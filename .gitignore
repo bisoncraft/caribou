@@ -66,4 +66,4 @@ client/cmd/verifymm/verifymm
 *.db
 evmrelay/cmd/evmrelay/evmrelay
 *.code-workspace
-.claude/
+.claude/settings.local.json
