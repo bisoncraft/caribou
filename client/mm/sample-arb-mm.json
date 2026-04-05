@@ -1,0 +1,62 @@
+{
+    "botConfigs": [
+        {
+            "host": "127.0.0.1:17273",
+            "baseID": 60,
+            "quoteID": 0,
+            "cexCfg": {
+                "name": "Binance"
+            },
+            "baseWalletOptions": {
+                "multisplit": "true"
+            },
+            "quoteWalletOptions": {
+                "multisplit": "true",
+                "multisplitbuffer": "5"
+            },
+            "alloc": {
+                "dex": {
+                    "60": 1000000000,
+                    "0": 10000000
+                },
+                "cex": {
+                    "60": 1000000000,
+                    "0": 10000000
+                }
+            },
+            "arbMarketMakingConfig": {
+                "cexName": "Binance",
+                "buyPlacements": [
+                    {
+                        "lots": 3,
+                        "multiplier": 2
+                    },
+                    {
+                        "lots": 3,
+                        "multiplier": 2
+                    }
+                ],
+                "sellPlacements": [
+                    {
+                        "lots": 3,
+                        "multiplier": 1
+                    },
+                    {
+                        "lots": 2,
+                        "multiplier": 1
+                    }
+                ],
+                "profit": 0.01,
+                "driftTolerance" : 0.001,
+                "orderPersistence": 10
+            }
+        }
+    ],
+    "cexConfigs": [
+        {
+            "name": "Binance",
+            "apiKey": "",
+            "apiSecret": ""
+        }
+    ]
+}

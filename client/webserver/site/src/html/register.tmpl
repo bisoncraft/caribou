@@ -1,0 +1,48 @@
+{{define "register"}}
+{{template "top" .}}
+<div id="main" data-handler="register" class="main align-items-center justify-content-center flex-column stylish-overflow">
+  <div class="position-absolute" id="forms">
+
+    {{- /* LOGIN FORM */ -}}
+    <form class="d-hide{{if and (not .UserInfo.Authed) .Initialized }} selected{{end}}" id="loginForm">
+      {{template "loginForm"}}
+    </form>
+
+    {{- /* RESET APP PASSWORD */ -}}
+    <form class="mx-auto my-5 d-hide" id="resetAppPWForm">
+      {{template "appPassResetForm"}}
+    </form>
+
+    {{- /* Form to set up a wallet. Shown on demand when a user clicks a setupWallet button. */ -}}
+    <form class="d-hide" id="newWalletForm">
+      {{template "newWalletForm"}}
+    </form>
+
+    {{- /* DEX ADDRESS FORM */ -}}
+    <form class="d-hide{{if and .Initialized .UserInfo.Authed (not .Host)}} selected{{end}}" id="dexAddrForm">
+      {{template "dexAddrForm" .}}
+    </form>
+
+    {{- /* DISCOVER ACCOUNT FORM */ -}}
+    <form class="d-hide{{if and .Initialized .UserInfo.Authed .Host}} selected{{end}}" id="discoverAcctForm" data-host="{{.Host}}">
+      {{template "discoverAcctForm" .}}
+    </form>
+
+    {{- /* REG ASSET SELECTOR */ -}}
+    <form class="d-hide" id="regAssetForm">
+      {{template "regAssetForm"}}
+    </form>
+
+    {{- /* CONFIRM FEE PAYMENT */ -}}
+    <form class="d-hide mw-425" id="confirmRegForm">
+      {{template "confirmRegistrationForm"}}
+    </form>
+
+    {{- /* SYNC AND BALANCE FORM */ -}}
+    <form class="d-hide" id="walletWait">
+      {{template "waitingForWalletForm"}}
+    </form>
+  </div>
+</div>
+{{template "bottom"}}
+{{end}}

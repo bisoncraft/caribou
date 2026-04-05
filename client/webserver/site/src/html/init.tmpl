@@ -1,0 +1,118 @@
+{{define "init"}}
+{{template "top" .}}
+<div id="main" data-handler="init" class="main align-items-center justify-content-center flex-column stylish-overflow">
+  <div class="position-absolute" id="forms">
+
+    {{- /* App Initialization */ -}}
+    <form id="appPWForm" class="flex-stretch-column">
+      <header>
+        <span class="ico-locked fs20 grey me-2"></span>
+        <span>[[[Set App Password]]]</span>
+      </header>
+      <input type="text" name="username" autocomplete="username" class="d-hide"> <!-- to suppress console warning -->
+      <div class="fs18">[[[reg_set_app_pw_msg]]]</div>
+      <div class="mt-3 border-top">
+        <label for="appPW">[[[Password]]]</label>
+        <input type="password" id="appPW" autocomplete="new-password">
+      </div>
+      <div>
+        <label for="appPWAgain">[[[Password Again]]]</label>
+        <input type="password" id="appPWAgain" autocomplete="off">
+      </div>
+      <div class="d-flex">
+        <div class="flex-grow-1 d-flex align-items-center">
+          <label for="seedInput" id="toggleSeedInput">
+            <span id="toggleSeedInputIcon" class="fs11 ico-plus me-1"></span>
+            [[[Restoration Seed]]]
+          </label>
+        </div>
+        <button id="appPWSubmit" class="flex-grow-1 feature ms-2">[[[Submit]]]</button>
+      </div>
+      <div id="seedInputBox" class="d-hide">
+        <textarea class="w-100 mono" id="seedInput" rows="4" autocomplete="off" spellcheck="false"></textarea>
+        <div class="pt-2 text-center fs15 text-warning">
+          [[[seed_same_wallet_warning]]]
+        </div>
+      </div>
+      <div class="fs15 text-center d-hide text-danger text-break" id="appPWErrMsg"></div>
+    </form>
+
+    {{- /* Quick Config Form */ -}}
+    <form id="quickConfigForm" class="flex-stretch-column d-hide">
+      <header>
+        <span class="fs22 ico-settings grey me-2"></span>
+        <span>Quick Configuration</span>
+      </header>
+      <div id="qcChoices" class="flex-stretch-column">
+        <div class="fs18 mb-2">[[[quickconfig_wallet_header]]]</div>
+        <div id="qcWalletsBox" class="mt-2">
+          <label id="qcWalletTmpl" class="p-1 d-flex justify-content-start align-items-center hoverbg pointer">
+            <input class="form-check-input" type="checkbox" data-tmpl="checkbox" checked>
+            <img class="quickconfig-asset-logo mx-2" data-tmpl="icon">
+            <span data-tmpl="name" class="fs20"></span>
+          </label>
+        </div>
+        <div class="fs18 mt-3 pt-3 border-top">[[[quickconfig_server_header]]]</div>
+        <div id="qcServersBox">
+          <label id="qcServerTmpl" class="d-flex justify-content-start align-items-center p-1 hoverbg pointer my-1">
+            <input class="form-check-input" type="checkbox" data-tmpl="checkbox" checked>
+            <span data-tmpl="host" class="ms-2 fs18 lh1"></span>
+          </label>
+        </div>
+        <button id="quickConfigSubmit" class="feature my-2">[[[Submit]]]</button>
+      </div>
+
+      <div id="qcErrors" class="d-hide">
+        <div id="qcWalletErrors">
+          <span class="my-1 fs16">
+            [[[quickconfig_wallet_error_header]]]
+          </span>
+          <div id="qcWalletErrorList" class="p-2 my-1"></div>
+        </div>
+
+        <div id="qcServerErrors">
+          <span class="my-1 fs16">
+            [[[quickconfig_server_error_header]]]
+          </span>
+          <div id="qcServerErrorList" class="p-2 my-1"></div>
+        </div>
+
+        <div class="d-flex justify-content-end my-1">
+          <button id="qcErrAck" class="go">[[[Continue]]]</button>
+        </div>
+      </div>
+    </form>
+
+    {{- /* Seed Backup */ -}}
+    <form id="seedBackupForm" class="d-hide">
+      <header>[[[Backup App Seed]]]</header>
+      <div id="sbWanna">
+        <div class="fs18 mb-3">
+          [[[seed_backup_implore]]]
+        </div>
+        <div class="flex-stretch-column pt-2">
+          <button id="showSeed" class="feature">[[[Backup Now]]]</button>
+        </div>
+        <div class="d-flex justify-content-end pt-3">
+          <div id="skipSeedBackup" class="d-block plainlink fs15 flex-center hoverbg pointer">
+            <span>[[[Skip this step for now]]]</span>
+            <span class="ico-info mx-1" data-tooltip="You can backup your seed at any time in the Settings view"></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="sbSeed" class="d-hide">
+        <div class="fs18 mb-3">[[[save_seed_instructions]]]</div>
+        <div class="mt-2 border-top flex-center">
+          <div class="fs18 mono mx-auto user-select-all text-break" id="mnemonic"></div>
+        </div>
+        <div class="d-flex justify-content-end">
+          <button id="seedAck" class="feature">[[[Done]]]</button>
+        </div>
+      </div>
+    </form>
+
+  </div> {{/* END FORMS */}}
+</div>
+{{template "bottom"}}
+{{end}}

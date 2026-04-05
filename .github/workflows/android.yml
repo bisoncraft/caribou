@@ -1,0 +1,52 @@
+name: Android build
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Release-Build"
+        default: "Build Android companion app"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout project code
+      - name: Checking out branch
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 #v6.0.0
+        with:
+          # Use sparse checkout to only select files in mobile app directory
+          # Turning off cone mode ensures that files in the project root are not included during checkout
+          sparse-checkout: 'companionapp/android'
+          sparse-checkout-cone-mode: false
+
+      # This step is needed because expo-github-action does not support paths.
+      # Therefore all mobile app assets should be moved to the project root.
+      - name: Move mobile app files to root
+        run: |
+          ls -lah
+          shopt -s dotglob
+          mv companionapp/android/* .
+          ls -lah
+
+      - name: Setup Java
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 #v5.0.0
+        with:
+          distribution: 'temurin'
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 #v3.2.2
+
+      - name: Build Debug apk
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Get apk path
+        id: debugApk
+        run: echo "apkfile=$(find app/build/outputs/apk/debug/*.apk)" >> $GITHUB_OUTPUT
+
+      - name: Upload Debug Build to Artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 #v5.0.0
+        with:
+          name: debug-apk
+          path: ${{ steps.debugApk.outputs.apkfile }}

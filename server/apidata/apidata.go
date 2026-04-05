@@ -1,0 +1,272 @@
+// This code is available on the terms of the project LICENSE.md file,
+// also available online at https://blueoakcouncil.org/license/1.0.0.
+
+package apidata
+
+import (
+	"encoding/json"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"decred.org/dcrdex/dex"
+	"decred.org/dcrdex/dex/candles"
+	"decred.org/dcrdex/dex/msgjson"
+	"decred.org/dcrdex/server/comms"
+	"decred.org/dcrdex/server/matcher"
+)
+
+var (
+	// Our internal millisecond representation of the bin sizes.
+	binSizes []uint64
+	started  uint32
+)
+
+// DBSource is a source of persistent data. DBSource is used to prime the
+// caches at startup.
+type DBSource interface {
+	LoadEpochStats(base, quote uint32, caches []*candles.Cache) error
+	LastCandleEndStamp(base, quote uint32, candleDur uint64) (uint64, error)
+	InsertCandles(base, quote uint32, dur uint64, cs []*candles.Candle) error
+}
+
+// MarketSource is a source of market information. Markets are added after
+// construction but before use using the AddMarketSource method.
+type MarketSource interface {
+	EpochDuration() uint64
+	Base() uint32
+	Quote() uint32
+}
+
+// BookSource is a source of order book information. The BookSource is added
+// after construction but before use.
+type BookSource interface {
+	Book(mktName string) (*msgjson.OrderBook, error)
+}
+
+type cacheWithStoredTime struct {
+	*candles.Cache
+	lastStoredEndStamp uint64 // protected by DataAPI.cacheMtx
+}
+
+// DataAPI is a data API backend.
+type DataAPI struct {
+	db             DBSource
+	epochDurations map[string]uint64
+	bookSource     BookSource
+
+	spotsMtx sync.RWMutex
+	spots    map[string]json.RawMessage
+
+	cacheMtx     sync.RWMutex
+	marketCaches map[string]map[uint64]*cacheWithStoredTime
+}
+
+// NewDataAPI is the constructor for a new DataAPI.
+func NewDataAPI(dbSrc DBSource, registerHTTP func(route string, handler comms.HTTPHandler)) *DataAPI {
+	s := &DataAPI{
+		db:             dbSrc,
+		epochDurations: make(map[string]uint64),
+		spots:          make(map[string]json.RawMessage),
+		marketCaches:   make(map[string]map[uint64]*cacheWithStoredTime),
+	}
+
+	if atomic.CompareAndSwapUint32(&started, 0, 1) {
+		registerHTTP(msgjson.SpotsRoute, s.handleSpots)
+		registerHTTP(msgjson.CandlesRoute, s.handleCandles)
+		registerHTTP(msgjson.OrderBookRoute, s.handleOrderBook)
+	}
+	return s
+}
+
+// AddMarketSource should be called before any markets are running.
+func (s *DataAPI) AddMarketSource(mkt MarketSource) error {
+	mktName, err := dex.MarketName(mkt.Base(), mkt.Quote())
+	if err != nil {
+		return err
+	}
+	epochDur := mkt.EpochDuration()
+	s.epochDurations[mktName] = epochDur
+	binCaches := make(map[uint64]*cacheWithStoredTime, len(binSizes)+1)
+	cacheList := make([]*candles.Cache, 0, len(binSizes)+1)
+	for _, binSize := range append([]uint64{epochDur}, binSizes...) {
+		cache := candles.NewCache(candles.CacheSize, binSize)
+		lastCandleEndStamp, err := s.db.LastCandleEndStamp(mkt.Base(), mkt.Quote(), cache.BinSize)
+		if err != nil {
+			return fmt.Errorf("LastCandleEndStamp: %w", err)
+		}
+		c := &cacheWithStoredTime{cache, lastCandleEndStamp}
+		cacheList = append(cacheList, cache)
+		binCaches[binSize] = c
+	}
+	err = s.db.LoadEpochStats(mkt.Base(), mkt.Quote(), cacheList)
+	if err != nil {
+		return err
+	}
+	s.cacheMtx.Lock()
+	s.marketCaches[mktName] = binCaches
+	s.cacheMtx.Unlock()
+	return nil
+}
+
+// SetBookSource should be called before the first call to handleBook.
+func (s *DataAPI) SetBookSource(bs BookSource) {
+	s.bookSource = bs
+}
+
+// ReportEpoch should be called by every Market after every match cycle to
+// report their epoch stats.
+func (s *DataAPI) ReportEpoch(base, quote uint32, epochIdx uint64, stats *matcher.MatchCycleStats) (*msgjson.Spot, error) {
+	mktName, err := dex.MarketName(base, quote)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add the candlestick.
+	addCandle := func() (change24 float64, vol24, high24, low24 uint64, err error) {
+		s.cacheMtx.Lock()
+		defer s.cacheMtx.Unlock()
+		mktCaches := s.marketCaches[mktName]
+		if mktCaches == nil {
+			return 0, 0, 0, 0, fmt.Errorf("unknown market %q", mktName)
+		}
+		epochDur := s.epochDurations[mktName]
+		startStamp := epochIdx * epochDur
+		endStamp := startStamp + epochDur
+		var cache5min *cacheWithStoredTime
+		const fiveMins = uint64(time.Minute * 5 / time.Millisecond)
+		candle := &candles.Candle{
+			StartStamp:  startStamp,
+			EndStamp:    endStamp,
+			MatchVolume: stats.MatchVolume,
+			QuoteVolume: stats.QuoteVolume,
+			HighRate:    stats.HighRate,
+			LowRate:     stats.LowRate,
+			StartRate:   stats.StartRate,
+			EndRate:     stats.EndRate,
+		}
+		for dur, cache := range mktCaches {
+			if dur == fiveMins {
+				cache5min = cache
+			}
+			cache.Add(candle)
+
+			// Check if any candles need to be inserted.
+			// Don't insert epoch candles.
+			if cache.BinSize == epochDur {
+				continue
+			}
+
+			newCandles := cache.CompletedCandlesSince(cache.lastStoredEndStamp)
+			if len(newCandles) == 0 {
+				continue
+			}
+			if err := s.db.InsertCandles(base, quote, cache.BinSize, newCandles); err != nil {
+				return 0, 0, 0, 0, fmt.Errorf("InsertCandles: %w", err)
+			}
+			cache.lastStoredEndStamp = newCandles[len(newCandles)-1].EndStamp
+		}
+		if cache5min == nil {
+			return 0, 0, 0, 0, fmt.Errorf("no 5 minute cache")
+		}
+		change24, vol24, high24, low24 = cache5min.Delta(time.Now().Add(-time.Hour * 24))
+		return
+	}
+
+	change24, vol24, high24, low24, err := addCandle()
+	if err != nil {
+		return nil, err
+	}
+
+	// Encode the spot price.
+	spot := &msgjson.Spot{
+		Stamp:    uint64(time.Now().UnixMilli()),
+		BaseID:   base,
+		QuoteID:  quote,
+		Rate:     stats.EndRate,
+		Change24: change24,
+		Vol24:    vol24,
+		High24:   high24,
+		Low24:    low24,
+	}
+
+	s.spotsMtx.Lock()
+	s.spots[mktName], err = json.Marshal(spot)
+	s.spotsMtx.Unlock()
+	return spot, err
+}
+
+// handleSpots implements comms.HTTPHandler for the /spots endpoint.
+func (s *DataAPI) handleSpots(any) (any, error) {
+	s.spotsMtx.RLock()
+	defer s.spotsMtx.RUnlock()
+	spots := make([]json.RawMessage, 0, len(s.spots))
+	for _, spot := range s.spots {
+		spots = append(spots, spot)
+	}
+	return spots, nil
+}
+
+// handleCandles implements comms.HTTPHandler for the /candles endpoints.
+func (s *DataAPI) handleCandles(thing any) (any, error) {
+	req, ok := thing.(*msgjson.CandlesRequest)
+	if !ok {
+		return nil, fmt.Errorf("candles request unparseable")
+	}
+
+	if req.NumCandles == 0 {
+		req.NumCandles = candles.DefaultCandleRequest
+	} else if req.NumCandles > candles.CacheSize {
+		return nil, fmt.Errorf("requested numCandles %d exceeds maximum request size %d", req.NumCandles, candles.CacheSize)
+	}
+
+	mkt, err := dex.MarketName(req.BaseID, req.QuoteID)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing market for %d - %d", req.BaseID, req.QuoteID)
+	}
+
+	binSizeDuration, err := time.ParseDuration(req.BinSize)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing binSize")
+	}
+	binSize := uint64(binSizeDuration / time.Millisecond)
+
+	s.cacheMtx.RLock()
+	defer s.cacheMtx.RUnlock()
+	marketCaches := s.marketCaches[mkt]
+	if marketCaches == nil {
+		return nil, fmt.Errorf("market %s not known", mkt)
+	}
+
+	cache := marketCaches[binSize]
+	if cache == nil {
+		return nil, fmt.Errorf("no data available for binSize %s", req.BinSize)
+	}
+
+	return cache.WireCandles(req.NumCandles), nil
+}
+
+// handleOrderBook implements comms.HTTPHandler for the /orderbook endpoints.
+func (s *DataAPI) handleOrderBook(thing any) (any, error) {
+	req, ok := thing.(*msgjson.OrderBookSubscription)
+	if !ok {
+		return nil, fmt.Errorf("unparseable orderbook request")
+	}
+
+	mkt, err := dex.MarketName(req.Base, req.Quote)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse requested market")
+	}
+	return s.bookSource.Book(mkt)
+}
+
+func init() {
+	for _, s := range candles.BinSizes {
+		dur, err := time.ParseDuration(s)
+		if err != nil {
+			panic("error parsing bin size '" + s + "': " + err.Error())
+		}
+		binSizes = append(binSizes, uint64(dur/time.Millisecond))
+	}
+}

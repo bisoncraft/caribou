@@ -1,0 +1,73 @@
+{
+    "markets": [
+        {
+            "base": "DCR_mainnet",
+            "quote": "BTC_mainnet",
+            "lotSize": 100000000,
+            "rateStep": 100000,
+            "epochDuration": 10000,
+            "marketBuyBuffer": 1.25,
+            "parcelSize": 4
+        },
+        {
+            "base": "BTC_testnet",
+            "quote": "LTC_testnet",
+            "lotSize": 100000,
+            "rateStep": 1000000,
+            "epochDuration": 6000,
+            "marketBuyBuffer": 1.25,
+            "parcelSize": 4
+        }
+    ],
+    "assets": {
+        "DCR_mainnet": {
+            "bip44symbol": "dcr",
+            "network": "mainnet",
+            "maxFeeRate": 10,
+            "swapConf": 4,
+            "configPath": "/home/dcrd/.dcrd/dcrd.conf",
+            "bondAmt": 10000000,
+            "bondConfs": 1
+        },
+        "DCR_testnet": {
+            "bip44symbol": "dcr",
+            "network": "testnet",
+            "maxFeeRate": 10,
+            "swapConf": 1,
+            "configPath": "/home/dcrd/.dcrd/dcrd.conf",
+            "bondAmt": 100000000,
+            "bondConfs": 1
+        },
+        "BTC_mainnet": {
+            "bip44symbol": "btc",
+            "network": "mainnet",
+            "maxFeeRate": 100,
+            "swapConf": 3
+        },
+        "BTC_testnet": {
+            "bip44symbol": "btc",
+            "network": "testnet",
+            "maxFeeRate": 100,
+            "swapConf": 1
+        },
+        "LTC_mainnet": {
+            "bip44symbol": "ltc",
+            "network": "mainnet",
+            "maxFeeRate": 20,
+            "swapConf": 6
+        },
+        "LTC_testnet": {
+            "bip44symbol": "ltc",
+            "network": "testnet",
+            "maxFeeRate": 20,
+            "swapConf": 6
+        },
+        "ETH_testnet": {
+            "bip44symbol": "eth",
+            "network": "testnet",
+            "maxFeeRate": 200,
+            "swapConf": 12,
+            "configPath": "/home/.ethereum/dex.conf"
+        }
+    }
+}

@@ -1,0 +1,120 @@
+$sans: "source-sans", sans-serif;
+$demi-sans: "demi-sans", sans-serif;
+$mono: "mono", monospace;
+
+/* fonts */
+@font-face {
+  font-family: "source-sans";
+  src:
+    url("/font/source-sans-pro-v9-latin-regular.woff") format("woff"),
+    url("/font/source-sans-pro-v9-latin-regular.svg") format("svg");
+  font-weight: normal;
+  font-style: normal;
+}
+
+/* fonts */
+@font-face {
+  font-family: "demi-sans";
+  src:
+    url("/font/source-sans-pro-semibold.woff") format("woff"),
+    url("/font/source-sans-pro-semibold.svg") format("svg");
+  font-weight: bolder;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: "mono";
+  src:
+    url("/font/inconsolata-v15-latin-regular.woff") format("woff"),
+    url("/font/inconsolata-v15-latin-regular.svg") format("svg");
+  font-weight: normal;
+  font-style: normal;
+}
+
+.fs8 {
+  font-size: 8px;
+}
+
+.fs10 {
+  font-size: 10px;
+}
+
+.fs11 {
+  font-size: 11px;
+}
+
+.fs12 {
+  font-size: 12px;
+}
+
+.fs13 {
+  font-size: 13px;
+}
+
+.fs14 {
+  font-size: 14px;
+}
+
+.fs15 {
+  font-size: 15px;
+}
+
+.fs16 {
+  font-size: 16px;
+}
+
+.fs17 {
+  font-size: 17px;
+}
+
+.fs18 {
+  font-size: 18px;
+}
+
+.fs20 {
+  font-size: 20px;
+}
+
+.fs22 {
+  font-size: 22px;
+}
+
+.fs24 {
+  font-size: 24px;
+}
+
+.fs26 {
+  font-size: 24px;
+}
+
+.fs28 {
+  font-size: 28px;
+}
+
+.fs32 {
+  font-size: 32px;
+}
+
+.fs35 {
+  font-size: 35px;
+}
+
+.fs50 {
+  font-size: 50px;
+}
+
+.demi {
+  font-family: $demi-sans;
+}
+
+.mono {
+  font-family: $mono;
+}
+
+.sans {
+  font-family: $sans;
+}
+
+.bold {
+  font-weight: bold;
+}

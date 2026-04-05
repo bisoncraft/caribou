@@ -1,0 +1,33 @@
+div.order-datum {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: start;
+  text-align: center;
+  font-size: 15px;
+
+  div:first-child {
+    font-family: $demi-sans;
+    background-color: var(--tertiary-bg);
+  }
+}
+
+div.match-header {
+  background-color: var(--tertiary-bg);
+}
+
+div.match-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  font-size: 14px;
+}
+
+.match-data-label {
+  opacity: 0.5;
+  font-family: $demi-sans;
+}
+
+#accelerateForm {
+  width: 500px;
+}

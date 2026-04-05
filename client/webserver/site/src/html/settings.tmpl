@@ -1,0 +1,190 @@
+{{define "settings"}}
+{{template "top" .}}
+{{$authed := .UserInfo.Authed}}
+<div id="main" data-handler="settings" class="overflow-y-auto">
+  <section class="mw-425 flex-stretch-column mx-auto">
+    <h1 class="text-center px-3 py-2"><span class="ico-settings"></span></h1>
+    <div class="settings px-3">
+      <div class="form-check ps-4 pt-2 border-top">
+        <input class="form-check-input" type="checkbox" value="" id="darkMode">
+        <label class="form-check-label" for="darkMode">
+          [[[Dark Mode]]]
+        </label>
+      </div>
+      <div id="fiatRateSources" class="pt-2 {{if not $authed}}d-hide{{end}}">
+        <div class="mb-1" data-tooltip="[[[fiat_exchange_rate_msg]]]">
+          [[[fiat_exchange_rate_sources]]]:
+          <span class="ico-info"></span>
+        </div>
+        {{range $source, $enabled := .FiatRateSources}}
+        <div class="form-check ms-3">
+          <input class="form-check-input" type="checkbox" value="{{$source}}" id="{{$source}}" {{if $enabled}} checked {{end}}>
+          <label class="form-check-label" for="{{$source}}">{{$source}}</label>
+        </div>
+        {{end}}
+      </div>
+      <div class="pt-2 {{if not .UserInfo.Authed}}d-hide{{end}}">
+        <span>Fiat Currency: </span><span id="fiatCurrency">{{.FiatCurrency}}</span>
+      </div>
+      <div class="form-check ps-4 pt-2">
+        <input class="form-check-input" type="checkbox" value="" id="showPokes" checked>
+        <label class="form-check-label" for="showPokes">
+          [[[Show pop-up notifications]]]
+        </label>
+      </div>
+      <div class="py-2 border-bottom {{if not .UserInfo.Authed}}d-hide{{end}}">
+        <div>
+          <div class="form-check">
+            <label class="form-check-label">
+              <input class="form-check-input" name="browserNtfnEnabled" type="checkbox" value="1" id="browserNtfnEnabled">
+              [[[enable_browser_ntfn]]]
+              <span class="ico-info" data-tooltip="[[[enable_browser_ntfn_info]]]"></span>
+            </label>
+          </div>
+          <div id="browserNtfnBlockedMsg" class="d-hide">[[[browser_ntfn_blocked]]]</div>
+          <div id="browserNtfnCheckboxContainer" class="d-hide">
+            <div class="form-check ms-3" id="browserNtfnCheckboxTemplate">
+              <label class="form-check-label" >
+              <span data-tmpl="label"></span>
+                <input class="form-check-input" type="checkbox" value="1" data-tmpl="checkbox">
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="py-3 border-bottom {{if not $authed}} d-hide{{end}}">
+        <div id="exchanges" {{if eq (len .Exchanges) 0}} class="d-hide"{{end}}>
+          <h5>[[[registered dexes]]]</h5>
+          {{range $host, $xc := .Exchanges}}
+            <a href="/dexsettings/{{$host}}"><button><div class=text-break>{{$host}}<span class="dex-settings-icon ico-settings ms-2"></span></div></button></a>
+          {{end}}
+        </div>
+        <br>
+        <div>
+          <p class="grey">
+          [[[simultaneous_servers_msg]]]
+          </p>
+          <button id="addADex">[[[Add a DEX]]]</button>
+          <button id="importAccount" class="ms-2">[[[Import Account]]]</button>
+        </div>
+      </div>
+      <div class="py-3 border-bottom {{if not .IsInitialized}}d-hide{{end}}">
+          <button id="changeAppPW" class="my-1 {{if not $authed}} d-hide{{end}}">[[[Change App Password]]]</button>
+          <button id="resetAppPW" class="my-1 {{if or $authed }} d-hide{{end}}">[[[Reset App Password]]]</button>
+      </div>
+      <div class="py-3 border-bottom {{if not .UserInfo.Authed}}d-hide{{end}}">
+        <p class="grey">[[[seed_implore_msg]]]</p>
+        <button id="exportSeed" class="fs15">[[[View Application Seed]]]</button>
+      </div>
+      <div id="exportLogs" class="py-3 mb-3 border-bottom pointer hoverbg">
+        <span class="ico-wide-headed-down-arrow"></span> [[[export_logs]]]
+      </div>
+      <div id="gameCodeLink" class="py-3 mb-3 border-bottom pointer hoverbg">
+        <span class="ico-ticket"></span> [[[Redeem game code]]]
+      </div>
+      <div class="mb-3 pb-3 border-bottom {{if not $authed}}d-hide{{end}}">
+        <button id="companionAppBtn" class="fs15">[[[Pair companion app]]]</button>
+      </div>
+      <p class="grey">[[[Build ID]]]: <span class="mono">{{commitHash false}}</span></p>
+    </div>
+  </section>
+
+  {{- /* POP-UP FORMS */ -}}
+  <div id="forms" class="d-hide">
+    
+    {{- /* DEX ADDRESS */ -}}
+    <form class="d-hide" id="dexAddrForm" autocomplete="off">
+      {{template "dexAddrForm" .}}
+    </form>
+
+    {{- /* REG ASSET SELECTOR */ -}}
+    <form class="d-hide" id="regAssetForm">
+      {{template "regAssetForm"}}
+    </form>
+    {{- /* CONFIRM REGISTRATION */ -}}
+    <form class="d-hide mw-425" id="confirmRegForm">
+      {{template "confirmRegistrationForm"}}
+    </form>
+
+    {{- /* AUTHORIZE IMPORT ACCOUNT */ -}}
+    <form class="d-hide" id="authorizeAccountImportForm">
+      {{template "authorizeAccountImportForm" .}}
+    </form>
+
+    {{- /* NEW WALLET */ -}}
+    <form class="d-hide" id="newWalletForm">
+      {{template "newWalletForm" }}
+    </form>
+
+    {{- /* CHANGE APP PASSWORD */ -}}
+    <form class="d-hide" id="changeAppPWForm">
+      {{template "changeAppPWForm"}}
+    </form>
+
+    {{- /* COMPANION APP PAIRING */ -}}
+    <form class="d-hide" id="companionAppForm">
+      {{template "companionAppForm"}}
+    </form>
+
+    {{- /* RESET APP PASSWORD */ -}}
+    <form class="d-hide" id="resetAppPWForm">
+      {{template "appPassResetForm"}}
+    </form>
+
+    {{- /* EXPORT SEED AUTHORIZATION */ -}}
+    <form class="d-hide" id="exportSeedAuth">
+      <div class="form-closer"><span class="ico-cross"></span></div>
+      <header>
+        [[[Export Seed]]]
+      </header>
+      <div class="text-start">
+        [[[pw_for_seed]]]
+      </div>
+      <div class="text-start">
+        <label for="exportSeedPW">[[[Password]]]</label>
+        <input type="password" id="exportSeedPW" autocomplete="current-password">
+      </div>
+      <div class="flex-stretch-column">
+        <button id="exportSeedSubmit" type="button" class="feature">[[[Show Me]]]</button>
+      </div>
+      <div class="fs15 text-center d-hide text-danger text-break" id="exportSeedErr"></div>
+    </form>
+
+    {{- /* SEED DISPLAY */ -}}
+    <form class="d-hide" id="authorizeSeedDisplay">
+      <div class="form-closer"><span class="ico-cross"></span></div>
+      <div class="pt-4">[[[dont_share]]]</div>
+      <div class="flex-center">
+        <div class="fs18 mono mx-auto user-select-all text-break" id="legacySeed"></div>
+        <div class="fs18 mono mx-auto user-select-all text-break" id="mnemonic"></div>
+      </div>
+    </form>
+
+    {{- /* SYNC AND BALANCE FORM */ -}}
+    <form class="d-hide" id="walletWait">
+      {{template "waitingForWalletForm"}}
+    </form>
+
+    <form id="gameCodeForm" class="d-hide">
+      <div class="form-closer"><span class="ico-cross"></span></div>
+      <header><span class="ico-ticket me-2"></span> [[[Redeem Game Code]]]</header>
+      <div class="px-3 flex-stretch-column">
+        <label for="gameCodeInput" class="pt-2">[[[Code]]]</label>
+        <input type="text" id="gameCodeInput">
+        <label for="gameCodeMsg" class="mt-2">[[[Message_optional]]]</label>
+        <input type="text" id="gameCodeMsg" maxlength="256">
+        <button type="button" id="gameCodeSubmit" class="feature mt-2">[[[Redeem]]]</button>
+        <div id="gameCodeSuccess" class="mt-2 pt-2 border-top flex-stretch-column d-hide">
+          <span>[[[Game code redeemed]]]</span>
+          <span class="mt-2">[[[Transaction]]]</span>
+          <a id="gameRedeemTx" class="mt-1 word-break-all" target="_blank"></a>
+          <span class="mt-2">[[[Value]]]: <span id="gameRedeemValue"></span> <span class="fs14 grey">DCR</span></span>
+          <span class="mt-2">[[[Prepaid bond redeemed]]]</span>
+        </div>
+        <div id="gameCodeErr" class="mt-2 text-warning d-hide"></div>
+      </div>
+    </form>
+  </div>
+</div>
+{{template "bottom"}}
+{{end}}

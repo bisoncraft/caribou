@@ -1,0 +1,147 @@
+=Decred DEX Specification=
+
+__TOC__
+
+==Introduction==
+
+Decred DEX is a decentralized, non-custodial, trustless, and intermediary-free
+cryptocurrency exchange platform. Decred DEX aims to solve a number of issues
+with existing systems of exchange.
+
+Currently, the majority of cryptocurrency trading is performed via centralized,
+custodial exchanges.
+These exchanges have filled an important role in the blockchain ecosystem, but
+are in many ways antithetical to the spirit of blockchain.
+Blockchain is decentralized, trustless, and enables self-custody, but when a
+user must send their coin to a third party in order to trade, all of those
+benefits are lost.
+
+Several projects have attempted to address this misalignment by
+replacing the exchange with a blockchain or a token, and they have met with
+varying degrees of success.
+While they remove the trusted third party (TTP), they insert their own products
+as a means to capture trading fees, which replaces the TTP friction with a
+new platform friction.
+
+A more robust solution is based on [https://github.com/decred/atomicswap atomic swap technology]
+[[references.mediawiki|<nowiki>[2]</nowiki>]],
+which enables trustless exchange directly between wallets.
+Until recently, few blockchains supported atomic swaps, but the past few years
+have seen widespread adoption, and such an exchange is now possible.
+
+Decred DEX is the first exchange built on atomic swaps that doesn't collect
+trading fees. The primary service offered by DEX is to match traders through a
+familiar interface based on markets and orders. Decred DEX's novel matching
+algorithm disincintevizes manipulative, abusive trading practices commonly seen
+on centralized exchanges. The epoch-based match cycle is difficult to game by
+the client, while for the server, cryptographic order commitments make
+censorship and unfair matching difficult.
+
+While trades are fully trustless, steps are taken to discourage malicious
+clients from hindering normal trade activity.
+All clients must lock coins in bonds to trade.
+Registered clients are then bound to the
+[[community.mediawiki|rules of community conduct]], violation of which typically
+results in loss of trading privileges.
+
+In the interest of maintaining active, open-source, community-driven
+development, this specification document describes the protocols necessary for
+implementation of both DEX clients and DEX servers.
+
+==Contents==
+
+The remaining content details the Decred DEX protocol.
+It is intended as a first resource when implementing servers and clients.
+Continuing client-server interoperability will likely depend on subtle aspects
+of the specification laid out in this document.
+
+'''<nowiki>[1]</nowiki> [[comm.mediawiki|Communication Protocols]]''' describes the
+messaging protocols and communication layer technologies that are to be used
+for the DEX API.
+
+* [[comm.mediawiki#websockets|WebSockets]]
+* [[comm.mediawiki/#encoding|Data Encodings]]
+** [[comm.mediawiki/#timestamps|Timestamps]]
+** [[comm.mediawiki/#rate-encoding|Rate Encoding]]
+** [[comm.mediawiki/#coin-id|Coin ID]]
+* [[comm.mediawiki/#message-protocol|Message Protocol]]
+* [[comm.mediawiki/#session-authentication|Session Authentication]]
+* [[comm.mediawiki/#http|HTTP]]
+
+'''<nowiki>[2]</nowiki> [[fundamentals.mediawiki|Distributed Exchange Design Fundamentals]]'''
+describes the notable design aspects that facilitate an exchange service with
+the features described above.
+
+* [[fundamentals.mediawiki/#exchange-variables|Exchange Variables]]
+** [[fundamentals.mediawiki/#global-variables|Global Variables]]
+** [[fundamentals.mediawiki/#asset-variables|Asset Variables]]
+** [[fundamentals.mediawiki/#market-variables|Market Variables]]
+** [[fundamentals.mediawiki/#configuration-data-request|Configuration Data Request]]
+* [[fundamentals.mediawiki/#fees|Fees]]
+* [[fundamentals.mediawiki/#transaction-fees|Transaction Fees]]
+* [[fundamentals.mediawiki/#epochbased-order-matching|Epoch-based Order Matching]]
+** [[fundamentals.mediawiki/#epoch-time|Epoch Time]]
+** [[fundamentals.mediawiki/#pseudorandom-order-matching|Pseudorandom Order Matching]]
+* [[fundamentals.mediawiki/#identities-based-on-public-key-infrastructure-pki-key-pairs|Identification]]
+* [[fundamentals.mediawiki/#blockchain-interaction|Blockchain Interaction]]
+* [[fundamentals.mediawiki/#adding-new-assets|Adding New Assets]]
+* [[fundamentals.mediawiki/#api-version|API Version]]
+** [[fundamentals.mediawiki/#v0|v0]]
+
+'''<nowiki>[3]</nowiki> [[admin.mediawiki|Distributed Exchange Administration]]''' describes
+the tasks required to administer the exchange.
+
+* [[admin.mediawiki/#exchange-variables|Exchange Variables]]
+* [[admin.mediawiki/#per-asset-variables|Per-asset Variables]]
+* [[admin.mediawiki/#administration-api|Administration API]]
+
+'''<nowiki>[4]</nowiki> [[accounts.mediawiki|Client Accounts]]''' details account creation.
+
+* [[accounts.mediawiki/#step-1-registration|Registration]]
+* [[accounts.mediawiki/#step-2-fee-notification|Fee Notification]]
+
+'''<nowiki>[5]</nowiki> [[orders.mediawiki|Client Order Management]]''' details the different
+order types and the client/server workflows required to synchronize the order
+book and place orders.
+
+* [[orders.mediawiki/#connection-persistence|Connection Persistence]]
+* [[orders.mediawiki/#order-book-subscriptions|Order Book Subscriptions]]
+* [[orders.mediawiki/#order-preparation|Order Preparation]]
+** [[orders.mediawiki/#calculating-transaction-fees|Calculating Transaction Fees]]
+** [[orders.mediawiki/#coin-preparation|Coin Preparation]]
+** [[orders.mediawiki/#order-commitment|Order Commitment]]
+** [[orders.mediawiki/#order-signing|Order Signing]]
+** [[orders.mediawiki/#order-id|Order ID]]
+* [[orders.mediawiki/#order-types|Order Types]]
+** [[orders.mediawiki/#limit-order|Limit Order]]
+** [[orders.mediawiki/#market-order|Market Order]]
+*** [[orders.mediawiki/#market-buy-orders|Market Buy Orders]]
+** [[orders.mediawiki/#cancel-order|Cancel Order]]
+* [[orders.mediawiki/#preimage-reveal|Preimage Handling]]
+* [[orders.mediawiki/#match-negotiation|Match Negotiation]]
+* [[orders.mediawiki/#match-revocation|Match Revocation]]
+* [[orders.mediawiki/#trade-suspension|Trade Suspension]]
+
+'''<nowiki>[6]</nowiki> [[api.mediawiki| Data API]]''' defines http and WebSocket APIs to browse
+trade history.
+
+'''<nowiki>[7]</nowiki> [[atomic.mediawiki|Atomic Settlement]]''' walks through the settlement
+process with a couple of examples to provide a high-level overview.
+
+* [[atomic.mediawiki/#case-a-perfect-match|Perfect Match]]
+* [[atomic.mediawiki/#case-b-multi-taker-with-partial-fill|Multi-Taker with Partial Fill]]
+
+'''<nowiki>[8]</nowiki> [[community.mediawiki|Community Conduct]]''' describes the system of rules
+to which clients interacting with the DEX must adhere.
+
+* [[community.mediawiki/#rules-of-community-conduct|Rules of Community Conduct]]
+** [[community.mediawiki/#rule-1-clients-must-respond-to-all-preimage-requests|Preimage Response]]
+** [[community.mediawiki/#rule-2-every-match-must-be-fully-settled|Fully Settle]]
+** [[community.mediawiki/#rule-3-an-accounts-cancellation-rate-must-not-exceed-the-threshold|Cancellation Rate Threshold]]
+** [[community.mediawiki/#rule-4-transaction-outputs-must-be-properly-sized|Transaction Output Size]]
+* [[community.mediawiki/#penalties|Penalties]]
+** [[community.mediawiki/#penalization-notification|Penalization Notification]]
+*** [[community.mediawiki/#penalty-object|Penalty Object]]
+
+'''<nowiki>[9]</nowiki> [[references.mediawiki|References]]''' lists references used in the development
+of the specification.

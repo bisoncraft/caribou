@@ -1,0 +1,53 @@
+{
+  "name": "bisonw",
+  "version": "1.2.0",
+  "description": "bisonw browser frontend",
+  "private": true,
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "watch": "webpack --watch --config webpack/dev.js",
+    "analyze": "webpack --config webpack/analyze.js",
+    "build": "npm exec tsc && webpack --config webpack/prod.js --progress --color",
+    "build_dev": "npm exec tsc && webpack --config webpack/dev.js --progress --color",
+    "lint": "npm exec tsc && npm exec -- eslint src",
+    "check-types": "npm exec tsc"
+  },
+  "keywords": [],
+  "author": "The Decred developers",
+  "license": "Blue Oak 1.0.0",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "//": "Remaining npm audit issues: minimatch <10.2.1 (high) and ajv <8.18.0 (moderate) are transitive deps of eslint 9. Fixes require eslint 10, which neostandard and eslint-webpack-plugin don't support yet. Revisit when neostandard adds eslint 10 support.",
+  "devDependencies": {
+    "@babel/core": "^7.21.8",
+    "@babel/plugin-transform-runtime": "^7.21.4",
+    "@babel/preset-env": "^7.21.5",
+    "@babel/preset-react": "^7.22.5",
+    "@babel/preset-typescript": "^7.21.5",
+    "@types/react": "^18.2.12",
+    "@types/react-dom": "^18.2.6",
+    "@babel/runtime": "^7.21.5",
+    "babel-loader": "^9.1.2",
+    "bootstrap": "^5.2.3",
+    "css-loader": "^6.7.3",
+    "css-minimizer-webpack-plugin": "^5.0.0",
+    "eslint": "^9.0.0",
+    "eslint-webpack-plugin": "^5.0.2",
+    "mini-css-extract-plugin": "^2.7.5",
+    "neostandard": "^0.12.2",
+    "sass": "^1.62.1",
+    "sass-loader": "^13.2.2",
+    "stylelint": "^17.0.0",
+    "stylelint-config-standard": "^40.0.0",
+    "stylelint-config-standard-scss": "^17.0.0",
+    "stylelint-webpack-plugin": "^5.1.0",
+    "ts-loader": "^9.4.2",
+    "typescript": "^5.0.4",
+    "webpack": "^5.105.0",
+    "webpack-bundle-analyzer": "^4.8.0",
+    "webpack-cli": "^5.0.2",
+    "webpack-merge": "^5.8.0"
+  }
+}

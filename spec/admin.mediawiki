@@ -1,0 +1,87 @@
+=Exchange Administration=
+
+__TOC__
+
+Operation of the DEX will require a non-trivial amount of administrative labor.
+Clients will expect near-perfect uptime and long-term operation.
+
+Operators must manage exchange settings properly to keep markets liquid and to
+balance fees and settlement speed.
+That said, changes to exchange or asset variables will often entail revocation
+of all existing orders on a market, so should be done as infrequently as
+possible.
+
+==Exchange Variables==
+
+{|
+! variable !! relevant section !! units || default
+|-
+| epoch&nbsp;duration || [[fundamentals.mediawiki/#epoch-based-order-matching|Epoch-based Order Matching]] || milliseconds || 20,000
+|-
+| market&nbsp;buy&nbsp;buffer || [[orders.mediawiki/#market-buy-orders|Market Buy Orders]] || unitless ratio || 1.25
+|-
+| bonds || [[fundamentals.mediawiki/#bonds|Bonds]] || atoms || 2e8 (2 DCR)
+|-
+| cancellation&nbsp;threshold || [[community.mediawiki/#rule-3-an-accounts-cancellation-rate-must-not-exceed-the-threshold|Rule 3]] || unitless ratio || 0.6
+|-
+| broadcast&nbsp;timeout || [[fundamentals.mediawiki/#exchange-variables|Exchange Variables]] &amp; [[community.mediawiki/#rule-1-clients-must-respond-to-all-preimage-requests|Rule 1]] || milliseconds || 60,000
+|}
+
+==Per-asset Variables==
+
+{|
+! variable !! units !! description
+|-
+| lot&nbsp;size  || atoms ||  the minimum order quantity and the order quantity increment when an asset is the base asset
+|-
+| rate&nbsp;step || atoms || the minimum price rate and the price rate increment when an asset is the quote asset. [[orders.mediawiki/#rate-encoding|message-rate encoding]]
+|-
+| fee&nbsp;rate  || atoms/byte || the minimum fee rate for swap transactions
+|-
+| swap&nbsp;confirmations|| count || the Minimum confirmations before acting on a swap transaction
+|}
+
+See also [[fundamentals.mediawiki/#exchange-variables|Exchange Variables]].
+
+==Administration API==
+
+The server will provide an HTTP API for performing various adminstrative tasks.
+
+'''API Endpoints'''
+{|
+! path      !! method !! description
+|-
+| /ping     || GET || checks if admin server is alive. Returns `pong` if server is still alive
+|-
+| /config   || GET || the current DEX configuration. See [[fundamentals.mediawiki/#configuration-data-request|Configuration Data Request]]
+|-
+| /enabledataapi/{yes} || GET || enable or disable the HTTP data API. "yes" must be a valid BOOL value (e.g, true, false)
+|-
+| /asset/{assetSymbol} || GET || display information about specified asset symbol (e.g dcr, btc)
+|-
+| /asset/{assetSymbol}/setfeescale/{scale} || GET || sets the fee rate scale factor for the specified asset. The scale factor must be a valid float(e.g 2.0). The default is 1.0.
+|-
+| /accounts || GET || lists information about all known accounts
+|-
+| /account/{accountID} || GET || list information about a specific account
+|-
+| /account/{accountID}/notify?timeout=TIMEOUT || POST || send a notification containing text in the request body to account. If not currently connected, the notification will be sent upon reconnect unless timeout duration has passed. default timeout is 72 hours. timeout should be of the form #h#m#s (i.e. "2h" or "5h30m"). Header Content-Type must be set to "text/plain"
+|-
+| /account/{accountID}/forgive_match/{matchID} || GET || forgive an account for a specific match failure
+|-
+| /markets  || GET || display status information for all markets
+|-
+| /market/{marketID} || GET || display status information for a specific market
+|-
+| /market/{marketID}/orderbook || GET || display the current order book for a specific market
+|-
+| /market/{marketID}/epochorders || GET || display current epoch orders for a specific market
+|-
+| /market/{marketID}/matches?includeinactive=BOOL || GET || display active matches for a specific market. If includeinactive, completed matches are also returned
+|-
+| /market/{marketID}/suspend?t=EPOCH-MS&persist=BOOL || GET || schedule a market suspension at the end of the current epoch or the first epoch after t has elapsed. If persist, booked orders are saved and reinstated upon resumption. Default is true
+|-
+| /market/{marketID}/resume?t=EPOCH-MS || GET || schedule a market resumption at the end of the current epoch or the first epoch after t has elapsed
+|-
+| /notifyall || POST || send a notification containing text in the request body to all connected clients. Header Content-Type must be set to "text/plain"
+|}

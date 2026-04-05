@@ -1,0 +1,316 @@
+{{define "mm"}}
+{{template "top" .}}
+<div id="main" data-handler="mm" class="flex-grow-1 flex-stretch-column stylish-overflow">
+  <div>
+
+    {{- /* BOT PANELS */ -}}
+    <div class="flex-center">
+      <div class="d-flex col-24 col-lg-20 col-xl-16 col-xxl-12">
+        <div id="boxZero" class=" flex-stretch-column col-24 col-md-12">
+
+          {{- /* MARKET MAKING OVERVIEW */ -}}
+          <div id="overview">
+            <section class="flex-stretch-column py-3">
+              <div class="d-flex justify-content-between px-3 pb-2">
+                <span class="fs26">Market Making</span>
+                <button id="newBot" class="feature lh1">
+                  <span class="ico-robot fs20 me-1"></span>
+                  <span>Create a New Bot</span>
+                </button>
+              </div>
+              <table class="row-border mt-2">
+                <tbody id="botRows">
+                  <tr id="botRowTmpl" class="hoverbg pointer">
+                    <td class="ps-3">
+                      <div class="d-flex justify-content-start align-items-center">
+                        <img class="mini-icon me-1" data-base-logo>
+                        <img class="mini-icon me-1" data-quote-logo>
+                        <span class="fs20" data-base-ticker></span>
+                        <span>-</span>
+                        <span class="fs20" data-quote-ticker></span>
+                      </div>
+                    </td>
+                    <td data-tmpl="profitLossBox" class="pe-3">
+                      <div class="d-flex align-items-center justify-content-end">
+                        <span class="fs14 grey me-2 demi">P/L</span>
+                        <div class="d-flex align-items-end fs18">
+                          <span data-tmpl="profitLoss"></span>
+                          <span class="grey fs15 ms-1">USD</span>
+                        </div>
+                        <div class="on-indicator on ms-2"></div>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {{- /* CEX OVERVIEW */ -}}
+              <div class="mt-2 px-3 fs22">Exchanges</div>
+              <table class="row-border mt-2">
+                <tbody id="cexRows">
+                  <tr id="exchangeRowTmpl">
+                    <td class="ps-3">
+                      <div class="d-flex justify-content-start align-items-center">
+                        <img data-tmpl="logo" class="small-icon me-2">
+                        <span data-tmpl="name" class="fs20"></span>
+                      </div>
+                    </td>
+                    <td data-tmpl="unconfigured" class="pe-3">
+                      <div class="d-flex align-items-center justify-content-end">
+                        <button data-tmpl="configureBttn" class="flex-center">
+                          <span class="ico-settings fs18 me-1"></span>
+                          <span>Configure</span>
+                        </button>
+                      </div>
+                    </td>
+                    <td data-tmpl="configured" class="pe-3">
+                      <div class="d-flex align-items-center justify-content-end">
+                        <div class="d-flex align-items-end fs18">
+                          <span class="grey">~</span>
+                          <span data-tmpl="usdBalance"></span>
+                          <span class="grey fs15 ms-1">USD</span>
+                        </div>
+                        <button data-tmpl="reconfigBttn" class="ico-settings ms-2"></button>
+                      </div>
+                    </td>
+                    <td data-tmpl="connectErrBox" class="d-hide pe-3">
+                      <span data-tmpl="connectErr" class="text-warning" data-tooltip></span>
+                      <button data-tmpl="errConfigureBttn" class="ico-settings ms-2"></button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </section>
+          </div>
+        </div>
+        <div id="boxOne" class=" flex-stretch-column col-24 col-md-12">
+          {{- /* NO CONFIGURED BOTS */ -}}
+          <div id="noBots">
+            <section class="flex-stretch-column">
+              <div class="flex-center lh1 pt-3">
+                <span class="ico-robot"></span>
+              </div>
+              <p class="px-3 pt-2 mt-2 border-top fs18 text-justify">
+                [[[whats_a_market_maker]]]
+              </p>
+            </section>
+          </div>
+          {{- /* BOT PANEL TEMPLATE */ -}}
+          <div id="botTmpl" class="flex-stretch-column mb-3">
+            <section class="flex-stretch-column position-relative pt-3">
+              <div data-tmpl="loadingBg" class="fill-abs z10 blurry-bg flex-center">
+                <div class="ico-robot fs50 grey position-relative spinner fast pb-2"></div>
+              </div>
+
+              <div class="d-flex px-3">
+                {{- /* MARKET NAME DISPLAY */ -}}
+                <div data-tmpl="marketLink" class="flex-grow-1 d-flex flex-column align-items-start hoverbg pointer">
+                  <div class="d-flex align-items-center fs24 lh1 pb-1">
+                    <img class="mini-icon" data-base-logo><img class="mx-1 mini-icon" data-quote-logo>
+                    <span data-base-ticker></span>&ndash;<span data-quote-ticker></span>
+                  </div>
+                  <div class="fs14 grey">
+                    <span class="me-1">@</span>
+                    <span data-host></span>
+                  </div>
+                </div>
+                {{- /* BOT TYPE DISPLAY */ -}}
+                <div class="flex-grow-1 d-flex flex-column align-items-end">
+                  <div class="d-flex align-items-center lh1 pb-1">
+                    <div data-tmpl="botTypeDisplay" class="fs20"></div>
+                  </div>
+                  <div class="d-flex align-items-center" data-cex-show>
+                    <img class="micro-icon greyscale me-1" data-cex-logo>
+                    <span class="grey fs15" data-cex-name></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="position-relative">
+
+                {{- /* ON */ -}}
+                <div data-tmpl="onBox" class="flex-stretch-column mt-2 pt-2 border-top">
+                  {{template "runningBotDisplay"}}
+                </div>
+
+                {{- /* OFF */ -}}
+                <div data-tmpl="offBox" class="flex-stretch-column">
+                  {{- /* STATUS AND ALLOCATE BUTTON */ -}}
+                  <div class="d-flex align-items-center mt-2 px-3 pt-2 border-top">
+                    <div class="col-8 ico-sleeping fs26 grey"></div>
+                    <div class="col-8 flex-center">
+                    </div>
+                    <div class="col-8 d-flex align-items-center justify-content-end">
+                      <button data-tmpl="reconfigureBttn" class="go">
+                        <span class="ico-settings fs17"></span> <span class="ms-2 ico-arrowright fs17"></span>
+                      </button>
+                    </div>
+                  </div>
+                  <span data-tmpl="offError" class="fs16 px-3 text-center text-warning d-hide"></span>
+
+                  {{- /* AVAILABLE BALANCES */ -}}
+                  <div class="flex-stretch-column px-3 pt-2 mt-2 border-top">
+                    <div class="d-flex align-items-center justify-content-between">
+                      <div class="flex-center">
+                        <span class="ico-barchart fs18 me-2"></span>
+                        <span class="fs20">Available Balances</span>
+                      </div>
+                    </div>
+
+                    {{- /* BASE ASSET */ -}}
+                    <div class="d-flex align-items-center justify-content-between mt-2">
+                      <div class="d-flex fs20 align-items-center">
+                        <img data-base-logo class="micro-icon me-1">
+                        <span data-base-name></span>
+                      </div>
+                      <div data-tmpl="baseTotalBalance" class="fs20"></div>
+                    </div>
+                    <div class="d-flex align-items-center fs17 grey justify-content-between">
+                      <span class="me-1">|- <img class="mini-icon logo-square me-1"></span>
+                      <div data-tmpl="baseDexBalance"></div>
+                    </div>
+                    <div data-tmpl="baseCexBalanceSection" class="d-flex fs17 grey align-items-center justify-content-between">
+                      <span class="me-1">|- <img data-cex-logo class="mini-icon"/></span>
+                      <div data-tmpl="baseCexBalance"></div>
+                    </div>
+
+                    {{- /* QUOTE ASSET */ -}}
+                    <div class="d-flex align-items-center justify-content-between mt-2">
+                      <div class="d-flex fs20 align-items-center">
+                        <img data-quote-logo class="micro-icon me-1">
+                        <span data-quote-name></span>
+                      </div>
+                      <div data-tmpl="quoteTotalBalance" class="fs20"></div>
+                    </div>
+                    <div class="d-flex align-items-center fs17 grey justify-content-between">
+                      <span class="me-1">|- <img class="mini-icon logo-square me-1"></span>
+                      <div data-tmpl="quoteDexBalance"></div>
+                    </div>
+                    <div data-tmpl="quoteCexBalanceSection" class="d-flex fs17 grey align-items-center justify-content-between">
+                      <span class="me-1">|- <img data-cex-logo class="mini-icon"/></span>
+                      <div data-tmpl="quoteCexBalance"></div>
+                    </div>
+
+                    {{- /* BASE FEE ASSET */ -}}
+                    <div data-tmpl="baseFeeBalanceSection" class="d-flex align-items-center justify-content-between mt-2">
+                      <div class="d-flex fs20 align-items-center">
+                        <img data-base-fee-logo class="micro-icon me-1">
+                        <span data-base-fee-name></span>
+                      </div>
+                      <div data-tmpl="baseFeeBalance" class="fs15"></div>
+                    </div>
+
+                    {{- /* QUOTE FEE ASSET */ -}}
+                    <div data-tmpl="quoteFeeBalanceSection" class="d-flex align-items-center justify-content-between mt-2">
+                      <div class="d-flex fs20 align-items-center">
+                        <img data-quote-fee-logo class="micro-icon me-1">
+                        <span data-quote-fee-name></span>
+                      </div>
+                      <div data-tmpl="quoteFeeBalance" class="fs15"></div>
+                    </div>
+  
+                  </div>
+
+                  {{- /* CURRENT MARKET DATA */ -}}
+                  <div class="d-flex align-items-stretch justify-content-start mt-2 pt-2 px-3 border-top">
+                    {{- /* HIDDEN FOR NOW - MOVE TO SETTINGS OVERVIEW WHEN IMPLEMENTED */ -}}
+                    <div class="flex-center flex-column p-2 d-hide">
+                      <span class="fs14 grey">Trigger</span>
+                      <span class="lh1">
+                        <span data-tmpl="profitTrigger" class="fs28">5</span>
+                        <span class="fs22 grey">%</span>
+                      </span>
+                    </div>
+
+                    {{- /* DEX MARKET INFO */ -}}
+                    <div data-tmpl="dexDataBox" class="flex-stretch-column flex-grow-1">
+                      <div class="d-flex align-items-center justify-content-start pt-1">
+                        <img class="mini-icon dex-logo me-1">
+                        <span class="fs18">DCRDEX</span>
+                      </div>
+                      <div class="flex-grow-1 d-flex align-items-end lh1 pt-1">
+                        <span data-tmpl="dexPrice" class="fs17"></span>
+                        <span class="fs14 grey ms-1">
+                          <span data-quote-ticker></span><span>/</span> <span data-base-ticker></span>
+                        </span>
+                      </div>
+                      <div class="flex-grow-1 d-flex align-items-end lh1 pt-1 pb-2">
+                        <span data-tmpl="dexVol" class="fs17"></span>
+                        <span class="fs14 grey ms-1">USD 24 hr. vol.</span>
+                      </div>
+                    </div>
+
+                    {{- /* CEX MARKET INFO */ -}}
+                    <div data-tmpl="cexDataBox" class="d-flex flex-column align-items-end flex-grow-1">
+                      <div class="flex-center">
+                        <img class="mini-icon me-1" data-cex-logo>
+                        <span class="fs20" data-cex-name></span>
+                      </div>
+                      <div class="flex-grow-1 d-flex align-items-end lh1 pt-1">
+                        <span data-tmpl="cexPrice" class="fs17"></span>
+                        <span class="fs14 grey ms-1">
+                          <span data-quote-ticker></span><span>/</span> <span data-base-ticker></span>
+                        </span>
+                      </div>
+                      <div class="flex-grow-1 d-flex align-items-end lh1 pt-1 pb-2">
+                        <span data-tmpl="cexVol" class="fs17"></span>
+                        <span class="fs14 grey ms-1">USD 24 hr. vol.</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="py-1 px-3 d-flex justify-content-start grey border-top">
+                    <span data-tmpl="removeBttn" class="pointer hoverbg flex-center">
+                      <span class="ico-cross fs11 me-1"></span>
+                      delete this bot
+                    </span>
+                  </div>
+                </div>
+
+                {{- /* NO FIAT RATES */ -}}
+                <div data-tmpl="noFiatDisplay" class="flex-center flex-column p-3 mt-2 border-top d-hide">
+                  <div class="flex-center">
+                    <span class="text-warning fs28 demi me-2">!</span>
+                    <span class="fs22">Missing fiat exchange rates</span>
+                  </div>
+                  <div class="mt-25">
+                    Enable external fiat rate sources in
+                    <a href="/settings">settings</a>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex-center align-items-stretch py-3">
+    <button type="button" class="medium px-4" id="archivedLogsBtn">[[[previous_run_logs]]]</button>
+  </div>
+    
+
+  {{- /* FORMS */ -}}
+  <div id="forms" class="d-hide">
+    {{template "orderOptionTemplates"}}
+
+    <form class="position-relative mw-425 d-hide" id="cexConfigForm" autocomplete="off">
+      {{template "cexConfigForm"}}
+    </form>
+
+    <form class="position-relative d-hide" id="orderReportForm" autocomplete="off">
+      {{template "orderReportForm"}}
+    </form>
+
+    <form class="position-relative mw-425 d-hide" id="confirmRemoveForm" autocomplete="off">
+      <div class="form-closer"><span class="ico-cross"></span></div>
+      <header>[[[delete_bot]]]</header>
+      <div id="confirmRemoveCfgMsg"></div>
+      <button id="confirmRemoveConfigBttn" type="button" class="feature mt-2 mx-2">Confirm</button>
+      <div id="removeCfgErr" class="fs15 text-center d-hide text-danger text-break"></div>
+    </form>
+  </div>  {{- /* END FORMS */ -}}
+</div>
+{{template "bottom"}}
+{{end}}

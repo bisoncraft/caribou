@@ -1,0 +1,308 @@
+[data-handler=wallets] {
+  .ico-unlocked {
+    color: var(--indicator-good);
+  }
+
+  .market-select-logo {
+    width: 20px;
+    height: 20px;
+  }
+
+  .short-host {
+    text-overflow: ellipsis;
+    max-width: 175px;
+  }
+
+  .mw-90p {
+    min-width: 90%;
+  }
+
+  #recoverWalletConfirm,
+  #confirmForce,
+  #toggleWalletStatusConfirm {
+    width: 400px;
+  }
+
+  #content {
+    flex-direction: column;
+
+    &:not(.multinet) .multinetonly {
+      display: none !important;
+    }
+
+    &.multinet .uninetonly {
+      display: none !important;
+    }
+
+    &:not(.token) .tokenonly {
+      display: none !important;
+    }
+  }
+
+  #assetSelect {
+    flex-direction: row;
+
+    .icon-select {
+      cursor: pointer;
+      min-height: fit-content;
+
+      img[data-tmpl=img] {
+        width: 30px;
+        height: 30px;
+      }
+
+      img[data-tmpl=parentImg] {
+        position: absolute;
+        left: 15px;
+        bottom: 15px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        border: 3px solid var(--section-bg);
+        background-color: var(--section-bg);
+      }
+
+      &.selected,
+      &:hover {
+        background-color: var(--body-bg);
+        // border: 1px solid var(--border-color);
+        opacity: 1;
+
+        img[data-tmpl=parentImg] {
+          border: 3px solid var(--body-bg);
+          background-color: var(--section-bg);
+        }
+      }
+    }
+
+    .icon-select.nowallet {
+      opacity: 0.7;
+
+      [data-tmpl=balance] {
+        display: none;
+      }
+    }
+  }
+
+  table#balanceTable {
+    td {
+      line-height: 1;
+    }
+
+    tr.itemized>td {
+      padding-bottom: 0.25rem;
+    }
+
+    tr:not(.sub, :first-child) td {
+      padding-top: 0.5rem;
+    }
+
+    tr {
+      font-size: 1.1rem;
+    }
+
+    tr.sub {
+      font-size: 0.9rem;
+
+      &.last>td:first-child::before {
+        content: '└─ ',
+      }
+
+      &>td:first-child::before {
+        content: '├─ ',
+      }
+
+      &>td:last-child {
+        @include border-right;
+
+        padding-right: 0.5rem;
+      }
+    }
+  }
+
+  #walletInfo {
+    border-left: none;
+  }
+
+  #txViewBlockExplorer {
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  #checkmarkBox {
+    height: 100px;
+  }
+
+  #walletDetailsBox {
+
+    // Asset name and balance sizes for mobile. Redefined for > sm below.
+    #assetLogo {
+      width: 30px;
+      height: 30px;
+    }
+
+    #assetName {
+      font-size: 30px;
+    }
+
+    #balance {
+      font-size: 20px;
+    }
+
+    #balanceUnit {
+      font-size: 17px;
+    }
+
+    #fiatBalanceBox {
+      font-size: 13px;
+    }
+
+    #tokenParentLogo {
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  .peers-table-icon {
+    padding-left: 30%;
+  }
+
+  #vspDisplay {
+    #vspEditIcon {
+      display: none;
+    }
+
+    &:hover #vspEditIcon {
+      display: inline;
+    }
+  }
+
+  .scrollsmall {
+    @include stylish-overflow;
+  }
+
+  .positive-tx {
+    color: var(--indicator-good);
+  }
+
+  .negative-tx {
+    color: inherit;
+  }
+
+  #docs {
+    .plainlink:visited,
+    .plainlink:hover {
+      text-decoration: none;
+    }
+  }
+}
+
+@include media-breakpoint-up(xl) {
+  .scrollsmall {
+    overflow: hidden;
+  }
+
+  .column {
+    @include hidden-overflow;
+    @include fill-abs;
+  }
+}
+
+@include media-breakpoint-up(lg) {
+  .fill-abs-lg {
+    @include fill-abs;
+  }
+
+  .stylish-overflow-lg {
+    @include stylish-overflow;
+  }
+
+  [data-handler=wallets] {
+    #walletDetailsBox {
+      border-bottom: none !important;
+    }
+  }
+
+  .flex-wrap-lg {
+    flex-wrap: wrap;
+  }
+
+  #purchaseTicketsErrBox {
+    background-color: var(--section-bg);
+  }
+}
+
+@include media-breakpoint-up(sm) {
+  [data-handler=wallets] {
+    #walletDetailsBox {
+      #assetLogo {
+        width: 40px;
+        height: 40px;
+      }
+
+      #assetName {
+        font-size: 40px;
+      }
+
+      #balance {
+        font-size: 28px;
+      }
+
+      #balanceUnit {
+        font-size: 20px;
+      }
+
+      #fiatBalanceBox {
+        font-size: 15px;
+      }
+    }
+
+    #content {
+      flex-direction: row;
+    }
+
+    #assetSelect {
+      flex-direction: column;
+      overflow-y: auto;
+
+      .icon-select {
+        padding: 15px;
+
+        img[data-tmpl=img] {
+          width: 40px;
+          height: 40px;
+        }
+
+        img[data-tmpl=parentImg] {
+          left: 20px;
+          bottom: 20px;
+          width: 28px;
+          height: 28px;
+          border-radius: 15px;
+        }
+      }
+    }
+  }
+}
+
+@include media-breakpoint-up(md) {
+  [data-handler=wallets] {
+    #sendReceive {
+      border-bottom: none;
+    }
+  }
+}
+
+#restoreWalletInfo,
+#exportWalletAuth,
+#unapproveTokenForm {
+  width: 450px;
+}
+
+#txDetails {
+  width: 450px;
+}
+
+#submitReconfig[disabled] {
+  cursor: not-allowed;
+}

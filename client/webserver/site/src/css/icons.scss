@@ -1,0 +1,246 @@
+/* icons */
+
+@font-face {
+  font-family: "icomoon";
+  src:
+    url("/font/icomoon.ttf?u8i98qq") format("truetype"),
+    url("/font/icomoon.woff?u8i98qq") format("woff"),
+    url("/font/icomoon.svg?u8i98qq#icomoon") format("svg");
+  font-weight: normal;
+  font-style: normal;
+}
+
+[class^="ico-"],
+[class*=" ico-"] {
+  /* use !important to prevent issues with browser extensions that change fonts */
+  font-family: "icomoon", monospace !important;
+  speak: none;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+
+  /* Better Font Rendering =========== */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.micro-icon {
+  height: 15px;
+  width: 15px;
+}
+
+.mini-icon {
+  height: 20px;
+  width: 20px;
+}
+
+.small-icon {
+  height: 25px;
+  width: 25px;
+}
+
+.medium-icon {
+  height: 30px;
+  width: 30px;
+}
+
+.large-icon {
+  height: 40px;
+  width: 40px;
+}
+
+.enourmous-icon {
+  height: 50px;
+  width: 50px;
+}
+
+.ico-spinner::before {
+  content: "\e97b";
+}
+
+.ico-settings::before {
+  content: "\e995";
+}
+
+.ico-plus::before {
+  content: "\ea0a";
+}
+
+.ico-minus::before {
+  content: "\ea0b";
+}
+
+.ico-check::before {
+  content: "\ea10";
+  display: inline-block;
+  color: var(--buy-color);
+}
+
+.ico-bell::before {
+  content: "\e900";
+}
+
+.ico-locked::before {
+  content: "\e98f";
+}
+
+.ico-unlocked::before {
+  content: "\e990";
+}
+
+.ico-sleeping::before {
+  content: "\e901";
+}
+
+.ico-cross::before {
+  content: "\e902";
+}
+
+.ico-profile::before {
+  content: "\e903";
+}
+
+.ico-disconnected::before {
+  content: "\e904";
+}
+
+.ico-search::before {
+  content: "\e905";
+}
+
+.ico-expired::before {
+  content: "\e906";
+}
+
+.ico-info::before {
+  content: "\e907";
+}
+
+.ico-textfile::before {
+  content: "\e908";
+}
+
+.ico-open::before {
+  content: "\e909";
+}
+
+.ico-sync::before {
+  content: "\e90a";
+}
+
+.ico-target::before {
+  content: "\e90b";
+}
+
+.ico-arrowright::before {
+  content: "\e90c";
+}
+
+.ico-arrowdown::before {
+  content: "\e90c";
+  display: inline-block;
+  transform: rotate(90deg);
+}
+
+.ico-arrowleft::before {
+  content: "\e90c";
+  display: inline-block;
+  transform: rotate(180deg);
+}
+
+.ico-wide-headed-left-arrow::before {
+  content: "\e919";
+  display: inline-block;
+}
+
+.ico-wide-headed-right-arrow::before {
+  content: "\e919";
+  display: inline-block;
+  transform: rotate(180deg);
+}
+
+.ico-wide-headed-down-arrow::before {
+  content: "\e919";
+  display: inline-block;
+  transform: rotate(270deg);
+}
+
+.ico-arrowup::before {
+  content: "\e90c";
+  display: inline-block;
+  transform: rotate(-90deg);
+}
+
+.ico-checkbox::before {
+  content: "\e90d";
+}
+
+.ico-connection::before {
+  content: "\e90e";
+}
+
+.ico-rocket::before {
+  content: "\e90f";
+}
+
+.ico-copy::before {
+  content: "\e910";
+}
+
+.ico-qrcode::before {
+  content: "\e911";
+}
+
+.ico-send::before {
+  content: "\e912";
+}
+
+.ico-exchange::before {
+  content: "\e913";
+}
+
+.ico-pause::before {
+  content: "\e914";
+}
+
+.ico-hamburger::before {
+  content: "\e915";
+}
+
+.ico-barchart::before {
+  content: "\e916";
+}
+
+.ico-edit::before {
+  content: "\e917";
+}
+
+.ico-ticket::before {
+  content: "\e918";
+}
+
+.ico-robot::before {
+  content: "\e91a";
+}
+
+.ico-secretagent::before {
+  content: "\e91b";
+}
+
+.ico-lever::before {
+  content: "\e91c";
+}
+
+.ico-global::before {
+  content: "\e91d";
+}
+
+.ico-sort::before {
+  content: "\e91e";
+}
+
+.ico-cogs::before {
+  content: "\e995";
+}

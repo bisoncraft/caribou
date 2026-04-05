@@ -1,0 +1,346 @@
+// Reusable components and styles 
+@import "~bootstrap/scss/mixins";
+@import "mixins";
+
+
+button {
+  background-color: transparent;
+  border: 1px solid var(--btn-border-color);
+  border-radius: 5px;
+  outline: none;
+  padding: 0.375rem 0.75rem;
+  user-select: none;
+  font-size: 1rem;
+  color: var(--text-color);
+  white-space: nowrap;
+
+  &:focus {
+    outline: none;
+  }
+
+  &:hover {
+    text-decoration: none;
+    border-color: var(--btn-hover-border-color);
+    background-color: #7772;
+  }
+
+  &.small {
+    padding: 0.25rem 0.5rem;
+    font-size: .9rem;
+  }
+
+  &.micro {
+    padding: 0.1rem 0.25rem;
+    font-size: .8rem;
+  }
+
+  &.large {
+    padding: 0.5rem 1rem;
+    font-size: 1.25rem;
+  }
+
+  &.noborder {
+    border: none;
+    border-radius: 0;
+  }
+
+  &.feature {
+    background-color: var(--btn-feature-bg);
+    border-color: var(--btn-feature-border-color);
+
+    &:hover {
+      background-color: var(--btn-feature-hover-bg);
+      border-color: var(--btn-featur-hover-border-color);
+    }
+
+    &:disabled {
+      opacity: 0.4;
+
+      &:hover {
+        background-color: var(--btn-feature-bg);
+        border-color: var(--btn-feature-border-color);
+      }
+    }
+  }
+
+  &.danger {
+    border-color: var(--text-danger);
+    color: var(--text-danger);
+
+    &:hover {
+      background-color: var(--text-danger);
+      color: var(--btn-danger-hover-color);
+    }
+  }
+
+  &.warning {
+    border-color: var(--text-warning);
+    color: var(--text-warning);
+
+    &:hover {
+      background-color: var(--text-warning);
+      color: var(--btn-danger-hover-color);
+    }
+  }
+
+  &.go {
+    background-color: var(--btn-go-bg);
+    color: var(--btn-go-color);
+
+    &:hover {
+      background-color: var(--btn-go-hover-bg);
+    }
+  }
+}
+
+// tables
+table {
+  color: var(--text-color);
+  border-collapse: collapse;
+  width: 100%;
+
+  .table-group-divider {
+    border-color: var(--border-color)
+  }
+
+  &.px-0 {
+    th,
+    td {
+      &:last-child,
+      &:first-child {
+        padding-left: 0;
+        padding-right: 0;
+      }
+    }
+
+  }
+  
+  th,
+  td {
+    padding: 0.5rem;
+
+    &:last-child:not(:first-child) {
+      text-align: right;
+    }
+
+    &.no-stretch {
+      width: 0;
+    }
+  }
+
+  &.row-border {
+    tbody {
+      border-bottom: 1px solid var(--border-color);
+
+      tr {
+        border-top: 1px solid var(--border-color);
+      }
+    }
+  }
+
+  &.cell-border {
+    th,
+    td {
+      border: 1px solid var(--border-color);
+    }
+  }
+
+  &.nopadding {
+    td {
+      padding: 0;
+    }
+  }
+
+  &.compact {
+    th,
+    td {
+      padding: 0.25rem;
+    }
+  }
+
+  &.row-hover {
+    tr:hover {
+      background-color: var(--tertiary-bg);
+    }
+  }
+
+  &.striped {
+    tr:nth-of-type(even) {
+      background-color: #7772;
+    }
+  }
+
+  &.no-bottom-border > tbody {
+    border-bottom-style: none;
+  }
+
+  & > thead.unbold th {
+    font-weight: normal;
+  }
+}
+
+a {
+  color: var(--link-color);
+
+  &:hover {
+    color: var(--link-color-hover);
+  }
+}
+
+table.reg-asset-markets {
+  @extend .stylish-overflow;
+
+  display: block;
+  max-height: 120px;
+  line-height: 1.15;
+  overflow-y: hidden;
+  margin-right: 8px;
+
+  &:hover {
+    overflow-y: auto;
+  }
+
+  tr {
+    border: none;
+  }
+
+  th {
+    font-weight: normal;
+    font-size: 13px;
+  }
+
+  td {
+    font-size: 14px;
+  }
+
+  th,
+  td {
+    padding: 1px 5px;
+  }
+}
+
+.form-check-label {
+  cursor: pointer;
+}
+
+.form-check-input[type=checkbox] {
+  border: 1px solid var(--form-input-border);
+  cursor: pointer;
+
+  &:checked {
+    background-color: var(--form-input-bg-active);
+  }
+}
+
+select {
+  font-family: inherit;
+  padding: 0.75rem 1rem;
+}
+
+// Hide number arrows.
+// Chrome, Safari, Edge, Opera
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+// Firefox
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+form.card button:hover {
+  color: black;
+}
+
+// Remove red background for firefox on empty number input fields.
+input:invalid {
+  box-shadow: none;
+}
+
+.dashed {
+  border-style: dashed;
+}
+
+.micro-icon {
+  position: relative;
+}
+
+#tooltip {
+  position: absolute;
+  left: -10000px;
+  z-index: 1000;
+  padding: 3px 6px;
+  max-width: 300px;
+  font-size: 15px;
+  border-radius: 4px;
+  background-color: var(--section-bg);
+
+  @include border;
+}
+
+.on-indicator {
+  width: 15px;
+  height: 15px;
+  border-radius: 8px;
+
+  &.on {
+    background-color: var(--indicator-good);
+  }
+
+  &.off {
+    background-color: #777;
+  }
+}
+
+.border-left { // alias of .border-start
+  border-left: 1px solid var(--border-color);
+}
+
+.border-right { // alias of .border-end
+  border-right: 1px solid var(--border-color);
+}
+
+div[data-handler=proposal],
+div[data-handler=proposals],
+div[data-handler=dexsettings],
+div[data-handler=init],
+div[data-handler=login],
+div[data-handler=markets],
+div[data-handler=mm],
+div[data-handler=mmsettings],
+div[data-handler=order],
+div[data-handler=orders],
+div[data-handler=register],
+div[data-handler=settings],
+div[data-handler=mmlogs],
+div[data-handler=wallets] {
+  #forms>form:not(.plain) {
+    border-radius: 5px;
+
+    @include border;
+
+    background-color: var(--form-bg);
+    box-shadow: 0 3px 6px #00000021, 0 2px 7px #00000041;
+  }
+}
+
+.corner-button {
+  position: absolute;
+  top: 0;
+
+  &.left {
+    left: 0;
+  }
+
+  &.right {
+    right: 0;
+  }
+}
+
+div[data-handler=proposal] .card,
+div[data-handler=proposals] .card {
+  background-color: var(--body-bg);
+  padding: 3px;
+}

@@ -1,0 +1,34 @@
+version: "2"
+run:
+  timeout: 10m
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - durationcheck
+    - govet
+    - grouper
+    - ineffassign
+    - makezero
+    - nosprintfhostport
+    - reassign
+    - rowserrcheck
+    - sqlclosecheck
+    - staticcheck
+    - tparallel
+    - unconvert
+  settings:
+    staticcheck:
+      checks:
+          - S1*
+  exclusions:
+    paths:
+      - docs/examples
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    paths:
+      - docs/examples

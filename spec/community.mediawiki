@@ -1,0 +1,118 @@
+=Community Conduct=
+
+__TOC__
+
+By registering, clients agree to abide by the rules described here. These rules
+are designed to ensure that clients are acting in good faith and maintaining
+behaviors that contribute to a smooth DEX experience for other users.
+
+==Rules of Community Conduct==
+
+===Rule 1: Clients must respond to all preimage requests===
+
+At the expiration of the epoch, every client with an order will receive a
+<code>preimage</code> request. The client has 5 seconds to respond.
+
+===Rule 2: Every match must be fully settled===
+
+Swap transactions must be created at the correct times (see
+[[fundamentals.mediawiki/#Exchange_Variables|broadcast timeout]]).
+
+In the event that the maker fails to start the atomic swap process with their
+initialization transaction, the taker will be notified that order execution is
+terminated due to failure of the maker to accept the order. The Maker's limit
+order will not go back on the order book, but they may be given the option to
+replace the order.
+
+In the event that the taker fails to respond to the maker's initialization
+transaction, the maker will incur no violation.
+
+Each party provides a unique per-match swap address in their match
+acknowledgement. If the taker fails to provide their per-match address before
+the broadcast timeout, the match is revoked and the taker incurs the violation
+instead of the maker, since the maker cannot broadcast their swap without the
+taker's address.
+
+===Rule 3: An account's cancellation rate must not exceed the threshold===
+
+The cancellation rate is the ratio of the count of canceled orders to the
+count of all completed orders.
+The completed order count is the sum of canceled orders and fully settled
+orders.
+An order is considered fully settled if it is no longer booked, had at least
+one match, and has completed all swaps from matches made with the order.
+Failed swaps where the counter-party is at fault do not count against the user.
+An order is considered canceled when a cancel order is matched to a standing
+limit order. The server may also cancel an order if the client's connection is
+dropped and the client fails to reconnect for more than 1 epoch duration.
+Cancellation of a partially filled order is counted as a full cancellation.
+The cancellation threshold is set by the DEX operator.
+The cancellation rate is evaluated on a 100-order rolling window.
+
+A new user is exempt from the cancellation rate requirement while their
+completed order count, <code>total</code>, is not greater than
+<code>threshold/(1-threshold)</code>. This follows from the possibility of the
+next completed order being fully-settled and just passing the required
+cancellation rate threshold: <code>total / (total + 1) <= threshold</code>
+
+===Rule 4: Transaction outputs must be properly sized===
+
+The swap output value must be sized to exactly the matched amount. The fee rate
+must be at least the minimum value set by the DEX. It is the client's
+responsibility to ensure that fees on a partial fill are not overpaid to a
+level that results in a violation of rules 1 or 3 when the remaining portion is
+matched.
+
+==Penalties==
+
+The primary penalty for breaches of conduct is a '''ban''', which includes loss
+of trading privileges, forfeiture of registration fee, and immediate revocation
+of any unfilled orders.
+
+Less drastic punitive measures such as a cool-down period may be considered
+for minor, first-time or infrequent conduct violations.
+
+===Penalization Notification===
+
+In the event that a rule is broken, the client will be sent a notification that
+includes penalization details. If the client is offline, this information will
+be sent in the [[comm.mediawiki/#Session_Authentication|connect response]].
+
+'''Notification route:''' <code>penalty</code>, '''originator: ''' DEX
+
+<code>payload</code>
+{|
+! field   !! type   !! description
+|-
+| penalty || object || a Penalty object (definition below)
+|-
+| sig     || string || hex-encoded signature of the serialized Penalty object
+|}
+
+====Penalty Object====
+
+{|
+! field      !! type   !! description
+|-
+| brokenrule || int    || the rule that was broken
+|-
+| timestamp  || int    || the UNIX timestamp in milliseconds at which the penalization occured
+|-
+| duration   || int    || the duration in milliseconds of the penalization
+|-
+| details    || string || a message describing the penalization
+|}
+
+'''Penalty serialization'''
+
+{|
+! field      !! size (bytes) !! description
+|-
+| brokenrule || 1            || the rule
+|-
+| timestamp  || 8            || server's UNIX timestamp (milliseconds)
+|-
+| duration   || 8            || duration (milliseconds)
+|-
+| details    || string       || a message (UTF-8)
+|}

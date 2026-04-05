@@ -1,0 +1,13 @@
+.filter-display {
+  border-radius: 3px;
+  font-size: 16px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.filter-opts {
+  position: relative;
+  max-width: 250px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

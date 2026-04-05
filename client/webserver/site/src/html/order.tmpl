@@ -1,0 +1,239 @@
+{{define "microIcon"}}
+<img src="/img/coins/{{baseAssetSymbol .}}.png" class="micro-icon">
+{{end}}
+
+{{define "order"}}
+{{template "top" .}}
+{{$ord := .Order}}
+<div id="main" data-handler="order" class="main w-100 overflow-y-auto" data-oid="{{$ord.ID}}">
+  <div class="px-5">
+    <div class="px-1 py-2">
+      <span class="fs22 demi me-2">[[[Order]]]</span>
+      <span class="fs18" dir="ltr">{{$ord.ID}}</span>
+      <span class="float-end ms-2"><a href="/orders" class="d-inline-block subtlelink fs15"><span class="fs12 ico-textfile"></span> [[[see all orders]]]</a></span>
+    </div>
+    {{- /* DATA CARDS */ -}}
+    <div class="d-flex flex-wrap">
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Exchange]]]</div>
+        <div class="py-1 px-3">{{$ord.Host}}</div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Market]]]</div>
+        <a href="/markets?host={{$ord.Host}}&base={{$ord.BaseID}}&quote={{$ord.QuoteID}}" class="plainlink hoverbg py-1 px-3">
+          {{template "microIcon" $ord.BaseSymbol}} {{template "microIcon" $ord.QuoteSymbol}}
+          <span id="mktBaseSymbol">{{toUpper $ord.BaseSymbol}}</span>-<span id="mktQuoteSymbol">{{toUpper $ord.QuoteSymbol}}</span>
+        </a>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Type]]]</div>
+        <div class="py-1 px-3">{{ $ord.TypeString }}</div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Status]]]</div>
+        <div class="py-1 px-3">
+          <span id="status">{{$ord.StatusString}}</span>
+          {{if $ord.Cancelable}}
+            <span id="cancelBttn" class="ico-cross fs12 ms-1 pointer hoverbg" data-tooltip="[[[cancel_order]]]"></span>
+          {{end}}
+        </div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Offering]]]</div>
+        <div class="py-1 px-3">{{$ord.OfferString}} {{$ord.FromTicker}} {{template "microIcon" $ord.FromSymbol}}</div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Asking]]]</div>
+        <div class="py-1 px-3">
+          {{if (not $ord.IsMarketOrder)}}
+            {{$ord.AskString}}
+          {{end}}
+          {{$ord.ToSymbol}} {{template "microIcon" $ord.ToSymbol}}
+        </div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Rate]]]</div>
+        <div class="py-1 px-3">{{$ord.RateString}}</div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Filled]]]</div>
+        <div class="py-1 px-3">
+          {{$ord.FilledPercent}}%
+          ({{$ord.FilledFrom}} {{template "microIcon" $ord.FromSymbol}}
+          &rarr;
+          {{$ord.FilledTo}} {{template "microIcon" $ord.ToSymbol}})
+        </div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Settled]]]</div>
+        <div class="py-1 px-3">
+          {{$ord.SettledPercent}}%
+          ({{$ord.SettledFrom}} {{template "microIcon" $ord.FromSymbol}}
+          &rarr;
+          {{$ord.SettledTo}} {{template "microIcon" $ord.ToSymbol}})
+        </div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Fees]]] <span class="ico-info fs12" data-tooltip="[[[order_fees_tooltip]]]"></span></div>
+        <div class="py-1 px-3">
+          {{$ord.SwapFeesString}} {{template "microIcon" $ord.FromFeeSymbol}},
+          {{$ord.RedemptionFeesString}} {{template "microIcon" $ord.ToFeeSymbol}}
+        </div>
+      </div>
+      <div class="order-datum border my-1 me-2">
+        <div class="border-bottom py-1 px-3">[[[Age]]]</div>
+        <div class="py-1 px-3" data-stamp="{{$ord.SubmitTime}}"></div>
+      </div>
+    </div> {{- /* END DATA CARDS */ -}}
+
+    {{- /* ACTIONS */ -}}
+    <div class="fs18 demi pt-4 pb-2 d-hide" id="actionsLabel">[[[Actions]]]</div>
+    <div class="d-flex align-items-stretch justify-content-start flex-wrap">
+      <button id="accelerateBttn" type="button" class="px-2 py-1 fs15 go d-hide">[[[accelerate]]]</button>
+    </div>
+
+    {{- /* MATCHES */ -}}
+    <div class="fs18 demi pt-4 pb-2{{if eq (len $ord.Matches) 0}} d-hide{{end}}" id="matchesLabel">[[[Matches]]]</div>
+    <div class="d-flex align-items-stretch justify-content-start flex-wrap" id="matchBox">
+
+      <div class="match-card me-4 mb-2 border" id="matchCardTmpl">
+        <div class="match-header mb-2 p-2">
+          <div class="d-flex justify-content-between align-items-center">
+            <span class="match-data-label ms-3">[[[Match ID]]]</span>
+          </div>
+          <div class="mono mx-3 fs15" data-tmpl="matchID"></div>
+        </div>
+
+        <div class="row py-2">
+          <div class="col-10 text-center">
+            <span class="match-data-label" data-tmpl="statusHdr">[[[Status]]]</span><br>
+            <span class="fs15" data-tmpl="status"></span>
+          </div>
+          <div class="col-14 text-center">
+            <span class="match-data-label">[[[Time]]]</span><br>
+            <span class="fs15" data-tmpl="matchTime"></span>
+            <span class="fs14">(<span class="fs15" data-tmpl="matchTimeAgo"></span> [[[ago]]])</span>
+          </div>
+        </div>
+
+        <div data-tmpl="cancelInfoDiv">
+          <div class="text-center fs20 text-danger">[[[Cancellation]]]</div>
+          <div class="text-center fs16" data-tmpl="cancelInfo">
+            <span data-tmpl="cancelAmount"></span> <img src="" class="micro-icon" data-tmpl="cancelIcon"> (<span data-tmpl="cancelOrderPortion"></span>)
+          </div>
+        </div>
+
+        <div data-tmpl="infoDiv">
+          <div class="text-center demi fs20 py-2" data-tmpl="fromToDiv">
+            <span data-tmpl="fromAmount"></span> <img src="" class="micro-icon" data-tmpl="fromIcon">
+            &rarr;
+            <span data-tmpl="toAmount"></span> <img src="" class="micro-icon" data-tmpl="toIcon">
+          </div>
+
+          <div class="row py-2">
+            <div class="col-10 text-center">
+              <span class="match-data-label">[[[Rate]]]</span><br>
+              <span class="fs15" data-tmpl="rate"></span>
+            </div>
+            <div class="col-7 text-center">
+              <span class="match-data-label">[[[Side]]]</span><br>
+              <span class="fs15" data-tmpl="side"></span>
+            </div>
+            <div class="col-7 text-center">
+              <span class="match-data-label">[[[Order Portion]]]</span><br>
+              <span class="fs15" data-tmpl="orderPortion">
+                <span data-tmpl="orderPortion"></span>
+              </span>
+            </div>
+          </div>
+
+          <div class="pt-3">
+            <div class="px-3 pb-3 d-hide" data-tmpl="makerSwap">
+              <div class="d-inline-block">
+                <div class="d-flex align-items-center justify-content-between">
+                  <span class="match-data-label">1. [[[Maker Swap]]] (<span data-tmpl="makerSwapAsset"></span>, <span data-tmpl="makerSwapYou">[[[you]]]</span><span data-tmpl="makerSwapThem">[[[them]]]</span>)</span>
+                  <span class="match-data-label" data-tmpl="makerSwapMsg"></span>
+                </div>
+                <span data-tmpl="makerSwapPending">&lt;[[[Pending]]]&gt;</span>
+                <a target="_blank" class="mono plainlink" data-tmpl="makerSwapCoin"></a>
+              </div>
+            </div>
+            <div class="px-3 pb-3 d-hide" data-tmpl="takerSwap">
+              <div class="d-inline-block">
+                <div class="d-flex align-items-center justify-content-between">
+                  <span class="match-data-label">2. [[[Taker Swap]]] (<span data-tmpl="takerSwapAsset"></span>, <span data-tmpl="takerSwapYou">[[[you]]]</span><span data-tmpl="takerSwapThem">[[[them]]]</span>)</span>
+                  <span class="match-data-label" data-tmpl="takerSwapMsg"></span>
+                </div>
+                <span data-tmpl="takerSwapPending">&lt;[[[Pending]]]&gt;</span>
+                <a target="_blank" class="mono plainlink" data-tmpl="takerSwapCoin"></a>
+              </div>
+            </div>
+            <div class="px-3 pb-3 d-hide" data-tmpl="makerRedeem">
+              <div class="d-inline-block">
+                <div class="d-flex align-items-center justify-content-between">
+                  <span class="match-data-label">3. [[[Maker Redemption]]] (<span data-tmpl="makerRedeemAsset"></span>, <span data-tmpl="makerRedeemYou">[[[you]]]</span><span data-tmpl="makerRedeemThem">[[[them]]]</span>)</span>
+                  <span class="match-data-label" data-tmpl="makerRedeemMsg"></span>
+                </div>
+                <span data-tmpl="makerRedeemPending">&lt;[[[Pending]]]&gt;</span>
+                <a target="_blank" class="mono plainlink" data-tmpl="makerRedeemCoin"></a>
+              </div>
+            </div>
+            <div class="px-3 pb-3 d-hide" data-tmpl="takerRedeem">
+              <div class="d-inline-block">
+                <div class="d-flex align-items-center justify-content-between">
+                  <span class="match-data-label">4. [[[Taker Redemption]]] (<span data-tmpl="takerRedeemAsset"></span>, <span data-tmpl="takerRedeemYou">[[[you]]]</span><span data-tmpl="takerRedeemThem">[[[them]]]</span>)</span>
+                  <span class="match-data-label" data-tmpl="takerRedeemMsg"></span>
+                </div>
+                <span data-tmpl="takerRedeemPending">&lt;[[[Pending]]]&gt;</span>
+                <a target="_blank" class="mono plainlink" data-tmpl="takerRedeemCoin"></a>
+              </div>
+            </div>
+             <div class="px-3 pb-3 d-hide" data-tmpl="refund">
+              <div class="d-inline-block">
+                <div class="d-flex align-items-center justify-content-between">
+                  <span class="match-data-label text-danger">[[[Refund]]] (<span data-tmpl="refundAsset"></span>, [[[you]]])</span>
+                  <span class="match-data-label" data-tmpl="refundMsg"></span>
+                </div>
+                <span data-tmpl="refundPending"></span>
+                <a target="_blank" class="mono plainlink" data-tmpl="refundCoin"></a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {{- /* FUNDING COINS */ -}}
+    <div class="order-datum d-inline-block border my-3">
+      <div class="text-start p-2">[[[Funding Coins]]]</div>
+      <div class="fs14 text-start p-2">
+        {{range $ord.FundingCoins}}
+          <a target="_blank" class="plainlink mono" data-explorer-id="{{$ord.FromID}}" data-explorer-coin="{{.StringID}}">{{.StringID}}</a><br>
+        {{end}}
+      </div>
+    </div>
+
+    <div id="accelerationCoins" class="order-datum d-inline-block my-3 {{if not $ord.AccelerationCoins}}d-hide{{end}}">
+      <div class="text-start">[[[acceleration_transactions]]]</div>
+      <div class="fs14 text-start">
+        {{range $ord.AccelerationCoins}}
+          <a target="_blank" class="plainlink mono" data-explorer-id="{{$ord.FromID}}" data-explorer-coin="{{.StringID}}">{{.StringID}}</a><br>
+        {{end}}
+      </div>
+    </div>
+
+  </div>
+  <div id="vOrderOpts">
+    {{template "orderOptionTemplates"}}
+  </div>
+  <div id="forms" class="d-hide">
+    <form class="d-hide" id="cancelForm" autocomplete="off">
+      {{template "cancelOrderForm" .}}
+    </form>
+    <form class="d-hide" id="accelerateForm"  autocomplete="off">
+      {{template "accelerateForm" .}}
+    </form> 
+  </div>
+</div>
+{{template "bottom"}}
+{{end}}

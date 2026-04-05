@@ -1,0 +1,297 @@
+.flex-grow-1 {
+  flex-grow: 1;
+}
+
+.flex-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.flex-stretch-column {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.flex-wrap {
+  flex-wrap: wrap;
+}
+
+.text-nowrap {
+  white-space: nowrap;
+}
+
+.position-relative {
+  position: relative;
+}
+
+.position-absolute {
+  position: absolute;
+}
+
+.hoverbg:hover,
+.hoverbg.active,
+.hoverbg.selected {
+  background-color: var(--tertiary-bg);
+}
+
+.invisible {
+  visibility: hidden;
+}
+
+.stylish-overflow {
+  @include stylish-overflow;
+
+  &.hoveronly:not(:hover) {
+    scrollbar-color: transparent transparent;
+
+    &::-webkit-scrollbar-track {
+      background-color: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background-color: transparent;
+      border-radius: 4px;
+    }
+  }
+
+  &.overflow-x-hidden {
+    overflow-x: hidden;
+  }
+}
+
+.hidden-overflow {
+  @include hidden-overflow;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.ease-color {
+  transition: color 1s ease;
+}
+
+.mw-375 {
+  max-width: 375px;
+}
+
+.mw-425 {
+  max-width: 425px;
+}
+
+.mw-500 {
+  max-width: 500px;
+}
+
+.max-h-100 {
+  max-height: 100%;
+}
+
+.d-hide {
+  display: none !important;
+}
+
+.buycolor {
+  color: var(--buy-color);
+}
+
+.sellcolor {
+  color: var(--sell-color);
+}
+
+.grey {
+  color: var(--text-grey);
+}
+
+.rounded3 {
+  border-radius: 3px;
+}
+
+.rounded25 {
+  border-radius: 25px;
+}
+
+hr.dashed {
+  @include border-top(2px, dashed);
+}
+
+
+img.token-parent {
+  width: 0.7em;
+  height: 0.7em;
+  position: relative;
+  top: -0.4em;
+}
+
+sup.token-parent {
+  font-size: 0.6em;
+  position: relative;
+  top: -0.6em;
+}
+
+.preline {
+  white-space: pre-line;
+}
+
+.vscroll {
+  @extend .stylish-overflow;
+
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.pointer {
+  cursor: pointer !important;
+}
+
+.underline {
+  text-decoration: underline;
+}
+
+.plainlink {
+  color: inherit;
+}
+
+.ico-info {
+  margin-left: 0.25rem;
+}
+
+.subtlelink,
+.subtlelink:visited {
+  text-decoration: none;
+
+  // TODO this color is almost identical to the default body color, with text-decoration: none
+  // the link isn't visible.  Consider using a different shade.
+  // color: var(--subtle-link-color);
+  &:hover {
+    text-decoration: underline !important;
+    // color: var(--subtle-link-hover-color);
+    cursor: pointer;
+  }
+}
+
+.word-break-all {
+  word-break: break-all;
+  user-select: all;
+}
+
+.lh1 {
+  line-height: 1;
+}
+
+.fill-abs {
+  @include fill-abs;
+}
+
+.min-fit {
+  min-height: fit-content;
+}
+
+div.clear {
+  opacity: 0; // Set by animation upon initial loading.
+}
+
+
+.overflow-y-auto {
+  overflow-y: auto;
+}
+
+.overflow-y-hidden {
+  overflow-y: hidden;
+}
+
+.overflow-x-hidden,
+.stylish-overflow.overflow-x-hidden {
+  overflow-x: hidden;
+}
+
+.user-select-all {
+  user-select: all;
+}
+
+.overflow-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-select-none {
+  user-select: none;
+}
+
+.text-danger {
+  color: var(--text-danger);
+}
+
+.text-warning {
+  color: var(--text-warning);
+}
+
+.text-buycolor {
+  color: var(--buy-color);
+}
+
+.text-sellcolor {
+  color: var(--sell-color);
+}
+
+.yes-indicator {
+  background: #22c55e;
+  width: 8px;
+  height: 8px;
+}
+
+.no-indicator {
+  background: #ef4444;
+  width: 8px;
+  height: 8px;
+}
+
+.approval-bar {
+  background: #22c55e; 
+  flex: var(--approval-flex);
+}
+
+.rejection-bar {
+  background: #ef4444; 
+  flex: var(--rejection-flex);
+}
+
+.vote-bar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  background: #e5e5e5;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.vote-yes {
+  background: #28a745;
+  width: var(--yes);
+}
+
+.vote-no {
+  background: #dc3545;
+  width: var(--no);
+}
+
+.approval-threshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--approval-threshold) * 1%);
+  width: 2px;
+  background: #000;
+  opacity: 0.7;
+  transform: translateX(-50%);
+  pointer-events: none;
+}

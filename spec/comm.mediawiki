@@ -1,0 +1,245 @@
+=Communication Protocols=
+
+__TOC__
+
+==WebSockets==
+
+Trustless negotiation of trades requires considerable messaging.
+Transaction details must be reported and relayed at appropriate times, sometimes
+with substantial delays between subsequent actions.
+Match notification via HTTP polling or other request interval-based methods are
+thus not suitable for the DEX system.
+Persistent, full-duplex communication is critical to minimizing communication
+latencies and wasted bandwidth.
+WebSockets ([https://tools.ietf.org/html/rfc6455 &#91;3&#93;]) are chosen as the
+default and preferred communications protocol for
+the DEX exchange API.
+In addition to fulfilling the aforementioned needs, Websockets are now a
+well-established technology with client software available for integration in
+virtually all popular programming languages.
+
+WebSocket messages are secured by encryption on Transport Layer
+Security (TLS) [https://tools.ietf.org/html/rfc8446 &#91;4&#93;] connections.
+
+==Encoding==
+
+===Timestamps===
+
+In all client-server messages that include a timestamp or duration field, the
+units of time are milliseconds unless otherwise specified. Location-independent
+timestamps are encoded as milliseconds since the UNIX epoch (Jan 01 00:00:00
+1970 UTC).
+
+If a timestamp must be converted to seconds, e.g. for encoding as a locktime in
+a swap contract, the timestamp should be rounded down.
+
+===Rate Encoding===
+
+Because the rate assigned to a limit order is a quotient, the value is naturally
+expressed as a floating point number.
+To avoid floating-point error, rates in API messages are encoded using a
+custom unit, '''atoms quote asset per unit base asset'''.
+This is called the '''message-rate format'''.
+This can alternatively be viewed as conventional rate multiplied by
+10<sup>8</sup> and floored to the nearest integer.
+
+As an example of message-rate encoding, if someone wanted to purchase asset Z
+using asset Y on the Z/Y market, and the user wanted to pay 0.001 Y for each 1
+Z, the message-rate encoding would be
+
+'''''r<sub>msg</sub> = 1 x 10<sup>8</sup> x 0.001 = 100000'''''
+
+with unit ''atoms Y / unit Z''.
+
+===Coin ID===
+
+In order to demonstrate control of unspent value on the blockchain, a user must
+provide its location. For Bitcoin-based blockchains, value is located by
+pointing to an unspent transaction output (UTXO), identified by its transaction
+ID and output index (vout). For account based assets, the coin id is different
+in different situations. Pre-swap it is simply an account address. While swapping,
+the value is transferred to a swap contract's address and can be found there in
+a map keyed by the swap's secret hash.
+
+In an effort to stay blockchain-protocol agnostic, the DEX accepts
+and recognizes the locating information as a single byte-array called the
+'''''coin ID''''', with the term '''''coin''''' being defined here as some
+amount of spendable value that is verifiable on the blockchain.
+It is up to backend and wallet developers to decide on how to properly encode the
+identifier as a coin ID. As an example, Bitcoin implements
+encoding as 36 bytes with the transaction hash being the first 32-bytes, and the
+big-endian encoded output index as the last 4 bytes.
+
+==Message Protocol==
+
+DEX messaging is JSON-formatted [https://tools.ietf.org/html/rfc8259 &#91;5&#93;].
+All messages, regardless of originating party, use a common top-level
+structure called a '''Message'''.
+
+'''JSON Message object'''
+
+{|
+! field    !! type !! description
+|-
+| type    || int || message type
+|-
+| payload || any || the data being transmitted
+|-
+| route   || string || the route identifier. requests and notifications only
+|-
+| id      || int > 0 || the request ID. requests and responses only
+|}
+
+There are three anticipated message types.
+
+'''Message types'''
+
+{|
+| type         || id || description
+|-
+| request      || 1 || a request is typically an uninitiated message that seeks a response
+|-
+| response     || 2 || a response to a request
+|-
+| notification || 3 || usually part of a data feed. requires no response
+|}
+
+'''Example request'''
+
+The payload for a request can be of any type.
+
+<pre>
+{
+	"type": 1,
+	"id": 123,
+	"route" "sendnum",
+	"payload": 5
+}
+</pre>
+
+'''Response payload'''
+
+The payload for a response has a structure that enables quick error checking.
+
+{|
+! field    !! type !! description
+|-
+| result || any || the result. field is missing or null if an error was encountered
+|-
+| error   || string or null || the error. field is null or missing if no error was encountered
+|}
+
+'''Example response'''
+
+<pre>
+{
+	"type": 2,
+	"id": 123,
+	"payload": { "result": true }
+}
+</pre>
+
+'''Example notification'''
+
+<pre>
+{
+	"type": 3,
+	"route": "notifynums"
+	"payload": [1, 5, 3, 9]
+}
+</pre>
+
+==Session Authentication==
+
+Many DEX messages must be sent on an authenticated connection. Once a WebSocket
+connection is established, the client will supply their account ID and signature.
+
+'''Request route:''' <code>connect</code>, '''originator: ''' client
+
+<code>payload</code>
+{|
+! field      !! type   !! description
+|-
+| accountid || string || account ID
+|-
+| apiver    || int    || requested API version
+|-
+| timestamp || int    || UNIX timestamp (milliseconds)
+|-
+| sig       || string || hex-encoded signature of serialized connection data. serialization described below
+|}
+
+'''Connect serialization'''
+
+{|
+! field   !! size (bytes) !! description
+|-
+| account ID || 32 || client [[accounts.mediawiki/#Step_1_Registration|account ID]]
+|-
+| API version || 2 || requested API version
+|-
+| timestamp || 8  || the client's UNIX timestamp (milliseconds)
+|}
+
+'''Connect response'''
+
+If a client unexpectedly disconnects with active orders, the orders may match in
+the client's absence. A list of any pending matches is included in the response.
+If the client has a broken rule, they will not be able to trade for the duration
+of their penalization.
+
+<code>result</code>
+{|
+! field   !! type   !! description
+|-
+| activematches || <nowiki>[object]</nowiki> || list of active [[orders.mediawiki/#Match_negotiation|Match objects]]
+|-
+| activeorderstatuses || <nowiki>[object]</nowiki> || list of active <code>Order Status Object</code>
+|-
+| score || int || The user's score. The math behind this is currently being adjusted
+|-
+| tier || int || Bond tier. One or more indicates the account can trade. Legacy fee being paid gives a perpetual +1 to tier. Not set by legacy servers.
+|-
+| activeBonds || <nowiki>[object]</nowiki> || list of active <code>Bond Object</code>
+|-
+| legacyFeePaid || bool || Whether the legacy fee was paid. This currently has the internal value of one bond tier. Not set by legacy servers.
+|-
+| suspended || bool || DEPRECATED. For legacy servers true if suspended. Implies tier < 1, and means that the user cannot trade until posting more bond.
+|-
+| sig || string || hex-encoded server's signature of the serialized connection data
+|}
+
+'''Order Status Object'''
+
+{|
+! field !! type !! description
+|-
+| ID || bytes || a unique order id
+|-
+| Status || int || the order status. See [[https://github.com/decred/dcrdex/blob/master/dex/order/status.go|status.go]] for statuses.
+|}
+
+'''Bond Object'''
+
+{|
+! field !! type !! description
+|-
+| version || int || Bond version.
+|-
+| amount || int || Amount held in the bond in the lowest communicatable denomination of that coin. i.e. atoms for dcr, gwei for eth.
+|-
+| expiry || int || When the bond expires, NOT the bond locktime.
+|-
+| coinID || bytes || Coin ID that created the bond.
+|-
+| assetID || int || SLIP-0044 registered coin type of the bond asset.
+|}
+
+==HTTP==
+
+An API using HTTP for message transport may be provided for basic account
+management and server status queries, however WebSocket connections are to be
+the sole means for
+[[orders.mediawiki/#Client_Order_Management|placing, monitoring, and executing orders]].
+The primary reason for limiting the scope of the HTTP API is to eliminate client
+polling for rapidly changing resources, such as order status API endpoints.
