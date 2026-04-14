@@ -348,8 +348,9 @@ type Token struct {
 type BlockchainClass string
 
 const (
-	BlockchainClassUTXO BlockchainClass = "UTXO"
-	BlockchainClassEVM  BlockchainClass = "EVM"
+	BlockchainClassUTXO    BlockchainClass = "UTXO"
+	BlockchainClassEVM     BlockchainClass = "EVM"
+	BlockchainClassAccount BlockchainClass = "Account"
 )
 
 func (c BlockchainClass) IsEVM() bool {
@@ -481,7 +482,8 @@ type TxHistoryResponse struct {
 }
 
 // Wallet is a common interface to be implemented by cryptocurrency wallet
-// software.
+// software. It covers basic wallet operations: balance, send, receive, and
+// transaction history. For atomic swap participation, see DecredDEX.
 type Wallet interface {
 	// It should be assumed that once disconnected, subsequent Connect calls
 	// will fail, requiring a new Wallet instance.
@@ -493,6 +495,44 @@ type Wallet interface {
 	// confirmations for which to calculate maturity, and returns a list of
 	// corresponding *Balance.
 	Balance() (*Balance, error)
+	// DepositAddress returns an address for depositing funds into the wallet.
+	DepositAddress() (string, error)
+	// OwnsDepositAddress indicates if the provided address can be used
+	// to deposit funds into the wallet.
+	OwnsDepositAddress(address string) (bool, error)
+	// Send sends the exact value to the specified address. This is different
+	// from Withdraw, which subtracts the tx fees from the amount sent.
+	Send(address string, value, feeRate uint64) (Coin, error)
+	// ValidateAddress checks that the provided address is valid.
+	ValidateAddress(address string) bool
+	// SyncStatus is information about the blockchain sync status. It should
+	// only indicate synced when there are network peers and all blocks on the
+	// network have been processed by the wallet.
+	SyncStatus() (*SyncStatus, error)
+	// StandardSendFee returns the fee for a "standard" send tx.
+	StandardSendFee(feeRate uint64) uint64
+	// TxHistory returns all the transactions a wallet has made. If refID
+	// is nil, then transactions starting from the most recent are returned
+	// (past is ignored). If past is true, the transactions prior to the
+	// refID are returned, otherwise the transactions after the refID are
+	// returned. n is the number of transactions to return. If n is <= 0,
+	// all the transactions will be returned.
+	TxHistory(*TxHistoryRequest) (*TxHistoryResponse, error)
+	// WalletTransaction returns a single transaction that either a wallet
+	// has made or in which the wallet has received funds. This function may
+	// support more transactions than are returned by TxHistory. For example,
+	// ETH/token wallets do not return receiving transactions in TxHistory,
+	// but WalletTransaction will return them.
+	WalletTransaction(ctx context.Context, txID string) (*WalletTransaction, error)
+	// PendingTransactions loads wallet transactions that are not yet confirmed.
+	PendingTransactions(ctx context.Context) []*WalletTransaction
+}
+
+// DecredDEX extends Wallet with the atomic swap methods required for
+// participation in DCRDEX trading. Implementations that support DEX trading
+// must satisfy this interface.
+type DecredDEX interface {
+	Wallet
 	// FundOrder selects coins for use in an order. The coins will be locked,
 	// and will not be returned in subsequent calls to FundOrder or calculated
 	// in calls to Available, unless they are unlocked with ReturnCoins. The
@@ -580,11 +620,6 @@ type Wallet interface {
 	// known when the init transaction was created. The client should store this
 	// information for persistence across sessions.
 	Refund(ctx context.Context, coinID, contract dex.Bytes, feeRate uint64) (dex.Bytes, error)
-	// DepositAddress returns an address for depositing funds into Bison Wallet.
-	DepositAddress() (string, error)
-	// OwnsDepositAddress indicates if the provided address can be used
-	// to deposit funds into the wallet.
-	OwnsDepositAddress(address string) (bool, error)
 	// RedemptionAddress gets an address for use in redeeming the counterparty's
 	// swap. This would be included in their swap initialization. This is
 	// called once per match during match acknowledgement, so each match gets
@@ -614,19 +649,10 @@ type Wallet interface {
 	SwapConfirmations(ctx context.Context, coinID dex.Bytes, contract dex.Bytes, matchTime time.Time) (confs uint32, spent bool, err error)
 	// ValidateSecret checks that the secret hashes to the secret hash.
 	ValidateSecret(secret, secretHash []byte) bool
-	// SyncStatus is information about the blockchain sync status. It should
-	// only indicate synced when there are network peers and all blocks on the
-	// network have been processed by the wallet.
-	SyncStatus() (*SyncStatus, error)
 	// RegFeeConfirmations gets the confirmations for a registration fee
 	// payment. This method need not be supported by all assets. Those assets
 	// which do no support DEX registration fees will return an ErrUnsupported.
 	RegFeeConfirmations(ctx context.Context, coinID dex.Bytes) (confs uint32, err error)
-	// Send sends the exact value to the specified address. This is different
-	// from Withdraw, which subtracts the tx fees from the amount sent.
-	Send(address string, value, feeRate uint64) (Coin, error)
-	// ValidateAddress checks that the provided address is valid.
-	ValidateAddress(address string) bool
 	// ConfirmTransaction checks the status of a redemption or refund. It
 	// returns the number of confirmations the tx has, the number of confirmations
 	// that are required for it to be considered fully confirmed, and the
@@ -640,8 +666,6 @@ type Wallet interface {
 	SingleLotSwapRefundFees(version uint32, feeRate uint64, useSafeTxSize bool) (uint64, uint64, error)
 	// SingleLotRedeemFees returns the fees for a redeem transaction for a single lot.
 	SingleLotRedeemFees(version uint32, feeRate uint64) (uint64, error)
-	// StandardSendFee returns the fee for a "standard" send tx.
-	StandardSendFee(feeRate uint64) uint64
 	// FundMultiOrder funds multiple orders at once. The return values will
 	// be in the same order as the passed orders. If less values are returned
 	// than the number of orders, then the orders at the end of the list were
@@ -649,21 +673,6 @@ type Wallet interface {
 	FundMultiOrder(ord *MultiOrder, maxLock uint64) (coins []Coins, redeemScripts [][]dex.Bytes, fundingFees uint64, err error)
 	// MaxFundingFees returns the max fees that could be paid for funding a swap.
 	MaxFundingFees(numTrades uint32, feeRate uint64, options map[string]string) uint64
-	// TxHistory returns all the transactions a wallet has made. If refID
-	// is nil, then transactions starting from the most recent are returned
-	// (past is ignored). If past is true, the transactions prior to the
-	// refID are returned, otherwise the transactions after the refID are
-	// returned. n is the number of transactions to return. If n is <= 0,
-	// all the transactions will be returned.
-	TxHistory(*TxHistoryRequest) (*TxHistoryResponse, error)
-	// WalletTransaction returns a single transaction that either a wallet
-	// has made or in which the wallet has received funds. This function may
-	// support more transactions than are returned by TxHistory. For example,
-	// ETH/token wallets do not return receiving transactions in TxHistory,
-	// but WalletTransaction will return them.
-	WalletTransaction(ctx context.Context, txID string) (*WalletTransaction, error)
-	// PendingTransactions loads wallet transactions that are not yet confirmed.
-	PendingTransactions(ctx context.Context) []*WalletTransaction
 }
 
 // Authenticator is a wallet implementation that require authentication.
