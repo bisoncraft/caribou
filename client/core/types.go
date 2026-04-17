@@ -6,34 +6,15 @@ package core
 import (
 	"encoding/hex"
 	"fmt"
-	"math"
 	"strings"
 
 	"decred.org/dcrdex/client/asset"
-	"decred.org/dcrdex/client/comms"
 	"decred.org/dcrdex/client/db"
-	"decred.org/dcrdex/client/orderbook"
 	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/candles"
-	"decred.org/dcrdex/dex/feerates"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
 
 const (
-	// hdKeyPurposeAccts is the BIP-43 purpose field for DEX account keys.
-	hdKeyPurposeAccts uint32 = hdkeychain.HardenedKeyStart + 0x646578 // ASCII "dex"
-	// hdKeyPurposeBonds is the BIP-43 purpose field for bond keys. These keys
-	// are separate from DEX accounts. The following path that is independent of
-	// a dex account will simplify discovery and key recovery if we devise a
-	// scheme to locate them on-chain:
-	//  m / hdKeyPurposeBonds / assetID' / bondIndex
-	hdKeyPurposeBonds uint32 = hdkeychain.HardenedKeyStart + 0x626f6e64 // ASCII "bond"
-	// hdKeyPurposeMesh is the BIP-43 purpose field for mesh keys.
-	hdKeyPurposeMesh uint32 = hdkeychain.HardenedKeyStart + 0x6d657368 // ASCII "mesh"
 	// hdKeyPurposeMulti is the BIP-43 purpose field for multisig keys.
 	hdKeyPurposeMulti uint32 = hdkeychain.HardenedKeyStart + 0x6D756C74 // ASCII "mult"
 )
@@ -88,25 +69,16 @@ type WalletForm struct {
 }
 
 // WalletBalance is an exchange wallet's balance which includes various locked
-// amounts in addition to other balance details stored in db. Both the
-// ContractLocked and BondLocked amounts are not included in the Locked field of
-// the embedded asset.Balance since they correspond to outputs that are foreign
-// to the wallet i.e. only spendable by externally-crafted transactions. On the
-// other hand, OrderLocked is part of Locked since these are regular UTXOs that
-// have been locked by the wallet to fund an order's swap transaction.
+// amounts in addition to other balance details stored in db. ContractLocked is
+// not included in the Locked field of the embedded asset.Balance since it
+// corresponds to outputs that are foreign to the wallet, i.e. only spendable
+// by externally-crafted transactions.
 type WalletBalance struct {
 	*db.Balance
-	// OrderLocked is the total amount of funds that is currently locked
-	// for swap, but not actually swapped yet. This amount is also included
-	// in the `Locked` balance value.
-	OrderLocked uint64 `json:"orderlocked"`
 	// ContractLocked is the total amount of funds locked in unspent (i.e.
 	// unredeemed / unrefunded) swap contracts. This amount is NOT included in
 	// the db.Balance.
 	ContractLocked uint64 `json:"contractlocked"`
-	// BondLocked is the total amount of funds locked in unspent fidelity bonds.
-	// This amount is NOT included in the db.Balance.
-	BondLocked uint64 `json:"bondlocked"`
 }
 
 // WalletState is the current status of an exchange wallet.
@@ -138,9 +110,6 @@ type WalletState struct {
 type FeeState struct {
 	Rate    uint64 `json:"rate"`
 	Send    uint64 `json:"send"`
-	Swap    uint64 `json:"swap"`
-	Redeem  uint64 `json:"redeem"`
-	Refund  uint64 `json:"refund"`
 	StampMS int64  `json:"stampMS"`
 }
 
@@ -169,8 +138,8 @@ type DeployContractResult struct {
 type ExtensionModeConfig struct {
 	// Name of embedding application. Used for messaging with disable features.
 	Name string `json:"name"`
-	// UseDEXBranding will tell the front end to use DCRDEX branding instead
-	// of Bison Wallet branding where possible.
+	// UseDEXBranding will tell the front end to use legacy DCRDEX branding
+	// instead of Bison Wallet branding where possible.
 	UseDEXBranding bool `json:"useDEXBranding"`
 	// RestrictedWallets are wallets that need restrictions on reconfiguration
 	// options.
@@ -191,22 +160,8 @@ type ExtensionModeConfig struct {
 	} `json:"restrictedWallets"`
 }
 
-// MeshMarket is a market on the Mesh.
-type MeshMarket struct {
-	BaseID  uint32 `json:"baseID"`
-	QuoteID uint32 `json:"quoteID"`
-}
-
-// Mesh is the core representation of the Mesh.
-type Mesh struct {
-	Markets       map[string]*MeshMarket        `json:"markets"`
-	AssetVersions map[uint32]uint32             `json:"assetVersions"`
-	FeeRates      map[uint32]*feerates.Estimate `json:"feeRates"`
-}
-
-// User is information about the user's wallets and DEX accounts.
+// User is information about the user's wallets.
 type User struct {
-	Exchanges          map[string]*Exchange        `json:"exchanges"`
 	Initialized        bool                        `json:"inited"`
 	SeedGenerationTime uint64                      `json:"seedgentime"`
 	Assets             map[uint32]*SupportedAsset  `json:"assets"`
@@ -214,7 +169,6 @@ type User struct {
 	Net                dex.Network                 `json:"net"`
 	ExtensionConfig    *ExtensionModeConfig        `json:"extensionModeConfig,omitempty"`
 	Actions            []*asset.ActionRequiredNote `json:"actions,omitempty"`
-	Mesh               *Mesh                       `json:"mesh,omitempty"`
 }
 
 // SupportedAsset is data about an asset and possibly the wallet associated
@@ -232,490 +186,6 @@ type SupportedAsset struct {
 	UnitInfo dex.UnitInfo `json:"unitInfo"`
 }
 
-// Match represents a match on an order. An order may have many matches.
-type Match struct {
-	MatchID       dex.Bytes         `json:"matchID"`
-	Status        order.MatchStatus `json:"status"`
-	Active        bool              `json:"active"`
-	Revoked       bool              `json:"revoked"`
-	Rate          uint64            `json:"rate"`
-	Qty           uint64            `json:"qty"`
-	Side          order.MatchSide   `json:"side"`
-	FeeRate       uint64            `json:"feeRate"`
-	Swap          *Coin             `json:"swap,omitempty"`
-	CounterSwap   *Coin             `json:"counterSwap,omitempty"`
-	Redeem        *Coin             `json:"redeem,omitempty"`
-	CounterRedeem *Coin             `json:"counterRedeem,omitempty"`
-	Refund        *Coin             `json:"refund,omitempty"`
-	Stamp         uint64            `json:"stamp"` // Server's time stamp - we have no local time recorded
-	IsCancel      bool              `json:"isCancel"`
-}
-
-// Coin encodes both the coin ID and the asset-dependent string representation
-// of the coin ID.
-type Coin struct {
-	ID       dex.Bytes `json:"id"`
-	StringID string    `json:"stringID"`
-	AssetID  uint32    `json:"assetID"`
-	Symbol   string    `json:"symbol"`
-	// Confs is populated only if this is a swap coin and we are waiting for
-	// confirmations e.g. when this is the maker's swap and we're in
-	// MakerSwapCast, or this is the takers swap, and we're in TakerSwapCast.
-	Confs *Confirmations `json:"confs,omitempty"`
-}
-
-// NewCoin constructs a new Coin.
-func NewCoin(assetID uint32, coinID []byte) *Coin {
-	return &Coin{
-		ID:       coinID,
-		StringID: coinIDString(assetID, coinID),
-		AssetID:  assetID,
-		Symbol:   unbip(assetID),
-	}
-}
-
-// Confirmations is the confirmation count and confirmation requirement of a
-// Coin.
-type Confirmations struct {
-	Count    int64 `json:"count"`
-	Required int64 `json:"required"`
-}
-
-// SetConfirmations sets the Confs field of the Coin.
-func (c *Coin) SetConfirmations(confs, confReq int64) {
-	c.Confs = &Confirmations{
-		Count:    confs,
-		Required: confReq,
-	}
-}
-
-// matchFromMetaMatch constructs a *Match from an Order and a *MetaMatch.
-// This function is intended for use with inactive matches. For active matches,
-// use matchFromMetaMatchWithConfs.
-func matchFromMetaMatch(ord order.Order, metaMatch *db.MetaMatch) *Match {
-	return matchFromMetaMatchWithConfs(ord, metaMatch, 0, 0, 0, 0, 0, 0, 0, 0)
-}
-
-// matchFromMetaMatchWithConfs constructs a *Match from a *MetaMatch,
-// and sets the confirmations for swaps-in-waiting.
-func matchFromMetaMatchWithConfs(ord order.Order, metaMatch *db.MetaMatch, swapConfs, swapReq, counterSwapConfs, counterReq, redeemConfs, redeemReq, refundConfs, refundReq int64) *Match {
-	if _, isCancel := ord.(*order.CancelOrder); isCancel {
-		fmt.Println("matchFromMetaMatchWithConfs got a cancel order for match", metaMatch)
-		return &Match{}
-	}
-	side := metaMatch.Side
-	sell := ord.Trade().Sell
-	status := metaMatch.Status
-
-	fromID, toID := ord.Quote(), ord.Base()
-	if sell {
-		fromID, toID = ord.Base(), ord.Quote()
-	}
-
-	proof := &metaMatch.MetaData.Proof
-
-	swapCoin, counterSwapCoin := proof.MakerSwap, proof.TakerSwap
-	redeemCoin, counterRedeemCoin := proof.MakerRedeem, proof.TakerRedeem
-	if side == order.Taker {
-		swapCoin, counterSwapCoin = proof.TakerSwap, proof.MakerSwap
-		redeemCoin, counterRedeemCoin = proof.TakerRedeem, proof.MakerRedeem
-	}
-
-	var refund, redeem, counterRedeem, swap, counterSwap *Coin
-	if len(proof.RefundCoin) > 0 {
-		refund = NewCoin(fromID, proof.RefundCoin)
-		refund.SetConfirmations(refundConfs, refundReq)
-	}
-	if len(swapCoin) > 0 {
-		swap = NewCoin(fromID, swapCoin)
-		if (side == order.Taker && status == order.TakerSwapCast) ||
-			(side == order.Maker && status == order.MakerSwapCast) &&
-				!proof.IsRevoked() && swapReq > 0 {
-
-			swap.SetConfirmations(swapConfs, swapReq)
-		}
-	}
-	if len(counterSwapCoin) > 0 {
-		counterSwap = NewCoin(toID, counterSwapCoin)
-		if (side == order.Maker && status == order.TakerSwapCast) ||
-			(side == order.Taker && status == order.MakerSwapCast) &&
-				!proof.IsRevoked() && counterReq > 0 {
-
-			counterSwap.SetConfirmations(counterSwapConfs, counterReq)
-		}
-	}
-	if len(redeemCoin) > 0 {
-		redeem = NewCoin(toID, redeemCoin)
-		if status < order.MatchConfirmed {
-			redeem.SetConfirmations(redeemConfs, redeemReq)
-		}
-	}
-	if len(counterRedeemCoin) > 0 {
-		counterRedeem = NewCoin(fromID, counterRedeemCoin)
-	}
-
-	userMatch, proof := metaMatch.UserMatch, &metaMatch.MetaData.Proof
-	match := &Match{
-		MatchID:       userMatch.MatchID[:],
-		Status:        userMatch.Status,
-		Active:        db.MatchIsActive(userMatch, proof),
-		Revoked:       proof.IsRevoked(),
-		Rate:          userMatch.Rate,
-		Qty:           userMatch.Quantity,
-		Side:          userMatch.Side,
-		FeeRate:       userMatch.FeeRateSwap,
-		Stamp:         metaMatch.MetaData.Stamp,
-		IsCancel:      userMatch.Address == "",
-		Swap:          swap,
-		CounterSwap:   counterSwap,
-		Redeem:        redeem,
-		CounterRedeem: counterRedeem,
-		Refund:        refund,
-	}
-
-	return match
-}
-
-// Order is core's general type for an order. An order may be a market, limit,
-// or cancel order. Some fields are only relevant to particular order types.
-type Order struct {
-	Host             string            `json:"host"`
-	BaseID           uint32            `json:"baseID"`
-	BaseSymbol       string            `json:"baseSymbol"`
-	QuoteID          uint32            `json:"quoteID"`
-	QuoteSymbol      string            `json:"quoteSymbol"`
-	MarketID         string            `json:"market"`
-	Type             order.OrderType   `json:"type"`
-	ID               dex.Bytes         `json:"id"`    // Can be empty if part of an InFlightOrder
-	Stamp            uint64            `json:"stamp"` // Server's time stamp
-	SubmitTime       uint64            `json:"submitTime"`
-	Sig              dex.Bytes         `json:"sig"`
-	Status           order.OrderStatus `json:"status"`
-	Epoch            uint64            `json:"epoch"`
-	Qty              uint64            `json:"qty"`
-	Sell             bool              `json:"sell"`
-	Filled           uint64            `json:"filled"`
-	Matches          []*Match          `json:"matches"`
-	Cancelling       bool              `json:"cancelling"`
-	Canceled         bool              `json:"canceled"`
-	FeesPaid         *FeeBreakdown     `json:"feesPaid"`
-	AllFeesConfirmed bool              `json:"allFeesConfirmed"`
-	FundingCoins     []*Coin           `json:"fundingCoins"`
-	LockedAmt        uint64            `json:"lockedamt"`
-	// ParentAssetLockedAmt is the swap fees locked when the "from asset" of a
-	// trade is a token. This wil be 0 if the "from asset" is not a token.
-	ParentAssetLockedAmt uint64 `json:"parentAssetLockedAmt"`
-	// RedeemLockedAmt is the amount locked for redemption fees. If the
-	// "to asset" is a token, it will be in units of the parent asset.
-	RedeemLockedAmt uint64 `json:"redeemLockedAmt"`
-	// RefundLockedAmt is the amount locked for refund fees. If the
-	// "from asset" is a token, it will be in units of the parent asset.
-	RefundLockedAmt   uint64            `json:"refundLockedAmt"`
-	AccelerationCoins []*Coin           `json:"accelerationCoins"`
-	Rate              uint64            `json:"rate"`          // limit only
-	TimeInForce       order.TimeInForce `json:"tif"`           // limit only
-	TargetOrderID     dex.Bytes         `json:"targetOrderID"` // cancel only
-	ReadyToTick       bool              `json:"readyToTick"`
-}
-
-// InFlightOrder is an Order that is not stamped yet, but has a temporary ID
-// to match once order submission is complete.
-type InFlightOrder struct {
-	*Order
-	TemporaryID uint64 `json:"tempID"`
-}
-
-// FeeBreakdown is categorized fee information.
-type FeeBreakdown struct {
-	Swap       uint64 `json:"swap"`
-	Redemption uint64 `json:"redemption"`
-	Funding    uint64 `json:"funding"` // split fees
-	// TODO: Refund is not yet being populated.
-	Refund uint64 `json:"refund"`
-}
-
-// coreOrderFromTrade constructs an *Order from the supplied limit or market
-// order and associated metadata.
-func coreOrderFromTrade(ord order.Order, metaData *db.OrderMetaData) *Order {
-	prefix, trade := ord.Prefix(), ord.Trade()
-	baseID, quoteID := ord.Base(), ord.Quote()
-
-	var rate uint64
-	var tif order.TimeInForce
-	switch ot := ord.(type) {
-	case *order.LimitOrder:
-		rate = ot.Rate
-		tif = ot.Force
-	case *order.CancelOrder:
-		return &Order{
-			Host:          metaData.Host,
-			BaseID:        baseID,
-			BaseSymbol:    unbip(baseID),
-			QuoteID:       quoteID,
-			QuoteSymbol:   unbip(quoteID),
-			MarketID:      marketName(baseID, quoteID),
-			Type:          prefix.OrderType,
-			ID:            ord.ID().Bytes(),
-			Stamp:         uint64(prefix.ServerTime.UnixMilli()),
-			SubmitTime:    uint64(prefix.ClientTime.UnixMilli()),
-			Sig:           metaData.Proof.DEXSig,
-			Status:        metaData.Status,
-			FeesPaid:      new(FeeBreakdown),
-			TargetOrderID: ot.TargetOrderID.Bytes(),
-		}
-	}
-
-	var cancelling, canceled bool
-	if !metaData.LinkedOrder.IsZero() {
-		if metaData.Status == order.OrderStatusCanceled {
-			canceled = true
-		} else {
-			cancelling = true
-		}
-	}
-
-	fromID := quoteID
-	if trade.Sell {
-		fromID = baseID
-	}
-
-	fundingCoins := make([]*Coin, 0, len(trade.Coins))
-	for i := range trade.Coins {
-		fundingCoins = append(fundingCoins, NewCoin(fromID, trade.Coins[i]))
-	}
-
-	accelerationCoins := make([]*Coin, 0, len(metaData.AccelerationCoins))
-	for _, coinID := range metaData.AccelerationCoins {
-		accelerationCoins = append(accelerationCoins, NewCoin(fromID, coinID))
-	}
-
-	// For in-flight orders, we'll set the order ID as a zero-hash.
-	var oid dex.Bytes
-	if ord.Time() > 0 {
-		oid = ord.ID().Bytes()
-	}
-
-	corder := &Order{
-		Host:        metaData.Host,
-		BaseID:      baseID,
-		BaseSymbol:  unbip(baseID),
-		QuoteID:     quoteID,
-		QuoteSymbol: unbip(quoteID),
-		MarketID:    marketName(baseID, quoteID),
-		Type:        prefix.OrderType,
-		ID:          oid,
-		Stamp:       uint64(prefix.ServerTime.UnixMilli()),
-		SubmitTime:  uint64(prefix.ClientTime.UnixMilli()),
-		Sig:         metaData.Proof.DEXSig,
-		Status:      metaData.Status,
-		Rate:        rate,
-		Qty:         trade.Quantity,
-		Sell:        trade.Sell,
-		Filled:      trade.Filled(),
-		TimeInForce: tif,
-		Canceled:    canceled,
-		Cancelling:  cancelling,
-		FeesPaid: &FeeBreakdown{
-			Swap:       metaData.SwapFeesPaid,
-			Redemption: metaData.RedemptionFeesPaid,
-			Funding:    metaData.FundingFeesPaid,
-		},
-		FundingCoins:      fundingCoins,
-		AccelerationCoins: accelerationCoins,
-	}
-
-	return corder
-}
-
-// Market is market info.
-type Market struct {
-	Name            string        `json:"name"`
-	BaseID          uint32        `json:"baseid"`
-	BaseSymbol      string        `json:"basesymbol"`
-	QuoteID         uint32        `json:"quoteid"`
-	QuoteSymbol     string        `json:"quotesymbol"`
-	LotSize         uint64        `json:"lotsize"`
-	ParcelSize      uint32        `json:"parcelsize"`
-	RateStep        uint64        `json:"ratestep"`
-	EpochLen        uint64        `json:"epochlen"`
-	StartEpoch      uint64        `json:"startepoch"`
-	MarketBuyBuffer float64       `json:"buybuffer"`
-	Orders          []*Order      `json:"orders"`
-	SpotPrice       *msgjson.Spot `json:"spot"`
-	// AtomToConv is a rate conversion factor. Multiply by AtomToConv to convert
-	// an atomic rate (e.g. gwei/sat) to a conventional rate (ETH/BTC). Divide
-	// by AtomToConv to convert a conventional rate to an atomic rate.
-	AtomToConv float64 `json:"atomToConv"`
-	// InFlightOrders are Orders with zeroed IDs for the embedded Order, but
-	// with a TemporaryID to match with a notification once asynchronous order
-	// submission is complete.
-	InFlightOrders []*InFlightOrder `json:"inflight"`
-	// MinimumRate is the minimum rate allowed for the market, which is the
-	// minimum rate at which 1 lot converts to something greater than dust.
-	MinimumRate uint64 `json:"minimumRate"`
-}
-
-// BaseContractLocked is the amount of base asset locked in un-redeemed
-// contracts.
-func (m *Market) BaseContractLocked() uint64 {
-	return m.sideContractLocked(true)
-}
-
-// QuoteContractLocked is the amount of quote asset locked in un-redeemed
-// contracts.
-func (m *Market) QuoteContractLocked() uint64 {
-	return m.sideContractLocked(false)
-}
-
-func (m *Market) sideContractLocked(sell bool) (amt uint64) {
-	for _, ord := range m.Orders {
-		if ord.Sell != sell {
-			continue
-		}
-		for _, match := range ord.Matches {
-			if match.Status >= order.MakerRedeemed || match.Refund != nil {
-				continue
-			}
-			if (match.Side == order.Maker && match.Status >= order.MakerSwapCast) ||
-				(match.Side == order.Taker && match.Status == order.TakerSwapCast) {
-
-				swapAmount := match.Qty
-				if !ord.Sell {
-					swapAmount = calc.BaseToQuote(match.Rate, match.Qty)
-				}
-				amt += swapAmount
-			}
-		}
-	}
-	return
-}
-
-// BaseOrderLocked is the amount of base asset locked in epoch or booked orders.
-func (m *Market) BaseOrderLocked() uint64 {
-	return m.sideOrderLocked(true)
-}
-
-// QuoteOrderLocked is the amount of quote asset locked in epoch or booked
-// orders.
-func (m *Market) QuoteOrderLocked() uint64 {
-	return m.sideOrderLocked(false)
-}
-
-func (m *Market) sideOrderLocked(sell bool) (amt uint64) {
-	for _, ord := range m.Orders {
-		if ord.Sell != sell {
-			continue
-		}
-		amt += ord.LockedAmt
-	}
-	return
-}
-
-// Display returns an ID string suitable for displaying in a UI.
-func (m *Market) Display() string {
-	return newDisplayIDFromSymbols(m.BaseSymbol, m.QuoteSymbol)
-}
-
-// mktID is a string ID constructed from the asset IDs.
-func (m *Market) marketName() string {
-	return marketName(m.BaseID, m.QuoteID)
-}
-
-// MsgRateToConventional converts a message-rate to a conventional rate.
-func (m *Market) MsgRateToConventional(r uint64) float64 {
-	return float64(r) / calc.RateEncodingFactor * m.AtomToConv
-}
-
-// ConventionalRateToMsg converts a conventional rate to a message-rate.
-func (m *Market) ConventionalRateToMsg(p float64) uint64 {
-	return uint64(math.Round(p / m.AtomToConv * calc.RateEncodingFactor))
-}
-
-// BondAsset describes the bond asset in terms of it's BIP-44 coin type,
-// required confirmations, and minimum bond amount. There is an analogous
-// msgjson type for server providing supported bond assets.
-type BondAsset struct {
-	Version uint16 `json:"ver"`
-	ID      uint32 `json:"id"`
-	Confs   uint32 `json:"confs"`
-	Amt     uint64 `json:"amount"`
-}
-
-// PendingBondState conveys a pending bond's asset and current confirmation
-// count.
-type PendingBondState struct {
-	CoinID  string `json:"coinID"`
-	Symbol  string `json:"symbol"`
-	AssetID uint32 `json:"assetID"`
-	Confs   uint32 `json:"confs"`
-}
-
-// BondOptions are auto-bond maintenance settings for a particular DEX.
-type BondOptions struct {
-	BondAsset    uint32 `json:"bondAsset"`
-	TargetTier   uint64 `json:"targetTier"`
-	MaxBondedAmt uint64 `json:"maxBondedAmt"`
-	PenaltyComps uint16 `json:"PenaltyComps"`
-}
-
-// ExchangeAuth is data characterizing the state of client bonding.
-type ExchangeAuth struct {
-	// Rep is the user's Reputation as reported by the DEX server.
-	Rep account.Reputation `json:"rep"`
-	// BondAssetID is the user's currently configured bond asset.
-	BondAssetID uint32 `json:"bondAssetID"`
-	// PendingStrength counts how many tiers are in unconfirmed bonds.
-	PendingStrength int64 `json:"pendingStrength"`
-	// WeakStrength counts the number of tiers that are about to expire.
-	WeakStrength int64 `json:"weakStrength"`
-	// LiveStrength counts all active bond tiers, including weak.
-	LiveStrength int64 `json:"liveStrength"`
-	// TargetTier is the user's current configured tier level.
-	TargetTier uint64 `json:"targetTier"`
-	// EffectiveTier is the user's current tier, after considering reputation.
-	EffectiveTier int64 `json:"effectiveTier"`
-	// MaxBondedAmt is the maximum amount that can be locked in bonds at a given
-	// time. If not provided, a default is calculated based on TargetTier and
-	// PenaltyComps.
-	MaxBondedAmt uint64 `json:"maxBondedAmt"`
-	// PenaltyComps is the maximum number of penalized tiers to automatically
-	// compensate.
-	PenaltyComps uint16 `json:"penaltyComps"`
-	// PendingBonds are currently pending bonds and their confirmation count.
-	PendingBonds []*PendingBondState `json:"pendingBonds"`
-	// ExpiredBonds are bonds that have expired but have not yet reached their
-	// lock time for refunding.
-	ExpiredBonds []*db.Bond `json:"expiredBonds"`
-	// Compensation is the amount we have locked in bonds greater than what
-	// is needed to maintain our target tier. This could be from penalty
-	// compensation, or it could be due to the user lowering their target tier.
-	Compensation int64 `json:"compensation"`
-}
-
-// Exchange represents a single DEX with any number of markets.
-type Exchange struct {
-	Host             string                 `json:"host"`
-	AcctID           string                 `json:"acctID"`
-	DEXPubKey        dex.Bytes              `json:"dexPubKey,omitempty"`
-	Markets          map[string]*Market     `json:"markets"`
-	Assets           map[uint32]*dex.Asset  `json:"assets"`
-	BondExpiry       uint64                 `json:"bondExpiry"`
-	BondAssets       map[string]*BondAsset  `json:"bondAssets"`
-	ConnectionStatus comms.ConnectionStatus `json:"connectionStatus"`
-	CandleDurs       []string               `json:"candleDurs"`
-	ViewOnly         bool                   `json:"viewOnly"`
-	Auth             ExchangeAuth           `json:"auth"`
-	PenaltyThreshold uint32                 `json:"penaltyThreshold"`
-	MaxScore         uint32                 `json:"maxScore"`
-	Disabled         bool                   `json:"disabled"`
-}
-
-// newDisplayIDFromSymbols creates a display-friendly market ID for a base/quote
-// symbol pair.
-func newDisplayIDFromSymbols(base, quote string) string {
-	return strings.ToUpper(base) + "-" + strings.ToUpper(quote)
-}
-
 // MiniOrder is minimal information about an order in a market's order book.
 // Replaced MiniOrder, which had a float Qty in conventional units.
 type MiniOrder struct {
@@ -728,140 +198,9 @@ type MiniOrder struct {
 	Token     string  `json:"token"`
 }
 
-// RemainderUpdate is an update to the quantity for an order on the order book.
-// Replaced RemainingUpdate, which had a float Qty in conventional units.
-type RemainderUpdate struct {
-	Token     string  `json:"token"`
-	Qty       float64 `json:"qty"`
-	QtyAtomic uint64  `json:"qtyAtomic"`
-}
-
-// OrderBook represents an order book, which are sorted buys and sells, and
-// unsorted epoch orders.
-type OrderBook struct {
-	Sells []*MiniOrder `json:"sells"`
-	Buys  []*MiniOrder `json:"buys"`
-	Epoch []*MiniOrder `json:"epoch"`
-	// RecentMatches is a cache of up to 100 recent matches for a market.
-	RecentMatches []*orderbook.MatchSummary `json:"recentMatches"`
-}
-
-// MarketOrderBook is used as the BookUpdate's Payload with the FreshBookAction.
-// The subscriber will likely need to translate into a JSON tagged type.
-type MarketOrderBook struct {
-	Base  uint32     `json:"base"`
-	Quote uint32     `json:"quote"`
-	Book  *OrderBook `json:"book"`
-}
-
-type CandleUpdate struct {
-	Dur          string          `json:"dur"`
-	DurMilliSecs uint64          `json:"ms"`
-	Candle       *candles.Candle `json:"candle"`
-}
-
-const (
-	FreshBookAction       = "book"
-	FreshCandlesAction    = "candles"
-	BookOrderAction       = "book_order"
-	EpochOrderAction      = "epoch_order"
-	UnbookOrderAction     = "unbook_order"
-	UpdateRemainingAction = "update_remaining"
-	CandleUpdateAction    = "candle_update"
-	EpochMatchSummary     = "epoch_match_summary"
-	EpochResolved         = "epoch_resolved"
-)
-
-// BookUpdate is an order book update.
-type BookUpdate struct {
-	Action   string `json:"action"`
-	Host     string `json:"host"`
-	MarketID string `json:"marketID"`
-	Payload  any    `json:"payload"`
-}
-
-type CandlesPayload struct {
-	Dur          string           `json:"dur"`
-	DurMilliSecs uint64           `json:"ms"`
-	Candles      []msgjson.Candle `json:"candles"`
-}
-
-type EpochMatchSummaryPayload struct {
-	MatchSummaries []*orderbook.MatchSummary `json:"matchSummaries"`
-	Epoch          uint64                    `json:"epoch"`
-}
-
-type ResolvedEpoch struct {
-	Current  uint64 `json:"current"`
-	Resolved uint64 `json:"resolved"`
-}
-
-// TradeForm is used to place a market or limit order
-type TradeForm struct {
-	Host    string            `json:"host"`
-	IsLimit bool              `json:"isLimit"`
-	Sell    bool              `json:"sell"`
-	Base    uint32            `json:"base"`
-	Quote   uint32            `json:"quote"`
-	Qty     uint64            `json:"qty"`
-	Rate    uint64            `json:"rate"`
-	TifNow  bool              `json:"tifnow"`
-	Options map[string]string `json:"options"`
-}
-
-// QtyRate specifies the quantity and rate of an order placement.
-type QtyRate struct {
-	Qty  uint64 `json:"qty"`
-	Rate uint64 `json:"rate"`
-}
-
-// MultiTradeForm is used to place multiple orders in one go.
-// All orders must be on the same side of the same market, and only standing
-// limit orders are supported.
-type MultiTradeForm struct {
-	Host  string `json:"host"`
-	Sell  bool   `json:"sell"`
-	Base  uint32 `json:"base"`
-	Quote uint32 `json:"quote"`
-	// MaxLock is the maximum amount of the "from" asset that the wallet
-	// should lock for the trade.
-	MaxLock    uint64            `json:"maxLock"`
-	Placements []*QtyRate        `json:"placement"`
-	Options    map[string]string `json:"options"`
-}
-
-// SingleLotFeesForm is used to determine the fees for a single lot trade.
-type SingleLotFeesForm struct {
-	Host          string `json:"host"`
-	Base          uint32 `json:"base"`
-	Quote         uint32 `json:"quote"`
-	Sell          bool   `json:"sell"`
-	UseMaxFeeRate bool   `json:"useMaxFeeRate"`
-	UseSafeTxSize bool   `json:"useSafeTxSize"`
-}
-
-// marketName is a string ID constructed from the asset IDs.
-func marketName(b, q uint32) string {
-	mkt, _ := dex.MarketName(b, q)
-	return mkt
-}
-
-// token is a short representation of a byte-slice-like ID, such as a match ID
-// or an order ID. The token is meant for display where the 64-character
-// hexadecimal IDs are untenable.
-func token(id []byte) string {
-	if len(id) < 4 {
-		return ""
-	}
-	return hex.EncodeToString(id[:4])
-}
-
 // coinIDString converts a coin ID to a human-readable string. If an error is
 // encountered the value starting with "<invalid coin>:" prefix is returned.
 func coinIDString(assetID uint32, coinID []byte) string {
-	if assetID == account.PrepaidBondID {
-		return "prepaid-bond:" + hex.EncodeToString(coinID)
-	}
 	coinStr, err := asset.DecodeCoinID(assetID, coinID)
 	if err != nil {
 		// Logging error here with fmt.Printf is better than dropping it. It's not
@@ -872,23 +211,6 @@ func coinIDString(assetID uint32, coinID []byte) string {
 		return "<invalid coin>:" + hex.EncodeToString(coinID)
 	}
 	return coinStr
-}
-
-// OrderFilter is almost the same as db.OrderFilter, except the Offset order ID
-// is a dex.Bytes instead of a order.OrderID.
-type OrderFilter struct {
-	N        int                 `json:"n"`
-	Offset   dex.Bytes           `json:"offset"`
-	Hosts    []string            `json:"hosts"`
-	Assets   []uint32            `json:"assets"`
-	Statuses []order.OrderStatus `json:"statuses"`
-	Market   *struct {
-		Base  uint32 `json:"baseID"`
-		Quote uint32 `json:"quoteID"`
-	} `json:"market"`
-	// IncludePartial will return canceled/revoked orders that have partial
-	// fills when OrderStatusExecuted is one of the Statuses.
-	IncludePartial bool `json:"includepartial"`
 }
 
 // assetMap tracks a series of assets and provides methods for registering an
@@ -906,4 +228,3 @@ func (c assetMap) merge(other assetMap) {
 		c[assetID] = struct{}{}
 	}
 }
-

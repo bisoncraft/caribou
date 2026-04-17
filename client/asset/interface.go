@@ -483,7 +483,7 @@ type TxHistoryResponse struct {
 
 // Wallet is a common interface to be implemented by cryptocurrency wallet
 // software. It covers basic wallet operations: balance, send, receive, and
-// transaction history. For atomic swap participation, see DecredDEX.
+// transaction history. For atomic swap participation, see AtomicSwapWallet.
 type Wallet interface {
 	// It should be assumed that once disconnected, subsequent Connect calls
 	// will fail, requiring a new Wallet instance.
@@ -528,10 +528,10 @@ type Wallet interface {
 	PendingTransactions(ctx context.Context) []*WalletTransaction
 }
 
-// DecredDEX extends Wallet with the atomic swap methods required for
-// participation in DCRDEX trading. Implementations that support DEX trading
-// must satisfy this interface.
-type DecredDEX interface {
+// AtomicSwapWallet extends Wallet with the atomic swap methods required for
+// peer-to-peer settlement. Implementations that support atomic swap
+// participation (init, audit, redeem, refund) must satisfy this interface.
+type AtomicSwapWallet interface {
 	Wallet
 	// FundOrder selects coins for use in an order. The coins will be locked,
 	// and will not be returned in subsequent calls to FundOrder or calculated

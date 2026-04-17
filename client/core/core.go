@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"decred.org/dcrdex/client/asset"
-	"decred.org/dcrdex/client/comms"
 	"decred.org/dcrdex/client/db"
 	"decred.org/dcrdex/client/db/bolt"
 	"decred.org/dcrdex/client/mnemonic"
@@ -31,9 +30,6 @@ import (
 	"decred.org/dcrdex/dex/dexnet"
 	"decred.org/dcrdex/dex/encode"
 	"decred.org/dcrdex/dex/encrypt"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	serverdex "decred.org/dcrdex/server/dex"
 	"github.com/decred/dcrd/crypto/blake256"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"golang.org/x/text/language"
@@ -41,37 +37,6 @@ import (
 )
 
 const (
-	// tickCheckDivisions is how many times to tick trades per broadcast timeout
-	// interval. e.g. 12 min btimeout / 8 divisions = 90 sec between checks.
-	tickCheckDivisions = 8
-	// defaultTickInterval is the tick interval used before the broadcast
-	// timeout is known (e.g. startup with down server).
-	defaultTickInterval = 30 * time.Second
-
-	marketTradeRedemptionSlippageBuffer = 2
-
-	// preimageReqTimeout the server's preimage request timeout period. When
-	// considered with a market's epoch duration, this is used to detect when an
-	// order should have gone through matching for a certain epoch. TODO:
-	// consider sharing const for the preimage timeout with the server packages,
-	// or a config response field if it should be considered variable.
-	preimageReqTimeout = 20 * time.Second
-
-	// wsMaxAnomalyCount is the maximum websocket connection anomaly after which
-	// a client receives a notification to check their connectivity.
-	wsMaxAnomalyCount = 3
-	// If a client's websocket connection to a server disconnects before
-	// wsAnomalyDuration since last connect time, the client's websocket
-	// connection anomaly count is increased.
-	wsAnomalyDuration = 60 * time.Minute
-
-	// This is a configurable server parameter, but we're assuming servers have
-	// changed it from the default , We're using this for the v1 ConnectResult,
-	// where we don't have the necessary information to calculate our bonded
-	// tier, so we calculate our bonus/revoked tier from the score in the
-	// ConnectResult.
-	// defaultPenaltyThreshold = 20 unused
-
 	// legacySeedLength is the length of the generated app seed used for app protection.
 	legacySeedLength = 64
 
@@ -90,19 +55,6 @@ var (
 	// When waiting for a wallet to sync, a SyncStatus check will be performed
 	// every syncTickerPeriod. var instead of const for testing purposes.
 	syncTickerPeriod = 3 * time.Second
-	// supportedAPIVers are the DEX server API versions this client is capable
-	// of communicating with.
-	//
-	// NOTE: API version may change at any time. Keep this in mind when
-	// updating the API. Long-running operations may start and end with
-	// differing versions.
-	supportedAPIVers = []int32{serverdex.PerMatchAddrVersion}
-	// ActiveOrdersLogoutErr is returned from logout when there are active
-	// orders.
-	ActiveOrdersLogoutErr = errors.New("cannot log out with active orders")
-	// ErrTooManyActiveMatches is returned from trade when the number of
-	// active matches exceeds the limit.
-	ErrTooManyActiveMatches = errors.New("too many active matches")
 	// walletDisabledErrStr is the error message returned when trying to use a
 	// disabled wallet.
 	walletDisabledErrStr = "%s wallet is disabled"
@@ -110,26 +62,8 @@ var (
 	errTimeout = errors.New("timeout")
 )
 
-type pendingFeeState struct {
-	confs uint32
-	asset uint32
-}
-
-// DefaultResponseTimeout is the default timeout for responses after a request is
-// successfully sent.
-const (
-	DefaultResponseTimeout = comms.DefaultResponseTimeout
-	fundingTxWait          = time.Minute // TODO: share var with server/market or put in config
-)
-
-// temporaryOrderIDCounter is used for inflight orders and must never be zero
-// when used for an inflight order.
-var temporaryOrderIDCounter uint64
-
-// blockWaiter is a message waiting to be stamped, signed, and sent once a
-// specified coin has the requisite confirmations. The blockWaiter is similar to
-// dcrdex/server/blockWaiter.Waiter, but is different enough to warrant a
-// separate type.
+// blockWaiter is a message waiting to be sent once a specified coin has the
+// requisite confirmations.
 type blockWaiter struct {
 	assetID uint32
 	trigger func() (bool, error)
@@ -146,9 +80,8 @@ type Config struct {
 	// Logger is the Core's logger and is also used to create the sub-loggers
 	// for the asset backends.
 	Logger dex.Logger
-	// Onion is the address (host:port) of a Tor proxy for use with DEX hosts
-	// with a .onion address. To use Tor with regular DEX addresses as well, set
-	// TorProxy.
+	// Onion is the address (host:port) of a Tor proxy for use with .onion
+	// addresses. To use Tor with regular addresses as well, set TorProxy.
 	Onion string
 	// TorProxy specifies the address of a Tor proxy server.
 	TorProxy string
@@ -167,21 +100,11 @@ type Config struct {
 	// on shutdown. This is useful if the consumer is using the BackupDB method,
 	// or simply creating manual backups of the DB file after shutdown.
 	NoAutoDBBackup bool // zero value is legacy behavior
-	// UnlockCoinsOnLogin indicates that on wallet connect during login, or on
-	// creation of a new wallet, all coins with the wallet should be unlocked.
-	UnlockCoinsOnLogin bool
 	// ExtensionModeFile is the path to a file that specifies configuration
 	// for running core in extension mode, which gives the caller options for
 	// e.g. limiting the ability to configure wallets.
 	ExtensionModeFile string
 
-	TheOneHost string
-
-	Mesh bool
-	// MaxActiveMatches is the maximum number of active swap matches allowed
-	// per DEX connection before new orders are deferred. Zero means use the
-	// default (48).
-	MaxActiveMatches int
 }
 
 // locale is data associated with the currently selected language.
@@ -191,20 +114,17 @@ type locale struct {
 	printer *message.Printer
 }
 
-// Core is the core client application. Core manages DEX connections, wallets,
-// database access, match negotiation and more.
+// Core is the core client application. Core manages wallets,
+// database access, atomic swap settlement and more.
 type Core struct {
-	ctx           context.Context
-	wg            sync.WaitGroup
-	ready         chan struct{}
-	rotate        chan struct{}
-	cfg           *Config
-	log           dex.Logger
-	db            db.DB
-	net           dex.Network
-	lockTimeTaker time.Duration
-	lockTimeMaker time.Duration
-	intl          atomic.Value // *locale
+	ctx  context.Context
+	wg   sync.WaitGroup
+	ready chan struct{}
+	cfg  *Config
+	log  dex.Logger
+	db   db.DB
+	net  dex.Network
+	intl atomic.Value // *locale
 
 	extensionModeConfig *ExtensionModeConfig
 
@@ -237,9 +157,6 @@ type Core struct {
 
 	noteMtx   sync.RWMutex
 	noteChans map[uint64]chan Notification
-
-	sentCommitsMtx sync.Mutex
-	sentCommits    map[order.Commitment]chan struct{}
 
 	ratesMtx        sync.RWMutex
 	fiatRateSources map[string]*commonRateSource
@@ -366,14 +283,11 @@ func New(cfg *Config) (*Core, error) {
 	c := &Core{
 		cfg:           cfg,
 		credentials:   creds,
-		ready:         make(chan struct{}),
-		rotate:        make(chan struct{}, 1),
-		log:           cfg.Logger,
-		db:            boltDB,
-		wallets:       make(map[uint32]*xcWallet),
-		net:           cfg.Net,
-		lockTimeTaker: dex.LockTimeTaker(cfg.Net),
-		lockTimeMaker: dex.LockTimeMaker(cfg.Net),
+		ready:   make(chan struct{}),
+		log:     cfg.Logger,
+		db:      boltDB,
+		wallets: make(map[uint32]*xcWallet),
+		net:     cfg.Net,
 		blockWaiters:  make(map[string]*blockWaiter),
 		tipPending:    make(map[uint32]uint64),
 		tipActive:     make(map[uint32]bool),
@@ -399,8 +313,7 @@ func New(cfg *Config) (*Core, error) {
 		printer: message.NewPrinter(lang),
 	})
 
-	// Populate the initial user data. User won't include any DEX info yet, as
-	// those are retrieved when Run is called and the core connects to the DEXes.
+	// Populate the initial user data.
 	c.log.Debugf("new client core created")
 	return c, nil
 }
@@ -408,11 +321,11 @@ func New(cfg *Config) (*Core, error) {
 // Run runs the core. Satisfies the runner.Runner interface.
 func (c *Core) Run(ctx context.Context) {
 	c.log.Infof("Starting Bison Wallet core")
-	// Store the context as a field, since we will need to spawn new DEX threads
-	// when new accounts are registered.
+	// Store the context as a field for use by goroutines spawned during
+	// initialization.
 	c.ctx = ctx
 	err := c.initialize()
-	if err != nil { // connectDEX gets ctx for the wsConn
+	if err != nil {
 		c.log.Critical(err)
 		close(c.ready) // unblock <-Ready()
 		return
@@ -575,7 +488,7 @@ func (c *Core) BackupDB(dst string, overwrite, compact bool) error {
 	return c.db.BackupTo(dst, overwrite, compact)
 }
 
-const defaultDEXPort = "7232"
+const defaultPort = "7232"
 
 // addrHost returns the host or url:port pair for an address.
 func addrHost(addr string) (string, error) {
@@ -584,7 +497,7 @@ func addrHost(addr string) (string, error) {
 	const missingPort = "missing port in address"
 	// Empty addresses are localhost.
 	if addr == "" {
-		return defaultHost + ":" + defaultDEXPort, nil
+		return defaultHost + ":" + defaultPort, nil
 	}
 	host, port, splitErr := net.SplitHostPort(addr)
 	_, portErr := strconv.ParseUint(port, 10, 16)
@@ -598,7 +511,7 @@ func addrHost(addr string) (string, error) {
 		var addrErr *net.AddrError
 		if errors.As(splitErr, &addrErr) && addrErr.Err == missingPort {
 			host = strings.Trim(addrErr.Addr, "[]") // JoinHostPort expects no brackets for ipv6 hosts
-			return net.JoinHostPort(host, defaultDEXPort), nil
+			return net.JoinHostPort(host, defaultPort), nil
 		}
 		// These are addresses with at least one colon in an unexpected
 		// position.
@@ -610,7 +523,7 @@ func addrHost(addr string) (string, error) {
 		host, port = a.Hostname(), a.Port()
 		// If the address parses but there is no port, append the default port.
 		if port == "" {
-			return net.JoinHostPort(host, defaultDEXPort), nil
+			return net.JoinHostPort(host, defaultPort), nil
 		}
 	}
 	// We have a port but no host. Replace with localhost.
@@ -641,7 +554,7 @@ func (c *Core) setCredentials(creds *db.PrimaryCredentials) {
 	c.credMtx.Unlock()
 }
 
-// Network returns the current DEX network.
+// Network returns the current wallet network.
 func (c *Core) Network() dex.Network {
 	return c.net
 }
@@ -649,26 +562,6 @@ func (c *Core) Network() dex.Network {
 // TorProxy returns the configured Tor proxy address, or "" if none.
 func (c *Core) TorProxy() string {
 	return c.cfg.TorProxy
-}
-
-// Exchanges returns an empty map; DEX connectivity is not available in this build.
-func (c *Core) Exchanges() map[string]*Exchange {
-	return make(map[string]*Exchange)
-}
-
-// Exchange always returns an error; DEX connectivity is not available in this build.
-func (c *Core) Exchange(host string) (*Exchange, error) {
-	return nil, fmt.Errorf("DEX connectivity not available in this build")
-}
-
-// ExchangeMarket always returns an error; DEX connectivity is not available in this build.
-func (c *Core) ExchangeMarket(host string, baseID, quoteID uint32) (*Market, error) {
-	return nil, fmt.Errorf("DEX connectivity not available in this build")
-}
-
-// MarketConfig always returns an error; DEX connectivity is not available in this build.
-func (c *Core) MarketConfig(host string, baseID, quoteID uint32) (*msgjson.Market, error) {
-	return nil, fmt.Errorf("DEX connectivity not available in this build")
 }
 
 // wallet gets the wallet for the specified asset ID in a thread-safe way.
@@ -743,10 +636,9 @@ func (c *Core) storeDepositAddress(wdbID []byte, addr string) error {
 	return c.db.UpdateWallet(dbWallet)
 }
 
-// connectAndUpdateWalletResumeTrades creates a connection to a wallet and
-// updates the balance. If resumeTrades is set to true, an attempt to resume
-// any trades that were unable to be resumed at startup will be made.
-func (c *Core) connectAndUpdateWalletResumeTrades(w *xcWallet, resumeTrades bool) error {
+// connectAndUpdateWallet creates a connection to a wallet and updates the
+// balance.
+func (c *Core) connectAndUpdateWallet(w *xcWallet) error {
 	assetID := w.AssetID
 
 	token := asset.TokenInfo(assetID)
@@ -756,7 +648,7 @@ func (c *Core) connectAndUpdateWalletResumeTrades(w *xcWallet, resumeTrades bool
 			return fmt.Errorf("token %s wallet has no %s parent?", unbip(assetID), unbip(token.ParentID))
 		}
 		if !parentWallet.connected() {
-			if err := c.connectAndUpdateWalletResumeTrades(parentWallet, resumeTrades); err != nil {
+			if err := c.connectAndUpdateWallet(parentWallet); err != nil {
 				return fmt.Errorf("failed to connect %s parent wallet for %s token: %v",
 					unbip(token.ParentID), unbip(assetID), err)
 			}
@@ -765,7 +657,7 @@ func (c *Core) connectAndUpdateWalletResumeTrades(w *xcWallet, resumeTrades bool
 
 	c.log.Debugf("Connecting wallet for %s", unbip(assetID))
 	addr := w.currentDepositAddress()
-	newAddr, err := c.connectWalletResumeTrades(w, resumeTrades)
+	newAddr, err := c.connectWallet(w)
 	if err != nil {
 		return fmt.Errorf("connectWallet: %w", err) // core.Error with code connectWalletErr
 	}
@@ -787,12 +679,6 @@ func (c *Core) connectAndUpdateWalletResumeTrades(w *xcWallet, resumeTrades bool
 	return nil
 }
 
-// connectAndUpdateWallet creates a connection to a wallet and updates the
-// balance.
-func (c *Core) connectAndUpdateWallet(w *xcWallet) error {
-	return c.connectAndUpdateWalletResumeTrades(w, true)
-}
-
 // connectedWallet fetches a wallet and will connect the wallet if it is not
 // already connected. If the wallet gets connected, this also emits WalletState
 // and WalletBalance notification.
@@ -811,13 +697,11 @@ func (c *Core) connectedWallet(assetID uint32) (*xcWallet, error) {
 	return wallet, nil
 }
 
-// connectWalletResumeTrades connects to the wallet and returns the deposit
-// address validated by the xcWallet after connecting. If the wallet backend
-// is still syncing, this also starts a goroutine to monitor sync status,
-// emitting WalletStateNotes on each progress update. If resumeTrades is set to
-// true, an attempt to resume any trades that were unable to be resumed at
-// startup will be made.
-func (c *Core) connectWalletResumeTrades(w *xcWallet, resumeTrades bool) (depositAddr string, err error) {
+// connectWallet connects to the wallet and returns the deposit address
+// validated by the xcWallet after connecting. If the wallet backend is still
+// syncing, this also starts a goroutine to monitor sync status, emitting
+// WalletStateNotes on each progress update.
+func (c *Core) connectWallet(w *xcWallet) (depositAddr string, err error) {
 	if w.isDisabled() {
 		return "", fmt.Errorf(walletDisabledErrStr, w.Symbol)
 	}
@@ -834,30 +718,15 @@ func (c *Core) connectWalletResumeTrades(w *xcWallet, resumeTrades bool) (deposi
 	synced := w.syncStatus.Synced
 	w.mtx.RUnlock()
 
-	// If the wallet is synced, update the bond reserves, logging any balance
-	// insufficiencies, otherwise start a loop to check the sync status until it
-	// is.
-	if synced {
-		// bond reserves not applicable in this build
-	} else {
+	if !synced {
 		c.startWalletSyncMonitor(w)
 	}
 
 	return
 }
 
-// connectWallet connects to the wallet and returns the deposit address
-// validated by the xcWallet after connecting. If the wallet backend is still
-// syncing, this also starts a goroutine to monitor sync status, emitting
-// WalletStateNotes on each progress update.
-func (c *Core) connectWallet(w *xcWallet) (depositAddr string, err error) {
-	return c.connectWalletResumeTrades(w, true)
-}
-
-// unlockWalletResumeTrades will unlock a wallet if it is not yet unlocked. If
-// resumeTrades is set to true, an attempt to resume any trades that were
-// unable to be resumed at startup will be made.
-func (c *Core) unlockWalletResumeTrades(crypter encrypt.Crypter, wallet *xcWallet, resumeTrades bool) error {
+// unlockWallet will unlock a wallet if it is not yet unlocked.
+func (c *Core) unlockWallet(crypter encrypt.Crypter, wallet *xcWallet) error {
 	// Unlock if either the backend itself is locked or if we lack a cached
 	// unencrypted password for encrypted wallets.
 	if !wallet.unlocked() {
@@ -875,32 +744,9 @@ func (c *Core) unlockWalletResumeTrades(crypter encrypt.Crypter, wallet *xcWalle
 		}
 		// Notify new wallet state.
 		c.notify(newWalletStateNote(wallet.state()))
-
 	}
 
 	return nil
-}
-
-// unlockWallet will unlock a wallet if it is not yet unlocked.
-func (c *Core) unlockWallet(crypter encrypt.Crypter, wallet *xcWallet) error {
-	return c.unlockWalletResumeTrades(crypter, wallet, true)
-}
-
-// connectAndUnlockResumeTrades will connect to the wallet if not already
-// connected, and unlock the wallet if not already unlocked. If the wallet
-// backend is still syncing, this also starts a goroutine to monitor sync
-// status, emitting WalletStateNotes on each progress update. If resumeTrades
-// is set to true, an attempt to resume any trades that were unable to be
-// resumed at startup will be made.
-func (c *Core) connectAndUnlockResumeTrades(crypter encrypt.Crypter, wallet *xcWallet, resumeTrades bool) error {
-	if !wallet.connected() {
-		err := c.connectAndUpdateWalletResumeTrades(wallet, resumeTrades)
-		if err != nil {
-			return err
-		}
-	}
-
-	return c.unlockWalletResumeTrades(crypter, wallet, resumeTrades)
 }
 
 // connectAndUnlock will connect to the wallet if not already connected,
@@ -908,7 +754,12 @@ func (c *Core) connectAndUnlockResumeTrades(crypter encrypt.Crypter, wallet *xcW
 // is still syncing, this also starts a goroutine to monitor sync status,
 // emitting WalletStateNotes on each progress update.
 func (c *Core) connectAndUnlock(crypter encrypt.Crypter, wallet *xcWallet) error {
-	return c.connectAndUnlockResumeTrades(crypter, wallet, true)
+	if !wallet.connected() {
+		if err := c.connectAndUpdateWallet(wallet); err != nil {
+			return err
+		}
+	}
+	return c.unlockWallet(crypter, wallet)
 }
 
 // walletBalance gets the xcWallet's current WalletBalance, which includes the
@@ -1133,7 +984,6 @@ func (c *Core) assetMap() map[uint32]*SupportedAsset {
 func (c *Core) User() *User {
 	return &User{
 		Assets:             c.assetMap(),
-		Exchanges:          c.Exchanges(),
 		Initialized:        c.IsInitialized(),
 		SeedGenerationTime: c.seedGenerationTime,
 		FiatRates:          c.fiatConversions(),
@@ -1195,12 +1045,6 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 	dbWallet.Address, err = c.connectWallet(wallet)
 	if err != nil {
 		return err
-	}
-
-	if c.cfg.UnlockCoinsOnLogin {
-		if err = wallet.ReturnCoins(nil); err != nil {
-			c.log.Errorf("Failed to unlock all %s wallet coins: %v", unbip(wallet.AssetID), err)
-		}
 	}
 
 	initErr := func(s string, a ...any) error {
@@ -1398,7 +1242,7 @@ func (c *Core) assetSeedAndPass(assetID uint32, crypter encrypt.Crypter) (seed, 
 // AssetSeedAndPass derives the wallet seed and password that would be used to
 // create a native wallet for a particular asset and application seed. Depending
 // on external wallet software and their key derivation paths, this seed may be
-// usable for accessing funds outside of DEX applications, e.g. btcwallet.
+// usable for accessing funds with external wallet software, e.g. btcwallet.
 func AssetSeedAndPass(assetID uint32, appSeed []byte) ([]byte, []byte) {
 	const accountBasedSeedAssetID = 60 // ETH
 	seedAssetID := assetID
@@ -1629,9 +1473,9 @@ func (c *Core) startWalletSyncMonitor(wallet *xcWallet) {
 // wallet implementation. It is up to the underlying wallet backend if and how
 // to implement this functionality. It may be asynchronous. Core will emit
 // wallet state notifications until the rescan is complete. If force is false,
-// this will check for active orders involving this asset before initiating a
+// this will check for active swaps involving this asset before initiating a
 // rescan. WARNING: It is ill-advised to initiate a wallet rescan with active
-// orders unless as a last ditch effort to get the wallet to recognize a
+// swaps unless as a last ditch effort to get the wallet to recognize a
 // transaction needed to complete a swap.
 func (c *Core) RescanWallet(assetID uint32, force bool) error {
 	wallet, err := c.connectedWallet(assetID)
@@ -1705,9 +1549,9 @@ func (c *Core) updateWallet(assetID uint32, wallet *xcWallet) {
 // which may not be possible if the wallet is too corrupted. Disconnect and
 // destroy the old wallet, create a new one, and if the recovery information
 // was retrieved from the old wallet, send this information to the new one.
-// If force is false, this will check for active orders involving this
+// If force is false, this will check for active swaps involving this
 // asset before initiating a rescan. WARNING: It is ill-advised to initiate
-// a wallet recovery with active orders unless the wallet db is definitely
+// a wallet recovery with active swaps unless the wallet db is definitely
 // corrupted and even a rescan will not save it.
 //
 // DO NOT MAKE CONCURRENT CALLS TO THIS FUNCTION WITH THE SAME ASSET.
@@ -1831,9 +1675,9 @@ func (c *Core) OpenWallet(assetID uint32, appPW []byte) error {
 		return err
 	}
 	c.log.Infof("Connected to and unlocked %s wallet. Balance available "+
-		"= %d / locked = %d / locked in contracts = %d, locked in bonds = %d, Deposit address = %s",
+		"= %d / locked = %d / locked in contracts = %d, Deposit address = %s",
 		state.Symbol, balances.Available, balances.Locked, balances.ContractLocked,
-		balances.BondLocked, state.Address)
+		state.Address)
 
 	c.notify(newWalletStateNote(state))
 	return nil
@@ -2142,7 +1986,7 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 		// setWalletPassword since it would use connectAndUpdateWallet, which
 		// performs additional deposit address validation and balance updates that
 		// are redundant with the rest of this function.
-		dbWallet.Address, err = c.connectWalletResumeTrades(w, false)
+		dbWallet.Address, err = c.connectWallet(w)
 		if err != nil {
 			return fmt.Errorf("connectWallet: %w", err)
 		}
@@ -2401,11 +2245,6 @@ func (c *Core) AutoWalletConfig(assetID uint32, walletType string) (map[string]s
 	return settings, nil
 }
 
-// AddDEX is not supported in this build (DEX connectivity removed).
-func (c *Core) AddDEX(_ []byte, _ string, _ any) error {
-	return fmt.Errorf("DEX connectivity not available in this build")
-}
-
 // IsInitialized checks if the app is already initialized.
 func (c *Core) IsInitialized() bool {
 	c.credMtx.RLock()
@@ -2551,7 +2390,8 @@ func seedInnerKey(seed []byte) []byte {
 	// seed. Any other uses of derivation from the seed should similarly create
 	// their own domain-specific value to ensure uniqueness.
 	//
-	// It is equal to BLAKE-256([]byte("DCRDEX-InnerKey-v0")).
+	// It is equal to BLAKE-256([]byte("DCRDEX-InnerKey-v0")) and kept unchanged
+	// for backwards compatibility with existing encrypted databases.
 	keyParam := [32]byte{
 		0x75, 0x25, 0xb1, 0xb6, 0x53, 0x33, 0x9e, 0x33,
 		0xbe, 0x11, 0x61, 0x45, 0x1a, 0x88, 0x6f, 0x37,
@@ -2567,9 +2407,8 @@ func seedInnerKey(seed []byte) []byte {
 
 
 // Login logs the user in. On the first login after startup or after a logout,
-// this function will connect wallets, resolve active trades, and decrypt
-// account keys for all known DEXes. Otherwise, it will only check whether or
-// not the app pass is correct.
+// this function will connect wallets and decrypt stored credentials. Otherwise,
+// it will only check whether or not the app pass is correct.
 func (c *Core) Login(pw []byte) error {
 	// Make sure the app has been initialized. This condition would error when
 	// attempting to retrieve the encryption key below as well, but the
@@ -2629,15 +2468,8 @@ func (c *Core) Login(pw []byte) error {
 	if needsInit, err := login(); err != nil {
 		return err
 	} else if needsInit {
-		// It is not an error if we can't connect, unless we need the wallet
-		// for active trades, but that condition is checked later in
-		// resolveActiveTrades. We won't try to unlock here, but if the wallet
-		// is needed for active trades, it will be unlocked in resolveActiveTrades
-		// and the balance updated there.
 		c.notify(newLoginNote("Connecting wallets..."))
 		c.connectWallets(crypter) // initialize reserves
-		c.notify(newLoginNote("Resuming active trades..."))
-		c.resolveActiveTrades(crypter)
 	}
 
 	return nil
@@ -2746,11 +2578,6 @@ func (c *Core) connectWallets(crypter encrypt.Crypter) {
 					c.log.Errorf("Failed to start or stop mixing: %v", err)
 				}
 			}
-			if c.cfg.UnlockCoinsOnLogin {
-				if err = wallet.ReturnCoins(nil); err != nil {
-					c.log.Errorf("Failed to unlock all %s wallet coins: %v", unbip(wallet.AssetID), err)
-				}
-			}
 		}
 		atomic.AddUint32(&connectCount, 1)
 	}
@@ -2788,7 +2615,7 @@ func (c *Core) Notifications(n int) (notes, pokes []*db.Notification, _ error) {
 	return notes, c.pokes(), nil
 }
 
-// pokes returns an empty slice; pokes were DEX server push notifications.
+// pokes returns an empty slice.
 func (c *Core) pokes() []*db.Notification {
 	return nil
 }
@@ -2810,7 +2637,7 @@ func (c *Core) recrypt(creds *db.PrimaryCredentials, oldCrypter, newCrypter encr
 		w.setEncPW(newEncPW)
 	}
 
-	_ = acctUpdates // DEX connections removed; in-memory updates skipped
+	_ = acctUpdates // no in-memory account state to update
 
 	return nil
 }
@@ -2837,7 +2664,7 @@ func (c *Core) initializePrimaryCredentials(pw []byte, oldKeyParams []byte) erro
 	return nil
 }
 
-// Active indicates if there are any active orders. Always false in this build.
+// Active indicates if there are any active swaps. Always false in this build.
 func (c *Core) Active() bool {
 	return false
 }
@@ -2849,11 +2676,6 @@ func (c *Core) Logout() error {
 
 	if !c.loggedIn {
 		return nil
-	}
-
-	// Check active orders
-	if c.Active() {
-		return codedError(activeOrdersErr, ActiveOrdersLogoutErr)
 	}
 
 	// Lock wallets
@@ -2873,7 +2695,7 @@ func (c *Core) Logout() error {
 				c.log.Infof("Locking %s wallet", symb)
 				if err := w.Lock(walletLockTimeout); err != nil {
 					// A failure to lock the wallet need not block the ability to
-					// lock the DEX accounts or shutdown Core gracefully.
+					// lock wallets or shutdown Core gracefully.
 					c.log.Warnf("Unable to lock %v wallet: %v", unbip(w.AssetID), err)
 				}
 			}
@@ -2888,33 +2710,6 @@ func (c *Core) Logout() error {
 
 	return nil
 }
-
-// coreOrderFromMetaOrder creates an *Order from a *db.MetaOrder, including
-// loading matches from the database. The order is presumed to be inactive, so
-// swap coin confirmations will not be set. For active orders, get the
-// *trackedTrade and use the coreOrder method.
-func (c *Core) coreOrderFromMetaOrder(mOrd *db.MetaOrder) (*Order, error) {
-	corder := coreOrderFromTrade(mOrd.Order, mOrd.MetaData)
-	oid := mOrd.Order.ID()
-	excludeCancels := false // maybe don't include cancel order matches?
-	matches, err := c.db.MatchesForOrder(oid, excludeCancels)
-	if err != nil {
-		return nil, fmt.Errorf("MatchesForOrder error loading matches for %s: %w", oid, err)
-	}
-	corder.Matches = make([]*Match, 0, len(matches))
-	for _, match := range matches {
-		corder.Matches = append(corder.Matches, matchFromMetaMatch(mOrd.Order, match))
-	}
-	return corder, nil
-}
-
-// marketWallets is not available in this build (DEX connectivity removed).
-func (c *Core) marketWallets(_ string, _, _ uint32) (ba, qa *dex.Asset, bw, qw *xcWallet, err error) {
-	return nil, nil, nil, nil, fmt.Errorf("DEX connectivity not available in this build")
-}
-
-// resolveActiveTrades is a no-op in this build (DEX trading layer removed).
-func (c *Core) resolveActiveTrades(_ encrypt.Crypter) {}
 
 func (c *Core) wait(coinID []byte, assetID uint32, trigger func() (bool, error), action func(error)) {
 	c.waiterMtx.Lock()
@@ -3014,9 +2809,8 @@ func (c *Core) ValidateAddress(address string, assetID uint32) (bool, error) {
 	return wallet.Wallet.ValidateAddress(address), nil
 }
 
-// ApproveToken calls a wallet's ApproveToken method. It approves the version
-// of the token used by the dex at the specified address.
-func (c *Core) ApproveToken(appPW []byte, assetID uint32, dexAddr string, onConfirm func()) (string, error) {
+// ApproveToken calls a wallet's ApproveToken method.
+func (c *Core) ApproveToken(appPW []byte, assetID uint32, onConfirm func()) (string, error) {
 	crypter, err := c.encryptionKey(appPW)
 	if err != nil {
 		return "", err
@@ -3476,13 +3270,6 @@ func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, 
 	return estimator.EstimateSendTxFee(address, amount, 0, subtract, maxWithdraw)
 }
 
-// MultiTradeResult is returned from MultiTrade. Some orders may be placed
-// successfully, while others may fail.
-type MultiTradeResult struct {
-	Order *Order
-	Error error
-}
-
 // TxHistory returns all the transactions a wallet has made. If refID
 // is nil, then transactions starting from the most recent are returned
 // (past is ignored). If past is true, the transactions prior to the
@@ -3510,14 +3297,6 @@ func (c *Core) WalletTransaction(assetID uint32, txID string) (*asset.WalletTran
 	return wallet.WalletTransaction(c.ctx, txID)
 }
 
-// assetSet bundles a server's asset "config" for a pair of assets.
-type assetSet struct {
-	baseAsset  *dex.Asset
-	quoteAsset *dex.Asset
-	fromAsset  *dex.Asset
-	toAsset    *dex.Asset
-}
-
 // AssetBalance retrieves and updates the current wallet balance.
 func (c *Core) AssetBalance(assetID uint32) (*WalletBalance, error) {
 	wallet, err := c.connectedWallet(assetID)
@@ -3525,13 +3304,6 @@ func (c *Core) AssetBalance(assetID uint32) (*WalletBalance, error) {
 		return nil, fmt.Errorf("%d -> %s wallet error: %w", assetID, unbip(assetID), err)
 	}
 	return c.walletBalance(wallet)
-}
-
-func pluralize(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
 
 // initialize loads wallet configurations from the database.

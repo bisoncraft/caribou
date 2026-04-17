@@ -30,7 +30,6 @@ const (
 	estimateUnavailableID            = "ESTIMATE_UNAVAILABLE"
 	noZeroRateID                     = "NO_ZERO_RATE"
 	noZeroQuantityID                 = "NO_ZERO_QUANTITY"
-	tradeID                          = "TRADE"
 	noAssetWalletID                  = "NO_ASSET_WALLET"
 	executedID                       = "EXECUTED"
 	bookedID                         = "BOOKED"
@@ -78,7 +77,6 @@ const (
 	candlesLoadingID                 = "CANDLES_LOADING"
 	depthLoadingID                   = "DEPTH_LOADING"
 	invalidAddrressMsgID             = "INVALID_ADDRESS_MSG"
-	txFeeSupportedID                 = "TXFEE_UNSUPPORTED"
 	txFeeErrorMsgID                  = "TXFEE_ERR_MSG"
 	activeOrdersLogoutErrorID        = "ACTIVE_ORDERS_LOGOUT_ERR_MSG"
 	invalidDateErrorMsgID            = "INVALID_DATE_ERR_MSG"
@@ -106,7 +104,6 @@ const (
 	matchStatusCompleteID            = "MATCH_STATUS_COMPLETE"
 	takerFoundMakerRedemptionID      = "TAKER_FOUND_MAKER_REDEMPTION"
 	sentToRelayerID                  = "SENT_TO_RELAYER"
-	openWalletErrMsgID               = "OPEN_WALLET_ERR_MSG"
 	orderAccelerationFeeErrMsgID     = "ORDER_ACCELERATION_FEE_ERR_MSG"
 	orderAccelerationErrMsgID        = "ORDER_ACCELERATION_ERR_MSG"
 	connectedID                      = "CONNECTED"
@@ -123,22 +120,8 @@ const (
 	refundImminentID                 = "REFUND_IMMINENT"
 	refundWillHappenAfterID          = "REFUND_WILL_HAPPEN_AFTER"
 	availableTitleID                 = "AVAILABLE_TITLE"
-	lockedTitleID                    = "LOCKED_TITLE"
-	immatureTitleID                  = "IMMATURE_TITLE"
-	swappingID                       = "SWAPPING"
-	bondedID                         = "BONDED"
-	lockedBalMsgID                   = "LOCKED_BAL_MSG"
-	immatureBalMsgID                 = "IMMATURE_BAL_MSG"
-	lockedSwappingBalMsgID           = "LOCKED_SWAPPING_BAL_MSG"
-	lockedBonBalMsgID                = "LOCKED_BOND_BAL_MSG"
-	reservesDeficitID                = "RESERVES_DEFICIT"
-	reservesDeficitMsgID             = "RESERVES_DEFICIT_MSG"
-	bondReservesID                   = "BOND_RESERVES"
-	bondReservesMsgID                = "BOND_RESERVES_MSG"
 	shieldedID                       = "SHIELDED"
 	shieldedMsgID                    = "SHIELDED_MSG"
-	orderID                          = "ORDER"
-	lockedOrderBalMsgID              = "LOCKED_ORDER_BAL_MSG"
 	creatingWalletsID                = "CREATING_WALLETS"
 	addingServersID                  = "ADDING_SERVER"
 	walletRecoverySupportMsgID       = "WALLET_RECOVERY_SUPPORT_MSG"
@@ -248,7 +231,6 @@ const (
 	mmWithdrawalID                 = "MM_WITHDRAWAL"
 	mmDepositID                    = "MM_DEPOSIT"
 	mmFailedSaveBotConfigID        = "MM_FAILED_SAVE_BOT_CONFIG"
-	mmMinTransferID                = "MM_MIN_TRANSFER"
 	mmMinTransferTooltipID         = "MM_MIN_TRANSFER_TOOLTIP"
 	mmFailedFetchBridgeFeesID      = "MM_FAILED_FETCH_BRIDGE_FEES"
 	mmBridgeConfigurationID        = "MM_BRIDGE_CONFIGURATION"
@@ -302,8 +284,6 @@ const (
 	mmFailedDeleteBotID            = "MM_FAILED_DELETE_BOT"
 	mmFailedUpdateRunningID        = "MM_FAILED_UPDATE_RUNNING"
 	mmManualAllocDescID            = "MM_MANUAL_ALLOC_DESC"
-	mmBisonWalletSideID            = "MM_BISON_WALLET_SIDE"
-	mmCexSideID                    = "MM_CEX_SIDE"
 	mmSelectMarketDescID           = "MM_SELECT_MARKET_DESC"
 	mmNoMarketsMatchID             = "MM_NO_MARKETS_MATCH"
 	mmRegisterHostID               = "MM_REGISTER_HOST"
@@ -369,20 +349,13 @@ const (
 	txTypeBridgeInitiationID       = "TX_TYPE_BRIDGE_INITIATION"
 	txTypeBridgeCompletionID       = "TX_TYPE_BRIDGE_COMPLETION"
 	swapOrSendTooltipID            = "SWAP_OR_SEND_TOOLTIP"
-	missingCexCredsID              = "MISSING_CEX_CREDS"
-	matchBufferID                  = "MATCH_BUFFER"
-	noPlacementsID                 = "NO_PLACEMENTS"
 	invalidValueID                 = "INVALID_VALUE"
-	noZeroID                       = "NO_ZERO"
 	botTypeBasicMMID               = "BOTTYPE_BASIC_MM"
 	botTypeArbMMID                 = "BOTTYPE_ARB_MM"
 	botTypeSimpleArbID             = "BOTTYPE_SIMPLE_ARB"
 	botTypeNoneID                  = "NO_BOTTYPE"
-	noCexID                        = "NO_CEX"
-	cexBalanceErrID                = "CEXBALANCE_ERR"
 	pendingID                      = "PENDING"
 	completeID                     = "COMPLETE"
-	archivedSettingsID             = "ARCHIVED_SETTINGS"
 	idTransparent                  = "TRANSPARENT"
 	idNoCodeProvided               = "NO_CODE_PROVIDED"
 	enableAccount                  = "ENABLE_ACCOUNT"
@@ -393,16 +366,10 @@ const (
 	idWalletNoPeers                = "WALLET_NO_PEERS"
 	idDepositError                 = "DEPOSIT_ERROR"
 	idWithdrawError                = "WITHDRAW_ERROR"
-	idDEXUnderfunded               = "DEX_UNDERFUNDED"
-	idCEXUnderfunded               = "CEX_UNDERFUNDED"
-	idCEXTooShallow                = "CEX_TOO_SHALLOW"
 	idAccountSuspended             = "ACCOUNT_SUSPENDED"
 	idUserLimitTooLow              = "USER_LIMIT_TOO_LOW"
 	idNoPriceSource                = "NO_PRICE_SOURCE"
 	idCEXOrderbookUnsynced         = "CEX_ORDERBOOK_UNSYNCED"
-	idDeterminePlacementsError     = "DETERMINE_PLACEMENTS_ERROR"
-	idPlaceBuyOrdersError          = "PLACE_BUY_ORDERS_ERROR"
-	idPlaceSellOrdersError         = "PLACE_SELL_ORDERS_ERROR"
 	idCEXTradeError                = "CEX_TRADE_ERROR"
 	idOrderReportTitle             = "ORDER_REPORT_TITLE"
 	idCEXBalances                  = "CEX_BALANCES"
@@ -447,7 +414,6 @@ var enUS = map[string]*intl.Translation{
 	estimateUnavailableID:            {T: "estimate unavailable"},
 	noZeroRateID:                     {T: "zero rate not allowed"},
 	noZeroQuantityID:                 {T: "zero quantity not allowed"},
-	tradeID:                          {T: "trade"},
 	noAssetWalletID:                  {T: "No {{ asset }} wallet"},
 	executedID:                       {T: "executed"},
 	bookedID:                         {T: "booked"},
@@ -492,7 +458,6 @@ var enUS = map[string]*intl.Translation{
 	candlesLoadingID:                 {T: "waiting for candlesticks"},
 	depthLoadingID:                   {T: "retrieving depth data"},
 	invalidAddrressMsgID:             {T: "invalid address: {{ address }}"},
-	txFeeSupportedID:                 {T: "fee estimation is not supported for this wallet type"},
 	txFeeErrorMsgID:                  {T: "fee estimation failed: {{ err }}"},
 	activeOrdersLogoutErrorID:        {T: "cannot logout with active orders"},
 	invalidDateErrorMsgID:            {T: "error: invalid date or time"},
@@ -519,7 +484,6 @@ var enUS = map[string]*intl.Translation{
 	matchStatusRedeemPendingID:       {T: "Redeem PENDING"},
 	matchStatusRedemptionConfirmedID: {T: "Redemption Confirmed"},
 	matchStatusCompleteID:            {T: "Complete"},
-	openWalletErrMsgID:               {T: "Error opening wallet: {{ msg }}"},
 	orderAccelerationFeeErrMsgID:     {T: "Error estimating acceleration fee: {{ msg }}"},
 	orderAccelerationErrMsgID:        {T: "Error accelerating order: {{ msg }}"},
 	connectedID:                      {T: "Connected"},
@@ -538,22 +502,8 @@ var enUS = map[string]*intl.Translation{
 	refundImminentID:                 {T: "Will happen in the next few blocks"},
 	refundWillHappenAfterID:          {T: "Refund will happen after {{ refundAfterTime }}"},
 	availableTitleID:                 {T: "Available"},
-	lockedTitleID:                    {T: "Locked"},
-	immatureTitleID:                  {T: "Immature"},
-	swappingID:                       {T: "Swapping"},
-	bondedID:                         {T: "Bonded"},
-	lockedBalMsgID:                   {T: "Total funds temporarily locked to cover the costs of your bond maintenance, live orders, matches and other activities"},
-	immatureBalMsgID:                 {T: "Incoming funds awaiting confirmation"},
-	lockedSwappingBalMsgID:           {T: "Funds currently locked in settling matches"},
-	lockedBonBalMsgID:                {T: "Funds locked in active bonds"},
-	reservesDeficitID:                {T: "Reserves Deficit"},
-	reservesDeficitMsgID:             {T: "The apparent wallet balance shortcoming to maintain bonding level. If this persists, you may need to add funds to stay fully bonded."},
-	bondReservesID:                   {T: "Bond Reserves"},
-	bondReservesMsgID:                {T: "Funds reserved to cover the expenses associated with bond maintenance"},
 	shieldedID:                       {T: "Shielded"},
 	shieldedMsgID:                    {T: "Total funds kept shielded"},
-	orderID:                          {T: "Order"},
-	lockedOrderBalMsgID:              {T: "Funds locked in unmatched orders"},
 	creatingWalletsID:                {T: "Creating wallets"},
 	addingServersID:                  {T: "Connecting to servers"},
 	walletRecoverySupportMsgID:       {T: "Native {{ walletSymbol }} wallet failed to load properly. Try clicking the 'Recover' button below to fix it"},
@@ -659,7 +609,6 @@ var enUS = map[string]*intl.Translation{
 	mmWithdrawalID:                 {T: "Withdrawal"},
 	mmDepositID:                    {T: "Deposit"},
 	mmFailedSaveBotConfigID:        {T: "Failed to save bot config: "},
-	mmMinTransferID:                {T: "Minimum External Transfer Size"},
 	mmMinTransferTooltipID:         {T: "Real deposits and withdrawals below this size are skipped. Use this to avoid excessive fee churn on small transfers."},
 	mmFailedFetchBridgeFeesID:      {T: "Failed to fetch bridge fees and limits"},
 	mmBridgeConfigurationID:        {T: "{{ asset }} Asset Bridge"},
@@ -713,8 +662,6 @@ var enUS = map[string]*intl.Translation{
 	mmFailedDeleteBotID:            {T: "Failed to delete bot: "},
 	mmFailedUpdateRunningID:        {T: "Failed to update running bot: "},
 	mmManualAllocDescID:            {T: "Set the bot allocation directly instead of using the automatic estimate."},
-	mmBisonWalletSideID:            {T: "Bison Wallet Side"},
-	mmCexSideID:                    {T: "{{ cexName }} Side"},
 	mmSelectMarketDescID:           {T: "Choose the DEX market this bot will manage."},
 	mmNoMarketsMatchID:             {T: "No markets match your search."},
 	mmRegisterHostID:               {T: "Register on {{ host }} to use this market for market making"},
@@ -781,20 +728,13 @@ var enUS = map[string]*intl.Translation{
 	txTypeBridgeInitiationID:       {T: "Bridge initiation"},
 	txTypeBridgeCompletionID:       {T: "Bridge completion"},
 	swapOrSendTooltipID:            {T: "The wallet was unable to determine if this transaction was a swap or a send."},
-	missingCexCredsID:              {T: "specify both key and secret"},
-	matchBufferID:                  {T: "Match buffer"},
-	noPlacementsID:                 {T: "must specify 1 or more placements"},
 	invalidValueID:                 {T: "invalid value"},
-	noZeroID:                       {T: "zero not allowed"},
 	botTypeBasicMMID:               {T: "Market Maker"},
 	botTypeArbMMID:                 {T: "Market Maker + Arbitrage"},
 	botTypeSimpleArbID:             {Version: 1, T: "Arbitrage"},
 	botTypeNoneID:                  {T: "choose a bot type"},
-	noCexID:                        {T: "choose an exchange for arbitrage"},
-	cexBalanceErrID:                {T: "error fetching {{ cexName }} balance for {{ assetID }}: {{ err }}"},
 	pendingID:                      {T: "Pending"},
 	completeID:                     {T: "Complete"},
-	archivedSettingsID:             {T: "Archived Settings"},
 	idTransparent:                  {T: "Transparent"},
 	idNoCodeProvided:               {T: "no code provided"},
 	enableAccount:                  {T: "Enable Account"},
@@ -805,16 +745,10 @@ var enUS = map[string]*intl.Translation{
 	idWalletNoPeers:                {T: "{{ assetSymbol }} wallet has no peers."},
 	idDepositError:                 {T: "The last attempted deposit of {{ assetSymbol }} at {{ time }} failed with the following error: {{ error }}"},
 	idWithdrawError:                {T: "The last attempted withdrawal of {{ assetSymbol }} at {{ time }} failed with the following error: {{ error }}"},
-	idDEXUnderfunded:               {T: "The {{ assetSymbol }} wallet is underfunded by {{ amount }}"},
-	idCEXUnderfunded:               {T: "The {{ cexName }} {{ assetSymbol }} wallet is underfunded by {{ amount }}"},
-	idCEXTooShallow:                {T: "The {{ cexName }} market on the {{ side }} side is too shallow for arbitrages as specified by the configuration."},
 	idAccountSuspended:             {T: "Your account at {{ dexHost }} is suspended."},
 	idUserLimitTooLow:              {T: "Your account at {{ dexHost }} has a limit too low to place all the orders required by the configuration."},
 	idNoPriceSource:                {T: "No oracle or fiat rate sources are available for this market."},
 	idCEXOrderbookUnsynced:         {T: "The {{ cexName }} orderbook is not synced."},
-	idDeterminePlacementsError:     {T: "Error determining placements: {{ error }}"},
-	idPlaceBuyOrdersError:          {T: "Error placing buy orders: {{ error }}"},
-	idPlaceSellOrdersError:         {T: "Error placing sell orders: {{ error }}"},
 	idCEXTradeError:                {T: "The last attempted CEX trade at {{ time }} failed with the following error: {{ error }}"},
 	idOrderReportTitle:             {T: "{{ side }} orders report for epoch #{{ epochNum }}"},
 	idCEXBalances:                  {T: "{{ cexName }} Balances"},
@@ -854,7 +788,6 @@ var ptBR = map[string]*intl.Translation{
 	estimateUnavailableID:     {T: "estimativa indisponível"},
 	noZeroRateID:              {T: "taxa não pode ser zero"},
 	noZeroQuantityID:          {T: "quantidade não pode ser zero"},
-	tradeID:                   {T: "troca"},
 	noAssetWalletID:           {T: "Sem carteira {{ asset }}"},
 	executedID:                {T: "executado"},
 	bookedID:                  {T: "reservado"},
@@ -916,7 +849,6 @@ var zhCN = map[string]*intl.Translation{
 	estimateUnavailableID:            {T: "估计不可用"},
 	noZeroRateID:                     {T: "汇率不能为零"},
 	noZeroQuantityID:                 {T: "数量不能为零"},
-	tradeID:                          {T: "交易"},
 	noAssetWalletID:                  {T: "没有钱包 {{ asset }}"},
 	executedID:                       {T: "执行"},
 	bookedID:                         {T: "保留"},
@@ -962,7 +894,6 @@ var zhCN = map[string]*intl.Translation{
 	candlesLoadingID:                 {T: "等待K线"},
 	depthLoadingID:                   {T: "等待交易深度数据"},
 	invalidAddrressMsgID:             {T: "不合法地址: {{ address }}"},
-	txFeeSupportedID:                 {T: "该钱包种类不支持区块交易费用估算"},
 	txFeeErrorMsgID:                  {T: "区块交易费用估算失败: {{ err }}"},
 	activeOrdersLogoutErrorID:        {T: "活跃订单导致无法登出"},
 	invalidDateErrorMsgID:            {T: "错误: 无效的日期或时间"},
@@ -989,7 +920,6 @@ var zhCN = map[string]*intl.Translation{
 	matchStatusRedeemPendingID:       {T: "赎回待处理"},
 	matchStatusRedemptionConfirmedID: {T: "赎回已确认"},
 	matchStatusCompleteID:            {T: "完成"},
-	openWalletErrMsgID:               {T: "打开钱包时出错: {{ msg }}"},
 	orderAccelerationFeeErrMsgID:     {T: "估算加速费用时出错: {{ msg }}"},
 	orderAccelerationErrMsgID:        {T: "加速订单时出错: {{ msg }}"},
 	connectedID:                      {T: "已连接"},
@@ -1007,22 +937,8 @@ var zhCN = map[string]*intl.Translation{
 	refundImminentID:                 {T: "将在接下来的几个区块内发生"},
 	refundWillHappenAfterID:          {T: "退款将在{{ refundAfterTime }}后发生"},
 	availableTitleID:                 {T: "可用"},
-	lockedTitleID:                    {T: "锁定"},
-	immatureTitleID:                  {T: "未成熟"},
-	swappingID:                       {T: "正在交换"},
-	bondedID:                         {T: "已绑定"},
-	lockedBalMsgID:                   {T: "所有资金暂时锁定，以覆盖您的保证金维护、实时订单、匹配和其他活动的费用"},
-	immatureBalMsgID:                 {T: "到款等待确认"},
-	lockedSwappingBalMsgID:           {T: "资金锁定在结算中"},
-	lockedBonBalMsgID:                {T: "资金锁定在活动保证金中"},
-	reservesDeficitID:                {T: "储备赤字"},
-	reservesDeficitMsgID:             {T: "显示的钱包余额不足以维持保证金水平。如果这种情况持续，您可能需要添加资金以保持完全绑定"},
-	bondReservesID:                   {T: "保证金储备"},
-	bondReservesMsgID:                {T: "储备资金用于覆盖保证金维护的费用"},
 	shieldedID:                       {T: "隐私保护"},
 	shieldedMsgID:                    {T: "所有资金已被隐私保护"},
-	orderID:                          {T: "订单"},
-	lockedOrderBalMsgID:              {T: "锁定在未匹配的订单中的资金"},
 	creatingWalletsID:                {T: "正在创建钱包"},
 	addingServersID:                  {T: "正在连接到服务器"},
 	walletRecoverySupportMsgID:       {T: "本地 {{ walletSymbol }} 钱包加载失败。请尝试点击下面的“恢复”按钮来修复它"},
@@ -1066,20 +982,13 @@ var zhCN = map[string]*intl.Translation{
 	txTypeSwapOrSendID:               {T: "交换 / 发送"},
 	txTypeMixID:                      {T: "混币"},
 	swapOrSendTooltipID:              {T: "钱包无法判断此交易是交换还是发送"},
-	missingCexCredsID:                {T: "同时指定密钥和秘密"},
-	matchBufferID:                    {T: "匹配缓冲"},
-	noPlacementsID:                   {T: "必须指定一个或多个选项"},
 	invalidValueID:                   {T: "无效值"},
-	noZeroID:                         {T: "不允许零值"},
 	botTypeBasicMMID:                 {T: "做市商"},
 	botTypeArbMMID:                   {T: "做市商 + 套利"},
 	botTypeSimpleArbID:               {Version: 1, T: "套利"},
 	botTypeNoneID:                    {T: "选择一个机器人类型"},
-	noCexID:                          {T: "选择一个交易所进行套利"},
-	cexBalanceErrID:                  {T: "获取{{ cexName }}余额时出错：{{ err }}"},
 	pendingID:                        {T: "待处理"},
 	completeID:                       {T: "完成"},
-	archivedSettingsID:               {T: "已归档设置"},
 	idTransparent:                    {T: "透明"},
 	idNoCodeProvided:                 {T: "未提供代码"},
 	enableAccount:                    {T: "启用账户"},
@@ -1090,16 +999,10 @@ var zhCN = map[string]*intl.Translation{
 	idWalletNoPeers:                  {T: "{{ assetSymbol }}钱包没有同行节点"},
 	idDepositError:                   {T: "上次尝试在{{ time }}存入{{ assetSymbol }}失败，错误信息：{{ error }}"},
 	idWithdrawError:                  {T: "上次尝试在{{ time }}提取{{ assetSymbol }}失败，错误信息：{{ error }}"},
-	idDEXUnderfunded:                 {T: "{{ assetSymbol }}钱包资金不足{{ amount }}"},
-	idCEXUnderfunded:                 {T: "{{ cexName }} {{ assetSymbol }}钱包资金不足{{ amount }}"},
-	idCEXTooShallow:                  {T: "{{ cexName }}市场的{{ side }}面深度不足，无法进行套利"},
 	idAccountSuspended:               {T: "您在{{ dexHost }}的账户已被暂停"},
 	idUserLimitTooLow:                {T: "您在{{ dexHost }}的账户限额太低，无法放置配置所需的所有订单"},
 	idNoPriceSource:                  {T: "此市场没有可用的预言机或法币汇率源"},
 	idCEXOrderbookUnsynced:           {T: "{{ cexName }}的订单簿未同步"},
-	idDeterminePlacementsError:       {T: "下单时出错：{{ error }}"},
-	idPlaceBuyOrdersError:            {T: "下买单时出错：{{ error }}"},
-	idPlaceSellOrdersError:           {T: "下卖单时出错：{{ error }}"},
 	idCEXTradeError:                  {T: "上次尝试在{{ time }}进行CEX交易失败，错误信息：{{ error }}"},
 	idOrderReportTitle:               {T: "{{ side }}订单报告，纪元 #{{ epochNum }}"},
 	idCEXBalances:                    {T: "{{ cexName }}余额"},
@@ -1128,7 +1031,6 @@ var plPL = map[string]*intl.Translation{
 	estimateUnavailableID:            {T: "brak szacunkowego wyliczenia"},
 	noZeroRateID:                     {T: "zero nie może być ceną"},
 	noZeroQuantityID:                 {T: "zero nie może być ilością"},
-	tradeID:                          {T: "handluj"},
 	noAssetWalletID:                  {T: "Brak portfela {{ asset }}"},
 	executedID:                       {T: "wykonano"},
 	bookedID:                         {T: "zapisano"},
@@ -1158,20 +1060,17 @@ var plPL = map[string]*intl.Translation{
 	setupNeededID:                    {T: "Potrzebna konfiguracja"},
 	availableID:                      {T: "dostępne"},
 	immatureID:                       {T: "niedojrzałe"},
-	lockedOrderBalMsgID:              {T: "Środki zablokowane w niesparowanych zamówieniach"},
 	invalidCertID:                    {T: "Nieważny certyfikat"},
 	connectedID:                      {T: "Połączono"},
 	invalidTierValueID:               {T: "Niepoprawna wartość poziomu"},
 	selectWalletForFeePaymentID:      {T: "Wybierz odpowiedni portfel, aby opłacić kaucję"},
 	makerID:                          {T: "Maker"},
 	disconnectedID:                   {T: "Rozłączono"},
-	reservesDeficitMsgID:             {T: "Brak odpowiedniego salda portfela do utrzymania poziomu kaucji. Jeśli ten problem będzie się utrzymywał, konieczne może być dodanie środków, aby utrzymać kaucję."},
 	connectWalletErrMsgID:            {T: "Połączenie z portfelem {{ assetName }} nie powiodło się: {{ errMsg }}"},
 	matchStatusTakerSwapCastID:       {T: "Wysłano swap taker"},
 	txTypeAccelerationID:             {T: "Przyspieszenie"},
 	orderBttnQtyErrID:                {T: "Ilość zamówień musi zostać określona."},
 	botTypeSimpleArbID:               {T: "Prosty arbitraż"},
-	bondReservesID:                   {T: "Rezerwy kaucji"},
 	invalidValueID:                   {T: "nieprawidłowa wartość"},
 	disabledMsgID:                    {T: "portfel jest wyłączony"},
 	walletRecoverySupportMsgID:       {T: "Błąd wczytywania wbudowanego portfela {{ walletSymbol }}. Kliknij przycisk 'Odtwórz' poniżej, aby to naprawić"},
@@ -1183,10 +1082,8 @@ var plPL = map[string]*intl.Translation{
 	botTypeNoneID:                    {T: "wybierz rodzaj bota"},
 	orderBttnQtyRateErrID:            {T: "Ilość zamówień i cena muszą zostać określone."},
 	shieldedMsgID:                    {T: "Suma osłoniętych środków"},
-	noZeroID:                         {T: "wartość nie może być zerowa"},
 	marketOrderID:                    {T: "market"},
 	walletDisabledID:                 {T: "Portfel {{ assetName }} jest wyłączony"},
-	missingCexCredsID:                {T: "określ zarówno klucz, jak i sekret"},
 	takerID:                          {T: "Taker"},
 	txTypeCreateBondID:               {T: "Utwórz kaucję"},
 	confirmationsID:                  {T: "potwierdzenia"},
@@ -1194,7 +1091,6 @@ var plPL = map[string]*intl.Translation{
 	browserNtfnMatchesID:             {T: "Sparowania"},
 	rescanStartedID:                  {T: "Trwa ponowne skanowanie portfela"},
 	addingServersID:                  {T: "Łączenie z serwerami"},
-	swappingID:                       {T: "Wymiana"},
 	matchStatusRefundedID:            {T: "Zwrócono"},
 	matchStatusRevokedID:             {T: "Odrzucono - {{ status }}"},
 	txTypeRedeemID:                   {T: "Wykup"},
@@ -1202,7 +1098,6 @@ var plPL = map[string]*intl.Translation{
 	ticketStatusRevokedID:            {T: "odwołany"},
 	limitOrderID:                     {T: "limit"},
 	orderBttnBuyBalErrID:             {T: "Brak wystarczających środków do zakupu."},
-	lockedBalMsgID:                   {T: "Suma środków tymczasowo zablokowanych na pokrycie kaucji, wystawionych zamówień, sparowań, oraz innych czynności"},
 	unavailableID:                    {T: "niedostępny"},
 	createAssetWalletMsgID:           {T: "Utwórz portfel {{ asset }}, aby rozpocząć handel"},
 	sellingID:                        {T: "Sprzedaż"},
@@ -1216,10 +1111,7 @@ var plPL = map[string]*intl.Translation{
 	invalidAddrressMsgID:             {T: "nieprawidłowy adres: {{ address }}"},
 	browserNtfnConnectionsID:         {T: "Połączenia z serwerami"},
 	txTypeTicketVoteID:               {T: "Głos"},
-	reservesDeficitID:                {T: "Deficyt rezerw"},
-	bondedID:                         {T: "Zabezpieczone kaucją"},
 	creatingWalletsID:                {T: "Tworzenie portfeli"},
-	orderID:                          {T: "Zamówienie"},
 	emptyDexAddrID:                   {T: "Pole adresu DEX nie może być puste"},
 	addedID:                          {T: "Dodano"},
 	tradingTierUpdateddID:            {T: "Zaktualizowano poziom handlu"},
@@ -1230,25 +1122,20 @@ var plPL = map[string]*intl.Translation{
 	feeBalanceID:                     {T: "saldo opłat"},
 	browserNtfnEnabledID:             {T: "Powiadomienia DCRDEX są włączone"},
 	ticketStatusExpiredID:            {T: "wygasły"},
-	txFeeSupportedID:                 {T: "szacowanie opłat dla tego rodzaju portfela nie jest wspierane"},
 	matchStatusRedeemPendingID:       {T: "Wykup środków w toku"},
 	passwordResetSuccessMsgID:        {T: "Hasło zostało zresetowane pomyślnie. Możesz zalogować się z użyciem nowego hasła."},
 	depthLoadingID:                   {T: "pobieranie danych o głębokości"},
 	txTypeApproveTokenID:             {T: "Zatwierdź token"},
 	txTypeSendID:                     {T: "Wyślij"},
-	openWalletErrMsgID:               {T: "Błąd otwierania portfela: {{ msg }}"},
 	reconfigSuccessID:                {T: "Konfiguracja portfela powiodła się!"},
 	ticketStatusUnminedID:            {T: "niewydobyty"},
-	immatureBalMsgID:                 {T: "Nadchodzące środki oczekujące na potwierdzenie"},
 	matchStatusRedemptionSentID:      {T: "Wysłano transakcję wykupu"},
 	availableTitleID:                 {T: "Dostępne"},
 	newWalletSuccessID:               {T: "Utworzono portfel {{ assetName }}!"},
 	txTypeTicketRevokeID:             {T: "Odwołanie biletu"},
 	shieldedID:                       {T: "Osłonięte"},
 	takerFoundMakerRedemptionID:      {T: "Wykupione przez {{ makerAddr }}"},
-	lockedSwappingBalMsgID:           {T: "Środki obecnie zablokowane w rozliczanych sparowaniach"},
 	refundImminentID:                 {T: "Odbędzie się w następnych paru blokach"},
-	immatureTitleID:                  {T: "Niedojrzałe"},
 	matchStatusMakerSwapCastID:       {T: "Wysłano swap maker"},
 	matchStatusRedemptionConfirmedID: {T: "Wykup potwierdzony"},
 	txTypeRefundID:                   {T: "Zwrot"},
@@ -1258,12 +1145,8 @@ var plPL = map[string]*intl.Translation{
 	ticketStatusUnknownID:            {T: "nieznany"},
 	ticketStatusVotedID:              {T: "oddano głos"},
 	txTypeRevokeTokenApprovalID:      {T: "Wycofaj zatwierdzenie tokena"},
-	lockedBonBalMsgID:                {T: "Środki zablokowane w aktywnych kaucjach"},
 	activeOrdersLogoutErrorID:        {T: "nie można wylogować się z aktywnymi zamówieniami"},
 	activeOrdersErrorID:              {T: "Portfel {{ assetName }} zarządza aktywnymi zamówieniami"},
-	lockedTitleID:                    {T: "Zablokowane"},
-	noCexID:                          {T: "wybierz giełdę do arbitrażu"},
-	bondReservesMsgID:                {T: "Środki zarezerwowane na pokrycie kosztów związanych z utrzymaniem kaucji"},
 	walletUnlockedID:                 {T: "Odblokowano portfel"},
 	matchStatusNewlyMatchedID:        {T: "Świeżo sparowane"},
 	regFeeSuccessID:                  {Version: 1, T: "Kaucja lojalnościowa została przyjęta!"},
@@ -1274,8 +1157,6 @@ var plPL = map[string]*intl.Translation{
 	candlesLoadingID:                 {T: "oczekiwanie na świece"},
 	walletEnabledID:                  {T: "Portfel {{ assetName }} jest włączony"},
 	matchStatusMakerRedeemedID:       {T: "Maker wykupił środki"},
-	noPlacementsID:                   {T: "1 lub więcej miejsc musi zostać określone"},
-	cexBalanceErrID:                  {T: "błąd pobierania salda {{ cexName }} dla {{ assetID }}: {{ err }}"},
 	refundWillHappenAfterID:          {T: "Zwrot środków za {{ refundAfterTime }}"},
 	txTypeSplitID:                    {T: "Dzielona"},
 	versionNotSupportedID:            {T: "{{ asset }} (v{{version}}) nie jest wspierana"},
@@ -1324,7 +1205,6 @@ var deDE = map[string]*intl.Translation{
 	estimateUnavailableID:            {T: "Schätzung nicht verfügbar"},
 	noZeroRateID:                     {T: "Null-Satz nicht erlaubt"},
 	noZeroQuantityID:                 {T: "Null-Menge nicht erlaubt"},
-	tradeID:                          {T: "Handel"},
 	noAssetWalletID:                  {T: "Kein {{ asset }} Wallet"},
 	executedID:                       {T: "ausgeführt"},
 	bookedID:                         {T: "gebucht"},
@@ -1369,7 +1249,6 @@ var deDE = map[string]*intl.Translation{
 	candlesLoadingID:                 {T: "Warte auf Kerzendiagramm"},
 	depthLoadingID:                   {T: "Abrufen der Tiefendaten"},
 	invalidAddrressMsgID:             {T: "ungültige Adresse: {{ address }}"},
-	txFeeSupportedID:                 {T: "Gebührenkalkulation für diesen Wallet-Typ nicht verfügbar"},
 	txFeeErrorMsgID:                  {T: "Gebührenkalkulation fehlgeschlagen: {{ err }}"},
 	activeOrdersLogoutErrorID:        {T: "Abmelden mit aktiven Aufträgen nicht möglich"},
 	invalidDateErrorMsgID:            {T: "Fehler: ungültiges Datum oder Uhrzeit"},
@@ -1396,7 +1275,6 @@ var deDE = map[string]*intl.Translation{
 	matchStatusRedeemPendingID:       {T: "Einlösung AUSSTEHEND"},
 	matchStatusRedemptionConfirmedID: {T: "Einlösung bestätigt"},
 	matchStatusCompleteID:            {T: "Fertig"},
-	openWalletErrMsgID:               {T: "Fehler beim öffnen des Wallet: {{ msg }}"},
 	orderAccelerationFeeErrMsgID:     {T: "Fehler bei der Schätzung der Beschleunigungsgebühr: {{ msg }}"},
 	orderAccelerationErrMsgID:        {T: "Fehler beim Beschleunigen des Auftrags: {{ msg }}"},
 	connectedID:                      {T: "Verbunden"},
@@ -1414,22 +1292,8 @@ var deDE = map[string]*intl.Translation{
 	refundImminentID:                 {T: "Wird in den nächsten Blöcken passieren"},
 	refundWillHappenAfterID:          {T: "Erstattung erfolgt nach {{ refundAfterTime }}"},
 	availableTitleID:                 {T: "Verfügbar"},
-	lockedTitleID:                    {T: "Gesperrt"},
-	immatureTitleID:                  {T: "Unmündig"},
-	swappingID:                       {T: "Swapping"},
-	bondedID:                         {T: "Kaution Verpfänded"},
-	lockedBalMsgID:                   {T: "Gesamtbetrag der temporär gesperrten Beträge für die Deckung der Kaution, aktiven Aufträge, Matches und anderer Aktivitäten"},
-	immatureBalMsgID:                 {T: "Eingehende Gelder warten auf Bestätigung"},
-	lockedSwappingBalMsgID:           {T: "Beträge die derzeit dsurch Abwicklung von Aufträgen gesperrt sind"},
-	lockedBonBalMsgID:                {T: "Gesperrte Beträge durch aktive Kautionen"},
-	reservesDeficitID:                {T: "Rücklagen Defizit"},
-	reservesDeficitMsgID:             {T: "Fehlendes Guthaben in deiner Wallet um die Kaution aufrecht zu erhalten. Du mußt möglicherweise dein Guthaben aufladen um die volle Kaution weiterhin zu decken."},
-	bondReservesID:                   {T: "Kautionsrücklagen"},
-	bondReservesMsgID:                {T: "Mittel zur Deckung der Kosten für die Aufrechterhaltung der Kaution"},
 	shieldedID:                       {T: "Shielded"},
 	shieldedMsgID:                    {T: "Shielded Gesamtbetrag"},
-	orderID:                          {T: "Auftrag"},
-	lockedOrderBalMsgID:              {T: "Gesperrte Betröge durch unausgeführte Auftröge"},
 	creatingWalletsID:                {T: "Erstelle Wallets"},
 	addingServersID:                  {T: "Verbinde mit Server"},
 	walletRecoverySupportMsgID:       {T: "Laden des nativen {{ walletSymbol }} Wallet fehlgeschlagen. Klicke 'Recover' um das Problem zu beseitigen"},
@@ -1474,20 +1338,13 @@ var deDE = map[string]*intl.Translation{
 	txTypeSwapOrSendID:               {T: "Swap / Senden"},
 	txTypeMixID:                      {T: "Mix"},
 	swapOrSendTooltipID:              {T: "Die Wallet konnte nicht feststellen, ob es sich bei dieser Transaktion um einen Swap oder einen Versandt handelt."},
-	missingCexCredsID:                {T: "Sowohl key als auch secret angeben"},
-	matchBufferID:                    {T: "Match buffer"},
-	noPlacementsID:                   {T: "muss 1 oder mehrere Platzierungen ageben"},
 	invalidValueID:                   {T: "ungültiger Wert"},
-	noZeroID:                         {T: "0 ist nicht erlaubt"},
 	botTypeBasicMMID:                 {T: "Market Maker"},
 	botTypeArbMMID:                   {T: "Market Maker + Arbitrage"},
 	botTypeSimpleArbID:               {Version: 1, T: "Arbitrage"},
 	botTypeNoneID:                    {T: "wähle einen Bot-Typ"},
-	noCexID:                          {T: "wähle einen Exchange für das Arbitrage"},
-	cexBalanceErrID:                  {T: "Fehler beim Abruf deines {{ cexName }} Guthabens für {{ assetID }}: {{ err }}"},
 	pendingID:                        {T: "Ausstehend"},
 	completeID:                       {T: "Fertig"},
-	archivedSettingsID:               {T: "Archivierte Einstellungen"},
 	idTransparent:                    {T: "Transparent"},
 	idNoCodeProvided:                 {T: "kein Code angegeben"},
 	enableAccount:                    {T: "Aktiviere Account"},
@@ -1498,16 +1355,10 @@ var deDE = map[string]*intl.Translation{
 	idWalletNoPeers:                  {T: "{{ assetSymbol }} Wallet hat keine Peers."},
 	idDepositError:                   {T: "Der letzte Einzahlungsversuch von {{ assetSymbol }} um {{ time }} schlug fehl mit dem folgenden Fehler:: {{ error }}"},
 	idWithdrawError:                  {T: "Die letzte Abheung von {{ assetSymbol }} um {{ time }} schlug fehl mit dem folgenden Fehler: {{ error }}"},
-	idDEXUnderfunded:                 {T: "Das {{ assetSymbol }} Wallet ist unterfinanziert um {{ amount }}"},
-	idCEXUnderfunded:                 {T: "Das {{ cexName }} {{ assetSymbol }} Wallet ist unterfinanziert um {{ amount }}"},
-	idCEXTooShallow:                  {T: "Der {{ cexName }} Markt auf der {{ side }} Seite ist zu dünn die konfigurierte Arbitrage Menge."},
 	idAccountSuspended:               {T: "Dein Konto bei {{ dexHost }} ist gesperrt."},
 	idUserLimitTooLow:                {T: "Dein Konto bei {{ dexHost }} hat ein zu niedriges Limit um alle konfigurierten Aufträge zu platzieren."},
 	idNoPriceSource:                  {T: "Keine Orakel oder Fiat-Wechselkurse verfügbar für diesen Markt."},
 	idCEXOrderbookUnsynced:           {T: "Das {{ cexName }} Auftragsbuch ist nicht synchronisiert."},
-	idDeterminePlacementsError:       {T: "Fehler bei der Ermittlung der Platzierungen: {{ error }}"},
-	idPlaceBuyOrdersError:            {T: "Fehler bei der Platzierung von Käufen: {{ error }}"},
-	idPlaceSellOrdersError:           {T: "Fehler bei der Platzierung von Verköufen: {{ error }}"},
 	idCEXTradeError:                  {T: "Der zuletzt Versuchte CEX Handel um {{ time }} schlug mit folgenden Fehler fehl: {{ error }}"},
 	idOrderReportTitle:               {T: "Report für {{ side }} Aufträge ofür Epoche # {{ epochNum }}"},
 	idCEXBalances:                    {T: "{{ cexName }} Guthaben"},
@@ -1556,7 +1407,6 @@ var ar = map[string]*intl.Translation{
 	estimateUnavailableID:            {T: "التقديرات غير متاحة"},
 	noZeroRateID:                     {T: "معدل الصفر غير مسموح به"},
 	noZeroQuantityID:                 {T: "غير مسموح بالكمية الصفرية"},
-	tradeID:                          {T: "التداول"},
 	noAssetWalletID:                  {T: "لا توجد {{ asset }} محفظة"},
 	executedID:                       {T: "تم تنفيذها"},
 	bookedID:                         {T: "تم الحجز"},
@@ -1596,7 +1446,6 @@ var ar = map[string]*intl.Translation{
 	disabledMsgID:                    {T: "تم تعطيل المحفظة"},
 	activeOrdersErrorID:              {T: "{{ assetName }} تدير المحفظة  الطلبات بفعالية"},
 	orderBttnQtyRateErrID:            {T: "يجب تحديد كمية وسعر الطلب."},
-	reservesDeficitMsgID:             {T: "النقص في رصيد المحفظة القابل للوصول للحفاظ على مستوى السند. إذا استمر هذا الوضع، قد تحتاج إلى إضافة أموال للبقاء مضمونا بسند."},
 	invalidCertID:                    {T: "شهادة غير صالحة"},
 	availableTitleID:                 {T: "متاح"},
 	addedID:                          {T: "تمت الإضافة"},
@@ -1609,29 +1458,22 @@ var ar = map[string]*intl.Translation{
 	discoveredID:                     {T: "مكتشفة"},
 	versionNotSupportedID:            {T: "{{ asset }} (v{{version}}) غير مدعوم"},
 	noWalletMsgID:                    {T: "أنشئ محفظة لتداول {{ asset1 }} و {{ asset2 }}"},
-	noPlacementsID:                   {T: "يجب تحديد موضع واحد أو أكثر"},
 	ticketStatusUnknownID:            {T: "غير معروفة"},
 	matchStatusMakerRedeemedID:       {T: "استرداد صانع السوق"},
 	txTypeSelfTransferID:             {T: "التحويل الذاتي"},
 	tradingTierUpdateddID:            {T: "تم تحديث مستوى التداول"},
 	txTypeApproveTokenID:             {T: "اعتماد التوكن"},
-	cexBalanceErrID:                  {T: "خطأ في جلب رصيد {{ cexName }} لـ {{ assetID }}: {{ err }}"},
 	txTypeTicketRevokeID:             {T: "استرجاع التذكرة"},
 	makerID:                          {T: "صانع السوق"},
 	txTypeAccelerationID:             {T: "التعجيل"},
-	noZeroID:                         {T: "الصفر غير مسموح"},
 	txTypeReceiveID:                  {T: "استلام"},
 	invalidValueID:                   {T: "قيمة غير صحيحة"},
 	connectWalletErrMsgID:            {T: "فشل في الاتصال بمحفظة {{ assetName }}: {{ errMsg }}"},
 	matchStatusRevokedID:             {T: "مسترجعة - {{ status }}"},
-	lockedBonBalMsgID:                {T: "الأموال مقفلة في سندات نشطة"},
-	orderID:                          {T: "طلب"},
 	regFeeSuccessID:                  {Version: 1, T: "تم قبول سند الاخلاص!"},
 	connectedID:                      {T: "متصل"},
 	limitOrderID:                     {T: "حد السعر"},
-	lockedOrderBalMsgID:              {T: "الأموال مقفلة في الطلبات غير المتطابقة"},
 	limitOrderImmediateTifID:         {T: "حد السعر (i)"},
-	swappingID:                       {T: "المقايضة"},
 	refundWillHappenAfterID:          {T: "سيحدث الاسترداد بعد {{ refundAfterTime }}"},
 	takerFoundMakerRedemptionID:      {T: "تم الاسترداد بواسطة {{ makerAddr }}"},
 	ticketStatusRevokedID:            {T: "مسترجعة"},
@@ -1640,15 +1482,12 @@ var ar = map[string]*intl.Translation{
 	browserNtfnBondsID:               {T: "السندات"},
 	orderBttnBuyBalErrID:             {T: "رصيد غير كاف للشراء."},
 	matchStatusRefundedID:            {T: "تم الاسترداد"},
-	bondReservesMsgID:                {T: "الأموال المخصصة لتغطية النفقات المرتبطة بصيانة السندات"},
 	noArchivedRecordsID:              {T: "لم يتم العثور على سجلات مؤرشفة"},
 	marketOrderID:                    {T: "السوق"},
 	walletSyncFinishingID:            {T: "الانتهاء"},
 	browserNtfnMatchesID:             {T: "التطابقات"},
-	noCexID:                          {T: "اختر منصة مبادلات للمراجحة"},
 	walletRecoverySupportMsgID:       {T: "فشل تحميل محفظة {{ walletSymbol }} الأصلية بشكل صحيح. حاول النقر على زر 'استعادة' أدناه لإصلاحها"},
 	invalidCompsValueID:              {T: "قيمة المقارنات غير صحيحة"},
-	immatureBalMsgID:                 {T: "الأموال الواردة في انتظار التأكيد"},
 	archivedRecordsPathID:            {T: "موقع الملف: {{ path }}"},
 	passwordResetSuccessMsgID:        {T: "تمت إعادة تعيين كلمة المرور الخاصة بك بنجاح. يمكنك المتابعة لتسجيل الدخول باستخدام كلمة المرور الجديدة."},
 	matchStatusNewlyMatchedID:        {T: "مطابقة حديثة"},
@@ -1659,16 +1498,12 @@ var ar = map[string]*intl.Translation{
 	matchStatusCompleteID:            {T: "مكتملة"},
 	ticketStatusUnminedID:            {T: "غير معدنة"},
 	orderAccelerationErrMsgID:        {T: "خطأ في تسريع الطلب: {{ msg }}"},
-	missingCexCredsID:                {T: "حدد كلاً من المفتاح والسر"},
-	lockedSwappingBalMsgID:           {T: "الأموال مقفلة حاليا في تسوية المطابقات"},
 	invalidAddrressMsgID:             {T: "عنوان غير صحيح: {{ address }}"},
-	openWalletErrMsgID:               {T: "خطأ في فتح المحفظة: {{ msg }}"},
 	botTypeBasicMMID:                 {T: "صانع السوق"},
 	shieldedMsgID:                    {T: "إجمالي الأموال المحتفظ بها محمية"},
 	txFeeErrorMsgID:                  {T: "فشل تقدير الرسوم: {{ err }}"},
 	createAssetWalletMsgID:           {T: "أنشئ محفظة {{ asset }} للتداول"},
 	takerID:                          {T: "المستفيد"},
-	lockedBalMsgID:                   {T: "إجمالي الأموال مقفلة مؤقتًا لتغطية تكاليف صيانة السندات، والطلبات الحية، والمطابقات والأنشطة الأخرى"},
 	matchStatusTakerSwapCastID:       {T: "تم إرسال مقايضة المستفيد"},
 	defaultID:                        {T: "افتراضي"},
 	botTypeNoneID:                    {T: "اختر نوع البوت"},
@@ -1690,7 +1525,6 @@ var ar = map[string]*intl.Translation{
 	activeOrdersLogoutErrorID:        {T: "لا يمكن تسجيل الخروج مع وجود طلبات نشطة"},
 	browserNtfnOrdersID:              {T: "الطلبات"},
 	botTypeArbMMID:                   {T: "صانع السوق + المراجحة"},
-	bondedID:                         {T: "مضمون بسند"},
 	botTypeSimpleArbID:               {T: "المراجحة البسيطة"},
 	txTypeSendID:                     {T: "إرسال"},
 	txTypeTicketPurchaseID:           {T: "شراء التذكرة"},
@@ -1700,22 +1534,17 @@ var ar = map[string]*intl.Translation{
 	candlesLoadingID:                 {T: "في انتظار أعمدة الشموع"},
 	immatureID:                       {T: "غير ناضجة"},
 	unavailableID:                    {T: "غير متوفرة"},
-	bondReservesID:                   {T: "احتياطيات السندات"},
 	txTypeUnknownID:                  {T: "غير معروفة"},
 	txTypeCreateBondID:               {T: "إنشاء السند"},
 	emptyDexAddrID:                   {T: "لا يمكن أن يكون عنوان منصة المبادلات اللامركزية DEX فارغًا"},
 	txTypeRedeemID:                   {T: "استرداد"},
 	orderBttnQtyErrID:                {T: "يجب تحديد كمية الطلب."},
-	immatureTitleID:                  {T: "غير ناضجة"},
 	invalidDateErrorMsgID:            {T: "خطأ: تاريخ أو وقت غير صحيح"},
-	reservesDeficitID:                {T: "عجز الاحتياطيات"},
 	browserNtfnConnectionsID:         {T: "اتصالات الخادم"},
-	lockedTitleID:                    {T: "مقفل"},
 	txTypeSplitID:                    {T: "تقسيم"},
 	matchStatusRedeemPendingID:       {T: "الاسترداد قيد الانتظار"},
 	txTypeSwapID:                     {T: "مقايضة"},
 	ticketStatusMissedID:             {T: "مفوتة"},
-	txFeeSupportedID:                 {T: "تقدير الرسوم غير مدعوم لهذا النوع من المحفظة"},
 	orderBttnSellBalErrID:            {T: "الرصيد غير كافي للبيع."},
 	mmConfigureID:                    {T: "التهيئة"},
 	mmMarketNotAvailableID:           {T: "السوق غير متوفر"},

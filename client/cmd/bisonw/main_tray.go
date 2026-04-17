@@ -36,8 +36,8 @@ func onReady() {
 	}()
 
 	systray.SetIcon(FavIcon)
-	systray.SetTitle("DCRDEX")
-	systray.SetTooltip("The Decred DEX")
+	systray.SetTitle("Bison Wallet")
+	systray.SetTooltip("Bison Wallet")
 
 	mStarting := systray.AddMenuItem("Starting...", "Starting up. Please wait...")
 	var addr string
@@ -71,7 +71,7 @@ func onReady() {
 	if logDirURL, err := app.FilePathToURL(filepath.Dir(cfg.LogPath)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	} else {
-		mLogs := systray.AddMenuItem("Open logs folder", "Open the folder with your DEX logs.")
+		mLogs := systray.AddMenuItem("Open logs folder", "Open the folder with your wallet logs.")
 		go func() {
 			for range mLogs.ClickedCh {
 				err := browser.OpenURL(logDirURL)
@@ -108,7 +108,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mQuit := systray.AddMenuItem("Quit", "Quit the DEX.")
+	mQuit := systray.AddMenuItem("Quit", "Quit Bison Wallet.")
 	go func() {
 		<-mQuit.ClickedCh
 		mOpen.Disable()

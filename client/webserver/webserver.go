@@ -32,8 +32,6 @@ import (
 	"decred.org/dcrdex/client/asset"
 	"decred.org/dcrdex/client/core"
 	"decred.org/dcrdex/client/db"
-	"decred.org/dcrdex/client/mm"
-	"decred.org/dcrdex/client/mm/libxc"
 	"decred.org/dcrdex/client/tor"
 	"decred.org/dcrdex/client/webserver/locales"
 	"decred.org/dcrdex/client/websocket"
@@ -94,8 +92,6 @@ var (
 type clientCore interface {
 	websocket.Core
 	Network() dex.Network
-	Exchanges() map[string]*core.Exchange
-	Exchange(host string) (*core.Exchange, error)
 	Login(pw []byte) error
 	InitializeClient(pw []byte, seed *string) (string, error)
 	AssetBalance(assetID uint32) (*core.WalletBalance, error)
@@ -128,12 +124,11 @@ type clientCore interface {
 	FiatRateSources() map[string]bool
 	EstimateSendTxFee(address string, assetID uint32, value uint64, subtract, maxWithdraw bool) (fee uint64, isValidAddress bool, err error)
 	ValidateAddress(address string, assetID uint32) (bool, error)
-	DeleteArchivedRecordsWithBackup(olderThan *time.Time, saveMatchesToFile, saveOrdersToFile bool) (string, int, error)
 	WalletPeers(assetID uint32) ([]*asset.WalletPeer, error)
 	AddWalletPeer(assetID uint32, addr string) error
 	RemoveWalletPeer(assetID uint32, addr string) error
 	Notifications(n int) (notes, pokes []*db.Notification, _ error)
-	ApproveToken(appPW []byte, assetID uint32, dexAddr string, onConrim func()) (string, error)
+	ApproveToken(appPW []byte, assetID uint32, onConfirm func()) (string, error)
 	UnapproveToken(appPW []byte, assetID uint32, version uint32) (string, error)
 	ApproveTokenFee(assetID uint32, version uint32, approval bool) (uint64, error)
 	StakeStatus(assetID uint32) (*asset.TicketStakingStatus, error)
@@ -150,7 +145,6 @@ type clientCore interface {
 	SetCompanionToken(token string) error
 	CompanionToken() (string, error)
 	TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error
-	RedeemGeocode(appPW, code []byte, msg string) (dex.Bytes, uint64, error)
 	BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName string) (*core.BridgeFeesAndLimits, error)
 	AllBridgePaths() (map[uint32]map[uint32][]string, error)
 	Bridge(fromAssetID, toAssetID uint32, amt uint64, bridgeName string) (string, error)
@@ -167,24 +161,6 @@ type clientCore interface {
 	CastVote(assetID uint32, pw []byte, token, bit string) error
 	AbandonTransaction(assetID uint32, txID string) error
 	WalletTransaction(assetID uint32, txID string) (*asset.WalletTransaction, error)
-}
-
-type MMCore interface {
-	MarketReport(host string, base, quote uint32) (*mm.MarketReport, error)
-	StartBot(mkt *mm.MarketWithHost, alternateConfigPath *string, pw []byte, overrideLotSizeChange bool) (err error)
-	StopBot(mkt *mm.MarketWithHost) error
-	UpdateCEXConfig(updatedCfg *mm.CEXConfig) error
-	CEXBalance(cexName string, assetID uint32) (*libxc.ExchangeBalance, error)
-	UpdateBotConfig(updatedCfg *mm.BotConfig) error
-	RemoveBotConfig(host string, baseID, quoteID uint32) error
-	Status() *mm.Status
-	ArchivedRuns() ([]*mm.MarketMakingRun, error)
-	RunOverview(startTime int64, mkt *mm.MarketWithHost) (*mm.MarketMakingRunOverview, error)
-	RunLogs(startTime int64, mkt *mm.MarketWithHost, n uint64, refID *uint64, filter *mm.RunLogFilters) (events, updatedEvents []*mm.MarketMakingEvent, overview *mm.MarketMakingRunOverview, err error)
-	CEXBook(host string, baseID, quoteID uint32) (buys, sells []*core.MiniOrder, _ error)
-	UpdateRunningBotCfg(cfg *mm.BotConfig, balanceDiffs *mm.BotInventoryDiffs, autoRebalanceCfg *mm.AutoRebalanceConfig, saveUpdate bool) error
-	AvailableBalances(mkt *mm.MarketWithHost, cexBaseID, cexQuoteID uint32, cexName *string) (dexBalances, cexBalances map[uint32]uint64, _ error)
-	MaxFundingFees(mkt *mm.MarketWithHost, maxBuyPlacements, maxSellPlacements uint32, baseOptions, quoteOptions map[string]string) (buyFees, sellFees uint64, err error)
 }
 
 // genCertPair generates a key/cert pair to the paths provided.
@@ -224,7 +200,6 @@ type cachedPassword struct {
 type Config struct {
 	DataDir       string
 	Core          clientCore // *core.Core
-	MarketMaker   MMCore     // *mm.MarketMaker
 	Addr          string
 	CustomSiteDir string
 	Language      string
@@ -245,11 +220,6 @@ type Config struct {
 	MainLogFilePath string
 }
 
-type valStamp struct {
-	val   uint64
-	stamp time.Time
-}
-
 // WebServer is a single-client http and websocket server enabling a browser
 // interface to Bison Wallet.
 type WebServer struct {
@@ -261,7 +231,6 @@ type WebServer struct {
 	lang     atomic.Value // string
 	langs    []string
 	core     clientCore
-	mm       MMCore
 	addr     string
 	csp      string
 	srv      *http.Server
@@ -278,9 +247,6 @@ type WebServer struct {
 	companionTokenExpiry  time.Time
 	companionTokenClaimed bool
 	companionExpiryTimer  *time.Timer
-
-	bondBufMtx sync.Mutex
-	bondBuf    map[uint32]valStamp
 
 	appVersion             string
 	newAppVersionAvailable bool
@@ -400,9 +366,8 @@ func New(cfg *Config) (*WebServer, error) {
 	// Make the server here so its methods can be registered.
 	s := &WebServer{
 		langs:           langs,
-		core:            cfg.Core,
-		mm:              cfg.MarketMaker,
-		siteDir:         siteDir,
+		core:    cfg.Core,
+		siteDir: siteDir,
 		mux:             mux,
 		srv:             httpServer,
 		addr:            cfg.Addr,
@@ -410,8 +375,7 @@ func New(cfg *Config) (*WebServer, error) {
 		wsServer:        websocket.New(cfg.Core, log.SubLogger("WS")),
 		authTokens:      make(map[string]bool),
 		cachedPasswords: make(map[string]*cachedPassword),
-		tor:             cfg.Tor,
-		bondBuf:         map[uint32]valStamp{},
+		tor:        cfg.Tor,
 		appVersion:      userAppVersion(cfg.AppVersion, false),
 		useDEXBranding:  useDEXBranding,
 		mainLogFilePath: cfg.MainLogFilePath,
@@ -488,11 +452,6 @@ func New(cfg *Config) (*WebServer, error) {
 		web.Group(func(webInit chi.Router) {
 			webInit.Use(s.requireInit)
 
-			webInit.Route(registerRoute, func(rr chi.Router) {
-				rr.Get("/", s.handleRegister)
-				rr.With(dexHostCtx).Get("/{host}", s.handleRegister)
-			})
-
 			webInit.Group(func(webNoAuth chi.Router) {
 				// The login handler requires init but not auth since
 				// it performs the auth.
@@ -510,17 +469,8 @@ func New(cfg *Config) (*WebServer, error) {
 				})
 			})
 
-			webInit.Group(func(webDC chi.Router) {
-				webDC.Use(s.requireDEXConnection, s.requireLogin)
-				webDC.Get(marketsRoute, s.handleMarkets)
-				webDC.Get(mmSettingsRoute, s.handleMMSettings)
-				webDC.Get(mmArchivesRoute, s.handleMMArchives)
-				webDC.Get(mmLogsRoute, s.handleMMLogs)
-				webDC.Get(marketMakerRoute, s.handleMarketMaking)
-				webDC.With(dexHostCtx).Get("/dexsettings/{host}", s.handleDexSettings)
-			})
 
-		})
+})
 	})
 
 	// api endpoints
@@ -564,7 +514,6 @@ func New(cfg *Config) (*WebServer, error) {
 			apiAuth.Post("/toggleratesource", s.apiToggleRateSource)
 			apiAuth.Post("/validateaddress", s.apiValidateAddress)
 			apiAuth.Post("/txfee", s.apiEstimateSendTxFee)
-			apiAuth.Post("/deletearchivedrecords", s.apiDeleteArchivedRecords)
 			apiAuth.Post("/getwalletpeers", s.apiGetWalletPeers)
 			apiAuth.Post("/addwalletpeer", s.apiAddWalletPeer)
 			apiAuth.Post("/removewalletpeer", s.apiRemoveWalletPeer)
@@ -573,7 +522,6 @@ func New(cfg *Config) (*WebServer, error) {
 			apiAuth.Post("/approvetokenfee", s.apiApproveTokenFee)
 			apiAuth.Post("/txhistory", s.apiTxHistory)
 			apiAuth.Post("/takeaction", s.apiTakeAction)
-			apiAuth.Post("/redeemgamecode", s.redeemGameCode)
 			apiAuth.Get("/exportapplog", s.apiExportAppLogs)
 
 			apiAuth.Post("/stakestatus", s.apiStakeStatus)
@@ -587,20 +535,6 @@ func New(cfg *Config) (*WebServer, error) {
 			apiAuth.Post("/configuremixer", s.apiConfigureMixer)
 			apiAuth.Post("/walletlogfilepath", s.apiWalletLogFilePath)
 
-			apiAuth.Post("/startmarketmakingbot", s.apiStartMarketMakingBot)
-			apiAuth.Post("/stopmarketmakingbot", s.apiStopMarketMakingBot)
-			apiAuth.Post("/updatebotconfig", s.apiUpdateBotConfig)
-			apiAuth.Post("/updaterunningbot", s.apiUpdateRunningBot)
-			apiAuth.Post("/updatecexconfig", s.apiUpdateCEXConfig)
-			apiAuth.Post("/removebotconfig", s.apiRemoveBotConfig)
-			apiAuth.Get("/marketmakingstatus", s.apiMarketMakingStatus)
-			apiAuth.Post("/marketreport", s.apiMarketReport)
-			apiAuth.Post("/cexbalance", s.apiCEXBalance)
-			apiAuth.Get("/archivedmmruns", s.apiArchivedRuns)
-			apiAuth.Post("/mmrunlogs", s.apiRunLogs)
-			apiAuth.Post("/cexbook", s.apiCEXBook)
-			apiAuth.Post("/availablebalances", s.apiAvailableBalances)
-			apiAuth.Post("/maxfundingfees", s.apiMaxFundingFees)
 			apiAuth.Get("/allbridgepaths", s.apiAllBridgePaths)
 			apiAuth.Post("/bridgefeesandlimits", s.apiBridgeFeesAndLimits)
 			apiAuth.Post("/bridge", s.apiBridge)
@@ -695,18 +629,9 @@ func (s *WebServer) buildTemplates(lang string) error {
 	bb := "bodybuilder"
 	html := newTemplates(htmlDir, localeName).
 		addTemplate("login", bb, "forms").
-		addTemplate("register", bb, "forms").
-		addTemplate("markets", bb, "forms").
 		addTemplate("wallets", bb, "forms", "docs").
 		addTemplate("settings", bb, "forms").
-		addTemplate("orders", bb).
-		addTemplate("order", bb, "forms").
-		addTemplate("dexsettings", bb, "forms").
 		addTemplate("init", bb).
-		addTemplate("mm", bb, "forms").
-		addTemplate("mmsettings", bb, "forms").
-		addTemplate("mmarchives", bb).
-		addTemplate("mmlogs", bb).
 		addTemplate("proposals", bb).
 		addTemplate("proposal", bb)
 	s.html.Store(html)

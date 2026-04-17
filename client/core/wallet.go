@@ -542,20 +542,6 @@ func (w *xcWallet) preAccelerate(swapCoins, accelerationCoins []dex.Bytes, chang
 	return accelerator.PreAccelerate(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
 }
 
-// swapConfirmations calls (asset.Wallet).SwapConfirmations with a timeout
-// Context. If the coin cannot be located, an asset.CoinNotFoundError is
-// returned. If the coin is located, but recognized as spent, no error is
-// returned.
-func (w *xcWallet) swapConfirmations(ctx context.Context, coinID []byte, contract []byte, matchTime uint64) (uint32, bool, error) {
-	if w.isDisabled() { // cannot check swap confirmation with disabled wallet.
-		return 0, false, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return 0, false, errWalletNotConnected
-	}
-	return w.Wallet.SwapConfirmations(ctx, coinID, contract, time.UnixMilli(int64(matchTime)))
-}
-
 // TxHistory returns all the transactions a wallet has made. If refID
 // is nil, then transactions starting from the most recent are returned
 // (past is ignored). If past is true, the transactions prior to the
@@ -598,8 +584,8 @@ func (w *xcWallet) pendingTxsCopy() map[string]*asset.WalletTransaction {
 	return utils.CopyMap(w.pendingTxs)
 }
 
-// MakeBondTx authors a DEX time-locked fidelity bond transaction if the
-// asset.Wallet implementation is a Bonder.
+// MakeBondTx authors a time-locked bond transaction if the asset.Wallet
+// implementation is a Bonder.
 func (w *xcWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Time, priv *secp256k1.PrivateKey, acctID []byte) (*asset.Bond, func(), error) {
 	bonder, ok := w.Wallet.(asset.Bonder)
 	if !ok {
@@ -687,21 +673,10 @@ func (w *xcWallet) ApprovalStatus() map[uint32]asset.ApprovalStatus {
 }
 
 func (w *xcWallet) setFeeState(feeRate uint64) {
-	swapFees, refundFees, err := w.SingleLotSwapRefundFees(asset.VersionNewest, feeRate, false)
-	if err != nil {
-		w.log.Errorf("Error getting single-lot swap+refund estimates: %v", err)
-	}
-	redeemFees, err := w.SingleLotRedeemFees(asset.VersionNewest, feeRate)
-	if err != nil {
-		w.log.Errorf("Error getting single-lot redeem estimates: %v", err)
-	}
 	sendFees := w.StandardSendFee(feeRate)
 	w.feeState.Store(&FeeState{
 		Rate:    feeRate,
 		Send:    sendFees,
-		Swap:    swapFees,
-		Redeem:  redeemFees,
-		Refund:  refundFees,
 		StampMS: time.Now().UnixMilli(),
 	})
 }

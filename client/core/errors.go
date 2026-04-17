@@ -109,10 +109,6 @@ func UnwrapErr(err error) error {
 	return UnwrapErr(InnerErr)
 }
 
-var (
-	ErrAccountSuspended = errors.New("may not trade while account is suspended")
-)
-
 // WalletNoPeersError should be returned when a wallet has no network peers.
 type WalletNoPeersError struct {
 	AssetID uint32

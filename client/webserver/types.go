@@ -4,8 +4,6 @@
 package webserver
 
 import (
-	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/dex"
 	"decred.org/dcrdex/dex/encode"
 	pi "decred.org/dcrdex/dex/politeia"
 )
@@ -24,48 +22,9 @@ func simpleAck() *standardResponse {
 	}
 }
 
-// The loginForm is sent by the client to log in to a DEX.
+// The loginForm is sent by the client to log in.
 type loginForm struct {
 	Pass encode.PassBytes `json:"pass"`
-}
-
-// addDexForm is used to connect a DEX without creating an account.
-type addDexForm struct {
-	Addr  string           `json:"addr"`
-	Cert  string           `json:"cert"`
-	AppPW encode.PassBytes `json:"appPW"`
-}
-
-// registrationForm is used to register a new DEX account.
-type registrationForm struct {
-	Addr     string           `json:"addr"`
-	Cert     string           `json:"cert"`
-	Password encode.PassBytes `json:"pass"`
-	Fee      uint64           `json:"fee"`
-	AssetID  *uint32          `json:"asset,omitempty"` // prevent omission using BTC
-}
-
-type bondsFeeBufferForm struct {
-	AssetID uint32 `json:"assetID"`
-}
-
-// postBondForm is used to post a new bond for an existing DEX account.
-type postBondForm struct {
-	Addr         string           `json:"addr"`
-	Cert         string           `json:"cert"` // may be empty for adding bond to existing account
-	Password     encode.PassBytes `json:"pass"`
-	Bond         uint64           `json:"bond"`
-	AssetID      *uint32          `json:"asset,omitempty"` // prevent omission using BTC
-	LockTime     uint64           `json:"lockTime"`
-	Maintain     *bool            `json:"maintain,omitempty"`
-	MaxBondedAmt *uint64          `json:"maxBondedAmt,omitempty"`
-	FeeBuffer    *uint64          `json:"feeBuffer,omitempty"`
-}
-
-type registrationTxFeeForm struct {
-	Addr    string  `json:"addr"`
-	Cert    string  `json:"cert"`
-	AssetID *uint32 `json:"asset,omitempty"`
 }
 
 type sendTxFeeForm struct {
@@ -103,15 +62,6 @@ type walletStatusForm struct {
 	Disable bool   `json:"disable"`
 }
 
-type tradeForm struct {
-	Pass  encode.PassBytes `json:"pw"`
-	Order *core.TradeForm  `json:"order"`
-}
-
-type cancelForm struct {
-	OrderID dex.Bytes `json:"orderID"`
-}
-
 // sendForm is sent to initiate either send tx.
 type sendForm struct {
 	AssetID  uint32           `json:"assetID"`
@@ -121,12 +71,6 @@ type sendForm struct {
 	Pass     encode.PassBytes `json:"pw"`
 }
 
-
-type deleteRecordsForm struct {
-	OlderThanMs       int64 `json:"olderThanMs"`
-	SaveOrdersToFile  bool  `json:"saveOrdersToFile"`
-	SaveMatchesToFile bool  `json:"saveMatchesToFile"`
-}
 
 type buildInfoResponse struct {
 	OK       bool   `json:"ok"`

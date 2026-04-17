@@ -4,16 +4,13 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,8 +18,6 @@ import (
 	"decred.org/dcrdex/client/asset"
 	_ "decred.org/dcrdex/client/asset/importall"
 	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/client/mm"
-	"decred.org/dcrdex/client/rpcserver"
 	"decred.org/dcrdex/client/webserver"
 	"decred.org/dcrdex/dex"
 )
@@ -40,12 +35,6 @@ func runCore(cfg *app.Config) error {
 	defer cancel() // for the earliest returns
 
 	asset.SetNetwork(cfg.Net)
-
-	// If explicitly running without web server then you must run the rpc
-	// server.
-	if cfg.NoWeb && !cfg.RPCOn {
-		return fmt.Errorf("cannot run without web server unless --rpc is specified")
-	}
 
 	if cfg.CPUProfile != "" {
 		var f *os.File
@@ -87,13 +76,7 @@ func runCore(cfg *app.Config) error {
 		return fmt.Errorf("error creating client core: %w", err)
 	}
 
-	marketMaker, err := mm.NewMarketMaker(clientCore, cfg.MMConfig.EventLogDBPath, cfg.MMConfig.BotConfigPath, logMaker.Logger("MM"))
-	if err != nil {
-		return fmt.Errorf("error creating market maker: %w", err)
-	}
-
-	// Catch interrupt signal (e.g. ctrl+c), prompting to shutdown if the user
-	// is logged in, and there are active orders or matches.
+	// Catch interrupt signal (e.g. ctrl+c) to initiate a clean shutdown.
 	killChan := make(chan os.Signal, 1)
 	signal.Notify(killChan, os.Interrupt)
 	go func() {
@@ -116,45 +99,14 @@ func runCore(cfg *app.Config) error {
 
 	<-clientCore.Ready()
 
-	var mmCM *dex.ConnectionMaster
 	defer func() {
 		log.Info("Exiting bisonw main.")
 		cancel()  // no-op with clean rpc/web server setup
 		wg.Wait() // no-op with clean setup and shutdown
-		if mmCM != nil {
-			mmCM.Wait()
-		}
 	}()
 
-	if marketMaker != nil {
-		mmCM = dex.NewConnectionMaster(marketMaker)
-		if err := mmCM.ConnectOnce(appCtx); err != nil {
-			return fmt.Errorf("Error connecting market maker")
-		}
-	}
-
-	if cfg.RPCOn {
-		rpcSrv, err := rpcserver.New(cfg.RPC(clientCore, marketMaker, logMaker.Logger("RPC")))
-		if err != nil {
-			return fmt.Errorf("failed to create rpc server: %w", err)
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cm := dex.NewConnectionMaster(rpcSrv)
-			err := cm.Connect(appCtx)
-			if err != nil {
-				log.Errorf("Error starting rpc server: %v", err)
-				cancel()
-				return
-			}
-			cm.Wait()
-		}()
-	}
-
 	if !cfg.NoWeb {
-		webSrv, err := webserver.New(cfg.Web(clientCore, marketMaker, logMaker.Logger("WEB"), utc))
+		webSrv, err := webserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
 		if err != nil {
 			return fmt.Errorf("failed creating web server: %w", err)
 		}
@@ -182,52 +134,12 @@ func runCore(cfg *app.Config) error {
 	return nil
 }
 
-// promptShutdown checks if there are active orders and asks confirmation to
-// shutdown if there are. The return value indicates if it is safe to stop Core
-// or if the user has confirmed they want to shutdown with active orders.
+// promptShutdown logs out of core and returns true to indicate it is safe to
+// shut down.
 func promptShutdown(clientCore *core.Core) bool {
 	log.Infof("Attempting to logout...")
-	// Do not allow Logout hanging to prevent shutdown.
-	res := make(chan bool, 1)
-	go func() {
-		// Only block logout if err is ActiveOrdersLogoutErr.
-		var ok bool
-		err := clientCore.Logout()
-		if err == nil {
-			ok = true
-		} else if !errors.Is(err, core.ActiveOrdersLogoutErr) {
-			log.Errorf("Unexpected logout error: %v", err)
-			ok = true
-		} // else not ok => prompt
-		res <- ok
-	}()
-
-	select {
-	case <-time.After(10 * time.Second):
-		log.Errorf("Timeout waiting for Logout. Allowing shutdown, but you likely have active orders!")
-		return true // cancel all the contexts, hopefully breaking whatever deadlock
-	case ok := <-res:
-		if ok {
-			return true
-		}
+	if err := clientCore.Logout(); err != nil {
+		log.Errorf("Logout error: %v", err)
 	}
-
-	fmt.Print("You have active orders. Shutting down now may result in failed swaps and account penalization.\n" +
-		"Do you want to quit anyway? ('yes' to quit, or enter to abort shutdown): ")
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan() // waiting for user input
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Input error: %v", err)
-		return false
-	}
-
-	switch resp := strings.ToLower(scanner.Text()); resp {
-	case "y", "yes":
-		return true
-	case "n", "no", "":
-	default: // anything else aborts, but warn about it
-		fmt.Printf("Unrecognized response %q. ", resp)
-	}
-	fmt.Println("Shutdown aborted.")
-	return false
+	return true
 }

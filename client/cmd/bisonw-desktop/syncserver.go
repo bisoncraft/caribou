@@ -11,7 +11,7 @@ requesting bisonw-desktop will exit without error. The receiving bisonw-desktop
 will reopen the window if it is closed.
 
 The sync server also enables killing a bisonw-desktop process that is running
-in the background because of active orders.
+in the background because of active swaps.
 */
 
 package main

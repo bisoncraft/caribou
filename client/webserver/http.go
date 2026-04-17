@@ -20,21 +20,13 @@ import (
 )
 
 const (
-	homeRoute        = "/"
-	registerRoute    = "/register"
-	initRoute        = "/init"
-	loginRoute       = "/login"
-	marketsRoute     = "/markets"
-	walletsRoute     = "/wallets"
-	walletLogRoute   = "/wallets/logfile"
-	settingsRoute    = "/settings"
-	ordersRoute      = "/orders"
-	exportOrderRoute = "/orders/export"
-	marketMakerRoute = "/mm"
-	mmSettingsRoute  = "/mmsettings"
-	mmArchivesRoute  = "/mmarchives"
-	mmLogsRoute      = "/mmlogs"
-	proposalsRoute   = "/proposals"
+	homeRoute      = "/"
+	initRoute      = "/init"
+	loginRoute     = "/login"
+	walletsRoute   = "/wallets"
+	walletLogRoute = "/wallets/logfile"
+	settingsRoute  = "/settings"
+	proposalsRoute = "/proposals"
 )
 
 // sendTemplate processes the template and sends the result.
@@ -86,58 +78,6 @@ func (s *WebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.sendTemplate(w, "login", cArgs)
-}
-
-// registerTmplData is template data for the /register page.
-type registerTmplData struct {
-	CommonArguments
-	KnownExchanges []string
-	// Host is optional. If provided, the register page will not display the add
-	// dex form, instead this host will be pre-selected for registration.
-	Host        string
-	Initialized bool
-}
-
-// handleRegister is the handler for the '/register' page request.
-func (s *WebServer) handleRegister(w http.ResponseWriter, r *http.Request) {
-	common := s.commonArgs(r, "Register | Bison Wallet")
-	host, _ := getHostCtx(r)
-	s.sendTemplate(w, "register", &registerTmplData{
-		CommonArguments: *common,
-		Host:            host,
-		KnownExchanges:  s.knownUnregisteredExchanges(s.core.Exchanges()),
-		Initialized:     s.core.IsInitialized(),
-	})
-}
-
-// knownUnregisteredExchanges returns all the known exchanges that
-// the user has not registered for.
-func (s *WebServer) knownUnregisteredExchanges(registeredExchanges map[string]*core.Exchange) []string {
-	certs := core.CertStore[s.core.Network()]
-	exchanges := make([]string, 0, len(certs))
-	for host := range certs {
-		xc := registeredExchanges[host]
-		if xc == nil || xc.Auth.TargetTier == 0 {
-			exchanges = append(exchanges, host)
-		}
-	}
-	for host, xc := range registeredExchanges {
-		if certs[host] != nil || xc.Auth.TargetTier > 0 {
-			continue
-		}
-		exchanges = append(exchanges, host)
-	}
-	return exchanges
-}
-
-// handleMarkets is the handler for the '/markets' page request.
-func (s *WebServer) handleMarkets(w http.ResponseWriter, r *http.Request) {
-	s.sendTemplate(w, "markets", s.commonArgs(r, "Markets | Bison Wallet"))
-}
-
-// handleMarketMaking is the handler for the '/mm' page request.
-func (s *WebServer) handleMarketMaking(w http.ResponseWriter, r *http.Request) {
-	s.sendTemplate(w, "mm", s.commonArgs(r, "Market Making | Bison Wallet"))
 }
 
 // handleWallets is the handler for the '/wallets' page request.
@@ -203,7 +143,7 @@ func (s *WebServer) handleWalletLogFile(w http.ResponseWriter, r *http.Request) 
 	defer logFile.Close()
 
 	assetName := dex.BipIDSymbol(uint32(assetID))
-	logFileName := fmt.Sprintf("dcrdex-%s-wallet.log", assetName)
+	logFileName := fmt.Sprintf("bison-%s-wallet.log", assetName)
 	w.Header().Set("Content-Disposition", "attachment; filename="+logFileName)
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
@@ -283,71 +223,18 @@ func (s *WebServer) handleInit(w http.ResponseWriter, r *http.Request) {
 // handleSettings is the handler for the '/settings' page request.
 func (s *WebServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 	common := s.commonArgs(r, "Settings | Bison Wallet")
-	xcs := s.core.Exchanges()
 	data := &struct {
 		CommonArguments
-		KnownExchanges  []string
 		FiatRateSources map[string]bool
 		FiatCurrency    string
-		Exchanges       map[string]*core.Exchange
 		IsInitialized   bool
 	}{
 		CommonArguments: *common,
-		KnownExchanges:  s.knownUnregisteredExchanges(xcs),
 		FiatCurrency:    core.DefaultFiatCurrency,
 		FiatRateSources: s.core.FiatRateSources(),
-		Exchanges:       xcs,
 		IsInitialized:   s.core.IsInitialized(),
 	}
 	s.sendTemplate(w, "settings", data)
-}
-
-// handleDexSettings is the handler for the '/dexsettings' page request.
-func (s *WebServer) handleDexSettings(w http.ResponseWriter, r *http.Request) {
-	host, err := getHostCtx(r)
-	if err != nil {
-		log.Errorf("error getting host ctx: %v", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	exchange, err := s.core.Exchange(host)
-	if err != nil {
-		log.Errorf("error getting exchange: %v", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	common := *s.commonArgs(r, fmt.Sprintf("%v Settings | Bison Wallet", host))
-	data := &struct {
-		CommonArguments
-		Exchange       *core.Exchange
-		KnownExchanges []string
-	}{
-		CommonArguments: common,
-		Exchange:        exchange,
-		KnownExchanges:  s.knownUnregisteredExchanges(s.core.Exchanges()),
-	}
-
-	s.sendTemplate(w, "dexsettings", data)
-}
-
-// handleMMSettings is the handler for the '/mmsettings' page request.
-func (s *WebServer) handleMMSettings(w http.ResponseWriter, r *http.Request) {
-	common := *s.commonArgs(r, "Market Making Settings | Bison Wallet")
-	s.sendTemplate(w, "mmsettings", common)
-}
-
-// handleMMArchives is the handler for the '/mmarchives' page request.
-func (s *WebServer) handleMMArchives(w http.ResponseWriter, r *http.Request) {
-	common := *s.commonArgs(r, "Market Making Archives | Bison Wallet")
-	s.sendTemplate(w, "mmarchives", common)
-}
-
-// handleMMLogs is the handler for the '/mmlogs' page request.
-func (s *WebServer) handleMMLogs(w http.ResponseWriter, r *http.Request) {
-	common := *s.commonArgs(r, "Market Making Logs | Bison Wallet")
-	s.sendTemplate(w, "mmlogs", common)
 }
 
 type proposalsTmplData struct {

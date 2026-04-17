@@ -8,28 +8,19 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/client/mm"
-	"decred.org/dcrdex/client/rpcserver"
 	"decred.org/dcrdex/client/webserver"
 	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/version"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/jessevdk/go-flags"
 )
 
 const (
-	defaultRPCCertFile = "rpc.cert"
-	defaultRPCKeyFile  = "rpc.key"
 	defaultMainnetHost = "127.0.0.1"
 	defaultTestnetHost = "127.0.0.2"
 	defaultSimnetHost  = "127.0.0.3"
-	walletPairOneHost  = "127.0.0.6"
-	walletPairTwoHost  = "127.0.0.7"
-	defaultRPCPort     = "5757"
 	defaultWebPort     = "5758"
 	defaultLogLevel    = "debug"
 	configFilename     = "dexc.conf"
@@ -40,60 +31,6 @@ var (
 	defaultConfigPath           = filepath.Join(defaultApplicationDirectory, configFilename)
 )
 
-// RPCConfig encapsulates the configuration needed for the RPC server.
-type RPCConfig struct {
-	RPCAddr string `long:"rpcaddr" description:"RPC server listen address"`
-	RPCUser string `long:"rpcuser" description:"RPC server user name"`
-	RPCPass string `long:"rpcpass" description:"RPC server password"`
-	RPCCert string `long:"rpccert" description:"RPC server certificate file location"`
-	RPCKey  string `long:"rpckey" description:"RPC server key file location"`
-	Dev     bool   `long:"rpcdev" description:"Enable developer RPC endpoints."`
-	// CertHosts is a list of hosts given to certgen.NewTLSCertPair for the
-	// "Subject Alternate Name" values of the generated TLS certificate. It is
-	// set automatically, not via the config file or cli args.
-	CertHosts []string
-}
-
-// RPC creates a rpc server configuration.
-func (cfg *RPCConfig) RPC(c *core.Core, marketMaker *mm.MarketMaker, log dex.Logger) *rpcserver.Config {
-	bwMajor, bwMinor, bwPatch, bwPreRel, bwBuildMeta, err := version.ParseSemVer(Version)
-	if err != nil {
-		panic(fmt.Errorf("failed to parse version: %w", err))
-	}
-
-	runtimeVer := strings.Replace(runtime.Version(), ".", "-", -1)
-	runBuildMeta := version.NormalizeString(runtimeVer)
-	build := version.NormalizeString(bwBuildMeta)
-	if build != "" {
-		bwBuildMeta = fmt.Sprintf("%s.%s", build, runBuildMeta)
-	}
-	bwVersion := &rpcserver.SemVersion{
-		VersionString: Version,
-		Major:         bwMajor,
-		Minor:         bwMinor,
-		Patch:         bwPatch,
-		Prerelease:    bwPreRel,
-		BuildMetadata: bwBuildMeta,
-	}
-
-	rpcserver.SetLogger(log)
-	return &rpcserver.Config{
-		Core:        c,
-		MarketMaker: marketMaker,
-		Addr:        cfg.RPCAddr,
-		User:        cfg.RPCUser,
-		Pass:        cfg.RPCPass,
-		Cert:        cfg.RPCCert,
-		Key:         cfg.RPCKey,
-		BWVersion:   bwVersion,
-		Dev:         cfg.Dev,
-		CertHosts: []string{
-			defaultTestnetHost, defaultSimnetHost, defaultMainnetHost,
-			walletPairOneHost, walletPairTwoHost,
-		},
-	}
-}
-
 // CoreConfig encapsulates the settings specific to core.Core.
 type CoreConfig struct {
 	DBPath       string `long:"db" description:"Database filepath. Database will be created if it does not exist."`
@@ -103,17 +40,9 @@ type CoreConfig struct {
 	// Net is a derivative field set by ResolveConfig.
 	Net dex.Network
 
-	TheOneHost string `long:"onehost" description:"Only connect with this server."`
-
-	NoAutoWalletLock   bool `long:"no-wallet-lock" description:"Disable locking of wallets on shutdown or logout. Use this if you want your external wallets to stay unlocked after closing the DEX app."`
-	NoAutoDBBackup     bool `long:"no-db-backup" description:"Disable creation of a database backup on shutdown."`
-	UnlockCoinsOnLogin bool `long:"release-wallet-coins" description:"On login or wallet creation, instruct the wallet to release any coins that it may have locked."`
-
+	NoAutoWalletLock  bool `long:"no-wallet-lock" description:"Disable locking of wallets on shutdown or logout. Use this if you want your external wallets to stay unlocked after closing the app."`
+	NoAutoDBBackup    bool `long:"no-db-backup" description:"Disable creation of a database backup on shutdown."`
 	ExtensionModeFile string `long:"extension-mode-file" description:"path to a file that specifies options for running core as an extension."`
-
-	Mesh bool `long:"mesh" description:"Enable Tatanka Mesh for peer-to-peer trading. This is experimental and not recommended for production use."`
-
-	MaxActiveMatches int `long:"max-active-matches" description:"Maximum number of active swap matches per DEX connection before deferring new orders. Default 48."`
 }
 
 // WebConfig encapsulates the configuration needed for the web server.
@@ -135,21 +64,13 @@ type LogConfig struct {
 	LocalLogs  bool   `long:"loglocal" description:"Use local time zone time stamps in log entries."`
 }
 
-// MMConfig encapsulates the settings specific to market making.
-type MMConfig struct {
-	BotConfigPath  string `long:"botConfigPath"`
-	EventLogDBPath string `long:"eventLogDBPath"`
-}
-
 // Config is the common application configuration definition. This composite
-// struct captures the configuration needed for core and both web and rpc
-// servers, as well as some application-level directives.
+// struct captures the configuration needed for core and the web server, as
+// well as some application-level directives.
 type Config struct {
 	CoreConfig
-	RPCConfig
 	WebConfig
 	LogConfig
-	MMConfig
 	// AppData and ConfigPath should be parsed from the command-line,
 	// as it makes no sense to set these in the config file itself. If no values
 	// are assigned, defaults will be used.
@@ -159,7 +80,6 @@ type Config struct {
 	// dex.Network field.
 	Testnet    bool   `long:"testnet" description:"use testnet"`
 	Simnet     bool   `long:"simnet" description:"use simnet"`
-	RPCOn      bool   `long:"rpc" description:"turn on the rpc server"`
 	NoWeb      bool   `long:"noweb" description:"disable the web server."`
 	CPUProfile string `long:"cpuprofile" description:"File for CPU profiling."`
 	ShowVer    bool   `short:"V" long:"version" description:"Display version information and exit"`
@@ -168,8 +88,8 @@ type Config struct {
 
 // Web creates a configuration for the webserver. This is a Config method
 // instead of a WebConfig method because Language is an app-level setting used
-// by both core and rpcserver.
-func (cfg *Config) Web(c *core.Core, mm *mm.MarketMaker, log dex.Logger, utc bool) *webserver.Config {
+// by both core and the web server.
+func (cfg *Config) Web(c *core.Core, log dex.Logger, utc bool) *webserver.Config {
 	addr := cfg.WebAddr
 	host, _, err := net.SplitHostPort(addr)
 	if err == nil && host != "" {
@@ -180,11 +100,6 @@ func (cfg *Config) Web(c *core.Core, mm *mm.MarketMaker, log dex.Logger, utc boo
 	}
 	ip := net.ParseIP(addr)
 
-	var mmCore webserver.MMCore
-	if mm != nil {
-		mmCore = mm
-	}
-
 	var certFile, keyFile string
 	if cfg.WebTLS || (ip != nil && !ip.IsLoopback() && !ip.IsPrivate()) || (ip == nil && addr != "localhost") {
 		certFile = filepath.Join(cfg.AppData, "web.cert")
@@ -192,10 +107,9 @@ func (cfg *Config) Web(c *core.Core, mm *mm.MarketMaker, log dex.Logger, utc boo
 	}
 
 	return &webserver.Config{
-		DataDir:         filepath.Join(cfg.AppData, "srv"),
-		Core:            c,
-		MarketMaker:     mmCore,
-		Addr:            cfg.WebAddr,
+		DataDir:       filepath.Join(cfg.AppData, "srv"),
+		Core:          c,
+		Addr:          cfg.WebAddr,
 		CustomSiteDir:   cfg.SiteDir,
 		Logger:          log,
 		UTC:             utc,
@@ -212,23 +126,19 @@ func (cfg *Config) Web(c *core.Core, mm *mm.MarketMaker, log dex.Logger, utc boo
 
 // Core creates a core.Core configuration. This is a Config method
 // instead of a CoreConfig method because Language is an app-level setting used
-// by both core and rpcserver.
+// by both core and the web server.
 func (cfg *Config) Core(log dex.Logger) *core.Config {
 	return &core.Config{
-		DBPath:             cfg.DBPath,
-		Net:                cfg.Net,
-		Logger:             log,
-		Onion:              cfg.Onion,
-		TorProxy:           cfg.TorProxy,
-		TorIsolation:       cfg.TorIsolation,
-		Language:           cfg.Language,
-		UnlockCoinsOnLogin: cfg.UnlockCoinsOnLogin,
-		NoAutoWalletLock:   cfg.NoAutoWalletLock,
-		NoAutoDBBackup:     cfg.NoAutoDBBackup,
-		ExtensionModeFile:  cfg.ExtensionModeFile,
-		TheOneHost:         cfg.TheOneHost,
-		Mesh:               cfg.Mesh,
-		MaxActiveMatches:   cfg.MaxActiveMatches,
+		DBPath:            cfg.DBPath,
+		Net:               cfg.Net,
+		Logger:            log,
+		Onion:             cfg.Onion,
+		TorProxy:          cfg.TorProxy,
+		TorIsolation:      cfg.TorIsolation,
+		Language:          cfg.Language,
+		NoAutoWalletLock:  cfg.NoAutoWalletLock,
+		NoAutoDBBackup:    cfg.NoAutoDBBackup,
+		ExtensionModeFile: cfg.ExtensionModeFile,
 	}
 }
 
@@ -236,9 +146,6 @@ var DefaultConfig = Config{
 	AppData:    defaultApplicationDirectory,
 	ConfigPath: defaultConfigPath,
 	LogConfig:  LogConfig{DebugLevel: defaultLogLevel},
-	RPCConfig: RPCConfig{
-		CertHosts: []string{defaultTestnetHost, defaultSimnetHost, defaultMainnetHost},
-	},
 }
 
 // ParseCLIConfig parses the command-line arguments into the provided struct
@@ -315,35 +222,23 @@ func ResolveConfig(appData string, cfg *Config) error {
 
 	cfg.AppData = appData
 
-	var defaultDBPath, defaultLogPath, defaultMMEventLogDBPath, defaultMMConfigPath string
+	var defaultDBPath, defaultLogPath string
 	switch {
 	case cfg.Testnet:
 		cfg.Net = dex.Testnet
-		defaultDBPath, defaultLogPath, defaultMMEventLogDBPath, defaultMMConfigPath = setNet(appData, "testnet")
+		defaultDBPath, defaultLogPath = setNet(appData, "testnet")
 	case cfg.Simnet:
 		cfg.Net = dex.Simnet
-		defaultDBPath, defaultLogPath, defaultMMEventLogDBPath, defaultMMConfigPath = setNet(appData, "simnet")
+		defaultDBPath, defaultLogPath = setNet(appData, "simnet")
 	default:
 		cfg.Net = dex.Mainnet
-		defaultDBPath, defaultLogPath, defaultMMEventLogDBPath, defaultMMConfigPath = setNet(appData, "mainnet")
+		defaultDBPath, defaultLogPath = setNet(appData, "mainnet")
 	}
 	defaultHost := DefaultHostByNetwork(cfg.Net)
 
-	// If web or RPC server addresses not set, use network specific
-	// defaults
+	// If web server address not set, use network specific default.
 	if cfg.WebAddr == "" {
 		cfg.WebAddr = net.JoinHostPort(defaultHost, defaultWebPort)
-	}
-	if cfg.RPCAddr == "" {
-		cfg.RPCAddr = net.JoinHostPort(defaultHost, defaultRPCPort)
-	}
-
-	if cfg.RPCCert == "" {
-		cfg.RPCCert = filepath.Join(appData, defaultRPCCertFile)
-	}
-
-	if cfg.RPCKey == "" {
-		cfg.RPCKey = filepath.Join(appData, defaultRPCKeyFile)
 	}
 
 	if cfg.DBPath == "" {
@@ -354,14 +249,6 @@ func ResolveConfig(appData string, cfg *Config) error {
 		cfg.LogPath = defaultLogPath
 	}
 
-	if cfg.MMConfig.BotConfigPath == "" {
-		cfg.MMConfig.BotConfigPath = defaultMMConfigPath
-	}
-
-	if cfg.MMConfig.EventLogDBPath == "" {
-		cfg.MMConfig.EventLogDBPath = defaultMMEventLogDBPath
-	}
-
 	return nil
 }
 
@@ -369,12 +256,10 @@ func ResolveConfig(appData string, cfg *Config) error {
 // files. It returns a suggested path for the database file and a log file. If
 // using a file rotator, the directory of the log filepath as parsed  by
 // filepath.Dir is suitable for use.
-func setNet(applicationDirectory, net string) (dbPath, logPath, mmEventDBPath, mmCfgPath string) {
+func setNet(applicationDirectory, net string) (dbPath, logPath string) {
 	netDirectory := filepath.Join(applicationDirectory, net)
 	logDirectory := filepath.Join(netDirectory, "logs")
 	logFilename := filepath.Join(logDirectory, "dexc.log")
-	mmEventLogDBFilename := filepath.Join(netDirectory, "eventlog.db")
-	mmCfgFilename := filepath.Join(netDirectory, "mm_cfg.json")
 	err := os.MkdirAll(netDirectory, 0700)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create net directory: %v\n", err)
@@ -385,7 +270,7 @@ func setNet(applicationDirectory, net string) (dbPath, logPath, mmEventDBPath, m
 		fmt.Fprintf(os.Stderr, "failed to create log directory: %v\n", err)
 		os.Exit(1)
 	}
-	return filepath.Join(netDirectory, "dexc.db"), logFilename, mmEventLogDBFilename, mmCfgFilename
+	return filepath.Join(netDirectory, "dexc.db"), logFilename
 }
 
 // DefaultHostByNetwork accepts configured network and returns the network

@@ -21,7 +21,7 @@ differences that make this version more suitable for less tech-savvy users.
 |-----------------------------------|------------------------------------------|
 | Shutdown via ctrl-c signal.       | When user closes window, continues       |
 | Prompt user to force shutdown if  | running in the background if there are   |
-| there are active orders.          | active orders. Run a little server that  |
+| there are active swaps.           | active swaps. Run a little server that   |
 |                                   | synchronizes at start-up, enabling the   |
 |                                   | window to be reopened when the user      |
 |                                   | tries to start another instance. A       |
@@ -33,13 +33,13 @@ Both versions use the same default client configuration file locations at
 AppDataDir("dexc").
 
 Since the program continues running in the background if there are active
-orders, there becomes a question of how and when to shutdown, or what happens
+swaps, there becomes a question of how and when to shutdown, or what happens
 when the user simply shuts off their computer.
- 1) If there are no active orders when the user closes the window, bisonw will
+ 1) If there are no active swaps when the user closes the window, bisonw will
     exit immediately.
  2) If we receive a SIGTERM signal, expected for system shutdown, shut down
     immediately. Ctrl-c still works if running via CLI, with no prompt.
- 3) If the window remains closed, but the active orders all resolve, shut down.
+ 3) If the window remains closed, but the active swaps all resolve, shut down.
     We check every minute while the window is closed.
  4) The user can kill the background program with a command-line argument,
     --kill, which uses the sync server in the background to issue the command.

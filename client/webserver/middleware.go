@@ -8,20 +8,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/order"
 	"github.com/go-chi/chi/v5"
 )
 
 type ctxID int
 
 const (
-	ctxOID ctxID = iota
-	ctxHost
-	ctxProposalToken
+	ctxProposalToken ctxID = iota
 )
 
 // securityMiddleware adds security headers to the server responses.
@@ -179,75 +174,6 @@ func (s *WebServer) rejectUnauthed(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// requireDEXConnection ensures that the user has completely registered with at
-// least 1 DEX before allowing the incoming request to proceed. Redirects to the
-// register page if the user has not connected any DEX.
-func (s *WebServer) requireDEXConnection(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if len(s.core.Exchanges()) == 0 {
-			http.Redirect(w, r, registerRoute, http.StatusSeeOther)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// dexHostCtx embeds the host into the request context.
-func dexHostCtx(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := chi.URLParam(r, "host")
-		ctx := context.WithValue(r.Context(), ctxHost, host)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// getHostCtx interprets the context value at ctxHost as a string host.
-func getHostCtx(r *http.Request) (string, error) {
-	untypedHost := r.Context().Value(ctxHost)
-	if untypedHost == nil {
-		return "", errors.New("host not set in request")
-	}
-	host, ok := untypedHost.(string)
-	if !ok {
-		return "", errors.New("type assertion failed")
-	}
-	return host, nil
-}
-
-// orderIDCtx embeds order ID into the request context.
-func orderIDCtx(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		oid := chi.URLParam(r, "oid")
-		ctx := context.WithValue(r.Context(), ctxOID, oid)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// getOrderIDCtx interprets the context value at ctxOID as a dex.Bytes order ID.
-func getOrderIDCtx(r *http.Request) (dex.Bytes, error) {
-	untypedOID := r.Context().Value(ctxOID)
-	if untypedOID == nil {
-		log.Errorf("nil value for order ID context value")
-	}
-	hexID, ok := untypedOID.(string)
-	if !ok {
-		log.Errorf("getOrderIDCtx type assertion failed. Expected string, got %T", untypedOID)
-		return nil, fmt.Errorf("type assertion failed")
-	}
-
-	if len(hexID) != order.OrderIDSize*2 {
-		log.Errorf("getOrderIDCtx received order ID string of wrong length. wanted %d, got %d",
-			order.OrderIDSize*2, len(hexID))
-		return nil, fmt.Errorf("invalid order ID")
-	}
-	oidB, err := hex.DecodeString(hexID)
-	if err != nil {
-		log.Errorf("getOrderIDCtx received invalid hex for order ID %q", hexID)
-		return nil, fmt.Errorf("")
-	}
-	return oidB, nil
 }
 
 // proposalTokenCtx embeds the proposal token into the request context.

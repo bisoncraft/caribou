@@ -8,53 +8,27 @@ import (
 	"sync/atomic"
 
 	"decred.org/dcrdex/client/asset"
-	"decred.org/dcrdex/client/comms"
 	"decred.org/dcrdex/client/db"
 	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
 )
 
 // Notifications should use the following note type strings.
 const (
-	NoteTypeFeePayment     = "feepayment"
-	NoteTypeBondPost       = "bondpost"
-	NoteTypeBondRefund     = "bondrefund"
-	NoteTypeUnknownBond    = "unknownbond"
-	NoteTypeSend           = "send"
-	NoteTypeOrder          = "order"
-	NoteTypeMatch          = "match"
-	NoteTypeEpoch          = "epoch"
-	NoteTypeConnEvent      = "conn"
-	NoteTypeBalance        = "balance"
-	NoteTypeSpots          = "spots"
-	NoteTypeWalletConfig   = "walletconfig"
-	NoteTypeWalletState    = "walletstate"
-	NoteTypeWalletSync     = "walletsync"
-	NoteTypeServerNotify   = "notify"
-	NoteTypeSecurity       = "security"
-	NoteTypeUpgrade        = "upgrade"
-	NoteTypeBot            = "bot"
-	NoteTypeDEXAuth        = "dex_auth"
-	NoteTypeFiatRates      = "fiatrateupdate"
-	NoteTypeCreateWallet   = "createwallet"
-	NoteTypeLogin          = "login"
-	NoteTypeWalletNote     = "walletnote"
-	NoteTypeReputation     = "reputation"
-	NoteTypeActionRequired = "actionrequired"
-	NoteTypeBridge         = "bridge"
+	NoteTypeSend       = "send"
+	NoteTypeBalance    = "balance"
+	NoteTypeWalletConfig = "walletconfig"
+	NoteTypeWalletState  = "walletstate"
+	NoteTypeWalletSync   = "walletsync"
+	NoteTypeSecurity     = "security"
+	NoteTypeFiatRates    = "fiatrateupdate"
+	NoteTypeLogin        = "login"
+	NoteTypeWalletNote   = "walletnote"
+	NoteTypeBridge       = "bridge"
 )
 
 var noteChanCounter uint64
 
 func (c *Core) logNote(n Notification) {
-	// Do not log certain spammy note types that have no value in logs.
-	switch n.Type() {
-	case NoteTypeSpots: // expand this case as needed
-		return
-	default:
-	}
 	if n.Subject() == "" && n.Details() == "" {
 		return
 	}
@@ -163,14 +137,6 @@ func (c *Core) formatDetails(topic Topic, args ...any) (translatedSubject, detai
 	return trans.subject.T, locale.printer.Sprintf(string(topic), args...)
 }
 
-func makeCoinIDToken(txHash string, assetID uint32) string {
-	return fmt.Sprintf("{{{%d|%s}}}", assetID, txHash)
-}
-
-func makeOrderToken(orderToken string) string {
-	return fmt.Sprintf("{{{order|%s}}}", orderToken)
-}
-
 // Notification is an interface for a user notification. Notification is
 // satisfied by db.Notification, so concrete types can embed the db type.
 type Notification interface {
@@ -229,112 +195,11 @@ func newSecurityNote(topic Topic, subject, details string, severity db.Severity)
 }
 
 const (
-	TopicFeePaymentInProgress    Topic = "FeePaymentInProgress"
-	TopicFeePaymentError         Topic = "FeePaymentError"
-	TopicFeeCoinError            Topic = "FeeCoinError"
-	TopicRegUpdate               Topic = "RegUpdate"
-	TopicBondConfirming          Topic = "BondConfirming"
-	TopicBondRefunded            Topic = "BondRefunded"
-	TopicBondPostError           Topic = "BondPostError"
-	TopicBondPostErrorConfirm    Topic = "BondPostErrorConfirm"
-	TopicBondCoinError           Topic = "BondCoinError"
-	TopicAccountRegistered       Topic = "AccountRegistered"
-	TopicAccountUnlockError      Topic = "AccountUnlockError"
 	TopicWalletConnectionWarning Topic = "WalletConnectionWarning"
 	TopicWalletUnlockError       Topic = "WalletUnlockError"
 	TopicWalletCommsWarning      Topic = "WalletCommsWarning"
 	TopicWalletPeersRestored     Topic = "WalletPeersRestored"
 )
-
-// FeePaymentNote is a notification regarding registration fee payment.
-type FeePaymentNote struct {
-	db.Notification
-	Asset         *uint32 `json:"asset,omitempty"`
-	Confirmations *uint32 `json:"confirmations,omitempty"`
-	Dex           string  `json:"dex,omitempty"`
-}
-
-func newFeePaymentNote(topic Topic, subject, details string, severity db.Severity, dexAddr string) *FeePaymentNote {
-	host, _ := addrHost(dexAddr)
-	return &FeePaymentNote{
-		Notification: db.NewNotification(NoteTypeFeePayment, topic, subject, details, severity),
-		Dex:          host,
-	}
-}
-
-func newFeePaymentNoteWithConfirmations(topic Topic, subject, details string, severity db.Severity, asset, currConfs uint32, dexAddr string) *FeePaymentNote {
-	feePmtNt := newFeePaymentNote(topic, subject, details, severity, dexAddr)
-	feePmtNt.Asset = &asset
-	feePmtNt.Confirmations = &currConfs
-	return feePmtNt
-}
-
-// BondRefundNote is a notification regarding bond refunds.
-type BondRefundNote struct {
-	db.Notification
-}
-
-func newBondRefundNote(topic Topic, subject, details string, severity db.Severity) *BondRefundNote {
-	return &BondRefundNote{
-		Notification: db.NewNotification(NoteTypeBondRefund, topic, subject, details, severity),
-	}
-}
-
-const (
-	TopicBondAuthUpdate Topic = "BondAuthUpdate"
-)
-
-// BondPostNote is a notification regarding bond posting.
-type BondPostNote struct {
-	db.Notification
-	Asset         *uint32       `json:"asset,omitempty"`
-	Confirmations *int32        `json:"confirmations,omitempty"`
-	BondedTier    *int64        `json:"bondedTier,omitempty"`
-	CoinID        *string       `json:"coinID,omitempty"`
-	Dex           string        `json:"dex,omitempty"`
-	Auth          *ExchangeAuth `json:"auth,omitempty"`
-}
-
-func newBondPostNote(topic Topic, subject, details string, severity db.Severity, dexAddr string) *BondPostNote {
-	host, _ := addrHost(dexAddr)
-	return &BondPostNote{
-		Notification: db.NewNotification(NoteTypeBondPost, topic, subject, details, severity),
-		Dex:          host,
-	}
-}
-
-func newBondPostNoteWithConfirmations(
-	topic Topic,
-	subject string,
-	details string,
-	severity db.Severity,
-	asset uint32,
-	coinID string,
-	currConfs int32,
-	host string,
-	auth *ExchangeAuth,
-) *BondPostNote {
-
-	bondPmtNt := newBondPostNote(topic, subject, details, severity, host)
-	bondPmtNt.Asset = &asset
-	bondPmtNt.CoinID = &coinID
-	bondPmtNt.Confirmations = &currConfs
-	bondPmtNt.Auth = auth
-	return bondPmtNt
-}
-
-func newBondPostNoteWithTier(topic Topic, subject, details string, severity db.Severity, dexAddr string, bondedTier int64, auth *ExchangeAuth) *BondPostNote {
-	bondPmtNt := newBondPostNote(topic, subject, details, severity, dexAddr)
-	bondPmtNt.BondedTier = &bondedTier
-	bondPmtNt.Auth = auth
-	return bondPmtNt
-}
-
-func newBondAuthUpdate(host string, auth *ExchangeAuth) *BondPostNote {
-	n := newBondPostNote(TopicBondAuthUpdate, "", "", db.Data, host)
-	n.Auth = auth
-	return n
-}
 
 // SendNote is a notification regarding a requested send or withdraw.
 type SendNote struct {
@@ -349,152 +214,6 @@ const (
 func newSendNote(topic Topic, subject, details string, severity db.Severity) *SendNote {
 	return &SendNote{
 		Notification: db.NewNotification(NoteTypeSend, topic, subject, details, severity),
-	}
-}
-
-// OrderNote is a notification about an order or a match.
-type OrderNote struct {
-	db.Notification
-	Order       *Order `json:"order"`
-	TemporaryID uint64 `json:"tempID,omitempty"`
-}
-
-const (
-	TopicOrderLoadFailure     Topic = "OrderLoadFailure"
-	TopicOrderResumeFailure   Topic = "OrderResumeFailure"
-	TopicBuyOrderPlaced       Topic = "BuyOrderPlaced"
-	TopicSellOrderPlaced      Topic = "SellOrderPlaced"
-	TopicYoloPlaced           Topic = "YoloPlaced"
-	TopicMissingMatches       Topic = "MissingMatches"
-	TopicWalletMissing        Topic = "WalletMissing"
-	TopicMatchErrorCoin       Topic = "MatchErrorCoin"
-	TopicMatchErrorContract   Topic = "MatchErrorContract"
-	TopicMatchRecoveryError   Topic = "MatchRecoveryError"
-	TopicOrderCoinError       Topic = "OrderCoinError"
-	TopicOrderCoinFetchError  Topic = "OrderCoinFetchError"
-	TopicPreimageSent         Topic = "PreimageSent"
-	TopicCancelPreimageSent   Topic = "CancelPreimageSent"
-	TopicMissedCancel         Topic = "MissedCancel"
-	TopicOrderBooked          Topic = "OrderBooked"
-	TopicNoMatch              Topic = "NoMatch"
-	TopicBuyOrderCanceled     Topic = "BuyOrderCanceled"
-	TopicSellOrderCanceled    Topic = "SellOrderCanceled"
-	TopicCancel               Topic = "Cancel"
-	TopicBuyMatchesMade       Topic = "BuyMatchesMade"
-	TopicSellMatchesMade      Topic = "SellMatchesMade"
-	TopicSwapSendError        Topic = "SwapSendError"
-	TopicInitError            Topic = "InitError"
-	TopicReportRedeemError    Topic = "ReportRedeemError"
-	TopicSwapsInitiated       Topic = "SwapsInitiated"
-	TopicRedemptionError      Topic = "RedemptionError"
-	TopicMatchComplete        Topic = "MatchComplete"
-	TopicRefundFailure        Topic = "RefundFailure"
-	TopicMatchesRefunded      Topic = "MatchesRefunded"
-	TopicMatchRevoked         Topic = "MatchRevoked"
-	TopicOrderRevoked         Topic = "OrderRevoked"
-	TopicOrderAutoRevoked     Topic = "OrderAutoRevoked"
-	TopicMatchRecovered       Topic = "MatchRecovered"
-	TopicCancellingOrder      Topic = "CancellingOrder"
-	TopicOrderStatusUpdate    Topic = "OrderStatusUpdate"
-	TopicMatchResolutionError Topic = "MatchResolutionError"
-	TopicFailedCancel         Topic = "FailedCancel"
-	TopicOrderLoaded          Topic = "OrderLoaded"
-	TopicOrderRetired         Topic = "OrderRetired"
-	TopicAsyncOrderFailure    Topic = "AsyncOrderFailure"
-	TopicAsyncOrderSubmitted  Topic = "AsyncOrderSubmitted"
-	TopicOrderQuantityTooHigh Topic = "OrderQuantityTooHigh"
-)
-
-func newOrderNote(topic Topic, subject, details string, severity db.Severity, corder *Order) *OrderNote {
-	return &OrderNote{
-		Notification: db.NewNotification(NoteTypeOrder, topic, subject, details, severity),
-		Order:        corder,
-	}
-}
-
-func newOrderNoteWithTempID(topic Topic, subject, details string, severity db.Severity, corder *Order, tempID uint64) *OrderNote {
-	note := newOrderNote(topic, subject, details, severity, corder)
-	note.TemporaryID = tempID
-	return note
-}
-
-// MatchNote is a notification about a match.
-type MatchNote struct {
-	db.Notification
-	OrderID  dex.Bytes `json:"orderID"`
-	Match    *Match    `json:"match"`
-	Host     string    `json:"host"`
-	MarketID string    `json:"marketID"`
-}
-
-const (
-	TopicAudit                 Topic = "Audit"
-	TopicAuditTrouble          Topic = "AuditTrouble"
-	TopicNewMatch              Topic = "NewMatch"
-	TopicCounterConfirms       Topic = "CounterConfirms"
-	TopicConfirms              Topic = "Confirms"
-	TopicRedemptionResubmitted Topic = "RedemptionResubmitted"
-	TopicRefundResubmitted     Topic = "RefundResubmitted"
-	TopicSwapRefunded          Topic = "SwapRefunded"
-	TopicSwapRedeemed          Topic = "SwapRedeemed"
-	TopicRedemptionConfirmed   Topic = "RedemptionConfirmed"
-	TopicRefundConfirmed       Topic = "RefundConfirmed"
-)
-
-// String supplements db.Notification's Stringer with the Order's ID, if the
-// Order is not nil.
-func (on *OrderNote) String() string {
-	base := on.Notification.String()
-	if on.Order == nil {
-		return base
-	}
-	return fmt.Sprintf("%s - Order: %s", base, on.Order.ID)
-}
-
-// EpochNotification is a data notification that a new epoch has begun.
-type EpochNotification struct {
-	db.Notification
-	Host     string `json:"host"`
-	MarketID string `json:"marketID"`
-	Epoch    uint64 `json:"epoch"`
-}
-
-const TopicEpoch Topic = "Epoch"
-
-func newEpochNotification(host, mktID string, epochIdx uint64) *EpochNotification {
-	return &EpochNotification{
-		Host:         host,
-		MarketID:     mktID,
-		Notification: db.NewNotification(NoteTypeEpoch, TopicEpoch, "", "", db.Data),
-		Epoch:        epochIdx,
-	}
-}
-
-// String supplements db.Notification's Stringer with the Epoch index.
-func (on *EpochNotification) String() string {
-	return fmt.Sprintf("%s - Index: %d", on.Notification.String(), on.Epoch)
-}
-
-// ConnEventNote is a notification regarding individual DEX connection status.
-type ConnEventNote struct {
-	db.Notification
-	Host             string                 `json:"host"`
-	ConnectionStatus comms.ConnectionStatus `json:"connectionStatus"`
-}
-
-const (
-	TopicDEXConnected    Topic = "DEXConnected"
-	TopicDEXDisconnected Topic = "DEXDisconnected"
-	TopicDexConnectivity Topic = "DEXConnectivity"
-	TopicDEXDisabled     Topic = "DEXDisabled"
-	TopicDEXEnabled      Topic = "DEXEnabled"
-)
-
-func newConnEventNote(topic Topic, subject, host string, status comms.ConnectionStatus, details string, severity db.Severity) *ConnEventNote {
-	return &ConnEventNote{
-		Notification:     db.NewNotification(NoteTypeConnEvent, topic, subject, details, severity),
-		Host:             host,
-		ConnectionStatus: status,
 	}
 }
 
@@ -530,48 +249,6 @@ func newBalanceNote(assetID uint32, bal *WalletBalance) *BalanceNote {
 	}
 }
 
-// SpotPriceNote is a notification of an update to the market's spot price.
-type SpotPriceNote struct {
-	db.Notification
-	Host  string                   `json:"host"`
-	Spots map[string]*msgjson.Spot `json:"spots"`
-}
-
-const TopicSpotsUpdate Topic = "SpotsUpdate"
-
-func newSpotPriceNote(host string, spots map[string]*msgjson.Spot) *SpotPriceNote {
-	return &SpotPriceNote{
-		Notification: db.NewNotification(NoteTypeSpots, TopicSpotsUpdate, "", "", db.Data),
-		Host:         host,
-		Spots:        spots,
-	}
-}
-
-// DEXAuthNote is a notification regarding individual DEX authentication status.
-type DEXAuthNote struct {
-	db.Notification
-	Host          string `json:"host"`
-	Authenticated bool   `json:"authenticated"`
-}
-
-const (
-	TopicDexAuthError     Topic = "DexAuthError"
-	TopicDexAuthErrorBond Topic = "DexAuthErrorBond"
-	TopicUnknownOrders    Topic = "UnknownOrders"
-	TopicOrdersReconciled Topic = "OrdersReconciled"
-	TopicBondConfirmed    Topic = "BondConfirmed"
-	TopicBondExpired      Topic = "BondExpired"
-	TopicAccountRegTier   Topic = "AccountRegTier"
-)
-
-func newDEXAuthNote(topic Topic, subject, host string, authenticated bool, details string, severity db.Severity) *DEXAuthNote {
-	return &DEXAuthNote{
-		Notification:  db.NewNotification(NoteTypeDEXAuth, topic, subject, details, severity),
-		Host:          host,
-		Authenticated: authenticated,
-	}
-}
-
 // WalletConfigNote is a notification regarding a change in wallet
 // configuration.
 type WalletConfigNote struct {
@@ -585,7 +262,6 @@ const (
 	TopicWalletPeersWarning         Topic = "WalletPeersWarning"
 	TopicWalletTypeDeprecated       Topic = "WalletTypeDeprecated"
 	TopicWalletPeersUpdate          Topic = "WalletPeersUpdate"
-	TopicBondWalletNotConnected     Topic = "BondWalletNotConnected"
 )
 
 func newWalletConfigNote(topic Topic, subject, details string, severity db.Severity, walletState *WalletState) *WalletConfigNote {
@@ -672,78 +348,6 @@ func newWalletSyncNote(assetID uint32, ss *asset.SyncStatus) *WalletSyncNote {
 	}
 }
 
-// ServerNotifyNote is a notification containing a server-originating message.
-type ServerNotifyNote struct {
-	db.Notification
-}
-
-const (
-	TopicMarketSuspendScheduled   Topic = "MarketSuspendScheduled"
-	TopicMarketSuspended          Topic = "MarketSuspended"
-	TopicMarketSuspendedWithPurge Topic = "MarketSuspendedWithPurge"
-	TopicMarketResumeScheduled    Topic = "MarketResumeScheduled"
-	TopicMarketResumed            Topic = "MarketResumed"
-	TopicPenalized                Topic = "Penalized"
-	TopicDEXNotification          Topic = "DEXNotification"
-)
-
-func newServerNotifyNote(topic Topic, subject, details string, severity db.Severity) *ServerNotifyNote {
-	return &ServerNotifyNote{
-		Notification: db.NewNotification(NoteTypeServerNotify, topic, subject, details, severity),
-	}
-}
-
-// UpgradeNote is a notification regarding an outdated client.
-type UpgradeNote struct {
-	db.Notification
-}
-
-const (
-	TopicUpgradeNeeded           Topic = "UpgradeNeeded"
-	TopicServerVersionTooOld     Topic = "ServerVersionTooOld"
-	TopicMMSnapshotsNotSupported Topic = "MMSnapshotsNotSupported"
-)
-
-func newUpgradeNote(topic Topic, subject, details string, severity db.Severity) *UpgradeNote {
-	return &UpgradeNote{
-		Notification: db.NewNotification(NoteTypeUpgrade, topic, subject, details, severity),
-	}
-}
-
-// ServerConfigUpdateNote is sent when a server's configuration is updated.
-type ServerConfigUpdateNote struct {
-	db.Notification
-	Host string `json:"host"`
-}
-
-const TopicServerConfigUpdate Topic = "ServerConfigUpdate"
-
-func newServerConfigUpdateNote(host string) *ServerConfigUpdateNote {
-	return &ServerConfigUpdateNote{
-		Notification: db.NewNotification(NoteTypeServerNotify, TopicServerConfigUpdate, "", "", db.Data),
-		Host:         host,
-	}
-}
-
-// WalletCreationNote is a notification regarding asynchronous wallet creation.
-type WalletCreationNote struct {
-	db.Notification
-	AssetID uint32 `json:"assetID"`
-}
-
-const (
-	TopicQueuedCreationFailed  Topic = "QueuedCreationFailed"
-	TopicQueuedCreationSuccess Topic = "QueuedCreationSuccess"
-	TopicCreationQueued        Topic = "CreationQueued"
-)
-
-func newWalletCreationNote(topic Topic, subject, details string, severity db.Severity, assetID uint32) *WalletCreationNote {
-	return &WalletCreationNote{
-		Notification: db.NewNotification(NoteTypeCreateWallet, topic, subject, details, severity),
-		AssetID:      assetID,
-	}
-}
-
 // LoginNote is a notification with the recent login status.
 type LoginNote struct {
 	db.Notification
@@ -772,80 +376,3 @@ func newWalletNote(n asset.WalletNotification) *WalletNote {
 	}
 }
 
-type ReputationNote struct {
-	db.Notification
-	Host       string             `json:"host"`
-	Reputation account.Reputation `json:"rep"`
-}
-
-const TopicReputationUpdate = "ReputationUpdate"
-
-func newReputationNote(host string, rep account.Reputation) *ReputationNote {
-	return &ReputationNote{
-		Notification: db.NewNotification(NoteTypeReputation, TopicReputationUpdate, "", "", db.Data),
-		Host:         host,
-		Reputation:   rep,
-	}
-}
-
-const TopicUnknownBondTierZero = "UnknownBondTierZero"
-
-// newUnknownBondTierZeroNote is used when unknown bonds are reported by the
-// server while at target tier zero.
-func newUnknownBondTierZeroNote(subject, details string) *db.Notification {
-	note := db.NewNotification(NoteTypeUnknownBond, TopicUnknownBondTierZero, subject, details, db.WarningLevel)
-	return &note
-}
-
-const (
-	ActionIDRedeemRejected = "redeemRejected"
-	TopicRedeemRejected    = "RedeemRejected"
-	ActionIDRefundRejected = "refundRejected"
-	TopicRefundRejected    = "RefundRejected"
-)
-
-func newActionRequiredNote(actionID, uniqueID string, payload any) *asset.ActionRequiredNote {
-	n := &asset.ActionRequiredNote{
-		UniqueID: uniqueID,
-		ActionID: actionID,
-		Payload:  payload,
-	}
-	const routeNotNeededCuzCoreHasNoteType = ""
-	n.Route = routeNotNeededCuzCoreHasNoteType
-	return n
-}
-
-type RejectedTxData struct {
-	OrderID dex.Bytes `json:"orderID"`
-	CoinID  dex.Bytes `json:"coinID"`
-	AssetID uint32    `json:"assetID"`
-	CoinFmt string    `json:"coinFmt"`
-	TxType  string    `json:"txType"`
-}
-
-// ActionRequiredNote is structured like a WalletNote. The payload will be
-// an *asset.ActionRequiredNote. This is done for compatibility reasons.
-type ActionRequiredNote WalletNote
-
-func newRejectedTxNote(assetID uint32, oid order.OrderID, coinID []byte, txType asset.ConfirmTxType) (*asset.ActionRequiredNote, *ActionRequiredNote) {
-	data := &RejectedTxData{
-		AssetID: assetID,
-		OrderID: oid[:],
-		CoinID:  coinID,
-		CoinFmt: coinIDString(assetID, coinID),
-		TxType:  txType.String(),
-	}
-	uniqueID := dex.Bytes(coinID).String()
-	actionID := ActionIDRedeemRejected
-	topic := db.Topic(TopicRedeemRejected)
-	if txType == asset.CTRefund {
-		actionID = ActionIDRefundRejected
-		topic = TopicRefundRejected
-	}
-	actionNote := newActionRequiredNote(actionID, uniqueID, data)
-	coreNote := &ActionRequiredNote{
-		Notification: db.NewNotification(NoteTypeActionRequired, topic, "", "", db.Data),
-		Payload:      actionNote,
-	}
-	return actionNote, coreNote
-}

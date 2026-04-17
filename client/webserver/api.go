@@ -17,9 +17,6 @@ import (
 	"decred.org/dcrdex/client/asset"
 	"decred.org/dcrdex/client/core"
 	"decred.org/dcrdex/client/db"
-	"decred.org/dcrdex/client/mm"
-	"decred.org/dcrdex/client/mm/libxc"
-	"decred.org/dcrdex/dex"
 	"decred.org/dcrdex/dex/config"
 	"decred.org/dcrdex/dex/encode"
 	pi "decred.org/dcrdex/dex/politeia"
@@ -166,7 +163,6 @@ func (s *WebServer) apiApproveTokenFee(w http.ResponseWriter, r *http.Request) {
 func (s *WebServer) apiApproveToken(w http.ResponseWriter, r *http.Request) {
 	var form struct {
 		AssetID  uint32           `json:"assetID"`
-		DexAddr  string           `json:"dexAddr"`
 		Password encode.PassBytes `json:"pass"`
 	}
 	if !readPost(w, r, &form) {
@@ -179,7 +175,7 @@ func (s *WebServer) apiApproveToken(w http.ResponseWriter, r *http.Request) {
 	}
 	defer zero(pass)
 
-	txID, err := s.core.ApproveToken(pass, form.AssetID, form.DexAddr, func() {})
+	txID, err := s.core.ApproveToken(pass, form.AssetID, func() {})
 	if err != nil {
 		s.writeAPIError(w, err)
 		return
@@ -282,7 +278,7 @@ func (s *WebServer) apiRecoverWallet(w http.ResponseWriter, r *http.Request) {
 	err = s.core.RecoverWallet(form.AssetID, appPW, form.Force)
 	if err != nil {
 		// NOTE: client may check for code activeOrdersErr to prompt for
-		// override the active orders safety check.
+		// an override of the safety check.
 		s.writeAPIError(w, fmt.Errorf("error recovering %s wallet: %w", unbip(form.AssetID), err))
 		return
 	}
@@ -514,12 +510,10 @@ func (s *WebServer) apiInit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, struct {
-		OK           bool     `json:"ok"`
-		Hosts        []string `json:"hosts"`
-		MnemonicSeed string   `json:"mnemonic"`
+		OK           bool   `json:"ok"`
+		MnemonicSeed string `json:"mnemonic"`
 	}{
 		OK:           true,
-		Hosts:        s.knownUnregisteredExchanges(map[string]*core.Exchange{}),
 		MnemonicSeed: mnemonicSeed,
 	})
 }
@@ -967,11 +961,6 @@ func (s *WebServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		u = s.core.User()
 	}
 
-	var mmStatus *mm.Status
-	if s.mm != nil {
-		mmStatus = s.mm.Status()
-	}
-
 	s.authMtx.RLock()
 	paired := s.companionToken != "" && s.companionTokenClaimed
 	s.authMtx.RUnlock()
@@ -983,7 +972,6 @@ func (s *WebServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		Inited             bool       `json:"inited"`
 		OK                 bool       `json:"ok"`
 		OnionUrl           string     `json:"onionUrl"`
-		MMStatus           *mm.Status `json:"mmStatus"`
 		CompanionAppPaired bool       `json:"companionAppPaired"`
 	}{
 		User:               u,
@@ -992,7 +980,6 @@ func (s *WebServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		Inited:             s.core.IsInitialized(),
 		OK:                 true,
 		OnionUrl:           s.onion,
-		MMStatus:           mmStatus,
 		CompanionAppPaired: paired,
 	}
 	writeJSON(w, response)
@@ -1016,160 +1003,6 @@ func (s *WebServer) apiToggleRateSource(w http.ResponseWriter, r *http.Request) 
 }
 
 // apiDeleteArchiveRecords handles the '/deletearchivedrecords' API request.
-func (s *WebServer) apiDeleteArchivedRecords(w http.ResponseWriter, r *http.Request) {
-	form := new(deleteRecordsForm)
-	if !readPost(w, r, form) {
-		return
-	}
-
-	var olderThan *time.Time
-	if form.OlderThanMs > 0 {
-		ot := time.UnixMilli(form.OlderThanMs)
-		olderThan = &ot
-	}
-
-	archivedRecordsPath, nRecordsDeleted, err := s.core.DeleteArchivedRecordsWithBackup(olderThan, form.SaveMatchesToFile, form.SaveOrdersToFile)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error deleting archived records: %w", err))
-		return
-	}
-	resp := &struct {
-		Ok                     bool   `json:"ok"`
-		ArchivedRecordsDeleted int    `json:"archivedRecordsDeleted"`
-		ArchivedRecordsPath    string `json:"archivedRecordsPath"`
-	}{
-		Ok:                     true,
-		ArchivedRecordsDeleted: nRecordsDeleted,
-		ArchivedRecordsPath:    archivedRecordsPath,
-	}
-	writeJSON(w, resp)
-}
-
-func (s *WebServer) apiMarketReport(w http.ResponseWriter, r *http.Request) {
-	form := &struct {
-		BaseID  uint32 `json:"baseID"`
-		QuoteID uint32 `json:"quoteID"`
-		Host    string `json:"host"`
-	}{}
-	if !readPost(w, r, form) {
-		return
-	}
-	report, err := s.mm.MarketReport(form.Host, form.BaseID, form.QuoteID)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error getting market report: %w", err))
-		return
-	}
-	writeJSON(w, &struct {
-		OK     bool             `json:"ok"`
-		Report *mm.MarketReport `json:"report"`
-	}{
-		OK:     true,
-		Report: report,
-	})
-}
-
-func (s *WebServer) apiCEXBalance(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		CEXName string `json:"cexName"`
-		AssetID uint32 `json:"assetID"`
-	}
-	if !readPost(w, r, &req) {
-		return
-	}
-	bal, err := s.mm.CEXBalance(req.CEXName, req.AssetID)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error getting cex balance: %w", err))
-		return
-	}
-	writeJSON(w, &struct {
-		OK         bool                   `json:"ok"`
-		CEXBalance *libxc.ExchangeBalance `json:"cexBalance"`
-	}{
-		OK:         true,
-		CEXBalance: bal,
-	})
-}
-
-func (s *WebServer) apiArchivedRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.mm.ArchivedRuns()
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error getting archived runs: %w", err))
-		return
-	}
-
-	writeJSON(w, &struct {
-		OK   bool                  `json:"ok"`
-		Runs []*mm.MarketMakingRun `json:"runs"`
-	}{
-		OK:   true,
-		Runs: runs,
-	})
-}
-
-func (s *WebServer) apiRunLogs(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		StartTime int64              `json:"startTime"`
-		Market    *mm.MarketWithHost `json:"market"`
-		N         uint64             `json:"n"`
-		RefID     *uint64            `json:"refID,omitempty"`
-		Filters   *mm.RunLogFilters  `json:"filters,omitempty"`
-	}
-	if !readPost(w, r, &req) {
-		return
-	}
-
-	if req.Market == nil {
-		s.writeAPIError(w, errors.New("market missing"))
-		return
-	}
-
-	logs, updatedLogs, overview, err := s.mm.RunLogs(req.StartTime, req.Market, req.N, req.RefID, req.Filters)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error getting run logs: %w", err))
-		return
-	}
-
-	writeJSON(w, &struct {
-		OK          bool                        `json:"ok"`
-		Overview    *mm.MarketMakingRunOverview `json:"overview"`
-		Logs        []*mm.MarketMakingEvent     `json:"logs"`
-		UpdatedLogs []*mm.MarketMakingEvent     `json:"updatedLogs"`
-	}{
-		OK:          true,
-		Overview:    overview,
-		Logs:        logs,
-		UpdatedLogs: updatedLogs,
-	})
-}
-
-func (s *WebServer) apiCEXBook(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host    string `json:"host"`
-		BaseID  uint32 `json:"baseID"`
-		QuoteID uint32 `json:"quoteID"`
-	}
-	if !readPost(w, r, &req) {
-		return
-	}
-	buys, sells, err := s.mm.CEXBook(req.Host, req.BaseID, req.QuoteID)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error CEX Book: %w", err))
-		return
-	}
-
-	writeJSON(w, &struct {
-		OK   bool            `json:"ok"`
-		Book *core.OrderBook `json:"book"`
-	}{
-		OK: true,
-		Book: &core.OrderBook{
-			Buys:  buys,
-			Sells: sells,
-		},
-	})
-
-}
-
 func (s *WebServer) apiStakeStatus(w http.ResponseWriter, r *http.Request) {
 	var assetID uint32
 	if !readPost(w, r, &assetID) {
@@ -1196,60 +1029,6 @@ func (s *WebServer) apiStakeStatus(w http.ResponseWriter, r *http.Request) {
 		ProposalsMeta: &proposalsMeta{
 			ProposalsInProgress: proposalsInProgress,
 		},
-	})
-}
-
-func (s *WebServer) apiAvailableBalances(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Market     *mm.MarketWithHost `json:"market"`
-		CEXBaseID  uint32             `json:"cexBaseID"`
-		CEXQuoteID uint32             `json:"cexQuoteID"`
-		CEXName    *string            `json:"cexName,omitempty"`
-	}
-	if !readPost(w, r, &req) {
-		return
-	}
-	dexBalances, cexBalances, err := s.mm.AvailableBalances(req.Market, req.CEXBaseID, req.CEXQuoteID, req.CEXName)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error fetching available balances: %w", err))
-		return
-	}
-
-	writeJSON(w, &struct {
-		OK          bool              `json:"ok"`
-		DEXBalances map[uint32]uint64 `json:"dexBalances"`
-		CEXBalances map[uint32]uint64 `json:"cexBalances"`
-	}{
-		OK:          true,
-		DEXBalances: dexBalances,
-		CEXBalances: cexBalances,
-	})
-}
-
-func (s *WebServer) apiMaxFundingFees(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Market            *mm.MarketWithHost `json:"market"`
-		MaxBuyPlacements  uint32             `json:"maxBuyPlacements"`
-		MaxSellPlacements uint32             `json:"maxSellPlacements"`
-		BaseOptions       map[string]string  `json:"baseOptions"`
-		QuoteOptions      map[string]string  `json:"quoteOptions"`
-	}
-	if !readPost(w, r, &req) {
-		return
-	}
-	buyFees, sellFees, err := s.mm.MaxFundingFees(req.Market, req.MaxBuyPlacements, req.MaxSellPlacements, req.BaseOptions, req.QuoteOptions)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error getting max funding fees: %w", err))
-		return
-	}
-	writeJSON(w, &struct {
-		OK       bool   `json:"ok"`
-		BuyFees  uint64 `json:"buyFees"`
-		SellFees uint64 `json:"sellFees"`
-	}{
-		OK:       true,
-		BuyFees:  buyFees,
-		SellFees: sellFees,
 	})
 }
 
@@ -1392,131 +1171,6 @@ func (s *WebServer) apiConfigureMixer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, simpleAck())
 }
 
-func (s *WebServer) apiStartMarketMakingBot(w http.ResponseWriter, r *http.Request) {
-	var form struct {
-		Config *mm.MarketWithHost `json:"config"`
-		AppPW  encode.PassBytes   `json:"appPW"`
-	}
-	defer form.AppPW.Clear()
-	if !readPost(w, r, &form) {
-		s.writeAPIError(w, fmt.Errorf("failed to read form"))
-		return
-	}
-	appPW, err := s.resolvePass(form.AppPW, r)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
-		return
-	}
-	defer zero(appPW)
-	if form.Config == nil {
-		s.writeAPIError(w, errors.New("config missing"))
-		return
-	}
-	if err = s.mm.StartBot(form.Config, nil, appPW, true); err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
-
-	writeJSON(w, simpleAck())
-}
-
-func (s *WebServer) apiStopMarketMakingBot(w http.ResponseWriter, r *http.Request) {
-	var form struct {
-		Market *mm.MarketWithHost `json:"market"`
-	}
-	if !readPost(w, r, &form) {
-		s.writeAPIError(w, fmt.Errorf("failed to read form"))
-		return
-	}
-	if form.Market == nil {
-		s.writeAPIError(w, errors.New("market missing"))
-		return
-	}
-	if err := s.mm.StopBot(form.Market); err != nil {
-		s.writeAPIError(w, fmt.Errorf("error stopping mm bot %q: %v", form.Market, err))
-		return
-	}
-	writeJSON(w, simpleAck())
-}
-
-func (s *WebServer) apiUpdateCEXConfig(w http.ResponseWriter, r *http.Request) {
-	var updatedCfg *mm.CEXConfig
-	if !readPost(w, r, &updatedCfg) {
-		s.writeAPIError(w, fmt.Errorf("failed to read config"))
-		return
-	}
-
-	if err := s.mm.UpdateCEXConfig(updatedCfg); err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
-
-	writeJSON(w, simpleAck())
-}
-
-func (s *WebServer) apiUpdateBotConfig(w http.ResponseWriter, r *http.Request) {
-	var updatedCfg *mm.BotConfig
-	if !readPost(w, r, &updatedCfg) {
-		s.writeAPIError(w, fmt.Errorf("failed to read config"))
-		return
-	}
-
-	if err := s.mm.UpdateBotConfig(updatedCfg); err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
-
-	writeJSON(w, simpleAck())
-}
-
-func (s *WebServer) apiUpdateRunningBot(w http.ResponseWriter, r *http.Request) {
-	var form struct {
-		Cfg              *mm.BotConfig           `json:"cfg"`
-		AutoRebalanceCfg *mm.AutoRebalanceConfig `json:"autoRebalanceCfg"`
-		Diffs            *mm.BotInventoryDiffs   `json:"diffs"`
-	}
-	if !readPost(w, r, &form) {
-		s.writeAPIError(w, fmt.Errorf("failed to read config"))
-		return
-	}
-
-	if err := s.mm.UpdateRunningBotCfg(form.Cfg, form.Diffs, form.AutoRebalanceCfg, true); err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
-
-	writeJSON(w, simpleAck())
-}
-
-func (s *WebServer) apiRemoveBotConfig(w http.ResponseWriter, r *http.Request) {
-	var form struct {
-		Host    string `json:"host"`
-		BaseID  uint32 `json:"baseID"`
-		QuoteID uint32 `json:"quoteID"`
-	}
-	if !readPost(w, r, &form) {
-		s.writeAPIError(w, fmt.Errorf("failed to read form"))
-		return
-	}
-
-	if err := s.mm.RemoveBotConfig(form.Host, form.BaseID, form.QuoteID); err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
-
-	writeJSON(w, simpleAck())
-}
-
-func (s *WebServer) apiMarketMakingStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, &struct {
-		OK     bool       `json:"ok"`
-		Status *mm.Status `json:"status"`
-	}{
-		OK:     true,
-		Status: s.mm.Status(),
-	})
-}
-
 func (s *WebServer) apiTxHistory(w http.ResponseWriter, r *http.Request) {
 	var form struct {
 		asset.TxHistoryRequest
@@ -1610,41 +1264,6 @@ func (s *WebServer) apiWalletLogFilePath(w http.ResponseWriter, r *http.Request)
 	}{
 		OK:   true,
 		Path: logFilePath,
-	})
-}
-
-func (s *WebServer) redeemGameCode(w http.ResponseWriter, r *http.Request) {
-	var form struct {
-		Code  dex.Bytes        `json:"code"`
-		Msg   string           `json:"msg"`
-		AppPW encode.PassBytes `json:"appPW"`
-	}
-	if !readPost(w, r, &form) {
-		return
-	}
-	defer form.AppPW.Clear()
-	appPW, err := s.resolvePass(form.AppPW, r)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
-		return
-	}
-	coinID, win, err := s.core.RedeemGeocode(appPW, form.Code, form.Msg)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("redemption error: %w", err))
-		return
-	}
-	const dcrBipID = 42
-	coinIDString, _ := asset.DecodeCoinID(dcrBipID, coinID)
-	writeJSON(w, &struct {
-		OK         bool      `json:"ok"`
-		CoinID     dex.Bytes `json:"coinID"`
-		CoinString string    `json:"coinString"`
-		Win        uint64    `json:"win"`
-	}{
-		OK:         true,
-		CoinID:     coinID,
-		CoinString: coinIDString,
-		Win:        win,
 	})
 }
 

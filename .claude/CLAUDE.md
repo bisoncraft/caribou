@@ -20,12 +20,14 @@ This is a new wallet based on **Bison Wallet**, without the DCRDEX trading/excha
 ### Out of scope — do not modify or extend
 - `server/` — DCRDEX server (epoch management, order matching, PostgreSQL DB)
 - `tatanka/` — Mesh network (separate repo)
-- `client/mm/` — Market-making and arbitrage
+- `client/mm/libxc/` — CEX exchange connectors (Binance, Coinbase, MEXC, Bitget); do not touch
 - `client/orderbook/` — DEX order book management
 - `client/comms/` — WebSocket connectivity to DEX servers
 - `dex/order/` — DEX order types
 - `dex/msgjson/` — DEX wire protocol messages
 - `dex/market.go` — Market/lot-size definitions
+
+Note: `client/mm/` top-level files (mm.go, config.go, exchange_adaptor.go, event_log.go, etc.) are **in scope for removal** as part of the DEX trading layer cleanup. Delete or gut them to unblock `core/types.go` cleanup.
 
 ## Common Commands
 

@@ -16,7 +16,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"decred.org/dcrdex/client/asset"
 	"decred.org/dcrdex/client/core"
@@ -62,40 +61,31 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 }
 
 type TCore struct {
-	clientCore       // This is here so we don't have to implement core methods we're not testing
-	balanceErr       error
-	syncFeed         core.BookFeed
-	syncErr          error
-	postBondErr      error
-	loginErr         error
-	logoutErr        error
-	initErr          error
-	isInited         bool
-	getDEXConfigErr  error
-	createWalletErr  error
-	openWalletErr    error
-	closeWalletErr   error
-	rescanWalletErr  error
-	sendErr          error
-	notHas           bool
-	notRunning       bool
-	notOpen          bool
-	rateSourceErr    error
-	estFee           uint64
-	estFeeErr        error
-	validAddr        bool
-	walletDisabled   bool
-	walletStatusErr  error
-	deletedRecords   int
-	deleteRecordsErr error
-	tradeErr         error
-	notes            []*db.Notification
-	notesErr         error
+	clientCore      // This is here so we don't have to implement core methods we're not testing
+	balanceErr      error
+	loginErr        error
+	logoutErr       error
+	initErr         error
+	isInited        bool
+	createWalletErr error
+	openWalletErr   error
+	closeWalletErr  error
+	rescanWalletErr error
+	sendErr         error
+	notHas          bool
+	notRunning      bool
+	notOpen         bool
+	rateSourceErr   error
+	estFee          uint64
+	estFeeErr       error
+	validAddr       bool
+	walletDisabled  bool
+	walletStatusErr error
+	notes           []*db.Notification
+	notesErr        error
 }
 
-func (c *TCore) Network() dex.Network                         { return dex.Mainnet }
-func (c *TCore) Exchanges() map[string]*core.Exchange         { return nil }
-func (c *TCore) Exchange(host string) (*core.Exchange, error) { return nil, nil }
+func (c *TCore) Network() dex.Network { return dex.Mainnet }
 func (c *TCore) ToggleRateSourceStatus(src string, disable bool) error {
 	return c.rateSourceErr
 }
@@ -185,9 +175,6 @@ func (c *TCore) RecoverWallet(uint32, []byte, bool) error {
 func (c *TCore) WalletRestorationInfo(pw []byte, assetID uint32) ([]*asset.WalletRestoration, error) {
 	return nil, nil
 }
-func (c *TCore) DeleteArchivedRecordsWithBackup(endDateTime *time.Time, saveMatchesToFile, saveOrdersToFile bool) (string, int, error) {
-	return "/path/to/records", c.deletedRecords, c.deleteRecordsErr
-}
 func (c *TCore) WalletPeers(assetID uint32) ([]*asset.WalletPeer, error) {
 	return nil, nil
 }
@@ -200,7 +187,7 @@ func (c *TCore) RemoveWalletPeer(assetID uint32, address string) error {
 func (c *TCore) Notifications(n int) (notes, pokes []*db.Notification, _ error) {
 	return c.notes, []*db.Notification{}, c.notesErr
 }
-func (c *TCore) ApproveToken(appPW []byte, assetID uint32, dexAddr string, onConfirm func()) (string, error) {
+func (c *TCore) ApproveToken(appPW []byte, assetID uint32, onConfirm func()) (string, error) {
 	return "", nil
 }
 func (c *TCore) UnapproveToken(appPW []byte, assetID uint32, version uint32) (string, error) {
@@ -243,10 +230,6 @@ func (c *TCore) FundsMixingStats(assetID uint32) (*asset.FundsMixingStats, error
 
 func (c *TCore) ConfigureFundsMixer(appPW []byte, assetID uint32, enabled bool) error {
 	return nil
-}
-
-func (c *TCore) RedeemGeocode(appPW, code []byte, msg string) (dex.Bytes, uint64, error) {
-	return nil, 0, nil
 }
 
 func (*TCore) SetLanguage(string) error             { return nil }
@@ -632,66 +615,6 @@ func (h *tHTTPHandler) ServeHTTP(_ http.ResponseWriter, req *http.Request) {
 	h.req = req
 }
 
-func TestOrderIDCtx(t *testing.T) {
-	hexOID := hex.EncodeToString(encode.RandomBytes(32))
-	req := (&http.Request{}).WithContext(context.WithValue(context.Background(), chi.RouteCtxKey, &chi.Context{
-		URLParams: chi.RouteParams{
-			Keys:   []string{"oid"},
-			Values: []string{hexOID},
-		},
-	}))
-
-	tNextHandler := &tHTTPHandler{}
-	handlerFunc := orderIDCtx(tNextHandler)
-	handlerFunc.ServeHTTP(nil, req)
-
-	reqCtx := tNextHandler.req.Context()
-	untypedOID := reqCtx.Value(ctxOID)
-	if untypedOID == nil {
-		t.Fatalf("oid not embedded in request context")
-	}
-	oidStr, ok := untypedOID.(string)
-	if !ok {
-		t.Fatalf("string type assertion failed")
-	}
-
-	if oidStr != hexOID {
-		t.Fatalf("wrong value embedded in request context. wanted %s, got %s", hexOID, oidStr)
-	}
-}
-
-func TestGetOrderIDCtx(t *testing.T) {
-	oid := encode.RandomBytes(32)
-	hexOID := hex.EncodeToString(oid)
-
-	r := (&http.Request{}).WithContext(context.WithValue(context.Background(), ctxOID, hexOID))
-
-	bytesOut, err := getOrderIDCtx(r)
-	if err != nil {
-		t.Fatalf("getOrderIDCtx error: %v", err)
-	}
-	if len(bytesOut) == 0 {
-		t.Fatalf("empty oid")
-	}
-	if !bytes.Equal(oid, bytesOut) {
-		t.Fatalf("wrong bytes. wanted %x, got %s", oid, bytesOut)
-	}
-
-	// Test some negative paths
-	for name, v := range map[string]any{
-		"nil":          nil,
-		"int":          5,
-		"wrong length": "abc",
-		"not hex":      "zyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxwzyxw",
-	} {
-		r := (&http.Request{}).WithContext(context.WithValue(context.Background(), ctxOID, v))
-		_, err := getOrderIDCtx(r)
-		if err == nil {
-			t.Fatalf("no error for %v", name)
-		}
-	}
-}
-
 func TestPasswordCache(t *testing.T) {
 	s, tCore, shutdown := newTServer(t, false)
 	defer shutdown()
@@ -900,28 +823,6 @@ func TestAPIToggleWalletStatus(t *testing.T) {
 	}
 }
 
-func TestAPIDeleteArchivedRecords(t *testing.T) {
-	s, tCore, shutdown := newTServer(t, false)
-	defer shutdown()
-	writer := new(TWriter)
-	reader := new(TReader)
-
-	var body *deleteRecordsForm
-	ensure := func(want string) {
-		ensureResponse(t, s.apiDeleteArchivedRecords, want, reader, writer, body, nil)
-	}
-
-	body = &deleteRecordsForm{
-		OlderThanMs: time.Now().UnixMilli(),
-	}
-
-	tCore.deletedRecords = 23
-	ensure(`{"ok":true,"archivedRecordsDeleted":23,"archivedRecordsPath":"/path/to/records"}`)
-
-	tCore.deleteRecordsErr = tErr
-	ensure(`{"ok":false,"msg":"expected dummy error"}`)
-}
-
 func TestAPITrade(t *testing.T) {
 	t.Skip("removed: DEX trading functionality")
 }
@@ -1058,7 +959,7 @@ func TestGetProposalTokenCtx(t *testing.T) {
 		"nil": nil,
 		"int": 5,
 	} {
-		r := (&http.Request{}).WithContext(context.WithValue(context.Background(), ctxOID, v))
+		r := (&http.Request{}).WithContext(context.WithValue(context.Background(), ctxProposalToken, v))
 		_, err := getProposalTokenCtx(r)
 		if err == nil {
 			t.Fatalf("no error for %v", name)

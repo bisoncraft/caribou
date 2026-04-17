@@ -63,8 +63,6 @@ import (
 	"decred.org/dcrdex/client/app"
 	"decred.org/dcrdex/client/asset"
 	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/client/mm"
-	"decred.org/dcrdex/client/rpcserver"
 	"decred.org/dcrdex/client/webserver"
 	"decred.org/dcrdex/dex"
 	"fyne.io/systray"
@@ -116,7 +114,7 @@ func mainCore() error {
 	syncDir := filepath.Join(cfg.AppData, cfg.Net.String())
 
 	// The --kill flag is a backup measure to end a background process (that
-	// presumably has active orders).
+	// presumably has active swaps).
 	if cfg.Kill {
 		sendKillSignal(syncDir)
 		return nil
@@ -185,42 +183,7 @@ func mainCore() error {
 		wg.Wait() // no-op with clean setup and shutdown
 	}()
 
-	// TODO: on shutdown, stop market making and wait for trades to be
-	// canceled.
-	marketMaker, err := mm.NewMarketMaker(clientCore, cfg.MMConfig.EventLogDBPath, cfg.BotConfigPath, logMaker.Logger("MM"))
-	if err != nil {
-		return fmt.Errorf("error creating market maker: %w", err)
-	}
-	cm := dex.NewConnectionMaster(marketMaker)
-	if err := cm.ConnectOnce(appCtx); err != nil {
-		return fmt.Errorf("error connecting market maker")
-	}
-	defer func() {
-		cancel()
-		cm.Wait()
-	}()
-
-	if cfg.RPCOn {
-		rpcSrv, err := rpcserver.New(cfg.RPC(clientCore, marketMaker, logMaker.Logger("RPC")))
-		if err != nil {
-			return fmt.Errorf("failed to create rpc server: %w", err)
-		}
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cm := dex.NewConnectionMaster(rpcSrv)
-			err := cm.Connect(appCtx)
-			if err != nil {
-				log.Errorf("Error starting rpc server: %v", err)
-				cancel()
-				return
-			}
-			cm.Wait()
-		}()
-	}
-
-	webSrv, err := webserver.New(cfg.Web(clientCore, marketMaker, logMaker.Logger("WEB"), utc))
+	webSrv, err := webserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
 	if err != nil {
 		return fmt.Errorf("failed creating web server: %w", err)
 	}
@@ -267,43 +230,15 @@ func mainCore() error {
 		}()
 	windowloop:
 		for {
-			var backgroundNoteSent bool
 			select {
 			case <-windowManager.zeroLeft:
 				if windowManager.persist.Load() {
 					continue // ignore
 				}
-			logout:
-				for {
-					err := clientCore.Logout()
-					if err == nil {
-						// Okay to quit.
-						break windowloop
-					}
-					if !errors.Is(err, core.ActiveOrdersLogoutErr) {
-						// Unknown error. Force shutdown.
-						log.Errorf("Core logout error: %v", err)
-						break windowloop
-					}
-					if !backgroundNoteSent {
-						sendDesktopNotification("Bison Wallet still running", "Bison Wallet is still resolving active DEX orders")
-						backgroundNoteSent = true
-					}
-					// Can't log out. Keep checking until either
-					//   1. We can log out. Exit the program.
-					//   2. The user reopens the window (via syncserver).
-					select {
-					case <-time.After(time.Minute):
-						// Try to log out again.
-						continue logout
-					case <-openC:
-						// re-open the window
-						openWindow()
-						continue windowloop
-					case <-appCtx.Done():
-						break windowloop
-					}
+				if err := clientCore.Logout(); err != nil {
+					log.Errorf("Core logout error: %v", err)
 				}
+				break windowloop
 			case <-appCtx.Done():
 				break windowloop
 			case <-openC:
@@ -497,7 +432,7 @@ func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struc
 	if logDirURL, err := app.FilePathToURL(logDirectory); err != nil {
 		log.Errorf("error constructing log directory URL: %v", err)
 	} else {
-		mLogs := systray.AddMenuItem("Open logs folder", "Open the folder with your DEX logs.")
+		mLogs := systray.AddMenuItem("Open logs folder", "Open the folder with your wallet logs.")
 		go func() {
 			for range mLogs.ClickedCh {
 				if err := browser.OpenURL(logDirURL); err != nil {
@@ -525,17 +460,17 @@ func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struc
 		}
 	}()
 
-	mQuit := systray.AddMenuItem("Force Quit", "Force Bison Wallet to close with active orders.")
+	mQuit := systray.AddMenuItem("Quit", "Shut down Bison Wallet.")
 	go func() {
 		for {
 			select {
 			case active := <-activeState:
 				if active {
 					mQuit.SetTitle("Force Quit")
-					mQuit.SetTooltip("Force Bison Wallet to close with active orders.")
+					mQuit.SetTooltip("Force Bison Wallet to close.")
 				} else {
 					mQuit.SetTitle("Quit")
-					mQuit.SetTooltip("Shutdown Bison Wallet. You have no active orders.")
+					mQuit.SetTooltip("Shut down Bison Wallet.")
 				}
 			case <-mQuit.ClickedCh:
 				mOpen.Disable()
