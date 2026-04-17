@@ -4,16 +4,16 @@
 package near
 
 import (
-	"encoding/hex"
 	"fmt"
 
 	"decred.org/dcrdex/client/asset"
 	"decred.org/dcrdex/dex"
+	"github.com/decred/base58"
 )
 
-// coin represents a NEAR transaction output.
+// coin represents a NEAR transaction.
 type coin struct {
-	txHash [32]byte
+	txHash [32]byte // raw 32-byte NEAR tx hash
 	value  uint64
 }
 
@@ -24,21 +24,23 @@ func (c *coin) ID() dex.Bytes {
 }
 
 func (c *coin) String() string {
-	return hex.EncodeToString(c.txHash[:])
+	return base58.Encode(c.txHash[:])
 }
 
 func (c *coin) Value() uint64 {
 	return c.value
 }
 
+// TxID returns the NEAR transaction hash as a base58 string, matching the
+// format used by NEAR explorers and RPC responses.
 func (c *coin) TxID() string {
-	return hex.EncodeToString(c.txHash[:])
+	return base58.Encode(c.txHash[:])
 }
 
-// decodeCoinID decodes a coin ID byte slice into a hex string.
+// decodeCoinID decodes a 32-byte coin ID into a base58 NEAR tx hash string.
 func decodeCoinID(coinID []byte) (string, error) {
 	if len(coinID) != 32 {
 		return "", fmt.Errorf("expected 32-byte coin ID, got %d bytes", len(coinID))
 	}
-	return hex.EncodeToString(coinID), nil
+	return base58.Encode(coinID), nil
 }

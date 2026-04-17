@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"decred.org/dcrdex/dex"
+	dexnear "decred.org/dcrdex/dex/networks/near"
 	"golang.org/x/net/proxy"
 )
 
@@ -145,6 +146,22 @@ func (c *rpcClient) viewAccount(accountID string) (*accountInfo, error) {
 	return &info, nil
 }
 
+func (c *rpcClient) viewAccountAt(accountID string, blockHeight uint64) (*accountInfo, error) {
+	result, err := c.call("query", map[string]interface{}{
+		"request_type": "view_account",
+		"block_id":     blockHeight,
+		"account_id":   accountID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var info accountInfo
+	if err := json.Unmarshal(result, &info); err != nil {
+		return nil, fmt.Errorf("error decoding account info: %w", err)
+	}
+	return &info, nil
+}
+
 // accessKeyInfo holds the response from a view_access_key query.
 type accessKeyInfo struct {
 	Nonce       uint64 `json:"nonce"`
@@ -171,13 +188,31 @@ func (c *rpcClient) viewAccessKey(accountID string, pubKeyBase58 string) (*acces
 
 // blockInfo holds selected fields from a block response.
 type blockInfo struct {
-	Header blockHeader `json:"header"`
+	Header blockHeader  `json:"header"`
+	Chunks []chunkRef   `json:"chunks"`
 }
 
 type blockHeader struct {
 	Height    uint64 `json:"height"`
 	Hash      string `json:"hash"`
 	Timestamp uint64 `json:"timestamp"` // nanoseconds
+}
+
+type chunkRef struct {
+	ChunkHash string `json:"chunk_hash"`
+	ShardID   int    `json:"shard_id"`
+}
+
+// chunkInfo holds selected fields from a chunk response.
+type chunkInfo struct {
+	Transactions []chunkTransaction `json:"transactions"`
+}
+
+type chunkTransaction struct {
+	Hash       string     `json:"hash"`
+	SignerID   string     `json:"signer_id"`
+	ReceiverID string     `json:"receiver_id"`
+	Actions    []txAction `json:"actions"`
 }
 
 func (c *rpcClient) getBlock(finality string) (*blockInfo, error) {
@@ -194,18 +229,74 @@ func (c *rpcClient) getBlock(finality string) (*blockInfo, error) {
 	return &info, nil
 }
 
+func (c *rpcClient) getBlockByHash(blockHash string) (*blockInfo, error) {
+	result, err := c.call("block", map[string]interface{}{
+		"block_id": blockHash,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var info blockInfo
+	if err := json.Unmarshal(result, &info); err != nil {
+		return nil, fmt.Errorf("error decoding block info: %w", err)
+	}
+	return &info, nil
+}
+
+func (c *rpcClient) getBlockByHeight(height uint64) (*blockInfo, error) {
+	result, err := c.call("block", map[string]interface{}{
+		"block_id": height,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var info blockInfo
+	if err := json.Unmarshal(result, &info); err != nil {
+		return nil, fmt.Errorf("error decoding block info: %w", err)
+	}
+	return &info, nil
+}
+
+func (c *rpcClient) getChunk(chunkHash string) (*chunkInfo, error) {
+	result, err := c.call("chunk", map[string]interface{}{
+		"chunk_id": chunkHash,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var info chunkInfo
+	if err := json.Unmarshal(result, &info); err != nil {
+		return nil, fmt.Errorf("error decoding chunk info: %w", err)
+	}
+	return &info, nil
+}
+
 // txResult holds the response from a transaction query or broadcast.
 type txResult struct {
-	Status             txStatus           `json:"status"`
-	Transaction        txTransaction      `json:"transaction"`
-	TransactionOutcome json.RawMessage    `json:"transaction_outcome"`
+	Status             txStatus       `json:"status"`
+	Transaction        txTransaction  `json:"transaction"`
+	TransactionOutcome txOutcomeBlock `json:"transaction_outcome"`
 }
 
 type txTransaction struct {
-	Hash       string          `json:"hash"`
-	SignerID   string          `json:"signer_id"`
-	ReceiverID string          `json:"receiver_id"`
-	Actions    json.RawMessage `json:"actions"`
+	Hash       string     `json:"hash"`
+	SignerID   string     `json:"signer_id"`
+	ReceiverID string     `json:"receiver_id"`
+	Actions    []txAction `json:"actions"`
+}
+
+// txAction represents a NEAR transaction action. Transfer actions are
+// deserialized into the Deposit field; other action types are ignored.
+type txAction struct {
+	Transfer *txTransfer `json:"Transfer,omitempty"`
+}
+
+type txTransfer struct {
+	Deposit string `json:"deposit"` // yoctoNEAR as decimal string
+}
+
+type txOutcomeBlock struct {
+	BlockHash string `json:"block_hash"`
 }
 
 type txStatus struct {
@@ -217,16 +308,19 @@ func (s *txStatus) isSuccess() bool {
 	return s.SuccessValue != nil && s.Failure == nil
 }
 
-func (c *rpcClient) broadcastTxCommit(signedTxBase64 string) (*txResult, error) {
-	result, err := c.call("broadcast_tx_commit", []string{signedTxBase64})
-	if err != nil {
-		return nil, err
+// transferAmount returns the total transfer amount in the transaction
+// actions, in drops.
+func (r *txResult) transferAmount() uint64 {
+	var total uint64
+	for _, a := range r.Transaction.Actions {
+		if a.Transfer != nil {
+			yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
+			if ok {
+				total += dexnear.YoctoToDrops(yocto)
+			}
+		}
 	}
-	var res txResult
-	if err := json.Unmarshal(result, &res); err != nil {
-		return nil, fmt.Errorf("error decoding tx result: %w", err)
-	}
-	return &res, nil
+	return total
 }
 
 func (c *rpcClient) broadcastTxAsync(signedTxBase64 string) (string, error) {

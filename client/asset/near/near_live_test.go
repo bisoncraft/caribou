@@ -252,22 +252,33 @@ func TestLiveSend(t *testing.T) {
 		t.Errorf("coin ID length = %d, want 32", len(coin.ID()))
 	}
 
-	// Verify recipient balance on-chain.
-	time.Sleep(2 * time.Second)
-	recipInfo, err := w.rpc.viewAccount(recipient)
-	if err != nil {
-		t.Fatalf("viewAccount error for recipient: %v", err)
+	// Wait for the async broadcast to be processed on-chain.
+	t.Log("Waiting for send to confirm...")
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case <-time.After(time.Second):
+			recipInfo, err := w.rpc.viewAccount(recipient)
+			if err != nil {
+				continue // Account might not exist yet.
+			}
+			recipYocto, ok := parseYoctoNEAR(recipInfo.Amount)
+			if !ok {
+				continue
+			}
+			recipDrops := dexnear.YoctoToDrops(recipYocto)
+			if recipDrops > 0 {
+				t.Logf("Recipient balance: %d drops (%.4f NEAR)", recipDrops, float64(recipDrops)/1e8)
+				if recipDrops < sendDrops/2 {
+					t.Errorf("recipient balance %d too low, expected ~%d", recipDrops, sendDrops)
+				}
+				goto sendConfirmed
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for recipient balance")
+		}
 	}
-	recipYocto, ok := parseYoctoNEAR(recipInfo.Amount)
-	if !ok {
-		t.Fatalf("failed to parse recipient balance")
-	}
-	recipDrops := dexnear.YoctoToDrops(recipYocto)
-	t.Logf("Recipient balance: %d drops (%.4f NEAR)", recipDrops, float64(recipDrops)/1e8)
-
-	if recipDrops < sendDrops/2 {
-		t.Errorf("recipient balance %d too low, expected ~%d", recipDrops, sendDrops)
-	}
+sendConfirmed:
 
 	// Verify sender balance decreased.
 	balAfter, err := w.Balance()
@@ -506,29 +517,145 @@ func TestLiveWalletTransaction(t *testing.T) {
 	txID := coin.TxID()
 	t.Logf("Sent tx: %s", txID)
 
-	// Query the transaction.
+	// The tx is broadcast asynchronously. It should appear as pending
+	// immediately after send.
+	pending := w.PendingTransactions(ctx)
+	t.Logf("Pending transactions immediately after send: %d", len(pending))
+	if len(pending) == 0 {
+		t.Error("expected at least 1 pending tx after async send")
+	}
+
+	// The tx should be in the local DB.
 	wtx, err := w.WalletTransaction(ctx, txID)
 	if err != nil {
-		// The tx hash we store is the sha256 of the serialized tx, which
-		// is not the same as NEAR's transaction hash. This query may fail
-		// since NEAR RPC expects the NEAR tx hash format. Log it as info
-		// rather than failing.
-		t.Logf("WalletTransaction query returned error (expected for now): %v", err)
-		return
+		t.Fatalf("WalletTransaction error: %v", err)
 	}
-	t.Logf("WalletTransaction: type=%d id=%s confirmed=%v", wtx.Type, wtx.ID, wtx.Confirmed)
+	t.Logf("WalletTransaction right after send: type=%d id=%s confirmed=%v", wtx.Type, wtx.ID, wtx.Confirmed)
+	if wtx.Type != asset.Send {
+		t.Errorf("expected Send type, got %d", wtx.Type)
+	}
 
-	// Pending transactions should be empty (our sends are synchronous via
-	// broadcast_tx_commit).
-	pending := w.PendingTransactions(ctx)
-	t.Logf("Pending transactions: %d", len(pending))
+	// Wait for the tip poller to confirm the transaction.
+	t.Log("Waiting for tx confirmation via tip poller...")
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case <-time.After(tipPollInterval):
+			wtx, err = w.WalletTransaction(ctx, txID)
+			if err != nil {
+				t.Fatalf("WalletTransaction poll error: %v", err)
+			}
+			if wtx.Confirmed {
+				t.Logf("Transaction confirmed at block %d", wtx.BlockNumber)
+				goto confirmed
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for tx confirmation")
+		}
+	}
+confirmed:
 
-	// TxHistory should return empty for now (not implemented).
-	hist, err := w.TxHistory(nil)
+	// After confirmation, pending list should be empty.
+	pending = w.PendingTransactions(ctx)
+	t.Logf("Pending transactions after confirmation: %d", len(pending))
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending txs after confirmation, got %d", len(pending))
+	}
+
+	// TxHistory should contain the confirmed tx.
+	hist, err := w.TxHistory(&asset.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("TxHistory error: %v", err)
 	}
 	t.Logf("TxHistory: %d txs", len(hist.Txs))
+	if len(hist.Txs) == 0 {
+		t.Error("expected at least 1 tx in history after confirmation")
+	} else {
+		tx0 := hist.Txs[0]
+		t.Logf("TxHistory[0]: id=%s type=%d amount=%d confirmed=%v block=%d",
+			tx0.ID, tx0.Type, tx0.Amount, tx0.Confirmed, tx0.BlockNumber)
+		if tx0.Amount != 1e8 {
+			t.Errorf("expected amount 1e8, got %d", tx0.Amount)
+		}
+		if !tx0.Confirmed {
+			t.Error("expected tx to be confirmed in history")
+		}
+	}
+}
+
+func TestLiveReceiveDetection(t *testing.T) {
+	w, pw := createTestWallet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	noteChan := make(chan asset.WalletNotification, 128)
+	w.emit = asset.NewWalletEmitter(noteChan, BipID, tLogger)
+
+	wg, err := w.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect error: %v", err)
+	}
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
+
+	if err := w.Unlock(pw); err != nil {
+		t.Fatalf("Unlock error: %v", err)
+	}
+
+	addr, _ := w.DepositAddress()
+
+	// Fund the account so it exists on-chain (required for balance comparison).
+	sendFromSandbox(t, addr, "10")
+	time.Sleep(3 * time.Second)
+
+	// Wait for the tip poller to pick up the initial funding and advance
+	// lastScannedHeight past it.
+	time.Sleep(tipPollInterval * 2)
+
+	// Drain any existing notifications.
+	for len(noteChan) > 0 {
+		<-noteChan
+	}
+
+	// Send another deposit. The scanner should detect this as a receive.
+	sendFromSandbox(t, addr, "5")
+
+	t.Log("Waiting for receive detection...")
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case note := <-noteChan:
+			if txNote, ok := note.(*asset.TransactionNote); ok {
+				if txNote.Transaction.Type == asset.Receive {
+					t.Logf("Detected receive: id=%s amount=%d drops",
+						txNote.Transaction.ID, txNote.Transaction.Amount)
+					// Verify it's in tx history.
+					hist, err := w.TxHistory(&asset.TxHistoryRequest{N: 10})
+					if err != nil {
+						t.Fatalf("TxHistory error: %v", err)
+					}
+					found := false
+					for _, tx := range hist.Txs {
+						if tx.ID == txNote.Transaction.ID {
+							found = true
+							if tx.Type != asset.Receive {
+								t.Errorf("expected Receive type, got %d", tx.Type)
+							}
+							break
+						}
+					}
+					if !found {
+						t.Error("receive tx not found in TxHistory")
+					}
+					return
+				}
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for receive detection")
+		}
+	}
 }
 
 func TestLiveStandardSendFee(t *testing.T) {
@@ -565,9 +692,10 @@ func TestLiveInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeCoinID error: %v", err)
 	}
-	if decoded != hex.EncodeToString(coinID) {
-		t.Errorf("DecodeCoinID = %q, want %q", decoded, hex.EncodeToString(coinID))
+	if decoded == "" {
+		t.Error("DecodeCoinID returned empty string")
 	}
+	t.Logf("DecodeCoinID: %s", decoded)
 
 	_, err = drv.DecodeCoinID([]byte{1, 2, 3})
 	if err == nil {

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"decred.org/dcrdex/client/asset"
 	"decred.org/dcrdex/dex/encode"
 	dexnear "decred.org/dcrdex/dex/networks/near"
 )
@@ -141,26 +140,29 @@ func TestCoinID(t *testing.T) {
 
 	c := &coin{txHash: txHash, value: 12345}
 
-	if c.String() != hashHex {
-		t.Errorf("coin.String() = %q, want %q", c.String(), hashHex)
-	}
 	if c.Value() != 12345 {
 		t.Errorf("coin.Value() = %d, want 12345", c.Value())
-	}
-	if c.TxID() != hashHex {
-		t.Errorf("coin.TxID() = %q, want %q", c.TxID(), hashHex)
 	}
 	if len(c.ID()) != 32 {
 		t.Errorf("coin.ID() length = %d, want 32", len(c.ID()))
 	}
 
-	// DecodeCoinID round-trip.
+	// String and TxID should return base58.
+	txID := c.TxID()
+	if txID == "" {
+		t.Error("coin.TxID() is empty")
+	}
+	if c.String() != txID {
+		t.Errorf("coin.String() = %q != coin.TxID() = %q", c.String(), txID)
+	}
+
+	// DecodeCoinID round-trip: raw bytes -> base58 string.
 	decoded, err := decodeCoinID(c.ID())
 	if err != nil {
 		t.Fatalf("decodeCoinID error: %v", err)
 	}
-	if decoded != hashHex {
-		t.Errorf("decodeCoinID = %q, want %q", decoded, hashHex)
+	if decoded != txID {
+		t.Errorf("decodeCoinID = %q, want %q", decoded, txID)
 	}
 
 	// Invalid length.
@@ -338,10 +340,9 @@ func TestAuthenticator(t *testing.T) {
 	}
 
 	w := &NearWallet{
-		dataDir:    dir,
-		pubKey:     ed25519.PublicKey(kf.PubKey),
-		accountID:  hex.EncodeToString(kf.PubKey),
-		pendingTxs: make(map[string]*asset.WalletTransaction),
+		dataDir:   dir,
+		pubKey:    ed25519.PublicKey(kf.PubKey),
+		accountID: hex.EncodeToString(kf.PubKey),
 	}
 
 	if !w.Locked() {
