@@ -10,13 +10,11 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"mime"
 	"net"
 	"net/http"
@@ -73,9 +71,6 @@ const (
 	// The basis for content-security-policy. connect-src must be the final
 	// directive so that it can be reliably supplemented on startup.
 	baseCSP = "default-src 'none'; script-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; connect-src 'self'"
-	// site is the common prefix for the site resources with respect to this
-	// webserver package.
-	site = "site"
 	// companionTokenTTL is the time-to-live for an unclaimed companion
 	// token. If the companion app does not scan the QR code within this
 	// window the token is automatically revoked.
@@ -91,13 +86,6 @@ var (
 var (
 	log   dex.Logger
 	unbip = dex.BipIDSymbol
-
-	//go:embed site/src/html/*.tmpl
-	htmlTmplRes    embed.FS
-	htmlTmplSub, _ = fs.Sub(htmlTmplRes, "site/src/html") // unrooted slash separated path as per io/fs.ValidPath
-
-	//go:embed site/dist site/src/img site/src/font
-	staticSiteRes embed.FS
 
 	latestVersionRegex = regexp.MustCompile(`\d+(\.\d+)+`)
 )
