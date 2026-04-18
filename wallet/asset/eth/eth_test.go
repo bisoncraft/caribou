@@ -30,7 +30,7 @@ import (
 	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
 	swapv0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
 	swapv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
-	"github.com/bisoncraft/meshwallet/evmrelay"
+	"github.com/bisoncraft/meshwallet/dex/evmrelay"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"

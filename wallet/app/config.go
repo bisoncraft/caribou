@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/webserver"
+	"github.com/bisoncraft/meshwallet/wallet/appserver"
 	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/jessevdk/go-flags"
@@ -89,7 +89,7 @@ type Config struct {
 // Web creates a configuration for the webserver. This is a Config method
 // instead of a WebConfig method because Language is an app-level setting used
 // by both core and the web server.
-func (cfg *Config) Web(c *core.Core, log dex.Logger, utc bool) *webserver.Config {
+func (cfg *Config) Web(c *core.Core, log dex.Logger, utc bool) *appserver.Config {
 	addr := cfg.WebAddr
 	host, _, err := net.SplitHostPort(addr)
 	if err == nil && host != "" {
@@ -106,7 +106,7 @@ func (cfg *Config) Web(c *core.Core, log dex.Logger, utc bool) *webserver.Config
 		keyFile = filepath.Join(cfg.AppData, "web.key")
 	}
 
-	return &webserver.Config{
+	return &appserver.Config{
 		DataDir:         filepath.Join(cfg.AppData, "srv"),
 		Core:            c,
 		Addr:            cfg.WebAddr,

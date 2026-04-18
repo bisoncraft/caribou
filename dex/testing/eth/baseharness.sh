@@ -294,7 +294,7 @@ RELAYEOF
 
 # Build the relay binary.
 REPO_ROOT=$(cd "${HARNESS_DIR}/../../.." && pwd)
-go build -C "${REPO_ROOT}" -o ~/dextest/evmrelay ./evmrelay/cmd/evmrelay
+go build -C "${REPO_ROOT}" -o ~/dextest/evmrelay ./dex/evmrelay/cmd/evmrelay
 
 # Stop existing relay if running, then (re)start with updated config.
 if nc -z localhost 21232 2>/dev/null; then

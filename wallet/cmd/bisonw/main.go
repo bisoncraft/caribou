@@ -18,7 +18,7 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
 	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/webserver"
+	"github.com/bisoncraft/meshwallet/wallet/appserver"
 	"github.com/bisoncraft/meshwallet/dex"
 )
 
@@ -27,7 +27,7 @@ const appName = "bisonw"
 
 var (
 	appCtx, cancel = context.WithCancel(context.Background())
-	webserverReady = make(chan string, 1)
+	appserverReady = make(chan string, 1)
 	log            dex.Logger
 )
 
@@ -106,7 +106,7 @@ func runCore(cfg *app.Config) error {
 	}()
 
 	if !cfg.NoWeb {
-		webSrv, err := webserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
+		webSrv, err := appserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
 		if err != nil {
 			return fmt.Errorf("failed creating web server: %w", err)
 		}
@@ -121,11 +121,11 @@ func runCore(cfg *app.Config) error {
 				cancel()
 				return
 			}
-			webserverReady <- webSrv.Addr()
+			appserverReady <- webSrv.Addr()
 			cm.Wait()
 		}()
 	} else {
-		close(webserverReady)
+		close(appserverReady)
 	}
 
 	// Wait for everything to stop.

@@ -63,7 +63,7 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/app"
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/webserver"
+	"github.com/bisoncraft/meshwallet/wallet/appserver"
 	"github.com/bisoncraft/meshwallet/dex"
 	"fyne.io/systray"
 	webview "github.com/bisoncraft/webview_go"
@@ -183,7 +183,7 @@ func mainCore() error {
 		wg.Wait() // no-op with clean setup and shutdown
 	}()
 
-	webSrv, err := webserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
+	webSrv, err := appserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
 	if err != nil {
 		return fmt.Errorf("failed creating web server: %w", err)
 	}
@@ -402,7 +402,7 @@ func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struc
 	// var addr string
 	// var ok bool
 	// select {
-	// case addr, ok = <-webserverReady:
+	// case addr, ok = <-appserverReady:
 	// 	if !ok { // no webserver started
 	// 		fmt.Fprintln(os.Stderr, "Web server required!")
 	// 		cancel()

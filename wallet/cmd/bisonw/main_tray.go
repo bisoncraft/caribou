@@ -43,7 +43,7 @@ func onReady() {
 	var addr string
 	var ok bool
 	select {
-	case addr, ok = <-webserverReady:
+	case addr, ok = <-appserverReady:
 		if !ok { // no webserver started
 			fmt.Fprintln(os.Stderr, "Web server required!")
 			cancel()

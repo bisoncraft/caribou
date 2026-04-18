@@ -11,8 +11,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/intl"
-	"github.com/bisoncraft/meshwallet/wallet/webserver"
-	"github.com/bisoncraft/meshwallet/wallet/webserver/locales"
+	"github.com/bisoncraft/meshwallet/wallet/appserver"
+	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
 	"github.com/bisoncraft/meshwallet/dex"
 )
 
@@ -34,7 +34,7 @@ func mainErr() error {
 	}
 
 	core.RegisterTranslations()
-	webserver.RegisterTranslations()
+	appserver.RegisterTranslations()
 	locales.RegisterTranslations()
 
 	reports := intl.Report()
@@ -166,7 +166,7 @@ func printCoreLines(es []*WorksheetEntry) (entryErrs []string) {
 }
 
 func printJSLines(es []*WorksheetEntry) (entryErrs []string) {
-	fmt.Printf("\nJS Notifications. Add these to the appropriate map in wallet/webserver/jsintl.go, replacing the IDs with the appropriate variables\n------------\n")
+	fmt.Printf("\nJS Notifications. Add these to the appropriate map in wallet/appserver/jsintl.go, replacing the IDs with the appropriate variables\n------------\n")
 	for _, e := range es {
 		fmt.Printf("	%s: %s,\n", e.ID, formatReportEntry(e))
 	}
@@ -174,7 +174,7 @@ func printJSLines(es []*WorksheetEntry) (entryErrs []string) {
 }
 
 func printHTMLLines(es []*WorksheetEntry) (entryErrs []string) {
-	fmt.Printf("\nHTML Notifications. Add these to the language file in wallet/webserver/locales\n------------\n")
+	fmt.Printf("\nHTML Notifications. Add these to the language file in wallet/appserver/locales\n------------\n")
 	for _, e := range es {
 		fmt.Printf(`	"%s": %s,`+"\n", e.ID, formatReportEntry(e))
 	}

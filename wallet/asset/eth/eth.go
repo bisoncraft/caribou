@@ -34,7 +34,7 @@ import (
 	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
 	multibal "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/multibalance"
 	"github.com/bisoncraft/meshwallet/dex/utils"
-	"github.com/bisoncraft/meshwallet/evmrelay"
+	"github.com/bisoncraft/meshwallet/dex/evmrelay"
 	"github.com/bisoncraft/go-bip39"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/decred/dcrd/hdkeychain/v3"

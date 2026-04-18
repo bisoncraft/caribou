@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/evmrelay"
+	"github.com/bisoncraft/meshwallet/dex/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 )
 

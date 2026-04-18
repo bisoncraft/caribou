@@ -11,9 +11,9 @@ This is a new wallet based on **Bison Wallet**, without the DCRDEX trading/excha
 ### In scope
 - Per-chain wallet implementations (`wallet/asset/`)
 - Atomic swap execution: init, audit, redeem, refund (the settlement mechanics, not the trading layer)
-- Wallet UI (`wallet/webserver/`)
+- Wallet UI (`wallet/appserver/`)
 - Wallet database (`wallet/db/`)
-- EVM relay service (`evmrelay/`)
+- EVM relay service (`dex/evmrelay/`)
 - Shared cryptographic utilities and asset abstractions (`dex/encode`, `dex/encrypt`, `dex/keygen`, `dex/networks`, `dex/asset.go`)
 - Monero adaptor signature primitives (`internal/adaptorsigs/`)
 
@@ -40,7 +40,7 @@ cd wallet/cmd/bisonw && go build -o bisonw
 cd wallet/cmd/bisonw-desktop && go build -o bisonw-desktop
 
 # Build the EVM relay service
-cd evmrelay/cmd/evmrelay && go build -o evmrelay
+cd dex/evmrelay/cmd/evmrelay && go build -o evmrelay
 
 # Cross-platform release packaging
 ./pkg.sh
@@ -85,8 +85,8 @@ Entry point: `wallet/cmd/bisonw/main.go`.
 ### `dex/` — Shared Utilities (subset)
 Only the non-trading parts are in scope: `asset.go` (wallet interface), `encode/`, `encrypt/`, `keygen/`, `networks/`, and general-purpose utilities. Avoid changes to `order/`, `msgjson/`, and `market.go`.
 
-### `evmrelay/` — EVM Relay Service
-Manages Ethereum/EVM atomic swap contract interactions, fee estimation, and batch redemptions. Entry point: `evmrelay/cmd/evmrelay/main.go`.
+### `dex/evmrelay/` — EVM Relay Service
+Manages Ethereum/EVM atomic swap contract interactions, fee estimation, and batch redemptions. Entry point: `dex/evmrelay/cmd/evmrelay/main.go`.
 
 ### `internal/` — Internal Utilities
 - `adaptorsigs/` — Adaptor signature primitives (used for Monero atomic swaps)

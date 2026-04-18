@@ -64,6 +64,6 @@ dex/lexi/cmd/lexidbexplorer/lexidbexplorer
 client/asset/xmr/cmd/mkjson/mkjson
 client/cmd/verifymm/verifymm
 *.db
-evmrelay/cmd/evmrelay/evmrelay
+dex/evmrelay/cmd/evmrelay/evmrelay
 *.code-workspace
 .claude/settings.local.json
