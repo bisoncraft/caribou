@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/book"
-	"decred.org/dcrdex/server/matcher"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/book"
+	"github.com/bisoncraft/meshwallet/server/matcher"
 )
 
 // An arbitrary account ID for test orders.

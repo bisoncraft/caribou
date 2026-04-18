@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"os"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/asset"
-	_ "decred.org/dcrdex/server/asset/importall"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	_ "github.com/bisoncraft/meshwallet/server/asset/importall"
 )
 
 type coinDecoder func([]byte) (string, error)

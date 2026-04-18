@@ -6,13 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/fiatrates"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/tatanka/client/orderbook"
-	"decred.org/dcrdex/tatanka/client/trade"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/fiatrates"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/tatanka/client/orderbook"
+	"github.com/bisoncraft/meshwallet/tatanka/client/trade"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 type order struct {

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/poly1305"

@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 )
 
 var (

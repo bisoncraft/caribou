@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"decred.org/dcrdex/dex/lexi"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 type dbScore struct {

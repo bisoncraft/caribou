@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"sync"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/server/matcher"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/server/matcher"
 )
 
 // A updateAction classifies updates into how they affect the book or epoch

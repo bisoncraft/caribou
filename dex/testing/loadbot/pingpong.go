@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	"decred.org/dcrdex/client/core"
+	"github.com/bisoncraft/meshwallet/wallet/core"
 )
 
 // The pingPonger is a Trader that simply sends single-lot, mid-gap rate orders

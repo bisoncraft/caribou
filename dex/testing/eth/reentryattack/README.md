@@ -36,5 +36,5 @@ Then, the contract's hex in the newly created contract.go file must be used in
 the harness, which deploys the contract used for testing, by replacing the hex
 there and restarting the harness.
 
-Finally, the harness tests in client/asset/eth contains a test that should fail
+Finally, the harness tests in wallet/asset/eth contains a test that should fail
 and show that indeed funds can be siphoned from the vulnerable contract.

@@ -5,7 +5,7 @@ package pg
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex/candles"
+	"github.com/bisoncraft/meshwallet/dex/candles"
 )
 
 func TestCandles(t *testing.T) {

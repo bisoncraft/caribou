@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/feerates"
-	"decred.org/dcrdex/dex/fiatrates"
-	"decred.org/dcrdex/dex/lexi"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/tatanka/client/conn"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/feerates"
+	"github.com/bisoncraft/meshwallet/dex/fiatrates"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/tatanka/client/conn"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

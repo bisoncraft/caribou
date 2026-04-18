@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/order"
 )
 
 var randB = encode.RandomBytes

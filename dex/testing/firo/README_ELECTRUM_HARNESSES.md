@@ -95,7 +95,7 @@ The **electrum.sh** script first cleans part of the **~/dextest/electrum/firo/cl
 directory tree.
 
 The script then downloads a specific commit from:
- <https://github.com/firoorg/electrum-firo.git> to the ../client/electrum-repo directory.
+ <https://github.com/firoorg/electrum-firo.git> to the ../wallet/electrum-repo directory.
 
 It then creates a python virtual environment (venv) sandbox and installs the
 requesting python3 interpreter, latest version of pip and all required modules
@@ -103,7 +103,7 @@ from files in `contrib/requirements` directory into the sandbox. If any need bui
 this point.
 
 A prepared, empty but encrypted electrum wallet is copied to the electrum data
-directory at **~/dextest/electrum/firo/client/wallet/regtest/wallets**.
+directory at **~/dextest/electrum/firo/wallet/wallet/regtest/wallets**.
 
 The script starts the Electrum-Firo wallet client in CLI mode with debug level
 logging to stderr. Change STARTUP= in the script to "GUI" to start the Gui or

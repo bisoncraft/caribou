@@ -11,8 +11,8 @@ import (
 	"slices"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 // Error codes

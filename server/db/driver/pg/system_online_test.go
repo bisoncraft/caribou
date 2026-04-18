@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 const (

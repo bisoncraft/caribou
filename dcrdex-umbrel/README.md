@@ -15,7 +15,7 @@ git clone https://github.com/decred/dcrdex
 cd dcrdex
 git checkout release-v1.x.x
 docker buildx create --use
-docker buildx build -f client/Dockerfile \
+docker buildx build -f wallet/Dockerfile \
   --platform linux/arm64,linux/amd64 \
   --tag decred/dcrdex:v1.x.x \
   --output "type=registry"  .

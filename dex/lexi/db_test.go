@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 	v1badger "github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger/v4"
 )

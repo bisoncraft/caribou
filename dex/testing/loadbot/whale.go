@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/order"
 )
 
 // whale erradicaly pushes the market one way or another randomly with huge buys

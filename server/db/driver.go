@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sync"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 var (

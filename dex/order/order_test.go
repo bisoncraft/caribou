@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 var (

@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )

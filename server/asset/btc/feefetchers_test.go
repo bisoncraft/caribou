@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex/feeratefetcher"
+	"github.com/bisoncraft/meshwallet/dex/feeratefetcher"
 )
 
 func testSource(src *feeratefetcher.SourceConfig) {

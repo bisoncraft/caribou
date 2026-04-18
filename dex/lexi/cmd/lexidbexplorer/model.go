@@ -6,7 +6,7 @@ package main
 import (
 	"sort"
 
-	"decred.org/dcrdex/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dgraph-io/badger/v4"
 )

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	v0 "decred.org/dcrdex/dex/networks/erc20/contracts/v0"
+	v0 "github.com/bisoncraft/meshwallet/dex/networks/erc20/contracts/v0"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 

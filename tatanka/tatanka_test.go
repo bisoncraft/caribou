@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

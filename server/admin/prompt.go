@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 	"golang.org/x/term"
 )
 

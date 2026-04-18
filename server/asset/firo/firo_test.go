@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 var (

@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrutil/v4"
 	flags "github.com/jessevdk/go-flags"

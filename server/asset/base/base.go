@@ -6,11 +6,11 @@ package base
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbase "decred.org/dcrdex/dex/networks/base"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/eth"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/eth"
 )
 
 const BipID = 8453

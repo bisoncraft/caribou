@@ -9,7 +9,7 @@ market-making, or bond/fidelity-bond system.
 
 ## Phase 1 — Delete out-of-scope files, keep build green (DONE)
 
-Deleted from `client/core/`:
+Deleted from `wallet/core/`:
 
 | File | What it contained |
 |------|-------------------|
@@ -23,14 +23,14 @@ Deleted from `client/core/`:
 
 Compensating changes:
 
-- **`client/core/phase2stubs.go`** (new): stub implementations for every symbol
+- **`wallet/core/phase2stubs.go`** (new): stub implementations for every symbol
   removed above that is still referenced by surviving code. Stubs return errors
   or zero values; they exist only to satisfy the compiler while callers are
   removed in Phase 2.
-- **`client/core/core.go`**: removed struct fields, imports, and call-sites that
+- **`wallet/core/core.go`**: removed struct fields, imports, and call-sites that
   directly referenced the deleted files (books map, mesh fields, bondXPriv,
   bookie note handlers, watchBonds goroutine, etc.).
-- **`client/core/core_test.go`**: gutted ~15 test functions with `t.Skip` where
+- **`wallet/core/core_test.go`**: gutted ~15 test functions with `t.Skip` where
   the test body depended on deleted functionality; removed book-setup code from
   shared helpers.
 
@@ -41,7 +41,7 @@ Compensating changes:
 `phase2stubs.go` lists the surviving callers. Work through them package by
 package, removing dead call-sites until each stub can be deleted.
 
-### 2a. `client/core/core.go` — trading functions
+### 2a. `wallet/core/core.go` — trading functions
 
 These functions exist purely to support DEX order matching and can be deleted
 outright (or reduced to error stubs if the webserver/rpcserver interface still
@@ -66,7 +66,7 @@ requires them):
 - `upgradeConnection` (already removed `subPriceFeed` call)
 - `checkEpochResolution` (already removed bookie.send block)
 
-### 2b. `client/core/core.go` — DEX connection / server management
+### 2b. `wallet/core/core.go` — DEX connection / server management
 
 Evaluate whether any of these are needed for atomic swap coordination without
 a full trading session:
@@ -78,7 +78,7 @@ a full trading session:
   (bonds are a trading-layer concept)
 - `UpdateCert`, `UpdateDEXHost` — remove if DEX server connections are dropped
 
-### 2c. `client/core/types.go` — dead types
+### 2c. `wallet/core/types.go` — dead types
 
 After trading functions are removed, delete or trim:
 
@@ -89,7 +89,7 @@ After trading functions are removed, delete or trim:
 - `OrderFilter`, `Order` (DEX order type — distinct from swap records)
 - Bond-related fields in `Exchange`, `Account`, `User`
 
-### 2d. `client/webserver` — remove trading routes
+### 2d. `wallet/webserver` — remove trading routes
 
 HTTP/WebSocket handlers that drive the trading UI:
 
@@ -100,15 +100,15 @@ HTTP/WebSocket handlers that drive the trading UI:
   `/api/bondsfeeBuffer`
 - `/api/discoveracct`, `/api/getdexconfig`, `/api/adddex`
 - `/api/orders`, `/api/order/:oid`
-- Order-book WebSocket subscription handler in `client/websocket/`
+- Order-book WebSocket subscription handler in `wallet/websocket/`
 - Update `clientCore` interface to remove the methods above
 
-### 2e. `client/rpcserver` — remove trading RPC commands
+### 2e. `wallet/rpcserver` — remove trading RPC commands
 
 Mirror of 2d for the JSON-RPC server; remove command handlers and trim the
 `clientCore` interface.
 
-### 2f. `client/db` — evaluate order/bond tables
+### 2f. `wallet/db` — evaluate order/bond tables
 
 The BoltDB schema stores DEX orders and bonds. Decide whether to:
 - Drop those buckets entirely (breaking change for existing users)
@@ -121,11 +121,11 @@ Once all callers in 2a–2f are removed, `phase2stubs.go` should have no
 remaining references and can be deleted. Confirm with:
 
 ```
-grep -rn "phase2" client/
+grep -rn "phase2" wallet/
 ```
 
 (The file has no special marker; verify by attempting to delete it and
-checking that `go build ./client/...` still passes.)
+checking that `go build ./wallet/...` still passes.)
 
 ---
 
@@ -133,7 +133,7 @@ checking that `go build ./client/...` still passes.)
 
 - `server/` — DEX matching server
 - `tatanka/` — Mesh network (separate repository)
-- `client/mm/` — Market-making
-- `client/orderbook/` — Order book management
-- `client/comms/` — DEX WebSocket connectivity
+- `wallet/mm/` — Market-making
+- `wallet/orderbook/` — Order book management
+- `wallet/comms/` — DEX WebSocket connectivity
 - `dex/order/`, `dex/msgjson/`, `dex/market.go`

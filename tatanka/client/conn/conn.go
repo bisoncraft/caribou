@@ -17,14 +17,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/dexnet"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/tatanka"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
-	"decred.org/dcrdex/tatanka/tcp"
-	tcpclient "decred.org/dcrdex/tatanka/tcp/client"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/tatanka"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/tcp"
+	tcpclient "github.com/bisoncraft/meshwallet/tatanka/tcp/client"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

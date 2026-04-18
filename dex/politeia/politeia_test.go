@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 const proposalLimit = 400

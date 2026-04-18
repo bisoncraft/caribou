@@ -8,7 +8,7 @@ import (
 	"sort"
 	"sync"
 
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 // Booker specifies the orderbook interface.

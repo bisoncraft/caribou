@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
 	"github.com/gorilla/websocket"
 )
 

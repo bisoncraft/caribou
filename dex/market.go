@@ -107,7 +107,7 @@ func NewMarketInfo(base, quote uint32, lotSize, rateStep, epochDuration uint64, 
 
 // NewMarketInfoFromSymbols is like NewMarketInfo, but the base and quote assets
 // are identified by their symbols as defined in the
-// decred.org/dcrdex/server/asset package.
+// github.com/bisoncraft/meshwallet/server/asset package.
 func NewMarketInfoFromSymbols(base, quote string, lotSize, rateStep, epochDuration uint64, parcelSize uint32, marketBuyBuffer float64) (*MarketInfo, error) {
 	base = strings.ToLower(base)
 	baseID, found := BipSymbolID(base)

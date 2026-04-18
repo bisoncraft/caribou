@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 func TestCheckCurrentTimeZone(t *testing.T) {

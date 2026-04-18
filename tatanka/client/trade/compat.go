@@ -6,8 +6,8 @@ package trade
 import (
 	"math"
 
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 // FeeParameters combines the user's fee exposure settings with the fees per

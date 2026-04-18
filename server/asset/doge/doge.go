@@ -6,11 +6,11 @@ package doge
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	dexdoge "decred.org/dcrdex/dex/networks/doge"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	dexdoge "github.com/bisoncraft/meshwallet/dex/networks/doge"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
 	"decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/wallet/udb"
 	"github.com/decred/dcrd/chaincfg/chainhash"

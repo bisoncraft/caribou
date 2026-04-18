@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )

@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"math/big"
 
-	"decred.org/dcrdex/dex"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 )

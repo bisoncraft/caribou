@@ -16,10 +16,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"decred.org/dcrdex/dex"
-	basenet "decred.org/dcrdex/dex/networks/base"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	dexpolygon "decred.org/dcrdex/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/dex"
+	basenet "github.com/bisoncraft/meshwallet/dex/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
 	"github.com/decred/slog"
 )
 

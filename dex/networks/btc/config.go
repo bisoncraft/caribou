@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/btcsuite/btcd/btcutil"
 )
 

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/db"
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/db"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 	"github.com/davecgh/go-spew/spew"
 )
 

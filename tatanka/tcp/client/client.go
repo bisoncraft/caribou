@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/client/comms"
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/wallet/comms"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

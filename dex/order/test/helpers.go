@@ -8,8 +8,8 @@ import (
 	"math/rand"
 	"time"
 
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 const (

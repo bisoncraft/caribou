@@ -12,11 +12,11 @@ import (
 	"sort"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/db"
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/db"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 	"github.com/lib/pq"
 )
 

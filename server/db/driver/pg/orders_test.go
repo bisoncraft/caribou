@@ -13,8 +13,8 @@ import (
 	"regexp"
 	"testing"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/order"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/order"
 )
 
 func TestMain(m *testing.M) {

@@ -6,11 +6,11 @@ package dash
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	dexdash "decred.org/dcrdex/dex/networks/dash"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	dexdash "github.com/bisoncraft/meshwallet/dex/networks/dash"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

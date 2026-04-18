@@ -36,7 +36,7 @@ func ReadCloneParams(cloneParams *CloneParams) *chaincfg.Params {
 // CloneParams are the parameters needed by BTC-clone-based Backend and
 // ExchangeWallet implementations. Pass a *CloneParams to ReadCloneParams to
 // create a *chaincfg.Params for server/asset/btc.NewBTCClone and
-// client/asset/btc.BTCCloneWallet.
+// wallet/asset/btc.BTCCloneWallet.
 type CloneParams struct {
 	// Name defines a human-readable identifier for the network. e.g. "mainnet",
 	// "testnet4", or "regtest"

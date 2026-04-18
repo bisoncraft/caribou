@@ -8,13 +8,13 @@ import (
 	"context"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/wait"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/server/db"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/wait"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/server/db"
 )
 
 var (

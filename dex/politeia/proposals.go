@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
 	cv1 "github.com/decred/politeia/politeiawww/api/comments/v1"
 	rv1 "github.com/decred/politeia/politeiawww/api/records/v1"
 	tv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"

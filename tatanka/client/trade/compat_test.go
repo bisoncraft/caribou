@@ -6,8 +6,8 @@ package trade
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 func TestMinimumLotSize(t *testing.T) {

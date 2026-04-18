@@ -37,7 +37,7 @@ TRADING_WALLET2_PORT="19582"
 VSPD_WALLET_SEED="2db72efa55b9e6cce9c27dde9bea848c6199004f9b1ae2add3b04389495edb9c"
 export VSPD_WALLET_RPC_PORT="19590"
 
-# Address for testing with an internal wallet in client/assets/dcr
+# Address for testing with an internal wallet in wallet/assets/dcr
 VSP_HARNESS_TEST_ADDR="SsXsicdfL1jB2Rzu2UA7P2B9gnpqA9YGypw"
 
 VSPD_PORT="19591"

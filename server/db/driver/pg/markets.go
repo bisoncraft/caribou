@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/candles"
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/candles"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 )
 
 func loadMarkets(db sqlQueryer, marketsTableName string) ([]*dex.MarketInfo, error) {

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/dexnet"
 )
 
 const (

@@ -16,16 +16,16 @@ This checklist is designed to ensure a smooth and successful release process for
   - [ ] Push the changes to the remote repository
 - Version Update:
   - [ ] Ensure the version number follows semantic versioning (MAJOR.MINOR.PATCH)
-  - [ ] Update the version number in [client/app/version.go](../client/app/version.go)
+  - [ ] Update the version number in [wallet/app/version.go](../wallet/app/version.go)
   - [ ] Update the version number in [server/cmd/dcrdex/version.go](../server/cmd/dcrdex/version.go)
-  - [ ] Update the version number in [client/cmd/bwctl/version.go](../client/cmd/bwctl/version.go)
-  - [ ] Update the version number in [client/webserver/webserver_test.go](../client/webserver/webserver_test.go)
-  - [ ] Update the version number in [client/cmd/bisonw-desktop/electron/pkg.sh](../client/cmd/bisonw-desktop/electron/pkg.sh)
-  - [ ] Update the version number in [client/cmd/bisonw-desktop/electron/prepare.sh](../client/cmd/bisonw-desktop/electron/prepare.sh)
-  - [ ] Update the version number in [client/cmd/bisonw-desktop/linux/pkg-debian.sh](../client/cmd/bisonw-desktop/linux/pkg-debian.sh)
-  - [ ] Update the version number in [client/cmd/bisonw-desktop/winres.json](../client/cmd/bisonw-desktop/winres.json)
-  - [ ] Update the version number in [client/cmd/bisonw-desktop/windows/windows-msi/BisonWallet.wxs](../client/cmd/bisonw-desktop/windows/windows-msi/BisonWallet.wxs)
-  - [ ] Update the version number in [client/cmd/bisonw/winres.json](../client/cmd/bisonw/winres.json)
+  - [ ] Update the version number in [wallet/cmd/bwctl/version.go](../wallet/cmd/bwctl/version.go)
+  - [ ] Update the version number in [wallet/webserver/webserver_test.go](../wallet/webserver/webserver_test.go)
+  - [ ] Update the version number in [wallet/cmd/bisonw-desktop/electron/pkg.sh](../wallet/cmd/bisonw-desktop/electron/pkg.sh)
+  - [ ] Update the version number in [wallet/cmd/bisonw-desktop/electron/prepare.sh](../wallet/cmd/bisonw-desktop/electron/prepare.sh)
+  - [ ] Update the version number in [wallet/cmd/bisonw-desktop/linux/pkg-debian.sh](../wallet/cmd/bisonw-desktop/linux/pkg-debian.sh)
+  - [ ] Update the version number in [wallet/cmd/bisonw-desktop/winres.json](../wallet/cmd/bisonw-desktop/winres.json)
+  - [ ] Update the version number in [wallet/cmd/bisonw-desktop/windows/windows-msi/BisonWallet.wxs](../wallet/cmd/bisonw-desktop/windows/windows-msi/BisonWallet.wxs)
+  - [ ] Update the version number in [wallet/cmd/bisonw/winres.json](../wallet/cmd/bisonw/winres.json)
   - [ ] Update the version number in [pkg.sh](../pkg.sh)
 - Documentation:
   - [ ] Update the documentation to reflect any new features or changes

@@ -51,8 +51,8 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )

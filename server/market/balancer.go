@@ -6,9 +6,9 @@ package market
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/server/asset"
 )
 
 // PendingAccounter can view order-reserved funds for an account-based asset's

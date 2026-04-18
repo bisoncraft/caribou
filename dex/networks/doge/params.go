@@ -4,8 +4,8 @@
 package doge
 
 import (
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/networks/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )

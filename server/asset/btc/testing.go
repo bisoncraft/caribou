@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"testing"
 
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	"decred.org/dcrdex/server/asset"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 )

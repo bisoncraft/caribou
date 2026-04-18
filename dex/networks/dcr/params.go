@@ -3,7 +3,7 @@
 
 package dcr
 
-import "decred.org/dcrdex/dex"
+import "github.com/bisoncraft/meshwallet/dex"
 
 var UnitInfo = dex.UnitInfo{
 	AtomicUnit: "atoms",

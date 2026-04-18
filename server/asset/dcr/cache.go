@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	chainjson "github.com/decred/dcrd/rpc/jsonrpc/types/v4"
 )

@@ -4,8 +4,8 @@
 package trade
 
 import (
-	"decred.org/dcrdex/tatanka/client/orderbook"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/client/orderbook"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 // DesiredTrade is the parameters of a trade that the user wants to make.

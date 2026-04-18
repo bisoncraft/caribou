@@ -10,11 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/candles"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/server/matcher"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/candles"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/server/matcher"
 )
 
 var (

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/ethereum/go-ethereum/log"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"

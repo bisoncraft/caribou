@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/dex/utils"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/utils"
 )
 
 const stackerSpread = 50.0

@@ -7,7 +7,7 @@ Trader routines, each with their own *core.Core (actually, a *Mantle) and
 wallets.
 
 Build with server locktimes in mind.
-i.e. -ldflags "-X 'decred.org/dcrdex/dex.testLockTimeTaker=3m' -X 'decred.org/dcrdex/dex.testLockTimeMaker=6m'"
+i.e. -ldflags "-X 'github.com/bisoncraft/meshwallet/dex.testLockTimeTaker=3m' -X 'github.com/bisoncraft/meshwallet/dex.testLockTimeMaker=6m'"
 
 Supported assets are bch, btc, dash, dcr, doge, dgb, eth, firo, ltc, and zec.
 */
@@ -33,16 +33,16 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/client/asset"
-	_ "decred.org/dcrdex/client/asset/importall"
-	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/config"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	"decred.org/dcrdex/dex/version"
-	dexpolygon "decred.org/dcrdex/dex/networks/polygon"
-	dexsrv "decred.org/dcrdex/server/dex"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/config"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/dex/version"
+	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	dexsrv "github.com/bisoncraft/meshwallet/server/dex"
 	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 )
 

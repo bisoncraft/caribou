@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"decred.org/dcrdex/dex/utils"
+	"github.com/bisoncraft/meshwallet/dex/utils"
 	"github.com/btcsuite/btcd/wire"
 )
 

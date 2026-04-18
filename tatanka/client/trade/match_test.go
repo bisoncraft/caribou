@@ -6,9 +6,9 @@ package trade
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/tatanka/client/orderbook"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/tatanka/client/orderbook"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 func TestMatchBook(t *testing.T) {

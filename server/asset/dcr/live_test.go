@@ -31,9 +31,9 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	dexdcr "decred.org/dcrdex/dex/networks/dcr"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexdcr "github.com/bisoncraft/meshwallet/dex/networks/dcr"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	chainjson "github.com/decred/dcrd/rpc/jsonrpc/types/v4"
 	"github.com/decred/dcrd/wire"

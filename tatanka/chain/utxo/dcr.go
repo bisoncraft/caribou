@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/tatanka/chain"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/tatanka/chain"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrutil/v4"
 	chainjson "github.com/decred/dcrd/rpc/jsonrpc/types/v4"

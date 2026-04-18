@@ -20,8 +20,8 @@ cat > "${DCRDEX_DATA_DIR}/build" <<EOF
 #!/usr/bin/env bash
 cd ${HARNESS_DIR}/../../../server/cmd/dcrdex/
 go build -o ${DCRDEX_DATA_DIR}/dcrdex -ldflags \
-    "-X 'decred.org/dcrdex/dex.testLockTimeTaker=3m' \
-    -X 'decred.org/dcrdex/dex.testLockTimeMaker=6m'"
+    "-X 'github.com/bisoncraft/meshwallet/dex.testLockTimeTaker=3m' \
+    -X 'github.com/bisoncraft/meshwallet/dex.testLockTimeMaker=6m'"
 EOF
 chmod +x "${DCRDEX_DATA_DIR}/build"
 
@@ -30,8 +30,8 @@ cat > "${DCRDEX_DATA_DIR}/build-lock" <<EOF
 #!/usr/bin/env bash
 cd ${HARNESS_DIR}/../../../server/cmd/dcrdex/
 go build -o ${DCRDEX_DATA_DIR}/dcrdex -ldflags \
-    "-X 'decred.org/dcrdex/dex.testLockTimeTaker=\${1:-1m}' \
-    -X 'decred.org/dcrdex/dex.testLockTimeMaker=\${2:-2m}'"
+    "-X 'github.com/bisoncraft/meshwallet/dex.testLockTimeTaker=\${1:-1m}' \
+    -X 'github.com/bisoncraft/meshwallet/dex.testLockTimeMaker=\${2:-2m}'"
 EOF
 chmod +x "${DCRDEX_DATA_DIR}/build-lock"
 

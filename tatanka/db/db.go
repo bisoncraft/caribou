@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
 )
 
 const DBVersion = 0

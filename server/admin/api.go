@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
-	dexsrv "decred.org/dcrdex/server/dex"
-	"decred.org/dcrdex/server/market"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/account"
+	dexsrv "github.com/bisoncraft/meshwallet/server/dex"
+	"github.com/bisoncraft/meshwallet/server/market"
 	"github.com/go-chi/chi/v5"
 )
 

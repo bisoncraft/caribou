@@ -1,7 +1,7 @@
 package base
 
 import (
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // These are the chain IDs of the various base networks.

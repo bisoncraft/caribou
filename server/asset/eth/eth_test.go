@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/encode"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -933,7 +933,7 @@ func TestPoll(t *testing.T) {
 }
 
 func TestValidateSignature(t *testing.T) {
-	// "ok" values used are the same as tests in client/assets/eth.
+	// "ok" values used are the same as tests in wallet/assets/eth.
 	pkBytes := mustParseHex("04b911d1f39f7792e165767e35aa134083e2f70ac7de6945d7641a3015d09a54561b71112b8d60f63831f0e62c23c6921ec627820afedf8236155b9e9bd82b6523")
 	msg := []byte("msg")
 	sigBytes := mustParseHex("ffd26911d3fdaf11ac44801744f2df015a16539b6e688aff4cabc092b747466e7bc8036a03d1479a1570dd11bf042120301c34a65b237267720ef8a9e56f2eb1")

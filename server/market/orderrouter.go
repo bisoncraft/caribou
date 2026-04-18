@@ -12,15 +12,15 @@ import (
 	"math"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/dex/wait"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/server/matcher"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/wait"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/server/matcher"
 )
 
 // The AuthManager handles client-related actions, including authorization and

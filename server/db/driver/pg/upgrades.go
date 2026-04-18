@@ -12,10 +12,10 @@ import (
 	"regexp"
 	"strings"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 )
 
 const dbVersion = 8

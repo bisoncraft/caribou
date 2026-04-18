@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/server/account"
 	"github.com/decred/dcrd/crypto/blake256"
 )
 

@@ -1,11 +1,11 @@
-module decred.org/dcrdex/dex/testing/loadbot
+module github.com/bisoncraft/meshwallet/dex/testing/loadbot
 
 go 1.24.0
 
-replace decred.org/dcrdex => ../../../
+replace github.com/bisoncraft/meshwallet => ../../../
 
 require (
-	decred.org/dcrdex v0.0.0-20230206134810-8a482dd7caf1
+	github.com/bisoncraft/meshwallet v0.0.0-20230206134810-8a482dd7caf1
 	github.com/Shopify/toxiproxy/v2 v2.4.0
 )
 

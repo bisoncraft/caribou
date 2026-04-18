@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	"decred.org/dcrdex/evmrelay"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 )
 

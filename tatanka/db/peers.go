@@ -6,7 +6,7 @@ package db
 import (
 	"fmt"
 
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

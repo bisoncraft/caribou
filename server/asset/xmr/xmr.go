@@ -7,10 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	dexxmr "decred.org/dcrdex/dex/networks/xmr"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	dexxmr "github.com/bisoncraft/meshwallet/dex/networks/xmr"
+	"github.com/bisoncraft/meshwallet/server/asset"
 )
 
 func init() {

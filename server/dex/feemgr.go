@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/market"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/market"
 )
 
 // FeeManager manages FeeFetchers.

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	"decred.org/dcrdex/tatanka/chain"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/tatanka/chain"
 )
 
 func TestSimnetBTC(t *testing.T) {

@@ -6,7 +6,7 @@ package bch
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"

@@ -6,11 +6,11 @@ package bch
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbch "decred.org/dcrdex/dex/networks/bch"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbch "github.com/bisoncraft/meshwallet/dex/networks/bch"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

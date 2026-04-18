@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	btctest "decred.org/dcrdex/dex/networks/btc/test"
+	btctest "github.com/bisoncraft/meshwallet/dex/networks/btc/test"
 )
 
 func TestCompatibility(t *testing.T) {

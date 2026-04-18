@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"math/big"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/networks/erc20"
-	erc20v0 "decred.org/dcrdex/dex/networks/erc20/contracts/v0"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	swapv0 "decred.org/dcrdex/dex/networks/eth/contracts/v0"
-	swapv1 "decred.org/dcrdex/dex/networks/eth/contracts/v1"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
+	erc20v0 "github.com/bisoncraft/meshwallet/dex/networks/erc20/contracts/v0"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	swapv0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 )

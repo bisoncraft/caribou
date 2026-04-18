@@ -3,7 +3,7 @@ package book
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/order"
 )
 
 func TestAccounts(t *testing.T) {

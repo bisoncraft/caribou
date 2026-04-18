@@ -14,12 +14,12 @@ import (
 	"runtime"
 	"strings"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/feerates"
-	"decred.org/dcrdex/dex/fiatrates"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/tatanka"
-	_ "decred.org/dcrdex/tatanka/chain/utxo"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/feerates"
+	"github.com/bisoncraft/meshwallet/dex/fiatrates"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/tatanka"
+	_ "github.com/bisoncraft/meshwallet/tatanka/chain/utxo"
 	"github.com/jessevdk/go-flags"
 	"github.com/jrick/logrotate/rotator"
 )

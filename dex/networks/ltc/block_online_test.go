@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"decred.org/dcrdex/dex/config"
+	"github.com/bisoncraft/meshwallet/dex/config"
 
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/decred/dcrd/chaincfg/chainhash" // just for the array type, not its methods

@@ -3,6 +3,6 @@
 
 package main
 
-import "decred.org/dcrdex/dex"
+import "github.com/bisoncraft/meshwallet/dex"
 
 var log = dex.StdOutLogger("RELAY", dex.LevelDebug)

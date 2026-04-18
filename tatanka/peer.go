@@ -6,7 +6,7 @@ package tatanka
 import (
 	"sync"
 
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 // peer represents a locally connected client.

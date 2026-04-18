@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/config"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/config"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
 	"github.com/decred/dcrd/rpcclient/v8"
 )
 

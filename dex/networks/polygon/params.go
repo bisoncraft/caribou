@@ -4,8 +4,8 @@
 package polygon
 
 import (
-	"decred.org/dcrdex/dex"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

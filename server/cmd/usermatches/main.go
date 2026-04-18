@@ -14,15 +14,15 @@ import (
 	"strconv"
 	"strings"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/btc"
-	"decred.org/dcrdex/server/asset/dcr"
-	"decred.org/dcrdex/server/asset/ltc"
-	"decred.org/dcrdex/server/db"
-	"decred.org/dcrdex/server/db/driver/pg"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/btc"
+	"github.com/bisoncraft/meshwallet/server/asset/dcr"
+	"github.com/bisoncraft/meshwallet/server/asset/ltc"
+	"github.com/bisoncraft/meshwallet/server/db"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg"
 )
 
 // We do not need a Backend Setup, just the Drivers to call DecodeCoinID. While

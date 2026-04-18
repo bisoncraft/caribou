@@ -13,10 +13,10 @@ import (
 	"os/signal"
 	"path/filepath"
 
-	"decred.org/dcrdex/client/app"
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/dexnet"
-	"decred.org/dcrdex/server/comms"
+	"github.com/bisoncraft/meshwallet/wallet/app"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/server/comms"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/go-chi/chi/v5"
 )

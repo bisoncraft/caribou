@@ -29,9 +29,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/btc"
 	"github.com/btcsuite/btcd/btcutil"
 )
 

@@ -15,10 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/client/asset"
-	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/client/db"
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // A Trader is a client routine to interact with the server. Each Trader passed

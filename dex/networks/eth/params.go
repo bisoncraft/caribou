@@ -14,9 +14,9 @@ import (
 	"os"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	v0 "decred.org/dcrdex/dex/networks/eth/contracts/v0"
-	swapv1 "decred.org/dcrdex/dex/networks/eth/contracts/v1"
+	"github.com/bisoncraft/meshwallet/dex"
+	v0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 )

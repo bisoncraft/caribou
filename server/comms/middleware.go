@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 type contextKey int

@@ -4,7 +4,7 @@
 package comms
 
 import (
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // log is a logger that is initialized with no output filters. This means the

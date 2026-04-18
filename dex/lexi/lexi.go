@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	v1badger "github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger/v4"
 )

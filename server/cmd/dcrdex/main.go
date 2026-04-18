@@ -15,11 +15,11 @@ import (
 	"strings"
 	"sync"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/server/admin"
-	_ "decred.org/dcrdex/server/asset/importall"
-	dexsrv "decred.org/dcrdex/server/dex"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/server/admin"
+	_ "github.com/bisoncraft/meshwallet/server/asset/importall"
+	dexsrv "github.com/bisoncraft/meshwallet/server/dex"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

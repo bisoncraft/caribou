@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
 

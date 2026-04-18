@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/evmrelay"
+	"github.com/bisoncraft/meshwallet/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 )
 

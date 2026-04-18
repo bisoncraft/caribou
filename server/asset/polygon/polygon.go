@@ -6,11 +6,11 @@ package polygon
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	dexpolygon "decred.org/dcrdex/dex/networks/polygon"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/eth"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/eth"
 )
 
 var registeredTokens = make(map[uint32]*eth.VersionedToken)

@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"decred.org/dcrdex/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/calc"
 	"github.com/decred/dcrd/crypto/blake256"
 )
 

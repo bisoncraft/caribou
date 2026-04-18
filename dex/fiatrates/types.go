@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // reactivateDuration is how long it'll take before an auto disabled rate source

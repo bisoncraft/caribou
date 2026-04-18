@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	"decred.org/dcrdex/server/asset"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/server/asset"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/ethereum/go-ethereum/common"

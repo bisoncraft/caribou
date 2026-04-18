@@ -6,7 +6,7 @@ package calc
 import (
 	"math/big"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // RateEncodingFactor is used when encoding an exchange rate as an integer.

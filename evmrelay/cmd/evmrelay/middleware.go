@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"decred.org/dcrdex/evmrelay"
+	"github.com/bisoncraft/meshwallet/evmrelay"
 )
 
 type loggingResponseWriter struct {

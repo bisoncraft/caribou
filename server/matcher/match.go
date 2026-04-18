@@ -9,9 +9,9 @@ import (
 	"math/rand"
 	"sort"
 
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/matcher/mt19937"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/matcher/mt19937"
 	"github.com/decred/dcrd/crypto/blake256"
 )
 

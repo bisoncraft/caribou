@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/dex/encrypt"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex/encrypt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

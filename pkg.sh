@@ -14,7 +14,7 @@ LDFLAGS_BASE="-buildid= -s -w -X main.Version=${VER}${META:++${META}}"
 
 # Build the webpack bundle prior to building the webserver package, which embeds
 # the files.
-pushd client/webserver/site
+pushd wallet/webserver/site
 go generate # just check, no write
 npm ci
 npm run build
@@ -30,11 +30,11 @@ build_targets (){
 
     mkdir -p "bin/bisonw-${OS}-${ARCH}-v${VER}"
 
-    pushd client/cmd/bisonw
+    pushd wallet/cmd/bisonw
     GOOS=${OS} GOARCH=${ARCH} go build -trimpath ${TAGS_BISONW:+-tags ${TAGS_BISONW}} -o "../../../bin/bisonw-${OS}-${ARCH}-v${VER}/${BISONW_EXE}" -ldflags "${LDFLAGS_BISONW:-${LDFLAGS_BASE}}"
     popd
 
-    pushd client/cmd/bwctl
+    pushd wallet/cmd/bwctl
     GOOS=${OS} GOARCH=${ARCH} go build -trimpath -o "../../../bin/bisonw-${OS}-${ARCH}-v${VER}" -ldflags "${LDFLAGS_BASE}"
     popd
 
@@ -60,7 +60,7 @@ LDFLAGS_BISONW="${LDFLAGS_BASE} -H=windowsgui"
 build_targets
 
 echo "Files embedded in the Go webserver package:"
-go list -f '{{ .EmbedFiles }}' decred.org/dcrdex/client/webserver
+go list -f '{{ .EmbedFiles }}' github.com/bisoncraft/meshwallet/wallet/webserver
 # NOTE: before embedding, we needed to grab: dist, src/font, src/html, src/img.
 
 pushd bin

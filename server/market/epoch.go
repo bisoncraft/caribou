@@ -6,8 +6,8 @@ package market
 import (
 	"time"
 
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 // EpochQueue represents an epoch order queue. The methods are NOT thread safe

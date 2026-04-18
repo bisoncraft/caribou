@@ -27,10 +27,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/client/comms"
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/dexnet"
-	"decred.org/dcrdex/server/noderelay"
+	"github.com/bisoncraft/meshwallet/wallet/comms"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/server/noderelay"
 )
 
 var log = dex.StdOutLogger("NODESRC", dex.LevelDebug)

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"decred.org/dcrdex/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/order"
 )
 
 type CoinID = order.CoinID

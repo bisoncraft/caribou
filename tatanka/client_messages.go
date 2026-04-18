@@ -9,12 +9,12 @@ import (
 	"errors"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/utils"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
-	"decred.org/dcrdex/tatanka/tcp"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/utils"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/tcp"
 )
 
 // clientJob is a job for the remote clients loop.

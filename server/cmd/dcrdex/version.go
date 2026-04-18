@@ -3,7 +3,7 @@
 
 package main
 
-import "decred.org/dcrdex/dex/version"
+import "github.com/bisoncraft/meshwallet/dex/version"
 
 const (
 	// appName is the application name.

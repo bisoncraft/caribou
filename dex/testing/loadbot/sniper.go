@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/client/core"
-	"decred.org/dcrdex/dex/calc"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/dex/calc"
 )
 
 // sniper is a Trader that will randomly place orders targeting existing orders.

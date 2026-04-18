@@ -1,4 +1,4 @@
-module decred.org/dcrdex
+module github.com/bisoncraft/meshwallet
 
 go 1.24.0
 

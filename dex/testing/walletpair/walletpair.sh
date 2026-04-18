@@ -53,14 +53,14 @@ fi
 CLIENT_1_DIR="${PAIR_ROOT}/dexc1"
 CLIENT_2_DIR="${PAIR_ROOT}/dexc2"
 HARNESS_DIR="${PAIR_ROOT}/harness-ctl"
-BW_DIR=$(realpath ../../../client/cmd/bisonw)
+BW_DIR=$(realpath ../../../wallet/cmd/bisonw)
 BISONW="${BW_DIR}/bisonw"
 
 cd "${BW_DIR}"
 if [ "${SIMNET}" ] ; then
   echo "building bisonw for simnet - lock times: taker 3m, maker 6m"
-  go build -ldflags "-X decred.org/dcrdex/dex.testLockTimeTaker=3m \
-                     -X decred.org/dcrdex/dex.testLockTimeMaker=6m"
+  go build -ldflags "-X github.com/bisoncraft/meshwallet/dex.testLockTimeTaker=3m \
+                     -X github.com/bisoncraft/meshwallet/dex.testLockTimeMaker=6m"
 else
   go build
 fi
@@ -70,7 +70,7 @@ mkdir -p "${HARNESS_DIR}"
 mkdir -p "${CLIENT_1_DIR}"
 mkdir -p "${CLIENT_2_DIR}"
 
-CLIENT_1_CONF="${CLIENT_1_DIR}/dexc.conf"
+CLIENT_1_CONF="${CLIENT_1_DIR}/meshwallet.conf"
 rm -f "${CLIENT_1_CONF}"
 CLIENT_1_CTL_KEY="${CLIENT_1_DIR}/ctl.key"
 rm -f "$CLIENT_1_CTL_KEY"
@@ -97,7 +97,7 @@ simnet=${SIMNET}
 testnet=${TESTNET}
 EOF
 
-CLIENT_2_CONF="${CLIENT_2_DIR}/dexc.conf"
+CLIENT_2_CONF="${CLIENT_2_DIR}/meshwallet.conf"
 rm -f "$CLIENT_2_CONF"
 CLIENT_2_CTL_KEY="${CLIENT_2_DIR}/ctl.key"
 rm -f "$CLIENT_2_CTL_KEY"

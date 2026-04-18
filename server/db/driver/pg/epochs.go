@@ -12,10 +12,10 @@ import (
 	"math"
 	"time"
 
-	"decred.org/dcrdex/dex/candles"
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/db"
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/dex/candles"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/db"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 	"github.com/lib/pq"
 )
 

@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

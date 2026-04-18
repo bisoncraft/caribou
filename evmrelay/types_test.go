@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	swapv1 "decred.org/dcrdex/dex/networks/eth/contracts/v1"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	swapv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 )
 

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 	pq "github.com/lib/pq" // the "postgres" sql driver
 )
 

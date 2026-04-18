@@ -1,7 +1,7 @@
 package importall
 
 import (
-	_ "decred.org/dcrdex/server/asset/base"    // register base asset
-	_ "decred.org/dcrdex/server/asset/eth"     // register eth asset
-	_ "decred.org/dcrdex/server/asset/polygon" // register polygon asset
+	_ "github.com/bisoncraft/meshwallet/server/asset/base"    // register base asset
+	_ "github.com/bisoncraft/meshwallet/server/asset/eth"     // register eth asset
+	_ "github.com/bisoncraft/meshwallet/server/asset/polygon" // register polygon asset
 )

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 func TestMessageUnmarshal(t *testing.T) {

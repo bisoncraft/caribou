@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"sync"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 /*

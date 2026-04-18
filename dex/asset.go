@@ -30,8 +30,8 @@ var (
 	// IF running on a test network (testnet or regtest) AND both values are set to
 	// valid duration strings.
 	// Values for both variables may be set at build time using linker flags e.g:
-	// go build -ldflags "-X 'decred.org/dcrdex/dex.testLockTimeTaker=10m' \
-	// -X 'decred.org/dcrdex/dex.testLockTimeMaker=20m'"
+	// go build -ldflags "-X 'github.com/bisoncraft/meshwallet/dex.testLockTimeTaker=10m' \
+	// -X 'github.com/bisoncraft/meshwallet/dex.testLockTimeMaker=20m'"
 	// Same values should be set when building server and client binaries.
 	testLockTimeTaker string
 	testLockTimeMaker string

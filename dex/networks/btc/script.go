@@ -11,8 +11,8 @@ import (
 	"errors"
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/account"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"

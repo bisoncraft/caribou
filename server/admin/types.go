@@ -6,7 +6,7 @@ package admin
 import (
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // AssetPost is the expected structure of the asset POST data.

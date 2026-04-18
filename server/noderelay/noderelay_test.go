@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/client/comms"
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/wallet/comms"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/dexnet"
 )
 
 func TestNexus(t *testing.T) {

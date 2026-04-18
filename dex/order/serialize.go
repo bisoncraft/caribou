@@ -8,8 +8,8 @@ import (
 	"bytes"
 	"fmt"
 
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 var uint32B = encode.Uint32Bytes

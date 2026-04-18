@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/account"
 	"decred.org/dcrwallet/v5/wallet/txsizes"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrec"

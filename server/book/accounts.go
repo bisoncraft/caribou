@@ -4,7 +4,7 @@
 package book
 
 import (
-	"decred.org/dcrdex/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/order"
 )
 
 // AccountTracking is a bit field representing the assets which need account

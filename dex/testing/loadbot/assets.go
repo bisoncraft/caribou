@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"decred.org/dcrdex/client/core"
+	"github.com/bisoncraft/meshwallet/wallet/core"
 )
 
 // AssetType categorizes assets by their wallet behavior.

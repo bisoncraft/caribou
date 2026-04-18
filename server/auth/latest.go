@@ -6,7 +6,7 @@ package auth
 import (
 	"sync"
 
-	"decred.org/dcrdex/server/db"
+	"github.com/bisoncraft/meshwallet/server/db"
 )
 
 type latestOutcomes[T db.Outcomer] struct {

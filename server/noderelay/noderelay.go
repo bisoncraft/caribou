@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/ws"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/ws"
 	"github.com/decred/dcrd/certgen"
 )
 

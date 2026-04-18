@@ -10,12 +10,12 @@
 package main
 
 import (
-	dexbase "decred.org/dcrdex/dex/networks/base"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
-	dexpolygon "decred.org/dcrdex/dex/networks/polygon"
-	_ "decred.org/dcrdex/server/asset/base"    // register base asset
-	_ "decred.org/dcrdex/server/asset/eth"     // register eth asset
-	_ "decred.org/dcrdex/server/asset/polygon" // register polygon asset
+	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	_ "github.com/bisoncraft/meshwallet/server/asset/base"    // register base asset
+	_ "github.com/bisoncraft/meshwallet/server/asset/eth"     // register eth asset
+	_ "github.com/bisoncraft/meshwallet/server/asset/polygon" // register polygon asset
 )
 
 func init() {

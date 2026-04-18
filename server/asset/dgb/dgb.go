@@ -6,11 +6,11 @@ package dgb
 import (
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	dexdgb "decred.org/dcrdex/dex/networks/dgb"
-	"decred.org/dcrdex/server/asset"
-	"decred.org/dcrdex/server/asset/btc"
+	"github.com/bisoncraft/meshwallet/dex"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	dexdgb "github.com/bisoncraft/meshwallet/dex/networks/dgb"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	"github.com/bisoncraft/meshwallet/server/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

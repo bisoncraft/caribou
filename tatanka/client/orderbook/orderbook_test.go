@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex/encode"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 func mustParseTime(s string) time.Time {

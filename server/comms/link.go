@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/dex/ws"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/ws"
 )
 
 const readLimitAuthorized = 262144

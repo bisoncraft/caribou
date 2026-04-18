@@ -9,10 +9,10 @@ This is a new wallet based on **Bison Wallet**, without the DCRDEX trading/excha
 **Tatanka Mesh** has moved to a separate repository and is not part of this project.
 
 ### In scope
-- Per-chain wallet implementations (`client/asset/`)
+- Per-chain wallet implementations (`wallet/asset/`)
 - Atomic swap execution: init, audit, redeem, refund (the settlement mechanics, not the trading layer)
-- Wallet UI (`client/webserver/`)
-- Wallet database (`client/db/`)
+- Wallet UI (`wallet/webserver/`)
+- Wallet database (`wallet/db/`)
 - EVM relay service (`evmrelay/`)
 - Shared cryptographic utilities and asset abstractions (`dex/encode`, `dex/encrypt`, `dex/keygen`, `dex/networks`, `dex/asset.go`)
 - Monero adaptor signature primitives (`internal/adaptorsigs/`)
@@ -20,24 +20,24 @@ This is a new wallet based on **Bison Wallet**, without the DCRDEX trading/excha
 ### Out of scope — do not modify or extend
 - `server/` — DCRDEX server (epoch management, order matching, PostgreSQL DB)
 - `tatanka/` — Mesh network (separate repo)
-- `client/mm/libxc/` — CEX exchange connectors (Binance, Coinbase, MEXC, Bitget); do not touch
-- `client/orderbook/` — DEX order book management
-- `client/comms/` — WebSocket connectivity to DEX servers
+- `wallet/mm/libxc/` — CEX exchange connectors (Binance, Coinbase, MEXC, Bitget); do not touch
+- `wallet/orderbook/` — DEX order book management
+- `wallet/comms/` — WebSocket connectivity to DEX servers
 - `dex/order/` — DEX order types
 - `dex/msgjson/` — DEX wire protocol messages
 - `dex/market.go` — Market/lot-size definitions
 
-Note: `client/mm/` top-level files (mm.go, config.go, exchange_adaptor.go, event_log.go, etc.) are **in scope for removal** as part of the DEX trading layer cleanup. Delete or gut them to unblock `core/types.go` cleanup.
+Note: `wallet/mm/` top-level files (mm.go, config.go, exchange_adaptor.go, event_log.go, etc.) are **in scope for removal** as part of the DEX trading layer cleanup. Delete or gut them to unblock `core/types.go` cleanup.
 
 ## Common Commands
 
 ### Build
 ```bash
 # Build the wallet binary
-cd client/cmd/bisonw && go build -o bisonw
+cd wallet/cmd/bisonw && go build -o bisonw
 
 # Build the desktop wallet
-cd client/cmd/bisonw-desktop && go build -o bisonw-desktop
+cd wallet/cmd/bisonw-desktop && go build -o bisonw-desktop
 
 # Build the EVM relay service
 cd evmrelay/cmd/evmrelay && go build -o evmrelay
@@ -55,11 +55,11 @@ cd evmrelay/cmd/evmrelay && go build -o evmrelay
 go test -race -short ./...
 
 # Test a specific asset package
-go test -race -short ./client/asset/btc/...
+go test -race -short ./wallet/asset/btc/...
 
 # Build with special tags to verify compilation
-go test -c -o /dev/null -tags live ./client/webserver
-go test -c -o /dev/null -tags harness ./client/asset/eth
+go test -c -o /dev/null -tags live ./wallet/webserver
+go test -c -o /dev/null -tags harness ./wallet/asset/eth
 ```
 
 ### Lint
@@ -69,18 +69,18 @@ golangci-lint -c ./.golangci.yml run
 
 ### Web UI (required before testing webserver package)
 ```bash
-cd client/webserver/site && npm ci && npm run build
+cd wallet/webserver/site && npm ci && npm run build
 ```
 
 ## Architecture
 
-### `client/` — Wallet Application
-Entry point: `client/cmd/bisonw/main.go`.
+### `wallet/` — Wallet Application
+Entry point: `wallet/cmd/bisonw/main.go`.
 
-- **`client/asset/`** — Per-chain wallet implementations (btc, eth, dcr, ltc, zec, xmr, bch, doge, firo, polygon, dash, dgb, zcl). Each implements `asset.Wallet` from `dex/asset.go`. **Primary development area.**
-- **`client/core/`** — Central wallet logic: swap lifecycle (init/audit/redeem/refund), account and key management, send/receive. DEX connectivity portions are being removed.
-- **`client/webserver/`** — Embedded web UI (HTML/CSS/JS under `site/`)
-- **`client/db/`** — BoltDB-backed wallet database
+- **`wallet/asset/`** — Per-chain wallet implementations (btc, eth, dcr, ltc, zec, xmr, bch, doge, firo, polygon, dash, dgb, zcl). Each implements `asset.Wallet` from `dex/asset.go`. **Primary development area.**
+- **`wallet/core/`** — Central wallet logic: swap lifecycle (init/audit/redeem/refund), account and key management, send/receive. DEX connectivity portions are being removed.
+- **`wallet/webserver/`** — Embedded web UI (HTML/CSS/JS under `site/`)
+- **`wallet/db/`** — BoltDB-backed wallet database
 
 ### `dex/` — Shared Utilities (subset)
 Only the non-trading parts are in scope: `asset.go` (wallet interface), `encode/`, `encrypt/`, `keygen/`, `networks/`, and general-purpose utilities. Avoid changes to `order/`, `msgjson/`, and `market.go`.
@@ -94,7 +94,7 @@ Manages Ethereum/EVM atomic swap contract interactions, fee estimation, and batc
 
 ## Key Design Patterns
 
-- **Asset interface**: Every supported chain implements `asset.Wallet` from `dex/asset.go`. Adding a new chain means implementing this interface and registering it under `client/asset/`.
+- **Asset interface**: Every supported chain implements `asset.Wallet` from `dex/asset.go`. Adding a new chain means implementing this interface and registering it under `wallet/asset/`.
 - **Atomic swaps**: Settlement uses on-chain atomic swaps (init → audit → redeem → refund). This mechanism is retained; what is removed is the DEX trading layer that drives it.
 - **Build tags**: `live`, `harness`, `electrumlive`, `rpclive`, `systray` gate tests requiring real network access, running nodes, or platform-specific support.
-- **Embedded web UI**: The frontend is bundled via `go:embed`; run `npm run build` in `client/webserver/site/` before running webserver tests.
+- **Embedded web UI**: The frontend is bundled via `go:embed`; run `npm run build` in `wallet/webserver/site/` before running webserver tests.

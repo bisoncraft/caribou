@@ -5,7 +5,7 @@ package pg
 import (
 	"testing"
 
-	"decred.org/dcrdex/server/account"
+	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 var tPubKey = []byte{

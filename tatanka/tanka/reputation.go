@@ -6,8 +6,8 @@ package tanka
 import (
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
 	"github.com/decred/dcrd/crypto/blake256"
 )
 

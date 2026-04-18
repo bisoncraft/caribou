@@ -6,8 +6,8 @@ package market
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
 )
 
 func TestBalancer(t *testing.T) {

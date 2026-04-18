@@ -7,8 +7,8 @@ import (
 	"context"
 	"sync"
 
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/server/matcher"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/server/matcher"
 )
 
 type readyEpoch struct {

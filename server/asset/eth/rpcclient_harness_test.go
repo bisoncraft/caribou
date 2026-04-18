@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/encode"
-	dexeth "decred.org/dcrdex/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/encode"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 )

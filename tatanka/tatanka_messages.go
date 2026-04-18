@@ -6,10 +6,10 @@ package tatanka
 import (
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 // handleInboundTatankaConnect handles an inbound tatanka connection.

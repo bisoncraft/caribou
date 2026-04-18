@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	dexeth "decred.org/dcrdex/dex/networks/eth"
+	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

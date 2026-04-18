@@ -8,11 +8,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/feerates"
-	"decred.org/dcrdex/dex/fiatrates"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/feerates"
+	"github.com/bisoncraft/meshwallet/dex/fiatrates"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 const (

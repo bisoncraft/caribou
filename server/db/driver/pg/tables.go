@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/server/db/driver/pg/internal"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/server/db/driver/pg/internal"
 )
 
 const (

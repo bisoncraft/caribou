@@ -14,16 +14,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/feerates"
-	"decred.org/dcrdex/dex/fiatrates"
-	"decred.org/dcrdex/dex/msgjson"
-	"decred.org/dcrdex/server/comms"
-	"decred.org/dcrdex/tatanka/chain"
-	"decred.org/dcrdex/tatanka/db"
-	"decred.org/dcrdex/tatanka/mj"
-	"decred.org/dcrdex/tatanka/tanka"
-	"decred.org/dcrdex/tatanka/tcp"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/feerates"
+	"github.com/bisoncraft/meshwallet/dex/fiatrates"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/tatanka/chain"
+	"github.com/bisoncraft/meshwallet/tatanka/db"
+	"github.com/bisoncraft/meshwallet/tatanka/mj"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/tatanka/tcp"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -76,7 +76,7 @@ type BootNode struct {
 
 // Draft note: Why do we need a parsedBootNode? Why not just make BootNode
 // have a tanka.PeerID instead of a dex.Bytes? Also, instead of having a
-// TatankaCredentials in client/conn, can we use BootNode as well?
+// TatankaCredentials in wallet/conn, can we use BootNode as well?
 
 // parsedBootNode is the unexported version of BootNode, but with a PeerID
 // instead of []byte.

@@ -8,7 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"decred.org/dcrdex/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/dex/msgjson"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )

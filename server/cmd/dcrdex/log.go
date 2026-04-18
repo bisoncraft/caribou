@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/jrick/logrotate/rotator"
 )
 

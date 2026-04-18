@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"decred.org/dcrdex/dex/utils"
+	"github.com/bisoncraft/meshwallet/dex/utils"
 	filipEdwards "filippo.io/edwards25519"
 	"filippo.io/edwards25519/field"
 	"github.com/athanorlabs/go-dleq"

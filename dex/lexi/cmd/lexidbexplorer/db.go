@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"decred.org/dcrdex/dex/lexi"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
 	"github.com/dgraph-io/badger/v4"
 )
 

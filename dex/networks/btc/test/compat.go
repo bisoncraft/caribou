@@ -6,7 +6,7 @@ package test
 import (
 	"testing"
 
-	"decred.org/dcrdex/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/dex/networks/btc"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"

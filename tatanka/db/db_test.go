@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/lexi"
-	"decred.org/dcrdex/tatanka/tanka"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/tatanka/tanka"
 )
 
 func tNewDB() (*DB, func()) {

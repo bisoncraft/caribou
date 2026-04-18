@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"strings"
 
-	ethv0 "decred.org/dcrdex/dex/networks/eth/contracts/v0"
+	ethv0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"

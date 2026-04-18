@@ -19,16 +19,16 @@ import (
 	"sync"
 	"time"
 
-	"decred.org/dcrdex/dex"
-	"decred.org/dcrdex/dex/calc"
-	"decred.org/dcrdex/dex/config"
-	"decred.org/dcrdex/dex/dexnet"
-	"decred.org/dcrdex/dex/feeratefetcher"
-	dexbtc "decred.org/dcrdex/dex/networks/btc"
-	dexzec "decred.org/dcrdex/dex/networks/zec"
-	"decred.org/dcrdex/server/account"
-	"decred.org/dcrdex/server/asset"
-	srvdex "decred.org/dcrdex/server/dex"
+	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/dex/config"
+	"github.com/bisoncraft/meshwallet/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/dex/feeratefetcher"
+	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	dexzec "github.com/bisoncraft/meshwallet/dex/networks/zec"
+	"github.com/bisoncraft/meshwallet/server/account"
+	"github.com/bisoncraft/meshwallet/server/asset"
+	srvdex "github.com/bisoncraft/meshwallet/server/dex"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -110,7 +110,7 @@ var (
 	zeroHash chainhash.Hash
 	// The blockPollInterval is the delay between calls to GetBestBlockHash to
 	// check for new blocks. Modify at compile time via blockPollIntervalStr:
-	// go build -ldflags "-X 'decred.org/dcrdex/server/asset/btc.blockPollIntervalStr=4s'"
+	// go build -ldflags "-X 'github.com/bisoncraft/meshwallet/server/asset/btc.blockPollIntervalStr=4s'"
 	blockPollInterval            time.Duration
 	blockPollIntervalStr         string
 	conventionalConversionFactor = float64(dexbtc.UnitInfo.Conventional.ConversionFactor)

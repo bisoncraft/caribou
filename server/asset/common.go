@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 )
 
 // BackendInfo provides auxiliary information about a backend.

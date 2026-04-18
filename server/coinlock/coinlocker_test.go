@@ -5,8 +5,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"decred.org/dcrdex/dex/order"
-	"decred.org/dcrdex/dex/order/test"
+	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/dex/order/test"
 )
 
 func randomBytes(len int) []byte {

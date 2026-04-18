@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	"decred.org/dcrdex/dex"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/dgraph-io/badger/v4"
 )
 
