@@ -17,17 +17,8 @@ This is a new wallet based on **Bison Wallet**, without the DCRDEX trading/excha
 - Shared cryptographic utilities and asset abstractions (`dex/encode`, `dex/encrypt`, `dex/keygen`, `dex/networks`, `dex/asset.go`)
 - Monero adaptor signature primitives (`internal/adaptorsigs/`)
 
-### Out of scope — do not modify or extend
-- `server/` — DCRDEX server (epoch management, order matching, PostgreSQL DB)
-- `tatanka/` — Mesh network (separate repo)
-- `wallet/mm/libxc/` — CEX exchange connectors (Binance, Coinbase, MEXC, Bitget); do not touch
-- `wallet/orderbook/` — DEX order book management
-- `wallet/comms/` — WebSocket connectivity to DEX servers
-- `dex/order/` — DEX order types
-- `dex/msgjson/` — DEX wire protocol messages
-- `dex/market.go` — Market/lot-size definitions
-
-Note: `wallet/mm/` top-level files (mm.go, config.go, exchange_adaptor.go, event_log.go, etc.) are **in scope for removal** as part of the DEX trading layer cleanup. Delete or gut them to unblock `core/types.go` cleanup.
+### Removal candidates
+Everything in the tree is fair game for modification or deletion in service of the wallet-only goal. Packages that are only reachable from the removed DEX trading layer or from unused server/mesh code can be trimmed or deleted. Some packages (e.g. `server/`, `tatanka/`, `wallet/mm/libxc/`, `wallet/cmd/testbinance/`, `wallet/comms/`, `wallet/mm/` top-level, `wallet/orderbook/`, `dex/order/`, `dex/msgjson/`, `dex/market.go`) are legacy DEX/mesh/CEX code with no role in the wallet's future; delete or trim them as opportunity arises, as long as in-scope code (wallets, atomic swap settlement, UI, DB, evmrelay, adaptorsigs) continues to build.
 
 ## Common Commands
 
@@ -83,7 +74,7 @@ Entry point: `wallet/cmd/bisonw/main.go`.
 - **`wallet/db/`** — BoltDB-backed wallet database
 
 ### `dex/` — Shared Utilities (subset)
-Only the non-trading parts are in scope: `asset.go` (wallet interface), `encode/`, `encrypt/`, `keygen/`, `networks/`, and general-purpose utilities. Avoid changes to `order/`, `msgjson/`, and `market.go`.
+Only the non-trading parts are in scope: `asset.go` (wallet interface), `encode/`, `encrypt/`, `keygen/`, `networks/`, and general-purpose utilities. `order/`, `msgjson/`, and `market.go` are being trimmed or removed as part of the DEX-layer cleanup.
 
 ### `dex/evmrelay/` — EVM Relay Service
 Manages Ethereum/EVM atomic swap contract interactions, fee estimation, and batch redemptions. Entry point: `dex/evmrelay/cmd/evmrelay/main.go`.
