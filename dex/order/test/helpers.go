@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/dex/order"
-	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 const (
@@ -48,7 +47,7 @@ var _ rand.Source64 = cryptoSource{}
 var _ rand.Source64 = (*cryptoSource)(nil)
 
 var (
-	acctTemplate = account.AccountID{
+	acctTemplate = order.AccountID{
 		0x22, 0x4c, 0xba, 0xaa, 0xfa, 0x80, 0xbf, 0x3b, 0xd1, 0xff, 0x73, 0x15,
 		0x90, 0xbc, 0xbd, 0xda, 0x5a, 0x76, 0xf9, 0x1e, 0x60, 0xa1, 0x56, 0x99,
 		0x46, 0x34, 0xe9, 0x1c, 0xaa, 0xaa, 0xaa, 0xaa,
@@ -79,13 +78,13 @@ func RandomAddress() string {
 }
 
 // NextAccount gets a unique account ID.
-func NextAccount() account.AccountID {
+func NextAccount() order.AccountID {
 	acctCounter++
 	intBytes := make([]byte, 4)
 	binary.BigEndian.PutUint32(intBytes, acctCounter)
-	acctID := account.AccountID{}
+	acctID := order.AccountID{}
 	copy(acctID[:], acctTemplate[:])
-	copy(acctID[account.HashSize-4:], intBytes)
+	copy(acctID[order.AccountIDSize-4:], intBytes)
 	return acctID
 }
 
@@ -119,7 +118,7 @@ func RandomCommitment() (com order.Commitment) {
 // Writer represents a client that places orders on one side of a market.
 type Writer struct {
 	Addr   string
-	Acct   account.AccountID
+	Acct   order.AccountID
 	Sell   bool
 	Market *Market
 }

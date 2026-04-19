@@ -9,11 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 var (
-	acct0 = account.AccountID{
+	acct0 = AccountID{
 		0x22, 0x4c, 0xba, 0xaa, 0xfa, 0x80, 0xbf, 0x3b,
 		0xd1, 0xff, 0x73, 0x15, 0x90, 0xbc, 0xbd, 0xda,
 		0x5a, 0x76, 0xf9, 0x1e, 0x60, 0xa1, 0x56, 0x99,
@@ -62,7 +61,7 @@ func Test_calcOrderID(t *testing.T) {
 
 func TestPrefix_Serialize(t *testing.T) {
 	type fields struct {
-		AccountID  account.AccountID
+		AccountID  AccountID
 		BaseAsset  uint32
 		QuoteAsset uint32
 		OrderType  OrderType

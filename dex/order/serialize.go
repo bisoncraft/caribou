@@ -9,7 +9,6 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/server/account"
 )
 
 var uint32B = encode.Uint32Bytes
@@ -51,11 +50,11 @@ func decodePrefix_v0(pushes [][]byte) (prefix *Prefix, err error) {
 	oTypeB, cTimeB, sTimeB := pushes[3], pushes[4], pushes[5]
 	commitB := pushes[6]
 
-	if len(acctB) != account.HashSize {
+	if len(acctB) != AccountIDSize {
 		return nil, fmt.Errorf("expected account ID length %d, got %d",
-			account.HashSize, len(acctB))
+			AccountIDSize, len(acctB))
 	}
-	var acctID account.AccountID
+	var acctID AccountID
 	copy(acctID[:], acctB)
 
 	if len(commitB) != CommitmentSize {

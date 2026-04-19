@@ -12,7 +12,6 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/server/account"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
@@ -281,7 +280,7 @@ const (
 
 	// BondPushDataSize is the size of the nulldata in a bond commitment output:
 	//  OP_RETURN <pushData: ver[2] | account_id[32] | lockTime[4] | pkh[20]>
-	BondPushDataSize = 2 + account.HashSize + 4 + 20
+	BondPushDataSize = 2 + 32 + 4 + 20
 )
 
 // redeemP2SHTxSize calculates the size of the redeeming transaction for a
@@ -709,7 +708,7 @@ func RefundP2SHContract(contract, sig, pubkey []byte) ([]byte, error) {
 }
 
 // OP_RETURN <pushData: ver[2] | account_id[32] | lockTime[4] | pkh[20]>
-func extractBondCommitDataV0(pushData []byte) (acct account.AccountID, lockTime uint32, pubkeyHash [20]byte, err error) {
+func extractBondCommitDataV0(pushData []byte) (acct [32]byte, lockTime uint32, pubkeyHash [20]byte, err error) {
 	if len(pushData) < 2 {
 		err = errors.New("invalid data")
 		return
@@ -728,7 +727,7 @@ func extractBondCommitDataV0(pushData []byte) (acct account.AccountID, lockTime 
 	pushData = pushData[2:] // pop off ver
 
 	copy(acct[:], pushData)
-	pushData = pushData[account.HashSize:]
+	pushData = pushData[32:]
 
 	lockTime = binary.BigEndian.Uint32(pushData)
 	pushData = pushData[4:]
@@ -744,7 +743,7 @@ func extractBondCommitDataV0(pushData []byte) (acct account.AccountID, lockTime 
 //
 // If the decoded commitment data indicates a version other than 0, an error is
 // returned.
-func ExtractBondCommitDataV0(scriptVer uint16, pkScript []byte) (acct account.AccountID, lockTime uint32, pubkeyHash [20]byte, err error) {
+func ExtractBondCommitDataV0(scriptVer uint16, pkScript []byte) (acct [32]byte, lockTime uint32, pubkeyHash [20]byte, err error) {
 	tokenizer := txscript.MakeScriptTokenizer(scriptVer, pkScript)
 	if !tokenizer.Next() {
 		err = tokenizer.Err()

@@ -15,9 +15,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/server/account"
 	"github.com/decred/dcrd/crypto/blake256"
 )
+
+// AccountIDSize is the byte length of an account ID (Blake256 hash).
+const AccountIDSize = blake256.Size
+
+// AccountID is a DEX account identifier.
+type AccountID [AccountIDSize]byte
 
 // Several types including OrderID and Commitment are defined as a Blake256
 // hash. Define an internal hash type and hashSize for convenience.
@@ -186,7 +191,7 @@ type Order interface {
 	UID() string
 
 	// User gives the user's account ID.
-	User() account.AccountID
+	User() AccountID
 
 	// Serialize marshals the order. Serialization is detailed in the 'Client
 	// Order Management' section of the DEX specification.
@@ -315,7 +320,7 @@ func (pi *Preimage) IsZero() bool {
 
 // Prefix is the order prefix containing data fields common to all orders.
 type Prefix struct {
-	AccountID  account.AccountID
+	AccountID  AccountID
 	BaseAsset  uint32
 	QuoteAsset uint32
 	OrderType  OrderType
@@ -335,7 +340,7 @@ func (p *Prefix) Prefix() *Prefix {
 }
 
 // PrefixLen is the length in bytes of the serialized order Prefix.
-const PrefixLen = account.HashSize + 4 + 4 + 1 + 8 + 8 + CommitmentSize
+const PrefixLen = AccountIDSize + 4 + 4 + 1 + 8 + 8 + CommitmentSize
 
 // serializeSize returns the length of the serialized order Prefix.
 func (p *Prefix) serializeSize() int {
@@ -357,7 +362,7 @@ func (p *Prefix) SetTime(t time.Time) {
 }
 
 // User gives the user's account ID.
-func (p *Prefix) User() account.AccountID {
+func (p *Prefix) User() AccountID {
 	return p.AccountID
 }
 
