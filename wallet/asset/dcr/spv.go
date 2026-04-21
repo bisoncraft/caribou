@@ -20,7 +20,6 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/utils"
 	"decred.org/dcrwallet/v5/chain"
 	walleterrors "decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/p2p"
@@ -982,7 +981,7 @@ func (w *spvWallet) SyncStatus(ctx context.Context) (*asset.SyncStatus, error) {
 	if height == 0 {
 		return ss, nil
 	}
-	height = utils.Clamp(height, 0, targetHeight)
+	height = dex.Clamp(height, 0, targetHeight)
 	ss.Blocks = uint64(height)
 
 	w.spvMtx.RLock()
@@ -996,7 +995,7 @@ func (w *spvWallet) SyncStatus(ctx context.Context) (*asset.SyncStatus, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error getting rescan point header: %w", err)
 		}
-		h := uint64(utils.Clamp(rescanHeader.Height, 1, uint32(targetHeight)+1) - 1)
+		h := uint64(dex.Clamp(rescanHeader.Height, 1, uint32(targetHeight)+1) - 1)
 		ss.Transactions = &h
 	}
 
@@ -1182,7 +1181,7 @@ func (w *spvWallet) ticketsInRange(ctx context.Context, lowerHeight, upperHeight
 	// If this is a mempool scan, we cannot scan backwards, so reverse the
 	// result order.
 	if includeMempool {
-		utils.ReverseSlice(tickets)
+		dex.ReverseSlice(tickets)
 	}
 
 	return tickets, nil

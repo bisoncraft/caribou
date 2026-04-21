@@ -33,7 +33,6 @@ import (
 	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
 	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
 	multibal "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/multibalance"
-	"github.com/bisoncraft/meshwallet/dex/utils"
 	"github.com/bisoncraft/meshwallet/dex/evmrelay"
 	"github.com/bisoncraft/go-bip39"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
@@ -2678,7 +2677,7 @@ func (bm *bridgeManager) addPendingBridge(initiationTxID string, sourceAssetID, 
 // bridge.
 func (bm *bridgeManager) checkPendingBridges(ctx context.Context) {
 	bm.mtx.RLock()
-	pendingBridges := utils.CopyMap(bm.pendingBridges)
+	pendingBridges := dex.CopyMap(bm.pendingBridges)
 	bm.mtx.RUnlock()
 
 	for initiationTxID, pendingBridge := range pendingBridges {

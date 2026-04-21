@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex/utils"
+	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -132,6 +132,6 @@ func readInternalByteOrder(r io.Reader, b []byte) error {
 		return err
 	}
 	// Reverse the bytes
-	utils.ReverseSlice(b)
+	dex.ReverseSlice(b)
 	return nil
 }

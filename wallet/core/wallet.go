@@ -17,7 +17,6 @@ import (
 	"github.com/bisoncraft/meshwallet/dex"
 	"github.com/bisoncraft/meshwallet/dex/encode"
 	"github.com/bisoncraft/meshwallet/dex/encrypt"
-	"github.com/bisoncraft/meshwallet/dex/utils"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
@@ -581,7 +580,7 @@ func (w *xcWallet) processWalletTransactions(txs []*asset.WalletTransaction) {
 func (w *xcWallet) pendingTxsCopy() map[string]*asset.WalletTransaction {
 	w.pendingTxsMtx.RLock()
 	defer w.pendingTxsMtx.RUnlock()
-	return utils.CopyMap(w.pendingTxs)
+	return dex.CopyMap(w.pendingTxs)
 }
 
 // MakeBondTx authors a time-locked bond transaction if the asset.Wallet
