@@ -12,7 +12,7 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/appserver"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/jessevdk/go-flags"
 )
@@ -38,7 +38,7 @@ type CoreConfig struct {
 	TorProxy     string `long:"torproxy" description:"Connect via TOR (eg. 127.0.0.1:9050)."`
 	TorIsolation bool   `long:"torisolation" description:"Enable TOR circuit isolation."`
 	// Net is a derivative field set by ResolveConfig.
-	Net dex.Network
+	Net util.Network
 
 	NoAutoWalletLock  bool   `long:"no-wallet-lock" description:"Disable locking of wallets on shutdown or logout. Use this if you want your external wallets to stay unlocked after closing the app."`
 	NoAutoDBBackup    bool   `long:"no-db-backup" description:"Disable creation of a database backup on shutdown."`
@@ -77,7 +77,7 @@ type Config struct {
 	AppData    string `long:"appdata" description:"Path to application directory."`
 	ConfigPath string `long:"config" description:"Path to an INI configuration file."`
 	// Testnet and Simnet are used to set the derivative CoreConfig.Net
-	// dex.Network field.
+	// util.Network field.
 	Testnet    bool   `long:"testnet" description:"use testnet"`
 	Simnet     bool   `long:"simnet" description:"use simnet"`
 	NoWeb      bool   `long:"noweb" description:"disable the web server."`
@@ -89,7 +89,7 @@ type Config struct {
 // Web creates a configuration for the webserver. This is a Config method
 // instead of a WebConfig method because Language is an app-level setting used
 // by both core and the web server.
-func (cfg *Config) Web(c *core.Core, log dex.Logger, utc bool) *appserver.Config {
+func (cfg *Config) Web(c *core.Core, log util.Logger, utc bool) *appserver.Config {
 	addr := cfg.WebAddr
 	host, _, err := net.SplitHostPort(addr)
 	if err == nil && host != "" {
@@ -127,7 +127,7 @@ func (cfg *Config) Web(c *core.Core, log dex.Logger, utc bool) *appserver.Config
 // Core creates a core.Core configuration. This is a Config method
 // instead of a CoreConfig method because Language is an app-level setting used
 // by both core and the web server.
-func (cfg *Config) Core(log dex.Logger) *core.Config {
+func (cfg *Config) Core(log util.Logger) *core.Config {
 	return &core.Config{
 		DBPath:            cfg.DBPath,
 		Net:               cfg.Net,
@@ -176,14 +176,14 @@ func ResolveCLIConfigPaths(cfg *Config) (appData, configPath string) {
 	// If the app directory has been changed, replace shortcut chars such
 	// as "~" with the full path.
 	if cfg.AppData != defaultApplicationDirectory {
-		cfg.AppData = dex.CleanAndExpandPath(cfg.AppData)
+		cfg.AppData = util.CleanAndExpandPath(cfg.AppData)
 		// If the app directory has been changed, but the config file path hasn't,
 		// reform the config file path with the new directory.
 		if cfg.ConfigPath == defaultConfigPath {
 			cfg.ConfigPath = filepath.Join(cfg.AppData, configFilename)
 		}
 	}
-	cfg.ConfigPath = dex.CleanAndExpandPath(cfg.ConfigPath)
+	cfg.ConfigPath = util.CleanAndExpandPath(cfg.ConfigPath)
 	return cfg.AppData, cfg.ConfigPath
 }
 
@@ -225,13 +225,13 @@ func ResolveConfig(appData string, cfg *Config) error {
 	var defaultDBPath, defaultLogPath string
 	switch {
 	case cfg.Testnet:
-		cfg.Net = dex.Testnet
+		cfg.Net = util.Testnet
 		defaultDBPath, defaultLogPath = setNet(appData, "testnet")
 	case cfg.Simnet:
-		cfg.Net = dex.Simnet
+		cfg.Net = util.Simnet
 		defaultDBPath, defaultLogPath = setNet(appData, "simnet")
 	default:
-		cfg.Net = dex.Mainnet
+		cfg.Net = util.Mainnet
 		defaultDBPath, defaultLogPath = setNet(appData, "mainnet")
 	}
 	defaultHost := DefaultHostByNetwork(cfg.Net)
@@ -275,11 +275,11 @@ func setNet(applicationDirectory, net string) (dbPath, logPath string) {
 
 // DefaultHostByNetwork accepts configured network and returns the network
 // specific default host
-func DefaultHostByNetwork(network dex.Network) string {
+func DefaultHostByNetwork(network util.Network) string {
 	switch network {
-	case dex.Testnet:
+	case util.Testnet:
 		return defaultTestnetHost
-	case dex.Simnet:
+	case util.Simnet:
 		return defaultSimnetHost
 	default:
 		return defaultMainnetHost

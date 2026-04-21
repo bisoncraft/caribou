@@ -10,8 +10,8 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/lexi"
 )
 
 const (
@@ -39,10 +39,10 @@ type nearTxDB struct {
 	*lexi.DB
 	txs        *lexi.Table
 	blockIndex *lexi.Index // confirmed txs, ordered by block number
-	log        dex.Logger
+	log        util.Logger
 }
 
-func newTxDB(path string, log dex.Logger) (*nearTxDB, error) {
+func newTxDB(path string, log util.Logger) (*nearTxDB, error) {
 	ldb, err := lexi.New(&lexi.Config{
 		Path: path,
 		Log:  log,

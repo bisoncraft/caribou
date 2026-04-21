@@ -25,11 +25,11 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/db"
 	"github.com/bisoncraft/meshwallet/wallet/db/bolt"
 	"github.com/bisoncraft/meshwallet/wallet/mnemonic"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/encrypt"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/encrypt"
 	"github.com/decred/dcrd/crypto/blake256"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"golang.org/x/text/language"
@@ -49,7 +49,7 @@ const (
 )
 
 var (
-	unbip = dex.BipIDSymbol
+	unbip = util.BipIDSymbol
 	// The coin waiters will query for transaction data every recheckInterval.
 	recheckInterval = time.Second * 5
 	// When waiting for a wallet to sync, a SyncStatus check will be performed
@@ -76,10 +76,10 @@ type Config struct {
 	// not already exist, it will be created.
 	DBPath string
 	// Net is the current network.
-	Net dex.Network
+	Net util.Network
 	// Logger is the Core's logger and is also used to create the sub-loggers
 	// for the asset backends.
-	Logger dex.Logger
+	Logger util.Logger
 	// Onion is the address (host:port) of a Tor proxy for use with .onion
 	// addresses. To use Tor with regular addresses as well, set TorProxy.
 	Onion string
@@ -121,9 +121,9 @@ type Core struct {
 	wg   sync.WaitGroup
 	ready chan struct{}
 	cfg  *Config
-	log  dex.Logger
+	log  util.Logger
 	db   db.DB
-	net  dex.Network
+	net  util.Network
 	intl atomic.Value // *locale
 
 	extensionModeConfig *ExtensionModeConfig
@@ -555,7 +555,7 @@ func (c *Core) setCredentials(creds *db.PrimaryCredentials) {
 }
 
 // Network returns the current wallet network.
-func (c *Core) Network() dex.Network {
+func (c *Core) Network() util.Network {
 	return c.net
 }
 
@@ -583,7 +583,7 @@ func (c *Core) initializeTokenWallet(tokenID uint32, tkn *asset.Token) error {
 	})
 	if err != nil {
 		return fmt.Errorf("error creating %s token wallet with existing %s parent wallet: %w",
-			dex.BipIDSymbol(tokenID), dex.BipIDSymbol(tkn.ParentID), err)
+			util.BipIDSymbol(tokenID), util.BipIDSymbol(tkn.ParentID), err)
 	}
 	w, err := c.loadXCWallet(dbWallet)
 	if err != nil {
@@ -597,7 +597,7 @@ func (c *Core) initializeTokenWallet(tokenID uint32, tkn *asset.Token) error {
 	if err != nil {
 		return fmt.Errorf("error storing new token wallet credentials: %w", err)
 	}
-	c.log.Infof("Token wallet for %s automatically created", dex.BipIDSymbol(tokenID))
+	c.log.Infof("Token wallet for %s automatically created", util.BipIDSymbol(tokenID))
 	c.updateWallet(tokenID, w)
 	return nil
 }
@@ -969,7 +969,7 @@ func (c *Core) assetMap() map[uint32]*SupportedAsset {
 			}
 			assets[tokenID] = &SupportedAsset{
 				ID:       tokenID,
-				Symbol:   dex.BipIDSymbol(tokenID),
+				Symbol:   util.BipIDSymbol(tokenID),
 				Wallet:   wallet,
 				Token:    token,
 				Name:     token.Name,
@@ -1382,7 +1382,7 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 	wallet.Wallet = w
 	wallet.parent = parent
 	wallet.supportedVersions = w.Info().SupportedVersions
-	wallet.connector = dex.NewConnectionMaster(w)
+	wallet.connector = util.NewConnectionMaster(w)
 	wallet.traits = asset.DetermineWalletTraits(w)
 	atomic.StoreUint32(wallet.broadcasting, 1)
 	return wallet, nil
@@ -3318,7 +3318,7 @@ func (c *Core) initialize() error {
 	for _, dbWallet := range dbWallets {
 		tkn := asset.TokenInfo(dbWallet.AssetID)
 		if asset.Asset(dbWallet.AssetID) == nil && tkn == nil {
-			c.log.Infof("Wallet for asset %s no longer supported", dex.BipIDSymbol(dbWallet.AssetID))
+			c.log.Infof("Wallet for asset %s no longer supported", util.BipIDSymbol(dbWallet.AssetID))
 			continue
 		}
 		assetID := dbWallet.AssetID
@@ -3653,13 +3653,13 @@ func createFile(fileName string) (*os.File, error) {
 		return nil, errors.New("no file path specified for creating")
 	}
 	fileDir := filepath.Dir(fileName)
-	if !dex.FileExists(fileDir) {
+	if !util.FileExists(fileDir) {
 		err := os.MkdirAll(fileDir, 0755)
 		if err != nil {
 			return nil, fmt.Errorf("os.MkdirAll error: %w", err)
 		}
 	}
-	fileName = dex.CleanAndExpandPath(fileName)
+	fileName = util.CleanAndExpandPath(fileName)
 	// Errors if file exists.
 	f, err := os.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {

@@ -30,14 +30,14 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/wait"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/wait"
 )
 
-var tLogger dex.Logger
+var tLogger util.Logger
 
-type WalletConstructor func(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error)
+type WalletConstructor func(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error)
 
 func tBackend(ctx context.Context, t *testing.T, cfg *Config, dir string, walletName *WalletName, blkFunc func(string)) *connectedWallet {
 	t.Helper()
@@ -74,12 +74,12 @@ func tBackend(ctx context.Context, t *testing.T, cfg *Config, dir string, wallet
 		DataDir: dir,
 	}
 
-	w, err := cfg.NewWallet(walletCfg, tLogger.SubLogger(walletName.Node+"."+walletName.Name), dex.Regtest)
+	w, err := cfg.NewWallet(walletCfg, tLogger.SubLogger(walletName.Node+"."+walletName.Name), util.Regtest)
 	if err != nil {
 		t.Fatalf("error creating backend: %v", err)
 	}
 
-	cm := dex.NewConnectionMaster(w)
+	cm := util.NewConnectionMaster(w)
 	err = cm.Connect(ctx)
 	if err != nil {
 		t.Fatalf("error connecting backend: %v", err)
@@ -104,7 +104,7 @@ func tBackend(ctx context.Context, t *testing.T, cfg *Config, dir string, wallet
 
 type connectedWallet struct {
 	asset.Wallet
-	cxn *dex.ConnectionMaster
+	cxn *util.ConnectionMaster
 }
 
 type testRig struct {
@@ -115,7 +115,7 @@ type testRig struct {
 }
 
 func (rig *testRig) close() {
-	closeConn := func(cm *dex.ConnectionMaster) {
+	closeConn := func(cm *util.ConnectionMaster) {
 		closed := make(chan struct{})
 		go func() {
 			cm.Disconnect()
@@ -161,7 +161,7 @@ type WalletName struct {
 type Config struct {
 	NewWallet    WalletConstructor
 	LotSize      uint64
-	Asset        *dex.Asset
+	Asset        *util.Asset
 	SplitTx      bool
 	SPV          bool
 	FirstWallet  *WalletName
@@ -169,7 +169,7 @@ type Config struct {
 }
 
 func Run(t *testing.T, cfg *Config) {
-	tLogger = dex.StdOutLogger("TEST", dex.LevelDebug)
+	tLogger = util.StdOutLogger("TEST", util.LevelDebug)
 	tCtx, shutdown := context.WithCancel(context.Background())
 	defer shutdown()
 

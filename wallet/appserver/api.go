@@ -17,9 +17,9 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 )
 
 var zero = encode.ClearBytes

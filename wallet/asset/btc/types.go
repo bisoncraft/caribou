@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -60,7 +60,7 @@ func (op *Output) Value() uint64 {
 
 // ID is the Output's coin ID. Part of the asset.Coin interface. For BTC, the
 // coin ID is 36 bytes = 32 bytes tx hash + 4 bytes big-endian vout.
-func (op *Output) ID() dex.Bytes {
+func (op *Output) ID() util.Bytes {
 	return ToCoinID(op.txHash(), op.vout())
 }
 
@@ -123,12 +123,12 @@ func (ci *AuditInfo) Coin() asset.Coin {
 }
 
 // Contract is the contract script.
-func (ci *AuditInfo) Contract() dex.Bytes {
+func (ci *AuditInfo) Contract() util.Bytes {
 	return ci.contract
 }
 
 // SecretHash is the contract's secret hash.
-func (ci *AuditInfo) SecretHash() dex.Bytes {
+func (ci *AuditInfo) SecretHash() util.Bytes {
 	return ci.secretHash
 }
 
@@ -172,7 +172,7 @@ func (r *SwapReceipt) Expiration() time.Time {
 }
 
 // Contract is the contract script. Part of the asset.Receipt interface.
-func (r *SwapReceipt) Contract() dex.Bytes {
+func (r *SwapReceipt) Contract() util.Bytes {
 	return r.SwapContract
 }
 
@@ -189,6 +189,6 @@ func (r *SwapReceipt) String() string {
 
 // SignedRefund is a signed refund script that can be used to return
 // funds to the user in the case a contract expires.
-func (r *SwapReceipt) SignedRefund() dex.Bytes {
+func (r *SwapReceipt) SignedRefund() util.Bytes {
 	return r.SignedRefundBytes
 }

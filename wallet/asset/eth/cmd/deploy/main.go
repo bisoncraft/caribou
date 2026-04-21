@@ -43,9 +43,9 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
 	"github.com/bisoncraft/meshwallet/wallet/asset/polygon"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/util"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -93,14 +93,14 @@ func mainErr() error {
 		return fmt.Errorf("more than one network specified")
 	}
 
-	net := dex.Mainnet
+	net := util.Mainnet
 	if useSimnet {
-		net = dex.Simnet
+		net = util.Simnet
 		dexeth.MaybeReadSimnetAddrs()
 		dexpolygon.MaybeReadSimnetAddrs()
 	}
 	if useTestnet {
-		net = dex.Testnet
+		net = util.Testnet
 	}
 
 	if readCreds {
@@ -114,7 +114,7 @@ func mainErr() error {
 		return nil
 	}
 
-	assetID, found := dex.BipSymbolID(chain)
+	assetID, found := util.BipSymbolID(chain)
 	if !found {
 		return fmt.Errorf("asset %s not known", chain)
 	}
@@ -125,12 +125,12 @@ func mainErr() error {
 
 	contractVer := uint32(contractVerI)
 
-	logLvl := dex.LevelInfo
+	logLvl := util.LevelInfo
 	if debug {
-		logLvl = dex.LevelDebug
+		logLvl = util.LevelDebug
 	}
 	if trace {
-		logLvl = dex.LevelTrace
+		logLvl = util.LevelTrace
 	}
 
 	var tokenAddr common.Address
@@ -141,9 +141,9 @@ func mainErr() error {
 		tokenAddr = common.HexToAddress(tokenAddress)
 	}
 
-	log := dex.StdOutLogger("DEPLOY", logLvl)
+	log := util.StdOutLogger("DEPLOY", logLvl)
 
-	var bui *dex.UnitInfo
+	var bui *util.UnitInfo
 	var chainCfg *params.ChainConfig
 	switch chain {
 	case "eth":

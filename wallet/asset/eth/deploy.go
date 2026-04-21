@@ -11,12 +11,12 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	erc20v0 "github.com/bisoncraft/meshwallet/dex/networks/erc20/contracts/v0"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	multibal "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/multibalance"
-	ethv0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
-	ethv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
+	"github.com/bisoncraft/meshwallet/util"
+	erc20v0 "github.com/bisoncraft/meshwallet/util/networks/erc20/contracts/v0"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	multibal "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/multibalance"
+	ethv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
+	ethv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -43,9 +43,9 @@ func (contractDeployer) EstimateDeployFunding(
 	tokenAddress common.Address,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 	txData, err := ContractDeployer.TxData(contractVer, tokenAddress)
 	if err != nil {
@@ -62,9 +62,9 @@ func (contractDeployer) estimateDeployFunding(
 	chain string,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 
 	walletDir, err := os.MkdirTemp("", "")
@@ -131,9 +131,9 @@ func (contractDeployer) EstimateMultiBalanceDeployFunding(
 	chain string,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 	const deploymentGas = 400_000 // 302_647 for https://goerli.etherscan.io/tx/0x540d3e82888b18f89566a988712a7c2ecd45bd2df472f8dd689e319ae9fa4445
 	txData := common.FromHex(multibal.MultiBalanceV0MetaData.Bin)
@@ -177,9 +177,9 @@ func (contractDeployer) DeployContract(
 	tokenAddress common.Address,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 	txData, err := ContractDeployer.TxData(contractVer, tokenAddress)
 	if err != nil {
@@ -227,9 +227,9 @@ func (contractDeployer) deployContract(
 	chain string,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 
 	walletDir, err := os.MkdirTemp("", "")
@@ -306,9 +306,9 @@ func (contractDeployer) ReturnETH(
 	returnAddr common.Address,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 
 	walletDir, err := os.MkdirTemp("", "")
@@ -333,8 +333,8 @@ func (contractDeployer) nodeAndRate(
 	credentialsPath string,
 
 	chainCfg *params.ChainConfig,
-	log dex.Logger,
-	net dex.Network,
+	log util.Logger,
+	net util.Network,
 ) (*multiRPCClient, *big.Int, *big.Int, error) {
 
 	seed, providers, err := getFileCredentials(chain, credentialsPath, net)
@@ -387,9 +387,9 @@ func (contractDeployer) DeployMultiBalance(
 	chain string,
 	credentialsPath string,
 	chainCfg *params.ChainConfig,
-	ui *dex.UnitInfo,
-	log dex.Logger,
-	net dex.Network,
+	ui *util.UnitInfo,
+	log util.Logger,
+	net util.Network,
 ) error {
 	txData := common.FromHex(multibal.MultiBalanceV0MetaData.Bin)
 	deployer := func(txOpts *bind.TransactOpts, cb bind.ContractBackend) (common.Address, *types.Transaction, error) {

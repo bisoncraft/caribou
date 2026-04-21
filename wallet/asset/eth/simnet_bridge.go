@@ -20,17 +20,17 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
-	dexerc20 "github.com/bisoncraft/meshwallet/dex/networks/erc20"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
+	dexerc20 "github.com/bisoncraft/meshwallet/util/networks/erc20"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
 )
 
 const simnetBridgeName = "simnet"
 
 var (
-	usdtBaseID, _ = dex.BipSymbolID("usdt.base")
+	usdtBaseID, _ = util.BipSymbolID("usdt.base")
 )
 
 var simnetHarnessDir = map[uint32]string{
@@ -49,20 +49,20 @@ var simnetTokenScript = map[uint32]string{
 }
 
 type simnetBridge struct {
-	net     dex.Network
+	net     util.Network
 	assetID uint32
 	cb      bind.ContractBackend
 	addr    common.Address
 	chainID *big.Int
-	log     dex.Logger
+	log     util.Logger
 
 	// Mock approval state tracking
 	approvedAssets map[uint32]bool
 	approvalsMtx   sync.RWMutex
 }
 
-func newSimnetBridge(assetID uint32, net dex.Network, cb bind.ContractBackend, addr common.Address, chainID *big.Int, log dex.Logger) (*simnetBridge, error) {
-	if net != dex.Simnet {
+func newSimnetBridge(assetID uint32, net util.Network, cb bind.ContractBackend, addr common.Address, chainID *big.Int, log util.Logger) (*simnetBridge, error) {
+	if net != util.Simnet {
 		return nil, fmt.Errorf("simnet bridge only available on simnet, got %s", net)
 	}
 

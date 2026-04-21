@@ -14,8 +14,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/evmrelay"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -79,9 +79,9 @@ type httpRelayer struct {
 var _ relayer = (*httpRelayer)(nil)
 
 // newHTTPRelayer creates a new relay client with the given base URL.
-func newHTTPRelayer(baseURL string, net dex.Network, baseChainID uint32, chainID int64) *httpRelayer {
+func newHTTPRelayer(baseURL string, net util.Network, baseChainID uint32, chainID int64) *httpRelayer {
 	relayChainID := chainID
-	if net == dex.Simnet {
+	if net == util.Simnet {
 		if id, ok := simnetRelayChainIDs[baseChainID]; ok {
 			relayChainID = id
 		}

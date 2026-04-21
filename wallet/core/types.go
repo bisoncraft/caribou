@@ -10,7 +10,7 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
 
@@ -166,7 +166,7 @@ type User struct {
 	SeedGenerationTime uint64                      `json:"seedgentime"`
 	Assets             map[uint32]*SupportedAsset  `json:"assets"`
 	FiatRates          map[uint32]float64          `json:"fiatRates"`
-	Net                dex.Network                 `json:"net"`
+	Net                util.Network                 `json:"net"`
 	ExtensionConfig    *ExtensionModeConfig        `json:"extensionModeConfig,omitempty"`
 	Actions            []*asset.ActionRequiredNote `json:"actions,omitempty"`
 }
@@ -183,7 +183,7 @@ type SupportedAsset struct {
 	Info *asset.WalletInfo `json:"info"`
 	// Token is only populated for token assets.
 	Token    *asset.Token `json:"token"`
-	UnitInfo dex.UnitInfo `json:"unitInfo"`
+	UnitInfo util.UnitInfo `json:"unitInfo"`
 }
 
 // MiniOrder is minimal information about an order in a market's order book.

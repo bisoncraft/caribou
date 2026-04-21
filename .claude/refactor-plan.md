@@ -136,4 +136,4 @@ checking that `go build ./wallet/...` still passes.)
 - `wallet/mm/` — Market-making
 - `wallet/orderbook/` — Order book management
 - `wallet/comms/` — DEX WebSocket connectivity
-- `dex/order/`, `dex/msgjson/`, `dex/market.go`
+- `util/order/`, `util/msgjson/`, `util/market.go`

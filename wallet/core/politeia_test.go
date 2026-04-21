@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 )
 
 // tPoliteiaVoter is a mock wallet implementing asset.PoliteiaVoter for testing.

@@ -17,9 +17,9 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/electrum"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 
@@ -30,7 +30,7 @@ type ExchangeWalletElectrum struct {
 	*baseWallet
 	*authAddOn
 	ew                 *electrumWallet
-	minElectrumVersion dex.Semver
+	minElectrumVersion util.Semver
 
 	findRedemptionMtx   sync.RWMutex
 	findRedemptionQueue map[OutPoint]*FindRedemptionReq
@@ -108,7 +108,7 @@ func (btc *ExchangeWalletElectrum) RedemptionAddress() (string, error) {
 
 // Connect connects to the Electrum wallet's RPC server and an electrum server
 // directly. Goroutines are started to monitor for new blocks and server
-// connection changes. Satisfies the dex.Connector interface.
+// connection changes. Satisfies the util.Connector interface.
 func (btc *ExchangeWalletElectrum) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	wg, err := btc.connect(ctx) // prepares btc.ew.chainV via btc.node.connect()
 	if err != nil {
@@ -139,11 +139,11 @@ func (btc *ExchangeWalletElectrum) Connect(ctx context.Context) (*sync.WaitGroup
 	if err != nil {
 		return nil, err
 	}
-	gotVer, err := dex.SemverFromString(verStr)
+	gotVer, err := util.SemverFromString(verStr)
 	if err != nil {
 		return nil, err
 	}
-	if !dex.SemverCompatible(btc.minElectrumVersion, *gotVer) {
+	if !util.SemverCompatible(btc.minElectrumVersion, *gotVer) {
 		return nil, fmt.Errorf("wanted electrum wallet version %s but got %s", btc.minElectrumVersion, gotVer)
 	}
 
@@ -204,7 +204,7 @@ func (btc *ExchangeWalletElectrum) walletFeeRate(ctx context.Context, _ RawReque
 	if err != nil {
 		return 0, err
 	}
-	return uint64(dex.IntDivUp(satPerKB, 1000)), nil
+	return uint64(util.IntDivUp(satPerKB, 1000)), nil
 }
 
 // findRedemption will search for the spending transaction of specified
@@ -257,7 +257,7 @@ func (btc *ExchangeWalletElectrum) tryRedemptionRequests(ctx context.Context) {
 
 // FindRedemption locates a swap contract output's redemption transaction input
 // and the secret key used to spend the output.
-func (btc *ExchangeWalletElectrum) FindRedemption(ctx context.Context, coinID, contract dex.Bytes) (redemptionCoin, secret dex.Bytes, err error) {
+func (btc *ExchangeWalletElectrum) FindRedemption(ctx context.Context, coinID, contract util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
 	txHash, vout, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, nil, err

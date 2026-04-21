@@ -13,25 +13,25 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20/polygonbridge"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20/polygonbridge"
 )
 
 var (
-	usdtEthID, _     = dex.BipSymbolID("usdt.eth")
-	usdtPolygonID, _ = dex.BipSymbolID("usdt.polygon")
-	wethPolygonID, _ = dex.BipSymbolID("weth.polygon")
-	ethID, _         = dex.BipSymbolID("eth")
-	polygonID, _     = dex.BipSymbolID("polygon")
-	polygonEthID, _  = dex.BipSymbolID("polygon.eth")
-	maticEthID, _    = dex.BipSymbolID("matic.eth")
+	usdtEthID, _     = util.BipSymbolID("usdt.eth")
+	usdtPolygonID, _ = util.BipSymbolID("usdt.polygon")
+	wethPolygonID, _ = util.BipSymbolID("weth.polygon")
+	ethID, _         = util.BipSymbolID("eth")
+	polygonID, _     = util.BipSymbolID("polygon")
+	polygonEthID, _  = util.BipSymbolID("polygon.eth")
+	maticEthID, _    = util.BipSymbolID("matic.eth")
 )
 
 // network -> chainAssetID -> sourceAssetID -> destAssetID
-var polygonBridgeSupportedAssets = map[dex.Network]map[uint32]map[uint32]uint32{
-	dex.Mainnet: {
+var polygonBridgeSupportedAssets = map[util.Network]map[uint32]map[uint32]uint32{
+	util.Mainnet: {
 		ethID: {
 			ethID:        wethPolygonID,
 			maticEthID:   polygonID,
@@ -42,7 +42,7 @@ var polygonBridgeSupportedAssets = map[dex.Network]map[uint32]map[uint32]uint32{
 			polygonID:     polygonEthID,
 		},
 	},
-	dex.Testnet: {
+	util.Testnet: {
 		ethID: {
 			ethID:        wethPolygonID,
 			polygonEthID: polygonID,
@@ -68,13 +68,13 @@ const (
 type polygonBridgePolygon struct {
 	cb            bind.ContractBackend
 	stateReceiver *polygonbridge.StateReceiver
-	log           dex.Logger
-	net           dex.Network
+	log           util.Logger
+	net           util.Network
 }
 
 var _ bridge = (*polygonBridgePolygon)(nil)
 
-func newPolygonBridgePolygon(cb bind.ContractBackend, net dex.Network, log dex.Logger) (*polygonBridgePolygon, error) {
+func newPolygonBridgePolygon(cb bind.ContractBackend, net util.Network, log util.Logger) (*polygonBridgePolygon, error) {
 	stateReceiver, err := polygonbridge.NewStateReceiver(stateSyncAddress, cb)
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (b *polygonBridgePolygon) bridgeContractAddr(ctx context.Context, assetID u
 func (b *polygonBridgePolygon) initiateBridge(opts *bind.TransactOpts, sourceAssetID, destAssetID uint32, amount *big.Int) (*types.Transaction, error) {
 	expectedDestAssetID := polygonBridgeSupportedAssets[b.net][polygonID][sourceAssetID]
 	if expectedDestAssetID != destAssetID {
-		return nil, fmt.Errorf("%s cannot be bridged to %s", dex.BipIDSymbol(sourceAssetID), dex.BipIDSymbol(destAssetID))
+		return nil, fmt.Errorf("%s cannot be bridged to %s", util.BipIDSymbol(sourceAssetID), util.BipIDSymbol(destAssetID))
 	}
 
 	if sourceAssetID == polygonID {
@@ -126,10 +126,10 @@ func (b *polygonBridgePolygon) initiateBridge(opts *bind.TransactOpts, sourceAss
 	return childERC20.Withdraw(opts, amount)
 }
 
-func getPolygonWithdrawalCompletionData(ctx context.Context, bridgeTxID string, isToken bool, network dex.Network) ([]byte, error) {
+func getPolygonWithdrawalCompletionData(ctx context.Context, bridgeTxID string, isToken bool, network util.Network) ([]byte, error) {
 	genURL := func(eventSignature string) string {
 		var networkName string
-		if network == dex.Mainnet {
+		if network == util.Mainnet {
 			networkName = "matic"
 		} else {
 			networkName = "amoy"
@@ -248,14 +248,14 @@ type polygonBridgeAddresses struct {
 	erc20PredicateBurnOnlyAddr common.Address
 }
 
-var polygonBridgeAddrs = map[dex.Network]*polygonBridgeAddresses{
-	dex.Mainnet: {
+var polygonBridgeAddrs = map[util.Network]*polygonBridgeAddresses{
+	util.Mainnet: {
 		rootChainManagerAddr:       common.HexToAddress("0xA0c68C638235ee32657e8f720a23ceC1bFc77C77"),
 		depositManagerAddr:         common.HexToAddress("0x401f6c983ea34274ec46f84d70b31c151321188b"),
 		withdrawManagerAddr:        common.HexToAddress("0x2A88696e0fFA76bAA1338F2C74497cC013495922"),
 		erc20PredicateBurnOnlyAddr: common.HexToAddress("0x626fb210bf50e201ed62ca2705c16de2a53dc966"),
 	},
-	dex.Testnet: {
+	util.Testnet: {
 		rootChainManagerAddr:       common.HexToAddress("0x34f5a25b627f50bb3f5cab72807c4d4f405a9232"),
 		depositManagerAddr:         common.HexToAddress("0x44Ad17990F9128C6d823Ee10dB7F0A5d40a731A4"),
 		withdrawManagerAddr:        common.HexToAddress("0x822db7e79096E7247d9273E5782ecAec464Eb96C"),
@@ -267,9 +267,9 @@ var polygonBridgeAddrs = map[dex.Network]*polygonBridgeAddresses{
 type polygonBridgeEth struct {
 	rootChainManager       *polygonbridge.RootChainManager
 	cb                     bind.ContractBackend
-	log                    dex.Logger
+	log                    util.Logger
 	addr                   common.Address
-	net                    dex.Network
+	net                    util.Network
 	node                   ethFetcher
 	withdrawManager        *polygonbridge.WithdrawManager
 	exitNFT                *polygonbridge.ExitNFT
@@ -278,7 +278,7 @@ type polygonBridgeEth struct {
 
 var _ bridge = (*polygonBridgeEth)(nil)
 
-func newPolygonBridgeEth(ctx context.Context, cb bind.ContractBackend, net dex.Network, addr common.Address, node ethFetcher, log dex.Logger) (*polygonBridgeEth, error) {
+func newPolygonBridgeEth(ctx context.Context, cb bind.ContractBackend, net util.Network, addr common.Address, node ethFetcher, log util.Logger) (*polygonBridgeEth, error) {
 	addrs, found := polygonBridgeAddrs[net]
 	if !found {
 		return nil, fmt.Errorf("no root chain manager address found for network %s", net)
@@ -420,7 +420,7 @@ func (b *polygonBridgeEth) requiresBridgeContractApproval(assetID uint32) bool {
 func (b *polygonBridgeEth) initiateBridge(opts *bind.TransactOpts, sourceAssetID, destAssetID uint32, amt *big.Int) (*types.Transaction, error) {
 	expectedDestAssetID := polygonBridgeSupportedAssets[b.net][ethID][sourceAssetID]
 	if expectedDestAssetID != destAssetID {
-		return nil, fmt.Errorf("%s cannot be bridged to %s", dex.BipIDSymbol(sourceAssetID), dex.BipIDSymbol(destAssetID))
+		return nil, fmt.Errorf("%s cannot be bridged to %s", util.BipIDSymbol(sourceAssetID), util.BipIDSymbol(destAssetID))
 	}
 
 	if sourceAssetID == ethID {

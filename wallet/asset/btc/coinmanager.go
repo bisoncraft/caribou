@@ -9,8 +9,8 @@ import (
 	"sync"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -45,7 +45,7 @@ type OrderFundingThresholder func(val, lots, maxFeeRate uint64, reportChange boo
 type CoinManager struct {
 	// Coins returned by Fund are cached for quick reference.
 	mtx sync.RWMutex
-	log dex.Logger
+	log util.Logger
 
 	orderEnough OrderFundingThresholder
 	chainParams *chaincfg.Params
@@ -59,7 +59,7 @@ type CoinManager struct {
 }
 
 func NewCoinManager(
-	log dex.Logger,
+	log util.Logger,
 	chainParams *chaincfg.Params,
 	orderEnough OrderFundingThresholder,
 	listUnspent func() ([]*ListUnspentResult, error),
@@ -89,7 +89,7 @@ func (c *CoinManager) FundWithUTXOs(
 	keep uint64,
 	lockUnspents bool,
 	enough EnoughFunc,
-) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []dex.Bytes, size, sum uint64, err error) {
+) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 	var avail uint64
 	for _, utxo := range utxos {
 		avail += utxo.Amount
@@ -105,7 +105,7 @@ func (c *CoinManager) fundWithUTXOs(
 	avail, keep uint64,
 	lockUnspents bool,
 	enough EnoughFunc,
-) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []dex.Bytes, size, sum uint64, err error) {
+) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 
 	if keep > 0 {
 		kept := leastOverFund(reserveEnough(keep), utxos)
@@ -149,7 +149,7 @@ func (c *CoinManager) fundWithUTXOs(
 
 func (c *CoinManager) fund(keep uint64, minConfs uint32, lockUnspents bool,
 	enough func(_, size, sum uint64) (bool, uint64)) (
-	coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []dex.Bytes, size, sum uint64, err error) {
+	coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 	utxos, _, avail, err := c.spendableUTXOs(minConfs)
 	if err != nil {
 		return nil, nil, nil, nil, 0, 0, fmt.Errorf("error getting spendable utxos: %w", err)
@@ -165,7 +165,7 @@ func (c *CoinManager) Fund(
 	minConfs uint32,
 	lockUnspents bool,
 	enough EnoughFunc,
-) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []dex.Bytes, size, sum uint64, err error) {
+) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
@@ -208,7 +208,7 @@ func (c *CoinManager) OrderWithLeastOverFund(maxLock, feeRate uint64, orders []*
 // passed in. If a split is allowed and all orders cannot be funded, nil slices
 // are returned.
 func (c *CoinManager) FundMultiBestEffort(keep, maxLock uint64, values []*asset.MultiOrderValue,
-	maxFeeRate uint64, splitAllowed bool) ([]asset.Coins, [][]dex.Bytes, map[OutPoint]*UTxO, []*Output, error) {
+	maxFeeRate uint64, splitAllowed bool) ([]asset.Coins, [][]util.Bytes, map[OutPoint]*UTxO, []*Output, error) {
 	utxos, _, avail, err := c.SpendableUTXOs(0)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("error getting spendable utxos: %w", err)
@@ -283,14 +283,14 @@ func (c *CoinManager) FundMultiBestEffort(keep, maxLock uint64, values []*asset.
 		return allFundingUTXOs
 	}
 
-	returnValues := func(allFundingUTXOs [][]*CompositeUTXO) (coins []asset.Coins, redeemScripts [][]dex.Bytes, fundingCoins map[OutPoint]*UTxO, spents []*Output, err error) {
+	returnValues := func(allFundingUTXOs [][]*CompositeUTXO) (coins []asset.Coins, redeemScripts [][]util.Bytes, fundingCoins map[OutPoint]*UTxO, spents []*Output, err error) {
 		coins = make([]asset.Coins, len(allFundingUTXOs))
 		fundingCoins = make(map[OutPoint]*UTxO)
 		spents = make([]*Output, 0, len(allFundingUTXOs))
-		redeemScripts = make([][]dex.Bytes, len(allFundingUTXOs))
+		redeemScripts = make([][]util.Bytes, len(allFundingUTXOs))
 		for i, fundingUTXOs := range allFundingUTXOs {
 			coins[i] = make(asset.Coins, len(fundingUTXOs))
-			redeemScripts[i] = make([]dex.Bytes, len(fundingUTXOs))
+			redeemScripts[i] = make([]util.Bytes, len(fundingUTXOs))
 			for j, output := range fundingUTXOs {
 				coins[i][j] = NewOutput(output.TxHash, output.Vout, output.Amount)
 				fundingCoins[OutPoint{TxHash: *output.TxHash, Vout: output.Vout}] = &UTxO{
@@ -421,7 +421,7 @@ func (c *CoinManager) ReturnOutPoint(pt OutPoint) error {
 }
 
 // FundingCoins attempts to find the specified utxos and locks them.
-func (c *CoinManager) FundingCoins(ids []dex.Bytes) (asset.Coins, error) {
+func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 	// First check if we have the coins in cache.
 	coins := make(asset.Coins, 0, len(ids))
 	notFound := make(map[OutPoint]bool)
@@ -575,7 +575,7 @@ func ConvertUnspent(confs uint32, unspents []*ListUnspentResult, chainParams *ch
 
 			nfo, err := dexbtc.InputInfo(txout.ScriptPubKey, txout.RedeemScript, chainParams)
 			if err != nil {
-				if errors.Is(err, dex.UnsupportedScriptError) {
+				if errors.Is(err, util.UnsupportedScriptError) {
 					continue
 				}
 				return nil, nil, 0, fmt.Errorf("error reading asset info: %w", err)
@@ -612,7 +612,7 @@ func TryFund(
 	sum, extra, size uint64,
 	coins asset.Coins,
 	fundingCoins map[OutPoint]*UTxO,
-	redeemScripts []dex.Bytes,
+	redeemScripts []util.Bytes,
 	spents []*Output,
 	err error,
 ) {

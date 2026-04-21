@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/msgjson"
 	"github.com/decred/dcrd/certgen"
 	"github.com/gorilla/websocket"
 )
 
-var tLogger = dex.StdOutLogger("conn_TEST", dex.LevelTrace)
+var tLogger = util.StdOutLogger("conn_TEST", util.LevelTrace)
 
 func makeRequest(id uint64, route string, msg any) *msgjson.Message {
 	req, _ := msgjson.NewRequest(id, route, msg)
@@ -258,7 +258,7 @@ func TestWsConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	noCertConnMaster := dex.NewConnectionMaster(noCertConn)
+	noCertConnMaster := util.NewConnectionMaster(noCertConn)
 	err = noCertConnMaster.Connect(ctx)
 	noCertConnMaster.Disconnect()
 	if err == nil || !errors.Is(err, ErrCertRequired) {
@@ -276,7 +276,7 @@ func TestWsConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiter := dex.NewConnectionMaster(wsc)
+	waiter := util.NewConnectionMaster(wsc)
 	err = waiter.Connect(ctx)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)

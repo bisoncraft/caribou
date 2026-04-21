@@ -21,15 +21,15 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/db"
 	"github.com/bisoncraft/meshwallet/wallet/mnemonic"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 	"github.com/go-chi/chi/v5"
 )
 
 var (
 	tErr           = fmt.Errorf("expected dummy error")
-	tLogger        dex.Logger
+	tLogger        util.Logger
 	tCtx           context.Context
 	testAppVersion = "1.1.0-rc1+release.local"
 )
@@ -40,7 +40,7 @@ type tCoin struct {
 	confsErr error
 }
 
-func (c *tCoin) ID() dex.Bytes {
+func (c *tCoin) ID() util.Bytes {
 	return c.id
 }
 
@@ -85,7 +85,7 @@ type TCore struct {
 	notesErr        error
 }
 
-func (c *TCore) Network() dex.Network { return dex.Mainnet }
+func (c *TCore) Network() util.Network { return util.Mainnet }
 func (c *TCore) ToggleRateSourceStatus(src string, disable bool) error {
 	return c.rateSourceErr
 }
@@ -159,7 +159,7 @@ func (c *TCore) NotificationFeed() *core.NoteFeed {
 	}
 }
 
-func (c *TCore) AckNotes(ids []dex.Bytes) {}
+func (c *TCore) AckNotes(ids []util.Bytes) {}
 
 func (c *TCore) Logout() error { return c.logoutErr }
 
@@ -318,7 +318,7 @@ func newTServer(t *testing.T, start bool) (*AppServer, *TCore, func()) {
 	}
 
 	if start {
-		cm := dex.NewConnectionMaster(s)
+		cm := util.NewConnectionMaster(s)
 		err := cm.Connect(ctx)
 		if err != nil {
 			t.Fatalf("Error starting AppServer: %v", err)
@@ -364,7 +364,7 @@ func ensureResponse(t *testing.T, f func(w http.ResponseWriter, r *http.Request)
 }
 
 func TestMain(m *testing.M) {
-	tLogger = dex.StdOutLogger("TEST", dex.LevelTrace)
+	tLogger = util.StdOutLogger("TEST", util.LevelTrace)
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {
@@ -419,7 +419,7 @@ func TestConnectBindError(t *testing.T) {
 		t.Fatalf("error creating server: %v", err)
 	}
 
-	cm := dex.NewConnectionMaster(s)
+	cm := util.NewConnectionMaster(s)
 	err = cm.Connect(tCtx)
 	if err == nil {
 		shutdown() // shutdown both servers with shared context

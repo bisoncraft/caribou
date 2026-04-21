@@ -30,12 +30,12 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 var (
 	tLotSize uint64 = 1e6
-	tDASH           = &dex.Asset{
+	tDASH           = &util.Asset{
 		ID:         5,
 		Symbol:     "dash",
 		Version:    version,

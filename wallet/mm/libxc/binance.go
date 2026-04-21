@@ -26,11 +26,11 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/comms"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/utils"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/utils"
 )
 
 // Binance API spot trading docs:
@@ -62,7 +62,7 @@ type binanceOrderBook struct {
 	synced         atomic.Bool
 	syncChan       chan struct{}
 	numSubscribers uint32
-	cm             *dex.ConnectionMaster
+	cm             *util.ConnectionMaster
 
 	getSnapshot func() (*bntypes.OrderbookSnapshot, error)
 	getAvgPrice func() (float64, error)
@@ -72,7 +72,7 @@ type binanceOrderBook struct {
 	mktID                 string
 	baseConversionFactor  uint64
 	quoteConversionFactor uint64
-	log                   dex.Logger
+	log                   util.Logger
 	avgPrice              atomic.Uint64
 
 	connectedChan chan bool
@@ -84,7 +84,7 @@ func newBinanceOrderBook(
 	getSnapshot func() (*bntypes.OrderbookSnapshot, error),
 	getAvgPrice func() (float64, error),
 	initialAvgPrice float64,
-	log dex.Logger,
+	log util.Logger,
 ) *binanceOrderBook {
 	msgAvgPrice := calc.MessageRateAlt(initialAvgPrice, baseConversionFactor, quoteConversionFactor)
 	book := &binanceOrderBook{
@@ -152,7 +152,7 @@ func (b *binanceOrderBook) convertBinanceBook(binanceBids, binanceAsks [][2]json
 // This function runs until the context is canceled. It must be started as
 // a new goroutine.
 func (b *binanceOrderBook) sync(ctx context.Context) {
-	cm := dex.NewConnectionMaster(b)
+	cm := util.NewConnectionMaster(b)
 	b.mtx.Lock()
 	b.cm = cm
 	b.mtx.Unlock()
@@ -495,7 +495,7 @@ type bncAssetConfig struct {
 	// that the token is hosted such as "ETH".
 	chain            string
 	conversionFactor uint64
-	ui               *dex.UnitInfo
+	ui               *util.UnitInfo
 }
 
 func bncAssetCfg(assetID uint32) (*bncAssetConfig, error) {
@@ -504,7 +504,7 @@ func bncAssetCfg(assetID uint32) (*bncAssetConfig, error) {
 		return nil, err
 	}
 
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		return nil, fmt.Errorf("no symbol found for asset ID %d", assetID)
 	}
@@ -576,16 +576,16 @@ func errHasBnCode(err error, code int) bool {
 }
 
 type binance struct {
-	log                dex.Logger
+	log                util.Logger
 	marketsURL         string
 	accountsURL        string
 	wsURL              string
 	apiKey             string
 	secretKey          string
 	knownAssets        map[uint32]bool
-	net                dex.Network
+	net                util.Network
 	tradeIDNonce       atomic.Uint32
-	tradeIDNoncePrefix dex.Bytes
+	tradeIDNoncePrefix util.Bytes
 	broadcast          func(any)
 	isUS               bool
 	torProxy           string
@@ -637,7 +637,7 @@ func (bnc *binance) AssetGroups() map[uint32]uint32 {
 	groups := make(map[uint32]uint32)
 	for coin, tknIDs := range tokenIDs {
 		ids := make([]uint32, 0, len(tknIDs)+1)
-		if nativeID, found := dex.BipSymbolID(convertBnCoin(coin)); found {
+		if nativeID, found := util.BipSymbolID(convertBnCoin(coin)); found {
 			ids = append(ids, nativeID)
 		}
 		ids = append(ids, tknIDs...)
@@ -666,9 +666,9 @@ func newBinance(cfg *CEXConfig, binanceUS bool) *binance {
 	var marketsURL, accountsURL, wsURL string
 
 	switch cfg.Net {
-	case dex.Testnet:
+	case util.Testnet:
 		marketsURL, accountsURL, wsURL = testnetHttpURL, fakeBinanceURL, testnetWebsocketURL
-	case dex.Simnet:
+	case util.Simnet:
 		marketsURL, accountsURL, wsURL = fakeBinanceURL, fakeBinanceURL, fakeBinanceWsURL
 	default: //mainnet
 		if binanceUS {
@@ -770,7 +770,7 @@ func (bnc *binance) readCoins(coins []*bntypes.CoinInfo) {
 		for _, netInfo := range nfo.NetworkList {
 			symbol := binanceCoinNetworkToDexSymbol(nfo.Coin, netInfo.Network)
 
-			assetID, found := dex.BipSymbolID(symbol)
+			assetID, found := util.BipSymbolID(symbol)
 			if !found {
 				continue
 			}
@@ -815,7 +815,7 @@ func (bnc *binance) getCoinInfo(ctx context.Context) error {
 	return nil
 }
 
-func parseMarketFilters(market *bntypes.Market, bui, qui dex.UnitInfo) (*bntypes.Market, error) {
+func parseMarketFilters(market *bntypes.Market, bui, qui util.UnitInfo) (*bntypes.Market, error) {
 	var rateStepFound, lotSizeFound bool
 
 	market.MaxNotional = math.MaxUint64
@@ -1455,7 +1455,7 @@ func (bnc *binance) ConfirmDeposit(ctx context.Context, deposit *DepositData) (b
 			switch status.Status {
 			case bntypes.DepositStatusSuccess, bntypes.DepositStatusCredited:
 				symbol := binanceCoinNetworkToDexSymbol(status.Coin, status.Network)
-				assetID, found := dex.BipSymbolID(symbol)
+				assetID, found := util.BipSymbolID(symbol)
 				if !found {
 					bnc.log.Errorf("Failed to find DEX asset ID for Coin: %s, Network: %s", status.Coin, status.Network)
 					return true, 0
@@ -1902,7 +1902,7 @@ func (bnc *binance) getListenID(ctx context.Context) (string, error) {
 }
 
 func (bnc *binance) getUserDataStream(ctx context.Context) (err error) {
-	newConn := func() (*dex.ConnectionMaster, error) {
+	newConn := func() (*util.ConnectionMaster, error) {
 		listenKey, err := bnc.getListenID(ctx)
 		if err != nil {
 			return nil, err
@@ -1927,7 +1927,7 @@ func (bnc *binance) getUserDataStream(ctx context.Context) (err error) {
 			return nil, fmt.Errorf("NewWsConn error: %w", err)
 		}
 
-		cm := dex.NewConnectionMaster(conn)
+		cm := util.NewConnectionMaster(conn)
 		if err = cm.ConnectOnce(ctx); err != nil {
 			return nil, err
 		}
@@ -2263,7 +2263,7 @@ func (bnc *binance) connectToMarketDataStream(ctx context.Context, baseID, quote
 	reconnectC := make(chan struct{})
 	checkSubsC := make(chan struct{})
 
-	newConnection := func() (*dex.ConnectionMaster, error) {
+	newConnection := func() (*util.ConnectionMaster, error) {
 		// Need to send key but not signature
 		connectEventFunc := func(cs comms.ConnectionStatus) {
 			if cs != comms.Disconnected && cs != comms.Connected {
@@ -2309,7 +2309,7 @@ func (bnc *binance) connectToMarketDataStream(ctx context.Context, baseID, quote
 		}
 
 		bnc.marketStream = conn
-		cm := dex.NewConnectionMaster(conn)
+		cm := util.NewConnectionMaster(conn)
 		if err = cm.ConnectOnce(ctx); err != nil {
 			return nil, fmt.Errorf("websocketHandler remote connect: %v", err)
 		}
@@ -2427,7 +2427,7 @@ func (bnc *binance) UnsubscribeMarket(baseID, quoteID uint32) (err error) {
 	}
 
 	var unsubscribe bool
-	var closer *dex.ConnectionMaster
+	var closer *util.ConnectionMaster
 
 	bnc.booksMtx.Lock()
 	defer func() {
@@ -2636,7 +2636,7 @@ func getDEXAssetIDs(coin string, tokenIDs map[string][]uint32) []uint32 {
 	}
 
 	assetIDs := make([]uint32, 0, 1)
-	if assetID, found := dex.BipSymbolID(dexSymbol); found {
+	if assetID, found := util.BipSymbolID(dexSymbol); found {
 		// Only registered assets.
 		if isRegistered(assetID) {
 			assetIDs = append(assetIDs, assetID)
@@ -2655,7 +2655,7 @@ func getDEXAssetIDs(coin string, tokenIDs map[string][]uint32) []uint32 {
 }
 
 func assetDisabled(isUS bool, assetID uint32) bool {
-	switch dex.BipIDSymbol(assetID) {
+	switch util.BipIDSymbol(assetID) {
 	case "zec":
 		return !isUS // exchange addresses not yet implemented
 	}
@@ -2687,7 +2687,7 @@ func binanceMarketToDexMarkets(binanceBaseSymbol, binanceQuoteSymbol string, tok
 			}
 			markets = append(markets, &MarketMatch{
 				Slug:     binanceBaseSymbol + binanceQuoteSymbol,
-				MarketID: dex.BipIDSymbol(baseID) + "_" + dex.BipIDSymbol(quoteID),
+				MarketID: util.BipIDSymbol(baseID) + "_" + util.BipIDSymbol(quoteID),
 				BaseID:   baseID,
 				QuoteID:  quoteID,
 			})

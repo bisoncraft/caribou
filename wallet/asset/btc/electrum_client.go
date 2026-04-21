@@ -24,9 +24,9 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/electrum"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/psbt"
@@ -72,7 +72,7 @@ type electrumNetworkClient interface {
 }
 
 type electrumWallet struct {
-	log         dex.Logger
+	log         util.Logger
 	chainParams *chaincfg.Params
 	decodeAddr  dexbtc.AddressDecoder
 	stringAddr  dexbtc.AddressStringer
@@ -105,7 +105,7 @@ func (ew *electrumWallet) resetChain(cl electrumNetworkClient) {
 
 type electrumWalletConfig struct {
 	params       *chaincfg.Params
-	log          dex.Logger
+	log          util.Logger
 	addrDecoder  dexbtc.AddressDecoder
 	addrStringer dexbtc.AddressStringer
 	segwit       bool // indicates if segwit addresses are expected from requests

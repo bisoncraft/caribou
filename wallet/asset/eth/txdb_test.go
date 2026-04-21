@@ -11,14 +11,14 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestTxDB(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	// Grab these for the tx generation utilities
 	_, eth, node, shutdown := tassetWallet(BipID)
@@ -129,7 +129,7 @@ func TestTxDB(t *testing.T) {
 	}
 	txHistoryStore.Close()
 
-	txHistoryStore, err = NewTxDB(tempDir, dex.StdOutLogger("TXDB", dex.LevelTrace), BipID)
+	txHistoryStore, err = NewTxDB(tempDir, util.StdOutLogger("TXDB", util.LevelTrace), BipID)
 	if err != nil {
 		t.Fatalf("error connecting to tx history store: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestTxDB(t *testing.T) {
 
 func TestTxDB_relay(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	// Grab these for the tx generation utilities
 	_, eth, node, shutdown := tassetWallet(BipID)
@@ -251,7 +251,7 @@ func TestTxDB_relay(t *testing.T) {
 
 func TestTxDBReplaceNonce(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	_, eth, node, shutdown := tassetWallet(BipID)
 	shutdown()
@@ -304,7 +304,7 @@ func TestTxDBReplaceNonce(t *testing.T) {
 
 func TestTxDB_getUnknownTx(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	txHistoryStore, err := NewTxDB(tempDir, tLogger, BipID)
 	if err != nil {

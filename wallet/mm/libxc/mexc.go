@@ -36,15 +36,15 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/mxctypes"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/mxctypes/pb"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"google.golang.org/protobuf/proto"
 )
 
 // MEXC Spot v3 CEX adaptor.
 type mexc struct {
-	log       dex.Logger
+	log       util.Logger
 	notify    func(any)
 	apiKey    string
 	secretKey string
@@ -132,7 +132,7 @@ type mexcOrderBook struct {
 	mtx            sync.RWMutex
 	synced         atomic.Bool
 	numSubscribers uint32
-	cm             *dex.ConnectionMaster
+	cm             *util.ConnectionMaster
 
 	symbol      string
 	book        *orderbook
@@ -140,7 +140,7 @@ type mexcOrderBook struct {
 
 	baseConversionFactor  uint64
 	quoteConversionFactor uint64
-	log                   dex.Logger
+	log                   util.Logger
 
 	connectedChan chan bool
 
@@ -152,7 +152,7 @@ func newMexcOrderBook(
 	baseConversionFactor, quoteConversionFactor uint64,
 	symbol string,
 	getSnapshot func() (*mxctypes.OrderbookSnapshot, error),
-	log dex.Logger,
+	log util.Logger,
 ) *mexcOrderBook {
 	return &mexcOrderBook{
 		symbol:                symbol,
@@ -237,7 +237,7 @@ func (b *mexcOrderBook) convertBookUpdate(update *mxctypes.BookUpdate) (bids, as
 	return bids, asks, nil
 }
 
-// Connect implements the dex.Connector interface.
+// Connect implements the util.Connector interface.
 // Synchronizes orderbook: fetch REST snapshot, then accept fresh WebSocket updates.
 func (b *mexcOrderBook) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// Synchronization variables
@@ -534,7 +534,7 @@ func (m *mexc) readCoins(coins []mxctypes.CoinInfo) {
 			// Build DEX symbol from coin + network (e.g., "usdt.polygon")
 			symbol := mexcCoinNetworkToDexSymbol(coinInfo.Coin, netInfo.Network)
 
-			assetID, found := dex.BipSymbolID(symbol)
+			assetID, found := util.BipSymbolID(symbol)
 			if !found {
 				continue
 			}
@@ -623,7 +623,7 @@ func mexcCoinNetworkToDexSymbol(coin, network string) string {
 	return coin + "." + dexNetwork
 }
 
-// dex.Connector implementation
+// util.Connector implementation
 func (m *mexc) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	m.ctx = ctx
 	var wg sync.WaitGroup
@@ -950,7 +950,7 @@ func (m *mexc) getDEXAssetIDs(coin string) []uint32 {
 	assetIDs := make([]uint32, 0, 3)
 
 	// Try direct symbol match (e.g., BTC, ETH, DCR)
-	if assetID, found := dex.BipSymbolID(dexSymbol); found {
+	if assetID, found := util.BipSymbolID(dexSymbol); found {
 		if isRegistered(assetID) {
 			assetIDs = append(assetIDs, assetID)
 			return assetIDs
@@ -962,7 +962,7 @@ func (m *mexc) getDEXAssetIDs(coin string) []uint32 {
 	tokenVariants := []string{"polygon", "eth", "base"}
 	for _, network := range tokenVariants {
 		tokenSymbol := dexSymbol + "." + network
-		if assetID, found := dex.BipSymbolID(tokenSymbol); found {
+		if assetID, found := util.BipSymbolID(tokenSymbol); found {
 			// Only include if it's in our supported list AND registered
 			if _, supported := supportedMEXCTokens[assetID]; supported && isRegistered(assetID) {
 				assetIDs = append(assetIDs, assetID)
@@ -972,7 +972,7 @@ func (m *mexc) getDEXAssetIDs(coin string) []uint32 {
 
 	// For wrapped assets, try the wrapped version
 	if dexSymbol == "eth" {
-		if assetID, found := dex.BipSymbolID("weth.polygon"); found {
+		if assetID, found := util.BipSymbolID("weth.polygon"); found {
 			if isRegistered(assetID) {
 				assetIDs = append(assetIDs, assetID)
 			}
@@ -1053,7 +1053,7 @@ func (m *mexc) getNetworkForAsset(assetID uint32) (string, error) {
 
 	// Native asset - use asset symbol as network
 	// For most native assets, MEXC uses the coin name as the network
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		return "", fmt.Errorf("no symbol found for asset ID %d", assetID)
 	}
@@ -1191,7 +1191,7 @@ func (m *mexc) Markets(ctx context.Context) (map[string]*Market, error) {
 		for _, baseID := range baseAssetIDs {
 			for _, quoteID := range quoteAssetIDs {
 				// Create market ID using the full asset symbols INCLUDING network suffix
-				marketID := dex.BipIDSymbol(baseID) + "_" + dex.BipIDSymbol(quoteID)
+				marketID := util.BipIDSymbol(baseID) + "_" + util.BipIDSymbol(quoteID)
 
 				m.log.Tracef("Adding market %s -> DEX market %s (base:%s quote:%s)",
 					symbol, marketID, symInfo.BaseAsset, symInfo.QuoteAsset)
@@ -1350,7 +1350,7 @@ func (m *mexc) SubscribeMarket(ctx context.Context, baseID, quoteID uint32) erro
 	m.booksMtx.Unlock()
 
 	// Start book sync in a connection master
-	cm := dex.NewConnectionMaster(book)
+	cm := util.NewConnectionMaster(book)
 	book.mtx.Lock()
 	book.cm = cm
 	book.mtx.Unlock()
@@ -1853,8 +1853,8 @@ func (m *mexc) handlePrivateDeals(wrapper *pb.PushDataV3ApiWrapper) {
 
 	// Handle fee (subtract from the filled amount for the asset being received)
 	feeCurrency := deal.GetFeeCurrency()
-	baseSymbol := strings.ToUpper(dex.BipIDSymbol(info.baseID))
-	quoteSymbol := strings.ToUpper(dex.BipIDSymbol(info.quoteID))
+	baseSymbol := strings.ToUpper(util.BipIDSymbol(info.baseID))
+	quoteSymbol := strings.ToUpper(util.BipIDSymbol(info.quoteID))
 
 	// Strip network suffixes for comparison
 	if i := strings.Index(baseSymbol, "."); i > 0 {
@@ -2059,8 +2059,8 @@ func (m *mexc) startPing() {
 
 // symbolFor builds a MEXC symbol from asset IDs, using exchange info when available.
 func (m *mexc) symbolFor(baseID, quoteID uint32) string {
-	base := strings.ToUpper(dex.BipIDSymbol(baseID))
-	quote := strings.ToUpper(dex.BipIDSymbol(quoteID))
+	base := strings.ToUpper(util.BipIDSymbol(baseID))
+	quote := strings.ToUpper(util.BipIDSymbol(quoteID))
 
 	// Strip network suffixes
 	if i := strings.Index(base, "."); i > 0 {
@@ -2705,7 +2705,7 @@ func (m *mexc) MidGap(baseID, quoteID uint32) uint64 {
 
 func (m *mexc) GetDepositAddress(ctx context.Context, assetID uint32) (string, error) {
 	// Get asset symbol
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		return "", fmt.Errorf("no symbol found for asset ID %d", assetID)
 	}
@@ -2766,7 +2766,7 @@ func (m *mexc) GetDepositAddress(ctx context.Context, assetID uint32) (string, e
 
 func (m *mexc) ConfirmDeposit(ctx context.Context, deposit *DepositData) (bool, uint64) {
 	// Get asset symbol
-	symbol := dex.BipIDSymbol(deposit.AssetID)
+	symbol := util.BipIDSymbol(deposit.AssetID)
 	if symbol == "" {
 		m.log.Errorf("no symbol found for asset ID %d", deposit.AssetID)
 		return false, 0
@@ -2954,7 +2954,7 @@ func (m *mexc) verifyWithdrawalAddress(ctx context.Context, coin, network, addre
 
 func (m *mexc) Withdraw(ctx context.Context, assetID uint32, amt uint64, address string) (string, uint64, error) {
 	// Get asset symbol
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		return "", 0, fmt.Errorf("no symbol found for asset ID %d", assetID)
 	}
@@ -3062,7 +3062,7 @@ func (m *mexc) Withdraw(ctx context.Context, assetID uint32, amt uint64, address
 
 func (m *mexc) ConfirmWithdrawal(ctx context.Context, withdrawalID string, assetID uint32) (uint64, string, error) {
 	// Get asset symbol
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		return 0, "", fmt.Errorf("no symbol found for asset ID %d", assetID)
 	}

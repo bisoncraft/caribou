@@ -9,10 +9,10 @@ import (
 	"os"
 
 	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
 	"github.com/fatih/color"
 )
 
@@ -88,12 +88,12 @@ func run() error {
 		return errors.New("quote2spv is removed - use quote2type=spv instead")
 	}
 
-	logLevel := dex.LevelInfo
+	logLevel := util.LevelInfo
 	switch {
 	case trace:
-		logLevel = dex.LevelTrace
+		logLevel = util.LevelTrace
 	case debug:
-		logLevel = dex.LevelDebug
+		logLevel = util.LevelDebug
 	}
 
 	// Assume any trailing arguments are test names.
@@ -197,7 +197,7 @@ func run() error {
 			QuoteNode:       quote2Node,
 		},
 		Tests:   tests,
-		Logger:  dex.NewLogger("T", logLevel, pl),
+		Logger:  util.NewLogger("T", logLevel, pl),
 		RunOnce: runOnce,
 	})
 }

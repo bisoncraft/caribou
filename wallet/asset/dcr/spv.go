@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"decred.org/dcrwallet/v5/chain"
 	walleterrors "decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/p2p"
@@ -155,7 +155,7 @@ type spvWallet struct {
 	db                wallet.DB
 	dir               string
 	chainParams       *chaincfg.Params
-	log               dex.Logger
+	log               util.Logger
 	bestSpvPeerHeight int32 // atomic
 	tipChan           chan *block
 	gapLimit          uint32
@@ -353,7 +353,7 @@ func (w *spvWallet) Accounts() XCWalletAccounts {
 	return w.accts.Load().(XCWalletAccounts)
 }
 
-func (w *spvWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net dex.Network, currentAddress string) (restart bool, err error) {
+func (w *spvWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net util.Network, currentAddress string) (restart bool, err error) {
 	return cfg.Type != walletTypeSPV, nil
 }
 
@@ -981,7 +981,7 @@ func (w *spvWallet) SyncStatus(ctx context.Context) (*asset.SyncStatus, error) {
 	if height == 0 {
 		return ss, nil
 	}
-	height = dex.Clamp(height, 0, targetHeight)
+	height = util.Clamp(height, 0, targetHeight)
 	ss.Blocks = uint64(height)
 
 	w.spvMtx.RLock()
@@ -995,7 +995,7 @@ func (w *spvWallet) SyncStatus(ctx context.Context) (*asset.SyncStatus, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error getting rescan point header: %w", err)
 		}
-		h := uint64(dex.Clamp(rescanHeader.Height, 1, uint32(targetHeight)+1) - 1)
+		h := uint64(util.Clamp(rescanHeader.Height, 1, uint32(targetHeight)+1) - 1)
 		ss.Transactions = &h
 	}
 
@@ -1035,7 +1035,7 @@ func (w *spvWallet) StakeInfo(ctx context.Context) (*wallet.StakeInfoData, error
 	return w.dcrWallet.StakeInfo(ctx)
 }
 
-func (w *spvWallet) newVSPClient(vspHost, vspPubKey string, log dex.Logger) (*wallet.VSPClient, error) {
+func (w *spvWallet) newVSPClient(vspHost, vspPubKey string, log util.Logger) (*wallet.VSPClient, error) {
 	return w.NewVSPClient(wallet.VSPClientConfig{
 		URL:    vspHost,
 		PubKey: vspPubKey,
@@ -1181,7 +1181,7 @@ func (w *spvWallet) ticketsInRange(ctx context.Context, lowerHeight, upperHeight
 	// If this is a mempool scan, we cannot scan backwards, so reverse the
 	// result order.
 	if includeMempool {
-		dex.ReverseSlice(tickets)
+		util.ReverseSlice(tickets)
 	}
 
 	return tickets, nil
@@ -1701,7 +1701,7 @@ func initLogging(netDir string) error {
 	return nil
 }
 
-func ticketSummaryToAssetTicket(ticketSummary *wallet.TicketSummary, hdr *wire.BlockHeader, log dex.Logger) *asset.Ticket {
+func ticketSummaryToAssetTicket(ticketSummary *wallet.TicketSummary, hdr *wire.BlockHeader, log util.Logger) *asset.Ticket {
 	spender := ""
 	if ticketSummary.Spender != nil {
 		spender = ticketSummary.Spender.Hash.String()

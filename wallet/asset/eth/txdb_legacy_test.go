@@ -10,12 +10,12 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 func TestMigrateLegacyTxDB(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	legacyDBPath := filepath.Join(tempDir, "legacy")
 

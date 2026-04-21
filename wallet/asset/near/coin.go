@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/decred/base58"
 )
 
@@ -19,7 +19,7 @@ type coin struct {
 
 var _ asset.Coin = (*coin)(nil)
 
-func (c *coin) ID() dex.Bytes {
+func (c *coin) ID() util.Bytes {
 	return c.txHash[:]
 }
 

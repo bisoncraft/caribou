@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // CacheExpiry is the duration after which a broadcast cache entry is
@@ -136,7 +136,7 @@ func RecoverFromCache[T CacheEntry](
 	key string,
 	rebroadcast func(T) error,
 	isConfirmed func(T) bool,
-	log dex.Logger,
+	log util.Logger,
 	opName string,
 ) (T, bool) {
 	cached, ok := cache.Get(key)

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	dexnear "github.com/bisoncraft/meshwallet/dex/networks/near"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
 )
 
 func TestValidateAddress(t *testing.T) {

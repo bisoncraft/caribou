@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
 )
 
 const (
@@ -112,7 +112,7 @@ func synchronize(syncDir string) (startServer bool, err error) {
 
 // runServer runs an instance of the sync server. Received commands are
 // communicated via unbuffered channels. Blocking channels are ignored.
-func runServer(ctx context.Context, syncDir string, openC chan<- struct{}, killC chan<- os.Signal, netw dex.Network) {
+func runServer(ctx context.Context, syncDir string, openC chan<- struct{}, killC chan<- os.Signal, netw util.Network) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Errorf("ListenTCP error: %v", err)

@@ -14,7 +14,7 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
-	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/davecgh/go-spew/spew"
 )
 

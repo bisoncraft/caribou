@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexnear "github.com/bisoncraft/meshwallet/dex/networks/near"
+	"github.com/bisoncraft/meshwallet/util"
+	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	tLogger = dex.StdOutLogger("NEARTEST", dex.LevelTrace)
+	tLogger = util.StdOutLogger("NEARTEST", util.LevelTrace)
 	tCtx    context.Context
 )
 
@@ -71,7 +71,7 @@ func createTestWallet(t *testing.T) (*NearWallet, []byte) {
 		Pass:     pw,
 		Settings: map[string]string{"rpcprovider": sandboxRPC},
 		DataDir:  dir,
-		Net:      dex.Simnet,
+		Net:      util.Simnet,
 		Logger:   tLogger,
 	})
 	if err != nil {
@@ -89,7 +89,7 @@ func createTestWallet(t *testing.T) (*NearWallet, []byte) {
 			}
 		},
 		DataDir: dir,
-	}, tLogger, dex.Simnet)
+	}, tLogger, util.Simnet)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestLiveCreateExists(t *testing.T) {
 	drv := &Driver{}
 
 	// Should not exist yet.
-	exists, err := drv.Exists(walletTypeRPC, dir, nil, dex.Simnet)
+	exists, err := drv.Exists(walletTypeRPC, dir, nil, util.Simnet)
 	if err != nil {
 		t.Fatalf("Exists error: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestLiveCreateExists(t *testing.T) {
 		Seed:    seed,
 		Pass:    pw,
 		DataDir: dir,
-		Net:     dex.Simnet,
+		Net:     util.Simnet,
 		Logger:  tLogger,
 	})
 	if err != nil {
@@ -399,7 +399,7 @@ func TestLiveCreateExists(t *testing.T) {
 	}
 
 	// Should exist now.
-	exists, err = drv.Exists(walletTypeRPC, dir, nil, dex.Simnet)
+	exists, err = drv.Exists(walletTypeRPC, dir, nil, util.Simnet)
 	if err != nil {
 		t.Fatalf("Exists error: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestLiveCreateExists(t *testing.T) {
 		Emit:     asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
 		DataDir:  dir,
-	}, tLogger, dex.Simnet)
+	}, tLogger, util.Simnet)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestLiveCreateExists(t *testing.T) {
 		Seed:    seed,
 		Pass:    pw,
 		DataDir: dir2,
-		Net:     dex.Simnet,
+		Net:     util.Simnet,
 		Logger:  tLogger,
 	})
 	if err != nil {
@@ -448,7 +448,7 @@ func TestLiveCreateExists(t *testing.T) {
 		Emit:     asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
 		DataDir:  dir2,
-	}, tLogger, dex.Simnet)
+	}, tLogger, util.Simnet)
 	if err != nil {
 		t.Fatalf("second Open error: %v", err)
 	}
@@ -466,13 +466,13 @@ func TestLiveCreateExists(t *testing.T) {
 	// Wrong password should fail to unlock.
 	dir3 := t.TempDir()
 	drv.Create(&asset.CreateWalletParams{
-		Type: walletTypeRPC, Seed: seed, Pass: pw, DataDir: dir3, Net: dex.Simnet, Logger: tLogger,
+		Type: walletTypeRPC, Seed: seed, Pass: pw, DataDir: dir3, Net: util.Simnet, Logger: tLogger,
 	})
 	w3, _ := drv.Open(&asset.WalletConfig{
 		Type: walletTypeRPC, Settings: map[string]string{"rpcprovider": sandboxRPC},
 		Emit: asset.NewWalletEmitter(noteChan, BipID, tLogger), PeersChange: func(uint32, error) {},
 		DataDir: dir3,
-	}, tLogger, dex.Simnet)
+	}, tLogger, util.Simnet)
 	nw3 := w3.(*NearWallet)
 	wrongPW := make([]byte, 32)
 	rand.Read(wrongPW)

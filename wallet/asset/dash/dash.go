@@ -9,9 +9,9 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexdash "github.com/bisoncraft/meshwallet/dex/networks/dash"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexdash "github.com/bisoncraft/meshwallet/util/networks/dash"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )
@@ -87,7 +87,7 @@ func init() {
 type Driver struct{}
 
 // Open creates the Dash exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return newWallet(cfg, logger, network)
 }
 
@@ -110,14 +110,14 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 }
 
 // newWallet constructs a new client wallet for Dash based on the WalletDefinition.Type
-func newWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	var params *chaincfg.Params
 	switch network {
-	case dex.Mainnet:
+	case util.Mainnet:
 		params = dexdash.MainNetParams
-	case dex.Testnet:
+	case util.Testnet:
 		params = dexdash.TestNetParams
-	case dex.Regtest:
+	case util.Regtest:
 		params = dexdash.RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)

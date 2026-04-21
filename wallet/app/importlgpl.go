@@ -12,7 +12,7 @@ package app
 import (
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/eth"  // register eth asset
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/near" // register near asset
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 )
 
 func init() {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	filipEdwards "filippo.io/edwards25519"
 	"filippo.io/edwards25519/field"
 	"github.com/athanorlabs/go-dleq"
@@ -26,7 +26,7 @@ func ProveDLEQ(secret []byte) ([]byte, error) {
 
 	secretB := [32]byte{}
 	copy(secretB[:], secret)
-	dex.ReverseSlice(secretB[:])
+	util.ReverseSlice(secretB[:])
 
 	proof, err := dleq.NewProof(dleqEdwards.NewCurve(), dleqSecp.NewCurve(), secretB)
 	if err != nil {
@@ -45,7 +45,7 @@ func bigIntToLittleEndian32(i *big.Int) [32]byte {
 	// This effectively left-pads with zeros.
 	copy(p[32-len(b):], b)
 	// Reverse the bytes to convert from big-endian to little-endian.
-	dex.ReverseSlice(p[:])
+	util.ReverseSlice(p[:])
 	return p
 }
 

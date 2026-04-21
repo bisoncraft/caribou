@@ -16,9 +16,9 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/db"
 	"github.com/bisoncraft/meshwallet/wallet/db/bolt"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/order"
-	"github.com/bisoncraft/meshwallet/dex/order/test"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/order"
+	"github.com/bisoncraft/meshwallet/util/order/test"
 )
 
 const dbname = "v5.db"
@@ -37,7 +37,7 @@ func main() {
 }
 
 func setup() error {
-	db, err := bolt.NewDB(dbname, dex.StdOutLogger("db_TEST", dex.LevelOff))
+	db, err := bolt.NewDB(dbname, util.StdOutLogger("db_TEST", util.LevelOff))
 	if err != nil {
 		return err
 	}

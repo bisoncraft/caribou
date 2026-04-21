@@ -14,8 +14,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexltc "github.com/bisoncraft/meshwallet/dex/networks/ltc"
+	"github.com/bisoncraft/meshwallet/util"
+	dexltc "github.com/bisoncraft/meshwallet/util/networks/ltc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -80,7 +80,7 @@ type ltcSPVWallet struct {
 	dir         string
 	chainParams *ltcchaincfg.Params
 	btcParams   *chaincfg.Params
-	log         dex.Logger
+	log         util.Logger
 
 	// This section is populated in Start.
 	*wallet.Wallet
@@ -95,7 +95,7 @@ type ltcSPVWallet struct {
 var _ btc.BTCWallet = (*ltcSPVWallet)(nil)
 
 // openSPVWallet creates a ltcSPVWallet, but does not Start.
-func openSPVWallet(dir string, cfg *btc.WalletConfig, btcParams *chaincfg.Params, log dex.Logger) btc.BTCWallet {
+func openSPVWallet(dir string, cfg *btc.WalletConfig, btcParams *chaincfg.Params, log util.Logger) btc.BTCWallet {
 	var ltcParams *ltcchaincfg.Params
 	switch btcParams.Name {
 	case dexltc.MainNetParams.Name:
@@ -115,7 +115,7 @@ func openSPVWallet(dir string, cfg *btc.WalletConfig, btcParams *chaincfg.Params
 }
 
 // createSPVWallet creates a new SPV wallet.
-func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log dex.Logger, extIdx, intIdx uint32, net *ltcchaincfg.Params) error {
+func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *ltcchaincfg.Params) error {
 	if err := logNeutrino(walletDir, log); err != nil {
 		return fmt.Errorf("error initializing dcrwallet+neutrino logging: %w", err)
 	}
@@ -130,7 +130,7 @@ func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir str
 		return fmt.Errorf("CreateNewWallet error: %w", err)
 	}
 
-	errCloser := dex.NewErrorCloser()
+	errCloser := util.NewErrorCloser()
 	defer errCloser.Done(log)
 	errCloser.Add(loader.UnloadWallet)
 
@@ -196,7 +196,7 @@ func (w *ltcSPVWallet) Start() (btc.SPVService, error) {
 		return nil, fmt.Errorf("couldn't load wallet: %w", err)
 	}
 
-	errCloser := dex.NewErrorCloser()
+	errCloser := util.NewErrorCloser()
 	defer errCloser.Done(w.log)
 	errCloser.Add(w.loader.UnloadWallet)
 
@@ -1041,13 +1041,13 @@ var (
 // there are concurrency issues with that since btcd and btcwallet have
 // unsupervised goroutines still running after shutdown. So we leave the rotator
 // running at the risk of losing some logs.
-func logNeutrino(walletDir string, baseLogger dex.Logger) error {
+func logNeutrino(walletDir string, baseLogger util.Logger) error {
 	if !atomic.CompareAndSwapUint32(&loggingInited, 0, 1) {
 		return nil
 	}
 
 	logDir := filepath.Join(walletDir, logDirName)
-	logSpinner, err := dex.LogRotator(logDir, logFileName)
+	logSpinner, err := util.LogRotator(logDir, logFileName)
 	if err != nil {
 		return fmt.Errorf("error initializing log rotator: %w", err)
 	}
@@ -1061,9 +1061,9 @@ func logNeutrino(walletDir string, baseLogger dex.Logger) error {
 	return nil
 }
 
-// logAdapter adapts dex.Logger to the btclog.Logger interface.
+// logAdapter adapts util.Logger to the btclog.Logger interface.
 type logAdapter struct {
-	dex.Logger
+	util.Logger
 }
 
 var _ btclog.Logger = (*logAdapter)(nil)
@@ -1077,14 +1077,14 @@ func (a *logAdapter) SetLevel(lvl btclog.Level) {
 }
 
 // fileLoggerPlus logs everything to a file, and everything with level >= warn
-// to both file and a specified dex.Logger.
+// to both file and a specified util.Logger.
 type fileLoggerPlus struct {
 	btclog.Logger
-	fileLogger dex.Logger
-	baseLogger dex.Logger
+	fileLogger util.Logger
+	baseLogger util.Logger
 }
 
-func newFileLoggerPlus(baseLogger, fileLogger dex.Logger) *fileLoggerPlus {
+func newFileLoggerPlus(baseLogger, fileLogger util.Logger) *fileLoggerPlus {
 	return &fileLoggerPlus{
 		Logger:     &logAdapter{fileLogger},
 		fileLogger: fileLogger,

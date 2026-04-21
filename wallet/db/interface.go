@@ -4,14 +4,14 @@
 package db
 
 import (
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encrypt"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encrypt"
 )
 
 // DB is an interface that must be satisfied by Bison Wallet persistent storage
 // manager.
 type DB interface {
-	dex.Runner
+	util.Runner
 	// SetPrimaryCredentials sets the initial *PrimaryCredentials.
 	SetPrimaryCredentials(creds *PrimaryCredentials) error
 	// PrimaryCredentials fetches the *PrimaryCredentials.

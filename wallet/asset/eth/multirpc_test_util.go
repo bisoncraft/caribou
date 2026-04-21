@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/params"
@@ -27,8 +27,8 @@ import (
 type MRPCTest struct {
 	ctx               context.Context
 	chain             string
-	chainConfigLookup func(net dex.Network) (*params.ChainConfig, error)
-	compatDataLookup  func(net dex.Network) (CompatibilityData, error)
+	chainConfigLookup func(net util.Network) (*params.ChainConfig, error)
+	compatDataLookup  func(net util.Network) (CompatibilityData, error)
 	harnessDirectory  string
 	credentialsFile   string
 }
@@ -38,8 +38,8 @@ type MRPCTest struct {
 // See README for getgas for format
 func NewMRPCTest(
 	ctx context.Context,
-	cfgLookup func(net dex.Network) (*params.ChainConfig, error),
-	compatLookup func(net dex.Network) (c CompatibilityData, err error),
+	cfgLookup func(net util.Network) (*params.ChainConfig, error),
+	compatLookup func(net util.Network) (c CompatibilityData, err error),
 	chainSymbol string,
 ) *MRPCTest {
 
@@ -61,14 +61,14 @@ func NewMRPCTest(
 	}
 }
 
-func (m *MRPCTest) rpcClient(dir string, seed []byte, endpoints []string, net dex.Network, skipConnect bool) (*multiRPCClient, error) {
+func (m *MRPCTest) rpcClient(dir string, seed []byte, endpoints []string, net util.Network, skipConnect bool) (*multiRPCClient, error) {
 	wDir := getWalletDir(dir, net)
 	err := os.MkdirAll(wDir, 0755)
 	if err != nil {
 		return nil, fmt.Errorf("os.Mkdir error: %w", err)
 	}
 
-	log := dex.StdOutLogger("T", dex.LevelTrace)
+	log := util.StdOutLogger("T", util.LevelTrace)
 
 	cfg, err := m.chainConfigLookup(net)
 	if err != nil {
@@ -90,7 +90,7 @@ func (m *MRPCTest) rpcClient(dir string, seed []byte, endpoints []string, net de
 		},
 		DataDir: dir,
 		Net:     net,
-		Logger:  dex.StdOutLogger("T", dex.LevelTrace),
+		Logger:  util.StdOutLogger("T", util.LevelTrace),
 	}, &compat, skipConnect); err != nil {
 		return nil, fmt.Errorf("error creating wallet: %v", err)
 	}
@@ -176,7 +176,7 @@ func (m *MRPCTest) TestSimnetMultiRPCClient(t *testing.T, wsPort, httpPort strin
 	}
 }
 
-func (m *MRPCTest) TestMonitorNet(t *testing.T, net dex.Network) {
+func (m *MRPCTest) TestMonitorNet(t *testing.T, net util.Network) {
 	seed, providers := m.readProviderFile(t, net)
 	dir := t.TempDir()
 
@@ -194,7 +194,7 @@ func (m *MRPCTest) TestMonitorNet(t *testing.T, net dex.Network) {
 	<-ctx.Done()
 }
 
-func (m *MRPCTest) TestRPC(t *testing.T, net dex.Network) {
+func (m *MRPCTest) TestRPC(t *testing.T, net util.Network) {
 	// To skip automatic websocket resolution, pass flag --skipws.
 
 	endpoint := os.Getenv("PROVIDER")
@@ -225,7 +225,7 @@ func (m *MRPCTest) TestRPC(t *testing.T, net dex.Network) {
 	}
 }
 
-func (m *MRPCTest) TestFreeServers(t *testing.T, freeServers []string, net dex.Network) {
+func (m *MRPCTest) TestFreeServers(t *testing.T, freeServers []string, net util.Network) {
 	compat, err := m.compatDataLookup(net)
 	if err != nil {
 		t.Fatalf("compatDataLookup error: %v", err)
@@ -265,22 +265,22 @@ func (m *MRPCTest) TestFreeServers(t *testing.T, freeServers []string, net dex.N
 }
 
 func (m *MRPCTest) TestMainnetCompliance(t *testing.T) {
-	_, providerLookup := m.readProviderFile(t, dex.Mainnet)
+	_, providerLookup := m.readProviderFile(t, util.Mainnet)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg, err := m.chainConfigLookup(dex.Mainnet)
+	cfg, err := m.chainConfigLookup(util.Mainnet)
 	if err != nil {
 		t.Fatalf("chainConfigLookup error: %v", err)
 	}
 
-	compat, err := m.compatDataLookup(dex.Mainnet)
+	compat, err := m.compatDataLookup(util.Mainnet)
 	if err != nil {
 		t.Fatalf("compatDataLookup error: %v", err)
 	}
 
-	log := dex.StdOutLogger("T", dex.LevelTrace)
-	providers, err := connectProviders(ctx, providerLookup, log, cfg.ChainID, dex.Mainnet, "")
+	log := util.StdOutLogger("T", util.LevelTrace)
+	providers, err := connectProviders(ctx, providerLookup, log, cfg.ChainID, util.Mainnet, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func (m *MRPCTest) TestMainnetCompliance(t *testing.T) {
 }
 
 func (m *MRPCTest) TestReceiptsHaveEffectiveGasPrice(t *testing.T) {
-	m.withClient(t, dex.Mainnet, func(ctx context.Context, cl *multiRPCClient) {
+	m.withClient(t, util.Mainnet, func(ctx context.Context, cl *multiRPCClient) {
 		if err := cl.withAny(ctx, func(ctx context.Context, p *provider) error {
 			blk, err := p.ec.BlockByNumber(ctx, nil)
 			if err != nil {
@@ -329,7 +329,7 @@ func (m *MRPCTest) TestReceiptsHaveEffectiveGasPrice(t *testing.T) {
 }
 
 func (m *MRPCTest) TestBaseReceiptsHaveEffectiveGasPrice(t *testing.T) {
-	m.withClient(t, dex.Mainnet, func(ctx context.Context, cl *multiRPCClient) {
+	m.withClient(t, util.Mainnet, func(ctx context.Context, cl *multiRPCClient) {
 		if err := cl.withAny(ctx, func(ctx context.Context, p *provider) error {
 			blk, err := p.ec.BaseBlockByNumber(ctx, nil)
 			if err != nil {
@@ -369,7 +369,7 @@ func (m *MRPCTest) TestBaseReceiptsHaveEffectiveGasPrice(t *testing.T) {
 	})
 }
 
-func (m *MRPCTest) withClient(t *testing.T, net dex.Network, f func(context.Context, *multiRPCClient)) {
+func (m *MRPCTest) withClient(t *testing.T, net util.Network, f func(context.Context, *multiRPCClient)) {
 	seed, providers := m.readProviderFile(t, net)
 	dir := t.TempDir()
 
@@ -390,7 +390,7 @@ func (m *MRPCTest) withClient(t *testing.T, net dex.Network, f func(context.Cont
 
 // FeeHistory prints the base fees sampled once per week going back the
 // specified number of days.
-func (m *MRPCTest) FeeHistory(t *testing.T, net dex.Network, blockTimeSecs, days uint64) {
+func (m *MRPCTest) FeeHistory(t *testing.T, net util.Network, blockTimeSecs, days uint64) {
 	m.withClient(t, net, func(ctx context.Context, cl *multiRPCClient) {
 		tip, err := cl.bestHeader(ctx)
 		if err != nil {
@@ -426,7 +426,7 @@ func (m *MRPCTest) FeeHistory(t *testing.T, net dex.Network, blockTimeSecs, days
 	})
 }
 
-func (m *MRPCTest) BlockStats(t *testing.T, steps, skipN int, net dex.Network) {
+func (m *MRPCTest) BlockStats(t *testing.T, steps, skipN int, net util.Network) {
 	m.withClient(t, net, func(ctx context.Context, cl *multiRPCClient) {
 		if err := cl.withAny(ctx, func(ctx context.Context, p *provider) error {
 			blk, err := p.ec.BlockByNumber(ctx, nil)
@@ -462,7 +462,7 @@ func (m *MRPCTest) BlockStats(t *testing.T, steps, skipN int, net dex.Network) {
 	})
 }
 
-func (m *MRPCTest) BaseBlockStats(t *testing.T, steps, skipN int, net dex.Network) {
+func (m *MRPCTest) BaseBlockStats(t *testing.T, steps, skipN int, net util.Network) {
 	m.withClient(t, net, func(ctx context.Context, cl *multiRPCClient) {
 		if err := cl.withAny(ctx, func(ctx context.Context, p *provider) error {
 			blk, err := p.ec.BaseBlockByNumber(ctx, nil)
@@ -502,7 +502,7 @@ func (m *MRPCTest) testSimnetEndpoint(endpoints []string, syncBlocks uint64, tFu
 	dir, _ := os.MkdirTemp("", "")
 	defer os.RemoveAll(dir)
 
-	cl, err := m.rpcClient(dir, encode.RandomBytes(32), endpoints, dex.Simnet, false)
+	cl, err := m.rpcClient(dir, encode.RandomBytes(32), endpoints, util.Simnet, false)
 	if err != nil {
 		return err
 	}
@@ -561,7 +561,7 @@ func (m *MRPCTest) mine(ctx context.Context) error {
 	return err
 }
 
-func (m *MRPCTest) readProviderFile(t *testing.T, net dex.Network) (seed []byte, providers []string) {
+func (m *MRPCTest) readProviderFile(t *testing.T, net util.Network) (seed []byte, providers []string) {
 	t.Helper()
 	var err error
 	seed, providers, err = getFileCredentials(m.chain, m.credentialsFile, net)

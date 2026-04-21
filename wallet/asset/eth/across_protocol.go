@@ -14,21 +14,21 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20"
 
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20/across"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20/across"
 )
 
 var (
-	chainAssetIDToAcrossChainID = map[dex.Network]map[uint32]uint64{
-		dex.Mainnet: {
+	chainAssetIDToAcrossChainID = map[util.Network]map[uint32]uint64{
+		util.Mainnet: {
 			ethID:     1,
 			polygonID: 137,
 			baseID:    8453,
 		},
-		dex.Testnet: {
+		util.Testnet: {
 			ethID:     11155111,
 			polygonID: 80002,
 			baseID:    84532,
@@ -36,18 +36,18 @@ var (
 	}
 
 	// Reverse of chainSuffixToID. Populated in init().
-	idToChainAssetID = map[dex.Network]map[uint64]uint32{
-		dex.Mainnet: make(map[uint64]uint32),
-		dex.Testnet: make(map[uint64]uint32),
+	idToChainAssetID = map[util.Network]map[uint64]uint32{
+		util.Mainnet: make(map[uint64]uint32),
+		util.Testnet: make(map[uint64]uint32),
 	}
 
-	acrossSpokePoolAddrs = map[dex.Network]map[uint64]common.Address{
-		dex.Mainnet: {
+	acrossSpokePoolAddrs = map[util.Network]map[uint64]common.Address{
+		util.Mainnet: {
 			1:    common.HexToAddress("0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5"),
 			137:  common.HexToAddress("0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096"),
 			8453: common.HexToAddress("0x09aea4b2242abC8bb4BB78D537A67a245A7bEC64"),
 		},
-		dex.Testnet: {
+		util.Testnet: {
 			11155111: common.HexToAddress("0x5ef6C01E11889d86803e0B23e3cB3F9E9d97B662"),
 			80002:    common.HexToAddress("0xd08baaE74D6d2eAb1F3320B2E1a53eeb391ce8e5"),
 			84532:    common.HexToAddress("0x82B564983aE7274c86695917BBf8C99ECb6F0F8F"),
@@ -55,19 +55,19 @@ var (
 	}
 
 	// native token addresses for each chain. i.e. weth on ethereum.
-	chainIDToNativeTokenAddr = map[dex.Network]map[uint64]common.Address{
-		dex.Mainnet: {
+	chainIDToNativeTokenAddr = map[util.Network]map[uint64]common.Address{
+		util.Mainnet: {
 			1:    common.HexToAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"),
 			8453: common.HexToAddress("0x4200000000000000000000000000000000000006"),
 		},
-		dex.Testnet: {
+		util.Testnet: {
 			11155111: common.HexToAddress("0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14"),
 			84532:    common.HexToAddress("0x4200000000000000000000000000000000000006"),
 		},
 	}
 
 	// Global cache for across available routes.
-	acrossAvailableRoutesCache = make(map[dex.Network][]acrossAvailableRoute)
+	acrossAvailableRoutesCache = make(map[util.Network][]acrossAvailableRoute)
 	acrossAvailableRoutesMutex sync.Mutex
 )
 
@@ -79,18 +79,18 @@ func init() {
 	}
 }
 
-func AcrossBridgeSupportedAsset(assetID uint32, net dex.Network) (supported bool) {
+func AcrossBridgeSupportedAsset(assetID uint32, net util.Network) (supported bool) {
 	return assetIDToAcrossAsset(net, assetID) != nil
 }
 
-func acrossBaseURL(net dex.Network) string {
-	if net == dex.Mainnet {
+func acrossBaseURL(net util.Network) string {
+	if net == util.Mainnet {
 		return "https://app.across.to"
 	}
 	return "https://testnet.across.to"
 }
 
-func getSpokePoolAddr(net dex.Network, chainID uint64) (common.Address, error) {
+func getSpokePoolAddr(net util.Network, chainID uint64) (common.Address, error) {
 	addrs, found := acrossSpokePoolAddrs[net]
 	if !found {
 		return common.Address{}, fmt.Errorf("no spoke pool addresses for network %s", net)
@@ -108,13 +108,13 @@ type acrossAsset struct {
 	address common.Address
 }
 
-func assetIDToAcrossAsset(net dex.Network, assetID uint32) *acrossAsset {
-	symbol := dex.BipIDSymbol(assetID)
+func assetIDToAcrossAsset(net util.Network, assetID uint32) *acrossAsset {
+	symbol := util.BipIDSymbol(assetID)
 	parts := strings.Split(symbol, ".")
 	assetName := parts[0]
 	chainName := parts[len(parts)-1]
 
-	chainAssetID, found := dex.BipSymbolID(chainName)
+	chainAssetID, found := util.BipSymbolID(chainName)
 	if !found {
 		return nil
 	}
@@ -147,13 +147,13 @@ func assetIDToAcrossAsset(net dex.Network, assetID uint32) *acrossAsset {
 	return &acrossAsset{chainID: chainID, symbol: strings.ToUpper(assetName), address: address}
 }
 
-func acrossAssetToAssetID(net dex.Network, symbol string, chainID uint64) (uint32, bool) {
+func acrossAssetToAssetID(net util.Network, symbol string, chainID uint64) (uint32, bool) {
 	chainAssetID, found := idToChainAssetID[net][chainID]
 	if !found {
 		return 0, false
 	}
 
-	chainSymbol := dex.BipIDSymbol(chainAssetID)
+	chainSymbol := util.BipIDSymbol(chainAssetID)
 	assetSymbol := strings.ToLower(symbol)
 	fullSymbol := assetSymbol
 	if chainSymbol != assetSymbol {
@@ -167,7 +167,7 @@ func acrossAssetToAssetID(net dex.Network, symbol string, chainID uint64) (uint3
 		fullSymbol = "base"
 	}
 
-	return dex.BipSymbolID(fullSymbol)
+	return util.BipSymbolID(fullSymbol)
 }
 
 // acrossAvailableRoute is the response structure for the Across available-routes API.
@@ -184,7 +184,7 @@ type acrossAvailableRoute struct {
 // getAcrossAvailableRoutes fetches available routes from the across API.
 // We make this same call for all wallets, so to avoid making too many calls
 // we cache the results.
-func getAcrossAvailableRoutes(ctx context.Context, net dex.Network) ([]acrossAvailableRoute, error) {
+func getAcrossAvailableRoutes(ctx context.Context, net util.Network) ([]acrossAvailableRoute, error) {
 	acrossAvailableRoutesMutex.Lock()
 	defer acrossAvailableRoutesMutex.Unlock()
 
@@ -204,7 +204,7 @@ func getAcrossAvailableRoutes(ctx context.Context, net dex.Network) ([]acrossAva
 }
 
 // returns the list of asset IDs that are supported as destinations for the origin asset.
-func acrossSupportedDestinations(ctx context.Context, assetID uint32, net dex.Network, log dex.Logger) (destinations []uint32, err error) {
+func acrossSupportedDestinations(ctx context.Context, assetID uint32, net util.Network, log util.Logger) (destinations []uint32, err error) {
 	res, err := getAcrossAvailableRoutes(ctx, net)
 	if err != nil {
 		return nil, err
@@ -252,8 +252,8 @@ type acrossBridge struct {
 	cb            bind.ContractBackend
 	spokePool     *across.SpokePool
 	spokePoolAddr common.Address
-	log           dex.Logger
-	net           dex.Network
+	log           util.Logger
+	net           util.Network
 	chainAssetID  uint32
 	chainID       uint64
 	addr          common.Address
@@ -263,7 +263,7 @@ type acrossBridge struct {
 
 var _ bridge = (*acrossBridge)(nil)
 
-func newAcrossBridge(ctx context.Context, cb bind.ContractBackend, node ethFetcher, chainAssetID uint32, net dex.Network, walletAddr common.Address, log dex.Logger) (*acrossBridge, error) {
+func newAcrossBridge(ctx context.Context, cb bind.ContractBackend, node ethFetcher, chainAssetID uint32, net util.Network, walletAddr common.Address, log util.Logger) (*acrossBridge, error) {
 	chainID, found := chainAssetIDToAcrossChainID[net][chainAssetID]
 	if !found {
 		return nil, fmt.Errorf("unknown chain asset ID %d", chainAssetID)
@@ -387,7 +387,7 @@ func (b *acrossBridge) initiateBridge(txOpts *bind.TransactOpts, sourceAssetID, 
 		return nil, fmt.Errorf("failed to fetch available routes: %w", err)
 	}
 	if !slices.Contains(supportedDestinations, destAssetID) {
-		return nil, fmt.Errorf("bridging from %s to %s is not supported", dex.BipIDSymbol(sourceAssetID), dex.BipIDSymbol(destAssetID))
+		return nil, fmt.Errorf("bridging from %s to %s is not supported", util.BipIDSymbol(sourceAssetID), util.BipIDSymbol(destAssetID))
 	}
 
 	sourceAsset := assetIDToAcrossAsset(b.net, sourceAssetID)
@@ -504,7 +504,7 @@ func (b *acrossBridge) verifyBridgeCompletion(ctx context.Context, data []byte) 
 	if len(data) != 64 {
 		return false, fmt.Errorf("invalid completion data length: expected 64, got %d", len(data))
 	}
-	if b.net != dex.Mainnet {
+	if b.net != util.Mainnet {
 		// Across docs: For best results, we recommend using the deposit/status
 		// endpoint on mainnet only. Our event indexing currently focuses on
 		// mainnet, so testnet queries may return incomplete data.

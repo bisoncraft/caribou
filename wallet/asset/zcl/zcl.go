@@ -11,10 +11,10 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexzcl "github.com/bisoncraft/meshwallet/dex/networks/zcl"
-	dexzec "github.com/bisoncraft/meshwallet/dex/networks/zec"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexzcl "github.com/bisoncraft/meshwallet/util/networks/zcl"
+	dexzec "github.com/bisoncraft/meshwallet/util/networks/zec"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
@@ -112,7 +112,7 @@ func init() {
 type Driver struct{}
 
 // Open creates the ZEC exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -147,17 +147,17 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 // exchange wallet. The wallet will shut down when the provided context is
 // canceled. The configPath can be an empty string, in which case the standard
 // system location of the zcashd config file is assumed.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, net dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (asset.Wallet, error) {
 	var btcParams *chaincfg.Params
 	var addrParams *dexzec.AddressParams
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		btcParams = dexzcl.MainNetParams
 		addrParams = dexzec.MainNetAddressParams
-	case dex.Testnet:
+	case util.Testnet:
 		btcParams = dexzcl.TestNet4Params
 		addrParams = dexzec.TestNet4AddressParams
-	case dex.Regtest:
+	case util.Regtest:
 		btcParams = dexzcl.RegressionNetParams
 		addrParams = dexzec.RegressionNetAddressParams
 	default:
@@ -261,7 +261,7 @@ func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, net dex.Network) (ass
 // TODO: Implement ShieldedWallet
 // type zecWallet struct {
 // 	*btc.ExchangeWalletNoAuth
-// 	log         dex.Logger
+// 	log         util.Logger
 // 	lastAddress atomic.Value // "string"
 // }
 

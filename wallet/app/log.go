@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/decred/slog"
 	"github.com/jrick/logrotate/rotator"
 )
@@ -42,7 +42,7 @@ func (w logWriter) Write(p []byte) (n int, err error) {
 // InitLogging initializes the logging rotater to write logs to logFile and
 // create roll files in the same directory. initLogging must be called before
 // the package-global log rotator variables are used.
-func InitLogging(logFilename, lvl string, stdout bool, utc bool) (lm *dex.LoggerMaker, closeFn func()) {
+func InitLogging(logFilename, lvl string, stdout bool, utc bool) (lm *util.LoggerMaker, closeFn func()) {
 	logDirectory := filepath.Dir(logFilename)
 	err := os.MkdirAll(logDirectory, 0700)
 	if err != nil {
@@ -57,7 +57,7 @@ func InitLogging(logFilename, lvl string, stdout bool, utc bool) (lm *dex.Logger
 	if !stdout {
 		fmt.Println("Logging to", logFilename)
 	}
-	lm, err = dex.NewLoggerMaker(&logWriter{logRotator, stdout}, lvl, utc)
+	lm, err = util.NewLoggerMaker(&logWriter{logRotator, stdout}, lvl, utc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create custom logger: %v\n", err)
 		os.Exit(1)

@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/msgjson"
-	"github.com/bisoncraft/meshwallet/dex/ws"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/msgjson"
+	"github.com/bisoncraft/meshwallet/util/ws"
 )
 
 var (
@@ -34,7 +34,7 @@ type wsClient struct {
 	cid int32
 }
 
-func newWSClient(addr string, conn ws.Connection, hndlr func(msg *msgjson.Message) *msgjson.Error, logger dex.Logger) *wsClient {
+func newWSClient(addr string, conn ws.Connection, hndlr func(msg *msgjson.Message) *msgjson.Error, logger util.Logger) *wsClient {
 	return &wsClient{
 		WSLink: ws.NewWSLink(addr, conn, pingPeriod, hndlr, logger),
 		cid:    atomic.AddInt32(&cidCounter, 1),
@@ -43,14 +43,14 @@ func newWSClient(addr string, conn ws.Connection, hndlr func(msg *msgjson.Messag
 
 // Core specifies the needed methods for Server to operate. Satisfied by *core.Core.
 type Core interface {
-	AckNotes([]dex.Bytes)
+	AckNotes([]util.Bytes)
 }
 
 // Server is a websocket hub that tracks all running websocket clients, allows
 // sending notifications to all of them, and manages per-client subscriptions.
 type Server struct {
 	core Core
-	log  dex.Logger
+	log  util.Logger
 	wg   sync.WaitGroup
 
 	clientsMtx sync.RWMutex
@@ -58,7 +58,7 @@ type Server struct {
 }
 
 // New returns a new websocket Server.
-func New(core Core, log dex.Logger) *Server {
+func New(core Core, log util.Logger) *Server {
 	return &Server{
 		core:    core,
 		log:     log,
@@ -120,7 +120,7 @@ func (s *Server) connect(ctx context.Context, conn ws.Connection, addr string) {
 	// Also, ensuring only live connections are in the clients map notify from
 	// sending before it is connected.
 	s.clientsMtx.Lock()
-	cm := dex.NewConnectionMaster(cl)
+	cm := util.NewConnectionMaster(cl)
 	err := cm.ConnectOnce(ctx) // we discard the cm anyway, but good practice
 	if err != nil {
 		s.clientsMtx.Unlock()
@@ -185,7 +185,7 @@ var wsHandlers = map[string]wsHandler{
 	"acknotes": wsAckNotes,
 }
 
-type ackNoteIDs []dex.Bytes
+type ackNoteIDs []util.Bytes
 
 // wsAckNotes is the handler for the 'acknotes' websocket route. It informs the
 // Core that the user has seen the specified notifications.

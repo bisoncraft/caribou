@@ -34,8 +34,8 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -54,8 +54,8 @@ import (
 )
 
 const (
-	WalletTransactionNotFound = dex.ErrorKind("wallet transaction not found")
-	SpentStatusUnknown        = dex.ErrorKind("spend status not known")
+	WalletTransactionNotFound = util.ErrorKind("wallet transaction not found")
+	SpentStatusUnknown        = util.ErrorKind("spend status not known")
 	// NOTE: possibly unexport the two above error kinds.
 
 	// defaultBroadcastWait is long enough for btcwallet's PublishTransaction
@@ -180,7 +180,7 @@ func (s *btcChainService) RemovePeer(addr string) error {
 var _ SPVService = (*btcChainService)(nil)
 
 // BTCWalletConstructor is a function to construct a BTCWallet.
-type BTCWalletConstructor func(dir string, cfg *WalletConfig, chainParams *chaincfg.Params, log dex.Logger) BTCWallet
+type BTCWalletConstructor func(dir string, cfg *WalletConfig, chainParams *chaincfg.Params, log util.Logger) BTCWallet
 
 func extendAddresses(extIdx, intIdx uint32, btcw *wallet.Wallet) error {
 	scopedKeyManager, err := btcw.Manager.FetchScopedKeyManager(waddrmgr.KeyScopeBIP0084)
@@ -229,7 +229,7 @@ type spvWallet struct {
 	dir         string
 	decodeAddr  dexbtc.AddressDecoder
 
-	log dex.Logger
+	log util.Logger
 
 	tipChan            chan *BlockVector
 	syncTarget         int32

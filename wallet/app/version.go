@@ -4,7 +4,7 @@
 package app
 
 import (
-	"github.com/bisoncraft/meshwallet/dex/version"
+	"github.com/bisoncraft/meshwallet/util/version"
 )
 
 var (

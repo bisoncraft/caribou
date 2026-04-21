@@ -4,7 +4,7 @@
 package btc
 
 import (
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // GetBalancesResult models a successful response from the getbalances request.
@@ -27,10 +27,10 @@ type ListUnspentResult struct {
 	Vout          uint32    `json:"vout"`
 	Address       string    `json:"address"`
 	Label         string    `json:"label"`
-	ScriptPubKey  dex.Bytes `json:"scriptPubKey"`
+	ScriptPubKey  util.Bytes `json:"scriptPubKey"`
 	Amount        float64   `json:"amount"`
 	Confirmations uint32    `json:"confirmations"`
-	RedeemScript  dex.Bytes `json:"redeemScript"`
+	RedeemScript  util.Bytes `json:"redeemScript"`
 	Spendable     bool      `json:"spendable"`
 	Solvable      bool      `json:"solvable"`
 	SafePtr       *bool     `json:"safe"`
@@ -54,7 +54,7 @@ type ListTransactionsResult struct {
 
 // SignTxResult models the data from the signrawtransaction command.
 type SignTxResult struct {
-	Hex      dex.Bytes      `json:"hex"`
+	Hex      util.Bytes      `json:"hex"`
 	Complete bool           `json:"complete"`
 	Errors   []*SignTxError `json:"errors"`
 }
@@ -64,7 +64,7 @@ type SignTxResult struct {
 type SignTxError struct {
 	TxID      string    `json:"txid"`
 	Vout      uint32    `json:"vout"`
-	ScriptSig dex.Bytes `json:"scriptSig"`
+	ScriptSig util.Bytes `json:"scriptSig"`
 	Sequence  uint64    `json:"sequence"`
 	Error     string    `json:"error"`
 }
@@ -88,7 +88,7 @@ type GetTransactionResult struct {
 	TxID         string    `json:"txid"`
 	Time         uint64    `json:"time"`
 	TimeReceived uint64    `json:"timereceived"`
-	Bytes        dex.Bytes `json:"hex"` // []byte, although it marshals/unmarshals a hex string
+	Bytes        util.Bytes `json:"hex"` // []byte, although it marshals/unmarshals a hex string
 	// BipReplaceable string    `json:"bip125-replaceable"` // unused
 	// Details        []*WalletTxDetails `json:"details"` // unused, and nearly impossible to satisfy in a generic interface
 }

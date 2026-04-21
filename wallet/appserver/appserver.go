@@ -35,12 +35,12 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/tor"
 	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
 	"github.com/bisoncraft/meshwallet/wallet/websocket"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/encrypt"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
-	"github.com/bisoncraft/meshwallet/dex/version"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/encrypt"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
+	"github.com/bisoncraft/meshwallet/util/version"
 	"github.com/decred/dcrd/certgen"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -82,8 +82,8 @@ var (
 )
 
 var (
-	log   dex.Logger
-	unbip = dex.BipIDSymbol
+	log   util.Logger
+	unbip = util.BipIDSymbol
 
 	latestVersionRegex = regexp.MustCompile(`\d+(\.\d+)+`)
 )
@@ -91,7 +91,7 @@ var (
 // clientCore is satisfied by core.Core.
 type clientCore interface {
 	websocket.Core
-	Network() dex.Network
+	Network() util.Network
 	Login(pw []byte) error
 	InitializeClient(pw []byte, seed *string) (string, error)
 	AssetBalance(assetID uint32) (*core.WalletBalance, error)
@@ -203,7 +203,7 @@ type Config struct {
 	Addr          string
 	CustomSiteDir string
 	Language      string
-	Logger        dex.Logger
+	Logger        util.Logger
 	UTC           bool   // for stdout http request logging
 	AppVersion    string // e.g. "1.0.4-pre", "1.0.4"
 	CertFile      string
@@ -321,8 +321,8 @@ func New(cfg *Config) (*AppServer, error) {
 
 	if cfg.CertFile != "" || cfg.KeyFile != "" {
 		// Find or create the key pair.
-		keyExists := dex.FileExists(cfg.KeyFile)
-		certExists := dex.FileExists(cfg.CertFile)
+		keyExists := util.FileExists(cfg.KeyFile)
+		certExists := util.FileExists(cfg.CertFile)
 		if certExists != keyExists {
 			return nil, fmt.Errorf("missing cert pair file")
 		}
@@ -400,7 +400,7 @@ func New(cfg *Config) (*AppServer, error) {
 	// Middleware
 	mux.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{
 		Logger: &chiLogger{ // logs with Trace()
-			Logger: dex.StdOutLogger("MUX", log.Level(), cfg.UTC),
+			Logger: util.StdOutLogger("MUX", log.Level(), cfg.UTC),
 		},
 		NoColor: runtime.GOOS == "windows",
 	}))
@@ -651,7 +651,7 @@ func (s *AppServer) Addr() string {
 	return s.addr
 }
 
-// Connect starts the web server. Satisfies the dex.Connector interface.
+// Connect starts the web server. Satisfies the util.Connector interface.
 func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	listeners := make([]net.Listener, 0)
@@ -666,7 +666,7 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error intializing hidden service: %w", err)
 		}
-		cm := dex.NewConnectionMaster(svc)
+		cm := util.NewConnectionMaster(svc)
 		if err := cm.ConnectOnce(ctx); err != nil {
 			return nil, fmt.Errorf("error connecting hidden service: %w", err)
 		}
@@ -1332,10 +1332,10 @@ func userAppVersion(fullVersion string, semVerOnly bool) string {
 	return fmt.Sprintf("%d.%d.%d-%s", major, minor, patch, pre)
 }
 
-// chiLogger is an adaptor around dex.Logger that satisfies
+// chiLogger is an adaptor around util.Logger that satisfies
 // chi/middleware.LoggerInterface for chi's DefaultLogFormatter.
 type chiLogger struct {
-	dex.Logger
+	util.Logger
 }
 
 func (l *chiLogger) Print(v ...any) {

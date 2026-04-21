@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	dexnear "github.com/bisoncraft/meshwallet/dex/networks/near"
+	"github.com/bisoncraft/meshwallet/util"
+	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
 	"golang.org/x/net/proxy"
 )
 
@@ -24,10 +24,10 @@ import (
 type rpcClient struct {
 	endpoint   string
 	httpClient *http.Client
-	log        dex.Logger
+	log        util.Logger
 }
 
-func newRPCClient(endpoint, torProxy string, log dex.Logger) (*rpcClient, error) {
+func newRPCClient(endpoint, torProxy string, log util.Logger) (*rpcClient, error) {
 	transport := &http.Transport{
 		MaxIdleConns:       2,
 		IdleConnTimeout:    90 * time.Second,

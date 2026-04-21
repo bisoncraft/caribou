@@ -15,10 +15,10 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbch "github.com/bisoncraft/meshwallet/dex/networks/bch"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbch "github.com/bisoncraft/meshwallet/util/networks/bch"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/bisoncraft/bchwallet/wallet"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -107,7 +107,7 @@ type Driver struct{}
 var _ asset.Driver = (*Driver)(nil)
 
 // Open creates the BCH exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	if cfg.Type == walletTypeSPV {
 		return nil, asset.ErrWalletTypeDisabled
 	}
@@ -128,7 +128,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 
 // Exists checks the existence of the wallet. Part of the Creator interface, so
 // only used for wallets with WalletDefinition.Seeded = true.
-func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error) {
+func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
 	if walletType != walletTypeSPV {
 		return false, fmt.Errorf("no Bitcoin Cash wallet of type %q available", walletType)
 	}
@@ -190,7 +190,7 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 
 // NewWallet is the exported constructor by which the DEX will import the
 // exchange wallet.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	cloneParams := parseCloneParams(network)
 	if cloneParams == nil {
 		return nil, fmt.Errorf("unknown network ID %v", network)
@@ -309,25 +309,25 @@ func translateTx(btcTx *wire.MsgTx) (*bchwire.MsgTx, error) {
 	return bchTx, nil
 }
 
-func parseCloneParams(net dex.Network) *chaincfg.Params {
+func parseCloneParams(net util.Network) *chaincfg.Params {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return dexbch.MainNetParams
-	case dex.Testnet:
+	case util.Testnet:
 		return dexbch.TestNet4Params
-	case dex.Regtest:
+	case util.Regtest:
 		return dexbch.RegressionNetParams
 	}
 	return nil
 }
 
-func parseChainParams(net dex.Network) (*bchchaincfg.Params, error) {
+func parseChainParams(net util.Network) (*bchchaincfg.Params, error) {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return &bchchaincfg.MainNetParams, nil
-	case dex.Testnet:
+	case util.Testnet:
 		return &bchchaincfg.TestNet4Params, nil
-	case dex.Regtest:
+	case util.Regtest:
 		return &bchchaincfg.RegressionNetParams, nil
 	}
 	return nil, fmt.Errorf("unknown network ID %v", net)
@@ -335,7 +335,7 @@ func parseChainParams(net dex.Network) (*bchchaincfg.Params, error) {
 
 // WithdrawSPVFunds is a function to generate a tx that spends all funds from a
 // deprecated SPV wallet.
-func WithdrawSPVFunds(ctx context.Context, walletPW []byte, recipient, dataDir string, net dex.Network, log dex.Logger) ([]byte, error) {
+func WithdrawSPVFunds(ctx context.Context, walletPW []byte, recipient, dataDir string, net util.Network, log util.Logger) ([]byte, error) {
 	cloneParams := parseCloneParams(net)
 	if cloneParams == nil {
 		return nil, fmt.Errorf("unknown net %v", net)

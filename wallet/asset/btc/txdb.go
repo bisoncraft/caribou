@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/lexi"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -77,18 +77,18 @@ func txKey(txid string) []byte {
 type BadgerTxDB struct {
 	*badger.DB
 	filePath string
-	log      dex.Logger
+	log      util.Logger
 	seq      *badger.Sequence
 	running  atomic.Bool
 	wg       sync.WaitGroup
 	ctx      context.Context
 }
 
-// badgerLoggerWrapper wraps dex.Logger and translates Warnf to Warningf to
+// badgerLoggerWrapper wraps util.Logger and translates Warnf to Warningf to
 // satisfy badger.Logger. It also lowers the log level of Infof to Debugf.
 // Debugf is discarded as badger's debug logs are too noisy even for trace.
 type badgerLoggerWrapper struct {
-	dex.Logger
+	util.Logger
 }
 
 var _ badger.Logger = (*badgerLoggerWrapper)(nil)
@@ -96,17 +96,17 @@ var _ badger.Logger = (*badgerLoggerWrapper)(nil)
 // Debugf is discarded - badger's debug logs are too verbose.
 func (log *badgerLoggerWrapper) Debugf(s string, a ...any) {}
 
-// Infof -> dex.Logger.Debugf
+// Infof -> util.Logger.Debugf
 func (log *badgerLoggerWrapper) Infof(s string, a ...any) {
 	log.Debugf(s, a...)
 }
 
-// Warningf -> dex.Logger.Warnf
+// Warningf -> util.Logger.Warnf
 func (log *badgerLoggerWrapper) Warningf(s string, a ...any) {
 	log.Warnf(s, a...)
 }
 
-func NewBadgerTxDB(filePath string, log dex.Logger) *BadgerTxDB {
+func NewBadgerTxDB(filePath string, log util.Logger) *BadgerTxDB {
 	return &BadgerTxDB{
 		filePath: filePath,
 		log:      log,
@@ -655,7 +655,7 @@ func (db *BadgerTxDB) SetLastReceiveTxQuery(block uint64) error {
 	return db.handleConflictWithBackoff(func() error { return db.setLastReceiveTxQuery(block) })
 }
 
-const ErrNeverQueried = dex.ErrorKind("never queried")
+const ErrNeverQueried = util.ErrorKind("never queried")
 
 // GetLastReceiveTxQuery retrieves the last time the wallet was queried for
 // receive transactions.

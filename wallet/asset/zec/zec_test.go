@@ -19,10 +19,10 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexzec "github.com/bisoncraft/meshwallet/dex/networks/zec"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexzec "github.com/bisoncraft/meshwallet/util/networks/zec"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -41,7 +41,7 @@ const (
 
 var (
 	tCtx     context.Context
-	tLogger  = dex.StdOutLogger("T", dex.LevelError)
+	tLogger  = util.StdOutLogger("T", util.LevelError)
 	tTxID    = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
 	tTxHash  *chainhash.Hash
 	tP2PKH   []byte
@@ -60,7 +60,7 @@ func generateTestBlockTime(blockHeight int64) time.Time {
 	return time.Unix(1e6, 0).Add(time.Duration(blockHeight) * maxFutureBlockTime / testBlocksPerBlockTimeOffset)
 }
 
-func makeRawTx(pkScripts []dex.Bytes, inputs []*wire.TxIn) *dexzec.Tx {
+func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *dexzec.Tx {
 	tx := &wire.MsgTx{
 		TxIn: inputs,
 	}
@@ -75,11 +75,11 @@ func dummyInput() *wire.TxIn {
 }
 
 func dummyTx() *dexzec.Tx {
-	return makeRawTx([]dex.Bytes{encode.RandomBytes(32)}, []*wire.TxIn{dummyInput()})
+	return makeRawTx([]util.Bytes{encode.RandomBytes(32)}, []*wire.TxIn{dummyInput()})
 }
 
 func signRawJSONTx(raw json.RawMessage) (*dexzec.Tx, []byte) {
-	var txB dex.Bytes
+	var txB util.Bytes
 	if err := json.Unmarshal(raw, &txB); err != nil {
 		panic(fmt.Sprintf("error unmarshaling tx: %v", err))
 	}
@@ -362,7 +362,7 @@ func tNewWallet() (*zecWallet, *tRPCClient, func()) {
 	}
 	walletCtx, shutdown := context.WithCancel(tCtx)
 
-	wi, err := NewWallet(walletCfg, tLogger, dex.Simnet)
+	wi, err := NewWallet(walletCfg, tLogger, util.Simnet)
 	if err != nil {
 		panic(fmt.Sprintf("NewWallet error: %v", err))
 	}
@@ -390,7 +390,7 @@ func tNewWallet() (*zecWallet, *tRPCClient, func()) {
 }
 
 func TestMain(m *testing.M) {
-	tLogger = dex.StdOutLogger("TEST", dex.LevelCritical)
+	tLogger = util.StdOutLogger("TEST", util.LevelCritical)
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	tTxHash, _ = chainhash.NewHashFromStr(tTxID)
@@ -474,7 +474,7 @@ func TestFundOrder(t *testing.T) {
 	cl.queueResponse("gettxout", &btcjson.GetTxOutResult{})
 	cl.queueResponse("listlockunspent", lockedOutpoints)
 
-	tx := makeRawTx([]dex.Bytes{{0x01}, {0x02}}, []*wire.TxIn{dummyInput()})
+	tx := makeRawTx([]util.Bytes{{0x01}, {0x02}}, []*wire.TxIn{dummyInput()})
 	tx.TxOut[1].Value = int64(lockedVal)
 	txB, _ := tx.Bytes()
 	const blockHeight = 5
@@ -830,7 +830,7 @@ func TestFundOrder(t *testing.T) {
 	cl.queueResponse(methodZGetAddressForAccount, &zGetAddressForAccountResult{Address: tAddr}) // split output
 	cl.queueResponse(methodZListUnifiedReceivers, &unifiedReceivers{Transparent: tAddr})
 	cl.queueResponse(methodZSendMany, "opid-123456")
-	txid := dex.Bytes(encode.RandomBytes(32)).String()
+	txid := util.Bytes(encode.RandomBytes(32)).String()
 	cl.queueResponse(methodZGetOperationResult, []*operationStatus{{
 		Status: "success",
 		Result: &opResult{
@@ -866,7 +866,7 @@ func TestFundingCoins(t *testing.T) {
 
 	const vout0 = 1
 	const txBlockHeight = 3
-	tx0 := makeRawTx([]dex.Bytes{{0x01}, tP2PKH}, []*wire.TxIn{dummyInput()})
+	tx0 := makeRawTx([]util.Bytes{{0x01}, tP2PKH}, []*wire.TxIn{dummyInput()})
 	txHash0 := tx0.TxHash()
 	_, _ = cl.addRawTx(txBlockHeight, tx0)
 	coinID0 := btc.ToCoinID(&txHash0, vout0)
@@ -887,7 +887,7 @@ func TestFundingCoins(t *testing.T) {
 	// Add a second funding coin to make sure more than one iteration of the
 	// utxo loops is required.
 	const vout1 = 0
-	tx1 := makeRawTx([]dex.Bytes{tP2PKH, {0x02}}, []*wire.TxIn{dummyInput()})
+	tx1 := makeRawTx([]util.Bytes{tP2PKH, {0x02}}, []*wire.TxIn{dummyInput()})
 	txHash1 := tx1.TxHash()
 	_, _ = cl.addRawTx(txBlockHeight, tx1)
 	coinID1 := btc.ToCoinID(&txHash1, vout1)
@@ -904,7 +904,7 @@ func TestFundingCoins(t *testing.T) {
 		Amount:       1,
 	}
 	unspents = append(unspents, p2pkhUnspent1)
-	coinIDs := []dex.Bytes{coinID0, coinID1}
+	coinIDs := []util.Bytes{coinID0, coinID1}
 	locked := []*btc.RPCOutpoint{}
 
 	queueSuccess := func() {
@@ -947,7 +947,7 @@ func TestFundingCoins(t *testing.T) {
 
 	// Bad coin ID.
 	goodCoinIDs := coinIDs
-	coinIDs = []dex.Bytes{encode.RandomBytes(35)}
+	coinIDs = []util.Bytes{encode.RandomBytes(35)}
 	ensureErr("bad coin ID")
 	coinIDs = goodCoinIDs
 
@@ -1156,7 +1156,7 @@ func TestSwapConfirmations(t *testing.T) {
 	const swapHeight = 2
 	const expConfs = tipHeight - swapHeight + 1
 
-	tx := makeRawTx([]dex.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
+	tx := makeRawTx([]util.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
 	txB, _ := tx.Bytes()
 	blockHash, swapBlock := cl.addRawTx(swapHeight, tx)
 	txHash := tx.TxHash()

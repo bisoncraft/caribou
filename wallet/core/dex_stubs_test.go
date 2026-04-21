@@ -6,8 +6,8 @@ package core
 import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/order"
 )
 
 // tDriver implements asset.Driver for testing.
@@ -18,7 +18,7 @@ type tDriver struct {
 	wallet        asset.Wallet // optional pre-opened wallet
 }
 
-func (d *tDriver) Open(_ *asset.WalletConfig, _ dex.Logger, _ dex.Network) (asset.Wallet, error) {
+func (d *tDriver) Open(_ *asset.WalletConfig, _ util.Logger, _ util.Network) (asset.Wallet, error) {
 	if d.openErr != nil {
 		return nil, d.openErr
 	}
@@ -34,7 +34,7 @@ type tCreator struct {
 	createErr error
 }
 
-func (c *tCreator) Exists(_, _ string, _ map[string]string, _ dex.Network) (bool, error) {
+func (c *tCreator) Exists(_, _ string, _ map[string]string, _ util.Network) (bool, error) {
 	return false, c.existsErr
 }
 func (c *tCreator) Create(_ *asset.CreateWalletParams) error { return c.createErr }
@@ -72,8 +72,8 @@ func init() {
 	for _, id := range []uint32{54321} {
 		asset.Register(id, &tDriver{winfo: &asset.WalletInfo{
 			SupportedVersions: []uint32{0},
-			UnitInfo: dex.UnitInfo{
-				Conventional: dex.Denomination{ConversionFactor: 1e8},
+			UnitInfo: util.UnitInfo{
+				Conventional: util.Denomination{ConversionFactor: 1e8},
 			},
 			AvailableWallets: []*asset.WalletDefinition{{Type: "type"}},
 		}}, true)
@@ -83,7 +83,7 @@ func init() {
 // Match is a stub for the removed DEX match type.
 // Referenced by helpers_test.go.
 type Match struct {
-	MatchID  dex.Bytes         `json:"matchID"`
+	MatchID  util.Bytes         `json:"matchID"`
 	Status   order.MatchStatus `json:"status"`
 	Active   bool              `json:"active"`
 	Revoked  bool              `json:"revoked"`
@@ -105,7 +105,7 @@ type Order struct {
 	QuoteSymbol string            `json:"quoteSymbol"`
 	MarketID    string            `json:"market"`
 	Type        order.OrderType   `json:"type"`
-	ID          dex.Bytes         `json:"id"`
+	ID          util.Bytes         `json:"id"`
 	Stamp       uint64            `json:"stamp"`
 	Status      order.OrderStatus `json:"status"`
 	Qty         uint64            `json:"qty"`

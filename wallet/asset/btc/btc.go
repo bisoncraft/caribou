@@ -26,12 +26,12 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -328,11 +328,11 @@ type TxInSigner func(tx *wire.MsgTx, idx int, subScript []byte, hashType txscrip
 type BTCCloneCFG struct {
 	WalletCFG          *asset.WalletConfig
 	MinNetworkVersion  uint64
-	MinElectrumVersion dex.Semver
+	MinElectrumVersion util.Semver
 	WalletInfo         *asset.WalletInfo
 	Symbol             string
-	Logger             dex.Logger
-	Network            dex.Network
+	Logger             util.Logger
+	Network            util.Network
 	ChainParams        *chaincfg.Params
 	// Ports is the default wallet RPC tcp ports used when undefined in
 	// WalletConfig.
@@ -386,7 +386,7 @@ type BTCCloneCFG struct {
 	FeeEstimator func(context.Context, RawRequester, uint64) (uint64, error)
 	// ExternalFeeEstimator should be supplied if the clone provides the
 	// apifeefallback ConfigOpt. TODO: confTarget uint64
-	ExternalFeeEstimator func(context.Context, dex.Network) (uint64, error)
+	ExternalFeeEstimator func(context.Context, util.Network) (uint64, error)
 	// ExternalFeeShelfLife can be set to adjust the time to staleness of
 	// external fee rates. Default is 5 minutes.
 	ExternalFeeShelfLife time.Duration
@@ -504,7 +504,7 @@ func readBaseWalletConfig(walletCfg *WalletConfig) (*baseWalletConfig, error) {
 }
 
 // readRPCWalletConfig parses the settings map into a *RPCWalletConfig.
-func readRPCWalletConfig(settings map[string]string, symbol string, net dex.Network, ports dexbtc.NetPorts) (cfg *RPCWalletConfig, err error) {
+func readRPCWalletConfig(settings map[string]string, symbol string, net util.Network, ports dexbtc.NetPorts) (cfg *RPCWalletConfig, err error) {
 	cfg = new(RPCWalletConfig)
 	err = config.Unmapify(settings, cfg)
 	if err != nil {
@@ -516,7 +516,7 @@ func readRPCWalletConfig(settings map[string]string, symbol string, net dex.Netw
 
 // parseRPCWalletConfig parses a *RPCWalletConfig from the settings map and
 // creates the unconnected *rpcclient.Client.
-func parseRPCWalletConfig(settings map[string]string, symbol string, net dex.Network,
+func parseRPCWalletConfig(settings map[string]string, symbol string, net util.Network,
 	ports dexbtc.NetPorts, singularWallet bool) (*RPCWalletConfig, *rpcclient.Client, error) {
 	cfg, err := readRPCWalletConfig(settings, symbol, net, ports)
 	if err != nil {
@@ -562,7 +562,7 @@ var _ asset.Creator = (*Driver)(nil)
 
 // Exists checks the existence of the wallet. Part of the Creator interface, so
 // only used for wallets with WalletDefinition.Seeded = true.
-func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error) {
+func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
 	if walletType != walletTypeSPV {
 		return false, fmt.Errorf("no Bitcoin wallet of type %q available", walletType)
 	}
@@ -628,7 +628,7 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 
 // Open opens or connects to the BTC exchange wallet. Start the wallet with its
 // Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -755,7 +755,7 @@ type baseWalletConfig struct {
 
 // feeRateCache wraps a ExternalFeeEstimator function and caches results.
 type feeRateCache struct {
-	f         func(context.Context, dex.Network) (uint64, error)
+	f         func(context.Context, util.Network) (uint64, error)
 	shelfLife time.Duration
 
 	mtx        sync.Mutex
@@ -765,7 +765,7 @@ type feeRateCache struct {
 	lastError  error
 }
 
-func (c *feeRateCache) rate(ctx context.Context, net dex.Network) (uint64, error) {
+func (c *feeRateCache) rate(ctx context.Context, net util.Network) (uint64, error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	const defaultShelfLife = time.Minute * 5
@@ -793,7 +793,7 @@ func (c *feeRateCache) rate(ctx context.Context, net dex.Network) (uint64, error
 
 // baseWallet is a wallet backend for Bitcoin. The backend is how the DEX
 // client app communicates with the BTC blockchain and wallet. baseWallet
-// satisfies the dex.Wallet interface.
+// satisfies the util.Wallet interface.
 type baseWallet struct {
 	// 64-bit atomic variables first. See
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
@@ -804,7 +804,7 @@ type baseWallet struct {
 	walletInfo        *asset.WalletInfo
 	cloneParams       *BTCCloneCFG
 	chainParams       *chaincfg.Params
-	log               dex.Logger
+	log               util.Logger
 	symbol            string
 	emit              *asset.WalletEmitter
 	lastPeerCount     uint32
@@ -835,7 +835,7 @@ type baseWallet struct {
 
 	txVersion func() int32
 
-	Network dex.Network
+	Network util.Network
 	ctx     context.Context // the asset subsystem starts with Connect(ctx)
 
 	// TODO: remove currentTip and the mutex, and make it local to the
@@ -1094,13 +1094,13 @@ func (btc *ExchangeWalletSPV) WithdrawTx(ctx context.Context, walletPW []byte, a
 	return signedTx, nil
 }
 
-func parseChainParams(net dex.Network) (*chaincfg.Params, error) {
+func parseChainParams(net util.Network) (*chaincfg.Params, error) {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return &chaincfg.MainNetParams, nil
-	case dex.Testnet:
+	case util.Testnet:
 		return &chaincfg.TestNet3Params, nil
-	case dex.Regtest:
+	case util.Regtest:
 		return &chaincfg.RegressionNetParams, nil
 	}
 	return nil, fmt.Errorf("unknown network ID %v", net)
@@ -1108,7 +1108,7 @@ func parseChainParams(net dex.Network) (*chaincfg.Params, error) {
 
 // NewWallet is the exported constructor by which the DEX will import the
 // exchange wallet.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, net dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (asset.Wallet, error) {
 	params, err := parseChainParams(net)
 	if err != nil {
 		return nil, err
@@ -1143,7 +1143,7 @@ func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, net dex.Network) (ass
 		return &ExchangeWalletAccelerator{rpcWallet}, nil
 	case walletTypeElectrum:
 		cloneCFG.Ports = dexbtc.NetPorts{} // no default ports
-		ver, err := dex.SemverFromString(needElectrumVersion)
+		ver, err := util.SemverFromString(needElectrumVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -1699,7 +1699,7 @@ func (btc *baseWallet) connect(ctx context.Context) (*sync.WaitGroup, error) {
 }
 
 // Connect connects the wallet to the btc.Wallet backend and starts monitoring
-// blocks and peers. Satisfies the dex.Connector interface.
+// blocks and peers. Satisfies the util.Connector interface.
 func (btc *intermediaryWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	wg, err := btc.connect(ctx)
 	if err != nil {
@@ -1977,15 +1977,15 @@ func rpcFeeRate(ctx context.Context, rr RawRequester, confTarget uint64) (uint64
 	if satPerKB <= 0 {
 		return 0, errors.New("zero or negative fee rate")
 	}
-	return uint64(dex.IntDivUp(int64(satPerKB), 1000)), nil
+	return uint64(util.IntDivUp(int64(satPerKB), 1000)), nil
 }
 
 // externalFeeRate gets the fee rate from the external API and returns it
 // in sats/vByte.
-func externalFeeRate(ctx context.Context, net dex.Network) (uint64, error) {
+func externalFeeRate(ctx context.Context, net util.Network) (uint64, error) {
 	// https://mempool.space/docs/api
 	var uri string
-	if net == dex.Testnet {
+	if net == util.Testnet {
 		uri = "https://mempool.space/testnet/api/v1/fees/recommended"
 	} else {
 		uri = "https://mempool.space/api/v1/fees/recommended"
@@ -2478,11 +2478,11 @@ func (btc *baseWallet) SingleLotRedeemFees(_ uint32, feeSuggestion uint64) (uint
 // FundOrder selects coins for use in an order. The coins will be locked, and
 // will not be returned in subsequent calls to FundOrder or calculated in calls
 // to Available, unless they are unlocked with ReturnCoins.
-// The returned []dex.Bytes contains the redeem scripts for the selected coins.
+// The returned []util.Bytes contains the redeem scripts for the selected coins.
 // Equal number of coins and redeemed scripts must be returned. A nil or empty
-// dex.Bytes should be appended to the redeem scripts collection for coins with
+// util.Bytes should be appended to the redeem scripts collection for coins with
 // no redeem script.
-func (btc *baseWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, uint64, error) {
+func (btc *baseWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint64, error) {
 	ordValStr := amount(ord.Value).String()
 	btc.log.Debugf("Attempting to fund order for %s %s, maxFeeRate = %d, max swaps = %d",
 		ordValStr, btc.symbol, ord.MaxFeeRate, ord.MaxSwapCount)
@@ -2500,7 +2500,7 @@ func (btc *baseWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, ui
 	if btc.feeRateLimit() < ord.MaxFeeRate {
 		return nil, nil, 0, fmt.Errorf(
 			"%v: server's max fee rate %v higher than configued fee rate limit %v",
-			dex.BipIDSymbol(BipID), ord.MaxFeeRate, btc.feeRateLimit())
+			util.BipIDSymbol(BipID), ord.MaxFeeRate, btc.feeRateLimit())
 	}
 
 	customCfg := new(swapOptions)
@@ -2566,7 +2566,7 @@ func (btc *baseWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, ui
 			}
 			return nil, nil, 0, err
 		} else if split {
-			return splitCoins, []dex.Bytes{nil}, splitFees, nil // no redeem script required for split tx output
+			return splitCoins, []util.Bytes{nil}, splitFees, nil // no redeem script required for split tx output
 		}
 		return coins, redeemScripts, 0, nil // splitCoins == coins
 	}
@@ -2730,7 +2730,7 @@ func (btc *baseWallet) submitMultiSplitTx(fundingCoins asset.Coins, spents []*Ou
 // called after it has been determined that all of the orders cannot be funded
 // without a split transaction.
 func (btc *baseWallet) fundMultiWithSplit(keep, maxLock uint64, values []*asset.MultiOrderValue,
-	splitTxFeeRate, maxFeeRate uint64, splitBuffer float64) ([]asset.Coins, [][]dex.Bytes, uint64, error) {
+	splitTxFeeRate, maxFeeRate uint64, splitBuffer float64) ([]asset.Coins, [][]util.Bytes, uint64, error) {
 	utxos, _, avail, err := btc.cm.SpendableUTXOs(0)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("error getting spendable utxos: %w", err)
@@ -2812,7 +2812,7 @@ func (btc *baseWallet) fundMultiWithSplit(keep, maxLock uint64, values []*asset.
 	}
 
 	coins := make([]asset.Coins, len(values))
-	redeemScripts := make([][]dex.Bytes, len(values))
+	redeemScripts := make([][]util.Bytes, len(values))
 	spents := make([]*Output, 0, len(values))
 
 	var splitIndex int
@@ -2820,7 +2820,7 @@ func (btc *baseWallet) fundMultiWithSplit(keep, maxLock uint64, values []*asset.
 	for i := range values {
 		if fundingUTXOs, ok := indexToFundingCoins[i]; ok {
 			coins[i] = make(asset.Coins, len(fundingUTXOs))
-			redeemScripts[i] = make([]dex.Bytes, len(fundingUTXOs))
+			redeemScripts[i] = make([]util.Bytes, len(fundingUTXOs))
 			for j, unspent := range fundingUTXOs {
 				output := NewOutput(unspent.TxHash, unspent.Vout, unspent.Amount)
 				locks = append(locks, &UTxO{
@@ -2835,7 +2835,7 @@ func (btc *baseWallet) fundMultiWithSplit(keep, maxLock uint64, values []*asset.
 			}
 		} else {
 			coins[i] = splitOutputCoins[splitIndex]
-			redeemScripts[i] = []dex.Bytes{nil}
+			redeemScripts[i] = []util.Bytes{nil}
 			splitIndex++
 		}
 	}
@@ -2850,7 +2850,7 @@ func (btc *baseWallet) fundMultiWithSplit(keep, maxLock uint64, values []*asset.
 // UTXOs. If a split is not allowed, it will fund the orders that it was able
 // to fund. If splitting is allowed, a split transaction will be created to fund
 // all of the orders.
-func (btc *baseWallet) fundMulti(maxLock uint64, values []*asset.MultiOrderValue, splitTxFeeRate, maxFeeRate uint64, allowSplit bool, splitBuffer float64) ([]asset.Coins, [][]dex.Bytes, uint64, error) {
+func (btc *baseWallet) fundMulti(maxLock uint64, values []*asset.MultiOrderValue, splitTxFeeRate, maxFeeRate uint64, allowSplit bool, splitBuffer float64) ([]asset.Coins, [][]util.Bytes, uint64, error) {
 	reserves := btc.bondReserves.Load()
 
 	coins, redeemScripts, fundingCoins, spents, err := btc.cm.FundMultiBestEffort(reserves, maxLock, values, maxFeeRate, allowSplit)
@@ -3048,7 +3048,7 @@ func (btc *baseWallet) rawWalletTx(hash *chainhash.Hash) ([]byte, uint32, error)
 // FundingCoins gets funding coins for the coin IDs. The coins are locked. This
 // method might be called to reinitialize an order from data stored externally.
 // This method will only return funding coins, e.g. unspent transaction outputs.
-func (btc *baseWallet) FundingCoins(ids []dex.Bytes) (asset.Coins, error) {
+func (btc *baseWallet) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 	return btc.cm.FundingCoins(ids)
 }
 
@@ -3128,7 +3128,7 @@ func (btc *baseWallet) lookupWalletTxOutput(txHash *chainhash.Hash, vout uint32)
 
 // getTransactions retrieves the transactions that created coins. The
 // returned slice will be in the same order as the argument.
-func (btc *baseWallet) getTransactions(coins []dex.Bytes) ([]*GetTransactionResult, error) {
+func (btc *baseWallet) getTransactions(coins []util.Bytes) ([]*GetTransactionResult, error) {
 	txs := make([]*GetTransactionResult, 0, len(coins))
 
 	for _, coinID := range coins {
@@ -3366,7 +3366,7 @@ func (btc *intermediaryWallet) FeesForRemainingSwaps(n, feeRate uint64) uint64 {
 // this amount.
 //
 // The returned change coin may be nil, and should be checked before use.
-func (btc *ExchangeWalletAccelerator) AccelerateOrder(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
+func (btc *ExchangeWalletAccelerator) AccelerateOrder(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
 	return accelerateOrder(btc.baseWallet, swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, newFeeRate)
 }
 
@@ -3382,11 +3382,11 @@ func (btc *ExchangeWalletAccelerator) AccelerateOrder(swapCoins, accelerationCoi
 // this amount.
 //
 // The returned change coin may be nil, and should be checked before use.
-func (btc *ExchangeWalletSPV) AccelerateOrder(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
+func (btc *ExchangeWalletSPV) AccelerateOrder(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
 	return accelerateOrder(btc.baseWallet, swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, newFeeRate)
 }
 
-func accelerateOrder(btc *baseWallet, swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
+func accelerateOrder(btc *baseWallet, swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
 	changeTxHash, changeVout, err := decodeCoinID(changeCoin)
 	if err != nil {
 		return nil, "", err
@@ -3456,7 +3456,7 @@ func accelerateOrder(btc *baseWallet, swapCoins, accelerationCoins []dex.Bytes, 
 // instead of broadcasting the acceleration transaction, it just returns
 // the amount of funds that will need to be spent in order to increase the
 // average fee rate to the desired amount.
-func (btc *ExchangeWalletAccelerator) AccelerationEstimate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
+func (btc *ExchangeWalletAccelerator) AccelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
 	return accelerationEstimate(btc.baseWallet, swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, newFeeRate)
 }
 
@@ -3464,11 +3464,11 @@ func (btc *ExchangeWalletAccelerator) AccelerationEstimate(swapCoins, accelerati
 // instead of broadcasting the acceleration transaction, it just returns
 // the amount of funds that will need to be spent in order to increase the
 // average fee rate to the desired amount.
-func (btc *ExchangeWalletSPV) AccelerationEstimate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
+func (btc *ExchangeWalletSPV) AccelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
 	return accelerationEstimate(btc.baseWallet, swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, newFeeRate)
 }
 
-func accelerationEstimate(btc *baseWallet, swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
+func accelerationEstimate(btc *baseWallet, swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
 	previousTxs, err := btc.getTransactions(append(swapCoins, accelerationCoins...))
 	if err != nil {
 		return 0, fmt.Errorf("failed to get transactions: %w", err)
@@ -3548,7 +3548,7 @@ func tooEarlyToAccelerate(swapTxs []*GetTransactionResult, accelerationTxs []*Ge
 // the user a good amount of flexibility in determining the post acceleration
 // effective fee rate, but still not allowing them to pick something
 // outrageously high.
-func (btc *ExchangeWalletAccelerator) PreAccelerate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
+func (btc *ExchangeWalletAccelerator) PreAccelerate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
 	return preAccelerate(btc.baseWallet, swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
 }
 
@@ -3560,7 +3560,7 @@ func (btc *ExchangeWalletAccelerator) PreAccelerate(swapCoins, accelerationCoins
 // the user a good amount of flexibility in determining the post acceleration
 // effective fee rate, but still not allowing them to pick something
 // outrageously high.
-func (btc *ExchangeWalletSPV) PreAccelerate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
+func (btc *ExchangeWalletSPV) PreAccelerate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
 	return preAccelerate(btc.baseWallet, swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
 }
 
@@ -3625,7 +3625,7 @@ func (btc *baseWallet) maxAccelerationRate(changeVal, feesAlreadyPaid, orderTxVB
 	return calcFeeRate(), nil
 }
 
-func preAccelerate(btc *baseWallet, swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
+func preAccelerate(btc *baseWallet, swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
 	makeError := func(err error) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
 		return 0, &asset.XYRange{}, nil, err
 	}
@@ -4990,7 +4990,7 @@ func (btc *baseWallet) RecoverAdaptorSecret(
 	return adaptorSecret, nil
 }
 
-func (btc *baseWallet) RefundPrivate(ctx context.Context, coinID dex.Bytes, contract *asset.PrivateContract, feeRate uint64) (dex.Bytes, error) {
+func (btc *baseWallet) RefundPrivate(ctx context.Context, coinID util.Bytes, contract *asset.PrivateContract, feeRate uint64) (util.Bytes, error) {
 	txHash, vout, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, err
@@ -5084,7 +5084,7 @@ func (btc *baseWallet) MarkPrivateSwapComplete(contract *asset.PrivateContract, 
 }
 
 // Redeem sends the redemption transaction, completing the atomic swap.
-func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]dex.Bytes, asset.Coin, uint64, error) {
+func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]util.Bytes, asset.Coin, uint64, error) {
 	// Check broadcast cache for retry of a previously built transaction.
 	cacheKey := broadcast.RedeemCacheKey(form.Redemptions)
 	if cached, ok := broadcast.RecoverFromCache(btc.redeemCache, cacheKey,
@@ -5223,7 +5223,7 @@ func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]de
 
 	// Prepare return values for caching.
 	txHash := btc.hashTx(msgTx)
-	coinIDs := make([]dex.Bytes, 0, len(form.Redemptions))
+	coinIDs := make([]util.Bytes, 0, len(form.Redemptions))
 	for i := range form.Redemptions {
 		coinIDs = append(coinIDs, ToCoinID(txHash, uint32(i)))
 	}
@@ -5284,7 +5284,7 @@ func ConvertAuditInfo(ai *asset.AuditInfo, decodeAddr dexbtc.AddressDecoder, cha
 // SignCoinMessage signs the message with the private key associated with the
 // specified unspent coin. A slice of pubkeys required to spend the coin and a
 // signature for each pubkey are returned.
-func (btc *baseWallet) SignCoinMessage(coin asset.Coin, msg dex.Bytes) (pubkeys, sigs []dex.Bytes, err error) {
+func (btc *baseWallet) SignCoinMessage(coin asset.Coin, msg util.Bytes) (pubkeys, sigs []util.Bytes, err error) {
 	op, err := ConvertCoin(coin)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error converting coin: %w", err)
@@ -5316,7 +5316,7 @@ func (btc *baseWallet) SignCoinMessage(coin asset.Coin, msg dex.Bytes) (pubkeys,
 // ability to work with an empty txData is a convenience for recovery tools and
 // testing, and it may change in the future if a GetTxData method is added for
 // this purpose.
-func (btc *baseWallet) AuditContract(coinID, contract, txData dex.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
+func (btc *baseWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
 	txHash, vout, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, err
@@ -5428,7 +5428,7 @@ func (btc *baseWallet) LockTimeExpired(_ context.Context, lockTime time.Time) (b
 
 // ContractLockTimeExpired returns true if the specified contract's locktime has
 // expired, making it possible to issue a Refund.
-func (btc *baseWallet) ContractLockTimeExpired(ctx context.Context, contract dex.Bytes) (bool, time.Time, error) {
+func (btc *baseWallet) ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error) {
 	_, _, locktime, _, err := dexbtc.ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("error extracting contract locktime: %w", err)
@@ -5447,7 +5447,7 @@ func (btc *baseWallet) ContractLockTimeExpired(ctx context.Context, contract dex
 //
 // This method blocks until the redemption is found, an error occurs or the
 // provided context is canceled.
-func (btc *intermediaryWallet) FindRedemption(ctx context.Context, coinID, _ dex.Bytes) (redemptionCoin, secret dex.Bytes, err error) {
+func (btc *intermediaryWallet) FindRedemption(ctx context.Context, coinID, _ util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
 	return btc.rf.FindRedemption(ctx, coinID)
 }
 
@@ -5458,7 +5458,7 @@ func (btc *intermediaryWallet) FindRedemption(ctx context.Context, coinID, _ dex
 // wallet does not store it, even though it was known when the init transaction
 // was created. The client should store this information for persistence across
 // sessions.
-func (btc *baseWallet) Refund(ctx context.Context, coinID, contract dex.Bytes, feeRate uint64) (dex.Bytes, error) {
+func (btc *baseWallet) Refund(ctx context.Context, coinID, contract util.Bytes, feeRate uint64) (util.Bytes, error) {
 	// Check broadcast cache for retry of a previously built transaction.
 	cacheKey := broadcast.RefundCacheKey(coinID)
 	if cached, ok := broadcast.RecoverFromCache(btc.refundCache, cacheKey,
@@ -5547,7 +5547,7 @@ func (btc *baseWallet) Refund(ctx context.Context, coinID, contract dex.Bytes, f
 
 // refundTx creates and signs a contract`s refund transaction. If refundAddr is
 // not supplied, one will be requested from the wallet.
-func (btc *baseWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout uint32, contract dex.Bytes, val uint64, refundAddr btcutil.Address, feeRate uint64) (*wire.MsgTx, error) {
+func (btc *baseWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout uint32, contract util.Bytes, val uint64, refundAddr btcutil.Address, feeRate uint64) (*wire.MsgTx, error) {
 	sender, _, lockTime, _, err := dexbtc.ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting swap addresses: %w", err)
@@ -5829,7 +5829,7 @@ func (btc *baseWallet) send(address string, val uint64, feeRate uint64, subtract
 // SwapConfirmations gets the number of confirmations for the specified swap
 // by first checking for a unspent output, and if not found, searching indexed
 // wallet transactions.
-func (btc *baseWallet) SwapConfirmations(_ context.Context, id dex.Bytes, contract dex.Bytes, startTime time.Time) (uint32, bool, error) {
+func (btc *baseWallet) SwapConfirmations(_ context.Context, id util.Bytes, contract util.Bytes, startTime time.Time) (uint32, bool, error) {
 	txHash, vout, err := decodeCoinID(id)
 	if err != nil {
 		return 0, false, err
@@ -5844,7 +5844,7 @@ func (btc *baseWallet) SwapConfirmations(_ context.Context, id dex.Bytes, contra
 // RegFeeConfirmations gets the number of confirmations for the specified output
 // by first checking for a unspent output, and if not found, searching indexed
 // wallet transactions.
-func (btc *baseWallet) RegFeeConfirmations(_ context.Context, id dex.Bytes) (confs uint32, err error) {
+func (btc *baseWallet) RegFeeConfirmations(_ context.Context, id util.Bytes) (confs uint32, err error) {
 	txHash, _, err := decodeCoinID(id)
 	if err != nil {
 		return 0, err
@@ -6150,7 +6150,7 @@ func (e *swapCacheEntry) Stamp() time.Time { return e.timestamp }
 
 type redeemCacheEntry struct {
 	signedTx  *wire.MsgTx
-	coinIDs   []dex.Bytes
+	coinIDs   []util.Bytes
 	outCoin   *Output
 	fees      uint64
 	totalIn   uint64
@@ -6161,7 +6161,7 @@ func (e *redeemCacheEntry) Stamp() time.Time { return e.timestamp }
 
 type refundCacheEntry struct {
 	signedTx     *wire.MsgTx
-	refundCoinID dex.Bytes
+	refundCoinID util.Bytes
 	refundVal    uint64
 	fees         uint64
 	timestamp    time.Time
@@ -6766,7 +6766,7 @@ func (btc *baseWallet) BondsFeeBuffer(feeRate uint64) uint64 {
 // the same order as the Values in the parameter. If the length of the returned
 // orders is shorter than what was passed in, it means that the orders at the
 // end of the list were unable to be funded.
-func (btc *baseWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) ([]asset.Coins, [][]dex.Bytes, uint64, error) {
+func (btc *baseWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) ([]asset.Coins, [][]util.Bytes, uint64, error) {
 	btc.log.Debugf("Attempting to fund a multi-order for %s, maxFeeRate = %d", btc.symbol, mo.MaxFeeRate)
 
 	var totalRequiredForOrders uint64
@@ -6799,7 +6799,7 @@ func (btc *baseWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) ([]a
 	if btc.feeRateLimit() < mo.MaxFeeRate {
 		return nil, nil, 0, fmt.Errorf(
 			"%v: server's max fee rate %v higher than configued fee rate limit %v",
-			dex.BipIDSymbol(BipID), mo.MaxFeeRate, btc.feeRateLimit())
+			util.BipIDSymbol(BipID), mo.MaxFeeRate, btc.feeRateLimit())
 	}
 
 	bal, err := btc.Balance()
@@ -7561,7 +7561,7 @@ func ToCoinID(txHash *chainhash.Hash, vout uint32) []byte {
 }
 
 // decodeCoinID decodes the coin ID into a tx hash and a vout.
-func decodeCoinID(coinID dex.Bytes) (*chainhash.Hash, uint32, error) {
+func decodeCoinID(coinID util.Bytes) (*chainhash.Hash, uint32, error) {
 	if len(coinID) != 36 {
 		return nil, 0, fmt.Errorf("coin ID wrong length. expected 36, got %d", len(coinID))
 	}
@@ -7657,7 +7657,7 @@ func msgTxFromBytes(txB []byte) (*wire.MsgTx, error) {
 // possibility that the tx is never mined and eventually purged from the
 // mempool. In that case we use the provided fee suggestion to create and send
 // a new redeem transaction, returning the new transactions hash.
-func (btc *baseWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
+func (btc *baseWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
 	txHash, _, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, err
@@ -7715,7 +7715,7 @@ func (btc *baseWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.Con
 	// tx has disappeared. Assume the fee was too low at the time and it
 	// was eventually purged from the mempool. Attempt to spend again with
 	// a currently reasonable fee.
-	var newCoinID dex.Bytes
+	var newCoinID util.Bytes
 	if confirmTx.IsRedeem() {
 		form := &asset.RedeemForm{
 			Redemptions: []*asset.Redemption{
@@ -7748,13 +7748,13 @@ func (btc *baseWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.Con
 
 type AddressRecycler struct {
 	recyclePath string
-	log         dex.Logger
+	log         util.Logger
 
 	mtx   sync.Mutex
 	addrs map[string]struct{}
 }
 
-func NewAddressRecycler(recyclePath string, log dex.Logger) (*AddressRecycler, error) {
+func NewAddressRecycler(recyclePath string, log util.Logger) (*AddressRecycler, error) {
 	// Try to load any cached unused redemption addresses.
 	b, err := os.ReadFile(recyclePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -7812,13 +7812,13 @@ func (a *AddressRecycler) ReturnAddresses(addrs []string) {
 }
 
 // BitcoreRateFetcher generates a rate fetching function for the bitcore.io API.
-func BitcoreRateFetcher(ticker string) func(ctx context.Context, net dex.Network) (uint64, error) {
+func BitcoreRateFetcher(ticker string) func(ctx context.Context, net util.Network) (uint64, error) {
 	const uriTemplate = "https://api.bitcore.io/api/%s/%s/fee/1"
 	mainnetURI, testnetURI := fmt.Sprintf(uriTemplate, ticker, "mainnet"), fmt.Sprintf(uriTemplate, ticker, "testnet")
 
-	return func(ctx context.Context, net dex.Network) (uint64, error) {
+	return func(ctx context.Context, net util.Network) (uint64, error) {
 		var uri string
-		if net == dex.Testnet {
+		if net == util.Testnet {
 			uri = testnetURI
 		} else {
 			uri = mainnetURI

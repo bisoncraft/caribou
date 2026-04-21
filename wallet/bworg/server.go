@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/webserver"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/webserver"
 	"github.com/go-chi/chi/v5"
 	"github.com/jrick/logrotate/rotator"
 )
@@ -25,7 +25,7 @@ const (
 
 var (
 	siteDir = "site"
-	log     dex.Logger
+	log     util.Logger
 
 	homeDir, _ = os.UserHomeDir()
 	appDir     = filepath.Join(homeDir, ".bworg")
@@ -52,11 +52,11 @@ func mainErr() error {
 		cancel()
 	}()
 
-	rotator, err := dex.LogRotator(logDir, "bworg.log")
+	rotator, err := util.LogRotator(logDir, "bworg.log")
 	if err != nil {
 		return fmt.Errorf("error initializing log rotator: %w", err)
 	}
-	log = dex.NewLogger("BW", dex.LevelInfo, &logWriter{rotator})
+	log = util.NewLogger("BW", util.LevelInfo, &logWriter{rotator})
 
 	webserver.UseLogger(log.SubLogger("SRV"))
 

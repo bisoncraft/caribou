@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/fiatrates"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/fiatrates"
 )
 
 const (
@@ -41,8 +41,8 @@ var (
 	// we would need 12 * 60 / (86,400 / 1000) = 8.33 assets. Very likely. So
 	// we're in a similar position to coinpaprika here too.
 	messariURL  = "https://data.messari.io/api/v1/assets/%s/metrics/market-data"
-	btcBipID, _ = dex.BipSymbolID("btc")
-	dcrBipID, _ = dex.BipSymbolID("dcr")
+	btcBipID, _ = util.BipSymbolID("btc")
+	dcrBipID, _ = util.BipSymbolID("dcr")
 )
 
 // fiatRateFetchers is the list of all supported fiat rate fetchers.
@@ -61,7 +61,7 @@ type fiatRateInfo struct {
 }
 
 // rateFetcher can fetch fiat rates for assets from an API.
-type rateFetcher func(context context.Context, logger dex.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64
+type rateFetcher func(context context.Context, logger util.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64
 
 type commonRateSource struct {
 	fetchRates rateFetcher
@@ -97,7 +97,7 @@ func (source *commonRateSource) assetRate(assetID uint32) *fiatRateInfo {
 }
 
 // refreshRates updates the last update time and the rate information for assets.
-func (source *commonRateSource) refreshRates(ctx context.Context, logger dex.Logger, assets map[uint32]*SupportedAsset) {
+func (source *commonRateSource) refreshRates(ctx context.Context, logger util.Logger, assets map[uint32]*SupportedAsset) {
 	fiatRates := source.fetchRates(ctx, logger, assets)
 	now := time.Now()
 	source.mtx.Lock()
@@ -124,7 +124,7 @@ func newCommonRateSource(fetcher rateFetcher) *commonRateSource {
 // FetchCoinpaprikaRates retrieves and parses fiat rate data from the
 // Coinpaprika API. See https://api.coinpaprika.com/#operation/getTickersById
 // for sample request and response information.
-func FetchCoinpaprikaRates(ctx context.Context, log dex.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
+func FetchCoinpaprikaRates(ctx context.Context, log util.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
 	coinpapAssets := make([]*fiatrates.CoinpaprikaAsset, 0, len(assets) /* too small cuz tokens*/)
 	for assetID, a := range assets {
 		coinpapAssets = append(coinpapAssets, &fiatrates.CoinpaprikaAsset{
@@ -138,7 +138,7 @@ func FetchCoinpaprikaRates(ctx context.Context, log dex.Logger, assets map[uint3
 
 // FetchDcrdataRates retrieves and parses fiat rate data from dcrdata
 // exchange rate API.
-func FetchDcrdataRates(ctx context.Context, log dex.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
+func FetchDcrdataRates(ctx context.Context, log util.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
 	assetBTC := assets[btcBipID]
 	assetDCR := assets[dcrBipID]
 	noBTCAsset := assetBTC == nil || assetBTC.Wallet == nil
@@ -172,7 +172,7 @@ func FetchDcrdataRates(ctx context.Context, log dex.Logger, assets map[uint32]*S
 // See https://messari.io/api/docs#operation/Get%20Asset%20Market%20Data for
 // sample request and response information.
 // TODO: Requires an API Key, temporarily disabled.
-func FetchMessariRates(ctx context.Context, log dex.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
+func FetchMessariRates(ctx context.Context, log util.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
 	fiatRates := make(map[uint32]float64)
 	fetchRate := func(sa *SupportedAsset) {
 		assetID := sa.ID
@@ -189,7 +189,7 @@ func FetchMessariRates(ctx context.Context, log dex.Logger, assets map[uint32]*S
 			} `json:"data"`
 		})
 
-		slug := dex.TokenSymbol(sa.Symbol)
+		slug := util.TokenSymbol(sa.Symbol)
 		reqStr := fmt.Sprintf(messariURL, slug)
 
 		ctx, cancel := context.WithTimeout(ctx, fiatRequestTimeout)

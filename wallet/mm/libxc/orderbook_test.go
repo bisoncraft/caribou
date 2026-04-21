@@ -8,7 +8,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/util/calc"
 )
 
 func TestOrderbook(t *testing.T) {

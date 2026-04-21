@@ -16,8 +16,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/cbtypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/davecgh/go-spew/spew"
 
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/bch"     // register bch asset
@@ -37,7 +37,7 @@ import (
 var tCtx context.Context
 
 func TestMain(m *testing.M) {
-	asset.SetNetwork(dex.Mainnet)
+	asset.SetNetwork(util.Mainnet)
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {
@@ -52,7 +52,7 @@ func tNewCoinbase(t *testing.T) (*coinbase, func()) {
 	if credsPath == "" {
 		t.Fatalf("No CBCREDS environmental variable found")
 	}
-	b, err := os.ReadFile(dex.CleanAndExpandPath(credsPath))
+	b, err := os.ReadFile(util.CleanAndExpandPath(credsPath))
 	if err != nil {
 		t.Fatalf("error reading credentials")
 	}
@@ -70,10 +70,10 @@ func tNewCoinbase(t *testing.T) (*coinbase, func()) {
 	}
 
 	c, err := newCoinbase(&CEXConfig{
-		Net:       dex.Mainnet,
+		Net:       util.Mainnet,
 		APIKey:    creds.Name,
 		SecretKey: creds.PrivateKey,
-		Logger:    dex.StdOutLogger("T", dex.LevelInfo),
+		Logger:    util.StdOutLogger("T", util.LevelInfo),
 		Notify:    func(any) {},
 	})
 	if err != nil {
@@ -90,7 +90,7 @@ func TestWithdraw(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestConfirmWithdrawal(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestMarkets(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestOrderbookSubscription(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestBook(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestGetDepositAddress(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestConfirmDeposit(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestBalanceIndividually(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
@@ -472,7 +472,7 @@ func TestBalanceIndividually(t *testing.T) {
 			t.Fatalf("Balance error: %v", err)
 		}
 
-		fmt.Printf("%s Balance = %+v \n", dex.BipIDSymbol(assetID), b)
+		fmt.Printf("%s Balance = %+v \n", util.BipIDSymbol(assetID), b)
 	}
 }
 
@@ -486,7 +486,7 @@ func TestBalances(t *testing.T) {
 	}
 
 	for assetID, balance := range balances {
-		fmt.Printf("%s Balance = %+v \n", dex.BipIDSymbol(assetID), balance)
+		fmt.Printf("%s Balance = %+v \n", util.BipIDSymbol(assetID), balance)
 	}
 }
 
@@ -495,7 +495,7 @@ func TestPlaceTrade(t *testing.T) {
 	c, shutdown := tNewCoinbase(t)
 	defer shutdown()
 
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	if err := cm.ConnectOnce(c.ctx); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}

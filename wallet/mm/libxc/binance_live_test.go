@@ -17,14 +17,14 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
 )
 
 var (
-	log         = dex.StdOutLogger("T", dex.LevelTrace)
+	log         = util.StdOutLogger("T", util.LevelTrace)
 	binanceUS   = true
-	net         = dex.Mainnet
+	net         = util.Mainnet
 	apiKey      string
 	apiSecret   string
 	baseID      uint64
@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 		binanceUS = false
 	}
 	if testnet {
-		net = dex.Testnet
+		net = util.Testnet
 	}
 
 	if s := os.Getenv("SECRET"); s != "" {
@@ -91,7 +91,7 @@ type spoofDriver struct {
 	cFactor uint64
 }
 
-func (drv *spoofDriver) Open(*asset.WalletConfig, dex.Logger, dex.Network) (asset.Wallet, error) {
+func (drv *spoofDriver) Open(*asset.WalletConfig, util.Logger, util.Network) (asset.Wallet, error) {
 	return nil, nil
 }
 
@@ -101,8 +101,8 @@ func (drv *spoofDriver) DecodeCoinID(coinID []byte) (string, error) {
 
 func (drv *spoofDriver) Info() *asset.WalletInfo {
 	return &asset.WalletInfo{
-		UnitInfo: dex.UnitInfo{
-			Conventional: dex.Denomination{
+		UnitInfo: util.UnitInfo{
+			Conventional: util.Denomination{
 				ConversionFactor: drv.cFactor,
 			},
 		},
@@ -227,7 +227,7 @@ func TestMatchedMarkets(t *testing.T) {
 	}
 
 	for _, market := range markets {
-		fmt.Printf("%s_%s %d %d\n", dex.BipIDSymbol(market.BaseID), dex.BipIDSymbol(market.QuoteID), market.BaseMinWithdraw, market.QuoteMinWithdraw)
+		fmt.Printf("%s_%s %d %d\n", util.BipIDSymbol(market.BaseID), util.BipIDSymbol(market.QuoteID), market.BaseMinWithdraw, market.QuoteMinWithdraw)
 	}
 }
 
@@ -488,7 +488,7 @@ func TestBalances(t *testing.T) {
 	}
 
 	for assetID, b := range balances {
-		t.Logf("%s: %+v", dex.BipIDSymbol(assetID), b)
+		t.Logf("%s: %+v", util.BipIDSymbol(assetID), b)
 	}
 }
 

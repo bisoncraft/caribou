@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/ethereum/go-ethereum/common"
 	ethcore "github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
@@ -45,13 +45,13 @@ var (
 
 // NetworkCompatibilityData returns the CompatibilityData for the specified
 // network. If using simnet, make sure the simnet harness is running.
-func NetworkCompatibilityData(net dex.Network) (c CompatibilityData, err error) {
+func NetworkCompatibilityData(net util.Network) (c CompatibilityData, err error) {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return mainnetCompatibilityData, nil
-	case dex.Testnet:
+	case util.Testnet:
 		return testnetCompatibilityData, nil
-	case dex.Simnet:
+	case util.Simnet:
 	default:
 		return c, fmt.Errorf("no compatibility data for network # %d", net)
 	}
@@ -93,15 +93,15 @@ func simnetDataDir() (string, error) {
 }
 
 // ETHConfig returns the ETH protocol configuration for the specified network.
-func ETHConfig(net dex.Network) (c ethconfig.Config, err error) {
+func ETHConfig(net util.Network) (c ethconfig.Config, err error) {
 	c = ethconfig.Defaults
 	switch net {
 	// Ethereum
-	case dex.Mainnet:
+	case util.Mainnet:
 		c.Genesis = ethcore.DefaultGenesisBlock()
-	case dex.Testnet:
+	case util.Testnet:
 		c.Genesis = ethcore.DefaultSepoliaGenesisBlock()
-	case dex.Simnet:
+	case util.Simnet:
 		// Args are gasLimit, faucet address.
 		c.Genesis = ethcore.DeveloperGenesisBlock(30000000, nil)
 	default:
@@ -113,7 +113,7 @@ func ETHConfig(net dex.Network) (c ethconfig.Config, err error) {
 }
 
 // ChainConfig returns the core configuration for the blockchain.
-func ChainConfig(net dex.Network) (c *params.ChainConfig, err error) {
+func ChainConfig(net util.Network) (c *params.ChainConfig, err error) {
 	cfg, err := ETHConfig(net)
 	if err != nil {
 		return nil, err

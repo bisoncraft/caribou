@@ -21,8 +21,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/xmr/cxmr"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexnxmr "github.com/bisoncraft/meshwallet/dex/networks/xmr"
+	"github.com/bisoncraft/meshwallet/util"
+	dexnxmr "github.com/bisoncraft/meshwallet/util/networks/xmr"
 )
 
 const (
@@ -118,7 +118,7 @@ var _ asset.Driver = (*Driver)(nil)
 var _ asset.Creator = (*Driver)(nil)
 
 // Open creates the XMR wallet.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return newWallet(cfg, logger, network)
 }
 
@@ -137,7 +137,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 }
 
 // Exists checks if a wallet already exists at the specified location.
-func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error) {
+func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
 	if walletType != walletTypeNative {
 		return false, fmt.Errorf("unknown wallet type %q", walletType)
 	}
@@ -248,11 +248,11 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	return nil
 }
 
-func dexNetworkToCgo(net dex.Network) cxmr.NetworkType {
+func dexNetworkToCgo(net util.Network) cxmr.NetworkType {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return cxmr.NetworkMainnet
-	case dex.Testnet:
+	case util.Testnet:
 		// Use Monero testnet instead of stagenet - stagenet has address
 		// validation bugs in monero_c.
 		// TODO: stagenet is supposedly more stable and meant for consumers
@@ -260,7 +260,7 @@ func dexNetworkToCgo(net dex.Network) cxmr.NetworkType {
 		// handle it. When testing validate address and send, which accepts
 		// an address both fail because of the address values.
 		return cxmr.NetworkTestnet
-	case dex.Simnet:
+	case util.Simnet:
 		// Monero regtest mode uses mainnet-style addresses (prefix 4/8).
 		// We use allow_mismatched_daemon_version to handle hard fork checks.
 		return cxmr.NetworkMainnet
@@ -271,8 +271,8 @@ func dexNetworkToCgo(net dex.Network) cxmr.NetworkType {
 
 // ExchangeWallet implements asset.Wallet with full Monero wallet functionality.
 type ExchangeWallet struct {
-	log  dex.Logger
-	net  dex.Network
+	log  util.Logger
+	net  util.Network
 	emit *asset.WalletEmitter
 
 	wm         *cxmr.WalletManager
@@ -317,16 +317,16 @@ var _ asset.FeeRater = (*ExchangeWallet)(nil)
 var _ asset.TxFeeEstimator = (*ExchangeWallet)(nil)
 var _ asset.Rescanner = (*ExchangeWallet)(nil)
 
-func newWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (*ExchangeWallet, error) {
+func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*ExchangeWallet, error) {
 	daemonAddr := cfg.Settings["daemonaddress"]
 	if daemonAddr == "" {
 		// Use default daemon address based on network
 		switch network {
-		case dex.Mainnet:
+		case util.Mainnet:
 			daemonAddr = defaultMainnetDaemon
-		case dex.Testnet:
+		case util.Testnet:
 			daemonAddr = defaultTestnetDaemon
-		case dex.Simnet:
+		case util.Simnet:
 			daemonAddr = defaultSimnetDaemon
 		default:
 			return nil, errors.New("daemon address not specified")
@@ -435,7 +435,7 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// block 0, but wallet expects mainnet hard fork schedule).
 	// TODO: This is made possible with a patch on monero_c, but it looks
 	// like it is in monero master so should be part of the library at some point.
-	if w.net == dex.Simnet {
+	if w.net == util.Simnet {
 		wallet.SetTrustedDaemon(true)
 		wallet.SetAllowMismatchedDaemonVersion(true)
 	}
@@ -446,7 +446,7 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	case cxmr.ConnectionDisconnected:
 		return nil, errors.New("failed to connect to daemon: disconnected")
 	case cxmr.ConnectionWrongVersion:
-		if w.net == dex.Mainnet {
+		if w.net == util.Mainnet {
 			return nil, errors.New("daemon version mismatch: please update your Monero daemon")
 		}
 		w.log.Warnf("Daemon version mismatch, continuing anyway")
@@ -1051,7 +1051,7 @@ func (w *ExchangeWallet) LockTimeExpired(ctx context.Context, lockTime time.Time
 }
 
 // RegFeeConfirmations returns confirmations for a registration fee payment.
-func (w *ExchangeWallet) RegFeeConfirmations(ctx context.Context, coinID dex.Bytes) (uint32, error) {
+func (w *ExchangeWallet) RegFeeConfirmations(ctx context.Context, coinID util.Bytes) (uint32, error) {
 	return 0, asset.ErrUnsupported
 }
 
@@ -1192,7 +1192,7 @@ func (w *ExchangeWallet) Rescan(_ context.Context, bday uint64) error {
 // birthdayToHeight converts a unix timestamp (seconds) to an approximate
 // block height for the current network. Returns 0 if bday is 0 or before
 // the network genesis.
-func birthdayToHeight(bday uint64, net dex.Network) uint64 {
+func birthdayToHeight(bday uint64, net util.Network) uint64 {
 	if bday == 0 {
 		return 0
 	}
@@ -1204,13 +1204,13 @@ func birthdayToHeight(bday uint64, net dex.Network) uint64 {
 	// of when each network started producing blocks.
 	var genesisTime uint64
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		// Mainnet genesis: April 18, 2014
 		genesisTime = 1397818193
-	case dex.Testnet:
+	case util.Testnet:
 		// Testnet launched alongside mainnet in April 2014.
 		genesisTime = 1397818193
-	case dex.Simnet:
+	case util.Simnet:
 		// Simnet/regtest: local network, always scan from genesis
 		return 0
 	default:
@@ -1347,7 +1347,7 @@ func (w *ExchangeWallet) RecoverWithSubaddresses(subaddressCount uint64) error {
 // The following methods are required by the Wallet interface but not supported
 // for basic wallet functionality (trading not implemented).
 
-func (w *ExchangeWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, uint64, error) {
+func (w *ExchangeWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint64, error) {
 	return nil, nil, 0, asset.ErrUnsupported
 }
 
@@ -1367,7 +1367,7 @@ func (w *ExchangeWallet) ReturnCoins(coins asset.Coins) error {
 	return asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) FundingCoins(ids []dex.Bytes) (asset.Coins, error) {
+func (w *ExchangeWallet) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 	return nil, asset.ErrUnsupported
 }
 
@@ -1375,35 +1375,35 @@ func (w *ExchangeWallet) Swap(_ context.Context, swaps *asset.Swaps) ([]asset.Re
 	return nil, nil, 0, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) Redeem(_ context.Context, form *asset.RedeemForm) ([]dex.Bytes, asset.Coin, uint64, error) {
+func (w *ExchangeWallet) Redeem(_ context.Context, form *asset.RedeemForm) ([]util.Bytes, asset.Coin, uint64, error) {
 	return nil, nil, 0, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) SignCoinMessage(coin asset.Coin, msg dex.Bytes) ([]dex.Bytes, []dex.Bytes, error) {
+func (w *ExchangeWallet) SignCoinMessage(coin asset.Coin, msg util.Bytes) ([]util.Bytes, []util.Bytes, error) {
 	return nil, nil, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) AuditContract(coinID, contract, txData dex.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
+func (w *ExchangeWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
 	return nil, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) ContractLockTimeExpired(ctx context.Context, contract dex.Bytes) (bool, time.Time, error) {
+func (w *ExchangeWallet) ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error) {
 	return false, time.Time{}, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) FindRedemption(ctx context.Context, coinID, contract dex.Bytes) (dex.Bytes, dex.Bytes, error) {
+func (w *ExchangeWallet) FindRedemption(ctx context.Context, coinID, contract util.Bytes) (util.Bytes, util.Bytes, error) {
 	return nil, nil, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) Refund(_ context.Context, coinID, contract dex.Bytes, feeRate uint64) (dex.Bytes, error) {
+func (w *ExchangeWallet) Refund(_ context.Context, coinID, contract util.Bytes, feeRate uint64) (util.Bytes, error) {
 	return nil, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) SwapConfirmations(ctx context.Context, coinID, contract dex.Bytes, matchTime time.Time) (uint32, bool, error) {
+func (w *ExchangeWallet) SwapConfirmations(ctx context.Context, coinID, contract util.Bytes, matchTime time.Time) (uint32, bool, error) {
 	return 0, false, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
+func (w *ExchangeWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
 	return nil, asset.ErrUnsupported
 }
 
@@ -1415,7 +1415,7 @@ func (w *ExchangeWallet) SingleLotRedeemFees(version uint32, feeRate uint64) (ui
 	return 0, asset.ErrUnsupported
 }
 
-func (w *ExchangeWallet) FundMultiOrder(ord *asset.MultiOrder, maxLock uint64) ([]asset.Coins, [][]dex.Bytes, uint64, error) {
+func (w *ExchangeWallet) FundMultiOrder(ord *asset.MultiOrder, maxLock uint64) ([]asset.Coins, [][]util.Bytes, uint64, error) {
 	return nil, nil, 0, asset.ErrUnsupported
 }
 
@@ -1430,7 +1430,7 @@ type Coin struct {
 	id     []byte
 }
 
-func (c *Coin) ID() dex.Bytes {
+func (c *Coin) ID() util.Bytes {
 	return c.id
 }
 

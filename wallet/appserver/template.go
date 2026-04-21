@@ -17,7 +17,7 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/intl"
 	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"golang.org/x/text/cases"

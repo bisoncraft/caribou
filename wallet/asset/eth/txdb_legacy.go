@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/dgraph-io/badger" // Keep version 1
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -86,12 +86,12 @@ const txDBVersion = txMappingVersion
 type badgerTxDB struct {
 	*badger.DB
 	filePath string
-	log      dex.Logger
+	log      util.Logger
 	updateWG sync.WaitGroup
 }
 
 // newBadgerTxDB creates a legacy badgerTxDB.
-func newBadgerTxDB(filePath string, log dex.Logger) (*badgerTxDB, error) {
+func newBadgerTxDB(filePath string, log util.Logger) (*badgerTxDB, error) {
 	// If memory use is a concern, could try
 	//   .WithValueLogLoadingMode(options.FileIO) // default options.MemoryMap
 	//   .WithMaxTableSize(sz int64); // bytes, default 6MB
@@ -311,11 +311,11 @@ func (db *badgerTxDB) getAllEntries() ([]*extendedWalletTx, error) {
 	})
 }
 
-// badgerLoggerWrapper wraps dex.Logger and translates Warnf to Warningf to
+// badgerLoggerWrapper wraps util.Logger and translates Warnf to Warningf to
 // satisfy badger.Logger. It also lowers the log level of Infof to Debugf.
 // Debugf is discarded as badger's debug logs are too noisy even for trace.
 type badgerLoggerWrapper struct {
-	dex.Logger
+	util.Logger
 }
 
 var _ badger.Logger = (*badgerLoggerWrapper)(nil)
@@ -325,7 +325,7 @@ func (log *badgerLoggerWrapper) Debugf(s string, a ...any) {}
 
 func (log *badgerLoggerWrapper) Debug(a ...any) {}
 
-// Infof -> dex.Logger.Debugf
+// Infof -> util.Logger.Debugf
 func (log *badgerLoggerWrapper) Infof(s string, a ...any) {
 	log.Debugf(s, a...)
 }
@@ -334,7 +334,7 @@ func (log *badgerLoggerWrapper) Info(a ...any) {
 	log.Debug(a...)
 }
 
-// Warningf -> dex.Logger.Warnf
+// Warningf -> util.Logger.Warnf
 func (log *badgerLoggerWrapper) Warningf(s string, a ...any) {
 	log.Warnf(s, a...)
 }

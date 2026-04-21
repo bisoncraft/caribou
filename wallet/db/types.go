@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/order"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/crypto/blake2s"
 )
@@ -42,9 +42,9 @@ const (
 )
 
 const (
-	ErrNoCredentials = dex.ErrorKind("no credentials have been stored")
-	ErrAcctNotFound  = dex.ErrorKind("account not found")
-	ErrNoSeedGenTime = dex.ErrorKind("seed generation time has not been stored")
+	ErrNoCredentials = util.ErrorKind("no credentials have been stored")
+	ErrAcctNotFound  = util.ErrorKind("account not found")
+	ErrNoSeedGenTime = util.ErrorKind("seed generation time has not been stored")
 )
 
 // String satisfies fmt.Stringer for Severity.
@@ -95,19 +95,19 @@ func BondUID(assetID uint32, bondCoinID []byte) []byte {
 	return hashKey(append(uint32Bytes(assetID), bondCoinID...))
 }
 
-// Bond is stored in a sub-bucket of an account bucket. The dex.Bytes type is
+// Bond is stored in a sub-bucket of an account bucket. The util.Bytes type is
 // used for certain fields so that the data marshals to/from hexadecimal.
 type Bond struct {
 	Version    uint16    `json:"ver"`
 	AssetID    uint32    `json:"asset"`
-	CoinID     dex.Bytes `json:"coinID"`
-	UnsignedTx dex.Bytes `json:"utx"`
-	SignedTx   dex.Bytes `json:"stx"`  // can be obtained from msgjson.Bond.CoinID
-	Data       dex.Bytes `json:"data"` // e.g. redeem script
+	CoinID     util.Bytes `json:"coinID"`
+	UnsignedTx util.Bytes `json:"utx"`
+	SignedTx   util.Bytes `json:"stx"`  // can be obtained from msgjson.Bond.CoinID
+	Data       util.Bytes `json:"data"` // e.g. redeem script
 	Amount     uint64    `json:"amt"`
 	LockTime   uint64    `json:"lockTime"`
 	KeyIndex   uint32    `json:"keyIndex"` // child key index for HD path: m / hdKeyPurposeBonds / assetID' / bondIndex
-	RefundTx   dex.Bytes `json:"refundTx"` // pays to wallet that created it - only a backup for emergency!
+	RefundTx   util.Bytes `json:"refundTx"` // pays to wallet that created it - only a backup for emergency!
 
 	Confirmed bool `json:"confirmed"` // if reached required confs according to server, not in serialization
 	Refunded  bool `json:"refunded"`  // not in serialization
@@ -437,20 +437,20 @@ type OrderMetaData struct {
 	// which case the current asset config should be used.
 	EpochDur uint64
 
-	// We store any variable information of each dex.Asset (the server's asset
+	// We store any variable information of each util.Asset (the server's asset
 	// config at time of order). This includes: the max fee rates for swap and
 	// redeem, and the asset versions, and the required swap confirmations
 	// counts.
 
-	// FromSwapConf and ToSwapConf are the dex.Asset.SwapConf values at the time
+	// FromSwapConf and ToSwapConf are the util.Asset.SwapConf values at the time
 	// the order is submitted. WARNING: may load from DB as zero for older
 	// orders, in which case the current asset config should be used.
 	FromSwapConf uint32
 	ToSwapConf   uint32
-	// MaxFeeRate is the dex.Asset.MaxFeeRate at the time of ordering. The rates
+	// MaxFeeRate is the util.Asset.MaxFeeRate at the time of ordering. The rates
 	// assigned to matches will be validated against this value.
 	MaxFeeRate uint64
-	// RedeemMaxFeeRate is the dex.Asset.MaxFeeRate for the redemption asset at
+	// RedeemMaxFeeRate is the util.Asset.MaxFeeRate for the redemption asset at
 	// the time of ordering. This rate is used to reserve funds for redemption,
 	// and therefore this rate can be used when actually submitting a redemption
 	// transaction.
@@ -1052,7 +1052,7 @@ type Notification struct {
 	Severeness  Severity  `json:"severity"`
 	TimeStamp   uint64    `json:"stamp"`
 	Ack         bool      `json:"acked"`
-	Id          dex.Bytes `json:"id"`
+	Id          util.Bytes `json:"id"`
 }
 
 // NewNotification is a constructor for a Notification.
@@ -1069,7 +1069,7 @@ func NewNotification(noteType string, topic Topic, subject, details string, seve
 }
 
 // ID is a unique ID based on a hash of the notification data.
-func (n *Notification) ID() dex.Bytes {
+func (n *Notification) ID() util.Bytes {
 	return noteKey(n.Encode())
 }
 

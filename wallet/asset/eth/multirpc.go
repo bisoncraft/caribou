@@ -24,11 +24,11 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/networks/base"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/networks/base"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -110,7 +110,7 @@ type provider struct {
 	ec           *combinedRPCClient
 	ws           bool
 	chainID      *big.Int
-	net          dex.Network
+	net          util.Network
 	tipCapV      atomic.Value // *cachedTipCap
 	stop         func()
 
@@ -135,7 +135,7 @@ func (p *provider) shutdown() {
 	p.ec.Close()
 }
 
-func (p *provider) setTip(header *types.Header, log dex.Logger) {
+func (p *provider) setTip(header *types.Header, log util.Logger) {
 	p.tip.Lock()
 	p.tip.header = header
 	p.tip.headerStamp = time.Now()
@@ -186,7 +186,7 @@ func (p *provider) failed() bool {
 
 // bestHeader get the best known header from the provider, cached if available,
 // otherwise a new RPC call is made.
-func (p *provider) bestHeader(ctx context.Context, log dex.Logger) (*types.Header, error) {
+func (p *provider) bestHeader(ctx context.Context, log util.Logger) (*types.Header, error) {
 	// Check if we have a cached header.
 	if tip := p.cachedTip(); tip != nil {
 		log.Tracef("Using cached header from %q", p.host)
@@ -200,7 +200,7 @@ func (p *provider) bestHeader(ctx context.Context, log dex.Logger) (*types.Heade
 		return nil, fmt.Errorf("HeaderByNumber error: %w", err)
 	}
 	timeDiff := time.Now().Unix() - int64(hdr.Time)
-	if timeDiff > dexeth.MaxBlockInterval && p.net != dex.Simnet {
+	if timeDiff > dexeth.MaxBlockInterval && p.net != util.Simnet {
 		p.setFailed()
 		return nil, fmt.Errorf("time since last block (%d sec) exceeds %d sec. "+
 			"Assuming provider %s is not in sync. Ensure your computer's system clock "+
@@ -221,7 +221,7 @@ func (p *provider) headerByHash(ctx context.Context, h common.Hash) (*types.Head
 
 // suggestTipCap returns a tip cap suggestion, cached if available, otherwise a
 // new RPC call is made.
-func (p *provider) suggestTipCap(ctx context.Context, log dex.Logger) *big.Int {
+func (p *provider) suggestTipCap(ctx context.Context, log util.Logger) *big.Int {
 	if cachedV := p.tipCapV.Load(); cachedV != nil {
 		rec := cachedV.(*cachedTipCap)
 		if time.Since(rec.stamp) < tipCapSuggestionExpiration {
@@ -251,7 +251,7 @@ func (p *provider) suggestTipCap(ctx context.Context, log dex.Logger) *big.Int {
 // refreshHeader fetches a header every headerCheckInterval. This keeps the
 // cached header up to date or fails the provider if there is a problem getting
 // the header.
-func (p *provider) refreshHeader(ctx context.Context, log dex.Logger) {
+func (p *provider) refreshHeader(ctx context.Context, log util.Logger) {
 	log.Tracef("handling header refreshes for %q", p.host)
 	ticker := time.NewTicker(headerCheckInterval)
 	defer ticker.Stop()
@@ -278,7 +278,7 @@ func (p *provider) refreshHeader(ctx context.Context, log dex.Logger) {
 // The Subscription and header chan are passed in, because error-free
 // instantiation of these variable is necessary to accepting that a websocket
 // connection is valid, so they are generated early in connectProviders.
-func (p *provider) subscribeHeaders(ctx context.Context, sub ethereum.Subscription, h chan *types.Header, log dex.Logger) {
+func (p *provider) subscribeHeaders(ctx context.Context, sub ethereum.Subscription, h chan *types.Header, log util.Logger) {
 	defer func() {
 		// If a provider does not respond to an unsubscribe request, the unsubscribe function
 		// will never return because geth does not use a timeout.
@@ -385,9 +385,9 @@ type receiptRecord struct {
 type multiRPCClient struct {
 	cfg      *params.ChainConfig
 	creds    *accountCredentials
-	log      dex.Logger
+	log      util.Logger
 	chainID  *big.Int
-	net      dex.Network
+	net      util.Network
 	torProxy string
 
 	finalizeConfs uint64
@@ -416,10 +416,10 @@ var _ ethFetcher = (*multiRPCClient)(nil)
 func newMultiRPCClient(
 	dir string,
 	endpoints []string,
-	log dex.Logger,
+	log util.Logger,
 	cfg *params.ChainConfig,
 	finalizeConfs uint64,
-	net dex.Network,
+	net util.Network,
 	torProxy string,
 ) (*multiRPCClient, error) {
 	walletDir := getWalletDir(dir, net)
@@ -448,7 +448,7 @@ func newMultiRPCClient(
 // list of providers that were successfully connected. It is not an error for a
 // connection to fail, unless all endpoints fail. The caller can infer failed
 // connections from the length and contents of the returned provider list.
-func connectProviders(ctx context.Context, endpoints []string, log dex.Logger, chainID *big.Int, net dex.Network, torProxy string) ([]*provider, error) {
+func connectProviders(ctx context.Context, endpoints []string, log util.Logger, chainID *big.Int, net util.Network, torProxy string) ([]*provider, error) {
 	providers := make([]*provider, 0, len(endpoints))
 	var success bool
 
@@ -717,7 +717,7 @@ func (m *multiRPCClient) connect(ctx context.Context) (err error) {
 // unknown providers have a sufficient api to trade and saves good providers to
 // file. One bad provider or connect problem will cause this to error.
 func createAndCheckProviders(ctx context.Context, walletDir string, endpoints []string, chainID *big.Int,
-	compat *CompatibilityData, net dex.Network, log dex.Logger, allProvidersMustConnect bool, torProxy string) error {
+	compat *CompatibilityData, net util.Network, log util.Logger, allProvidersMustConnect bool, torProxy string) error {
 
 	var localCP map[string]bool
 	path := filepath.Join(walletDir, "compliant-providers.json")
@@ -768,7 +768,7 @@ func createAndCheckProviders(ctx context.Context, walletDir string, endpoints []
 			return fmt.Errorf("expected to successfully connect to all of these unfamiliar providers: %s",
 				failedProviders(providers, unknownEndpoints))
 		}
-		providers, err = checkProvidersCompliance(ctx, providers, compat, dex.Disabled /* logger is for testing only */, allProvidersMustConnect)
+		providers, err = checkProvidersCompliance(ctx, providers, compat, util.Disabled /* logger is for testing only */, allProvidersMustConnect)
 		if err != nil {
 			return err
 		}
@@ -1584,8 +1584,8 @@ type rpcTest struct {
 // newCompatibilityTests returns a list of RPC tests to run to determine API
 // compatibility.
 // NOTE: The logger is intended for use the execution of the compatibility
-// tests, and it will generally be dex.Disabled in production.
-func newCompatibilityTests(cb bind.ContractBackend, compat *CompatibilityData, log dex.Logger) []*rpcTest {
+// tests, and it will generally be util.Disabled in production.
+func newCompatibilityTests(cb bind.ContractBackend, compat *CompatibilityData, log util.Logger) []*rpcTest {
 	return []*rpcTest{
 		{
 			name: "HeaderByNumber",
@@ -1716,7 +1716,7 @@ func domain(addr string) (string, error) {
 		return "", errors.New("address is an empty string")
 	}
 	if strings.HasSuffix(addr, ".ipc") {
-		return dex.CleanAndExpandPath(addr), nil // ipc file
+		return util.CleanAndExpandPath(addr), nil // ipc file
 	}
 	const missingPort = "missing port in address"
 	host, port, splitErr := net.SplitHostPort(addr)
@@ -1777,7 +1777,7 @@ func domain(addr string) (string, error) {
 // requires by sending a series of requests and verifying the responses. If a
 // provider is found to be compliant, their domain name is added to a list and
 // stored in a file on disk so that future checks can be short-circuited.
-func checkProvidersCompliance(ctx context.Context, providers []*provider, compat *CompatibilityData, log dex.Logger, errOnNonCompliant bool) ([]*provider, error) {
+func checkProvidersCompliance(ctx context.Context, providers []*provider, compat *CompatibilityData, log util.Logger, errOnNonCompliant bool) ([]*provider, error) {
 	compliantProviders := make([]*provider, 0, len(providers))
 	for _, p := range providers {
 		// Need to run API tests on this endpoint.

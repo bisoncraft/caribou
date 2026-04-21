@@ -24,13 +24,13 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	swapv0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
-	swapv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
-	"github.com/bisoncraft/meshwallet/dex/evmrelay"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	swapv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
+	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
@@ -47,18 +47,18 @@ const (
 
 var (
 	_       ethFetcher = (*testNode)(nil)
-	tLogger            = dex.StdOutLogger("ETHTEST", dex.LevelTrace)
+	tLogger            = util.StdOutLogger("ETHTEST", util.LevelTrace)
 
 	testAddressA = common.HexToAddress("dd93b447f7eBCA361805eBe056259853F3912E04")
 	testAddressB = common.HexToAddress("8d83B207674bfd53B418a6E47DA148F5bFeCc652")
 	testAddressC = common.HexToAddress("2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27")
 
 	ethGasesV0   = dexeth.VersionedGases[0]
-	tokenGasesV0 = dexeth.Tokens[usdcEthID].NetTokens[dex.Simnet].SwapContracts[0].Gas
+	tokenGasesV0 = dexeth.Tokens[usdcEthID].NetTokens[util.Simnet].SwapContracts[0].Gas
 	ethGasesV1   = dexeth.VersionedGases[1]
-	tokenGasesV1 = dexeth.Tokens[usdcEthID].NetTokens[dex.Simnet].SwapContracts[1].Gas
+	tokenGasesV1 = dexeth.Tokens[usdcEthID].NetTokens[util.Simnet].SwapContracts[1].Gas
 
-	tETHV0 = &dex.Asset{
+	tETHV0 = &util.Asset{
 		Version:    0,
 		ID:         60,
 		Symbol:     "ETH",
@@ -66,7 +66,7 @@ var (
 		SwapConf:   1,
 	}
 
-	tETHV1 = &dex.Asset{
+	tETHV1 = &util.Asset{
 		Version:    1,
 		ID:         60,
 		Symbol:     "ETH",
@@ -74,7 +74,7 @@ var (
 		SwapConf:   1,
 	}
 
-	tBTC = &dex.Asset{
+	tBTC = &util.Asset{
 		ID:         0,
 		Symbol:     "btc",
 		Version:    0, // match btc.version
@@ -82,7 +82,7 @@ var (
 		SwapConf:   1,
 	}
 
-	tTokenV0 = &dex.Asset{
+	tTokenV0 = &util.Asset{
 		ID:         usdcEthID,
 		Symbol:     "usdc.eth",
 		Version:    0,
@@ -90,7 +90,7 @@ var (
 		SwapConf:   1,
 	}
 
-	tTokenV1 = &dex.Asset{
+	tTokenV1 = &util.Asset{
 		ID:         usdcEthID,
 		Symbol:     "dextt.eth",
 		Version:    1,
@@ -1657,7 +1657,7 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 	if assetID == BipID { // just make a copy
 		maps.Copy(versionedGases, dexeth.VersionedGases)
 	} else {
-		netToken := dexeth.Tokens[assetID].NetTokens[dex.Simnet]
+		netToken := dexeth.Tokens[assetID].NetTokens[util.Simnet]
 		for ver, c := range netToken.SwapContracts {
 			versionedGases[ver] = &c.Gas
 		}
@@ -1677,10 +1677,10 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 	aw := &assetWallet{
 		baseWallet: &baseWallet{
 			baseChainID:      BipID,
-			chainID:          dexeth.ChainIDs[dex.Simnet],
+			chainID:          dexeth.ChainIDs[util.Simnet],
 			tokens:           dexeth.Tokens,
 			addr:             node.addr,
-			net:              dex.Simnet,
+			net:              util.Simnet,
 			node:             node,
 			ctx:              ctx,
 			log:              tLogger,
@@ -1695,7 +1695,7 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 			maxTxFeeGwei:     dexeth.GweiFactor, // 1 ETH
 		},
 		versionedGases:     versionedGases,
-		log:                tLogger.SubLogger(strings.ToUpper(dex.BipIDSymbol(assetID))),
+		log:                tLogger.SubLogger(strings.ToUpper(util.BipIDSymbol(assetID))),
 		assetID:            assetID,
 		contractorV0:       c,
 		contractorV1:       c,
@@ -1741,7 +1741,7 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 			cfg:         &tokenWalletConfig{},
 			parent:      node.tokenParent,
 			token:       dexeth.Tokens[usdcEthID],
-			netToken:    dexeth.Tokens[usdcEthID].NetTokens[dex.Simnet],
+			netToken:    dexeth.Tokens[usdcEthID].NetTokens[util.Simnet],
 		}
 		aw.wallets = map[uint32]*assetWallet{
 			usdcEthID: aw,
@@ -2084,7 +2084,7 @@ func testRefund(t *testing.T, assetID uint32) {
 	// 	dexeth.VersionedGases[1] = gasesV1
 	// 	defer delete(dexeth.VersionedGases, 1)
 	// } else {
-	// 	tokenContracts := dexeth.Tokens[usdcEthID].NetTokens[dex.Simnet].SwapContracts
+	// 	tokenContracts := dexeth.Tokens[usdcEthID].NetTokens[util.Simnet].SwapContracts
 	// 	tc := *tokenContracts[0]
 	// 	tc.Gas = *gasesV1
 	// 	tokenContracts[1] = &tc
@@ -2240,7 +2240,7 @@ func testRefund(t *testing.T, assetID uint32) {
 // ETH wallet code.
 type badCoin uint64
 
-func (*badCoin) ID() dex.Bytes {
+func (*badCoin) ID() util.Bytes {
 	return []byte{123}
 }
 func (*badCoin) String() string {
@@ -2292,7 +2292,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 		coinValue   uint64
 		coinAddress string
 	}
-	checkFundOrderResult := func(coins asset.Coins, redeemScripts []dex.Bytes, err error, test fundOrderTest) {
+	checkFundOrderResult := func(coins asset.Coins, redeemScripts []util.Bytes, err error, test fundOrderTest) {
 		t.Helper()
 		if test.wantErr && err == nil {
 			t.Fatalf("%v: expected error but didn't get", test.testName)
@@ -2437,7 +2437,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 
 	// Test reloading coins from first order
 	coinVal := coins1[0].Value()
-	coins, err = w2.FundingCoins([]dex.Bytes{parseRecoveryID(coins1[0])})
+	coins, err = w2.FundingCoins([]util.Bytes{parseRecoveryID(coins1[0])})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2454,7 +2454,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 	if assetID != BipID {
 		rid = createTokenFundingCoin(node.addr, coinVal+1, 1).RecoveryID()
 	}
-	_, err = w2.FundingCoins([]dex.Bytes{rid})
+	_, err = w2.FundingCoins([]util.Bytes{rid})
 	if err == nil {
 		t.Fatalf("expected error but didn't get one")
 	}
@@ -2462,7 +2462,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 
 	// Test funding coins with bad coin ID
 
-	_, err = w2.FundingCoins([]dex.Bytes{append(parseRecoveryID(coins1[0]), 0x0a)})
+	_, err = w2.FundingCoins([]util.Bytes{append(parseRecoveryID(coins1[0]), 0x0a)})
 	if err == nil {
 		t.Fatalf("expected error but did not get")
 	}
@@ -2478,13 +2478,13 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 	differentKindaCoin := (&coin{
 		txHash: randomHash(), // e.g. tx hash
 	})
-	_, err = w2.FundingCoins([]dex.Bytes{differentKindaCoin.ID()})
+	_, err = w2.FundingCoins([]util.Bytes{differentKindaCoin.ID()})
 	if err == nil {
 		t.Fatalf("expected error for unknown coin id format, but did not get")
 	}
 
 	differentAddressCoin := createFundingCoin(differentAddress, 100000)
-	_, err = w2.FundingCoins([]dex.Bytes{differentAddressCoin.ID()})
+	_, err = w2.FundingCoins([]util.Bytes{differentAddressCoin.ID()})
 	if err == nil {
 		t.Fatalf("expected error for wrong address, but did not get")
 	}
@@ -2492,7 +2492,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 
 	// Test funding coins with balance error
 	node.balErr = errors.New("test error")
-	_, err = w2.FundingCoins([]dex.Bytes{badCoin.ID()})
+	_, err = w2.FundingCoins([]util.Bytes{badCoin.ID()})
 	if err == nil {
 		t.Fatalf("expected error but did not get")
 	}
@@ -2500,7 +2500,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 	checkBalance(eth2, walletBalanceGwei-coinVal, coinVal, "after funding error 5")
 
 	// Reloading coins from second order
-	coins, err = w2.FundingCoins([]dex.Bytes{parseRecoveryID(coins2[0])})
+	coins, err = w2.FundingCoins([]util.Bytes{parseRecoveryID(coins2[0])})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2531,7 +2531,7 @@ func testFundOrderReturnCoinsFundingCoins(t *testing.T, assetID uint32) {
 	checkBalance(eth2, walletBalanceGwei, 0, "return coins after funding")
 
 	// Test funding coins with two coins at the same time
-	_, err = w2.FundingCoins([]dex.Bytes{parseRecoveryID(coins1[0]), parseRecoveryID(coins2[0])})
+	_, err = w2.FundingCoins([]util.Bytes{parseRecoveryID(coins1[0]), parseRecoveryID(coins2[0])})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2553,7 +2553,7 @@ func testFundMultiOrder(t *testing.T, assetID uint32) {
 	if assetID != BipID {
 		fromAsset = tTokenV0
 		node.tokenContractor.allow = unlimitedAllowance
-		swapGas = dexeth.Tokens[usdcEthID].NetTokens[dex.Simnet].
+		swapGas = dexeth.Tokens[usdcEthID].NetTokens[util.Simnet].
 			SwapContracts[fromAsset.Version].Gas.Swap
 	}
 
@@ -3013,8 +3013,8 @@ func testSwap(t *testing.T, assetID uint32) {
 	receivingAddress := "0x2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27"
 	node.tContractor.initTx = types.NewTx(&types.DynamicFeeTx{})
 
-	coinIDsForAmounts := func(coinAmounts []uint64, n uint64) []dex.Bytes {
-		coinIDs := make([]dex.Bytes, 0, len(coinAmounts))
+	coinIDsForAmounts := func(coinAmounts []uint64, n uint64) []util.Bytes {
+		coinIDs := make([]util.Bytes, 0, len(coinAmounts))
 		for _, amt := range coinAmounts {
 			if assetID == BipID {
 				coinIDs = append(coinIDs, createFundingCoin(eth.addr, amt).RecoveryID())
@@ -3325,7 +3325,7 @@ func testRedeem(t *testing.T, assetID uint32) {
 	// 	eth.versionedGases[1] = &tokenGases
 	// }
 
-	// tokenContracts := eth.tokens[usdcEthID].NetTokens[dex.Simnet].SwapContracts
+	// tokenContracts := eth.tokens[usdcEthID].NetTokens[util.Simnet].SwapContracts
 	// tokenContracts[1] = tokenContracts[0]
 	// defer delete(tokenContracts, 1)
 
@@ -3737,7 +3737,7 @@ func TestGaslessRedeem(t *testing.T) {
 	calldata := []byte{0x01, 0x02, 0x03}
 	relayTaskID := "test-relay-task-id-abc123"
 	contractNonce := big.NewInt(123)
-	dexeth.ContractAddresses[1][dex.Simnet] = common.BytesToAddress(encode.RandomBytes(20))
+	dexeth.ContractAddresses[1][util.Simnet] = common.BytesToAddress(encode.RandomBytes(20))
 
 	initiator := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	participant := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -4049,7 +4049,7 @@ func TestGaslessRedeem(t *testing.T) {
 			eth.relayer = tr
 
 			eth.versionedContracts = map[uint32]common.Address{
-				1: dexeth.ContractAddresses[1][dex.Simnet],
+				1: dexeth.ContractAddresses[1][util.Simnet],
 			}
 			node.baseFee = nodeBaseFee
 			node.tip = nodeTip
@@ -4104,7 +4104,7 @@ func TestGaslessRedeem(t *testing.T) {
 				t.Fatalf("expected 1 relay request, got %d", len(tr.submittedReqs))
 			}
 			req := tr.submittedReqs[0]
-			if req.Target != dexeth.ContractAddresses[1][dex.Simnet] {
+			if req.Target != dexeth.ContractAddresses[1][util.Simnet] {
 				t.Fatalf("wrong relay target %s", req.Target)
 			}
 			if len(ids) != len(test.redemptions) {
@@ -4685,7 +4685,7 @@ func testAuditContract(t *testing.T, assetID uint32) {
 
 	tests := []struct {
 		name           string
-		contract       dex.Bytes
+		contract       util.Bytes
 		initiations    []*dexeth.Initiation
 		differentHash  bool
 		badTxData      bool
@@ -5033,17 +5033,17 @@ func TestSwapConfirmation(t *testing.T) {
 
 func TestDriverOpen(t *testing.T) {
 	drv := &Driver{}
-	logger := dex.StdOutLogger("ETHTEST", dex.LevelOff)
+	logger := util.StdOutLogger("ETHTEST", util.LevelOff)
 	tmpDir := t.TempDir()
 
 	settings := map[string]string{providersKey: "a.ipc"}
-	err := CreateEVMWallet(dexeth.ChainIDs[dex.Testnet], &asset.CreateWalletParams{
+	err := CreateEVMWallet(dexeth.ChainIDs[util.Testnet], &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     encode.RandomBytes(32),
 		Pass:     encode.RandomBytes(32),
 		Settings: settings,
 		DataDir:  tmpDir,
-		Net:      dex.Testnet,
+		Net:      util.Testnet,
 		Logger:   logger,
 	}, &testnetCompatibilityData, true)
 	if err != nil {
@@ -5056,7 +5056,7 @@ func TestDriverOpen(t *testing.T) {
 		Settings: settings,
 		DataDir:  tmpDir,
 	}
-	wallet, err := drv.Open(cfg, logger, dex.Testnet)
+	wallet, err := drv.Open(cfg, logger, util.Testnet)
 	if err != nil {
 		t.Fatalf("driver open error: %v", err)
 	}
@@ -5070,7 +5070,7 @@ func TestDriverOpen(t *testing.T) {
 
 	// Make sure gas fee limit is properly parsed from settings
 	cfg.Settings["gasfeelimit"] = "150"
-	wallet, err = drv.Open(cfg, logger, dex.Testnet)
+	wallet, err = drv.Open(cfg, logger, util.Testnet)
 	if err != nil {
 		t.Fatalf("driver open error: %v", err)
 	}
@@ -5090,7 +5090,7 @@ func TestDriverExists(t *testing.T) {
 	settings := map[string]string{providersKey: "a.ipc"}
 
 	// no wallet
-	exists, err := drv.Exists(walletTypeRPC, tmpDir, settings, dex.Simnet)
+	exists, err := drv.Exists(walletTypeRPC, tmpDir, settings, util.Simnet)
 	if err != nil {
 		t.Fatalf("Exists error for no geth wallet: %v", err)
 	}
@@ -5099,13 +5099,13 @@ func TestDriverExists(t *testing.T) {
 	}
 
 	// Create the wallet.
-	err = CreateEVMWallet(dexeth.ChainIDs[dex.Simnet], &asset.CreateWalletParams{
+	err = CreateEVMWallet(dexeth.ChainIDs[util.Simnet], &asset.CreateWalletParams{
 		Type:     walletTypeRPC,
 		Seed:     encode.RandomBytes(32),
 		Pass:     encode.RandomBytes(32),
 		Settings: settings,
 		DataDir:  tmpDir,
-		Net:      dex.Simnet,
+		Net:      util.Simnet,
 		Logger:   tLogger,
 	}, &testnetCompatibilityData, true)
 	if err != nil {
@@ -5113,7 +5113,7 @@ func TestDriverExists(t *testing.T) {
 	}
 
 	// exists
-	exists, err = drv.Exists(walletTypeRPC, tmpDir, settings, dex.Simnet)
+	exists, err = drv.Exists(walletTypeRPC, tmpDir, settings, util.Simnet)
 	if err != nil {
 		t.Fatalf("Exists error for existent geth wallet: %v", err)
 	}
@@ -5122,7 +5122,7 @@ func TestDriverExists(t *testing.T) {
 	}
 
 	// Wrong wallet type
-	if _, err := drv.Exists("not-geth", tmpDir, settings, dex.Simnet); err == nil {
+	if _, err := drv.Exists("not-geth", tmpDir, settings, util.Simnet); err == nil {
 		t.Fatalf("no error for unknown wallet type")
 	}
 }
@@ -6766,8 +6766,8 @@ func TestBridgeCompletionFees(t *testing.T) {
 }
 
 func TestBridgeManager(t *testing.T) {
-	setupWithPendingBridges := func(t *testing.T, pendingBridges []*extendedWalletTx) (*bridgeManager, *mockBridge, chan asset.WalletNotification, *tTxDB, dex.Logger) {
-		log := dex.StdOutLogger("TEST", dex.LevelDebug)
+	setupWithPendingBridges := func(t *testing.T, pendingBridges []*extendedWalletTx) (*bridgeManager, *mockBridge, chan asset.WalletNotification, *tTxDB, util.Logger) {
+		log := util.StdOutLogger("TEST", util.LevelDebug)
 		notificationChan := make(chan asset.WalletNotification, 10)
 		emitter := asset.NewWalletEmitter(notificationChan, BipID, log)
 
@@ -6811,7 +6811,7 @@ func TestBridgeManager(t *testing.T) {
 		return bm, mb, notificationChan, db, log
 	}
 
-	setup := func(t *testing.T) (*bridgeManager, *mockBridge, chan asset.WalletNotification, *tTxDB, dex.Logger) {
+	setup := func(t *testing.T) (*bridgeManager, *mockBridge, chan asset.WalletNotification, *tTxDB, util.Logger) {
 		bm, mb, notificationChan, db, log := setupWithPendingBridges(t, nil)
 		return bm, mb, notificationChan, db, log
 	}
@@ -6944,7 +6944,7 @@ func TestBridgeManager(t *testing.T) {
 	})
 
 	t.Run("SkipUnconfirmedTx", func(t *testing.T) {
-		log := dex.StdOutLogger("TEST", dex.LevelDebug)
+		log := util.StdOutLogger("TEST", util.LevelDebug)
 		notificationChan := make(chan asset.WalletNotification, 10)
 		emitter := asset.NewWalletEmitter(notificationChan, BipID, log)
 

@@ -12,9 +12,9 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexdoge "github.com/bisoncraft/meshwallet/dex/networks/doge"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexdoge "github.com/bisoncraft/meshwallet/util/networks/doge"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
@@ -111,7 +111,7 @@ func init() {
 type Driver struct{}
 
 // Open creates the DOGE exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -138,14 +138,14 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 // exchange wallet. The wallet will shut down when the provided context is
 // canceled. The configPath can be an empty string, in which case the standard
 // system location of the dogecoind config file is assumed.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	var params *chaincfg.Params
 	switch network {
-	case dex.Mainnet:
+	case util.Mainnet:
 		params = dexdoge.MainNetParams
-	case dex.Testnet:
+	case util.Testnet:
 		params = dexdoge.TestNet4Params
-	case dex.Regtest:
+	case util.Regtest:
 		params = dexdoge.RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
@@ -223,10 +223,10 @@ var bitcoreFeeRate = btc.BitcoreRateFetcher("DOGE")
 // externalFeeRate returns a fee rate for the network. If an error is
 // encountered fetching the testnet fee rate, we will try to return the
 // mainnet fee rate.
-func externalFeeRate(ctx context.Context, net dex.Network) (uint64, error) {
+func externalFeeRate(ctx context.Context, net util.Network) (uint64, error) {
 	feeRate, err := bitcoreFeeRate(ctx, net)
-	if err == nil || net != dex.Testnet {
+	if err == nil || net != util.Testnet {
 		return feeRate, err
 	}
-	return bitcoreFeeRate(ctx, dex.Mainnet)
+	return bitcoreFeeRate(ctx, util.Mainnet)
 }

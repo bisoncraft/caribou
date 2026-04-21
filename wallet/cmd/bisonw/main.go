@@ -19,7 +19,7 @@ import (
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/appserver"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // appName defines the application name.
@@ -28,7 +28,7 @@ const appName = "bisonw"
 var (
 	appCtx, cancel = context.WithCancel(context.Background())
 	appserverReady = make(chan string, 1)
-	log            dex.Logger
+	log            util.Logger
 )
 
 func runCore(cfg *app.Config) error {
@@ -61,7 +61,7 @@ func runCore(cfg *app.Config) error {
 	}
 	log.Infof("bisonw starting for network: %s", cfg.Net)
 	log.Infof("Swap locktimes config: maker %s, taker %s",
-		dex.LockTimeMaker(cfg.Net), dex.LockTimeTaker(cfg.Net))
+		util.LockTimeMaker(cfg.Net), util.LockTimeTaker(cfg.Net))
 
 	defer func() {
 		if pv := recover(); pv != nil {
@@ -114,7 +114,7 @@ func runCore(cfg *app.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cm := dex.NewConnectionMaster(webSrv)
+			cm := util.NewConnectionMaster(webSrv)
 			err := cm.Connect(appCtx)
 			if err != nil {
 				log.Errorf("Error starting web server: %v", err)

@@ -12,7 +12,7 @@ go generate -x ./wallet/webserver/site # no -write
 cd "$dir"
 
 # list of all modules to test
-modules=". /dex/testing/loadbot /wallet/cmd/bisonw-desktop"
+modules=". /util/testing/loadbot /wallet/cmd/bisonw-desktop"
 
 # For each module, run go mod tidy, build and run test.
 for m in $modules
@@ -60,7 +60,7 @@ go test -c -o /dev/null -tags harness ./wallet/asset/zec
 go test -c -o /dev/null -tags harness ./wallet/asset/dash
 go test -c -o /dev/null -tags harness ./wallet/asset/firo
 go test -c -o /dev/null -tags rpclive ./wallet/asset/polygon
-go test -c -o /dev/null -tags live ./dex/testing/firo/test
+go test -c -o /dev/null -tags live ./util/testing/firo/test
 
 # Return to initial directory.
 cd "$dir"

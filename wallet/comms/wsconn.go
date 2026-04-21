@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/msgjson"
 	"github.com/gorilla/websocket"
 )
 
@@ -133,7 +133,7 @@ type WsCfg struct {
 	ConnectEventFunc func(ConnectionStatus)
 
 	// Logger is the logger for the WsConn.
-	Logger dex.Logger
+	Logger util.Logger
 
 	// NetDialContext specifies an optional dialer context to use.
 	NetDialContext func(context.Context, string, string) (net.Conn, error)
@@ -158,7 +158,7 @@ type wsConn struct {
 	rID    uint64
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	log    dex.Logger
+	log    util.Logger
 	cfg    *WsCfg
 	tlsCfg *tls.Config
 	readCh chan *msgjson.Message
@@ -259,9 +259,9 @@ func (conn *wsConn) connect(ctx context.Context) error {
 		if isErrorInvalidCert(err) {
 			conn.setConnectionStatus(InvalidCert)
 			if len(conn.cfg.Cert) == 0 {
-				return dex.NewError(ErrCertRequired, err.Error())
+				return util.NewError(ErrCertRequired, err.Error())
 			}
-			return dex.NewError(ErrInvalidCert, err.Error())
+			return util.NewError(ErrInvalidCert, err.Error())
 		}
 		conn.setConnectionStatus(Disconnected)
 		return err

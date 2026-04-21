@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 func TestIsAlreadyBroadcastErr(t *testing.T) {
@@ -38,8 +38,8 @@ type testCoin struct {
 	id []byte
 }
 
-func (c *testCoin) ID() dex.Bytes  { return c.id }
-func (c *testCoin) String() string { return dex.Bytes(c.id).String() }
+func (c *testCoin) ID() util.Bytes  { return c.id }
+func (c *testCoin) String() string { return util.Bytes(c.id).String() }
 func (c *testCoin) TxID() string   { return "" }
 func (c *testCoin) Value() uint64  { return 0 }
 
@@ -142,7 +142,7 @@ func TestCacheExpiry(t *testing.T) {
 }
 
 func TestRecoverFromCache(t *testing.T) {
-	log := dex.StdOutLogger("TEST", dex.LevelWarn)
+	log := util.StdOutLogger("TEST", util.LevelWarn)
 
 	t.Run("cache miss", func(t *testing.T) {
 		c := NewCache[*testEntry]()

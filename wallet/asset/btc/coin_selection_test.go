@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 )
 
 func Test_leastOverFund(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // ExchangeBalance holds the available and locked balances of an asset
@@ -97,7 +97,7 @@ const (
 // when interacting with the CEX interface will adhere to the standard
 // rates and quantities of the DEX.
 type CEX interface {
-	dex.Connector
+	util.Connector
 	// Balance returns the balance of an asset at the CEX.
 	Balance(assetID uint32) (*ExchangeBalance, error)
 	// Balances returns the balances of known assets on the CEX.
@@ -179,11 +179,11 @@ func IsValidCexName(cexName string) bool {
 }
 
 type CEXConfig struct {
-	Net           dex.Network
+	Net           util.Network
 	APIKey        string
 	SecretKey     string
 	APIPassphrase string // Required by some exchanges like Bitget
-	Logger        dex.Logger
+	Logger        util.Logger
 	Notify        func(any)
 	TorProxy      string
 }

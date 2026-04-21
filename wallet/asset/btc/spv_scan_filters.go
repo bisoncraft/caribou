@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -66,7 +66,7 @@ type BlockInfoReader interface {
 // locate non-wallet transactions.
 type BlockFiltersScanner struct {
 	BlockInfoReader
-	log             dex.Logger
+	log             util.Logger
 	cacheExpiration time.Duration
 
 	checkpointMtx sync.Mutex
@@ -77,7 +77,7 @@ type BlockFiltersScanner struct {
 }
 
 // NewBlockFiltersScanner creates a BlockFiltersScanner.
-func NewBlockFiltersScanner(blkInfoRdr BlockInfoReader, log dex.Logger) *BlockFiltersScanner {
+func NewBlockFiltersScanner(blkInfoRdr BlockInfoReader, log util.Logger) *BlockFiltersScanner {
 	return &BlockFiltersScanner{
 		BlockInfoReader: blkInfoRdr,
 		log:             log,

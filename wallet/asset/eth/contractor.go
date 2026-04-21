@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
-	erc20v0 "github.com/bisoncraft/meshwallet/dex/networks/erc20/contracts/v0"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	swapv0 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v0"
-	swapv1 "github.com/bisoncraft/meshwallet/dex/networks/eth/contracts/v1"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20"
+	erc20v0 "github.com/bisoncraft/meshwallet/util/networks/erc20/contracts/v0"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	swapv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -76,7 +76,7 @@ type unifiedContractor interface {
 	tokenContractor(token *dexeth.Token) (tokenContractor, error)
 }
 
-type contractorConstructor func(net dex.Network, contractAddr, acctAddr common.Address, ec bind.ContractBackend, chainID int64) (contractor, error)
+type contractorConstructor func(net util.Network, contractAddr, acctAddr common.Address, ec bind.ContractBackend, chainID int64) (contractor, error)
 
 // contractV0 is the interface common to a version 0 swap contract or version 0
 // token swap contract.
@@ -122,7 +122,7 @@ var _ contractor = (*contractorV0)(nil)
 // newV0Contractor is the constructor for a version 0 ETH swap contract. For
 // token swap contracts, use newV0TokenContractor to construct a
 // tokenContractorV0.
-func newV0Contractor(_ dex.Network, contractAddr, acctAddr common.Address, cb bind.ContractBackend, _ int64) (contractor, error) {
+func newV0Contractor(_ util.Network, contractAddr, acctAddr common.Address, cb bind.ContractBackend, _ int64) (contractor, error) {
 	c, err := swapv0.NewETHSwap(contractAddr, cb)
 	if err != nil {
 		return nil, err
@@ -552,7 +552,7 @@ var _ contractor = (*tokenContractorV0)(nil)
 var _ tokenContractor = (*tokenContractorV0)(nil)
 
 // newV0TokenContractor is a contractor for version 0 erc20 token swap contract.
-func newV0TokenContractor(net dex.Network, token *dexeth.Token, acctAddr common.Address, cb bind.ContractBackend) (tokenContractor, error) {
+func newV0TokenContractor(net util.Network, token *dexeth.Token, acctAddr common.Address, cb bind.ContractBackend) (tokenContractor, error) {
 	netToken, found := token.NetTokens[net]
 	if !found {
 		return nil, fmt.Errorf("token %s has no network %s", token.Name, net)
@@ -655,7 +655,7 @@ type signedRedeemContractor interface {
 
 type contractorV1 struct {
 	contractV1
-	net              dex.Network
+	net              util.Network
 	abi              *abi.ABI
 	tokenAddr        common.Address // zero-address for base-chain asset, e.g. ETH, POL
 	swapContractAddr common.Address
@@ -674,7 +674,7 @@ type contractorV1 struct {
 var _ contractor = (*contractorV1)(nil)
 var _ signedRedeemContractor = (*contractorV1)(nil)
 
-func newV1Contractor(net dex.Network, swapContractAddr, acctAddr common.Address, cb bind.ContractBackend, chainID int64) (contractor, error) {
+func newV1Contractor(net util.Network, swapContractAddr, acctAddr common.Address, cb bind.ContractBackend, chainID int64) (contractor, error) {
 	c, err := swapv1.NewETHSwap(swapContractAddr, cb)
 	if err != nil {
 		return nil, err

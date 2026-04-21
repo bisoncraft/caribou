@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/encrypt"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/encrypt"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
@@ -45,8 +45,8 @@ func runWithTimeout(f func() error, timeout time.Duration) error {
 // xcWallet is a wallet. Use (*Core).loadWallet to construct a xcWallet.
 type xcWallet struct {
 	asset.Wallet
-	log               dex.Logger
-	connector         *dex.ConnectionMaster
+	log               util.Logger
+	connector         *util.ConnectionMaster
 	AssetID           uint32
 	Symbol            string
 	supportedVersions []uint32
@@ -251,7 +251,7 @@ func (w *xcWallet) locallyUnlocked() bool {
 	return len(w.pw) > 0 // cached password for encrypted wallet
 }
 
-func (w *xcWallet) unitInfo() dex.UnitInfo {
+func (w *xcWallet) unitInfo() util.UnitInfo {
 	return w.Info().UnitInfo
 }
 
@@ -383,7 +383,7 @@ func (w *xcWallet) checkPeersAndSyncStatus() error {
 	return nil
 }
 
-// Connect calls the dex.Connector's Connect method, sets the xcWallet.hookedUp
+// Connect calls the util.Connector's Connect method, sets the xcWallet.hookedUp
 // flag to true, and validates the deposit address. Use Disconnect to cleanly
 // shutdown the wallet.
 func (w *xcWallet) Connect() error {
@@ -442,7 +442,7 @@ func (w *xcWallet) Connect() error {
 	return nil
 }
 
-// Disconnect calls the dex.Connector's Disconnect method and sets the
+// Disconnect calls the util.Connector's Disconnect method and sets the
 // xcWallet.hookedUp flag to false. Will also close the wallet if it is an
 // asset.Opener and open.
 func (w *xcWallet) Disconnect() {
@@ -493,7 +493,7 @@ func (w *xcWallet) logFilePath() (string, error) {
 
 // accelerateOrder uses the Child-Pays-For-Parent technique to accelerate an
 // order if the wallet is an Accelerator.
-func (w *xcWallet) accelerateOrder(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
+func (w *xcWallet) accelerateOrder(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
 	if w.isDisabled() { // cannot perform order acceleration with disabled wallet.
 		return nil, "", fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
 	}
@@ -509,7 +509,7 @@ func (w *xcWallet) accelerateOrder(swapCoins, accelerationCoins []dex.Bytes, cha
 
 // accelerationEstimate estimates the cost to accelerate an order if the wallet
 // is an Accelerator.
-func (w *xcWallet) accelerationEstimate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, error) {
+func (w *xcWallet) accelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, error) {
 	if w.isDisabled() { // cannot perform acceleration estimate with disabled wallet.
 		return 0, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
 	}
@@ -526,7 +526,7 @@ func (w *xcWallet) accelerationEstimate(swapCoins, accelerationCoins []dex.Bytes
 
 // preAccelerate gives the user information about accelerating an order if the
 // wallet is an Accelerator.
-func (w *xcWallet) preAccelerate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
+func (w *xcWallet) preAccelerate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
 	if w.isDisabled() { // cannot perform operation with disabled wallet.
 		return 0, &asset.XYRange{}, nil, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
 	}
@@ -580,7 +580,7 @@ func (w *xcWallet) processWalletTransactions(txs []*asset.WalletTransaction) {
 func (w *xcWallet) pendingTxsCopy() map[string]*asset.WalletTransaction {
 	w.pendingTxsMtx.RLock()
 	defer w.pendingTxsMtx.RUnlock()
-	return dex.CopyMap(w.pendingTxs)
+	return util.CopyMap(w.pendingTxs)
 }
 
 // MakeBondTx authors a time-locked bond transaction if the asset.Wallet

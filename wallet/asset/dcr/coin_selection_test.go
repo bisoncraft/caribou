@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	dexdcr "github.com/bisoncraft/meshwallet/dex/networks/dcr"
+	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 )
 

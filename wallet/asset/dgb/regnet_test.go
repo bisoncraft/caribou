@@ -24,12 +24,12 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 var (
 	tLotSize uint64 = 1e6
-	tDGB            = &dex.Asset{
+	tDGB            = &util.Asset{
 		ID:         20,
 		Symbol:     "dgb",
 		Version:    version,

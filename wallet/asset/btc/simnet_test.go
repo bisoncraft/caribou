@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -34,11 +34,11 @@ const (
 )
 
 var (
-	tLogger   dex.Logger
+	tLogger   util.Logger
 	tCtx      context.Context
 	tLotSize  uint64 = 1e7
 	tRateStep uint64 = 100
-	tBTC             = &dex.Asset{
+	tBTC             = &util.Asset{
 		ID:         0,
 		Symbol:     "btc",
 		Version:    version,
@@ -56,7 +56,7 @@ func mineBeta() error {
 	return exec.Command("tmux", "send-keys", "-t", "btc-harness:0", "./mine-beta 1", "C-m").Run()
 }
 
-func tBackend(t *testing.T, name string, isInternal bool, blkFunc func(string, error)) (*ExchangeWalletFullNode, *dex.ConnectionMaster) {
+func tBackend(t *testing.T, name string, isInternal bool, blkFunc func(string, error)) (*ExchangeWalletFullNode, *util.ConnectionMaster) {
 	t.Helper()
 	user, err := user.Current()
 	if err != nil {
@@ -104,11 +104,11 @@ func tBackend(t *testing.T, name string, isInternal bool, blkFunc func(string, e
 		walletCfg.DataDir = dataDir
 	}
 	var backend asset.Wallet
-	backend, err = NewWallet(walletCfg, tLogger, dex.Simnet)
+	backend, err = NewWallet(walletCfg, tLogger, util.Simnet)
 	if err != nil {
 		t.Fatalf("error creating backend: %v", err)
 	}
-	cm := dex.NewConnectionMaster(backend)
+	cm := util.NewConnectionMaster(backend)
 	err = cm.Connect(tCtx)
 	if err != nil {
 		t.Fatalf("error connecting backend: %v", err)
@@ -146,14 +146,14 @@ func tBackend(t *testing.T, name string, isInternal bool, blkFunc func(string, e
 
 type testRig struct {
 	backends          map[string]*ExchangeWalletFullNode
-	connectionMasters map[string]*dex.ConnectionMaster
+	connectionMasters map[string]*util.ConnectionMaster
 }
 
 func newTestRig(t *testing.T, blkFunc func(string, error)) *testRig {
 	t.Helper()
 	rig := &testRig{
 		backends:          make(map[string]*ExchangeWalletFullNode),
-		connectionMasters: make(map[string]*dex.ConnectionMaster, 3),
+		connectionMasters: make(map[string]*util.ConnectionMaster, 3),
 	}
 	rig.backends["alpha"], rig.connectionMasters["alpha"] = tBackend(t, "alpha", false, blkFunc)
 	rig.backends["beta"], rig.connectionMasters["beta"] = tBackend(t, "beta", false, blkFunc)
@@ -210,7 +210,7 @@ func waitNetwork() {
 }
 
 func TestMain(m *testing.M) {
-	tLogger = dex.StdOutLogger("TEST", dex.LevelTrace)
+	tLogger = util.StdOutLogger("TEST", util.LevelTrace)
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {
@@ -317,11 +317,11 @@ func TestMakeBondTx(t *testing.T) {
 }
 
 func TestExternalFeeRate(t *testing.T) {
-	fetchRateWithTimeout(t, dex.Mainnet)
-	fetchRateWithTimeout(t, dex.Testnet)
+	fetchRateWithTimeout(t, util.Mainnet)
+	fetchRateWithTimeout(t, util.Testnet)
 }
 
-func fetchRateWithTimeout(t *testing.T, net dex.Network) {
+func fetchRateWithTimeout(t *testing.T, net util.Network) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	feeRate, err := externalFeeRate(ctx, net)

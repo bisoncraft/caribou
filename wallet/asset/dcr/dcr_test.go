@@ -23,11 +23,11 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	dexdcr "github.com/bisoncraft/meshwallet/dex/networks/dcr"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
 	dcradaptor "github.com/bisoncraft/meshwallet/internal/adaptorsigs"
 	"decred.org/dcrwallet/v5/rpc/client/dcrwallet"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
@@ -48,11 +48,11 @@ import (
 )
 
 var (
-	tLogger   dex.Logger
+	tLogger   util.Logger
 	tCtx      context.Context
 	tLotSize  uint64 = 1e7
 	tRateStep uint64 = 100
-	tDCR             = &dex.Asset{
+	tDCR             = &util.Asset{
 		ID:         42,
 		Symbol:     "dcr",
 		Version:    version,
@@ -87,7 +87,7 @@ func makeGetTxOutRes(confs, lots int64, pkScript []byte) *chainjson.GetTxOutResu
 	}
 }
 
-func makeRawTx(inputs []*wire.TxIn, outputScripts []dex.Bytes) *wire.MsgTx {
+func makeRawTx(inputs []*wire.TxIn, outputScripts []util.Bytes) *wire.MsgTx {
 	tx := wire.NewMsgTx()
 	for _, pkScript := range outputScripts {
 		tx.TxOut = append(tx.TxOut, &wire.TxOut{
@@ -98,7 +98,7 @@ func makeRawTx(inputs []*wire.TxIn, outputScripts []dex.Bytes) *wire.MsgTx {
 	return tx
 }
 
-func makeTxHex(inputs []*wire.TxIn, pkScripts []dex.Bytes) (string, error) {
+func makeTxHex(inputs []*wire.TxIn, pkScripts []util.Bytes) (string, error) {
 	msgTx := wire.NewMsgTx()
 	msgTx.TxIn = inputs
 	for _, pkScript := range pkScripts {
@@ -135,7 +135,7 @@ func dummyInput() *wire.TxIn {
 }
 
 func dummyTx() *wire.MsgTx {
-	return makeRawTx([]*wire.TxIn{dummyInput()}, []dex.Bytes{})
+	return makeRawTx([]*wire.TxIn{dummyInput()}, []util.Bytes{})
 }
 
 // sometimes we want to not start monitor blocks to avoid a race condition in
@@ -149,7 +149,7 @@ func tNewWalletMonitorBlocks(monitorBlocks bool) (*ExchangeWallet, *tRPCClient, 
 	}
 	walletCtx, shutdown := context.WithCancel(tCtx)
 
-	wallet, err := unconnectedWallet(walletCfg, &walletConfig{}, tChainParams, tLogger, dex.Simnet)
+	wallet, err := unconnectedWallet(walletCfg, &walletConfig{}, tChainParams, tLogger, util.Simnet)
 	if err != nil {
 		shutdown()
 		panic(err.Error())
@@ -753,7 +753,7 @@ func (c *tRPCClient) SignMessage(ctx context.Context, addr stdaddr.Address, msg 
 func TestMain(m *testing.M) {
 	tChainParams = chaincfg.MainNetParams()
 	tPKHAddr, _ = stdaddr.DecodeAddress("DsTya4cCFBgtofDLiRhkyPYEQjgs3HnarVP", tChainParams)
-	tLogger = dex.StdOutLogger("TEST", dex.LevelTrace)
+	tLogger = util.StdOutLogger("TEST", util.LevelTrace)
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	tTxHash, _ = chainhash.NewHashFromStr(tTxID)
@@ -1118,7 +1118,7 @@ func TestAvailableFund(t *testing.T) {
 // is acceptable.
 type tCoin struct{ id []byte }
 
-func (c *tCoin) ID() dex.Bytes {
+func (c *tCoin) ID() util.Bytes {
 	if len(c.id) > 0 {
 		return c.id
 	}
@@ -1200,7 +1200,7 @@ func TestFundingCoins(t *testing.T) {
 	}
 
 	node.unspent = []walletjson.ListUnspentResult{p2pkhUnspent}
-	coinIDs := []dex.Bytes{coinID}
+	coinIDs := []util.Bytes{coinID}
 
 	ensureGood := func() {
 		t.Helper()
@@ -1238,7 +1238,7 @@ func TestFundingCoins(t *testing.T) {
 
 	// Bad coin ID
 	ogIDs := coinIDs
-	coinIDs = []dex.Bytes{randBytes(35)}
+	coinIDs = []util.Bytes{randBytes(35)}
 	ensureErr("bad coin ID")
 	coinIDs = ogIDs
 
@@ -1331,7 +1331,7 @@ func TestFundMultiOrder(t *testing.T) {
 		// the split output. If any of the coins are nil,
 		// than that output is from the split output.
 		expectedCoins         []asset.Coins
-		expectedRedeemScripts [][]dex.Bytes
+		expectedRedeemScripts [][]util.Bytes
 		expectSendRawTx       bool
 		expectedSplitFee      uint64
 		expectedInputs        []*wire.TxIn
@@ -1388,7 +1388,7 @@ func TestFundMultiOrder(t *testing.T) {
 				{newOutput(&txHashes[0], 0, 19e5, wire.TxTreeRegular)},
 				{newOutput(&txHashes[1], 0, 35e5, wire.TxTreeRegular)},
 			},
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 			},
@@ -1449,7 +1449,7 @@ func TestFundMultiOrder(t *testing.T) {
 				{newOutput(&txHashes[0], 0, 6e5, wire.TxTreeRegular), newOutput(&txHashes[1], 0, 5e5, wire.TxTreeRegular)},
 				{newOutput(&txHashes[2], 0, 22e5, wire.TxTreeRegular)},
 			},
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil, nil},
 				{nil},
 			},
@@ -1515,7 +1515,7 @@ func TestFundMultiOrder(t *testing.T) {
 			expectedCoins: []asset.Coins{
 				{newOutput(&txHashes[0], 0, 11e5, wire.TxTreeRegular)},
 			},
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 			},
 			expectedLockedCoins: []*wire.OutPoint{
@@ -1579,7 +1579,7 @@ func TestFundMultiOrder(t *testing.T) {
 			expectedCoins: []asset.Coins{
 				{newOutput(&txHashes[0], 0, 11e5, wire.TxTreeRegular)},
 			},
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 			},
 			expectedLockedCoins: []*wire.OutPoint{
@@ -1648,7 +1648,7 @@ func TestFundMultiOrder(t *testing.T) {
 				{newOutput(&txHashes[1], 0, 13e5, wire.TxTreeRegular)},
 				{newOutput(&txHashes[0], 0, 11e5, wire.TxTreeRegular)},
 			},
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 				{nil},
@@ -1717,7 +1717,7 @@ func TestFundMultiOrder(t *testing.T) {
 				{newOutput(&txHashes[0], 0, 11e5, wire.TxTreeRegular)},
 				{newOutput(&txHashes[1], 0, 22e5, wire.TxTreeRegular)},
 			},
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 			},
@@ -1789,7 +1789,7 @@ func TestFundMultiOrder(t *testing.T) {
 				wire.NewTxOut(requiredForOrder(15e5, 2), []byte{}),
 			},
 			expectedSplitFee: expectedSplitFee(2, 2),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 			},
@@ -1887,7 +1887,7 @@ func TestFundMultiOrder(t *testing.T) {
 			},
 			expectedChange:   50e5 - (2*uint64(requiredForOrder(15e5, 2)) + expectedSplitFee(1, 3)),
 			expectedSplitFee: expectedSplitFee(1, 3),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 			},
@@ -1976,7 +1976,7 @@ func TestFundMultiOrder(t *testing.T) {
 			},
 			expectedChange:   2e6,
 			expectedSplitFee: expectedSplitFee(1, 3),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 			},
@@ -2065,7 +2065,7 @@ func TestFundMultiOrder(t *testing.T) {
 				wire.NewTxOut(requiredForOrder(15e5, 2)*110/100, []byte{}),
 			},
 			expectedSplitFee: expectedSplitFee(1, 2),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 			},
@@ -2177,7 +2177,7 @@ func TestFundMultiOrder(t *testing.T) {
 				wire.NewTxOut(120e5-requiredForOrder(1e6, 2)-int64(expectedSplitFee(1, 2)), []byte{}),
 			},
 			expectedSplitFee: expectedSplitFee(1, 2),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 				{nil},
@@ -2260,7 +2260,7 @@ func TestFundMultiOrder(t *testing.T) {
 				wire.NewTxOut(120e5-requiredForOrder(1e6, 2)-int64(expectedSplitFee(1, 2)), []byte{}),
 			},
 			expectedSplitFee: expectedSplitFee(1, 2),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 				{nil},
@@ -2359,7 +2359,7 @@ func TestFundMultiOrder(t *testing.T) {
 				wire.NewTxOut(18e5-requiredForOrder(1e6, 2)-int64(expectedSplitFee(2, 2)), []byte{}),
 			},
 			expectedSplitFee: expectedSplitFee(2, 2),
-			expectedRedeemScripts: [][]dex.Bytes{
+			expectedRedeemScripts: [][]util.Bytes{
 				{nil},
 				{nil},
 				{nil},
@@ -2846,8 +2846,8 @@ type TAuditInfo struct{}
 func (ai *TAuditInfo) Recipient() string     { return tPKHAddr.String() }
 func (ai *TAuditInfo) Expiration() time.Time { return time.Time{} }
 func (ai *TAuditInfo) Coin() asset.Coin      { return &tCoin{} }
-func (ai *TAuditInfo) Contract() dex.Bytes   { return nil }
-func (ai *TAuditInfo) SecretHash() dex.Bytes { return nil }
+func (ai *TAuditInfo) Contract() util.Bytes   { return nil }
+func (ai *TAuditInfo) SecretHash() util.Bytes { return nil }
 
 func TestRedeem(t *testing.T) {
 	wallet, node, shutdown := tNewWallet()
@@ -3173,7 +3173,7 @@ type tReceipt struct {
 
 func (r *tReceipt) Expiration() time.Time { return time.Unix(int64(r.expiration), 0).UTC() }
 func (r *tReceipt) Coin() asset.Coin      { return r.coin }
-func (r *tReceipt) Contract() dex.Bytes   { return r.contract }
+func (r *tReceipt) Contract() util.Bytes   { return r.contract }
 
 func TestFindRedemption(t *testing.T) {
 	wallet, node, shutdown := tNewWallet()
@@ -3209,7 +3209,7 @@ func TestFindRedemption(t *testing.T) {
 
 	// Prepare and add the contract transaction to the blockchain. Put the pay-to-contract script at index 1.
 	inputs := []*wire.TxIn{makeRPCVin(&chainhash.Hash{}, 0, otherSpendScript)}
-	outputScripts := []dex.Bytes{otherScript, contractP2SHScript}
+	outputScripts := []util.Bytes{otherScript, contractP2SHScript}
 	contractTx := makeRawTx(inputs, outputScripts)
 	contractTxHash := contractTx.TxHash()
 	coinID := ToCoinID(&contractTxHash, contractVout)
@@ -3238,7 +3238,7 @@ func TestFindRedemption(t *testing.T) {
 	inputs = append(inputs, makeRPCVin(&contractTxHash, contractVout, redemptionScript))
 
 	// Add the redemption to mempool and check if wallet.FindRedemption finds it.
-	redeemTx := makeRawTx(inputs, []dex.Bytes{otherScript})
+	redeemTx := makeRawTx(inputs, []util.Bytes{otherScript})
 	node.blockchain.addRawTx(-1, redeemTx)
 	_, checkSecret, err := wallet.FindRedemption(tCtx, coinID, nil)
 	if err != nil {
@@ -3253,7 +3253,7 @@ func TestFindRedemption(t *testing.T) {
 	}
 
 	// Move the redemption to a new block and check if wallet.FindRedemption finds it.
-	_, redeemBlock := node.blockchain.addRawTx(contractHeight+2, makeRawTx(inputs, []dex.Bytes{otherScript}))
+	_, redeemBlock := node.blockchain.addRawTx(contractHeight+2, makeRawTx(inputs, []util.Bytes{otherScript}))
 	_, checkSecret, err = wallet.FindRedemption(tCtx, coinID, nil)
 	if err != nil {
 		t.Fatalf("error finding redemption: %v", err)
@@ -3310,7 +3310,7 @@ func TestFindRedemption(t *testing.T) {
 	redeemBlock.Transactions[0].TxIn[1].SignatureScript = redemptionScript
 
 	// Wrong script type for output
-	walletTx.Hex, _ = makeTxHex(inputs, []dex.Bytes{otherScript, otherScript})
+	walletTx.Hex, _ = makeTxHex(inputs, []util.Bytes{otherScript, otherScript})
 	_, _, err = wallet.FindRedemption(tCtx, coinID, nil)
 	if err == nil {
 		t.Fatalf("no error for wrong script type")
@@ -4349,7 +4349,7 @@ type tReconfigurer struct {
 	err     error
 }
 
-func (r *tReconfigurer) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net dex.Network, currentAddress string) (restartRequired bool, err error) {
+func (r *tReconfigurer) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net util.Network, currentAddress string) (restartRequired bool, err error) {
 	return r.restart, r.err
 }
 
@@ -4576,7 +4576,7 @@ func TestConfirmTransaction(t *testing.T) {
 
 	redemptionScript, _ := dexdcr.RedeemP2SHContract(contract, randBytes(73), randBytes(33), secret)
 
-	spentTx := makeRawTx(nil, []dex.Bytes{contractP2SHScript})
+	spentTx := makeRawTx(nil, []util.Bytes{contractP2SHScript})
 	txHash := spentTx.TxHash()
 	node.blockchain.addRawTx(1, spentTx)
 	inputs := []*wire.TxIn{makeRPCVin(&txHash, 0, redemptionScript)}
@@ -4779,7 +4779,7 @@ func TestPurchaseTickets(t *testing.T) {
 
 	var blocksToConfirm atomic.Int64
 	cl.walletTxFn = func() (*walletjson.GetTransactionResult, error) {
-		txHex, _ := makeTxHex(nil, []dex.Bytes{randBytes(25)})
+		txHex, _ := makeTxHex(nil, []util.Bytes{randBytes(25)})
 		var confs int64 = 1
 		if blocksToConfirm.Load() > 0 {
 			confs = 0

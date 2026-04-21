@@ -14,14 +14,14 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/db"
 	dbtest "github.com/bisoncraft/meshwallet/wallet/db/test"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/order"
-	ordertest "github.com/bisoncraft/meshwallet/dex/order/test"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/order"
+	ordertest "github.com/bisoncraft/meshwallet/util/order/test"
 	"go.etcd.io/bbolt"
 )
 
 var (
-	tLogger = dex.StdOutLogger("db_TEST", dex.LevelTrace)
+	tLogger = util.StdOutLogger("db_TEST", util.LevelTrace)
 )
 
 func newTestDB(t *testing.T) (*BoltDB, func()) {

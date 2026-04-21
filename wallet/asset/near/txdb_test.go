@@ -5,13 +5,13 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 func newTestTxDB(t *testing.T) *nearTxDB {
 	t.Helper()
 	dir := t.TempDir()
-	log := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	log := util.StdOutLogger("TXDB", util.LevelTrace)
 	db, err := newTxDB(dir, log)
 	if err != nil {
 		t.Fatalf("newTxDB error: %v", err)

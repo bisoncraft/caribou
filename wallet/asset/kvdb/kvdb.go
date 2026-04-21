@@ -9,8 +9,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/lexi"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -24,10 +24,10 @@ type KeyValueDB interface {
 
 type kvDB struct {
 	*badger.DB
-	log dex.Logger
+	log util.Logger
 }
 
-func NewFileDB(filePath string, log dex.Logger) (KeyValueDB, error) {
+func NewFileDB(filePath string, log util.Logger) (KeyValueDB, error) {
 	// If memory use is a concern, could try
 	//   .WithValueLogLoadingMode(options.FileIO) // default options.MemoryMap
 	//   .WithMaxTableSize(sz int64); // bytes, default 6MB
@@ -116,11 +116,11 @@ func (d *kvDB) Store(k []byte, thing encoding.BinaryMarshaler) error {
 	})
 }
 
-// badgerLoggerWrapper wraps dex.Logger and translates Warnf to Warningf to
+// badgerLoggerWrapper wraps util.Logger and translates Warnf to Warningf to
 // satisfy badger.Logger. Debugf is discarded as badger's debug logs are too
 // noisy even for trace.
 type badgerLoggerWrapper struct {
-	dex.Logger
+	util.Logger
 }
 
 var _ badger.Logger = (*badgerLoggerWrapper)(nil)
@@ -128,7 +128,7 @@ var _ badger.Logger = (*badgerLoggerWrapper)(nil)
 // Debugf is discarded - badger's debug logs are too verbose.
 func (log *badgerLoggerWrapper) Debugf(s string, a ...any) {}
 
-// Warningf -> dex.Logger.Warnf
+// Warningf -> util.Logger.Warnf
 func (log *badgerLoggerWrapper) Warningf(s string, a ...any) {
 	log.Warnf(s, a...)
 }

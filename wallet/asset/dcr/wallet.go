@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
 	"github.com/decred/dcrd/chaincfg/chainhash"
@@ -22,7 +22,7 @@ import (
 
 // WalletConstructor defines a function that can be invoked to create a custom
 // implementation of the Wallet interface.
-type WalletConstructor func(settings map[string]string, chainParams *chaincfg.Params, logger dex.Logger) (Wallet, error)
+type WalletConstructor func(settings map[string]string, chainParams *chaincfg.Params, logger util.Logger) (Wallet, error)
 
 // customWalletConstructors are functions for setting up custom implementations
 // of the Wallet interface that may be used by the ExchangeWallet instead of the
@@ -174,7 +174,7 @@ type Wallet interface {
 	SetVotingPreferences(ctx context.Context, choices, tspendPolicy, treasuryPolicy map[string]string) error
 	SetTxFee(ctx context.Context, feePerKB dcrutil.Amount) error
 	StakeInfo(ctx context.Context) (*wallet.StakeInfoData, error)
-	Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net dex.Network, currentAddress string) (restart bool, err error)
+	Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net util.Network, currentAddress string) (restart bool, err error)
 	WalletOwnsAddress(ctx context.Context, addr stdaddr.Address) (bool, error)
 	AddressUsed(ctx context.Context, addrStr string) (bool, error)
 	// AbandonTransaction implements asset.TxAbandoner, marking an unconfirmed

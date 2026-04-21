@@ -13,8 +13,8 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/dex"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
+	"github.com/bisoncraft/meshwallet/util"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 	tv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
 	qrcode "github.com/skip2/go-qrcode"
 )
@@ -146,7 +146,7 @@ func (s *AppServer) handleWalletLogFile(w http.ResponseWriter, r *http.Request) 
 	}
 	defer logFile.Close()
 
-	assetName := dex.BipIDSymbol(uint32(assetID))
+	assetName := util.BipIDSymbol(uint32(assetID))
 	logFileName := fmt.Sprintf("bison-%s-wallet.log", assetName)
 	w.Header().Set("Content-Disposition", "attachment; filename="+logFileName)
 	w.Header().Set("Content-Type", "text/plain")

@@ -10,19 +10,19 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func registerToken(tokenID uint32, desc string, allowedNets ...dex.Network) {
+func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 	token, found := dexbase.Tokens[tokenID]
 	if !found {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
-	netAddrs := make(map[dex.Network]string)
-	netVersions := make(map[dex.Network][]uint32, 3)
+	netAddrs := make(map[util.Network]string)
+	netVersions := make(map[util.Network][]uint32, 3)
 	for net, netToken := range token.NetTokens {
 		if !slices.Contains(allowedNets, net) {
 			continue
@@ -43,9 +43,9 @@ func registerToken(tokenID uint32, desc string, allowedNets ...dex.Network) {
 func init() {
 	dexbase.MaybeReadSimnetAddrs()
 	asset.Register(BipID, &Driver{})
-	registerToken(usdcTokenID, "The USDC Base ERC20 token.", dex.Mainnet, dex.Testnet, dex.Simnet)
-	registerToken(usdtTokenID, "The USDT Base ERC20 token.", dex.Mainnet, dex.Testnet, dex.Simnet)
-	registerToken(wbtcTokenID, "Wrapped BTC.", dex.Mainnet, dex.Testnet)
+	registerToken(usdcTokenID, "The USDC Base ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
+	registerToken(usdtTokenID, "The USDT Base ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
+	registerToken(wbtcTokenID, "Wrapped BTC.", util.Mainnet, util.Testnet)
 }
 
 const (
@@ -57,9 +57,9 @@ const (
 )
 
 var (
-	usdcTokenID, _ = dex.BipSymbolID("usdc.base")
-	usdtTokenID, _ = dex.BipSymbolID("usdt.base")
-	wbtcTokenID, _ = dex.BipSymbolID("wbtc.base")
+	usdcTokenID, _ = util.BipSymbolID("usdc.base")
+	usdtTokenID, _ = util.BipSymbolID("usdt.base")
+	wbtcTokenID, _ = util.BipSymbolID("wbtc.base")
 	// WalletInfo defines some general information about a Base Wallet(EVM
 	// Compatible).
 
@@ -95,7 +95,7 @@ var (
 type Driver struct{}
 
 // Open opens the Base exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, net dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (asset.Wallet, error) {
 	chainCfg, err := ChainConfig(net)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate Base genesis configuration for network %s", net)
@@ -116,9 +116,9 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, net dex.Networ
 
 	var defaultProviders []string
 	switch net {
-	case dex.Simnet:
+	case util.Simnet:
 		defaultProviders = []string{"http://127.0.0.1:39556"}
-	case dex.Testnet:
+	case util.Testnet:
 		defaultProviders = []string{
 			"https://base-sepolia-rpc.publicnode.com",
 			"https://sepolia.base.org",
@@ -126,7 +126,7 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, net dex.Networ
 			"https://base-sepolia.api.onfinality.io/public", // heavily rate limited, mainnet seems fine
 			"https://base-sepolia.gateway.tenderly.co",
 		}
-	case dex.Mainnet:
+	case util.Mainnet:
 		defaultProviders = []string{
 			"https://base-rpc.publicnode.com", // not for production use
 			"https://mainnet.base.org",
@@ -163,7 +163,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 	return &wi
 }
 
-func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error) {
+func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
 	if walletType != walletTypeRPC {
 		return false, fmt.Errorf("unknown wallet type %q", walletType)
 	}

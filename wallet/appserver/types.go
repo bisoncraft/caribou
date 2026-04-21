@@ -4,8 +4,8 @@
 package appserver
 
 import (
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 )
 
 // standardResponse is a basic API response when no data needs to be returned.

@@ -26,10 +26,10 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexzec "github.com/bisoncraft/meshwallet/dex/networks/zec"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexzec "github.com/bisoncraft/meshwallet/util/networks/zec"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcjson"
@@ -155,7 +155,7 @@ func init() {
 type Driver struct{}
 
 // Open creates the ZEC exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -207,17 +207,17 @@ func newRPCConnection(cfg *dexbtc.RPCConfig) (*rpcclient.Client, error) {
 // exchange wallet. The wallet will shut down when the provided context is
 // canceled. The configPath can be an empty string, in which case the standard
 // system location of the zcashd config file is assumed.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, net dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (asset.Wallet, error) {
 	var btcParams *chaincfg.Params
 	var addrParams *dexzec.AddressParams
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		btcParams = dexzec.MainNetParams
 		addrParams = dexzec.MainNetAddressParams
-	case dex.Testnet:
+	case util.Testnet:
 		btcParams = dexzec.TestNet4Params
 		addrParams = dexzec.TestNet4AddressParams
-	case dex.Regtest:
+	case util.Regtest:
 		btcParams = dexzec.RegressionNetParams
 		addrParams = dexzec.RegressionNetAddressParams
 	default:
@@ -305,8 +305,8 @@ type rpcCaller interface {
 //  4. ...
 type zecWallet struct {
 	ctx           context.Context
-	log           dex.Logger
-	net           dex.Network
+	log           util.Logger
+	net           util.Network
 	lastAddress   atomic.Value // "string"
 	btcParams     *chaincfg.Params
 	addrParams    *dexzec.AddressParams
@@ -696,7 +696,7 @@ type swapOptions struct {
 	// FeeBump *float64 `ini:"swapfeebump"`
 }
 
-func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, uint64, error) {
+func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint64, error) {
 	ordValStr := btcutil.Amount(ord.Value).String()
 	w.log.Debugf("Attempting to fund Zcash order, maxFeeRate = %d, max swaps = %d",
 		ord.MaxFeeRate, ord.MaxSwapCount)
@@ -791,7 +791,7 @@ func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, uint6
 			Amount:  shieldedSplitNeeded,
 		}}
 		coins = []asset.Coin{op}
-		redeemScripts = []dex.Bytes{nil}
+		redeemScripts = []util.Bytes{nil}
 		spents = []*btc.Output{op}
 	} else if useSplit {
 		// No shielded split needed. Should we do a split to avoid overlock.
@@ -855,7 +855,7 @@ func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, uint6
 				Amount:  splitOutputVal,
 			}}
 			coins = []asset.Coin{op}
-			redeemScripts = []dex.Bytes{nil}
+			redeemScripts = []util.Bytes{nil}
 			spents = []*btc.Output{op}
 		}
 	}
@@ -871,7 +871,7 @@ func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []dex.Bytes, uint6
 }
 
 // Redeem sends the redemption transaction, completing the atomic swap.
-func (w *zecWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]dex.Bytes, asset.Coin, uint64, error) {
+func (w *zecWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]util.Bytes, asset.Coin, uint64, error) {
 	// Check broadcast cache for retry of a previously built transaction.
 	cacheKey := broadcast.RedeemCacheKey(form.Redemptions)
 	if cached, ok := broadcast.RecoverFromCache(w.redeemCache, cacheKey,
@@ -986,7 +986,7 @@ func (w *zecWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]dex.B
 
 	// Prepare return values for caching.
 	txHash := tx.TxHash()
-	coinIDs := make([]dex.Bytes, 0, len(form.Redemptions))
+	coinIDs := make([]util.Bytes, 0, len(form.Redemptions))
 	for i := range form.Redemptions {
 		coinIDs = append(coinIDs, btc.ToCoinID(&txHash, uint32(i)))
 	}
@@ -1297,11 +1297,11 @@ func (w *zecWallet) SingleLotRedeemFees(_ uint32, feeSuggestion uint64) (uint64,
 // FundingCoins gets funding coins for the coin IDs. The coins are locked. This
 // method might be called to reinitialize an order from data stored externally.
 // This method will only return funding coins, e.g. unspent transaction outputs.
-func (w *zecWallet) FundingCoins(ids []dex.Bytes) (asset.Coins, error) {
+func (w *zecWallet) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 	return w.cm.FundingCoins(ids)
 }
 
-func decodeCoinID(coinID dex.Bytes) (*chainhash.Hash, uint32, error) {
+func decodeCoinID(coinID util.Bytes) (*chainhash.Hash, uint32, error) {
 	if len(coinID) != 36 {
 		return nil, 0, fmt.Errorf("coin ID wrong length. expected 36, got %d", len(coinID))
 	}
@@ -1436,7 +1436,7 @@ func (w *zecWallet) fund(
 	sum, size, shieldedSplitNeeded, shieldedSplitFees uint64,
 	coins asset.Coins,
 	fundingCoins map[btc.OutPoint]*btc.UTxO,
-	redeemScripts []dex.Bytes,
+	redeemScripts []util.Bytes,
 	spents []*btc.Output,
 	err error,
 ) {
@@ -1524,7 +1524,7 @@ func (w *zecWallet) SetBondReserves(reserves uint64) {
 	w.reserves.Store(reserves)
 }
 
-func (w *zecWallet) AuditContract(coinID, contract, txData dex.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
+func (w *zecWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
 	txHash, vout, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, err
@@ -1611,7 +1611,7 @@ func (w *zecWallet) AuditContract(coinID, contract, txData dex.Bytes, rebroadcas
 	}, nil
 }
 
-func (w *zecWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
+func (w *zecWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
 	txHash, _, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, err
@@ -1663,7 +1663,7 @@ func (w *zecWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.Confir
 	// spending tx has disappeared. Assume the fee was too low at the time
 	// and it was eventually purged from the mempool. Attempt to spend again
 	// with a currently reasonable fee.
-	var newCoinID dex.Bytes
+	var newCoinID util.Bytes
 	if confirmTx.IsRedeem() {
 		form := &asset.RedeemForm{
 			Redemptions: []*asset.Redemption{
@@ -1694,7 +1694,7 @@ func (w *zecWallet) ConfirmTransaction(coinID dex.Bytes, confirmTx *asset.Confir
 	}, nil
 }
 
-func (w *zecWallet) ContractLockTimeExpired(ctx context.Context, contract dex.Bytes) (bool, time.Time, error) {
+func (w *zecWallet) ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error) {
 	_, _, locktime, _, err := dexbtc.ExtractSwapDetails(contract, false /* segwit */, w.btcParams)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("error extracting contract locktime: %w", err)
@@ -1747,11 +1747,11 @@ func (w *zecWallet) AddressUsed(addrStr string) (bool, error) {
 	return recv != 0, err
 }
 
-func (w *zecWallet) FindRedemption(ctx context.Context, coinID, contract dex.Bytes) (redemptionCoin, secret dex.Bytes, err error) {
+func (w *zecWallet) FindRedemption(ctx context.Context, coinID, contract util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
 	return w.rf.FindRedemption(ctx, coinID)
 }
 
-func (w *zecWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) (coins []asset.Coins, redeemScripts [][]dex.Bytes, fundingFees uint64, err error) {
+func (w *zecWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) (coins []asset.Coins, redeemScripts [][]util.Bytes, fundingFees uint64, err error) {
 	w.log.Debugf("Attempting to fund a multi-order for ZEC")
 
 	var totalRequiredForOrders uint64
@@ -1835,7 +1835,7 @@ func (w *zecWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) (coins 
 	coins = make([]asset.Coins, len(mo.Values))
 	utxos := make([]*btc.UTxO, len(mo.Values))
 	ops := make([]*btc.Output, len(mo.Values))
-	redeemScripts = make([][]dex.Bytes, len(mo.Values))
+	redeemScripts = make([][]util.Bytes, len(mo.Values))
 next:
 	for i, v := range mo.Values {
 		orderReq := orderReqs[i]
@@ -1861,7 +1861,7 @@ next:
 				}
 				ops[i] = btc.NewOutput(txHash, vout, orderReq)
 				coins[i] = asset.Coins{ops[i]}
-				redeemScripts[i] = []dex.Bytes{nil}
+				redeemScripts[i] = []util.Bytes{nil}
 				delete(txOuts, vout)
 				continue next
 			}
@@ -1986,7 +1986,7 @@ func (w *zecWallet) recyclableAddress() (string, error) {
 	return transparentAddressString(w)
 }
 
-func (w *zecWallet) Refund(ctx context.Context, coinID, contract dex.Bytes, feeRate uint64) (dex.Bytes, error) {
+func (w *zecWallet) Refund(ctx context.Context, coinID, contract util.Bytes, feeRate uint64) (util.Bytes, error) {
 	// Check broadcast cache for retry of a previously built transaction.
 	cacheKey := broadcast.RefundCacheKey(coinID)
 	if cached, ok := broadcast.RecoverFromCache(w.refundCache, cacheKey,
@@ -2084,7 +2084,7 @@ func (e *zecSwapCacheEntry) Stamp() time.Time { return e.timestamp }
 
 type zecRedeemCacheEntry struct {
 	signedTx  *dexzec.Tx
-	coinIDs   []dex.Bytes
+	coinIDs   []util.Bytes
 	outCoin   *btc.Output
 	fees      uint64
 	totalIn   uint64
@@ -2095,7 +2095,7 @@ func (e *zecRedeemCacheEntry) Stamp() time.Time { return e.timestamp }
 
 type zecRefundCacheEntry struct {
 	signedTx     *dexzec.Tx
-	refundCoinID dex.Bytes
+	refundCoinID util.Bytes
 	refundVal    uint64
 	fees         uint64
 	timestamp    time.Time
@@ -2114,7 +2114,7 @@ func (w *zecWallet) broadcastTx(ctx context.Context, tx *dexzec.Tx) (*chainhash.
 		if err != nil {
 			return "serialization error: " + err.Error()
 		}
-		return dex.Bytes(b).String()
+		return util.Bytes(b).String()
 	}
 	txHash, err := sendRawTransaction(w, tx)
 	if err != nil {
@@ -2133,7 +2133,7 @@ func (w *zecWallet) broadcastTx(ctx context.Context, tx *dexzec.Tx) (*chainhash.
 	return txHash, nil
 }
 
-func (w *zecWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout uint32, contract dex.Bytes, val uint64, refundAddr btcutil.Address, fees uint64) (*wire.MsgTx, error) {
+func (w *zecWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout uint32, contract util.Bytes, val uint64, refundAddr btcutil.Address, fees uint64) (*wire.MsgTx, error) {
 	sender, _, lockTime, _, err := dexbtc.ExtractSwapDetails(contract, false, w.btcParams)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting swap addresses: %w", err)
@@ -2203,7 +2203,7 @@ func (w *zecWallet) createSig(ctx context.Context, msgTx *wire.MsgTx, idx int, p
 	return sig, privKey.PubKey().SerializeCompressed(), nil
 }
 
-func (w *zecWallet) RegFeeConfirmations(_ context.Context, id dex.Bytes) (confs uint32, err error) {
+func (w *zecWallet) RegFeeConfirmations(_ context.Context, id util.Bytes) (confs uint32, err error) {
 	return 0, errors.New("legacy registration not supported")
 }
 
@@ -2324,7 +2324,7 @@ type txCoin struct {
 var _ asset.Coin = (*txCoin)(nil)
 
 // ID is a unique identifier for this coin.
-func (c *txCoin) ID() dex.Bytes {
+func (c *txCoin) ID() util.Bytes {
 	return c.txHash[:]
 }
 
@@ -2469,7 +2469,7 @@ func (w *zecWallet) sendWithReturn(baseTx *dexzec.Tx, addr btcutil.Address, tota
 	return signedTx, err
 }
 
-func (w *zecWallet) SignCoinMessage(coin asset.Coin, msg dex.Bytes) (pubkeys, sigs []dex.Bytes, err error) {
+func (w *zecWallet) SignCoinMessage(coin asset.Coin, msg util.Bytes) (pubkeys, sigs []util.Bytes, err error) {
 
 	op, err := btc.ConvertCoin(coin)
 	if err != nil {
@@ -2714,7 +2714,7 @@ func (w *zecWallet) Swap(ctx context.Context, swaps *asset.Swaps) ([]asset.Recei
 	return receipts, changeCoin, fees, nil
 }
 
-func (w *zecWallet) SwapConfirmations(_ context.Context, id dex.Bytes, contract dex.Bytes, startTime time.Time) (uint32, bool, error) {
+func (w *zecWallet) SwapConfirmations(_ context.Context, id util.Bytes, contract util.Bytes, startTime time.Time) (uint32, bool, error) {
 	txHash, vout, err := decodeCoinID(id)
 	if err != nil {
 		return 0, false, err

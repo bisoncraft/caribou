@@ -19,11 +19,11 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/db"
 	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/encrypt"
-	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/encrypt"
+	"github.com/bisoncraft/meshwallet/util/order"
 	"go.etcd.io/bbolt"
 )
 
@@ -151,14 +151,14 @@ var defaultOpts = Opts{
 type BoltDB struct {
 	*bbolt.DB
 	opts Opts
-	log  dex.Logger
+	log  util.Logger
 }
 
 // Check that BoltDB satisfies the db.DB interface.
 var _ dexdb.DB = (*BoltDB)(nil)
 
 // NewDB is a constructor for a *BoltDB.
-func NewDB(dbPath string, logger dex.Logger, opts ...Opts) (dexdb.DB, error) {
+func NewDB(dbPath string, logger util.Logger, opts ...Opts) (dexdb.DB, error) {
 	_, err := os.Stat(dbPath)
 	isNew := os.IsNotExist(err)
 
@@ -541,7 +541,7 @@ func (db *BoltDB) ListAccounts() ([]string, error) {
 	})
 }
 
-func loadAccountInfo(acct *bbolt.Bucket, log dex.Logger) (*db.AccountInfo, error) {
+func loadAccountInfo(acct *bbolt.Bucket, log util.Logger) (*db.AccountInfo, error) {
 	acctB := getCopy(acct, accountKey)
 	if acctB == nil {
 		return nil, fmt.Errorf("empty account")

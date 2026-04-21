@@ -7,7 +7,7 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/cbtypes"
-	"github.com/bisoncraft/meshwallet/dex/calc"
+	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/davecgh/go-spew/spew"
 )
 

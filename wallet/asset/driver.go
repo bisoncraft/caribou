@@ -9,15 +9,15 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // nettedToken is a Token with its available networks. Saving the valid
 // networks enables filtering out tokens via the package's SetNetwork.
 type nettedToken struct {
 	*Token
-	erc20NetAddrs             map[dex.Network]string
-	netSupportedAssetVersions map[dex.Network][]uint32
+	erc20NetAddrs             map[util.Network]string
+	netSupportedAssetVersions map[util.Network][]uint32
 }
 
 var (
@@ -36,14 +36,14 @@ type CreateWalletParams struct {
 	Birthday uint64
 	Settings map[string]string
 	DataDir  string
-	Net      dex.Network
-	Logger   dex.Logger
+	Net      util.Network
+	Logger   util.Logger
 	TorProxy string
 }
 
 // Driver is the interface required of all exchange wallets.
 type Driver interface {
-	Open(*WalletConfig, dex.Logger, dex.Network) (Wallet, error)
+	Open(*WalletConfig, util.Logger, util.Network) (Wallet, error)
 	DecodeCoinID(coinID []byte) (string, error)
 	Info() *WalletInfo
 }
@@ -52,7 +52,7 @@ type Driver interface {
 // wallets during CreateWallet. Only assets that provide seeded wallets need to
 // implement Creator.
 type Creator interface {
-	Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error)
+	Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error)
 	Create(*CreateWalletParams) error
 }
 
@@ -89,10 +89,10 @@ func Register(assetID uint32, driver Driver, overwrite ...bool) {
 // SetNetwork to enable net-based filtering of package function output.
 func RegisterToken(
 	tokenID uint32,
-	token *dex.Token,
+	token *util.Token,
 	walletDef *WalletDefinition,
-	erc20NetAddrs map[dex.Network]string,
-	netSupportedAssetVersions map[dex.Network][]uint32,
+	erc20NetAddrs map[util.Network]string,
+	netSupportedAssetVersions map[util.Network][]uint32,
 ) {
 	driversMtx.Lock()
 	defer driversMtx.Unlock()
@@ -115,7 +115,7 @@ func RegisterToken(
 }
 
 // WalletExists will be true if the specified wallet exists.
-func WalletExists(assetID uint32, walletType, dataDir string, settings map[string]string, net dex.Network) (exists bool, err error) {
+func WalletExists(assetID uint32, walletType, dataDir string, settings map[string]string, net util.Network) (exists bool, err error) {
 	return exists, withDriver(assetID, func(drv Driver) error {
 		creator, is := drv.(Creator)
 		if !is {
@@ -138,7 +138,7 @@ func CreateWallet(assetID uint32, seedParams *CreateWalletParams) error {
 }
 
 // OpenWallet sets up the asset, returning the exchange wallet.
-func OpenWallet(assetID uint32, cfg *WalletConfig, logger dex.Logger, net dex.Network) (w Wallet, err error) {
+func OpenWallet(assetID uint32, cfg *WalletConfig, logger util.Logger, net util.Network) (w Wallet, err error) {
 	return w, withDriver(assetID, func(drv Driver) error {
 		w, err = drv.Open(cfg, logger, net)
 		return err
@@ -157,14 +157,14 @@ func DecodeCoinID(assetID uint32, coinID []byte) (cid string, err error) {
 	}
 	tkn, ok := tokens[assetID]
 	if !ok {
-		return "", fmt.Errorf("no driver or token info for asset %d (%s)", assetID, dex.BipIDSymbol(assetID))
+		return "", fmt.Errorf("no driver or token info for asset %d (%s)", assetID, util.BipIDSymbol(assetID))
 	}
 	drv, ok = drivers[tkn.ParentID]
 	if ok {
 		return drv.DecodeCoinID(coinID)
 	}
 	return "", fmt.Errorf("no %d (%s) parent asset driver for token %d (%s)",
-		tkn.ParentID, dex.BipIDSymbol(tkn.ParentID), assetID, dex.BipIDSymbol(assetID))
+		tkn.ParentID, util.BipIDSymbol(tkn.ParentID), assetID, util.BipIDSymbol(assetID))
 }
 
 // A registered asset is information about a supported asset.
@@ -183,7 +183,7 @@ func Assets() map[uint32]*RegisteredAsset {
 	for assetID, driver := range drivers {
 		assets[assetID] = &RegisteredAsset{
 			ID:     assetID,
-			Symbol: dex.BipIDSymbol(assetID),
+			Symbol: util.BipIDSymbol(assetID),
 			Info:   driver.Info(),
 		}
 	}
@@ -214,7 +214,7 @@ func Asset(assetID uint32) *RegisteredAsset {
 	}
 	ra := &RegisteredAsset{
 		ID:     assetID,
-		Symbol: dex.BipIDSymbol(assetID),
+		Symbol: util.BipIDSymbol(assetID),
 		Info:   drv.Info(),
 	}
 	for tokenID, token := range tokens {
@@ -252,8 +252,8 @@ func Info(assetID uint32) (*WalletInfo, error) {
 	return drv.Info(), nil
 }
 
-// UnitInfo returns the dex.UnitInfo for the asset or token.
-func UnitInfo(assetID uint32) (dex.UnitInfo, error) {
+// UnitInfo returns the util.UnitInfo for the asset or token.
+func UnitInfo(assetID uint32) (util.UnitInfo, error) {
 	driversMtx.RLock()
 	defer driversMtx.RUnlock()
 	drv, ok := drivers[assetID]
@@ -264,12 +264,12 @@ func UnitInfo(assetID uint32) (dex.UnitInfo, error) {
 	if ok {
 		return token.UnitInfo, nil
 	}
-	return dex.UnitInfo{}, fmt.Errorf("asset: unsupported asset %d", assetID)
+	return util.UnitInfo{}, fmt.Errorf("asset: unsupported asset %d", assetID)
 }
 
 // SetNetwork will filter registered assets for those available on the specified
 // network. SetNetwork need only be called once during initialization.
-func SetNetwork(net dex.Network) {
+func SetNetwork(net util.Network) {
 	for assetID, nt := range tokens {
 		addr, exists := nt.erc20NetAddrs[net]
 		if !exists {
@@ -305,7 +305,7 @@ func WalletDef(assetID uint32, walletType string) (*WalletDefinition, error) {
 		}
 	}
 	if wd == nil {
-		return nil, fmt.Errorf("could not find wallet definition for asset %s, type %q", dex.BipIDSymbol(assetID), walletType)
+		return nil, fmt.Errorf("could not find wallet definition for asset %s, type %q", util.BipIDSymbol(assetID), walletType)
 	}
 	return wd, nil
 }
@@ -336,7 +336,7 @@ func FormatAtoms(assetID uint32, atoms uint64) string {
 	return "<unknown asset>"
 }
 
-type spvWithdrawFunc func(ctx context.Context, walletPW []byte, recipient, dataDir string, net dex.Network, log dex.Logger) ([]byte, error)
+type spvWithdrawFunc func(ctx context.Context, walletPW []byte, recipient, dataDir string, net util.Network, log util.Logger) ([]byte, error)
 
 var spvRecovererFuncs = make(map[uint32]spvWithdrawFunc)
 
@@ -348,7 +348,7 @@ func RegisterSPVWithdrawFunc(assetID uint32, f spvWithdrawFunc) {
 
 // SPVWithdrawTx generates a transaction that spends all funds from a deprecated
 // spv wallet.
-func SPVWithdrawTx(ctx context.Context, assetID uint32, walletPW []byte, recipient, dataDir string, net dex.Network, log dex.Logger) ([]byte, error) {
+func SPVWithdrawTx(ctx context.Context, assetID uint32, walletPW []byte, recipient, dataDir string, net util.Network, log util.Logger) ([]byte, error) {
 	f, found := spvRecovererFuncs[assetID]
 	if !found {
 		return nil, errors.New("no withdraw function")

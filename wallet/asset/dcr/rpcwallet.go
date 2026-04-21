@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"decred.org/dcrwallet/v5/rpc/client/dcrwallet"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
@@ -37,17 +37,17 @@ import (
 )
 
 var (
-	compatibleWalletRPCVersions = []dex.Semver{
+	compatibleWalletRPCVersions = []util.Semver{
 		{Major: 11, Minor: 0, Patch: 0}, // 2.1.0 release
 	}
-	compatibleNodeRPCVersions = []dex.Semver{
+	compatibleNodeRPCVersions = []util.Semver{
 		{Major: 8, Minor: 0, Patch: 0}, // 1.8-pre, just dropped unused ticket RPCs
 		{Major: 7, Minor: 0, Patch: 0}, // 1.7 release, new gettxout args
 	}
 	// From vspWithSPVWalletRPCVersion and later the wallet's current "vsp"
 	// is included in the walletinfo response and the wallet will no longer
 	// error on GetTickets with an spv wallet.
-	vspWithSPVWalletRPCVersion = dex.Semver{Major: 9, Minor: 2, Patch: 0}
+	vspWithSPVWalletRPCVersion = util.Semver{Major: 9, Minor: 2, Patch: 0}
 )
 
 // RawRequest RPC methods
@@ -68,7 +68,7 @@ const (
 // with the json-rpc server of an external dcrwallet daemon.
 type rpcWallet struct {
 	chainParams *chaincfg.Params
-	log         dex.Logger
+	log         util.Logger
 	rpcCfg      *rpcclient.ConnConfig
 	accountsV   atomic.Value // XCWalletAccounts
 
@@ -168,7 +168,7 @@ type rpcClient interface {
 // of the rpcWallet. The rpcClient isn't connected to the server yet, use the
 // Connect method of the returned *rpcWallet to connect the rpcClient to the
 // server.
-func newRPCWallet(settings map[string]string, logger dex.Logger, net dex.Network) (*rpcWallet, error) {
+func newRPCWallet(settings map[string]string, logger util.Logger, net util.Network) (*rpcWallet, error) {
 	cfg, chainParams, err := loadRPCConfig(settings, net)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing config: %w", err)
@@ -233,7 +233,7 @@ func (w *rpcWallet) Accounts() XCWalletAccounts {
 }
 
 // Reconfigure updates the wallet to user a new configuration.
-func (w *rpcWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net dex.Network, currentAddress string) (restart bool, err error) {
+func (w *rpcWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, net util.Network, currentAddress string) (restart bool, err error) {
 	if !(cfg.Type == walletTypeDcrwRPC || cfg.Type == walletTypeLegacy) {
 		return true, nil
 	}
@@ -363,7 +363,7 @@ func (w *rpcWallet) handleRPCClientReconnection(ctx context.Context) {
 // and sets the spvMode flag accordingly. The spvMode flag is only set after a
 // successful check. This method is not safe for concurrent access, and the
 // rpcMtx must be at least read locked.
-func checkRPCConnection(ctx context.Context, connector rpcConnector, client rpcClient, log dex.Logger) (bool, bool, error) {
+func checkRPCConnection(ctx context.Context, connector rpcConnector, client rpcClient, log util.Logger) (bool, bool, error) {
 	// Check the required API versions.
 	versions, err := connector.Version(ctx)
 	if err != nil {
@@ -374,8 +374,8 @@ func checkRPCConnection(ctx context.Context, connector rpcConnector, client rpcC
 	if !exists {
 		return false, false, fmt.Errorf("dcrwallet.Version response missing 'dcrwalletjsonrpcapi'")
 	}
-	walletSemver := dex.NewSemver(ver.Major, ver.Minor, ver.Patch)
-	if !dex.SemverCompatibleAny(compatibleWalletRPCVersions, walletSemver) {
+	walletSemver := util.NewSemver(ver.Major, ver.Minor, ver.Patch)
+	if !util.SemverCompatibleAny(compatibleWalletRPCVersions, walletSemver) {
 		return false, false, fmt.Errorf("advertised dcrwallet JSON-RPC version %v incompatible with %v",
 			walletSemver, compatibleWalletRPCVersions)
 	}
@@ -385,8 +385,8 @@ func checkRPCConnection(ctx context.Context, connector rpcConnector, client rpcC
 
 	ver, exists = versions["dcrdjsonrpcapi"]
 	if exists {
-		nodeSemver := dex.NewSemver(ver.Major, ver.Minor, ver.Patch)
-		if !dex.SemverCompatibleAny(compatibleNodeRPCVersions, nodeSemver) {
+		nodeSemver := util.NewSemver(ver.Major, ver.Minor, ver.Patch)
+		if !util.SemverCompatibleAny(compatibleNodeRPCVersions, nodeSemver) {
 			return false, false, fmt.Errorf("advertised dcrd JSON-RPC version %v incompatible with %v",
 				nodeSemver, compatibleNodeRPCVersions)
 		}

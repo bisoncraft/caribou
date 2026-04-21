@@ -8,8 +8,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexzec "github.com/bisoncraft/meshwallet/dex/networks/zec"
+	"github.com/bisoncraft/meshwallet/util"
+	dexzec "github.com/bisoncraft/meshwallet/util/networks/zec"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -52,7 +52,7 @@ type GetTransactionResult struct {
 	TxID         string    `json:"txid"`
 	Time         uint64    `json:"time"`
 	TimeReceived uint64    `json:"timereceived"`
-	Bytes        dex.Bytes `json:"hex"`
+	Bytes        util.Bytes `json:"hex"`
 }
 
 func getTransaction(c rpcCaller, txHash *chainhash.Hash) (*zTx, error) {
@@ -76,7 +76,7 @@ func getTransaction(c rpcCaller, txHash *chainhash.Hash) (*zTx, error) {
 }
 
 func getRawTransaction(c rpcCaller, txHash *chainhash.Hash) ([]byte, error) {
-	var txB dex.Bytes
+	var txB util.Bytes
 	return txB, c.CallRPC("getrawtransaction", []any{txHash.String()}, &txB)
 }
 
@@ -141,7 +141,7 @@ func dumpPrivKey(c rpcCaller, addr string) (*secp256k1.PrivateKey, error) {
 	return wif.PrivKey, nil
 }
 
-func listLockUnspent(c rpcCaller, log dex.Logger) ([]*btc.RPCOutpoint, error) {
+func listLockUnspent(c rpcCaller, log util.Logger) ([]*btc.RPCOutpoint, error) {
 	var unspents []*btc.RPCOutpoint
 	err := c.CallRPC("listlockunspent", nil, &unspents)
 	if err != nil {
@@ -244,7 +244,7 @@ func getVerboseBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (header *btc.
 }
 
 func getBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (*wire.BlockHeader, error) {
-	var b dex.Bytes
+	var b util.Bytes
 	err := c.CallRPC("getblockheader", []any{blockHash.String(), false}, &b)
 	if err != nil {
 		return nil, err
@@ -302,7 +302,7 @@ func getBlockHeight(c rpcCaller, blockHash *chainhash.Hash) (int32, error) {
 }
 
 func getBlock(c rpcCaller, h chainhash.Hash) (*dexzec.Block, error) {
-	var blkB dex.Bytes
+	var blkB util.Bytes
 	err := c.CallRPC("getblock", []any{h.String(), int64(0)}, &blkB)
 	if err != nil {
 		return nil, err

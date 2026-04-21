@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrutil/v4"
 )
@@ -51,7 +51,7 @@ type rpcConfig struct {
 	RPCCert        string `ini:"rpccert"`
 }
 
-func loadRPCConfig(settings map[string]string, network dex.Network) (*rpcConfig, *chaincfg.Params, error) {
+func loadRPCConfig(settings map[string]string, network util.Network) (*rpcConfig, *chaincfg.Params, error) {
 	cfg := new(rpcConfig)
 	chainParams, err := loadConfig(settings, network, cfg)
 	if err != nil {
@@ -60,11 +60,11 @@ func loadRPCConfig(settings map[string]string, network dex.Network) (*rpcConfig,
 
 	var defaultServer string
 	switch network {
-	case dex.Simnet:
+	case util.Simnet:
 		defaultServer = defaultSimnet
-	case dex.Testnet:
+	case util.Testnet:
 		defaultServer = defaultTestnet3
-	case dex.Mainnet:
+	case util.Mainnet:
 		defaultServer = defaultMainnet
 	default:
 		return nil, nil, fmt.Errorf("unknown network ID: %d", uint8(network))
@@ -75,7 +75,7 @@ func loadRPCConfig(settings map[string]string, network dex.Network) (*rpcConfig,
 	if cfg.RPCCert == "" {
 		cfg.RPCCert = defaultRPCCert
 	} else {
-		cfg.RPCCert = dex.CleanAndExpandPath(cfg.RPCCert)
+		cfg.RPCCert = util.CleanAndExpandPath(cfg.RPCCert)
 	}
 
 	if cfg.PrimaryAccount == "" {
@@ -109,7 +109,7 @@ func loadRPCConfig(settings map[string]string, network dex.Network) (*rpcConfig,
 // RPCListen or RPCCert in the specified file, default values will be used. If
 // there is no error, the module-level chainParams variable will be set
 // appropriately for the network.
-func loadConfig(settings map[string]string, network dex.Network, cfg any) (*chaincfg.Params, error) {
+func loadConfig(settings map[string]string, network util.Network, cfg any) (*chaincfg.Params, error) {
 	if err := config.Unmapify(settings, cfg); err != nil {
 		return nil, fmt.Errorf("error parsing config: %w", err)
 	}
@@ -117,15 +117,15 @@ func loadConfig(settings map[string]string, network dex.Network, cfg any) (*chai
 	return parseChainParams(network)
 }
 
-func parseChainParams(network dex.Network) (*chaincfg.Params, error) {
+func parseChainParams(network util.Network) (*chaincfg.Params, error) {
 	// Get network settings. Zero value is mainnet, but unknown non-zero cfg.Net
 	// is an error.
 	switch network {
-	case dex.Simnet:
+	case util.Simnet:
 		return chaincfg.SimNetParams(), nil
-	case dex.Testnet:
+	case util.Testnet:
 		return chaincfg.TestNet3Params(), nil
-	case dex.Mainnet:
+	case util.Mainnet:
 		return chaincfg.MainNetParams(), nil
 	default:
 		return nil, fmt.Errorf("unknown network ID: %d", uint8(network))

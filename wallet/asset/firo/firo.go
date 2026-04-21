@@ -15,10 +15,10 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexfiro "github.com/bisoncraft/meshwallet/dex/networks/firo"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexfiro "github.com/bisoncraft/meshwallet/util/networks/firo"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
@@ -100,7 +100,7 @@ func init() {
 type Driver struct{}
 
 // Open creates the FIRO exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -127,14 +127,14 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 // exchange wallet. The wallet will shut down when the provided context is
 // canceled. The configPath can be an empty string, in which case the standard
 // system location of the firod config file is assumed.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	var params *chaincfg.Params
 	switch network {
-	case dex.Mainnet:
+	case util.Mainnet:
 		params = dexfiro.MainNetParams
-	case dex.Testnet:
+	case util.Testnet:
 		params = dexfiro.TestNetParams
-	case dex.Regtest:
+	case util.Regtest:
 		params = dexfiro.RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
@@ -186,7 +186,7 @@ func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) 
 	case walletTypeElectrum:
 		// override Ports - no default ports
 		cloneCFG.Ports = dexbtc.NetPorts{}
-		ver, err := dex.SemverFromString(needElectrumVersion)
+		ver, err := util.SemverFromString(needElectrumVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -287,16 +287,16 @@ func estimateFee(ctx context.Context, rr btc.RawRequester, _ uint64) (uint64, er
 // externalFeeRate returns a fee rate for the network. If an error is
 // encountered fetching the testnet fee rate, we will try to return the
 // mainnet fee rate.
-func externalFeeRate(ctx context.Context, net dex.Network) (uint64, error) {
+func externalFeeRate(ctx context.Context, net util.Network) (uint64, error) {
 	const mainnetURI = "https://explorer.firo.org/insight-api-zcoin/utils/estimatefee"
 	var uri string
-	if net == dex.Testnet {
+	if net == util.Testnet {
 		uri = "https://testexplorer.firo.org/insight-api-zcoin/utils/estimatefee"
 	} else {
 		uri = "https://explorer.firo.org/insight-api-zcoin/utils/estimatefee"
 	}
 	feeRate, err := fetchExternalFee(ctx, uri)
-	if err == nil || net != dex.Testnet {
+	if err == nil || net != util.Testnet {
 		return feeRate, err
 	}
 	return fetchExternalFee(ctx, mainnetURI)

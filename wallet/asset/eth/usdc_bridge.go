@@ -15,11 +15,11 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20"
-	"github.com/bisoncraft/meshwallet/dex/networks/erc20/cctp"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20"
+	"github.com/bisoncraft/meshwallet/util/networks/erc20/cctp"
 )
 
 // bridge is the interface that must be implemented by a bridge.
@@ -94,9 +94,9 @@ type bridge interface {
 }
 
 var (
-	usdcEthID, _     = dex.BipSymbolID("usdc.eth")
-	usdcPolygonID, _ = dex.BipSymbolID("usdc.polygon")
-	usdcBaseID, _    = dex.BipSymbolID("usdc.base")
+	usdcEthID, _     = util.BipSymbolID("usdc.eth")
+	usdcPolygonID, _ = util.BipSymbolID("usdc.polygon")
+	usdcBaseID, _    = util.BipSymbolID("usdc.base")
 )
 
 type usdcBridgeInfo struct {
@@ -106,15 +106,15 @@ type usdcBridgeInfo struct {
 	domainID               uint32
 }
 
-var usdcBridgeInfos = map[uint32]map[dex.Network]*usdcBridgeInfo{
+var usdcBridgeInfos = map[uint32]map[util.Network]*usdcBridgeInfo{
 	usdcEthID: {
-		dex.Mainnet: {
+		util.Mainnet: {
 			tokenMessengerAddr:     common.HexToAddress("0xbd3fa81b58ba92a82136038b25adec7066af3155"),
 			messageTransmitterAddr: common.HexToAddress("0x0a992d191deec32afe36203ad87d7d289a738f81"),
 			domainID:               0,
 			usdcAssetID:            usdcEthID,
 		},
-		dex.Testnet: {
+		util.Testnet: {
 			tokenMessengerAddr:     common.HexToAddress("0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5"),
 			messageTransmitterAddr: common.HexToAddress("0x7865fAfC2db2093669d92c0F33AeEF291086BEFD"),
 			domainID:               0,
@@ -122,13 +122,13 @@ var usdcBridgeInfos = map[uint32]map[dex.Network]*usdcBridgeInfo{
 		},
 	},
 	usdcPolygonID: {
-		dex.Mainnet: {
+		util.Mainnet: {
 			tokenMessengerAddr:     common.HexToAddress("0x9daF8c91AEFAE50b9c0E69629D3F6Ca40cA3B3FE"),
 			messageTransmitterAddr: common.HexToAddress("0xF3be9355363857F3e001be68856A2f96b4C39Ba9"),
 			domainID:               7,
 			usdcAssetID:            usdcPolygonID,
 		},
-		dex.Testnet: {
+		util.Testnet: {
 			tokenMessengerAddr:     common.HexToAddress("0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5"),
 			messageTransmitterAddr: common.HexToAddress("0x7865fAfC2db2093669d92c0F33AeEF291086BEFD"),
 			domainID:               7,
@@ -136,13 +136,13 @@ var usdcBridgeInfos = map[uint32]map[dex.Network]*usdcBridgeInfo{
 		},
 	},
 	usdcBaseID: {
-		dex.Mainnet: {
+		util.Mainnet: {
 			tokenMessengerAddr:     common.HexToAddress("0x9daF8c91AEFAE50b9c0E69629D3F6Ca40cA3B3FE"),
 			messageTransmitterAddr: common.HexToAddress("0xF3be9355363857F3e001be68856A2f96b4C39Ba9"),
 			domainID:               6,
 			usdcAssetID:            usdcBaseID,
 		},
-		dex.Testnet: {
+		util.Testnet: {
 			tokenMessengerAddr:     common.HexToAddress("0x9f3B8679c73C2Fef8b59B4f3444d4e156fb70AA5"),
 			messageTransmitterAddr: common.HexToAddress("0x7865fAfC2db2093669d92c0F33AeEF291086BEFD"),
 			domainID:               6,
@@ -157,14 +157,14 @@ var baseChainToUSDCAssetID = map[uint32]uint32{
 	baseID:    usdcBaseID,
 }
 
-var usdcBridgeAttestationUrl = map[dex.Network]string{
-	dex.Mainnet: "https://iris-api.circle.com/attestations/",
-	dex.Testnet: "https://iris-api-sandbox.circle.com/attestations/",
+var usdcBridgeAttestationUrl = map[util.Network]string{
+	util.Mainnet: "https://iris-api.circle.com/attestations/",
+	util.Testnet: "https://iris-api-sandbox.circle.com/attestations/",
 }
 
 // getUsdcBridgeInfo returns the contract addresses for the USDC bridge on
 // the specified asset and network.
-func getUsdcBridgeInfo(assetID uint32, net dex.Network) (*usdcBridgeInfo, error) {
+func getUsdcBridgeInfo(assetID uint32, net util.Network) (*usdcBridgeInfo, error) {
 	assetBridgeInfo, found := usdcBridgeInfos[assetID]
 	if !found {
 		return nil, fmt.Errorf("usdc bridge info not found for assetID %d and network %s", assetID, net)
@@ -202,7 +202,7 @@ type usdcBridge struct {
 	tokenAddress       common.Address
 	cb                 bind.ContractBackend
 	attestationUrl     string
-	net                dex.Network
+	net                util.Network
 	addr               common.Address
 	node               ethFetcher
 	usdcAssetID        uint32
@@ -210,7 +210,7 @@ type usdcBridge struct {
 
 var _ bridge = (*usdcBridge)(nil)
 
-func newUsdcBridge(chainAssetID uint32, net dex.Network, cb bind.ContractBackend, addr common.Address, node ethFetcher) (*usdcBridge, error) {
+func newUsdcBridge(chainAssetID uint32, net util.Network, cb bind.ContractBackend, addr common.Address, node ethFetcher) (*usdcBridge, error) {
 	usdcAssetID, found := baseChainToUSDCAssetID[chainAssetID]
 	if !found {
 		return nil, fmt.Errorf("usdc bridge not supported for chain assetID %d", chainAssetID)

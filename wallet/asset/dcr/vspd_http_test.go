@@ -8,13 +8,13 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 func TestHTTPForVSPD(t *testing.T) {
 	w := &ExchangeWallet{
-		network: dex.Testnet,
-		log:     dex.StdOutLogger("TEST", dex.LevelInfo),
+		network: util.Testnet,
+		log:     util.StdOutLogger("TEST", util.LevelInfo),
 	}
 	vsps, err := w.ListVSPs()
 	if err != nil {
@@ -23,7 +23,7 @@ func TestHTTPForVSPD(t *testing.T) {
 
 	fmt.Printf("##### %d testnet VSPs fetched \n", len(vsps))
 
-	w.network = dex.Mainnet
+	w.network = util.Mainnet
 	vsps, err = w.ListVSPs()
 	if err != nil {
 		t.Fatalf("ListVSPs (mainnet) error: %v", err)

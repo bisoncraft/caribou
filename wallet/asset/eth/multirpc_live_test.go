@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 const (
@@ -44,15 +44,15 @@ func TestSimnetMultiRPCClient(t *testing.T) {
 }
 
 func TestMonitorTestnet(t *testing.T) {
-	mt.TestMonitorNet(t, dex.Testnet)
+	mt.TestMonitorNet(t, util.Testnet)
 }
 
 func TestMonitorMainnet(t *testing.T) {
-	mt.TestMonitorNet(t, dex.Mainnet)
+	mt.TestMonitorNet(t, util.Mainnet)
 }
 
 func TestRPC(t *testing.T) {
-	mt.TestRPC(t, dex.Mainnet)
+	mt.TestRPC(t, util.Mainnet)
 }
 
 var freeServers = []string{
@@ -72,7 +72,7 @@ var freeServers = []string{
 }
 
 func TestFreeServers(t *testing.T) {
-	mt.TestFreeServers(t, freeServers, dex.Mainnet)
+	mt.TestFreeServers(t, freeServers, util.Mainnet)
 }
 
 var freeTestnetServers = []string{
@@ -100,7 +100,7 @@ var freeTestnetServers = []string{
 }
 
 func TestFreeTestnetServers(t *testing.T) {
-	mt.TestFreeServers(t, freeTestnetServers, dex.Testnet)
+	mt.TestFreeServers(t, freeTestnetServers, util.Testnet)
 }
 
 func TestMainnetCompliance(t *testing.T) {
@@ -112,9 +112,9 @@ func TestReceiptsHaveEffectiveGasPrice(t *testing.T) {
 }
 
 func TestBlockStats(t *testing.T) {
-	mt.BlockStats(t, 5, 1024, dex.Mainnet)
+	mt.BlockStats(t, 5, 1024, util.Mainnet)
 }
 
 func TestTestnetBlockStats(t *testing.T) {
-	mt.BlockStats(t, 5, 1024, dex.Testnet)
+	mt.BlockStats(t, 5, 1024, util.Testnet)
 }

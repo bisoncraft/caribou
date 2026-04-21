@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	dexfiro "github.com/bisoncraft/meshwallet/dex/networks/firo"
+	dexfiro "github.com/bisoncraft/meshwallet/util/networks/firo"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/base58"
 	"github.com/btcsuite/btcd/chaincfg"

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util/encode"
 )
 
 const (

@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/util/order"
 )
 
 func TestOrderReader_StatusString(t *testing.T) {

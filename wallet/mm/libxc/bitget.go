@@ -41,10 +41,10 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/comms"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bgtypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/huandu/skiplist"
 )
 
@@ -95,7 +95,7 @@ type bitgetOrderBook struct {
 	mtx            sync.RWMutex
 	synced         atomic.Bool
 	numSubscribers uint32
-	cm             *dex.ConnectionMaster
+	cm             *util.ConnectionMaster
 
 	symbol      string
 	bids        *skiplist.SkipList // *bitgetObEntry, sorted descending by rate
@@ -104,7 +104,7 @@ type bitgetOrderBook struct {
 
 	baseConversionFactor  uint64
 	quoteConversionFactor uint64
-	log                   dex.Logger
+	log                   util.Logger
 
 	connectedChan chan bool
 
@@ -166,7 +166,7 @@ func newBitgetOrderBook(
 	baseConversionFactor, quoteConversionFactor uint64,
 	symbol string,
 	getSnapshot func() (*bgtypes.OrderbookSnapshot, error),
-	log dex.Logger,
+	log util.Logger,
 ) *bitgetOrderBook {
 	return &bitgetOrderBook{
 		symbol:                symbol,
@@ -265,7 +265,7 @@ func (b *bitgetOrderBook) snapStrings(levels int) (bids, asks [][]string) {
 	return bids, asks
 }
 
-// Connect implements the dex.Connector interface.
+// Connect implements the util.Connector interface.
 // Synchronizes orderbook: fetch REST snapshot, then accept fresh WebSocket updates.
 func (b *bitgetOrderBook) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// Synchronization variables
@@ -553,20 +553,20 @@ func (b *bitgetOrderBook) midGap() uint64 {
 
 // bitget is the main Bitget exchange adapter
 type bitget struct {
-	log        dex.Logger
+	log        util.Logger
 	apiURL     string
 	wsPublic   string
 	wsPrivate  string
 	apiKey     string
 	secretKey  string
 	passphrase string // Bitget requires a passphrase for API access
-	net        dex.Network
+	net        util.Network
 	broadcast  func(any)
 	torProxy   string
 	ctx        context.Context
 
 	tradeIDNonce       atomic.Uint32
-	tradeIDNoncePrefix dex.Bytes
+	tradeIDNoncePrefix util.Bytes
 
 	// Markets and symbols
 	markets     atomic.Value // map[string]*bgtypes.Market
@@ -631,7 +631,7 @@ func (bg *bitget) AssetGroups() map[uint32]uint32 {
 	groups := make(map[uint32]uint32)
 	for coin, tknIDs := range tokenIDs {
 		ids := make([]uint32, 0, len(tknIDs)+1)
-		if nativeID, found := dex.BipSymbolID(convertBitgetCoin(coin)); found {
+		if nativeID, found := util.BipSymbolID(convertBitgetCoin(coin)); found {
 			ids = append(ids, nativeID)
 		}
 		ids = append(ids, tknIDs...)
@@ -741,7 +741,7 @@ type bitgetAssetConfig struct {
 	// that the token is hosted such as "ETH".
 	chain            string
 	conversionFactor uint64
-	ui               *dex.UnitInfo
+	ui               *util.UnitInfo
 }
 
 func bitgetAssetCfg(assetID uint32) (*bitgetAssetConfig, error) {
@@ -750,7 +750,7 @@ func bitgetAssetCfg(assetID uint32) (*bitgetAssetConfig, error) {
 		return nil, err
 	}
 
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		return nil, fmt.Errorf("no symbol found for asset ID %d", assetID)
 	}
@@ -954,7 +954,7 @@ func (bg *bitget) readCoins(coins []*bgtypes.CoinInfo) {
 			}
 
 			symbol := bitgetCoinNetworkToDexSymbol(coin.Coin, chain.Chain)
-			assetID, found := dex.BipSymbolID(symbol)
+			assetID, found := util.BipSymbolID(symbol)
 			if !found {
 				continue
 			}
@@ -1142,7 +1142,7 @@ func bitgetMarketToDexMarkets(baseSymbol, quoteSymbol string, tokenIDs map[strin
 		for _, quoteID := range quoteAssetIDs {
 			markets = append(markets, &MarketMatch{
 				Slug:     baseSymbol + quoteSymbol,
-				MarketID: dex.BipIDSymbol(baseID) + "_" + dex.BipIDSymbol(quoteID),
+				MarketID: util.BipIDSymbol(baseID) + "_" + util.BipIDSymbol(quoteID),
 				BaseID:   baseID,
 				QuoteID:  quoteID,
 			})
@@ -1166,7 +1166,7 @@ func bitgetGetDEXAssetIDs(coin string, tokenIDs map[string][]uint32) []uint32 {
 	assetIDs := make([]uint32, 0, 3)
 
 	// Try direct symbol match (e.g., BTC, ETH, DCR)
-	if assetID, found := dex.BipSymbolID(dexSymbol); found {
+	if assetID, found := util.BipSymbolID(dexSymbol); found {
 		if isRegistered(assetID) {
 			assetIDs = append(assetIDs, assetID)
 			return assetIDs
@@ -1191,7 +1191,7 @@ func bitgetMktID(baseCfg, quoteCfg *bitgetAssetConfig) string {
 	return baseCfg.coin + quoteCfg.coin
 }
 
-// Connect implements the dex.Connector interface
+// Connect implements the util.Connector interface
 func (bg *bitget) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	bg.ctx = ctx
 	wg := new(sync.WaitGroup)
@@ -1568,7 +1568,7 @@ func (bg *bitget) handleOrderUpdate(msg *bgtypes.WsDataMessage) {
 		}
 
 		// Log order data for debugging
-		if bg.log.Level() <= dex.LevelTrace {
+		if bg.log.Level() <= util.LevelTrace {
 			dataJson, _ := json.MarshalIndent(orderData, "", "  ")
 			bg.log.Tracef("Order data: %s", string(dataJson))
 		}
@@ -1711,7 +1711,7 @@ func (bg *bitget) SubscribeMarket(ctx context.Context, baseID, quoteID uint32) e
 	bg.booksMtx.Unlock()
 
 	// Start book sync in a connection master
-	cm := dex.NewConnectionMaster(book)
+	cm := util.NewConnectionMaster(book)
 	book.mtx.Lock()
 	book.cm = cm
 	book.mtx.Unlock()
@@ -2164,7 +2164,7 @@ func (bg *bitget) handleOrderbookUpdate(msg *bgtypes.WsDataMessage) {
 
 // parseFloatOrZero parses a string to float64, returning 0 for empty strings
 // and logging warnings only for actual parsing errors (non-empty strings that fail to parse)
-func parseFloatOrZero(s string, fieldName, symbol string, log dex.Logger) float64 {
+func parseFloatOrZero(s string, fieldName, symbol string, log util.Logger) float64 {
 	if s == "" {
 		// Empty strings are expected for some ticker fields (e.g., new markets, no recent activity)
 		return 0
@@ -3081,7 +3081,7 @@ func (bg *bitget) Withdraw(ctx context.Context, assetID uint32, qty uint64, addr
 	}
 
 	// Get DEX symbol for error messages
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 	if symbol == "" {
 		symbol = fmt.Sprintf("asset_%d", assetID)
 	}

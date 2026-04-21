@@ -22,14 +22,14 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // const alphaAddress = "rltc1qjld4f85m96rr77035c5yuhkz8apxlkkla0ftmz"
 
 var (
 	tLotSize uint64 = 1e6
-	tLTC            = &dex.Asset{
+	tLTC            = &util.Asset{
 		ID:         2,
 		Symbol:     "ltc",
 		Version:    version,
@@ -47,11 +47,11 @@ func TestWallet(t *testing.T) {
 }
 
 func TestExternalFeeRate(t *testing.T) {
-	fetchRateWithTimeout(t, dex.Mainnet)
-	fetchRateWithTimeout(t, dex.Testnet)
+	fetchRateWithTimeout(t, util.Mainnet)
+	fetchRateWithTimeout(t, util.Testnet)
 }
 
-func fetchRateWithTimeout(t *testing.T, net dex.Network) {
+func fetchRateWithTimeout(t *testing.T, net util.Network) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	feeRate, err := externalFeeRate(ctx, net)

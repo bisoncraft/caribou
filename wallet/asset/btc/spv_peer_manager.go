@@ -14,7 +14,7 @@ import (
 	"sync"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 type peerSource uint16
@@ -61,11 +61,11 @@ type SPVPeerManager struct {
 
 	defaultPort string
 
-	log dex.Logger
+	log util.Logger
 }
 
 // NewSPVPeerManager creates a new SPVPeerManager.
-func NewSPVPeerManager(cs PeerManagerChainService, defaultPeers []string, dir string, log dex.Logger, defaultPort string) *SPVPeerManager {
+func NewSPVPeerManager(cs PeerManagerChainService, defaultPeers []string, dir string, log util.Logger, defaultPort string) *SPVPeerManager {
 	return &SPVPeerManager{
 		cs:                 cs,
 		defaultPeers:       defaultPeers,

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -35,7 +35,7 @@ const (
 type btcSPVWallet struct {
 	*wallet.Wallet
 	chainParams *chaincfg.Params
-	log         dex.Logger
+	log         util.Logger
 	dir         string
 
 	// Below fields are populated in Start.
@@ -54,7 +54,7 @@ type btcSPVWallet struct {
 var _ BTCWallet = (*btcSPVWallet)(nil)
 
 // createSPVWallet creates a new SPV wallet.
-func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log dex.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
+func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
 	if err := logNeutrino(walletDir); err != nil {
 		return fmt.Errorf("error initializing btcwallet+neutrino logging: %w", err)
 	}
@@ -104,7 +104,7 @@ func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir str
 
 // openSPVWallet is the BTCWalletConstructor for Bitcoin.
 func openSPVWallet(dir string, cfg *WalletConfig,
-	chainParams *chaincfg.Params, log dex.Logger) BTCWallet {
+	chainParams *chaincfg.Params, log util.Logger) BTCWallet {
 
 	w := &btcSPVWallet{
 		dir:         dir,
@@ -152,7 +152,7 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 		return nil, fmt.Errorf("couldn't load wallet: %w", err)
 	}
 
-	errCloser := dex.NewErrorCloser()
+	errCloser := util.NewErrorCloser()
 	defer errCloser.Done(w.log)
 	errCloser.Add(w.loader.UnloadWallet)
 

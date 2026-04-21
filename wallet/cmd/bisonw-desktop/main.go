@@ -55,7 +55,7 @@ import (
 	"runtime"
 
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 const (
@@ -64,7 +64,7 @@ const (
 )
 
 var (
-	log     dex.Logger
+	log     util.Logger
 	exePath = findExePath()
 
 	// tmpLogoPath is set to a temp file path on startup for the logo on desktop

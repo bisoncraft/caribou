@@ -9,7 +9,7 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 // Notifications should use the following note type strings.
@@ -114,7 +114,7 @@ func (c *Core) returnFeed(channelID uint64) {
 }
 
 // AckNotes sets the acknowledgement field for the notifications.
-func (c *Core) AckNotes(ids []dex.Bytes) {
+func (c *Core) AckNotes(ids []util.Bytes) {
 	for _, id := range ids {
 		err := c.db.AckNotification(id)
 		if err != nil {
@@ -163,7 +163,7 @@ type Notification interface {
 	Acked() bool
 	// ID should be unique, except in the case of identical copies of
 	// db.Notification where the IDs should be the same.
-	ID() dex.Bytes
+	ID() util.Bytes
 	// Stamp sets the notification timestamp. If db.NewNotification is used to
 	// construct the db.Notification, the timestamp will already be set.
 	Stamp()

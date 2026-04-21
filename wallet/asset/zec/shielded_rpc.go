@@ -4,7 +4,7 @@
 package zec
 
 import (
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/btcsuite/btcd/btcutil"
 )
 
@@ -186,7 +186,7 @@ type operationStatus struct {
 // ErrEmptyOpResults is returned when z_getoperationresult returns an empty
 // array for the specified operation ID. This appears to be normal in some or
 // all cases when the result is not yet ready.
-const ErrEmptyOpResults = dex.ErrorKind("no z_getoperationstatus results")
+const ErrEmptyOpResults = util.ErrorKind("no z_getoperationstatus results")
 
 // z_getoperationresult (["operationid", ... ])
 func zGetOperationResult(c rpcCaller, operationID string) (s *operationStatus, err error) {

@@ -21,10 +21,10 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/keygen"
-	dexnear "github.com/bisoncraft/meshwallet/dex/networks/near"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/keygen"
+	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
 	"github.com/decred/base58"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
@@ -78,7 +78,7 @@ type Driver struct{}
 var _ asset.Driver = (*Driver)(nil)
 var _ asset.Creator = (*Driver)(nil)
 
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return newWallet(cfg, logger, network)
 }
 
@@ -91,7 +91,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 	return &wi
 }
 
-func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error) {
+func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
 	if walletType != walletTypeRPC {
 		return false, fmt.Errorf("unknown wallet type %q", walletType)
 	}
@@ -126,8 +126,8 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 // NearWallet implements asset.Wallet and asset.Authenticator for the NEAR
 // Protocol.
 type NearWallet struct {
-	log         dex.Logger
-	net         dex.Network
+	log         util.Logger
+	net         util.Network
 	emit        *asset.WalletEmitter
 	peersChange func(uint32, error)
 	dataDir     string
@@ -157,7 +157,7 @@ type NearWallet struct {
 var _ asset.Wallet = (*NearWallet)(nil)
 var _ asset.Authenticator = (*NearWallet)(nil)
 
-func newWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (*NearWallet, error) {
+func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*NearWallet, error) {
 	keyFile := filepath.Join(cfg.DataDir, keyFileName)
 	kf, err := readKeyFile(keyFile)
 	if err != nil {
@@ -698,7 +698,7 @@ func (w *NearWallet) rpcEndpoint() string {
 	if ep, ok := dexnear.DefaultRPCEndpoints[w.net]; ok {
 		return ep
 	}
-	return dexnear.DefaultRPCEndpoints[dex.Mainnet]
+	return dexnear.DefaultRPCEndpoints[util.Mainnet]
 }
 
 // pubKeyBase58 returns the NEAR-formatted public key string "ed25519:<base58>".
@@ -731,8 +731,8 @@ func privKeyFromSeed(seed []byte) (ed25519.PrivateKey, func(), error) {
 
 // keyFileData is the structure stored on disk.
 type keyFileData struct {
-	EncryptedSeed dex.Bytes `json:"encryptedSeed"`
-	PubKey        dex.Bytes `json:"pubKey"`
+	EncryptedSeed util.Bytes `json:"encryptedSeed"`
+	PubKey        util.Bytes `json:"pubKey"`
 }
 
 // saveKeyFile encrypts the ed25519 seed with AES-256-GCM and writes it to disk.

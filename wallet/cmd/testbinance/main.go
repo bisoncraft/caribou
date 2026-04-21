@@ -25,14 +25,14 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/fiatrates"
-	"github.com/bisoncraft/meshwallet/dex/msgjson"
-	"github.com/bisoncraft/meshwallet/dex/utils"
-	"github.com/bisoncraft/meshwallet/dex/ws"
-	"github.com/bisoncraft/meshwallet/dex/webserver"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/fiatrates"
+	"github.com/bisoncraft/meshwallet/util/msgjson"
+	"github.com/bisoncraft/meshwallet/util/utils"
+	"github.com/bisoncraft/meshwallet/util/ws"
+	"github.com/bisoncraft/meshwallet/util/webserver"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -49,7 +49,7 @@ const (
 )
 
 var (
-	log dex.Logger
+	log util.Logger
 
 	walkingSpeedAdj float64
 	gapRange        float64
@@ -100,7 +100,7 @@ func parseAssetID(asset string) uint32 {
 	case "usdc":
 		symbol = "usdc.polygon"
 	}
-	assetID, _ := dex.BipSymbolID(symbol)
+	assetID, _ := util.BipSymbolID(symbol)
 	return assetID
 }
 
@@ -216,14 +216,14 @@ func main() {
 
 	switch {
 	case logTrace:
-		log = dex.StdOutLogger("TB", dex.LevelTrace)
-		webserver.UseLogger(dex.StdOutLogger("C", dex.LevelTrace))
+		log = util.StdOutLogger("TB", util.LevelTrace)
+		webserver.UseLogger(util.StdOutLogger("C", util.LevelTrace))
 	case logDebug:
-		log = dex.StdOutLogger("TB", dex.LevelDebug)
-		webserver.UseLogger(dex.StdOutLogger("C", dex.LevelDebug))
+		log = util.StdOutLogger("TB", util.LevelDebug)
+		webserver.UseLogger(util.StdOutLogger("C", util.LevelDebug))
 	default:
-		log = dex.StdOutLogger("TB", dex.LevelInfo)
-		webserver.UseLogger(dex.StdOutLogger("C", dex.LevelInfo))
+		log = util.StdOutLogger("TB", util.LevelInfo)
+		webserver.UseLogger(util.StdOutLogger("C", util.LevelInfo))
 	}
 
 	if err := mainErr(); err != nil {
@@ -313,7 +313,7 @@ type fakeBinance struct {
 
 func newFakeBinanceServer(ctx context.Context) (*fakeBinance, error) {
 	log.Trace("Fetching coinpaprika prices")
-	fiatRates := fiatrates.FetchCoinpaprikaRates(ctx, coinpapAssets, dex.StdOutLogger("CP", dex.LevelDebug))
+	fiatRates := fiatrates.FetchCoinpaprikaRates(ctx, coinpapAssets, util.StdOutLogger("CP", util.LevelDebug))
 	if len(fiatRates) < len(coinpapAssets) {
 		return nil, fmt.Errorf("not enough coinpap assets. wanted %d, got %d", len(coinpapAssets), len(fiatRates))
 	}
@@ -569,7 +569,7 @@ func (f *fakeBinance) run(ctx context.Context) {
 	f.srv.Run(ctx)
 }
 
-func (f *fakeBinance) newWSLink(w http.ResponseWriter, r *http.Request, handler func([]byte)) (_ *ws.WSLink, _ *dex.ConnectionMaster) {
+func (f *fakeBinance) newWSLink(w http.ResponseWriter, r *http.Request, handler func([]byte)) (_ *ws.WSLink, _ *util.ConnectionMaster) {
 	wsConn, err := ws.NewConnection(w, r, pongWait)
 	if err != nil {
 		log.Errorf("ws.NewConnection error: %v", err)
@@ -577,14 +577,14 @@ func (f *fakeBinance) newWSLink(w http.ResponseWriter, r *http.Request, handler 
 		return
 	}
 
-	ip := dex.NewIPKey(r.RemoteAddr)
+	ip := util.NewIPKey(r.RemoteAddr)
 
 	conn := ws.NewWSLink(ip.String(), wsConn, pingPeriod, func(msg *msgjson.Message) *msgjson.Error {
 		return nil
-	}, dex.StdOutLogger(fmt.Sprintf("CL[%s]", ip), dex.LevelDebug))
+	}, util.StdOutLogger(fmt.Sprintf("CL[%s]", ip), util.LevelDebug))
 	conn.RawHandler = handler
 
-	cm := dex.NewConnectionMaster(conn)
+	cm := util.NewConnectionMaster(conn)
 	if err = cm.ConnectOnce(f.ctx); err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return

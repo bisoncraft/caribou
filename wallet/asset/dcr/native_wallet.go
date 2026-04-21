@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
 	"github.com/decred/dcrd/chaincfg/chainhash"
@@ -212,7 +212,7 @@ func (w *NativeWallet) mixFunds() {
 		return
 	}
 	ctx := w.mixer.ctx
-	if w.network == dex.Simnet {
+	if w.network == util.Simnet {
 		w.mixer.wg.Add(1)
 		go func() {
 			defer w.mixer.wg.Done()

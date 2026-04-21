@@ -28,11 +28,11 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/comms"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/cbtypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/calc"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/utils"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/utils"
 
 	"gopkg.in/square/go-jose.v2"
 	"gopkg.in/square/go-jose.v2/jwt"
@@ -60,7 +60,7 @@ type cbWSConn struct {
 	wsConn     comms.WsConn
 	seq        atomic.Uint64
 	wsPath     string
-	log        dex.Logger
+	log        util.Logger
 	productID  string
 	channel    string
 	channelID  string
@@ -71,7 +71,7 @@ type cbWSConn struct {
 	torProxy   string
 }
 
-func newCBWSConn(apiName, wsPath, productID, channel, channelID string, msgHandler func([]byte), setSynced func(bool), privKey *ecdsa.PrivateKey, log dex.Logger, torProxy string) *cbWSConn {
+func newCBWSConn(apiName, wsPath, productID, channel, channelID string, msgHandler func([]byte), setSynced func(bool), privKey *ecdsa.PrivateKey, log util.Logger, torProxy string) *cbWSConn {
 	subLoggerName := fmt.Sprintf("WS-%s", channel)
 	if productID != "" {
 		subLoggerName += "-" + productID
@@ -254,7 +254,7 @@ func (c *cbWSConn) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, fmt.Errorf("error creating WsConn: %w", err)
 	}
 
-	cm := dex.NewConnectionMaster(conn)
+	cm := util.NewConnectionMaster(conn)
 	if err := cm.ConnectOnce(ctx); err != nil {
 		return nil, fmt.Errorf("error connecting to websocket feed: %w", err)
 	}
@@ -287,18 +287,18 @@ type cbBook struct {
 	mtx            sync.RWMutex
 	numSubscribers uint32
 
-	cm        *dex.ConnectionMaster
+	cm        *util.ConnectionMaster
 	synced    atomic.Bool
 	productID string
 	wsPath    string
 	book      *orderbook
-	bui       *dex.UnitInfo
-	qui       *dex.UnitInfo
-	log       dex.Logger
+	bui       *util.UnitInfo
+	qui       *util.UnitInfo
+	log       util.Logger
 	torProxy  string
 }
 
-func newCBBook(wsPath, productID string, bui, qui *dex.UnitInfo, log dex.Logger, torProxy string) *cbBook {
+func newCBBook(wsPath, productID string, bui, qui *util.UnitInfo, log util.Logger, torProxy string) *cbBook {
 	return &cbBook{
 		wsPath:    wsPath,
 		productID: productID,
@@ -382,7 +382,7 @@ func (c *cbBook) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// apiName and signer not provided because these subscriptions do not need
 	// authentication.
 	conn := newCBWSConn("", c.wsPath, c.productID, "level2", "l2_data", c.handleLevel2Message, setSynced, nil, c.log, c.torProxy)
-	wsCM := dex.NewConnectionMaster(conn)
+	wsCM := util.NewConnectionMaster(conn)
 	if err := wsCM.ConnectOnce(ctx); err != nil {
 		return nil, fmt.Errorf("error connecting to websocket feed: %w", err)
 	}
@@ -400,7 +400,7 @@ func (c *cbBook) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 }
 
 func (c *cbBook) sync(ctx context.Context) error {
-	cm := dex.NewConnectionMaster(c)
+	cm := util.NewConnectionMaster(c)
 	c.mtx.Lock()
 	c.cm = cm
 	c.numSubscribers++
@@ -409,7 +409,7 @@ func (c *cbBook) sync(ctx context.Context) error {
 }
 
 type coinbase struct {
-	log        dex.Logger
+	log        util.Logger
 	basePath   string
 	wsPath     string
 	apiName    string
@@ -417,7 +417,7 @@ type coinbase struct {
 	tickerIDs  map[string][]uint32
 	idTicker   map[uint32]string
 	ctx        context.Context
-	net        dex.Network
+	net        util.Network
 	torProxy   string
 	accounts   atomic.Value // map[string]*coinbaseAccount
 	assets     atomic.Value // map[string]*coinbaseAsset
@@ -445,7 +445,7 @@ type coinbase struct {
 	tradeUpdateCounter int
 
 	tradeIDNonce       atomic.Uint32
-	tradeIDNoncePrefix dex.Bytes
+	tradeIDNoncePrefix util.Bytes
 
 	broadcast func(any)
 }
@@ -455,7 +455,7 @@ var _ CEX = (*coinbase)(nil)
 func newCoinbase(cfg *CEXConfig) (*coinbase, error) {
 	var basePath, wsPath string
 	switch cfg.Net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		basePath = "api.coinbase.com/"
 		wsPath = "advanced-trade-ws.coinbase.com/"
 	default:
@@ -603,7 +603,7 @@ func (c *coinbase) handleUserMessage(b []byte) {
 
 func (c *coinbase) subscribeUserChannel(ctx context.Context) (*sync.WaitGroup, error) {
 	conn := newCBWSConn(c.apiName, c.wsPath, "", "user", "user", c.handleUserMessage, func(bool) {}, c.apiPrivKey, c.log, c.torProxy)
-	cm := dex.NewConnectionMaster(conn)
+	cm := util.NewConnectionMaster(conn)
 	if err := cm.ConnectOnce(ctx); err != nil {
 		return nil, fmt.Errorf("error connecting to websocket feed: %w", err)
 	}
@@ -709,7 +709,7 @@ func (c *coinbase) Balance(assetID uint32) (*ExchangeBalance, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting unit info for asset ID %d", assetID)
 	}
-	symbol := dex.BipIDSymbol(assetID)
+	symbol := util.BipIDSymbol(assetID)
 
 	ticker, found := c.idTicker[assetID]
 	if !found {
@@ -1818,7 +1818,7 @@ func (c *coinbase) updateMarkets(ctx context.Context) (map[string]*Market, error
 		}
 
 		for _, m := range dexMarkets {
-			dexMarketSlug := dex.BipIDSymbol(m[0]) + "_" + dex.BipIDSymbol(m[1])
+			dexMarketSlug := util.BipIDSymbol(m[0]) + "_" + util.BipIDSymbol(m[1])
 			markets[dexMarketSlug] = &Market{
 				BaseID:  m[0],
 				QuoteID: m[1],
@@ -1838,14 +1838,14 @@ func (c *coinbase) updateMarkets(ctx context.Context) (map[string]*Market, error
 	return markets, nil
 }
 
-func toAtomic(v float64, ui *dex.UnitInfo) uint64 {
+func toAtomic(v float64, ui *util.UnitInfo) uint64 {
 	return uint64(math.Round(v * float64(ui.Conventional.ConversionFactor)))
 }
 
-func toConv(v uint64, ui *dex.UnitInfo) float64 {
+func toConv(v uint64, ui *util.UnitInfo) float64 {
 	return float64(v) / float64(ui.Conventional.ConversionFactor)
 }
 
-func messageRate(conventionalRate float64, bui, qui *dex.UnitInfo) uint64 {
+func messageRate(conventionalRate float64, bui, qui *util.UnitInfo) uint64 {
 	return calc.MessageRateAlt(conventionalRate, bui.Conventional.ConversionFactor, qui.Conventional.ConversionFactor)
 }

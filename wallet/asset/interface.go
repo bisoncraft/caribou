@@ -7,8 +7,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	pi "github.com/bisoncraft/meshwallet/dex/politeia"
+	"github.com/bisoncraft/meshwallet/util"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/chaincfg/chainhash"
@@ -243,57 +243,57 @@ const (
 	// ErrSwapNotInitiated most likely means that a swap using a contract has
 	// not yet been mined. There is no guarantee that the swap will be mined
 	// in the future.
-	ErrSwapNotInitiated = dex.ErrorKind("swap not yet initiated")
+	ErrSwapNotInitiated = util.ErrorKind("swap not yet initiated")
 
-	CoinNotFoundError = dex.ErrorKind("coin not found")
+	CoinNotFoundError = util.ErrorKind("coin not found")
 	// ErrTxRejected is returned when a transaction was rejected. This
 	// generally would indicate either an internal wallet error, or potentially
 	// a user using multiple instances of the wallet simultaneously. As such
 	// it may or may not be advisable to try the tx again without seeking
 	// further investigation.
-	ErrTxRejected = dex.ErrorKind("transaction was rejected")
+	ErrTxRejected = util.ErrorKind("transaction was rejected")
 	// ErrTxLost is returned when the tx is irreparably lost, as would be the
 	// case if it's inputs were spent by another tx first or if it is not the
 	// accepted tx for a given nonce. These txs have incurred no fee losses, so
 	// the caller should feel free to re-issue the tx.
-	ErrTxLost         = dex.ErrorKind("tx lost")
-	ErrRequestTimeout = dex.ErrorKind("request timeout")
-	ErrConnectionDown = dex.ErrorKind("wallet not connected")
-	ErrNotImplemented = dex.ErrorKind("not implemented")
-	ErrUnsupported    = dex.ErrorKind("unsupported")
+	ErrTxLost         = util.ErrorKind("tx lost")
+	ErrRequestTimeout = util.ErrorKind("request timeout")
+	ErrConnectionDown = util.ErrorKind("wallet not connected")
+	ErrNotImplemented = util.ErrorKind("not implemented")
+	ErrUnsupported    = util.ErrorKind("unsupported")
 	// ErrSwapRefunded is returned from ConfirmTransaction when the swap has
 	// been refunded before the user could redeem.
-	ErrSwapRefunded = dex.ErrorKind("swap refunded")
+	ErrSwapRefunded = util.ErrorKind("swap refunded")
 	// ErrSwapRedeemed is returned from ConfirmTransaction when the swap has
 	// been redeemed before the user could refund.
-	ErrSwapRedeemed = dex.ErrorKind("swap redeemed")
+	ErrSwapRedeemed = util.ErrorKind("swap redeemed")
 	// ErrNotEnoughConfirms is returned when a transaction is confirmed,
 	// but does not have enough confirmations to be trusted.
-	ErrNotEnoughConfirms = dex.ErrorKind("transaction does not have enough confirmations")
+	ErrNotEnoughConfirms = util.ErrorKind("transaction does not have enough confirmations")
 	// ErrWalletTypeDisabled indicates that a wallet type is no longer
 	// available.
-	ErrWalletTypeDisabled = dex.ErrorKind("wallet type has been disabled")
+	ErrWalletTypeDisabled = util.ErrorKind("wallet type has been disabled")
 	// ErrInsufficientBalance is returned when there is insufficient available
 	// balance for an operation, such as reserving funds for future bonds.
-	ErrInsufficientBalance = dex.ErrorKind("insufficient available balance")
+	ErrInsufficientBalance = util.ErrorKind("insufficient available balance")
 	// ErrIncorrectBondKey is returned when a provided private key is incorrect
 	// for a bond output.
-	ErrIncorrectBondKey = dex.ErrorKind("incorrect private key")
+	ErrIncorrectBondKey = util.ErrorKind("incorrect private key")
 	// ErrUnapprovedToken is returned when trying to fund an order using a token
 	// that has not been approved.
-	ErrUnapprovedToken = dex.ErrorKind("token not approved")
-	ErrApprovalPending = dex.ErrorKind("approval pending")
+	ErrUnapprovedToken = util.ErrorKind("token not approved")
+	ErrApprovalPending = util.ErrorKind("approval pending")
 	// ErrInsufficientRedeemFunds is returned when there is insufficient funds
 	// to redeem a swap, but a gasless relay redemption would fix the issue.
-	ErrInsufficientRedeemFunds = dex.ErrorKind("insufficient redeem funds")
+	ErrInsufficientRedeemFunds = util.ErrorKind("insufficient redeem funds")
 
 	// ErrRelayRedemptionLotSizeTooSmall is returned when the lot size is
 	// too small to cover the relay fees for a gasless redemption.
-	ErrRelayRedemptionLotSizeTooSmall = dex.ErrorKind("relay redemption lot size too small")
+	ErrRelayRedemptionLotSizeTooSmall = util.ErrorKind("relay redemption lot size too small")
 
 	// ErrMultisigPartialSend is returned when an error occurs after creating
 	// a multisig and sending some amount of funds.
-	ErrMultisigPartialSend = dex.ErrorKind("multisig partially sent")
+	ErrMultisigPartialSend = util.ErrorKind("multisig partially sent")
 
 	// InternalNodeLoggerName is the name for a logger that is used to fine
 	// tune log levels for only loggers using this name.
@@ -337,9 +337,9 @@ type WalletDefinition struct {
 	GuideLink string `json:"guidelink"`
 }
 
-// Token combines the generic dex.Token with a WalletDefinition.
+// Token combines the generic util.Token with a WalletDefinition.
 type Token struct {
-	*dex.Token
+	*util.Token
 	Definition             *WalletDefinition `json:"definition"`
 	ContractAddress        string            `json:"contractAddress"` // Set in SetNetwork
 	SupportedAssetVersions []uint32          `json:"supportedAssetVersions"`
@@ -377,7 +377,7 @@ type WalletInfo struct {
 	LegacyWalletIndex int `json:"emptyidx"`
 	// UnitInfo is the information about unit names and conversion factors for
 	// the asset.
-	UnitInfo dex.UnitInfo `json:"unitinfo"`
+	UnitInfo util.UnitInfo `json:"unitinfo"`
 	// BlockchainClass is the type of the wallet's blockchain.
 	BlockchainClass BlockchainClass
 }
@@ -454,7 +454,7 @@ type WalletConfig struct {
 type ConfirmTxStatus struct {
 	Confs  uint64
 	Req    uint64
-	CoinID dex.Bytes
+	CoinID util.Bytes
 	// PendingSubmission is true for ETH relay redemptions before the relay
 	// has submitted the transaction on-chain. The redemption message should
 	// only be sent to the server once this is false.
@@ -487,7 +487,7 @@ type TxHistoryResponse struct {
 type Wallet interface {
 	// It should be assumed that once disconnected, subsequent Connect calls
 	// will fail, requiring a new Wallet instance.
-	dex.Connector
+	util.Connector
 	// Info returns a set of basic information about the wallet driver.
 	Info() *WalletInfo
 	// Balance should return the balance of the wallet, categorized by
@@ -536,12 +536,12 @@ type AtomicSwapWallet interface {
 	// FundOrder selects coins for use in an order. The coins will be locked,
 	// and will not be returned in subsequent calls to FundOrder or calculated
 	// in calls to Available, unless they are unlocked with ReturnCoins. The
-	// returned []dex.Bytes contains the redeem scripts for the selected coins.
+	// returned []util.Bytes contains the redeem scripts for the selected coins.
 	// Equal number of coins and redeemed scripts must be returned. A nil or
-	// empty dex.Bytes should be appended to the redeem scripts collection for
+	// empty util.Bytes should be appended to the redeem scripts collection for
 	// coins with no redeem script. The fees returned are any fees paid in the
 	// process of funding the order, such as transaction fees for a split tx.
-	FundOrder(*Order) (coins Coins, redeemScripts []dex.Bytes, fees uint64, err error)
+	FundOrder(*Order) (coins Coins, redeemScripts []util.Bytes, fees uint64, err error)
 	// MaxOrder generates information about the maximum order size and
 	// associated fees that the wallet can support for the specified DEX. The
 	// fees are an estimate based on current network conditions, and will be <=
@@ -564,7 +564,7 @@ type AtomicSwapWallet interface {
 	// This method might be called to reinitialize an order from data stored
 	// externally. This method will only return funding coins, e.g. unspent
 	// transaction outputs.
-	FundingCoins([]dex.Bytes) (Coins, error)
+	FundingCoins([]util.Bytes) (Coins, error)
 	// Swap sends the swaps in a single transaction. The Receipts returned can
 	// be used to refund a failed transaction. The Input coins are unlocked
 	// where necessary to ensure accurate balance reporting in cases where the
@@ -573,11 +573,11 @@ type AtomicSwapWallet interface {
 	Swap(ctx context.Context, swaps *Swaps) (receipts []Receipt, changeCoin Coin, feesPaid uint64, err error)
 	// Redeem sends the redemption transaction, which may contain more than one
 	// redemption. The input coin IDs and the output Coin are returned.
-	Redeem(ctx context.Context, redeems *RedeemForm) (ins []dex.Bytes, out Coin, feesPaid uint64, err error)
+	Redeem(ctx context.Context, redeems *RedeemForm) (ins []util.Bytes, out Coin, feesPaid uint64, err error)
 	// SignCoinMessage signs the coin ID with the private key associated with the
 	// specified Coin. A slice of pubkeys required to spend the Coin and a
 	// signature for each pubkey are returned.
-	SignCoinMessage(Coin, dex.Bytes) (pubkeys, sigs []dex.Bytes, err error)
+	SignCoinMessage(Coin, util.Bytes) (pubkeys, sigs []util.Bytes, err error)
 	// AuditContract retrieves information about a swap contract from the
 	// provided txData and broadcasts the txData to ensure the contract is
 	// propagated to the blockchain. The information returned would be used
@@ -586,14 +586,14 @@ type AtomicSwapWallet interface {
 	// already be broadcasted. A successful audit response does not mean
 	// the tx exists on the blockchain, use SwapConfirmations to ensure
 	// the tx is mined.
-	AuditContract(coinID, contract, txData dex.Bytes, rebroadcast bool) (*AuditInfo, error)
+	AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*AuditInfo, error)
 	// ContractLockTimeExpired returns true if the specified contract's locktime
 	// has expired, making it possible to issue a Refund. The contract expiry
 	// time is also returned, but reaching this time does not necessarily mean
 	// the contract can be refunded since assets have different rules to satisfy
 	// the lock. For example, in Bitcoin the median of the last 11 blocks must
 	// be past the expiry time, not the current time.
-	ContractLockTimeExpired(ctx context.Context, contract dex.Bytes) (bool, time.Time, error)
+	ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error)
 	// FindRedemption watches for the input that spends the specified
 	// coin and contract, and returns the spending input and the
 	// secret key when it finds a spender.
@@ -610,7 +610,7 @@ type AtomicSwapWallet interface {
 	// NOTE: This could potentially be a long and expensive operation if
 	// performed long after the swap is broadcast; might be better executed from
 	// a goroutine.
-	FindRedemption(ctx context.Context, coinID, contract dex.Bytes) (redemptionCoin, secret dex.Bytes, err error)
+	FindRedemption(ctx context.Context, coinID, contract util.Bytes) (redemptionCoin, secret util.Bytes, err error)
 	// Refund refunds a contract. This can only be used after the time lock has
 	// expired AND if the contract has not been redeemed/refunded. This method
 	// MUST return an asset.CoinNotFoundError error if the swap is already
@@ -619,7 +619,7 @@ type AtomicSwapWallet interface {
 	// the unspent coin info as the wallet does not store it, even though it was
 	// known when the init transaction was created. The client should store this
 	// information for persistence across sessions.
-	Refund(ctx context.Context, coinID, contract dex.Bytes, feeRate uint64) (dex.Bytes, error)
+	Refund(ctx context.Context, coinID, contract util.Bytes, feeRate uint64) (util.Bytes, error)
 	// RedemptionAddress gets an address for use in redeeming the counterparty's
 	// swap. This would be included in their swap initialization. This is
 	// called once per match during match acknowledgement, so each match gets
@@ -646,13 +646,13 @@ type AtomicSwapWallet interface {
 	// be accurate.
 	// The contract and matchTime are provided so that wallets may search for
 	// the coin using light filters.
-	SwapConfirmations(ctx context.Context, coinID dex.Bytes, contract dex.Bytes, matchTime time.Time) (confs uint32, spent bool, err error)
+	SwapConfirmations(ctx context.Context, coinID util.Bytes, contract util.Bytes, matchTime time.Time) (confs uint32, spent bool, err error)
 	// ValidateSecret checks that the secret hashes to the secret hash.
 	ValidateSecret(secret, secretHash []byte) bool
 	// RegFeeConfirmations gets the confirmations for a registration fee
 	// payment. This method need not be supported by all assets. Those assets
 	// which do no support DEX registration fees will return an ErrUnsupported.
-	RegFeeConfirmations(ctx context.Context, coinID dex.Bytes) (confs uint32, err error)
+	RegFeeConfirmations(ctx context.Context, coinID util.Bytes) (confs uint32, err error)
 	// ConfirmTransaction checks the status of a redemption or refund. It
 	// returns the number of confirmations the tx has, the number of confirmations
 	// that are required for it to be considered fully confirmed, and the
@@ -661,7 +661,7 @@ type AtomicSwapWallet interface {
 	// to replace the old one. The caller is notified of this by having a
 	// different CoinID in the returned asset.ConfirmTxStatus as was used to
 	// call the function.
-	ConfirmTransaction(coinID dex.Bytes, confirmTx *ConfirmTx, feeSuggestion uint64) (*ConfirmTxStatus, error)
+	ConfirmTransaction(coinID util.Bytes, confirmTx *ConfirmTx, feeSuggestion uint64) (*ConfirmTxStatus, error)
 	// SingleLotSwapRefundFees returns the fees for a swap and refund transaction for a single lot.
 	SingleLotSwapRefundFees(version uint32, feeRate uint64, useSafeTxSize bool) (uint64, uint64, error)
 	// SingleLotRedeemFees returns the fees for a redeem transaction for a single lot.
@@ -670,7 +670,7 @@ type AtomicSwapWallet interface {
 	// be in the same order as the passed orders. If less values are returned
 	// than the number of orders, then the orders at the end of the list were
 	// not able to be funded.
-	FundMultiOrder(ord *MultiOrder, maxLock uint64) (coins []Coins, redeemScripts [][]dex.Bytes, fundingFees uint64, err error)
+	FundMultiOrder(ord *MultiOrder, maxLock uint64) (coins []Coins, redeemScripts [][]util.Bytes, fundingFees uint64, err error)
 	// MaxFundingFees returns the max fees that could be paid for funding a swap.
 	MaxFundingFees(numTrades uint32, feeRate uint64, options map[string]string) uint64
 }
@@ -764,7 +764,7 @@ type PrivateSwapper interface {
 	// asset.CoinNotFoundError error if the swap is already spent, which
 	// is used to indicate if FindRedemption should be used and the
 	// counterparty's swap redeemed.
-	RefundPrivate(ctx context.Context, coinID dex.Bytes, contract *PrivateContract, feeRate uint64) (dex.Bytes, error)
+	RefundPrivate(ctx context.Context, coinID util.Bytes, contract *PrivateContract, feeRate uint64) (util.Bytes, error)
 	// MarkPrivateSwapComplete should be called when a private swap is complete
 	// to clean up some data that is no longer needed. This could potentially be
 	// handled by the wallet itself, but it adds a lot of complexity to the wallet.
@@ -1092,9 +1092,9 @@ type LogFiler interface {
 // transaction secrets.
 type DynamicSwapper interface {
 	// DynamicSwapFeesPaid returns fees for initiation transactions.
-	DynamicSwapFeesPaid(ctx context.Context, coinID, contractData dex.Bytes) (fee uint64, secretHashes [][]byte, err error)
+	DynamicSwapFeesPaid(ctx context.Context, coinID, contractData util.Bytes) (fee uint64, secretHashes [][]byte, err error)
 	// DynamicRedemptionFeesPaid returns fees for redemption transactions.
-	DynamicRedemptionFeesPaid(ctx context.Context, coinID, contractData dex.Bytes) (fee uint64, secretHashes [][]byte, err error)
+	DynamicRedemptionFeesPaid(ctx context.Context, coinID, contractData util.Bytes) (fee uint64, secretHashes [][]byte, err error)
 	// GasFeeLimit returns the user set gas fee limit to be used as the max
 	// fee if higher than server.
 	GasFeeLimit() uint64
@@ -1191,13 +1191,13 @@ type Accelerator interface {
 	// this amount.
 	//
 	// The returned change coin may be nil, and should be checked before use.
-	AccelerateOrder(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes,
+	AccelerateOrder(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes,
 		requiredForRemainingSwaps, newFeeRate uint64) (Coin, string, error)
 	// AccelerationEstimate takes the same parameters as AccelerateOrder, but
 	// instead of broadcasting the acceleration transaction, it just returns
 	// the amount of funds that will need to be spent in order to increase the
 	// average fee rate to the desired amount.
-	AccelerationEstimate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes,
+	AccelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes,
 		requiredForRemainingSwaps, newFeeRate uint64) (uint64, error)
 	// PreAccelerate returns the current average fee rate of the unmined swap
 	// initiation and acceleration transactions, and also returns a suggested
@@ -1207,7 +1207,7 @@ type Accelerator interface {
 	// the user a good amount of flexibility in determining the post acceleration
 	// effective fee rate, but still not allowing them to pick something
 	// outrageously high.
-	PreAccelerate(swapCoins, accelerationCoins []dex.Bytes, changeCoin dex.Bytes,
+	PreAccelerate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes,
 		requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *XYRange, *EarlyAcceleration, error)
 }
 
@@ -1278,14 +1278,14 @@ type GaslessRedeemer interface {
 	// true. If it is false, an updated coin ID will be returned from
 	// ConfirmRedemption when the transaction is submitted by the relay,
 	// and the server should be notified using that coin ID.
-	GaslessRedeem(ctx context.Context, redeems *RedeemForm) (ins []dex.Bytes, out Coin, feesPaid uint64, submitted bool, err error)
+	GaslessRedeem(ctx context.Context, redeems *RedeemForm) (ins []util.Bytes, out Coin, feesPaid uint64, submitted bool, err error)
 }
 
 // GaslessRedeemCalldata is the minimal information needed for a third party to
 // submit an emergency gasless redeem transaction.
 type GaslessRedeemCalldata struct {
 	ContractAddress string
-	Calldata        dex.Bytes
+	Calldata        util.Bytes
 }
 
 // GaslessRedeemValidation is returned when gasless redeem calldata parses,
@@ -1305,7 +1305,7 @@ type GaslessRedeemValidation struct {
 type EmergencyGaslessRedeemer interface {
 	GaslessRedeemCalldata(ctx context.Context, form *RedeemForm, relayerAddress string) (*GaslessRedeemCalldata, error)
 	ValidateGaslessRedeemCalldata(ctx context.Context, contractAddress string, calldata []byte) (*GaslessRedeemValidation, error)
-	SubmitGaslessRedeemCalldata(ctx context.Context, contractAddress string, calldata []byte) (dex.Bytes, error)
+	SubmitGaslessRedeemCalldata(ctx context.Context, contractAddress string, calldata []byte) (util.Bytes, error)
 }
 
 // LiveReconfigurer is a wallet that can possibly handle a reconfiguration
@@ -1449,7 +1449,7 @@ type Stances struct {
 // VotingServiceProvider is information about a voting service provider.
 type VotingServiceProvider struct {
 	URL           string      `json:"url"`
-	Network       dex.Network `json:"network"`
+	Network       util.Network `json:"network"`
 	Launched      uint64      `json:"launched"`    // milliseconds
 	LastUpdated   uint64      `json:"lastUpdated"` // milliseconds
 	APIVersions   []int64     `json:"apiVersions"`
@@ -1595,11 +1595,11 @@ func IncomingTxType(txType TransactionType) bool {
 // transaction.
 type BondTxInfo struct {
 	// AccountID is the account is the account ID that the bond is applied to.
-	AccountID dex.Bytes `json:"accountID"`
+	AccountID util.Bytes `json:"accountID"`
 	// LockTime is the time until which the bond is locked.
 	LockTime uint64 `json:"lockTime"`
 	// BondID is the ID of the bond.
-	BondID dex.Bytes `json:"bondID"`
+	BondID util.Bytes `json:"bondID"`
 }
 
 // BridgeCounterpartTx identifies an initiation transaction if it is part of a
@@ -1743,7 +1743,7 @@ const (
 // to locate the unspent value on the blockchain.
 type Coin interface {
 	// ID is a unique identifier for this coin.
-	ID() dex.Bytes
+	ID() util.Bytes
 	// String is a string representation of the coin.
 	String() string
 	// Value is the available quantity, in atoms/satoshi.
@@ -1763,7 +1763,7 @@ type RecoveryCoin interface {
 	// RecoveryID is an ID that can be used to re-establish funding state during
 	// startup. If a Coin implements RecoveryCoin, the RecoveryID will be used
 	// in the database record, and ultimately passed to the FundingCoins method.
-	RecoveryID() dex.Bytes
+	RecoveryID() util.Bytes
 }
 
 // Coins a collection of coins as returned by Fund.
@@ -1778,13 +1778,13 @@ type Receipt interface {
 	// Contract is the unique swap contract data. This may be a redeem script
 	// for UTXO assets, or other information that uniquely identifies the swap
 	// for account-based assets e.g. a contract version and secret hash for ETH.
-	Contract() dex.Bytes
+	Contract() util.Bytes
 	// String provides a human-readable representation of the swap that may
 	// provide supplementary data to locate the swap.
 	String() string
 	// SignedRefund is a signed refund script that can be used to return
 	// funds to the user in the case a contract expires.
-	SignedRefund() dex.Bytes
+	SignedRefund() util.Bytes
 }
 
 // AuditInfo is audit information about a swap contract needed to audit the
@@ -1799,11 +1799,11 @@ type AuditInfo struct {
 	// Contract is the unique swap contract data. This may be a redeem script
 	// for UTXO assets, or other information that uniquely identifies the swap
 	// for account-based assets e.g. a contract version and secret hash for ETH.
-	Contract dex.Bytes
+	Contract util.Bytes
 	// SecretHash is the contract's secret hash. This is likely to be encoded in
 	// the Contract field, which is often the redeem script or an asset-specific
 	// encoding of the unique swap data.
-	SecretHash dex.Bytes
+	SecretHash util.Bytes
 }
 
 // INPUT TYPES
@@ -1867,7 +1867,7 @@ type Contract struct {
 	// Value is the amount being traded.
 	Value uint64
 	// SecretHash is the hash of the secret key.
-	SecretHash dex.Bytes
+	SecretHash util.Bytes
 	// LockTime is the contract lock time in UNIX seconds.
 	LockTime uint64
 }
@@ -1899,19 +1899,19 @@ type ConfirmTx struct {
 	// spends is the AuditInfo for the swap output being spent. Only needed for redeems.
 	spends *AuditInfo
 	// secret is the secret key needed to satisfy the swap contract. Only needed for redeems.
-	secret dex.Bytes
+	secret util.Bytes
 	// spendsCoinID is the tx to refund. Only needed for refunds.
-	spendsCoinID dex.Bytes
+	spendsCoinID util.Bytes
 	// contract is the contract to refund. Only needed for refunds.
-	contract dex.Bytes
+	contract util.Bytes
 	// secretHash is the secret hash of the swap to refund. Only needed for refunds.
-	secretHash dex.Bytes
+	secretHash util.Bytes
 	// confirmTxType is redeem or refund.
 	txType ConfirmTxType
 }
 
 // NewRedeemConfTx creates a new redeem conf tx.
-func NewRedeemConfTx(spends *AuditInfo, secret dex.Bytes) *ConfirmTx {
+func NewRedeemConfTx(spends *AuditInfo, secret util.Bytes) *ConfirmTx {
 	return &ConfirmTx{
 		spends: spends,
 		secret: secret,
@@ -1920,7 +1920,7 @@ func NewRedeemConfTx(spends *AuditInfo, secret dex.Bytes) *ConfirmTx {
 }
 
 // NewRefundConfTx creates a new refund conf tx.
-func NewRefundConfTx(spendsCoinID, contract, secretHash dex.Bytes) *ConfirmTx {
+func NewRefundConfTx(spendsCoinID, contract, secretHash util.Bytes) *ConfirmTx {
 	return &ConfirmTx{
 		spendsCoinID: spendsCoinID,
 		contract:     contract,
@@ -1935,12 +1935,12 @@ func (ct *ConfirmTx) Spends() *AuditInfo {
 }
 
 // Secret returns the conf tx secret. Only use for redeems.
-func (ct *ConfirmTx) Secret() dex.Bytes {
+func (ct *ConfirmTx) Secret() util.Bytes {
 	return ct.secret
 }
 
 // SpendsCoinID returns the coin id the confirm tx spends.
-func (ct *ConfirmTx) SpendsCoinID() dex.Bytes {
+func (ct *ConfirmTx) SpendsCoinID() util.Bytes {
 	if ct.txType == CTRedeem {
 		return ct.spends.Coin.ID()
 	}
@@ -1948,7 +1948,7 @@ func (ct *ConfirmTx) SpendsCoinID() dex.Bytes {
 }
 
 // SecretHash returns the swap's secret hash.
-func (ct *ConfirmTx) SecretHash() dex.Bytes {
+func (ct *ConfirmTx) SecretHash() util.Bytes {
 	if ct.txType == CTRedeem {
 		return ct.spends.SecretHash
 	}
@@ -1956,7 +1956,7 @@ func (ct *ConfirmTx) SecretHash() dex.Bytes {
 }
 
 // Contract returns the swap's contract.
-func (ct *ConfirmTx) Contract() dex.Bytes {
+func (ct *ConfirmTx) Contract() util.Bytes {
 	if ct.txType == CTRedeem {
 		return ct.spends.Contract
 	}
@@ -1979,7 +1979,7 @@ type Redemption struct {
 	// Spends is the AuditInfo for the swap output being spent.
 	Spends *AuditInfo
 	// Secret is the secret key needed to satisfy the swap contract.
-	Secret dex.Bytes
+	Secret util.Bytes
 }
 
 // RedeemForm is a group of Redemptions. The struct will be
@@ -2081,7 +2081,7 @@ type MultiOrder struct {
 
 // A GeocodeRedeemer redeems funds from a geocode game.
 type GeocodeRedeemer interface {
-	RedeemGeocode(code []byte, msg string) (dex.Bytes, uint64, error)
+	RedeemGeocode(code []byte, msg string) (util.Bytes, uint64, error)
 }
 
 // MaxMatchesCounter counts the maximum number of matches that can go in a tx.
@@ -2162,7 +2162,7 @@ type ActionTaker interface {
 type WalletEmitter struct {
 	c       chan<- WalletNotification
 	assetID uint32
-	log     dex.Logger
+	log     util.Logger
 }
 
 type ActionRequiredNote struct {
@@ -2178,7 +2178,7 @@ type ActionResolvedNote struct {
 }
 
 // NewWalletEmitter constructs a WalletEmitter for an asset.
-func NewWalletEmitter(c chan<- WalletNotification, assetID uint32, log dex.Logger) *WalletEmitter {
+func NewWalletEmitter(c chan<- WalletNotification, assetID uint32, log util.Logger) *WalletEmitter {
 	return &WalletEmitter{
 		c:       c,
 		assetID: assetID,

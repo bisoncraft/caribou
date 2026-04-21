@@ -13,7 +13,7 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/intl"
 	"github.com/bisoncraft/meshwallet/wallet/appserver"
 	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 func main() {
@@ -87,7 +87,7 @@ type WorksheetEntry struct {
 }
 
 func formatReport(reportFile string) error {
-	b, err := os.ReadFile(dex.CleanAndExpandPath(reportFile))
+	b, err := os.ReadFile(util.CleanAndExpandPath(reportFile))
 	if err != nil {
 		return fmt.Errorf("error reading file at %q: %w", reportFile, err)
 	}

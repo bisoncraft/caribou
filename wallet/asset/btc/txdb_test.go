@@ -12,13 +12,13 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
 )
 
 func TestTxDB(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelInfo)
+	tLogger := util.StdOutLogger("TXDB", util.LevelInfo)
 
 	txHistoryStore := NewBadgerTxDB(tempDir, tLogger)
 
@@ -198,7 +198,7 @@ func TestTxDB(t *testing.T) {
 
 func TestSetAndGetLastQuery(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -235,7 +235,7 @@ func TestSetAndGetLastQuery(t *testing.T) {
 
 func TestStoreAndGetSecNonce(t *testing.T) {
 	tempDir := t.TempDir()
-	tLogger := dex.StdOutLogger("TXDB", dex.LevelTrace)
+	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

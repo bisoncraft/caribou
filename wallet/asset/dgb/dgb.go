@@ -9,9 +9,9 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexdgb "github.com/bisoncraft/meshwallet/dex/networks/dgb"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexdgb "github.com/bisoncraft/meshwallet/util/networks/dgb"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )
@@ -92,7 +92,7 @@ func init() {
 type Driver struct{}
 
 // Open creates the DGB exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -119,14 +119,14 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 // exchange wallet. The wallet will shut down when the provided context is
 // canceled. The configPath can be an empty string, in which case the standard
 // system location of the digibyted config file is assumed.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	var params *chaincfg.Params
 	switch network {
-	case dex.Mainnet:
+	case util.Mainnet:
 		params = dexdgb.MainNetParams
-	case dex.Testnet:
+	case util.Testnet:
 		params = dexdgb.TestNetParams
-	case dex.Regtest:
+	case util.Regtest:
 		params = dexdgb.RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)

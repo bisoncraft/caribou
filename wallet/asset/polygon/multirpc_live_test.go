@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 const (
@@ -45,19 +45,19 @@ func TestSimnetMultiRPCClient(t *testing.T) {
 }
 
 func TestMonitorTestnet(t *testing.T) {
-	mt.TestMonitorNet(t, dex.Testnet)
+	mt.TestMonitorNet(t, util.Testnet)
 }
 
 func TestMonitorMainnet(t *testing.T) {
-	mt.TestMonitorNet(t, dex.Mainnet)
+	mt.TestMonitorNet(t, util.Mainnet)
 }
 
 func TestRPCMainnet(t *testing.T) {
-	mt.TestRPC(t, dex.Mainnet)
+	mt.TestRPC(t, util.Mainnet)
 }
 
 func TestRPCTestnet(t *testing.T) {
-	mt.TestRPC(t, dex.Testnet)
+	mt.TestRPC(t, util.Testnet)
 }
 
 func TestFreeServers(t *testing.T) {
@@ -70,7 +70,7 @@ func TestFreeServers(t *testing.T) {
 		"https://gateway.tenderly.co/public/polygon", // Tenderly
 		"https://polygon-bor-rpc.publicnode.com",     // PublicNode
 	}
-	mt.TestFreeServers(t, freeServers, dex.Mainnet)
+	mt.TestFreeServers(t, freeServers, util.Mainnet)
 }
 
 func TestFreeTestnetServers(t *testing.T) {
@@ -82,7 +82,7 @@ func TestFreeTestnetServers(t *testing.T) {
 		"https://polygon-amoy-bor-rpc.publicnode.com", // PublicNode
 		"wss://polygon-amoy-bor-rpc.publicnode.com",   // PublicNode WSS
 	}
-	mt.TestFreeServers(t, freeServers, dex.Testnet)
+	mt.TestFreeServers(t, freeServers, util.Testnet)
 }
 
 func TestMainnetCompliance(t *testing.T) {
@@ -90,19 +90,19 @@ func TestMainnetCompliance(t *testing.T) {
 }
 
 func TestTestnetFees(t *testing.T) {
-	mt.FeeHistory(t, dex.Testnet, 3, 90)
+	mt.FeeHistory(t, util.Testnet, 3, 90)
 }
 
 func TestBlockStats(t *testing.T) {
-	mt.BlockStats(t, 5, 1024, dex.Mainnet)
+	mt.BlockStats(t, 5, 1024, util.Mainnet)
 }
 
 func TestTestnetBlockStats(t *testing.T) {
-	mt.BlockStats(t, 5, 1024, dex.Testnet)
+	mt.BlockStats(t, 5, 1024, util.Testnet)
 }
 
 func TestFees(t *testing.T) {
-	mt.FeeHistory(t, dex.Mainnet, 3, 365)
+	mt.FeeHistory(t, util.Mainnet, 3, 365)
 }
 
 func TestReceiptsHaveEffectiveGasPrice(t *testing.T) {

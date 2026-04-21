@@ -15,10 +15,10 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset/base"
 	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
 	"github.com/bisoncraft/meshwallet/wallet/asset/polygon"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -66,9 +66,9 @@ func mainErr() error {
 		return fmt.Errorf("more than one network specified")
 	}
 
-	net := dex.Mainnet
+	net := util.Mainnet
 	if useSimnet {
-		net = dex.Simnet
+		net = util.Simnet
 		switch chain {
 		case "eth":
 			dexeth.MaybeReadSimnetAddrs()
@@ -79,7 +79,7 @@ func mainErr() error {
 		}
 	}
 	if useTestnet {
-		net = dex.Testnet
+		net = util.Testnet
 	}
 
 	if readCreds {
@@ -106,29 +106,29 @@ func mainErr() error {
 		token = token + "." + chain
 	}
 
-	assetID, found := dex.BipSymbolID(token)
+	assetID, found := util.BipSymbolID(token)
 	if !found {
 		return fmt.Errorf("asset %s not known", token)
 	}
 	contractVer := uint32(contractVerI)
 
-	logLvl := dex.LevelInfo
+	logLvl := util.LevelInfo
 	if debug {
-		logLvl = dex.LevelDebug
+		logLvl = util.LevelDebug
 	}
 	if trace {
-		logLvl = dex.LevelTrace
+		logLvl = util.LevelTrace
 	}
 
-	log := dex.StdOutLogger("GG", logLvl)
+	log := util.StdOutLogger("GG", logLvl)
 
 	walletParams := func(
 		gases map[uint32]*dexeth.Gases,
-		contracts map[uint32]map[dex.Network]common.Address,
+		contracts map[uint32]map[util.Network]common.Address,
 		tokens map[uint32]*dexeth.Token,
-		compatLookup func(net dex.Network) (c eth.CompatibilityData, err error),
-		chainCfg func(net dex.Network) (c *params.ChainConfig, err error),
-		bui *dex.UnitInfo,
+		compatLookup func(net util.Network) (c eth.CompatibilityData, err error),
+		chainCfg func(net util.Network) (c *params.ChainConfig, err error),
+		bui *util.UnitInfo,
 	) (*eth.GetGasWalletParams, error) {
 
 		wParams := new(eth.GetGasWalletParams)

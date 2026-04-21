@@ -7,19 +7,19 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 func TestConnect(t *testing.T) {
 	dataDir := t.TempDir()
 
-	log := dex.StdOutLogger("T", dex.LevelDebug)
+	log := util.StdOutLogger("T", util.LevelDebug)
 	relay, err := New(dataDir, log)
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
 
-	cm := dex.NewConnectionMaster(relay)
+	cm := util.NewConnectionMaster(relay)
 	defer cm.Wait()
 
 	ctx, cancel := context.WithCancel(context.Background())

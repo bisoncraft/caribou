@@ -18,10 +18,10 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexzec "github.com/bisoncraft/meshwallet/dex/networks/zec"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexzec "github.com/bisoncraft/meshwallet/util/networks/zec"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/decred/dcrd/rpcclient/v8"
@@ -34,7 +34,7 @@ const (
 	testnetOverwinterActivationHeight = 207500
 )
 
-var tZEC = &dex.Asset{
+var tZEC = &util.Asset{
 	ID:       0,
 	Symbol:   "zec",
 	Version:  version,
@@ -104,7 +104,7 @@ func testDeserializeBlocks(t *testing.T, port string, upgradeHeights ...int64) {
 		return b
 	}
 
-	blockBytes := func(hashStr string) (blockB dex.Bytes) {
+	blockBytes := func(hashStr string) (blockB util.Bytes) {
 		raw, err := cl.RawRequest(ctx, "getblock", []json.RawMessage{mustMarshal(hashStr), mustMarshal(0)})
 		if err != nil {
 			t.Fatalf("Failed to fetch block hash for %s: %v", hashStr, err)
@@ -162,7 +162,7 @@ func testDeserializeBlocks(t *testing.T, port string, upgradeHeights ...int64) {
 }
 
 func TestMultiSplit(t *testing.T) {
-	log := dex.StdOutLogger("T", dex.LevelTrace)
+	log := util.StdOutLogger("T", util.LevelTrace)
 	c := make(chan asset.WalletNotification, 16)
 	tmpDir := t.TempDir()
 	walletCfg := &asset.WalletConfig{
@@ -180,7 +180,7 @@ func TestMultiSplit(t *testing.T) {
 		},
 		DataDir: tmpDir,
 	}
-	wi, err := NewWallet(walletCfg, log, dex.Simnet)
+	wi, err := NewWallet(walletCfg, log, util.Simnet)
 	if err != nil {
 		t.Fatalf("Error making new wallet: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestMultiSplit(t *testing.T) {
 		}
 	}()
 
-	cm := dex.NewConnectionMaster(w)
+	cm := util.NewConnectionMaster(w)
 	if err := cm.ConnectOnce(ctx); err != nil {
 		t.Fatalf("Error connecting wallet: %v", err)
 	}

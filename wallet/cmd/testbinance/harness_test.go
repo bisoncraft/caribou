@@ -16,14 +16,14 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/comms"
 	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
 )
 
 const testAPIKey = "Test Client 3000"
 
 func TestMain(m *testing.M) {
-	log = dex.StdOutLogger("T", dex.LevelTrace)
+	log = util.StdOutLogger("T", util.LevelTrace)
 	m.Run()
 }
 
@@ -96,18 +96,18 @@ func printThing(name string, thing any) {
 	fmt.Println("#####", name, ":", string(b))
 }
 
-func newWebsocketClient(ctx context.Context, uri string, handler func([]byte)) (comms.WsConn, *dex.ConnectionMaster, error) {
+func newWebsocketClient(ctx context.Context, uri string, handler func([]byte)) (comms.WsConn, *util.ConnectionMaster, error) {
 	wsClient, err := comms.NewWsConn(&comms.WsCfg{
 		URL:            uri,
 		PingWait:       pongWait,
-		Logger:         dex.StdOutLogger("W", log.Level()),
+		Logger:         util.StdOutLogger("W", log.Level()),
 		RawHandler:     handler,
 		ConnectHeaders: http.Header{"X-MBX-APIKEY": []string{testAPIKey}},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("Error creating websocket client: %v", err)
 	}
-	wsCM := dex.NewConnectionMaster(wsClient)
+	wsCM := util.NewConnectionMaster(wsClient)
 	if err = wsCM.ConnectOnce(ctx); err != nil {
 		return nil, nil, fmt.Errorf("Error connecting websocket client: %v", err)
 	}

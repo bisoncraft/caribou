@@ -13,11 +13,11 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	"github.com/bisoncraft/meshwallet/dex/dexnet"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
-	dexltc "github.com/bisoncraft/meshwallet/dex/networks/ltc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/meshwallet/util/dexnet"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexltc "github.com/bisoncraft/meshwallet/util/networks/ltc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/dcrlabs/ltcwallet/wallet"
 	ltcchaincfg "github.com/ltcsuite/ltcd/chaincfg"
@@ -94,7 +94,7 @@ type Driver struct{}
 var _ asset.Driver = (*Driver)(nil)
 
 // Open creates the LTC exchange wallet. Start the wallet with its Run method.
-func (d *Driver) Open(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
 
@@ -119,7 +119,7 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 
 // Exists checks the existence of the wallet. Part of the Creator interface, so
 // only used for wallets with WalletDefinition.Seeded = true.
-func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net dex.Network) (bool, error) {
+func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
 	if walletType != walletTypeSPV {
 		return false, fmt.Errorf("no Bitcoin wallet of type %q available", walletType)
 	}
@@ -192,14 +192,14 @@ func RegisterCustomWallet(constructor btc.CustomWalletConstructor, def *asset.Wa
 
 // NewWallet is the exported constructor by which the DEX will import the
 // exchange wallet.
-func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	var cloneParams *chaincfg.Params
 	switch network {
-	case dex.Mainnet:
+	case util.Mainnet:
 		cloneParams = dexltc.MainNetParams
-	case dex.Testnet:
+	case util.Testnet:
 		cloneParams = dexltc.TestNet4Params
-	case dex.Regtest:
+	case util.Regtest:
 		cloneParams = dexltc.RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
@@ -235,7 +235,7 @@ func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) 
 		return btc.OpenSPVWallet(cloneCFG, openSPVWallet)
 	case walletTypeElectrum:
 		cloneCFG.Ports = dexbtc.NetPorts{} // no default ports
-		ver, err := dex.SemverFromString(needElectrumVersion)
+		ver, err := util.SemverFromString(needElectrumVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -250,21 +250,21 @@ func NewWallet(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) 
 	}
 }
 
-func parseChainParams(net dex.Network) (*ltcchaincfg.Params, error) {
+func parseChainParams(net util.Network) (*ltcchaincfg.Params, error) {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return &ltcchaincfg.MainNetParams, nil
-	case dex.Testnet:
+	case util.Testnet:
 		return &ltcchaincfg.TestNet4Params, nil
-	case dex.Regtest:
+	case util.Regtest:
 		return &ltcchaincfg.RegressionNetParams, nil
 	}
 	return nil, fmt.Errorf("unknown network ID %v", net)
 }
 
-func externalFeeRate(ctx context.Context, net dex.Network) (uint64, error) {
+func externalFeeRate(ctx context.Context, net util.Network) (uint64, error) {
 	switch net {
-	case dex.Mainnet, dex.Simnet:
+	case util.Mainnet, util.Simnet:
 		return fetchBlockCypherFees(ctx)
 	}
 	return bitcoreFeeRate(ctx, net)

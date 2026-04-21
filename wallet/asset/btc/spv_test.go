@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -484,7 +484,7 @@ func TestSwapConfirmations(t *testing.T) {
 
 	_, _, pkScript, _, _, _, _ := makeSwapContract(true, time.Hour*12)
 
-	swapTx := makeRawTx([]dex.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
+	swapTx := makeRawTx([]util.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
 	swapTxHash := swapTx.TxHash()
 	const vout = 0
 	swapOutPt := NewOutPoint(&swapTxHash, vout)
@@ -642,7 +642,7 @@ func TestGetTxOut(t *testing.T) {
 	const vout = 0
 	const blockHeight = 10
 	const tipHeight = 20
-	tx := makeRawTx([]dex.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
+	tx := makeRawTx([]util.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
 	txHash := tx.TxHash()
 	outPt := NewOutPoint(&txHash, vout)
 	blockHash, _ := node.addRawTx(blockHeight, tx)
@@ -953,7 +953,7 @@ func TestCheckRescanStall(t *testing.T) {
 		wallet:      btcWallet,
 		cl:          neutrinoClient,
 		tipChan:     make(chan *BlockVector, 1),
-		log:         dex.StdOutLogger("T", dex.LevelTrace),
+		log:         util.StdOutLogger("T", util.LevelTrace),
 	}
 
 	// Build a chain of 20 blocks. Both chain service and wallet see the

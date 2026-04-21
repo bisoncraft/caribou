@@ -5,20 +5,20 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbase "github.com/bisoncraft/meshwallet/dex/networks/base"
-	dexeth "github.com/bisoncraft/meshwallet/dex/networks/eth"
-	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func regToken(tokens map[uint32]*dexeth.Token, tokenID uint32, desc string, nets ...dex.Network) {
+func regToken(tokens map[uint32]*dexeth.Token, tokenID uint32, desc string, nets ...util.Network) {
 	token, found := tokens[tokenID]
 	if !found {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
-	netAddrs := make(map[dex.Network]string)
-	netVersions := make(map[dex.Network][]uint32, 3)
+	netAddrs := make(map[util.Network]string)
+	netVersions := make(map[util.Network][]uint32, 3)
 	for net, netToken := range token.NetTokens {
 		netAddrs[net] = netToken.Address.String()
 		netVersions[net] = make([]uint32, 0, 1)
@@ -35,17 +35,17 @@ func regToken(tokens map[uint32]*dexeth.Token, tokenID uint32, desc string, nets
 
 func registerTokens() {
 	asset.Register(966, &Driver{})
-	regToken(dexpolygon.Tokens, 966001, "The USDC Ethereum ERC20 token.", dex.Mainnet)
-	regToken(dexpolygon.Tokens, 966004, "The USDT Ethereum ERC20 token.", dex.Mainnet)
-	regToken(dexpolygon.Tokens, 966003, "Wrapped BTC.", dex.Mainnet)
-	regToken(dexpolygon.Tokens, 966002, "Wrapped ETH.", dex.Mainnet)
+	regToken(dexpolygon.Tokens, 966001, "The USDC Ethereum ERC20 token.", util.Mainnet)
+	regToken(dexpolygon.Tokens, 966004, "The USDT Ethereum ERC20 token.", util.Mainnet)
+	regToken(dexpolygon.Tokens, 966003, "Wrapped BTC.", util.Mainnet)
+	regToken(dexpolygon.Tokens, 966002, "Wrapped ETH.", util.Mainnet)
 	asset.Register(8453, &Driver{})
-	regToken(dexbase.Tokens, 61000, "The USDC Base ERC20 token.", dex.Mainnet)
+	regToken(dexbase.Tokens, 61000, "The USDC Base ERC20 token.", util.Mainnet)
 }
 
 func TestAcrossAssetToID(t *testing.T) {
 	registerTokens()
-	asset.SetNetwork(dex.Mainnet)
+	asset.SetNetwork(util.Mainnet)
 
 	expectedMappings := map[uint32]*acrossAsset{
 		60: {
@@ -97,7 +97,7 @@ func TestAcrossAssetToID(t *testing.T) {
 
 	// Test asset ID to across asset conversion
 	for assetID, expectedAcross := range expectedMappings {
-		acrossAsset := assetIDToAcrossAsset(dex.Mainnet, assetID)
+		acrossAsset := assetIDToAcrossAsset(util.Mainnet, assetID)
 
 		if acrossAsset == nil {
 			t.Errorf("Expected assetIDToAcrossAsset to return non-nil for asset %d", assetID)
@@ -119,7 +119,7 @@ func TestAcrossAssetToID(t *testing.T) {
 
 	// Test across asset to asset ID conversion (reverse direction)
 	for expectedAssetID, acrossAsset := range expectedMappings {
-		assetID, ok := acrossAssetToAssetID(dex.Mainnet, acrossAsset.symbol, acrossAsset.chainID)
+		assetID, ok := acrossAssetToAssetID(util.Mainnet, acrossAsset.symbol, acrossAsset.chainID)
 
 		if !ok {
 			t.Errorf("Expected acrossAssetToAssetID to succeed for %+v", acrossAsset)
@@ -133,13 +133,13 @@ func TestAcrossAssetToID(t *testing.T) {
 
 	// Test round-trip conversions
 	for assetID := range expectedMappings {
-		acrossAsset := assetIDToAcrossAsset(dex.Mainnet, assetID)
+		acrossAsset := assetIDToAcrossAsset(util.Mainnet, assetID)
 		if acrossAsset == nil {
 			t.Errorf("Forward conversion failed for asset ID %d", assetID)
 			continue
 		}
 
-		convertedAssetID, ok := acrossAssetToAssetID(dex.Mainnet, acrossAsset.symbol, acrossAsset.chainID)
+		convertedAssetID, ok := acrossAssetToAssetID(util.Mainnet, acrossAsset.symbol, acrossAsset.chainID)
 		if !ok {
 			t.Errorf("Reverse conversion failed for across asset %+v", acrossAsset)
 			continue

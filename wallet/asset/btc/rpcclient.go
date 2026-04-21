@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -110,7 +110,7 @@ type rpcCore struct {
 	minNetworkVersion    uint64
 	minDescriptorVersion uint64
 
-	log             dex.Logger
+	log             util.Logger
 	chainParams     *chaincfg.Params
 	omitAddressType bool
 	legacySignTx    bool
@@ -150,14 +150,14 @@ func newRPCClient(cfg *rpcCore) *rpcClient {
 }
 
 // ChainOK is for screening the chain field of the getblockchaininfo result.
-func ChainOK(net dex.Network, str string) bool {
+func ChainOK(net util.Network, str string) bool {
 	var chainStr string
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		chainStr = "main"
-	case dex.Testnet:
+	case util.Testnet:
 		chainStr = "test"
-	case dex.Regtest:
+	case util.Regtest:
 		chainStr = "reg"
 	}
 	return strings.Contains(str, chainStr)
@@ -369,7 +369,7 @@ func (wc *rpcClient) callHashGetter(method string, args anylist) (*chainhash.Has
 
 // GetBlock fetches the MsgBlock.
 func (wc *rpcClient) GetBlock(h chainhash.Hash) (*wire.MsgBlock, error) {
-	var blkB dex.Bytes
+	var blkB util.Bytes
 	args := anylist{h.String()}
 	if wc.booleanGetBlock {
 		args = append(args, false)
@@ -476,7 +476,7 @@ func (wc *rpcClient) GetRawMempool() ([]*chainhash.Hash, error) {
 
 // GetRawTransaction retrieves the MsgTx.
 func (wc *rpcClient) GetRawTransaction(txHash *chainhash.Hash) (*wire.MsgTx, error) {
-	var txB dex.Bytes
+	var txB util.Bytes
 	args := anylist{txHash.String(), false}
 	if wc.numericGetRawTxRPC {
 		args[1] = 0
@@ -911,7 +911,7 @@ func (wc *rpcClient) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract 
 	args = append(args, options)
 
 	var res struct {
-		TxBytes dex.Bytes `json:"hex"`
+		TxBytes util.Bytes `json:"hex"`
 		Fees    float64   `json:"fee"`
 	}
 	err = wc.call(methodFundRawTransaction, args, &res)
@@ -1102,7 +1102,7 @@ func (wc *rpcClient) FindRedemptionsInMempool(ctx context.Context, reqs map[OutP
 
 func FindRedemptionsInMempool(
 	ctx context.Context,
-	log dex.Logger,
+	log util.Logger,
 	reqs map[OutPoint]*FindRedemptionReq,
 	getMempool func() ([]*chainhash.Hash, error),
 	getTx func(txHash *chainhash.Hash) (*wire.MsgTx, error),

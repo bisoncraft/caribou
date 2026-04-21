@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	ethereum "github.com/bisoncraft/op-geth"
 	basecommon "github.com/bisoncraft/op-geth/common"
 	basehexutil "github.com/bisoncraft/op-geth/common/hexutil"
@@ -16,7 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-var baseID, _ = dex.BipSymbolID("base") // really weth.base
+var baseID, _ = util.BipSymbolID("base") // really weth.base
 
 func toBlockNumArg(number *big.Int) string {
 	if number == nil {

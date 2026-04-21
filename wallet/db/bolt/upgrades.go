@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 
 	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/order"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/order"
 	"go.etcd.io/bbolt"
 )
 
@@ -61,7 +61,7 @@ func setDBVersion(tx *bbolt.Tx, newVersion uint32) error {
 	return bucket.Put(versionKey, encode.Uint32Bytes(newVersion))
 }
 
-var upgradeLog = dex.Disabled
+var upgradeLog = util.Disabled
 
 // upgradeDB checks whether any upgrades are necessary before the database is
 // ready for application usage.  If any are, they are performed.

@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -29,7 +29,7 @@ func (c *fundingCoin) String() string {
 
 // ID utf-8 encodes the account address. This ID will be sent to the server as
 // part of the order.
-func (c *fundingCoin) ID() dex.Bytes {
+func (c *fundingCoin) ID() util.Bytes {
 	return []byte(c.addr.String())
 }
 
@@ -45,7 +45,7 @@ func (c *fundingCoin) Value() uint64 {
 // RecoveryID is a byte-encoded address and value of a funding coin. RecoveryID
 // satisfies the asset.RecoveryCoin interface, so this ID will be used as input
 // for (asset.Wallet).FundingCoins.
-func (c *fundingCoin) RecoveryID() dex.Bytes {
+func (c *fundingCoin) RecoveryID() util.Bytes {
 	b := make([]byte, fundingCoinIDSize)
 	copy(b[:20], c.addr[:])
 	binary.BigEndian.PutUint64(b[20:28], c.amt)
@@ -92,7 +92,7 @@ func (c *tokenFundingCoin) String() string {
 
 // ID utf-8 encodes the account address. This ID will be sent to the server as
 // part of the an order.
-func (c *tokenFundingCoin) ID() dex.Bytes {
+func (c *tokenFundingCoin) ID() util.Bytes {
 	return []byte(c.addr.String())
 }
 
@@ -101,7 +101,7 @@ func (c *tokenFundingCoin) TxID() string {
 }
 
 // ID creates a byte slice that can be decoded with DecodeCoinID.
-func (c *tokenFundingCoin) RecoveryID() dex.Bytes {
+func (c *tokenFundingCoin) RecoveryID() util.Bytes {
 	b := make([]byte, tokenFundingCoinIDSize)
 	copy(b[:20], c.addr[:])
 	binary.BigEndian.PutUint64(b[20:28], c.amt)

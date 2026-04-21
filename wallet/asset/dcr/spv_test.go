@@ -13,8 +13,8 @@ import (
 	"unsafe"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
 	walleterrors "decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/p2p"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
@@ -456,7 +456,7 @@ func tNewSpvWallet() (*spvWallet, *tDcrWallet) {
 	return &spvWallet{
 		dcrWallet: dcrw,
 		spv:       dcrw,
-		log:       dex.StdOutLogger("T", dex.LevelTrace),
+		log:       util.StdOutLogger("T", util.LevelTrace),
 		blockCache: blockCache{
 			blocks: make(map[chainhash.Hash]*cachedBlock),
 		},
@@ -974,7 +974,7 @@ func TestBirthdayBlockHeight(t *testing.T) {
 	w := &NativeWallet{
 		ExchangeWallet: &ExchangeWallet{
 			wallet: spvw,
-			log:    dex.StdOutLogger("T", dex.LevelInfo),
+			log:    util.StdOutLogger("T", util.LevelInfo),
 		},
 		spvw: spvw,
 	}
@@ -1000,7 +1000,7 @@ func TestRescan(t *testing.T) {
 	w := &NativeWallet{
 		ExchangeWallet: &ExchangeWallet{
 			wallet: spvw,
-			log:    dex.StdOutLogger("T", dex.LevelInfo),
+			log:    util.StdOutLogger("T", util.LevelInfo),
 		},
 		spvw: spvw,
 	}

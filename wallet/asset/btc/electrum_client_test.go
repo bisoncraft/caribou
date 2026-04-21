@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/electrum"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -33,7 +33,7 @@ func Test_electrumWallet(t *testing.T) {
 	ewc := electrum.NewWalletClient("user", "pass", "http://127.0.0.1:5678", "~/.electrum/testnet/wallets/default_wallet")
 	ew := newElectrumWallet(ewc, &electrumWalletConfig{
 		params: &chaincfg.TestNet3Params,
-		log:    dex.StdOutLogger("ELECTRUM-TEST", dex.LevelTrace),
+		log:    util.StdOutLogger("ELECTRUM-TEST", util.LevelTrace),
 		segwit: true,
 	})
 	var wg sync.WaitGroup

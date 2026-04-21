@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
-	"github.com/bisoncraft/meshwallet/dex"
-	dexpolygon "github.com/bisoncraft/meshwallet/dex/networks/polygon"
+	"github.com/bisoncraft/meshwallet/util"
+	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
 	"github.com/ethereum/go-ethereum/common"
 	ethcore "github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/params"
@@ -36,13 +36,13 @@ var (
 
 // NetworkCompatibilityData returns the CompatibilityData for the specified
 // network. If using simnet, make sure the simnet harness is running.
-func NetworkCompatibilityData(net dex.Network) (c eth.CompatibilityData, err error) {
+func NetworkCompatibilityData(net util.Network) (c eth.CompatibilityData, err error) {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return mainnetCompatibilityData, nil
-	case dex.Testnet:
+	case util.Testnet:
 		return testnetCompatibilityData, nil
-	case dex.Simnet:
+	case util.Simnet:
 	default:
 		return c, fmt.Errorf("no compatibility data for network # %d", net)
 	}
@@ -84,13 +84,13 @@ func simnetDataDir() (string, error) {
 }
 
 // ChainConfig returns the core configuration for the blockchain.
-func ChainConfig(net dex.Network) (c *params.ChainConfig, err error) {
+func ChainConfig(net util.Network) (c *params.ChainConfig, err error) {
 	switch net {
-	case dex.Mainnet:
+	case util.Mainnet:
 		return dexpolygon.BorMainnetChainConfig, nil
-	case dex.Testnet:
+	case util.Testnet:
 		return dexpolygon.AmoyChainConfig, nil
-	case dex.Simnet:
+	case util.Simnet:
 		// Args are gasLimit, faucet address.
 		genesis := ethcore.DeveloperGenesisBlock(30000000, nil)
 		return genesis.Config, nil

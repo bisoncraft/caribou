@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	dexbtc "github.com/bisoncraft/meshwallet/dex/networks/btc"
+	"github.com/bisoncraft/meshwallet/util"
+	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -50,15 +50,15 @@ func (req *FindRedemptionReq) PkScript() []byte {
 
 // FindRedemptionResult models the result of a find redemption attempt.
 type FindRedemptionResult struct {
-	redemptionCoinID dex.Bytes
-	secret           dex.Bytes
+	redemptionCoinID util.Bytes
+	secret           util.Bytes
 	err              error
 }
 
 // RedemptionFinder searches on-chain for the redemption of a swap transactions.
 type RedemptionFinder struct {
 	mtx         sync.RWMutex
-	log         dex.Logger
+	log         util.Logger
 	redemptions map[OutPoint]*FindRedemptionReq
 
 	getWalletTransaction      func(txHash *chainhash.Hash) (*GetTransactionResult, error)
@@ -74,7 +74,7 @@ type RedemptionFinder struct {
 }
 
 func NewRedemptionFinder(
-	log dex.Logger,
+	log util.Logger,
 	getWalletTransaction func(txHash *chainhash.Hash) (*GetTransactionResult, error),
 	getBlockHeight func(*chainhash.Hash) (int32, error),
 	getBlock func(h chainhash.Hash) (*wire.MsgBlock, error),
@@ -102,7 +102,7 @@ func NewRedemptionFinder(
 	}
 }
 
-func (r *RedemptionFinder) FindRedemption(ctx context.Context, coinID dex.Bytes) (redemptionCoin, secret dex.Bytes, err error) {
+func (r *RedemptionFinder) FindRedemption(ctx context.Context, coinID util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
 	txHash, vout, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot decode contract coin id: %w", err)

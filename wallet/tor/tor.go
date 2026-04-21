@@ -17,12 +17,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/jrick/logrotate/rotator"
 )
 
 type HiddenService struct {
-	log     dex.Logger
+	log     util.Logger
 	exePath string
 	dataDir string
 	logPath string
@@ -31,7 +31,7 @@ type HiddenService struct {
 	onionAddr  string
 }
 
-func New(dataDir string, log dex.Logger) (_ *HiddenService, err error) {
+func New(dataDir string, log util.Logger) (_ *HiddenService, err error) {
 	if len(torBinary) == 0 {
 		log.Error("It doesn't look like tor was packaged correctly")
 		log.Error("Tor is only available on Linux for now")

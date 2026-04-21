@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/msgjson"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/msgjson"
 )
 
 var tCtx context.Context
 
 type TCore struct{}
 
-func (c *TCore) AckNotes(ids []dex.Bytes) {}
+func (c *TCore) AckNotes(ids []util.Bytes) {}
 
 type TConn struct {
 	msg       []byte
@@ -93,8 +93,8 @@ func newLink() *tLink {
 		respReady: make(chan []byte, 1),
 		close:     make(chan struct{}, 1),
 	}
-	ipk := dex.IPKey{16, 16, 120, 120 /* ipv6 1010:7878:: */}
-	cl := newWSClient(ipk.String(), conn, func(*msgjson.Message) *msgjson.Error { return nil }, dex.StdOutLogger("ws_TEST", dex.LevelTrace))
+	ipk := util.IPKey{16, 16, 120, 120 /* ipv6 1010:7878:: */}
+	cl := newWSClient(ipk.String(), conn, func(*msgjson.Message) *msgjson.Error { return nil }, util.StdOutLogger("ws_TEST", util.LevelTrace))
 	return &tLink{
 		cl:   cl,
 		conn: conn,
@@ -103,7 +103,7 @@ func newLink() *tLink {
 
 func newTServer() (*Server, *TCore) {
 	c := &TCore{}
-	return New(c, dex.StdOutLogger("TEST", dex.LevelTrace)), c
+	return New(c, util.StdOutLogger("TEST", util.LevelTrace)), c
 }
 
 func TestMain(m *testing.M) {
@@ -171,7 +171,7 @@ func TestClientMap(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		ipk := dex.IPKey{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255 /* ipv4 */, 127, 0, 0, 1}
+		ipk := util.IPKey{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255 /* ipv4 */, 127, 0, 0, 1}
 		srv.connect(ctx, conn, ipk.String())
 		wg.Done()
 	}()

@@ -1,0 +1,1122 @@
+package lexi
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	v1badger "github.com/dgraph-io/badger"
+	"github.com/dgraph-io/badger/v4"
+)
+
+func newTestDB(t *testing.T) (*DB, func()) {
+	tmpDir := t.TempDir()
+	db, err := New(&Config{
+		Path: filepath.Join(tmpDir, "test.db"),
+		Log:  util.StdOutLogger("T", util.LevelInfo),
+	})
+	if err != nil {
+		t.Fatalf("error constructing db: %v", err)
+	}
+	return db, func() {}
+}
+
+func TestPrefixes(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	pfix, err := db.prefixForName("1")
+	if err != nil {
+		t.Fatalf("error getting prefix 1: %v", err)
+	}
+	if pfix != firstAvailablePrefix {
+		t.Fatalf("expected prefix %s, got %s", firstAvailablePrefix, pfix)
+	}
+
+	pfix, err = db.prefixForName("2")
+	if err != nil {
+		t.Fatalf("error getting prefix 2: %v", err)
+	}
+	if secondPfix := incrementPrefix(firstAvailablePrefix); pfix != secondPfix {
+		t.Fatalf("expected prefix %s, got %s", secondPfix, pfix)
+	}
+
+	// Make sure requests for the same table name return the already-registered
+	// prefix.
+	pfix, err = db.prefixForName("1")
+	if err != nil {
+		t.Fatalf("error getting prefix 1 again: %v", err)
+	}
+	if pfix != firstAvailablePrefix {
+		t.Fatalf("expected prefix %s, got %s", firstAvailablePrefix, pfix)
+	}
+}
+
+type tValue struct {
+	k, v, idx []byte
+}
+
+func (v *tValue) MarshalBinary() ([]byte, error) {
+	return v.v, nil
+}
+
+func (v *tValue) UnmarshalBinary(data []byte) error {
+	v.v = make([]byte, len(data))
+	copy(v.v, data)
+	return nil
+}
+
+func valueIndex(k, v KV) ([]byte, error) {
+	return v.(*tValue).idx, nil
+}
+
+func valueKey(k, v KV) ([]byte, error) {
+	return v.(*tValue).k, nil
+}
+
+func TestIndex(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	idx, err := tbl.AddIndex("I", valueIndex)
+	if err != nil {
+		t.Fatalf("Error adding index: %v", err)
+	}
+
+	keyIdx, err := tbl.AddIndex("K", valueKey)
+	if err != nil {
+		t.Fatalf("Error adding index: %v", err)
+	}
+
+	// Put 100 values in.
+	const nVs = 100
+	vs := make([]*tValue, nVs)
+	for i := 0; i < nVs; i++ {
+		// Random value, but with a flag at the end.
+		k := append(encode.RandomBytes(5), byte(i))
+		// The index is keyed on i, with a prefix of 0, until 40, after which
+		// the prefix is 1.
+		indexKey := []byte{byte(i)}
+		prefix := []byte{0}
+		if i >= 40 {
+			prefix = []byte{1}
+		}
+		indexKey = append(prefix, indexKey...)
+		v := &tValue{k: indexKey, v: encode.RandomBytes(10), idx: []byte{byte(i)}}
+		vs[i] = v
+		if err := tbl.Set(k, v); err != nil {
+			t.Fatalf("Error setting table entry: %v", err)
+		}
+	}
+
+	// Iterate forwards.
+	var i int
+	idx.Iterate(nil, func(it *Iter) error {
+		v := vs[i]
+		it.V(func(vB []byte) error {
+			if !bytes.Equal(vB, v.v) {
+				t.Fatalf("Wrong bytes for forward iteration index %d", i)
+			}
+			return nil
+		})
+		i++
+		return nil
+	})
+	if i != nVs {
+		t.Fatalf("Expected to iterate %d items but only did %d", nVs, i)
+	}
+
+	// Iterate backwards
+	i = nVs
+	idx.Iterate(nil, func(it *Iter) error {
+		i--
+		v := vs[i]
+		return it.V(func(vB []byte) error {
+			if !bytes.Equal(vB, v.v) {
+				t.Fatalf("Wrong bytes for reverse iteration index %d", i)
+			}
+			return nil
+		})
+	}, WithReverse())
+	if i != 0 {
+		t.Fatalf("Expected to iterate back to zero but only got to %d", i)
+	}
+
+	// Iterate forwards with prefix.
+	keyIdx.Iterate([]byte{0}, func(it *Iter) error {
+		v := vs[i]
+		it.V(func(vB []byte) error {
+			if !bytes.Equal(vB, v.v) {
+				t.Fatalf("Wrong bytes for forward iteration index %d", i)
+			}
+			return nil
+		})
+		i++
+		return nil
+	})
+	if i != 40 {
+		t.Fatalf("Expected to iterate 40 items but only did %d", i)
+	}
+
+	// Iterate backwards with prefix.
+	keyIdx.Iterate([]byte{0}, func(it *Iter) error {
+		i--
+		v := vs[i]
+		return it.V(func(vB []byte) error {
+			if !bytes.Equal(vB, v.v) {
+				t.Fatalf("Wrong bytes for reverse iteration index %d", i)
+			}
+			return nil
+		})
+	}, WithReverse())
+	if i != 0 {
+		t.Fatalf("Expected to iterate back to zero but only got to %d", i)
+	}
+
+	// Iterate forward and delete the first half.
+	i = 0
+	if err := idx.Iterate(nil, func(it *Iter) error {
+		if i < 50 {
+			i++
+			return it.Delete()
+		}
+		return ErrEndIteration
+	}, WithUpdate()); err != nil {
+		t.Fatalf("Error iterating forward to delete entries: %v", err)
+	}
+	if i != 50 {
+		t.Fatalf("Expected to iterate forward to 50, but only got to %d", i)
+	}
+
+	idx.Iterate(nil, func(it *Iter) error {
+		return it.V(func(vB []byte) error {
+			if !bytes.Equal(vB, vs[50].v) {
+				t.Fatal("Wrong first iteration item after deletion")
+			}
+			return ErrEndIteration
+		})
+	})
+
+	// Seek a specific item.
+	i = 75
+	idx.Iterate(nil, func(it *Iter) error {
+		if i == 75 {
+			i--
+			return it.V(func(vB []byte) error {
+				if !bytes.Equal(vB, vs[75].v) {
+					t.Fatal("first item wasn't 25")
+				}
+				return nil
+			})
+		} else if i == 74 {
+			return ErrEndIteration
+		}
+		t.Fatal("reached an unexpected value")
+		return nil
+	}, WithSeek(vs[75].idx), WithReverse())
+	if i != 74 {
+		t.Fatal("never reached 74")
+	}
+
+	// Make sure we can iterate the table directly
+	i = 0
+	if err := tbl.Iterate(nil, func(it *Iter) error {
+		i++
+		return nil
+	}); err != nil {
+		t.Fatalf("Error iterating table: %v", err)
+	}
+	if i != 50 {
+		t.Fatal("table didn't have 50")
+	}
+}
+
+func TestDatum(t *testing.T) {
+	testEncodeDecode := func(tag string, d *datum) {
+		t.Helper()
+		b, err := d.bytes()
+		if err != nil {
+			t.Fatalf("%s: error encoding simple datum: %v", tag, err)
+		}
+		reD, err := decodeDatum(b)
+		if err != nil {
+			t.Fatalf("%s: error decoding simple datum: %v", tag, err)
+		}
+		if !bytes.Equal(reD.v, d.v) {
+			t.Fatalf("%s: decoding datum value incorrect. %x != %x", tag, reD.v, d.v)
+		}
+		if d.version != 0 {
+			t.Fatalf("%s: wrong datum version. expected %d, got %d", tag, d.version, reD.version)
+		}
+		if len(d.indexes) != len(reD.indexes) {
+			t.Fatalf("%s: wrong number of indexes. wanted %d, got %d", tag, len(d.indexes), reD.indexes)
+		}
+		for i, idx := range d.indexes {
+			if !bytes.Equal(idx, reD.indexes[i]) {
+				t.Fatalf("%s: Wrong index # %d", tag, i)
+			}
+		}
+	}
+
+	d := &datum{version: 1, v: []byte{0x01}}
+	if _, err := d.bytes(); err == nil || !strings.Contains(err.Error(), "unknown datum version") {
+		t.Fatalf("Wrong error for unknown datum version: %v", err)
+	}
+	d.version = 0
+
+	testEncodeDecode("simple", d)
+
+	d = &datum{v: encode.RandomBytes(300)}
+	d.indexes = append(d.indexes, encode.RandomBytes(5))
+	d.indexes = append(d.indexes, encode.RandomBytes(300))
+	testEncodeDecode("complex", d)
+}
+
+func TestUniqueIndex(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("UniqueTest")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	uniqueIdx, err := tbl.AddUniqueIndex("Unique", func(k, v KV) ([]byte, error) {
+		return v.(*tValue).idx, nil
+	})
+	if err != nil {
+		t.Fatalf("Error adding unique index: %v", err)
+	}
+
+	key1 := []byte("key1")
+	key2 := []byte("key2")
+
+	// Both values have the same index key to test uniqueness constraint
+	sameIndexKey := []byte{0x01}
+
+	val1 := &tValue{
+		k:   key1,
+		v:   []byte("value1"),
+		idx: sameIndexKey,
+	}
+	val2 := &tValue{
+		k:   key2,
+		v:   []byte("value2"),
+		idx: sameIndexKey,
+	}
+
+	// First insert should succeed
+	if err := tbl.Set(key1, val1); err != nil {
+		t.Fatalf("Error setting first value: %v", err)
+	}
+
+	// Second insert with same index key should fail without WithReplace()
+	err = tbl.Set(key2, val2)
+	if err == nil {
+		t.Fatal("Expected error when inserting duplicate index value without WithReplace(), but got none")
+	}
+	if !strings.Contains(err.Error(), "index uniqueness violation") {
+		t.Fatalf("Expected unique index error, got: %v", err)
+	}
+
+	// Verify the first value is still there
+	var retrievedVal []byte
+	numEntries := 0
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		numEntries++
+		err := it.V(func(v []byte) error {
+			retrievedVal = v
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Error iterating table: %v", err)
+	}
+	if !bytes.Equal(retrievedVal, val1.v) {
+		t.Fatalf("Expected value1 to still be in table, got %s", retrievedVal)
+	}
+	if numEntries != 1 {
+		t.Fatalf("Expected 1 entry in table, got %d", numEntries)
+	}
+
+	// Second insert with same index key should succeed with WithReplace()
+	if err := tbl.Set(key2, val2, WithReplace()); err != nil {
+		t.Fatalf("Error setting second value with WithReplace(): %v", err)
+	}
+
+	// Verify the replacement worked by checking the table content
+	numEntries = 0
+	var lastVal []byte
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		numEntries++
+		return it.V(func(v []byte) error {
+			lastVal = v
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Error iterating table after replace: %v", err)
+	}
+	if numEntries != 1 {
+		t.Fatalf("Expected 1 value in table after replace, got %d", numEntries)
+	}
+	if !bytes.Equal(lastVal, val2.v) {
+		t.Fatalf("Expected replaced value to be value2, got %s", lastVal)
+	}
+
+	// Verify we can iterate through the unique index and get the correct result
+	numEntries = 0
+	uniqueIdx.Iterate(nil, func(it *Iter) error {
+		numEntries++
+		return it.V(func(v []byte) error {
+			if !bytes.Equal(v, val2.v) {
+				t.Fatalf("Expected value2 when iterating unique index, got %s", v)
+			}
+			return nil
+		})
+	})
+	if numEntries != 1 {
+		t.Fatalf("Expected 1 value in unique index, got %d", numEntries)
+	}
+}
+
+// TestNotIndexed tests that when an index mapping function returns
+// ErrNotIndexed, the datum is not added to the index.
+func TestNotIndexed(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("NotIndexedTest")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	// Create an index that only indexes even values where the first byte is
+	// even.
+	idx, err := tbl.AddIndex("EvenOnly", func(k, v KV) ([]byte, error) {
+		val := v.(*tValue)
+		if len(val.v) > 0 && val.v[0]%2 == 0 {
+			return []byte{val.v[0]}, nil
+		}
+		return nil, ErrNotIndexed
+	})
+	if err != nil {
+		t.Fatalf("Error adding index: %v", err)
+	}
+
+	// Insert 10 values, with alternating even/odd first bytes
+	for i := 0; i < 10; i++ {
+		k := []byte{byte(i)}
+		v := &tValue{
+			k:   k,
+			v:   append([]byte{byte(i)}, encode.RandomBytes(5)...),
+			idx: []byte{byte(i)},
+		}
+		if err := tbl.Set(k, v); err != nil {
+			t.Fatalf("Error setting value %d: %v", i, err)
+		}
+	}
+
+	count := 0
+	expectedValues := []byte{0, 2, 4, 6, 8}
+	foundValues := make([]byte, 0, 5)
+	err = idx.Iterate(nil, func(it *Iter) error {
+		count++
+		return it.V(func(vB []byte) error {
+			if len(vB) > 0 {
+				foundValues = append(foundValues, vB[0])
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Error iterating index: %v", err)
+	}
+
+	// Ensure that the number of values in the index is correct,
+	// and that the expected values were found.
+	if count != 5 {
+		t.Fatalf("Expected 5 indexed values, got %d", count)
+	}
+	slices.Sort(foundValues)
+	if !reflect.DeepEqual(foundValues, expectedValues) {
+		t.Fatalf("Expected values %v, got %v", expectedValues, foundValues)
+	}
+
+	// Ensure the table has all the values, even those that were not indexed.
+	tableCount := 0
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		tableCount++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Error iterating table: %v", err)
+	}
+	if tableCount != 10 {
+		t.Fatalf("Expected 10 table entries, got %d", tableCount)
+	}
+
+	// Delete an even and an odd value
+	evenKey := []byte{2}
+	oddKey := []byte{3}
+	if err := tbl.Delete(evenKey); err != nil {
+		t.Fatalf("Error deleting even key: %v", err)
+	}
+	if err := tbl.Delete(oddKey); err != nil {
+		t.Fatalf("Error deleting odd key: %v", err)
+	}
+
+	// Recheck the index after deletion
+	count = 0
+	expectedValues = []byte{0, 4, 6, 8} // 2 was removed
+	foundValues = make([]byte, 0, 4)
+	err = idx.Iterate(nil, func(it *Iter) error {
+		count++
+		return it.V(func(vB []byte) error {
+			if len(vB) > 0 {
+				foundValues = append(foundValues, vB[0])
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Error iterating index after deletion: %v", err)
+	}
+
+	// Ensure that the number of values in the index is correct after deletion,
+	// and that the expected values were found.
+	if count != 4 {
+		t.Fatalf("Expected 4 indexed values after deletion, got %d", count)
+	}
+	slices.Sort(foundValues)
+	if !reflect.DeepEqual(foundValues, expectedValues) {
+		t.Fatalf("Expected values %v after deletion, got %v", expectedValues, foundValues)
+	}
+
+	// Recheck the table after deletion
+	tableCount = 0
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		tableCount++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Error iterating table after deletion: %v", err)
+	}
+	if tableCount != 8 {
+		t.Fatalf("Expected 8 table entries after deletion, got %d", tableCount)
+	}
+}
+
+func TestDeleteIndex(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("DeleteIndexTest")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	idx, err := tbl.AddIndex("I", func(k, v KV) ([]byte, error) {
+		return v.(*tValue).idx, nil
+	})
+	if err != nil {
+		t.Fatalf("Error adding index: %v", err)
+	}
+
+	for i := range 10 {
+		k := []byte{byte(i)}
+		v := &tValue{
+			k:   k,
+			v:   append([]byte{byte(i)}, encode.RandomBytes(5)...),
+			idx: []byte{byte(i)},
+		}
+		if err := tbl.Set(k, v); err != nil {
+			t.Fatalf("Error setting value %d: %v", i, err)
+		}
+	}
+
+	var count int
+	idx.Iterate(nil, func(it *Iter) error {
+		count++
+		return nil
+	})
+	if count != 10 {
+		t.Fatalf("Expected 10 values, got %d", count)
+	}
+
+	err = db.DeleteIndex("DeleteIndexTest", "I")
+	if err != nil {
+		t.Fatalf("Error deleting index: %v", err)
+	}
+
+	count = 0
+	idx.Iterate(nil, func(it *Iter) error {
+		count++
+		return nil
+	})
+	if count != 0 {
+		t.Fatalf("Expected 0 values, got %d", count)
+	}
+}
+
+func TestReIndex(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	// Create a table with no indexes.
+	tbl, err := db.Table("DeleteIndexTest")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	// Add 10 values to the table.
+	values := make([][]byte, 10)
+	for i := range 10 {
+		k := []byte{byte(i)}
+		v := &tValue{
+			k:   k,
+			v:   append([]byte{byte(i)}, encode.RandomBytes(5)...),
+			idx: []byte{byte(i)},
+		}
+		values[i] = v.v
+		if err := tbl.Set(k, v); err != nil {
+			t.Fatalf("Error setting value %d: %v", i, err)
+		}
+	}
+	sort.Slice(values, func(i, j int) bool {
+		return bytes.Compare(values[i], values[j]) < 0
+	})
+
+	// Create two indexes, one on the key and one on the value.
+	kIdx, err := tbl.AddIndex("K", func(k, v KV) ([]byte, error) {
+		return k.([]byte), nil
+	})
+	if err != nil {
+		t.Fatalf("Error adding index: %v", err)
+	}
+	vIdx, err := tbl.AddIndex("V", func(k, v KV) ([]byte, error) {
+		return v.([]byte), nil
+	})
+	if err != nil {
+		t.Fatalf("Error adding index: %v", err)
+	}
+
+	// Reindex the indexes.
+	err = db.Upgrade(func() error {
+		err = db.ReIndex("DeleteIndexTest", "K", func(k, v []byte) ([]byte, error) {
+			return k, nil
+		})
+		if err != nil {
+			return err
+		}
+		return db.ReIndex("DeleteIndexTest", "V", func(k, v []byte) ([]byte, error) {
+			return v, nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Error reindexing index: %v", err)
+	}
+
+	// Check the key index.
+	var count int
+	var expKey int
+	kIdx.Iterate(nil, func(it *Iter) error {
+		k, err := it.K()
+		if err != nil {
+			return err
+		}
+		if int(k[0]) != expKey {
+			return fmt.Errorf("expected key %d, got %d", expKey, k[0])
+		}
+		count++
+		expKey++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Error iterating index: %v", err)
+	}
+	if count != 10 {
+		t.Fatalf("Expected 10 values, got %d", count)
+	}
+
+	// Check the value index.
+	count = 0
+	err = vIdx.Iterate(nil, func(it *Iter) error {
+		return it.V(func(v []byte) error {
+			if !bytes.Equal(v, values[count]) {
+				return fmt.Errorf("expected value %d, got %d", values[count], v)
+			}
+			count++
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Error iterating index: %v", err)
+	}
+	if count != 10 {
+		t.Fatalf("Expected 10 values, got %d", count)
+	}
+}
+
+// TestUpgradeTransaction verifies that the same transaction is used for all
+// db.Update calls within a single upgrade, and that different upgrade calls
+// use different transactions.
+func TestUpgradeTransaction(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	var firstUpgradeTxn *badger.Txn
+	var secondUpgradeTxn *badger.Txn
+
+	err := db.Upgrade(func() error {
+		err := db.Update(func(txn *badger.Txn) error {
+			firstUpgradeTxn = txn
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		err = db.Update(func(txn *badger.Txn) error {
+			if txn != firstUpgradeTxn {
+				t.Fatal("Second db.Update should use the same transaction as the first")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("First upgrade failed: %v", err)
+	}
+
+	err = db.Upgrade(func() error {
+		err := db.Update(func(txn *badger.Txn) error {
+			secondUpgradeTxn = txn
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		err = db.Update(func(txn *badger.Txn) error {
+			if txn != secondUpgradeTxn {
+				t.Fatal("Second db.Update should use the same transaction as the first")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Second upgrade failed: %v", err)
+	}
+
+	if firstUpgradeTxn == secondUpgradeTxn {
+		t.Fatal("The two upgrade calls should use different transactions")
+	}
+}
+
+func TestDBVersion(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	// Initially, the version should be 0
+	got, err := db.GetDBVersion()
+	if err != nil {
+		t.Fatalf("unexpected error when getting unset DB version: %v", err)
+	}
+	if got != 0 {
+		t.Fatalf("expected initial version 0, got %d", got)
+	}
+
+	// Set a version
+	var version uint32 = 2
+	if err := db.SetDBVersion(version); err != nil {
+		t.Fatalf("SetDBVersion error: %v", err)
+	}
+
+	got, err = db.GetDBVersion()
+	if err != nil {
+		t.Fatalf("GetDBVersion error: %v", err)
+	}
+	if got != version {
+		t.Fatalf("expected version %d, got %d", version, got)
+	}
+
+	// Set a new version
+	version = 3
+	if err := db.SetDBVersion(version); err != nil {
+		t.Fatalf("SetDBVersion error: %v", err)
+	}
+	got, err = db.GetDBVersion()
+	if err != nil {
+		t.Fatalf("GetDBVersion error: %v", err)
+	}
+	if got != version {
+		t.Fatalf("expected version %d, got %d", version, got)
+	}
+}
+
+// TestTransactionOptions tests the new WithTxn and WithGetTxn options for
+// Set and Get operations.
+func TestTransactionOptions(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("TxnTest")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	key := []byte("key")
+	val := &tValue{
+		k:   key,
+		v:   []byte("val"),
+		idx: []byte{0x99},
+	}
+
+	// This transaction should rollback and not persist the value
+	err = db.Update(func(txn *badger.Txn) error {
+		if err := tbl.Set(key, val, WithTxn(txn)); err != nil {
+			return err
+		}
+
+		// Verify we can read it within the transaction
+		var retrievedVal tValue
+		if err := tbl.Get(key, &retrievedVal, WithGetTxn(txn)); err != nil {
+			return fmt.Errorf("unexpected error reading within txn: %w", err)
+		}
+
+		// Force rollback by returning an error
+		return fmt.Errorf("intentional rollback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "intentional rollback") {
+		t.Fatalf("Expected intentional rollback error, got: %v", err)
+	}
+
+	// Verify the value was not persisted
+	var retrievedVal tValue
+	err = tbl.Get(key, &retrievedVal)
+	if err == nil {
+		t.Fatalf("Expected error when getting rolled back value, but got none")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "key not found") {
+		t.Fatalf("Expected key not found error, got: %v", err)
+	}
+}
+
+func TestNeedsV1toV4Update(t *testing.T) {
+	tests := []struct {
+		name, addSuffix string
+		setupFunc       func(t *testing.T, tmpDir string, basePath string)
+		wantNeedsMigr   bool
+		wantV4Suffix    bool
+	}{
+		{
+			name:          "neither directory exists - new db",
+			setupFunc:     func(t *testing.T, tmpDir string, basePath string) {},
+			wantNeedsMigr: false,
+			wantV4Suffix:  true,
+		},
+		{
+			name: "only v1 directory exists - needs migration",
+			setupFunc: func(t *testing.T, tmpDir string, basePath string) {
+				if err := os.MkdirAll(basePath, 0755); err != nil {
+					t.Fatalf("Failed to create v1 directory: %v", err)
+				}
+			},
+			wantNeedsMigr: true,
+			wantV4Suffix:  true,
+		},
+		{
+			name: "only v4 directory exists - already migrated",
+			setupFunc: func(t *testing.T, tmpDir string, basePath string) {
+				v4Path := basePath + "_v4"
+				if err := os.MkdirAll(v4Path, 0755); err != nil {
+					t.Fatalf("Failed to create v4 directory: %v", err)
+				}
+			},
+			wantNeedsMigr: false,
+			wantV4Suffix:  true,
+		},
+		{
+			name: "both v1 and v4 directories exist - use v4",
+			setupFunc: func(t *testing.T, tmpDir string, basePath string) {
+				if err := os.MkdirAll(basePath, 0755); err != nil {
+					t.Fatalf("Failed to create v1 directory: %v", err)
+				}
+				v4Path := basePath + "_v4"
+				if err := os.MkdirAll(v4Path, 0755); err != nil {
+					t.Fatalf("Failed to create v4 directory: %v", err)
+				}
+			},
+			wantNeedsMigr: false,
+			wantV4Suffix:  true,
+		},
+		{
+			name: "v4 directory exists - already migrated - base path has version suffix",
+			setupFunc: func(t *testing.T, tmpDir string, basePath string) {
+				v4Path := basePath + "_v4"
+				if err := os.MkdirAll(v4Path, 0755); err != nil {
+					t.Fatalf("Failed to create v4 directory: %v", err)
+				}
+			},
+			wantNeedsMigr: false,
+			wantV4Suffix:  true,
+			addSuffix:     "_v4",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			basePath := filepath.Join(tmpDir, "test.db")
+
+			tt.setupFunc(t, tmpDir, basePath)
+
+			gotPath, gotNeeds, err := NeedsV1toV4Update(basePath + tt.addSuffix)
+			if err != nil {
+				t.Fatalf("NeedsV1toV4Update returned error: %v", err)
+			}
+
+			if gotNeeds != tt.wantNeedsMigr {
+				t.Errorf("NeedsV1toV4Update() needsMigration = %v, want %v", gotNeeds, tt.wantNeedsMigr)
+			}
+
+			expectedV4Path := basePath + "_v4"
+			if tt.wantV4Suffix && gotPath != expectedV4Path {
+				t.Errorf("NeedsV1toV4Update() path = %v, want %v", gotPath, expectedV4Path)
+			}
+		})
+	}
+}
+
+func TestBadgerV1Update(t *testing.T) {
+	tmpDir := t.TempDir()
+	v1Path := filepath.Join(tmpDir, "v1db")
+	v4Path := filepath.Join(tmpDir, "v4db")
+
+	logger := util.StdOutLogger("TEST", util.LevelWarn)
+
+	// Create a v1 database and populate it with test data.
+	v1opts := v1badger.DefaultOptions(v1Path).WithLogger(&badgerLoggerWrapper{logger})
+	v1db, err := v1badger.Open(v1opts)
+	if err != nil {
+		t.Fatalf("Failed to open v1 database: %v", err)
+	}
+
+	// Insert test data into v1 database.
+	testData := map[string]string{
+		"key1": "value1",
+		"key2": "value2",
+		"key3": "value3",
+	}
+
+	err = v1db.Update(func(txn *v1badger.Txn) error {
+		for k, v := range testData {
+			if err := txn.Set([]byte(k), []byte(v)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Failed to insert test data into v1 database: %v", err)
+	}
+
+	// Close the v1 database before migration.
+	if err := v1db.Close(); err != nil {
+		t.Fatalf("Failed to close v1 database: %v", err)
+	}
+
+	// Perform the migration.
+	v4opts := badger.DefaultOptions(v4Path).WithLogger(&badgerLoggerWrapper{logger})
+	v4db, err := BadgerV1Update(v1Path, v4Path, logger, v4opts)
+	if err != nil {
+		t.Fatalf("BadgerV1Update failed: %v", err)
+	}
+	defer v4db.Close()
+
+	// Verify all data was migrated correctly.
+	err = v4db.View(func(txn *badger.Txn) error {
+		for k, expectedV := range testData {
+			item, err := txn.Get([]byte(k))
+			if err != nil {
+				return fmt.Errorf("failed to get key %s: %w", k, err)
+			}
+			err = item.Value(func(val []byte) error {
+				if string(val) != expectedV {
+					return fmt.Errorf("key %s: expected value %s, got %s", k, expectedV, string(val))
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Data verification failed: %v", err)
+	}
+}
+
+func TestBadgerV1UpdateWithLargeData(t *testing.T) {
+	tmpDir := t.TempDir()
+	v1Path := filepath.Join(tmpDir, "v1db_large")
+	v4Path := filepath.Join(tmpDir, "v4db_large")
+
+	logger := util.StdOutLogger("TEST", util.LevelWarn)
+
+	// Create a v1 database and populate it with more data.
+	v1opts := v1badger.DefaultOptions(v1Path).WithLogger(&badgerLoggerWrapper{logger})
+	v1db, err := v1badger.Open(v1opts)
+	if err != nil {
+		t.Fatalf("Failed to open v1 database: %v", err)
+	}
+
+	// Insert 100 key-value pairs with varying sizes.
+	const numEntries = 100
+	testData := make(map[string][]byte, numEntries)
+
+	err = v1db.Update(func(txn *v1badger.Txn) error {
+		for i := 0; i < numEntries; i++ {
+			key := fmt.Sprintf("key_%04d", i)
+			value := encode.RandomBytes(100 + i*10) // Varying value sizes
+			testData[key] = value
+			if err := txn.Set([]byte(key), value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	if err := v1db.Close(); err != nil {
+		t.Fatalf("Failed to close v1 database: %v", err)
+	}
+
+	// Perform the migration.
+	v4opts := badger.DefaultOptions(v4Path).WithLogger(&badgerLoggerWrapper{logger})
+	v4db, err := BadgerV1Update(v1Path, v4Path, logger, v4opts)
+	if err != nil {
+		t.Fatalf("BadgerV1Update failed: %v", err)
+	}
+	defer v4db.Close()
+
+	// Verify all data was migrated correctly.
+	var count int
+	err = v4db.View(func(txn *badger.Txn) error {
+		for k, expectedV := range testData {
+			item, err := txn.Get([]byte(k))
+			if err != nil {
+				return fmt.Errorf("failed to get key %s: %w", k, err)
+			}
+			err = item.Value(func(val []byte) error {
+				if !bytes.Equal(val, expectedV) {
+					return fmt.Errorf("key %s: value mismatch", k)
+				}
+				count++
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Data verification failed: %v", err)
+	}
+
+	if count != numEntries {
+		t.Fatalf("Expected %d entries, but verified %d", numEntries, count)
+	}
+}
+
+func TestNewWithMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "test.db")
+
+	logger := util.StdOutLogger("TEST", util.LevelWarn)
+
+	// Create a v1 database at the base path.
+	v1opts := v1badger.DefaultOptions(basePath).WithLogger(&badgerLoggerWrapper{logger})
+	v1db, err := v1badger.Open(v1opts)
+	if err != nil {
+		t.Fatalf("Failed to create v1 database: %v", err)
+	}
+
+	// Insert some data.
+	testKey := []byte("migration_test_key")
+	testValue := []byte("migration_test_value")
+	err = v1db.Update(func(txn *v1badger.Txn) error {
+		return txn.Set(testKey, testValue)
+	})
+	if err != nil {
+		t.Fatalf("Failed to insert data: %v", err)
+	}
+
+	if err := v1db.Close(); err != nil {
+		t.Fatalf("Failed to close v1 database: %v", err)
+	}
+
+	// Open with New() which should trigger migration.
+	db, err := New(&Config{
+		Path: basePath,
+		Log:  logger,
+	})
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer db.Close()
+
+	// Verify the migrated data is accessible.
+	err = db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(testKey)
+		if err != nil {
+			return fmt.Errorf("failed to get migrated key: %w", err)
+		}
+		return item.Value(func(val []byte) error {
+			if !bytes.Equal(val, testValue) {
+				return fmt.Errorf("value mismatch: expected %s, got %s", testValue, val)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Migrated data verification failed: %v", err)
+	}
+
+	// Verify the v4 directory was created.
+	v4Path := basePath + "_v4"
+	if _, err := os.Stat(v4Path); os.IsNotExist(err) {
+		t.Fatalf("Expected v4 directory to exist at %s", v4Path)
+	}
+}

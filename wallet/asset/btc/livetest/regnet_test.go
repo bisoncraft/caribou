@@ -14,8 +14,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	tBTC = &dex.Asset{
+	tBTC = &util.Asset{
 		ID:         0,
 		Symbol:     "btc",
 		Version:    0, // match btc.version
@@ -59,7 +59,7 @@ func TestWallet(t *testing.T) {
 
 	spvDir := t.TempDir()
 
-	createWallet := func(cfg *asset.WalletConfig, name string, logger dex.Logger) error {
+	createWallet := func(cfg *asset.WalletConfig, name string, logger util.Logger) error {
 		// var seed [32]byte
 		// copy(seed[:], []byte(name))
 		seed := encode.RandomBytes(32)
@@ -69,21 +69,21 @@ func TestWallet(t *testing.T) {
 			Seed:    seed[:],
 			Pass:    tPW, // match walletPassword in livetest.go -> Run
 			DataDir: cfg.DataDir,
-			Net:     dex.Simnet,
+			Net:     util.Simnet,
 			Logger:  logger,
 		})
 		if err != nil {
 			return fmt.Errorf("error creating SPV wallet: %w", err)
 		}
 
-		w, err := btc.NewWallet(cfg, logger, dex.Regtest)
+		w, err := btc.NewWallet(cfg, logger, util.Regtest)
 		if err != nil {
 			t.Fatalf("error creating backend: %v", err)
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		cm := dex.NewConnectionMaster(w)
+		cm := util.NewConnectionMaster(w)
 		err = cm.Connect(ctx)
 		if err != nil {
 			t.Fatalf("error connecting backend: %v", err)
@@ -123,7 +123,7 @@ func TestWallet(t *testing.T) {
 		return nil
 	}
 
-	spvConstructor := func(cfg *asset.WalletConfig, logger dex.Logger, network dex.Network) (asset.Wallet, error) {
+	spvConstructor := func(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 		token := hex.EncodeToString(encode.RandomBytes(4))
 		cfg.Type = walletTypeSPV
 		cfg.DataDir = filepath.Join(spvDir, token)

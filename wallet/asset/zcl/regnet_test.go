@@ -9,12 +9,12 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 )
 
 var (
 	tLotSize uint64 = 1e6
-	tZCL            = &dex.Asset{
+	tZCL            = &util.Asset{
 		ID:         BipID,
 		Symbol:     "zcl",
 		MaxFeeRate: 100,

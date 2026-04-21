@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/config"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/internal/adaptorsigs"
 	dcradaptor "github.com/bisoncraft/meshwallet/internal/adaptorsigs/dcr"
 	"decred.org/dcrwallet/v5/rpc/client/dcrwallet"
@@ -127,7 +127,7 @@ type partClient struct {
 	partSignKeyHalf  *secp256k1.PrivateKey
 }
 
-func newRPCWallet(settings map[string]string, logger dex.Logger, net dex.Network) (*combinedClient, error) {
+func newRPCWallet(settings map[string]string, logger util.Logger, net util.Network) (*combinedClient, error) {
 	certs, err := os.ReadFile(settings["rpccert"])
 	if err != nil {
 		return nil, fmt.Errorf("TLS certificate read error: %w", err)
@@ -155,11 +155,11 @@ func newRPCWallet(settings map[string]string, logger dex.Logger, net dex.Network
 
 	var params *chaincfg.Params
 	switch net {
-	case dex.Simnet:
+	case util.Simnet:
 		params = chaincfg.SimNetParams()
-	case dex.Testnet:
+	case util.Testnet:
 		params = chaincfg.TestNet3Params()
-	case dex.Mainnet:
+	case util.Mainnet:
 		params = chaincfg.MainNetParams()
 	default:
 		return nil, fmt.Errorf("unknown network ID: %d", uint8(net))
@@ -205,11 +205,11 @@ out:
 	}
 	settings["account"] = "default"
 
-	net := dex.Simnet
+	net := util.Simnet
 	if testnet {
-		net = dex.Testnet
+		net = util.Testnet
 	}
-	dcr, err := newRPCWallet(settings, dex.StdOutLogger("client", slog.LevelTrace), net)
+	dcr, err := newRPCWallet(settings, util.StdOutLogger("client", slog.LevelTrace), net)
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +353,7 @@ func run(ctx context.Context) error {
 	}
 
 	pl := prettyLogger{c: color.New(color.FgGreen)}
-	log := dex.NewLogger("T", dex.LevelInfo, pl)
+	log := util.NewLogger("T", util.LevelInfo, pl)
 
 	log.Info("Running success.")
 	if err := success(ctx); err != nil {

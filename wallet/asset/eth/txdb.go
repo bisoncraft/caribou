@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/dex/encode"
-	"github.com/bisoncraft/meshwallet/dex/lexi"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/lexi"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -28,8 +28,8 @@ type extendedWalletTx struct {
 	SubmissionTime uint64         `json:"timeStamp"` // seconds
 	Nonce          *big.Int       `json:"nonce"`
 	Receipt        *types.Receipt `json:"receipt,omitempty"`
-	RawTx          dex.Bytes      `json:"rawTx"`
-	CallData       dex.Bytes      `json:"callData"`
+	RawTx          util.Bytes      `json:"rawTx"`
+	CallData       util.Bytes      `json:"callData"`
 	// NonceReplacement is a transaction with the same nonce that was accepted
 	// by the network, meaning this tx was not applied.
 	NonceReplacement string `json:"nonceReplacement,omitempty"`
@@ -52,7 +52,7 @@ type extendedWalletTx struct {
 	PreviousBridgeCompletionID string `json:"previousBridgeCompletionID,omitempty"`
 	// BridgeFollowUpData is the data required to submit and verify a follow-up
 	// bridge completion. It is only populated for follow-up bridge completions.
-	BridgeFollowUpData dex.Bytes `json:"bridgeFollowUpData,omitempty"`
+	BridgeFollowUpData util.Bytes `json:"bridgeFollowUpData,omitempty"`
 	// RequiresFollowUp is true if the bridge requires a follow-up completion. It
 	// is set to true for the initial bridge completion.
 	RequiresFollowUp bool `json:"requiresFollowUp,omitempty"`
@@ -123,7 +123,7 @@ func (t *extendedWalletTx) tx() (*types.Transaction, error) {
 }
 
 type txDB interface {
-	dex.Connector
+	util.Connector
 	storeTx(wt *extendedWalletTx) error
 	getTxs(tokenID *uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error)
 	// getTx gets a single transaction. It is not an error if the tx is not known.
@@ -149,7 +149,7 @@ type TxDB struct {
 	bridgeInitiationAssetIndex *lexi.Index
 
 	baseChainID uint32
-	log         dex.Logger
+	log         util.Logger
 }
 
 var _ txDB = (*TxDB)(nil)
@@ -229,7 +229,7 @@ func bridgeAssetIndexEntry(wt *extendedWalletTx, baseChainID uint32) []byte {
 }
 
 // NewTxDB creates a transaction database for storing Ethereum transactions.
-func NewTxDB(path string, log dex.Logger, baseChainID uint32) (*TxDB, error) {
+func NewTxDB(path string, log util.Logger, baseChainID uint32) (*TxDB, error) {
 	ldb, err := lexi.New(&lexi.Config{
 		Path: path,
 		Log:  log,

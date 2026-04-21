@@ -64,7 +64,7 @@ import (
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/appserver"
-	"github.com/bisoncraft/meshwallet/dex"
+	"github.com/bisoncraft/meshwallet/util"
 	"fyne.io/systray"
 	webview "github.com/bisoncraft/webview_go"
 	"github.com/gen2brain/beeep"
@@ -192,7 +192,7 @@ func mainCore() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		cm := dex.NewConnectionMaster(webSrv)
+		cm := util.NewConnectionMaster(webSrv)
 		webStart <- cm.Connect(appCtx)
 		cm.Wait()
 	}()
