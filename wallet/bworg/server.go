@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/meshwallet/dex"
-	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/dex/webserver"
 	"github.com/go-chi/chi/v5"
 	"github.com/jrick/logrotate/rotator"
 )
@@ -58,9 +58,9 @@ func mainErr() error {
 	}
 	log = dex.NewLogger("BW", dex.LevelInfo, &logWriter{rotator})
 
-	comms.UseLogger(log.SubLogger("SRV"))
+	webserver.UseLogger(log.SubLogger("SRV"))
 
-	srv, err := comms.NewServer(&comms.RPCConfig{
+	srv, err := webserver.NewServer(&webserver.RPCConfig{
 		ListenAddrs: []string{serverAddress},
 		NoTLS:       true,
 	})
