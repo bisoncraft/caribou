@@ -35,7 +35,7 @@ import (
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	pi "github.com/bisoncraft/meshwallet/util/politeia"
-	dcradaptor "github.com/bisoncraft/meshwallet/internal/adaptorsigs"
+	dcradaptor "github.com/bisoncraft/meshwallet/wallet/internal/adaptorsigs"
 
 	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"

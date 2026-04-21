@@ -47,9 +47,9 @@ util/lexi/cmd/lexidbexplorer/lexidbexplorer
 util/evmrelay/cmd/evmrelay/evmrelay
 util/testing/btc/harnesschain.tar.gz
 util/testing/loadbot/loadbot
-internal/cmd/xmrswap/xmrswap
-internal/cmd/xmrswap/config.json
-internal/libsecp256k1/secp256k1
+wallet/internal/cmd/xmrswap/xmrswap
+wallet/internal/cmd/xmrswap/config.json
+wallet/internal/libsecp256k1/secp256k1
 **/testdata/fuzz
 *.db
 *.code-workspace

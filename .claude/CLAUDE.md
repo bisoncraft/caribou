@@ -15,7 +15,7 @@ This is a new wallet based on **Bison Wallet**, without the DCRDEX trading/excha
 - Wallet database (`wallet/db/`)
 - EVM relay service (`util/evmrelay/`)
 - Shared cryptographic utilities and asset abstractions (`util/encode`, `util/encrypt`, `util/keygen`, `util/networks`, `util/asset.go`)
-- Monero adaptor signature primitives (`internal/adaptorsigs/`)
+- Monero adaptor signature primitives (`wallet/internal/adaptorsigs/`)
 
 ### Removal candidates
 Everything in the tree is fair game for modification or deletion in service of the wallet-only goal. Packages that are only reachable from the removed DEX trading layer or from unused server/mesh code can be trimmed or deleted. Some packages (e.g. `server/`, `tatanka/`, `wallet/mm/libxc/`, `wallet/cmd/testbinance/`, `wallet/comms/`, `wallet/mm/` top-level, `wallet/orderbook/`, `util/order/`, `util/msgjson/`, `util/market.go`) are legacy DEX/mesh/CEX code with no role in the wallet's future; delete or trim them as opportunity arises, as long as in-scope code (wallets, atomic swap settlement, UI, DB, evmrelay, adaptorsigs) continues to build.
@@ -79,7 +79,7 @@ Only the non-trading parts are in scope: `asset.go` (wallet interface), `encode/
 ### `util/evmrelay/` — EVM Relay Service
 Manages Ethereum/EVM atomic swap contract interactions, fee estimation, and batch redemptions. Entry point: `util/evmrelay/cmd/evmrelay/main.go`.
 
-### `internal/` — Internal Utilities
+### `wallet/internal/` — Internal Utilities
 - `adaptorsigs/` — Adaptor signature primitives (used for Monero atomic swaps)
 - `cmd/xmrswap/` — XMR atomic swap tooling
 

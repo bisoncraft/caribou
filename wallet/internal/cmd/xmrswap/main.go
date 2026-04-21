@@ -17,8 +17,8 @@ import (
 
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
-	"github.com/bisoncraft/meshwallet/internal/adaptorsigs"
-	dcradaptor "github.com/bisoncraft/meshwallet/internal/adaptorsigs/dcr"
+	"github.com/bisoncraft/meshwallet/wallet/internal/adaptorsigs"
+	dcradaptor "github.com/bisoncraft/meshwallet/wallet/internal/adaptorsigs/dcr"
 	"decred.org/dcrwallet/v5/rpc/client/dcrwallet"
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/agl/ed25519/edwards25519"
