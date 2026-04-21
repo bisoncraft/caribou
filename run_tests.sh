@@ -61,16 +61,6 @@ go test -c -o /dev/null -tags harness ./wallet/asset/dash
 go test -c -o /dev/null -tags harness ./wallet/asset/firo
 go test -c -o /dev/null -tags rpclive ./wallet/asset/polygon
 go test -c -o /dev/null -tags live ./dex/testing/firo/test
-go test -c -o /dev/null -tags live ./server/noderelay
-go test -c -o /dev/null -tags dcrlive ./server/asset/dcr
-go test -c -o /dev/null -tags btclive ./server/asset/btc
-go test -c -o /dev/null -tags ltclive ./server/asset/ltc
-go test -c -o /dev/null -tags bchlive ./server/asset/bch
-go test -c -o /dev/null -tags dogelive ./server/asset/doge
-go test -c -o /dev/null -tags zeclive ./server/asset/zec
-go test -c -o /dev/null -tags firolive ./server/asset/firo
-go test -c -o /dev/null -tags harness ./server/asset/eth
-go test -c -o /dev/null -tags pgonline ./server/db/driver/pg
 
 # Return to initial directory.
 cd "$dir"

@@ -32,7 +32,7 @@ import (
 	"github.com/bisoncraft/meshwallet/dex/msgjson"
 	"github.com/bisoncraft/meshwallet/dex/utils"
 	"github.com/bisoncraft/meshwallet/dex/ws"
-	"github.com/bisoncraft/meshwallet/server/comms"
+	"github.com/bisoncraft/meshwallet/dex/webserver"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -217,13 +217,13 @@ func main() {
 	switch {
 	case logTrace:
 		log = dex.StdOutLogger("TB", dex.LevelTrace)
-		comms.UseLogger(dex.StdOutLogger("C", dex.LevelTrace))
+		webserver.UseLogger(dex.StdOutLogger("C", dex.LevelTrace))
 	case logDebug:
 		log = dex.StdOutLogger("TB", dex.LevelDebug)
-		comms.UseLogger(dex.StdOutLogger("C", dex.LevelDebug))
+		webserver.UseLogger(dex.StdOutLogger("C", dex.LevelDebug))
 	default:
 		log = dex.StdOutLogger("TB", dex.LevelInfo)
-		comms.UseLogger(dex.StdOutLogger("C", dex.LevelInfo))
+		webserver.UseLogger(dex.StdOutLogger("C", dex.LevelInfo))
 	}
 
 	if err := mainErr(); err != nil {
@@ -288,7 +288,7 @@ type userOrder struct {
 
 type fakeBinance struct {
 	ctx       context.Context
-	srv       *comms.Server
+	srv       *webserver.Server
 	fiatRates map[uint32]float64
 
 	withdrawalHistoryMtx sync.RWMutex
@@ -318,7 +318,7 @@ func newFakeBinanceServer(ctx context.Context) (*fakeBinance, error) {
 		return nil, fmt.Errorf("not enough coinpap assets. wanted %d, got %d", len(coinpapAssets), len(fiatRates))
 	}
 
-	srv, err := comms.NewServer(&comms.RPCConfig{
+	srv, err := webserver.NewServer(&webserver.RPCConfig{
 		ListenAddrs: []string{":37346"},
 		NoTLS:       true,
 	})
