@@ -3,7 +3,7 @@ package ltc
 import (
 	"testing"
 
-	dexltc "github.com/bisoncraft/meshwallet/util/networks/ltc"
+	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
 	ltcchaincfg "github.com/ltcsuite/ltcd/chaincfg"
 	"github.com/ltcsuite/ltcd/ltcutil"
 )

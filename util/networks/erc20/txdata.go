@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

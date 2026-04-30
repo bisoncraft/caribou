@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	swapv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
-	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
+	swapv0 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 )
 

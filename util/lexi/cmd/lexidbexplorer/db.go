@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/util/lexi"
+	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/dgraph-io/badger/v4"
 )
 

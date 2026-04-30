@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/dgraph-io/badger" // Keep version 1
 	"github.com/ethereum/go-ethereum/common"
 )

@@ -14,11 +14,11 @@ import (
 	"math/rand"
 	"os"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/order"
-	"github.com/bisoncraft/meshwallet/util/order/test"
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/wallet/db/bolt"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/order"
+	"github.com/bisoncraft/bosswallet/util/order/test"
+	"github.com/bisoncraft/bosswallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/wallet/db/bolt"
 )
 
 const dbname = "v5.db"

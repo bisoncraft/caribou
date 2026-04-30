@@ -9,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util/calc"
-	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	"github.com/bisoncraft/bosswallet/util/calc"
+	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 )
 
 // SendEnough generates a function that can be used as the enough argument to

@@ -10,7 +10,7 @@ import (
 	"github.com/athanorlabs/go-dleq"
 	dleqEdwards "github.com/athanorlabs/go-dleq/ed25519"
 	dleqSecp "github.com/athanorlabs/go-dleq/secp256k1"
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	dcrEdwards "github.com/decred/dcrd/dcrec/edwards/v2"
 	dcrSecp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )

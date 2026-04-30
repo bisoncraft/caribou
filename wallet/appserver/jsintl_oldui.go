@@ -5,7 +5,7 @@
 
 package appserver
 
-import "github.com/bisoncraft/meshwallet/wallet/intl"
+import "github.com/bisoncraft/bosswallet/wallet/intl"
 
 const (
 	noPassErrMsgID                   = "NO_PASS_ERROR_MSG"

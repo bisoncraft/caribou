@@ -11,7 +11,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 )
 
 // Error codes. Values are fixed by the wire protocol; do not renumber.

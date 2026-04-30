@@ -1,7 +1,7 @@
 package base
 
 import (
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 )
 
 // These are the chain IDs of the various base networks.

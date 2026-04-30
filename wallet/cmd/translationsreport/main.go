@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/wallet/appserver"
-	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/intl"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/appserver"
+	"github.com/bisoncraft/bosswallet/wallet/appserver/locales"
+	"github.com/bisoncraft/bosswallet/wallet/core"
+	"github.com/bisoncraft/bosswallet/wallet/intl"
 )
 
 func main() {

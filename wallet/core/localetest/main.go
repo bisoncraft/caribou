@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/bosswallet/wallet/core"
 )
 
 func main() {

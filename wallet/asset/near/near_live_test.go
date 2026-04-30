@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/util"
+	dexnear "github.com/bisoncraft/bosswallet/util/networks/near"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
 const (

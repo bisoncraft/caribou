@@ -14,8 +14,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 )
 

@@ -1,6 +1,6 @@
 package locales
 
-import "github.com/bisoncraft/meshwallet/wallet/intl"
+import "github.com/bisoncraft/bosswallet/wallet/intl"
 
 var DeDE = map[string]*intl.Translation{
 	"Language":                       {T: "de-DE"},

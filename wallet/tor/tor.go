@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/jrick/logrotate/rotator"
 )
 

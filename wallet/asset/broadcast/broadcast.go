@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
 // CacheExpiry is the duration after which a broadcast cache entry is

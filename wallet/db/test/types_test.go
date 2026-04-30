@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/wallet/db"
 )
 
 func TestAccountInfo(t *testing.T) {

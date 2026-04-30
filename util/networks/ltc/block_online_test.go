@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/util/config"
+	"github.com/bisoncraft/bosswallet/util/config"
 
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/decred/dcrd/chaincfg/chainhash" // just for the array type, not its methods

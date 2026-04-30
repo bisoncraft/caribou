@@ -59,8 +59,8 @@ BISONW="${BW_DIR}/bisonw"
 cd "${BW_DIR}"
 if [ "${SIMNET}" ] ; then
   echo "building bisonw for simnet - lock times: taker 3m, maker 6m"
-  go build -ldflags "-X github.com/bisoncraft/meshwallet/dex.testLockTimeTaker=3m \
-                     -X github.com/bisoncraft/meshwallet/dex.testLockTimeMaker=6m"
+  go build -ldflags "-X github.com/bisoncraft/bosswallet/dex.testLockTimeTaker=3m \
+                     -X github.com/bisoncraft/bosswallet/dex.testLockTimeMaker=6m"
 else
   go build
 fi

@@ -8,8 +8,8 @@ package zcl
 import (
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc/livetest"
 )
 
 var (

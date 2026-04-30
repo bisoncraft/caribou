@@ -14,9 +14,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	v0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
-	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
+	"github.com/bisoncraft/bosswallet/util"
+	v0 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 )

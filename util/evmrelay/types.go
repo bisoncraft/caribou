@@ -10,8 +10,8 @@ import (
 	"math/big"
 	"time"
 
-	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
-	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
+	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
+	swapv1 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 )
 

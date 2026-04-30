@@ -3,7 +3,7 @@
 
 package dcr
 
-import "github.com/bisoncraft/meshwallet/util"
+import "github.com/bisoncraft/bosswallet/util"
 
 var UnitInfo = util.UnitInfo{
 	AtomicUnit: "atoms",

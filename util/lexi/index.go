@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/dgraph-io/badger/v4"
 )
 

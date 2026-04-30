@@ -8,11 +8,11 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/bisoncraft/meshwallet/util"
-	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
-	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
+	"github.com/bisoncraft/bosswallet/util"
+	dexbase "github.com/bisoncraft/bosswallet/util/networks/base"
+	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

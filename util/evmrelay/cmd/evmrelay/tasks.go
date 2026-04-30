@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
-	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	"github.com/bisoncraft/bosswallet/util/evmrelay"
+	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

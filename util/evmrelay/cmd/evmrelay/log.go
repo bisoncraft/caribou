@@ -3,6 +3,6 @@
 
 package main
 
-import "github.com/bisoncraft/meshwallet/util"
+import "github.com/bisoncraft/bosswallet/util"
 
 var log = util.StdOutLogger("RELAY", util.LevelDebug)

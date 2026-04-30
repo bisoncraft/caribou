@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/wallet/app"
-	"github.com/bisoncraft/meshwallet/wallet/appserver"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
-	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/app"
+	"github.com/bisoncraft/bosswallet/wallet/appserver"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/importall"
+	"github.com/bisoncraft/bosswallet/wallet/core"
 )
 
 // appName defines the application name.

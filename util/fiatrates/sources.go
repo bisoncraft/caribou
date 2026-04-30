@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/ethereum/go-ethereum/log"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"

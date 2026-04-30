@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/bosswallet/util/encode"
 )
 
 var (

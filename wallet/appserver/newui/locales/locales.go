@@ -2,7 +2,7 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 package locales
 
-import "github.com/bisoncraft/meshwallet/wallet/intl"
+import "github.com/bisoncraft/bosswallet/wallet/intl"
 
 var Locales = map[string]map[string]*intl.Translation{
 	"en-US": EnUS,

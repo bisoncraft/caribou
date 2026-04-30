@@ -11,9 +11,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/mnemonic"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/core"
+	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
 )
 
 func main() {

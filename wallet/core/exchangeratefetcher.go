@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/dexnet"
-	"github.com/bisoncraft/meshwallet/util/fiatrates"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/dexnet"
+	"github.com/bisoncraft/bosswallet/util/fiatrates"
 )
 
 const (

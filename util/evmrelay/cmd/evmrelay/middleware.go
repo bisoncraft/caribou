@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
+	"github.com/bisoncraft/bosswallet/util/evmrelay"
 )
 
 type loggingResponseWriter struct {

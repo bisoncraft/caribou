@@ -11,7 +11,7 @@ import (
 	"fmt"
 
 	"decred.org/dcrwallet/v5/wallet/txsizes"
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrec"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"

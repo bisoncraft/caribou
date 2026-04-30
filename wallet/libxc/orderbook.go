@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"sync"
 
-	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/bosswallet/util/calc"
 	"github.com/huandu/skiplist"
 )
 

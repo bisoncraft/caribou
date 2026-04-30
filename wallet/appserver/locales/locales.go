@@ -3,7 +3,7 @@ package locales
 import (
 	"fmt"
 
-	"github.com/bisoncraft/meshwallet/wallet/intl"
+	"github.com/bisoncraft/bosswallet/wallet/intl"
 	"golang.org/x/text/language"
 )
 

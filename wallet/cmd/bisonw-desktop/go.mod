@@ -1,11 +1,11 @@
-module github.com/bisoncraft/meshwallet/wallet/cmd/bisonw-desktop
+module github.com/bisoncraft/bosswallet/wallet/cmd/bisonw-desktop
 
 go 1.24.0
 
-replace github.com/bisoncraft/meshwallet => ../../..
+replace github.com/bisoncraft/bosswallet => ../../..
 
 require (
-	github.com/bisoncraft/meshwallet v0.6.3
+	github.com/bisoncraft/bosswallet v0.6.3
 	fyne.io/systray v1.10.1-0.20230403195833-7dc3c09283d6
 	github.com/bisoncraft/webview_go v0.1.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c

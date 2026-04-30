@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 )
 
 const (

@@ -4,7 +4,7 @@
 package webserver
 
 import (
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 )
 
 // log is a logger that is initialized with no output filters. This means the

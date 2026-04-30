@@ -17,13 +17,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/config"
-	"github.com/bisoncraft/meshwallet/util/encode"
-	"github.com/bisoncraft/meshwallet/util/encrypt"
-	"github.com/bisoncraft/meshwallet/util/order"
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/config"
+	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/util/encrypt"
+	"github.com/bisoncraft/bosswallet/util/order"
+	"github.com/bisoncraft/bosswallet/wallet/db"
+	dexdb "github.com/bisoncraft/bosswallet/wallet/db"
 	"go.etcd.io/bbolt"
 )
 
@@ -147,7 +147,7 @@ var defaultOpts = Opts{
 }
 
 // BoltDB is a bbolt-based database backend for Bison Wallet. BoltDB satisfies
-// the db.DB interface defined at github.com/bisoncraft/meshwallet/wallet/db.
+// the db.DB interface defined at github.com/bisoncraft/bosswallet/wallet/db.
 type BoltDB struct {
 	*bbolt.DB
 	opts Opts

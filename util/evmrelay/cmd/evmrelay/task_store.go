@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
+	"github.com/bisoncraft/bosswallet/util/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 )
 

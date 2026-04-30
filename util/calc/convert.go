@@ -6,7 +6,7 @@ package calc
 import (
 	"math/big"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 )
 
 // RateEncodingFactor is used when encoding an exchange rate as an integer.

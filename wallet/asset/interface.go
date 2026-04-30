@@ -8,8 +8,8 @@ import (
 	"time"
 
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
-	"github.com/bisoncraft/meshwallet/util"
-	pi "github.com/bisoncraft/meshwallet/util/politeia"
+	"github.com/bisoncraft/bosswallet/util"
+	pi "github.com/bisoncraft/bosswallet/util/politeia"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"

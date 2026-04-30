@@ -4,7 +4,7 @@
 package btc
 
 import (
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 )
 
 // GetBalancesResult models a successful response from the getbalances request.

@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/bosswallet/util/encode"
 )
 
 var uint32B = encode.Uint32Bytes

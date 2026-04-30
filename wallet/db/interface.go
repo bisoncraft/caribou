@@ -4,8 +4,8 @@
 package db
 
 import (
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/encrypt"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/encrypt"
 )
 
 // DB is an interface that must be satisfied by Bison Wallet persistent storage

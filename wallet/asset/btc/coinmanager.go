@@ -8,9 +8,9 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/bisoncraft/meshwallet/util"
-	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/util"
+	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

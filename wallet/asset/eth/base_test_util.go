@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	ethereum "github.com/bisoncraft/op-geth"
 	basecommon "github.com/bisoncraft/op-geth/common"
 	basehexutil "github.com/bisoncraft/op-geth/common/hexutil"

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
 func TestIsAlreadyBroadcastErr(t *testing.T) {

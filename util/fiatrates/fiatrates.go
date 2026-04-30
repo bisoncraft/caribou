@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/dexnet"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/dexnet"
 )
 
 const (

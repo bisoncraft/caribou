@@ -29,10 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/config"
-	"github.com/bisoncraft/meshwallet/util/wait"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/config"
+	"github.com/bisoncraft/bosswallet/util/wait"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
 var tLogger util.Logger

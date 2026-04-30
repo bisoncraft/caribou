@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

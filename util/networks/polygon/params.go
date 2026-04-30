@@ -4,8 +4,8 @@
 package polygon
 
 import (
-	"github.com/bisoncraft/meshwallet/util"
-	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
+	"github.com/bisoncraft/bosswallet/util"
+	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

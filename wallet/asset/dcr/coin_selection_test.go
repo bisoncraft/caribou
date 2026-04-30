@@ -11,7 +11,7 @@ import (
 	"time"
 
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
-	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
+	dexdcr "github.com/bisoncraft/bosswallet/util/networks/dcr"
 )
 
 func Test_leastOverFund(t *testing.T) {

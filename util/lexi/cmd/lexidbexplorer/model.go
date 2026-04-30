@@ -6,7 +6,7 @@ package main
 import (
 	"sort"
 
-	"github.com/bisoncraft/meshwallet/util/lexi"
+	"github.com/bisoncraft/bosswallet/util/lexi"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dgraph-io/badger/v4"
 )

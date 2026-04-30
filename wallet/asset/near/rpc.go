@@ -15,8 +15,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
+	"github.com/bisoncraft/bosswallet/util"
+	dexnear "github.com/bisoncraft/bosswallet/util/networks/near"
 	"golang.org/x/net/proxy"
 )
 

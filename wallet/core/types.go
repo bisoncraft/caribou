@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/db"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
 

@@ -1,4 +1,4 @@
-module github.com/bisoncraft/meshwallet
+module github.com/bisoncraft/bosswallet
 
 go 1.24.0
 

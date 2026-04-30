@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc/electrum"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc/electrum"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/davecgh/go-spew/spew"
 )

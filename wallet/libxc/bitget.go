@@ -37,14 +37,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/calc"
-	"github.com/bisoncraft/meshwallet/util/dexnet"
-	"github.com/bisoncraft/meshwallet/util/encode"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/comms"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/libxc/bgtypes"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/calc"
+	"github.com/bisoncraft/bosswallet/util/dexnet"
+	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/comms"
+	"github.com/bisoncraft/bosswallet/wallet/core"
+	"github.com/bisoncraft/bosswallet/wallet/libxc/bgtypes"
 	"github.com/huandu/skiplist"
 )
 

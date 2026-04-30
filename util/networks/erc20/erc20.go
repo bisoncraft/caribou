@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	v0 "github.com/bisoncraft/meshwallet/util/networks/erc20/contracts/v0"
+	v0 "github.com/bisoncraft/bosswallet/util/networks/erc20/contracts/v0"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 

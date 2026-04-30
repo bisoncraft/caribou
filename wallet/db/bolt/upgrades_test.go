@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util/order"
-	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/util/order"
+	dexdb "github.com/bisoncraft/bosswallet/wallet/db"
 	"go.etcd.io/bbolt"
 )
 

@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/btcsuite/btcd/wire"
 )
 

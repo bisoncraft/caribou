@@ -14,12 +14,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util/config"
-	"github.com/bisoncraft/meshwallet/util/encode"
-	pi "github.com/bisoncraft/meshwallet/util/politeia"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/util/config"
+	"github.com/bisoncraft/bosswallet/util/encode"
+	pi "github.com/bisoncraft/bosswallet/util/politeia"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/core"
+	"github.com/bisoncraft/bosswallet/wallet/db"
 )
 
 var zero = encode.ClearBytes

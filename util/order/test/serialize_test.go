@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util/encode"
-	"github.com/bisoncraft/meshwallet/util/order"
+	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/util/order"
 )
 
 var randB = encode.RandomBytes

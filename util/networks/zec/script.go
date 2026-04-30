@@ -6,7 +6,7 @@ package zec
 import (
 	"math"
 
-	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/btcsuite/btcd/wire"
 )
 

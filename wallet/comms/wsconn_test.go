@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/msgjson"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/msgjson"
 	"github.com/decred/dcrd/certgen"
 	"github.com/gorilla/websocket"
 )

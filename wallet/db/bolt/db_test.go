@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/order"
-	ordertest "github.com/bisoncraft/meshwallet/util/order/test"
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	dbtest "github.com/bisoncraft/meshwallet/wallet/db/test"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/order"
+	ordertest "github.com/bisoncraft/bosswallet/util/order/test"
+	"github.com/bisoncraft/bosswallet/wallet/db"
+	dbtest "github.com/bisoncraft/bosswallet/wallet/db/test"
 	"go.etcd.io/bbolt"
 )
 

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/config"
-	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
-	dexfiro "github.com/bisoncraft/meshwallet/util/networks/firo"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/config"
+	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
+	dexfiro "github.com/bisoncraft/bosswallet/util/networks/firo"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/decred/dcrd/rpcclient/v8"
 )

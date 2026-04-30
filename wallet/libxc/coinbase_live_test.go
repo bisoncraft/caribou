@@ -14,24 +14,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/calc"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/libxc/cbtypes"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/calc"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/libxc/cbtypes"
 	"github.com/davecgh/go-spew/spew"
 
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/bch"     // register bch asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/btc"     // register btc asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/dash"    // register dash asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/dcr"     // register dcr asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/dgb"     // register dgb asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/doge"    // register doge asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/eth"     // register eth asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/firo"    // register firo asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/ltc"     // register ltc asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/polygon" // register polygon asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/zcl"     // register zcl asset
-	_ "github.com/bisoncraft/meshwallet/wallet/asset/zec"     // register zec asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/bch"     // register bch asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/btc"     // register btc asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/dash"    // register dash asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/dcr"     // register dcr asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/dgb"     // register dgb asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/doge"    // register doge asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/eth"     // register eth asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/firo"    // register firo asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/ltc"     // register ltc asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/polygon" // register polygon asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/zcl"     // register zcl asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/zec"     // register zec asset
 )
 
 var tCtx context.Context

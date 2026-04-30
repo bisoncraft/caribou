@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/lexi"
-	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/lexi"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
 const (

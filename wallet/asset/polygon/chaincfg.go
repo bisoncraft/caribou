@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/util"
-	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
-	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
+	"github.com/bisoncraft/bosswallet/util"
+	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
+	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 	ethcore "github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/params"

@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/lexi"
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/lexi"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
