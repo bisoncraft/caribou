@@ -34,9 +34,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcwallet/waddrmgr"
-	btcwallet "github.com/btcsuite/btcwallet/wallet"
-	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/decred/slog"
 	"github.com/gcash/bchd/bchec"
 	bchchaincfg "github.com/gcash/bchd/chaincfg"
@@ -46,8 +43,12 @@ import (
 	"github.com/gcash/bchlog"
 	"github.com/gcash/bchutil"
 	"github.com/jrick/logrotate/rotator"
-	btcneutrino "github.com/lightninglabs/neutrino"
-	"github.com/lightninglabs/neutrino/headerfs"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	inHeaderfs "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	inSpv "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
+	inWaddrmgr "github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	inWtxmgr "github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 )
 
 const (
@@ -255,12 +256,12 @@ func (w *bchSPVWallet) PublishTransaction(btcTx *wire.MsgTx, label string) error
 	return w.Wallet.PublishTransaction(bchTx)
 }
 
-func (w *bchSPVWallet) CalculateAccountBalances(account uint32, confirms int32) (btcwallet.Balances, error) {
+func (w *bchSPVWallet) CalculateAccountBalances(account uint32, confirms int32) (inWallet.Balances, error) {
 	bals, err := w.Wallet.CalculateAccountBalances(account, confirms)
 	if err != nil {
-		return btcwallet.Balances{}, err
+		return inWallet.Balances{}, err
 	}
-	return btcwallet.Balances{
+	return inWallet.Balances{
 		Total:          btcutil.Amount(bals.Total),
 		Spendable:      btcutil.Amount(bals.Spendable),
 		ImmatureReward: btcutil.Amount(bals.ImmatureReward),
@@ -303,7 +304,7 @@ func (w *bchSPVWallet) ListSinceBlock(start, end, syncHeight int32) ([]btcjson.L
 	return btcRes, nil
 }
 
-func (w *bchSPVWallet) GetTransactions(startBlock, endBlock int32, _ string, cancel <-chan struct{}) (*btcwallet.GetTransactionsResult, error) {
+func (w *bchSPVWallet) GetTransactions(startBlock, endBlock int32, _ string, cancel <-chan struct{}) (*inWallet.GetTransactionsResult, error) {
 	startID := wallet.NewBlockIdentifierFromHeight(startBlock)
 	endID := wallet.NewBlockIdentifierFromHeight(endBlock)
 	bchGTR, err := w.Wallet.GetTransactions(startID, endID, cancel)
@@ -311,27 +312,27 @@ func (w *bchSPVWallet) GetTransactions(startBlock, endBlock int32, _ string, can
 		return nil, err
 	}
 
-	convertTxs := func(txs []wallet.TransactionSummary) []btcwallet.TransactionSummary {
-		transactions := make([]btcwallet.TransactionSummary, len(txs))
+	convertTxs := func(txs []wallet.TransactionSummary) []inWallet.TransactionSummary {
+		transactions := make([]inWallet.TransactionSummary, len(txs))
 		for i, tx := range txs {
 			txHash := chainhash.Hash(*tx.Hash)
-			inputs := make([]btcwallet.TransactionSummaryInput, len(tx.MyInputs))
+			inputs := make([]inWallet.TransactionSummaryInput, len(tx.MyInputs))
 			for k, in := range tx.MyInputs {
-				inputs[k] = btcwallet.TransactionSummaryInput{
+				inputs[k] = inWallet.TransactionSummaryInput{
 					Index:           in.Index,
 					PreviousAccount: in.PreviousAccount,
 					PreviousAmount:  btcutil.Amount(in.PreviousAmount),
 				}
 			}
-			outputs := make([]btcwallet.TransactionSummaryOutput, len(tx.MyOutputs))
+			outputs := make([]inWallet.TransactionSummaryOutput, len(tx.MyOutputs))
 			for k, out := range tx.MyOutputs {
-				outputs[k] = btcwallet.TransactionSummaryOutput{
+				outputs[k] = inWallet.TransactionSummaryOutput{
 					Index:    out.Index,
 					Account:  out.Account,
 					Internal: out.Internal,
 				}
 			}
-			transactions[i] = btcwallet.TransactionSummary{
+			transactions[i] = inWallet.TransactionSummary{
 				Hash:        &txHash,
 				Transaction: tx.Transaction,
 				MyInputs:    inputs,
@@ -343,14 +344,14 @@ func (w *bchSPVWallet) GetTransactions(startBlock, endBlock int32, _ string, can
 		return transactions
 	}
 
-	btcGTR := &btcwallet.GetTransactionsResult{
-		MinedTransactions:   make([]btcwallet.Block, len(bchGTR.MinedTransactions)),
+	btcGTR := &inWallet.GetTransactionsResult{
+		MinedTransactions:   make([]inWallet.Block, len(bchGTR.MinedTransactions)),
 		UnminedTransactions: convertTxs(bchGTR.UnminedTransactions),
 	}
 
 	for i, block := range bchGTR.MinedTransactions {
 		blockHash := chainhash.Hash(*block.Hash)
-		btcGTR.MinedTransactions[i] = btcwallet.Block{
+		btcGTR.MinedTransactions[i] = inWallet.Block{
 			Hash:         &blockHash,
 			Height:       block.Height,
 			Timestamp:    block.Timestamp,
@@ -418,7 +419,7 @@ func (w *bchSPVWallet) FetchInputInfo(prevOut *wire.OutPoint) (*wire.MsgTx, *wir
 		notOurs = err != nil
 	}
 	if notOurs {
-		return nil, nil, nil, 0, btcwallet.ErrNotMine
+		return nil, nil, nil, 0, inWallet.ErrNotMine
 	}
 
 	btcTxOut := &wire.TxOut{
@@ -455,7 +456,7 @@ func (w *bchSPVWallet) LockedOutpoints() []btcjson.TransactionInput {
 	return locked
 }
 
-func (w *bchSPVWallet) NewChangeAddress(account uint32, _ waddrmgr.KeyScope) (btcutil.Address, error) {
+func (w *bchSPVWallet) NewChangeAddress(account uint32, _ inWaddrmgr.KeyScope) (btcutil.Address, error) {
 	bchAddr, err := w.Wallet.NewChangeAddress(account, bchwaddrmgr.KeyScopeBIP0044)
 	if err != nil {
 		return nil, err
@@ -463,7 +464,7 @@ func (w *bchSPVWallet) NewChangeAddress(account uint32, _ waddrmgr.KeyScope) (bt
 	return dexbch.DecodeCashAddress(bchAddr.String(), w.btcParams)
 }
 
-func (w *bchSPVWallet) NewAddress(account uint32, _ waddrmgr.KeyScope) (btcutil.Address, error) {
+func (w *bchSPVWallet) NewAddress(account uint32, _ inWaddrmgr.KeyScope) (btcutil.Address, error) {
 	bchAddr, err := w.Wallet.NewAddress(account, bchwaddrmgr.KeyScopeBIP0044)
 	if err != nil {
 		return nil, err
@@ -485,8 +486,8 @@ func (w *bchSPVWallet) PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, 
 	return priv, nil
 }
 
-func (w *bchSPVWallet) SendOutputs(outputs []*wire.TxOut, _ *waddrmgr.KeyScope, account uint32, minconf int32,
-	satPerKb btcutil.Amount, _ btcwallet.CoinSelectionStrategy, label string) (*wire.MsgTx, error) {
+func (w *bchSPVWallet) SendOutputs(outputs []*wire.TxOut, _ *inWaddrmgr.KeyScope, account uint32, minconf int32,
+	satPerKb btcutil.Amount, _ inWallet.CoinSelectionStrategy, label string) (*wire.MsgTx, error) {
 
 	bchOuts := make([]*bchwire.TxOut, len(outputs))
 	for i, op := range outputs {
@@ -540,12 +541,12 @@ func (w *bchSPVWallet) Stop() {
 	w.log.Info("SPV wallet closed")
 }
 
-func (w *bchSPVWallet) AccountProperties(_ waddrmgr.KeyScope, acct uint32) (*waddrmgr.AccountProperties, error) {
+func (w *bchSPVWallet) AccountProperties(_ inWaddrmgr.KeyScope, acct uint32) (*inWaddrmgr.AccountProperties, error) {
 	props, err := w.Wallet.AccountProperties(bchwaddrmgr.KeyScopeBIP0044, acct)
 	if err != nil {
 		return nil, err
 	}
-	return &waddrmgr.AccountProperties{
+	return &inWaddrmgr.AccountProperties{
 		// bch only has a subset of the btc AccountProperties. We'll give
 		// everything we have. The only two that are actually used are these
 		// first to fields.
@@ -644,7 +645,7 @@ func (w *bchSPVWallet) dropTransactionHistory() error {
 	})
 }
 
-func (w *bchSPVWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDetails, error) {
+func (w *bchSPVWallet) WalletTransaction(txHash *chainhash.Hash) (*inWtxmgr.TxDetails, error) {
 	txDetails, err := w.txDetails((*bchchainhash.Hash)(txHash))
 	if err != nil {
 		return nil, err
@@ -655,9 +656,9 @@ func (w *bchSPVWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDeta
 		return nil, err
 	}
 
-	credits := make([]wtxmgr.CreditRecord, len(txDetails.Credits))
+	credits := make([]inWtxmgr.CreditRecord, len(txDetails.Credits))
 	for i, c := range txDetails.Credits {
-		credits[i] = wtxmgr.CreditRecord{
+		credits[i] = inWtxmgr.CreditRecord{
 			Amount: btcutil.Amount(c.Amount),
 			Index:  c.Index,
 			Spent:  c.Spent,
@@ -665,23 +666,23 @@ func (w *bchSPVWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDeta
 		}
 	}
 
-	debits := make([]wtxmgr.DebitRecord, len(txDetails.Debits))
+	debits := make([]inWtxmgr.DebitRecord, len(txDetails.Debits))
 	for i, d := range txDetails.Debits {
-		debits[i] = wtxmgr.DebitRecord{
+		debits[i] = inWtxmgr.DebitRecord{
 			Amount: btcutil.Amount(d.Amount),
 			Index:  d.Index,
 		}
 	}
 
-	return &wtxmgr.TxDetails{
-		TxRecord: wtxmgr.TxRecord{
-			MsgTx:        *btcTx,
+	return &inWtxmgr.TxDetails{
+		TxRecord: inWtxmgr.TxRecord{
+			Tx:           bisonwire.Tx{MsgTx: *btcTx, Chain: "bch"},
 			Hash:         chainhash.Hash(txDetails.TxRecord.Hash),
 			Received:     txDetails.TxRecord.Received,
 			SerializedTx: txDetails.TxRecord.SerializedTx,
 		},
-		Block: wtxmgr.BlockMeta{
-			Block: wtxmgr.Block{
+		Block: inWtxmgr.BlockMeta{
+			Block: inWtxmgr.Block{
 				Hash:   chainhash.Hash(txDetails.Block.Hash),
 				Height: txDetails.Block.Height,
 			},
@@ -692,9 +693,9 @@ func (w *bchSPVWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDeta
 	}, nil
 }
 
-func (w *bchSPVWallet) SyncedTo() waddrmgr.BlockStamp {
+func (w *bchSPVWallet) SyncedTo() inWaddrmgr.BlockStamp {
 	bs := w.Manager.SyncedTo()
-	return waddrmgr.BlockStamp{
+	return inWaddrmgr.BlockStamp{
 		Height:    bs.Height,
 		Hash:      chainhash.Hash(bs.Hash),
 		Timestamp: bs.Timestamp,
@@ -871,12 +872,12 @@ func (s *spvService) GetBlockHash(height int64) (*chainhash.Hash, error) {
 	return (*chainhash.Hash)(bchHash), nil
 }
 
-func (s *spvService) BestBlock() (*headerfs.BlockStamp, error) {
+func (s *spvService) BestBlock() (*inHeaderfs.BlockStamp, error) {
 	bs, err := s.ChainService.BestBlock()
 	if err != nil {
 		return nil, err
 	}
-	return &headerfs.BlockStamp{
+	return &inHeaderfs.BlockStamp{
 		Height:    bs.Height,
 		Hash:      chainhash.Hash(bs.Hash),
 		Timestamp: bs.Timestamp,
@@ -919,7 +920,7 @@ func (s *spvService) GetBlockHeader(h *chainhash.Hash) (*wire.BlockHeader, error
 	}, nil
 }
 
-func (s *spvService) GetCFilter(blockHash chainhash.Hash, filterType wire.FilterType, _ ...btcneutrino.QueryOption) (*gcs.Filter, error) {
+func (s *spvService) GetCFilter(blockHash chainhash.Hash, filterType wire.FilterType, _ ...inSpv.QueryOption) (*gcs.Filter, error) {
 	f, err := s.ChainService.GetCFilter(bchchainhash.Hash(blockHash), bchwire.GCSFilterRegular)
 	if err != nil {
 		return nil, err
@@ -933,7 +934,7 @@ func (s *spvService) GetCFilter(blockHash chainhash.Hash, filterType wire.Filter
 	return gcs.FromBytes(f.N(), f.P(), DefaultM, b)
 }
 
-func (s *spvService) GetBlock(blockHash chainhash.Hash, _ ...btcneutrino.QueryOption) (*btcutil.Block, error) {
+func (s *spvService) GetBlock(blockHash chainhash.Hash, _ ...inSpv.QueryOption) (*btcutil.Block, error) {
 	blk, err := s.ChainService.GetBlock(bchchainhash.Hash(blockHash))
 	if err != nil {
 		return nil, err

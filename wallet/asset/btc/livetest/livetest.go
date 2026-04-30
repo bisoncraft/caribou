@@ -1,3 +1,5 @@
+//go:build harness
+
 package livetest
 
 // Regnet tests expect the BTC test harness to be running. The harness miner

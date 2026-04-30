@@ -36,6 +36,13 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb" // bdb init() registers a driver
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -44,13 +51,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcwallet/waddrmgr"
-	"github.com/btcsuite/btcwallet/wallet"
-	"github.com/btcsuite/btcwallet/walletdb"
-	_ "github.com/btcsuite/btcwallet/walletdb/bdb" // bdb init() registers a driver
-	"github.com/btcsuite/btcwallet/wtxmgr"
-	"github.com/lightninglabs/neutrino"
-	"github.com/lightninglabs/neutrino/headerfs"
 )
 
 const (
@@ -132,8 +132,9 @@ type BlockNotification struct {
 	Height int32
 }
 
-// SPVService is satisfied by *neutrino.ChainService, with the exception of the
-// Peers method, which has a generic interface in place of neutrino.ServerPeer.
+// SPVService is satisfied by *spv.ChainService (via btcChainService), with the
+// exception of the Peers method, which has a generic interface in place of
+// spv.ServerPeer.
 type SPVService interface {
 	GetBlockHash(int64) (*chainhash.Hash, error)
 	BestBlock() (*headerfs.BlockStamp, error)
@@ -141,8 +142,8 @@ type SPVService interface {
 	AddPeer(addr string) error
 	GetBlockHeight(hash *chainhash.Hash) (int32, error)
 	GetBlockHeader(*chainhash.Hash) (*wire.BlockHeader, error)
-	GetCFilter(blockHash chainhash.Hash, filterType wire.FilterType, options ...neutrino.QueryOption) (*gcs.Filter, error)
-	GetBlock(blockHash chainhash.Hash, options ...neutrino.QueryOption) (*btcutil.Block, error)
+	GetCFilter(blockHash chainhash.Hash, filterType wire.FilterType, options ...spv.QueryOption) (*gcs.Filter, error)
+	GetBlock(blockHash chainhash.Hash, options ...spv.QueryOption) (*btcutil.Block, error)
 	Stop() error
 }
 
@@ -154,10 +155,11 @@ type SPVPeer interface {
 	Addr() string
 }
 
-// btcChainService wraps *neutrino.ChainService in order to translate the
-// neutrino.ServerPeer to the SPVPeer interface type.
+// btcChainService wraps *spv.ChainService in order to translate the
+// spv.ServerPeer to the SPVPeer interface type, and to convert GetBlock's
+// return type from *bisonwire.BlockWithHeight to *btcutil.Block.
 type btcChainService struct {
-	*neutrino.ChainService
+	*spv.ChainService
 }
 
 func (s *btcChainService) Peers() []SPVPeer {
@@ -175,6 +177,18 @@ func (s *btcChainService) AddPeer(addr string) error {
 
 func (s *btcChainService) RemovePeer(addr string) error {
 	return s.ChainService.RemoveNodeByAddr(addr)
+}
+
+// GetBlock wraps spv.ChainService.GetBlock, converting the returned
+// *bisonwire.BlockWithHeight to a *btcutil.Block as expected by SPVService.
+func (s *btcChainService) GetBlock(blockHash chainhash.Hash, options ...spv.QueryOption) (*btcutil.Block, error) {
+	bwh, err := s.ChainService.GetBlock(blockHash, options...)
+	if err != nil {
+		return nil, err
+	}
+	msgBlock := bwh.Block.MsgBlock()
+	btcBlock := btcutil.NewBlock(msgBlock)
+	return btcBlock, nil
 }
 
 var _ SPVService = (*btcChainService)(nil)
@@ -526,7 +540,7 @@ func (w *spvWallet) ownsInputs(txid string) bool {
 		return false
 	}
 
-	for _, txIn := range txDetails.MsgTx.TxIn {
+	for _, txIn := range txDetails.Tx.MsgTx.TxIn {
 		_, _, _, _, err = w.wallet.FetchInputInfo(&txIn.PreviousOutPoint)
 		if err != nil {
 			if !errors.Is(err, wallet.ErrNotMine) {
@@ -1243,7 +1257,7 @@ func (w *spvWallet) GetTxOut(txHash *chainhash.Hash, vout uint32, pkScript []byt
 			if spent {
 				return nil, 0, nil
 			}
-			if len(txDetails.MsgTx.TxOut) <= int(vout) {
+			if len(txDetails.Tx.MsgTx.TxOut) <= int(vout) {
 				return nil, 0, fmt.Errorf("wallet transaction %s doesn't have enough outputs for vout %d", txHash, vout)
 			}
 
@@ -1256,7 +1270,7 @@ func (w *spvWallet) GetTxOut(txHash *chainhash.Hash, vout uint32, pkScript []byt
 				confs = uint32(confirms(txDetails.Block.Height, tip.Height))
 			}
 
-			msgTx := &txDetails.MsgTx
+			msgTx := &txDetails.Tx.MsgTx
 			if len(msgTx.TxOut) <= int(vout) {
 				return nil, 0, fmt.Errorf("wallet transaction %s found, but not enough outputs for vout %d", txHash, vout)
 			}
@@ -1411,7 +1425,7 @@ func (w *spvWallet) GetWalletTransaction(txHash *chainhash.Hash) (*GetTransactio
 	// TODO: The serialized transaction is already in the DB, so reserializing
 	// might be avoided here. According to btcwallet, details.SerializedTx is
 	// "optional" (?), but we might check for it.
-	txRaw, err := serializeMsgTx(&details.MsgTx)
+	txRaw, err := serializeMsgTx(&details.Tx.MsgTx)
 	if err != nil {
 		return nil, err
 	}
@@ -1444,9 +1458,9 @@ func (w *spvWallet) GetWalletTransaction(txHash *chainhash.Hash) (*GetTransactio
 		}
 
 		// Fee can only be determined if every input is a debit.
-		if len(details.Debits) == len(details.MsgTx.TxIn) {
+		if len(details.Debits) == len(details.Tx.MsgTx.TxIn) {
 			var outputTotal btcutil.Amount
-			for _, output := range details.MsgTx.TxOut {
+			for _, output := range details.Tx.MsgTx.TxOut {
 				outputTotal += btcutil.Amount(output.Value)
 			}
 			ret.Fee = (debitTotal - outputTotal).ToBTC()
