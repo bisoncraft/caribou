@@ -14,12 +14,12 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/networks/erc20"
 	"github.com/bisoncraft/meshwallet/util/networks/erc20/cctp"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 // bridge is the interface that must be implemented by a bridge.

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/bisoncraft/meshwallet/util"
 	filipEdwards "filippo.io/edwards25519"
 	"filippo.io/edwards25519/field"
 	"github.com/athanorlabs/go-dleq"
 	dleqEdwards "github.com/athanorlabs/go-dleq/ed25519"
 	dleqSecp "github.com/athanorlabs/go-dleq/secp256k1"
+	"github.com/bisoncraft/meshwallet/util"
 	dcrEdwards "github.com/decred/dcrd/dcrec/edwards/v2"
 	dcrSecp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )

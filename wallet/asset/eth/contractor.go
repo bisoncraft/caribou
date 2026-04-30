@@ -12,7 +12,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/networks/erc20"
@@ -20,6 +19,7 @@ import (
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	swapv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
 	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"

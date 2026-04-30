@@ -18,8 +18,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/util"
 	"decred.org/dcrwallet/v5/chain"
 	walleterrors "decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/p2p"
@@ -27,6 +25,8 @@ import (
 	"decred.org/dcrwallet/v5/spv"
 	"decred.org/dcrwallet/v5/wallet"
 	"decred.org/dcrwallet/v5/wallet/udb"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/decred/dcrd/addrmgr/v3"
 	"github.com/decred/dcrd/blockchain/stake/v5"
 	"github.com/decred/dcrd/chaincfg/chainhash"

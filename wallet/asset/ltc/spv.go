@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/util"
 	dexltc "github.com/bisoncraft/meshwallet/util/networks/ltc"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"

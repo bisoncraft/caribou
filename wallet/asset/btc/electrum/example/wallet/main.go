@@ -11,8 +11,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc/electrum"
 	dexltc "github.com/bisoncraft/meshwallet/util/networks/ltc"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc/electrum"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/davecgh/go-spew/spew"

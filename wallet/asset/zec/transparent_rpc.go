@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/util"
 	dexzec "github.com/bisoncraft/meshwallet/util/networks/zec"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -48,10 +48,10 @@ type GetTransactionResult struct {
 	Confirmations int64  `json:"confirmations"`
 	BlockHash     string `json:"blockhash"`
 	// BlockIndex    int64  `json:"blockindex"` // unused, consider commenting
-	BlockTime    uint64    `json:"blocktime"`
-	TxID         string    `json:"txid"`
-	Time         uint64    `json:"time"`
-	TimeReceived uint64    `json:"timereceived"`
+	BlockTime    uint64     `json:"blocktime"`
+	TxID         string     `json:"txid"`
+	Time         uint64     `json:"time"`
+	TimeReceived uint64     `json:"timereceived"`
 	Bytes        util.Bytes `json:"hex"`
 }
 

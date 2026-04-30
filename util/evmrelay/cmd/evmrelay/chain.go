@@ -12,10 +12,10 @@ import (
 	"sync"
 
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	basenet "github.com/bisoncraft/meshwallet/util/networks/base"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"

@@ -10,8 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bisoncraft/meshwallet/wallet/app"
 	"fyne.io/systray"
+	"github.com/bisoncraft/meshwallet/wallet/app"
 	"github.com/pkg/browser"
 )
 

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common"
 )

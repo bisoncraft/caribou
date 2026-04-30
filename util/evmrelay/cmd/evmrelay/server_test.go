@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"

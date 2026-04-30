@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 )
 
 const (

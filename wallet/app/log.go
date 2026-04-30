@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/decred/slog"
 	"github.com/jrick/logrotate/rotator"
 )

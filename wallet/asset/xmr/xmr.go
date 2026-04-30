@@ -19,10 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/xmr/cxmr"
 	"github.com/bisoncraft/meshwallet/util"
 	dexnxmr "github.com/bisoncraft/meshwallet/util/networks/xmr"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/xmr/cxmr"
 )
 
 const (

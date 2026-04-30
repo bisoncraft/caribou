@@ -21,12 +21,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr/musig2"
@@ -2658,7 +2658,7 @@ func testFundingCoins(t *testing.T, segwit bool, walletType string) {
 	ensureGood()
 }
 
-func checkMaxOrder(t *testing.T, wallet asset.Wallet, lots, swapVal, maxFees, estWorstCase, estBestCase uint64) {
+func checkMaxOrder(t *testing.T, wallet asset.AtomicSwapWallet, lots, swapVal, maxFees, estWorstCase, estBestCase uint64) {
 	t.Helper()
 	maxOrder, err := wallet.MaxOrder(&asset.MaxOrderForm{
 		LotSize:       tLotSize,
@@ -3330,9 +3330,9 @@ func testPrivateSwap(t *testing.T, segwit bool, walletType string) {
 
 type TAuditInfo struct{}
 
-func (ai *TAuditInfo) Recipient() string     { return tP2PKHAddr }
-func (ai *TAuditInfo) Expiration() time.Time { return time.Time{} }
-func (ai *TAuditInfo) Coin() asset.Coin      { return &tCoin{} }
+func (ai *TAuditInfo) Recipient() string      { return tP2PKHAddr }
+func (ai *TAuditInfo) Expiration() time.Time  { return time.Time{} }
+func (ai *TAuditInfo) Coin() asset.Coin       { return &tCoin{} }
 func (ai *TAuditInfo) Contract() util.Bytes   { return nil }
 func (ai *TAuditInfo) SecretHash() util.Bytes { return nil }
 
@@ -3627,7 +3627,7 @@ type tReceipt struct {
 
 func (r *tReceipt) Expiration() time.Time { return time.Unix(int64(r.expiration), 0).UTC() }
 func (r *tReceipt) Coin() asset.Coin      { return r.coin }
-func (r *tReceipt) Contract() util.Bytes   { return r.contract }
+func (r *tReceipt) Contract() util.Bytes  { return r.contract }
 
 func TestFindRedemption(t *testing.T) {
 	runRubric(t, testFindRedemption)

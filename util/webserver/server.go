@@ -317,4 +317,3 @@ func parseListeners(addrs []string) ([]string, []string, bool, error) {
 	}
 	return ipv4ListenAddrs, ipv6ListenAddrs, haveWildcard, nil
 }
-

@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
 	"github.com/bisoncraft/meshwallet/util"
 	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
+	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 )

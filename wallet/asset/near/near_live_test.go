@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 const (
@@ -410,11 +410,11 @@ func TestLiveCreateExists(t *testing.T) {
 	// Open, unlock, verify address is deterministic.
 	noteChan := make(chan asset.WalletNotification, 8)
 	w, err := drv.Open(&asset.WalletConfig{
-		Type:     walletTypeRPC,
-		Settings: map[string]string{"rpcprovider": sandboxRPC},
-		Emit:     asset.NewWalletEmitter(noteChan, BipID, tLogger),
+		Type:        walletTypeRPC,
+		Settings:    map[string]string{"rpcprovider": sandboxRPC},
+		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
-		DataDir:  dir,
+		DataDir:     dir,
 	}, tLogger, util.Simnet)
 	if err != nil {
 		t.Fatalf("Open error: %v", err)
@@ -443,11 +443,11 @@ func TestLiveCreateExists(t *testing.T) {
 	}
 
 	w2, err := drv.Open(&asset.WalletConfig{
-		Type:     walletTypeRPC,
-		Settings: map[string]string{"rpcprovider": sandboxRPC},
-		Emit:     asset.NewWalletEmitter(noteChan, BipID, tLogger),
+		Type:        walletTypeRPC,
+		Settings:    map[string]string{"rpcprovider": sandboxRPC},
+		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
-		DataDir:  dir2,
+		DataDir:     dir2,
 	}, tLogger, util.Simnet)
 	if err != nil {
 		t.Fatalf("second Open error: %v", err)

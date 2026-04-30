@@ -22,15 +22,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	swapv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
 	swapv1 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v1"
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
@@ -1645,7 +1645,7 @@ func newTestNode(assetID uint32) *tMempoolNode {
 	}
 }
 
-func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, context.CancelFunc) {
+func tassetWallet(assetID uint32) (asset.AtomicSwapWallet, *assetWallet, *tMempoolNode, context.CancelFunc) {
 	node := newTestNode(assetID)
 	ctx, cancel := context.WithCancel(context.Background())
 	var c contractor = node.contractor
@@ -1718,7 +1718,7 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 		BipID: aw,
 	}
 
-	var w asset.Wallet
+	var w asset.AtomicSwapWallet
 	if assetID == BipID {
 		w = &ETHWallet{assetWallet: aw}
 		aw.wallets = map[uint32]*assetWallet{

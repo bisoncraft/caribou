@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	dexfiro "github.com/bisoncraft/meshwallet/util/networks/firo"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"

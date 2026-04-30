@@ -22,15 +22,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/comms"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"github.com/bisoncraft/meshwallet/util/encode"
-	"github.com/bisoncraft/meshwallet/util/utils"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/comms"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/wallet/libxc/bntypes"
 )
 
 // Binance API spot trading docs:
@@ -1314,8 +1313,8 @@ func (bnc *binance) Trade(ctx context.Context, baseID, quoteID uint32, sell bool
 		BaseID:      baseID,
 		QuoteID:     quoteID,
 		Market:      orderType == OrderTypeMarket,
-		BaseFilled:  utils.SafeSub(baseFilled, baseFees),
-		QuoteFilled: utils.SafeSub(quoteFilled, quoteFees),
+		BaseFilled:  util.SafeSub(baseFilled, baseFees),
+		QuoteFilled: util.SafeSub(quoteFilled, quoteFees),
 		Complete:    orderResponse.Status != "NEW" && orderResponse.Status != "PARTIALLY_FILLED",
 	}, err
 }
@@ -1596,7 +1595,7 @@ func (bnc *binance) Markets(ctx context.Context) (map[string]*Market, error) {
 	for _, m := range matches {
 		mkts[m.Slug] = append(mkts[m.Slug], m)
 	}
-	encSymbols, err := json.Marshal(utils.MapKeys(mkts))
+	encSymbols, err := json.Marshal(util.MapKeys(mkts))
 	if err != nil {
 		return nil, fmt.Errorf("error encoding symbold for market data request: %w", err)
 	}
@@ -1854,8 +1853,8 @@ func (bnc *binance) handleExecutionReport(update *bntypes.StreamUpdate) {
 		Rate:        tradeInfo.rate,
 		Qty:         tradeInfo.qty,
 		Market:      tradeInfo.market,
-		BaseFilled:  utils.SafeSub(baseFilled, baseFee),
-		QuoteFilled: utils.SafeSub(quoteFilled, quoteFee),
+		BaseFilled:  util.SafeSub(baseFilled, baseFee),
+		QuoteFilled: util.SafeSub(quoteFilled, quoteFee),
 		BaseID:      tradeInfo.baseID,
 		QuoteID:     tradeInfo.quoteID,
 		Sell:        tradeInfo.sell,

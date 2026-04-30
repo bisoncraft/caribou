@@ -7,9 +7,9 @@ import (
 	"context"
 	"time"
 
+	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/bisoncraft/meshwallet/util"
 	pi "github.com/bisoncraft/meshwallet/util/politeia"
-	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -1448,19 +1448,19 @@ type Stances struct {
 
 // VotingServiceProvider is information about a voting service provider.
 type VotingServiceProvider struct {
-	URL           string      `json:"url"`
+	URL           string       `json:"url"`
 	Network       util.Network `json:"network"`
-	Launched      uint64      `json:"launched"`    // milliseconds
-	LastUpdated   uint64      `json:"lastUpdated"` // milliseconds
-	APIVersions   []int64     `json:"apiVersions"`
-	FeePercentage float64     `json:"feePercentage"`
-	Closed        bool        `json:"closed"`
-	Voting        int64       `json:"voting"`
-	Voted         int64       `json:"voted"`
-	Revoked       int64       `json:"revoked"`
-	VSPDVersion   string      `json:"vspdVersion"`
-	BlockHeight   uint32      `json:"blockHeight"`
-	NetShare      float32     `json:"netShare"`
+	Launched      uint64       `json:"launched"`    // milliseconds
+	LastUpdated   uint64       `json:"lastUpdated"` // milliseconds
+	APIVersions   []int64      `json:"apiVersions"`
+	FeePercentage float64      `json:"feePercentage"`
+	Closed        bool         `json:"closed"`
+	Voting        int64        `json:"voting"`
+	Voted         int64        `json:"voted"`
+	Revoked       int64        `json:"revoked"`
+	VSPDVersion   string       `json:"vspdVersion"`
+	BlockHeight   uint32       `json:"blockHeight"`
+	NetShare      float32      `json:"netShare"`
 }
 
 // TicketStats sums up some statistics for historical staking data for a

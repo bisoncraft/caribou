@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 func TestIsAlreadyBroadcastErr(t *testing.T) {
@@ -38,7 +38,7 @@ type testCoin struct {
 	id []byte
 }
 
-func (c *testCoin) ID() util.Bytes  { return c.id }
+func (c *testCoin) ID() util.Bytes { return c.id }
 func (c *testCoin) String() string { return util.Bytes(c.id).String() }
 func (c *testCoin) TxID() string   { return "" }
 func (c *testCoin) Value() uint64  { return 0 }

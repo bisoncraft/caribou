@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/cbtypes"
 	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/libxc/cbtypes"
 	"github.com/davecgh/go-spew/spew"
 )
 

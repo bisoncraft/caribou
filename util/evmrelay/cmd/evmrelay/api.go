@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	"github.com/bisoncraft/meshwallet/util/evmrelay"
+	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 )

@@ -8,11 +8,11 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
 	"github.com/bisoncraft/meshwallet/util"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

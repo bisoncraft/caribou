@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/util"
 	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	dexdgb "github.com/bisoncraft/meshwallet/util/networks/dgb"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )

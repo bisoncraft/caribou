@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 func TestHTTPForVSPD(t *testing.T) {

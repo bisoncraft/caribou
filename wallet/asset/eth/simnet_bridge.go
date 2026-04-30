@@ -19,12 +19,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	dexbase "github.com/bisoncraft/meshwallet/util/networks/base"
 	dexerc20 "github.com/bisoncraft/meshwallet/util/networks/erc20"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	dexpolygon "github.com/bisoncraft/meshwallet/util/networks/polygon"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 const simnetBridgeName = "simnet"

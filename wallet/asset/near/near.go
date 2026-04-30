@@ -20,11 +20,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/keygen"
 	dexnear "github.com/bisoncraft/meshwallet/util/networks/near"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/decred/base58"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )

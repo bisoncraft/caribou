@@ -24,17 +24,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
+	"github.com/bisoncraft/go-bip39"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/encode"
+	"github.com/bisoncraft/meshwallet/util/evmrelay"
 	"github.com/bisoncraft/meshwallet/util/keygen"
 	"github.com/bisoncraft/meshwallet/util/networks/erc20"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	multibal "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/multibalance"
-	"github.com/bisoncraft/meshwallet/util/evmrelay"
-	"github.com/bisoncraft/go-bip39"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"github.com/ethereum/go-ethereum"
@@ -9095,7 +9095,7 @@ func (w *assetWallet) PendingTransactions(ctx context.Context) []*asset.WalletTr
 // getgas, deploy, and nodeclient testing. If simnet providers are not
 // specified, getFileCredentials will add the simnet alpha node.
 type providersFile struct {
-	Seed      util.Bytes                                                   `json:"seed"`
+	Seed      util.Bytes                                                  `json:"seed"`
 	Providers map[string] /* symbol */ map[string] /* network */ []string `json:"providers"`
 	Relays    map[string] /* symbol */ map[string] /* network */ string   `json:"relays"`
 }

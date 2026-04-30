@@ -12,9 +12,9 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/util"
 	pi "github.com/bisoncraft/meshwallet/util/politeia"
+	"github.com/bisoncraft/meshwallet/wallet/core"
 	tv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
 	qrcode "github.com/skip2/go-qrcode"
 )

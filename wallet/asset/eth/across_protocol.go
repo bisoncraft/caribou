@@ -13,10 +13,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"github.com/bisoncraft/meshwallet/util/networks/erc20"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 
 	"github.com/bisoncraft/meshwallet/util/networks/erc20/across"
 )

@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	dexfiro "github.com/bisoncraft/meshwallet/util/networks/firo"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcutil"
 )
 

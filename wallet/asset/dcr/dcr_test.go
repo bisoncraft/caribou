@@ -21,16 +21,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
+	"decred.org/dcrwallet/v5/rpc/client/dcrwallet"
+	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/broadcast"
 	dcradaptor "github.com/bisoncraft/meshwallet/wallet/internal/adaptorsigs"
-	"decred.org/dcrwallet/v5/rpc/client/dcrwallet"
-	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v3"
@@ -2843,9 +2843,9 @@ func TestSwap(t *testing.T) {
 
 type TAuditInfo struct{}
 
-func (ai *TAuditInfo) Recipient() string     { return tPKHAddr.String() }
-func (ai *TAuditInfo) Expiration() time.Time { return time.Time{} }
-func (ai *TAuditInfo) Coin() asset.Coin      { return &tCoin{} }
+func (ai *TAuditInfo) Recipient() string      { return tPKHAddr.String() }
+func (ai *TAuditInfo) Expiration() time.Time  { return time.Time{} }
+func (ai *TAuditInfo) Coin() asset.Coin       { return &tCoin{} }
 func (ai *TAuditInfo) Contract() util.Bytes   { return nil }
 func (ai *TAuditInfo) SecretHash() util.Bytes { return nil }
 
@@ -3173,7 +3173,7 @@ type tReceipt struct {
 
 func (r *tReceipt) Expiration() time.Time { return time.Unix(int64(r.expiration), 0).UTC() }
 func (r *tReceipt) Coin() asset.Coin      { return r.coin }
-func (r *tReceipt) Contract() util.Bytes   { return r.contract }
+func (r *tReceipt) Contract() util.Bytes  { return r.contract }
 
 func TestFindRedemption(t *testing.T) {
 	wallet, node, shutdown := tNewWallet()

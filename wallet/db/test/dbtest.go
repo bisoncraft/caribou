@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	ordertest "github.com/bisoncraft/meshwallet/util/order/test"
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/db"
-	ordertest "github.com/bisoncraft/meshwallet/util/order/test"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

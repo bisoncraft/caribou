@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/lexi"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 const (
@@ -171,4 +171,3 @@ func (db *nearTxDB) getPendingTxs() ([]*dbTx, error) {
 	})
 	return txs, err
 }
-

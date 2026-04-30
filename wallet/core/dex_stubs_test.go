@@ -4,10 +4,12 @@
 package core
 
 import (
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/db"
+	"sort"
+
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/order"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/db"
 )
 
 // tDriver implements asset.Driver for testing.
@@ -25,7 +27,7 @@ func (d *tDriver) Open(_ *asset.WalletConfig, _ util.Logger, _ util.Network) (as
 	return d.wallet, nil
 }
 func (d *tDriver) DecodeCoinID(_ []byte) (string, error) { return d.decodedCoinID, nil }
-func (d *tDriver) Info() *asset.WalletInfo                { return d.winfo }
+func (d *tDriver) Info() *asset.WalletInfo               { return d.winfo }
 
 // tCreator embeds tDriver and implements asset.Creator for seeded wallets.
 type tCreator struct {
@@ -51,20 +53,30 @@ func newPokesCache(capacity int) *pokesCache {
 }
 
 func (p *pokesCache) add(n *db.Notification) {
-	if len(p.cache) < p.cap {
-		p.cache = append(p.cache, n)
+	if len(p.cache) >= p.cap {
+		p.cache[p.cursor] = n
 	} else {
-		p.cache[p.cursor%p.cap] = n
+		p.cache = append(p.cache, n)
 	}
-	p.cursor++
+	p.cursor = (p.cursor + 1) % p.cap
 }
 
 func (p *pokesCache) init(notes []*db.Notification) {
+	if len(notes) > p.cap {
+		notes = notes[:len(notes)-p.cap]
+	}
 	p.cache = notes
-	p.cursor = len(notes)
+	p.cursor = len(notes) % p.cap
 }
 
-func (p *pokesCache) pokes() []*db.Notification { return p.cache }
+func (p *pokesCache) pokes() []*db.Notification {
+	out := make([]*db.Notification, len(p.cache))
+	copy(out, p.cache)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].TimeStamp < out[j].TimeStamp
+	})
+	return out
+}
 
 func init() {
 	// Register a stub driver for the generic test asset IDs used in tests
@@ -83,7 +95,7 @@ func init() {
 // Match is a stub for the removed DEX match type.
 // Referenced by helpers_test.go.
 type Match struct {
-	MatchID  util.Bytes         `json:"matchID"`
+	MatchID  util.Bytes        `json:"matchID"`
 	Status   order.MatchStatus `json:"status"`
 	Active   bool              `json:"active"`
 	Revoked  bool              `json:"revoked"`
@@ -105,7 +117,7 @@ type Order struct {
 	QuoteSymbol string            `json:"quoteSymbol"`
 	MarketID    string            `json:"market"`
 	Type        order.OrderType   `json:"type"`
-	ID          util.Bytes         `json:"id"`
+	ID          util.Bytes        `json:"id"`
 	Stamp       uint64            `json:"stamp"`
 	Status      order.OrderStatus `json:"status"`
 	Qty         uint64            `json:"qty"`

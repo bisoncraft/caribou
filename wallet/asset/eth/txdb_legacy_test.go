@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 func TestMigrateLegacyTxDB(t *testing.T) {

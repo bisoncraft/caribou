@@ -6,8 +6,8 @@
 package appserver
 
 import (
-	"github.com/bisoncraft/meshwallet/wallet/intl"
 	"github.com/bisoncraft/meshwallet/wallet/appserver/newui/locales"
+	"github.com/bisoncraft/meshwallet/wallet/intl"
 )
 
 var localesMap = locales.Locales

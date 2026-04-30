@@ -17,13 +17,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/encode"
+	pi "github.com/bisoncraft/meshwallet/util/politeia"
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/core"
 	"github.com/bisoncraft/meshwallet/wallet/db"
 	"github.com/bisoncraft/meshwallet/wallet/mnemonic"
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/encode"
-	pi "github.com/bisoncraft/meshwallet/util/politeia"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -100,8 +100,8 @@ func (c *TCore) InitializeClient(pw []byte, seed *string) (string, error) {
 	}
 	return mnemonicSeed, c.initErr
 }
-func (c *TCore) Login(pw []byte) error { return c.loginErr }
-func (c *TCore) IsInitialized() bool   { return c.isInited }
+func (c *TCore) Login(pw []byte) error                                    { return c.loginErr }
+func (c *TCore) IsInitialized() bool                                      { return c.isInited }
 func (c *TCore) AssetBalance(assetID uint32) (*core.WalletBalance, error) { return nil, c.balanceErr }
 func (c *TCore) WalletState(assetID uint32) *core.WalletState {
 	if c.notHas {
@@ -447,9 +447,9 @@ func TestAPILogin(t *testing.T) {
 	ensure(`{"ok":true,"notes":null,"pokes":[]}`)
 
 	tCore.notes = []*db.Notification{{
-		TopicID: core.TopicAccountUnlockError,
+		TopicID: core.TopicWalletUnlockError,
 	}}
-	ensure(`{"ok":true,"notes":[{"type":"","topic":"AccountUnlockError","subject":"","details":"","severity":0,"stamp":0,"acked":false,"id":""}],"pokes":[]}`)
+	ensure(`{"ok":true,"notes":[{"type":"","topic":"WalletUnlockError","subject":"","details":"","severity":0,"stamp":0,"acked":false,"id":""}],"pokes":[]}`)
 
 	tCore.notes = nil
 	tCore.notesErr = errors.New("")

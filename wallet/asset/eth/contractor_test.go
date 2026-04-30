@@ -8,10 +8,10 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	dexeth "github.com/bisoncraft/meshwallet/util/networks/eth"
 	swapv0 "github.com/bisoncraft/meshwallet/util/networks/eth/contracts/v0"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"

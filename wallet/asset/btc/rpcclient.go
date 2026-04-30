@@ -16,10 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -912,7 +912,7 @@ func (wc *rpcClient) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract 
 
 	var res struct {
 		TxBytes util.Bytes `json:"hex"`
-		Fees    float64   `json:"fee"`
+		Fees    float64    `json:"fee"`
 	}
 	err = wc.call(methodFundRawTransaction, args, &res)
 	if err != nil {

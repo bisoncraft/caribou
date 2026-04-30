@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/encrypt"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 

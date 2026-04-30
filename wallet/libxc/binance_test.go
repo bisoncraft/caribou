@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	_ "github.com/bisoncraft/meshwallet/wallet/asset/importall"
-	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/bntypes"
-	"github.com/bisoncraft/meshwallet/util/calc"
+	"github.com/bisoncraft/meshwallet/wallet/libxc/bntypes"
 	"github.com/davecgh/go-spew/spew"
 )
 

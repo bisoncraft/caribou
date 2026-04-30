@@ -7,15 +7,15 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/util"
 )
 
 // Notifications should use the following note type strings.
 const (
-	NoteTypeSend       = "send"
-	NoteTypeBalance    = "balance"
+	NoteTypeSend         = "send"
+	NoteTypeBalance      = "balance"
 	NoteTypeWalletConfig = "walletconfig"
 	NoteTypeWalletState  = "walletstate"
 	NoteTypeWalletSync   = "walletsync"
@@ -375,4 +375,3 @@ func newWalletNote(n asset.WalletNotification) *WalletNote {
 		Payload:      n,
 	}
 }
-

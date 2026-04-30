@@ -7,12 +7,12 @@ GV=$(go version | sed "s/^.*go\([0-9.]*\).*/\1/")
 echo "Go version: $GV"
 
 # Ensure html templates pass localization.
-go generate -x ./wallet/webserver/site # no -write
+go generate -x ./wallet/appserver/site # no -write
 
 cd "$dir"
 
 # list of all modules to test
-modules=". /util/testing/loadbot /wallet/cmd/bisonw-desktop"
+modules=". /wallet/cmd/bisonw-desktop"
 
 # For each module, run go mod tidy, build and run test.
 for m in $modules
@@ -44,10 +44,9 @@ go run ./wallet/core/localetest/main.go
 # -race in go tests above requires cgo, but disable it for the compile tests below
 export CGO_ENABLED=0
 go build ./...
-go build -tags harness -o /dev/null ./wallet/cmd/simnet-trade-tests
 go build -tags systray -o /dev/null ./wallet/cmd/bisonw
 
-go test -c -o /dev/null -tags live ./wallet/webserver
+go test -c -o /dev/null -tags live ./wallet/appserver
 go test -c -o /dev/null -tags harness ./wallet/asset/dcr
 go test -c -o /dev/null -tags electrumlive ./wallet/asset/btc
 go test -c -o /dev/null -tags harness ./wallet/asset/btc/livetest
@@ -58,7 +57,6 @@ go test -c -o /dev/null -tags harness ./wallet/asset/eth
 go test -c -o /dev/null -tags rpclive ./wallet/asset/eth
 go test -c -o /dev/null -tags harness ./wallet/asset/zec
 go test -c -o /dev/null -tags harness ./wallet/asset/dash
-go test -c -o /dev/null -tags harness ./wallet/asset/firo
 go test -c -o /dev/null -tags rpclive ./wallet/asset/polygon
 go test -c -o /dev/null -tags live ./util/testing/firo/test
 

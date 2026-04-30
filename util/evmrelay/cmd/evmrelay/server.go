@@ -59,7 +59,7 @@ type relayConfig struct {
 	DataDir        string        `json:"dataDir"`
 	TrustedProxies []string      `json:"trustedProxies"` // IPs whose X-Real-IP / X-Forwarded-For headers are honored
 	Chains         []chainConfig `json:"chains"`
-	Net            util.Network   `json:"-"` // set from CLI flags
+	Net            util.Network  `json:"-"` // set from CLI flags
 }
 
 type chainConfig struct {

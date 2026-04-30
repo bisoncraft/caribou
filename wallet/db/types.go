@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/order"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/crypto/blake2s"
 )
@@ -98,15 +98,15 @@ func BondUID(assetID uint32, bondCoinID []byte) []byte {
 // Bond is stored in a sub-bucket of an account bucket. The util.Bytes type is
 // used for certain fields so that the data marshals to/from hexadecimal.
 type Bond struct {
-	Version    uint16    `json:"ver"`
-	AssetID    uint32    `json:"asset"`
+	Version    uint16     `json:"ver"`
+	AssetID    uint32     `json:"asset"`
 	CoinID     util.Bytes `json:"coinID"`
 	UnsignedTx util.Bytes `json:"utx"`
 	SignedTx   util.Bytes `json:"stx"`  // can be obtained from msgjson.Bond.CoinID
 	Data       util.Bytes `json:"data"` // e.g. redeem script
-	Amount     uint64    `json:"amt"`
-	LockTime   uint64    `json:"lockTime"`
-	KeyIndex   uint32    `json:"keyIndex"` // child key index for HD path: m / hdKeyPurposeBonds / assetID' / bondIndex
+	Amount     uint64     `json:"amt"`
+	LockTime   uint64     `json:"lockTime"`
+	KeyIndex   uint32     `json:"keyIndex"` // child key index for HD path: m / hdKeyPurposeBonds / assetID' / bondIndex
 	RefundTx   util.Bytes `json:"refundTx"` // pays to wallet that created it - only a backup for emergency!
 
 	Confirmed bool `json:"confirmed"` // if reached required confs according to server, not in serialization
@@ -1045,13 +1045,13 @@ type Topic string
 // Notification is information for the user that is typically meant for display,
 // and is persisted for recall across sessions.
 type Notification struct {
-	NoteType    string    `json:"type"`
-	TopicID     Topic     `json:"topic"`
-	SubjectText string    `json:"subject"`
-	DetailText  string    `json:"details"`
-	Severeness  Severity  `json:"severity"`
-	TimeStamp   uint64    `json:"stamp"`
-	Ack         bool      `json:"acked"`
+	NoteType    string     `json:"type"`
+	TopicID     Topic      `json:"topic"`
+	SubjectText string     `json:"subject"`
+	DetailText  string     `json:"details"`
+	Severeness  Severity   `json:"severity"`
+	TimeStamp   uint64     `json:"stamp"`
+	Ack         bool       `json:"acked"`
 	Id          util.Bytes `json:"id"`
 }
 

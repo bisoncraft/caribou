@@ -71,7 +71,6 @@ type sendForm struct {
 	Pass     encode.PassBytes `json:"pw"`
 }
 
-
 type buildInfoResponse struct {
 	OK       bool   `json:"ok"`
 	Version  string `json:"version"`

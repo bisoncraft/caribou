@@ -24,15 +24,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/comms"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/mm/libxc/cbtypes"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/calc"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"github.com/bisoncraft/meshwallet/util/encode"
-	"github.com/bisoncraft/meshwallet/util/utils"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/comms"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/wallet/libxc/cbtypes"
 
 	"gopkg.in/square/go-jose.v2"
 	"gopkg.in/square/go-jose.v2/jwt"
@@ -588,7 +587,7 @@ func (c *coinbase) handleUserMessage(b []byte) {
 			QuoteID:     info.quoteID,
 			Market:      info.market,
 			BaseFilled:  toAtomic(order.CumulativeQty, &bui),
-			QuoteFilled: utils.SafeSub(filledValue, totalFees),
+			QuoteFilled: util.SafeSub(filledValue, totalFees),
 			Complete:    order.Status != "OPEN" && order.Status != "PENDING",
 		}
 		updater <- update
@@ -1468,7 +1467,7 @@ func (c *coinbase) TradeStatus(ctx context.Context, id string, baseID, quoteID u
 		BaseID:      baseID,
 		QuoteID:     quoteID,
 		BaseFilled:  toAtomic(res.Order.FilledSize, &bui),
-		QuoteFilled: utils.SafeSub(filledValue, totalFees),
+		QuoteFilled: util.SafeSub(filledValue, totalFees),
 		Complete:    res.Order.Status != "OPEN" && res.Order.Status != "PENDING",
 	}, nil
 }

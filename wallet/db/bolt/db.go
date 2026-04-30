@@ -17,13 +17,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/encrypt"
 	"github.com/bisoncraft/meshwallet/util/order"
+	"github.com/bisoncraft/meshwallet/wallet/db"
+	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
 	"go.etcd.io/bbolt"
 )
 
@@ -56,21 +56,21 @@ var (
 // value encodings.
 var (
 	// bucket keys
-	appBucket              = []byte("appBucket")
-	accountsBucket         = []byte("accounts")
-	bondIndexesBucket      = []byte("bondIndexes")
-	bondsSubBucket         = []byte("bonds") // sub bucket of accounts
-	activeOrdersBucket     = []byte("activeOrders")
-	archivedOrdersBucket   = []byte("orders")
-	activeMatchesBucket    = []byte("activeMatches")
-	archivedMatchesBucket  = []byte("matches")
-	botProgramsBucket      = []byte("botPrograms")
-	walletsBucket          = []byte("wallets")
-	notesBucket            = []byte("notes")
-	pokesBucket            = []byte("pokes")
-	credentialsBucket      = []byte("credentials")
-	multisigIndexesBucket  = []byte("multiIndexes")
-	multisigPubKeysBucket  = []byte("multiPubKeys")
+	appBucket             = []byte("appBucket")
+	accountsBucket        = []byte("accounts")
+	bondIndexesBucket     = []byte("bondIndexes")
+	bondsSubBucket        = []byte("bonds") // sub bucket of accounts
+	activeOrdersBucket    = []byte("activeOrders")
+	archivedOrdersBucket  = []byte("orders")
+	activeMatchesBucket   = []byte("activeMatches")
+	archivedMatchesBucket = []byte("matches")
+	botProgramsBucket     = []byte("botPrograms")
+	walletsBucket         = []byte("wallets")
+	notesBucket           = []byte("notes")
+	pokesBucket           = []byte("pokes")
+	credentialsBucket     = []byte("credentials")
+	multisigIndexesBucket = []byte("multiIndexes")
+	multisigPubKeysBucket = []byte("multiPubKeys")
 	// value keys
 	versionKey = []byte("version")
 	linkedKey  = []byte("linked")
@@ -2627,7 +2627,6 @@ func (db *BoltDB) CompanionToken() (token string, _ error) {
 func timeNow() uint64 {
 	return uint64(time.Now().UnixMilli())
 }
-
 
 // A couple of common bbolt functions.
 type bucketFunc func(*bbolt.Bucket) error

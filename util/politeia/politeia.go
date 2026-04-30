@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/bisoncraft/meshwallet/util"
-	"github.com/bisoncraft/meshwallet/util/lexi"
 	"decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/wallet/udb"
+	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/util/lexi"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	tkv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
 	piclient "github.com/decred/politeia/politeiawww/client"

@@ -17,13 +17,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	dbtest "github.com/bisoncraft/meshwallet/wallet/db/test"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/encrypt"
 	"github.com/bisoncraft/meshwallet/util/wait"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/db"
+	dbtest "github.com/bisoncraft/meshwallet/wallet/db/test"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -49,8 +49,8 @@ func init() {
 }
 
 var (
-	tCtx          context.Context
-	tUTXOAssetA   = &util.Asset{
+	tCtx        context.Context
+	tUTXOAssetA = &util.Asset{
 		ID:         42,
 		Symbol:     "dcr",
 		Version:    0, // match the stubbed (*TXCWallet).Info result
@@ -931,19 +931,19 @@ func newTestRig() *testRig {
 	rig := &testRig{
 		shutdown: shutdown,
 		core: &Core{
-			ctx:           ctx,
-			cfg:           &Config{},
-			db:            tdb,
-			log:           tLogger,
-			wallets:       make(map[uint32]*xcWallet),
-			blockWaiters:  make(map[string]*blockWaiter),
-			newCrypter:    func([]byte) encrypt.Crypter { return crypter },
-			reCrypter:     func([]byte, []byte) (encrypt.Crypter, error) { return crypter, crypter.recryptErr },
-			noteChans:     make(map[uint64]chan Notification),
-			tipPending:    make(map[uint32]uint64),
-			tipActive:     make(map[uint32]bool),
-			balPending:    make(map[uint32]*asset.Balance),
-			balActive:     make(map[uint32]bool),
+			ctx:          ctx,
+			cfg:          &Config{},
+			db:           tdb,
+			log:          tLogger,
+			wallets:      make(map[uint32]*xcWallet),
+			blockWaiters: make(map[string]*blockWaiter),
+			newCrypter:   func([]byte) encrypt.Crypter { return crypter },
+			reCrypter:    func([]byte, []byte) (encrypt.Crypter, error) { return crypter, crypter.recryptErr },
+			noteChans:    make(map[uint64]chan Notification),
+			tipPending:   make(map[uint32]uint64),
+			tipActive:    make(map[uint32]bool),
+			balPending:   make(map[uint32]*asset.Balance),
+			balActive:    make(map[uint32]bool),
 
 			fiatRateSources:  make(map[string]*commonRateSource),
 			notes:            make(chan asset.WalletNotification, 128),

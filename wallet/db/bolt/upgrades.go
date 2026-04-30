@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"path/filepath"
 
-	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/order"
+	dexdb "github.com/bisoncraft/meshwallet/wallet/db"
 	"go.etcd.io/bbolt"
 )
 

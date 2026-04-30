@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 type peerSource uint16

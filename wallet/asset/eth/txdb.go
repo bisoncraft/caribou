@@ -11,10 +11,10 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/lexi"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -28,8 +28,8 @@ type extendedWalletTx struct {
 	SubmissionTime uint64         `json:"timeStamp"` // seconds
 	Nonce          *big.Int       `json:"nonce"`
 	Receipt        *types.Receipt `json:"receipt,omitempty"`
-	RawTx          util.Bytes      `json:"rawTx"`
-	CallData       util.Bytes      `json:"callData"`
+	RawTx          util.Bytes     `json:"rawTx"`
+	CallData       util.Bytes     `json:"callData"`
 	// NonceReplacement is a transaction with the same nonce that was accepted
 	// by the network, meaning this tx was not applied.
 	NonceReplacement string `json:"nonceReplacement,omitempty"`

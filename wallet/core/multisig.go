@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util/keygen"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )

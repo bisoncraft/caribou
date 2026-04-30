@@ -10,11 +10,11 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/bisoncraft/meshwallet/util"
 	dexbtc "github.com/bisoncraft/meshwallet/util/networks/btc"
 	dexdoge "github.com/bisoncraft/meshwallet/util/networks/doge"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

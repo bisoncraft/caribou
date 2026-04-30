@@ -23,17 +23,17 @@ type Balances struct {
 
 // ListUnspentResult models a successful response from the listunspent request.
 type ListUnspentResult struct {
-	TxID          string    `json:"txid"`
-	Vout          uint32    `json:"vout"`
-	Address       string    `json:"address"`
-	Label         string    `json:"label"`
+	TxID          string     `json:"txid"`
+	Vout          uint32     `json:"vout"`
+	Address       string     `json:"address"`
+	Label         string     `json:"label"`
 	ScriptPubKey  util.Bytes `json:"scriptPubKey"`
-	Amount        float64   `json:"amount"`
-	Confirmations uint32    `json:"confirmations"`
+	Amount        float64    `json:"amount"`
+	Confirmations uint32     `json:"confirmations"`
 	RedeemScript  util.Bytes `json:"redeemScript"`
-	Spendable     bool      `json:"spendable"`
-	Solvable      bool      `json:"solvable"`
-	SafePtr       *bool     `json:"safe"`
+	Spendable     bool       `json:"spendable"`
+	Solvable      bool       `json:"solvable"`
+	SafePtr       *bool      `json:"safe"`
 }
 
 func (l *ListUnspentResult) Safe() bool {
@@ -54,7 +54,7 @@ type ListTransactionsResult struct {
 
 // SignTxResult models the data from the signrawtransaction command.
 type SignTxResult struct {
-	Hex      util.Bytes      `json:"hex"`
+	Hex      util.Bytes     `json:"hex"`
 	Complete bool           `json:"complete"`
 	Errors   []*SignTxError `json:"errors"`
 }
@@ -62,11 +62,11 @@ type SignTxResult struct {
 // SignTxError models the data that contains script verification errors from the
 // signrawtransaction request
 type SignTxError struct {
-	TxID      string    `json:"txid"`
-	Vout      uint32    `json:"vout"`
+	TxID      string     `json:"txid"`
+	Vout      uint32     `json:"vout"`
 	ScriptSig util.Bytes `json:"scriptSig"`
-	Sequence  uint64    `json:"sequence"`
-	Error     string    `json:"error"`
+	Sequence  uint64     `json:"sequence"`
+	Error     string     `json:"error"`
 }
 
 // GetTransactionResult models the required data from the gettransaction
@@ -85,9 +85,9 @@ type GetTransactionResult struct {
 	BlockIndex    int64  `json:"blockindex"` // unused, consider commenting
 	BlockTime     uint64 `json:"blocktime"`
 	// BlockHeight   uint64    `json:"blockheight"` // unused, potentially work to obtain
-	TxID         string    `json:"txid"`
-	Time         uint64    `json:"time"`
-	TimeReceived uint64    `json:"timereceived"`
+	TxID         string     `json:"txid"`
+	Time         uint64     `json:"time"`
+	TimeReceived uint64     `json:"timereceived"`
 	Bytes        util.Bytes `json:"hex"` // []byte, although it marshals/unmarshals a hex string
 	// BipReplaceable string    `json:"bip125-replaceable"` // unused
 	// Details        []*WalletTxDetails `json:"details"` // unused, and nearly impossible to satisfy in a generic interface

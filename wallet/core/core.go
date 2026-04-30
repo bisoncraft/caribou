@@ -21,15 +21,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/wallet/db/bolt"
-	"github.com/bisoncraft/meshwallet/wallet/mnemonic"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/encrypt"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/meshwallet/wallet/db/bolt"
+	"github.com/bisoncraft/meshwallet/wallet/mnemonic"
 	"github.com/decred/dcrd/crypto/blake256"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"golang.org/x/text/language"
@@ -104,7 +104,6 @@ type Config struct {
 	// for running core in extension mode, which gives the caller options for
 	// e.g. limiting the ability to configure wallets.
 	ExtensionModeFile string
-
 }
 
 // locale is data associated with the currently selected language.
@@ -117,14 +116,14 @@ type locale struct {
 // Core is the core client application. Core manages wallets,
 // database access, atomic swap settlement and more.
 type Core struct {
-	ctx  context.Context
-	wg   sync.WaitGroup
+	ctx   context.Context
+	wg    sync.WaitGroup
 	ready chan struct{}
-	cfg  *Config
-	log  util.Logger
-	db   db.DB
-	net  util.Network
-	intl atomic.Value // *locale
+	cfg   *Config
+	log   util.Logger
+	db    db.DB
+	net   util.Network
+	intl  atomic.Value // *locale
 
 	extensionModeConfig *ExtensionModeConfig
 
@@ -167,7 +166,6 @@ type Core struct {
 
 	requestedActionMtx sync.RWMutex
 	requestedActions   map[string]*asset.ActionRequiredNote
-
 }
 
 // New is the constructor for a new Core.
@@ -281,21 +279,21 @@ func New(cfg *Config) (*Core, error) {
 	}
 
 	c := &Core{
-		cfg:           cfg,
-		credentials:   creds,
-		ready:   make(chan struct{}),
-		log:     cfg.Logger,
-		db:      boltDB,
-		wallets: make(map[uint32]*xcWallet),
-		net:     cfg.Net,
-		blockWaiters:  make(map[string]*blockWaiter),
-		tipPending:    make(map[uint32]uint64),
-		tipActive:     make(map[uint32]bool),
-		balPending:    make(map[uint32]*asset.Balance),
-		balActive:     make(map[uint32]bool),
-		newCrypter:    encrypt.NewCrypter,
-		reCrypter:     encrypt.Deserialize,
-		noteChans:     make(map[uint64]chan Notification),
+		cfg:          cfg,
+		credentials:  creds,
+		ready:        make(chan struct{}),
+		log:          cfg.Logger,
+		db:           boltDB,
+		wallets:      make(map[uint32]*xcWallet),
+		net:          cfg.Net,
+		blockWaiters: make(map[string]*blockWaiter),
+		tipPending:   make(map[uint32]uint64),
+		tipActive:    make(map[uint32]bool),
+		balPending:   make(map[uint32]*asset.Balance),
+		balActive:    make(map[uint32]bool),
+		newCrypter:   encrypt.NewCrypter,
+		reCrypter:    encrypt.Deserialize,
+		noteChans:    make(map[uint64]chan Notification),
 
 		extensionModeConfig: xCfg,
 		seedGenerationTime:  seedGenerationTime,
@@ -2063,7 +2061,6 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 		go oldWallet.Disconnect()
 	}
 
-
 	return nil
 }
 
@@ -2404,7 +2401,6 @@ func seedInnerKey(seed []byte) []byte {
 	innerKey := blake256.Sum256(key)
 	return innerKey[:]
 }
-
 
 // Login logs the user in. On the first login after startup or after a logout,
 // this function will connect wallets and decrypt stored credentials. Otherwise,
@@ -4157,4 +4153,3 @@ func (c *Core) GenerateBCHRecoveryTransaction(appPW []byte, recipient string) ([
 func (c *Core) ExtensionModeConfig() *ExtensionModeConfig {
 	return c.extensionModeConfig
 }
-

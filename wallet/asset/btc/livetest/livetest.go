@@ -29,10 +29,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/config"
 	"github.com/bisoncraft/meshwallet/util/wait"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 )
 
 var tLogger util.Logger
@@ -78,6 +78,10 @@ func tBackend(ctx context.Context, t *testing.T, cfg *Config, dir string, wallet
 	if err != nil {
 		t.Fatalf("error creating backend: %v", err)
 	}
+	asw, ok := w.(asset.AtomicSwapWallet)
+	if !ok {
+		t.Fatalf("wallet does not implement asset.AtomicSwapWallet")
+	}
 
 	cm := util.NewConnectionMaster(w)
 	err = cm.Connect(ctx)
@@ -99,11 +103,11 @@ func tBackend(ctx context.Context, t *testing.T, cfg *Config, dir string, wallet
 		}
 	}()
 
-	return &connectedWallet{w, cm}
+	return &connectedWallet{asw, cm}
 }
 
 type connectedWallet struct {
-	asset.Wallet
+	asset.AtomicSwapWallet
 	cxn *util.ConnectionMaster
 }
 
@@ -228,7 +232,7 @@ func Run(t *testing.T, cfg *Config) {
 
 	// Unlocks a wallet for use.
 	unlock := func(w *connectedWallet, name string) {
-		a, isAuthenticator := w.Wallet.(asset.Authenticator)
+		a, isAuthenticator := w.AtomicSwapWallet.(asset.Authenticator)
 		if isAuthenticator {
 			err := a.Unlock(walletPassword)
 			if err != nil && !strings.Contains(err.Error(), "running with an unencrypted wallet, but walletpassphrase was called") {
@@ -572,7 +576,7 @@ func Run(t *testing.T, cfg *Config) {
 	tLogger.Infof("Sent with %s", coin.String())
 
 	// Test Withdraw.
-	withdrawer, _ := rig.secondWallet.Wallet.(asset.Withdrawer)
+	withdrawer, _ := rig.secondWallet.AtomicSwapWallet.(asset.Withdrawer)
 	tLogger.Info("Testing Withdraw")
 	coin, err = withdrawer.Withdraw(address, cfg.LotSize, defaultFee)
 	if err != nil {

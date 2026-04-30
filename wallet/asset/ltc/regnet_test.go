@@ -21,8 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
 	"github.com/bisoncraft/meshwallet/util"
+	"github.com/bisoncraft/meshwallet/wallet/asset/btc/livetest"
 )
 
 // const alphaAddress = "rltc1qjld4f85m96rr77035c5yuhkz8apxlkkla0ftmz"

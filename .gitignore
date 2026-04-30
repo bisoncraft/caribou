@@ -53,4 +53,4 @@ wallet/internal/libsecp256k1/secp256k1
 **/testdata/fuzz
 *.db
 *.code-workspace
-.claude/settings.local.json
+.claude/

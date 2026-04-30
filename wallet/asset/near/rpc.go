@@ -69,11 +69,11 @@ type jsonRPCResponse struct {
 }
 
 type rpcError struct {
-	Name    string          `json:"name"`
-	Cause   *rpcErrorCause  `json:"cause"`
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    string          `json:"data"`
+	Name    string         `json:"name"`
+	Cause   *rpcErrorCause `json:"cause"`
+	Code    int            `json:"code"`
+	Message string         `json:"message"`
+	Data    string         `json:"data"`
 }
 
 type rpcErrorCause struct {
@@ -188,8 +188,8 @@ func (c *rpcClient) viewAccessKey(accountID string, pubKeyBase58 string) (*acces
 
 // blockInfo holds selected fields from a block response.
 type blockInfo struct {
-	Header blockHeader  `json:"header"`
-	Chunks []chunkRef   `json:"chunks"`
+	Header blockHeader `json:"header"`
+	Chunks []chunkRef  `json:"chunks"`
 }
 
 type blockHeader struct {
@@ -337,9 +337,9 @@ func (c *rpcClient) broadcastTxAsync(signedTxBase64 string) (string, error) {
 
 func (c *rpcClient) txStatus(txHash, senderID string) (*txResult, error) {
 	result, err := c.call("tx", map[string]interface{}{
-		"tx_hash":  txHash,
+		"tx_hash":           txHash,
 		"sender_account_id": senderID,
-		"wait_until": "EXECUTED_OPTIMISTIC",
+		"wait_until":        "EXECUTED_OPTIMISTIC",
 	})
 	if err != nil {
 		return nil, err

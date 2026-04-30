@@ -29,18 +29,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
-	"github.com/bisoncraft/meshwallet/wallet/core"
-	"github.com/bisoncraft/meshwallet/wallet/db"
-	"github.com/bisoncraft/meshwallet/wallet/tor"
-	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
-	"github.com/bisoncraft/meshwallet/wallet/websocket"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/dexnet"
 	"github.com/bisoncraft/meshwallet/util/encode"
 	"github.com/bisoncraft/meshwallet/util/encrypt"
 	pi "github.com/bisoncraft/meshwallet/util/politeia"
 	"github.com/bisoncraft/meshwallet/util/version"
+	"github.com/bisoncraft/meshwallet/wallet/appserver/locales"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
+	"github.com/bisoncraft/meshwallet/wallet/core"
+	"github.com/bisoncraft/meshwallet/wallet/db"
+	"github.com/bisoncraft/meshwallet/wallet/tor"
+	"github.com/bisoncraft/meshwallet/wallet/websocket"
 	"github.com/decred/dcrd/certgen"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -366,8 +366,8 @@ func New(cfg *Config) (*AppServer, error) {
 	// Make the server here so its methods can be registered.
 	s := &AppServer{
 		langs:           langs,
-		core:    cfg.Core,
-		siteDir: siteDir,
+		core:            cfg.Core,
+		siteDir:         siteDir,
 		mux:             mux,
 		srv:             httpServer,
 		addr:            cfg.Addr,
@@ -375,7 +375,7 @@ func New(cfg *Config) (*AppServer, error) {
 		wsServer:        websocket.New(cfg.Core, log.SubLogger("WS")),
 		authTokens:      make(map[string]bool),
 		cachedPasswords: make(map[string]*cachedPassword),
-		tor:        cfg.Tor,
+		tor:             cfg.Tor,
 		appVersion:      userAppVersion(cfg.AppVersion, false),
 		useDEXBranding:  useDEXBranding,
 		mainLogFilePath: cfg.MainLogFilePath,
@@ -469,8 +469,7 @@ func New(cfg *Config) (*AppServer, error) {
 				})
 			})
 
-
-})
+		})
 	})
 
 	// api endpoints

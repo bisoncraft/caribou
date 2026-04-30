@@ -18,9 +18,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/bisoncraft/meshwallet/util"
 	"github.com/bisoncraft/meshwallet/util/lexi"
+	"github.com/bisoncraft/meshwallet/wallet/asset"
 	"github.com/dgraph-io/badger/v4"
 )
 

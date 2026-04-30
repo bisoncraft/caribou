@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
+	dexdcr "github.com/bisoncraft/meshwallet/util/networks/dcr"
 )
 
 func Test_leastOverFund(t *testing.T) {
