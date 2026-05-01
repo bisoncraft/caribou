@@ -82,7 +82,12 @@ func btcNetParams(p *chaincfg.Params) *netparams.ChainParams {
 		WitnessScriptHashAddrID:  p.WitnessScriptHashAddrID,
 		HDPrivateKeyID:           p.HDPrivateKeyID,
 		HDPublicKeyID:            p.HDPublicKeyID,
-		HDCoinType:               p.HDCoinType,
+		// btcd's chaincfg sets HDCoinType=1 for regtest/testnet (BIP-44 testnet coin
+		// type), but the vendored utxowallet's KeyScopeBIP00xx globals are at Coin=0
+		// and the BTC asset wrapper requests addresses through them. Force coin=0
+		// across all networks; see wallet/utxowallet/DERIVATION.md and
+		// wallet/utxowallet/assets/btc.go (which uses HDCoinType=0 unconditionally).
+		HDCoinType:               0,
 		BIP0034Height:            p.BIP0034Height,
 		BIP0065Height:            p.BIP0065Height,
 		BIP0066Height:            p.BIP0066Height,
