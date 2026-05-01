@@ -206,17 +206,33 @@ func Run(t *testing.T, cfg *Config) {
 	}
 
 	var expConfs uint32
-	blockWait := time.Second * 5
+	// Pre-mine: small fixed wait so the prior tx broadcast reaches the alpha
+	// mempool before we mine. SPV broadcast takes a bit longer than RPC.
+	preMineWait := time.Second * 1
 	if cfg.SPV {
-		blockWait = time.Second * 6
+		preMineWait = time.Second * 2
+	}
+	// Post-mine: wait until both wallets have signaled the new block via
+	// blkFunc, then, for SPV, give the cfilters scan a brief moment to catch up
+	// so that tx-level lookups (Refund's input lookup, FindRedemption's spent
+	// detection, etc.) see the new state. checkConfs has its own retry deadline
+	// so being slightly aggressive here is fine.
+	const postMineDeadline = 12 * time.Second
+	waitForBlock := func() {
+		deadline := time.Now().Add(postMineDeadline)
+		for atomic.LoadUint32(&blockReported) == 0 && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if cfg.SPV {
+			time.Sleep(1500 * time.Millisecond)
+		}
 	}
 	mine := func() {
-		if cfg.SPV { // broadcast with spv client takes a bit longer
-			time.Sleep(blockWait)
-		}
+		time.Sleep(preMineWait)
+		atomic.StoreUint32(&blockReported, 0)
 		rig.mineAlpha()
 		expConfs++
-		time.Sleep(blockWait)
+		waitForBlock()
 	}
 
 	tmpDir, err := os.MkdirTemp("", "")
@@ -324,9 +340,10 @@ func Run(t *testing.T, cfg *Config) {
 	// For some reason, SwapConfirmations fails with a split tx in SPV mode in
 	// this test. It works fine in practice, so figuring this out is a TODO.
 	if cfg.SplitTx && cfg.SPV {
-		time.Sleep(blockWait)
+		time.Sleep(preMineWait)
+		atomic.StoreUint32(&blockReported, 0)
 		rig.mineAlpha()
-		time.Sleep(blockWait)
+		waitForBlock()
 	}
 
 	address, err := rig.firstWallet.DepositAddress()
@@ -384,11 +401,29 @@ func Run(t *testing.T, cfg *Config) {
 	confContract := receipts[0].Contract()
 	checkConfs := func(minN uint32, expSpent bool) {
 		t.Helper()
-		confs, spent, err := rig.secondWallet.SwapConfirmations(context.Background(), confCoin.ID(), confContract, tStart)
-		if err != nil {
-			if minN > 0 || !errors.Is(err, asset.CoinNotFoundError) {
-				t.Fatalf("error getting %d confs: %v", minN, err)
+		// Poll for up to 30 s. SPV wallets see new blocks via the underlying
+		// node's notifications but only confirm a swap output via cfilters
+		// scan, which can lag the block by several seconds (especially on a
+		// fresh wallet whose birthday triggers a deep initial scan).
+		deadline := time.Now().Add(30 * time.Second)
+		var confs uint32
+		var spent bool
+		var err error
+		for {
+			confs, spent, err = rig.secondWallet.SwapConfirmations(context.Background(), confCoin.ID(), confContract, tStart)
+			if err != nil && (minN == 0 && errors.Is(err, asset.CoinNotFoundError)) {
+				err = nil
 			}
+			if err == nil && confs >= minN && spent == expSpent {
+				return
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("error getting %d confs: %v", minN, err)
 		}
 		if confs < minN {
 			t.Fatalf("expected %d confs, got %d", minN, confs)
@@ -559,9 +594,21 @@ func Run(t *testing.T, cfg *Config) {
 	}
 
 	const defaultFee = 100
-	coinID, err := rig.secondWallet.Refund(context.Background(), swapReceipt.Coin().ID(), swapReceipt.Contract(), 100)
-	if err != nil {
-		t.Fatalf("refund error: %v", err)
+	// SPV wallets recognize the swap output as their own only after the
+	// cfilters scan for the just-mined block completes, which can lag the
+	// block-header notification by a couple of seconds. Retry until the input
+	// is visible or a deadline passes.
+	var coinID []byte
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		coinID, err = rig.secondWallet.Refund(context.Background(), swapReceipt.Coin().ID(), swapReceipt.Contract(), 100)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, asset.CoinNotFoundError) || time.Now().After(deadline) {
+			t.Fatalf("refund error: %v", err)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 	c, _ := asset.DecodeCoinID(cfg.Asset.ID, coinID)
 	tLogger.Infof("Refunded with %s", c)
