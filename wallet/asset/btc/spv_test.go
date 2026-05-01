@@ -155,6 +155,10 @@ func (c *tBtcWallet) NewAddress(account uint32, scope waddrmgr.KeyScope) (btcuti
 	return btcutil.DecodeAddress(c.newAddress, &chaincfg.MainNetParams)
 }
 
+func (c *tBtcWallet) ScopeForPurpose(purpose uint32) waddrmgr.KeyScope {
+	return waddrmgr.KeyScope{Purpose: purpose, Coin: 0}
+}
+
 func (c *tBtcWallet) SignTransaction(tx *wire.MsgTx, hashType txscript.SigHashType, additionalPrevScriptsadditionalPrevScripts map[wire.OutPoint][]byte,
 	additionalKeysByAddress map[string]*btcutil.WIF, p2shRedeemScriptsByAddress map[string][]byte) ([]wallet.SignatureError, error) {
 

@@ -91,6 +91,7 @@ type BTCWallet interface {
 	LockedOutpoints() []btcjson.TransactionInput
 	NewChangeAddress(account uint32, scope waddrmgr.KeyScope) (btcutil.Address, error)
 	NewAddress(account uint32, scope waddrmgr.KeyScope) (btcutil.Address, error)
+	ScopeForPurpose(purpose uint32) waddrmgr.KeyScope
 	PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, error)
 	Unlock(passphrase []byte, lock <-chan time.Time) error
 	Lock()
@@ -197,7 +198,7 @@ var _ SPVService = (*btcChainService)(nil)
 type BTCWalletConstructor func(dir string, cfg *WalletConfig, chainParams *chaincfg.Params, log util.Logger) BTCWallet
 
 func extendAddresses(extIdx, intIdx uint32, btcw *wallet.Wallet) error {
-	scopedKeyManager, err := btcw.Manager.FetchScopedKeyManager(waddrmgr.KeyScopeBIP0084)
+	scopedKeyManager, err := btcw.Manager.FetchScopedKeyManager(btcw.ScopeForPurpose(84))
 	if err != nil {
 		return err
 	}
@@ -711,13 +712,13 @@ func (w *spvWallet) ListLockUnspent() ([]*RPCOutpoint, error) {
 // ChangeAddress gets a new internal address from the wallet. The address will
 // be bech32-encoded (P2WPKH).
 func (w *spvWallet) ChangeAddress(ctx context.Context) (btcutil.Address, error) {
-	return w.wallet.NewChangeAddress(w.acctNum, waddrmgr.KeyScopeBIP0084)
+	return w.wallet.NewChangeAddress(w.acctNum, w.wallet.ScopeForPurpose(84))
 }
 
 // ExternalAddress gets a new bech32-encoded (P2WPKH) external address from the
 // wallet.
 func (w *spvWallet) ExternalAddress(ctx context.Context) (btcutil.Address, error) {
-	return w.wallet.NewAddress(w.acctNum, waddrmgr.KeyScopeBIP0084)
+	return w.wallet.NewAddress(w.acctNum, w.wallet.ScopeForPurpose(84))
 }
 
 // signTx attempts to have the wallet sign the transaction inputs.
@@ -1212,7 +1213,7 @@ func copyDir(src, dst string) error {
 // numDerivedAddresses returns the number of internal and external addresses
 // that the wallet has derived.
 func (w *spvWallet) numDerivedAddresses() (internal, external uint32, err error) {
-	props, err := w.wallet.AccountProperties(waddrmgr.KeyScopeBIP0084, w.acctNum)
+	props, err := w.wallet.AccountProperties(w.wallet.ScopeForPurpose(84), w.acctNum)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1223,7 +1224,7 @@ func (w *spvWallet) numDerivedAddresses() (internal, external uint32, err error)
 // Fingerprint returns an identifier for this wallet. It is the hash of the
 // compressed serialization of the account pub key.
 func (w *spvWallet) Fingerprint() (string, error) {
-	props, err := w.wallet.AccountProperties(waddrmgr.KeyScopeBIP0084, w.acctNum)
+	props, err := w.wallet.AccountProperties(w.wallet.ScopeForPurpose(84), w.acctNum)
 	if err != nil {
 		return "", err
 	}

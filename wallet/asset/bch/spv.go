@@ -464,6 +464,12 @@ func (w *bchSPVWallet) NewChangeAddress(account uint32, _ inWaddrmgr.KeyScope) (
 	return dexbch.DecodeCashAddress(bchAddr.String(), w.btcParams)
 }
 
+// ScopeForPurpose satisfies the BTCWallet interface. BCH always derives
+// at BIP-44, ignoring the requested purpose.
+func (w *bchSPVWallet) ScopeForPurpose(_ uint32) inWaddrmgr.KeyScope {
+	return inWaddrmgr.KeyScope{Purpose: 44, Coin: 0}
+}
+
 func (w *bchSPVWallet) NewAddress(account uint32, _ inWaddrmgr.KeyScope) (btcutil.Address, error) {
 	bchAddr, err := w.Wallet.NewAddress(account, bchwaddrmgr.KeyScopeBIP0044)
 	if err != nil {

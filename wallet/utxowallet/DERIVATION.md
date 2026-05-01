@@ -68,7 +68,9 @@ Litecoin's chain params at `wallet/utxowallet/assets/ltc.go` set:
 
 The Litecoin asset wrapper at `wallet/asset/ltc/spv.go` calls `w.Wallet.ScopeForPurpose(84)` everywhere it used to call `KeyScopeBIP0084WithBitcoinCoinID`. Mainnet Litecoin wallets created by Boss Wallet derive at `m/{44,49,84,86}'/2'/...`; testnet4 and regtest at `m/.../1'/...`. There is no `KeyScopeBIP0084WithBitcoinCoinID` in the vendored tree, intentionally.
 
-The same coin-type plumbing is what makes a future Bitcoin Cash, Dogecoin, etc. derive at their respective SLIP-44 coin types without a per-chain workaround.
+The Bitcoin asset wrapper at `wallet/asset/btc/spv_wrapper.go` follows the same pattern: `NewChangeAddress`, `NewAddress`, `AccountProperties`, and `extendAddresses` all look up scopes via `wallet.ScopeForPurpose(84)` rather than the package-level `waddrmgr.KeyScopeBIP0084` constant. The `BTCWallet` interface includes `ScopeForPurpose(purpose uint32) waddrmgr.KeyScope` so non-`*wallet.Wallet` implementations (BCH, the in-tree test fakes) can answer for themselves; BCH always returns `{Purpose: 44, Coin: 0}` because the BCH SPV wallet derives through a separately-vendored bchwallet stack. Bitcoin's chain params follow `btcd`'s `chaincfg`: mainnet uses `HDCoinType: 0`, testnet3/regtest use `HDCoinType: 1` per BIP-44, and the asset wrapper now picks up the correct coin type for the network rather than forcing `0`.
+
+The same coin-type plumbing is what makes a future Dogecoin, Digibyte, etc. derive at their respective SLIP-44 coin types without a per-chain workaround.
 
 ### Implications
 
