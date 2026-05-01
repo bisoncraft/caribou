@@ -210,7 +210,12 @@ func Run(t *testing.T, cfg *Config) {
 	// mempool before we mine. SPV broadcast takes a bit longer than RPC.
 	preMineWait := time.Second * 1
 	if cfg.SPV {
-		preMineWait = time.Second * 2
+		// SPV's SendRawTransaction returns optimistically after a 2s broadcast
+		// timeout, but the P2P INV → getdata → tx-accept round-trip to the
+		// alpha node can take a few seconds longer. If we mine before the tx
+		// reaches alpha's mempool, the mined block is empty and the
+		// downstream find-in-block check fails.
+		preMineWait = time.Second * 5
 	}
 	// Post-mine: wait until both wallets have signaled the new block via
 	// blkFunc, then, for SPV, give the cfilters scan a brief moment to catch up
@@ -440,6 +445,7 @@ func Run(t *testing.T, cfg *Config) {
 
 	getAuditInfo := func(coinID, contract []byte) *asset.AuditInfo {
 		c := make(chan *asset.AuditInfo, 1)
+		expired := make(chan struct{})
 		latencyQ.Wait(&wait.Waiter{
 			Expiration: time.Now().Add(time.Second * 10),
 			TryFunc: func() wait.TryDirective {
@@ -454,13 +460,17 @@ func Run(t *testing.T, cfg *Config) {
 				c <- ai
 				return wait.DontTryAgain
 			},
-			ExpireFunc: func() {
-				t.Fatalf("makeRedemption -> AuditContract timed out")
-			},
+			ExpireFunc: func() { close(expired) },
 		})
 
 		// Alpha should be able to redeem.
-		return <-c
+		select {
+		case ai := <-c:
+			return ai
+		case <-expired:
+			t.Fatalf("makeRedemption -> AuditContract timed out")
+			return nil
+		}
 	}
 
 	makeRedemption := func(swapVal uint64, receipt asset.Receipt, secret []byte) *asset.Redemption {
@@ -523,6 +533,7 @@ func Run(t *testing.T, cfg *Config) {
 	tLogger.Info("Testing FindRedemption")
 
 	found := make(chan struct{})
+	expired := make(chan struct{})
 	latencyQ.Wait(&wait.Waiter{
 		Expiration: time.Now().Add(time.Second * 10),
 		TryFunc: func() wait.TryDirective {
@@ -535,9 +546,13 @@ func Run(t *testing.T, cfg *Config) {
 			close(found)
 			return wait.DontTryAgain
 		},
-		ExpireFunc: func() { t.Fatalf("mempool FindRedemption timed out") },
+		ExpireFunc: func() { close(expired) },
 	})
-	<-found
+	select {
+	case <-found:
+	case <-expired:
+		t.Fatalf("mempool FindRedemption timed out")
+	}
 
 	// Mine a block and find the redemption again.
 	mine()
