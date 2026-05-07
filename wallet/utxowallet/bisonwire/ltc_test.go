@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"testing"
+	"testing/iotest"
 
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -258,5 +259,46 @@ func TestDecodeTransaction(t *testing.T) {
 	err = msgTx.Deserialize(bytes.NewReader(integTx))
 	if err == nil { // witness tx but flag byte is 08
 		t.Fatal("expected error") //fails because of flag
+	}
+}
+
+// TestDeserializeTxShortReads verifies that the bisonwire decoder handles
+// io.Readers that return short reads (n < len(b)) without corrupting the MWEB
+// kernel-hash capture used to compute the LTC tx ID. Wraps the same pure-MW
+// vectors used by TestDeserializeTx in an iotest.OneByteReader, which forces
+// the decoder.Read path to be invoked one byte at a time. Pre-fix, the tee
+// buffer captured the full read buffer rather than b[:n], so the resulting
+// blake3.Sum256(Kern0) hash mismatched.
+func TestDeserializeTxShortReads(t *testing.T) {
+	tests := []struct {
+		name     string
+		tx       []byte
+		wantHash string
+	}{{
+		"mempool MW tx e6f8fdb15b27e603adcfa5aa4107a0e7a7b07e6dc76d2ba95a33710db02a0049",
+		txe6f8fdbmp,
+		"e6f8fdb15b27e603adcfa5aa4107a0e7a7b07e6dc76d2ba95a33710db02a0049",
+	}, {
+		"mempool MW tx 62e17562a697e3167e2b68bce5a927ac355249ef5751800c4dd927ddf57d9db2",
+		tx62e1756mp,
+		"62e17562a697e3167e2b68bce5a927ac355249ef5751800c4dd927ddf57d9db2",
+	}, {
+		"mempool MW tx cc202c44db4d6faec57f42566c6b1e03139f924eaf685ae964b3076594d65349",
+		txcc202c4mp,
+		"cc202c44db4d6faec57f42566c6b1e03139f924eaf685ae964b3076594d65349",
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := &Tx{Chain: "ltc"}
+			r := iotest.OneByteReader(bytes.NewReader(tt.tx))
+			if err := deserializeLitecoinTx(r, tx); err != nil {
+				t.Fatal(err)
+			}
+			if got := tx.TxHash().String(); got != tt.wantHash {
+				t.Errorf("tx hash mismatch under short reads: "+
+					"want %v, got %v", tt.wantHash, got)
+			}
+		})
 	}
 }

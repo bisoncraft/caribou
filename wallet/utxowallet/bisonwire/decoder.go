@@ -32,13 +32,15 @@ func newDecoder(r io.Reader) *decoder {
 
 func (d *decoder) Read(b []byte) (n int, err error) {
 	n, err = d.rd.Read(b)
-	if err != nil {
-		return 0, err
+	// An io.Reader may legitimately return both n>0 and a non-nil error.
+	// Tee the bytes that were actually read (b[:n]) and surface n,err to
+	// the caller; otherwise io.ReadFull short-read accounting and the
+	// MWEB kernel-hash capture below break for any reader that does not
+	// always fully fill b.
+	if n > 0 && d.tee != nil {
+		d.tee.Write(b[:n])
 	}
-	if d.tee != nil {
-		d.tee.Write(b)
-	}
-	return n, nil
+	return n, err
 }
 
 func (d *decoder) readByte() (byte, error) {
