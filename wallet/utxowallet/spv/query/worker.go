@@ -119,25 +119,16 @@ func (w *worker) Run(results chan<- *jobResult, quit <-chan struct{}) {
 
 		select {
 		// There is no point in queueing the request if the job already
-		// is canceled, so we check this quickly.
+		// is canceled, so we check this quickly. The Loop below will
+		// observe the cancel channel again and emit ErrJobCanceled.
 		case <-job.cancelChan:
 			log.Tracef("Worker %v found job with index %v "+
 				"already canceled", peer.Addr(), job.Index())
-
-			// We break to the below loop, where we'll check the
-			// cancel channel again and the ErrJobCanceled
-			// result will be sent back.
-			break
 
 		case <-job.internalCancelChan:
 			log.Tracef("Worker %v found job with index %v "+
 				"already internally canceled (batch timed out)",
 				peer.Addr(), job.Index())
-
-			// We break to the below loop, where we'll check the
-			// internal cancel channel again and the ErrJobCanceled
-			// result will be sent back.
-			break
 
 		// We received a non-canceled query job, send it to the peer.
 		default:
