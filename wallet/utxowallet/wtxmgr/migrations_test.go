@@ -187,3 +187,98 @@ func TestMigrationDropTransactionHistory(t *testing.T) {
 		false,
 	)
 }
+
+// TestMigrationManagerHonorsNamespace ensures that MigrationManager.{Current,
+// Set}Version operate on the namespace argument supplied by the caller, not on
+// the manager's receiver bucket. The two are normally identical (the migration
+// runner passes mgr.Namespace()), but the contract permits any caller to pass
+// a different bucket.
+func TestMigrationManagerHonorsNamespace(t *testing.T) {
+	t.Parallel()
+
+	_, db, teardown, err := testStore()
+	if err != nil {
+		t.Fatalf("unable to create test store: %v", err)
+	}
+	defer teardown()
+
+	// Make a sibling top-level bucket that looks like a wtxmgr namespace, so
+	// fetchVersion/putVersion can read and write its rootVersion key. We seed
+	// it with a distinct version so we can tell which bucket got read.
+	otherKey := []byte("other-ns")
+	const otherVersionInit uint32 = 7
+	err = walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+		ns, err := tx.CreateTopLevelBucket(otherKey)
+		if err != nil {
+			return err
+		}
+		return putVersion(ns, otherVersionInit)
+	})
+	if err != nil {
+		t.Fatalf("unable to create sibling namespace: %v", err)
+	}
+
+	// CurrentVersion(ns) must read from ns, not from the receiver. We root the
+	// MigrationManager at namespaceKey (the wtxmgr default) but pass it the
+	// sibling bucket; we should see the sibling's version, not the receiver's.
+	err = walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+		recv := tx.ReadWriteBucket(namespaceKey)
+		other := tx.ReadWriteBucket(otherKey)
+		mgr := NewMigrationManager(recv)
+
+		got, err := mgr.CurrentVersion(other)
+		if err != nil {
+			return fmt.Errorf("CurrentVersion: %v", err)
+		}
+		if got != otherVersionInit {
+			return fmt.Errorf("CurrentVersion read wrong bucket: "+
+				"got %d, want %d", got, otherVersionInit)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// SetVersion(ns, v) must write to ns, not to the receiver. Write a new
+	// value to the sibling, then verify (a) the sibling reflects the write
+	// and (b) the receiver bucket's version is unchanged.
+	const newOtherVersion uint32 = 42
+	err = walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+		recv := tx.ReadWriteBucket(namespaceKey)
+		other := tx.ReadWriteBucket(otherKey)
+		mgr := NewMigrationManager(recv)
+		return mgr.SetVersion(other, newOtherVersion)
+	})
+	if err != nil {
+		t.Fatalf("SetVersion: %v", err)
+	}
+
+	err = walletdb.View(db, func(tx walletdb.ReadTx) error {
+		other := tx.ReadBucket(otherKey)
+		gotOther, err := fetchVersion(other)
+		if err != nil {
+			return fmt.Errorf("fetchVersion(other): %v", err)
+		}
+		if gotOther != newOtherVersion {
+			return fmt.Errorf("sibling bucket version: got %d, "+
+				"want %d", gotOther, newOtherVersion)
+		}
+
+		recv := tx.ReadBucket(namespaceKey)
+		gotRecv, err := fetchVersion(recv)
+		if err != nil {
+			return fmt.Errorf("fetchVersion(recv): %v", err)
+		}
+		// testStore() initializes the receiver to the latest version.
+		if gotRecv != getLatestVersion() {
+			return fmt.Errorf("receiver bucket version was "+
+				"clobbered: got %d, want %d (latest)",
+				gotRecv, getLatestVersion())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
