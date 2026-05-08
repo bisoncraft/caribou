@@ -309,8 +309,8 @@ func populateBirthdayBlock(ns walletdb.ReadWriteBucket) error {
 	// interval (in seconds) for a known chain. Both are needed to estimate
 	// the birthday block height from a wall-clock timestamp.
 	type genesisInfo struct {
-		timestamp     time.Time
-		secsPerBlock  float64
+		timestamp    time.Time
+		secsPerBlock float64
 	}
 
 	// knownGenesis is a lookup table of genesis block hashes to their chain

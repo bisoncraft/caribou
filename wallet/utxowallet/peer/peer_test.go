@@ -325,4 +325,3 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		t.Fatal("Timeout waiting for remote reader to close")
 	}
 }
-

@@ -276,12 +276,12 @@ var BTCParams = map[string]*netparams.ChainParams{
 		// scope lookups through wallet.ScopeForPurpose which honors the real
 		// HDCoinType — see DERIVATION.md. Bump this to 1 once the affected
 		// tests are migrated off the package-level KeyScope constants.
-		HDCoinType:              0,
-		BIP0034Height:           21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
-		BIP0065Height:           581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
-		BIP0066Height:           330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
-		CoinbaseMaturity:        100,
-		MaxSatoshi:              btcutil.MaxSatoshi,
+		HDCoinType:       0,
+		BIP0034Height:    21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
+		BIP0065Height:    581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
+		BIP0066Height:    330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
+		CoinbaseMaturity: 100,
+		MaxSatoshi:       btcutil.MaxSatoshi,
 	},
 	"simnet": {
 		Chain:       "btc",
@@ -364,11 +364,11 @@ var BTCParams = map[string]*netparams.ChainParams{
 		// See the testnet entry above for why this is 0 rather than the
 		// BIP-44 standard 1. Same rationale: in-tree tests use the legacy
 		// waddrmgr.KeyScopeBIP00xx Coin=0 constants.
-		HDCoinType:               0,
-		BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
-		BIP0065Height:            1351,      // Used by regression tests
-		BIP0066Height:            1251,      // Used by regression tests
-		CoinbaseMaturity:         100,
-		MaxSatoshi:               btcutil.MaxSatoshi,
+		HDCoinType:       0,
+		BIP0034Height:    100000000, // Not active - Permit ver 1 blocks
+		BIP0065Height:    1351,      // Used by regression tests
+		BIP0066Height:    1251,      // Used by regression tests
+		CoinbaseMaturity: 100,
+		MaxSatoshi:       btcutil.MaxSatoshi,
 	},
 }

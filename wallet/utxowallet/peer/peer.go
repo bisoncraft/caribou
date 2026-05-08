@@ -408,10 +408,10 @@ type Peer struct {
 
 	wireEncoding wire.MessageEncoding
 
-	knownInventory lru.Cache
-	prevGetHdrsMtx sync.Mutex
-	prevGetHdrsBegin   *chainhash.Hash
-	prevGetHdrsStop    *chainhash.Hash
+	knownInventory   lru.Cache
+	prevGetHdrsMtx   sync.Mutex
+	prevGetHdrsBegin *chainhash.Hash
+	prevGetHdrsStop  *chainhash.Hash
 
 	// These fields keep track of statistics for the peer and are protected
 	// by the statsMtx mutex.
@@ -2008,11 +2008,11 @@ func newPeerBase(origCfg *Config, inbound bool) *Peer {
 		inbound:         inbound,
 		wireEncoding:    wire.LatestEncoding,
 		knownInventory:  lru.NewCache(maxKnownInventory),
-		stallControl:  make(chan stallControlMsg, 1), // nonblocking sync
-		outputQueue:   make(chan outMsg, outputBufferSize),
-		sendQueue:     make(chan outMsg, 1),   // nonblocking sync
-		sendDoneQueue: make(chan struct{}, 1), // nonblocking sync
-		inQuit:        make(chan struct{}),
+		stallControl:    make(chan stallControlMsg, 1), // nonblocking sync
+		outputQueue:     make(chan outMsg, outputBufferSize),
+		sendQueue:       make(chan outMsg, 1),   // nonblocking sync
+		sendDoneQueue:   make(chan struct{}, 1), // nonblocking sync
+		inQuit:          make(chan struct{}),
 		queueQuit:       make(chan struct{}),
 		outQuit:         make(chan struct{}),
 		quit:            make(chan struct{}),
