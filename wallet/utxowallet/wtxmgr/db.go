@@ -80,6 +80,11 @@ var (
 	rootMinedBalance = []byte("bal")
 )
 
+const (
+	// latestTxMgrVersion is the current wtxmgr database schema version.
+	latestTxMgrVersion uint32 = 2
+)
+
 // The root bucket's mined balance k/v pair records the total balance for all
 // unspent credits from mined transactions.  This includes immature outputs, and
 // outputs spent by mempool transactions, which must be considered when
@@ -1387,17 +1392,9 @@ func openStore(ns walletdb.ReadBucket) error {
 		return err
 	}
 
-	latestVersion := getLatestVersion()
-	if version < latestVersion {
-		str := fmt.Sprintf("a database upgrade is required to upgrade "+
-			"wtxmgr from recorded version %d to the latest version %d",
-			version, latestVersion)
-		return storeError(ErrNeedsUpgrade, str, nil)
-	}
-
-	if version > latestVersion {
-		str := fmt.Sprintf("version recorded version %d is newer that "+
-			"latest understood version %d", version, latestVersion)
+	if version != latestTxMgrVersion {
+		str := fmt.Sprintf("wtxmgr version mismatch: recorded %d, "+
+			"expected %d", version, latestTxMgrVersion)
 		return storeError(ErrUnknownVersion, str, nil)
 	}
 
@@ -1415,7 +1412,7 @@ func createStore(ns walletdb.ReadWriteBucket) error {
 	}
 
 	// Write the latest store version.
-	if err := putVersion(ns, getLatestVersion()); err != nil {
+	if err := putVersion(ns, latestTxMgrVersion); err != nil {
 		return err
 	}
 

@@ -24,19 +24,10 @@ const (
 	MaxReorgDepth = 10000
 )
 
-var (
-	// LatestMgrVersion is the most recent manager version.
-	LatestMgrVersion = getLatestVersion()
-
-	// latestMgrVersion is the most recent manager version as a variable so
-	// the tests can change it to force errors.
-	latestMgrVersion = LatestMgrVersion
+const (
+	// LatestMgrVersion is the current manager database schema version.
+	LatestMgrVersion uint32 = 8
 )
-
-// ObtainUserInputFunc is a function that reads a user input and returns it as
-// a byte stream. It is used to accept data required during upgrades, for e.g.
-// wallet seed and private passphrase.
-type ObtainUserInputFunc func() ([]byte, error)
 
 // maybeConvertDbError converts the passed error to a ManagerError with an
 // error code of ErrDatabase if it is not already a ManagerError.  This is
@@ -2627,7 +2618,7 @@ func createManagerNS(ns walletdb.ReadWriteBucket,
 		}
 	}
 
-	if err := putManagerVersion(ns, latestMgrVersion); err != nil {
+	if err := putManagerVersion(ns, LatestMgrVersion); err != nil {
 		return err
 	}
 

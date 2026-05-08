@@ -177,7 +177,7 @@ func (w *ltcSPVWallet) Start() (btc.SPVService, error) {
 	}
 
 	w.log.Debug("Starting native LTC wallet...")
-	w.Wallet, err = w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase), false)
+	w.Wallet, err = w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase))
 	if err != nil {
 		return nil, fmt.Errorf("couldn't load wallet: %w", err)
 	}

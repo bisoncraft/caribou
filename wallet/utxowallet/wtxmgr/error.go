@@ -41,13 +41,9 @@ const (
 	// handled by creating a new store.
 	ErrNoExists
 
-	// ErrNeedsUpgrade describes an error during store opening where the
-	// database contains an older version of the store.
-	ErrNeedsUpgrade
-
 	// ErrUnknownVersion describes an error where the store already exists
-	// but the database version is newer than latest version known to this
-	// software.  This likely indicates an outdated binary.
+	// but the database version does not match the expected version. This
+	// can mean a newer or older incompatible binary opened the database.
 	ErrUnknownVersion
 )
 
@@ -57,7 +53,6 @@ var errStrs = [...]string{
 	ErrInput:          "ErrInput",
 	ErrAlreadyExists:  "ErrAlreadyExists",
 	ErrNoExists:       "ErrNoExists",
-	ErrNeedsUpgrade:   "ErrNeedsUpgrade",
 	ErrUnknownVersion: "ErrUnknownVersion",
 }
 

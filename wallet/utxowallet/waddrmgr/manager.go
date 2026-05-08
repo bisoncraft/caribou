@@ -104,22 +104,6 @@ type ScryptOptions struct {
 	N, R, P int
 }
 
-// OpenCallbacks houses caller-provided callbacks that may be called when
-// opening an existing manager.  The open blocks on the execution of these
-// functions.
-type OpenCallbacks struct {
-	// ObtainSeed is a callback function that is potentially invoked during
-	// upgrades.  It is intended to be used to request the wallet seed
-	// from the user (or any other mechanism the caller deems fit).
-	ObtainSeed ObtainUserInputFunc
-
-	// ObtainPrivatePass is a callback function that is potentially invoked
-	// during upgrades.  It is intended to be used to request the wallet
-	// private passphrase from the user (or any other mechanism the caller
-	// deems fit).
-	ObtainPrivatePass ObtainUserInputFunc
-}
-
 // DefaultScryptOptions is the default options used with scrypt.
 var DefaultScryptOptions = ScryptOptions{
 	N: 262144, // 2^18
@@ -1510,18 +1494,16 @@ func checkBranchKeys(acctKey *hdkeychain.ExtendedKey) error {
 func loadManager(ns walletdb.ReadBucket, pubPassphrase []byte,
 	chainParams *netparams.ChainParams) (*Manager, error) {
 
-	// Verify the version is neither too old or too new.
+	// Verify the version matches exactly. No upgrade path exists; a
+	// mismatch means the DB was created by a different software version.
 	version, err := fetchManagerVersion(ns)
 	if err != nil {
 		str := "failed to fetch version for update"
 		return nil, managerError(ErrDatabase, str, err)
 	}
-	if version < latestMgrVersion {
-		str := "database upgrade required"
-		return nil, managerError(ErrUpgrade, str, nil)
-	} else if version > latestMgrVersion {
-		str := "database version is greater than latest understood version"
-		return nil, managerError(ErrUpgrade, str, nil)
+	if version != LatestMgrVersion {
+		str := "database version does not match the current version"
+		return nil, managerError(ErrVersionMismatch, str, nil)
 	}
 
 	// Load whether or not the manager is watching-only from the db.

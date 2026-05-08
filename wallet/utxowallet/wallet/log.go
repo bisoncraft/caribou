@@ -6,7 +6,6 @@ package wallet
 
 import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/migration"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btclog"
 )
@@ -33,7 +32,6 @@ func DisableLog() {
 func UseLogger(logger btclog.Logger) {
 	log = logger
 
-	migration.UseLogger(logger)
 	waddrmgr.UseLogger(logger)
 	wtxmgr.UseLogger(logger)
 }

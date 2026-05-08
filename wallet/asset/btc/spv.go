@@ -189,7 +189,7 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 	}
 
 	w.log.Debug("Starting native BTC wallet...")
-	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase), false)
+	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase))
 	if err != nil {
 		return nil, fmt.Errorf("couldn't load wallet: %w", err)
 	}

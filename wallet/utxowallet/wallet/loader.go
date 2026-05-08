@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -291,7 +290,7 @@ func (l *Loader) createNewWallet(pubPassphrase, privPassphrase []byte,
 
 	// Open the newly-created wallet.
 	w, err := OpenWithRetry(
-		l.db, pubPassphrase, nil, l.chainParams, l.recoveryWindow,
+		l.db, pubPassphrase, l.chainParams, l.recoveryWindow,
 		l.cfg.walletSyncRetryInterval,
 	)
 	if err != nil {
@@ -303,18 +302,9 @@ func (l *Loader) createNewWallet(pubPassphrase, privPassphrase []byte,
 	return w, nil
 }
 
-var errNoConsole = errors.New("db upgrade requires console access for additional input")
-
-func noConsole() ([]byte, error) {
-	return nil, errNoConsole
-}
-
 // OpenExistingWallet opens the wallet from the loader's wallet database path
-// and the public passphrase.  If the loader is being called by a context where
-// standard input prompts may be used during wallet upgrades, setting
-// canConsolePrompt will enables these prompts.
-func (l *Loader) OpenExistingWallet(pubPassphrase []byte,
-	canConsolePrompt bool) (*Wallet, error) {
+// and the public passphrase.
+func (l *Loader) OpenExistingWallet(pubPassphrase []byte) (*Wallet, error) {
 
 	defer l.mu.Unlock()
 	l.mu.Lock()
@@ -341,16 +331,8 @@ func (l *Loader) OpenExistingWallet(pubPassphrase []byte,
 		}
 	}
 
-	// canConsolePrompt is retained for API compatibility but interactive
-	// console prompting is not supported in the library build; both paths
-	// use the noConsole stub so callers must supply all credentials up front.
-	_ = canConsolePrompt
-	cbs := &waddrmgr.OpenCallbacks{
-		ObtainSeed:        noConsole,
-		ObtainPrivatePass: noConsole,
-	}
 	w, err := OpenWithRetry(
-		l.db, pubPassphrase, cbs, l.chainParams, l.recoveryWindow,
+		l.db, pubPassphrase, l.chainParams, l.recoveryWindow,
 		l.cfg.walletSyncRetryInterval,
 	)
 	if err != nil {

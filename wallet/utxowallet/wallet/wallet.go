@@ -21,7 +21,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txauthor"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txrules"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/migration"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -4003,18 +4002,18 @@ func create(db walletdb.DB, pubPass, privPass []byte,
 }
 
 // Open loads an already-created wallet from the passed database and namespaces.
-func Open(db walletdb.DB, pubPass []byte, cbs *waddrmgr.OpenCallbacks,
-	chainParams *netparams.ChainParams, recoveryWindow uint32) (*Wallet, error) {
+func Open(db walletdb.DB, pubPass []byte, chainParams *netparams.ChainParams,
+	recoveryWindow uint32) (*Wallet, error) {
 
 	return OpenWithRetry(
-		db, pubPass, cbs, chainParams, recoveryWindow,
+		db, pubPass, chainParams, recoveryWindow,
 		defaultSyncRetryInterval,
 	)
 }
 
 // OpenWithRetry loads an already-created wallet from the passed database and
 // namespaces and re-tries on errors during initial sync.
-func OpenWithRetry(db walletdb.DB, pubPass []byte, cbs *waddrmgr.OpenCallbacks,
+func OpenWithRetry(db walletdb.DB, pubPass []byte,
 	chainParams *netparams.ChainParams, recoveryWindow uint32,
 	syncRetryInterval time.Duration) (*Wallet, error) {
 
@@ -4023,10 +4022,6 @@ func OpenWithRetry(db walletdb.DB, pubPass []byte, cbs *waddrmgr.OpenCallbacks,
 		txMgr   *wtxmgr.Store
 	)
 
-	// Before attempting to open the wallet, we'll check if there are any
-	// database upgrades for us to proceed. We'll also create our references
-	// to the address and transaction managers, as they are backed by the
-	// database.
 	err := walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
 		addrMgrBucket := tx.ReadWriteBucket(waddrmgrNamespaceKey)
 		if addrMgrBucket == nil {
@@ -4037,13 +4032,7 @@ func OpenWithRetry(db walletdb.DB, pubPass []byte, cbs *waddrmgr.OpenCallbacks,
 			return errors.New("missing transaction manager namespace")
 		}
 
-		addrMgrUpgrader := waddrmgr.NewMigrationManager(addrMgrBucket)
-		txMgrUpgrader := wtxmgr.NewMigrationManager(txMgrBucket)
-		err := migration.Upgrade(txMgrUpgrader, addrMgrUpgrader)
-		if err != nil {
-			return err
-		}
-
+		var err error
 		addrMgr, err = waddrmgr.Open(addrMgrBucket, pubPass, chainParams)
 		if err != nil {
 			return err
