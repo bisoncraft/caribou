@@ -11,37 +11,38 @@ import (
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"go.etcd.io/bbolt"
+	bberrors "go.etcd.io/bbolt/errors"
 )
 
 // convertErr converts some bolt errors to the equivalent walletdb error.
 func convertErr(err error) error {
 	switch err {
 	// Database open/create errors.
-	case bbolt.ErrDatabaseNotOpen:
+	case bberrors.ErrDatabaseNotOpen:
 		return walletdb.ErrDbNotOpen
-	case bbolt.ErrInvalid:
+	case bberrors.ErrInvalid:
 		return walletdb.ErrInvalid
 
 	// Transaction errors.
-	case bbolt.ErrTxNotWritable:
+	case bberrors.ErrTxNotWritable:
 		return walletdb.ErrTxNotWritable
-	case bbolt.ErrTxClosed:
+	case bberrors.ErrTxClosed:
 		return walletdb.ErrTxClosed
 
 	// Value/bucket errors.
-	case bbolt.ErrBucketNotFound:
+	case bberrors.ErrBucketNotFound:
 		return walletdb.ErrBucketNotFound
-	case bbolt.ErrBucketExists:
+	case bberrors.ErrBucketExists:
 		return walletdb.ErrBucketExists
-	case bbolt.ErrBucketNameRequired:
+	case bberrors.ErrBucketNameRequired:
 		return walletdb.ErrBucketNameRequired
-	case bbolt.ErrKeyRequired:
+	case bberrors.ErrKeyRequired:
 		return walletdb.ErrKeyRequired
-	case bbolt.ErrKeyTooLarge:
+	case bberrors.ErrKeyTooLarge:
 		return walletdb.ErrKeyTooLarge
-	case bbolt.ErrValueTooLarge:
+	case bberrors.ErrValueTooLarge:
 		return walletdb.ErrValueTooLarge
-	case bbolt.ErrIncompatibleValue:
+	case bberrors.ErrIncompatibleValue:
 		return walletdb.ErrIncompatibleValue
 	}
 
@@ -341,7 +342,8 @@ func (db *db) BeginReadWriteTx() (walletdb.ReadWriteTx, error) {
 // This function is part of the walletdb.Db interface implementation.
 func (db *db) Copy(w io.Writer) error {
 	return convertErr((*bbolt.DB)(db).View(func(tx *bbolt.Tx) error {
-		return tx.Copy(w)
+		_, err := tx.WriteTo(w)
+		return err
 	}))
 }
 

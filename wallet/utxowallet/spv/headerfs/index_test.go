@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"io/ioutil"
 	mathRand "math/rand"
 	"os"
 	"testing"
@@ -16,7 +15,7 @@ import (
 )
 
 func createTestIndex(t testing.TB) (func(), *headerIndex, error) {
-	tempDir, err := ioutil.TempDir("", "neutrino")
+	tempDir, err := os.MkdirTemp("", "neutrino")
 	if err != nil {
 		return nil, nil, err
 	}

@@ -15,7 +15,6 @@ const waitTime = time.Second * 5
 // TestBatchWriter tests that the BatchWriter behaves as expected.
 func TestBatchWriter(t *testing.T) {
 	t.Parallel()
-	rand.Seed(time.Now().UnixNano())
 
 	// waitForItems is a helper function that will wait for a given set of
 	// items to appear in the db.

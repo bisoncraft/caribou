@@ -1,6 +1,7 @@
 package pushtx
 
 import (
+	crand "crypto/rand"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -27,7 +28,7 @@ func createTx(t *testing.T, numOutputs int, inputs ...wire.OutPoint) *wire.MsgTx
 	}
 	for i := 0; i < numOutputs; i++ {
 		var pkScript [32]byte
-		if _, err := rand.Read(pkScript[:]); err != nil {
+		if _, err := crand.Read(pkScript[:]); err != nil {
 			t.Fatal(err)
 		}
 

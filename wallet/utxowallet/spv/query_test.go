@@ -3,11 +3,11 @@ package spv
 import (
 	"bytes"
 	"compress/bzip2"
+	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"math/big"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,10 +113,12 @@ func loadBlocks(t *testing.T, dataFile string, network wire.BitcoinNet) (
 	return blocks, nil
 }
 
-// genRandomBlockHash generates a random block hash using math/rand.
+// genRandomBlockHash generates a random block hash using crypto/rand.
 func genRandomBlockHash() *chainhash.Hash {
 	var seed [32]byte
-	rand.Read(seed[:])
+	if _, err := crand.Read(seed[:]); err != nil {
+		panic(err)
+	}
 	hash := chainhash.Hash(seed)
 	return &hash
 }
@@ -133,7 +135,7 @@ func genRandFilter(numElements uint32, t *testing.T) (
 	elements := make([][]byte, numElements)
 	for i := uint32(0); i < numElements; i++ {
 		var elem [20]byte
-		if _, err := rand.Read(elem[:]); err != nil {
+		if _, err := crand.Read(elem[:]); err != nil {
 			t.Fatalf("unable to create random filter: %v", err)
 			return nil, nil, 0
 		}
@@ -142,7 +144,7 @@ func genRandFilter(numElements uint32, t *testing.T) (
 	}
 
 	var key [16]byte
-	if _, err := rand.Read(key[:]); err != nil {
+	if _, err := crand.Read(key[:]); err != nil {
 		t.Fatalf("unable to create random filter: %v", err)
 		return nil, nil, 0
 	}
