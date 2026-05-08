@@ -245,13 +245,6 @@ type blockIterator struct {
 	err  error
 }
 
-func makeBlockIterator(ns walletdb.ReadWriteBucket, height int32) blockIterator {
-	seek := make([]byte, 4)
-	byteOrder.PutUint32(seek, uint32(height))
-	c := ns.NestedReadWriteBucket(bucketBlocks).ReadWriteCursor()
-	return blockIterator{c: c, seek: seek}
-}
-
 func makeReadBlockIterator(ns walletdb.ReadBucket, height int32) blockIterator {
 	seek := make([]byte, 4)
 	byteOrder.PutUint32(seek, uint32(height))
@@ -407,15 +400,6 @@ func putTxRecord(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Block) error
 	err = ns.NestedReadWriteBucket(bucketTxRecords).Put(k, v)
 	if err != nil {
 		str := fmt.Sprintf("%s: put failed for %v", bucketTxRecords, rec.Hash)
-		return storeError(ErrDatabase, str, err)
-	}
-	return nil
-}
-
-func putRawTxRecord(ns walletdb.ReadWriteBucket, k, v []byte) error {
-	err := ns.NestedReadWriteBucket(bucketTxRecords).Put(k, v)
-	if err != nil {
-		str := fmt.Sprintf("%s: put failed", bucketTxRecords)
 		return storeError(ErrDatabase, str, err)
 	}
 	return nil
@@ -709,11 +693,6 @@ type creditIterator struct {
 	err    error
 }
 
-func makeCreditIterator(ns walletdb.ReadWriteBucket, prefix []byte) creditIterator {
-	c := ns.NestedReadWriteBucket(bucketCredits).ReadWriteCursor()
-	return creditIterator{c: c, prefix: prefix}
-}
-
 func makeReadCreditIterator(ns walletdb.ReadBucket, prefix []byte) creditIterator {
 	c := ns.NestedReadBucket(bucketCredits).ReadCursor()
 	return creditIterator{c: readCursor{c}, prefix: prefix}
@@ -941,11 +920,6 @@ type debitIterator struct {
 	cv     []byte
 	elem   DebitRecord
 	err    error
-}
-
-func makeDebitIterator(ns walletdb.ReadWriteBucket, prefix []byte) debitIterator {
-	c := ns.NestedReadWriteBucket(bucketDebits).ReadWriteCursor()
-	return debitIterator{c: c, prefix: prefix}
 }
 
 func makeReadDebitIterator(ns walletdb.ReadBucket, prefix []byte) debitIterator {
@@ -1196,10 +1170,6 @@ func (it *unminedCreditIterator) next() bool {
 // 	}
 // 	return nil
 // }
-
-func (it *unminedCreditIterator) reposition(txHash *chainhash.Hash, index uint32) {
-	it.c.Seek(canonicalOutPoint(txHash, index))
-}
 
 // Outpoints spent by unmined transactions are saved in the unmined inputs
 // bucket.  This bucket maps between each previous output spent, for both mined

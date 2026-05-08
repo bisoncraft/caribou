@@ -15,17 +15,9 @@ import (
 	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
 )
 
-var (
-	// ignoreDbTypes are types which should be ignored when running tests
-	// that iterate all supported DB types.  This allows some tests to add
-	// bogus drivers for testing purposes while still allowing other tests
-	// to easily iterate all supported drivers.
-	ignoreDbTypes = map[string]bool{"createopenfail": true}
-
-	// defaultDBTimeout specifies the timeout value when opening the wallet
-	// database.
-	defaultDBTimeout = 10 * time.Second
-)
+// defaultDBTimeout specifies the timeout value when opening the wallet
+// database.
+var defaultDBTimeout = 10 * time.Second
 
 // TestAddDuplicateDriver ensures that adding a duplicate driver does not
 // overwrite an existing one.

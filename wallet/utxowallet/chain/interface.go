@@ -12,11 +12,6 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// isCurrentDelta is the delta duration we'll use from the present time to
-// determine if a backend is considered "current", i.e. synced to the tip of
-// the chain.
-const isCurrentDelta = 2 * time.Hour
-
 // BackEnds returns a list of the available back ends.
 // TODO: Refactor each into a driver and use dynamic registration.
 func BackEnds() []string {
