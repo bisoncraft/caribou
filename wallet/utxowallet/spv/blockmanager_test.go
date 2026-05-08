@@ -72,15 +72,21 @@ func setupBlockManager(t *testing.T) (*blockManager, headerfs.BlockHeaderStore,
 		require.NoError(t, db.Close())
 	})
 
+	params := assets.BTCParams["simnet"]
+
+	// The block- and filter-header stores must agree on which network's
+	// genesis they're seeding. assets.BTCParams["simnet"] is regtest-shaped
+	// (Net: wire.TestNet, Bech32HRPSegwit: "bcrt", regtest genesis); pulling
+	// the genesis header from the same params struct keeps the two stores
+	// consistent with each other and with the blockManager that consumes
+	// `params` below.
 	hdrStore, err := headerfs.NewBlockHeaderStore(
-		tempDir, db, &chaincfg.SimNetParams.GenesisBlock.Header,
+		tempDir, db, &params.GenesisBlock.Header,
 	)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("error creating block "+
 			"header store: %s", err)
 	}
-
-	params := assets.BTCParams["simnet"]
 
 	cfStore, err := headerfs.NewFilterHeaderStore(
 		tempDir, db, headerfs.RegularFilter, params,
@@ -529,8 +535,12 @@ func TestBlockManagerInvalidInterval(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create a mock peer to prevent panics when attempting to ban
-		// a peer that served an invalid filter header.
-		mockPeer := NewServerPeer(&ChainService{}, false)
+		// a peer that served an invalid filter header. NewPeerConfig
+		// dereferences chainParams.Net, so the embedded ChainService
+		// must carry a non-nil chainParams.
+		mockPeer := NewServerPeer(&ChainService{
+			chainParams: assets.BTCParams["simnet"],
+		}, false)
 		mockPeer.Peer, err = peer.NewOutboundPeer(
 			NewPeerConfig(mockPeer), "127.0.0.1:8333",
 		)
