@@ -267,9 +267,15 @@ var BTCParams = map[string]*netparams.ChainParams{
 		PrivateKeyID:            0xef,                            // starts with 9 (uncompressed) or c (compressed)
 		HDPrivateKeyID:          [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
 		HDPublicKeyID:           [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
-		// HDCoinType is 0 (not 1) to match btcwallet's historical derivation
-		// paths. btcwallet always used Coin=0 for key scopes regardless of
-		// network, so BTC testnet wallets use m/84'/0'/... not m/84'/1'/...
+		// BIP-44 says HDCoinType should be 1 for testnet, but the wallet- and
+		// wtxmgr-package unit tests load wallets via this entry and reference
+		// the legacy waddrmgr.KeyScopeBIP00xx constants (all Coin=0) directly,
+		// so the in-tree scope lookups only resolve when the wallet is also
+		// rooted at Coin=0. Production BTC consumers (wallet/asset/btc) read
+		// chain params from btcd's chaincfg, not from this map, and route
+		// scope lookups through wallet.ScopeForPurpose which honors the real
+		// HDCoinType — see DERIVATION.md. Bump this to 1 once the affected
+		// tests are migrated off the package-level KeyScope constants.
 		HDCoinType:              0,
 		BIP0034Height:           21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
 		BIP0065Height:           581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
@@ -355,7 +361,9 @@ var BTCParams = map[string]*netparams.ChainParams{
 		PrivateKeyID:             0xef,                            // starts with 9 (uncompressed) or c (compressed)
 		HDPrivateKeyID:           [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
 		HDPublicKeyID:            [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
-		// HDCoinType is 0 to match btcwallet's historical behavior (always Coin=0).
+		// See the testnet entry above for why this is 0 rather than the
+		// BIP-44 standard 1. Same rationale: in-tree tests use the legacy
+		// waddrmgr.KeyScopeBIP00xx Coin=0 constants.
 		HDCoinType:               0,
 		BIP0034Height:            100000000, // Not active - Permit ver 1 blocks
 		BIP0065Height:            1351,      // Used by regression tests

@@ -72,6 +72,10 @@ The Bitcoin asset wrapper at `wallet/asset/btc/spv_wrapper.go` follows the same 
 
 The same coin-type plumbing is what makes a future Dogecoin, Digibyte, etc. derive at their respective SLIP-44 coin types without a per-chain workaround.
 
+### Caveat: `wallet/utxowallet/assets/btc.go` testnet/simnet still set `HDCoinType: 0`
+
+The Bitcoin entries in `wallet/utxowallet/assets/BTCParams` are *not* what the BTC asset wrapper uses — the wrapper reads from `btcd`'s `chaincfg` directly, as described above. `BTCParams` exists for in-tree test fixtures (and as the data source LTCParams is templated from). The testnet and simnet entries continue to set `HDCoinType: 0` rather than the BIP-44 standard `1`, because several `wallet/`- and `wtxmgr/`-package unit tests load wallets via `BTCParams["testnet"]` and reference the legacy `waddrmgr.KeyScopeBIP00xx` constants (all `Coin=0`) directly when querying scopes. Bumping `HDCoinType` to `1` makes those scope lookups miss the wallet's actual scopes (`{Purpose: 84, Coin: 1}` etc.) and the tests fail with "scope m/84'/0' not found." Migrating those tests to `w.ScopeForPurpose(...)` and `waddrmgr.ScopeAddrMapForCoin(coinType)` is on the to-do list; once done, the testnet/simnet entries here should be flipped to `1`.
+
 ### Implications
 
 A Litecoin seed produced by a wallet that depended on `dcrlabs/ltcwallet` (this includes Bison Wallet) will not properly restore in Boss Wallet: Boss Wallet looks at `m/.../2'/...` while the source wallet's funds sit at `m/.../0'/...`. Boss Wallet will report a zero balance. To recover, either restore the seed in the originating wallet and send the funds to a fresh Boss Wallet Litecoin address, or import the seed into a third-party wallet that lets you override the derivation path (Electrum-LTC, Sparrow's "advanced" derivation field, etc.), specify `m/84'/0'/...`, and forward the funds from there.
