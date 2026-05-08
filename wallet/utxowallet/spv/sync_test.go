@@ -1,3 +1,10 @@
+//go:build livebtcd
+
+// Tests in this file spawn real btcd instances via rpctest. They are gated
+// behind the `livebtcd` build tag so that `go test ./...` stays runnable
+// without btcd in PATH. To run them: `go test -tags=livebtcd ./...` (with a
+// btcd binary discoverable on PATH).
+
 package spv_test
 
 import (

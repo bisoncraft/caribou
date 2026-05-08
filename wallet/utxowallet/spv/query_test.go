@@ -20,6 +20,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/query"
 	"github.com/btcsuite/btcd/blockchain"
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/btcutil/gcs/builder"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -282,14 +283,17 @@ func TestBlockCache(t *testing.T) {
 	}
 
 	// Set up a ChainService with a BlockCache that can fit the first half
-	// of the blocks.
+	// of the blocks. MaxSatoshi must be non-zero, otherwise the per-output
+	// upper-bound check inside checkBlockSanity rejects every coinbase in
+	// the test data (50 BTC > 0) and the response is recorded as no-progress.
 	cs := &ChainService{
 		BlockCache: lru.NewCache[wire.InvVect, *CacheableBlock](
 			size,
 		),
 		BlockHeaders: headers,
 		chainParams: &netparams.ChainParams{
-			PowLimit: maxPowLimit,
+			PowLimit:   maxPowLimit,
+			MaxSatoshi: btcutil.MaxSatoshi,
 		},
 		timeSource:  blockchain.NewMedianTime(),
 		workManager: &mockDispatcher{},
@@ -324,9 +328,14 @@ func TestBlockCache(t *testing.T) {
 			header, _, err := headers.FetchHeader(&blockHash)
 			require.NoError(t, err)
 
-			resp := &wire.MsgBlock{
+			// GetBlock's handleResp now type-asserts on
+			// *bisonwire.Block (the wire response type after
+			// the bisonwire vendoring); it ignores plain
+			// *wire.MsgBlock with a noProgress return.
+			resp := &bisonwire.Block{
+				Chain:        "btc",
 				Header:       *header,
-				Transactions: b.MsgBlock().Transactions,
+				Transactions: b.Transactions,
 			}
 
 			progress := reqs[0].HandleResp(getData, resp, "")
