@@ -203,7 +203,6 @@ func EstimateSerializeSize(inputCount int, txOuts []*wire.TxOut, addChangeOutput
 func EstimateVirtualSize(numP2PKHIns, numP2TRIns, numP2WPKHIns, numNestedP2WPKHIns int,
 	txOuts []*wire.TxOut, changeScriptSize int) int {
 	outputCount := len(txOuts)
-
 	changeOutputSize := 0
 	if changeScriptSize > 0 {
 		changeOutputSize = 8 +
@@ -218,7 +217,7 @@ func EstimateVirtualSize(numP2PKHIns, numP2TRIns, numP2WPKHIns, numNestedP2WPKHI
 	baseSize := 8 +
 		wire.VarIntSerializeSize(
 			uint64(numP2PKHIns+numP2TRIns+numP2WPKHIns+numNestedP2WPKHIns)) +
-		wire.VarIntSerializeSize(uint64(len(txOuts))) +
+		wire.VarIntSerializeSize(uint64(outputCount)) +
 		numP2PKHIns*RedeemP2PKHInputSize +
 		numP2WPKHIns*RedeemP2WPKHInputSize +
 		numP2TRIns*RedeemP2TRInputSize +
