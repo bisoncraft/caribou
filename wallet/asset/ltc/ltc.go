@@ -18,8 +18,8 @@ import (
 	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	"github.com/btcsuite/btcd/chaincfg"
 	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/btcsuite/btcd/chaincfg"
 )
 
 const (

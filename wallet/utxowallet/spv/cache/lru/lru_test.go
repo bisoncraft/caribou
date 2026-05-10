@@ -375,10 +375,7 @@ func TestRangeAbort(t *testing.T) {
 	visited := 0
 	testVisitor := func(key int, value *sizeable) bool {
 		visited++
-		if visited >= numItems/2 {
-			return false
-		}
-		return true
+		return visited < numItems/2
 	}
 
 	// Call the method.

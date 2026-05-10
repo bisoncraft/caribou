@@ -24,6 +24,12 @@ import (
 	dexbch "github.com/bisoncraft/bosswallet/util/networks/bch"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	inSpv "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
+	inHeaderfs "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	inWaddrmgr "github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	inWtxmgr "github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	neutrino "github.com/bisoncraft/neutrino-bch"
 	labschain "github.com/bisoncraft/neutrino-bch/chain"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -43,12 +49,6 @@ import (
 	"github.com/gcash/bchlog"
 	"github.com/gcash/bchutil"
 	"github.com/jrick/logrotate/rotator"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	inHeaderfs "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
-	inSpv "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
-	inWaddrmgr "github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
-	inWtxmgr "github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 )
 
 const (
