@@ -3900,7 +3900,7 @@ func CreateWithCallback(db walletdb.DB, pubPass, privPass []byte,
 	birthday time.Time, cb func(walletdb.ReadWriteTx) error) error {
 
 	return create(
-		db, pubPass, privPass, rootKey, chainParams, birthday, false, cb,
+		db, pubPass, privPass, rootKey, chainParams, birthday, false, nil, cb,
 	)
 }
 
@@ -3912,7 +3912,7 @@ func CreateWatchingOnlyWithCallback(db walletdb.DB, pubPass []byte,
 	cb func(walletdb.ReadWriteTx) error) error {
 
 	return create(
-		db, pubPass, nil, nil, chainParams, birthday, true, cb,
+		db, pubPass, nil, nil, chainParams, birthday, true, nil, cb,
 	)
 }
 
@@ -3924,7 +3924,7 @@ func Create(db walletdb.DB, pubPass, privPass []byte,
 	birthday time.Time) error {
 
 	return create(
-		db, pubPass, privPass, rootKey, chainParams, birthday, false, nil,
+		db, pubPass, privPass, rootKey, chainParams, birthday, false, nil, nil,
 	)
 }
 
@@ -3936,13 +3936,14 @@ func CreateWatchingOnly(db walletdb.DB, pubPass []byte,
 	chainParams *netparams.ChainParams, birthday time.Time) error {
 
 	return create(
-		db, pubPass, nil, nil, chainParams, birthday, true, nil,
+		db, pubPass, nil, nil, chainParams, birthday, true, nil, nil,
 	)
 }
 
 func create(db walletdb.DB, pubPass, privPass []byte,
 	rootKey *hdkeychain.ExtendedKey, chainParams *netparams.ChainParams,
 	birthday time.Time, isWatchingOnly bool,
+	scryptOpts *waddrmgr.ScryptOptions,
 	cb func(walletdb.ReadWriteTx) error) error {
 
 	// If no root key was provided, we create one now from a random seed.
@@ -3981,8 +3982,8 @@ func create(db walletdb.DB, pubPass, privPass []byte,
 		}
 
 		err = waddrmgr.Create(
-			addrmgrNs, rootKey, pubPass, privPass, chainParams, nil,
-			birthday,
+			addrmgrNs, rootKey, pubPass, privPass, chainParams,
+			scryptOpts, birthday,
 		)
 		if err != nil {
 			return err

@@ -146,6 +146,7 @@ func testWalletForLTC(t *testing.T) (*Wallet, func()) {
 	loader := NewLoader(
 		assets.LTCParams["mainnet"], dir, true, defaultDBTimeout, 250,
 		WithWalletSyncRetryInterval(10*time.Millisecond),
+		WithScryptOptions(&waddrmgr.FastScryptOptions),
 	)
 	w, err := loader.CreateNewWallet(pubPass, privPass, seed, time.Now())
 	if err != nil {

@@ -40,6 +40,7 @@ func testWallet(t *testing.T) (*Wallet, func()) {
 	loader := NewLoader(
 		assets.BTCParams["testnet"], dir, true, defaultDBTimeout, 250,
 		WithWalletSyncRetryInterval(10*time.Millisecond),
+		WithScryptOptions(&waddrmgr.FastScryptOptions),
 	)
 	w, err := loader.CreateNewWallet(pubPass, privPass, seed, time.Now())
 	if err != nil {
@@ -72,6 +73,7 @@ func testWalletWatchingOnly(t *testing.T) (*Wallet, func()) {
 	loader := NewLoader(
 		assets.BTCParams["testnet"], dir, true, defaultDBTimeout, 250,
 		WithWalletSyncRetryInterval(10*time.Millisecond),
+		WithScryptOptions(&waddrmgr.FastScryptOptions),
 	)
 	w, err := loader.CreateNewWatchingOnlyWallet(pubPass, time.Now())
 	if err != nil {

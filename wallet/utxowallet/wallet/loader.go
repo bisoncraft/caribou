@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -44,6 +45,7 @@ var (
 // loaderConfig contains the configuration options for the loader.
 type loaderConfig struct {
 	walletSyncRetryInterval time.Duration
+	scryptOpts              *waddrmgr.ScryptOptions
 }
 
 // defaultLoaderConfig returns the default configuration options for the loader.
@@ -61,6 +63,16 @@ type LoaderOption func(*loaderConfig)
 func WithWalletSyncRetryInterval(interval time.Duration) LoaderOption {
 	return func(c *loaderConfig) {
 		c.walletSyncRetryInterval = interval
+	}
+}
+
+// WithScryptOptions overrides the scrypt parameters used to derive the wallet's
+// master keys when a new wallet is created. Production callers should leave the
+// default (DefaultScryptOptions, ~256 MiB per derivation); tests may pass
+// FastScryptOptions to keep memory usage bounded.
+func WithScryptOptions(opts *waddrmgr.ScryptOptions) LoaderOption {
+	return func(c *loaderConfig) {
+		c.scryptOpts = opts
 	}
 }
 
@@ -270,22 +282,12 @@ func (l *Loader) createNewWallet(pubPassphrase, privPassphrase []byte,
 	}
 
 	// Initialize the newly created database for the wallet before opening.
-	if isWatchingOnly {
-		err := CreateWatchingOnlyWithCallback(
-			l.db, pubPassphrase, l.chainParams, bday,
-			l.walletCreated,
-		)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		err := CreateWithCallback(
-			l.db, pubPassphrase, privPassphrase, rootKey,
-			l.chainParams, bday, l.walletCreated,
-		)
-		if err != nil {
-			return nil, err
-		}
+	err = create(
+		l.db, pubPassphrase, privPassphrase, rootKey, l.chainParams,
+		bday, isWatchingOnly, l.cfg.scryptOpts, l.walletCreated,
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	// Open the newly-created wallet.
