@@ -92,7 +92,9 @@ func TestLocateBirthdayBlock(t *testing.T) {
 
 	for _, testCase := range testCases {
 		testCase := testCase
-		success := t.Run(testCase.name, func(t *testing.T) {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			chainConn := createMockChainConn(
 				chainParams.GenesisBlock, numBlocks, blockInterval,
 			)
@@ -109,9 +111,6 @@ func TestLocateBirthdayBlock(t *testing.T) {
 					birthdayBlock.Height)
 			}
 		})
-		if !success {
-			break
-		}
 	}
 }
 
@@ -226,8 +225,11 @@ func TestLabelTransaction(t *testing.T) {
 
 // TestGetTransaction tests if we can fetch a mined, an existing
 // and a non-existing transaction from the wallet like we expect.
+//
+// Each subtest creates its own wallet, but the table-driven case closures
+// write to the shared outer err declared below, so this test cannot be
+// safely parallelised at either level.
 func TestGetTransaction(t *testing.T) {
-	t.Parallel()
 	rec, err := wtxmgr.NewTxRecord("btc", TstSerializedTx, time.Now())
 	require.NoError(t, err)
 

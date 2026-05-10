@@ -15,9 +15,10 @@ import (
 
 // TestComputeInputScript checks that the wallet can create the full
 // witness script for a witness output.
+//
+// Subtests share a single wallet and addUtxo mutates its UTXO set, so this
+// test cannot be safely parallelised at either level.
 func TestComputeInputScript(t *testing.T) {
-	t.Parallel()
-
 	testCases := []struct {
 		name              string
 		scope             waddrmgr.KeyScope

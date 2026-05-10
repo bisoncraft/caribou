@@ -595,7 +595,9 @@ func TestFilterHeaderStateAssertion(t *testing.T) {
 
 	for _, testCase := range testCases {
 		testCase := testCase
-		success := t.Run(testCase.name, func(t *testing.T) {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			// We'll start the test by setting up our required
 			// dependencies.
 			cleanUp, tempDir, db := setup(t)
@@ -624,9 +626,6 @@ func TestFilterHeaderStateAssertion(t *testing.T) {
 				t.Fatal("expected file to not be removed")
 			}
 		})
-		if !success {
-			break
-		}
 	}
 }
 

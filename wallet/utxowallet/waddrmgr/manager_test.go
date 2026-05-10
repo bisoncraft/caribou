@@ -3145,9 +3145,11 @@ func assertAddressDerivation(t *testing.T, db walletdb.DB,
 
 // TestManagedAddressValidation tests that we're able to properly detect and
 // reject various fault cases for address/key derivation.
+//
+// The subtests share a single backing wallet DB and root manager and each
+// performs a walletdb.Update, so this test cannot be safely parallelised at
+// either level.
 func TestManagedAddressValidation(t *testing.T) {
-	t.Parallel()
-
 	teardown, db := emptyDB(t)
 	defer teardown()
 

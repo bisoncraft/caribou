@@ -157,6 +157,8 @@ func TestTlvEncodeDecode(t *testing.T) {
 		tc := tc
 
 		t.Run(tc.name, func(tt *testing.T) {
+			tt.Parallel()
+
 			data, err := tlvEncodeTaprootScript(tc.given)
 
 			if tc.expectedErrEncode != "" {

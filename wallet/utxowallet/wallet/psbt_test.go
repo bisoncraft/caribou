@@ -31,9 +31,10 @@ var (
 )
 
 // TestFundPsbt tests that a given PSBT packet is funded correctly.
+//
+// Subtests share a single wallet and mutate its UTXO/address state via
+// FundPsbt, so this test cannot be safely parallelised at either level.
 func TestFundPsbt(t *testing.T) {
-	t.Parallel()
-
 	w, cleanup := testWallet(t)
 	defer cleanup()
 

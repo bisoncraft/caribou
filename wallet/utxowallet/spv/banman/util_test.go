@@ -57,7 +57,9 @@ func TestParseIPNet(t *testing.T) {
 
 	for _, testCase := range testCases {
 		testCase := testCase
-		success := t.Run(testCase.name, func(t *testing.T) {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
 			// Parse the IP network from each test's address and
 			// mask.
 			ipNet, err := ParseIPNet(testCase.addr, testCase.mask)
@@ -83,8 +85,5 @@ func TestParseIPNet(t *testing.T) {
 					testCase.result.Mask, ipNet.Mask)
 			}
 		})
-		if !success {
-			return
-		}
 	}
 }

@@ -96,6 +96,8 @@ func TestTaprootKey(t *testing.T) {
 		tc := tc
 
 		t.Run(tc.name, func(tt *testing.T) {
+			tt.Parallel()
+
 			taprootKey, err := tc.given.TaprootKey()
 			require.NoError(tt, err)
 
