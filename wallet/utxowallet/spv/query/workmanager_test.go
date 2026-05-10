@@ -555,7 +555,8 @@ func TestWorkManagerTimeOutBatch(t *testing.T) {
 	// NOTE: We will timeout the batch to simulate a slow peer connection
 	// and make sure we cancel all ongoing queries including the ones which
 	// are still queued up.
-	errChan := wm.Query(queries, Timeout(1*time.Second))
+	const batchTimeout = 100 * time.Millisecond
+	errChan := wm.Query(queries, Timeout(batchTimeout))
 
 	// Send a query to every active worker.
 	for i := 0; i < numWorkers; i++ {
@@ -570,8 +571,9 @@ func TestWorkManagerTimeOutBatch(t *testing.T) {
 	}
 
 	// We wait before we send the result for one query to exceed the timeout
-	// of the batch.
-	time.Sleep(2 * time.Second)
+	// of the batch. Pad generously so this stays robust under slow CI even
+	// after the timeout has been shortened.
+	time.Sleep(batchTimeout * 5)
 
 	// We need to signal a result for one of the active workers so that
 	// the batch timeout is triggered.

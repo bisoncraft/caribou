@@ -100,7 +100,11 @@ func TestRebroadcast(t *testing.T) {
 				Cancel:        func() {},
 			}, nil
 		},
-		RebroadcastInterval: DefaultRebroadcastInterval,
+		// Pin the rebroadcast ticker far beyond any realistic test
+		// runtime. The production default (one minute) is short enough
+		// that a slow -race run can let the ticker fire mid-test and
+		// inject a spurious rebroadcast that desyncs the assertions.
+		RebroadcastInterval: time.Hour,
 	}
 
 	broadcaster := NewBroadcaster(cfg)
