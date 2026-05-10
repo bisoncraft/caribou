@@ -6,6 +6,7 @@ package netparams
 
 import (
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
@@ -64,14 +65,17 @@ type ChainParams struct {
 	// MaxSatoshi varies between assets.
 	MaxSatoshi int64
 
-	btcdParams *chaincfg.Params
+	btcdParamsOnce sync.Once
+	btcdParams     *chaincfg.Params
 }
 
 // BTCDParams are the btcd.chaincfg.Params that correspond the ChainParams.
 func (c *ChainParams) BTCDParams() *chaincfg.Params {
-	if c.btcdParams != nil {
-		return c.btcdParams
-	}
+	c.btcdParamsOnce.Do(c.initBTCDParams)
+	return c.btcdParams
+}
+
+func (c *ChainParams) initBTCDParams() {
 	c.btcdParams = &chaincfg.Params{
 		Name:                     c.Name,
 		Net:                      c.Net,
@@ -102,5 +106,4 @@ func (c *ChainParams) BTCDParams() *chaincfg.Params {
 		BIP0066Height:            c.BIP0066Height,
 		CoinbaseMaturity:         c.CoinbaseMaturity,
 	}
-	return c.btcdParams
 }
