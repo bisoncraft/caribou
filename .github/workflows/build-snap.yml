@@ -15,7 +15,7 @@ jobs:
             fetch-depth: 0
 
         - name: Compile frontend
-          working-directory: wallet/webserver/site
+          working-directory: wallet/appserver/newui
           run: |
             npm install
             npm run build
