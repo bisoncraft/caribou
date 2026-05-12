@@ -1041,6 +1041,7 @@ func (w *ExchangeWallet) SyncStatus() (*asset.SyncStatus, error) {
 	}
 	status, ok := statusI.(*asset.SyncStatus)
 	if !ok {
+		w.log.Warnf("unexpected type for syncStatus: %T", statusI)
 		return &asset.SyncStatus{}, nil
 	}
 	return status, nil

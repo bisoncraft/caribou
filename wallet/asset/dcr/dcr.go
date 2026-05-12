@@ -730,6 +730,7 @@ type ExchangeWallet struct {
 func (dcr *ExchangeWallet) config() *exchangeWalletConfig {
 	cfg, ok := dcr.cfgV.Load().(*exchangeWalletConfig)
 	if !ok {
+		dcr.log.Warnf("unexpected type for config: %T", dcr.cfgV.Load())
 		return nil
 	}
 	return cfg
@@ -6322,6 +6323,8 @@ func (dcr *ExchangeWallet) StakeStatus() (*asset.TicketStakingStatus, error) {
 			vsp, ok := v.(*vsp)
 			if ok {
 				vspURL = vsp.URL
+			} else {
+				dcr.log.Warnf("unexpected type for vsp: %T", v)
 			}
 		}
 	} else {

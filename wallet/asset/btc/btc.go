@@ -870,6 +870,7 @@ type baseWallet struct {
 func (w *baseWallet) cfg() *baseWalletConfig {
 	cfg, ok := w.cfgV.Load().(*baseWalletConfig)
 	if !ok {
+		w.log.Warnf("unexpected type for config: %T", w.cfgV.Load())
 		return nil
 	}
 	return cfg
