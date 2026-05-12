@@ -271,7 +271,7 @@ func (db *BoltDB) Run(ctx context.Context) {
 		return
 	}
 
-	// TODO: If we never see trouble with the compacted DB files when bisonw
+	// TODO: If we never see trouble with the compacted DB files when bossw
 	// starts up, we can just compact to the backups folder and copy that backup
 	// file back on top of the main DB file after it is closed.  For now, the
 	// backup above is a direct (not compacted) copy.

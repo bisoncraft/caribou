@@ -1,8 +1,8 @@
-# Build Instructions for bisonw-desktop
+# Build Instructions for bossw-desktop
 
 bison-desktop is a cross-platform desktop application for Bison Wallet. The instructions below are for building the client from source. If you are looking for pre-built binaries, see the [releases page](https://github.com/decred/dcrdex/releases).
 
-**Note**: The instructions below are to be run in your CLI from the `bisonw-desktop` directory.
+**Note**: The instructions below are to be run in your CLI from the `bossw-desktop` directory.
 
 ## Debian
 
@@ -43,7 +43,7 @@ sudo ufw disable # if ufw is installed on the host, this is neccessary for lxd t
 
 ### Publishing the snap
 
-The snap can be uploaded to the Snap Store using `./linux/publish-snap.sh`.  This requires [Snapcraft developer account credentials](https://snapcraft.io/docs/releasing-your-app).  After this is completed, the package can be installed on any system running `snap` by running `snap install bisonw`.  The app will be available on the [Snap Store](https://snapcraft.io/store/bisonw).
+The snap can be uploaded to the Snap Store using `./linux/publish-snap.sh`.  This requires [Snapcraft developer account credentials](https://snapcraft.io/docs/releasing-your-app).  After this is completed, the package can be installed on any system running `snap` by running `snap install bossw`.  The app will be available on the [Snap Store](https://snapcraft.io/store/bossw).
 
 ## Windows
 

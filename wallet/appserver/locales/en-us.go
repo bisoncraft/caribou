@@ -359,8 +359,8 @@ var EnUS = map[string]*intl.Translation{
 	"archived_date_tooltip":       {T: "Archived orders and matches created before your specified and date and time will be deleted from the database."},
 	"save_matches_to_file":        {T: "Save matches to CSV file"},
 	"save_orders_to_file":         {T: "Save orders to CSV file"},
-	"save_orders_to_file_msg":     {T: "Optional: Whether to save deleted orders to CSV file on bisonw data directory. Default is false."},
-	"save_matches_to_file_msg":    {T: "Optional: Whether to save deleted matches to CSV file on bisonw data directory. Default is false."},
+	"save_orders_to_file_msg":     {T: "Optional: Whether to save deleted orders to CSV file on bossw data directory. Default is false."},
+	"save_matches_to_file_msg":    {T: "Optional: Whether to save deleted matches to CSV file on bossw data directory. Default is false."},
 	// Market maker bot
 	"Market Making":          {T: "Market Making"},
 	"Off":                    {T: "Off"},

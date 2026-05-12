@@ -2,7 +2,7 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 /*
-bisonw-desktop is the Desktop version of Bison Wallet. There are a number of
+bossw-desktop is the Desktop version of Bison Wallet. There are a number of
 differences that make this version more suitable for less tech-savvy users.
 
 | CLI version                       | Desktop version                          |
@@ -35,7 +35,7 @@ AppDataDir("dexc").
 Since the program continues running in the background if there are active
 swaps, there becomes a question of how and when to shutdown, or what happens
 when the user simply shuts off their computer.
- 1) If there are no active swaps when the user closes the window, bisonw will
+ 1) If there are no active swaps when the user closes the window, bossw will
     exit immediately.
  2) If we receive a SIGTERM signal, expected for system shutdown, shut down
     immediately. Ctrl-c still works if running via CLI, with no prompt.
@@ -59,7 +59,7 @@ import (
 )
 
 const (
-	appName  = "bisonw-desktop"
+	appName  = "bossw-desktop"
 	appTitle = "Bison Wallet"
 )
 
@@ -72,7 +72,7 @@ var (
 	tmpLogoPath string
 )
 
-//go:embed src/bisonw-dark-256.png
+//go:embed src/bossw-dark-256.png
 var symbolSolidPNG []byte
 
 func storeTmpLogo() (tempDir string) {
@@ -86,7 +86,7 @@ func storeTmpLogo() (tempDir string) {
 		if runtime.GOOS == "windows" {
 			srcImg = symbolSolidPNG // png ok, but Windows can be quirky with transparency
 		}
-		tmpLogoPath = filepath.Join(tempDir, "bisonw.png")
+		tmpLogoPath = filepath.Join(tempDir, "bossw.png")
 		_ = os.WriteFile(tmpLogoPath, srcImg, 0644)
 		// sendDesktopNotification will work now.
 	}

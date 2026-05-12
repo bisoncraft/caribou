@@ -8,7 +8,7 @@ module.exports = {
     name: 'Bison Wallet',
     appBundleId: 'com.bisonwallet.desktop',
     extraResource: ['../resources/'+require('./utils.js').getPlatform()],
-    icon: '../src/bisonw.icns',
+    icon: '../src/bossw.icns',
     appVersion: require('./package.json').version,
     executableName: 'BisonWallet',
     asar: true,
@@ -49,7 +49,7 @@ module.exports = {
       config: {
         format: 'ULFO',
         name: 'BisonWallet',
-        icon: '../src/bisonw.icns',
+        icon: '../src/bossw.icns',
         overwrite: true,
       }
     },
@@ -59,7 +59,7 @@ module.exports = {
         options: {
           maintainer: 'The Decred Developers',
           homepage: 'https://bisonwallet.com',
-          icon: '../src/bisonw.png',
+          icon: '../src/bossw.png',
           categories: ['Office', 'Finance'],
           description: 'A multi-coin wallet with DEX in-built.',
         },
@@ -71,7 +71,7 @@ module.exports = {
         options: {
           maintainer: 'The Decred Developers',
           summary: 'A multi-coin wallet with DEX in-built.',
-          icon: '../src/bisonw.png',
+          icon: '../src/bossw.png',
           categories: ['Office', 'Finance'],
         },
       },

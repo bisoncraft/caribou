@@ -23,8 +23,8 @@ bin/
 bin-v*/
 /bworg
 wallet/bworg/bworg
-wallet/cmd/bisonw/bisonw
-wallet/cmd/bisonw/libwallet2_api_c*
+wallet/cmd/bossw/bossw
+wallet/cmd/bossw/libwallet2_api_c*
 wallet/cmd/bossw-desktop/bossw-desktop
 wallet/cmd/bossw-desktop/pkg/installers
 wallet/cmd/bossw-desktop/snap/snapcraft.yaml

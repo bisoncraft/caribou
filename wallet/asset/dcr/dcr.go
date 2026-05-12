@@ -8312,7 +8312,7 @@ func (dcr *ExchangeWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asse
 					"replaced by tx %s. core should not be replacing the transaction. maybe ConfirmTransaction "+
 					"is being run concurrently for the same tx", mTx.txHash, confirmTx.TxType(), secretHash, *txHash)
 			}
-			// Will hit this if bisonw was restarted with an actively
+			// Will hit this if bossw was restarted with an actively
 			// redeeming or maybe refunding swap.
 			dcr.mempoolTxsMtx.Lock()
 			dcr.mempoolTxs[secretHash] = &mempoolTx{txHash: *txHash, firstSeen: time.Now(), txType: confirmTx.TxType()}
