@@ -34,7 +34,9 @@ type logWriter struct {
 // Write writes the data in p to the log file.
 func (w logWriter) Write(p []byte) (n int, err error) {
 	if w.stdout {
-		os.Stdout.Write(p)
+		if _, err := os.Stdout.Write(p); err != nil {
+			fmt.Fprintf(os.Stderr, "error writing to stdout: %v\n", err)
+		}
 	}
 	return w.Rotator.Write(p)
 }
@@ -64,6 +66,6 @@ func InitLogging(logFilename, lvl string, stdout bool, utc bool) (lm *util.Logge
 	}
 	lm.SetLevelsFromMap(defaultLogLevelMap)
 	return lm, func() {
-		logRotator.Close()
+		_ = logRotator.Close()
 	}
 }

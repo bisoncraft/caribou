@@ -169,7 +169,7 @@ func (s *syncServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/kill":
 		b, err := io.ReadAll(r.Body)
-		r.Body.Close()
+		_ = r.Body.Close()
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			http.Error(w, "error reading request body", http.StatusBadRequest)

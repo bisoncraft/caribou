@@ -728,7 +728,11 @@ type ExchangeWallet struct {
 }
 
 func (dcr *ExchangeWallet) config() *exchangeWalletConfig {
-	return dcr.cfgV.Load().(*exchangeWalletConfig)
+	cfg, ok := dcr.cfgV.Load().(*exchangeWalletConfig)
+	if !ok {
+		return nil
+	}
+	return cfg
 }
 
 // Check that ExchangeWallet satisfies the Wallet interface.
@@ -5825,8 +5829,8 @@ func (dcr *ExchangeWallet) lockedAtoms(acct string) (uint64, error) {
 // convertCoin converts the asset.Coin to an output whose tree may be unknown.
 // Use wallet.UnspentOutput to determine the output tree where necessary.
 func (dcr *ExchangeWallet) convertCoin(coin asset.Coin) (*output, error) {
-	op, _ := coin.(*output)
-	if op != nil {
+	op, ok := coin.(*output)
+	if ok {
 		return op, nil
 	}
 	txHash, vout, err := decodeCoinID(coin.ID())
@@ -6315,7 +6319,10 @@ func (dcr *ExchangeWallet) StakeStatus() (*asset.TicketStakingStatus, error) {
 	var vspURL string
 	if !isRPC {
 		if v := dcr.vspV.Load(); v != nil {
-			vspURL = v.(*vsp).URL
+			vsp, ok := v.(*vsp)
+			if ok {
+				vspURL = vsp.URL
+			}
 		}
 	} else {
 		rpcW, ok := dcr.wallet.(*rpcWallet)
@@ -6587,8 +6594,12 @@ func (dcr *ExchangeWallet) runTicketBuyer() {
 		if v == nil {
 			err = errors.New("no vsp set")
 		} else {
-			vInfo := v.(*vsp)
-			tickets, err = dcr.wallet.PurchaseTickets(dcr.ctx, int(remain), vInfo.URL, vInfo.PubKey, dcr.mixing.Load())
+			vInfo, ok := v.(*vsp)
+			if !ok {
+				err = errors.New("invalid vsp type")
+			} else {
+				tickets, err = dcr.wallet.PurchaseTickets(dcr.ctx, int(remain), vInfo.URL, vInfo.PubKey, dcr.mixing.Load())
+			}
 		}
 	}
 	if err != nil {
@@ -6900,7 +6911,11 @@ func (dcr *ExchangeWallet) Proposal(token string) (*pi.Proposal, error) {
 		// Wallet hasn't synced a tip yet; can't check voting eligibility.
 		return proposal, nil
 	}
-	tip := tipI.(*block)
+	tip, ok := tipI.(*block)
+	if !ok {
+		// Tip has invalid type; skip voting eligibility check.
+		return proposal, nil
+	}
 	if tip.height > int64(proposal.EndBlockHeight) {
 		return proposal, nil
 	}
@@ -7083,7 +7098,11 @@ func (dcr *ExchangeWallet) txDB() *btc.BadgerTxDB {
 	if db == nil {
 		return nil
 	}
-	return db.(*btc.BadgerTxDB)
+	txdb, ok := db.(*btc.BadgerTxDB)
+	if !ok {
+		return nil
+	}
+	return txdb
 }
 
 func rpcTxFee(tx *ListTransactionsResult) uint64 {
@@ -7921,7 +7940,11 @@ func (dcr *ExchangeWallet) handleTipChange(ctx context.Context, newTipHash *chai
 	dcr.handleTipMtx.Lock()
 	defer dcr.handleTipMtx.Unlock()
 
-	prevTip := dcr.currentTip.Swap(&block{newTipHeight, newTipHash}).(*block)
+	oldTipI := dcr.currentTip.Swap(&block{newTipHeight, newTipHash})
+	prevTip, ok := oldTipI.(*block)
+	if !ok {
+		prevTip = &block{}
+	}
 
 	dcr.log.Tracef("tip change: %d (%s) => %d (%s)", prevTip.height, prevTip.hash, newTipHeight, newTipHash)
 
@@ -8055,7 +8078,15 @@ func (dcr *ExchangeWallet) blockHeader(ctx context.Context, blockHash *chainhash
 }
 
 func (dcr *ExchangeWallet) cachedBestBlock() *block {
-	return dcr.currentTip.Load().(*block)
+	tipI := dcr.currentTip.Load()
+	if tipI == nil {
+		return &block{}
+	}
+	tip, ok := tipI.(*block)
+	if !ok {
+		return &block{}
+	}
+	return tip
 }
 
 // wireBytes dumps the serialized transaction bytes.
@@ -8620,7 +8651,7 @@ func getDcrdataTxs(ctx context.Context, addr string, net util.Network) (txs []*w
 		if err != nil {
 			return nil, fmt.Errorf("error reading response body: %w", err)
 		}
-		r.Body.Close()
+		_ = r.Body.Close()
 		hexTx := string(b)
 		txB, err := hex.DecodeString(hexTx)
 		if err != nil {

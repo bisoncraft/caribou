@@ -180,7 +180,9 @@ func genCertPair(certFile, keyFile string, altDNSNames []string) error {
 		return err
 	}
 	if err = os.WriteFile(keyFile, key, 0600); err != nil {
-		os.Remove(certFile)
+		if remErr := os.Remove(certFile); remErr != nil {
+			err = fmt.Errorf("key write failed (%w), and cleanup also failed: %w", err, remErr)
+		}
 		return err
 	}
 
@@ -1094,7 +1096,7 @@ func (s *AppServer) readNotifications(ctx context.Context) {
 // readPost unmarshals the request body into the provided interface.
 func readPost(w http.ResponseWriter, r *http.Request, thing any) bool {
 	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
+	_ = r.Body.Close()
 	if err != nil {
 		log.Debugf("Error reading request body: %v", err)
 		http.Error(w, "error reading JSON message", http.StatusBadRequest)

@@ -485,7 +485,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 	defer ticker.Stop()
 	defer func() {
 		if w.txDB != nil {
-			w.txDB.Close()
+			_ = w.txDB.Close()
 		}
 	}()
 

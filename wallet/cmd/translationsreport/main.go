@@ -69,7 +69,7 @@ func mainErr() error {
 		enc.SetEscapeHTML(false) // This is why we're using json.Encoder
 		enc.SetIndent("", "    ")
 		err = enc.Encode(worksheet)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			return fmt.Errorf("json encode error: %w", err)
 		}

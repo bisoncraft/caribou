@@ -1918,7 +1918,7 @@ func migrateLegacyTxDB(legacyDBPath string, newDB txDB, log util.Logger) error {
 
 	log.Infof("Successfully migrated %d transactions from legacy database", len(entries))
 
-	legacyDB.Close()
+	_ = legacyDB.Close()
 	return os.RemoveAll(legacyDBPath)
 }
 
@@ -2697,7 +2697,10 @@ func (bm *bridgeManager) checkPendingBridges(ctx context.Context) {
 
 		var completionData []byte
 		if dataVal := pendingBridge.completionData.Load(); dataVal != nil {
-			completionData = dataVal.([]byte)
+			cd, ok := dataVal.([]byte)
+			if ok {
+				completionData = cd
+			}
 		} else {
 			bridge, ok := bm.bridges[pendingBridge.bridgeName]
 			if !ok {

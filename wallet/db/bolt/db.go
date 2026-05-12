@@ -267,7 +267,7 @@ func (db *BoltDB) Run(ctx context.Context) {
 	// Only compact if free space is at least the byte threshold AND that fee
 	// space accounts for a significant percent of the file.
 	if freeBytes < byteThresh || pctFree < pctThresh {
-		db.Close()
+		_ = db.Close()
 		return
 	}
 
@@ -283,12 +283,12 @@ func (db *BoltDB) Run(ctx context.Context) {
 	compFile := srcPath + ".tmp"             // deterministic on *same fs*
 	err := db.BackupTo(compFile, true, true) // overwrite and compact
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		db.log.Errorf("Unable to compact database: %v", err)
 		return
 	}
 
-	db.Close() // close db file at srcPath
+	_ = db.Close() // close db file at srcPath
 
 	initSize, compSize := db.fileSize(srcPath), db.fileSize(compFile)
 	db.log.Infof("Compacted database file from %v => %v bytes (%.2f%% reduction)",

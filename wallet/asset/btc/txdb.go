@@ -167,7 +167,7 @@ func (db *BadgerTxDB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 				if err := db.seq.Release(); err != nil {
 					db.log.Errorf("error releasing sequence: %v", err)
 				}
-				db.Close()
+				_ = db.Close()
 				return
 			}
 		}
