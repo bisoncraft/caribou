@@ -12,7 +12,7 @@ go generate -x ./wallet/appserver/site # no -write
 cd "$dir"
 
 # list of all modules to test
-modules=". /wallet/cmd/bisonw-desktop"
+modules=". /wallet/cmd/bossw-desktop"
 
 # For each module, run go mod tidy, build and run test.
 for m in $modules

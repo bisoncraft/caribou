@@ -25,9 +25,9 @@ bin-v*/
 wallet/bworg/bworg
 wallet/cmd/bisonw/bisonw
 wallet/cmd/bisonw/libwallet2_api_c*
-wallet/cmd/bisonw-desktop/bisonw-desktop
-wallet/cmd/bisonw-desktop/pkg/installers
-wallet/cmd/bisonw-desktop/snap/snapcraft.yaml
+wallet/cmd/bossw-desktop/bossw-desktop
+wallet/cmd/bossw-desktop/pkg/installers
+wallet/cmd/bossw-desktop/snap/snapcraft.yaml
 wallet/cmd/assetseed/assetseed
 wallet/cmd/simnet-trade-tests/simnet-trade-tests
 wallet/cmd/testbinance/testbinance

@@ -26,18 +26,18 @@ jobs:
             sudo apt-get -y install libgtk-3-dev libwebkit2gtk-4.1-dev build-essential
 
         - name: Build deb package
-          working-directory: wallet/cmd/bisonw-desktop
+          working-directory: wallet/cmd/bossw-desktop
           run: pkg/pkg-debian.sh
 
         - name: Prepare snapcraft.yml
-          working-directory: wallet/cmd/bisonw-desktop
+          working-directory: wallet/cmd/bossw-desktop
           run: pkg/prepare-snap.sh
 
         - name: Build snap package
           uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
           id: build
           with:
-            path: wallet/cmd/bisonw-desktop
+            path: wallet/cmd/bossw-desktop
 
         - name: Publish snap to Snap Store
           uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
