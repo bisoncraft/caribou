@@ -28,7 +28,7 @@ cd wallet/cmd/bisonw && go build -o bisonw
 
 ### Desktop wallet
 ```bash
-cd wallet/cmd/bisonw-desktop && go build -o bisonw-desktop
+cd wallet/cmd/bossw-desktop && go build -o bossw-desktop
 ```
 
 ### Cross-platform release packaging
