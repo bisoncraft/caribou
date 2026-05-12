@@ -5,8 +5,8 @@ go 1.24.0
 replace github.com/bisoncraft/bosswallet => ../../..
 
 require (
-	github.com/bisoncraft/bosswallet v0.6.3
 	fyne.io/systray v1.10.1-0.20230403195833-7dc3c09283d6
+	github.com/bisoncraft/bosswallet v0.6.3
 	github.com/bisoncraft/webview_go v0.1.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 )
@@ -81,7 +81,6 @@ require (
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	gopkg.in/square/go-jose.v2 v2.6.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
@@ -157,14 +156,12 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/holiman/bloomfilter/v2 v2.0.3 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
-	github.com/huandu/skiplist v1.2.1 // indirect
 	github.com/jessevdk/go-flags v1.6.1 // indirect
 	github.com/jrick/bitset v1.0.0 // indirect
 	github.com/jrick/logrotate v1.1.2 // indirect
 	github.com/jrick/wsrpc/v2 v2.3.8 // indirect
 	github.com/kkdai/bstream v1.0.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
-	github.com/lib/pq v1.11.2 // indirect
 	github.com/lightninglabs/gozmq v0.0.0-20191113021534-d20a764486bf // indirect
 	github.com/lightninglabs/neutrino v0.16.1-0.20240814152458-81d6cd2d2da5 // indirect
 	github.com/lightninglabs/neutrino/cache v1.1.2 // indirect
@@ -193,7 +190,6 @@ require (
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.39.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
-	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.1 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
