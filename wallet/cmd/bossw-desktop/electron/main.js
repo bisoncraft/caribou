@@ -12,25 +12,25 @@ const path = require("node:path");
 const { shell, nativeImage } = require("electron/common");
 const { getPlatform } = require("./utils.js");
 
-// defaultWebAddress is the local address where the bisonw web server listens.
+// defaultWebAddress is the local address where the bossw web server listens.
 const defaultWebAddress = "http://127.0.0.1:5758";
 
 // save a reference to the Tray object globally to avoid garbage collection
 let tray;
-let bisonwProcess;
+let bosswProcess;
 let isAppReady;
 let network;
 let isWebServerReady = false;
 let isShuttingDown = false;
 const activeOrdersLogoutErr = "cannot log out with active orders";
 
-// "bisonw" is the binary that we will package.
-const bisonwPath = path.resolve(path.join(getExtraFilesPath(), "./bisonw"));
+// "bossw" is the binary that we will package.
+const bosswPath = path.resolve(path.join(getExtraFilesPath(), "./bossw"));
 
-// Spawn the bisonw process
-bisonwProcess = spawn(bisonwPath);
+// Spawn the bossw process
+bosswProcess = spawn(bosswPath);
 
-bisonwProcess.stdout.on("data", async (data) => {
+bosswProcess.stdout.on("data", async (data) => {
   const message = data.toString();
   if (message.includes("LOGIN AND TRADE")) {
     isWebServerReady = true;
@@ -60,9 +60,9 @@ bisonwProcess.stdout.on("data", async (data) => {
       })
       .then((result) => {
         if (result.response === 1) {
-          bisonwProcess.stdin.write("yes\n");
+          bosswProcess.stdin.write("yes\n");
         } else {
-          bisonwProcess.stdin.write("no\n");
+          bosswProcess.stdin.write("no\n");
           isShuttingDown = false; // user aborted
         }
       });
@@ -79,12 +79,12 @@ bisonwProcess.stdout.on("data", async (data) => {
   console.log(`${data}`);
 });
 
-bisonwProcess.on("exit", (code, signal) => {
+bosswProcess.on("exit", (code, signal) => {
   console.log(`Bison Wallet process exited with code ${code}, signal ${signal}`);
   app.exit(code || 0);
 });
 
-bisonwProcess.stderr.on("data", (data) => {
+bosswProcess.stderr.on("data", (data) => {
   console.error(data.toString());
 });
 
@@ -118,10 +118,10 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (e) => {
-  if (bisonwProcess && !isShuttingDown) {
+  if (bosswProcess && !isShuttingDown) {
     e.preventDefault();
     isShuttingDown = true;
-    bisonwProcess.kill("SIGINT");
+    bosswProcess.kill("SIGINT");
   }
 });
 
@@ -144,10 +144,10 @@ function createWindow() {
 }
 
 function setTrayMenu() {
-  const bisonwIcon = path.resolve(
-    path.join(getExtraFilesPath(), "./bisonw-16.png")
+  const bosswIcon = path.resolve(
+    path.join(getExtraFilesPath(), "./bossw-16.png")
   );
-  const icon = nativeImage.createFromPath(bisonwIcon);
+  const icon = nativeImage.createFromPath(bosswIcon);
   tray = new Tray(icon);
   const trayTemplate = Menu.buildFromTemplate([
     {

@@ -7,7 +7,7 @@ VER=$(git describe --tags --abbrev=0 --always | sed -e 's/^v//')
 META= # "release"
 REV="0"
 
-APP="bisonw"
+APP="bossw"
 ARCH="amd64"
 
 # The build directory will be deleted at the beginning of every build. The

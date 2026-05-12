@@ -1,17 +1,17 @@
-# Dockerfile for cross-compiling bisonw-desktop.exe for Windows from Linux.
+# Dockerfile for cross-compiling bossw-desktop.exe for Windows from Linux.
 #
 # Prerequisites:
 #   The site bundle must be built before running the docker build:
 #     cd wallet/webserver/site && npm clean-install && npm run build
 #
 # Build (from the repo root):
-#   docker build -t bisonw-desktop-windows -f wallet/cmd/bisonw-desktop/windows/Dockerfile .
+#   docker build -t bossw-desktop-windows -f wallet/cmd/bossw-desktop/windows/Dockerfile .
 #
 # Build with XMR support:
-#   docker build -t bisonw-desktop-windows --build-arg XMR=1 -f wallet/cmd/bisonw-desktop/windows/Dockerfile .
+#   docker build -t bossw-desktop-windows --build-arg XMR=1 -f wallet/cmd/bossw-desktop/windows/Dockerfile .
 #
 # Extract the exe and DLLs:
-#   mkdir -p build && docker run --rm bisonw-desktop-windows tar -cf - -C /out . | tar -xf - -C ./build
+#   mkdir -p build && docker run --rm bossw-desktop-windows tar -cf - -C /out . | tar -xf - -C ./build
 
 FROM golang:1.24-bookworm
 
@@ -28,7 +28,7 @@ ARG XMR=0
 ARG WEBVIEW2_VERSION=1.0.3856.49
 
 COPY . /src
-WORKDIR /src/wallet/cmd/bisonw-desktop
+WORKDIR /src/wallet/cmd/bossw-desktop
 
 # Fetch the WebView2 NuGet package for the runtime DLL (WebView2Loader.dll).
 RUN mkdir -p /tmp/webview2 && \
@@ -62,9 +62,9 @@ ENV CXX=x86_64-w64-mingw32-g++
 ENV CGO_CXXFLAGS="-I/tmp/winsdk"
 
 RUN if [ "$XMR" = "1" ]; then \
-        go build -v -tags xmr -ldflags="-H windowsgui" -o /out/bisonw-desktop.exe; \
+        go build -v -tags xmr -ldflags="-H windowsgui" -o /out/bossw-desktop.exe; \
     else \
-        go build -v -ldflags="-H windowsgui" -o /out/bisonw-desktop.exe; \
+        go build -v -ldflags="-H windowsgui" -o /out/bossw-desktop.exe; \
     fi
 
 # Bundle runtime DLLs that are not present on a stock Windows install.

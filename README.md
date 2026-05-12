@@ -23,7 +23,7 @@ gated access is out of scope on its own merits, regardless of convenience.
 
 ### Wallet binary
 ```bash
-cd wallet/cmd/bisonw && go build -o bisonw
+cd wallet/cmd/bossw && go build -o bossw
 ```
 
 ### Desktop wallet

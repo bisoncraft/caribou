@@ -48,7 +48,7 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-echo Building bisonw-desktop with CGO configured...
+echo Building bossw-desktop with CGO configured...
 set CGO_CXXFLAGS="-I%libDir%\build\native\include"
 set CGO_ENABLED=1
 if defined BUILD_TAGS (
@@ -66,7 +66,7 @@ if defined XMR_ENABLED (
     copy /Y ..\..\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll %outputDir%
 )
 
-echo The WebView2Loader.dll file should be included with bisonw-desktop.exe
+echo The WebView2Loader.dll file should be included with bossw-desktop.exe
 exit /b 0
 
 :ERROR

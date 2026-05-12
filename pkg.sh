@@ -28,21 +28,21 @@ build_targets (){
     ARCH=${TARGET##*/}
     echo "Building for ${OS}-${ARCH}"
 
-    mkdir -p "bin/bisonw-${OS}-${ARCH}-v${VER}"
+    mkdir -p "bin/bossw-${OS}-${ARCH}-v${VER}"
 
-    pushd wallet/cmd/bisonw
-    GOOS=${OS} GOARCH=${ARCH} go build -trimpath ${TAGS_BISONW:+-tags ${TAGS_BISONW}} -o "../../../bin/bisonw-${OS}-${ARCH}-v${VER}/${BISONW_EXE}" -ldflags "${LDFLAGS_BISONW:-${LDFLAGS_BASE}}"
+    pushd wallet/cmd/bossw
+    GOOS=${OS} GOARCH=${ARCH} go build -trimpath ${TAGS_BOSSW:+-tags ${TAGS_BOSSW}} -o "../../../bin/bossw-${OS}-${ARCH}-v${VER}/${BOSSW_EXE}" -ldflags "${LDFLAGS_BOSSW:-${LDFLAGS_BASE}}"
     popd
 
     pushd wallet/cmd/bwctl
-    GOOS=${OS} GOARCH=${ARCH} go build -trimpath -o "../../../bin/bisonw-${OS}-${ARCH}-v${VER}" -ldflags "${LDFLAGS_BASE}"
+    GOOS=${OS} GOARCH=${ARCH} go build -trimpath -o "../../../bin/bossw-${OS}-${ARCH}-v${VER}" -ldflags "${LDFLAGS_BASE}"
     popd
 
     pushd bin
     if [[ "$OS" == "windows" ]]; then
-      zip -9 -r -q "bisonw-${OS}-${ARCH}-v${VER}.zip" "bisonw-${OS}-${ARCH}-v${VER}"
+      zip -9 -r -q "bossw-${OS}-${ARCH}-v${VER}.zip" "bossw-${OS}-${ARCH}-v${VER}"
     else
-      tar -I 'gzip -9' --owner=0 --group=0 -cf "bisonw-${OS}-${ARCH}-v${VER}.tar.gz" "bisonw-${OS}-${ARCH}-v${VER}"
+      tar -I 'gzip -9' --owner=0 --group=0 -cf "bossw-${OS}-${ARCH}-v${VER}.tar.gz" "bossw-${OS}-${ARCH}-v${VER}"
     fi
     popd
   done
@@ -54,9 +54,9 @@ build_targets
 
 # Only Windows gets the systray build
 TARGETS="windows/amd64"
-TAGS_BISONW="systray"
-BISONW_EXE="bisonw.exe"
-LDFLAGS_BISONW="${LDFLAGS_BASE} -H=windowsgui"
+TAGS_BOSSW="systray"
+BOSSW_EXE="bossw.exe"
+LDFLAGS_BOSSW="${LDFLAGS_BASE} -H=windowsgui"
 build_targets
 
 echo "Files embedded in the Go webserver package:"
@@ -64,5 +64,5 @@ go list -f '{{ .EmbedFiles }}' github.com/bisoncraft/bosswallet/wallet/webserver
 # NOTE: before embedding, we needed to grab: dist, src/font, src/html, src/img.
 
 pushd bin
-sha256sum *.gz *.zip *.deb *.msi *.dmg > bisonw-v${VER}-manifest.txt
+sha256sum *.gz *.zip *.deb *.msi *.dmg > bossw-v${VER}-manifest.txt
 popd

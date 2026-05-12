@@ -46,7 +46,7 @@ BIN_BUILDPATH="${BIN_BUILDDIR}/${BIN_FILENAME}"
 # https://specifications.freedesktop.org/desktop-entry-spec/latest/
 DOT_DESKTOP_TARGETDIR="/usr/share/applications"
 DOT_DESKTOP_BUILDDIR="${DEB_DIR}${DOT_DESKTOP_TARGETDIR}"
-DOT_DESKTOP_FILENAME="bisonw.desktop"
+DOT_DESKTOP_FILENAME="bossw.desktop"
 DOT_DESKTOP_BUILDPATH="${DOT_DESKTOP_BUILDDIR}/${DOT_DESKTOP_FILENAME}"
 
 # Prepare the directory structure.
@@ -61,14 +61,14 @@ npm clean-install
 npm run build
 cd $CWD
 
-# Build bisonw
+# Build bossw
 LDFLAGS="-s -w -X main.Version=${VER}${META:++${META}}"
 GOOS=linux GOARCH=${ARCH} go build ${TAGS:+-tags ${TAGS}} -o "${BIN_BUILDPATH}" -ldflags "$LDFLAGS"
 chmod 755 "${BIN_BUILDPATH}"
 
 # Bundle XMR shared library if building with XMR support.
 if [[ " ${TAGS} " == *" xmr "* || "${TAGS}" == "xmr" ]]; then
-  XMR_LIB_DIR="${DEB_DIR}/usr/lib/bisonw"
+  XMR_LIB_DIR="${DEB_DIR}/usr/lib/bossw"
   mkdir -p "${XMR_LIB_DIR}"
   cp "../../asset/xmr/lib/linux-${ARCH}/libwallet2_api_c.so" "${XMR_LIB_DIR}/"
 fi
@@ -76,7 +76,7 @@ fi
 # Full control file specification -
 # https://www.debian.org/doc/debian-policy/ch-controlfields.html
 cat > "${CONTROL_DIR}/control" <<EOF
-Package: bisonw
+Package: bossw
 Version: ${VER}
 Architecture: ${ARCH}
 Maintainer: Decred developers <briantstafford@gmail.com>
@@ -89,8 +89,8 @@ EOF
 # PNG and SVG will work. If it's a bitmap, should probably be >= 128 x 128 px.
 ICON_TARGETDIR="/usr/share/icons/hicolor"
 ICON_BUILDDIR="${DEB_DIR}${ICON_TARGETDIR}"
-install -Dm644 -t "${ICON_BUILDDIR}/scalable/apps" "${SRC_DIR}/bisonw.svg"
-install -Dm644 -t "${ICON_BUILDDIR}/128x128/apps" "${SRC_DIR}/bisonw.png"
+install -Dm644 -t "${ICON_BUILDDIR}/scalable/apps" "${SRC_DIR}/bossw.svg"
+install -Dm644 -t "${ICON_BUILDDIR}/128x128/apps" "${SRC_DIR}/bossw.png"
 
 # AppStream metadata
 # https://wiki.debian.org/AppStream

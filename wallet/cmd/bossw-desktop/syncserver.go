@@ -3,14 +3,14 @@
 
 /*
 The sync server is a tiny HTTP server that handles synchronization of multiple
-instances of bisonw-desktop. Any bisonw-desktop instance that manages to get a
+instances of bossw-desktop. Any bossw-desktop instance that manages to get a
 running webserver will create a sync server and publish the address at specific
-file location. On startup, before getting too far, bisonw-desktop looks for a
+file location. On startup, before getting too far, bossw-desktop looks for a
 file, reads the address, and attempts to make contact. If contact is made, the
-requesting bisonw-desktop will exit without error. The receiving bisonw-desktop
+requesting bossw-desktop will exit without error. The receiving bossw-desktop
 will reopen the window if it is closed.
 
-The sync server also enables killing a bisonw-desktop process that is running
+The sync server also enables killing a bossw-desktop process that is running
 in the background because of active swaps.
 */
 
@@ -83,10 +83,10 @@ func sendKillSignal(syncDir string) {
 	}
 }
 
-// synchronize attempts to determine the state of any other bisonw-desktop
+// synchronize attempts to determine the state of any other bossw-desktop
 // instances that are running. If none are found, startServer will be true.
 // If another instance is found, close will be true, and this instance of
-// bisonw-desktop should exit immediately.
+// bossw-desktop should exit immediately.
 func synchronize(syncDir string) (startServer bool, err error) {
 	addr, _, err := getSyncAddress(syncDir)
 	if err != nil {

@@ -35,7 +35,7 @@ docker run --rm monero_c_builder cat /monero_c/release/monero/aarch64-apple-darw
 
 ## Runtime Requirements
 
-After building bisonw with XMR support, the library must be available at runtime:
+After building bossw with XMR support, the library must be available at runtime:
 
 **Option 1: Copy library next to executable (recommended for development)**
 ```bash
@@ -54,10 +54,10 @@ copy lib\windows-amd64\libwallet2_api_c.dll .\
 
 **Option 2: Install to application library directory (for system packaging)**
 ```bash
-# Linux - use /usr/lib/bisonw to avoid conflicts with other apps using monero_c
-sudo mkdir -p /usr/lib/bisonw
-sudo cp lib/linux-amd64/libwallet2_api_c.so /usr/lib/bisonw/
+# Linux - use /usr/lib/bossw to avoid conflicts with other apps using monero_c
+sudo mkdir -p /usr/lib/bossw
+sudo cp lib/linux-amd64/libwallet2_api_c.so /usr/lib/bossw/
 ```
 
 The binary's rpath is configured to search both the executable's directory and
-`/usr/lib/bisonw`, so either location works without setting `LD_LIBRARY_PATH`.
+`/usr/lib/bossw`, so either location works without setting `LD_LIBRARY_PATH`.

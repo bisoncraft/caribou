@@ -11,7 +11,7 @@ import (
 	webview "github.com/bisoncraft/webview_go"
 )
 
-//go:embed src/bisonw.png
+//go:embed src/bossw.png
 var Icon []byte
 
 //go:embed src/favicon-32.png

@@ -1,4 +1,4 @@
-module github.com/bisoncraft/bosswallet/wallet/cmd/bisonw-desktop
+module github.com/bisoncraft/bosswallet/wallet/cmd/bossw-desktop
 
 go 1.24.0
 

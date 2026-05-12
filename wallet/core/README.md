@@ -14,7 +14,7 @@ Alice reviews the tx and if acceptable, feeds it through her tool to sign the ot
 
 ### With RPC Server
 
-The rpc server must be enabled when starting bisonw.
+The rpc server must be enabled when starting bossw.
 
 The file at /dcrdex/wallet/core/multisigexample.csv should be copied and the data filled in according to comments.
 

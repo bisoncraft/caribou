@@ -86,9 +86,9 @@ func mainCore() error {
 
 	// A single process cannot run multiple webview windows, so we run webview
 	// as a subprocess. We could create a simpler webview binary to call that
-	// would be substantially smaller than the bisonw binary, but when done that
+	// would be substantially smaller than the bossw binary, but when done that
 	// way, the opened window does not have the icon that the system associates
-	// with bisonw and taskbar icons won't be stacked. Instead, we'll create a
+	// with bossw and taskbar icons won't be stacked. Instead, we'll create a
 	// short path here and execute ourself with the --webview flag.
 	if cfg.Webview != "" {
 		runWebview(cfg.Webview)
@@ -178,7 +178,7 @@ func mainCore() error {
 	<-clientCore.Ready()
 
 	defer func() {
-		log.Info("Exiting bisonw main.")
+		log.Info("Exiting bossw main.")
 		cancel()  // no-op with clean rpc/web server setup
 		wg.Wait() // no-op with clean setup and shutdown
 	}()

@@ -12,10 +12,10 @@ Before you begin, ensure you have the following installed on your system:
 
 ## Steps to Build Bison Wallet
 
-1. Clone the Repository and ensure you're in the `bisonw-desktop/electron` directory:
+1. Clone the Repository and ensure you're in the `bossw-desktop/electron` directory:
 
    ```bash
-   cd bisonw-desktop/electron
+   cd bossw-desktop/electron
    ```
 
 2. Run `npm ci` to set up the environment. The `./prepare.sh` script is auto executed by `npm ci` after `npm ci` is done.
@@ -37,4 +37,4 @@ Before you begin, ensure you have the following installed on your system:
    ./pkg.sh
    ```
 
-   After the build process completes, you can find the compiled application in the `bisonw-desktop/installers` directory.
+   After the build process completes, you can find the compiled application in the `bossw-desktop/installers` directory.

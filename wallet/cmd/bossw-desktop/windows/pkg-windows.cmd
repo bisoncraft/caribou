@@ -1,4 +1,4 @@
-:: This script builds the bisonw-desktop MSI installer.
+:: This script builds the bossw-desktop MSI installer.
 
 @echo off
 

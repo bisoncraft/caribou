@@ -11,7 +11,7 @@ package cxmr
 //
 // At runtime, the library is searched for in the following order:
 //  1. Same directory as the executable ($ORIGIN)
-//  2. /usr/lib/bisonw/
+//  2. /usr/lib/bossw/
 //
 // For development, copy the library next to the executable:
 //
@@ -20,5 +20,5 @@ package cxmr
 //
 // For system packaging, install to the application library directory:
 //
-//	sudo mkdir -p /usr/lib/bisonw
-//	sudo cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so /usr/lib/bisonw/
+//	sudo mkdir -p /usr/lib/bossw
+//	sudo cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so /usr/lib/bossw/

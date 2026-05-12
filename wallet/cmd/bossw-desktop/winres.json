@@ -1,16 +1,16 @@
 {
   "RT_GROUP_ICON": {
     "#32512": {
-      "0000": "./src/bisonw-256.png"
+      "0000": "./src/bossw-256.png"
     },
     "#1": {
-      "0000": "./src/bisonw-256.png"
+      "0000": "./src/bossw-256.png"
     },
     "#2": {
-      "0000": "./src/bisonw-dark-256.png"
+      "0000": "./src/bossw-dark-256.png"
     },
     "#3": {
-      "0000": "./src/bisonw-light-256.png"
+      "0000": "./src/bossw-light-256.png"
     }
   },
   "RT_VERSION": {
@@ -26,10 +26,10 @@
             "CompanyName": "Decred",
             "FileDescription": "Bison Wallet (WebView version)",
             "FileVersion": "1.1.0.0-rc2",
-            "InternalName": "bisonw",
+            "InternalName": "bossw",
             "LegalCopyright": "© The Decred Developers. Blue Oak Model License 1.0.0",
             "LegalTrademarks": "",
-            "OriginalFilename": "bisonw-desktop.exe",
+            "OriginalFilename": "bossw-desktop.exe",
             "PrivateBuild": "",
             "ProductName": "Bison Wallet",
             "ProductVersion": "1.1.0.0-rc2",

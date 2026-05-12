@@ -23,7 +23,7 @@ import (
 )
 
 // appName defines the application name.
-const appName = "bisonw"
+const appName = "bossw"
 
 var (
 	appCtx, cancel = context.WithCancel(context.Background())
@@ -59,7 +59,7 @@ func runCore(cfg *app.Config) error {
 		log.Infof("Logging with UTC time stamps. Current local time is %v",
 			time.Now().Local().Format("15:04:05 MST"))
 	}
-	log.Infof("bisonw starting for network: %s", cfg.Net)
+	log.Infof("bossw starting for network: %s", cfg.Net)
 	log.Infof("Swap locktimes config: maker %s, taker %s",
 		util.LockTimeMaker(cfg.Net), util.LockTimeTaker(cfg.Net))
 
@@ -100,7 +100,7 @@ func runCore(cfg *app.Config) error {
 	<-clientCore.Ready()
 
 	defer func() {
-		log.Info("Exiting bisonw main.")
+		log.Info("Exiting bossw main.")
 		cancel()  // no-op with clean rpc/web server setup
 		wg.Wait() // no-op with clean setup and shutdown
 	}()
