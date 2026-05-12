@@ -5,28 +5,17 @@ import {
   PageData,
   UnitInfo,
   TotalUSDBalance,
+  PortfolioTotals,
   FormData,
   CoreNote,
   LogMessage,
-  OrderNote,
-  InFlightOrder,
-  Market,
-  Order,
   BalanceNote,
-  BondNote,
-  MatchNote,
-  ConnEventNote,
-  SpotPriceNote,
   WalletNote,
   TransactionNote,
-  ReputationNote,
   WalletConfigNote,
   WalletSyncNote,
-  Match,
   RateNote,
-  TipChangeNote,
-  BookUpdate,
-  MarketMakingStatus
+  TipChangeNote
 } from './registry'
 import { TickerAsset, normalizedTicker } from './assets'
 import Doc from './doc'
@@ -39,7 +28,6 @@ export class Application {
   commitHash: string
   langs: string[]
   lang: string
-  mmStatus: MarketMakingStatus
   inited: boolean
   authed: boolean
   pageLoaded: (d: PageData) => void
@@ -74,7 +62,6 @@ export class Application {
     }
     // Enable logging from anywhere.
     window.log = (loggerID, ...a) => { this.log(loggerID, ...a) }
-    // window.mmStatus = () => this.mmStatus
 
     // Recorders can record log messages, and then save them to file on request.
     const recorderKeys = State.fetchLocal(State.recordersLK) || []
@@ -113,16 +100,6 @@ export class Application {
 
     ws.connect(getSocketURI(), () => window.location.reload())
     ws.registerRoute('notify', (note: CoreNote) => this.notify(note))
-    // Dealing with some baggage from the old codebase.
-    ws.registerRoute('book', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('book_order', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('unbook_order', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('update_remaining', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('epoch_order', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('epoch_order', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('candles', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('candle_update', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
-    ws.registerRoute('epoch_match_summary', (d: BookUpdate) => { this.notify(convertBookNote(d)) })
 
     // Handle back navigation from the browser.
     Doc.bind(window, 'popstate', (e: PopStateEvent) => {
@@ -169,7 +146,6 @@ export class Application {
     }
     this.lang = r.lang
     this.langs = r.langs
-    this.mmStatus = r.mmStatus
     if (needsTickers) this.prepareTickerAssets()
     return r
   }
@@ -202,7 +178,7 @@ export class Application {
       const normedTicker = normalizedTicker(a)
       let ta = tickerMap[normedTicker]
       if (ta) {
-        ta.addNetworkAsset(a)
+        ta.addVariant(a)
         continue
       }
       ta = new TickerAsset(a)
@@ -224,9 +200,42 @@ export class Application {
       }
       if (total === 0) return acc
       numContribs++
-      return acc + (total / cFactor * acc)
+      return acc + (total / cFactor) * xcRate
     }, 0)
     return { ok: true, total, numContribs }
+  }
+
+  /*
+   * portfolioTotals returns a breakdown of the portfolio value in USD.
+   * Only assets with a known fiat rate are included in the totals.
+   * ratesComplete is false if any wallet asset is missing a rate.
+   */
+  portfolioTotals (): PortfolioTotals {
+    let available = 0
+    let locked = 0
+    let numWallets = 0
+    let ratesComplete = true
+
+    if (!this.user) return { total: 0, available: 0, locked: 0, numWallets: 0, ratesComplete: false }
+
+    for (const asset of Object.values(this.user.assets)) {
+      const { wallet } = asset
+      if (!wallet) continue
+      numWallets++
+      const fiatRate = this.user.fiatRates[asset.id]
+      if (!fiatRate) {
+        ratesComplete = false
+        continue
+      }
+      const cFactor = asset.unitInfo.conventional.conversionFactor
+      const bal = wallet.balance
+      available += ((bal.available ?? 0) / cFactor) * fiatRate
+      const lockedTotal = (bal.locked ?? 0) + (bal.contractlocked ?? 0) +
+        (bal.bondlocked ?? 0) + (bal.orderlocked ?? 0)
+      locked += (lockedTotal / cFactor) * fiatRate
+    }
+
+    return { total: available + locked, available, locked, numWallets, ratesComplete }
   }
 
   asset (assetID: number) {
@@ -284,7 +293,6 @@ export class Application {
  * LoggerID   Description
  * --------   -----------
  * notes      Notifications of all levels.
- * book       Order book feed.
  * ws.........Websocket connection status changes.
  */
   log (loggerID: string, ...msg: any) {
@@ -315,65 +323,15 @@ export class Application {
         console.log(error.stack)
       }
     }
-    // TODO: Popup notifications
   }
 
   updateUser (note: CoreNote) {
     const { user } = this
     switch (note.type) {
-      case 'order': {
-        const orderNote = note as OrderNote
-        const order = orderNote.order
-        const mkt = user.exchanges[order.host].markets[order.market]
-        const tempID = orderNote.tempID
-
-        // Ensure market's inflight orders list is updated.
-        if (note.topic === 'AsyncOrderSubmitted') {
-          const inFlight = order as InFlightOrder
-          inFlight.tempID = tempID
-          if (!mkt.inflight) mkt.inflight = [inFlight]
-          else mkt.inflight.push(inFlight)
-          break
-        } else if (note.topic === 'AsyncOrderFailure') {
-          mkt.inflight = mkt.inflight.filter(ord => ord.tempID !== tempID)
-          break
-        } else {
-          for (const i in mkt.inflight || []) {
-            if (!(mkt.inflight[i].tempID === tempID)) continue
-            mkt.inflight = mkt.inflight.filter(ord => ord.tempID !== tempID)
-            break
-          }
-        }
-
-        // Updates given order in market's orders list if it finds it.
-        // Returns a bool which indicates if order was found.
-        mkt.orders = mkt.orders || []
-        const updateOrder = (mkt: Market, ord: Order) => {
-          const i = mkt.orders.findIndex((o: Order) => o.id === ord.id)
-          if (i === -1) return false
-          if (note.topic === 'OrderRetired') mkt.orders.splice(i, 1)
-          else mkt.orders[i] = ord
-          return true
-        }
-        // If the notification order already exists we update it.
-        // In case market's orders list is empty or the notification order isn't
-        // part of it we add it manually as this means the order was
-        // just placed.
-        if (!updateOrder(mkt, order)) mkt.orders.push(order)
-        break
-      }
       case 'balance': {
         const n: BalanceNote = note as BalanceNote
         user.assets[n.assetID].wallet.balance = n.balance
         Object.values(this.balanceUpdaters).forEach(u => u())
-        break
-      }
-      case 'bondpost':
-        this.handleBondNote(note as BondNote)
-        break
-      case 'reputation': {
-        const n = note as ReputationNote
-        user.exchanges[n.host].auth.rep = n.rep
         break
       }
       case 'walletstate':
@@ -383,6 +341,9 @@ export class Application {
         if (!wallet) return
         const asset = user.assets[wallet.assetID]
         asset.wallet = wallet
+        for (const ta of this.tickerList ?? []) {
+          if (ta.variantLookup[wallet.assetID]) ta.updateHasWallets()
+        }
         break
       }
       case 'walletsync': {
@@ -395,38 +356,11 @@ export class Application {
         }
         break
       }
-      case 'match': {
-        const n = note as MatchNote
-        const ord = this.order(n.orderID)
-        if (ord) updateMatch(ord, n.match)
-        break
-      }
-      case 'conn': {
-        const n = note as ConnEventNote
-        const xc = user.exchanges[n.host]
-        if (xc) xc.connectionStatus = n.connectionStatus
-        break
-      }
-      case 'spots': {
-        const n = note as SpotPriceNote
-        const xc = user.exchanges[n.host]
-        // Spots can come before the user is fetched after login and before/while the
-        // markets page reload when it receives a dex conn note.
-        if (!xc || !xc.markets) break
-        for (const [mktName, spot] of Object.entries(n.spots)) xc.markets[mktName].spot = spot
-        break
-      }
       case 'fiatrateupdate': {
         this.user.fiatRates = (note as RateNote).fiatRates
         Object.values(this.fiatRateUpdaters).forEach(u => u())
         break
       }
-      // TODO: implement required actions
-      // case 'actionrequired': {
-      //   const n = note as CoreActionRequiredNote
-      //   this.addAction(n.payload)
-      //   break
-      // }
       case 'walletnote': {
         const n = note as WalletNote
         switch (n.payload.route) {
@@ -436,15 +370,11 @@ export class Application {
             break
           }
           case 'actionRequired': {
-            // const req = n.payload as ActionRequiredNote
             // TODO: implement required actions
-            // this.addAction(req)
-            /// this.blinkAction()
             break
           }
           case 'actionResolved': {
             // TODO: implement
-            // this.resolveAction(n.payload as ActionResolvedNote)
             break
           }
           case 'tipChange': {
@@ -455,92 +385,7 @@ export class Application {
         }
         break
       }
-      // TODO: implement market maker stuff
-      // case 'runstats': {
-      //     this.log('mm', { runstats: note })
-      //     const n = note as RunStatsNote
-      //     const bot = this.botStatus(n.host, n.baseID, n.quoteID)
-      //     if (bot) {
-      //       bot.runStats = n.stats
-      //       bot.running = Boolean(n.stats)
-      //       if (!n.stats) {
-      //         bot.latestEpoch = undefined
-      //         bot.cexProblems = undefined
-      //       }
-      //     }
-      //     break
-      //   }
-      //   case 'cexnote': {
-      //     const n = note as CEXNotification
-      //     switch (n.topic) {
-      //       case 'BalanceUpdate': {
-      //         const u = n.note as CEXBalanceUpdate
-      //         this.mmStatus.cexes[n.cexName].balances[u.assetID] = u.balance
-      //       }
-      //     }
-      //     break
-      //   }
-      //   case 'epochreport': {
-      //     const n = note as EpochReportNote
-      //     const bot = this.botStatus(n.host, n.baseID, n.quoteID)
-      //     if (bot) bot.latestEpoch = n.report
-      //     break
-      //   }
-      //   case 'cexproblems': {
-      //     const n = note as CEXProblemsNote
-      //     const bot = this.botStatus(n.host, n.baseID, n.quoteID)
-      //     if (bot) bot.cexProblems = n.problems
-      //     break
-      //   }
     }
-  }
-
-  /*
-   * updateBondConfs updates the information for a pending bond.
-   */
-  updateBondConfs (dexAddr: string, coinID: string, confs: number) {
-    const dex = this.user.exchanges[dexAddr]
-    for (const bond of dex.auth.pendingBonds) if (bond.coinID === coinID) bond.confs = confs
-  }
-
-  updateTier (host: string, bondedTier: number) {
-    this.user.exchanges[host].auth.rep.bondedTier = bondedTier
-  }
-
-  /*
-   * handleBondNote is the handler for the 'bondpost'-type notification, which
-   * is used to update the dex tier and registration status.
-   */
-  handleBondNote (note: BondNote) {
-    if (note.auth) this.user.exchanges[note.dex].auth = note.auth
-    switch (note.topic) {
-      case 'RegUpdate':
-        if (note.coinID !== null) { // should never be null for RegUpdate
-          this.updateBondConfs(note.dex, note.coinID, note.confirmations)
-        }
-        break
-      case 'BondConfirmed':
-        if (note.tier !== null) { // should never be null for BondConfirmed
-          this.updateTier(note.dex, note.tier)
-        }
-        break
-      default:
-        break
-    }
-  }
-
-  /* order attempts to locate an order by order ID. */
-  order (oid: string): Order | null {
-    for (const xc of Object.values(this.user.exchanges)) {
-      if (!xc || !xc.markets) continue
-      for (const market of Object.values(xc.markets)) {
-        if (!market.orders) continue
-        for (const ord of market.orders) {
-          if (ord.id === oid) return ord
-        }
-      }
-    }
-    return null
   }
 
   handleTransactionNote (assetID: number, note: TransactionNote) {
@@ -579,38 +424,6 @@ function nowString (): string {
 function getSocketURI (): string {
   const protocol = (window.location.protocol === 'https:') ? 'wss' : 'ws'
   return `${protocol}://${window.location.host}/ws`
-}
-
-/* updateMatch updates the match in or adds the match to the order. */
-function updateMatch (order: Order, match: Match) {
-  for (const i in order.matches) {
-    const m = order.matches[i]
-    if (m.matchID === match.matchID) {
-      order.matches[i] = match
-      return
-    }
-  }
-  order.matches = order.matches || []
-  order.matches.push(match)
-}
-
-function convertBookNote (note: BookUpdate): CoreNote {
-  return {
-    type: 'bookupdate',
-    topic: note.action,
-    subject: '',
-    details: '',
-    severity: 0,
-    stamp: 0,
-    acked: false,
-    id: '',
-    data: {
-      host: note.host,
-      marketID: note.marketID,
-      matchesSummary: note.matchesSummary,
-      payload: note.payload
-    }
-  }
 }
 
 const app = new Application()
