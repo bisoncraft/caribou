@@ -46,7 +46,7 @@ jobs:
             buffer drops clean-pass output (upstream issue), so always post
             via gh.
           # Configure via repository variables:
-          # CLAUDE_CODE_MODEL: claude-haiku-4-5, claude-sonnet-4-6 (default), or claude-opus-4-7
+          # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-7
           # CLAUDE_CODE_EFFORT: quick, standard (default), or thorough
           # --permission-mode bypassPermissions skips the per-tool allowlist
           # prompts. Safe here because the prompt is hardcoded in this file,
@@ -56,6 +56,6 @@ jobs:
           # spends turns being denied on the action's own comment-posting
           # MCP tools and hits --max-turns before posting a review.
           claude_args: |
-            --model ${{ vars.CLAUDE_CODE_MODEL || 'claude-sonnet-4-6' }}
-            --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '8') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '15') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '25') || '15' }}
+            --model ${{ vars.CLAUDE_CODE_MODEL || 'claude-haiku-4-5' }}
+            --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '12') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '25') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '40') || '25' }}
             --permission-mode bypassPermissions
