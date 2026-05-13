@@ -16,7 +16,7 @@ Once the library is built and placed in `lib/<platform>/`, build with:
 - GCC/Clang (C/C++ compiler)
 
 ```bash
-go build -tags xmr ./wallet/cmd/bisonw
+go build -tags xmr ./wallet/cmd/bossw
 ```
 
 ### Runtime Setup
@@ -34,11 +34,11 @@ cp wallet/asset/xmr/lib/linux-arm64/libwallet2_api_c.so ./
 
 # macOS ARM64 (Apple Silicon)
 cp wallet/asset/xmr/lib/darwin-arm64/libwallet2_api_c.dylib ./
-codesign -s - bisonw
+codesign -s - bossw
 
 # macOS x86_64 (Intel)
 cp wallet/asset/xmr/lib/darwin-amd64/libwallet2_api_c.dylib ./
-codesign -s - bisonw
+codesign -s - bossw
 
 # Windows
 copy client\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll .\
@@ -47,13 +47,13 @@ copy client\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll .\
 **Option 2: Install to application library directory (for system packaging)**
 
 ```bash
-# Linux - use /usr/lib/bisonw to avoid conflicts with other apps using monero_c
-sudo mkdir -p /usr/lib/bisonw
-sudo cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so /usr/lib/bisonw/
+# Linux - use /usr/lib/bossw to avoid conflicts with other apps using monero_c
+sudo mkdir -p /usr/lib/bossw
+sudo cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so /usr/lib/bossw/
 ```
 
 The binary's rpath is configured to search both the executable's directory and
-`/usr/lib/bisonw`, so either location works without setting `LD_LIBRARY_PATH`.
+`/usr/lib/bossw`, so either location works without setting `LD_LIBRARY_PATH`.
 
 ## Configuration
 
@@ -281,7 +281,7 @@ set PATH=C:\path\to\library;%PATH%
 **"Killed: 9" on macOS**
 
 macOS requires the binary to be ad-hoc signed after building with a dynamic
-library. Run `codesign -s - bisonw` after building. If the library was
+library. Run `codesign -s - bossw` after building. If the library was
 downloaded rather than built locally, you may also need to remove the quarantine
 attribute: `xattr -d com.apple.quarantine libwallet2_api_c.dylib`.
 

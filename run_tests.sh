@@ -12,7 +12,7 @@ go generate -x ./wallet/appserver/site # no -write
 cd "$dir"
 
 # list of all modules to test
-modules=". /wallet/cmd/bisonw-desktop"
+modules=". /wallet/cmd/bossw-desktop"
 
 # For each module, run go mod tidy, build and run test.
 for m in $modules
@@ -44,7 +44,7 @@ go run ./wallet/core/localetest/main.go
 # -race in go tests above requires cgo, but disable it for the compile tests below
 export CGO_ENABLED=0
 go build ./...
-go build -tags systray -o /dev/null ./wallet/cmd/bisonw
+go build -tags systray -o /dev/null ./wallet/cmd/bossw
 
 go test -c -o /dev/null -tags live ./wallet/appserver
 go test -c -o /dev/null -tags harness ./wallet/asset/dcr

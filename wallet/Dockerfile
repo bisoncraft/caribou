@@ -1,12 +1,12 @@
 #
 # Build the docker image
-# $ docker build -t user/bisonw -f wallet/Dockerfile .
+# $ docker build -t user/bossw -f wallet/Dockerfile .
 #
 # Create docker volume to store client data
-# $ docker volume create --name=bisonw_data
+# $ docker volume create --name=bossw_data
 #
 # Run the docker image, mapping web access port.
-# $ docker run -d --rm -p 127.0.0.1:5758:5758 -v bisonw_data:/dex/.dexc user/bisonw
+# $ docker run -d --rm -p 127.0.0.1:5758:5758 -v bossw_data:/dex/.dexc user/bossw
 #
 
 # frontend build
@@ -25,7 +25,7 @@ WORKDIR /root/dex/wallet/appserver/newui/
 RUN npm clean-install
 RUN npm run build
 
-# bisonw binary build
+# bossw binary build
 
 # The image below is golang:1.25.3-alpine3.22 (linux/amd64)
 # It's pulled by the digest (immutable id) to avoid supply-chain attacks.
@@ -35,7 +35,7 @@ RUN npm run build
 #    Docker will print the digest of the new image after the pull has finished.
 FROM golang@sha256:aee43c3ccbf24fdffb7295693b6e33b21e01baec1b2a55acc351fde345e9ec34 AS gobuilder
 COPY --from=nodebuilder /root/dex/ /root/dex/
-WORKDIR /root/dex/wallet/cmd/bisonw/
+WORKDIR /root/dex/wallet/cmd/bossw/
 RUN CGO_ENABLED=0 GOOS=linux go build
 WORKDIR /root/dex/wallet/cmd/bwctl/
 RUN CGO_ENABLED=0 GOOS=linux go build
@@ -47,7 +47,7 @@ WORKDIR /dex
 ENV HOME=/dex
 RUN mkdir -p /dex/.dexc && chown 1000 /dex/.dexc
 USER 1000
-COPY --from=gobuilder /root/dex/wallet/cmd/bisonw/bisonw ./
+COPY --from=gobuilder /root/dex/wallet/cmd/bossw/bossw ./
 COPY --from=gobuilder /root/dex/wallet/cmd/bwctl/bwctl ./
 COPY ./wallet/entrypoint.sh ./
 EXPOSE 5758

@@ -269,12 +269,12 @@ func New(cfg *Config) (*AppServer, error) {
 	var siteDir string // empty signals embedded files only
 	if cfg.NoEmbed {
 		// Look for the "site" folder in the executable's path, the working
-		// directory, or relative to [repo root]/client/cmd/bisonw.
-		execPath, err := os.Executable() // e.g. /usr/bin/bisonw
+		// directory, or relative to [repo root]/client/cmd/bossw.
+		execPath, err := os.Executable() // e.g. /usr/bin/bossw
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
 		}
-		execPath, err = filepath.EvalSymlinks(execPath) // e.g. /opt/decred/dex/bisonw
+		execPath, err = filepath.EvalSymlinks(execPath) // e.g. /opt/decred/dex/bossw
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
 		}
@@ -300,8 +300,8 @@ func New(cfg *Config) (*AppServer, error) {
 		if siteDir == "" {
 			return nil, fmt.Errorf("no HTML template files found. "+
 				"Place the 'site' folder in the executable's directory %q or the working directory, "+
-				"or run bisonw from within the wallet/cmd/bisonw source workspace folder, or specify the"+
-				"'sitedir' configuration directive to bisonw.", execPath)
+				"or run bossw from within the wallet/cmd/bossw source workspace folder, or specify the"+
+				"'sitedir' configuration directive to bossw.", execPath)
 		}
 
 		log.Infof("Located \"site\" folder at %v", siteDir)
