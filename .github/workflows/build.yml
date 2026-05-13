@@ -34,8 +34,8 @@ jobs:
 
       - name: Test
         run: |
-          mkdir -p wallet/webserver/site/dist
-          touch -t 2306151245 wallet/webserver/site/dist/placeholder
+          mkdir -p wallet/appserver/newui/dist
+          touch -t 2306151245 wallet/appserver/newui/dist/placeholder
           ./run_tests.sh
   build-js:
     name: Build JS
@@ -50,13 +50,13 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
     - name: npm clean-install
-      working-directory: ./wallet/webserver/site
+      working-directory: ./wallet/appserver/newui
       run: npm ci
     - name: npm run lint
-      working-directory: ./wallet/webserver/site
+      working-directory: ./wallet/appserver/newui
       run: npm run lint
     - name: npm run build
-      working-directory: ./wallet/webserver/site
+      working-directory: ./wallet/appserver/newui
       run: npm run build
 
   lint-docs:
