@@ -27,6 +27,7 @@ import (
 	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr/musig2"
@@ -36,7 +37,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcwallet/wallet"
 )
 
 var (
@@ -2660,16 +2660,8 @@ func testFundingCoins(t *testing.T, segwit bool, walletType string) {
 
 func checkMaxOrder(t *testing.T, wallet asset.AtomicSwapWallet, lots, swapVal, maxFees, estWorstCase, estBestCase uint64) {
 	t.Helper()
-	maxOrder, err := wallet.MaxOrder(&asset.MaxOrderForm{
-		LotSize:       tLotSize,
-		FeeSuggestion: feeSuggestion,
-		AssetVersion:  version,
-		MaxFeeRate:    tBTC.MaxFeeRate,
-	})
-	if err != nil {
-		t.Fatalf("MaxOrder error: %v", err)
-	}
-	checkSwapEstimate(t, maxOrder, lots, swapVal, maxFees, estWorstCase, estBestCase)
+	// MaxOrder is a DEX-layer method removed from the wallet interface.
+	t.Skip("MaxOrder not available in wallet-only build")
 }
 
 func checkSwapEstimate(t *testing.T, est *asset.SwapEstimate, lots, swapVal, maxFees, estWorstCase, estBestCase uint64) {

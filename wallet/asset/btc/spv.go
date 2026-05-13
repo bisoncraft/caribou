@@ -11,20 +11,21 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txauthor"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btclog"
-	"github.com/btcsuite/btcwallet/chain"
-	"github.com/btcsuite/btcwallet/waddrmgr"
-	"github.com/btcsuite/btcwallet/wallet"
-	"github.com/btcsuite/btcwallet/wallet/txauthor"
-	"github.com/btcsuite/btcwallet/walletdb"
-	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/jrick/logrotate/rotator"
-	"github.com/lightninglabs/neutrino"
 )
 
 const (
@@ -34,14 +35,15 @@ const (
 // btcSPVWallet implements BTCWallet for Bitcoin.
 type btcSPVWallet struct {
 	*wallet.Wallet
-	chainParams *chaincfg.Params
-	log         util.Logger
-	dir         string
+	chainParams    *chaincfg.Params
+	netChainParams *netparams.ChainParams
+	log            util.Logger
+	dir            string
 
 	// Below fields are populated in Start.
 	loader      *wallet.Loader
 	chainClient *chain.NeutrinoClient
-	cl          *neutrino.ChainService
+	cl          *spv.ChainService
 	neutrinoDB  walletdb.DB
 
 	// rescanStarting is set while reloading the wallet and dropping
@@ -49,6 +51,45 @@ type btcSPVWallet struct {
 	rescanStarting uint32 // atomic
 
 	peerManager *SPVPeerManager
+}
+
+// btcNetParams wraps a *chaincfg.Params in a *netparams.ChainParams suitable
+// for the in-tree utxowallet library. The btcdParams field is set so that
+// netparams.ChainParams.BTCDParams() returns the original *chaincfg.Params.
+func btcNetParams(p *chaincfg.Params) *netparams.ChainParams {
+	np := &netparams.ChainParams{
+		Chain:                    "btc",
+		Name:                     p.Name,
+		Net:                      p.Net,
+		GenesisBlock:             p.GenesisBlock,
+		GenesisHash:              p.GenesisHash,
+		TargetTimespan:           p.TargetTimespan,
+		TargetTimePerBlock:       p.TargetTimePerBlock,
+		RetargetAdjustmentFactor: p.RetargetAdjustmentFactor,
+		ReduceMinDifficulty:      p.ReduceMinDifficulty,
+		MinDiffReductionTime:     p.MinDiffReductionTime,
+		Checkpoints:              p.Checkpoints,
+		PowLimit:                 p.PowLimit,
+		PowLimitBits:             p.PowLimitBits,
+		PoWNoRetargeting:         p.PoWNoRetargeting,
+		DNSSeeds:                 p.DNSSeeds,
+		DefaultPort:              p.DefaultPort,
+		Bech32HRPSegwit:          p.Bech32HRPSegwit,
+		PubKeyHashAddrID:         p.PubKeyHashAddrID,
+		ScriptHashAddrID:         p.ScriptHashAddrID,
+		PrivateKeyID:             p.PrivateKeyID,
+		WitnessPubKeyHashAddrID:  p.WitnessPubKeyHashAddrID,
+		WitnessScriptHashAddrID:  p.WitnessScriptHashAddrID,
+		HDPrivateKeyID:           p.HDPrivateKeyID,
+		HDPublicKeyID:            p.HDPublicKeyID,
+		HDCoinType:               p.HDCoinType,
+		BIP0034Height:            p.BIP0034Height,
+		BIP0065Height:            p.BIP0065Height,
+		BIP0066Height:            p.BIP0066Height,
+		CoinbaseMaturity:         p.CoinbaseMaturity,
+		MaxSatoshi:               btcutil.MaxSatoshi,
+	}
+	return np
 }
 
 var _ BTCWallet = (*btcSPVWallet)(nil)
@@ -59,7 +100,7 @@ func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir str
 		return fmt.Errorf("error initializing btcwallet+neutrino logging: %w", err)
 	}
 
-	loader := wallet.NewLoader(net, walletDir, true, dbTimeout, 250)
+	loader := wallet.NewLoader(btcNetParams(net), walletDir, true, dbTimeout, 250)
 
 	pubPass := []byte(wallet.InsecurePubPassphrase)
 
@@ -107,9 +148,10 @@ func openSPVWallet(dir string, cfg *WalletConfig,
 	chainParams *chaincfg.Params, log util.Logger) BTCWallet {
 
 	w := &btcSPVWallet{
-		dir:         dir,
-		chainParams: chainParams,
-		log:         log,
+		dir:            dir,
+		chainParams:    chainParams,
+		netChainParams: btcNetParams(chainParams),
+		log:            log,
 	}
 	return w
 }
@@ -136,7 +178,7 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 		return nil, fmt.Errorf("error initializing btcwallet+neutrino logging: %v", err)
 	}
 	// timeout and recoverWindow arguments borrowed from btcwallet directly.
-	w.loader = wallet.NewLoader(w.chainParams, w.dir, true, dbTimeout, 250)
+	w.loader = wallet.NewLoader(w.netChainParams, w.dir, true, dbTimeout, 250)
 
 	exists, err := w.loader.WalletExists()
 	if err != nil {
@@ -147,7 +189,7 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 	}
 
 	w.log.Debug("Starting native BTC wallet...")
-	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase), false)
+	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase))
 	if err != nil {
 		return nil, fmt.Errorf("couldn't load wallet: %w", err)
 	}
@@ -166,10 +208,11 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 	// TODO: Route SPV peer connections through Tor when TorProxy is
 	// configured. Requires upstream library support.
 	w.log.Debug("Starting neutrino chain service...")
-	w.cl, err = neutrino.NewChainService(neutrino.Config{
+	w.cl, err = spv.NewChainService(spv.Config{
 		DataDir:       w.dir,
 		Database:      w.neutrinoDB,
-		ChainParams:   *w.chainParams,
+		Chain:         "btc",
+		ChainParams:   w.netChainParams,
 		PersistToDisk: true, // keep cfilter headers on disk for efficient rescanning
 		// AddPeers:      addPeers,
 		// ConnectPeers:  connectPeers,
@@ -194,7 +237,7 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 	peerManager := NewSPVPeerManager(&btcChainService{w.cl}, defaultPeers, w.dir, w.log, w.chainParams.DefaultPort)
 	w.peerManager = peerManager
 
-	w.chainClient = chain.NewNeutrinoClient(w.chainParams, w.cl)
+	w.chainClient = chain.NewNeutrinoClient(w.netChainParams, w.cl)
 	w.Wallet = btcw
 
 	if err = w.chainClient.Start(); err != nil { // lazily starts connmgr
@@ -202,7 +245,7 @@ func (w *btcSPVWallet) Start() (SPVService, error) {
 	}
 
 	w.log.Info("Synchronizing wallet with network...")
-	btcw.SynchronizeRPC(w.chainClient)
+	btcw.Synchronize(w.chainClient)
 
 	errCloser.Success()
 
@@ -266,7 +309,7 @@ func (w *btcSPVWallet) RescanAsync() error {
 	}
 
 	w.log.Info("Synchronizing wallet with network...")
-	w.Wallet.SynchronizeRPC(w.chainClient)
+	w.Wallet.Synchronize(w.chainClient)
 	return nil
 }
 
@@ -487,7 +530,7 @@ func logNeutrino(walletDir string) error {
 		return l
 	}
 
-	neutrino.UseLogger(logger("NTRNO", btclog.LevelDebug))
+	spv.UseLogger(logger("NTRNO", btclog.LevelDebug))
 	wallet.UseLogger(logger("BTCW", btclog.LevelInfo))
 	wtxmgr.UseLogger(logger("TXMGR", btclog.LevelInfo))
 	chain.UseLogger(logger("CHAIN", btclog.LevelInfo))

@@ -16,6 +16,14 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -24,16 +32,8 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/peer"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/btcsuite/btcwallet/chain"
-	"github.com/btcsuite/btcwallet/waddrmgr"
-	"github.com/btcsuite/btcwallet/wallet"
-	"github.com/btcsuite/btcwallet/walletdb"
-	"github.com/btcsuite/btcwallet/wtxmgr"
-	"github.com/lightninglabs/neutrino"
-	"github.com/lightninglabs/neutrino/headerfs"
 )
 
 type tBtcWallet struct {
@@ -155,6 +155,10 @@ func (c *tBtcWallet) NewAddress(account uint32, scope waddrmgr.KeyScope) (btcuti
 	return btcutil.DecodeAddress(c.newAddress, &chaincfg.MainNetParams)
 }
 
+func (c *tBtcWallet) ScopeForPurpose(purpose uint32) waddrmgr.KeyScope {
+	return waddrmgr.KeyScope{Purpose: purpose, Coin: 0}
+}
+
 func (c *tBtcWallet) SignTransaction(tx *wire.MsgTx, hashType txscript.SigHashType, additionalPrevScriptsadditionalPrevScripts map[wire.OutPoint][]byte,
 	additionalKeysByAddress map[string]*btcutil.WIF, p2shRedeemScriptsByAddress map[string][]byte) ([]wallet.SignatureError, error) {
 
@@ -229,7 +233,7 @@ func (c *tBtcWallet) ChainSynced() bool {
 	return c.getBlockchainInfo.Blocks >= c.getBlockchainInfo.Headers // -1 ok for chain sync ?
 }
 
-func (c *tBtcWallet) SynchronizeRPC(chainClient chain.Interface) {}
+func (c *tBtcWallet) Synchronize(chainClient chain.Interface) {}
 
 func (c *tBtcWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDetails, error) {
 	if c.getTransactionErr != nil {
@@ -282,7 +286,7 @@ func (c *tBtcWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDetail
 	}
 	return &wtxmgr.TxDetails{
 		TxRecord: wtxmgr.TxRecord{
-			MsgTx:    *tx,
+			Tx:       bisonwire.Tx{MsgTx: *tx, Chain: "btc"},
 			Received: time.Unix(int64(txData.Time), 0),
 		},
 		Block: wtxmgr.BlockMeta{
@@ -411,11 +415,11 @@ func (c *tNeutrinoClient) Peers() []SPVPeer {
 	if c.noPeers {
 		return nil
 	}
-	peer := &neutrino.ServerPeer{Peer: &peer.Peer{}}
+	p := &tSPVPeer{}
 	if c.getBlockchainInfo != nil {
-		peer.UpdateLastBlockHeight(int32(c.getBlockchainInfo.Headers))
+		p.lastHeight = int32(c.getBlockchainInfo.Headers)
 	}
-	return []SPVPeer{peer}
+	return []SPVPeer{p}
 }
 
 func (c *tNeutrinoClient) AddPeer(string) error {
@@ -438,7 +442,7 @@ func (c *tNeutrinoClient) GetBlockHeader(blkHash *chainhash.Hash) (*wire.BlockHe
 	return &block.msgBlock.Header, nil
 }
 
-func (c *tNeutrinoClient) GetCFilter(blockHash chainhash.Hash, filterType wire.FilterType, options ...neutrino.QueryOption) (*gcs.Filter, error) {
+func (c *tNeutrinoClient) GetCFilter(blockHash chainhash.Hash, filterType wire.FilterType, options ...spv.QueryOption) (*gcs.Filter, error) {
 	var key [gcs.KeySize]byte
 	copy(key[:], blockHash.CloneBytes()[:])
 	scripts := c.getCFilterScripts[blockHash]
@@ -446,7 +450,7 @@ func (c *tNeutrinoClient) GetCFilter(blockHash chainhash.Hash, filterType wire.F
 	return gcs.BuildGCSFilter(builder.DefaultP, builder.DefaultM, key, scripts)
 }
 
-func (c *tNeutrinoClient) GetBlock(blockHash chainhash.Hash, options ...neutrino.QueryOption) (*btcutil.Block, error) {
+func (c *tNeutrinoClient) GetBlock(blockHash chainhash.Hash, options ...spv.QueryOption) (*btcutil.Block, error) {
 	blk := c.getBlock(blockHash)
 	if blk == nil {
 		return nil, fmt.Errorf("no (test) block %s", blockHash)
@@ -464,6 +468,10 @@ func (p *tSPVPeer) StartingHeight() int32 {
 
 func (p *tSPVPeer) LastBlock() int32 {
 	return p.lastHeight
+}
+
+func (p *tSPVPeer) Addr() string {
+	return ""
 }
 
 func TestSwapConfirmations(t *testing.T) {
