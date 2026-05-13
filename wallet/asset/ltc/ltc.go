@@ -18,9 +18,8 @@ import (
 	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/dcrlabs/ltcwallet/wallet"
-	ltcchaincfg "github.com/ltcsuite/ltcd/chaincfg"
 )
 
 const (
@@ -129,7 +128,7 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 		return false, err
 	}
 	walletDir := filepath.Join(dataDir, chainParams.Name)
-	loader := wallet.NewLoader(chainParams, walletDir, true, dbTimeout, 250)
+	loader := inWallet.NewLoader(ltcNetParams(chainParams), walletDir, true, dbTimeout, 250)
 	return loader.WalletExists()
 }
 
@@ -250,14 +249,14 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	}
 }
 
-func parseChainParams(net util.Network) (*ltcchaincfg.Params, error) {
+func parseChainParams(net util.Network) (*chaincfg.Params, error) {
 	switch net {
 	case util.Mainnet:
-		return &ltcchaincfg.MainNetParams, nil
+		return dexltc.MainNetParams, nil
 	case util.Testnet:
-		return &ltcchaincfg.TestNet4Params, nil
+		return dexltc.TestNet4Params, nil
 	case util.Regtest:
-		return &ltcchaincfg.RegressionNetParams, nil
+		return dexltc.RegressionNetParams, nil
 	}
 	return nil, fmt.Errorf("unknown network ID %v", net)
 }

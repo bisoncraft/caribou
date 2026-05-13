@@ -22,21 +22,25 @@ gated access is out of scope on its own merits, regardless of convenience.
 ## Building and testing
 
 ### Wallet binary
+
 ```bash
 cd wallet/cmd/bossw && go build -o bossw
 ```
 
 ### Desktop wallet
+
 ```bash
 cd wallet/cmd/bossw-desktop && go build -o bossw-desktop
 ```
 
 ### Cross-platform release packaging
+
 ```bash
 ./pkg.sh
 ```
 
 ### Tests
+
 ```bash
 # Full suite
 ./run_tests.sh
@@ -52,16 +56,22 @@ Some test files require build tags for tests that need real networks or
 running nodes: `live`, `harness`, `electrumlive`, `rpclive`, `systray`.
 
 ### Lint
+
 ```bash
 golangci-lint -c ./.golangci.yml run
 ```
 
 ### Web UI build (required before appserver tests)
+
 ```bash
 cd wallet/appserver/newui && npm ci && npm run build
 ```
 
+<<<<<<< cleanup-webserver-refs
 The `wallet/appserver/newui/dist/` directory is embedded via `go:embed`;
+=======
+The `wallet/appserver/site/dist/` directory is embedded via `go:embed`;
+>>>>>>> master
 `go test ./wallet/appserver/...` will fail with `no matching files found`
 if the bundle has not been built.
 

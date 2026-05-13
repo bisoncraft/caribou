@@ -1709,7 +1709,9 @@ func CreateEVMWallet(chainID int64, createWalletParams *asset.CreateWalletParams
 		providerDef := createWalletParams.Settings[providersKey]
 		if !skipConnect && len(providerDef) > 0 {
 			endpoints := strings.Split(providerDef, providerDelimiter)
-			if err := createAndCheckProviders(context.Background(), walletDir, endpoints,
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := createAndCheckProviders(ctx, walletDir, endpoints,
 				big.NewInt(chainID), compat, createWalletParams.Net, createWalletParams.Logger, false, createWalletParams.TorProxy); err != nil {
 				return fmt.Errorf("create and check providers: %v", err)
 			}

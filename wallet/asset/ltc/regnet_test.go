@@ -17,11 +17,17 @@ package ltc
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"os/exec"
+	"os/user"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/livetest"
 )
 
@@ -36,6 +42,10 @@ var (
 		MaxFeeRate: 10,
 		SwapConf:   1,
 	}
+
+	ltcUsr, _        = user.Current()
+	ltcHarnessCtlDir = filepath.Join(ltcUsr.HomeDir, "dextest", "ltc", "harness-ctl")
+	ltcPW            = []byte("abc")
 )
 
 func TestWallet(t *testing.T) {
@@ -43,6 +53,107 @@ func TestWallet(t *testing.T) {
 		NewWallet: NewWallet,
 		LotSize:   tLotSize,
 		Asset:     tLTC,
+	})
+}
+
+func TestSPVWallet(t *testing.T) {
+	const lotSize = 1e6
+
+	spvDir := t.TempDir()
+
+	createLTCWallet := func(cfg *asset.WalletConfig, name string, logger util.Logger) error {
+		seed := encode.RandomBytes(32)
+
+		err := (&Driver{}).Create(&asset.CreateWalletParams{
+			Type:    walletTypeSPV,
+			Seed:    seed,
+			Pass:    ltcPW, // matches walletPassword in livetest.go -> Run
+			DataDir: cfg.DataDir,
+			Net:     util.Simnet,
+			Logger:  logger,
+		})
+		if err != nil {
+			return fmt.Errorf("error creating LTC SPV wallet: %w", err)
+		}
+
+		w, err := NewWallet(cfg, logger, util.Regtest)
+		if err != nil {
+			t.Fatalf("error opening LTC SPV wallet: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		cm := util.NewConnectionMaster(w)
+		if err = cm.Connect(ctx); err != nil {
+			t.Fatalf("error connecting LTC SPV wallet: %v", err)
+		}
+		defer cm.Disconnect()
+
+		addr, err := w.DepositAddress()
+		if err != nil {
+			return fmt.Errorf("DepositAddress error: %w", err)
+		}
+
+		if err := ltcLoadAddress(addr); err != nil {
+			return fmt.Errorf("ltcLoadAddress error: %w", err)
+		}
+
+		time.Sleep(time.Second * 3)
+
+		for {
+			ss, err := w.SyncStatus()
+			if err != nil {
+				return fmt.Errorf("SyncStatus error: %w", err)
+			}
+			if ss.Synced {
+				break
+			}
+			fmt.Printf("%s LTC SPV sync progress %.1f%%\n", name, ss.BlockProgress()*100)
+			time.Sleep(time.Second)
+		}
+
+		bal, _ := w.Balance()
+		logger.Infof("%s with address %s is synced, balance = %+v", name, addr, bal)
+
+		return nil
+	}
+
+	spvConstructor := func(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
+		token := hex.EncodeToString(encode.RandomBytes(4))
+		cfg.Type = walletTypeSPV
+		cfg.DataDir = filepath.Join(spvDir, token)
+
+		name := ltcParseName(cfg.Settings)
+
+		// The LTC regtest alpha node listens on 20585; the SPV wallet's
+		// default peer list already includes that address, so no override
+		// is required unless we need the beta node specifically.
+		if name == "beta" {
+			cfg.Settings["peer"] = "localhost:20586" // beta node listen port
+		}
+
+		if err := createLTCWallet(cfg, name, logger); err != nil {
+			return nil, fmt.Errorf("createLTCWallet error: %w", err)
+		}
+
+		return NewWallet(cfg, logger, network)
+	}
+
+	fmt.Println("////////// LTC SPV WALLET W/O SPLIT //////////")
+	livetest.Run(t, &livetest.Config{
+		NewWallet: spvConstructor,
+		LotSize:   lotSize,
+		Asset:     tLTC,
+		SPV:       true,
+	})
+
+	fmt.Println("////////// LTC SPV WALLET WITH SPLIT //////////")
+	livetest.Run(t, &livetest.Config{
+		NewWallet: spvConstructor,
+		LotSize:   lotSize,
+		Asset:     tLTC,
+		SPV:       true,
+		SplitTx:   true,
 	})
 }
 
@@ -59,4 +170,31 @@ func fetchRateWithTimeout(t *testing.T, net util.Network) {
 		t.Fatalf("error fetching %s fees: %v", net, err)
 	}
 	fmt.Printf("##### Fee rate fetched for %s! %d Sats/vB \n", net, feeRate)
+}
+
+// ltcLoadAddress funds addr from the LTC harness alpha wallet, sending the
+// standard set of outputs used by livetest.Run, then mines a block.
+func ltcLoadAddress(addr string) error {
+	for _, v := range []string{"10", "18", "5", "7", "1", "15", "3", "25"} {
+		if err := ltcRunCmd("./alpha", "sendtoaddress", addr, v); err != nil {
+			return err
+		}
+	}
+	return ltcRunCmd("./mine-alpha", "1")
+}
+
+func ltcRunCmd(exe string, args ...string) error {
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = ltcHarnessCtlDir
+	return cmd.Run()
+}
+
+// ltcParseName derives a wallet name from its settings map, mirroring
+// the parseName helper in the BTC livetest package.
+func ltcParseName(settings map[string]string) string {
+	name := settings["walletname"]
+	if name == "" {
+		name = filepath.Base(settings["datadir"])
+	}
+	return name
 }

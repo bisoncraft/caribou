@@ -529,7 +529,9 @@ func (b *acrossBridge) verifyBridgeCompletion(ctx context.Context, data []byte) 
 }
 
 func (b *acrossBridge) supportedDestinations(sourceAssetID uint32) []uint32 {
-	destinations, err := acrossSupportedDestinations(context.Background(), sourceAssetID, b.net, b.log)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	destinations, err := acrossSupportedDestinations(ctx, sourceAssetID, b.net, b.log)
 	if err != nil {
 		b.log.Errorf("Across bridge: failed to fetch supported destinations: %v", err)
 		return nil
