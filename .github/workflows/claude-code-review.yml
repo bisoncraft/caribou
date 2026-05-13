@@ -28,6 +28,15 @@ jobs:
         uses: anthropics/claude-code-action@dde2242db6af13460b916652159b6ba19a598f30 #v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this pull request. Focus on:
+            - bugs and logic errors
+            - security issues (especially anything touching keys, signing, or RPC trust boundaries)
+            - missing or weak test coverage on changed code paths
+            - unclear or unidiomatic code
+
+            Be concise. Skip nitpicks and don't restate what the diff already
+            shows. If there is nothing worth flagging, say so in one line.
           # Configure via repository variables:
           # CLAUDE_CODE_MODEL: claude-haiku-4-5, claude-sonnet-4-6 (default), or claude-opus-4-7
           # CLAUDE_CODE_EFFORT: quick, standard (default), or thorough
