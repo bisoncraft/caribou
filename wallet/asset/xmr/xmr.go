@@ -168,7 +168,7 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	// nothing is lost.
 	if wm.WalletExists(walletPath) {
 		for _, f := range []string{walletPath, walletPath + ".keys", filepath.Join(params.DataDir, walletMetaFile)} {
-			os.Remove(f)
+			_ = os.Remove(f)
 		}
 	}
 
@@ -1035,7 +1035,14 @@ func (w *ExchangeWallet) EstimateSendTxFee(address string, value, feeRate uint64
 
 // SyncStatus returns the wallet sync status.
 func (w *ExchangeWallet) SyncStatus() (*asset.SyncStatus, error) {
-	status := w.syncStatus.Load().(*asset.SyncStatus)
+	statusI := w.syncStatus.Load()
+	if statusI == nil {
+		return &asset.SyncStatus{}, nil
+	}
+	status, ok := statusI.(*asset.SyncStatus)
+	if !ok {
+		return &asset.SyncStatus{}, nil
+	}
 	return status, nil
 }
 

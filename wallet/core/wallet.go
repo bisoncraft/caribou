@@ -277,7 +277,11 @@ func (w *xcWallet) state() *WalletState {
 
 	var feeState *FeeState
 	if feeStateI := w.feeState.Load(); feeStateI != nil {
-		feeState = feeStateI.(*FeeState)
+		var ok bool
+		feeState, ok = feeStateI.(*FeeState)
+		if !ok {
+			w.log.Warnf("unexpected type for feeState: %T", feeStateI)
+		}
 	}
 
 	state := &WalletState{

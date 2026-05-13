@@ -867,20 +867,28 @@ type baseWallet struct {
 	refundCache *broadcast.Cache[*refundCacheEntry]
 }
 
+func (w *baseWallet) cfg() *baseWalletConfig {
+	cfg, ok := w.cfgV.Load().(*baseWalletConfig)
+	if !ok {
+		return nil
+	}
+	return cfg
+}
+
 func (w *baseWallet) fallbackFeeRate() uint64 {
-	return w.cfgV.Load().(*baseWalletConfig).fallbackFeeRate
+	return w.cfg().fallbackFeeRate
 }
 
 func (w *baseWallet) feeRateLimit() uint64 {
-	return w.cfgV.Load().(*baseWalletConfig).feeRateLimit
+	return w.cfg().feeRateLimit
 }
 
 func (w *baseWallet) redeemConfTarget() uint64 {
-	return w.cfgV.Load().(*baseWalletConfig).redeemConfTarget
+	return w.cfg().redeemConfTarget
 }
 
 func (w *baseWallet) useSplitTx() bool {
-	return w.cfgV.Load().(*baseWalletConfig).useSplitTx
+	return w.cfg().useSplitTx
 }
 
 func (w *baseWallet) UseSplitTx() bool {
@@ -888,7 +896,7 @@ func (w *baseWallet) UseSplitTx() bool {
 }
 
 func (w *baseWallet) apiFeeFallback() bool {
-	return w.cfgV.Load().(*baseWalletConfig).apiFeeFallback
+	return w.cfg().apiFeeFallback
 }
 
 type intermediaryWallet struct {
@@ -1043,7 +1051,10 @@ func (btc *ExchangeWalletSPV) LogFilePath() string {
 // address.
 func (btc *ExchangeWalletSPV) WithdrawTx(ctx context.Context, walletPW []byte, addr btcutil.Address) (_ *wire.MsgTx, err error) {
 	btc.ctx = ctx
-	spvw := btc.node.(*spvWallet)
+	spvw, ok := btc.node.(*spvWallet)
+	if !ok {
+		return nil, fmt.Errorf("invalid node type for SPV wallet")
+	}
 	spvw.cl, err = spvw.wallet.Start()
 	if err != nil {
 		return nil, fmt.Errorf("error starting wallet")
@@ -3716,7 +3727,11 @@ func (btc *baseWallet) txDB() *BadgerTxDB {
 	if dbi == nil {
 		return nil
 	}
-	return dbi.(*BadgerTxDB)
+	db, ok := dbi.(*BadgerTxDB)
+	if !ok {
+		return nil
+	}
+	return db
 }
 
 func (btc *baseWallet) markTxAsSubmitted(txHash *chainhash.Hash) {

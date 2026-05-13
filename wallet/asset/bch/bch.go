@@ -359,7 +359,10 @@ func WithdrawSPVFunds(ctx context.Context, walletPW []byte, recipient, dataDir s
 	if err != nil {
 		return nil, fmt.Errorf("error constructing wallet: %w", err)
 	}
-	w := wi.(*btc.ExchangeWalletSPV)
+	w, ok := wi.(*btc.ExchangeWalletSPV)
+	if !ok {
+		return nil, fmt.Errorf("invalid wallet type: expected *btc.ExchangeWalletSPV")
+	}
 
 	btcTx, err := w.WithdrawTx(ctx, walletPW, addr)
 	if err != nil {

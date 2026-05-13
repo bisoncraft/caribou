@@ -435,7 +435,16 @@ func (c *Core) Ready() <-chan struct{} {
 }
 
 func (c *Core) locale() *locale {
-	return c.intl.Load().(*locale)
+	intlI := c.intl.Load()
+	if intlI == nil {
+		return nil
+	}
+	loc, ok := intlI.(*locale)
+	if !ok {
+		c.log.Warnf("unexpected type for locale: %T", intlI)
+		return nil
+	}
+	return loc
 }
 
 // SetLanguage sets the langauge used for notifications. The language set with
