@@ -21,11 +21,13 @@ func TestDriverInfo(t *testing.T) {
 	if info.BlockchainClass != asset.BlockchainClassEVM {
 		t.Fatalf("Info.BlockchainClass = %q, want %q", info.BlockchainClass, asset.BlockchainClassEVM)
 	}
-	// Info returns a defensive copy: mutating it must not leak into the
-	// package-level WalletInfo.
+	// Info does a value copy of WalletInfo, so scalar fields are isolated
+	// from the package-level value. Slice fields like AvailableWallets are
+	// shared by reference; that limitation is intentional, not asserted
+	// here.
 	info.Name = "Mutated"
 	if drv.Info().Name == "Mutated" {
-		t.Fatal("Driver.Info should return a defensive copy of WalletInfo")
+		t.Fatal("Driver.Info should isolate scalar fields from package-level WalletInfo")
 	}
 }
 
@@ -55,6 +57,10 @@ func TestDriverDecodeCoinID(t *testing.T) {
 	if got != want {
 		t.Fatalf("DecodeCoinID = %q, want %q", got, want)
 	}
+	// An unsupported length should error, not silently produce a result.
+	if _, err := drv.DecodeCoinID(encode.RandomBytes(20)); err == nil {
+		t.Fatal("expected error for unsupported coin ID length")
+	}
 }
 
 func TestPolygonFinalizeConfs(t *testing.T) {
@@ -75,6 +81,9 @@ func TestChainConfig(t *testing.T) {
 	}{
 		{util.Mainnet, 137},
 		{util.Testnet, 80002},
+		// Simnet builds a developer genesis via ethcore.DeveloperGenesisBlock,
+		// which uses params.AllDevChainProtocolChanges (ChainID 1337).
+		{util.Simnet, 1337},
 	}
 	for _, tc := range cases {
 		cfg, err := ChainConfig(tc.net)
