@@ -67,11 +67,7 @@ golangci-lint -c ./.golangci.yml run
 cd wallet/appserver/newui && npm ci && npm run build
 ```
 
-<<<<<<< cleanup-webserver-refs
 The `wallet/appserver/newui/dist/` directory is embedded via `go:embed`;
-=======
-The `wallet/appserver/site/dist/` directory is embedded via `go:embed`;
->>>>>>> master
 `go test ./wallet/appserver/...` will fail with `no matching files found`
 if the bundle has not been built.
 
