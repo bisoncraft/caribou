@@ -56,7 +56,7 @@ mkdir -p "${DOT_DESKTOP_BUILDDIR}"
 
 # Build site bundle
 CWD=$(pwd)
-cd ../../webserver/site
+cd ../../appserver/newui
 npm clean-install
 npm run build
 cd $CWD

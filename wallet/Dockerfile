@@ -21,7 +21,7 @@ FROM node@sha256:809972647175c30a4c7763d3e6cc064dec588972af57e540e5a6f27442bb084
 WORKDIR /root/dex
 COPY . .
 RUN apk add git
-WORKDIR /root/dex/wallet/webserver/site/
+WORKDIR /root/dex/wallet/appserver/newui/
 RUN npm clean-install
 RUN npm run build
 

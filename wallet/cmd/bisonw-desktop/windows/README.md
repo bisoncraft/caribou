@@ -30,7 +30,7 @@ Build the Windows binary:
 windows\build-windows.cmd
 ```
 
-This will also build the site bundle if `wallet/webserver/site/dist` does not exist.
+This will also build the site bundle if `wallet/appserver/newui/dist` does not exist.
 
 The resulting `.exe` will be in `build\windows`.
 
@@ -51,7 +51,7 @@ The Windows `.exe` can be cross-compiled from Linux using Docker. This does not 
 Build the site bundle if it hasn't been built already:
 
 ```bash
-cd wallet/webserver/site
+cd wallet/appserver/newui
 npm clean-install
 npm run build
 cd ../../..

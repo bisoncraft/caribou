@@ -24,13 +24,13 @@ gated access is out of scope on its own merits, regardless of convenience.
 ### Wallet binary
 
 ```bash
-cd wallet/cmd/bisonw && go build -o bisonw
+cd wallet/cmd/bossw && go build -o bossw
 ```
 
 ### Desktop wallet
 
 ```bash
-cd wallet/cmd/bisonw-desktop && go build -o bisonw-desktop
+cd wallet/cmd/bossw-desktop && go build -o bossw-desktop
 ```
 
 ### Cross-platform release packaging
@@ -64,10 +64,10 @@ golangci-lint -c ./.golangci.yml run
 ### Web UI build (required before appserver tests)
 
 ```bash
-cd wallet/appserver/site && npm ci && npm run build
+cd wallet/appserver/newui && npm ci && npm run build
 ```
 
-The `wallet/appserver/site/dist/` directory is embedded via `go:embed`;
+The `wallet/appserver/newui/dist/` directory is embedded via `go:embed`;
 `go test ./wallet/appserver/...` will fail with `no matching files found`
 if the bundle has not been built.
 
@@ -78,13 +78,13 @@ Each line corresponds to a Claude agent definition under `.claude/agents/`,
 which is the day-to-day specification for the work.
 
 - **Desktop UI rewrite.** A new React + TypeScript desktop UI lives at
-  `wallet/webserver/desktop/` and is served by `wallet/webserver/` (Go).
+  `wallet/appserver/desktop/` and is served by `wallet/appserver/` (Go).
   Builds only into the `!mobile` binary. Responsive down to 1024px wide.
   Tracked by the `desktop-ui` agent. The directory is not yet checked in.
 - **Mobile app.** A React Native app under `wallet/mobile/` that embeds the
   Go wallet core in-process via `gomobile bind`, exposes it over a
   localhost-only token-authenticated HTTP listener, and reuses the same
-  webserver REST/WebSocket API as the desktop UI. iOS and Android. Builds
+  appserver REST/WebSocket API as the desktop UI. iOS and Android. Builds
   only into the `mobile` binary. Tracked by the `mobile-ui` agent. The
   directory is not yet checked in.
 - **NEAR wallet.** `wallet/asset/near/` is in early-stage development.
@@ -104,8 +104,8 @@ which is the day-to-day specification for the work.
   `wallet/asset/interface.go`. Adding a new chain means implementing the
   interface and registering a driver under `wallet/asset/`.
 - **Embedded web UI.** The current frontend bundle is included via
-  `go:embed` from `wallet/appserver/site/dist/`. The planned React desktop UI
-  will follow the same embed pattern from `wallet/webserver/desktop/dist/`.
+  `go:embed` from `wallet/appserver/newui/dist/`. The planned React desktop UI
+  will follow the same embed pattern from `wallet/appserver/desktop/dist/`.
 - **Build tags.** `live`, `harness`, `electrumlive`, `rpclive`, and `systray`
   gate tests requiring real network access, running nodes, or platform
   features. `mobile` / `!mobile` will gate the mobile vs. desktop binary.

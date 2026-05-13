@@ -2,7 +2,7 @@
 #
 # Prerequisites:
 #   The site bundle must be built before running the docker build:
-#     cd wallet/webserver/site && npm clean-install && npm run build
+#     cd wallet/appserver/newui && npm clean-install && npm run build
 #
 # Build (from the repo root):
 #   docker build -t bisonw-desktop-windows -f wallet/cmd/bisonw-desktop/windows/Dockerfile .

@@ -28,7 +28,7 @@ if exist "%outputDir%" (
 )
 mkdir %outputDir%
 
-set sitePath=..\..\webserver\site
+set sitePath=..\..\appserver\newui
 set workDir=%cd%
 
 :: If the site bundle does not exist, build it.
