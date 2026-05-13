@@ -4023,12 +4023,12 @@ func OpenWithRetry(db walletdb.DB, pubPass []byte,
 		txMgr   *wtxmgr.Store
 	)
 
-	err := walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
-		addrMgrBucket := tx.ReadWriteBucket(waddrmgrNamespaceKey)
+	err := walletdb.View(db, func(tx walletdb.ReadTx) error {
+		addrMgrBucket := tx.ReadBucket(waddrmgrNamespaceKey)
 		if addrMgrBucket == nil {
 			return errors.New("missing address manager namespace")
 		}
-		txMgrBucket := tx.ReadWriteBucket(wtxmgrNamespaceKey)
+		txMgrBucket := tx.ReadBucket(wtxmgrNamespaceKey)
 		if txMgrBucket == nil {
 			return errors.New("missing transaction manager namespace")
 		}
