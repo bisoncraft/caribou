@@ -28,10 +28,9 @@ jobs:
         uses: anthropics/claude-code-action@dde2242db6af13460b916652159b6ba19a598f30 #v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: |
-            --model ${{ vars.CLAUDE_CODE_MODEL || 'claude-haiku-4-5' }}
-            --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '4') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '8') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '12') || '8' }}
-        env:
           # Configure via repository variables:
-          # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-7
+          # CLAUDE_CODE_MODEL: claude-haiku-4-5, claude-sonnet-4-6 (default), or claude-opus-4-7
           # CLAUDE_CODE_EFFORT: quick, standard (default), or thorough
+          claude_args: |
+            --model ${{ vars.CLAUDE_CODE_MODEL || 'claude-sonnet-4-6' }}
+            --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '4') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '8') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '12') || '8' }}
