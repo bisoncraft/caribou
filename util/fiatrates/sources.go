@@ -69,6 +69,8 @@ const (
 	// 1712 calls left unused.
 	kuCoin              = "KuCoin"
 	kuCoinPriceEndpoint = "https://api.kucoin.com/api/v1/prices?currencies=%s"
+
+	chainlink = "Chainlink"
 )
 
 var (
@@ -242,6 +244,15 @@ func fiatSources(cfg Config) []*source {
 				return fiatRates, nil
 			},
 		},
+	}
+
+	if cfg.ChainlinkRPCURL != "" {
+		sources = append(sources, &source{
+			name:            chainlink,
+			requestInterval: defaultRefreshInterval,
+			disabled:        strings.Contains(disabledSources, strings.ToLower(chainlink)),
+			getRates:        chainlinkRateFetcher(cfg),
+		})
 	}
 
 	for i := range sources {
