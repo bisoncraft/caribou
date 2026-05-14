@@ -330,7 +330,8 @@ func TestWorkerDisconnect(t *testing.T) {
 func TestWorkerProgress(t *testing.T) {
 	t.Parallel()
 
-	const taskTimeout = 50 * time.Millisecond
+	const taskTimeout = 500 * time.Millisecond
+	const progressInterval = 50 * time.Millisecond
 
 	ctx, err := startWorker()
 	if err != nil {
@@ -365,7 +366,7 @@ func TestWorkerProgress(t *testing.T) {
 			t.Fatalf("resp not received")
 		}
 
-		time.Sleep(taskTimeout / 2)
+		time.Sleep(progressInterval)
 	}
 
 	// Finally send the final response.

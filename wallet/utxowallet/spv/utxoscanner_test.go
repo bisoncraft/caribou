@@ -385,24 +385,24 @@ func TestUtxoScannerScanAddBlocks(t *testing.T) {
 	block99999Hash := Block99999.BlockHash()
 	mockChainClient.SetBlockHash(99999, &block99999Hash)
 	mockChainClient.SetBlock(&block99999Hash, &bisonwire.BlockWithHeight{Block: bisonwire.BlockFromMsgBlock("btc", &Block99999)})
-	mockChainClient.SetBestSnapshot(&block99999Hash, 99999)
 
 	block100000Hash := Block100000.BlockHash()
 	mockChainClient.SetBlockHash(100000, &block100000Hash)
 	mockChainClient.SetBlock(&block100000Hash, &bisonwire.BlockWithHeight{Block: bisonwire.BlockFromMsgBlock("btc", &Block100000)})
 
-	var snapshotLock sync.Mutex
-	waitForSnapshot := make(chan struct{})
+	// Send the snapshot value through the channel itself rather than
+	// gating a shared mutable mock. This avoids a race between the test
+	// updating the mock and the scanner reading it after the gate opens.
+	snapshots := make(chan *headerfs.BlockStamp, 3)
+	snapshots <- &headerfs.BlockStamp{Hash: block99999Hash, Height: 99999}
+	snapshots <- &headerfs.BlockStamp{Hash: block100000Hash, Height: 100000}
+	snapshots <- &headerfs.BlockStamp{Hash: block100000Hash, Height: 100000}
 
 	scanner := NewUtxoScanner(&UtxoScannerConfig{
 		GetBlock:     mockChainClient.GetBlockFromNetwork,
 		GetBlockHash: mockChainClient.GetBlockHash,
 		BestSnapshot: func() (*headerfs.BlockStamp, error) {
-			<-waitForSnapshot
-			snapshotLock.Lock()
-			defer snapshotLock.Unlock()
-
-			return mockChainClient.BestSnapshot()
+			return <-snapshots, nil
 		},
 		BlockFilterMatches: mockChainClient.blockFilterMatches,
 	})
@@ -421,23 +421,6 @@ func TestUtxoScannerScanAddBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to enqueue scan request: %v", err)
 	}
-
-	// The utxoscanner should currently be waiting for the block stamp at
-	// height 99999. Signaling will cause the initial scan to finish and
-	// block while querying again for the updated chain tip.
-	waitForSnapshot <- struct{}{}
-
-	// Now, add the successor block at height 100000 and update the best
-	// snapshot..
-	snapshotLock.Lock()
-	mockChainClient.SetBestSnapshot(&block100000Hash, 100000)
-	snapshotLock.Unlock()
-
-	// The rescan should now be waiting for stamp 100000, signal to allow
-	// the rescan to detect the added block and perform another pass.
-	// Signal one more for the final query scan makes before exiting.
-	waitForSnapshot <- struct{}{}
-	waitForSnapshot <- struct{}{}
 
 	spendReport, scanErr = req.Result(nil)
 	if scanErr != nil {
