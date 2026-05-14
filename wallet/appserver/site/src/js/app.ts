@@ -160,7 +160,7 @@ interface requiredAction {
   selected: boolean
 }
 
-// Application is the main javascript web application for Bison Wallet.
+// Application is the main javascript web application for Boss Wallet.
 export default class Application {
   notes: CoreNotePlus[]
   pokes: CoreNotePlus[]
@@ -265,7 +265,7 @@ export default class Application {
    */
   async start () {
     await this.fetchBuildInfo()
-    console.log('Bison Wallet, Build', this.commitHash.substring(0, 8))
+    console.log('Boss Wallet, Build', this.commitHash.substring(0, 8))
 
     // Handle back navigation from the browser.
     bind(window, 'popstate', (e: PopStateEvent) => {

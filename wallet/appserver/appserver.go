@@ -209,7 +209,7 @@ type Config struct {
 }
 
 // AppServer is a single-client http and websocket server enabling a browser
-// interface to Bison Wallet.
+// interface to Boss Wallet.
 type AppServer struct {
 	ctx      context.Context
 	dataDir  string

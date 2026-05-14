@@ -43,7 +43,7 @@ type Ticket struct {
 	Address string `json:"address"`
 }
 
-// Proposal is the struct that holds all politeia data that Bison Wallet needs
+// Proposal is the struct that holds all politeia data that Boss Wallet needs
 // for each proposal. This is the object that is saved to the lexi DB. It uses
 // data from three politeia API's: records, comments and ticketvote.
 type Proposal struct {

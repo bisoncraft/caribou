@@ -81,7 +81,7 @@ func proposalMetadataDecode(fs []rv1.File) (*piv1.ProposalMetadata, string, erro
 }
 
 // statusTimestamps contains the published, censored and abandoned timestamps
-// that maybe used on Bison Wallet UI.
+// that maybe used on Boss Wallet UI.
 type statusTimestamps struct {
 	published int64
 	censored  int64

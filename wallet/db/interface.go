@@ -8,7 +8,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encrypt"
 )
 
-// DB is an interface that must be satisfied by Bison Wallet persistent storage
+// DB is an interface that must be satisfied by Boss Wallet persistent storage
 // manager.
 type DB interface {
 	util.Runner

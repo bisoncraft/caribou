@@ -27,8 +27,8 @@ func main() {
 
 func run() error {
 	var appSeedHex, appMnemonic string
-	flag.StringVar(&appSeedHex, "seedhex", "", "Bison Wallet application seed (128 hexadecimal characters)")
-	flag.StringVar(&appMnemonic, "mnemonic", "", "Bison Wallet application seed (15 word mnemonic)")
+	flag.StringVar(&appSeedHex, "seedhex", "", "Boss Wallet application seed (128 hexadecimal characters)")
+	flag.StringVar(&appMnemonic, "mnemonic", "", "Boss Wallet application seed (15 word mnemonic)")
 	var assetID uint
 	flag.UintVar(&assetID, "asset", 0, "Asset ID. BIP-0044 coin type (integer).\n"+
 		"See https://github.com/satoshilabs/slips/blob/master/slip-0044.md")

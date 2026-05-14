@@ -74,7 +74,7 @@ func (s *AppServer) handleHome(w http.ResponseWriter, r *http.Request) {
 
 // handleLogin is the handler for the '/login' page request.
 func (s *AppServer) handleLogin(w http.ResponseWriter, r *http.Request) {
-	cArgs := s.commonArgs(r, "Login | Bison Wallet")
+	cArgs := s.commonArgs(r, "Login | Boss Wallet")
 	if cArgs.UserInfo.Authed {
 		http.Redirect(w, r, walletsRoute, http.StatusSeeOther)
 		return
@@ -103,7 +103,7 @@ func (s *AppServer) handleWallets(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(nowallets, func(i, j int) bool {
 		return nowallets[i].Name < nowallets[j].Name
 	})
-	s.sendTemplate(w, "wallets", s.commonArgs(r, "Wallets | Bison Wallet"))
+	s.sendTemplate(w, "wallets", s.commonArgs(r, "Wallets | Boss Wallet"))
 }
 
 // handleWalletLogFile is the handler for the '/wallets/logfile' page request.
@@ -219,12 +219,12 @@ func (s *AppServer) handleGenerateCompanionAppQRCode(w http.ResponseWriter, r *h
 
 // handleInit is the handler for the '/init' page request
 func (s *AppServer) handleInit(w http.ResponseWriter, r *http.Request) {
-	s.sendTemplate(w, "init", s.commonArgs(r, "Welcome | Bison Wallet"))
+	s.sendTemplate(w, "init", s.commonArgs(r, "Welcome | Boss Wallet"))
 }
 
 // handleSettings is the handler for the '/settings' page request.
 func (s *AppServer) handleSettings(w http.ResponseWriter, r *http.Request) {
-	common := s.commonArgs(r, "Settings | Bison Wallet")
+	common := s.commonArgs(r, "Settings | Boss Wallet")
 	data := &struct {
 		CommonArguments
 		FiatRateSources map[string]bool
@@ -307,7 +307,7 @@ func (s *AppServer) handleProposals(w http.ResponseWriter, r *http.Request) {
 	_, isSyncing, lastSyncTimestamp := s.core.PoliteiaDetails()
 
 	s.sendTemplate(w, "proposals", &proposalsTmplData{
-		CommonArguments: *s.commonArgs(r, "Proposals | Bison Wallet"),
+		CommonArguments: *s.commonArgs(r, "Proposals | Boss Wallet"),
 		Proposals:       proposals,
 		VoteStatuses:    pi.VotesStatuses,
 		Pagination: Pagination{
@@ -363,7 +363,7 @@ func (s *AppServer) handleProposal(w http.ResponseWriter, r *http.Request) {
 	piURL, _, _ := s.core.PoliteiaDetails()
 
 	s.sendTemplate(w, "proposal", &proposalTmplData{
-		CommonArguments: *s.commonArgs(r, "Proposal | Bison Wallet"),
+		CommonArguments: *s.commonArgs(r, "Proposal | Boss Wallet"),
 		Proposal:        proposal,
 		VoteStatuses:    pi.VotesStatuses,
 		PoliteiaURL:     piURL,
@@ -373,14 +373,14 @@ func (s *AppServer) handleProposal(w http.ResponseWriter, r *http.Request) {
 
 func (s *AppServer) sendProposalPageWithError(r *http.Request, w http.ResponseWriter, errMsg string) {
 	s.sendTemplate(w, "proposal", &proposalTmplData{
-		CommonArguments: *s.commonArgs(r, "Proposal | Bison Wallet"),
+		CommonArguments: *s.commonArgs(r, "Proposal | Boss Wallet"),
 		ErrorMsg:        errMsg,
 	})
 }
 
 func (s *AppServer) sendProposalsPageWithError(r *http.Request, w http.ResponseWriter, errMsg string) {
 	s.sendTemplate(w, "proposals", &proposalsTmplData{
-		CommonArguments: *s.commonArgs(r, "Proposals | Bison Wallet"),
+		CommonArguments: *s.commonArgs(r, "Proposals | Boss Wallet"),
 		ErrorMsg:        errMsg,
 	})
 }

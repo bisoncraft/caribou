@@ -501,7 +501,7 @@ type baseWallet struct {
 }
 
 // assetWallet is a wallet backend for Ethereum and Eth tokens. The backend is
-// how Bison Wallet communicates with the Ethereum blockchain and wallet.
+// how Boss Wallet communicates with the Ethereum blockchain and wallet.
 // assetWallet satisfies the util.Wallet interface.
 type assetWallet struct {
 	*baseWallet

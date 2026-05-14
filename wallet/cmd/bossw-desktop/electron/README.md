@@ -1,6 +1,6 @@
-# Building Bison Wallet with Electron
+# Building Boss Wallet with Electron
 
-This guide provides instructions on how to build the Bison Wallet application using Electron. Follow the steps below to set up your development environment and compile the application.
+This guide provides instructions on how to build the Boss Wallet application using Electron. Follow the steps below to set up your development environment and compile the application.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ Before you begin, ensure you have the following installed on your system:
 - [npm](https://www.npmjs.com/get-npm) (comes with Node.js)
 - [Golang](https://golang.org/dl/) (version 1.23.0 or higher)
 
-## Steps to Build Bison Wallet
+## Steps to Build Boss Wallet
 
 1. Clone the Repository and ensure you're in the `bossw-desktop/electron` directory:
 

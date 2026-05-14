@@ -8,7 +8,7 @@ who has gas funds.
 
 - The afflicted client must be running with the RPC server enabled.
 - The helper must have gas funds on the relevant chain (e.g. POL on Polygon).
-- The helper must also be running a Bison Wallet with the RPC server enabled
+- The helper must also be running a Boss Wallet with the RPC server enabled
   and a connected wallet for the same chain.
 
 ## Steps
@@ -64,4 +64,4 @@ This returns the transaction hash.
 - The calldata includes a deadline. If the deadline passes before
   submission, the calldata is no longer valid and must be rebuilt.
 - The helper does not need to be running the relay service. They just need
-  a Bison Wallet with gas funds on the same chain.
+  a Boss Wallet with gas funds on the same chain.

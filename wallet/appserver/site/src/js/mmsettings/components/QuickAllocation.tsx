@@ -482,7 +482,7 @@ const AllocationTable: React.FC = () => {
           {/* DEX Header */}
             <div className="d-flex align-items-center mb-3">
               <img className="logo-square mini-icon me-3" src={Doc.logoPath('DEX')} alt="DEX" />
-            <span className="fs16 demi">Bison Wallet Balances</span>
+            <span className="fs16 demi">Boss Wallet Balances</span>
             </div>
 
           {/* DEX Balances */}

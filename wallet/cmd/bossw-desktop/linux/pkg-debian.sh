@@ -107,7 +107,7 @@ chmod 775 "${POSTINST_PATH}"
 cat > "${DOT_DESKTOP_BUILDPATH}" <<EOF
 [Desktop Entry]
 Version=1.5
-Name=Bison Wallet
+Name=Boss Wallet
 Comment=Multi-wallet backed by Decred DEX
 Exec=${BIN_FILENAME}
 Icon=${APP}
