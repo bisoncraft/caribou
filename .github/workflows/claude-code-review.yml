@@ -56,6 +56,16 @@ jobs:
           # comments post as github-actions[bot] but the review runs for
           # everyone.
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # The action also has a separate actor permission gate that
+          # rejects any PR author without `write` on the base repo
+          # (triage and read both fail this check). Disable it so fork
+          # PRs - the whole reason this workflow uses
+          # pull_request_target - actually run. The injection-defense
+          # comments above (base-ref checkout, strict gh-only Bash
+          # allowlist, no bypassPermissions) are what make this safe
+          # for untrusted actors; this input just stops the action from
+          # second-guessing that.
+          allowed_non_write_users: "*"
           prompt: |
             Review pull request #${{ github.event.pull_request.number }}.
 
