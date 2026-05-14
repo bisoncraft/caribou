@@ -189,7 +189,6 @@ var bipIDs = map[uint32]string{
 	144:   "xrp",
 	145:   "bch",
 	146:   "nebl",
-	147:   "zcl",
 	148:   "xlm",
 	149:   "nlc2",
 	150:   "whl",

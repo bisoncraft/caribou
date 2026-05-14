@@ -47,9 +47,6 @@ FIRO_ON=$?
 ~/dextest/zec/harness-ctl/alpha getblockchaininfo &> /dev/null
 ZEC_ON=$?
 
-~/dextest/zcl/harness-ctl/alpha getblockchaininfo &> /dev/null
-ZCL_ON=$?
-
 ~/dextest/dgb/harness-ctl/alpha getblockchaininfo &> /dev/null
 DGB_ON=$?
 
@@ -456,21 +453,6 @@ EOF
 else echo "Zcash is not running. Configuring dcrdex markets without ZEC."
 fi
 
-if [ $ZCL_ON -eq 0 ]; then
-    cat << EOF >> "${FILEPATH}"
-        },
-        {
-            "base": "ZCL_simnet",
-            "quote": "BTC_simnet",
-            "lotSize": 5000000,
-            "rateStep": 100000,
-            "epochDuration": ${EPOCH_DURATION},
-            "marketBuyBuffer": 1.2,
-            "parcelSize": 8
-EOF
-else echo "Zclassic is not running. Configuring dcrdex markets without ZCL."
-fi
-
 if [ $DGB_ON -eq 0 ]; then
     cat << EOF >> "${FILEPATH}"
         },
@@ -697,20 +679,6 @@ if [ $ZEC_ON -eq 0 ]; then
             "maxFeeRate": 10000,
             "swapConf": 1,
             "configPath": "${TEST_ROOT}/zec/alpha/alpha.conf"
-EOF
-fi
-
-if [ $ZCL_ON -eq 0 ]; then
-    cat << EOF >> "${FILEPATH}"
-         },
-        "ZCL_simnet": {
-            "bip44symbol": "zcl",
-            "network": "simnet",
-            "maxFeeRate": 200,
-            "swapConf": 1,
-            "configPath": "${TEST_ROOT}/zcl/alpha/alpha.conf",
-            "bondAmt": 40000000,
-            "bondConfs": 1
 EOF
 fi
 

@@ -41,19 +41,12 @@ const (
 	pkTxIn              = "Zcash___TxInHash"
 	pkV5TxDigest        = "ZcashTxHash_"
 	pkHeader            = "ZTxIdHeadersHash"
-	pkPrevOutsV4        = "ZcashPrevoutHash"
-	pkSequenceV4        = "ZcashSequencHash"
-	pkOutputsV4         = "ZcashOutputsHash"
 )
 
 var (
 	// Little-endian encoded CONSENSUS_BRANCH_IDs.
 	// https://zcash.readthedocs.io/en/latest/rtd_pages/nu_dev_guide.html#canopy
-	ConsensusBranchNU5     = [4]byte{0xB4, 0xD0, 0xD6, 0xC2} // 1687104, testnet: 1842420
-	ConsensusBranchSapling = [4]byte{0xBB, 0x09, 0xB8, 0x76}
-
-	// Zclassic only
-	ConsensusBranchButtercup = [4]byte{0x0d, 0x54, 0x0b, 0x93}
+	ConsensusBranchNU5 = [4]byte{0xB4, 0xD0, 0xD6, 0xC2} // 1687104, testnet: 1842420
 
 	emptySaplingDigest = [32]byte{0x6f, 0x2f, 0xc8, 0xf9, 0x8f, 0xea, 0xfd, 0x94,
 		0xe7, 0x4a, 0x0d, 0xf4, 0xbe, 0xd7, 0x43, 0x91, 0xee, 0x0b, 0x5a, 0x69,
@@ -120,9 +113,6 @@ func (tx *Tx) SignatureDigest(
 	vin int, hashType txscript.SigHashType, script []byte, vals []int64, prevScripts [][]byte,
 ) (_ [32]byte, err error) {
 
-	if tx.Version == 4 {
-		return tx.txDigestV4(hashType, vin, vals, script)
-	}
 	td, err := tx.transparentSigDigestV5(vin, hashType, vals, prevScripts)
 	if err != nil {
 		return
@@ -158,66 +148,6 @@ func (tx *Tx) headerDigestV5() ([32]byte, error) {
 	copy(b[12:16], uint32Bytes(tx.LockTime))
 	copy(b[16:], uint32Bytes(tx.ExpiryHeight))
 	return blake2bHash(b, []byte(pkHeader))
-}
-
-// Zclassic only. Based on ZIP-0243, but uses ConsensusBranchButtercup from
-// Zclassic.
-// isSimnet is hack for https://github.com/ZclassicCommunity/zclassic/issues/83
-func (tx *Tx) txDigestV4(
-	hashType txscript.SigHashType, vin int, vals []int64, script []byte,
-) (_ chainhash.Hash, err error) {
-
-	b, err := tx.sighashPreimageV4(hashType, vin, vals, script)
-	if err != nil {
-		return
-	}
-	consensusBranchID := ConsensusBranchButtercup
-	h, err := blake2bHash(b, append([]byte("ZcashSigHash"), consensusBranchID[:]...))
-	if err != nil {
-		return
-	}
-
-	var txHash chainhash.Hash
-	copy(txHash[:], h[:])
-	return txHash, nil
-}
-
-func (tx *Tx) sighashPreimageV4(hashType txscript.SigHashType, vin int, vals []int64, script []byte) (_ []byte, err error) {
-	buf := bytes.NewBuffer(make([]byte, 0, 270+len(script)))
-	buf.Write(uint32Bytes(uint32(tx.Version) | (1 << 31))) // 4 bytes
-	buf.Write(uint32Bytes(versionSaplingGroupID))          // + 4 = 8
-	prevoutsDigest, err := tx.calcHashPrevOuts(pkPrevOutsV4)
-	if err != nil {
-		return
-	}
-	buf.Write(prevoutsDigest[:]) // + 32 = 40
-
-	seqDigest, err := tx.hashSequence(pkSequenceV4)
-	if err != nil {
-		return
-	}
-	buf.Write(seqDigest[:]) // + 32 = 72
-
-	outputsDigest, err := tx.hashOutputs(pkOutputsV4)
-	if err != nil {
-		return
-	}
-	buf.Write(outputsDigest[:]) // + 32 = 104
-	// The following three fields are all zero hashes for transparent txs.
-	// hashJoinSplits, hashShieldedSpends, hashShieldedOutputs [32]byte
-	buf.Write(make([]byte, 96))             // + 96 = 200
-	buf.Write(uint32Bytes(tx.LockTime))     // + 4 = 204
-	buf.Write(uint32Bytes(tx.ExpiryHeight)) // + 4 = 208
-	// valueBalance
-	buf.Write(uint64Bytes(0))                // + 8 = 216
-	buf.Write(uint32Bytes(uint32(hashType))) // + 4 = 220
-
-	txInsDigest, err := tx.preimageTxInSig(vin, vals[vin], script) // + 50 + len(prevScript) = 270 + len(prevScript)
-	if err != nil {
-		return
-	}
-	buf.Write(txInsDigest[:])
-	return buf.Bytes(), nil
 }
 
 func (tx *Tx) transparentDigestV5() (h [32]byte, err error) {

@@ -925,7 +925,6 @@ func (wc *rpcClient) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract 
 			}
 			var bal float64
 			// args: "(dummy)" minconf includeWatchonly inZat
-			// Using default inZat = false for compatibility with ZCL.
 			if err := wc.call(methodGetBalance, anylist{"", 0, false}, &bal); err != nil {
 				return 0, err
 			}
