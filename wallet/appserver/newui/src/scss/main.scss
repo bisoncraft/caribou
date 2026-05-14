@@ -606,6 +606,11 @@ img.logo-full {
   letter-spacing: 0.04em;
 }
 
+.receive-address {
+  word-break: break-all;
+  user-select: all;
+}
+
 // Portfolio section headers
 .portfolio-section-header {
   font-size: 11px;
