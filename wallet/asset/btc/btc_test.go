@@ -687,7 +687,7 @@ func tNewWallet(segwit bool, walletType string) (*intermediaryWallet, *testData,
 		}
 	}
 
-	data.walletCfg = wallet.cfgV.Load().(*baseWalletConfig)
+	data.walletCfg = wallet.cfgV.Load()
 
 	if err != nil {
 		shutdown()

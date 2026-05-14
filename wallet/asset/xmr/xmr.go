@@ -1037,12 +1037,11 @@ func (w *ExchangeWallet) EstimateSendTxFee(address string, value, feeRate uint64
 func (w *ExchangeWallet) SyncStatus() (*asset.SyncStatus, error) {
 	statusI := w.syncStatus.Load()
 	if statusI == nil {
-		return &asset.SyncStatus{}, nil
+		return nil, errors.New("sync status not initialized")
 	}
 	status, ok := statusI.(*asset.SyncStatus)
 	if !ok {
-		w.log.Warnf("unexpected type for syncStatus: %T", statusI)
-		return &asset.SyncStatus{}, nil
+		return nil, fmt.Errorf("unexpected type for syncStatus: %T", statusI)
 	}
 	return status, nil
 }

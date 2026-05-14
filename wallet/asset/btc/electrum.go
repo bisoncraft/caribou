@@ -365,6 +365,9 @@ func (btc *ExchangeWalletElectrum) watchBlocks(ctx context.Context) {
 				btc.log.Errorf("failed to get sync status: %w", err)
 				continue
 			}
+			if ss == nil {
+				continue
+			}
 
 			sameTip := currentTip.Height == int64(ss.Blocks)
 			if sameTip {

@@ -799,7 +799,7 @@ type baseWallet struct {
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	tipAtConnect int64
 
-	cfgV              atomic.Value // *baseWalletConfig
+	cfgV              atomic.Pointer[baseWalletConfig]
 	node              Wallet
 	walletInfo        *asset.WalletInfo
 	cloneParams       *BTCCloneCFG
@@ -868,12 +868,7 @@ type baseWallet struct {
 }
 
 func (w *baseWallet) cfg() *baseWalletConfig {
-	cfg, ok := w.cfgV.Load().(*baseWalletConfig)
-	if !ok {
-		w.log.Warnf("unexpected type for config: %T", w.cfgV.Load())
-		return nil
-	}
-	return cfg
+	return w.cfgV.Load()
 }
 
 func (w *baseWallet) fallbackFeeRate() uint64 {
@@ -1821,6 +1816,9 @@ func (btc *baseWallet) SyncStatus() (*asset.SyncStatus, error) {
 	ss, err := btc.node.SyncStatus()
 	if err != nil {
 		return nil, err
+	}
+	if ss == nil {
+		return nil, errors.New("node returned nil sync status")
 	}
 	ss.StartingBlocks = uint64(atomic.LoadInt64(&btc.tipAtConnect))
 	if ss.Synced {
@@ -5968,7 +5966,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 				syncStatus, err := btc.node.SyncStatus()
 				if err != nil {
 					btc.log.Errorf("Error retrieving sync status before queuing polled block: %v", err)
-				} else if !syncStatus.Synced {
+				} else if syncStatus != nil && !syncStatus.Synced {
 					blockAllowance *= 10
 				}
 				queuedBlock = &polledBlock{
@@ -7247,7 +7245,7 @@ func (btc *intermediaryWallet) syncTxHistory(tip uint64) {
 		btc.log.Errorf("Error getting sync status: %v", err)
 		return
 	}
-	if !ss.Synced {
+	if ss == nil || !ss.Synced {
 		return
 	}
 
