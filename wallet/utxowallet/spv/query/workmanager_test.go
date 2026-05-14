@@ -460,8 +460,17 @@ func TestWorkManagerWorkRankingScheduling(t *testing.T) {
 		}
 	}
 
-	// Sleep to make sure all results are forwarded to the workmanager.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the batch to complete. When errChan fires with nil, the
+	// workmanager has processed every result and freed each worker's
+	// active job slot, so it's safe to schedule the next batch.
+	select {
+	case err := <-errChan:
+		if err != nil {
+			t.Fatalf("unexpected error from batch: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("batch did not complete")
+	}
 
 	// Send a new set of queries.
 	queries = nil
