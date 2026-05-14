@@ -8,7 +8,7 @@ interface ActivateAssetParams {
   assetID: number
 }
 
-const BTC_ASSET_ID = 0
+const walletTypeSPV = 'SPV'
 
 export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
   const [submitting, setSubmitting] = useState(false)
@@ -25,7 +25,8 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
 
   const close = () => app.setForm({ form: '', data: {} })
 
-  if (assetID !== BTC_ASSET_ID) {
+  const spvDef = asset.info?.availablewallets?.find(w => w.type === walletTypeSPV)
+  if (!spvDef) {
     return (
       <form className="modal form-width-300">
         <header>
@@ -47,7 +48,7 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
     setSubmitting(true)
     const r = await postJSON('/api/newwallet', {
       assetID,
-      walletType: 'SPV',
+      walletType: walletTypeSPV,
       config: {}
     })
     setSubmitting(false)
