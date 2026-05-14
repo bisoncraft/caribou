@@ -8,8 +8,6 @@ interface ActivateAssetParams {
   assetID: number
 }
 
-const walletTypeSPV = 'SPV'
-
 export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState('')
@@ -25,8 +23,8 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
 
   const close = () => app.setForm({ form: '', data: {} })
 
-  const spvDef = asset.info?.availablewallets?.find(w => w.type === walletTypeSPV)
-  if (!spvDef) {
+  const walletDef = asset.info?.availablewallets?.[0]
+  if (!walletDef) {
     return (
       <form className="modal form-width-300">
         <header>
@@ -48,7 +46,7 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
     setSubmitting(true)
     const r = await postJSON('/api/newwallet', {
       assetID,
-      walletType: walletTypeSPV,
+      walletType: walletDef.type,
       config: {}
     })
     setSubmitting(false)
@@ -66,7 +64,7 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
         <span>{tvar('Activate {{ name }}', { name: asset.name })}</span>
       </header>
       <div className="px-3 pb-2 fs14 grey">
-        {t('A native SPV node will be initialized and begin syncing in the background.')}
+        {walletDef.description}
       </div>
       <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
       <div className="flex-stretch-column p-3">
