@@ -28,7 +28,7 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
     return (
       <form className="modal form-width-300">
         <header>
-          <img src={Doc.logoPath(asset.symbol)} className="mini-icon me-2" />
+          <img src={Doc.logoPath(asset.unitInfo.conventional.unit)} className="mini-icon me-2" />
           <span>{asset.name}</span>
         </header>
         <div className="px-3 pb-3 grey text-center">
@@ -60,7 +60,7 @@ export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
   return (
     <form className="modal form-width-300">
       <header>
-        <img src={Doc.logoPath(asset.symbol)} className="mini-icon me-2" />
+        <img src={Doc.logoPath(asset.unitInfo.conventional.unit)} className="mini-icon me-2" />
         <span>{tvar('Activate {{ name }}', { name: asset.name })}</span>
       </header>
       <div className="px-3 pb-2 fs14 grey">

@@ -1,9 +1,4 @@
-import { SupportedAsset, UnitInfo } from './registry'
-
-interface BipInfo {
-  assetID: number
-  logo: string
-}
+import { UnitInfo } from './registry'
 
 const languages = navigator.languages.filter((locale: string) => locale !== 'c')
 
@@ -69,15 +64,6 @@ function convertToConventional (v: number, unitInfo: UnitInfo) {
 }
 
 export default class Doc {
-  static bipMap: Record<string, BipInfo> = {}
-
-  static registerAssets (assets: SupportedAsset[]) {
-    for (const { id: assetID, symbol } of assets) {
-      const logoSymbol = symbol.split('.')[0] // e.g. usdc.eth => usdc
-      this.bipMap[symbol] = { assetID, logo: `/img/coins/${logoSymbol}.png` }
-    }
-  }
-
   /* bind binds the function to the event for the element. */
   static bind (el: EventTarget, ev: string | string[], f: EventListenerOrEventListenerObject, opts?: any /* EventListenerOptions */): void {
     for (const e of (Array.isArray(ev) ? ev : [ev])) el.addEventListener(e, f, opts)
@@ -88,15 +74,12 @@ export default class Doc {
     el.removeEventListener(ev, f)
   }
 
-  /*
-   * logoPath creates a path to a png logo for the specified ticker symbol. If
-   * the symbol is not a supported asset, the generic letter logo will be
-   * requested instead.
-   */
-  static logoPath (symbol: string): string {
-    const bipInfo = this.bipMap[symbol]
-    if (bipInfo) return bipInfo.logo
-    return `/img/coins/${symbol.substring(0, 1)}.png`
+  // logoPath returns the path to the coin logo for the given ticker. Logos
+  // live at /img/coins/<ticker>.png keyed on the lowercased ticker, so
+  // callers should pass the normalized ticker (e.g. "BTC", "LTC", "POL",
+  // "USDC"), not the asset symbol.
+  static logoPath (ticker: string): string {
+    return `/img/coins/${ticker.toLowerCase()}.png`
   }
 
   /*

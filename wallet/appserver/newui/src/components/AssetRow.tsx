@@ -71,7 +71,7 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
     ? `${portfolioPct.toFixed(1)}%`
     : '—'
 
-  const logoPath = Doc.logoPath(asset.logoSymbol)
+  const logoPath = Doc.logoPath(asset.ticker)
 
   return (
     <tr ref={rowRef} className="asset-row">

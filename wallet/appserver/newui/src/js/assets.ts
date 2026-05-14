@@ -1,4 +1,3 @@
-import Doc from './doc'
 import {
   UnitInfo,
   SupportedAsset,
@@ -12,8 +11,6 @@ export class AssetVariant {
   assetID: number
   symbol: string
   ui: UnitInfo
-  chainName: string
-  chainLogo: string
   ticker: string
   token?: {
     networkMade: boolean
@@ -22,18 +19,16 @@ export class AssetVariant {
   }
 
   constructor (a: SupportedAsset) {
-    const { id: assetID, symbol, name, token, unitInfo: ui, unitInfo: { conventional: { unit: ticker } } } = a
+    const { id: assetID, symbol, token, unitInfo: ui, unitInfo: { conventional: { unit: ticker } } } = a
     this.assetID = assetID
     this.ticker = ticker
     this.symbol = symbol
     this.ui = ui
-    this.chainName = token ? app.user.assets[token.networkID].name : name
-    this.chainLogo = token ? Doc.logoPath(app.user.assets[token.networkID].symbol) : Doc.logoPath(symbol)
     if (token) {
       this.token = {
         networkID: token.networkID,
         feeUI: app.unitInfo(token.networkID),
-        networkMade: Boolean(app.user.assets[token.networkID].wallet)
+        networkMade: Boolean(app.user.assets[token.networkID]?.wallet)
       }
     }
   }
@@ -54,7 +49,6 @@ export class TickerAsset {
   hasWallets: boolean
   cFactor: number
   bestID: number
-  logoSymbol: string
   name: string
   variants: AssetVariant[]
   variantLookup: Record<number, AssetVariant>
@@ -64,26 +58,24 @@ export class TickerAsset {
   ui: UnitInfo
 
   constructor (a: SupportedAsset) {
-    const { id: assetID, name, symbol, unitInfo: ui, unitInfo: { conventional: { conversionFactor: cFactor } } } = a
+    const { id: assetID, name, unitInfo: ui, unitInfo: { conventional: { conversionFactor: cFactor } } } = a
     this.ticker = normalizedTicker(a)
     this.cFactor = cFactor
     this.variants = []
     this.variantLookup = {}
     this.bestID = assetID
     this.name = name
-    this.logoSymbol = symbol
     this.ui = ui
     this.addVariant(a)
   }
 
   addVariant (a: SupportedAsset) {
-    const { id: assetID, symbol, name, wallet: w, token, unitInfo: ui } = a
+    const { id: assetID, name, wallet: w, token, unitInfo: ui } = a
     const xcRate = app.idRate(assetID)
     if (!xcRate) this.haveAllFiatRates = false
     this.hasTokens = this.hasTokens || Boolean(token)
     if (!token) { // prefer the native asset data, e.g. weth.polygon -> eth}
       this.bestID = assetID
-      this.logoSymbol = symbol
       this.name = name
       this.ui = ui
     }

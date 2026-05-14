@@ -7,7 +7,7 @@ interface InactiveAssetRowProps {
 }
 
 export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
-  const logoPath = Doc.logoPath(asset.logoSymbol)
+  const logoPath = Doc.logoPath(asset.ticker)
 
   const handleActivate = () => {
     app.setForm({ form: 'activateasset', data: { assetID: asset.bestID } })

@@ -36,7 +36,7 @@ export default function PortfolioTotals ({ totals, walletAssets }: PortfolioTota
         {walletAssets.map(ta => (
           <img
             key={ta.ticker}
-            src={Doc.logoPath(ta.logoSymbol)}
+            src={Doc.logoPath(ta.ticker)}
             alt={ta.ticker}
             title={ta.name}
             className="portfolio-totals-logo"
