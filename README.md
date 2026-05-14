@@ -73,30 +73,24 @@ if the bundle has not been built.
 
 ## Roadmap
 
-The following work is intended but not yet (or only partially) in the tree.
-Each line corresponds to a Claude agent definition under `.claude/agents/`,
-which is the day-to-day specification for the work.
+Boss Wallet is under active development. Our near-term goals are:
 
-- **Desktop UI rewrite.** A new React + TypeScript desktop UI lives at
-  `wallet/appserver/desktop/` and is served by `wallet/appserver/` (Go).
-  Builds only into the `!mobile` binary. Responsive down to 1024px wide.
-  Tracked by the `desktop-ui` agent. The directory is not yet checked in.
-- **Mobile app.** A React Native app under `wallet/mobile/` that embeds the
-  Go wallet core in-process via `gomobile bind`, exposes it over a
-  localhost-only token-authenticated HTTP listener, and reuses the same
-  appserver REST/WebSocket API as the desktop UI. iOS and Android. Builds
-  only into the `mobile` binary. Tracked by the `mobile-ui` agent. The
-  directory is not yet checked in.
-- **NEAR wallet.** `wallet/asset/near/` is in early-stage development.
-  Account-based, ed25519, Borsh-encoded transactions, NEAR JSON-RPC. Swap
-  support is intended to be implemented via NEAR Intents — signed intent
-  messages submitted to the `intents.near` contract, fulfilled by off-chain
-  solvers — mapped onto the existing `Swap` / `AuditContract` / `Redeem` /
-  `Refund` surface of `asset.Wallet`. Tracked by the `near-wallet-dev` agent.
-- **Pure-Go Electrum backend.** A new `chain.Interface` implementation under
-  `wallet/utxowallet/chain/` backed by an Electrum protocol client, as an
-  alternative to the existing Neutrino SPV backend. Tracked by the
-  `utxowallet-dev` agent.
+- **May 2026**: Complete a comprehensive code refactor and achieve high test coverage for all core wallet components.
+- **June - July 2026**:
+    - Implement basic sync, send, and receive functionality end-to-end for Bitcoin (BTC), Litecoin (LTC), Ethereum (ETH), Polygon (POL), and stablecoin tokens (USDT, USDC).
+    - Integrate Chainlink oracle feeds.
+    - Go-based Electrum wallet for BTC and LTC
+    - Mobile wallet infrastructure
+        - Database configuration and tuning
+        - Build scripts
+        - Emulator documentation
+        - Basic UI implementation
+- **End of July 2026**:
+    - Secure grant funding for light wallet implementations, with a focus on Zcash (ZEC) and Monero (XMR)
+    - Implement basic wallets for Zcash and Monero
+    - Add tokens for xAUT, PAXG, and other commodity tokens
+- **August 2026**:
+    - Implement NEAR Intents for efficient cross-chain interactions, and demonstrate basic swap functionality between supported assets
 
 ## Design notes
 
