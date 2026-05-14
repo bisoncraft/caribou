@@ -96,7 +96,7 @@ export class Application {
     this.pageLoaded = pageLoaded
     this.reRender = reRender
     await this.fetchBuildInfo()
-    console.log('Bison Wallet, Build', this.commitHash.substring(0, 8))
+    console.log('Boss Wallet, Build', this.commitHash.substring(0, 8))
 
     ws.connect(getSocketURI(), () => window.location.reload())
     ws.registerRoute('notify', (note: CoreNote) => this.notify(note))
@@ -120,7 +120,7 @@ export class Application {
     if (!skipPush) {
       window.history.pushState({ page: page, data: data }, '', url.toString())
     }
-    document.title = data?.title || 'Bison Wallet'
+    document.title = data?.title || 'Boss Wallet'
     this.storePageData({ pageParts: page.split('/'), pageRoot: pageRoot(page), data: data, query: url.searchParams })
   }
 

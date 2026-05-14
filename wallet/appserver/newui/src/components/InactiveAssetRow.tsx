@@ -9,14 +9,12 @@ interface InactiveAssetRowProps {
 export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
   const logoPath = Doc.logoPath(asset.logoSymbol)
 
-  const handleAddWallet = () => {
-    // TODO: open the wallet-creation form once it exists in Modals.
-    // For now, find the best assetID and pass it along as a placeholder.
-    app.setForm({ form: 'createwallet', data: { assetID: asset.bestID } })
+  const handleActivate = () => {
+    app.setForm({ form: 'activateasset', data: { assetID: asset.bestID } })
   }
 
   return (
-    <tr className="asset-row inactive-asset-row" onClick={handleAddWallet}>
+    <tr className="asset-row inactive-asset-row" onClick={handleActivate}>
       <td className="asset-row-asset">
         <div className="d-flex align-items-center">
           <img src={logoPath} alt={asset.ticker} className="asset-logo inactive-asset-logo" />
@@ -29,7 +27,7 @@ export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
         </div>
       </td>
       <td className="asset-row-add-wallet" colSpan={3}>
-        + Activate wallet
+        + Activate
       </td>
       <td className="asset-row-num" />
     </tr>

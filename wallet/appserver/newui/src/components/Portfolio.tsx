@@ -108,7 +108,7 @@ export default function Portfolio () {
           <>
             <div className="portfolio-section-header">ACTIVATE NEW ASSETS</div>
             <p className="portfolio-section-copy grey fs13">
-              Bison Wallet supports {inactiveCount} other asset{inactiveCount !== 1 ? 's' : ''} across {networkCount} networks with more on the roadmap.
+              Boss Wallet supports {inactiveCount} other asset{inactiveCount !== 1 ? 's' : ''} across {networkCount} networks with more on the roadmap.
             </p>
             <table className="asset-table w-100">
               <tbody>

@@ -29,7 +29,7 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
 
   // Locked wallet (encrypted and not open)
   if (wallet.encrypted && !wallet.open) {
-    return <span className="ico-lock-closed asset-status-dot asset-status-locked fs11" title="Wallet locked" />
+    return <span className="ico-lock-closed asset-status-dot asset-status-locked fs11" title="Locked" />
   }
 
   // Syncing

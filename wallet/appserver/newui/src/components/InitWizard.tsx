@@ -17,7 +17,7 @@ const SeedPromptForm = ({ setUsingSeed }: SeedPromptFormParams) => {
     <form className="modal">
       <header>
         <img className="logo-full small me-2" />
-        <span>{t('Welcome to Bison Wallet!')}</span>
+        <span>{t('Welcome to Boss Wallet!')}</span>
       </header>
       <div className="px-3">{t('prompt_for_seed')}</div>
       <div className="d-flex align-items-center p-3">

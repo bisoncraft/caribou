@@ -1,16 +1,16 @@
 import { useState } from 'react'
-import t from '../js/intl'
+import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import Doc from '../js/doc'
 import { postJSON } from '../js/http'
 
-interface CreateWalletParams {
+interface ActivateAssetParams {
   assetID: number
 }
 
 const BTC_ASSET_ID = 0
 
-export default function CreateWallet ({ assetID }: CreateWalletParams) {
+export default function ActivateAsset ({ assetID }: ActivateAssetParams) {
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState('')
 
@@ -33,7 +33,7 @@ export default function CreateWallet ({ assetID }: CreateWalletParams) {
           <span>{asset.name}</span>
         </header>
         <div className="px-3 pb-3 grey text-center">
-          {t('Wallet activation for this asset is not yet supported.')}
+          {t('Activation for this asset is not yet supported.')}
         </div>
         <div className="flex-stretch-column p-3">
           <button onClick={close}>{t('Close')}</button>
@@ -52,7 +52,7 @@ export default function CreateWallet ({ assetID }: CreateWalletParams) {
     })
     setSubmitting(false)
     if (!r.ok) {
-      setErr(r.msg || t('Failed to create wallet'))
+      setErr(r.msg || t('Failed to activate asset'))
       return
     }
     close()
@@ -62,15 +62,15 @@ export default function CreateWallet ({ assetID }: CreateWalletParams) {
     <form className="modal form-width-300">
       <header>
         <img src={Doc.logoPath(asset.symbol)} className="mini-icon me-2" />
-        <span>{t('Activate Bitcoin Wallet')}</span>
+        <span>{tvar('Activate {{ name }}', { name: asset.name })}</span>
       </header>
       <div className="px-3 pb-2 fs14 grey">
-        {t('A native SPV wallet will be created and begin syncing in the background.')}
+        {t('A native SPV node will be initialized and begin syncing in the background.')}
       </div>
       <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
       <div className="flex-stretch-column p-3">
         <button className="feature" onClick={submit} disabled={submitting}>
-          {submitting ? t('Creating...') : t('Create Wallet')}
+          {submitting ? t('Activating...') : t('Activate Now')}
         </button>
         <button className="mt-2" onClick={close} disabled={submitting}>{t('Cancel')}</button>
       </div>

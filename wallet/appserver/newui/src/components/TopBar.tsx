@@ -19,7 +19,7 @@ export default function TopBar () {
     <div className="topbar d-flex align-items-stretch">
       {/* Left: logo */}
       <div className="topbar-left d-flex align-items-center">
-        <img className="logo-full medium" alt="Bison Wallet" />
+        <img className="logo-full medium" alt="Boss Wallet" />
       </div>
 
       {/* Right: total value + action buttons */}

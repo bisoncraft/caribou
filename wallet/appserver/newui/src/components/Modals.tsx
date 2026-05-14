@@ -2,7 +2,7 @@ import { MouseEvent } from 'react'
 import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
-import CreateWallet from './CreateWallet'
+import ActivateAsset from './ActivateAsset'
 import { FormData } from '../js/registry'
 import app from '../js/application'
 
@@ -22,7 +22,7 @@ export default function Modals ({ fd }: ModalsParams) {
       case 'receive': return <Receive />
       case 'send': return <Send />
       case 'swap': return <Swap />
-      case 'createwallet': return <CreateWallet assetID={fd.data.assetID} />
+      case 'activateasset': return <ActivateAsset assetID={fd.data.assetID} />
       default: return (<div className="flex-center">Unknown form: {fd.form}</div>)
     }
   }

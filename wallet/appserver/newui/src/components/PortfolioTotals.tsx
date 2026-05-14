@@ -20,8 +20,8 @@ export default function PortfolioTotals ({ totals, walletAssets }: PortfolioTota
   if (numWallets === 0) {
     return (
       <div className="portfolio-totals portfolio-totals-empty">
-        <div className="portfolio-totals-heading grey">No wallets yet</div>
-        <div className="portfolio-totals-subtitle grey fs13">Activate a wallet to get started.</div>
+        <div className="portfolio-totals-heading grey">No assets yet</div>
+        <div className="portfolio-totals-subtitle grey fs13">Activate an asset to get started.</div>
       </div>
     )
   }
