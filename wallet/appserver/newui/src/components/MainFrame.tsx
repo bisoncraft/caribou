@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import app from '../js/application'
-import Header from './Header'
+import TopBar from './TopBar'
 import Sidebar from './Sidebar'
 import Portfolio from './Portfolio'
 import Trade from './Trade'
 import Settings from './Settings'
+import Activity from './Activity'
 import Modals from './Modals'
 import { PageData, FormData } from '../js/registry'
 
@@ -25,15 +26,16 @@ export default function MainFrame ({ pd }: MainFrameParams) {
       case 'portfolio': return <Portfolio />
       case 'trade': return <Trade />
       case 'settings': return <Settings />
+      case 'activity': return <Activity />
       default: return (<div className="flex-center">Unknown page: {pd.pageRoot}</div>)
     }
   }
   return (
     <div className="d-flex flex-column h-100">
-      <Header />
+      <TopBar />
       <div className="d-flex flex-grow-1 align-items-stretch">
         <Sidebar />
-        <div className="flex-grow-1 border-left border-top position-relative fade-in">{renderContent()}</div>
+        <div className="flex-grow-1 position-relative fade-in">{renderContent()}</div>
       </div>
       <Modals fd={formData} />
     </div>

@@ -8,7 +8,7 @@ function sidebarButtonClass (page: string, button: string) {
 export default function Sidebar () {
   const page = app.pageData.pageRoot
   return (
-    <div className="flex-stretch-column p-3">
+    <div className="sidebar flex-stretch-column p-3">
       <span className="fs12 grey">{t('VIEWS')}</span>
       <button className={sidebarButtonClass(page, 'portfolio')}
         onClick={() => app.loadPage('portfolio')}>
@@ -19,6 +19,11 @@ export default function Sidebar () {
         onClick={() => app.loadPage('trade')}>
         <span className="ico-barchart me-3" />
         <span>{t('Trade')}</span>
+      </button>
+      <button className={sidebarButtonClass(page, 'activity')}
+        onClick={() => app.loadPage('activity')}>
+        <span className="ico-bell me-3" />
+        <span>{t('Activity')}</span>
       </button>
       <span className="mt-4 fs12 grey">{t('FAVORITES')}</span>
       <button className={sidebarButtonClass(page, '')}>
