@@ -34,10 +34,14 @@ export default function Portfolio () {
   }, [redraw])
 
   const handlePillSelect = (ticker: string) => {
+    const isCurrentlySelected = selectedTicker === ticker
     setSelectedTicker(prev => prev === ticker ? null : ticker)
-    setHighlightedTicker(ticker)
-    // Clear the highlight flag after animation completes
-    setTimeout(() => setHighlightedTicker(null), 900)
+    // Only flash the highlight when actually selecting, not when
+    // toggling off.
+    if (!isCurrentlySelected) {
+      setHighlightedTicker(ticker)
+      setTimeout(() => setHighlightedTicker(null), 900)
+    }
   }
 
   const totals = app.portfolioTotals()
