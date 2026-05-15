@@ -35,7 +35,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encrypt"
 	pi "github.com/bisoncraft/bosswallet/util/politeia"
 	"github.com/bisoncraft/bosswallet/util/version"
-	"github.com/bisoncraft/bosswallet/wallet/appserver/locales"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/core"
 	"github.com/bisoncraft/bosswallet/wallet/db"
@@ -44,13 +43,7 @@ import (
 	"github.com/decred/dcrd/certgen"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"golang.org/x/text/language"
 )
-
-// contextKey is the key param type used when saving values to a context using
-// context.WithValue. A custom type is defined because built-in types are
-// discouraged.
-type contextKey string
 
 const (
 	// httpConnTimeoutSeconds is the maximum number of seconds allowed for
@@ -61,18 +54,11 @@ const (
 	authCK = "dexauth"
 	// pwKeyCK is the cookie used to unencrypt the user's password.
 	pwKeyCK = "sessionkey"
-	// ctxKeyUserInfo is used in the authorization middleware for saving user
-	// info in http request contexts.
-	ctxKeyUserInfo = contextKey("userinfo")
 	// notifyRoute is a route used for general notifications.
 	notifyRoute = "notify"
 	// The basis for content-security-policy. connect-src must be the final
 	// directive so that it can be reliably supplemented on startup.
 	baseCSP = "default-src 'none'; script-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; connect-src 'self'"
-	// companionTokenTTL is the time-to-live for an unclaimed companion
-	// token. If the companion app does not scan the QR code within this
-	// window the token is automatically revoked.
-	companionTokenTTL = 10 * time.Minute
 )
 
 var (
@@ -271,7 +257,7 @@ func New(cfg *Config) (*AppServer, error) {
 	var siteDir string // empty signals embedded files only
 	if cfg.NoEmbed {
 		// Look for the "site" folder in the executable's path, the working
-		// directory, or relative to [repo root]/client/cmd/bossw.
+		// directory, or relative to [repo root]/wallet/cmd/bossw.
 		execPath, err := os.Executable() // e.g. /usr/bin/bossw
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
@@ -287,7 +273,7 @@ func New(cfg *Config) (*AppServer, error) {
 			cfg.CustomSiteDir,
 			filepath.Join(execPath, site),
 			absDir,
-			filepath.Clean(filepath.Join(execPath, "../../appserver/site")),
+			filepath.Clean(filepath.Join(execPath, "../../appserver", site)),
 		} {
 			if dir == "" {
 				continue
@@ -434,45 +420,10 @@ func New(cfg *Config) (*AppServer, error) {
 
 	// The WebSocket handler is mounted on /ws in Connect.
 
-	// Webpages
-	mux.Group(func(web chi.Router) {
-		web.Use(s.tokenAuthMiddleware)
-		// Inject user info for handlers that use extractUserInfo, which
-		// includes most of the page handlers that use commonArgs to
-		// inject the User object for page template execution.
-		web.Use(s.authMiddleware)
-		web.Get(settingsRoute, s.handleSettings)
-
-		web.Get("/generateqrcode", s.handleGenerateQRCode)
-
-		web.Group(func(notInit chi.Router) {
-			notInit.Use(s.requireNotInit)
-			notInit.Get(initRoute, s.handleInit)
-		})
-
-		// The rest of the web handlers require initialization.
-		web.Group(func(webInit chi.Router) {
-			webInit.Use(s.requireInit)
-
-			webInit.Group(func(webNoAuth chi.Router) {
-				// The login handler requires init but not auth since
-				// it performs the auth.
-				webNoAuth.Get(loginRoute, s.handleLogin)
-
-				// The rest of these handlers require both init and auth.
-				webNoAuth.Group(func(webAuth chi.Router) {
-					webAuth.Use(s.requireLogin)
-					webAuth.Get(homeRoute, s.handleHome)
-					webAuth.Get(walletsRoute, s.handleWallets)
-					webAuth.Get(walletLogRoute, s.handleWalletLogFile)
-					webAuth.With(proposalTokenCtx).Get("/proposal/{token}", s.handleProposal)
-					webAuth.Get(proposalsRoute, s.handleProposals)
-					webAuth.Get("/generatecompanionappqrcode", s.handleGenerateCompanionAppQRCode)
-				})
-			})
-
-		})
-	})
+	// Webpages — only registered for the legacy server-rendered UI build.
+	// Under the new SPA UI (default build) every page is served from the
+	// SPA shell via the mux.NotFound fallback installed below.
+	s.registerLegacyWebRoutes(mux)
 
 	// api endpoints
 	mux.Route("/api", func(r chi.Router) {
@@ -555,6 +506,20 @@ func New(cfg *Config) (*AppServer, error) {
 	fileServer(mux, "/img", siteDir, "src/img", "")
 	fileServer(mux, "/font", siteDir, "src/font", "")
 
+	// Under the new UI, the SPA performs its own client-side routing
+	// (e.g. /portfolio, /trade, /activity). Serve the SPA shell for any
+	// unmatched GET so deep-linking and page refreshes work. API and asset
+	// routes register their own handlers and won't reach this fallback.
+	if newUI {
+		mux.NotFound(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.NotFound(w, r)
+				return
+			}
+			s.serveSPAIndex(w)
+		})
+	}
+
 	return s, nil
 }
 
@@ -589,61 +554,6 @@ func (w *AppServer) fetchLatestVersion(ctx context.Context) {
 		(latestMajor == currentMajor && latestMinor == currentMinor && latestPatch > currentPatch) {
 		w.newAppVersionAvailable = true
 	}
-}
-
-// buildTemplates prepares the HTML templates, which are executed and served in
-// sendTemplate. An empty siteDir indicates that the embedded templates in the
-// htmlTmplSub FS should be used. If siteDir is set, the templates will be
-// loaded from disk.
-func (s *AppServer) buildTemplates(lang string) error {
-	// Under the new UI, pages are served from a bundled SPA (newui/dist) and
-	// there are no Go html/template files to build.
-	if newUI {
-		return nil
-	}
-
-	// Try to identify language.
-	acceptLang, err := language.Parse(lang)
-	if err != nil {
-		return fmt.Errorf("unable to parse requested language: %v", err)
-	}
-
-	// Find acceptable match with available locales.
-	langTags := make([]language.Tag, 0, len(locales.Locales))
-	localeNames := make([]string, 0, len(locales.Locales))
-	for localeName := range locales.Locales {
-		lang, _ := language.Parse(localeName) // checked in init()
-		langTags = append(langTags, lang)
-		localeNames = append(localeNames, localeName)
-	}
-	_, idx, conf := language.NewMatcher(langTags).Match(acceptLang)
-	localeName := localeNames[idx] // use index because tag may end up as something hyper specific like zh-Hans-u-rg-cnzzzz
-	switch conf {
-	case language.Exact, language.High, language.Low:
-		log.Infof("Using language %v", localeName)
-	case language.No:
-		return fmt.Errorf("no match for %q in recognized languages %v", lang, localeNames)
-	}
-
-	var htmlDir string
-	if s.siteDir == "" {
-		log.Infof("Using embedded HTML templates")
-	} else {
-		htmlDir = filepath.Join(s.siteDir, "src", "html")
-		log.Infof("Using HTML templates in %s", htmlDir)
-	}
-
-	bb := "bodybuilder"
-	html := newTemplates(htmlDir, localeName).
-		addTemplate("login", bb, "forms").
-		addTemplate("wallets", bb, "forms", "docs").
-		addTemplate("settings", bb, "forms").
-		addTemplate("init", bb).
-		addTemplate("proposals", bb).
-		addTemplate("proposal", bb)
-	s.html.Store(html)
-
-	return html.buildErr()
 }
 
 // Addr gives the address on which AppServer is listening. Use only after
@@ -822,53 +732,6 @@ func (s *AppServer) authorize() string {
 	s.authMtx.Lock()
 	s.authTokens[token] = true
 	s.authMtx.Unlock()
-	return token
-}
-
-// authorizeCompanion mints a new companion-app auth token, revoking any
-// previous one. The token is unclaimed until the companion app scans the
-// QR code and opens the URL. An unclaimed token expires after
-// companionTokenTTL.
-func (s *AppServer) authorizeCompanion() string {
-	b := make([]byte, 32)
-	crand.Read(b)
-	token := hex.EncodeToString(b)
-	zero(b)
-
-	s.authMtx.Lock()
-	// Revoke previous companion token.
-	if s.companionToken != "" {
-		delete(s.authTokens, s.companionToken)
-	}
-	// Stop any previous expiry timer.
-	if s.companionExpiryTimer != nil {
-		s.companionExpiryTimer.Stop()
-	}
-	s.authTokens[token] = true
-	s.companionToken = token
-	s.companionTokenHash = ""
-	s.companionTokenExpiry = time.Now().Add(companionTokenTTL)
-	s.companionTokenClaimed = false
-	s.companionExpiryTimer = time.AfterFunc(companionTokenTTL, func() {
-		s.authMtx.Lock()
-		defer s.authMtx.Unlock()
-		if s.companionToken == token && !s.companionTokenClaimed {
-			delete(s.authTokens, token)
-			s.companionToken = ""
-			s.companionTokenExpiry = time.Time{}
-			s.companionExpiryTimer = nil
-		}
-	})
-	s.authMtx.Unlock()
-
-	// Clear any previously persisted token. The new token is only
-	// persisted when claimed (see tokenAuthMiddleware) so that a
-	// crash before claim doesn't leave a stale unclaimed token that
-	// gets treated as claimed on restart.
-	if err := s.core.SetCompanionToken(""); err != nil {
-		log.Errorf("Error clearing persisted companion token: %v", err)
-	}
-
 	return token
 }
 
@@ -1112,24 +975,6 @@ func readPost(w http.ResponseWriter, r *http.Request, thing any) bool {
 	return true
 }
 
-// userInfo is information about the connected user. This type embeds the
-// core.User type, adding fields specific to the users server authentication
-// and cookies.
-type userInfo struct {
-	Authed           bool
-	PasswordIsCached bool
-}
-
-// Extract the userInfo from the request context. This should be used with
-// authMiddleware.
-func extractUserInfo(r *http.Request) *userInfo {
-	user, ok := r.Context().Value(ctxKeyUserInfo).(*userInfo)
-	if !ok {
-		log.Errorf("no auth info retrieved from client")
-		return &userInfo{}
-	}
-	return user
-}
 
 // serveSPAIndex serves the bundled newui index.html. Under the new UI, the
 // page routes do not render server-side templates; they deliver the SPA

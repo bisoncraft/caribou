@@ -70,7 +70,7 @@ mkdir -p "${HARNESS_DIR}"
 mkdir -p "${CLIENT_1_DIR}"
 mkdir -p "${CLIENT_2_DIR}"
 
-CLIENT_1_CONF="${CLIENT_1_DIR}/meshwallet.conf"
+CLIENT_1_CONF="${CLIENT_1_DIR}/bossw.conf"
 rm -f "${CLIENT_1_CONF}"
 CLIENT_1_CTL_KEY="${CLIENT_1_DIR}/ctl.key"
 rm -f "$CLIENT_1_CTL_KEY"
@@ -97,7 +97,7 @@ simnet=${SIMNET}
 testnet=${TESTNET}
 EOF
 
-CLIENT_2_CONF="${CLIENT_2_DIR}/meshwallet.conf"
+CLIENT_2_CONF="${CLIENT_2_DIR}/bossw.conf"
 rm -f "$CLIENT_2_CONF"
 CLIENT_2_CTL_KEY="${CLIENT_2_DIR}/ctl.key"
 rm -f "$CLIENT_2_CTL_KEY"

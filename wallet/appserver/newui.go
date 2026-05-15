@@ -5,10 +5,7 @@
 
 package appserver
 
-import (
-	"embed"
-	"io/fs"
-)
+import "embed"
 
 const (
 	newUI = true
@@ -17,11 +14,5 @@ const (
 	site = "newui"
 )
 
-var (
-	//go:embed newui/dist newui/src/img newui/src/font
-	staticSiteRes embed.FS
-
-	// Unused for New UI
-	htmlTmplRes embed.FS
-	htmlTmplSub fs.FS
-)
+//go:embed newui/dist newui/src/img newui/src/font
+var staticSiteRes embed.FS
