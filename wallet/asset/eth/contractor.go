@@ -14,11 +14,11 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
 	erc20v0 "github.com/bisoncraft/bosswallet/wallet/asset/erc20/contracts/v0"
 	swapv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
 	swapv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"

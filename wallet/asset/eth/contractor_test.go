@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
-	swapv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	swapv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"

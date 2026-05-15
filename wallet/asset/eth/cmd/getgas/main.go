@@ -13,9 +13,6 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbase "github.com/bisoncraft/bosswallet/wallet/asset/base"
-	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/wallet/asset/polygon"
 	"github.com/bisoncraft/bosswallet/wallet/asset/base"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/bisoncraft/bosswallet/wallet/asset/polygon"
@@ -71,11 +68,11 @@ func mainErr() error {
 		net = util.Simnet
 		switch chain {
 		case "eth":
-			dexeth.MaybeReadSimnetAddrs()
+			eth.MaybeReadSimnetAddrs()
 		case "polygon":
-			dexpolygon.MaybeReadSimnetAddrs()
+			polygon.MaybeReadSimnetAddrs()
 		case "base":
-			dexbase.MaybeReadSimnetAddrs()
+			base.MaybeReadSimnetAddrs()
 		}
 	}
 	if useTestnet {
@@ -123,9 +120,9 @@ func mainErr() error {
 	log := util.StdOutLogger("GG", logLvl)
 
 	walletParams := func(
-		gases map[uint32]*dexeth.Gases,
+		gases map[uint32]*eth.Gases,
 		contracts map[uint32]map[util.Network]common.Address,
-		tokens map[uint32]*dexeth.Token,
+		tokens map[uint32]*eth.Token,
 		compatLookup func(net util.Network) (c eth.CompatibilityData, err error),
 		chainCfg func(net util.Network) (c *params.ChainConfig, err error),
 		bui *util.UnitInfo,
@@ -184,14 +181,14 @@ func mainErr() error {
 	var wParams *eth.GetGasWalletParams
 	switch chain {
 	case "eth":
-		wParams, err = walletParams(dexeth.VersionedGases, dexeth.ContractAddresses, dexeth.Tokens,
-			eth.NetworkCompatibilityData, eth.ChainConfig, &dexeth.UnitInfo)
+		wParams, err = walletParams(eth.VersionedGases, eth.ContractAddresses, eth.Tokens,
+			eth.NetworkCompatibilityData, eth.ChainConfig, &eth.UnitInfo)
 	case "polygon":
-		wParams, err = walletParams(dexpolygon.VersionedGases, dexpolygon.ContractAddresses, dexpolygon.Tokens,
-			polygon.NetworkCompatibilityData, polygon.ChainConfig, &dexpolygon.UnitInfo)
+		wParams, err = walletParams(polygon.VersionedGases, polygon.ContractAddresses, polygon.Tokens,
+			polygon.NetworkCompatibilityData, polygon.ChainConfig, &polygon.UnitInfo)
 	case "base":
-		wParams, err = walletParams(dexbase.VersionedGases, dexbase.ContractAddresses, dexbase.Tokens,
-			base.NetworkCompatibilityData, base.ChainConfig, &dexbase.UnitInfo)
+		wParams, err = walletParams(base.VersionedGases, base.ContractAddresses, base.Tokens,
+			base.NetworkCompatibilityData, base.ChainConfig, &base.UnitInfo)
 	default:
 		return fmt.Errorf("chain %s not known", chain)
 	}

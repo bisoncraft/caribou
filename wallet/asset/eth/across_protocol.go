@@ -15,8 +15,8 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
-	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
 
 	"github.com/bisoncraft/bosswallet/wallet/asset/erc20/across"
 )

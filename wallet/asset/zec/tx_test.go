@@ -239,4 +239,3 @@ func TestV5SigDigest(t *testing.T) {
 		t.Fatalf("wrong signatureDigest")
 	}
 }
-

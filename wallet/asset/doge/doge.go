@@ -11,9 +11,9 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

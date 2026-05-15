@@ -41,8 +41,6 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/wallet/asset/polygon"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/bisoncraft/bosswallet/wallet/asset/polygon"
@@ -96,8 +94,8 @@ func mainErr() error {
 	net := util.Mainnet
 	if useSimnet {
 		net = util.Simnet
-		dexeth.MaybeReadSimnetAddrs()
-		dexpolygon.MaybeReadSimnetAddrs()
+		eth.MaybeReadSimnetAddrs()
+		polygon.MaybeReadSimnetAddrs()
 	}
 	if useTestnet {
 		net = util.Testnet
@@ -147,13 +145,13 @@ func mainErr() error {
 	var chainCfg *params.ChainConfig
 	switch chain {
 	case "eth":
-		bui = &dexeth.UnitInfo
+		bui = &eth.UnitInfo
 		chainCfg, err = eth.ChainConfig(net)
 		if err != nil {
 			return fmt.Errorf("error finding chain config: %v", err)
 		}
 	case "polygon":
-		bui = &dexpolygon.UnitInfo
+		bui = &polygon.UnitInfo
 		chainCfg, err = polygon.ChainConfig(net)
 		if err != nil {
 			return fmt.Errorf("error finding chain config: %v", err)

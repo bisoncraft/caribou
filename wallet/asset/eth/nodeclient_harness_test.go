@@ -40,9 +40,9 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	swapv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
 	swapv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"

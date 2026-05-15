@@ -906,4 +906,3 @@ func TestAPIBuildInfo(t *testing.T) {
 
 	ensureResponse(t, s.apiBuildInfo, string(body), reader, writer, nil, nil)
 }
-

@@ -25,10 +25,10 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcjson"

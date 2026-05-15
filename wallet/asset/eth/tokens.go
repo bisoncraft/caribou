@@ -106,7 +106,7 @@ var Tokens = map[uint32]*Token{
 		EVMFactor: new(int64),
 		Token: &util.Token{
 			NetworkID: EthBipID,
-			Name:     "USDC",
+			Name:      "USDC",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "µUSD",
 				Conventional: util.Denomination{
@@ -226,7 +226,7 @@ var Tokens = map[uint32]*Token{
 		EVMFactor: new(int64),
 		Token: &util.Token{
 			NetworkID: EthBipID,
-			Name:     "Tether",
+			Name:      "Tether",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "microUSD",
 				Conventional: util.Denomination{
@@ -344,7 +344,7 @@ var Tokens = map[uint32]*Token{
 	maticTokenID: {
 		Token: &util.Token{
 			NetworkID: EthBipID,
-			Name:     "MATIC",
+			Name:      "MATIC",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "gwei",
 				Conventional: util.Denomination{
@@ -407,7 +407,7 @@ var Tokens = map[uint32]*Token{
 	polygonTokenID: {
 		Token: &util.Token{
 			NetworkID: EthBipID,
-			Name:     "POL",
+			Name:      "POL",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "gwei",
 				Conventional: util.Denomination{

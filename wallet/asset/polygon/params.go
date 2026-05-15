@@ -126,7 +126,7 @@ var (
 		EVMFactor: new(int64),
 		Token: &util.Token{
 			NetworkID: PolygonBipID,
-			Name:     "USDC",
+			Name:      "USDC",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "µUSD",
 				Conventional: util.Denomination{
@@ -238,7 +238,7 @@ var (
 		EVMFactor: new(int64),
 		Token: &util.Token{
 			NetworkID: PolygonBipID,
-			Name:     "Tether",
+			Name:      "Tether",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "microUSD",
 				Conventional: util.Denomination{
@@ -322,7 +322,7 @@ var (
 	TokenWETH = &dexeth.Token{
 		Token: &util.Token{
 			NetworkID: PolygonBipID,
-			Name:     "Wrapped Ether",
+			Name:      "Wrapped Ether",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "gwei",
 				Conventional: util.Denomination{
@@ -394,7 +394,7 @@ var (
 		EVMFactor: new(int64),
 		Token: &util.Token{
 			NetworkID: PolygonBipID,
-			Name:     "Wrapped Bitcoin",
+			Name:      "Wrapped Bitcoin",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "Sats",
 				Conventional: util.Denomination{

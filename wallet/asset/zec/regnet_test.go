@@ -17,9 +17,9 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/livetest"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

@@ -11,11 +11,11 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	erc20v0 "github.com/bisoncraft/bosswallet/wallet/asset/erc20/contracts/v0"
 	multibal "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/multibalance"
 	ethv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
 	ethv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"

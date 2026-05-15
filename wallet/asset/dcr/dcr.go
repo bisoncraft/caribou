@@ -5885,8 +5885,8 @@ func (dcr *ExchangeWallet) withdraw(addr stdaddr.Address, val, feeRate uint64) (
 // in addition to the sent amount, and the output will be the zeroth output.
 // TODO: Just use the sendtoaddress rpc since dcrwallet respects locked utxos!
 func (dcr *ExchangeWallet) sendToAddress(addr stdaddr.Address, amt, feeRate uint64) (*wire.MsgTx, uint64, uint64, error) {
-	baseSize := uint32(MsgTxOverhead + P2PKHOutputSize*2) // may be extra if change gets omitted (see signTxAndAddChange)
-	reportChange := dcr.wallet.Accounts().UnmixedAccount == ""          // otherwise change goes to unmixed account
+	baseSize := uint32(MsgTxOverhead + P2PKHOutputSize*2)      // may be extra if change gets omitted (see signTxAndAddChange)
+	reportChange := dcr.wallet.Accounts().UnmixedAccount == "" // otherwise change goes to unmixed account
 	enough := sendEnough(amt, feeRate, false, baseSize, reportChange)
 	reserves := dcr.bondReserves.Load()
 	coins, _, _, _, err := dcr.fund(reserves, enough)
