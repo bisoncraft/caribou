@@ -668,7 +668,7 @@ type ExchangeWallet struct {
 	oracleFailing bool
 
 	handleTipMtx sync.Mutex
-	currentTip   atomic.Value // *block
+	currentTip   atomic.Pointer[block]
 
 	// Coins returned by Fund are cached for quick reference.
 	fundingMtx   sync.RWMutex
@@ -6927,14 +6927,9 @@ func (dcr *ExchangeWallet) Proposal(token string) (*pi.Proposal, error) {
 		return proposal, nil
 	}
 
-	tipI := dcr.currentTip.Load()
-	if tipI == nil {
+	tip := dcr.currentTip.Load()
+	if tip == nil {
 		// Wallet hasn't synced a tip yet; can't check voting eligibility.
-		return proposal, nil
-	}
-	tip, ok := tipI.(*block)
-	if !ok {
-		dcr.log.Warnf("unexpected type for currentTip: %T", tipI)
 		return proposal, nil
 	}
 	if tip.height > int64(proposal.EndBlockHeight) {
@@ -7964,16 +7959,7 @@ func (dcr *ExchangeWallet) handleTipChange(ctx context.Context, newTipHash *chai
 	dcr.handleTipMtx.Lock()
 	defer dcr.handleTipMtx.Unlock()
 
-	oldTipI := dcr.currentTip.Swap(&block{newTipHeight, newTipHash})
-	var prevTip *block
-	if oldTipI != nil {
-		var ok bool
-		prevTip, ok = oldTipI.(*block)
-		if !ok {
-			dcr.log.Warnf("unexpected type for currentTip: %T", oldTipI)
-		}
-	}
-
+	prevTip := dcr.currentTip.Swap(&block{newTipHeight, newTipHash})
 	var prevHeight int64
 	var prevHash *chainhash.Hash
 	if prevTip != nil {
@@ -8112,16 +8098,7 @@ func (dcr *ExchangeWallet) blockHeader(ctx context.Context, blockHash *chainhash
 }
 
 func (dcr *ExchangeWallet) cachedBestBlock() *block {
-	tipI := dcr.currentTip.Load()
-	if tipI == nil {
-		return nil
-	}
-	tip, ok := tipI.(*block)
-	if !ok {
-		dcr.log.Warnf("unexpected type for currentTip: %T", tipI)
-		return nil
-	}
-	return tip
+	return dcr.currentTip.Load()
 }
 
 // wireBytes dumps the serialized transaction bytes.

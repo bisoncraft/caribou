@@ -5,6 +5,7 @@ package dcr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -169,6 +170,9 @@ func (dcr *ExchangeWallet) scanFiltersForTxBlock(ctx context.Context, tx *extern
 	// Run cfilters scan in reverse from best block to lastScannedBlock or
 	// to block just before earliestTxTime.
 	currentTip := dcr.cachedBestBlock()
+	if currentTip == nil {
+		return nil, errors.New("wallet tip not synced")
+	}
 	if lastScannedBlock == nil {
 		dcr.log.Debugf("Searching for tx %s in blocks between best block %d (%s) and the block just before %s.",
 			tx.hash, currentTip.height, currentTip.hash, earliestTxTime)
