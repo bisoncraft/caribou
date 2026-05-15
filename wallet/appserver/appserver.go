@@ -222,7 +222,6 @@ type AppServer struct {
 	addr     string
 	csp      string
 	srv      *http.Server
-	html     atomic.Value // *templates
 	tor      bool
 	onion    string
 
@@ -239,7 +238,6 @@ type AppServer struct {
 	appVersion             string
 	newAppVersionAvailable bool
 
-	useDEXBranding  bool
 	mainLogFilePath string
 }
 
@@ -346,11 +344,6 @@ func New(cfg *Config) (*AppServer, error) {
 		langs = append(langs, l)
 	}
 
-	var useDEXBranding bool
-	if xCfg := cfg.Core.ExtensionModeConfig(); xCfg != nil {
-		useDEXBranding = xCfg.UseDEXBranding
-	}
-
 	// Make the server here so its methods can be registered.
 	s := &AppServer{
 		langs:           langs,
@@ -365,7 +358,6 @@ func New(cfg *Config) (*AppServer, error) {
 		cachedPasswords: make(map[string]*cachedPassword),
 		tor:             cfg.Tor,
 		appVersion:      userAppVersion(cfg.AppVersion, false),
-		useDEXBranding:  useDEXBranding,
 		mainLogFilePath: cfg.MainLogFilePath,
 	}
 	s.lang.Store(lang)
@@ -379,10 +371,6 @@ func New(cfg *Config) (*AppServer, error) {
 	} else if h != "" {
 		s.companionTokenHash = h
 		s.companionTokenClaimed = true
-	}
-
-	if err := s.buildTemplates(lang); err != nil {
-		return nil, fmt.Errorf("error loading localized html templates: %v", err)
 	}
 
 	// Middleware
@@ -419,11 +407,6 @@ func New(cfg *Config) (*AppServer, error) {
 	}
 
 	// The WebSocket handler is mounted on /ws in Connect.
-
-	// Webpages — only registered for the legacy server-rendered UI build.
-	// Under the new SPA UI (default build) every page is served from the
-	// SPA shell via the mux.NotFound fallback installed below.
-	s.registerLegacyWebRoutes(mux)
 
 	// api endpoints
 	mux.Route("/api", func(r chi.Router) {
@@ -506,19 +489,17 @@ func New(cfg *Config) (*AppServer, error) {
 	fileServer(mux, "/img", siteDir, "src/img", "")
 	fileServer(mux, "/font", siteDir, "src/font", "")
 
-	// Under the new UI, the SPA performs its own client-side routing
-	// (e.g. /portfolio, /trade, /activity). Serve the SPA shell for any
-	// unmatched GET so deep-linking and page refreshes work. API and asset
-	// routes register their own handlers and won't reach this fallback.
-	if newUI {
-		mux.NotFound(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				http.NotFound(w, r)
-				return
-			}
-			s.serveSPAIndex(w)
-		})
-	}
+	// The SPA performs its own client-side routing (/portfolio,
+	// /trade, /activity, etc.). Serve the SPA shell for any unmatched
+	// GET so deep-linking and refreshes work. API and asset routes
+	// register their own handlers and won't reach this fallback.
+	mux.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		s.serveSPAIndex(w)
+	})
 
 	return s, nil
 }
