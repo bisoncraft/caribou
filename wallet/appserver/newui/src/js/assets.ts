@@ -15,7 +15,7 @@ export class NetworkAsset {
   ticker: string
   token?: {
     parentMade: boolean
-    parentID: number
+    networkID: number
     feeUI: UnitInfo
   }
 
@@ -25,9 +25,9 @@ export class NetworkAsset {
     this.ticker = ticker
     this.symbol = symbol
     this.ui = ui
-    this.chainName = token ? app.user.assets[token.parentID].name : name
-    this.chainLogo = token ? Doc.logoPath(app.user.assets[token.parentID].symbol) : Doc.logoPath(symbol)
-    if (token) this.token = { parentID: token.parentID, feeUI: app.unitInfo(token.parentID), parentMade: Boolean(app.user.assets[token.parentID].wallet) }
+    this.chainName = token ? app.user.assets[token.networkID].name : name
+    this.chainLogo = token ? Doc.logoPath(app.user.assets[token.networkID].symbol) : Doc.logoPath(symbol)
+    if (token) this.token = { networkID: token.networkID, feeUI: app.unitInfo(token.networkID), parentMade: Boolean(app.user.assets[token.networkID].wallet) }
   }
 
   get bal () {
@@ -37,7 +37,7 @@ export class NetworkAsset {
 
   updateTokenParentMade () {
     if (!this.token) return false
-    this.token.parentMade = Boolean(app.user.assets[this.token.parentID].wallet)
+    this.token.parentMade = Boolean(app.user.assets[this.token.networkID].wallet)
   }
 }
 
