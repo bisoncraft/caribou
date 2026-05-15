@@ -382,7 +382,7 @@ func (conn *wsConn) close() {
 	_ = conn.ws.WriteControl(websocket.CloseMessage, msg,
 		time.Now().Add(50*time.Millisecond)) // ignore any error
 	// Forcibly close the underlying connection.
-	conn.ws.Close()
+	_ = conn.ws.Close()
 }
 
 func (conn *wsConn) readRaw(ctx context.Context) {

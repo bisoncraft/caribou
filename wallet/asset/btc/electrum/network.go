@@ -225,7 +225,7 @@ func ConnectServer(ctx context.Context, addr string, opts *ConnectOpts) (*Server
 		conn = tls.Client(conn, opts.TLSConfig)
 		err = conn.(*tls.Conn).HandshakeContext(ctx)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 	}
@@ -250,7 +250,7 @@ func ConnectServer(ctx context.Context, addr string, opts *ConnectOpts) (*Server
 	// Negotiate protocol version.
 	sc.proto, err = sc.negotiateVersion()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err // e.g. code 1: "unsupported protocol version: 1.4"
 	}
 
@@ -262,7 +262,7 @@ func ConnectServer(ctx context.Context, addr string, opts *ConnectOpts) (*Server
 
 	go func() {
 		<-ctx.Done()
-		conn.Close()
+		_ = conn.Close()
 		close(sc.done)
 	}()
 

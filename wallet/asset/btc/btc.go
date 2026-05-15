@@ -799,7 +799,7 @@ type baseWallet struct {
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	tipAtConnect int64
 
-	cfgV              atomic.Value // *baseWalletConfig
+	cfgV              atomic.Pointer[baseWalletConfig]
 	node              Wallet
 	walletInfo        *asset.WalletInfo
 	cloneParams       *BTCCloneCFG
@@ -867,20 +867,24 @@ type baseWallet struct {
 	refundCache *broadcast.Cache[*refundCacheEntry]
 }
 
+func (w *baseWallet) cfg() *baseWalletConfig {
+	return w.cfgV.Load()
+}
+
 func (w *baseWallet) fallbackFeeRate() uint64 {
-	return w.cfgV.Load().(*baseWalletConfig).fallbackFeeRate
+	return w.cfg().fallbackFeeRate
 }
 
 func (w *baseWallet) feeRateLimit() uint64 {
-	return w.cfgV.Load().(*baseWalletConfig).feeRateLimit
+	return w.cfg().feeRateLimit
 }
 
 func (w *baseWallet) redeemConfTarget() uint64 {
-	return w.cfgV.Load().(*baseWalletConfig).redeemConfTarget
+	return w.cfg().redeemConfTarget
 }
 
 func (w *baseWallet) useSplitTx() bool {
-	return w.cfgV.Load().(*baseWalletConfig).useSplitTx
+	return w.cfg().useSplitTx
 }
 
 func (w *baseWallet) UseSplitTx() bool {
@@ -888,7 +892,7 @@ func (w *baseWallet) UseSplitTx() bool {
 }
 
 func (w *baseWallet) apiFeeFallback() bool {
-	return w.cfgV.Load().(*baseWalletConfig).apiFeeFallback
+	return w.cfg().apiFeeFallback
 }
 
 type intermediaryWallet struct {
@@ -1043,7 +1047,10 @@ func (btc *ExchangeWalletSPV) LogFilePath() string {
 // address.
 func (btc *ExchangeWalletSPV) WithdrawTx(ctx context.Context, walletPW []byte, addr btcutil.Address) (_ *wire.MsgTx, err error) {
 	btc.ctx = ctx
-	spvw := btc.node.(*spvWallet)
+	spvw, ok := btc.node.(*spvWallet)
+	if !ok {
+		return nil, fmt.Errorf("invalid node type for SPV wallet")
+	}
 	spvw.cl, err = spvw.wallet.Start()
 	if err != nil {
 		return nil, fmt.Errorf("error starting wallet")
@@ -1809,6 +1816,9 @@ func (btc *baseWallet) SyncStatus() (*asset.SyncStatus, error) {
 	ss, err := btc.node.SyncStatus()
 	if err != nil {
 		return nil, err
+	}
+	if ss == nil {
+		return nil, errors.New("node returned nil sync status")
 	}
 	ss.StartingBlocks = uint64(atomic.LoadInt64(&btc.tipAtConnect))
 	if ss.Synced {
@@ -3716,7 +3726,11 @@ func (btc *baseWallet) txDB() *BadgerTxDB {
 	if dbi == nil {
 		return nil
 	}
-	return dbi.(*BadgerTxDB)
+	db, ok := dbi.(*BadgerTxDB)
+	if !ok {
+		return nil
+	}
+	return db
 }
 
 func (btc *baseWallet) markTxAsSubmitted(txHash *chainhash.Hash) {
@@ -5952,7 +5966,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 				syncStatus, err := btc.node.SyncStatus()
 				if err != nil {
 					btc.log.Errorf("Error retrieving sync status before queuing polled block: %v", err)
-				} else if !syncStatus.Synced {
+				} else if syncStatus != nil && !syncStatus.Synced {
 					blockAllowance *= 10
 				}
 				queuedBlock = &polledBlock{
@@ -7231,7 +7245,7 @@ func (btc *intermediaryWallet) syncTxHistory(tip uint64) {
 		btc.log.Errorf("Error getting sync status: %v", err)
 		return
 	}
-	if !ss.Synced {
+	if ss == nil || !ss.Synced {
 		return
 	}
 

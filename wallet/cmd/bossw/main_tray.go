@@ -95,7 +95,7 @@ func onReady() {
 							fmt.Fprintf(os.Stderr, "failed to create new config file: %v", err)
 							continue
 						}
-						fid.Close()
+						_ = fid.Close()
 					}
 				}
 				err := browser.OpenURL(cfgPathURL)

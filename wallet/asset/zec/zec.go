@@ -3654,7 +3654,7 @@ func (w *zecWallet) syncTxHistory(tip uint64) {
 		w.log.Errorf("Error getting sync status: %v", err)
 		return
 	}
-	if !ss.Synced {
+	if ss == nil || !ss.Synced {
 		return
 	}
 
