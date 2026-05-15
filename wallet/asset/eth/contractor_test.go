@@ -9,8 +9,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	swapv0 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v0"
+	swapv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -50,7 +49,7 @@ func (c tContractV0) IsRefundable(opts *bind.CallOpts, secretHash [32]byte) (boo
 
 func TestInitV0(t *testing.T) {
 	abiContract := &tContractV0{}
-	c := contractorV0{contractV0: abiContract, evmify: dexeth.GweiToWei}
+	c := contractorV0{contractV0: abiContract, evmify: GweiToWei}
 	addrStr := "0xB6De8BB5ed28E6bE6d671975cad20C03931bE981"
 	secretHashB := encode.RandomBytes(32)
 	const gweiVal = 123456
@@ -87,8 +86,8 @@ func TestInitV0(t *testing.T) {
 	if init.Participant != common.HexToAddress(addrStr) {
 		t.Fatalf("wrong address. wanted %s, got %s", common.HexToAddress(addrStr), init.Participant)
 	}
-	if dexeth.WeiToGwei(init.Value) != gweiVal {
-		t.Fatalf("wrong value. wanted %d, got %d", gweiVal, dexeth.WeiToGwei(init.Value))
+	if WeiToGwei(init.Value) != gweiVal {
+		t.Fatalf("wrong value. wanted %d, got %d", gweiVal, WeiToGwei(init.Value))
 	}
 
 	// wrong secret hash size
@@ -127,7 +126,7 @@ func TestInitV0(t *testing.T) {
 
 func TestRedeemV0(t *testing.T) {
 	abiContract := &tContractV0{}
-	c := contractorV0{contractV0: abiContract, evmify: dexeth.GweiToWei}
+	c := contractorV0{contractV0: abiContract, evmify: GweiToWei}
 
 	secretB := encode.RandomBytes(32)
 	secretHash := sha256.Sum256(secretB)
@@ -194,8 +193,8 @@ func TestSwapV0(t *testing.T) {
 	abiContract := &tContractV0{}
 	c := contractorV0{
 		contractV0: abiContract,
-		evmify:     dexeth.GweiToWei,
-		atomize:    dexeth.WeiToGwei,
+		evmify:     GweiToWei,
+		atomize:    WeiToGwei,
 	}
 
 	var secret [32]byte
@@ -209,7 +208,7 @@ func TestSwapV0(t *testing.T) {
 
 	abiContract.swap = swapv0.ETHSwapSwap{
 		Secret:               secret,
-		Value:                dexeth.GweiToWei(valGwei),
+		Value:                GweiToWei(valGwei),
 		InitBlockNumber:      big.NewInt(blockNum),
 		RefundBlockTimestamp: big.NewInt(stamp),
 		Initiator:            initiator,
@@ -233,7 +232,7 @@ func TestSwapV0(t *testing.T) {
 	if swap.Secret != secret {
 		t.Fatalf("wrong secret")
 	}
-	if dexeth.WeiToGwei(swap.Value) != valGwei {
+	if WeiToGwei(swap.Value) != valGwei {
 		t.Fatalf("wrong value")
 	}
 	if swap.BlockHeight != blockNum {

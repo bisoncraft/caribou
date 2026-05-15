@@ -21,7 +21,6 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
@@ -267,7 +266,7 @@ func TestMakeBondTx(t *testing.T) {
 
 	pkh := btcutil.Hash160(pubkey.SerializeCompressed())
 
-	lockTimeUint, pkhPush, err := dexbtc.ExtractBondDetailsV0(0, bond.Data)
+	lockTimeUint, pkhPush, err := ExtractBondDetailsV0(0, bond.Data)
 	if err != nil {
 		t.Fatalf("ExtractBondDetailsV0: %v", err)
 	}

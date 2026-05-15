@@ -10,9 +10,8 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexzcl "github.com/bisoncraft/bosswallet/util/networks/zcl"
-	dexzec "github.com/bisoncraft/bosswallet/util/networks/zec"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexzec "github.com/bisoncraft/bosswallet/wallet/asset/zec"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -87,20 +86,25 @@ var (
 			IsBoolean: true,
 		},
 	}
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:              walletTypeRPC,
+		Tab:               "External",
+		Description:       "Connect to zclassicd",
+		DefaultConfigPath: dexbtc.SystemConfigPath("zclassic"),
+		ConfigOpts:        configOpts,
+		NoAuth:            true,
+	}
 	// WalletInfo defines some general information about a Zcash wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Zclassic",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexzcl.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{{
-			Type:              walletTypeRPC,
-			Tab:               "External",
-			Description:       "Connect to zclassicd",
-			DefaultConfigPath: dexbtc.SystemConfigPath("zclassic"),
-			ConfigOpts:        configOpts,
-			NoAuth:            true,
-		}},
-		BlockchainClass: asset.BlockchainClassUTXO,
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 
@@ -152,13 +156,13 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 	var addrParams *dexzec.AddressParams
 	switch net {
 	case util.Mainnet:
-		btcParams = dexzcl.MainNetParams
+		btcParams = MainNetParams
 		addrParams = dexzec.MainNetAddressParams
 	case util.Testnet:
-		btcParams = dexzcl.TestNet4Params
+		btcParams = TestNet4Params
 		addrParams = dexzec.TestNet4AddressParams
 	case util.Regtest:
-		btcParams = dexzcl.RegressionNetParams
+		btcParams = RegressionNetParams
 		addrParams = dexzec.RegressionNetAddressParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", net)

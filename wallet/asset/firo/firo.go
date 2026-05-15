@@ -15,8 +15,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexfiro "github.com/bisoncraft/bosswallet/util/networks/firo"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 
@@ -44,7 +43,7 @@ var (
 			Key:          "fallbackfee",
 			DisplayName:  "Fallback fee rate",
 			Description:  "Firo's 'fallbackfee' rate. Units: FIRO/kB",
-			DefaultValue: strconv.FormatFloat(dexfiro.DefaultFee*1000/1e8, 'f', -1, 64),
+			DefaultValue: strconv.FormatFloat(DefaultFee*1000/1e8, 'f', -1, 64),
 		},
 		{
 			Key:         "feeratelimit",
@@ -53,7 +52,7 @@ var (
 				"pay on swap transactions. If feeratelimit is lower than a market's " +
 				"maxfeerate, you will not be able to trade on that market with this " +
 				"wallet.  Units: FIRO/kB",
-			DefaultValue: strconv.FormatFloat(dexfiro.DefaultFeeRateLimit*1000/1e8, 'f', -1, 64),
+			DefaultValue: strconv.FormatFloat(DefaultFeeRateLimit*1000/1e8, 'f', -1, 64),
 		},
 		{
 			Key:         "txsplit",
@@ -66,20 +65,21 @@ var (
 			// DefaultValue is false
 		},
 	}...)
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:              walletTypeRPC,
+		Tab:               "Firo Core (external)",
+		Description:       "Connect to firod",
+		DefaultConfigPath: dexbtc.SystemConfigPath("firo"),
+		ConfigOpts:        configOpts,
+		MultiFundingOpts:  btc.MultiFundingOpts,
+	}
 	// WalletInfo defines some general information about a Firo wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Firo",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexfiro.UnitInfo,
+		UnitInfo:          UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
-			{
-				Type:              walletTypeRPC,
-				Tab:               "Firo Core (external)",
-				Description:       "Connect to firod",
-				DefaultConfigPath: dexbtc.SystemConfigPath("firo"),
-				ConfigOpts:        configOpts,
-				MultiFundingOpts:  btc.MultiFundingOpts,
-			},
+			rpcWalletDefinition,
 			// {
 			// 	Type:             walletTypeElectrum,
 			// 	Tab:              "Electrum-Firo (external)",
@@ -89,6 +89,10 @@ var (
 			// }, // TODO: Broken. Investigate and re-enable.
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 
@@ -131,11 +135,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	var params *chaincfg.Params
 	switch network {
 	case util.Mainnet:
-		params = dexfiro.MainNetParams
+		params = MainNetParams
 	case util.Testnet:
-		params = dexfiro.TestNetParams
+		params = TestNetParams
 	case util.Regtest:
-		params = dexfiro.RegressionNetParams
+		params = RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
 	}
@@ -148,9 +152,9 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		Logger:                   logger,
 		Network:                  network,
 		ChainParams:              params,
-		Ports:                    dexfiro.NetPorts,
-		DefaultFallbackFee:       dexfiro.DefaultFee,
-		DefaultFeeRateLimit:      dexfiro.DefaultFeeRateLimit,
+		Ports:                    NetPorts,
+		DefaultFallbackFee:       DefaultFee,
+		DefaultFeeRateLimit:      DefaultFeeRateLimit,
 		Segwit:                   false,
 		InitTxSize:               dexbtc.InitTxSize,
 		InitTxSizeBase:           dexbtc.InitTxSizeBase,
@@ -278,8 +282,8 @@ func estimateFee(ctx context.Context, rr btc.RawRequester, _ uint64) (uint64, er
 		return 0, nil
 	}
 	// Keep this check
-	if feeRate > dexfiro.DefaultFeeRateLimit/1e5 {
-		return dexfiro.DefaultFee, nil
+	if feeRate > DefaultFeeRateLimit/1e5 {
+		return DefaultFee, nil
 	}
 	return uint64(math.Round(feeRate * 1e5)), nil
 }

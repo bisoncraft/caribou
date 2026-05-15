@@ -17,8 +17,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexzec "github.com/bisoncraft/bosswallet/util/networks/zec"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/livetest"
@@ -117,7 +116,7 @@ func testDeserializeBlocks(t *testing.T, port string, upgradeHeights ...int64) {
 
 	nBlocksFromHash := func(hashStr string, n int) {
 		for i := 0; i < n; i++ {
-			zecBlock, err := dexzec.DeserializeBlock(blockBytes(hashStr))
+			zecBlock, err := DeserializeBlock(blockBytes(hashStr))
 			if err != nil {
 				t.Fatalf("Error deserializing %s: %v", hashStr, err)
 			}
@@ -226,7 +225,7 @@ func TestMultiSplit(t *testing.T) {
 	}
 
 	var v0, v1 uint64 = 1e8, 2e8
-	orderReq0, orderReq1 := dexzec.RequiredOrderFunds(v0, 1, dexbtc.RedeemP2PKHInputSize, 1), dexzec.RequiredOrderFunds(v1, 1, dexbtc.RedeemP2PKHInputSize, 2)
+	orderReq0, orderReq1 := RequiredOrderFunds(v0, 1, dexbtc.RedeemP2PKHInputSize, 1), RequiredOrderFunds(v1, 1, dexbtc.RedeemP2PKHInputSize, 2)
 
 	tAddr := func() string {
 		addr, err := transparentAddressString(w)
@@ -241,7 +240,7 @@ func TestMultiSplit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listUnspent error: %v", err)
 	}
-	fees := dexzec.TxFeesZIP317(1+(dexbtc.RedeemP2PKHInputSize*uint64(len(unspents))), 1+(3*dexbtc.P2PKHOutputSize), 0, 0, 0, uint64(bals.orchard.noteCount))
+	fees := TxFeesZIP317(1+(dexbtc.RedeemP2PKHInputSize*uint64(len(unspents))), 1+(3*dexbtc.P2PKHOutputSize), 0, 0, 0, uint64(bals.orchard.noteCount))
 	netBal := bals.available() - fees
 	changeVal := netBal - orderReq0 - orderReq1
 
@@ -318,7 +317,7 @@ func TestMultiSplit(t *testing.T) {
 
 	// Send everything to a single transparent address to test for a
 	// fully-transparent split tx.
-	splitFees := dexzec.TxFeesZIP317(1+(3*dexbtc.RedeemP2PKHInputSize), 1+dexbtc.P2PKHOutputSize, 0, 0, 0, 0)
+	splitFees := TxFeesZIP317(1+(3*dexbtc.RedeemP2PKHInputSize), 1+dexbtc.P2PKHOutputSize, 0, 0, 0, 0)
 	netBal -= splitFees
 	txHash, err = w.sendOneShielded(ctx, tAddr(), netBal, NoPrivacy)
 	if err != nil {
@@ -358,7 +357,7 @@ func TestMultiSplit(t *testing.T) {
 		t.Fatalf("listUnspent error: %v", err)
 	}
 
-	splitFees = dexzec.TxFeesZIP317(1+(dexbtc.RedeemP2PKHInputSize*uint64(len(unspents))), 1, 0, 0, 0, uint64(bals.orchard.noteCount))
+	splitFees = TxFeesZIP317(1+(dexbtc.RedeemP2PKHInputSize*uint64(len(unspents))), 1, 0, 0, 0, uint64(bals.orchard.noteCount))
 	netBal = bals.available() - splitFees
 
 	txHash, err = w.sendOneShielded(ctx, orchardAddr, netBal, NoPrivacy)

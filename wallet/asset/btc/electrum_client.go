@@ -24,7 +24,6 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/electrum"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -74,8 +73,8 @@ type electrumNetworkClient interface {
 type electrumWallet struct {
 	log         util.Logger
 	chainParams *chaincfg.Params
-	decodeAddr  dexbtc.AddressDecoder
-	stringAddr  dexbtc.AddressStringer
+	decodeAddr  AddressDecoder
+	stringAddr  AddressStringer
 	rpcCfg      *RPCConfig // supports live reconfigure check
 	wallet      electrumWalletClient
 	chainV      atomic.Value // electrumNetworkClient
@@ -106,8 +105,8 @@ func (ew *electrumWallet) resetChain(cl electrumNetworkClient) {
 type electrumWalletConfig struct {
 	params       *chaincfg.Params
 	log          util.Logger
-	addrDecoder  dexbtc.AddressDecoder
-	addrStringer dexbtc.AddressStringer
+	addrDecoder  AddressDecoder
+	addrStringer AddressStringer
 	segwit       bool // indicates if segwit addresses are expected from requests
 	rpcCfg       *RPCConfig
 	torProxy     string
@@ -360,7 +359,7 @@ func (ew *electrumWallet) Reconfigure(cfg *asset.WalletConfig, currentAddress st
 	if err != nil {
 		return false, fmt.Errorf("error parsing rpc wallet config: %w", err)
 	}
-	dexbtc.StandardizeRPCConf(&parsedCfg.RPCConfig.RPCConfig, "")
+	StandardizeRPCConf(&parsedCfg.RPCConfig, "")
 
 	// Changing RPC settings is not supported without restart.
 	return parsedCfg.RPCConfig != *ew.rpcCfg, nil

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util/evmrelay"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
 )

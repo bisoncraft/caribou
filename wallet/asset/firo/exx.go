@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	dexfiro "github.com/bisoncraft/bosswallet/util/networks/firo"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/base58"
@@ -72,11 +71,11 @@ func decodeExxAddress(encodedAddr string, net *chaincfg.Params) (btcutil.Address
 	var expNet string
 	switch netID {
 	case ExxMainnet:
-		expNet = dexfiro.MainNetParams.Name
+		expNet = MainNetParams.Name
 	case ExxTestnet:
-		expNet = dexfiro.TestNetParams.Name
+		expNet = TestNetParams.Name
 	case ExxSimnet:
-		expNet = dexfiro.RegressionNetParams.Name
+		expNet = RegressionNetParams.Name
 	default:
 		return nil, fmt.Errorf("unrecognized network id %x", netID)
 	}
@@ -122,11 +121,11 @@ func (a *addressEXX) ScriptAddress() []byte {
 func (a *addressEXX) IsForNet(chainParams *chaincfg.Params) bool {
 	switch a.netID {
 	case ExxMainnet:
-		return chainParams.Name == dexfiro.MainNetParams.Name
+		return chainParams.Name == MainNetParams.Name
 	case ExxTestnet:
-		return chainParams.Name == dexfiro.TestNetParams.Name
+		return chainParams.Name == TestNetParams.Name
 	case ExxSimnet:
-		return chainParams.Name == dexfiro.RegressionNetParams.Name
+		return chainParams.Name == RegressionNetParams.Name
 	}
 	return false
 }

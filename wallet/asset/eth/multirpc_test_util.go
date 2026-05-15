@@ -17,7 +17,6 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
@@ -572,8 +571,8 @@ func (m *MRPCTest) readProviderFile(t *testing.T, net util.Network) (seed []byte
 }
 
 func fmtFee(v *big.Int) string {
-	if v.Cmp(dexeth.GweiToWei(1)) < 0 {
+	if v.Cmp(GweiToWei(1)) < 0 {
 		return fmt.Sprintf("%s wei / gas", v)
 	}
-	return fmt.Sprintf("%d gwei / gas", dexeth.WeiToGwei(v))
+	return fmt.Sprintf("%d gwei / gas", WeiToGwei(v))
 }

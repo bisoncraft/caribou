@@ -11,7 +11,6 @@ import (
 	"time"
 
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
-	dexdcr "github.com/bisoncraft/bosswallet/util/networks/dcr"
 )
 
 func Test_leastOverFund(t *testing.T) {
@@ -19,7 +18,7 @@ func Test_leastOverFund(t *testing.T) {
 	newU := func(amt float64) *compositeUTXO {
 		return &compositeUTXO{
 			rpc:   &walletjson.ListUnspentResult{Amount: amt},
-			input: &dexdcr.SpendInfo{},
+			input: &SpendInfo{},
 		}
 	}
 	tests := []struct {
@@ -100,7 +99,7 @@ func Test_leastOverFundWithLimit(t *testing.T) {
 	newU := func(amt float64) *compositeUTXO {
 		return &compositeUTXO{
 			rpc:   &walletjson.ListUnspentResult{Amount: amt},
-			input: &dexdcr.SpendInfo{},
+			input: &SpendInfo{},
 		}
 	}
 	tests := []struct {
@@ -158,7 +157,7 @@ func Fuzz_leastOverFund(f *testing.F) {
 	newU := func(amt float64) *compositeUTXO {
 		return &compositeUTXO{
 			rpc:   &walletjson.ListUnspentResult{Amount: amt},
-			input: &dexdcr.SpendInfo{},
+			input: &SpendInfo{},
 		}
 	}
 
@@ -202,7 +201,7 @@ func BenchmarkLeastOverFund(b *testing.B) {
 			rpc: &walletjson.ListUnspentResult{
 				Amount: float64(1+rnd.Int31n(100)) / float64(1e8),
 			},
-			input: &dexdcr.SpendInfo{},
+			input: &SpendInfo{},
 		}
 		utxos[i] = utxo
 	}

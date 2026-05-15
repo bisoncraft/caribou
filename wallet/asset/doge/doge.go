@@ -11,8 +11,7 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexdoge "github.com/bisoncraft/bosswallet/util/networks/doge"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -57,7 +56,7 @@ var (
 			Key:          fallbackFeeKey,
 			DisplayName:  "Fallback fee rate",
 			Description:  "Dogecoin's 'fallbackfee' rate. Units: DOGE/kB",
-			DefaultValue: strconv.FormatFloat(dexdoge.DefaultFee*1000/1e8, 'f', -1, 64),
+			DefaultValue: strconv.FormatFloat(DefaultFee*1000/1e8, 'f', -1, 64),
 		},
 		{
 			Key:         "feeratelimit",
@@ -66,7 +65,7 @@ var (
 				"pay on swap transactions. If feeratelimit is lower than a market's " +
 				"maxfeerate, you will not be able to trade on that market with this " +
 				"wallet.  Units: BTC/kB",
-			DefaultValue: strconv.FormatFloat(dexdoge.DefaultFeeRateLimit*1000/1e8, 'f', -1, 64),
+			DefaultValue: strconv.FormatFloat(DefaultFeeRateLimit*1000/1e8, 'f', -1, 64),
 		},
 		{
 			Key:         "txsplit",
@@ -87,19 +86,24 @@ var (
 			DefaultValue: "true",
 		},
 	}
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:              walletTypeRPC,
+		Tab:               "External",
+		Description:       "Connect to dogecoind",
+		DefaultConfigPath: dexbtc.SystemConfigPath("dogecoin"),
+		ConfigOpts:        configOpts,
+	}
 	// WalletInfo defines some general information about a Dogecoin wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Dogecoin",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexdoge.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{{
-			Type:              walletTypeRPC,
-			Tab:               "External",
-			Description:       "Connect to dogecoind",
-			DefaultConfigPath: dexbtc.SystemConfigPath("dogecoin"),
-			ConfigOpts:        configOpts,
-		}},
-		BlockchainClass: asset.BlockchainClassUTXO,
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 
@@ -142,11 +146,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	var params *chaincfg.Params
 	switch network {
 	case util.Mainnet:
-		params = dexdoge.MainNetParams
+		params = MainNetParams
 	case util.Testnet:
-		params = dexdoge.TestNet4Params
+		params = TestNet4Params
 	case util.Regtest:
-		params = dexdoge.RegressionNetParams
+		params = RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
 	}
@@ -167,8 +171,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		Network:                  network,
 		ChainParams:              params,
 		Ports:                    ports,
-		DefaultFallbackFee:       dexdoge.DefaultFee,
-		DefaultFeeRateLimit:      dexdoge.DefaultFeeRateLimit,
+		DefaultFallbackFee:       DefaultFee,
+		DefaultFeeRateLimit:      DefaultFeeRateLimit,
 		LegacyBalance:            true,
 		Segwit:                   false,
 		InitTxSize:               dexbtc.InitTxSize,
@@ -182,7 +186,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		ConstantDustLimit:        dustLimit,
 		FeeEstimator:             estimateFee,
 		ExternalFeeEstimator:     externalFeeRate,
-		BlockDeserializer:        dexdoge.DeserializeBlock,
+		BlockDeserializer:        DeserializeBlock,
 		AssetID:                  BipID,
 	}
 
@@ -211,8 +215,8 @@ func estimateFee(ctx context.Context, cl btc.RawRequester, _ uint64) (uint64, er
 	}
 	// estimatefee is f#$%ed
 	// https://github.com/decred/dcrdex/pull/1558#discussion_r850061882
-	if feeRate > dexdoge.DefaultFeeRateLimit/1e5 {
-		return dexdoge.DefaultFee, nil
+	if feeRate > DefaultFeeRateLimit/1e5 {
+		return DefaultFee, nil
 	}
 	return uint64(math.Round(feeRate * 1e5)), nil
 }

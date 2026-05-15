@@ -209,8 +209,8 @@ func (ui *UnitInfo) FormatSignedAtoms(v int64, plusSign ...bool) string {
 
 // Token is a generic representation of a token-type asset.
 type Token struct {
-	// ParentID is the asset ID of the token's parent asset.
-	ParentID uint32 `json:"parentID"`
+	// NetworkID is the asset ID of the network (chain) this token lives on.
+	NetworkID uint32 `json:"networkID"`
 	// Name is the display name of the token asset.
 	Name string `json:"name"`
 	// UnitInfo is the UnitInfo for the token.

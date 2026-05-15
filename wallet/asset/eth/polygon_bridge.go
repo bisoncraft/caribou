@@ -14,8 +14,8 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
-	"github.com/bisoncraft/bosswallet/util/networks/erc20"
-	"github.com/bisoncraft/bosswallet/util/networks/erc20/polygonbridge"
+	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
+	"github.com/bisoncraft/bosswallet/wallet/asset/erc20/polygonbridge"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 

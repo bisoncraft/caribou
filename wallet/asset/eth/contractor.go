@@ -14,11 +14,10 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/util/networks/erc20"
-	erc20v0 "github.com/bisoncraft/bosswallet/util/networks/erc20/contracts/v0"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	swapv0 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v0"
-	swapv1 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v1"
+	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
+	erc20v0 "github.com/bisoncraft/bosswallet/wallet/asset/erc20/contracts/v0"
+	swapv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
+	swapv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -32,9 +31,9 @@ import (
 // The intention is that if a new contract is implemented, the contractor
 // interface itself will not require any updates.
 type contractor interface {
-	status(ctx context.Context, locator []byte) (*dexeth.SwapStatus, error)
-	vector(ctx context.Context, locator []byte) (*dexeth.SwapVector, error)
-	statusAndVector(ctx context.Context, locator []byte) (*dexeth.SwapStatus, *dexeth.SwapVector, error)
+	status(ctx context.Context, locator []byte) (*SwapStatus, error)
+	vector(ctx context.Context, locator []byte) (*SwapVector, error)
+	statusAndVector(ctx context.Context, locator []byte) (*SwapStatus, *SwapVector, error)
 	initiate(*bind.TransactOpts, []*asset.Contract) (*types.Transaction, error)
 	redeem(txOpts *bind.TransactOpts, redeems []*asset.Redemption) (*types.Transaction, error)
 	refund(opts *bind.TransactOpts, locator []byte) (*types.Transaction, error)
@@ -73,7 +72,7 @@ type tokenContractor interface {
 }
 
 type unifiedContractor interface {
-	tokenContractor(token *dexeth.Token) (tokenContractor, error)
+	tokenContractor(token *Token) (tokenContractor, error)
 }
 
 type contractorConstructor func(net util.Network, contractAddr, acctAddr common.Address, ec bind.ContractBackend, chainID int64) (contractor, error)
@@ -130,12 +129,12 @@ func newV0Contractor(_ util.Network, contractAddr, acctAddr common.Address, cb b
 
 	return &contractorV0{
 		contractV0:   c,
-		abi:          dexeth.ABIs[0],
+		abi:          ABIs[0],
 		cb:           cb,
 		contractAddr: contractAddr,
 		acctAddr:     acctAddr,
-		evmify:       dexeth.GweiToWei,
-		atomize:      dexeth.WeiToGwei,
+		evmify:       GweiToWei,
+		atomize:      WeiToGwei,
 	}, nil
 }
 
@@ -145,8 +144,8 @@ func (c *contractorV0) initiate(txOpts *bind.TransactOpts, contracts []*asset.Co
 	secrets := make(map[[32]byte]bool, len(contracts))
 
 	for _, contract := range contracts {
-		if len(contract.SecretHash) != dexeth.SecretHashSize {
-			return nil, fmt.Errorf("wrong secret hash length. wanted %d, got %d", dexeth.SecretHashSize, len(contract.SecretHash))
+		if len(contract.SecretHash) != SecretHashSize {
+			return nil, fmt.Errorf("wrong secret hash length. wanted %d, got %d", SecretHashSize, len(contract.SecretHash))
 		}
 
 		var secretHash [32]byte
@@ -205,8 +204,8 @@ func (c *contractorV0) redeem(txOpts *bind.TransactOpts, redemptions []*asset.Re
 
 // status fetches the SwapStatus, which specifies the current state of mutable
 // swap data.
-func (c *contractorV0) status(ctx context.Context, locator []byte) (*dexeth.SwapStatus, error) {
-	secretHash, err := dexeth.ParseV0Locator(locator)
+func (c *contractorV0) status(ctx context.Context, locator []byte) (*SwapStatus, error) {
+	secretHash, err := ParseV0Locator(locator)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +213,7 @@ func (c *contractorV0) status(ctx context.Context, locator []byte) (*dexeth.Swap
 	if err != nil {
 		return nil, err
 	}
-	status := &dexeth.SwapStatus{
+	status := &SwapStatus{
 		Step:        swap.State,
 		Secret:      swap.Secret,
 		BlockHeight: swap.BlockHeight,
@@ -224,8 +223,8 @@ func (c *contractorV0) status(ctx context.Context, locator []byte) (*dexeth.Swap
 
 // vector generates a SwapVector, containing the immutable data that defines
 // the swap.
-func (c *contractorV0) vector(ctx context.Context, locator []byte) (*dexeth.SwapVector, error) {
-	secretHash, err := dexeth.ParseV0Locator(locator)
+func (c *contractorV0) vector(ctx context.Context, locator []byte) (*SwapVector, error) {
+	secretHash, err := ParseV0Locator(locator)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +232,7 @@ func (c *contractorV0) vector(ctx context.Context, locator []byte) (*dexeth.Swap
 	if err != nil {
 		return nil, err
 	}
-	vector := &dexeth.SwapVector{
+	vector := &SwapVector{
 		From:       swap.Initiator,
 		To:         swap.Participant,
 		Value:      swap.Value,
@@ -246,8 +245,8 @@ func (c *contractorV0) vector(ctx context.Context, locator []byte) (*dexeth.Swap
 // statusAndVector generates both the status and the vector simultaneously. For
 // version 0, this is better than calling status and vector separately, since
 // each makes an identical call to c.swap.
-func (c *contractorV0) statusAndVector(ctx context.Context, locator []byte) (*dexeth.SwapStatus, *dexeth.SwapVector, error) {
-	secretHash, err := dexeth.ParseV0Locator(locator)
+func (c *contractorV0) statusAndVector(ctx context.Context, locator []byte) (*SwapStatus, *SwapVector, error) {
+	secretHash, err := ParseV0Locator(locator)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -255,14 +254,14 @@ func (c *contractorV0) statusAndVector(ctx context.Context, locator []byte) (*de
 	if err != nil {
 		return nil, nil, err
 	}
-	vector := &dexeth.SwapVector{
+	vector := &SwapVector{
 		From:       swap.Initiator,
 		To:         swap.Participant,
 		Value:      swap.Value,
 		SecretHash: secretHash,
 		LockTime:   uint64(swap.LockTime.Unix()),
 	}
-	status := &dexeth.SwapStatus{
+	status := &SwapStatus{
 		Step:        swap.State,
 		Secret:      swap.Secret,
 		BlockHeight: swap.BlockHeight,
@@ -270,7 +269,7 @@ func (c *contractorV0) statusAndVector(ctx context.Context, locator []byte) (*de
 	return status, vector, nil
 }
 
-func (c *contractorV0) swap(ctx context.Context, secretHash [32]byte) (*dexeth.SwapState, error) {
+func (c *contractorV0) swap(ctx context.Context, secretHash [32]byte) (*SwapState, error) {
 	callOpts := &bind.CallOpts{
 		From:    c.acctAddr,
 		Context: ctx,
@@ -280,21 +279,21 @@ func (c *contractorV0) swap(ctx context.Context, secretHash [32]byte) (*dexeth.S
 		return nil, err
 	}
 
-	return &dexeth.SwapState{
+	return &SwapState{
 		BlockHeight: state.InitBlockNumber.Uint64(),
 		LockTime:    time.Unix(state.RefundBlockTimestamp.Int64(), 0),
 		Secret:      state.Secret,
 		Initiator:   state.Initiator,
 		Participant: state.Participant,
 		Value:       state.Value,
-		State:       dexeth.SwapStep(state.State),
+		State:       SwapStep(state.State),
 	}, nil
 }
 
 // refund issues the refund command to the swap contract. Use isRefundable first
 // to ensure the refund will be accepted.
 func (c *contractorV0) refund(txOpts *bind.TransactOpts, locator []byte) (tx *types.Transaction, err error) {
-	secretHash, err := dexeth.ParseV0Locator(locator)
+	secretHash, err := ParseV0Locator(locator)
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +306,7 @@ func (c *contractorV0) refundImpl(txOpts *bind.TransactOpts, secretHash [32]byte
 
 // isRefundable exposes the isRefundable method of the swap contract.
 func (c *contractorV0) isRefundable(locator []byte) (bool, error) {
-	secretHash, err := dexeth.ParseV0Locator(locator)
+	secretHash, err := ParseV0Locator(locator)
 	if err != nil {
 		return false, err
 	}
@@ -336,7 +335,7 @@ func (c *contractorV0) estimateRedeemGas(ctx context.Context, secrets [][32]byte
 // supplied must reference existing swaps that are refundable, so this method
 // can't be used until the swap is initiated and the lock time has expired.
 func (c *contractorV0) estimateRefundGas(ctx context.Context, locator []byte) (uint64, error) {
-	secretHash, err := dexeth.ParseV0Locator(locator)
+	secretHash, err := ParseV0Locator(locator)
 	if err != nil {
 		return 0, err
 	}
@@ -436,7 +435,7 @@ func (c *contractorV0) value(ctx context.Context, tx *types.Transaction) (in, ou
 
 // incomingValue calculates the value being redeemed for refunded in the tx.
 func (c *contractorV0) incomingValue(ctx context.Context, tx *types.Transaction) (uint64, error) {
-	if redeems, err := dexeth.ParseRedeemDataV0(tx.Data()); err == nil {
+	if redeems, err := ParseRedeemDataV0(tx.Data()); err == nil {
 		var redeemed uint64
 		for _, redeem := range redeems {
 			swap, err := c.swap(ctx, redeem.SecretHash)
@@ -447,7 +446,7 @@ func (c *contractorV0) incomingValue(ctx context.Context, tx *types.Transaction)
 		}
 		return redeemed, nil
 	}
-	secretHash, err := dexeth.ParseRefundDataV0(tx.Data())
+	secretHash, err := ParseRefundDataV0(tx.Data())
 	if err != nil {
 		return 0, nil
 	}
@@ -460,7 +459,7 @@ func (c *contractorV0) incomingValue(ctx context.Context, tx *types.Transaction)
 
 // outgoingValue calculates the value sent in swaps in the tx.
 func (c *contractorV0) outgoingValue(tx *types.Transaction) (swapped uint64) {
-	if inits, err := dexeth.ParseInitiateDataV0(tx.Data()); err == nil {
+	if inits, err := ParseInitiateDataV0(tx.Data()); err == nil {
 		for _, init := range inits {
 			swapped += c.atomize(init.Value)
 		}
@@ -552,7 +551,7 @@ var _ contractor = (*tokenContractorV0)(nil)
 var _ tokenContractor = (*tokenContractorV0)(nil)
 
 // newV0TokenContractor is a contractor for version 0 erc20 token swap contract.
-func newV0TokenContractor(net util.Network, token *dexeth.Token, acctAddr common.Address, cb bind.ContractBackend) (tokenContractor, error) {
+func newV0TokenContractor(net util.Network, token *Token, acctAddr common.Address, cb bind.ContractBackend) (tokenContractor, error) {
 	netToken, found := token.NetTokens[net]
 	if !found {
 		return nil, fmt.Errorf("token %s has no network %s", token.Name, net)
@@ -689,57 +688,57 @@ func newV1Contractor(net util.Network, swapContractAddr, acctAddr common.Address
 	return &contractorV1{
 		contractV1:       c,
 		net:              net,
-		abi:              dexeth.ABIs[1],
+		abi:              ABIs[1],
 		swapContractAddr: swapContractAddr,
 		acctAddr:         acctAddr,
 		cb:               cb,
 		chainID:          cid,
-		atomize:          dexeth.WeiToGwei,
-		evmify:           dexeth.GweiToWei,
+		atomize:          WeiToGwei,
+		evmify:           GweiToWei,
 		eip712DomainSep:  domainSep,
 		eip712RedeemType: eip712RedeemTypehash,
 	}, nil
 }
 
-func (c *contractorV1) status(ctx context.Context, locator []byte) (*dexeth.SwapStatus, error) {
-	v, err := dexeth.ParseV1Locator(locator)
+func (c *contractorV1) status(ctx context.Context, locator []byte) (*SwapStatus, error) {
+	v, err := ParseV1Locator(locator)
 	if err != nil {
 		return nil, err
 	}
-	rec, err := c.Status(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, dexeth.SwapVectorToAbigen(v))
+	rec, err := c.Status(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, SwapVectorToAbigen(v))
 	if err != nil {
 		return nil, err
 	}
-	return &dexeth.SwapStatus{
-		Step:        dexeth.SwapStep(rec.Step),
+	return &SwapStatus{
+		Step:        SwapStep(rec.Step),
 		Secret:      rec.Secret,
 		BlockHeight: rec.BlockNumber.Uint64(),
 	}, err
 }
 
-func (c *contractorV1) vector(ctx context.Context, locator []byte) (*dexeth.SwapVector, error) {
-	return dexeth.ParseV1Locator(locator)
+func (c *contractorV1) vector(ctx context.Context, locator []byte) (*SwapVector, error) {
+	return ParseV1Locator(locator)
 }
 
-func (c *contractorV1) statusAndVector(ctx context.Context, locator []byte) (*dexeth.SwapStatus, *dexeth.SwapVector, error) {
-	v, err := dexeth.ParseV1Locator(locator)
+func (c *contractorV1) statusAndVector(ctx context.Context, locator []byte) (*SwapStatus, *SwapVector, error) {
+	v, err := ParseV1Locator(locator)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	rec, err := c.Status(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, dexeth.SwapVectorToAbigen(v))
+	rec, err := c.Status(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, SwapVectorToAbigen(v))
 	if err != nil {
 		return nil, nil, err
 	}
-	return &dexeth.SwapStatus{
-		Step:        dexeth.SwapStep(rec.Step),
+	return &SwapStatus{
+		Step:        SwapStep(rec.Step),
 		Secret:      rec.Secret,
 		BlockHeight: rec.BlockNumber.Uint64(),
 	}, v, err
 }
 
-// func (c *contractorV1) record(v *dexeth.SwapVector) (r [32]byte, err error) {
-// 	abiVec := dexeth.SwapVectorToAbigen(v)
+// func (c *contractorV1) record(v *SwapVector) (r [32]byte, err error) {
+// 	abiVec := SwapVectorToAbigen(v)
 // 	ck, err := c.ContractKey(&bind.CallOpts{From: c.acctAddr}, abiVec)
 // 	if err != nil {
 // 		return r, fmt.Errorf("ContractKey error: %v", err)
@@ -750,14 +749,14 @@ func (c *contractorV1) statusAndVector(ctx context.Context, locator []byte) (*de
 func (c *contractorV1) initiate(txOpts *bind.TransactOpts, contracts []*asset.Contract) (*types.Transaction, error) {
 	versionedContracts := make([]swapv1.ETHSwapVector, 0, len(contracts))
 	for _, ac := range contracts {
-		v := &dexeth.SwapVector{
+		v := &SwapVector{
 			From:     c.acctAddr,
 			To:       common.HexToAddress(ac.Address),
 			Value:    c.evmify(ac.Value),
 			LockTime: ac.LockTime,
 		}
 		copy(v.SecretHash[:], ac.SecretHash)
-		versionedContracts = append(versionedContracts, dexeth.SwapVectorToAbigen(v))
+		versionedContracts = append(versionedContracts, SwapVectorToAbigen(v))
 	}
 	return c.Initiate(txOpts, c.tokenAddr, versionedContracts)
 }
@@ -779,16 +778,16 @@ func (c *contractorV1) convertRedeems(redeems []*asset.Redemption) ([]swapv1.ETH
 
 		// Not checking version from DecodeLocator because it was already
 		// audited and incorrect version locator would err below anyway.
-		_, locator, err := dexeth.DecodeContractData(r.Spends.Contract)
+		_, locator, err := DecodeContractData(r.Spends.Contract)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing locator redeem: %w", err)
 		}
-		v, err := dexeth.ParseV1Locator(locator)
+		v, err := ParseV1Locator(locator)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing locator: %w", err)
 		}
 		versionedRedemptions = append(versionedRedemptions, swapv1.ETHSwapRedemption{
-			V:      dexeth.SwapVectorToAbigen(v),
+			V:      SwapVectorToAbigen(v),
 			Secret: secret,
 		})
 	}
@@ -921,11 +920,11 @@ func (c *contractorV1) nonces(addr common.Address) (*big.Int, error) {
 }
 
 func (c *contractorV1) refund(txOpts *bind.TransactOpts, locator []byte) (*types.Transaction, error) {
-	v, err := dexeth.ParseV1Locator(locator)
+	v, err := ParseV1Locator(locator)
 	if err != nil {
 		return nil, err
 	}
-	return c.Refund(txOpts, c.tokenAddr, dexeth.SwapVectorToAbigen(v))
+	return c.Refund(txOpts, c.tokenAddr, SwapVectorToAbigen(v))
 }
 
 // dummyInitiationsV1 creates n dummy initiations for gas/calldata estimation.
@@ -955,7 +954,7 @@ func (c *contractorV1) estimateInitGas(ctx context.Context, n int) (uint64, erro
 
 	var value *big.Int
 	if !c.isToken {
-		value = dexeth.GweiToWei(uint64(n))
+		value = GweiToWei(uint64(n))
 	}
 
 	return c.estimateGas(ctx, value, "initiate", c.tokenAddr, initiations)
@@ -970,9 +969,9 @@ func (c *contractorV1) estimateRedeemGas(ctx context.Context, secrets [][32]byte
 		return 0, fmt.Errorf("number of secrets (%d) does not match number of contracts (%d)", len(secrets), len(locators))
 	}
 
-	vectors := make([]*dexeth.SwapVector, len(locators))
+	vectors := make([]*SwapVector, len(locators))
 	for i, loc := range locators {
-		v, err := dexeth.ParseV1Locator(loc)
+		v, err := ParseV1Locator(loc)
 		if err != nil {
 			return 0, fmt.Errorf("unable to parse locator # %d (%x): %v", i, loc, err)
 		}
@@ -983,18 +982,18 @@ func (c *contractorV1) estimateRedeemGas(ctx context.Context, secrets [][32]byte
 	for i, secret := range secrets {
 		redemps = append(redemps, swapv1.ETHSwapRedemption{
 			Secret: secret,
-			V:      dexeth.SwapVectorToAbigen(vectors[i]),
+			V:      SwapVectorToAbigen(vectors[i]),
 		})
 	}
 	return c.estimateGas(ctx, nil, "redeem", c.tokenAddr, redemps)
 }
 
 func (c *contractorV1) estimateRefundGas(ctx context.Context, locator []byte) (uint64, error) {
-	v, err := dexeth.ParseV1Locator(locator)
+	v, err := ParseV1Locator(locator)
 	if err != nil {
 		return 0, err
 	}
-	return c.estimateGas(ctx, nil, "refund", c.tokenAddr, dexeth.SwapVectorToAbigen(v))
+	return c.estimateGas(ctx, nil, "refund", c.tokenAddr, SwapVectorToAbigen(v))
 }
 
 // packRedeemData returns ABI-packed calldata for a redeem transaction.
@@ -1032,46 +1031,46 @@ func (c *contractorV1) packRefundData() ([]byte, error) {
 }
 
 func (c *contractorV1) isRedeemable(locator []byte, secret [32]byte) (bool, error) {
-	v, err := dexeth.ParseV1Locator(locator)
+	v, err := ParseV1Locator(locator)
 	if err != nil {
 		return false, err
 	}
 	if v.To != c.acctAddr {
 		return false, nil
 	}
-	if is, err := c.IsRedeemable(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, dexeth.SwapVectorToAbigen(v)); err != nil || !is {
+	if is, err := c.IsRedeemable(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, SwapVectorToAbigen(v)); err != nil || !is {
 		return is, err
 	}
 	return sha256.Sum256(secret[:]) == v.SecretHash, nil
 }
 
 func (c *contractorV1) isRefundable(locator []byte) (bool, error) {
-	v, err := dexeth.ParseV1Locator(locator)
+	v, err := ParseV1Locator(locator)
 	if err != nil {
 		return false, err
 	}
-	if is, err := c.IsRedeemable(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, dexeth.SwapVectorToAbigen(v)); err != nil || !is {
+	if is, err := c.IsRedeemable(&bind.CallOpts{From: c.acctAddr}, c.tokenAddr, SwapVectorToAbigen(v)); err != nil || !is {
 		return is, err
 	}
 	return time.Now().Unix() >= int64(v.LockTime), nil
 }
 
 func (c *contractorV1) incomingValue(ctx context.Context, tx *types.Transaction) (uint64, error) {
-	if _, redeems, err := dexeth.ParseRedeemDataV1(tx.Data()); err == nil {
+	if _, redeems, err := ParseRedeemDataV1(tx.Data()); err == nil {
 		redeemed := new(big.Int)
 		for _, r := range redeems {
 			redeemed.Add(redeemed, r.Contract.Value)
 		}
 		return c.atomize(redeemed), nil
 	}
-	if signed, err := dexeth.ParseSignedRedeemDataV1(tx.Data()); err == nil {
+	if signed, err := ParseSignedRedeemDataV1(tx.Data()); err == nil {
 		redeemed := new(big.Int)
 		for _, r := range signed.Redemptions {
 			redeemed.Add(redeemed, r.Contract.Value)
 		}
 		return c.atomize(redeemed), nil
 	}
-	refund, err := dexeth.ParseRefundDataV1(tx.Data())
+	refund, err := ParseRefundDataV1(tx.Data())
 	if err != nil {
 		return 0, nil
 	}
@@ -1079,7 +1078,7 @@ func (c *contractorV1) incomingValue(ctx context.Context, tx *types.Transaction)
 }
 
 func (c *contractorV1) outgoingValue(tx *types.Transaction) (swapped uint64) {
-	if _, inits, err := dexeth.ParseInitiateDataV1(tx.Data()); err == nil {
+	if _, inits, err := ParseInitiateDataV1(tx.Data()); err == nil {
 		for _, init := range inits {
 			swapped += c.atomize(init.Value)
 		}
@@ -1106,7 +1105,7 @@ type tokenContractorV1 struct {
 	*erc20Contractor
 }
 
-func (c *contractorV1) tokenContractor(token *dexeth.Token) (tokenContractor, error) {
+func (c *contractorV1) tokenContractor(token *Token) (tokenContractor, error) {
 	netToken, found := token.NetTokens[c.net]
 	if !found {
 		return nil, fmt.Errorf("token %s has no network %s", token.Name, c.net)

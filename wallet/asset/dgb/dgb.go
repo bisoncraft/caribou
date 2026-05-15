@@ -8,8 +8,7 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexdgb "github.com/bisoncraft/bosswallet/util/networks/dgb"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 
@@ -38,7 +37,7 @@ var (
 			Key:          "fallbackfee",
 			DisplayName:  "Fallback fee rate",
 			Description:  "DigiByte's 'fallbackfee' rate. Units: DGB/kB",
-			DefaultValue: strconv.FormatFloat(dexdgb.DefaultFee*1000/1e8, 'f', -1, 64), // higher than BTC default
+			DefaultValue: strconv.FormatFloat(DefaultFee*1000/1e8, 'f', -1, 64), // higher than BTC default
 		},
 		{
 			Key:         "feeratelimit",
@@ -47,7 +46,7 @@ var (
 				"pay on swap transactions. If feeratelimit is lower than a market's " +
 				"maxfeerate, you will not be able to trade on that market with this " +
 				"wallet.  Units: BTC/kB",
-			DefaultValue: strconv.FormatFloat(dexdgb.DefaultFeeRateLimit*1000/1e8, 'f', -1, 64), // higher than BTC default
+			DefaultValue: strconv.FormatFloat(DefaultFeeRateLimit*1000/1e8, 'f', -1, 64), // higher than BTC default
 		},
 		{
 			Key:         "redeemconftarget",
@@ -68,19 +67,24 @@ var (
 			DefaultValue: "true", // low fee, fast chain
 		}, // no ExternalFeeEstimator, so no apifeefallback option
 	}...)
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:              walletTypeRPC,
+		Tab:               "External",
+		Description:       "Connect to digibyted",
+		DefaultConfigPath: dexbtc.SystemConfigPath("digibyte"),
+		ConfigOpts:        configOpts,
+	}
 	// WalletInfo defines some general information about a DigiByte wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "DigiByte",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexdgb.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{{
-			Type:              walletTypeRPC,
-			Tab:               "External",
-			Description:       "Connect to digibyted",
-			DefaultConfigPath: dexbtc.SystemConfigPath("digibyte"),
-			ConfigOpts:        configOpts,
-		}},
-		BlockchainClass: asset.BlockchainClassUTXO,
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 
@@ -123,11 +127,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	var params *chaincfg.Params
 	switch network {
 	case util.Mainnet:
-		params = dexdgb.MainNetParams
+		params = MainNetParams
 	case util.Testnet:
-		params = dexdgb.TestNetParams
+		params = TestNetParams
 	case util.Regtest:
-		params = dexdgb.RegressionNetParams
+		params = RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
 	}
@@ -152,8 +156,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		Network:             network,
 		ChainParams:         params,
 		Ports:               ports,
-		DefaultFallbackFee:  dexdgb.DefaultFee,
-		DefaultFeeRateLimit: dexdgb.DefaultFeeRateLimit,
+		DefaultFallbackFee:  DefaultFee,
+		DefaultFeeRateLimit: DefaultFeeRateLimit,
 		LegacyBalance:       true,
 		Segwit:              true,
 		InitTxSize:          dexbtc.InitTxSizeSegwit,

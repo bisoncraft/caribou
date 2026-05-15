@@ -14,8 +14,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
@@ -72,13 +71,17 @@ var (
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Litecoin",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexltc.UnitInfo,
+		UnitInfo:          UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
 			// electrumWalletDefinition, // TODO: Broken. Investigate and re-enable.
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 
@@ -195,11 +198,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	var cloneParams *chaincfg.Params
 	switch network {
 	case util.Mainnet:
-		cloneParams = dexltc.MainNetParams
+		cloneParams = MainNetParams
 	case util.Testnet:
-		cloneParams = dexltc.TestNet4Params
+		cloneParams = TestNet4Params
 	case util.Regtest:
-		cloneParams = dexltc.RegressionNetParams
+		cloneParams = RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
 	}
@@ -222,7 +225,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		Segwit:               true,
 		InitTxSize:           dexbtc.InitTxSizeSegwit,
 		InitTxSizeBase:       dexbtc.InitTxSizeBaseSegwit,
-		BlockDeserializer:    dexltc.DeserializeBlockBytes,
+		BlockDeserializer:    DeserializeBlockBytes,
 		ExternalFeeEstimator: externalFeeRate,
 		AssetID:              BipID,
 	}
@@ -252,11 +255,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 func parseChainParams(net util.Network) (*chaincfg.Params, error) {
 	switch net {
 	case util.Mainnet:
-		return dexltc.MainNetParams, nil
+		return MainNetParams, nil
 	case util.Testnet:
-		return dexltc.TestNet4Params, nil
+		return TestNet4Params, nil
 	case util.Regtest:
-		return dexltc.RegressionNetParams, nil
+		return RegressionNetParams, nil
 	}
 	return nil, fmt.Errorf("unknown network ID %v", net)
 }

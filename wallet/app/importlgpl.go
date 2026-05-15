@@ -10,8 +10,7 @@
 package app
 
 import (
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/eth"  // register eth asset
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	_ "github.com/bisoncraft/bosswallet/wallet/asset/near" // register near asset
 )
 

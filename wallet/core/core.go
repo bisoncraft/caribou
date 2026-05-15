@@ -580,8 +580,8 @@ func (c *Core) wallet(assetID uint32) (*xcWallet, bool) {
 }
 
 func (c *Core) initializeTokenWallet(tokenID uint32, tkn *asset.Token) error {
-	if _, found := c.wallet(tkn.ParentID); !found {
-		return fmt.Errorf("no parent wallet %d for token %s", tkn.ParentID, tkn.Name)
+	if _, found := c.wallet(tkn.NetworkID); !found {
+		return fmt.Errorf("no network wallet %d for token %s", tkn.NetworkID, tkn.Name)
 	}
 	dbWallet, err := c.createTokenDBWallet(tokenID, tkn, &WalletForm{
 		AssetID: tokenID,
@@ -589,8 +589,8 @@ func (c *Core) initializeTokenWallet(tokenID uint32, tkn *asset.Token) error {
 		Type:    tkn.Definition.Type,
 	})
 	if err != nil {
-		return fmt.Errorf("error creating %s token wallet with existing %s parent wallet: %w",
-			util.BipIDSymbol(tokenID), util.BipIDSymbol(tkn.ParentID), err)
+		return fmt.Errorf("error creating %s token wallet with existing %s network wallet: %w",
+			util.BipIDSymbol(tokenID), util.BipIDSymbol(tkn.NetworkID), err)
 	}
 	w, err := c.loadXCWallet(dbWallet)
 	if err != nil {
@@ -650,14 +650,14 @@ func (c *Core) connectAndUpdateWallet(w *xcWallet) error {
 
 	token := asset.TokenInfo(assetID)
 	if token != nil {
-		parentWallet, found := c.wallet(token.ParentID)
+		networkWallet, found := c.wallet(token.NetworkID)
 		if !found {
-			return fmt.Errorf("token %s wallet has no %s parent?", unbip(assetID), unbip(token.ParentID))
+			return fmt.Errorf("token %s wallet has no %s network wallet", unbip(assetID), unbip(token.NetworkID))
 		}
-		if !parentWallet.connected() {
-			if err := c.connectAndUpdateWallet(parentWallet); err != nil {
-				return fmt.Errorf("failed to connect %s parent wallet for %s token: %v",
-					unbip(token.ParentID), unbip(assetID), err)
+		if !networkWallet.connected() {
+			if err := c.connectAndUpdateWallet(networkWallet); err != nil {
+				return fmt.Errorf("failed to connect %s network wallet for %s token: %v",
+					unbip(token.NetworkID), unbip(assetID), err)
 			}
 		}
 	}
@@ -828,17 +828,17 @@ func (c *Core) updateBalances(assets assetMap) {
 		}
 
 		if token := asset.TokenInfo(assetID); token != nil {
-			if _, alreadyUpdating := assets[token.ParentID]; alreadyUpdating {
+			if _, alreadyUpdating := assets[token.NetworkID]; alreadyUpdating {
 				continue
 			}
-			parentWallet, exists := c.wallet(token.ParentID)
+			networkWallet, exists := c.wallet(token.NetworkID)
 			if !exists {
-				c.log.Errorf("non-existent %d wallet should exist", token.ParentID)
+				c.log.Errorf("non-existent %d wallet should exist", token.NetworkID)
 				continue
 			}
-			_, err := c.updateWalletBalance(parentWallet)
+			_, err := c.updateWalletBalance(networkWallet)
 			if err != nil {
-				c.log.Errorf("error updating %q balance: %v", unbip(token.ParentID), err)
+				c.log.Errorf("error updating %q balance: %v", unbip(token.NetworkID), err)
 				continue
 			}
 		}
@@ -885,11 +885,11 @@ func (c *Core) ToggleWalletStatus(assetID uint32, disable bool) error {
 		return nil
 	}
 
-	// If this wallet is a parent, disable/enable all token wallets.
+	// If this wallet is a network wallet, disable/enable all token wallets.
 	var affectedWallets []*xcWallet
 	if disable {
-		// Ensure wallet is not a parent of an enabled token wallet with active
-		// orders.
+		// Ensure wallet is not the network wallet of an enabled token wallet
+		// with active orders.
 		if assetInfo := asset.Asset(assetID); assetInfo != nil {
 			for id := range assetInfo.Tokens {
 				if wallet, exists := c.wallet(id); exists && !wallet.isDisabled() {
@@ -898,7 +898,7 @@ func (c *Core) ToggleWalletStatus(assetID uint32, disable bool) error {
 			}
 		}
 
-		// If wallet is a parent wallet, it will be the last to be disconnected
+		// If wallet is a network wallet, it will be the last to be disconnected
 		// and disabled.
 		affectedWallets = append(affectedWallets, wallet)
 
@@ -910,9 +910,9 @@ func (c *Core) ToggleWalletStatus(assetID uint32, disable bool) error {
 			wallet.setDisabled(true)
 		}
 	} else {
-		if wallet.parent != nil && wallet.parent.isDisabled() {
-			// Ensure parent wallet starts first.
-			affectedWallets = append(affectedWallets, wallet.parent)
+		if wallet.network != nil && wallet.network.isDisabled() {
+			// Ensure network wallet starts first.
+			affectedWallets = append(affectedWallets, wallet.network)
 		}
 
 		affectedWallets = append(affectedWallets, wallet)
@@ -1100,7 +1100,7 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 				Type:    tkn.Definition.Type,
 			}
 			if err := c.createWallet(crypter, nil, form); err != nil {
-				c.log.Errorf("Error creating token %s wallet for parent %s", tkn.Name, symbol)
+				c.log.Errorf("Error creating token %s wallet for network %s", tkn.Name, symbol)
 			}
 		}
 	}
@@ -1163,14 +1163,14 @@ func (c *Core) createDBWallet(crypter encrypt.Crypter, form *WalletForm, walletP
 }
 
 func (c *Core) createTokenDBWallet(tokenID uint32, token *asset.Token, form *WalletForm) (*db.Wallet, error) {
-	wallet, found := c.wallet(token.ParentID)
+	wallet, found := c.wallet(token.NetworkID)
 	if !found {
-		return nil, fmt.Errorf("no parent wallet %d for token %d (%s)", token.ParentID, tokenID, unbip(tokenID))
+		return nil, fmt.Errorf("no network wallet %d for token %d (%s)", token.NetworkID, tokenID, unbip(tokenID))
 	}
 
 	tokenMaster, is := wallet.Wallet.(asset.TokenMaster)
 	if !is {
-		return nil, fmt.Errorf("parent wallet %s is not a TokenMaster", unbip(token.ParentID))
+		return nil, fmt.Errorf("network wallet %s is not a TokenMaster", unbip(token.NetworkID))
 	}
 
 	// Sometimes core will insert data into the Settings map to communicate
@@ -1188,7 +1188,7 @@ func (c *Core) createTokenDBWallet(tokenID uint32, token *asset.Token, form *Wal
 		AssetID:  tokenID,
 		Settings: form.Config,
 		// EncryptedPW ignored because we assume throughout that token wallet
-		// authorization is handled by the parent.
+		// authorization is handled by the network wallet.
 		// Balance and Address are set after connect.
 	}, nil
 }
@@ -1234,7 +1234,7 @@ func (c *Core) assetSeedAndPass(assetID uint32, crypter encrypt.Crypter) (seed, 
 
 	if tkn := asset.TokenInfo(assetID); tkn != nil {
 		return nil, nil, fmt.Errorf("%s is a token. assets seeds are for base chains onlyu. did you want %s",
-			tkn.Name, asset.Asset(tkn.ParentID).Info.Name)
+			tkn.Name, asset.Asset(tkn.NetworkID).Info.Name)
 	}
 
 	appSeed, err := crypter.Decrypt(creds.EncSeed)
@@ -1257,9 +1257,9 @@ func AssetSeedAndPass(assetID uint32, appSeed []byte) ([]byte, []byte) {
 		seedAssetID = accountBasedSeedAssetID
 	}
 	// Tokens asset IDs shouldn't be passed in, but if they are, return the seed
-	// for the parent ID.
+	// for the network ID.
 	if tkn := asset.TokenInfo(assetID); tkn != nil {
-		if ai, _ := asset.Info(tkn.ParentID); ai != nil {
+		if ai, _ := asset.Info(tkn.NetworkID); ai != nil {
 			if ai.BlockchainClass.IsEVM() {
 				seedAssetID = accountBasedSeedAssetID
 			}
@@ -1289,7 +1289,7 @@ func (c *Core) assetDataBackupDirectory(assetID uint32) string {
 // loadWallet uses the data from the database to construct a new exchange
 // wallet. The returned wallet is running but not connected.
 func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
-	var parent *xcWallet
+	var network *xcWallet
 	assetID := dbWallet.AssetID
 
 	// Construct the unconnected xcWallet.
@@ -1361,14 +1361,14 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 		w, err = asset.OpenWallet(assetID, walletCfg, log, c.net)
 	} else {
 		var found bool
-		parent, found = c.wallet(token.ParentID)
+		network, found = c.wallet(token.NetworkID)
 		if !found {
-			return nil, fmt.Errorf("cannot load %s wallet before %s wallet", unbip(assetID), unbip(token.ParentID))
+			return nil, fmt.Errorf("cannot load %s wallet before %s wallet", unbip(assetID), unbip(token.NetworkID))
 		}
 
-		tokenMaster, is := parent.Wallet.(asset.TokenMaster)
+		tokenMaster, is := network.Wallet.(asset.TokenMaster)
 		if !is {
-			return nil, fmt.Errorf("%s token's %s parent wallet is not a TokenMaster", unbip(assetID), unbip(token.ParentID))
+			return nil, fmt.Errorf("%s token's %s network wallet is not a TokenMaster", unbip(assetID), unbip(token.NetworkID))
 		}
 
 		w, err = tokenMaster.OpenTokenWallet(&asset.TokenConfig{
@@ -1387,7 +1387,7 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 	}
 
 	wallet.Wallet = w
-	wallet.parent = parent
+	wallet.network = network
 	wallet.supportedVersions = w.Info().SupportedVersions
 	wallet.connector = util.NewConnectionMaster(w)
 	wallet.traits = asset.DetermineWalletTraits(w)
@@ -2530,9 +2530,9 @@ func (c *Core) connectWallets(crypter encrypt.Crypter) {
 		if wallet.isDisabled() {
 			return
 		}
-		// Return early if this is a token and the parent wallet is disabled.
+		// Return early if this is a token and its network wallet is disabled.
 		if token := asset.TokenInfo(wallet.AssetID); token != nil {
-			if parentWallet, found := c.wallet(token.ParentID); found && parentWallet.isDisabled() {
+			if networkWallet, found := c.wallet(token.NetworkID); found && networkWallet.isDisabled() {
 				return
 			}
 		}
@@ -3021,14 +3021,14 @@ func (c *Core) TestContractGas(appPW []byte, assetIDs []uint32, tokenAssetIDs []
 		return nil, newError(authErr, "TestContractGas password error: %w", err)
 	}
 
-	// Group token asset IDs by their parent chain.
-	tokensByParent := make(map[uint32][]uint32)
+	// Group token asset IDs by their host network/chain.
+	tokensByNetwork := make(map[uint32][]uint32)
 	for _, tokenID := range tokenAssetIDs {
 		ti := asset.TokenInfo(tokenID)
 		if ti == nil {
 			return nil, newError(assetSupportErr, "unknown token asset ID %d", tokenID)
 		}
-		tokensByParent[ti.ParentID] = append(tokensByParent[ti.ParentID], tokenID)
+		tokensByNetwork[ti.NetworkID] = append(tokensByNetwork[ti.NetworkID], tokenID)
 	}
 
 	// Build the set of chains to test. Explicitly listed chains run both
@@ -3037,10 +3037,10 @@ func (c *Core) TestContractGas(appPW []byte, assetIDs []uint32, tokenAssetIDs []
 	for _, id := range assetIDs {
 		explicitChains[id] = true
 	}
-	// Auto-add parent chains for tokens not already covered.
-	for parentID := range tokensByParent {
-		if !explicitChains[parentID] {
-			assetIDs = append(assetIDs, parentID)
+	// Auto-add network chains for tokens not already covered.
+	for networkID := range tokensByNetwork {
+		if !explicitChains[networkID] {
+			assetIDs = append(assetIDs, networkID)
 		}
 	}
 
@@ -3068,7 +3068,7 @@ func (c *Core) TestContractGas(appPW []byte, assetIDs []uint32, tokenAssetIDs []
 					Error:   "wallet does not support contract gas testing",
 				}}
 			} else {
-				tokensForChain := tokensByParent[assetID]
+				tokensForChain := tokensByNetwork[assetID]
 				tokensOnly := !explicitChains[assetID]
 				gasResults, err := tester.TestContractGas(1, maxSwaps, tokensForChain, tokensOnly)
 				if err != nil {
@@ -3207,7 +3207,7 @@ func (c *Core) BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName str
 	if initiationFee > 0 {
 		fromFeeAssetID := fromAssetID
 		if token := asset.TokenInfo(fromAssetID); token != nil {
-			fromFeeAssetID = token.ParentID
+			fromFeeAssetID = token.NetworkID
 		}
 		fees[fromFeeAssetID] += initiationFee
 	}
@@ -3215,7 +3215,7 @@ func (c *Core) BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName str
 	if completionFee > 0 {
 		toFeeAssetID := toAssetID
 		if token := asset.TokenInfo(toAssetID); token != nil {
-			toFeeAssetID = token.ParentID
+			toFeeAssetID = token.NetworkID
 		}
 		fees[toFeeAssetID] += completionFee
 	}

@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
+	dexltc "github.com/bisoncraft/bosswallet/wallet/asset/ltc"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/electrum"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"

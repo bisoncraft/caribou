@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util/calc"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 )
 
 // SendEnough generates a function that can be used as the enough argument to
@@ -32,7 +31,7 @@ func SendEnough(amt, feeRate uint64, subtract bool, baseTxSize uint64, segwit, r
 			return false, 0
 		}
 		excess := sum - req
-		if !reportChange || dexbtc.IsDustVal(dexbtc.P2PKHOutputSize, excess, feeRate, segwit) {
+		if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate, segwit) {
 			excess = 0
 		}
 		return true, excess
@@ -50,7 +49,7 @@ func orderEnough(val, lots, feeRate, initTxSizeBase, initTxSize uint64, segwit, 
 		reqFunds := calc.RequiredOrderFunds(val, inputsSize, lots, initTxSizeBase, initTxSize, feeRate)
 		if sum >= reqFunds {
 			excess := sum - reqFunds
-			if !reportChange || dexbtc.IsDustVal(dexbtc.P2PKHOutputSize, excess, feeRate, segwit) {
+			if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate, segwit) {
 				excess = 0
 			}
 			return true, excess

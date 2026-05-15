@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
@@ -92,14 +91,13 @@ var _ btc.BTCWallet = (*ltcSPVWallet)(nil)
 // by looking up the LTC network in the assets table.
 func ltcNetParams(btcParams *chaincfg.Params) *netparams.ChainParams {
 	switch btcParams.Name {
-	case dexltc.MainNetParams.Name:
+	case MainNetParams.Name:
 		return assets.LTCParams["mainnet"]
-	case dexltc.TestNet4Params.Name:
+	case TestNet4Params.Name:
 		return assets.LTCParams["testnet"]
-	case dexltc.RegressionNetParams.Name:
+	case RegressionNetParams.Name:
 		return assets.LTCParams["simnet"]
 	default:
-		// Fallback: return mainnet params (should not happen in practice).
 		return assets.LTCParams["mainnet"]
 	}
 }
@@ -215,9 +213,9 @@ func (w *ltcSPVWallet) Start() (btc.SPVService, error) {
 
 	var defaultPeers []string
 	switch w.btcParams.Name {
-	case dexltc.TestNet4Params.Name:
+	case TestNet4Params.Name:
 		defaultPeers = append([]string{"127.0.0.1:19335"}, testnet4Seeds...)
-	case dexltc.RegressionNetParams.Name:
+	case RegressionNetParams.Name:
 		defaultPeers = []string{"127.0.0.1:20585"}
 	}
 	peerManager := btc.NewSPVPeerManager(&ltcChainService{w.cl}, defaultPeers, w.dir, w.log, w.netChainParams.DefaultPort)

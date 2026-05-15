@@ -25,10 +25,8 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
-	"github.com/bisoncraft/bosswallet/util/networks/base"
-	"github.com/bisoncraft/bosswallet/util/networks/erc20"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -200,11 +198,11 @@ func (p *provider) bestHeader(ctx context.Context, log util.Logger) (*types.Head
 		return nil, fmt.Errorf("HeaderByNumber error: %w", err)
 	}
 	timeDiff := time.Now().Unix() - int64(hdr.Time)
-	if timeDiff > dexeth.MaxBlockInterval && p.net != util.Simnet {
+	if timeDiff > MaxBlockInterval && p.net != util.Simnet {
 		p.setFailed()
 		return nil, fmt.Errorf("time since last block (%d sec) exceeds %d sec. "+
 			"Assuming provider %s is not in sync. Ensure your computer's system clock "+
-			"is correct", timeDiff, dexeth.MaxBlockInterval, p.host)
+			"is correct", timeDiff, MaxBlockInterval, p.host)
 	}
 	p.setTip(hdr, log)
 	return hdr, nil
@@ -232,10 +230,10 @@ func (p *provider) suggestTipCap(ctx context.Context, log util.Logger) *big.Int 
 	if err != nil {
 		p.setFailed()
 		log.Errorf("error getting tip cap suggestion from %q: %v", p.host, err)
-		return dexeth.GweiToWei(dexeth.MinGasTipCap)
+		return GweiToWei(MinGasTipCap)
 	}
 
-	minGasTipCapWei := dexeth.GweiToWei(dexeth.MinGasTipCap)
+	minGasTipCapWei := GweiToWei(MinGasTipCap)
 	if tipCap.Cmp(minGasTipCapWei) < 0 {
 		return tipCap.Set(minGasTipCapWei)
 	}
@@ -1622,7 +1620,7 @@ func newCompatibilityTests(cb bind.ContractBackend, compat *CompatibilityData, l
 				if err != nil {
 					return err
 				}
-				log.Debugf("#### Retrieved tip cap: %d gwei", dexeth.WeiToGweiCeil(tipCap))
+				log.Debugf("#### Retrieved tip cap: %d gwei", WeiToGweiCeil(tipCap))
 				return nil
 			},
 		},
@@ -1633,7 +1631,7 @@ func newCompatibilityTests(cb bind.ContractBackend, compat *CompatibilityData, l
 				if err != nil {
 					return err
 				}
-				log.Debugf("#### Balance retrieved: %.9f", float64(dexeth.WeiToGweiCeil(bal))/1e9)
+				log.Debugf("#### Balance retrieved: %.9f", float64(WeiToGweiCeil(bal))/1e9)
 				return nil
 			},
 		},
@@ -1673,7 +1671,7 @@ func newCompatibilityTests(cb bind.ContractBackend, compat *CompatibilityData, l
 				// I guess we would need to unpack the results. I don't really
 				// know how to interpret these, but I'm really just looking for
 				// a request error.
-				log.Debug("#### ERC20 token balanceOf result:", dexeth.WeiToGwei(bal), "gwei")
+				log.Debug("#### ERC20 token balanceOf result:", WeiToGwei(bal), "gwei")
 				return nil
 			},
 		},
@@ -1816,7 +1814,7 @@ func isNotFoundError(err error) bool {
 // Stack GasPriceOracle precompile. The multiRPCClient itself satisfies
 // bind.ContractBackend.
 func (m *multiRPCClient) l1FeeForCalldata(ctx context.Context, calldata []byte) (*big.Int, error) {
-	return base.L1FeeForCalldata(ctx, m, calldata)
+	return L1FeeForCalldata(ctx, m, calldata)
 }
 
 // l1FeeFromReceipt returns the L1 fee paid for a transaction from its receipt.

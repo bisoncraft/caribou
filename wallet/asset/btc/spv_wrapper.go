@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
@@ -242,7 +241,7 @@ type spvWallet struct {
 	acctNum     uint32
 	acctName    string
 	dir         string
-	decodeAddr  dexbtc.AddressDecoder
+	decodeAddr  AddressDecoder
 
 	log util.Logger
 
@@ -778,7 +777,7 @@ func (w *spvWallet) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract b
 	remaining := sum - sendAmount
 
 	// Check if there will be a change output if there is enough remaining.
-	estFeeWithChange := (txSize + dexbtc.P2WPKHOutputSize) * feeRate
+	estFeeWithChange := (txSize + P2WPKHOutputSize) * feeRate
 	var changeValue uint64
 	if remaining > estFeeWithChange {
 		changeValue = remaining - estFeeWithChange
@@ -790,7 +789,7 @@ func (w *spvWallet) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract b
 	}
 
 	var finalFee uint64
-	if dexbtc.IsDustVal(dexbtc.P2WPKHOutputSize, changeValue, feeRate, true) {
+	if IsDustVal(P2WPKHOutputSize, changeValue, feeRate, true) {
 		// remaining cannot cover a non-dust change and the fee for the change.
 		finalFee = estFee + remaining
 	} else {
@@ -801,7 +800,7 @@ func (w *spvWallet) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract b
 	if subtract {
 		sendAmount -= finalFee
 	}
-	if dexbtc.IsDustVal(minTxSize, sendAmount, feeRate, true) {
+	if IsDustVal(minTxSize, sendAmount, feeRate, true) {
 		return 0, errors.New("output value is dust")
 	}
 

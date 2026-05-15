@@ -13,9 +13,9 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbase "github.com/bisoncraft/bosswallet/util/networks/base"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
+	dexbase "github.com/bisoncraft/bosswallet/wallet/asset/base"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	dexpolygon "github.com/bisoncraft/bosswallet/wallet/asset/polygon"
 	"github.com/bisoncraft/bosswallet/wallet/asset/base"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/bisoncraft/bosswallet/wallet/asset/polygon"

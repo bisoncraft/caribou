@@ -337,6 +337,12 @@ type WalletDefinition struct {
 	GuideLink string `json:"guidelink"`
 }
 
+// Network is information about an asset's network.
+type Network struct {
+	ID            uint32 `json:"id"`
+	NativeAssetID uint32 `json:"nativeAssetID"`
+}
+
 // Token combines the generic util.Token with a WalletDefinition.
 type Token struct {
 	*util.Token
@@ -380,6 +386,9 @@ type WalletInfo struct {
 	UnitInfo util.UnitInfo `json:"unitinfo"`
 	// BlockchainClass is the type of the wallet's blockchain.
 	BlockchainClass BlockchainClass
+	// Network describes the chain this wallet operates on. For chains that
+	// host tokens, this is the network referenced by token Token.NetworkID.
+	Network *Network `json:"network"`
 }
 
 // ConfigOption is a wallet configuration option.

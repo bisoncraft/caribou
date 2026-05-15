@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexnxmr "github.com/bisoncraft/bosswallet/util/networks/xmr"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/xmr/cxmr"
 )
@@ -92,18 +91,24 @@ var (
 		},
 	}
 
+	nativeWalletDefinition = &asset.WalletDefinition{
+		Type:        walletTypeNative,
+		Seeded:      true,
+		Tab:         "Native",
+		Description: "Native Monero wallet using libwallet2",
+		ConfigOpts:  configOpts,
+	}
+
 	// WalletInfo defines general information about a Monero wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Monero",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexnxmr.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{{
-			Type:        walletTypeNative,
-			Seeded:      true,
-			Tab:         "Native",
-			Description: "Native Monero wallet using libwallet2",
-			ConfigOpts:  configOpts,
-		}},
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{nativeWalletDefinition},
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 

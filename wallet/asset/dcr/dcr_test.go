@@ -27,7 +27,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/calc"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexdcr "github.com/bisoncraft/bosswallet/util/networks/dcr"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
 	dcradaptor "github.com/bisoncraft/bosswallet/wallet/internal/adaptorsigs"
@@ -781,7 +780,7 @@ func TestMaxFundingFees(t *testing.T) {
 	}
 
 	maxFundingFees := wallet.MaxFundingFees(3, maxFeeRate, useSplitOptions)
-	expectedFees := maxFeeRate * (dexdcr.P2PKHInputSize*12 + dexdcr.P2PKHOutputSize*4 + dexdcr.MsgTxOverhead)
+	expectedFees := maxFeeRate * (P2PKHInputSize*12 + P2PKHOutputSize*4 + MsgTxOverhead)
 	if maxFundingFees != expectedFees {
 		t.Fatalf("unexpected max funding fees. expected %d, got %d", expectedFees, maxFundingFees)
 	}
@@ -845,7 +844,7 @@ func TestAvailableFund(t *testing.T) {
 	// Add 1 unspent output and check balance
 	var littleLots uint64 = 6
 	littleOrder := tLotSize * littleLots
-	littleFunds := calc.RequiredOrderFunds(littleOrder, dexdcr.P2PKHInputSize, littleLots, dexdcr.InitTxSizeBase, dexdcr.InitTxSize, tDCR.MaxFeeRate)
+	littleFunds := calc.RequiredOrderFunds(littleOrder, P2PKHInputSize, littleLots, InitTxSizeBase, InitTxSize, tDCR.MaxFeeRate)
 	addUtxo(littleFunds, 0, false)
 	bal, err = wallet.Balance()
 	if err != nil {
@@ -883,7 +882,7 @@ func TestAvailableFund(t *testing.T) {
 	var lottaLots uint64 = 100
 	lottaOrder := tLotSize * 100
 	// Add funding for an extra input to accommodate the later combined tests.
-	lottaFunds := calc.RequiredOrderFunds(lottaOrder, 2*dexdcr.P2PKHInputSize, lottaLots, dexdcr.InitTxSizeBase, dexdcr.InitTxSize, tDCR.MaxFeeRate)
+	lottaFunds := calc.RequiredOrderFunds(lottaOrder, 2*P2PKHInputSize, lottaLots, InitTxSizeBase, InitTxSize, tDCR.MaxFeeRate)
 	addUtxo(lottaFunds, 1, false)
 	bal, err = wallet.Balance()
 	if err != nil {
@@ -1013,7 +1012,7 @@ func TestAvailableFund(t *testing.T) {
 	}
 
 	// Not enough to cover transaction fees.
-	tweak := float64(littleFunds+lottaFunds-calc.RequiredOrderFunds(extraLottaOrder, 2*dexdcr.P2PKHInputSize, extraLottaLots, dexdcr.InitTxSizeBase, dexdcr.InitTxSize, tDCR.MaxFeeRate)+1) / 1e8
+	tweak := float64(littleFunds+lottaFunds-calc.RequiredOrderFunds(extraLottaOrder, 2*P2PKHInputSize, extraLottaLots, InitTxSizeBase, InitTxSize, tDCR.MaxFeeRate)+1) / 1e8
 	node.unspent[0].Amount -= tweak
 	setOrderValue(extraLottaOrder)
 	_, _, _, err = wallet.FundOrder(ord)
@@ -1047,8 +1046,8 @@ func TestAvailableFund(t *testing.T) {
 		t.Fatalf("error for split tx: %v", err)
 	}
 
-	inputSize := dexdcr.P2PKHInputSize - dexdcr.P2PKHSigScriptSize // no sig script
-	splitTxSize := dexdcr.MsgTxOverhead + (2 * inputSize) + 2*dexdcr.P2PKHOutputSize
+	inputSize := P2PKHInputSize - P2PKHSigScriptSize // no sig script
+	splitTxSize := MsgTxOverhead + (2 * inputSize) + 2*P2PKHOutputSize
 	expectedFees := uint64(splitTxSize) * feeSuggestion
 	if fees != expectedFees {
 		t.Fatalf("expected fees of %d, got %d", expectedFees, fees)
@@ -1307,15 +1306,15 @@ func TestFundMultiOrder(t *testing.T) {
 	}
 
 	expectedSplitFee := func(numInputs, numOutputs uint64) uint64 {
-		inputSize := uint64(dexdcr.P2PKHInputSize)
-		outputSize := uint64(dexdcr.P2PKHOutputSize)
-		return (dexdcr.MsgTxOverhead + numInputs*inputSize + numOutputs*outputSize) * feeSuggestion
+		inputSize := uint64(P2PKHInputSize)
+		outputSize := uint64(P2PKHOutputSize)
+		return (MsgTxOverhead + numInputs*inputSize + numOutputs*outputSize) * feeSuggestion
 	}
 
 	requiredForOrder := func(value, maxSwapCount uint64) int64 {
-		inputSize := uint64(dexdcr.P2PKHInputSize)
+		inputSize := uint64(P2PKHInputSize)
 		return int64(calc.RequiredOrderFunds(value, inputSize, maxSwapCount,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, maxFeeRate))
+			InitTxSizeBase, InitTxSize, maxFeeRate))
 	}
 
 	type test struct {
@@ -2377,7 +2376,7 @@ func TestFundMultiOrder(t *testing.T) {
 		node.newAddr = tPKHAddr
 		node.changeAddr = tPKHAddr
 		node.signFunc = func(msgTx *wire.MsgTx) (*wire.MsgTx, bool, error) {
-			return signFunc(msgTx, dexdcr.P2PKHSigScriptSize)
+			return signFunc(msgTx, P2PKHSigScriptSize)
 		}
 		node.sentRawTx = nil
 		node.lockedCoins = nil
@@ -2596,7 +2595,7 @@ func TestFundEdges(t *testing.T) {
 	//  lots = swap_size / lot_size = 10
 	//  base_tx_bytes = (lots - 1) * swap_size + swap_size_base = 9 * 251 + 85 = 2344
 	//  base_fees = 56256
-	//  backing_bytes: 1x P2PKH inputs = dexdcr.P2PKHInputSize = 166 bytes
+	//  backing_bytes: 1x P2PKH inputs = P2PKHInputSize = 166 bytes
 	//  backing_fees: 166 * fee_rate(24 atoms/byte) = 3984 atoms
 	//  total_bytes  = base_tx_bytes + backing_bytes = 2344 + 166 = 2510
 	// total_fees: base_fees + backing_fees = 56256 + 3984 = 60240 atoms
@@ -2660,7 +2659,7 @@ func TestFundEdges(t *testing.T) {
 	node.newAddr = tPKHAddr
 	node.changeAddr = tPKHAddr
 	node.signFunc = func(msgTx *wire.MsgTx) (*wire.MsgTx, bool, error) {
-		return signFunc(msgTx, dexdcr.P2PKHSigScriptSize)
+		return signFunc(msgTx, P2PKHSigScriptSize)
 	}
 
 	fees = uint64(totalBytes+splitTxBaggage) * tDCR.MaxFeeRate
@@ -2754,7 +2753,7 @@ func TestSwap(t *testing.T) {
 	signFunc := func(msgTx *wire.MsgTx) (*wire.MsgTx, bool, error) {
 		// Set the sigScripts to random bytes of the correct length for spending a
 		// p2pkh output.
-		scriptSize := dexdcr.P2PKHSigScriptSize
+		scriptSize := P2PKHSigScriptSize
 		// Oscillate the signature size to work the fee optimization loop.
 		if sigSizer%2 == 0 {
 			scriptSize -= 2
@@ -2859,7 +2858,7 @@ func TestRedeem(t *testing.T) {
 	lockTime := time.Now().Add(time.Hour * 12)
 	addr := tPKHAddr.String()
 
-	contract, err := dexdcr.MakeContract(addr, addr, secretHash[:], lockTime.Unix(), tChainParams)
+	contract, err := MakeContract(addr, addr, secretHash[:], lockTime.Unix(), tChainParams)
 	if err != nil {
 		t.Fatalf("error making swap contract: %v", err)
 	}
@@ -3068,7 +3067,7 @@ func TestAuditContract(t *testing.T) {
 	secretHash, _ := hex.DecodeString("5124208c80d33507befa517c08ed01aa8d33adbf37ecd70fb5f9352f7a51a88d")
 	lockTime := time.Now().Add(time.Hour * 12)
 	addrStr := tPKHAddr.String()
-	contract, err := dexdcr.MakeContract(addrStr, addrStr, secretHash, lockTime.Unix(), tChainParams)
+	contract, err := MakeContract(addrStr, addrStr, secretHash, lockTime.Unix(), tChainParams)
 	if err != nil {
 		t.Fatalf("error making swap contract: %v", err)
 	}
@@ -3115,7 +3114,7 @@ func TestAuditContract(t *testing.T) {
 	pkh, _ := hex.DecodeString("c6a704f11af6cbee8738ff19fc28cdc70aba0b82")
 	wrongAddr, _ := stdaddr.NewAddressPubKeyHashEcdsaSecp256k1V0(pkh, tChainParams)
 	wrongAddrStr := wrongAddr.String()
-	wrongContract, err := dexdcr.MakeContract(wrongAddrStr, wrongAddrStr, secretHash, lockTime.Unix(), tChainParams)
+	wrongContract, err := MakeContract(wrongAddrStr, wrongAddrStr, secretHash, lockTime.Unix(), tChainParams)
 	if err != nil {
 		t.Fatalf("error making wrong swap contract: %v", err)
 	}
@@ -3191,7 +3190,7 @@ func TestFindRedemption(t *testing.T) {
 	secretHash := sha256.Sum256(secret)
 	lockTime := time.Now().Add(time.Hour * 12)
 	addrStr := tPKHAddr.String()
-	contract, err := dexdcr.MakeContract(addrStr, addrStr, secretHash[:], lockTime.Unix(), tChainParams)
+	contract, err := MakeContract(addrStr, addrStr, secretHash[:], lockTime.Unix(), tChainParams)
 	if err != nil {
 		t.Fatalf("error making swap contract: %v", err)
 	}
@@ -3201,7 +3200,7 @@ func TestFindRedemption(t *testing.T) {
 	tPKHAddrV3, _ := stdaddr.DecodeAddress(tPKHAddr.String(), tChainParams)
 	_, otherScript := tPKHAddrV3.PaymentScript()
 
-	redemptionScript, _ := dexdcr.RedeemP2SHContract(contract, randBytes(73), randBytes(33), secret)
+	redemptionScript, _ := RedeemP2SHContract(contract, randBytes(73), randBytes(33), secret)
 	otherSpendScript, _ := txscript.NewScriptBuilder().
 		AddData(randBytes(73)).
 		AddData(randBytes(33)).
@@ -3332,7 +3331,7 @@ func TestRefund(t *testing.T) {
 	secretHash := sha256.Sum256(secret)
 	lockTime := time.Now().Add(time.Hour * 12)
 	addrStr := tPKHAddr.String()
-	contract, err := dexdcr.MakeContract(addrStr, addrStr, secretHash[:], lockTime.Unix(), tChainParams)
+	contract, err := MakeContract(addrStr, addrStr, secretHash[:], lockTime.Unix(), tChainParams)
 	if err != nil {
 		t.Fatalf("error making swap contract: %v", err)
 	}
@@ -3606,7 +3605,7 @@ func TestWithdrawTxSizeValidation(t *testing.T) {
 
 	node.changeAddr = tPKHAddr
 	node.signFunc = func(msgTx *wire.MsgTx) (*wire.MsgTx, bool, error) {
-		return signFunc(msgTx, dexdcr.P2PKHSigScriptSize)
+		return signFunc(msgTx, P2PKHSigScriptSize)
 	}
 
 	// Test 1: Normal transaction with single UTXO (should succeed)
@@ -4078,9 +4077,9 @@ func TestSendEdges(t *testing.T) {
 	const swapVal = 2e8 // leaving untyped. NewTxOut wants int64
 
 	contractAddr, _ := stdaddr.NewAddressScriptHashV0(randBytes(20), tChainParams)
-	// See dexdcr.IsDust for the source of this dustCoverage voodoo.
-	dustCoverage := (dexdcr.P2PKHOutputSize + 165) * feeRate * 3
-	dexReqFees := dexdcr.InitTxSize * feeRate
+	// See IsDust for the source of this dustCoverage voodoo.
+	dustCoverage := (P2PKHOutputSize + 165) * feeRate * 3
+	dexReqFees := InitTxSize * feeRate
 
 	_, pkScript := contractAddr.PaymentScript()
 
@@ -4092,7 +4091,7 @@ func TestSendEdges(t *testing.T) {
 	}
 
 	node.signFunc = func(tx *wire.MsgTx) (*wire.MsgTx, bool, error) {
-		return signFunc(tx, dexdcr.P2PKHSigScriptSize)
+		return signFunc(tx, P2PKHSigScriptSize)
 	}
 
 	tests := []struct {
@@ -4484,11 +4483,11 @@ func TestEstimateSendTxFee(t *testing.T) {
 	tx.AddTxOut(newTxOut(int64(unspentVal), payScriptVer, payScript))
 
 	// bSize is the base size for a single tx input.
-	bSize := dexdcr.TxInOverhead + uint32(wire.VarIntSerializeSize(uint64(dexdcr.P2PKHSigScriptSize))) + dexdcr.P2PKHSigScriptSize
+	bSize := TxInOverhead + uint32(wire.VarIntSerializeSize(uint64(P2PKHSigScriptSize))) + P2PKHSigScriptSize
 
 	txSize := uint32(tx.SerializeSize()) + bSize
 	estFee := uint64(txSize) * optimalFeeRate
-	changeFee := dexdcr.P2PKHOutputSize * optimalFeeRate
+	changeFee := P2PKHOutputSize * optimalFeeRate
 	estFeeWithChange := changeFee + estFee
 
 	// This should return fee rate estimate for one output.
@@ -4558,7 +4557,7 @@ func TestConfirmTransaction(t *testing.T) {
 	addr := tPKHAddr.String()
 
 	node.newAddr = tPKHAddr
-	contract, err := dexdcr.MakeContract(addr, addr, secretHash[:], lockTime.Unix(), tChainParams)
+	contract, err := MakeContract(addr, addr, secretHash[:], lockTime.Unix(), tChainParams)
 	if err != nil {
 		t.Fatalf("error making swap contract: %v", err)
 	}
@@ -4574,7 +4573,7 @@ func TestConfirmTransaction(t *testing.T) {
 	contractAddr, _ := stdaddr.NewAddressScriptHashV0(contract, tChainParams)
 	_, contractP2SHScript := contractAddr.PaymentScript()
 
-	redemptionScript, _ := dexdcr.RedeemP2SHContract(contract, randBytes(73), randBytes(33), secret)
+	redemptionScript, _ := RedeemP2SHContract(contract, randBytes(73), randBytes(33), secret)
 
 	spentTx := makeRawTx(nil, []util.Bytes{contractP2SHScript})
 	txHash := spentTx.TxHash()
@@ -5059,7 +5058,7 @@ func makeSwapContract(lockTimeOffset time.Duration) (pkScriptVer uint16, pkScrip
 
 	lockTime := time.Now().Add(lockTimeOffset)
 	var err error
-	contract, err := dexdcr.MakeContract(tPKHAddr.String(), tPKHAddr.String(), secretHash[:], lockTime.Unix(), chaincfg.MainNetParams())
+	contract, err := MakeContract(tPKHAddr.String(), tPKHAddr.String(), secretHash[:], lockTime.Unix(), chaincfg.MainNetParams())
 	if err != nil {
 		panic("error making swap contract:" + err.Error())
 	}
@@ -5081,9 +5080,9 @@ func TestIDUnknownTx(t *testing.T) {
 	}
 
 	// Redeem Tx
-	swapContract, _ := dexdcr.MakeContract(tPKHAddr.String(), tPKHAddr.String(), randBytes(32), time.Now().Unix(), chaincfg.MainNetParams())
+	swapContract, _ := MakeContract(tPKHAddr.String(), tPKHAddr.String(), randBytes(32), time.Now().Unix(), chaincfg.MainNetParams())
 	txIn := wire.NewTxIn(&wire.OutPoint{}, 0, nil)
-	txIn.SignatureScript, _ = dexdcr.RedeemP2SHContract(swapContract, randBytes(73), randBytes(33), randBytes(32))
+	txIn.SignatureScript, _ = RedeemP2SHContract(swapContract, randBytes(73), randBytes(33), randBytes(32))
 	redeemFee := 0.0000143
 	_, tP2PKH := tPKHAddr.PaymentScript()
 	redemptionTx := &wire.MsgTx{
@@ -5100,7 +5099,7 @@ func TestIDUnknownTx(t *testing.T) {
 	bondLockTime := 1711637410
 	bondID := h2b("0e39bbb09592fd00b7d770cc832ddf4d625ae3a0")
 	accountID := h2b("a0836b39b5ceb84f422b8a8cd5940117087a8522457c6d81d200557652fbe6ea")
-	bondContract, _ := dexdcr.MakeBondScript(0, uint32(bondLockTime), bondID)
+	bondContract, _ := MakeBondScript(0, uint32(bondLockTime), bondID)
 	contractAddr, err := stdaddr.NewAddressScriptHashV0(bondContract, chaincfg.MainNetParams())
 	if err != nil {
 		t.Fatal("error making script address:" + err.Error())
@@ -5117,7 +5116,7 @@ func TestIDUnknownTx(t *testing.T) {
 
 	// Redeem Bond Tx
 	txIn = wire.NewTxIn(&wire.OutPoint{}, 0, nil)
-	txIn.SignatureScript, _ = dexdcr.RefundBondScript(bondContract, randBytes(73), randBytes(33))
+	txIn.SignatureScript, _ = RefundBondScript(bondContract, randBytes(73), randBytes(33))
 	redeemBondTx := &wire.MsgTx{
 		TxIn:  []*wire.TxIn{txIn},
 		TxOut: []*wire.TxOut{wire.NewTxOut(int64(toAtoms(5)), tP2PKH)},
@@ -5460,7 +5459,7 @@ func TestSwapPrivate(t *testing.T) {
 	signFunc := func(msgTx *wire.MsgTx) (*wire.MsgTx, bool, error) {
 		// Set the sigScripts to random bytes of the correct length for spending a
 		// p2pkh output.
-		scriptSize := dexdcr.P2PKHSigScriptSize
+		scriptSize := P2PKHSigScriptSize
 		// Oscillate the signature size to work the fee optimization loop.
 		if sigSizer%2 == 0 {
 			scriptSize -= 2
@@ -5709,7 +5708,7 @@ func TestAuditPrivateContract(t *testing.T) {
 	// Create the private contract script
 	redeemPKH := stdaddr.Hash160(contract.RedeemPublicKey)
 	refundPKH := stdaddr.Hash160(contract.RefundPublicKey)
-	contractScript, err := dexdcr.MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
+	contractScript, err := MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
 	if err != nil {
 		t.Fatalf("error making private swap contract: %v", err)
 	}
@@ -5905,7 +5904,7 @@ func TestGenerateUnsignedRedeemTx(t *testing.T) {
 	}
 
 	// Check that the output value is correct (contract value minus fees)
-	expectedTxSize := dexdcr.MsgTxOverhead + dexdcr.TxInOverhead + 1 + dexdcr.RedeemPrivateSwapSigScriptSize + dexdcr.P2PKHOutputSize
+	expectedTxSize := MsgTxOverhead + TxInOverhead + 1 + RedeemPrivateSwapSigScriptSize + P2PKHOutputSize
 	expectedFee := feeRate * uint64(expectedTxSize)
 	expectedOutputValue := privateContract.Value - expectedFee
 	output := msgTx.TxOut[0]
@@ -5997,7 +5996,7 @@ func TestGeneratePrivateKeyTweakedAdaptor(t *testing.T) {
 
 	// Calculate fee and output value
 	feeRate := uint64(10)
-	txSize := redeemTx.SerializeSize() + dexdcr.RedeemPrivateSwapSigScriptSize + len(pkScript)
+	txSize := redeemTx.SerializeSize() + RedeemPrivateSwapSigScriptSize + len(pkScript)
 	fee := feeRate * uint64(txSize)
 	outputValue := contract.Value - fee
 
@@ -6219,7 +6218,7 @@ func TestGeneratePublicKeyTweakedAdaptor(t *testing.T) {
 
 	// Calculate fee and output value
 	feeRate := uint64(10)
-	txSize := redeemTx.SerializeSize() + dexdcr.RedeemPrivateSwapSigScriptSize + len(pkScript)
+	txSize := redeemTx.SerializeSize() + RedeemPrivateSwapSigScriptSize + len(pkScript)
 	fee := feeRate * uint64(txSize)
 	outputValue := contract.Value - fee
 
@@ -6395,7 +6394,7 @@ func TestRedeemPrivate(t *testing.T) {
 	if out == nil {
 		t.Fatalf("expected non-nil output coin")
 	}
-	expectedTxSize := dexdcr.MsgTxOverhead + dexdcr.TxInOverhead + 1 + dexdcr.RedeemPrivateSwapSigScriptSize + dexdcr.P2PKHOutputSize
+	expectedTxSize := MsgTxOverhead + TxInOverhead + 1 + RedeemPrivateSwapSigScriptSize + P2PKHOutputSize
 	expectedFee := optimalFeeRate * uint64(expectedTxSize)
 	if feesPaid != expectedFee {
 		t.Fatalf("expected %d fees paid, got %d", expectedFee, feesPaid)

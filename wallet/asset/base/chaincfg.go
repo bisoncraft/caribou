@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbase "github.com/bisoncraft/bosswallet/util/networks/base"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
@@ -92,6 +91,6 @@ func ChainConfig(net util.Network) (c *params.ChainConfig, err error) {
 		c.ChainID = big.NewInt(1337)
 		return
 	}
-	c.ChainID = big.NewInt(dexbase.ChainIDs[net])
+	c.ChainID = big.NewInt(ChainIDs[net])
 	return
 }

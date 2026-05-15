@@ -17,7 +17,6 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/electrum"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -57,7 +56,7 @@ func ElectrumWallet(cfg *BTCCloneCFG) (*ExchangeWalletElectrum, error) {
 	}
 
 	rpcCfg := &clientCfg.RPCConfig
-	dexbtc.StandardizeRPCConf(&rpcCfg.RPCConfig, "")
+	StandardizeRPCConf(rpcCfg, "")
 	ewc := electrum.NewWalletClient(rpcCfg.RPCUser, rpcCfg.RPCPass,
 		"http://"+rpcCfg.RPCBind, rpcCfg.WalletName)
 	ew := newElectrumWallet(ewc, &electrumWalletConfig{
@@ -222,7 +221,7 @@ func (btc *ExchangeWalletElectrum) findRedemption(ctx context.Context, op OutPoi
 	}
 	txHash := msgTx.TxHash()
 	txIn := msgTx.TxIn[vin]
-	secret, err := dexbtc.FindKeyPush(txIn.Witness, txIn.SignatureScript,
+	secret, err := FindKeyPush(txIn.Witness, txIn.SignatureScript,
 		contractHash, btc.segwit, btc.chainParams)
 	if err != nil {
 		return nil, 0, nil, fmt.Errorf("failed to extract secret key from tx %v input %d: %w",
@@ -266,10 +265,10 @@ func (btc *ExchangeWalletElectrum) FindRedemption(ctx context.Context, coinID, c
 	// We can verify the contract hash via:
 	// txRes, _ := btc.ewc.getWalletTransaction(txHash)
 	// msgTx, _ := msgTxFromBytes(txRes.Hex)
-	// contractHash := dexbtc.ExtractScriptHash(msgTx.TxOut[vout].PkScript)
+	// contractHash := ExtractScriptHash(msgTx.TxOut[vout].PkScript)
 	// OR
 	// txOut, _, _ := btc.ew.getTxOutput(txHash, vout)
-	// contractHash := dexbtc.ExtractScriptHash(txOut.PkScript)
+	// contractHash := ExtractScriptHash(txOut.PkScript)
 
 	// Check once before putting this in the queue.
 	outPt := NewOutPoint(txHash, vout)

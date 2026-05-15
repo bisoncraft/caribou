@@ -20,11 +20,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbase "github.com/bisoncraft/bosswallet/util/networks/base"
-	dexerc20 "github.com/bisoncraft/bosswallet/util/networks/erc20"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	dexerc20 "github.com/bisoncraft/bosswallet/wallet/asset/erc20"
 )
 
 const simnetBridgeName = "simnet"
@@ -222,7 +219,7 @@ func (b *simnetBridge) sendToDestination(destAssetID uint32, amount *big.Int) er
 	var scriptName string
 
 	if tok := asset.TokenInfo(destAssetID); tok != nil {
-		destDir = simnetHarnessDir[tok.ParentID]
+		destDir = simnetHarnessDir[tok.NetworkID]
 		scriptName = simnetTokenScript[destAssetID]
 		if destDir == "" || scriptName == "" {
 			return fmt.Errorf("unknown token destination asset ID: %d", destAssetID)
@@ -289,17 +286,11 @@ func evmToDEXAtomic(assetID uint32, evmAmount *big.Int) (*big.Int, error) {
 		return nil, fmt.Errorf("negative amount: %s", evmAmount)
 	}
 
-	if tok, found := dexeth.Tokens[assetID]; found {
-		return new(big.Int).SetUint64(tok.EVMToAtomic(evmAmount)), nil
-	}
-	if tok, found := dexpolygon.Tokens[assetID]; found {
-		return new(big.Int).SetUint64(tok.EVMToAtomic(evmAmount)), nil
-	}
-	if tok, found := dexbase.Tokens[assetID]; found {
+	if tok, found := EVMTokens[assetID]; found {
 		return new(big.Int).SetUint64(tok.EVMToAtomic(evmAmount)), nil
 	}
 
-	return new(big.Int).SetUint64(dexeth.WeiToGwei(evmAmount)), nil
+	return new(big.Int).SetUint64(WeiToGwei(evmAmount)), nil
 }
 
 // getCompletionData retrieves the data needed to complete the bridge.

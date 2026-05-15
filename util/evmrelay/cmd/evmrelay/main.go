@@ -17,9 +17,9 @@ import (
 	"syscall"
 
 	"github.com/bisoncraft/bosswallet/util"
-	basenet "github.com/bisoncraft/bosswallet/util/networks/base"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
+	basenet "github.com/bisoncraft/bosswallet/wallet/asset/base"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	dexpolygon "github.com/bisoncraft/bosswallet/wallet/asset/polygon"
 	"github.com/decred/slog"
 )
 

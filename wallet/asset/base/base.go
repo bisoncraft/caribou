@@ -9,15 +9,13 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbase "github.com/bisoncraft/bosswallet/util/networks/base"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 
 func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
-	token, found := dexbase.Tokens[tokenID]
+	token, found := Tokens[tokenID]
 	if !found {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
@@ -41,7 +39,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 }
 
 func init() {
-	dexbase.MaybeReadSimnetAddrs()
+	MaybeReadSimnetAddrs()
 	asset.Register(BipID, &Driver{})
 	registerToken(usdcTokenID, "The USDC Base ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
 	registerToken(usdtTokenID, "The USDT Base ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
@@ -57,9 +55,6 @@ const (
 )
 
 var (
-	usdcTokenID, _ = util.BipSymbolID("usdc.base")
-	usdtTokenID, _ = util.BipSymbolID("usdt.base")
-	wbtcTokenID, _ = util.BipSymbolID("wbtc.base")
 	// WalletInfo defines some general information about a Base Wallet(EVM
 	// Compatible).
 
@@ -74,21 +69,25 @@ var (
 			DefaultValue: strconv.FormatUint(defaultGasFeeLimit, 10),
 		},
 	}
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:        walletTypeRPC,
+		Tab:         "External",
+		Description: "Infrastructure providers (e.g. Infura) or local nodes",
+		ConfigOpts:  append(eth.RPCOpts, walletOpts...),
+		Seeded:      true,
+		NoAuth:      true,
+	}
+
 	WalletInfo = asset.WalletInfo{
 		Name:              "Base",
 		SupportedVersions: []uint32{1},
-		UnitInfo:          dexbase.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{
-			{
-				Type:        walletTypeRPC,
-				Tab:         "External",
-				Description: "Infrastructure providers (e.g. Infura) or local nodes",
-				ConfigOpts:  append(eth.RPCOpts, walletOpts...),
-				Seeded:      true,
-				NoAuth:      true,
-			},
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassEVM,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
 		},
-		BlockchainClass: asset.BlockchainClassEVM,
 	}
 )
 
@@ -105,7 +104,7 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		return nil, fmt.Errorf("failed to locate Base compatibility data: %s", net)
 	}
 	contracts := make(map[uint32]common.Address, 1)
-	for ver, netAddrs := range dexbase.ContractAddresses {
+	for ver, netAddrs := range ContractAddresses {
 		for netw, addr := range netAddrs {
 			if netw == net {
 				contracts[ver] = addr
@@ -141,15 +140,15 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		ChainCfg:           chainCfg,
 		AssetCfg:           cfg,
 		CompatData:         &compat,
-		VersionedGases:     dexbase.VersionedGases,
-		Tokens:             dexbase.Tokens,
+		VersionedGases:     VersionedGases,
+		Tokens:             Tokens,
 		FinalizeConfs:      3,
 		Logger:             logger,
 		BaseChainContracts: contracts,
 		WalletInfo:         WalletInfo,
 		Net:                net,
 		DefaultProviders:   defaultProviders,
-		MaxTxFeeGwei:       dexeth.GweiFactor, // 1 ETH
+		MaxTxFeeGwei:       eth.GweiFactor, // 1 ETH
 		IsOpStack:          true,
 	})
 }
@@ -175,5 +174,5 @@ func (d *Driver) Create(cfg *asset.CreateWalletParams) error {
 	if err != nil {
 		return fmt.Errorf("error finding compatibility data: %v", err)
 	}
-	return eth.CreateEVMWallet(dexbase.ChainIDs[cfg.Net], cfg, &compat, false)
+	return eth.CreateEVMWallet(ChainIDs[cfg.Net], cfg, &compat, false)
 }

@@ -39,7 +39,7 @@ func run() error {
 	}
 
 	if tkn := asset.TokenInfo(uint32(assetID)); tkn != nil {
-		return fmt.Errorf("this is a token. did you want asset ID %d for %s?\n", tkn.ParentID, asset.Asset(tkn.ParentID).Info.Name)
+		return fmt.Errorf("this is a token. did you want asset ID %d for %s?\n", tkn.NetworkID, asset.Asset(tkn.NetworkID).Info.Name)
 	}
 
 	var (
