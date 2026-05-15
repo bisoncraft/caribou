@@ -135,23 +135,25 @@ func (b *Broadcaster) broadcastHandler(sub *blockntfns.Subscription) {
 	transactions := make(map[chainhash.Hash]*wire.MsgTx)
 
 	// The rebroadcast semaphore is used to ensure we have only one
-	// rebroadcast running at a time.
+	// rebroadcast running at a time. rebroadcastPending records that a
+	// trigger arrived while one was already running, so we can run one
+	// more pass as soon as it finishes - otherwise a burst of block
+	// notifications would silently lose all but the first.
 	rebroadcastSem := make(chan struct{}, 1)
 	rebroadcastSem <- struct{}{}
+	rebroadcastDone := make(chan struct{}, 1)
+	var rebroadcastPending bool
 
-	// triggerRebroadcast is a helper method that checks whether the
-	// rebroadcast semaphore is available, and if it is spawns a goroutine
-	// to rebroadcast all pending transactions.
 	triggerRebroadcast := func() {
 		select {
-		// If the rebroadcast semaphore is available, start a
-		// new goroutine to exectue a rebroadcast.
 		case <-rebroadcastSem:
 		default:
+			rebroadcastPending = true
 			log.Tracef("Existing rebroadcast still in " +
-				"progress")
+				"progress; queued another pass")
 			return
 		}
+		rebroadcastPending = false
 
 		// Make a copy of the current set of transactions to hand to
 		// the goroutine.
@@ -166,6 +168,10 @@ func (b *Broadcaster) broadcastHandler(sub *blockntfns.Subscription) {
 
 			b.rebroadcast(txs, b.confChan)
 			rebroadcastSem <- struct{}{}
+			select {
+			case rebroadcastDone <- struct{}{}:
+			case <-b.quit:
+			}
 		}()
 	}
 
@@ -214,6 +220,13 @@ func (b *Broadcaster) broadcastHandler(sub *blockntfns.Subscription) {
 		// re-broadcasts to ensure a timely confirmation.
 		case <-reBroadcastTicker.C:
 			triggerRebroadcast()
+
+		// A rebroadcast goroutine finished. If a trigger arrived while
+		// it was running, run another pass now.
+		case <-rebroadcastDone:
+			if rebroadcastPending {
+				triggerRebroadcast()
+			}
 
 		case <-b.quit:
 			return
