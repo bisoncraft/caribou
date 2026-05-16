@@ -32,7 +32,17 @@ func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int
 		return nil, err
 	}
 
-	answer := *abi.ConvertType(out[1], new(*big.Int)).(**big.Int)
+	if len(out) < 2 {
+		return nil, fmt.Errorf("invalid latestRoundData response: expected at least 2 outputs, got %d", len(out))
+	}
+
+	converted := abi.ConvertType(out[1], new(*big.Int))
+	answerPtr, ok := converted.(**big.Int)
+	if !ok {
+		return nil, fmt.Errorf("failed to convert latestRoundData answer to *big.Int")
+	}
+
+	answer := *answerPtr
 	if answer.Sign() <= 0 {
 		return nil, fmt.Errorf("non-positive answer: %s", answer)
 	}
@@ -46,8 +56,16 @@ func (c *aggregatorBoundContract) decimals(ctx context.Context) (uint8, error) {
 		return 0, err
 	}
 
-	decimals := *abi.ConvertType(out[0], new(uint8)).(*uint8)
-	return decimals, nil
+	if len(out) < 1 {
+		return 0, fmt.Errorf("invalid decimals response: expected at least 1 output, got %d", len(out))
+	}
+
+	decimalsPtr, ok := abi.ConvertType(out[0], new(uint8)).(*uint8)
+	if !ok {
+		return 0, fmt.Errorf("failed to convert decimals to uint8")
+	}
+
+	return *decimalsPtr, nil
 }
 
 // chainlinkPolygonFeeds maps ticker symbols to their USD Data Feed addresses on Polygon mainnet.
