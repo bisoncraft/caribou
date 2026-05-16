@@ -91,6 +91,7 @@ Boss Wallet is under active development. Our near-term goals are:
     - Add tokens for xAUT, PAXG, and other commodity tokens
 - **August 2026**:
     - Implement NEAR Intents for efficient cross-chain interactions, and demonstrate basic swap functionality between supported assets
+    - Add fiat onramp, e.g. Alchemy Pay
 
 ## Design notes
 
