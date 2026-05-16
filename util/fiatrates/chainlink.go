@@ -17,8 +17,13 @@ import (
 
 const aggregatorV3ABI = `[{"inputs":[],"name":"latestRoundData","outputs":[{"internalType":"uint80","name":"roundId","type":"uint80"},{"internalType":"int256","name":"answer","type":"int256"},{"internalType":"uint256","name":"startedAt","type":"uint256"},{"internalType":"uint256","name":"updatedAt","type":"uint256"},{"internalType":"uint80","name":"answeredInRound","type":"uint80"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"}]`
 
+const (
+	chainlinkDialTimeout = 5 * time.Second
+	chainlinkInitTimeout = 5 * time.Second
+)
+
 type chainlinkAggregatorContract interface {
-	latestRoundData(ctx context.Context) (*big.Int, error)
+	latestRoundData(ctx context.Context) (*big.Int, time.Time, error)
 	decimals(ctx context.Context) (uint8, error)
 }
 
@@ -26,28 +31,36 @@ type aggregatorBoundContract struct {
 	bound *bind.BoundContract
 }
 
-func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int, error) {
+func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int, time.Time, error) {
 	var out []interface{}
 	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "latestRoundData"); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
-	if len(out) < 2 {
-		return nil, fmt.Errorf("invalid latestRoundData response: expected at least 2 outputs, got %d", len(out))
+	if len(out) < 4 {
+		return nil, time.Time{}, fmt.Errorf("invalid latestRoundData response: expected at least 4 outputs, got %d", len(out))
 	}
 
 	converted := abi.ConvertType(out[1], new(*big.Int))
 	answerPtr, ok := converted.(**big.Int)
 	if !ok {
-		return nil, fmt.Errorf("failed to convert latestRoundData answer to *big.Int")
+		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData answer to *big.Int")
 	}
 
 	answer := *answerPtr
 	if answer.Sign() <= 0 {
-		return nil, fmt.Errorf("non-positive answer: %s", answer)
+		return nil, time.Time{}, fmt.Errorf("non-positive answer: %s", answer)
 	}
 
-	return answer, nil
+	convertedUpdated := abi.ConvertType(out[3], new(*big.Int))
+	updatedAtPtr, ok := convertedUpdated.(**big.Int)
+	if !ok {
+		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData updatedAt to *big.Int")
+	}
+
+	updatedAt := time.Unix((*updatedAtPtr).Int64(), 0)
+
+	return answer, updatedAt, nil
 }
 
 func (c *aggregatorBoundContract) decimals(ctx context.Context) (uint8, error) {
@@ -79,7 +92,7 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 	"DOGE": common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"),
 	"ZEC":  common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"),
 	"LINK": common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"),
-	// Missing feeds: ADA, SOL, AVAX, XRP, BNB
+	// Missing feeds: ADA, SOL, AVAX, XRP, BNB, MATIC
 	// To add: 1. Get addresses from https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
 	//         2. Verify contract has decimals() method
 	//         3. Test with live RPC calls
@@ -114,8 +127,8 @@ func validateRPCURL(urlStr string) error {
 		return fmt.Errorf("invalid RPC URL: %w", err)
 	}
 
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("invalid RPC URL scheme: %s (must be http or https)", u.Scheme)
+	if u.Scheme != "https" {
+		return fmt.Errorf("invalid RPC URL scheme: %s (must be https)", u.Scheme)
 	}
 
 	if u.Host == "" {
@@ -139,6 +152,7 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	// Get provider list: use configured providers or fall back to defaults
 	providers := chainlinkDefaultProviders
 	if cfg.ChainlinkProviders != "" {
+		// Split on any whitespace (spaces, tabs, newlines).
 		providers = strings.Fields(cfg.ChainlinkProviders)
 		for _, provider := range providers {
 			if err := validateRPCURL(provider); err != nil {
@@ -147,11 +161,13 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		}
 	}
 
+	// Chainlink is one of several fiat rate sources; the oracle averages across all
+	// active sources, so a single compromised RPC cannot unilaterally skew final prices.
+	// Operators should restrict ChainlinkProviders to trusted endpoints in production.
 	var ec *ethclient.Client
 	var lastErr error
-	dialTimeout := 5 * time.Second
 	for _, provider := range providers {
-		dialCtx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
 		var err error
 		ec, err = ethclient.DialContext(dialCtx, provider)
 		cancel()
@@ -176,7 +192,9 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 			bound: bind.NewBoundContract(addr, *aggregatorABI, ec, nil, nil),
 		}
 
-		decimals, err := contract.decimals(context.Background())
+		initCtx, cancel := context.WithTimeout(context.Background(), chainlinkInitTimeout)
+		decimals, err := contract.decimals(initCtx)
+		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("chainlink: failed to query decimals for %s: %w", ticker, err)
 		}
@@ -195,11 +213,17 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 			if !ok {
 				continue
 			}
-			answer, err := info.contract.latestRoundData(ctx)
+			answer, updatedAt, err := info.contract.latestRoundData(ctx)
 			if err != nil {
 				log.Warnf("chainlink: %s/USD: %v", ticker, err)
 				continue
 			}
+
+			if time.Since(updatedAt) > FiatRateDataExpiry {
+				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
+				continue
+			}
+
 			f, _ := new(big.Float).Quo(
 				new(big.Float).SetInt(answer),
 				info.divisor,

@@ -50,17 +50,18 @@ func TestChainlinkLive(t *testing.T) {
 type mockAggregatorContract struct {
 	answer        *big.Int
 	decimalPlaces uint8
+	updatedAt     time.Time
 	err           error
 }
 
-func (m *mockAggregatorContract) latestRoundData(ctx context.Context) (*big.Int, error) {
-	return m.answer, m.err
+func (m *mockAggregatorContract) latestRoundData(ctx context.Context) (*big.Int, time.Time, error) {
+	if m.updatedAt.IsZero() {
+		return m.answer, time.Now(), m.err
+	}
+	return m.answer, m.updatedAt, m.err
 }
 
 func (m *mockAggregatorContract) decimals(ctx context.Context) (uint8, error) {
-	if m.decimalPlaces == 0 {
-		return 8, nil
-	}
 	return m.decimalPlaces, nil
 }
 
@@ -68,9 +69,9 @@ func (m *mockAggregatorContract) decimals(ctx context.Context) (uint8, error) {
 func TestChainlinkAggregatorContractMock(t *testing.T) {
 	// Test a BTC price of $50,000 (fixed-point: 5000000000000 = 50000 * 1e8)
 	btcPrice := big.NewInt(5000000000000)
-	mock := &mockAggregatorContract{answer: btcPrice}
+	mock := &mockAggregatorContract{answer: btcPrice, decimalPlaces: 8}
 
-	answer, err := mock.latestRoundData(context.Background())
+	answer, _, err := mock.latestRoundData(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestChainlinkAggregatorContractMock(t *testing.T) {
 
 	// Test that mock can return custom errors
 	mockWithErr := &mockAggregatorContract{err: fmt.Errorf("custom error")}
-	_, err = mockWithErr.latestRoundData(context.Background())
+	_, _, err = mockWithErr.latestRoundData(context.Background())
 	if err == nil {
 		t.Error("expected error from mock, got nil")
 	}
@@ -117,7 +118,7 @@ func TestChainlinkContractCallError(t *testing.T) {
 	customErr := fmt.Errorf("rpc error: connection refused")
 	mock := &mockAggregatorContract{err: customErr}
 
-	_, err := mock.latestRoundData(context.Background())
+	_, _, err := mock.latestRoundData(context.Background())
 	if err == nil {
 		t.Fatal("expected error from contract call, got nil")
 	}
@@ -193,45 +194,45 @@ func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
 	}
 }
 
-// TestChainlinkInvalidRPCURLs tests that invalid RPC URLs are rejected during initialization.
-func TestChainlinkInvalidRPCURLs(t *testing.T) {
-	testCases := []struct {
-		name       string
-		providers  string
-		shouldFail bool
+// TestValidateRPCURL tests RPC URL validation directly.
+func TestValidateRPCURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
 	}{
 		{
-			name:       "invalid scheme",
-			providers:  "ftp://invalid.com",
-			shouldFail: true,
+			name:    "valid https URL",
+			url:     "https://polygon.drpc.org",
+			wantErr: false,
 		},
 		{
-			name:       "no host",
-			providers:  "https://",
-			shouldFail: true,
+			name:    "http rejected",
+			url:     "http://polygon.drpc.org",
+			wantErr: true,
 		},
 		{
-			name:       "valid https URL",
-			providers:  "https://valid.example.com",
-			shouldFail: true, // will fail to actually dial, but URL validation passes
+			name:    "invalid scheme",
+			url:     "ftp://invalid.com",
+			wantErr: true,
 		},
 		{
-			name:       "valid http URL",
-			providers:  "http://valid.example.com",
-			shouldFail: true, // will fail to actually dial, but URL validation passes
+			name:    "missing host",
+			url:     "https://",
+			wantErr: true,
+		},
+		{
+			name:    "unparseable URL",
+			url:     "not a valid url",
+			wantErr: true,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{
-				ChainlinkTestnet:   false,
-				ChainlinkProviders: tc.providers,
-			}
-
-			_, err := chainlinkRateFetcher(cfg)
-			if tc.shouldFail && err == nil {
-				t.Error("expected error for invalid URL, got nil")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRPCURL(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateRPCURL(%q) = %v, want error = %v", tt.url, err, tt.wantErr)
 			}
 		})
 	}
@@ -300,7 +301,7 @@ func TestChainlinkAggregatorWithDifferentDecimals(t *testing.T) {
 				decimalPlaces: tt.decimals,
 			}
 
-			answer, err := mock.latestRoundData(context.Background())
+			answer, _, err := mock.latestRoundData(context.Background())
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -316,6 +317,108 @@ func TestChainlinkAggregatorWithDifferentDecimals(t *testing.T) {
 			}
 
 			// Manually convert like the fetcher does
+			divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+			f, _ := new(big.Float).Quo(
+				new(big.Float).SetInt(answer),
+				divisor,
+			).Float64()
+
+			if f != tt.expected {
+				t.Errorf("expected price %f, got %f", tt.expected, f)
+			}
+		})
+	}
+}
+
+// TestChainlinkPriceStaleness tests that stale prices are rejected.
+func TestChainlinkPriceStaleness(t *testing.T) {
+	tests := []struct {
+		name         string
+		updatedAt    time.Time
+		shouldReject bool
+	}{
+		{
+			name:         "fresh price",
+			updatedAt:    time.Now(),
+			shouldReject: false,
+		},
+		{
+			name:         "price from 30 minutes ago",
+			updatedAt:    time.Now().Add(-30 * time.Minute),
+			shouldReject: false,
+		},
+		{
+			name:         "price from 2 hours ago",
+			updatedAt:    time.Now().Add(-2 * time.Hour),
+			shouldReject: true,
+		},
+		{
+			name:         "price from 24 hours ago",
+			updatedAt:    time.Now().Add(-24 * time.Hour),
+			shouldReject: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Check if the staleness logic would reject this timestamp
+			isStale := time.Since(tt.updatedAt) > FiatRateDataExpiry
+			if isStale != tt.shouldReject {
+				t.Errorf("staleness check failed: isStale=%v, shouldReject=%v", isStale, tt.shouldReject)
+			}
+		})
+	}
+}
+
+// TestChainlinkDecimalEdgeCases tests extreme decimal values.
+func TestChainlinkDecimalEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		answer   *big.Int
+		decimals uint8
+		expected float64
+	}{
+		{
+			name:     "zero decimals (price is raw answer)",
+			answer:   big.NewInt(50000),
+			decimals: 0,
+			expected: 50000.0,
+		},
+		{
+			name:     "18 decimals (erc20 standard)",
+			answer:   new(big.Int).Mul(big.NewInt(50000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)),
+			decimals: 18,
+			expected: 50000.0,
+		},
+		{
+			name:     "20 decimals (extreme)",
+			answer:   new(big.Int).Mul(big.NewInt(50000), new(big.Int).Exp(big.NewInt(10), big.NewInt(20), nil)),
+			decimals: 20,
+			expected: 50000.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockAggregatorContract{
+				answer:        tt.answer,
+				decimalPlaces: tt.decimals,
+			}
+
+			answer, _, err := mock.latestRoundData(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			decimals, err := mock.decimals(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error getting decimals: %v", err)
+			}
+
+			if decimals != tt.decimals {
+				t.Errorf("expected decimals %d, got %d", tt.decimals, decimals)
+			}
+
 			divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
 			f, _ := new(big.Float).Quo(
 				new(big.Float).SetInt(answer),
