@@ -246,12 +246,15 @@ func fiatSources(cfg Config) []*source {
 		},
 	}
 
-	if cfg.ChainlinkRPCURL != "" {
+	getRates, err := chainlinkRateFetcher(cfg)
+	if err != nil {
+		log.Error("chainlink: failed to initialize", "err", err)
+	} else {
 		sources = append(sources, &source{
 			name:            chainlink,
 			requestInterval: defaultRefreshInterval,
 			disabled:        strings.Contains(disabledSources, strings.ToLower(chainlink)),
-			getRates:        chainlinkRateFetcher(cfg),
+			getRates:        getRates,
 		})
 	}
 

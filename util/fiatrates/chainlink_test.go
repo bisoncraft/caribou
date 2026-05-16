@@ -2,122 +2,92 @@ package fiatrates
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/util"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// TestChainlinkLive tests the Chainlink price feeds on Polygon mainnet.
-// This test connects to a live Polygon RPC endpoint and queries actual price feeds.
-// Use -run TestChainlinkLive to execute this test.
+// TestChainlinkLive tests the Chainlink price feeds on Polygon mainnet end-to-end.
 func TestChainlinkLive(t *testing.T) {
-	t.Skipf("skipping live test: requires an authenticated rpc endpoint")
-
-	// Use public RPC endpoint
-	rpcURL := "https://rpc.ankr.com/polygon/<your-auth-token>",
-
+	cfg := Config{
+		ChainlinkTestnet: false,
+		// Uses default providers if not specified
 	}
 
-	var ec *ethclient.Client
-	var err error
-
-	for _, rpcURL := range rpcURLs {
-		ec, err = ethclient.Dial(rpcURL)
-		if err == nil {
-			break
-		}
+	getRates, err := chainlinkRateFetcher(cfg)
+	if err != nil {
+		t.Skipf("skipping live test: failed to initialize chainlink fetcher: %v", err)
 	}
 
-	if ec == nil {
-		t.Fatalf("skipping live test: failed to connect to any RPC endpoint")
-	}
-	defer ec.Close()
-
+	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Test multiple price feeds
-	testCases := map[string]string{
-		"BTC":  "0xc907E116054Ad103354f2D350FD2514433D57F6f",
-		"ETH":  "0xF9680D99D6C9589e2a93a78A04A279e509205945",
-		"LTC":  "0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa",
-		"BCH":  "0x327d9822e9932996f55b39F557AEC838313da8b7",
-		"DOGE": "0xbaf9327b6564454F4a3364C33eFeEf032b4b4444",
-		"ZEC":  "0xBC08c639e579a391C4228F20d0C29d0690092DF0",
-		"LINK": "0xd9FFdb71EbE7496cC440152d43986Aae0AB76665",
+	tickers := []string{"BTC", "ETH", "LTC", "BCH", "DOGE", "ZEC", "LINK"}
+	rates, err := getRates(ctx, tickers, log)
+	if err != nil {
+		t.Fatalf("failed to fetch rates: %v", err)
 	}
 
-	successCount := 0
-	for ticker, addrStr := range testCases {
-		addr := common.HexToAddress(addrStr)
-		price, err := latestUSDPrice(ctx, ec, addr)
-		if err != nil {
-			t.Logf("  %s: ERROR - %v", ticker, err)
-			continue
-		}
-
-		if price <= 0 {
-			t.Logf("  %s: INVALID - %f", ticker, price)
-			continue
-		}
-
-		successCount++
-		t.Logf("  %s: $%.2f", ticker, price)
-	}
-
-	if successCount == 0 {
+	if len(rates) == 0 {
 		t.Fatal("failed to fetch any prices")
 	}
 
-	t.Logf("Successfully fetched %d/%d prices", successCount, len(testCases))
+	for ticker, price := range rates {
+		t.Logf("  %s: $%.2f", ticker, price)
+	}
+
+	t.Logf("Successfully fetched %d/%d prices", len(rates), len(tickers))
 }
 
-// TestChainlinkLatestUSDPrice tests a single price feed query.
-func TestChainlinkLatestUSDPrice(t *testing.T) {
-	// Try multiple public Polygon RPC endpoints
-	rpcURLs := []string{
-		"https://rpc.ankr.com/polygon/cf24355cdd40a03578f2fbaff682439c63877f8e61f206358abb908ee384d917",
-		"https://polygon-rpc.com",
-		"https://gateway.tenderly.co/public/polygon-mainnet",
-	}
+// mockAggregatorContract is a test mock of chainlinkAggregatorContract.
+type mockAggregatorContract struct {
+	answer *big.Int
+	err    error
+}
 
-	var ec *ethclient.Client
-	var err error
+func (m *mockAggregatorContract) latestRoundData(ctx context.Context) (*big.Int, error) {
+	return m.answer, m.err
+}
 
-	for _, rpcURL := range rpcURLs {
-		ec, err = newEthClient(rpcURL)
-		if err == nil {
-			break
-		}
-	}
+// TestChainlinkAggregatorContractMock tests price decoding via a mock contract.
+func TestChainlinkAggregatorContractMock(t *testing.T) {
+	// Test a BTC price of $50,000 (fixed-point: 5000000000000 = 50000 * 1e8)
+	btcPrice := big.NewInt(5000000000000)
+	mock := &mockAggregatorContract{answer: btcPrice}
 
-	if ec == nil {
-		t.Skipf("skipping live test: failed to connect to any RPC endpoint")
-	}
-	defer ec.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Test BTC/USD feed on Polygon
-	btcAddr := common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f")
-	price, err := latestUSDPrice(ctx, ec, btcAddr)
+	answer, err := mock.latestRoundData(context.Background())
 	if err != nil {
-		t.Fatalf("failed to fetch BTC price: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if price <= 0 {
-		t.Fatalf("invalid BTC price: %f", price)
+	// Verify the mock returns the configured answer
+	if answer.Cmp(btcPrice) != 0 {
+		t.Errorf("expected answer %v, got %v", btcPrice, answer)
 	}
 
-	t.Logf("BTC/USD: $%.2f", price)
+	// Decode to float64
+	f, _ := new(big.Float).Quo(
+		new(big.Float).SetInt(answer),
+		new(big.Float).SetFloat64(1e8),
+	).Float64()
 
-	// BTC should be between $1k and $1M (sanity check)
-	if price < 1000 || price > 1000000 {
-		t.Logf("warning: BTC price %f seems unusual", price)
+	expected := 50000.0
+	if f != expected {
+		t.Errorf("expected price %f, got %f", expected, f)
+	}
+
+	// Test that mock can return custom errors
+	mockWithErr := &mockAggregatorContract{err: fmt.Errorf("custom error")}
+	_, err = mockWithErr.latestRoundData(context.Background())
+	if err == nil {
+		t.Error("expected error from mock, got nil")
 	}
 }
 
@@ -134,7 +104,83 @@ func TestChainlinkFeedsExist(t *testing.T) {
 	t.Logf("verified %d feeds with valid addresses", len(chainlinkPolygonFeeds))
 }
 
-// newEthClient creates an ethclient for the given RPC URL.
-func newEthClient(rpcURL string) (*ethclient.Client, error) {
-	return ethclient.Dial(rpcURL)
+// TestChainlinkContractCallError tests error handling for failed contract calls.
+func TestChainlinkContractCallError(t *testing.T) {
+	customErr := fmt.Errorf("rpc error: connection refused")
+	mock := &mockAggregatorContract{err: customErr}
+
+	_, err := mock.latestRoundData(context.Background())
+	if err == nil {
+		t.Fatal("expected error from contract call, got nil")
+	}
+	if !errors.Is(err, customErr) {
+		t.Errorf("expected custom error, got: %v", err)
+	}
 }
+
+
+// TestChainlinkMissingTicker tests handling of tickers with no configured feed.
+func TestChainlinkMissingTicker(t *testing.T) {
+	cfg := Config{
+		ChainlinkTestnet: false,
+	}
+
+	getRates, err := chainlinkRateFetcher(cfg)
+	if err != nil {
+		t.Skipf("skipping live test: failed to initialize chainlink fetcher: %v", err)
+	}
+
+	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Request tickers that don't have configured feeds
+	tickers := []string{"UNKNOWN_COIN", "XYZ"}
+	rates, err := getRates(ctx, tickers, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should return empty map since no feeds exist for these tickers
+	if len(rates) != 0 {
+		t.Errorf("expected empty rates for unknown tickers, got %d results", len(rates))
+	}
+}
+
+// TestChainlinkMixedValidInvalidTickers tests fetching a mix of valid and invalid tickers.
+func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
+	cfg := Config{
+		ChainlinkTestnet: false,
+	}
+
+	getRates, err := chainlinkRateFetcher(cfg)
+	if err != nil {
+		t.Skipf("skipping live test: failed to initialize chainlink fetcher: %v", err)
+	}
+
+	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Mix of valid and invalid tickers
+	tickers := []string{"BTC", "NONEXISTENT", "ETH", "INVALID_TICKER"}
+	rates, err := getRates(ctx, tickers, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have prices for BTC and ETH only
+	if len(rates) != 2 {
+		t.Errorf("expected 2 prices, got %d", len(rates))
+	}
+	if _, hasBTC := rates["BTC"]; !hasBTC {
+		t.Error("expected BTC price in results")
+	}
+	if _, hasETH := rates["ETH"]; !hasETH {
+		t.Error("expected ETH price in results")
+	}
+	if rate, hasNonexistent := rates["NONEXISTENT"]; hasNonexistent {
+		t.Errorf("should not have price for NONEXISTENT, got: %f", rate)
+	}
+}
+

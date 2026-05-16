@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"sync"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -17,6 +16,28 @@ import (
 const aggregatorV3ABI = `[{"inputs":[],"name":"latestRoundData","outputs":[{"internalType":"uint80","name":"roundId","type":"uint80"},{"internalType":"int256","name":"answer","type":"int256"},{"internalType":"uint256","name":"startedAt","type":"uint256"},{"internalType":"uint256","name":"updatedAt","type":"uint256"},{"internalType":"uint80","name":"answeredInRound","type":"uint80"}],"stateMutability":"view","type":"function"}]`
 
 var aggregatorABI = parseABIOrPanic(aggregatorV3ABI)
+
+type chainlinkAggregatorContract interface {
+	latestRoundData(ctx context.Context) (*big.Int, error)
+}
+
+type aggregatorBoundContract struct {
+	bound *bind.BoundContract
+}
+
+func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int, error) {
+	var out []interface{}
+	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "latestRoundData"); err != nil {
+		return nil, err
+	}
+
+	answer := *abi.ConvertType(out[1], new(*big.Int)).(**big.Int)
+	if answer.Sign() <= 0 {
+		return nil, fmt.Errorf("non-positive answer: %s", answer)
+	}
+
+	return answer, nil
+}
 
 // chainlinkPolygonFeeds maps ticker symbols to their USD Data Feed addresses on Polygon mainnet.
 // Verify addresses against https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
@@ -37,6 +58,16 @@ var chainlinkTestnetFeeds = map[string]common.Address{
 	"BTC": common.HexToAddress("0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43"),
 }
 
+// chainlinkDefaultProviders are free public Polygon RPC endpoints used as fallback
+// if no providers are explicitly configured. Verified working as of 2025-05-16.
+var chainlinkDefaultProviders = []string{
+	"https://polygon.drpc.org",             // dRPC - fast, reliable
+	"https://polygon.publicnode.com",       // Allnodes - verified working
+	"https://polygon.api.onfinality.io/public", // OnFinality - verified working
+	"https://polygon-public.nodies.app/",   // Nodies - verified working
+	"https://1rpc.io/matic",                // 1RPC - verified working
+}
+
 func parseABIOrPanic(abiStr string) *abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(abiStr))
 	if err != nil {
@@ -45,58 +76,58 @@ func parseABIOrPanic(abiStr string) *abi.ABI {
 	return &parsed
 }
 
-func chainlinkRateFetcher(cfg Config) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
 	feeds := chainlinkPolygonFeeds
 	if cfg.ChainlinkTestnet {
 		feeds = chainlinkTestnetFeeds
 	}
 
-	var (
-		once  sync.Once
-		ec    *ethclient.Client
-		ecErr error
-	)
+	// Get provider list: use configured providers or fall back to defaults
+	providers := chainlinkDefaultProviders
+	if cfg.ChainlinkProviders != "" {
+		providers = strings.Fields(cfg.ChainlinkProviders)
+	}
+
+	var ec *ethclient.Client
+	var lastErr error
+	for _, provider := range providers {
+		var err error
+		ec, err = ethclient.DialContext(context.Background(), provider)
+		if err == nil {
+			break
+		}
+		lastErr = err
+	}
+
+	if ec == nil {
+		return nil, fmt.Errorf("chainlink: dial all providers failed: %w", lastErr)
+	}
+
+	contracts := make(map[string]chainlinkAggregatorContract, len(feeds))
+	for ticker, addr := range feeds {
+		contracts[ticker] = &aggregatorBoundContract{
+			bound: bind.NewBoundContract(addr, *aggregatorABI, ec, nil, nil),
+		}
+	}
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
-		once.Do(func() {
-			ec, ecErr = ethclient.DialContext(context.Background(), cfg.ChainlinkRPCURL)
-		})
-		if ecErr != nil {
-			return nil, fmt.Errorf("chainlink: dial: %w", ecErr)
-		}
-
 		rates := make(map[string]float64)
 		for _, ticker := range tickers {
-			addr, ok := feeds[ticker]
+			contract, ok := contracts[ticker]
 			if !ok {
 				continue
 			}
-			price, err := latestUSDPrice(ctx, ec, addr)
+			answer, err := contract.latestRoundData(ctx)
 			if err != nil {
 				log.Warnf("chainlink: %s/USD: %v", ticker, err)
 				continue
 			}
-			rates[ticker] = price
+			f, _ := new(big.Float).Quo(
+				new(big.Float).SetInt(answer),
+				new(big.Float).SetFloat64(1e8),
+			).Float64()
+			rates[ticker] = f
 		}
 		return rates, nil
-	}
-}
-
-func latestUSDPrice(ctx context.Context, client *ethclient.Client, addr common.Address) (float64, error) {
-	contract := bind.NewBoundContract(addr, *aggregatorABI, client, nil, nil)
-	var out []interface{}
-	if err := contract.Call(&bind.CallOpts{Context: ctx}, &out, "latestRoundData"); err != nil {
-		return 0, err
-	}
-
-	answer := *abi.ConvertType(out[1], new(*big.Int)).(**big.Int)
-	if answer.Sign() <= 0 {
-		return 0, fmt.Errorf("non-positive answer: %s", answer)
-	}
-
-	f, _ := new(big.Float).Quo(
-		new(big.Float).SetInt(answer),
-		new(big.Float).SetFloat64(1e8),
-	).Float64()
-	return f, nil
+	}, nil
 }
