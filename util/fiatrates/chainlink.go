@@ -18,23 +18,18 @@ const aggregatorV3ABI = `[{"inputs":[],"name":"latestRoundData","outputs":[{"int
 
 var aggregatorABI = parseABIOrPanic(aggregatorV3ABI)
 
-// chainlinkMainnetFeeds maps ticker symbols to their USD Data Feed addresses on Ethereum mainnet.
-// Verify addresses against https://docs.chain.link/data-feeds/price-feeds/addresses?network=ethereum
-// TODO: Add addresses for ADA, SOL, AVAX, XRP, BNB from official Chainlink documentation
-var chainlinkMainnetFeeds = map[string]common.Address{
-	"BTC":   common.HexToAddress("0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c"),
-	"ETH":   common.HexToAddress("0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419"),
-	"LTC":   common.HexToAddress("0x6AF09DF7563C363B5763b9102712EbeD3b9e859B"),
-	"BCH":   common.HexToAddress("0x9F0F69428F923D6c95B781F89E165C9b2df9789D"),
-	"DOGE":  common.HexToAddress("0x2465CefD3b488BE410b941b1d4b2767088e2A028"),
-	"ZEC":   common.HexToAddress("0xd54B033D48d0475f19c5fccf7484E8A981848501"),
-	"LINK":  common.HexToAddress("0x2c1d072e956AFFC0D435Cb7AC38EF18d24d9127c"),
-	"MATIC": common.HexToAddress("0x7bAC85A8a13A4BcD8abb3eB7d6b4d632c895a6B1"),
-	// ADA: "0x???" - need to research
-	// SOL: "0x???" - need to research
-	// AVAX: "0x???" - need to research
-	// XRP: "0x???" - need to research
-	// BNB: "0x???" - need to research
+// chainlinkPolygonFeeds maps ticker symbols to their USD Data Feed addresses on Polygon mainnet.
+// Verify addresses against https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
+// Polygon offers fresher data due to lower fees and more frequent updates.
+var chainlinkPolygonFeeds = map[string]common.Address{
+	"BTC":  common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f"),
+	"ETH":  common.HexToAddress("0xF9680D99D6C9589e2a93a78A04A279e509205945"),
+	"LTC":  common.HexToAddress("0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa"),
+	"BCH":  common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"),
+	"DOGE": common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"),
+	"ZEC":  common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"),
+	"LINK": common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"),
+	// TODO: Add addresses for ADA, SOL, AVAX, XRP, BNB from official Chainlink documentation
 }
 
 var chainlinkTestnetFeeds = map[string]common.Address{
@@ -51,7 +46,7 @@ func parseABIOrPanic(abiStr string) *abi.ABI {
 }
 
 func chainlinkRateFetcher(cfg Config) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	feeds := chainlinkMainnetFeeds
+	feeds := chainlinkPolygonFeeds
 	if cfg.ChainlinkTestnet {
 		feeds = chainlinkTestnetFeeds
 	}
