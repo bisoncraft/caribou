@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -15,8 +16,6 @@ import (
 )
 
 const aggregatorV3ABI = `[{"inputs":[],"name":"latestRoundData","outputs":[{"internalType":"uint80","name":"roundId","type":"uint80"},{"internalType":"int256","name":"answer","type":"int256"},{"internalType":"uint256","name":"startedAt","type":"uint256"},{"internalType":"uint256","name":"updatedAt","type":"uint256"},{"internalType":"uint80","name":"answeredInRound","type":"uint80"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"}]`
-
-var aggregatorABI = parseABIOrPanic(aggregatorV3ABI)
 
 type chainlinkAggregatorContract interface {
 	latestRoundData(ctx context.Context) (*big.Int, error)
@@ -83,12 +82,12 @@ var chainlinkDefaultProviders = []string{
 	"https://1rpc.io/matic",                    // 1RPC - verified working
 }
 
-func parseABIOrPanic(abiStr string) *abi.ABI {
+func parseABI(abiStr string) (*abi.ABI, error) {
 	parsed, err := abi.JSON(strings.NewReader(abiStr))
 	if err != nil {
-		panic(fmt.Sprintf("failed to parse aggregator abi: %v", err))
+		return nil, fmt.Errorf("failed to parse aggregator abi: %w", err)
 	}
-	return &parsed
+	return &parsed, nil
 }
 
 func validateRPCURL(urlStr string) error {
@@ -109,6 +108,11 @@ func validateRPCURL(urlStr string) error {
 }
 
 func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
+	aggregatorABI, err := parseABI(aggregatorV3ABI)
+	if err != nil {
+		return nil, fmt.Errorf("chainlink: %w", err)
+	}
+
 	feeds := chainlinkPolygonFeeds
 	if cfg.ChainlinkTestnet {
 		feeds = chainlinkTestnetFeeds
@@ -127,9 +131,12 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 
 	var ec *ethclient.Client
 	var lastErr error
+	dialTimeout := 5 * time.Second
 	for _, provider := range providers {
+		dialCtx, cancel := context.WithTimeout(context.Background(), dialTimeout)
 		var err error
-		ec, err = ethclient.DialContext(context.Background(), provider)
+		ec, err = ethclient.DialContext(dialCtx, provider)
+		cancel()
 		if err == nil {
 			break
 		}
