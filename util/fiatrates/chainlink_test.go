@@ -15,6 +15,9 @@ import (
 
 // TestChainlinkLive tests the Chainlink price feeds on Polygon mainnet end-to-end.
 func TestChainlinkLive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live test")
+	}
 	cfg := Config{
 		ChainlinkTestnet: false,
 		// Uses default providers if not specified
@@ -106,9 +109,6 @@ func TestChainlinkFeedsExist(t *testing.T) {
 		if addr == (common.Address{}) {
 			t.Errorf("%s feed has zero address", ticker)
 		}
-		if fmt.Sprintf("%s", addr) == "0x0000000000000000000000000000000000000000" {
-			t.Errorf("%s feed has zero address", ticker)
-		}
 	}
 	t.Logf("verified %d feeds with valid addresses", len(chainlinkPolygonFeeds))
 }
@@ -129,6 +129,9 @@ func TestChainlinkContractCallError(t *testing.T) {
 
 // TestChainlinkMissingTicker tests handling of tickers with no configured feed.
 func TestChainlinkMissingTicker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live test")
+	}
 	cfg := Config{
 		ChainlinkTestnet: false,
 	}
@@ -157,6 +160,9 @@ func TestChainlinkMissingTicker(t *testing.T) {
 
 // TestChainlinkMixedValidInvalidTickers tests fetching a mix of valid and invalid tickers.
 func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live test")
+	}
 	cfg := Config{
 		ChainlinkTestnet: false,
 	}
@@ -240,6 +246,9 @@ func TestValidateRPCURL(t *testing.T) {
 
 // TestChainlinkTestnetConfiguration tests that the testnet flag correctly selects testnet feeds.
 func TestChainlinkTestnetConfiguration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live test")
+	}
 	cfg := Config{
 		ChainlinkTestnet: true,
 	}
@@ -343,26 +352,25 @@ func TestChainlinkPriceStaleness(t *testing.T) {
 			shouldReject: false,
 		},
 		{
+			name:         "price from 5 minutes ago",
+			updatedAt:    time.Now().Add(-5 * time.Minute),
+			shouldReject: false,
+		},
+		{
 			name:         "price from 30 minutes ago",
 			updatedAt:    time.Now().Add(-30 * time.Minute),
-			shouldReject: false,
+			shouldReject: true,
 		},
 		{
 			name:         "price from 2 hours ago",
 			updatedAt:    time.Now().Add(-2 * time.Hour),
 			shouldReject: true,
 		},
-		{
-			name:         "price from 24 hours ago",
-			updatedAt:    time.Now().Add(-24 * time.Hour),
-			shouldReject: true,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Check if the staleness logic would reject this timestamp
-			isStale := time.Since(tt.updatedAt) > FiatRateDataExpiry
+			isStale := time.Since(tt.updatedAt) > chainlinkMaxAge
 			if isStale != tt.shouldReject {
 				t.Errorf("staleness check failed: isStale=%v, shouldReject=%v", isStale, tt.shouldReject)
 			}
@@ -429,5 +437,103 @@ func TestChainlinkDecimalEdgeCases(t *testing.T) {
 				t.Errorf("expected price %f, got %f", tt.expected, f)
 			}
 		})
+	}
+}
+
+// newTestContracts builds a contractInfo map from mocks for use with chainlinkFetcherFromContracts.
+func newTestContracts(ticker string, mock *mockAggregatorContract, decimals uint8) map[string]*contractInfo {
+	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+	return map[string]*contractInfo{
+		ticker: {contract: mock, divisor: divisor},
+	}
+}
+
+// TestChainlinkClosureValidPrice tests that a fresh, valid price is returned correctly.
+func TestChainlinkClosureValidPrice(t *testing.T) {
+	// $50,000 with 8 decimals
+	mock := &mockAggregatorContract{
+		answer:    big.NewInt(5000000000000),
+		updatedAt: time.Now().Add(-1 * time.Minute),
+	}
+	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	price, ok := rates["BTC"]
+	if !ok {
+		t.Fatal("expected BTC price in results")
+	}
+	if price != 50000.0 {
+		t.Errorf("expected 50000.0, got %f", price)
+	}
+}
+
+// TestChainlinkClosureMissingTicker tests that tickers absent from contracts are silently skipped.
+func TestChainlinkClosureMissingTicker(t *testing.T) {
+	fetch := chainlinkFetcherFromContracts(map[string]*contractInfo{}) // empty
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC", "ETH"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rates) != 0 {
+		t.Errorf("expected empty rates for unknown tickers, got %d results", len(rates))
+	}
+}
+
+// TestChainlinkClosureStaleness tests that prices older than chainlinkMaxAge are rejected.
+func TestChainlinkClosureStaleness(t *testing.T) {
+	mock := &mockAggregatorContract{
+		answer:    big.NewInt(5000000000000),
+		updatedAt: time.Now().Add(-(chainlinkMaxAge + time.Minute)),
+	}
+	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := rates["BTC"]; ok {
+		t.Error("expected stale BTC price to be rejected, but it was returned")
+	}
+}
+
+// TestChainlinkClosureFutureTimestamp tests that prices with future timestamps are rejected.
+func TestChainlinkClosureFutureTimestamp(t *testing.T) {
+	mock := &mockAggregatorContract{
+		answer:    big.NewInt(5000000000000),
+		updatedAt: time.Now().Add(time.Hour),
+	}
+	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := rates["BTC"]; ok {
+		t.Error("expected future-timestamp BTC price to be rejected, but it was returned")
+	}
+}
+
+// TestChainlinkClosureContractError tests that latestRoundData errors cause the ticker to be skipped.
+func TestChainlinkClosureContractError(t *testing.T) {
+	mock := &mockAggregatorContract{
+		err: fmt.Errorf("rpc error: connection refused"),
+	}
+	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := rates["BTC"]; ok {
+		t.Error("expected erroring BTC contract to be skipped, but it was returned")
 	}
 }

@@ -37,7 +37,7 @@ func NewFiatOracle(cfg Config, tickerSymbols string, log util.Logger) (*Oracle, 
 	fiatOracle := &Oracle{
 		log:       log,
 		rates:     make(map[string]*FiatRateInfo),
-		sources:   fiatSources(cfg),
+		sources:   fiatSources(cfg, log),
 		listeners: make(map[string]chan<- map[string]*FiatRateInfo),
 	}
 

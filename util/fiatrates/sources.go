@@ -77,7 +77,7 @@ var (
 	upperCaser = cases.Upper(language.AmericanEnglish)
 )
 
-func fiatSources(cfg Config) []*source {
+func fiatSources(cfg Config, flog util.Logger) []*source {
 	disabledSources := strings.ToLower(cfg.DisabledFiatSources)
 	sources := []*source{
 		{
@@ -246,16 +246,17 @@ func fiatSources(cfg Config) []*source {
 		},
 	}
 
-	getRates, err := chainlinkRateFetcher(cfg)
-	if err != nil {
-		log.Error("chainlink: failed to initialize", "err", err)
-	} else {
-		sources = append(sources, &source{
-			name:            chainlink,
-			requestInterval: defaultRefreshInterval,
-			disabled:        strings.Contains(disabledSources, strings.ToLower(chainlink)),
-			getRates:        getRates,
-		})
+	if !strings.Contains(disabledSources, strings.ToLower(chainlink)) {
+		getRates, err := chainlinkRateFetcher(cfg)
+		if err != nil {
+			flog.Errorf("chainlink: %v", err)
+		} else {
+			sources = append(sources, &source{
+				name:            chainlink,
+				requestInterval: defaultRefreshInterval,
+				getRates:        getRates,
+			})
+		}
 	}
 
 	for i := range sources {

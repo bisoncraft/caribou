@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -15,11 +16,36 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-const aggregatorV3ABI = `[{"inputs":[],"name":"latestRoundData","outputs":[{"internalType":"uint80","name":"roundId","type":"uint80"},{"internalType":"int256","name":"answer","type":"int256"},{"internalType":"uint256","name":"startedAt","type":"uint256"},{"internalType":"uint256","name":"updatedAt","type":"uint256"},{"internalType":"uint80","name":"answeredInRound","type":"uint80"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"}]`
+const aggregatorV3ABI = `[
+  {
+    "inputs": [],
+    "name": "latestRoundData",
+    "outputs": [
+      {"internalType": "uint80",  "name": "roundId",         "type": "uint80"},
+      {"internalType": "int256",  "name": "answer",          "type": "int256"},
+      {"internalType": "uint256", "name": "startedAt",       "type": "uint256"},
+      {"internalType": "uint256", "name": "updatedAt",       "type": "uint256"},
+      {"internalType": "uint80",  "name": "answeredInRound", "type": "uint80"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "decimals",
+    "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]`
 
 const (
 	chainlinkDialTimeout = 5 * time.Second
 	chainlinkInitTimeout = 5 * time.Second
+	// chainlinkMaxAge is the maximum age of a Chainlink price before it is
+	// rejected. Polygon BTC/USD updates every ~27s with a 1h heartbeat, so
+	// 10 minutes is a tight but reasonable bound.
+	chainlinkMaxAge = 10 * time.Minute
 )
 
 type chainlinkAggregatorContract interface {
@@ -92,7 +118,7 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 	"DOGE": common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"),
 	"ZEC":  common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"),
 	"LINK": common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"),
-	// Missing feeds: ADA, SOL, AVAX, XRP, BNB, MATIC
+	// Missing feeds: ADA, SOL, AVAX, XRP, BNB
 	// To add: 1. Get addresses from https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
 	//         2. Verify contract has decimals() method
 	//         3. Test with live RPC calls
@@ -103,14 +129,14 @@ var chainlinkTestnetFeeds = map[string]common.Address{
 	"BTC": common.HexToAddress("0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43"),
 }
 
-// chainlinkDefaultProviders are free public Polygon RPC endpoints used as fallback
-// if no providers are explicitly configured. Verified working as of 2025-05-16.
+// chainlinkDefaultProviders are free public Polygon RPC endpoints used as
+// fallback if no providers are explicitly configured.
 var chainlinkDefaultProviders = []string{
-	"https://polygon.drpc.org",                 // dRPC - fast, reliable
-	"https://polygon.publicnode.com",           // Allnodes - verified working
-	"https://polygon.api.onfinality.io/public", // OnFinality - verified working
-	"https://polygon-public.nodies.app/",       // Nodies - verified working
-	"https://1rpc.io/matic",                    // 1RPC - verified working
+	"https://polygon.drpc.org",
+	"https://polygon.publicnode.com",
+	"https://polygon.api.onfinality.io/public",
+	"https://polygon-public.nodies.app/",
+	"https://1rpc.io/matic",
 }
 
 func parseABI(abiStr string) (*abi.ABI, error) {
@@ -138,74 +164,14 @@ func validateRPCURL(urlStr string) error {
 	return nil
 }
 
-func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
-	aggregatorABI, err := parseABI(aggregatorV3ABI)
-	if err != nil {
-		return nil, fmt.Errorf("chainlink: %w", err)
-	}
+type contractInfo struct {
+	contract chainlinkAggregatorContract
+	divisor  *big.Float
+}
 
-	feeds := chainlinkPolygonFeeds
-	if cfg.ChainlinkTestnet {
-		feeds = chainlinkTestnetFeeds
-	}
-
-	// Get provider list: use configured providers or fall back to defaults
-	providers := chainlinkDefaultProviders
-	if cfg.ChainlinkProviders != "" {
-		// Split on any whitespace (spaces, tabs, newlines).
-		providers = strings.Fields(cfg.ChainlinkProviders)
-		for _, provider := range providers {
-			if err := validateRPCURL(provider); err != nil {
-				return nil, fmt.Errorf("chainlink: %w", err)
-			}
-		}
-	}
-
-	// Chainlink is one of several fiat rate sources; the oracle averages across all
-	// active sources, so a single compromised RPC cannot unilaterally skew final prices.
-	// Operators should restrict ChainlinkProviders to trusted endpoints in production.
-	var ec *ethclient.Client
-	var lastErr error
-	for _, provider := range providers {
-		dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
-		var err error
-		ec, err = ethclient.DialContext(dialCtx, provider)
-		cancel()
-		if err == nil {
-			break
-		}
-		lastErr = err
-	}
-
-	if ec == nil {
-		return nil, fmt.Errorf("chainlink: dial all providers failed: %w", lastErr)
-	}
-
-	type contractInfo struct {
-		contract chainlinkAggregatorContract
-		divisor  *big.Float
-	}
-
-	contracts := make(map[string]*contractInfo, len(feeds))
-	for ticker, addr := range feeds {
-		contract := &aggregatorBoundContract{
-			bound: bind.NewBoundContract(addr, *aggregatorABI, ec, nil, nil),
-		}
-
-		initCtx, cancel := context.WithTimeout(context.Background(), chainlinkInitTimeout)
-		decimals, err := contract.decimals(initCtx)
-		cancel()
-		if err != nil {
-			return nil, fmt.Errorf("chainlink: failed to query decimals for %s: %w", ticker, err)
-		}
-
-		divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
-		contracts[ticker] = &contractInfo{
-			contract: contract,
-			divisor:  divisor,
-		}
-	}
-
+// chainlinkFetcherFromContracts creates a rate fetcher from pre-built contracts.
+// Used in tests to exercise the closure logic without network I/O.
+func chainlinkFetcherFromContracts(contracts map[string]*contractInfo) func(context.Context, []string, util.Logger) (map[string]float64, error) {
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 		rates := make(map[string]float64)
 		for _, ticker := range tickers {
@@ -218,18 +184,146 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 				log.Warnf("chainlink: %s/USD: %v", ticker, err)
 				continue
 			}
+			if updatedAt.After(time.Now()) {
+				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
+				continue
+			}
+			if time.Since(updatedAt) > chainlinkMaxAge {
+				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
+				continue
+			}
+			f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), info.divisor).Float64()
+			rates[ticker] = f
+		}
+		return rates, nil
+	}
+}
 
-			if time.Since(updatedAt) > FiatRateDataExpiry {
+func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
+	aggregatorABI, err := parseABI(aggregatorV3ABI)
+	if err != nil {
+		return nil, fmt.Errorf("chainlink: %w", err)
+	}
+
+	feeds := chainlinkPolygonFeeds
+	if cfg.ChainlinkTestnet {
+		feeds = chainlinkTestnetFeeds
+	}
+
+	// Get provider list: use configured providers or fall back to defaults.
+	providers := chainlinkDefaultProviders
+	if cfg.ChainlinkProviders != "" {
+		// Split on any whitespace (spaces, tabs, newlines).
+		providers = strings.Fields(cfg.ChainlinkProviders)
+		for _, provider := range providers {
+			if err := validateRPCURL(provider); err != nil {
+				return nil, fmt.Errorf("chainlink: %w", err)
+			}
+		}
+	}
+
+	// Chainlink is one of several fiat rate sources; the oracle averages across
+	// all active sources, so a single compromised RPC cannot unilaterally skew
+	// final prices. Operators should restrict ChainlinkProviders to trusted
+	// endpoints in production.
+	//
+	// The provider connection is established lazily on the first getRates call.
+	// If any RPC call fails, the connection is reset and re-dialed from the
+	// beginning of the provider list on the next call.
+	var (
+		mu        sync.Mutex
+		ec        *ethclient.Client
+		contracts = make(map[string]*contractInfo)
+	)
+
+	// connect dials providers in order until one succeeds. Called with mu held.
+	connect := func() error {
+		var lastErr error
+		for _, provider := range providers {
+			dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
+			newEC, err := ethclient.DialContext(dialCtx, provider)
+			cancel()
+			if err == nil {
+				ec = newEC
+				contracts = make(map[string]*contractInfo)
+				return nil
+			}
+			lastErr = err
+		}
+		return fmt.Errorf("dial all providers failed: %w", lastErr)
+	}
+
+	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
+		mu.Lock()
+		if ec == nil {
+			if err := connect(); err != nil {
+				mu.Unlock()
+				return nil, fmt.Errorf("chainlink: %w", err)
+			}
+		}
+		currentEC := ec
+		mu.Unlock()
+
+		rates := make(map[string]float64)
+		var connFailed bool
+		for _, ticker := range tickers {
+			addr, ok := feeds[ticker]
+			if !ok {
+				continue
+			}
+
+			mu.Lock()
+			info := contracts[ticker]
+			mu.Unlock()
+
+			if info == nil {
+				contract := &aggregatorBoundContract{
+					bound: bind.NewBoundContract(addr, *aggregatorABI, currentEC, nil, nil),
+				}
+				initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
+				d, err := contract.decimals(initCtx)
+				cancel()
+				if err != nil {
+					log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
+					connFailed = true
+					continue
+				}
+				divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
+				info = &contractInfo{contract: contract, divisor: divisor}
+				mu.Lock()
+				contracts[ticker] = info
+				mu.Unlock()
+			}
+
+			answer, updatedAt, err := info.contract.latestRoundData(ctx)
+			if err != nil {
+				log.Warnf("chainlink: %s/USD: %v", ticker, err)
+				connFailed = true
+				continue
+			}
+
+			if updatedAt.After(time.Now()) {
+				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
+				continue
+			}
+
+			if time.Since(updatedAt) > chainlinkMaxAge {
 				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
 				continue
 			}
 
-			f, _ := new(big.Float).Quo(
-				new(big.Float).SetInt(answer),
-				info.divisor,
-			).Float64()
+			f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), info.divisor).Float64()
 			rates[ticker] = f
 		}
+
+		if connFailed {
+			mu.Lock()
+			if ec == currentEC {
+				ec = nil
+			}
+			mu.Unlock()
+		}
+
 		return rates, nil
 	}, nil
 }
