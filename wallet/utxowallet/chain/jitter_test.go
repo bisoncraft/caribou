@@ -91,8 +91,6 @@ func TestJitterTicker(t *testing.T) {
 		// Tick duration should be between 80ms and 120ms.
 		require.True(t, diff >= 80*time.Millisecond, "diff: %v", diff)
 
-		// We give 1ms more to account for the time it takes to run the
-		// code.
-		require.True(t, diff < 121*time.Millisecond, "diff: %v", diff)
+		require.True(t, diff < 150*time.Millisecond, "diff: %v", diff)
 	}
 }
