@@ -257,9 +257,9 @@ ${MULTIBALANCE_CONTRACT_ADDR}
 EOF
 
 # Add test tokens.
-"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDC_CONTRACT_ADDR}\",4400000000000000000)"
-"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDT_CONTRACT_ADDR}\",4400000000000000000)"
-"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_LINK_CONTRACT_ADDR}\",4400000000000000000000)"
+"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDC_CONTRACT_ADDR}\",4400000000000000000)"  # 4.4 trillion USDC x 10^6 (6 decimals)
+"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDT_CONTRACT_ADDR}\",4400000000000000000)"  # 4.4 trillion USDT x 10^6 (6 decimals)
+"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_LINK_CONTRACT_ADDR}\",4400000000000000000000)"  # 4400 LINK x 10^18 (18 decimals)
 
 cd "${NODES_ROOT}/harness-ctl"
 

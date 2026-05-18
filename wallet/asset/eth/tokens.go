@@ -454,7 +454,8 @@ var Tokens = map[uint32]*Token{
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "nLINK",
 				Conventional: util.Denomination{
-					Unit:             "LINK",
+					Unit: "LINK",
+					// EVMFactor defaults to 9; log10(1e9)+9=18 decimals.
 					ConversionFactor: 1e9,
 				},
 				FeeRateDenom: "gas",
@@ -468,7 +469,7 @@ var Tokens = map[uint32]*Token{
 				},
 			},
 			util.Testnet: {
-				Address: common.HexToAddress("0x779877A7B0D9C8e6FD2f00455812545844ad0C02"), // Sepolia
+				Address: common.HexToAddress("0x779877A7B0D9E8603169DdbD7836e478b4624789"), // Sepolia
 				SwapContracts: map[uint32]*SwapContract{
 					1: {Gas: tokenV1Gases},
 				},

@@ -33,8 +33,10 @@ var simnetHarnessDir = map[uint32]string{
 }
 
 var simnetTokenScript = map[uint32]string{
-	usdcEthID:     "sendUSDC",
-	usdtEthID:     "sendUSDT",
+	usdcEthID: "sendUSDC",
+	usdtEthID: "sendUSDT",
+	// linkEthID has no simnetBridgePaths entry yet; entry is preparatory for
+	// future cross-chain bridge support.
 	linkEthID:     "sendLINK",
 	usdcPolygonID: "sendUSDC",
 	usdtPolygonID: "sendUSDT",
