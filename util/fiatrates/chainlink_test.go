@@ -25,7 +25,7 @@ func TestChainlinkLive(t *testing.T) {
 
 	getRates, err := chainlinkRateFetcher(cfg)
 	if err != nil {
-		t.Skipf("skipping live test: failed to initialize chainlink fetcher: %v", err)
+		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
 
 	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
@@ -138,7 +138,7 @@ func TestChainlinkMissingTicker(t *testing.T) {
 
 	getRates, err := chainlinkRateFetcher(cfg)
 	if err != nil {
-		t.Skipf("skipping live test: failed to initialize chainlink fetcher: %v", err)
+		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
 
 	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
@@ -169,7 +169,7 @@ func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
 
 	getRates, err := chainlinkRateFetcher(cfg)
 	if err != nil {
-		t.Skipf("skipping live test: failed to initialize chainlink fetcher: %v", err)
+		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
 
 	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
@@ -183,10 +183,9 @@ func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should have prices for BTC and ETH only (or skip if RPC fails)
+	// Should have prices for BTC and ETH only.
 	if len(rates) == 0 {
-		t.Logf("no rates returned (RPC may be unavailable)")
-		return
+		t.Fatal("no rates returned")
 	}
 
 	if _, hasBTC := rates["BTC"]; !hasBTC {
@@ -255,7 +254,7 @@ func TestChainlinkTestnetConfiguration(t *testing.T) {
 
 	getRates, err := chainlinkRateFetcher(cfg)
 	if err != nil {
-		t.Skipf("skipping test: failed to initialize chainlink fetcher: %v", err)
+		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
 
 	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)

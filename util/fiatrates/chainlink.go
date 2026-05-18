@@ -2,6 +2,7 @@ package fiatrates
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/url"
@@ -233,40 +234,58 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	// If any RPC call fails, the connection is reset and re-dialed from the
 	// beginning of the provider list on the next call.
 	var (
-		mu       sync.Mutex
+		mtx      sync.Mutex
 		ec       *ethclient.Client
 		divisors = make(map[string]*big.Float) // keyed by ticker; survives reconnects
 	)
 
-	// connect dials providers in order until one succeeds. Called with mu held.
-	connect := func() error {
+	// isConnErr returns true for errors that indicate a provider failure
+	// rather than a cancelled or timed-out context.
+	isConnErr := func(err error) bool {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	}
+
+	// dial tries providers in order and returns the first successful client.
+	// It does not hold mtx, so callers must handle the returned client under a lock.
+	dial := func() (*ethclient.Client, error) {
 		var lastErr error
 		for _, provider := range providers {
 			dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
 			newEC, err := ethclient.DialContext(dialCtx, provider)
 			cancel()
 			if err == nil {
-				ec = newEC
-				return nil
+				return newEC, nil
 			}
 			lastErr = err
 		}
-		return fmt.Errorf("dial all providers failed: %w", lastErr)
+		return nil, fmt.Errorf("dial all providers failed: %w", lastErr)
 	}
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
-		mu.Lock()
-		if ec == nil {
-			if err := connect(); err != nil {
-				mu.Unlock()
+		mtx.Lock()
+		needConnect := ec == nil
+		mtx.Unlock()
+
+		if needConnect {
+			newEC, err := dial()
+			if err != nil {
 				return nil, fmt.Errorf("chainlink: %w", err)
 			}
+			mtx.Lock()
+			if ec == nil {
+				ec = newEC
+			} else {
+				newEC.Close() // another caller connected first
+			}
+			mtx.Unlock()
 		}
+
+		mtx.Lock()
 		currentEC := ec
-		mu.Unlock()
+		mtx.Unlock()
 
 		var (
-			ratesMu    sync.Mutex
+			ratesMtx   sync.Mutex
 			rates      = make(map[string]float64)
 			connFailed atomic.Bool
 		)
@@ -282,9 +301,9 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 					bound: bind.NewBoundContract(addr, *aggregatorABI, currentEC, nil, nil),
 				}
 
-				mu.Lock()
+				mtx.Lock()
 				div := divisors[ticker]
-				mu.Unlock()
+				mtx.Unlock()
 
 				if div == nil {
 					initCtx, cancel := context.WithTimeout(gctx, chainlinkInitTimeout)
@@ -292,21 +311,25 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 					cancel()
 					if err != nil {
 						log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
-						connFailed.Store(true)
+						if isConnErr(err) {
+							connFailed.Store(true)
+						}
 						return nil
 					}
 					div = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
-					mu.Lock()
+					mtx.Lock()
 					if divisors[ticker] == nil {
 						divisors[ticker] = div
 					}
-					mu.Unlock()
+					mtx.Unlock()
 				}
 
 				answer, updatedAt, err := contract.latestRoundData(gctx)
 				if err != nil {
 					log.Warnf("chainlink: %s/USD: %v", ticker, err)
-					connFailed.Store(true)
+					if isConnErr(err) {
+						connFailed.Store(true)
+					}
 					return nil
 				}
 
@@ -321,20 +344,27 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 				}
 
 				f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), div).Float64()
-				ratesMu.Lock()
+				ratesMtx.Lock()
 				rates[ticker] = f
-				ratesMu.Unlock()
+				ratesMtx.Unlock()
 				return nil
 			})
 		}
-		_ = g.Wait() // goroutines never return non-nil errors
+		if err := g.Wait(); err != nil {
+			log.Warnf("chainlink: unexpected goroutine error: %v", err)
+		}
 
 		if connFailed.Load() {
-			mu.Lock()
+			var doClose bool
+			mtx.Lock()
 			if ec == currentEC {
 				ec = nil
+				doClose = true
 			}
-			mu.Unlock()
+			mtx.Unlock()
+			if doClose {
+				currentEC.Close()
+			}
 		}
 
 		return rates, nil
