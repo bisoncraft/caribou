@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -535,4 +537,126 @@ func TestChainlinkClosureContractError(t *testing.T) {
 	if _, ok := rates["BTC"]; ok {
 		t.Error("expected erroring BTC contract to be skipped, but it was returned")
 	}
+}
+
+// mockRPCClient implements chainRPCClient for testing. CodeAt and CallContract
+// are never invoked in these tests because newContractFn returns mock contracts
+// that bypass the bound-contract machinery entirely.
+type mockRPCClient struct {
+	once     sync.Once
+	closedCh chan struct{}
+}
+
+func newMockRPCClient() *mockRPCClient {
+	return &mockRPCClient{closedCh: make(chan struct{})}
+}
+
+func (m *mockRPCClient) CodeAt(_ context.Context, _ common.Address, _ *big.Int) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *mockRPCClient) CallContract(_ context.Context, _ ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *mockRPCClient) Close() {
+	m.once.Do(func() { close(m.closedCh) })
+}
+
+func (m *mockRPCClient) isClosed() bool {
+	select {
+	case <-m.closedCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// TestChainlinkConnFailedReset verifies that a connection error during
+// latestRoundData triggers connFailed, resets ec to nil, and closes the
+// client — causing a re-dial on the next call.
+func TestChainlinkConnFailedReset(t *testing.T) {
+	connErr := fmt.Errorf("connection refused")
+
+	var (
+		dialCount   int
+		firstClient *mockRPCClient
+	)
+	dialFn := func() (chainRPCClient, error) {
+		dialCount++
+		c := newMockRPCClient()
+		if firstClient == nil {
+			firstClient = c
+		}
+		return c, nil
+	}
+
+	fetch := chainlinkFetcherCore(
+		chainlinkPolygonFeeds,
+		dialFn,
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract {
+			return &mockAggregatorContract{err: connErr, decimalPlaces: 8}
+		},
+	)
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+
+	// First call: connects, latestRoundData fails with conn error, ec reset.
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rates) != 0 {
+		t.Errorf("expected no rates on connection failure, got %v", rates)
+	}
+	if !firstClient.isClosed() {
+		t.Error("expected client to be closed after connection failure")
+	}
+	if dialCount != 1 {
+		t.Errorf("expected 1 dial, got %d", dialCount)
+	}
+
+	// Second call must re-dial since ec was reset to nil.
+	_, _ = fetch(context.Background(), []string{"BTC"}, log)
+	if dialCount != 2 {
+		t.Errorf("expected 2 dials after reconnect, got %d", dialCount)
+	}
+}
+
+// TestChainlinkConcurrentRates exercises the double-check locking patterns for
+// ec and divisors under concurrent load. Run with -race to detect data races.
+func TestChainlinkConcurrentRates(t *testing.T) {
+	fetch := chainlinkFetcherCore(
+		chainlinkPolygonFeeds,
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(addr common.Address, _ chainRPCClient) chainlinkAggregatorContract {
+			mocks := map[common.Address]*mockAggregatorContract{
+				chainlinkPolygonFeeds["BTC"]: {
+					answer:        big.NewInt(5000000000000),
+					decimalPlaces: 8,
+					updatedAt:     time.Now().Add(-time.Minute),
+				},
+				chainlinkPolygonFeeds["ETH"]: {
+					answer:        big.NewInt(300000000000),
+					decimalPlaces: 8,
+					updatedAt:     time.Now().Add(-time.Minute),
+				},
+			}
+			if m, ok := mocks[addr]; ok {
+				return m
+			}
+			return &mockAggregatorContract{err: fmt.Errorf("unknown")}
+		},
+	)
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = fetch(context.Background(), []string{"BTC", "ETH"}, log)
+		}()
+	}
+	wg.Wait()
 }

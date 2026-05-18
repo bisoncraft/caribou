@@ -56,6 +56,13 @@ type chainlinkAggregatorContract interface {
 	decimals(ctx context.Context) (uint8, error)
 }
 
+// chainRPCClient is the subset of *ethclient.Client used by the rate fetcher.
+// Close() matches *ethclient.Client which returns no error.
+type chainRPCClient interface {
+	bind.ContractCaller
+	Close()
+}
+
 type aggregatorBoundContract struct {
 	bound *bind.BoundContract
 }
@@ -220,34 +227,12 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		providers = strings.Fields(cfg.ChainlinkProviders)
 		for _, provider := range providers {
 			if err := validateRPCURL(provider); err != nil {
-				return nil, fmt.Errorf("chainlink: %w", err)
+				return nil, fmt.Errorf("chainlink: invalid provider %q: %w", provider, err)
 			}
 		}
 	}
 
-	// Chainlink is one of several fiat rate sources; the oracle averages across
-	// all active sources, so a single compromised RPC cannot unilaterally skew
-	// final prices. Operators should restrict ChainlinkProviders to trusted
-	// endpoints in production.
-	//
-	// The provider connection is established lazily on the first getRates call.
-	// If any RPC call fails, the connection is reset and re-dialed from the
-	// beginning of the provider list on the next call.
-	var (
-		mtx      sync.Mutex
-		ec       *ethclient.Client
-		divisors = make(map[string]*big.Float) // keyed by ticker; survives reconnects
-	)
-
-	// isConnErr returns true for errors that indicate a provider failure
-	// rather than a cancelled or timed-out context.
-	isConnErr := func(err error) bool {
-		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-	}
-
-	// dial tries providers in order and returns the first successful client.
-	// It does not hold mtx, so callers must handle the returned client under a lock.
-	dial := func() (*ethclient.Client, error) {
+	dialFn := func() (chainRPCClient, error) {
 		var lastErr error
 		for _, provider := range providers {
 			dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
@@ -261,13 +246,45 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		return nil, fmt.Errorf("dial all providers failed: %w", lastErr)
 	}
 
+	return chainlinkFetcherCore(feeds, dialFn, func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract {
+		return &aggregatorBoundContract{bound: bind.NewBoundContract(addr, *aggregatorABI, client, nil, nil)}
+	}), nil
+}
+
+// chainlinkFetcherCore is the testable core of chainlinkRateFetcher with
+// injectable dial and contract factory functions.
+func chainlinkFetcherCore(
+	feeds map[string]common.Address,
+	dialFn func() (chainRPCClient, error),
+	newContract func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract,
+) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+	// Chainlink is one of several fiat rate sources; the oracle averages across
+	// all active sources, so a single compromised RPC cannot unilaterally skew
+	// final prices. Operators should restrict ChainlinkProviders to trusted
+	// endpoints in production.
+	//
+	// The provider connection is established lazily on the first getRates call.
+	// If any RPC call fails, the connection is reset and re-dialed from the
+	// beginning of the provider list on the next call.
+	var (
+		mtx      sync.Mutex
+		ec       chainRPCClient
+		divisors = make(map[string]*big.Float) // keyed by ticker; survives reconnects
+	)
+
+	// isConnErr returns true for errors that indicate a provider failure
+	// rather than a cancelled or timed-out context.
+	isConnErr := func(err error) bool {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	}
+
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 		mtx.Lock()
 		needConnect := ec == nil
 		mtx.Unlock()
 
 		if needConnect {
-			newEC, err := dial()
+			newEC, err := dialFn()
 			if err != nil {
 				return nil, fmt.Errorf("chainlink: %w", err)
 			}
@@ -297,9 +314,7 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 				continue
 			}
 			g.Go(func() error {
-				contract := &aggregatorBoundContract{
-					bound: bind.NewBoundContract(addr, *aggregatorABI, currentEC, nil, nil),
-				}
+				contract := newContract(addr, currentEC)
 
 				mtx.Lock()
 				div := divisors[ticker]
@@ -368,5 +383,5 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		}
 
 		return rates, nil
-	}, nil
+	}
 }
