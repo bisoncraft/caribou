@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -14,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"golang.org/x/sync/errgroup"
 )
 
 const aggregatorV3ABI = `[
@@ -231,9 +233,9 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	// If any RPC call fails, the connection is reset and re-dialed from the
 	// beginning of the provider list on the next call.
 	var (
-		mu        sync.Mutex
-		ec        *ethclient.Client
-		contracts = make(map[string]*contractInfo)
+		mu       sync.Mutex
+		ec       *ethclient.Client
+		divisors = make(map[string]*big.Float) // keyed by ticker; survives reconnects
 	)
 
 	// connect dials providers in order until one succeeds. Called with mu held.
@@ -245,7 +247,6 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 			cancel()
 			if err == nil {
 				ec = newEC
-				contracts = make(map[string]*contractInfo)
 				return nil
 			}
 			lastErr = err
@@ -264,59 +265,71 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		currentEC := ec
 		mu.Unlock()
 
-		rates := make(map[string]float64)
-		var connFailed bool
+		var (
+			ratesMu    sync.Mutex
+			rates      = make(map[string]float64)
+			connFailed atomic.Bool
+		)
+
+		g, gctx := errgroup.WithContext(ctx)
 		for _, ticker := range tickers {
 			addr, ok := feeds[ticker]
 			if !ok {
 				continue
 			}
-
-			mu.Lock()
-			info := contracts[ticker]
-			mu.Unlock()
-
-			if info == nil {
+			g.Go(func() error {
 				contract := &aggregatorBoundContract{
 					bound: bind.NewBoundContract(addr, *aggregatorABI, currentEC, nil, nil),
 				}
-				initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
-				d, err := contract.decimals(initCtx)
-				cancel()
-				if err != nil {
-					log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
-					connFailed = true
-					continue
-				}
-				divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
-				info = &contractInfo{contract: contract, divisor: divisor}
+
 				mu.Lock()
-				contracts[ticker] = info
+				div := divisors[ticker]
 				mu.Unlock()
-			}
 
-			answer, updatedAt, err := info.contract.latestRoundData(ctx)
-			if err != nil {
-				log.Warnf("chainlink: %s/USD: %v", ticker, err)
-				connFailed = true
-				continue
-			}
+				if div == nil {
+					initCtx, cancel := context.WithTimeout(gctx, chainlinkInitTimeout)
+					d, err := contract.decimals(initCtx)
+					cancel()
+					if err != nil {
+						log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
+						connFailed.Store(true)
+						return nil
+					}
+					div = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
+					mu.Lock()
+					if divisors[ticker] == nil {
+						divisors[ticker] = div
+					}
+					mu.Unlock()
+				}
 
-			if updatedAt.After(time.Now()) {
-				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
-				continue
-			}
+				answer, updatedAt, err := contract.latestRoundData(gctx)
+				if err != nil {
+					log.Warnf("chainlink: %s/USD: %v", ticker, err)
+					connFailed.Store(true)
+					return nil
+				}
 
-			if time.Since(updatedAt) > chainlinkMaxAge {
-				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
-				continue
-			}
+				if updatedAt.After(time.Now()) {
+					log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
+					return nil
+				}
 
-			f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), info.divisor).Float64()
-			rates[ticker] = f
+				if time.Since(updatedAt) > chainlinkMaxAge {
+					log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
+					return nil
+				}
+
+				f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), div).Float64()
+				ratesMu.Lock()
+				rates[ticker] = f
+				ratesMu.Unlock()
+				return nil
+			})
 		}
+		_ = g.Wait() // goroutines never return non-nil errors
 
-		if connFailed {
+		if connFailed.Load() {
 			mu.Lock()
 			if ec == currentEC {
 				ec = nil
