@@ -67,6 +67,25 @@ func registerToken(tokenID uint32, desc string) {
 	}, netAddrs, netAssetVersions)
 }
 
+var (
+	// Ethereum
+	ethID, _        = util.BipSymbolID("eth")
+	usdcEthID, _    = util.BipSymbolID("usdc.eth")
+	usdtEthID, _    = util.BipSymbolID("usdt.eth")
+	maticEthID, _   = util.BipSymbolID("matic.eth")
+	polygonEthID, _ = util.BipSymbolID("polygon.eth")
+	linkEthID, _    = util.BipSymbolID("link.eth")
+	// Polygon
+	polygonID, _     = util.BipSymbolID("polygon")
+	wethPolygonID, _ = util.BipSymbolID("weth.polygon")
+	usdcPolygonID, _ = util.BipSymbolID("usdc.polygon")
+	usdtPolygonID, _ = util.BipSymbolID("usdt.polygon")
+	// Base
+	baseID, _     = util.BipSymbolID("base")
+	usdcBaseID, _ = util.BipSymbolID("usdc.base")
+	usdtBaseID, _ = util.BipSymbolID("usdt.base")
+)
+
 func init() {
 	MaybeReadSimnetAddrs()
 	asset.Register(BipID, &Driver{})
@@ -74,6 +93,7 @@ func init() {
 	registerToken(usdtEthID, "The USDT Ethereum ERC20 token.")
 	registerToken(maticEthID, "The MATIC Ethereum ERC20 token.")
 	registerToken(polygonEthID, "The POL Ethereum ERC20 token.")
+	registerToken(linkEthID, "The LINK Chainlink Ethereum ERC20 token.")
 }
 
 const (

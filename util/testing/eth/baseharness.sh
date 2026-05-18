@@ -132,6 +132,9 @@ TEST_USDC_CONTRACT_HASH=$(gethDeploy "deployERC20(\"${TEST_TOKEN}\",6)")
 echo "Deploying USDT contract."
 TEST_USDT_CONTRACT_HASH=$(gethDeploy "deployERC20(\"${TEST_TOKEN}\",6)")
 
+echo "Deploying LINK contract."
+TEST_LINK_CONTRACT_HASH=$(gethDeploy "deployERC20(\"${TEST_TOKEN}\",18)")
+
 echo "Deploying MultiBalance contract."
 MULTIBALANCE_CONTRACT_HASH=$(gethDeploy "deploy(\"${MULTIBALANCE_BIN}\")")
 
@@ -181,6 +184,12 @@ cat > "${NODES_ROOT}/test_usdt_contract_address.txt" <<EOF
 ${TEST_USDT_CONTRACT_ADDR}
 EOF
 
+TEST_LINK_CONTRACT_ADDR=$("${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/contractAddress.js --exec contractAddress(\"${TEST_LINK_CONTRACT_HASH}\")" | sed 's/"//g')
+echo "Test LINK contract address is ${TEST_LINK_CONTRACT_ADDR}. Saving to ${NODES_ROOT}/test_link_contract_address.txt"
+cat > "${NODES_ROOT}/test_link_contract_address.txt" <<EOF
+${TEST_LINK_CONTRACT_ADDR}
+EOF
+
 echo "Deploying ERC20SwapV0 contract for USDT."
 USDT_SWAP_CONTRACT_HASH=$(gethDeploy "deployERC20Swap(\"${ERC20_SWAP_V0}\",\"${TEST_USDT_CONTRACT_ADDR}\")")
 
@@ -221,6 +230,12 @@ cat > "${NODES_ROOT}/harness-ctl/sendUSDT" <<EOF
 EOF
 chmod +x "${NODES_ROOT}/harness-ctl/sendUSDT"
 
+cat > "${NODES_ROOT}/harness-ctl/sendLINK" <<EOF
+#!/usr/bin/env bash
+./alpha attach --preload loadTestToken.js --exec "transfer(\"${TEST_LINK_CONTRACT_ADDR}\",18,\"\$1\",\$2)"
+EOF
+chmod +x "${NODES_ROOT}/harness-ctl/sendLINK"
+
 mine_pending_txs
 
 USDC_SWAP_CONTRACT_ADDR_V0=$("${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/contractAddress.js --exec contractAddress(\"${USDC_SWAP_CONTRACT_HASH_V0}\")" | sed 's/"//g')
@@ -244,6 +259,7 @@ EOF
 # Add test tokens.
 "${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDC_CONTRACT_ADDR}\",4400000000000000000)"
 "${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDT_CONTRACT_ADDR}\",4400000000000000000)"
+"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_LINK_CONTRACT_ADDR}\",4400000000000000000000)"
 
 cd "${NODES_ROOT}/harness-ctl"
 

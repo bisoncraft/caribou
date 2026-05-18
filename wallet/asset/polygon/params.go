@@ -460,5 +460,5 @@ var (
 // simnet harness to populate swap contract and token addresses in
 // ContractAddresses and Tokens.
 func MaybeReadSimnetAddrs() {
-	dexeth.MaybeReadSimnetAddrsDir("polygon", ContractAddresses, MultiBalanceAddresses, Tokens[usdcTokenID].NetTokens[util.Simnet], Tokens[usdtTokenID].NetTokens[util.Simnet])
+	dexeth.MaybeReadSimnetAddrsDir("polygon", ContractAddresses, MultiBalanceAddresses, Tokens[usdcTokenID].NetTokens[util.Simnet], Tokens[usdtTokenID].NetTokens[util.Simnet], nil)
 }

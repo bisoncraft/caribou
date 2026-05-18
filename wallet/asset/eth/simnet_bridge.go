@@ -26,10 +26,6 @@ import (
 
 const simnetBridgeName = "simnet"
 
-var (
-	usdtBaseID, _ = util.BipSymbolID("usdt.base")
-)
-
 var simnetHarnessDir = map[uint32]string{
 	ethID:     "eth",
 	polygonID: "polygon",
@@ -39,6 +35,7 @@ var simnetHarnessDir = map[uint32]string{
 var simnetTokenScript = map[uint32]string{
 	usdcEthID:     "sendUSDC",
 	usdtEthID:     "sendUSDT",
+	linkEthID:     "sendLINK",
 	usdcPolygonID: "sendUSDC",
 	usdtPolygonID: "sendUSDT",
 	usdcBaseID:    "sendUSDC",
