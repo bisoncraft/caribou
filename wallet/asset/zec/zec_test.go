@@ -117,8 +117,9 @@ func makeSwapContract(lockTimeOffset time.Duration) (secret []byte, secretHash [
 }
 
 type tRPCClient struct {
-	tipChanged chan asset.WalletNotification
-	responses  map[string][]any
+	tipChanged   chan asset.WalletNotification
+	responsesMtx sync.Mutex
+	responses    map[string][]any
 
 	// If there is an "any" key in the getTransactionMap, that value will be
 	// returned for all requests. Otherwise the tx id is looked up.
@@ -146,11 +147,15 @@ func newRPCClient() *tRPCClient {
 }
 
 func (c *tRPCClient) queueResponse(method string, resp any) {
+	c.responsesMtx.Lock()
+	defer c.responsesMtx.Unlock()
 	c.responses[method] = append(c.responses[method], resp)
 }
 
 func (c *tRPCClient) checkEmptiness(t *testing.T) {
 	t.Helper()
+	c.responsesMtx.Lock()
+	defer c.responsesMtx.Unlock()
 	var stillQueued = map[string]int{}
 	for method, resps := range c.responses {
 		if len(resps) > 0 {
@@ -234,10 +239,12 @@ func (c *tRPCClient) RawRequest(ctx context.Context, method string, args []json.
 		return b, nil
 	}
 
+	c.responsesMtx.Lock()
 	responses := c.responses[method]
 	if len(responses) > 0 {
-		resp := c.responses[method][0]
-		c.responses[method] = c.responses[method][1:]
+		resp := responses[0]
+		c.responses[method] = responses[1:]
+		c.responsesMtx.Unlock()
 		if err, is := resp.(error); is {
 			return nil, err
 		}
@@ -246,6 +253,7 @@ func (c *tRPCClient) RawRequest(ctx context.Context, method string, args []json.
 		}
 		return respond(resp)
 	}
+	c.responsesMtx.Unlock()
 
 	// Some methods are handled by the testing infrastructure
 	switch method {
