@@ -449,8 +449,8 @@ var Tokens = map[uint32]*Token{
 
 	linkTokenID: {
 		Token: &util.Token{
-			ParentID: EthBipID,
-			Name:     "LINK",
+			NetworkID: EthBipID,
+			Name:      "LINK",
 			UnitInfo: util.UnitInfo{
 				AtomicUnit: "nLINK",
 				Conventional: util.Denomination{
@@ -469,7 +469,7 @@ var Tokens = map[uint32]*Token{
 				},
 			},
 			util.Testnet: {
-				Address: common.HexToAddress("0x779877A7B0D9E8603169DdbD7836e478b4624789"), // Sepolia
+				Address: common.HexToAddress("0x779877A7B0D9E8603169DdbD7836e478b4624789"), // Sepolia, per https://docs.chain.link/resources/acquire-link
 				SwapContracts: map[uint32]*SwapContract{
 					1: {Gas: tokenV1Gases},
 				},
