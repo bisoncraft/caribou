@@ -23,7 +23,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/keygen"
-	dexnear "github.com/bisoncraft/bosswallet/util/networks/near"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/decred/base58"
 	"github.com/decred/dcrd/hdkeychain/v3"
@@ -31,7 +30,6 @@ import (
 
 const (
 	version       = 0
-	BipID         = dexnear.BipID
 	walletTypeRPC = "rpc"
 	keyFileName   = "near-keyfile.json"
 
@@ -40,21 +38,27 @@ const (
 )
 
 var (
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Seeded:      true,
+		Type:        walletTypeRPC,
+		Tab:         "Native",
+		Description: "NEAR Protocol wallet",
+		ConfigOpts: []*asset.ConfigOption{{
+			Key:         "rpcprovider",
+			DisplayName: "RPC Provider",
+			Description: "NEAR RPC endpoint URL",
+		}},
+	}
+
 	WalletInfo = asset.WalletInfo{
 		Name:              "NEAR Protocol",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexnear.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{{
-			Seeded:      true,
-			Type:        walletTypeRPC,
-			Tab:         "Native",
-			Description: "NEAR Protocol wallet",
-			ConfigOpts: []*asset.ConfigOption{{
-				Key:         "rpcprovider",
-				DisplayName: "RPC Provider",
-				Description: "NEAR RPC endpoint URL",
-			}},
-		}},
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 
 	seedDerivationPath = []uint32{
@@ -291,8 +295,8 @@ func (w *NearWallet) Balance() (*asset.Balance, error) {
 	}
 
 	return &asset.Balance{
-		Available: dexnear.YoctoToDrops(available),
-		Locked:    dexnear.YoctoToDrops(locked),
+		Available: YoctoToDrops(available),
+		Locked:    YoctoToDrops(locked),
 	}, nil
 }
 
@@ -320,7 +324,7 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	privKey := w.privKey
 	w.keyMtx.RUnlock()
 
-	yoctoAmount := dexnear.DropsToYocto(value)
+	yoctoAmount := DropsToYocto(value)
 
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
@@ -365,7 +369,7 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		Type:      asset.Send,
 		ID:        txID,
 		Amount:    value,
-		Fees:      dexnear.DefaultFee,
+		Fees:      DefaultFee,
 		Recipient: &recipient,
 	}
 
@@ -401,7 +405,7 @@ func (w *NearWallet) SyncStatus() (*asset.SyncStatus, error) {
 	tipTime := w.tipTime
 	w.tipMtx.RUnlock()
 
-	synced := time.Since(tipTime) < time.Duration(dexnear.MaxBlockInterval)*time.Second
+	synced := time.Since(tipTime) < time.Duration(MaxBlockInterval)*time.Second
 
 	return &asset.SyncStatus{
 		Synced: synced,
@@ -410,7 +414,7 @@ func (w *NearWallet) SyncStatus() (*asset.SyncStatus, error) {
 }
 
 func (w *NearWallet) StandardSendFee(_ uint64) uint64 {
-	return dexnear.DefaultFee
+	return DefaultFee
 }
 
 func (w *NearWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
@@ -447,7 +451,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*asset
 		Type:      txType,
 		ID:        txID,
 		Amount:    result.transferAmount(),
-		Fees:      dexnear.DefaultFee,
+		Fees:      DefaultFee,
 		Confirmed: result.Status.isSuccess(),
 	}
 
@@ -653,7 +657,7 @@ func (w *NearWallet) scanChunk(chunkHash string, blockHeight uint64) {
 			if a.Transfer != nil {
 				yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
 				if ok {
-					amount += dexnear.YoctoToDrops(yocto)
+					amount += YoctoToDrops(yocto)
 				}
 			}
 		}
@@ -695,10 +699,10 @@ func (w *NearWallet) rpcEndpoint() string {
 	if ep, ok := w.settings["rpcprovider"]; ok && ep != "" {
 		return ep
 	}
-	if ep, ok := dexnear.DefaultRPCEndpoints[w.net]; ok {
+	if ep, ok := DefaultRPCEndpoints[w.net]; ok {
 		return ep
 	}
-	return dexnear.DefaultRPCEndpoints[util.Mainnet]
+	return DefaultRPCEndpoints[util.Mainnet]
 }
 
 // pubKeyBase58 returns the NEAR-formatted public key string "ed25519:<base58>".

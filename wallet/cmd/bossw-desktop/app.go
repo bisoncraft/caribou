@@ -394,7 +394,7 @@ func runWebviewSubprocess(ctx context.Context, url string) {
 func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struct{},
 	killC chan<- os.Signal, activeState <-chan bool) {
 	systray.SetIcon(FavIcon)
-	systray.SetTitle("Bison Wallet")
+	systray.SetTitle("Boss Wallet")
 	systray.SetTooltip("Self-custodial multi-wallet")
 
 	// TODO: Consider reworking main so we can show the icon earlier?
@@ -414,7 +414,7 @@ func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struc
 
 	// mStarting.Hide()
 
-	mOpen := systray.AddMenuItem("Open", "Open Bison Wallet window")
+	mOpen := systray.AddMenuItem("Open", "Open Boss Wallet window")
 	mOpen.SetIcon(FavIcon)
 	go func() {
 		for range mOpen.ClickedCh {
@@ -460,17 +460,17 @@ func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struc
 		}
 	}()
 
-	mQuit := systray.AddMenuItem("Quit", "Shut down Bison Wallet.")
+	mQuit := systray.AddMenuItem("Quit", "Shut down Boss Wallet.")
 	go func() {
 		for {
 			select {
 			case active := <-activeState:
 				if active {
 					mQuit.SetTitle("Force Quit")
-					mQuit.SetTooltip("Force Bison Wallet to close.")
+					mQuit.SetTooltip("Force Boss Wallet to close.")
 				} else {
 					mQuit.SetTitle("Quit")
-					mQuit.SetTooltip("Shut down Bison Wallet.")
+					mQuit.SetTooltip("Shut down Boss Wallet.")
 				}
 			case <-mQuit.ClickedCh:
 				mOpen.Disable()

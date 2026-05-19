@@ -11,12 +11,11 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	erc20v0 "github.com/bisoncraft/bosswallet/util/networks/erc20/contracts/v0"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	multibal "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/multibalance"
-	ethv0 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v0"
-	ethv1 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v1"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	erc20v0 "github.com/bisoncraft/bosswallet/wallet/asset/erc20/contracts/v0"
+	multibal "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/multibalance"
+	ethv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
+	ethv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -86,7 +85,7 @@ func (contractDeployer) estimateDeployFunding(
 		return fmt.Errorf("error getting eth balance: %v", err)
 	}
 
-	log.Infof("Balance: %s %s", ui.ConventionalString(dexeth.WeiToGwei(baseChainBal)), ui.Conventional.Unit)
+	log.Infof("Balance: %s %s", ui.ConventionalString(WeiToGwei(baseChainBal)), ui.Conventional.Unit)
 
 	var gas uint64
 	if baseChainBal.Cmp(new(big.Int)) > 0 {
@@ -103,7 +102,7 @@ func (contractDeployer) estimateDeployFunding(
 		}
 	}
 
-	feeRate := dexeth.WeiToGweiCeil(maxFeeRate)
+	feeRate := WeiToGweiCeil(maxFeeRate)
 	if gas == 0 {
 		gas = deploymentGas
 	}
@@ -111,7 +110,7 @@ func (contractDeployer) estimateDeployFunding(
 
 	log.Infof("Estimated fees: %s", ui.ConventionalString(fees))
 
-	gweiBal := dexeth.WeiToGwei(baseChainBal)
+	gweiBal := WeiToGwei(baseChainBal)
 	if fees < gweiBal {
 		log.Infof("👍 Current balance (%s %s) sufficient for fees (%s)",
 			ui.ConventionalString(gweiBal), ui.Conventional.Unit, ui.ConventionalString(fees))
@@ -251,7 +250,7 @@ func (contractDeployer) deployContract(
 		return fmt.Errorf("error getting eth balance: %v", err)
 	}
 
-	log.Infof("Balance: %s %s", ui.ConventionalString(dexeth.WeiToGwei(baseChainBal)), ui.Conventional.Unit)
+	log.Infof("Balance: %s %s", ui.ConventionalString(WeiToGwei(baseChainBal)), ui.Conventional.Unit)
 
 	// We may be able to get a proper estimate.
 	gas, err := cl.EstimateGas(ctx, ethereum.CallMsg{
@@ -263,13 +262,13 @@ func (contractDeployer) deployContract(
 		return fmt.Errorf("EstimateGas error: %v", err)
 	}
 
-	feeRate := dexeth.WeiToGweiCeil(maxFeeRate)
+	feeRate := WeiToGweiCeil(maxFeeRate)
 	log.Infof("Estimated fees: %s gwei", ui.ConventionalString(feeRate*gas))
 
 	gas = gas * 5 / 4 // Add 20% buffer
 	feesWithBuffer := feeRate * gas
 
-	gweiBal := dexeth.WeiToGwei(baseChainBal)
+	gweiBal := WeiToGwei(baseChainBal)
 	if feesWithBuffer >= gweiBal {
 		shortage := feesWithBuffer - gweiBal
 		return fmt.Errorf("❌ Current balance (%[1]s %[2]s) insufficient for fees (%[3]s). Send %[4]s %[2]s to %[5]s",
@@ -277,7 +276,7 @@ func (contractDeployer) deployContract(
 			ui.ConventionalString(shortage), cl.address())
 	}
 
-	txOpts, err := cl.txOpts(ctx, 0, gas, dexeth.GweiToWei(feeRate), tipRate, nil)
+	txOpts, err := cl.txOpts(ctx, 0, gas, GweiToWei(feeRate), tipRate, nil)
 	if err != nil {
 		return err
 	}

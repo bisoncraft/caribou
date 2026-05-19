@@ -18,7 +18,6 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
@@ -104,8 +103,8 @@ type rpcCore struct {
 	cloneParams          *BTCCloneCFG
 	requesterV           atomic.Value // RawRequester
 	segwit               bool
-	decodeAddr           dexbtc.AddressDecoder
-	stringAddr           dexbtc.AddressStringer
+	decodeAddr           AddressDecoder
+	stringAddr           AddressStringer
 	legacyRawSends       bool
 	minNetworkVersion    uint64
 	minDescriptorVersion uint64
@@ -220,7 +219,7 @@ func (wc *rpcClient) Reconfigure(cfg *asset.WalletConfig, currentAddress string)
 
 	// Check the RPC configuration.
 	newCfg := &parsedCfg.RPCConfig
-	if err = dexbtc.CheckRPCConfig(&newCfg.RPCConfig, wc.cloneParams.WalletInfo.Name,
+	if err = CheckRPCConfig(newCfg, wc.cloneParams.WalletInfo.Name,
 		wc.cloneParams.Network, wc.cloneParams.Ports); err != nil {
 		return
 	}
@@ -708,7 +707,7 @@ func (wc *rpcClient) PrivKeyForAddress(ctx context.Context, addr string) (*btcec
 		return nil, fmt.Errorf("getaddressinfo RPC failure: %w", err)
 	}
 	wc.log.Tracef("Address %v descriptor: %v", addr, ai.Descriptor)
-	desc, err := dexbtc.ParseDescriptor(ai.Descriptor)
+	desc, err := ParseDescriptor(ai.Descriptor)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse descriptor %q: %w", ai.Descriptor, err)
 	}
@@ -722,10 +721,10 @@ func (wc *rpcClient) PrivKeyForAddress(ctx context.Context, addr string) (*btcec
 	fp, addrPath := desc.KeyOrigin.Fingerprint, desc.KeyOrigin.Steps
 	// Should match:
 	//   fp, path = ai.HDMasterFingerprint, ai.HDKeyPath
-	//   addrPath, _, err = dexbtc.ParsePath(path)
+	//   addrPath, _, err = ParsePath(path)
 	bareKey := len(addrPath) == 0
 
-	if desc.KeyFmt != dexbtc.KeyHexPub {
+	if desc.KeyFmt != KeyHexPub {
 		return nil, fmt.Errorf("not a hexadecimal pubkey: %v", desc.Key)
 	}
 	// The key was validated by ParseDescriptor, but check again.
@@ -756,13 +755,13 @@ func (wc *rpcClient) PrivKeyForAddress(ctx context.Context, addr string) (*btcec
 
 masters:
 	for _, d := range masterDescs.Descriptors {
-		masterDesc, err := dexbtc.ParseDescriptor(d.Descriptor)
+		masterDesc, err := ParseDescriptor(d.Descriptor)
 		if err != nil {
 			wc.log.Errorf("Failed to parse descriptor %q: %v", d.Descriptor, err)
 			continue // unexpected, but check the others
 		}
 		if bareKey { // match KeyHexPub -> KeyWIFPriv
-			if masterDesc.KeyFmt != dexbtc.KeyWIFPriv {
+			if masterDesc.KeyFmt != KeyWIFPriv {
 				continue
 			}
 			wif, err := btcutil.DecodeWIF(masterDesc.Key)
@@ -777,12 +776,12 @@ masters:
 		}
 
 		// match KeyHexPub -> [fingerprint/path]KeyExtended
-		if masterDesc.KeyFmt != dexbtc.KeyExtended {
+		if masterDesc.KeyFmt != KeyExtended {
 			continue
 		}
 		// Break the key into its parts and compute the fingerprint of the
 		// master private key.
-		xPriv, fingerprint, pathStr, isRange, err := dexbtc.ParseKeyExtended(masterDesc.Key)
+		xPriv, fingerprint, pathStr, isRange, err := ParseKeyExtended(masterDesc.Key)
 		if err != nil {
 			wc.log.Debugf("Failed to parse descriptor extended key: %v", err)
 			continue
@@ -803,7 +802,7 @@ masters:
 		if !isRange {
 			continue // imported?
 		}
-		path, _, err := dexbtc.ParsePath(pathStr)
+		path, _, err := ParsePath(pathStr)
 		if err != nil {
 			wc.log.Debugf("Failed to parse descriptor extended key path %q: %v", pathStr, err)
 			continue
@@ -820,9 +819,9 @@ masters:
 		// NOTE: We could conceivably cache the extended private key for this
 		// address range/branch, but it could be a security risk:
 		// childIdx := addrPath[len(addrPath)-1]
-		// branch, err := dexbtc.DeepChild(xPriv, path)
+		// branch, err := DeepChild(xPriv, path)
 		// child, err := branch.Derive(childIdx)
-		child, err := dexbtc.DeepChild(xPriv, addrPath)
+		child, err := DeepChild(xPriv, addrPath)
 		if err != nil {
 			return nil, fmt.Errorf("address key derivation failed: %v", err) // any point in checking the rest?
 		}
@@ -926,7 +925,6 @@ func (wc *rpcClient) EstimateSendTxFee(tx *wire.MsgTx, feeRate uint64, subtract 
 			}
 			var bal float64
 			// args: "(dummy)" minconf includeWatchonly inZat
-			// Using default inZat = false for compatibility with ZCL.
 			if err := wc.call(methodGetBalance, anylist{"", 0, false}, &bal); err != nil {
 				return 0, err
 			}

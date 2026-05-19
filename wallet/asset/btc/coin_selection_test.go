@@ -6,8 +6,6 @@ import (
 	"sort"
 	"testing"
 	"time"
-
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 )
 
 func Test_leastOverFund(t *testing.T) {
@@ -19,7 +17,7 @@ func Test_leastOverFund(t *testing.T) {
 			UTxO: &UTxO{
 				Amount: uint64(amt) * 1e8,
 			},
-			Input: &dexbtc.SpendInfo{},
+			Input: &SpendInfo{},
 		}
 	}
 	tests := []struct {
@@ -105,7 +103,7 @@ func Test_leastOverFundWithLimit(t *testing.T) {
 			UTxO: &UTxO{
 				Amount: uint64(amt) * 1e8,
 			},
-			Input: &dexbtc.SpendInfo{},
+			Input: &SpendInfo{},
 		}
 	}
 	tests := []struct {
@@ -165,7 +163,7 @@ func Fuzz_leastOverFund(f *testing.F) {
 			UTxO: &UTxO{
 				Amount: uint64(amt * 1e8),
 			},
-			Input: &dexbtc.SpendInfo{},
+			Input: &SpendInfo{},
 		}
 	}
 
@@ -212,7 +210,7 @@ func BenchmarkLeastOverFund(b *testing.B) {
 			UTxO: &UTxO{
 				Amount: uint64(rnd.Int31n(100) * 1e8),
 			},
-			Input: &dexbtc.SpendInfo{},
+			Input: &SpendInfo{},
 		}
 		utxos[i] = utxo
 	}

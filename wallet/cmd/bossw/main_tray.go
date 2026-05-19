@@ -36,8 +36,8 @@ func onReady() {
 	}()
 
 	systray.SetIcon(FavIcon)
-	systray.SetTitle("Bison Wallet")
-	systray.SetTooltip("Bison Wallet")
+	systray.SetTitle("Boss Wallet")
+	systray.SetTooltip("Boss Wallet")
 
 	mStarting := systray.AddMenuItem("Starting...", "Starting up. Please wait...")
 	var addr string
@@ -108,7 +108,7 @@ func onReady() {
 
 	systray.AddSeparator()
 
-	mQuit := systray.AddMenuItem("Quit", "Quit Bison Wallet.")
+	mQuit := systray.AddMenuItem("Quit", "Quit Boss Wallet.")
 	go func() {
 		<-mQuit.ClickedCh
 		mOpen.Disable()

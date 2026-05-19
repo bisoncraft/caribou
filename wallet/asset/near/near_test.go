@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexnear "github.com/bisoncraft/bosswallet/util/networks/near"
 )
 
 func TestValidateAddress(t *testing.T) {
@@ -108,13 +107,13 @@ func TestUnitConversion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			yocto := dexnear.DropsToYocto(tt.drops)
+			yocto := DropsToYocto(tt.drops)
 			if yocto.String() != tt.wantYocto {
 				t.Errorf("DropsToYocto(%d) = %s, want %s", tt.drops, yocto.String(), tt.wantYocto)
 			}
 
 			// Round-trip.
-			roundTripped := dexnear.YoctoToDrops(yocto)
+			roundTripped := YoctoToDrops(yocto)
 			if roundTripped != tt.drops {
 				t.Errorf("YoctoToDrops(DropsToYocto(%d)) = %d", tt.drops, roundTripped)
 			}
@@ -124,8 +123,8 @@ func TestUnitConversion(t *testing.T) {
 
 func TestYoctoToDropsTruncation(t *testing.T) {
 	// yoctoNEAR that doesn't divide evenly into drops should truncate.
-	yocto := new(big.Int).Add(dexnear.DropsToYocto(42), big.NewInt(999))
-	drops := dexnear.YoctoToDrops(yocto)
+	yocto := new(big.Int).Add(DropsToYocto(42), big.NewInt(999))
+	drops := YoctoToDrops(yocto)
 	if drops != 42 {
 		t.Errorf("YoctoToDrops with remainder = %d, want 42", drops)
 	}

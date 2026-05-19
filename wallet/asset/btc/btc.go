@@ -29,7 +29,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
@@ -69,11 +68,11 @@ const (
 
 	// splitTxBaggage is the total number of additional bytes associated with
 	// using a split transaction to fund a swap.
-	splitTxBaggage = dexbtc.MinimumTxOverhead + dexbtc.RedeemP2PKHInputSize + 2*dexbtc.P2PKHOutputSize
+	splitTxBaggage = MinimumTxOverhead + RedeemP2PKHInputSize + 2*P2PKHOutputSize
 	// splitTxBaggageSegwit it the analogue of splitTxBaggage for segwit.
 	// We include the 2 bytes for marker and flag.
-	splitTxBaggageSegwit = dexbtc.MinimumTxOverhead + 2*dexbtc.P2WPKHOutputSize +
-		dexbtc.RedeemP2WPKHInputSize + ((dexbtc.RedeemP2WPKHInputWitnessWeight + dexbtc.SegwitMarkerAndFlagWeight + 3) / 4)
+	splitTxBaggageSegwit = MinimumTxOverhead + 2*P2WPKHOutputSize +
+		RedeemP2WPKHInputSize + ((RedeemP2WPKHInputWitnessWeight + SegwitMarkerAndFlagWeight + 3) / 4)
 
 	walletTypeLegacy   = ""
 	walletTypeRPC      = "bitcoindRPC"
@@ -106,7 +105,7 @@ var (
 	blockTicker                  = time.Second
 	peerCountTicker              = 5 * time.Second
 	walletBlockAllowance         = time.Second * 10
-	conventionalConversionFactor = float64(dexbtc.UnitInfo.Conventional.ConversionFactor)
+	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
 
 	ElectrumConfigOpts = []*asset.ConfigOption{
 		{
@@ -187,7 +186,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "External",
 		Description:       "Connect to bitcoind",
-		DefaultConfigPath: dexbtc.SystemConfigPath("bitcoin"),
+		DefaultConfigPath: SystemConfigPath("bitcoin"),
 		ConfigOpts:        append(RPCConfigOpts("Bitcoin", "8332"), CommonConfigOpts("BTC", false)...),
 		MultiFundingOpts:  MultiFundingOpts,
 	}
@@ -213,7 +212,7 @@ var (
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Bitcoin",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexbtc.UnitInfo,
+		UnitInfo:          UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
@@ -221,6 +220,10 @@ var (
 		},
 		LegacyWalletIndex: 1,
 		BlockchainClass:   asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 )
 
@@ -336,7 +339,7 @@ type BTCCloneCFG struct {
 	ChainParams        *chaincfg.Params
 	// Ports is the default wallet RPC tcp ports used when undefined in
 	// WalletConfig.
-	Ports               dexbtc.NetPorts
+	Ports               NetPorts
 	DefaultFallbackFee  uint64 // sats/byte
 	DefaultFeeRateLimit uint64 // sats/byte
 	// LegacyBalance is for clones that don't yet support the 'getbalances' RPC
@@ -364,11 +367,11 @@ type BTCCloneCFG struct {
 	// AddressDecoder is an optional argument that can decode an address string
 	// into btcutil.Address. If AddressDecoder is not supplied,
 	// btcutil.DecodeAddress will be used.
-	AddressDecoder dexbtc.AddressDecoder // string => btcutil.Address
+	AddressDecoder AddressDecoder // string => btcutil.Address
 	// AddressStringer is an optional argument that can encode a btcutil.Address
 	// into an address string. If AddressStringer is not supplied, the
 	// (btcutil.Address).String method will be used.
-	AddressStringer dexbtc.AddressStringer // btcutil.Address => string, may be an override or just the String method
+	AddressStringer AddressStringer // btcutil.Address => string, may be an override or just the String method
 	// BlockDeserializer can be used in place of (*wire.MsgBlock).Deserialize.
 	BlockDeserializer func([]byte) (*wire.MsgBlock, error)
 	// ArglessChangeAddrRPC can be true if the getrawchangeaddress takes no
@@ -427,7 +430,7 @@ type BTCCloneCFG struct {
 	ManualMedianTime bool
 	// ConstantDustLimit is used if an asset enforces a dust limit (minimum
 	// output value) that doesn't depend on the serialized size of the output.
-	// If ConstantDustLimit is zero, dexbtc.IsDust is used.
+	// If ConstantDustLimit is zero, IsDust is used.
 	ConstantDustLimit uint64
 	// OmitRPCOptionsArg is for clones that don't take an options argument.
 	OmitRPCOptionsArg bool
@@ -443,12 +446,6 @@ type BTCCloneCFG struct {
 // PaymentScripter can be implemented to make non-standard payment scripts.
 type PaymentScripter interface {
 	PaymentScript() ([]byte, error)
-}
-
-// RPCConfig adds a wallet name to the basic configuration.
-type RPCConfig struct {
-	dexbtc.RPCConfig `ini:",extends"`
-	WalletName       string `ini:"walletname"`
 }
 
 // RPCWalletConfig is a combination of RPCConfig and WalletConfig. Used for a
@@ -504,20 +501,20 @@ func readBaseWalletConfig(walletCfg *WalletConfig) (*baseWalletConfig, error) {
 }
 
 // readRPCWalletConfig parses the settings map into a *RPCWalletConfig.
-func readRPCWalletConfig(settings map[string]string, symbol string, net util.Network, ports dexbtc.NetPorts) (cfg *RPCWalletConfig, err error) {
+func readRPCWalletConfig(settings map[string]string, symbol string, net util.Network, ports NetPorts) (cfg *RPCWalletConfig, err error) {
 	cfg = new(RPCWalletConfig)
 	err = config.Unmapify(settings, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing rpc wallet config: %w", err)
 	}
-	err = dexbtc.CheckRPCConfig(&cfg.RPCConfig.RPCConfig, symbol, net, ports)
+	err = CheckRPCConfig(&cfg.RPCConfig, symbol, net, ports)
 	return
 }
 
 // parseRPCWalletConfig parses a *RPCWalletConfig from the settings map and
 // creates the unconnected *rpcclient.Client.
 func parseRPCWalletConfig(settings map[string]string, symbol string, net util.Network,
-	ports dexbtc.NetPorts, singularWallet bool) (*RPCWalletConfig, *rpcclient.Client, error) {
+	ports NetPorts, singularWallet bool) (*RPCWalletConfig, *rpcclient.Client, error) {
 	cfg, err := readRPCWalletConfig(settings, symbol, net, ports)
 	if err != nil {
 		return nil, nil, err
@@ -651,7 +648,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexbtc.MinLotSize(maxFeeRate, true)
+	return MinLotSize(maxFeeRate, true)
 }
 
 type CustomWallet interface {
@@ -819,7 +816,7 @@ type baseWallet struct {
 	signNonSegwit     TxInSigner
 	localFeeRate      func(context.Context, RawRequester, uint64) (uint64, error)
 	feeCache          *feeRateCache
-	decodeAddr        dexbtc.AddressDecoder
+	decodeAddr        AddressDecoder
 	walletDir         string
 	// noListTxHistory is true for assets that cannot call the
 	// ListTransactionSinceBlock method. This is true for Firo
@@ -831,7 +828,7 @@ type baseWallet struct {
 	calcTxSize    func(*wire.MsgTx) uint64
 	hashTx        func(*wire.MsgTx) *chainhash.Hash
 
-	stringAddr dexbtc.AddressStringer
+	stringAddr AddressStringer
 
 	txVersion func() int32
 
@@ -1078,11 +1075,11 @@ func (btc *ExchangeWalletSPV) WithdrawTx(ctx context.Context, walletPW []byte, a
 		inputsSize += uint64(utxo.Input.VBytes())
 	}
 
-	var baseSize uint64 = dexbtc.MinimumTxOverhead
+	var baseSize uint64 = MinimumTxOverhead
 	if btc.segwit {
-		baseSize += dexbtc.P2WPKHOutputSize * 2
+		baseSize += P2WPKHOutputSize * 2
 	} else {
-		baseSize += dexbtc.P2PKHOutputSize * 2
+		baseSize += P2PKHOutputSize * 2
 	}
 
 	fundedTx, totalIn, _, err := btc.fundedTx(coins)
@@ -1129,7 +1126,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		Logger:              logger,
 		Network:             net,
 		ChainParams:         params,
-		Ports:               dexbtc.RPCPorts,
+		Ports:               RPCPorts,
 		DefaultFallbackFee:  defaultFee,
 		DefaultFeeRateLimit: defaultFeeRateLimit,
 		Segwit:              true,
@@ -1149,7 +1146,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		}
 		return &ExchangeWalletAccelerator{rpcWallet}, nil
 	case walletTypeElectrum:
-		cloneCFG.Ports = dexbtc.NetPorts{} // no default ports
+		cloneCFG.Ports = NetPorts{} // no default ports
 		ver, err := util.SemverFromString(needElectrumVersion)
 		if err != nil {
 			return nil, err
@@ -1299,18 +1296,18 @@ func newUnconnectedWallet(cfg *BTCCloneCFG, walletCfg *WalletConfig) (*baseWalle
 	initTxSize := uint64(cfg.InitTxSize)
 	if initTxSize == 0 {
 		if cfg.Segwit {
-			initTxSize = dexbtc.InitTxSizeSegwit
+			initTxSize = InitTxSizeSegwit
 		} else {
-			initTxSize = dexbtc.InitTxSize
+			initTxSize = InitTxSize
 		}
 	}
 
 	initTxSizeBase := uint64(cfg.InitTxSizeBase)
 	if initTxSizeBase == 0 {
 		if cfg.Segwit {
-			initTxSizeBase = dexbtc.InitTxSizeBaseSegwit
+			initTxSizeBase = InitTxSizeBaseSegwit
 		} else {
-			initTxSizeBase = dexbtc.InitTxSizeBase
+			initTxSizeBase = InitTxSizeBase
 		}
 	}
 
@@ -1326,7 +1323,7 @@ func newUnconnectedWallet(cfg *BTCCloneCFG, walletCfg *WalletConfig) (*baseWalle
 
 	txSizeCalculator := cfg.TxSizeCalculator
 	if txSizeCalculator == nil {
-		txSizeCalculator = dexbtc.MsgTxVBytes
+		txSizeCalculator = MsgTxVBytes
 	}
 
 	txHasher := cfg.TxHasher
@@ -1777,12 +1774,12 @@ func (btc *baseWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig,
 }
 
 // IsDust checks if the tx output's value is dust. If the dustLimit is set, it
-// is compared against that, otherwise the formula in dexbtc.IsDust is used.
+// is compared against that, otherwise the formula in IsDust is used.
 func (btc *baseWallet) IsDust(txOut *wire.TxOut, minRelayTxFee uint64) bool {
 	if btc.dustLimit > 0 {
 		return txOut.Value < int64(btc.dustLimit)
 	}
-	return dexbtc.IsDust(txOut, minRelayTxFee)
+	return IsDust(txOut, minRelayTxFee)
 }
 
 // GetBlockchainInfoResult models the data returned from the getblockchaininfo
@@ -1895,11 +1892,11 @@ func bondsFeeBuffer(segwit bool, highFeeRate uint64) uint64 {
 	const inputCount uint64 = 8 // plan for lots of inputs
 	var largeBondTxSize uint64
 	if segwit {
-		largeBondTxSize = dexbtc.MinimumTxOverhead + dexbtc.P2WSHOutputSize + 1 + dexbtc.BondPushDataSize +
-			dexbtc.P2WPKHOutputSize + inputCount*dexbtc.RedeemP2WPKHInputSize
+		largeBondTxSize = MinimumTxOverhead + P2WSHOutputSize + 1 + BondPushDataSize +
+			P2WPKHOutputSize + inputCount*RedeemP2WPKHInputSize
 	} else {
-		largeBondTxSize = dexbtc.MinimumTxOverhead + dexbtc.P2SHOutputSize + 1 + dexbtc.BondPushDataSize +
-			dexbtc.P2PKHOutputSize + inputCount*dexbtc.RedeemP2PKHInputSize
+		largeBondTxSize = MinimumTxOverhead + P2SHOutputSize + 1 + BondPushDataSize +
+			P2PKHOutputSize + inputCount*RedeemP2PKHInputSize
 	}
 
 	// Normally we can plan on just 2 parallel "tracks" (single bond overlap
@@ -2233,19 +2230,19 @@ func (btc *baseWallet) SingleLotSwapRefundFees(_ uint32, feeSuggestion uint64, u
 
 	var swapTxSize uint64
 	if btc.segwit {
-		inputSize := dexbtc.RedeemP2WPKHInputSize + uint64((dexbtc.RedeemP2PKSigScriptSize+2+3)/4)
-		swapTxSize = dexbtc.MinimumTxOverhead + (numInputs * inputSize) + dexbtc.P2WSHOutputSize + dexbtc.P2WPKHOutputSize
+		inputSize := RedeemP2WPKHInputSize + uint64((RedeemP2PKSigScriptSize+2+3)/4)
+		swapTxSize = MinimumTxOverhead + (numInputs * inputSize) + P2WSHOutputSize + P2WPKHOutputSize
 	} else {
-		swapTxSize = dexbtc.MinimumTxOverhead + (numInputs * dexbtc.RedeemP2PKHInputSize) + dexbtc.P2SHOutputSize + dexbtc.P2PKHOutputSize
+		swapTxSize = MinimumTxOverhead + (numInputs * RedeemP2PKHInputSize) + P2SHOutputSize + P2PKHOutputSize
 	}
 
 	var refundTxSize uint64
 	if btc.segwit {
-		witnessVBytes := uint64((dexbtc.RefundSigScriptSize + 2 + 3) / 4)
-		refundTxSize = dexbtc.MinimumTxOverhead + dexbtc.TxInOverhead + witnessVBytes + dexbtc.P2WPKHOutputSize
+		witnessVBytes := uint64((RefundSigScriptSize + 2 + 3) / 4)
+		refundTxSize = MinimumTxOverhead + TxInOverhead + witnessVBytes + P2WPKHOutputSize
 	} else {
-		inputSize := uint64(dexbtc.TxInOverhead + dexbtc.RefundSigScriptSize)
-		refundTxSize = dexbtc.MinimumTxOverhead + inputSize + dexbtc.P2PKHOutputSize
+		inputSize := uint64(TxInOverhead + RefundSigScriptSize)
+		refundTxSize = MinimumTxOverhead + inputSize + P2PKHOutputSize
 	}
 
 	return swapTxSize * feeSuggestion, refundTxSize * feeSuggestion, nil
@@ -2402,18 +2399,18 @@ func (btc *baseWallet) preRedeem(numLots, feeSuggestion uint64, options map[stri
 		feeRate = btc.targetFeeRateWithFallback(btc.redeemConfTarget(), 0)
 	}
 	// Best is one transaction with req.Lots inputs and 1 output.
-	var best uint64 = dexbtc.MinimumTxOverhead
+	var best uint64 = MinimumTxOverhead
 	// Worst is req.Lots transactions, each with one input and one output.
-	var worst uint64 = dexbtc.MinimumTxOverhead * numLots
+	var worst uint64 = MinimumTxOverhead * numLots
 	var inputSize, outputSize uint64
 	if btc.segwit {
 		// Add the marker and flag weight here.
-		inputSize = dexbtc.TxInOverhead + (dexbtc.RedeemSwapSigScriptSize+2+3)/4
-		outputSize = dexbtc.P2WPKHOutputSize
+		inputSize = TxInOverhead + (RedeemSwapSigScriptSize+2+3)/4
+		outputSize = P2WPKHOutputSize
 
 	} else {
-		inputSize = dexbtc.TxInOverhead + dexbtc.RedeemSwapSigScriptSize
-		outputSize = dexbtc.P2PKHOutputSize
+		inputSize = TxInOverhead + RedeemSwapSigScriptSize
+		outputSize = P2PKHOutputSize
 	}
 	best += inputSize*numLots + outputSize
 	worst += (inputSize + outputSize) * numLots
@@ -2616,21 +2613,21 @@ func (btc *baseWallet) fundMultiSplitTx(
 
 	var swapInputSize uint64
 	if btc.segwit {
-		swapInputSize = dexbtc.RedeemP2WPKHInputTotalSize
+		swapInputSize = RedeemP2WPKHInputTotalSize
 	} else {
-		swapInputSize = dexbtc.RedeemP2PKHInputSize
+		swapInputSize = RedeemP2PKHInputSize
 	}
 	_, totalOutputRequired := btc.fundsRequiredForMultiOrders(orders, maxFeeRate, splitBuffer, swapInputSize)
 
-	var splitTxSizeWithoutInputs uint64 = dexbtc.MinimumTxOverhead
+	var splitTxSizeWithoutInputs uint64 = MinimumTxOverhead
 	numOutputs := len(orders)
 	if keep > 0 {
 		numOutputs++
 	}
 	if btc.segwit {
-		splitTxSizeWithoutInputs += uint64(dexbtc.P2WPKHOutputSize * numOutputs)
+		splitTxSizeWithoutInputs += uint64(P2WPKHOutputSize * numOutputs)
 	} else {
-		splitTxSizeWithoutInputs += uint64(dexbtc.P2PKHOutputSize * numOutputs)
+		splitTxSizeWithoutInputs += uint64(P2PKHOutputSize * numOutputs)
 	}
 	enough := func(_, inputsSize, sum uint64) (bool, uint64) {
 		splitTxFee := (splitTxSizeWithoutInputs + inputsSize) * splitTxFeeRate
@@ -2672,9 +2669,9 @@ func (btc *baseWallet) submitMultiSplitTx(fundingCoins asset.Coins, spents []*Ou
 
 	var swapInputSize uint64
 	if btc.segwit {
-		swapInputSize = dexbtc.RedeemP2WPKHInputTotalSize
+		swapInputSize = RedeemP2WPKHInputTotalSize
 	} else {
-		swapInputSize = dexbtc.RedeemP2PKHInputSize
+		swapInputSize = RedeemP2PKHInputSize
 	}
 
 	requiredForOrders, totalRequired := btc.fundsRequiredForMultiOrders(orders, maxFeeRate, splitBuffer, swapInputSize)
@@ -3016,16 +3013,16 @@ func (btc *baseWallet) splitBaggageFees(maxFeeRate uint64, extraOutput bool) (sw
 	if btc.segwit {
 		baggage = maxFeeRate * splitTxBaggageSegwit
 		if extraOutput {
-			baggage += maxFeeRate * dexbtc.P2WPKHOutputSize
+			baggage += maxFeeRate * P2WPKHOutputSize
 		}
-		swapInputSize = dexbtc.RedeemP2WPKHInputTotalSize
+		swapInputSize = RedeemP2WPKHInputTotalSize
 		return
 	}
 	baggage = maxFeeRate * splitTxBaggage
 	if extraOutput {
-		baggage += maxFeeRate * dexbtc.P2PKHOutputSize
+		baggage += maxFeeRate * P2PKHOutputSize
 	}
-	swapInputSize = dexbtc.RedeemP2PKHInputSize
+	swapInputSize = RedeemP2PKHInputSize
 	return
 }
 
@@ -3288,20 +3285,20 @@ func (btc *baseWallet) signedAccelerationTx(previousTxs []*GetTransactionResult,
 
 	// Figure out how much funds we need to increase the fee to the requested
 	// amount.
-	txSize := uint64(dexbtc.MinimumTxOverhead)
+	txSize := uint64(MinimumTxOverhead)
 	// Add the size of using the order change as an input
 	if btc.segwit {
-		txSize += dexbtc.RedeemP2WPKHInputTotalSize
+		txSize += RedeemP2WPKHInputTotalSize
 	} else {
-		txSize += dexbtc.RedeemP2PKHInputSize
+		txSize += RedeemP2PKHInputSize
 	}
 	// We need an output if funds are still required for additional swaps in
 	// the order.
 	if requiredForRemainingSwaps > 0 {
 		if btc.segwit {
-			txSize += dexbtc.P2WPKHOutputSize
+			txSize += P2WPKHOutputSize
 		} else {
-			txSize += dexbtc.P2PKHOutputSize
+			txSize += P2PKHOutputSize
 		}
 	}
 	fundsRequired := additionalFeesRequired + requiredForRemainingSwaps + txSize*newFeeRate
@@ -3310,20 +3307,20 @@ func (btc *baseWallet) signedAccelerationTx(previousTxs []*GetTransactionResult,
 	if fundsRequired > orderChange.Val {
 		// If change not enough, need to use other UTXOs.
 		enough := func(_, inputSize, inputsVal uint64) (bool, uint64) {
-			txSize := dexbtc.MinimumTxOverhead + inputSize
+			txSize := MinimumTxOverhead + inputSize
 
 			// add the order change as an input
 			if btc.segwit {
-				txSize += dexbtc.RedeemP2WPKHInputTotalSize
+				txSize += RedeemP2WPKHInputTotalSize
 			} else {
-				txSize += dexbtc.RedeemP2PKHInputSize
+				txSize += RedeemP2PKHInputSize
 			}
 
 			if requiredForRemainingSwaps > 0 {
 				if btc.segwit {
-					txSize += dexbtc.P2WPKHOutputSize
+					txSize += P2WPKHOutputSize
 				} else {
-					txSize += dexbtc.P2PKHOutputSize
+					txSize += P2PKHOutputSize
 				}
 			}
 
@@ -3582,18 +3579,18 @@ func (btc *baseWallet) maxAccelerationRate(changeVal, feesAlreadyPaid, orderTxVB
 
 	// First, add all the elements that will definitely be part of the
 	// acceleration transaction, without any additional inputs.
-	txSize += dexbtc.MinimumTxOverhead
+	txSize += MinimumTxOverhead
 	if btc.segwit {
-		txSize += dexbtc.RedeemP2WPKHInputSize
-		witnessSize += dexbtc.RedeemP2WPKHInputWitnessWeight
+		txSize += RedeemP2WPKHInputSize
+		witnessSize += RedeemP2WPKHInputWitnessWeight
 	} else {
-		txSize += dexbtc.RedeemP2PKHInputSize
+		txSize += RedeemP2PKHInputSize
 	}
 	if requiredForRemainingSwaps > 0 {
 		if btc.segwit {
-			txSize += dexbtc.P2WPKHOutputSize
+			txSize += P2WPKHOutputSize
 		} else {
-			txSize += dexbtc.P2PKHOutputSize
+			txSize += P2PKHOutputSize
 		}
 	}
 
@@ -3622,7 +3619,7 @@ func (btc *baseWallet) maxAccelerationRate(changeVal, feesAlreadyPaid, orderTxVB
 		if utxo.Input.NonStandardScript {
 			continue
 		}
-		txSize += dexbtc.TxInOverhead +
+		txSize += TxInOverhead +
 			uint64(wire.VarIntSerializeSize(uint64(utxo.Input.SigScriptSize))) +
 			uint64(utxo.Input.SigScriptSize)
 		witnessSize += uint64(utxo.Input.WitnessSize)
@@ -3892,7 +3889,7 @@ func (btc *baseWallet) Swap(ctx context.Context, swaps *asset.Swaps) ([]asset.Re
 		}
 
 		// Create the contract, a P2SH redeem script.
-		contractScript, err := dexbtc.MakeContract(contractAddr, revokeAddr,
+		contractScript, err := MakeContract(contractAddr, revokeAddr,
 			contract.SecretHash, int64(contract.LockTime), btc.segwit, btc.chainParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("unable to create pubkey script for address %s: %w", contract.Address, err)
@@ -4188,7 +4185,7 @@ func privateSwapOutputDataFromContract(contract *asset.PrivateContract) (*privat
 
 	// Create the refund script and the taproot script tree, which only
 	// contains one leaf.
-	refundScript, err := dexbtc.PrivateSwapRefundScript(refundPubKey.pubKey, int64(contract.LockTime))
+	refundScript, err := PrivateSwapRefundScript(refundPubKey.pubKey, int64(contract.LockTime))
 	if err != nil {
 		return nil, fmt.Errorf("error creating refund script: %w", err)
 	}
@@ -4198,7 +4195,7 @@ func privateSwapOutputDataFromContract(contract *asset.PrivateContract) (*privat
 	tapScriptRootHash := tapScriptTree.RootNode.TapHash()
 	controlBlock := tapScriptTree.LeafMerkleProofs[0].ToControlBlock(combinedKey.FinalKey)
 	outputKey := txscript.ComputeTaprootOutputKey(combinedKey.FinalKey, tapScriptRootHash[:])
-	pkScript, err := dexbtc.PayToTaprootScript(outputKey)
+	pkScript, err := PayToTaprootScript(outputKey)
 	if err != nil {
 		return nil, fmt.Errorf("error creating pay-to-taproot script: %w", err)
 	}
@@ -4258,8 +4255,8 @@ func (btc *baseWallet) privateRefundTx(swapTxOut *Output, lockTime int64, output
 
 	// Calculate the fee.
 	size := btc.calcTxSize(refundTx)
-	witnessVBytes := uint64((dexbtc.PrivateRefundWitnessSize + 2 + 3) / 4)
-	size += witnessVBytes + dexbtc.P2WPKHOutputSize
+	witnessVBytes := uint64((PrivateRefundWitnessSize + 2 + 3) / 4)
+	size += witnessVBytes + P2WPKHOutputSize
 	fee := feeRate * size
 	if feeRate*size > swapTxOut.Val {
 		return nil, fmt.Errorf("refund tx not worth the fees")
@@ -4492,8 +4489,8 @@ func (btc *baseWallet) GenerateUnsignedRedeemTx(coinID []byte, contract *asset.P
 
 	// Make sure that the redeem tx is worth the fees.
 	size := btc.calcTxSize(redeemTx)
-	txInVBytes := uint64((dexbtc.PrivateRedeemWitnessSize + 2 + 3) / 4)
-	size += txInVBytes + dexbtc.P2WPKHOutputSize
+	txInVBytes := uint64((PrivateRedeemWitnessSize + 2 + 3) / 4)
+	size += txInVBytes + P2WPKHOutputSize
 	fee := feeRate * size
 	if fee > contract.Value {
 		return nil, fmt.Errorf("redeem tx not worth the fees")
@@ -5139,7 +5136,7 @@ func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]ut
 		// Extract the swap contract recipient and secret hash and check the secret
 		// hash against the hash of the provided secret.
 		contract := cinfo.contract
-		_, receiver, _, secretHash, err := dexbtc.ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
+		_, receiver, _, secretHash, err := ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("error extracting swap addresses: %w", err)
 		}
@@ -5164,10 +5161,10 @@ func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]ut
 	size := btc.calcTxSize(msgTx)
 	if btc.segwit {
 		// Add the marker and flag weight here.
-		witnessVBytes := (dexbtc.RedeemSwapSigScriptSize*uint64(len(form.Redemptions)) + 2 + 3) / 4
-		size += witnessVBytes + dexbtc.P2WPKHOutputSize
+		witnessVBytes := (RedeemSwapSigScriptSize*uint64(len(form.Redemptions)) + 2 + 3) / 4
+		size += witnessVBytes + P2WPKHOutputSize
 	} else {
-		size += dexbtc.RedeemSwapSigScriptSize*uint64(len(form.Redemptions)) + dexbtc.P2PKHOutputSize
+		size += RedeemSwapSigScriptSize*uint64(len(form.Redemptions)) + P2PKHOutputSize
 	}
 
 	customCfg := new(redeemOptions)
@@ -5219,7 +5216,7 @@ func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]ut
 			if err != nil {
 				return nil, nil, 0, err
 			}
-			msgTx.TxIn[i].Witness = dexbtc.RedeemP2WSHContract(contract, redeemSig, redeemPubKey, r.Secret)
+			msgTx.TxIn[i].Witness = RedeemP2WSHContract(contract, redeemSig, redeemPubKey, r.Secret)
 		}
 	} else {
 		for i, r := range form.Redemptions {
@@ -5228,7 +5225,7 @@ func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]ut
 			if err != nil {
 				return nil, nil, 0, err
 			}
-			msgTx.TxIn[i].SignatureScript, err = dexbtc.RedeemP2SHContract(contract, redeemSig, redeemPubKey, r.Secret)
+			msgTx.TxIn[i].SignatureScript, err = RedeemP2SHContract(contract, redeemSig, redeemPubKey, r.Secret)
 			if err != nil {
 				return nil, nil, 0, err
 			}
@@ -5271,7 +5268,7 @@ func (btc *baseWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]ut
 
 // ConvertAuditInfo converts from the common *asset.AuditInfo type to our
 // internal *auditInfo type.
-func ConvertAuditInfo(ai *asset.AuditInfo, decodeAddr dexbtc.AddressDecoder, chainParams *chaincfg.Params) (*AuditInfo, error) {
+func ConvertAuditInfo(ai *asset.AuditInfo, decodeAddr AddressDecoder, chainParams *chaincfg.Params) (*AuditInfo, error) {
 	if ai.Coin == nil {
 		return nil, fmt.Errorf("no coin")
 	}
@@ -5336,7 +5333,7 @@ func (btc *baseWallet) AuditContract(coinID, contract, txData util.Bytes, rebroa
 		return nil, err
 	}
 	// Get the receiving address.
-	_, receiver, stamp, secretHash, err := dexbtc.ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
+	_, receiver, stamp, secretHash, err := ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting swap addresses: %w", err)
 	}
@@ -5443,7 +5440,7 @@ func (btc *baseWallet) LockTimeExpired(_ context.Context, lockTime time.Time) (b
 // ContractLockTimeExpired returns true if the specified contract's locktime has
 // expired, making it possible to issue a Refund.
 func (btc *baseWallet) ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error) {
-	_, _, locktime, _, err := dexbtc.ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
+	_, _, locktime, _, err := ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("error extracting contract locktime: %w", err)
 	}
@@ -5562,7 +5559,7 @@ func (btc *baseWallet) Refund(ctx context.Context, coinID, contract util.Bytes, 
 // refundTx creates and signs a contract`s refund transaction. If refundAddr is
 // not supplied, one will be requested from the wallet.
 func (btc *baseWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout uint32, contract util.Bytes, val uint64, refundAddr btcutil.Address, feeRate uint64) (*wire.MsgTx, error) {
-	sender, _, lockTime, _, err := dexbtc.ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
+	sender, _, lockTime, _, err := ExtractSwapDetails(contract, btc.segwit, btc.chainParams)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting swap addresses: %w", err)
 	}
@@ -5583,10 +5580,10 @@ func (btc *baseWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vou
 
 	if btc.segwit {
 		// Add the marker and flag weight too.
-		witnessVBytes := uint64((dexbtc.RefundSigScriptSize + 2 + 3) / 4)
-		size += witnessVBytes + dexbtc.P2WPKHOutputSize
+		witnessVBytes := uint64((RefundSigScriptSize + 2 + 3) / 4)
+		size += witnessVBytes + P2WPKHOutputSize
 	} else {
-		size += dexbtc.RefundSigScriptSize + dexbtc.P2PKHOutputSize
+		size += RefundSigScriptSize + P2PKHOutputSize
 	}
 
 	fee := feeRate * size // TODO: use btc.FeeRate in caller and fallback to nfo.MaxFeeRate
@@ -5616,7 +5613,7 @@ func (btc *baseWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vou
 		if err != nil {
 			return nil, fmt.Errorf("createWitnessSig: %w", err)
 		}
-		txIn.Witness = dexbtc.RefundP2WSHContract(contract, refundSig, refundPubKey)
+		txIn.Witness = RefundP2WSHContract(contract, refundSig, refundPubKey)
 	} else {
 		prevScript, err := btc.scriptHashScript(contract)
 		if err != nil {
@@ -5627,7 +5624,7 @@ func (btc *baseWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vou
 		if err != nil {
 			return nil, fmt.Errorf("createSig: %w", err)
 		}
-		txIn.SignatureScript, err = dexbtc.RefundP2SHContract(contract, refundSig, refundPubKey)
+		txIn.SignatureScript, err = RefundP2SHContract(contract, refundSig, refundPubKey)
 		if err != nil {
 			return nil, fmt.Errorf("RefundP2SHContract: %w", err)
 		}
@@ -5676,7 +5673,7 @@ func (btc *baseWallet) recyclableAddress() (string, error) {
 func (btc *baseWallet) ReturnRefundContracts(contracts [][]byte) {
 	addrs := make([]string, 0, len(contracts))
 	for _, c := range contracts {
-		sender, _, _, _, err := dexbtc.ExtractSwapDetails(c, btc.segwit, btc.chainParams)
+		sender, _, _, _, err := ExtractSwapDetails(c, btc.segwit, btc.chainParams)
 		if err != nil {
 			btc.log.Errorf("Error extracting refund address from contract '%x': %v", c, err)
 			continue
@@ -5773,11 +5770,11 @@ func (btc *baseWallet) send(address string, val uint64, feeRate uint64, subtract
 		return nil, 0, 0, fmt.Errorf("PayToAddrScript error: %w", err)
 	}
 
-	baseSize := dexbtc.MinimumTxOverhead
+	baseSize := MinimumTxOverhead
 	if btc.segwit {
-		baseSize += dexbtc.P2WPKHOutputSize * 2
+		baseSize += P2WPKHOutputSize * 2
 	} else {
-		baseSize += dexbtc.P2PKHOutputSize * 2
+		baseSize += P2PKHOutputSize * 2
 	}
 
 	enough := SendEnough(val, feeRate, subtract, uint64(baseSize), btc.segwit, true)
@@ -6063,9 +6060,9 @@ func (btc *baseWallet) signTxAndAddChange(ctx context.Context, baseTx *wire.MsgT
 	if err != nil {
 		return makeErr("error creating change script: %v", err)
 	}
-	changeFees := dexbtc.P2PKHOutputSize * feeRate
+	changeFees := P2PKHOutputSize * feeRate
 	if btc.segwit {
-		changeFees = dexbtc.P2WPKHOutputSize * feeRate
+		changeFees = P2WPKHOutputSize * feeRate
 	}
 	changeIdx := len(baseTx.TxOut)
 	changeOutput := wire.NewTxOut(int64(remaining-minFee-changeFees), changeScript)
@@ -6079,7 +6076,7 @@ func (btc *baseWallet) signTxAndAddChange(ctx context.Context, baseTx *wire.MsgT
 		// Add the change output.
 		vSize0 := btc.calcTxSize(baseTx)
 		baseTx.AddTxOut(changeOutput)
-		changeSize := btc.calcTxSize(baseTx) - vSize0       // may be dexbtc.P2WPKHOutputSize
+		changeSize := btc.calcTxSize(baseTx) - vSize0       // may be P2WPKHOutputSize
 		addrStr, _ := btc.stringAddr(addr, btc.chainParams) // just for logging
 		btc.log.Tracef("Change output size = %d, addr = %s", changeSize, addrStr)
 
@@ -6278,7 +6275,7 @@ func (btc *intermediaryWallet) EstimateSendTxFee(address string, sendAmount, fee
 	}
 
 	wireOP := wire.NewTxOut(int64(sendAmount), pkScript)
-	if dexbtc.IsDust(wireOP, feeRate) {
+	if IsDust(wireOP, feeRate) {
 		return 0, false, errors.New("output value is dust")
 	}
 
@@ -6294,12 +6291,12 @@ func (btc *intermediaryWallet) EstimateSendTxFee(address string, sendAmount, fee
 // StandardSendFee returns the fees for a simple send tx with one input and two
 // outputs.
 func (btc *baseWallet) StandardSendFee(feeRate uint64) uint64 {
-	var sz uint64 = dexbtc.MinimumTxOverhead
+	var sz uint64 = MinimumTxOverhead
 	if btc.segwit {
-		inputSize := dexbtc.RedeemP2WPKHInputSize + uint64((dexbtc.RedeemP2PKSigScriptSize+2+3)/4)
-		sz += inputSize + dexbtc.P2WPKHOutputSize*2
+		inputSize := RedeemP2WPKHInputSize + uint64((RedeemP2PKSigScriptSize+2+3)/4)
+		sz += inputSize + P2WPKHOutputSize*2
 	} else {
-		sz += dexbtc.RedeemP2PKHInputSize + dexbtc.P2PKHOutputSize*2
+		sz += RedeemP2PKHInputSize + P2PKHOutputSize*2
 	}
 	return feeRate * sz
 }
@@ -6373,10 +6370,10 @@ func (btc *baseWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time
 
 	// TL output.
 	lockTimeSec := lockTime.Unix()
-	if lockTimeSec >= dexbtc.MaxCLTVScriptNum || lockTimeSec <= 0 {
+	if lockTimeSec >= MaxCLTVScriptNum || lockTimeSec <= 0 {
 		return nil, nil, fmt.Errorf("invalid lock time %v", lockTime)
 	}
-	bondScript, err := dexbtc.MakeBondScript(ver, uint32(lockTimeSec), pkh)
+	bondScript, err := MakeBondScript(ver, uint32(lockTimeSec), pkh)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
 	}
@@ -6402,9 +6399,9 @@ func (btc *baseWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time
 
 	baseSize := uint32(baseTx.SerializeSize())
 	if btc.segwit {
-		baseSize += dexbtc.P2WPKHOutputSize
+		baseSize += P2WPKHOutputSize
 	} else {
-		baseSize += dexbtc.P2PKHOutputSize
+		baseSize += P2PKHOutputSize
 	}
 
 	const subtract = false
@@ -6498,7 +6495,7 @@ func (btc *baseWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time
 
 func (btc *baseWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt uint64,
 	script []byte, priv *btcec.PrivateKey, feeRate uint64) (*wire.MsgTx, error) {
-	lockTime, pkhPush, err := dexbtc.ExtractBondDetailsV0(0, script)
+	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
 	if err != nil {
 		return nil, err
 	}
@@ -6521,10 +6518,10 @@ func (btc *baseWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt
 	// Calculate fees and add the refund output.
 	size := btc.calcTxSize(msgTx)
 	if btc.segwit {
-		witnessVBytes := (dexbtc.RedeemBondSigScriptSize + 2 + 3) / 4
-		size += uint64(witnessVBytes) + dexbtc.P2WPKHOutputSize
+		witnessVBytes := (RedeemBondSigScriptSize + 2 + 3) / 4
+		size += uint64(witnessVBytes) + P2WPKHOutputSize
 	} else {
-		size += dexbtc.RedeemBondSigScriptSize + dexbtc.P2PKHOutputSize
+		size += RedeemBondSigScriptSize + P2PKHOutputSize
 	}
 	fee := feeRate * size
 	if fee > amt {
@@ -6553,7 +6550,7 @@ func (btc *baseWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt
 		if err != nil {
 			return nil, err
 		}
-		txIn.Witness = dexbtc.RefundBondScriptSegwit(script, sig, pk)
+		txIn.Witness = RefundBondScriptSegwit(script, sig, pk)
 	} else {
 		prevPkScript, err := btc.scriptHashScript(script) // P2SH: OP_HASH160 <script hash> OP_EQUAL
 		if err != nil {
@@ -6563,7 +6560,7 @@ func (btc *baseWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt
 		if err != nil {
 			return nil, err
 		}
-		txIn.SignatureScript, err = dexbtc.RefundBondScript(script, sig, pk)
+		txIn.SignatureScript, err = RefundBondScript(script, sig, pk)
 		if err != nil {
 			return nil, fmt.Errorf("RefundBondScript: %w", err)
 		}
@@ -6579,7 +6576,7 @@ func (btc *baseWallet) RefundBond(ctx context.Context, ver uint16, coinID, scrip
 	if ver != 0 {
 		return nil, errors.New("only version 0 bonds supported")
 	}
-	lockTime, pkhPush, err := dexbtc.ExtractBondDetailsV0(0, script)
+	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
 	if err != nil {
 		return nil, err
 	}
@@ -6624,12 +6621,12 @@ func (btc *baseWallet) decodeV0BondTx(msgTx *wire.MsgTx, txHash *chainhash.Hash,
 	if len(msgTx.TxOut) < 2 {
 		return nil, fmt.Errorf("tx %s is not a v0 bond transaction: too few outputs", txHash)
 	}
-	_, lockTime, pkh, err := dexbtc.ExtractBondCommitDataV0(0, msgTx.TxOut[1].PkScript)
+	_, lockTime, pkh, err := ExtractBondCommitDataV0(0, msgTx.TxOut[1].PkScript)
 	if err != nil {
 		return nil, fmt.Errorf("unable to extract bond commitment details from output 1 of %s: %v", txHash, err)
 	}
 	// Sanity check.
-	bondScript, err := dexbtc.MakeBondScript(0, lockTime, pkh[:])
+	bondScript, err := MakeBondScript(0, lockTime, pkh[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
 	}
@@ -6786,9 +6783,9 @@ func (btc *baseWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) ([]a
 	var totalRequiredForOrders uint64
 	var swapInputSize uint64
 	if btc.segwit {
-		swapInputSize = dexbtc.RedeemP2WPKHInputTotalSize
+		swapInputSize = RedeemP2WPKHInputTotalSize
 	} else {
-		swapInputSize = dexbtc.RedeemP2PKHInputSize
+		swapInputSize = RedeemP2PKHInputSize
 	}
 	for _, value := range mo.Values {
 		if value.Value == 0 {
@@ -6847,16 +6844,16 @@ func (btc *baseWallet) MaxFundingFees(numTrades uint32, feeRate uint64, options 
 
 	var inputSize, outputSize uint64
 	if btc.segwit {
-		inputSize = dexbtc.RedeemP2WPKHInputTotalSize
-		outputSize = dexbtc.P2WPKHOutputSize
+		inputSize = RedeemP2WPKHInputTotalSize
+		outputSize = P2WPKHOutputSize
 	} else {
-		inputSize = dexbtc.RedeemP2PKHInputSize
-		outputSize = dexbtc.P2PKHOutputSize
+		inputSize = RedeemP2PKHInputSize
+		outputSize = P2PKHOutputSize
 	}
 
 	const numInputs = 12 // plan for lots of inputs to get a safe estimate
 
-	txSize := dexbtc.MinimumTxOverhead + numInputs*inputSize + uint64(numTrades+1)*outputSize
+	txSize := MinimumTxOverhead + numInputs*inputSize + uint64(numTrades+1)*outputSize
 	return feeRate * txSize
 }
 
@@ -6900,7 +6897,7 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 			return false, nil
 		}
 		const scriptVer = 0
-		acctID, lockTime, pkHash, err := dexbtc.ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
+		acctID, lockTime, pkHash, err := ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
 		if err != nil {
 			return false, nil
 		}
@@ -6972,7 +6969,7 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 
 	// Swap redemptions and refunds
 	contractIsSwap := func(segwit bool, contract []byte) bool {
-		_, _, _, _, err := dexbtc.ExtractSwapDetails(contract, segwit, btc.chainParams)
+		_, _, _, _, err := ExtractSwapDetails(contract, segwit, btc.chainParams)
 		return err == nil
 	}
 	redeemsSwap := func(msgTx *wire.MsgTx) bool {
@@ -7003,7 +7000,7 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		var bondInfo *asset.BondTxInfo
 		isBond := func(segwit bool, contract []byte) bool {
 			const scriptVer = 0
-			lockTime, pkHash, err := dexbtc.ExtractBondDetailsV0(scriptVer, contract)
+			lockTime, pkHash, err := ExtractBondDetailsV0(scriptVer, contract)
 			if err != nil {
 				return false
 			}

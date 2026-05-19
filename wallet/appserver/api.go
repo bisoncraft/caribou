@@ -564,10 +564,6 @@ func (s *AppServer) apiSetLocale(w http.ResponseWriter, r *http.Request) {
 	// Get actual language after SetLanguage (in case of fallback)
 	actualLang := s.core.Language()
 	s.lang.Store(actualLang)
-	if err := s.buildTemplates(actualLang); err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
 
 	writeJSON(w, simpleAck())
 }

@@ -2,8 +2,6 @@ package ltc
 
 import (
 	"testing"
-
-	dexltc "github.com/bisoncraft/bosswallet/util/networks/ltc"
 )
 
 func TestLtcNetParamsMappings(t *testing.T) {
@@ -17,13 +15,13 @@ func TestLtcNetParamsMappings(t *testing.T) {
 	} {
 		_ = p
 	}
-	if np := ltcNetParams(dexltc.MainNetParams); np == nil {
+	if np := ltcNetParams(MainNetParams); np == nil {
 		t.Fatal("ltcNetParams(mainnet) returned nil")
 	}
-	if np := ltcNetParams(dexltc.TestNet4Params); np == nil {
+	if np := ltcNetParams(TestNet4Params); np == nil {
 		t.Fatal("ltcNetParams(testnet4) returned nil")
 	}
-	if np := ltcNetParams(dexltc.RegressionNetParams); np == nil {
+	if np := ltcNetParams(RegressionNetParams); np == nil {
 		t.Fatal("ltcNetParams(regtest) returned nil")
 	}
 

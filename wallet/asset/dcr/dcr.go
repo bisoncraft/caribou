@@ -40,7 +40,6 @@ import (
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
 	_ "decred.org/dcrwallet/v5/wallet/drivers/bdb"
-	dexdcr "github.com/bisoncraft/bosswallet/util/networks/dcr"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/decred/dcrd/blockchain/stake/v5"
@@ -82,7 +81,7 @@ const (
 
 	// splitTxBaggage is the total number of additional bytes associated with
 	// using a split transaction to fund a swap.
-	splitTxBaggage = dexdcr.MsgTxOverhead + dexdcr.P2PKHInputSize + 2*dexdcr.P2PKHOutputSize
+	splitTxBaggage = MsgTxOverhead + P2PKHInputSize + 2*P2PKHOutputSize
 
 	walletTypeDcrwRPC = "dcrwalletRPC"
 	walletTypeLegacy  = "" // dcrwallet RPC prior to wallet types
@@ -112,8 +111,8 @@ const (
 	defaultCSPPMainnet  = "mix.decred.org:5760"
 	defaultCSPPTestnet3 = "mix.decred.org:15760"
 
-	ticketSize               = dexdcr.MsgTxOverhead + dexdcr.P2PKHInputSize + 2*dexdcr.P2SHOutputSize /* stakesubmission and sstxchanges */ + 32 /* see e.g. RewardCommitmentScript */
-	minVSPTicketPurchaseSize = dexdcr.MsgTxOverhead + dexdcr.P2PKHInputSize + dexdcr.P2PKHOutputSize + ticketSize
+	ticketSize               = MsgTxOverhead + P2PKHInputSize + 2*P2SHOutputSize /* stakesubmission and sstxchanges */ + 32 /* see e.g. RewardCommitmentScript */
+	minVSPTicketPurchaseSize = MsgTxOverhead + P2PKHInputSize + P2PKHOutputSize + ticketSize
 
 	// sstxCommitmentString is the string to insert when a verbose
 	// transaction output's pkscript type is a ticket commitment.
@@ -129,7 +128,7 @@ var (
 	// blockTicker is the delay between calls to check for new blocks.
 	blockTicker                  = time.Second
 	peerCountTicker              = 5 * time.Second
-	conventionalConversionFactor = float64(dexdcr.UnitInfo.Conventional.ConversionFactor)
+	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
 	walletBlockAllowance         = time.Second * 10
 
 	// maxMempoolAge is the max amount of time the wallet will let a
@@ -286,20 +285,22 @@ var (
 		},
 	}
 
+	spvWalletDefinition = &asset.WalletDefinition{
+		Type:             walletTypeSPV,
+		Tab:              "Native",
+		Description:      "Use the built-in SPV wallet",
+		ConfigOpts:       WalletOpts,
+		Seeded:           true,
+		MultiFundingOpts: multiFundingOpts,
+	}
+
 	// WalletInfo defines some general information about a Decred wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Decred",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexdcr.UnitInfo,
+		UnitInfo:          UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
-			{
-				Type:             walletTypeSPV,
-				Tab:              "Native",
-				Description:      "Use the built-in SPV wallet",
-				ConfigOpts:       WalletOpts,
-				Seeded:           true,
-				MultiFundingOpts: multiFundingOpts,
-			},
+			spvWalletDefinition,
 			{
 				Type:              walletTypeDcrwRPC,
 				Tab:               "External",
@@ -310,6 +311,10 @@ var (
 			},
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 	swapFeeBumpKey      = "swapfeebump"
 	splitKey            = "swapsplit"
@@ -565,7 +570,7 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexdcr.MinLotSize(maxFeeRate)
+	return MinLotSize(maxFeeRate)
 }
 
 func init() {
@@ -1317,8 +1322,8 @@ func (dcr *ExchangeWallet) Balance() (*asset.Balance, error) {
 
 func bondsFeeBuffer(highFeeRate uint64) uint64 {
 	const inputCount uint64 = 12 // plan for lots of inputs
-	largeBondTxSize := dexdcr.MsgTxOverhead + dexdcr.P2SHOutputSize + 1 + dexdcr.BondPushDataSize +
-		dexdcr.P2PKHOutputSize + inputCount*dexdcr.P2PKHInputSize
+	largeBondTxSize := MsgTxOverhead + P2SHOutputSize + 1 + BondPushDataSize +
+		P2PKHOutputSize + inputCount*P2PKHInputSize
 	// Normally we can plan on just 2 parallel "tracks" (single bond overlap
 	// when bonds are expired and waiting to refund) but that may increase
 	// temporarily if target tier is adjusted up.
@@ -1519,7 +1524,7 @@ func (dcr *ExchangeWallet) maxOrder(lotSize, feeSuggestion, maxFeeRate uint64) (
 	avail := sumUTXOs(utxos)
 
 	// Start by attempting max lots with a basic fee.
-	basicFee := dexdcr.InitTxSize * maxFeeRate
+	basicFee := InitTxSize * maxFeeRate
 	// NOTE: Split tx is an order-time option. The max order is generally
 	// attainable when split is used, regardless of whether they choose it on
 	// the order form. Allow the split for max order purposes.
@@ -1561,7 +1566,7 @@ func (dcr *ExchangeWallet) estimateSwap(lots, lotSize, feeSuggestion, maxFeeRate
 		bumpedNetRate = uint64(math.Ceil(float64(bumpedNetRate) * feeBump))
 	}
 
-	feeReservesPerLot := bumpedMaxRate * dexdcr.InitTxSize
+	feeReservesPerLot := bumpedMaxRate * InitTxSize
 
 	val := lots * lotSize
 	// The orderEnough func does not account for a split transaction at the
@@ -1580,15 +1585,15 @@ func (dcr *ExchangeWallet) estimateSwap(lots, lotSize, feeSuggestion, maxFeeRate
 	digestInputs := func(inputsSize uint32) (reqFunds, maxFees, estHighFees, estLowFees uint64) {
 		// NOTE: reqFunds = val + fees, so change (extra) will be sum-reqFunds
 		reqFunds = calc.RequiredOrderFunds(val, uint64(inputsSize), lots,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, bumpedMaxRate) // as in tryFund's enough func
+			InitTxSizeBase, InitTxSize, bumpedMaxRate) // as in tryFund's enough func
 		maxFees = reqFunds - val
 
 		estHighFunds := calc.RequiredOrderFunds(val, uint64(inputsSize), lots,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, bumpedNetRate)
+			InitTxSizeBase, InitTxSize, bumpedNetRate)
 		estHighFees = estHighFunds - val
 
 		estLowFunds := calc.RequiredOrderFunds(val, uint64(inputsSize), 1,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, bumpedNetRate) // best means single multi-lot match, even better than batch
+			InitTxSizeBase, InitTxSize, bumpedNetRate) // best means single multi-lot match, even better than batch
 		estLowFees = estLowFunds - val
 		return
 	}
@@ -1763,8 +1768,8 @@ func (dcr *ExchangeWallet) SingleLotSwapRefundFees(_ uint32, feeSuggestion uint6
 	} else {
 		numInputs = 2
 	}
-	swapTxSize := dexdcr.InitTxSizeBase + (numInputs * dexdcr.P2PKHInputSize)
-	refundTxSize := dexdcr.MsgTxOverhead + dexdcr.TxInOverhead + dexdcr.RefundSigScriptSize + dexdcr.P2PKHOutputSize
+	swapTxSize := InitTxSizeBase + (numInputs * P2PKHInputSize)
+	refundTxSize := MsgTxOverhead + TxInOverhead + RefundSigScriptSize + P2PKHOutputSize
 	return swapTxSize * feeSuggestion, uint64(refundTxSize) * feeSuggestion, nil
 }
 
@@ -1780,7 +1785,7 @@ func (dcr *ExchangeWallet) MaxFundingFees(numTrades uint32, feeRate uint64, opti
 	}
 
 	const numInputs = 12 // plan for lots of inputs to get a safe estimate
-	splitTxSize := dexdcr.MsgTxOverhead + (numInputs * dexdcr.P2PKHInputSize) + (uint64(numTrades+1) * dexdcr.P2PKHOutputSize)
+	splitTxSize := MsgTxOverhead + (numInputs * P2PKHInputSize) + (uint64(numTrades+1) * P2PKHOutputSize)
 	return splitTxSize * dcr.config().feeRateLimit
 }
 
@@ -1843,11 +1848,11 @@ func (dcr *ExchangeWallet) preRedeem(numLots, feeSuggestion uint64, options map[
 		feeRate = dcr.targetFeeRateWithFallback(cfg.redeemConfTarget, feeSuggestion)
 	}
 	// Best is one transaction with req.Lots inputs and 1 output.
-	var best uint64 = dexdcr.MsgTxOverhead
+	var best uint64 = MsgTxOverhead
 	// Worst is req.Lots transactions, each with one input and one output.
-	var worst uint64 = dexdcr.MsgTxOverhead * numLots
-	var inputSize uint64 = dexdcr.TxInOverhead + dexdcr.RedeemSwapSigScriptSize
-	var outputSize uint64 = dexdcr.P2PKHOutputSize
+	var worst uint64 = MsgTxOverhead * numLots
+	var inputSize uint64 = TxInOverhead + RedeemSwapSigScriptSize
+	var outputSize uint64 = P2PKHOutputSize
 	best += inputSize*numLots + outputSize
 	worst += (inputSize + outputSize) * numLots
 
@@ -1981,7 +1986,7 @@ func (dcr *ExchangeWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Byte
 			// Force a split if funding failure may be due to reserves.
 			dcr.log.Infof("Retrying order funding with a forced split transaction to help respect reserves.")
 			useSplit = true
-			keepForSplitToo := reserves + (bumpedMaxRate * dexdcr.P2PKHInputSize) // so we fail before split() if it's really that tight
+			keepForSplitToo := reserves + (bumpedMaxRate * P2PKHInputSize) // so we fail before split() if it's really that tight
 			coins, redeemScripts, sum, inputsSize, err = dcr.fund(keepForSplitToo,
 				orderEnough(ord.Value, ord.MaxSwapCount, bumpedMaxRate, useSplit))
 			// And make an extra output for the reserves amount plus additional
@@ -2101,8 +2106,8 @@ func (dcr *ExchangeWallet) fundsRequiredForMultiOrders(orders []*asset.MultiOrde
 	var totalRequired uint64
 
 	for i, value := range orders {
-		req := calc.RequiredOrderFunds(value.Value, dexdcr.P2PKHInputSize, value.MaxSwapCount,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, feeRate)
+		req := calc.RequiredOrderFunds(value.Value, P2PKHInputSize, value.MaxSwapCount,
+			InitTxSizeBase, InitTxSize, feeRate)
 		req = uint64(math.Round(float64(req) * (100 + splitBuffer) / 100))
 		requiredForOrders[i] = req
 		totalRequired += req
@@ -2252,12 +2257,12 @@ func (dcr *ExchangeWallet) fundMultiSplitTx(orders []*asset.MultiOrderValue, utx
 	splitTxFeeRate, maxFeeRate uint64, splitBuffer float64, keep, maxLock uint64) (bool, asset.Coins, []*fundingCoin) {
 	_, totalOutputRequired := dcr.fundsRequiredForMultiOrders(orders, maxFeeRate, splitBuffer)
 
-	var splitTxSizeWithoutInputs uint32 = dexdcr.MsgTxOverhead
+	var splitTxSizeWithoutInputs uint32 = MsgTxOverhead
 	numOutputs := len(orders)
 	if keep > 0 {
 		numOutputs++
 	}
-	splitTxSizeWithoutInputs += uint32(dexdcr.P2PKHOutputSize * numOutputs)
+	splitTxSizeWithoutInputs += uint32(P2PKHOutputSize * numOutputs)
 
 	enough := func(sum uint64, size uint32, utxo *compositeUTXO) (bool, uint64) {
 		totalSum := sum + toAtoms(utxo.rpc.Amount)
@@ -2527,8 +2532,8 @@ func (dcr *ExchangeWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) 
 		if value.MaxSwapCount == 0 {
 			return nil, nil, 0, fmt.Errorf("cannot fund zero-lot order")
 		}
-		req := calc.RequiredOrderFunds(value.Value, dexdcr.P2PKHInputSize, value.MaxSwapCount,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, mo.MaxFeeRate)
+		req := calc.RequiredOrderFunds(value.Value, P2PKHInputSize, value.MaxSwapCount,
+			InitTxSizeBase, InitTxSize, mo.MaxFeeRate)
 		totalRequiredForOrders += req
 	}
 
@@ -2804,7 +2809,7 @@ func (dcr *ExchangeWallet) split(value uint64, lots uint64, coins asset.Coins, i
 	// and transaction overhead, and compare to the excess that would be locked.
 	baggageFees := bumpedMaxRate * splitTxBaggage
 	if extraOutput > 0 {
-		baggageFees += bumpedMaxRate * dexdcr.P2PKHOutputSize
+		baggageFees += bumpedMaxRate * P2PKHOutputSize
 	}
 
 	var coinSum uint64
@@ -2815,7 +2820,7 @@ func (dcr *ExchangeWallet) split(value uint64, lots uint64, coins asset.Coins, i
 	valStr := amount(value).String()
 
 	excess := coinSum - calc.RequiredOrderFunds(value, inputsSize, lots,
-		dexdcr.InitTxSizeBase, dexdcr.InitTxSize, bumpedMaxRate)
+		InitTxSizeBase, InitTxSize, bumpedMaxRate)
 
 	if baggageFees > excess {
 		dcr.log.Debugf("Skipping split transaction because cost is greater than potential over-lock. %s > %s.",
@@ -2856,8 +2861,8 @@ func (dcr *ExchangeWallet) split(value uint64, lots uint64, coins asset.Coins, i
 		}
 	}
 
-	reqFunds := calc.RequiredOrderFunds(value, dexdcr.P2PKHInputSize, lots,
-		dexdcr.InitTxSizeBase, dexdcr.InitTxSize, bumpedMaxRate)
+	reqFunds := calc.RequiredOrderFunds(value, P2PKHInputSize, lots,
+		InitTxSizeBase, InitTxSize, bumpedMaxRate)
 
 	dcr.fundingMtx.Lock()         // before generating the new output in sendCoins
 	defer dcr.fundingMtx.Unlock() // after locking it (wallet and map)
@@ -3224,7 +3229,7 @@ func (dcr *ExchangeWallet) privateRefundTx(ctx context.Context, coinID, contract
 			if spent {
 				spendTx := outFound.spenderTx
 				// Refunds are not batched, so input 0 is always the spender.
-				if dexdcr.IsRefundScript(utxo.Version, spendTx.TxIn[0].SignatureScript, contract, true) {
+				if IsRefundScript(utxo.Version, spendTx.TxIn[0].SignatureScript, contract, true) {
 					return spendTx, 0, 0, nil
 				} // otherwise it must be a redeem
 				return nil, 0, 0, fmt.Errorf("contract %s:%d is spent in %v (%w)",
@@ -3233,7 +3238,7 @@ func (dcr *ExchangeWallet) privateRefundTx(ctx context.Context, coinID, contract
 		}
 	}
 
-	refunder, _, lockTime, err := dexdcr.ExtractPrivateSwapDetails(contract)
+	refunder, _, lockTime, err := ExtractPrivateSwapDetails(contract)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("error extracting swap addresses: %w", err)
 	}
@@ -3250,7 +3255,7 @@ func (dcr *ExchangeWallet) privateRefundTx(ctx context.Context, coinID, contract
 	msgTx.AddTxIn(txIn)
 
 	// Calculate fees and add the change output.
-	size := msgTx.SerializeSize() + dexdcr.RefundPrivateScriptSigSize + dexdcr.P2PKHOutputSize
+	size := msgTx.SerializeSize() + RefundPrivateScriptSigSize + P2PKHOutputSize
 	fee := feeRate * uint64(size)
 	if fee > val {
 		return nil, 0, 0, fmt.Errorf("refund tx not worth the fees")
@@ -3266,7 +3271,7 @@ func (dcr *ExchangeWallet) privateRefundTx(ctx context.Context, coinID, contract
 	pkScriptVer, pkScript := refundAddr.PaymentScript()
 	txOut := newTxOut(int64(val-fee), pkScriptVer, pkScript)
 	// One last check for dust.
-	if dexdcr.IsDust(txOut, feeRate) {
+	if IsDust(txOut, feeRate) {
 		return nil, 0, 0, fmt.Errorf("refund output is dust")
 	}
 	msgTx.AddTxOut(txOut)
@@ -3280,7 +3285,7 @@ func (dcr *ExchangeWallet) privateRefundTx(ctx context.Context, coinID, contract
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	redeemSigScript, err := dexdcr.RefundP2SHContract(contract, refundSig, refundPubKey)
+	redeemSigScript, err := RefundP2SHContract(contract, refundSig, refundPubKey)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -3326,7 +3331,7 @@ func (dcr *ExchangeWallet) SwapPrivate(ctx context.Context, swaps *asset.Private
 
 		redeemPKH := stdaddr.Hash160(contract.RedeemPublicKey)
 		refundPKH := stdaddr.Hash160(contract.RefundPublicKey)
-		contractScript, err := dexdcr.MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
+		contractScript, err := MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
 		if err != nil {
 			return nil, nil, nil, 0, fmt.Errorf("unable to create pubkey script: %w", err)
 		}
@@ -3468,7 +3473,7 @@ func (dcr *ExchangeWallet) AuditPrivateContract(coinID, txData []byte, contract 
 
 	redeemPKH := stdaddr.Hash160(contract.RedeemPublicKey)
 	refundPKH := stdaddr.Hash160(contract.RefundPublicKey)
-	expectedContractScript, err := dexdcr.MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
+	expectedContractScript, err := MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
 	if err != nil {
 		return fmt.Errorf("unable to create pubkey script: %w", err)
 	}
@@ -3476,7 +3481,7 @@ func (dcr *ExchangeWallet) AuditPrivateContract(coinID, txData []byte, contract 
 	// Compare the contract hash to the P2SH address.
 	contractHash := dcrutil.Hash160(expectedContractScript)
 	addr := addrs[0]
-	addrScript, err := dexdcr.AddressScript(addr)
+	addrScript, err := AddressScript(addr)
 	if err != nil {
 		return fmt.Errorf("error encoding script address: %w", err)
 	}
@@ -3512,7 +3517,7 @@ func (dcr *ExchangeWallet) GenerateUnsignedRedeemTx(coinID []byte, contract *ass
 	redeemTx := wire.NewMsgTx()
 	redeemTx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Hash: *txHash, Index: vout}, int64(contract.Value), nil))
 
-	size := redeemTx.SerializeSize() + dexdcr.RedeemPrivateSwapSigScriptSize + dexdcr.P2PKHOutputSize
+	size := redeemTx.SerializeSize() + RedeemPrivateSwapSigScriptSize + P2PKHOutputSize
 	fee := feeRate * uint64(size)
 	if fee > contract.Value {
 		return nil, fmt.Errorf("redeem tx not worth the fees")
@@ -3541,7 +3546,7 @@ func (dcr *ExchangeWallet) ValidateAdaptorSecret(adaptorSecret *btcec.ModNScalar
 func privateContractPkScript(contract *asset.PrivateContract, params stdaddr.AddressParamsV0) (contractScript, pkScript []byte, err error) {
 	redeemPKH := stdaddr.Hash160(contract.RedeemPublicKey)
 	refundPKH := stdaddr.Hash160(contract.RefundPublicKey)
-	contractScript, err = dexdcr.MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
+	contractScript, err = MakePrivateContract(redeemPKH, refundPKH, int64(contract.LockTime))
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to create pubkey script: %w", err)
 	}
@@ -3731,7 +3736,7 @@ func (dcr *ExchangeWallet) RedeemPrivate(ctx context.Context, contract *asset.Pr
 	ourSig := append(sig.Serialize(), byte(txscript.SigHashAll))
 	theirSig := append(cpSig.Serialize(), byte(txscript.SigHashAll))
 
-	redeemScript, err := dexdcr.RedeemP2SHPrivateContract(contractScript,
+	redeemScript, err := RedeemP2SHPrivateContract(contractScript,
 		redeemPK.SerializeCompressed(),
 		ourSig,
 		refundPK.SerializeCompressed(),
@@ -3800,7 +3805,7 @@ func (dcr *ExchangeWallet) RefundPrivate(ctx context.Context, coinID util.Bytes,
 }
 
 func parseRedeemPrivateContract(script []byte) (pkRedeemer, sigRedeemer, pkRefund, sigRefund []byte, err error) {
-	if len(script) < dexdcr.RefundPrivateScriptSigSize {
+	if len(script) < RefundPrivateScriptSigSize {
 		err = fmt.Errorf("invalid swap redemption: length = %v", len(script))
 		return
 	}
@@ -3917,7 +3922,7 @@ func (dcr *ExchangeWallet) Swap(ctx context.Context, swaps *asset.Swaps) ([]asse
 		}
 		refundAddrs = append(refundAddrs, revokeAddrV2)
 		// Create the contract, a P2SH redeem script.
-		contractScript, err := dexdcr.MakeContract(contract.Address, revokeAddrV2.String(), contract.SecretHash, int64(contract.LockTime), dcr.chainParams)
+		contractScript, err := MakeContract(contract.Address, revokeAddrV2.String(), contract.SecretHash, int64(contract.LockTime), dcr.chainParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("unable to create pubkey script for address %s: %w", contract.Address, err)
 		}
@@ -4086,7 +4091,7 @@ func (dcr *ExchangeWallet) Redeem(ctx context.Context, form *asset.RedeemForm) (
 		// Extract the swap contract recipient and secret hash and check the secret
 		// hash against the hash of the provided secret.
 		contract := cinfo.contract
-		_, receiver, _, secretHash, err := dexdcr.ExtractSwapDetails(contract, dcr.chainParams)
+		_, receiver, _, secretHash, err := ExtractSwapDetails(contract, dcr.chainParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("error extracting swap addresses: %w", err)
 		}
@@ -4103,7 +4108,7 @@ func (dcr *ExchangeWallet) Redeem(ctx context.Context, form *asset.RedeemForm) (
 	}
 
 	// Calculate the size and the fees.
-	size := msgTx.SerializeSize() + dexdcr.RedeemSwapSigScriptSize*len(form.Redemptions) + dexdcr.P2PKHOutputSize
+	size := msgTx.SerializeSize() + RedeemSwapSigScriptSize*len(form.Redemptions) + P2PKHOutputSize
 
 	customCfg := new(redeemOptions)
 	err := config.Unmapify(form.Options, customCfg)
@@ -4133,7 +4138,7 @@ func (dcr *ExchangeWallet) Redeem(ctx context.Context, form *asset.RedeemForm) (
 		return nil, nil, 0, err
 	}
 	// One last check for dust.
-	if dexdcr.IsDust(txOut, feeRate) {
+	if IsDust(txOut, feeRate) {
 		return nil, nil, 0, fmt.Errorf("redeem output is dust")
 	}
 	msgTx.AddTxOut(txOut)
@@ -4144,7 +4149,7 @@ func (dcr *ExchangeWallet) Redeem(ctx context.Context, form *asset.RedeemForm) (
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		redeemSigScript, err := dexdcr.RedeemP2SHContract(contract, redeemSig, redeemPubKey, r.Secret)
+		redeemSigScript, err := RedeemP2SHContract(contract, redeemSig, redeemPubKey, r.Secret)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -4268,7 +4273,7 @@ func (dcr *ExchangeWallet) AuditContract(coinID, contract, txData util.Bytes, re
 	}
 
 	// Get the receiving address.
-	_, receiver, stamp, secretHash, err := dexdcr.ExtractSwapDetails(contract, dcr.chainParams)
+	_, receiver, stamp, secretHash, err := ExtractSwapDetails(contract, dcr.chainParams)
 	if err != nil {
 		return nil, fmt.Errorf("error extracting swap addresses: %w", err)
 	}
@@ -4333,7 +4338,7 @@ func (dcr *ExchangeWallet) AuditContract(coinID, contract, txData util.Bytes, re
 	// Compare the contract hash to the P2SH address.
 	contractHash := dcrutil.Hash160(contract)
 	addr := addrs[0]
-	addrScript, err := dexdcr.AddressScript(addr)
+	addrScript, err := AddressScript(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -4463,7 +4468,7 @@ func (dcr *ExchangeWallet) LockTimeExpired(ctx context.Context, lockTime time.Ti
 // ContractLockTimeExpired returns true if the specified contract's locktime has
 // expired, making it possible to issue a Refund.
 func (dcr *ExchangeWallet) ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error) {
-	_, _, locktime, _, err := dexdcr.ExtractSwapDetails(contract, dcr.chainParams)
+	_, _, locktime, _, err := ExtractSwapDetails(contract, dcr.chainParams)
 	if err != nil {
 		return false, time.Time{}, fmt.Errorf("error extracting contract locktime: %w", err)
 	}
@@ -4790,8 +4795,8 @@ func (dcr *ExchangeWallet) findRedemptionsInTx(scanPoint string, tx *wire.MsgTx,
 			}
 			found++
 
-			scriptHash := dexdcr.ExtractScriptHash(req.contractOutputScriptVer, req.contractP2SHScript)
-			secret, err := dexdcr.FindKeyPush(req.contractOutputScriptVer, txIn.SignatureScript, scriptHash, dcr.chainParams)
+			scriptHash := ExtractScriptHash(req.contractOutputScriptVer, req.contractP2SHScript)
+			secret, err := FindKeyPush(req.contractOutputScriptVer, txIn.SignatureScript, scriptHash, dcr.chainParams)
 			if err != nil {
 				dcr.log.Errorf("Error parsing contract secret for %s from tx input %s:%d in %s: %v",
 					contractOutpoint.String(), redeemTxHash, i, scanPoint, err)
@@ -4948,7 +4953,7 @@ func (dcr *ExchangeWallet) refundTx(ctx context.Context, coinID, contract util.B
 			if spent {
 				spendTx := outFound.spenderTx
 				// Refunds are not batched, so input 0 is always the spender.
-				if dexdcr.IsRefundScript(utxo.Version, spendTx.TxIn[0].SignatureScript, contract, false) {
+				if IsRefundScript(utxo.Version, spendTx.TxIn[0].SignatureScript, contract, false) {
 					return spendTx, 0, 0, nil
 				} // otherwise it must be a redeem
 				return nil, 0, 0, fmt.Errorf("contract %s:%d is spent in %v (%w)",
@@ -4957,7 +4962,7 @@ func (dcr *ExchangeWallet) refundTx(ctx context.Context, coinID, contract util.B
 		}
 	}
 
-	sender, _, lockTime, _, err := dexdcr.ExtractSwapDetails(contract, dcr.chainParams)
+	sender, _, lockTime, _, err := ExtractSwapDetails(contract, dcr.chainParams)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("error extracting swap addresses: %w", err)
 	}
@@ -4973,7 +4978,7 @@ func (dcr *ExchangeWallet) refundTx(ctx context.Context, coinID, contract util.B
 	txIn.Sequence = wire.MaxTxInSequenceNum - 1
 	msgTx.AddTxIn(txIn)
 	// Calculate fees and add the change output.
-	size := msgTx.SerializeSize() + dexdcr.RefundSigScriptSize + dexdcr.P2PKHOutputSize
+	size := msgTx.SerializeSize() + RefundSigScriptSize + P2PKHOutputSize
 	fee := feeRate * uint64(size)
 	if fee > val {
 		return nil, 0, 0, fmt.Errorf("refund tx not worth the fees")
@@ -4988,7 +4993,7 @@ func (dcr *ExchangeWallet) refundTx(ctx context.Context, coinID, contract util.B
 	pkScriptVer, pkScript := refundAddr.PaymentScript()
 	txOut := newTxOut(int64(val-fee), pkScriptVer, pkScript)
 	// One last check for dust.
-	if dexdcr.IsDust(txOut, feeRate) {
+	if IsDust(txOut, feeRate) {
 		return nil, 0, 0, fmt.Errorf("refund output is dust")
 	}
 	msgTx.AddTxOut(txOut)
@@ -4997,7 +5002,7 @@ func (dcr *ExchangeWallet) refundTx(ctx context.Context, coinID, contract util.B
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	redeemSigScript, err := dexdcr.RefundP2SHContract(contract, refundSig, refundPubKey)
+	redeemSigScript, err := RefundP2SHContract(contract, refundSig, refundPubKey)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -5158,10 +5163,10 @@ func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime 
 
 	// TL output.
 	lockTimeSec := lockTime.Unix()
-	if lockTimeSec >= dexdcr.MaxCLTVScriptNum || lockTimeSec <= 0 {
+	if lockTimeSec >= MaxCLTVScriptNum || lockTimeSec <= 0 {
 		return nil, nil, fmt.Errorf("invalid lock time %v", lockTime)
 	}
-	bondScript, err := dexdcr.MakeBondScript(ver, uint32(lockTimeSec), pkh)
+	bondScript, err := MakeBondScript(ver, uint32(lockTimeSec), pkh)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
 	}
@@ -5171,7 +5176,7 @@ func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime 
 	}
 	bondPkScriptVer, bondPkScript := bondAddr.PaymentScript()
 	txOut := newTxOut(int64(amt), bondPkScriptVer, bondPkScript)
-	if dexdcr.IsDust(txOut, feeRate) {
+	if IsDust(txOut, feeRate) {
 		return nil, nil, fmt.Errorf("bond output is dust")
 	}
 	baseTx.AddTxOut(txOut)
@@ -5188,7 +5193,7 @@ func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime 
 
 	// NOTE: this "fund -> addInputCoins -> signTxAndAddChange -> lock prevouts"
 	// sequence might be best encapsulated in a fundRawTransactionMethod.
-	baseSize := uint32(baseTx.SerializeSize()) + dexdcr.P2PKHOutputSize // uint32(dexdcr.MsgTxOverhead + dexdcr.P2PKHOutputSize*3)
+	baseSize := uint32(baseTx.SerializeSize()) + P2PKHOutputSize // uint32(MsgTxOverhead + P2PKHOutputSize*3)
 	enough := sendEnough(amt, feeRate, false, baseSize, true)
 	coins, _, _, _, err := dcr.fund(0, enough)
 	if err != nil {
@@ -5277,7 +5282,7 @@ func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime 
 
 func (dcr *ExchangeWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt uint64,
 	script []byte, priv *secp256k1.PrivateKey, feeRate uint64) (*wire.MsgTx, error) {
-	lockTime, pkhPush, err := dexdcr.ExtractBondDetailsV0(0, script)
+	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
 	if err != nil {
 		return nil, err
 	}
@@ -5298,7 +5303,7 @@ func (dcr *ExchangeWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32,
 	redeemMsgTx.AddTxIn(txIn)
 
 	// Calculate fees and add the refund output.
-	redeemSize := redeemMsgTx.SerializeSize() + dexdcr.RedeemBondSigScriptSize + dexdcr.P2PKHOutputSize
+	redeemSize := redeemMsgTx.SerializeSize() + RedeemBondSigScriptSize + P2PKHOutputSize
 	fee := feeRate * uint64(redeemSize)
 	if fee > amt {
 		return nil, fmt.Errorf("irredeemable bond at fee rate %d atoms/byte", feeRate)
@@ -5310,7 +5315,7 @@ func (dcr *ExchangeWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32,
 	}
 	redeemScriptVer, redeemPkScript := redeemAddr.PaymentScript()
 	redeemTxOut := newTxOut(int64(amt-fee), redeemScriptVer, redeemPkScript)
-	if dexdcr.IsDust(redeemTxOut, feeRate) { // hard to imagine
+	if IsDust(redeemTxOut, feeRate) { // hard to imagine
 		return nil, fmt.Errorf("redeem output is dust")
 	}
 	redeemMsgTx.AddTxOut(redeemTxOut)
@@ -5322,7 +5327,7 @@ func (dcr *ExchangeWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32,
 		return nil, fmt.Errorf("error creating signature for bond redeem input script '%v': %w", redeemAddr, err)
 	}
 
-	bondRedeemSigScript, err := dexdcr.RefundBondScript(script, redeemInSig, pk)
+	bondRedeemSigScript, err := RefundBondScript(script, redeemInSig, pk)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build bond redeem input script: %w", err)
 	}
@@ -5339,7 +5344,7 @@ func (dcr *ExchangeWallet) RefundBond(ctx context.Context, ver uint16, coinID, s
 	if ver != 0 {
 		return nil, errors.New("only version 0 bonds supported")
 	}
-	lockTime, pkhPush, err := dexdcr.ExtractBondDetailsV0(0, script)
+	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
 	if err != nil {
 		return nil, err
 	}
@@ -5432,12 +5437,12 @@ func (dcr *ExchangeWallet) FindBond(ctx context.Context, coinID []byte, searchUn
 		if len(msgTx.TxOut) < 2 {
 			return nil, fmt.Errorf("tx %s is not a v0 bond transaction: too few outputs", txHash)
 		}
-		_, lockTime, pkh, err := dexdcr.ExtractBondCommitDataV0(0, msgTx.TxOut[1].PkScript)
+		_, lockTime, pkh, err := ExtractBondCommitDataV0(0, msgTx.TxOut[1].PkScript)
 		if err != nil {
 			return nil, fmt.Errorf("unable to extract bond commitment details from output 1 of %s: %v", txHash, err)
 		}
 		// Sanity check.
-		bondScript, err := dexdcr.MakeBondScript(0, lockTime, pkh[:])
+		bondScript, err := MakeBondScript(0, lockTime, pkh[:])
 		if err != nil {
 			return nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
 		}
@@ -5774,7 +5779,7 @@ func (dcr *ExchangeWallet) SyncStatus() (ss *asset.SyncStatus, err error) {
 // Combines the RPC type with the spending input information.
 type compositeUTXO struct {
 	rpc   *walletjson.ListUnspentResult
-	input *dexdcr.SpendInfo
+	input *SpendInfo
 	confs int64
 	// TODO: consider including isDexChange bool for consumer
 }
@@ -5799,14 +5804,14 @@ func (dcr *ExchangeWallet) parseUTXOs(unspents []*walletjson.ListUnspentResult) 
 
 		// NOTE: listunspent does not indicate script version, so for the
 		// purposes of our funding coins, we are going to assume 0.
-		nfo, err := dexdcr.InputInfo(0, scriptPK, redeemScript, dcr.chainParams)
+		nfo, err := InputInfo(0, scriptPK, redeemScript, dcr.chainParams)
 		if err != nil {
 			if errors.Is(err, util.UnsupportedScriptError) {
 				continue
 			}
 			return nil, fmt.Errorf("error reading asset info: %w", err)
 		}
-		if nfo.ScriptType == dexdcr.ScriptUnsupported || nfo.NonStandardScript {
+		if nfo.ScriptType == ScriptUnsupported || nfo.NonStandardScript {
 			// InputInfo sets NonStandardScript for P2SH with non-standard
 			// redeem scripts. Don't return these since they cannot fund
 			// arbitrary txns.
@@ -5856,7 +5861,7 @@ func (dcr *ExchangeWallet) withdraw(addr stdaddr.Address, val, feeRate uint64) (
 	if val == 0 {
 		return nil, 0, fmt.Errorf("cannot withdraw value = 0")
 	}
-	baseSize := uint32(dexdcr.MsgTxOverhead + dexdcr.P2PKHOutputSize*2)
+	baseSize := uint32(MsgTxOverhead + P2PKHOutputSize*2)
 	reportChange := dcr.wallet.Accounts().UnmixedAccount == "" // otherwise change goes to unmixed account
 	enough := sendEnough(val, feeRate, true, baseSize, reportChange)
 	reserves := dcr.bondReserves.Load()
@@ -5880,8 +5885,8 @@ func (dcr *ExchangeWallet) withdraw(addr stdaddr.Address, val, feeRate uint64) (
 // in addition to the sent amount, and the output will be the zeroth output.
 // TODO: Just use the sendtoaddress rpc since dcrwallet respects locked utxos!
 func (dcr *ExchangeWallet) sendToAddress(addr stdaddr.Address, amt, feeRate uint64) (*wire.MsgTx, uint64, uint64, error) {
-	baseSize := uint32(dexdcr.MsgTxOverhead + dexdcr.P2PKHOutputSize*2) // may be extra if change gets omitted (see signTxAndAddChange)
-	reportChange := dcr.wallet.Accounts().UnmixedAccount == ""          // otherwise change goes to unmixed account
+	baseSize := uint32(MsgTxOverhead + P2PKHOutputSize*2)      // may be extra if change gets omitted (see signTxAndAddChange)
+	reportChange := dcr.wallet.Accounts().UnmixedAccount == "" // otherwise change goes to unmixed account
 	enough := sendEnough(amt, feeRate, false, baseSize, reportChange)
 	reserves := dcr.bondReserves.Load()
 	coins, _, _, _, err := dcr.fund(reserves, enough)
@@ -6069,7 +6074,7 @@ func (dcr *ExchangeWallet) signTxAndAddChange(ctx context.Context, baseTx *wire.
 	var changeAdded bool
 	var changeAddress stdaddr.Address
 	var changeOutput *wire.TxOut
-	minFeeWithChange := (size + dexdcr.P2PKHOutputSize) * feeRate
+	minFeeWithChange := (size + P2PKHOutputSize) * feeRate
 	if remaining > minFeeWithChange {
 		changeValue := remaining - minFeeWithChange
 		if subtractFrom >= 0 {
@@ -6077,7 +6082,7 @@ func (dcr *ExchangeWallet) signTxAndAddChange(ctx context.Context, baseTx *wire.
 			// from the specified existing output.
 			changeValue = remaining
 		}
-		if !dexdcr.IsDustVal(dexdcr.P2PKHOutputSize, changeValue, feeRate) {
+		if !IsDustVal(P2PKHOutputSize, changeValue, feeRate) {
 			if subtractFrom >= 0 { // only subtract after dust check
 				baseTx.TxOut[subtractFrom].Value -= int64(minFeeWithChange)
 				remaining += minFeeWithChange
@@ -6141,7 +6146,7 @@ func (dcr *ExchangeWallet) signTxAndAddChange(ctx context.Context, baseTx *wire.
 			tried[lastFee] = true
 			subtractee.Value = int64(reservoir - reqFee) // next
 			lastFee = reqFee
-			if dexdcr.IsDust(subtractee, feeRate) {
+			if IsDust(subtractee, feeRate) {
 				// Another condition that should be impossible, but check anyway in case
 				// the maximum fee was underestimated causing the first check to be
 				// missed.
@@ -6248,7 +6253,7 @@ func (dcr *ExchangeWallet) EstimateSendTxFee(address string, sendAmount, feeRate
 	remaining := sum - sendAmount
 
 	// Check if there will be a change output if there is enough remaining.
-	estFeeWithChange := (txSize + dexdcr.P2PKHOutputSize) * feeRate
+	estFeeWithChange := (txSize + P2PKHOutputSize) * feeRate
 	var changeValue uint64
 	if remaining > estFeeWithChange {
 		changeValue = remaining - estFeeWithChange
@@ -6260,7 +6265,7 @@ func (dcr *ExchangeWallet) EstimateSendTxFee(address string, sendAmount, feeRate
 	}
 
 	var finalFee uint64
-	if dexdcr.IsDustVal(dexdcr.P2PKHOutputSize, changeValue, feeRate) {
+	if IsDustVal(P2PKHOutputSize, changeValue, feeRate) {
 		// remaining cannot cover a non-dust change and the fee for the change.
 		finalFee = estFee + remaining
 	} else {
@@ -6273,7 +6278,7 @@ func (dcr *ExchangeWallet) EstimateSendTxFee(address string, sendAmount, feeRate
 // StandardSendFee returns the fees for a simple send tx with one input and two
 // outputs.
 func (dcr *ExchangeWallet) StandardSendFee(feeRate uint64) uint64 {
-	var baseSize uint64 = dexdcr.MsgTxOverhead + dexdcr.P2PKHOutputSize*2 + dexdcr.P2PKHInputSize
+	var baseSize uint64 = MsgTxOverhead + P2PKHOutputSize*2 + P2PKHInputSize
 	return feeRate * baseSize
 }
 
@@ -7033,7 +7038,7 @@ func (dcr *ExchangeWallet) broadcastTx(ctx context.Context, signedTx *wire.MsgTx
 	// Transactions larger than 100KB will be rejected by the mempool even though
 	// they would be valid according to consensus rules.
 	txSize := signedTx.SerializeSize()
-	maxSize := uint64(dexdcr.MaxStandardTxSize)
+	maxSize := uint64(MaxStandardTxSize)
 
 	if uint64(txSize) > maxSize {
 		return nil, fmt.Errorf(
@@ -7058,7 +7063,7 @@ func (dcr *ExchangeWallet) broadcastTx(ctx context.Context, signedTx *wire.MsgTx
 			continue
 		}
 
-		if dexdcr.IsDust(txOut, feeRate) {
+		if IsDust(txOut, feeRate) {
 			// Calculate minimum non-dust value for error message.
 			totalSize := uint64(txOut.SerializeSize()) + 165
 			minValue := feeRate * totalSize * 3
@@ -7090,7 +7095,7 @@ func (dcr *ExchangeWallet) broadcastTx(ctx context.Context, signedTx *wire.MsgTx
 // createSig creates and returns the serialized raw signature and compressed
 // pubkey for a transaction input signature.
 func (dcr *ExchangeWallet) createSig(ctx context.Context, tx *wire.MsgTx, idx int, pkScript []byte, addr stdaddr.Address) (sig, pubkey []byte, err error) {
-	sigType, err := dexdcr.AddressSigType(addr)
+	sigType, err := AddressSigType(addr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -7259,7 +7264,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			return false, nil
 		}
 		const scriptVer = 0
-		acctID, lockTime, pkHash, err := dexdcr.ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
+		acctID, lockTime, pkHash, err := ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
 		if err != nil {
 			return false, nil
 		}
@@ -7319,7 +7324,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 
 	// Swap redemptions and refunds
 	contractIsSwap := func(contract []byte) bool {
-		_, _, _, _, err := dexdcr.ExtractSwapDetails(contract, dcr.chainParams)
+		_, _, _, _, err := ExtractSwapDetails(contract, dcr.chainParams)
 		return err == nil
 	}
 	redeemsSwap := func(msgTx *wire.MsgTx) bool {
@@ -7350,7 +7355,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		var bondInfo *asset.BondTxInfo
 		isBond := func(contract []byte) bool {
 			const scriptVer = 0
-			lockTime, pkHash, err := dexdcr.ExtractBondDetailsV0(scriptVer, contract)
+			lockTime, pkHash, err := ExtractBondDetailsV0(scriptVer, contract)
 			if err != nil {
 				return false
 			}
@@ -8420,13 +8425,13 @@ func (dcr *ExchangeWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asse
 			for i := range spendTx.TxIn {
 				sigScript := spendTx.TxIn[i].SignatureScript
 				sigScriptLen := len(sigScript)
-				if sigScriptLen < dexdcr.SwapContractSize {
+				if sigScriptLen < SwapContractSize {
 					continue
 				}
 				// The spent contract is at the end of the signature
 				// script. Lop off the front half.
-				script := sigScript[sigScriptLen-dexdcr.SwapContractSize:]
-				_, _, _, sh, err := dexdcr.ExtractSwapDetails(script, dcr.chainParams)
+				script := sigScript[sigScriptLen-SwapContractSize:]
+				_, _, _, sh, err := ExtractSwapDetails(script, dcr.chainParams)
 				if err != nil {
 					// This is not our script, but not necessarily
 					// a problem.
@@ -8571,9 +8576,9 @@ func (dcr *ExchangeWallet) RedeemGeocode(code []byte, msg string) (util.Bytes, u
 		return nil, 0, fmt.Errorf("no spendable game outputs found in %d txs for address %s", len(gameTxs), gameAddr)
 	}
 
-	var txSize uint64 = dexdcr.MsgTxOverhead + uint64(len(redeemTx.TxIn))*dexdcr.P2PKHInputSize + dexdcr.P2PKHOutputSize
+	var txSize uint64 = MsgTxOverhead + uint64(len(redeemTx.TxIn))*P2PKHInputSize + P2PKHOutputSize
 	if msgLen > 0 {
-		txSize += dexdcr.TxOutOverhead + 1 /* opreturn */ + uint64(wire.VarIntSerializeSize(uint64(msgLen))) + uint64(msgLen)
+		txSize += TxOutOverhead + 1 /* opreturn */ + uint64(wire.VarIntSerializeSize(uint64(msgLen))) + uint64(msgLen)
 	}
 	fees := feeRate * txSize
 
@@ -8581,7 +8586,7 @@ func (dcr *ExchangeWallet) RedeemGeocode(code []byte, msg string) (util.Bytes, u
 		return nil, 0, fmt.Errorf("estimated fees %d are less than the redeemable value %d", fees, redeemable)
 	}
 	win := uint64(redeemable) - fees
-	if dexdcr.IsDustVal(dexdcr.P2PKHOutputSize, win, feeRate) {
+	if IsDustVal(P2PKHOutputSize, win, feeRate) {
 		return nil, 0, fmt.Errorf("received value is dust after fees: %d - %d = %d", redeemable, fees, win)
 	}
 
@@ -8709,7 +8714,7 @@ func (dcr *ExchangeWallet) SendFundsToMultisig(ctx context.Context, pm *asset.Pa
 	}
 
 	feeRate := dcr.targetFeeRateWithFallback(2, 0)
-	redeemTxSize := dexdcr.PaymentMultisigRedeemTxSize(int64(len(xpubs)), pm.NRequired, int64(len(addrToValue)))
+	redeemTxSize := PaymentMultisigRedeemTxSize(int64(len(xpubs)), pm.NRequired, int64(len(addrToValue)))
 	redeemFee := feeRate * redeemTxSize
 	value += redeemFee
 
@@ -8735,7 +8740,7 @@ func (dcr *ExchangeWallet) SendFundsToMultisig(ctx context.Context, pm *asset.Pa
 		return nil, err
 	}
 
-	redeemScript, err := dexdcr.MakePaymentMultisig(addr.String(), xpubs, pm.NRequired, pm.Locktime, dcr.chainParams)
+	redeemScript, err := MakePaymentMultisig(addr.String(), xpubs, pm.NRequired, pm.Locktime, dcr.chainParams)
 	if err != nil {
 		return nil, fmt.Errorf("unable to make multisig redeem script: %v", err)
 	}
@@ -8818,12 +8823,12 @@ func (dcr *ExchangeWallet) SignMultisig(ctx context.Context, pmTx *asset.Payment
 		return nil, errors.New("spending tx does not have an input")
 	}
 
-	redeemScript, sigs, err := dexdcr.SigsFromPaymentMultisig(msgTx.TxIn[0].SignatureScript)
+	redeemScript, sigs, err := SigsFromPaymentMultisig(msgTx.TxIn[0].SignatureScript)
 	if err != nil {
 		return nil, err
 	}
 
-	nRequired, _, _, pubKeys, err := dexdcr.ExtractPaymentMultisigDetails(redeemScript)
+	nRequired, _, _, pubKeys, err := ExtractPaymentMultisigDetails(redeemScript)
 	if err != nil {
 		return nil, err
 	}
@@ -8866,7 +8871,7 @@ func (dcr *ExchangeWallet) SignMultisig(ctx context.Context, pmTx *asset.Payment
 		return nil, err
 	}
 	// Add our signature to the others and repace the sig script.
-	sigScript, err := dexdcr.RedeemPaymentMultisig(redeemScript, insert(sigs, sigOffset, sig))
+	sigScript, err := RedeemPaymentMultisig(redeemScript, insert(sigs, sigOffset, sig))
 	if err != nil {
 		return nil, err
 	}
@@ -8899,12 +8904,12 @@ func (dcr *ExchangeWallet) RefundMultisig(ctx context.Context, pmTx *asset.Payme
 		return "", errors.New("spending tx does not have an input")
 	}
 
-	redeemScript, _, err := dexdcr.SigsFromPaymentMultisig(msgTx.TxIn[0].SignatureScript)
+	redeemScript, _, err := SigsFromPaymentMultisig(msgTx.TxIn[0].SignatureScript)
 	if err != nil {
 		return "", err
 	}
 
-	_, sender, locktime, pubKeys, err := dexdcr.ExtractPaymentMultisigDetails(redeemScript)
+	_, sender, locktime, pubKeys, err := ExtractPaymentMultisigDetails(redeemScript)
 	if err != nil {
 		return "", err
 	}
@@ -8922,7 +8927,7 @@ func (dcr *ExchangeWallet) RefundMultisig(ctx context.Context, pmTx *asset.Payme
 		return "", fmt.Errorf("error generating address: %v", err)
 	}
 
-	size := dexdcr.PaymentMultisigRefundTxSize(int64(len(pubKeys)))
+	size := PaymentMultisigRefundTxSize(int64(len(pubKeys)))
 	feeRate := dcr.targetFeeRateWithFallback(2, 0)
 	refundFee := int64(feeRate) * int64(size)
 	pkScriptVer, pkScript := addr.PaymentScript()
@@ -8935,7 +8940,7 @@ func (dcr *ExchangeWallet) RefundMultisig(ctx context.Context, pmTx *asset.Payme
 	if err != nil {
 		return "", err
 	}
-	sigScript, err := dexdcr.RefundPaymentMultisig(redeemScript, pubkey, redeemSig)
+	sigScript, err := RefundPaymentMultisig(redeemScript, pubkey, redeemSig)
 	if err != nil {
 		return "", err
 	}
@@ -9161,12 +9166,12 @@ func (dcr *ExchangeWallet) ViewPaymentMultisig(pmTx *asset.PaymentMultisigTx) (s
 		return "", errors.New("spending tx does not have an input")
 	}
 
-	redeemScript, sigs, err := dexdcr.SigsFromPaymentMultisig(msgTx.TxIn[0].SignatureScript)
+	redeemScript, sigs, err := SigsFromPaymentMultisig(msgTx.TxIn[0].SignatureScript)
 	if err != nil {
 		return "", err
 	}
 
-	nRequired, sender, locktime, pubKeys, err := dexdcr.ExtractPaymentMultisigDetails(redeemScript)
+	nRequired, sender, locktime, pubKeys, err := ExtractPaymentMultisigDetails(redeemScript)
 	if err != nil {
 		return "", err
 	}

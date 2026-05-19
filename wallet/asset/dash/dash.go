@@ -8,10 +8,9 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexdash "github.com/bisoncraft/bosswallet/util/networks/dash"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )
@@ -30,7 +29,7 @@ var (
 			Key:          "fallbackfee",
 			DisplayName:  "Fallback fee rate",
 			Description:  "Dash's 'fallbackfee' rate. Units: DASH/kB",
-			DefaultValue: strconv.FormatFloat(dexdash.DefaultFee*1000/1e8, 'f', -1, 64),
+			DefaultValue: strconv.FormatFloat(DefaultFee*1000/1e8, 'f', -1, 64),
 		},
 		{
 			Key:         "feeratelimit",
@@ -39,7 +38,7 @@ var (
 				"pay on swap transactions. If feeratelimit is lower than a market's " +
 				"maxfeerate, you will not be able to trade on that market with this " +
 				"wallet.  Units: DASH/kB",
-			DefaultValue: strconv.FormatFloat(dexdash.DefaultFeeRateLimit*1000/1e8, 'f', -1, 64),
+			DefaultValue: strconv.FormatFloat(DefaultFeeRateLimit*1000/1e8, 'f', -1, 64),
 		},
 		{
 			Key:         "redeemconftarget",
@@ -61,21 +60,25 @@ var (
 		},
 	}...)
 
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:              walletTypeRPC,
+		Tab:               "Dash Core (external)",
+		Description:       "Connect to dashd",
+		DefaultConfigPath: dexbtc.SystemConfigPath("dash"),
+		ConfigOpts:        configOpts,
+	}
+
 	// WalletInfo defines some general information about a Dash wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Dash",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexdash.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{
-			{
-				Type:              walletTypeRPC,
-				Tab:               "Dash Core (external)",
-				Description:       "Connect to dashd",
-				DefaultConfigPath: dexbtc.SystemConfigPath("dash"),
-				ConfigOpts:        configOpts,
-			},
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
 		},
-		BlockchainClass: asset.BlockchainClassUTXO,
 	}
 )
 
@@ -114,11 +117,11 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	var params *chaincfg.Params
 	switch network {
 	case util.Mainnet:
-		params = dexdash.MainNetParams
+		params = MainNetParams
 	case util.Testnet:
-		params = dexdash.TestNetParams
+		params = TestNetParams
 	case util.Regtest:
-		params = dexdash.RegressionNetParams
+		params = RegressionNetParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", network)
 	}
@@ -139,8 +142,8 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		Network:             network,
 		ChainParams:         params,
 		Ports:               ports,
-		DefaultFallbackFee:  dexdash.DefaultFee,
-		DefaultFeeRateLimit: dexdash.DefaultFeeRateLimit,
+		DefaultFallbackFee:  DefaultFee,
+		DefaultFeeRateLimit: DefaultFeeRateLimit,
 		LegacyBalance:       false,
 		Segwit:              false,
 		// Dash v19.1.0 has a breaking change from the true/false 'allowhighfees'

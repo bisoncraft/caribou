@@ -62,7 +62,7 @@ const (
 	// According to the gw-ratelimit-limit header, we can make 2000 requests
 	// every 24hours(I think there's only a gw-ratelimit-reset header set to
 	// 30000 but can't decipher if it's in seconds or minutes). Multiple tickers
-	// can be requested in a single call (Firo and ZCL not supported). See
+	// can be requested in a single call (Firo not supported). See
 	// Header values for
 	// https://api.kucoin.com/api/v1/prices?currencies=BTC,DCR. Requesting for
 	// ticker data every 5min gives us 288 calls per day, with the remaining
@@ -272,9 +272,6 @@ func parseBinanceTickers(tickerSymbols []string) string {
 	var tickers strings.Builder
 	for _, ticker := range tickerSymbols {
 		ticker = parseTicker(ticker)
-		if strings.EqualFold(ticker, "zcl") { // not supported on binance as of writing
-			continue
-		}
 		tickers.WriteString(fmt.Sprintf("%q,", ticker+"USDT"))
 	}
 	return strings.Trim(tickers.String(), ",")

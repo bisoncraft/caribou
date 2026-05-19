@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -146,7 +145,7 @@ func (r *RedemptionFinder) FindRedemption(ctx context.Context, coinID util.Bytes
 		blockHeight:  blockHeight,
 		resultChan:   make(chan *FindRedemptionResult, 1),
 		pkScript:     pkScript,
-		contractHash: dexbtc.ExtractScriptHash(pkScript),
+		contractHash: ExtractScriptHash(pkScript),
 	}
 
 	if err := r.queueFindRedemptionRequest(req); err != nil {
@@ -538,7 +537,7 @@ func FindRedemptionsInTxWithHasher(ctx context.Context, segwit bool, reqs map[Ou
 			if outPt.TxHash == poHash && outPt.Vout == poVout {
 				// Match!
 				txHash := hashTx(msgTx)
-				secret, err := dexbtc.FindKeyPush(txIn.Witness, txIn.SignatureScript, req.contractHash[:], segwit, chainParams)
+				secret, err := FindKeyPush(txIn.Witness, txIn.SignatureScript, req.contractHash[:], segwit, chainParams)
 				if err != nil {
 					req.fail("no secret extracted from redemption input %s:%d for swap output %s: %v",
 						txHash, vin, outPt, err)

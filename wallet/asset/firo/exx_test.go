@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"testing"
 
-	dexfiro "github.com/bisoncraft/bosswallet/util/networks/firo"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcutil"
 )
@@ -27,7 +26,7 @@ const (
 ///////////////////////////////////////////////////////////////////////////////
 
 func TestDecodeExxAddress(t *testing.T) {
-	addr, err := decodeExxAddress(exxAddress, dexfiro.MainNetParams)
+	addr, err := decodeExxAddress(exxAddress, MainNetParams)
 	if err != nil {
 		t.Fatalf("addr=%v - %v", addr, err)
 	}
@@ -39,7 +38,7 @@ func TestDecodeExxAddress(t *testing.T) {
 		t.Fatalf("invalid type=%T", ty)
 	}
 
-	if !addr.IsForNet(dexfiro.MainNetParams) {
+	if !addr.IsForNet(MainNetParams) {
 		t.Fatalf("IsForNet failed")
 	}
 	scriptAddressB, err := hex.DecodeString(scriptAddress)
@@ -60,7 +59,7 @@ func TestDecodeExxAddress(t *testing.T) {
 }
 
 func TestBuildExxPayToScript(t *testing.T) {
-	addr, err := decodeExxAddress(exxAddress, dexfiro.MainNetParams)
+	addr, err := decodeExxAddress(exxAddress, MainNetParams)
 	if err != nil {
 		t.Fatalf("addr=%v - %v", addr, err)
 	}
@@ -87,7 +86,7 @@ func TestBuildExxPayToScript(t *testing.T) {
 ///////////////////////////////////////////////////////////////////////////////
 
 func TestDecodeExtAddress(t *testing.T) {
-	addr, err := decodeExxAddress(testnetExtAddress, dexfiro.TestNetParams)
+	addr, err := decodeExxAddress(testnetExtAddress, TestNetParams)
 	if err != nil {
 		t.Fatalf("testnet - addr=%v - %v", addr, err)
 	}
@@ -99,7 +98,7 @@ func TestDecodeExtAddress(t *testing.T) {
 		t.Fatalf("testnet - invalid type=%T", ty)
 	}
 
-	if !addr.IsForNet(dexfiro.TestNetParams) {
+	if !addr.IsForNet(TestNetParams) {
 		t.Fatalf("testnet - IsForNet failed")
 	}
 	testnetScriptAddressB, err := hex.DecodeString(testnetScriptAddress)
@@ -120,7 +119,7 @@ func TestDecodeExtAddress(t *testing.T) {
 }
 
 func TestBuildExtPayToScript(t *testing.T) {
-	addr, err := decodeExxAddress(testnetExtAddress, dexfiro.TestNetParams)
+	addr, err := decodeExxAddress(testnetExtAddress, TestNetParams)
 	if err != nil {
 		t.Fatalf("testnet - addr=%v - %v", addr, err)
 	}

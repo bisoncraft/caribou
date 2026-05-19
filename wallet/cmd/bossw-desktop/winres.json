@@ -24,14 +24,14 @@
           "0409": {
             "Comments": "",
             "CompanyName": "Decred",
-            "FileDescription": "Bison Wallet (WebView version)",
+            "FileDescription": "Boss Wallet (WebView version)",
             "FileVersion": "1.1.0.0-rc2",
             "InternalName": "bossw",
             "LegalCopyright": "© The Decred Developers. Blue Oak Model License 1.0.0",
             "LegalTrademarks": "",
             "OriginalFilename": "bossw-desktop.exe",
             "PrivateBuild": "",
-            "ProductName": "Bison Wallet",
+            "ProductName": "Boss Wallet",
             "ProductVersion": "1.1.0.0-rc2",
             "SpecialBuild": ""
           }

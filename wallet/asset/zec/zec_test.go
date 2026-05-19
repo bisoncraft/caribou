@@ -19,10 +19,9 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexzec "github.com/bisoncraft/bosswallet/util/networks/zec"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
@@ -50,7 +49,7 @@ var (
 )
 
 type msgBlockWithHeight struct {
-	msgBlock *dexzec.Block
+	msgBlock *Block
 	height   int64
 }
 
@@ -60,30 +59,30 @@ func generateTestBlockTime(blockHeight int64) time.Time {
 	return time.Unix(1e6, 0).Add(time.Duration(blockHeight) * maxFutureBlockTime / testBlocksPerBlockTimeOffset)
 }
 
-func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *dexzec.Tx {
+func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *Tx {
 	tx := &wire.MsgTx{
 		TxIn: inputs,
 	}
 	for _, pkScript := range pkScripts {
 		tx.TxOut = append(tx.TxOut, wire.NewTxOut(1, pkScript))
 	}
-	return dexzec.NewTxFromMsgTx(tx, dexzec.MaxExpiryHeight)
+	return NewTxFromMsgTx(tx, MaxExpiryHeight)
 }
 
 func dummyInput() *wire.TxIn {
 	return wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x01}, 0), nil, nil)
 }
 
-func dummyTx() *dexzec.Tx {
+func dummyTx() *Tx {
 	return makeRawTx([]util.Bytes{encode.RandomBytes(32)}, []*wire.TxIn{dummyInput()})
 }
 
-func signRawJSONTx(raw json.RawMessage) (*dexzec.Tx, []byte) {
+func signRawJSONTx(raw json.RawMessage) (*Tx, []byte) {
 	var txB util.Bytes
 	if err := json.Unmarshal(raw, &txB); err != nil {
 		panic(fmt.Sprintf("error unmarshaling tx: %v", err))
 	}
-	tx, err := dexzec.DeserializeTx(txB)
+	tx, err := DeserializeTx(txB)
 	if err != nil {
 		panic(fmt.Sprintf("error deserializing tx: %v", err))
 	}
@@ -105,7 +104,7 @@ func makeSwapContract(lockTimeOffset time.Duration) (secret []byte, secretHash [
 	secret = encode.RandomBytes(32)
 	secretHash = sha256.Sum256(secret)
 
-	addr, _ = dexzec.DecodeAddress(tAddr, dexzec.RegressionNetAddressParams, dexzec.RegressionNetParams)
+	addr, _ = DecodeAddress(tAddr, RegressionNetAddressParams, RegressionNetParams)
 
 	lockTime = time.Now().Add(lockTimeOffset)
 	contract, err := dexbtc.MakeContract(addr, addr, secretHash[:], lockTime.Unix(), false, &chaincfg.MainNetParams)
@@ -138,7 +137,7 @@ func newRPCClient() *tRPCClient {
 		responses:  make(map[string][]any),
 		tipChanged: make(chan asset.WalletNotification),
 		verboseBlocks: map[string]*msgBlockWithHeight{
-			genesisHash.String(): {msgBlock: &dexzec.Block{}},
+			genesisHash.String(): {msgBlock: &Block{}},
 		},
 		mainchain: map[int64]*chainhash.Hash{
 			0: genesisHash,
@@ -196,7 +195,7 @@ func (c *tRPCClient) getBestBlockHeight() int64 {
 	return bestBlkHeight
 }
 
-func (c *tRPCClient) addRawTx(blockHeight int64, tx *dexzec.Tx) (*chainhash.Hash, *dexzec.Block) {
+func (c *tRPCClient) addRawTx(blockHeight int64, tx *Tx) (*chainhash.Hash, *Block) {
 	c.blockchainMtx.Lock()
 	defer c.blockchainMtx.Unlock()
 	blockHash, found := c.mainchain[blockHeight]
@@ -212,7 +211,7 @@ func (c *tRPCClient) addRawTx(blockHeight int64, tx *dexzec.Tx) (*chainhash.Hash
 		nonce, bits := rand.Uint32(), rand.Uint32()
 		header := wire.NewBlockHeader(0, prevBlock, &chainhash.Hash{} /* lie, maybe fix this */, bits, nonce)
 		header.Timestamp = generateTestBlockTime(blockHeight)
-		blk := &dexzec.Block{MsgBlock: *wire.NewMsgBlock(header)} // only now do we know the block hash
+		blk := &Block{MsgBlock: *wire.NewMsgBlock(header)} // only now do we know the block hash
 		hash := blk.BlockHash()
 		blockHash = &hash
 		c.verboseBlocks[blockHash.String()] = &msgBlockWithHeight{
@@ -441,7 +440,7 @@ func TestFundOrder(t *testing.T) {
 
 	var littleLots uint64 = 12
 	littleOrder := tLotSize * littleLots
-	littleFunds := dexzec.RequiredOrderFunds(littleOrder, 1, dexbtc.RedeemP2PKHInputSize, littleLots)
+	littleFunds := RequiredOrderFunds(littleOrder, 1, dexbtc.RedeemP2PKHInputSize, littleLots)
 	littleUTXO := &btc.ListUnspentResult{
 		TxID:          tTxID,
 		Address:       "tmH2m5fi5yY3Qg2GpGwcCrnnoD4wp944RMJ",
@@ -505,7 +504,7 @@ func TestFundOrder(t *testing.T) {
 	var lottaLots uint64 = 100
 	lottaOrder := tLotSize * lottaLots
 	// Add funding for an extra input to accommodate the later combined tests.
-	lottaFunds := dexzec.RequiredOrderFunds(lottaOrder, 1, dexbtc.RedeemP2PKHInputSize, lottaLots)
+	lottaFunds := RequiredOrderFunds(lottaOrder, 1, dexbtc.RedeemP2PKHInputSize, lottaLots)
 	lottaUTXO := &btc.ListUnspentResult{
 		TxID:          tTxID,
 		Address:       "tmH2m5fi5yY3Qg2GpGwcCrnnoD4wp944RMJ",
@@ -705,7 +704,7 @@ func TestFundOrder(t *testing.T) {
 
 	// Not enough to cover transaction fees.
 	extraLottaLots := littleLots + lottaLots
-	tweak := float64(littleFunds+lottaFunds-dexzec.RequiredOrderFunds(extraLottaOrder, 2, 2*dexbtc.RedeemP2PKHInputSize, extraLottaLots)+1) / 1e8
+	tweak := float64(littleFunds+lottaFunds-RequiredOrderFunds(extraLottaOrder, 2, 2*dexbtc.RedeemP2PKHInputSize, extraLottaLots)+1) / 1e8
 	lottaUTXO.Amount -= tweak
 	// cl.queueResponse("listunspent", unspents)
 	_, _, _, err = w.FundOrder(ord)
@@ -762,7 +761,7 @@ func TestFundOrder(t *testing.T) {
 	}
 
 	// With a little more available, the split should be performed.
-	baggageFees := dexzec.TxFeesZIP317(2*dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+	baggageFees := TxFeesZIP317(2*dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
 	lottaUTXO.Amount += (float64(baggageFees) + 1) / 1e8
 	queueSuccess()
 	queueSplit()
@@ -822,8 +821,8 @@ func TestFundOrder(t *testing.T) {
 	// No reserves, no little UTXO, but shielded funds available for
 	// shielded split
 	unspents = []*btc.ListUnspentResult{lottaUTXO}
-	splitOutputAmt := dexzec.RequiredOrderFunds(ord.Value, 1, dexbtc.RedeemP2PKHInputSize, ord.MaxSwapCount)
-	shieldedSplitFees := dexzec.TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, dexbtc.P2PKHOutputSize+1, 0, 0, 0, nActionsOrchardEstimate)
+	splitOutputAmt := RequiredOrderFunds(ord.Value, 1, dexbtc.RedeemP2PKHInputSize, ord.MaxSwapCount)
+	shieldedSplitFees := TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, dexbtc.P2PKHOutputSize+1, 0, 0, 0, nActionsOrchardEstimate)
 	w.lastAddress.Store(tUnifiedAddr)
 	acctBal.Pools.Orchard.ValueZat = splitOutputAmt + shieldedSplitFees - lottaFunds
 	queueSuccess()
@@ -837,11 +836,11 @@ func TestFundOrder(t *testing.T) {
 			TxID: txid,
 		},
 	}})
-	btcAddr, _ := dexzec.DecodeAddress(tAddr, w.addrParams, w.btcParams)
+	btcAddr, _ := DecodeAddress(tAddr, w.addrParams, w.btcParams)
 	pkScript, _ := txscript.PayToAddrScript(btcAddr)
-	msgTx := wire.NewMsgTx(dexzec.VersionNU5)
+	msgTx := wire.NewMsgTx(VersionNU5)
 	msgTx.TxOut = append(msgTx.TxOut, wire.NewTxOut(int64(splitOutputAmt), pkScript))
-	txB, _ = dexzec.NewTxFromMsgTx(msgTx, dexzec.MaxExpiryHeight).Bytes()
+	txB, _ = NewTxFromMsgTx(msgTx, MaxExpiryHeight).Bytes()
 	cl.getTransactionMap = map[string]*btc.GetTransactionResult{
 		txid: {
 			Bytes: txB,
@@ -1010,7 +1009,7 @@ func TestSwap(t *testing.T) {
 	}
 
 	// Fees should be returned.
-	btcAddr, _ := dexzec.DecodeAddress(tAddr, w.addrParams, w.btcParams)
+	btcAddr, _ := DecodeAddress(tAddr, w.addrParams, w.btcParams)
 	contractScript, err := dexbtc.MakeContract(btcAddr, btcAddr, encode.RandomBytes(32), 0, false, w.btcParams)
 	if err != nil {
 		t.Fatalf("unable to create pubkey script for address %s: %v", contract.Address, err)
@@ -1029,7 +1028,7 @@ func TestSwap(t *testing.T) {
 	}
 	txOutsSize := uint64(wire.NewTxOut(int64(contract.Value), pkScript).SerializeSize())
 	txInsSize := uint64(len(coins))*dexbtc.RedeemP2PKHInputSize + 1
-	fees := dexzec.TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
+	fees := TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
 	if feesPaid != fees {
 		t.Fatalf("sent fees, %d, less than required fees, %d", feesPaid, fees)
 	}
@@ -1319,7 +1318,7 @@ func TestPreSwap(t *testing.T) {
 	const lots = 10
 	swapVal := lots * tLotSize
 
-	singleSwapFees := dexzec.TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, dexbtc.P2SHOutputSize+1, 0, 0, 0, 0)
+	singleSwapFees := TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, dexbtc.P2SHOutputSize+1, 0, 0, 0, 0)
 	bestCaseFees := singleSwapFees
 	worstCaseFees := lots * bestCaseFees
 
@@ -1472,7 +1471,7 @@ func TestFundMultiOrder(t *testing.T) {
 			MaxSwapCount: 1,
 		}},
 	}
-	req := dexzec.RequiredOrderFunds(tLotSize, 1, dexbtc.RedeemP2PKHInputSize, 1)
+	req := RequiredOrderFunds(tLotSize, 1, dexbtc.RedeemP2PKHInputSize, 1)
 
 	// maxLock too low
 	if _, _, _, err := w.FundMultiOrder(mo, 1); !errorHasCode(err, errMaxLock) {

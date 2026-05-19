@@ -41,8 +41,7 @@ const BipIDs: Record<number, string> = {
   966001: 'usdc.polygon',
   966002: 'weth.polygon',
   966003: 'wbtc.polygon',
-  966004: 'usdt.polygon',
-  147: 'zcl'
+  966004: 'usdt.polygon'
 }
 
 const BipSymbolIDs: Record<string, number> = {};

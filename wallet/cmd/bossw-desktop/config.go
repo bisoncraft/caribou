@@ -11,7 +11,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/app"
 )
 
-// Config is the configuration for Bison Wallet.
+// Config is the configuration for Boss Wallet.
 type Config struct {
 	app.Config
 	Kill      bool   `long:"kill" description:"Send a kill signal to a running instance and exit. This is not be supported on darwin"`

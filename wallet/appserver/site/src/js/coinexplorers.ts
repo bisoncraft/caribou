@@ -107,10 +107,6 @@ export const CoinExplorers: Record<number, Record<number, (cid: string) => strin
     [Testnet]: (cid: string) => `https://blockexplorer.one/zcash/testnet/tx/${cid.split(':')[0]}`,
     [Simnet]: (cid: string) => `https://zcashblockexplorer.com/transactions/${cid.split(':')[0]}`
   },
-  147: { // zcl
-    [Mainnet]: (cid: string) => `https://explorer.zcl.zelcore.io/tx/${cid.split(':')[0]}`,
-    [Simnet]: (cid: string) => `https://explorer.zcl.zelcore.io/tx/${cid.split(':')[0]}`
-  },
   128: { // xmr
     [Mainnet]: (cid: string) => `https://monerohash.com/explorer/tx/${cid.split(':')[0]}`
   },

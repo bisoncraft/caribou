@@ -93,15 +93,16 @@ func RegisterToken(
 	walletDef *WalletDefinition,
 	erc20NetAddrs map[util.Network]string,
 	netSupportedAssetVersions map[util.Network][]uint32,
+	overwrite ...bool,
 ) {
 	driversMtx.Lock()
 	defer driversMtx.Unlock()
-	if _, exists := tokens[tokenID]; exists {
+	if _, exists := tokens[tokenID]; exists && !(len(overwrite) > 0 && overwrite[0]) {
 		panic(fmt.Sprintf("token %d already exists", tokenID))
 	}
-	_, exists := drivers[token.ParentID]
+	_, exists := drivers[token.NetworkID]
 	if !exists {
-		panic(fmt.Sprintf("token %d's parent asset %d isn't registered", tokenID, token.ParentID))
+		panic(fmt.Sprintf("token %d's network asset %d isn't registered", tokenID, token.NetworkID))
 	}
 	tokens[tokenID] = &nettedToken{
 		Token: &Token{
@@ -159,12 +160,12 @@ func DecodeCoinID(assetID uint32, coinID []byte) (cid string, err error) {
 	if !ok {
 		return "", fmt.Errorf("no driver or token info for asset %d (%s)", assetID, util.BipIDSymbol(assetID))
 	}
-	drv, ok = drivers[tkn.ParentID]
+	drv, ok = drivers[tkn.NetworkID]
 	if ok {
 		return drv.DecodeCoinID(coinID)
 	}
-	return "", fmt.Errorf("no %d (%s) parent asset driver for token %d (%s)",
-		tkn.ParentID, util.BipIDSymbol(tkn.ParentID), assetID, util.BipIDSymbol(assetID))
+	return "", fmt.Errorf("no %d (%s) network asset driver for token %d (%s)",
+		tkn.NetworkID, util.BipIDSymbol(tkn.NetworkID), assetID, util.BipIDSymbol(assetID))
 }
 
 // A registered asset is information about a supported asset.
@@ -189,16 +190,16 @@ func Assets() map[uint32]*RegisteredAsset {
 	}
 
 	for tokenID, token := range tokens {
-		parent, found := assets[token.ParentID]
+		network, found := assets[token.NetworkID]
 		if !found {
 			// should be impossible.
-			fmt.Println("parentless token", tokenID, token.Name)
+			fmt.Println("networkless token", tokenID, token.Name)
 			continue
 		}
-		if parent.Tokens == nil {
-			parent.Tokens = make(map[uint32]*Token, 1)
+		if network.Tokens == nil {
+			network.Tokens = make(map[uint32]*Token, 1)
 		}
-		parent.Tokens[tokenID] = token.Token
+		network.Tokens[tokenID] = token.Token
 	}
 	return assets
 }
@@ -218,7 +219,7 @@ func Asset(assetID uint32) *RegisteredAsset {
 		Info:   drv.Info(),
 	}
 	for tokenID, token := range tokens {
-		if token.ParentID == assetID {
+		if token.NetworkID == assetID {
 			if ra.Tokens == nil {
 				ra.Tokens = make(map[uint32]*Token, 1)
 			}
@@ -314,7 +315,7 @@ func WalletDef(assetID uint32, walletType string) (*WalletDefinition, error) {
 func MinimumLotSize(assetID uint32, maxFeeRate uint64) (minLotSize uint64, found bool) {
 	baseChainID := assetID
 	if token, is := tokens[assetID]; is {
-		baseChainID = token.ParentID
+		baseChainID = token.NetworkID
 	}
 	drv, found := drivers[baseChainID]
 	if !found {

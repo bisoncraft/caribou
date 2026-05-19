@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexnear "github.com/bisoncraft/bosswallet/util/networks/near"
 	"golang.org/x/net/proxy"
 )
 
@@ -316,7 +315,7 @@ func (r *txResult) transferAmount() uint64 {
 		if a.Transfer != nil {
 			yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
 			if ok {
-				total += dexnear.YoctoToDrops(yocto)
+				total += YoctoToDrops(yocto)
 			}
 		}
 	}

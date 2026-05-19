@@ -2,7 +2,7 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 /*
-bossw-desktop is the Desktop version of Bison Wallet. There are a number of
+bossw-desktop is the Desktop version of Boss Wallet. There are a number of
 differences that make this version more suitable for less tech-savvy users.
 
 | CLI version                       | Desktop version                          |
@@ -60,7 +60,7 @@ import (
 
 const (
 	appName  = "bossw-desktop"
-	appTitle = "Bison Wallet"
+	appTitle = "Boss Wallet"
 )
 
 var (

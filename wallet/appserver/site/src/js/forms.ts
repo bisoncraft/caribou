@@ -368,7 +368,7 @@ export class NewWalletForm {
     this.subform.update(asset.id, configOpts, false)
     this.setGuideLink(guideLink)
 
-    // A seeded or token wallet is internal to Bison Wallet and as such does
+    // A seeded or token wallet is internal to Boss Wallet and as such does
     // not have an external config file to select.
     if (walletDef.seeded || Boolean(this.current.asset.token)) Doc.hide(this.subform.fileSelector)
     else Doc.show(this.subform.fileSelector)

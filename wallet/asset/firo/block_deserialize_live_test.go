@@ -10,8 +10,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexfiro "github.com/bisoncraft/bosswallet/util/networks/firo"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/decred/dcrd/rpcclient/v8"
 )
@@ -67,11 +66,11 @@ func testScanBlocks(t *testing.T, net util.Network, startHeight, endHeight int64
 		var params *chaincfg.Params
 		switch net {
 		case util.Mainnet:
-			params = dexfiro.MainNetParams
+			params = MainNetParams
 		case util.Testnet:
-			params = dexfiro.TestNetParams
+			params = TestNetParams
 		case util.Regtest:
-			params = dexfiro.RegressionNetParams
+			params = RegressionNetParams
 		default:
 			t.Fatalf("unknown network ID %v", net)
 		}

@@ -13,9 +13,9 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/evmrelay"
-	basenet "github.com/bisoncraft/bosswallet/util/networks/base"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
+	basenet "github.com/bisoncraft/bosswallet/wallet/asset/base"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	dexpolygon "github.com/bisoncraft/bosswallet/wallet/asset/polygon"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -106,11 +106,11 @@ func (c *chainClient) estimateFee(ctx context.Context, numRedemptions int) (*big
 
 	var l1Fee *big.Int
 	if c.isOpStack {
-		syntheticCalldata, err := evmrelay.MockSignedRedeemCalldata(numRedemptions)
+		syntheticCalldata, err := dexeth.MockSignedRedeemCalldata(numRedemptions)
 		if err != nil {
 			return nil, fmt.Errorf("error generating synthetic calldata: %w", err)
 		}
-		l1Fee, err = basenet.L1FeeForCalldata(ctx, c.ec, syntheticCalldata)
+		l1Fee, err = dexeth.L1FeeForCalldata(ctx, c.ec, syntheticCalldata)
 		if err != nil {
 			return nil, fmt.Errorf("error getting L1 fee: %w", err)
 		}
@@ -137,7 +137,7 @@ func (c *chainClient) validateFee(ctx context.Context, calldata []byte, parsed *
 
 	var l1Fee *big.Int
 	if c.isOpStack {
-		l1Fee, err = basenet.L1FeeForCalldata(ctx, c.ec, calldata)
+		l1Fee, err = dexeth.L1FeeForCalldata(ctx, c.ec, calldata)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error getting L1 fee: %w", err)
 		}

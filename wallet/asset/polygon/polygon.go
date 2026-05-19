@@ -9,19 +9,18 @@ import (
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 
 func init() {
-	dexpolygon.MaybeReadSimnetAddrs()
+	MaybeReadSimnetAddrs()
 }
 
 func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
-	token, found := dexpolygon.Tokens[tokenID]
+	token, found := Tokens[tokenID]
 	if !found {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
@@ -46,6 +45,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 
 func init() {
 	asset.Register(BipID, &Driver{})
+	eth.RegisterEVMTokens(Tokens)
 	registerToken(usdcTokenID, "The USDC Ethereum ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
 	registerToken(usdtTokenID, "The USDT Ethereum ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
 	registerToken(wbtcTokenID, "Wrapped BTC.", util.Mainnet)
@@ -61,10 +61,6 @@ const (
 )
 
 var (
-	usdcTokenID, _ = util.BipSymbolID("usdc.polygon")
-	usdtTokenID, _ = util.BipSymbolID("usdt.polygon")
-	wethTokenID, _ = util.BipSymbolID("weth.polygon")
-	wbtcTokenID, _ = util.BipSymbolID("wbtc.polygon")
 	// WalletInfo defines some general information about a Polygon Wallet(EVM
 	// Compatible).
 
@@ -79,21 +75,25 @@ var (
 			DefaultValue: strconv.FormatUint(defaultGasFeeLimit, 10),
 		},
 	}
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:        walletTypeRPC,
+		Tab:         "External",
+		Description: "Infrastructure providers (e.g. Infura) or local nodes",
+		ConfigOpts:  append(eth.RPCOpts, walletOpts...),
+		Seeded:      true,
+		NoAuth:      true,
+	}
+
 	WalletInfo = asset.WalletInfo{
 		Name:              "Polygon",
 		SupportedVersions: []uint32{0, 1},
-		UnitInfo:          dexpolygon.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{
-			{
-				Type:        walletTypeRPC,
-				Tab:         "External",
-				Description: "Infrastructure providers (e.g. Infura) or local nodes",
-				ConfigOpts:  append(eth.RPCOpts, walletOpts...),
-				Seeded:      true,
-				NoAuth:      true,
-			},
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassEVM,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
 		},
-		BlockchainClass: asset.BlockchainClassEVM,
 	}
 )
 
@@ -117,7 +117,7 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		return nil, fmt.Errorf("failed to locate Polygon compatibility data: %s", net)
 	}
 	contracts := make(map[uint32]common.Address, 1)
-	for ver, netAddrs := range dexpolygon.ContractAddresses {
+	for ver, netAddrs := range ContractAddresses {
 		for netw, addr := range netAddrs {
 			if netw == net {
 				contracts[ver] = addr
@@ -148,18 +148,18 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		}
 	}
 
-	// BipID, chainCfg, cfg, &t, dexpolygon.VersionedGases, dexpolygon.Tokens, logger, net
+	// BipID, chainCfg, cfg, &t, VersionedGases, Tokens, logger, net
 	evmWallet, err := eth.NewEVMWallet(&eth.EVMWalletConfig{
 		BaseChainID:        BipID,
 		ChainCfg:           chainCfg,
 		AssetCfg:           cfg,
 		CompatData:         &compat,
-		VersionedGases:     dexpolygon.VersionedGases,
-		Tokens:             dexpolygon.Tokens,
+		VersionedGases:     VersionedGases,
+		Tokens:             Tokens,
 		FinalizeConfs:      polygonFinalizeConfs(net),
 		Logger:             logger,
 		BaseChainContracts: contracts,
-		MultiBalAddress:    dexpolygon.MultiBalanceAddresses[net],
+		MultiBalAddress:    MultiBalanceAddresses[net],
 		WalletInfo:         WalletInfo,
 		Net:                net,
 		DefaultProviders:   defaultProviders,
@@ -193,5 +193,5 @@ func (d *Driver) Create(cfg *asset.CreateWalletParams) error {
 	if err != nil {
 		return fmt.Errorf("error finding compatibility data: %v", err)
 	}
-	return eth.CreateEVMWallet(dexpolygon.ChainIDs[cfg.Net], cfg, &compat, false)
+	return eth.CreateEVMWallet(ChainIDs[cfg.Net], cfg, &compat, false)
 }

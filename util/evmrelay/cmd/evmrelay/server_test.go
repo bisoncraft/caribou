@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util/evmrelay"
-	dexeth "github.com/bisoncraft/bosswallet/util/networks/eth"
-	swapv1 "github.com/bisoncraft/bosswallet/util/networks/eth/contracts/v1"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	swapv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"

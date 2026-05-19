@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -23,7 +22,7 @@ type CompositeUTXO struct {
 	*UTxO
 	Confs        uint32
 	RedeemScript []byte
-	Input        *dexbtc.SpendInfo
+	Input        *SpendInfo
 }
 
 // EnoughFunc considers information about funding inputs and indicates whether
@@ -573,14 +572,14 @@ func ConvertUnspent(confs uint32, unspents []*ListUnspentResult, chainParams *ch
 				return nil, nil, 0, fmt.Errorf("error decoding txid in ListUnspentResult: %w", err)
 			}
 
-			nfo, err := dexbtc.InputInfo(txout.ScriptPubKey, txout.RedeemScript, chainParams)
+			nfo, err := InputInfo(txout.ScriptPubKey, txout.RedeemScript, chainParams)
 			if err != nil {
 				if errors.Is(err, util.UnsupportedScriptError) {
 					continue
 				}
 				return nil, nil, 0, fmt.Errorf("error reading asset info: %w", err)
 			}
-			if nfo.ScriptType == dexbtc.ScriptUnsupported || nfo.NonStandardScript {
+			if nfo.ScriptType == ScriptUnsupported || nfo.NonStandardScript {
 				// InputInfo sets NonStandardScript for P2SH with non-standard
 				// redeem scripts. Don't return these since they cannot fund
 				// arbitrary txns.

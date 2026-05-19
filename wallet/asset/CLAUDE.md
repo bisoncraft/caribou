@@ -9,7 +9,7 @@ This is the primary development area for the wallet. Each subdirectory implement
 - Address generation and key management per chain
 
 ## Supported chains
-btc, eth (and polygon), dcr, ltc, zec, xmr, bch, doge, firo, dash, dgb, zcl
+btc, eth (and polygon), dcr, ltc, zec, xmr, bch, doge, firo, dash, dgb
 
 ## What does NOT belong here
 - Order management, lot sizes, or DEX rate logic — those live in the (out-of-scope) DEX layer

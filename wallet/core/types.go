@@ -139,7 +139,7 @@ type ExtensionModeConfig struct {
 	// Name of embedding application. Used for messaging with disable features.
 	Name string `json:"name"`
 	// UseDEXBranding will tell the front end to use legacy DCRDEX branding
-	// instead of Bison Wallet branding where possible.
+	// instead of Boss Wallet branding where possible.
 	UseDEXBranding bool `json:"useDEXBranding"`
 	// RestrictedWallets are wallets that need restrictions on reconfiguration
 	// options.

@@ -53,7 +53,7 @@ type xcWallet struct {
 	dbID              []byte
 	walletType        string
 	traits            asset.WalletTrait
-	parent            *xcWallet
+	network           *xcWallet
 	feeState          atomic.Value // *FeeState
 	connectMtx        sync.Mutex
 
@@ -104,8 +104,8 @@ func (w *xcWallet) Unlock(crypter encrypt.Crypter) error {
 	if w.isDisabled() { // cannot unlock disabled wallet.
 		return fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
 	}
-	if w.parent != nil {
-		return w.parent.Unlock(crypter)
+	if w.network != nil {
+		return w.network.Unlock(crypter)
 	}
 	if !w.connected() {
 		return errWalletNotConnected
@@ -151,8 +151,8 @@ func (w *xcWallet) refreshUnlock() (unlockAttempted bool, err error) {
 	if w.isDisabled() { // disabled wallet cannot be unlocked.
 		return false, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
 	}
-	if w.parent != nil {
-		return w.parent.refreshUnlock()
+	if w.network != nil {
+		return w.network.refreshUnlock()
 	}
 	if !w.connected() {
 		return false, errWalletNotConnected
@@ -194,8 +194,8 @@ func (w *xcWallet) Lock(timeout time.Duration) error {
 	}
 	w.mtx.Lock()
 	defer w.mtx.Unlock()
-	if w.parent != nil {
-		return w.parent.Lock(timeout)
+	if w.network != nil {
+		return w.network.Lock(timeout)
 	}
 	if !w.hookedUp {
 		return errWalletNotConnected
@@ -223,8 +223,8 @@ func (w *xcWallet) unlocked() bool {
 	if !is {
 		return w.locallyUnlocked()
 	}
-	if w.parent != nil {
-		return w.parent.unlocked()
+	if w.network != nil {
+		return w.network.unlocked()
 	}
 	if !w.connected() {
 		return false
@@ -240,8 +240,8 @@ func (w *xcWallet) locallyUnlocked() bool {
 	if w.isDisabled() {
 		return false
 	}
-	if w.parent != nil {
-		return w.parent.locallyUnlocked()
+	if w.network != nil {
+		return w.network.locallyUnlocked()
 	}
 	w.mtx.RLock()
 	defer w.mtx.RUnlock()
@@ -306,10 +306,10 @@ func (w *xcWallet) state() *WalletState {
 	}
 	w.mtx.RUnlock()
 
-	if w.parent != nil {
-		w.parent.mtx.RLock()
-		state.Open = len(w.parent.encPass) == 0 || len(w.parent.pw) > 0
-		w.parent.mtx.RUnlock()
+	if w.network != nil {
+		w.network.mtx.RLock()
+		state.Open = len(w.network.encPass) == 0 || len(w.network.pw) > 0
+		w.network.mtx.RUnlock()
 	}
 
 	return state

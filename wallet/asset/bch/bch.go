@@ -16,10 +16,9 @@ import (
 	"github.com/bisoncraft/bchwallet/wallet"
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbch "github.com/bisoncraft/bosswallet/util/networks/bch"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
@@ -83,13 +82,17 @@ var (
 		Name:              "Bitcoin Cash",
 		SupportedVersions: []uint32{version},
 		// Same as bitcoin. That's dumb.
-		UnitInfo: dexbch.UnitInfo,
+		UnitInfo: UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			// spvWalletDefinition,
 			rpcWalletDefinition,
 			// electrumWalletDefinition, // getinfo RPC needs backport: https://github.com/Electron-Cash/Electron-Cash/pull/2399
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 
 	externalFeeRate = btc.BitcoreRateFetcher("BCH")
@@ -217,8 +220,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		// Bitcoin Cash uses the Cash Address encoding, which is Bech32, but not
 		// indicative of segwit. We provide a custom encoder and decode to go
 		// to/from a btcutil.Address and a string.
-		AddressDecoder:  dexbch.DecodeCashAddress,
-		AddressStringer: dexbch.EncodeCashAddress,
+		AddressDecoder:  DecodeCashAddress,
+		AddressStringer: EncodeCashAddress,
 		// Bitcoin Cash has a custom signature hash algorithm. Since they don't
 		// have segwit, Bitcoin Cash implemented a variation of the withdrawn
 		// BIP0062 that utilizes Schnorr signatures.
@@ -312,11 +315,11 @@ func translateTx(btcTx *wire.MsgTx) (*bchwire.MsgTx, error) {
 func parseCloneParams(net util.Network) *chaincfg.Params {
 	switch net {
 	case util.Mainnet:
-		return dexbch.MainNetParams
+		return MainNetParams
 	case util.Testnet:
-		return dexbch.TestNet4Params
+		return TestNet4Params
 	case util.Regtest:
-		return dexbch.RegressionNetParams
+		return RegressionNetParams
 	}
 	return nil
 }
@@ -340,7 +343,7 @@ func WithdrawSPVFunds(ctx context.Context, walletPW []byte, recipient, dataDir s
 	if cloneParams == nil {
 		return nil, fmt.Errorf("unknown net %v", net)
 	}
-	addr, err := dexbch.DecodeCashAddress(recipient, cloneParams)
+	addr, err := DecodeCashAddress(recipient, cloneParams)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding address %q: %w", recipient, err)
 	}

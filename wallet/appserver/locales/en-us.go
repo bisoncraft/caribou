@@ -722,7 +722,7 @@ var EnUS = map[string]*intl.Translation{
 	"Number of Runs":              {T: "Number of Runs"},
 	"New Release Message":         {T: "<strong> 🚀 New release available!</strong> Get the latest version now."},
 	"View Website":                {T: "View Website"},
-	"new_user_banner_msg":         {T: "New to Bison Wallet? Read some important tips before you start trading."},
+	"new_user_banner_msg":         {T: "New to Boss Wallet? Read some important tips before you start trading."},
 	"Learn More":                  {T: "Learn More"},
 	"multi_hop_completion_order":  {T: "Multi-Hop Completion Order"},
 	"mh_completion_tooltip":       {T: "This specifies the type of order to execute on the second leg of a multi-hop arb. Market orders will always be filled, ensuring that the bot never has any funds stuck in the intermediate asset, but may result in losses if the price suddenly moves against the bot."},

@@ -21,7 +21,6 @@ import (
 	_ "github.com/bisoncraft/bchwallet/walletdb/bdb"
 	bchwtxmgr "github.com/bisoncraft/bchwallet/wtxmgr"
 	"github.com/bisoncraft/bosswallet/util"
-	dexbch "github.com/bisoncraft/bosswallet/util/networks/bch"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
@@ -92,11 +91,11 @@ var _ btc.BTCWallet = (*bchSPVWallet)(nil)
 func openSPVWallet(dir string, cfg *btc.WalletConfig, btcParams *chaincfg.Params, log util.Logger) btc.BTCWallet {
 	var bchParams *bchchaincfg.Params
 	switch btcParams.Name {
-	case dexbch.MainNetParams.Name:
+	case MainNetParams.Name:
 		bchParams = &bchchaincfg.MainNetParams
-	case dexbch.TestNet4Params.Name:
+	case TestNet4Params.Name:
 		bchParams = &bchchaincfg.TestNet4Params
-	case dexbch.RegressionNetParams.Name:
+	case RegressionNetParams.Name:
 		bchParams = &bchchaincfg.RegressionNetParams
 	}
 
@@ -461,7 +460,7 @@ func (w *bchSPVWallet) NewChangeAddress(account uint32, _ inWaddrmgr.KeyScope) (
 	if err != nil {
 		return nil, err
 	}
-	return dexbch.DecodeCashAddress(bchAddr.String(), w.btcParams)
+	return DecodeCashAddress(bchAddr.String(), w.btcParams)
 }
 
 // ScopeForPurpose satisfies the BTCWallet interface. BCH always derives
@@ -475,11 +474,11 @@ func (w *bchSPVWallet) NewAddress(account uint32, _ inWaddrmgr.KeyScope) (btcuti
 	if err != nil {
 		return nil, err
 	}
-	return dexbch.DecodeCashAddress(bchAddr.String(), w.btcParams)
+	return DecodeCashAddress(bchAddr.String(), w.btcParams)
 }
 
 func (w *bchSPVWallet) PrivKeyForAddress(a btcutil.Address) (*btcec.PrivateKey, error) {
-	bchAddr, err := dexbch.BTCAddrToBCHAddr(a, w.btcParams)
+	bchAddr, err := BTCAddrToBCHAddr(a, w.btcParams)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +516,7 @@ func (w *bchSPVWallet) SendOutputs(outputs []*wire.TxOut, _ *inWaddrmgr.KeyScope
 }
 
 func (w *bchSPVWallet) HaveAddress(a btcutil.Address) (bool, error) {
-	bchAddr, err := dexbch.BTCAddrToBCHAddr(a, w.btcParams)
+	bchAddr, err := BTCAddrToBCHAddr(a, w.btcParams)
 	if err != nil {
 		return false, err
 	}
@@ -800,7 +799,7 @@ func (w *bchSPVWallet) RemovePeer(addr string) error {
 }
 
 func (w *bchSPVWallet) TotalReceivedForAddr(btcAddr btcutil.Address, minConf int32) (btcutil.Amount, error) {
-	bchAddr, err := dexbch.BTCAddrToBCHAddr(btcAddr, w.btcParams)
+	bchAddr, err := BTCAddrToBCHAddr(btcAddr, w.btcParams)
 	if err != nil {
 		return 0, err
 	}

@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexpolygon "github.com/bisoncraft/bosswallet/util/networks/polygon"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 	ethcore "github.com/ethereum/go-ethereum/core"
@@ -87,9 +86,9 @@ func simnetDataDir() (string, error) {
 func ChainConfig(net util.Network) (c *params.ChainConfig, err error) {
 	switch net {
 	case util.Mainnet:
-		return dexpolygon.BorMainnetChainConfig, nil
+		return BorMainnetChainConfig, nil
 	case util.Testnet:
-		return dexpolygon.AmoyChainConfig, nil
+		return AmoyChainConfig, nil
 	case util.Simnet:
 		// Args are gasLimit, faucet address.
 		genesis := ethcore.DeveloperGenesisBlock(30000000, nil)

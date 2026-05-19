@@ -211,7 +211,7 @@ export interface SupportedAsset {
 }
 
 export interface Token {
-  parentID: number
+  networkID: number
   name: string
   unitInfo: UnitInfo
   contractAddress: string

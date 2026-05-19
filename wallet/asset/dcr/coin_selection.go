@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util/calc"
-	dexdcr "github.com/bisoncraft/bosswallet/util/networks/dcr"
 )
 
 // sendEnough generates a function that can be used as the enough argument to
@@ -33,7 +32,7 @@ func sendEnough(amt, feeRate uint64, subtract bool, baseTxSize uint32, reportCha
 			return false, 0
 		}
 		excess := total - req
-		if !reportChange || dexdcr.IsDustVal(dexdcr.P2PKHOutputSize, excess, feeRate) {
+		if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate) {
 			excess = 0
 		}
 		return true, excess
@@ -49,13 +48,13 @@ func sendEnough(amt, feeRate uint64, subtract bool, baseTxSize uint32, reportCha
 func orderEnough(val, lots, feeRate uint64, reportChange bool) func(sum uint64, size uint32, unspent *compositeUTXO) (bool, uint64) {
 	return func(sum uint64, size uint32, unspent *compositeUTXO) (bool, uint64) {
 		reqFunds := calc.RequiredOrderFunds(val, uint64(size+unspent.input.Size()), lots,
-			dexdcr.InitTxSizeBase, dexdcr.InitTxSize, feeRate)
+			InitTxSizeBase, InitTxSize, feeRate)
 		total := sum + toAtoms(unspent.rpc.Amount) // all selected utxos
 
 		if total >= reqFunds { // that'll do it
 			// change = total - (val + swapTxnsFee)
 			excess := total - reqFunds // reqFunds = val + swapTxnsFee
-			if !reportChange || dexdcr.IsDustVal(dexdcr.P2PKHOutputSize, excess, feeRate) {
+			if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate) {
 				excess = 0
 			}
 			return true, excess

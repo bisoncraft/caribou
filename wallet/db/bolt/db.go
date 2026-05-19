@@ -146,7 +146,7 @@ var defaultOpts = Opts{
 	BackupOnShutdown: true,
 }
 
-// BoltDB is a bbolt-based database backend for Bison Wallet. BoltDB satisfies
+// BoltDB is a bbolt-based database backend for Boss Wallet. BoltDB satisfies
 // the db.DB interface defined at github.com/bisoncraft/bosswallet/wallet/db.
 type BoltDB struct {
 	*bbolt.DB

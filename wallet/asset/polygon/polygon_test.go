@@ -147,8 +147,8 @@ func TestTokenRegistration(t *testing.T) {
 		if tok.Token == nil {
 			t.Fatalf("%s: embedded util.Token is nil", tc.name)
 		}
-		if tok.ParentID != BipID {
-			t.Fatalf("%s ParentID = %d, want %d (polygon BipID)", tc.name, tok.ParentID, BipID)
+		if tok.NetworkID != BipID {
+			t.Fatalf("%s NetworkID = %d, want %d (polygon BipID)", tc.name, tok.NetworkID, BipID)
 		}
 		if tok.Name != tc.name {
 			t.Fatalf("token id %d Name = %q, want %q", tc.id, tok.Name, tc.name)

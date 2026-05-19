@@ -32,7 +32,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	dexdcr "github.com/bisoncraft/bosswallet/util/networks/dcr"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/davecgh/go-spew/spew"
@@ -268,7 +267,7 @@ func TestMakeBondTx(t *testing.T) {
 
 	pkh := dcrutil.Hash160(pubkey.SerializeCompressed())
 
-	lockTimeUint, pkhPush, err := dexdcr.ExtractBondDetailsV0(bondOutVersion, bond.Data)
+	lockTimeUint, pkhPush, err := ExtractBondDetailsV0(bondOutVersion, bond.Data)
 	if err != nil {
 		t.Fatalf("ExtractBondDetailsV0: %v", err)
 	}

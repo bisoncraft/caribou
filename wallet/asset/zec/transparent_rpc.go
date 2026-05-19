@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexzec "github.com/bisoncraft/bosswallet/util/networks/zec"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcjson"
@@ -40,7 +39,7 @@ func lockUnspent(c rpcCaller, unlock bool, ops []*btc.Output) error {
 }
 
 type zTx struct {
-	*dexzec.Tx
+	*Tx
 	blockHash *chainhash.Hash
 }
 
@@ -60,7 +59,7 @@ func getTransaction(c rpcCaller, txHash *chainhash.Hash) (*zTx, error) {
 	if err := c.CallRPC("gettransaction", []any{txHash.String()}, &tx); err != nil {
 		return nil, err
 	}
-	dexzecTx, err := dexzec.DeserializeTx(tx.Bytes)
+	dexzecTx, err := DeserializeTx(tx.Bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +83,7 @@ func getRawTransaction(c rpcCaller, txHash *chainhash.Hash) ([]byte, error) {
 // NOTE: signrawtransaction is deprecated in zcashd v6.11.0 and will be removed
 // in a future release. Migration to PCZT-based methods will be required when
 // Zallet provides replacement RPC methods.
-func signTxByRPC(c rpcCaller, inTx *dexzec.Tx) (*dexzec.Tx, error) {
+func signTxByRPC(c rpcCaller, inTx *Tx) (*Tx, error) {
 	txBytes, err := inTx.Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("tx serialization error: %w", err)
@@ -104,7 +103,7 @@ func signTxByRPC(c rpcCaller, inTx *dexzec.Tx) (*dexzec.Tx, error) {
 		}
 		return nil, fmt.Errorf("signing incomplete. %d signing errors encountered: %s", len(res.Errors), errMsg.String())
 	}
-	outTx, err := dexzec.DeserializeTx(res.Hex)
+	outTx, err := DeserializeTx(res.Hex)
 	if err != nil {
 		return nil, fmt.Errorf("error deserializing transaction response: %w", err)
 	}
@@ -120,7 +119,7 @@ func callHashGetter(c rpcCaller, method string, args []any) (*chainhash.Hash, er
 	return chainhash.NewHashFromStr(txid)
 }
 
-func sendRawTransaction(c rpcCaller, tx *dexzec.Tx) (*chainhash.Hash, error) {
+func sendRawTransaction(c rpcCaller, tx *Tx) (*chainhash.Hash, error) {
 	txB, err := tx.Bytes()
 	if err != nil {
 		return nil, err
@@ -249,7 +248,7 @@ func getBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (*wire.BlockHeader, 
 	if err != nil {
 		return nil, err
 	}
-	return dexzec.DeserializeBlockHeader(b)
+	return DeserializeBlockHeader(b)
 }
 
 func getRPCBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (*btc.BlockHeader, error) {
@@ -301,14 +300,14 @@ func getBlockHeight(c rpcCaller, blockHash *chainhash.Hash) (int32, error) {
 	return int32(hdr.Height), nil
 }
 
-func getBlock(c rpcCaller, h chainhash.Hash) (*dexzec.Block, error) {
+func getBlock(c rpcCaller, h chainhash.Hash) (*Block, error) {
 	var blkB util.Bytes
 	err := c.CallRPC("getblock", []any{h.String(), int64(0)}, &blkB)
 	if err != nil {
 		return nil, err
 	}
 
-	return dexzec.DeserializeBlock(blkB)
+	return DeserializeBlock(blkB)
 }
 
 // getBestBlockHeight returns the height of the top mainchain block.
@@ -343,13 +342,13 @@ func getRawMempool(c rpcCaller) ([]*chainhash.Hash, error) {
 	return hashes, nil
 }
 
-func getZecTransaction(c rpcCaller, txHash *chainhash.Hash) (*dexzec.Tx, error) {
+func getZecTransaction(c rpcCaller, txHash *chainhash.Hash) (*Tx, error) {
 	txB, err := getRawTransaction(c, txHash)
 	if err != nil {
 		return nil, err
 	}
 
-	return dexzec.DeserializeTx(txB)
+	return DeserializeTx(txB)
 }
 
 func translateRPCCancelErr(err error) error {

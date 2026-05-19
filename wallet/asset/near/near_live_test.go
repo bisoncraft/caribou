@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	dexnear "github.com/bisoncraft/bosswallet/util/networks/near"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
@@ -266,7 +265,7 @@ func TestLiveSend(t *testing.T) {
 			if !ok {
 				continue
 			}
-			recipDrops := dexnear.YoctoToDrops(recipYocto)
+			recipDrops := YoctoToDrops(recipYocto)
 			if recipDrops > 0 {
 				t.Logf("Recipient balance: %d drops (%.4f NEAR)", recipDrops, float64(recipDrops)/1e8)
 				if recipDrops < sendDrops/2 {

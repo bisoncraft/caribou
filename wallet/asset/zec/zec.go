@@ -25,11 +25,10 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/util/networks/btc"
-	dexzec "github.com/bisoncraft/bosswallet/util/networks/zec"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcjson"
@@ -128,23 +127,28 @@ var (
 			IsBoolean: true,
 		},
 	}
+	rpcWalletDefinition = &asset.WalletDefinition{
+		Type:              walletTypeRPC,
+		Tab:               "External",
+		Description:       "Connect to zcashd",
+		DefaultConfigPath: dexbtc.SystemConfigPath("zcash"),
+		ConfigOpts:        configOpts,
+		NoAuth:            true,
+	}
 	// WalletInfo defines some general information about a Zcash wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Zcash",
 		SupportedVersions: []uint32{version},
-		UnitInfo:          dexzec.UnitInfo,
-		AvailableWallets: []*asset.WalletDefinition{{
-			Type:              walletTypeRPC,
-			Tab:               "External",
-			Description:       "Connect to zcashd",
-			DefaultConfigPath: dexbtc.SystemConfigPath("zcash"),
-			ConfigOpts:        configOpts,
-			NoAuth:            true,
-		}},
-		BlockchainClass: asset.BlockchainClassUTXO,
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:   asset.BlockchainClassUTXO,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
 	}
 
-	feeReservesPerLot = dexzec.TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+	feeReservesPerLot = TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
 )
 
 func init() {
@@ -183,7 +187,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexzec.MinLotSize(maxFeeRate)
+	return MinLotSize(maxFeeRate)
 }
 
 // WalletConfig are wallet-level configuration settings.
@@ -209,17 +213,17 @@ func newRPCConnection(cfg *dexbtc.RPCConfig) (*rpcclient.Client, error) {
 // system location of the zcashd config file is assumed.
 func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (asset.Wallet, error) {
 	var btcParams *chaincfg.Params
-	var addrParams *dexzec.AddressParams
+	var addrParams *AddressParams
 	switch net {
 	case util.Mainnet:
-		btcParams = dexzec.MainNetParams
-		addrParams = dexzec.MainNetAddressParams
+		btcParams = MainNetParams
+		addrParams = MainNetAddressParams
 	case util.Testnet:
-		btcParams = dexzec.TestNet4Params
-		addrParams = dexzec.TestNet4AddressParams
+		btcParams = TestNet4Params
+		addrParams = TestNet4AddressParams
 	case util.Regtest:
-		btcParams = dexzec.RegressionNetParams
-		addrParams = dexzec.RegressionNetAddressParams
+		btcParams = RegressionNetParams
+		addrParams = RegressionNetAddressParams
 	default:
 		return nil, fmt.Errorf("unknown network ID %v", net)
 	}
@@ -269,7 +273,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		btcParams:   btcParams,
 		addrParams:  addrParams,
 		decodeAddr: func(addr string, net *chaincfg.Params) (btcutil.Address, error) {
-			return dexzec.DecodeAddress(addr, addrParams, btcParams)
+			return DecodeAddress(addr, addrParams, btcParams)
 		},
 		ar:          ar,
 		node:        cl,
@@ -309,7 +313,7 @@ type zecWallet struct {
 	net           util.Network
 	lastAddress   atomic.Value // "string"
 	btcParams     *chaincfg.Params
-	addrParams    *dexzec.AddressParams
+	addrParams    *AddressParams
 	node          btc.RawRequester
 	ar            *btc.AddressRecycler
 	rf            *btc.RedemptionFinder
@@ -476,7 +480,7 @@ func (w *zecWallet) prepareCoinManager() {
 		w.btcParams,
 		func(val, lots, maxFeeRate uint64, reportChange bool) btc.EnoughFunc { // orderEnough
 			return func(inputCount, inputsSize, sum uint64) (bool, uint64) {
-				req := dexzec.RequiredOrderFunds(val, inputCount, inputsSize, lots)
+				req := RequiredOrderFunds(val, inputCount, inputsSize, lots)
 				if sum >= req {
 					excess := sum - req
 					if !reportChange || isDust(val, dexbtc.P2SHOutputSize) {
@@ -501,7 +505,7 @@ func (w *zecWallet) prepareCoinManager() {
 			if err != nil {
 				return nil, err
 			}
-			tx, err := dexzec.DeserializeTx(walletTx.Bytes)
+			tx, err := DeserializeTx(walletTx.Bytes)
 			if err != nil {
 				w.log.Warnf("Invalid transaction %v (%x): %v", txHash, walletTx.Bytes, err)
 				return nil, nil
@@ -513,7 +517,7 @@ func (w *zecWallet) prepareCoinManager() {
 			return tx.TxOut[vout], nil
 		},
 		func(addr btcutil.Address) (string, error) {
-			return dexzec.EncodeAddress(addr, w.addrParams)
+			return EncodeAddress(addr, w.addrParams)
 		},
 	)
 }
@@ -750,7 +754,7 @@ func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint
 			return nil, nil, 0, fmt.Errorf("DepositAddress error: %w", err)
 		}
 
-		toAddrStr, err := dexzec.EncodeAddress(toAddrBTC, w.addrParams)
+		toAddrStr, err := EncodeAddress(toAddrBTC, w.addrParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("EncodeAddress error: %w", err)
 		}
@@ -795,14 +799,14 @@ func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint
 		spents = []*btc.Output{op}
 	} else if useSplit {
 		// No shielded split needed. Should we do a split to avoid overlock.
-		splitTxFees := dexzec.TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
-		requiredForOrderWithoutSplit := dexzec.RequiredOrderFunds(ord.Value, uint64(len(coins)), inputsSize, ord.MaxSwapCount)
+		splitTxFees := TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+		requiredForOrderWithoutSplit := RequiredOrderFunds(ord.Value, uint64(len(coins)), inputsSize, ord.MaxSwapCount)
 		excessWithoutSplit := sum - requiredForOrderWithoutSplit
 		if splitTxFees >= excessWithoutSplit {
 			w.log.Debugf("Skipping split transaction because cost is greater than potential over-lock. "+
 				"%s > %s", btcutil.Amount(splitTxFees), btcutil.Amount(excessWithoutSplit))
 		} else {
-			splitOutputVal := dexzec.RequiredOrderFunds(ord.Value, 1, dexbtc.RedeemP2PKHInputSize, ord.MaxSwapCount)
+			splitOutputVal := RequiredOrderFunds(ord.Value, 1, dexbtc.RedeemP2PKHInputSize, ord.MaxSwapCount)
 			transparentSplitFees = splitTxFees
 			baseTx, _, _, err := w.fundedTx(spents)
 			if err != nil {
@@ -843,7 +847,7 @@ func (w *zecWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint
 
 			op := btc.NewOutput(splitTxHash, 0, splitOutputVal)
 
-			addrStr, err := dexzec.EncodeAddress(splitOutputAddr, w.addrParams)
+			addrStr, err := EncodeAddress(splitOutputAddr, w.addrParams)
 			if err != nil {
 				return nil, nil, 0, fmt.Errorf("error stringing address %q: %w", splitOutputAddr, err)
 			}
@@ -894,7 +898,7 @@ func (w *zecWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]util.
 	}
 
 	// Create a transaction that spends the referenced contract.
-	tx := dexzec.NewTxFromMsgTx(wire.NewMsgTx(dexzec.VersionNU5), dexzec.MaxExpiryHeight)
+	tx := NewTxFromMsgTx(wire.NewMsgTx(VersionNU5), MaxExpiryHeight)
 	var totalIn uint64
 	contracts := make([][]byte, 0, len(form.Redemptions))
 	prevScripts := make([][]byte, 0, len(form.Redemptions))
@@ -938,7 +942,7 @@ func (w *zecWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]util.
 
 	txInsSize += uint64(wire.VarIntSerializeSize(uint64(len(tx.TxIn))))
 	txOutsSize := uint64(1 + dexbtc.P2PKHOutputSize)
-	fee := dexzec.TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
+	fee := TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
 
 	// Send the funds back to the exchange wallet.
 	redeemAddr, err := transparentAddress(w, w.addrParams, w.btcParams)
@@ -961,7 +965,7 @@ func (w *zecWallet) Redeem(ctx context.Context, form *asset.RedeemForm) ([]util.
 		contract := contracts[i]
 		addr := addresses[i]
 
-		addrStr, err := dexzec.EncodeAddress(addr, w.addrParams)
+		addrStr, err := EncodeAddress(addr, w.addrParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("EncodeAddress error: %w", err)
 		}
@@ -1117,16 +1121,16 @@ func (w *zecWallet) estimateSwap(
 		if withSplit {
 			splitInputsSize := inputsSize + uint64(wire.VarIntSerializeSize(n))
 			splitOutputsSize := uint64(2*dexbtc.P2PKHOutputSize + 1)
-			splitFees = dexzec.TxFeesZIP317(splitInputsSize, splitOutputsSize, 0, 0, 0, 0)
+			splitFees = TxFeesZIP317(splitInputsSize, splitOutputsSize, 0, 0, 0, 0)
 			inputsSize = dexbtc.RedeemP2PKHInputSize
 			n = 1
 		}
 
 		firstSwapInputsSize := inputsSize + uint64(wire.VarIntSerializeSize(n))
 		singleOutputSize := uint64(dexbtc.P2SHOutputSize+dexbtc.P2PKHOutputSize) + 1
-		estLowFees = dexzec.TxFeesZIP317(firstSwapInputsSize, singleOutputSize, 0, 0, 0, 0)
+		estLowFees = TxFeesZIP317(firstSwapInputsSize, singleOutputSize, 0, 0, 0, 0)
 
-		req := dexzec.RequiredOrderFunds(val, n, inputsSize, lots)
+		req := RequiredOrderFunds(val, n, inputsSize, lots)
 		maxFees = req - val + splitFees
 		estHighFees = maxFees
 		return
@@ -1134,8 +1138,8 @@ func (w *zecWallet) estimateSwap(
 
 	// Math for split transactions is a little different.
 	if trySplit {
-		baggage := dexzec.TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
-		excess := sum - dexzec.RequiredOrderFunds(val, uint64(len(coins)), inputsSize, lots)
+		baggage := TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+		excess := sum - RequiredOrderFunds(val, uint64(len(coins)), inputsSize, lots)
 		if baggage >= excess {
 			reqFunds, maxFees, estHighFees, estLowFees := digestInputs(inputsSize, true)
 			return &asset.SwapEstimate{
@@ -1266,8 +1270,8 @@ func (w *zecWallet) SingleLotSwapRefundFees(_ uint32, feeSuggestion uint64, useS
 
 	inputsSize := numInputs*dexbtc.RedeemP2PKHInputSize + 1
 	outputsSize := uint64(dexbtc.P2PKHOutputSize + 1)
-	swapFees = dexzec.TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
-	refundFees = dexzec.TxFeesZIP317(dexbtc.RefundSigScriptSize+1, dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+	swapFees = TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
+	refundFees = TxFeesZIP317(dexbtc.RefundSigScriptSize+1, dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
 
 	return swapFees, refundFees, nil
 }
@@ -1279,7 +1283,7 @@ func (w *zecWallet) PreRedeem(form *asset.PreRedeemForm) (*asset.PreRedeem, erro
 func (w *zecWallet) preRedeem(numLots, _ uint64, options map[string]string) (*asset.PreRedeem, error) {
 	singleInputsSize := uint64(dexbtc.TxInOverhead + dexbtc.RedeemSwapSigScriptSize + 1)
 	singleOutputsSize := uint64(dexbtc.P2PKHOutputSize + 1)
-	singleMatchFees := dexzec.TxFeesZIP317(singleInputsSize, singleOutputsSize, 0, 0, 0, 0)
+	singleMatchFees := TxFeesZIP317(singleInputsSize, singleOutputsSize, 0, 0, 0, 0)
 	return &asset.PreRedeem{
 		Estimate: &asset.RedeemEstimate{
 			RealisticWorstCase: singleMatchFees * numLots,
@@ -1291,7 +1295,7 @@ func (w *zecWallet) preRedeem(numLots, _ uint64, options map[string]string) (*as
 func (w *zecWallet) SingleLotRedeemFees(_ uint32, feeSuggestion uint64) (uint64, error) {
 	singleInputsSize := uint64(dexbtc.TxInOverhead + dexbtc.RedeemSwapSigScriptSize + 1)
 	singleOutputsSize := uint64(dexbtc.P2PKHOutputSize + 1)
-	return dexzec.TxFeesZIP317(singleInputsSize, singleOutputsSize, 0, 0, 0, 0), nil
+	return TxFeesZIP317(singleInputsSize, singleOutputsSize, 0, 0, 0, 0), nil
 }
 
 // FundingCoins gets funding coins for the coin IDs. The coins are locked. This
@@ -1311,8 +1315,8 @@ func decodeCoinID(coinID util.Bytes) (*chainhash.Hash, uint32, error) {
 }
 
 // fundedTx creates and returns a new MsgTx with the provided coins as inputs.
-func (w *zecWallet) fundedTx(coins []*btc.Output) (*dexzec.Tx, uint64, []btc.OutPoint, error) {
-	baseTx := zecTx(wire.NewMsgTx(dexzec.VersionNU5))
+func (w *zecWallet) fundedTx(coins []*btc.Output) (*Tx, uint64, []btc.OutPoint, error) {
+	baseTx := zecTx(wire.NewMsgTx(VersionNU5))
 	totalIn, pts, err := w.addInputsToTx(baseTx, coins)
 	if err != nil {
 		return nil, 0, nil, err
@@ -1320,7 +1324,7 @@ func (w *zecWallet) fundedTx(coins []*btc.Output) (*dexzec.Tx, uint64, []btc.Out
 	return baseTx, totalIn, pts, nil
 }
 
-func (w *zecWallet) addInputsToTx(tx *dexzec.Tx, coins []*btc.Output) (uint64, []btc.OutPoint, error) {
+func (w *zecWallet) addInputsToTx(tx *Tx, coins []*btc.Output) (uint64, []btc.OutPoint, error) {
 	var totalIn uint64
 	// Add the funding utxos.
 	pts := make([]btc.OutPoint, 0, len(coins))
@@ -1335,9 +1339,9 @@ func (w *zecWallet) addInputsToTx(tx *dexzec.Tx, coins []*btc.Output) (uint64, [
 
 // signTxAndAddChange signs the passed tx and adds a change output if the change
 // wouldn't be dust. Returns but does NOT broadcast the signed tx.
-func (w *zecWallet) signTxAndAddChange(ctx context.Context, baseTx *dexzec.Tx, addr btcutil.Address, totalIn, totalOut, fees uint64) (*dexzec.Tx, *btc.Output, error) {
+func (w *zecWallet) signTxAndAddChange(ctx context.Context, baseTx *Tx, addr btcutil.Address, totalIn, totalOut, fees uint64) (*Tx, *btc.Output, error) {
 
-	makeErr := func(s string, a ...any) (*dexzec.Tx, *btc.Output, error) {
+	makeErr := func(s string, a ...any) (*Tx, *btc.Output, error) {
 		return nil, nil, fmt.Errorf(s, a...)
 	}
 
@@ -1445,15 +1449,15 @@ func (w *zecWallet) fund(
 	reserves := w.reserves.Load()
 	nActionsOrchard := uint64(orchardBal.noteCount)
 	enough := func(inputCount, inputsSize, sum uint64) (bool, uint64) {
-		req := dexzec.RequiredOrderFunds(val, inputCount, inputsSize, maxSwapCount)
+		req := RequiredOrderFunds(val, inputCount, inputsSize, maxSwapCount)
 		if sum >= req {
 			return true, sum - req + shieldedAvail
 		}
 		if shieldedAvail == 0 {
 			return false, 0
 		}
-		shieldedFees := dexzec.TxFeesZIP317(inputsSize+uint64(wire.VarIntSerializeSize(inputCount)), dexbtc.P2PKHOutputSize+1, 0, 0, 0, nActionsOrchard)
-		req = dexzec.RequiredOrderFunds(val, 1, dexbtc.RedeemP2PKHInputSize, maxSwapCount)
+		shieldedFees := TxFeesZIP317(inputsSize+uint64(wire.VarIntSerializeSize(inputCount)), dexbtc.P2PKHOutputSize+1, 0, 0, 0, nActionsOrchard)
+		req = RequiredOrderFunds(val, 1, dexbtc.RedeemP2PKHInputSize, maxSwapCount)
 		if sum+shieldedAvail >= req+shieldedFees {
 			return true, sum + shieldedAvail - (req + shieldedFees)
 		}
@@ -1480,12 +1484,12 @@ func (w *zecWallet) fund(
 		return
 	}
 
-	shieldedSplitNeeded = dexzec.RequiredOrderFunds(val, 1, dexbtc.RedeemP2PKHInputSize, maxSwapCount)
+	shieldedSplitNeeded = RequiredOrderFunds(val, 1, dexbtc.RedeemP2PKHInputSize, maxSwapCount)
 
 	// If we don't have any utxos see if a straight shielded split will get us there.
 	if len(utxos) == 0 {
 		// Can we do it with just the shielded balance?
-		shieldedSplitFees = dexzec.TxFeesZIP317(0, dexbtc.P2SHOutputSize+1, 0, 0, 0, nActionsOrchard)
+		shieldedSplitFees = TxFeesZIP317(0, dexbtc.P2SHOutputSize+1, 0, 0, 0, nActionsOrchard)
 		req := val + shieldedSplitFees
 		if shieldedAvail < req {
 			// err is still the error from the last call to FundWithUTXOs
@@ -1504,10 +1508,10 @@ func (w *zecWallet) fund(
 		return
 	}
 
-	req := dexzec.RequiredOrderFunds(val, uint64(len(coins)), size, maxSwapCount)
+	req := RequiredOrderFunds(val, uint64(len(coins)), size, maxSwapCount)
 	if req > sum {
 		txOutsSize := uint64(dexbtc.P2PKHOutputSize + 1) // 1 for varint
-		shieldedSplitFees = dexzec.TxFeesZIP317(size+uint64(wire.VarIntSerializeSize(uint64(len(coins)))), txOutsSize, 0, 0, 0, nActionsOrchard)
+		shieldedSplitFees = TxFeesZIP317(size+uint64(wire.VarIntSerializeSize(uint64(len(coins)))), txOutsSize, 0, 0, 0, nActionsOrchard)
 	}
 
 	if shieldedAvail+sum < shieldedSplitNeeded+shieldedSplitFees {
@@ -1541,7 +1545,7 @@ func (w *zecWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadca
 	// only a confirmed counterparty contract can be located, and only one
 	// within ContractSearchLimit. As such, this mode of operation is not
 	// intended for normal server-coordinated operation.
-	var tx *dexzec.Tx
+	var tx *Tx
 	var txOut *wire.TxOut
 	if len(txData) == 0 {
 		// Fall back to gettxout, but we won't have the tx to rebroadcast.
@@ -1550,7 +1554,7 @@ func (w *zecWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadca
 			return nil, fmt.Errorf("error finding unspent contract: %s:%d : %w", txHash, vout, err)
 		}
 	} else {
-		tx, err = dexzec.DeserializeTx(txData)
+		tx, err = DeserializeTx(txData)
 		if err != nil {
 			return nil, fmt.Errorf("coin not found, and error encountered decoding tx data: %v", err)
 		}
@@ -1597,7 +1601,7 @@ func (w *zecWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadca
 		}()
 	}
 
-	addrStr, err := dexzec.EncodeAddress(receiver, w.addrParams)
+	addrStr, err := EncodeAddress(receiver, w.addrParams)
 	if err != nil {
 		w.log.Errorf("Failed to stringify receiver address %v (default): %v", receiver, err)
 	}
@@ -1763,7 +1767,7 @@ func (w *zecWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) (coins 
 		if v.MaxSwapCount == 0 {
 			return nil, nil, 0, fmt.Errorf("cannot fund zero-lot order")
 		}
-		req := dexzec.RequiredOrderFunds(v.Value, 1, swapInputSize, v.MaxSwapCount)
+		req := RequiredOrderFunds(v.Value, 1, swapInputSize, v.MaxSwapCount)
 		totalRequiredForOrders += req
 	}
 
@@ -1808,7 +1812,7 @@ func (w *zecWallet) FundMultiOrder(mo *asset.MultiOrder, maxLock uint64) (coins 
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("error getting address for split tx: %v", err)
 		}
-		orderReqs[i] = dexzec.RequiredOrderFunds(v.Value, 1, dexbtc.RedeemP2PKHInputSize, v.MaxSwapCount)
+		orderReqs[i] = RequiredOrderFunds(v.Value, 1, dexbtc.RedeemP2PKHInputSize, v.MaxSwapCount)
 		addrs[i] = addr
 		recips[i] = &zSendManyRecipient{Address: addr, Amount: btcutil.Amount(orderReqs[i]).ToBTC()}
 	}
@@ -1849,7 +1853,7 @@ next:
 					return nil, nil, 0, fmt.Errorf("unexpected multi-sig (%d)", len(addrs))
 				}
 				addr := addrs[0]
-				addrStr, err := dexzec.EncodeAddress(addr, w.addrParams)
+				addrStr, err := EncodeAddress(addr, w.addrParams)
 				if err != nil {
 					return nil, nil, 0, fmt.Errorf("error encoding Zcash transparent address: %w", err)
 				}
@@ -1938,13 +1942,13 @@ func (w *zecWallet) MaxFundingFees(numTrades uint32, feeRate uint64, settings ma
 
 	// Assume a split from shielded
 	txOutsSize := uint64(numTrades*dexbtc.P2PKHOutputSize + 1) // 1 for varint
-	shieldedSplitFees := dexzec.TxFeesZIP317(0, txOutsSize, 0, 0, 0, nActionsOrchardEstimate)
+	shieldedSplitFees := TxFeesZIP317(0, txOutsSize, 0, 0, 0, nActionsOrchardEstimate)
 
 	if !customCfg.Split {
 		return shieldedSplitFees
 	}
 
-	return shieldedSplitFees + dexzec.TxFeesZIP317(1, uint64(numTrades+1)*dexbtc.P2PKHOutputSize, 0, 0, 0, 0)
+	return shieldedSplitFees + TxFeesZIP317(1, uint64(numTrades+1)*dexbtc.P2PKHOutputSize, 0, 0, 0, 0)
 }
 
 func (w *zecWallet) OwnsDepositAddress(addrStr string) (bool, error) {
@@ -2033,7 +2037,7 @@ func (w *zecWallet) Refund(ctx context.Context, coinID, contract util.Bytes, fee
 	// actions derived from tx structure, not a simple rate.
 	var inputsSize uint64 = dexbtc.TxInOverhead + dexbtc.RefundSigScriptSize + 1
 	var outputsSize uint64 = dexbtc.P2PKHOutputSize + 1
-	refundFees := dexzec.TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
+	refundFees := TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
 	msgTx, err := w.refundTx(ctx, txHash, vout, contract, uint64(utxo.Value), nil, refundFees)
 	if err != nil {
 		return nil, fmt.Errorf("error creating refund tx: %w", err)
@@ -2069,7 +2073,7 @@ func (w *zecWallet) Refund(ctx context.Context, coinID, contract util.Bytes, fee
 }
 
 type zecSwapCacheEntry struct {
-	signedTx   *dexzec.Tx
+	signedTx   *Tx
 	receipts   []asset.Receipt
 	change     *btc.Output
 	fees       uint64
@@ -2083,7 +2087,7 @@ type zecSwapCacheEntry struct {
 func (e *zecSwapCacheEntry) Stamp() time.Time { return e.timestamp }
 
 type zecRedeemCacheEntry struct {
-	signedTx  *dexzec.Tx
+	signedTx  *Tx
 	coinIDs   []util.Bytes
 	outCoin   *btc.Output
 	fees      uint64
@@ -2094,7 +2098,7 @@ type zecRedeemCacheEntry struct {
 func (e *zecRedeemCacheEntry) Stamp() time.Time { return e.timestamp }
 
 type zecRefundCacheEntry struct {
-	signedTx     *dexzec.Tx
+	signedTx     *Tx
 	refundCoinID util.Bytes
 	refundVal    uint64
 	fees         uint64
@@ -2108,7 +2112,7 @@ func (e *zecRefundCacheEntry) Stamp() time.Time { return e.timestamp }
 // because the ZEC RPC infrastructure (CallRPC) doesn't support context yet.
 // The wallet call timeout set in core will not apply to ZEC operations until
 // CallRPC is updated to accept and respect a context.Context.
-func (w *zecWallet) broadcastTx(ctx context.Context, tx *dexzec.Tx) (*chainhash.Hash, error) {
+func (w *zecWallet) broadcastTx(ctx context.Context, tx *Tx) (*chainhash.Hash, error) {
 	rawTx := func() string {
 		b, err := tx.Bytes()
 		if err != nil {
@@ -2140,7 +2144,7 @@ func (w *zecWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout u
 	}
 
 	// Create the transaction that spends the contract.
-	msgTx := wire.NewMsgTx(dexzec.VersionNU5)
+	msgTx := wire.NewMsgTx(VersionNU5)
 	msgTx.LockTime = uint32(lockTime)
 	prevOut := wire.NewOutPoint(txHash, vout)
 	txIn := wire.NewTxIn(prevOut, []byte{}, nil)
@@ -2185,7 +2189,7 @@ func (w *zecWallet) refundTx(ctx context.Context, txHash *chainhash.Hash, vout u
 }
 
 func (w *zecWallet) createSig(ctx context.Context, msgTx *wire.MsgTx, idx int, pkScript []byte, addr btcutil.Address, vals []int64, prevScripts [][]byte) (sig, pubkey []byte, err error) {
-	addrStr, err := dexzec.EncodeAddress(addr, w.addrParams)
+	addrStr, err := EncodeAddress(addr, w.addrParams)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error encoding address: %w", err)
 	}
@@ -2209,7 +2213,7 @@ func (w *zecWallet) RegFeeConfirmations(_ context.Context, id util.Bytes) (confs
 
 func sendEnough(val uint64) btc.EnoughFunc {
 	return func(inputCount, inputsSize, sum uint64) (bool, uint64) {
-		fees := dexzec.TxFeesZIP317(inputCount*dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+		fees := TxFeesZIP317(inputCount*dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
 		total := fees + val
 		if sum >= total {
 			return true, sum - total
@@ -2237,7 +2241,7 @@ func (w *zecWallet) fundOrchard(amt uint64) (sum, fees uint64, n int, funded boo
 	var u *zListUnspentResult
 	for n, u = range unspents {
 		sum += toZats(u.Amount)
-		fees = dexzec.TxFeesZIP317(0, 0, 0, 0, 0, uint64(n))
+		fees = TxFeesZIP317(0, 0, 0, 0, 0, uint64(n))
 		if sum > amt+fees {
 			funded = true
 			return
@@ -2286,7 +2290,7 @@ func (w *zecWallet) EstimateSendTxFee(
 			amt, bal.Transparent, orchardSum, err)
 	}
 
-	fees = dexzec.TxFeesZIP317(inputsSize+uint64(wire.VarIntSerializeSize(uint64(len(spents)))), 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, uint64(orchardN))
+	fees = TxFeesZIP317(inputsSize+uint64(wire.VarIntSerializeSize(uint64(len(spents)))), 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, uint64(orchardN))
 	return
 }
 
@@ -2313,7 +2317,7 @@ func (w *zecWallet) maxWithdrawFees(addrType string) (uint64, error) {
 		txOutsSize = dexbtc.P2PKHOutputSize + 1
 	}
 	// TODO: Do we get nJoinSplit from noteCounts.Sprout somehow?
-	return dexzec.TxFeesZIP317(txInsSize, txOutsSize, uint64(noteCounts.Sapling), nOutputsSapling, 0, nActionsOrchard), nil
+	return TxFeesZIP317(txInsSize, txOutsSize, uint64(noteCounts.Sapling), nOutputsSapling, 0, nActionsOrchard), nil
 }
 
 type txCoin struct {
@@ -2379,7 +2383,7 @@ func (w *zecWallet) Send(addr string, value, feeRate uint64) (asset.Coin, error)
 // StandardSendFee returns the fees for a simple send tx with one input and two
 // outputs.
 func (w *zecWallet) StandardSendFee(feeRate uint64) uint64 {
-	return dexzec.TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+	return TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
 }
 
 // TransactionConfirmations gets the number of confirmations for the specified
@@ -2404,7 +2408,7 @@ func (w *zecWallet) TransactionConfirmations(ctx context.Context, txID string) (
 // the fees will be subtracted from the value. If false, the fees are in
 // addition to the value. feeRate is in units of sats/byte.
 func (w *zecWallet) send(addrStr string, val uint64, subtract bool) (*chainhash.Hash, uint32, uint64, error) {
-	addr, err := dexzec.DecodeAddress(addrStr, w.addrParams, w.btcParams)
+	addr, err := DecodeAddress(addrStr, w.addrParams, w.btcParams)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("invalid address: %s", addrStr)
 	}
@@ -2424,7 +2428,7 @@ func (w *zecWallet) send(addrStr string, val uint64, subtract bool) (*chainhash.
 		return nil, 0, 0, fmt.Errorf("error adding inputs to transaction: %w", err)
 	}
 
-	fees := dexzec.TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+	fees := TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
 	var toSend uint64
 	if subtract {
 		toSend = val - fees
@@ -2451,14 +2455,14 @@ func (w *zecWallet) send(addrStr string, val uint64, subtract bool) (*chainhash.
 	return txHash, 0, toSend, nil
 }
 
-func (w *zecWallet) sendWithReturn(baseTx *dexzec.Tx, addr btcutil.Address, totalIn, totalOut uint64) (*dexzec.Tx, error) {
+func (w *zecWallet) sendWithReturn(baseTx *Tx, addr btcutil.Address, totalIn, totalOut uint64) (*Tx, error) {
 	txInsSize := uint64(len(baseTx.TxIn))*dexbtc.RedeemP2PKHInputSize + 1
 	var txOutsSize uint64 = uint64(wire.VarIntSerializeSize(uint64(len(baseTx.TxOut) + 1)))
 	for _, txOut := range baseTx.TxOut {
 		txOutsSize += uint64(txOut.SerializeSize())
 	}
 
-	fees := dexzec.TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
+	fees := TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
 
 	signedTx, _, err := w.signTxAndAddChange(w.ctx, baseTx, addr, totalIn, totalOut, fees)
 	if err != nil {
@@ -2565,13 +2569,13 @@ func (w *zecWallet) Swap(ctx context.Context, swaps *asset.Swaps) ([]asset.Recei
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("error creating revocation address: %w", err)
 		}
-		revokeAddr, err := dexzec.DecodeAddress(revokeAddrStr, w.addrParams, w.btcParams)
+		revokeAddr, err := DecodeAddress(revokeAddrStr, w.addrParams, w.btcParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("refund address decode error: %v", err)
 		}
 		refundAddrs = append(refundAddrs, revokeAddr)
 
-		contractAddr, err := dexzec.DecodeAddress(contract.Address, w.addrParams, w.btcParams)
+		contractAddr, err := DecodeAddress(contract.Address, w.addrParams, w.btcParams)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("contract address decode error: %v", err)
 		}
@@ -2618,7 +2622,7 @@ func (w *zecWallet) Swap(ctx context.Context, swaps *asset.Swaps) ([]asset.Recei
 
 	txInsSize := uint64(len(coins))*dexbtc.RedeemP2PKHInputSize + 1
 	txOutsSize := swapOutsSize + dexbtc.P2PKHOutputSize
-	fees := dexzec.TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
+	fees := TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
 
 	// Sign, add change, but don't send the transaction yet until
 	// the individual swap refund txs are prepared and signed.
@@ -2653,7 +2657,7 @@ func (w *zecWallet) Swap(ctx context.Context, swaps *asset.Swaps) ([]asset.Recei
 	// Pre-build the change lock UTxO for caching if LockChange is set.
 	var changeLock *btc.UTxO
 	if change != nil && swaps.LockChange {
-		addrStr, err := dexzec.EncodeAddress(changeAddr, w.addrParams)
+		addrStr, err := EncodeAddress(changeAddr, w.addrParams)
 		if err != nil {
 			w.log.Errorf("Failed to stringify address %v (default encoding): %v", changeAddr, err)
 			addrStr = changeAddr.String()
@@ -2789,12 +2793,12 @@ func transparentAddressString(c rpcCaller) (string, error) {
 	return receivers.Transparent, nil
 }
 
-func transparentAddress(c rpcCaller, addrParams *dexzec.AddressParams, btcParams *chaincfg.Params) (btcutil.Address, error) {
+func transparentAddress(c rpcCaller, addrParams *AddressParams, btcParams *chaincfg.Params) (btcutil.Address, error) {
 	addrStr, err := transparentAddressString(c)
 	if err != nil {
 		return nil, err
 	}
-	return dexzec.DecodeAddress(addrStr, addrParams, btcParams)
+	return DecodeAddress(addrStr, addrParams, btcParams)
 }
 
 func (w *zecWallet) lastShieldedAddress() (addr string, err error) {
@@ -3007,8 +3011,8 @@ func (w *zecWallet) sendShielded(ctx context.Context, toAddr string, amt uint64)
 	return txHash, nil
 }
 
-func zecTx(tx *wire.MsgTx) *dexzec.Tx {
-	return dexzec.NewTxFromMsgTx(tx, dexzec.MaxExpiryHeight)
+func zecTx(tx *wire.MsgTx) *Tx {
+	return NewTxFromMsgTx(tx, MaxExpiryHeight)
 }
 
 // signTx signs the transaction input with Zcash's BLAKE-2B sighash digest.
@@ -3053,7 +3057,7 @@ func hashTx(tx *wire.MsgTx) *chainhash.Hash {
 }
 
 func deserializeTx(b []byte) (*wire.MsgTx, error) {
-	tx, err := dexzec.DeserializeTx(b)
+	tx, err := DeserializeTx(b)
 	if err != nil {
 		return nil, err
 	}
@@ -3450,7 +3454,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 				return false
 			}
 
-			addr, err := dexzec.EncodeAddress(addrs[0], w.addrParams)
+			addr, err := EncodeAddress(addrs[0], w.addrParams)
 			if err != nil {
 				w.log.Errorf("unable to encode address: %w", err)
 				return false
@@ -3487,7 +3491,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 				continue
 			}
 
-			addr, err := dexzec.EncodeAddress(addrs[0], w.addrParams)
+			addr, err := EncodeAddress(addrs[0], w.addrParams)
 			if err != nil {
 				w.log.Errorf("unable to encode address: %w", err)
 				continue
@@ -3519,7 +3523,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 				continue
 			}
 
-			addr, err := dexzec.EncodeAddress(addrs[0], w.addrParams)
+			addr, err := EncodeAddress(addrs[0], w.addrParams)
 			if err != nil {
 				w.log.Errorf("unable to encode address: %w", err)
 				continue
