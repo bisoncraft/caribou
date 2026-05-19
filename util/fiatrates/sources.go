@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/ethereum/go-ethereum/log"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -109,7 +108,7 @@ func fiatSources(cfg Config) []*source {
 			name:            kuCoin,
 			requestInterval: defaultRefreshInterval,
 			disabled:        strings.Contains(disabledSources, strings.ToLower(kuCoin)),
-			getRates: func(ctx context.Context, tickers []string, _ util.Logger) (map[string]float64, error) {
+			getRates: func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 				var response struct {
 					Data map[string]string `json:"data"`
 				}
@@ -124,7 +123,7 @@ func fiatSources(cfg Config) []*source {
 				for ticker, rateStr := range response.Data {
 					rate, err := strconv.ParseFloat(rateStr, 64)
 					if err != nil {
-						log.Error("%s: failed to convert fiat rate for %s to float64: %v", kuCoin, ticker, err)
+						log.Errorf("%s: failed to convert fiat rate for %s to float64: %v", kuCoin, ticker, err)
 						continue
 					}
 					fiatRates[parseTicker(ticker)] = rate
@@ -137,7 +136,7 @@ func fiatSources(cfg Config) []*source {
 			name:            binance,
 			requestInterval: defaultRefreshInterval,
 			disabled:        strings.Contains(disabledSources, strings.ToLower(binance)),
-			getRates: func(ctx context.Context, tickers []string, _ util.Logger) (map[string]float64, error) {
+			getRates: func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 				priceEndpoint := binancePriceEndpoint
 				if cfg.EnableBinanceUS {
 					priceEndpoint = binanceUSPriceEndpoint
@@ -164,7 +163,7 @@ func fiatSources(cfg Config) []*source {
 					ticker := parseTicker(strings.TrimSuffix(asset.Symbol, "USDT"))
 					rate, err := strconv.ParseFloat(asset.Price, 64)
 					if err != nil {
-						log.Error("%s: failed to convert fiat rate for %s to float64: %v", binance, ticker, err)
+						log.Errorf("%s: failed to convert fiat rate for %s to float64: %v", binance, ticker, err)
 						continue
 					}
 					fiatRates[ticker] = rate

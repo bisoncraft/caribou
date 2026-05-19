@@ -544,7 +544,8 @@ func (b *acrossBridge) requiresFollowUpCompletion(uint32) bool {
 }
 
 func (b *acrossBridge) getFollowUpCompletionData(ctx context.Context, completionTxID string) (required bool, data []byte, err error) {
-	panic("not implemented")
+	// TODO: implement
+	return false, nil, nil
 }
 
 func (b *acrossBridge) completeFollowUpBridge(txOpts *bind.TransactOpts, data []byte) (tx *types.Transaction, err error) {

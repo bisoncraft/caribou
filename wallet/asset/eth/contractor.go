@@ -672,6 +672,7 @@ type contractorV1 struct {
 
 var _ contractor = (*contractorV1)(nil)
 var _ signedRedeemContractor = (*contractorV1)(nil)
+var _ unifiedContractor = (*contractorV1)(nil)
 
 func newV1Contractor(net util.Network, swapContractAddr, acctAddr common.Address, cb bind.ContractBackend, chainID int64) (contractor, error) {
 	c, err := swapv1.NewETHSwap(swapContractAddr, cb)

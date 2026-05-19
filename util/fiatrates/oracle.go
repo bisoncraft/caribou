@@ -182,7 +182,11 @@ func (o *Oracle) notifyListeners(rates map[string]*FiatRateInfo) {
 	o.listenersMtx.RLock()
 	defer o.listenersMtx.RUnlock()
 	for _, rateChan := range o.listeners {
-		rateChan <- rates
+		select {
+		case rateChan <- rates:
+		default:
+			o.log.Warnf("notifyListeners: listener channel full, dropping rate update")
+		}
 	}
 }
 

@@ -81,7 +81,9 @@ func (s *source) checkIfSourceCanReactivate() bool {
 	}
 
 	reactivate := s.canReactivate && !s.lastRefresh.IsZero() && time.Since(s.lastRefresh) > reactivateDuration
-	s.disabled = reactivate
+	if reactivate {
+		s.disabled = false
+	}
 	return reactivate
 }
 

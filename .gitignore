@@ -18,6 +18,8 @@ go.work.sum
 dex*key
 markets.json
 dist/
+!wallet/appserver/newui/dist/
+!wallet/appserver/newui/dist/placeholder
 node_modules/
 bin/
 bin-v*/
