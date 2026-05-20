@@ -6,6 +6,9 @@ package eth
 import (
 	"math"
 	"math/big"
+	"os"
+	"os/user"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -142,8 +145,15 @@ func TestLinkTokenDefinition(t *testing.T) {
 		}
 	}
 
-	// Simnet address starts zero (filled by MaybeReadSimnetAddrs at harness time).
-	if token.NetTokens[util.Simnet].Address != (common.Address{}) {
-		t.Fatal("simnet address should be zero before harness runs")
+	// Simnet address starts zero in source; MaybeReadSimnetAddrs (called from
+	// init) populates it only when harness files exist. Skip on harness machines.
+	usr, err := user.Current()
+	if err == nil {
+		harnessDir := filepath.Join(usr.HomeDir, "dextest", "eth")
+		if _, err := os.Stat(harnessDir); os.IsNotExist(err) {
+			if token.NetTokens[util.Simnet].Address != (common.Address{}) {
+				t.Fatal("simnet address should be zero before harness runs")
+			}
+		}
 	}
 }

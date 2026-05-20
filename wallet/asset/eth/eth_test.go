@@ -1739,10 +1739,8 @@ func tassetWallet(assetID uint32) (asset.AtomicSwapWallet, *assetWallet, *tMempo
 			assetWallet: aw,
 			cfg:         &tokenWalletConfig{},
 			parent:      node.tokenParent,
-			token:       Tokens[usdcEthID],
-			netToken:    Tokens[usdcEthID].NetTokens[util.Simnet],
-			// token:       dexeth.Tokens[assetID],
-			// netToken:    dexeth.Tokens[assetID].NetTokens[util.Simnet],
+			token:       Tokens[assetID],
+			netToken:    Tokens[assetID].NetTokens[util.Simnet],
 		}
 		aw.wallets = map[uint32]*assetWallet{
 			assetID: aw,
