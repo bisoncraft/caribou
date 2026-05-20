@@ -165,6 +165,90 @@ func TestTokenRegistration(t *testing.T) {
 	}
 }
 
+func TestChainIDs(t *testing.T) {
+	cases := []struct {
+		net    util.Network
+		wantID int64
+	}{
+		{util.Mainnet, MainnetChainID},
+		{util.Testnet, TestnetChainID},
+		{util.Simnet, SimnetChainID},
+	}
+	for _, tc := range cases {
+		got, ok := ChainIDs[tc.net]
+		if !ok {
+			t.Fatalf("ChainIDs missing entry for %s", tc.net)
+		}
+		if got != tc.wantID {
+			t.Fatalf("ChainIDs[%s] = %d, want %d", tc.net, got, tc.wantID)
+		}
+	}
+	if _, ok := ChainIDs[util.Network(99)]; ok {
+		t.Fatal("ChainIDs should not have an entry for an unknown network")
+	}
+
+	// Driver.Open reads ChainConfig(net).ChainID and Driver.Create reads
+	// ChainIDs[net]. These two paths must agree on the chain ID for each
+	// network or a wallet created on one path will talk to a different
+	// chain than a wallet opened on the other.
+	for _, net := range []util.Network{util.Mainnet, util.Testnet, util.Simnet} {
+		cfg, err := ChainConfig(net)
+		if err != nil {
+			t.Fatalf("ChainConfig(%s) error: %v", net, err)
+		}
+		if cfg.ChainID == nil {
+			t.Fatalf("ChainConfig(%s).ChainID is nil", net)
+		}
+		if cfg.ChainID.Int64() != ChainIDs[net] {
+			t.Fatalf("chain ID disagreement for %s: ChainConfig=%d, ChainIDs=%d",
+				net, cfg.ChainID.Int64(), ChainIDs[net])
+		}
+	}
+}
+
+// TestContractAddresses verifies that the swap-contract address map covers
+// both supported versions on every supported network, and that mainnet and
+// testnet entries are non-zero. Simnet entries are populated at runtime by
+// MaybeReadSimnetAddrs from the eth simnet harness files, so we only assert
+// the slot exists.
+func TestContractAddresses(t *testing.T) {
+	wantVersions := []uint32{0, 1}
+	wantNets := []util.Network{util.Mainnet, util.Testnet, util.Simnet}
+	for _, ver := range wantVersions {
+		netMap, ok := ContractAddresses[ver]
+		if !ok {
+			t.Fatalf("ContractAddresses missing v%d", ver)
+		}
+		for _, net := range wantNets {
+			addr, ok := netMap[net]
+			if !ok {
+				t.Fatalf("ContractAddresses[v%d] missing %s", ver, net)
+			}
+			if net == util.Simnet {
+				continue
+			}
+			if (addr == common.Address{}) {
+				t.Fatalf("ContractAddresses[v%d][%s] is the zero address", ver, net)
+			}
+		}
+	}
+}
+
+// TestMultiBalanceAddresses verifies the multi-balance contract address is
+// configured for mainnet and testnet. Simnet does not deploy a multi-balance
+// contract; Driver.Open passes the zero value from the map miss.
+func TestMultiBalanceAddresses(t *testing.T) {
+	for _, net := range []util.Network{util.Mainnet, util.Testnet} {
+		addr, ok := MultiBalanceAddresses[net]
+		if !ok {
+			t.Fatalf("MultiBalanceAddresses missing %s", net)
+		}
+		if (addr == common.Address{}) {
+			t.Fatalf("MultiBalanceAddresses[%s] is the zero address", net)
+		}
+	}
+}
+
 // TestPolygonAssetRegistered ensures the polygon Driver itself is registered
 // at BipID and surfaces the expected base-chain WalletInfo.
 func TestPolygonAssetRegistered(t *testing.T) {
