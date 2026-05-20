@@ -4,7 +4,6 @@ import {
   User,
   PageData,
   UnitInfo,
-  TotalUSDBalance,
   PortfolioTotals,
   FormData,
   CoreNote,
@@ -189,27 +188,9 @@ export class Application {
     this.tickerMap = tickerMap
   }
 
-  totalBalanceUSD (): TotalUSDBalance {
-    if (!this.user) return { ok: false, total: 0, numContribs: 0 }
-    if (Object.keys(this.user.tickerRates).length === 0) return { ok: false, total: 0, numContribs: 0 }
-    let numContribs = 0
-    const total = this.tickerList.reduce((acc: number, { ticker, total, xcRate, cFactor }: TickerAsset) => {
-      if (!xcRate) {
-        console.warn('no exchange rate info for', ticker)
-        return acc
-      }
-      if (total === 0) return acc
-      numContribs++
-      return acc + (total / cFactor) * xcRate
-    }, 0)
-    return { ok: true, total, numContribs }
-  }
-
-  /*
-   * portfolioTotals returns a breakdown of the portfolio value in USD.
-   * Only assets with a known fiat rate are included in the totals.
-   * ratesComplete is false if any wallet asset is missing a rate.
-   */
+  // portfolioTotals returns a breakdown of the portfolio value in USD.
+  // Only assets with a known fiat rate are included in the totals.
+  // ratesComplete is false if any wallet asset is missing a rate.
   portfolioTotals (): PortfolioTotals {
     let available = 0
     let locked = 0
@@ -230,9 +211,7 @@ export class Application {
       const cFactor = asset.unitInfo.conventional.conversionFactor
       const bal = wallet.balance
       available += ((bal.available ?? 0) / cFactor) * fiatRate
-      const lockedTotal = (bal.locked ?? 0) + (bal.contractlocked ?? 0) +
-        (bal.bondlocked ?? 0) + (bal.orderlocked ?? 0)
-      locked += (lockedTotal / cFactor) * fiatRate
+      locked += ((bal.locked ?? 0) / cFactor) * fiatRate
     }
 
     return { total: available + locked, available, locked, numWallets, ratesComplete }
@@ -336,13 +315,17 @@ export class Application {
       }
       case 'walletstate':
       case 'walletconfig': {
-        // assets can be null if failed to connect to dex server.
         const wallet = (note as WalletConfigNote)?.wallet
         if (!wallet) return
         const asset = user.assets[wallet.assetID]
         asset.wallet = wallet
+        // Refresh every ticker that contains this asset as a variant OR as a
+        // token's parent network — creating ETH unlocks every ERC-20 ticker.
         for (const ta of this.tickerList ?? []) {
-          if (ta.variantLookup[wallet.assetID]) ta.updateHasWallets()
+          if (ta.variantLookup[wallet.assetID] ||
+              ta.variants.some(v => v.token?.networkID === wallet.assetID)) {
+            ta.updateHasWallets()
+          }
         }
         break
       }

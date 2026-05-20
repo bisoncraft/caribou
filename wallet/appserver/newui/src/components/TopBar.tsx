@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import t from '../js/intl'
 import app from '../js/application'
 import Doc from '../js/doc'
 import { PortfolioTotals } from '../js/registry'
@@ -15,48 +16,48 @@ export default function TopBar () {
     }
   }, [])
 
+  const totalDisplay = totals.total > 0 ? `$${Doc.formatFourSigFigs(totals.total, 2)} USD` : '—'
+
   return (
     <div className="topbar d-flex align-items-stretch">
-      {/* Left: logo */}
       <div className="topbar-left d-flex align-items-center">
         <img className="logo-full medium" alt="Boss Wallet" />
       </div>
 
-      {/* Right: total value + action buttons */}
       <div className="topbar-right d-flex align-items-center justify-content-end flex-grow-1">
-        {totals.total > 0 && (
+        {totals.numWallets > 0 && (
           <div className="topbar-total d-flex flex-column align-items-end me-4">
-            <span className="topbar-total-value">${Doc.formatFourSigFigs(totals.total, 2)} USD</span>
-            <span className="topbar-total-label">TOTAL VALUE</span>
+            <span className="topbar-total-value">{totalDisplay}</span>
+            <span className="topbar-total-label">{t('TOTAL VALUE')}</span>
           </div>
         )}
 
-        <button className="topbar-action-btn flex-center flex-column noborder"
+        <button type="button" className="topbar-action-btn flex-center flex-column noborder"
           onClick={() => app.setForm({ form: 'receive', data: {} })}
-          title="Receive">
+          title={t('Receive')}>
           <span className="ico-qrcode fs24" />
-          <span className="topbar-action-label">RECEIVE</span>
+          <span className="topbar-action-label">{t('RECEIVE')}</span>
         </button>
 
-        <button className="topbar-action-btn flex-center flex-column noborder"
+        <button type="button" className="topbar-action-btn flex-center flex-column noborder"
           onClick={() => app.setForm({ form: 'send', data: {} })}
-          title="Send">
+          title={t('Send')}>
           <span className="ico-send fs24" />
-          <span className="topbar-action-label">SEND</span>
+          <span className="topbar-action-label">{t('SEND')}</span>
         </button>
 
-        <button className="topbar-action-btn flex-center flex-column noborder"
+        <button type="button" className="topbar-action-btn flex-center flex-column noborder"
           onClick={() => app.setForm({ form: 'swap', data: {} })}
-          title="Swap">
+          title={t('Swap')}>
           <span className="ico-swap fs24" />
-          <span className="topbar-action-label">SWAP</span>
+          <span className="topbar-action-label">{t('SWAP')}</span>
         </button>
 
-        <button className="topbar-action-btn flex-center flex-column noborder"
+        <button type="button" className="topbar-action-btn flex-center flex-column noborder"
           onClick={() => app.loadPage('settings')}
-          title="Settings">
+          title={t('Settings')}>
           <span className="ico-gear fs24" />
-          <span className="topbar-action-label">SETTINGS</span>
+          <span className="topbar-action-label">{t('SETTINGS')}</span>
         </button>
       </div>
     </div>

@@ -1,16 +1,23 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { CoreNote } from '../js/registry'
-import { TickerAsset } from '../js/assets'
+import { TickerAsset, AssetVariant } from '../js/assets'
 import PortfolioTotals from './PortfolioTotals'
 import AssetPills from './AssetPills'
 import AssetRow from './AssetRow'
 import InactiveAssetRow from './InactiveAssetRow'
 
+// networkIDFor returns the settlement network's assetID for a variant.
+function networkIDFor (v: AssetVariant): number {
+  return v.token ? v.token.networkID : v.assetID
+}
+
 export default function Portfolio () {
   const [, setTick] = useState(0)
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
   const [highlightedTicker, setHighlightedTicker] = useState<string | null>(null)
+  const highlightTimerRef = useRef<number | null>(null)
 
   const redraw = useCallback(() => setTick(n => n + 1), [])
 
@@ -30,47 +37,57 @@ export default function Portfolio () {
       app.unregisterBalanceUpdater(balK)
       app.unregisterFiatRateUpdater(rateK)
       app.unregisterNoteFeed(noteK)
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current)
+      }
     }
   }, [redraw])
 
   const handlePillSelect = (ticker: string) => {
     const isCurrentlySelected = selectedTicker === ticker
     setSelectedTicker(prev => prev === ticker ? null : ticker)
-    // Only flash the highlight when actually selecting, not when
-    // toggling off.
-    if (!isCurrentlySelected) {
-      setHighlightedTicker(ticker)
-      setTimeout(() => setHighlightedTicker(null), 900)
+    // Only flash the highlight when actually selecting, not when toggling off.
+    if (isCurrentlySelected) return
+    if (highlightTimerRef.current !== null) {
+      window.clearTimeout(highlightTimerRef.current)
     }
+    setHighlightedTicker(ticker)
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedTicker(null)
+      highlightTimerRef.current = null
+    }, 900)
   }
 
   const totals = app.portfolioTotals()
   const tickerList: TickerAsset[] = app.tickerList ?? []
-
-  const walletAssets = tickerList.filter(ta => ta.hasWallets)
-  const inactiveAssets = tickerList.filter(ta => !ta.hasWallets)
-
-  // Sort active assets by USD value descending
   const fiatRates = app.user?.fiatRates ?? {}
-  const sortedWalletAssets = [...walletAssets].sort((a, b) => {
-    const aRate = fiatRates[a.bestID] ?? 0
-    const bRate = fiatRates[b.bestID] ?? 0
-    const aVal = (a.total / a.cFactor) * aRate
-    const bVal = (b.total / b.cFactor) * bRate
+
+  const sortedWalletAssets: TickerAsset[] = []
+  const inactiveAssets: TickerAsset[] = []
+  for (const ta of tickerList) {
+    if (ta.hasWallets) sortedWalletAssets.push(ta)
+    else inactiveAssets.push(ta)
+  }
+  sortedWalletAssets.sort((a, b) => {
+    const aVal = (a.total / a.cFactor) * (fiatRates[a.bestID] ?? 0)
+    const bVal = (b.total / b.cFactor) * (fiatRates[b.bestID] ?? 0)
     return bVal - aVal
   })
 
-  // Count distinct inactive assets
+  // Distinct settlement networks across inactive variants.
+  const inactiveNetworks = new Set<number>()
+  for (const ta of inactiveAssets) {
+    for (const v of ta.variants) inactiveNetworks.add(networkIDFor(v))
+  }
   const inactiveCount = inactiveAssets.length
-  // TODO: count unique networks among inactive assets if network info becomes available per TickerAsset.
-  const networkCount = 5 // placeholder — see TODO above
+  const inactiveNetworkCount = inactiveNetworks.size
 
   return (
     <div className="portfolio-view fill-abs" style={{ overflowY: 'auto' }}>
       <div className="portfolio-inner">
         <PortfolioTotals totals={totals} walletAssets={sortedWalletAssets} />
 
-        {walletAssets.length > 0 && (
+        {sortedWalletAssets.length > 0 && (
           <AssetPills
             walletAssets={sortedWalletAssets}
             selectedTicker={selectedTicker}
@@ -78,15 +95,15 @@ export default function Portfolio () {
           />
         )}
 
-        {walletAssets.length > 0 && (
+        {sortedWalletAssets.length > 0 && (
           <table className="asset-table w-100">
             <thead>
               <tr className="asset-table-header">
-                <th className="asset-th-asset">ASSETS</th>
-                <th className="asset-th-num">BALANCE</th>
-                <th className="asset-th-num">VALUE</th>
-                <th className="asset-th-num">PRICE</th>
-                <th className="asset-th-num">PORTFOLIO %</th>
+                <th className="asset-th-asset">{t('ASSETS')}</th>
+                <th className="asset-th-num">{t('BALANCE')}</th>
+                <th className="asset-th-num">{t('VALUE')}</th>
+                <th className="asset-th-num">{t('PRICE')}</th>
+                <th className="asset-th-num">{t('PORTFOLIO %')}</th>
               </tr>
             </thead>
             <tbody>
@@ -110,9 +127,14 @@ export default function Portfolio () {
 
         {inactiveCount > 0 && (
           <>
-            <div className="portfolio-section-header">ACTIVATE NEW ASSETS</div>
+            <div className="portfolio-section-header">{t('ACTIVATE NEW ASSETS')}</div>
             <p className="portfolio-section-copy grey fs13">
-              Boss Wallet supports {inactiveCount} other asset{inactiveCount !== 1 ? 's' : ''} across {networkCount} networks with more on the roadmap.
+              {tvar('Boss Wallet supports {{ assets }} other {{ assetWord }} across {{ networks }} {{ networkWord }} with more on the roadmap.', {
+                assets: String(inactiveCount),
+                assetWord: inactiveCount === 1 ? t('asset') : t('assets'),
+                networks: String(inactiveNetworkCount),
+                networkWord: inactiveNetworkCount === 1 ? t('network') : t('networks')
+              })}
             </p>
             <table className="asset-table w-100">
               <tbody>

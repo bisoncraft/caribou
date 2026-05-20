@@ -14,6 +14,13 @@ body {
   --demi-bold: 600;
   --text-danger: #ec6a6a;
   --text-warning: #f82e;
+  // brand accent (used by pills, highlight, inactive rows, etc.)
+  --accent-blue:        #1d50b5;
+  --accent-blue-border: #4271ce;
+  --accent-blue-text:   #6fa3d8;
+  --accent-blue-hover:  #9ec4f0;
+  --accent-blue-strong: #e8f0fb;
+  --accent-syncing:     #e6a817;
   // buttons
   --btn-border-color: #7777;
   --btn-hover-border-color: #777;

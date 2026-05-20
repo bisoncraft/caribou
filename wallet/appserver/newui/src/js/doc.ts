@@ -74,14 +74,6 @@ export default class Doc {
     el.removeEventListener(ev, f)
   }
 
-  // logoPath returns the path to the coin logo for the given ticker. Logos
-  // live at /img/coins/<ticker>.png keyed on the lowercased ticker, so
-  // callers should pass the normalized ticker (e.g. "BTC", "LTC", "POL",
-  // "USDC"), not the asset symbol.
-  static logoPath (ticker: string): string {
-    return `/img/coins/${ticker.toLowerCase()}.png`
-  }
-
   /*
    * formatCoinValue formats the value in atomic units into a string
    * representation in conventional units. If the value happens to be an
@@ -113,12 +105,6 @@ export default class Doc {
 
   static formatFourSigFigs (n: number, maxDecimals?: number): string {
     return formatSigFigsWithFormatters(intFormatter, fourSigFigs, n, maxDecimals)
-  }
-
-  static addrHost (addr: string) {
-    // Handle IPv6 cases like "[::1]:7232"
-    if (addr.startsWith('[')) return addr.substring(1, addr.lastIndexOf(']'))
-    return addr.split(':')[0]
   }
 }
 

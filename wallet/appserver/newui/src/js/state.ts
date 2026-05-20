@@ -4,22 +4,9 @@
 export default class State {
   // Cookie keys.
   static darkModeLK = 'darkMode'
-  static authCK = 'dexauth'
-  static pwKeyCK = 'sessionkey'
-  // Local storage keys (for data that we don't need at the server).
-  // static popupsLK = 'popups'
+  // Local storage keys.
   static loggersLK = 'loggers'
   static recordersLK = 'recorders'
-  static lastMarketLK = 'lastMarket'
-  // static depthZoomLK = 'depthZoom'
-  // static lastMMMarketLK = 'mmMarket'
-  // static optionsExpansionLK = 'mmOptsExpand'
-  // static leftMarketDockLK = 'leftmarketdock'
-  // static selectedAssetLK = 'selectedasset'
-  // static pendingTxsExpandedLK = 'pendingTxsExpanded'
-  // static notificationsLK = 'notifications' // DEPRECATED before v1
-  // static orderDisclaimerAckedLK = 'ordAck'
-  // static lastCandleDurationLK = 'lastCandleDuration'
   static localeSpecsKey = 'localeSpecsLK'
   static localeKey = 'localeLK'
   static recordMissingTranslationsLK = 'recordMissingTranslationsLK'
@@ -79,13 +66,5 @@ export default class State {
   /* removeLocal removes the key-value pair from Window.localStorage. */
   static removeLocal (k: string) {
     window.localStorage.removeItem(k)
-  }
-
-  static getLastMarket (): [string, string] | null {
-    return State.fetchLocal(State.lastMarketLK)
-  }
-
-  static setLastMarket (market: [string, string]) {
-    State.storeLocal(State.lastMarketLK, market)
   }
 }

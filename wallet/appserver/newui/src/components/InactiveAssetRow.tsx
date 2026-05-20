@@ -1,14 +1,13 @@
-import Doc from '../js/doc'
+import t from '../js/intl'
 import app from '../js/application'
 import { TickerAsset } from '../js/assets'
+import CoinLogo from './CoinLogo'
 
 interface InactiveAssetRowProps {
   asset: TickerAsset
 }
 
 export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
-  const logoPath = Doc.logoPath(asset.ticker)
-
   const handleActivate = () => {
     app.setForm({ form: 'activateasset', data: { assetID: asset.bestID } })
   }
@@ -17,7 +16,7 @@ export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
     <tr className="asset-row inactive-asset-row" onClick={handleActivate}>
       <td className="asset-row-asset">
         <div className="d-flex align-items-center">
-          <img src={logoPath} alt={asset.ticker} className="asset-logo inactive-asset-logo" />
+          <CoinLogo ticker={asset.ticker} className="asset-logo inactive-asset-logo" />
           <div className="asset-name-wrap ms-2">
             <div className="asset-name">
               <span>{asset.name}</span>
@@ -27,7 +26,7 @@ export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
         </div>
       </td>
       <td className="asset-row-add-wallet" colSpan={3}>
-        + Activate
+        + {t('Activate')}
       </td>
       <td className="asset-row-num" />
     </tr>

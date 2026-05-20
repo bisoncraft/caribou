@@ -17,24 +17,6 @@ declare global {
   }
 }
 
-export enum ConnectionStatus {
-  Disconnected = 0,
-  Connected = 1,
-  InvalidCert = 2,
-}
-
-export interface Asset {
-  id: number
-  symbol: string
-  version: number
-  maxFeeRate: number
-  swapSize: number
-  swapSizeBase: number
-  redeemSize: number
-  swapConf: number
-  unitInfo: UnitInfo
-}
-
 export interface SupportedAsset {
   id: number
   symbol: string
@@ -95,7 +77,6 @@ export interface WalletState {
   syncProgress: number
   syncStatus: SyncStatus
   approved: Record<number, ApprovalStatus>
-  bridgeApproved?: Record<string, ApprovalStatus>
   feeState?: FeeState
   pendingTxs: Record<string, WalletTransaction>
 }
@@ -114,11 +95,6 @@ export interface WalletBalance {
   immature: number
   locked: number
   stamp: string // time.Time
-  orderlocked?: number
-  contractlocked?: number
-  bondlocked?: number
-  bondReserves?: number
-  reservesDeficit?: number
   other: Record<string, CustomBalance>
 }
 
@@ -134,7 +110,6 @@ export interface WalletDefinition {
   description: string
   configpath: string
   configopts: ConfigOption[]
-  multifundingopts: OrderOption[]
   noauth: boolean
   guidelink: string
 }
@@ -170,14 +145,6 @@ export interface Denomination {
   conversionFactor: number
 }
 
-export interface ExtensionConfiguredWallet {
-  hiddenFields: string[]
-  disableWalletType: boolean
-  disablePassword: boolean
-  disableStaking: boolean
-  disablePrivacy: boolean
-}
-
 export interface User {
   inited: boolean
   seedgentime: number
@@ -197,15 +164,6 @@ export interface CoreNote {
   acked: boolean
   id: string
   data: any
-}
-
-export interface BridgeNote extends CoreNote {
-  sourceAssetID: number
-  destAssetID: number
-  txID: string
-  completionTxIDs: string[]
-  amount: number
-  complete: boolean
 }
 
 export interface BalanceNote extends CoreNote {
@@ -276,27 +234,6 @@ export interface CoreActionRequiredNote extends CoreNote {
   payload: ActionRequiredNote
 }
 
-export interface RejectedTxData {
-  assetID: number
-  orderID: string
-  coinID: string
-  coinFmt: string
-  txType: string
-}
-
-export interface RecentMatch {
-  rate: number
-  qty: number
-  stamp: number
-  sell: boolean
-}
-
-export interface EpochNote extends CoreNote {
-  host: string
-  marketID: string
-  epoch: number
-}
-
 export interface APIResponse {
   requestSuccessful: boolean
   ok: boolean
@@ -339,138 +276,6 @@ export interface PageElement extends HTMLElement {
   disabled?: boolean
 }
 
-export interface BooleanConfig {
-  reason: string
-}
-
-export interface XYRangePoint {
-  label: string
-  x: number
-  y: number
-}
-
-export interface XYRange {
-  start: XYRangePoint
-  end: XYRangePoint
-  xUnit: string
-  yUnit: string
-  roundX?: boolean
-  roundY?: boolean
-}
-
-export interface OrderOption extends ConfigOption {
-  boolean?: BooleanConfig
-  xyRange?: XYRange
-  showByDefault?: boolean
-  quoteAssetOnly?: boolean
-}
-
-export interface SwapEstimate {
-  lots: number
-  value: number
-  maxFees: number
-  realisticWorstCase: number
-  realisticBestCase: number
-  feeReservesPerLot: number
-}
-
-export interface RedeemEstimate {
-  realisticBestCase: number
-  realisticWorstCase: number
-}
-
-export interface PreSwap {
-  estimate: SwapEstimate
-  options: OrderOption[]
-}
-
-export interface PreRedeem {
-  estimate: RedeemEstimate
-  userOpRequired: boolean
-  options: OrderOption[]
-}
-
-export interface OrderEstimate {
-  swap: PreSwap
-  redeem: PreRedeem
-}
-
-export interface MaxOrderEstimate {
-  swap: SwapEstimate
-  redeem: RedeemEstimate
-}
-
-export interface MaxSell {
-  maxSell: MaxOrderEstimate
-}
-
-export interface MaxBuy {
-  maxBuy: MaxOrderEstimate
-}
-
-export interface LotFees {
-  swap: number
-  redeem: number
-  refund: number
-}
-
-export interface LotFeeRange {
-  max: LotFees
-  estimated: LotFees
-}
-
-export interface AssetBookingFees extends LotFeeRange {
-  bookingFeesPerLot: number
-  bookingFeesPerCounterLot: number
-  bookingFees: number
-  swapReservesFactor: number // (1 + orderReservesFactor)
-  redeemReservesFactor: number
-  tokenFeesPerSwap: number
-}
-
-export interface BookingFees {
-  base: AssetBookingFees
-  quote: AssetBookingFees
-}
-
-export interface MarketReport {
-  price: number
-  oracles: OracleReport[]
-  baseFiatRate: number
-  quoteFiatRate: number
-  baseFees: LotFeeRange
-  quoteFees: LotFeeRange
-}
-
-export interface Candle {
-  startStamp: number
-  endStamp: number
-  matchVolume: number
-  quoteVolume: number
-  highRate: number
-  lowRate: number
-  startRate: number
-  endRate: number
-}
-
-export interface CandlesPayload {
-  dur: string
-  ms: number
-  candles: Candle[]
-}
-
-export interface OracleReport {
-  host: string
-  usdVol: number
-  bestBuy: number
-  bestSell: number
-}
-
-export interface ExchangeBalance {
-  available: number
-  locked: number
-}
-
 // changing the order of the elements in this enum will affect
 // the sorting of the peers table in wallets.ts.
 export enum PeerSource {
@@ -479,155 +284,11 @@ export enum PeerSource {
   Discovered,
 }
 
-export interface Amount {
-  atoms: number
-  conventional: number
-  fmt: string
-  usd: number
-  fmtUSD: string
-}
-
-export interface ProfitLoss {
-  initial: Record<number, Amount>
-  initialUSD: number
-  mods: Record<number, Amount>
-  modsUSD: number
-  final: Record<number, Amount>
-  finalUSD: number
-  diffs: Record<number, Amount>
-  profit: number
-  profitRatio: number
-}
-
 export interface WalletPeer {
   addr: string
   source: PeerSource
   connected: boolean
 }
-
-export interface TicketTransaction {
-  hash: string
-  ticketPrice: number
-  fees: number
-  stamp: number
-  blockHeight: number
-}
-
-export interface Ticket {
-  tx: TicketTransaction
-  status: number
-  spender: string
-}
-
-export interface TBChoice {
-  id: string
-  description: string
-}
-
-export interface TBAgenda {
-  id: string
-  description: string
-  currentChoice: string
-  choices: TBChoice[]
-}
-
-export interface TKeyPolicyResult {
-  key: string
-  policy: string
-  ticket?: string
-}
-
-export interface TBTreasurySpend {
-  hash: string
-  value: number
-  currentPolicy: string
-}
-
-export interface Stances {
-  agendas: TBAgenda[]
-  tspends: TBTreasurySpend[]
-  treasuryKeys: TKeyPolicyResult[]
-}
-
-export interface TicketStats {
-  totalRewards: number
-  ticketCount: number
-  votes: number
-  revokes: number
-  mempool: number
-  queued: number
-}
-
-export interface TicketStakingStatus {
-  ticketPrice: number
-  votingSubsidy: number
-  vsp: string
-  isRPC: boolean
-  tickets: Ticket[]
-  stances: Stances
-  stats: TicketStats
-}
-
-// VotingServiceProvider is information about a voting service provider.
-export interface VotingServiceProvider {
-  url: string
-  network: number
-  launched: number
-  lastUpdated: number
-  apiVersions: number[]
-  feePercentage: number
-  closed: boolean
-  voting: number
-  voted: number
-  revoked: number
-  vspdVersion: string
-  blockHeight: number
-  netShare: number
-}
-
-export interface BondTxInfo {
-  bondID: string
-  lockTime: number
-  accountID: string
-}
-
-export interface BridgeCounterpartTx {
-  assetID: number
-  ids: string[]
-  complete: boolean
-  amountReceived: number
-  fees: number
-}
-
-export interface BridgeFeesAndLimits {
-  fees: Record<number, number>
-  minLimit: number
-  maxLimit: number
-  hasLimits: boolean
-}
-
-export interface BridgeResult {
-  ok: boolean
-  txID?: string
-  msg?: string
-}
-
-export interface BridgeApprovalStatusResult {
-  ok: boolean
-  status: number // 0=Approved, 1=Pending, 2=NotApproved
-  msg?: string
-}
-
-export interface BridgeApprovalResult {
-  ok: boolean
-  txID?: string
-  msg?: string
-}
-
-// Bridge approval status constants
-export const BridgeApprovalApproved = 0
-export const BridgeApprovalPending = 1
-export const BridgeApprovalNotApproved = 2
 
 export interface WalletTransaction {
   type: number
@@ -638,12 +299,9 @@ export interface WalletTransaction {
   blockNumber: number
   tokenID?: number
   recipient?: string
-  bondInfo?: BondTxInfo
   additionalData: Record<string, string>
   isUserOp: boolean
   userOpTxID: string
-  bridgeCounterpartTx?: BridgeCounterpartTx
-  bridgeName?: string
   confirmed: boolean
   confirms?: {
     current: number
@@ -664,8 +322,6 @@ export interface TxHistoryResult {
   moreAvailable: boolean
 }
 
-export const PrepaidBondID = 2147483647
-
 export interface AppState {
   user: User
   lang: string
@@ -680,12 +336,6 @@ export interface PageData {
   pageRoot: string
   data: any
   query: URLSearchParams
-}
-
-export interface TotalUSDBalance {
-  ok: boolean
-  total: number
-  numContribs: number
 }
 
 export interface PortfolioTotals {

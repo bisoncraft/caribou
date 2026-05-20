@@ -1,8 +1,10 @@
-import { useState, ChangeEvent } from 'react'
+import { useState, ChangeEvent, FormEvent } from 'react'
 import t from '../js/intl'
 import PasswordInput from './PasswordInput'
 import LocaleSelector from './LocaleSelector'
 import { postJSON } from '../js/http'
+
+const noSubmit = (e: FormEvent) => e.preventDefault()
 
 interface UnlockedFormParams {
   setUnlocked: () => void
@@ -27,7 +29,7 @@ export default function UnlockForm ({ setUnlocked }: UnlockedFormParams) {
       <div className="top-right-floater">
         <LocaleSelector />
       </div>
-      <form className="modal form-width-250">
+      <form className="modal form-width-250" onSubmit={noSubmit}>
         <header>
           <img className="logo-full small me-2" />
           <span>{t('Welcome Back!')}</span>
@@ -36,7 +38,7 @@ export default function UnlockForm ({ setUnlocked }: UnlockedFormParams) {
           <PasswordInput value={pw} onChange={pwChanged} />
         </div>
         <div className="flex-stretch-column p-3">
-          <button onClick={submitPW} disabled={pw === ''} className="feature">
+          <button type="button" onClick={submitPW} disabled={pw === ''} className="feature">
             {t('Unlock')}
           </button>
         </div>

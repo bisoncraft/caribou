@@ -459,22 +459,22 @@ img.logo-full {
   letter-spacing: 0.06em;
   padding: 0.2rem 0.65rem;
   border-radius: 20px;
-  background-color: #1d50b533;
-  border: 1px solid #1d50b566;
-  color: #6fa3d8;
+  background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 40%, transparent);
+  color: var(--accent-blue-text);
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 
   &:hover {
-    background-color: #1d50b555 !important;
-    border-color: #4271ce !important;
-    color: #9ec4f0 !important;
+    background-color: color-mix(in srgb, var(--accent-blue) 33%, transparent) !important;
+    border-color: var(--accent-blue-border) !important;
+    color: var(--accent-blue-hover) !important;
     cursor: pointer;
   }
 
   &.asset-pill-selected {
-    background-color: #1d50b5 !important;
-    border-color: #4271ce !important;
-    color: #e8f0fb !important;
+    background-color: var(--accent-blue) !important;
+    border-color: var(--accent-blue-border) !important;
+    color: var(--accent-blue-strong) !important;
   }
 }
 
@@ -540,7 +540,8 @@ img.logo-full {
   min-width: 0;
 }
 
-// Status dot
+// Status dot. Parent .asset-name uses `gap: 6px` for spacing between the
+// asset name and this indicator.
 .asset-status-dot {
   display: inline-block;
   width: 8px;
@@ -549,7 +550,7 @@ img.logo-full {
   flex-shrink: 0;
 
   &.asset-status-syncing {
-    background-color: #e6a817;
+    background-color: var(--accent-syncing);
   }
 }
 
@@ -561,8 +562,8 @@ img.logo-full {
 
 // Row highlight flash (triggered by pill selection)
 @keyframes rowHighlight {
-  0%   { background-color: #4271ce33; }
-  60%  { background-color: #4271ce22; }
+  0%   { background-color: color-mix(in srgb, var(--accent-blue-border) 20%, transparent); }
+  60%  { background-color: color-mix(in srgb, var(--accent-blue-border) 13%, transparent); }
   100% { background-color: transparent; }
 }
 
@@ -570,26 +571,30 @@ img.logo-full {
   animation: rowHighlight 0.8s ease-out forwards;
 }
 
-// Inactive asset rows
+// Inactive asset rows. The decorative dashed bar is anchored to the row's
+// leftmost cell so we don't get one stripe per <td>.
 .inactive-asset-row {
   cursor: pointer;
   transition: background-color 0.15s;
 
   td {
     opacity: 0.55;
-    border-left: 3px dashed #4271ce66;
     transition: opacity 0.15s, color 0.15s;
   }
 
+  td:first-child {
+    border-left: 3px dashed color-mix(in srgb, var(--accent-blue-border) 40%, transparent);
+  }
+
   &:hover {
-    background-color: #1d50b522;
+    background-color: color-mix(in srgb, var(--accent-blue) 13%, transparent);
 
     td {
       opacity: 1;
     }
 
     .asset-row-add-wallet {
-      color: #9ec4f0;
+      color: var(--accent-blue-hover);
     }
   }
 }
@@ -601,7 +606,7 @@ img.logo-full {
 .asset-row-add-wallet {
   text-align: center;
   vertical-align: middle;
-  color: #6fa3d8;
+  color: var(--accent-blue-text);
   font-size: 12px;
   letter-spacing: 0.04em;
 }
