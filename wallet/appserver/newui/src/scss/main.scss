@@ -57,7 +57,6 @@ textarea {
   display: block;
   padding: 0.375rem 0.75rem;
   width: 100%;
-  // border: 1px solid var(--form-input-border);
   border: none;
   border-radius: 5px;
   background-color: var(--form-input-bg);
@@ -69,6 +68,21 @@ textarea {
     border-width: 1px;
     border-color: var(--form-input-border-focus);
     outline: none;
+  }
+}
+
+// Inputs/textareas wrapped in .form-input-bg should be visually transparent
+// — the wrapper provides the bg and the focus ring. This rule must come
+// after the global input rule above so that the focus override wins (same
+// specificity; source order is the tiebreaker).
+.form-input-bg {
+  input,
+  textarea {
+    background-color: transparent;
+
+    &:focus {
+      border: none;
+    }
   }
 }
 
@@ -291,6 +305,33 @@ img.logo-full {
   &.fast {
     animation: spin 1s infinite linear;
   }
+}
+
+// Inline CSS spinner. Sized by inline style on the element; this rule
+// supplies the arc, color, and rotation only.
+.spinner-circle {
+  display: inline-block;
+  vertical-align: middle;
+  border-style: solid;
+  border-color: currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+// Form error region: a short horizontal nudge to draw the eye when it
+// transitions from empty to a message, then settles.
+@keyframes formErrNudge {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(-4px); }
+  40%  { transform: translateX(4px); }
+  60%  { transform: translateX(-2px); }
+  80%  { transform: translateX(2px); }
+  100% { transform: translateX(0); }
+}
+
+.form-err {
+  animation: formErrNudge 0.35s ease-out;
 }
 
 .init-bg {

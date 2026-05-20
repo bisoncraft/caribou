@@ -34,6 +34,23 @@ body {
 
 .form-input-bg {
   background-color: var(--form-input-bg);
+  transition: box-shadow 0.1s;
+
+  // Focus indication lives on the wrapper so the pill reads as one unit
+  // instead of showing a nested border around the inner <input>. Uses
+  // box-shadow so the ring doesn't displace layout.
+  &:focus-within {
+    box-shadow: 0 0 0 1px var(--form-input-border-focus);
+  }
+
+  &.is-disabled {
+    opacity: 0.55;
+  }
+}
+
+input:disabled,
+textarea:disabled {
+  cursor: not-allowed;
 }
 
 .grey {
