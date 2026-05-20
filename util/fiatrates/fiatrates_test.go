@@ -132,7 +132,7 @@ func TestParseBinanceTickers(t *testing.T) {
 }
 
 func TestAllFiatSourceDisabled(t *testing.T) {
-	all := cryptoCompare + "," + kuCoin + "," + binance + "," + coinpaprika + "," + messari
+	all := cryptoCompare + "," + kuCoin + "," + binance + "," + coinpaprika + "," + messari + "," + chainlink
 	allCfg := Config{DisabledFiatSources: all}
 	if !allCfg.AllFiatSourceDisabled() {
 		t.Error("expected all sources to be disabled")
@@ -291,7 +291,7 @@ func TestSourceKuCoin(t *testing.T) {
 	})
 	defer restore()
 
-	sources := fiatSources(Config{})
+	sources := fiatSources(Config{}, tLog)
 	kuCoinSrc := sources[1] // kuCoin is index 1
 
 	rates, err := kuCoinSrc.getRates(context.Background(), []string{"btc", "eth"}, tLog)
@@ -313,7 +313,7 @@ func TestSourceKuCoinHTTPError(t *testing.T) {
 	})
 	defer restore()
 
-	sources := fiatSources(Config{})
+	sources := fiatSources(Config{}, tLog)
 	_, err := sources[1].getRates(context.Background(), []string{"btc"}, tLog)
 	if err == nil {
 		t.Error("expected error on HTTP failure")
@@ -329,7 +329,7 @@ func TestSourceBinance(t *testing.T) {
 	})
 	defer restore()
 
-	sources := fiatSources(Config{})
+	sources := fiatSources(Config{}, tLog)
 	binanceSrc := sources[2] // binance is index 2
 
 	rates, err := binanceSrc.getRates(context.Background(), []string{"btc", "eth"}, tLog)
@@ -346,7 +346,7 @@ func TestSourceBinance(t *testing.T) {
 
 func TestSourceBinanceEmptyTickers(t *testing.T) {
 	// parseBinanceTickers returns "" for empty input — source should return nil, nil.
-	sources := fiatSources(Config{})
+	sources := fiatSources(Config{}, tLog)
 	rates, err := sources[2].getRates(context.Background(), nil, tLog)
 	if err != nil || rates != nil {
 		t.Errorf("empty tickers: got rates=%v err=%v, want nil, nil", rates, err)
@@ -363,7 +363,7 @@ func TestSourceCoinpaprika(t *testing.T) {
 	})
 	defer restore()
 
-	sources := fiatSources(Config{})
+	sources := fiatSources(Config{}, tLog)
 	coinpapSrc := sources[3] // coinpaprika is index 3
 
 	rates, err := coinpapSrc.getRates(context.Background(), []string{"btc", "dcr"}, tLog)
@@ -384,7 +384,7 @@ func TestSourceCryptoCompare(t *testing.T) {
 	})
 	defer restore()
 
-	sources := fiatSources(Config{CryptoCompareAPIKey: "testkey"})
+	sources := fiatSources(Config{CryptoCompareAPIKey: "testkey"}, tLog)
 	ccSrc := sources[0] // cryptoCompare is index 0
 
 	rates, err := ccSrc.getRates(context.Background(), []string{"btc", "eth"}, tLog)
@@ -401,7 +401,7 @@ func TestSourceCryptoCompare(t *testing.T) {
 
 func TestSourceCryptoCompareNoKey(t *testing.T) {
 	// Without an API key the closure should return nil, nil immediately.
-	sources := fiatSources(Config{})
+	sources := fiatSources(Config{}, tLog)
 	rates, err := sources[0].getRates(context.Background(), []string{"btc"}, tLog)
 	if err != nil || rates != nil {
 		t.Errorf("no-key cryptoCompare: got rates=%v err=%v, want nil, nil", rates, err)
