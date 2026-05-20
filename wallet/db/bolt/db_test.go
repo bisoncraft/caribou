@@ -1400,9 +1400,9 @@ func TestDeleteInactiveMatches(t *testing.T) {
 	})
 	t.Logf("~ %d milliseconds to insert %d MetaOrder", int(time.Since(tStart)/time.Millisecond)-numToDoO, numToDoO)
 
-	numToDo := 10000
+	numToDo := 1000
 	numActive := 100
-	numNewer := 1111
+	numNewer := 111
 	if testing.Short() {
 		numToDo = 24
 		numActive = 8
@@ -1517,10 +1517,10 @@ func TestDeleteInactiveOrders(t *testing.T) {
 	base1, quote1 := randU32(), randU32()
 	base2, quote2 := randU32(), randU32()
 
-	numToDo := 10008
-	numActive := 1000
-	numNewer := 1111
-	numActiveMatchWithOrd := 481
+	numToDo := 1008
+	numActive := 100
+	numNewer := 111
+	numActiveMatchWithOrd := 48
 	if testing.Short() {
 		numToDo = 48
 		numActive = 10

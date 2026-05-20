@@ -1233,7 +1233,7 @@ func (c *Core) assetSeedAndPass(assetID uint32, crypter encrypt.Crypter) (seed, 
 	}
 
 	if tkn := asset.TokenInfo(assetID); tkn != nil {
-		return nil, nil, fmt.Errorf("%s is a token. assets seeds are for base chains onlyu. did you want %s",
+		return nil, nil, fmt.Errorf("%s is a token. assets seeds are for base chains only. did you want %s",
 			tkn.Name, asset.Asset(tkn.NetworkID).Info.Name)
 	}
 
