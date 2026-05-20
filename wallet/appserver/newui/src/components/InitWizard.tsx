@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, FormEvent } from 'react'
 import t from '../js/intl'
 import PasswordInput from './PasswordInput'
 import LocaleSelector from './LocaleSelector'
 import { postJSON } from '../js/http'
+
+const noSubmit = (e: FormEvent) => e.preventDefault()
 
 /*
  * SeedPromptFormParams is the interface for the SeedPromptForm component.
@@ -14,15 +16,15 @@ const SeedPromptForm = ({ setUsingSeed }: SeedPromptFormParams) => {
   const onNoSeedClicked = () => setUsingSeed(false)
 
   return (
-    <form className="modal">
+    <form className="modal" onSubmit={noSubmit}>
       <header>
         <img className="logo-full small me-2" />
-        <span>{t('Welcome to Bison Wallet!')}</span>
+        <span>{t('Welcome to Boss Wallet!')}</span>
       </header>
       <div className="px-3">{t('prompt_for_seed')}</div>
       <div className="d-flex align-items-center p-3">
-        <button className="fs16 me-1 flex-grow-1" onClick={onUsingSeedClicked}>{t('Yes')}</button>
-        <button className="feature fs16 ms-1 flex-grow-1" onClick={onNoSeedClicked}>{t('No')}</button>
+        <button type="button" className="fs16 me-1 flex-grow-1" onClick={onUsingSeedClicked}>{t('Yes')}</button>
+        <button type="button" className="feature fs16 ms-1 flex-grow-1" onClick={onNoSeedClicked}>{t('No')}</button>
       </div>
     </form>
   )
@@ -55,7 +57,7 @@ const PasswordForm = ({ setRegistered, setUsingSeed, setSeed, seed }: PasswordFo
   }
 
   return (
-    <form className="modal form-width-300">
+    <form className="modal form-width-300" onSubmit={noSubmit}>
       <div className="fs18 p-3 text-center">{t('Set a password for your wallet')}</div>
       <div className="flex-stretch-column px-3">
         <div className="mb-2"><PasswordInput onChange={(e) => setPW(e.target.value)} value={pw} /></div>
@@ -63,8 +65,8 @@ const PasswordForm = ({ setRegistered, setUsingSeed, setSeed, seed }: PasswordFo
       </div>
       <div className={`flex-center errcolor p-3 ${err ? '' : 'd-none'}`}>{err}</div>
       <div className="flex-stretch-column p-3">
-        <button className="feature w-100" disabled={pw !== pw2 || pw.trim() === ''} onClick={submitPW}>{t('Submit')}</button>
-        <button className="w-100 mt-2" onClick={onGoBackClicked}>{t('Go Back')}</button>
+        <button type="button" className="feature w-100" disabled={pw !== pw2 || pw.trim() === ''} onClick={submitPW}>{t('Submit')}</button>
+        <button type="button" className="w-100 mt-2" onClick={onGoBackClicked}>{t('Go Back')}</button>
       </div>
     </form>
   )
@@ -88,7 +90,7 @@ export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
   }
 
   return (
-    <form className="modal">
+    <form className="modal" onSubmit={noSubmit}>
       <div className="fs18 p-3 text-center">{t('Input your recovery seed')}</div>
       <div className="d-flex px-3">
         <textarea className="fs14" onChange={onChange}></textarea>
@@ -96,10 +98,12 @@ export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
       <div className={`flex-center errcolor p-3 ${err ? '' : 'd-none'}`}>{err}</div>
       <div className="d-flex flex-column p-3">
         <button
+          type="button"
           className="feature w-100"
           disabled={workingSeed.trim() === ''}
           onClick={submitSeed}>{t('Recover')}</button>
         <button
+          type="button"
           className="w-100 mt-2"
           onClick={onGoBackClicked}>{t('Go Back')}</button>
       </div>
@@ -114,11 +118,11 @@ interface SeedDisplayParams {
 
 export const SeedDisplay = ({ acked, seed }: SeedDisplayParams) => {
   return (
-    <form className="modal form-width-300">
+    <form className="modal form-width-300" onSubmit={noSubmit}>
       <div className="pt-3 px-3">{t('seed_display_warning')}</div>
       <div className="mt-3 mx-3 p-2 fs14 form-input-bg mono">{seed}</div>
       <div className="flex-stretch-column p-3">
-        <button className="feature w-100" onClick={acked}>{t('I have written down my seed')}</button>
+        <button type="button" className="feature w-100" onClick={acked}>{t('I have written down my seed')}</button>
       </div>
     </form>
   )

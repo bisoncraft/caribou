@@ -5,7 +5,7 @@ package locales
 import "github.com/bisoncraft/bosswallet/wallet/intl"
 
 var EnUS = map[string]*intl.Translation{
-	"prompt_for_seed":      {T: "Are you restoring Bison Wallet from a seed?"},
+	"prompt_for_seed":      {T: "Are you restoring Boss Wallet from a seed?"},
 	"seed_display_warning": {T: "Your seed is shown below. Write it down and keep it safe. You will need it to restore your wallet if you lose your device."},
 	"Welcome Back!":        {T: "Welcome Back!"},
 	"Unlock":               {T: "Unlock"},
