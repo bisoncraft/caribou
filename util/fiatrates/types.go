@@ -17,6 +17,8 @@ type Config struct {
 	CryptoCompareAPIKey string `long:"ccdataapikey" description:"This is your free API Key from cryptocompare.com."`
 	EnableBinanceUS     bool   `long:"enablebinanceus" description:"Set to true, if running the tatanka mesh from a US based server."`
 	DisabledFiatSources string `long:"disabledfiatsources" description:"A list of disabled sources separated by comma. See fiatrate/sources.go."`
+	ChainlinkProviders  string `long:"chainlinkproviders" description:"Whitespace-separated Polygon RPC provider URLs for Chainlink Data Feeds. Leave empty to use defaults."`
+	ChainlinkTestnet    bool   `long:"chainlinktestnet" description:"Use Sepolia testnet Chainlink feed addresses instead of Polygon mainnet."`
 }
 
 // AllFiatSourceDisabled checks if all currently supported fiat rate sources
@@ -25,7 +27,7 @@ func (cfg Config) AllFiatSourceDisabled() bool {
 	disabledSources := strings.ToLower(cfg.DisabledFiatSources)
 	return strings.Contains(disabledSources, strings.ToLower(cryptoCompare)) && strings.Contains(disabledSources, strings.ToLower(binance)) &&
 		strings.Contains(disabledSources, strings.ToLower(coinpaprika)) && strings.Contains(disabledSources, strings.ToLower(messari)) &&
-		strings.Contains(disabledSources, strings.ToLower(kuCoin))
+		strings.Contains(disabledSources, strings.ToLower(kuCoin)) && strings.Contains(disabledSources, strings.ToLower(chainlink))
 }
 
 type source struct {

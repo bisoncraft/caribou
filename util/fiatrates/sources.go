@@ -69,13 +69,15 @@ const (
 	// 1712 calls left unused.
 	kuCoin              = "KuCoin"
 	kuCoinPriceEndpoint = "https://api.kucoin.com/api/v1/prices?currencies=%s"
+
+	chainlink = "Chainlink"
 )
 
 var (
 	upperCaser = cases.Upper(language.AmericanEnglish)
 )
 
-func fiatSources(cfg Config) []*source {
+func fiatSources(cfg Config, flog util.Logger) []*source {
 	disabledSources := strings.ToLower(cfg.DisabledFiatSources)
 	sources := []*source{
 		{
@@ -242,6 +244,19 @@ func fiatSources(cfg Config) []*source {
 				return fiatRates, nil
 			},
 		},
+	}
+
+	if !strings.Contains(disabledSources, strings.ToLower(chainlink)) {
+		getRates, err := chainlinkRateFetcher(cfg)
+		if err != nil {
+			flog.Errorf("chainlink: %v", err)
+		} else {
+			sources = append(sources, &source{
+				name:            chainlink,
+				requestInterval: defaultRefreshInterval,
+				getRates:        getRates,
+			})
+		}
 	}
 
 	for i := range sources {
