@@ -1,0 +1,398 @@
+// Component-scoped styles. Grouped by component/region.
+
+// -----------------------------------------------------------------------
+// Modal & overlay surfaces.
+
+// Wraps the unlock / init screen. Full-screen, neutral grey backdrop.
+.forms {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: var(--modal-wrapper-bg);
+}
+
+// Dimmed scrim behind in-app modal dialogs (Receive, ActivateAsset, …).
+.modals {
+  z-index: 101;
+  background-color: var(--scrim-bg);
+  backdrop-filter: blur(5px);
+}
+
+form.modal {
+  border-color: var(--border-color);
+  margin: auto;
+  position: relative;
+  background-color: var(--body-bg);
+}
+
+// Used by the init wizard's outer container — same shade as .forms so the
+// transition between forms screens and the wizard is seamless.
+.init-bg {
+  background-color: var(--modal-wrapper-bg);
+}
+
+// Translucent loading overlay; sits above page content.
+.loading-bg {
+  background-color: color-mix(in srgb, var(--body-bg) 47%, transparent);
+  z-index: 201;
+}
+
+.top-right-floater {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+// -----------------------------------------------------------------------
+// Logo image (rendered via CSS `content`).
+
+img.logo-full {
+  content: url("/img/bison-full_97x50.png");
+
+  &.small  { height: 25px; width: 48.5px; }
+  &.medium { height: 40px; width: 77.6px; }
+}
+
+// -----------------------------------------------------------------------
+// Form-input wrapper. Pairs with <PasswordInput /> (and any future
+// embedded input with adornments).
+
+.form-input-bg {
+  background-color: var(--form-input-bg);
+  transition: box-shadow 0.1s;
+
+  // Focus indication on the wrapper so the pill reads as one unit.
+  // box-shadow rather than border so the ring doesn't displace layout.
+  &:focus-within {
+    box-shadow: 0 0 0 1px var(--form-input-border-focus);
+  }
+
+  &.is-disabled {
+    opacity: 0.55;
+  }
+
+  // Wrapped <input>/<textarea>: transparent against the wrapper bg and
+  // no per-element focus border. Defined after the global input rule in
+  // base.scss so source order resolves the specificity tie.
+  input,
+  textarea {
+    background-color: transparent;
+
+    &:focus { border: none; }
+  }
+}
+
+// -----------------------------------------------------------------------
+// App shell: TopBar + Sidebar.
+
+.topbar {
+  height: 80px;
+  min-height: 80px;
+  background-color: var(--body-bg);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.topbar-left {
+  width: var(--sidebar-width);
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+
+.topbar-right {
+  padding: 0 12px;
+}
+
+.topbar-total {
+  padding-right: 12px;
+  border-right: 1px solid var(--border-color);
+  margin-right: 4px;
+}
+
+.topbar-total-value {
+  font-size: 18px;
+  font-weight: var(--demi-bold);
+  color: var(--text-color);
+  line-height: 1.2;
+}
+
+.topbar-total-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-grey);
+}
+
+.topbar-action-btn {
+  width: 64px;
+  height: 60px;
+  gap: 4px;
+  color: var(--text-grey);
+  border-radius: 5px;
+  padding: 0;
+
+  &:hover {
+    color: var(--text-color);
+    cursor: pointer;
+  }
+}
+
+.topbar-action-label {
+  font-size: 9px;
+  letter-spacing: 0.07em;
+  font-weight: var(--demi-bold);
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+}
+
+// -----------------------------------------------------------------------
+// Portfolio view.
+
+.portfolio-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.portfolio-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 2rem 4rem;
+  width: 100%;
+}
+
+.portfolio-totals {
+  text-align: center;
+  padding: 2rem 0 1.5rem;
+}
+
+.portfolio-totals-logos {
+  gap: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.portfolio-totals-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: contain;
+}
+
+.portfolio-totals-heading {
+  font-size: 42px;
+  font-weight: var(--demi-bold);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.portfolio-totals-subtitle {
+  margin-top: 0.5rem;
+}
+
+.portfolio-totals-empty .portfolio-totals-heading {
+  font-size: 24px;
+  font-weight: normal;
+}
+
+.portfolio-totals-stats {
+  margin-top: 0.75rem;
+  gap: 0.5rem;
+}
+
+.portfolio-stat {
+  font-size: 14px;
+  color: var(--text-grey);
+  letter-spacing: 0.01em;
+}
+
+.portfolio-stat-sep {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: var(--text-grey);
+  opacity: 0.5;
+  margin: 0 0.25rem;
+}
+
+.portfolio-section-header {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-grey);
+  font-weight: var(--demi-bold);
+  padding: 2rem 0 0.5rem;
+  border-top: 1px solid var(--border-color);
+  margin-top: 2rem;
+}
+
+.portfolio-section-copy {
+  margin-bottom: 1rem;
+}
+
+// -----------------------------------------------------------------------
+// Asset pills (filter row above the asset table).
+
+.asset-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0.5rem;
+}
+
+.asset-pill {
+  font-size: 12px;
+  font-weight: var(--demi-bold);
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.65rem;
+  border-radius: 20px;
+  background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 40%, transparent);
+  color: var(--accent-blue-text);
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--accent-blue) 33%, transparent);
+    border-color: var(--accent-blue-border);
+    color: var(--accent-blue-hover);
+    cursor: pointer;
+  }
+
+  &.asset-pill-selected {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue-border);
+    color: var(--accent-blue-strong);
+  }
+}
+
+// -----------------------------------------------------------------------
+// Asset table (active + inactive rows share most styles).
+
+.asset-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.asset-table-header th {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-grey);
+  font-weight: var(--demi-bold);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+
+  &.asset-th-asset { text-align: left; }
+  &.asset-th-num   { text-align: right; }
+}
+
+.asset-row td {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.asset-row-asset { text-align: left; }
+
+.asset-row-num {
+  text-align: right;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.asset-logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.asset-name {
+  font-size: 15px;
+  font-weight: var(--demi-bold);
+  gap: 6px;
+}
+
+.asset-name-wrap {
+  min-width: 0;
+}
+
+// Status indicators (parent .asset-name uses `gap: 6px` for spacing).
+.asset-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &.asset-status-syncing {
+    background-color: var(--accent-syncing);
+  }
+}
+
+.asset-status-locked {
+  color: var(--text-danger);
+  width: auto;
+  height: auto;
+}
+
+// Row highlight flash, triggered by clicking a ticker pill.
+@keyframes rowHighlight {
+  0%   { background-color: color-mix(in srgb, var(--accent-blue-border) 20%, transparent); }
+  60%  { background-color: color-mix(in srgb, var(--accent-blue-border) 13%, transparent); }
+  100% { background-color: transparent; }
+}
+
+.asset-row-highlight {
+  animation: rowHighlight 0.8s ease-out forwards;
+}
+
+// Inactive rows. The dashed bar is anchored to the leftmost cell so we
+// don't get one stripe per <td>.
+.inactive-asset-row {
+  cursor: pointer;
+  transition: background-color 0.15s;
+
+  td {
+    opacity: 0.55;
+    transition: opacity 0.15s, color 0.15s;
+  }
+
+  td:first-child {
+    border-left: 3px dashed color-mix(in srgb, var(--accent-blue-border) 40%, transparent);
+  }
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--accent-blue) 13%, transparent);
+
+    td { opacity: 1; }
+
+    .asset-row-add-wallet { color: var(--accent-blue-hover); }
+  }
+}
+
+.inactive-asset-logo {
+  filter: grayscale(40%);
+}
+
+.asset-row-add-wallet {
+  text-align: center;
+  vertical-align: middle;
+  color: var(--accent-blue-text);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+// -----------------------------------------------------------------------
+// Receive dialog.
+
+.receive-address {
+  word-break: break-all;
+  user-select: all;
+}

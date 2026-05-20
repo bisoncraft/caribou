@@ -16,82 +16,14 @@
   font-style: normal;
 }
 
-.demi {
-  font-weight: var(--demi-bold);
-}
+.demi { font-weight: var(--demi-bold); }
+.mono { font-family: var(--mono); }
 
-.mono {
-  font-family: var(--mono);
-}
+// Font-size utility classes. Generated for the sizes actually used in the
+// codebase — add a new entry if you start using a new size, don't sprinkle
+// inline styles.
+$font-sizes: 8, 11, 12, 13, 14, 16, 18, 24, 50;
 
-.fs8 {
-  font-size: 8px;
-}
-
-.fs10 {
-  font-size: 10px;
-}
-
-.fs11 {
-  font-size: 11px;
-}
-
-.fs12 {
-  font-size: 12px;
-}
-
-.fs13 {
-  font-size: 13px;
-}
-
-.fs14 {
-  font-size: 14px;
-}
-
-.fs15 {
-  font-size: 15px;
-}
-
-.fs16 {
-  font-size: 16px;
-}
-
-.fs17 {
-  font-size: 17px;
-}
-
-.fs18 {
-  font-size: 18px;
-}
-
-.fs20 {
-  font-size: 20px;
-}
-
-.fs22 {
-  font-size: 22px;
-}
-
-.fs24 {
-  font-size: 24px;
-}
-
-.fs26 {
-  font-size: 24px;
-}
-
-.fs28 {
-  font-size: 28px;
-}
-
-.fs32 {
-  font-size: 32px;
-}
-
-.fs35 {
-  font-size: 35px;
-}
-
-.fs50 {
-  font-size: 50px;
+@each $size in $font-sizes {
+  .fs#{$size} { font-size: #{$size}px; }
 }

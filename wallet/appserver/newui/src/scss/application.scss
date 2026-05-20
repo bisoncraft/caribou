@@ -1,11 +1,12 @@
-// variable customizations
-@use "vars.scss";
+// Design tokens (CSS custom properties).
+@use "vars";
 
-// Utilities, reusable components
-@use "typography.scss";
-@use "utilities.scss";
-@use "icons.scss";
-// @use "components.scss";
+// Static, low-level concerns.
+@use "typography";
+@use "icons";
+@use "utilities"; // auto-generated spacing/flex/border helpers
+@use "base";       // body reset + element styles + hand-written utility classes
+@use "animations"; // keyframes + animation classes (.spinner, .form-err, …)
 
-// UI views
-@use "main.scss";
+// Component / view styles.
+@use "components";
