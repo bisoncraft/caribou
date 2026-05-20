@@ -18,7 +18,10 @@ go.work.sum
 dex*key
 markets.json
 dist/
+# go:embed needs the directory to exist in fresh checkouts, so track the
+# directory + a placeholder but keep webpack output ignored.
 !wallet/appserver/newui/dist/
+wallet/appserver/newui/dist/*
 !wallet/appserver/newui/dist/placeholder
 node_modules/
 bin/
