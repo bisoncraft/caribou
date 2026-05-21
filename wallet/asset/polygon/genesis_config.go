@@ -22,7 +22,7 @@ var allocs embed.FS
 // These are the chain IDs of the various polygon network.
 const (
 	MainnetChainID = 137
-	TestnetChainID = 80001 // Mumbai
+	TestnetChainID = 80002 // Amoy
 	SimnetChainID  = 1337
 )
 
