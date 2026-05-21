@@ -245,6 +245,19 @@ func TestValidateRPCURL(t *testing.T) {
 	}
 }
 
+// TestChainlinkRateFetcherEmptyProviders verifies that a non-empty but
+// whitespace-only ChainlinkProviders setting is rejected at construction
+// rather than silently producing an empty provider list and a confusing
+// dial-time error.
+func TestChainlinkRateFetcherEmptyProviders(t *testing.T) {
+	for _, val := range []string{" ", "\t", " \n\t "} {
+		_, err := chainlinkRateFetcher(Config{ChainlinkProviders: val})
+		if err == nil {
+			t.Errorf("ChainlinkProviders=%q: expected error, got nil", val)
+		}
+	}
+}
+
 // TestChainlinkTestnetConfiguration tests that the testnet flag correctly selects testnet feeds.
 func TestChainlinkTestnetConfiguration(t *testing.T) {
 	if testing.Short() {
@@ -340,45 +353,6 @@ func TestChainlinkAggregatorWithDifferentDecimals(t *testing.T) {
 	}
 }
 
-// TestChainlinkPriceStaleness tests that stale prices are rejected.
-func TestChainlinkPriceStaleness(t *testing.T) {
-	tests := []struct {
-		name         string
-		updatedAt    time.Time
-		shouldReject bool
-	}{
-		{
-			name:         "fresh price",
-			updatedAt:    time.Now(),
-			shouldReject: false,
-		},
-		{
-			name:         "price from 5 minutes ago",
-			updatedAt:    time.Now().Add(-5 * time.Minute),
-			shouldReject: false,
-		},
-		{
-			name:         "price from 30 minutes ago",
-			updatedAt:    time.Now().Add(-30 * time.Minute),
-			shouldReject: true,
-		},
-		{
-			name:         "price from 2 hours ago",
-			updatedAt:    time.Now().Add(-2 * time.Hour),
-			shouldReject: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			isStale := time.Since(tt.updatedAt) > chainlinkMaxAge
-			if isStale != tt.shouldReject {
-				t.Errorf("staleness check failed: isStale=%v, shouldReject=%v", isStale, tt.shouldReject)
-			}
-		})
-	}
-}
-
 // TestChainlinkDecimalEdgeCases tests extreme decimal values.
 func TestChainlinkDecimalEdgeCases(t *testing.T) {
 	tests := []struct {
@@ -441,22 +415,30 @@ func TestChainlinkDecimalEdgeCases(t *testing.T) {
 	}
 }
 
-// newTestContracts builds a contractInfo map from mocks for use with chainlinkFetcherFromContracts.
-func newTestContracts(ticker string, mock *mockAggregatorContract, decimals uint8) map[string]*contractInfo {
-	divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
-	return map[string]*contractInfo{
-		ticker: {contract: mock, divisor: divisor},
-	}
+// mockFeedAddr is an arbitrary non-zero address used as a feed-table key
+// in closure tests; its value is irrelevant because the contract factory
+// ignores the address and returns a pre-configured mock.
+var mockFeedAddr = common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+
+// newMockCoreFetch wires a single mock aggregator into chainlinkFetcherCore
+// under the given ticker, so closure tests exercise the production code path.
+func newMockCoreFetch(ticker string, mock *mockAggregatorContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+	return chainlinkFetcherCore(
+		map[string]common.Address{ticker: mockFeedAddr},
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return mock },
+	)
 }
 
 // TestChainlinkClosureValidPrice tests that a fresh, valid price is returned correctly.
 func TestChainlinkClosureValidPrice(t *testing.T) {
 	// $50,000 with 8 decimals
 	mock := &mockAggregatorContract{
-		answer:    big.NewInt(5000000000000),
-		updatedAt: time.Now().Add(-1 * time.Minute),
+		answer:        big.NewInt(5000000000000),
+		decimalPlaces: 8,
+		updatedAt:     time.Now().Add(-1 * time.Minute),
 	}
-	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 	rates, err := fetch(context.Background(), []string{"BTC"}, log)
@@ -472,9 +454,19 @@ func TestChainlinkClosureValidPrice(t *testing.T) {
 	}
 }
 
-// TestChainlinkClosureMissingTicker tests that tickers absent from contracts are silently skipped.
+// TestChainlinkClosureMissingTicker tests that tickers absent from feeds are silently skipped.
 func TestChainlinkClosureMissingTicker(t *testing.T) {
-	fetch := chainlinkFetcherFromContracts(map[string]*contractInfo{}) // empty
+	fetch := chainlinkFetcherCore(
+		map[string]common.Address{}, // no feeds configured
+		func() (chainRPCClient, error) {
+			t.Fatal("dial should not happen when no requested ticker has a feed")
+			return nil, nil
+		},
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract {
+			t.Fatal("newContract should not be called for unmatched tickers")
+			return nil
+		},
+	)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 	rates, err := fetch(context.Background(), []string{"BTC", "ETH"}, log)
@@ -489,10 +481,11 @@ func TestChainlinkClosureMissingTicker(t *testing.T) {
 // TestChainlinkClosureStaleness tests that prices older than chainlinkMaxAge are rejected.
 func TestChainlinkClosureStaleness(t *testing.T) {
 	mock := &mockAggregatorContract{
-		answer:    big.NewInt(5000000000000),
-		updatedAt: time.Now().Add(-(chainlinkMaxAge + time.Minute)),
+		answer:        big.NewInt(5000000000000),
+		decimalPlaces: 8,
+		updatedAt:     time.Now().Add(-(chainlinkMaxAge + time.Minute)),
 	}
-	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 	rates, err := fetch(context.Background(), []string{"BTC"}, log)
@@ -504,13 +497,14 @@ func TestChainlinkClosureStaleness(t *testing.T) {
 	}
 }
 
-// TestChainlinkClosureFutureTimestamp tests that prices with future timestamps are rejected.
+// TestChainlinkClosureFutureTimestamp tests that prices beyond the skew window are rejected.
 func TestChainlinkClosureFutureTimestamp(t *testing.T) {
 	mock := &mockAggregatorContract{
-		answer:    big.NewInt(5000000000000),
-		updatedAt: time.Now().Add(time.Hour),
+		answer:        big.NewInt(5000000000000),
+		decimalPlaces: 8,
+		updatedAt:     time.Now().Add(time.Hour),
 	}
-	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 	rates, err := fetch(context.Background(), []string{"BTC"}, log)
@@ -525,9 +519,10 @@ func TestChainlinkClosureFutureTimestamp(t *testing.T) {
 // TestChainlinkClosureContractError tests that latestRoundData errors cause the ticker to be skipped.
 func TestChainlinkClosureContractError(t *testing.T) {
 	mock := &mockAggregatorContract{
-		err: fmt.Errorf("rpc error: connection refused"),
+		decimalPlaces: 8,
+		err:           fmt.Errorf("rpc error: connection refused"),
 	}
-	fetch := chainlinkFetcherFromContracts(newTestContracts("BTC", mock, 8))
+	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 	rates, err := fetch(context.Background(), []string{"BTC"}, log)

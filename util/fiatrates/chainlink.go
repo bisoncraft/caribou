@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
-	"golang.org/x/sync/errgroup"
 )
 
 const aggregatorV3ABI = `[
@@ -49,6 +48,10 @@ const (
 	// rejected. Polygon BTC/USD updates every ~27s with a 1h heartbeat, so
 	// 10 minutes is a tight but reasonable bound.
 	chainlinkMaxAge = 10 * time.Minute
+	// chainlinkFutureSkew tolerates small forward drift between the Chainlink
+	// block timestamp and the local wall clock before treating a price as
+	// invalid. Validator clock skew on Polygon is small but not zero.
+	chainlinkFutureSkew = 30 * time.Second
 )
 
 type chainlinkAggregatorContract interface {
@@ -174,41 +177,6 @@ func validateRPCURL(urlStr string) error {
 	return nil
 }
 
-type contractInfo struct {
-	contract chainlinkAggregatorContract
-	divisor  *big.Float
-}
-
-// chainlinkFetcherFromContracts creates a rate fetcher from pre-built contracts.
-// Used in tests to exercise the closure logic without network I/O.
-func chainlinkFetcherFromContracts(contracts map[string]*contractInfo) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
-		rates := make(map[string]float64)
-		for _, ticker := range tickers {
-			info, ok := contracts[ticker]
-			if !ok {
-				continue
-			}
-			answer, updatedAt, err := info.contract.latestRoundData(ctx)
-			if err != nil {
-				log.Warnf("chainlink: %s/USD: %v", ticker, err)
-				continue
-			}
-			if updatedAt.After(time.Now()) {
-				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
-				continue
-			}
-			if time.Since(updatedAt) > chainlinkMaxAge {
-				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
-				continue
-			}
-			f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), info.divisor).Float64()
-			rates[ticker] = f
-		}
-		return rates, nil
-	}
-}
-
 func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
 	aggregatorABI, err := parseABI(aggregatorV3ABI)
 	if err != nil {
@@ -225,6 +193,9 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	if cfg.ChainlinkProviders != "" {
 		// Split on any whitespace (spaces, tabs, newlines).
 		providers = strings.Fields(cfg.ChainlinkProviders)
+		if len(providers) == 0 {
+			return nil, fmt.Errorf("chainlink: ChainlinkProviders is set but contains no URLs; unset it to use defaults")
+		}
 		for _, provider := range providers {
 			if err := validateRPCURL(provider); err != nil {
 				return nil, fmt.Errorf("chainlink: invalid provider %q: %w", provider, err)
@@ -265,11 +236,19 @@ func chainlinkFetcherCore(
 	//
 	// The provider connection is established lazily on the first getRates call.
 	// If any RPC call fails, the connection is reset and re-dialed from the
-	// beginning of the provider list on the next call.
+	// beginning of the provider list on the next call. Failover is between
+	// cycles, not within: a provider that dies mid-cycle costs that cycle's
+	// rates entirely, since the pinned client is not swapped until the next
+	// getRates invocation observes connFailed.
+	//
+	// divisors caches the 10^decimals factor per feed and intentionally
+	// survives reconnects: Chainlink Data Feed decimals are immutable per
+	// aggregator address (decimal changes are deployed as a new feed at a new
+	// address), so a cached divisor cannot go stale relative to its address.
 	var (
 		mtx      sync.Mutex
 		ec       chainRPCClient
-		divisors = make(map[string]*big.Float) // keyed by ticker; survives reconnects
+		divisors = make(map[string]*big.Float)
 	)
 
 	// isConnErr returns true for errors that indicate a provider failure
@@ -279,6 +258,19 @@ func chainlinkFetcherCore(
 	}
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
+		// Short-circuit before dialing if none of the requested tickers map to
+		// a configured feed. Avoids paying the dial timeout for nothing.
+		hasAny := false
+		for _, t := range tickers {
+			if _, ok := feeds[t]; ok {
+				hasAny = true
+				break
+			}
+		}
+		if !hasAny {
+			return map[string]float64{}, nil
+		}
+
 		mtx.Lock()
 		needConnect := ec == nil
 		mtx.Unlock()
@@ -305,15 +297,17 @@ func chainlinkFetcherCore(
 			ratesMtx   sync.Mutex
 			rates      = make(map[string]float64)
 			connFailed atomic.Bool
+			wg         sync.WaitGroup
 		)
 
-		g, gctx := errgroup.WithContext(ctx)
 		for _, ticker := range tickers {
 			addr, ok := feeds[ticker]
 			if !ok {
 				continue
 			}
-			g.Go(func() error {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				contract := newContract(addr, currentEC)
 
 				mtx.Lock()
@@ -321,7 +315,7 @@ func chainlinkFetcherCore(
 				mtx.Unlock()
 
 				if div == nil {
-					initCtx, cancel := context.WithTimeout(gctx, chainlinkInitTimeout)
+					initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
 					d, err := contract.decimals(initCtx)
 					cancel()
 					if err != nil {
@@ -329,7 +323,7 @@ func chainlinkFetcherCore(
 						if isConnErr(err) {
 							connFailed.Store(true)
 						}
-						return nil
+						return
 					}
 					div = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
 					mtx.Lock()
@@ -339,35 +333,32 @@ func chainlinkFetcherCore(
 					mtx.Unlock()
 				}
 
-				answer, updatedAt, err := contract.latestRoundData(gctx)
+				answer, updatedAt, err := contract.latestRoundData(ctx)
 				if err != nil {
 					log.Warnf("chainlink: %s/USD: %v", ticker, err)
 					if isConnErr(err) {
 						connFailed.Store(true)
 					}
-					return nil
+					return
 				}
 
-				if updatedAt.After(time.Now()) {
+				if time.Until(updatedAt) > chainlinkFutureSkew {
 					log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
-					return nil
+					return
 				}
 
 				if time.Since(updatedAt) > chainlinkMaxAge {
 					log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
-					return nil
+					return
 				}
 
 				f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), div).Float64()
 				ratesMtx.Lock()
 				rates[ticker] = f
 				ratesMtx.Unlock()
-				return nil
-			})
+			}()
 		}
-		if err := g.Wait(); err != nil {
-			log.Warnf("chainlink: unexpected goroutine error: %v", err)
-		}
+		wg.Wait()
 
 		if connFailed.Load() {
 			var doClose bool
