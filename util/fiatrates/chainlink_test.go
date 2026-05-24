@@ -14,6 +14,25 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+// mockAggregatorContract is a test mock of chainlinkAggregatorContract.
+type mockAggregatorContract struct {
+	answer        *big.Int
+	decimalPlaces uint8
+	updatedAt     time.Time
+	err           error
+}
+
+func (m *mockAggregatorContract) latestRoundData(_ context.Context) (*big.Int, time.Time, error) {
+	if m.updatedAt.IsZero() {
+		return m.answer, time.Now(), m.err
+	}
+	return m.answer, m.updatedAt, m.err
+}
+
+func (m *mockAggregatorContract) decimals(_ context.Context) (uint8, error) {
+	return m.decimalPlaces, nil
+}
+
 // TestChainlinkLive tests the Chainlink price feeds on Polygon mainnet end-to-end.
 func TestChainlinkLive(t *testing.T) {
 	if testing.Short() {
@@ -214,7 +233,6 @@ func TestChainlinkTestnetConfiguration(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should successfully get rates from testnet
 	if len(rates) > 0 {
 		t.Logf("Successfully fetched %d/%d testnet prices", len(rates), len(tickers))
 	}
@@ -245,13 +263,21 @@ func (m *mockBatchContract) read(_ context.Context, addrs []common.Address) ([]M
 	return out, nil
 }
 
-// newMockCoreFetch wires a single mock batch contract into chainlinkFetcherCore
+// newMockCoreFetch wires a single mock batch contract into chainlinkBatchFetcherCore
 // under the given ticker, so closure tests exercise the production code path.
 func newMockCoreFetch(ticker string, mock *mockBatchContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	return chainlinkFetcherCore(
+	return chainlinkBatchFetcherCore(
 		map[string]common.Address{ticker: mockFeedAddr},
 		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
 		func(_ chainRPCClient) chainlinkBatchContract { return mock },
+	)
+}
+
+func newMockLegacyCoreFetch(ticker string, mock *mockAggregatorContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+	return chainlinkLegacyFetcherCore(
+		map[string]common.Address{ticker: mockFeedAddr},
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return mock },
 	)
 }
 
@@ -346,7 +372,7 @@ func TestChainlinkClosureDecimals(t *testing.T) {
 
 // TestChainlinkClosureMissingTicker tests that tickers absent from feeds are silently skipped.
 func TestChainlinkClosureMissingTicker(t *testing.T) {
-	fetch := chainlinkFetcherCore(
+	fetch := chainlinkBatchFetcherCore(
 		map[string]common.Address{}, // no feeds configured
 		func() (chainRPCClient, error) {
 			t.Fatal("dial should not happen when no requested ticker has a feed")
@@ -446,6 +472,63 @@ func TestChainlinkClosureOkFalse(t *testing.T) {
 	}
 }
 
+func TestChainlinkFetcherFallsBackWhenBatchAddressUnset(t *testing.T) {
+	legacy := &mockAggregatorContract{
+		answer:        big.NewInt(5000000000000),
+		decimalPlaces: 8,
+		updatedAt:     time.Now().Add(-1 * time.Minute),
+	}
+	fetch := selectChainlinkFetcher(
+		map[string]common.Address{"BTC": mockFeedAddr},
+		common.Address{},
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return legacy },
+		func(_ chainRPCClient) chainlinkBatchContract {
+			t.Fatal("batch fetcher should not be selected when batch address is unset")
+			return nil
+		},
+	)
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if price := rates["BTC"]; price != 50000.0 {
+		t.Fatalf("expected fallback price 50000.0, got %f", price)
+	}
+}
+
+func TestChainlinkFetcherUsesBatchWhenAddressConfigured(t *testing.T) {
+	batch := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
+		mockFeedAddr: {
+			Answer:    big.NewInt(5000000000000),
+			Decimals:  8,
+			UpdatedAt: big.NewInt(time.Now().Add(-1 * time.Minute).Unix()),
+			Ok:        true,
+		},
+	}}
+	fetch := selectChainlinkFetcher(
+		map[string]common.Address{"BTC": mockFeedAddr},
+		common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract {
+			t.Fatal("legacy fetcher should not be selected when batch address is configured")
+			return nil
+		},
+		func(_ chainRPCClient) chainlinkBatchContract { return batch },
+	)
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if price := rates["BTC"]; price != 50000.0 {
+		t.Fatalf("expected batch price 50000.0, got %f", price)
+	}
+}
+
 // mockRPCClient implements chainRPCClient for testing. CodeAt and CallContract
 // are never invoked in these tests because newBatchContract returns mock
 // contracts that bypass the bound-contract machinery entirely.
@@ -497,7 +580,7 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 		return c, nil
 	}
 
-	fetch := chainlinkFetcherCore(
+	fetch := chainlinkBatchFetcherCore(
 		map[string]common.Address{"BTC": mockFeedAddr},
 		dialFn,
 		func(_ chainRPCClient) chainlinkBatchContract {
@@ -532,7 +615,7 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 // TestChainlinkConcurrentRates exercises the double-check locking patterns for
 // ec and divisors under concurrent load. Run with -race to detect data races.
 func TestChainlinkConcurrentRates(t *testing.T) {
-	fetch := chainlinkFetcherCore(
+	fetch := chainlinkBatchFetcherCore(
 		chainlinkPolygonFeeds,
 		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
 		func(_ chainRPCClient) chainlinkBatchContract {

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -16,6 +17,29 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
+
+const aggregatorV3ABI = `[
+  {
+    "inputs": [],
+    "name": "latestRoundData",
+    "outputs": [
+      {"internalType": "uint80",  "name": "roundId",         "type": "uint80"},
+      {"internalType": "int256",  "name": "answer",          "type": "int256"},
+      {"internalType": "uint256", "name": "startedAt",       "type": "uint256"},
+      {"internalType": "uint256", "name": "updatedAt",       "type": "uint256"},
+      {"internalType": "uint80",  "name": "answeredInRound", "type": "uint80"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "decimals",
+    "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]`
 
 const multiAggregatorABI = `[
   {
@@ -39,6 +63,7 @@ const multiAggregatorABI = `[
 
 const (
 	chainlinkDialTimeout = 5 * time.Second
+	chainlinkInitTimeout = 5 * time.Second
 	// chainlinkMaxAge is the maximum age of a Chainlink price before it is
 	// rejected. Polygon BTC/USD updates every ~27s with a 1h heartbeat, so
 	// 10 minutes is a tight but reasonable bound.
@@ -59,6 +84,11 @@ type MultiAggregatorReading struct {
 	Ok        bool
 }
 
+type chainlinkAggregatorContract interface {
+	latestRoundData(ctx context.Context) (*big.Int, time.Time, error)
+	decimals(ctx context.Context) (uint8, error)
+}
+
 type chainlinkBatchContract interface {
 	read(ctx context.Context, addrs []common.Address) ([]MultiAggregatorReading, error)
 }
@@ -72,6 +102,55 @@ type chainRPCClient interface {
 
 type batchBoundContract struct {
 	bound *bind.BoundContract
+}
+
+type aggregatorBoundContract struct {
+	bound *bind.BoundContract
+}
+
+func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int, time.Time, error) {
+	var out []interface{}
+	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "latestRoundData"); err != nil {
+		return nil, time.Time{}, err
+	}
+
+	if len(out) < 4 {
+		return nil, time.Time{}, fmt.Errorf("invalid latestRoundData response: expected at least 4 outputs, got %d", len(out))
+	}
+
+	converted := abi.ConvertType(out[1], new(*big.Int))
+	answerPtr, ok := converted.(**big.Int)
+	if !ok {
+		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData answer to *big.Int")
+	}
+
+	answer := *answerPtr
+	if answer.Sign() <= 0 {
+		return nil, time.Time{}, fmt.Errorf("non-positive answer: %s", answer)
+	}
+
+	convertedUpdated := abi.ConvertType(out[3], new(*big.Int))
+	updatedAtPtr, ok := convertedUpdated.(**big.Int)
+	if !ok {
+		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData updatedAt to *big.Int")
+	}
+
+	return answer, time.Unix((*updatedAtPtr).Int64(), 0), nil
+}
+
+func (c *aggregatorBoundContract) decimals(ctx context.Context) (uint8, error) {
+	var out []interface{}
+	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "decimals"); err != nil {
+		return 0, err
+	}
+	if len(out) < 1 {
+		return 0, fmt.Errorf("invalid decimals response: expected at least 1 output, got %d", len(out))
+	}
+	decimalsPtr, ok := abi.ConvertType(out[0], new(uint8)).(*uint8)
+	if !ok {
+		return 0, fmt.Errorf("failed to convert decimals to uint8")
+	}
+	return *decimalsPtr, nil
 }
 
 func (c *batchBoundContract) read(ctx context.Context, addrs []common.Address) ([]MultiAggregatorReading, error) {
@@ -158,11 +237,6 @@ func validateRPCURL(urlStr string) error {
 }
 
 func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
-	batchABI, err := parseABI(multiAggregatorABI)
-	if err != nil {
-		return nil, fmt.Errorf("chainlink: %w", err)
-	}
-
 	feeds := chainlinkPolygonFeeds
 	batchAddr := chainlinkPolygonBatchAddr
 	if cfg.ChainlinkTestnet {
@@ -199,14 +273,189 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		return nil, fmt.Errorf("dial all providers failed: %w", lastErr)
 	}
 
-	return chainlinkFetcherCore(feeds, dialFn, func(client chainRPCClient) chainlinkBatchContract {
-		return &batchBoundContract{bound: bind.NewBoundContract(batchAddr, *batchABI, client, nil, nil)}
-	}), nil
+	if batchAddr == (common.Address{}) {
+		aggregatorABI, err := parseABI(aggregatorV3ABI)
+		if err != nil {
+			return nil, fmt.Errorf("chainlink: %w", err)
+		}
+		return selectChainlinkFetcher(
+			feeds,
+			batchAddr,
+			dialFn,
+			func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract {
+				return &aggregatorBoundContract{bound: bind.NewBoundContract(addr, *aggregatorABI, client, nil, nil)}
+			},
+			nil,
+		), nil
+	}
+
+	batchABI, err := parseABI(multiAggregatorABI)
+	if err != nil {
+		return nil, fmt.Errorf("chainlink: %w", err)
+	}
+	return selectChainlinkFetcher(
+		feeds,
+		batchAddr,
+		dialFn,
+		nil,
+		func(client chainRPCClient) chainlinkBatchContract {
+			return &batchBoundContract{bound: bind.NewBoundContract(batchAddr, *batchABI, client, nil, nil)}
+		},
+	), nil
 }
 
-// chainlinkFetcherCore is the testable core of chainlinkRateFetcher with
-// injectable dial and batch contract factory functions.
-func chainlinkFetcherCore(
+func selectChainlinkFetcher(
+	feeds map[string]common.Address,
+	batchAddr common.Address,
+	dialFn func() (chainRPCClient, error),
+	newContract func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract,
+	newBatchContract func(client chainRPCClient) chainlinkBatchContract,
+) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+	if batchAddr == (common.Address{}) {
+		return chainlinkLegacyFetcherCore(feeds, dialFn, newContract)
+	}
+	return chainlinkBatchFetcherCore(feeds, dialFn, newBatchContract)
+}
+
+// chainlinkLegacyFetcherCore is the testable per-feed fallback used until the
+// batch contract is deployed and configured.
+func chainlinkLegacyFetcherCore(
+	feeds map[string]common.Address,
+	dialFn func() (chainRPCClient, error),
+	newContract func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract,
+) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+	var (
+		mtx      sync.Mutex
+		ec       chainRPCClient
+		divisors = make(map[string]*big.Float)
+	)
+
+	isConnErr := func(err error) bool {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	}
+
+	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
+		hasAny := false
+		for _, t := range tickers {
+			if _, ok := feeds[t]; ok {
+				hasAny = true
+				break
+			}
+		}
+		if !hasAny {
+			return map[string]float64{}, nil
+		}
+
+		mtx.Lock()
+		needConnect := ec == nil
+		mtx.Unlock()
+
+		if needConnect {
+			newEC, err := dialFn()
+			if err != nil {
+				return nil, fmt.Errorf("chainlink: %w", err)
+			}
+			mtx.Lock()
+			if ec == nil {
+				ec = newEC
+			} else {
+				newEC.Close()
+			}
+			mtx.Unlock()
+		}
+
+		mtx.Lock()
+		currentEC := ec
+		mtx.Unlock()
+
+		var (
+			ratesMtx   sync.Mutex
+			rates      = make(map[string]float64)
+			connFailed atomic.Bool
+			wg         sync.WaitGroup
+		)
+
+		for _, ticker := range tickers {
+			addr, ok := feeds[ticker]
+			if !ok {
+				continue
+			}
+			wg.Add(1)
+			go func(ticker string, addr common.Address) {
+				defer wg.Done()
+				contract := newContract(addr, currentEC)
+
+				mtx.Lock()
+				div := divisors[ticker]
+				mtx.Unlock()
+
+				if div == nil {
+					initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
+					d, err := contract.decimals(initCtx)
+					cancel()
+					if err != nil {
+						log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
+						if isConnErr(err) {
+							connFailed.Store(true)
+						}
+						return
+					}
+					div = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
+					mtx.Lock()
+					if divisors[ticker] == nil {
+						divisors[ticker] = div
+					} else {
+						div = divisors[ticker]
+					}
+					mtx.Unlock()
+				}
+
+				answer, updatedAt, err := contract.latestRoundData(ctx)
+				if err != nil {
+					log.Warnf("chainlink: %s/USD: %v", ticker, err)
+					if isConnErr(err) {
+						connFailed.Store(true)
+					}
+					return
+				}
+
+				if time.Until(updatedAt) > chainlinkFutureSkew {
+					log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
+					return
+				}
+				if time.Since(updatedAt) > chainlinkMaxAge {
+					log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
+					return
+				}
+
+				f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), div).Float64()
+				ratesMtx.Lock()
+				rates[ticker] = f
+				ratesMtx.Unlock()
+			}(ticker, addr)
+		}
+		wg.Wait()
+
+		if connFailed.Load() {
+			var doClose bool
+			mtx.Lock()
+			if ec == currentEC {
+				ec = nil
+				doClose = true
+			}
+			mtx.Unlock()
+			if doClose {
+				currentEC.Close()
+			}
+		}
+
+		return rates, nil
+	}
+}
+
+// chainlinkBatchFetcherCore is the testable batched implementation used once
+// the deployed batch contract address is configured.
+func chainlinkBatchFetcherCore(
 	feeds map[string]common.Address,
 	dialFn func() (chainRPCClient, error),
 	newBatchContract func(client chainRPCClient) chainlinkBatchContract,
