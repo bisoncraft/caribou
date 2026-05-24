@@ -2,7 +2,6 @@ package fiatrates
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -51,60 +50,6 @@ func TestChainlinkLive(t *testing.T) {
 	t.Logf("Successfully fetched %d/%d prices", len(rates), len(tickers))
 }
 
-// mockAggregatorContract is a test mock of chainlinkAggregatorContract.
-type mockAggregatorContract struct {
-	answer        *big.Int
-	decimalPlaces uint8
-	updatedAt     time.Time
-	err           error
-}
-
-func (m *mockAggregatorContract) latestRoundData(ctx context.Context) (*big.Int, time.Time, error) {
-	if m.updatedAt.IsZero() {
-		return m.answer, time.Now(), m.err
-	}
-	return m.answer, m.updatedAt, m.err
-}
-
-func (m *mockAggregatorContract) decimals(ctx context.Context) (uint8, error) {
-	return m.decimalPlaces, nil
-}
-
-// TestChainlinkAggregatorContractMock tests price decoding via a mock contract.
-func TestChainlinkAggregatorContractMock(t *testing.T) {
-	// Test a BTC price of $50,000 (fixed-point: 5000000000000 = 50000 * 1e8)
-	btcPrice := big.NewInt(5000000000000)
-	mock := &mockAggregatorContract{answer: btcPrice, decimalPlaces: 8}
-
-	answer, _, err := mock.latestRoundData(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Verify the mock returns the configured answer
-	if answer.Cmp(btcPrice) != 0 {
-		t.Errorf("expected answer %v, got %v", btcPrice, answer)
-	}
-
-	// Decode to float64
-	f, _ := new(big.Float).Quo(
-		new(big.Float).SetInt(answer),
-		new(big.Float).SetFloat64(1e8),
-	).Float64()
-
-	expected := 50000.0
-	if f != expected {
-		t.Errorf("expected price %f, got %f", expected, f)
-	}
-
-	// Test that mock can return custom errors
-	mockWithErr := &mockAggregatorContract{err: fmt.Errorf("custom error")}
-	_, _, err = mockWithErr.latestRoundData(context.Background())
-	if err == nil {
-		t.Error("expected error from mock, got nil")
-	}
-}
-
 // TestChainlinkFeedsExist verifies all configured feeds have valid addresses.
 func TestChainlinkFeedsExist(t *testing.T) {
 	for ticker, addr := range chainlinkPolygonFeeds {
@@ -113,20 +58,6 @@ func TestChainlinkFeedsExist(t *testing.T) {
 		}
 	}
 	t.Logf("verified %d feeds with valid addresses", len(chainlinkPolygonFeeds))
-}
-
-// TestChainlinkContractCallError tests error handling for failed contract calls.
-func TestChainlinkContractCallError(t *testing.T) {
-	customErr := fmt.Errorf("rpc error: connection refused")
-	mock := &mockAggregatorContract{err: customErr}
-
-	_, _, err := mock.latestRoundData(context.Background())
-	if err == nil {
-		t.Fatal("expected error from contract call, got nil")
-	}
-	if !errors.Is(err, customErr) {
-		t.Errorf("expected custom error, got: %v", err)
-	}
 }
 
 // TestChainlinkMissingTicker tests handling of tickers with no configured feed.
@@ -289,8 +220,70 @@ func TestChainlinkTestnetConfiguration(t *testing.T) {
 	}
 }
 
-// TestChainlinkAggregatorWithDifferentDecimals tests price conversion with different decimal places.
-func TestChainlinkAggregatorWithDifferentDecimals(t *testing.T) {
+// mockFeedAddr is an arbitrary non-zero address used as a feed-table key
+// in closure tests; its value is irrelevant because the batch contract mock
+// is keyed on this address.
+var mockFeedAddr = common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+
+// mockBatchContract is a test mock of chainlinkBatchContract.
+type mockBatchContract struct {
+	readings map[common.Address]MultiAggregatorReading
+	err      error
+}
+
+func (m *mockBatchContract) read(_ context.Context, addrs []common.Address) ([]MultiAggregatorReading, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]MultiAggregatorReading, len(addrs))
+	for i, addr := range addrs {
+		if r, ok := m.readings[addr]; ok {
+			out[i] = r
+		}
+		// unrecognized address: out[i] stays zero-valued (Ok=false)
+	}
+	return out, nil
+}
+
+// newMockCoreFetch wires a single mock batch contract into chainlinkFetcherCore
+// under the given ticker, so closure tests exercise the production code path.
+func newMockCoreFetch(ticker string, mock *mockBatchContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
+	return chainlinkFetcherCore(
+		map[string]common.Address{ticker: mockFeedAddr},
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(_ chainRPCClient) chainlinkBatchContract { return mock },
+	)
+}
+
+// TestChainlinkClosureValidPrice tests that a fresh, valid price is returned correctly.
+func TestChainlinkClosureValidPrice(t *testing.T) {
+	// $50,000 with 8 decimals
+	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
+		mockFeedAddr: {
+			Answer:    big.NewInt(5000000000000),
+			Decimals:  8,
+			UpdatedAt: big.NewInt(time.Now().Add(-1 * time.Minute).Unix()),
+			Ok:        true,
+		},
+	}}
+	fetch := newMockCoreFetch("BTC", mock)
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	price, ok := rates["BTC"]
+	if !ok {
+		t.Fatal("expected BTC price in results")
+	}
+	if price != 50000.0 {
+		t.Errorf("expected 50000.0, got %f", price)
+	}
+}
+
+// TestChainlinkClosureDecimals tests price conversion across different decimal values.
+func TestChainlinkClosureDecimals(t *testing.T) {
 	tests := []struct {
 		name     string
 		answer   *big.Int
@@ -310,6 +303,12 @@ func TestChainlinkAggregatorWithDifferentDecimals(t *testing.T) {
 			expected: 50000.0,
 		},
 		{
+			name:     "0 decimals",
+			answer:   big.NewInt(50000),
+			decimals: 0,
+			expected: 50000.0,
+		},
+		{
 			name:     "18 decimals",
 			answer:   new(big.Int).Mul(big.NewInt(50000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)),
 			decimals: 18,
@@ -319,138 +318,29 @@ func TestChainlinkAggregatorWithDifferentDecimals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockAggregatorContract{
-				answer:        tt.answer,
-				decimalPlaces: tt.decimals,
-			}
+			mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
+				mockFeedAddr: {
+					Answer:    tt.answer,
+					Decimals:  tt.decimals,
+					UpdatedAt: big.NewInt(time.Now().Add(-1 * time.Minute).Unix()),
+					Ok:        true,
+				},
+			}}
+			fetch := newMockCoreFetch("BTC", mock)
 
-			answer, _, err := mock.latestRoundData(context.Background())
+			log := util.NewLogger("test", util.LevelDebug, io.Discard)
+			rates, err := fetch(context.Background(), []string{"BTC"}, log)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-
-			decimals, err := mock.decimals(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error getting decimals: %v", err)
+			price, ok := rates["BTC"]
+			if !ok {
+				t.Fatal("expected BTC price in results")
 			}
-
-			// Verify decimals query works
-			if decimals != tt.decimals {
-				t.Errorf("expected decimals %d, got %d", tt.decimals, decimals)
-			}
-
-			// Manually convert like the fetcher does
-			divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
-			f, _ := new(big.Float).Quo(
-				new(big.Float).SetInt(answer),
-				divisor,
-			).Float64()
-
-			if f != tt.expected {
-				t.Errorf("expected price %f, got %f", tt.expected, f)
+			if price != tt.expected {
+				t.Errorf("expected %f, got %f", tt.expected, price)
 			}
 		})
-	}
-}
-
-// TestChainlinkDecimalEdgeCases tests extreme decimal values.
-func TestChainlinkDecimalEdgeCases(t *testing.T) {
-	tests := []struct {
-		name     string
-		answer   *big.Int
-		decimals uint8
-		expected float64
-	}{
-		{
-			name:     "zero decimals (price is raw answer)",
-			answer:   big.NewInt(50000),
-			decimals: 0,
-			expected: 50000.0,
-		},
-		{
-			name:     "18 decimals (erc20 standard)",
-			answer:   new(big.Int).Mul(big.NewInt(50000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)),
-			decimals: 18,
-			expected: 50000.0,
-		},
-		{
-			name:     "20 decimals (extreme)",
-			answer:   new(big.Int).Mul(big.NewInt(50000), new(big.Int).Exp(big.NewInt(10), big.NewInt(20), nil)),
-			decimals: 20,
-			expected: 50000.0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &mockAggregatorContract{
-				answer:        tt.answer,
-				decimalPlaces: tt.decimals,
-			}
-
-			answer, _, err := mock.latestRoundData(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			decimals, err := mock.decimals(context.Background())
-			if err != nil {
-				t.Fatalf("unexpected error getting decimals: %v", err)
-			}
-
-			if decimals != tt.decimals {
-				t.Errorf("expected decimals %d, got %d", tt.decimals, decimals)
-			}
-
-			divisor := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
-			f, _ := new(big.Float).Quo(
-				new(big.Float).SetInt(answer),
-				divisor,
-			).Float64()
-
-			if f != tt.expected {
-				t.Errorf("expected price %f, got %f", tt.expected, f)
-			}
-		})
-	}
-}
-
-// mockFeedAddr is an arbitrary non-zero address used as a feed-table key
-// in closure tests; its value is irrelevant because the contract factory
-// ignores the address and returns a pre-configured mock.
-var mockFeedAddr = common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
-
-// newMockCoreFetch wires a single mock aggregator into chainlinkFetcherCore
-// under the given ticker, so closure tests exercise the production code path.
-func newMockCoreFetch(ticker string, mock *mockAggregatorContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	return chainlinkFetcherCore(
-		map[string]common.Address{ticker: mockFeedAddr},
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return mock },
-	)
-}
-
-// TestChainlinkClosureValidPrice tests that a fresh, valid price is returned correctly.
-func TestChainlinkClosureValidPrice(t *testing.T) {
-	// $50,000 with 8 decimals
-	mock := &mockAggregatorContract{
-		answer:        big.NewInt(5000000000000),
-		decimalPlaces: 8,
-		updatedAt:     time.Now().Add(-1 * time.Minute),
-	}
-	fetch := newMockCoreFetch("BTC", mock)
-
-	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	price, ok := rates["BTC"]
-	if !ok {
-		t.Fatal("expected BTC price in results")
-	}
-	if price != 50000.0 {
-		t.Errorf("expected 50000.0, got %f", price)
 	}
 }
 
@@ -462,8 +352,8 @@ func TestChainlinkClosureMissingTicker(t *testing.T) {
 			t.Fatal("dial should not happen when no requested ticker has a feed")
 			return nil, nil
 		},
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract {
-			t.Fatal("newContract should not be called for unmatched tickers")
+		func(_ chainRPCClient) chainlinkBatchContract {
+			t.Fatal("newBatchContract should not be called for unmatched tickers")
 			return nil
 		},
 	)
@@ -480,11 +370,14 @@ func TestChainlinkClosureMissingTicker(t *testing.T) {
 
 // TestChainlinkClosureStaleness tests that prices older than chainlinkMaxAge are rejected.
 func TestChainlinkClosureStaleness(t *testing.T) {
-	mock := &mockAggregatorContract{
-		answer:        big.NewInt(5000000000000),
-		decimalPlaces: 8,
-		updatedAt:     time.Now().Add(-(chainlinkMaxAge + time.Minute)),
-	}
+	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
+		mockFeedAddr: {
+			Answer:    big.NewInt(5000000000000),
+			Decimals:  8,
+			UpdatedAt: big.NewInt(time.Now().Add(-(chainlinkMaxAge + time.Minute)).Unix()),
+			Ok:        true,
+		},
+	}}
 	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
@@ -499,11 +392,14 @@ func TestChainlinkClosureStaleness(t *testing.T) {
 
 // TestChainlinkClosureFutureTimestamp tests that prices beyond the skew window are rejected.
 func TestChainlinkClosureFutureTimestamp(t *testing.T) {
-	mock := &mockAggregatorContract{
-		answer:        big.NewInt(5000000000000),
-		decimalPlaces: 8,
-		updatedAt:     time.Now().Add(time.Hour),
-	}
+	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
+		mockFeedAddr: {
+			Answer:    big.NewInt(5000000000000),
+			Decimals:  8,
+			UpdatedAt: big.NewInt(time.Now().Add(time.Hour).Unix()),
+			Ok:        true,
+		},
+	}}
 	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
@@ -516,11 +412,10 @@ func TestChainlinkClosureFutureTimestamp(t *testing.T) {
 	}
 }
 
-// TestChainlinkClosureContractError tests that latestRoundData errors cause the ticker to be skipped.
+// TestChainlinkClosureContractError tests that a batch read error causes the ticker to be skipped.
 func TestChainlinkClosureContractError(t *testing.T) {
-	mock := &mockAggregatorContract{
-		decimalPlaces: 8,
-		err:           fmt.Errorf("rpc error: connection refused"),
+	mock := &mockBatchContract{
+		err: fmt.Errorf("rpc error: connection refused"),
 	}
 	fetch := newMockCoreFetch("BTC", mock)
 
@@ -530,13 +425,30 @@ func TestChainlinkClosureContractError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, ok := rates["BTC"]; ok {
-		t.Error("expected erroring BTC contract to be skipped, but it was returned")
+		t.Error("expected erroring batch contract to produce no rates, but BTC was returned")
+	}
+}
+
+// TestChainlinkClosureOkFalse tests that a reading with ok=false is logged and skipped.
+func TestChainlinkClosureOkFalse(t *testing.T) {
+	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
+		mockFeedAddr: {Ok: false},
+	}}
+	fetch := newMockCoreFetch("BTC", mock)
+
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := rates["BTC"]; ok {
+		t.Error("expected ok=false reading to be skipped, but BTC was returned")
 	}
 }
 
 // mockRPCClient implements chainRPCClient for testing. CodeAt and CallContract
-// are never invoked in these tests because newContractFn returns mock contracts
-// that bypass the bound-contract machinery entirely.
+// are never invoked in these tests because newBatchContract returns mock
+// contracts that bypass the bound-contract machinery entirely.
 type mockRPCClient struct {
 	once     sync.Once
 	closedCh chan struct{}
@@ -567,9 +479,8 @@ func (m *mockRPCClient) isClosed() bool {
 	}
 }
 
-// TestChainlinkConnFailedReset verifies that a connection error during
-// latestRoundData triggers connFailed, resets ec to nil, and closes the
-// client — causing a re-dial on the next call.
+// TestChainlinkConnFailedReset verifies that a connection error during the
+// batch read triggers a connection reset and re-dial on the next call.
 func TestChainlinkConnFailedReset(t *testing.T) {
 	connErr := fmt.Errorf("connection refused")
 
@@ -587,16 +498,16 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 	}
 
 	fetch := chainlinkFetcherCore(
-		chainlinkPolygonFeeds,
+		map[string]common.Address{"BTC": mockFeedAddr},
 		dialFn,
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract {
-			return &mockAggregatorContract{err: connErr, decimalPlaces: 8}
+		func(_ chainRPCClient) chainlinkBatchContract {
+			return &mockBatchContract{err: connErr}
 		},
 	)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 
-	// First call: connects, latestRoundData fails with conn error, ec reset.
+	// First call: connects, batch read fails with conn error, ec reset.
 	rates, err := fetch(context.Background(), []string{"BTC"}, log)
 	if err != nil {
 		t.Fatal(err)
@@ -624,23 +535,21 @@ func TestChainlinkConcurrentRates(t *testing.T) {
 	fetch := chainlinkFetcherCore(
 		chainlinkPolygonFeeds,
 		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
-		func(addr common.Address, _ chainRPCClient) chainlinkAggregatorContract {
-			mocks := map[common.Address]*mockAggregatorContract{
+		func(_ chainRPCClient) chainlinkBatchContract {
+			return &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
 				chainlinkPolygonFeeds["BTC"]: {
-					answer:        big.NewInt(5000000000000),
-					decimalPlaces: 8,
-					updatedAt:     time.Now().Add(-time.Minute),
+					Answer:    big.NewInt(5000000000000),
+					Decimals:  8,
+					UpdatedAt: big.NewInt(time.Now().Add(-time.Minute).Unix()),
+					Ok:        true,
 				},
 				chainlinkPolygonFeeds["ETH"]: {
-					answer:        big.NewInt(300000000000),
-					decimalPlaces: 8,
-					updatedAt:     time.Now().Add(-time.Minute),
+					Answer:    big.NewInt(300000000000),
+					Decimals:  8,
+					UpdatedAt: big.NewInt(time.Now().Add(-time.Minute).Unix()),
+					Ok:        true,
 				},
-			}
-			if m, ok := mocks[addr]; ok {
-				return m
-			}
-			return &mockAggregatorContract{err: fmt.Errorf("unknown")}
+			}}
 		},
 	)
 
