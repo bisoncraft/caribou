@@ -1739,12 +1739,12 @@ func tassetWallet(assetID uint32) (asset.AtomicSwapWallet, *assetWallet, *tMempo
 			assetWallet: aw,
 			cfg:         &tokenWalletConfig{},
 			parent:      node.tokenParent,
-			token:       Tokens[usdcEthID],
-			netToken:    Tokens[usdcEthID].NetTokens[util.Simnet],
+			token:       Tokens[assetID],
+			netToken:    Tokens[assetID].NetTokens[util.Simnet],
 		}
 		aw.wallets = map[uint32]*assetWallet{
-			usdcEthID: aw,
-			BipID:     node.tokenParent,
+			assetID: aw,
+			BipID:   node.tokenParent,
 		}
 	}
 
@@ -5703,6 +5703,7 @@ func TestReconfigure(t *testing.T) {
 func TestSend(t *testing.T) {
 	t.Run("eth", func(t *testing.T) { testSend(t, BipID) })
 	t.Run("token", func(t *testing.T) { testSend(t, usdcEthID) })
+	t.Run("link", func(t *testing.T) { testSend(t, linkEthID) })
 }
 
 func testSend(t *testing.T, assetID uint32) {

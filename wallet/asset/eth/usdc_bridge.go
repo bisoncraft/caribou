@@ -93,12 +93,6 @@ type bridge interface {
 	bridgeLimits(sourceAssetID, destAssetID uint32) (min, max *big.Int, hasLimits bool, err error)
 }
 
-var (
-	usdcEthID, _     = util.BipSymbolID("usdc.eth")
-	usdcPolygonID, _ = util.BipSymbolID("usdc.polygon")
-	usdcBaseID, _    = util.BipSymbolID("usdc.base")
-)
-
 type usdcBridgeInfo struct {
 	tokenMessengerAddr     common.Address
 	messageTransmitterAddr common.Address

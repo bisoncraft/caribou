@@ -391,6 +391,7 @@ var (
 	usdtTokenID, _    = util.BipSymbolID("usdt.eth")
 	polygonTokenID, _ = util.BipSymbolID("polygon.eth")
 	maticTokenID, _   = util.BipSymbolID("matic.eth") // old matic 0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0
+	linkTokenID, _    = util.BipSymbolID("link.eth")
 )
 
 // Gases lists the expected gas required for various DEX and wallet operations.

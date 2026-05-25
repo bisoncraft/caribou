@@ -19,16 +19,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset/erc20/polygonbridge"
 )
 
-var (
-	usdtEthID, _     = util.BipSymbolID("usdt.eth")
-	usdtPolygonID, _ = util.BipSymbolID("usdt.polygon")
-	wethPolygonID, _ = util.BipSymbolID("weth.polygon")
-	ethID, _         = util.BipSymbolID("eth")
-	polygonID, _     = util.BipSymbolID("polygon")
-	polygonEthID, _  = util.BipSymbolID("polygon.eth")
-	maticEthID, _    = util.BipSymbolID("matic.eth")
-)
-
 // network -> chainAssetID -> sourceAssetID -> destAssetID
 var polygonBridgeSupportedAssets = map[util.Network]map[uint32]map[uint32]uint32{
 	util.Mainnet: {
