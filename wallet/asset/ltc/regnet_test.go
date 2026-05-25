@@ -100,6 +100,11 @@ func TestSPVWallet(t *testing.T) {
 
 		time.Sleep(time.Second * 3)
 
+		// Bound the sync poll. Previously the loop ran indefinitely; if the
+		// harness never reaches Synced, the whole test would hang silently
+		// until the outer test timeout. 2 minutes is well above normal
+		// regnet sync time but short enough to surface real breakage.
+		syncDeadline := time.Now().Add(2 * time.Minute)
 		for {
 			ss, err := w.SyncStatus()
 			if err != nil {
@@ -107,6 +112,9 @@ func TestSPVWallet(t *testing.T) {
 			}
 			if ss.Synced {
 				break
+			}
+			if time.Now().After(syncDeadline) {
+				return fmt.Errorf("%s LTC SPV did not sync within deadline (progress %.1f%%)", name, ss.BlockProgress()*100)
 			}
 			fmt.Printf("%s LTC SPV sync progress %.1f%%\n", name, ss.BlockProgress()*100)
 			time.Sleep(time.Second)
