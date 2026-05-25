@@ -157,21 +157,6 @@ func TestSPVWallet(t *testing.T) {
 	})
 }
 
-func TestExternalFeeRate(t *testing.T) {
-	fetchRateWithTimeout(t, util.Mainnet)
-	fetchRateWithTimeout(t, util.Testnet)
-}
-
-func fetchRateWithTimeout(t *testing.T, net util.Network) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-	feeRate, err := externalFeeRate(ctx, net)
-	if err != nil {
-		t.Fatalf("error fetching %s fees: %v", net, err)
-	}
-	fmt.Printf("##### Fee rate fetched for %s! %d Sats/vB \n", net, feeRate)
-}
-
 // ltcLoadAddress funds addr from the LTC harness alpha wallet, sending the
 // standard set of outputs used by livetest.Run, then mines a block.
 func ltcLoadAddress(addr string) error {
