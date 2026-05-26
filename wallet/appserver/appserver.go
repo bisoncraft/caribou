@@ -412,6 +412,7 @@ func New(cfg *Config) (*AppServer, error) {
 	mux.Route("/api", func(r chi.Router) {
 		r.Use(middleware.AllowContentType("application/json"))
 		r.Post("/init", s.apiInit)
+		r.Post("/validateseed", s.apiValidateSeed)
 		r.Get("/isinitialized", s.apiIsInitialized)
 		r.Post("/resetapppassword", s.apiResetAppPassword)
 		r.Get("/user", s.apiUser)
