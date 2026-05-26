@@ -69,7 +69,7 @@ func TestExternalFeeRate(t *testing.T) {
 			return jsonResp(http.StatusOK,
 				`{"low_fee_per_kb":2500,"medium_fee_per_kb":5000,"high_fee_per_kb":10000}`), nil
 		},
-		want: 3, // round(2500/1000) = 3 (banker's rounding to even via math.Round)
+		want: 3, // math.Round(2.5) = 3 (rounds half away from zero)
 	}, {
 		name: "simnet routes to blockcypher",
 		net:  util.Simnet,
@@ -100,6 +100,13 @@ func TestExternalFeeRate(t *testing.T) {
 		net:  util.Mainnet,
 		rt: func(req *http.Request) (*http.Response, error) {
 			return jsonResp(http.StatusOK, `{"low_fee_per_kb":0}`), nil
+		},
+		wantErr: true,
+	}, {
+		name: "bitcore zero rate is error",
+		net:  util.Testnet,
+		rt: func(req *http.Request) (*http.Response, error) {
+			return jsonResp(http.StatusOK, `{"feerate":0}`), nil
 		},
 		wantErr: true,
 	}, {
