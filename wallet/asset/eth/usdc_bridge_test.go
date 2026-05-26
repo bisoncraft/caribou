@@ -1,11 +1,14 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
+//go:build !harness && !rpclive
+
 package eth
 
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +17,9 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset/erc20/cctp"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 func TestGetUsdcBridgeInfo(t *testing.T) {
@@ -312,6 +317,156 @@ func TestGetAttestation(t *testing.T) {
 		serverErrCode = http.StatusInternalServerError
 		if _, err := b.getAttestation(context.Background(), []byte("msg")); err == nil {
 			t.Fatal("expected error for 500 response")
+		}
+	})
+}
+
+// TestNewUsdcBridgeSuccess covers the construction success path - binding the
+// CCTP contracts and resolving token info - for every supported chain and
+// network. The error paths live in TestNewUsdcBridgeErrors.
+func TestNewUsdcBridgeSuccess(t *testing.T) {
+	addr := common.HexToAddress("0x2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27")
+	for _, chainAssetID := range []uint32{ethID, polygonID, baseID} {
+		for _, net := range []util.Network{util.Mainnet, util.Testnet} {
+			b, err := newUsdcBridge(chainAssetID, net, nil, addr, &testNode{})
+			if err != nil {
+				t.Fatalf("chain %d net %s: %v", chainAssetID, net, err)
+			}
+			if b.usdcAssetID != baseChainToUSDCAssetID[chainAssetID] {
+				t.Errorf("chain %d: usdcAssetID = %d, want %d", chainAssetID, b.usdcAssetID, baseChainToUSDCAssetID[chainAssetID])
+			}
+			if b.attestationUrl != usdcBridgeAttestationUrl[net] {
+				t.Errorf("net %s: attestationUrl = %q", net, b.attestationUrl)
+			}
+			if (b.tokenMessengerAddr == common.Address{}) {
+				t.Errorf("chain %d net %s: zero tokenMessengerAddr", chainAssetID, net)
+			}
+		}
+	}
+}
+
+// messageSentLog builds a synthetic MessageSent event log carrying msg, so the
+// receipt-parsing path can be exercised without a live node. MessageSent has a
+// single non-indexed bytes field, so the message lands entirely in the log
+// data and the topic is just the event signature.
+func messageSentLog(t *testing.T, msg []byte) *types.Log {
+	t.Helper()
+	parsed, err := cctp.MessageTransmitterMetaData.GetAbi()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := parsed.Events["MessageSent"]
+	data, err := ev.Inputs.Pack(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &types.Log{
+		Topics: []common.Hash{ev.ID},
+		Data:   data,
+	}
+}
+
+func newTestUsdcBridge(t *testing.T, n *testNode) *usdcBridge {
+	t.Helper()
+	addr := common.HexToAddress("0x2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27")
+	b, err := newUsdcBridge(ethID, util.Testnet, nil, addr, n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestUsdcGetMessageSentEventLog(t *testing.T) {
+	wantMsg := []byte{0xde, 0xad, 0xbe, 0xef}
+	txID := "0x" + hex.EncodeToString(make([]byte, 32))
+
+	t.Run("extracts message from receipt", func(t *testing.T) {
+		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{messageSentLog(t, wantMsg)}}}
+		got, err := newTestUsdcBridge(t, n).getMessageSentEventLog(context.Background(), txID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, wantMsg) {
+			t.Fatalf("msg = %x, want %x", got, wantMsg)
+		}
+	})
+
+	t.Run("receipt error propagates", func(t *testing.T) {
+		n := &testNode{receiptErr: fmt.Errorf("receipt unavailable")}
+		if _, err := newTestUsdcBridge(t, n).getMessageSentEventLog(context.Background(), txID); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("no MessageSent log in receipt", func(t *testing.T) {
+		// A receipt whose only log isn't a MessageSent event.
+		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{{
+			Topics: []common.Hash{common.HexToHash("0x01")},
+		}}}}
+		if _, err := newTestUsdcBridge(t, n).getMessageSentEventLog(context.Background(), txID); err == nil {
+			t.Fatal("expected error for receipt with no MessageSent event")
+		}
+	})
+}
+
+// TestUsdcGetCompletionData covers the full completion flow: pull the
+// MessageSent message out of the burn receipt, fetch the attestation from
+// Circle, and serialize the two into mint info the destination chain can use.
+func TestUsdcGetCompletionData(t *testing.T) {
+	wantMsg := []byte{0x11, 0x22, 0x33}
+	txID := "0x" + hex.EncodeToString(make([]byte, 32))
+
+	receiptNode := func() *testNode {
+		return &testNode{receipt: &types.Receipt{Logs: []*types.Log{messageSentLog(t, wantMsg)}}}
+	}
+
+	t.Run("complete attestation yields mint info", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, `{"attestation":"0xaabb","status":"complete"}`)
+		}))
+		t.Cleanup(srv.Close)
+
+		b := newTestUsdcBridge(t, receiptNode())
+		b.attestationUrl = srv.URL + "/attestations/"
+
+		data, err := b.getCompletionData(context.Background(), usdcEthID, txID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mintInfo, err := deserializeUsdcMintInfo(data)
+		if err != nil {
+			t.Fatalf("deserialize completion data: %v", err)
+		}
+		if !bytes.Equal(mintInfo.message, wantMsg) {
+			t.Errorf("message = %x, want %x", mintInfo.message, wantMsg)
+		}
+		if !bytes.Equal(mintInfo.attestation, []byte{0xaa, 0xbb}) {
+			t.Errorf("attestation = %x, want aabb", mintInfo.attestation)
+		}
+	})
+
+	t.Run("pending attestation yields nil", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintln(w, `{"status":"pending_confirmations"}`)
+		}))
+		t.Cleanup(srv.Close)
+
+		b := newTestUsdcBridge(t, receiptNode())
+		b.attestationUrl = srv.URL + "/attestations/"
+
+		data, err := b.getCompletionData(context.Background(), usdcEthID, txID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data != nil {
+			t.Errorf("expected nil completion data while attestation pending, got %x", data)
+		}
+	})
+
+	t.Run("receipt error propagates", func(t *testing.T) {
+		n := &testNode{receiptErr: fmt.Errorf("receipt unavailable")}
+		if _, err := newTestUsdcBridge(t, n).getCompletionData(context.Background(), usdcEthID, txID); err == nil {
+			t.Fatal("expected error")
 		}
 	})
 }
