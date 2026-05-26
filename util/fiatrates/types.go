@@ -17,8 +17,8 @@ type Config struct {
 	CryptoCompareAPIKey string `long:"ccdataapikey" description:"This is your free API Key from cryptocompare.com."`
 	EnableBinanceUS     bool   `long:"enablebinanceus" description:"Set to true, if running the tatanka mesh from a US based server."`
 	DisabledFiatSources string `long:"disabledfiatsources" description:"A list of disabled sources separated by comma. See fiatrate/sources.go."`
-	ChainlinkProviders  string `long:"chainlinkproviders" description:"Whitespace-separated Polygon RPC provider URLs for Chainlink Data Feeds. Leave empty to use defaults."`
-	ChainlinkTestnet    bool   `long:"chainlinktestnet" description:"Use Sepolia testnet Chainlink feed addresses instead of Polygon mainnet."`
+	ChainlinkProviders  string `long:"chainlinkproviders" description:"Whitespace-separated Polygon RPC provider URLs for Chainlink Data Feeds (e.g. https://polygon.drpc.org). Leave empty to use built-in Polygon mainnet defaults."`
+	ChainlinkBatchAddr  string `long:"chainlinkbatchaddr" description:"Deployed MultiAggregatorV0 contract address for batch Chainlink reads. Leave empty to use per-feed reads."`
 }
 
 // AllFiatSourceDisabled checks if all currently supported fiat rate sources
