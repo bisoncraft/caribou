@@ -396,4 +396,20 @@ func TestPolygonBridgeEthGetFollowUpCompletionDataErrors(t *testing.T) {
 			t.Error("expected error when no exit log present")
 		}
 	})
+
+	t.Run("exit log with too few topics errors", func(t *testing.T) {
+		// The exit log carries the exitId and token in topics 2 and 3, so a log
+		// matching the signature but with fewer than 4 topics must error rather
+		// than index out of range.
+		b.node = &testNode{receipt: &types.Receipt{Logs: []*types.Log{{
+			Topics: []common.Hash{
+				common.HexToHash("0xaa5303fdad123ab5ecaefaf69137bf8632257839546d43a3b3dd148cc2879d6f"),
+				common.HexToHash("0x01"),
+				common.HexToHash("0x02"),
+			},
+		}}}}
+		if _, _, err := b.getFollowUpCompletionData(context.Background(), txID); err == nil {
+			t.Error("expected error for exit log with fewer than 4 topics")
+		}
+	})
 }
