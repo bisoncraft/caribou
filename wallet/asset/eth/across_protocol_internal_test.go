@@ -162,12 +162,17 @@ func TestGetAcrossAvailableRoutes(t *testing.T) {
 	})
 }
 
-// fakeLogger is a minimal util.Logger that records error/warn calls so tests
-// can assert on logged token-mismatch warnings without pulling in a full
-// logger.
+// fakeLogger records Errorf calls so tests can assert on logged token-mismatch
+// warnings without pulling in a full logger. The embedded util.Disabled
+// satisfies the rest of the util.Logger interface as no-ops, so a stray
+// Warnf/Infof/etc. in a touched code path won't nil-panic.
 type fakeLogger struct {
 	util.Logger
 	errs int
+}
+
+func newFakeLogger() *fakeLogger {
+	return &fakeLogger{Logger: util.Disabled}
 }
 
 func (l *fakeLogger) Errorf(string, ...any) { l.errs++ }
@@ -185,7 +190,7 @@ func TestAcrossSupportedDestinations(t *testing.T) {
 	})
 	stubDexnetClient(t, h.transport())
 
-	log := &fakeLogger{}
+	log := newFakeLogger()
 	dests, err := acrossSupportedDestinations(context.Background(), ethID, util.Mainnet, log)
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +206,24 @@ func TestAcrossSupportedDestinations(t *testing.T) {
 	if _, err := acrossSupportedDestinations(context.Background(), 0xDEADBEEF, util.Mainnet, log); err == nil {
 		t.Error("expected error for unknown source asset")
 	}
+
+	// A route whose origin chain/symbol match but whose origin token address
+	// does not is an error return that aborts the whole call - distinct from
+	// the logged-and-skipped destination mismatch.
+	t.Run("origin token address mismatch", func(t *testing.T) {
+		resetAcrossRoutesCache(t)
+		h := newAcrossHandler(t)
+		h.on("/api/available-routes", func(r *http.Request) (int, string) {
+			return http.StatusOK, `[{"originChainId":1,"destinationChainId":8453,
+				"originToken":"0xDEAD000000000000000000000000000000000000",
+				"destinationToken":"0x4200000000000000000000000000000000000006",
+				"originTokenSymbol":"WETH","destinationTokenSymbol":"WETH","isNative":true}]`
+		})
+		stubDexnetClient(t, h.transport())
+		if _, err := acrossSupportedDestinations(context.Background(), ethID, util.Mainnet, newFakeLogger()); err == nil {
+			t.Error("expected error for origin token address mismatch")
+		}
+	})
 }
 
 func TestNewAcrossBridge(t *testing.T) {
@@ -302,6 +325,9 @@ func TestAcrossBridgeVerifyCompletion(t *testing.T) {
 		h.on("/api/deposit/status", func(r *http.Request) (int, string) {
 			if got := r.URL.Query().Get("depositId"); got != "42" {
 				t.Errorf("depositId = %q, want 42", got)
+			}
+			if got := r.URL.Query().Get("originChainId"); got != "1" {
+				t.Errorf("originChainId = %q, want 1", got)
 			}
 			return http.StatusOK, `{"status":"filled"}`
 		})
@@ -406,6 +432,18 @@ func TestAcrossBridgeLimits(t *testing.T) {
 		}
 	})
 
+	t.Run("bad max", func(t *testing.T) {
+		h := newAcrossHandler(t)
+		h.on("/api/limits", func(r *http.Request) (int, string) {
+			return http.StatusOK, `{"minDeposit":"1000","maxDeposit":"notanumber"}`
+		})
+		stubDexnetClient(t, h.transport())
+		b := &acrossBridge{net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
+		if _, _, _, err := b.bridgeLimits(ethID, baseID); err == nil {
+			t.Error("expected error for malformed maxDeposit")
+		}
+	})
+
 	t.Run("http error", func(t *testing.T) {
 		h := newAcrossHandler(t)
 		h.on("/api/limits", func(r *http.Request) (int, string) {
@@ -415,6 +453,59 @@ func TestAcrossBridgeLimits(t *testing.T) {
 		b := &acrossBridge{net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
 		if _, _, _, err := b.bridgeLimits(ethID, baseID); err == nil {
 			t.Error("expected error on 503")
+		}
+	})
+}
+
+func TestAcrossBridgeSupportedAsset(t *testing.T) {
+	if !AcrossBridgeSupportedAsset(ethID, util.Mainnet) {
+		t.Error("ethID should be supported on mainnet")
+	}
+	if AcrossBridgeSupportedAsset(0xDEADBEEF, util.Mainnet) {
+		t.Error("unknown asset should not be supported")
+	}
+}
+
+// TestAcrossBridgeSupportedDestinations covers the supportedDestinations method,
+// which wraps acrossSupportedDestinations with a background context and swallows
+// errors into a nil return after logging.
+func TestAcrossBridgeSupportedDestinations(t *testing.T) {
+	t.Run("ok", func(t *testing.T) {
+		resetAcrossRoutesCache(t)
+		h := newAcrossHandler(t)
+		h.on("/api/available-routes", func(r *http.Request) (int, string) {
+			return http.StatusOK, `[{"originChainId":1,"destinationChainId":8453,"originToken":"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2","destinationToken":"0x4200000000000000000000000000000000000006","originTokenSymbol":"WETH","destinationTokenSymbol":"WETH","isNative":true}]`
+		})
+		stubDexnetClient(t, h.transport())
+
+		log := newFakeLogger()
+		b := &acrossBridge{net: util.Mainnet, log: log}
+		dests := b.supportedDestinations(ethID)
+		if len(dests) != 1 || dests[0] != baseID {
+			t.Fatalf("dests = %v, want [%d]", dests, baseID)
+		}
+		if log.errs != 0 {
+			t.Errorf("unexpected error logs: %d", log.errs)
+		}
+	})
+
+	t.Run("error returns nil and logs", func(t *testing.T) {
+		resetAcrossRoutesCache(t)
+		h := newAcrossHandler(t)
+		h.on("/api/available-routes", func(r *http.Request) (int, string) {
+			return http.StatusOK, `[]`
+		})
+		stubDexnetClient(t, h.transport())
+
+		log := newFakeLogger()
+		b := &acrossBridge{net: util.Mainnet, log: log}
+		// Unknown source asset makes acrossSupportedDestinations error; the
+		// wrapper must log and return nil rather than propagate.
+		if dests := b.supportedDestinations(0xDEADBEEF); dests != nil {
+			t.Errorf("dests = %v, want nil", dests)
+		}
+		if log.errs == 0 {
+			t.Error("expected an error to be logged")
 		}
 	})
 }
@@ -445,7 +536,7 @@ func TestAcrossInitiateBridgeErrors(t *testing.T) {
 			chainAssetID: ethID,
 			chainID:      testAcrossEthChainID,
 			apiBaseURL:   "https://app.across.to",
-			log:          &fakeLogger{},
+			log:          newFakeLogger(),
 		}
 	}
 
