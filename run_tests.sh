@@ -20,14 +20,17 @@ do
 	cd "$dir/$m"
 
 	# Run `go mod tidy` and fail if the git status of go.mod and/or
-	# go.sum changes. Only do this for the latest Go version.
-	if [[ "$GV" =~ ^1.25 ]]; then
+	# go.sum changes. Gated by RUN_TIDY_CHECK so the gate doesn't
+	# silently disappear when the CI Go matrix bumps - CI sets this on
+	# one matrix leg (the latest Go version) and devs can opt in
+	# locally with `RUN_TIDY_CHECK=1 ./run_tests.sh`. Unset means skip.
+	if [ -n "$RUN_TIDY_CHECK" ]; then
 		MOD_STATUS=$(git status --porcelain go.mod go.sum)
 		go mod tidy
 		UPDATED_MOD_STATUS=$(git status --porcelain go.mod go.sum)
 		if [ "$UPDATED_MOD_STATUS" != "$MOD_STATUS" ]; then
 			echo "$m: running 'go mod tidy' modified go.mod and/or go.sum"
-		git diff --unified=0 go.mod go.sum
+			git diff --unified=0 go.mod go.sum
 			exit 1
 		fi
 	fi

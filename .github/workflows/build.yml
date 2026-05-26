@@ -35,6 +35,12 @@ jobs:
         run: "curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.6.2"
 
       - name: Test
+        # RUN_TIDY_CHECK gates the `go mod tidy` no-op check in
+        # run_tests.sh; set it on the highest Go version in the matrix
+        # so the gate runs exactly once per CI run. Bump the version
+        # below when the matrix's top entry changes.
+        env:
+          RUN_TIDY_CHECK: ${{ matrix.go == '1.25' && '1' || '' }}
         run: |
           mkdir -p wallet/appserver/newui/dist
           touch -t 2306151245 wallet/appserver/newui/dist/placeholder
