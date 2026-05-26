@@ -30,8 +30,8 @@ var (
 	// IF running on a test network (testnet or regtest) AND both values are set to
 	// valid duration strings.
 	// Values for both variables may be set at build time using linker flags e.g:
-	// go build -ldflags "-X 'github.com/bisoncraft/bosswallet/dex.testLockTimeTaker=10m' \
-	// -X 'github.com/bisoncraft/bosswallet/dex.testLockTimeMaker=20m'"
+	// go build -ldflags "-X 'github.com/bisoncraft/bosswallet/util.testLockTimeTaker=10m' \
+	// -X 'github.com/bisoncraft/bosswallet/util.testLockTimeMaker=20m'"
 	// Same values should be set when building server and client binaries.
 	testLockTimeTaker string
 	testLockTimeMaker string

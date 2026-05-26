@@ -73,7 +73,7 @@ done
 HARNESS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${HARNESS_DIR}/../../.." && pwd)"
 echo "Building sendnear tool..."
-go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/sendnear" ./dex/testing/near/sendnear/
+go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/sendnear" ./util/testing/near/sendnear/
 
 cat > "${NODES_ROOT}/rpc_endpoint.txt" <<EOF
 http://localhost:${RPC_PORT}
