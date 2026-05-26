@@ -4,13 +4,17 @@ SESSION="${CHAIN}-harness"
 TESTING_ADDRESS="946dfaB1AD7caCFeF77dE70ea68819a30acD4577"
 
 fileToHex () {
+  if [ ! -f "$1" ]; then
+    echo "fileToHex: contract bytecode file not found: $1" >&2
+    exit 1
+  fi
   echo $(xxd -p "$1" | tr -d '\n')
 }
-ETH_SWAP_V0=$(fileToHex "../../networks/eth/contracts/v0/contract.bin")
-ERC20_SWAP_V0=$(fileToHex "../../networks/erc20/contracts/v0/swap_contract.bin")
-TEST_TOKEN=$(fileToHex "../../networks/erc20/contracts/v0/token_contract.bin")
-MULTIBALANCE_BIN=$(fileToHex "../../networks/eth/contracts/multibalance/contract.bin")
-ETH_SWAP_V1=$(fileToHex "../../networks/eth/contracts/v1/contract.bin")
+ETH_SWAP_V0=$(fileToHex "../../../wallet/asset/eth/contracts/v0/contract.bin")
+ERC20_SWAP_V0=$(fileToHex "../../../wallet/asset/erc20/contracts/v0/swap_contract.bin")
+TEST_TOKEN=$(fileToHex "../../../wallet/asset/erc20/contracts/v0/token_contract.bin")
+MULTIBALANCE_BIN=$(fileToHex "../../../wallet/asset/eth/contracts/multibalance/contract.bin")
+ETH_SWAP_V1=$(fileToHex "../../../wallet/asset/eth/contracts/v1/contract.bin")
 
 # Ensure we can create the session and that there's not a session already
 # running before we nuke the data directory.
