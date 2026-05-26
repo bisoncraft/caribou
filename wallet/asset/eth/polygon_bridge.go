@@ -521,8 +521,8 @@ func (b *polygonBridgeEth) getFollowUpCompletionData(ctx context.Context, comple
 
 	for _, log := range receipt.Logs {
 		if log.Topics[0] == common.HexToHash("0xaa5303fdad123ab5ecaefaf69137bf8632257839546d43a3b3dd148cc2879d6f") {
-			if len(log.Topics) < 3 {
-				return false, nil, fmt.Errorf("expected at least 2 topics, got %d", len(log.Topics))
+			if len(log.Topics) < 4 {
+				return false, nil, fmt.Errorf("expected at least 4 topics, got %d", len(log.Topics))
 			}
 			exitID := new(big.Int).SetBytes(log.Topics[2].Bytes())
 			token := common.HexToAddress(log.Topics[3].Hex())
