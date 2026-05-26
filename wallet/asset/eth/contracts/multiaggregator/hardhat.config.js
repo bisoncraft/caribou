@@ -7,7 +7,7 @@ module.exports = {
   networks: {
     hardhat: {},
     ...(process.env.AMOY_RPC_URL ? {
-      amoy: {
+      polygonAmoy: {
         url: process.env.AMOY_RPC_URL,
         accounts: [process.env.PRIVATE_KEY]
       }

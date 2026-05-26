@@ -75,8 +75,8 @@ const (
 )
 
 // MultiAggregatorReading mirrors MultiAggregatorV0.Reading from the on-chain
-// contract. Fields must be exported so abi.ConvertType can map ABI tuple field
-// names to struct fields by reflection (e.g. "updatedAt" → "UpdatedAt").
+// contract. Fields must be exported and listed in ABI tuple field order, since
+// abi.ConvertType maps by position rather than by name.
 type MultiAggregatorReading struct {
 	Answer    *big.Int
 	UpdatedAt *big.Int
@@ -98,6 +98,112 @@ type chainlinkBatchContract interface {
 type chainRPCClient interface {
 	bind.ContractCaller
 	Close()
+}
+
+type divisorKey struct {
+	ticker   string
+	decimals uint8
+}
+
+type divisorCache struct {
+	mtx  sync.Mutex
+	vals map[divisorKey]*big.Float
+}
+
+func newDivisorCache() *divisorCache {
+	return &divisorCache{vals: make(map[divisorKey]*big.Float)}
+}
+
+func (c *divisorCache) getOrCreate(ticker string, decimals uint8) *big.Float {
+	key := divisorKey{ticker: ticker, decimals: decimals}
+
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if div := c.vals[key]; div != nil {
+		return div
+	}
+
+	div := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+	c.vals[key] = div
+	return div
+}
+
+// connRef wraps a chainRPCClient with a reference count so concurrent fetch
+// cycles can share a connection without one cycle closing it while another is
+// mid-call. Callers must acquire before using client and call release when
+// done. The caller that evicts the connection from the shared pointer calls
+// release then closeWhenDone: closeWhenDone blocks until all outstanding
+// acquire/release pairs complete, then closes client exactly once.
+type connRef struct {
+	client    chainRPCClient
+	wg        sync.WaitGroup
+	closeOnce sync.Once
+}
+
+func (r *connRef) acquire() { r.wg.Add(1) }
+func (r *connRef) release() { r.wg.Done() }
+func (r *connRef) closeWhenDone() {
+	r.closeOnce.Do(func() {
+		r.wg.Wait()
+		r.client.Close()
+	})
+}
+
+type sharedConn struct {
+	mtx  sync.Mutex
+	conn *connRef
+}
+
+func (s *sharedConn) acquire(dialFn func() (chainRPCClient, error)) (*connRef, error) {
+	s.mtx.Lock()
+	if s.conn != nil {
+		current := s.conn
+		current.acquire()
+		s.mtx.Unlock()
+		return current, nil
+	}
+	s.mtx.Unlock()
+
+	newEC, err := dialFn()
+	if err != nil {
+		return nil, err
+	}
+
+	s.mtx.Lock()
+	if s.conn == nil {
+		s.conn = &connRef{client: newEC}
+	} else {
+		newEC.Close()
+	}
+	current := s.conn
+	current.acquire()
+	s.mtx.Unlock()
+	return current, nil
+}
+
+func (s *sharedConn) reset(current *connRef) {
+	s.mtx.Lock()
+	if s.conn == current {
+		s.conn = nil
+	}
+	s.mtx.Unlock()
+	current.release()
+	current.closeWhenDone()
+}
+
+func isConnErr(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// EIP-3 execution reverts carry error code 3 in the JSON-RPC layer;
+	// use the typed interface where available to avoid string matching.
+	type rpcError interface{ ErrorCode() int }
+	if rpcErr, ok := err.(rpcError); ok && rpcErr.ErrorCode() == 3 {
+		return false
+	}
+	msg := err.Error()
+	return !strings.Contains(msg, "execution reverted") && !strings.Contains(msg, "VM Exception")
 }
 
 type batchBoundContract struct {
@@ -135,7 +241,12 @@ func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int
 		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData updatedAt to *big.Int")
 	}
 
-	return answer, time.Unix((*updatedAtPtr).Int64(), 0), nil
+	updatedAt := *updatedAtPtr
+	if !updatedAt.IsInt64() {
+		return nil, time.Time{}, fmt.Errorf("latestRoundData updatedAt overflows int64: %s", updatedAt)
+	}
+
+	return answer, time.Unix(updatedAt.Int64(), 0), nil
 }
 
 func (c *aggregatorBoundContract) decimals(ctx context.Context) (uint8, error) {
@@ -185,21 +296,9 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 	//         2. Test with live RPC calls
 }
 
-// chainlinkTestnetFeeds are Polygon Amoy feed addresses.
-// TODO: replace placeholder addresses with real Polygon Amoy Chainlink feed addresses
-// from https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon&page=1&testnetPage=1
-var chainlinkTestnetFeeds = map[string]common.Address{
-	"ETH": common.HexToAddress("0x694AA1769357215DE4FAC081bf1f309aDC325306"),
-	"BTC": common.HexToAddress("0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43"),
-}
-
 // chainlinkPolygonBatchAddr is the deployed MultiAggregatorV0 address on Polygon mainnet.
 // TODO: fill in after deployment.
 var chainlinkPolygonBatchAddr = common.Address{}
-
-// chainlinkAmoyBatchAddr is the deployed MultiAggregatorV0 address on Polygon Amoy testnet.
-// TODO: fill in after deployment.
-var chainlinkAmoyBatchAddr = common.Address{}
 
 // chainlinkDefaultProviders are free public Polygon RPC endpoints used as
 // fallback if no providers are explicitly configured.
@@ -239,12 +338,17 @@ func validateRPCURL(urlStr string) error {
 func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
 	feeds := chainlinkPolygonFeeds
 	batchAddr := chainlinkPolygonBatchAddr
-	if cfg.ChainlinkTestnet {
-		feeds = chainlinkTestnetFeeds
-		batchAddr = chainlinkAmoyBatchAddr
+	if cfg.ChainlinkBatchAddr != "" {
+		if !common.IsHexAddress(cfg.ChainlinkBatchAddr) {
+			return nil, fmt.Errorf("chainlink: invalid ChainlinkBatchAddr %q: not a valid hex address", cfg.ChainlinkBatchAddr)
+		}
+		batchAddr = common.HexToAddress(cfg.ChainlinkBatchAddr)
+		if batchAddr == (common.Address{}) {
+			return nil, fmt.Errorf("chainlink: ChainlinkBatchAddr resolved to zero address")
+		}
 	}
 
-	// Get provider list: use configured providers or fall back to defaults.
+	// Get provider list: use configured providers or fall back to network defaults.
 	providers := chainlinkDefaultProviders
 	if cfg.ChainlinkProviders != "" {
 		// Split on any whitespace (spaces, tabs, newlines).
@@ -273,19 +377,20 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		return nil, fmt.Errorf("dial all providers failed: %w", lastErr)
 	}
 
+	maxAge := chainlinkMaxAge
+
 	if batchAddr == (common.Address{}) {
 		aggregatorABI, err := parseABI(aggregatorV3ABI)
 		if err != nil {
 			return nil, fmt.Errorf("chainlink: %w", err)
 		}
-		return selectChainlinkFetcher(
+		return chainlinkLegacyFetcherCore(
 			feeds,
-			batchAddr,
 			dialFn,
 			func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract {
 				return &aggregatorBoundContract{bound: bind.NewBoundContract(addr, *aggregatorABI, client, nil, nil)}
 			},
-			nil,
+			maxAge,
 		), nil
 	}
 
@@ -293,28 +398,14 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	if err != nil {
 		return nil, fmt.Errorf("chainlink: %w", err)
 	}
-	return selectChainlinkFetcher(
+	return chainlinkBatchFetcherCore(
 		feeds,
-		batchAddr,
 		dialFn,
-		nil,
 		func(client chainRPCClient) chainlinkBatchContract {
 			return &batchBoundContract{bound: bind.NewBoundContract(batchAddr, *batchABI, client, nil, nil)}
 		},
+		maxAge,
 	), nil
-}
-
-func selectChainlinkFetcher(
-	feeds map[string]common.Address,
-	batchAddr common.Address,
-	dialFn func() (chainRPCClient, error),
-	newContract func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract,
-	newBatchContract func(client chainRPCClient) chainlinkBatchContract,
-) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	if batchAddr == (common.Address{}) {
-		return chainlinkLegacyFetcherCore(feeds, dialFn, newContract)
-	}
-	return chainlinkBatchFetcherCore(feeds, dialFn, newBatchContract)
 }
 
 // chainlinkLegacyFetcherCore is the testable per-feed fallback used until the
@@ -323,16 +414,12 @@ func chainlinkLegacyFetcherCore(
 	feeds map[string]common.Address,
 	dialFn func() (chainRPCClient, error),
 	newContract func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract,
+	maxAge time.Duration,
 ) func(context.Context, []string, util.Logger) (map[string]float64, error) {
 	var (
-		mtx      sync.Mutex
-		ec       chainRPCClient
-		divisors = make(map[string]*big.Float)
+		conn     sharedConn
+		divisors = newDivisorCache()
 	)
-
-	isConnErr := func(err error) bool {
-		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-	}
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 		hasAny := false
@@ -346,27 +433,10 @@ func chainlinkLegacyFetcherCore(
 			return map[string]float64{}, nil
 		}
 
-		mtx.Lock()
-		needConnect := ec == nil
-		mtx.Unlock()
-
-		if needConnect {
-			newEC, err := dialFn()
-			if err != nil {
-				return nil, fmt.Errorf("chainlink: %w", err)
-			}
-			mtx.Lock()
-			if ec == nil {
-				ec = newEC
-			} else {
-				newEC.Close()
-			}
-			mtx.Unlock()
+		current, err := conn.acquire(dialFn)
+		if err != nil {
+			return nil, fmt.Errorf("chainlink: %w", err)
 		}
-
-		mtx.Lock()
-		currentEC := ec
-		mtx.Unlock()
 
 		var (
 			ratesMtx   sync.Mutex
@@ -383,34 +453,23 @@ func chainlinkLegacyFetcherCore(
 			wg.Add(1)
 			go func(ticker string, addr common.Address) {
 				defer wg.Done()
-				contract := newContract(addr, currentEC)
+				contract := newContract(addr, current.client)
 
-				mtx.Lock()
-				div := divisors[ticker]
-				mtx.Unlock()
-
-				if div == nil {
-					initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
-					d, err := contract.decimals(initCtx)
-					cancel()
-					if err != nil {
-						log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
-						if isConnErr(err) {
-							connFailed.Store(true)
-						}
-						return
+				initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
+				d, err := contract.decimals(initCtx)
+				cancel()
+				if err != nil {
+					log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
+					if isConnErr(err) {
+						connFailed.Store(true)
 					}
-					div = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(d)), nil))
-					mtx.Lock()
-					if divisors[ticker] == nil {
-						divisors[ticker] = div
-					} else {
-						div = divisors[ticker]
-					}
-					mtx.Unlock()
+					return
 				}
+				div := divisors.getOrCreate(ticker, d)
 
-				answer, updatedAt, err := contract.latestRoundData(ctx)
+				rateCtx, rateCancel := context.WithTimeout(ctx, chainlinkInitTimeout)
+				answer, updatedAt, err := contract.latestRoundData(rateCtx)
+				rateCancel()
 				if err != nil {
 					log.Warnf("chainlink: %s/USD: %v", ticker, err)
 					if isConnErr(err) {
@@ -423,7 +482,7 @@ func chainlinkLegacyFetcherCore(
 					log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
 					return
 				}
-				if time.Since(updatedAt) > chainlinkMaxAge {
+				if time.Since(updatedAt) > maxAge {
 					log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
 					return
 				}
@@ -437,18 +496,17 @@ func chainlinkLegacyFetcherCore(
 		wg.Wait()
 
 		if connFailed.Load() {
-			var doClose bool
-			mtx.Lock()
-			if ec == currentEC {
-				ec = nil
-				doClose = true
+			conn.reset(current)
+			if len(rates) == 0 {
+				return nil, fmt.Errorf("chainlink: all feed reads failed")
 			}
-			mtx.Unlock()
-			if doClose {
-				currentEC.Close()
-			}
+			return rates, nil
 		}
 
+		current.release()
+		if len(rates) == 0 {
+			return nil, fmt.Errorf("chainlink: no valid prices returned")
+		}
 		return rates, nil
 	}
 }
@@ -459,6 +517,7 @@ func chainlinkBatchFetcherCore(
 	feeds map[string]common.Address,
 	dialFn func() (chainRPCClient, error),
 	newBatchContract func(client chainRPCClient) chainlinkBatchContract,
+	maxAge time.Duration,
 ) func(context.Context, []string, util.Logger) (map[string]float64, error) {
 	// Chainlink is one of several fiat rate sources; the oracle averages across
 	// all active sources, so a single compromised RPC cannot unilaterally skew
@@ -472,21 +531,13 @@ func chainlinkBatchFetcherCore(
 	// rates entirely, since the pinned client is not swapped until the next
 	// getRates invocation observes a failure.
 	//
-	// divisors caches the 10^decimals factor per feed and intentionally
-	// survives reconnects: Chainlink Data Feed decimals are immutable per
-	// aggregator address (decimal changes are deployed as a new feed at a new
-	// address), so a cached divisor cannot go stale relative to its address.
+	// divisors caches the 10^decimals factor keyed by "ticker:decimals". Keying
+	// on both fields means a bad first read (malicious RPC returning wrong
+	// decimals) cannot permanently corrupt subsequent honest reads.
 	var (
-		mtx      sync.Mutex
-		ec       chainRPCClient
-		divisors = make(map[string]*big.Float)
+		conn     sharedConn
+		divisors = newDivisorCache()
 	)
-
-	// isConnErr returns true for errors that indicate a provider failure
-	// rather than a cancelled or timed-out context.
-	isConnErr := func(err error) bool {
-		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-	}
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 		// Build an ordered list of (ticker, addr) pairs for feeds that match
@@ -510,47 +561,26 @@ func chainlinkBatchFetcherCore(
 			addrs[i] = e.addr
 		}
 
-		mtx.Lock()
-		needConnect := ec == nil
-		mtx.Unlock()
-
-		if needConnect {
-			newEC, err := dialFn()
-			if err != nil {
-				return nil, fmt.Errorf("chainlink: %w", err)
-			}
-			mtx.Lock()
-			if ec == nil {
-				ec = newEC
-			} else {
-				newEC.Close() // another caller connected first
-			}
-			mtx.Unlock()
+		current, err := conn.acquire(dialFn)
+		if err != nil {
+			return nil, fmt.Errorf("chainlink: %w", err)
 		}
 
-		mtx.Lock()
-		currentEC := ec
-		mtx.Unlock()
-
-		readings, err := newBatchContract(currentEC).read(ctx, addrs)
+		readCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
+		readings, err := newBatchContract(current.client).read(readCtx, addrs)
+		cancel()
 		if err != nil {
 			log.Warnf("chainlink: batch read failed: %v", err)
 			if isConnErr(err) {
-				var doClose bool
-				mtx.Lock()
-				if ec == currentEC {
-					ec = nil
-					doClose = true
-				}
-				mtx.Unlock()
-				if doClose {
-					currentEC.Close()
-				}
+				conn.reset(current)
+			} else {
+				current.release()
 			}
-			return map[string]float64{}, nil
+			return nil, fmt.Errorf("chainlink: batch read failed: %w", err)
 		}
 
 		if len(readings) != len(entries) {
+			current.release()
 			return nil, fmt.Errorf("chainlink: batch read returned %d readings for %d feeds", len(readings), len(entries))
 		}
 
@@ -562,8 +592,16 @@ func chainlinkBatchFetcherCore(
 				log.Warnf("chainlink: %s/USD: feed returned ok=false", ticker)
 				continue
 			}
+			if reading.Answer == nil || reading.UpdatedAt == nil {
+				log.Warnf("chainlink: %s/USD: nil fields in reading", ticker)
+				continue
+			}
 			if reading.Answer.Sign() <= 0 {
 				log.Warnf("chainlink: %s/USD: non-positive answer", ticker)
+				continue
+			}
+			if !reading.UpdatedAt.IsInt64() {
+				log.Warnf("chainlink: %s/USD: updatedAt overflows int64", ticker)
 				continue
 			}
 
@@ -572,29 +610,21 @@ func chainlinkBatchFetcherCore(
 				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
 				continue
 			}
-			if time.Since(updatedAt) > chainlinkMaxAge {
+			if time.Since(updatedAt) > maxAge {
 				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
 				continue
 			}
 
-			mtx.Lock()
-			div := divisors[ticker]
-			mtx.Unlock()
-			if div == nil {
-				div = new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(reading.Decimals)), nil))
-				mtx.Lock()
-				if divisors[ticker] == nil {
-					divisors[ticker] = div
-				} else {
-					div = divisors[ticker]
-				}
-				mtx.Unlock()
-			}
+			div := divisors.getOrCreate(ticker, reading.Decimals)
 
 			f, _ := new(big.Float).Quo(new(big.Float).SetInt(reading.Answer), div).Float64()
 			rates[ticker] = f
 		}
 
+		current.release()
+		if len(rates) == 0 {
+			return nil, fmt.Errorf("chainlink: no valid prices returned")
+		}
 		return rates, nil
 	}
 }

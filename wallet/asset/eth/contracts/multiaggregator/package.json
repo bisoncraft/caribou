@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "scripts": {
     "compile": "npx hardhat compile",
-    "deploy:amoy": "npx hardhat run scripts/deploy.js --network amoy",
+    "deploy:amoy": "npx hardhat run scripts/deploy.js --network polygonAmoy",
     "deploy:polygon": "npx hardhat run scripts/deploy.js --network polygon",
-    "verify:amoy": "npx hardhat verify --network amoy",
+    "verify:amoy": "npx hardhat verify --network polygonAmoy",
     "verify:polygon": "npx hardhat verify --network polygon"
   },
   "dependencies": {

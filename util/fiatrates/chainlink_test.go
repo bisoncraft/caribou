@@ -2,6 +2,7 @@ package fiatrates
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -20,6 +22,9 @@ type mockAggregatorContract struct {
 	decimalPlaces uint8
 	updatedAt     time.Time
 	err           error
+
+	mtx           sync.Mutex
+	decimalsCalls int
 }
 
 func (m *mockAggregatorContract) latestRoundData(_ context.Context) (*big.Int, time.Time, error) {
@@ -30,7 +35,16 @@ func (m *mockAggregatorContract) latestRoundData(_ context.Context) (*big.Int, t
 }
 
 func (m *mockAggregatorContract) decimals(_ context.Context) (uint8, error) {
+	m.mtx.Lock()
+	m.decimalsCalls++
+	m.mtx.Unlock()
 	return m.decimalPlaces, nil
+}
+
+func (m *mockAggregatorContract) decimalCallCount() int {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	return m.decimalsCalls
 }
 
 // TestChainlinkLive tests the Chainlink price feeds on Polygon mainnet end-to-end.
@@ -38,10 +52,7 @@ func TestChainlinkLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live test")
 	}
-	cfg := Config{
-		ChainlinkTestnet: false,
-		// Uses default providers if not specified
-	}
+	cfg := Config{}
 
 	getRates, err := chainlinkRateFetcher(cfg)
 	if err != nil {
@@ -84,11 +95,7 @@ func TestChainlinkMissingTicker(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live test")
 	}
-	cfg := Config{
-		ChainlinkTestnet: false,
-	}
-
-	getRates, err := chainlinkRateFetcher(cfg)
+	getRates, err := chainlinkRateFetcher(Config{})
 	if err != nil {
 		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
@@ -115,11 +122,7 @@ func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live test")
 	}
-	cfg := Config{
-		ChainlinkTestnet: false,
-	}
-
-	getRates, err := chainlinkRateFetcher(cfg)
+	getRates, err := chainlinkRateFetcher(Config{})
 	if err != nil {
 		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
@@ -208,33 +211,37 @@ func TestChainlinkRateFetcherEmptyProviders(t *testing.T) {
 	}
 }
 
-// TestChainlinkTestnetConfiguration tests that the testnet flag correctly selects testnet feeds.
-func TestChainlinkTestnetConfiguration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("live test")
-	}
-	cfg := Config{
-		ChainlinkTestnet: true,
-	}
-
-	getRates, err := chainlinkRateFetcher(cfg)
-	if err != nil {
-		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
+// TestChainlinkLegacyFetcherDecimalsEachCycle verifies that the legacy fetcher
+// calls decimals() on every cycle so a bad first response cannot permanently
+// corrupt a ticker's divisor until process restart.
+func TestChainlinkLegacyFetcherDecimalsEachCycle(t *testing.T) {
+	mock := &mockAggregatorContract{
+		answer:        big.NewInt(5000000000000),
+		decimalPlaces: 8,
+		updatedAt:     time.Now().Add(-time.Minute),
 	}
 
-	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	fetch := chainlinkLegacyFetcherCore(
+		map[string]common.Address{"BTC": mockFeedAddr},
+		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return mock },
+		chainlinkMaxAge,
+	)
 
-	// Testnet feeds only have ETH and BTC
-	tickers := []string{"ETH", "BTC"}
-	rates, err := getRates(ctx, tickers, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	const cycles = 3
+	log := util.NewLogger("test", util.LevelDebug, io.Discard)
+	for i := 0; i < cycles; i++ {
+		rates, err := fetch(context.Background(), []string{"BTC"}, log)
+		if err != nil {
+			t.Fatalf("fetch %d: unexpected error: %v", i+1, err)
+		}
+		if _, ok := rates["BTC"]; !ok {
+			t.Fatalf("fetch %d: expected BTC price in results", i+1)
+		}
 	}
 
-	if len(rates) > 0 {
-		t.Logf("Successfully fetched %d/%d testnet prices", len(rates), len(tickers))
+	if got := mock.decimalCallCount(); got != cycles {
+		t.Fatalf("expected decimals() called once per cycle (%d), got %d", cycles, got)
 	}
 }
 
@@ -270,14 +277,7 @@ func newMockCoreFetch(ticker string, mock *mockBatchContract) func(context.Conte
 		map[string]common.Address{ticker: mockFeedAddr},
 		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
 		func(_ chainRPCClient) chainlinkBatchContract { return mock },
-	)
-}
-
-func newMockLegacyCoreFetch(ticker string, mock *mockAggregatorContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	return chainlinkLegacyFetcherCore(
-		map[string]common.Address{ticker: mockFeedAddr},
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return mock },
+		chainlinkMaxAge,
 	)
 }
 
@@ -382,6 +382,7 @@ func TestChainlinkClosureMissingTicker(t *testing.T) {
 			t.Fatal("newBatchContract should not be called for unmatched tickers")
 			return nil
 		},
+		chainlinkMaxAge,
 	)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
@@ -394,7 +395,8 @@ func TestChainlinkClosureMissingTicker(t *testing.T) {
 	}
 }
 
-// TestChainlinkClosureStaleness tests that prices older than chainlinkMaxAge are rejected.
+// TestChainlinkClosureStaleness tests that prices older than chainlinkMaxAge
+// cause an error so the oracle preserves its last-known rates.
 func TestChainlinkClosureStaleness(t *testing.T) {
 	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
 		mockFeedAddr: {
@@ -407,16 +409,14 @@ func TestChainlinkClosureStaleness(t *testing.T) {
 	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := rates["BTC"]; ok {
-		t.Error("expected stale BTC price to be rejected, but it was returned")
+	_, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err == nil {
+		t.Fatal("expected error when all feeds are stale, got nil")
 	}
 }
 
-// TestChainlinkClosureFutureTimestamp tests that prices beyond the skew window are rejected.
+// TestChainlinkClosureFutureTimestamp tests that prices beyond the skew window
+// cause an error so the oracle preserves its last-known rates.
 func TestChainlinkClosureFutureTimestamp(t *testing.T) {
 	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
 		mockFeedAddr: {
@@ -429,16 +429,15 @@ func TestChainlinkClosureFutureTimestamp(t *testing.T) {
 	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := rates["BTC"]; ok {
-		t.Error("expected future-timestamp BTC price to be rejected, but it was returned")
+	_, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err == nil {
+		t.Fatal("expected error when all feeds have future timestamps, got nil")
 	}
 }
 
-// TestChainlinkClosureContractError tests that a batch read error causes the ticker to be skipped.
+// TestChainlinkClosureContractError tests that a batch read error is returned to
+// the caller so the oracle can preserve its last-known rates instead of
+// overwriting them with an empty map.
 func TestChainlinkClosureContractError(t *testing.T) {
 	mock := &mockBatchContract{
 		err: fmt.Errorf("rpc error: connection refused"),
@@ -446,16 +445,14 @@ func TestChainlinkClosureContractError(t *testing.T) {
 	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := rates["BTC"]; ok {
-		t.Error("expected erroring batch contract to produce no rates, but BTC was returned")
+	_, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err == nil {
+		t.Fatal("expected error on batch read failure, got nil")
 	}
 }
 
-// TestChainlinkClosureOkFalse tests that a reading with ok=false is logged and skipped.
+// TestChainlinkClosureOkFalse tests that a reading with ok=false causes an
+// error so the oracle preserves its last-known rates.
 func TestChainlinkClosureOkFalse(t *testing.T) {
 	mock := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
 		mockFeedAddr: {Ok: false},
@@ -463,69 +460,87 @@ func TestChainlinkClosureOkFalse(t *testing.T) {
 	fetch := newMockCoreFetch("BTC", mock)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := rates["BTC"]; ok {
-		t.Error("expected ok=false reading to be skipped, but BTC was returned")
+	_, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err == nil {
+		t.Fatal("expected error when all feeds return ok=false, got nil")
 	}
 }
 
-func TestChainlinkFetcherFallsBackWhenBatchAddressUnset(t *testing.T) {
-	legacy := &mockAggregatorContract{
-		answer:        big.NewInt(5000000000000),
-		decimalPlaces: 8,
-		updatedAt:     time.Now().Add(-1 * time.Minute),
+func TestChainlinkRateFetcherInvalidBatchAddress(t *testing.T) {
+	tests := []string{
+		"not-an-address",
+		"0x1234",
+		"0x0000000000000000000000000000000000000000",
 	}
-	fetch := selectChainlinkFetcher(
-		map[string]common.Address{"BTC": mockFeedAddr},
-		common.Address{},
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return legacy },
-		func(_ chainRPCClient) chainlinkBatchContract {
-			t.Fatal("batch fetcher should not be selected when batch address is unset")
-			return nil
-		},
-	)
 
-	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if price := rates["BTC"]; price != 50000.0 {
-		t.Fatalf("expected fallback price 50000.0, got %f", price)
+	for _, addr := range tests {
+		t.Run(addr, func(t *testing.T) {
+			_, err := chainlinkRateFetcher(Config{ChainlinkBatchAddr: addr})
+			if err == nil {
+				t.Fatalf("expected error for ChainlinkBatchAddr=%q", addr)
+			}
+		})
 	}
 }
 
-func TestChainlinkFetcherUsesBatchWhenAddressConfigured(t *testing.T) {
-	batch := &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
-		mockFeedAddr: {
-			Answer:    big.NewInt(5000000000000),
-			Decimals:  8,
-			UpdatedAt: big.NewInt(time.Now().Add(-1 * time.Minute).Unix()),
-			Ok:        true,
-		},
-	}}
-	fetch := selectChainlinkFetcher(
-		map[string]common.Address{"BTC": mockFeedAddr},
-		common.HexToAddress("0x9999999999999999999999999999999999999999"),
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract {
-			t.Fatal("legacy fetcher should not be selected when batch address is configured")
-			return nil
-		},
-		func(_ chainRPCClient) chainlinkBatchContract { return batch },
-	)
+// abiDecodeMockClient is a chainRPCClient that returns fixed bytes from
+// CallContract, used to exercise the ABI decoding path end-to-end.
+type abiDecodeMockClient struct{ returnBytes []byte }
 
-	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
+func (m *abiDecodeMockClient) CodeAt(_ context.Context, _ common.Address, _ *big.Int) ([]byte, error) {
+	return nil, nil
+}
+func (m *abiDecodeMockClient) CallContract(_ context.Context, _ ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	return m.returnBytes, nil
+}
+func (m *abiDecodeMockClient) Close() {}
+
+// TestChainlinkABITupleDecoding verifies that MultiAggregatorReading fields are
+// decoded in ABI tuple position order. A field reorder in the struct produces
+// wrong values here even when types still match, catching the failure in CI.
+func TestChainlinkABITupleDecoding(t *testing.T) {
+	// ABI-encoded return for read() → Reading[1]:
+	//   answer=5000000000000, updatedAt=1000000, decimals=8, ok=true
+	encoded, err := hex.DecodeString(
+		"0000000000000000000000000000000000000000000000000000000000000020" + // array offset
+			"0000000000000000000000000000000000000000000000000000000000000001" + // length = 1
+			"0000000000000000000000000000000000000000000000000000048c27395000" + // answer
+			"00000000000000000000000000000000000000000000000000000000000f4240" + // updatedAt
+			"0000000000000000000000000000000000000000000000000000000000000008" + // decimals
+			"0000000000000000000000000000000000000000000000000000000000000001", // ok
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	batchABI, err := parseABI(multiAggregatorABI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := &batchBoundContract{
+		bound: bind.NewBoundContract(common.Address{}, *batchABI,
+			&abiDecodeMockClient{returnBytes: encoded}, nil, nil),
+	}
+
+	readings, err := contract.read(context.Background(), []common.Address{{}})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if price := rates["BTC"]; price != 50000.0 {
-		t.Fatalf("expected batch price 50000.0, got %f", price)
+	if len(readings) != 1 {
+		t.Fatalf("expected 1 reading, got %d", len(readings))
+	}
+	r := readings[0]
+	if r.Answer == nil || r.Answer.Cmp(big.NewInt(5000000000000)) != 0 {
+		t.Errorf("Answer: got %v, want 5000000000000", r.Answer)
+	}
+	if r.UpdatedAt == nil || r.UpdatedAt.Cmp(big.NewInt(1000000)) != 0 {
+		t.Errorf("UpdatedAt: got %v, want 1000000", r.UpdatedAt)
+	}
+	if r.Decimals != 8 {
+		t.Errorf("Decimals: got %d, want 8", r.Decimals)
+	}
+	if !r.Ok {
+		t.Error("Ok: got false, want true")
 	}
 }
 
@@ -586,17 +601,15 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 		func(_ chainRPCClient) chainlinkBatchContract {
 			return &mockBatchContract{err: connErr}
 		},
+		chainlinkMaxAge,
 	)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
 
 	// First call: connects, batch read fails with conn error, ec reset.
-	rates, err := fetch(context.Background(), []string{"BTC"}, log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rates) != 0 {
-		t.Errorf("expected no rates on connection failure, got %v", rates)
+	_, err := fetch(context.Background(), []string{"BTC"}, log)
+	if err == nil {
+		t.Fatal("expected error on connection failure, got nil")
 	}
 	if !firstClient.isClosed() {
 		t.Error("expected client to be closed after connection failure")
@@ -605,7 +618,7 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 		t.Errorf("expected 1 dial, got %d", dialCount)
 	}
 
-	// Second call must re-dial since ec was reset to nil.
+	// Second call must re-dial since conn was reset to nil.
 	_, _ = fetch(context.Background(), []string{"BTC"}, log)
 	if dialCount != 2 {
 		t.Errorf("expected 2 dials after reconnect, got %d", dialCount)
@@ -634,6 +647,7 @@ func TestChainlinkConcurrentRates(t *testing.T) {
 				},
 			}}
 		},
+		chainlinkMaxAge,
 	)
 
 	log := util.NewLogger("test", util.LevelDebug, io.Discard)
