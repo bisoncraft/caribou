@@ -6766,6 +6766,13 @@ func TestBridgeCompletionFees(t *testing.T) {
 }
 
 func TestBridgeManager(t *testing.T) {
+	// bridgeMonitorInterval is both the bridge manager's poll interval and
+	// the unit that negative-assertion waits below are sized against. Keeping
+	// them in one place makes the coupling explicit so a future bump to the
+	// interval can't silently shrink the wait to under a single tick.
+	const bridgeMonitorInterval = 100 * time.Millisecond
+	negativeAssertionWait := 3 * bridgeMonitorInterval
+
 	setupWithPendingBridges := func(t *testing.T, pendingBridges []*extendedWalletTx) (*bridgeManager, *mockBridge, chan asset.WalletNotification, *tTxDB, util.Logger) {
 		log := util.StdOutLogger("TEST", util.LevelDebug)
 		notificationChan := make(chan asset.WalletNotification, 10)
@@ -6800,7 +6807,7 @@ func TestBridgeManager(t *testing.T) {
 			bridges:         bridges,
 			emit:            emitter,
 			txDB:            db,
-			monitorInterval: 100 * time.Millisecond,
+			monitorInterval: bridgeMonitorInterval,
 			log:             log,
 			getTxFunc:       getConfirmedTxFunc,
 		})
@@ -6906,8 +6913,9 @@ func TestBridgeManager(t *testing.T) {
 		// Remove the bridge
 		bm.markBridgeComplete(burnTxID, []string{"mintTxID"}, 1000000, 1000, true)
 
-		// Wait and ensure no more calls occur
-		time.Sleep(300 * time.Millisecond) // Longer than 2 monitor intervals
+		// Wait long enough that the monitor would have ticked at least
+		// twice if it were still polling, then assert no further calls.
+		time.Sleep(negativeAssertionWait)
 		select {
 		case <-mb.getCompletionDataCalled:
 			t.Error("getCompletionData was called after removing all pending bridges")
@@ -6976,7 +6984,7 @@ func TestBridgeManager(t *testing.T) {
 			bridges:         bridges,
 			emit:            emitter,
 			txDB:            db,
-			monitorInterval: 100 * time.Millisecond,
+			monitorInterval: bridgeMonitorInterval,
 			log:             log,
 			getTxFunc:       getTxFunc,
 		})
@@ -6992,8 +7000,9 @@ func TestBridgeManager(t *testing.T) {
 		bridgeName := "mock"
 		bm.addPendingBridge(burnTxID, sourceAssetID, destAssetID, amount, bridgeName)
 
-		// Wait a bit and ensure getCompletionData is NOT called
-		time.Sleep(300 * time.Millisecond)
+		// Wait long enough that the monitor would have ticked at least
+		// twice if it were going to poll, then assert it stayed quiet.
+		time.Sleep(negativeAssertionWait)
 		select {
 		case <-mb.getCompletionDataCalled:
 			t.Error("getCompletionData was called for unconfirmed transaction")
