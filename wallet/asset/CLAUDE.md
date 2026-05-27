@@ -1,6 +1,6 @@
 # wallet/asset — Per-Chain Wallet Implementations
 
-This is the primary development area for the wallet. Each subdirectory implements the `asset.Wallet` interface defined in `dex/asset.go` for a specific blockchain.
+This is the primary development area for the wallet. Each subdirectory implements the `asset.Wallet` interface defined in `wallet/asset/interface.go` for a specific blockchain.
 
 ## What belongs here
 - Send, receive, balance, fee estimation for each chain
@@ -16,4 +16,4 @@ btc, eth (and polygon), dcr, ltc, zec, xmr, bch, doge, firo, dash, dgb
 - Server-side asset backends — those are in `server/asset/` which is out of scope
 
 ## Interface contract
-Every wallet must satisfy `asset.Wallet` (and optionally the extended interfaces like `asset.Sweeper`, `asset.Accelerator`, etc.) from `dex/asset.go`. When adding methods, check `dex/asset.go` first for existing optional interfaces before defining new ones.
+Every wallet must satisfy `asset.Wallet` (and optionally the extended interfaces like `asset.Sweeper`, `asset.Accelerator`, etc.) from `wallet/asset/interface.go`. When adding methods, check `wallet/asset/interface.go` first for existing optional interfaces before defining new ones.
