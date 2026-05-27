@@ -20,6 +20,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/core"
 	"github.com/bisoncraft/bosswallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
 )
 
 var zero = encode.ClearBytes
@@ -527,6 +528,25 @@ func (s *AppServer) apiIsInitialized(w http.ResponseWriter, r *http.Request) {
 		OK:          true,
 		Initialized: s.core.IsInitialized(),
 	})
+}
+
+// apiValidateSeed is the handler for the '/validateseed' API request.
+// It validates the submitted mnemonic using the mnemonic package's decoder
+// (15-word wordlist check + embedded checksum) without initializing or
+// mutating any wallet state. This endpoint is unauthenticated because it
+// is used during the init wizard, before the client is initialized.
+func (s *AppServer) apiValidateSeed(w http.ResponseWriter, r *http.Request) {
+	form := &struct {
+		Seed string `json:"seed"`
+	}{}
+	if !readPost(w, r, form) {
+		return
+	}
+	if _, _, err := mnemonic.DecodeMnemonic(form.Seed); err != nil {
+		s.writeAPIError(w, fmt.Errorf("invalid seed: %w", err))
+		return
+	}
+	writeJSON(w, simpleAck())
 }
 
 func (s *AppServer) apiLocale(w http.ResponseWriter, r *http.Request) {

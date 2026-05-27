@@ -2,12 +2,12 @@ import { useState, FormEvent } from 'react'
 import t from '../js/intl'
 import PasswordInput from './PasswordInput'
 import LocaleSelector from './LocaleSelector'
+import Spinner from './Spinner'
 import { postJSON } from '../js/http'
 
-const noSubmit = (e: FormEvent) => e.preventDefault()
-
 /*
- * SeedPromptFormParams is the interface for the SeedPromptForm component.
+ * SeedPromptForm asks the user whether they are restoring from an existing
+ * seed. It is the first screen of the init wizard.
  */
 interface SeedPromptFormParams { setUsingSeed: (y: boolean) => void }
 
@@ -16,7 +16,7 @@ const SeedPromptForm = ({ setUsingSeed }: SeedPromptFormParams) => {
   const onNoSeedClicked = () => setUsingSeed(false)
 
   return (
-    <form className="modal" onSubmit={noSubmit}>
+    <form className="modal" onSubmit={(e: FormEvent) => e.preventDefault()}>
       <header>
         <img className="logo-full small me-2" />
         <span>{t('Welcome to Boss Wallet!')}</span>
@@ -33,40 +33,90 @@ const SeedPromptForm = ({ setUsingSeed }: SeedPromptFormParams) => {
 interface PasswordFormParams {
   setRegistered: (y: boolean) => void
   setSeed: (s: string) => void
-  setUsingSeed: (y: boolean) => void
+  setUsingSeed: (y: boolean | undefined) => void
   seed: string
 }
 
 const PasswordForm = ({ setRegistered, setUsingSeed, setSeed, seed }: PasswordFormParams) => {
   const [pw, setPW] = useState('')
   const [pw2, setPW2] = useState('')
-  const [err, setErr] = useState<string | undefined>(undefined)
+  const [err, setErr] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   const onGoBackClicked = () => {
     setPW('')
     setPW2('')
+    setErr('')
+    // Clear any validated restore seed too, otherwise re-picking "No" on the
+    // prompt would silently create a wallet from the discarded seed, and
+    // re-picking "Yes" would skip the SeedInput screen.
+    setSeed('')
     setUsingSeed(undefined)
   }
 
   const submitPW = async () => {
+    if (submitting) return
+    setErr('')
+    setSubmitting(true)
     const r = await postJSON('/api/init', { pass: pw, seed })
+    setSubmitting(false)
     if (r.ok) {
       setRegistered(true)
       if (r.mnemonic) setSeed(r.mnemonic)
-    } else setErr(r.errMsg)
+    } else {
+      setErr(r.errMsg || r.msg || t('Initialization failed.'))
+    }
   }
 
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    submitPW()
+  }
+
+  const canSubmit = pw.trim() !== '' && pw === pw2 && !submitting
+
   return (
-    <form className="modal form-width-300" onSubmit={noSubmit}>
+    <form className="modal form-width-300" onSubmit={onSubmit}>
       <div className="fs18 p-3 text-center">{t('Set a password for your wallet')}</div>
       <div className="flex-stretch-column px-3">
-        <div className="mb-2"><PasswordInput onChange={(e) => setPW(e.target.value)} value={pw} /></div>
-        <div><PasswordInput placeholder={t('password again')} onChange={(e) => setPW2(e.target.value)} value={pw2} /></div>
+        <div className="mb-2">
+          <PasswordInput
+            onChange={(e) => { setPW(e.target.value); if (err) setErr('') }}
+            value={pw}
+            disabled={submitting}
+            autoFocus
+          />
+        </div>
+        <div>
+          <PasswordInput
+            placeholder={t('password again')}
+            onChange={(e) => { setPW2(e.target.value); if (err) setErr('') }}
+            value={pw2}
+            disabled={submitting}
+          />
+        </div>
       </div>
-      <div className={`flex-center errcolor p-3 ${err ? '' : 'd-none'}`}>{err}</div>
+      <div className="px-3 pt-2" aria-live="polite">
+        {err && (
+          <div key={err} className="form-err flex-center errcolor text-center">
+            {err}
+          </div>
+        )}
+      </div>
       <div className="flex-stretch-column p-3">
-        <button type="button" className="feature w-100" disabled={pw !== pw2 || pw.trim() === ''} onClick={submitPW}>{t('Submit')}</button>
-        <button type="button" className="w-100 mt-2" onClick={onGoBackClicked}>{t('Go Back')}</button>
+        <button type="submit" className="feature w-100" disabled={!canSubmit}>
+          {submitting
+            ? (
+              <span className="d-inline-flex align-items-center justify-content-center">
+                <Spinner className="me-2" />
+                <span>{t('Submitting...')}</span>
+              </span>
+              )
+            : t('Submit')}
+        </button>
+        <button type="button" className="w-100 mt-2" onClick={onGoBackClicked} disabled={submitting}>
+          {t('Go Back')}
+        </button>
       </div>
     </form>
   )
@@ -74,38 +124,91 @@ const PasswordForm = ({ setRegistered, setUsingSeed, setSeed, seed }: PasswordFo
 
 interface SeedInputParams {
   setSeed: (s: string) => void
-  setUsingSeed: (y: boolean) => void
+  setUsingSeed: (y: boolean | undefined) => void
 }
 
 export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
-  const [err, setErr] = useState<string | undefined>(undefined)
-  const [workingSeed, setWorkingSeed] = useState<string>('')
+  const [err, setErr] = useState('')
+  const [workingSeed, setWorkingSeed] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => setWorkingSeed(e.target.value)
-  const onGoBackClicked = () => setUsingSeed(undefined)
-  const submitSeed = async () => {
-    const r = await postJSON('/api/validateSeed', { seed: workingSeed })
-    if (r.ok) setSeed(workingSeed)
-    else setErr(r.errMsg)
+  const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setWorkingSeed(e.target.value)
+    if (err) setErr('')
   }
 
+  const onGoBackClicked = () => setUsingSeed(undefined)
+
+  // Normalize whitespace: collapse runs of whitespace/newlines to single
+  // spaces and trim so stray formatting does not break validation.
+  const normalizedSeed = () => workingSeed.trim().replace(/\s+/g, ' ')
+
+  const submitSeed = async () => {
+    if (submitting) return
+    const seed = normalizedSeed()
+    setErr('')
+    setSubmitting(true)
+    const r = await postJSON('/api/validateseed', { seed })
+    setSubmitting(false)
+    if (r.ok) {
+      setSeed(seed)
+    } else {
+      setErr(r.errMsg || r.msg || t('Invalid seed.'))
+    }
+  }
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    submitSeed()
+  }
+
+  const wordCount = workingSeed.trim() === '' ? 0 : workingSeed.trim().split(/\s+/).length
+  const canSubmit = wordCount > 0 && !submitting
+
   return (
-    <form className="modal" onSubmit={noSubmit}>
+    <form className="modal" onSubmit={onSubmit}>
       <div className="fs18 p-3 text-center">{t('Input your recovery seed')}</div>
       <div className="d-flex px-3">
-        <textarea className="fs14" onChange={onChange}></textarea>
+        <textarea
+          className="fs14"
+          onChange={onChange}
+          value={workingSeed}
+          placeholder={t('seed_textarea_placeholder')}
+          disabled={submitting}
+          autoFocus
+        />
       </div>
-      <div className={`flex-center errcolor p-3 ${err ? '' : 'd-none'}`}>{err}</div>
+      <div className="px-3 pt-1 fs12 text-center" style={{ opacity: wordCount === 0 ? 0 : 1 }}>
+        {wordCount} {wordCount === 1 ? t('word') : t('words')}
+      </div>
+      <div className="px-3 pt-1" aria-live="polite">
+        {err && (
+          <div key={err} className="form-err flex-center errcolor text-center">
+            {err}
+          </div>
+        )}
+      </div>
       <div className="d-flex flex-column p-3">
         <button
-          type="button"
+          type="submit"
           className="feature w-100"
-          disabled={workingSeed.trim() === ''}
-          onClick={submitSeed}>{t('Recover')}</button>
+          disabled={!canSubmit}>
+          {submitting
+            ? (
+              <span className="d-inline-flex align-items-center justify-content-center">
+                <Spinner className="me-2" />
+                <span>{t('Validating...')}</span>
+              </span>
+              )
+            : t('Recover')}
+        </button>
         <button
           type="button"
           className="w-100 mt-2"
-          onClick={onGoBackClicked}>{t('Go Back')}</button>
+          disabled={submitting}
+          onClick={onGoBackClicked}>
+          {t('Go Back')}
+        </button>
       </div>
     </form>
   )
@@ -113,16 +216,20 @@ export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
 
 interface SeedDisplayParams {
   acked: () => void
-  seed: string
+  seed: string | undefined
 }
 
 export const SeedDisplay = ({ acked, seed }: SeedDisplayParams) => {
   return (
-    <form className="modal form-width-300" onSubmit={noSubmit}>
+    <form className="modal form-width-300" onSubmit={(e: FormEvent) => e.preventDefault()}>
       <div className="pt-3 px-3">{t('seed_display_warning')}</div>
-      <div className="mt-3 mx-3 p-2 fs14 form-input-bg mono">{seed}</div>
+      {seed
+        ? <div className="mt-3 mx-3 p-2 fs14 form-input-bg mono">{seed}</div>
+        : null}
       <div className="flex-stretch-column p-3">
-        <button type="button" className="feature w-100" onClick={acked}>{t('I have written down my seed')}</button>
+        <button type="button" className="feature w-100" onClick={acked}>
+          {t('I have written down my seed')}
+        </button>
       </div>
     </form>
   )
@@ -138,7 +245,7 @@ export default function InitWizard ({ setInited }: InitWizardParams) {
   const [registered, setRegistered] = useState<boolean>(false)
 
   const done = () => {
-    setSeed('')
+    setSeed(undefined)
     setInited()
   }
 
@@ -150,8 +257,8 @@ export default function InitWizard ({ setInited }: InitWizardParams) {
   const renderContent = () => {
     if (usingSeed === undefined) return <SeedPromptForm setUsingSeed={setUsingSeed} />
     if (usingSeed && !seed) return <SeedInput setSeed={setSeed} setUsingSeed={setUsingSeed} />
-    if (!registered) return <PasswordForm setRegistered={registerFormFeedback} setSeed={setSeed} setUsingSeed={setUsingSeed} seed={seed || ''} />
-    return <SeedDisplay acked={() => { done() }} seed={seed} />
+    if (!registered) return <PasswordForm setRegistered={registerFormFeedback} setSeed={setSeed} setUsingSeed={setUsingSeed} seed={seed ?? ''} />
+    return <SeedDisplay acked={done} seed={seed} />
   }
 
   return (
