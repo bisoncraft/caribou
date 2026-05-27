@@ -109,6 +109,12 @@ jobs:
           PR_NUMBER: ${{ env.PR_NUMBER }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          # Skip a full review when the PR changes more than this many lines
+          # (additions + deletions). A full review feeds the whole diff to
+          # Claude, and past a point the model exhausts its turn/token budget
+          # and the check fails instead of producing a review. Tunable via the
+          # CLAUDE_CODE_MAX_DIFF_LINES repo variable.
+          MAX_DIFF_LINES: ${{ vars.CLAUDE_CODE_MAX_DIFF_LINES || '2000' }}
         run: |
           set -euo pipefail
 
@@ -141,6 +147,30 @@ jobs:
           fi
 
           write_full_scope() {
+            # Guard against full reviews of very large PRs. A full review
+            # feeds the entire diff to Claude via `gh pr diff`; past
+            # MAX_DIFF_LINES the model runs out of turns/tokens and the check
+            # fails rather than producing a review. Skip gracefully instead,
+            # recording HEAD as reviewed (like the diverged/rebase branch) so
+            # later incremental pushes - small diffs on top - still get
+            # reviewed. The "Note skipped large diff" step posts the
+            # explanation and writes the reviewed-sha marker.
+            local changed
+            changed=$(gh pr view "$PR_NUMBER" --json additions,deletions \
+                        --jq '.additions + .deletions' 2>/dev/null) || changed=0
+            if [ "${changed:-0}" -gt "$MAX_DIFF_LINES" ]; then
+              echo "PR changes $changed lines (> $MAX_DIFF_LINES); skipping full review."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "skip_reason=toolarge" >> "$GITHUB_OUTPUT"
+              echo "skip_changed_lines=$changed" >> "$GITHUB_OUTPUT"
+              # Hand the latest marker comment id (if any) to the
+              # "Note skipped large diff" step so it can advance that
+              # comment's marker in place - on the genuinely-latest
+              # marker comment - rather than on the skip comment, which
+              # may not be latest. Empty when there is no marker yet.
+              echo "marker_id=$LATEST_MARKER_ID" >> "$GITHUB_OUTPUT"
+              return 0
+            fi
             {
               echo "scope<<__CLAUDE_SCOPE_EOF__"
               echo "Review the FULL pull request."
@@ -250,6 +280,72 @@ jobs:
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Note skipped large diff
+        # When the review was skipped because the PR is too large, leave a
+        # single comment explaining why (so a green check isn't mistaken for
+        # "reviewed and clean") and advance the reviewed-sha marker to HEAD.
+        # The marker lets the next push - if it only adds a small diff on top -
+        # be reviewed incrementally rather than re-skipped. Same coverage
+        # trade-off as the rebase/diverged branch: the large baseline is never
+        # reviewed by Claude, but human reviewers still see the full diff.
+        #
+        # The "Determine review range" step always picks the newest
+        # marker-bearing comment, so the marker MUST live there. When a prior
+        # review already wrote a marker (MARKER_ID set and distinct from the
+        # skip comment), advance THAT comment in place - exactly like the
+        # diverged/rebase branch - and keep the explanatory skip comment
+        # marker-free, so the two never both carry a marker. Only when no
+        # separate marker comment exists does the skip comment itself carry
+        # the marker; it is then the newest marker-bearing comment, so the
+        # invariant holds. The skip comment is keyed by its own marker and
+        # PATCHed in place so repeated large pushes update one comment instead
+        # of spamming the thread.
+        if: steps.range.outputs.skip == 'true' && steps.range.outputs.skip_reason == 'toolarge'
+        env:
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.range.outputs.head_sha }}
+          CHANGED: ${{ steps.range.outputs.skip_changed_lines }}
+          MARKER_ID: ${{ steps.range.outputs.marker_id }}
+          MAX_DIFF_LINES: ${{ vars.CLAUDE_CODE_MAX_DIFF_LINES || '2000' }}
+        run: |
+          set -euo pipefail
+
+          # The single explanatory skip comment, keyed by its own marker.
+          EXISTING_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+                          --jq '.[]
+                                | select(.user.login == "github-actions[bot]")
+                                | select(.body | contains("claude-review-skip: large-diff"))
+                                | .id' \
+                        | tail -n1) || EXISTING_ID=""
+
+          MSG=$(printf 'This PR changes %s lines, over the automated-review limit of %s, so the Claude review was skipped to avoid an incomplete result. Push smaller follow-up commits to have them reviewed incrementally, or raise the `CLAUDE_CODE_MAX_DIFF_LINES` repo variable.' \
+                  "$CHANGED" "$MAX_DIFF_LINES")
+
+          if [ -n "$MARKER_ID" ] && [ "$MARKER_ID" != "$EXISTING_ID" ]; then
+            # The latest marker lives on a separate (review) comment that is
+            # newer than the skip comment. Advance it in place and keep the
+            # skip comment marker-free so only one marker exists.
+            MARKER_BODY=$(gh api "repos/$REPO/issues/comments/$MARKER_ID" --jq .body)
+            STRIPPED=$(printf '%s' "$MARKER_BODY" \
+                       | sed -E 's|<!-- claude-reviewed-sha: [0-9a-f]+ -->||g')
+            NEW_MARKER_BODY=$(printf '%s\n\n<!-- claude-reviewed-sha: %s -->\n' "$STRIPPED" "$HEAD_SHA")
+            gh api -X PATCH "repos/$REPO/issues/comments/$MARKER_ID" -f body="$NEW_MARKER_BODY" >/dev/null
+            BODY=$(printf '<!-- claude-review-skip: large-diff -->\n%s\n' "$MSG")
+          else
+            # No separate marker comment (or the only marker is already on the
+            # skip comment): the skip comment carries the marker. It is the
+            # newest marker-bearing comment, so the range step finds it.
+            BODY=$(printf '<!-- claude-review-skip: large-diff -->\n%s\n\n<!-- claude-reviewed-sha: %s -->\n' "$MSG" "$HEAD_SHA")
+          fi
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING_ID" -f body="$BODY" >/dev/null
+          else
+            gh pr comment "$PR_NUMBER" --body "$BODY"
+          fi
+
       - name: Mint review nonce
         # Mint a random nonce that Claude is asked to embed in its
         # review comment. The "Append review marker" step uses the
@@ -335,6 +431,9 @@ jobs:
           # Configure via repository variables:
           # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-7
           # CLAUDE_CODE_EFFORT: quick, standard (default), or thorough
+          # CLAUDE_CODE_MAX_DIFF_LINES: full reviews of PRs changing more than
+          #   this many lines are skipped gracefully (default 2000; see the
+          #   "Determine review range" step).
           #
           # --allowed-tools restricts Claude to exactly the three gh
           # subcommands the review needs. We do NOT use
