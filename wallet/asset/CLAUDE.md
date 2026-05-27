@@ -12,8 +12,8 @@ This is the primary development area for the wallet. Each subdirectory implement
 btc, eth (and polygon), dcr, ltc, zec, xmr, bch, doge, firo, dash, dgb
 
 ## What does NOT belong here
-- Order management, lot sizes, or DEX rate logic — those live in the (out-of-scope) DEX layer
-- Server-side asset backends — those are in `server/asset/` which is out of scope
+- Order management, lot sizes, or DEX rate logic - this is a wallet, not a DEX client
+- Server-side asset backends - this fork has no server component
 
 ## Interface contract
 Every wallet must satisfy `asset.Wallet` (and optionally the extended interfaces like `asset.Sweeper`, `asset.Accelerator`, etc.) from `wallet/asset/interface.go`. When adding methods, check `wallet/asset/interface.go` first for existing optional interfaces before defining new ones.
