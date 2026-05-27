@@ -10,11 +10,11 @@ Download and run setup as Administrator (privileges are required in order to set
 
  ```batch
  cd %UserProfile%
- curl -O https://raw.githubusercontent.com/decred/dcrdex/master/wallet/cmd/bossw-desktop/windows/setup-windows.cmd
+ curl -O https://raw.githubusercontent.com/bisoncraft/bosswallet/master/wallet/cmd/bossw-desktop/windows/setup-windows.cmd
  setup-windows.cmd <branch> <repoUrl>
  ```
 
- Both `branch` and `repoUrl` are optional.  If not specified, it will clone the `master` branch in the default [dcrdex repository](https://github.com/decred/dcrdex).
+ Both `branch` and `repoUrl` are optional.  If not specified, it will clone the `master` branch in the default [bosswallet repository](https://github.com/bisoncraft/bosswallet).
 
  This will download and install `git` and `PowerShell`, clone the repo and install the build toolchain and required SDKs for the build.  Once completed, close the above command prompt, open a new prompt in order to effectuate `PATH` and other environment variables configured by the setup script.  Administrator privileges are NOT required for the rest of the steps.
 
