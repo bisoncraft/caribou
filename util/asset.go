@@ -8,14 +8,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 )
 
 const (
 	UnsupportedScriptError = ErrorKind("unsupported script type")
-
-	defaultLockTimeTaker = 8 * time.Hour
-	defaultlockTimeMaker = 20 * time.Hour
 
 	secondsPerMinute  int64 = 60
 	secondsPerDay           = 24 * 60 * secondsPerMinute
@@ -23,61 +19,6 @@ const (
 	BondExpiryTestnet       = 180 * secondsPerMinute // 3 hours
 	BondExpirySimnet        = 4 * secondsPerMinute   // 4 minutes
 )
-
-var (
-	// These string variables are defined to enable setting custom locktime values
-	// that may be used instead of `DefaultLockTimeTaker` and `DefaultLockTimeMaker`
-	// IF running on a test network (testnet or regtest) AND both values are set to
-	// valid duration strings.
-	// Values for both variables may be set at build time using linker flags e.g:
-	// go build -ldflags "-X 'github.com/bisoncraft/bosswallet/dex.testLockTimeTaker=10m' \
-	// -X 'github.com/bisoncraft/bosswallet/dex.testLockTimeMaker=20m'"
-	// Same values should be set when building server and client binaries.
-	testLockTimeTaker string
-	testLockTimeMaker string
-
-	testLockTime struct {
-		taker time.Duration
-		maker time.Duration
-	}
-)
-
-// Set test locktime values on init. Panics if invalid or 0-second duration
-// strings are provided.
-func init() {
-	if testLockTimeTaker == "" && testLockTimeMaker == "" {
-		testLockTime.taker, testLockTime.maker = defaultLockTimeTaker, defaultlockTimeMaker
-		return
-	}
-	testLockTime.taker, _ = time.ParseDuration(testLockTimeTaker)
-	if testLockTime.taker.Seconds() == 0 {
-		panic(fmt.Sprintf("invalid value for testLockTimeTaker: %q", testLockTimeTaker))
-	}
-	testLockTime.maker, _ = time.ParseDuration(testLockTimeMaker)
-	if testLockTime.maker.Seconds() == 0 {
-		panic(fmt.Sprintf("invalid value for testLockTimeMaker: %q", testLockTimeMaker))
-	}
-}
-
-// LockTimeTaker returns the taker locktime value that should be used by both
-// client and server for the specified network. Mainnet uses a constant value
-// while test networks support setting a custom value during build.
-func LockTimeTaker(network Network) time.Duration {
-	if network == Mainnet {
-		return defaultLockTimeTaker
-	}
-	return testLockTime.taker
-}
-
-// LockTimeMaker returns the maker locktime value that should be used by both
-// client and server for the specified network. Mainnet uses a constant value
-// while test networks support setting a custom value during build.
-func LockTimeMaker(network Network) time.Duration {
-	if network == Mainnet {
-		return defaultlockTimeMaker
-	}
-	return testLockTime.maker
-}
 
 // BondExpiry returns the bond expiry duration in seconds for a given network.
 func BondExpiry(net Network) int64 {

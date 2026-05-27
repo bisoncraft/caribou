@@ -60,8 +60,6 @@ func runCore(cfg *app.Config) error {
 			time.Now().Local().Format("15:04:05 MST"))
 	}
 	log.Infof("bossw starting for network: %s", cfg.Net)
-	log.Infof("Swap locktimes config: maker %s, taker %s",
-		util.LockTimeMaker(cfg.Net), util.LockTimeTaker(cfg.Net))
 
 	defer func() {
 		if pv := recover(); pv != nil {
