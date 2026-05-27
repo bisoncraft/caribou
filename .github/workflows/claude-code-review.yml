@@ -82,6 +82,15 @@ jobs:
         # Claude via `gh pr diff` or pre-fetched into the prompt by the
         # "Determine review range" step below, so no untrusted files
         # ever land in the working tree.
+        #
+        # persist-credentials: false so the writable GITHUB_TOKEN is not
+        # stored as an http.extraheader in .git/config on the runner.
+        # The review uses `gh` (its own GH_TOKEN env), never git remote
+        # operations, so persisting is unnecessary - and leaving it on
+        # would let a prompt-injected model surface the token via a
+        # read-only `git config` call (auto-allowed in every mode).
+        with:
+          persist-credentials: false
 
       - name: Determine review range
         # Scope each review to changes since the previous one when
@@ -435,14 +444,51 @@ jobs:
           #   this many lines are skipped gracefully (default 2000; see the
           #   "Determine review range" step).
           #
-          # --allowed-tools restricts Claude to exactly the three gh
-          # subcommands the review needs. We do NOT use
-          # --permission-mode bypassPermissions: under
-          # pull_request_target the runner has secrets in env, and
-          # bypassPermissions would give a prompt-injected model a free
-          # shell to read them (printenv, gh auth token, curl ...). With
-          # the allowlist, the permission system denies any command not
-          # in this list, so even a successful injection cannot exfil.
+          # --allowedTools auto-approves exactly the three gh subcommands
+          # the review needs, and we do NOT use --permission-mode
+          # bypassPermissions: under pull_request_target the runner has
+          # secrets in env, and bypassPermissions would give a
+          # prompt-injected model a free shell to read them (printenv,
+          # gh auth token, curl ...).
+          #
+          # The allowlist alone is NOT sufficient, though. Claude Code
+          # auto-runs a built-in set of "read-only" Bash commands (cat,
+          # echo, head, tail, grep, find, diff, ls, wc, stat, ...) WITHOUT
+          # a prompt in every permission mode, regardless of --allowedTools
+          # (see https://code.claude.com/docs/en/permissions, "Read-only
+          # commands"). So an injected diff could otherwise read a secret -
+          # `echo $ANTHROPIC_API_KEY`, `cat` a token file,
+          # `grep . /proc/self/environ` - and exfil it through the allowed
+          # `gh pr comment`. Anything OUTSIDE the read-only set (curl,
+          # printenv, gh auth token, sh -c ...) already needs a prompt,
+          # which fails closed in headless CI, so the gap is exactly the
+          # read-only set.
+          #
+          # --disallowedTools closes the content-reading members of that
+          # set. Deny rules override the built-in auto-allow: rules are
+          # evaluated deny -> ask -> allow, first match wins. This is
+          # prefix-matched and not provably airtight (e.g. read-only
+          # `git config` can surface the token actions/checkout persists in
+          # .git/config - mitigated separately by persist-credentials:
+          # false on the checkout step), but it removes the obvious
+          # env/file read-and-exfil paths. Concretely it closes the
+          # read-then-relay path: without the denylist a read-only `cat`
+          # would surface a secret into the model's context, from which it
+          # could be re-emitted as a literal `gh pr comment` body.
+          #
+          # The complementary direct path - `gh pr comment --body
+          # "$ANTHROPIC_API_KEY"` or `--body "$(printenv)"` - is closed by
+          # Claude Code itself, independent of this denylist: the Bash
+          # matcher refuses to match an allow rule for any command it
+          # cannot statically analyze (variable expansion or command
+          # substitution), so such a command falls through to "needs
+          # approval" and fails closed in headless CI. Verified empirically
+          # on claude CLI v2.1.152 (2026-05): `gh pr comment --body "$X"`
+          # and `--body "$(...)"` were both denied, while a literal body
+          # ran. This behavior is NOT documented, so treat it as verified
+          # rather than contractual - the denylist and persist-credentials
+          # above do not depend on it and stand on their own.
+          #
           # If the action's built-in MCP comment tools get denied that
           # is fine - we post via `gh pr comment` directly.
           claude_args: |
@@ -450,6 +496,7 @@ jobs:
             --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '12') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '25') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '40') || '25' }}
             --permission-mode default
             --allowedTools "Bash(gh pr diff:*)" "Bash(gh pr view:*)" "Bash(gh pr comment:*)"
+            --disallowedTools "Bash(cat:*)" "Bash(echo:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(grep:*)" "Bash(find:*)" "Bash(diff:*)"
 
       - name: Append review marker
         # Find the bot comment Claude just posted (by the
