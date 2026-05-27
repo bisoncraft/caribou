@@ -2,11 +2,11 @@
 
 // These tests require the NEAR sandbox harness to be running:
 //
-//   cd dex/testing/near && ./harness.sh
+//   cd util/testing/near && ./harness.sh
 //
 // Run with:
 //
-//   go test -v -tags harness -run TestLive ./client/asset/near/
+//   go test -v -tags harness -run TestLive ./wallet/asset/near/
 
 package near
 
