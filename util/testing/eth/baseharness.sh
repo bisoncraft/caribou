@@ -10,11 +10,13 @@ fileToHex () {
   fi
   echo $(xxd -p "$1" | tr -d '\n')
 }
-ETH_SWAP_V0=$(fileToHex "../../../wallet/asset/eth/contracts/v0/contract.bin")
-ERC20_SWAP_V0=$(fileToHex "../../../wallet/asset/erc20/contracts/v0/swap_contract.bin")
-TEST_TOKEN=$(fileToHex "../../../wallet/asset/erc20/contracts/v0/token_contract.bin")
-MULTIBALANCE_BIN=$(fileToHex "../../../wallet/asset/eth/contracts/multibalance/contract.bin")
-ETH_SWAP_V1=$(fileToHex "../../../wallet/asset/eth/contracts/v1/contract.bin")
+# fileToHex exits 1 in a subshell on a missing file; the `|| exit 1` propagates
+# that to this script, which otherwise has no `set -e` to abort the assignment.
+ETH_SWAP_V0=$(fileToHex "../../../wallet/asset/eth/contracts/v0/contract.bin") || exit 1
+ERC20_SWAP_V0=$(fileToHex "../../../wallet/asset/erc20/contracts/v0/swap_contract.bin") || exit 1
+TEST_TOKEN=$(fileToHex "../../../wallet/asset/erc20/contracts/v0/token_contract.bin") || exit 1
+MULTIBALANCE_BIN=$(fileToHex "../../../wallet/asset/eth/contracts/multibalance/contract.bin") || exit 1
+ETH_SWAP_V1=$(fileToHex "../../../wallet/asset/eth/contracts/v1/contract.bin") || exit 1
 
 # Ensure we can create the session and that there's not a session already
 # running before we nuke the data directory.
