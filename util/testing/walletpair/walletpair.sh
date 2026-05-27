@@ -57,13 +57,7 @@ BW_DIR=$(realpath ../../../wallet/cmd/bossw)
 BOSSW="${BW_DIR}/bossw"
 
 cd "${BW_DIR}"
-if [ "${SIMNET}" ] ; then
-  echo "building bossw for simnet - lock times: taker 3m, maker 6m"
-  go build -ldflags "-X github.com/bisoncraft/bosswallet/util.testLockTimeTaker=3m \
-                     -X github.com/bisoncraft/bosswallet/util.testLockTimeMaker=6m"
-else
-  go build
-fi
+go build
 cd -
 
 mkdir -p "${HARNESS_DIR}"
