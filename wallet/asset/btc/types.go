@@ -3,11 +3,9 @@ package btc
 import (
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -102,36 +100,6 @@ func ConvertCoin(coin asset.Coin) (*Output, error) {
 	return NewOutput(txHash, vout, coin.Value()), nil
 }
 
-// AuditInfo is information about a swap contract on that blockchain.
-type AuditInfo struct {
-	Output     *Output
-	Recipient  btcutil.Address // caution: use stringAddr, not the Stringer
-	contract   []byte
-	secretHash []byte
-	expiration time.Time
-}
-
-// Expiration returns the expiration time of the contract, which is the earliest
-// time that a refund can be issued for an un-redeemed contract.
-func (ci *AuditInfo) Expiration() time.Time {
-	return ci.expiration
-}
-
-// Coin returns the output as an asset.Coin.
-func (ci *AuditInfo) Coin() asset.Coin {
-	return ci.Output
-}
-
-// Contract is the contract script.
-func (ci *AuditInfo) Contract() util.Bytes {
-	return ci.contract
-}
-
-// SecretHash is the contract's secret hash.
-func (ci *AuditInfo) SecretHash() util.Bytes {
-	return ci.secretHash
-}
-
 type BlockVector struct {
 	Height int64
 	Hash   chainhash.Hash
@@ -154,41 +122,4 @@ func TxOutFromTxBytes(
 		return nil, fmt.Errorf("no vout %d in tx %s", vout, hashTx(msgTx))
 	}
 	return msgTx.TxOut[vout], nil
-}
-
-// SwapReceipt is information about a swap contract that was broadcast by this
-// wallet. Satisfies the asset.Receipt interface.
-type SwapReceipt struct {
-	Output            *Output
-	SwapContract      []byte
-	SignedRefundBytes []byte
-	ExpirationTime    time.Time
-}
-
-// Expiration is the time that the contract will expire, allowing the user to
-// issue a refund transaction. Part of the asset.Receipt interface.
-func (r *SwapReceipt) Expiration() time.Time {
-	return r.ExpirationTime
-}
-
-// Contract is the contract script. Part of the asset.Receipt interface.
-func (r *SwapReceipt) Contract() util.Bytes {
-	return r.SwapContract
-}
-
-// Coin is the output information as an asset.Coin. Part of the asset.Receipt
-// interface.
-func (r *SwapReceipt) Coin() asset.Coin {
-	return r.Output
-}
-
-// String provides a human-readable representation of the contract's Coin.
-func (r *SwapReceipt) String() string {
-	return r.Output.String()
-}
-
-// SignedRefund is a signed refund script that can be used to return
-// funds to the user in the case a contract expires.
-func (r *SwapReceipt) SignedRefund() util.Bytes {
-	return r.SignedRefundBytes
 }
