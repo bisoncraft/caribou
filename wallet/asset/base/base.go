@@ -11,7 +11,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
-	"github.com/ethereum/go-ethereum/common"
 )
 
 func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
@@ -27,7 +26,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 		}
 		netAddrs[net] = netToken.Address.String()
 		netVersions[net] = make([]uint32, 0, 1)
-		for ver := range netToken.SwapContracts {
+		for ver := range netToken.Gas {
 			netVersions[net] = append(netVersions[net], ver)
 		}
 	}
@@ -103,16 +102,6 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate Base compatibility data: %s", net)
 	}
-	contracts := make(map[uint32]common.Address, 1)
-	for ver, netAddrs := range ContractAddresses {
-		for netw, addr := range netAddrs {
-			if netw == net {
-				contracts[ver] = addr
-				break
-			}
-		}
-	}
-
 	var defaultProviders []string
 	switch net {
 	case util.Simnet:
@@ -136,20 +125,19 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 	}
 
 	return eth.NewEVMWallet(&eth.EVMWalletConfig{
-		BaseChainID:        BipID,
-		ChainCfg:           chainCfg,
-		AssetCfg:           cfg,
-		CompatData:         &compat,
-		VersionedGases:     VersionedGases,
-		Tokens:             Tokens,
-		FinalizeConfs:      3,
-		Logger:             logger,
-		BaseChainContracts: contracts,
-		WalletInfo:         WalletInfo,
-		Net:                net,
-		DefaultProviders:   defaultProviders,
-		MaxTxFeeGwei:       eth.GweiFactor, // 1 ETH
-		IsOpStack:          true,
+		BaseChainID:      BipID,
+		ChainCfg:         chainCfg,
+		AssetCfg:         cfg,
+		CompatData:       &compat,
+		VersionedGases:   VersionedGases,
+		Tokens:           Tokens,
+		FinalizeConfs:    3,
+		Logger:           logger,
+		WalletInfo:       WalletInfo,
+		Net:              net,
+		DefaultProviders: defaultProviders,
+		MaxTxFeeGwei:     eth.GweiFactor, // 1 ETH
+		IsOpStack:        true,
 	})
 }
 

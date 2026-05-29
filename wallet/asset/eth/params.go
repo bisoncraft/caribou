@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"math/big"
 	"os"
 	"time"
@@ -68,56 +67,18 @@ var (
 		1: v1Gases,
 	}
 
-	ContractAddresses = map[uint32]map[util.Network]common.Address{
-		0: {
-			util.Mainnet: common.HexToAddress("0x8C17e4968B6903E1601be82Ca989c5B5E2c7b400"),
-			util.Testnet: common.HexToAddress("0x73bc803A2604b2c58B8680c3CE1b14489842EF16"), // tx 0xb24b44beebc0e34fa57bd9f08f9aaf70f40c654f3ddbe0b15dd942ee23ce02f4
-			util.Simnet:  common.HexToAddress(""),
-		},
-		1: {
-			util.Mainnet: common.HexToAddress("0x82f29E3aCe0a0045c7b263Bf3198DA2210aD1670"), // tx 0x9895b26ca1dc7f06e3cfa93914ed73c44673610b2e8afadd04f0b1af5bd0f170
-			util.Testnet: common.HexToAddress("0xc809A01d5286b0Ae88F552eF8961c649AB4922e1"), // tx 0xb2f7c996eb94b42d017f188051ca21f01110ec453de4103581c56bd725f645fe
-			util.Simnet:  common.HexToAddress(""),
-		},
-	}
-
 	MultiBalanceAddresses = map[util.Network]common.Address{
 		util.Mainnet: common.HexToAddress("0x73bc803A2604b2c58B8680c3CE1b14489842EF16"), // tx 0xaf6cb861578c0ded0750397d7e044a7dd86c94aa47211d02188e146a2424dda4
 		util.Testnet: common.HexToAddress("0x8Bd6F6dBe69588D94953EE289Fd3E1db3e8dB43D"), // tx 0x46a416344927a8d1f33865374e9b9e824249980da8d34f6c3214a1ee036ca5fe
 	}
 )
 
-var v0Gases = &Gases{
-	Swap:      174500, // 134,500 actual -- https://goerli.etherscan.io/tx/0xa17b6edeaf79791b5fc9232dc05a56d43f3a67845f3248e763b77162fae9b181, verified on mainnet
-	SwapAdd:   146400, // 112,600 actual (247,100 for 2) -- https://goerli.etherscan.io/tx/0xa4fc65b8001bf8c44f1079b3d97adf42eb1097658e360b9033596253b0cbbd04, verified on mainnet
-	Redeem:    78600,  // 60,456 actual -- https://goerli.etherscan.io/tx/0x5b22c48052df4a8ecd03a31b62e5015e6afe18c9ffb05e6cdd77396dfc3ca917, verified on mainnet
-	RedeemAdd: 41000,  // 31,672 actual (92,083 for 2, 123,724 for 3) -- https://goerli.etherscan.io/tx/0xae424cc9b0d43bf934112245cb74ab9eca9c2611eabcd6257b6ec258b071c1e6, https://goerli.etherscan.io/tx/0x7ba7cb945da108d39a5a0ac580d4841c4017a32cd0e244f26845c6ed501d2475, verified on mainnet
-	Refund:    57000,  // 43,014 actual -- https://goerli.etherscan.io/tx/0x586ed4cb7dab043f98d4cc08930d9eb291b0052d140d949b20232ceb6ad15f25
-}
+// v0Gases and v1Gases are the base-chain ETH gas tables. The native ETH asset
+// does not use token Transfer/Approve, so these are empty placeholders that
+// preserve the supported version keys.
+var v0Gases = &Gases{}
 
-// Mainnet v1 swap evidence:
-//
-//	init:            0x8e67683bbca54ab8d814867c37b8088e9730971c47162c51c64178c560b59d41
-//	redeem:          0x670fea7573d701c6e356fce77fb27a5e402f26e5d64634f1c3a5ad7bedaca018
-//	refund:          0xe0c3dee16897adf104e600520845d0f6436756daa9863966b6f67e538cb5002c
-//	gasless redeem:  0xd5b2211b74e785dcfe778f37468c78d63fa1f44559722e6f0a585ecb0f805a1a
-var v1Gases = &Gases{
-	// Mainnet measurements:
-	// Swaps (n=1..5):   [54317 84069 113821 143562 173316]
-	Swap:    70_612,
-	SwapAdd: 38_673,
-	// Redeems (n=1..5): [44988 58418 71873 85305 98751]
-	Redeem:    58_484,
-	RedeemAdd: 17_472,
-	// Refunds (n=1..6): [48069 48069 48069 48069 48069 42940]
-	Refund: 61_378,
-
-	// Signed redeems (n=1..5): [85304 82190 96202 110204 124197]
-	// The first time someone does a gasless redeem, it will be more expensive due
-	// to the first-time cost of initializing the on chain nonce.
-	SignedRedeem:    110_895,
-	SignedRedeemAdd: 12_639,
-}
+var v1Gases = &Gases{}
 
 // LoadGenesisFile loads a Genesis config from a json file.
 func LoadGenesisFile(genesisFile string) (*core.Genesis, error) {
@@ -179,39 +140,6 @@ func DecodeContractData(data []byte) (contractVersion uint32, locator []byte, er
 		err = fmt.Errorf("unkown contract version %d", contractVersion)
 	}
 	return
-}
-
-// InitGas calculates the gas required for a batch of n inits.
-func InitGas(n int, contractVer uint32) uint64 {
-	if n == 0 {
-		return 0
-	}
-	g, ok := VersionedGases[contractVer]
-	if !ok {
-		return math.MaxUint64
-	}
-	return g.SwapN(n)
-}
-
-// RedeemGas calculates the gas required for a batch of n redemptions.
-func RedeemGas(n int, contractVer uint32) uint64 {
-	if n == 0 {
-		return 0
-	}
-	g, ok := VersionedGases[contractVer]
-	if !ok {
-		return math.MaxUint64
-	}
-	return g.RedeemN(n)
-}
-
-// RefundGas calculates the gas required for a refund.
-func RefundGas(contractVer uint32) uint64 {
-	g, ok := VersionedGases[contractVer]
-	if !ok {
-		return math.MaxUint64
-	}
-	return g.Refund
 }
 
 var (
@@ -378,9 +306,9 @@ var (
 	linkTokenID, _    = util.BipSymbolID("link.eth")
 )
 
-// Gases lists the expected gas required for various DEX and wallet operations.
+// Gases lists the expected gas required for token wallet operations.
 type Gases struct {
-	// Approve is the amount of gas needed to approve the swap contract for
+	// Approve is the amount of gas needed to approve a contract for
 	// transferring tokens. The first approval for an address uses more gas than
 	// subsequent approvals for the same address.
 	Approve uint64 `json:"approve"`
@@ -388,46 +316,6 @@ type Gases struct {
 	// transfer to an address uses more gas than subsequent transfers to the
 	// same address.
 	Transfer uint64 `json:"transfer"`
-	// Swap is the amount of gas needed to initialize a single ethereum swap.
-	Swap uint64 `json:"swap"`
-	// SwapAdd is the amount of gas needed to initialize additional swaps in
-	// the same transaction.
-	SwapAdd uint64 `json:"swapAdd"`
-	// Redeem is the amount of gas it costs to redeem a swap.
-	Redeem uint64 `json:"redeem"`
-	// RedeemAdd is the amount of gas needed to redeem additional swaps in the
-	// same transaction.
-	RedeemAdd uint64 `json:"redeemAdd"`
-	// Refund is the amount of gas needed to refund a swap.
-	Refund uint64 `json:"refund"`
-
-	SignedRedeem    uint64 `json:"signedRedeem"`
-	SignedRedeemAdd uint64 `json:"signedRedeemAdd"`
-}
-
-// SwapN calculates the gas needed to initiate n swaps.
-func (g *Gases) SwapN(n int) uint64 {
-	if n <= 0 {
-		return 0
-	}
-	return g.Swap + g.SwapAdd*(uint64(n)-1)
-}
-
-// RedeemN calculates the gas needed to redeem n swaps. Returns 0 if n <= 0.
-func (g *Gases) RedeemN(n int) uint64 {
-	if n <= 0 {
-		return 0
-	}
-	return g.Redeem + g.RedeemAdd*(uint64(n)-1)
-}
-
-// SignedRedeemN calculates the gas needed for a signed (relayed) redemption
-// of n swaps. Returns 0 if n <= 0.
-func (g *Gases) SignedRedeemN(n int) uint64 {
-	if n <= 0 {
-		return 0
-	}
-	return g.SignedRedeem + g.SignedRedeemAdd*(uint64(n)-1)
 }
 
 func ParseV0Locator(locator []byte) (secretHash [32]byte, err error) {

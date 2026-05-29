@@ -4,7 +4,6 @@
 package eth
 
 import (
-	"math"
 	"math/big"
 	"os"
 	"os/user"
@@ -50,59 +49,6 @@ func TestConversions(t *testing.T) {
 	}
 }
 
-func TestVersionedGases(t *testing.T) {
-	type test struct {
-		ver            uint32
-		expRedeemGases []uint64
-		expInitGases   []uint64
-		expRefundGas   uint64
-	}
-
-	tests := []*test{
-		{
-			ver: 0,
-			expInitGases: []uint64{
-				0,
-				v0Gases.Swap,
-				v0Gases.Swap + v0Gases.SwapAdd,
-				v0Gases.Swap + v0Gases.SwapAdd*2,
-			},
-			expRedeemGases: []uint64{
-				0,
-				v0Gases.Redeem,
-				v0Gases.Redeem + v0Gases.RedeemAdd,
-				v0Gases.Redeem + v0Gases.RedeemAdd*2,
-			},
-			expRefundGas: v0Gases.Refund,
-		},
-		{
-			ver:            2,
-			expInitGases:   []uint64{0, math.MaxUint64},
-			expRedeemGases: []uint64{0, math.MaxUint64},
-			expRefundGas:   math.MaxUint64,
-		},
-	}
-
-	for _, tt := range tests {
-		for n, expGas := range tt.expInitGases {
-			gas := InitGas(n, tt.ver)
-			if gas != expGas {
-				t.Fatalf("wrong gas for %d inits, version %d. wanted %d, got %d", n, tt.ver, expGas, gas)
-			}
-		}
-		for n, expGas := range tt.expRedeemGases {
-			gas := RedeemGas(n, tt.ver)
-			if gas != expGas {
-				t.Fatalf("wrong gas for %d redeems, version %d. wanted %d, got %d", n, tt.ver, expGas, gas)
-			}
-		}
-		gas := RefundGas(tt.ver)
-		if gas != tt.expRefundGas {
-			t.Fatalf("wrong gas for refund, version %d. wanted %d, got %d", tt.ver, tt.expRefundGas, gas)
-		}
-	}
-}
-
 func TestLinkTokenDefinition(t *testing.T) {
 	tokenID, ok := util.BipSymbolID("link.eth")
 	if !ok {
@@ -123,17 +69,17 @@ func TestLinkTokenDefinition(t *testing.T) {
 		t.Fatalf("EVMFactor should be nil (default 9), got %d", *token.EVMFactor)
 	}
 
-	// v1 swap contract must exist; v0 must not (LINK is v1-only).
+	// v1 gas table must exist; v0 must not (LINK is v1-only).
 	for _, net := range []util.Network{util.Mainnet, util.Testnet, util.Simnet} {
 		netToken, ok := token.NetTokens[net]
 		if !ok {
 			t.Fatalf("missing NetToken for network %v", net)
 		}
-		if _, hasV0 := netToken.SwapContracts[0]; hasV0 {
-			t.Fatalf("network %v: unexpected v0 swap contract", net)
+		if _, hasV0 := netToken.Gas[0]; hasV0 {
+			t.Fatalf("network %v: unexpected v0 gas table", net)
 		}
-		if _, hasV1 := netToken.SwapContracts[1]; !hasV1 {
-			t.Fatalf("network %v: missing v1 swap contract", net)
+		if _, hasV1 := netToken.Gas[1]; !hasV1 {
+			t.Fatalf("network %v: missing v1 gas table", net)
 		}
 	}
 

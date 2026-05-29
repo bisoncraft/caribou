@@ -52,7 +52,7 @@ func registerToken(tokenID uint32, desc string) {
 	for net, netToken := range token.NetTokens {
 		netAddrs[net] = netToken.Address.String()
 		netAssetVersions[net] = make([]uint32, 0, 1)
-		for ver := range netToken.SwapContracts {
+		for ver := range netToken.Gas {
 			netAssetVersions[net] = append(netAssetVersions[net], ver)
 		}
 	}
@@ -497,8 +497,7 @@ type assetWallet struct {
 	wi        asset.WalletInfo
 	tokenAddr common.Address // empty address for base chain asset
 
-	versionedContracts map[uint32]common.Address
-	versionedGases     map[uint32]*Gases
+	versionedGases map[uint32]*Gases
 
 	lockedFunds struct {
 		mtx                sync.RWMutex
@@ -726,17 +725,6 @@ func newWallet(assetCFG *asset.WalletConfig, logger util.Logger, net util.Networ
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate Ethereum compatibility data: %s", net)
 	}
-	contracts := make(map[uint32]common.Address, 1)
-
-	for ver, netAddrs := range ContractAddresses {
-		for netw, addr := range netAddrs {
-			if netw == net {
-				contracts[ver] = addr
-				break
-			}
-		}
-	}
-
 	var defaultProviders []string
 	switch net {
 	case util.Simnet:
@@ -760,38 +748,36 @@ func newWallet(assetCFG *asset.WalletConfig, logger util.Logger, net util.Networ
 	}
 
 	return NewEVMWallet(&EVMWalletConfig{
-		BaseChainID:        BipID,
-		ChainCfg:           chainCfg,
-		AssetCfg:           assetCFG,
-		CompatData:         &comp,
-		VersionedGases:     VersionedGases,
-		Tokens:             Tokens,
-		FinalizeConfs:      3,
-		Logger:             logger,
-		BaseChainContracts: contracts,
-		MultiBalAddress:    MultiBalanceAddresses[net],
-		WalletInfo:         WalletInfo,
-		Net:                net,
-		DefaultProviders:   defaultProviders,
-		MaxTxFeeGwei:       GweiFactor, // 1 ETH
+		BaseChainID:      BipID,
+		ChainCfg:         chainCfg,
+		AssetCfg:         assetCFG,
+		CompatData:       &comp,
+		VersionedGases:   VersionedGases,
+		Tokens:           Tokens,
+		FinalizeConfs:    3,
+		Logger:           logger,
+		MultiBalAddress:  MultiBalanceAddresses[net],
+		WalletInfo:       WalletInfo,
+		Net:              net,
+		DefaultProviders: defaultProviders,
+		MaxTxFeeGwei:     GweiFactor, // 1 ETH
 	})
 }
 
 // EVMWalletConfig is the configuration for an evm-compatible wallet.
 type EVMWalletConfig struct {
-	BaseChainID        uint32
-	ChainCfg           *params.ChainConfig
-	AssetCfg           *asset.WalletConfig
-	CompatData         *CompatibilityData
-	VersionedGases     map[uint32]*Gases
-	Tokens             map[uint32]*Token
-	FinalizeConfs      uint64
-	Logger             util.Logger
-	BaseChainContracts map[uint32]common.Address
-	DefaultProviders   []string
-	MultiBalAddress    common.Address // If empty, separate calls for N tokens + 1
-	WalletInfo         asset.WalletInfo
-	Net                util.Network
+	BaseChainID      uint32
+	ChainCfg         *params.ChainConfig
+	AssetCfg         *asset.WalletConfig
+	CompatData       *CompatibilityData
+	VersionedGases   map[uint32]*Gases
+	Tokens           map[uint32]*Token
+	FinalizeConfs    uint64
+	Logger           util.Logger
+	DefaultProviders []string
+	MultiBalAddress  common.Address // If empty, separate calls for N tokens + 1
+	WalletInfo       asset.WalletInfo
+	Net              util.Network
 	// MaxTxFeeGwei is the absolute maximum fees we will allow for a single tx.
 	// It should be set to a relatively large value.
 	MaxTxFeeGwei uint64
@@ -845,31 +831,20 @@ func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
 		isOpStack:           cfg.IsOpStack,
 	}
 
-	var maxSwapGas, maxRedeemGas uint64
-	for _, gases := range cfg.VersionedGases {
-		if gases.Swap > maxSwapGas {
-			maxSwapGas = gases.Swap
-		}
-		if gases.Redeem > maxRedeemGas {
-			maxRedeemGas = gases.Redeem
-		}
-	}
-
 	aw := &assetWallet{
-		baseWallet:         eth,
-		log:                cfg.Logger,
-		assetID:            assetID,
-		versionedContracts: cfg.BaseChainContracts,
-		versionedGases:     cfg.VersionedGases,
-		emit:               cfg.AssetCfg.Emit,
-		pendingApprovals:   make(map[common.Address]*pendingApproval),
-		approvalCache:      make(map[common.Address]bool),
-		peersChange:        cfg.AssetCfg.PeersChange,
-		evmify:             GweiToWei,
-		atomize:            WeiToGwei,
-		ui:                 UnitInfo,
-		pendingTxCheckBal:  new(big.Int),
-		wi:                 cfg.WalletInfo,
+		baseWallet:        eth,
+		log:               cfg.Logger,
+		assetID:           assetID,
+		versionedGases:    cfg.VersionedGases,
+		emit:              cfg.AssetCfg.Emit,
+		pendingApprovals:  make(map[common.Address]*pendingApproval),
+		approvalCache:     make(map[common.Address]bool),
+		peersChange:       cfg.AssetCfg.PeersChange,
+		evmify:            GweiToWei,
+		atomize:           WeiToGwei,
+		ui:                UnitInfo,
+		pendingTxCheckBal: new(big.Int),
+		wi:                cfg.WalletInfo,
 	}
 
 	aw.wallets = map[uint32]*assetWallet{
@@ -1609,32 +1584,29 @@ func (w *ETHWallet) OpenTokenWallet(tokenCfg *asset.TokenConfig) (asset.Wallet, 
 	if netToken == nil {
 		return nil, fmt.Errorf("no %s network configuration for token %s (%d)", w.net, token.Name, tokenCfg.AssetID)
 	}
-	if len(netToken.SwapContracts) == 0 {
-		return nil, fmt.Errorf("no swap contracts for token %s (%d) on %s", token.Name, tokenCfg.AssetID, w.net)
+	if len(netToken.Gas) == 0 {
+		return nil, fmt.Errorf("no gas table for token %s (%d) on %s", token.Name, tokenCfg.AssetID, w.net)
 	}
 
 	supportedAssetVersions := make([]uint32, 0, 1)
-	contracts := make(map[uint32]common.Address)
 	gases := make(map[uint32]*Gases)
-	for ver, c := range netToken.SwapContracts {
-		contracts[ver] = c.Address
-		gases[ver] = &c.Gas
+	for ver, g := range netToken.Gas {
+		gases[ver] = g
 		supportedAssetVersions = append(supportedAssetVersions, ver)
 	}
 
 	aw := &assetWallet{
-		baseWallet:         w.baseWallet,
-		log:                w.baseWallet.log.SubLogger(strings.ToUpper(util.BipIDSymbol(tokenCfg.AssetID))),
-		assetID:            tokenCfg.AssetID,
-		versionedContracts: contracts,
-		versionedGases:     gases,
-		emit:               tokenCfg.Emit,
-		peersChange:        tokenCfg.PeersChange,
-		pendingApprovals:   make(map[common.Address]*pendingApproval),
-		approvalCache:      make(map[common.Address]bool),
-		evmify:             token.AtomicToEVM,
-		atomize:            token.EVMToAtomic,
-		ui:                 token.UnitInfo,
+		baseWallet:       w.baseWallet,
+		log:              w.baseWallet.log.SubLogger(strings.ToUpper(util.BipIDSymbol(tokenCfg.AssetID))),
+		assetID:          tokenCfg.AssetID,
+		versionedGases:   gases,
+		emit:             tokenCfg.Emit,
+		peersChange:      tokenCfg.PeersChange,
+		pendingApprovals: make(map[common.Address]*pendingApproval),
+		approvalCache:    make(map[common.Address]bool),
+		evmify:           token.AtomicToEVM,
+		atomize:          token.EVMToAtomic,
+		ui:               token.UnitInfo,
 		wi: asset.WalletInfo{
 			Name:              token.Name,
 			SupportedVersions: supportedAssetVersions,
@@ -4641,8 +4613,8 @@ func (getGas) returnFunds(
 			return fmt.Errorf("no %s token for %s", token.Name, net)
 		}
 		var g Gases
-		for _, sc := range nt.SwapContracts {
-			g = sc.Gas
+		for _, ng := range nt.Gas {
+			g = *ng
 			break
 		}
 		fees := g.Transfer * WeiToGweiCeil(maxFeeRate)

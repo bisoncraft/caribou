@@ -44,9 +44,9 @@ var (
 	testAddressC = common.HexToAddress("2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27")
 
 	ethGasesV0   = VersionedGases[0]
-	tokenGasesV0 = Tokens[usdcEthID].NetTokens[util.Simnet].SwapContracts[0].Gas
+	tokenGasesV0 = Tokens[usdcEthID].NetTokens[util.Simnet].Gas[0]
 	ethGasesV1   = VersionedGases[1]
-	tokenGasesV1 = Tokens[usdcEthID].NetTokens[util.Simnet].SwapContracts[1].Gas
+	tokenGasesV1 = Tokens[usdcEthID].NetTokens[util.Simnet].Gas[1]
 
 	tETHV0 = &util.Asset{
 		Version:    0,
@@ -983,9 +983,6 @@ func TestCheckForNewBlocks(t *testing.T) {
 					txDB:             &tTxDB{},
 					finalizeConfs:    txConfsNeededToConfirm,
 				},
-				versionedContracts: map[uint32]common.Address{
-					0: {},
-				},
 				log:     tLogger.SubLogger("ETH"),
 				emit:    emit,
 				assetID: BipID,
@@ -1131,8 +1128,8 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 		maps.Copy(versionedGases, VersionedGases)
 	} else {
 		netToken := Tokens[assetID].NetTokens[util.Simnet]
-		for ver, c := range netToken.SwapContracts {
-			versionedGases[ver] = &c.Gas
+		for ver, g := range netToken.Gas {
+			versionedGases[ver] = g
 		}
 	}
 
@@ -1177,9 +1174,6 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 		// move up after review
 		wi:   WalletInfo,
 		emit: asset.NewWalletEmitter(emitChan, BipID, tLogger),
-		versionedContracts: map[uint32]common.Address{
-			0: {},
-		},
 	}
 	if assetID != BipID {
 		aw.tokenContractor = node.tokenContractor

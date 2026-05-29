@@ -206,34 +206,6 @@ func TestChainIDs(t *testing.T) {
 	}
 }
 
-// TestContractAddresses verifies that the swap-contract address map covers
-// both supported versions on every supported network, and that mainnet and
-// testnet entries are non-zero. Simnet entries are populated at runtime by
-// MaybeReadSimnetAddrs from the eth simnet harness files, so we only assert
-// the slot exists.
-func TestContractAddresses(t *testing.T) {
-	wantVersions := []uint32{0, 1}
-	wantNets := []util.Network{util.Mainnet, util.Testnet, util.Simnet}
-	for _, ver := range wantVersions {
-		netMap, ok := ContractAddresses[ver]
-		if !ok {
-			t.Fatalf("ContractAddresses missing v%d", ver)
-		}
-		for _, net := range wantNets {
-			addr, ok := netMap[net]
-			if !ok {
-				t.Fatalf("ContractAddresses[v%d] missing %s", ver, net)
-			}
-			if net == util.Simnet {
-				continue
-			}
-			if (addr == common.Address{}) {
-				t.Fatalf("ContractAddresses[v%d][%s] is the zero address", ver, net)
-			}
-		}
-	}
-}
-
 // TestMultiBalanceAddresses verifies the multi-balance contract address is
 // configured for mainnet and testnet. Simnet does not deploy a multi-balance
 // contract; Driver.Open passes the zero value from the map miss.
