@@ -15,8 +15,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	v0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
-	swapv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 )
@@ -358,20 +356,6 @@ type SwapState struct {
 	State       SwapStep
 }
 
-// SwapStateFromV0 converts a version 0 contract *ETHSwapSwap to the generalized
-// *SwapState type.
-func SwapStateFromV0(state *v0.ETHSwapSwap) *SwapState {
-	return &SwapState{
-		BlockHeight: state.InitBlockNumber.Uint64(),
-		LockTime:    time.Unix(state.RefundBlockTimestamp.Int64(), 0),
-		Secret:      state.Secret,
-		Initiator:   state.Initiator,
-		Participant: state.Participant,
-		Value:       state.Value,
-		State:       SwapStep(state.State),
-	}
-}
-
 // Initiation is the data used to initiate a swap.
 type Initiation struct {
 	LockTime    time.Time
@@ -473,16 +457,6 @@ func ParseV1Locator(locator []byte) (v *SwapVector, err error) {
 		err = fmt.Errorf("wrong v1 locator length. wanted %d, got %d", LocatorV1Length, len(locator))
 	}
 	return
-}
-
-func SwapVectorToAbigen(v *SwapVector) swapv1.ETHSwapVector {
-	return swapv1.ETHSwapVector{
-		SecretHash:      v.SecretHash,
-		Initiator:       v.From,
-		RefundTimestamp: v.LockTime,
-		Participant:     v.To,
-		Value:           v.Value,
-	}
 }
 
 // ProtocolVersion assists in mapping the util.Asset.Version to a contract

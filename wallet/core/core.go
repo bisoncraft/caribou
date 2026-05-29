@@ -2812,42 +2812,6 @@ func (c *Core) ValidateAddress(address string, assetID uint32) (bool, error) {
 	return wallet.Wallet.ValidateAddress(address), nil
 }
 
-// ApproveToken calls a wallet's ApproveToken method.
-func (c *Core) ApproveToken(appPW []byte, assetID uint32, onConfirm func()) (string, error) {
-	crypter, err := c.encryptionKey(appPW)
-	if err != nil {
-		return "", err
-	}
-
-	wallet, err := c.connectedWallet(assetID)
-	if err != nil {
-		return "", err
-	}
-
-	err = wallet.Unlock(crypter)
-	if err != nil {
-		return "", err
-	}
-
-	err = wallet.checkPeersAndSyncStatus()
-	if err != nil {
-		return "", err
-	}
-
-	walletOnConfirm := func() {
-		go onConfirm()
-		go c.notify(newTokenApprovalNote(wallet.state()))
-	}
-
-	txID, err := wallet.ApproveToken(0, walletOnConfirm)
-	if err != nil {
-		return "", err
-	}
-
-	c.notify(newTokenApprovalNote(wallet.state()))
-	return txID, nil
-}
-
 // UnapproveToken calls a wallet's UnapproveToken method for a specified
 // version of the token.
 func (c *Core) UnapproveToken(appPW []byte, assetID uint32, version uint32) (string, error) {
@@ -2882,16 +2846,6 @@ func (c *Core) UnapproveToken(appPW []byte, assetID uint32, version uint32) (str
 
 	c.notify(newTokenApprovalNote(wallet.state()))
 	return txID, nil
-}
-
-// ApproveTokenFee returns the fee for a token approval/unapproval.
-func (c *Core) ApproveTokenFee(assetID uint32, version uint32, approval bool) (uint64, error) {
-	wallet, err := c.connectedWallet(assetID)
-	if err != nil {
-		return 0, err
-	}
-
-	return wallet.ApprovalFee(version, approval)
 }
 
 // BridgeContractApprovalStatus returns the approval status of the bridge

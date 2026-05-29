@@ -57,10 +57,6 @@ type extendedWalletTx struct {
 	// is set to true for the initial bridge completion.
 	RequiresFollowUp bool `json:"requiresFollowUp,omitempty"`
 
-	// RelayTaskID is the original relay task ID string used for polling relay status.
-	// The coin ID map key is the keccak256 of this value.
-	RelayTaskID string `json:"relayTaskID,omitempty"`
-
 	txHash          common.Hash
 	lastCheck       uint64
 	savedToDB       bool
@@ -96,21 +92,6 @@ func (wt *extendedWalletTx) UnmarshalBinary(b []byte) error {
 
 func (t *extendedWalletTx) age() time.Duration {
 	return time.Since(time.Unix(int64(t.SubmissionTime), 0))
-}
-
-func (t *extendedWalletTx) relayTaskHash() common.Hash {
-	return common.HexToHash(t.ID)
-}
-
-func (t *extendedWalletTx) hasRelayTx() bool {
-	return t.RelayTxID != ""
-}
-
-func (t *extendedWalletTx) relayTxHash() common.Hash {
-	if !t.hasRelayTx() {
-		return common.Hash{}
-	}
-	return common.HexToHash(t.RelayTxID)
 }
 
 func (t *extendedWalletTx) tx() (*types.Transaction, error) {
