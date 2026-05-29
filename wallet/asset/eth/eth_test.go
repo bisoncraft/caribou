@@ -1755,6 +1755,13 @@ func TestBalanceWithMempool(t *testing.T) {
 	tinyBal := newBalance(0, 0, 0)
 	tinyBal.Current = big.NewInt(GweiFactor - 1)
 
+	// subGweiOutBal carries a half-gwei remainder in pending-out. Available is
+	// computed as floor((current - pendingOut)/gwei), so 4e8 - (1.4e8 + 0.5)
+	// gwei floors to 2.6e8 - 1. Flooring pending-out independently first (the
+	// old behavior) would have dropped the half gwei and yielded 2.6e8.
+	subGweiOutBal := newBalance(4e8, 0, 0)
+	subGweiOutBal.PendingOut = new(big.Int).Add(GweiToWei(1.4e8), big.NewInt(GweiFactor/2))
+
 	tests := []struct {
 		name         string
 		bal          *Balance
@@ -1787,6 +1794,10 @@ func TestBalanceWithMempool(t *testing.T) {
 		bal:        newBalance(4e8, 0, 1.4e8),
 		wantBal:    2.6e8,
 		wantLocked: 0,
+	}, {
+		name:    "ok pending out sub-gwei floored once",
+		bal:     subGweiOutBal,
+		wantBal: 2.6e8 - 1,
 	}, {
 		name:       "ok pending out token",
 		bal:        newBalance(4e8, 0, 1.4e8),

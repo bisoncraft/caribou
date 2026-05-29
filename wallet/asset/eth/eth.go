@@ -3002,9 +3002,15 @@ func (w *assetWallet) balance() (*asset.Balance, error) {
 	}
 
 	locked := w.amountLocked()
+	// Subtract pending-out from current in wei before atomizing so the sub-gwei
+	// remainder is floored once, rather than flooring each term independently
+	// (which can over-report the spendable balance by up to 1 gwei when
+	// pending-out has a fractional gwei part). locked is already in atomic
+	// units, so subtract it after atomizing.
+	spendable := w.atomize(new(big.Int).Sub(bal.Current, bal.PendingOut))
 	var available uint64
-	if w.atomize(bal.Current) > locked+w.atomize(bal.PendingOut) {
-		available = w.atomize(bal.Current) - locked - w.atomize(bal.PendingOut)
+	if spendable > locked {
+		available = spendable - locked
 	}
 
 	return &asset.Balance{
