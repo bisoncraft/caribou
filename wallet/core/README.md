@@ -16,7 +16,7 @@ Alice reviews the tx and if acceptable, feeds it through her tool to sign the ot
 
 The rpc server must be enabled when starting bossw.
 
-The file at /dcrdex/wallet/core/multisigexample.csv should be copied and the data filled in according to comments.
+The file at wallet/core/multisigexample.csv should be copied and the data filled in according to comments.
 
 The user gathers pubkeys, addresses, and amounts from all parties. Pubkeys must be derived with the rpc command `paymentmultisigpubkey` so that core can find them later.
 

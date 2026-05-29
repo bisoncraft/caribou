@@ -9,7 +9,7 @@ dcrd, dcrwallet, dcrctl, monerod, monero-wallet-rpc, and monero-wallet-cli
 
 ## Simnet
 
-Simnet requires that the dcr and xmr harnesses in /dcrdex/dex/testing be running.
+Simnet requires that the dcr and xmr harnesses in util/testing be running.
 
 ## Testnet
 

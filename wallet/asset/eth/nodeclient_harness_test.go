@@ -2370,7 +2370,7 @@ func testRefund(t *testing.T, assetID uint32) {
 
 		// NOTE: Refunding to an account other than the sender takes more
 		// gas. At present redeem gas must be set to around 46000 although
-		// it will only use about 43100. Set in dex/networks/eth/params.go
+		// it will only use about 43100. Set in wallet/asset/eth/params.go
 		// to test.
 		// }, {
 		// 	name:           "ok non initiator refunder",
