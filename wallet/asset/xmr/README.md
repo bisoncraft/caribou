@@ -191,21 +191,6 @@ signing entirely within wallet2. The Go layer only supplies the destination
 address, amount, and fee priority — it never touches raw cryptographic
 primitives.
 
-### Secret Hash Validation
-
-For atomic swap compatibility, the wallet validates secrets against their hashes
-using SHA-256:
-
-```go
-func (w *ExchangeWallet) ValidateSecret(secret, secretHash []byte) bool {
-    h := sha256.Sum256(secret)
-    return bytes.Equal(h[:], secretHash)
-}
-```
-
-This uses Go's `crypto/sha256` and a constant-time-safe `bytes.Equal`
-comparison (constant-length inputs).
-
 ### Fund Validation Mechanism
 
 Fund validation operates at two levels: aggregate balance queries and

@@ -6,9 +6,7 @@
 package xmr
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -790,11 +788,6 @@ func (w *ExchangeWallet) OwnsDepositAddress(address string) (bool, error) {
 	return false, nil
 }
 
-// RedemptionAddress returns an address for redemption (same as deposit for Monero).
-func (w *ExchangeWallet) RedemptionAddress() (string, error) {
-	return w.NewAddress()
-}
-
 // ValidateAddress checks if an address is valid.
 func (w *ExchangeWallet) ValidateAddress(address string) bool {
 	netType := dexNetworkToCgo(w.net)
@@ -1049,22 +1042,6 @@ func (w *ExchangeWallet) SyncStatus() (*asset.SyncStatus, error) {
 		return nil, fmt.Errorf("unexpected type for syncStatus: %T", statusI)
 	}
 	return status, nil
-}
-
-// ValidateSecret checks that the secret hashes to the secret hash.
-func (w *ExchangeWallet) ValidateSecret(secret, secretHash []byte) bool {
-	h := sha256.Sum256(secret)
-	return bytes.Equal(h[:], secretHash)
-}
-
-// LockTimeExpired checks if a locktime has expired.
-func (w *ExchangeWallet) LockTimeExpired(ctx context.Context, lockTime time.Time) (bool, error) {
-	return time.Now().After(lockTime), nil
-}
-
-// RegFeeConfirmations returns confirmations for a registration fee payment.
-func (w *ExchangeWallet) RegFeeConfirmations(ctx context.Context, coinID util.Bytes) (uint32, error) {
-	return 0, asset.ErrUnsupported
 }
 
 // StandardSendFee returns the standard send fee.
@@ -1354,85 +1331,6 @@ func (w *ExchangeWallet) RecoverWithSubaddresses(subaddressCount uint64) error {
 		return fmt.Errorf("failed to generate subaddresses: %w", err)
 	}
 	return w.rescanFromHeight(0, 0)
-}
-
-// The following methods are required by the Wallet interface but not supported
-// for basic wallet functionality (trading not implemented).
-
-func (w *ExchangeWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint64, error) {
-	return nil, nil, 0, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) MaxOrder(form *asset.MaxOrderForm) (*asset.SwapEstimate, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) PreSwap(form *asset.PreSwapForm) (*asset.PreSwap, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) PreRedeem(form *asset.PreRedeemForm) (*asset.PreRedeem, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) ReturnCoins(coins asset.Coins) error {
-	return asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) Swap(_ context.Context, swaps *asset.Swaps) ([]asset.Receipt, asset.Coin, uint64, error) {
-	return nil, nil, 0, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) Redeem(_ context.Context, form *asset.RedeemForm) ([]util.Bytes, asset.Coin, uint64, error) {
-	return nil, nil, 0, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) SignCoinMessage(coin asset.Coin, msg util.Bytes) ([]util.Bytes, []util.Bytes, error) {
-	return nil, nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error) {
-	return false, time.Time{}, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) FindRedemption(ctx context.Context, coinID, contract util.Bytes) (util.Bytes, util.Bytes, error) {
-	return nil, nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) Refund(_ context.Context, coinID, contract util.Bytes, feeRate uint64) (util.Bytes, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) SwapConfirmations(ctx context.Context, coinID, contract util.Bytes, matchTime time.Time) (uint32, bool, error) {
-	return 0, false, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
-	return nil, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) SingleLotSwapRefundFees(version uint32, feeRate uint64, useSafeTxSize bool) (uint64, uint64, error) {
-	return 0, 0, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) SingleLotRedeemFees(version uint32, feeRate uint64) (uint64, error) {
-	return 0, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) FundMultiOrder(ord *asset.MultiOrder, maxLock uint64) ([]asset.Coins, [][]util.Bytes, uint64, error) {
-	return nil, nil, 0, asset.ErrUnsupported
-}
-
-func (w *ExchangeWallet) MaxFundingFees(numTrades uint32, feeRate uint64, options map[string]string) uint64 {
-	return 0
 }
 
 // Coin represents a Monero transaction output.
