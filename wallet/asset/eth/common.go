@@ -34,10 +34,6 @@ func DecodeCoinID(coinID []byte) (*ETHCoinID, error) {
 	}, nil
 }
 
-// SecretHashSize is the byte-length of the hash of the secret key used in
-// swaps.
-const SecretHashSize = 32
-
 // CheckAPIModules checks that the geth node supports the required modules.
 func CheckAPIModules(c *rpc.Client, endpoint string, log util.Logger, reqModules []string) (err error) {
 	apis, err := c.SupportedModules()

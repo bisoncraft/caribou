@@ -4,14 +4,10 @@
 package eth
 
 import (
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"os"
-	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/ethereum/go-ethereum/common"
@@ -96,52 +92,6 @@ func LoadGenesisFile(genesisFile string) (*core.Genesis, error) {
 	return &genesis, nil
 }
 
-// EncodeContractData packs the contract version and the locator into a byte
-// slice for communicating a swap's identity.
-func EncodeContractData(contractVersion uint32, locator []byte) []byte {
-	b := make([]byte, len(locator)+4)
-	binary.BigEndian.PutUint32(b[:4], contractVersion)
-	copy(b[4:], locator[:])
-	return b
-}
-
-func DecodeContractDataV0(data []byte) (secretHash [32]byte, err error) {
-	contractVer, secretHashB, err := DecodeContractData(data)
-	if err != nil {
-		return secretHash, err
-	}
-	if contractVer != 0 {
-		return secretHash, errors.New("not contract version 0")
-	}
-	copy(secretHash[:], secretHashB)
-	return
-}
-
-// DecodeContractData unpacks the contract version and the locator.
-func DecodeContractData(data []byte) (contractVersion uint32, locator []byte, err error) {
-	if len(data) < 4 {
-		err = errors.New("invalid short encoding")
-		return
-	}
-	locator = data[4:]
-	contractVersion = binary.BigEndian.Uint32(data[:4])
-	switch contractVersion {
-	case 0:
-		if len(locator) != SecretHashSize {
-			err = fmt.Errorf("v0 locator is too small. expected %d, got %d", SecretHashSize, len(locator))
-			return
-		}
-	case 1:
-		if len(locator) != LocatorV1Length {
-			err = fmt.Errorf("v1 locator is too small. expected %d, got %d", LocatorV1Length, len(locator))
-			return
-		}
-	default:
-		err = fmt.Errorf("unkown contract version %d", contractVersion)
-	}
-	return
-}
-
 var (
 	// add before diving by gweiFactorBig to take the ceiling.
 	gweiCeilAddend = big.NewInt(GweiFactor - 1)
@@ -194,110 +144,6 @@ func WeiToGweiSafe(wei *big.Int) (uint64, error) {
 	return gwei.Uint64(), nil
 }
 
-// SwapStep is the state of a swap and corresponds to values in the Solidity
-// swap contract.
-type SwapStep uint8
-
-// Swap states represent the status of a swap. The default state of a swap is
-// SSNone. A swap in status SSNone does not exist. SSInitiated indicates that a
-// party has initiated the swap and funds have been sent to the contract.
-// SSRedeemed indicates a successful swap where the participant was able to
-// redeem with the secret hash. SSRefunded indicates a failed swap, where the
-// initiating party refunded their coins after the locktime passed. A swap no
-// longer changes states after reaching SSRedeemed or SSRefunded.
-const (
-	// SSNone indicates that the swap is not initiated. This is the default
-	// state of a swap.
-	SSNone SwapStep = iota
-	// SSInitiated indicates that the swap has been initiated.
-	SSInitiated
-	// SSRedeemed indicates that the swap was initiated and then redeemed.
-	// This is one of two possible end states of a swap.
-	SSRedeemed
-	// SSRefunded indicates that the swap was initiated and then refunded.
-	// This is one of two possible end states of a swap.
-	SSRefunded
-)
-
-// String satisfies the Stringer interface.
-func (ss SwapStep) String() string {
-	switch ss {
-	case SSNone:
-		return "none"
-	case SSInitiated:
-		return "initiated"
-	case SSRedeemed:
-		return "redeemed"
-	case SSRefunded:
-		return "refunded"
-	}
-	return "unknown"
-}
-
-// SwapVector is immutable contract data.
-type SwapVector struct {
-	From       common.Address
-	To         common.Address
-	Value      *big.Int
-	SecretHash [32]byte
-	LockTime   uint64 // seconds
-}
-
-// Locator encodes a version 1 locator for the SwapVector.
-func (v *SwapVector) Locator() []byte {
-	locator := make([]byte, LocatorV1Length)
-	copy(locator[0:20], v.From[:])
-	copy(locator[20:40], v.To[:])
-	v.Value.FillBytes(locator[40:72])
-	copy(locator[72:104], v.SecretHash[:])
-	binary.BigEndian.PutUint64(locator[104:112], v.LockTime)
-	return locator
-}
-
-func (v *SwapVector) String() string {
-	return fmt.Sprintf("{ from = %s, to = %s, value = %d, secret hash = %s, locktime = %s }",
-		v.From, v.To, v.Value, hex.EncodeToString(v.SecretHash[:]), time.UnixMilli(int64(v.LockTime)))
-}
-
-func CompareVectors(v1, v2 *SwapVector) bool {
-	// Check vector equivalence.
-	return v1.Value.Cmp(v2.Value) == 0 && v1.To == v2.To && v1.From == v2.From &&
-		v1.LockTime == v2.LockTime && v1.SecretHash == v2.SecretHash
-}
-
-// SwapStatus is the contract data that specifies the current contract state.
-type SwapStatus struct {
-	BlockHeight uint64
-	Secret      [32]byte
-	Step        SwapStep
-}
-
-// SwapState is the current state of an in-process swap, as stored on-chain by
-// the v0 contract.
-type SwapState struct {
-	BlockHeight uint64
-	LockTime    time.Time
-	Secret      [32]byte
-	Initiator   common.Address
-	Participant common.Address
-	Value       *big.Int
-	State       SwapStep
-}
-
-// Initiation is the data used to initiate a swap.
-type Initiation struct {
-	LockTime    time.Time
-	SecretHash  [32]byte
-	Participant common.Address
-	Value       *big.Int
-}
-
-// Redemption is the data used to redeem a swap.
-type Redemption struct {
-	Secret     [32]byte
-	SecretHash [32]byte
-}
-
 var (
 	usdcTokenID, _    = util.BipSymbolID("usdc.eth")
 	usdtTokenID, _    = util.BipSymbolID("usdt.eth")
@@ -316,35 +162,6 @@ type Gases struct {
 	// transfer to an address uses more gas than subsequent transfers to the
 	// same address.
 	Transfer uint64 `json:"transfer"`
-}
-
-func ParseV0Locator(locator []byte) (secretHash [32]byte, err error) {
-	if len(locator) == SecretHashSize {
-		copy(secretHash[:], locator)
-	} else {
-		err = fmt.Errorf("wrong v0 locator length. wanted %d, got %d", SecretHashSize, len(locator))
-	}
-	return
-}
-
-// LocatorV1Length = from 20 + to 20 + value 32 + secretHash 32 +
-// lockTime 8 = 112 bytes
-const LocatorV1Length = 112
-
-func ParseV1Locator(locator []byte) (v *SwapVector, err error) {
-	// from 20 + to 20 + value 8 + secretHash 32 + lockTime 8
-	if len(locator) == LocatorV1Length {
-		v = &SwapVector{
-			From:     common.BytesToAddress(locator[:20]),
-			To:       common.BytesToAddress(locator[20:40]),
-			Value:    new(big.Int).SetBytes(locator[40:72]),
-			LockTime: binary.BigEndian.Uint64(locator[104:112]),
-		}
-		copy(v.SecretHash[:], locator[72:104])
-	} else {
-		err = fmt.Errorf("wrong v1 locator length. wanted %d, got %d", LocatorV1Length, len(locator))
-	}
-	return
 }
 
 // ProtocolVersion assists in mapping the util.Asset.Version to a contract
