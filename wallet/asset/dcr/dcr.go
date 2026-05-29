@@ -393,74 +393,6 @@ func (op *output) wireOutPoint() *wire.OutPoint {
 	return wire.NewOutPoint(op.txHash(), op.vout(), op.tree)
 }
 
-// auditInfo is information about a swap contract on the blockchain, not
-// necessarily created by this wallet, as would be returned from AuditContract.
-type auditInfo struct {
-	output     *output
-	secretHash []byte
-	contract   []byte
-	recipient  stdaddr.Address // unused?
-	expiration time.Time
-}
-
-// Expiration is the expiration time of the contract, which is the earliest time
-// that a refund can be issued for an un-redeemed contract.
-func (ci *auditInfo) Expiration() time.Time {
-	return ci.expiration
-}
-
-// Contract is the contract script.
-func (ci *auditInfo) Contract() util.Bytes {
-	return ci.contract
-}
-
-// Coin returns the output as an asset.Coin.
-func (ci *auditInfo) Coin() asset.Coin {
-	return ci.output
-}
-
-// SecretHash is the contract's secret hash.
-func (ci *auditInfo) SecretHash() util.Bytes {
-	return ci.secretHash
-}
-
-// swapReceipt is information about a swap contract that was broadcast by this
-// wallet. Satisfies the asset.Receipt interface.
-type swapReceipt struct {
-	output       *output
-	contract     []byte
-	signedRefund []byte
-	expiration   time.Time
-}
-
-// Expiration is the time that the contract will expire, allowing the user to
-// issue a refund transaction. Part of the asset.Receipt interface.
-func (r *swapReceipt) Expiration() time.Time {
-	return r.expiration
-}
-
-// Coin is the contract script. Part of the asset.Receipt interface.
-func (r *swapReceipt) Contract() util.Bytes {
-	return r.contract
-}
-
-// Coin is the output information as an asset.Coin. Part of the asset.Receipt
-// interface.
-func (r *swapReceipt) Coin() asset.Coin {
-	return r.output
-}
-
-// String provides a human-readable representation of the contract's Coin.
-func (r *swapReceipt) String() string {
-	return r.output.String()
-}
-
-// SignedRefund is a signed refund script that can be used to return
-// funds to the user in the case a contract expires.
-func (r *swapReceipt) SignedRefund() util.Bytes {
-	return r.signedRefund
-}
-
 // fundingCoin is similar to output, but also stores the address. The
 // ExchangeWallet fundingCoins dict is used as a local cache of coins being
 // spent.
@@ -596,13 +528,6 @@ type exchangeWalletConfig struct {
 	politeiaEnabled  bool
 }
 
-// mempoolTx holds a refund or redeem.
-type mempoolTx struct {
-	txHash    chainhash.Hash
-	firstSeen time.Time
-	txType    asset.ConfirmTxType
-}
-
 // vsp holds info needed for purchasing tickets from a vsp. PubKey is from the
 // vsp and is used for verifying communications.
 type vsp struct {
@@ -654,10 +579,6 @@ type ExchangeWallet struct {
 	externalTxMtx   sync.RWMutex
 	externalTxCache map[chainhash.Hash]*externalTx
 
-	// TODO: Consider persisting mempool txs on file.
-	mempoolTxsMtx sync.RWMutex
-	mempoolTxs    map[[32]byte]*mempoolTx // keyed by secret hash
-
 	vspV atomic.Value // *vsp
 
 	connected atomic.Bool
@@ -689,10 +610,6 @@ type ExchangeWallet struct {
 		sync.RWMutex
 		progress *rescanProgress // nil = no rescan in progress
 	}
-
-	swapCache   *broadcast.Cache[*dcrSwapCacheEntry]
-	redeemCache *broadcast.Cache[*dcrRedeemCacheEntry]
-	refundCache *broadcast.Cache[*dcrRefundCacheEntry]
 
 	politeiaMtx     sync.RWMutex
 	politeia        *pi.Politeia
@@ -857,15 +774,11 @@ func unconnectedWallet(cfg *asset.WalletConfig, dcrCfg *walletConfig, chainParam
 		findRedemptionQueue: make(map[outPoint]*findRedemptionReq),
 		externalTxCache:     make(map[chainhash.Hash]*externalTx),
 		oracleFees:          make(map[uint64]feeStamped),
-		mempoolTxs:          make(map[[32]byte]*mempoolTx),
 		vspFilepath:         vspFilepath,
 		walletType:          cfg.Type,
 		subsidyCache:        blockchain.NewSubsidyCache(chainParams),
 		pendingTxs:          make(map[chainhash.Hash]*btc.ExtendedWalletTx),
 		walletDir:           dir,
-		swapCache:           broadcast.NewCache[*dcrSwapCacheEntry](),
-		redeemCache:         broadcast.NewCache[*dcrRedeemCacheEntry](),
-		refundCache:         broadcast.NewCache[*dcrRefundCacheEntry](),
 	}
 
 	if b, err := os.ReadFile(vspFilepath); err == nil {
@@ -4162,43 +4075,6 @@ func (dcr *ExchangeWallet) CastVote(token, bit string) error {
 
 	return p.CastVotes(dcr, voteDetails.EligibleTickets, bit, token)
 }
-
-type dcrSwapCacheEntry struct {
-	signedTx   *wire.MsgTx
-	receipts   []asset.Receipt
-	change     *output
-	changeAddr string
-	fees       uint64
-	totalOut   uint64
-	feeRate    uint64
-	lockChange bool
-	timestamp  time.Time
-}
-
-func (e *dcrSwapCacheEntry) Stamp() time.Time { return e.timestamp }
-
-type dcrRedeemCacheEntry struct {
-	signedTx  *wire.MsgTx
-	coinIDs   []util.Bytes
-	outCoin   *output
-	fees      uint64
-	totalIn   uint64
-	feeRate   uint64
-	timestamp time.Time
-}
-
-func (e *dcrRedeemCacheEntry) Stamp() time.Time { return e.timestamp }
-
-type dcrRefundCacheEntry struct {
-	signedTx     *wire.MsgTx
-	refundCoinID util.Bytes
-	refundVal    uint64
-	fees         uint64
-	feeRate      uint64
-	timestamp    time.Time
-}
-
-func (e *dcrRefundCacheEntry) Stamp() time.Time { return e.timestamp }
 
 func (dcr *ExchangeWallet) broadcastTx(ctx context.Context, signedTx *wire.MsgTx, feeRate uint64) (*chainhash.Hash, error) {
 	// Hard limit: Validate transaction size before broadcasting to prevent

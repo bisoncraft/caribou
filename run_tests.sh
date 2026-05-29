@@ -52,7 +52,6 @@ go build -tags systray -o /dev/null ./wallet/cmd/bossw
 go test -c -o /dev/null -tags live ./wallet/appserver
 go test -c -o /dev/null -tags harness ./wallet/asset/dcr
 go test -c -o /dev/null -tags electrumlive ./wallet/asset/btc
-go test -c -o /dev/null -tags harness ./wallet/asset/btc/livetest
 go test -c -o /dev/null -tags harness ./wallet/asset/ltc
 go test -c -o /dev/null -tags harness ./wallet/asset/bch
 go test -c -o /dev/null -tags harness ./wallet/asset/firo

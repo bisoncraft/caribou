@@ -277,15 +277,7 @@ func newWalletConfigNote(topic Topic, subject, details string, severity db.Sever
 type WalletStateNote WalletConfigNote
 
 const TopicWalletState Topic = "WalletState"
-const TopicTokenApproval Topic = "TokenApproval"
 const TopicBridgeApproval Topic = "BridgeApproval"
-
-func newTokenApprovalNote(walletState *WalletState) *WalletStateNote {
-	return &WalletStateNote{
-		Notification: db.NewNotification(NoteTypeWalletState, TopicTokenApproval, "", "", db.Data),
-		Wallet:       walletState,
-	}
-}
 
 func newBridgeApprovalNote(walletState *WalletState) *WalletStateNote {
 	return &WalletStateNote{

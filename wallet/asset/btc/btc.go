@@ -834,10 +834,6 @@ type baseWallet struct {
 	txHistoryDB atomic.Value // *BadgerTxDB
 
 	ar *AddressRecycler
-
-	swapCache   *broadcast.Cache[*swapCacheEntry]
-	redeemCache *broadcast.Cache[*redeemCacheEntry]
-	refundCache *broadcast.Cache[*refundCacheEntry]
 }
 
 func (w *baseWallet) cfg() *baseWalletConfig {
@@ -924,7 +920,6 @@ var _ asset.Authenticator = (*ExchangeWalletSPV)(nil)
 var _ asset.Authenticator = (*ExchangeWalletFullNode)(nil)
 var _ asset.Authenticator = (*ExchangeWalletAccelerator)(nil)
 var _ asset.Authenticator = (*ExchangeWalletCustom)(nil)
-var _ asset.AddressReturner = (*baseWallet)(nil)
 var _ asset.NewAddresser = (*baseWallet)(nil)
 
 // RecoveryCfg is the information that is transferred from the old wallet
@@ -1358,9 +1353,6 @@ func newUnconnectedWallet(cfg *BTCCloneCFG, walletCfg *WalletConfig) (*baseWalle
 		pendingTxs:        make(map[chainhash.Hash]ExtendedWalletTx),
 		walletDir:         walletDir,
 		ar:                addressRecyler,
-		swapCache:         broadcast.NewCache[*swapCacheEntry](),
-		redeemCache:       broadcast.NewCache[*redeemCacheEntry](),
-		refundCache:       broadcast.NewCache[*refundCacheEntry](),
 	}
 	w.cfgV.Store(baseCfg)
 
@@ -3448,41 +3440,6 @@ func (btc *baseWallet) signTxAndAddChange(ctx context.Context, baseTx *wire.MsgT
 
 	return msgTx, change, fee, nil
 }
-
-type swapCacheEntry struct {
-	signedTx   *wire.MsgTx
-	receipts   []asset.Receipt
-	change     *Output
-	fees       uint64
-	totalOut   uint64
-	lockChange bool
-	changeLock *UTxO // pre-built UTxO for LockUTXOs when LockChange is set
-	pts        []OutPoint
-	timestamp  time.Time
-}
-
-func (e *swapCacheEntry) Stamp() time.Time { return e.timestamp }
-
-type redeemCacheEntry struct {
-	signedTx  *wire.MsgTx
-	coinIDs   []util.Bytes
-	outCoin   *Output
-	fees      uint64
-	totalIn   uint64
-	timestamp time.Time
-}
-
-func (e *redeemCacheEntry) Stamp() time.Time { return e.timestamp }
-
-type refundCacheEntry struct {
-	signedTx     *wire.MsgTx
-	refundCoinID util.Bytes
-	refundVal    uint64
-	fees         uint64
-	timestamp    time.Time
-}
-
-func (e *refundCacheEntry) Stamp() time.Time { return e.timestamp }
 
 func (btc *baseWallet) broadcastTx(ctx context.Context, signedTx *wire.MsgTx) (*chainhash.Hash, error) {
 	txHash, err := btc.node.SendRawTransaction(ctx, signedTx)

@@ -114,7 +114,6 @@ type clientCore interface {
 	AddWalletPeer(assetID uint32, addr string) error
 	RemoveWalletPeer(assetID uint32, addr string) error
 	Notifications(n int) (notes, pokes []*db.Notification, _ error)
-	UnapproveToken(appPW []byte, assetID uint32, version uint32) (string, error)
 	StakeStatus(assetID uint32) (*asset.TicketStakingStatus, error)
 	SetVSP(assetID uint32, addr string) error
 	PurchaseTickets(assetID uint32, pw []byte, n int) error
@@ -451,7 +450,6 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/getwalletpeers", s.apiGetWalletPeers)
 			apiAuth.Post("/addwalletpeer", s.apiAddWalletPeer)
 			apiAuth.Post("/removewalletpeer", s.apiRemoveWalletPeer)
-			apiAuth.Post("/unapprovetoken", s.apiUnapproveToken)
 			apiAuth.Post("/txhistory", s.apiTxHistory)
 			apiAuth.Post("/takeaction", s.apiTakeAction)
 			apiAuth.Get("/exportapplog", s.apiExportAppLogs)

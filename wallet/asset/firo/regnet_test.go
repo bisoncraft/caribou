@@ -17,37 +17,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc/livetest"
 )
-
-var (
-	tLotSize uint64 = 1e6
-	tFIRO           = &util.Asset{
-		ID:         136,
-		Symbol:     "firo",
-		Version:    version,
-		MaxFeeRate: 20,
-		SwapConf:   1,
-	}
-)
-
-// Run harness with NOMINER="1"
-func TestWallet(t *testing.T) {
-	livetest.Run(t, &livetest.Config{
-		NewWallet: NewWallet,
-		LotSize:   tLotSize,
-		Asset:     tFIRO,
-		SplitTx:   true,
-		FirstWallet: &livetest.WalletName{
-			WalletType: walletTypeRPC,
-			Node:       "alpha",
-		},
-		SecondWallet: &livetest.WalletName{
-			WalletType: walletTypeRPC,
-			Node:       "gamma",
-		},
-	})
-}
 
 // Tests only mainnet, testnet is expected to return -1 normally
 func TestFetchExternalFee(t *testing.T) {

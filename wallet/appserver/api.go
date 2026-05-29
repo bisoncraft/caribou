@@ -135,37 +135,6 @@ func (s *AppServer) apiRemoveWalletPeer(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, simpleAck())
 }
 
-func (s *AppServer) apiUnapproveToken(w http.ResponseWriter, r *http.Request) {
-	var form struct {
-		AssetID  uint32           `json:"assetID"`
-		Version  uint32           `json:"version"`
-		Password encode.PassBytes `json:"pass"`
-	}
-	if !readPost(w, r, &form) {
-		return
-	}
-	pass, err := s.resolvePass(form.Password, r)
-	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
-		return
-	}
-	defer zero(pass)
-
-	txID, err := s.core.UnapproveToken(pass, form.AssetID, form.Version)
-	if err != nil {
-		s.writeAPIError(w, err)
-		return
-	}
-	resp := struct {
-		OK   bool   `json:"ok"`
-		TxID string `json:"txID"`
-	}{
-		OK:   true,
-		TxID: txID,
-	}
-	writeJSON(w, resp)
-}
-
 // apiNewWallet is the handler for the '/newwallet' API request.
 func (s *AppServer) apiNewWallet(w http.ResponseWriter, r *http.Request) {
 	form := new(newWalletForm)

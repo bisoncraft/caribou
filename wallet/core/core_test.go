@@ -7,7 +7,6 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -75,16 +74,14 @@ var (
 		MaxFeeRate: 20,
 		SwapConf:   1,
 	}
-	tPW                        = []byte("dexpw")
-	wPW                        = []byte("walletpw")
-	tErr                       = fmt.Errorf("test error")
-	tFee                uint64 = 1e8
-	tFeeAsset           uint32 = 42
-	tSwapFeesPaid       uint64 = 500
-	tRedemptionFeesPaid uint64 = 350
-	tLogger                    = util.StdOutLogger("TCORE", util.LevelInfo)
-	tMaxFeeRate         uint64 = 10
-	tWalletInfo                = &asset.WalletInfo{
+	tPW                = []byte("dexpw")
+	wPW                = []byte("walletpw")
+	tErr               = fmt.Errorf("test error")
+	tFee        uint64 = 1e8
+	tFeeAsset   uint32 = 42
+	tLogger            = util.StdOutLogger("TCORE", util.LevelInfo)
+	tMaxFeeRate uint64 = 10
+	tWalletInfo        = &asset.WalletInfo{
 		SupportedVersions: []uint32{0},
 		UnitInfo: util.UnitInfo{
 			Conventional: util.Denomination{
@@ -226,91 +223,25 @@ func (c *tCoin) Value() uint64 {
 	return c.val
 }
 
-type tReceipt struct {
-	coin       *tCoin
-	contract   []byte
-	expiration time.Time
-}
-
-func (r *tReceipt) Coin() asset.Coin {
-	return r.coin
-}
-
-func (r *tReceipt) Contract() util.Bytes {
-	return r.contract
-}
-
-func (r *tReceipt) Expiration() time.Time {
-	return r.expiration
-}
-
-func (r *tReceipt) String() string {
-	return r.coin.String()
-}
-
-func (r *tReceipt) SignedRefund() util.Bytes {
-	return nil
-}
-
 type TXCWallet struct {
-	swapSize            uint64
-	sendFeeSuggestion   uint64
-	sendCoin            *tCoin
-	sendErr             error
-	addrErr             error
-	signCoinErr         error
-	lastSwapsMtx        sync.Mutex
-	lastSwaps           []*asset.Swaps
-	lastRedeems         []*asset.RedeemForm
-	swapReceipts        []asset.Receipt
-	swapCounter         int
-	swapErr             error
-	auditInfo           *asset.AuditInfo
-	auditInfoFunc       func(coinID, contract, txData util.Bytes) (*asset.AuditInfo, error)
-	auditErr            error
-	auditChan           chan struct{}
-	refundCoin          util.Bytes
-	refundErr           error
-	refundFeeSuggestion uint64
-	redeemCoins         []util.Bytes
-	redeemCounter       int
-	redeemFeeSuggestion uint64
-	redeemErr           error
-	redeemErrChan       chan error
-	badSecret           bool
-	fundedVal           uint64
-	fundedSwaps         uint64
-	connectErr          error
-	unlockErr           error
-	balErr              error
-	bal                 *asset.Balance
-	fundingMtx          sync.RWMutex
-	fundingCoins        asset.Coins
-	fundRedeemScripts   []util.Bytes
-	returnedCoins       asset.Coins
-	fundingCoinErr      error
-	lockErr             error
-	locked              bool
-	changeCoin          *tCoin
-	syncStatus          func() (bool, float32, error)
-	confsMtx            sync.RWMutex
-	confs               map[string]uint32
-	confsErr            map[string]error
-	preSwapForm         *asset.PreSwapForm
-	preSwap             *asset.PreSwap
-	preRedeemForm       *asset.PreRedeemForm
-	preRedeem           *asset.PreRedeem
-	ownsAddress         bool
-	ownsAddressErr      error
-	pubKeys             []util.Bytes
-	sigs                []util.Bytes
-	feeCoin             []byte
-	makeRegFeeTxErr     error
-	feeCoinSent         []byte
-	sendTxnErr          error
-	contractExpired     bool
-	contractLockTime    time.Time
-	accelerationParams  *struct {
+	swapSize           uint64
+	sendFeeSuggestion  uint64
+	sendCoin           *tCoin
+	sendErr            error
+	addrErr            error
+	connectErr         error
+	unlockErr          error
+	balErr             error
+	bal                *asset.Balance
+	lockErr            error
+	locked             bool
+	changeCoin         *tCoin
+	syncStatus         func() (bool, float32, error)
+	ownsAddress        bool
+	ownsAddressErr     error
+	feeCoinSent        []byte
+	sendTxnErr         error
+	accelerationParams *struct {
 		swapCoins                 []util.Bytes
 		accelerationCoins         []util.Bytes
 		changeCoin                util.Bytes
@@ -332,19 +263,10 @@ type TXCWallet struct {
 	reserves                    atomic.Uint64
 	findBond                    *asset.BondDetails
 	findBondErr                 error
-	maxSwaps, maxRedeems        int
-
-	confirmTxResult *asset.ConfirmTxStatus
-	confirmTxErr    error
-	confirmTxCalled bool
 
 	estFee    uint64
 	estFeeErr error
 	validAddr bool
-
-	returnedAddr      string
-	returnedContracts [][]byte
-	redemptionAddr    string
 }
 
 var _ asset.Accelerator = (*TXCWallet)(nil)
@@ -352,14 +274,9 @@ var _ asset.Withdrawer = (*TXCWallet)(nil)
 
 func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
 	w := &TXCWallet{
-		changeCoin:       &tCoin{id: encode.RandomBytes(36)},
-		syncStatus:       func() (synced bool, progress float32, err error) { return true, 1, nil },
-		confs:            make(map[string]uint32),
-		confsErr:         make(map[string]error),
-		ownsAddress:      true,
-		contractLockTime: time.Now().Add(time.Minute),
-		lastSwaps:        make([]*asset.Swaps, 0),
-		lastRedeems:      make([]*asset.RedeemForm, 0),
+		changeCoin:  &tCoin{id: encode.RandomBytes(36)},
+		syncStatus:  func() (synced bool, progress float32, err error) { return true, 1, nil },
+		ownsAddress: true,
 		info: &asset.WalletInfo{
 			SupportedVersions: []uint32{0},
 		},
@@ -414,123 +331,8 @@ func (w *TXCWallet) Balance() (*asset.Balance, error) {
 	return w.bal, nil
 }
 
-func (w *TXCWallet) ConfirmTransaction(coinID util.Bytes, confirmTx *asset.ConfirmTx, feeSuggestion uint64) (*asset.ConfirmTxStatus, error) {
-	w.confirmTxCalled = true
-	return w.confirmTxResult, w.confirmTxErr
-}
-
-func (w *TXCWallet) FundOrder(ord *asset.Order) (asset.Coins, []util.Bytes, uint64, error) {
-	w.fundedVal = ord.Value
-	w.fundedSwaps = ord.MaxSwapCount
-	return w.fundingCoins, w.fundRedeemScripts, 0, w.fundingCoinErr
-}
-
-func (w *TXCWallet) MaxOrder(*asset.MaxOrderForm) (*asset.SwapEstimate, error) {
-	return nil, nil
-}
-
-func (w *TXCWallet) PreSwap(form *asset.PreSwapForm) (*asset.PreSwap, error) {
-	w.preSwapForm = form
-	return w.preSwap, nil
-}
-
-func (w *TXCWallet) PreRedeem(form *asset.PreRedeemForm) (*asset.PreRedeem, error) {
-	w.preRedeemForm = form
-	return w.preRedeem, nil
-}
-func (w *TXCWallet) RedemptionFees() (uint64, error) { return 0, nil }
-
-func (w *TXCWallet) ReturnCoins(coins asset.Coins) error {
-	w.fundingMtx.Lock()
-	defer w.fundingMtx.Unlock()
-	w.returnedCoins = coins
-	coinInSlice := func(coin asset.Coin) bool {
-		for _, c := range coins {
-			if bytes.Equal(c.ID(), coin.ID()) {
-				return true
-			}
-		}
-		return false
-	}
-
-	for _, c := range w.fundingCoins {
-		if coinInSlice(c) {
-			continue
-		}
-		return errors.New("not found")
-	}
-	return nil
-}
-
-func (w *TXCWallet) FundingCoins([]util.Bytes) (asset.Coins, error) {
-	return w.fundingCoins, w.fundingCoinErr
-}
-
-func (w *TXCWallet) Swap(_ context.Context, swaps *asset.Swaps) ([]asset.Receipt, asset.Coin, uint64, error) {
-	w.swapCounter++
-	w.lastSwapsMtx.Lock()
-	w.lastSwaps = append(w.lastSwaps, swaps)
-	w.lastSwapsMtx.Unlock()
-	if w.swapErr != nil {
-		return nil, nil, 0, w.swapErr
-	}
-	return w.swapReceipts, w.changeCoin, tSwapFeesPaid, nil
-}
-
-func (w *TXCWallet) Redeem(_ context.Context, form *asset.RedeemForm) ([]util.Bytes, asset.Coin, uint64, error) {
-	w.redeemFeeSuggestion = form.FeeSuggestion
-	defer func() {
-		if w.redeemErrChan != nil {
-			w.redeemErrChan <- w.redeemErr
-		}
-	}()
-	w.lastRedeems = append(w.lastRedeems, form)
-	w.redeemCounter++
-	if w.redeemErr != nil {
-		return nil, nil, 0, w.redeemErr
-	}
-	return w.redeemCoins, &tCoin{id: []byte{0x0c, 0x0d}}, tRedemptionFeesPaid, nil
-}
-
-func (w *TXCWallet) SignCoinMessage(asset.Coin, util.Bytes) (pubkeys, sigs []util.Bytes, err error) {
-	return w.pubKeys, w.sigs, w.signCoinErr
-}
-
-func (w *TXCWallet) AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*asset.AuditInfo, error) {
-	defer func() {
-		if w.auditChan != nil {
-			w.auditChan <- struct{}{}
-		}
-	}()
-	if w.auditInfoFunc != nil {
-		return w.auditInfoFunc(coinID, contract, txData)
-	}
-	return w.auditInfo, w.auditErr
-}
-
-func (w *TXCWallet) LockTimeExpired(_ context.Context, lockTime time.Time) (bool, error) {
-	return w.contractExpired, nil
-}
-
-func (w *TXCWallet) ContractLockTimeExpired(_ context.Context, contract util.Bytes) (bool, time.Time, error) {
-	return w.contractExpired, w.contractLockTime, nil
-}
-
-func (w *TXCWallet) FindRedemption(ctx context.Context, coinID, _ util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
-	return nil, nil, fmt.Errorf("not mocked")
-}
-
-func (w *TXCWallet) Refund(_ context.Context, refundCoin util.Bytes, refundContract util.Bytes, feeSuggestion uint64) (util.Bytes, error) {
-	w.refundFeeSuggestion = feeSuggestion
-	return w.refundCoin, w.refundErr
-}
-
 func (w *TXCWallet) DepositAddress() (string, error) {
 	return "", w.addrErr
-}
-
-func (w *TXCWallet) RedemptionAddress() (string, error) {
-	return w.redemptionAddr, w.addrErr
 }
 
 func (w *TXCWallet) NewAddress() (string, error) {
@@ -580,10 +382,6 @@ func (w *TXCWallet) EstimateSendTxFee(address string, value, feeRate uint64, sub
 	return w.estFee, true, w.estFeeErr
 }
 
-func (w *TXCWallet) ValidateSecret(secret, secretHash []byte) bool {
-	return !w.badSecret
-}
-
 func (w *TXCWallet) SyncStatus() (*asset.SyncStatus, error) {
 	synced, progress, err := w.syncStatus()
 	if err != nil {
@@ -591,30 +389,6 @@ func (w *TXCWallet) SyncStatus() (*asset.SyncStatus, error) {
 	}
 	blocks := uint64(math.Round(float64(progress) * 100))
 	return &asset.SyncStatus{Synced: synced, TargetHeight: blocks, Blocks: blocks}, nil
-}
-
-func (w *TXCWallet) setConfs(coinID util.Bytes, confs uint32, err error) {
-	id := coinID.String()
-	w.confsMtx.Lock()
-	w.confs[id] = confs
-	w.confsErr[id] = err
-	w.confsMtx.Unlock()
-}
-
-func (w *TXCWallet) tConfirmations(_ context.Context, coinID util.Bytes) (uint32, error) {
-	id := coinID.String()
-	w.confsMtx.RLock()
-	defer w.confsMtx.RUnlock()
-	return w.confs[id], w.confsErr[id]
-}
-
-func (w *TXCWallet) SwapConfirmations(ctx context.Context, coinID util.Bytes, contract util.Bytes, matchTime time.Time) (uint32, bool, error) {
-	confs, err := w.tConfirmations(ctx, coinID)
-	return confs, false, err
-}
-
-func (w *TXCWallet) RegFeeConfirmations(ctx context.Context, coinID util.Bytes) (uint32, error) {
-	return w.tConfirmations(ctx, coinID)
 }
 
 func (w *TXCWallet) FeesForRemainingSwaps(n, feeRate uint64) uint64 {
@@ -669,14 +443,6 @@ func (w *TXCWallet) PreAccelerate(swapCoins, accelerationCoins []util.Bytes, cha
 	return w.preAccelerateSwapRate, &w.preAccelerateSuggestedRange, nil, nil
 }
 
-func (w *TXCWallet) SingleLotSwapRefundFees(version uint32, feeRate uint64, useSafeTxSize bool) (uint64, uint64, error) {
-	return 0, 0, nil
-}
-
-func (w *TXCWallet) SingleLotRedeemFees(version uint32, feeRate uint64) (uint64, error) {
-	return 0, nil
-}
-
 func (w *TXCWallet) StandardSendFee(uint64) uint64 { return 1 }
 
 func (w *TXCWallet) AccelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (uint64, error) {
@@ -700,20 +466,6 @@ func (w *TXCWallet) AccelerationEstimate(swapCoins, accelerationCoins []util.Byt
 	}
 
 	return w.accelerationEstimate, nil
-}
-
-func (w *TXCWallet) ReturnRedemptionAddress(addr string) {
-	w.returnedAddr = addr
-}
-func (w *TXCWallet) ReturnRefundContracts(contracts [][]byte) {
-	w.returnedContracts = contracts
-}
-func (w *TXCWallet) MaxFundingFees(_ uint32, _ uint64, _ map[string]string) uint64 {
-	return 0
-}
-
-func (*TXCWallet) FundMultiOrder(ord *asset.MultiOrder, maxLock uint64) (coins []asset.Coins, redeemScripts [][]util.Bytes, fundingFees uint64, err error) {
-	return nil, nil, 0, nil
 }
 
 var _ asset.Bonder = (*TXCWallet)(nil)
@@ -755,73 +507,6 @@ func (w *TXCWallet) WalletTransaction(ctx context.Context, txID string) (*asset.
 
 func (w *TXCWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
 	return nil
-}
-
-var _ asset.MaxMatchesCounter = (*TXCWallet)(nil)
-
-func (w *TXCWallet) MaxSwaps(serverVer uint32, feeRate uint64) (int, error) {
-	return w.maxSwaps, nil
-}
-func (w *TXCWallet) MaxRedeems(serverVer uint32) (int, error) {
-	return w.maxRedeems, nil
-}
-
-type TAccountLocker struct {
-	*TXCWallet
-	reserveNRedemptions    uint64
-	reserveNRedemptionsErr error
-	reReserveRedemptionErr error
-	redemptionUnlocked     uint64
-	reservedRedemption     uint64
-
-	reserveNRefunds    uint64
-	reserveNRefundsErr error
-	reReserveRefundErr error
-	refundUnlocked     uint64
-	reservedRefund     uint64
-}
-
-var _ asset.AccountLocker = (*TAccountLocker)(nil)
-
-func newTAccountLocker(assetID uint32) (*xcWallet, *TAccountLocker) {
-	xcWallet, tWallet := newTWallet(assetID)
-	accountLocker := &TAccountLocker{TXCWallet: tWallet}
-	xcWallet.Wallet = accountLocker
-	return xcWallet, accountLocker
-}
-
-func (w *TAccountLocker) ReserveNRedemptions(n uint64, ver uint32, maxFeeRate uint64, lotSize uint64) (uint64, error) {
-	return w.reserveNRedemptions, w.reserveNRedemptionsErr
-}
-
-func (w *TAccountLocker) ReReserveRedemption(v uint64) error {
-	w.fundingMtx.Lock()
-	defer w.fundingMtx.Unlock()
-	w.reservedRedemption += v
-	return w.reReserveRedemptionErr
-}
-
-func (w *TAccountLocker) UnlockRedemptionReserves(v uint64) {
-	w.fundingMtx.Lock()
-	defer w.fundingMtx.Unlock()
-	w.redemptionUnlocked += v
-}
-
-func (w *TAccountLocker) ReserveNRefunds(n uint64, ver uint32, maxFeeRate uint64) (uint64, error) {
-	return w.reserveNRefunds, w.reserveNRefundsErr
-}
-
-func (w *TAccountLocker) UnlockRefundReserves(v uint64) {
-	w.fundingMtx.Lock()
-	defer w.fundingMtx.Unlock()
-	w.refundUnlocked += v
-}
-
-func (w *TAccountLocker) ReReserveRefund(v uint64) error {
-	w.fundingMtx.Lock()
-	defer w.fundingMtx.Unlock()
-	w.reservedRefund += v
-	return w.reReserveRefundErr
 }
 
 type TFeeRater struct {
@@ -1840,25 +1525,6 @@ func TestEstimateSendTxFee(t *testing.T) {
 		}
 	}
 }
-
-type TDynamicSwapper struct {
-	*TXCWallet
-	tfpPaid         uint64
-	tfpSecretHashes [][]byte
-	tfpErr          error
-}
-
-func (dtfc *TDynamicSwapper) DynamicSwapFeesPaid(ctx context.Context, coinID, contractData util.Bytes) (uint64, [][]byte, error) {
-	return dtfc.tfpPaid, dtfc.tfpSecretHashes, dtfc.tfpErr
-}
-func (dtfc *TDynamicSwapper) DynamicRedemptionFeesPaid(ctx context.Context, coinID, contractData util.Bytes) (uint64, [][]byte, error) {
-	return dtfc.tfpPaid, dtfc.tfpSecretHashes, dtfc.tfpErr
-}
-func (dtfc *TDynamicSwapper) GasFeeLimit() uint64 {
-	return 200
-}
-
-var _ asset.DynamicSwapper = (*TDynamicSwapper)(nil)
 
 func TestPokesCacheInit(t *testing.T) {
 	tPokes := []*db.Notification{

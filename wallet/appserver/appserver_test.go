@@ -185,15 +185,6 @@ func (c *TCore) RemoveWalletPeer(assetID uint32, address string) error {
 func (c *TCore) Notifications(n int) (notes, pokes []*db.Notification, _ error) {
 	return c.notes, []*db.Notification{}, c.notesErr
 }
-func (c *TCore) ApproveToken(appPW []byte, assetID uint32, onConfirm func()) (string, error) {
-	return "", nil
-}
-func (c *TCore) UnapproveToken(appPW []byte, assetID uint32, version uint32) (string, error) {
-	return "", nil
-}
-func (c *TCore) ApproveTokenFee(assetID uint32, version uint32, approval bool) (uint64, error) {
-	return 0, nil
-}
 func (c *TCore) StakeStatus(assetID uint32) (*asset.TicketStakingStatus, error) {
 	return nil, nil
 }

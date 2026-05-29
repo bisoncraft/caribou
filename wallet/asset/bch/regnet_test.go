@@ -22,28 +22,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc/livetest"
 )
-
-var (
-	tLotSize  uint64 = 1e6
-	tRateStep uint64 = 10
-	tBCH             = &util.Asset{
-		ID:         2,
-		Symbol:     "bch",
-		Version:    version,
-		MaxFeeRate: 10,
-		SwapConf:   1,
-	}
-)
-
-func TestWallet(t *testing.T) {
-	livetest.Run(t, &livetest.Config{
-		NewWallet: NewWallet,
-		LotSize:   tLotSize,
-		Asset:     tBCH,
-	})
-}
 
 func TestExternalFeeRate(t *testing.T) {
 	fetchRateWithTimeout(t, util.Mainnet)

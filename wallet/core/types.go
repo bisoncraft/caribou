@@ -99,7 +99,6 @@ type WalletState struct {
 	SyncProgress   float32                             `json:"syncProgress"`
 	SyncStatus     *asset.SyncStatus                   `json:"syncStatus"`
 	Disabled       bool                                `json:"disabled"`
-	Approved       map[uint32]asset.ApprovalStatus     `json:"approved"`
 	BridgeApproved map[string]asset.ApprovalStatus     `json:"bridgeApproved"`
 	FeeState       *FeeState                           `json:"feeState"`
 	PendingTxs     map[string]*asset.WalletTransaction `json:"pendingTxs"`
@@ -119,18 +118,6 @@ type BridgeFeesAndLimits struct {
 	MinLimit  uint64            `json:"minLimit"`
 	MaxLimit  uint64            `json:"maxLimit"`
 	HasLimits bool              `json:"hasLimits"`
-}
-
-// ContractGasTestResult is the per-asset result of a contract gas test.
-type ContractGasTestResult = asset.GasTestResult
-
-// DeployContractResult is the per-chain result of a contract deployment.
-type DeployContractResult struct {
-	AssetID      uint32 `json:"assetID"`
-	Symbol       string `json:"symbol"`
-	ContractAddr string `json:"contractAddr,omitempty"`
-	TxID         string `json:"txID,omitempty"`
-	Error        string `json:"error,omitempty"`
 }
 
 // ExtensionModeConfig is configuration for running core in extension mode,
