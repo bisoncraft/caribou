@@ -2626,7 +2626,7 @@ func (c *Core) pokes() []*db.Notification {
 }
 
 func (c *Core) recrypt(creds *db.PrimaryCredentials, oldCrypter, newCrypter encrypt.Crypter) error {
-	walletUpdates, acctUpdates, err := c.db.Recrypt(creds, oldCrypter, newCrypter)
+	walletUpdates, err := c.db.Recrypt(creds, oldCrypter, newCrypter)
 	if err != nil {
 		return err
 	}
@@ -2641,8 +2641,6 @@ func (c *Core) recrypt(creds *db.PrimaryCredentials, oldCrypter, newCrypter encr
 		}
 		w.setEncPW(newEncPW)
 	}
-
-	_ = acctUpdates // no in-memory account state to update
 
 	return nil
 }

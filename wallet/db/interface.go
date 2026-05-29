@@ -16,10 +16,10 @@ type DB interface {
 	SetPrimaryCredentials(creds *PrimaryCredentials) error
 	// PrimaryCredentials fetches the *PrimaryCredentials.
 	PrimaryCredentials() (*PrimaryCredentials, error)
-	// Recrypt re-encrypts the wallet passwords and account private keys, and
-	// stores the new *PrimaryCredentials.
+	// Recrypt re-encrypts the wallet passwords and stores the new
+	// *PrimaryCredentials.
 	Recrypt(creds *PrimaryCredentials, oldCrypter, newCrypter encrypt.Crypter) (
-		walletUpdates map[uint32][]byte, acctUpdates map[string][]byte, err error)
+		walletUpdates map[uint32][]byte, err error)
 	// UpdateWallet adds a wallet to the database, or updates the wallet
 	// credentials if the wallet already exists. A wallet is specified by the
 	// pair (asset ID, account name).

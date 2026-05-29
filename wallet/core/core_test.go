@@ -164,13 +164,13 @@ func (tdb *TDB) SaveDisabledRateSources(disableSources []string) error {
 	return nil
 }
 func (tdb *TDB) Recrypt(creds *db.PrimaryCredentials, oldCrypter, newCrypter encrypt.Crypter) (
-	walletUpdates map[uint32][]byte, acctUpdates map[string][]byte, err error) {
+	walletUpdates map[uint32][]byte, err error) {
 
 	if tdb.recryptErr != nil {
-		return nil, nil, tdb.recryptErr
+		return nil, tdb.recryptErr
 	}
 
-	return nil, nil, nil
+	return nil, nil
 }
 
 func (tdb *TDB) Backup() error {
