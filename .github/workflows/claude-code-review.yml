@@ -166,7 +166,11 @@ jobs:
             # explanation and writes the reviewed-sha marker.
             local changed
             changed=$(gh pr view "$PR_NUMBER" --json additions,deletions \
-                        --jq '.additions + .deletions' 2>/dev/null) || changed=0
+                        --jq '.additions + .deletions' 2>/dev/null) || {
+              echo "warn: gh pr view failed; assuming 0 changed lines" \
+                   "(full review will proceed)" >&2
+              changed=0
+            }
             if [ "${changed:-0}" -gt "$MAX_DIFF_LINES" ]; then
               echo "PR changes $changed lines (> $MAX_DIFF_LINES); skipping full review."
               echo "skip=true" >> "$GITHUB_OUTPUT"
