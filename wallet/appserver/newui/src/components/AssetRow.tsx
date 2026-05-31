@@ -72,10 +72,10 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
         </div>
       </td>
       <td className="asset-row-num">
-        <span className="mono">{availFmt}</span>
+        {fiatRate > 0 ? usdFmt.format(usdValue) : '—'}
       </td>
       <td className="asset-row-num">
-        {fiatRate > 0 ? usdFmt.format(usdValue) : '—'}
+        <span className="mono">{availFmt}</span>
       </td>
       <td className="asset-row-num">
         {fiatRate > 0 ? usdFmt.format(fiatRate) : '—'}
