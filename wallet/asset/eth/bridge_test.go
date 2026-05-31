@@ -19,6 +19,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 type mockBridge struct {
@@ -240,7 +241,7 @@ func TestBridgeManager(t *testing.T) {
 
 		getConfirmedTxFunc := func(txHash common.Hash, callback func(*extendedWalletTx)) bool {
 			tx := &extendedWalletTx{
-				WalletTransaction: &asset.WalletTransaction{
+				WalletTransaction: &txdb.WalletTransaction{
 					ID:        txHash.Hex(),
 					Confirmed: true,
 				},
@@ -345,9 +346,9 @@ func TestBridgeManager(t *testing.T) {
 		bm.addPendingBridge(burnTxID, sourceAssetID, destAssetID, amount, bridgeName)
 
 		db.txToGet = &extendedWalletTx{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID: burnTxID,
-				BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					AssetID: destAssetID,
 				},
 			},
@@ -385,10 +386,10 @@ func TestBridgeManager(t *testing.T) {
 		burnTxID := "tx4"
 		bm, _, _, _, _ := setupWithPendingBridges(t, []*extendedWalletTx{
 			{
-				WalletTransaction: &asset.WalletTransaction{
-					Type: asset.InitiateBridge,
+				WalletTransaction: &txdb.WalletTransaction{
+					Type: txdb.InitiateBridge,
 					ID:   burnTxID,
-					BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+					BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 						AssetID: destAssetID,
 					},
 				},
@@ -422,7 +423,7 @@ func TestBridgeManager(t *testing.T) {
 		// Create getTxFunc that returns an unconfirmed transaction
 		getTxFunc := func(txHash common.Hash, callback func(*extendedWalletTx)) bool {
 			tx := &extendedWalletTx{
-				WalletTransaction: &asset.WalletTransaction{
+				WalletTransaction: &txdb.WalletTransaction{
 					ID:        txHash.Hex(),
 					Confirmed: false, // Not confirmed
 				},
@@ -475,18 +476,18 @@ func TestBridgeManager(t *testing.T) {
 
 func TestCompleteBridge(t *testing.T) {
 	t.Parallel()
-	initiationTx := &asset.BridgeCounterpartTx{
+	initiationTx := &txdb.BridgeCounterpartTx{
 		IDs:     []string{"initiation-tx-id"},
 		AssetID: 123,
 	}
 	timestamp := uint64(time.Now().Unix())
 	confirmedTx := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:                  "complete-tx-id",
 			Amount:              1e9,
 			Fees:                5000, // 5000 gwei fees
 			Confirmed:           true,
-			Type:                asset.CompleteBridge,
+			Type:                txdb.CompleteBridge,
 			BridgeCounterpartTx: initiationTx,
 			Timestamp:           timestamp,
 		},
@@ -495,12 +496,12 @@ func TestCompleteBridge(t *testing.T) {
 	}
 	// Previous completion tx for follow-up scenarios
 	initialCompletionTx := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:                  "initial-completion-tx-id",
 			Amount:              0,
 			Fees:                3000, // 3000 gwei fees
 			Confirmed:           true,
-			Type:                asset.CompleteBridge,
+			Type:                txdb.CompleteBridge,
 			BridgeCounterpartTx: initiationTx,
 			Timestamp:           timestamp,
 		},
@@ -508,12 +509,12 @@ func TestCompleteBridge(t *testing.T) {
 		savedToDB: true,
 	}
 	confirmedTxWithFollowUpData := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:                  "follow-up-tx-id",
 			Amount:              1e9,
 			Fees:                2000, // 2000 gwei fees for follow-up
 			Confirmed:           true,
-			Type:                asset.CompleteBridge,
+			Type:                txdb.CompleteBridge,
 			BridgeCounterpartTx: initiationTx,
 			Timestamp:           timestamp,
 		},
@@ -523,12 +524,12 @@ func TestCompleteBridge(t *testing.T) {
 		savedToDB:                  true,
 	}
 	pendingTx := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:                  "pending-tx-id",
 			Amount:              1e9,
 			Fees:                0, // No fees yet - not confirmed
 			Confirmed:           false,
-			Type:                asset.CompleteBridge,
+			Type:                txdb.CompleteBridge,
 			BridgeCounterpartTx: initiationTx,
 			Timestamp:           timestamp,
 		},

@@ -19,6 +19,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc/electrum"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 
@@ -530,7 +531,7 @@ func (btc *ExchangeWalletElectrum) syncTxHistory(tip uint64) {
 // WalletTransaction returns a transaction that either the wallet has made or
 // one in which the wallet has received funds. The txID can be either a byte
 // reversed tx hash or a hex encoded coin ID.
-func (btc *ExchangeWalletElectrum) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (btc *ExchangeWalletElectrum) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	coinID, err := hex.DecodeString(txID)
 	if err == nil {
 		txHash, _, err := decodeCoinID(coinID)
@@ -607,7 +608,7 @@ func (btc *ExchangeWalletElectrum) WalletTransaction(ctx context.Context, txID s
 // If past is true, the transactions prior to the refID are returned, otherwise
 // the transactions after the refID are returned. n is the number of
 // transactions to return. If n is <= 0, all the transactions will be returned.
-func (btc *ExchangeWalletElectrum) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (btc *ExchangeWalletElectrum) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	txHistoryDB := btc.txDB()
 	if txHistoryDB == nil {
 		return nil, fmt.Errorf("tx database not initialized")

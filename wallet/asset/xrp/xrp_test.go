@@ -9,8 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
 )
 
@@ -465,7 +466,7 @@ func TestWalletTransactionFromTx(t *testing.T) {
 		meta      txMeta
 		validated bool
 		ledgerIdx uint64
-		check     func(t *testing.T, wt *asset.WalletTransaction)
+		check     func(t *testing.T, wt *txdb.WalletTransaction)
 	}{
 		{
 			name: "ignore non-payment transaction",
@@ -474,7 +475,7 @@ func TestWalletTransactionFromTx(t *testing.T) {
 				TransactionType: "AccountSet",
 				Hash:            "abc",
 			},
-			check: func(t *testing.T, wt *asset.WalletTransaction) {
+			check: func(t *testing.T, wt *txdb.WalletTransaction) {
 				if wt != nil {
 					t.Fatalf("expected nil wallet transaction, got %+v", wt)
 				}
@@ -495,7 +496,7 @@ func TestWalletTransactionFromTx(t *testing.T) {
 			},
 			validated: true,
 			ledgerIdx: 10,
-			check: func(t *testing.T, wt *asset.WalletTransaction) {
+			check: func(t *testing.T, wt *txdb.WalletTransaction) {
 				if wt != nil {
 					t.Fatalf("expected nil wallet transaction, got %+v", wt)
 				}
@@ -516,11 +517,11 @@ func TestWalletTransactionFromTx(t *testing.T) {
 			},
 			validated: true,
 			ledgerIdx: 11,
-			check: func(t *testing.T, wt *asset.WalletTransaction) {
+			check: func(t *testing.T, wt *txdb.WalletTransaction) {
 				if wt == nil {
 					t.Fatal("expected wallet transaction")
 				}
-				if wt.Type != asset.Receive || wt.Amount != 95 || wt.BlockNumber != 11 || !wt.Confirmed {
+				if wt.Type != txdb.Receive || wt.Amount != 95 || wt.BlockNumber != 11 || !wt.Confirmed {
 					t.Fatalf("unexpected receive tx: %+v", wt)
 				}
 				if wt.Recipient == nil || *wt.Recipient != walletAddr {
@@ -543,11 +544,11 @@ func TestWalletTransactionFromTx(t *testing.T) {
 			},
 			validated: true,
 			ledgerIdx: 12,
-			check: func(t *testing.T, wt *asset.WalletTransaction) {
+			check: func(t *testing.T, wt *txdb.WalletTransaction) {
 				if wt == nil {
 					t.Fatal("expected wallet transaction")
 				}
-				if wt.Type != asset.Send || wt.Amount != 250 || !wt.Rejected {
+				if wt.Type != txdb.Send || wt.Amount != 250 || !wt.Rejected {
 					t.Fatalf("unexpected send tx: %+v", wt)
 				}
 				if wt.Recipient == nil || *wt.Recipient != otherAddr {
@@ -568,7 +569,7 @@ func TestWalletTransactionFromTx(t *testing.T) {
 				Fee:  "12",
 				Hash: "ff",
 			},
-			check: func(t *testing.T, wt *asset.WalletTransaction) {
+			check: func(t *testing.T, wt *txdb.WalletTransaction) {
 				if wt != nil {
 					t.Fatalf("expected nil wallet transaction, got %+v", wt)
 				}

@@ -24,6 +24,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/keygen"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/base58"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
@@ -366,8 +367,8 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	w.nonce = nonce
 
 	recipient := address
-	wtx := &asset.WalletTransaction{
-		Type:      asset.Send,
+	wtx := &txdb.WalletTransaction{
+		Type:      txdb.Send,
 		ID:        txID,
 		Amount:    value,
 		Fees:      DefaultFee,
@@ -418,14 +419,14 @@ func (w *NearWallet) StandardSendFee(_ uint64) uint64 {
 	return DefaultFee
 }
 
-func (w *NearWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *NearWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if w.txDB == nil || req == nil {
-		return &asset.TxHistoryResponse{}, nil
+		return &txdb.TxHistoryResponse{}, nil
 	}
 	return w.txDB.getTxs(req)
 }
 
-func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	// Check the local DB first.
 	if w.txDB != nil {
 		wt, err := w.txDB.getTx(txID)
@@ -443,12 +444,12 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*asset
 		return nil, asset.CoinNotFoundError
 	}
 
-	txType := asset.Send
+	txType := txdb.Send
 	if result.Transaction.ReceiverID == w.accountID && result.Transaction.SignerID != w.accountID {
-		txType = asset.Receive
+		txType = txdb.Receive
 	}
 
-	wt := &asset.WalletTransaction{
+	wt := &txdb.WalletTransaction{
 		Type:      txType,
 		ID:        txID,
 		Amount:    result.transferAmount(),
@@ -456,7 +457,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*asset
 		Confirmed: result.Status.isSuccess(),
 	}
 
-	if txType == asset.Send {
+	if txType == txdb.Send {
 		recipient := result.Transaction.ReceiverID
 		wt.Recipient = &recipient
 	}
@@ -468,7 +469,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*asset
 	return wt, nil
 }
 
-func (w *NearWallet) PendingTransactions(_ context.Context) []*asset.WalletTransaction {
+func (w *NearWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
 	if w.txDB == nil {
 		return nil
 	}
@@ -477,7 +478,7 @@ func (w *NearWallet) PendingTransactions(_ context.Context) []*asset.WalletTrans
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return nil
 	}
-	txs := make([]*asset.WalletTransaction, 0, len(pending))
+	txs := make([]*txdb.WalletTransaction, 0, len(pending))
 	for _, wt := range pending {
 		txs = append(txs, wt.WalletTransaction)
 	}
@@ -672,8 +673,8 @@ func (w *NearWallet) scanChunk(chunkHash string, blockHeight uint64) {
 		}
 
 		sender := ct.SignerID
-		wtx := &asset.WalletTransaction{
-			Type:        asset.Receive,
+		wtx := &txdb.WalletTransaction{
+			Type:        txdb.Receive,
 			ID:          ct.Hash,
 			Amount:      amount,
 			BlockNumber: blockHeight,

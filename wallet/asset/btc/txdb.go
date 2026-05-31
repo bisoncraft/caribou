@@ -21,11 +21,12 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/dgraph-io/badger/v4"
 )
 
 type ExtendedWalletTx struct {
-	*asset.WalletTransaction
+	*txdb.WalletTransaction
 	// Create bond transactions are added to the store before
 	// they are submitted.
 	Submitted bool `json:"submitted"`
@@ -461,14 +462,14 @@ func (db *BadgerTxDB) MarkTxAsSubmitted(txID string) error {
 // are returned, and the value of past is ignored. If the transaction with
 // ID refID is not in the database, asset.CoinNotFoundError is returned.
 // Unsubmitted transactions are not returned.
-func (db *BadgerTxDB) GetTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (db *BadgerTxDB) GetTxs(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	db.wg.Add(1)
 	defer db.wg.Done()
 	if !db.running.Load() {
 		return nil, fmt.Errorf("database is not running")
 	}
 
-	var txs []*asset.WalletTransaction
+	var txs []*txdb.WalletTransaction
 	var moreAvailable bool
 	ignoreTypes := req.IngoreTypesLookup()
 	if err := db.View(func(txn *badger.Txn) error {
@@ -526,7 +527,7 @@ func (db *BadgerTxDB) GetTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespo
 			if past {
 				txs = append(txs, wt.WalletTransaction)
 			} else {
-				txs = append([]*asset.WalletTransaction{wt.WalletTransaction}, txs...)
+				txs = append([]*txdb.WalletTransaction{wt.WalletTransaction}, txs...)
 			}
 		}
 
@@ -534,7 +535,7 @@ func (db *BadgerTxDB) GetTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespo
 	}); err != nil {
 		return nil, err
 	}
-	return &asset.TxHistoryResponse{
+	return &txdb.TxHistoryResponse{
 		Txs:           txs,
 		MoreAvailable: moreAvailable,
 	}, nil
@@ -542,13 +543,13 @@ func (db *BadgerTxDB) GetTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespo
 
 // GetTx retrieves a transaction by its ID. If the transaction is not in
 // the database, asset.CoinNotFoundError is returned.
-func (db *BadgerTxDB) GetTx(txID string) (*asset.WalletTransaction, error) {
+func (db *BadgerTxDB) GetTx(txID string) (*txdb.WalletTransaction, error) {
 	db.wg.Add(1)
 	defer db.wg.Done()
 	if !db.running.Load() {
 		return nil, fmt.Errorf("database is not running")
 	}
-	r, err := db.GetTxs(&asset.TxHistoryRequest{
+	r, err := db.GetTxs(&txdb.TxHistoryRequest{
 		N:     1,
 		RefID: &txID,
 	})

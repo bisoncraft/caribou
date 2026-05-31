@@ -15,15 +15,16 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// extendedWalletTx is an asset.WalletTransaction extended with additional
+// extendedWalletTx is an txdb.WalletTransaction extended with additional
 // fields used for tracking transactions.
 type extendedWalletTx struct {
-	*asset.WalletTransaction
+	*txdb.WalletTransaction
 	BlockSubmitted uint64         `json:"blockSubmitted"`
 	SubmissionTime uint64         `json:"timeStamp"` // seconds
 	Nonce          *big.Int       `json:"nonce"`
@@ -105,14 +106,14 @@ func (t *extendedWalletTx) tx() (*types.Transaction, error) {
 type txDB interface {
 	util.Connector
 	storeTx(wt *extendedWalletTx) error
-	getTxs(tokenID *uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error)
+	getTxs(tokenID *uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	// getTx gets a single transaction. It is not an error if the tx is not known.
 	// In that case, a nil tx is returned.
 	getTx(txHash common.Hash) (*extendedWalletTx, error)
 	// getPendingTxs returns any recent txs that are not confirmed, ordered
 	// by nonce lowest-first.
 	getPendingTxs() ([]*extendedWalletTx, error)
-	getBridges(tokenID *uint32, n int, refID *common.Hash, past bool) ([]*asset.WalletTransaction, error)
+	getBridges(tokenID *uint32, n int, refID *common.Hash, past bool) ([]*txdb.WalletTransaction, error)
 	getPendingBridges(tokenID *uint32) ([]*extendedWalletTx, error)
 	getBridgeCompletions(initiationTxID string) ([]*extendedWalletTx, error)
 }
@@ -255,7 +256,7 @@ func NewTxDB(path string, log util.Logger, baseChainID uint32) (*TxDB, error) {
 		if !is {
 			return nil, fmt.Errorf("expected type *extendedWalletTx, got %T", wt)
 		}
-		if wt.WalletTransaction.Type != asset.InitiateBridge {
+		if wt.WalletTransaction.Type != txdb.InitiateBridge {
 			return nil, lexi.ErrNotIndexed
 		}
 		return bridgeIndexEntry(wt), nil
@@ -269,7 +270,7 @@ func NewTxDB(path string, log util.Logger, baseChainID uint32) (*TxDB, error) {
 		if !is {
 			return nil, fmt.Errorf("expected type *extendedWalletTx, got %T", wt)
 		}
-		if wt.WalletTransaction.Type != asset.InitiateBridge {
+		if wt.WalletTransaction.Type != txdb.InitiateBridge {
 			return nil, lexi.ErrNotIndexed
 		}
 		return bridgeAssetIndexEntry(wt, baseChainID), nil
@@ -305,7 +306,7 @@ func (db *TxDB) storeTx(wt *extendedWalletTx) error {
 		}
 
 		// If this is a bridge completion, update the bridge completions table
-		if wt.WalletTransaction.Type == asset.CompleteBridge {
+		if wt.WalletTransaction.Type == txdb.CompleteBridge {
 			return db.addBridgeCompletion(wt, txn)
 		}
 
@@ -381,7 +382,7 @@ func (db *TxDB) getTx(txHash common.Hash) (*extendedWalletTx, error) {
 // - If past=true: Results are in decreasing nonce order
 // - The referenced transaction is included in results
 // - Returns asset.CoinNotFoundError if refID not found
-func (db *TxDB) getTxs(assetIDPtr *uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (db *TxDB) getTxs(assetIDPtr *uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	var n, past = req.N, req.Past
 	var refID *common.Hash
 	if req.RefID != nil {
@@ -425,7 +426,7 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *asset.TxHistoryRequest) (*asset.
 		opts = append(opts, lexi.WithSeek(entry))
 	}
 
-	txs := make([]*asset.WalletTransaction, 0, n)
+	txs := make([]*txdb.WalletTransaction, 0, n)
 	var moreAvailable bool
 	ignoreTypes := req.IngoreTypesLookup()
 	iterFunc := func(it *lexi.Iter) error {
@@ -450,7 +451,7 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *asset.TxHistoryRequest) (*asset.
 	if err := idx.Iterate(assetID, iterFunc, opts...); err != nil {
 		return nil, err
 	}
-	return &asset.TxHistoryResponse{
+	return &txdb.TxHistoryResponse{
 		Txs:           txs,
 		MoreAvailable: moreAvailable,
 	}, nil
@@ -502,7 +503,7 @@ func (db *TxDB) getPendingTxs() (txs []*extendedWalletTx, err error) {
 // - If past=true: Results are in reverse chronological order
 // - The referenced transaction is included in results
 // - Returns asset.CoinNotFoundError if refID not found
-func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool) ([]*asset.WalletTransaction, error) {
+func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool) ([]*txdb.WalletTransaction, error) {
 	var opts []lexi.IterationOption
 	if past || refID == nil {
 		opts = append(opts, lexi.WithReverse())
@@ -513,7 +514,7 @@ func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool
 		if err != nil || wt == nil {
 			return nil, asset.CoinNotFoundError
 		}
-		if wt.Type != asset.InitiateBridge {
+		if wt.Type != txdb.InitiateBridge {
 			return nil, fmt.Errorf("referenced transaction is not a bridge initiation")
 		}
 
@@ -537,7 +538,7 @@ func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool
 		opts = append(opts, lexi.WithSeek(entry))
 	}
 
-	txs := make([]*asset.WalletTransaction, 0, n)
+	txs := make([]*txdb.WalletTransaction, 0, n)
 
 	iterFunc := func(it *lexi.Iter) error {
 		wt := new(extendedWalletTx)

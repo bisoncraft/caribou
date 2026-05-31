@@ -14,6 +14,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 func TestTxDB(t *testing.T) {
@@ -35,7 +36,7 @@ func TestTxDB(t *testing.T) {
 		wg.Wait()
 	}()
 
-	r, err := txHistoryStore.GetTxs(&asset.TxHistoryRequest{Past: true})
+	r, err := txHistoryStore.GetTxs(&txdb.TxHistoryRequest{Past: true})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
@@ -44,8 +45,8 @@ func TestTxDB(t *testing.T) {
 	}
 
 	tx1 := &ExtendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type:        asset.Send,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:        txdb.Send,
 			ID:          hex.EncodeToString(encode.RandomBytes(32)),
 			Amount:      1e8,
 			Fees:        1e5,
@@ -55,8 +56,8 @@ func TestTxDB(t *testing.T) {
 	}
 
 	tx2 := &ExtendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type:        asset.Receive,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:        txdb.Receive,
 			ID:          hex.EncodeToString(encode.RandomBytes(32)),
 			Amount:      1e8,
 			Fees:        3e5,
@@ -66,8 +67,8 @@ func TestTxDB(t *testing.T) {
 	}
 
 	tx3 := &ExtendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type:        asset.Swap,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:        txdb.Swap,
 			ID:          hex.EncodeToString(encode.RandomBytes(32)),
 			Amount:      1e8,
 			Fees:        2e5,
@@ -76,10 +77,10 @@ func TestTxDB(t *testing.T) {
 		Submitted: true,
 	}
 
-	GetTxsAndCheck := func(n int, refID *string, past bool, expected []*asset.WalletTransaction) {
+	GetTxsAndCheck := func(n int, refID *string, past bool, expected []*txdb.WalletTransaction) {
 		t.Helper()
 
-		r, err = txHistoryStore.GetTxs(&asset.TxHistoryRequest{
+		r, err = txHistoryStore.GetTxs(&txdb.TxHistoryRequest{
 			N:     n,
 			RefID: refID,
 			Past:  past,
@@ -121,7 +122,7 @@ func TestTxDB(t *testing.T) {
 		t.Fatalf("failed to store tx: %v", err)
 	}
 
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
 
 	err = txHistoryStore.MarkTxAsSubmitted(tx1.ID)
@@ -129,7 +130,7 @@ func TestTxDB(t *testing.T) {
 		t.Fatalf("failed to mark tx as submitted: %v", err)
 	}
 	tx1.Submitted = true
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx1.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
 
 	// Storing same pending tx twice should not change anything.
@@ -137,7 +138,7 @@ func TestTxDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to store tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx1.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
 
 	tx1.BlockNumber = 100
@@ -145,14 +146,14 @@ func TestTxDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to store tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx1.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
 
 	err = txHistoryStore.StoreTx(tx2)
 	if err != nil {
 		t.Fatalf("failed to store tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx2.WalletTransaction, tx1.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx2.WalletTransaction, tx1.WalletTransaction})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx2, tx1})
 
 	tx2.BlockNumber = 99
@@ -161,35 +162,35 @@ func TestTxDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to store tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx1.WalletTransaction, tx2.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction, tx2.WalletTransaction})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
 
 	err = txHistoryStore.StoreTx(tx3)
 	if err != nil {
 		t.Fatalf("failed to store tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx3.WalletTransaction, tx1.WalletTransaction, tx2.WalletTransaction})
-	GetTxsAndCheck(2, &tx1.ID, false, []*asset.WalletTransaction{tx3.WalletTransaction, tx1.WalletTransaction})
-	GetTxsAndCheck(2, &tx1.ID, true, []*asset.WalletTransaction{tx1.WalletTransaction, tx2.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx3.WalletTransaction, tx1.WalletTransaction, tx2.WalletTransaction})
+	GetTxsAndCheck(2, &tx1.ID, false, []*txdb.WalletTransaction{tx3.WalletTransaction, tx1.WalletTransaction})
+	GetTxsAndCheck(2, &tx1.ID, true, []*txdb.WalletTransaction{tx1.WalletTransaction, tx2.WalletTransaction})
 	getPendingTxsAndCheck([]*ExtendedWalletTx{tx3, tx1})
 
 	err = txHistoryStore.RemoveTx(tx1.ID)
 	if err != nil {
 		t.Fatalf("failed to remove tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx3.WalletTransaction, tx2.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx3.WalletTransaction, tx2.WalletTransaction})
 
 	err = txHistoryStore.RemoveTx(tx2.ID)
 	if err != nil {
 		t.Fatalf("failed to remove tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{tx3.WalletTransaction})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx3.WalletTransaction})
 
 	err = txHistoryStore.RemoveTx(tx3.ID)
 	if err != nil {
 		t.Fatalf("failed to remove tx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*asset.WalletTransaction{})
+	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{})
 
 	_, err = txHistoryStore.GetTx(tx2.ID)
 	if !errors.Is(err, asset.CoinNotFoundError) {

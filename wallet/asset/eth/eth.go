@@ -27,6 +27,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
 	multibal "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/multibalance"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/go-bip39"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	"github.com/decred/dcrd/hdkeychain/v3"
@@ -1119,7 +1120,7 @@ type genBridgeTxResult struct {
 
 type genTxResult struct {
 	tx        *types.Transaction
-	txType    asset.TransactionType
+	txType    txdb.TransactionType
 	amt       uint64
 	recipient *string
 	bridge    *genBridgeTxResult
@@ -1184,7 +1185,7 @@ func (w *assetWallet) withNonce(ctx context.Context, f transactionGenerator) (er
 
 	if genTxResult != nil {
 		et := w.extendedTx(genTxResult)
-		et.Confirms = &asset.Confirms{Target: uint32(w.finalizeConfs)}
+		et.Confirms = &txdb.Confirms{Target: uint32(w.finalizeConfs)}
 		et.Timestamp = uint64(time.Now().Unix())
 		w.pendingTxs = append(w.pendingTxs, et)
 		if n.Cmp(w.pendingNonceAt) >= 0 {
@@ -1824,7 +1825,7 @@ func (w *assetWallet) approveBridgeContract(ctx context.Context, bridge bridge, 
 
 		return &genTxResult{
 			tx:     tx,
-			txType: asset.ApproveToken,
+			txType: txdb.ApproveToken,
 			amt:    w.atomize(unlimitedAllowance),
 		}, nil
 	})
@@ -1901,7 +1902,7 @@ func (w *assetWallet) unapproveBridgeContract(ctx context.Context, bridge bridge
 
 		return &genTxResult{
 			tx:     tx,
-			txType: asset.ApproveToken,
+			txType: txdb.ApproveToken,
 			amt:    w.atomize(new(big.Int)),
 		}, nil
 	})
@@ -1968,7 +1969,7 @@ func (w *assetWallet) initiateBridge(ctx context.Context, amt uint64, dest uint3
 
 		return &genTxResult{
 			tx:     tx,
-			txType: asset.InitiateBridge,
+			txType: txdb.InitiateBridge,
 			amt:    amt,
 			bridge: &genBridgeTxResult{
 				counterpartAssetID: dest,
@@ -2041,13 +2042,13 @@ func (w *assetWallet) MarkBridgeComplete(initiationTxID string, completionTxIDs 
 	w.bridgeManager.markBridgeComplete(initiationTxID, completionTxIDs, amtReceived, fees, complete)
 }
 
-func (w *assetWallet) pendingBridges() ([]*asset.WalletTransaction, error) {
+func (w *assetWallet) pendingBridges() ([]*txdb.WalletTransaction, error) {
 	pendingBridges, err := w.txDB.getPendingBridges(&w.assetID)
 	if err != nil {
 		return nil, fmt.Errorf("error getting pending bridges: %w", err)
 	}
 
-	wt := make([]*asset.WalletTransaction, 0, len(pendingBridges))
+	wt := make([]*txdb.WalletTransaction, 0, len(pendingBridges))
 	for _, pb := range pendingBridges {
 		wt = append(wt, pb.WalletTransaction)
 	}
@@ -2056,11 +2057,11 @@ func (w *assetWallet) pendingBridges() ([]*asset.WalletTransaction, error) {
 }
 
 // PendingBridges lists all uncompleted bridge transactions on the blockchain.
-func (w *assetWallet) PendingBridges() ([]*asset.WalletTransaction, error) {
+func (w *assetWallet) PendingBridges() ([]*txdb.WalletTransaction, error) {
 	return w.pendingBridges()
 }
 
-func (w *assetWallet) bridgeHistory(n int, refID *string, past bool) ([]*asset.WalletTransaction, error) {
+func (w *assetWallet) bridgeHistory(n int, refID *string, past bool) ([]*txdb.WalletTransaction, error) {
 	var refHash *common.Hash
 	if refID != nil {
 		rh := common.HexToHash(*refID)
@@ -2084,11 +2085,11 @@ func (w *assetWallet) bridgeHistory(n int, refID *string, past bool) ([]*asset.W
 // - If past = true: Results are ordered by completion time (descending).
 // - The referenced transaction is included in the results.
 // - Returns asset.CoinNotFoundError if the refID is not found.
-func (w *assetWallet) BridgeHistory(n int, refID *string, past bool) ([]*asset.WalletTransaction, error) {
+func (w *assetWallet) BridgeHistory(n int, refID *string, past bool) ([]*txdb.WalletTransaction, error) {
 	return w.bridgeHistory(n, refID, past)
 }
 
-func (w *assetWallet) completeBridge(ctx context.Context, data []byte, bridgeTx *asset.BridgeCounterpartTx, amount uint64, bridge bridge, bridgeName string) (txID string, err error) {
+func (w *assetWallet) completeBridge(ctx context.Context, data []byte, bridgeTx *txdb.BridgeCounterpartTx, amount uint64, bridge bridge, bridgeName string) (txID string, err error) {
 	maxFeeRate, tipRate, err := w.recommendedMaxFeeRate(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error calculating bridge fee rate: %w", err)
@@ -2117,7 +2118,7 @@ func (w *assetWallet) completeBridge(ctx context.Context, data []byte, bridgeTx 
 
 		return &genTxResult{
 			tx:     tx,
-			txType: asset.CompleteBridge,
+			txType: txdb.CompleteBridge,
 			amt:    amtInTx,
 			bridge: &genBridgeTxResult{
 				counterpartAssetID: bridgeTx.AssetID,
@@ -2131,7 +2132,7 @@ func (w *assetWallet) completeBridge(ctx context.Context, data []byte, bridgeTx 
 
 // completeBridgeFollowUp submits a follow-up completion transaction for a bridge.
 // This is only required for withdrawing POL from Polygon POS to Ethereum.
-func (w *assetWallet) completeBridgeFollowUp(ctx context.Context, data []byte, initialCompletionID string, amount uint64, bridgeTx *asset.BridgeCounterpartTx, bridge bridge, bridgeName string) (txID string, err error) {
+func (w *assetWallet) completeBridgeFollowUp(ctx context.Context, data []byte, initialCompletionID string, amount uint64, bridgeTx *txdb.BridgeCounterpartTx, bridge bridge, bridgeName string) (txID string, err error) {
 	maxFeeRate, tipRate, err := w.recommendedMaxFeeRate(ctx)
 	if err != nil {
 		return "", fmt.Errorf("error calculating bridge fee rate: %w", err)
@@ -2152,7 +2153,7 @@ func (w *assetWallet) completeBridgeFollowUp(ctx context.Context, data []byte, i
 
 		return &genTxResult{
 			tx:     tx,
-			txType: asset.CompleteBridge,
+			txType: txdb.CompleteBridge,
 			amt:    amount,
 			bridge: &genBridgeTxResult{
 				counterpartAssetID:         bridgeTx.AssetID,
@@ -2173,7 +2174,7 @@ func (w *assetWallet) getLatestBridgeCompletion(initiationTxID string) (*extende
 	// Check if the completion is still pending
 	w.nonceMtx.RLock()
 	for _, tx := range w.pendingTxs {
-		if tx.Type == asset.CompleteBridge {
+		if tx.Type == txdb.CompleteBridge {
 			if tx.BridgeCounterpartTx == nil || len(tx.BridgeCounterpartTx.IDs) < 1 {
 				w.log.Warnf("bridge completion transaction %s has no counterpart transaction", tx.ID)
 				continue
@@ -2219,7 +2220,7 @@ func (w *assetWallet) getLatestBridgeCompletion(initiationTxID string) (*extende
 //     (unless someone else has already called it), and if our exit has not been
 //     processed, we just wait until someone else calls it again. This will
 //     handle the vast majority of cases.
-func (w *assetWallet) completeBridgeIfNeeded(ctx context.Context, bridgeTx *asset.BridgeCounterpartTx, amount uint64, data []byte, bridgeName string) error {
+func (w *assetWallet) completeBridgeIfNeeded(ctx context.Context, bridgeTx *txdb.BridgeCounterpartTx, amount uint64, data []byte, bridgeName string) error {
 	bridge, ok := w.bridges[bridgeName]
 	if !ok {
 		return fmt.Errorf("bridge %s not found", bridgeName)
@@ -2330,7 +2331,7 @@ func (w *assetWallet) completeBridgeIfNeeded(ctx context.Context, bridgeTx *asse
 
 // CompleteBridge completes a bridge by submitting a transaction that mints
 // or unlocks coins on the destination chain.
-func (w *assetWallet) CompleteBridge(ctx context.Context, bridgeTx *asset.BridgeCounterpartTx, amount uint64, data []byte, bridgeName string) error {
+func (w *assetWallet) CompleteBridge(ctx context.Context, bridgeTx *txdb.BridgeCounterpartTx, amount uint64, data []byte, bridgeName string) error {
 	return w.completeBridgeIfNeeded(ctx, bridgeTx, amount, data, bridgeName)
 }
 
@@ -2969,7 +2970,7 @@ func (w *assetWallet) sumPendingTxs() (out, in uint64) {
 
 		var txOut, txIn uint64
 		if txAssetID == w.assetID {
-			if asset.IncomingTxType(pendingTx.Type) {
+			if txdb.IncomingTxType(pendingTx.Type) {
 				txIn = pendingTx.Amount
 			} else {
 				txOut = pendingTx.Amount
@@ -3187,7 +3188,7 @@ func (w *assetWallet) balanceWithTxPool() (*Balance, error) {
 // 	v := big.NewInt(GweiFactor)
 // 	spoofTx := types.NewTransaction(tx.Nonce(), w.addr, v, defaultSendGasLimit, v, nil)
 // 	spoofHash := tx.Hash()
-// 	pendingSpoofTx := w.extendedTx(spoofTx, asset.SelfSend, GweiFactor)
+// 	pendingSpoofTx := w.extendedTx(spoofTx, txdb.SelfSend, GweiFactor)
 // 	w.nonceMtx.Lock()
 // 	for i, pendingTx := range w.pendingTxs {
 // 		if pendingTx.txHash == txHash {
@@ -3218,12 +3219,12 @@ func (w *ETHWallet) sendToAddr(addr common.Address, amt uint64, maxFeeRate, tipR
 	recipient := addr.Hex()
 	res := &genTxResult{
 		tx:        nil,
-		txType:    asset.Send,
+		txType:    txdb.Send,
 		amt:       amt,
 		recipient: &recipient,
 	}
 	if addr == w.addr {
-		res.txType = asset.SelfSend
+		res.txType = txdb.SelfSend
 	}
 
 	return res.tx, w.withNonce(w.ctx, func(nonce *big.Int) (*genTxResult, error) {
@@ -3263,12 +3264,12 @@ func (w *TokenWallet) sendToAddr(addr common.Address, amt uint64, maxFeeRate, ti
 	recipient := addr.Hex()
 	res := &genTxResult{
 		tx:        nil,
-		txType:    asset.Send,
+		txType:    txdb.Send,
 		amt:       amt,
 		recipient: &recipient,
 	}
 	if addr == w.addr {
-		res.txType = asset.SelfSend
+		res.txType = txdb.SelfSend
 	}
 
 	tc, err := w.tokenContractorOrErr()
@@ -3315,7 +3316,7 @@ func (w *assetWallet) loadTokenContractor() error {
 
 // emitTransactionNote sends a TransactionNote to the base asset wallet and
 // also the wallet, if applicable.
-func (w *baseWallet) emitTransactionNote(tx *asset.WalletTransaction, new bool) {
+func (w *baseWallet) emitTransactionNote(tx *txdb.WalletTransaction, new bool) {
 	w.walletsMtx.RLock()
 	baseWallet, found := w.wallets[w.baseChainID]
 	var tokenWallet *assetWallet
@@ -3378,7 +3379,7 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
 		// We're just waiting on confs. Don't check again until we expect to be
 		// finalized.
 		confsChanged := pendingTx.Confirms == nil || pendingTx.Confirms.Current != uint32(confs)
-		pendingTx.Confirms = &asset.Confirms{
+		pendingTx.Confirms = &txdb.Confirms{
 			Current: uint32(confs),
 			Target:  uint32(w.finalizeConfs),
 		}
@@ -3494,7 +3495,7 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
 			oldConfs = pendingTx.Confirms.Current
 		}
 		updated = confs != uint64(oldConfs)
-		pendingTx.Confirms = &asset.Confirms{
+		pendingTx.Confirms = &txdb.Confirms{
 			Current: uint32(confs),
 			Target:  uint32(w.finalizeConfs),
 		}
@@ -3649,13 +3650,13 @@ const (
 // TransactionActionNote is used to request user action on transactions in
 // abnormal states.
 type TransactionActionNote struct {
-	Tx      *asset.WalletTransaction `json:"tx"`
-	Nonce   uint64                   `json:"nonce,omitempty"`
-	NewFees uint64                   `json:"newFees,omitempty"`
+	Tx      *txdb.WalletTransaction `json:"tx"`
+	Nonce   uint64                  `json:"nonce,omitempty"`
+	NewFees uint64                  `json:"newFees,omitempty"`
 }
 
 // newLostNonceNote is information regarding a tx that appears to be lost.
-func newLostNonceNote(tx asset.WalletTransaction, nonce uint64) *TransactionActionNote {
+func newLostNonceNote(tx txdb.WalletTransaction, nonce uint64) *TransactionActionNote {
 	return &TransactionActionNote{
 		Tx:    &tx,
 		Nonce: nonce,
@@ -3663,7 +3664,7 @@ func newLostNonceNote(tx asset.WalletTransaction, nonce uint64) *TransactionActi
 }
 
 // newLowFeeNote is data about a tx that is stuck in mempool with too-low fees.
-func newLowFeeNote(tx asset.WalletTransaction, newFees uint64) *TransactionActionNote {
+func newLowFeeNote(tx txdb.WalletTransaction, newFees uint64) *TransactionActionNote {
 	return &TransactionActionNote{
 		Tx:      &tx,
 		NewFees: newFees,
@@ -3845,7 +3846,7 @@ func (w *assetWallet) userActionNonceReplacement(actionB []byte) error {
 		recipient := w.addr.Hex()
 		newPendingTx := w.extendedTx(&genTxResult{
 			tx:        replacementTx,
-			txType:    asset.Unknown,
+			txType:    txdb.Unknown,
 			amt:       0,
 			recipient: &recipient,
 		})
@@ -3924,7 +3925,7 @@ func (w *assetWallet) userActionRecoverNonces(actionB []byte) error {
 			recipient := w.addr.Hex()
 			pendingTx := w.extendAndStoreTx(&genTxResult{
 				tx:        tx,
-				txType:    asset.SelfSend,
+				txType:    txdb.SelfSend,
 				amt:       0,
 				recipient: &recipient,
 			}, nil)
@@ -4040,7 +4041,7 @@ func (w *baseWallet) extendAndStoreTx(genTxResult *genTxResult, tokenAssetID *ui
 	}
 
 	wt := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			Type:      genTxResult.txType,
 			ID:        genTxResult.tx.Hash().String(),
 			Amount:    genTxResult.amt,
@@ -4062,7 +4063,7 @@ func (w *baseWallet) extendAndStoreTx(genTxResult *genTxResult, tokenAssetID *ui
 	}
 
 	if genTxResult.bridge != nil {
-		wt.BridgeCounterpartTx = &asset.BridgeCounterpartTx{
+		wt.BridgeCounterpartTx = &txdb.BridgeCounterpartTx{
 			AssetID: genTxResult.bridge.counterpartAssetID,
 		}
 		if genTxResult.bridge.counterpartTxID != "" {
@@ -4084,7 +4085,7 @@ func (w *baseWallet) extendAndStoreTx(genTxResult *genTxResult, tokenAssetID *ui
 // If past is true, the transactions prior to the refID are returned, otherwise
 // the transactions after the refID are returned. n is the number of
 // transactions to return. If n is <= 0, all the transactions will be returned.
-func (w *ETHWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *ETHWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	return w.txDB.getTxs(nil, req)
 }
 
@@ -4094,11 +4095,11 @@ func (w *ETHWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResp
 // returned, otherwise the transactions after the refID are returned. n is the
 // number of transactions to return. If n is <= 0, all the transactions will be
 // returned.
-func (w *TokenWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *TokenWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	return w.txDB.getTxs(&w.assetID, req)
 }
 
-func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.Hash) (*asset.WalletTransaction, error) {
+func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.Hash) (*txdb.WalletTransaction, error) {
 	tx, blockHeight, err := w.node.getTransaction(ctx, txHash)
 	if err != nil {
 		return nil, err
@@ -4109,8 +4110,8 @@ func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.H
 	}
 
 	addr := w.addr.String()
-	return &asset.WalletTransaction{
-		Type:      asset.Receive,
+	return &txdb.WalletTransaction{
+		Type:      txdb.Receive,
 		ID:        tx.Hash().String(),
 		Amount:    w.atomize(tx.Value()),
 		Recipient: &addr,
@@ -4126,9 +4127,9 @@ func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.H
 
 // WalletTransaction returns a transaction that either the wallet has made or
 // one in which the wallet has received funds.
-func (w *ETHWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *ETHWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	txHash := common.HexToHash(txID)
-	var localTx asset.WalletTransaction
+	var localTx txdb.WalletTransaction
 	if w.withLocalTxRead(txHash, func(wt *extendedWalletTx) {
 		localTx = *wt.WalletTransaction
 	}) {
@@ -4154,7 +4155,7 @@ func (w *TokenWallet) extractValueFromTransferLog(receipt *types.Receipt) (uint6
 	return tc.parseTransfer(receipt)
 }
 
-func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common.Hash) (*asset.WalletTransaction, error) {
+func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common.Hash) (*txdb.WalletTransaction, error) {
 	receipt, _, err := w.node.transactionAndReceipt(ctx, txHash)
 	if err != nil {
 		return nil, err
@@ -4164,8 +4165,8 @@ func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common
 	value, err := w.extractValueFromTransferLog(receipt)
 	if err != nil {
 		w.log.Errorf("Error extracting value from transfer log: %v", err)
-		return &asset.WalletTransaction{
-			Type:        asset.Unknown,
+		return &txdb.WalletTransaction{
+			Type:        txdb.Unknown,
 			ID:          txHash.String(),
 			BlockNumber: uint64(blockHeight),
 			Confirmed:   blockHeight > 0,
@@ -4173,8 +4174,8 @@ func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common
 	}
 
 	addr := w.addr.String()
-	return &asset.WalletTransaction{
-		Type:        asset.Receive,
+	return &txdb.WalletTransaction{
+		Type:        txdb.Receive,
 		ID:          txHash.String(),
 		BlockNumber: uint64(blockHeight),
 		TokenID:     &w.assetID,
@@ -4187,9 +4188,9 @@ func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common
 	}, nil
 }
 
-func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	txHash := common.HexToHash(txID)
-	var localTx asset.WalletTransaction
+	var localTx txdb.WalletTransaction
 	if w.withLocalTxRead(txHash, func(wt *extendedWalletTx) {
 		localTx = *wt.WalletTransaction
 	}) {
@@ -4205,10 +4206,10 @@ func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*asse
 }
 
 // PendingTransactions loads wallet transactions that are not yet confirmed.
-func (w *assetWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
+func (w *assetWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {
 	w.nonceMtx.RLock()
 	defer w.nonceMtx.RUnlock()
-	txs := make([]*asset.WalletTransaction, 0)
+	txs := make([]*txdb.WalletTransaction, 0)
 	for _, tx := range w.pendingTxs {
 		txAssetID := w.baseChainID
 		if tx.TokenID != nil {

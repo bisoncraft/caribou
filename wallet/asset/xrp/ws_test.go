@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
@@ -123,7 +125,7 @@ func TestHandleWSMessageTransactionEmitsBalanceChange(t *testing.T) {
 	if !txNote.New {
 		t.Fatal("expected websocket receive to be reported as a new transaction")
 	}
-	if txNote.Transaction.Type != asset.Receive {
+	if txNote.Transaction.Type != txdb.Receive {
 		t.Fatalf("transaction type = %v, want receive", txNote.Transaction.Type)
 	}
 	if txNote.Transaction.BlockNumber != 321 || !txNote.Transaction.Confirmed {

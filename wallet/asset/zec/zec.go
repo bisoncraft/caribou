@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
@@ -933,9 +935,9 @@ func (w *zecWallet) Send(addr string, value, feeRate uint64) (asset.Coin, error)
 	if err != nil {
 		w.log.Errorf("error checking if address %q is owned: %v", addr, err)
 	}
-	txType := asset.Send
+	txType := txdb.Send
 	if selfSend {
-		txType = asset.SelfSend
+		txType = txdb.SelfSend
 	}
 
 	tx, err := getTransaction(w, txHash)
@@ -943,7 +945,7 @@ func (w *zecWallet) Send(addr string, value, feeRate uint64) (asset.Coin, error)
 		return nil, fmt.Errorf("unable to find tx after send %s: %v", txHash, err)
 	}
 
-	w.addTxToHistory(&asset.WalletTransaction{
+	w.addTxToHistory(&txdb.WalletTransaction{
 		Type:   txType,
 		ID:     txHash.String(),
 		Amount: value,
@@ -1280,7 +1282,7 @@ func (w *zecWallet) listSinceBlock(start int64) ([]btcjson.ListTransactionsResul
 	return res, nil
 }
 
-func (w *zecWallet) addTxToHistory(wt *asset.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
+func (w *zecWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
 	txHistoryDB := w.txDB()
 	if txHistoryDB == nil {
 		return
@@ -1405,7 +1407,7 @@ func (w *zecWallet) startTxHistoryDB(ctx context.Context) (*sync.WaitGroup, erro
 
 // WalletTransaction returns a transaction that either the wallet has made or
 // one in which the wallet has received funds.
-func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*txdb.WalletTransaction, error) {
 	coinID, err := hex.DecodeString(txID)
 	if err == nil {
 		txHash, _, err := decodeCoinID(coinID)
@@ -1467,10 +1469,10 @@ func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*asset.Wa
 }
 
 // PendingTransactions loads wallet transactions that are not yet confirmed.
-func (w *zecWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
+func (w *zecWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {
 	w.pendingTxsMtx.RLock()
 	defer w.pendingTxsMtx.RUnlock()
-	txs := make([]*asset.WalletTransaction, 0, len(w.pendingTxs))
+	txs := make([]*txdb.WalletTransaction, 0, len(w.pendingTxs))
 	for _, tx := range w.pendingTxs {
 		if tx.Confirmed {
 			continue
@@ -1486,7 +1488,7 @@ func (w *zecWallet) PendingTransactions(ctx context.Context) []*asset.WalletTran
 // If past is true, the transactions prior to the refID are returned, otherwise
 // the transactions after the refID are returned. n is the number of
 // transactions to return. If n is <= 0, all the transactions will be returned.
-func (w *zecWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *zecWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	txHistoryDB := w.txDB()
 	if txHistoryDB == nil {
 		return nil, fmt.Errorf("tx database not initialized")
@@ -1499,7 +1501,7 @@ const sendCategory = "send"
 
 // idUnknownTx identifies the type and details of a transaction either made
 // or received by the wallet.
-func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.WalletTransaction, error) {
+func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.WalletTransaction, error) {
 	txHash, err := chainhash.NewHashFromStr(tx.TxID)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding tx hash %s: %v", tx.TxID, err)
@@ -1516,7 +1518,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 
 	fee := msgTx.RequiredTxFeesZIP317()
 
-	txIsBond := func(msgTx *zTx) (bool, *asset.BondTxInfo) {
+	txIsBond := func(msgTx *zTx) (bool, *txdb.BondTxInfo) {
 		if len(msgTx.TxOut) < 2 {
 			return false, nil
 		}
@@ -1525,15 +1527,15 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		if err != nil {
 			return false, nil
 		}
-		return true, &asset.BondTxInfo{
+		return true, &txdb.BondTxInfo{
 			AccountID: acctID[:],
 			LockTime:  uint64(lockTime),
 			BondID:    pkHash[:],
 		}
 	}
 	if isBond, bondInfo := txIsBond(msgTx); isBond {
-		return &asset.WalletTransaction{
-			Type:     asset.CreateBond,
+		return &txdb.WalletTransaction{
+			Type:     txdb.CreateBond,
 			ID:       tx.TxID,
 			Amount:   uint64(msgTx.TxOut[0].Value),
 			Fees:     fee,
@@ -1552,8 +1554,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		return
 	}
 	if v := txPaysToScriptHash(msgTx); v > 0 {
-		return &asset.WalletTransaction{
-			Type:   asset.SwapOrSend,
+		return &txdb.WalletTransaction{
+			Type:   txdb.SwapOrSend,
 			ID:     tx.TxID,
 			Amount: v,
 			Fees:   fee,
@@ -1588,8 +1590,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		return containsContractAtPushIndex(msgTx, 4, contractIsSwap)
 	}
 	if redeemsSwap(msgTx) {
-		return &asset.WalletTransaction{
-			Type:   asset.Redeem,
+		return &txdb.WalletTransaction{
+			Type:   txdb.Redeem,
 			ID:     tx.TxID,
 			Amount: totalOut + fee,
 			Fees:   fee,
@@ -1599,8 +1601,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		return containsContractAtPushIndex(msgTx, 3, contractIsSwap)
 	}
 	if refundsSwap(msgTx) {
-		return &asset.WalletTransaction{
-			Type:   asset.Refund,
+		return &txdb.WalletTransaction{
+			Type:   txdb.Refund,
 			ID:     tx.TxID,
 			Amount: totalOut + fee,
 			Fees:   fee,
@@ -1608,15 +1610,15 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 	}
 
 	// Bond refunds
-	redeemsBond := func(msgTx *zTx) (bool, *asset.BondTxInfo) {
-		var bondInfo *asset.BondTxInfo
+	redeemsBond := func(msgTx *zTx) (bool, *txdb.BondTxInfo) {
+		var bondInfo *txdb.BondTxInfo
 		isBond := func(contract []byte) bool {
 			const scriptVer = 0
 			lockTime, pkHash, err := btc.ExtractBondDetailsV0(scriptVer, contract)
 			if err != nil {
 				return false
 			}
-			bondInfo = &asset.BondTxInfo{
+			bondInfo = &txdb.BondTxInfo{
 				AccountID: []byte{}, // Could look for the bond tx to get this, I guess.
 				LockTime:  uint64(lockTime),
 				BondID:    pkHash[:],
@@ -1626,8 +1628,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		return containsContractAtPushIndex(msgTx, 2, isBond), bondInfo
 	}
 	if isBondRedemption, bondInfo := redeemsBond(msgTx); isBondRedemption {
-		return &asset.WalletTransaction{
-			Type:     asset.RedeemBond,
+		return &txdb.WalletTransaction{
+			Type:     txdb.RedeemBond,
 			ID:       tx.TxID,
 			Amount:   totalOut,
 			Fees:     fee,
@@ -1665,8 +1667,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 	}
 
 	if tx.Category == sendCategory && allOutputsPayUs(msgTx) && len(msgTx.TxIn) == 1 {
-		return &asset.WalletTransaction{
-			Type: asset.Split,
+		return &txdb.WalletTransaction{
+			Type: txdb.Split,
 			ID:   tx.TxID,
 			Fees: fee,
 		}, nil
@@ -1734,11 +1736,11 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 	}
 
 	if tx.Category == sendCategory {
-		txType := asset.Send
+		txType := txdb.Send
 		if allOutputsPayUs(msgTx) {
-			txType = asset.SelfSend
+			txType = txdb.SelfSend
 		}
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			Type:      txType,
 			ID:        tx.TxID,
 			Amount:    out,
@@ -1747,8 +1749,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		}, nil
 	}
 
-	return &asset.WalletTransaction{
-		Type:      asset.Receive,
+	return &txdb.WalletTransaction{
+		Type:      txdb.Receive,
 		ID:        tx.TxID,
 		Amount:    in,
 		Fees:      fee,
@@ -1919,7 +1921,7 @@ func (w *zecWallet) syncTxHistory(tip uint64) {
 		} else {
 			tx.Confirmed = false
 			updated = tx.Confirms == nil || tx.Confirms.Current != uint32(confs)
-			tx.Confirms = &asset.Confirms{
+			tx.Confirms = &txdb.Confirms{
 				Current: uint32(confs),
 				Target:  confTxFinality,
 			}

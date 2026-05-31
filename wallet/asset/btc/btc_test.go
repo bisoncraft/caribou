@@ -22,6 +22,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
@@ -1391,7 +1392,7 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 		tx             *wire.MsgTx
 		ownedAddresses map[string]bool
 		ownsAddress    bool
-		exp            *asset.WalletTransaction
+		exp            *txdb.WalletTransaction
 	}
 
 	tests := []*test{
@@ -1401,8 +1402,8 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Send: true,
 			},
 			tx: swapTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.SwapOrSend,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.SwapOrSend,
 				ID:     swapTx.TxHash().String(),
 				Amount: toSatoshi(1),
 			},
@@ -1414,8 +1415,8 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Fee:  &redeemFee,
 			},
 			tx: redemptionTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.Redeem,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.Redeem,
 				ID:     redemptionTx.TxHash().String(),
 				Amount: toSatoshi(5),
 				Fees:   toSatoshi(redeemFee),
@@ -1428,12 +1429,12 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Fee:  floatPtr(0.0000222),
 			},
 			tx: createBondTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.CreateBond,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.CreateBond,
 				ID:     createBondTx.TxHash().String(),
 				Amount: toSatoshi(2),
 				Fees:   toSatoshi(0.0000222),
-				BondInfo: &asset.BondTxInfo{
+				BondInfo: &txdb.BondTxInfo{
 					AccountID: accountID,
 					BondID:    bondID,
 					LockTime:  uint64(bondLockTime),
@@ -1446,11 +1447,11 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Send: false,
 			},
 			tx: redeemBondTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.RedeemBond,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.RedeemBond,
 				ID:     redeemBondTx.TxHash().String(),
 				Amount: toSatoshi(5),
-				BondInfo: &asset.BondTxInfo{
+				BondInfo: &txdb.BondTxInfo{
 					AccountID: []byte{},
 					BondID:    bondID,
 					LockTime:  uint64(bondLockTime),
@@ -1463,8 +1464,8 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Send: true,
 			},
 			tx: accelerationTx,
-			exp: &asset.WalletTransaction{
-				Type: asset.Acceleration,
+			exp: &txdb.WalletTransaction{
+				Type: txdb.Acceleration,
 				ID:   accelerationTx.TxHash().String(),
 			},
 			ownsAddress: true,
@@ -1475,8 +1476,8 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Send: true,
 			},
 			tx: splitTx,
-			exp: &asset.WalletTransaction{
-				Type: asset.Split,
+			exp: &txdb.WalletTransaction{
+				Type: txdb.Split,
 				ID:   splitTx.TxHash().String(),
 			},
 			ownsAddress: true,
@@ -1487,8 +1488,8 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				Send: true,
 			},
 			tx: sendTx,
-			exp: &asset.WalletTransaction{
-				Type:      asset.Send,
+			exp: &txdb.WalletTransaction{
+				Type:      txdb.Send,
 				ID:        sendTx.TxHash().String(),
 				Amount:    toSatoshi(4),
 				Recipient: &cpAddrStr,
@@ -1499,8 +1500,8 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 			name: "receive",
 			ltr:  &ListTransactionsResult{},
 			tx:   receiveTx,
-			exp: &asset.WalletTransaction{
-				Type:      asset.Receive,
+			exp: &txdb.WalletTransaction{
+				Type:      txdb.Receive,
 				ID:        receiveTx.TxHash().String(),
 				Amount:    toSatoshi(4),
 				Recipient: &ourAddrStr,

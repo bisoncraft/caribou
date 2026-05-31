@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
@@ -372,8 +374,8 @@ func TestTxDB(t *testing.T) {
 	makeSend := func(id string, block uint64, confirmed bool) *dbTx {
 		addr := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
 		return &dbTx{
-			WalletTransaction: &asset.WalletTransaction{
-				Type:        asset.Send,
+			WalletTransaction: &txdb.WalletTransaction{
+				Type:        txdb.Send,
 				ID:          id,
 				Amount:      1_000_000,
 				Fees:        12,
@@ -417,8 +419,8 @@ func TestTxDB(t *testing.T) {
 
 	// Pending tx (BlockNumber==0).
 	txPending := &dbTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type: asset.Send,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type: txdb.Send,
 			ID:   "PENDING001",
 		},
 		LastLedgerSequence: 300,
@@ -437,8 +439,8 @@ func TestTxDB(t *testing.T) {
 
 	// Expired tx: excluded from getPendingTxs, included in getTxs.
 	txExpired := &dbTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type:     asset.Send,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:     txdb.Send,
 			ID:       "EXPIRED001",
 			Rejected: true,
 		},
@@ -457,7 +459,7 @@ func TestTxDB(t *testing.T) {
 	}
 
 	// getTxs: includes confirmed and expired, excludes unconfirmed-non-expired.
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 10})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("getTxs: %v", err)
 	}
@@ -483,7 +485,7 @@ func TestTxDB(t *testing.T) {
 		}
 	}
 
-	resp2, err := db.getTxs(&asset.TxHistoryRequest{N: 2})
+	resp2, err := db.getTxs(&txdb.TxHistoryRequest{N: 2})
 	if err != nil {
 		t.Fatalf("getTxs N=2: %v", err)
 	}
@@ -498,7 +500,7 @@ func TestTxDB(t *testing.T) {
 	// Default (reverse) means highest block first. RefID of TXABC003 (block 103)
 	// with Past=true should return txs with lower block numbers.
 	refID := "TXABC003"
-	resp3, err := db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
+	resp3, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs RefID past: %v", err)
 	}
@@ -510,14 +512,14 @@ func TestTxDB(t *testing.T) {
 
 	// RefID using an expired tx (BlockNumber==0) as anchor.
 	expiredRef := "EXPIRED001"
-	_, err = db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &expiredRef, Past: true})
+	_, err = db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &expiredRef, Past: true})
 	if err != nil {
 		t.Errorf("getTxs with expired RefID: %v", err)
 	}
 
 	// RefID for a pending (unconfirmed non-expired) tx must fail.
 	pendingRef := "PENDING001"
-	_, err = db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &pendingRef})
+	_, err = db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &pendingRef})
 	if err == nil {
 		t.Error("expected error when RefID is a non-expired pending tx")
 	}
@@ -643,8 +645,8 @@ func TestCheckPendingTxsMultiExpire(t *testing.T) {
 
 	makePending := func(id string, lls uint32) *dbTx {
 		return &dbTx{
-			WalletTransaction: &asset.WalletTransaction{
-				Type: asset.Send,
+			WalletTransaction: &txdb.WalletTransaction{
+				Type: txdb.Send,
 				ID:   id,
 			},
 			LastLedgerSequence: lls,
@@ -773,7 +775,7 @@ func TestHandleValidatedTipUpdates(t *testing.T) {
 			t.Fatalf("timed out waiting for notifications (tx=%v bal=%v)", txNote != nil, balNote != nil)
 		}
 	}
-	if txNote.Transaction.Type != asset.Receive {
+	if txNote.Transaction.Type != txdb.Receive {
 		t.Errorf("tx type = %v, want Receive", txNote.Transaction.Type)
 	}
 }
@@ -943,7 +945,7 @@ func TestScanAccountTxsNewPayment(t *testing.T) {
 	if err != nil || stored == nil {
 		t.Fatalf("expected stored tx, got %v, %v", stored, err)
 	}
-	if stored.Type != asset.Receive {
+	if stored.Type != txdb.Receive {
 		t.Errorf("tx type = %v, want Receive", stored.Type)
 	}
 }

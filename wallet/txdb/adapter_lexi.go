@@ -1,0 +1,142 @@
+// This code is available on the terms of the project LICENSE.md file,
+// also available online at https://blueoakcouncil.org/license/1.0.0.
+
+//go:build !mobile
+
+package txdb
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/lexi"
+)
+
+// lexiStore adapts a *lexi.DB (Badger) to the Store interface. lexi's
+// ErrEndIteration and ErrNotIndexed share their underlying string values with
+// this package's sentinels, so callback/index-function errors round-trip
+// without translation. Only ErrKeyNotFound (badger.ErrKeyNotFound) differs and
+// is translated in Get/Delete.
+type lexiStore struct {
+	db     *lexi.DB
+	cancel context.CancelFunc
+	wg     *sync.WaitGroup
+}
+
+func newLexiStore(path string, log util.Logger) (Store, error) {
+	db, err := lexi.New(&lexi.Config{Path: path, Log: log})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	wg, err := db.Connect(ctx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &lexiStore{db: db, cancel: cancel, wg: wg}, nil
+}
+
+func (s *lexiStore) Table(name string) (StoreTable, error) {
+	t, err := s.db.Table(name)
+	if err != nil {
+		return nil, err
+	}
+	return &lexiTable{t: t}, nil
+}
+
+// Close cancels the lexi background context, which releases the id sequence and
+// closes the underlying Badger database, then waits for shutdown.
+func (s *lexiStore) Close() error {
+	s.cancel()
+	s.wg.Wait()
+	return nil
+}
+
+type lexiTable struct {
+	t *lexi.Table
+}
+
+func wrapLexiIndexFunc(f IndexFunc) func(k, v lexi.KV) ([]byte, error) {
+	return func(k, v lexi.KV) ([]byte, error) {
+		kB, _ := k.([]byte)
+		vB, _ := v.([]byte)
+		return f(kB, vB)
+	}
+}
+
+func (t *lexiTable) AddIndex(name string, f IndexFunc) (StoreIndex, error) {
+	idx, err := t.t.AddIndex(name, wrapLexiIndexFunc(f))
+	if err != nil {
+		return nil, err
+	}
+	return &lexiIndex{idx: idx}, nil
+}
+
+func (t *lexiTable) AddUniqueIndex(name string, f IndexFunc) (StoreIndex, error) {
+	idx, err := t.t.AddUniqueIndex(name, wrapLexiIndexFunc(f))
+	if err != nil {
+		return nil, err
+	}
+	return &lexiIndex{idx: idx}, nil
+}
+
+func (t *lexiTable) Set(k, v []byte, replace bool) error {
+	if replace {
+		return t.t.Set(k, v, lexi.WithReplace())
+	}
+	return t.t.Set(k, v)
+}
+
+func (t *lexiTable) Get(k []byte) ([]byte, error) {
+	b, err := t.t.GetRaw(k)
+	if errors.Is(err, lexi.ErrKeyNotFound) {
+		return nil, ErrKeyNotFound
+	}
+	return b, err
+}
+
+func (t *lexiTable) Delete(k []byte) error {
+	err := t.t.Delete(k)
+	if errors.Is(err, lexi.ErrKeyNotFound) {
+		return ErrKeyNotFound
+	}
+	return err
+}
+
+func (t *lexiTable) Iterate(prefix []byte, f func(StoreIter) error, reverse bool, seek []byte) error {
+	var prefixKV lexi.KV
+	if len(prefix) > 0 {
+		prefixKV = prefix
+	}
+	return t.t.Iterate(prefixKV, func(it *lexi.Iter) error {
+		return f(it)
+	}, lexiIterOpts(reverse, seek)...)
+}
+
+type lexiIndex struct {
+	idx *lexi.Index
+}
+
+func (i *lexiIndex) Iterate(prefix []byte, f func(StoreIter) error, reverse bool, seek []byte) error {
+	var prefixKV lexi.KV
+	if len(prefix) > 0 {
+		prefixKV = prefix
+	}
+	return i.idx.Iterate(prefixKV, func(it *lexi.Iter) error {
+		return f(it)
+	}, lexiIterOpts(reverse, seek)...)
+}
+
+func lexiIterOpts(reverse bool, seek []byte) []lexi.IterationOption {
+	var opts []lexi.IterationOption
+	if reverse {
+		opts = append(opts, lexi.WithReverse())
+	}
+	if len(seek) > 0 {
+		opts = append(opts, lexi.WithSeek(seek))
+	}
+	return opts
+}

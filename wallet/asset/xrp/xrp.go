@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/encrypt"
@@ -690,8 +692,8 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	txID := strings.ToUpper(hex.EncodeToString(txHash[:]))
 
 	recipient := address
-	wtx := &asset.WalletTransaction{
-		Type:      asset.Send,
+	wtx := &txdb.WalletTransaction{
+		Type:      txdb.Send,
 		ID:        txID,
 		Amount:    value,
 		Fees:      fee,
@@ -800,19 +802,19 @@ func (w *xrpWallet) StandardSendFee(_ uint64) uint64 {
 	return fee
 }
 
-func (w *xrpWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *xrpWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	w.opWG.Add(1)
 	defer w.opWG.Done()
 	if !w.running.Load() {
-		return &asset.TxHistoryResponse{}, nil
+		return &txdb.TxHistoryResponse{}, nil
 	}
 	if w.txDB == nil || req == nil {
-		return &asset.TxHistoryResponse{}, nil
+		return &txdb.TxHistoryResponse{}, nil
 	}
 	return w.txDB.getTxs(req)
 }
 
-func (w *xrpWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *xrpWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	if w.rpc == nil {
 		return nil, fmt.Errorf("wallet not connected")
 	}
@@ -848,7 +850,7 @@ func (w *xrpWallet) WalletTransaction(ctx context.Context, txID string) (*asset.
 	return wt, nil
 }
 
-func (w *xrpWallet) PendingTransactions(_ context.Context) []*asset.WalletTransaction {
+func (w *xrpWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
 	w.opWG.Add(1)
 	defer w.opWG.Done()
 	if !w.running.Load() {
@@ -862,7 +864,7 @@ func (w *xrpWallet) PendingTransactions(_ context.Context) []*asset.WalletTransa
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return nil
 	}
-	txs := make([]*asset.WalletTransaction, 0, len(pending))
+	txs := make([]*txdb.WalletTransaction, 0, len(pending))
 	for _, wt := range pending {
 		txs = append(txs, wt.WalletTransaction)
 	}
@@ -1098,7 +1100,7 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 				pageHigh = ledgerIdx
 			}
 
-			if wtx.Type == asset.Receive {
+			if wtx.Type == txdb.Receive {
 				w.log.Infof("Detected incoming transfer %s: %d drops from %s", txID, wtx.Amount, tr.Account)
 			} else {
 				recipient := ""
@@ -1185,7 +1187,7 @@ func (w *xrpWallet) emitBalanceChange() {
 
 // storeNewTx persists wtx, deriving the submission time from tr's close time
 // and falling back to the current wall clock when close_time_iso is absent.
-func (w *xrpWallet) storeNewTx(wtx *asset.WalletTransaction, tr *txResult) error {
+func (w *xrpWallet) storeNewTx(wtx *txdb.WalletTransaction, tr *txResult) error {
 	submitTime := tr.closeTime()
 	if submitTime == 0 {
 		submitTime = uint64(time.Now().Unix())
@@ -1209,7 +1211,7 @@ func (w *xrpWallet) advanceLastScanned(seq uint64) {
 	w.lastScannedLedger.Store(seq)
 }
 
-func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64) *asset.WalletTransaction {
+func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64) *txdb.WalletTransaction {
 	if tr == nil || tr.TransactionType != "Payment" {
 		return nil
 	}
@@ -1236,8 +1238,8 @@ func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valid
 			return nil // ignore IOU or malformed non-XRP amounts
 		}
 		recipient := walletAddr
-		return &asset.WalletTransaction{
-			Type:        asset.Receive,
+		return &txdb.WalletTransaction{
+			Type:        txdb.Receive,
 			ID:          strings.ToUpper(tr.Hash),
 			Amount:      amount,
 			Fees:        feeParsed,
@@ -1252,8 +1254,8 @@ func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valid
 		return nil // ignore non-XRP payments for this native XRP wallet
 	}
 	recipient := tr.Destination
-	return &asset.WalletTransaction{
-		Type:        asset.Send,
+	return &txdb.WalletTransaction{
+		Type:        txdb.Send,
 		ID:          strings.ToUpper(tr.Hash),
 		Amount:      amount,
 		Fees:        feeParsed,

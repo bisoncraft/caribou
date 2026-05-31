@@ -39,6 +39,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/core"
 	"github.com/bisoncraft/bosswallet/wallet/db"
 	"github.com/bisoncraft/bosswallet/wallet/tor"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/websocket"
 	"github.com/decred/dcrd/certgen"
 	"github.com/go-chi/chi/v5"
@@ -120,7 +121,7 @@ type clientCore interface {
 	SetVotingPreferences(assetID uint32, choices, tSpendPolicy, treasuryPolicy map[string]string) error
 	ListVSPs(assetID uint32) ([]*asset.VotingServiceProvider, error)
 	TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*asset.Ticket, error)
-	TxHistory(assetID uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error)
+	TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	FundsMixingStats(assetID uint32) (*asset.FundsMixingStats, error)
 	ConfigureFundsMixer(appPW []byte, assetID uint32, enabled bool) error
 	SetLanguage(string) error
@@ -134,8 +135,8 @@ type clientCore interface {
 	BridgeContractApprovalStatus(assetID uint32, bridgeName string) (asset.ApprovalStatus, error)
 	ApproveBridgeContract(assetID uint32, bridgeName string) (string, error)
 	UnapproveBridgeContract(assetID uint32, bridgeName string) (string, error)
-	PendingBridges(assetID uint32) ([]*asset.WalletTransaction, error)
-	BridgeHistory(assetID uint32, n int, refID *string, past bool) ([]*asset.WalletTransaction, error)
+	PendingBridges(assetID uint32) ([]*txdb.WalletTransaction, error)
+	BridgeHistory(assetID uint32, n int, refID *string, past bool) ([]*txdb.WalletTransaction, error)
 	ExtensionModeConfig() *core.ExtensionModeConfig
 	PoliteiaDetails() (string, bool, int64)
 	ProposalsAll(offset, rowsCount int, searchPhrase string, filterByVoteStatus ...int) ([]*pi.Proposal, int, error)
@@ -143,7 +144,7 @@ type clientCore interface {
 	ProposalsInProgress() ([]*pi.MiniProposal, error)
 	CastVote(assetID uint32, pw []byte, token, bit string) error
 	AbandonTransaction(assetID uint32, txID string) error
-	WalletTransaction(assetID uint32, txID string) (*asset.WalletTransaction, error)
+	WalletTransaction(assetID uint32, txID string) (*txdb.WalletTransaction, error)
 }
 
 // genCertPair generates a key/cert pair to the paths provided.

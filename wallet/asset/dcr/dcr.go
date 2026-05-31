@@ -32,6 +32,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
@@ -2145,13 +2146,13 @@ func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime 
 	}
 	success = true
 
-	bondInfo := &asset.BondTxInfo{
+	bondInfo := &txdb.BondTxInfo{
 		AccountID: acctID,
 		LockTime:  uint64(lockTimeSec),
 		BondID:    pkh,
 	}
-	dcr.addTxToHistory(&asset.WalletTransaction{
-		Type:     asset.CreateBond,
+	dcr.addTxToHistory(&txdb.WalletTransaction{
+		Type:     txdb.CreateBond,
 		ID:       txHash.String(),
 		Amount:   amt,
 		Fees:     fee,
@@ -2249,12 +2250,12 @@ func (dcr *ExchangeWallet) RefundBond(ctx context.Context, ver uint16, coinID, s
 	}
 
 	refundAmt := msgTx.TxOut[0].Value
-	bondInfo := &asset.BondTxInfo{
+	bondInfo := &txdb.BondTxInfo{
 		LockTime: uint64(lockTime),
 		BondID:   pkhPush,
 	}
-	dcr.addTxToHistory(&asset.WalletTransaction{
-		Type:     asset.RedeemBond,
+	dcr.addTxToHistory(&txdb.WalletTransaction{
+		Type:     txdb.RedeemBond,
 		ID:       redeemHash.String(),
 		Amount:   amt,
 		Fees:     amt - uint64(refundAmt),
@@ -2402,12 +2403,12 @@ func (dcr *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asse
 	if err != nil {
 		dcr.log.Errorf("error checking if address %q is owned: %v", address, err)
 	}
-	txType := asset.Send
+	txType := txdb.Send
 	if selfSend {
-		txType = asset.SelfSend
+		txType = txdb.SelfSend
 	}
 
-	dcr.addTxToHistory(&asset.WalletTransaction{
+	dcr.addTxToHistory(&txdb.WalletTransaction{
 		Type:      txType,
 		ID:        msgTx.CachedTxHash().String(),
 		Amount:    sentVal,
@@ -2435,19 +2436,19 @@ func (dcr *ExchangeWallet) Send(address string, value, feeRate uint64) (asset.Co
 	if err != nil {
 		dcr.log.Errorf("error checking if address %q is owned: %v", address, err)
 	}
-	txType := asset.Send
+	txType := txdb.Send
 	if selfSend {
-		txType = asset.SelfSend
+		txType = txdb.SelfSend
 	}
 
-	dcr.addTxToHistory(&asset.WalletTransaction{
+	dcr.addTxToHistory(&txdb.WalletTransaction{
 		Type:      txType,
 		ID:        msgTx.CachedTxHash().String(),
 		Amount:    sentVal,
 		Fees:      fee,
 		Recipient: &address,
 		Timestamp: uint64(time.Now().Unix()),
-		Confirms:  &asset.Confirms{Target: confTxFinality},
+		Confirms:  &txdb.Confirms{Target: confTxFinality},
 	}, msgTx.CachedTxHash(), true)
 	return newOutput(msgTx.CachedTxHash(), 0, sentVal, wire.TxTreeRegular), nil
 }
@@ -3417,13 +3418,13 @@ func (dcr *ExchangeWallet) runTicketBuyer() {
 			return
 		}
 		tb.unconfirmedTickets[*txHash] = struct{}{}
-		dcr.addTxToHistory(&asset.WalletTransaction{
-			Type:      asset.TicketPurchase,
+		dcr.addTxToHistory(&txdb.WalletTransaction{
+			Type:      txdb.TicketPurchase,
 			ID:        txHash.String(),
 			Amount:    ticket.Tx.TicketPrice,
 			Fees:      ticket.Tx.Fees,
 			Timestamp: uint64(time.Now().Unix()),
-			Confirms:  &asset.Confirms{Target: confTxFinality},
+			Confirms:  &txdb.Confirms{Target: confTxFinality},
 		}, txHash, true)
 	}
 	ok = true
@@ -3932,7 +3933,7 @@ func isMixTx(tx *wire.MsgTx) (isMix bool, mixDenom int64) {
 
 // idUnknownTx identifies the type and details of a transaction either made
 // or received by the wallet.
-func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactionsResult) (*asset.WalletTransaction, error) {
+func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactionsResult) (*txdb.WalletTransaction, error) {
 	txHash, err := chainhash.NewHashFromStr(ltxr.TxID)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding tx hash %s: %v", ltxr.TxID, err)
@@ -3961,29 +3962,29 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 
 	switch *ltxr.TxType {
 	case walletjson.LTTTVote:
-		return &asset.WalletTransaction{
-			Type:   asset.TicketVote,
+		return &txdb.WalletTransaction{
+			Type:   txdb.TicketVote,
 			ID:     ltxr.TxID,
 			Amount: totalOut,
 			Fees:   fee,
 		}, nil
 	case walletjson.LTTTRevocation:
-		return &asset.WalletTransaction{
-			Type:   asset.TicketRevocation,
+		return &txdb.WalletTransaction{
+			Type:   txdb.TicketRevocation,
 			ID:     ltxr.TxID,
 			Amount: totalOut,
 			Fees:   fee,
 		}, nil
 	case walletjson.LTTTTicket:
-		return &asset.WalletTransaction{
-			Type:   asset.TicketPurchase,
+		return &txdb.WalletTransaction{
+			Type:   txdb.TicketPurchase,
 			ID:     ltxr.TxID,
 			Amount: totalOut,
 			Fees:   fee,
 		}, nil
 	}
 
-	txIsBond := func(msgTx *wire.MsgTx) (bool, *asset.BondTxInfo) {
+	txIsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
 		if len(msgTx.TxOut) < 2 {
 			return false, nil
 		}
@@ -3992,15 +3993,15 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		if err != nil {
 			return false, nil
 		}
-		return true, &asset.BondTxInfo{
+		return true, &txdb.BondTxInfo{
 			AccountID: acctID[:],
 			LockTime:  uint64(lockTime),
 			BondID:    pkHash[:],
 		}
 	}
 	if isBond, bondInfo := txIsBond(tx.MsgTx); isBond {
-		return &asset.WalletTransaction{
-			Type:     asset.CreateBond,
+		return &txdb.WalletTransaction{
+			Type:     txdb.CreateBond,
 			ID:       ltxr.TxID,
 			Amount:   uint64(tx.MsgTx.TxOut[0].Value),
 			Fees:     fee,
@@ -4019,8 +4020,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		return
 	}
 	if v := txPaysToScriptHash(tx.MsgTx); v > 0 {
-		return &asset.WalletTransaction{
-			Type:   asset.SwapOrSend,
+		return &txdb.WalletTransaction{
+			Type:   txdb.SwapOrSend,
 			ID:     ltxr.TxID,
 			Amount: v,
 			Fees:   fee,
@@ -4055,8 +4056,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		return containsContractAtPushIndex(msgTx, 4, contractIsSwap)
 	}
 	if redeemsSwap(tx.MsgTx) {
-		return &asset.WalletTransaction{
-			Type:   asset.Redeem,
+		return &txdb.WalletTransaction{
+			Type:   txdb.Redeem,
 			ID:     ltxr.TxID,
 			Amount: totalOut + fee,
 			Fees:   fee,
@@ -4066,8 +4067,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		return containsContractAtPushIndex(msgTx, 3, contractIsSwap)
 	}
 	if refundsSwap(tx.MsgTx) {
-		return &asset.WalletTransaction{
-			Type:   asset.Refund,
+		return &txdb.WalletTransaction{
+			Type:   txdb.Refund,
 			ID:     ltxr.TxID,
 			Amount: totalOut + fee,
 			Fees:   fee,
@@ -4075,15 +4076,15 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	}
 
 	// Bond refunds
-	redeemsBond := func(msgTx *wire.MsgTx) (bool, *asset.BondTxInfo) {
-		var bondInfo *asset.BondTxInfo
+	redeemsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
+		var bondInfo *txdb.BondTxInfo
 		isBond := func(contract []byte) bool {
 			const scriptVer = 0
 			lockTime, pkHash, err := ExtractBondDetailsV0(scriptVer, contract)
 			if err != nil {
 				return false
 			}
-			bondInfo = &asset.BondTxInfo{
+			bondInfo = &txdb.BondTxInfo{
 				AccountID: []byte{}, // Could look for the bond tx to get this, I guess.
 				LockTime:  uint64(lockTime),
 				BondID:    pkHash[:],
@@ -4093,8 +4094,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		return containsContractAtPushIndex(msgTx, 2, isBond), bondInfo
 	}
 	if isBondRedemption, bondInfo := redeemsBond(tx.MsgTx); isBondRedemption {
-		return &asset.WalletTransaction{
-			Type:     asset.RedeemBond,
+		return &txdb.WalletTransaction{
+			Type:     txdb.RedeemBond,
 			ID:       ltxr.TxID,
 			Amount:   totalOut,
 			Fees:     fee,
@@ -4126,8 +4127,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	}
 
 	if ltxr.Send && allOutputsPayUs(tx.MsgTx) && len(tx.MsgTx.TxIn) == 1 {
-		return &asset.WalletTransaction{
-			Type: asset.Split,
+		return &txdb.WalletTransaction{
+			Type: txdb.Split,
 			ID:   ltxr.TxID,
 			Fees: fee,
 		}, nil
@@ -4159,8 +4160,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			}
 		}
 
-		return &asset.WalletTransaction{
-			Type:   asset.Mix,
+		return &txdb.WalletTransaction{
+			Type:   txdb.Mix,
 			ID:     ltxr.TxID,
 			Amount: mixedAmount,
 			Fees:   fee,
@@ -4222,13 +4223,13 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	in, out := txOutDirection(tx.MsgTx)
 
 	if ltxr.Send {
-		txType := asset.Send
+		txType := txdb.Send
 		amt := out
 		if allOutputsPayUs(tx.MsgTx) {
-			txType = asset.SelfSend
+			txType = txdb.SelfSend
 			amt = in
 		}
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			Type:      txType,
 			ID:        ltxr.TxID,
 			Amount:    amt,
@@ -4237,8 +4238,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		}, nil
 	}
 
-	return &asset.WalletTransaction{
-		Type:      asset.Receive,
+	return &txdb.WalletTransaction{
+		Type:      txdb.Receive,
 		ID:        ltxr.TxID,
 		Amount:    in,
 		Fees:      fee,
@@ -4408,7 +4409,7 @@ func (dcr *ExchangeWallet) syncTxHistory(ctx context.Context, tip uint64) {
 		} else {
 			tx.Confirmed = false
 			updated = tx.Confirms == nil || tx.Confirms.Current != uint32(confs)
-			tx.Confirms = &asset.Confirms{
+			tx.Confirms = &txdb.Confirms{
 				Current: uint32(confs),
 				Target:  confTxFinality,
 			}
@@ -4482,7 +4483,7 @@ func (dcr *ExchangeWallet) removeTxFromHistory(txHash *chainhash.Hash) {
 	}
 }
 
-func (dcr *ExchangeWallet) addTxToHistory(wt *asset.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
+func (dcr *ExchangeWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
 	txHistoryDB := dcr.txDB()
 	if txHistoryDB == nil {
 		return
@@ -4888,7 +4889,7 @@ func toDCR[V uint64 | int64](v V) float64 {
 // WalletTransaction returns a transaction that either the wallet has made or
 // one in which the wallet has received funds. The txID should be either a
 // coin ID or a transaction hash in hexadecimal form.
-func (dcr *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (dcr *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	coinID, err := hex.DecodeString(txID)
 	if err == nil {
 		txHash, _, err := decodeCoinID(coinID)
@@ -4969,10 +4970,10 @@ func (dcr *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (
 }
 
 // PendingTransactions loads wallet transactions that are not yet confirmed.
-func (dcr *ExchangeWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
+func (dcr *ExchangeWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {
 	dcr.pendingTxsMtx.RLock()
 	defer dcr.pendingTxsMtx.RUnlock()
-	txs := make([]*asset.WalletTransaction, 0, len(dcr.pendingTxs))
+	txs := make([]*txdb.WalletTransaction, 0, len(dcr.pendingTxs))
 	for _, tx := range dcr.pendingTxs {
 		if tx.Confirmed {
 			continue
@@ -4988,7 +4989,7 @@ func (dcr *ExchangeWallet) PendingTransactions(ctx context.Context) []*asset.Wal
 // If past is true, the transactions prior to the refID are returned, otherwise
 // the transactions after the refID are returned. n is the number of
 // transactions to return. If n is <= 0, all the transactions will be returned.
-func (dcr *ExchangeWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (dcr *ExchangeWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	txHistoryDB := dcr.txDB()
 	if txHistoryDB == nil {
 		return nil, fmt.Errorf("tx database not initialized")

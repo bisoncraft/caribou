@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
@@ -651,8 +653,8 @@ func TestWalletTransactionFromDB(t *testing.T) {
 	const txID = "AAAA000000000000000000000000000000000000000000000000000000000001"
 	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
 	stored := &dbTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type:        asset.Send,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:        txdb.Send,
 			ID:          txID,
 			Amount:      1_000_000,
 			Fees:        12,
@@ -688,8 +690,8 @@ func TestWalletTransactionDBLookupCaseInsensitive(t *testing.T) {
 	const txID = "BBBB000000000000000000000000000000000000000000000000000000000002"
 	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
 	if err := w.txDB.storeTx(&dbTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type: asset.Send, ID: txID, Amount: 500, BlockNumber: 10, Confirmed: true, Recipient: &recip,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type: txdb.Send, ID: txID, Amount: 500, BlockNumber: 10, Confirmed: true, Recipient: &recip,
 		},
 	}); err != nil {
 		t.Fatalf("storeTx: %v", err)
@@ -730,7 +732,7 @@ func TestWalletTransactionFromRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WalletTransaction: %v", err)
 	}
-	if wt.Type != asset.Send || wt.Amount != 2_000_000 || wt.BlockNumber != 300 || !wt.Confirmed {
+	if wt.Type != txdb.Send || wt.Amount != 2_000_000 || wt.BlockNumber != 300 || !wt.Confirmed {
 		t.Errorf("unexpected result: %+v", wt)
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
+
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
@@ -22,9 +24,9 @@ const (
 	lastScannedKey = "lastScannedLedger"
 )
 
-// dbTx wraps asset.WalletTransaction with additional tracking fields.
+// dbTx wraps txdb.WalletTransaction with additional tracking fields.
 type dbTx struct {
-	*asset.WalletTransaction
+	*txdb.WalletTransaction
 	SubmissionTime     uint64 `json:"submissionTime"`               // unix seconds
 	LastLedgerSequence uint32 `json:"lastLedgerSequence,omitempty"` // 0 for receives
 	Expired            bool   `json:"expired,omitempty"`            // true when LLS passed without inclusion
@@ -39,7 +41,7 @@ func (tx *dbTx) UnmarshalBinary(b []byte) error {
 		return err
 	}
 	if tx.WalletTransaction == nil {
-		tx.WalletTransaction = &asset.WalletTransaction{}
+		tx.WalletTransaction = &txdb.WalletTransaction{}
 	}
 	return nil
 }
@@ -120,7 +122,7 @@ func (db *xrpTxDB) getTx(txID string) (*dbTx, error) {
 	return &wt, nil
 }
 
-func (db *xrpTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (db *xrpTxDB) getTxs(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	n := req.N
 	if n == 0 {
 		n = 50
@@ -155,7 +157,7 @@ func (db *xrpTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse
 		opts = append(opts, lexi.WithSeek(entry))
 	}
 
-	txs := make([]*asset.WalletTransaction, 0, n)
+	txs := make([]*txdb.WalletTransaction, 0, n)
 	var moreAvailable bool
 	ignoreTypes := req.IngoreTypesLookup()
 
@@ -191,7 +193,7 @@ func (db *xrpTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse
 		return nil, err
 	}
 
-	return &asset.TxHistoryResponse{
+	return &txdb.TxHistoryResponse{
 		Txs:           txs,
 		MoreAvailable: moreAvailable,
 	}, nil

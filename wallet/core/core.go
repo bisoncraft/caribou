@@ -30,6 +30,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/db"
 	"github.com/bisoncraft/bosswallet/wallet/db/bolt"
 	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/crypto/blake256"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"golang.org/x/text/language"
@@ -116,6 +117,7 @@ type Core struct {
 	cfg   *Config
 	log   util.Logger
 	db    db.DB
+	txDB  *txdb.TxDB
 	net   util.Network
 	intl  atomic.Value // *locale
 
@@ -173,6 +175,15 @@ func New(cfg *Config) (*Core, error) {
 	boltDB, err := bolt.NewDB(cfg.DBPath, cfg.Logger.SubLogger("DB"), dbOpts)
 	if err != nil {
 		return nil, fmt.Errorf("database initialization error: %w", err)
+	}
+
+	// The master transaction database lives beside the main database. It is
+	// shared by all wallets, each of which manages its own transactions through
+	// a network-scoped NetworkTxDB handle.
+	txDBPath := filepath.Join(filepath.Dir(cfg.DBPath), "tx.db")
+	masterTxDB, err := txdb.New(txDBPath, cfg.Logger.SubLogger("TXDB"))
+	if err != nil {
+		return nil, fmt.Errorf("transaction database initialization error: %w", err)
 	}
 	if cfg.TorProxy != "" {
 		if _, _, err = net.SplitHostPort(cfg.TorProxy); err != nil {
@@ -278,6 +289,7 @@ func New(cfg *Config) (*Core, error) {
 		ready:        make(chan struct{}),
 		log:          cfg.Logger,
 		db:           boltDB,
+		txDB:         masterTxDB,
 		wallets:      make(map[uint32]*xcWallet),
 		net:          cfg.Net,
 		blockWaiters: make(map[string]*blockWaiter),
@@ -393,6 +405,11 @@ fetchers:
 	// Stop the DB after dexConnections and other goroutines are done.
 	stopDB()
 	dbWG.Wait()
+
+	// Close the master transaction database.
+	if err := c.txDB.Close(); err != nil {
+		c.log.Errorf("Error closing transaction database: %v", err)
+	}
 
 	// Lock and disconnect the wallets.
 	c.walletMtx.Lock()
@@ -1303,7 +1320,7 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 		broadcasting: new(uint32),
 		disabled:     dbWallet.Disabled,
 		syncStatus:   &asset.SyncStatus{},
-		pendingTxs:   make(map[string]*asset.WalletTransaction),
+		pendingTxs:   make(map[string]*txdb.WalletTransaction),
 	}
 
 	token := asset.TokenInfo(assetID)
@@ -1347,6 +1364,7 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 			PeersChange: peersChange,
 			DataDir:     c.assetDataDirectory(assetID),
 			TorProxy:    c.cfg.TorProxy,
+			NetworkTxDB: c.txDB.NetworkTxDB(assetID),
 		}
 
 		settings[asset.SpecialSettingActivelyUsed] = "false"
@@ -1370,6 +1388,7 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 			Settings:    settings,
 			Emit:        asset.NewWalletEmitter(c.notes, assetID, log),
 			PeersChange: peersChange,
+			NetworkTxDB: c.txDB.NetworkTxDB(token.NetworkID),
 		})
 	}
 	if err != nil {
@@ -2909,7 +2928,7 @@ func (c *Core) Bridge(fromAssetID, toAssetID uint32, amt uint64, bridgeName stri
 
 // PendingBridges returns the pending bridges originating on the chain of the
 // given asset ID.
-func (c *Core) PendingBridges(assetID uint32) ([]*asset.WalletTransaction, error) {
+func (c *Core) PendingBridges(assetID uint32) ([]*txdb.WalletTransaction, error) {
 	wallet, found := c.wallet(assetID)
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
@@ -2919,7 +2938,7 @@ func (c *Core) PendingBridges(assetID uint32) ([]*asset.WalletTransaction, error
 }
 
 // BridgeHistory returns the bridge history for the given asset ID.
-func (c *Core) BridgeHistory(assetID uint32, n int, refID *string, past bool) ([]*asset.WalletTransaction, error) {
+func (c *Core) BridgeHistory(assetID uint32, n int, refID *string, past bool) ([]*txdb.WalletTransaction, error) {
 	wallet, found := c.wallet(assetID)
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
@@ -3054,7 +3073,7 @@ func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, 
 // refID are returned, otherwise the transactions after the refID are
 // returned. n is the number of transactions to return. If n is <= 0,
 // all the transactions will be returned
-func (c *Core) TxHistory(assetID uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (c *Core) TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	wallet, found := c.wallet(assetID)
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
@@ -3066,7 +3085,7 @@ func (c *Core) TxHistory(assetID uint32, req *asset.TxHistoryRequest) (*asset.Tx
 // WalletTransaction returns information about a transaction that the wallet
 // has made or one in which that wallet received funds. This function supports
 // both transaction ID and coin ID.
-func (c *Core) WalletTransaction(assetID uint32, txID string) (*asset.WalletTransaction, error) {
+func (c *Core) WalletTransaction(assetID uint32, txID string) (*txdb.WalletTransaction, error) {
 	wallet, found := c.wallet(assetID)
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
@@ -3204,7 +3223,7 @@ func (c *Core) handleBridgeReadyToComplete(n *asset.BridgeReadyToCompleteNote) {
 		return
 	}
 
-	bridgeTx := &asset.BridgeCounterpartTx{
+	bridgeTx := &txdb.BridgeCounterpartTx{
 		AssetID: n.AssetID,
 		IDs:     []string{n.InitiateBridgeTxID},
 	}
@@ -3250,7 +3269,7 @@ func (c *Core) handleWalletNotification(ni asset.WalletNotification) {
 		if !ok {
 			return
 		}
-		w.processWalletTransactions([]*asset.WalletTransaction{n.Transaction})
+		w.processWalletTransactions([]*txdb.WalletTransaction{n.Transaction})
 	}
 	c.notify(newWalletNote(ni))
 }

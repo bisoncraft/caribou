@@ -6,6 +6,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 func newTestTxDB(t *testing.T) *nearTxDB {
@@ -22,9 +23,9 @@ func newTestTxDB(t *testing.T) *nearTxDB {
 	return db
 }
 
-func makeDBTx(id string, blockNumber uint64, txType asset.TransactionType) *dbTx {
+func makeDBTx(id string, blockNumber uint64, txType txdb.TransactionType) *dbTx {
 	return &dbTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			Type:        txType,
 			ID:          id,
 			Amount:      1000,
@@ -38,7 +39,7 @@ func makeDBTx(id string, blockNumber uint64, txType asset.TransactionType) *dbTx
 func TestTxDBStoreAndGet(t *testing.T) {
 	db := newTestTxDB(t)
 
-	tx := makeDBTx("tx1", 100, asset.Send)
+	tx := makeDBTx("tx1", 100, txdb.Send)
 
 	// Store.
 	if err := db.storeTx(tx); err != nil {
@@ -76,7 +77,7 @@ func TestTxDBStoreAndGet(t *testing.T) {
 func TestTxDBReplace(t *testing.T) {
 	db := newTestTxDB(t)
 
-	tx := makeDBTx("tx1", 0, asset.Send)
+	tx := makeDBTx("tx1", 0, txdb.Send)
 	if err := db.storeTx(tx); err != nil {
 		t.Fatalf("storeTx error: %v", err)
 	}
@@ -103,7 +104,7 @@ func TestTxDBReplace(t *testing.T) {
 func TestTxDBGetTxsEmpty(t *testing.T) {
 	db := newTestTxDB(t)
 
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 10, Past: true})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
 	}
@@ -120,14 +121,14 @@ func TestTxDBGetTxsOrdering(t *testing.T) {
 
 	// Insert confirmed transactions with different block numbers.
 	for i := uint64(1); i <= 5; i++ {
-		tx := makeDBTx(fmt.Sprintf("tx%d", i), i*100, asset.Send)
+		tx := makeDBTx(fmt.Sprintf("tx%d", i), i*100, txdb.Send)
 		if err := db.storeTx(tx); err != nil {
 			t.Fatalf("storeTx error: %v", err)
 		}
 	}
 
 	// Default (no RefID): should be reverse order (most recent first).
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 10, Past: true})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
 	}
@@ -147,14 +148,14 @@ func TestTxDBGetTxsPagination(t *testing.T) {
 	db := newTestTxDB(t)
 
 	for i := uint64(1); i <= 10; i++ {
-		tx := makeDBTx(fmt.Sprintf("tx%d", i), i*100, asset.Send)
+		tx := makeDBTx(fmt.Sprintf("tx%d", i), i*100, txdb.Send)
 		if err := db.storeTx(tx); err != nil {
 			t.Fatalf("storeTx error: %v", err)
 		}
 	}
 
 	// Fetch first 3 (most recent).
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 3, Past: true})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 3, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestTxDBGetTxsPagination(t *testing.T) {
 
 	// Paginate backwards from tx8.
 	refID := "tx8"
-	resp, err = db.getTxs(&asset.TxHistoryRequest{N: 3, RefID: &refID, Past: true})
+	resp, err = db.getTxs(&txdb.TxHistoryRequest{N: 3, RefID: &refID, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs pagination error: %v", err)
 	}
@@ -190,19 +191,19 @@ func TestTxDBPendingExcludedFromHistory(t *testing.T) {
 	db := newTestTxDB(t)
 
 	// Insert a pending tx (BlockNumber == 0).
-	pending := makeDBTx("pending1", 0, asset.Send)
+	pending := makeDBTx("pending1", 0, txdb.Send)
 	if err := db.storeTx(pending); err != nil {
 		t.Fatalf("storeTx error: %v", err)
 	}
 
 	// Insert a confirmed tx.
-	confirmed := makeDBTx("confirmed1", 100, asset.Send)
+	confirmed := makeDBTx("confirmed1", 100, txdb.Send)
 	if err := db.storeTx(confirmed); err != nil {
 		t.Fatalf("storeTx error: %v", err)
 	}
 
 	// History should only contain confirmed.
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 10, Past: true})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
 	}
@@ -218,9 +219,9 @@ func TestTxDBGetPendingTxs(t *testing.T) {
 	db := newTestTxDB(t)
 
 	// Insert mix of pending and confirmed.
-	pending1 := makeDBTx("p1", 0, asset.Send)
-	pending2 := makeDBTx("p2", 0, asset.Send)
-	confirmed1 := makeDBTx("c1", 100, asset.Send)
+	pending1 := makeDBTx("p1", 0, txdb.Send)
+	pending2 := makeDBTx("p2", 0, txdb.Send)
+	confirmed1 := makeDBTx("c1", 100, txdb.Send)
 
 	for _, tx := range []*dbTx{pending1, pending2, confirmed1} {
 		if err := db.storeTx(tx); err != nil {
@@ -246,7 +247,7 @@ func TestTxDBPendingToConfirmed(t *testing.T) {
 	db := newTestTxDB(t)
 
 	// Store as pending.
-	tx := makeDBTx("tx1", 0, asset.Send)
+	tx := makeDBTx("tx1", 0, txdb.Send)
 	if err := db.storeTx(tx); err != nil {
 		t.Fatalf("storeTx error: %v", err)
 	}
@@ -261,7 +262,7 @@ func TestTxDBPendingToConfirmed(t *testing.T) {
 	}
 
 	// Should NOT be in history (block index).
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 10, Past: true})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
 	}
@@ -285,7 +286,7 @@ func TestTxDBPendingToConfirmed(t *testing.T) {
 	}
 
 	// Should now be in history.
-	resp, err = db.getTxs(&asset.TxHistoryRequest{N: 10, Past: true})
+	resp, err = db.getTxs(&txdb.TxHistoryRequest{N: 10, Past: true})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
 	}
@@ -300,8 +301,8 @@ func TestTxDBPendingToConfirmed(t *testing.T) {
 func TestTxDBIgnoreTypes(t *testing.T) {
 	db := newTestTxDB(t)
 
-	send := makeDBTx("send1", 100, asset.Send)
-	recv := makeDBTx("recv1", 200, asset.Receive)
+	send := makeDBTx("send1", 100, txdb.Send)
+	recv := makeDBTx("recv1", 200, txdb.Receive)
 
 	if err := db.storeTx(send); err != nil {
 		t.Fatalf("storeTx error: %v", err)
@@ -311,10 +312,10 @@ func TestTxDBIgnoreTypes(t *testing.T) {
 	}
 
 	// Ignore sends.
-	resp, err := db.getTxs(&asset.TxHistoryRequest{
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{
 		N:           10,
 		Past:        true,
-		IgnoreTypes: []asset.TransactionType{asset.Send},
+		IgnoreTypes: []txdb.TransactionType{txdb.Send},
 	})
 	if err != nil {
 		t.Fatalf("getTxs error: %v", err)
@@ -331,7 +332,7 @@ func TestTxDBRefIDNotFound(t *testing.T) {
 	db := newTestTxDB(t)
 
 	refID := "nonexistent"
-	_, err := db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
+	_, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
 	if err != asset.CoinNotFoundError {
 		t.Fatalf("expected CoinNotFoundError, got %v", err)
 	}
@@ -341,14 +342,14 @@ func TestTxDBRefIDPending(t *testing.T) {
 	db := newTestTxDB(t)
 
 	// Store a pending tx.
-	tx := makeDBTx("pending", 0, asset.Send)
+	tx := makeDBTx("pending", 0, txdb.Send)
 	if err := db.storeTx(tx); err != nil {
 		t.Fatalf("storeTx error: %v", err)
 	}
 
 	// Using a pending tx as RefID should error.
 	refID := "pending"
-	_, err := db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
+	_, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
 	if err != asset.CoinNotFoundError {
 		t.Fatalf("expected CoinNotFoundError for pending RefID, got %v", err)
 	}
