@@ -61,11 +61,6 @@ type ElectrumClient struct {
 	addrCacheMtx sync.Mutex
 	addrCache    map[string]*scripthashEntry
 
-	// outpointCache maps a watched outpoint to its address, used during
-	// rescan / FilterBlocks. Mutex-guarded.
-	outpointCacheMtx sync.Mutex
-	outpointCache    map[wire.OutPoint]btcutil.Address
-
 	enqueueNotification chan any
 	dequeueNotification chan any
 	currentBlock        chan *waddrmgr.BlockStamp
@@ -87,10 +82,16 @@ type ElectrumClient struct {
 }
 
 // scripthashEntry captures per-scripthash state.
+//
+// ready is non-nil only while the first SubscribeScripthash call for this
+// scripthash is still in flight. Subsequent subscribeAddress callers for the
+// same scripthash wait on it; the field is set back to nil and closed once
+// the RPC completes (success or failure).
 type scripthashEntry struct {
 	addr        btcutil.Address
 	lastStatus  string
 	lastHistory []electrum.HistoryEntry
+	ready       chan struct{}
 }
 
 var _ Interface = (*ElectrumClient)(nil)
@@ -115,12 +116,11 @@ func NewElectrumClient(chainParams *netparams.ChainParams, network ElectrumNetwo
 		return nil, fmt.Errorf("electrum: %w", err)
 	}
 	return &ElectrumClient{
-		net:           network,
-		chainParams:   chainParams,
-		btcParams:     chainParams.BTCDParams(),
-		chain:         chain,
-		addrCache:     make(map[string]*scripthashEntry),
-		outpointCache: make(map[wire.OutPoint]btcutil.Address),
+		net:         network,
+		chainParams: chainParams,
+		btcParams:   chainParams.BTCDParams(),
+		chain:       chain,
+		addrCache:   make(map[string]*scripthashEntry),
 	}, nil
 }
 
@@ -372,22 +372,29 @@ func (c *ElectrumClient) scripthashLoop() {
 // handleScripthashStatus fetches the latest history for the scripthash,
 // diffs against the cached history, and emits a RelevantTx notification for
 // each newly-seen entry.
+//
+// Both reads of and writes to entry.lastStatus / entry.lastHistory happen
+// under addrCacheMtx; the cache lock is released across the GetHistory RPC
+// to avoid holding it during a network round-trip.
 func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) error {
 	c.addrCacheMtx.Lock()
 	entry, ok := c.addrCache[st.Scripthash]
-	c.addrCacheMtx.Unlock()
 	if !ok {
+		c.addrCacheMtx.Unlock()
 		log.Debugf("electrum: status for unknown scripthash %s", st.Scripthash)
 		return nil
 	}
 	if entry.lastStatus == st.Status {
+		c.addrCacheMtx.Unlock()
 		return nil
 	}
+	prev := append([]electrum.HistoryEntry(nil), entry.lastHistory...)
+	c.addrCacheMtx.Unlock()
+
 	hist, err := c.net.GetHistory(c.ctx, st.Scripthash)
 	if err != nil {
 		return fmt.Errorf("get history: %w", err)
 	}
-	prev := entry.lastHistory
 	for _, h := range hist {
 		if alreadySeen(prev, h.TxHash, h.Height) {
 			continue

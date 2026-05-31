@@ -106,38 +106,57 @@ func (n *Network) Headers() *Headers { return n.headers }
 // Start connects to the trusted server, syncs headers, and begins listening
 // for tip and scripthash notifications. The provided ctx is the network's
 // lifetime: cancelling ctx is equivalent to calling Stop.
+//
+// On any error Start unwinds — cancels the internal context, closes the
+// partially-initialised node (if any), and closes the done channel so a
+// caller doing `defer net.WaitForShutdown()` doesn't deadlock.
 func (n *Network) Start(parent context.Context) error {
 	n.mu.Lock()
 	if n.started {
 		n.mu.Unlock()
 		return errors.New("electrum: network already started")
 	}
+	// Stage the context but don't flip `started` until everything we
+	// need is up — Stop relies on `started` to decide whether there's
+	// anything to tear down.
 	n.ctx, n.cancel = context.WithCancel(parent)
-	n.started = true
 	n.mu.Unlock()
+
+	failed := func(err error) error {
+		if n.cancel != nil {
+			n.cancel()
+		}
+		n.doneClosed.Do(func() {
+			close(n.tipChangeChan)
+			close(n.scripthashCh)
+			close(n.done)
+		})
+		return err
+	}
 
 	node, err := NewNode(n.ctx, n.cfg.TrustedServer, n.cfg.TorProxy,
 		n.cfg.Chain.Params.GenesisHash.String())
 	if err != nil {
-		n.cancel()
-		return err
+		return failed(err)
 	}
-	n.mu.Lock()
-	n.node = node
-	n.mu.Unlock()
 
 	if err := n.syncHeaders(n.ctx, node); err != nil {
 		node.Close()
-		n.cancel()
-		return fmt.Errorf("electrum: initial header sync: %w", err)
+		return failed(fmt.Errorf("electrum: initial header sync: %w", err))
 	}
 
 	tip, err := node.SubscribeHeaders(n.ctx)
 	if err != nil {
 		node.Close()
-		n.cancel()
-		return fmt.Errorf("electrum: subscribe headers: %w", err)
+		return failed(fmt.Errorf("electrum: subscribe headers: %w", err))
 	}
+
+	// Commit: everything is up, publish the node and flip `started`.
+	n.mu.Lock()
+	n.node = node
+	n.started = true
+	n.mu.Unlock()
+
 	// The first subscribe payload is the current tip. If we're already at
 	// or above that height our sync is a no-op; otherwise the subscription
 	// loop will pull us forward.
@@ -153,11 +172,20 @@ func (n *Network) Start(parent context.Context) error {
 	return nil
 }
 
-// Stop initiates teardown. Done closes once teardown finishes.
+// Stop initiates teardown. Done closes once teardown finishes. Safe to call
+// on a network that never successfully started; in that case Stop just makes
+// sure WaitForShutdown unblocks.
 func (n *Network) Stop() {
 	n.mu.Lock()
 	if !n.started {
 		n.mu.Unlock()
+		// Never started, or already stopped. Either way ensure the
+		// done channel is closed so WaitForShutdown does not hang.
+		n.doneClosed.Do(func() {
+			close(n.tipChangeChan)
+			close(n.scripthashCh)
+			close(n.done)
+		})
 		return
 	}
 	cancel := n.cancel

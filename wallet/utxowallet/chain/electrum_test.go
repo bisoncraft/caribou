@@ -409,6 +409,77 @@ func TestElectrumSendRawTransaction(t *testing.T) {
 	}
 }
 
+// TestElectrumRescanOnStoppedClient is the regression for M2: Rescan on a
+// client whose Stop has already run should return an error rather than
+// silently no-op.
+func TestElectrumRescanOnStoppedClient(t *testing.T) {
+	c, _ := makeClient(t, 1)
+	c.Stop()
+	c.WaitForShutdown()
+	err := c.Rescan(nil, nil, nil)
+	if err == nil {
+		t.Fatal("expected error from Rescan on stopped client, got nil")
+	}
+}
+
+// TestElectrumScripthashStatusRace exercises H1: concurrent scripthash
+// status notifications and a Rescan that writes the same entry's
+// lastHistory. Race-detector runs would have caught the original bug.
+func TestElectrumScripthashStatusRace(t *testing.T) {
+	c, stub := makeClient(t, 3)
+	drain(t, c, 1, time.Second) // ClientConnected
+
+	addr, sh := newSimnetAddr(t)
+	// Pre-seed enough history that GetHistory/get_raw paths see real data.
+	for i := range 6 {
+		txid, rawHex := synthTxToAddr(t, addr)
+		stub.history[sh] = append(stub.history[sh], electrum.HistoryEntry{
+			Height: int32(1 + i%2), TxHash: txid,
+		})
+		stub.rawTxs[txid] = rawHex
+	}
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+
+	// Drive concurrent status notifications and Rescan calls so the
+	// addrCache is read and written from multiple goroutines.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 50 {
+			stub.scripthashCh <- &electrum.ScripthashStatus{
+				Scripthash: sh, Status: "v" + string(rune('a'+i%26)),
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		hash := stub.headers[0].BlockHash()
+		for range 5 {
+			if err := c.Rescan(&hash, []btcutil.Address{addr}, nil); err != nil {
+				t.Errorf("Rescan: %v", err)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	wg.Wait()
+
+	// Drain any leftover notifications so test cleanup doesn't deadlock
+	// the notification handler. The exact count isn't important here;
+	// we're testing for races, not message contents.
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case <-c.Notifications():
+		case <-deadline:
+			return
+		}
+	}
+}
+
 func TestElectrumMapRPCErr(t *testing.T) {
 	c, _ := makeClient(t, 1)
 	cases := []struct {

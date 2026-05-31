@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"maps"
 	"sort"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
@@ -40,35 +39,50 @@ func (c *ElectrumClient) NotifyReceived(addrs []btcutil.Address) error {
 }
 
 // subscribeAddress computes the scripthash for addr, subscribes if not
-// already, and primes the cached history so future notifications can diff
+// already, and primes the cached entry so future notifications can diff
 // against it.
+//
+// Concurrent calls for the same address are serialized via a per-scripthash
+// inflight wait: the first caller does the subscribe RPC while later callers
+// block on its completion. This prevents the previous race where a second
+// caller saw the cache entry before the first caller's subscription had
+// reached the server.
 func (c *ElectrumClient) subscribeAddress(addr btcutil.Address) error {
 	sh, err := addrScripthash(addr)
 	if err != nil {
 		return err
 	}
 	c.addrCacheMtx.Lock()
-	_, exists := c.addrCache[sh]
-	if !exists {
-		c.addrCache[sh] = &scripthashEntry{addr: addr}
-	}
-	c.addrCacheMtx.Unlock()
-	if exists {
+	if entry, ok := c.addrCache[sh]; ok {
+		ready := entry.ready
+		c.addrCacheMtx.Unlock()
+		if ready != nil {
+			<-ready // wait for an in-flight subscribe to complete
+		}
 		return nil
 	}
+	ready := make(chan struct{})
+	c.addrCache[sh] = &scripthashEntry{addr: addr, ready: ready}
+	c.addrCacheMtx.Unlock()
+
 	status, err := c.net.SubscribeScripthash(c.ctx, sh)
 	if err != nil {
-		// Roll back the cache entry so a retry can succeed.
+		// Roll back so a retry can succeed; release any blocked
+		// waiters by closing ready (they'll re-enter and find no
+		// entry).
 		c.addrCacheMtx.Lock()
 		delete(c.addrCache, sh)
 		c.addrCacheMtx.Unlock()
+		close(ready)
 		return fmt.Errorf("electrum: subscribe scripthash for %s: %w", addr, err)
 	}
 	c.addrCacheMtx.Lock()
 	if entry, ok := c.addrCache[sh]; ok {
 		entry.lastStatus = status.Status
+		entry.ready = nil
 	}
 	c.addrCacheMtx.Unlock()
+	close(ready)
 	return nil
 }
 
@@ -86,14 +100,16 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 	addrs []btcutil.Address,
 	outpoints map[wire.OutPoint]btcutil.Address) error {
 
-	// Record outpoints for the duration of this rescan. They are used by
-	// FilterBlocks to detect spends from watched outputs.
-	c.outpointCacheMtx.Lock()
-	maps.Copy(c.outpointCache, outpoints)
-	c.outpointCacheMtx.Unlock()
+	// M2: surface an error rather than silently no-op if the client has
+	// already been stopped.
+	if err := c.ctx.Err(); err != nil {
+		return fmt.Errorf("electrum: rescan on stopped client: %w", err)
+	}
 
 	// Subscribe to every address we plan to scan so we keep receiving
-	// updates after the rescan completes.
+	// updates after the rescan completes. Watched outpoints arrive on
+	// every FilterBlocksRequest, so we don't cache them here — the
+	// scripthash subscriptions are the durable state.
 	scripthashes := make([]string, 0, len(addrs)+len(outpoints))
 	for _, addr := range addrs {
 		sh, err := addrScripthash(addr)
@@ -170,7 +186,9 @@ func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
 
 	tip := c.net.Tip()
 	if tip < startHeight {
-		c.tryDispatchRescanFinished(tip)
+		if ctx.Err() == nil {
+			c.tryDispatchRescanFinished(tip)
+		}
 		return
 	}
 
@@ -206,6 +224,12 @@ func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
 				return
 			}
 		}
+	}
+	// M4: don't emit RescanFinished if a newer Rescan cancelled this one
+	// between the last iteration and here. That newer Rescan will dispatch
+	// its own RescanFinished when its walk completes.
+	if ctx.Err() != nil {
+		return
 	}
 	c.tryDispatchRescanFinished(tip)
 }
@@ -279,6 +303,12 @@ func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.Blo
 
 	ntfn := FilteredBlockConnected{Block: &block}
 	for _, e := range uniq {
+		// L1: fast-fail on cancellation rather than spend a round of
+		// doomed RPC calls — each GetRawTransaction would just return
+		// ctx.Err() anyway.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		rawHex, err := c.net.GetRawTransaction(ctx, e.TxHash)
 		if err != nil {
 			log.Warnf("electrum: rescan fetch %s: %v", e.TxHash, err)
