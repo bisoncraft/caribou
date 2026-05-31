@@ -29,6 +29,7 @@ export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
         + {t('Activate')}
       </td>
       <td className="asset-row-num" />
+      <td className="asset-row-actions" />
     </tr>
   )
 }

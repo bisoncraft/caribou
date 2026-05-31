@@ -305,6 +305,32 @@ img.logo-full {
   white-space: nowrap;
 }
 
+// Trailing action cell with per-row Send/Receive icons.
+.asset-row-actions {
+  text-align: right;
+  white-space: nowrap;
+  width: 1%; // shrink to fit content
+}
+
+.asset-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--text-grey);
+  cursor: pointer;
+  transition: color 0.12s, background-color 0.12s;
+
+  &:hover {
+    color: var(--accent-blue-hover);
+    background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+  }
+
+  & + .asset-action-icon { margin-left: 4px; }
+}
+
 .asset-logo {
   width: 30px;
   height: 30px;

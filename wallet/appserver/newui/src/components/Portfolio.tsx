@@ -104,6 +104,7 @@ export default function Portfolio () {
                 <th className="asset-th-num">{t('BALANCE')}</th>
                 <th className="asset-th-num">{t('PRICE')}</th>
                 <th className="asset-th-num">{t('PORTFOLIO %')}</th>
+                <th className="asset-row-actions" aria-hidden />
               </tr>
             </thead>
             <tbody>

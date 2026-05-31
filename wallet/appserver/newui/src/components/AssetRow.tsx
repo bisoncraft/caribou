@@ -83,6 +83,22 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
       <td className="asset-row-num">
         {pctDisplay}
       </td>
+      <td className="asset-row-actions">
+        <span
+          className="asset-action-icon ico-download fs16"
+          role="button"
+          tabIndex={0}
+          title={t('Receive')}
+          onClick={() => app.setForm({ form: 'receive', data: {} })}
+        />
+        <span
+          className="asset-action-icon ico-upload fs16"
+          role="button"
+          tabIndex={0}
+          title={t('Send')}
+          onClick={() => app.setForm({ form: 'send', data: {} })}
+        />
+      </td>
     </tr>
   )
 }
