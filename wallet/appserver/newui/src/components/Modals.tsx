@@ -22,7 +22,7 @@ export default function Modals ({ fd }: ModalsParams) {
       case 'receive': return <Receive />
       case 'send': return <Send />
       case 'swap': return <Swap />
-      case 'activateasset': return <ActivateAsset assetID={fd.data.assetID} />
+      case 'activateasset': return <ActivateAsset ticker={fd.data.ticker} />
       default: return (<div className="flex-center">Unknown form: {fd.form}</div>)
     }
   }

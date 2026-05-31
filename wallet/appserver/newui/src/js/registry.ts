@@ -81,6 +81,12 @@ export interface WalletState {
   pendingTxs: Record<string, WalletTransaction>
 }
 
+export interface NetworkInfo {
+  id: number
+  nativeAssetID: number
+  priority: boolean
+}
+
 export interface WalletInfo {
   name: string
   version: number
@@ -88,6 +94,7 @@ export interface WalletInfo {
   versions: number[]
   emptyidx: number
   unitinfo: UnitInfo
+  network?: NetworkInfo
 }
 
 export interface WalletBalance {
