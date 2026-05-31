@@ -247,7 +247,7 @@ function MultiNetActivate ({ ticker, close }: { ticker: string, close: () => voi
                 <span className="fs12" style={{ color: 'var(--accent-syncing)' }}>✓</span>
               )}
               {!active && row.status === 'failed' && (
-                <span className="errcolor fs12" title={row.errMsg}>{t('Failed')}</span>
+                <span className="errcolor fs12 has-tip" aria-label={row.errMsg}>{t('Failed')}</span>
               )}
             </>
           )

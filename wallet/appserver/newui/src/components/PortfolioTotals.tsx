@@ -38,7 +38,7 @@ export default function PortfolioTotals ({ totals, walletAssets }: PortfolioTota
           <CoinLogo
             key={ta.ticker}
             ticker={ta.ticker}
-            title={ta.name}
+            alt={ta.name}
             className="portfolio-totals-logo"
           />
         ))}

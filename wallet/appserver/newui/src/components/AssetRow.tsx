@@ -1,4 +1,4 @@
-import t from '../js/intl'
+import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { TickerAsset } from '../js/assets'
 import CoinLogo from './CoinLogo'
@@ -35,15 +35,15 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
   if (wallet.synced && wallet.open) return null
 
   if (wallet.encrypted && !wallet.open) {
-    return <span className="ico-lock-closed asset-status-dot asset-status-locked fs11" title={t('Locked')} />
+    return <span className="ico-lock-closed asset-status-dot asset-status-locked has-tip fs11" aria-label={t('Locked')} />
   }
 
   if (!wallet.synced) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-dot asset-status-syncing"
-        title={`${t('Syncing')}: ${pct}%`}
+        className="asset-status-dot asset-status-syncing has-tip"
+        aria-label={`${t('Syncing')}: ${pct}%`}
       />
     )
   }
@@ -85,17 +85,17 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
       </td>
       <td className="asset-row-actions">
         <span
-          className="asset-action-icon ico-download fs16"
+          className="asset-action-icon has-tip ico-download fs16"
           role="button"
           tabIndex={0}
-          title={t('Receive')}
+          aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
           onClick={() => app.setForm({ form: 'receive', data: {} })}
         />
         <span
-          className="asset-action-icon ico-upload fs16"
+          className="asset-action-icon has-tip ico-upload fs16"
           role="button"
           tabIndex={0}
-          title={t('Send')}
+          aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
           onClick={() => app.setForm({ form: 'send', data: {} })}
         />
       </td>
