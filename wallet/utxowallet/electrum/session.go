@@ -38,9 +38,8 @@ const (
 
 // session tracks an estimated per-connection electrumx cost.
 type session struct {
-	cost atomic.Uint64 // float32 bits via math.Float32frombits
-
-	mu sync.Mutex // serializes bump+decay (read-modify-write)
+	cost atomic.Uint64 // float64 bits, accessed via math.Float64{bits,frombits}
+	mu   sync.Mutex    // serializes bump+decay (read-modify-write)
 }
 
 func newSession() *session {
@@ -79,12 +78,6 @@ func (s *session) Cost() float64 {
 // limit. Callers may wish to rotate connections when this returns true.
 func (s *session) SoftLimitExceeded() bool {
 	return s.Cost() > costSoftLimit
-}
-
-// HardLimitExceeded reports whether the estimated cost has crossed the hard
-// limit. At this point the server is likely about to disconnect.
-func (s *session) HardLimitExceeded() bool {
-	return s.Cost() > costHardLimit
 }
 
 func (s *session) bump(delta float64) {

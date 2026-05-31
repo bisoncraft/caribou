@@ -10,12 +10,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -169,11 +171,22 @@ func (s *stubNetwork) EstimateFee(context.Context, int32) (int64, error) {
 
 // ----------------------------------------------------------------------------
 
-// btcSimnet wraps the simnet params for tests. We use simnet because it
-// has its own genesis distinct from mainnet/testnet, matching how the
-// downstream wallet tests are configured.
-func btcSimnet() *netparams.ChainParams {
-	return netparams.NSimnetParams
+// testParams returns a minimal *netparams.ChainParams suitable for these
+// tests. Only the fields the chain package actually touches are populated;
+// notably we set Net so BTCDParams() builds a usable *chaincfg.Params that
+// txscript.ExtractPkScriptAddrs accepts.
+func testParams() *netparams.ChainParams {
+	return &netparams.ChainParams{
+		Chain:                   "btc",
+		Net:                     chaincfg.SimNetParams.Net,
+		GenesisBlock:            chaincfg.SimNetParams.GenesisBlock,
+		GenesisHash:             chaincfg.SimNetParams.GenesisHash,
+		PubKeyHashAddrID:        chaincfg.SimNetParams.PubKeyHashAddrID,
+		ScriptHashAddrID:        chaincfg.SimNetParams.ScriptHashAddrID,
+		WitnessPubKeyHashAddrID: chaincfg.SimNetParams.WitnessPubKeyHashAddrID,
+		WitnessScriptHashAddrID: chaincfg.SimNetParams.WitnessScriptHashAddrID,
+		Bech32HRPSegwit:         chaincfg.SimNetParams.Bech32HRPSegwit,
+	}
 }
 
 // makeClient constructs an ElectrumClient against a stubNetwork seeded with
@@ -187,12 +200,10 @@ func makeClient(t *testing.T, blocks int) (*ElectrumClient, *stubNetwork) {
 	}
 	stub.synced = true
 
-	params := &netparams.ChainParams{Chain: "btc"}
-	// Copy a few fields so BTCDParams() can construct a usable *chaincfg.Params.
-	*params = *btcSimnet()
-	params.Chain = "btc"
-
-	c := NewElectrumClient(params, stub)
+	c, err := NewElectrumClient(testParams(), stub)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
 	if err := c.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -431,12 +442,11 @@ func TestElectrumRescanEmitsBlocksAndFilteredAndFinished(t *testing.T) {
 	stub.rawTxs[txid] = rawHex
 
 	startHash := stub.headers[0].BlockHash()
-	go func() {
-		err := c.Rescan(&startHash, []btcutil.Address{addr}, nil)
-		if err != nil && !errors.Is(err, errClientShutDown) {
-			t.Errorf("Rescan: %v", err)
-		}
-	}()
+	// Rescan is async: it returns nil immediately and emits notifications
+	// from a goroutine.
+	if err := c.Rescan(&startHash, []btcutil.Address{addr}, nil); err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
 
 	// Heights 0, 1 produce BlockConnected; height 2 produces
 	// FilteredBlockConnected; heights 3, 4 produce BlockConnected;
@@ -516,28 +526,96 @@ func newSimnetAddr(t *testing.T) (btcutil.Address, string) {
 	return addr, sh
 }
 
+func TestElectrumFilterBlocks(t *testing.T) {
+	c, stub := makeClient(t, 6)
+
+	addr, sh := newSimnetAddr(t)
+	// The tx must actually pay to addr so the in-tree BlockFilterer
+	// recognises it as "relevant" — FilterBlocks doesn't trust the
+	// server's history blindly.
+	txid, rawHex := synthTxToAddr(t, addr)
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 3, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+
+	scopedIdx := waddrmgr.ScopedIndex{Scope: waddrmgr.KeyScopeBIP0084}
+	req := &FilterBlocksRequest{
+		ExternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{scopedIdx: addr},
+	}
+	for h, hdr := range stub.headers {
+		req.Blocks = append(req.Blocks, wtxmgr.BlockMeta{
+			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: int32(h)},
+			Time:  hdr.Timestamp,
+		})
+	}
+
+	resp, err := c.FilterBlocks(req)
+	if err != nil {
+		t.Fatalf("FilterBlocks: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected a response for a block with activity, got nil")
+	}
+	if resp.BlockMeta.Height != 3 {
+		t.Fatalf("matched block height = %d, want 3", resp.BlockMeta.Height)
+	}
+	if len(resp.RelevantTxns) != 1 {
+		t.Fatalf("RelevantTxns = %d, want 1", len(resp.RelevantTxns))
+	}
+
+	// And a miss case: no addresses, no hits.
+	miss, err := c.FilterBlocks(&FilterBlocksRequest{
+		Blocks:        req.Blocks,
+		ExternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{},
+	})
+	if err != nil {
+		t.Fatalf("FilterBlocks miss: %v", err)
+	}
+	if miss != nil {
+		t.Fatalf("expected nil response for empty addr list, got %+v", miss)
+	}
+}
+
+// synthTxNonce makes each synthTx return a distinct transaction so successive
+// calls in the same test (or shared fixtures) don't produce colliding txids.
+var synthTxNonce atomic.Uint32
+
 // synthTx returns a minimally-valid wire tx, its txid hex, and its raw hex
-// serialization. The tx pays to OP_TRUE so it's accepted by any parser.
+// serialization. The tx pays to OP_TRUE; use synthTxToAddr when the caller
+// needs the output to belong to a specific address.
 func synthTx(t *testing.T) (txid, rawHex string) {
 	t.Helper()
-	tx := wire.NewMsgTx(wire.TxVersion)
-	tx.AddTxIn(&wire.TxIn{
-		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{1, 2, 3}, Index: 0},
-		SignatureScript:  []byte{0x51},
-		Sequence:         wire.MaxTxInSequenceNum,
-	})
 	script, err := txscript.NewScriptBuilder().AddOp(txscript.OP_TRUE).Script()
 	if err != nil {
 		t.Fatalf("scriptBuilder: %v", err)
 	}
-	tx.AddTxOut(&wire.TxOut{Value: 1000, PkScript: script})
+	return synthTxWithScript(t, script)
+}
+
+// synthTxToAddr returns a minimally-valid wire tx that pays its single output
+// to addr, plus the txid and hex serialization. Use this when the test needs
+// the tx to be filterable as "relevant" to addr.
+func synthTxToAddr(t *testing.T, addr btcutil.Address) (txid, rawHex string) {
+	t.Helper()
+	script, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		t.Fatalf("PayToAddrScript: %v", err)
+	}
+	return synthTxWithScript(t, script)
+}
+
+func synthTxWithScript(t *testing.T, pkScript []byte) (txid, rawHex string) {
+	t.Helper()
+	nonce := synthTxNonce.Add(1)
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{31: byte(nonce)}, Index: 0},
+		SignatureScript:  []byte{0x51},
+		Sequence:         wire.MaxTxInSequenceNum,
+	})
+	tx.AddTxOut(&wire.TxOut{Value: 1000 + int64(nonce), PkScript: pkScript})
 	var buf bytes.Buffer
 	if err := tx.Serialize(&buf); err != nil {
 		t.Fatalf("Serialize: %v", err)
 	}
 	return tx.TxHash().String(), hex.EncodeToString(buf.Bytes())
 }
-
-// Confirm bisonwire is referenced from the test file so its import sticks
-// when go-test trims unused imports during build cycles.
-var _ = bisonwire.ChainBTC

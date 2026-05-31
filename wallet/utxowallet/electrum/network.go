@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -202,6 +203,18 @@ func (n *Network) HeaderByHeight(height int32) *wire.BlockHeader {
 	return n.headers.ByHeight(height)
 }
 
+// HeaderByHash returns the height and header for the given block hash, plus
+// ok=false if the hash is not in the local store.
+func (n *Network) HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
+	return n.headers.ByHash(hash)
+}
+
+// TipHash returns the hash of the highest connected header (zero hash if
+// none).
+func (n *Network) TipHash() chainhash.Hash {
+	return n.headers.TipHash()
+}
+
 // SubscribeScripthash subscribes to status changes for a scripthash and
 // returns the current status.
 func (n *Network) SubscribeScripthash(ctx context.Context, scripthash string) (*ScripthashStatus, error) {
@@ -296,10 +309,7 @@ func (n *Network) getNode() (*Node, error) {
 // during Start.
 func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 	for {
-		nextHeight := n.headers.Tip() + 1
-		if nextHeight < n.cfg.Chain.StartHeight {
-			nextHeight = n.cfg.Chain.StartHeight
-		}
+		nextHeight := max(n.headers.Tip()+1, n.cfg.Chain.StartHeight)
 		batch, err := node.BlockHeaders(ctx, nextHeight, n.cfg.HeaderBatchSize)
 		if err != nil {
 			return err
@@ -339,7 +349,11 @@ func (n *Network) headersLoop(initialTip *HeadersTip) {
 	// Apply the subscription's initial reply as if it were a notification.
 	n.applyTipNotification(initialTip)
 
-	ch := n.cfg.TrustedServerNodeHeadersChan(n.getNodeUnsafe())
+	node := n.peekNode()
+	if node == nil {
+		return
+	}
+	ch := node.HeadersNotifyChan()
 	for {
 		select {
 		case <-n.ctx.Done():
@@ -353,20 +367,9 @@ func (n *Network) headersLoop(initialTip *HeadersTip) {
 	}
 }
 
-// TrustedServerNodeHeadersChan is a helper that returns the active node's
-// headers channel, isolated so we can rotate the underlying node when we add
-// failover.
-func (cfg *Config) TrustedServerNodeHeadersChan(node *Node) <-chan *HeadersTip {
-	if node == nil {
-		// closed channel so callers exit immediately
-		ch := make(chan *HeadersTip)
-		close(ch)
-		return ch
-	}
-	return node.HeadersNotifyChan()
-}
-
-func (n *Network) getNodeUnsafe() *Node {
+// peekNode returns the current node without an error path, for goroutines
+// that have already verified Start succeeded and just want a snapshot.
+func (n *Network) peekNode() *Node {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.node
@@ -431,10 +434,7 @@ func (n *Network) catchUp(targetHeight int32) error {
 	}
 	for n.headers.Tip() < targetHeight {
 		nextHeight := n.headers.Tip() + 1
-		want := int(targetHeight - n.headers.Tip())
-		if want > n.cfg.HeaderBatchSize {
-			want = n.cfg.HeaderBatchSize
-		}
+		want := min(int(targetHeight-n.headers.Tip()), n.cfg.HeaderBatchSize)
 		batch, err := node.BlockHeaders(n.ctx, nextHeight, want)
 		if err != nil {
 			return err
@@ -466,7 +466,7 @@ func (n *Network) deliverTipChange(tip int32) {
 // per-network channel.
 func (n *Network) scripthashLoop() {
 	defer n.wg.Done()
-	node := n.getNodeUnsafe()
+	node := n.peekNode()
 	if node == nil {
 		return
 	}
@@ -493,6 +493,11 @@ func (n *Network) scripthashLoop() {
 
 // watchNode waits for the node to drop and then tears the network down. A
 // later phase will replace this with peer rotation.
+//
+// The final-shutdown bookkeeping runs in a child goroutine because
+// `n.wg.Wait()` would otherwise deadlock — watchNode itself is part of the
+// waitgroup. Returning lets our own `defer n.wg.Done()` fire so the wait can
+// complete; the child then closes the public channels and signals done.
 func (n *Network) watchNode(node *Node) {
 	defer n.wg.Done()
 	select {
@@ -501,7 +506,6 @@ func (n *Network) watchNode(node *Node) {
 		n.Stop()
 	case <-n.ctx.Done():
 	}
-	// Wait for the other goroutines to settle then signal final shutdown.
 	go func() {
 		n.wg.Wait()
 		n.doneClosed.Do(func() {

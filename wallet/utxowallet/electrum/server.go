@@ -62,12 +62,10 @@ type dialOptions struct {
 // generic JSON-RPC request/response and notification dispatch. It is built
 // once per connection; reconnects mean a fresh Server.
 type Server struct {
-	addr    string
-	conn    net.Conn
-	closing atomic.Bool // set when we initiate shutdown
-
-	cancelCause context.CancelCauseFunc
-	done        chan struct{}
+	addr   string
+	conn   net.Conn
+	cancel context.CancelFunc
+	done   chan struct{}
 
 	nextID atomic.Uint64
 
@@ -116,12 +114,12 @@ func dial(ctx context.Context, addr string, opts *dialOptions) (*Server, error) 
 	}
 
 	// Wrap the parent ctx so callers can shut us down individually.
-	connCtx, cancel := context.WithCancelCause(ctx)
+	connCtx, cancel := context.WithCancel(ctx)
 
 	s := &Server{
 		addr:             addr,
 		conn:             conn,
-		cancelCause:      cancel,
+		cancel:           cancel,
 		done:             make(chan struct{}),
 		handlers:         make(map[uint64]chan *rpcResponse),
 		headersNotify:    make(chan *HeadersTip, notifyBufSize),
@@ -132,7 +130,6 @@ func dial(ctx context.Context, addr string, opts *dialOptions) (*Server, error) 
 	go s.keepAlive(connCtx)
 	go func() {
 		<-connCtx.Done()
-		s.closing.Store(true)
 		_ = conn.Close()
 		close(s.done)
 	}()
@@ -149,9 +146,7 @@ func (s *Server) Done() <-chan struct{} { return s.done }
 
 // Close initiates shutdown. The Done channel will close once shutdown
 // finishes. Safe to call multiple times.
-func (s *Server) Close() {
-	s.cancelCause(ErrServerClosed)
-}
+func (s *Server) Close() { s.cancel() }
 
 // nextRequestID returns a fresh JSON-RPC request id.
 func (s *Server) nextRequestID() uint64 { return s.nextID.Add(1) }
@@ -171,7 +166,9 @@ func (s *Server) request(ctx context.Context, method string, args, out any) erro
 
 	if err := s.write(msg); err != nil {
 		s.unregisterHandler(id)
-		s.cancelCause(fmt.Errorf("write: %w", err))
+		// A failed write means the connection is gone; tear down so
+		// the listen goroutine doesn't sit on a half-dead socket.
+		s.cancel()
 		return err
 	}
 
@@ -246,10 +243,10 @@ func (s *Server) listen(ctx context.Context) {
 		}
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			if !s.closing.Load() && ctx.Err() == nil {
+			if ctx.Err() == nil {
 				log.Tracef("electrum %s: read: %v", s.addr, err)
 			}
-			s.cancelCause(fmt.Errorf("read: %w", err))
+			s.cancel()
 			return
 		}
 

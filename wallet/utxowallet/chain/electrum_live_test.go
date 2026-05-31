@@ -76,7 +76,10 @@ func TestElectrumClientLiveSync(t *testing.T) {
 				t.Fatalf("NewNetwork: %v", err)
 			}
 
-			c := NewElectrumClient(lc.params, AdaptNetwork(net))
+			c, err := NewElectrumClient(lc.params, net)
+			if err != nil {
+				t.Fatalf("NewElectrumClient: %v", err)
+			}
 			if err := c.Start(); err != nil {
 				t.Fatalf("Start: %v", err)
 			}
@@ -165,7 +168,10 @@ func TestElectrumClientLiveRescanEmptyWallet(t *testing.T) {
 				t.Fatalf("NewNetwork: %v", err)
 			}
 
-			c := NewElectrumClient(lc.params, AdaptNetwork(net))
+			c, err := NewElectrumClient(lc.params, net)
+			if err != nil {
+				t.Fatalf("NewElectrumClient: %v", err)
+			}
 			if err := c.Start(); err != nil {
 				t.Fatalf("Start: %v", err)
 			}

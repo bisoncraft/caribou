@@ -21,6 +21,7 @@ package electrum
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"math/big"
 	"testing"
 	"time"
@@ -146,17 +147,15 @@ func TestLiveNetworkSyncHeaders(t *testing.T) {
 	useTestLogger(t)
 	for _, tc := range liveCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &Config{
-				Chain: &ChainConfig{
-					Chain:       tc.chain,
-					Params:      tc.params,
-					HeaderSize:  80,
-					StartHeight: 0,
-				},
+			chainCfg, err := NewChainConfig(tc.chain, tc.params)
+			if err != nil {
+				t.Fatalf("NewChainConfig: %v", err)
+			}
+			net, err := NewNetwork(&Config{
+				Chain:         chainCfg,
 				TrustedServer: &ServerAddr{Proto: "ssl", Addr: tc.addr},
 				DataDir:       t.TempDir(),
-			}
-			net, err := NewNetwork(cfg)
+			})
 			if err != nil {
 				t.Fatalf("NewNetwork: %v", err)
 			}
@@ -213,7 +212,7 @@ func TestLiveGetTransaction(t *testing.T) {
 			}
 			// Sanity: decode the header and check it BlockHash()es to
 			// the chain's known genesis.
-			raw, err := DecodeHexBatch(hexHdr)
+			raw, err := hex.DecodeString(hexHdr)
 			if err != nil {
 				t.Fatalf("decode header hex: %v", err)
 			}

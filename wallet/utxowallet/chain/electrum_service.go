@@ -46,26 +46,5 @@ type ElectrumNetwork interface {
 	EstimateFee(ctx context.Context, confTarget int32) (int64, error)
 }
 
-// electrumNetworkAdapter wraps a concrete *electrum.Network with the small
-// adapter methods needed to satisfy ElectrumNetwork. It exists because the
-// concrete type exposes HeaderByHash via Headers().ByHash, and we want a flat
-// interface for testability.
-type electrumNetworkAdapter struct {
-	*electrum.Network
-}
-
-// HeaderByHash forwards to the underlying headers store.
-func (a *electrumNetworkAdapter) HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
-	return a.Network.Headers().ByHash(hash)
-}
-
-// TipHash forwards to the underlying headers store.
-func (a *electrumNetworkAdapter) TipHash() chainhash.Hash {
-	return a.Network.Headers().TipHash()
-}
-
-// AdaptNetwork wraps a concrete *electrum.Network so it satisfies the
-// ElectrumNetwork interface used by ElectrumClient.
-func AdaptNetwork(n *electrum.Network) ElectrumNetwork {
-	return &electrumNetworkAdapter{Network: n}
-}
+// Compile-time check: *electrum.Network satisfies ElectrumNetwork.
+var _ ElectrumNetwork = (*electrum.Network)(nil)

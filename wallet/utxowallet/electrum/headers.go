@@ -7,7 +7,6 @@ package electrum
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -138,24 +137,6 @@ func (h *Headers) TipHash() chainhash.Hash {
 		return chainhash.Hash{}
 	}
 	return hdr.BlockHash()
-}
-
-// Range copies count headers starting at startHeight into dst (which must be
-// pre-allocated) and returns the number of headers actually written. It is
-// the caller's responsibility to keep startHeight+count within the chain.
-func (h *Headers) Range(startHeight int32, dst []wire.BlockHeader) int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	n := 0
-	for i := range dst {
-		hdr, ok := h.byHeight[startHeight+int32(i)]
-		if !ok {
-			break
-		}
-		dst[i] = *hdr
-		n++
-	}
-	return n
 }
 
 // AppendBatch appends a batch of raw headers (concatenated, headerSize bytes
@@ -318,19 +299,13 @@ func (h *Headers) parseBatch(raw []byte) ([]*wire.BlockHeader, error) {
 }
 
 // prevHashAt returns the hash that a header at `height` must reference as
-// PrevBlock. height must equal tip+1 or be exactly StartHeight; for
-// StartHeight the parent is the genesis as derived from chain params.
+// PrevBlock. For the very first header (at StartHeight) there is no local
+// parent to compare against — at StartHeight == 0 the parent is genesis and
+// PrevBlock is the zero hash; at a non-zero StartHeight checkpoint we'd need
+// a stored checkpoint hash to validate against, which we don't yet support,
+// so we accept what the server gave us.
 func (h *Headers) prevHashAt(height int32) (chainhash.Hash, error) {
 	if height == h.cfg.StartHeight {
-		// We expect the first header to be at StartHeight; its parent
-		// is the previous block, or — when StartHeight is 0 — the
-		// genesis block has no parent and PrevBlock is zero.
-		if h.cfg.StartHeight == 0 {
-			return chainhash.Hash{}, nil
-		}
-		// For non-zero start heights we cannot validate the very
-		// first header against a known parent; accept whatever the
-		// server gave us.
 		return chainhash.Hash{}, nil
 	}
 	prev := h.byHeight[height-1]
@@ -388,11 +363,4 @@ func (h *Headers) loadFromDisk() error {
 	h.tip.Store(h.cfg.StartHeight + count - 1)
 	log.Infof("electrum: loaded %d headers, tip at %d", count, h.tip.Load())
 	return nil
-}
-
-// DecodeHexBatch decodes a hex-encoded concatenated batch of raw headers
-// (as returned by electrumx) into bytes. It is exposed so callers wiring up
-// the sync loop can reuse the same decoding.
-func DecodeHexBatch(s string) ([]byte, error) {
-	return hex.DecodeString(s)
 }

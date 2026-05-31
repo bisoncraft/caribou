@@ -262,27 +262,3 @@ func TestHeadersFilePathLayout(t *testing.T) {
 		t.Fatalf("expected directory %s: %v", filepath.Dir(want), err)
 	}
 }
-
-func TestHeadersRange(t *testing.T) {
-	h, _ := newTestHeaders(t)
-	chain := synthChain(10, 1)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	dst := make([]wire.BlockHeader, 4)
-	n := h.Range(2, dst)
-	if n != 4 {
-		t.Fatalf("Range wrote %d, want 4", n)
-	}
-	for i, want := range chain[2:6] {
-		if dst[i].BlockHash() != want.BlockHash() {
-			t.Fatalf("Range[%d] mismatch", i)
-		}
-	}
-	// Reading past the tip yields a partial copy.
-	dst2 := make([]wire.BlockHeader, 4)
-	n = h.Range(8, dst2)
-	if n != 2 {
-		t.Fatalf("Range past tip wrote %d, want 2", n)
-	}
-}

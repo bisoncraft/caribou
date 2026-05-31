@@ -6,6 +6,7 @@ package chain
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"maps"
@@ -71,19 +72,16 @@ func (c *ElectrumClient) subscribeAddress(addr btcutil.Address) error {
 	return nil
 }
 
-// Rescan walks the chain from startHash to tip, fetching all transactions
-// that involve any of the supplied addresses or outpoints and emitting the
-// chain.Interface notifications a fresh wallet sync expects.
+// Rescan kicks off a chain rescan: walking from startHash to the current tip,
+// fetching every transaction that involves any of the supplied addresses or
+// outpoints and emitting the chain.Interface notifications a fresh wallet
+// sync expects (BlockConnected for inert blocks, FilteredBlockConnected for
+// blocks with matches, periodic RescanProgress, terminating RescanFinished).
 //
-// The semantics mirror what NeutrinoClient.Rescan delivers: a stream of
-// BlockConnected notifications (for blocks with no relevant txs),
-// FilteredBlockConnected notifications (for blocks that touched our addresses),
-// periodic RescanProgress notifications, and a terminating RescanFinished.
-//
-// Unlike NeutrinoClient.Rescan, ElectrumClient.Rescan is synchronous — it
-// returns only after RescanFinished has been delivered (or the client has
-// shut down). This matches what the wallet's rescanRPCHandler expects:
-// notifications drive the wallet state; the call's error is incidental.
+// Rescan is asynchronous to match NeutrinoClient: it does the synchronous
+// setup (scripthash subscriptions, history fetches), kicks off a walk
+// goroutine, and returns nil immediately. A subsequent Rescan call cancels
+// any in-flight walk before starting the new one.
 func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 	addrs []btcutil.Address,
 	outpoints map[wire.OutPoint]btcutil.Address) error {
@@ -96,7 +94,7 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 
 	// Subscribe to every address we plan to scan so we keep receiving
 	// updates after the rescan completes.
-	scripthashes := make([]string, 0, len(addrs))
+	scripthashes := make([]string, 0, len(addrs)+len(outpoints))
 	for _, addr := range addrs {
 		sh, err := addrScripthash(addr)
 		if err != nil {
@@ -107,7 +105,6 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 			return err
 		}
 	}
-	// And outpoint addresses too.
 	for _, addr := range outpoints {
 		sh, err := addrScripthash(addr)
 		if err != nil {
@@ -138,42 +135,97 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 		return err
 	}
 
+	// Cancel any in-flight rescan and wait for its goroutine to exit
+	// before starting ours. This keeps the notification stream coherent.
+	c.rescanMtx.Lock()
+	if c.rescanCancel != nil {
+		c.rescanCancel()
+		prev := c.rescanDone
+		c.rescanMtx.Unlock()
+		<-prev
+		c.rescanMtx.Lock()
+	}
+	ctx, cancel := context.WithCancel(c.ctx)
+	done := make(chan struct{})
+	c.rescanCancel = cancel
+	c.rescanDone = done
+	c.rescanMtx.Unlock()
+
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		defer close(done)
+		c.runRescan(ctx, startHeight, matches)
+	}()
+
+	return nil
+}
+
+// runRescan executes the rescan walk on the rescan goroutine. It returns
+// silently on cancellation; on completion it enqueues RescanFinished. Errors
+// during the walk are logged but not returned — the wallet observes progress
+// through the notification stream, not via Rescan's call site.
+func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
+	matches map[int32][]electrum.HistoryEntry) {
+
 	tip := c.net.Tip()
 	if tip < startHeight {
-		// Nothing to walk; the chain is shorter than the start point.
-		return c.dispatchRescanFinished(tip)
+		c.tryDispatchRescanFinished(tip)
+		return
 	}
 
 	for height := startHeight; height <= tip; height++ {
-		select {
-		case <-c.quit:
-			return errClientShutDown
-		default:
+		if ctx.Err() != nil {
+			return
 		}
 		hdr := c.net.HeaderByHeight(height)
 		if hdr == nil {
-			return fmt.Errorf("electrum: rescan missing header at %d", height)
+			log.Errorf("electrum: rescan missing header at %d", height)
+			return
 		}
 		block := wtxmgr.BlockMeta{
 			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
 			Time:  hdr.Timestamp,
 		}
 		entries := matches[height]
+		var err error
 		if len(entries) == 0 {
-			// Block had no activity; only emit BlockConnected.
-			if err := c.enqueue(BlockConnected(block)); err != nil {
-				return err
-			}
-		} else if err := c.emitFilteredBlock(block, entries); err != nil {
-			return err
+			err = c.enqueueCtx(ctx, BlockConnected(block))
+		} else {
+			err = c.emitFilteredBlock(ctx, block, entries)
+		}
+		if err != nil {
+			return // shutdown or rescan cancelled
 		}
 		if height%rescanProgressInterval == 0 && height != startHeight {
-			if err := c.enqueueRescanProgress(hdr, height); err != nil {
-				return err
+			if err := c.enqueueCtx(ctx, &RescanProgress{
+				Hash:   hdr.BlockHash(),
+				Height: height,
+				Time:   hdr.Timestamp,
+			}); err != nil {
+				return
 			}
 		}
 	}
-	return c.dispatchRescanFinished(tip)
+	c.tryDispatchRescanFinished(tip)
+}
+
+// tryDispatchRescanFinished enqueues a RescanFinished notification, logging
+// (but not propagating) any error so the caller doesn't have to.
+func (c *ElectrumClient) tryDispatchRescanFinished(tip int32) {
+	hdr := c.net.HeaderByHeight(tip)
+	if hdr == nil {
+		log.Warnf("electrum: rescan finished but no header at %d", tip)
+		return
+	}
+	h := hdr.BlockHash()
+	if err := c.enqueue(&RescanFinished{
+		Hash:   &h,
+		Height: tip,
+		Time:   hdr.Timestamp,
+	}); err != nil {
+		log.Debugf("electrum: enqueue RescanFinished: %v", err)
+	}
 }
 
 // collectHistories fetches the history for every scripthash and groups the
@@ -210,8 +262,8 @@ func (c *ElectrumClient) collectHistories(scripthashes []string, startHeight int
 
 // emitFilteredBlock fetches each matching tx, decodes it, and emits a single
 // FilteredBlockConnected notification carrying the block plus relevant
-// records.
-func (c *ElectrumClient) emitFilteredBlock(block wtxmgr.BlockMeta, entries []electrum.HistoryEntry) error {
+// records. ctx allows the rescan to be cancelled mid-block.
+func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.BlockMeta, entries []electrum.HistoryEntry) error {
 	// Deduplicate txids — two scripthashes can match the same tx.
 	seen := make(map[string]struct{}, len(entries))
 	uniq := make([]electrum.HistoryEntry, 0, len(entries))
@@ -226,9 +278,8 @@ func (c *ElectrumClient) emitFilteredBlock(block wtxmgr.BlockMeta, entries []ele
 	sort.Slice(uniq, func(i, j int) bool { return uniq[i].TxHash < uniq[j].TxHash })
 
 	ntfn := FilteredBlockConnected{Block: &block}
-	chain := chainFromParams(c.chainParams)
 	for _, e := range uniq {
-		rawHex, err := c.net.GetRawTransaction(c.ctx, e.TxHash)
+		rawHex, err := c.net.GetRawTransaction(ctx, e.TxHash)
 		if err != nil {
 			log.Warnf("electrum: rescan fetch %s: %v", e.TxHash, err)
 			continue
@@ -238,42 +289,34 @@ func (c *ElectrumClient) emitFilteredBlock(block wtxmgr.BlockMeta, entries []ele
 			log.Warnf("electrum: decode raw %s: %v", e.TxHash, err)
 			continue
 		}
-		rec, err := wtxmgr.NewTxRecord(string(chain), raw, block.Time)
+		rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, block.Time)
 		if err != nil {
 			log.Warnf("electrum: tx record %s: %v", e.TxHash, err)
 			continue
 		}
 		ntfn.RelevantTxs = append(ntfn.RelevantTxs, rec)
 	}
-	return c.enqueue(ntfn)
+	return c.enqueueCtx(ctx, ntfn)
 }
 
-func (c *ElectrumClient) enqueueRescanProgress(hdr *wire.BlockHeader, height int32) error {
-	return c.enqueue(&RescanProgress{
-		Hash:   hdr.BlockHash(),
-		Height: height,
-		Time:   hdr.Timestamp,
-	})
-}
-
-func (c *ElectrumClient) dispatchRescanFinished(tip int32) error {
-	hdr := c.net.HeaderByHeight(tip)
-	if hdr == nil {
-		return fmt.Errorf("electrum: rescan finished but missing header at %d", tip)
-	}
-	h := hdr.BlockHash()
-	return c.enqueue(&RescanFinished{
-		Hash:   &h,
-		Height: tip,
-		Time:   hdr.Timestamp,
-	})
-}
-
-// enqueue pushes a notification onto the queue; respects shutdown.
+// enqueue pushes a notification onto the queue, blocking only on shutdown.
 func (c *ElectrumClient) enqueue(n any) error {
 	select {
 	case c.enqueueNotification <- n:
 		return nil
+	case <-c.quit:
+		return errClientShutDown
+	}
+}
+
+// enqueueCtx is like enqueue but also unblocks when ctx is cancelled — used
+// by the rescan walk so a superseded rescan exits promptly.
+func (c *ElectrumClient) enqueueCtx(ctx context.Context, n any) error {
+	select {
+	case c.enqueueNotification <- n:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-c.quit:
 		return errClientShutDown
 	}
@@ -321,30 +364,19 @@ func (c *ElectrumClient) FilterBlocks(req *FilterBlocksRequest) (*FilterBlocksRe
 		heightSet[blk.Height] = true
 	}
 
-	// Per-height bucket of (txid, scripthash) so we can fetch each tx
-	// once and know which address triggered it.
-	type txid string
-	type hit struct {
-		tx  txid
-		sh  string
-		hdr electrum.HistoryEntry
-	}
-	hitsByHeight := make(map[int32][]hit)
+	// Per-height bucket of matching txids. We fetch each tx at most once
+	// even if multiple watched scripthashes touch the same tx.
+	hitsByHeight := make(map[int32][]string)
 	for _, r := range refs {
 		hist, err := c.fetchHistory(r.sh)
 		if err != nil {
 			return nil, err
 		}
 		for _, h := range hist {
-			if h.Height <= 0 {
+			if h.Height <= 0 || !heightSet[h.Height] {
 				continue
 			}
-			if !heightSet[h.Height] {
-				continue
-			}
-			hitsByHeight[h.Height] = append(hitsByHeight[h.Height], hit{
-				tx: txid(h.TxHash), sh: r.sh, hdr: h,
-			})
+			hitsByHeight[h.Height] = append(hitsByHeight[h.Height], h.TxHash)
 		}
 	}
 
@@ -359,22 +391,21 @@ func (c *ElectrumClient) FilterBlocks(req *FilterBlocksRequest) (*FilterBlocksRe
 			continue
 		}
 		// Dedup txids — multiple scripthashes can land on the same tx.
-		seen := make(map[txid]struct{}, len(hits))
-		uniqTxs := make([]txid, 0, len(hits))
-		for _, h := range hits {
-			if _, dup := seen[h.tx]; dup {
+		seen := make(map[string]struct{}, len(hits))
+		uniqTxs := make([]string, 0, len(hits))
+		for _, t := range hits {
+			if _, dup := seen[t]; dup {
 				continue
 			}
-			seen[h.tx] = struct{}{}
-			uniqTxs = append(uniqTxs, h.tx)
+			seen[t] = struct{}{}
+			uniqTxs = append(uniqTxs, t)
 		}
 
 		// Fetch the txs and decode them as bisonwire.Tx so the
 		// existing BlockFilterer machinery can inspect them.
-		chain := chainFromParams(c.chainParams)
 		bw := make([]*bisonwire.Tx, 0, len(uniqTxs))
 		for _, t := range uniqTxs {
-			rawHex, err := c.net.GetRawTransaction(c.ctx, string(t))
+			rawHex, err := c.net.GetRawTransaction(c.ctx, t)
 			if err != nil {
 				return nil, fmt.Errorf("electrum: fetch %s: %w", t, err)
 			}
@@ -382,7 +413,7 @@ func (c *ElectrumClient) FilterBlocks(req *FilterBlocksRequest) (*FilterBlocksRe
 			if err != nil {
 				return nil, fmt.Errorf("electrum: decode %s: %w", t, err)
 			}
-			tx := &bisonwire.Tx{Chain: string(chain)}
+			tx := &bisonwire.Tx{Chain: string(c.chain)}
 			if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
 				return nil, fmt.Errorf("electrum: deserialize %s: %w", t, err)
 			}

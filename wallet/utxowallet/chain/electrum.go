@@ -5,11 +5,13 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,6 +53,7 @@ type ElectrumClient struct {
 	net         ElectrumNetwork
 	chainParams *netparams.ChainParams
 	btcParams   *chaincfg.Params
+	chain       bisonwire.Chain
 
 	// addrCache maps a scripthash hex string to the address it was
 	// registered for, plus the last status we processed so we can detect
@@ -74,6 +77,13 @@ type ElectrumClient struct {
 	startMtx sync.Mutex
 	started  bool
 	wg       sync.WaitGroup
+
+	// rescanMtx serializes Rescan calls: a new Rescan cancels and waits
+	// for any in-flight walk before starting its own. The cancel func is
+	// nil when no walk is running.
+	rescanMtx    sync.Mutex
+	rescanCancel context.CancelFunc
+	rescanDone   chan struct{}
 }
 
 // scripthashEntry captures per-scripthash state.
@@ -88,14 +98,30 @@ var _ ElectrumBackend = (*ElectrumClient)(nil)
 
 // NewElectrumClient constructs an ElectrumClient backed by the given network.
 // The network must not be started; ElectrumClient.Start will start it.
-func NewElectrumClient(chainParams *netparams.ChainParams, network ElectrumNetwork) *ElectrumClient {
+//
+// chainParams.Chain must be a value recognised by bisonwire.ChainFromString
+// (currently "btc" or "ltc"); otherwise an error is returned. We validate
+// here rather than at every call site so the internal helpers can assume the
+// chain string is good.
+func NewElectrumClient(chainParams *netparams.ChainParams, network ElectrumNetwork) (*ElectrumClient, error) {
+	if chainParams == nil {
+		return nil, errors.New("electrum: nil chain params")
+	}
+	if network == nil {
+		return nil, errors.New("electrum: nil network")
+	}
+	chain, err := bisonwire.ChainFromString(chainParams.Chain)
+	if err != nil {
+		return nil, fmt.Errorf("electrum: %w", err)
+	}
 	return &ElectrumClient{
 		net:           network,
 		chainParams:   chainParams,
 		btcParams:     chainParams.BTCDParams(),
+		chain:         chain,
 		addrCache:     make(map[string]*scripthashEntry),
 		outpointCache: make(map[wire.OutPoint]btcutil.Address),
-	}
+	}, nil
 }
 
 // BackEnd returns the name of the backend.
@@ -399,7 +425,7 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 	if err != nil {
 		return fmt.Errorf("decode raw tx: %w", err)
 	}
-	rec, err := wtxmgr.NewTxRecord(string(chainFromParams(c.chainParams)), raw, time.Now())
+	rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, time.Now())
 	if err != nil {
 		return fmt.Errorf("new tx record: %w", err)
 	}
@@ -420,17 +446,6 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 	return nil
 }
 
-// chainFromParams returns the bisonwire.Chain implied by chainParams.Chain.
-func chainFromParams(p *netparams.ChainParams) bisonwire.Chain {
-	c, err := bisonwire.ChainFromString(p.Chain)
-	if err != nil {
-		// Fall back to BTC to avoid panicking; the wallet will surface
-		// any real mismatch through tx-record validation later.
-		return bisonwire.ChainBTC
-	}
-	return c
-}
-
 // ----------------------------------------------------------------------------
 // notificationHandler — drains enqueueNotification into dequeueNotification.
 // Mirrors NeutrinoClient.notificationHandler for compatibility.
@@ -439,10 +454,15 @@ func chainFromParams(p *netparams.ChainParams) bisonwire.Chain {
 func (c *ElectrumClient) notificationHandler() {
 	defer c.wg.Done()
 	hash, height, err := c.GetBestBlock()
-	bs := &waddrmgr.BlockStamp{}
-	if err == nil {
-		bs = &waddrmgr.BlockStamp{Hash: *hash, Height: height}
+	if err != nil {
+		log.Errorf("electrum: failed to get best block at startup: %v", err)
+		// Tear down so the wallet sees Notifications() close instead
+		// of silently advertising a zero-height BlockStamp.
+		go c.Stop()
+		close(c.dequeueNotification)
+		return
 	}
+	bs := &waddrmgr.BlockStamp{Hash: *hash, Height: height}
 
 	var notifications []any
 	enqueue := c.enqueueNotification
@@ -504,29 +524,16 @@ func addrScripthash(addr btcutil.Address) (string, error) {
 		return "", fmt.Errorf("pay to addr script: %w", err)
 	}
 	sum := sha256.Sum256(script)
-	for i, j := 0, len(sum)-1; i < j; i, j = i+1, j-1 {
-		sum[i], sum[j] = sum[j], sum[i]
-	}
+	slices.Reverse(sum[:])
 	return hex.EncodeToString(sum[:]), nil
 }
 
 // serializeMsgTxHex returns the hex-encoded wire format of tx.
 func serializeMsgTxHex(tx *wire.MsgTx) (string, error) {
-	buf := make([]byte, 0, tx.SerializeSize())
-	w := newByteWriter(buf)
-	if err := tx.Serialize(w); err != nil {
+	var buf bytes.Buffer
+	buf.Grow(tx.SerializeSize())
+	if err := tx.Serialize(&buf); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(w.Bytes()), nil
+	return hex.EncodeToString(buf.Bytes()), nil
 }
-
-// byteWriter is a tiny growable buffer that implements io.Writer without
-// the extra surface of bytes.Buffer (and without importing it just for this).
-type byteWriter struct{ b []byte }
-
-func newByteWriter(b []byte) *byteWriter { return &byteWriter{b: b} }
-func (w *byteWriter) Write(p []byte) (int, error) {
-	w.b = append(w.b, p...)
-	return len(p), nil
-}
-func (w *byteWriter) Bytes() []byte { return w.b }
