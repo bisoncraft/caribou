@@ -20,6 +20,7 @@ func BackEnds() []string {
 		"btcd",
 		"neutrino",
 		"bitcoind-rpc-polling",
+		ElectrumBackEnd,
 	}
 }
 
