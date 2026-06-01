@@ -8,13 +8,15 @@
 // representation rides along inside it via WalletTransaction.RawTx.
 //
 // The underlying storage engine is selected at build time (see engine_*.go):
-// Badger (util/lexi) on desktop and bbolt (wallet/glossi) on mobile.
+// Badger (util/lexi) on desktop and bbolt (util/glossi) on mobile.
 package txdb
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -102,7 +104,18 @@ func newTxDB(store Store, log util.Logger) (*TxDB, error) {
 	return db, nil
 }
 
-// Close closes the underlying store.
+// Connect ties the TxDB's shutdown to ctx: when ctx is canceled, the
+// underlying storage engine is closed. The returned WaitGroup completes once
+// shutdown is finished. Production callers should call Connect immediately
+// after New and wait the WaitGroup as part of their shutdown sequence. Tests
+// and one-shot tools may instead use Close directly.
+func (db *TxDB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	return db.store.Connect(ctx)
+}
+
+// Close closes the underlying store. Only safe when Connect has not been
+// called; otherwise cancel the context passed to Connect and wait the
+// returned WaitGroup.
 func (db *TxDB) Close() error { return db.store.Close() }
 
 // NetworkTxDB returns a transaction database handle scoped to a single network.

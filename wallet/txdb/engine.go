@@ -4,12 +4,15 @@
 package txdb
 
 import (
+	"context"
+	"sync"
+
 	"github.com/bisoncraft/bosswallet/util"
 )
 
 // The transaction database is built on a small storage abstraction so that the
 // backing engine can be swapped at build time: Badger (util/lexi) on desktop and
-// bbolt (wallet/glossi) on mobile. The interfaces below capture the common
+// bbolt (util/glossi) on mobile. The interfaces below capture the common
 // surface of those two engines.
 //
 // The sentinel errors deliberately use the same string values as both engines
@@ -32,11 +35,18 @@ const (
 type IndexFunc func(k, v []byte) ([]byte, error)
 
 // Store is an indexed key-value store. It is implemented by adapters over
-// util/lexi (Badger) and wallet/glossi (bbolt).
+// util/lexi (Badger) and util/glossi (bbolt).
 type Store interface {
+	// Connect ties the store's shutdown to ctx: when ctx is canceled, the
+	// underlying database is closed. The returned WaitGroup completes once
+	// shutdown is finished. Long-running consumers should call Connect; tests
+	// and one-shot tools may instead use Close directly.
+	Connect(ctx context.Context) (*sync.WaitGroup, error)
 	// Table returns (creating if necessary) a namespaced, indexable table.
 	Table(name string) (StoreTable, error)
-	// Close closes the underlying database.
+	// Close closes the underlying database. Only safe to call when Connect has
+	// not been called; for the managed lifecycle, cancel the context passed to
+	// Connect and wait the returned WaitGroup.
 	Close() error
 }
 

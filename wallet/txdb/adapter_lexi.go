@@ -20,9 +20,7 @@ import (
 // without translation. Only ErrKeyNotFound (badger.ErrKeyNotFound) differs and
 // is translated in Get/Delete.
 type lexiStore struct {
-	db     *lexi.DB
-	cancel context.CancelFunc
-	wg     *sync.WaitGroup
+	db *lexi.DB
 }
 
 func newLexiStore(path string, log util.Logger) (Store, error) {
@@ -30,13 +28,19 @@ func newLexiStore(path string, log util.Logger) (Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	wg, err := db.Connect(ctx)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	return &lexiStore{db: db, cancel: cancel, wg: wg}, nil
+	return &lexiStore{db: db}, nil
+}
+
+// Connect forwards to lexi.DB.Connect, which spawns the value-log GC ticker
+// and binds Badger's shutdown (id-sequence release + Close) to ctx.
+func (s *lexiStore) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	return s.db.Connect(ctx)
+}
+
+// Close closes the underlying Badger database. Only valid when Connect has not
+// been called; lexi.Connect's goroutine handles Close internally on ctx done.
+func (s *lexiStore) Close() error {
+	return s.db.Close()
 }
 
 func (s *lexiStore) Table(name string) (StoreTable, error) {
@@ -45,14 +49,6 @@ func (s *lexiStore) Table(name string) (StoreTable, error) {
 		return nil, err
 	}
 	return &lexiTable{t: t}, nil
-}
-
-// Close cancels the lexi background context, which releases the id sequence and
-// closes the underlying Badger database, then waits for shutdown.
-func (s *lexiStore) Close() error {
-	s.cancel()
-	s.wg.Wait()
-	return nil
 }
 
 type lexiTable struct {

@@ -59,14 +59,17 @@ func (t *Table) addIndex(name string, f func(k, v []byte) ([]byte, error), uniqu
 	}
 	idx := &Index{table: t, name: name, f: f, unique: unique}
 	err := t.db.Update(func(tx *bbolt.Tx) error {
-		meta := tx.Bucket(t.name).Bucket(metaBucketKey)
+		tb := tx.Bucket(t.name)
+		meta := tb.Bucket(metaBucketKey)
+		seqBkt := tb.Bucket(seqBucketKey)
 		if existing := meta.Get([]byte(name)); existing != nil {
 			idx.id = existing[0]
 			return nil
 		}
-		// Assign the next id from the sequence.
+		// Assign the next id from the sequence. The sequence lives in its own
+		// sub-bucket so an index name can never collide with it.
 		var seq byte
-		if s := meta.Get(indexSeqKey); s != nil {
+		if s := seqBkt.Get(seqKey); s != nil {
 			seq = s[0]
 		}
 		if seq == 0xff {
@@ -76,7 +79,7 @@ func (t *Table) addIndex(name string, f func(k, v []byte) ([]byte, error), uniqu
 		if err := meta.Put([]byte(name), []byte{idx.id}); err != nil {
 			return err
 		}
-		return meta.Put(indexSeqKey, []byte{seq + 1})
+		return seqBkt.Put(seqKey, []byte{seq + 1})
 	})
 	if err != nil {
 		return nil, err
@@ -245,6 +248,13 @@ func walk(c *bbolt.Cursor, bound, seek []byte, reverse bool, f func(key, val []b
 }
 
 func forwardWalk(c *bbolt.Cursor, bound, seek []byte, f func(key, val []byte) error) error {
+	// bound is the scope (where iteration terminates); seek is an optional
+	// start-offset within the scope. If seek precedes bound, clamp it up: a
+	// pre-bound seek would land outside the prefix and the HasPrefix check
+	// would break on the first iteration, silently returning nothing.
+	if len(seek) > 0 && len(bound) > 0 && bytes.Compare(seek, bound) < 0 {
+		seek = bound
+	}
 	var k, v []byte
 	switch {
 	case len(seek) > 0:
@@ -269,6 +279,13 @@ func forwardWalk(c *bbolt.Cursor, bound, seek []byte, f func(key, val []byte) er
 }
 
 func reverseWalk(c *bbolt.Cursor, bound, seek []byte, f func(key, val []byte) error) error {
+	// See the forwardWalk comment: bound is scope, seek is an optional offset
+	// inside it. Clamping seek up to bound prevents a pre-bound seek from
+	// positioning us below the scope and terminating immediately on the first
+	// HasPrefix check.
+	if len(seek) > 0 && len(bound) > 0 && bytes.Compare(seek, bound) < 0 {
+		seek = bound
+	}
 	start := bound
 	if len(seek) > 0 {
 		start = seek

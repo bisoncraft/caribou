@@ -8,7 +8,7 @@ package txdb
 import "github.com/bisoncraft/bosswallet/util"
 
 // newStore opens the mobile transaction store, backed by bbolt via
-// wallet/glossi.
+// util/glossi.
 func newStore(path string, log util.Logger) (Store, error) {
 	return newGlossiStore(path, log)
 }

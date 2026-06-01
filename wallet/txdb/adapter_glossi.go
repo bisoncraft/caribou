@@ -6,8 +6,11 @@
 package txdb
 
 import (
+	"context"
+	"sync"
+
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/glossi"
+	"github.com/bisoncraft/bosswallet/util/glossi"
 )
 
 // glossiStore adapts a *glossi.DB (bbolt) to the Store interface. glossi's
@@ -26,6 +29,11 @@ func newGlossiStore(path string, log util.Logger) (Store, error) {
 	return &glossiStore{db: db}, nil
 }
 
+// Connect forwards to glossi.DB.Connect, which binds bbolt's shutdown to ctx.
+func (s *glossiStore) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	return s.db.Connect(ctx)
+}
+
 func (s *glossiStore) Table(name string) (StoreTable, error) {
 	t, err := s.db.Table(name)
 	if err != nil {
@@ -34,6 +42,8 @@ func (s *glossiStore) Table(name string) (StoreTable, error) {
 	return &glossiTable{t: t}, nil
 }
 
+// Close closes the underlying bbolt database. Only valid when Connect has not
+// been called; glossi.Connect's goroutine handles Close internally on ctx done.
 func (s *glossiStore) Close() error { return s.db.Close() }
 
 type glossiTable struct {

@@ -15,7 +15,7 @@ import (
 )
 
 // newTestTxDB builds a TxDB backed by the build-selected storage engine (Badger
-// via util/lexi on desktop, bbolt via wallet/glossi on mobile). Running the
+// via util/lexi on desktop, bbolt via util/glossi on mobile). Running the
 // suite under both -tags settings verifies the two engines behave identically.
 func newTestTxDB(t *testing.T) *TxDB {
 	t.Helper()

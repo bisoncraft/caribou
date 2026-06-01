@@ -16,14 +16,17 @@ import (
 const ErrUniqueConflict = util.ErrorKind("unique index conflict")
 
 var (
-	// Sub-buckets within a Table's bucket.
+	// Sub-buckets within a Table's bucket. Splitting the name→id map and the
+	// id sequence into separate buckets makes it structurally impossible for
+	// an index name to collide with the sequence key.
 	dataBucketKey  = []byte("d") // primary key -> datum
 	indexBucketKey = []byte("i") // indexID||indexEntry||key -> key
-	metaBucketKey  = []byte("m") // index name -> indexID, plus the id sequence
+	metaBucketKey  = []byte("m") // index name -> indexID
+	seqBucketKey   = []byte("s") // single entry: the next index id
 
-	// indexSeqKey is the reserved meta key holding the next index id. Index
-	// names are non-empty, so a single 0x00 byte cannot collide with one.
-	indexSeqKey = []byte{0x00}
+	// seqKey is the only key in the seq bucket; the bucket-as-namespace makes
+	// this key arbitrary.
+	seqKey = []byte("seq")
 )
 
 // Table is a namespaced section of the DB. A Table can have indexes, such that
@@ -46,7 +49,7 @@ func (db *DB) Table(name string) (*Table, error) {
 		if err != nil {
 			return err
 		}
-		for _, sub := range [][]byte{dataBucketKey, indexBucketKey, metaBucketKey} {
+		for _, sub := range [][]byte{dataBucketKey, indexBucketKey, metaBucketKey, seqBucketKey} {
 			if _, err := tb.CreateBucketIfNotExists(sub); err != nil {
 				return err
 			}

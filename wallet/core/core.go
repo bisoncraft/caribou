@@ -345,6 +345,13 @@ func (c *Core) Run(ctx context.Context) {
 		c.db.Run(ctxDB)
 	}()
 
+	// The master transaction DB monitors the application context; its shutdown
+	// (storage-engine close, GC drain, etc.) runs when ctx is canceled.
+	txDBWG, err := c.txDB.Connect(ctx)
+	if err != nil {
+		c.log.Errorf("Error connecting transaction database: %v", err)
+	}
+
 	// Retrieve disabled fiat rate sources from database.
 	disabledSources, err := c.db.DisabledRateSources()
 	if err != nil {
@@ -406,9 +413,11 @@ fetchers:
 	stopDB()
 	dbWG.Wait()
 
-	// Close the master transaction database.
-	if err := c.txDB.Close(); err != nil {
-		c.log.Errorf("Error closing transaction database: %v", err)
+	// Wait for the master transaction database to finish shutting down (it
+	// was bound to ctx by Connect above and is already draining since ctx is
+	// done by the time we reach here).
+	if txDBWG != nil {
+		txDBWG.Wait()
 	}
 
 	// Lock and disconnect the wallets.
