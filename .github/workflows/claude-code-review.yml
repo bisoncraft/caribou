@@ -442,7 +442,7 @@ jobs:
             clean-pass output (upstream issue), so always post via
             gh.
           # Configure via repository variables:
-          # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-7
+          # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-8
           # CLAUDE_CODE_EFFORT: quick, standard (default), or thorough
           # CLAUDE_CODE_MAX_DIFF_LINES: full reviews of PRs changing more than
           #   this many lines are skipped gracefully (default 2000; see the
@@ -456,12 +456,13 @@ jobs:
           # gh auth token, curl ...).
           #
           # The allowlist alone is NOT sufficient, though. Claude Code
-          # auto-runs a built-in set of "read-only" Bash commands (cat,
-          # echo, head, tail, grep, find, diff, ls, wc, stat, ...) WITHOUT
+          # auto-runs a built-in set of "read-only" Bash commands WITHOUT
           # a prompt in every permission mode, regardless of --allowedTools
           # (see https://code.claude.com/docs/en/permissions, "Read-only
-          # commands"). So an injected diff could otherwise read a secret -
-          # `echo $ANTHROPIC_API_KEY`, `cat` a token file,
+          # commands"). The documented set is: ls, cat, echo, pwd, head,
+          # tail, grep, find, wc, which, diff, stat, du, cd, and read-only
+          # forms of git. So an injected diff could otherwise read a
+          # secret - `echo $ANTHROPIC_API_KEY`, `cat` a token file,
           # `grep . /proc/self/environ` - and exfil it through the allowed
           # `gh pr comment`. Anything OUTSIDE the read-only set (curl,
           # printenv, gh auth token, sh -c ...) already needs a prompt,
@@ -479,6 +480,13 @@ jobs:
           # read-then-relay path: without the denylist a read-only `cat`
           # would surface a secret into the model's context, from which it
           # could be re-emitted as a literal `gh pr comment` body.
+          #
+          # printf, awk, and sed are denied too. These are NOT in the
+          # documented read-only set above (they already fail closed in
+          # headless CI), so this is belt-and-suspenders against the
+          # set's "These include ..." being non-exhaustive or growing in
+          # a future release - the review only ever needs `gh`, so denying
+          # them costs nothing.
           #
           # The complementary direct path - `gh pr comment --body
           # "$ANTHROPIC_API_KEY"` or `--body "$(printenv)"` - is closed by
@@ -500,7 +508,7 @@ jobs:
             --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '12') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '25') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '40') || '25' }}
             --permission-mode default
             --allowedTools "Bash(gh pr diff:*)" "Bash(gh pr view:*)" "Bash(gh pr comment:*)"
-            --disallowedTools "Bash(cat:*)" "Bash(echo:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(grep:*)" "Bash(find:*)" "Bash(diff:*)"
+            --disallowedTools "Bash(cat:*)" "Bash(echo:*)" "Bash(printf:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(grep:*)" "Bash(awk:*)" "Bash(sed:*)" "Bash(find:*)" "Bash(diff:*)"
 
       - name: Append review marker
         # Find the bot comment Claude just posted (by the
