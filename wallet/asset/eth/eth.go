@@ -875,13 +875,14 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 		w.bridges[usdcBridgeName] = usdcBridge
 	} */
 
-	if w.assetID == ethID {
+	switch w.assetID {
+	case ethID:
 		if polygonBridge, err := newPolygonBridgeEth(ctx, w.node.contractBackend(), w.net, w.addr, w.node, w.log); err != nil {
 			w.log.Warnf("Failed to initialize Polygon bridge for ETH: %v", err)
 		} else {
 			w.bridges[polygonBridgeName] = polygonBridge
 		}
-	} else if w.assetID == polygonID {
+	case polygonID:
 		if polygonBridge, err := newPolygonBridgePolygon(w.node.contractBackend(), w.net, w.log); err != nil {
 			w.log.Warnf("Failed to initialize Polygon bridge for Polygon: %v", err)
 		} else {

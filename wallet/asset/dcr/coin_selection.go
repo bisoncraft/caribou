@@ -82,13 +82,13 @@ func subsetWithLeastOverFund(enough func(uint64, uint32, *compositeUTXO) (bool, 
 	included := make([]bool, len(utxos))
 	const iterations = 1000
 
-	for nRep := 0; nRep < iterations; nRep++ {
+	for range iterations {
 		var nTotal uint64
 		var totalSize uint32
 		var numIncluded int
 
-		for nPass := 0; nPass < 2; nPass++ {
-			for i := 0; i < len(shuffledUTXOs); i++ {
+		for nPass := range 2 {
+			for i := range shuffledUTXOs {
 				var use bool
 				if nPass == 0 {
 					use = rnd.Int63()&1 == 1
@@ -121,7 +121,7 @@ func subsetWithLeastOverFund(enough func(uint64, uint32, *compositeUTXO) (bool, 
 				}
 			}
 		}
-		for i := 0; i < len(included); i++ {
+		for i := range included {
 			included[i] = false
 		}
 	}
