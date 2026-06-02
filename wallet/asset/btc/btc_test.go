@@ -33,16 +33,8 @@ import (
 )
 
 var (
-	tLogger  util.Logger
-	tCtx     context.Context
-	tLotSize uint64 = 1e6 // 0.01 BTC
-	tBTC            = &util.Asset{
-		ID:         0,
-		Symbol:     "btc",
-		Version:    version,
-		MaxFeeRate: 34,
-		SwapConf:   1,
-	}
+	tLogger        util.Logger
+	tCtx           context.Context
 	tSwapSizeBase  uint64 = InitTxSizeBaseSegwit
 	tSwapSize      uint64 = InitTxSizeSegwit
 	optimalFeeRate uint64 = 24
@@ -52,9 +44,8 @@ var (
 	tP2PKHAddr     = "1Bggq7Vu5oaoLFV1NNp5KhAzcku83qQhgi"
 	tP2PKH         []byte
 	tP2WPKH        []byte
-	tP2WPKHAddr           = "bc1qq49ypf420s0kh52l9pk7ha8n8nhsugdpculjas"
-	feeSuggestion  uint64 = 10
-	rnd                   = rand.New(rand.NewPCG(0x12345678, 0x87654321))
+	tP2WPKHAddr    = "bc1qq49ypf420s0kh52l9pk7ha8n8nhsugdpculjas"
+	rnd            = rand.New(rand.NewPCG(0x12345678, 0x87654321))
 )
 
 func boolPtr(v bool) *bool {
@@ -110,7 +101,6 @@ type testData struct {
 	txOutErr      error
 	sigIncomplete bool
 	signFunc      func(*wire.MsgTx)
-	signMsgFunc   func([]json.RawMessage) (json.RawMessage, error)
 
 	blockchainMtx       sync.RWMutex
 	verboseBlocks       map[chainhash.Hash]*msgBlockWithHeight
@@ -534,14 +524,6 @@ func (c *testData) getBlockAtHeight(blockHeight int64) (*chainhash.Hash, *msgBlo
 	return blockHash, blk
 }
 
-func (c *testData) truncateChains() {
-	c.blockchainMtx.RLock()
-	defer c.blockchainMtx.RUnlock()
-	c.mainchain = make(map[int64]*chainhash.Hash)
-	c.verboseBlocks = make(map[chainhash.Hash]*msgBlockWithHeight)
-	c.mempoolTxs = make(map[chainhash.Hash]*wire.MsgTx)
-}
-
 func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *wire.MsgTx {
 	tx := &wire.MsgTx{
 		TxIn: inputs,
@@ -552,31 +534,10 @@ func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *wire.MsgTx {
 	return tx
 }
 
-func makeTxHex(pkScripts []util.Bytes, inputs []*wire.TxIn) ([]byte, error) {
-	msgTx := wire.NewMsgTx(wire.TxVersion)
-	for _, txIn := range inputs {
-		msgTx.AddTxIn(txIn)
-	}
-	for _, pkScript := range pkScripts {
-		txOut := wire.NewTxOut(100000000, pkScript)
-		msgTx.AddTxOut(txOut)
-	}
-	txBuf := bytes.NewBuffer(make([]byte, 0, MsgTxVBytes(msgTx)))
-	err := msgTx.Serialize(txBuf)
-	if err != nil {
-		return nil, err
-	}
-	return txBuf.Bytes(), nil
-}
-
 // msgTxFromHex creates a wire.MsgTx by deserializing the hex-encoded
 // transaction.
 func msgTxFromHex(txHex string) (*wire.MsgTx, error) {
 	return deserializeMsgTx(hex.NewDecoder(strings.NewReader(txHex)))
-}
-
-func makeRPCVin(txHash *chainhash.Hash, vout uint32, sigScript []byte, witness [][]byte) *wire.TxIn {
-	return wire.NewTxIn(wire.NewOutPoint(txHash, vout), sigScript, witness)
 }
 
 func dummyInput() *wire.TxIn {

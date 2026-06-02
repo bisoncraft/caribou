@@ -40,53 +40,8 @@ var (
 	tLogger            = util.StdOutLogger("ETHTEST", util.LevelTrace)
 
 	testAddressA = common.HexToAddress("dd93b447f7eBCA361805eBe056259853F3912E04")
-	testAddressB = common.HexToAddress("8d83B207674bfd53B418a6E47DA148F5bFeCc652")
-	testAddressC = common.HexToAddress("2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27")
 
-	ethGasesV0   = VersionedGases[0]
-	tokenGasesV0 = Tokens[usdcEthID].NetTokens[util.Simnet].Gas[0]
-	ethGasesV1   = VersionedGases[1]
 	tokenGasesV1 = Tokens[usdcEthID].NetTokens[util.Simnet].Gas[1]
-
-	tETHV0 = &util.Asset{
-		Version:    0,
-		ID:         60,
-		Symbol:     "ETH",
-		MaxFeeRate: 100,
-		SwapConf:   1,
-	}
-
-	tETHV1 = &util.Asset{
-		Version:    1,
-		ID:         60,
-		Symbol:     "ETH",
-		MaxFeeRate: 100,
-		SwapConf:   1,
-	}
-
-	tBTC = &util.Asset{
-		ID:         0,
-		Symbol:     "btc",
-		Version:    0, // match btc.version
-		MaxFeeRate: 10,
-		SwapConf:   1,
-	}
-
-	tTokenV0 = &util.Asset{
-		ID:         usdcEthID,
-		Symbol:     "usdc.eth",
-		Version:    0,
-		MaxFeeRate: 20,
-		SwapConf:   1,
-	}
-
-	tTokenV1 = &util.Asset{
-		ID:         usdcEthID,
-		Symbol:     "dextt.eth",
-		Version:    1,
-		MaxFeeRate: 20,
-		SwapConf:   1,
-	}
 
 	signer = types.LatestSigner(params.AllEthashProtocolChanges)
 
@@ -113,7 +68,6 @@ type testNode struct {
 	balErr            error
 	signDataErr       error
 	privKey           *ecdsa.PrivateKey
-	refundable        bool
 	baseFee           *big.Int
 	tip               *big.Int
 	netFeeStateErr    error
@@ -408,8 +362,6 @@ type tTxDB struct {
 	storeTxCalled  bool
 	storedTx       *extendedWalletTx
 	storeTxErr     error
-	removeTxCalled bool
-	removeTxErr    error
 	txToGet        *extendedWalletTx
 	txs            map[common.Hash]*extendedWalletTx // for looking up multiple txs by hash
 	getTxErr       error
@@ -425,10 +377,6 @@ func (db *tTxDB) storeTx(wt *extendedWalletTx) error {
 	db.storeTxCalled = true
 	db.storedTx = wt
 	return db.storeTxErr
-}
-func (db *tTxDB) removeTx(_ /* id */ string) error {
-	db.removeTxCalled = true
-	return db.removeTxErr
 }
 func (db *tTxDB) getTxs(tokenID *uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
 	return nil, nil
@@ -446,9 +394,6 @@ func (db *tTxDB) getTx(txHash common.Hash) (tx *extendedWalletTx, _ error) {
 }
 func (db *tTxDB) getPendingTxs() ([]*extendedWalletTx, error) {
 	panic("getPendingTxs not implemented")
-}
-func (db *tTxDB) close() error {
-	return nil
 }
 func (db *tTxDB) getBridges(tokenID *uint32, n int, refID *common.Hash, past bool) ([]*asset.WalletTransaction, error) {
 	panic("getBridges not implemented")
@@ -1538,23 +1483,6 @@ func TestFeeRate(t *testing.T) {
 	}
 }
 
-// badCoin fulfills the asset.Coin interface, but the ID does not match the ID expected in the
-// ETH wallet code.
-type badCoin uint64
-
-func (*badCoin) ID() util.Bytes {
-	return []byte{123}
-}
-func (*badCoin) String() string {
-	return "abc"
-}
-func (*badCoin) TxID() string {
-	return "abc"
-}
-func (b *badCoin) Value() uint64 {
-	return uint64(*b)
-}
-
 func TestOwnsAddress(t *testing.T) {
 	address := "0b84C791b79Ee37De042AD2ffF1A253c3ce9bc27" // no "0x" prefix
 	if !common.IsHexAddress(address) {
@@ -1789,15 +1717,6 @@ func TestDriverDecodeCoinID(t *testing.T) {
 		t.Fatal("expected error but did not get")
 	}
 }
-func ethToGwei(v uint64) uint64 {
-	return v * GweiFactor
-}
-
-func ethToWei(v uint64) *big.Int {
-	bigV := new(big.Int).SetUint64(ethToGwei(v))
-	return new(big.Int).Mul(bigV, big.NewInt(GweiFactor))
-}
-
 func TestReconfigure(t *testing.T) {
 	w, eth, _, shutdown := tassetWallet(BipID)
 	defer shutdown()
@@ -2242,12 +2161,4 @@ func TestDomain(t *testing.T) {
 			}
 		})
 	}
-}
-
-func parseRecoveryID(c asset.Coin) []byte {
-	return c.(asset.RecoveryCoin).RecoveryID()
-}
-
-func randomHash() common.Hash {
-	return common.BytesToHash(encode.RandomBytes(20))
 }

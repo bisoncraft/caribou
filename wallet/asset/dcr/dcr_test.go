@@ -40,26 +40,17 @@ import (
 )
 
 var (
-	tLogger   util.Logger
-	tCtx      context.Context
-	tLotSize  uint64 = 1e7
-	tRateStep uint64 = 100
-	tDCR             = &util.Asset{
-		ID:         42,
-		Symbol:     "dcr",
-		Version:    version,
-		MaxFeeRate: 24, // FundOrder and swap/redeem fallback when estimation fails
-		SwapConf:   1,
-	}
+	tLogger        util.Logger
+	tCtx           context.Context
+	tLotSize       uint64 = 1e7
 	optimalFeeRate uint64 = 22
 	tErr                  = fmt.Errorf("test error")
 	tTxID                 = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
 	tTxHash        *chainhash.Hash
 	tPKHAddr       stdaddr.Address
 	tP2PKHScript   []byte
-	tChainParams          = chaincfg.MainNetParams()
-	feeSuggestion  uint64 = 10
-	tAcctName             = "tAcctName"
+	tChainParams   = chaincfg.MainNetParams()
+	tAcctName      = "tAcctName"
 )
 
 func randBytes(l int) []byte {
@@ -79,17 +70,6 @@ func makeGetTxOutRes(confs, lots int64, pkScript []byte) *chainjson.GetTxOutResu
 	}
 }
 
-func makeRawTx(inputs []*wire.TxIn, outputScripts []util.Bytes) *wire.MsgTx {
-	tx := wire.NewMsgTx()
-	for _, pkScript := range outputScripts {
-		tx.TxOut = append(tx.TxOut, &wire.TxOut{
-			PkScript: pkScript,
-		})
-	}
-	tx.TxIn = inputs
-	return tx
-}
-
 func makeTxHex(inputs []*wire.TxIn, pkScripts []util.Bytes) (string, error) {
 	msgTx := wire.NewMsgTx()
 	msgTx.TxIn = inputs
@@ -103,31 +83,6 @@ func makeTxHex(inputs []*wire.TxIn, pkScripts []util.Bytes) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(txBuf.Bytes()), nil
-}
-
-func makeRPCVin(txHash *chainhash.Hash, vout uint32, sigScript []byte) *wire.TxIn {
-	return &wire.TxIn{
-		PreviousOutPoint: *wire.NewOutPoint(txHash, vout, 0),
-		SignatureScript:  sigScript,
-	}
-}
-
-func newTxOutResult(script []byte, value uint64, confs int64) *chainjson.GetTxOutResult {
-	return &chainjson.GetTxOutResult{
-		Confirmations: confs,
-		Value:         float64(value) / 1e8,
-		ScriptPubKey: chainjson.ScriptPubKeyResult{
-			Hex: hex.EncodeToString(script),
-		},
-	}
-}
-
-func dummyInput() *wire.TxIn {
-	return wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x01}, 0, 0), 0, nil)
-}
-
-func dummyTx() *wire.MsgTx {
-	return makeRawTx([]*wire.TxIn{dummyInput()}, []util.Bytes{})
 }
 
 // sometimes we want to not start monitor blocks to avoid a race condition in
@@ -188,7 +143,6 @@ type tRPCClient struct {
 	txOutErr       error
 	bestBlockErr   error
 	mempoolErr     error
-	rawTxErr       error
 	unspent        []walletjson.ListUnspentResult
 	unspentErr     error
 	balanceResult  *walletjson.GetBalanceResult
@@ -781,22 +735,6 @@ func (ai *TAuditInfo) Expiration() time.Time  { return time.Time{} }
 func (ai *TAuditInfo) Coin() asset.Coin       { return &tCoin{} }
 func (ai *TAuditInfo) Contract() util.Bytes   { return nil }
 func (ai *TAuditInfo) SecretHash() util.Bytes { return nil }
-
-const (
-	txCatReceive = "recv"
-	txCatSend    = "send"
-	//txCatGenerate = "generate"
-)
-
-type tReceipt struct {
-	coin       *tCoin
-	contract   []byte
-	expiration uint64
-}
-
-func (r *tReceipt) Expiration() time.Time { return time.Unix(int64(r.expiration), 0).UTC() }
-func (r *tReceipt) Coin() asset.Coin      { return r.coin }
-func (r *tReceipt) Contract() util.Bytes  { return r.contract }
 
 type tSenderType byte
 

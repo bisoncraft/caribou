@@ -596,14 +596,6 @@ func TestApiGetBalance(t *testing.T) {
 	tCore.balanceErr = nil
 }
 
-type tHTTPHandler struct {
-	req *http.Request
-}
-
-func (h *tHTTPHandler) ServeHTTP(_ http.ResponseWriter, req *http.Request) {
-	h.req = req
-}
-
 func TestPasswordCache(t *testing.T) {
 	s, tCore, shutdown := newTServer(t, false)
 	defer shutdown()

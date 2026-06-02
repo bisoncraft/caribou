@@ -10,11 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
@@ -27,9 +25,8 @@ import (
 )
 
 const (
-	maxFutureBlockTime = 2 * time.Hour // see MaxTimeOffsetSeconds in btcd/blockchain/validate.go
-	tAddr              = "tmH2m5fi5yY3Qg2GpGwcCrnnoD4wp944RMJ"
-	tUnifiedAddr       = "uregtest1w2khftfjd8w7vgw32g24nwqdt0f3zfrwe9a4uy6trsq3swlpgsfssf2uqsfluu3490jdgers4vwz8l9yg39c9x70phllu8cy57f8mdc6ym5e7xtra0f99wtxvnm0wg4uz7an0wvl5s7jt2y7fqla2j976ej0e4hsspq73m0zrw5lzly797fhku0q74xeshuwvwmrku5u8f7gyd2r0sx"
+	tAddr        = "tmH2m5fi5yY3Qg2GpGwcCrnnoD4wp944RMJ"
+	tUnifiedAddr = "uregtest1w2khftfjd8w7vgw32g24nwqdt0f3zfrwe9a4uy6trsq3swlpgsfssf2uqsfluu3490jdgers4vwz8l9yg39c9x70phllu8cy57f8mdc6ym5e7xtra0f99wtxvnm0wg4uz7an0wvl5s7jt2y7fqla2j976ej0e4hsspq73m0zrw5lzly797fhku0q74xeshuwvwmrku5u8f7gyd2r0sx"
 )
 
 var (
@@ -44,12 +41,6 @@ var (
 type msgBlockWithHeight struct {
 	msgBlock *Block
 	height   int64
-}
-
-const testBlocksPerBlockTimeOffset = 4
-
-func generateTestBlockTime(blockHeight int64) time.Time {
-	return time.Unix(1e6, 0).Add(time.Duration(blockHeight) * maxFutureBlockTime / testBlocksPerBlockTimeOffset)
 }
 
 func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *Tx {
@@ -171,36 +162,6 @@ func (c *tRPCClient) getBestBlockHeight() int64 {
 		}
 	}
 	return bestBlkHeight
-}
-
-func (c *tRPCClient) addRawTx(blockHeight int64, tx *Tx) (*chainhash.Hash, *Block) {
-	c.blockchainMtx.Lock()
-	defer c.blockchainMtx.Unlock()
-	blockHash, found := c.mainchain[blockHeight]
-	if !found {
-		prevBlock := &chainhash.Hash{}
-		if blockHeight > 0 {
-			var exists bool
-			prevBlock, exists = c.mainchain[blockHeight-1]
-			if !exists {
-				prevBlock = &chainhash.Hash{}
-			}
-		}
-		nonce, bits := rand.Uint32(), rand.Uint32()
-		header := wire.NewBlockHeader(0, prevBlock, &chainhash.Hash{} /* lie, maybe fix this */, bits, nonce)
-		header.Timestamp = generateTestBlockTime(blockHeight)
-		blk := &Block{MsgBlock: *wire.NewMsgBlock(header)} // only now do we know the block hash
-		hash := blk.BlockHash()
-		blockHash = &hash
-		c.verboseBlocks[blockHash.String()] = &msgBlockWithHeight{
-			msgBlock: blk,
-			height:   blockHeight,
-		}
-		c.mainchain[blockHeight] = blockHash
-	}
-	block := c.verboseBlocks[blockHash.String()]
-	block.msgBlock.AddTransaction(tx.MsgTx)
-	return blockHash, block.msgBlock
 }
 
 func (c *tRPCClient) RawRequest(ctx context.Context, method string, args []json.RawMessage) (json.RawMessage, error) {

@@ -56,7 +56,6 @@ var (
 		MaxFeeRate: 10,
 		SwapConf:   1,
 	}
-	tSwapSizeA uint64 = 251
 
 	tUTXOAssetB = &util.Asset{
 		ID:         0,
@@ -65,7 +64,6 @@ var (
 		MaxFeeRate: 2,
 		SwapConf:   1,
 	}
-	tSwapSizeB uint64 = 225
 
 	tACCTAsset = &util.Asset{
 		ID:         60,
@@ -77,10 +75,8 @@ var (
 	tPW                = []byte("dexpw")
 	wPW                = []byte("walletpw")
 	tErr               = fmt.Errorf("test error")
-	tFee        uint64 = 1e8
 	tFeeAsset   uint32 = 42
 	tLogger            = util.StdOutLogger("TCORE", util.LevelInfo)
-	tMaxFeeRate uint64 = 10
 	tWalletInfo        = &asset.WalletInfo{
 		SupportedVersions: []uint32{0},
 		UnitInfo: util.UnitInfo{
