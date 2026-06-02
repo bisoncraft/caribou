@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/calc"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
@@ -61,24 +60,13 @@ const (
 	// version which descriptor wallets have been introduced.
 	minDescriptorVersion = 220000
 
-	// splitTxBaggage is the total number of additional bytes associated with
-	// using a split transaction to fund a swap.
-	splitTxBaggage = MinimumTxOverhead + RedeemP2PKHInputSize + 2*P2PKHOutputSize
-	// splitTxBaggageSegwit it the analogue of splitTxBaggage for segwit.
-	// We include the 2 bytes for marker and flag.
-	splitTxBaggageSegwit = MinimumTxOverhead + 2*P2WPKHOutputSize +
-		RedeemP2WPKHInputSize + ((RedeemP2WPKHInputWitnessWeight + SegwitMarkerAndFlagWeight + 3) / 4)
-
 	walletTypeLegacy   = ""
 	walletTypeRPC      = "bitcoindRPC"
 	walletTypeSPV      = "SPV"
 	walletTypeElectrum = "electrumRPC"
 
-	swapFeeBumpKey      = "swapfeebump"
-	splitKey            = "swapsplit"
 	multiSplitKey       = "multisplit"
 	multiSplitBufferKey = "multisplitbuffer"
-	redeemFeeBumpFee    = "redeemfeebump"
 
 	// confTxFinality is the amount of confirms a redeem or refund
 	// transaction needs before the trade is considered confirmed. The tx is
@@ -194,15 +182,6 @@ var (
 		MultiFundingOpts: MultiFundingOpts,
 	}
 
-	electrumWalletDefinition = &asset.WalletDefinition{
-		Type:        walletTypeElectrum,
-		Tab:         "Electrum (external)",
-		Description: "Use an external Electrum Wallet",
-		// json: DefaultConfigPath: filepath.Join(btcutil.AppDataDir("electrum", false), "config"), // e.g. ~/.electrum/config
-		ConfigOpts:       append(ElectrumConfigOpts, CommonConfigOpts("BTC", false)...),
-		MultiFundingOpts: MultiFundingOpts,
-	}
-
 	// WalletInfo defines some general information about a Bitcoin wallet.
 	WalletInfo = &asset.WalletInfo{
 		Name:              "Bitcoin",
@@ -211,7 +190,6 @@ var (
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
-			// electrumWalletDefinition, // TODO: Broken. Investigate and re-enable.
 		},
 		LegacyWalletIndex: 1,
 		BlockchainClass:   asset.BlockchainClassUTXO,
@@ -671,45 +649,6 @@ func RegisterCustomWallet(constructor CustomWalletConstructor, def *asset.Wallet
 	}
 	customWalletConstructors[def.Type] = constructor
 	WalletInfo.AvailableWallets = append(WalletInfo.AvailableWallets, def)
-}
-
-// swapOptions captures the available Swap options. Tagged to be used with
-// config.Unmapify to decode e.g. asset.Order.Options.
-type swapOptions struct {
-	Split   *bool    `ini:"swapsplit"`
-	FeeBump *float64 `ini:"swapfeebump"`
-}
-
-// fundMultiOptions are the possible order options when calling FundMultiOrder.
-type fundMultiOptions struct {
-	// Split, if true, and multi-order cannot be funded with the existing UTXOs
-	// in the wallet without going over the maxLock limit, a split transaction
-	// will be created with one output per order.
-	//
-	// Use the multiSplitKey const defined above in the options map to set this option.
-	Split bool `ini:"multisplit"`
-	// SplitBuffer, if set, will instruct the wallet to add a buffer onto each
-	// output of the multi-order split transaction (if the split is needed).
-	// SplitBuffer is defined as a percentage of the output. If a .1 BTC output
-	// is required for an order and SplitBuffer is set to 5, a .105 BTC output
-	// will be created.
-	//
-	// The motivation for this is to assist market makers in having to do the
-	// least amount of splits as possible. It is useful when BTC is the quote
-	// asset on a market, and the price is increasing. During a market maker's
-	// operation, it will frequently have to cancel and replace orders as the
-	// rate moves. If BTC is the quote asset on a market, and the rate has
-	// lightly increased, the market maker will need to lock slightly more of
-	// the quote asset for the same amount of lots of the base asset. If there
-	// is no split buffer, this may necessitate a new split transaction.
-	//
-	// Use the multiSplitBufferKey const defined above in the options map to set this.
-	SplitBuffer float64 `ini:"multisplitbuffer"`
-}
-
-// redeemOptions are order options that apply to redemptions.
-type redeemOptions struct {
-	FeeBump *float64 `ini:"redeemfeebump"`
 }
 
 func init() {
@@ -2023,159 +1962,6 @@ func (btc *baseWallet) sizeUnit() string {
 	return "B"
 }
 
-// split will send a split transaction and return the sized output. If the
-// split transaction is determined to be un-economical, it will not be sent,
-// there is no error, and the input coins will be returned unmodified, but an
-// info message will be logged. The returned bool indicates if a split tx was
-// sent (true) or if the original coins were returned unmodified (false).
-//
-// A split transaction nets additional network bytes consisting of
-//   - overhead from 1 transaction
-//   - 1 extra signed p2wpkh-spending input. The split tx has the fundingCoins as
-//     inputs now, but we'll add the input that spends the sized coin that will go
-//     into the first swap if the split tx does not add excess baggage
-//   - 2 additional p2wpkh outputs for the split tx sized output and change
-//
-// If the fees associated with this extra baggage are more than the excess
-// amount that would be locked if a split transaction were not used, then the
-// split transaction is pointless. This might be common, for instance, if an
-// order is canceled partially filled, and then the remainder resubmitted. We
-// would already have an output of just the right size, and that would be
-// recognized here.
-func (btc *baseWallet) split(value uint64, lots uint64, outputs []*Output, inputsSize uint64,
-	fundingCoins map[OutPoint]*UTxO, suggestedFeeRate, bumpedMaxRate, extraOutput uint64) (asset.Coins, bool, uint64, error) {
-
-	var err error
-	defer func() {
-		if err != nil {
-			return
-		}
-		btc.cm.LockOutputsMap(fundingCoins)
-		err = btc.node.LockUnspent(false, outputs)
-		if err != nil {
-			btc.log.Errorf("error locking unspent outputs: %v", err)
-		}
-	}()
-
-	// Calculate the extra fees associated with the additional inputs, outputs,
-	// and transaction overhead, and compare to the excess that would be locked.
-	swapInputSize, baggage := btc.splitBaggageFees(bumpedMaxRate, extraOutput > 0)
-
-	var coinSum uint64
-	coins := make(asset.Coins, 0, len(outputs))
-	for _, op := range outputs {
-		coins = append(coins, op)
-		coinSum += op.Val
-	}
-
-	valueStr := amount(value).String()
-
-	excess := coinSum - calc.RequiredOrderFunds(value, inputsSize, lots, btc.initTxSizeBase, btc.initTxSize, bumpedMaxRate)
-	if baggage > excess {
-		btc.log.Debugf("Skipping split transaction because cost is greater than potential over-lock. "+
-			"%s > %s", amount(baggage), amount(excess))
-		btc.log.Infof("Funding %s %s order with coins %v worth %s",
-			valueStr, btc.symbol, coins, amount(coinSum))
-		return coins, false, 0, nil // err==nil records and locks the provided fundingCoins in defer
-	}
-
-	addr, err := btc.node.ExternalAddress(btc.ctx)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("error creating split transaction address: %w", err)
-	}
-	addrStr, err := btc.stringAddr(addr, btc.chainParams)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("failed to stringify the change address: %w", err)
-	}
-
-	reqFunds := calc.RequiredOrderFunds(value, swapInputSize, lots, btc.initTxSizeBase, btc.initTxSize, bumpedMaxRate)
-
-	baseTx, _, _, err := btc.fundedTx(coins)
-	splitScript, err := txscript.PayToAddrScript(addr)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("error creating split tx script: %w", err)
-	}
-	baseTx.AddTxOut(wire.NewTxOut(int64(reqFunds), splitScript))
-
-	if extraOutput > 0 {
-		addr, err := btc.node.ChangeAddress(btc.ctx)
-		if err != nil {
-			return nil, false, 0, fmt.Errorf("error creating split transaction address: %w", err)
-		}
-		splitScript, err := txscript.PayToAddrScript(addr)
-		if err != nil {
-			return nil, false, 0, fmt.Errorf("error creating split tx script: %w", err)
-		}
-		baseTx.AddTxOut(wire.NewTxOut(int64(extraOutput), splitScript))
-	}
-
-	// Grab a change address.
-	changeAddr, err := btc.node.ChangeAddress(btc.ctx)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("error creating change address: %w", err)
-	}
-
-	// Sign, add change, and send the transaction.
-	msgTx, err := btc.sendWithReturn(baseTx, changeAddr, coinSum, reqFunds+extraOutput, suggestedFeeRate)
-	if err != nil {
-		return nil, false, 0, fmt.Errorf("error sending tx: %w", err)
-	}
-
-	txHash := btc.hashTx(msgTx)
-	op := NewOutput(txHash, 0, reqFunds)
-
-	totalOut := reqFunds
-	for i := 1; i < len(msgTx.TxOut); i++ {
-		totalOut += uint64(msgTx.TxOut[i].Value)
-	}
-
-	btc.addTxToHistory(&asset.WalletTransaction{
-		Type: asset.Split,
-		ID:   txHash.String(),
-		Fees: coinSum - totalOut,
-	}, txHash, true)
-
-	fundingCoins = map[OutPoint]*UTxO{op.Pt: {
-		TxHash:  op.txHash(),
-		Vout:    op.vout(),
-		Address: addrStr,
-		Amount:  reqFunds,
-	}}
-
-	// Unlock spent coins
-	returnErr := btc.ReturnCoins(coins)
-	if returnErr != nil {
-		btc.log.Errorf("error unlocking spent coins: %v", returnErr)
-	}
-
-	btc.log.Infof("Funding %s %s order with split output coin %v from original coins %v",
-		valueStr, btc.symbol, op, coins)
-	btc.log.Infof("Sent split transaction %s to accommodate swap of size %s %s + fees = %s",
-		op.txHash(), valueStr, btc.symbol, amount(reqFunds))
-
-	// Assign to coins so the deferred function will lock the output.
-	outputs = []*Output{op}
-	return asset.Coins{op}, true, coinSum - totalOut, nil
-}
-
-// splitBaggageFees is the fees associated with adding a split transaction.
-func (btc *baseWallet) splitBaggageFees(maxFeeRate uint64, extraOutput bool) (swapInputSize, baggage uint64) {
-	if btc.segwit {
-		baggage = maxFeeRate * splitTxBaggageSegwit
-		if extraOutput {
-			baggage += maxFeeRate * P2WPKHOutputSize
-		}
-		swapInputSize = RedeemP2WPKHInputTotalSize
-		return
-	}
-	baggage = maxFeeRate * splitTxBaggage
-	if extraOutput {
-		baggage += maxFeeRate * P2PKHOutputSize
-	}
-	swapInputSize = RedeemP2PKHInputSize
-	return
-}
-
 // ReturnCoins unlocks coins. This would be used in the case of a canceled or
 // partially filled order. Part of the asset.Wallet interface.
 func (btc *baseWallet) ReturnCoins(unspents asset.Coins) error {
@@ -2946,27 +2732,6 @@ func (btc *baseWallet) addTxToHistory(wt *asset.WalletTransaction, txHash *chain
 	}
 }
 
-// privateSwapPubKey encodes a public key and nonce to be used for a private
-// swap. The public key and nonce must be sent to the counterparty in order
-// for them to calculate the combined nonce used in musig2.
-type privateSwapPubKey struct {
-	pubKey   *btcec.PublicKey
-	pubNonce [66]byte
-}
-
-// privateSwapOutputData contains the data related to a private swap
-// output. This is a convenience struct that contains the data needed to
-// perform functions related to private swaps.
-type privateSwapOutputData struct {
-	redeemPubKey      *privateSwapPubKey
-	refundPubKey      *privateSwapPubKey
-	refundScript      []byte
-	leaf              txscript.TapLeaf
-	controlBlock      *txscript.ControlBlock
-	tapscriptRootHash []byte
-	pkScript          []byte
-}
-
 // DepositAddress returns an address for depositing funds into the
 // exchange wallet.
 func (btc *baseWallet) DepositAddress() (string, error) {
@@ -3457,50 +3222,6 @@ func (btc *baseWallet) broadcastTx(ctx context.Context, signedTx *wire.MsgTx) (*
 			"expected %s, got %s. raw tx: %x", checkHash, *txHash, btc.wireBytes(signedTx))
 	}
 	return txHash, nil
-}
-
-// createSig creates and returns the serialized raw signature and compressed
-// pubkey for a transaction input signature.
-func (btc *baseWallet) createSig(ctx context.Context, tx *wire.MsgTx, idx int, pkScript []byte, addr btcutil.Address, vals []int64, pkScripts [][]byte) (sig, pubkey []byte, err error) {
-	addrStr, err := btc.stringAddr(addr, btc.chainParams)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	privKey, err := btc.node.PrivKeyForAddress(ctx, addrStr)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer privKey.Zero()
-
-	sig, err = btc.signNonSegwit(tx, idx, pkScript, txscript.SigHashAll, privKey, vals, pkScripts)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return sig, privKey.PubKey().SerializeCompressed(), nil
-}
-
-// createWitnessSig creates and returns a signature for the witness of a segwit
-// input and the pubkey associated with the address.
-func (btc *baseWallet) createWitnessSig(ctx context.Context, tx *wire.MsgTx, idx int, pkScript []byte,
-	addr btcutil.Address, val int64, sigHashes *txscript.TxSigHashes) (sig, pubkey []byte, err error) {
-	addrStr, err := btc.stringAddr(addr, btc.chainParams)
-	if err != nil {
-		return nil, nil, err
-	}
-	privKey, err := btc.node.PrivKeyForAddress(ctx, addrStr)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer privKey.Zero()
-	sig, err = txscript.RawTxInWitnessSignature(tx, sigHashes, idx, val,
-		pkScript, txscript.SigHashAll, privKey)
-
-	if err != nil {
-		return nil, nil, err
-	}
-	return sig, privKey.PubKey().SerializeCompressed(), nil
 }
 
 // ValidateAddress checks that the provided address is valid.
@@ -4781,23 +4502,6 @@ func rawTxInSig(tx *wire.MsgTx, idx int, pkScript []byte, hashType txscript.SigH
 // with trailing zeros and decimal points removed.
 func prettyBTC(v uint64) string {
 	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(float64(v)/1e8, 'f', 8, 64), "0"), ".")
-}
-
-// calcBumpedRate calculated a bump on the baseRate. If bump is nil, the
-// baseRate is returned directly. In the case of an error (nil or out-of-range),
-// the baseRate is returned unchanged.
-func calcBumpedRate(baseRate uint64, bump *float64) (uint64, error) {
-	if bump == nil {
-		return baseRate, nil
-	}
-	userBump := *bump
-	if userBump > 2.0 {
-		return baseRate, fmt.Errorf("fee bump %f is higher than the 2.0 limit", userBump)
-	}
-	if userBump < 1.0 {
-		return baseRate, fmt.Errorf("fee bump %f is lower than 1", userBump)
-	}
-	return uint64(math.Round(float64(baseRate) * userBump)), nil
 }
 
 func hashTx(tx *wire.MsgTx) *chainhash.Hash {

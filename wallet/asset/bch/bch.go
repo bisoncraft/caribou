@@ -59,23 +59,6 @@ var (
 		ConfigOpts:        append(btc.RPCConfigOpts("Bitcoin Cash", ""), btc.CommonConfigOpts("BCH", true)...),
 		MultiFundingOpts:  btc.MultiFundingOpts,
 	}
-	spvWalletDefinition = &asset.WalletDefinition{
-		Type:             walletTypeSPV,
-		Tab:              "Native",
-		Description:      "Use the built-in SPV wallet",
-		ConfigOpts:       btc.CommonConfigOpts("BCH", true),
-		Seeded:           true,
-		MultiFundingOpts: btc.MultiFundingOpts,
-	}
-
-	electrumWalletDefinition = &asset.WalletDefinition{
-		Type:        walletTypeElectrum,
-		Tab:         "Electron Cash  (external)",
-		Description: "Use an external Electron Cash (BCH Electrum fork) Wallet",
-		// json: DefaultConfigPath: filepath.Join(btcutil.AppDataDir("electrom-cash", false), "config"), // maybe?
-		ConfigOpts:       btc.CommonConfigOpts("BCH", true),
-		MultiFundingOpts: btc.MultiFundingOpts,
-	}
 
 	// WalletInfo defines some general information about a Bitcoin Cash wallet.
 	WalletInfo = &asset.WalletInfo{
@@ -84,9 +67,7 @@ var (
 		// Same as bitcoin. That's dumb.
 		UnitInfo: UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
-			// spvWalletDefinition,
 			rpcWalletDefinition,
-			// electrumWalletDefinition, // getinfo RPC needs backport: https://github.com/Electron-Cash/Electron-Cash/pull/2399
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
 		Network: &asset.Network{

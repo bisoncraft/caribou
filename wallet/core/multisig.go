@@ -156,17 +156,6 @@ func deriveMultisigKey(multisigXPriv *hdkeychain.ExtendedKey, assetID, multisigI
 	return priv, nil
 }
 
-func (c *Core) multisigKeyIdx(assetID, idx uint32) (*secp256k1.PrivateKey, error) {
-	c.loginMtx.Lock()
-	defer c.loginMtx.Unlock()
-
-	if c.multisigXPriv == nil {
-		return nil, errors.New("not logged in")
-	}
-
-	return deriveMultisigKey(c.multisigXPriv, assetID, idx)
-}
-
 // nextMultisigKey generates the private key for the next multisig, incrementing a
 // persistent multisig index counter. This method requires login to decrypt and set
 // the multisig xpriv, so use the multisigKeysReady method to ensure it is ready first.

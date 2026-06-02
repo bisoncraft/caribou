@@ -239,17 +239,6 @@ func (w *ltcSPVWallet) Birthday() time.Time {
 	return w.Manager.Birthday()
 }
 
-func (w *ltcSPVWallet) updateDBBirthday(bday time.Time) error {
-	ltcw, isLoaded := w.loader.LoadedWallet()
-	if !isLoaded {
-		return fmt.Errorf("wallet not loaded")
-	}
-	return walletdb.Update(ltcw.Database(), func(dbtx walletdb.ReadWriteTx) error {
-		ns := dbtx.ReadWriteBucket(waddrmgrNamespace)
-		return ltcw.Manager.SetBirthday(ns, bday)
-	})
-}
-
 // PublishTransaction publishes the transaction to the network.
 func (w *ltcSPVWallet) PublishTransaction(tx *wire.MsgTx, label string) error {
 	return w.Wallet.PublishTransaction(tx, label)
@@ -643,12 +632,6 @@ func logRotator(dir string) (*rotator.Rotator, error) {
 
 	logFilename := filepath.Join(dir, logFileName)
 	return rotator.New(logFilename, 32*1024, false, maxLogRolls)
-}
-
-// walletExists checks if a wallet exists at the given path.
-func walletExists(dir string, btcParams *chaincfg.Params) (bool, error) {
-	loader := wallet.NewLoader(ltcNetParams(btcParams), dir, true, dbTimeout, 250)
-	return loader.WalletExists()
 }
 
 // bisonwire type needed for TxRecord construction in tests.

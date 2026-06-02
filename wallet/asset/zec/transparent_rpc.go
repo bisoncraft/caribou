@@ -1,19 +1,14 @@
 package zec
 
 import (
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcjson"
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/rpcclient/v8"
 )
 
@@ -79,37 +74,6 @@ func getRawTransaction(c rpcCaller, txHash *chainhash.Hash) ([]byte, error) {
 	return txB, c.CallRPC("getrawtransaction", []any{txHash.String()}, &txB)
 }
 
-// signTxByRPC signs a transaction using the signrawtransaction RPC.
-// NOTE: signrawtransaction is deprecated in zcashd v6.11.0 and will be removed
-// in a future release. Migration to PCZT-based methods will be required when
-// Zallet provides replacement RPC methods.
-func signTxByRPC(c rpcCaller, inTx *Tx) (*Tx, error) {
-	txBytes, err := inTx.Bytes()
-	if err != nil {
-		return nil, fmt.Errorf("tx serialization error: %w", err)
-	}
-	res := new(btc.SignTxResult)
-
-	err = c.CallRPC("signrawtransaction", []any{hex.EncodeToString(txBytes)}, res)
-	if err != nil {
-		return nil, fmt.Errorf("tx signing error: %w", err)
-	}
-	if !res.Complete {
-		sep := ""
-		var errMsg strings.Builder
-		for _, e := range res.Errors {
-			errMsg.WriteString(e.Error + sep)
-			sep = ";"
-		}
-		return nil, fmt.Errorf("signing incomplete. %d signing errors encountered: %s", len(res.Errors), errMsg.String())
-	}
-	outTx, err := DeserializeTx(res.Hex)
-	if err != nil {
-		return nil, fmt.Errorf("error deserializing transaction response: %w", err)
-	}
-	return outTx, nil
-}
-
 func callHashGetter(c rpcCaller, method string, args []any) (*chainhash.Hash, error) {
 	var txid string
 	err := c.CallRPC(method, args, &txid)
@@ -117,27 +81,6 @@ func callHashGetter(c rpcCaller, method string, args []any) (*chainhash.Hash, er
 		return nil, err
 	}
 	return chainhash.NewHashFromStr(txid)
-}
-
-func sendRawTransaction(c rpcCaller, tx *Tx) (*chainhash.Hash, error) {
-	txB, err := tx.Bytes()
-	if err != nil {
-		return nil, err
-	}
-	return callHashGetter(c, "sendrawtransaction", []any{hex.EncodeToString(txB), false})
-}
-
-func dumpPrivKey(c rpcCaller, addr string) (*secp256k1.PrivateKey, error) {
-	var keyHex string
-	err := c.CallRPC("dumpprivkey", []any{addr}, &keyHex)
-	if err != nil {
-		return nil, err
-	}
-	wif, err := btcutil.DecodeWIF(keyHex)
-	if err != nil {
-		return nil, err
-	}
-	return wif.PrivKey, nil
 }
 
 func listLockUnspent(c rpcCaller, log util.Logger) ([]*btc.RPCOutpoint, error) {
@@ -178,23 +121,6 @@ func listLockUnspent(c rpcCaller, log util.Logger) ([]*btc.RPCOutpoint, error) {
 	}
 	unspents = unspents[:i]
 	return unspents, nil
-}
-
-func getTxOut(c rpcCaller, txHash *chainhash.Hash, index uint32) (*wire.TxOut, uint32, error) {
-	// Note that we pass to call pointer to a pointer (&res) so that
-	// json.Unmarshal can nil the pointer if the method returns the JSON null.
-	var res *btcjson.GetTxOutResult
-	if err := c.CallRPC("gettxout", []any{txHash.String(), index, true}, &res); err != nil {
-		return nil, 0, err
-	}
-	if res == nil {
-		return nil, 0, nil
-	}
-	outputScript, err := hex.DecodeString(res.ScriptPubKey.Hex)
-	if err != nil {
-		return nil, 0, err
-	}
-	return wire.NewTxOut(int64(toZats(res.Value)), outputScript), uint32(res.Confirmations), nil
 }
 
 func getVersion(c rpcCaller) (uint64, uint64, error) {
@@ -240,15 +166,6 @@ func getVerboseBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (header *btc.
 	// RPC wallet must return negative confirmations number for orphaned blocks.
 	mainchain = hdr.Confirmations >= 0
 	return hdr, mainchain, nil
-}
-
-func getBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (*wire.BlockHeader, error) {
-	var b util.Bytes
-	err := c.CallRPC("getblockheader", []any{blockHash.String(), false}, &b)
-	if err != nil {
-		return nil, err
-	}
-	return DeserializeBlockHeader(b)
 }
 
 func getRPCBlockHeader(c rpcCaller, blockHash *chainhash.Hash) (*btc.BlockHeader, error) {
@@ -359,13 +276,6 @@ func translateRPCCancelErr(err error) error {
 		err = asset.ErrRequestTimeout
 	}
 	return err
-}
-
-func getTxOutput(c rpcCaller, txHash *chainhash.Hash, index uint32) (*btcjson.GetTxOutResult, error) {
-	// Note that we pass to call pointer to a pointer (&res) so that
-	// json.Unmarshal can nil the pointer if the method returns the JSON null.
-	var res *btcjson.GetTxOutResult
-	return res, c.CallRPC("gettxout", []any{txHash.String(), index, true}, &res)
 }
 
 func syncStatus(c rpcCaller) (*asset.SyncStatus, error) {

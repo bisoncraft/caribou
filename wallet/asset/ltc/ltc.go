@@ -51,14 +51,6 @@ var (
 		ConfigOpts:        append(btc.RPCConfigOpts("Litecoin", "9332"), btc.CommonConfigOpts("LTC", true)...),
 		MultiFundingOpts:  btc.MultiFundingOpts,
 	}
-	electrumWalletDefinition = &asset.WalletDefinition{
-		Type:        walletTypeElectrum,
-		Tab:         "Electrum-LTC (external)",
-		Description: "Use an external Electrum-LTC Wallet",
-		// json: DefaultConfigPath: filepath.Join(btcutil.AppDataDir("electrum-ltc", false), "config"), // e.g. ~/.electrum-ltc/config		ConfigOpts:        append(rpcOpts, commonOpts...),
-		ConfigOpts:       append(btc.ElectrumConfigOpts, btc.CommonConfigOpts("LTC", true)...),
-		MultiFundingOpts: btc.MultiFundingOpts,
-	}
 	spvWalletDefinition = &asset.WalletDefinition{
 		Type:             walletTypeSPV,
 		Tab:              "Native",
@@ -75,7 +67,6 @@ var (
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
-			// electrumWalletDefinition, // TODO: Broken. Investigate and re-enable.
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
 		Network: &asset.Network{

@@ -12,8 +12,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"os/exec"
-	"os/user"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -118,9 +116,6 @@ const (
 
 	LiveEstimateFailedError = util.ErrorKind("live gas estimate failed")
 
-	// signedRedeemDeadline is the maximum lifetime of an EIP-712 signed
-	// redeem. The contract will reject signatures past this deadline.
-	signedRedeemDeadline = 10 * time.Minute
 	// txAgeOut is the amount of time after which we forego any tx
 	// synchronization efforts for unconfirmed pending txs.
 	txAgeOut = 2 * time.Hour
@@ -230,15 +225,6 @@ func safeConfs(tip, blockNum uint64) uint64 {
 		return 0
 	}
 	return tip - blockNum + 1
-}
-
-// safeConfsBig is safeConfs but with a *big.Int blockNum. A nil blockNum will
-// result in a zero.
-func safeConfsBig(tip uint64, blockNum *big.Int) uint64 {
-	if blockNum == nil {
-		return 0
-	}
-	return safeConfs(tip, blockNum.Uint64())
 }
 
 // WalletConfig are wallet-level configuration settings.
@@ -517,14 +503,6 @@ type assetWallet struct {
 	// transfer, and tx-history features. nil for the base-chain asset.
 	tokenContractor tokenContractor
 
-	l1OpFees struct {
-		sync.Mutex
-		blockNum    uint64
-		swapL1Fee   uint64 // gwei, for 1 swap tx
-		redeemL1Fee uint64 // gwei, for 1 redeem tx
-		refundL1Fee uint64 // gwei, for 1 refund tx
-	}
-
 	evmify  func(uint64) *big.Int
 	atomize func(*big.Int) uint64
 
@@ -556,66 +534,10 @@ type TokenWallet struct {
 	netToken *NetToken
 }
 
-// perTxGasLimit is the most gas we can use on a transaction. It is the lower of
-// either the block's gas limit or the limit based on our maximum allowable
-// fees.
-func (w *assetWallet) perTxGasLimit(feeRateGwei uint64) uint64 {
-	blockGasLimit := w.tip().GasLimit
-	maxFeeBasedGasLimit := w.maxTxFeeGwei / feeRateGwei
-	return min(maxFeeBasedGasLimit, blockGasLimit)
-}
-
-// maxSwapsOrRedeems calculates the maximum number of swaps or redemptions that
-// can go in a single transaction. If feeRateGwei is not provided, the
-// prevailing fee rate will be used.
-func (w *assetWallet) maxSwapsOrRedeems(oneGas, gasAdd uint64, feeRateGwei uint64) (n int, err error) {
-	feeRate := GweiToWei(feeRateGwei)
-	if feeRateGwei == 0 {
-		feeRate, err = w.currentFeeRate(w.ctx)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	txGasLimit := w.perTxGasLimit(WeiToGweiCeil(feeRate))
-	if oneGas > txGasLimit {
-		return 0, fmt.Errorf("tx limit zero")
-	}
-	return 1 + int((txGasLimit-oneGas)/gasAdd), nil
-}
-
 // Info returns basic information about the wallet and asset.
 func (w *assetWallet) Info() *asset.WalletInfo {
 	wi := w.wi
 	return &wi
-}
-
-// avgDiff calculates the average per-step increase from the first to the last
-// element. If the last element is not greater than the first, it returns 0.
-func avgDiff(vs []uint64) uint64 {
-	if len(vs) < 2 {
-		return 0
-	}
-	if vs[len(vs)-1] <= vs[0] {
-		return 0
-	}
-	return (vs[len(vs)-1] - vs[0]) / uint64(len(vs)-1)
-}
-
-func recommendedGas(v uint64) uint64 {
-	return v * 13 / 10
-}
-
-// avgSlice calculates the average of a slice of uint64 values.
-func avgSlice(vs []uint64) uint64 {
-	if len(vs) == 0 {
-		return 0
-	}
-	var sum uint64
-	for _, v := range vs {
-		sum += v
-	}
-	return sum / uint64(len(vs))
 }
 
 // genWalletSeed uses the wallet seed passed from core as the entropy for
@@ -650,16 +572,6 @@ func privKeyFromSeed(seed []byte) (pk []byte, zero func(), err error) {
 		return nil, nil, err
 	}
 	return pk, extKey.Zero, nil
-}
-
-// contractVersion converts a server's asset protocol version to a swap contract
-// version. It applies to both tokens and eth right now, but that may not always
-// be the case.
-func contractVersion(assetVer uint32) uint32 {
-	if assetVer == asset.VersionNewest {
-		return ContractVersionNewest
-	}
-	return ProtocolVersion(assetVer).ContractVersion()
 }
 
 func CreateEVMWallet(chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool) error {
@@ -1644,87 +1556,6 @@ func (eth *baseWallet) OwnsDepositAddress(address string) (bool, error) {
 	return addr == eth.addr, nil
 }
 
-func (w *assetWallet) amtString(amt uint64) string {
-	return fmt.Sprintf("%s %s", w.ui.ConventionalString(amt), w.ui.Conventional.Unit)
-}
-
-// fundReserveType represents the various uses for which funds need to be locked:
-// initiations, redemptions, and refunds.
-type fundReserveType uint32
-
-const (
-	initiationReserve fundReserveType = iota
-	redemptionReserve
-	refundReserve
-)
-
-func (f fundReserveType) String() string {
-	switch f {
-	case initiationReserve:
-		return "initiation"
-	case redemptionReserve:
-		return "redemption"
-	case refundReserve:
-		return "refund"
-	default:
-		return ""
-	}
-}
-
-// fundReserveOfType returns a pointer to the funds reserved for a particular
-// use case.
-func (w *assetWallet) fundReserveOfType(t fundReserveType) *uint64 {
-	switch t {
-	case initiationReserve:
-		return &w.lockedFunds.initiateReserves
-	case redemptionReserve:
-		return &w.lockedFunds.redemptionReserves
-	case refundReserve:
-		return &w.lockedFunds.refundReserves
-	default:
-		panic(fmt.Sprintf("invalid fund reserve type: %v", t))
-	}
-}
-
-var errInsufficientFunds = errors.New("insufficient funds")
-var errBalanceRetrieval = errors.New("balance retrieval error")
-
-// lockFunds locks funds for a use case.
-func (w *assetWallet) lockFunds(amt uint64, t fundReserveType) error {
-	balance, err := w.balance()
-	if err != nil {
-		return fmt.Errorf("%w: %v", errBalanceRetrieval, err)
-	}
-
-	if balance.Available < amt {
-		return fmt.Errorf("%w: attempting to lock more %s for %s than is currently available. %d > %d %s",
-			errInsufficientFunds, util.BipIDSymbol(w.assetID), t, amt, balance.Available, w.ui.AtomicUnit)
-	}
-
-	w.lockedFunds.mtx.Lock()
-	defer w.lockedFunds.mtx.Unlock()
-
-	*w.fundReserveOfType(t) += amt
-	return nil
-}
-
-// unlockFunds unlocks funds for a use case.
-func (w *assetWallet) unlockFunds(amt uint64, t fundReserveType) {
-	w.lockedFunds.mtx.Lock()
-	defer w.lockedFunds.mtx.Unlock()
-
-	reserve := w.fundReserveOfType(t)
-
-	if *reserve < amt {
-		*reserve = 0
-		w.log.Errorf("attempting to unlock more for %s than is currently locked - %d > %d. "+
-			"clearing all locked funds", t, amt, *reserve)
-		return
-	}
-
-	*reserve -= amt
-}
-
 // amountLocked returns the total amount currently locked.
 func (w *assetWallet) amountLocked() uint64 {
 	w.lockedFunds.mtx.RLock()
@@ -1799,14 +1630,6 @@ func (c *coin) Value() uint64 {
 }
 
 var _ asset.Coin = (*coin)(nil)
-
-func (eth *ETHWallet) createFundingCoin(amount uint64) *fundingCoin {
-	return createFundingCoin(eth.addr, amount)
-}
-
-func (eth *TokenWallet) createTokenFundingCoin(amount, fees uint64) *tokenFundingCoin {
-	return createTokenFundingCoin(eth.addr, amount, fees)
-}
 
 // approvalGas gets the best available estimate for an approval tx, which is
 // the greater of the asset's registered value and a live estimate. It is an
@@ -2601,10 +2424,6 @@ func (w *assetWallet) BridgeCompletionFees(bridgeName string) (uint64, bool, err
 	return fees, availableFeeBalance >= fees, nil
 }
 
-func unlockRedemptionReserves(w *assetWallet, reserves uint64) {
-	w.unlockFunds(reserves, redemptionReserve)
-}
-
 // DepositAddress returns an address for the exchange wallet. This implementation
 // is idempotent, always returning the same address for a given assetWallet.
 func (eth *baseWallet) DepositAddress() (string, error) {
@@ -2890,14 +2709,6 @@ func (eth *baseWallet) SyncStatus() (*asset.SyncStatus, error) {
 	}, nil
 }
 
-func (w *baseWallet) currentBaseFee(ctx context.Context) (*big.Int, error) {
-	base, _, err := w.currentNetworkFees(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return base, nil
-}
-
 // currentNetworkFees give the current base fee rate (from the best header),
 // and recommended tip cap.
 func (w *baseWallet) currentNetworkFees(ctx context.Context) (baseRate, tipRate *big.Int, err error) {
@@ -2914,17 +2725,6 @@ func (w *baseWallet) currentNetworkFees(ctx context.Context) (baseRate, tipRate 
 	}
 	c.blockNum = tip
 	return c.baseRate, c.tipRate, nil
-}
-
-// currentFeeRate gives the current rate of transactions being mined. Only
-// use this to provide informative realistic estimates of actual fee *use*. For
-// transaction planning, use recommendedMaxFeeRateGwei.
-func (w *baseWallet) currentFeeRate(ctx context.Context) (_ *big.Int, err error) {
-	b, t, err := w.currentNetworkFees(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return new(big.Int).Add(b, t), nil
 }
 
 // recommendedMaxFeeRate finds a recommended max fee rate using the somewhat
@@ -3018,9 +2818,9 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 	}
 }
 
-// checkForNewBlocks checks for new blocks. When a tip change is detected, the
-// tipChange callback function is invoked and a goroutine is started to check
-// if any contracts in the findRedemptionQueue are redeemed in the new blocks.
+// checkForNewBlocks checks for new blocks. When a tip change is detected,
+// pending txs and approvals are rechecked and a TipChange notification is
+// emitted to each connected wallet.
 func (eth *ETHWallet) checkForNewBlocks(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, onChainDataFetchTimeout)
 	defer cancel()
@@ -3508,18 +3308,6 @@ func (w *assetWallet) loadTokenContractor() error {
 		return fmt.Errorf("wrong %s token address. expected %s, got %s", token.Name, netToken.Address, c.tokenAddress())
 	}
 	w.tokenContractor = c
-	return nil
-}
-
-func checkTxStatus(receipt *types.Receipt, gasLimit uint64) error {
-	if receipt.Status != types.ReceiptStatusSuccessful {
-		return fmt.Errorf("transaction status failed")
-	}
-
-	if receipt.GasUsed > gasLimit {
-		return fmt.Errorf("gas used, %d, appears to have exceeded limit of %d", receipt.GasUsed, gasLimit)
-	}
-
 	return nil
 }
 
@@ -4519,36 +4307,6 @@ func waitForConfirmation(ctx context.Context, desc string, cl ethFetcher, txHash
 			return ctx.Err()
 		}
 	}
-}
-
-// runSimnetMiner starts a gouroutine to generate a simnet block every 5 seconds
-// until the ctx is canceled. By default, the eth harness will mine a block
-// every 15s. We want to speed it up a bit for e.g. GetGas testing.
-func runSimnetMiner(ctx context.Context, symbol string, log util.Logger) {
-	log.Infof("Starting the simnet miner")
-	go func() {
-		tick := time.NewTicker(time.Second * 5)
-		u, err := user.Current()
-		if err != nil {
-			log.Criticalf("cannot run simnet miner because we couldn't get the current user")
-			return
-		}
-		for {
-			select {
-			case <-tick.C:
-				log.Debugf("Mining a simnet block")
-				mine := exec.CommandContext(ctx, "./mine-alpha", "1")
-				mine.Dir = filepath.Join(u.HomeDir, "dextest", symbol, "harness-ctl")
-				b, err := mine.CombinedOutput()
-				if err != nil {
-					log.Errorf("Mining error: %v", err)
-					log.Errorf("Mining error output: %s", string(b))
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 }
 
 type getGas byte

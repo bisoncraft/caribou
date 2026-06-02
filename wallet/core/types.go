@@ -6,7 +6,6 @@ package core
 import (
 	"encoding/hex"
 	"fmt"
-	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
@@ -18,47 +17,6 @@ const (
 	// hdKeyPurposeMulti is the BIP-43 purpose field for multisig keys.
 	hdKeyPurposeMulti uint32 = hdkeychain.HardenedKeyStart + 0x6D756C74 // ASCII "mult"
 )
-
-// errorSet is a slice of orders with a prefix prepended to the Error output.
-type errorSet struct {
-	prefix string
-	errs   []error
-}
-
-// newErrorSet constructs an error set with a prefix.
-func newErrorSet(s string, a ...any) *errorSet {
-	return &errorSet{prefix: fmt.Sprintf(s, a...)}
-}
-
-// add adds the message to the slice as an error and returns the errorSet.
-func (set *errorSet) add(s string, a ...any) *errorSet {
-	set.errs = append(set.errs, fmt.Errorf(s, a...))
-	return set
-}
-
-// addErr adds the error to the set.
-func (set *errorSet) addErr(err error) *errorSet {
-	set.errs = append(set.errs, err)
-	return set
-}
-
-// ifAny returns the error set if there are any errors, else nil.
-func (set *errorSet) ifAny() error {
-	if len(set.errs) > 0 {
-		return set
-	}
-	return nil
-}
-
-// Error satisfies the error interface. Error strings are concatenated using a
-// ", " and prepended with the prefix.
-func (set *errorSet) Error() string {
-	errStrings := make([]string, 0, len(set.errs))
-	for i := range set.errs {
-		errStrings = append(errStrings, set.errs[i].Error())
-	}
-	return set.prefix + "{" + strings.Join(errStrings, ", ") + "}"
-}
 
 // WalletForm is information necessary to create a new exchange wallet.
 // The ConfigText, if provided, will be parsed for wallet connection settings.

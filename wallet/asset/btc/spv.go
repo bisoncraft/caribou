@@ -160,17 +160,6 @@ func (w *btcSPVWallet) Birthday() time.Time {
 	return w.Manager.Birthday()
 }
 
-func (w *btcSPVWallet) updateDBBirthday(bday time.Time) error {
-	btcw, isLoaded := w.loader.LoadedWallet()
-	if !isLoaded {
-		return fmt.Errorf("wallet not loaded")
-	}
-	return walletdb.Update(btcw.Database(), func(dbtx walletdb.ReadWriteTx) error {
-		ns := dbtx.ReadWriteBucket(wAddrMgrBkt)
-		return btcw.Manager.SetBirthday(ns, bday)
-	})
-}
-
 // Start initializes the *btcwallet.Wallet and its supporting players and
 // starts syncing.
 func (w *btcSPVWallet) Start() (SPVService, error) {

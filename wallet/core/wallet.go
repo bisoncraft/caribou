@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,10 +91,6 @@ func (w *xcWallet) setEncPW(encPW []byte) {
 	w.mtx.Lock()
 	w.encPass = encPW
 	w.mtx.Unlock()
-}
-
-func (w *xcWallet) supportsVer(ver uint32) bool {
-	return slices.Contains(w.supportedVersions, ver)
 }
 
 // Unlock unlocks the wallet backend and caches the decrypted wallet password so
@@ -249,15 +244,6 @@ func (w *xcWallet) locallyUnlocked() bool {
 		return true // unencrypted wallet
 	}
 	return len(w.pw) > 0 // cached password for encrypted wallet
-}
-
-func (w *xcWallet) unitInfo() util.UnitInfo {
-	return w.Info().UnitInfo
-}
-
-func (w *xcWallet) amtString(amt uint64) string {
-	ui := w.unitInfo()
-	return fmt.Sprintf("%s %s", ui.ConventionalString(amt), ui.Conventional.Unit)
 }
 
 // state returns the current WalletState.
@@ -487,56 +473,6 @@ func (w *xcWallet) logFilePath() (string, error) {
 		return "", errors.New("wallet does not support getting log file")
 	}
 	return logFiler.LogFilePath(), nil
-}
-
-// accelerateOrder uses the Child-Pays-For-Parent technique to accelerate an
-// order if the wallet is an Accelerator.
-func (w *xcWallet) accelerateOrder(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
-	if w.isDisabled() { // cannot perform order acceleration with disabled wallet.
-		return nil, "", fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return nil, "", errWalletNotConnected
-	}
-	accelerator, ok := w.Wallet.(asset.Accelerator)
-	if !ok {
-		return nil, "", errors.New("wallet does not support acceleration")
-	}
-	return accelerator.AccelerateOrder(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, newFeeRate)
-}
-
-// accelerationEstimate estimates the cost to accelerate an order if the wallet
-// is an Accelerator.
-func (w *xcWallet) accelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, error) {
-	if w.isDisabled() { // cannot perform acceleration estimate with disabled wallet.
-		return 0, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return 0, errWalletNotConnected
-	}
-	accelerator, ok := w.Wallet.(asset.Accelerator)
-	if !ok {
-		return 0, errors.New("wallet does not support acceleration")
-	}
-
-	return accelerator.AccelerationEstimate(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
-}
-
-// preAccelerate gives the user information about accelerating an order if the
-// wallet is an Accelerator.
-func (w *xcWallet) preAccelerate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
-	if w.isDisabled() { // cannot perform operation with disabled wallet.
-		return 0, &asset.XYRange{}, nil, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return 0, &asset.XYRange{}, nil, errWalletNotConnected
-	}
-	accelerator, ok := w.Wallet.(asset.Accelerator)
-	if !ok {
-		return 0, &asset.XYRange{}, nil, errors.New("wallet does not support acceleration")
-	}
-
-	return accelerator.PreAccelerate(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
 }
 
 // TxHistory returns all the transactions a wallet has made. If refID

@@ -34,26 +34,6 @@ var (
 		util.Simnet:  SimnetChainID,
 	}
 
-	// mumbaiChainConfig contains the chain parameters to run a node on the
-	// Mumbai test network. This is a copy of
-	// https://github.com/maticnetwork/bor/blob/891ec7fef619cac0a796e3e29d5b2d4c095bdd9b/params/config.go#L336.
-	mumbaiChainConfig = &params.ChainConfig{
-		ChainID:             big.NewInt(80001),
-		HomesteadBlock:      big.NewInt(0),
-		DAOForkBlock:        nil,
-		DAOForkSupport:      true,
-		EIP150Block:         big.NewInt(0),
-		EIP155Block:         big.NewInt(0),
-		EIP158Block:         big.NewInt(0),
-		ByzantiumBlock:      big.NewInt(0),
-		ConstantinopleBlock: big.NewInt(0),
-		PetersburgBlock:     big.NewInt(0),
-		IstanbulBlock:       big.NewInt(2722000),
-		MuirGlacierBlock:    big.NewInt(2722000),
-		BerlinBlock:         big.NewInt(13996000),
-		LondonBlock:         big.NewInt(22640000),
-	}
-
 	// Called BorTestChainConfig in maticnetwork/bor/params/config.go
 	AmoyChainConfig = &params.ChainConfig{
 		ChainID:             big.NewInt(80002),
@@ -107,21 +87,6 @@ func DefaultAmoyGenesisBlock() *core.Genesis {
 		Mixhash:    common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
 		Coinbase:   common.HexToAddress("0x0000000000000000000000000000000000000000"),
 		Alloc:      readPrealloc("allocs/amoy.json"),
-	}
-}
-
-// defaultMumbaiGenesisBlock returns the Mumbai network genesis block. See:
-// https://github.com/maticnetwork/bor/blob/891ec7fef619cac0a796e3e29d5b2d4c095bdd9b/core/genesis.go#L495
-func defaultMumbaiGenesisBlock() *core.Genesis {
-	return &core.Genesis{
-		Config:     mumbaiChainConfig,
-		Nonce:      0,
-		Timestamp:  1558348305,
-		GasLimit:   10000000,
-		Difficulty: big.NewInt(1),
-		Mixhash:    common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
-		Coinbase:   common.HexToAddress("0x0000000000000000000000000000000000000000"),
-		Alloc:      readPrealloc("allocs/mumbai.json"),
 	}
 }
 

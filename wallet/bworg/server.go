@@ -173,23 +173,6 @@ func fileServer(rr chi.Router, pathPrefix string) {
 	})
 }
 
-func serveFile(w http.ResponseWriter, r *http.Request, fullFilePath string) {
-	// Generate the full file system path and test for existence.
-	fi, err := os.Stat(fullFilePath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	// Deny directory listings
-	if fi.IsDir() {
-		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
-		return
-	}
-
-	http.ServeFile(w, r, fullFilePath)
-}
-
 type logWriter struct {
 	*rotator.Rotator
 }

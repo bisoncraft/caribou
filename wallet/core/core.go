@@ -40,18 +40,12 @@ const (
 	// legacySeedLength is the length of the generated app seed used for app protection.
 	legacySeedLength = 64
 
-	// pokesCapacity is the maximum number of poke notifications that
-	// will be cached.
-	pokesCapacity = 100
-
 	// walletLockTimeout is the default timeout used when locking wallets.
 	walletLockTimeout = 5 * time.Second
 )
 
 var (
 	unbip = util.BipIDSymbol
-	// The coin waiters will query for transaction data every recheckInterval.
-	recheckInterval = time.Second * 5
 	// When waiting for a wallet to sync, a SyncStatus check will be performed
 	// every syncTickerPeriod. var instead of const for testing purposes.
 	syncTickerPeriod = 3 * time.Second
@@ -2714,23 +2708,6 @@ func (c *Core) Logout() error {
 	return nil
 }
 
-func (c *Core) wait(coinID []byte, assetID uint32, trigger func() (bool, error), action func(error)) {
-	c.waiterMtx.Lock()
-	defer c.waiterMtx.Unlock()
-	c.blockWaiters[coinIDString(assetID, coinID)] = &blockWaiter{
-		assetID: assetID,
-		trigger: trigger,
-		action:  action,
-	}
-}
-
-func (c *Core) waiting(coinID []byte, assetID uint32) bool {
-	c.waiterMtx.RLock()
-	defer c.waiterMtx.RUnlock()
-	_, found := c.blockWaiters[coinIDString(assetID, coinID)]
-	return found
-}
-
 // removeWaiter removes a blockWaiter from the map.
 func (c *Core) removeWaiter(id string) {
 	c.waiterMtx.Lock()
@@ -3445,28 +3422,6 @@ func (c *Core) WalletRestorationInfo(pw []byte, assetID uint32) ([]*asset.Wallet
 	}
 
 	return restorationInfo, nil
-}
-
-// createFile creates a new file and will create the file directory if it does
-// not exist.
-func createFile(fileName string) (*os.File, error) {
-	if fileName == "" {
-		return nil, errors.New("no file path specified for creating")
-	}
-	fileDir := filepath.Dir(fileName)
-	if !util.FileExists(fileDir) {
-		err := os.MkdirAll(fileDir, 0755)
-		if err != nil {
-			return nil, fmt.Errorf("os.MkdirAll error: %w", err)
-		}
-	}
-	fileName = util.CleanAndExpandPath(fileName)
-	// Errors if file exists.
-	f, err := os.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
 }
 
 // WalletPeers returns a list of peers that a wallet is connected to. It also

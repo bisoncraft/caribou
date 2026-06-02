@@ -8,8 +8,6 @@ import (
 	"math/rand"
 	"sort"
 	"time"
-
-	"github.com/bisoncraft/bosswallet/util/calc"
 )
 
 // sendEnough generates a function that can be used as the enough argument to
@@ -36,30 +34,6 @@ func sendEnough(amt, feeRate uint64, subtract bool, baseTxSize uint32, reportCha
 			excess = 0
 		}
 		return true, excess
-	}
-}
-
-// orderEnough generates a function that can be used as the enough argument to
-// the fund method. If change from a split transaction will be created AND
-// immediately available (not mixing), set reportChange to indicate this and the
-// returned enough func will return a non-zero excess value reflecting this
-// potential spit tx change. Otherwise, the enough func will always return 0,
-// leaving only unselected UTXOs to cover any required reserves.
-func orderEnough(val, lots, feeRate uint64, reportChange bool) func(sum uint64, size uint32, unspent *compositeUTXO) (bool, uint64) {
-	return func(sum uint64, size uint32, unspent *compositeUTXO) (bool, uint64) {
-		reqFunds := calc.RequiredOrderFunds(val, uint64(size+unspent.input.Size()), lots,
-			InitTxSizeBase, InitTxSize, feeRate)
-		total := sum + toAtoms(unspent.rpc.Amount) // all selected utxos
-
-		if total >= reqFunds { // that'll do it
-			// change = total - (val + swapTxnsFee)
-			excess := total - reqFunds // reqFunds = val + swapTxnsFee
-			if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate) {
-				excess = 0
-			}
-			return true, excess
-		}
-		return false, 0
 	}
 }
 

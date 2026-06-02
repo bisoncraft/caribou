@@ -909,10 +909,6 @@ func (w *spvWallet) WalletUnlock(pw []byte) error {
 	return w.Unlock(pw)
 }
 
-func (w *spvWallet) getBlockHeaderVerbose(blockHash *chainhash.Hash) (*wire.BlockHeader, error) {
-	return w.cl.GetBlockHeader(blockHash)
-}
-
 // returns a bool value to indicate whether this block is a part of main chain.
 // For orphaned blocks header.Confirmations is negative.
 func (w *spvWallet) GetBlockHeader(blockHash *chainhash.Hash) (header *BlockHeader, mainchain bool, err error) {

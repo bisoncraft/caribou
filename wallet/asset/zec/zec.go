@@ -24,11 +24,8 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -61,10 +58,6 @@ const (
 	unifiedAddressType     = "unified"
 
 	minOrchardConfs = 1
-	// nActionsOrchardEstimate is used for tx fee estimation. Scanning 1000
-	// previous blocks, only found 1 with a tx with > 6 nActionsOrchard. Most
-	// are 2.
-	nActionsOrchardEstimate = 6
 
 	blockTicker     = time.Second
 	peerCountTicker = 5 * time.Second
@@ -692,81 +685,6 @@ func decodeCoinID(coinID util.Bytes) (*chainhash.Hash, uint32, error) {
 	return &txHash, binary.BigEndian.Uint32(coinID[32:]), nil
 }
 
-// fundedTx creates and returns a new MsgTx with the provided coins as inputs.
-func (w *zecWallet) fundedTx(coins []*btc.Output) (*Tx, uint64, []btc.OutPoint, error) {
-	baseTx := zecTx(wire.NewMsgTx(VersionNU5))
-	totalIn, pts, err := w.addInputsToTx(baseTx, coins)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	return baseTx, totalIn, pts, nil
-}
-
-func (w *zecWallet) addInputsToTx(tx *Tx, coins []*btc.Output) (uint64, []btc.OutPoint, error) {
-	var totalIn uint64
-	// Add the funding utxos.
-	pts := make([]btc.OutPoint, 0, len(coins))
-	for _, op := range coins {
-		totalIn += op.Val
-		txIn := wire.NewTxIn(op.WireOutPoint(), []byte{}, nil)
-		tx.AddTxIn(txIn)
-		pts = append(pts, op.Pt)
-	}
-	return totalIn, pts, nil
-}
-
-// signTxAndAddChange signs the passed tx and adds a change output if the change
-// wouldn't be dust. Returns but does NOT broadcast the signed tx.
-func (w *zecWallet) signTxAndAddChange(ctx context.Context, baseTx *Tx, addr btcutil.Address, totalIn, totalOut, fees uint64) (*Tx, *btc.Output, error) {
-
-	makeErr := func(s string, a ...any) (*Tx, *btc.Output, error) {
-		return nil, nil, fmt.Errorf(s, a...)
-	}
-
-	// Sign the transaction to get an initial size estimate and calculate whether
-	// a change output would be dust.
-	remaining := totalIn - totalOut
-	if fees > remaining {
-		b, _ := baseTx.Bytes()
-		return makeErr("not enough funds to cover minimum fee rate. %s < %s, raw tx: %x",
-			btcutil.Amount(totalIn), btcutil.Amount(fees+totalOut), b)
-	}
-
-	// Create a change output.
-	changeScript, err := txscript.PayToAddrScript(addr)
-	if err != nil {
-		return makeErr("error creating change script: %v", err)
-	}
-
-	changeIdx := len(baseTx.TxOut)
-	changeValue := remaining - fees
-	changeOutput := wire.NewTxOut(int64(changeValue), changeScript)
-
-	// If the change is not dust, recompute the signed txn size and iterate on
-	// the fees vs. change amount.
-	changeAdded := !isDust(changeValue, dexbtc.P2PKHOutputSize)
-	if changeAdded {
-		// Add the change output.
-		baseTx.AddTxOut(changeOutput)
-	} else {
-		w.log.Debugf("Foregoing change worth up to %v because it is dust", changeOutput.Value)
-	}
-
-	msgTx, err := signTxByRPC(w, baseTx)
-	if err != nil {
-		b, _ := baseTx.Bytes()
-		return makeErr("signing error: %v, raw tx: %x", err, b)
-	}
-
-	txHash := msgTx.TxHash()
-	var change *btc.Output
-	if changeAdded {
-		change = btc.NewOutput(&txHash, uint32(changeIdx), uint64(changeOutput.Value))
-	}
-
-	return msgTx, change, nil
-}
-
 type balanceBreakdown struct {
 	avail     uint64
 	maturing  uint64
@@ -777,10 +695,6 @@ type balances struct {
 	orchard     *balanceBreakdown
 	sapling     uint64
 	transparent *balanceBreakdown
-}
-
-func (b *balances) available() uint64 {
-	return b.orchard.avail + b.transparent.avail
 }
 
 func (w *zecWallet) balances() (*balances, error) {
@@ -871,31 +785,6 @@ func (w *zecWallet) OwnsDepositAddress(addrStr string) (bool, error) {
 		return false, fmt.Errorf("error validating address: %w", err)
 	}
 	return res.IsMine, nil
-}
-
-func (w *zecWallet) broadcastTx(ctx context.Context, tx *Tx) (*chainhash.Hash, error) {
-	rawTx := func() string {
-		b, err := tx.Bytes()
-		if err != nil {
-			return "serialization error: " + err.Error()
-		}
-		return util.Bytes(b).String()
-	}
-	txHash, err := sendRawTransaction(w, tx)
-	if err != nil {
-		if broadcast.IsAlreadyBroadcastErr(err) {
-			h := tx.TxHash()
-			w.log.Warnf("Transaction %s appears to already be broadcast: %v", h, err)
-			return &h, nil
-		}
-		return nil, fmt.Errorf("sendrawtx error: %v: %s", err, rawTx())
-	}
-	checkHash := tx.TxHash()
-	if *txHash != checkHash {
-		return nil, fmt.Errorf("transaction sent, but received unexpected transaction ID back from RPC server. "+
-			"expected %s, got %s. raw tx: %s", checkHash, txHash, rawTx())
-	}
-	return txHash, nil
 }
 
 func sendEnough(val uint64) btc.EnoughFunc {
@@ -1091,75 +980,6 @@ func (w *zecWallet) TransactionConfirmations(ctx context.Context, txID string) (
 	return uint32(tx.Confirmations), nil
 }
 
-// send the value to the address, with the given fee rate. If subtract is true,
-// the fees will be subtracted from the value. If false, the fees are in
-// addition to the value. feeRate is in units of sats/byte.
-func (w *zecWallet) send(addrStr string, val uint64, subtract bool) (*chainhash.Hash, uint32, uint64, error) {
-	addr, err := DecodeAddress(addrStr, w.addrParams, w.btcParams)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("invalid address: %s", addrStr)
-	}
-	pay2script, err := txscript.PayToAddrScript(addr)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("PayToAddrScript error: %w", err)
-	}
-
-	const minConfs = 0
-	_, _, spents, _, inputsSize, _, err := w.cm.Fund(w.reserves.Load(), minConfs, false, sendEnough(val))
-	if err != nil {
-		return nil, 0, 0, newError(errFunding, "error funding transaction: %w", err)
-	}
-
-	fundedTx, totalIn, _, err := w.fundedTx(spents)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("error adding inputs to transaction: %w", err)
-	}
-
-	fees := TxFeesZIP317(inputsSize, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
-	var toSend uint64
-	if subtract {
-		toSend = val - fees
-	} else {
-		toSend = val
-	}
-	fundedTx.AddTxOut(wire.NewTxOut(int64(toSend), pay2script))
-
-	changeAddr, err := transparentAddress(w, w.addrParams, w.btcParams)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("error creating change address: %w", err)
-	}
-
-	signedTx, _, err := w.signTxAndAddChange(w.ctx, fundedTx, changeAddr, totalIn, val, fees)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("signTxAndAddChange error: %v", err)
-	}
-
-	txHash, err := w.broadcastTx(w.ctx, signedTx)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-
-	return txHash, 0, toSend, nil
-}
-
-func (w *zecWallet) sendWithReturn(baseTx *Tx, addr btcutil.Address, totalIn, totalOut uint64) (*Tx, error) {
-	txInsSize := uint64(len(baseTx.TxIn))*dexbtc.RedeemP2PKHInputSize + 1
-	var txOutsSize uint64 = uint64(wire.VarIntSerializeSize(uint64(len(baseTx.TxOut) + 1)))
-	for _, txOut := range baseTx.TxOut {
-		txOutsSize += uint64(txOut.SerializeSize())
-	}
-
-	fees := TxFeesZIP317(txInsSize, txOutsSize, 0, 0, 0, 0)
-
-	signedTx, _, err := w.signTxAndAddChange(w.ctx, baseTx, addr, totalIn, totalOut, fees)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = w.broadcastTx(w.ctx, signedTx)
-	return signedTx, err
-}
-
 func (w *zecWallet) SyncStatus() (*asset.SyncStatus, error) {
 	ss, err := syncStatus(w)
 	if err != nil {
@@ -1187,27 +1007,6 @@ func (w *zecWallet) ValidateAddress(addr string) bool {
 		return false
 	}
 	return res.IsValid
-}
-
-func transparentAddressString(c rpcCaller) (string, error) {
-	// One of the address types MUST be shielded.
-	addrRes, err := zGetAddressForAccount(c, shieldedAcctNumber, []string{transparentAddressType, orchardAddressType})
-	if err != nil {
-		return "", err
-	}
-	receivers, err := zGetUnifiedReceivers(c, addrRes.Address)
-	if err != nil {
-		return "", err
-	}
-	return receivers.Transparent, nil
-}
-
-func transparentAddress(c rpcCaller, addrParams *AddressParams, btcParams *chaincfg.Params) (btcutil.Address, error) {
-	addrStr, err := transparentAddressString(c)
-	if err != nil {
-		return nil, err
-	}
-	return DecodeAddress(addrStr, addrParams, btcParams)
 }
 
 func (w *zecWallet) lastShieldedAddress() (addr string, err error) {
@@ -1422,21 +1221,6 @@ func (w *zecWallet) sendShielded(ctx context.Context, toAddr string, amt uint64)
 
 func zecTx(tx *wire.MsgTx) *Tx {
 	return NewTxFromMsgTx(tx, MaxExpiryHeight)
-}
-
-// signTx signs the transaction input with Zcash's BLAKE-2B sighash digest.
-// Won't work with shielded or blended transactions.
-func signTx(btcTx *wire.MsgTx, idx int, pkScript []byte, hashType txscript.SigHashType,
-	key *btcec.PrivateKey, amts []int64, prevScripts [][]byte) ([]byte, error) {
-
-	tx := zecTx(btcTx)
-
-	sigHash, err := tx.SignatureDigest(idx, hashType, pkScript, amts, prevScripts)
-	if err != nil {
-		return nil, fmt.Errorf("sighash calculation error: %v", err)
-	}
-
-	return append(ecdsa.Sign(key, sigHash[:]).Serialize(), byte(hashType)), nil
 }
 
 // isDust returns true if the output will be rejected as dust.
@@ -1849,8 +1633,6 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 			BondInfo: bondInfo,
 		}, nil
 	}
-
-	const scriptVersion = 0
 
 	allOutputsPayUs := func(msgTx *zTx) bool {
 		for _, txOut := range msgTx.TxOut {

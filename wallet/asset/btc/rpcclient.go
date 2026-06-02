@@ -121,7 +121,6 @@ type rpcCore struct {
 	hashTx             func(*wire.MsgTx) *chainhash.Hash
 	numericGetRawTxRPC bool
 	manualMedianTime   bool
-	addrFunc           func() (btcutil.Address, error)
 
 	deserializeBlock         func([]byte) (*wire.MsgBlock, error)
 	legacyValidateAddressRPC bool
@@ -305,33 +304,6 @@ func (wc *rpcClient) SendRawTransaction(ctx context.Context, tx *wire.MsgTx) (*c
 	return chainhash.NewHashFromStr(txid)
 }
 
-// sendRawTransaction sends the MsgTx.
-func (wc *rpcClient) sendRawTransaction(ctx context.Context, tx *wire.MsgTx) (txHash *chainhash.Hash, err error) {
-	if wc.legacyRawSends {
-		txHash, err = wc.SendRawTransactionLegacy(tx)
-	} else {
-		txHash, err = wc.SendRawTransaction(ctx, tx)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !wc.unlockSpends {
-		return txHash, nil
-	}
-
-	// TODO: lockUnspent should really just take a []*OutPoint, since it doesn't
-	// need the value.
-	ops := make([]*Output, 0, len(tx.TxIn))
-	for _, txIn := range tx.TxIn {
-		prevOut := &txIn.PreviousOutPoint
-		ops = append(ops, &Output{Pt: NewOutPoint(&prevOut.Hash, prevOut.Index)})
-	}
-	if err := wc.LockUnspent(true, ops); err != nil {
-		wc.log.Warnf("error unlocking spent outputs: %v", err)
-	}
-	return txHash, nil
-}
-
 // GetTxOut returns the transaction output info if it's unspent and
 // nil, otherwise.
 func (wc *rpcClient) GetTxOut(txHash *chainhash.Hash, index uint32, _ []byte, _ time.Time) (*wire.TxOut, uint32, error) {
@@ -412,19 +384,6 @@ func (wc *rpcClient) GetBestBlockHeight() (int32, error) {
 		return -1, err
 	}
 	return int32(header.Height), nil
-}
-
-// getChainStamp satisfies chainStamper for manual median time calculations.
-func (wc *rpcClient) getChainStamp(blockHash *chainhash.Hash) (stamp time.Time, prevHash *chainhash.Hash, err error) {
-	hdr, _, err := wc.GetBlockHeader(blockHash)
-	if err != nil {
-		return
-	}
-	prevHash, err = chainhash.NewHashFromStr(hdr.PreviousBlockHash)
-	if err != nil {
-		return
-	}
-	return time.Unix(hdr.Time, 0).UTC(), prevHash, nil
 }
 
 // MedianTime is the median time for the current best block.
