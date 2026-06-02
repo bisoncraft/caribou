@@ -114,7 +114,7 @@ func mainCore() error {
 	syncDir := filepath.Join(cfg.AppData, cfg.Net.String())
 
 	// The --kill flag is a backup measure to end a background process (that
-	// presumably has active swaps).
+	// presumably is still busy).
 	if cfg.Kill {
 		sendKillSignal(syncDir)
 		return nil

@@ -11,7 +11,7 @@ requesting bossw-desktop will exit without error. The receiving bossw-desktop
 will reopen the window if it is closed.
 
 The sync server also enables killing a bossw-desktop process that is running
-in the background because of active swaps.
+in the background because the wallet is busy.
 */
 
 package main
