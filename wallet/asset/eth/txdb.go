@@ -72,7 +72,6 @@ type extendedWalletTx struct {
 }
 
 const (
-	dbVersion                      = 2
 	txsTable                       = "txs"
 	bridgeCompletionsTable         = "bridgeCompletions"
 	allAssetIndexName              = "allAssets"
@@ -310,72 +309,7 @@ func NewTxDB(path string, log util.Logger, baseChainID uint32) (*TxDB, error) {
 		log:                        log,
 	}
 
-	return db, db.upgrade()
-}
-
-func (db *TxDB) v1Upgrade() error {
-	err := db.ReIndex(txsTable, allAssetIndexName, func(k, v []byte) ([]byte, error) {
-		wt := new(extendedWalletTx)
-		if err := wt.UnmarshalBinary(v); err != nil {
-			return nil, err
-		}
-		return allAssetIndexEntry(wt), nil
-	})
-	if err != nil {
-		return err
-	}
-
-	return db.ReIndex(txsTable, assetIndexName, func(k, v []byte) ([]byte, error) {
-		wt := new(extendedWalletTx)
-		if err := wt.UnmarshalBinary(v); err != nil {
-			return nil, err
-		}
-		return assetSpecificIndexEntry(wt, db.baseChainID), nil
-	})
-}
-
-func (db *TxDB) v2Upgrade() error {
-	return db.ReIndex(txsTable, bridgeInitiationAssetIndexName, func(k, v []byte) ([]byte, error) {
-		wt := new(extendedWalletTx)
-		if err := wt.UnmarshalBinary(v); err != nil {
-			return nil, err
-		}
-		if wt.WalletTransaction.Type != asset.InitiateBridge {
-			return nil, lexi.ErrNotIndexed
-		}
-		return bridgeAssetIndexEntry(wt, db.baseChainID), nil
-	})
-}
-
-func (db *TxDB) upgrade() error {
-	version, err := db.GetDBVersion()
-	if err != nil {
-		return err
-	}
-	if version == dbVersion {
-		return nil
-	}
-	if version > dbVersion {
-		return fmt.Errorf("unknown database version %d, wallet recognizes up to %d", version, dbVersion)
-	}
-
-	db.log.Infof("Upgrading database from version %d to %d", version, dbVersion)
-
-	return db.Upgrade(func() error {
-		if version < 1 {
-			if err := db.v1Upgrade(); err != nil {
-				return err
-			}
-			version = 1
-		}
-		if version < 2 {
-			if err := db.v2Upgrade(); err != nil {
-				return err
-			}
-			version = 2
-		}
-		return db.SetDBVersion(dbVersion)
-	})
+	return db, nil
 }
 
 // storeTx stores a transaction in the database. If a transaction with the

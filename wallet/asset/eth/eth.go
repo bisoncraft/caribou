@@ -1920,33 +1920,6 @@ func getWalletDir(dataDir string, network util.Network) string {
 	return filepath.Join(dataDir, network.String())
 }
 
-func migrateLegacyTxDB(legacyDBPath string, newDB txDB, log util.Logger) error {
-	if _, err := os.Stat(legacyDBPath); err != nil {
-		return nil
-	}
-
-	legacyDB, err := newBadgerTxDB(legacyDBPath, log.SubLogger("LEGACYDB"))
-	if err != nil {
-		return fmt.Errorf("error opening legacy db: %w", err)
-	}
-
-	entries, err := legacyDB.getAllEntries()
-	if err != nil {
-		return fmt.Errorf("error getting legacy entries: %w", err)
-	}
-
-	for _, tx := range entries {
-		if err := newDB.storeTx(tx); err != nil {
-			return fmt.Errorf("error storing legacy tx: %w", err)
-		}
-	}
-
-	log.Infof("Successfully migrated %d transactions from legacy database", len(entries))
-
-	_ = legacyDB.Close()
-	return os.RemoveAll(legacyDBPath)
-}
-
 const (
 	acrossBridgeName  string = "across"
 	usdcBridgeName    string = "usdc"
@@ -2015,12 +1988,6 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	}
 
 	w.txDB, err = NewTxDB(filepath.Join(w.dir, "txhistorydb-lexi"), w.log.SubLogger("TXDB"), w.baseChainID)
-	if err != nil {
-		return nil, err
-	}
-
-	legacyDBPath := filepath.Join(w.dir, "txhistorydb")
-	err = migrateLegacyTxDB(legacyDBPath, w.txDB, w.log)
 	if err != nil {
 		return nil, err
 	}
