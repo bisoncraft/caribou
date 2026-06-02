@@ -258,11 +258,19 @@ jobs:
             exit 0
           fi
 
-          # Cap the embedded diff. GitHub Actions step outputs are
-          # limited to 1 MiB each (50 MiB total per job), and very
-          # large incremental diffs are unusual enough that a full
-          # review is more useful anyway.
-          if [ "$(printf '%s' "$DIFF" | wc -c)" -gt 262144 ]; then
+          # Cap the embedded diff at 110 KiB. The binding limit is not
+          # the 1 MiB step-output cap but the kernel's per-env-var
+          # execve limit: claude-code-action passes our prompt to its
+          # `bun` step as the PROMPT environment variable (see that
+          # action's action.yml), and Linux caps any single env-var
+          # string at MAX_ARG_STRLEN = 32 * 4 KiB = 128 KiB. A larger
+          # prompt makes the runner's execve of /bin/bash for that step
+          # fail with E2BIG ("Argument list too long") before Claude
+          # runs at all. 110 KiB leaves headroom for the prompt
+          # boilerplate wrapped around the diff. Oversized incremental
+          # diffs fall back to a full review (Claude fetches via
+          # `gh pr diff`), whose prompt does not embed the diff.
+          if [ "$(printf '%s' "$DIFF" | wc -c)" -gt 112640 ]; then
             write_full_scope
             exit 0
           fi
