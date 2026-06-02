@@ -16,7 +16,7 @@ Simnet harnesses only run on Linux or Mac OS.
 
 All harness scripts live under `util/testing/<chain>/`:
 
-```
+```text
 util/testing/
 ├── base/           # Base L2 (eth-derived)
 ├── bch/            # Bitcoin Cash
@@ -86,11 +86,11 @@ The BTC harness creates four wallets, each with a different funding profile —
 **alpha**, **beta**, **gamma**, **delta**. They are not interchangeable;
 tests that need varying UTXO shapes depend on the specifics:
 
-| Wallet | Node  | Coinbase outputs | Spent / change outputs | Use case |
-|--------|-------|------------------|------------------------|----------|
-| alpha  | alpha | yes (mining)     | yes                    | mixed UTXO set, change |
+| Wallet | Node  | Coinbase outputs | Spent / change outputs | Use case                   |
+|--------|-------|------------------|------------------------|----------------------------|
+| alpha  | alpha | yes (mining)     | yes                    | mixed UTXO set, change     |
 | beta   | beta  | yes (mining)     | none                   | pure coinbase, never spent |
-| gamma  | alpha | none             | yes (varied sizes)     | many small UTXOs |
+| gamma  | alpha | none             | yes (varied sizes)     | many small UTXOs           |
 | delta  | beta  | none             | yes                    | as gamma, on the beta node |
 
 The wallet password is **`abc`** for encrypted wallets.
@@ -135,12 +135,12 @@ attach console.
 Each harness pins its own port set so the families can coexist. Selected
 examples:
 
-| Chain  | Alpha RPC | Beta RPC | Notes |
-|--------|-----------|----------|-------|
-| btc    | 20556     | 20557    | regtest, RPC user/pass `user`/`pass` |
-| ltc    | 20557 ↑   | 20558 ↑  | follows btc-style but offset; check `ltc/harness.sh` |
-| eth    | 38556 (HTTP), 38557 (WS), 8552 (authrpc) | — | --dev mode, single node |
-| base   | 39556 (HTTP), 39557 (WS), 8652 (authrpc) | — | eth-derived |
+| Chain | Alpha RPC                                | Beta RPC | Notes                                                |
+|-------|------------------------------------------|----------|------------------------------------------------------|
+| btc   | 20556                                    | 20557    | regtest, RPC user/pass `user`/`pass`                 |
+| ltc   | 20557 ↑                                  | 20558 ↑  | follows btc-style but offset; check `ltc/harness.sh` |
+| eth   | 38556 (HTTP), 38557 (WS), 8552 (authrpc) | —        | --dev mode, single node                              |
+| base  | 39556 (HTTP), 39557 (WS), 8652 (authrpc) | —        | eth-derived                                          |
 
 The authoritative ports are the `*_PORT` exports at the top of each
 `harness.sh`. Read them before assuming.
@@ -172,12 +172,12 @@ machine.
 
 Tests that need a live harness are gated by build tags:
 
-| Tag            | What it means |
-|----------------|---------------|
-| `harness`      | Full harness must be running. |
-| `rpclive`      | An RPC node is reachable (subset of `harness`). |
+| Tag            | What it means                                           |
+|----------------|---------------------------------------------------------|
+| `harness`      | Full harness must be running.                           |
+| `rpclive`      | An RPC node is reachable (subset of `harness`).         |
 | `electrumlive` | An ElectrumX server is reachable (for `btc`/`ltc` SPV). |
-| `live`         | Live mainnet/testnet endpoints — **not** simnet. |
+| `live`         | Live mainnet/testnet endpoints — **not** simnet.        |
 
 Common invocations:
 

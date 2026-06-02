@@ -11,13 +11,14 @@ The web assets from `/newui/dist/`, as well as fonts and images from `/newui/src
 (`go:embed`) into the `bossw` binary (see `wallet/appserver/embed.go`).
 
 The React app communicates with the wallet core through the HTTP server via two mechanisms:
+
 - **REST**: `POST /api/...` for commands (JSON in, JSON out).
 - **WebSocket**: `/ws` for `CoreNote` push notifications (balance, sync, tx,
   rate, tip-change, etc.).
 
 ## Repository layout
 
-```
+```text
 wallet/appserver/
 ├── appserver.go        # chi router, TLS, CSRF, cookies, session keys
 ├── api.go              # REST handlers — /api/* surface
@@ -80,12 +81,14 @@ Run at least one or two simnet harnesses before starting your UI dev work.
 You'll run two separate terminals (in addition to any simnet harnesses).
 
 ### Terminal 1 - Web Assets
+
 ```bash
 cd wallet/appserver/newui
 npm run watch
 ```
 
 ### Terminal 2 - Bossw
+
 ```bash
 cd wallet/cmd/bossw
 go build && ./bossw --simnet --no-embed-site
@@ -98,7 +101,7 @@ To start with a fresh wallet, shut down `bossw`, delete the files in `~/.bossw/s
 `src/index.tsx` mounts `<App/>` into `#root`. `App.tsx` is a small state
 machine on `AppState`:
 
-```
+```text
 fetchAppState() ──► AppState
                      ├── user != null         → <MainFrame/>
                      ├── inited && !user      → <UnlockForm/>
