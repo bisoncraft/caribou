@@ -82,6 +82,15 @@ jobs:
         # Claude via `gh pr diff` or pre-fetched into the prompt by the
         # "Determine review range" step below, so no untrusted files
         # ever land in the working tree.
+        #
+        # persist-credentials: false so the writable GITHUB_TOKEN is not
+        # stored as an http.extraheader in .git/config on the runner.
+        # The review uses `gh` (its own GH_TOKEN env), never git remote
+        # operations, so persisting is unnecessary - and leaving it on
+        # would let a prompt-injected model surface the token via a
+        # read-only `git config` call (auto-allowed in every mode).
+        with:
+          persist-credentials: false
 
       - name: Determine review range
         # Scope each review to changes since the previous one when
@@ -109,6 +118,12 @@ jobs:
           PR_NUMBER: ${{ env.PR_NUMBER }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
+          # Skip a full review when the PR changes more than this many lines
+          # (additions + deletions). A full review feeds the whole diff to
+          # Claude, and past a point the model exhausts its turn/token budget
+          # and the check fails instead of producing a review. Tunable via the
+          # CLAUDE_CODE_MAX_DIFF_LINES repo variable.
+          MAX_DIFF_LINES: ${{ vars.CLAUDE_CODE_MAX_DIFF_LINES || '2000' }}
         run: |
           set -euo pipefail
 
@@ -141,6 +156,34 @@ jobs:
           fi
 
           write_full_scope() {
+            # Guard against full reviews of very large PRs. A full review
+            # feeds the entire diff to Claude via `gh pr diff`; past
+            # MAX_DIFF_LINES the model runs out of turns/tokens and the check
+            # fails rather than producing a review. Skip gracefully instead,
+            # recording HEAD as reviewed (like the diverged/rebase branch) so
+            # later incremental pushes - small diffs on top - still get
+            # reviewed. The "Note skipped large diff" step posts the
+            # explanation and writes the reviewed-sha marker.
+            local changed
+            changed=$(gh pr view "$PR_NUMBER" --json additions,deletions \
+                        --jq '.additions + .deletions' 2>/dev/null) || {
+              echo "warn: gh pr view failed; assuming 0 changed lines" \
+                   "(full review will proceed)" >&2
+              changed=0
+            }
+            if [ "${changed:-0}" -gt "$MAX_DIFF_LINES" ]; then
+              echo "PR changes $changed lines (> $MAX_DIFF_LINES); skipping full review."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "skip_reason=toolarge" >> "$GITHUB_OUTPUT"
+              echo "skip_changed_lines=$changed" >> "$GITHUB_OUTPUT"
+              # Hand the latest marker comment id (if any) to the
+              # "Note skipped large diff" step so it can advance that
+              # comment's marker in place - on the genuinely-latest
+              # marker comment - rather than on the skip comment, which
+              # may not be latest. Empty when there is no marker yet.
+              echo "marker_id=$LATEST_MARKER_ID" >> "$GITHUB_OUTPUT"
+              return 0
+            fi
             {
               echo "scope<<__CLAUDE_SCOPE_EOF__"
               echo "Review the FULL pull request."
@@ -250,6 +293,72 @@ jobs:
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Note skipped large diff
+        # When the review was skipped because the PR is too large, leave a
+        # single comment explaining why (so a green check isn't mistaken for
+        # "reviewed and clean") and advance the reviewed-sha marker to HEAD.
+        # The marker lets the next push - if it only adds a small diff on top -
+        # be reviewed incrementally rather than re-skipped. Same coverage
+        # trade-off as the rebase/diverged branch: the large baseline is never
+        # reviewed by Claude, but human reviewers still see the full diff.
+        #
+        # The "Determine review range" step always picks the newest
+        # marker-bearing comment, so the marker MUST live there. When a prior
+        # review already wrote a marker (MARKER_ID set and distinct from the
+        # skip comment), advance THAT comment in place - exactly like the
+        # diverged/rebase branch - and keep the explanatory skip comment
+        # marker-free, so the two never both carry a marker. Only when no
+        # separate marker comment exists does the skip comment itself carry
+        # the marker; it is then the newest marker-bearing comment, so the
+        # invariant holds. The skip comment is keyed by its own marker and
+        # PATCHed in place so repeated large pushes update one comment instead
+        # of spamming the thread.
+        if: steps.range.outputs.skip == 'true' && steps.range.outputs.skip_reason == 'toolarge'
+        env:
+          PR_NUMBER: ${{ env.PR_NUMBER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.range.outputs.head_sha }}
+          CHANGED: ${{ steps.range.outputs.skip_changed_lines }}
+          MARKER_ID: ${{ steps.range.outputs.marker_id }}
+          MAX_DIFF_LINES: ${{ vars.CLAUDE_CODE_MAX_DIFF_LINES || '2000' }}
+        run: |
+          set -euo pipefail
+
+          # The single explanatory skip comment, keyed by its own marker.
+          EXISTING_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+                          --jq '.[]
+                                | select(.user.login == "github-actions[bot]")
+                                | select(.body | contains("claude-review-skip: large-diff"))
+                                | .id' \
+                        | tail -n1) || EXISTING_ID=""
+
+          MSG=$(printf 'This PR changes %s lines, over the automated-review limit of %s, so the Claude review was skipped to avoid an incomplete result. Push smaller follow-up commits to have them reviewed incrementally, or raise the `CLAUDE_CODE_MAX_DIFF_LINES` repo variable.' \
+                  "$CHANGED" "$MAX_DIFF_LINES")
+
+          if [ -n "$MARKER_ID" ] && [ "$MARKER_ID" != "$EXISTING_ID" ]; then
+            # The latest marker lives on a separate (review) comment that is
+            # newer than the skip comment. Advance it in place and keep the
+            # skip comment marker-free so only one marker exists.
+            MARKER_BODY=$(gh api "repos/$REPO/issues/comments/$MARKER_ID" --jq .body)
+            STRIPPED=$(printf '%s' "$MARKER_BODY" \
+                       | sed -E 's|<!-- claude-reviewed-sha: [0-9a-f]+ -->||g')
+            NEW_MARKER_BODY=$(printf '%s\n\n<!-- claude-reviewed-sha: %s -->\n' "$STRIPPED" "$HEAD_SHA")
+            gh api -X PATCH "repos/$REPO/issues/comments/$MARKER_ID" -f body="$NEW_MARKER_BODY" >/dev/null
+            BODY=$(printf '<!-- claude-review-skip: large-diff -->\n%s\n' "$MSG")
+          else
+            # No separate marker comment (or the only marker is already on the
+            # skip comment): the skip comment carries the marker. It is the
+            # newest marker-bearing comment, so the range step finds it.
+            BODY=$(printf '<!-- claude-review-skip: large-diff -->\n%s\n\n<!-- claude-reviewed-sha: %s -->\n' "$MSG" "$HEAD_SHA")
+          fi
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING_ID" -f body="$BODY" >/dev/null
+          else
+            gh pr comment "$PR_NUMBER" --body "$BODY"
+          fi
+
       - name: Mint review nonce
         # Mint a random nonce that Claude is asked to embed in its
         # review comment. The "Append review marker" step uses the
@@ -333,17 +442,65 @@ jobs:
             clean-pass output (upstream issue), so always post via
             gh.
           # Configure via repository variables:
-          # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-7
+          # CLAUDE_CODE_MODEL: claude-haiku-4-5 (default), claude-sonnet-4-6, or claude-opus-4-8
           # CLAUDE_CODE_EFFORT: quick, standard (default), or thorough
+          # CLAUDE_CODE_MAX_DIFF_LINES: full reviews of PRs changing more than
+          #   this many lines are skipped gracefully (default 2000; see the
+          #   "Determine review range" step).
           #
-          # --allowed-tools restricts Claude to exactly the three gh
-          # subcommands the review needs. We do NOT use
-          # --permission-mode bypassPermissions: under
-          # pull_request_target the runner has secrets in env, and
-          # bypassPermissions would give a prompt-injected model a free
-          # shell to read them (printenv, gh auth token, curl ...). With
-          # the allowlist, the permission system denies any command not
-          # in this list, so even a successful injection cannot exfil.
+          # --allowedTools auto-approves exactly the three gh subcommands
+          # the review needs, and we do NOT use --permission-mode
+          # bypassPermissions: under pull_request_target the runner has
+          # secrets in env, and bypassPermissions would give a
+          # prompt-injected model a free shell to read them (printenv,
+          # gh auth token, curl ...).
+          #
+          # The allowlist alone is NOT sufficient, though. Claude Code
+          # auto-runs a built-in set of "read-only" Bash commands WITHOUT
+          # a prompt in every permission mode, regardless of --allowedTools
+          # (see https://code.claude.com/docs/en/permissions, "Read-only
+          # commands"). The documented set is: ls, cat, echo, pwd, head,
+          # tail, grep, find, wc, which, diff, stat, du, cd, and read-only
+          # forms of git. So an injected diff could otherwise read a
+          # secret - `echo $ANTHROPIC_API_KEY`, `cat` a token file,
+          # `grep . /proc/self/environ` - and exfil it through the allowed
+          # `gh pr comment`. Anything OUTSIDE the read-only set (curl,
+          # printenv, gh auth token, sh -c ...) already needs a prompt,
+          # which fails closed in headless CI, so the gap is exactly the
+          # read-only set.
+          #
+          # --disallowedTools closes the content-reading members of that
+          # set. Deny rules override the built-in auto-allow: rules are
+          # evaluated deny -> ask -> allow, first match wins. This is
+          # prefix-matched and not provably airtight (e.g. read-only
+          # `git config` can surface the token actions/checkout persists in
+          # .git/config - mitigated separately by persist-credentials:
+          # false on the checkout step), but it removes the obvious
+          # env/file read-and-exfil paths. Concretely it closes the
+          # read-then-relay path: without the denylist a read-only `cat`
+          # would surface a secret into the model's context, from which it
+          # could be re-emitted as a literal `gh pr comment` body.
+          #
+          # printf, awk, and sed are denied too. These are NOT in the
+          # documented read-only set above (they already fail closed in
+          # headless CI), so this is belt-and-suspenders against the
+          # set's "These include ..." being non-exhaustive or growing in
+          # a future release - the review only ever needs `gh`, so denying
+          # them costs nothing.
+          #
+          # The complementary direct path - `gh pr comment --body
+          # "$ANTHROPIC_API_KEY"` or `--body "$(printenv)"` - is closed by
+          # Claude Code itself, independent of this denylist: the Bash
+          # matcher refuses to match an allow rule for any command it
+          # cannot statically analyze (variable expansion or command
+          # substitution), so such a command falls through to "needs
+          # approval" and fails closed in headless CI. Verified empirically
+          # on claude CLI v2.1.152 (2026-05): `gh pr comment --body "$X"`
+          # and `--body "$(...)"` were both denied, while a literal body
+          # ran. This behavior is NOT documented, so treat it as verified
+          # rather than contractual - the denylist and persist-credentials
+          # above do not depend on it and stand on their own.
+          #
           # If the action's built-in MCP comment tools get denied that
           # is fine - we post via `gh pr comment` directly.
           claude_args: |
@@ -351,6 +508,7 @@ jobs:
             --max-turns ${{ (vars.CLAUDE_CODE_EFFORT == 'quick' && '12') || (vars.CLAUDE_CODE_EFFORT == 'standard' && '25') || (vars.CLAUDE_CODE_EFFORT == 'thorough' && '40') || '25' }}
             --permission-mode default
             --allowedTools "Bash(gh pr diff:*)" "Bash(gh pr view:*)" "Bash(gh pr comment:*)"
+            --disallowedTools "Bash(cat:*)" "Bash(echo:*)" "Bash(printf:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(grep:*)" "Bash(awk:*)" "Bash(sed:*)" "Bash(find:*)" "Bash(diff:*)"
 
       - name: Append review marker
         # Find the bot comment Claude just posted (by the
