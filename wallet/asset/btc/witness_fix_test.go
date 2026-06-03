@@ -1,5 +1,3 @@
-//go:build !spvlive
-
 package btc
 
 import (

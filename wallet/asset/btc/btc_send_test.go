@@ -1,4 +1,4 @@
-//go:build !spvlive && !harness
+//go:build !harness
 
 package btc
 
