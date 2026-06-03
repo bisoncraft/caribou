@@ -10,7 +10,6 @@ import (
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/bisoncraft/bosswallet/util"
 	pi "github.com/bisoncraft/bosswallet/util/politeia"
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/txscript/v4/stdaddr"
@@ -21,28 +20,28 @@ import (
 type WalletTrait uint64
 
 const (
-	WalletTraitRescanner         WalletTrait = 1 << iota // The Wallet is an asset.Rescanner.
-	WalletTraitNewAddresser                              // The Wallet can generate new addresses on demand with NewAddress.
-	WalletTraitLogFiler                                  // The Wallet allows for downloading of a log file.
-	WalletTraitFeeRater                                  // Wallet can provide a fee rate for non-critical transactions
-	WalletTraitAccelerator                               // This wallet can accelerate transactions using the CPFP technique
-	WalletTraitRecoverer                                 // The wallet is an asset.Recoverer.
-	WalletTraitWithdrawer                                // The Wallet can withdraw a specific amount from an exchange wallet.
-	WalletTraitSweeper                                   // The Wallet can sweep all the funds, leaving no change.
-	WalletTraitRestorer                                  // The wallet is an asset.WalletRestorer
-	WalletTraitTxFeeEstimator                            // The wallet can estimate transaction fees.
-	WalletTraitPeerManager                               // The wallet can manage its peers.
-	WalletTraitAuthenticator                             // The wallet require authentication.
-	WalletTraitShielded                                  // DEPRECATED. Left for ordering
-	WalletTraitTokenApprover                             // The wallet is a TokenApprover
-	WalletTraitAccountLocker                             // The wallet must have enough balance for redemptions before a trade.
-	WalletTraitTicketBuyer                               // The wallet can participate in decred staking.
-	WalletTraitHistorian                                 // This wallet can return its transaction history // DEPRECATED
-	WalletTraitFundsMixer                                // The wallet can mix funds.
-	WalletTraitDynamicSwapper                            // The wallet has dynamic fees.
-	WalletTraitContractDeployer                          // The wallet can deploy contracts.
-	WalletTraitContractGasTester                         // The wallet can test contract gas usage.
-	WalletTraitPoliteiaVoter                             // The wallet can vote on Politeia proposals.
+	WalletTraitRescanner             WalletTrait = 1 << iota // The Wallet is an asset.Rescanner.
+	WalletTraitNewAddresser                                  // The Wallet can generate new addresses on demand with NewAddress.
+	WalletTraitLogFiler                                      // The Wallet allows for downloading of a log file.
+	WalletTraitFeeRater                                      // Wallet can provide a fee rate for non-critical transactions
+	WalletTraitAccelerator                                   // This wallet can accelerate transactions using the CPFP technique
+	WalletTraitRecoverer                                     // The wallet is an asset.Recoverer.
+	WalletTraitWithdrawer                                    // The Wallet can withdraw a specific amount from an exchange wallet.
+	WalletTraitSweeper                                       // The Wallet can sweep all the funds, leaving no change.
+	WalletTraitRestorer                                      // The wallet is an asset.WalletRestorer
+	WalletTraitTxFeeEstimator                                // The wallet can estimate transaction fees.
+	WalletTraitPeerManager                                   // The wallet can manage its peers.
+	WalletTraitAuthenticator                                 // The wallet require authentication.
+	WalletTraitShielded                                      // DEPRECATED. Left for ordering
+	WalletTraitDeprTokenApprover                             // DEPRECATED. Left for ordering
+	WalletTraitDeprAccountLocker                             // DEPRECATED. Left for ordering
+	WalletTraitTicketBuyer                                   // The wallet can participate in decred staking.
+	WalletTraitHistorian                                     // This wallet can return its transaction history // DEPRECATED
+	WalletTraitFundsMixer                                    // The wallet can mix funds.
+	WalletTraitDeprDynamicSwapper                            // DEPRECATED. Left for ordering
+	WalletTraitDeprContractDeployer                          // DEPRECATED. Left for ordering
+	WalletTraitDeprContractGasTester                         // DEPRECATED. Left for ordering
+	WalletTraitPoliteiaVoter                                 // The wallet can vote on Politeia proposals.
 )
 
 // IsRescanner tests if the WalletTrait has the WalletTraitRescanner bit set.
@@ -117,18 +116,6 @@ func (wt WalletTrait) IsAuthenticator() bool {
 	return wt&WalletTraitAuthenticator != 0
 }
 
-// IsTokenApprover tests if the WalletTrait has the WalletTraitTokenApprover bit
-// set, which indicates the wallet implements the TokenApprover interface.
-func (wt WalletTrait) IsTokenApprover() bool {
-	return wt&WalletTraitTokenApprover != 0
-}
-
-// IsAccountLocker test if WalletTrait has WalletTraitAccountLocker bit set,
-// which indicates the wallet implements the AccountLocker interface.
-func (wt WalletTrait) IsAccountLocker() bool {
-	return wt&WalletTraitAccountLocker != 0
-}
-
 // IsTicketBuyer tests if the WalletTrait has the WalletTraitTicketBuyer bit set,
 // which indicates the wallet implements the TicketBuyer interface.
 func (wt WalletTrait) IsTicketBuyer() bool {
@@ -139,29 +126,6 @@ func (wt WalletTrait) IsTicketBuyer() bool {
 // which indicates the wallet implements the FundsMixer interface.
 func (wt WalletTrait) IsFundsMixer() bool {
 	return wt&WalletTraitFundsMixer != 0
-}
-
-// IsDynamicSwapper tests if a wallet has the WalletTraitDynamicSwapper bit set,
-// which indicates the wallet implements the DynamicSwapper interface. This also
-// indicates that the wallet will initially report a higher estimated fee for
-// transactions then when a transaction is confirmed, the actual fee will be
-// known.
-func (wt WalletTrait) IsDynamicSwapper() bool {
-	return wt&WalletTraitDynamicSwapper != 0
-}
-
-// IsContractDeployer tests if the WalletTrait has the
-// WalletTraitContractDeployer bit set, which indicates the wallet implements the
-// ContractDeployer interface.
-func (wt WalletTrait) IsContractDeployer() bool {
-	return wt&WalletTraitContractDeployer != 0
-}
-
-// IsContractGasTester tests if the WalletTrait has the
-// WalletTraitContractGasTester bit set, which indicates the wallet implements
-// the ContractGasTester interface.
-func (wt WalletTrait) IsContractGasTester() bool {
-	return wt&WalletTraitContractGasTester != 0
 }
 
 // IsPoliteiaVoter tests if the WalletTrait has the WalletTraitPoliteiaVoter
@@ -208,26 +172,11 @@ func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	if _, is := w.(Authenticator); is {
 		t |= WalletTraitAuthenticator
 	}
-	if _, is := w.(TokenApprover); is {
-		t |= WalletTraitTokenApprover
-	}
-	if _, is := w.(AccountLocker); is {
-		t |= WalletTraitAccountLocker
-	}
 	if _, is := w.(TicketBuyer); is {
 		t |= WalletTraitTicketBuyer
 	}
 	if _, is := w.(FundsMixer); is {
 		t |= WalletTraitFundsMixer
-	}
-	if _, is := w.(DynamicSwapper); is {
-		t |= WalletTraitDynamicSwapper
-	}
-	if _, is := w.(ContractDeployer); is {
-		t |= WalletTraitContractDeployer
-	}
-	if _, is := w.(ContractGasTester); is {
-		t |= WalletTraitContractGasTester
 	}
 	if _, is := w.(PoliteiaVoter); is {
 		t |= WalletTraitPoliteiaVoter
@@ -457,19 +406,6 @@ type WalletConfig struct {
 	TorProxy string
 }
 
-// ConfirmTxStatus contains the coinID which redeemed or refunded a swap, the
-// number of confirmations the transaction has, and the number of confirmations
-// required for it to be considered confirmed.
-type ConfirmTxStatus struct {
-	Confs  uint64
-	Req    uint64
-	CoinID util.Bytes
-	// PendingSubmission is true for ETH relay redemptions before the relay
-	// has submitted the transaction on-chain. The redemption message should
-	// only be sent to the server once this is false.
-	PendingSubmission bool
-}
-
 type TxHistoryRequest struct {
 	N           int               `json:"n"`
 	RefID       *string           `json:"refID"`
@@ -492,7 +428,7 @@ type TxHistoryResponse struct {
 
 // Wallet is a common interface to be implemented by cryptocurrency wallet
 // software. It covers basic wallet operations: balance, send, receive, and
-// transaction history. For atomic swap participation, see AtomicSwapWallet.
+// transaction history.
 type Wallet interface {
 	// It should be assumed that once disconnected, subsequent Connect calls
 	// will fail, requiring a new Wallet instance.
@@ -537,153 +473,6 @@ type Wallet interface {
 	PendingTransactions(ctx context.Context) []*WalletTransaction
 }
 
-// AtomicSwapWallet extends Wallet with the atomic swap methods required for
-// peer-to-peer settlement. Implementations that support atomic swap
-// participation (init, audit, redeem, refund) must satisfy this interface.
-type AtomicSwapWallet interface {
-	Wallet
-	// FundOrder selects coins for use in an order. The coins will be locked,
-	// and will not be returned in subsequent calls to FundOrder or calculated
-	// in calls to Available, unless they are unlocked with ReturnCoins. The
-	// returned []util.Bytes contains the redeem scripts for the selected coins.
-	// Equal number of coins and redeemed scripts must be returned. A nil or
-	// empty util.Bytes should be appended to the redeem scripts collection for
-	// coins with no redeem script. The fees returned are any fees paid in the
-	// process of funding the order, such as transaction fees for a split tx.
-	FundOrder(*Order) (coins Coins, redeemScripts []util.Bytes, fees uint64, err error)
-	// MaxOrder generates information about the maximum order size and
-	// associated fees that the wallet can support for the specified DEX. The
-	// fees are an estimate based on current network conditions, and will be <=
-	// the fees associated with the Asset.MaxFeeRate. For quote assets, lotSize
-	// will be an estimate based on current market conditions. lotSize should
-	// not be zero.
-	MaxOrder(*MaxOrderForm) (*SwapEstimate, error)
-	// PreSwap gets a pre-swap estimate for the specified order size.
-	PreSwap(*PreSwapForm) (*PreSwap, error)
-	// PreRedeem gets a pre-redeem estimate for the specified order size.
-	PreRedeem(*PreRedeemForm) (*PreRedeem, error)
-	// ReturnCoins unlocks coins. This would be necessary in the case of a
-	// canceled order. A nil Coins slice indicates to unlock all coins that the
-	// wallet may have locked, a syntax that should always be followed by
-	// FundingCoins for any active orders, and is thus only appropriate at time
-	// of login. Unlocking all coins is likely only useful for external wallets
-	// whose lifetime is longer than the asset.Wallet instance.
-	ReturnCoins(Coins) error
-	// FundingCoins gets funding coins for the coin IDs. The coins are locked.
-	// This method might be called to reinitialize an order from data stored
-	// externally. This method will only return funding coins, e.g. unspent
-	// transaction outputs.
-	FundingCoins([]util.Bytes) (Coins, error)
-	// Swap sends the swaps in a single transaction. The Receipts returned can
-	// be used to refund a failed transaction. The Input coins are unlocked
-	// where necessary to ensure accurate balance reporting in cases where the
-	// wallet includes spent coins as part of the locked balance just because
-	// they were previously locked.
-	Swap(ctx context.Context, swaps *Swaps) (receipts []Receipt, changeCoin Coin, feesPaid uint64, err error)
-	// Redeem sends the redemption transaction, which may contain more than one
-	// redemption. The input coin IDs and the output Coin are returned.
-	Redeem(ctx context.Context, redeems *RedeemForm) (ins []util.Bytes, out Coin, feesPaid uint64, err error)
-	// SignCoinMessage signs the coin ID with the private key associated with the
-	// specified Coin. A slice of pubkeys required to spend the Coin and a
-	// signature for each pubkey are returned.
-	SignCoinMessage(Coin, util.Bytes) (pubkeys, sigs []util.Bytes, err error)
-	// AuditContract retrieves information about a swap contract from the
-	// provided txData and broadcasts the txData to ensure the contract is
-	// propagated to the blockchain. The information returned would be used
-	// to verify the counter-party's contract during a swap. It is not an
-	// error if the provided txData cannot be broadcasted because it may
-	// already be broadcasted. A successful audit response does not mean
-	// the tx exists on the blockchain, use SwapConfirmations to ensure
-	// the tx is mined.
-	AuditContract(coinID, contract, txData util.Bytes, rebroadcast bool) (*AuditInfo, error)
-	// ContractLockTimeExpired returns true if the specified contract's locktime
-	// has expired, making it possible to issue a Refund. The contract expiry
-	// time is also returned, but reaching this time does not necessarily mean
-	// the contract can be refunded since assets have different rules to satisfy
-	// the lock. For example, in Bitcoin the median of the last 11 blocks must
-	// be past the expiry time, not the current time.
-	ContractLockTimeExpired(ctx context.Context, contract util.Bytes) (bool, time.Time, error)
-	// FindRedemption watches for the input that spends the specified
-	// coin and contract, and returns the spending input and the
-	// secret key when it finds a spender.
-	//
-	// For typical utxo-based blockchains, every input of every block tx
-	// (starting at the contract block) will need to be scanned until a spending
-	// input is found.
-	//
-	// FindRedemption is necessary to deal with the case of a maker redeeming
-	// but not forwarding their redemption information. The DEX does not monitor
-	// for this case. While it will result in the counter-party being penalized,
-	// the input still needs to be found so the swap can be completed.
-	//
-	// NOTE: This could potentially be a long and expensive operation if
-	// performed long after the swap is broadcast; might be better executed from
-	// a goroutine.
-	FindRedemption(ctx context.Context, coinID, contract util.Bytes) (redemptionCoin, secret util.Bytes, err error)
-	// Refund refunds a contract. This can only be used after the time lock has
-	// expired AND if the contract has not been redeemed/refunded. This method
-	// MUST return an asset.CoinNotFoundError error if the swap is already
-	// spent, which is used to indicate if FindRedemption should be used and the
-	// counterparty's swap redeemed. NOTE: The contract cannot be retrieved from
-	// the unspent coin info as the wallet does not store it, even though it was
-	// known when the init transaction was created. The client should store this
-	// information for persistence across sessions.
-	Refund(ctx context.Context, coinID, contract util.Bytes, feeRate uint64) (util.Bytes, error)
-	// RedemptionAddress gets an address for use in redeeming the counterparty's
-	// swap. This would be included in their swap initialization. This is
-	// called once per match during match acknowledgement, so each match gets
-	// a unique address. If addresses are unique and matches are later revoked
-	// without use, the gap limit may become a hurdle when restoring the
-	// wallet.
-	//
-	// For UTXO-based assets, implementations MUST return a unique address on
-	// each call. The address becomes part of the HTLC script, so a unique
-	// address per match ensures each swap contract has a unique script hash
-	// and therefore a unique CoinID. This is a critical security property: it
-	// prevents a malicious counterparty from presenting a single on-chain
-	// contract as fulfilling multiple matches. (EVM-based assets use a
-	// different contract structure and are not subject to this requirement.)
-	RedemptionAddress() (string, error)
-	// LockTimeExpired returns true if the specified locktime has expired,
-	// making it possible to redeem the locked coins.
-	LockTimeExpired(ctx context.Context, lockTime time.Time) (bool, error)
-	// SwapConfirmations gets the number of confirmations and the spend status
-	// for the specified swap. If the swap was not funded by this wallet, and
-	// it is already spent, you may see CoinNotFoundError.
-	// If the coin is located, but recognized as spent, no error is returned.
-	// If the contract is already redeemed or refunded, the confs value may not
-	// be accurate.
-	// The contract and matchTime are provided so that wallets may search for
-	// the coin using light filters.
-	SwapConfirmations(ctx context.Context, coinID util.Bytes, contract util.Bytes, matchTime time.Time) (confs uint32, spent bool, err error)
-	// ValidateSecret checks that the secret hashes to the secret hash.
-	ValidateSecret(secret, secretHash []byte) bool
-	// RegFeeConfirmations gets the confirmations for a registration fee
-	// payment. This method need not be supported by all assets. Those assets
-	// which do no support DEX registration fees will return an ErrUnsupported.
-	RegFeeConfirmations(ctx context.Context, coinID util.Bytes) (confs uint32, err error)
-	// ConfirmTransaction checks the status of a redemption or refund. It
-	// returns the number of confirmations the tx has, the number of confirmations
-	// that are required for it to be considered fully confirmed, and the
-	// CoinID it is currently watching for confirms. If it is determined that
-	// a transaction will not be mined, this function will submit a new transaction
-	// to replace the old one. The caller is notified of this by having a
-	// different CoinID in the returned asset.ConfirmTxStatus as was used to
-	// call the function.
-	ConfirmTransaction(coinID util.Bytes, confirmTx *ConfirmTx, feeSuggestion uint64) (*ConfirmTxStatus, error)
-	// SingleLotSwapRefundFees returns the fees for a swap and refund transaction for a single lot.
-	SingleLotSwapRefundFees(version uint32, feeRate uint64, useSafeTxSize bool) (uint64, uint64, error)
-	// SingleLotRedeemFees returns the fees for a redeem transaction for a single lot.
-	SingleLotRedeemFees(version uint32, feeRate uint64) (uint64, error)
-	// FundMultiOrder funds multiple orders at once. The return values will
-	// be in the same order as the passed orders. If less values are returned
-	// than the number of orders, then the orders at the end of the list were
-	// not able to be funded.
-	FundMultiOrder(ord *MultiOrder, maxLock uint64) (coins []Coins, redeemScripts [][]util.Bytes, fundingFees uint64, err error)
-	// MaxFundingFees returns the max fees that could be paid for funding a swap.
-	MaxFundingFees(numTrades uint32, feeRate uint64, options map[string]string) uint64
-}
-
 // Authenticator is a wallet implementation that require authentication.
 type Authenticator interface {
 	// Unlock unlocks the exchange wallet.
@@ -692,93 +481,6 @@ type Authenticator interface {
 	Lock() error
 	// Locked will be true if the wallet is currently locked.
 	Locked() bool
-}
-
-// PrivateSwapper defines the set of operations needed to perform a private
-// atomic swap. This type of swap uses adaptor signatures to enable trustless,
-// cross-asset exchanges while obscuring the on-chain link between the two swap
-// transactions.
-type PrivateSwapper interface {
-	// PrivateSwapPubKey returns a public key to be used for a private
-	// adaptor signature based swap. In some cases, additional information
-	// is included, such as a public nonce in the case of BTC using MuSig2
-	// signatures.
-	PrivateSwapPubKey() ([]byte, error)
-	// SwapPrivate creates and broadcasts the funding transaction for one or more
-	// private swaps. This transaction locks funds into the contract script
-	// defined by the provided PrivateSwaps data.
-	SwapPrivate(ctx context.Context, swaps *PrivateSwaps) (receipts []Receipt, coin Coin, txData []byte, fees uint64, err error)
-	// AuditPrivateContract verifies that an on-chain transaction (identified by
-	// coinID and txData) correctly funds the swap as defined by the contract.
-	// This ensures the counterparty has locked funds into the agreed-upon
-	// script and amount.
-	AuditPrivateContract(coinID, txData []byte, contract *PrivateContract, rebroadcast bool) error
-	// GenerateUnsignedRedeemTx creates the unsigned transaction that will be
-	// used to redeem the swap funds. This transaction is sent to the
-	// counterparty, who will create an adaptor signature for it.
-	GenerateUnsignedRedeemTx(coinID []byte, contract *PrivateContract, feeRate uint64) ([]byte, error)
-	// ValidateAdaptorSecret checks if a given adaptor secret is compatible
-	// with the cryptographic constraints of the asset's protocol for a
-	// specific redemption.
-	//
-	// Some cryptographic schemes impose rules on the values used in
-	// signatures. For instance, Bitcoin's Schnorr signature scheme requires
-	// the final public nonce to be a point with an even Y-coordinate. In
-	// such cases, the adaptor secret must be chosen carefully to ensure
-	// this rule is satisfied when it's combined with other signature data.
-	//
-	// This method allows the swapper to validate a secret against these
-	// protocol-specific rules before it is used. If a secret is invalid,
-	// the caller is expected to generate a new one and repeat the
-	// validation.
-	//
-	// For assets that do not have such constraints on adaptor secrets,
-	// this function should be implemented as a no-op that simply returns
-	// (true, nil).
-	ValidateAdaptorSecret(adaptorSecret *btcec.ModNScalar, unsignedRedeemB []byte, contract *PrivateContract) (bool, error)
-	// GeneratePrivateKeyTweakedAdaptor generates an adaptor signature for
-	// the provided unsigned redemption transaction. This is called by the
-	// party which generated the adaptor secret. The isRedeemer flag
-	// specifies whether the wallet is the redeemer or refunder for this
-	// contract.
-	GeneratePrivateKeyTweakedAdaptor(unsignedRedeemB []byte, contract *PrivateContract, adaptorSec *btcec.ModNScalar, isRedeemer bool) ([]byte, error)
-	// ValidateAdaptorSig verifies a private-key-tweaked adaptor signature
-	// received from the counterparty. This check ensures that if the
-	// secret is revealed, this signature can be combined with it to create
-	// a valid signature for the redemption specified by unsignedRedeemB.
-	ValidateAdaptorSig(unsignedRedeemB []byte, adaptorSigB []byte, adaptorPub *btcec.JacobianPoint, contract *PrivateContract, isRedeemer bool) (bool, error)
-	// GeneratePublicKeyTweakedAdaptor creates a public-key-tweaked adaptor
-	// signature. This is generated by the party who does not know the
-	// secret. The party that knows the secret can use this signature to
-	// redeem a swap, thereby revealing the secret to the other party.
-	GeneratePublicKeyTweakedAdaptor(unsignedRedeemB []byte, contract *PrivateContract, adaptorPub *btcec.JacobianPoint) ([]byte, error)
-	// RecoverAdaptorSecret extracts the adaptor secret after the
-	// counterparty has redeemed their funds on-chain. It derives the
-	// secret by comparing the complete signature from the counterparty's
-	// transaction with the original adaptor signature. In some cases,
-	// such as BTC which uses multi-signer adaptor signatures, two adaptor
-	// signatures are needed to recover the secret. In DCR which uses a
-	// single-signer adaptor signature scheme, the cpRedeemAdaptorSigB
-	// argument would be unused.
-	RecoverAdaptorSecret(cpRedeemTxB []byte, ourRefundAdaptorSigB, cpRedeemAdaptorSigB []byte, adaptorPub *btcec.JacobianPoint, contract *PrivateContract) (*btcec.ModNScalar, error)
-	// RedeemPrivate completes and broadcasts the redemption transaction for
-	// a private swap. The adaptorSigB is transformed into a valid
-	// signature using the adaptor secret. This is used to transform the
-	// unsigned redemption into a signed redemption transaction, which is
-	// then broadcasted.
-	RedeemPrivate(ctx context.Context, contract *PrivateContract, unsignedRedeemB []byte, adaptorSigB []byte, adaptorSecret *btcec.ModNScalar) (out Coin, feesPaid uint64, txData []byte, err error)
-	// RefundPrivate refunds a private swap. This can only be used after
-	// the time lock has expired AND if the contract has not been
-	// redeemed/refunded. This method MUST return an
-	// asset.CoinNotFoundError error if the swap is already spent, which
-	// is used to indicate if FindRedemption should be used and the
-	// counterparty's swap redeemed.
-	RefundPrivate(ctx context.Context, coinID util.Bytes, contract *PrivateContract, feeRate uint64) (util.Bytes, error)
-	// MarkPrivateSwapComplete should be called when a private swap is complete
-	// to clean up some data that is no longer needed. This could potentially be
-	// handled by the wallet itself, but it adds a lot of complexity to the wallet.
-	// It is simpler for the caller to handle this.
-	MarkPrivateSwapComplete(contract *PrivateContract, redeemer bool)
 }
 
 // TxFeeEstimator is a wallet implementation with fee estimation functionality.
@@ -1010,60 +712,6 @@ type Bridger interface {
 	BridgeCompletionFees(bridgeName string) (fees uint64, hasSufficientBalance bool, err error)
 }
 
-// ContractDeployer is a wallet that can deploy smart contracts.
-type ContractDeployer interface {
-	// BuildDeployTxData builds the transaction data for deploying a DEX swap
-	// contract. If tokenAddress is empty, the base asset contract is used.
-	BuildDeployTxData(contractVer uint32, tokenAddress string) ([]byte, error)
-	// DeployContract deploys a contract with the given transaction data
-	// (complete bytecode including constructor args). Returns the expected
-	// contract address and the transaction ID.
-	DeployContract(txData []byte) (contractAddr, txID string, err error)
-}
-
-// GasTestResult holds the gas usage measurements from testing swap contract
-// functions.
-type GasTestResult struct {
-	AssetID          uint32   `json:"assetID"`
-	Symbol           string   `json:"symbol"`
-	TxIDs            []string `json:"txIDs"`
-	Swap             uint64   `json:"swap"`
-	SwapAdd          uint64   `json:"swapAdd"`
-	Redeem           uint64   `json:"redeem"`
-	RedeemAdd        uint64   `json:"redeemAdd"`
-	Refund           uint64   `json:"refund"`
-	Approve          uint64   `json:"approve,omitempty"`  // zero for base chain
-	Transfer         uint64   `json:"transfer,omitempty"` // zero for base chain
-	RawSwaps         []uint64 `json:"rawSwaps"`
-	RawRedeems       []uint64 `json:"rawRedeems"`
-	RawRefunds       []uint64 `json:"rawRefunds"`
-	RawApprovals     []uint64 `json:"rawApprovals,omitempty"`
-	RawTransfers     []uint64 `json:"rawTransfers,omitempty"`
-	SignedRedeem     uint64   `json:"signedRedeem,omitempty"`
-	SignedRedeemAdd  uint64   `json:"signedRedeemAdd,omitempty"`
-	RawSignedRedeems []uint64 `json:"rawSignedRedeems,omitempty"`
-	// Gasless redeem relay estimates.
-	GaslessRedeemVerification       uint64   `json:"gaslessRedeemVerification,omitempty"`
-	GaslessRedeemVerificationAdd    uint64   `json:"gaslessRedeemVerificationAdd,omitempty"`
-	GaslessRedeemPreVerification    uint64   `json:"gaslessRedeemPreVerification,omitempty"`
-	GaslessRedeemPreVerificationAdd uint64   `json:"gaslessRedeemPreVerificationAdd,omitempty"`
-	GaslessRedeemCall               uint64   `json:"gaslessRedeemCall,omitempty"`
-	GaslessRedeemCallAdd            uint64   `json:"gaslessRedeemCallAdd,omitempty"`
-	RawGaslessVerification          []uint64 `json:"rawGaslessVerification,omitempty"`
-	RawGaslessPreVerification       []uint64 `json:"rawGaslessPreVerification,omitempty"`
-	RawGaslessCall                  []uint64 `json:"rawGaslessCall,omitempty"`
-	Summary                         string   `json:"summary"`
-	Error                           string   `json:"error,omitempty"`
-}
-
-// ContractGasTester is a wallet that can test swap contract gas usage by
-// exercising all contract functions and measuring actual gas consumption.
-// If tokensOnly is true, base chain gas tests are skipped and only the
-// specified tokens are tested.
-type ContractGasTester interface {
-	TestContractGas(contractVer uint32, maxSwaps int, tokenAssetIDs []uint32, tokensOnly bool) ([]*GasTestResult, error)
-}
-
 // Sweeper is a wallet that can clear the entire balance of the wallet/account
 // to an address. Similar to Withdraw, but no input value is required.
 type Sweeper interface {
@@ -1076,37 +724,9 @@ type NewAddresser interface {
 	AddressUsed(string) (bool, error)
 }
 
-// AddressReturner is a wallet that allows recycling of unused redemption or refund
-// addresses. Asset implementations should log any errors internally. The caller
-// is responsible for only returning unused addresses.
-type AddressReturner interface {
-	// ReturnRefundContracts should be called with the Receipt.Contract() data
-	// for any swaps that will not be refunded.
-	ReturnRefundContracts(contracts [][]byte)
-	// ReturnRedemptionAddress accepts a  Wallet.RedemptionAddress() if the
-	// address will not be used.
-	ReturnRedemptionAddress(addr string)
-}
-
 // LogFiler is a wallet that allows for downloading of its log file.
 type LogFiler interface {
 	LogFilePath() string
-}
-
-// DynamicSwapper defines methods that accept an initiation
-// or redemption coinID and returns the fee spent on the transaction along with
-// the secrets included in the tx. Returns asset.CoinNotFoundError for unmined
-// txn. Returns asset.ErrNotEnoughConfirms for txn with too few confirmations.
-// Will also error if the secret in the contractData is not found in the
-// transaction secrets.
-type DynamicSwapper interface {
-	// DynamicSwapFeesPaid returns fees for initiation transactions.
-	DynamicSwapFeesPaid(ctx context.Context, coinID, contractData util.Bytes) (fee uint64, secretHashes [][]byte, err error)
-	// DynamicRedemptionFeesPaid returns fees for redemption transactions.
-	DynamicRedemptionFeesPaid(ctx context.Context, coinID, contractData util.Bytes) (fee uint64, secretHashes [][]byte, err error)
-	// GasFeeLimit returns the user set gas fee limit to be used as the max
-	// fee if higher than server.
-	GasFeeLimit() uint64
 }
 
 // FeeRater is capable of retrieving a non-critical fee rate estimate for an
@@ -1242,81 +862,6 @@ type TokenMaster interface {
 	OpenTokenWallet(cfg *TokenConfig) (Wallet, error)
 }
 
-// AccountLocker is a wallet in which redemptions and refunds require a wallet
-// to have available balance to pay fees.
-type AccountLocker interface {
-	// ReserveNRedemptions is used when preparing funding for an order that
-	// redeems to an account-based asset. The wallet will set aside the
-	// appropriate amount of funds so that we can redeem N swaps using the
-	// specified fee and asset version. It is an error to request funds >
-	// spendable balance. The lotSize parameter is used to ensure that when
-	// doing a gasless relay redemption, the size of the redemption will be
-	// able to cover the relay fees.
-	ReserveNRedemptions(n uint64, ver uint32, maxFeeRate uint64, lotSize uint64) (uint64, error)
-	// ReReserveRedemption is used when reconstructing existing orders on
-	// startup. It is an error to request funds > spendable balance.
-	ReReserveRedemption(amt uint64) error
-	// UnlockRedemptionReserves is used to return funds reserved for redemption
-	// when an order is canceled or otherwise completed unfilled.
-	UnlockRedemptionReserves(uint64)
-	// ReserveNRefunds is used when preparing funding for an order that refunds
-	// to an account-based asset. The wallet will set aside the appropriate
-	// amount of funds so that we can refund N swaps using the specified fee and
-	// asset version. It is an error to request funds > spendable balance.
-	ReserveNRefunds(n uint64, ver uint32, maxFeeRate uint64) (uint64, error)
-	// ReReserveRefund is used when reconstructing existing orders on
-	// startup. It is an error to request funds > spendable balance.
-	ReReserveRefund(uint64) error
-	// UnlockRefundReserves is used to return funds reserved for refunds
-	// when an order was cancelled or revoked before a swap was initiated,
-	// completed successfully, or after a refund was done.
-	UnlockRefundReserves(uint64)
-}
-
-// GaslessRedeemer is implemented by wallets that support gasless redemption.
-// This is a subset of wallets that implement AccountLocker.
-type GaslessRedeemer interface {
-	// GaslessRedeem will redeem swaps without requiring funds in the wallet.
-	// It should be called if ReserveNRedemptions returned a zero value. The
-	// submitted bool will be true if the wallet received funds since the
-	// wallet attempted to reserve funds, and is able to pay for the redemption
-	// on its own, otherwise if the redemption was submitted via relay, it will
-	// be false.
-	//
-	// The redemption message should only be sent to the server if submitted is
-	// true. If it is false, an updated coin ID will be returned from
-	// ConfirmRedemption when the transaction is submitted by the relay,
-	// and the server should be notified using that coin ID.
-	GaslessRedeem(ctx context.Context, redeems *RedeemForm) (ins []util.Bytes, out Coin, feesPaid uint64, submitted bool, err error)
-}
-
-// GaslessRedeemCalldata is the minimal information needed for a third party to
-// submit an emergency gasless redeem transaction.
-type GaslessRedeemCalldata struct {
-	ContractAddress string
-	Calldata        util.Bytes
-}
-
-// GaslessRedeemValidation is returned when gasless redeem calldata parses,
-// targets the current wallet as fee recipient, and successfully simulates.
-type GaslessRedeemValidation struct {
-	FeeRecipient    string
-	Nonce           string
-	Deadline        uint64
-	RelayerFee      string
-	GasEstimate     uint64
-	EstimatedTxCost string
-	Profitable      bool
-}
-
-// EmergencyGaslessRedeemer is implemented by wallets that can build, validate,
-// and submit gasless redeem calldata outside the normal relay flow.
-type EmergencyGaslessRedeemer interface {
-	GaslessRedeemCalldata(ctx context.Context, form *RedeemForm, relayerAddress string) (*GaslessRedeemCalldata, error)
-	ValidateGaslessRedeemCalldata(ctx context.Context, contractAddress string, calldata []byte) (*GaslessRedeemValidation, error)
-	SubmitGaslessRedeemCalldata(ctx context.Context, contractAddress string, calldata []byte) (util.Bytes, error)
-}
-
 // LiveReconfigurer is a wallet that can possibly handle a reconfiguration
 // without the need for re-initialization.
 type LiveReconfigurer interface {
@@ -1375,24 +920,6 @@ func (a ApprovalStatus) String() string {
 		return "not approved"
 	}
 	return "unknown"
-}
-
-// TokenApprover is implemented by wallets that require an approval before
-// trading.
-type TokenApprover interface {
-	// ApproveToken sends an approval transaction for a specific version of
-	// the token's swap contract. An error is returned if an approval has
-	// already been done or is pending. The onConfirm callback is called
-	// when the approval transaction is confirmed.
-	ApproveToken(assetVer uint32, onConfirm func()) (string, error)
-	// UnapproveToken removes the approval for a specific version of the
-	// token's swap contract.
-	UnapproveToken(assetVer uint32, onConfirm func()) (string, error)
-	// ApprovalStatus returns the approval status for each version of the
-	// token's swap contract.
-	ApprovalStatus() map[uint32]ApprovalStatus
-	// ApprovalFee returns the estimated fee for an approval transaction.
-	ApprovalFee(assetVer uint32, approval bool) (uint64, error)
 }
 
 // TicketTransaction represents a ticket transaction.
@@ -1778,325 +1305,9 @@ type RecoveryCoin interface {
 // Coins a collection of coins as returned by Fund.
 type Coins []Coin
 
-// Receipt holds information about a sent swap contract.
-type Receipt interface {
-	// Expiration is the time lock expiration.
-	Expiration() time.Time
-	// Coin is the swap initiation transaction's Coin.
-	Coin() Coin
-	// Contract is the unique swap contract data. This may be a redeem script
-	// for UTXO assets, or other information that uniquely identifies the swap
-	// for account-based assets e.g. a contract version and secret hash for ETH.
-	Contract() util.Bytes
-	// String provides a human-readable representation of the swap that may
-	// provide supplementary data to locate the swap.
-	String() string
-	// SignedRefund is a signed refund script that can be used to return
-	// funds to the user in the case a contract expires.
-	SignedRefund() util.Bytes
-}
-
-// AuditInfo is audit information about a swap contract needed to audit the
-// contract.
-type AuditInfo struct {
-	// Recipient is the string-encoded recipient address.
-	Recipient string
-	// Expiration is the unix timestamp of the contract time lock expiration.
-	Expiration time.Time
-	// Coin is the coin that contains the contract.
-	Coin Coin
-	// Contract is the unique swap contract data. This may be a redeem script
-	// for UTXO assets, or other information that uniquely identifies the swap
-	// for account-based assets e.g. a contract version and secret hash for ETH.
-	Contract util.Bytes
-	// SecretHash is the contract's secret hash. This is likely to be encoded in
-	// the Contract field, which is often the redeem script or an asset-specific
-	// encoding of the unique swap data.
-	SecretHash util.Bytes
-}
-
-// INPUT TYPES
-// The types below will be used by the client as inputs for the methods exposed
-// by the wallet.
-
-// Swaps is the details needed to broadcast a swap contract(s).
-type Swaps struct {
-	// AssetVersion is the server's asset version.``
-	AssetVersion uint32
-	// Inputs are the Coins being spent.
-	Inputs Coins
-	// Contract is the contract data.
-	Contracts []*Contract
-	// FeeRate is the required fee rate in atoms/byte.
-	FeeRate uint64
-	// LockChange can be set to true if the change should be locked for
-	// subsequent matches.
-	LockChange bool
-	// Options are OrderOptions set or selected by the user at order time.
-	Options map[string]string
-}
-
-// PrivateContract defines the parameters of a private swap.
-type PrivateContract struct {
-	// LockTime is the lock time for the contract.
-	LockTime uint64
-	// Value is the value of the contract.
-	Value uint64
-	// RedeemPublicKey is the public key of the wallet that will redeem the
-	// private swap.
-	RedeemPublicKey []byte
-	// RefundPublicKey is the public key of the wallet that will refund the
-	// swap if it expires. The signature of this key is also required to redeem
-	// the swap. The redeemer receives the signature using this public key using
-	// an adaptor signature.
-	RefundPublicKey []byte
-}
-
-// PrivateSwaps is the details needed to broadcast a private swap contract(s).
-type PrivateSwaps struct {
-	// Version is the asset version.
-	Version uint32
-	// Inputs are the Coins being spent.
-	Inputs Coins
-	// Contract is the contract data.
-	Contracts []*PrivateContract
-	// FeeRate is the required fee rate in atoms/byte.
-	FeeRate uint64
-	// LockChange can be set to true if the change should be locked for
-	// subsequent matches.
-	LockChange bool
-	// Options are OrderOptions set or selected by the user at order time.
-	Options map[string]string
-}
-
-// Contract is a swap contract.
-type Contract struct {
-	// Address is the receiving address.
-	Address string
-	// Value is the amount being traded.
-	Value uint64
-	// SecretHash is the hash of the secret key.
-	SecretHash util.Bytes
-	// LockTime is the contract lock time in UNIX seconds.
-	LockTime uint64
-}
-
-// ConfirmTxType is the confirm tx type.
-type ConfirmTxType int
-
-const (
-	// CTRedeem is a redeem tx.
-	CTRedeem ConfirmTxType = iota
-	// CTRefund is a refund tx.
-	CTRefund
-)
-
-// String satisfies Stringer.
-func (ct ConfirmTxType) String() string {
-	switch ct {
-	case CTRedeem:
-		return "redeem"
-	case CTRefund:
-		return "refund"
-	}
-	return "unknown"
-}
-
-// ConfirmTx is a redemption transaction that spends a counter-party's swap
-// contract or a refund that spends our own swap.
-type ConfirmTx struct {
-	// spends is the AuditInfo for the swap output being spent. Only needed for redeems.
-	spends *AuditInfo
-	// secret is the secret key needed to satisfy the swap contract. Only needed for redeems.
-	secret util.Bytes
-	// spendsCoinID is the tx to refund. Only needed for refunds.
-	spendsCoinID util.Bytes
-	// contract is the contract to refund. Only needed for refunds.
-	contract util.Bytes
-	// secretHash is the secret hash of the swap to refund. Only needed for refunds.
-	secretHash util.Bytes
-	// confirmTxType is redeem or refund.
-	txType ConfirmTxType
-}
-
-// NewRedeemConfTx creates a new redeem conf tx.
-func NewRedeemConfTx(spends *AuditInfo, secret util.Bytes) *ConfirmTx {
-	return &ConfirmTx{
-		spends: spends,
-		secret: secret,
-		txType: CTRedeem,
-	}
-}
-
-// NewRefundConfTx creates a new refund conf tx.
-func NewRefundConfTx(spendsCoinID, contract, secretHash util.Bytes) *ConfirmTx {
-	return &ConfirmTx{
-		spendsCoinID: spendsCoinID,
-		contract:     contract,
-		secretHash:   secretHash,
-		txType:       CTRefund,
-	}
-}
-
-// Spends returns the conf tx spends. Only use for redeems.
-func (ct *ConfirmTx) Spends() *AuditInfo {
-	return ct.spends
-}
-
-// Secret returns the conf tx secret. Only use for redeems.
-func (ct *ConfirmTx) Secret() util.Bytes {
-	return ct.secret
-}
-
-// SpendsCoinID returns the coin id the confirm tx spends.
-func (ct *ConfirmTx) SpendsCoinID() util.Bytes {
-	if ct.txType == CTRedeem {
-		return ct.spends.Coin.ID()
-	}
-	return ct.spendsCoinID
-}
-
-// SecretHash returns the swap's secret hash.
-func (ct *ConfirmTx) SecretHash() util.Bytes {
-	if ct.txType == CTRedeem {
-		return ct.spends.SecretHash
-	}
-	return ct.secretHash
-}
-
-// Contract returns the swap's contract.
-func (ct *ConfirmTx) Contract() util.Bytes {
-	if ct.txType == CTRedeem {
-		return ct.spends.Contract
-	}
-	return ct.contract
-}
-
-// TxType returns the conf tx type.
-func (ct *ConfirmTx) TxType() ConfirmTxType {
-	return ct.txType
-}
-
-// IsRedeem return true if it is a redeem.
-func (ct *ConfirmTx) IsRedeem() bool {
-	return ct.txType == CTRedeem
-}
-
-// Redemption is a redemption transaction that spends a counter-party's swap
-// contract.
-type Redemption struct {
-	// Spends is the AuditInfo for the swap output being spent.
-	Spends *AuditInfo
-	// Secret is the secret key needed to satisfy the swap contract.
-	Secret util.Bytes
-}
-
-// RedeemForm is a group of Redemptions. The struct will be
-// expanded in in-progress work to accommodate order-time options.
-type RedeemForm struct {
-	Redemptions []*Redemption
-	// FeeSuggestion is a suggested fee rate. For redemptions, the suggestion is
-	// just a fallback if an internal estimate using the wallet's redeem confirm
-	// block target setting is not available. Since this is the redemption,
-	// there is no obligation on the client to use the fee suggestion in any
-	// way, but obviously fees that are too low may result in the redemption
-	// getting stuck in mempool.
-	FeeSuggestion uint64
-	Options       map[string]string
-}
-
-// Order is order details needed for FundOrder.
-type Order struct {
-	// AssetVersion is the asset version of the "from" asset with the init
-	// transaction.
-	AssetVersion uint32
-	// Value is the amount required to satisfy the order. The Value does not
-	// include fees. Fees will be calculated internally based on the number of
-	// possible swaps (MaxSwapCount) and the exchange's configuration
-	// (Exchange).
-	Value uint64
-	// MaxSwapCount is the number of lots in the order, which is also the
-	// maximum number of transactions that an order could potentially generate
-	// in a worst-case scenario of all 1-lot matches.
-	MaxSwapCount uint64 // uint64 for compatibility with quantity and lot size.
-	// MaxFeeRate is the largest possible fee rate for the init transaction (of
-	// this "from" asset) specific to and provided by a particular server, and
-	// is used to calculate the funding required to cover fees.
-	MaxFeeRate uint64
-	// Immediate should be set to true if this is for an order that is not a
-	// standing order, likely a market order or a limit order with immediate
-	// time-in-force.
-	Immediate bool
-	// FeeSuggestion is a suggested fee from the server. If a split transaction
-	// is used, the fee rate used should be at least the suggested fee, else
-	// zero-conf coins might be rejected.
-	FeeSuggestion uint64
-	// Options are options that corresponds to PreSwap.Options, as well as
-	// their values.
-	Options map[string]string
-
-	// The following fields are only used for some assets where the redeemed/to
-	// asset may require funds in this "from" asset. For example, buying ERC20
-	// tokens with ETH.
-
-	// RedeemVersion is the asset version of the "to" asset with the redeem
-	// transaction.
-	RedeemVersion uint32
-	// RedeemAssetID is the asset ID of the "to" asset.
-	RedeemAssetID uint32
-}
-
-// MultiOrderValue is one of the placements in a multi-order.
-type MultiOrderValue struct {
-	// Value is the amount required to satisfy the order. The Value does not
-	// include fees. Fees will be calculated internally based on the number of
-	// possible swaps (MaxSwapCount) and the exchange's configuration
-	// (Exchange).
-	Value uint64
-	// MaxSwapCount is the number of lots in the order, which is also the
-	// maximum number of transactions that an order could potentially generate
-	// in a worst-case scenario of all 1-lot matches.
-	MaxSwapCount uint64 // uint64 for compatibility with quantity and lot size.
-}
-
-// MultiOrder is order details needed for FundMultiOrder.
-type MultiOrder struct {
-	// AssetVersion is the asset version of the "from" asset with the init
-	// transaction.
-	AssetVersion uint32
-	Values       []*MultiOrderValue
-	// MaxFeeRate is the largest possible fee rate for the init transaction (of
-	// this "from" asset) specific to and provided by a particular server, and
-	// is used to calculate the funding required to cover fees.
-	MaxFeeRate uint64
-	// FeeSuggestion is a suggested fee from the server. If a split transaction
-	// is used, the fee rate used should be at least the suggested fee, else
-	// zero-conf coins might be rejected.
-	FeeSuggestion uint64
-	// Options are options that corresponds to PreSwap.Options, as well as
-	// their values.
-	Options map[string]string
-
-	// The following fields are only used for some assets where the redeemed/to
-	// asset may require funds in this "from" asset. For example, buying ERC20
-	// tokens with ETH.
-
-	// RedeemVersion is the asset version of the "to" asset with the redeem
-	// transaction.
-	RedeemVersion uint32
-	// RedeemAssetID is the asset ID of the "to" asset.
-	RedeemAssetID uint32
-}
-
 // A GeocodeRedeemer redeems funds from a geocode game.
 type GeocodeRedeemer interface {
 	RedeemGeocode(code []byte, msg string) (util.Bytes, uint64, error)
-}
-
-// MaxMatchesCounter counts the maximum number of matches that can go in a tx.
-type MaxMatchesCounter interface {
-	MaxSwaps(serverVer uint32, feeRate uint64) (int, error)
-	MaxRedeems(serverVer uint32) (int, error)
 }
 
 // WalletNotification can be any asynchronous information the wallet needs
@@ -2314,13 +1525,6 @@ func (e *WalletEmitter) ActionResolved(uniqueID string) {
 		},
 		UniqueID: uniqueID,
 	})
-}
-
-// InitChecker is an account wallet that checks the status of a swap init.
-type InitChecker interface {
-	// AlreadyInitialized returns if the swap was already initialized and
-	// some data needed to interact with the contract later.
-	AlreadyInitialized(assetVersion uint32, contract *Contract) (initialized bool, zeroHash, contractData []byte, err error)
 }
 
 // Sender sends with more granular control parameters

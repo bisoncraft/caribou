@@ -13,46 +13,26 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-const RelayCoinIDLength = common.HashLength * 2
-
-// ETHCoinID identifies an ETH transaction or relay redemption.
+// ETHCoinID identifies an ETH transaction.
 type ETHCoinID struct {
-	IsRelay       bool
-	RelayTaskHash common.Hash
-	TxHash        common.Hash
+	TxHash common.Hash
 }
 
 // DecodeCoinID decodes an eth coin ID into an ETHCoinID. For eth there are no
 // funding coin IDs, just an account address. Care should be taken not to use
 // DecodeCoinID or (Driver).DecodeCoinID for account addresses.
 func DecodeCoinID(coinID []byte) (*ETHCoinID, error) {
-	if len(coinID) == RelayCoinIDLength {
-		var relayTaskHash, txHash common.Hash
-		copy(relayTaskHash[:], coinID[:common.HashLength])
-		copy(txHash[:], coinID[common.HashLength:])
-		return &ETHCoinID{
-			IsRelay:       true,
-			RelayTaskHash: relayTaskHash,
-			TxHash:        txHash,
-		}, nil
-	}
-
 	if len(coinID) != common.HashLength {
-		return nil, fmt.Errorf("wrong coin ID length. wanted %d or %d, got %d",
-			common.HashLength, RelayCoinIDLength, len(coinID))
+		return nil, fmt.Errorf("wrong coin ID length. wanted %d, got %d",
+			common.HashLength, len(coinID))
 	}
 
 	var h common.Hash
 	h.SetBytes(coinID)
 	return &ETHCoinID{
-		IsRelay: false,
-		TxHash:  h,
+		TxHash: h,
 	}, nil
 }
-
-// SecretHashSize is the byte-length of the hash of the secret key used in
-// swaps.
-const SecretHashSize = 32
 
 // CheckAPIModules checks that the geth node supports the required modules.
 func CheckAPIModules(c *rpc.Client, endpoint string, log util.Logger, reqModules []string) (err error) {

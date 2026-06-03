@@ -3,17 +3,10 @@
 package btc
 
 import (
-	"context"
-	"encoding/hex"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
@@ -66,90 +59,6 @@ func TestSend(t *testing.T) {
 	runRubric(t, func(t *testing.T, segwit bool, walletType string) {
 		testSender(t, tSendSender, segwit, walletType)
 	})
-}
-
-func TestConfirmations(t *testing.T) {
-	runRubric(t, testConfirmations)
-}
-
-func testConfirmations(t *testing.T, segwit bool, walletType string) {
-	wallet, node, shutdown := tNewWallet(segwit, walletType)
-	defer shutdown()
-
-	// coinID := make([]byte, 36)
-	// copy(coinID[:32], tTxHash[:])
-
-	_, _, pkScript, contract, _, _, _ := makeSwapContract(segwit, time.Hour*12)
-	const tipHeight = 10
-	const swapHeight = 2
-	const spendHeight = 4
-	const expConfs = tipHeight - swapHeight + 1
-
-	tx := makeRawTx([]util.Bytes{pkScript}, []*wire.TxIn{dummyInput()})
-	blockHash, swapBlock := node.addRawTx(swapHeight, tx)
-	txHash := tx.TxHash()
-	coinID := ToCoinID(&txHash, 0)
-	// Simulate a spending transaction, and advance the tip so that the swap
-	// has two confirmations.
-	spendingTx := dummyTx()
-	spendingTx.TxIn[0].PreviousOutPoint.Hash = txHash
-	spendingBlockHash, _ := node.addRawTx(spendHeight, spendingTx)
-
-	// Prime the blockchain
-	for i := int64(1); i <= tipHeight; i++ {
-		node.addRawTx(i, dummyTx())
-	}
-
-	matchTime := swapBlock.Header.Timestamp
-
-	// Bad coin id
-	_, _, err := wallet.SwapConfirmations(context.Background(), randBytes(35), contract, matchTime)
-	if err == nil {
-		t.Fatalf("no error for bad coin ID")
-	}
-
-	// Short path.
-	txOutRes := &btcjson.GetTxOutResult{
-		Confirmations: expConfs,
-		BestBlock:     blockHash.String(),
-	}
-	node.txOutRes = txOutRes
-	node.getCFilterScripts[*blockHash] = [][]byte{pkScript}
-	confs, _, err := wallet.SwapConfirmations(context.Background(), coinID, contract, matchTime)
-	if err != nil {
-		t.Fatalf("error for gettransaction path: %v", err)
-	}
-	if confs != expConfs {
-		t.Fatalf("confs not retrieved from gettxout path. expected %d, got %d", expConfs, confs)
-	}
-
-	// no tx output found
-	node.txOutRes = nil
-	node.getCFilterScripts[*blockHash] = nil
-	node.getTransactionErr = tErr
-	_, _, err = wallet.SwapConfirmations(context.Background(), coinID, contract, matchTime)
-	if err == nil {
-		t.Fatalf("no error for gettransaction error")
-	}
-	node.getCFilterScripts[*blockHash] = [][]byte{pkScript}
-	node.getTransactionErr = nil
-	txB, _ := serializeMsgTx(tx)
-
-	node.getTransactionMap = map[string]*GetTransactionResult{
-		"any": {
-			BlockHash: blockHash.String(),
-			Bytes:     txB,
-		}}
-
-	node.getCFilterScripts[*spendingBlockHash] = [][]byte{pkScript}
-	node.walletTxSpent = true
-	_, spent, err := wallet.SwapConfirmations(context.Background(), coinID, contract, matchTime)
-	if err != nil {
-		t.Fatalf("error for spent swap: %v", err)
-	}
-	if !spent {
-		t.Fatalf("swap not spent")
-	}
 }
 
 func TestSendEdges(t *testing.T) {
@@ -297,128 +206,5 @@ func testSyncStatus(t *testing.T, segwit bool, walletType string) {
 	}
 	if ss.BlockProgress() > 0.500001 || ss.BlockProgress() < 0.4999999 {
 		t.Fatalf("progress out of range. Expected 0.5, got %.2f", ss.BlockProgress())
-	}
-}
-
-func TestConfirmTransaction(t *testing.T) {
-	segwit := true
-	wallet, node, shutdown := tNewWallet(segwit, walletTypeRPC)
-	defer shutdown()
-
-	swapVal := toSatoshi(5)
-
-	secret, _, _, contract, addr, _, lockTime := makeSwapContract(segwit, time.Hour*12)
-
-	coin := NewOutput(tTxHash, 0, swapVal)
-	ci := &asset.AuditInfo{
-		Coin:       coin,
-		Contract:   contract,
-		Recipient:  addr.String(),
-		Expiration: lockTime,
-	}
-
-	confirmTx := asset.NewRedeemConfTx(ci, secret)
-
-	coinID := coin.ID()
-
-	privBytes, _ := hex.DecodeString("b07209eec1a8fb6cfe5cb6ace36567406971a75c330db7101fb21bc679bc5330")
-	privKey, _ := btcec.PrivKeyFromBytes(privBytes)
-	wif, err := btcutil.NewWIF(privKey, &chaincfg.MainNetParams, true)
-	if err != nil {
-		t.Fatalf("error encoding wif: %v", err)
-	}
-
-	node.newAddress = tP2WPKHAddr
-	node.privKeyForAddr = wif
-
-	tests := []struct {
-		name                 string
-		confirmTx            *asset.ConfirmTx
-		coinID               []byte
-		wantErr              bool
-		wantConfs            uint64
-		txOutRes             *btcjson.GetTxOutResult
-		getTransactionResult *GetTransactionResult
-		txOutErr             error
-		getTransactionErr    error
-	}{{
-		name:                 "ok and found",
-		coinID:               coinID,
-		confirmTx:            confirmTx,
-		getTransactionResult: new(GetTransactionResult),
-	}, {
-		name:      "ok spent by someone but not sure who",
-		coinID:    coinID,
-		confirmTx: confirmTx,
-		wantConfs: confTxFinality,
-	}, {
-		name:      "ok but sending new tx",
-		coinID:    coinID,
-		confirmTx: confirmTx,
-		txOutRes:  new(btcjson.GetTxOutResult),
-	}, {
-		name:      "ok but sending new refund tx",
-		coinID:    coinID,
-		confirmTx: asset.NewRefundConfTx(coin.ID(), contract, secret),
-		txOutRes:  newTxOutResult(nil, 1e8, 2),
-	}, {
-		name:      "decode coin error",
-		confirmTx: confirmTx,
-		wantErr:   true,
-	}, {
-		name:      "error finding contract output",
-		coinID:    coinID,
-		confirmTx: confirmTx,
-		txOutErr:  errors.New(""),
-		wantErr:   true,
-	}, {
-		name:              "error finding redeem tx",
-		coinID:            coinID,
-		confirmTx:         confirmTx,
-		getTransactionErr: errors.New(""),
-		wantErr:           true,
-	}, {
-		name:   "redeem error",
-		coinID: coinID,
-		confirmTx: func() *asset.ConfirmTx {
-			ci := &asset.AuditInfo{
-				Coin: coin,
-				// Contract:   contract,
-				Recipient:  addr.String(),
-				Expiration: lockTime,
-			}
-
-			return asset.NewRedeemConfTx(ci, secret)
-		}(),
-		txOutRes: new(btcjson.GetTxOutResult),
-		wantErr:  true,
-	}, {
-		name:      "refund error",
-		coinID:    coinID,
-		confirmTx: asset.NewRefundConfTx(coin.ID(), contract, secret),
-		txOutRes:  new(btcjson.GetTxOutResult), // fee too low
-		wantErr:   true,
-	}}
-	for _, test := range tests {
-		wallet.redeemCache = broadcast.NewCache[*redeemCacheEntry]()
-		wallet.refundCache = broadcast.NewCache[*refundCacheEntry]()
-		node.txOutRes = test.txOutRes
-		node.txOutErr = test.txOutErr
-		node.getTransactionErr = test.getTransactionErr
-		node.getTransactionMap[tTxID] = test.getTransactionResult
-
-		status, err := wallet.ConfirmTransaction(test.coinID, test.confirmTx, 0)
-		if test.wantErr {
-			if err == nil {
-				t.Fatalf("%q: expected error", test.name)
-			}
-			continue
-		}
-		if err != nil {
-			t.Fatalf("%q: unexpected error: %v", test.name, err)
-		}
-		if status.Confs != test.wantConfs {
-			t.Fatalf("%q: wanted %d confs but got %d", test.name, test.wantConfs, status.Confs)
-		}
 	}
 }

@@ -1480,50 +1480,6 @@ func createBuckets(ns walletdb.ReadWriteBucket) error {
 	return nil
 }
 
-// deleteBuckets deletes all of the descendants buckets required for the
-// transaction store to properly carry its duties.
-func deleteBuckets(ns walletdb.ReadWriteBucket) error {
-	if err := ns.DeleteNestedBucket(bucketBlocks); err != nil {
-		str := "failed to delete blocks bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketTxRecords); err != nil {
-		str := "failed to delete tx records bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketCredits); err != nil {
-		str := "failed to delete credits bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketDebits); err != nil {
-		str := "failed to delete debits bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketUnspent); err != nil {
-		str := "failed to delete unspent bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketUnmined); err != nil {
-		str := "failed to delete unmined bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketUnminedCredits); err != nil {
-		str := "failed to delete unmined credits bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	if err := ns.DeleteNestedBucket(bucketUnminedInputs); err != nil {
-		str := "failed to delete unmined inputs bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-	err := ns.DeleteNestedBucket(bucketLockedOutputs)
-	if err != nil && err != walletdb.ErrBucketNotFound {
-		str := "failed to delete locked outputs bucket"
-		return storeError(ErrDatabase, str, err)
-	}
-
-	return nil
-}
-
 // putVersion modifies the version of the store to reflect the given version
 // number.
 func putVersion(ns walletdb.ReadWriteBucket, version uint32) error {

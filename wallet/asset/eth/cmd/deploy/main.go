@@ -66,8 +66,7 @@ func mainErr() error {
 	}
 	defaultCredentialsPath := filepath.Join(u.HomeDir, "dextest", "credentials.json")
 
-	var contractVerI int
-	var chain, credentialsPath, tokenAddress, returnAddr string
+	var chain, credentialsPath, returnAddr string
 	var useTestnet, useMainnet, useSimnet, trace, debug, readCreds, fundingReq, multiBal bool
 	flag.BoolVar(&readCreds, "readcreds", false, "does not run gas estimates. read the credentials file and print the address")
 	flag.BoolVar(&fundingReq, "fundingrequired", false, "does not run gas estimates. calculate the funding required by the wallet to get estimates")
@@ -78,8 +77,6 @@ func mainErr() error {
 	flag.BoolVar(&trace, "trace", false, "trace logs")
 	flag.BoolVar(&debug, "debug", false, "debug logs")
 	flag.StringVar(&chain, "chain", "eth", "symbol of the base chain")
-	flag.StringVar(&tokenAddress, "tokenaddr", "", "launches an erc20-linked contract with this token. default launches a base chain contract")
-	flag.IntVar(&contractVerI, "ver", 0, "contract version")
 	flag.StringVar(&credentialsPath, "creds", defaultCredentialsPath, "path for JSON credentials file.")
 	flag.BoolVar(&multiBal, "multibalance", false, "deploy / estimate the MultiBalanceV0 contract instead of the swap contract")
 	flag.Parse()
@@ -121,22 +118,12 @@ func mainErr() error {
 		return fmt.Errorf("specified chain is not a base chain. appears to be token %s", tkn.Name)
 	}
 
-	contractVer := uint32(contractVerI)
-
 	logLvl := util.LevelInfo
 	if debug {
 		logLvl = util.LevelDebug
 	}
 	if trace {
 		logLvl = util.LevelTrace
-	}
-
-	var tokenAddr common.Address
-	if tokenAddress != "" {
-		if !common.IsHexAddress(tokenAddress) {
-			return fmt.Errorf("token address %q does not appear to be valid", tokenAddress)
-		}
-		tokenAddr = common.HexToAddress(tokenAddress)
 	}
 
 	log := util.StdOutLogger("DEPLOY", logLvl)
@@ -160,22 +147,12 @@ func mainErr() error {
 
 	switch {
 	case fundingReq:
-		if multiBal {
-			return eth.ContractDeployer.EstimateMultiBalanceDeployFunding(
-				ctx,
-				chain,
-				credentialsPath,
-				chainCfg,
-				bui,
-				log,
-				net,
-			)
+		if !multiBal {
+			return fmt.Errorf("only the MultiBalanceV0 contract can be deployed; add --multibalance")
 		}
-		return eth.ContractDeployer.EstimateDeployFunding(
+		return eth.ContractDeployer.EstimateMultiBalanceDeployFunding(
 			ctx,
 			chain,
-			contractVer,
-			tokenAddr,
 			credentialsPath,
 			chainCfg,
 			bui,
@@ -199,16 +176,6 @@ func mainErr() error {
 			net,
 		)
 	default:
-		return eth.ContractDeployer.DeployContract(
-			ctx,
-			chain,
-			contractVer,
-			tokenAddr,
-			credentialsPath,
-			chainCfg,
-			bui,
-			log,
-			net,
-		)
+		return fmt.Errorf("only the MultiBalanceV0 contract can be deployed; add --multibalance")
 	}
 }

@@ -22,7 +22,7 @@ func regToken(tokens map[uint32]*eth.Token, tokenID uint32, desc string, nets ..
 	for net, netToken := range token.NetTokens {
 		netAddrs[net] = netToken.Address.String()
 		netVersions[net] = make([]uint32, 0, 1)
-		for ver := range netToken.SwapContracts {
+		for ver := range netToken.Gas {
 			netVersions[net] = append(netVersions[net], ver)
 		}
 	}

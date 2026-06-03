@@ -12,7 +12,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
-	"github.com/ethereum/go-ethereum/common"
 )
 
 func init() {
@@ -32,7 +31,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 		}
 		netAddrs[net] = netToken.Address.String()
 		netVersions[net] = make([]uint32, 0, 1)
-		for ver := range netToken.SwapContracts {
+		for ver := range netToken.Gas {
 			netVersions[net] = append(netVersions[net], ver)
 		}
 	}
@@ -116,16 +115,6 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate Polygon compatibility data: %s", net)
 	}
-	contracts := make(map[uint32]common.Address, 1)
-	for ver, netAddrs := range ContractAddresses {
-		for netw, addr := range netAddrs {
-			if netw == net {
-				contracts[ver] = addr
-				break
-			}
-		}
-	}
-
 	var defaultProviders []string
 	switch net {
 	case util.Simnet:
@@ -150,20 +139,19 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 
 	// BipID, chainCfg, cfg, &t, VersionedGases, Tokens, logger, net
 	evmWallet, err := eth.NewEVMWallet(&eth.EVMWalletConfig{
-		BaseChainID:        BipID,
-		ChainCfg:           chainCfg,
-		AssetCfg:           cfg,
-		CompatData:         &compat,
-		VersionedGases:     VersionedGases,
-		Tokens:             Tokens,
-		FinalizeConfs:      polygonFinalizeConfs(net),
-		Logger:             logger,
-		BaseChainContracts: contracts,
-		MultiBalAddress:    MultiBalanceAddresses[net],
-		WalletInfo:         WalletInfo,
-		Net:                net,
-		DefaultProviders:   defaultProviders,
-		MaxTxFeeGwei:       1000 * dexeth.GweiFactor, // 1000 POL
+		BaseChainID:      BipID,
+		ChainCfg:         chainCfg,
+		AssetCfg:         cfg,
+		CompatData:       &compat,
+		VersionedGases:   VersionedGases,
+		Tokens:           Tokens,
+		FinalizeConfs:    polygonFinalizeConfs(net),
+		Logger:           logger,
+		MultiBalAddress:  MultiBalanceAddresses[net],
+		WalletInfo:       WalletInfo,
+		Net:              net,
+		DefaultProviders: defaultProviders,
+		MaxTxFeeGwei:     1000 * dexeth.GweiFactor, // 1000 POL
 	})
 	if err != nil {
 		return nil, err

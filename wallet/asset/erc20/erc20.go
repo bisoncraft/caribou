@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	v0 "github.com/bisoncraft/bosswallet/wallet/asset/erc20/contracts/v0"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 
@@ -20,4 +19,3 @@ func parseABI(abiStr string) *abi.ABI {
 }
 
 var ERC20ABI = parseABI(IERC20MetaData.ABI)
-var ERC20SwapABIV0 = parseABI(v0.ERC20SwapMetaData.ABI)

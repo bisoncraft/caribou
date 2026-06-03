@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,10 +91,6 @@ func (w *xcWallet) setEncPW(encPW []byte) {
 	w.mtx.Lock()
 	w.encPass = encPW
 	w.mtx.Unlock()
-}
-
-func (w *xcWallet) supportsVer(ver uint32) bool {
-	return slices.Contains(w.supportedVersions, ver)
 }
 
 // Unlock unlocks the wallet backend and caches the decrypted wallet password so
@@ -251,15 +246,6 @@ func (w *xcWallet) locallyUnlocked() bool {
 	return len(w.pw) > 0 // cached password for encrypted wallet
 }
 
-func (w *xcWallet) unitInfo() util.UnitInfo {
-	return w.Info().UnitInfo
-}
-
-func (w *xcWallet) amtString(amt uint64) string {
-	ui := w.unitInfo()
-	return fmt.Sprintf("%s %s", ui.ConventionalString(amt), ui.Conventional.Unit)
-}
-
 // state returns the current WalletState.
 func (w *xcWallet) state() *WalletState {
 	winfo := w.Info()
@@ -268,11 +254,6 @@ func (w *xcWallet) state() *WalletState {
 	var peerCount uint32
 	if w.peerCount > 0 { // initialized to -1 initially, means no count yet
 		peerCount = uint32(w.peerCount)
-	}
-
-	var tokenApprovals map[uint32]asset.ApprovalStatus
-	if w.connector.On() {
-		tokenApprovals = w.ApprovalStatus()
 	}
 
 	var feeState *FeeState
@@ -300,7 +281,6 @@ func (w *xcWallet) state() *WalletState {
 		Class:        winfo.BlockchainClass,
 		Traits:       w.traits,
 		Disabled:     w.disabled,
-		Approved:     tokenApprovals,
 		FeeState:     feeState,
 		PendingTxs:   w.pendingTxsCopy(),
 	}
@@ -495,56 +475,6 @@ func (w *xcWallet) logFilePath() (string, error) {
 	return logFiler.LogFilePath(), nil
 }
 
-// accelerateOrder uses the Child-Pays-For-Parent technique to accelerate an
-// order if the wallet is an Accelerator.
-func (w *xcWallet) accelerateOrder(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, newFeeRate uint64) (asset.Coin, string, error) {
-	if w.isDisabled() { // cannot perform order acceleration with disabled wallet.
-		return nil, "", fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return nil, "", errWalletNotConnected
-	}
-	accelerator, ok := w.Wallet.(asset.Accelerator)
-	if !ok {
-		return nil, "", errors.New("wallet does not support acceleration")
-	}
-	return accelerator.AccelerateOrder(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, newFeeRate)
-}
-
-// accelerationEstimate estimates the cost to accelerate an order if the wallet
-// is an Accelerator.
-func (w *xcWallet) accelerationEstimate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, error) {
-	if w.isDisabled() { // cannot perform acceleration estimate with disabled wallet.
-		return 0, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return 0, errWalletNotConnected
-	}
-	accelerator, ok := w.Wallet.(asset.Accelerator)
-	if !ok {
-		return 0, errors.New("wallet does not support acceleration")
-	}
-
-	return accelerator.AccelerationEstimate(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
-}
-
-// preAccelerate gives the user information about accelerating an order if the
-// wallet is an Accelerator.
-func (w *xcWallet) preAccelerate(swapCoins, accelerationCoins []util.Bytes, changeCoin util.Bytes, requiredForRemainingSwaps, feeSuggestion uint64) (uint64, *asset.XYRange, *asset.EarlyAcceleration, error) {
-	if w.isDisabled() { // cannot perform operation with disabled wallet.
-		return 0, &asset.XYRange{}, nil, fmt.Errorf(walletDisabledErrStr, strings.ToUpper(unbip(w.AssetID)))
-	}
-	if !w.connected() {
-		return 0, &asset.XYRange{}, nil, errWalletNotConnected
-	}
-	accelerator, ok := w.Wallet.(asset.Accelerator)
-	if !ok {
-		return 0, &asset.XYRange{}, nil, errors.New("wallet does not support acceleration")
-	}
-
-	return accelerator.PreAccelerate(swapCoins, accelerationCoins, changeCoin, requiredForRemainingSwaps, feeSuggestion)
-}
-
 // TxHistory returns all the transactions a wallet has made. If refID
 // is nil, then transactions starting from the most recent are returned
 // (past is ignored). If past is true, the transactions prior to the
@@ -634,45 +564,6 @@ func (w *xcWallet) SendTransaction(tx []byte) ([]byte, error) {
 		return nil, errors.New("wallet is not a Broadcaster")
 	}
 	return bonder.SendTransaction(tx)
-}
-
-// ApproveToken sends an approval transaction if the wallet is a TokenApprover.
-func (w *xcWallet) ApproveToken(assetVersion uint32, onConfirm func()) (string, error) {
-	approver, ok := w.Wallet.(asset.TokenApprover)
-	if !ok {
-		return "", fmt.Errorf("%s wallet is not a TokenApprover", unbip(w.AssetID))
-	}
-	return approver.ApproveToken(assetVersion, onConfirm)
-}
-
-// ApproveToken sends an approval transaction if the wallet is a TokenApprover.
-func (w *xcWallet) UnapproveToken(assetVersion uint32, onConfirm func()) (string, error) {
-	approver, ok := w.Wallet.(asset.TokenApprover)
-	if !ok {
-		return "", fmt.Errorf("%s wallet is not a TokenApprover", unbip(w.AssetID))
-	}
-	return approver.UnapproveToken(assetVersion, onConfirm)
-}
-
-// ApprovalFee returns the estimated fee to send an approval transaction if the
-// wallet is a TokenApprover.
-func (w *xcWallet) ApprovalFee(assetVersion uint32, approval bool) (uint64, error) {
-	approver, ok := w.Wallet.(asset.TokenApprover)
-	if !ok {
-		return 0, fmt.Errorf("%s wallet is not a TokenApprover", unbip(w.AssetID))
-	}
-	return approver.ApprovalFee(assetVersion, approval)
-}
-
-// ApprovalStatus returns the approval status of each version of the asset if
-// the wallet is a TokenApprover.
-func (w *xcWallet) ApprovalStatus() map[uint32]asset.ApprovalStatus {
-	approver, ok := w.Wallet.(asset.TokenApprover)
-	if !ok {
-		return nil
-	}
-
-	return approver.ApprovalStatus()
 }
 
 func (w *xcWallet) setFeeState(feeRate uint64) {

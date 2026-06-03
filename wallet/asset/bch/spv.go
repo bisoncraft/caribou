@@ -775,17 +775,6 @@ func (w *bchSPVWallet) Birthday() time.Time {
 	return w.Manager.Birthday()
 }
 
-func (w *bchSPVWallet) updateDBBirthday(bday time.Time) error {
-	btcw, isLoaded := w.loader.LoadedWallet()
-	if !isLoaded {
-		return fmt.Errorf("wallet not loaded")
-	}
-	return walletdb.Update(btcw.Database(), func(dbtx walletdb.ReadWriteTx) error {
-		ns := dbtx.ReadWriteBucket(waddrmgrNamespace)
-		return btcw.Manager.SetBirthday(ns, bday)
-	})
-}
-
 func (w *bchSPVWallet) Peers() ([]*asset.WalletPeer, error) {
 	return w.peerManager.Peers()
 }

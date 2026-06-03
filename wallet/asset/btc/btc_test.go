@@ -7,7 +7,6 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,7 +24,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -35,16 +33,8 @@ import (
 )
 
 var (
-	tLogger  util.Logger
-	tCtx     context.Context
-	tLotSize uint64 = 1e6 // 0.01 BTC
-	tBTC            = &util.Asset{
-		ID:         0,
-		Symbol:     "btc",
-		Version:    version,
-		MaxFeeRate: 34,
-		SwapConf:   1,
-	}
+	tLogger        util.Logger
+	tCtx           context.Context
 	tSwapSizeBase  uint64 = InitTxSizeBaseSegwit
 	tSwapSize      uint64 = InitTxSizeSegwit
 	optimalFeeRate uint64 = 24
@@ -54,9 +44,8 @@ var (
 	tP2PKHAddr     = "1Bggq7Vu5oaoLFV1NNp5KhAzcku83qQhgi"
 	tP2PKH         []byte
 	tP2WPKH        []byte
-	tP2WPKHAddr           = "bc1qq49ypf420s0kh52l9pk7ha8n8nhsugdpculjas"
-	feeSuggestion  uint64 = 10
-	rnd                   = rand.New(rand.NewPCG(0x12345678, 0x87654321))
+	tP2WPKHAddr    = "bc1qq49ypf420s0kh52l9pk7ha8n8nhsugdpculjas"
+	rnd            = rand.New(rand.NewPCG(0x12345678, 0x87654321))
 )
 
 func boolPtr(v bool) *bool {
@@ -112,7 +101,6 @@ type testData struct {
 	txOutErr      error
 	sigIncomplete bool
 	signFunc      func(*wire.MsgTx)
-	signMsgFunc   func([]json.RawMessage) (json.RawMessage, error)
 
 	blockchainMtx       sync.RWMutex
 	verboseBlocks       map[chainhash.Hash]*msgBlockWithHeight
@@ -536,14 +524,6 @@ func (c *testData) getBlockAtHeight(blockHeight int64) (*chainhash.Hash, *msgBlo
 	return blockHash, blk
 }
 
-func (c *testData) truncateChains() {
-	c.blockchainMtx.RLock()
-	defer c.blockchainMtx.RUnlock()
-	c.mainchain = make(map[int64]*chainhash.Hash)
-	c.verboseBlocks = make(map[chainhash.Hash]*msgBlockWithHeight)
-	c.mempoolTxs = make(map[chainhash.Hash]*wire.MsgTx)
-}
-
 func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *wire.MsgTx {
 	tx := &wire.MsgTx{
 		TxIn: inputs,
@@ -554,31 +534,10 @@ func makeRawTx(pkScripts []util.Bytes, inputs []*wire.TxIn) *wire.MsgTx {
 	return tx
 }
 
-func makeTxHex(pkScripts []util.Bytes, inputs []*wire.TxIn) ([]byte, error) {
-	msgTx := wire.NewMsgTx(wire.TxVersion)
-	for _, txIn := range inputs {
-		msgTx.AddTxIn(txIn)
-	}
-	for _, pkScript := range pkScripts {
-		txOut := wire.NewTxOut(100000000, pkScript)
-		msgTx.AddTxOut(txOut)
-	}
-	txBuf := bytes.NewBuffer(make([]byte, 0, MsgTxVBytes(msgTx)))
-	err := msgTx.Serialize(txBuf)
-	if err != nil {
-		return nil, err
-	}
-	return txBuf.Bytes(), nil
-}
-
 // msgTxFromHex creates a wire.MsgTx by deserializing the hex-encoded
 // transaction.
 func msgTxFromHex(txHex string) (*wire.MsgTx, error) {
 	return deserializeMsgTx(hex.NewDecoder(strings.NewReader(txHex)))
-}
-
-func makeRPCVin(txHash *chainhash.Hash, vout uint32, sigScript []byte, witness [][]byte) *wire.TxIn {
-	return wire.NewTxIn(wire.NewOutPoint(txHash, vout), sigScript, witness)
 }
 
 func dummyInput() *wire.TxIn {
@@ -774,31 +733,6 @@ func (c *tCoin) String() string { return hex.EncodeToString(c.id) }
 func (c *tCoin) TxID() string   { return hex.EncodeToString(c.id) }
 func (c *tCoin) Value() uint64  { return 100 }
 
-func checkMaxOrder(t *testing.T, wallet asset.AtomicSwapWallet, lots, swapVal, maxFees, estWorstCase, estBestCase uint64) {
-	t.Helper()
-	// MaxOrder is a DEX-layer method removed from the wallet interface.
-	t.Skip("MaxOrder not available in wallet-only build")
-}
-
-func checkSwapEstimate(t *testing.T, est *asset.SwapEstimate, lots, swapVal, maxFees, estWorstCase, estBestCase uint64) {
-	t.Helper()
-	if est.Lots != lots {
-		t.Fatalf("Estimate has wrong Lots. wanted %d, got %d", lots, est.Lots)
-	}
-	if est.Value != swapVal {
-		t.Fatalf("Estimate has wrong Value. wanted %d, got %d", swapVal, est.Value)
-	}
-	if est.MaxFees != maxFees {
-		t.Fatalf("Estimate has wrong MaxFees. wanted %d, got %d", maxFees, est.MaxFees)
-	}
-	if est.RealisticWorstCase != estWorstCase {
-		t.Fatalf("Estimate has wrong RealisticWorstCase. wanted %d, got %d", estWorstCase, est.RealisticWorstCase)
-	}
-	if est.RealisticBestCase != estBestCase {
-		t.Fatalf("Estimate has wrong RealisticBestCase. wanted %d, got %d", estBestCase, est.RealisticBestCase)
-	}
-}
-
 type TAuditInfo struct{}
 
 func (ai *TAuditInfo) Recipient() string      { return tP2PKHAddr }
@@ -806,108 +740,6 @@ func (ai *TAuditInfo) Expiration() time.Time  { return time.Time{} }
 func (ai *TAuditInfo) Coin() asset.Coin       { return &tCoin{} }
 func (ai *TAuditInfo) Contract() util.Bytes   { return nil }
 func (ai *TAuditInfo) SecretHash() util.Bytes { return nil }
-
-func TestSignCoinMessage(t *testing.T) {
-	runRubric(t, testSignCoinMessage)
-}
-
-func testSignCoinMessage(t *testing.T, segwit bool, walletType string) {
-	wallet, node, shutdown := tNewWallet(segwit, walletType)
-	defer shutdown()
-
-	vout := uint32(5)
-	privBytes, _ := hex.DecodeString("b07209eec1a8fb6cfe5cb6ace36567406971a75c330db7101fb21bc679bc5330")
-	privKey, pubKey := btcec.PrivKeyFromBytes(privBytes)
-	wif, err := btcutil.NewWIF(privKey, &chaincfg.MainNetParams, true)
-	if err != nil {
-		t.Fatalf("error encoding wif: %v", err)
-	}
-
-	msg := randBytes(36)
-	msgHash := chainhash.HashB(msg)
-	pk := pubKey.SerializeCompressed()
-	signature := ecdsa.Sign(privKey, msgHash)
-	sig := signature.Serialize()
-
-	pt := NewOutPoint(tTxHash, vout)
-	utxo := &UTxO{Address: tP2PKHAddr}
-	wallet.cm.lockedOutputs[pt] = utxo
-	node.privKeyForAddr = wif
-	node.signMsgFunc = func(params []json.RawMessage) (json.RawMessage, error) {
-		if len(params) != 2 {
-			t.Fatalf("expected 2 params, found %d", len(params))
-		}
-		var sentKey string
-		var sentMsg util.Bytes
-		err := json.Unmarshal(params[0], &sentKey)
-		if err != nil {
-			t.Fatalf("unmarshal error: %v", err)
-		}
-		_ = sentMsg.UnmarshalJSON(params[1])
-		if sentKey != wif.String() {
-			t.Fatalf("received wrong key. expected '%s', got '%s'", wif.String(), sentKey)
-		}
-		var checkMsg util.Bytes = msg
-		if sentMsg.String() != checkMsg.String() {
-			t.Fatalf("received wrong message. expected '%s', got '%s'", checkMsg.String(), sentMsg.String())
-		}
-		msgHash := chainhash.HashB(sentMsg)
-		sig := ecdsa.Sign(wif.PrivKey, msgHash)
-		r, _ := json.Marshal(base64.StdEncoding.EncodeToString(sig.Serialize()))
-		return r, nil
-	}
-
-	var coin asset.Coin = NewOutput(tTxHash, vout, 5e7)
-	pubkeys, sigs, err := wallet.SignCoinMessage(coin, msg)
-	if err != nil {
-		t.Fatalf("SignCoinMessage error: %v", err)
-	}
-	if len(pubkeys) != 1 {
-		t.Fatalf("expected 1 pubkey, received %d", len(pubkeys))
-	}
-	if len(sigs) != 1 {
-		t.Fatalf("expected 1 sig, received %d", len(sigs))
-	}
-	if !bytes.Equal(pk, pubkeys[0]) {
-		t.Fatalf("wrong pubkey. expected %x, got %x", pubkeys[0], pk)
-	}
-	if !bytes.Equal(sig, sigs[0]) {
-		t.Fatalf("wrong signature. exptected %x, got %x", sigs[0], sig)
-	}
-
-	// Unknown UTXO
-	delete(wallet.cm.lockedOutputs, pt)
-	_, _, err = wallet.SignCoinMessage(coin, msg)
-	if err == nil {
-		t.Fatalf("no error for unknown utxo")
-	}
-	wallet.cm.lockedOutputs[pt] = utxo
-
-	// dumpprivkey error
-	node.privKeyForAddrErr = tErr
-	_, _, err = wallet.SignCoinMessage(coin, msg)
-	if err == nil {
-		t.Fatalf("no error for dumpprivkey rpc error")
-	}
-	node.privKeyForAddrErr = nil
-
-	// bad coin
-	badCoin := &tCoin{id: make([]byte, 15)}
-	_, _, err = wallet.SignCoinMessage(badCoin, msg)
-	if err == nil {
-		t.Fatalf("no error for bad coin")
-	}
-}
-
-type tReceipt struct {
-	coin       *tCoin
-	contract   []byte
-	expiration uint64
-}
-
-func (r *tReceipt) Expiration() time.Time { return time.Unix(int64(r.expiration), 0).UTC() }
-func (r *tReceipt) Coin() asset.Coin      { return r.coin }
-func (r *tReceipt) Contract() util.Bytes  { return r.contract }
 
 type tSenderType byte
 
@@ -1261,7 +1093,7 @@ func TestAddressRecycling(t *testing.T) {
 	checkAddrs("first single addr", addr1.String())
 
 	td.ownsAddress = true
-	redemptionAddr, _ := w.RedemptionAddress()
+	redemptionAddr, _ := w.recyclableAddress()
 	if redemptionAddr != addr1.String() {
 		t.Fatalf("recycled address not returned for redemption address")
 	}
@@ -1279,14 +1111,14 @@ func TestAddressRecycling(t *testing.T) {
 	td.newAddress = "1JoiKZz2QRd47ARtcYgvgxC9jhnre9aphv"
 	priv, _ := btcec.NewPrivateKey()
 	td.privKeyForAddr, _ = btcutil.NewWIF(priv, &chaincfg.MainNetParams, true)
-	redemptionAddr, err := w.RedemptionAddress()
+	redemptionAddr, err := w.recyclableAddress()
 	if err != nil {
 		t.Fatalf("RedemptionAddress error: %v", err)
 	}
 	if redemptionAddr == addr1.String() || redemptionAddr == addr2.String() {
 		t.Fatalf("unowned address returned (1)")
 	}
-	redemptionAddr, _ = w.RedemptionAddress()
+	redemptionAddr, _ = w.recyclableAddress()
 	if redemptionAddr == addr1.String() || redemptionAddr == addr2.String() {
 		t.Fatalf("unowned address returned (2)")
 	}

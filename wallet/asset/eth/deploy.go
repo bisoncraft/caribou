@@ -12,47 +12,19 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	erc20v0 "github.com/bisoncraft/bosswallet/wallet/asset/erc20/contracts/v0"
 	multibal "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/multibalance"
-	ethv0 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v0"
-	ethv1 "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/v1"
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// contractDeployer deploys a dcrdex swap contract for an evm-compatible
-// blockchain. contractDeployer can deploy both base asset contracts or ERC20
-// contracts. contractDeployer is used by the cmd/deploy/deploy utility.
+// contractDeployer deploys the multibalance contract for an evm-compatible
+// blockchain. contractDeployer is used by the cmd/deploy/deploy utility.
 type contractDeployer byte
 
 var ContractDeployer contractDeployer
-
-// EstimateDeployFunding estimates the fees required to deploy a contract.
-// The gas estimate is only accurate if sufficient funds are in the wallet (so
-// that estimateGas succeeds), otherwise a generously-padded estimate is
-// generated.
-func (contractDeployer) EstimateDeployFunding(
-	ctx context.Context,
-	chain string,
-	contractVer uint32,
-	tokenAddress common.Address,
-	credentialsPath string,
-	chainCfg *params.ChainConfig,
-	ui *util.UnitInfo,
-	log util.Logger,
-	net util.Network,
-) error {
-	txData, err := ContractDeployer.TxData(contractVer, tokenAddress)
-	if err != nil {
-		return err
-	}
-	const deploymentGas = 1_000_000 // eth v0: 687_671, token v0 825_478
-	return ContractDeployer.estimateDeployFunding(ctx, txData, deploymentGas, chain, credentialsPath, chainCfg, ui, log, net)
-}
 
 func (contractDeployer) estimateDeployFunding(
 	ctx context.Context,
@@ -137,83 +109,6 @@ func (contractDeployer) EstimateMultiBalanceDeployFunding(
 	const deploymentGas = 400_000 // 302_647 for https://goerli.etherscan.io/tx/0x540d3e82888b18f89566a988712a7c2ecd45bd2df472f8dd689e319ae9fa4445
 	txData := common.FromHex(multibal.MultiBalanceV0MetaData.Bin)
 	return ContractDeployer.estimateDeployFunding(ctx, txData, deploymentGas, chain, credentialsPath, chainCfg, ui, log, net)
-}
-
-func (contractDeployer) TxData(contractVer uint32, tokenAddr common.Address) (txData []byte, err error) {
-	if tokenAddr == (common.Address{}) {
-		switch contractVer {
-		case 0:
-			return common.FromHex(ethv0.ETHSwapBin), nil
-		case 1:
-			return common.FromHex(ethv1.ETHSwapBin), nil
-		}
-	}
-	var abiData *abi.ABI
-	var bytecode []byte
-	switch contractVer {
-	case 0:
-		bytecode = common.FromHex(erc20v0.ERC20SwapBin)
-		abiData, err = erc20v0.ERC20SwapMetaData.GetAbi()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("error parsing ABI: %w", err)
-	}
-	if abiData == nil {
-		return nil, fmt.Errorf("no abi data for version %d", contractVer)
-	}
-	argData, err := abiData.Pack("", tokenAddr)
-	if err != nil {
-		return nil, fmt.Errorf("error packing token address: %w", err)
-	}
-	return append(bytecode, argData...), nil
-}
-
-// DeployContract deployes a dcrdex swap contract.
-func (contractDeployer) DeployContract(
-	ctx context.Context,
-	chain string,
-	contractVer uint32,
-	tokenAddress common.Address,
-	credentialsPath string,
-	chainCfg *params.ChainConfig,
-	ui *util.UnitInfo,
-	log util.Logger,
-	net util.Network,
-) error {
-	txData, err := ContractDeployer.TxData(contractVer, tokenAddress)
-	if err != nil {
-		return err
-	}
-
-	var deployer deployerFunc
-	isToken := tokenAddress != (common.Address{})
-	if isToken {
-		switch contractVer {
-		case 0:
-			deployer = func(txOpts *bind.TransactOpts, cb bind.ContractBackend) (common.Address, *types.Transaction, error) {
-				contractAddr, tx, _, err := erc20v0.DeployERC20Swap(txOpts, cb, tokenAddress)
-				return contractAddr, tx, err
-			}
-		}
-	} else {
-		switch contractVer {
-		case 0:
-			deployer = func(txOpts *bind.TransactOpts, cb bind.ContractBackend) (common.Address, *types.Transaction, error) {
-				contractAddr, tx, _, err := ethv0.DeployETHSwap(txOpts, cb)
-				return contractAddr, tx, err
-			}
-		case 1:
-			deployer = func(txOpts *bind.TransactOpts, cb bind.ContractBackend) (common.Address, *types.Transaction, error) {
-				contractAddr, tx, _, err := ethv1.DeployETHSwap(txOpts, cb)
-				return contractAddr, tx, err
-			}
-		}
-	}
-	if deployer == nil {
-		return fmt.Errorf("contract version unknown")
-	}
-
-	return ContractDeployer.deployContract(ctx, txData, deployer, chain, credentialsPath, chainCfg, ui, log, net)
 }
 
 type deployerFunc func(txOpts *bind.TransactOpts, cb bind.ContractBackend) (common.Address, *types.Transaction, error)
@@ -396,18 +291,4 @@ func (contractDeployer) DeployMultiBalance(
 		return contractAddr, tx, err
 	}
 	return ContractDeployer.deployContract(ctx, txData, deployer, chain, credentialsPath, chainCfg, ui, log, net)
-}
-
-// BuildDeployTxData builds the transaction data for deploying a DEX swap
-// contract. If tokenAddress is empty, the base asset contract is used.
-// For v1 contracts, EIP-712 signed relay redemptions are supported.
-func BuildDeployTxData(contractVer uint32, tokenAddress string) ([]byte, error) {
-	var tokenAddr common.Address
-	if tokenAddress != "" {
-		if !common.IsHexAddress(tokenAddress) {
-			return nil, fmt.Errorf("invalid token address: %s", tokenAddress)
-		}
-		tokenAddr = common.HexToAddress(tokenAddress)
-	}
-	return ContractDeployer.TxData(contractVer, tokenAddr)
 }

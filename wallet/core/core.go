@@ -40,18 +40,12 @@ const (
 	// legacySeedLength is the length of the generated app seed used for app protection.
 	legacySeedLength = 64
 
-	// pokesCapacity is the maximum number of poke notifications that
-	// will be cached.
-	pokesCapacity = 100
-
 	// walletLockTimeout is the default timeout used when locking wallets.
 	walletLockTimeout = 5 * time.Second
 )
 
 var (
 	unbip = util.BipIDSymbol
-	// The coin waiters will query for transaction data every recheckInterval.
-	recheckInterval = time.Second * 5
 	// When waiting for a wallet to sync, a SyncStatus check will be performed
 	// every syncTickerPeriod. var instead of const for testing purposes.
 	syncTickerPeriod = 3 * time.Second
@@ -2714,23 +2708,6 @@ func (c *Core) Logout() error {
 	return nil
 }
 
-func (c *Core) wait(coinID []byte, assetID uint32, trigger func() (bool, error), action func(error)) {
-	c.waiterMtx.Lock()
-	defer c.waiterMtx.Unlock()
-	c.blockWaiters[coinIDString(assetID, coinID)] = &blockWaiter{
-		assetID: assetID,
-		trigger: trigger,
-		action:  action,
-	}
-}
-
-func (c *Core) waiting(coinID []byte, assetID uint32) bool {
-	c.waiterMtx.RLock()
-	defer c.waiterMtx.RUnlock()
-	_, found := c.blockWaiters[coinIDString(assetID, coinID)]
-	return found
-}
-
 // removeWaiter removes a blockWaiter from the map.
 func (c *Core) removeWaiter(id string) {
 	c.waiterMtx.Lock()
@@ -2812,88 +2789,6 @@ func (c *Core) ValidateAddress(address string, assetID uint32) (bool, error) {
 	return wallet.Wallet.ValidateAddress(address), nil
 }
 
-// ApproveToken calls a wallet's ApproveToken method.
-func (c *Core) ApproveToken(appPW []byte, assetID uint32, onConfirm func()) (string, error) {
-	crypter, err := c.encryptionKey(appPW)
-	if err != nil {
-		return "", err
-	}
-
-	wallet, err := c.connectedWallet(assetID)
-	if err != nil {
-		return "", err
-	}
-
-	err = wallet.Unlock(crypter)
-	if err != nil {
-		return "", err
-	}
-
-	err = wallet.checkPeersAndSyncStatus()
-	if err != nil {
-		return "", err
-	}
-
-	walletOnConfirm := func() {
-		go onConfirm()
-		go c.notify(newTokenApprovalNote(wallet.state()))
-	}
-
-	txID, err := wallet.ApproveToken(0, walletOnConfirm)
-	if err != nil {
-		return "", err
-	}
-
-	c.notify(newTokenApprovalNote(wallet.state()))
-	return txID, nil
-}
-
-// UnapproveToken calls a wallet's UnapproveToken method for a specified
-// version of the token.
-func (c *Core) UnapproveToken(appPW []byte, assetID uint32, version uint32) (string, error) {
-	crypter, err := c.encryptionKey(appPW)
-	if err != nil {
-		return "", err
-	}
-
-	wallet, err := c.connectedWallet(assetID)
-	if err != nil {
-		return "", err
-	}
-
-	err = wallet.Unlock(crypter)
-	if err != nil {
-		return "", err
-	}
-
-	err = wallet.checkPeersAndSyncStatus()
-	if err != nil {
-		return "", err
-	}
-
-	onConfirm := func() {
-		go c.notify(newTokenApprovalNote(wallet.state()))
-	}
-
-	txID, err := wallet.UnapproveToken(version, onConfirm)
-	if err != nil {
-		return "", err
-	}
-
-	c.notify(newTokenApprovalNote(wallet.state()))
-	return txID, nil
-}
-
-// ApproveTokenFee returns the fee for a token approval/unapproval.
-func (c *Core) ApproveTokenFee(assetID uint32, version uint32, approval bool) (uint64, error) {
-	wallet, err := c.connectedWallet(assetID)
-	if err != nil {
-		return 0, err
-	}
-
-	return wallet.ApprovalFee(version, approval)
-}
-
 // BridgeContractApprovalStatus returns the approval status of the bridge
 // contract for the specified asset.
 func (c *Core) BridgeContractApprovalStatus(assetID uint32, bridgeName string) (asset.ApprovalStatus, error) {
@@ -2966,126 +2861,6 @@ func (c *Core) UnapproveBridgeContract(assetID uint32, bridgeName string) (strin
 	// Send immediate notification (unapproval pending)
 	c.notify(newBridgeApprovalNote(wallet.state()))
 	return txID, nil
-}
-
-// DeployContract deploys a smart contract to one or more EVM chains.
-func (c *Core) DeployContract(appPW []byte, assetIDs []uint32, txData []byte, contractVer *uint32, tokenAddress string) ([]*DeployContractResult, error) {
-	_, err := c.encryptionKey(appPW)
-	if err != nil {
-		return nil, newError(authErr, "DeployContract password error: %w", err)
-	}
-	results := make([]*DeployContractResult, 0, len(assetIDs))
-	for _, assetID := range assetIDs {
-		res := &DeployContractResult{AssetID: assetID, Symbol: unbip(assetID)}
-		wallet, err := c.connectedWallet(assetID)
-		if err != nil {
-			res.Error = err.Error()
-			results = append(results, res)
-			continue
-		}
-		deployer, ok := wallet.Wallet.(asset.ContractDeployer)
-		if !ok {
-			res.Error = "wallet does not support contract deployment"
-			results = append(results, res)
-			continue
-		}
-		deployData := txData
-		if deployData == nil && contractVer != nil {
-			deployData, err = deployer.BuildDeployTxData(*contractVer, tokenAddress)
-			if err != nil {
-				res.Error = err.Error()
-				results = append(results, res)
-				continue
-			}
-		}
-		contractAddr, txID, err := deployer.DeployContract(deployData)
-		if err != nil {
-			res.Error = err.Error()
-			results = append(results, res)
-			continue
-		}
-		res.ContractAddr = contractAddr
-		res.TxID = txID
-		results = append(results, res)
-	}
-	return results, nil
-}
-
-// TestContractGas exercises all v1 swap contract functions on the specified
-// chains and tokens, measuring actual gas consumption.
-func (c *Core) TestContractGas(appPW []byte, assetIDs []uint32, tokenAssetIDs []uint32, maxSwaps int) ([]*ContractGasTestResult, error) {
-	_, err := c.encryptionKey(appPW)
-	if err != nil {
-		return nil, newError(authErr, "TestContractGas password error: %w", err)
-	}
-
-	// Group token asset IDs by their host network/chain.
-	tokensByNetwork := make(map[uint32][]uint32)
-	for _, tokenID := range tokenAssetIDs {
-		ti := asset.TokenInfo(tokenID)
-		if ti == nil {
-			return nil, newError(assetSupportErr, "unknown token asset ID %d", tokenID)
-		}
-		tokensByNetwork[ti.NetworkID] = append(tokensByNetwork[ti.NetworkID], tokenID)
-	}
-
-	// Build the set of chains to test. Explicitly listed chains run both
-	// base and token tests. Chains inferred from tokens run tokens only.
-	explicitChains := make(map[uint32]bool, len(assetIDs))
-	for _, id := range assetIDs {
-		explicitChains[id] = true
-	}
-	// Auto-add network chains for tokens not already covered.
-	for networkID := range tokensByNetwork {
-		if !explicitChains[networkID] {
-			assetIDs = append(assetIDs, networkID)
-		}
-	}
-
-	var (
-		results []*ContractGasTestResult
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-	)
-	for _, assetID := range assetIDs {
-		wg.Add(1)
-		go func(assetID uint32) {
-			defer wg.Done()
-			var res []*ContractGasTestResult
-			wallet, err := c.connectedWallet(assetID)
-			if err != nil {
-				res = []*ContractGasTestResult{{
-					AssetID: assetID,
-					Symbol:  unbip(assetID),
-					Error:   err.Error(),
-				}}
-			} else if tester, ok := wallet.Wallet.(asset.ContractGasTester); !ok {
-				res = []*ContractGasTestResult{{
-					AssetID: assetID,
-					Symbol:  unbip(assetID),
-					Error:   "wallet does not support contract gas testing",
-				}}
-			} else {
-				tokensForChain := tokensByNetwork[assetID]
-				tokensOnly := !explicitChains[assetID]
-				gasResults, err := tester.TestContractGas(1, maxSwaps, tokensForChain, tokensOnly)
-				if err != nil {
-					res = []*ContractGasTestResult{{
-						AssetID: assetID,
-						Symbol:  unbip(assetID),
-						Error:   err.Error(),
-					}}
-				} else {
-					res = gasResults
-				}
-			}
-			mu.Lock()
-			results = append(results, res...)
-			mu.Unlock()
-		}(assetID)
-	}
-	wg.Wait()
-	return results, nil
 }
 
 // Bridge initiates a bridge.
@@ -3647,28 +3422,6 @@ func (c *Core) WalletRestorationInfo(pw []byte, assetID uint32) ([]*asset.Wallet
 	}
 
 	return restorationInfo, nil
-}
-
-// createFile creates a new file and will create the file directory if it does
-// not exist.
-func createFile(fileName string) (*os.File, error) {
-	if fileName == "" {
-		return nil, errors.New("no file path specified for creating")
-	}
-	fileDir := filepath.Dir(fileName)
-	if !util.FileExists(fileDir) {
-		err := os.MkdirAll(fileDir, 0755)
-		if err != nil {
-			return nil, fmt.Errorf("os.MkdirAll error: %w", err)
-		}
-	}
-	fileName = util.CleanAndExpandPath(fileName)
-	// Errors if file exists.
-	f, err := os.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
 }
 
 // WalletPeers returns a list of peers that a wallet is connected to. It also
