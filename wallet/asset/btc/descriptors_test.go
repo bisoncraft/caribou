@@ -18,6 +18,7 @@ import (
 var chainParams = &chaincfg.RegressionNetParams
 
 func TestParseDescriptor(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		desc    string
@@ -144,6 +145,7 @@ func TestParseDescriptor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := ParseDescriptor(tt.desc)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseDescriptor() error = %v, wantErr %v", err, tt.wantErr)
@@ -159,6 +161,7 @@ func TestParseDescriptor(t *testing.T) {
 }
 
 func TestDescriptors(t *testing.T) {
+	t.Parallel()
 	// getaddressinfo bcrt1qwuqqg9dajf7f7ddxp4un3p2dtagvrny4qll6xe
 	descAddr := "wpkh([b940190e/84'/1'/0'/0/0]030003429cd5d23b1a229ec88dba6f2b69fb539fe26cd80229267aa0c992dc26b2)#0pfw7rck"
 	d, err := ParseDescriptor(descAddr)
@@ -279,6 +282,7 @@ func TestDescriptors(t *testing.T) {
 }
 
 func TestParsePath(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		path        string
@@ -320,6 +324,7 @@ func TestParsePath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			gotPath, gotIsRange, err := ParsePath(tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParsePath() error = %v, wantErr %v", err, tt.wantErr)
@@ -336,6 +341,7 @@ func TestParsePath(t *testing.T) {
 }
 
 func TestParseKeyExtended(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		keyStr          string
@@ -383,6 +389,7 @@ func TestParseKeyExtended(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, gotFingerprint, gotPath, gotIsRange, err := ParseKeyExtended(tt.keyStr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ParseKeyExtended() error = %v, wantErr %v", err, tt.wantErr)
@@ -405,6 +412,7 @@ func TestParseKeyExtended(t *testing.T) {
 }
 
 func Test_checkDescriptorKey(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		key  string
@@ -438,6 +446,7 @@ func Test_checkDescriptorKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := checkDescriptorKey(tt.key); got != tt.want {
 				t.Errorf("checkDescriptorKey() = %v, want %v", got, tt.want)
 			}

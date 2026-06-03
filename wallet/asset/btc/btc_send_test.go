@@ -14,6 +14,7 @@ import (
 )
 
 func TestLockUnlock(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testLockUnlock)
 }
 
@@ -50,18 +51,21 @@ func testLockUnlock(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestWithdraw(t *testing.T) {
+	t.Parallel()
 	runRubric(t, func(t *testing.T, segwit bool, walletType string) {
 		testSender(t, tWithdrawSender, segwit, walletType)
 	})
 }
 
 func TestSend(t *testing.T) {
+	t.Parallel()
 	runRubric(t, func(t *testing.T, segwit bool, walletType string) {
 		testSender(t, tSendSender, segwit, walletType)
 	})
 }
 
 func TestSendEdges(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testSendEdges)
 }
 
@@ -146,6 +150,7 @@ func testSendEdges(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestSyncStatus(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testSyncStatus)
 }
 

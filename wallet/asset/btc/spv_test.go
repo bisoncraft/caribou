@@ -475,6 +475,7 @@ func (p *tSPVPeer) Addr() string {
 }
 
 func TestSwapConfirmations(t *testing.T) {
+	t.Parallel()
 	wallet, node, shutdown := tNewWallet(true, walletTypeSPV)
 	defer shutdown()
 
@@ -586,6 +587,7 @@ func TestSwapConfirmations(t *testing.T) {
 }
 
 func TestFindBlockForTime(t *testing.T) {
+	t.Parallel()
 	wallet, node, shutdown := tNewWallet(true, walletTypeSPV)
 	defer shutdown()
 	spv := wallet.node.(*spvWallet)
@@ -642,6 +644,7 @@ func TestFindBlockForTime(t *testing.T) {
 }
 
 func TestGetTxOut(t *testing.T) {
+	t.Parallel()
 	wallet, node, shutdown := tNewWallet(true, walletTypeSPV)
 	defer shutdown()
 	spv := wallet.node.(*spvWallet)
@@ -747,6 +750,10 @@ func TestGetTxOut(t *testing.T) {
 }
 
 func TestTryBlocksWithNotifier(t *testing.T) {
+	// Not parallel: this test mutates the package-level blockTicker and
+	// walletBlockAllowance, which every wallet's watchBlocks goroutine
+	// reads. Running it in the sequential phase keeps it from racing the
+	// parallel tests.
 	defaultWalletBlockAllowance := walletBlockAllowance
 	defaultBlockTicker := blockTicker
 
@@ -855,6 +862,7 @@ func TestTryBlocksWithNotifier(t *testing.T) {
 }
 
 func TestGetBlockHeader(t *testing.T) {
+	t.Parallel()
 	wallet, node, shutdown := tNewWallet(true, walletTypeSPV)
 	defer shutdown()
 
@@ -952,6 +960,7 @@ func TestGetBlockHeader(t *testing.T) {
 }
 
 func TestCheckRescanStall(t *testing.T) {
+	t.Parallel()
 	data := newTestData()
 	btcWallet := &tBtcWallet{testData: data}
 	neutrinoClient := &tNeutrinoClient{data}

@@ -24,6 +24,7 @@ import (
 const walletPass = "walletpass"
 
 func TestPSBT(t *testing.T) {
+	t.Parallel()
 	// an unsigned swap txn funded by a single p2wpkh
 	txRaw, _ := hex.DecodeString("010000000118f36e05994f8e69dace16f4a3d4c9ff8db6f58bf48d498b1c0d6daf63c6f8690100000000ffffffff02408e2c0000000000220020e0133024bb27f510f6959467df91ed5daa791f598ba1c09ef1f1ac4540bfdda16e7710000000000016001460a8dbedd538501e2ad9e9f5a4d8a11e35a6c4e700000000")
 	msgTx := wire.NewMsgTx(wire.TxVersion)
@@ -46,6 +47,7 @@ func TestPSBT(t *testing.T) {
 // This test uses a testnet BTC Electrum wallet listening on localhost 6789.
 
 func TestElectrumExchangeWallet(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

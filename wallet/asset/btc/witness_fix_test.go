@@ -20,6 +20,7 @@ var tx7393096d9 []byte
 var tx73be398c4 []byte
 
 func TestBigWitness(t *testing.T) {
+	t.Parallel()
 	msgBlock := &wire.MsgBlock{}
 	err := msgBlock.Deserialize(bytes.NewReader(block757922))
 	if err != nil {

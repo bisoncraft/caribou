@@ -35,8 +35,6 @@ import (
 var (
 	tLogger        util.Logger
 	tCtx           context.Context
-	tSwapSizeBase  uint64 = InitTxSizeBaseSegwit
-	tSwapSize      uint64 = InitTxSizeSegwit
 	optimalFeeRate uint64 = 24
 	tErr                  = fmt.Errorf("test error")
 	tTxID                 = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
@@ -45,7 +43,6 @@ var (
 	tP2PKH         []byte
 	tP2WPKH        []byte
 	tP2WPKHAddr    = "bc1qq49ypf420s0kh52l9pk7ha8n8nhsugdpculjas"
-	rnd            = rand.New(rand.NewPCG(0x12345678, 0x87654321))
 )
 
 func boolPtr(v bool) *bool {
@@ -103,6 +100,7 @@ type testData struct {
 	signFunc      func(*wire.MsgTx)
 
 	blockchainMtx       sync.RWMutex
+	rnd                 *rand.Rand // guarded by blockchainMtx, see addRawTx
 	verboseBlocks       map[chainhash.Hash]*msgBlockWithHeight
 	dbBlockForTx        map[chainhash.Hash]*hashEntry
 	mainchain           map[int64]*chainhash.Hash
@@ -160,6 +158,7 @@ func newTestData() *testData {
 	// setup genesis block, required by bestblock polling goroutine
 	genesisHash := chaincfg.MainNetParams.GenesisHash
 	return &testData{
+		rnd:      rand.New(rand.NewPCG(0x12345678, 0x87654321)),
 		txOutRes: newTxOutResult([]byte{}, 1, 0),
 		verboseBlocks: map[chainhash.Hash]*msgBlockWithHeight{
 			*genesisHash: {msgBlock: &wire.MsgBlock{}},
@@ -494,7 +493,7 @@ func (c *testData) addRawTx(blockHeight int64, tx *wire.MsgTx) (*chainhash.Hash,
 				prevBlock = &chainhash.Hash{}
 			}
 		}
-		nonce, bits := rnd.Uint32(), rnd.Uint32()
+		nonce, bits := c.rnd.Uint32(), c.rnd.Uint32()
 		header := wire.NewBlockHeader(0, prevBlock, &chainhash.Hash{} /* lie, maybe fix this */, bits, nonce)
 		header.Timestamp = generateTestBlockTime(blockHeight)
 		msgBlock := wire.NewMsgBlock(header) // only now do we know the block hash
@@ -575,14 +574,6 @@ func makeSwapContract(segwit bool, lockTimeOffset time.Duration) (secret []byte,
 }
 
 func tNewWallet(segwit bool, walletType string) (*intermediaryWallet, *testData, func()) {
-	if segwit {
-		tSwapSize = InitTxSizeSegwit
-		tSwapSizeBase = InitTxSizeBaseSegwit
-	} else {
-		tSwapSize = InitTxSize
-		tSwapSizeBase = InitTxSizeBase
-	}
-
 	dataDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		panic("couldn't create data dir:" + err.Error())
@@ -704,12 +695,15 @@ type testFunc func(t *testing.T, segwit bool, walletType string)
 
 func runRubric(t *testing.T, f testFunc) {
 	t.Run("rpc|segwit", func(t *testing.T) {
+		t.Parallel()
 		f(t, true, walletTypeRPC)
 	})
 	t.Run("rpc|non-segwit", func(t *testing.T) {
+		t.Parallel()
 		f(t, false, walletTypeRPC)
 	})
 	t.Run("spv|segwit", func(t *testing.T) {
+		t.Parallel()
 		f(t, true, walletTypeSPV)
 	})
 }
@@ -959,6 +953,7 @@ func testSender(t *testing.T, senderType tSenderType, segwit bool, walletType st
 }
 
 func TestPrettyBTC(t *testing.T) {
+	t.Parallel()
 	type test struct {
 		v   uint64
 		exp string
@@ -1002,6 +997,7 @@ func (r *tReconfigurer) Reconfigure(walletCfg *asset.WalletConfig, currentAddres
 }
 
 func TestReconfigure(t *testing.T) {
+	t.Parallel()
 	wallet, _, shutdown := tNewWallet(false, walletTypeRPC)
 	// We don't need the wallet running, and we need to write to the node field,
 	// which is used in the block loop.
@@ -1058,6 +1054,7 @@ func TestReconfigure(t *testing.T) {
 }
 
 func TestAddressRecycling(t *testing.T) {
+	t.Parallel()
 	w, td, shutdown := tNewWallet(false, walletTypeSPV)
 	defer shutdown()
 
@@ -1147,6 +1144,8 @@ func TestAddressRecycling(t *testing.T) {
 }
 
 func TestFindBond(t *testing.T) {
+	// Subtests share a single wallet/node fixture that each case mutates, so
+	// this test is not parallelized.
 	wallet, node, shutdown := tNewWallet(false, walletTypeRPC)
 	defer shutdown()
 
@@ -1306,10 +1305,13 @@ func TestFindBond(t *testing.T) {
 }
 
 func TestIDUnknownTx(t *testing.T) {
+	t.Parallel()
 	t.Run("non-segwit", func(t *testing.T) {
+		t.Parallel()
 		testIDUnknownTx(t, false)
 	})
 	t.Run("segwit", func(t *testing.T) {
+		t.Parallel()
 		testIDUnknownTx(t, true)
 	})
 }
@@ -1538,6 +1540,7 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 
 	runTest := func(tt *test) {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			wallet, node, shutdown := tNewWallet(true, walletTypeRPC)
 			defer shutdown()
 			txID := tt.tx.TxHash().String()
