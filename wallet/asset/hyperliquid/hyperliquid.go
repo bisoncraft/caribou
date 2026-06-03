@@ -1,0 +1,972 @@
+// This code is available on the terms of the project LICENSE.md file,
+// also available online at https://blueoakcouncil.org/license/1.0.0.
+
+package hyperliquid
+
+import (
+	"bytes"
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	gethcrypto "github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/util/keygen"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/decred/dcrd/hdkeychain/v3"
+	"golang.org/x/net/proxy"
+)
+
+var (
+	seedDerivationPath = []uint32{
+		hdkeychain.HardenedKeyStart + 44,    // purpose 44'
+		hdkeychain.HardenedKeyStart + 10001, // HYPE coin type 10001'
+		hdkeychain.HardenedKeyStart,         // account 0'
+		0,                                   // branch 0
+		0,                                   // index 0
+	}
+
+	// evmAddressRE matches a 0x-prefixed 40-hex-char Ethereum-style address.
+	evmAddressRE = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+
+	walletDefinition = &asset.WalletDefinition{
+		Seeded:      true,
+		Type:        "rpc",
+		Tab:         "Native",
+		Description: "Hyperliquid HYPE wallet",
+		ConfigOpts: []*asset.ConfigOption{{
+			Key:         "apiendpoint",
+			DisplayName: "API Endpoint",
+			Description: "Hyperliquid API base URL (optional override)",
+		}},
+	}
+
+	WalletInfo = asset.WalletInfo{
+		Name:              "Hyperliquid",
+		SupportedVersions: []uint32{0},
+		UnitInfo:          UnitInfo,
+		AvailableWallets:  []*asset.WalletDefinition{walletDefinition},
+		BlockchainClass:   asset.BlockchainClassAccount,
+		Network: &asset.Network{
+			ID:            BipID,
+			NativeAssetID: BipID,
+		},
+	}
+)
+
+func init() {
+	asset.Register(BipID, &Driver{})
+}
+
+// Driver implements asset.Driver and asset.Creator.
+type Driver struct{}
+
+var _ asset.Driver = (*Driver)(nil)
+var _ asset.Creator = (*Driver)(nil)
+
+func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
+	return newWallet(cfg, logger, network)
+}
+
+func (d *Driver) DecodeCoinID(coinID []byte) (string, error) {
+	return decodeCoinID(coinID)
+}
+
+func (d *Driver) Info() *asset.WalletInfo {
+	wi := WalletInfo
+	return &wi
+}
+
+func (d *Driver) Exists(walletType, dataDir string, _ map[string]string, _ util.Network) (bool, error) {
+	if walletType != "rpc" {
+		return false, fmt.Errorf("unknown wallet type %q", walletType)
+	}
+	_, err := os.Stat(filepath.Join(dataDir, keyFileName))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (d *Driver) Create(params *asset.CreateWalletParams) error {
+	if params.Type != "rpc" {
+		return fmt.Errorf("unknown wallet type %q", params.Type)
+	}
+	if len(params.Seed) == 0 {
+		return fmt.Errorf("wallet seed cannot be empty")
+	}
+
+	privKey, addr, zero, err := privKeyFromSeed(params.Seed)
+	if err != nil {
+		return err
+	}
+	defer zero()
+
+	if err := os.MkdirAll(params.DataDir, 0700); err != nil {
+		return fmt.Errorf("creating data directory: %w", err)
+	}
+
+	_ = addr
+	return saveKeyFile(filepath.Join(params.DataDir, keyFileName), privKey, params.Pass)
+}
+
+// HyperWallet implements asset.Wallet for the Hyperliquid L1.
+type HyperWallet struct {
+	log         util.Logger
+	net         util.Network
+	emit        *asset.WalletEmitter
+	peersChange func(uint32, error)
+	dataDir     string
+	settings    map[string]string
+
+	keyMtx  sync.RWMutex
+	privKey []byte // nil when locked; 32-byte secp256k1 private key
+	pubKey  []byte // compressed secp256k1 public key (33 bytes)
+	address string // "0x..." lowercase hex
+
+	sendMtx       sync.Mutex
+	nextSendNonce uint64
+
+	hypeTokenID string // "HYPE:<tokenId>", resolved on Connect
+
+	rpc  *rpcClient
+	txDB *hyperTxDB
+
+	scanMtx sync.Mutex
+	tipMtx  sync.RWMutex
+	tip     uint64    // unix milliseconds of last successful API contact
+	tipTime time.Time // wall time of last tip update
+
+	// lastScannedMS is the unix millisecond timestamp up to which we have
+	// scanned ledger updates for incoming transactions.
+	lastScannedMS int64
+}
+
+var _ asset.Wallet = (*HyperWallet)(nil)
+var _ asset.Authenticator = (*HyperWallet)(nil)
+var _ asset.Withdrawer = (*HyperWallet)(nil)
+var _ asset.FeeRater = (*HyperWallet)(nil)
+var _ asset.Rescanner = (*HyperWallet)(nil)
+
+func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*HyperWallet, error) {
+	kf, err := readKeyFile(filepath.Join(cfg.DataDir, keyFileName))
+	if err != nil {
+		return nil, fmt.Errorf("loading key file: %w", err)
+	}
+
+	return &HyperWallet{
+		log:         logger,
+		net:         network,
+		emit:        cfg.Emit,
+		peersChange: cfg.PeersChange,
+		dataDir:     cfg.DataDir,
+		settings:    cfg.Settings,
+		pubKey:      kf.PubKey,
+		address:     pubKeyToAddress(kf.PubKey),
+	}, nil
+}
+
+// Unlock decrypts the private key with the wallet password.
+func (w *HyperWallet) Unlock(pw []byte) error {
+	kf, err := readKeyFile(filepath.Join(w.dataDir, keyFileName))
+	if err != nil {
+		return fmt.Errorf("reading key file: %w", err)
+	}
+
+	privBytes, err := decryptSeed(kf.EncryptedSeed, pw)
+	if err != nil {
+		return fmt.Errorf("decrypting key: %w", err)
+	}
+
+	// Verify the decrypted key matches the stored public key.
+	priv, err := gethcrypto.ToECDSA(privBytes)
+	if err != nil {
+		encode.ClearBytes(privBytes)
+		return fmt.Errorf("parsing private key: %w", err)
+	}
+	derivedPub := gethcrypto.CompressPubkey(&priv.PublicKey)
+	// priv is only needed for the pubkey check; clear it immediately.
+	priv = nil
+	if !bytes.Equal(derivedPub, w.pubKey) {
+		encode.ClearBytes(privBytes)
+		return fmt.Errorf("decrypted key does not match stored public key")
+	}
+
+	w.keyMtx.Lock()
+	encode.ClearBytes(w.privKey)
+	w.privKey = privBytes
+	w.keyMtx.Unlock()
+	return nil
+}
+
+// Lock zeros the private key from memory.
+func (w *HyperWallet) Lock() error {
+	w.keyMtx.Lock()
+	defer w.keyMtx.Unlock()
+	encode.ClearBytes(w.privKey)
+	w.privKey = nil
+	return nil
+}
+
+// Locked returns true if the private key is not in memory.
+func (w *HyperWallet) Locked() bool {
+	w.keyMtx.RLock()
+	defer w.keyMtx.RUnlock()
+	return w.privKey == nil
+}
+
+// Connect establishes the API connection, resolves the HYPE token ID, and
+// starts the tip poller.
+func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	rpc, err := newRPCClient(w.apiEndpoint(), w.settings["torproxy"], w.log)
+	if err != nil {
+		return nil, fmt.Errorf("creating RPC client: %w", err)
+	}
+	w.rpc = rpc
+
+	// Resolve HYPE token identifier from spot meta.
+	meta, err := rpc.spotMeta(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fetching spot meta: %w", err)
+	}
+	hypeID, err := hypeTokenIDFromMeta(meta)
+	if err != nil {
+		return nil, fmt.Errorf("resolving HYPE token ID: %w", err)
+	}
+	w.hypeTokenID = hypeID
+	w.log.Debugf("HYPE token ID: %s", hypeID)
+
+	// Open transaction database.
+	txDB, err := newTxDB(filepath.Join(w.dataDir, "txdb"), w.log.SubLogger("TXDB"))
+	if err != nil {
+		return nil, fmt.Errorf("opening tx database: %w", err)
+	}
+	w.txDB = txDB
+
+	lastScannedMS, err := txDB.getLastScannedMS()
+	if err != nil {
+		_ = txDB.Close()
+		w.txDB = nil
+		return nil, fmt.Errorf("loading persisted scan watermark: %w", err)
+	}
+	maxPendingNonce, err := txDB.highestPendingNonce()
+	if err != nil {
+		_ = txDB.Close()
+		w.txDB = nil
+		return nil, fmt.Errorf("loading pending send state: %w", err)
+	}
+
+	// Seed initial tip from local clock; spotMeta already confirmed connectivity.
+	t := time.Now()
+	w.tipMtx.Lock()
+	w.tip = uint64(t.UnixMilli())
+	w.tipTime = t
+	w.lastScannedMS = lastScannedMS
+	w.tipMtx.Unlock()
+	if uint64(lastScannedMS) > maxPendingNonce {
+		maxPendingNonce = uint64(lastScannedMS)
+	}
+	w.sendMtx.Lock()
+	w.nextSendNonce = maxPendingNonce
+	w.sendMtx.Unlock()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.tipPoller(ctx)
+	}()
+
+	return &wg, nil
+}
+
+func (w *HyperWallet) Info() *asset.WalletInfo {
+	wi := WalletInfo
+	return &wi
+}
+
+func (w *HyperWallet) Balance() (*asset.Balance, error) {
+	if w.rpc == nil {
+		return nil, asset.ErrConnectionDown
+	}
+	available, held, err := w.rpc.spotBalance(context.Background(), w.address)
+	if err != nil {
+		return nil, err
+	}
+	return &asset.Balance{
+		Available: available,
+		Locked:    held,
+	}, nil
+}
+
+func (w *HyperWallet) DepositAddress() (string, error) {
+	return w.address, nil
+}
+
+func (w *HyperWallet) OwnsDepositAddress(address string) (bool, error) {
+	return strings.EqualFold(address, w.address), nil
+}
+
+func (w *HyperWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	return w.send(address, value)
+}
+
+func (w *HyperWallet) Withdraw(address string, value, _ uint64) (asset.Coin, error) {
+	return w.send(address, value)
+}
+
+func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
+	if !w.ValidateAddress(address) {
+		return nil, fmt.Errorf("invalid Hyperliquid address %q", address)
+	}
+	if value == 0 {
+		return nil, fmt.Errorf("cannot send zero value")
+	}
+
+	w.keyMtx.RLock()
+	if w.privKey == nil {
+		w.keyMtx.RUnlock()
+		return nil, fmt.Errorf("wallet is locked")
+	}
+	privKeyCopy := make([]byte, len(w.privKey))
+	copy(privKeyCopy, w.privKey)
+	w.keyMtx.RUnlock()
+	defer encode.ClearBytes(privKeyCopy)
+
+	priv, err := gethcrypto.ToECDSA(privKeyCopy)
+	if err != nil {
+		return nil, fmt.Errorf("loading private key: %w", err)
+	}
+
+	nonce := w.nextSpotSendNonce()
+	amtStr := atomsToHYPE(value)
+	chainName := eip712ChainNames[w.net]
+
+	action := spotSendAction{
+		Type:             "spotSend",
+		HyperliquidChain: chainName,
+		SignatureChainID: fmt.Sprintf("0x%x", eip712ChainID),
+		Destination:      address,
+		Token:            w.hypeTokenID,
+		Amount:           amtStr,
+		Time:             nonce,
+	}
+
+	hash := spotSendEIP712Hash(w.net, address, w.hypeTokenID, amtStr, nonce)
+	sig, err := signHash(priv, hash)
+	if err != nil {
+		return nil, fmt.Errorf("signing action: %w", err)
+	}
+
+	// Use a nonce-based hex string as the pending tx ID. The tip poller
+	// replaces it with the real hash from the ledger once confirmed.
+	txID := fmt.Sprintf("0x%016x", nonce)
+	recipient := address
+	wtx := &asset.WalletTransaction{
+		Type:      asset.Send,
+		ID:        txID,
+		Amount:    value,
+		Fees:      0,
+		Recipient: &recipient,
+		AdditionalData: map[string]string{
+			"nonce": strconv.FormatUint(nonce, 10),
+		},
+	}
+
+	// Store the pending record before broadcasting so a storeTx failure
+	// after a successful send can never leave the transaction untracked.
+	if w.txDB != nil {
+		if err := w.txDB.storeTx(&dbTx{
+			WalletTransaction: wtx,
+			SubmissionTime:    uint64(time.Now().Unix()),
+		}); err != nil {
+			return nil, fmt.Errorf("recording pending send: %w", err)
+		}
+	}
+
+	if err := w.rpc.spotSend(context.Background(), action, sig, nonce); err != nil {
+		// Remove the stored pending entry so it doesn't linger.
+		if w.txDB != nil {
+			if delErr := w.txDB.deleteTx(txID); delErr != nil {
+				w.log.Errorf("Cleaning up pending tx %s after failed send: %v", txID, delErr)
+			}
+		}
+		return nil, fmt.Errorf("spot send: %w", err)
+	}
+
+	if w.emit != nil {
+		w.emit.TransactionNote(wtx, true)
+	}
+
+	return &coin{txID: txID, value: value}, nil
+}
+
+func (w *HyperWallet) ValidateAddress(address string) bool {
+	return evmAddressRE.MatchString(address)
+}
+
+func (w *HyperWallet) SyncStatus() (*asset.SyncStatus, error) {
+	w.tipMtx.RLock()
+	tipTime := w.tipTime
+	w.tipMtx.RUnlock()
+
+	synced := !tipTime.IsZero() && time.Since(tipTime) < time.Duration(MaxBlockInterval)*time.Second
+	return &asset.SyncStatus{Synced: synced}, nil
+}
+
+func (w *HyperWallet) StandardSendFee(_ uint64) uint64 { return 0 }
+func (w *HyperWallet) FeeRate() uint64                 { return 0 }
+
+func (w *HyperWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+	if w.txDB == nil || req == nil {
+		return &asset.TxHistoryResponse{}, nil
+	}
+	return w.txDB.getTxs(req)
+}
+
+func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.WalletTransaction, error) {
+	if w.txDB != nil {
+		wt, err := w.txDB.getTx(txID)
+		if err != nil {
+			return nil, err
+		}
+		if wt != nil {
+			return wt.WalletTransaction, nil
+		}
+	}
+	return nil, asset.CoinNotFoundError
+}
+
+func (w *HyperWallet) PendingTransactions(_ context.Context) []*asset.WalletTransaction {
+	if w.txDB == nil {
+		return nil
+	}
+	pending, err := w.txDB.getPendingTxs()
+	if err != nil {
+		w.log.Errorf("Getting pending txs: %v", err)
+		return nil
+	}
+	txs := make([]*asset.WalletTransaction, 0, len(pending))
+	for _, wt := range pending {
+		txs = append(txs, wt.WalletTransaction)
+	}
+	return txs
+}
+
+func (w *HyperWallet) nextSpotSendNonce() uint64 {
+	nonce := uint64(time.Now().UnixMilli())
+
+	w.sendMtx.Lock()
+	defer w.sendMtx.Unlock()
+
+	if nonce <= w.nextSendNonce {
+		nonce = w.nextSendNonce + 1
+	}
+	w.nextSendNonce = nonce
+	return nonce
+}
+
+func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
+	if w.rpc == nil {
+		return asset.ErrConnectionDown
+	}
+	updates, err := w.rpc.ledgerUpdates(ctx, w.address, 0)
+	if err != nil {
+		return fmt.Errorf("fetching ledger updates: %w", err)
+	}
+	for _, u := range updates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		w.processLedgerUpdate(u)
+	}
+	if err := w.advanceLastScannedMS(maxLedgerUpdateTime(updates) + 1); err != nil {
+		return fmt.Errorf("persisting rescan watermark: %w", err)
+	}
+	return nil
+}
+
+// tipPoller maintains a WebSocket connection for real-time ledger events.
+// On each (re)connect it first calls scanLedger to catch up on any events
+// missed while offline, then enters the live message loop.
+func (w *HyperWallet) tipPoller(ctx context.Context) {
+	defer func() {
+		if w.txDB != nil {
+			_ = w.txDB.Close()
+		}
+	}()
+
+	var netDial func(context.Context, string, string) (net.Conn, error)
+	if torProxy := w.settings["torproxy"]; torProxy != "" {
+		d, err := proxy.SOCKS5("tcp", torProxy, nil, proxy.Direct)
+		if err != nil {
+			w.log.Errorf("WS proxy dialer: %v", err)
+		} else {
+			netDial = func(_ context.Context, network, addr string) (net.Conn, error) {
+				return d.Dial(network, addr)
+			}
+		}
+	}
+
+	wsc := &wsClient{
+		url:     w.wsEndpoint(),
+		user:    w.address,
+		log:     w.log,
+		netDial: netDial,
+		onEvent: w.processLedgerUpdate,
+		onLive: func() {
+			t := time.Now()
+			w.tipMtx.Lock()
+			w.tip = uint64(t.UnixMilli())
+			w.tipTime = t
+			tip := w.tip
+			w.tipMtx.Unlock()
+			if w.emit != nil {
+				w.emit.TipChange(tip)
+			}
+		},
+		onReconnect: w.scanLedger,
+	}
+	wsc.run(ctx)
+}
+
+func (w *HyperWallet) wsEndpoint() string {
+	if ep, ok := w.settings["wsendpoint"]; ok && ep != "" {
+		return ep
+	}
+	if ep, ok := DefaultWSEndpoints[w.net]; ok {
+		return ep
+	}
+	return DefaultWSEndpoints[util.Mainnet]
+}
+
+// scanLedger fetches ledger updates since lastScannedMS and processes them.
+// Returns an error if the API call fails; on success the caller should update
+// the tip timestamp.
+func (w *HyperWallet) scanLedger(ctx context.Context) error {
+	// Snapshot the watermark before the HTTP call; do not hold the lock
+	// across the network round-trip.
+	w.tipMtx.RLock()
+	since := w.lastScannedMS
+	w.tipMtx.RUnlock()
+
+	updates, err := w.rpc.ledgerUpdates(ctx, w.address, since)
+	if err != nil {
+		return err
+	}
+
+	for _, u := range updates {
+		w.processLedgerUpdate(u)
+	}
+
+	if err := w.advanceLastScannedMS(maxLedgerUpdateTime(updates) + 1); err != nil {
+		return fmt.Errorf("persisting scan watermark: %w", err)
+	}
+	return nil
+}
+
+func maxLedgerUpdateTime(updates []ledgerUpdate) int64 {
+	var maxTime int64 = -1
+	for _, u := range updates {
+		if int64(u.Time) > maxTime {
+			maxTime = int64(u.Time)
+		}
+	}
+	return maxTime
+}
+
+func (w *HyperWallet) advanceLastScannedMS(next int64) error {
+	if next <= 0 {
+		return nil
+	}
+
+	w.scanMtx.Lock()
+	defer w.scanMtx.Unlock()
+
+	w.tipMtx.RLock()
+	current := w.lastScannedMS
+	w.tipMtx.RUnlock()
+	if next <= current {
+		return nil
+	}
+
+	if w.txDB != nil {
+		if err := w.txDB.setLastScannedMS(next); err != nil {
+			return err
+		}
+	}
+
+	w.tipMtx.Lock()
+	if next > w.lastScannedMS {
+		w.lastScannedMS = next
+	}
+	w.tipMtx.Unlock()
+	return nil
+}
+
+// processLedgerUpdate handles a single ledger entry: confirms pending sent txs
+// and stores newly detected incoming transfers.
+func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
+	if w.txDB == nil {
+		return
+	}
+
+	if u.Delta.Coin != "HYPE" {
+		return
+	}
+
+	switch u.Delta.Type {
+	case "spotTransfer", "transfer", "deposit", "internalTransfer":
+		w.handleTransferUpdate(u)
+	}
+}
+
+func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
+	amount, err := parseHYPE(u.Delta.Amount)
+	if err != nil {
+		w.log.Warnf("Parsing ledger amount %q: %v", u.Delta.Amount, err)
+		return
+	}
+
+	isOutgoing := strings.EqualFold(u.Delta.User, w.address)
+	isIncoming := strings.EqualFold(u.Delta.Destination, w.address)
+
+	if isOutgoing {
+		// Try to match and confirm a pending send tx by nonce proximity.
+		w.confirmPendingSend(u, amount)
+		return
+	}
+
+	if !isIncoming {
+		return
+	}
+
+	// Incoming transfer not already in the DB.
+	if existing, _ := w.txDB.getTx(u.Hash); existing != nil {
+		return
+	}
+
+	w.tipMtx.RLock()
+	tip := w.tip
+	w.tipMtx.RUnlock()
+
+	sender := u.Delta.User
+	wtx := &asset.WalletTransaction{
+		Type:        asset.Receive,
+		ID:          u.Hash,
+		Amount:      amount,
+		BlockNumber: tip,
+		Confirmed:   true,
+		Recipient:   &sender,
+		AdditionalData: map[string]string{
+			"time": strconv.FormatUint(u.Time, 10),
+		},
+	}
+
+	if err := w.txDB.storeTx(&dbTx{
+		WalletTransaction: wtx,
+		SubmissionTime:    uint64(time.Now().Unix()),
+	}); err != nil {
+		w.log.Errorf("Storing receive tx %s: %v", u.Hash, err)
+		return
+	}
+
+	w.log.Infof("Incoming HYPE transfer %s: %s HYPE from %s", u.Hash, u.Delta.Amount, u.Delta.User)
+	if w.emit != nil {
+		w.emit.TransactionNote(wtx, true)
+	}
+}
+
+// confirmPendingSend finds the pending send matching ledger update u (matched
+// by nonce stored in AdditionalData) and updates it with the confirmed state.
+// Pending entries older than pendingTTL are expired opportunistically.
+func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
+	pending, err := w.txDB.getPendingTxs()
+	if err != nil {
+		w.log.Errorf("Getting pending txs: %v", err)
+		return
+	}
+
+	cutoff := uint64(time.Now().Unix()) - pendingTTL
+	for _, p := range pending {
+		if p.SubmissionTime > 0 && p.SubmissionTime < cutoff {
+			w.log.Infof("Expiring stale pending send %s (submitted %ds ago)",
+				p.ID, uint64(time.Now().Unix())-p.SubmissionTime)
+			if err := w.txDB.deleteTx(p.ID); err != nil {
+				w.log.Errorf("Deleting expired pending tx %s: %v", p.ID, err)
+			}
+			continue
+		}
+
+		nonceStr, ok := p.AdditionalData["nonce"]
+		if !ok {
+			continue
+		}
+		nonce, err := strconv.ParseUint(nonceStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		// Match by nonce proximity (within 5 seconds) and amount.
+		diff := int64(u.Time) - int64(nonce)
+		if diff < -5000 || diff > 5000 {
+			continue
+		}
+		if p.Amount != amount {
+			continue
+		}
+		if p.Recipient == nil || !strings.EqualFold(*p.Recipient, u.Delta.Destination) {
+			continue
+		}
+
+		w.tipMtx.RLock()
+		tip := w.tip
+		w.tipMtx.RUnlock()
+
+		oldID := p.ID
+		p.ID = u.Hash
+		p.BlockNumber = tip
+		p.Confirmed = true
+		p.AdditionalData["txHash"] = u.Hash
+
+		// Store the confirmed entry before deleting the pending one so the tx
+		// is never lost if the store fails.
+		if err := w.txDB.storeTx(p); err != nil {
+			w.log.Errorf("Storing confirmed send tx %s: %v", u.Hash, err)
+			return
+		}
+		if err := w.txDB.deleteTx(oldID); err != nil {
+			w.log.Warnf("Removing stale pending tx %s: %v", oldID, err)
+		}
+
+		w.log.Infof("Send tx confirmed: %s (%s HYPE)", u.Hash, u.Delta.Amount)
+		if w.emit != nil {
+			w.emit.TransactionNote(p.WalletTransaction, false)
+		}
+		return
+	}
+}
+
+func (w *HyperWallet) apiEndpoint() string {
+	if ep, ok := w.settings["apiendpoint"]; ok && ep != "" {
+		return ep
+	}
+	if ep, ok := DefaultAPIEndpoints[w.net]; ok {
+		return ep
+	}
+	return DefaultAPIEndpoints[util.Mainnet]
+}
+
+// --- key management ---
+
+// keyFile stores the public key and AES-GCM encrypted private key seed.
+type keyFile struct {
+	PubKey        []byte `json:"pubKey"`        // compressed secp256k1 (33 bytes)
+	EncryptedSeed []byte `json:"encryptedSeed"` // AES-GCM encrypted 32-byte key
+}
+
+func saveKeyFile(path string, privKey *ecdsa.PrivateKey, pw []byte) error {
+	raw := gethcrypto.FromECDSA(privKey)
+	defer encode.ClearBytes(raw)
+
+	encrypted, err := encryptSeed(raw, pw)
+	if err != nil {
+		return fmt.Errorf("encrypting private key: %w", err)
+	}
+
+	kf := keyFile{
+		PubKey:        gethcrypto.CompressPubkey(&privKey.PublicKey),
+		EncryptedSeed: encrypted,
+	}
+
+	data, err := json.Marshal(kf)
+	if err != nil {
+		return fmt.Errorf("marshaling key file: %w", err)
+	}
+
+	return os.WriteFile(path, data, 0600)
+}
+
+func readKeyFile(path string) (*keyFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var kf keyFile
+	if err := json.Unmarshal(data, &kf); err != nil {
+		return nil, fmt.Errorf("parsing key file: %w", err)
+	}
+	return &kf, nil
+}
+
+// encryptSeed encrypts seed with pw using AES-256-GCM.
+// Output: nonce(12) || ciphertext+tag.
+func encryptSeed(seed, pw []byte) ([]byte, error) {
+	key := deriveAESKey(pw)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, seed, nil), nil
+}
+
+// decryptSeed decrypts a seed encrypted by encryptSeed.
+func decryptSeed(encrypted, pw []byte) ([]byte, error) {
+	key := deriveAESKey(pw)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	ns := gcm.NonceSize()
+	if len(encrypted) < ns {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	plaintext, err := gcm.Open(nil, encrypted[:ns], encrypted[ns:], nil)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed (wrong password?): %w", err)
+	}
+	return plaintext, nil
+}
+
+// deriveAESKey stretches pw to a 32-byte AES key using SHA-256 via keccak256.
+func deriveAESKey(pw []byte) []byte {
+	return gethcrypto.Keccak256(pw)
+}
+
+// privKeyFromSeed derives the secp256k1 private key and Ethereum address from
+// a wallet seed.
+func privKeyFromSeed(seed []byte) (*ecdsa.PrivateKey, string, func(), error) {
+	extKey, err := keygen.GenDeepChild(seed, seedDerivationPath)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("deriving key: %w", err)
+	}
+
+	rawBytes, err := extKey.SerializedPrivKey()
+	if err != nil {
+		extKey.Zero()
+		return nil, "", nil, fmt.Errorf("serializing private key: %w", err)
+	}
+	// Copy before zeroing: SerializedPrivKey returns a slice backed by extKey's
+	// internal storage, so Zero() would corrupt the bytes in-place.
+	privBytes := make([]byte, len(rawBytes))
+	copy(privBytes, rawBytes)
+	extKey.Zero()
+
+	priv, err := gethcrypto.ToECDSA(privBytes)
+	if err != nil {
+		encode.ClearBytes(privBytes)
+		return nil, "", nil, fmt.Errorf("parsing private key: %w", err)
+	}
+
+	addr := strings.ToLower(gethcrypto.PubkeyToAddress(priv.PublicKey).Hex())
+
+	zero := func() {
+		encode.ClearBytes(privBytes)
+	}
+
+	return priv, addr, zero, nil
+}
+
+// pubKeyToAddress derives the 0x-prefixed lowercase Ethereum address from a
+// compressed secp256k1 public key (33 bytes).
+func pubKeyToAddress(compressedPub []byte) string {
+	pub, err := gethcrypto.DecompressPubkey(compressedPub)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(gethcrypto.PubkeyToAddress(*pub).Hex())
+}
+
+// --- EIP-712 signing ---
+
+// eip712Domain is the EIP-712 domain separator hash, computed once at package
+// init. All inputs (name, version, chainId, verifyingContract) are constants.
+var eip712Domain = eip712DomainHash()
+
+// spotSendTypeHashBytes is the keccak256 of the SpotSend type string, also a
+// constant that would otherwise be recomputed on every send.
+var spotSendTypeHashBytes = gethcrypto.Keccak256([]byte(
+	"SpotSend(string hyperliquidChain,string destination,string token,string amount,uint64 time)",
+))
+
+// spotSendEIP712Hash computes the EIP-712 hash for a SpotSend action.
+func spotSendEIP712Hash(network util.Network, destination, token, amount string, nonce uint64) []byte {
+	messageHash := spotSendMessageHash(network, destination, token, amount, nonce)
+	input := make([]byte, 0, 2+32+32)
+	input = append(input, 0x19, 0x01)
+	input = append(input, eip712Domain...)
+	input = append(input, messageHash...)
+	return gethcrypto.Keccak256(input)
+}
+
+func eip712DomainHash() []byte {
+	domainTypeHash := gethcrypto.Keccak256([]byte(
+		"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+	))
+
+	chainIDBytes := make([]byte, 32)
+	binary.BigEndian.PutUint64(chainIDBytes[24:], eip712ChainID)
+
+	encoded := make([]byte, 0, 5*32)
+	encoded = append(encoded, domainTypeHash...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte("HyperliquidSignTransaction"))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte("1"))...)
+	encoded = append(encoded, chainIDBytes...)
+	encoded = append(encoded, make([]byte, 32)...) // zero address
+
+	return gethcrypto.Keccak256(encoded)
+}
+
+func spotSendMessageHash(network util.Network, destination, token, amount string, nonce uint64) []byte {
+	chainName := eip712ChainNames[network]
+	nonceBytes := make([]byte, 32)
+	binary.BigEndian.PutUint64(nonceBytes[24:], nonce)
+
+	encoded := make([]byte, 0, 6*32)
+	encoded = append(encoded, spotSendTypeHashBytes...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(chainName))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(destination))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(token))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(amount))...)
+	encoded = append(encoded, nonceBytes...)
+
+	return gethcrypto.Keccak256(encoded)
+}
+
+// signHash signs a 32-byte hash with a secp256k1 private key.
+// Returns a 65-byte compact signature [R(32)||S(32)||V(1)] with V = 27 or 28.
+func signHash(privKey *ecdsa.PrivateKey, hash []byte) ([65]byte, error) {
+	sig, err := gethcrypto.Sign(hash, privKey)
+	if err != nil {
+		return [65]byte{}, err
+	}
+	// go-ethereum returns V as 0 or 1; Hyperliquid expects 27 or 28.
+	sig[64] += 27
+	return [65]byte(sig), nil
+}

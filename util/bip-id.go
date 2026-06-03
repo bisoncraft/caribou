@@ -582,6 +582,7 @@ var bipIDs = map[uint32]string{
 	9888:  "btf",
 	9999:  "god",
 	10000: "fo",
+	10001: "hype",
 	10291: "btr",
 	11111: "ess",
 	12345: "ipos",
