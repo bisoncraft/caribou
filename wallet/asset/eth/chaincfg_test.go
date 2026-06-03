@@ -16,7 +16,9 @@ import (
 const unknownNet = util.Network(99)
 
 func TestNetworkCompatibilityData(t *testing.T) {
+	t.Parallel()
 	t.Run("mainnet", func(t *testing.T) {
+		t.Parallel()
 		got, err := NetworkCompatibilityData(util.Mainnet)
 		if err != nil {
 			t.Fatal(err)
@@ -27,6 +29,7 @@ func TestNetworkCompatibilityData(t *testing.T) {
 	})
 
 	t.Run("testnet", func(t *testing.T) {
+		t.Parallel()
 		got, err := NetworkCompatibilityData(util.Testnet)
 		if err != nil {
 			t.Fatal(err)
@@ -37,6 +40,7 @@ func TestNetworkCompatibilityData(t *testing.T) {
 	})
 
 	t.Run("unknown network errors", func(t *testing.T) {
+		t.Parallel()
 		if _, err := NetworkCompatibilityData(unknownNet); err == nil {
 			t.Error("expected error for unknown network")
 		}
@@ -44,6 +48,7 @@ func TestNetworkCompatibilityData(t *testing.T) {
 }
 
 func TestSimnetDataDir(t *testing.T) {
+	t.Parallel()
 	dir, err := simnetDataDir()
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +59,7 @@ func TestSimnetDataDir(t *testing.T) {
 }
 
 func TestETHConfig(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		net         util.Network
@@ -67,6 +73,7 @@ func TestETHConfig(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			c, err := ETHConfig(tc.net)
 			if tc.wantErr {
 				if err == nil {
@@ -89,7 +96,9 @@ func TestETHConfig(t *testing.T) {
 }
 
 func TestChainConfig(t *testing.T) {
+	t.Parallel()
 	t.Run("mainnet", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := ChainConfig(util.Mainnet)
 		if err != nil {
 			t.Fatal(err)
@@ -100,6 +109,7 @@ func TestChainConfig(t *testing.T) {
 	})
 
 	t.Run("unknown errors", func(t *testing.T) {
+		t.Parallel()
 		if _, err := ChainConfig(unknownNet); err == nil {
 			t.Error("expected error for unknown network")
 		}

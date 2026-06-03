@@ -11,7 +11,9 @@ import (
 )
 
 func TestDecodeCoinID(t *testing.T) {
+	t.Parallel()
 	t.Run("tx hash", func(t *testing.T) {
+		t.Parallel()
 		raw := bytes.Repeat([]byte{0xab}, common.HashLength)
 		cid, err := DecodeCoinID(raw)
 		if err != nil {
@@ -23,6 +25,7 @@ func TestDecodeCoinID(t *testing.T) {
 	})
 
 	t.Run("wrong length", func(t *testing.T) {
+		t.Parallel()
 		for _, n := range []int{0, 1, common.HashLength - 1, common.HashLength + 1, common.HashLength * 2} {
 			if _, err := DecodeCoinID(make([]byte, n)); err == nil {
 				t.Errorf("expected error for coin ID of length %d", n)

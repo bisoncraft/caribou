@@ -17,6 +17,7 @@ import (
 )
 
 func TestTxDB(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
@@ -194,6 +195,7 @@ func TestTxDB(t *testing.T) {
 }
 
 func TestTxDB_relay(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
@@ -250,6 +252,7 @@ func TestTxDB_relay(t *testing.T) {
 }
 
 func TestTxDBReplaceNonce(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
@@ -303,6 +306,7 @@ func TestTxDBReplaceNonce(t *testing.T) {
 }
 
 func TestTxDB_getUnknownTx(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
@@ -321,12 +325,14 @@ func TestTxDB_getUnknownTx(t *testing.T) {
 }
 
 func TestTxDB_GetBridges(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	db, err := NewTxDB(tempDir, tLogger, BipID)
 	if err != nil {
 		t.Fatalf("error creating txDB: %v", err)
 	}
-	defer db.Close()
+	// t.Cleanup rather than defer so the db outlives the parallel subtests.
+	t.Cleanup(func() { db.Close() })
 
 	now := time.Now()
 	txs := []*extendedWalletTx{
@@ -399,6 +405,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	}
 
 	t.Run("getBridges all", func(t *testing.T) {
+		t.Parallel()
 		result, err := db.getBridges(nil, 0, nil, false)
 		if err != nil {
 			t.Fatalf("getBridges failed: %v", err)
@@ -416,6 +423,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getBridges limited", func(t *testing.T) {
+		t.Parallel()
 		result, err := db.getBridges(nil, 2, nil, false)
 		if err != nil {
 			t.Fatalf("getBridges failed: %v", err)
@@ -431,6 +439,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getBridges with refID and past=false", func(t *testing.T) {
+		t.Parallel()
 		refID := common.HexToHash(txs[0].ID)
 		result, err := db.getBridges(nil, 2, &refID, false)
 		if err != nil {
@@ -447,6 +456,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getBridges with refID and past=true", func(t *testing.T) {
+		t.Parallel()
 		refID := common.HexToHash(txs[0].ID)
 		result, err := db.getBridges(nil, 2, &refID, true)
 		if err != nil {
@@ -463,6 +473,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getBridges with refID and past=true from newer bridge", func(t *testing.T) {
+		t.Parallel()
 		// Use txs[1] as reference to test past=true with older transactions available
 		refID := common.HexToHash(txs[1].ID)
 		result, err := db.getBridges(nil, 2, &refID, true)
@@ -480,6 +491,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getBridges with invalid refID", func(t *testing.T) {
+		t.Parallel()
 		invalidID := common.HexToHash("0xdeadbeef")
 		_, err := db.getBridges(nil, 2, &invalidID, false)
 		if err == nil || err != asset.CoinNotFoundError {
@@ -488,6 +500,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getBridges with non-bridge refID", func(t *testing.T) {
+		t.Parallel()
 		nonBridgeID := common.HexToHash(txs[4].ID)
 		_, err := db.getBridges(nil, 2, &nonBridgeID, false)
 		if err == nil {
@@ -496,6 +509,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 	})
 
 	t.Run("getPendingBridges", func(t *testing.T) {
+		t.Parallel()
 		result, err := db.getPendingBridges(nil)
 		if err != nil {
 			t.Fatalf("getPendingBridges failed: %v", err)
@@ -511,6 +525,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 }
 
 func TestTxDB_GetBridgeCompletions(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	db, err := NewTxDB(tempDir, tLogger, BipID)
 	if err != nil {

@@ -23,6 +23,7 @@ import (
 )
 
 func TestGetUsdcBridgeInfo(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		assetID    uint32
@@ -41,6 +42,7 @@ func TestGetUsdcBridgeInfo(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			info, err := getUsdcBridgeInfo(tc.assetID, tc.net)
 			if tc.wantErr {
 				if err == nil {
@@ -68,6 +70,7 @@ func TestGetUsdcBridgeInfo(t *testing.T) {
 }
 
 func TestUsdcMintInfoRoundTrip(t *testing.T) {
+	t.Parallel()
 	orig := &usdcMintInfo{
 		attestation: encode.RandomBytes(65),
 		message:     encode.RandomBytes(200),
@@ -85,6 +88,7 @@ func TestUsdcMintInfoRoundTrip(t *testing.T) {
 }
 
 func TestDeserializeUsdcMintInfoErrors(t *testing.T) {
+	t.Parallel()
 	// Garbage bytes that don't decode as a versioned blob.
 	if _, err := deserializeUsdcMintInfo([]byte{0xff}); err == nil {
 		t.Fatal("expected error for malformed blob")
@@ -115,6 +119,7 @@ func TestDeserializeUsdcMintInfoErrors(t *testing.T) {
 }
 
 func TestUsdcBridgeSupportedDestinations(t *testing.T) {
+	t.Parallel()
 	b := &usdcBridge{}
 	cases := []struct {
 		src  uint32
@@ -134,6 +139,7 @@ func TestUsdcBridgeSupportedDestinations(t *testing.T) {
 }
 
 func TestUsdcBridgeConstants(t *testing.T) {
+	t.Parallel()
 	b := &usdcBridge{}
 
 	if !b.requiresBridgeContractApproval(0) {
@@ -173,6 +179,7 @@ func TestUsdcBridgeConstants(t *testing.T) {
 }
 
 func TestUsdcBridgeFollowUpUnused(t *testing.T) {
+	t.Parallel()
 	b := &usdcBridge{}
 	if required, data, err := b.getFollowUpCompletionData(context.Background(), "deadbeef"); err == nil || required || data != nil {
 		t.Fatalf("getFollowUpCompletionData = (%v, %v, %v), want (false, nil, error)", required, data, err)
@@ -186,6 +193,7 @@ func TestUsdcBridgeFollowUpUnused(t *testing.T) {
 // methods that reject calls for an asset other than the one the bridge was
 // constructed for. These don't require any contract backend.
 func TestUsdcBridgeAssetIDGuards(t *testing.T) {
+	t.Parallel()
 	b := &usdcBridge{usdcAssetID: usdcEthID}
 
 	if _, err := b.bridgeContractAddr(context.Background(), usdcPolygonID); err == nil {
@@ -210,6 +218,7 @@ func TestUsdcBridgeAssetIDGuards(t *testing.T) {
 // TestCompleteBridgeRejectsBadInput verifies completeBridge rejects malformed
 // mintInfo before it ever reaches the message transmitter contract call.
 func TestCompleteBridgeRejectsBadInput(t *testing.T) {
+	t.Parallel()
 	b := &usdcBridge{}
 
 	// Garbage bytes.
@@ -231,6 +240,7 @@ func TestCompleteBridgeRejectsBadInput(t *testing.T) {
 }
 
 func TestNewUsdcBridgeErrors(t *testing.T) {
+	t.Parallel()
 	// Chain asset ID not in baseChainToUSDCAssetID.
 	if _, err := newUsdcBridge(0xDEADBEEF, util.Mainnet, nil, common.Address{}, nil); err == nil {
 		t.Error("expected error for unknown chain assetID")
@@ -245,6 +255,8 @@ func TestNewUsdcBridgeErrors(t *testing.T) {
 // to cover the Circle API contract: complete status returns the decoded
 // bytes, non-complete returns nil/nil so the caller polls again, malformed
 // hex surfaces an error, and an HTTP error propagates.
+// Subtests share and mutate the respBody/serverErrCode/gotRequestPath
+// fixture driving the httptest server, so this test is not parallelized.
 func TestGetAttestation(t *testing.T) {
 	var (
 		respBody       string
@@ -325,6 +337,7 @@ func TestGetAttestation(t *testing.T) {
 // CCTP contracts and resolving token info - for every supported chain and
 // network. The error paths live in TestNewUsdcBridgeErrors.
 func TestNewUsdcBridgeSuccess(t *testing.T) {
+	t.Parallel()
 	addr := common.HexToAddress("0x2b84C791b79Ee37De042AD2ffF1A253c3ce9bc27")
 	for _, chainAssetID := range []uint32{ethID, polygonID, baseID} {
 		for _, net := range []util.Network{util.Mainnet, util.Testnet} {
@@ -377,10 +390,12 @@ func newTestUsdcBridge(t *testing.T, n *testNode) *usdcBridge {
 }
 
 func TestUsdcGetMessageSentEventLog(t *testing.T) {
+	t.Parallel()
 	wantMsg := []byte{0xde, 0xad, 0xbe, 0xef}
 	txID := "0x" + hex.EncodeToString(make([]byte, 32))
 
 	t.Run("extracts message from receipt", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{messageSentLog(t, wantMsg)}}}
 		got, err := newTestUsdcBridge(t, n).getMessageSentEventLog(context.Background(), txID)
 		if err != nil {
@@ -392,6 +407,7 @@ func TestUsdcGetMessageSentEventLog(t *testing.T) {
 	})
 
 	t.Run("receipt error propagates", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receiptErr: fmt.Errorf("receipt unavailable")}
 		if _, err := newTestUsdcBridge(t, n).getMessageSentEventLog(context.Background(), txID); err == nil {
 			t.Fatal("expected error")
@@ -399,6 +415,7 @@ func TestUsdcGetMessageSentEventLog(t *testing.T) {
 	})
 
 	t.Run("no MessageSent log in receipt", func(t *testing.T) {
+		t.Parallel()
 		// A receipt whose only log isn't a MessageSent event.
 		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{{
 			Topics: []common.Hash{common.HexToHash("0x01")},
@@ -413,6 +430,7 @@ func TestUsdcGetMessageSentEventLog(t *testing.T) {
 // MessageSent message out of the burn receipt, fetch the attestation from
 // Circle, and serialize the two into mint info the destination chain can use.
 func TestUsdcGetCompletionData(t *testing.T) {
+	t.Parallel()
 	wantMsg := []byte{0x11, 0x22, 0x33}
 	txID := "0x" + hex.EncodeToString(make([]byte, 32))
 
@@ -421,6 +439,7 @@ func TestUsdcGetCompletionData(t *testing.T) {
 	}
 
 	t.Run("complete attestation yields mint info", func(t *testing.T) {
+		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, `{"attestation":"0xaabb","status":"complete"}`)
 		}))
@@ -446,6 +465,7 @@ func TestUsdcGetCompletionData(t *testing.T) {
 	})
 
 	t.Run("pending attestation yields nil", func(t *testing.T) {
+		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, `{"status":"pending_confirmations"}`)
 		}))
@@ -464,6 +484,7 @@ func TestUsdcGetCompletionData(t *testing.T) {
 	})
 
 	t.Run("receipt error propagates", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receiptErr: fmt.Errorf("receipt unavailable")}
 		if _, err := newTestUsdcBridge(t, n).getCompletionData(context.Background(), usdcEthID, txID); err == nil {
 			t.Fatal("expected error")

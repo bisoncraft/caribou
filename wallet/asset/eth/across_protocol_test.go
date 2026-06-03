@@ -44,6 +44,7 @@ func registerTokens() {
 }
 
 func TestAcrossAssetToID(t *testing.T) {
+	t.Parallel()
 	registerTokens()
 	asset.SetNetwork(util.Mainnet)
 

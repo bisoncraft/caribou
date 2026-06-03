@@ -17,6 +17,7 @@ import (
 )
 
 func TestConversions(t *testing.T) {
+	t.Parallel()
 	newBigIntFromStr := func(str string) *big.Int {
 		t.Helper()
 		bi, ok := new(big.Int).SetString(str, 10)
@@ -38,6 +39,7 @@ func TestConversions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if gotWei := GweiToWei(tt.gwei); !reflect.DeepEqual(gotWei, tt.wei) {
 				t.Errorf("GweiToWei() = %v, want %v", gotWei, tt.wei)
 			}
@@ -50,6 +52,7 @@ func TestConversions(t *testing.T) {
 }
 
 func TestLinkTokenDefinition(t *testing.T) {
+	t.Parallel()
 	tokenID, ok := util.BipSymbolID("link.eth")
 	if !ok {
 		t.Fatal("link.eth not registered")

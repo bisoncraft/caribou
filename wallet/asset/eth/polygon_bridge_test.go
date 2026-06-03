@@ -37,6 +37,8 @@ func (f polyRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { r
 // getPolygonWithdrawalCompletionData builds its request against a hardcoded
 // proof-generator URL, so the transport - not the URL - is what we intercept.
 // The requested URL is recorded into *gotURL when non-nil.
+//
+// dexnet.Client is a process-global, so callers must not call t.Parallel().
 func stubProofGen(t *testing.T, status int, body string, gotURL *string) {
 	t.Helper()
 	prev := dexnet.Client.Transport
@@ -54,6 +56,7 @@ func stubProofGen(t *testing.T, status int, body string, gotURL *string) {
 }
 
 func TestPolygonBridgeSupportedDestinations(t *testing.T) {
+	t.Parallel()
 	// polygonBridgePolygon dispatches on the polygonID column of the map,
 	// polygonBridgeEth on the ethID column.
 	polB := &polygonBridgePolygon{net: util.Mainnet}
@@ -79,6 +82,7 @@ func TestPolygonBridgeSupportedDestinations(t *testing.T) {
 }
 
 func TestNewPolygonBridgePolygon(t *testing.T) {
+	t.Parallel()
 	// Only binds the StateReceiver contract; no network call, so a nil backend
 	// is fine.
 	b, err := newPolygonBridgePolygon(nil, util.Mainnet, util.Disabled)
@@ -91,6 +95,7 @@ func TestNewPolygonBridgePolygon(t *testing.T) {
 }
 
 func TestPolygonBridgePolygonTrivial(t *testing.T) {
+	t.Parallel()
 	b, err := newPolygonBridgePolygon(nil, util.Mainnet, util.Disabled)
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +145,7 @@ func TestPolygonBridgePolygonTrivial(t *testing.T) {
 }
 
 func TestPolygonBridgePolygonInitiateBridgeGuard(t *testing.T) {
+	t.Parallel()
 	b := &polygonBridgePolygon{net: util.Mainnet}
 	// pol is bridged to polEth; asking for any other destination is rejected
 	// before any contract interaction.
@@ -149,6 +155,7 @@ func TestPolygonBridgePolygonInitiateBridgeGuard(t *testing.T) {
 }
 
 func TestNewPolygonBridgeEthUnsupportedNetwork(t *testing.T) {
+	t.Parallel()
 	// Simnet has no bridge addresses, so construction fails before any
 	// contract call.
 	if _, err := newPolygonBridgeEth(context.Background(), nil, util.Simnet, common.Address{}, &testNode{}, util.Disabled); err == nil {
@@ -157,22 +164,26 @@ func TestNewPolygonBridgeEthUnsupportedNetwork(t *testing.T) {
 }
 
 func TestPolygonBridgeEthBridgeContractAddr(t *testing.T) {
+	t.Parallel()
 	b := &polygonBridgeEth{net: util.Mainnet}
 	depositManager := polygonBridgeAddrs[util.Mainnet].depositManagerAddr
 
 	t.Run("unsupported asset", func(t *testing.T) {
+		t.Parallel()
 		if _, err := b.bridgeContractAddr(context.Background(), 0xDEAD); err == nil {
 			t.Error("expected error for unsupported asset")
 		}
 	})
 
 	t.Run("eth needs no approval", func(t *testing.T) {
+		t.Parallel()
 		if _, err := b.bridgeContractAddr(context.Background(), ethID); err == nil {
 			t.Error("expected error - eth requires no bridge contract approval")
 		}
 	})
 
 	t.Run("matic uses deposit manager", func(t *testing.T) {
+		t.Parallel()
 		got, err := b.bridgeContractAddr(context.Background(), maticEthID)
 		if err != nil {
 			t.Fatal(err)
@@ -183,6 +194,7 @@ func TestPolygonBridgeEthBridgeContractAddr(t *testing.T) {
 	})
 
 	t.Run("pol uses deposit manager", func(t *testing.T) {
+		t.Parallel()
 		got, err := b.bridgeContractAddr(context.Background(), polygonEthID)
 		if err != nil {
 			t.Fatal(err)
@@ -194,6 +206,7 @@ func TestPolygonBridgeEthBridgeContractAddr(t *testing.T) {
 }
 
 func TestPolygonBridgeEthFlags(t *testing.T) {
+	t.Parallel()
 	b := &polygonBridgeEth{net: util.Mainnet}
 
 	if b.requiresBridgeContractApproval(ethID) {
@@ -235,6 +248,7 @@ func TestPolygonBridgeEthFlags(t *testing.T) {
 }
 
 func TestPolygonBridgeEthInitiateBridgeGuard(t *testing.T) {
+	t.Parallel()
 	b := &polygonBridgeEth{net: util.Mainnet}
 	// eth bridges to wethPolygon; any other destination is rejected up front.
 	if _, err := b.initiateBridge(nil, ethID, polygonEthID, big.NewInt(1)); err == nil {
@@ -243,6 +257,7 @@ func TestPolygonBridgeEthInitiateBridgeGuard(t *testing.T) {
 }
 
 func TestPolygonBridgeEthJSONErrors(t *testing.T) {
+	t.Parallel()
 	b := &polygonBridgeEth{net: util.Mainnet}
 
 	// Both follow-up methods unmarshal their data argument before touching any
@@ -256,10 +271,12 @@ func TestPolygonBridgeEthJSONErrors(t *testing.T) {
 }
 
 func TestGetPolygonBridgeCompletionData(t *testing.T) {
+	t.Parallel()
 	txID := "0x" + hex.EncodeToString(make([]byte, 32))
 	stateID := common.HexToHash("0x2a") // 42
 
 	t.Run("extracts state id from log", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{{
 			Topics: []common.Hash{common.HexToHash(stateSyncedEventHash), stateID},
 		}}}}
@@ -273,6 +290,7 @@ func TestGetPolygonBridgeCompletionData(t *testing.T) {
 	})
 
 	t.Run("receipt error propagates", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receiptErr: errTestPolygon}
 		if _, err := getPolygonBridgeCompletionData(context.Background(), n, txID); err == nil {
 			t.Error("expected error")
@@ -280,6 +298,7 @@ func TestGetPolygonBridgeCompletionData(t *testing.T) {
 	})
 
 	t.Run("matching log without state id topic", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{{
 			Topics: []common.Hash{common.HexToHash(stateSyncedEventHash)},
 		}}}}
@@ -289,6 +308,7 @@ func TestGetPolygonBridgeCompletionData(t *testing.T) {
 	})
 
 	t.Run("no matching log", func(t *testing.T) {
+		t.Parallel()
 		n := &testNode{receipt: &types.Receipt{Logs: []*types.Log{{
 			Topics: []common.Hash{common.HexToHash("0x01")},
 		}}}}
@@ -377,6 +397,7 @@ func TestPolygonBridgePolygonGetCompletionData(t *testing.T) {
 	}
 }
 
+// Subtests share and mutate b.node, so this test is not parallelized.
 func TestPolygonBridgeEthGetFollowUpCompletionDataErrors(t *testing.T) {
 	txID := "0x" + hex.EncodeToString(make([]byte, 32))
 	b := &polygonBridgeEth{net: util.Mainnet}

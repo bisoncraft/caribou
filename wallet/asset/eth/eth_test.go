@@ -406,6 +406,8 @@ func (db *tTxDB) getBridgeCompletions(initiationTxID string) ([]*extendedWalletT
 }
 
 func TestCheckPendingTxs(t *testing.T) {
+	// Subtests share a single eth/node fixture that each case mutates, so this
+	// test is not parallelized.
 	_, eth, node, shutdown := tassetWallet(BipID)
 	defer shutdown()
 
@@ -591,6 +593,7 @@ func TestCheckPendingTxs(t *testing.T) {
 }
 
 func TestTakeAction(t *testing.T) {
+	t.Parallel()
 	_, eth, node, shutdown := tassetWallet(BipID)
 	defer shutdown()
 
@@ -708,6 +711,7 @@ func TestTakeAction(t *testing.T) {
 }
 
 func TestCheckForNewBlocks(t *testing.T) {
+	t.Parallel()
 	header0 := &types.Header{Number: new(big.Int)}
 	header1 := &types.Header{Number: big.NewInt(1)}
 	tests := []struct {
@@ -781,6 +785,7 @@ func TestCheckForNewBlocks(t *testing.T) {
 }
 
 func TestSyncStatus(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                string
 		syncProg            ethereum.SyncProgress
@@ -975,6 +980,7 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 }
 
 func TestBalanceWithMempool(t *testing.T) {
+	t.Parallel()
 	tinyBal := newBalance(0, 0, 0)
 	tinyBal.Current = big.NewInt(GweiFactor - 1)
 
@@ -1136,6 +1142,7 @@ func TestBalanceWithMempool(t *testing.T) {
 }
 
 func TestBalanceNoMempool(t *testing.T) {
+	t.Parallel()
 	var nonceCounter int64
 
 	newExtendedWalletTx := func(assetID uint32, amt, maxFees, blockNum uint64, txType asset.TransactionType) *extendedWalletTx {
@@ -1225,6 +1232,7 @@ func TestBalanceNoMempool(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, eth, node, shutdown := tassetWallet(tt.assetID)
 			defer shutdown()
 			eth.node = node.testNode // no mempool
@@ -1251,6 +1259,7 @@ func TestBalanceNoMempool(t *testing.T) {
 }
 
 func TestFeeRate(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	node := &testNode{}
 	eth := &baseWallet{
@@ -1299,6 +1308,7 @@ func TestFeeRate(t *testing.T) {
 }
 
 func TestOwnsAddress(t *testing.T) {
+	t.Parallel()
 	address := "0b84C791b79Ee37De042AD2ffF1A253c3ce9bc27" // no "0x" prefix
 	if !common.IsHexAddress(address) {
 		t.Fatalf("bad test address")
@@ -1372,6 +1382,7 @@ func TestOwnsAddress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			owns, err := eth.OwnsDepositAddress(tt.address)
 			if (err == nil) && tt.wantErr {
 				t.Error("expected error")
@@ -1387,6 +1398,7 @@ func TestOwnsAddress(t *testing.T) {
 }
 
 func TestDriverOpen(t *testing.T) {
+	t.Parallel()
 	drv := &Driver{}
 	logger := util.StdOutLogger("ETHTEST", util.LevelOff)
 	tmpDir := t.TempDir()
@@ -1439,6 +1451,7 @@ func TestDriverOpen(t *testing.T) {
 }
 
 func TestDriverExists(t *testing.T) {
+	t.Parallel()
 	drv := &Driver{}
 	tmpDir := t.TempDir()
 
@@ -1483,6 +1496,7 @@ func TestDriverExists(t *testing.T) {
 }
 
 func TestDriverDecodeCoinID(t *testing.T) {
+	t.Parallel()
 	drv := &Driver{}
 	addressStr := "0xB6De8BB5ed28E6bE6d671975cad20C03931bE981"
 	address := common.HexToAddress(addressStr)
@@ -1535,6 +1549,7 @@ func TestDriverDecodeCoinID(t *testing.T) {
 	}
 }
 func TestReconfigure(t *testing.T) {
+	t.Parallel()
 	w, eth, _, shutdown := tassetWallet(BipID)
 	defer shutdown()
 
@@ -1571,9 +1586,10 @@ func TestReconfigure(t *testing.T) {
 }
 
 func TestSend(t *testing.T) {
-	t.Run("eth", func(t *testing.T) { testSend(t, BipID) })
-	t.Run("token", func(t *testing.T) { testSend(t, usdcEthID) })
-	t.Run("link", func(t *testing.T) { testSend(t, linkEthID) })
+	t.Parallel()
+	t.Run("eth", func(t *testing.T) { t.Parallel(); testSend(t, BipID) })
+	t.Run("token", func(t *testing.T) { t.Parallel(); testSend(t, usdcEthID) })
+	t.Run("link", func(t *testing.T) { t.Parallel(); testSend(t, linkEthID) })
 }
 
 func testSend(t *testing.T, assetID uint32) {
@@ -1657,8 +1673,9 @@ func testSend(t *testing.T, assetID uint32) {
 // Ensures that a small rise in the base fee between estimation
 // and sending will not cause a failure.
 func TestEstimateVsActualSendFees(t *testing.T) {
-	t.Run("eth", func(t *testing.T) { testEstimateVsActualSendFees(t, BipID) })
-	t.Run("token", func(t *testing.T) { testEstimateVsActualSendFees(t, usdcEthID) })
+	t.Parallel()
+	t.Run("eth", func(t *testing.T) { t.Parallel(); testEstimateVsActualSendFees(t, BipID) })
+	t.Run("token", func(t *testing.T) { t.Parallel(); testEstimateVsActualSendFees(t, usdcEthID) })
 }
 
 func testEstimateVsActualSendFees(t *testing.T, assetID uint32) {
@@ -1704,8 +1721,9 @@ func testEstimateVsActualSendFees(t *testing.T, assetID uint32) {
 }
 
 func TestEstimateSendTxFee(t *testing.T) {
-	t.Run("eth", func(t *testing.T) { testEstimateSendTxFee(t, BipID) })
-	t.Run("token", func(t *testing.T) { testEstimateSendTxFee(t, usdcEthID) })
+	t.Parallel()
+	t.Run("eth", func(t *testing.T) { t.Parallel(); testEstimateSendTxFee(t, BipID) })
+	t.Run("token", func(t *testing.T) { t.Parallel(); testEstimateSendTxFee(t, usdcEthID) })
 }
 
 func testEstimateSendTxFee(t *testing.T, assetID uint32) {
@@ -1789,6 +1807,7 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 }
 
 func TestReceiptCache(t *testing.T) {
+	t.Parallel()
 	m := &multiRPCClient{
 		finalizeConfs: 3,
 	}
@@ -1837,6 +1856,7 @@ func TestReceiptCache(t *testing.T) {
 }
 
 func TestFreshProviderList(t *testing.T) {
+	t.Parallel()
 
 	tests := []struct {
 		times    []int64
@@ -1858,6 +1878,7 @@ func TestFreshProviderList(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(fmt.Sprintf("test#%d", i), func(t *testing.T) {
+			t.Parallel()
 			node := &multiRPCClient{
 				finalizeConfs: 3,
 				providers:     make([]*provider, len(tt.times)),
@@ -1879,6 +1900,7 @@ func TestFreshProviderList(t *testing.T) {
 }
 
 func TestDomain(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		addr       string
 		wantDomain string
@@ -1963,6 +1985,7 @@ func TestDomain(t *testing.T) {
 
 	for i, test := range tests {
 		t.Run(fmt.Sprintf("test#%d", i), func(t *testing.T) {
+			t.Parallel()
 			d, err := domain(test.addr)
 			if test.wantErr {
 				if err == nil {

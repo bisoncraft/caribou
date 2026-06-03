@@ -28,7 +28,9 @@ func genKey(t *testing.T) *ecdsa.PrivateKey {
 }
 
 func TestImportKeyToKeyStore(t *testing.T) {
+	t.Parallel()
 	t.Run("import into empty keystore", func(t *testing.T) {
+		t.Parallel()
 		ks := newTestKeyStore(t)
 		if err := importKeyToKeyStore(ks, genKey(t), testKeyStorePW); err != nil {
 			t.Fatal(err)
@@ -39,6 +41,7 @@ func TestImportKeyToKeyStore(t *testing.T) {
 	})
 
 	t.Run("re-import matching key is a no-op", func(t *testing.T) {
+		t.Parallel()
 		ks := newTestKeyStore(t)
 		priv := genKey(t)
 		if err := importKeyToKeyStore(ks, priv, testKeyStorePW); err != nil {
@@ -55,6 +58,7 @@ func TestImportKeyToKeyStore(t *testing.T) {
 	})
 
 	t.Run("mismatched key errors", func(t *testing.T) {
+		t.Parallel()
 		ks := newTestKeyStore(t)
 		if err := importKeyToKeyStore(ks, genKey(t), testKeyStorePW); err != nil {
 			t.Fatal(err)
@@ -65,6 +69,7 @@ func TestImportKeyToKeyStore(t *testing.T) {
 	})
 
 	t.Run("multiple accounts errors", func(t *testing.T) {
+		t.Parallel()
 		ks := newTestKeyStore(t)
 		// Seed two accounts directly so importKeyToKeyStore sees len > 1.
 		if _, err := ks.ImportECDSA(genKey(t), string(testKeyStorePW)); err != nil {
@@ -80,7 +85,9 @@ func TestImportKeyToKeyStore(t *testing.T) {
 }
 
 func TestCredentialsFromKeyStore(t *testing.T) {
+	t.Parallel()
 	t.Run("single account", func(t *testing.T) {
+		t.Parallel()
 		ks := newTestKeyStore(t)
 		priv := genKey(t)
 		if err := importKeyToKeyStore(ks, priv, testKeyStorePW); err != nil {
@@ -99,12 +106,14 @@ func TestCredentialsFromKeyStore(t *testing.T) {
 	})
 
 	t.Run("no accounts errors", func(t *testing.T) {
+		t.Parallel()
 		if _, err := credentialsFromKeyStore(newTestKeyStore(t)); err == nil {
 			t.Error("expected error for empty keystore")
 		}
 	})
 
 	t.Run("multiple accounts errors", func(t *testing.T) {
+		t.Parallel()
 		ks := newTestKeyStore(t)
 		if _, err := ks.ImportECDSA(genKey(t), string(testKeyStorePW)); err != nil {
 			t.Fatal(err)
@@ -119,13 +128,16 @@ func TestCredentialsFromKeyStore(t *testing.T) {
 }
 
 func TestPathCredentials(t *testing.T) {
+	t.Parallel()
 	t.Run("empty dir errors", func(t *testing.T) {
+		t.Parallel()
 		if _, err := pathCredentials(t.TempDir()); err == nil {
 			t.Error("expected error for directory with no accounts")
 		}
 	})
 
 	t.Run("dir with one key", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		// pathCredentials opens the dir with LightScrypt params, so seed it with
 		// a keystore using the same params.
@@ -145,6 +157,7 @@ func TestPathCredentials(t *testing.T) {
 }
 
 func TestSignHash(t *testing.T) {
+	t.Parallel()
 	ks := newTestKeyStore(t)
 	priv := genKey(t)
 	if err := importKeyToKeyStore(ks, priv, testKeyStorePW); err != nil {

@@ -93,6 +93,7 @@ func (m *mockBridge) bridgeLimits(sourceAssetID, destAssetID uint32) (min, max *
 }
 
 func TestBridgeCompletionFees(t *testing.T) {
+	t.Parallel()
 	const bridgeName = "mock"
 	const maxFeeRateGwei = 202
 
@@ -166,6 +167,7 @@ func TestBridgeCompletionFees(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, aw, node, shutdown := tassetWallet(tt.assetID)
 			defer shutdown()
 
@@ -211,6 +213,7 @@ func TestBridgeCompletionFees(t *testing.T) {
 }
 
 func TestBridgeManager(t *testing.T) {
+	t.Parallel()
 	// bridgeMonitorInterval is both the bridge manager's poll interval and
 	// the unit that negative-assertion waits below are sized against. Keeping
 	// them in one place makes the coupling explicit so a future bump to the
@@ -270,6 +273,7 @@ func TestBridgeManager(t *testing.T) {
 
 	// Test: Adding and monitoring a pending bridge
 	t.Run("AddAndMonitor", func(t *testing.T) {
+		t.Parallel()
 		bm, mb, _, _, _ := setup(t)
 
 		// Add a pending bridge
@@ -293,6 +297,7 @@ func TestBridgeManager(t *testing.T) {
 
 	// Test: Successful mint info retrieval and notification
 	t.Run("SuccessfulMintInfo", func(t *testing.T) {
+		t.Parallel()
 		bm, mb, notificationChan, _, _ := setup(t)
 
 		// Configure getMintInfo to succeed
@@ -328,6 +333,7 @@ func TestBridgeManager(t *testing.T) {
 	})
 
 	t.Run("MarkAsComplete", func(t *testing.T) {
+		t.Parallel()
 		bm, mb, _, db, _ := setup(t)
 
 		// Add a pending bridge
@@ -374,6 +380,7 @@ func TestBridgeManager(t *testing.T) {
 	})
 
 	t.Run("LoadPendingBridges", func(t *testing.T) {
+		t.Parallel()
 		destAssetID := uint32(123)
 		burnTxID := "tx4"
 		bm, _, _, _, _ := setupWithPendingBridges(t, []*extendedWalletTx{
@@ -397,6 +404,7 @@ func TestBridgeManager(t *testing.T) {
 	})
 
 	t.Run("SkipUnconfirmedTx", func(t *testing.T) {
+		t.Parallel()
 		log := util.StdOutLogger("TEST", util.LevelDebug)
 		notificationChan := make(chan asset.WalletNotification, 10)
 		emitter := asset.NewWalletEmitter(notificationChan, BipID, log)
@@ -466,6 +474,7 @@ func TestBridgeManager(t *testing.T) {
 }
 
 func TestCompleteBridge(t *testing.T) {
+	t.Parallel()
 	initiationTx := &asset.BridgeCounterpartTx{
 		IDs:     []string{"initiation-tx-id"},
 		AssetID: 123,
@@ -682,6 +691,7 @@ func TestCompleteBridge(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			w, _, _, shutdown := tassetWallet(BipID)
 			defer shutdown()
 
