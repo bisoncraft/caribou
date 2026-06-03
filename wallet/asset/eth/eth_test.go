@@ -35,20 +35,9 @@ const (
 	txConfsNeededToConfirm = 3
 )
 
-var (
-	_       ethFetcher = (*testNode)(nil)
-	tLogger            = util.StdOutLogger("ETHTEST", util.LevelTrace)
-
-	testAddressA = common.HexToAddress("dd93b447f7eBCA361805eBe056259853F3912E04")
-
-	tokenGasesV1 = Tokens[usdcEthID].NetTokens[util.Simnet].Gas[1]
-
-	signer = types.LatestSigner(params.AllEthashProtocolChanges)
-
-	// simBackend = backends.NewSimulatedBackend(core.GenesisAlloc{
-	// 	testAddressA: core.GenesisAccount{Balance: GweiToWei(5e10)},
-	// }, 1e9)
-)
+// testNode is the ethFetcher used throughout the offline tests. Shared test
+// globals and bootstrap live in testmain_test.go.
+var _ ethFetcher = (*testNode)(nil)
 
 type tGetTxRes struct {
 	tx     *types.Transaction
