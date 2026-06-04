@@ -529,7 +529,7 @@ func TestSwapConfirmations(t *testing.T) {
 	}
 
 	// confirmations() path
-	node.confsErr = tErr
+	node.confsErr = errTest
 	checkFailure("confirmations")
 
 	node.confsErr = nil
@@ -669,7 +669,7 @@ func TestGetTxOut(t *testing.T) {
 	}
 
 	// Abnormal error
-	node.getTransactionErr = tErr
+	node.getTransactionErr = errTest
 	_, _, err := spv.GetTxOut(&txHash, vout, pkScript, generateTestBlockTime(blockHeight))
 	if err == nil {
 		t.Fatalf("no error for getWalletTransaction error")

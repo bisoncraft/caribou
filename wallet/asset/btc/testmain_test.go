@@ -17,7 +17,7 @@ var (
 	tLogger        util.Logger
 	tCtx           context.Context
 	optimalFeeRate uint64 = 24
-	tErr                  = fmt.Errorf("test error")
+	errTest               = fmt.Errorf("test error")
 	tTxID                 = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
 	tTxHash        *chainhash.Hash
 	tP2PKHAddr     = "1Bggq7Vu5oaoLFV1NNp5KhAzcku83qQhgi"

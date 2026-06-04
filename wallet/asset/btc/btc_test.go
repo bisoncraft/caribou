@@ -996,7 +996,7 @@ func TestReconfigure(t *testing.T) {
 
 	cfg.Settings["redeemconftarget"] = "2"
 
-	reconfigurer.err = tErr
+	reconfigurer.err = errTest
 	if _, err = wallet.Reconfigure(tCtx, cfg, ""); err == nil {
 		t.Fatal("node reconfigure error not propagated")
 	}
