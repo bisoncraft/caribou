@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func regToken(tokens map[uint32]*eth.Token, tokenID uint32, desc string, nets ...util.Network) {
+func regToken(tokens map[uint32]*eth.Token, tokenID uint32, desc string) {
 	token, found := tokens[tokenID]
 	if !found {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
@@ -35,12 +35,12 @@ func regToken(tokens map[uint32]*eth.Token, tokenID uint32, desc string, nets ..
 
 func registerTokens() {
 	asset.Register(966, &eth.Driver{}, true)
-	regToken(dexpolygon.Tokens, 966001, "The USDC Ethereum ERC20 token.", util.Mainnet)
-	regToken(dexpolygon.Tokens, 966004, "The USDT Ethereum ERC20 token.", util.Mainnet)
-	regToken(dexpolygon.Tokens, 966003, "Wrapped BTC.", util.Mainnet)
-	regToken(dexpolygon.Tokens, 966002, "Wrapped ETH.", util.Mainnet)
+	regToken(dexpolygon.Tokens, 966001, "The USDC Ethereum ERC20 token.")
+	regToken(dexpolygon.Tokens, 966004, "The USDT Ethereum ERC20 token.")
+	regToken(dexpolygon.Tokens, 966003, "Wrapped BTC.")
+	regToken(dexpolygon.Tokens, 966002, "Wrapped ETH.")
 	asset.Register(8453, &eth.Driver{}, true)
-	regToken(dexbase.Tokens, 61000, "The USDC Base ERC20 token.", util.Mainnet)
+	regToken(dexbase.Tokens, 61000, "The USDC Base ERC20 token.")
 }
 
 func TestAcrossAssetToID(t *testing.T) {
