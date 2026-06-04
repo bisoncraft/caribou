@@ -44,7 +44,8 @@ func registerTokens() {
 }
 
 func TestAcrossAssetToID(t *testing.T) {
-	t.Parallel()
+	// asset.SetNetwork mutates the global tokens map without holding
+	// driversMtx, so this test is not parallelized.
 	registerTokens()
 	asset.SetNetwork(util.Mainnet)
 
