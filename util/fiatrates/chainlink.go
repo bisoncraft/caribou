@@ -289,6 +289,11 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 	"LTC":  common.HexToAddress("0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa"),
 	"BCH":  common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"),
 	"DOGE": common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"),
+	// ZEC/USD on Polygon updates less often than chainlinkMaxAge, so it is
+	// intermittently rejected as stale and omitted from a cycle's results.
+	// This is expected best-effort behavior, not an error: the feed is healthy,
+	// the staleness guard is doing its job, and other fiat-rate sources cover
+	// ZEC. Tighten or relax only by revisiting chainlinkMaxAge for all feeds.
 	"ZEC":  common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"),
 	"LINK": common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"),
 	// Missing feeds: ADA, SOL, AVAX, XRP, BNB
@@ -297,8 +302,8 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 }
 
 // chainlinkPolygonBatchAddr is the deployed MultiAggregatorV0 address on Polygon mainnet.
-// TODO: fill in after deployment.
-var chainlinkPolygonBatchAddr = common.Address{}
+// Verified source: https://polygonscan.com/address/0x71eCdcF7F77765F0f596c03C63c80541733fd060#code
+var chainlinkPolygonBatchAddr = common.HexToAddress("0x71eCdcF7F77765F0f596c03C63c80541733fd060")
 
 // chainlinkDefaultProviders are free public Polygon RPC endpoints used as
 // fallback if no providers are explicitly configured.
