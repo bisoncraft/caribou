@@ -776,6 +776,110 @@ func TestUniqueIndexConflictAsError(t *testing.T) {
 	}
 }
 
+// TestIterDatumDecodeError plants a corrupted datum value at the table's
+// internal prefix and verifies that Iter.V (via the lazy Iter.datum lookup)
+// surfaces the decode error rather than returning silently.
+func TestIterDatumDecodeError(t *testing.T) {
+	db, _ := newTestDB(t)
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	dbID, err := db.KeyID([]byte("k"))
+	if err != nil {
+		t.Fatalf("KeyID: %v", err)
+	}
+	// Overwrite the datum row with a value too short to decode.
+	err = db.DB.Update(func(txn *badger.Txn) error {
+		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
+	})
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		return it.V(func(v []byte) error { return nil })
+	})
+	if err == nil {
+		t.Fatal("expected decode error from Iter.V on corrupt datum")
+	}
+}
+
+// TestSetReplaceCorruptOldDatum forces the decode-error path in Set when an
+// existing datum's bytes don't parse during a WithReplace operation.
+func TestSetReplaceCorruptOldDatum(t *testing.T) {
+	db, _ := newTestDB(t)
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	dbID, err := db.KeyID([]byte("k"))
+	if err != nil {
+		t.Fatalf("KeyID: %v", err)
+	}
+	err = db.DB.Update(func(txn *badger.Txn) error {
+		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
+	})
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	err = tbl.Set([]byte("k"), &tValue{v: []byte("v2")}, WithReplace())
+	if err == nil {
+		t.Fatal("expected decode error from replace of corrupt entry")
+	}
+}
+
+// TestDeleteCorruptDatum forces the decode-error path inside removeTableEntry
+// when Delete encounters a malformed datum row.
+func TestDeleteCorruptDatum(t *testing.T) {
+	db, _ := newTestDB(t)
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	dbID, err := db.KeyID([]byte("k"))
+	if err != nil {
+		t.Fatalf("KeyID: %v", err)
+	}
+	err = db.DB.Update(func(txn *badger.Txn) error {
+		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
+	})
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if err := tbl.Delete([]byte("k")); err == nil {
+		t.Fatal("expected decode error from Delete on corrupt datum")
+	}
+}
+
+// TestDecodeDatumReadErrors covers the remaining wire.ReadVarInt error
+// branches in decodeDatum — index-count, index-length, and value-length read
+// errors triggered by a truncated multi-byte varint marker.
+func TestDecodeDatumReadErrors(t *testing.T) {
+	// 0xff is a uint64 varint marker that requires 8 trailing bytes.
+
+	// Index-count varint truncated.
+	if _, err := decodeDatum([]byte{0, 0xff, 0, 0}); err == nil {
+		t.Fatal("expected nIndexes read error")
+	}
+	// Index-length varint truncated (nIndexes=1, then 0xff with too few bytes).
+	if _, err := decodeDatum([]byte{0, 1, 0xff, 0}); err == nil {
+		t.Fatal("expected indexLen read error")
+	}
+	// Value-length varint truncated (nIndexes=0, then 0xff with too few bytes).
+	if _, err := decodeDatum([]byte{0, 0, 0xff, 0}); err == nil {
+		t.Fatal("expected valueLen read error")
+	}
+}
+
 // TestGetRawWithTxn covers the WithGetTxn branch of GetRaw, distinct from the
 // existing TestTransactionOptions which exclusively uses Get.
 func TestGetRawWithTxn(t *testing.T) {
