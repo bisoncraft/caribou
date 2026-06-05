@@ -45,6 +45,8 @@ func (f roundTripFn) RoundTrip(r *http.Request) (*http.Response, error) { return
 
 // stubDexnetClient swaps dexnet.Client.Transport for the duration of the test
 // so calls through dexnet.Get / dexnet.Do never hit the public internet.
+//
+// dexnet.Client is a process-global, so callers must not call t.Parallel().
 func stubDexnetClient(t *testing.T, rt http.RoundTripper) {
 	t.Helper()
 	prev := dexnet.Client.Transport
@@ -92,6 +94,7 @@ func (h *acrossHandler) transport() http.RoundTripper {
 }
 
 func TestAcrossBaseURL(t *testing.T) {
+	t.Parallel()
 	if got := acrossBaseURL(util.Mainnet); got != "https://app.across.to" {
 		t.Errorf("mainnet base = %q", got)
 	}
@@ -105,6 +108,7 @@ func TestAcrossBaseURL(t *testing.T) {
 }
 
 func TestGetSpokePoolAddr(t *testing.T) {
+	t.Parallel()
 	if _, err := getSpokePoolAddr(util.Mainnet, testAcrossEthChainID); err != nil {
 		t.Fatalf("mainnet eth: %v", err)
 	}
@@ -227,6 +231,7 @@ func TestAcrossSupportedDestinations(t *testing.T) {
 }
 
 func TestNewAcrossBridge(t *testing.T) {
+	t.Parallel()
 	// Unknown chain asset ID rejected before any backend work.
 	if _, err := newAcrossBridge(context.Background(), nil, nil, 0xDEADBEEF, util.Mainnet, common.Address{}, nil); err == nil {
 		t.Error("expected error for unknown chain asset ID")
@@ -238,6 +243,7 @@ func TestNewAcrossBridge(t *testing.T) {
 }
 
 func TestAcrossBridgeContractAddr(t *testing.T) {
+	t.Parallel()
 	b := &acrossBridge{chainAssetID: ethID, spokePoolAddr: common.HexToAddress("0xabc")}
 
 	// Native asset has no contract approval requirement.
@@ -255,6 +261,7 @@ func TestAcrossBridgeContractAddr(t *testing.T) {
 }
 
 func TestAcrossBridgeFlags(t *testing.T) {
+	t.Parallel()
 	b := &acrossBridge{chainAssetID: ethID}
 
 	if b.requiresBridgeContractApproval(ethID) {
@@ -282,6 +289,7 @@ func TestAcrossBridgeFlags(t *testing.T) {
 }
 
 func TestAcrossBridgeTrivialErrors(t *testing.T) {
+	t.Parallel()
 	b := &acrossBridge{}
 	if _, err := b.completeBridge(nil, 0, nil); err == nil {
 		t.Error("completeBridge should always error for across")
@@ -458,6 +466,7 @@ func TestAcrossBridgeLimits(t *testing.T) {
 }
 
 func TestAcrossBridgeSupportedAsset(t *testing.T) {
+	t.Parallel()
 	if !AcrossBridgeSupportedAsset(ethID, util.Mainnet) {
 		t.Error("ethID should be supported on mainnet")
 	}

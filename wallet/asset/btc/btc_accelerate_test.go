@@ -1,4 +1,4 @@
-//go:build !spvlive && !harness
+//go:build !harness
 
 package btc
 
@@ -22,6 +22,7 @@ import (
 // TestAccelerateOrder tests the entire acceleration workflow, including
 // AccelerateOrder, PreAccelerate, and AccelerationEstimate
 func TestAccelerateOrder(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testAccelerateOrder)
 }
 
@@ -745,6 +746,7 @@ func testAccelerateOrder(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestTooEarlyToAccelerate(t *testing.T) {
+	t.Parallel()
 	type tx struct {
 		secondsBeforeNow uint64
 		confirmations    uint64

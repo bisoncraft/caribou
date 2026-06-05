@@ -1,4 +1,4 @@
-//go:build !spvlive && !harness
+//go:build !harness
 
 package btc
 
@@ -14,6 +14,7 @@ import (
 )
 
 func TestLockUnlock(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testLockUnlock)
 }
 
@@ -29,7 +30,7 @@ func testLockUnlock(t *testing.T, segwit bool, walletType string) {
 	if err != nil {
 		t.Fatalf("unlock error: %v", err)
 	}
-	node.unlockErr = tErr
+	node.unlockErr = errTest
 	err = wallet.Unlock(pw)
 	if err == nil {
 		t.Fatalf("no error for walletpassphrase error")
@@ -41,7 +42,7 @@ func testLockUnlock(t *testing.T, segwit bool, walletType string) {
 		if err != nil {
 			t.Fatalf("lock error: %v", err)
 		}
-		node.lockErr = tErr
+		node.lockErr = errTest
 		err = wallet.Lock()
 		if err == nil {
 			t.Fatalf("no error for walletlock rpc error")
@@ -50,18 +51,21 @@ func testLockUnlock(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestWithdraw(t *testing.T) {
+	t.Parallel()
 	runRubric(t, func(t *testing.T, segwit bool, walletType string) {
 		testSender(t, tWithdrawSender, segwit, walletType)
 	})
 }
 
 func TestSend(t *testing.T) {
+	t.Parallel()
 	runRubric(t, func(t *testing.T, segwit bool, walletType string) {
 		testSender(t, tSendSender, segwit, walletType)
 	})
 }
 
 func TestSendEdges(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testSendEdges)
 }
 
@@ -146,6 +150,7 @@ func testSendEdges(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestSyncStatus(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testSyncStatus)
 }
 
@@ -177,10 +182,10 @@ func testSyncStatus(t *testing.T, segwit bool, walletType string) {
 		t.Fatalf("progress not complete when loading last block")
 	}
 
-	node.getBlockchainInfoErr = tErr // rpc
+	node.getBlockchainInfoErr = errTest // rpc
 	node.blockchainMtx.Lock()
-	node.getBestBlockHashErr = tErr // spv BestBlock()
-	delete(node.mainchain, 100)     // force spv to BestBlock() with no wallet block
+	node.getBestBlockHashErr = errTest // spv BestBlock()
+	delete(node.mainchain, 100)        // force spv to BestBlock() with no wallet block
 	node.blockchainMtx.Unlock()
 	_, err = wallet.SyncStatus()
 	if err == nil {

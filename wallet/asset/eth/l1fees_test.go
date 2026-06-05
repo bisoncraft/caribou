@@ -32,6 +32,7 @@ func (s *stubContractBackend) CallContract(ctx context.Context, call ethereum.Ca
 }
 
 func TestWrapCalldata(t *testing.T) {
+	t.Parallel()
 	calldata := []byte{0xde, 0xad, 0xbe, 0xef}
 	raw, err := WrapCalldata(calldata)
 	if err != nil {
@@ -65,6 +66,7 @@ func TestWrapCalldata(t *testing.T) {
 }
 
 func TestWrapCalldataEmpty(t *testing.T) {
+	t.Parallel()
 	raw, err := WrapCalldata(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -79,9 +81,11 @@ func TestWrapCalldataEmpty(t *testing.T) {
 }
 
 func TestL1FeeForCalldata(t *testing.T) {
+	t.Parallel()
 	calldata := []byte{0x01, 0x02, 0x03}
 
 	t.Run("returns decoded fee", func(t *testing.T) {
+		t.Parallel()
 		want := big.NewInt(123456789)
 		// Encode the fee exactly as the precompile would return it.
 		packed, err := gasPriceOracleABI.Methods["getL1Fee"].Outputs.Pack(want)
@@ -104,6 +108,7 @@ func TestL1FeeForCalldata(t *testing.T) {
 	})
 
 	t.Run("call error propagates", func(t *testing.T) {
+		t.Parallel()
 		cb := &stubContractBackend{callErr: errors.New("rpc down")}
 		if _, err := L1FeeForCalldata(context.Background(), cb, calldata); err == nil {
 			t.Error("expected error when CallContract fails")
@@ -111,6 +116,7 @@ func TestL1FeeForCalldata(t *testing.T) {
 	})
 
 	t.Run("undecodable result errors", func(t *testing.T) {
+		t.Parallel()
 		// Too few bytes to unpack a uint256.
 		cb := &stubContractBackend{callResult: []byte{0x01}}
 		if _, err := L1FeeForCalldata(context.Background(), cb, calldata); err == nil {
@@ -119,6 +125,7 @@ func TestL1FeeForCalldata(t *testing.T) {
 	})
 
 	t.Run("empty result errors", func(t *testing.T) {
+		t.Parallel()
 		cb := &stubContractBackend{callResult: []byte{}}
 		if _, err := L1FeeForCalldata(context.Background(), cb, calldata); err == nil {
 			t.Error("expected error for empty result")

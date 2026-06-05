@@ -9,6 +9,7 @@ import (
 )
 
 func Test_leastOverFund(t *testing.T) {
+	t.Parallel()
 	enough := func(_, _, sum uint64) (bool, uint64) {
 		return sum >= 10e8, 0
 	}
@@ -83,6 +84,7 @@ func Test_leastOverFund(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := leastOverFund(enough, tt.utxos)
 			sort.Slice(got, func(i int, j int) bool {
 				return got[i].Amount < got[j].Amount
@@ -95,6 +97,7 @@ func Test_leastOverFund(t *testing.T) {
 }
 
 func Test_leastOverFundWithLimit(t *testing.T) {
+	t.Parallel()
 	enough := func(_, _, sum uint64) (bool, uint64) {
 		return sum >= 10e8, 0
 	}
@@ -127,6 +130,7 @@ func Test_leastOverFundWithLimit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := leastOverFundWithLimit(enough, tt.limit, tt.utxos)
 			sort.Slice(got, func(i int, j int) bool {
 				return got[i].Amount < got[j].Amount

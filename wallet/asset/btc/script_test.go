@@ -60,6 +60,7 @@ func testAddresses() *tAddrs {
 }
 
 func TestVarIntSizes(t *testing.T) {
+	t.Parallel()
 	got := wire.VarIntSerializeSize(uint64(RedeemP2PKHSigScriptSize))
 	if got != 1 {
 		t.Errorf("Incorrect opcode prefix size %d, want 1", got)
@@ -72,6 +73,7 @@ func TestVarIntSizes(t *testing.T) {
 }
 
 func TestParseScriptType(t *testing.T) {
+	t.Parallel()
 	addrs := testAddresses()
 
 	var scriptType BTCScriptType
@@ -136,10 +138,13 @@ func TestParseScriptType(t *testing.T) {
 }
 
 func TestMakeContract(t *testing.T) {
+	t.Parallel()
 	t.Run("segwit", func(t *testing.T) {
+		t.Parallel()
 		testMakeContract(t, true)
 	})
 	t.Run("non-segwit", func(t *testing.T) {
+		t.Parallel()
 		testMakeContract(t, false)
 	})
 }
@@ -184,6 +189,7 @@ func testMakeContract(t *testing.T, segwit bool) {
 }
 
 func TestIsDust(t *testing.T) {
+	t.Parallel()
 	pkScript := []byte{0x76, 0xa9, 0x21, 0x03, 0x2f, 0x7e, 0x43,
 		0x0a, 0xa4, 0xc9, 0xd1, 0x59, 0x43, 0x7e, 0x84, 0xb9,
 		0x75, 0xdc, 0x76, 0xd9, 0x00, 0x3b, 0xf0, 0x92, 0x2c,
@@ -255,6 +261,7 @@ func TestIsDust(t *testing.T) {
 }
 
 func TestExtractScriptAddrs(t *testing.T) {
+	t.Parallel()
 	// Invalid script
 	_, nonStd, _ := ExtractScriptAddrs(invalidScript, tParams)
 	if !nonStd {
@@ -305,10 +312,13 @@ func TestExtractScriptAddrs(t *testing.T) {
 }
 
 func TestExtractSwapDetails(t *testing.T) {
+	t.Parallel()
 	t.Run("segwit", func(t *testing.T) {
+		t.Parallel()
 		testExtractSwapDetails(t, true)
 	})
 	t.Run("non-segwit", func(t *testing.T) {
+		t.Parallel()
 		testExtractSwapDetails(t, false)
 	})
 }
@@ -365,6 +375,7 @@ func testExtractSwapDetails(t *testing.T, segwit bool) {
 }
 
 func TestInputInfo(t *testing.T) {
+	t.Parallel()
 	addrs := testAddresses()
 	var spendInfo *SpendInfo
 	var err error
@@ -427,10 +438,13 @@ func TestInputInfo(t *testing.T) {
 }
 
 func TestFindKeyPush(t *testing.T) {
+	t.Parallel()
 	t.Run("segwit", func(t *testing.T) {
+		t.Parallel()
 		testFindKeyPush(t, true)
 	})
 	t.Run("non-segwit", func(t *testing.T) {
+		t.Parallel()
 		testFindKeyPush(t, false)
 	})
 }
@@ -502,6 +516,7 @@ func testFindKeyPush(t *testing.T, segwit bool) {
 }
 
 func TestExtractContractHash(t *testing.T) {
+	t.Parallel()
 	addrs := testAddresses()
 	// non-hex
 	_, err := ExtractContractHash("zz")
@@ -553,6 +568,7 @@ func TestExtractContractHash(t *testing.T) {
 }
 
 func TestMsgTxVBytes(t *testing.T) {
+	t.Parallel()
 	// segwit txn
 	segwitTx := "010000000001015018feb13925a5ea9a548ff1af92bca55d3004dc8b1020" +
 		"d99978878f073142d80000000000ffffffff02406c85000000000017a914" +

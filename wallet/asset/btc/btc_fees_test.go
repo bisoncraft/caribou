@@ -1,4 +1,4 @@
-//go:build !spvlive && !harness
+//go:build !harness
 
 package btc
 
@@ -14,6 +14,7 @@ import (
 )
 
 func TestEstimateSendTxFee(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testEstimateSendTxFee)
 }
 
@@ -125,6 +126,7 @@ func testEstimateSendTxFee(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestGetTxFee(t *testing.T) {
+	t.Parallel()
 	runRubric(t, testGetTxFee)
 }
 
@@ -263,6 +265,7 @@ func testGetTxFee(t *testing.T, segwit bool, walletType string) {
 }
 
 func TestFeeRateCache(t *testing.T) {
+	t.Parallel()
 	const okRate = 1
 	var n int
 	feeRateOK := func(context.Context, util.Network) (uint64, error) {

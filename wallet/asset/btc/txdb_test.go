@@ -17,6 +17,7 @@ import (
 )
 
 func TestTxDB(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelInfo)
 
@@ -197,6 +198,7 @@ func TestTxDB(t *testing.T) {
 }
 
 func TestSetAndGetLastQuery(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 
@@ -234,6 +236,7 @@ func TestSetAndGetLastQuery(t *testing.T) {
 }
 
 func TestStoreAndGetSecNonce(t *testing.T) {
+	t.Parallel()
 	tempDir := t.TempDir()
 	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
 

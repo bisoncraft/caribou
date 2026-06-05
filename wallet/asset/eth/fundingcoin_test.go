@@ -11,6 +11,7 @@ import (
 )
 
 func TestFundingCoinID(t *testing.T) {
+	t.Parallel()
 	// Decode and encode fundingCoinID
 	var address [20]byte
 	copy(address[:], encode.RandomBytes(20))

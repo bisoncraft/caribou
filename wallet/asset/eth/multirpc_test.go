@@ -18,6 +18,7 @@ import (
 )
 
 func TestProviderString(t *testing.T) {
+	t.Parallel()
 	p := &provider{host: "infura.io"}
 	if p.String() != "infura.io" {
 		t.Errorf("String() = %q, want infura.io", p.String())
@@ -25,9 +26,11 @@ func TestProviderString(t *testing.T) {
 }
 
 func TestProviderTipCache(t *testing.T) {
+	t.Parallel()
 	hdr := &types.Header{Number: big.NewInt(42)}
 
 	t.Run("fresh tip is returned", func(t *testing.T) {
+		t.Parallel()
 		p := &provider{host: "h"}
 		p.setTip(hdr, util.Disabled)
 		if got := p.cachedTip(); got != hdr {
@@ -36,6 +39,7 @@ func TestProviderTipCache(t *testing.T) {
 	})
 
 	t.Run("stale header is dropped", func(t *testing.T) {
+		t.Parallel()
 		p := &provider{host: "h"}
 		p.tip.header = hdr
 		p.tip.headerStamp = time.Now().Add(-11 * time.Second) // > 10s default staleness
@@ -52,6 +56,7 @@ func TestProviderTipCache(t *testing.T) {
 	})
 
 	t.Run("recently failed provider returns nil", func(t *testing.T) {
+		t.Parallel()
 		p := &provider{host: "h"}
 		p.tip.header = hdr
 		p.tip.headerStamp = time.Now()
@@ -63,13 +68,16 @@ func TestProviderTipCache(t *testing.T) {
 }
 
 func TestProviderFailed(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh provider is not failed", func(t *testing.T) {
+		t.Parallel()
 		if (&provider{}).failed() {
 			t.Error("a fresh provider should not be failed")
 		}
 	})
 
 	t.Run("recently failed", func(t *testing.T) {
+		t.Parallel()
 		p := &provider{}
 		p.setFailed()
 		if !p.failed() {
@@ -78,6 +86,7 @@ func TestProviderFailed(t *testing.T) {
 	})
 
 	t.Run("bricked by fail count", func(t *testing.T) {
+		t.Parallel()
 		p := &provider{}
 		p.tip.failCount = brickedFailCount + 1 // old failStamp, but too many fails
 		if !p.failed() {
@@ -86,6 +95,7 @@ func TestProviderFailed(t *testing.T) {
 	})
 
 	t.Run("setTip clears failure", func(t *testing.T) {
+		t.Parallel()
 		p := &provider{host: "h"}
 		p.setFailed()
 		p.setTip(&types.Header{Number: big.NewInt(1)}, util.Disabled)
@@ -96,7 +106,9 @@ func TestProviderFailed(t *testing.T) {
 }
 
 func TestFailedProviders(t *testing.T) {
+	t.Parallel()
 	t.Run("reports the missing endpoints by domain", func(t *testing.T) {
+		t.Parallel()
 		succeeded := []*provider{{endpointAddr: "https://a.infura.io/k"}}
 		tried := []string{"https://a.infura.io/k", "https://b.alchemy.com/k2"}
 		got := failedProviders(succeeded, tried)
@@ -106,6 +118,7 @@ func TestFailedProviders(t *testing.T) {
 	})
 
 	t.Run("none failed is empty", func(t *testing.T) {
+		t.Parallel()
 		succeeded := []*provider{{endpointAddr: "https://a.infura.io/k"}}
 		tried := []string{"https://a.infura.io/k"}
 		if got := failedProviders(succeeded, tried); got != "" {
@@ -115,15 +128,18 @@ func TestFailedProviders(t *testing.T) {
 }
 
 func TestErrorFilter(t *testing.T) {
+	t.Parallel()
 	sentinel := errors.New("boom sentinel")
 
 	t.Run("substring match", func(t *testing.T) {
+		t.Parallel()
 		if !errorFilter(errors.New("rpc: known transaction abc"), "known transaction") {
 			t.Error("expected substring match")
 		}
 	})
 
 	t.Run("errors.Is match", func(t *testing.T) {
+		t.Parallel()
 		wrapped := fmt.Errorf("wrapped: %w", sentinel)
 		if !errorFilter(wrapped, sentinel) {
 			t.Error("expected errors.Is match for wrapped sentinel")
@@ -131,6 +147,7 @@ func TestErrorFilter(t *testing.T) {
 	})
 
 	t.Run("error matcher by message", func(t *testing.T) {
+		t.Parallel()
 		// Distinct error instance, but its message is contained in err.
 		if !errorFilter(errors.New("xxx already known yyy"), errors.New("already known")) {
 			t.Error("expected match on error matcher's message")
@@ -138,6 +155,7 @@ func TestErrorFilter(t *testing.T) {
 	})
 
 	t.Run("no match", func(t *testing.T) {
+		t.Parallel()
 		if errorFilter(errors.New("totally unrelated"), "nope", errors.New("also no")) {
 			t.Error("did not expect a match")
 		}
@@ -145,7 +163,9 @@ func TestErrorFilter(t *testing.T) {
 }
 
 func TestAcceptabilityFilters(t *testing.T) {
+	t.Parallel()
 	t.Run("allRPCErrorsAreFails", func(t *testing.T) {
+		t.Parallel()
 		discard, propagate, fail := allRPCErrorsAreFails(errors.New("x"))
 		if discard || propagate || !fail {
 			t.Errorf("got (%v, %v, %v), want (false, false, true)", discard, propagate, fail)
@@ -153,6 +173,7 @@ func TestAcceptabilityFilters(t *testing.T) {
 	})
 
 	t.Run("allowAlreadyKnownFilter discards known txs", func(t *testing.T) {
+		t.Parallel()
 		discard, propagate, fail := allowAlreadyKnownFilter(errors.New("rpc: known transaction 0xabc"))
 		if !discard || propagate || fail {
 			t.Errorf("got (%v, %v, %v), want (true, false, false)", discard, propagate, fail)
@@ -160,6 +181,7 @@ func TestAcceptabilityFilters(t *testing.T) {
 	})
 
 	t.Run("allowAlreadyKnownFilter keeps other errors", func(t *testing.T) {
+		t.Parallel()
 		discard, _, _ := allowAlreadyKnownFilter(errors.New("insufficient funds"))
 		if discard {
 			t.Error("unrelated error should not be discarded")
@@ -168,6 +190,7 @@ func TestAcceptabilityFilters(t *testing.T) {
 }
 
 func TestRPCTransactionUnmarshalJSON(t *testing.T) {
+	t.Parallel()
 	// Build and sign a real tx so its JSON satisfies types.Transaction's
 	// unmarshaler, then augment the object with the block fields the relay
 	// returns so txExtraDetail parsing is exercised too.
