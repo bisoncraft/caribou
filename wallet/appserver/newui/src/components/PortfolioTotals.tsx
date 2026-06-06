@@ -35,12 +35,15 @@ export default function PortfolioTotals ({ totals, walletAssets }: PortfolioTota
     <div className="portfolio-totals">
       <div className="portfolio-totals-logos d-flex justify-content-center align-items-center">
         {walletAssets.map(ta => (
-          <CoinLogo
-            key={ta.ticker}
-            ticker={ta.ticker}
-            alt={ta.name}
-            className="portfolio-totals-logo"
-          />
+          // Wrap so the .has-tip ::after tooltip renders (pseudo-elements
+          // don't render on the replaced <img> itself).
+          <span key={ta.ticker} className="has-tip" aria-label={ta.name}>
+            <CoinLogo
+              ticker={ta.ticker}
+              alt={ta.name}
+              className="portfolio-totals-logo"
+            />
+          </span>
         ))}
       </div>
       <div className="portfolio-totals-heading">{usdFmt.format(total)}</div>
