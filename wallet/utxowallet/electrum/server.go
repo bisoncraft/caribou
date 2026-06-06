@@ -20,11 +20,19 @@ import (
 	"github.com/decred/go-socks/socks"
 )
 
-// keepAliveInterval governs both the keep-alive ping cadence and the rolling
-// read deadline. ElectrumX servers idle-time-out around 10 minutes by default,
-// so 10s well within the worst case and gives us prompt detection of dropped
-// sockets.
+// keepAliveInterval is the keep-alive ping cadence. ElectrumX servers
+// idle-time-out around 10 minutes by default, so 10s is well within the worst
+// case and gives prompt detection of dropped sockets.
 const keepAliveInterval = 10 * time.Second
+
+// readIdleTimeout bounds how long listen() will block waiting for new bytes
+// from the server. It is refreshed at the top of each listen iteration, so
+// the limit is "no bytes from server in this window" rather than "the entire
+// read takes longer than this", which matters when a multi-megabyte header
+// batch arrives in chunks on a slow link. With the keep-alive ping firing
+// every keepAliveInterval, the server should never go silent for this long
+// on a healthy connection.
+const readIdleTimeout = 3 * keepAliveInterval
 
 // dialTimeout is the connection timeout when dialing without a SOCKS proxy.
 const dialTimeout = 5 * time.Second
@@ -241,6 +249,18 @@ func (s *Server) listen(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		// Refresh the read deadline per iteration so a single slow read
+		// can't be cut off by a stale deadline set earlier. The window
+		// resets every time we successfully receive a frame, so a
+		// chunky multi-MB header batch trickling in over a slow link
+		// stays alive as long as bytes keep arriving.
+		if err := s.conn.SetReadDeadline(time.Now().Add(readIdleTimeout)); err != nil {
+			if ctx.Err() == nil {
+				log.Tracef("electrum %s: set read deadline: %v", s.addr, err)
+			}
+			s.cancel()
+			return
+		}
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			if ctx.Err() == nil {
@@ -332,17 +352,17 @@ func (s *Server) failPendingHandlers() {
 	}
 }
 
-// keepAlive bounces the read deadline and pings the server. It exits when ctx
-// is cancelled or any operation fails — failure cascades back through listen
-// and surfaces to in-flight callers via ErrServerClosed.
+// keepAlive pings the server on a fixed cadence so the connection's read side
+// has a guaranteed signal to wake it up. listen() handles the read deadline
+// itself; we deliberately do NOT bounce the deadline here, because doing so
+// from a separate goroutine races with whatever read listen() is currently
+// blocked on (e.g. a large in-flight header batch). keepAlive exits when ctx
+// is cancelled or ping fails; failure cascades through listen and surfaces to
+// in-flight callers via ErrServerClosed.
 func (s *Server) keepAlive(ctx context.Context) {
 	t := time.NewTicker(keepAliveInterval)
 	defer t.Stop()
 	for {
-		// Push the read deadline 25% past the next ping interval so
-		// listen blocks long enough to receive the pong but no
-		// longer.
-		_ = s.conn.SetReadDeadline(time.Now().Add(keepAliveInterval * 5 / 4))
 		if err := s.ping(ctx); err != nil {
 			return
 		}

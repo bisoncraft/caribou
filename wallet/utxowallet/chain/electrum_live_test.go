@@ -11,6 +11,8 @@
 package chain
 
 import (
+	"bytes"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -18,9 +20,34 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
+	"golang.org/x/crypto/scrypt"
 )
+
+// checkLTCScrypt is the Litecoin PoW check used by the live chain tests.
+// See wallet/utxowallet/assets/ltc.go for the production-side equivalent.
+// Duplicated here to avoid a heavy asset-package import from a test file.
+func checkLTCScrypt(hdr *wire.BlockHeader) error {
+	var buf bytes.Buffer
+	buf.Grow(wire.MaxBlockHeaderPayload)
+	if err := hdr.Serialize(&buf); err != nil {
+		return err
+	}
+	sh, err := scrypt.Key(buf.Bytes(), buf.Bytes(), 1024, 1, 1, 32)
+	if err != nil {
+		return err
+	}
+	var powHash chainhash.Hash
+	copy(powHash[:], sh)
+	target := blockchain.CompactToBig(hdr.Bits)
+	if blockchain.HashToBig(&powHash).Cmp(target) > 0 {
+		return fmt.Errorf("scrypt %x exceeds target for bits 0x%08x", powHash, hdr.Bits)
+	}
+	return nil
+}
 
 type liveChain struct {
 	name        string
@@ -37,6 +64,14 @@ func liveChains(t *testing.T) []liveChain {
 		Net:          chaincfg.RegressionNetParams.Net,
 		GenesisBlock: chaincfg.RegressionNetParams.GenesisBlock,
 		GenesisHash:  chaincfg.RegressionNetParams.GenesisHash,
+		// Pin genesis as a checkpoint so the validator path runs at
+		// least once during the live sync, and flag regtest's
+		// no-retarget rule so the retarget validator skips the
+		// 2016-block boundary checks.
+		Checkpoints: []chaincfg.Checkpoint{
+			{Height: 0, Hash: chaincfg.RegressionNetParams.GenesisHash},
+		},
+		PoWNoRetargeting: true,
 	}
 
 	ltcGenesis, err := chainhash.NewHashFromStr(
@@ -47,6 +82,17 @@ func liveChains(t *testing.T) []liveChain {
 	ltcParams := &netparams.ChainParams{
 		Chain:       "ltc",
 		GenesisHash: ltcGenesis,
+		// Litecoin PoW is scrypt(header), not SHA256d. Headers.checkPoW
+		// delegates to this hook when present and falls back to
+		// SHA256d when nil; without it the live LTC sync would reject
+		// every header because its scrypt hash doesn't satisfy bits
+		// 0x207fffff under the SHA256d interpretation. Mirrors
+		// wallet/utxowallet/assets/ltc.go's checkPoWScrypt.
+		CheckPoW: checkLTCScrypt,
+		// Genesis-pinned checkpoint + regtest no-retarget flag for
+		// the same reasons as btcParams above.
+		Checkpoints:      []chaincfg.Checkpoint{{Height: 0, Hash: ltcGenesis}},
+		PoWNoRetargeting: true,
 	}
 
 	return []liveChain{
@@ -87,12 +133,15 @@ func TestElectrumClientLiveSync(t *testing.T) {
 				c.Stop()
 				done := make(chan struct{})
 				go func() {
+					// Generous shutdown window: a -race run
+					// after the long LTC scrypt-PoW sync can
+					// take several seconds to fully drain.
 					c.WaitForShutdown()
 					close(done)
 				}()
 				select {
 				case <-done:
-				case <-time.After(5 * time.Second):
+				case <-time.After(30 * time.Second):
 					t.Errorf("client did not shut down")
 				}
 			})

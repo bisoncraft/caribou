@@ -22,16 +22,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btclog"
+	"golang.org/x/crypto/scrypt"
 )
 
 type liveCase struct {
@@ -65,7 +68,8 @@ func liveCases(t *testing.T) []liveCase {
 
 // regtestParams wraps a *chaincfg.Params in a *netparams.ChainParams with
 // only the fields the electrum package actually reads (Chain, GenesisHash,
-// Net).
+// Net). A genesis-height checkpoint is configured so the live sync
+// exercises the checkpoint validator on a known-good hash.
 func regtestParams(t *testing.T, p *chaincfg.Params) *netparams.ChainParams {
 	t.Helper()
 	return &netparams.ChainParams{
@@ -73,6 +77,14 @@ func regtestParams(t *testing.T, p *chaincfg.Params) *netparams.ChainParams {
 		Net:          p.Net,
 		GenesisBlock: p.GenesisBlock,
 		GenesisHash:  p.GenesisHash,
+		// Pin genesis as a checkpoint so the validator path runs at
+		// least once during the live sync. BTC regtest's full chain
+		// is too volatile for higher checkpoints.
+		Checkpoints: []chaincfg.Checkpoint{{Height: 0, Hash: p.GenesisHash}},
+		// Regtest doesn't retarget; record that so the retarget
+		// validator skips. Without this, every 2016-block boundary
+		// would expect a retarget that never happens on regtest.
+		PoWNoRetargeting: true,
 	}
 }
 
@@ -93,7 +105,42 @@ func ltcRegtestParams(t *testing.T) *netparams.ChainParams {
 		Chain:       "ltc",
 		GenesisHash: h,
 		PowLimit:    new(big.Int), // unused in this test
+		// Litecoin PoW is scrypt(header), not SHA256d. The header
+		// validation path in Headers.checkPoW delegates to this hook
+		// when present, falling back to SHA256d when nil — without
+		// it, regtest headers' scrypt hashes wouldn't satisfy the
+		// 0x207fffff target check against their SHA256d. See
+		// wallet/utxowallet/assets/ltc.go for the production
+		// equivalent.
+		CheckPoW: checkPoWScryptForTest,
+		// Genesis-pinned checkpoint and regtest no-retarget flag for
+		// the same reasons as the BTC params above.
+		Checkpoints:      []chaincfg.Checkpoint{{Height: 0, Hash: h}},
+		PoWNoRetargeting: true,
 	}
+}
+
+// checkPoWScryptForTest is the Litecoin PoW check used by the live tests.
+// It mirrors wallet/utxowallet/assets/ltc.go's checkPoWScrypt but is
+// duplicated here because the electrum package can't import the asset
+// package without inviting a heavy dependency cycle.
+func checkPoWScryptForTest(hdr *wire.BlockHeader) error {
+	var buf bytes.Buffer
+	buf.Grow(wire.MaxBlockHeaderPayload)
+	if err := hdr.Serialize(&buf); err != nil {
+		return err
+	}
+	sh, err := scrypt.Key(buf.Bytes(), buf.Bytes(), 1024, 1, 1, 32)
+	if err != nil {
+		return err
+	}
+	var powHash chainhash.Hash
+	copy(powHash[:], sh)
+	target := blockchain.CompactToBig(hdr.Bits)
+	if blockchain.HashToBig(&powHash).Cmp(target) > 0 {
+		return fmt.Errorf("scrypt %x exceeds target for bits 0x%08x", powHash, hdr.Bits)
+	}
+	return nil
 }
 
 // useTestLogger installs a verbose btclog backend so failures include
@@ -159,6 +206,10 @@ func TestLiveNetworkSyncHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewNetwork: %v", err)
 			}
+			// With the per-header PoW window in place, only the
+			// trailing recentPoWWindow headers are scrypt-checked
+			// for LTC; older headers fall through to retarget +
+			// checkpoint validation. 30s is plenty.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := net.Start(ctx); err != nil {

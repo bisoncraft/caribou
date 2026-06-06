@@ -10,11 +10,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -24,6 +28,20 @@ import (
 // client and is large enough to absorb every reorg observed in practice on
 // BTC and LTC.
 const reorgRewindDepth = 8
+
+// recentPoWWindow is the number of recent headers (counting back from the
+// server-reported tip at sync time) that get full per-header PoW
+// validation. Older headers are validated by checkpoint match plus
+// retarget-structure: the difficulty Bits at each retarget boundary must
+// be the value computed from the prior chunk's timestamp delta. Per-header
+// PoW on deep history would force a full scrypt walk over millions of LTC
+// blocks (tens of minutes) for no meaningful additional safety beyond
+// what checkpoints + retarget structure already provide.
+const recentPoWWindow = 2016
+
+// retargetInterval is the number of blocks between difficulty adjustments
+// on BTC and LTC. It's a power-of-two convenience for both chains.
+const retargetInterval = 2016
 
 // headerFileName is the on-disk header file relative to the chain data dir.
 const headerFileName = "blockchain_headers"
@@ -41,14 +59,8 @@ type Headers struct {
 	// filePath is the absolute path to the header file.
 	filePath string
 
-	tip      atomic.Int32 // height of the last connected header
-	synced   atomic.Bool  // true once initial sync completes
-	recovery atomic.Bool  // true while a reorg rewind is in progress
-
-	// recoveryTip is the height the client should see during recovery so
-	// it does not observe the chain going backwards.
-	recoveryTipMtx sync.RWMutex
-	recoveryTip    int32
+	tip    atomic.Int32 // height of the last connected header
+	synced atomic.Bool  // true once initial sync completes
 
 	mu       sync.RWMutex
 	byHeight map[int32]*wire.BlockHeader
@@ -84,17 +96,18 @@ func NewHeaders(cfg *ChainConfig, dataDir string) (*Headers, error) {
 	return h, nil
 }
 
-// Tip returns the height of the highest connected header, or StartHeight-1 if
-// no headers have been connected yet. During a reorg rewind, Tip returns the
-// pre-rewind tip so external observers do not see the chain go backwards
-// momentarily.
+// Tip returns the height of the highest connected header, or StartHeight-1
+// if no headers have been connected yet.
+//
+// Tip reflects the truth about the in-memory store — including a momentary
+// dip during a reorg rewind. The old implementation masked the dip behind a
+// "recovery tip" but that broke recovery in subtle ways (review2 #2): the
+// masked tip pointed at a header that had just been deleted, so
+// HeaderByHeight(Tip()) returned nil and the recovery path's catch-up
+// floored at the masked height instead of the real one. Consumers that
+// don't want to see the dip should subscribe to TipChange events and use
+// the Disconnected entries to drive their own rollback.
 func (h *Headers) Tip() int32 {
-	if h.recovery.Load() {
-		h.recoveryTipMtx.RLock()
-		t := h.recoveryTip
-		h.recoveryTipMtx.RUnlock()
-		return t
-	}
 	return h.tip.Load()
 }
 
@@ -144,7 +157,14 @@ func (h *Headers) TipHash() chainhash.Hash {
 // predecessor or this returns an error and the chain is left unchanged.
 //
 // startHeight must equal Tip()+1; otherwise an error is returned.
-func (h *Headers) AppendBatch(startHeight int32, raw []byte) (int, error) {
+//
+// tipHint is the server-reported best height the caller is syncing toward.
+// Headers within the trailing recentPoWWindow of tipHint get full
+// per-header PoW; older headers are validated by checkpoint match plus
+// retarget-structure (cheap, catches trivial-bits forgery without forcing
+// scrypt on millions of LTC blocks). Pass tipHint=0 to validate every
+// header — useful for bench/test paths that want the strict mode.
+func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int, error) {
 	headerSize := h.cfg.HeaderSize
 	if len(raw)%headerSize != 0 {
 		return 0, fmt.Errorf("electrum: header batch length %d not a multiple of %d",
@@ -163,15 +183,30 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte) (int, error) {
 			startHeight, h.tip.Load())
 	}
 
-	// Verify each header connects to the previous one.
+	// Validate each header. We always check linkage and checkpoint hashes;
+	// retarget Bits are checked at boundaries; per-header PoW only applies
+	// to headers within recentPoWWindow of tipHint (or all headers when
+	// tipHint==0, the strict mode).
 	prevHash, err := h.prevHashAt(startHeight)
 	if err != nil {
 		return 0, err
 	}
 	for i, hdr := range headers {
+		height := startHeight + int32(i)
 		if hdr.PrevBlock != prevHash {
 			return 0, fmt.Errorf("electrum: header at %d does not connect: prev %s, want %s",
-				startHeight+int32(i), hdr.PrevBlock, prevHash)
+				height, hdr.PrevBlock, prevHash)
+		}
+		if err := h.validateCheckpoint(height, hdr); err != nil {
+			return 0, err
+		}
+		if err := h.validateRetargetLocked(height, hdr, headers, startHeight); err != nil {
+			return 0, err
+		}
+		if h.shouldCheckPoW(height, tipHint) {
+			if err := h.checkPoW(hdr); err != nil {
+				return 0, fmt.Errorf("electrum: header at %d: %w", height, err)
+			}
 		}
 		prevHash = hdr.BlockHash()
 	}
@@ -190,39 +225,70 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte) (int, error) {
 	return len(headers), nil
 }
 
+// shouldCheckPoW reports whether the header at `height` falls within the
+// trailing recentPoWWindow of the server-reported tipHint. Returns true also
+// when tipHint == 0 (strict mode — used by AppendOne, by tests, and as a
+// safe default when the caller doesn't know the tip).
+func (h *Headers) shouldCheckPoW(height, tipHint int32) bool {
+	if tipHint <= 0 {
+		return true
+	}
+	return height > tipHint-recentPoWWindow
+}
+
 // AppendOne appends a single header that must connect to the current tip.
-// It returns true on success; on failure (header does not connect) it
-// triggers a reorg rewind and returns false, leaving the caller to retry on
-// the next notification.
-func (h *Headers) AppendOne(hdr *wire.BlockHeader) (bool, error) {
+//
+// Return values:
+//   - connected=true, disconnected=nil, err=nil — header appended cleanly.
+//   - connected=false, disconnected!=nil, err=nil — header did NOT connect;
+//     a reorg rewind was performed and the caller should expect a fresh
+//     headers subscription notification to bring us to the new chain. The
+//     disconnected slice (newest-first) is what was rolled back, so the
+//     caller can surface BlockDisconnected events.
+//   - connected=false, disconnected=nil, err!=nil — fatal: write/persist
+//     failure or PoW violation. The chain is left untouched.
+func (h *Headers) AppendOne(hdr *wire.BlockHeader) (connected bool, disconnected []DisconnectedBlock, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	tip := h.tip.Load()
 	prevHash, err := h.prevHashAt(tip + 1)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if hdr.PrevBlock != prevHash {
 		log.Debugf("electrum: incoming header at %d does not connect (prev %s, want %s); rewinding %d",
 			tip+1, hdr.PrevBlock, prevHash, reorgRewindDepth)
-		if err := h.rewindLocked(reorgRewindDepth); err != nil {
-			return false, err
+		disc, err := h.rewindLocked(reorgRewindDepth)
+		if err != nil {
+			return false, nil, err
 		}
-		return false, nil
+		return false, disc, nil
+	}
+	newHeight := tip + 1
+	if err := h.validateCheckpoint(newHeight, hdr); err != nil {
+		return false, nil, err
+	}
+	// AppendOne is the tip-update path: the incoming header is the new
+	// chain tip. Always run per-header PoW here regardless of any
+	// caller-side tipHint logic — this is the strongest cheap signal we
+	// have that the new tip is honest.
+	if err := h.validateRetargetLocked(newHeight, hdr, nil, 0); err != nil {
+		return false, nil, err
+	}
+	if err := h.checkPoW(hdr); err != nil {
+		return false, nil, fmt.Errorf("electrum: header at %d: %w", newHeight, err)
 	}
 	var buf bytes.Buffer
 	if err := hdr.Serialize(&buf); err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if err := h.appendToFile(buf.Bytes()); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	newHeight := tip + 1
 	h.byHeight[newHeight] = hdr
 	h.byHash[hdr.BlockHash()] = newHeight
 	h.tip.Store(newHeight)
-	h.recovery.Store(false)
-	return true, nil
+	return true, nil, nil
 }
 
 // VerifyAll walks the in-memory chain backwards from tip to StartHeight,
@@ -247,17 +313,38 @@ func (h *Headers) VerifyAll() error {
 
 // rewindLocked drops the top `depth` headers from memory and truncates the
 // file. The caller must hold h.mu.
-func (h *Headers) rewindLocked(depth int32) error {
+//
+// Returns the disconnected blocks in newest-first order. The returned
+// metadata is captured BEFORE the in-memory state mutates so callers can
+// surface BlockDisconnected events even though the in-memory entries are
+// gone by the time they look.
+func (h *Headers) rewindLocked(depth int32) ([]DisconnectedBlock, error) {
 	tip := h.tip.Load()
 	if tip-depth < h.cfg.StartHeight {
-		return fmt.Errorf("electrum: cannot rewind %d below start %d (tip %d)",
+		return nil, fmt.Errorf("electrum: cannot rewind %d below start %d (tip %d)",
 			depth, h.cfg.StartHeight, tip)
+	}
+	// Snapshot disconnected metadata before mutating anything.
+	disc := make([]DisconnectedBlock, 0, depth)
+	for i := range int(depth) {
+		height := tip - int32(i)
+		hdr := h.byHeight[height]
+		if hdr == nil {
+			// Should not happen — the maps are populated alongside
+			// the file. If it does, skip rather than block recovery.
+			continue
+		}
+		disc = append(disc, DisconnectedBlock{
+			Hash:   hdr.BlockHash(),
+			Height: height,
+			Time:   hdr.Timestamp.Unix(),
+		})
 	}
 	// File first, in-memory second, so a failed truncate leaves the maps
 	// untouched.
 	newSize := int64(tip-depth-h.cfg.StartHeight+1) * int64(h.cfg.HeaderSize)
 	if err := os.Truncate(h.filePath, newSize); err != nil {
-		return fmt.Errorf("electrum: truncate header file: %w", err)
+		return nil, fmt.Errorf("electrum: truncate header file: %w", err)
 	}
 	for i := range int(depth) {
 		height := tip - int32(i)
@@ -267,12 +354,8 @@ func (h *Headers) rewindLocked(depth int32) error {
 		}
 		delete(h.byHeight, height)
 	}
-	h.recoveryTipMtx.Lock()
-	h.recoveryTip = tip
-	h.recoveryTipMtx.Unlock()
-	h.recovery.Store(true)
 	h.tip.Store(tip - depth)
-	return nil
+	return disc, nil
 }
 
 // parseBatch deserializes a concatenated raw header batch.
@@ -298,6 +381,133 @@ func (h *Headers) parseBatch(raw []byte) ([]*wire.BlockHeader, error) {
 	return out, nil
 }
 
+// validateCheckpoint verifies that, if height matches one of the configured
+// checkpoints, the header's hash matches the checkpoint hash. Returns nil
+// if no checkpoint applies. A checkpoint mismatch is a strong hostile-server
+// signal and fails fast.
+func (h *Headers) validateCheckpoint(height int32, hdr *wire.BlockHeader) error {
+	if h.cfg.Params == nil {
+		return nil
+	}
+	for _, cp := range h.cfg.Params.Checkpoints {
+		if cp.Height != height {
+			continue
+		}
+		got := hdr.BlockHash()
+		if cp.Hash == nil {
+			continue
+		}
+		if got != *cp.Hash {
+			return fmt.Errorf("electrum: checkpoint mismatch at %d: server gave %s, expected %s",
+				height, got, cp.Hash)
+		}
+	}
+	return nil
+}
+
+// validateRetargetLocked verifies the difficulty Bits at a retarget boundary
+// matches the value computed from the prior retarget chunk's timestamp
+// delta. The check is skipped on chains with PoWNoRetargeting (regtest) and
+// for heights that aren't retarget boundaries.
+//
+// `inBatch` and `batchStart` let the validator find a chunk's first header
+// when it's still in the current batch (not yet committed to byHeight).
+// AppendOne calls with inBatch=nil and batchStart=0 — in steady-state tip
+// updates the prior chunk is always already in byHeight.
+//
+// The caller must hold h.mu (read or write).
+func (h *Headers) validateRetargetLocked(height int32, hdr *wire.BlockHeader,
+	inBatch []*wire.BlockHeader, batchStart int32) error {
+
+	if h.cfg.Params == nil || h.cfg.Params.PoWNoRetargeting {
+		return nil
+	}
+	if height == 0 || height%retargetInterval != 0 {
+		// Not a retarget boundary; nothing to check (and the prior
+		// header's Bits propagates unchanged, but we don't enforce
+		// that here — it'd reject legitimate downward adjustments on
+		// chains where bits can change off-cycle. The retarget check
+		// at the next boundary will catch a tampered chunk).
+		return nil
+	}
+	prior := h.headerAt(height-1, inBatch, batchStart)
+	chunkStart := h.headerAt(height-retargetInterval, inBatch, batchStart)
+	if prior == nil || chunkStart == nil {
+		// Can't validate without the prior chunk; soft-pass rather
+		// than reject. This only triggers when a batch is so deep
+		// that it predates loadFromDisk's range, which we don't
+		// support in practice.
+		return nil
+	}
+	want := computeNextWorkRequired(h.cfg.Params, prior, chunkStart)
+	if hdr.Bits != want {
+		return fmt.Errorf("electrum: retarget mismatch at %d: header bits 0x%08x, computed 0x%08x",
+			height, hdr.Bits, want)
+	}
+	return nil
+}
+
+// headerAt returns the header at `height`, looking first in `inBatch`
+// (which is indexed from batchStart) and falling back to byHeight.
+func (h *Headers) headerAt(height int32, inBatch []*wire.BlockHeader, batchStart int32) *wire.BlockHeader {
+	if inBatch != nil && height >= batchStart && int(height-batchStart) < len(inBatch) {
+		return inBatch[height-batchStart]
+	}
+	return h.byHeight[height]
+}
+
+// computeNextWorkRequired implements the standard Bitcoin/Litecoin retarget
+// rule: new_target = prev_target * actual_timespan / expected_timespan,
+// clamped to [expected/factor, expected*factor] on the timespan and to
+// PowLimit on the target. Mirrors blockchain.calcNextRequiredDifficulty.
+func computeNextWorkRequired(params *netparams.ChainParams, prior, chunkStart *wire.BlockHeader) uint32 {
+	expectedTimespan := int64(params.TargetTimespan / time.Second)
+	if expectedTimespan == 0 {
+		// Params don't define retarget timing (shouldn't happen for
+		// BTC/LTC). Accept whatever the server gave us.
+		return prior.Bits
+	}
+	factor := params.RetargetAdjustmentFactor
+	if factor == 0 {
+		factor = 4 // BTC/LTC standard.
+	}
+	minTimespan := expectedTimespan / factor
+	maxTimespan := expectedTimespan * factor
+
+	actualTimespan := prior.Timestamp.Unix() - chunkStart.Timestamp.Unix()
+	actualTimespan = max(min(actualTimespan, maxTimespan), minTimespan)
+
+	prevTarget := blockchain.CompactToBig(prior.Bits)
+	newTarget := new(big.Int).Mul(prevTarget, big.NewInt(actualTimespan))
+	newTarget.Div(newTarget, big.NewInt(expectedTimespan))
+	if params.PowLimit != nil && newTarget.Cmp(params.PowLimit) > 0 {
+		newTarget = new(big.Int).Set(params.PowLimit)
+	}
+	return blockchain.BigToCompact(newTarget)
+}
+
+// checkPoW validates that hdr satisfies its own claimed target. For chains
+// that supply a custom CheckPoW hook on their netparams (e.g. Litecoin's
+// scrypt) the hook is delegated to; otherwise we run the standard Bitcoin
+// double-SHA256 check.
+//
+// We intentionally do not validate retargeting or PowLimit clamps here — a
+// hostile server could still claim arbitrary difficulty per header. The
+// per-header check is the cheapest meaningful bound: trivial-difficulty
+// forgeries fail it, and any cheaper attack would require breaking SHA256d
+// (or scrypt) preimage resistance.
+func (h *Headers) checkPoW(hdr *wire.BlockHeader) error {
+	if h.cfg.Params != nil && h.cfg.Params.CheckPoW != nil {
+		return h.cfg.Params.CheckPoW(hdr)
+	}
+	target := blockchain.CompactToBig(hdr.Bits)
+	hash := hdr.BlockHash()
+	if blockchain.HashToBig(&hash).Cmp(target) > 0 {
+		return fmt.Errorf("block hash %s exceeds target for bits 0x%08x", hash, hdr.Bits)
+	}
+	return nil
+}
+
 // prevHashAt returns the hash that a header at `height` must reference as
 // PrevBlock. For the very first header (at StartHeight) there is no local
 // parent to compare against — at StartHeight == 0 the parent is genesis and
@@ -315,13 +525,20 @@ func (h *Headers) prevHashAt(height int32) (chainhash.Hash, error) {
 	return prev.BlockHash(), nil
 }
 
-// appendToFile appends raw header bytes to the persistent header file.
-func (h *Headers) appendToFile(raw []byte) error {
+// appendToFile appends raw header bytes to the persistent header file. The
+// Close error is captured via a named return so a failed flush on a sketchy
+// filesystem (NFS, full disk) surfaces as an error rather than a silent
+// disagreement between memory and disk on the next restart.
+func (h *Headers) appendToFile(raw []byte) (err error) {
 	f, err := os.OpenFile(h.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("electrum: open header file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("electrum: close header file: %w", cerr)
+		}
+	}()
 	if _, err := f.Write(raw); err != nil {
 		return fmt.Errorf("electrum: write header file: %w", err)
 	}

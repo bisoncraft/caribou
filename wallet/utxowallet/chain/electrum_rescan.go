@@ -47,19 +47,53 @@ func (c *ElectrumClient) NotifyReceived(addrs []btcutil.Address) error {
 // block on its completion. This prevents the previous race where a second
 // caller saw the cache entry before the first caller's subscription had
 // reached the server.
+//
+// If the in-flight subscribe fails, waiters discover the cache entry was
+// rolled back and retry themselves rather than returning nil — otherwise the
+// wallet layer would believe the address was subscribed when the server never
+// actually heard about it. Retries are bounded so a persistently failing
+// server eventually surfaces an error to the caller.
 func (c *ElectrumClient) subscribeAddress(addr btcutil.Address) error {
+	const maxAttempts = 3
+	for range maxAttempts {
+		retry, err := c.trySubscribeAddress(addr)
+		if err != nil {
+			return err
+		}
+		if !retry {
+			return nil
+		}
+	}
+	return fmt.Errorf("electrum: subscribe scripthash for %s: in-flight subscribe failed", addr)
+}
+
+// trySubscribeAddress performs a single subscribe attempt. It returns
+// (retry=true, nil) when the caller observed an in-flight subscribe that
+// failed and bailed; the outer loop should re-enter.
+func (c *ElectrumClient) trySubscribeAddress(addr btcutil.Address) (retry bool, err error) {
 	sh, err := addrScripthash(addr)
 	if err != nil {
-		return err
+		return false, err
 	}
 	c.addrCacheMtx.Lock()
 	if entry, ok := c.addrCache[sh]; ok {
 		ready := entry.ready
 		c.addrCacheMtx.Unlock()
-		if ready != nil {
-			<-ready // wait for an in-flight subscribe to complete
+		if ready == nil {
+			// Already subscribed.
+			return false, nil
 		}
-		return nil
+		<-ready
+		// First caller finished. If it succeeded the entry is still
+		// present and we're done; if it failed the entry was deleted
+		// and we should retry rather than silently return success.
+		c.addrCacheMtx.Lock()
+		_, survived := c.addrCache[sh]
+		c.addrCacheMtx.Unlock()
+		if survived {
+			return false, nil
+		}
+		return true, nil
 	}
 	ready := make(chan struct{})
 	c.addrCache[sh] = &scripthashEntry{addr: addr, ready: ready}
@@ -67,23 +101,40 @@ func (c *ElectrumClient) subscribeAddress(addr btcutil.Address) error {
 
 	status, err := c.net.SubscribeScripthash(c.ctx, sh)
 	if err != nil {
-		// Roll back so a retry can succeed; release any blocked
-		// waiters by closing ready (they'll re-enter and find no
-		// entry).
+		// Roll back so a retry can succeed, then release any blocked
+		// waiters. They observe the missing entry and retry rather
+		// than returning nil.
 		c.addrCacheMtx.Lock()
 		delete(c.addrCache, sh)
 		c.addrCacheMtx.Unlock()
 		close(ready)
-		return fmt.Errorf("electrum: subscribe scripthash for %s: %w", addr, err)
+		return false, fmt.Errorf("electrum: subscribe scripthash for %s: %w", addr, err)
 	}
+	// Release waiters first so they see a stable cache entry, then
+	// run the initial-history emission below. lastStatus stays empty so
+	// the synthesized status change below is processed as a real
+	// transition rather than short-circuited.
 	c.addrCacheMtx.Lock()
 	if entry, ok := c.addrCache[sh]; ok {
-		entry.lastStatus = status.Status
 		entry.ready = nil
 	}
 	c.addrCacheMtx.Unlock()
 	close(ready)
-	return nil
+
+	// Review2 #5: SubscribeScripthash returns the current status
+	// synchronously but never enqueues an initial notification. Without
+	// this, transactions already pending (or confirmed) at subscribe time
+	// would only surface after the server's next status change — pending
+	// mempool txs in particular would stay invisible until they confirm.
+	// Synthesize an initial status notification so the existing
+	// diff-and-emit path runs once. If the server reported no activity
+	// (empty status) there's nothing to do.
+	if status.Status != "" {
+		if err := c.handleScripthashStatus(status); err != nil {
+			log.Debugf("electrum: prime scripthash %s: %v", sh, err)
+		}
+	}
+	return false, nil
 }
 
 // Rescan kicks off a chain rescan: walking from startHash to the current tip,
@@ -181,6 +232,15 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 // silently on cancellation; on completion it enqueues RescanFinished. Errors
 // during the walk are logged but not returned — the wallet observes progress
 // through the notification stream, not via Rescan's call site.
+//
+// Notification shape (review2 #11): only emit FilteredBlockConnected for
+// blocks containing watched-address activity, plus periodic RescanProgress
+// notifications to advance the wallet's syncedTo, plus a terminating
+// RescanFinished. Emitting a BlockConnected per empty block during a deep
+// rescan would force a per-block walletdb.Update — fine for shallow
+// birthdays but unnecessarily expensive for imported / deep-birthday wallets.
+// catchUpHashes in chainntfns.go walks syncedTo forward on every
+// RescanProgress, so the wallet's progress is still recorded.
 func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
 	matches map[int32][]electrum.HistoryEntry) {
 
@@ -201,19 +261,14 @@ func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
 			log.Errorf("electrum: rescan missing header at %d", height)
 			return
 		}
-		block := wtxmgr.BlockMeta{
-			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
-			Time:  hdr.Timestamp,
-		}
-		entries := matches[height]
-		var err error
-		if len(entries) == 0 {
-			err = c.enqueueCtx(ctx, BlockConnected(block))
-		} else {
-			err = c.emitFilteredBlock(ctx, block, entries)
-		}
-		if err != nil {
-			return // shutdown or rescan cancelled
+		if entries := matches[height]; len(entries) > 0 {
+			block := wtxmgr.BlockMeta{
+				Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
+				Time:  hdr.Timestamp,
+			}
+			if err := c.emitFilteredBlock(ctx, block, entries); err != nil {
+				return // shutdown or rescan cancelled
+			}
 		}
 		if height%rescanProgressInterval == 0 && height != startHeight {
 			if err := c.enqueueCtx(ctx, &RescanProgress{

@@ -7,8 +7,10 @@ package electrum
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -28,15 +30,14 @@ const (
 	userAgent = "Bison Wallet"
 )
 
-// Node is a single connected electrumx peer. It wraps a Server with session
-// cost tracking and exposes the JSON-RPC methods we use.
+// Node is a single connected electrumx peer. It wraps a Server and exposes
+// the JSON-RPC methods we use.
 //
 // A Node is one-shot: once its underlying Server's Done channel closes, the
 // caller should discard the Node and dial a fresh one if needed.
 type Node struct {
-	addr    *ServerAddr
-	server  *Server
-	session *session
+	addr   *ServerAddr
+	server *Server
 
 	softwareVersion string
 	protocolVersion string
@@ -78,9 +79,8 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 	}
 
 	n := &Node{
-		addr:    addr,
-		server:  srv,
-		session: newSession(),
+		addr:   addr,
+		server: srv,
 	}
 
 	vers, err := n.serverVersion(ctx)
@@ -102,8 +102,6 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 			feats.GenesisHash, expectedGenesis)
 	}
 
-	n.session.start(ctx)
-
 	log.Infof("electrum: connected to %s over %s (server %s, proto %s, genesis %s)",
 		addr.Addr, addr.Proto, n.softwareVersion, n.protocolVersion, feats.GenesisHash)
 
@@ -119,13 +117,6 @@ func (n *Node) Done() <-chan struct{} { return n.server.Done() }
 // Close initiates shutdown.
 func (n *Node) Close() { n.server.Close() }
 
-// SessionCost returns the current estimated electrumx session cost.
-func (n *Node) SessionCost() float64 { return n.session.Cost() }
-
-// SoftLimitExceeded reports whether the cost estimate suggests rotating to a
-// fresh node.
-func (n *Node) SoftLimitExceeded() bool { return n.session.SoftLimitExceeded() }
-
 // ----------------------------------------------------------------------------
 // JSON-RPC API
 // ----------------------------------------------------------------------------
@@ -135,7 +126,6 @@ func (n *Node) serverVersion(ctx context.Context) ([2]string, error) {
 	var out [2]string
 	args := positional{userAgent, []string{protoMin, protoMax}}
 	if err := n.server.request(ctx, "server.version", args, &out); err != nil {
-		n.session.bumpError()
 		return out, err
 	}
 	return out, nil
@@ -145,10 +135,8 @@ func (n *Node) serverVersion(ctx context.Context) ([2]string, error) {
 func (n *Node) serverFeatures(ctx context.Context) (*ServerFeatures, error) {
 	var out ServerFeatures
 	if err := n.server.request(ctx, "server.features", nil, &out); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpStruct(&out)
 	return &out, nil
 }
 
@@ -156,10 +144,8 @@ func (n *Node) serverFeatures(ctx context.Context) (*ServerFeatures, error) {
 func (n *Node) BlockHeader(ctx context.Context, height int32) (string, error) {
 	var hex string
 	if err := n.server.request(ctx, "blockchain.block.header", positional{height}, &hex); err != nil {
-		n.session.bumpError()
 		return "", err
 	}
-	n.session.bumpString(hex)
 	return hex, nil
 }
 
@@ -182,10 +168,8 @@ func (n *Node) BlockHeaders(ctx context.Context, startHeight int32, count int) (
 	var out BlockHeadersResult
 	if err := n.server.request(ctx, "blockchain.block.headers",
 		positional{startHeight, count}, &out); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpString(out.HexConcat)
 	return &out, nil
 }
 
@@ -195,10 +179,8 @@ func (n *Node) BlockHeaders(ctx context.Context, startHeight int32, count int) (
 func (n *Node) SubscribeHeaders(ctx context.Context) (*HeadersTip, error) {
 	var out HeadersTip
 	if err := n.server.request(ctx, "blockchain.headers.subscribe", nil, &out); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpString(out.Hex)
 	return &out, nil
 }
 
@@ -212,10 +194,8 @@ func (n *Node) SubscribeScripthash(ctx context.Context, scripthash string) (*Scr
 	var status string
 	if err := n.server.request(ctx, "blockchain.scripthash.subscribe",
 		positional{scripthash}, &status); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpString(status)
 	return &ScripthashStatus{Scripthash: scripthash, Status: status}, nil
 }
 
@@ -227,7 +207,6 @@ func (n *Node) UnsubscribeScripthash(ctx context.Context, scripthash string) {
 	if err := n.server.request(ctx, "blockchain.scripthash.unsubscribe",
 		positional{scripthash}, &ok); err != nil {
 		log.Debugf("electrum: scripthash unsubscribe %s: %v", scripthash, err)
-		n.session.bumpError()
 	}
 }
 
@@ -242,10 +221,8 @@ func (n *Node) GetHistory(ctx context.Context, scripthash string) ([]HistoryEntr
 	var out []HistoryEntry
 	if err := n.server.request(ctx, "blockchain.scripthash.get_history",
 		positional{scripthash}, &out); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpStruct(out)
 	return out, nil
 }
 
@@ -254,10 +231,8 @@ func (n *Node) ListUnspent(ctx context.Context, scripthash string) ([]UnspentEnt
 	var out []UnspentEntry
 	if err := n.server.request(ctx, "blockchain.scripthash.listunspent",
 		positional{scripthash}, &out); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpStruct(out)
 	return out, nil
 }
 
@@ -268,26 +243,51 @@ func (n *Node) GetTransactionVerbose(ctx context.Context, txid string) (*Verbose
 	var out VerboseTx
 	if err := n.server.request(ctx, "blockchain.transaction.get",
 		positional{txid, true}, &out); err != nil {
-		n.session.bumpError()
 		return nil, err
 	}
-	n.session.bumpString(txid)
-	n.session.bumpStruct(&out)
 	return &out, nil
 }
 
 // GetRawTransaction issues `blockchain.transaction.get` with verbose=false,
 // returning the hex-encoded raw transaction.
+//
+// The returned bytes are verified to actually hash (double-SHA256, reversed)
+// to the requested txid. Without this check, a hostile server can substitute
+// arbitrary bytes for a real txid and we would record a transaction that was
+// never on chain. This is a cheap, one-shot bound — no Merkle proof, but
+// real bytes for the right id.
 func (n *Node) GetRawTransaction(ctx context.Context, txid string) (string, error) {
 	var out string
 	if err := n.server.request(ctx, "blockchain.transaction.get",
 		positional{txid, false}, &out); err != nil {
-		n.session.bumpError()
 		return "", err
 	}
-	n.session.bumpString(txid)
-	n.session.bumpString(out)
+	if err := verifyTxidMatchesHex(txid, out); err != nil {
+		return "", err
+	}
 	return out, nil
+}
+
+// verifyTxidMatchesHex returns nil if outHex is the raw transaction whose
+// SHA256(SHA256(bytes)) (reversed) equals txid. The check is a cheap defence
+// against a server returning the wrong bytes for a requested txid.
+func verifyTxidMatchesHex(txid, outHex string) error {
+	raw, err := hex.DecodeString(outHex)
+	if err != nil {
+		return fmt.Errorf("electrum: decode tx hex: %w", err)
+	}
+	first := sha256.Sum256(raw)
+	second := sha256.Sum256(first[:])
+	// Bitcoin txids are big-endian display of little-endian internal
+	// hashes — reverse before hex-encoding.
+	for i, j := 0, len(second)-1; i < j; i, j = i+1, j-1 {
+		second[i], second[j] = second[j], second[i]
+	}
+	got := hex.EncodeToString(second[:])
+	if got != txid {
+		return fmt.Errorf("electrum: tx hex hashes to %s, requested %s", got, txid)
+	}
+	return nil
 }
 
 // Broadcast issues `blockchain.transaction.broadcast` and returns the txid
@@ -296,11 +296,8 @@ func (n *Node) Broadcast(ctx context.Context, rawTxHex string) (string, error) {
 	var txid string
 	if err := n.server.request(ctx, "blockchain.transaction.broadcast",
 		positional{rawTxHex}, &txid); err != nil {
-		n.session.bumpError()
 		return "", err
 	}
-	n.session.bumpString(rawTxHex)
-	n.session.bumpString(txid)
 	return txid, nil
 }
 
@@ -314,10 +311,8 @@ func (n *Node) EstimateFee(ctx context.Context, confTarget int32) (int64, error)
 	var coinsPerKB float64
 	if err := n.server.request(ctx, "blockchain.estimatefee",
 		positional{confTarget}, &coinsPerKB); err != nil {
-		n.session.bumpError()
 		return 0, err
 	}
-	n.session.bumpBytes(8)
 	if coinsPerKB <= 0 {
 		return 0, errors.New("electrum: server cannot estimate fee for given target")
 	}

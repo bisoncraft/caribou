@@ -59,6 +59,32 @@ type HeadersTip struct {
 	Hex    string `json:"hex"`
 }
 
+// DisconnectedBlock captures a header that has been rolled back from the
+// chain due to a reorg rewind. The header itself is no longer in the headers
+// store by the time consumers see it, so the metadata is included inline.
+type DisconnectedBlock struct {
+	Hash   [32]byte
+	Height int32
+	Time   int64 // unix seconds
+}
+
+// TipChange is the structured event Network publishes when its header chain
+// advances or rewinds. Consumers translate it into chain.Interface
+// notifications: BlockDisconnected for each Disconnected entry (in order,
+// which is newest-first / disconnect order) and BlockConnected for each
+// Connected height (oldest-first / connect order).
+//
+// Either or both slices may be populated in a single event:
+//   - Pure advance: Connected populated, Disconnected empty.
+//   - Pure rewind: Disconnected populated, Connected empty.
+//   - Reorg (rewind + replacement): both populated. The wallet processes
+//     Disconnected first so its syncedTo is on the common ancestor before
+//     the new connects are recorded.
+type TipChange struct {
+	Disconnected []DisconnectedBlock
+	Connected    []int32 // heights newly appended; queryable via HeaderByHeight
+}
+
 // HistoryEntry is one element of a `blockchain.scripthash.get_history` reply.
 type HistoryEntry struct {
 	Height int32  `json:"height"`

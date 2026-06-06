@@ -39,9 +39,31 @@ type stubNetwork struct {
 	bcasted  []string
 	bcastErr error
 
-	tipCh        chan int32
+	// subscribeHook, if non-nil, is invoked at the top of each
+	// SubscribeScripthash call (under s.mu). The returned error is
+	// returned to the caller. count is the 1-based call index. Tests use
+	// this to inject failures and to gate ordering of concurrent
+	// subscribers.
+	subscribeHook func(count int, sh string) error
+	subscribeN    int
+
+	tipCh        chan *electrum.TipChange
 	scripthashCh chan *electrum.ScripthashStatus
 	done         chan struct{}
+}
+
+// pushConnected enqueues a TipChange with a single Connected height. Tests
+// use this in place of the prior "send an int32 height" form.
+func (s *stubNetwork) pushConnected(t *testing.T, h int32) {
+	t.Helper()
+	s.tipCh <- &electrum.TipChange{Connected: []int32{h}}
+}
+
+// pushDisconnected enqueues a TipChange with the given disconnected blocks
+// (newest-first), driving the chain client's BlockDisconnected emission path.
+func (s *stubNetwork) pushDisconnected(t *testing.T, blocks ...electrum.DisconnectedBlock) {
+	t.Helper()
+	s.tipCh <- &electrum.TipChange{Disconnected: blocks}
 }
 
 func newStubNetwork() *stubNetwork {
@@ -50,7 +72,7 @@ func newStubNetwork() *stubNetwork {
 		subs:         map[string]string{},
 		history:      map[string][]electrum.HistoryEntry{},
 		rawTxs:       map[string]string{},
-		tipCh:        make(chan int32, 8),
+		tipCh:        make(chan *electrum.TipChange, 8),
 		scripthashCh: make(chan *electrum.ScripthashStatus, 8),
 		done:         make(chan struct{}),
 	}
@@ -119,10 +141,20 @@ func (s *stubNetwork) TipHash() chainhash.Hash {
 	return s.headers[len(s.headers)-1].BlockHash()
 }
 
-func (s *stubNetwork) TipChangeChan() <-chan int32                       { return s.tipCh }
+func (s *stubNetwork) TipChangeChan() <-chan *electrum.TipChange         { return s.tipCh }
 func (s *stubNetwork) ScripthashChan() <-chan *electrum.ScripthashStatus { return s.scripthashCh }
 
 func (s *stubNetwork) SubscribeScripthash(_ context.Context, sh string) (*electrum.ScripthashStatus, error) {
+	s.mu.Lock()
+	s.subscribeN++
+	hook := s.subscribeHook
+	n := s.subscribeN
+	s.mu.Unlock()
+	if hook != nil {
+		if err := hook(n, sh); err != nil {
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	status := s.subs[sh]
@@ -190,8 +222,10 @@ func testParams() *netparams.ChainParams {
 }
 
 // makeClient constructs an ElectrumClient against a stubNetwork seeded with
-// n blocks. The returned client has been Started; the caller is responsible
-// for Stop()/WaitForShutdown.
+// n blocks. The returned client has been Started, the initial
+// ClientConnected and BlockConnected (mirroring what the real *electrum.Network
+// emits at Start time) have already been drained from the notification
+// channel, and the caller is responsible only for Stop()/WaitForShutdown.
 func makeClient(t *testing.T, blocks int) (*ElectrumClient, *stubNetwork) {
 	t.Helper()
 	stub := newStubNetwork()
@@ -211,6 +245,17 @@ func makeClient(t *testing.T, blocks int) (*ElectrumClient, *stubNetwork) {
 		c.Stop()
 		c.WaitForShutdown()
 	})
+	// ClientConnected is always enqueued by Start; drain it so tests
+	// start from a stable baseline.
+	drain(t, c, 1, time.Second)
+	if blocks > 0 {
+		// Mirror network.headersLoop's "initial tip-change after
+		// applying the subscription's initial reply" emission, and
+		// drain the resulting BlockConnected. This guarantees bs is
+		// populated by the time the caller looks at it.
+		stub.pushConnected(t, stub.Tip())
+		drain(t, c, 1, time.Second)
+	}
 	return c, stub
 }
 
@@ -304,14 +349,11 @@ func TestElectrumGetBlockUnimplemented(t *testing.T) {
 
 func TestElectrumTipChangeBecomesBlockConnected(t *testing.T) {
 	c, stub := makeClient(t, 3)
-	// First notification is always ClientConnected.
-	first := drain(t, c, 1, 2*time.Second)[0]
-	if _, ok := first.(ClientConnected); !ok {
-		t.Fatalf("first ntfn = %T, want ClientConnected", first)
-	}
+	// makeClient already drained the initial ClientConnected and
+	// startup BlockConnected.
 	// Add a new block and push a tip-change.
 	stub.addBlock(t, time.Unix(1_700_000_999, 0))
-	stub.tipCh <- 3
+	stub.pushConnected(t, 3)
 	// Expect a BlockConnected with height 3.
 	got := drain(t, c, 1, 2*time.Second)[0]
 	bc, ok := got.(BlockConnected)
@@ -325,10 +367,8 @@ func TestElectrumTipChangeBecomesBlockConnected(t *testing.T) {
 
 func TestElectrumBlockStamp(t *testing.T) {
 	c, stub := makeClient(t, 2)
-	// Drain the initial ClientConnected.
-	drain(t, c, 1, time.Second)
-
-	// BlockStamp before any BlockConnected returns the best-block stamp.
+	// After makeClient, the initial BlockConnected at Tip()==1 has been
+	// drained; bs is the resulting block stamp.
 	bs, err := c.BlockStamp()
 	if err != nil {
 		t.Fatalf("BlockStamp: %v", err)
@@ -340,7 +380,7 @@ func TestElectrumBlockStamp(t *testing.T) {
 	// Push a tip-change; BlockStamp should advance after we read the
 	// BlockConnected notification.
 	stub.addBlock(t, time.Unix(1_700_001_000, 0))
-	stub.tipCh <- 2
+	stub.pushConnected(t, 2)
 	drain(t, c, 1, time.Second) // consume BlockConnected
 	bs, err = c.BlockStamp()
 	if err != nil {
@@ -353,7 +393,7 @@ func TestElectrumBlockStamp(t *testing.T) {
 
 func TestElectrumNotifyReceivedAndRelevantTx(t *testing.T) {
 	c, stub := makeClient(t, 3)
-	drain(t, c, 1, time.Second) // ClientConnected
+	// makeClient already drained initial ClientConnected + BlockConnected.
 
 	addr, sh := newSimnetAddr(t)
 
@@ -384,6 +424,43 @@ func TestElectrumNotifyReceivedAndRelevantTx(t *testing.T) {
 	}
 }
 
+// TestElectrumSubscribeEmitsInitialPendingTx is the regression for review2 #5:
+// when a tx is already in the server's history at subscribe time, the wallet
+// must see it. Pre-fix, SubscribeScripthash returned the current status
+// synchronously, no initial notification was enqueued, and a mempool tx would
+// stay invisible until it confirmed.
+func TestElectrumSubscribeEmitsInitialPendingTx(t *testing.T) {
+	c, stub := makeClient(t, 3)
+
+	addr, sh := newSimnetAddr(t)
+
+	// Pre-seed history with a pending (height=0) tx.
+	txid, rawHex := synthTxToAddr(t, addr)
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 0, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	// And a non-empty status so subscribeAddress triggers the initial
+	// diff path.
+	stub.subs[sh] = "initial"
+
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+
+	// The first emission after subscribe should be a RelevantTx for the
+	// pending tx, with no block meta.
+	ntfns := drain(t, c, 1, 2*time.Second)
+	rt, ok := ntfns[0].(RelevantTx)
+	if !ok {
+		t.Fatalf("ntfn = %T, want RelevantTx", ntfns[0])
+	}
+	if rt.Block != nil {
+		t.Fatalf("RelevantTx.Block = %+v, want nil for mempool", rt.Block)
+	}
+	if rt.TxRecord == nil || rt.TxRecord.Hash.String() != txid {
+		t.Fatalf("RelevantTx.TxRecord txid = %v, want %s", rt.TxRecord, txid)
+	}
+}
+
 func TestElectrumNotifyBlocksIsNoop(t *testing.T) {
 	c, _ := makeClient(t, 1)
 	if err := c.NotifyBlocks(); err != nil {
@@ -409,6 +486,209 @@ func TestElectrumSendRawTransaction(t *testing.T) {
 	}
 }
 
+// TestElectrumTipChangeMultiBlock is the regression for review2 #3: a single
+// network tip-change event covering N blocks must produce N
+// BlockConnected notifications, not just one for the final height.
+// waddrmgr.PutSyncedTo chains prev-hash → hash, so a single multi-block
+// notification would roll back and leave the wallet stuck at the old tip.
+func TestElectrumTipChangeMultiBlock(t *testing.T) {
+	c, stub := makeClient(t, 2)
+	// Add 3 more blocks; deliver a single TipChange covering all of them.
+	for i := range 3 {
+		stub.addBlock(t, time.Unix(int64(1_700_000_000+(2+i)*60), 0))
+	}
+	stub.tipCh <- &electrum.TipChange{Connected: []int32{2, 3, 4}}
+
+	got := drain(t, c, 3, 2*time.Second)
+	for i, n := range got {
+		bc, ok := n.(BlockConnected)
+		if !ok {
+			t.Fatalf("ntfn[%d] = %T, want BlockConnected", i, n)
+		}
+		if want := int32(2 + i); bc.Height != want {
+			t.Errorf("ntfn[%d].Height = %d, want %d", i, bc.Height, want)
+		}
+	}
+}
+
+// TestElectrumBlockDisconnectedOnRewind is the regression for review2 #1:
+// when the network emits a TipChange with Disconnected entries, the chain
+// client must emit a BlockDisconnected for each — otherwise the wallet's
+// orphan rollback path (disconnectBlock → TxStore.Rollback) is never
+// driven and orphaned txs stay confirmed until the next process restart.
+func TestElectrumBlockDisconnectedOnRewind(t *testing.T) {
+	c, stub := makeClient(t, 5)
+
+	disc := []electrum.DisconnectedBlock{
+		{Hash: [32]byte{1}, Height: 4, Time: 1_700_001_000},
+		{Hash: [32]byte{2}, Height: 3, Time: 1_700_000_940},
+		{Hash: [32]byte{3}, Height: 2, Time: 1_700_000_880},
+	}
+	stub.pushDisconnected(t, disc...)
+
+	got := drain(t, c, 3, 2*time.Second)
+	for i, n := range got {
+		bd, ok := n.(BlockDisconnected)
+		if !ok {
+			t.Fatalf("ntfn[%d] = %T, want BlockDisconnected", i, n)
+		}
+		if bd.Height != disc[i].Height {
+			t.Errorf("ntfn[%d].Height = %d, want %d", i, bd.Height, disc[i].Height)
+		}
+		if bd.Hash != chainhash.Hash(disc[i].Hash) {
+			t.Errorf("ntfn[%d].Hash = %s, want %x", i, bd.Hash, disc[i].Hash)
+		}
+	}
+}
+
+// TestElectrumReorgEvent confirms a TipChange carrying BOTH a rewind and a
+// replacement connect range produces disconnects first, connects second.
+// The wallet's disconnectBlock must run before the new connects so syncedTo
+// is on the common ancestor before any new blocks are recorded.
+func TestElectrumReorgEvent(t *testing.T) {
+	c, stub := makeClient(t, 5)
+
+	// Two existing blocks are being replaced by two new ones.
+	stub.addBlock(t, time.Unix(1_700_001_000, 0)) // new height 5
+	stub.tipCh <- &electrum.TipChange{
+		Disconnected: []electrum.DisconnectedBlock{
+			{Hash: [32]byte{0xff}, Height: 4, Time: 1_700_000_960},
+			{Hash: [32]byte{0xfe}, Height: 3, Time: 1_700_000_900},
+		},
+		Connected: []int32{5},
+	}
+
+	got := drain(t, c, 3, 2*time.Second)
+	if _, ok := got[0].(BlockDisconnected); !ok {
+		t.Fatalf("got[0] = %T, want BlockDisconnected", got[0])
+	}
+	if _, ok := got[1].(BlockDisconnected); !ok {
+		t.Fatalf("got[1] = %T, want BlockDisconnected", got[1])
+	}
+	bc, ok := got[2].(BlockConnected)
+	if !ok {
+		t.Fatalf("got[2] = %T, want BlockConnected", got[2])
+	}
+	if bc.Height != 5 {
+		t.Fatalf("BlockConnected.Height = %d, want 5", bc.Height)
+	}
+}
+
+// TestElectrumScripthashAheadOfHeaders is the regression for review2 #6:
+// when a scripthash status notification reports a tx at a confirmed height
+// whose header hasn't been appended locally yet, the chain client must NOT
+// emit a RelevantTx with blockMeta=nil (which would record the tx as
+// unmined forever, since the next status-diff would treat it as
+// already-seen). The tx must be deferred and flushed once the tip catches
+// up.
+func TestElectrumScripthashAheadOfHeaders(t *testing.T) {
+	c, stub := makeClient(t, 2)
+
+	addr, sh := newSimnetAddr(t)
+	// Synthesize a tx that the wallet will see as relevant once the
+	// header at height=5 lands.
+	txid, rawHex := synthTxToAddr(t, addr)
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 5, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+
+	// Push the scripthash status BEFORE the header arrives. Pre-fix, the
+	// chain client would have emitted RelevantTx(blockMeta=nil), persist
+	// the tx as unmined, and never self-heal.
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "h5"}
+
+	// Confirm no premature emission within a short window.
+	select {
+	case n := <-c.Notifications():
+		t.Fatalf("unexpected early notification %T while header missing", n)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Verify the entry parked in pending.
+	c.addrCacheMtx.Lock()
+	entry := c.addrCache[sh]
+	pendCount := 0
+	if entry != nil {
+		pendCount = len(entry.pending)
+	}
+	c.addrCacheMtx.Unlock()
+	if pendCount != 1 {
+		t.Fatalf("expected 1 deferred entry, got %d", pendCount)
+	}
+
+	// Now the headers catch up. The tip-change should drive a flush and
+	// emit the deferred RelevantTx with proper block meta.
+	for i := 2; i <= 5; i++ {
+		stub.addBlock(t, time.Unix(int64(1_700_001_000+i*60), 0))
+	}
+	stub.tipCh <- &electrum.TipChange{Connected: []int32{2, 3, 4, 5}}
+
+	got := drain(t, c, 5, 2*time.Second) // 4 BlockConnected + 1 RelevantTx
+	var rt *RelevantTx
+	for _, n := range got {
+		if r, ok := n.(RelevantTx); ok {
+			rt = &r
+			break
+		}
+	}
+	if rt == nil {
+		t.Fatal("expected a RelevantTx after tip catch-up")
+	}
+	if rt.Block == nil {
+		t.Fatal("RelevantTx.Block = nil; expected confirmed block meta")
+	}
+	if rt.Block.Height != 5 {
+		t.Fatalf("RelevantTx.Block.Height = %d, want 5", rt.Block.Height)
+	}
+}
+
+// TestElectrumNotificationHandlerSurvivesNoInitialTip is the regression for
+// review2 #4: the handler used to call GetBestBlock at startup and tear the
+// whole client down (close dequeue + go Stop()) if it failed. The wallet's
+// chain-notification loop then exits silently and the wallet never syncs.
+// The fix is to never call GetBestBlock here and to populate bs from the
+// first enqueued BlockConnected instead.
+func TestElectrumNotificationHandlerSurvivesNoInitialTip(t *testing.T) {
+	stub := newStubNetwork()
+	// No blocks: stub.Tip() returns -1 so GetBestBlock would fail.
+	stub.synced = true
+
+	c, err := NewElectrumClient(testParams(), stub)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		c.Stop()
+		c.WaitForShutdown()
+	})
+
+	// ClientConnected must be deliverable: the handler is alive.
+	got := drain(t, c, 1, 2*time.Second)
+	if _, ok := got[0].(ClientConnected); !ok {
+		t.Fatalf("first ntfn = %T, want ClientConnected", got[0])
+	}
+
+	// Now feed the first BlockConnected via a tip change. BlockStamp
+	// should subsequently return non-blocking with that height.
+	stub.addBlock(t, time.Unix(1_700_000_000, 0))
+	stub.pushConnected(t, 0)
+	drain(t, c, 1, 2*time.Second) // BlockConnected
+
+	bs, err := c.BlockStamp()
+	if err != nil {
+		t.Fatalf("BlockStamp: %v", err)
+	}
+	if bs.Height != 0 {
+		t.Fatalf("BlockStamp.Height = %d, want 0", bs.Height)
+	}
+}
+
 // TestElectrumRescanOnStoppedClient is the regression for M2: Rescan on a
 // client whose Stop has already run should return an error rather than
 // silently no-op.
@@ -427,7 +707,7 @@ func TestElectrumRescanOnStoppedClient(t *testing.T) {
 // lastHistory. Race-detector runs would have caught the original bug.
 func TestElectrumScripthashStatusRace(t *testing.T) {
 	c, stub := makeClient(t, 3)
-	drain(t, c, 1, time.Second) // ClientConnected
+	// makeClient already drained initial ClientConnected + BlockConnected.
 
 	addr, sh := newSimnetAddr(t)
 	// Pre-seed enough history that GetHistory/get_raw paths see real data.
@@ -480,6 +760,91 @@ func TestElectrumScripthashStatusRace(t *testing.T) {
 	}
 }
 
+// TestElectrumSubscribeAddressConcurrentFailure is the regression for the
+// review-flagged Medium bug: when the first caller's SubscribeScripthash RPC
+// fails, concurrent waiters that observed the in-flight entry must NOT
+// silently return nil (which would leave the wallet layer believing the
+// address was subscribed). They must either retry and observe a real
+// subscription, or surface the error.
+func TestElectrumSubscribeAddressConcurrentFailure(t *testing.T) {
+	c, stub := makeClient(t, 1)
+	// makeClient already drained initial ClientConnected + BlockConnected.
+
+	addr, sh := newSimnetAddr(t)
+
+	// Gate the first SubscribeScripthash call so the second caller is
+	// guaranteed to enqueue while the first is still in flight, then fail
+	// it. Subsequent calls succeed normally.
+	release := make(chan struct{})
+	enqueued := make(chan struct{}, 1)
+	stub.mu.Lock()
+	stub.subscribeHook = func(n int, _ string) error {
+		if n == 1 {
+			// Tell the test the first call has entered; then
+			// block until the test releases it.
+			enqueued <- struct{}{}
+			<-release
+			return errors.New("injected subscribe failure")
+		}
+		return nil
+	}
+	stub.mu.Unlock()
+
+	type result struct {
+		who string
+		err error
+	}
+	results := make(chan result, 2)
+
+	go func() {
+		err := c.NotifyReceived([]btcutil.Address{addr})
+		results <- result{"A", err}
+	}()
+
+	// Wait until A is inside the SubscribeScripthash RPC so B's entry
+	// will observe the in-flight ready channel rather than racing past
+	// it.
+	select {
+	case <-enqueued:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first subscribe never reached the server")
+	}
+
+	go func() {
+		err := c.NotifyReceived([]btcutil.Address{addr})
+		results <- result{"B", err}
+	}()
+
+	// Give B a moment to enter trySubscribeAddress and start waiting on
+	// ready before we unblock A.
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+
+	// Both calls must complete; neither should leave the address
+	// unsubscribed and report success.
+	deadline := time.After(5 * time.Second)
+	for range 2 {
+		select {
+		case r := <-results:
+			if r.err != nil {
+				// Surfacing the error is an acceptable outcome
+				// (caller knows the address isn't subscribed).
+				continue
+			}
+			// Success is only acceptable if the address is actually
+			// subscribed in the cache after the call returned.
+			c.addrCacheMtx.Lock()
+			_, ok := c.addrCache[sh]
+			c.addrCacheMtx.Unlock()
+			if !ok {
+				t.Fatalf("caller %s returned nil but address %s was not subscribed (the bug)", r.who, addr)
+			}
+		case <-deadline:
+			t.Fatal("subscribe calls did not return")
+		}
+	}
+}
+
 func TestElectrumMapRPCErr(t *testing.T) {
 	c, _ := makeClient(t, 1)
 	cases := []struct {
@@ -504,7 +869,7 @@ func TestElectrumMapRPCErr(t *testing.T) {
 
 func TestElectrumRescanEmitsBlocksAndFilteredAndFinished(t *testing.T) {
 	c, stub := makeClient(t, 5)
-	drain(t, c, 1, time.Second) // ClientConnected
+	// makeClient already drained initial ClientConnected + BlockConnected.
 
 	addr, sh := newSimnetAddr(t)
 	// Place a tx at height 2.
@@ -519,17 +884,13 @@ func TestElectrumRescanEmitsBlocksAndFilteredAndFinished(t *testing.T) {
 		t.Fatalf("Rescan: %v", err)
 	}
 
-	// Heights 0, 1 produce BlockConnected; height 2 produces
-	// FilteredBlockConnected; heights 3, 4 produce BlockConnected;
-	// then RescanFinished.
-	got := drain(t, c, 6, 5*time.Second)
+	// Review2 #11: empty blocks no longer produce BlockConnected. The
+	// only notifications from a 5-block walk with a single match at
+	// height 2 are FilteredBlockConnected(2) + RescanFinished.
+	got := drain(t, c, 2, 5*time.Second)
 
 	wantTypes := []string{
-		"chain.BlockConnected",
-		"chain.BlockConnected",
 		"chain.FilteredBlockConnected",
-		"chain.BlockConnected",
-		"chain.BlockConnected",
 		"*chain.RescanFinished",
 	}
 	for i, n := range got {
@@ -539,7 +900,7 @@ func TestElectrumRescanEmitsBlocksAndFilteredAndFinished(t *testing.T) {
 		}
 	}
 
-	fbc := got[2].(FilteredBlockConnected)
+	fbc := got[0].(FilteredBlockConnected)
 	if fbc.Block.Height != 2 {
 		t.Fatalf("FilteredBlockConnected.Block.Height = %d", fbc.Block.Height)
 	}
@@ -547,7 +908,7 @@ func TestElectrumRescanEmitsBlocksAndFilteredAndFinished(t *testing.T) {
 		t.Fatalf("FilteredBlockConnected.RelevantTxs = %d, want 1", len(fbc.RelevantTxs))
 	}
 
-	rf := got[5].(*RescanFinished)
+	rf := got[1].(*RescanFinished)
 	if rf.Height != 4 {
 		t.Fatalf("RescanFinished.Height = %d, want 4", rf.Height)
 	}

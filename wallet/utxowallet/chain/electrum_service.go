@@ -30,7 +30,7 @@ type ElectrumNetwork interface {
 	TipHash() chainhash.Hash
 
 	// Notification channels. Closed when the network shuts down.
-	TipChangeChan() <-chan int32
+	TipChangeChan() <-chan *electrum.TipChange
 	ScripthashChan() <-chan *electrum.ScripthashStatus
 
 	// Scripthash subscriptions.

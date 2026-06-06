@@ -87,10 +87,18 @@ type ElectrumClient struct {
 // scripthash is still in flight. Subsequent subscribeAddress callers for the
 // same scripthash wait on it; the field is set back to nil and closed once
 // the RPC completes (success or failure).
+//
+// pending holds history entries whose confirmed height has not yet been
+// connected locally. handleScripthashStatus defers them rather than
+// emitting a RelevantTx with blockMeta=nil (which would record a confirmed
+// tx as unmined forever and never self-heal — review2 #6). The chain
+// client's tip-change dispatch flushes pending entries once their headers
+// arrive.
 type scripthashEntry struct {
 	addr        btcutil.Address
 	lastStatus  string
 	lastHistory []electrum.HistoryEntry
+	pending     []electrum.HistoryEntry
 	ready       chan struct{}
 }
 
@@ -314,8 +322,16 @@ var electrumErrMap = map[string]error{
 // Notification fan-out.
 // ----------------------------------------------------------------------------
 
-// tipChangeLoop translates electrum.Network tip-change events into
-// chain.BlockConnected notifications.
+// tipChangeLoop translates electrum.Network TipChange events into the
+// per-block chain.BlockDisconnected / chain.BlockConnected notifications
+// the wallet's chainntfns loop expects.
+//
+// Review2 #1+#3: a single network event can describe both a reorg rewind
+// and a multi-block catch-up. We dispatch disconnects first (so the wallet's
+// disconnectBlock path rolls back to the common ancestor before we record
+// new connects) and then connects per block (so waddrmgr.PutSyncedTo can
+// chain prev-hash → hash for every step, instead of being asked to jump N
+// blocks forward and failing).
 func (c *ElectrumClient) tipChangeLoop() {
 	defer c.wg.Done()
 	ch := c.net.TipChangeChan()
@@ -323,28 +339,51 @@ func (c *ElectrumClient) tipChangeLoop() {
 		select {
 		case <-c.quit:
 			return
-		case height, ok := <-ch:
+		case ev, ok := <-ch:
 			if !ok {
 				return
 			}
-			c.dispatchTipChange(height)
+			c.dispatchTipChange(ev)
 		}
 	}
 }
 
-func (c *ElectrumClient) dispatchTipChange(height int32) {
-	hdr := c.net.HeaderByHeight(height)
-	if hdr == nil {
-		log.Warnf("electrum: tip-change to %d but no local header", height)
+func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
+	if ev == nil {
 		return
 	}
-	ntfn := BlockConnected{
-		Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
-		Time:  hdr.Timestamp,
+	// Disconnects first (review2 #1). The metadata is carried by the
+	// event because the headers store has already removed these blocks
+	// from its maps by the time we see them here.
+	for _, d := range ev.Disconnected {
+		ntfn := BlockDisconnected(wtxmgr.BlockMeta{
+			Block: wtxmgr.Block{Hash: chainhash.Hash(d.Hash), Height: d.Height},
+			Time:  time.Unix(d.Time, 0),
+		})
+		if err := c.enqueue(ntfn); err != nil {
+			return
+		}
 	}
-	select {
-	case c.enqueueNotification <- ntfn:
-	case <-c.quit:
+	// Then connects, one BlockConnected per height (review2 #3).
+	for _, h := range ev.Connected {
+		hdr := c.net.HeaderByHeight(h)
+		if hdr == nil {
+			log.Warnf("electrum: tip-change connect at %d but no local header", h)
+			continue
+		}
+		ntfn := BlockConnected{
+			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: h},
+			Time:  hdr.Timestamp,
+		}
+		if err := c.enqueue(ntfn); err != nil {
+			return
+		}
+	}
+	// Review2 #6: a scripthash status may have arrived while these
+	// headers were still in flight. Now that the headers are local,
+	// flush any deferred entries so confirmed txs aren't stuck unmined.
+	if len(ev.Connected) > 0 {
+		c.flushPending()
 	}
 }
 
@@ -371,11 +410,13 @@ func (c *ElectrumClient) scripthashLoop() {
 
 // handleScripthashStatus fetches the latest history for the scripthash,
 // diffs against the cached history, and emits a RelevantTx notification for
-// each newly-seen entry.
+// each newly-seen entry whose confirmed-block header is already local.
+// Confirmed entries whose header hasn't arrived yet are deferred to
+// entry.pending and flushed by the tip-change path once their header lands.
 //
-// Both reads of and writes to entry.lastStatus / entry.lastHistory happen
-// under addrCacheMtx; the cache lock is released across the GetHistory RPC
-// to avoid holding it during a network round-trip.
+// Both reads of and writes to entry.lastStatus / entry.lastHistory /
+// entry.pending happen under addrCacheMtx; the cache lock is released
+// across the GetHistory RPC to avoid holding it during a network round-trip.
 func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) error {
 	c.addrCacheMtx.Lock()
 	entry, ok := c.addrCache[st.Scripthash]
@@ -395,19 +436,103 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 	if err != nil {
 		return fmt.Errorf("get history: %w", err)
 	}
+	// Partition the new entries into "ready to emit" and "deferred until
+	// the header arrives". Already-seen entries are not re-emitted but
+	// stay in the carry-forward list.
+	emitted := make([]electrum.HistoryEntry, 0, len(hist))
+	var deferred []electrum.HistoryEntry
 	for _, h := range hist {
 		if alreadySeen(prev, h.TxHash, h.Height) {
+			emitted = append(emitted, h)
+			continue
+		}
+		if h.Height > 0 && c.net.HeaderByHeight(h.Height) == nil {
+			// Review2 #6: do not emit a RelevantTx with
+			// blockMeta=nil for a confirmed tx. That would record
+			// the tx as unmined and the next status-change diff
+			// would treat it as already-seen, leaving it stuck
+			// unmined forever. Park it and let the tip-change
+			// dispatcher flush it once the header arrives.
+			deferred = append(deferred, h)
 			continue
 		}
 		if err := c.emitRelevantTx(h); err != nil {
 			log.Debugf("electrum: emit %s: %v", h.TxHash, err)
+			continue
 		}
+		emitted = append(emitted, h)
 	}
 	c.addrCacheMtx.Lock()
 	entry.lastStatus = st.Status
-	entry.lastHistory = hist
+	entry.lastHistory = emitted
+	entry.pending = mergePendingEntries(entry.pending, deferred)
 	c.addrCacheMtx.Unlock()
 	return nil
+}
+
+// mergePendingEntries adds entries from src into dst, skipping any (txid,
+// height) duplicates already present.
+func mergePendingEntries(dst, src []electrum.HistoryEntry) []electrum.HistoryEntry {
+	if len(src) == 0 {
+		return dst
+	}
+	seen := make(map[string]struct{}, len(dst))
+	for _, e := range dst {
+		seen[fmt.Sprintf("%s|%d", e.TxHash, e.Height)] = struct{}{}
+	}
+	for _, e := range src {
+		key := fmt.Sprintf("%s|%d", e.TxHash, e.Height)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		dst = append(dst, e)
+		seen[key] = struct{}{}
+	}
+	return dst
+}
+
+// flushPendingForHeights drains scripthash entries pending on heights now
+// known to the local headers store. Called after every TipChange.Connected
+// range so review2 #6's deferred emissions catch up automatically.
+func (c *ElectrumClient) flushPending() {
+	type readyBatch struct {
+		sh    string
+		ready []electrum.HistoryEntry
+	}
+	var batches []readyBatch
+
+	c.addrCacheMtx.Lock()
+	for sh, entry := range c.addrCache {
+		if len(entry.pending) == 0 {
+			continue
+		}
+		var ready, remain []electrum.HistoryEntry
+		for _, e := range entry.pending {
+			if e.Height > 0 && c.net.HeaderByHeight(e.Height) == nil {
+				remain = append(remain, e)
+				continue
+			}
+			ready = append(ready, e)
+		}
+		if len(ready) > 0 {
+			entry.pending = remain
+			batches = append(batches, readyBatch{sh: sh, ready: ready})
+		}
+	}
+	c.addrCacheMtx.Unlock()
+
+	for _, b := range batches {
+		for _, e := range b.ready {
+			if err := c.emitRelevantTx(e); err != nil {
+				log.Debugf("electrum: flush emit %s: %v", e.TxHash, err)
+			}
+		}
+		c.addrCacheMtx.Lock()
+		if entry, ok := c.addrCache[b.sh]; ok {
+			entry.lastHistory = append(entry.lastHistory, b.ready...)
+		}
+		c.addrCacheMtx.Unlock()
+	}
 }
 
 // alreadySeen reports whether the (txid, height) was already in the prior
@@ -460,16 +585,18 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 
 func (c *ElectrumClient) notificationHandler() {
 	defer c.wg.Done()
-	hash, height, err := c.GetBestBlock()
-	if err != nil {
-		log.Errorf("electrum: failed to get best block at startup: %v", err)
-		// Tear down so the wallet sees Notifications() close instead
-		// of silently advertising a zero-height BlockStamp.
-		go c.Stop()
-		close(c.dequeueNotification)
-		return
-	}
-	bs := &waddrmgr.BlockStamp{Hash: *hash, Height: height}
+
+	// Do NOT prime bs by calling GetBestBlock here. That call would race
+	// against the network's tip-subscription delivering the first
+	// BlockConnected, and it has two failure modes — server returning an
+	// empty first batch while Tip() is still -1, and the brief window
+	// during a reorg rewind where Tip() points at a header we've already
+	// deleted. The previous implementation tore the whole handler down on
+	// either of those, which made Start() silently advertise success
+	// while leaving the wallet unable to sync. Instead we let bs stay nil
+	// until the first BlockConnected arrives; BlockStamp callers wait
+	// (which is what NeutrinoClient does pre-first-block as well).
+	var bs *waddrmgr.BlockStamp
 
 	var notifications []any
 	enqueue := c.enqueueNotification
@@ -477,6 +604,14 @@ func (c *ElectrumClient) notificationHandler() {
 	var next any
 
 	for {
+		// Only let BlockStamp callers proceed once we have a real bs.
+		// `nil` send-case is never selectable, which is exactly what we
+		// want.
+		var blockStampCh chan *waddrmgr.BlockStamp
+		if bs != nil {
+			blockStampCh = c.currentBlock
+		}
+
 		select {
 		case n, ok := <-enqueue:
 			if !ok {
@@ -487,6 +622,15 @@ func (c *ElectrumClient) notificationHandler() {
 				enqueue = nil
 				continue
 			}
+			// Update bs as soon as a BlockConnected is enqueued, not
+			// at dequeue: BlockStamp() callers may be the consumer
+			// blocking the dequeue, so deferring bs until consume
+			// would deadlock. Semantically this means bs reflects
+			// the latest block this client has heard about, even if
+			// the wallet hasn't drained the notification yet.
+			if bc, ok := n.(BlockConnected); ok {
+				bs = &waddrmgr.BlockStamp{Hash: bc.Hash, Height: bc.Height}
+			}
 			if len(notifications) == 0 {
 				next = n
 				dequeue = c.dequeueNotification
@@ -494,9 +638,6 @@ func (c *ElectrumClient) notificationHandler() {
 			notifications = append(notifications, n)
 
 		case dequeue <- next:
-			if bc, ok := next.(BlockConnected); ok {
-				bs = &waddrmgr.BlockStamp{Hash: bc.Hash, Height: bc.Height}
-			}
 			notifications[0] = nil
 			notifications = notifications[1:]
 			if len(notifications) != 0 {
@@ -509,7 +650,7 @@ func (c *ElectrumClient) notificationHandler() {
 				dequeue = nil
 			}
 
-		case c.currentBlock <- bs:
+		case blockStampCh <- bs:
 
 		case <-c.quit:
 			close(c.dequeueNotification)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -31,8 +32,9 @@ func testChainConfig() *ChainConfig {
 
 // synthChain produces a chain of `count` headers starting from a synthetic
 // genesis whose PrevBlock is the zero hash. Each subsequent header chains via
-// PrevBlock; nothing else is meaningful. The chain is deterministic given
-// `seed`.
+// PrevBlock and is "mined" against the regtest PowLimit (Bits=0x207fffff) by
+// incrementing Nonce until the block hash satisfies the target. On regtest
+// this loop terminates in ~2 iterations on average.
 func synthChain(count int, seed uint32) []*wire.BlockHeader {
 	out := make([]*wire.BlockHeader, count)
 	ts := time.Unix(1_600_000_000, 0)
@@ -46,10 +48,30 @@ func synthChain(count int, seed uint32) []*wire.BlockHeader {
 			Bits:       0x207fffff,
 			Nonce:      seed + uint32(i),
 		}
+		mineHeader(h)
 		out[i] = h
 		prev = h.BlockHash()
 	}
 	return out
+}
+
+// mineHeader bumps Nonce until BlockHash() satisfies hdr.Bits. For the
+// regtest PowLimit (0x207fffff) this is ~2 iterations on average; a few
+// hundred at worst.
+func mineHeader(h *wire.BlockHeader) {
+	for {
+		hash := h.BlockHash()
+		// 0x207fffff target is ~2^255: any hash whose top byte's
+		// high bit is clear satisfies it. Use the full check via the
+		// same path the production code uses so the test exercises
+		// the real predicate.
+		hdrs := &Headers{cfg: testChainConfig()}
+		if err := hdrs.checkPoW(h); err == nil {
+			_ = hash
+			return
+		}
+		h.Nonce++
+	}
 }
 
 func serializeBatch(t *testing.T, hdrs []*wire.BlockHeader) []byte {
@@ -74,6 +96,137 @@ func newTestHeaders(t *testing.T) (*Headers, string) {
 	return h, dir
 }
 
+// TestHeadersRejectsTrivialDifficultyForgery is the regression for review2 #8:
+// a server that links headers correctly but advertises an absurdly low
+// difficulty (high Bits target). With the per-header PoW check the chain
+// rejects them; without it the wallet accepts a hostile chain as best.
+func TestHeadersRejectsTrivialDifficultyForgery(t *testing.T) {
+	h, _ := newTestHeaders(t)
+	// Tight bits that almost no random hash will satisfy.
+	hdr := &wire.BlockHeader{
+		Version:   1,
+		PrevBlock: chainhash.Hash{},
+		Bits:      0x1d00ffff, // BTC mainnet starting difficulty
+		Timestamp: time.Unix(1_600_000_000, 0),
+		Nonce:     0,
+	}
+	// We did not mine it; the hash almost certainly exceeds the target.
+	raw, err := serializeHeader(hdr)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if _, err := h.AppendBatch(0, raw, 0); err == nil {
+		t.Fatal("expected PoW error for unmined header at tight target")
+	}
+}
+
+// paramsWithCheckpoints returns a *netparams.ChainParams suitable for the
+// validation tests, carrying the supplied checkpoints. We can't shallow-copy
+// netparams.NSimnetParams (it has a sync.Once); construct the minimal set
+// of fields the validators actually read.
+func paramsWithCheckpoints(cps []chaincfg.Checkpoint) *netparams.ChainParams {
+	src := netparams.NSimnetParams
+	return &netparams.ChainParams{
+		Chain:            src.Chain,
+		Net:              src.Net,
+		GenesisBlock:     src.GenesisBlock,
+		GenesisHash:      src.GenesisHash,
+		PowLimit:         src.PowLimit,
+		PowLimitBits:     src.PowLimitBits,
+		PoWNoRetargeting: src.PoWNoRetargeting,
+		Checkpoints:      cps,
+	}
+}
+
+// TestHeadersCheckpointMismatchRejected covers the checkpoint validator:
+// when the configured params carry a checkpoint at a height in the batch
+// but its hash doesn't match the appended header, AppendBatch refuses.
+func TestHeadersCheckpointMismatchRejected(t *testing.T) {
+	dir := t.TempDir()
+	chain := synthChain(3, 41)
+	bogus := chainhash.Hash{31: 0xab}
+	cfg := &ChainConfig{
+		Chain:       bisonwire.ChainBTC,
+		Params:      paramsWithCheckpoints([]chaincfg.Checkpoint{{Height: 2, Hash: &bogus}}),
+		HeaderSize:  80,
+		StartHeight: 0,
+	}
+
+	h, err := NewHeaders(cfg, dir)
+	if err != nil {
+		t.Fatalf("NewHeaders: %v", err)
+	}
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err == nil {
+		t.Fatal("expected checkpoint mismatch error")
+	}
+}
+
+// TestHeadersCheckpointMatchAccepted is the positive companion: configuring
+// a correct checkpoint hash lets the chain through.
+func TestHeadersCheckpointMatchAccepted(t *testing.T) {
+	dir := t.TempDir()
+	chain := synthChain(3, 42)
+	good := chain[2].BlockHash()
+	cfg := &ChainConfig{
+		Chain:       bisonwire.ChainBTC,
+		Params:      paramsWithCheckpoints([]chaincfg.Checkpoint{{Height: 2, Hash: &good}}),
+		HeaderSize:  80,
+		StartHeight: 0,
+	}
+
+	h, err := NewHeaders(cfg, dir)
+	if err != nil {
+		t.Fatalf("NewHeaders: %v", err)
+	}
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+}
+
+// TestHeadersPoWWindowSkipsDeepHistory exercises the per-header PoW window:
+// with tipHint set far above the batch, headers in the batch get
+// retarget+checkpoint validation only; per-header PoW is skipped. We assert
+// this by feeding unmined headers and verifying they're accepted because
+// they fall outside the window.
+//
+// Because the test ChainParams has PoWNoRetargeting=true (regtest), the
+// retarget validator is a no-op. Combined with no checkpoints, this batch
+// passes purely on linkage + skip-PoW.
+func TestHeadersPoWWindowSkipsDeepHistory(t *testing.T) {
+	dir := t.TempDir()
+	h, err := NewHeaders(testChainConfig(), dir)
+	if err != nil {
+		t.Fatalf("NewHeaders: %v", err)
+	}
+	ts := time.Unix(1_600_000_000, 0)
+	var prev chainhash.Hash
+	var hdrs []*wire.BlockHeader
+	for i := range 5 {
+		hdr := &wire.BlockHeader{
+			Version:   1,
+			PrevBlock: prev,
+			Bits:      0x1d00ffff, // tight target — fails checkPoW
+			Timestamp: ts.Add(time.Duration(i) * time.Minute),
+			Nonce:     uint32(i),
+		}
+		hdrs = append(hdrs, hdr)
+		prev = hdr.BlockHash()
+	}
+	// tipHint=recentPoWWindow+10 puts every header in the batch (heights
+	// 0..4) outside the per-header PoW window.
+	if _, err := h.AppendBatch(0, serializeBatch(t, hdrs), recentPoWWindow+10); err != nil {
+		t.Fatalf("AppendBatch (deep-history skip-PoW): %v", err)
+	}
+}
+
+func serializeHeader(hdr *wire.BlockHeader) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := hdr.Serialize(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func TestHeadersEmpty(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	if h.Tip() != -1 {
@@ -95,7 +248,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 	chain := synthChain(10, 1)
 	raw := serializeBatch(t, chain)
 
-	n, err := h.AppendBatch(0, raw)
+	n, err := h.AppendBatch(0, raw, 0)
 	if err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
@@ -121,7 +274,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 
 	// Batch from the wrong start height must fail.
 	more := serializeBatch(t, synthChain(3, 99))
-	if _, err := h.AppendBatch(5, more); err == nil {
+	if _, err := h.AppendBatch(5, more, 0); err == nil {
 		t.Fatal("expected error appending non-contiguous batch")
 	}
 
@@ -130,7 +283,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 		{PrevBlock: chain[len(chain)-1].BlockHash(), Bits: 0x207fffff, Nonce: 100},
 		{PrevBlock: chainhash.Hash{}, Bits: 0x207fffff, Nonce: 101}, // wrong prev
 	}
-	if _, err := h.AppendBatch(10, serializeBatch(t, broken)); err == nil {
+	if _, err := h.AppendBatch(10, serializeBatch(t, broken), 0); err == nil {
 		t.Fatal("expected error for batch with internal break")
 	}
 }
@@ -138,7 +291,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 func TestHeadersAppendOne(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(5, 7)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
 		t.Fatalf("seed AppendBatch: %v", err)
 	}
 	// Append one connected header.
@@ -148,7 +301,8 @@ func TestHeadersAppendOne(t *testing.T) {
 		Nonce:     500,
 		Timestamp: time.Now(),
 	}
-	ok, err := h.AppendOne(next)
+	mineHeader(next)
+	ok, _, err := h.AppendOne(next)
 	if err != nil {
 		t.Fatalf("AppendOne (good): %v", err)
 	}
@@ -166,7 +320,7 @@ func TestHeadersAppendOne(t *testing.T) {
 		PrevBlock: chainhash.Hash{31: 1}, // garbage
 		Bits:      0x207fffff,
 	}
-	if _, err := h.AppendOne(bad); err == nil {
+	if _, _, err := h.AppendOne(bad); err == nil {
 		t.Fatal("expected error when rewind would underflow")
 	}
 }
@@ -174,26 +328,32 @@ func TestHeadersAppendOne(t *testing.T) {
 func TestHeadersReorgRewind(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(20, 1)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	tipBefore := h.Tip()
 	hashAtRewind := chain[tipBefore-int32(reorgRewindDepth)].BlockHash()
 
 	bad := &wire.BlockHeader{PrevBlock: chainhash.Hash{31: 1}, Bits: 0x207fffff}
-	ok, err := h.AppendOne(bad)
+	ok, disc, err := h.AppendOne(bad)
 	if err != nil {
 		t.Fatalf("AppendOne: %v", err)
 	}
 	if ok {
 		t.Fatal("expected rewind on unconnectable header")
 	}
-	if got := h.Tip(); got != tipBefore {
-		// While in recovery, Tip() should report the pre-rewind tip.
-		t.Fatalf("during recovery, Tip()=%d should equal pre-rewind tip %d", got, tipBefore)
+	// rewind should surface the disconnected blocks (review2 #1).
+	if len(disc) != reorgRewindDepth {
+		t.Fatalf("expected %d disconnected blocks, got %d", reorgRewindDepth, len(disc))
 	}
-	// Hash at the new actual tip (post-rewind) should be the pre-rewind
-	// hash at tipBefore - depth.
+	// Disconnected blocks are newest-first.
+	if disc[0].Height != tipBefore {
+		t.Fatalf("first disconnected height = %d, want %d", disc[0].Height, tipBefore)
+	}
+	// Tip() now reflects the truth: pre-rewind tip minus depth (review2 #2).
+	if got := h.Tip(); got != tipBefore-int32(reorgRewindDepth) {
+		t.Fatalf("post-rewind Tip()=%d, want %d", got, tipBefore-int32(reorgRewindDepth))
+	}
 	if got := h.TipHash(); got != hashAtRewind {
 		t.Fatalf("post-rewind hash mismatch: got %s, want %s", got, hashAtRewind)
 	}
@@ -204,14 +364,14 @@ func TestHeadersReorgRewind(t *testing.T) {
 		Bits:      0x207fffff,
 		Nonce:     12345,
 	}
-	ok, err = h.AppendOne(good)
+	mineHeader(good)
+	ok, _, err = h.AppendOne(good)
 	if err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}
 	if !ok {
 		t.Fatal("expected reconnect to succeed")
 	}
-	// Recovery flag should clear; Tip() now reports the actual tip again.
 	if got := h.Tip(); got != tipBefore-int32(reorgRewindDepth)+1 {
 		t.Fatalf("post-reconnect tip wrong: got %d", got)
 	}
@@ -220,7 +380,7 @@ func TestHeadersReorgRewind(t *testing.T) {
 func TestHeadersPersistence(t *testing.T) {
 	h, dir := newTestHeaders(t)
 	chain := synthChain(15, 42)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 

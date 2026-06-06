@@ -65,7 +65,7 @@ type Network struct {
 	doneClosed sync.Once
 	done       chan struct{}
 
-	tipChangeChan chan int32
+	tipChangeChan chan *TipChange
 	scripthashCh  chan *ScripthashStatus
 }
 
@@ -94,7 +94,7 @@ func NewNetwork(cfg *Config) (*Network, error) {
 		cfg:           cfg,
 		headers:       h,
 		done:          make(chan struct{}),
-		tipChangeChan: make(chan int32, notifyBufSize),
+		tipChangeChan: make(chan *TipChange, notifyBufSize),
 		scripthashCh:  make(chan *ScripthashStatus, notifyBufSize),
 	}, nil
 }
@@ -140,15 +140,24 @@ func (n *Network) Start(parent context.Context) error {
 		return failed(err)
 	}
 
-	if err := n.syncHeaders(n.ctx, node); err != nil {
-		node.Close()
-		return failed(fmt.Errorf("electrum: initial header sync: %w", err))
-	}
-
+	// Subscribe FIRST so syncHeaders knows the server-reported tip. That
+	// height becomes the tipHint for AppendBatch: headers within the
+	// trailing recentPoWWindow get per-header PoW, older headers are
+	// validated only by checkpoint match + retarget structure (much
+	// faster than per-header scrypt over millions of LTC blocks).
+	//
+	// Tip-change notifications that arrive during sync are buffered by
+	// the server's headersNotify channel; we drain them via headersLoop
+	// after sync completes.
 	tip, err := node.SubscribeHeaders(n.ctx)
 	if err != nil {
 		node.Close()
 		return failed(fmt.Errorf("electrum: subscribe headers: %w", err))
+	}
+
+	if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
+		node.Close()
+		return failed(fmt.Errorf("electrum: initial header sync: %w", err))
 	}
 
 	// Commit: everything is up, publish the node and flip `started`.
@@ -207,9 +216,10 @@ func (n *Network) Done() <-chan struct{} { return n.done }
 // WaitForShutdown blocks until all background goroutines have exited.
 func (n *Network) WaitForShutdown() { <-n.done }
 
-// TipChangeChan returns a channel that receives the new tip height every time
-// the chain advances. The channel is closed when the network shuts down.
-func (n *Network) TipChangeChan() <-chan int32 { return n.tipChangeChan }
+// TipChangeChan returns a channel that receives a TipChange event every time
+// the chain advances or rewinds. The channel is closed when the network
+// shuts down.
+func (n *Network) TipChangeChan() <-chan *TipChange { return n.tipChangeChan }
 
 // ScripthashChan returns a channel that receives scripthash status changes
 // for any subscribed scripthash. The channel is closed when the network
@@ -334,8 +344,10 @@ func (n *Network) getNode() (*Node, error) {
 
 // syncHeaders pulls headers from `Tip()+1` until the server reports a short
 // batch (i.e. we've caught up). It runs as a single-threaded blocking call
-// during Start.
-func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
+// during Start. tipHint is the server-reported best height learned from the
+// initial subscribe; it lets AppendBatch decide which trailing window of
+// headers gets full per-header PoW.
+func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) error {
 	for {
 		nextHeight := max(n.headers.Tip()+1, n.cfg.Chain.StartHeight)
 		batch, err := node.BlockHeaders(ctx, nextHeight, n.cfg.HeaderBatchSize)
@@ -349,7 +361,7 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 		if err != nil {
 			return fmt.Errorf("electrum: decode header batch: %w", err)
 		}
-		if _, err := n.headers.AppendBatch(nextHeight, raw); err != nil {
+		if _, err := n.headers.AppendBatch(nextHeight, raw, tipHint); err != nil {
 			return err
 		}
 		log.Debugf("electrum: appended %d headers at height %d (tip now %d)",
@@ -357,12 +369,23 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 		if batch.Count < n.cfg.HeaderBatchSize {
 			break
 		}
-		// Brief breather to keep server session cost low.
+		// Brief breather between back-to-back batches. We're a polite
+		// client; the public electrumx servers throttle aggressive
+		// pullers and this keeps us comfortably under any soft limit.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+	if n.headers.Tip() < n.cfg.Chain.StartHeight {
+		// The server returned an empty first batch from StartHeight,
+		// leaving us with no headers at all. Marking synced here
+		// would leave Tip() at -1 and any consumer relying on
+		// GetBestBlock would see a stuck wallet that never errors.
+		// Surface the failure so Start fails loudly instead.
+		return fmt.Errorf("electrum: server returned no headers from height %d",
+			n.cfg.Chain.StartHeight)
 	}
 	n.headers.SetSynced(true)
 	log.Infof("electrum: header sync complete, tip at %d", n.headers.Tip())
@@ -370,12 +393,27 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 }
 
 // headersLoop consumes tip notifications from the node and applies them to
-// the headers store, fanning out tip-change notifications to subscribers.
+// the headers store, fanning out structured TipChange events to subscribers.
 func (n *Network) headersLoop(initialTip *HeadersTip) {
 	defer n.wg.Done()
 
-	// Apply the subscription's initial reply as if it were a notification.
-	n.applyTipNotification(initialTip)
+	// lastDeliveredTip is the highest height we've published in a
+	// Connected entry. The first iteration uses the headers-store tip
+	// after we apply the subscription's initial reply, then walks forward
+	// from there as we receive notifications.
+	lastDeliveredTip := n.headers.Tip()
+
+	// Apply the subscription's initial reply, then emit an initial event
+	// so subscribers always see at least one BlockConnected for the
+	// starting tip — even if no replay was needed.
+	n.applyTipNotification(initialTip, &lastDeliveredTip)
+	if tip := n.headers.Tip(); tip >= n.cfg.Chain.StartHeight && tip != lastDeliveredTip-1 {
+		// Synthesize the initial Connected event covering the
+		// already-synced tip. We pass lastDeliveredTip = tip - 1 so
+		// the helper emits exactly one Connected[tip].
+		n.deliverConnectRange(tip-1, tip)
+		lastDeliveredTip = tip
+	}
 
 	node := n.peekNode()
 	if node == nil {
@@ -390,9 +428,22 @@ func (n *Network) headersLoop(initialTip *HeadersTip) {
 			if !ok {
 				return
 			}
-			n.applyTipNotification(t)
+			n.applyTipNotification(t, &lastDeliveredTip)
 		}
 	}
+}
+
+// deliverConnectRange emits a TipChange whose Connected slice is the
+// per-block range (lastDelivered, newTip]. No-op if newTip <= lastDelivered.
+func (n *Network) deliverConnectRange(lastDelivered, newTip int32) {
+	if newTip <= lastDelivered {
+		return
+	}
+	connected := make([]int32, 0, newTip-lastDelivered)
+	for h := lastDelivered + 1; h <= newTip; h++ {
+		connected = append(connected, h)
+	}
+	n.deliverTipChange(&TipChange{Connected: connected})
 }
 
 // peekNode returns the current node without an error path, for goroutines
@@ -403,7 +454,12 @@ func (n *Network) peekNode() *Node {
 	return n.node
 }
 
-func (n *Network) applyTipNotification(t *HeadersTip) {
+// applyTipNotification processes one tip notification from the server and
+// publishes a structured TipChange covering whatever happened. lastDelivered
+// is the highest height we've already published in a Connected entry; we
+// update it to the new tip after a successful apply so the next iteration
+// emits only the incremental range.
+func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
 	if t == nil {
 		return
 	}
@@ -415,11 +471,26 @@ func (n *Network) applyTipNotification(t *HeadersTip) {
 	ourTip := n.headers.Tip()
 	switch {
 	case t.Height <= ourTip:
-		// Already have it; nothing to do.
+		// Server is reporting a height we already have. Could be a
+		// duplicate or a rewind on the server side that hasn't yet
+		// touched us. Nothing to do.
 		return
 	case t.Height == ourTip+1:
-		if err := n.connectOneTip(t.Hex); err != nil {
+		disc, err := n.connectOneTip(t.Hex)
+		if err != nil {
 			log.Debugf("electrum: connect tip at %d: %v", t.Height, err)
+			return
+		}
+		if len(disc) > 0 {
+			// Rewind triggered. Publish the disconnects so
+			// consumers can roll back; the next server
+			// notification will bring us forward on the new
+			// chain. Update lastDelivered to the new (lower)
+			// tip so the eventual replacement emits only the
+			// connect range past it.
+			newTip := n.headers.Tip()
+			n.deliverTipChange(&TipChange{Disconnected: disc})
+			*lastDelivered = newTip
 			return
 		}
 	default:
@@ -429,30 +500,32 @@ func (n *Network) applyTipNotification(t *HeadersTip) {
 			return
 		}
 	}
-	n.deliverTipChange(n.headers.Tip())
+	newTip := n.headers.Tip()
+	if newTip > *lastDelivered {
+		n.deliverConnectRange(*lastDelivered, newTip)
+		*lastDelivered = newTip
+	}
 }
 
-func (n *Network) connectOneTip(hexHdr string) error {
+// connectOneTip parses a single header from a tip notification, appends it,
+// and reports any disconnected headers that resulted from a reorg rewind.
+func (n *Network) connectOneTip(hexHdr string) ([]DisconnectedBlock, error) {
 	raw, err := hex.DecodeString(hexHdr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(raw) != n.cfg.Chain.HeaderSize {
-		return fmt.Errorf("unexpected header length %d", len(raw))
+		return nil, fmt.Errorf("unexpected header length %d", len(raw))
 	}
 	hdr := new(wire.BlockHeader)
 	if err := hdr.Deserialize(bytes.NewReader(raw)); err != nil {
-		return err
+		return nil, err
 	}
-	ok, err := n.headers.AppendOne(hdr)
+	_, disc, err := n.headers.AppendOne(hdr)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !ok {
-		// Rewind triggered; next notification will resync.
-		return nil
-	}
-	return nil
+	return disc, nil
 }
 
 func (n *Network) catchUp(targetHeight int32) error {
@@ -474,19 +547,30 @@ func (n *Network) catchUp(targetHeight int32) error {
 		if err != nil {
 			return err
 		}
-		if _, err := n.headers.AppendBatch(nextHeight, raw); err != nil {
+		// targetHeight is the latest server-reported tip we're
+		// catching up to — pass it as tipHint so AppendBatch applies
+		// per-header PoW only to headers within the trailing
+		// recentPoWWindow.
+		if _, err := n.headers.AppendBatch(nextHeight, raw, targetHeight); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (n *Network) deliverTipChange(tip int32) {
+// deliverTipChange publishes a TipChange event. Drops on a full channel
+// rather than blocking the headers loop — consumers that fall behind get a
+// warn-level log they can monitor.
+func (n *Network) deliverTipChange(tc *TipChange) {
+	if tc == nil {
+		return
+	}
 	select {
-	case n.tipChangeChan <- tip:
+	case n.tipChangeChan <- tc:
 	case <-n.ctx.Done():
 	default:
-		log.Warnf("electrum: tip-change channel full, dropping notify for height %d", tip)
+		log.Warnf("electrum: tip-change channel full, dropping event (connected=%d disconnected=%d)",
+			len(tc.Connected), len(tc.Disconnected))
 	}
 }
 
