@@ -109,11 +109,9 @@ export default function Receive ({ ticker }: ReceiveProps) {
 
   // When the component mounts with a single-variant preselected ticker,
   // initial state already puts us at step 3 — but the address still
-  // needs to be fetched. fetchAddress is intentionally not in the dep
-  // array; we only fire this once for the initial selection.
+  // needs to be fetched. Empty deps: this is a one-shot mount effect.
   useEffect(() => {
-    if (initial.v) void fetchAddress(initial.v)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (initial.v) fetchAddress(initial.v)
   }, [])
 
   const pickVariant = async (v: AssetVariant) => {
