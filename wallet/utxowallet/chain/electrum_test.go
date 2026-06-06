@@ -1007,6 +1007,83 @@ func TestElectrumFilterBlocks(t *testing.T) {
 	}
 }
 
+// TestElectrumFilterBlocksSurfacesWatchedOutPointSpends is the regression
+// for the Codex P1: a transaction that spends a wallet-owned outpoint but
+// does not also pay one of the current lookahead addresses must still be
+// fetched and surfaced by FilterBlocks. Pre-fix, the candidate scripthash
+// set was built only from ExternalAddrs and InternalAddrs, so spend-only
+// txs at watched outpoints went undiscovered and the wallet balance went
+// stale.
+func TestElectrumFilterBlocksSurfacesWatchedOutPointSpends(t *testing.T) {
+	c, stub := makeClient(t, 6)
+
+	owner, sh := newSimnetAddr(t)
+
+	// Synthesize a tx that SPENDS a watched outpoint (an input whose
+	// PreviousOutPoint maps to owner via WatchedOutPoints). The tx pays
+	// to OP_TRUE — owner is NOT in the output set, so without the fix
+	// this tx would not be on owner's scripthash watch path and the
+	// spend would never reach BlockFilterer.FilterTx.
+	prevHash := chainhash.Hash{31: 0xaa}
+	watchedOutpoint := wire.OutPoint{Hash: prevHash, Index: 0}
+	tx := wire.NewMsgTx(wire.TxVersion)
+	tx.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: watchedOutpoint,
+		SignatureScript:  []byte{0x51},
+		Sequence:         wire.MaxTxInSequenceNum,
+	})
+	tx.AddTxOut(&wire.TxOut{Value: 1234, PkScript: []byte{0x51}}) // OP_TRUE
+	var buf bytes.Buffer
+	if err := tx.Serialize(&buf); err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	rawHex := hex.EncodeToString(buf.Bytes())
+	txid := tx.TxHash().String()
+
+	// Electrumx returns history for owner's scripthash because the
+	// spend's input references an output paying that scripthash —
+	// scripthash histories cover both directions of address activity.
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 4, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+
+	req := &FilterBlocksRequest{
+		// Crucially, no lookahead addresses — the only signal that
+		// this tx is relevant is the watched outpoint.
+		ExternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{},
+		InternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{},
+		WatchedOutPoints: map[wire.OutPoint]btcutil.Address{
+			watchedOutpoint: owner,
+		},
+	}
+	for h, hdr := range stub.headers {
+		req.Blocks = append(req.Blocks, wtxmgr.BlockMeta{
+			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: int32(h)},
+			Time:  hdr.Timestamp,
+		})
+	}
+
+	resp, err := c.FilterBlocks(req)
+	if err != nil {
+		t.Fatalf("FilterBlocks: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected a response: the spend-only tx should have been surfaced via WatchedOutPoints")
+	}
+	if resp.BlockMeta.Height != 4 {
+		t.Fatalf("matched block height = %d, want 4", resp.BlockMeta.Height)
+	}
+	if len(resp.RelevantTxns) != 1 {
+		t.Fatalf("RelevantTxns = %d, want 1", len(resp.RelevantTxns))
+	}
+	// Verify the relevant tx actually spends the watched outpoint —
+	// otherwise we'd be passing for the wrong reason.
+	got := resp.RelevantTxns[0]
+	if len(got.TxIn) == 0 || got.TxIn[0].PreviousOutPoint != watchedOutpoint {
+		t.Fatalf("relevant tx does not spend the watched outpoint; got input %+v",
+			got.TxIn[0].PreviousOutPoint)
+	}
+}
+
 // synthTxNonce makes each synthTx return a distinct transaction so successive
 // calls in the same test (or shared fixtures) don't produce colliding txids.
 var synthTxNonce atomic.Uint32

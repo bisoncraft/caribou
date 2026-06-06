@@ -408,38 +408,66 @@ func (c *ElectrumClient) enqueueCtx(ctx context.Context, n any) error {
 }
 
 // FilterBlocks scans the requested blocks for activity on the requested
-// addresses, returning a response for the first block that matched (or nil
-// if none did).
+// addresses and watched outpoints, returning a response for the first block
+// that matched (or nil if none did).
 //
 // Implementation strategy: we batch-fetch GetHistory for each requested
 // address's scripthash (cached when possible), bucket the results by block
 // height, then for each requested block test for hits. When a block has
 // hits, we fetch the matching transactions and run them through the standard
 // BlockFilterer to populate the response in the shape callers expect.
+//
+// req.WatchedOutPoints values are the addresses owning those outpoints. We
+// include their scripthashes in the lookup set because an electrumx
+// scripthash history covers both directions of an address: receives AND
+// spends. Without this, a tx that spends a wallet-owned outpoint but does
+// not also pay one of the lookahead addresses would never be fetched, and
+// BlockFilterer.FilterTx would never see it — leaving the spend
+// undiscovered and the wallet balance stale. The neutrino backend includes
+// the same set in its cfilter watchlist.
 func (c *ElectrumClient) FilterBlocks(req *FilterBlocksRequest) (*FilterBlocksResponse, error) {
 	if len(req.Blocks) == 0 {
 		return nil, nil
 	}
 
-	// Combine external + internal addresses for scripthash lookup.
+	// Combine external + internal addresses + watched-outpoint addresses
+	// for scripthash lookup. Dedup by scripthash to avoid redundant
+	// GetHistory round-trips when the same address appears in multiple
+	// sets (e.g. a watched outpoint paid to a current lookahead address).
 	type addrRef struct {
 		addr btcutil.Address
 		sh   string
 	}
-	refs := make([]addrRef, 0, len(req.ExternalAddrs)+len(req.InternalAddrs))
-	for _, a := range req.ExternalAddrs {
+	refs := make([]addrRef, 0,
+		len(req.ExternalAddrs)+len(req.InternalAddrs)+len(req.WatchedOutPoints))
+	seenSH := make(map[string]struct{},
+		len(req.ExternalAddrs)+len(req.InternalAddrs)+len(req.WatchedOutPoints))
+	addRef := func(a btcutil.Address) error {
 		sh, err := addrScripthash(a)
 		if err != nil {
+			return err
+		}
+		if _, dup := seenSH[sh]; dup {
+			return nil
+		}
+		seenSH[sh] = struct{}{}
+		refs = append(refs, addrRef{addr: a, sh: sh})
+		return nil
+	}
+	for _, a := range req.ExternalAddrs {
+		if err := addRef(a); err != nil {
 			return nil, err
 		}
-		refs = append(refs, addrRef{addr: a, sh: sh})
 	}
 	for _, a := range req.InternalAddrs {
-		sh, err := addrScripthash(a)
-		if err != nil {
+		if err := addRef(a); err != nil {
 			return nil, err
 		}
-		refs = append(refs, addrRef{addr: a, sh: sh})
+	}
+	for _, a := range req.WatchedOutPoints {
+		if err := addRef(a); err != nil {
+			return nil, err
+		}
 	}
 
 	// Build a set of heights of interest so we can short-circuit blocks
