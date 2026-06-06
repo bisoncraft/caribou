@@ -4,14 +4,15 @@
 package encrypt
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"runtime"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
-	"golang.org/x/crypto/poly1305"
 )
 
 // Crypter is an interface for an encryption key and encryption/decryption
@@ -47,7 +48,7 @@ var intCoder = encode.IntCoder
 type Key [KeySize]byte
 
 // Salt is randomness used as part of key derivation. This is different from the
-// salt generated during xchacha20poly1305 encryption, which is shorter.
+// nonce generated during xchacha20poly1305 encryption, which is shorter.
 type Salt [SaltSize]byte
 
 // newSalt is the constructor for a salt based on randomness from crypto/rand.
@@ -90,7 +91,7 @@ func Deserialize(pw, encCrypter []byte) (Crypter, error) {
 // derivation and xchacha20poly1305 for symmetric encryption.
 type argonPolyCrypter struct {
 	key    Key
-	tag    [poly1305.TagSize]byte
+	tag    [sha256.Size]byte
 	salt   Salt
 	params *argonParams
 }
@@ -106,8 +107,7 @@ func newArgonPolyCrypter(pw []byte) *argonPolyCrypter {
 	var encKey Key
 	copy(encKey[:], keyB[:KeySize])
 	// MAC key is the second 32 bytes.
-	var polyKey [KeySize]byte
-	copy(polyKey[:], keyB[KeySize:])
+	macKey := keyB[KeySize:]
 
 	c := &argonPolyCrypter{
 		key:  encKey,
@@ -120,8 +120,18 @@ func newArgonPolyCrypter(pw []byte) *argonPolyCrypter {
 	}
 	// Use the mac key and the serialized parameters to generate the
 	// authenticator.
-	poly1305.Sum(&c.tag, c.serializeParams(), &polyKey)
+	c.tag = macTag(macKey, c.serializeParams())
 	return c
+}
+
+// macTag computes the HMAC-SHA256 authenticator over msg keyed by macKey. It is
+// used to verify the password on deserialization.
+func macTag(macKey, msg []byte) [sha256.Size]byte {
+	h := hmac.New(sha256.New, macKey)
+	h.Write(msg)
+	var tag [sha256.Size]byte
+	copy(tag[:], h.Sum(nil))
+	return tag
 }
 
 // Encrypt encrypts the plaintext.
@@ -172,7 +182,7 @@ func (c *argonPolyCrypter) Serialize() []byte {
 }
 
 // serializeParams serializes the argonPolyCrypter parameters, without the
-// poly1305 auth tag.
+// HMAC auth tag.
 func (c *argonPolyCrypter) serializeParams() encode.BuildyBytes {
 	return encode.BuildyBytes{0}.
 		AddData(c.salt[:]).
@@ -207,11 +217,11 @@ func decodeArgonPoly_v0(pw []byte, pushes [][]byte) (*argonPolyCrypter, error) {
 		return nil, fmt.Errorf("threads parameter encoding length is incorrect. expected 1, got %d", len(threadsB))
 	}
 
-	if len(tagB) != poly1305.TagSize {
-		return nil, fmt.Errorf("mac authenticator of incorrect length. wanted %d, got %d", poly1305.TagSize, len(tagB))
+	if len(tagB) != sha256.Size {
+		return nil, fmt.Errorf("mac authenticator of incorrect length. wanted %d, got %d", sha256.Size, len(tagB))
 	}
-	var polyTag [poly1305.TagSize]byte
-	copy(polyTag[:], tagB)
+	var tag [sha256.Size]byte
+	copy(tag[:], tagB)
 
 	// Create the argonPolyCrypter.
 	params := &argonParams{
@@ -221,18 +231,17 @@ func decodeArgonPoly_v0(pw []byte, pushes [][]byte) (*argonPolyCrypter, error) {
 	}
 	c := &argonPolyCrypter{
 		salt:   salt,
-		tag:    polyTag,
+		tag:    tag,
 		params: params,
 	}
 
 	// Prepare the key.
 	keyB := argon2.IDKey(pw, c.salt[:], params.time, params.memory, params.threads, KeySize*2)
 
-	// Check the poly1305 auth to verify the password.
-	polyKeyB := keyB[KeySize:]
-	var polyKey [KeySize]byte
-	copy(polyKey[:], polyKeyB)
-	if !poly1305.Verify(&c.tag, c.serializeParams(), &polyKey) {
+	// Check the HMAC auth to verify the password.
+	macKey := keyB[KeySize:]
+	expTag := macTag(macKey, c.serializeParams())
+	if !hmac.Equal(c.tag[:], expTag[:]) {
 		return nil, fmt.Errorf("incorrect password")
 	}
 
