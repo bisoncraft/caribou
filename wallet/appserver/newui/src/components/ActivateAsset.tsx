@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react'
+import { useState, useEffect, FormEvent } from 'react'
 import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { postJSON } from '../js/http'
@@ -52,8 +52,11 @@ export default function ActivateAsset ({ ticker }: ActivateAssetParams) {
     )
   }
 
-  // Determine whether this is a multi-network token.
-  // A native-only ticker has a single variant with no .token.
+  // Determine whether this is a multi-network token. Note: this differs
+  // from TickerAsset.isMultiNet (variants.length > 1) — we also treat a
+  // single-token-on-one-network as multi-net so the picker UI confirms
+  // the parent chain to activate (e.g. USDC.polygon needs the Polygon
+  // wallet, and the user should see "Polygon" before we create it).
   const isMultiNet = ta.variants.length > 1 || ta.variants.some(v => v.token)
 
   if (!isMultiNet) {
@@ -118,7 +121,7 @@ function NativeActivate ({ ticker, close }: { ticker: string, close: () => void 
       <div className="px-3 pb-2 fs14 grey">
         {walletDef.description}
       </div>
-      <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`} key={err}>{err}</div>
+      <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
       <div className="flex-stretch-column p-3">
         <button type="button" className="feature" onClick={submit} disabled={submitting}>
           {submitting ? <><Spinner className="me-2" />{t('Activating...')}</> : t('Activate Now')}
@@ -214,10 +217,14 @@ function MultiNetActivate ({ ticker, close }: { ticker: string, close: () => voi
     .filter(r => !isNetworkActive(r.v) && r.checked)
     .every(r => r.status === 'done')
 
-  if (allSucceeded) {
-    close()
-    return null
-  }
+  // Close after a successful batch via effect — calling close() (which
+  // does app.setForm) directly in render mutates a parent during a
+  // child's render, which React rejects.
+  useEffect(() => {
+    if (allSucceeded) close()
+  }, [allSucceeded, close])
+
+  if (allSucceeded) return null
 
   const isRunning = phase === 'running'
 
