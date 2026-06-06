@@ -50,8 +50,6 @@ func (id *MatchID) Scan(src any) error {
 	return nil
 }
 
-var zeroMatchID MatchID
-
 // DecodeMatchID checks a string as being both hex and the right length and
 // returns its bytes encoded as an order.MatchID.
 func DecodeMatchID(matchIDStr string) (MatchID, error) {

@@ -267,7 +267,7 @@ func (contractDeployer) nodeAndRate(
 	baseRate, tipRate, err := cl.currentFees(ctx)
 	if err != nil {
 		cl.shutdown()
-		return nil, nil, nil, fmt.Errorf("Error estimating fee rate: %v", err)
+		return nil, nil, nil, fmt.Errorf("error estimating fee rate: %v", err)
 	}
 
 	maxFeeRate := new(big.Int).Add(tipRate, new(big.Int).Mul(baseRate, big.NewInt(2)))

@@ -1885,7 +1885,7 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 			DataDir:  c.assetDataDirectory(assetID),
 			TorProxy: c.cfg.TorProxy,
 		}, oldWallet.currentDepositAddress()); err != nil {
-			return fmt.Errorf("Reconfigure: %v", err)
+			return fmt.Errorf("reconfigure: %v", err)
 		} else if !restart {
 			// Config was updated without a need to restart.
 			if owns, err := oldWallet.OwnsDepositAddress(oldWallet.currentDepositAddress()); err != nil {
@@ -2727,7 +2727,7 @@ func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, sub
 		var err error
 		crypter, err = c.encryptionKey(pw)
 		if err != nil {
-			return nil, fmt.Errorf("Trade password error: %w", err)
+			return nil, fmt.Errorf("trade password error: %w", err)
 		}
 		defer crypter.Close()
 	}

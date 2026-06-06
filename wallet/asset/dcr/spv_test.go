@@ -506,7 +506,7 @@ func TestAccountOwnsAddress(t *testing.T) {
 	}
 
 	// Other KnownAddress error
-	dcrw.knownAddrErr = tErr
+	dcrw.knownAddrErr = errTest
 	if _, err := w.AccountOwnsAddress(tCtx, tPKHAddr, tAcctName); err == nil {
 		t.Fatal("no error for KnownAddress error")
 	}
@@ -547,7 +547,7 @@ func TestAccountBalance(t *testing.T) {
 	}
 
 	// AccountBalance error
-	dcrw.acctBalErr = tErr
+	dcrw.acctBalErr = errTest
 	if _, err := w.AccountBalance(tCtx, 1, ""); err == nil {
 		t.Fatal("no error for AccountBalance error")
 	}
@@ -558,15 +558,15 @@ func TestSimpleErrorPropagation(t *testing.T) {
 	var err error
 	tests := map[string]func(){
 		"LockedOutputs": func() {
-			dcrw.lockedPtsErr = tErr
+			dcrw.lockedPtsErr = errTest
 			_, err = w.LockedOutputs(tCtx, "")
 		},
 		"Unspents": func() {
-			dcrw.listUnspentErr = tErr
+			dcrw.listUnspentErr = errTest
 			_, err = w.Unspents(tCtx, "")
 		},
 		"SignRawTransaction.err": func() {
-			dcrw.signTxErr = tErr
+			dcrw.signTxErr = errTest
 			_, err = w.SignRawTransaction(tCtx, new(wire.MsgTx))
 			dcrw.signTxErr = nil
 		},
@@ -575,31 +575,31 @@ func TestSimpleErrorPropagation(t *testing.T) {
 			_, err = w.SignRawTransaction(tCtx, new(wire.MsgTx))
 		},
 		"SendRawTransaction": func() {
-			dcrw.publishTxErr = tErr
+			dcrw.publishTxErr = errTest
 			_, err = w.SendRawTransaction(tCtx, nil, false)
 		},
 		"ExternalAddress": func() {
-			dcrw.extAddrErr = tErr
+			dcrw.extAddrErr = errTest
 			_, err = w.ExternalAddress(tCtx, "")
 		},
 		"InternalAddress": func() {
-			dcrw.intAddrErr = tErr
+			dcrw.intAddrErr = errTest
 			_, err = w.InternalAddress(tCtx, "")
 		},
 		"AccountUnlocked": func() {
-			dcrw.acctUnlockedErr = tErr
+			dcrw.acctUnlockedErr = errTest
 			_, err = w.AccountUnlocked(tCtx, "")
 		},
 		"LockAccount": func() {
-			dcrw.lockAcctErr = tErr
+			dcrw.lockAcctErr = errTest
 			err = w.LockAccount(tCtx, "")
 		},
 		"UnlockAccount": func() {
-			dcrw.unlockAcctErr = tErr
+			dcrw.unlockAcctErr = errTest
 			err = w.UnlockAccount(tCtx, []byte("abc"), "")
 		},
 		"AddressPrivKey": func() {
-			dcrw.privKeyErr = tErr
+			dcrw.privKeyErr = errTest
 			_, err = w.AddressPrivKey(tCtx, tPKHAddr)
 		},
 	}
@@ -674,14 +674,14 @@ func TestUnspentOutput(t *testing.T) {
 	}
 
 	// TxDetails generic error
-	dcrw.txDetailsErr = tErr
+	dcrw.txDetailsErr = errTest
 	if _, err := w.UnspentOutput(tCtx, nil, 1, 0); err == nil {
 		t.Fatalf("expected TxDetail generic error to propagate")
 	}
 	dcrw.txDetailsErr = nil
 
 	// ListTransactionDetails error
-	dcrw.listTxsErr = tErr
+	dcrw.listTxsErr = errTest
 	if _, err := w.UnspentOutput(tCtx, nil, 1, 0); err == nil {
 		t.Fatalf("expected ListTransactionDetails error to propagate")
 	}
@@ -766,14 +766,14 @@ func TestGetBlockHeader(t *testing.T) {
 	dcrw.mainchainDontHave = false
 
 	// BlockHeader error
-	dcrw.blockHeaderErr[blockHash] = tErr
+	dcrw.blockHeaderErr[blockHash] = errTest
 	if _, err := w.GetBlockHeader(tCtx, &blockHash); err == nil {
 		t.Fatalf("BlockHeader error not propagated")
 	}
 	dcrw.blockHeaderErr[blockHash] = nil
 
 	// medianTime error
-	dcrw.blockHeaderErr[blockHash5] = tErr
+	dcrw.blockHeaderErr[blockHash5] = errTest
 	if _, err := w.GetBlockHeader(tCtx, &blockHash); err == nil {
 		t.Fatalf("medianTime error not propagated")
 	}
@@ -789,7 +789,7 @@ func TestGetBlockHeader(t *testing.T) {
 	dcrw.tip.height = tipHeight
 
 	// GetBlockHash error
-	dcrw.blockInfoErr = tErr
+	dcrw.blockInfoErr = errTest
 	if _, err := w.GetBlockHeader(tCtx, &blockHash); err == nil {
 		t.Fatalf("BlockInfo error not propagated")
 	}
@@ -822,7 +822,7 @@ func TestGetBlock(t *testing.T) {
 	}
 
 	// Blocks error
-	dcrw.spvBlocksErr = tErr
+	dcrw.spvBlocksErr = errTest
 	if _, err := w.GetBlock(tCtx, &blockHash); err == nil {
 		t.Fatalf("Blocks error not propagated")
 	}
@@ -847,7 +847,7 @@ func TestGetBlock(t *testing.T) {
 	// Zero the time. Then check to make sure it was updated.
 	// We can also add back our Blocks error, because with a cached block,
 	// we'll never get there.
-	dcrw.spvBlocksErr = tErr
+	dcrw.spvBlocksErr = errTest
 	w.blockCache.blocks[blockHash].lastAccess = time.Time{}
 	if _, err = w.GetBlock(tCtx, &blockHash); err != nil {
 		t.Fatalf("final success (cached) error: %v", err)
@@ -910,14 +910,14 @@ func TestGetTransaction(t *testing.T) {
 	}
 
 	// TxDetails generic error
-	dcrw.txDetailsErr = tErr
+	dcrw.txDetailsErr = errTest
 	if _, err := w.GetTransaction(tCtx, txHash); err == nil {
 		t.Fatalf("expected TxDetail generic error to propagate")
 	}
 	dcrw.txDetailsErr = nil
 
 	// ListTransactionDetails error
-	dcrw.listTxsErr = tErr
+	dcrw.listTxsErr = errTest
 	if _, err := w.UnspentOutput(tCtx, nil, 1, 0); err == nil {
 		t.Fatalf("expected ListTransactionDetails error to propagate")
 	}
@@ -960,7 +960,7 @@ func TestMatchAnyScript(t *testing.T) {
 		t.Fatalf("no match reported")
 	}
 
-	dcrw.filterErr = tErr
+	dcrw.filterErr = errTest
 	if _, err := w.MatchAnyScript(tCtx, &blockHash, [][]byte{pkScript}); err == nil {
 		t.Fatalf("CFilterV2 error did not propagate")
 	}
@@ -1030,11 +1030,11 @@ func TestRescan(t *testing.T) {
 	ensureErr("rescan finished without a progress update", nil)
 
 	// Initial error comes straight through.
-	tErr := errors.New("test error")
-	ensureErr("test error", []wallet.RescanProgress{{Err: tErr}})
+	errTest := errors.New("test error")
+	ensureErr("test error", []wallet.RescanProgress{{Err: errTest}})
 
 	// Any progress update = no error.
-	ensureErr("", []wallet.RescanProgress{{}, {Err: tErr}})
+	ensureErr("", []wallet.RescanProgress{{}, {Err: errTest}})
 
 	// Rescan in progress error
 	w.rescan.Lock()

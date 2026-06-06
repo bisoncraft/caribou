@@ -148,7 +148,7 @@ func (c *erc20TokenContractor) value(_ context.Context, tx *types.Transaction) (
 func estimateGas(ctx context.Context, from, to common.Address, contractABI *abi.ABI, cb bind.ContractBackend, value *big.Int, method string, args ...any) (uint64, error) {
 	data, err := contractABI.Pack(method, args...)
 	if err != nil {
-		return 0, fmt.Errorf("Pack error: %v", err)
+		return 0, fmt.Errorf("pack error: %v", err)
 	}
 
 	return cb.EstimateGas(ctx, ethereum.CallMsg{

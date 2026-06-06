@@ -39,7 +39,7 @@ func run() error {
 	}
 
 	if tkn := asset.TokenInfo(uint32(assetID)); tkn != nil {
-		return fmt.Errorf("this is a token. did you want asset ID %d for %s?\n", tkn.NetworkID, asset.Asset(tkn.NetworkID).Info.Name)
+		return fmt.Errorf("this is a token. did you want asset ID %d for %s?", tkn.NetworkID, asset.Asset(tkn.NetworkID).Info.Name)
 	}
 
 	var (
@@ -51,16 +51,16 @@ func run() error {
 	if appSeedHex != "" {
 		appSeedB, err = hex.DecodeString(appSeedHex)
 		if err != nil {
-			return fmt.Errorf("bad app seed: %v\n", err)
+			return fmt.Errorf("bad app seed: %v", err)
 		}
 
 		if len(appSeedB) != 64 {
-			return fmt.Errorf("app seed is %d bytes, expected 64\n", len(appSeedB))
+			return fmt.Errorf("app seed is %d bytes, expected 64", len(appSeedB))
 		}
 	} else {
 		appSeedB, bday, err = mnemonic.DecodeMnemonic(appMnemonic)
 		if err != nil {
-			return fmt.Errorf("bad mnemonic: %v\n", err)
+			return fmt.Errorf("bad mnemonic: %v", err)
 		}
 	}
 

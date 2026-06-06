@@ -2722,7 +2722,7 @@ func (w *baseWallet) currentNetworkFees(ctx context.Context) (baseRate, tipRate 
 	}
 	c.baseRate, c.tipRate, err = w.node.currentFees(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Error getting net fee state: %v", err)
+		return nil, nil, fmt.Errorf("error getting net fee state: %v", err)
 	}
 	c.blockNum = tip
 	return c.baseRate, c.tipRate, nil
@@ -2733,7 +2733,7 @@ func (w *baseWallet) currentNetworkFees(ctx context.Context) (baseRate, tipRate 
 func (eth *baseWallet) recommendedMaxFeeRate(ctx context.Context) (maxFeeRate, tipRate *big.Int, err error) {
 	base, tip, err := eth.currentNetworkFees(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Error getting net fee state: %v", err)
+		return nil, nil, fmt.Errorf("error getting net fee state: %v", err)
 	}
 
 	return new(big.Int).Add(

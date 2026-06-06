@@ -18,7 +18,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -35,7 +34,7 @@ var (
 	tTxID   = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
 	tTxHash *chainhash.Hash
 	tP2PKH  []byte
-	tErr    = errors.New("test error")
+	errTest = errors.New("test error")
 )
 
 type msgBlockWithHeight struct {
@@ -71,7 +70,7 @@ func signRawJSONTx(raw json.RawMessage) (*Tx, []byte) {
 		panic(fmt.Sprintf("error deserializing tx: %v", err))
 	}
 	for i := range tx.TxIn {
-		tx.TxIn[i].SignatureScript = encode.RandomBytes(dexbtc.RedeemP2PKHSigScriptSize)
+		tx.TxIn[i].SignatureScript = encode.RandomBytes(btc.RedeemP2PKHSigScriptSize)
 	}
 	txB, err = tx.Bytes()
 	if err != nil {
@@ -347,7 +346,8 @@ func TestSend(t *testing.T) {
 	defer cl.checkEmptiness(t)
 
 	const sendAmt uint64 = 1e8
-	w.lastAddress.Store(tUnifiedAddr)
+	tAddr := string(tUnifiedAddr)
+	w.lastAddress.Store(&tAddr)
 
 	successOp := []*operationStatus{{
 		Status: "success",
@@ -410,7 +410,7 @@ func TestSyncStatus(t *testing.T) {
 	}
 
 	// getblockchaininfo error
-	cl.queueResponse("getblockchaininfo", tErr)
+	cl.queueResponse("getblockchaininfo", errTest)
 	_, err = w.SyncStatus()
 	if !errorHasCode(err, errGetChainInfo) {
 		t.Fatalf("SyncStatus wrong error: %v", err)
@@ -418,7 +418,7 @@ func TestSyncStatus(t *testing.T) {
 
 	// getnetworkinfo error
 	cl.queueResponse("getblockchaininfo", bci)
-	cl.queueResponse("getnetworkinfo", tErr)
+	cl.queueResponse("getnetworkinfo", errTest)
 	_, err = w.SyncStatus()
 	if !errorHasCode(err, errGetNetInfo) {
 		t.Fatalf("SyncStatus wrong error: %v", err)

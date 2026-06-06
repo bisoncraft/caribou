@@ -669,7 +669,7 @@ func getExchangeWalletCfg(dcrCfg *walletConfig, logger util.Logger) (*exchangeWa
 	if dcrCfg.FeeRateLimit > 0 {
 		feesLimitPerByte = toAtoms(dcrCfg.FeeRateLimit / 1000)
 		if feesLimitPerByte == 0 {
-			return nil, fmt.Errorf("Fee rate limit is smaller than smallest unit: %v",
+			return nil, fmt.Errorf("fee rate limit is smaller than smallest unit: %v",
 				dcrCfg.FeeRateLimit)
 		}
 	}
@@ -2079,7 +2079,7 @@ func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime 
 	enough := sendEnough(amt, feeRate, false, baseSize, true)
 	coins, _, _, _, err := dcr.fund(0, enough)
 	if err != nil {
-		return nil, nil, fmt.Errorf("Unable to send %s DCR with fee rate of %d atoms/byte: %w",
+		return nil, nil, fmt.Errorf("unable to send %s DCR with fee rate of %d atoms/byte: %w",
 			amount(amt), feeRate, err)
 	}
 
@@ -2660,7 +2660,7 @@ func (dcr *ExchangeWallet) sendToAddress(addr stdaddr.Address, amt, feeRate uint
 	reserves := dcr.bondReserves.Load()
 	coins, _, _, _, err := dcr.fund(reserves, enough)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("Unable to send %s DCR with fee rate of %d atoms/byte: %w",
+		return nil, 0, 0, fmt.Errorf("unable to send %s DCR with fee rate of %d atoms/byte: %w",
 			amount(amt), feeRate, err)
 	}
 
@@ -3080,7 +3080,7 @@ func (dcr *ExchangeWallet) StakeStatus() (*asset.TicketStakingStatus, error) {
 	// wallets.
 	tickets, err := dcr.tickets(dcr.ctx)
 	if err != nil {
-		if errors.Is(err, oldSPVWalletErr) {
+		if errors.Is(err, errOldSPVWallet) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("error retrieving tickets: %w", err)

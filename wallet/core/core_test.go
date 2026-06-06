@@ -74,7 +74,7 @@ var (
 	}
 	tPW                = []byte("dexpw")
 	wPW                = []byte("walletpw")
-	tErr               = fmt.Errorf("test error")
+	errTest            = fmt.Errorf("test error")
 	tFeeAsset   uint32 = 42
 	tLogger            = util.StdOutLogger("TCORE", util.LevelInfo)
 	tWalletInfo        = &asset.WalletInfo{
@@ -697,7 +697,7 @@ func TestCreateWallet(t *testing.T) {
 	tCore.credentials = creds
 
 	// Crypter error.
-	rig.crypter.(*tCrypter).encryptErr = tErr
+	rig.crypter.(*tCrypter).encryptErr = errTest
 	ensureErr("Encrypt")
 	rig.crypter.(*tCrypter).encryptErr = nil
 
@@ -712,27 +712,27 @@ func TestCreateWallet(t *testing.T) {
 	}, true)
 
 	// Connection error.
-	tWallet.connectErr = tErr
+	tWallet.connectErr = errTest
 	ensureErr("Connect")
 	tWallet.connectErr = nil
 
 	// Unlock error.
-	tWallet.unlockErr = tErr
+	tWallet.unlockErr = errTest
 	ensureErr("Unlock")
 	tWallet.unlockErr = nil
 
 	// Address error.
-	tWallet.addrErr = tErr
+	tWallet.addrErr = errTest
 	ensureErr("Address")
 	tWallet.addrErr = nil
 
 	// Balance error.
-	tWallet.balErr = tErr
+	tWallet.balErr = errTest
 	ensureErr("Balance")
 	tWallet.balErr = nil
 
 	// Database error.
-	rig.db.updateWalletErr = tErr
+	rig.db.updateWalletErr = errTest
 	ensureErr("db.UpdateWallet")
 	rig.db.updateWalletErr = nil
 
@@ -771,7 +771,7 @@ func TestInitializeClient(t *testing.T) {
 	}
 
 	// Store error. Use a non-empty password to pass empty password check.
-	rig.db.setCredsErr = tErr
+	rig.db.setCredsErr = errTest
 	_, err = tCore.InitializeClient(tPW, nil)
 	if err == nil {
 		t.Fatalf("no error for StoreEncryptedKey error")
@@ -817,7 +817,7 @@ func TestSend(t *testing.T) {
 
 	// connect error
 	wallet.hookedUp = false
-	tWallet.connectErr = tErr
+	tWallet.connectErr = errTest
 	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false)
 	if err == nil {
 		t.Fatalf("no error for wallet connect error")
@@ -825,7 +825,7 @@ func TestSend(t *testing.T) {
 	tWallet.connectErr = nil
 
 	// Send error
-	tWallet.sendErr = tErr
+	tWallet.sendErr = errTest
 	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false)
 	if err == nil {
 		t.Fatalf("no error for wallet send error")
@@ -1017,7 +1017,7 @@ func TestWalletSettings(t *testing.T) {
 	tCore.wallets[assetID] = &xcWallet{}
 
 	// db error
-	rig.db.walletErr = tErr
+	rig.db.walletErr = errTest
 	_, err = tCore.WalletSettings(assetID)
 	if !errorHasCode(err, dbErr) {
 		t.Fatalf("wrong error when expected db error: %v", err)
@@ -1048,7 +1048,7 @@ func TestChangeAppPass(t *testing.T) {
 	newTPW := []byte("apppass")
 
 	// App Password error
-	rig.crypter.(*tCrypterSmart).recryptErr = tErr
+	rig.crypter.(*tCrypterSmart).recryptErr = errTest
 	err := tCore.ChangeAppPass(tPW, newTPW)
 	if !errorHasCode(err, authErr) {
 		t.Fatalf("wrong error for password error: %v", err)
@@ -1097,7 +1097,7 @@ func TestResetAppPass(t *testing.T) {
 	}
 
 	// Want incorrect seed error.
-	rig.crypter.(*tCrypterSmart).recryptErr = tErr
+	rig.crypter.(*tCrypterSmart).recryptErr = errTest
 	// tCrypter is used to encode the orginal seed but we don't need it here, so
 	// we need to add 8 bytes to commplete the expected seed lenght(64).
 	err = tCore.ResetAppPass(tPW, seed+"blah")
@@ -1130,7 +1130,7 @@ func TestSetWalletPassword(t *testing.T) {
 	}
 
 	// Auth error
-	rig.crypter.(*tCrypter).recryptErr = tErr
+	rig.crypter.(*tCrypter).recryptErr = errTest
 	err = tCore.SetWalletPassword(tPW, assetID, newPW)
 	if !errorHasCode(err, authErr) {
 		t.Fatalf("wrong error for auth error: %v", err)
@@ -1148,7 +1148,7 @@ func TestSetWalletPassword(t *testing.T) {
 
 	// Connection error
 	xyzWallet.hookedUp = false
-	tXyzWallet.connectErr = tErr
+	tXyzWallet.connectErr = errTest
 	err = tCore.SetWalletPassword(tPW, assetID, newPW)
 	if !errorHasCode(err, connectionErr) {
 		t.Fatalf("wrong error for connection error: %v", err)
@@ -1157,7 +1157,7 @@ func TestSetWalletPassword(t *testing.T) {
 	tXyzWallet.connectErr = nil
 
 	// Unlock error
-	tXyzWallet.unlockErr = tErr
+	tXyzWallet.unlockErr = errTest
 	err = tCore.SetWalletPassword(tPW, assetID, newPW)
 	if !errorHasCode(err, authErr) {
 		t.Fatalf("wrong error for auth error: %v", err)
@@ -1165,7 +1165,7 @@ func TestSetWalletPassword(t *testing.T) {
 	tXyzWallet.unlockErr = nil
 
 	// SetWalletPassword db error
-	rig.db.setWalletPwErr = tErr
+	rig.db.setWalletPwErr = errTest
 	err = tCore.SetWalletPassword(tPW, assetID, newPW)
 	if !errorHasCode(err, dbErr) {
 		t.Fatalf("wrong error for missing wallet: %v", err)
@@ -1500,7 +1500,7 @@ func TestEstimateSendTxFee(t *testing.T) {
 
 		tWallet.estFeeErr = nil
 		if test.wantErr {
-			tWallet.estFeeErr = tErr
+			tWallet.estFeeErr = errTest
 		}
 		estimate, _, err := tCore.EstimateSendTxFee("addr", test.asset, test.value, test.subtract, false)
 		if test.wantErr {

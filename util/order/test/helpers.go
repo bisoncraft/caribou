@@ -269,9 +269,6 @@ func CompareTrade(t1, t2 *order.Trade) error {
 	if t1.Quantity != t2.Quantity {
 		return fmt.Errorf("quantity mismatch. %d != %d", t1.Quantity, t2.Quantity)
 	}
-	if t1.Address != t2.Address {
-		return fmt.Errorf("address mismatch. %s != %s", t1.Address, t2.Address)
-	}
 	return nil
 }
 
@@ -299,19 +296,16 @@ func CompareUserMatch(m1, m2 *order.UserMatch) error {
 		return fmt.Errorf("MatchID mismatch. %s != %s", m1.MatchID, m2.MatchID)
 	}
 	if m1.Quantity != m2.Quantity {
-		return fmt.Errorf("Quantity mismatch. %d != %d", m1.Quantity, m2.Quantity)
+		return fmt.Errorf("quantity mismatch. %d != %d", m1.Quantity, m2.Quantity)
 	}
 	if m1.Rate != m2.Rate {
-		return fmt.Errorf("Rate mismatch. %d != %d", m1.Rate, m2.Rate)
-	}
-	if m1.Address != m2.Address {
-		return fmt.Errorf("Address mismatch. %s != %s", m1.Address, m2.Address)
+		return fmt.Errorf("rate mismatch. %d != %d", m1.Rate, m2.Rate)
 	}
 	if m1.Status != m2.Status {
-		return fmt.Errorf("Status mismatch. %d != %d", m1.Status, m2.Status)
+		return fmt.Errorf("status mismatch. %d != %d", m1.Status, m2.Status)
 	}
 	if m1.Side != m2.Side {
-		return fmt.Errorf("Side mismatch. %d != %d", m1.Side, m2.Side)
+		return fmt.Errorf("side mismatch. %d != %d", m1.Side, m2.Side)
 	}
 	if m1.FeeRateSwap != m2.FeeRateSwap {
 		return fmt.Errorf("FeeRateSwap mismatch. %d != %d", m1.FeeRateSwap, m2.FeeRateSwap)
