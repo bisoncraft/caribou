@@ -1,4 +1,4 @@
-import { useRef, useState, FormEvent } from 'react'
+import { useEffect, useRef, useState, FormEvent } from 'react'
 import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { postJSON } from '../js/http'
@@ -40,9 +40,28 @@ function isVariantActive (v: AssetVariant): boolean {
 
 const noSubmit = (e: FormEvent) => e.preventDefault()
 
-export default function Receive () {
-  const [ta, setTa] = useState<TickerAsset | null>(null)
-  const [variant, setVariant] = useState<AssetVariant | null>(null)
+interface ReceiveProps {
+  // Optional preselected ticker (e.g. when launched from a portfolio row's
+  // Receive icon). When set, the asset picker is skipped on mount.
+  ticker?: string
+}
+
+// preselected resolves an optional ticker prop to a TickerAsset and, when
+// the ticker has exactly one variant, that variant — so we can skip the
+// asset (and where unambiguous, the network) picker on mount. Returns
+// nulls if the ticker is missing or has no active variant.
+function preselected (ticker?: string): { ta: TickerAsset | null, v: AssetVariant | null } {
+  if (!ticker) return { ta: null, v: null }
+  const ta = app.tickerMap?.[ticker]
+  if (!ta || activeVariants(ta).length === 0) return { ta: null, v: null }
+  // Skip step 2 only for single-variant tickers (same rule as pickAsset).
+  return { ta, v: ta.variants.length === 1 ? ta.variants[0] : null }
+}
+
+export default function Receive ({ ticker }: ReceiveProps) {
+  const initial = preselected(ticker)
+  const [ta, setTa] = useState<TickerAsset | null>(initial.ta)
+  const [variant, setVariant] = useState<AssetVariant | null>(initial.v)
   const [address, setAddress] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
@@ -87,6 +106,15 @@ export default function Receive () {
       await fetchAddress(v)
     }
   }
+
+  // When the component mounts with a single-variant preselected ticker,
+  // initial state already puts us at step 3 — but the address still
+  // needs to be fetched. fetchAddress is intentionally not in the dep
+  // array; we only fire this once for the initial selection.
+  useEffect(() => {
+    if (initial.v) void fetchAddress(initial.v)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const pickVariant = async (v: AssetVariant) => {
     setVariant(v)
@@ -236,7 +264,7 @@ export default function Receive () {
                   </button>
                 </div>
                 {variantErr && (
-                  <div className="errcolor fs12 mt-1" key={variantErr}>{variantErr}</div>
+                  <div className="errcolor fs12 mt-1">{variantErr}</div>
                 )}
               </div>
             )

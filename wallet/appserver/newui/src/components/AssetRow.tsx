@@ -84,19 +84,17 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
         {pctDisplay}
       </td>
       <td className="asset-row-actions">
-        <span
+        <button
+          type="button"
           className="asset-action-icon has-tip ico-download fs16"
-          role="button"
-          tabIndex={0}
           aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
-          onClick={() => app.setForm({ form: 'receive', data: {} })}
+          onClick={() => app.setForm({ form: 'receive', data: { ticker: asset.ticker } })}
         />
-        <span
+        <button
+          type="button"
           className="asset-action-icon has-tip ico-upload fs16"
-          role="button"
-          tabIndex={0}
           aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
-          onClick={() => app.setForm({ form: 'send', data: {} })}
+          onClick={() => app.setForm({ form: 'send', data: { ticker: asset.ticker } })}
         />
       </td>
     </tr>

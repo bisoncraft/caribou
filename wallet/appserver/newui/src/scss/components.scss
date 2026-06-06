@@ -312,12 +312,18 @@ img.logo-full {
   width: 1%; // shrink to fit content
 }
 
+// Per-row Send/Receive buttons in the portfolio asset table. Native <button>
+// resets keep the icon glyph rendering identically to the previous span
+// implementation; the .ico-* class provides the glyph via ::before.
 .asset-action-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
   border-radius: 4px;
   color: var(--text-grey);
   cursor: pointer;
@@ -326,6 +332,11 @@ img.logo-full {
   &:hover {
     color: var(--accent-blue-hover);
     background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 1px;
   }
 
   & + .asset-action-icon { margin-left: 4px; }
