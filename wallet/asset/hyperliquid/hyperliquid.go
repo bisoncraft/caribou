@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
@@ -29,8 +31,19 @@ import (
 	"github.com/bisoncraft/bosswallet/util/keygen"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/decred/dcrd/hdkeychain/v3"
+	"golang.org/x/crypto/scrypt"
 	"golang.org/x/net/proxy"
 )
+
+const (
+	scryptSaltLen = 32
+	scryptR       = 8
+	scryptP       = 1
+)
+
+// kdfScryptN is the scrypt N (work factor) for key derivation. Package-level
+// so tests can set a lower value to avoid long runtimes.
+var kdfScryptN = 1 << 18
 
 var (
 	seedDerivationPath = []uint32{
@@ -127,12 +140,13 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 
 // HyperWallet implements asset.Wallet for the Hyperliquid L1.
 type HyperWallet struct {
-	log         util.Logger
-	net         util.Network
-	emit        *asset.WalletEmitter
-	peersChange func(uint32, error)
-	dataDir     string
-	settings    map[string]string
+	log           util.Logger
+	net           util.Network
+	emit          *asset.WalletEmitter
+	peersChange   func(uint32, error)
+	lastPeerCount uint32 // accessed via sync/atomic; 0 = disconnected, 1 = connected
+	dataDir       string
+	settings      map[string]string
 
 	keyMtx  sync.RWMutex
 	privKey []byte // nil when locked; 32-byte secp256k1 private key
@@ -147,10 +161,11 @@ type HyperWallet struct {
 	rpc  *rpcClient
 	txDB *hyperTxDB
 
-	scanMtx sync.Mutex
-	tipMtx  sync.RWMutex
-	tip     uint64    // unix milliseconds of last successful API contact
-	tipTime time.Time // wall time of last tip update
+	ledgerMtx sync.Mutex
+	scanMtx   sync.Mutex
+	tipMtx    sync.RWMutex
+	tip       uint64    // unix milliseconds of last successful API contact
+	tipTime   time.Time // wall time of last tip update
 
 	// lastScannedMS is the unix millisecond timestamp up to which we have
 	// scanned ledger updates for incoming transactions.
@@ -181,14 +196,16 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	}, nil
 }
 
-// Unlock decrypts the private key with the wallet password.
+// Unlock decrypts the private key with the wallet password. Legacy key files
+// (no scrypt salt) are automatically re-encrypted with the scrypt KDF on
+// first successful unlock.
 func (w *HyperWallet) Unlock(pw []byte) error {
 	kf, err := readKeyFile(filepath.Join(w.dataDir, keyFileName))
 	if err != nil {
 		return fmt.Errorf("reading key file: %w", err)
 	}
 
-	privBytes, err := decryptSeed(kf.EncryptedSeed, pw)
+	privBytes, err := decryptSeed(kf.EncryptedSeed, pw, kf.Salt)
 	if err != nil {
 		return fmt.Errorf("decrypting key: %w", err)
 	}
@@ -200,12 +217,20 @@ func (w *HyperWallet) Unlock(pw []byte) error {
 		return fmt.Errorf("parsing private key: %w", err)
 	}
 	derivedPub := gethcrypto.CompressPubkey(&priv.PublicKey)
-	// priv is only needed for the pubkey check; clear it immediately.
-	priv = nil
 	if !bytes.Equal(derivedPub, w.pubKey) {
 		encode.ClearBytes(privBytes)
 		return fmt.Errorf("decrypted key does not match stored public key")
 	}
+
+	// Migrate legacy key files (no salt) to the scrypt KDF.
+	if len(kf.Salt) == 0 {
+		if merr := saveKeyFile(filepath.Join(w.dataDir, keyFileName), priv, pw); merr != nil {
+			w.log.Warnf("Key file migration to scrypt KDF failed: %v", merr)
+		} else {
+			w.log.Infof("Key file migrated to scrypt KDF")
+		}
+	}
+	priv = nil
 
 	w.keyMtx.Lock()
 	encode.ClearBytes(w.privKey)
@@ -331,6 +356,9 @@ func (w *HyperWallet) Withdraw(address string, value, _ uint64) (asset.Coin, err
 }
 
 func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
+	if w.rpc == nil {
+		return nil, asset.ErrConnectionDown
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid Hyperliquid address %q", address)
 	}
@@ -400,10 +428,13 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 	}
 
 	if err := w.rpc.spotSend(context.Background(), action, sig, nonce); err != nil {
-		// Remove the stored pending entry so it doesn't linger.
-		if w.txDB != nil {
+		// Only remove the pending record on an explicit server rejection. For
+		// transport errors (network drop, timeout) the tx may have landed, so
+		// we leave the record for scanLedger to resolve.
+		var rejection *exchangeRejection
+		if errors.As(err, &rejection) && w.txDB != nil {
 			if delErr := w.txDB.deleteTx(txID); delErr != nil {
-				w.log.Errorf("Cleaning up pending tx %s after failed send: %v", txID, delErr)
+				w.log.Errorf("Cleaning up pending tx %s after rejection: %v", txID, delErr)
 			}
 		}
 		return nil, fmt.Errorf("spot send: %w", err)
@@ -441,12 +472,23 @@ func (w *HyperWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryRe
 
 func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.WalletTransaction, error) {
 	if w.txDB != nil {
-		wt, err := w.txDB.getTx(txID)
-		if err != nil {
-			return nil, err
+		for _, lookupID := range walletTransactionLookupIDs(txID) {
+			wt, err := w.txDB.getTx(lookupID)
+			if err != nil {
+				return nil, err
+			}
+			if wt != nil {
+				return wt.WalletTransaction, nil
+			}
 		}
-		if wt != nil {
-			return wt.WalletTransaction, nil
+		for _, lookupID := range walletTransactionLookupIDs(txID) {
+			wt, err := w.txDB.getTxByPendingID(lookupID)
+			if err != nil {
+				return nil, err
+			}
+			if wt != nil {
+				return wt.WalletTransaction, nil
+			}
 		}
 	}
 	return nil, asset.CoinNotFoundError
@@ -509,6 +551,9 @@ func (w *HyperWallet) tipPoller(ctx context.Context) {
 		if w.txDB != nil {
 			_ = w.txDB.Close()
 		}
+		if atomic.SwapUint32(&w.lastPeerCount, 0) != 0 && w.peersChange != nil {
+			w.peersChange(0, nil)
+		}
 	}()
 
 	var netDial func(context.Context, string, string) (net.Conn, error)
@@ -538,6 +583,9 @@ func (w *HyperWallet) tipPoller(ctx context.Context) {
 			w.tipMtx.Unlock()
 			if w.emit != nil {
 				w.emit.TipChange(tip)
+			}
+			if atomic.SwapUint32(&w.lastPeerCount, 1) != 1 && w.peersChange != nil {
+				w.peersChange(1, nil)
 			}
 		},
 		onReconnect: w.scanLedger,
@@ -620,8 +668,12 @@ func (w *HyperWallet) advanceLastScannedMS(next int64) error {
 }
 
 // processLedgerUpdate handles a single ledger entry: confirms pending sent txs
-// and stores newly detected incoming transfers.
+// and stores newly detected incoming transfers. ledgerMtx serializes concurrent
+// callers (Rescan and the WS goroutine) to prevent duplicate confirms/stores.
 func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
+	w.ledgerMtx.Lock()
+	defer w.ledgerMtx.Unlock()
+
 	if w.txDB == nil {
 		return
 	}
@@ -665,16 +717,17 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 	tip := w.tip
 	w.tipMtx.RUnlock()
 
-	sender := u.Delta.User
+	addr := w.address
 	wtx := &asset.WalletTransaction{
 		Type:        asset.Receive,
 		ID:          u.Hash,
 		Amount:      amount,
 		BlockNumber: tip,
 		Confirmed:   true,
-		Recipient:   &sender,
+		Recipient:   &addr,
 		AdditionalData: map[string]string{
-			"time": strconv.FormatUint(u.Time, 10),
+			"time":   strconv.FormatUint(u.Time, 10),
+			"sender": u.Delta.User,
 		},
 	}
 
@@ -694,6 +747,9 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 
 // confirmPendingSend finds the pending send matching ledger update u (matched
 // by nonce stored in AdditionalData) and updates it with the confirmed state.
+// When multiple pending sends share the same recipient and amount within the
+// 5-second window, the one whose nonce is numerically closest to u.Time is
+// chosen, preventing incorrect aliasing on rapid duplicate sends.
 // Pending entries older than pendingTTL are expired opportunistically.
 func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	pending, err := w.txDB.getPendingTxs()
@@ -703,6 +759,8 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	}
 
 	cutoff := uint64(time.Now().Unix()) - pendingTTL
+	var best *dbTx
+	var bestAbsDiff int64
 	for _, p := range pending {
 		if p.SubmissionTime > 0 && p.SubmissionTime < cutoff {
 			w.log.Infof("Expiring stale pending send %s (submitted %ds ago)",
@@ -732,33 +790,55 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 		if p.Recipient == nil || !strings.EqualFold(*p.Recipient, u.Delta.Destination) {
 			continue
 		}
-
-		w.tipMtx.RLock()
-		tip := w.tip
-		w.tipMtx.RUnlock()
-
-		oldID := p.ID
-		p.ID = u.Hash
-		p.BlockNumber = tip
-		p.Confirmed = true
-		p.AdditionalData["txHash"] = u.Hash
-
-		// Store the confirmed entry before deleting the pending one so the tx
-		// is never lost if the store fails.
-		if err := w.txDB.storeTx(p); err != nil {
-			w.log.Errorf("Storing confirmed send tx %s: %v", u.Hash, err)
-			return
+		absDiff := diff
+		if absDiff < 0 {
+			absDiff = -absDiff
 		}
-		if err := w.txDB.deleteTx(oldID); err != nil {
-			w.log.Warnf("Removing stale pending tx %s: %v", oldID, err)
+		if best == nil || absDiff < bestAbsDiff {
+			best, bestAbsDiff = p, absDiff
 		}
+	}
 
-		w.log.Infof("Send tx confirmed: %s (%s HYPE)", u.Hash, u.Delta.Amount)
-		if w.emit != nil {
-			w.emit.TransactionNote(p.WalletTransaction, false)
-		}
+	if best == nil {
 		return
 	}
+
+	w.tipMtx.RLock()
+	tip := w.tip
+	w.tipMtx.RUnlock()
+
+	oldID := best.ID
+	best.ID = u.Hash
+	best.BlockNumber = tip
+	best.Confirmed = true
+	if best.AdditionalData == nil {
+		best.AdditionalData = make(map[string]string, 2)
+	}
+	best.AdditionalData[pendingIDKey] = oldID
+	best.AdditionalData["txHash"] = u.Hash
+
+	// Store the confirmed entry before deleting the pending one so the tx
+	// is never lost if the store fails.
+	if err := w.txDB.storeTx(best); err != nil {
+		w.log.Errorf("Storing confirmed send tx %s: %v", u.Hash, err)
+		return
+	}
+	if err := w.txDB.deleteTx(oldID); err != nil {
+		w.log.Warnf("Removing stale pending tx %s: %v", oldID, err)
+	}
+
+	w.log.Infof("Send tx confirmed: %s (%s HYPE)", u.Hash, u.Delta.Amount)
+	if w.emit != nil {
+		w.emit.TransactionNote(best.WalletTransaction, false)
+	}
+}
+
+func walletTransactionLookupIDs(txID string) []string {
+	ids := []string{txID}
+	if pendingID, ok := pendingIDFromCoinString(txID); ok && pendingID != txID {
+		ids = append(ids, pendingID)
+	}
+	return ids
 }
 
 func (w *HyperWallet) apiEndpoint() string {
@@ -774,22 +854,31 @@ func (w *HyperWallet) apiEndpoint() string {
 // --- key management ---
 
 // keyFile stores the public key and AES-GCM encrypted private key seed.
+// Salt is nil in files written by the legacy keccak256 KDF; always present in
+// files written by the current scrypt KDF.
 type keyFile struct {
-	PubKey        []byte `json:"pubKey"`        // compressed secp256k1 (33 bytes)
-	EncryptedSeed []byte `json:"encryptedSeed"` // AES-GCM encrypted 32-byte key
+	PubKey        []byte `json:"pubKey"`         // compressed secp256k1 (33 bytes)
+	Salt          []byte `json:"salt,omitempty"` // scrypt salt; nil for legacy files
+	EncryptedSeed []byte `json:"encryptedSeed"`  // AES-GCM encrypted 32-byte key
 }
 
 func saveKeyFile(path string, privKey *ecdsa.PrivateKey, pw []byte) error {
 	raw := gethcrypto.FromECDSA(privKey)
 	defer encode.ClearBytes(raw)
 
-	encrypted, err := encryptSeed(raw, pw)
+	salt := make([]byte, scryptSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("generating salt: %w", err)
+	}
+
+	encrypted, err := encryptSeed(raw, pw, salt)
 	if err != nil {
 		return fmt.Errorf("encrypting private key: %w", err)
 	}
 
 	kf := keyFile{
 		PubKey:        gethcrypto.CompressPubkey(&privKey.PublicKey),
+		Salt:          salt,
 		EncryptedSeed: encrypted,
 	}
 
@@ -798,7 +887,28 @@ func saveKeyFile(path string, privKey *ecdsa.PrivateKey, pw []byte) error {
 		return fmt.Errorf("marshaling key file: %w", err)
 	}
 
-	return os.WriteFile(path, data, 0600)
+	// Write atomically via temp-file + rename so a crash mid-write cannot
+	// corrupt an existing key file.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".keyfile-*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp key file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("chmod temp key file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("writing temp key file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("closing temp key file: %w", err)
+	}
+	return os.Rename(tmpName, path)
 }
 
 func readKeyFile(path string) (*keyFile, error) {
@@ -813,10 +923,13 @@ func readKeyFile(path string) (*keyFile, error) {
 	return &kf, nil
 }
 
-// encryptSeed encrypts seed with pw using AES-256-GCM.
+// encryptSeed encrypts seed with pw and salt using AES-256-GCM.
 // Output: nonce(12) || ciphertext+tag.
-func encryptSeed(seed, pw []byte) ([]byte, error) {
-	key := deriveAESKey(pw)
+func encryptSeed(seed, pw, salt []byte) ([]byte, error) {
+	key, err := deriveAESKey(pw, salt)
+	if err != nil {
+		return nil, err
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -832,9 +945,19 @@ func encryptSeed(seed, pw []byte) ([]byte, error) {
 	return gcm.Seal(nonce, nonce, seed, nil), nil
 }
 
-// decryptSeed decrypts a seed encrypted by encryptSeed.
-func decryptSeed(encrypted, pw []byte) ([]byte, error) {
-	key := deriveAESKey(pw)
+// decryptSeed decrypts a seed encrypted by encryptSeed. When salt is nil the
+// file predates the scrypt KDF and the legacy keccak256 derivation is used.
+func decryptSeed(encrypted, pw, salt []byte) ([]byte, error) {
+	var key []byte
+	if len(salt) == 0 {
+		key = gethcrypto.Keccak256(pw)
+	} else {
+		var err error
+		key, err = deriveAESKey(pw, salt)
+		if err != nil {
+			return nil, fmt.Errorf("key derivation: %w", err)
+		}
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -854,9 +977,9 @@ func decryptSeed(encrypted, pw []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// deriveAESKey stretches pw to a 32-byte AES key using SHA-256 via keccak256.
-func deriveAESKey(pw []byte) []byte {
-	return gethcrypto.Keccak256(pw)
+// deriveAESKey stretches pw and salt to a 32-byte AES key using scrypt.
+func deriveAESKey(pw, salt []byte) ([]byte, error) {
+	return scrypt.Key(pw, salt, kdfScryptN, scryptR, scryptP, 32)
 }
 
 // privKeyFromSeed derives the secp256k1 private key and Ethereum address from

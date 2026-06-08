@@ -233,6 +233,13 @@ type exchangeResponse struct {
 	Response json.RawMessage `json:"response"`
 }
 
+// exchangeRejection is returned when the server explicitly rejects a request
+// (status != "ok"). It is distinct from transport or HTTP errors so callers
+// can decide whether to retain or discard a pending transaction record.
+type exchangeRejection struct{ msg string }
+
+func (e *exchangeRejection) Error() string { return e.msg }
+
 // spotSend broadcasts a signed spot transfer. sig is the 65-byte compact
 // signature [R(32) || S(32) || V(1)] with V = 27 or 28.
 func (c *rpcClient) spotSend(ctx context.Context, action spotSendAction, sig [65]byte, nonce uint64) error {
@@ -255,7 +262,7 @@ func (c *rpcClient) spotSend(ctx context.Context, action spotSendAction, sig [65
 		return err
 	}
 	if resp.Status != "ok" {
-		return fmt.Errorf("exchange error: %s", resp.Response)
+		return &exchangeRejection{msg: fmt.Sprintf("exchange error: %s", resp.Response)}
 	}
 	return nil
 }

@@ -6,9 +6,13 @@ package hyperliquid
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +30,11 @@ import (
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/gorilla/websocket"
 )
+
+func init() {
+	// Use a minimal scrypt work factor so key-derivation tests finish quickly.
+	kdfScryptN = 1 << 5
+}
 
 // --- params ---
 
@@ -240,7 +249,10 @@ func TestEncryptDecryptSeed(t *testing.T) {
 	}
 	pw := []byte("test-password-32-bytes-exactly!!")
 
-	encrypted, err := encryptSeed(seed, pw)
+	salt := make([]byte, scryptSaltLen)
+	rand.Read(salt)
+
+	encrypted, err := encryptSeed(seed, pw, salt)
 	if err != nil {
 		t.Fatalf("encryptSeed error: %v", err)
 	}
@@ -248,7 +260,7 @@ func TestEncryptDecryptSeed(t *testing.T) {
 		t.Fatal("ciphertext contains plaintext seed")
 	}
 
-	decrypted, err := decryptSeed(encrypted, pw)
+	decrypted, err := decryptSeed(encrypted, pw, salt)
 	if err != nil {
 		t.Fatalf("decryptSeed error: %v", err)
 	}
@@ -258,7 +270,7 @@ func TestEncryptDecryptSeed(t *testing.T) {
 		t.Error("decrypted seed does not match original")
 	}
 
-	_, err = decryptSeed(encrypted, []byte("wrong-password!!"))
+	_, err = decryptSeed(encrypted, []byte("wrong-password!!"), salt)
 	if err == nil {
 		t.Fatal("expected error with wrong password")
 	}
@@ -294,7 +306,7 @@ func TestKeyFileRoundTrip(t *testing.T) {
 		t.Error("stored pubkey doesn't match")
 	}
 
-	decSeed, err := decryptSeed(kf.EncryptedSeed, pw)
+	decSeed, err := decryptSeed(kf.EncryptedSeed, pw, kf.Salt)
 	if err != nil {
 		t.Fatalf("decryptSeed error: %v", err)
 	}
@@ -314,6 +326,98 @@ func TestKeyFileNotExist(t *testing.T) {
 	_, err := readKeyFile("/nonexistent/path/hl-keyfile.json")
 	if !os.IsNotExist(err) {
 		t.Errorf("expected os.IsNotExist, got: %v", err)
+	}
+}
+
+// writeLegacyKeyFile creates a key file using the old keccak256 KDF (no salt)
+// so that TestUnlockMigratesLegacyKeyFile can verify the auto-migration path.
+func writeLegacyKeyFile(t *testing.T, path string, priv *ecdsa.PrivateKey, pw []byte) {
+	t.Helper()
+	raw := gethcrypto.FromECDSA(priv)
+	defer encode.ClearBytes(raw)
+
+	key := gethcrypto.Keccak256(pw)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal(err)
+	}
+	encrypted := gcm.Seal(nonce, nonce, raw, nil)
+
+	kf := keyFile{
+		PubKey:        gethcrypto.CompressPubkey(&priv.PublicKey),
+		EncryptedSeed: encrypted,
+		// no Salt — legacy format
+	}
+	data, err := json.Marshal(kf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnlockMigratesLegacyKeyFile(t *testing.T) {
+	seed := make([]byte, 32)
+	rand.Read(seed)
+	pw := []byte("migration-test-password-32bytes!")
+
+	priv, _, zero, err := privKeyFromSeed(seed)
+	if err != nil {
+		t.Fatalf("privKeyFromSeed: %v", err)
+	}
+	defer zero()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, keyFileName)
+	writeLegacyKeyFile(t, path, priv, pw)
+
+	// Confirm the file starts without a salt.
+	kfBefore, err := readKeyFile(path)
+	if err != nil {
+		t.Fatalf("readKeyFile before: %v", err)
+	}
+	if len(kfBefore.Salt) != 0 {
+		t.Fatal("expected no salt in legacy file")
+	}
+
+	log := util.StdOutLogger("HLTEST", util.LevelTrace)
+	w := &HyperWallet{
+		log:     log,
+		dataDir: dir,
+		pubKey:  gethcrypto.CompressPubkey(&priv.PublicKey),
+		address: pubKeyToAddress(gethcrypto.CompressPubkey(&priv.PublicKey)),
+	}
+	if err := w.Unlock(pw); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	// After migration the key file must have a salt.
+	kfAfter, err := readKeyFile(path)
+	if err != nil {
+		t.Fatalf("readKeyFile after: %v", err)
+	}
+	if len(kfAfter.Salt) == 0 {
+		t.Error("expected salt after KDF migration")
+	}
+
+	// The migrated file must still unlock correctly.
+	w2 := &HyperWallet{
+		log:     log,
+		dataDir: dir,
+		pubKey:  kfAfter.PubKey,
+		address: pubKeyToAddress(kfAfter.PubKey),
+	}
+	if err := w2.Unlock(pw); err != nil {
+		t.Fatalf("Unlock after migration: %v", err)
 	}
 }
 
@@ -799,6 +903,42 @@ func TestRescanBeforeConnect(t *testing.T) {
 	}
 }
 
+func TestSendWithdrawBeforeConnect(t *testing.T) {
+	w, _ := newSendTestWallet(t, func(rw http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(rw).Encode(exchangeResponse{Status: "ok"})
+	})
+	w.rpc = nil
+
+	tests := []struct {
+		name string
+		fn   func() error
+	}{
+		{
+			name: "send",
+			fn: func() error {
+				_, err := w.Send("0x1234567890123456789012345678901234567890", 1e8, 0)
+				return err
+			},
+		},
+		{
+			name: "withdraw",
+			fn: func() error {
+				_, err := w.Withdraw("0x1234567890123456789012345678901234567890", 1e8, 0)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.fn()
+			if !errors.Is(err, asset.ErrConnectionDown) {
+				t.Fatalf("expected ErrConnectionDown, got %v", err)
+			}
+		})
+	}
+}
+
 // --- txdb ---
 
 func newTestTxDB(t *testing.T) *hyperTxDB {
@@ -921,6 +1061,28 @@ func TestTxDBGetPendingTxs(t *testing.T) {
 	}
 	if got[0].ID != "pending-1" {
 		t.Errorf("pending tx ID = %q, want %q", got[0].ID, "pending-1")
+	}
+}
+
+func TestTxDBGetTxsRefIDOnPendingReturnsDistinctError(t *testing.T) {
+	db := newTestTxDB(t)
+
+	pendingID := "pending-ref-test"
+	if err := db.storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
+		ID: pendingID, Type: asset.Send, Amount: 1e8, BlockNumber: 0,
+	}}); err != nil {
+		t.Fatalf("storeTx: %v", err)
+	}
+
+	_, err := db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &pendingID})
+	if !errors.Is(err, ErrTxIsPending) {
+		t.Errorf("expected ErrTxIsPending, got %v", err)
+	}
+
+	missingID := "does-not-exist"
+	_, err = db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &missingID})
+	if !errors.Is(err, asset.CoinNotFoundError) {
+		t.Errorf("expected CoinNotFoundError for missing RefID, got %v", err)
 	}
 }
 
@@ -1103,6 +1265,28 @@ func TestSendCleansUpOnBroadcastFailure(t *testing.T) {
 	}
 }
 
+func TestSendKeepsPendingOnNetworkError(t *testing.T) {
+	// A server that returns HTTP 500 (transport error, not an exchange rejection).
+	// The pending record must survive so scanLedger can resolve the tx.
+	w, _ := newSendTestWallet(t, func(rw http.ResponseWriter, r *http.Request) {
+		http.Error(rw, "server error", http.StatusInternalServerError)
+	})
+
+	recipient := "0x1234567890123456789012345678901234567890"
+	_, err := w.send(recipient, 1e8)
+	if err == nil {
+		t.Fatal("expected error from failed send")
+	}
+
+	pending, err := w.txDB.getPendingTxs()
+	if err != nil {
+		t.Fatalf("getPendingTxs: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Errorf("expected 1 pending tx retained after network error, got %d", len(pending))
+	}
+}
+
 // --- pending tx expiry ---
 
 func TestExpireOldPending(t *testing.T) {
@@ -1258,6 +1442,9 @@ func TestConfirmPendingSend(t *testing.T) {
 	if confirmed.BlockNumber == 0 {
 		t.Error("confirmed tx should have a block number")
 	}
+	if confirmed.AdditionalData[pendingIDKey] != pendingID {
+		t.Fatalf("pending alias = %q, want %q", confirmed.AdditionalData[pendingIDKey], pendingID)
+	}
 }
 
 func TestConfirmPendingSendNoMatch(t *testing.T) {
@@ -1357,6 +1544,159 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 	}
 }
 
+// TestConfirmPendingSendPicksClosestNonce verifies that when two pending sends
+// share the same recipient and amount and both fall within the 5-second
+// proximity window, the one whose nonce is numerically closest to the ledger
+// update time is confirmed — not just the first one found.
+func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
+	w := newTestWalletWithDB(t)
+
+	recipient := "0x3333333333333333333333333333333333333333"
+	baseTime := uint64(1700000010000)
+	// nonceA is 2000ms before the ledger update; nonceB is 500ms before — B is closer.
+	nonceA := baseTime - 2000
+	nonceB := baseTime - 500
+	pendingIDA := fmt.Sprintf("0x%016x", nonceA)
+	pendingIDB := fmt.Sprintf("0x%016x", nonceB)
+
+	for _, entry := range []struct {
+		id    string
+		nonce uint64
+	}{
+		{pendingIDA, nonceA},
+		{pendingIDB, nonceB},
+	} {
+		if err := w.txDB.storeTx(&dbTx{
+			WalletTransaction: &asset.WalletTransaction{
+				ID:        entry.id,
+				Type:      asset.Send,
+				Amount:    5e8,
+				Recipient: &recipient,
+				AdditionalData: map[string]string{
+					"nonce": strconv.FormatUint(entry.nonce, 10),
+				},
+			},
+			SubmissionTime: uint64(time.Now().Unix()),
+		}); err != nil {
+			t.Fatalf("storeTx %s: %v", entry.id, err)
+		}
+	}
+
+	realHash := "0x" + fmt.Sprintf("%064x", 55)
+	w.confirmPendingSend(ledgerUpdate{
+		Time: baseTime,
+		Hash: realHash,
+		Delta: ledgerDelta{
+			Type:        "spotTransfer",
+			Coin:        "HYPE",
+			Amount:      "5",
+			User:        w.address,
+			Destination: recipient,
+		},
+	}, 5e8)
+
+	// The confirmed entry must alias pendingIDB (closest nonce, 500ms diff).
+	confirmed, err := w.txDB.getTx(realHash)
+	if err != nil {
+		t.Fatalf("getTx confirmed: %v", err)
+	}
+	if confirmed == nil {
+		t.Fatal("confirmed tx not stored")
+	}
+	if confirmed.AdditionalData[pendingIDKey] != pendingIDB {
+		t.Errorf("pendingIDKey = %q, want %q (closest nonce)", confirmed.AdditionalData[pendingIDKey], pendingIDB)
+	}
+
+	// pendingIDB must be deleted; pendingIDA must remain.
+	if tx, _ := w.txDB.getTx(pendingIDB); tx != nil {
+		t.Error("pendingIDB should have been deleted after confirmation")
+	}
+	if tx, _ := w.txDB.getTx(pendingIDA); tx == nil {
+		t.Error("pendingIDA should still be pending")
+	}
+}
+
+func TestWalletTransactionLookupByPendingCoinID(t *testing.T) {
+	w := newTestWalletWithDB(t)
+	pendingID := "0x0000018bcfe56800"
+	recipient := "0x1111111111111111111111111111111111111111"
+
+	if err := w.txDB.storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
+		ID:        pendingID,
+		Type:      asset.Send,
+		Amount:    1e8,
+		Recipient: &recipient,
+		AdditionalData: map[string]string{
+			"nonce": "1700000000000",
+		},
+	}}); err != nil {
+		t.Fatalf("storeTx: %v", err)
+	}
+
+	coinIDStr, err := decodeCoinID(coinIDBytes(pendingID))
+	if err != nil {
+		t.Fatalf("decodeCoinID: %v", err)
+	}
+
+	wt, err := w.WalletTransaction(context.Background(), coinIDStr)
+	if err != nil {
+		t.Fatalf("WalletTransaction: %v", err)
+	}
+	if wt.ID != pendingID {
+		t.Fatalf("WalletTransaction ID = %q, want %q", wt.ID, pendingID)
+	}
+}
+
+func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
+	w := newTestWalletWithDB(t)
+	nonce := uint64(1700000001000)
+	pendingID := fmt.Sprintf("0x%016x", nonce)
+	recipient := "0x1111111111111111111111111111111111111111"
+
+	if err := w.txDB.storeTx(&dbTx{
+		WalletTransaction: &asset.WalletTransaction{
+			ID:        pendingID,
+			Type:      asset.Send,
+			Amount:    5e8,
+			Recipient: &recipient,
+			AdditionalData: map[string]string{
+				"nonce": strconv.FormatUint(nonce, 10),
+			},
+		},
+		SubmissionTime: uint64(time.Now().Unix()),
+	}); err != nil {
+		t.Fatalf("storeTx: %v", err)
+	}
+
+	realHash := "0x" + fmt.Sprintf("%064x", 42)
+	w.confirmPendingSend(ledgerUpdate{
+		Time: nonce + 500,
+		Hash: realHash,
+		Delta: ledgerDelta{
+			Type:        "spotTransfer",
+			Coin:        "HYPE",
+			Amount:      "5",
+			User:        w.address,
+			Destination: recipient,
+		},
+	}, 5e8)
+
+	coinIDStr, err := decodeCoinID(coinIDBytes(pendingID))
+	if err != nil {
+		t.Fatalf("decodeCoinID: %v", err)
+	}
+
+	for _, lookupID := range []string{pendingID, coinIDStr, realHash} {
+		wt, err := w.WalletTransaction(context.Background(), lookupID)
+		if err != nil {
+			t.Fatalf("WalletTransaction(%q): %v", lookupID, err)
+		}
+		if wt.ID != realHash {
+			t.Fatalf("WalletTransaction(%q) ID = %q, want %q", lookupID, wt.ID, realHash)
+		}
+	}
+}
+
 // --- handleTransferUpdate ---
 
 func TestHandleTransferUpdateReceive(t *testing.T) {
@@ -1394,6 +1734,12 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 	}
 	if !got.Confirmed {
 		t.Error("receive tx should be confirmed")
+	}
+	if got.Recipient == nil || *got.Recipient != w.address {
+		t.Errorf("Recipient = %v, want %q (wallet address)", got.Recipient, w.address)
+	}
+	if got.AdditionalData["sender"] != sender {
+		t.Errorf("AdditionalData[sender] = %q, want %q", got.AdditionalData["sender"], sender)
 	}
 }
 

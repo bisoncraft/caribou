@@ -15,12 +15,18 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
+// ErrTxIsPending is returned by TxHistory when a RefID names a pending tx
+// (BlockNumber == 0). Distinct from asset.CoinNotFoundError so callers can
+// tell apart "tx does not exist" from "tx exists but is not yet confirmed".
+var ErrTxIsPending = errors.New("ref tx is pending")
+
 const (
 	txsTableName   = "txs"
 	blockIndexName = "block"
 	metaTableName  = "meta"
 
 	lastScannedMSKey = "lastScannedMS"
+	pendingIDKey     = "pendingID"
 )
 
 // dbTx wraps asset.WalletTransaction with the submission timestamp for
@@ -107,6 +113,27 @@ func (db *hyperTxDB) deleteTx(txID string) error {
 	return db.txs.Delete([]byte(txID))
 }
 
+func (db *hyperTxDB) getTxByPendingID(pendingID string) (*dbTx, error) {
+	var found *dbTx
+	err := db.txs.Iterate(nil, func(it *lexi.Iter) error {
+		wt := new(dbTx)
+		if err := it.V(func(vB []byte) error {
+			return wt.UnmarshalBinary(vB)
+		}); err != nil {
+			return err
+		}
+		if wt.AdditionalData[pendingIDKey] != pendingID {
+			return nil
+		}
+		found = wt
+		return lexi.ErrEndIteration
+	})
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
 func (db *hyperTxDB) getLastScannedMS() (int64, error) {
 	b, err := db.meta.GetRaw([]byte(lastScannedMSKey))
 	if err != nil {
@@ -169,8 +196,11 @@ func (db *hyperTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespon
 		if err != nil {
 			return nil, err
 		}
-		if wt == nil || wt.BlockNumber == 0 {
+		if wt == nil {
 			return nil, asset.CoinNotFoundError
+		}
+		if wt.BlockNumber == 0 {
+			return nil, ErrTxIsPending
 		}
 		entry := make([]byte, 8)
 		binary.BigEndian.PutUint64(entry, wt.BlockNumber)

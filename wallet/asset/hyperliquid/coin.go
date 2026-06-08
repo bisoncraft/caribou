@@ -65,3 +65,14 @@ func decodeCoinID(coinID []byte) (string, error) {
 	}
 	return "0x" + hex.EncodeToString(coinID), nil
 }
+
+// pendingIDFromCoinString converts a decoded 32-byte coin ID back to the
+// nonce-based pending tx ID form when the coin ID was derived from a pending
+// placeholder. Returns false for normal transaction hashes.
+func pendingIDFromCoinString(txID string) (string, bool) {
+	h := strings.TrimPrefix(txID, "0x")
+	if len(h) != 64 || h[:48] != strings.Repeat("0", 48) {
+		return "", false
+	}
+	return "0x" + h[48:], true
+}

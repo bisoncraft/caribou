@@ -379,8 +379,11 @@ export class Application {
     const w = this.wallet(assetID)
     if (!w) return
     const tx = note.transaction
-    if (tx.confirmed) delete w.pendingTxs[tx.id]
-    else w.pendingTxs[tx.id] = tx
+    if (tx.confirmed) {
+      const pendingID = tx.additionalData?.pendingID
+      if (pendingID) delete w.pendingTxs[pendingID]
+      delete w.pendingTxs[tx.id]
+    } else w.pendingTxs[tx.id] = tx
   }
 }
 
