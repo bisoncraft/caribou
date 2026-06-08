@@ -73,6 +73,7 @@ var (
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,
+			Priority:      true,
 		},
 	}
 

@@ -290,6 +290,11 @@ type WalletDefinition struct {
 type Network struct {
 	ID            uint32 `json:"id"`
 	NativeAssetID uint32 `json:"nativeAssetID"`
+	// Priority indicates this is a well-known, high-priority network that
+	// should be pre-selected by default in multi-network activation UIs.
+	// Obscure or experimental networks can set this to false so they are
+	// opt-in rather than opt-out.
+	Priority bool `json:"priority"`
 }
 
 // Token combines the generic util.Token with a WalletDefinition.

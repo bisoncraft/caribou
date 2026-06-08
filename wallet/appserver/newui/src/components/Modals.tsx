@@ -19,10 +19,10 @@ const onBackgroundClick = (e: MouseEvent) => {
 export default function Modals ({ fd }: ModalsParams) {
   const renderContent = () => {
     switch (fd.form) {
-      case 'receive': return <Receive />
-      case 'send': return <Send />
+      case 'receive': return <Receive ticker={fd.data?.ticker} />
+      case 'send': return <Send ticker={fd.data?.ticker} />
       case 'swap': return <Swap />
-      case 'activateasset': return <ActivateAsset assetID={fd.data.assetID} />
+      case 'activateasset': return <ActivateAsset ticker={fd.data.ticker} />
       default: return (<div className="flex-center">Unknown form: {fd.form}</div>)
     }
   }

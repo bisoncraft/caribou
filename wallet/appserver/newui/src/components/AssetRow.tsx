@@ -1,4 +1,4 @@
-import t from '../js/intl'
+import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { TickerAsset } from '../js/assets'
 import CoinLogo from './CoinLogo'
@@ -35,15 +35,15 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
   if (wallet.synced && wallet.open) return null
 
   if (wallet.encrypted && !wallet.open) {
-    return <span className="ico-lock-closed asset-status-dot asset-status-locked fs11" title={t('Locked')} />
+    return <span className="ico-lock-closed asset-status-dot asset-status-locked has-tip fs11" aria-label={t('Locked')} />
   }
 
   if (!wallet.synced) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-dot asset-status-syncing"
-        title={`${t('Syncing')}: ${pct}%`}
+        className="asset-status-dot asset-status-syncing has-tip"
+        aria-label={`${t('Syncing')}: ${pct}%`}
       />
     )
   }
@@ -72,16 +72,30 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
         </div>
       </td>
       <td className="asset-row-num">
-        <span className="mono">{availFmt}</span>
+        {fiatRate > 0 ? usdFmt.format(usdValue) : '—'}
       </td>
       <td className="asset-row-num">
-        {fiatRate > 0 ? usdFmt.format(usdValue) : '—'}
+        <span className="mono">{availFmt}</span>
       </td>
       <td className="asset-row-num">
         {fiatRate > 0 ? usdFmt.format(fiatRate) : '—'}
       </td>
       <td className="asset-row-num">
         {pctDisplay}
+      </td>
+      <td className="asset-row-actions">
+        <button
+          type="button"
+          className="asset-action-icon has-tip ico-download fs16"
+          aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
+          onClick={() => app.setForm({ form: 'receive', data: { ticker: asset.ticker } })}
+        />
+        <button
+          type="button"
+          className="asset-action-icon has-tip ico-upload fs16"
+          aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
+          onClick={() => app.setForm({ form: 'send', data: { ticker: asset.ticker } })}
+        />
       </td>
     </tr>
   )

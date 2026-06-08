@@ -1,9 +1,10 @@
-import { useRef, useState, FormEvent } from 'react'
+import { useEffect, useRef, useState, FormEvent } from 'react'
 import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { postJSON } from '../js/http'
 import { TickerAsset, AssetVariant } from '../js/assets'
 import CoinLogo from './CoinLogo'
+import Spinner from './Spinner'
 
 // activeVariants returns the variants of a ticker whose underlying wallet
 // is created and can therefore receive funds. For a native variant that
@@ -14,6 +15,11 @@ function activeVariants (ta: TickerAsset): AssetVariant[] {
     const networkID = v.token ? v.token.networkID : v.assetID
     return Boolean(app.user.assets[networkID]?.wallet)
   })
+}
+
+// allVariants returns all variants, active or not.
+function allVariants (ta: TickerAsset): AssetVariant[] {
+  return ta.variants
 }
 
 // networkAsset returns the SupportedAsset for the variant's settlement
@@ -28,15 +34,41 @@ function networkTicker (v: AssetVariant): string {
   return n ? n.unitInfo.conventional.unit : ''
 }
 
+function isVariantActive (v: AssetVariant): boolean {
+  return Boolean(networkAsset(v)?.wallet)
+}
+
 const noSubmit = (e: FormEvent) => e.preventDefault()
 
-export default function Receive () {
-  const [ta, setTa] = useState<TickerAsset | null>(null)
-  const [variant, setVariant] = useState<AssetVariant | null>(null)
+interface ReceiveProps {
+  // Optional preselected ticker (e.g. when launched from a portfolio row's
+  // Receive icon). When set, the asset picker is skipped on mount.
+  ticker?: string
+}
+
+// preselected resolves an optional ticker prop to a TickerAsset and, when
+// the ticker has exactly one variant, that variant — so we can skip the
+// asset (and where unambiguous, the network) picker on mount. Returns
+// nulls if the ticker is missing or has no active variant.
+function preselected (ticker?: string): { ta: TickerAsset | null, v: AssetVariant | null } {
+  if (!ticker) return { ta: null, v: null }
+  const ta = app.tickerMap?.[ticker]
+  if (!ta || activeVariants(ta).length === 0) return { ta: null, v: null }
+  // Skip step 2 only for single-variant tickers (same rule as pickAsset).
+  return { ta, v: ta.variants.length === 1 ? ta.variants[0] : null }
+}
+
+export default function Receive ({ ticker }: ReceiveProps) {
+  const initial = preselected(ticker)
+  const [ta, setTa] = useState<TickerAsset | null>(initial.ta)
+  const [variant, setVariant] = useState<AssetVariant | null>(initial.v)
   const [address, setAddress] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
+  // Per-variant activation state for inline Activate in step 2.
+  const [activating, setActivating] = useState<number | null>(null)
+  const [activateErr, setActivateErr] = useState<Record<number, string>>({})
   // Monotonic request ID so stale /api/depositaddress responses can't
   // overwrite a newer selection.
   const reqIDRef = useRef(0)
@@ -63,12 +95,24 @@ export default function Receive () {
 
   const pickAsset = async (chosen: TickerAsset) => {
     setTa(chosen)
-    const vs = activeVariants(chosen)
-    if (vs.length === 1) {
-      setVariant(vs[0])
-      await fetchAddress(vs[0])
+    setActivating(null)
+    setActivateErr({})
+    // Only skip the network picker for single-variant tickers (e.g. BTC,
+    // native ETH). Multi-network tokens always show step 2 so the user
+    // can see other networks and activate them inline if they want.
+    if (chosen.variants.length === 1) {
+      const v = chosen.variants[0]
+      setVariant(v)
+      await fetchAddress(v)
     }
   }
+
+  // When the component mounts with a single-variant preselected ticker,
+  // initial state already puts us at step 3 — but the address still
+  // needs to be fetched. Empty deps: this is a one-shot mount effect.
+  useEffect(() => {
+    if (initial.v) fetchAddress(initial.v)
+  }, [])
 
   const pickVariant = async (v: AssetVariant) => {
     setVariant(v)
@@ -81,12 +125,14 @@ export default function Receive () {
   }
 
   const backToAssets = () => {
-    setTa(null); setVariant(null); resetForBack()
+    setTa(null); setVariant(null); setActivating(null); setActivateErr({}); resetForBack()
   }
 
   const backToNetwork = () => {
-    // Only meaningful when ta has >1 active variant; otherwise behaves like backToAssets.
-    if (ta && activeVariants(ta).length > 1) {
+    // Step 2 is reachable for any multi-variant ticker (active or not),
+    // since inactive variants render as inline-activate rows. Single-variant
+    // tickers skip step 2 entirely, so Back goes to step 1 there.
+    if (ta && ta.variants.length > 1) {
       setVariant(null); resetForBack()
     } else {
       backToAssets()
@@ -98,6 +144,34 @@ export default function Receive () {
     await navigator.clipboard.writeText(address)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+  }
+
+  // Inline activate: fires a single-network activation from the network picker.
+  const inlineActivate = async (v: AssetVariant) => {
+    const networkID = v.token ? v.token.networkID : v.assetID
+    const netAsset = app.user?.assets[networkID]
+    const walletDef = netAsset?.info?.availablewallets?.[0]
+    if (!walletDef) {
+      setActivateErr(prev => ({ ...prev, [v.assetID]: t('No wallet definition available') }))
+      return
+    }
+    setActivating(v.assetID)
+    setActivateErr(prev => { const next = { ...prev }; delete next[v.assetID]; return next })
+    const r = await postJSON('/api/newwallet', {
+      assetID: networkID,
+      walletType: walletDef.type,
+      config: {}
+    })
+    setActivating(null)
+    if (!r.ok) {
+      setActivateErr(prev => ({
+        ...prev,
+        [v.assetID]: r.errMsg || r.msg || t('Failed to activate')
+      }))
+      return
+    }
+    // Activation succeeded: proceed to fetch address for this variant.
+    await pickVariant(v)
   }
 
   // Step 1: asset picker
@@ -133,9 +207,16 @@ export default function Receive () {
     )
   }
 
-  // Step 2: network picker for multi-network tokens
+  // Step 2: network picker for multi-network tokens — shows active + inactive variants.
   if (!variant) {
-    const vs = activeVariants(ta)
+    // Stable partition: active networks first, then inactive. Preserves the
+    // original variant ordering within each group.
+    const vs = [...allVariants(ta)].sort((a, b) => {
+      const aActive = isVariantActive(a) ? 0 : 1
+      const bActive = isVariantActive(b) ? 0 : 1
+      return aActive - bActive
+    })
+    const anyActivating = activating !== null
     return (
       <form className="modal form-width-300" onSubmit={noSubmit}>
         <header>
@@ -147,11 +228,42 @@ export default function Receive () {
           {vs.map(v => {
             const nt = networkTicker(v)
             const nName = networkAsset(v)?.name ?? ''
+            const active = isVariantActive(v)
+            const isThisActivating = activating === v.assetID
+            const variantErr = activateErr[v.assetID]
+            if (active) {
+              return (
+                <div
+                  key={v.assetID}
+                  className="d-flex align-items-center px-3 py-2 hoverbg pointer"
+                  onClick={() => pickVariant(v)}
+                >
+                  <CoinLogo ticker={nt} className="mini-icon me-2" />
+                  <span className="flex-grow-1">{nName}</span>
+                  <span className="grey fs12">{nt}</span>
+                </div>
+              )
+            }
+            // Inactive network variant row.
             return (
-              <div key={v.assetID} className="d-flex align-items-center px-3 py-2 hoverbg pointer" onClick={() => pickVariant(v)}>
-                <CoinLogo ticker={nt} className="mini-icon me-2" />
-                <span className="flex-grow-1">{nName}</span>
-                <span className="grey fs12">{nt}</span>
+              <div key={v.assetID} className="receive-inactive-net px-3 py-2">
+                <div className="d-flex align-items-center">
+                  <CoinLogo ticker={nt} className="mini-icon me-2 receive-inactive-logo" />
+                  <span className="flex-grow-1 grey">{nName}</span>
+                  <button
+                    type="button"
+                    className="receive-activate-btn fs12"
+                    onClick={() => inlineActivate(v)}
+                    disabled={anyActivating}
+                  >
+                    {isThisActivating
+                      ? <><Spinner size={12} className="me-1" />{t('Activating...')}</>
+                      : t('Activate')}
+                  </button>
+                </div>
+                {variantErr && (
+                  <div className="errcolor fs12 mt-1">{variantErr}</div>
+                )}
               </div>
             )
           })}
@@ -166,7 +278,6 @@ export default function Receive () {
   // Step 3: address display
   const netName = networkAsset(variant)?.name ?? ''
   const netTicker = networkTicker(variant)
-  const isToken = Boolean(variant.token)
   return (
     <form className="modal form-width-300" onSubmit={noSubmit}>
       <header>
@@ -182,11 +293,6 @@ export default function Receive () {
         {loading ? t('Loading...') : address}
       </div>
       <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
-      {isToken && address && (
-        <div className="px-3 pb-2 fs12 errcolor text-center">
-          {tvar('Only send {{ ticker }} on the {{ network }} network. Other tokens or networks may result in lost funds.', { ticker: ta.ticker, network: netName })}
-        </div>
-      )}
       <div className="flex-stretch-column p-3">
         <button type="button" className="feature" onClick={copy} disabled={!address}>
           {copied ? t('Copied!') : t('Copy Address')}

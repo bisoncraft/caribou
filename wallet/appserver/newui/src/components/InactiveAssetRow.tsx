@@ -9,7 +9,7 @@ interface InactiveAssetRowProps {
 
 export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
   const handleActivate = () => {
-    app.setForm({ form: 'activateasset', data: { assetID: asset.bestID } })
+    app.setForm({ form: 'activateasset', data: { ticker: asset.ticker } })
   }
 
   return (
@@ -29,6 +29,7 @@ export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
         + {t('Activate')}
       </td>
       <td className="asset-row-num" />
+      <td className="asset-row-actions" />
     </tr>
   )
 }

@@ -60,6 +60,7 @@ func TestParseCoinpapNameSymbol(t *testing.T) {
 		{"matic", "matic", "matic", "matic"},
 		{"matic", "matic.eth", "polygon", "matic"},
 		{"bitcoin", "btc", "bitcoin", "btc"},
+		{"chainlink", "link", "chainlink", "link"},
 	}
 	for _, tc := range tests {
 		gotName, gotSymbol := parseCoinpapNameSymbol(tc.name, tc.symbol)

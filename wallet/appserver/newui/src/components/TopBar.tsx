@@ -33,29 +33,25 @@ export default function TopBar () {
         )}
 
         <button type="button" className="topbar-action-btn flex-center flex-column noborder"
-          onClick={() => app.setForm({ form: 'receive', data: {} })}
-          title={t('Receive')}>
+          onClick={() => app.setForm({ form: 'receive', data: {} })}>
           <span className="ico-qrcode fs24" />
           <span className="topbar-action-label">{t('RECEIVE')}</span>
         </button>
 
         <button type="button" className="topbar-action-btn flex-center flex-column noborder"
-          onClick={() => app.setForm({ form: 'send', data: {} })}
-          title={t('Send')}>
+          onClick={() => app.setForm({ form: 'send', data: {} })}>
           <span className="ico-send fs24" />
           <span className="topbar-action-label">{t('SEND')}</span>
         </button>
 
         <button type="button" className="topbar-action-btn flex-center flex-column noborder"
-          onClick={() => app.setForm({ form: 'swap', data: {} })}
-          title={t('Swap')}>
+          onClick={() => app.setForm({ form: 'swap', data: {} })}>
           <span className="ico-swap fs24" />
           <span className="topbar-action-label">{t('SWAP')}</span>
         </button>
 
         <button type="button" className="topbar-action-btn flex-center flex-column noborder"
-          onClick={() => app.loadPage('settings')}
-          title={t('Settings')}>
+          onClick={() => app.loadPage('settings')}>
           <span className="ico-gear fs24" />
           <span className="topbar-action-label">{t('SETTINGS')}</span>
         </button>
