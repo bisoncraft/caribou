@@ -825,11 +825,25 @@ func (s *AppServer) apiSend(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, fmt.Errorf("no wallet found for %s", unbip(form.AssetID)))
 		return
 	}
-	if len(form.Pass) == 0 {
-		s.writeAPIError(w, fmt.Errorf("empty password"))
+	// When the send-requires-password setting is enabled, the user must
+	// supply their app password explicitly; otherwise fall back to the
+	// session-cached password.
+	requirePW, err := s.core.SendRequiresPassword()
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("error reading send-requires-password setting: %w", err))
 		return
 	}
-	coin, err := s.core.Send(form.Pass, form.AssetID, form.Value, form.Address, form.Subtract)
+	if requirePW && len(form.Pass) == 0 {
+		s.writeAPIError(w, fmt.Errorf("password required to send"))
+		return
+	}
+	pass, err := s.resolvePass(form.Pass, r)
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
+		return
+	}
+	defer zero(pass)
+	coin, err := s.core.Send(pass, form.AssetID, form.Value, form.Address, form.Subtract)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("send/withdraw error: %w", err))
 		return
@@ -842,6 +856,22 @@ func (s *AppServer) apiSend(w http.ResponseWriter, r *http.Request) {
 		Coin: coin.String(),
 	}
 	writeJSON(w, resp)
+}
+
+// apiSetSendRequirePassword handles the 'setsendrequirespassword' API request,
+// toggling whether sending funds requires the app password.
+func (s *AppServer) apiSetSendRequirePassword(w http.ResponseWriter, r *http.Request) {
+	form := &struct {
+		Require bool `json:"require"`
+	}{}
+	if !readPost(w, r, form) {
+		return
+	}
+	if err := s.core.SetSendRequiresPassword(form.Require); err != nil {
+		s.writeAPIError(w, fmt.Errorf("error setting send-requires-password: %w", err))
+		return
+	}
+	writeJSON(w, simpleAck())
 }
 
 // apiActuallyLogin logs the user in. login form private data is expected to be
@@ -894,14 +924,27 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 	paired := s.companionToken != "" && s.companionTokenClaimed
 	s.authMtx.RUnlock()
 
+	// appSettings carries user-configurable settings surfaced on the
+	// /settings page. They are only meaningful once authed; the zero value
+	// is a harmless default otherwise.
+	var settings appSettings
+	if u != nil {
+		var err error
+		settings.SendRequiresPassword, err = s.core.SendRequiresPassword()
+		if err != nil {
+			log.Errorf("error reading send-requires-password setting: %v", err)
+		}
+	}
+
 	response := struct {
-		User               *core.User `json:"user"`
-		Lang               string     `json:"lang"`
-		Langs              []string   `json:"langs"`
-		Inited             bool       `json:"inited"`
-		OK                 bool       `json:"ok"`
-		OnionUrl           string     `json:"onionUrl"`
-		CompanionAppPaired bool       `json:"companionAppPaired"`
+		User               *core.User  `json:"user"`
+		Lang               string      `json:"lang"`
+		Langs              []string    `json:"langs"`
+		Inited             bool        `json:"inited"`
+		OK                 bool        `json:"ok"`
+		OnionUrl           string      `json:"onionUrl"`
+		CompanionAppPaired bool        `json:"companionAppPaired"`
+		AppSettings        appSettings `json:"appSettings"`
 	}{
 		User:               u,
 		Lang:               *s.lang.Load(),
@@ -910,6 +953,7 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		OK:                 true,
 		OnionUrl:           s.onion,
 		CompanionAppPaired: paired,
+		AppSettings:        settings,
 	}
 	writeJSON(w, response)
 }

@@ -329,6 +329,12 @@ export interface TxHistoryResult {
   moreAvailable: boolean
 }
 
+// AppSettings holds user-configurable application settings surfaced on the
+// Settings page and returned with the /api/user response.
+export interface AppSettings {
+  sendRequiresPassword: boolean
+}
+
 export interface AppState {
   user: User
   lang: string
@@ -336,6 +342,7 @@ export interface AppState {
   inited: boolean
   ok: boolean
   onionUrl: string
+  appSettings: AppSettings
 }
 
 export interface PageData {

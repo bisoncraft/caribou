@@ -79,6 +79,7 @@ var (
 	walletDisabledKey     = []byte("walletDisabled")
 	langKey               = []byte("lang")
 	companionTokenKey     = []byte("companionToken")
+	sendRequiresPwKey     = []byte("sendRequiresPassword")
 
 	// values
 	byteTrue = encode.ByteTrue
@@ -968,6 +969,34 @@ func (db *BoltDB) CompanionToken() (token string, _ error) {
 		bkt := dbTx.Bucket(appBucket)
 		if bkt != nil {
 			token = string(bkt.Get(companionTokenKey))
+		}
+		return nil
+	})
+}
+
+// SetSendRequiresPassword stores whether the user must supply their app
+// password to send funds. When false the key is deleted, so the default
+// (no value stored) reads back as false.
+func (db *BoltDB) SetSendRequiresPassword(require bool) error {
+	return db.Update(func(dbTx *bbolt.Tx) error {
+		bkt := dbTx.Bucket(appBucket)
+		if bkt == nil {
+			return fmt.Errorf("app bucket not found")
+		}
+		if !require {
+			return bkt.Delete(sendRequiresPwKey)
+		}
+		return bkt.Put(sendRequiresPwKey, byteTrue)
+	})
+}
+
+// SendRequiresPassword retrieves whether sending requires the app password.
+// If no value has been stored, false is returned without an error.
+func (db *BoltDB) SendRequiresPassword() (require bool, _ error) {
+	return require, db.View(func(dbTx *bbolt.Tx) error {
+		bkt := dbTx.Bucket(appBucket)
+		if bkt != nil {
+			require = bytes.Equal(bkt.Get(sendRequiresPwKey), byteTrue)
 		}
 		return nil
 	})

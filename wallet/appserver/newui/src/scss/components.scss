@@ -597,3 +597,59 @@ img.logo-full {
     stroke-linejoin: round;
   }
 }
+
+// -----------------------------------------------------------------------
+// Send dialog. The asset/network pickers reuse the Receive picker classes;
+// these rules cover the step-3 send form inputs.
+
+// Recipient address field. Base styles input[type=text] with the form
+// background; we add a validity border that lights up once the address has
+// been checked server-side.
+.send-addr {
+  // The base input rule sets width:100% with padding; without border-box the
+  // padding overflows the modal's content box. Box it.
+  box-sizing: border-box;
+  border: 1px solid transparent;
+
+  // A failed address validation gets an orange (warning) outline. A passing
+  // one collapses to .send-addr-display, so there is no valid-state border.
+  &.send-addr--invalid {
+    border-color: var(--accent-syncing);
+
+    &:focus { border-color: var(--accent-syncing); }
+  }
+}
+
+// Read-only display of a validated address, shown in place of the input so the
+// whole address is visible. Long strings wrap rather than overflow.
+.send-addr-display {
+  padding: 0.375rem 0.75rem;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+// Amount row: a styled container holding a borderless input, the unit label
+// and a Max button.
+.send-amt {
+  input {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    font-size: 18px;
+
+    &:focus { border: none; outline: none; }
+  }
+}
+
+// Clickable "Available:" / Max affordance above the amount field.
+.send-maxlink {
+  color: var(--accent-blue-text);
+
+  &:hover { color: var(--accent-blue-hover); }
+}
+
+.send-summary {
+  border-top: 1px solid var(--border-color);
+  margin-top: 0.25rem;
+}

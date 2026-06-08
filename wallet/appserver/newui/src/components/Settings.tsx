@@ -1,8 +1,49 @@
 import { useState, FormEvent } from 'react'
 import t from '../js/intl'
+import app from '../js/application'
 import PasswordInput from './PasswordInput'
 import Spinner from './Spinner'
+import Checkbox from './Checkbox'
 import { postJSON } from '../js/http'
+
+/*
+ * SendSettings exposes app-level send preferences. Currently the only toggle
+ * is whether sending funds requires the app password; the value is mirrored
+ * into app.appSettings so the Send dialog picks it up without a refetch.
+ */
+function SendSettings () {
+  const [requirePW, setRequirePW] = useState(app.appSettings.sendRequiresPassword)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const toggle = async (checked: boolean) => {
+    if (saving) return
+    setSaving(true)
+    setErr('')
+    const prev = requirePW
+    setRequirePW(checked) // optimistic
+    const r = await postJSON('/api/setsendrequirespassword', { require: checked })
+    setSaving(false)
+    if (!r.ok) {
+      setRequirePW(prev) // revert on failure
+      setErr(r.errMsg || r.msg || t('Failed to save setting.'))
+      return
+    }
+    app.appSettings.sendRequiresPassword = checked
+  }
+
+  return (
+    <div className="form-width-300">
+      <div className="fs18 pb-2 text-center">{t('Send Settings')}</div>
+      <label className="checkbox-row">
+        <Checkbox checked={requirePW} onChange={toggle} disabled={saving} ariaLabel={t('Require password to send')} />
+        <span className="flex-grow-1 fs14">{t('Require password to send')}</span>
+        {saving && <Spinner size={14} />}
+      </label>
+      {err && <div className="errcolor fs12 text-center pt-2">{err}</div>}
+    </div>
+  )
+}
 
 /*
  * SeedExport is a password-gated component that calls /api/exportseed and
@@ -119,6 +160,8 @@ function SeedExport () {
 export default function Settings () {
   return (
     <div className="fill-abs d-flex flex-column align-items-center pt-5">
+      <SendSettings />
+      <div className="py-4" />
       <SeedExport />
     </div>
   )

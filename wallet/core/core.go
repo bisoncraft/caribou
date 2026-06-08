@@ -483,6 +483,18 @@ func (c *Core) CompanionToken() (string, error) {
 	return c.db.CompanionToken()
 }
 
+// SetSendRequiresPassword stores whether sending funds requires the app
+// password.
+func (c *Core) SetSendRequiresPassword(require bool) error {
+	return c.db.SetSendRequiresPassword(require)
+}
+
+// SendRequiresPassword reports whether sending funds requires the app
+// password. If no value has been stored, false is returned without an error.
+func (c *Core) SendRequiresPassword() (bool, error) {
+	return c.db.SendRequiresPassword()
+}
+
 // BackupDB makes a backup of the database at the specified location, optionally
 // overwriting any existing file and compacting the database.
 func (c *Core) BackupDB(dst string, overwrite, compact bool) error {

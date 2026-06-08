@@ -71,6 +71,12 @@ type sendForm struct {
 	Pass     encode.PassBytes `json:"pw"`
 }
 
+// appSettings carries user-configurable application settings surfaced on the
+// /settings page and returned with the /api/user response.
+type appSettings struct {
+	SendRequiresPassword bool `json:"sendRequiresPassword"`
+}
+
 type buildInfoResponse struct {
 	OK       bool   `json:"ok"`
 	Version  string `json:"version"`
