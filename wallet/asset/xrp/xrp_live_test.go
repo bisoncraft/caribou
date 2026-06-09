@@ -254,7 +254,7 @@ func TestHarnessBalance(t *testing.T) {
 		t.Fatalf("expected zero balance, got avail=%d locked=%d", bal.Available, bal.Locked)
 	}
 
-	harnessFund(t, addr, 10_000_000) // 10 XRP
+	harnessFund(t, addr, 2_000_000) // 1 XRP reserve + 1 XRP available
 	time.Sleep(tipWait)
 
 	bal, err = w.Balance()
@@ -283,7 +283,7 @@ func TestHarnessBalanceNotification(t *testing.T) {
 	}
 
 	addr, _ := w.DepositAddress()
-	harnessFund(t, addr, 10_000_000)
+	harnessFund(t, addr, 2_000_000)
 
 	timeout := time.After(5 * time.Second)
 	for {
@@ -316,11 +316,11 @@ func TestHarnessConfirmation(t *testing.T) {
 	senderAddr, _ := sender.DepositAddress()
 	receiverAddr, _ := receiver.DepositAddress()
 
-	// Fund both accounts. The simnet base reserve is 10 XRP, so the receiver
-	// must be pre-activated or Send() rejects the payment. Sender needs
-	// enough for two sends (1 XRP each) plus its own reserve (10 XRP) plus fees.
-	harnessFund(t, senderAddr, 25_000_000)
-	harnessFund(t, receiverAddr, 10_000_000)
+	// Fund both accounts. The base reserve is 1 XRP, so the receiver must be
+	// pre-activated or Send() rejects the payment. Sender needs enough for two
+	// sends (1 XRP each) plus its own reserve (1 XRP) plus fees.
+	harnessFund(t, senderAddr, 5_000_000)
+	harnessFund(t, receiverAddr, 1_000_000)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -138,7 +138,7 @@ echo "Building sendxrp..."
 go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/sendxrp" \
   ./util/testing/xrp/sendxrp/
 
-if [ "${USE_DOCKER}" = "1" ]; then
+if [ "${USE_DOCKER}" = "1" ] && ! docker image inspect "${DOCKER_IMAGE}" > /dev/null 2>&1; then
   echo "Building Docker image ${DOCKER_IMAGE}..."
   docker build --platform linux/amd64 -t "${DOCKER_IMAGE}" "${SCRIPT_DIR}"
 fi
@@ -199,6 +199,10 @@ full
 
 [fetch_depth]
 full
+
+[voting]
+account_reserve=1000000
+owner_reserve=200000
 EOF
   cp "${SCRIPT_DIR}/validators.txt" "${ALPHA_DIR}/validators.txt"
 else
@@ -248,6 +252,10 @@ full
 
 [fetch_depth]
 full
+
+[voting]
+account_reserve=1000000
+owner_reserve=200000
 EOF
   cp "${SCRIPT_DIR}/validators.txt" "${DOCKER_CFG_DIR}/validators.txt"
 fi

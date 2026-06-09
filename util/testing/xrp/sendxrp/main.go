@@ -21,7 +21,7 @@ import (
 	btcec "github.com/btcsuite/btcd/btcec/v2"
 )
 
-var httpClient = &http.Client{Timeout: 10 * time.Second}
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 const (
 	// genesisKeyHex is the secp256k1 private key for the rippled standalone
