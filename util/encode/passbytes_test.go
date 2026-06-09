@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
-	"time"
 )
 
 const (
@@ -27,7 +26,6 @@ func randomString(length int) string {
 		return string(b)
 	}
 
-	rand.Seed(time.Now().UnixNano())
 	buf := make([]byte, length)
 
 	if length <= 2 {

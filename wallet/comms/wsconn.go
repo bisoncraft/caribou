@@ -702,7 +702,7 @@ func (conn *wsConn) RequestRaw(msgID uint64, rawMsg []byte, f func(*msgjson.Mess
 //	return <-errChan // timeout or response error
 func (conn *wsConn) RequestWithTimeout(msg *msgjson.Message, f func(*msgjson.Message), expireTime time.Duration, expire func()) error {
 	if msg.Type != msgjson.Request {
-		return fmt.Errorf("Message is not a request: %v", msg.Type)
+		return fmt.Errorf("message is not a request: %v", msg.Type)
 	}
 	rawMsg, err := json.Marshal(msg)
 	if err != nil {

@@ -70,7 +70,7 @@ type rpcWallet struct {
 	chainParams *chaincfg.Params
 	log         util.Logger
 	rpcCfg      *rpcclient.ConnConfig
-	accountsV   atomic.Value // XCWalletAccounts
+	accountsV   atomic.Pointer[XCWalletAccounts]
 
 	hasSPVTicketFunctions bool
 
@@ -218,7 +218,7 @@ func newRPCWallet(settings map[string]string, logger util.Logger, net util.Netwo
 	rpcw.rpcConnector = nodeRPCClient
 	rpcw.rpcClient = newCombinedClient(nodeRPCClient, chainParams)
 
-	rpcw.accountsV.Store(XCWalletAccounts{
+	rpcw.accountsV.Store(&XCWalletAccounts{
 		PrimaryAccount: cfg.PrimaryAccount,
 		UnmixedAccount: cfg.UnmixedAccount,
 		TradingAccount: cfg.TradingAccount,
@@ -229,7 +229,7 @@ func newRPCWallet(settings map[string]string, logger util.Logger, net util.Netwo
 
 // Accounts returns the names of the accounts for use by the exchange wallet.
 func (w *rpcWallet) Accounts() XCWalletAccounts {
-	return w.accountsV.Load().(XCWalletAccounts)
+	return *w.accountsV.Load()
 }
 
 // Reconfigure updates the wallet to user a new configuration.
@@ -261,7 +261,7 @@ func (w *rpcWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, ne
 	var allOk bool
 	defer func() {
 		if allOk { // update the account names as the last step
-			w.accountsV.Store(XCWalletAccounts{
+			w.accountsV.Store(&XCWalletAccounts{
 				PrimaryAccount: rpcCfg.PrimaryAccount,
 				UnmixedAccount: rpcCfg.UnmixedAccount,
 				TradingAccount: rpcCfg.TradingAccount,
@@ -269,7 +269,7 @@ func (w *rpcWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, ne
 		}
 	}()
 
-	currentAccts := w.accountsV.Load().(XCWalletAccounts)
+	currentAccts := *w.accountsV.Load()
 
 	if rpcCfg.RPCUser == w.rpcCfg.User &&
 		rpcCfg.RPCPass == w.rpcCfg.Pass &&
@@ -1076,7 +1076,7 @@ func (w *rpcWallet) PurchaseTickets(ctx context.Context, n int, _, _ string, _ b
 	return tickets, nil
 }
 
-var oldSPVWalletErr = errors.New("wallet is an older spv wallet")
+var errOldSPVWallet = errors.New("wallet is an older spv wallet")
 
 // Tickets returns active tickets.
 func (w *rpcWallet) Tickets(ctx context.Context) ([]*asset.Ticket, error) {
@@ -1086,7 +1086,7 @@ func (w *rpcWallet) Tickets(ctx context.Context) ([]*asset.Ticket, error) {
 func (w *rpcWallet) tickets(ctx context.Context, includeImmature bool) ([]*asset.Ticket, error) {
 	// GetTickets only works for spv clients after version 9.2.0
 	if w.spvMode && !w.hasSPVTicketFunctions {
-		return nil, oldSPVWalletErr
+		return nil, errOldSPVWallet
 	}
 	hashes, err := w.rpcClient.GetTickets(ctx, includeImmature)
 	if err != nil {

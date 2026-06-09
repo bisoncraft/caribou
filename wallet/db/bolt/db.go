@@ -21,6 +21,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encrypt"
 	dexdb "github.com/bisoncraft/bosswallet/wallet/db"
 	"go.etcd.io/bbolt"
+	bolterr "go.etcd.io/bbolt/errors"
 )
 
 // getCopy returns a copy of the value for the given key and provided bucket. If
@@ -109,7 +110,7 @@ var _ dexdb.DB = (*BoltDB)(nil)
 func NewDB(dbPath string, logger util.Logger, opts ...Opts) (dexdb.DB, error) {
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 3 * time.Second})
 	if err != nil {
-		if errors.Is(err, bbolt.ErrTimeout) {
+		if errors.Is(err, bolterr.ErrTimeout) {
 			err = fmt.Errorf("%w, could happen when database is already being used by another process", err)
 		}
 		return nil, err
@@ -239,11 +240,11 @@ func (db *BoltDB) Recrypt(creds *dexdb.PrimaryCredentials, oldCrypter, newCrypte
 
 			pw, err := oldCrypter.Decrypt(w.EncryptedPW)
 			if err != nil {
-				return fmt.Errorf("Decrypt error: %w", err)
+				return fmt.Errorf("decrypt error: %w", err)
 			}
 			w.EncryptedPW, err = newCrypter.Encrypt(pw)
 			if err != nil {
-				return fmt.Errorf("Encrypt error: %w", err)
+				return fmt.Errorf("encrypt error: %w", err)
 			}
 			err = wBkt.Put(walletKey, w.Encode())
 			if err != nil {

@@ -570,11 +570,11 @@ func (btc *ExchangeWalletElectrum) WalletTransaction(ctx context.Context, txID s
 			i := 0
 			for {
 				if i > 20 || blockHeight < 0 {
-					return nil, fmt.Errorf("Cannot find mined tx block number for %s", gtr.BlockHash)
+					return nil, fmt.Errorf("cannot find mined tx block number for %s", gtr.BlockHash)
 				}
 				bh, err := btc.ew.getBlockHeaderByHeight(btc.ctx, int64(blockHeight))
 				if err != nil {
-					return nil, fmt.Errorf("Error getting mined tx block number %s: %v", gtr.BlockHash, err)
+					return nil, fmt.Errorf("error getting mined tx block number %s: %v", gtr.BlockHash, err)
 				}
 				if bh.BlockHash().String() == gtr.BlockHash {
 					break

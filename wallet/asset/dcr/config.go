@@ -94,11 +94,11 @@ func loadRPCConfig(settings map[string]string, network util.Network) (*rpcConfig
 	if cfg.UnmixedAccount != "" {
 		switch {
 		case cfg.PrimaryAccount == cfg.UnmixedAccount:
-			return nil, nil, fmt.Errorf("Primary Account should not be the same as Change Account")
+			return nil, nil, fmt.Errorf("primary account should not be the same as change account")
 		case cfg.PrimaryAccount == cfg.TradingAccount:
-			return nil, nil, fmt.Errorf("Primary Account should not be the same as Temporary Trading Account")
+			return nil, nil, fmt.Errorf("primary account should not be the same as temporary trading account")
 		case cfg.TradingAccount == cfg.UnmixedAccount:
-			return nil, nil, fmt.Errorf("Temporary Trading Account should not be the same as Change Account")
+			return nil, nil, fmt.Errorf("temporary trading account should not be the same as change account")
 		}
 	}
 

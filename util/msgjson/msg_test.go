@@ -19,10 +19,6 @@ func TestMessageUnmarshal(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
-	if payload == nil {
-		t.Errorf("expected payload to not be nil")
-	}
-
 	payload = new(Payload)
 	err = msg.Unmarshal(&payload) // **Payload
 	if err != nil {

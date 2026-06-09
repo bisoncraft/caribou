@@ -1,6 +1,7 @@
 package adaptorsigs
 
 import (
+	crand "crypto/rand"
 	"math/rand"
 	"testing"
 	"time"
@@ -102,7 +103,7 @@ func TestAdaptorSignatureRandom(t *testing.T) {
 
 func RandomBytes(len int) []byte {
 	bytes := make([]byte, len)
-	_, err := rand.Read(bytes)
+	_, err := crand.Read(bytes)
 	if err != nil {
 		panic("error reading random bytes: " + err.Error())
 	}

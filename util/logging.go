@@ -210,7 +210,7 @@ func (lm *LoggerMaker) SetLevels(debugLevel string) error {
 		// Validate debug log level.
 		lvl, ok := slog.LevelFromString(debugLevel)
 		if !ok {
-			str := "The specified debug level [%v] is invalid"
+			str := "the specified debug level [%v] is invalid"
 			return fmt.Errorf(str, debugLevel)
 		}
 		lm.DefaultLevel = lvl
@@ -224,7 +224,7 @@ func (lm *LoggerMaker) SetLevels(debugLevel string) error {
 	for _, logLevelPair := range levelPairs {
 		if !strings.Contains(logLevelPair, "=") {
 			// Mixed defaults and key=val pairs are not permitted.
-			str := "The specified debug level contains an invalid " +
+			str := "the specified debug level contains an invalid " +
 				"subsystem/level pair [%v]"
 			return fmt.Errorf(str, logLevelPair)
 		}
@@ -236,7 +236,7 @@ func (lm *LoggerMaker) SetLevels(debugLevel string) error {
 		// Validate log level.
 		lvl, ok := slog.LevelFromString(logLevel)
 		if !ok {
-			str := "The specified debug level [%v] is invalid"
+			str := "the specified debug level [%v] is invalid"
 			return fmt.Errorf(str, logLevel)
 		}
 		lm.Levels[subsysID] = lvl

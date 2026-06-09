@@ -20,10 +20,12 @@ import (
 	"github.com/decred/dcrd/txscript/v4/stdaddr"
 	"github.com/decred/dcrd/txscript/v4/stdscript"
 	"github.com/decred/dcrd/wire"
-	"golang.org/x/crypto/ripemd160"
 )
 
 const (
+	// ripemd160Size is the byte size of a RIPEMD-160 digest (20 bytes).
+	ripemd160Size = 20
+
 	// MaxCLTVScriptNum is the largest usable value for a CLTV lockTime. This
 	// will actually be stored in a 5-byte ScriptNum since they have a sign bit,
 	// however, it is not 2^39-1 since the spending transaction's nLocktime is
@@ -763,7 +765,7 @@ func ExtractSwapDetails(pkScript []byte, chainParams *chaincfg.Params) (
 
 // ExtractPrivateSwapDetails extracts the pub key hashes of the refunder and
 // redeemer, and the locktime from a private swap contract.
-func ExtractPrivateSwapDetails(script []byte) (refunder, redeemer [ripemd160.Size]byte, locktime int64, err error) {
+func ExtractPrivateSwapDetails(script []byte) (refunder, redeemer [ripemd160Size]byte, locktime int64, err error) {
 	if len(script) != 62 {
 		err = fmt.Errorf("invalid swap contract: length = %v", len(script))
 		return
@@ -1248,7 +1250,7 @@ func RefundPaymentMultisig(redeemScript, pubKey, sig []byte) ([]byte, error) {
 }
 
 // ExtractPaymentMultisigDetails extracts details from a multisig payment script.
-func ExtractPaymentMultisigDetails(script []byte) (nRequired int64, sender [ripemd160.Size]byte,
+func ExtractPaymentMultisigDetails(script []byte) (nRequired int64, sender [ripemd160Size]byte,
 	locktime int64, pubKeys []*secp256k1.PublicKey, err error) {
 	// OP_IF
 	//  nRequired (OP_DATA_33 pubkey) nKeys OP_CHECKMULTISIGVERIFY OP_1
@@ -1292,21 +1294,21 @@ func ExtractPaymentMultisigDetails(script []byte) (nRequired int64, sender [ripe
 		script[gapSize+38] == txscript.OP_ENDIF {
 		nPubKeys := gapSize / pubBlock
 		if nPubKeys != int(script[gapSize+2])-txscript.OP_1+1 {
-			return 0, [ripemd160.Size]byte{}, 0, nil, errors.New("invalid nPubKeys")
+			return 0, [ripemd160Size]byte{}, 0, nil, errors.New("invalid nPubKeys")
 		}
 		pubKeys = make([]*secp256k1.PublicKey, nPubKeys)
 		for i := 0; i < nPubKeys; i++ {
 			if script[i*pubBlock+2] != txscript.OP_DATA_33 {
-				return 0, [ripemd160.Size]byte{}, 0, nil, errors.New("invalid multisig payment script")
+				return 0, [ripemd160Size]byte{}, 0, nil, errors.New("invalid multisig payment script")
 			}
 			start := i*pubBlock + 3
 			pubKeys[i], err = secp256k1.ParsePubKey(script[start : start+secp256k1.PubKeyBytesLenCompressed])
 			if err != nil {
-				return 0, [ripemd160.Size]byte{}, 0, nil, fmt.Errorf("bad pubkey: %v", err)
+				return 0, [ripemd160Size]byte{}, 0, nil, fmt.Errorf("bad pubkey: %v", err)
 			}
 		}
 		start := gapSize + 16
-		copy(sender[:], script[start:start+ripemd160.Size])
+		copy(sender[:], script[start:start+ripemd160Size])
 		nRequired = int64(script[1]) - txscript.OP_1 + 1
 		start = gapSize + 7
 		locktime = int64(binary.LittleEndian.Uint32(script[start : start+4]))

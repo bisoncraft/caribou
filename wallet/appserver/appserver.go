@@ -213,7 +213,7 @@ type AppServer struct {
 	wsServer *websocket.Server
 	mux      *chi.Mux
 	siteDir  string
-	lang     atomic.Value // string
+	lang     atomic.Pointer[string]
 	langs    []string
 	core     clientCore
 	addr     string
@@ -284,7 +284,7 @@ func New(cfg *Config) (*AppServer, error) {
 			return nil, fmt.Errorf("no HTML template files found. "+
 				"Place the 'site' folder in the executable's directory %q or the working directory, "+
 				"or run bossw from within the wallet/cmd/bossw source workspace folder, or specify the"+
-				"'sitedir' configuration directive to bossw.", execPath)
+				"'sitedir' configuration directive to bossw", execPath)
 		}
 
 		log.Infof("Located \"site\" folder at %v", siteDir)
@@ -357,7 +357,7 @@ func New(cfg *Config) (*AppServer, error) {
 		appVersion:      userAppVersion(cfg.AppVersion, false),
 		mainLogFilePath: cfg.MainLogFilePath,
 	}
-	s.lang.Store(lang)
+	s.lang.Store(&lang)
 
 	// Restore a persisted companion token hash so the companion app
 	// stays paired across restarts. The raw token is not stored; it
@@ -580,7 +580,7 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// Start serving.
 	listener, err := net.Listen("tcp", s.addr)
 	if err != nil {
-		return nil, fmt.Errorf("Can't listen on %s. web server quitting: %w", s.addr, err)
+		return nil, fmt.Errorf("can't listen on %s. web server quitting: %w", s.addr, err)
 	}
 	https := s.srv.TLSConfig != nil
 	if https {
@@ -1095,7 +1095,7 @@ func fileServer(r chi.Router, pathPrefix, siteDir, subDir, forceContentType stri
 	// For the chi.Mux, make sure a path that ends in "/" and append a "*".
 	muxRoot := pathPrefix
 	if pathPrefix != "/" && pathPrefix[len(pathPrefix)-1] != '/' {
-		r.Get(pathPrefix, http.RedirectHandler(pathPrefix+"/", 301).ServeHTTP)
+		r.Get(pathPrefix, http.RedirectHandler(pathPrefix+"/", http.StatusMovedPermanently).ServeHTTP)
 		muxRoot += "/"
 	}
 	muxRoot += "*"

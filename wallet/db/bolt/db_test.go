@@ -3,6 +3,7 @@ package bolt
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -264,7 +265,7 @@ func nTimes(n int, f func(int)) {
 
 func randBytes(l int) []byte {
 	b := make([]byte, l)
-	rand.Read(b)
+	crand.Read(b)
 	return b
 }
 

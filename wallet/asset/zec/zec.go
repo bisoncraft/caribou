@@ -25,7 +25,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -122,7 +121,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "External",
 		Description:       "Connect to zcashd",
-		DefaultConfigPath: dexbtc.SystemConfigPath("zcash"),
+		DefaultConfigPath: btc.SystemConfigPath("zcash"),
 		ConfigOpts:        configOpts,
 		NoAuth:            true,
 	}
@@ -187,7 +186,7 @@ type WalletConfig struct {
 	ActivelyUsed     bool   `ini:"special_activelyUsed"` // injected by core
 }
 
-func newRPCConnection(cfg *dexbtc.RPCConfig) (*rpcclient.Client, error) {
+func newRPCConnection(cfg *btc.RPCConfig) (*rpcclient.Client, error) {
 	return rpcclient.New(&rpcclient.ConnConfig{
 		HTTPPostMode: true,
 		DisableTLS:   true,
@@ -220,7 +219,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 
 	// Designate the clone ports. These will be overwritten by any explicit
 	// settings in the configuration file.
-	ports := dexbtc.NetPorts{
+	ports := btc.NetPorts{
 		Mainnet: "8232",
 		Testnet: "18232",
 		Simnet:  "18232",
@@ -241,12 +240,12 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		return nil, fmt.Errorf("error creating address recycler: %w", err)
 	}
 
-	var rpcCfg dexbtc.RPCConfig
+	var rpcCfg btc.RPCConfig
 	if err := config.Unmapify(cfg.Settings, &rpcCfg); err != nil {
 		return nil, fmt.Errorf("error reading settings: %w", err)
 	}
 
-	if err := dexbtc.CheckRPCConfig(&rpcCfg, "Zcash", net, ports); err != nil {
+	if err := btc.CheckRPCConfig(&rpcCfg, "Zcash", net, ports); err != nil {
 		return nil, fmt.Errorf("rpc config error: %v", err)
 	}
 
@@ -298,13 +297,13 @@ type zecWallet struct {
 	ctx           context.Context
 	log           util.Logger
 	net           util.Network
-	lastAddress   atomic.Value // "string"
+	lastAddress   atomic.Pointer[string]
 	btcParams     *chaincfg.Params
 	addrParams    *AddressParams
 	node          btc.RawRequester
 	ar            *btc.AddressRecycler
 	rf            *btc.RedemptionFinder
-	decodeAddr    dexbtc.AddressDecoder
+	decodeAddr    btc.AddressDecoder
 	lastPeerCount uint32
 	peersChange   func(uint32, error)
 	emit          *asset.WalletEmitter
@@ -326,7 +325,7 @@ type zecWallet struct {
 
 	receiveTxLastQuery atomic.Uint64
 
-	txHistoryDB      atomic.Value // *btc.BadgerTxDB
+	txHistoryDB      atomic.Pointer[btc.BadgerTxDB]
 	syncingTxHistory atomic.Bool
 }
 
@@ -466,7 +465,7 @@ func (w *zecWallet) prepareCoinManager() {
 				req := RequiredOrderFunds(val, inputCount, inputsSize, lots)
 				if sum >= req {
 					excess := sum - req
-					if !reportChange || isDust(val, dexbtc.P2SHOutputSize) {
+					if !reportChange || isDust(val, btc.P2SHOutputSize) {
 						excess = 0
 					}
 					return true, excess
@@ -790,7 +789,7 @@ func (w *zecWallet) OwnsDepositAddress(addrStr string) (bool, error) {
 
 func sendEnough(val uint64) btc.EnoughFunc {
 	return func(inputCount, inputsSize, sum uint64) (bool, uint64) {
-		fees := TxFeesZIP317(inputCount*dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+		fees := TxFeesZIP317(inputCount*btc.RedeemP2PKHInputSize+1, 2*btc.P2PKHOutputSize+1, 0, 0, 0, 0)
 		total := fees + val
 		if sum >= total {
 			return true, sum - total
@@ -867,7 +866,7 @@ func (w *zecWallet) EstimateSendTxFee(
 			amt, bal.Transparent, orchardSum, err)
 	}
 
-	fees = TxFeesZIP317(inputsSize+uint64(wire.VarIntSerializeSize(uint64(len(spents)))), 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, uint64(orchardN))
+	fees = TxFeesZIP317(inputsSize+uint64(wire.VarIntSerializeSize(uint64(len(spents)))), 2*btc.P2PKHOutputSize+1, 0, 0, 0, uint64(orchardN))
 	return
 }
 
@@ -882,7 +881,7 @@ func (w *zecWallet) maxWithdrawFees(addrType string) (uint64, error) {
 		return 0, fmt.Errorf("balances error: %w", err)
 	}
 
-	txInsSize := numInputs*dexbtc.RedeemP2PKHInputSize + uint64(wire.VarIntSerializeSize(numInputs))
+	txInsSize := numInputs*btc.RedeemP2PKHInputSize + uint64(wire.VarIntSerializeSize(numInputs))
 	nActionsOrchard := uint64(noteCounts.Orchard)
 	var txOutsSize, nOutputsSapling uint64
 	switch addrType {
@@ -891,7 +890,7 @@ func (w *zecWallet) maxWithdrawFees(addrType string) (uint64, error) {
 	case saplingAddressType:
 		nOutputsSapling = 1
 	default: // transparent
-		txOutsSize = dexbtc.P2PKHOutputSize + 1
+		txOutsSize = btc.P2PKHOutputSize + 1
 	}
 	// TODO: Do we get nJoinSplit from noteCounts.Sprout somehow?
 	return TxFeesZIP317(txInsSize, txOutsSize, uint64(noteCounts.Sapling), nOutputsSapling, 0, nActionsOrchard), nil
@@ -960,7 +959,7 @@ func (w *zecWallet) Send(addr string, value, feeRate uint64) (asset.Coin, error)
 // StandardSendFee returns the fees for a simple send tx with one input and two
 // outputs.
 func (w *zecWallet) StandardSendFee(feeRate uint64) uint64 {
-	return TxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, 2*dexbtc.P2PKHOutputSize+1, 0, 0, 0, 0)
+	return TxFeesZIP317(btc.RedeemP2PKHInputSize+1, 2*btc.P2PKHOutputSize+1, 0, 0, 0, 0)
 }
 
 // TransactionConfirmations gets the number of confirmations for the specified
@@ -1012,7 +1011,7 @@ func (w *zecWallet) ValidateAddress(addr string) bool {
 
 func (w *zecWallet) lastShieldedAddress() (addr string, err error) {
 	if addrPtr := w.lastAddress.Load(); addrPtr != nil {
-		return addrPtr.(string), nil
+		return *addrPtr, nil
 	}
 	accts, err := zListAccounts(w)
 	if err != nil {
@@ -1026,7 +1025,7 @@ func (w *zecWallet) lastShieldedAddress() (addr string, err error) {
 			break // generate first address
 		}
 		lastAddr := acct.Addresses[len(acct.Addresses)-1].UnifiedAddr
-		w.lastAddress.Store(lastAddr)
+		w.lastAddress.Store(&lastAddr)
 		return lastAddr, nil // Orchard = Unified for account 1
 	}
 	return w.newShieldedAddress()
@@ -1122,8 +1121,9 @@ func (w *zecWallet) newShieldedAddress() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	w.lastAddress.Store(addrRes.Address)
-	return addrRes.Address, nil
+	addr := addrRes.Address
+	w.lastAddress.Store(&addr)
+	return addr, nil
 }
 
 // sendOne is a helper function for doing a z_sendmany with a single recipient.
@@ -1263,7 +1263,7 @@ func (w *zecWallet) txDB() *btc.BadgerTxDB {
 	if db == nil {
 		return nil
 	}
-	return db.(*btc.BadgerTxDB)
+	return db
 }
 
 func (w *zecWallet) listSinceBlock(start int64) ([]btcjson.ListTransactionsResult, error) {
@@ -1521,7 +1521,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 			return false, nil
 		}
 		const scriptVer = 0
-		acctID, lockTime, pkHash, err := dexbtc.ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
+		acctID, lockTime, pkHash, err := btc.ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
 		if err != nil {
 			return false, nil
 		}
@@ -1581,7 +1581,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 
 	// Swap redemptions and refunds
 	contractIsSwap := func(contract []byte) bool {
-		_, _, _, _, err := dexbtc.ExtractSwapDetails(contract, false /* segwit */, w.btcParams)
+		_, _, _, _, err := btc.ExtractSwapDetails(contract, false /* segwit */, w.btcParams)
 		return err == nil
 	}
 	redeemsSwap := func(msgTx *zTx) bool {
@@ -1612,7 +1612,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*asset.Wall
 		var bondInfo *asset.BondTxInfo
 		isBond := func(contract []byte) bool {
 			const scriptVer = 0
-			lockTime, pkHash, err := dexbtc.ExtractBondDetailsV0(scriptVer, contract)
+			lockTime, pkHash, err := btc.ExtractBondDetailsV0(scriptVer, contract)
 			if err != nil {
 				return false
 			}

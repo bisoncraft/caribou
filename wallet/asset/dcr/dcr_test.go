@@ -44,7 +44,7 @@ var (
 	tCtx           context.Context
 	tLotSize       uint64 = 1e7
 	optimalFeeRate uint64 = 22
-	tErr                  = fmt.Errorf("test error")
+	errTest               = fmt.Errorf("test error")
 	tTxID                 = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
 	tTxHash        *chainhash.Hash
 	tPKHAddr       stdaddr.Address
@@ -106,7 +106,7 @@ func tNewWalletMonitorBlocks(monitorBlocks bool) (*ExchangeWallet, *tRPCClient, 
 		rpcClient: client,
 		log:       log,
 	}
-	rpcw.accountsV.Store(XCWalletAccounts{
+	rpcw.accountsV.Store(&XCWalletAccounts{
 		PrimaryAccount: tAcctName,
 	})
 	wallet.wallet = rpcw
@@ -790,7 +790,7 @@ func testSender(t *testing.T, senderType tSenderType) {
 
 	// GetRawChangeAddress error
 	if senderType == tSendSender { // withdraw test does not get a change address
-		node.changeAddrErr = tErr
+		node.changeAddrErr = errTest
 		_, err = sender(addr, sendVal)
 		if err == nil {
 			t.Fatalf("no error for rawchangeaddress: %v", err)
@@ -1303,7 +1303,7 @@ func TestLookupTxOutput(t *testing.T) {
 	delete(node.txOutRes, op)
 	walletTx := &walletjson.GetTransactionResult{}
 	node.walletTxFn = func() (*walletjson.GetTransactionResult, error) {
-		return walletTx, tErr
+		return walletTx, errTest
 	}
 	_, _, spent, err = wallet.lookupTxOutput(context.Background(), &op.txHash, op.vout)
 	if err == nil {
@@ -1466,7 +1466,7 @@ func TestSyncStatus(t *testing.T) {
 		t.Fatalf("progress not complete with sync true")
 	}
 
-	node.rawErr[methodSyncStatus] = tErr
+	node.rawErr[methodSyncStatus] = errTest
 	_, err = wallet.SyncStatus()
 	if err == nil {
 		t.Fatalf("SyncStatus error not propagated")

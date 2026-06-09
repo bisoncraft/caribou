@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	tErr           = fmt.Errorf("expected dummy error")
+	errTest        = fmt.Errorf("expected dummy error")
 	tLogger        util.Logger
 	tCtx           context.Context
 	testAppVersion = "1.1.0-rc1+release.local"
@@ -445,8 +445,8 @@ func TestAPILogin(t *testing.T) {
 	ensure(`{"ok":true,"notes":null,"pokes":[]}`)
 
 	// Login error
-	tCore.loginErr = tErr
-	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, tErr))
+	tCore.loginErr = errTest
+	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.loginErr = nil
 }
 
@@ -492,7 +492,7 @@ func TestSend(t *testing.T) {
 	tCore.notHas = false
 
 	// Send/Withdraw error
-	tCore.sendErr = tErr
+	tCore.sendErr = errTest
 	if isOK() {
 		t.Fatalf("no error for Send/Withdraw error")
 	}
@@ -526,8 +526,8 @@ func TestAPIInit(t *testing.T) {
 	ensure(s.apiIsInitialized, `{"ok":true,"initialized":true}`)
 
 	// Initialization error
-	tCore.initErr = tErr
-	ensure(s.apiInit, fmt.Sprintf(`{"ok":false,"msg":"%s"}`, tErr))
+	tCore.initErr = errTest
+	ensure(s.apiInit, fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.initErr = nil
 }
 
@@ -555,8 +555,8 @@ func TestAPINewWallet(t *testing.T) {
 	ensure(`{"ok":false,"msg":"already have a wallet for btc"}`)
 	tCore.notHas = true
 
-	tCore.createWalletErr = tErr
-	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, tErr))
+	tCore.createWalletErr = errTest
+	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.createWalletErr = nil
 
 	tCore.notHas = false
@@ -574,8 +574,8 @@ func TestAPILogout(t *testing.T) {
 	ensure(`{"ok":true}`)
 
 	// Logout error
-	tCore.logoutErr = tErr
-	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, tErr))
+	tCore.logoutErr = errTest
+	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.logoutErr = nil
 }
 
@@ -591,8 +591,8 @@ func TestApiGetBalance(t *testing.T) {
 	ensure(`{"ok":true,"balance":null}`)
 
 	// Logout error
-	tCore.balanceErr = tErr
-	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, tErr))
+	tCore.balanceErr = errTest
+	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.balanceErr = nil
 }
 
@@ -766,8 +766,8 @@ func TestAPIEstimateSendTxFee(t *testing.T) {
 	tCore.estFee = 10000
 	ensureResponse(t, s.apiEstimateSendTxFee, want, reader, writer, body, nil)
 
-	want = fmt.Sprintf(`{"ok":false,"msg":"%s"}`, tErr)
-	tCore.estFeeErr = tErr
+	want = fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest)
+	tCore.estFeeErr = errTest
 	ensureResponse(t, s.apiEstimateSendTxFee, want, reader, writer, body, nil)
 }
 

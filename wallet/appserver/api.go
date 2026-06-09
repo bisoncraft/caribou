@@ -212,7 +212,7 @@ func (s *AppServer) apiRescanWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.core.WalletState(form.AssetID)
 	if status == nil {
-		s.writeAPIError(w, fmt.Errorf("No wallet for %d -> %s", form.AssetID, unbip(form.AssetID)))
+		s.writeAPIError(w, fmt.Errorf("no wallet for %d -> %s", form.AssetID, unbip(form.AssetID)))
 		return
 	}
 	err := s.core.RescanWallet(form.AssetID, form.Force)
@@ -234,7 +234,7 @@ func (s *AppServer) apiOpenWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.core.WalletState(form.AssetID)
 	if status == nil {
-		s.writeAPIError(w, fmt.Errorf("No wallet for %d -> %s", form.AssetID, unbip(form.AssetID)))
+		s.writeAPIError(w, fmt.Errorf("no wallet for %d -> %s", form.AssetID, unbip(form.AssetID)))
 		return
 	}
 	pass, err := s.resolvePass(form.Pass, r)
@@ -496,7 +496,7 @@ func (s *AppServer) apiSetLocale(w http.ResponseWriter, r *http.Request) {
 
 	// Get actual language after SetLanguage (in case of fallback)
 	actualLang := s.core.Language()
-	s.lang.Store(actualLang)
+	s.lang.Store(&actualLang)
 
 	writeJSON(w, simpleAck())
 }
@@ -904,7 +904,7 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		CompanionAppPaired bool       `json:"companionAppPaired"`
 	}{
 		User:               u,
-		Lang:               s.lang.Load().(string),
+		Lang:               *s.lang.Load(),
 		Langs:              s.langs,
 		Inited:             s.core.IsInitialized(),
 		OK:                 true,

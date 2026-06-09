@@ -274,7 +274,7 @@ func (c *Core) SignMultisig(csvFilePath string, signIdx int) error {
 	idx, err := c.db.MultisigIndexForPubkey(pm.AssetID, pubkey)
 	if err != nil {
 		return fmt.Errorf("unable to find the index for pubkey %x and asset id %d. If this wallet was restored, "+
-			"try creating signing keys with that asset until you see the used key returned.", pm.SignerXpubs[signIdx], pm.AssetID)
+			"try creating signing keys with that asset until you see the used key returned", pm.SignerXpubs[signIdx], pm.AssetID)
 	}
 	c.loginMtx.Lock()
 
