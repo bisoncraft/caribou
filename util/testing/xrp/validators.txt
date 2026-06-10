@@ -1,0 +1,9 @@
+# Intentionally empty.
+#
+# rippled --standalone does not consult a UNL; this file exists only because
+# rippled.cfg references [validators_file] and refuses to start without it.
+[validators]
+
+[validator_list_sites]
+
+[validator_list_keys]
