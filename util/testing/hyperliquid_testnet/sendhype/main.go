@@ -26,7 +26,7 @@ import (
 // funderPrivKeyHex is the hex-encoded private key for the testnet funder
 // account. Replace with a key whose address holds testnet HYPE.
 // SECURITY: this is a testnet-only key with no real value.
-const funderPrivKeyHex = "0000000000000000000000000000000000000000000000000000000000000001"
+const funderPrivKeyHex = "0000000000000000000000000000000000000000000000000000000000000001" // "0000000000000000000000000000000000000000000000000000000000000001"
 
 // defaultFunderKey is the placeholder value; running with it is a no-op.
 const defaultFunderKey = "0000000000000000000000000000000000000000000000000000000000000001"

@@ -178,7 +178,7 @@ func hypeTokenIDFromMeta(meta *spotMetaResponse) (string, error) {
 // ledgerDelta describes a balance change event.
 type ledgerDelta struct {
 	Type        string `json:"type"`
-	Coin        string `json:"coin"`
+	Token       string `json:"token"` // coin name e.g. "HYPE" (field is "token" in API)
 	Amount      string `json:"amount"`
 	User        string `json:"user"`
 	Destination string `json:"destination"`
@@ -204,16 +204,21 @@ func (c *rpcClient) ledgerUpdates(ctx context.Context, user string, startTimeMS 
 	return updates, nil
 }
 
-// --- spot send ---
+// --- send asset ---
 
-type spotSendAction struct {
+// sendAssetAction is the generalized spot transfer action. It routes between
+// DEX spot balances and works in all account modes (manual, unified, portfolio).
+type sendAssetAction struct {
 	Type             string `json:"type"`
 	HyperliquidChain string `json:"hyperliquidChain"`
 	SignatureChainID string `json:"signatureChainId"`
 	Destination      string `json:"destination"`
+	SourceDex        string `json:"sourceDex"`
+	DestinationDex   string `json:"destinationDex"`
 	Token            string `json:"token"`
 	Amount           string `json:"amount"`
-	Time             uint64 `json:"time"`
+	FromSubAccount   string `json:"fromSubAccount"`
+	Nonce            uint64 `json:"nonce"`
 }
 
 type exchangeSignature struct {
@@ -223,7 +228,7 @@ type exchangeSignature struct {
 }
 
 type exchangeRequest struct {
-	Action    spotSendAction    `json:"action"`
+	Action    any               `json:"action"`
 	Nonce     uint64            `json:"nonce"`
 	Signature exchangeSignature `json:"signature"`
 }
@@ -240,9 +245,9 @@ type exchangeRejection struct{ msg string }
 
 func (e *exchangeRejection) Error() string { return e.msg }
 
-// spotSend broadcasts a signed spot transfer. sig is the 65-byte compact
-// signature [R(32) || S(32) || V(1)] with V = 27 or 28.
-func (c *rpcClient) spotSend(ctx context.Context, action spotSendAction, sig [65]byte, nonce uint64) error {
+// sendAsset broadcasts a signed spot-to-spot asset transfer. sig is the
+// 65-byte compact signature [R(32) || S(32) || V(1)] with V = 27 or 28.
+func (c *rpcClient) sendAsset(ctx context.Context, action sendAssetAction, sig [65]byte, nonce uint64) error {
 	r := "0x" + fmt.Sprintf("%064x", sig[:32])
 	s := "0x" + fmt.Sprintf("%064x", sig[32:64])
 	v := sig[64]

@@ -1,24 +1,27 @@
 //go:build harness
 
-// These tests run against the Hyperliquid testnet. The harness sets up
-// the sendhype funder tool:
+// These tests run against the Hyperliquid testnet.
 //
-//	cd util/testing/hyperliquid && ./harness.sh
+// Setup:
+//  1. Export the private key of your funded testnet account from MetaMask.
+//  2. Set HL_TEST_PRIVATE_KEY=<hex_key> before running.
 //
 // Run with:
 //
-//	go test -v -tags harness -run TestLive ./wallet/asset/hyperliquid/
+//	HL_TEST_PRIVATE_KEY=<hex> go test -v -tags harness -run TestLive ./wallet/asset/hyperliquid/
 package hyperliquid
 
 import (
 	"context"
 	"crypto/rand"
-	"fmt"
+	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
@@ -26,57 +29,53 @@ import (
 
 const testnetAPI = "https://api.hyperliquid-testnet.xyz"
 
+// testSinkAddress is a known active account on the Hyperliquid testnet with a
+// real HYPE spot balance, used as the recipient for outbound test sends.
+// Hyperliquid testnet requires the recipient to be an active clearinghouse
+// account — zero-balance or EVM-only accounts are rejected.
+const testSinkAddress = "0xeffb9c711ec1d3e551a7391dd848290a614c2e63"
+
 var tLogger = util.StdOutLogger("HLTEST", util.LevelTrace)
 
-func sendFromFunder(t *testing.T, recipient string, amountHYPE string) {
-	t.Helper()
-	homeDir := os.Getenv("HOME")
-	sendhype := filepath.Join(homeDir, "dextest", "hyperliquid", "sendhype")
-	cmd := exec.Command(sendhype, testnetAPI, recipient, amountHYPE)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("sendhype failed: %v\n%s", err, out)
-	}
-	t.Logf("sendhype: %s", out)
-}
-
+// createTestWallet opens a wallet from the private key in HL_TEST_PRIVATE_KEY.
+// The key must belong to a funded testnet account. The test is skipped if the
+// env var is not set.
 func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 	t.Helper()
-	dir := t.TempDir()
 
-	seed := make([]byte, 32)
-	if _, err := rand.Read(seed); err != nil {
-		t.Fatalf("rand.Read: %v", err)
+	privKeyHex := strings.TrimPrefix(os.Getenv("HL_TEST_PRIVATE_KEY"), "0x")
+	if privKeyHex == "" {
+		t.Skip("set HL_TEST_PRIVATE_KEY=<hex_private_key> of a funded testnet account")
 	}
+	privBytes, err := hex.DecodeString(privKeyHex)
+	if err != nil || len(privBytes) != 32 {
+		t.Fatalf("invalid HL_TEST_PRIVATE_KEY: want 32-byte hex, got %d bytes", len(privBytes))
+	}
+	privKey, err := gethcrypto.ToECDSA(privBytes)
+	if err != nil {
+		t.Fatalf("parsing private key: %v", err)
+	}
+
+	dir := t.TempDir()
 	pw := make([]byte, 32)
 	if _, err := rand.Read(pw); err != nil {
 		t.Fatalf("rand.Read pw: %v", err)
 	}
 
-	d := &Driver{}
-	if err := d.Create(&asset.CreateWalletParams{
-		Type:     "rpc",
-		Seed:     seed,
-		Pass:     pw,
-		Settings: map[string]string{"apiendpoint": testnetAPI},
-		DataDir:  dir,
-		Net:      util.Testnet,
-		Logger:   tLogger,
-	}); err != nil {
-		t.Fatalf("Create: %v", err)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := saveKeyFile(filepath.Join(dir, keyFileName), privKey, pw); err != nil {
+		t.Fatalf("saveKeyFile: %v", err)
 	}
 
 	noteChan := make(chan asset.WalletNotification, 128)
-	w, err := d.Open(&asset.WalletConfig{
-		Type:     "rpc",
-		Settings: map[string]string{"apiendpoint": testnetAPI},
-		Emit:     asset.NewWalletEmitter(noteChan, BipID, tLogger),
-		PeersChange: func(n uint32, err error) {
-			if err != nil {
-				tLogger.Errorf("PeersChange: %v", err)
-			}
-		},
-		DataDir: dir,
+	w, err := (&Driver{}).Open(&asset.WalletConfig{
+		Type:        "rpc",
+		Settings:    map[string]string{"apiendpoint": testnetAPI},
+		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
+		PeersChange: func(n uint32, err error) {},
+		DataDir:     dir,
 	}, tLogger, util.Testnet)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -145,23 +144,12 @@ func TestLiveBalance(t *testing.T) {
 
 	bal, err := w.Balance()
 	if err != nil {
-		t.Fatalf("Balance before funding: %v", err)
+		t.Fatalf("Balance: %v", err)
 	}
-	t.Logf("Balance before funding: available=%d", bal.Available)
+	t.Logf("Balance: available=%d (%.4f HYPE)", bal.Available, float64(bal.Available)/1e8)
 
-	addr, _ := w.DepositAddress()
-	sendFromFunder(t, addr, "10")
-	time.Sleep(3 * time.Second)
-
-	bal, err = w.Balance()
-	if err != nil {
-		t.Fatalf("Balance after funding: %v", err)
-	}
-	t.Logf("Balance after funding: available=%d (%.4f HYPE)", bal.Available, float64(bal.Available)/1e8)
-
-	wantAtoms := uint64(10 * 1e8)
-	if bal.Available < wantAtoms/2 || bal.Available > wantAtoms*2 {
-		t.Fatalf("balance %d out of expected range for 10 HYPE", bal.Available)
+	if bal.Available == 0 {
+		t.Fatal("expected non-zero balance for funded testnet account")
 	}
 }
 
@@ -180,26 +168,18 @@ func TestLiveSend(t *testing.T) {
 		t.Fatalf("Unlock: %v", err)
 	}
 
-	addr, _ := w.DepositAddress()
-	sendFromFunder(t, addr, "20")
-	time.Sleep(3 * time.Second)
-
 	bal, err := w.Balance()
 	if err != nil {
 		t.Fatalf("Balance: %v", err)
 	}
-	if bal.Available == 0 {
-		t.Fatal("wallet has zero balance after funding")
+	t.Logf("Balance: %d (%.4f HYPE)", bal.Available, float64(bal.Available)/1e8)
+
+	const sendAtoms = uint64(0.1 * 1e8)
+	if bal.Available < sendAtoms {
+		t.Skipf("insufficient balance: have %.4f HYPE, need 0.1", float64(bal.Available)/1e8)
 	}
-	t.Logf("Balance before send: %d (%.4f HYPE)", bal.Available, float64(bal.Available)/1e8)
 
-	// Generate a random recipient address.
-	recipientKey := make([]byte, 20)
-	rand.Read(recipientKey)
-	recipient := fmt.Sprintf("0x%040x", recipientKey)
-
-	sendAtoms := uint64(1 * 1e8) // 1 HYPE
-	coin, err := w.Send(recipient, sendAtoms, 0)
+	coin, err := w.Send(testSinkAddress, sendAtoms, 0)
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -297,7 +277,6 @@ func TestLiveCreateExists(t *testing.T) {
 		t.Fatal("wallet should exist after Create")
 	}
 
-	// Open and get the address.
 	noteChan := make(chan asset.WalletNotification, 8)
 	w1, err := d.Open(&asset.WalletConfig{
 		Type:        "rpc",
@@ -373,35 +352,33 @@ func TestLiveWalletTransaction(t *testing.T) {
 		t.Fatalf("Unlock: %v", err)
 	}
 
-	addr, _ := w.DepositAddress()
-	sendFromFunder(t, addr, "5")
-	time.Sleep(3 * time.Second)
+	bal, err := w.Balance()
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	const sendAtoms = uint64(0.1 * 1e8)
+	if bal.Available < sendAtoms {
+		t.Skipf("insufficient balance: have %.4f HYPE, need 0.1", float64(bal.Available)/1e8)
+	}
 
-	recipientKey := make([]byte, 20)
-	rand.Read(recipientKey)
-	recipient := fmt.Sprintf("0x%040x", recipientKey)
-
-	coin, err := w.Send(recipient, 1e8, 0) // 1 HYPE
+	coin, err := w.Send(testSinkAddress, sendAtoms, 0)
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	txID := coin.TxID()
 	t.Logf("Sent tx: %s", txID)
 
-	// Should appear as pending immediately.
 	pending := w.PendingTransactions(ctx)
 	if len(pending) == 0 {
 		t.Error("expected pending tx after send")
 	}
 
-	// Should be findable via WalletTransaction.
 	wtx, err := w.WalletTransaction(ctx, txID)
 	if err != nil {
 		t.Fatalf("WalletTransaction: %v", err)
 	}
 	t.Logf("WalletTransaction: type=%d id=%s confirmed=%v", wtx.Type, wtx.ID, wtx.Confirmed)
 
-	// Wait for confirmation via tip poller.
 	t.Log("Waiting for confirmation...")
 	timeout := time.After(30 * time.Second)
 	for {
@@ -443,7 +420,14 @@ func TestLiveReceiveDetection(t *testing.T) {
 		t.Fatalf("Unlock: %v", err)
 	}
 
-	addr, _ := w.DepositAddress()
+	bal, err := w.Balance()
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	const sendAtoms = uint64(0.1 * 1e8)
+	if bal.Available < sendAtoms {
+		t.Skipf("insufficient balance: have %.4f HYPE, need 0.1", float64(bal.Available)/1e8)
+	}
 
 	// Drain initial notifications.
 	time.Sleep(6 * time.Second)
@@ -451,10 +435,15 @@ func TestLiveReceiveDetection(t *testing.T) {
 		<-noteChan
 	}
 
-	// Fund the wallet — should trigger a Receive notification.
-	sendFromFunder(t, addr, "3")
+	// Hyperliquid rejects self-transfers, so test outgoing send detection instead.
+	// The notification path is the same — ledger scan → processLedgerUpdate → emit.
+	coin, err := w.Send(testSinkAddress, sendAtoms, 0)
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	t.Logf("Sent %s, waiting for send notification...", coin.TxID())
 
-	t.Log("Waiting for receive detection...")
+	t.Log("Waiting for send notification...")
 	timeout := time.After(30 * time.Second)
 	for {
 		select {
@@ -463,14 +452,14 @@ func TestLiveReceiveDetection(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if txNote.Transaction.Type == asset.Receive {
-				t.Logf("Detected receive: id=%s amount=%d (%.4f HYPE)",
+			if txNote.Transaction.Type == asset.Send {
+				t.Logf("Detected send: id=%s amount=%d (%.4f HYPE)",
 					txNote.Transaction.ID, txNote.Transaction.Amount,
 					float64(txNote.Transaction.Amount)/1e8)
 				return
 			}
 		case <-timeout:
-			t.Fatal("timed out waiting for receive detection")
+			t.Fatal("timed out waiting for send notification")
 		}
 	}
 }

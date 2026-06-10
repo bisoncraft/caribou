@@ -36,14 +36,12 @@ var (
 	DefaultAPIEndpoints = map[util.Network]string{
 		util.Mainnet: "https://api.hyperliquid.xyz",
 		util.Testnet: "https://api.hyperliquid-testnet.xyz",
-		util.Simnet:  "https://api.hyperliquid-testnet.xyz",
 	}
 
 	// DefaultWSEndpoints maps network to the Hyperliquid WebSocket URL.
 	DefaultWSEndpoints = map[util.Network]string{
 		util.Mainnet: "wss://api.hyperliquid.xyz/ws",
 		util.Testnet: "wss://api.hyperliquid-testnet.xyz/ws",
-		util.Simnet:  "wss://api.hyperliquid-testnet.xyz/ws",
 	}
 
 	// eip712ChainNames maps network to the hyperliquidChain string used in
@@ -51,7 +49,6 @@ var (
 	eip712ChainNames = map[util.Network]string{
 		util.Mainnet: "Mainnet",
 		util.Testnet: "Testnet",
-		util.Simnet:  "Testnet",
 	}
 
 	// eip712ChainID is the chain ID in the EIP-712 domain separator.

@@ -385,17 +385,20 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 	amtStr := atomsToHYPE(value)
 	chainName := eip712ChainNames[w.net]
 
-	action := spotSendAction{
-		Type:             "spotSend",
+	action := sendAssetAction{
+		Type:             "sendAsset",
 		HyperliquidChain: chainName,
 		SignatureChainID: fmt.Sprintf("0x%x", eip712ChainID),
 		Destination:      address,
+		SourceDex:        "spot",
+		DestinationDex:   "spot",
 		Token:            w.hypeTokenID,
 		Amount:           amtStr,
-		Time:             nonce,
+		FromSubAccount:   "",
+		Nonce:            nonce,
 	}
 
-	hash := spotSendEIP712Hash(w.net, address, w.hypeTokenID, amtStr, nonce)
+	hash := sendAssetEIP712Hash(w.net, address, "spot", "spot", w.hypeTokenID, amtStr, "", nonce)
 	sig, err := signHash(priv, hash)
 	if err != nil {
 		return nil, fmt.Errorf("signing action: %w", err)
@@ -427,7 +430,7 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 		}
 	}
 
-	if err := w.rpc.spotSend(context.Background(), action, sig, nonce); err != nil {
+	if err := w.rpc.sendAsset(context.Background(), action, sig, nonce); err != nil {
 		// Only remove the pending record on an explicit server rejection. For
 		// transport errors (network drop, timeout) the tx may have landed, so
 		// we leave the record for scanLedger to resolve.
@@ -678,12 +681,12 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
 		return
 	}
 
-	if u.Delta.Coin != "HYPE" {
+	if u.Delta.Token != "HYPE" {
 		return
 	}
 
 	switch u.Delta.Type {
-	case "spotTransfer", "transfer", "deposit", "internalTransfer":
+	case "send", "spotTransfer", "transfer", "deposit", "internalTransfer":
 		w.handleTransferUpdate(u)
 	}
 }
@@ -1032,15 +1035,14 @@ func pubKeyToAddress(compressedPub []byte) string {
 // init. All inputs (name, version, chainId, verifyingContract) are constants.
 var eip712Domain = eip712DomainHash()
 
-// spotSendTypeHashBytes is the keccak256 of the SpotSend type string, also a
-// constant that would otherwise be recomputed on every send.
-var spotSendTypeHashBytes = gethcrypto.Keccak256([]byte(
-	"SpotSend(string hyperliquidChain,string destination,string token,string amount,uint64 time)",
+// sendAssetTypeHashBytes is the keccak256 of the SendAsset EIP-712 type string.
+var sendAssetTypeHashBytes = gethcrypto.Keccak256([]byte(
+	"HyperliquidTransaction:SendAsset(string hyperliquidChain,string destination,string sourceDex,string destinationDex,string token,string amount,string fromSubAccount,uint64 nonce)",
 ))
 
-// spotSendEIP712Hash computes the EIP-712 hash for a SpotSend action.
-func spotSendEIP712Hash(network util.Network, destination, token, amount string, nonce uint64) []byte {
-	messageHash := spotSendMessageHash(network, destination, token, amount, nonce)
+// sendAssetEIP712Hash computes the EIP-712 hash for a SendAsset action.
+func sendAssetEIP712Hash(network util.Network, destination, sourceDex, destinationDex, token, amount, fromSubAccount string, nonce uint64) []byte {
+	messageHash := sendAssetMessageHash(network, destination, sourceDex, destinationDex, token, amount, fromSubAccount, nonce)
 	input := make([]byte, 0, 2+32+32)
 	input = append(input, 0x19, 0x01)
 	input = append(input, eip712Domain...)
@@ -1066,17 +1068,20 @@ func eip712DomainHash() []byte {
 	return gethcrypto.Keccak256(encoded)
 }
 
-func spotSendMessageHash(network util.Network, destination, token, amount string, nonce uint64) []byte {
+func sendAssetMessageHash(network util.Network, destination, sourceDex, destinationDex, token, amount, fromSubAccount string, nonce uint64) []byte {
 	chainName := eip712ChainNames[network]
 	nonceBytes := make([]byte, 32)
 	binary.BigEndian.PutUint64(nonceBytes[24:], nonce)
 
-	encoded := make([]byte, 0, 6*32)
-	encoded = append(encoded, spotSendTypeHashBytes...)
+	encoded := make([]byte, 0, 9*32)
+	encoded = append(encoded, sendAssetTypeHashBytes...)
 	encoded = append(encoded, gethcrypto.Keccak256([]byte(chainName))...)
 	encoded = append(encoded, gethcrypto.Keccak256([]byte(destination))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(sourceDex))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(destinationDex))...)
 	encoded = append(encoded, gethcrypto.Keccak256([]byte(token))...)
 	encoded = append(encoded, gethcrypto.Keccak256([]byte(amount))...)
+	encoded = append(encoded, gethcrypto.Keccak256([]byte(fromSubAccount))...)
 	encoded = append(encoded, nonceBytes...)
 
 	return gethcrypto.Keccak256(encoded)

@@ -9,7 +9,7 @@
 set -e
 
 API_URL="https://api.hyperliquid-testnet.xyz"
-NODES_ROOT=~/dextest/hyperliquid
+NODES_ROOT=~/dextest/hyperliquid_testnet
 
 if [ "$1" = "stop" ]; then
   echo "Nothing to stop (testnet harness requires no local process)."
@@ -32,7 +32,7 @@ HARNESS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${HARNESS_DIR}/../../.." && pwd)"
 
 echo "Building sendhype tool..."
-go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/sendhype" ./util/testing/hyperliquid/sendhype/
+go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/sendhype" ./util/testing/hyperliquid_testnet/sendhype/
 
 cat > "${NODES_ROOT}/info.txt" <<EOF
 Hyperliquid Testnet Harness

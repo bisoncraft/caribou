@@ -502,21 +502,21 @@ func TestEIP712DomainHashStable(t *testing.T) {
 	}
 }
 
-func TestSpotSendEIP712HashDeterministic(t *testing.T) {
-	h1 := spotSendEIP712Hash(util.Mainnet, "0xabc", "HYPE:0x1234", "1.5", 1700000000000)
-	h2 := spotSendEIP712Hash(util.Mainnet, "0xabc", "HYPE:0x1234", "1.5", 1700000000000)
+func TestSendAssetEIP712HashDeterministic(t *testing.T) {
+	h1 := sendAssetEIP712Hash(util.Mainnet, "0xabc", "spot", "spot", "HYPE:0x1234", "1.5", "", 1700000000000)
+	h2 := sendAssetEIP712Hash(util.Mainnet, "0xabc", "spot", "spot", "HYPE:0x1234", "1.5", "", 1700000000000)
 	if !bytes.Equal(h1, h2) {
-		t.Error("spotSendEIP712Hash is not deterministic")
+		t.Error("sendAssetEIP712Hash is not deterministic")
 	}
 
 	// Different nonce → different hash.
-	h3 := spotSendEIP712Hash(util.Mainnet, "0xabc", "HYPE:0x1234", "1.5", 1700000000001)
+	h3 := sendAssetEIP712Hash(util.Mainnet, "0xabc", "spot", "spot", "HYPE:0x1234", "1.5", "", 1700000000001)
 	if bytes.Equal(h1, h3) {
 		t.Error("different nonce should produce different hash")
 	}
 
 	// Mainnet vs testnet → different hash.
-	h4 := spotSendEIP712Hash(util.Testnet, "0xabc", "HYPE:0x1234", "1.5", 1700000000000)
+	h4 := sendAssetEIP712Hash(util.Testnet, "0xabc", "spot", "spot", "HYPE:0x1234", "1.5", "", 1700000000000)
 	if bytes.Equal(h1, h4) {
 		t.Error("mainnet and testnet should produce different hashes")
 	}
@@ -532,7 +532,7 @@ func TestSignAndVerify(t *testing.T) {
 	}
 	defer zero()
 
-	hash := spotSendEIP712Hash(util.Mainnet, "0xrecipient", "HYPE:0x1234", "1.0", 1700000000000)
+	hash := sendAssetEIP712Hash(util.Mainnet, "0xrecipient", "spot", "spot", "HYPE:0x1234", "1.0", "", 1700000000000)
 
 	sig, err := signHash(priv, hash)
 	if err != nil {
@@ -680,7 +680,7 @@ func TestRPCLedgerUpdates(t *testing.T) {
 				Hash: "0x" + fmt.Sprintf("%064x", 1),
 				Delta: ledgerDelta{
 					Type:        "spotTransfer",
-					Coin:        "HYPE",
+					Token:       "HYPE",
 					Amount:      "5.0",
 					User:        "0xsender",
 					Destination: "0xrecipient",
@@ -720,24 +720,27 @@ func TestRPCSpotSend(t *testing.T) {
 	c, srv := newTestRPCClient(t, handler)
 	defer srv.Close()
 
-	action := spotSendAction{
-		Type:             "spotSend",
+	action := sendAssetAction{
+		Type:             "sendAsset",
 		HyperliquidChain: "Testnet",
 		SignatureChainID: "0x3e6",
 		Destination:      "0xrecipient",
+		SourceDex:        "spot",
+		DestinationDex:   "spot",
 		Token:            "HYPE:0x1234",
 		Amount:           "1.0",
-		Time:             1700000000000,
+		FromSubAccount:   "",
+		Nonce:            1700000000000,
 	}
 	var sig [65]byte
 	sig[64] = 28
 
-	if err := c.spotSend(context.Background(), action, sig, 1700000000000); err != nil {
-		t.Fatalf("spotSend error: %v", err)
+	if err := c.sendAsset(context.Background(), action, sig, 1700000000000); err != nil {
+		t.Fatalf("sendAsset error: %v", err)
 	}
 }
 
-func TestRPCSpotSendError(t *testing.T) {
+func TestRPCSendAssetError(t *testing.T) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		resp := exchangeResponse{
 			Status:   "err",
@@ -748,9 +751,9 @@ func TestRPCSpotSendError(t *testing.T) {
 	c, srv := newTestRPCClient(t, handler)
 	defer srv.Close()
 
-	action := spotSendAction{Type: "spotSend"}
+	action := sendAssetAction{Type: "sendAsset"}
 	var sig [65]byte
-	err := c.spotSend(context.Background(), action, sig, 123)
+	err := c.sendAsset(context.Background(), action, sig, 123)
 	if err == nil {
 		t.Fatal("expected error for err status")
 	}
@@ -1142,7 +1145,7 @@ func newTestWalletWithDB(t *testing.T) *HyperWallet {
 // --- send ordering ---
 
 // newSendTestWallet returns a wallet wired to a mock exchange server.
-// The handler governs whether spotSend succeeds or fails.
+// The handler governs whether sendAsset succeeds or fails.
 func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWallet, *httptest.Server) {
 	t.Helper()
 
@@ -1321,7 +1324,7 @@ func TestExpireOldPending(t *testing.T) {
 		Hash: "0x" + fmt.Sprintf("%064x", 1),
 		Delta: ledgerDelta{
 			Type:        "spotTransfer",
-			Coin:        "HYPE",
+			Token:       "HYPE",
 			Amount:      "1",
 			User:        w.address,
 			Destination: differentDest,
@@ -1366,7 +1369,7 @@ func TestFreshPendingNotExpired(t *testing.T) {
 		Time: nonce + 100,
 		Hash: "0x" + fmt.Sprintf("%064x", 2),
 		Delta: ledgerDelta{
-			Type: "spotTransfer", Coin: "HYPE", Amount: "1",
+			Type: "spotTransfer", Token: "HYPE", Amount: "1",
 			User: w.address, Destination: differentDest,
 		},
 	}, 1e8)
@@ -1410,7 +1413,7 @@ func TestConfirmPendingSend(t *testing.T) {
 		Hash: realHash,
 		Delta: ledgerDelta{
 			Type:        "spotTransfer",
-			Coin:        "HYPE",
+			Token:       "HYPE",
 			Amount:      "5",
 			User:        w.address,
 			Destination: recipient,
@@ -1472,7 +1475,7 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 		Time: nonce + 100,
 		Hash: "0x" + fmt.Sprintf("%064x", 99),
 		Delta: ledgerDelta{
-			Type: "spotTransfer", Coin: "HYPE",
+			Type: "spotTransfer", Token: "HYPE",
 			Amount: "99", User: w.address, Destination: recipient,
 		},
 	}, 99e8)
@@ -1517,7 +1520,7 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 		Hash: realHash,
 		Delta: ledgerDelta{
 			Type:        "spotTransfer",
-			Coin:        "HYPE",
+			Token:       "HYPE",
 			Amount:      "5",
 			User:        w.address,
 			Destination: recipientB,
@@ -1588,7 +1591,7 @@ func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
 		Hash: realHash,
 		Delta: ledgerDelta{
 			Type:        "spotTransfer",
-			Coin:        "HYPE",
+			Token:       "HYPE",
 			Amount:      "5",
 			User:        w.address,
 			Destination: recipient,
@@ -1674,7 +1677,7 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 		Hash: realHash,
 		Delta: ledgerDelta{
 			Type:        "spotTransfer",
-			Coin:        "HYPE",
+			Token:       "HYPE",
 			Amount:      "5",
 			User:        w.address,
 			Destination: recipient,
@@ -1709,7 +1712,7 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 		Hash: realHash,
 		Delta: ledgerDelta{
 			Type:        "spotTransfer",
-			Coin:        "HYPE",
+			Token:       "HYPE",
 			Amount:      "3.5",
 			User:        sender,
 			Destination: w.address,
@@ -1752,7 +1755,7 @@ func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 		Time: 1700000005000,
 		Hash: realHash,
 		Delta: ledgerDelta{
-			Type: "spotTransfer", Coin: "HYPE", Amount: "1",
+			Type: "spotTransfer", Token: "HYPE", Amount: "1",
 			User: sender, Destination: w.address,
 		},
 	}
@@ -1776,7 +1779,7 @@ func TestProcessLedgerUpdateNonHYPE(t *testing.T) {
 		Time: 1700000005000,
 		Hash: "0x" + fmt.Sprintf("%064x", 1),
 		Delta: ledgerDelta{
-			Type: "spotTransfer", Coin: "USDC", Amount: "100",
+			Type: "spotTransfer", Token: "USDC", Amount: "100",
 			User: "0xsender", Destination: w.address,
 		},
 	}
@@ -1834,7 +1837,7 @@ func TestScanLedgerAdvancesWatermark(t *testing.T) {
 				Hash: hash1,
 				Delta: ledgerDelta{
 					Type:        "spotTransfer",
-					Coin:        "HYPE",
+					Token:       "HYPE",
 					Amount:      "1",
 					User:        sender,
 					Destination: "0xabcdef1234567890abcdef1234567890abcdef12",
@@ -1845,7 +1848,7 @@ func TestScanLedgerAdvancesWatermark(t *testing.T) {
 				Hash: hash2,
 				Delta: ledgerDelta{
 					Type:        "spotTransfer",
-					Coin:        "HYPE",
+					Token:       "HYPE",
 					Amount:      "2",
 					User:        sender,
 					Destination: "0xabcdef1234567890abcdef1234567890abcdef12",
@@ -2135,7 +2138,7 @@ func TestWSClientReceivesEvent(t *testing.T) {
 			Time: 1700000001000,
 			Hash: hash,
 			Delta: ledgerDelta{
-				Type: "spotTransfer", Coin: "HYPE", Amount: "1",
+				Type: "spotTransfer", Token: "HYPE", Amount: "1",
 				User:        "0xsender",
 				Destination: "0xrecipient",
 			},
@@ -2179,7 +2182,7 @@ func TestWSClientSnapshotProcessed(t *testing.T) {
 			Time: 1700000002000,
 			Hash: hash,
 			Delta: ledgerDelta{
-				Type: "spotTransfer", Coin: "HYPE", Amount: "2",
+				Type: "spotTransfer", Token: "HYPE", Amount: "2",
 				User: "0xa", Destination: "0xb",
 			},
 		}}, true) // isSnapshot = true
@@ -2220,7 +2223,7 @@ func TestWSClientOnLiveCalled(t *testing.T) {
 			Time: 1700000003000,
 			Hash: "0x" + fmt.Sprintf("%064x", 3),
 			Delta: ledgerDelta{
-				Type: "spotTransfer", Coin: "HYPE", Amount: "1",
+				Type: "spotTransfer", Token: "HYPE", Amount: "1",
 				User: "0xa", Destination: "0xb",
 			},
 		}}, false)
@@ -2261,7 +2264,7 @@ func TestWSClientIgnoresOtherChannels(t *testing.T) {
 			Time: 1700000004000,
 			Hash: "0x" + fmt.Sprintf("%064x", 4),
 			Delta: ledgerDelta{
-				Type: "spotTransfer", Coin: "HYPE", Amount: "1",
+				Type: "spotTransfer", Token: "HYPE", Amount: "1",
 				User: "0xa", Destination: "0xb",
 			},
 		}}, false)
