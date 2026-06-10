@@ -4,9 +4,10 @@
 package bnb
 
 import (
+	"errors"
 	"math/big"
+	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -63,6 +64,28 @@ func TestDriverDecodeCoinID(t *testing.T) {
 	}
 }
 
+func TestDriverOpen(t *testing.T) {
+	drv := &Driver{}
+	wallet, err := drv.Open(&asset.WalletConfig{
+		Type:     walletTypeRPC,
+		Settings: map[string]string{},
+		DataDir:  t.TempDir(),
+	}, util.Disabled, util.Testnet)
+	if err != nil {
+		t.Fatalf("Open(testnet) error: %v", err)
+	}
+	if wallet == nil {
+		t.Fatal("Open returned nil wallet")
+	}
+	info := wallet.Info()
+	if info == nil {
+		t.Fatal("wallet.Info returned nil")
+	}
+	if info.Name != WalletInfo.Name {
+		t.Fatalf("wallet.Info().Name = %q, want %q", info.Name, WalletInfo.Name)
+	}
+}
+
 func TestChainConfig(t *testing.T) {
 	cases := []struct {
 		net    util.Network
@@ -115,12 +138,82 @@ func TestNetworkCompatibilityData(t *testing.T) {
 }
 
 func TestSimnetDataDir(t *testing.T) {
+	origHomeDir := userHomeDir
+	t.Cleanup(func() {
+		userHomeDir = origHomeDir
+	})
+
+	userHomeDir = func() (string, error) {
+		return "/tmp/test-home", nil
+	}
+
 	dir, err := simnetDataDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(dir, filepath.Join("dextest", "bnb")) {
-		t.Fatalf("simnetDataDir = %q, want path ending in dextest/bnb", dir)
+	want := filepath.Join("/tmp/test-home", "dextest", "bnb")
+	if dir != want {
+		t.Fatalf("simnetDataDir = %q, want %q", dir, want)
+	}
+}
+
+func TestSimnetDataDirError(t *testing.T) {
+	origHomeDir := userHomeDir
+	t.Cleanup(func() {
+		userHomeDir = origHomeDir
+	})
+
+	userHomeDir = func() (string, error) {
+		return "", errors.New("boom")
+	}
+
+	if _, err := simnetDataDir(); err == nil {
+		t.Fatal("expected error from userHomeDir")
+	}
+}
+
+func TestNetworkCompatibilityDataSimnet(t *testing.T) {
+	origHomeDir := userHomeDir
+	origTokenAddr := simnetUSDC.Address
+	t.Cleanup(func() {
+		userHomeDir = origHomeDir
+		simnetUSDC.Address = origTokenAddr
+	})
+
+	tmp := t.TempDir()
+	userHomeDir = func() (string, error) {
+		return tmp, nil
+	}
+	simnetUSDC.Address = common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	simnetDir := filepath.Join(tmp, "dextest", "bnb")
+	if err := os.MkdirAll(simnetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error: %v", err)
+	}
+	writeFile := func(name, contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(simnetDir, name), []byte(contents), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error: %v", name, err)
+		}
+	}
+	writeFile("test_tx_hash.txt", "0x2222222222222222222222222222222222222222222222222222222222222222\n")
+	writeFile("test_block1_hash.txt", "0x3333333333333333333333333333333333333333333333333333333333333333\n")
+
+	compat, err := NetworkCompatibilityData(util.Simnet)
+	if err != nil {
+		t.Fatalf("NetworkCompatibilityData(simnet) error: %v", err)
+	}
+	if compat.Addr != common.HexToAddress("0x18d65fb8d60c1199bb1ad381be47aa692b482605") {
+		t.Fatalf("simnet Addr = %s", compat.Addr)
+	}
+	if compat.TokenAddr != simnetUSDC.Address {
+		t.Fatalf("simnet TokenAddr = %s, want %s", compat.TokenAddr, simnetUSDC.Address)
+	}
+	if compat.TxHash != common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222") {
+		t.Fatalf("simnet TxHash = %s", compat.TxHash)
+	}
+	if compat.BlockHash != common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333") {
+		t.Fatalf("simnet BlockHash = %s", compat.BlockHash)
 	}
 }
 

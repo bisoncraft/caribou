@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 
@@ -18,6 +17,8 @@ import (
 )
 
 var (
+	userHomeDir = os.UserHomeDir
+
 	mainnetCompatibilityData = eth.CompatibilityData{
 		Addr:      common.HexToAddress("0x50e7cd491fa11d54b73913b58459cad5fd66a40a"),
 		TokenAddr: common.Address{},
@@ -81,7 +82,7 @@ func simnetCompatibilityData() (eth.CompatibilityData, error) {
 	}
 
 	return eth.CompatibilityData{
-		Addr:      common.HexToAddress("18d65fb8d60c1199bb1ad381be47aa692b482605"),
+		Addr:      common.HexToAddress("0x18d65fb8d60c1199bb1ad381be47aa692b482605"),
 		TokenAddr: tokenAddr,
 		TxHash:    common.HexToHash(txHash),
 		BlockHash: common.HexToHash(blockHash),
@@ -89,11 +90,11 @@ func simnetCompatibilityData() (eth.CompatibilityData, error) {
 }
 
 func simnetDataDir() (string, error) {
-	u, err := user.Current()
+	homeDir, err := userHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("error getting current user: %w", err)
+		return "", fmt.Errorf("error getting home directory: %w", err)
 	}
-	return filepath.Join(u.HomeDir, "dextest", "bnb"), nil
+	return filepath.Join(homeDir, "dextest", "bnb"), nil
 }
 
 // ChainConfig returns the core configuration for the blockchain.
