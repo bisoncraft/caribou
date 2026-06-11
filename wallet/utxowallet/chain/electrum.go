@@ -541,10 +541,19 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 		}
 		emitted = append(emitted, h)
 	}
+	// Re-fetch under the lock and confirm it's still the same entry before
+	// committing. A subscribed entry is never deleted today (the only
+	// addrCache delete is the subscribe-failure rollback, which can't apply
+	// to an entry we're already processing), so this is defense-in-depth: if
+	// a future Unsubscribe ever removes-and-replaces an entry across the
+	// GetHistory window, we skip rather than write our stale-derived result
+	// onto a fresh entry.
 	c.addrCacheMtx.Lock()
-	entry.lastStatus = st.Status
-	entry.lastHistory = emitted
-	entry.pending = mergePendingEntries(entry.pending, deferred)
+	if e, ok := c.addrCache[st.Scripthash]; ok && e == entry {
+		entry.lastStatus = st.Status
+		entry.lastHistory = emitted
+		entry.pending = mergePendingEntries(entry.pending, deferred)
+	}
 	c.addrCacheMtx.Unlock()
 	return nil
 }

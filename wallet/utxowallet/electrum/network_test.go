@@ -235,6 +235,101 @@ func TestApplyTipNotificationShutdownEscape(t *testing.T) {
 	}
 }
 
+// TestNetworkStopNotStartedKeepsSenderChannelsOpenWhenLaunched is the
+// white-box regression for F1: once the goroutines are launched, the !started
+// Stop path (reached when watchNode calls n.Stop() after an external Stop
+// flipped started=false) must NOT close the sender channels. watchNode's
+// wg.Wait()-gated close is the sole closer; closing here could panic a parked
+// headersLoop/scripthashLoop send.
+func TestNetworkStopNotStartedKeepsSenderChannelsOpenWhenLaunched(t *testing.T) {
+	n := &Network{
+		tipChangeChan: make(chan *TipChange, 1),
+		scripthashCh:  make(chan *ScripthashStatus, 1),
+		done:          make(chan struct{}),
+	}
+	n.launched = true // goroutines were launched
+	n.started = false // ...then transitioned to stopped
+
+	n.Stop() // !started path
+
+	assertOpen := func(name string, closed bool) {
+		if closed {
+			t.Fatalf("%s was closed by the !started Stop path while launched", name)
+		}
+	}
+	select {
+	case _, ok := <-n.tipChangeChan:
+		assertOpen("tipChangeChan", !ok)
+		t.Fatal("unexpected value on tipChangeChan")
+	default:
+	}
+	select {
+	case _, ok := <-n.scripthashCh:
+		assertOpen("scripthashCh", !ok)
+		t.Fatal("unexpected value on scripthashCh")
+	default:
+	}
+	// A send must still succeed — the channel is open.
+	select {
+	case n.tipChangeChan <- &TipChange{}:
+	default:
+		t.Fatal("could not send on an open tipChangeChan")
+	}
+}
+
+// TestNetworkStopRaceParkedSenders is the F1 stress regression: with senders
+// parked on the blocking channel sends, a concurrent Stop (cancel) plus the
+// wg.Wait()-gated close must tear down without a send-on-closed panic. Run
+// under -race.
+func TestNetworkStopRaceParkedSenders(t *testing.T) {
+	for range 300 {
+		n := &Network{
+			cfg:           &Config{Chain: testChainConfig()},
+			tipChangeChan: make(chan *TipChange, 1),
+			scripthashCh:  make(chan *ScripthashStatus, 1),
+			done:          make(chan struct{}),
+		}
+		n.ctx, n.cancel = context.WithCancel(context.Background())
+		n.started, n.launched = true, true
+
+		// Two senders that park on the blocking sends (nothing drains them).
+		n.wg.Add(2)
+		go func() {
+			defer n.wg.Done()
+			for n.deliverTipChange(&TipChange{Connected: []int32{1}}) {
+			}
+		}()
+		go func() {
+			defer n.wg.Done()
+			for {
+				select {
+				case n.scripthashCh <- &ScripthashStatus{}:
+				case <-n.ctx.Done():
+					return
+				}
+			}
+		}()
+
+		// Stand-in for watchNode's child goroutine: the sole, wg.Wait()-gated
+		// closer the fix relies on.
+		go func() {
+			n.wg.Wait()
+			n.doneClosed.Do(func() {
+				close(n.tipChangeChan)
+				close(n.scripthashCh)
+				close(n.done)
+			})
+		}()
+
+		n.Stop() // started path: cancel() (nil node)
+		// A second Stop now hits the !started branch; with launched=true it
+		// must be a no-op, never racing the close against the senders.
+		go n.Stop()
+
+		<-n.done // no panic ⇒ pass
+	}
+}
+
 // TestNetworkWaitForShutdownAfterFailedStart is the regression for H2:
 // calling WaitForShutdown after Start fails must not deadlock. Previously
 // the done channel was only closed by the watchNode goroutine, which never

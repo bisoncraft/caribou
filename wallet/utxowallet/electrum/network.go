@@ -58,6 +58,14 @@ type Network struct {
 	mu      sync.RWMutex
 	node    *Node
 	started bool
+	// launched records that Start got far enough to spawn the background
+	// goroutines (including watchNode). Once set it stays set. It lets the
+	// !started Stop path tell "never started, no goroutines, safe to close
+	// the channels directly" from "started then stopped, goroutines still
+	// draining, let watchNode's wg.Wait()-gated close own it" — closing a
+	// sender channel out from under a live headersLoop/scripthashLoop send
+	// would panic.
+	launched bool
 
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -160,10 +168,12 @@ func (n *Network) Start(parent context.Context) error {
 		return failed(fmt.Errorf("electrum: initial header sync: %w", err))
 	}
 
-	// Commit: everything is up, publish the node and flip `started`.
+	// Commit: everything is up, publish the node and flip `started`. Mark
+	// launched too — from here on watchNode owns the channel close.
 	n.mu.Lock()
 	n.node = node
 	n.started = true
+	n.launched = true
 	n.mu.Unlock()
 
 	// The first subscribe payload is the current tip. If we're already at
@@ -187,14 +197,20 @@ func (n *Network) Start(parent context.Context) error {
 func (n *Network) Stop() {
 	n.mu.Lock()
 	if !n.started {
+		launched := n.launched
 		n.mu.Unlock()
-		// Never started, or already stopped. Either way ensure the
-		// done channel is closed so WaitForShutdown does not hang.
-		n.doneClosed.Do(func() {
-			close(n.tipChangeChan)
-			close(n.scripthashCh)
-			close(n.done)
-		})
+		// If the goroutines were ever launched, watchNode's child
+		// goroutine closes the channels after wg.Wait() — doing it here
+		// could close a channel out from under a live sender and panic.
+		// Only the genuinely-never-started case (no goroutines, no
+		// watchNode) closes directly; there are no senders to race.
+		if !launched {
+			n.doneClosed.Do(func() {
+				close(n.tipChangeChan)
+				close(n.scripthashCh)
+				close(n.done)
+			})
+		}
 		return
 	}
 	cancel := n.cancel
@@ -202,11 +218,16 @@ func (n *Network) Stop() {
 	n.started = false
 	n.mu.Unlock()
 
-	if node != nil {
-		node.Close()
-	}
+	// Cancel BEFORE closing the node. Senders (headersLoop/scripthashLoop)
+	// park on a blocking channel send; cancelling first makes n.ctx.Done()
+	// ready so they exit via that arm rather than racing node.Done() ->
+	// watchNode -> teardown. It also steers watchNode's own select to its
+	// ctx.Done() case, so it doesn't re-enter Stop's !started path.
 	if cancel != nil {
 		cancel()
+	}
+	if node != nil {
+		node.Close()
 	}
 }
 
