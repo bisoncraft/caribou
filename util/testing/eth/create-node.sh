@@ -15,6 +15,8 @@ NODE_DIR="${GROUP_DIR}/node"
 mkdir -p "${NODE_DIR}"
 mkdir -p "${NODE_DIR}/geth"
 
+DEV_PERIOD="${DEV_PERIOD:-10}"
+
 # Write node ctl script.
 cat > "${NODES_ROOT}/harness-ctl/${NAME}" <<EOF
 #!/usr/bin/env bash
@@ -38,4 +40,4 @@ echo "Starting simnet ${NAME} node"
 tmux send-keys -t "$TMUX_WIN_ID" "${NODES_ROOT}/harness-ctl/${NAME} " \
 	"--config ${NODE_DIR}/eth.conf --verbosity 5 --vmdebug --http --http.port " \
 	"${HTTP_PORT} --ws --ws.port ${WS_PORT} --ws.api ${WS_MODULES} " \
-	"--dev --dev.period 10 2>&1 | tee ${NODE_DIR}/${NAME}.log" C-m
+	"--dev --dev.period ${DEV_PERIOD} 2>&1 | tee ${NODE_DIR}/${NAME}.log" C-m

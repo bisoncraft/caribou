@@ -21,8 +21,8 @@ import (
 func TestDriverInfo(t *testing.T) {
 	drv := &Driver{}
 	info := drv.Info()
-	if info.Name != "BNB Smart Chain" {
-		t.Fatalf("Info.Name = %q, want %q", info.Name, "BNB Smart Chain")
+	if info.Name != "BNB" {
+		t.Fatalf("Info.Name = %q, want %q", info.Name, "BNB")
 	}
 	if info.BlockchainClass != asset.BlockchainClassEVM {
 		t.Fatalf("Info.BlockchainClass = %q, want %q", info.BlockchainClass, asset.BlockchainClassEVM)
@@ -184,7 +184,6 @@ func TestNetworkCompatibilityDataSimnet(t *testing.T) {
 	userHomeDir = func() (string, error) {
 		return tmp, nil
 	}
-	simnetUSDC.Address = common.HexToAddress("0x1111111111111111111111111111111111111111")
 
 	simnetDir := filepath.Join(tmp, "dextest", "bnb")
 	if err := os.MkdirAll(simnetDir, 0o755); err != nil {
@@ -199,22 +198,38 @@ func TestNetworkCompatibilityDataSimnet(t *testing.T) {
 	writeFile("test_tx_hash.txt", "0x2222222222222222222222222222222222222222222222222222222222222222\n")
 	writeFile("test_block1_hash.txt", "0x3333333333333333333333333333333333333333333333333333333333333333\n")
 
-	compat, err := NetworkCompatibilityData(util.Simnet)
-	if err != nil {
-		t.Fatalf("NetworkCompatibilityData(simnet) error: %v", err)
-	}
-	if compat.Addr != common.HexToAddress("0x18d65fb8d60c1199bb1ad381be47aa692b482605") {
-		t.Fatalf("simnet Addr = %s", compat.Addr)
-	}
-	if compat.TokenAddr != simnetUSDC.Address {
-		t.Fatalf("simnet TokenAddr = %s, want %s", compat.TokenAddr, simnetUSDC.Address)
-	}
-	if compat.TxHash != common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222") {
-		t.Fatalf("simnet TxHash = %s", compat.TxHash)
-	}
-	if compat.BlockHash != common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333") {
-		t.Fatalf("simnet BlockHash = %s", compat.BlockHash)
-	}
+	t.Run("in-memory token addr", func(t *testing.T) {
+		simnetUSDC.Address = common.HexToAddress("0x1111111111111111111111111111111111111111")
+		compat, err := NetworkCompatibilityData(util.Simnet)
+		if err != nil {
+			t.Fatalf("NetworkCompatibilityData(simnet) error: %v", err)
+		}
+		if compat.Addr != common.HexToAddress("0x18d65fb8d60c1199bb1ad381be47aa692b482605") {
+			t.Fatalf("simnet Addr = %s", compat.Addr)
+		}
+		if compat.TokenAddr != simnetUSDC.Address {
+			t.Fatalf("simnet TokenAddr = %s, want %s", compat.TokenAddr, simnetUSDC.Address)
+		}
+		if compat.TxHash != common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222") {
+			t.Fatalf("simnet TxHash = %s", compat.TxHash)
+		}
+		if compat.BlockHash != common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333") {
+			t.Fatalf("simnet BlockHash = %s", compat.BlockHash)
+		}
+	})
+
+	t.Run("token addr from file", func(t *testing.T) {
+		simnetUSDC.Address = common.Address{}
+		fileAddr := "0x4444444444444444444444444444444444444444"
+		writeFile("test_usdc_contract_address.txt", fileAddr+"\n")
+		compat, err := NetworkCompatibilityData(util.Simnet)
+		if err != nil {
+			t.Fatalf("NetworkCompatibilityData(simnet) error: %v", err)
+		}
+		if compat.TokenAddr != common.HexToAddress(fileAddr) {
+			t.Fatalf("simnet TokenAddr = %s, want %s", compat.TokenAddr.Hex(), fileAddr)
+		}
+	})
 }
 
 func TestChainIDs(t *testing.T) {
@@ -266,6 +281,29 @@ func TestWalletInfoRegistration(t *testing.T) {
 	}
 	if reg.Tokens != nil {
 		t.Fatal("native BNB asset should not register tokens in the initial implementation")
+	}
+}
+
+func TestDriverCreate(t *testing.T) {
+	drv := &Driver{}
+	tmp := t.TempDir()
+	err := drv.Create(&asset.CreateWalletParams{
+		Type:     walletTypeRPC,
+		Seed:     encode.RandomBytes(32),
+		Pass:     encode.RandomBytes(32),
+		Settings: map[string]string{},
+		DataDir:  tmp,
+		Net:      util.Testnet,
+	})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	exists, err := drv.Exists(walletTypeRPC, tmp, nil, util.Testnet)
+	if err != nil {
+		t.Fatalf("Exists error: %v", err)
+	}
+	if !exists {
+		t.Fatal("wallet should exist after Create")
 	}
 }
 

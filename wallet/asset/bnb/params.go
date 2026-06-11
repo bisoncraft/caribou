@@ -31,6 +31,8 @@ var (
 		FeeRateDenom: "gas",
 	}
 
+	// v1Gases has zero gas estimates because no swap contracts are deployed for
+	// BNB. Populate these when BNB tokens with swap support are added.
 	v1Gases = &dexeth.Gases{}
 
 	VersionedGases = map[uint32]*dexeth.Gases{

@@ -37,6 +37,8 @@ func parseCoinpapNameSymbol(name, symbol string) (string, string) {
 	switch symbol {
 	case "usdc":
 		name = "usd-coin"
+	case "bnb":
+		name = "binance-coin"
 	case "polygon":
 		symbol = "matic"
 		name = "polygon"

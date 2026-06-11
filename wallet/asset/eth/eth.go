@@ -120,15 +120,9 @@ const (
 	// txAgeOut is the amount of time after which we forego any tx
 	// synchronization efforts for unconfirmed pending txs.
 	txAgeOut = 2 * time.Hour
-	// stateUpdateTick is the minimum amount of time between checks for
-	// new block and updating of pending txs, counter-party redemptions and
-	// approval txs.
-	// HTTP RPC clients meter tip header calls to minimum 10 seconds.
-	// WebSockets will stay up-to-date, so can expect new blocks often.
-	// A shorter blockTicker would be too much for e.g. Polygon where the block
-	// time is 2 or 3 seconds. We'd be doing a ton of calls for pending tx
-	// updates.
-	stateUpdateTick = time.Second * 5
+	// chainOpTick is used by explicit chain wait/recheck loops that are not
+	// part of the steady-state tip monitoring path.
+	chainOpTick = time.Second * 2
 	// maxUnindexedTxs is the number of pending txs we will allow to be
 	// unverified on-chain before we halt broadcasting of new txs.
 	maxUnindexedTxs = 10
@@ -1224,7 +1218,7 @@ func nonceIsSane(pendingTxs []*extendedWalletTx, pendingNonceAt *big.Int) error 
 		lastNonce = nonce
 		age := pendingTx.age()
 		// Only allow a handful of txs that we haven't been seen on-chain yet.
-		if age > stateUpdateTick*10 {
+		if age > chainOpTick*10 {
 			numNotIndexed++
 		}
 		if age >= txAgeOut {
@@ -2804,34 +2798,52 @@ func (eth *ETHWallet) monitorPeers(ctx context.Context) {
 
 // monitorBlocks pings for new blocks and runs the tipChange callback function
 // when the block changes. New blocks are also scanned for potential contract
-// redeems.
+// redeems. The ticker is the primary driver; when a WebSocket subscription is
+// active, newHeadCh delivers headers immediately without waiting for the tick.
 func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
-	ticker := time.NewTicker(stateUpdateTick)
+	ticker := time.NewTicker(chainOpTick)
 	defer ticker.Stop()
+
+	// WebSocket subscriptions deliver headers directly. Selecting on this
+	// channel gives instant tip-change detection; the ticker is the fallback
+	// for HTTP-only connections and a safety net if WS drops.
+	var newHeadCh <-chan *types.Header
+	if m, ok := eth.node.(*multiRPCClient); ok {
+		newHeadCh = m.newHeadCh
+	}
+
+	checkNewBlocks := func() {
+		innerCtx, cancel := context.WithTimeout(ctx, onChainDataFetchTimeout)
+		defer cancel()
+		bestHdr, err := eth.node.bestHeader(innerCtx)
+		if err != nil {
+			eth.log.Errorf("failed to get best header: %v", err)
+			return
+		}
+		eth.applyTipChange(bestHdr)
+	}
+
 	for {
 		select {
+		case hdr := <-newHeadCh:
+			if hdr != nil {
+				eth.applyTipChange(hdr)
+			}
 		case <-ticker.C:
-			eth.checkForNewBlocks(ctx)
+			checkNewBlocks()
 		case <-ctx.Done():
 			return
 		}
-		if ctx.Err() != nil { // shutdown during last check, disallow chance of another tick
+		if ctx.Err() != nil {
 			return
 		}
 	}
 }
 
-// checkForNewBlocks checks for new blocks. When a tip change is detected,
-// pending txs and approvals are rechecked and a TipChange notification is
-// emitted to each connected wallet.
-func (eth *ETHWallet) checkForNewBlocks(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, onChainDataFetchTimeout)
-	defer cancel()
-	bestHdr, err := eth.node.bestHeader(ctx)
-	if err != nil {
-		eth.log.Errorf("failed to get best hash: %v", err)
-		return
-	}
+// applyTipChange updates the current tip if hdr represents a new best header.
+// When a tip change is detected, pending txs and approvals are rechecked and a
+// TipChange notification is emitted to each connected wallet.
+func (eth *ETHWallet) applyTipChange(bestHdr *types.Header) {
 	bestHash := bestHdr.Hash()
 	// This method is called frequently. Don't hold write lock
 	// unless tip has changed.
@@ -4281,7 +4293,7 @@ func waitForConfirmation(ctx context.Context, desc string, cl ethFetcher, txHash
 	if err != nil {
 		return fmt.Errorf("error getting best header: %w", err)
 	}
-	ticker := time.NewTicker(stateUpdateTick)
+	ticker := time.NewTicker(chainOpTick)
 	lastReport := time.Now()
 	defer ticker.Stop()
 	for {

@@ -45,7 +45,7 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "BNB Smart Chain",
+		Name:              "BNB",
 		SupportedVersions: []uint32{1},
 		UnitInfo:          UnitInfo,
 		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
@@ -72,7 +72,7 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 	var defaultProviders []string
 	switch net {
 	case util.Simnet:
-		defaultProviders = []string{"http://127.0.0.1:48556"}
+		defaultProviders = []string{"ws://127.0.0.1:48557"}
 	case util.Testnet:
 		defaultProviders = []string{
 			"https://bsc-testnet-dataseed.bnbchain.org",

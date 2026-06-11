@@ -700,15 +700,14 @@ func TestTakeAction(t *testing.T) {
 
 }
 
-func TestCheckForNewBlocks(t *testing.T) {
+func TestApplyTipChange(t *testing.T) {
 	t.Parallel()
 	header0 := &types.Header{Number: new(big.Int)}
 	header1 := &types.Header{Number: big.NewInt(1)}
 	tests := []struct {
-		name              string
-		hashErr, blockErr error
-		bestHeader        *types.Header
-		hasTipChange      bool
+		name         string
+		bestHeader   *types.Header
+		hasTipChange bool
 	}{{
 		name:         "ok",
 		bestHeader:   header1,
@@ -725,7 +724,6 @@ func TestCheckForNewBlocks(t *testing.T) {
 		emit := asset.NewWalletEmitter(notes, BipID, tLogger)
 
 		node.bestHdr = test.bestHeader
-		node.bestHdrErr = test.blockErr
 		w := &ETHWallet{
 			assetWallet: &assetWallet{
 				baseWallet: &baseWallet{
@@ -746,7 +744,7 @@ func TestCheckForNewBlocks(t *testing.T) {
 		}
 		w.wallets = map[uint32]*assetWallet{BipID: w.assetWallet}
 		w.assetWallet.connected.Store(true)
-		w.checkForNewBlocks(ctx)
+		w.applyTipChange(test.bestHeader)
 
 		if test.hasTipChange {
 		out:

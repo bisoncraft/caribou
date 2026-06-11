@@ -276,7 +276,7 @@ func (p *provider) refreshHeader(ctx context.Context, log util.Logger) {
 // The Subscription and header chan are passed in, because error-free
 // instantiation of these variable is necessary to accepting that a websocket
 // connection is valid, so they are generated early in connectProviders.
-func (p *provider) subscribeHeaders(ctx context.Context, sub ethereum.Subscription, h chan *types.Header, log util.Logger) {
+func (p *provider) subscribeHeaders(ctx context.Context, sub ethereum.Subscription, h chan *types.Header, log util.Logger, newHeadCh chan<- *types.Header) {
 	defer func() {
 		// If a provider does not respond to an unsubscribe request, the unsubscribe function
 		// will never return because geth does not use a timeout.
@@ -342,6 +342,12 @@ func (p *provider) subscribeHeaders(ctx context.Context, sub ethereum.Subscripti
 			log.Tracef("%q reported new tip at height %s (%s)", p.host, hdr.Number, hdr.Hash())
 			p.setTip(hdr, log)
 			p.tip.wsHeaderSeen.Store(true)
+			if newHeadCh != nil {
+				select {
+				case newHeadCh <- hdr:
+				default:
+				}
+			}
 		case err, ok := <-sub.Err():
 			if !ok {
 				// Subscription cancelled
@@ -407,6 +413,12 @@ type multiRPCClient struct {
 		cache     map[common.Hash]*receiptRecord
 		lastClean time.Time
 	}
+
+	// newHeadCh receives the latest observed header from a WebSocket
+	// subscription, allowing monitorBlocks to react without an additional
+	// HeaderByNumber call.
+	newHeadCh chan *types.Header
+	hasWS     atomic.Bool
 }
 
 var _ ethFetcher = (*multiRPCClient)(nil)
@@ -435,6 +447,7 @@ func newMultiRPCClient(
 		endpoints:     endpoints,
 		finalizeConfs: finalizeConfs,
 		torProxy:      torProxy,
+		newHeadCh:     make(chan *types.Header, 1),
 	}
 	m.receipts.cache = make(map[common.Hash]*receiptRecord)
 	m.receipts.lastClean = time.Now()
@@ -446,7 +459,7 @@ func newMultiRPCClient(
 // list of providers that were successfully connected. It is not an error for a
 // connection to fail, unless all endpoints fail. The caller can infer failed
 // connections from the length and contents of the returned provider list.
-func connectProviders(ctx context.Context, endpoints []string, log util.Logger, chainID *big.Int, net util.Network, torProxy string) ([]*provider, error) {
+func connectProviders(ctx context.Context, endpoints []string, log util.Logger, chainID *big.Int, net util.Network, torProxy string, newHeadCh chan<- *types.Header) ([]*provider, error) {
 	providers := make([]*provider, 0, len(endpoints))
 	var success bool
 
@@ -530,7 +543,7 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 			if err == nil {
 				ec = ethclient.NewClient(rpcClient)
 				h = make(chan *types.Header, 8)
-				sub, err = ec.SubscribeNewHead(timedCtx, h)
+				sub, err = ec.SubscribeNewHead(ctx, h)
 				if err != nil {
 					rpcClient.Close()
 					ec = nil
@@ -612,15 +625,17 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 		if wsSubscribed {
 			wg.Add(1)
 			go func() {
-				p.subscribeHeaders(ctx, sub, h, log)
+				p.subscribeHeaders(ctx, sub, h, log, newHeadCh)
 				wg.Done()
 			}()
 		}
-		wg.Add(1)
-		go func() {
-			p.refreshHeader(ctx, log)
-			wg.Done()
-		}()
+		if !wsSubscribed {
+			wg.Add(1)
+			go func() {
+				p.refreshHeader(ctx, log)
+				wg.Done()
+			}()
+		}
 
 		p.stop = func() {
 			cancel()
@@ -679,7 +694,7 @@ out:
 }
 
 func (m *multiRPCClient) connect(ctx context.Context) (err error) {
-	providers, err := connectProviders(ctx, m.endpoints, m.log, m.chainID, m.net, m.torProxy)
+	providers, err := connectProviders(ctx, m.endpoints, m.log, m.chainID, m.net, m.torProxy, m.newHeadCh)
 	if err != nil {
 		return err
 	}
@@ -687,6 +702,14 @@ func (m *multiRPCClient) connect(ctx context.Context) (err error) {
 	m.providerMtx.Lock()
 	m.providers = providers
 	m.providerMtx.Unlock()
+	hasWS := false
+	for _, p := range providers {
+		if p.ws {
+			hasWS = true
+			break
+		}
+	}
+	m.hasWS.Store(hasWS)
 
 	var connections int
 	for _, p := range m.providerList() {
@@ -752,7 +775,7 @@ func createAndCheckProviders(ctx context.Context, walletDir string, endpoints []
 	}
 
 	if len(unknownEndpoints) > 0 {
-		providers, err := connectProviders(ctx, unknownEndpoints, log, chainID, net, torProxy)
+		providers, err := connectProviders(ctx, unknownEndpoints, log, chainID, net, torProxy, nil)
 		if err != nil {
 			return fmt.Errorf("expected to successfully connect to at least 1 of these unfamiliar providers: %s",
 				failedProviders(providers, unknownEndpoints))
@@ -813,10 +836,18 @@ func (m *multiRPCClient) reconfigure(ctx context.Context, endpoints []string, co
 	}
 
 	// TODO: If endpoints haven't change, do nothing.
-	providers, err := connectProviders(ctx, endpoints, m.log, m.chainID, m.net, m.torProxy)
+	providers, err := connectProviders(ctx, endpoints, m.log, m.chainID, m.net, m.torProxy, m.newHeadCh)
 	if err != nil {
 		return err
 	}
+	hasWS := false
+	for _, p := range providers {
+		if p.ws {
+			hasWS = true
+			break
+		}
+	}
+	m.hasWS.Store(hasWS)
 
 	m.providerMtx.Lock()
 	oldProviders := m.providers
