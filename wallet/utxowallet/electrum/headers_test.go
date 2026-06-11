@@ -6,6 +6,7 @@ package electrum
 
 import (
 	"bytes"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -94,6 +96,102 @@ func newTestHeaders(t *testing.T) (*Headers, string) {
 		t.Fatalf("NewHeaders: %v", err)
 	}
 	return h, dir
+}
+
+// TestComputeNextWorkRequired pins the retarget math (review #7) so it can't
+// silently drift from btcd's consensus rule. btcd's implementation isn't
+// reusable standalone (unexported, or a *BlockChain method), so we validate
+// our copy against the formula directly across the unclamped path, both
+// timespan clamps, and the PowLimit clamp.
+func TestComputeNextWorkRequired(t *testing.T) {
+	const expected = int64(1_209_600) // 14 days of 10-min blocks (2016).
+	const factor = int64(4)
+
+	// Pick a prior target well below PowLimit. We canonicalize via the
+	// compact round trip so expectations use the same precision the
+	// production code does.
+	bigPowLimit := new(big.Int).Lsh(big.NewInt(1), 255) // ~2^255, never clamps below.
+	priorBits := blockchain.BigToCompact(new(big.Int).Lsh(big.NewInt(1), 240))
+	priorTarget := blockchain.CompactToBig(priorBits)
+
+	mkParams := func(powLimit *big.Int, timespan time.Duration) *netparams.ChainParams {
+		return &netparams.ChainParams{
+			TargetTimespan:           timespan,
+			RetargetAdjustmentFactor: factor,
+			PowLimit:                 powLimit,
+		}
+	}
+	mkHeaders := func(actualTimespan int64) (prior, chunkStart *wire.BlockHeader) {
+		start := time.Unix(1_600_000_000, 0)
+		chunkStart = &wire.BlockHeader{Timestamp: start}
+		prior = &wire.BlockHeader{Bits: priorBits, Timestamp: start.Add(time.Duration(actualTimespan) * time.Second)}
+		return prior, chunkStart
+	}
+	// scaled returns BigToCompact(priorTarget * num / den), clamped to
+	// PowLimit — the formula re-derived independently of the function body.
+	scaled := func(num, den int64) uint32 {
+		tgt := new(big.Int).Mul(priorTarget, big.NewInt(num))
+		tgt.Div(tgt, big.NewInt(den))
+		if tgt.Cmp(bigPowLimit) > 0 {
+			tgt = bigPowLimit
+		}
+		return blockchain.BigToCompact(tgt)
+	}
+
+	tests := []struct {
+		name           string
+		params         *netparams.ChainParams
+		actualTimespan int64
+		want           uint32
+	}{{
+		name:           "unclamped identity (actual == expected)",
+		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
+		actualTimespan: expected,
+		want:           scaled(expected, expected), // == priorBits
+	}, {
+		name:           "clamped to max (slow blocks)",
+		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
+		actualTimespan: expected * 100, // way over max → clamp to expected*factor.
+		want:           scaled(factor, 1),
+	}, {
+		name:           "clamped to min (fast blocks)",
+		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
+		actualTimespan: 1, // way under min → clamp to expected/factor.
+		want:           scaled(1, factor),
+	}, {
+		name:           "PowLimit clamp",
+		params:         mkParams(new(big.Int).Lsh(big.NewInt(1), 241), time.Duration(expected)*time.Second), // 2*priorTarget
+		actualTimespan: expected * 100,                                                                      // wants *4, exceeds PowLimit.
+		want:           blockchain.BigToCompact(new(big.Int).Lsh(big.NewInt(1), 241)),
+	}, {
+		// Non-clamped, non-integer-ratio retarget — exercises the
+		// multiply/divide + BigToCompact rounding that the identity and
+		// clean-multiple cases don't. want is re-derived from the formula
+		// with the exact actualTimespan.
+		name:           "partial retarget (no clamp)",
+		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
+		actualTimespan: expected + 123457, // within [expected/4, expected*4]
+		want: func() uint32 {
+			tgt := new(big.Int).Mul(priorTarget, big.NewInt(expected+123457))
+			tgt.Div(tgt, big.NewInt(expected))
+			return blockchain.BigToCompact(tgt)
+		}(),
+	}, {
+		name:           "zero timespan guard returns prior bits",
+		params:         mkParams(bigPowLimit, 0),
+		actualTimespan: expected,
+		want:           priorBits,
+	}}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prior, chunkStart := mkHeaders(tt.actualTimespan)
+			got := computeNextWorkRequired(tt.params, prior, chunkStart)
+			if got != tt.want {
+				t.Fatalf("got 0x%08x, want 0x%08x", got, tt.want)
+			}
+		})
+	}
 }
 
 // TestHeadersRejectsTrivialDifficultyForgery is the regression for review2 #8:

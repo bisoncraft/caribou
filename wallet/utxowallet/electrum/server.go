@@ -277,14 +277,14 @@ func (s *Server) listen(ctx context.Context) {
 		}
 
 		if resp.Method != "" {
-			s.dispatchNotification(resp.Method, line)
+			s.dispatchNotification(ctx, resp.Method, line)
 			continue
 		}
 		s.deliverResponse(resp.ID, &resp)
 	}
 }
 
-func (s *Server) dispatchNotification(method string, raw []byte) {
+func (s *Server) dispatchNotification(ctx context.Context, method string, raw []byte) {
 	var n ntfnPayload
 	if err := json.Unmarshal(raw, &n); err != nil {
 		log.Tracef("electrum %s: notification payload decode: %v", s.addr, err)
@@ -308,7 +308,7 @@ func (s *Server) dispatchNotification(method string, raw []byte) {
 			log.Tracef("electrum %s: scripthash notify decode: %v", s.addr, err)
 			return
 		}
-		s.sendScripthashStatus(&ScripthashStatus{Scripthash: pair[0], Status: pair[1]})
+		s.sendScripthashStatus(ctx, &ScripthashStatus{Scripthash: pair[0], Status: pair[1]})
 	default:
 		log.Tracef("electrum %s: unknown notification method %q", s.addr, method)
 	}
@@ -324,13 +324,20 @@ func (s *Server) sendHeadersTip(t *HeadersTip) {
 	}
 }
 
-func (s *Server) sendScripthashStatus(st *ScripthashStatus) {
+func (s *Server) sendScripthashStatus(ctx context.Context, st *ScripthashStatus) {
 	s.scripthashMtx.Lock()
 	defer s.scripthashMtx.Unlock()
+	// Block until delivered (or shutdown) rather than dropping. A scripthash
+	// status is the address's latest state; dropping the last one would leave
+	// an incoming tx invisible until unrelated future activity. This runs on
+	// the listen goroutine, but the network-layer forwarder drains
+	// scripthashNotify continuously into a coalescing map with no network I/O,
+	// so the send returns promptly and listen is never deadlocked behind it.
+	// ctx is the connection context, cancelled on Close, so shutdown unblocks
+	// this before listen returns to run closeNotifyChannels.
 	select {
 	case s.scripthashNotify <- st:
-	default:
-		log.Warnf("electrum %s: scripthash notify channel full, dropping %s", s.addr, st.Scripthash)
+	case <-ctx.Done():
 	}
 }
 

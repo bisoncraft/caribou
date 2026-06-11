@@ -401,18 +401,23 @@ func (n *Network) headersLoop(initialTip *HeadersTip) {
 	// Connected entry. The first iteration uses the headers-store tip
 	// after we apply the subscription's initial reply, then walks forward
 	// from there as we receive notifications.
-	lastDeliveredTip := n.headers.Tip()
+	tipBefore := n.headers.Tip()
+	lastDeliveredTip := tipBefore
 
-	// Apply the subscription's initial reply, then emit an initial event
-	// so subscribers always see at least one BlockConnected for the
-	// starting tip — even if no replay was needed.
+	// Apply the subscription's initial reply. If the server's initial tip
+	// was one we already had, applyTipNotification delivers nothing and
+	// leaves the tip unchanged; in that case we synthesize a single
+	// Connected[tip] below so subscribers always get a baseline for the
+	// already-synced tip. If applyTipNotification instead advanced or
+	// rewound the tip, it already delivered the corresponding range, so we
+	// must NOT synthesize again — the previous `tip != lastDeliveredTip-1`
+	// guard always fired and double-delivered the tip after a startup
+	// catch-up.
 	n.applyTipNotification(initialTip, &lastDeliveredTip)
-	if tip := n.headers.Tip(); tip >= n.cfg.Chain.StartHeight && tip != lastDeliveredTip-1 {
-		// Synthesize the initial Connected event covering the
-		// already-synced tip. We pass lastDeliveredTip = tip - 1 so
-		// the helper emits exactly one Connected[tip].
-		n.deliverConnectRange(tip-1, tip)
-		lastDeliveredTip = tip
+	if tip := n.headers.Tip(); tip == tipBefore && tip >= n.cfg.Chain.StartHeight {
+		if n.deliverConnectRange(tip-1, tip) {
+			lastDeliveredTip = tip
+		}
 	}
 
 	node := n.peekNode()
@@ -434,16 +439,18 @@ func (n *Network) headersLoop(initialTip *HeadersTip) {
 }
 
 // deliverConnectRange emits a TipChange whose Connected slice is the
-// per-block range (lastDelivered, newTip]. No-op if newTip <= lastDelivered.
-func (n *Network) deliverConnectRange(lastDelivered, newTip int32) {
+// per-block range (lastDelivered, newTip]. No-op (and reports success) if
+// newTip <= lastDelivered. Returns the delivery result so the caller only
+// advances lastDelivered when the heights were actually published.
+func (n *Network) deliverConnectRange(lastDelivered, newTip int32) bool {
 	if newTip <= lastDelivered {
-		return
+		return true
 	}
 	connected := make([]int32, 0, newTip-lastDelivered)
 	for h := lastDelivered + 1; h <= newTip; h++ {
 		connected = append(connected, h)
 	}
-	n.deliverTipChange(&TipChange{Connected: connected})
+	return n.deliverTipChange(&TipChange{Connected: connected})
 }
 
 // peekNode returns the current node without an error path, for goroutines
@@ -482,28 +489,57 @@ func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
 			return
 		}
 		if len(disc) > 0 {
-			// Rewind triggered. Publish the disconnects so
-			// consumers can roll back; the next server
-			// notification will bring us forward on the new
-			// chain. Update lastDelivered to the new (lower)
-			// tip so the eventual replacement emits only the
-			// connect range past it.
+			// Rewind triggered. Publish the disconnects so consumers
+			// can roll back, then lower lastDelivered to the new
+			// (lower) tip so the next notification's connect range
+			// starts just past it. deliverTipChange blocks until the
+			// event is accepted, so the rollback is never lost.
 			newTip := n.headers.Tip()
 			n.deliverTipChange(&TipChange{Disconnected: disc})
 			*lastDelivered = newTip
 			return
 		}
 	default:
-		// Jumped ahead; catch up in chunks.
-		if err := n.catchUp(t.Height); err != nil {
+		// Jumped ahead; catch up in chunks. catchUp also recovers from a
+		// reorg discovered mid-catch-up (the server's chain diverges
+		// below our tip), returning whatever it had to disconnect — even
+		// when it ultimately errors after a partial rewind.
+		disc, err := n.catchUp(t.Height)
+		if len(disc) > 0 {
+			// Publish the disconnects BEFORE the error check. catchUp's
+			// Rewind calls have already truncated the headers store (on
+			// disk and in memory); returning without surfacing these
+			// would leave downstream believing the orphaned blocks are
+			// still connected, permanently diverging its view from the
+			// store. disc is newest-first and contiguous, so its last
+			// element is the lowest (fork) height; drop lastDelivered
+			// just below it so the connect-range emission re-publishes
+			// the new chain from the fork forward.
+			n.deliverTipChange(&TipChange{Disconnected: disc})
+			lowest := disc[len(disc)-1].Height
+			if *lastDelivered >= lowest {
+				*lastDelivered = lowest - 1
+			}
+		}
+		if err != nil {
+			// Couldn't fully resync this round (e.g. reorg deeper than
+			// maxReorgDepth). We've already surfaced the rollback above;
+			// the next notification continues catching up from the
+			// lowered tip.
 			log.Debugf("electrum: catch up to %d: %v", t.Height, err)
 			return
 		}
 	}
 	newTip := n.headers.Tip()
 	if newTip > *lastDelivered {
-		n.deliverConnectRange(*lastDelivered, newTip)
-		*lastDelivered = newTip
+		// Only advance lastDelivered if the Connected range was actually
+		// published. If the channel was full and the event dropped,
+		// leaving lastDelivered where it is lets the next notification
+		// re-emit the missed heights — advancing past dropped data would
+		// strand those BlockConnected events permanently (review #5).
+		if n.deliverConnectRange(*lastDelivered, newTip) {
+			*lastDelivered = newTip
+		}
 	}
 }
 
@@ -528,49 +564,110 @@ func (n *Network) connectOneTip(hexHdr string) ([]DisconnectedBlock, error) {
 	return disc, nil
 }
 
-func (n *Network) catchUp(targetHeight int32) error {
+func (n *Network) catchUp(targetHeight int32) ([]DisconnectedBlock, error) {
 	node, err := n.getNode()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for n.headers.Tip() < targetHeight {
-		nextHeight := n.headers.Tip() + 1
-		want := min(int(targetHeight-n.headers.Tip()), n.cfg.HeaderBatchSize)
-		batch, err := node.BlockHeaders(n.ctx, nextHeight, want)
+	fetch := func(startHeight, count int32) ([]byte, int, error) {
+		batch, err := node.BlockHeaders(n.ctx, startHeight, int(count))
 		if err != nil {
-			return err
+			return nil, 0, err
 		}
 		if batch.Count == 0 {
-			break
+			return nil, 0, nil
 		}
 		raw, err := hex.DecodeString(batch.HexConcat)
 		if err != nil {
-			return err
+			return nil, 0, err
+		}
+		return raw, batch.Count, nil
+	}
+	return n.catchUpFrom(targetHeight, fetch)
+}
+
+// headerFetcher returns up to `count` raw concatenated headers starting at
+// `startHeight`, along with how many were returned (0 signals the server has
+// no more). It's the seam catchUpFrom is tested through.
+type headerFetcher func(startHeight, count int32) (raw []byte, n int, err error)
+
+// catchUpFrom is the chunked sync + reorg-recovery loop. It pulls headers via
+// fetch and appends them until Tip() reaches targetHeight. If the server's
+// chain has diverged below our tip, AppendBatch reports errHeaderDoesNotConnect
+// and we rewind in reorgRewindDepth steps (up to maxReorgDepth total) to find
+// the fork point, then resume. The returned disconnected blocks (newest-first,
+// accumulated across steps) let the caller surface BlockDisconnected events and
+// reset its delivery cursor. A reorg deeper than maxReorgDepth is treated as
+// unrecoverable and surfaced as an error.
+//
+// Note: the rewind budget is per-call. A persistently flapping server that
+// serves a transient fork on each notification can therefore make us
+// truncate-and-reappend a little on every call without any single call
+// crossing maxReorgDepth. Each such call still publishes its disconnects and
+// makes forward progress, so the chain stays consistent, but the churn isn't
+// bounded across calls. A cross-call rewind budget would be the fuller fix if
+// that ever shows up against a real peer.
+func (n *Network) catchUpFrom(targetHeight int32, fetch headerFetcher) ([]DisconnectedBlock, error) {
+	var disconnected []DisconnectedBlock
+	var rewound int32
+	for n.headers.Tip() < targetHeight {
+		nextHeight := n.headers.Tip() + 1
+		want := int32(min(int(targetHeight-n.headers.Tip()), n.cfg.HeaderBatchSize))
+		raw, count, err := fetch(nextHeight, want)
+		if err != nil {
+			return disconnected, err
+		}
+		if count == 0 {
+			break
 		}
 		// targetHeight is the latest server-reported tip we're
 		// catching up to — pass it as tipHint so AppendBatch applies
 		// per-header PoW only to headers within the trailing
 		// recentPoWWindow.
-		if _, err := n.headers.AppendBatch(nextHeight, raw, targetHeight); err != nil {
-			return err
+		_, err = n.headers.AppendBatch(nextHeight, raw, targetHeight)
+		if err == nil {
+			continue
 		}
+		if !errors.Is(err, errHeaderDoesNotConnect) {
+			return disconnected, err
+		}
+		// Reorg: the batch doesn't link to our tip. Rewind a step and
+		// retry; the next fetch starts from the lowered tip and will
+		// connect once we've passed the fork point.
+		rewound += reorgRewindDepth
+		if rewound > maxReorgDepth {
+			return disconnected, fmt.Errorf(
+				"electrum: reorg deeper than %d blocks near height %d; resync required: %w",
+				maxReorgDepth, nextHeight, err)
+		}
+		disc, rerr := n.headers.Rewind(reorgRewindDepth)
+		if rerr != nil {
+			return disconnected, fmt.Errorf("electrum: reorg rewind: %w", rerr)
+		}
+		disconnected = append(disconnected, disc...)
 	}
-	return nil
+	return disconnected, nil
 }
 
-// deliverTipChange publishes a TipChange event. Drops on a full channel
-// rather than blocking the headers loop — consumers that fall behind get a
-// warn-level log they can monitor.
-func (n *Network) deliverTipChange(tc *TipChange) {
+// deliverTipChange publishes a TipChange event, blocking until the consumer
+// accepts it (bounded backpressure) or the network shuts down. It must NOT
+// drop on a full channel: a Disconnected event cannot be regenerated once the
+// underlying headers have been rewound, so dropping one would permanently
+// strand the rollback downstream. Blocking here is safe — the sole consumer
+// (the chain client's tipChangeLoop) drains into an effectively unbounded
+// notification queue and performs no network I/O, so this send can't deadlock.
+//
+// Returns true iff the event was delivered; false only when ctx was cancelled
+// (shutdown), in which case the caller should not advance its delivery cursor.
+func (n *Network) deliverTipChange(tc *TipChange) bool {
 	if tc == nil {
-		return
+		return true
 	}
 	select {
 	case n.tipChangeChan <- tc:
+		return true
 	case <-n.ctx.Done():
-	default:
-		log.Warnf("electrum: tip-change channel full, dropping event (connected=%d disconnected=%d)",
-			len(tc.Connected), len(tc.Disconnected))
+		return false
 	}
 }
 
@@ -591,13 +688,16 @@ func (n *Network) scripthashLoop() {
 			if !ok {
 				return
 			}
+			// Block until delivered rather than dropping: a scripthash
+			// status is the address's latest state, and dropping the
+			// last one leaves an incoming tx invisible until unrelated
+			// future activity. This can't stall — the chain client's
+			// scripthash reader drains scripthashCh into a coalescing
+			// map with no network I/O, so it's always ready to receive.
 			select {
 			case n.scripthashCh <- st:
 			case <-n.ctx.Done():
 				return
-			default:
-				log.Warnf("electrum: scripthash channel full, dropping notify for %s",
-					st.Scripthash)
 			}
 		}
 	}

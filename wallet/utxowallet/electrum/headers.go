@@ -23,11 +23,24 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// reorgRewindDepth controls how many headers we drop from our tip when an
-// incoming header fails to connect. The value matches the upstream electrum
-// client and is large enough to absorb every reorg observed in practice on
-// BTC and LTC.
+// reorgRewindDepth controls how many headers we drop from our tip on each
+// step when an incoming header fails to connect. The value matches the
+// upstream electrum client and is large enough to absorb every reorg observed
+// in practice on BTC and LTC in a single step.
 const reorgRewindDepth = 8
+
+// maxReorgDepth bounds how far catchUp will rewind, in total, chasing a fork
+// point during reorg recovery. It's far deeper than any reorg seen on BTC/LTC
+// mainnet; a divergence beyond it almost certainly means a corrupt local store
+// or a hostile/forked server, so we surface a clear error rather than rewind
+// unboundedly.
+const maxReorgDepth = 200
+
+// errHeaderDoesNotConnect is returned (wrapped) by AppendBatch when the first
+// header of a batch fails to link to the current tip. catchUp treats it as a
+// reorg signal: the server's chain diverges below our tip, so it rewinds and
+// retries rather than aborting the sync.
+var errHeaderDoesNotConnect = errors.New("electrum: header does not connect")
 
 // recentPoWWindow is the number of recent headers (counting back from the
 // server-reported tip at sync time) that get full per-header PoW
@@ -194,8 +207,8 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 	for i, hdr := range headers {
 		height := startHeight + int32(i)
 		if hdr.PrevBlock != prevHash {
-			return 0, fmt.Errorf("electrum: header at %d does not connect: prev %s, want %s",
-				height, hdr.PrevBlock, prevHash)
+			return 0, fmt.Errorf("%w at %d: prev %s, want %s",
+				errHeaderDoesNotConnect, height, hdr.PrevBlock, prevHash)
 		}
 		if err := h.validateCheckpoint(height, hdr); err != nil {
 			return 0, err
@@ -309,6 +322,15 @@ func (h *Headers) VerifyAll() error {
 		}
 	}
 	return nil
+}
+
+// Rewind drops the top `depth` headers and returns the disconnected blocks
+// (newest-first). It's the locked wrapper around rewindLocked used by reorg
+// recovery in catchUp.
+func (h *Headers) Rewind(depth int32) ([]DisconnectedBlock, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rewindLocked(depth)
 }
 
 // rewindLocked drops the top `depth` headers from memory and truncates the
@@ -459,7 +481,16 @@ func (h *Headers) headerAt(height int32, inBatch []*wire.BlockHeader, batchStart
 // computeNextWorkRequired implements the standard Bitcoin/Litecoin retarget
 // rule: new_target = prev_target * actual_timespan / expected_timespan,
 // clamped to [expected/factor, expected*factor] on the timespan and to
-// PowLimit on the target. Mirrors blockchain.calcNextRequiredDifficulty.
+// PowLimit on the target.
+//
+// This mirrors btcd's blockchain.calcNextRequiredDifficulty. We can't call
+// btcd's directly: its standalone form is unexported, and the exported
+// CalcNextRequiredDifficulty is a method on *blockchain.BlockChain that needs
+// a full instantiated chain with a HeaderCtx node graph — neither of which a
+// headers-only electrum client maintains. The duplication is consensus-
+// sensitive, so TestComputeNextWorkRequired pins this implementation's output
+// against hand-computed expectations (unclamped, both timespan clamps, and the
+// PowLimit clamp) to catch drift.
 func computeNextWorkRequired(params *netparams.ChainParams, prior, chunkStart *wire.BlockHeader) uint32 {
 	expectedTimespan := int64(params.TargetTimespan / time.Second)
 	if expectedTimespan == 0 {

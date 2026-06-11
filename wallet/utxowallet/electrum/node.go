@@ -6,14 +6,16 @@
 package electrum
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
+
+	"github.com/btcsuite/btcd/wire"
 )
 
 // ErrNotConnected is returned when a Node API call is attempted on a Node
@@ -268,22 +270,39 @@ func (n *Node) GetRawTransaction(ctx context.Context, txid string) (string, erro
 	return out, nil
 }
 
-// verifyTxidMatchesHex returns nil if outHex is the raw transaction whose
-// SHA256(SHA256(bytes)) (reversed) equals txid. The check is a cheap defence
-// against a server returning the wrong bytes for a requested txid.
+// verifyTxidMatchesHex returns nil if outHex deserializes to a transaction
+// whose txid equals the requested txid. The check is a cheap defence against a
+// server returning the wrong bytes for a requested txid.
+//
+// We must hash the no-witness serialization, not the raw bytes. electrum's
+// blockchain.transaction.get returns the full network serialization, which for
+// a segwit tx carries the marker/flag/witness; SHA256d of those bytes is the
+// wtxid, not the txid. wire.MsgTx.TxHash hashes the witness-stripped form,
+// which is exactly what the txid commits to — so this works for both legacy
+// and segwit transactions.
 func verifyTxidMatchesHex(txid, outHex string) error {
 	raw, err := hex.DecodeString(outHex)
 	if err != nil {
 		return fmt.Errorf("electrum: decode tx hex: %w", err)
 	}
-	first := sha256.Sum256(raw)
-	second := sha256.Sum256(first[:])
-	// Bitcoin txids are big-endian display of little-endian internal
-	// hashes — reverse before hex-encoding.
-	for i, j := 0, len(second)-1; i < j; i, j = i+1, j-1 {
-		second[i], second[j] = second[j], second[i]
+	// wire.MsgTx parses BTC and standard (including segwit) LTC transactions.
+	// It does NOT understand LTC MWEB transactions (extension flag 0x08),
+	// which fail here just as the previous SHA256d-of-raw check failed to
+	// match their txid — verifying those requires chain-aware hashing
+	// (bisonwire's litcoinTxHash) and remains a known limitation rather than
+	// a regression.
+	r := bytes.NewReader(raw)
+	var msgTx wire.MsgTx
+	if err := msgTx.Deserialize(r); err != nil {
+		return fmt.Errorf("electrum: deserialize tx: %w", err)
 	}
-	got := hex.EncodeToString(second[:])
+	// Reject trailing bytes. Deserialize stops at the transaction boundary, so
+	// a server appending arbitrary bytes after a valid tx would otherwise pass
+	// — the prior whole-buffer hash would have rejected it.
+	if r.Len() != 0 {
+		return fmt.Errorf("electrum: tx hex has %d trailing bytes after the transaction", r.Len())
+	}
+	got := msgTx.TxHash().String()
 	if got != txid {
 		return fmt.Errorf("electrum: tx hex hashes to %s, requested %s", got, txid)
 	}

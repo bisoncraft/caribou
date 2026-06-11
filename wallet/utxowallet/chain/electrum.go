@@ -61,6 +61,19 @@ type ElectrumClient struct {
 	addrCacheMtx sync.Mutex
 	addrCache    map[string]*scripthashEntry
 
+	// dirtyMtx guards dirty/dirtyWake, the coalescing buffer between the
+	// scripthash reader and processor goroutines. A scripthash status is
+	// idempotent state (handleScripthashStatus re-fetches full history on
+	// any change), so a burst of statuses for the same scripthash collapses
+	// to its latest value here rather than queueing behind a slow
+	// GetHistory round trip on a fixed-size channel and risking a drop of
+	// the *latest* status — which would leave an incoming tx invisible
+	// until unrelated future activity. The reader never blocks on the
+	// network, so the upstream notify channels stay drained.
+	dirtyMtx  sync.Mutex
+	dirty     map[string]*electrum.ScripthashStatus
+	dirtyWake chan struct{}
+
 	enqueueNotification chan any
 	dequeueNotification chan any
 	currentBlock        chan *waddrmgr.BlockStamp
@@ -95,7 +108,20 @@ type ElectrumClient struct {
 // client's tip-change dispatch flushes pending entries once their headers
 // arrive.
 type scripthashEntry struct {
-	addr        btcutil.Address
+	addr btcutil.Address
+
+	// proc serializes the read-modify-write in handleScripthashStatus.
+	// handleScripthashStatus can run concurrently for the same scripthash
+	// (once from the subscribe path priming the initial status, once from
+	// scripthashLoop on a server notification). It reads lastStatus/
+	// lastHistory, releases addrCacheMtx across a GetHistory round trip,
+	// then writes back the diff result. addrCacheMtx alone only guards the
+	// individual field accesses, not the whole logical sequence — two runs
+	// could both read the same prev and the last writer would clobber the
+	// other's emitted history, losing a RelevantTx. proc is held for the
+	// duration of that sequence so the RMW is atomic per scripthash.
+	proc sync.Mutex
+
 	lastStatus  string
 	lastHistory []electrum.HistoryEntry
 	pending     []electrum.HistoryEntry
@@ -159,6 +185,8 @@ func (c *ElectrumClient) Start() error {
 	c.dequeueNotification = make(chan any)
 	c.currentBlock = make(chan *waddrmgr.BlockStamp)
 	c.quit = make(chan struct{})
+	c.dirty = make(map[string]*electrum.ScripthashStatus)
+	c.dirtyWake = make(chan struct{}, 1)
 	c.started = true
 
 	// Initial ClientConnected notification.
@@ -171,10 +199,11 @@ func (c *ElectrumClient) Start() error {
 		}
 	}()
 
-	c.wg.Add(3)
+	c.wg.Add(4)
 	go c.notificationHandler()
 	go c.tipChangeLoop()
 	go c.scripthashLoop()
+	go c.scripthashProcessor()
 
 	return nil
 }
@@ -387,9 +416,11 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 	}
 }
 
-// scripthashLoop translates scripthash-status notifications into RelevantTx
-// notifications. It fetches the address's history on each change, diffs it
-// against the previous history, and emits a RelevantTx for each new entry.
+// scripthashLoop is the reader half of the scripthash pipeline. It drains the
+// network's scripthash channel into the per-scripthash coalescing buffer and
+// wakes the processor. It deliberately does no network I/O, so the upstream
+// notify channels never back up and drop the latest status (review finding
+// #4): a slow GetHistory in the processor can't stall this reader.
 func (c *ElectrumClient) scripthashLoop() {
 	defer c.wg.Done()
 	ch := c.net.ScripthashChan()
@@ -400,6 +431,46 @@ func (c *ElectrumClient) scripthashLoop() {
 		case st, ok := <-ch:
 			if !ok {
 				return
+			}
+			c.dirtyMtx.Lock()
+			// Latest-wins: a newer status for the same scripthash
+			// supersedes an unprocessed older one. The processor
+			// re-fetches full history regardless, so only the most
+			// recent status matters.
+			c.dirty[st.Scripthash] = st
+			c.dirtyMtx.Unlock()
+			select {
+			case c.dirtyWake <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// scripthashProcessor is the worker half of the scripthash pipeline. It drains
+// the coalescing buffer and turns each scripthash status into RelevantTx
+// notifications via handleScripthashStatus (which fetches and diffs the
+// address history). Blocking on GetHistory here can't drop notifications
+// because the reader has already parked the latest status in c.dirty.
+func (c *ElectrumClient) scripthashProcessor() {
+	defer c.wg.Done()
+	for {
+		select {
+		case <-c.quit:
+			return
+		case <-c.dirtyWake:
+		}
+		for {
+			c.dirtyMtx.Lock()
+			var st *electrum.ScripthashStatus
+			for sh, s := range c.dirty {
+				st = s
+				delete(c.dirty, sh)
+				break
+			}
+			c.dirtyMtx.Unlock()
+			if st == nil {
+				break
 			}
 			if err := c.handleScripthashStatus(st); err != nil {
 				log.Debugf("electrum: handle scripthash %s: %v", st.Scripthash, err)
@@ -420,11 +491,19 @@ func (c *ElectrumClient) scripthashLoop() {
 func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) error {
 	c.addrCacheMtx.Lock()
 	entry, ok := c.addrCache[st.Scripthash]
+	c.addrCacheMtx.Unlock()
 	if !ok {
-		c.addrCacheMtx.Unlock()
 		log.Debugf("electrum: status for unknown scripthash %s", st.Scripthash)
 		return nil
 	}
+
+	// Serialize the whole read-modify-write against concurrent invocations
+	// for the same scripthash. Held across the GetHistory RPC so a second
+	// caller can't read a stale prev and clobber our emitted history.
+	entry.proc.Lock()
+	defer entry.proc.Unlock()
+
+	c.addrCacheMtx.Lock()
 	if entry.lastStatus == st.Status {
 		c.addrCacheMtx.Unlock()
 		return nil
@@ -495,17 +574,38 @@ func mergePendingEntries(dst, src []electrum.HistoryEntry) []electrum.HistoryEnt
 // known to the local headers store. Called after every TipChange.Connected
 // range so review2 #6's deferred emissions catch up automatically.
 func (c *ElectrumClient) flushPending() {
-	type readyBatch struct {
-		sh    string
-		ready []electrum.HistoryEntry
-	}
-	var batches []readyBatch
-
+	// Snapshot the scripthashes that currently have pending entries. We
+	// cannot hold addrCacheMtx while acquiring entry.proc — handleScripthashStatus
+	// acquires proc first and then addrCacheMtx, so taking them in the
+	// opposite order here would risk deadlock. Collect the keys, then process
+	// each entry under its own proc lock.
 	c.addrCacheMtx.Lock()
+	shs := make([]string, 0, len(c.addrCache))
 	for sh, entry := range c.addrCache {
-		if len(entry.pending) == 0 {
+		if len(entry.pending) > 0 {
+			shs = append(shs, sh)
+		}
+	}
+	c.addrCacheMtx.Unlock()
+
+	for _, sh := range shs {
+		c.addrCacheMtx.Lock()
+		entry := c.addrCache[sh]
+		c.addrCacheMtx.Unlock()
+		if entry == nil {
 			continue
 		}
+
+		// Hold proc across the partition + emit + lastHistory append so the
+		// whole sequence is atomic against handleScripthashStatus's RMW for
+		// this scripthash. Otherwise a concurrent status diff could read
+		// lastHistory without the flushed entries (not appended yet) and
+		// pending without them either (already trimmed), and re-emit them as
+		// duplicates — exactly the lost-update the proc lock exists to
+		// prevent.
+		entry.proc.Lock()
+
+		c.addrCacheMtx.Lock()
 		var ready, remain []electrum.HistoryEntry
 		for _, e := range entry.pending {
 			if e.Height > 0 && c.net.HeaderByHeight(e.Height) == nil {
@@ -514,24 +614,20 @@ func (c *ElectrumClient) flushPending() {
 			}
 			ready = append(ready, e)
 		}
-		if len(ready) > 0 {
-			entry.pending = remain
-			batches = append(batches, readyBatch{sh: sh, ready: ready})
-		}
-	}
-	c.addrCacheMtx.Unlock()
+		entry.pending = remain
+		c.addrCacheMtx.Unlock()
 
-	for _, b := range batches {
-		for _, e := range b.ready {
+		for _, e := range ready {
 			if err := c.emitRelevantTx(e); err != nil {
 				log.Debugf("electrum: flush emit %s: %v", e.TxHash, err)
 			}
 		}
+
 		c.addrCacheMtx.Lock()
-		if entry, ok := c.addrCache[b.sh]; ok {
-			entry.lastHistory = append(entry.lastHistory, b.ready...)
-		}
+		entry.lastHistory = append(entry.lastHistory, ready...)
 		c.addrCacheMtx.Unlock()
+
+		entry.proc.Unlock()
 	}
 }
 

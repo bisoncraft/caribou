@@ -312,17 +312,13 @@ func (c *ElectrumClient) tryDispatchRescanFinished(tip int32) {
 func (c *ElectrumClient) collectHistories(scripthashes []string, startHeight int32) (map[int32][]electrum.HistoryEntry, error) {
 	out := make(map[int32][]electrum.HistoryEntry)
 	for _, sh := range scripthashes {
-		hist, err := c.net.GetHistory(c.ctx, sh)
+		// fetchAndCacheHistory caches the history (under the entry's proc
+		// lock) so the live notification path can diff against it without a
+		// lost-update race.
+		hist, err := c.fetchAndCacheHistory(sh)
 		if err != nil {
 			return nil, fmt.Errorf("electrum: get history for %s: %w", sh, err)
 		}
-		// Cache the history so the live notification path can diff
-		// against it.
-		c.addrCacheMtx.Lock()
-		if entry, ok := c.addrCache[sh]; ok {
-			entry.lastHistory = hist
-		}
-		c.addrCacheMtx.Unlock()
 		for _, h := range hist {
 			if h.Height < startHeight {
 				continue
@@ -339,11 +335,24 @@ func (c *ElectrumClient) collectHistories(scripthashes []string, startHeight int
 	return out, nil
 }
 
-// emitFilteredBlock fetches each matching tx, decodes it, and emits a single
-// FilteredBlockConnected notification carrying the block plus relevant
-// records. ctx allows the rescan to be cancelled mid-block.
-func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.BlockMeta, entries []electrum.HistoryEntry) error {
-	// Deduplicate txids — two scripthashes can match the same tx.
+// dedupStrings returns s with duplicate values removed, preserving first-seen
+// order.
+func dedupStrings(s []string) []string {
+	seen := make(map[string]struct{}, len(s))
+	out := make([]string, 0, len(s))
+	for _, v := range s {
+		if _, dup := seen[v]; dup {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+// dedupHistoryByTxid returns the entries with duplicate txids removed (two
+// scripthashes can match the same tx), preserving first-seen order.
+func dedupHistoryByTxid(entries []electrum.HistoryEntry) []electrum.HistoryEntry {
 	seen := make(map[string]struct{}, len(entries))
 	uniq := make([]electrum.HistoryEntry, 0, len(entries))
 	for _, e := range entries {
@@ -353,6 +362,28 @@ func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.Blo
 		seen[e.TxHash] = struct{}{}
 		uniq = append(uniq, e)
 	}
+	return uniq
+}
+
+// fetchRawTx fetches a transaction by txid and returns its decoded raw bytes.
+// The server's hex is verified to hash to txid inside GetRawTransaction.
+func (c *ElectrumClient) fetchRawTx(ctx context.Context, txid string) ([]byte, error) {
+	rawHex, err := c.net.GetRawTransaction(ctx, txid)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := hex.DecodeString(rawHex)
+	if err != nil {
+		return nil, fmt.Errorf("electrum: decode raw %s: %w", txid, err)
+	}
+	return raw, nil
+}
+
+// emitFilteredBlock fetches each matching tx, decodes it, and emits a single
+// FilteredBlockConnected notification carrying the block plus relevant
+// records. ctx allows the rescan to be cancelled mid-block.
+func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.BlockMeta, entries []electrum.HistoryEntry) error {
+	uniq := dedupHistoryByTxid(entries)
 	// Sort by txid for determinism.
 	sort.Slice(uniq, func(i, j int) bool { return uniq[i].TxHash < uniq[j].TxHash })
 
@@ -364,14 +395,9 @@ func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.Blo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rawHex, err := c.net.GetRawTransaction(ctx, e.TxHash)
+		raw, err := c.fetchRawTx(ctx, e.TxHash)
 		if err != nil {
 			log.Warnf("electrum: rescan fetch %s: %v", e.TxHash, err)
-			continue
-		}
-		raw, err := hex.DecodeString(rawHex)
-		if err != nil {
-			log.Warnf("electrum: decode raw %s: %v", e.TxHash, err)
 			continue
 		}
 		rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, block.Time)
@@ -405,6 +431,48 @@ func (c *ElectrumClient) enqueueCtx(ctx context.Context, n any) error {
 	case <-c.quit:
 		return errClientShutDown
 	}
+}
+
+// orderTxsByDependency reorders a block's transactions so that any parent (a
+// tx whose output is spent by another tx in the same set) precedes its
+// children. It performs a depth-first post-order walk: before emitting a tx it
+// recurses into the producers of its inputs, so producers are appended first.
+//
+// We deliberately do not reuse wtxmgr.DependencySort here: it returns
+// []*wire.MsgTx (we need []*bisonwire.Tx) and, more importantly, it identifies
+// nodes via wire.MsgTx.TxHash(), which is the wrong txid for LTC (bisonwire
+// uses litcoinTxHash for MWEB-bearing txs). Keying on bisonwire.Tx.TxHash()
+// here keeps the ordering correct across chains.
+//
+// A valid block can't contain a cycle (a tx can't spend a descendant), so the
+// recursion always terminates. Output order is deterministic for a given input
+// order. Txs whose inputs reference outpoints outside this set (the common
+// case — parents in earlier blocks) simply have no in-set dependency and keep
+// their relative position.
+func orderTxsByDependency(txs []*bisonwire.Tx) []*bisonwire.Tx {
+	idxByHash := make(map[chainhash.Hash]int, len(txs))
+	for i, tx := range txs {
+		idxByHash[tx.TxHash()] = i
+	}
+	visited := make([]bool, len(txs))
+	order := make([]*bisonwire.Tx, 0, len(txs))
+	var visit func(i int)
+	visit = func(i int) {
+		if visited[i] {
+			return
+		}
+		visited[i] = true
+		for _, in := range txs[i].TxIn {
+			if p, ok := idxByHash[in.PreviousOutPoint.Hash]; ok {
+				visit(p)
+			}
+		}
+		order = append(order, txs[i])
+	}
+	for i := range txs {
+		visit(i)
+	}
+	return order
 }
 
 // FilterBlocks scans the requested blocks for activity on the requested
@@ -504,27 +572,15 @@ func (c *ElectrumClient) FilterBlocks(req *FilterBlocksRequest) (*FilterBlocksRe
 			continue
 		}
 		// Dedup txids — multiple scripthashes can land on the same tx.
-		seen := make(map[string]struct{}, len(hits))
-		uniqTxs := make([]string, 0, len(hits))
-		for _, t := range hits {
-			if _, dup := seen[t]; dup {
-				continue
-			}
-			seen[t] = struct{}{}
-			uniqTxs = append(uniqTxs, t)
-		}
+		uniqTxs := dedupStrings(hits)
 
 		// Fetch the txs and decode them as bisonwire.Tx so the
 		// existing BlockFilterer machinery can inspect them.
 		bw := make([]*bisonwire.Tx, 0, len(uniqTxs))
 		for _, t := range uniqTxs {
-			rawHex, err := c.net.GetRawTransaction(c.ctx, t)
+			raw, err := c.fetchRawTx(c.ctx, t)
 			if err != nil {
 				return nil, fmt.Errorf("electrum: fetch %s: %w", t, err)
-			}
-			raw, err := hex.DecodeString(rawHex)
-			if err != nil {
-				return nil, fmt.Errorf("electrum: decode %s: %w", t, err)
 			}
 			tx := &bisonwire.Tx{Chain: string(c.chain)}
 			if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
@@ -536,8 +592,18 @@ func (c *ElectrumClient) FilterBlocks(req *FilterBlocksRequest) (*FilterBlocksRe
 		bf := NewBlockFilterer(c.btcParams, req)
 		// Run each fetched tx through the filterer to populate the
 		// scope/index maps and outpoint set the response wants.
+		//
+		// Order matters: BlockFilterer.FilterTx only recognizes a spend of
+		// an output created in the same block if the creating (parent) tx
+		// was filtered first — that's when its outpoint lands in
+		// FoundOutPoints. electrumx history is bucketed by height but is not
+		// guaranteed to be in block/topological order, so we restore the
+		// parent-before-child invariant explicitly. Without this, a wallet
+		// that receives then re-spends within one block could leave the
+		// outpoint unmarked. Neutrino gets this for free by iterating
+		// block.Transactions in order.
 		var hasRelevant bool
-		for _, tx := range bw {
+		for _, tx := range orderTxsByDependency(bw) {
 			if bf.FilterTx(tx) {
 				bf.RelevantTxns = append(bf.RelevantTxns, tx)
 				hasRelevant = true
@@ -568,16 +634,34 @@ func (c *ElectrumClient) fetchHistory(scripthash string) ([]electrum.HistoryEntr
 		return hist, nil
 	}
 	c.addrCacheMtx.Unlock()
+	return c.fetchAndCacheHistory(scripthash)
+}
 
+// fetchAndCacheHistory fetches a scripthash's history and stores it as the
+// cached lastHistory baseline. The cache write is serialized with the live
+// notification path's read-modify-write through the entry's proc lock (held
+// across the GetHistory round trip, proc→addrCacheMtx order), so a
+// rescan/FilterBlocks fetch can't clobber a concurrent handleScripthashStatus
+// result and cause a later duplicate emission. If the scripthash isn't cached,
+// it just fetches.
+func (c *ElectrumClient) fetchAndCacheHistory(scripthash string) ([]electrum.HistoryEntry, error) {
+	c.addrCacheMtx.Lock()
+	entry := c.addrCache[scripthash]
+	c.addrCacheMtx.Unlock()
+
+	if entry != nil {
+		entry.proc.Lock()
+		defer entry.proc.Unlock()
+	}
 	hist, err := c.net.GetHistory(c.ctx, scripthash)
 	if err != nil {
 		return nil, err
 	}
-	c.addrCacheMtx.Lock()
-	if entry, ok := c.addrCache[scripthash]; ok {
+	if entry != nil {
+		c.addrCacheMtx.Lock()
 		entry.lastHistory = hist
+		c.addrCacheMtx.Unlock()
 	}
-	c.addrCacheMtx.Unlock()
 	return hist, nil
 }
 

@@ -1084,6 +1084,104 @@ func TestElectrumFilterBlocksSurfacesWatchedOutPointSpends(t *testing.T) {
 	}
 }
 
+// TestElectrumFilterBlocksSameBlockParentChild is the regression for review
+// #2: when a wallet receives funds and re-spends them within the same block,
+// the child tx is only recognized as relevant if its same-block parent was
+// filtered first (so the parent's outpoint is in FoundOutPoints). electrumx
+// history is not in block order, so FilterBlocks must topologically order the
+// fetched txs. We deliberately feed the child ahead of the parent in history
+// to exercise the ordering; without orderTxsByDependency the child's spend is
+// missed and only one relevant tx is returned.
+func TestElectrumFilterBlocksSameBlockParentChild(t *testing.T) {
+	c, stub := makeClient(t, 6)
+
+	addr, sh := newSimnetAddr(t)
+	payScript, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		t.Fatalf("PayToAddrScript: %v", err)
+	}
+
+	// Parent pays our address (relevant via output) and creates outpoint 0.
+	parent := wire.NewMsgTx(wire.TxVersion)
+	parent.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{31: 0xc1}, Index: 0},
+		SignatureScript:  []byte{0x51},
+		Sequence:         wire.MaxTxInSequenceNum,
+	})
+	parent.AddTxOut(&wire.TxOut{Value: 5000, PkScript: payScript})
+	parentTxid := parent.TxHash().String()
+
+	// Child spends the parent's output 0 and pays OP_TRUE (not our address),
+	// so the ONLY thing making it relevant is the same-block spend.
+	child := wire.NewMsgTx(wire.TxVersion)
+	child.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Hash: parent.TxHash(), Index: 0},
+		SignatureScript:  []byte{0x51},
+		Sequence:         wire.MaxTxInSequenceNum,
+	})
+	child.AddTxOut(&wire.TxOut{Value: 4000, PkScript: []byte{0x51}})
+	childTxid := child.TxHash().String()
+
+	serialize := func(tx *wire.MsgTx) string {
+		var buf bytes.Buffer
+		if err := tx.Serialize(&buf); err != nil {
+			t.Fatalf("Serialize: %v", err)
+		}
+		return hex.EncodeToString(buf.Bytes())
+	}
+	stub.rawTxs[parentTxid] = serialize(parent)
+	stub.rawTxs[childTxid] = serialize(child)
+
+	// Both appear in our scripthash history at the same height. Child is
+	// listed FIRST to force the out-of-order case.
+	stub.history[sh] = []electrum.HistoryEntry{
+		{Height: 3, TxHash: childTxid},
+		{Height: 3, TxHash: parentTxid},
+	}
+
+	scopedIdx := waddrmgr.ScopedIndex{Scope: waddrmgr.KeyScopeBIP0084}
+	req := &FilterBlocksRequest{
+		ExternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{scopedIdx: addr},
+	}
+	for h, hdr := range stub.headers {
+		req.Blocks = append(req.Blocks, wtxmgr.BlockMeta{
+			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: int32(h)},
+			Time:  hdr.Timestamp,
+		})
+	}
+
+	resp, err := c.FilterBlocks(req)
+	if err != nil {
+		t.Fatalf("FilterBlocks: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected a response for the block with activity")
+	}
+	// Both parent (pays us) and child (spends our same-block output) must be
+	// surfaced. Pre-fix, the child filtered first sees an empty
+	// FoundOutPoints and is dropped, yielding only the parent.
+	if len(resp.RelevantTxns) != 2 {
+		t.Fatalf("RelevantTxns = %d, want 2 (parent + same-block child)", len(resp.RelevantTxns))
+	}
+	// Assert the CHILD specifically is present — that's the spend that gets
+	// missed without the topological ordering. Checking only the count could
+	// pass for the wrong reason if a future refactor changed which tx survives.
+	var sawChild bool
+	for _, rt := range resp.RelevantTxns {
+		if rt.TxHash().String() == childTxid {
+			sawChild = true
+		}
+	}
+	if !sawChild {
+		t.Fatal("same-block child spend not surfaced in RelevantTxns")
+	}
+	// And the parent's outpoint must be recorded as found/spent.
+	parentOutpoint := wire.OutPoint{Hash: parent.TxHash(), Index: 0}
+	if _, ok := resp.FoundOutPoints[parentOutpoint]; !ok {
+		t.Fatal("parent outpoint not in FoundOutPoints")
+	}
+}
+
 // synthTxNonce makes each synthTx return a distinct transaction so successive
 // calls in the same test (or shared fixtures) don't produce colliding txids.
 var synthTxNonce atomic.Uint32
