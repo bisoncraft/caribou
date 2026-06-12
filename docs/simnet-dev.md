@@ -38,10 +38,11 @@ util/testing/
 
 Two harness families dominate:
 
-1. **Bitcoin-family** (`btc`, `ltc`, `bch`, `doge`, `dgb`, `dash`, `firo`,
-   `zec`). All share `btc/base-harness.sh` and configure it with per-chain
-   env vars (`SYMBOL`, `DAEMON`, `CLI`, ports, mining addresses, descriptor
-   files).
+1. **Bitcoin-family** (`btc`, `ltc`, `bch`, `dgb`). These source
+   `btc/base-harness.sh` and configure it with per-chain env vars (`SYMBOL`,
+   `DAEMON`, `CLI`, ports, mining addresses, descriptor files). `doge`, `dash`,
+   `firo`, and `zec` are also Bitcoin-derived but ship standalone `harness.sh`
+   scripts.
 2. **Ethereum-family** (`eth`, `base`, `polygon`). All share `eth/baseharness.sh`
    with similar per-chain wiring.
 
@@ -57,8 +58,7 @@ Every harness needs:
   `litecoind` + `litecoin-cli`, `dcrd` + `dcrctl` + `dcrwallet`, …). See each
   harness's `README.md` for exact version requirements.
 - `bc` (used by some ETH-family math).
-- For BTC v30+ descriptor wallets, `xxd` is used to hex-encode contract
-  bytecode for the eth family.
+- For the eth family, `xxd` is used to hex-encode contract bytecode.
 
 ## Running a harness
 
@@ -109,14 +109,14 @@ preconfigured for that wallet:
 ### Ethereum-family wallets
 
 The ETH harness runs a single private node, **alpha**, in `geth --dev` mode.
-Blocks are mined every ~10 seconds in a dedicated mining tmux session — there
-is no concept of separate wallets at the harness level; `eth.accounts[0]` is
-the unlocked dev account that funds everything.
+geth auto-mines a block every ~10 seconds (`--dev.period 10`), so there is no
+manual mining command. There is also no concept of separate wallets at the
+harness level; `eth.accounts[0]` is the unlocked dev account that funds
+everything.
 
 ```bash
 ./alpha attach                                  # JS console on the dev node
 ./sendtoaddress 0xabc...def 1.5                 # send 1.5 ETH
-./mine-alpha 5                                  # mine ~5 blocks
 ./quit
 ```
 
@@ -138,7 +138,7 @@ examples:
 | Chain | Alpha RPC                                | Beta RPC | Notes                                                |
 |-------|------------------------------------------|----------|------------------------------------------------------|
 | btc   | 20556                                    | 20557    | regtest, RPC user/pass `user`/`pass`                 |
-| ltc   | 20557 ↑                                  | 20558 ↑  | follows btc-style but offset; check `ltc/harness.sh` |
+| ltc   | 20566                                    | 20567    | follows btc-style but offset; check `ltc/harness.sh` |
 | eth   | 38556 (HTTP), 38557 (WS), 8552 (authrpc) | —        | --dev mode, single node                              |
 | base  | 39556 (HTTP), 39557 (WS), 8652 (authrpc) | —        | eth-derived                                          |
 
@@ -150,7 +150,7 @@ The wallet binary on `--simnet` listens on `127.0.0.3:5758` by default
 dev session is:
 
 - Window A: harness shell (`./harness.sh` for one or more chains)
-- Window B: `cd wallet/cmd/bossw && ./bossw --simnet --debuglevel=debug`
+- Window B: `cd wallet/cmd/bossw && ./bossw --simnet --log=debug`
 - Browser: `http://127.0.0.3:5758`
 
 ## How the wallet finds the harness

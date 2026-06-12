@@ -111,8 +111,8 @@ fetchAppState() ──► AppState
 `Loading` renders while the initial fetch is in flight.
 
 `MainFrame` owns the persistent shell (sidebar + top bar + active page) and
-delegates to one of the page components (`Portfolio`, `Send`, `Receive`,
-`Activity`, `Settings`, `Swap`, `Trade`). Modals are rendered through
+delegates to one of the page components (`Portfolio`, `Trade`, `Settings`,
+`Activity`). `Send`, `Receive`, and `Swap` are modals, rendered through
 `Modals.tsx` and triggered with `app.setForm(...)`.
 
 ## The `app` singleton (`js/application.ts`)
@@ -152,7 +152,7 @@ throw — and return an `Envelope`:
 ```ts
 type Envelope = { ok: boolean; errMsg?: string; ...payload }
 
-const res = await postJSON('/api/sendtxfee', { addr, value, assetID, subtract })
+const res = await postJSON('/api/txfee', { addr, value, assetID, subtract })
 if (!res.ok) {
   // res.errMsg is always a string here
   return showError(res.errMsg)
@@ -196,7 +196,8 @@ imports the rest:
 
 - `vars.scss` — colors, spacing, breakpoints. **Add new design tokens here**
   rather than hard-coding in components.
-- `mixins.scss` — reusable Sass mixins.
+- `mixins.scss` — reusable Sass mixins (pulled in via `base.scss`, not
+  `application.scss` directly).
 - `base.scss` — element-level resets and defaults.
 - `typography.scss` — font stacks, sizes, headings.
 - `components.scss` — component classes (the bulk of styles).
@@ -227,7 +228,7 @@ classes under it.
 
 ```bash
 cd wallet/appserver/newui
-npm run lint    # tsc --noEmit + eslint
+npm run lint    # tsc + eslint
 ```
 
 The lint config extends `standard`, `@typescript-eslint/recommended`, and
