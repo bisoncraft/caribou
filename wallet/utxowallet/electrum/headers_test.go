@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,6 +192,91 @@ func TestComputeNextWorkRequired(t *testing.T) {
 				t.Fatalf("got 0x%08x, want 0x%08x", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestValidateRetargetLocked exercises the retarget-structure trust check at a
+// difficulty boundary — the decision that's NEVER reached by the rest of the
+// suite because every other test runs with PoWNoRetargeting=true. This is the
+// defence against a server forging difficulty across a 2016-block boundary on
+// the historical span that isn't per-header PoW-checked; computeNextWorkRequired
+// covers the math, this covers accept vs reject and the skip paths.
+func TestValidateRetargetLocked(t *testing.T) {
+	// Params with retargeting ENABLED (unlike NSimnetParams).
+	params := &netparams.ChainParams{
+		TargetTimespan:           14 * 24 * time.Hour, // 1,209,600s
+		RetargetAdjustmentFactor: 4,
+		PowLimit:                 new(big.Int).Lsh(big.NewInt(1), 255),
+		PoWNoRetargeting:         false,
+	}
+	const boundary = int32(retargetInterval) // first retarget height
+
+	priorBits := blockchain.BigToCompact(new(big.Int).Lsh(big.NewInt(1), 240))
+	start := time.Unix(1_600_000_000, 0)
+	chunkStart := &wire.BlockHeader{Bits: priorBits, Timestamp: start}
+	// actualTimespan = 10 days, inside [expected/4, expected*4] so the retarget
+	// is a real (non-clamped) adjustment rather than the identity.
+	prior := &wire.BlockHeader{Bits: priorBits, Timestamp: start.Add(10 * 24 * time.Hour)}
+	want := computeNextWorkRequired(params, prior, chunkStart)
+	if want == priorBits || want == 0x207fffff {
+		t.Fatalf("test setup: want 0x%08x not distinct from prior/forged bits", want)
+	}
+
+	newH := func(p *netparams.ChainParams, byHeight map[int32]*wire.BlockHeader) *Headers {
+		return &Headers{
+			cfg:      &ChainConfig{Params: p, StartHeight: 0, HeaderSize: 80},
+			byHeight: byHeight,
+		}
+	}
+	full := map[int32]*wire.BlockHeader{0: chunkStart, boundary - 1: prior}
+
+	good := &wire.BlockHeader{Bits: want}
+	bad := &wire.BlockHeader{Bits: 0x207fffff} // trivial-difficulty forgery
+
+	// Accept: the boundary header carries the correctly-computed Bits.
+	if err := newH(params, full).validateRetargetLocked(boundary, good, nil, 0); err != nil {
+		t.Fatalf("valid retarget rejected: %v", err)
+	}
+	// Reject: forged easy Bits at the boundary.
+	if err := newH(params, full).validateRetargetLocked(boundary, bad, nil, 0); err == nil {
+		t.Fatal("forged retarget Bits accepted")
+	} else if !strings.Contains(err.Error(), "retarget mismatch") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Skip — PoWNoRetargeting disables the check entirely. Construct a fresh
+	// params (can't copy *params: ChainParams holds a sync.Once).
+	noRT := &netparams.ChainParams{
+		TargetTimespan:           params.TargetTimespan,
+		RetargetAdjustmentFactor: params.RetargetAdjustmentFactor,
+		PowLimit:                 params.PowLimit,
+		PoWNoRetargeting:         true,
+	}
+	if err := newH(noRT, full).validateRetargetLocked(boundary, bad, nil, 0); err != nil {
+		t.Fatalf("PoWNoRetargeting should skip: %v", err)
+	}
+	// Skip — non-boundary height is not checked.
+	if err := newH(params, full).validateRetargetLocked(boundary-1, bad, nil, 0); err != nil {
+		t.Fatalf("non-boundary height should skip: %v", err)
+	}
+	// Soft-pass — missing chunk-start header (predates our range).
+	if err := newH(params, map[int32]*wire.BlockHeader{boundary - 1: prior}).
+		validateRetargetLocked(boundary, bad, nil, 0); err != nil {
+		t.Fatalf("missing chunk start should soft-pass: %v", err)
+	}
+
+	// inBatch path: prior/chunkStart resolved from the in-flight batch rather
+	// than byHeight — the headerAt branch AppendBatch uses when a batch crosses
+	// a boundary. The intermediate entries are never dereferenced.
+	batch := make([]*wire.BlockHeader, boundary)
+	batch[0] = chunkStart
+	batch[boundary-1] = prior
+	hEmpty := newH(params, map[int32]*wire.BlockHeader{})
+	if err := hEmpty.validateRetargetLocked(boundary, good, batch, 0); err != nil {
+		t.Fatalf("inBatch valid retarget rejected: %v", err)
+	}
+	if err := hEmpty.validateRetargetLocked(boundary, bad, batch, 0); err == nil {
+		t.Fatal("inBatch forged retarget accepted")
 	}
 }
 
