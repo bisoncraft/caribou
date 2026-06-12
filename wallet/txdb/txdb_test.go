@@ -187,6 +187,49 @@ func TestGetTxsOrderAndPagination(t *testing.T) {
 	}
 }
 
+func TestGetTxsSameEffTimePagination(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	// b and c share an effective time (200). The networkTime index entry
+	// carries the tx id so a RefID seek lands on the exact tx rather than the
+	// first sibling sharing that time.
+	for _, wt := range []*WalletTransaction{
+		tx("a", 1, 100),
+		tx("b", 1, 200),
+		tx("c", 1, 200),
+		tx("d", 1, 300),
+	} {
+		if err := n.StoreTx(wt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Default order: most recent first, ties broken by id descending.
+	resp, _ := n.GetTxs(&TxHistoryRequest{})
+	if !eq(ids(resp.Txs), []string{"d", "c", "b", "a"}) {
+		t.Fatalf("default = %v", ids(resp.Txs))
+	}
+
+	cases := []struct {
+		ref  string
+		past bool
+		want []string
+	}{
+		{"c", false, []string{"c", "d"}},      // forward from the later sibling
+		{"b", false, []string{"b", "c", "d"}}, // forward from the earlier sibling
+		{"b", true, []string{"b", "a"}},       // past from the earlier sibling
+		{"c", true, []string{"c", "b", "a"}},  // past from the later sibling
+	}
+	for _, c := range cases {
+		ref := c.ref
+		resp, _ := n.GetTxs(&TxHistoryRequest{RefID: &ref, Past: c.past})
+		if !eq(ids(resp.Txs), c.want) {
+			t.Fatalf("ref=%s past=%v = %v, want %v", c.ref, c.past, ids(resp.Txs), c.want)
+		}
+	}
+}
+
 func TestIgnoreTypes(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)
@@ -220,6 +263,32 @@ func TestPendingTxs(t *testing.T) {
 	}
 	if len(pending) != 2 || !got["pend1"] || !got["pend2"] {
 		t.Fatalf("pending = %v", ids(pending))
+	}
+}
+
+func TestPendingTxsNetworkScoped(t *testing.T) {
+	db := newTestTxDB(t)
+	a := db.NetworkTxDB(netA)
+	b := db.NetworkTxDB(netB)
+
+	a.StoreTx(tx("a-pend", 0, 0)) // BlockNumber 0 -> pending
+	b.StoreTx(tx("b-pend", 0, 0))
+	b.StoreTx(tx("b-mined", 7, 100))
+
+	pa, err := a.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("netA GetPendingTxs: %v", err)
+	}
+	if !eq(ids(pa), []string{"a-pend"}) {
+		t.Fatalf("netA pending = %v, want [a-pend]", ids(pa))
+	}
+
+	pb, err := b.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("netB GetPendingTxs: %v", err)
+	}
+	if !eq(ids(pb), []string{"b-pend"}) {
+		t.Fatalf("netB pending = %v, want [b-pend]", ids(pb))
 	}
 }
 

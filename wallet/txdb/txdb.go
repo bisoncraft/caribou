@@ -214,15 +214,20 @@ func recordMeta(b []byte) (network, assetID uint32, effTime uint64, flags byte, 
 // --- agnostic index functions -------------------------------------------------
 
 // indexNetworkTime orders transactions within a network by effective time.
-// Entry: network(4) || effTime(8).
-func indexNetworkTime(_, v []byte) ([]byte, error) {
+// Entry: network(4) || effTime(8) || id. The trailing id (the primary key with
+// its network prefix stripped) makes every entry unique, so a RefID seek lands
+// exactly even when transactions share an effective time.
+func indexNetworkTime(k, v []byte) ([]byte, error) {
 	network, _, effTime, _, err := recordMeta(v)
 	if err != nil {
 		return nil, err
 	}
-	e := make([]byte, 12)
+	// k is the primary key, txKey(network, id) = network(4) || id.
+	id := k[4:]
+	e := make([]byte, 12+len(id))
 	binary.BigEndian.PutUint32(e[0:], network)
 	binary.BigEndian.PutUint64(e[4:], effTime)
+	copy(e[12:], id)
 	return e, nil
 }
 
@@ -249,18 +254,22 @@ func indexAssetTime(_, v []byte) ([]byte, error) {
 	return e, nil
 }
 
-// indexPending partitions transactions by pending state, time-ordered within
-// each partition. Entry: pendingByte(1) || effTime(8).
+// indexPending partitions transactions by pending state and network,
+// time-ordered within each partition.
+// Entry: pendingByte(1) || network(4) || effTime(8). The network component lets
+// getPendingTxs scope its scan with a prefix instead of walking every network's
+// pending transactions and discarding the non-matching ones.
 func indexPending(_, v []byte) ([]byte, error) {
-	_, _, effTime, flags, err := recordMeta(v)
+	network, _, effTime, flags, err := recordMeta(v)
 	if err != nil {
 		return nil, err
 	}
-	e := make([]byte, 9)
+	e := make([]byte, 13)
 	if flags&flagPending != 0 {
 		e[0] = 1
 	}
-	binary.BigEndian.PutUint64(e[1:], effTime)
+	binary.BigEndian.PutUint32(e[1:], network)
+	binary.BigEndian.PutUint64(e[5:], effTime)
 	return e, nil
 }
 
@@ -323,15 +332,25 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 	if req.RefID != nil {
 		raw, err := db.txs.Get(txKey(network, *req.RefID))
 		if err != nil {
-			return nil, ErrUnknownTx
+			if err == ErrKeyNotFound {
+				return nil, ErrUnknownTx
+			}
+			return nil, err
 		}
 		_, _, effTime, _, err := recordMeta(raw)
 		if err != nil {
 			return nil, err
 		}
-		seek = make([]byte, 12)
+		// Seek to the exact networkTime index entry for this tx:
+		// network(4) || effTime(8) || id. Including the id makes the cursor
+		// unambiguous when several txs share an effective time (e.g. an
+		// approve + initiate in the same block); a network||effTime-only seek
+		// would land on the first sibling at that time and mis-page.
+		id := []byte(*req.RefID)
+		seek = make([]byte, 12+len(id))
 		binary.BigEndian.PutUint32(seek[0:], network)
 		binary.BigEndian.PutUint64(seek[4:], effTime)
+		copy(seek[12:], id)
 	}
 
 	txs := make([]*WalletTransaction, 0, n)
@@ -361,14 +380,15 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 
 func (db *TxDB) getPendingTxs(network uint32) ([]*WalletTransaction, error) {
 	var txs []*WalletTransaction
-	// Pending partition of the pending index has a leading 1 byte.
-	err := db.pendingIndex.Iterate([]byte{1}, func(it StoreIter) error {
-		wt, recNet, err := decodeIterWithNetwork(it)
+	// The pending index entry is pendingByte(1) || network(4) || effTime(8), so
+	// this 5-byte prefix scopes the scan to one network's pending partition.
+	prefix := make([]byte, 5)
+	prefix[0] = 1
+	binary.BigEndian.PutUint32(prefix[1:], network)
+	err := db.pendingIndex.Iterate(prefix, func(it StoreIter) error {
+		wt, err := decodeIter(it)
 		if err != nil {
 			return err
-		}
-		if recNet != network {
-			return nil
 		}
 		txs = append(txs, wt)
 		return nil
