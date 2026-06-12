@@ -59,30 +59,31 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 }
 
 type TCore struct {
-	clientCore        // This is here so we don't have to implement core methods we're not testing
-	balanceErr        error
-	loginErr          error
-	logoutErr         error
-	initErr           error
-	isInited          bool
-	createWalletErr   error
-	openWalletErr     error
-	closeWalletErr    error
-	rescanWalletErr   error
-	sendErr           error
-	sendRequiresPW    bool
-	sendRequiresPWErr error
-	notHas            bool
-	notRunning        bool
-	notOpen           bool
-	rateSourceErr     error
-	estFee            uint64
-	estFeeErr         error
-	validAddr         bool
-	walletDisabled    bool
-	walletStatusErr   error
-	notes             []*db.Notification
-	notesErr          error
+	clientCore           // This is here so we don't have to implement core methods we're not testing
+	balanceErr           error
+	loginErr             error
+	logoutErr            error
+	initErr              error
+	isInited             bool
+	createWalletErr      error
+	openWalletErr        error
+	closeWalletErr       error
+	rescanWalletErr      error
+	sendErr              error
+	sendRequiresPW       bool
+	sendRequiresPWErr    error
+	setSendRequiresPWErr error
+	notHas               bool
+	notRunning           bool
+	notOpen              bool
+	rateSourceErr        error
+	estFee               uint64
+	estFeeErr            error
+	validAddr            bool
+	walletDisabled       bool
+	walletStatusErr      error
+	notes                []*db.Notification
+	notesErr             error
 }
 
 func (c *TCore) Network() util.Network { return util.Mainnet }
@@ -227,7 +228,7 @@ func (*TCore) SetLanguage(string) error              { return nil }
 func (*TCore) Language() string                      { return "en-US" }
 func (*TCore) SetCompanionToken(token string) error  { return nil }
 func (*TCore) CompanionToken() (string, error)       { return "", nil }
-func (*TCore) SetSendRequiresPassword(bool) error    { return nil }
+func (c *TCore) SetSendRequiresPassword(bool) error  { return c.setSendRequiresPWErr }
 func (c *TCore) SendRequiresPassword() (bool, error) { return c.sendRequiresPW, c.sendRequiresPWErr }
 
 func (*TCore) TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error { return nil }
@@ -527,6 +528,26 @@ func TestSend(t *testing.T) {
 	}
 	tCore.sendRequiresPWErr = nil
 	tCore.sendRequiresPW = false
+}
+
+func TestAPISetSendRequirePassword(t *testing.T) {
+	writer := new(TWriter)
+	reader := new(TReader)
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	body := &struct {
+		Require bool `json:"require"`
+	}{Require: true}
+
+	// success
+	ensureResponse(t, s.apiSetSendRequirePassword, `{"ok":true}`, reader, writer, body, nil)
+
+	// core error is surfaced
+	tCore.setSendRequiresPWErr = errTest
+	ensureResponse(t, s.apiSetSendRequirePassword,
+		fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest), reader, writer, body, nil)
+	tCore.setSendRequiresPWErr = nil
 }
 
 func TestAPIInit(t *testing.T) {
