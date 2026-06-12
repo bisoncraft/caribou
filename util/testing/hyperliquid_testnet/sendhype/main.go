@@ -3,8 +3,8 @@
 //
 // Usage: sendhype <api_url> <recipient_0x_addr> <amount_hype>
 //
-// The funder's private key is hardcoded. The account must hold testnet HYPE,
-// obtainable from the Hyperliquid testnet faucet.
+// Set HYPE_FUNDER_KEY in the environment to the sender's private key (hex).
+// The account must hold testnet HYPE from the Hyperliquid testnet faucet.
 package main
 
 import (
@@ -16,23 +16,23 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
-// funderPrivKeyHex is the hex-encoded private key for the testnet funder
-// account. Replace with a key whose address holds testnet HYPE.
-// SECURITY: this is a testnet-only key with no real value.
-const funderPrivKeyHex = "0000000000000000000000000000000000000000000000000000000000000001" // "0000000000000000000000000000000000000000000000000000000000000001"
-
-// defaultFunderKey is the placeholder value; running with it is a no-op.
+// defaultFunderKey is the placeholder value. Set HYPE_FUNDER_KEY in the
+// environment to override. SECURITY: testnet-only key with no real value.
 const defaultFunderKey = "0000000000000000000000000000000000000000000000000000000000000001"
 
-// eip712ChainID is Hyperliquid's chain ID used in the EIP-712 domain.
-const eip712ChainID = uint64(998)
+// eip712ChainID is the Arbitrum Sepolia chain ID used in the EIP-712 domain
+// for Hyperliquid testnet user-signed actions.
+const eip712ChainID = uint64(0x66eee)
+
+var sendAssetTypeHash = gethcrypto.Keccak256([]byte(
+	"HyperliquidTransaction:SendAsset(string hyperliquidChain,string destination,string sourceDex,string destinationDex,string token,string amount,string fromSubAccount,uint64 nonce)",
+))
 
 func main() {
 	if len(os.Args) != 4 {
@@ -43,8 +43,12 @@ func main() {
 	recipient := os.Args[2]
 	amtHYPE := os.Args[3]
 
+	funderPrivKeyHex := os.Getenv("HYPE_FUNDER_KEY")
+	if funderPrivKeyHex == "" {
+		funderPrivKeyHex = defaultFunderKey
+	}
 	if funderPrivKeyHex == defaultFunderKey {
-		fmt.Fprintln(os.Stderr, "sendhype: funderPrivKeyHex is still the placeholder — replace it with a funded testnet account key before running the harness")
+		fmt.Fprintln(os.Stderr, "sendhype: set HYPE_FUNDER_KEY to a funded testnet account key before running the harness")
 		os.Exit(1)
 	}
 
@@ -57,7 +61,6 @@ func main() {
 	sender := strings.ToLower(gethcrypto.PubkeyToAddress(privKey.PublicKey).Hex())
 	fmt.Printf("Funder address: %s\n", sender)
 
-	// Fetch HYPE token ID from spot meta.
 	tokenID, err := fetchHypeTokenID(apiURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fetching spot meta: %v\n", err)
@@ -91,7 +94,7 @@ func fetchHypeTokenID(apiURL string) (string, error) {
 }
 
 func sendHYPE(apiURL string, privKey *ecdsa.PrivateKey, dest, tokenID, amount string, nonce uint64) error {
-	hash := spotSendEIP712Hash("Testnet", dest, tokenID, amount, nonce)
+	hash := sendAssetEIP712Hash("Testnet", dest, tokenID, amount, nonce)
 	sig, err := gethcrypto.Sign(hash, privKey)
 	if err != nil {
 		return fmt.Errorf("signing: %w", err)
@@ -104,13 +107,16 @@ func sendHYPE(apiURL string, privKey *ecdsa.PrivateKey, dest, tokenID, amount st
 
 	req := map[string]any{
 		"action": map[string]any{
-			"type":             "spotSend",
+			"type":             "sendAsset",
 			"hyperliquidChain": "Testnet",
-			"signatureChainId": "0x" + strconv.FormatUint(eip712ChainID, 16),
+			"signatureChainId": fmt.Sprintf("0x%x", eip712ChainID),
 			"destination":      dest,
+			"sourceDex":        "spot",
+			"destinationDex":   "spot",
 			"token":            tokenID,
 			"amount":           amount,
-			"time":             nonce,
+			"fromSubAccount":   "",
+			"nonce":            nonce,
 		},
 		"nonce": nonce,
 		"signature": map[string]any{
@@ -133,12 +139,13 @@ func sendHYPE(apiURL string, privKey *ecdsa.PrivateKey, dest, tokenID, amount st
 	return nil
 }
 
-// --- EIP-712 (minimal, matching the wallet implementation) ---
+// --- EIP-712 (matches wallet/asset/hyperliquid signing) ---
 
-func spotSendEIP712Hash(chainName, dest, token, amount string, nonce uint64) []byte {
+func sendAssetEIP712Hash(chainName, dest, tokenID, amount string, nonce uint64) []byte {
 	domainHash := eip712DomainHash()
-	msgHash := spotSendMessageHash(chainName, dest, token, amount, nonce)
-	return gethcrypto.Keccak256(append([]byte{0x19, 0x01}, append(domainHash, msgHash...)...))
+	msgHash := sendAssetMessageHash(chainName, dest, tokenID, amount, nonce)
+	input := append([]byte{0x19, 0x01}, append(domainHash, msgHash...)...)
+	return gethcrypto.Keccak256(input)
 }
 
 func eip712DomainHash() []byte {
@@ -157,19 +164,19 @@ func eip712DomainHash() []byte {
 	return gethcrypto.Keccak256(enc)
 }
 
-func spotSendMessageHash(chainName, dest, token, amount string, nonce uint64) []byte {
-	typeHash := gethcrypto.Keccak256([]byte(
-		"SpotSend(string hyperliquidChain,string destination,string token,string amount,uint64 time)",
-	))
+func sendAssetMessageHash(chainName, dest, tokenID, amount string, nonce uint64) []byte {
 	nonceBytes := make([]byte, 32)
 	binary.BigEndian.PutUint64(nonceBytes[24:], nonce)
 
-	enc := make([]byte, 0, 6*32)
-	enc = append(enc, typeHash...)
+	enc := make([]byte, 0, 9*32)
+	enc = append(enc, sendAssetTypeHash...)
 	enc = append(enc, gethcrypto.Keccak256([]byte(chainName))...)
 	enc = append(enc, gethcrypto.Keccak256([]byte(dest))...)
-	enc = append(enc, gethcrypto.Keccak256([]byte(token))...)
+	enc = append(enc, gethcrypto.Keccak256([]byte("spot"))...) // sourceDex
+	enc = append(enc, gethcrypto.Keccak256([]byte("spot"))...) // destinationDex
+	enc = append(enc, gethcrypto.Keccak256([]byte(tokenID))...)
 	enc = append(enc, gethcrypto.Keccak256([]byte(amount))...)
+	enc = append(enc, gethcrypto.Keccak256([]byte(""))...) // fromSubAccount
 	enc = append(enc, nonceBytes...)
 	return gethcrypto.Keccak256(enc)
 }

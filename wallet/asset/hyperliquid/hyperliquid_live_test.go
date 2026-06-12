@@ -37,9 +37,15 @@ const testSinkAddress = "0xeffb9c711ec1d3e551a7391dd848290a614c2e63"
 
 var tLogger = util.StdOutLogger("HLTEST", util.LevelTrace)
 
-// createTestWallet opens a wallet from the private key in HL_TEST_PRIVATE_KEY.
+// createTestWallet opens a wallet from the raw private key in HL_TEST_PRIVATE_KEY.
 // The key must belong to a funded testnet account. The test is skipped if the
 // env var is not set.
+//
+// We call saveKeyFile directly rather than Driver.Create because Create expects
+// a seed and derives the key via HD derivation, which would produce a different
+// address than the MetaMask account the test key belongs to. Create performs no
+// other initialization beyond saveKeyFile — DB setup and metadata happen in
+// Connect, which the tests call normally.
 func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 	t.Helper()
 

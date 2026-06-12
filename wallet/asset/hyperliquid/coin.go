@@ -19,7 +19,7 @@ type coin struct {
 	// txID is either a 0x-prefixed 32-byte hex hash (confirmed) or a
 	// nonce-based placeholder (pending, fmt "0x%016x" of unix milliseconds).
 	txID  string
-	value uint64 // microHYPE
+	value uint64 // atoms (1e8 per HYPE)
 }
 
 var _ asset.Coin = (*coin)(nil)

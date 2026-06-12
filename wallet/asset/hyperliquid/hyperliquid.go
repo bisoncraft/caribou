@@ -159,7 +159,7 @@ type HyperWallet struct {
 	hypeTokenID string // "HYPE:<tokenId>", resolved on Connect
 
 	rpc  *rpcClient
-	txDB *hyperTxDB
+	txDB atomic.Pointer[hyperTxDB]
 
 	ledgerMtx sync.Mutex
 	scanMtx   sync.Mutex
@@ -281,18 +281,18 @@ func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening tx database: %w", err)
 	}
-	w.txDB = txDB
+	w.txDB.Store(txDB)
 
 	lastScannedMS, err := txDB.getLastScannedMS()
 	if err != nil {
 		_ = txDB.Close()
-		w.txDB = nil
+		w.txDB.Store(nil)
 		return nil, fmt.Errorf("loading persisted scan watermark: %w", err)
 	}
 	maxPendingNonce, err := txDB.highestPendingNonce()
 	if err != nil {
 		_ = txDB.Close()
-		w.txDB = nil
+		w.txDB.Store(nil)
 		return nil, fmt.Errorf("loading pending send state: %w", err)
 	}
 
@@ -383,12 +383,13 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 
 	nonce := w.nextSpotSendNonce()
 	amtStr := atomsToHYPE(value)
-	chainName := eip712ChainNames[w.net]
+	chainName := networkChainName(w.net)
+	chainID := networkChainID(w.net)
 
 	action := sendAssetAction{
 		Type:             "sendAsset",
 		HyperliquidChain: chainName,
-		SignatureChainID: fmt.Sprintf("0x%x", eip712ChainID),
+		SignatureChainID: fmt.Sprintf("0x%x", chainID),
 		Destination:      address,
 		SourceDex:        "spot",
 		DestinationDex:   "spot",
@@ -421,8 +422,8 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 
 	// Store the pending record before broadcasting so a storeTx failure
 	// after a successful send can never leave the transaction untracked.
-	if w.txDB != nil {
-		if err := w.txDB.storeTx(&dbTx{
+	if db := w.txDB.Load(); db != nil {
+		if err := db.storeTx(&dbTx{
 			WalletTransaction: wtx,
 			SubmissionTime:    uint64(time.Now().Unix()),
 		}); err != nil {
@@ -435,9 +436,11 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 		// transport errors (network drop, timeout) the tx may have landed, so
 		// we leave the record for scanLedger to resolve.
 		var rejection *exchangeRejection
-		if errors.As(err, &rejection) && w.txDB != nil {
-			if delErr := w.txDB.deleteTx(txID); delErr != nil {
-				w.log.Errorf("Cleaning up pending tx %s after rejection: %v", txID, delErr)
+		if errors.As(err, &rejection) {
+			if db := w.txDB.Load(); db != nil {
+				if delErr := db.deleteTx(txID); delErr != nil {
+					w.log.Errorf("Cleaning up pending tx %s after rejection: %v", txID, delErr)
+				}
 			}
 		}
 		return nil, fmt.Errorf("spot send: %w", err)
@@ -467,16 +470,18 @@ func (w *HyperWallet) StandardSendFee(_ uint64) uint64 { return 0 }
 func (w *HyperWallet) FeeRate() uint64                 { return 0 }
 
 func (w *HyperWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
-	if w.txDB == nil || req == nil {
+	db := w.txDB.Load()
+	if db == nil || req == nil {
 		return &asset.TxHistoryResponse{}, nil
 	}
-	return w.txDB.getTxs(req)
+	return db.getTxs(req)
 }
 
 func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.WalletTransaction, error) {
-	if w.txDB != nil {
+	db := w.txDB.Load()
+	if db != nil {
 		for _, lookupID := range walletTransactionLookupIDs(txID) {
-			wt, err := w.txDB.getTx(lookupID)
+			wt, err := db.getTx(lookupID)
 			if err != nil {
 				return nil, err
 			}
@@ -485,7 +490,7 @@ func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.
 			}
 		}
 		for _, lookupID := range walletTransactionLookupIDs(txID) {
-			wt, err := w.txDB.getTxByPendingID(lookupID)
+			wt, err := db.getTxByPendingID(lookupID)
 			if err != nil {
 				return nil, err
 			}
@@ -498,10 +503,11 @@ func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.
 }
 
 func (w *HyperWallet) PendingTransactions(_ context.Context) []*asset.WalletTransaction {
-	if w.txDB == nil {
+	db := w.txDB.Load()
+	if db == nil {
 		return nil
 	}
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := db.getPendingTxs()
 	if err != nil {
 		w.log.Errorf("Getting pending txs: %v", err)
 		return nil
@@ -551,8 +557,8 @@ func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
 // missed while offline, then enters the live message loop.
 func (w *HyperWallet) tipPoller(ctx context.Context) {
 	defer func() {
-		if w.txDB != nil {
-			_ = w.txDB.Close()
+		if db := w.txDB.Swap(nil); db != nil {
+			_ = db.Close()
 		}
 		if atomic.SwapUint32(&w.lastPeerCount, 0) != 0 && w.peersChange != nil {
 			w.peersChange(0, nil)
@@ -656,8 +662,8 @@ func (w *HyperWallet) advanceLastScannedMS(next int64) error {
 		return nil
 	}
 
-	if w.txDB != nil {
-		if err := w.txDB.setLastScannedMS(next); err != nil {
+	if db := w.txDB.Load(); db != nil {
+		if err := db.setLastScannedMS(next); err != nil {
 			return err
 		}
 	}
@@ -677,7 +683,8 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
 	w.ledgerMtx.Lock()
 	defer w.ledgerMtx.Unlock()
 
-	if w.txDB == nil {
+	db := w.txDB.Load()
+	if db == nil {
 		return
 	}
 
@@ -687,11 +694,11 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
 
 	switch u.Delta.Type {
 	case "send", "spotTransfer", "transfer", "deposit", "internalTransfer":
-		w.handleTransferUpdate(u)
+		w.handleTransferUpdate(u, db)
 	}
 }
 
-func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
+func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 	amount, err := parseHYPE(u.Delta.Amount)
 	if err != nil {
 		w.log.Warnf("Parsing ledger amount %q: %v", u.Delta.Amount, err)
@@ -703,7 +710,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 
 	if isOutgoing {
 		// Try to match and confirm a pending send tx by nonce proximity.
-		w.confirmPendingSend(u, amount)
+		w.confirmPendingSend(u, amount, db)
 		return
 	}
 
@@ -712,7 +719,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 	}
 
 	// Incoming transfer not already in the DB.
-	if existing, _ := w.txDB.getTx(u.Hash); existing != nil {
+	if existing, _ := db.getTx(u.Hash); existing != nil {
 		return
 	}
 
@@ -734,7 +741,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 		},
 	}
 
-	if err := w.txDB.storeTx(&dbTx{
+	if err := db.storeTx(&dbTx{
 		WalletTransaction: wtx,
 		SubmissionTime:    uint64(time.Now().Unix()),
 	}); err != nil {
@@ -754,8 +761,8 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 // 5-second window, the one whose nonce is numerically closest to u.Time is
 // chosen, preventing incorrect aliasing on rapid duplicate sends.
 // Pending entries older than pendingTTL are expired opportunistically.
-func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
-	pending, err := w.txDB.getPendingTxs()
+func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hyperTxDB) {
+	pending, err := db.getPendingTxs()
 	if err != nil {
 		w.log.Errorf("Getting pending txs: %v", err)
 		return
@@ -768,7 +775,7 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 		if p.SubmissionTime > 0 && p.SubmissionTime < cutoff {
 			w.log.Infof("Expiring stale pending send %s (submitted %ds ago)",
 				p.ID, uint64(time.Now().Unix())-p.SubmissionTime)
-			if err := w.txDB.deleteTx(p.ID); err != nil {
+			if err := db.deleteTx(p.ID); err != nil {
 				w.log.Errorf("Deleting expired pending tx %s: %v", p.ID, err)
 			}
 			continue
@@ -822,11 +829,11 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 
 	// Store the confirmed entry before deleting the pending one so the tx
 	// is never lost if the store fails.
-	if err := w.txDB.storeTx(best); err != nil {
+	if err := db.storeTx(best); err != nil {
 		w.log.Errorf("Storing confirmed send tx %s: %v", u.Hash, err)
 		return
 	}
-	if err := w.txDB.deleteTx(oldID); err != nil {
+	if err := db.deleteTx(oldID); err != nil {
 		w.log.Warnf("Removing stale pending tx %s: %v", oldID, err)
 	}
 
@@ -1031,32 +1038,47 @@ func pubKeyToAddress(compressedPub []byte) string {
 
 // --- EIP-712 signing ---
 
-// eip712Domain is the EIP-712 domain separator hash, computed once at package
-// init. All inputs (name, version, chainId, verifyingContract) are constants.
-var eip712Domain = eip712DomainHash()
-
 // sendAssetTypeHashBytes is the keccak256 of the SendAsset EIP-712 type string.
 var sendAssetTypeHashBytes = gethcrypto.Keccak256([]byte(
 	"HyperliquidTransaction:SendAsset(string hyperliquidChain,string destination,string sourceDex,string destinationDex,string token,string amount,string fromSubAccount,uint64 nonce)",
 ))
 
+// networkChainID returns the EIP-712 signing chain ID for network, falling
+// back to mainnet for any network not explicitly in the map.
+func networkChainID(network util.Network) uint64 {
+	if id, ok := eip712ChainIDs[network]; ok {
+		return id
+	}
+	return eip712ChainIDs[util.Mainnet]
+}
+
+// networkChainName returns the hyperliquidChain string for network, falling
+// back to mainnet for any network not explicitly in the map.
+func networkChainName(network util.Network) string {
+	if name, ok := eip712ChainNames[network]; ok {
+		return name
+	}
+	return eip712ChainNames[util.Mainnet]
+}
+
 // sendAssetEIP712Hash computes the EIP-712 hash for a SendAsset action.
 func sendAssetEIP712Hash(network util.Network, destination, sourceDex, destinationDex, token, amount, fromSubAccount string, nonce uint64) []byte {
+	domain := eip712DomainHashFor(networkChainID(network))
 	messageHash := sendAssetMessageHash(network, destination, sourceDex, destinationDex, token, amount, fromSubAccount, nonce)
 	input := make([]byte, 0, 2+32+32)
 	input = append(input, 0x19, 0x01)
-	input = append(input, eip712Domain...)
+	input = append(input, domain...)
 	input = append(input, messageHash...)
 	return gethcrypto.Keccak256(input)
 }
 
-func eip712DomainHash() []byte {
+func eip712DomainHashFor(chainID uint64) []byte {
 	domainTypeHash := gethcrypto.Keccak256([]byte(
 		"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
 	))
 
 	chainIDBytes := make([]byte, 32)
-	binary.BigEndian.PutUint64(chainIDBytes[24:], eip712ChainID)
+	binary.BigEndian.PutUint64(chainIDBytes[24:], chainID)
 
 	encoded := make([]byte, 0, 5*32)
 	encoded = append(encoded, domainTypeHash...)
@@ -1069,7 +1091,7 @@ func eip712DomainHash() []byte {
 }
 
 func sendAssetMessageHash(network util.Network, destination, sourceDex, destinationDex, token, amount, fromSubAccount string, nonce uint64) []byte {
-	chainName := eip712ChainNames[network]
+	chainName := networkChainName(network)
 	nonceBytes := make([]byte, 32)
 	binary.BigEndian.PutUint64(nonceBytes[24:], nonce)
 

@@ -19,13 +19,13 @@ const (
 
 	// pendingTTL is how long a pending send may wait for confirmation before
 	// it is considered permanently unconfirmed and removed from the DB.
-	// Hyperliquid finalizes in ~1 s; 30 s is very conservative.
-	pendingTTL = 30
+	// Hyperliquid finalizes in ~1 s; 120 s allows for WS reconnect lag.
+	pendingTTL = 120
 )
 
 var (
 	UnitInfo = util.UnitInfo{
-		AtomicUnit: "microHYPE",
+		AtomicUnit: "atoms",
 		Conventional: util.Denomination{
 			Unit:             "HYPE",
 			ConversionFactor: 1e8,
@@ -51,9 +51,13 @@ var (
 		util.Testnet: "Testnet",
 	}
 
-	// eip712ChainID is the chain ID in the EIP-712 domain separator.
-	// Hyperliquid uses 998 for both mainnet and testnet.
-	eip712ChainID = uint64(998)
+	// eip712ChainIDs maps network to the chain ID used in the EIP-712 domain
+	// separator for Hyperliquid user-signed actions. Testnet uses Arbitrum
+	// Sepolia (0x66eee = 421614); mainnet uses Arbitrum One (0xa4b1 = 42161).
+	eip712ChainIDs = map[util.Network]uint64{
+		util.Mainnet: 0xa4b1,
+		util.Testnet: 0x66eee,
+	}
 )
 
 // atomsToHYPE converts microHYPE atoms to a decimal HYPE string for the

@@ -492,10 +492,10 @@ func TestAuthenticator(t *testing.T) {
 
 func TestEIP712DomainHashStable(t *testing.T) {
 	// The domain hash must be deterministic — a regression guard.
-	h1 := eip712DomainHash()
-	h2 := eip712DomainHash()
+	h1 := eip712DomainHashFor(eip712ChainIDs[util.Testnet])
+	h2 := eip712DomainHashFor(eip712ChainIDs[util.Testnet])
 	if !bytes.Equal(h1, h2) {
-		t.Error("eip712DomainHash is not deterministic")
+		t.Error("eip712DomainHashFor is not deterministic")
 	}
 	if len(h1) != 32 {
 		t.Errorf("domain hash length = %d, want 32", len(h1))
@@ -1133,11 +1133,11 @@ func newTestWalletWithDB(t *testing.T) *HyperWallet {
 		log:     log,
 		net:     util.Testnet,
 		address: "0xabcdef1234567890abcdef1234567890abcdef12",
-		txDB:    db,
 		emit:    asset.NewWalletEmitter(noteChan, BipID, log),
 		tipMtx:  sync.RWMutex{},
 		tip:     uint64(1700000000000),
 	}
+	w.txDB.Store(db)
 	t.Cleanup(func() { db.Close() })
 	return w
 }
@@ -1211,9 +1211,9 @@ func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWa
 		settings:    map[string]string{},
 		hypeTokenID: "HYPE:0x1234",
 		rpc:         rpc,
-		txDB:        db,
 		emit:        asset.NewWalletEmitter(noteChan, BipID, util.StdOutLogger("HLTEST", util.LevelTrace)),
 	}
+	w.txDB.Store(db)
 	w.Unlock(pw)
 	t.Cleanup(func() { db.Close(); srv.Close() })
 	return w, srv
@@ -1231,7 +1231,7 @@ func TestSendStoreBeforeBroadcast(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	tx, err := w.txDB.getTx(coin.TxID())
+	tx, err := w.txDB.Load().getTx(coin.TxID())
 	if err != nil {
 		t.Fatalf("getTx: %v", err)
 	}
@@ -1259,7 +1259,7 @@ func TestSendCleansUpOnBroadcastFailure(t *testing.T) {
 	}
 
 	// No pending entries should remain.
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := w.txDB.Load().getPendingTxs()
 	if err != nil {
 		t.Fatalf("getPendingTxs: %v", err)
 	}
@@ -1281,7 +1281,7 @@ func TestSendKeepsPendingOnNetworkError(t *testing.T) {
 		t.Fatal("expected error from failed send")
 	}
 
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := w.txDB.Load().getPendingTxs()
 	if err != nil {
 		t.Fatalf("getPendingTxs: %v", err)
 	}
@@ -1301,7 +1301,7 @@ func TestExpireOldPending(t *testing.T) {
 
 	// Store a pending tx with a submission time well past the TTL.
 	staleTime := uint64(time.Now().Unix()) - pendingTTL - 60
-	if err := w.txDB.storeTx(&dbTx{
+	if err := w.txDB.Load().storeTx(&dbTx{
 		WalletTransaction: &asset.WalletTransaction{
 			ID:        pendingID,
 			Type:      asset.Send,
@@ -1329,9 +1329,9 @@ func TestExpireOldPending(t *testing.T) {
 			User:        w.address,
 			Destination: differentDest,
 		},
-	}, 1e8)
+	}, 1e8, w.txDB.Load())
 
-	tx, err := w.txDB.getTx(pendingID)
+	tx, err := w.txDB.Load().getTx(pendingID)
 	if err != nil {
 		t.Fatalf("getTx: %v", err)
 	}
@@ -1348,7 +1348,7 @@ func TestFreshPendingNotExpired(t *testing.T) {
 	recipient := "0x2222222222222222222222222222222222222222"
 
 	// Store a fresh pending tx (just submitted).
-	if err := w.txDB.storeTx(&dbTx{
+	if err := w.txDB.Load().storeTx(&dbTx{
 		WalletTransaction: &asset.WalletTransaction{
 			ID:        pendingID,
 			Type:      asset.Send,
@@ -1372,9 +1372,9 @@ func TestFreshPendingNotExpired(t *testing.T) {
 			Type: "spotTransfer", Token: "HYPE", Amount: "1",
 			User: w.address, Destination: differentDest,
 		},
-	}, 1e8)
+	}, 1e8, w.txDB.Load())
 
-	tx, err := w.txDB.getTx(pendingID)
+	tx, err := w.txDB.Load().getTx(pendingID)
 	if err != nil {
 		t.Fatalf("getTx: %v", err)
 	}
@@ -1402,7 +1402,7 @@ func TestConfirmPendingSend(t *testing.T) {
 		},
 		SubmissionTime: uint64(time.Now().Unix()),
 	}
-	if err := w.txDB.storeTx(pendingTx); err != nil {
+	if err := w.txDB.Load().storeTx(pendingTx); err != nil {
 		t.Fatalf("storeTx: %v", err)
 	}
 
@@ -1420,10 +1420,10 @@ func TestConfirmPendingSend(t *testing.T) {
 		},
 	}
 
-	w.confirmPendingSend(update, 5e8)
+	w.confirmPendingSend(update, 5e8, w.txDB.Load())
 
 	// Pending entry should be gone.
-	old, err := w.txDB.getTx(pendingID)
+	old, err := w.txDB.Load().getTx(pendingID)
 	if err != nil {
 		t.Fatalf("getTx old: %v", err)
 	}
@@ -1432,7 +1432,7 @@ func TestConfirmPendingSend(t *testing.T) {
 	}
 
 	// Confirmed entry should exist under the real hash.
-	confirmed, err := w.txDB.getTx(realHash)
+	confirmed, err := w.txDB.Load().getTx(realHash)
 	if err != nil {
 		t.Fatalf("getTx confirmed: %v", err)
 	}
@@ -1456,7 +1456,7 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x2222222222222222222222222222222222222222"
-	if err := w.txDB.storeTx(&dbTx{
+	if err := w.txDB.Load().storeTx(&dbTx{
 		WalletTransaction: &asset.WalletTransaction{
 			ID:        pendingID,
 			Type:      asset.Send,
@@ -1478,10 +1478,10 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 			Type: "spotTransfer", Token: "HYPE",
 			Amount: "99", User: w.address, Destination: recipient,
 		},
-	}, 99e8)
+	}, 99e8, w.txDB.Load())
 
 	// Pending entry should still be there.
-	still, err := w.txDB.getTx(pendingID)
+	still, err := w.txDB.Load().getTx(pendingID)
 	if err != nil {
 		t.Fatalf("getTx: %v", err)
 	}
@@ -1499,7 +1499,7 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 	for i, recipient := range []string{recipientA, recipientB} {
 		nonce := baseNonce + uint64(i)
 		pendingID := fmt.Sprintf("0x%016x", nonce)
-		if err := w.txDB.storeTx(&dbTx{
+		if err := w.txDB.Load().storeTx(&dbTx{
 			WalletTransaction: &asset.WalletTransaction{
 				ID:        pendingID,
 				Type:      asset.Send,
@@ -1525,9 +1525,9 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 			User:        w.address,
 			Destination: recipientB,
 		},
-	}, 5e8)
+	}, 5e8, w.txDB.Load())
 
-	confirmed, err := w.txDB.getTx(realHash)
+	confirmed, err := w.txDB.Load().getTx(realHash)
 	if err != nil {
 		t.Fatalf("getTx confirmed: %v", err)
 	}
@@ -1538,7 +1538,7 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 		t.Fatalf("confirmed recipient = %v, want %s", confirmed.Recipient, recipientB)
 	}
 
-	stillPending, err := w.txDB.getTx(fmt.Sprintf("0x%016x", baseNonce))
+	stillPending, err := w.txDB.Load().getTx(fmt.Sprintf("0x%016x", baseNonce))
 	if err != nil {
 		t.Fatalf("getTx pending A: %v", err)
 	}
@@ -1569,7 +1569,7 @@ func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
 		{pendingIDA, nonceA},
 		{pendingIDB, nonceB},
 	} {
-		if err := w.txDB.storeTx(&dbTx{
+		if err := w.txDB.Load().storeTx(&dbTx{
 			WalletTransaction: &asset.WalletTransaction{
 				ID:        entry.id,
 				Type:      asset.Send,
@@ -1596,10 +1596,10 @@ func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 5e8)
+	}, 5e8, w.txDB.Load())
 
 	// The confirmed entry must alias pendingIDB (closest nonce, 500ms diff).
-	confirmed, err := w.txDB.getTx(realHash)
+	confirmed, err := w.txDB.Load().getTx(realHash)
 	if err != nil {
 		t.Fatalf("getTx confirmed: %v", err)
 	}
@@ -1611,10 +1611,10 @@ func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
 	}
 
 	// pendingIDB must be deleted; pendingIDA must remain.
-	if tx, _ := w.txDB.getTx(pendingIDB); tx != nil {
+	if tx, _ := w.txDB.Load().getTx(pendingIDB); tx != nil {
 		t.Error("pendingIDB should have been deleted after confirmation")
 	}
-	if tx, _ := w.txDB.getTx(pendingIDA); tx == nil {
+	if tx, _ := w.txDB.Load().getTx(pendingIDA); tx == nil {
 		t.Error("pendingIDA should still be pending")
 	}
 }
@@ -1624,7 +1624,7 @@ func TestWalletTransactionLookupByPendingCoinID(t *testing.T) {
 	pendingID := "0x0000018bcfe56800"
 	recipient := "0x1111111111111111111111111111111111111111"
 
-	if err := w.txDB.storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
+	if err := w.txDB.Load().storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
 		ID:        pendingID,
 		Type:      asset.Send,
 		Amount:    1e8,
@@ -1656,7 +1656,7 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x1111111111111111111111111111111111111111"
 
-	if err := w.txDB.storeTx(&dbTx{
+	if err := w.txDB.Load().storeTx(&dbTx{
 		WalletTransaction: &asset.WalletTransaction{
 			ID:        pendingID,
 			Type:      asset.Send,
@@ -1682,7 +1682,7 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 5e8)
+	}, 5e8, w.txDB.Load())
 
 	coinIDStr, err := decodeCoinID(coinIDBytes(pendingID))
 	if err != nil {
@@ -1719,9 +1719,9 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 		},
 	}
 
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, w.txDB.Load())
 
-	got, err := w.txDB.getTx(realHash)
+	got, err := w.txDB.Load().getTx(realHash)
 	if err != nil {
 		t.Fatalf("getTx: %v", err)
 	}
@@ -1761,10 +1761,10 @@ func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 	}
 
 	// Call twice — second call should be a no-op.
-	w.handleTransferUpdate(update)
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, w.txDB.Load())
+	w.handleTransferUpdate(update, w.txDB.Load())
 
-	resp, err := w.txDB.getTxs(&asset.TxHistoryRequest{N: 10})
+	resp, err := w.txDB.Load().getTxs(&asset.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("getTxs: %v", err)
 	}
@@ -1786,7 +1786,7 @@ func TestProcessLedgerUpdateNonHYPE(t *testing.T) {
 	// Should be silently ignored (non-HYPE coin).
 	w.processLedgerUpdate(update)
 
-	resp, err := w.txDB.getTxs(&asset.TxHistoryRequest{N: 10})
+	resp, err := w.txDB.Load().getTxs(&asset.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("getTxs: %v", err)
 	}
@@ -1815,10 +1815,10 @@ func newTestWalletWithRPC(t *testing.T, srv *httptest.Server) *HyperWallet {
 		log:     log,
 		net:     util.Testnet,
 		address: "0xabcdef1234567890abcdef1234567890abcdef12",
-		txDB:    db,
 		rpc:     rpc,
 		emit:    asset.NewWalletEmitter(noteChan, BipID, log),
 	}
+	w.txDB.Store(db)
 	t.Cleanup(func() { db.Close() })
 	return w
 }
@@ -1873,7 +1873,7 @@ func TestScanLedgerAdvancesWatermark(t *testing.T) {
 	if got != ts2+1 {
 		t.Errorf("lastScannedMS = %d, want %d", got, ts2+1)
 	}
-	gotPersisted, err := wallet.txDB.getLastScannedMS()
+	gotPersisted, err := wallet.txDB.Load().getLastScannedMS()
 	if err != nil {
 		t.Fatalf("getLastScannedMS: %v", err)
 	}
@@ -1883,7 +1883,7 @@ func TestScanLedgerAdvancesWatermark(t *testing.T) {
 
 	// Both receive events should be stored.
 	for _, hash := range []string{hash1, hash2} {
-		tx, err := wallet.txDB.getTx(hash)
+		tx, err := wallet.txDB.Load().getTx(hash)
 		if err != nil {
 			t.Fatalf("getTx %s: %v", hash, err)
 		}

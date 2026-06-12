@@ -64,7 +64,7 @@ if [ -z "\$1" ] || [ -z "\$2" ]; then
   echo "Usage: ./send <0x_recipient> <amount_hype>"
   exit 1
 fi
-"${NODES_ROOT}/sendhype" "${API_URL}" "\$1" "\$2"
+HYPE_FUNDER_KEY="${HYPE_FUNDER_KEY}" "${NODES_ROOT}/sendhype" "${API_URL}" "\$1" "\$2"
 SENDEOF
 chmod +x "${NODES_ROOT}/send"
 
