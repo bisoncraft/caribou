@@ -66,6 +66,10 @@ var (
 			Key:         "apiendpoint",
 			DisplayName: "API Endpoint",
 			Description: "Hyperliquid API base URL (optional override)",
+		}, {
+			Key:         "wsendpoint",
+			DisplayName: "WebSocket Endpoint",
+			Description: "Hyperliquid WebSocket URL (optional override)",
 		}},
 	}
 
@@ -1059,6 +1063,13 @@ func networkChainName(network util.Network) string {
 		return name
 	}
 	return eip712ChainNames[util.Mainnet]
+}
+
+// SendAssetEIP712Hash computes the EIP-712 hash for a SendAsset action. It is
+// exported for use by the Hyperliquid mock server, which must verify
+// signatures using the same hashing logic as the wallet.
+func SendAssetEIP712Hash(network util.Network, destination, sourceDex, destinationDex, token, amount, fromSubAccount string, nonce uint64) []byte {
+	return sendAssetEIP712Hash(network, destination, sourceDex, destinationDex, token, amount, fromSubAccount, nonce)
 }
 
 // sendAssetEIP712Hash computes the EIP-712 hash for a SendAsset action.

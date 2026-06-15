@@ -1,20 +1,38 @@
 //go:build harness
 
-// These tests run against the Hyperliquid testnet.
+// These tests run against the Hyperliquid testnet, or against the local
+// Hyperliquid mock server (see util/testing/hyperliquid_mock) when
+// HL_API_ENDPOINT is set.
 //
-// Setup:
+// Setup (real testnet):
 //  1. Export the private key of your funded testnet account from MetaMask.
 //  2. Set HL_TEST_PRIVATE_KEY=<hex_key> before running.
 //
 // Run with:
 //
 //	HL_TEST_PRIVATE_KEY=<hex> go test -v -tags harness -run TestLive ./wallet/asset/hyperliquid/
+//
+// Setup (mock server):
+//  1. Start the mock: ./run_hype_mock_harness.sh
+//  2. Set HL_API_ENDPOINT=http://127.0.0.1:18080 and
+//     HL_WS_ENDPOINT=ws://127.0.0.1:18080/ws before running. HL_TEST_PRIVATE_KEY
+//     is not needed — a fresh key is generated and funded via the mock's
+//     /test/fund endpoint.
+//
+// Run with:
+//
+//	HL_API_ENDPOINT=http://127.0.0.1:18080 HL_WS_ENDPOINT=ws://127.0.0.1:18080/ws \
+//	  go test -v -tags harness -run TestLive ./wallet/asset/hyperliquid/
 package hyperliquid
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,19 +45,73 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 )
 
-const testnetAPI = "https://api.hyperliquid-testnet.xyz"
+const defaultTestnetAPI = "https://api.hyperliquid-testnet.xyz"
 
-// testSinkAddress is a known active account on the Hyperliquid testnet with a
-// real HYPE spot balance, used as the recipient for outbound test sends.
-// Hyperliquid testnet requires the recipient to be an active clearinghouse
-// account — zero-balance or EVM-only accounts are rejected.
+// testnetAPI returns the REST API base URL to test against: the local mock
+// server if HL_API_ENDPOINT is set, otherwise the public testnet.
+func testnetAPI() string {
+	if ep := os.Getenv("HL_API_ENDPOINT"); ep != "" {
+		return ep
+	}
+	return defaultTestnetAPI
+}
+
+// usingMock reports whether the live tests are configured to run against the
+// local Hyperliquid mock server rather than the real testnet.
+func usingMock() bool {
+	return os.Getenv("HL_API_ENDPOINT") != ""
+}
+
+// testSinkAddress is the recipient used for outbound test sends.
+//
+// Against the real testnet this must be a known active account with a real
+// HYPE spot balance — Hyperliquid rejects sends to inactive/zero-balance
+// accounts. Against the mock server any address works, since the mock
+// creates accounts on demand.
 const testSinkAddress = "0xeffb9c711ec1d3e551a7391dd848290a614c2e63"
 
 var tLogger = util.StdOutLogger("HLTEST", util.LevelTrace)
 
-// createTestWallet opens a wallet from the raw private key in HL_TEST_PRIVATE_KEY.
-// The key must belong to a funded testnet account. The test is skipped if the
+// walletSettings returns the wallet config settings to use for the live
+// tests, pointing at the mock server's WS endpoint if HL_API_ENDPOINT is set.
+func walletSettings() map[string]string {
+	settings := map[string]string{"apiendpoint": testnetAPI()}
+	if ep := os.Getenv("HL_WS_ENDPOINT"); ep != "" {
+		settings["wsendpoint"] = ep
+	}
+	return settings
+}
+
+// fundMockAddress credits address with amountAtoms via the mock server's
+// /test/fund endpoint. It is only valid when usingMock() is true.
+func fundMockAddress(t *testing.T, address string, amountAtoms uint64) {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Address     string `json:"address"`
+		AmountAtoms uint64 `json:"amountAtoms"`
+	}{Address: address, AmountAtoms: amountAtoms})
+	if err != nil {
+		t.Fatalf("marshal fund request: %v", err)
+	}
+	resp, err := http.Post(testnetAPI()+"/test/fund", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("fund request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fund request: unexpected status %d", resp.StatusCode)
+	}
+}
+
+// createTestWallet opens a wallet for the live tests.
+//
+// Against the real testnet it uses the raw private key in HL_TEST_PRIVATE_KEY,
+// which must belong to a funded testnet account; the test is skipped if the
 // env var is not set.
+//
+// Against the mock server (HL_API_ENDPOINT set) it generates a fresh key and
+// funds it directly via the mock's /test/fund endpoint, so no pre-funded
+// account is needed.
 //
 // We call saveKeyFile directly rather than Driver.Create because Create expects
 // a seed and derives the key via HD derivation, which would produce a different
@@ -49,17 +121,27 @@ var tLogger = util.StdOutLogger("HLTEST", util.LevelTrace)
 func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 	t.Helper()
 
-	privKeyHex := strings.TrimPrefix(os.Getenv("HL_TEST_PRIVATE_KEY"), "0x")
-	if privKeyHex == "" {
-		t.Skip("set HL_TEST_PRIVATE_KEY=<hex_private_key> of a funded testnet account")
-	}
-	privBytes, err := hex.DecodeString(privKeyHex)
-	if err != nil || len(privBytes) != 32 {
-		t.Fatalf("invalid HL_TEST_PRIVATE_KEY: want 32-byte hex, got %d bytes", len(privBytes))
-	}
-	privKey, err := gethcrypto.ToECDSA(privBytes)
-	if err != nil {
-		t.Fatalf("parsing private key: %v", err)
+	var privKey *ecdsa.PrivateKey
+	switch {
+	case usingMock():
+		var err error
+		privKey, err = gethcrypto.GenerateKey()
+		if err != nil {
+			t.Fatalf("generating key: %v", err)
+		}
+	default:
+		privKeyHex := strings.TrimPrefix(os.Getenv("HL_TEST_PRIVATE_KEY"), "0x")
+		if privKeyHex == "" {
+			t.Skip("set HL_TEST_PRIVATE_KEY=<hex_private_key> of a funded testnet account, or HL_API_ENDPOINT to use the mock server")
+		}
+		privBytes, err := hex.DecodeString(privKeyHex)
+		if err != nil || len(privBytes) != 32 {
+			t.Fatalf("invalid HL_TEST_PRIVATE_KEY: want 32-byte hex, got %d bytes", len(privBytes))
+		}
+		privKey, err = gethcrypto.ToECDSA(privBytes)
+		if err != nil {
+			t.Fatalf("parsing private key: %v", err)
+		}
 	}
 
 	dir := t.TempDir()
@@ -78,7 +160,7 @@ func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 	noteChan := make(chan asset.WalletNotification, 128)
 	w, err := (&Driver{}).Open(&asset.WalletConfig{
 		Type:        "rpc",
-		Settings:    map[string]string{"apiendpoint": testnetAPI},
+		Settings:    walletSettings(),
 		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(n uint32, err error) {},
 		DataDir:     dir,
@@ -87,7 +169,16 @@ func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	return w.(*HyperWallet), pw
+	hw := w.(*HyperWallet)
+	if usingMock() {
+		addr, err := hw.DepositAddress()
+		if err != nil {
+			t.Fatalf("DepositAddress: %v", err)
+		}
+		fundMockAddress(t, addr, 1000*1e8) // 1000 HYPE
+	}
+
+	return hw, pw
 }
 
 func TestLiveConnect(t *testing.T) {
@@ -286,7 +377,7 @@ func TestLiveCreateExists(t *testing.T) {
 	noteChan := make(chan asset.WalletNotification, 8)
 	w1, err := d.Open(&asset.WalletConfig{
 		Type:        "rpc",
-		Settings:    map[string]string{"apiendpoint": testnetAPI},
+		Settings:    walletSettings(),
 		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
 		DataDir:     dir,
@@ -309,7 +400,7 @@ func TestLiveCreateExists(t *testing.T) {
 	})
 	w2, _ := d.Open(&asset.WalletConfig{
 		Type:        "rpc",
-		Settings:    map[string]string{"apiendpoint": testnetAPI},
+		Settings:    walletSettings(),
 		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
 		DataDir:     dir2,
@@ -332,7 +423,7 @@ func TestLiveCreateExists(t *testing.T) {
 	})
 	w3, _ := d.Open(&asset.WalletConfig{
 		Type:        "rpc",
-		Settings:    map[string]string{"apiendpoint": testnetAPI},
+		Settings:    walletSettings(),
 		Emit:        asset.NewWalletEmitter(noteChan, BipID, tLogger),
 		PeersChange: func(uint32, error) {},
 		DataDir:     dir3,
