@@ -131,18 +131,23 @@ func (wt *extendedWalletTx) encodeRawTx() error {
 
 // decodeETHData decodes the eth-specific fields from a WalletTransaction's
 // RawTx. An empty RawTx yields the zero value.
-func decodeETHData(raw []byte) ethTxData {
+func decodeETHData(raw []byte) (ethTxData, error) {
 	var d ethTxData
 	if len(raw) > 0 {
-		_ = json.Unmarshal(raw, &d)
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return d, fmt.Errorf("error decoding eth tx data: %w", err)
+		}
 	}
-	return d
+	return d, nil
 }
 
 // decodeExtendedTx reconstructs an extendedWalletTx from a stored
 // WalletTransaction.
-func decodeExtendedTx(wt *txdb.WalletTransaction) *extendedWalletTx {
-	d := decodeETHData(wt.RawTx)
+func decodeExtendedTx(wt *txdb.WalletTransaction) (*extendedWalletTx, error) {
+	d, err := decodeETHData(wt.RawTx)
+	if err != nil {
+		return nil, err
+	}
 	ewt := &extendedWalletTx{
 		WalletTransaction:          wt,
 		BlockSubmitted:             d.BlockSubmitted,
@@ -161,7 +166,7 @@ func decodeExtendedTx(wt *txdb.WalletTransaction) *extendedWalletTx {
 	ewt.txHash = common.HexToHash(wt.ID)
 	ewt.lastBroadcast = time.Unix(int64(ewt.SubmissionTime), 0)
 	ewt.savedToDB = true
-	return ewt
+	return ewt, nil
 }
 
 type txDB interface {
@@ -205,8 +210,11 @@ var _ txDB = (*TxDB)(nil)
 //   - isRelay: 1 if the transaction is a relay tx, 0 otherwise.
 //   - nonce: the nonce of the transaction, so that pending transactions and
 //     transactions within the same block are ordered by nonce.
-func allAssetIndexEntry(wt *txdb.WalletTransaction) []byte {
-	d := decodeETHData(wt.RawTx)
+func allAssetIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
+	d, err := decodeETHData(wt.RawTx)
+	if err != nil {
+		return nil, err
+	}
 	entry := make([]byte, 8+1+8)
 	blockNumber := wt.BlockNumber
 	if blockNumber == 0 {
@@ -221,22 +229,25 @@ func allAssetIndexEntry(wt *txdb.WalletTransaction) []byte {
 	if d.Nonce != nil {
 		binary.BigEndian.PutUint64(entry[9:], d.Nonce.Uint64())
 	}
-	return entry
+	return entry, nil
 }
 
 // assetSpecificIndexEntry is used to iterate over all transactions for a
 // specific asset ID. It is the same as allAssetIndexEntry, prepended with
 // the asset ID.
-func assetSpecificIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) []byte {
+func assetSpecificIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) ([]byte, error) {
 	var assetID uint32 = baseChainID
 	if wt.TokenID != nil {
 		assetID = *wt.TokenID
 	}
-	allAssetIndexKey := allAssetIndexEntry(wt)
+	allAssetIndexKey, err := allAssetIndexEntry(wt)
+	if err != nil {
+		return nil, err
+	}
 	assetKey := make([]byte, 4+len(allAssetIndexKey))
 	binary.BigEndian.PutUint32(assetKey[:4], assetID)
 	copy(assetKey[4:], allAssetIndexKey)
-	return assetKey
+	return assetKey, nil
 }
 
 // bridgeIndexEntry generates an index entry for iterating over bridge initiation
@@ -244,8 +255,11 @@ func assetSpecificIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) []b
 // submission time of the bridge initiation transaction. Pending bridges appear
 // at the end of the index. A pending flag byte separates pending from completed
 // bridges while allowing both to be sorted by submission time.
-func bridgeIndexEntry(wt *txdb.WalletTransaction) []byte {
-	d := decodeETHData(wt.RawTx)
+func bridgeIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
+	d, err := decodeETHData(wt.RawTx)
+	if err != nil {
+		return nil, err
+	}
 	var pendingFlag byte = 0 // 0 for completed bridges
 	if wt.BridgeCounterpartTx == nil || !wt.BridgeCounterpartTx.Complete {
 		pendingFlag = 1 // 1 for pending bridges
@@ -254,41 +268,47 @@ func bridgeIndexEntry(wt *txdb.WalletTransaction) []byte {
 	entry := make([]byte, 9) // 1 byte for pending flag + 8 bytes for submission time
 	entry[0] = pendingFlag
 	binary.BigEndian.PutUint64(entry[1:9], d.SubmissionTime)
-	return entry
+	return entry, nil
 }
 
 // bridgeAssetIndexEntry is used to iterate over bridge initiation transactions
 // for a specific asset ID (base chain or token). It is the bridgeIndexEntry
 // prepended with the asset ID.
-func bridgeAssetIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) []byte {
+func bridgeAssetIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) ([]byte, error) {
 	var assetID uint32 = baseChainID
 	if wt.TokenID != nil {
 		assetID = *wt.TokenID
 	}
-	bridgeKey := bridgeIndexEntry(wt)
+	bridgeKey, err := bridgeIndexEntry(wt)
+	if err != nil {
+		return nil, err
+	}
 	assetKey := make([]byte, 4+len(bridgeKey))
 	binary.BigEndian.PutUint32(assetKey[:4], assetID)
 	copy(assetKey[4:], bridgeKey)
-	return assetKey
+	return assetKey, nil
 }
 
 // NewTxDB creates an eth transaction store backed by the master transaction
 // database handle supplied by Core.
 func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, error) {
+	if db == nil {
+		return nil, errors.New("nil network tx DB")
+	}
 	bridgeCompletions, err := db.Table(bridgeCompletionsTable)
 	if err != nil {
 		return nil, err
 	}
 
 	allAssetIndex, err := db.AddUniqueTxIndex(allAssetIndexName, func(wt *txdb.WalletTransaction) ([]byte, error) {
-		return allAssetIndexEntry(wt), nil
+		return allAssetIndexEntry(wt)
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	assetIndex, err := db.AddUniqueTxIndex(assetIndexName, func(wt *txdb.WalletTransaction) ([]byte, error) {
-		return assetSpecificIndexEntry(wt, baseChainID), nil
+		return assetSpecificIndexEntry(wt, baseChainID)
 	})
 	if err != nil {
 		return nil, err
@@ -298,7 +318,7 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 		if wt.Type != txdb.InitiateBridge {
 			return nil, txdb.ErrNotIndexed
 		}
-		return bridgeIndexEntry(wt), nil
+		return bridgeIndexEntry(wt)
 	})
 	if err != nil {
 		return nil, err
@@ -308,7 +328,7 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 		if wt.Type != txdb.InitiateBridge {
 			return nil, txdb.ErrNotIndexed
 		}
-		return bridgeAssetIndexEntry(wt, baseChainID), nil
+		return bridgeAssetIndexEntry(wt, baseChainID)
 	})
 	if err != nil {
 		return nil, err
@@ -390,7 +410,7 @@ func (db *TxDB) getTx(txHash common.Hash) (*extendedWalletTx, error) {
 	if wt == nil {
 		return nil, nil
 	}
-	return decodeExtendedTx(wt), nil
+	return decodeExtendedTx(wt)
 }
 
 // getTxs fetches n transactions in nonce order. See the txDB interface for the
@@ -423,7 +443,10 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *txdb.TxHistoryRequest) (*txdb.Tx
 			return nil, asset.CoinNotFoundError
 		}
 		if assetIDPtr == nil {
-			seek = allAssetIndexEntry(wt.WalletTransaction)
+			seek, err = allAssetIndexEntry(wt.WalletTransaction)
+			if err != nil {
+				return nil, err
+			}
 		} else {
 			refTxAssetID := db.baseChainID
 			if wt.TokenID != nil {
@@ -432,7 +455,10 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *txdb.TxHistoryRequest) (*txdb.Tx
 			if refTxAssetID != assetID {
 				return nil, fmt.Errorf("token ID mismatch: %d != %d", refTxAssetID, assetID)
 			}
-			seek = assetSpecificIndexEntry(wt.WalletTransaction, db.baseChainID)
+			seek, err = assetSpecificIndexEntry(wt.WalletTransaction, db.baseChainID)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -463,7 +489,10 @@ func (db *TxDB) getPendingTxs() (txs []*extendedWalletTx, err error) {
 	var numConfirmedTxs int
 
 	err = db.allAssetIndex.Iterate(nil, func(wt *txdb.WalletTransaction) error {
-		ewt := decodeExtendedTx(wt)
+		ewt, err := decodeExtendedTx(wt)
+		if err != nil {
+			return err
+		}
 		if ewt.AssumedLost {
 			return nil
 		}
@@ -509,9 +538,15 @@ func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool
 			if refTxAssetID != *assetID {
 				return nil, fmt.Errorf("token ID mismatch: %d != %d", refTxAssetID, *assetID)
 			}
-			seek = bridgeAssetIndexEntry(wt.WalletTransaction, *assetID)
+			seek, err = bridgeAssetIndexEntry(wt.WalletTransaction, *assetID)
+			if err != nil {
+				return nil, err
+			}
 		} else {
-			seek = bridgeIndexEntry(wt.WalletTransaction)
+			seek, err = bridgeIndexEntry(wt.WalletTransaction)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -537,7 +572,10 @@ func (db *TxDB) getPendingBridges(tokenID *uint32) (txs []*extendedWalletTx, err
 	}
 
 	err = idx.Iterate(prefix, func(wt *txdb.WalletTransaction) error {
-		ewt := decodeExtendedTx(wt)
+		ewt, err := decodeExtendedTx(wt)
+		if err != nil {
+			return err
+		}
 		if ewt.AssumedLost {
 			return nil
 		}

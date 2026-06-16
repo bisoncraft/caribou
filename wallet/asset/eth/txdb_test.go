@@ -314,6 +314,49 @@ func TestTxDBReplaceNonce(t *testing.T) {
 	}
 }
 
+// TestTxDBCorruptRawTxDoesNotEvict ensures that a transaction whose eth RawTx
+// extension is undecodable fails to store rather than silently producing a
+// nonce-0 unique-index key that evicts an unrelated transaction.
+func TestTxDBCorruptRawTxDoesNotEvict(t *testing.T) {
+	t.Parallel()
+	_, eth, node, shutdown := tassetWallet(BipID)
+	shutdown()
+
+	txHistoryStore := newTestTxDB(t)
+
+	// A normal tx with nonce 0.
+	good := eth.extendedTx(&genTxResult{
+		tx:     node.newTransaction(0, big.NewInt(1)),
+		txType: txdb.Send,
+		amt:    1,
+	})
+	if err := txHistoryStore.storeTx(good); err != nil {
+		t.Fatalf("error storing good tx: %v", err)
+	}
+
+	// A tx whose eth RawTx extension is undecodable. Computing its unique
+	// nonce-index entry decodes RawTx; a decode failure must fail the store
+	// instead of yielding a nonce-0 key that evicts `good` (which is also
+	// nonce 0) via the unique-index replace path.
+	bad := &txdb.WalletTransaction{
+		Type:  txdb.Send,
+		ID:    common.HexToHash("0xdead").String(),
+		RawTx: []byte("{ not valid json"),
+	}
+	if err := txHistoryStore.db.StoreTx(bad); err == nil {
+		t.Fatal("expected error storing tx with corrupt eth RawTx, got nil")
+	}
+
+	// The good tx must still be present (not evicted by the failed store).
+	got, err := txHistoryStore.getTx(good.txHash)
+	if err != nil {
+		t.Fatalf("error retrieving good tx: %v", err)
+	}
+	if got == nil {
+		t.Fatal("good tx was evicted by a failed corrupt-RawTx store")
+	}
+}
+
 func TestTxDB_getUnknownTx(t *testing.T) {
 	t.Parallel()
 	txHistoryStore := newTestTxDB(t)
