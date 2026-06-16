@@ -145,7 +145,7 @@ type NearWallet struct {
 	accountID string // hex-encoded public key (implicit account)
 
 	rpc  *rpcClient
-	txDB *nearTxDB
+	txDB txdb.NetworkTxDB
 
 	tipMtx  sync.RWMutex
 	tipHash [32]byte
@@ -182,6 +182,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		settings:    cfg.Settings,
 		pubKey:      pubKey,
 		accountID:   accountID,
+		txDB:        cfg.NetworkTxDB,
 	}, nil
 }
 
@@ -240,13 +241,8 @@ func (w *NearWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}
 	w.rpc = rpc
 
-	// Open the transaction database.
-	txDBPath := filepath.Join(w.dataDir, "txdb")
-	txDB, err := newTxDB(txDBPath, w.log.SubLogger("TXDB"))
-	if err != nil {
-		return nil, fmt.Errorf("error opening tx database: %w", err)
-	}
-	w.txDB = txDB
+	// The transaction database (w.txDB) is the master tx DB handle supplied by
+	// Core via WalletConfig.NetworkTxDB; the wallet does not own its lifecycle.
 
 	// Fetch initial block.
 	block, err := w.rpc.getBlock("final")
@@ -376,10 +372,7 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	}
 
 	if w.txDB != nil {
-		if err = w.txDB.storeTx(&dbTx{
-			WalletTransaction: wtx,
-			SubmissionTime:    uint64(time.Now().Unix()),
-		}); err != nil {
+		if err = w.txDB.StoreTx(wtx); err != nil {
 			w.log.Errorf("Error storing send tx: %v", err)
 		}
 	}
@@ -423,18 +416,18 @@ func (w *NearWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryRespo
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
 	}
-	return w.txDB.getTxs(req)
+	return w.txDB.GetTxs(req)
 }
 
 func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	// Check the local DB first.
 	if w.txDB != nil {
-		wt, err := w.txDB.getTx(txID)
+		wt, err := w.txDB.GetTx(txID)
 		if err != nil {
 			return nil, err
 		}
 		if wt != nil {
-			return wt.WalletTransaction, nil
+			return wt, nil
 		}
 	}
 
@@ -463,7 +456,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 
 	if result.Status.isSuccess() {
-		wt.BlockNumber = w.resolveBlockHeight(result.TransactionOutcome.BlockHash)
+		wt.BlockNumber, wt.Timestamp = w.resolveBlock(result.TransactionOutcome.BlockHash)
 	}
 
 	return wt, nil
@@ -473,27 +466,18 @@ func (w *NearWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransa
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := w.txDB.GetPendingTxs()
 	if err != nil {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return nil
 	}
-	txs := make([]*txdb.WalletTransaction, 0, len(pending))
-	for _, wt := range pending {
-		txs = append(txs, wt.WalletTransaction)
-	}
-	return txs
+	return pending
 }
 
 // tipPoller polls for new blocks and checks pending transactions.
 func (w *NearWallet) tipPoller(ctx context.Context) {
 	ticker := time.NewTicker(tipPollInterval)
 	defer ticker.Stop()
-	defer func() {
-		if w.txDB != nil {
-			_ = w.txDB.Close()
-		}
-	}()
 
 	for {
 		select {
@@ -533,7 +517,7 @@ func (w *NearWallet) checkPendingTxs() {
 	if w.txDB == nil {
 		return
 	}
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := w.txDB.GetPendingTxs()
 	if err != nil {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return
@@ -544,41 +528,49 @@ func (w *NearWallet) checkPendingTxs() {
 			w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
 			continue
 		}
-		blockHeight := w.resolveBlockHeight(result.TransactionOutcome.BlockHash)
+		blockHeight, blockTime := w.resolveBlock(result.TransactionOutcome.BlockHash)
 		if result.Status.isSuccess() {
 			tx.BlockNumber = blockHeight
+			tx.Timestamp = blockTime
 			tx.Confirmed = true
-			if err := w.txDB.storeTx(tx); err != nil {
+			if err := w.txDB.StoreTx(tx); err != nil {
 				w.log.Errorf("Error updating confirmed tx %s: %v", tx.ID, err)
 				continue
 			}
 			w.log.Infof("Transaction %s confirmed at block %d", tx.ID, blockHeight)
 			if w.emit != nil {
-				w.emit.TransactionNote(tx.WalletTransaction, false)
+				w.emit.TransactionNote(tx, false)
 			}
 		} else if result.Status.Failure != nil {
 			w.log.Warnf("Transaction %s failed: %s", tx.ID, string(result.Status.Failure))
+			// A failed tx is terminal: it is finalized (Confirmed) and did not
+			// have its intended effect (Rejected), matching the convention used
+			// by the other wallets. Marking it Confirmed removes it from the
+			// pending set so it is no longer monitored.
 			tx.BlockNumber = blockHeight
-			if err := w.txDB.storeTx(tx); err != nil {
+			tx.Timestamp = blockTime
+			tx.Confirmed = true
+			tx.Rejected = true
+			if err := w.txDB.StoreTx(tx); err != nil {
 				w.log.Errorf("Error updating failed tx %s: %v", tx.ID, err)
 			}
 		}
 	}
 }
 
-// resolveBlockHeight looks up the block height for a block hash. Falls back to
-// the current tip height if the lookup fails.
-func (w *NearWallet) resolveBlockHeight(blockHash string) uint64 {
+// resolveBlock looks up the height and timestamp (unix seconds) for a block
+// hash. Falls back to the current tip if the lookup fails.
+func (w *NearWallet) resolveBlock(blockHash string) (height, tsSec uint64) {
 	if blockHash != "" {
 		block, err := w.rpc.getBlockByHash(blockHash)
 		if err == nil {
-			return block.Header.Height
+			return block.Header.Height, block.Header.Timestamp / 1_000_000_000
 		}
 		w.log.Warnf("Error resolving block hash %s: %v", blockHash, err)
 	}
 	w.tipMtx.RLock()
 	defer w.tipMtx.RUnlock()
-	return w.tip
+	return w.tip, uint64(w.tipTime.Unix())
 }
 
 // maxScanBlocks limits how many blocks we scan in a single poll cycle to
@@ -633,8 +625,9 @@ func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
 			break
 		}
+		blockTime := block.Header.Timestamp / 1_000_000_000
 		for _, chunk := range block.Chunks {
-			w.scanChunk(chunk.ChunkHash, height)
+			w.scanChunk(chunk.ChunkHash, height, blockTime)
 		}
 	}
 
@@ -642,7 +635,7 @@ func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 }
 
 // scanChunk fetches a chunk and stores any incoming transfer transactions.
-func (w *NearWallet) scanChunk(chunkHash string, blockHeight uint64) {
+func (w *NearWallet) scanChunk(chunkHash string, blockHeight, blockTime uint64) {
 	chunk, err := w.rpc.getChunk(chunkHash)
 	if err != nil {
 		w.log.Warnf("Error fetching chunk %s: %v", chunkHash, err)
@@ -668,7 +661,7 @@ func (w *NearWallet) scanChunk(chunkHash string, blockHeight uint64) {
 		}
 
 		// Check if we already have this tx.
-		if existing, _ := w.txDB.getTx(ct.Hash); existing != nil {
+		if existing, _ := w.txDB.GetTx(ct.Hash); existing != nil {
 			continue
 		}
 
@@ -678,14 +671,12 @@ func (w *NearWallet) scanChunk(chunkHash string, blockHeight uint64) {
 			ID:          ct.Hash,
 			Amount:      amount,
 			BlockNumber: blockHeight,
+			Timestamp:   blockTime,
 			Confirmed:   true,
 			Recipient:   &sender,
 		}
 
-		if err := w.txDB.storeTx(&dbTx{
-			WalletTransaction: wtx,
-			SubmissionTime:    uint64(time.Now().Unix()),
-		}); err != nil {
+		if err := w.txDB.StoreTx(wtx); err != nil {
 			w.log.Errorf("Error storing receive tx %s: %v", ct.Hash, err)
 			continue
 		}
