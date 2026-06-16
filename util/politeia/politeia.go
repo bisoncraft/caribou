@@ -20,12 +20,10 @@ import (
 	piclient "github.com/decred/politeia/politeiawww/client"
 )
 
-const (
-	// VoteBitYes is the string value for identifying "yes" vote bits
-	VoteBitYes = tkv1.VoteOptionIDApprove
-	// VoteBitNo is the string value for identifying "no" vote bits
-	VoteBitNo = tkv1.VoteOptionIDReject
+// VoteBitYes and VoteBitNo are defined in the pitypes leaf package and aliased
+// into this package in aliases.go.
 
+const (
 	PoliteiaMainnetHost = "https://proposals.decred.org"
 
 	// dbVersion is the current required version of the proposals db.

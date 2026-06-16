@@ -33,7 +33,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/encrypt"
-	pi "github.com/bisoncraft/bosswallet/util/politeia"
+	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
 	"github.com/bisoncraft/bosswallet/util/version"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/core"
