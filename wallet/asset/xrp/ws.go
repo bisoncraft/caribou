@@ -280,7 +280,7 @@ func (w *xrpWallet) processObservedTransaction(tr *txResult, meta txMeta, ledger
 	emitNew := true
 
 	if w.txDB != nil {
-		existing, err := w.txDB.getTx(wtx.ID)
+		existing, err := w.txDB.GetTx(wtx.ID)
 		if err != nil {
 			w.log.Errorf("getTx %s: %v", wtx.ID, err)
 			return
@@ -298,11 +298,14 @@ func (w *xrpWallet) processObservedTransaction(tr *txResult, meta txMeta, ledger
 			existing.Confirmed = true
 			existing.Rejected = wtx.Rejected
 			existing.Recipient = wtx.Recipient
-			if err := w.txDB.storeTx(existing); err != nil {
+			if ct := tr.closeTime(); ct > 0 {
+				existing.Timestamp = ct
+			}
+			if err := w.txDB.StoreTx(existing); err != nil {
 				w.log.Errorf("Error updating observed tx %s: %v", wtx.ID, err)
 				return
 			}
-			emitTx = existing.WalletTransaction
+			emitTx = existing
 			emitNew = false
 		} else {
 			if err := w.storeNewTx(wtx, tr); err != nil {

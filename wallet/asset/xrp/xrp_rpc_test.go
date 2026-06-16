@@ -614,16 +614,13 @@ func TestBalanceOwnerReserve(t *testing.T) {
 func makeWalletTransactionWallet(t *testing.T, m *mockRippled) *xrpWallet {
 	t.Helper()
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
+	n, mt := newTestTxDB(t)
 	w := &xrpWallet{
-		address: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		rpc:     m.rpcClient(),
-		txDB:    db,
-		log:     log,
+		address:   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
 	}
 	w.running.Store(true)
 	return w
@@ -652,18 +649,16 @@ func TestWalletTransactionFromDB(t *testing.T) {
 
 	const txID = "AAAA000000000000000000000000000000000000000000000000000000000001"
 	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
-	stored := &dbTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type:        txdb.Send,
-			ID:          txID,
-			Amount:      1_000_000,
-			Fees:        12,
-			BlockNumber: 500,
-			Confirmed:   true,
-			Recipient:   &recip,
-		},
+	stored := &txdb.WalletTransaction{
+		Type:        txdb.Send,
+		ID:          txID,
+		Amount:      1_000_000,
+		Fees:        12,
+		BlockNumber: 500,
+		Confirmed:   true,
+		Recipient:   &recip,
 	}
-	if err := w.txDB.storeTx(stored); err != nil {
+	if err := w.txDB.StoreTx(stored); err != nil {
 		t.Fatalf("storeTx: %v", err)
 	}
 
@@ -689,10 +684,8 @@ func TestWalletTransactionDBLookupCaseInsensitive(t *testing.T) {
 
 	const txID = "BBBB000000000000000000000000000000000000000000000000000000000002"
 	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
-	if err := w.txDB.storeTx(&dbTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type: txdb.Send, ID: txID, Amount: 500, BlockNumber: 10, Confirmed: true, Recipient: &recip,
-		},
+	if err := w.txDB.StoreTx(&txdb.WalletTransaction{
+		Type: txdb.Send, ID: txID, Amount: 500, BlockNumber: 10, Confirmed: true, Recipient: &recip,
 	}); err != nil {
 		t.Fatalf("storeTx: %v", err)
 	}

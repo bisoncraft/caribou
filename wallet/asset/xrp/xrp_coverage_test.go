@@ -347,181 +347,40 @@ func TestWalletLifecycle(t *testing.T) {
 
 // ---- txdb ----
 
-func TestTxDB(t *testing.T) {
+// newTestTxDB returns a master-tx-DB-backed NetworkTxDB handle and its meta
+// table for the BipID network, for use in wallet tests. It replaces the
+// per-wallet database the XRP wallet kept before migrating onto txdb.
+func newTestTxDB(t *testing.T) (txdb.NetworkTxDB, txdb.StoreTable) {
+	t.Helper()
 	log := util.NewLogger("test", util.LevelError, io.Discard)
-	db, err := newTxDB(t.TempDir(), log)
+	master, err := txdb.New(t.TempDir()+"/tx.db", log)
 	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
+		t.Fatalf("txdb.New: %v", err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { master.Close() })
+	n := master.NetworkTxDB(BipID)
+	mt, err := n.Table(metaTableName)
+	if err != nil {
+		t.Fatalf("meta Table: %v", err)
+	}
+	return n, mt
+}
 
-	// Empty DB: lastScannedLedger is 0.
-	seq, err := db.getLastScannedLedger()
+// TestLastScannedLedger covers the wallet's meta-table accessors over the
+// master tx DB.
+func TestLastScannedLedger(t *testing.T) {
+	n, mt := newTestTxDB(t)
+	w := &xrpWallet{txDB: n, metaTable: mt}
+
+	seq, err := w.getLastScannedLedger()
 	if err != nil || seq != 0 {
 		t.Fatalf("getLastScannedLedger empty: seq=%d, err=%v", seq, err)
 	}
-
-	// Persist and retrieve scan position.
-	if err := db.setLastScannedLedger(77); err != nil {
+	if err := w.setLastScannedLedger(77); err != nil {
 		t.Fatalf("setLastScannedLedger: %v", err)
 	}
-	seq, err = db.getLastScannedLedger()
-	if err != nil || seq != 77 {
+	if seq, err = w.getLastScannedLedger(); err != nil || seq != 77 {
 		t.Fatalf("getLastScannedLedger after set: seq=%d, err=%v", seq, err)
-	}
-
-	// Helper: build a minimal send dbTx.
-	makeSend := func(id string, block uint64, confirmed bool) *dbTx {
-		addr := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
-		return &dbTx{
-			WalletTransaction: &txdb.WalletTransaction{
-				Type:        txdb.Send,
-				ID:          id,
-				Amount:      1_000_000,
-				Fees:        12,
-				BlockNumber: block,
-				Confirmed:   confirmed,
-				Recipient:   &addr,
-			},
-			SubmissionTime:     1000,
-			LastLedgerSequence: 200,
-		}
-	}
-
-	// Store and retrieve a confirmed tx.
-	tx1 := makeSend("TXABC001", 100, true)
-	if err := db.storeTx(tx1); err != nil {
-		t.Fatalf("storeTx tx1: %v", err)
-	}
-	got, err := db.getTx("TXABC001")
-	if err != nil || got == nil {
-		t.Fatalf("getTx tx1: got=%v, err=%v", got, err)
-	}
-	if got.Amount != 1_000_000 || got.BlockNumber != 100 {
-		t.Errorf("getTx tx1 data mismatch: %+v", got)
-	}
-
-	// Missing key returns nil, no error.
-	missing, err := db.getTx("NOPE")
-	if err != nil || missing != nil {
-		t.Errorf("getTx missing: got=%v, err=%v", missing, err)
-	}
-
-	// storeTx replaces an existing entry.
-	tx1Updated := makeSend("TXABC001", 101, true)
-	if err := db.storeTx(tx1Updated); err != nil {
-		t.Fatalf("storeTx replace: %v", err)
-	}
-	got, _ = db.getTx("TXABC001")
-	if got.BlockNumber != 101 {
-		t.Errorf("replace: expected BlockNumber 101, got %d", got.BlockNumber)
-	}
-
-	// Pending tx (BlockNumber==0).
-	txPending := &dbTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type: txdb.Send,
-			ID:   "PENDING001",
-		},
-		LastLedgerSequence: 300,
-	}
-	if err := db.storeTx(txPending); err != nil {
-		t.Fatalf("storeTx pending: %v", err)
-	}
-
-	pending, err := db.getPendingTxs()
-	if err != nil {
-		t.Fatalf("getPendingTxs: %v", err)
-	}
-	if len(pending) != 1 || pending[0].ID != "PENDING001" {
-		t.Errorf("getPendingTxs: got %v", pending)
-	}
-
-	// Expired tx: excluded from getPendingTxs, included in getTxs.
-	txExpired := &dbTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type:     txdb.Send,
-			ID:       "EXPIRED001",
-			Rejected: true,
-		},
-		Expired: true,
-	}
-	if err := db.storeTx(txExpired); err != nil {
-		t.Fatalf("storeTx expired: %v", err)
-	}
-
-	pending, err = db.getPendingTxs()
-	if err != nil {
-		t.Fatalf("getPendingTxs after expired: %v", err)
-	}
-	if len(pending) != 1 {
-		t.Errorf("getPendingTxs: expected 1 (non-expired), got %d", len(pending))
-	}
-
-	// getTxs: includes confirmed and expired, excludes unconfirmed-non-expired.
-	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 10})
-	if err != nil {
-		t.Fatalf("getTxs: %v", err)
-	}
-	seen := make(map[string]bool)
-	for _, tx := range resp.Txs {
-		seen[tx.ID] = true
-	}
-	if !seen["TXABC001"] {
-		t.Error("getTxs: confirmed tx TXABC001 missing")
-	}
-	if !seen["EXPIRED001"] {
-		t.Error("getTxs: expired tx EXPIRED001 missing")
-	}
-	if seen["PENDING001"] {
-		t.Error("getTxs: pending tx PENDING001 should be excluded")
-	}
-
-	// Pagination: store a few more confirmed txs and verify N limit + moreAvailable.
-	for i := 2; i <= 5; i++ {
-		id := fmt.Sprintf("TXABC%03d", i)
-		if err := db.storeTx(makeSend(id, uint64(100+i), true)); err != nil {
-			t.Fatalf("storeTx %s: %v", id, err)
-		}
-	}
-
-	resp2, err := db.getTxs(&txdb.TxHistoryRequest{N: 2})
-	if err != nil {
-		t.Fatalf("getTxs N=2: %v", err)
-	}
-	if len(resp2.Txs) != 2 {
-		t.Errorf("getTxs N=2: got %d txs, want 2", len(resp2.Txs))
-	}
-	if !resp2.MoreAvailable {
-		t.Error("getTxs N=2: expected MoreAvailable=true")
-	}
-
-	// RefID pagination: forward page after a known tx.
-	// Default (reverse) means highest block first. RefID of TXABC003 (block 103)
-	// with Past=true should return txs with lower block numbers.
-	refID := "TXABC003"
-	resp3, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &refID, Past: true})
-	if err != nil {
-		t.Fatalf("getTxs RefID past: %v", err)
-	}
-	for _, tx := range resp3.Txs {
-		if tx.BlockNumber >= 103 {
-			t.Errorf("Past=true from block 103: got tx %s at block %d (should be < 103)", tx.ID, tx.BlockNumber)
-		}
-	}
-
-	// RefID using an expired tx (BlockNumber==0) as anchor.
-	expiredRef := "EXPIRED001"
-	_, err = db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &expiredRef, Past: true})
-	if err != nil {
-		t.Errorf("getTxs with expired RefID: %v", err)
-	}
-
-	// RefID for a pending (unconfirmed non-expired) tx must fail.
-	pendingRef := "PENDING001"
-	_, err = db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &pendingRef})
-	if err == nil {
-		t.Error("expected error when RefID is a non-expired pending tx")
 	}
 }
 
@@ -631,11 +490,7 @@ func TestCreateUnknownType(t *testing.T) {
 // re-derive the correct sequence from the network.
 func TestCheckPendingTxsMultiExpire(t *testing.T) {
 	log := util.NewLogger("test", util.LevelError, io.Discard)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	defer db.Close()
+	n, mt := newTestTxDB(t)
 
 	// Both tx RPC lookups return txnNotFound, triggering expiration.
 	m := newMockRippled(t)
@@ -643,28 +498,23 @@ func TestCheckPendingTxsMultiExpire(t *testing.T) {
 		return nil, &rpcError{errType: "txnNotFound", msg: "Transaction not found."}
 	})
 
-	makePending := func(id string, lls uint32) *dbTx {
-		return &dbTx{
-			WalletTransaction: &txdb.WalletTransaction{
-				Type: txdb.Send,
-				ID:   id,
-			},
-			LastLedgerSequence: lls,
-		}
+	makePending := func(id string, lls uint32) *txdb.WalletTransaction {
+		wt := &txdb.WalletTransaction{Type: txdb.Send, ID: id}
+		setLastLedgerSequence(wt, lls)
+		return wt
 	}
 
-	tx1 := makePending("TX0001", 10)
-	tx2 := makePending("TX0002", 10)
-	for _, tx := range []*dbTx{tx1, tx2} {
-		if err := db.storeTx(tx); err != nil {
-			t.Fatalf("storeTx: %v", err)
+	for _, tx := range []*txdb.WalletTransaction{makePending("TX0001", 10), makePending("TX0002", 10)} {
+		if err := n.StoreTx(tx); err != nil {
+			t.Fatalf("StoreTx: %v", err)
 		}
 	}
 
 	w := &xrpWallet{
-		txDB: db,
-		rpc:  m.rpcClient(),
-		log:  log,
+		txDB:      n,
+		metaTable: mt,
+		rpc:       m.rpcClient(),
+		log:       log,
 	}
 	w.nextSeq = 99
 	w.tip = 20 // both txs have LLS=10 < tip=20, so both expire
@@ -700,11 +550,7 @@ func TestHandleValidatedTipNoOp(t *testing.T) {
 // runs checkPendingTxs and scanAccountTxs, and emits a balance when txs are found.
 func TestHandleValidatedTipUpdates(t *testing.T) {
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	n, mt := newTestTxDB(t)
 
 	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	noteChan := make(chan asset.WalletNotification, 8)
@@ -741,7 +587,8 @@ func TestHandleValidatedTipUpdates(t *testing.T) {
 	w := &xrpWallet{
 		address:     walletAddr,
 		rpc:         m.rpcClient(),
-		txDB:        db,
+		txDB:        n,
+		metaTable:   mt,
 		log:         log,
 		emit:        asset.NewWalletEmitter(noteChan, BipID, log),
 		baseReserve: BaseReserveDrops,
@@ -784,11 +631,7 @@ func TestHandleValidatedTipUpdates(t *testing.T) {
 // and no pending txs does NOT trigger a balance emission (avoids unnecessary RPCs).
 func TestHandleValidatedTipQuietNoEmit(t *testing.T) {
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	n, mt := newTestTxDB(t)
 
 	m := newMockRippled(t)
 	m.handle("account_tx", func(_ json.RawMessage) (any, *rpcError) {
@@ -801,11 +644,12 @@ func TestHandleValidatedTipQuietNoEmit(t *testing.T) {
 
 	noteChan := make(chan asset.WalletNotification, 4)
 	w := &xrpWallet{
-		address: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		rpc:     m.rpcClient(),
-		txDB:    db,
-		log:     log,
-		emit:    asset.NewWalletEmitter(noteChan, BipID, log),
+		address:   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
+		emit:      asset.NewWalletEmitter(noteChan, BipID, log),
 	}
 	w.running.Store(true)
 	w.tip = 100
@@ -896,11 +740,7 @@ func TestReconcileSeqDoesNotRewind(t *testing.T) {
 // payment and reports balanceChanged=true.
 func TestScanAccountTxsNewPayment(t *testing.T) {
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	n, mt := newTestTxDB(t)
 
 	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	m := newMockRippled(t)
@@ -930,10 +770,11 @@ func TestScanAccountTxsNewPayment(t *testing.T) {
 	})
 
 	w := &xrpWallet{
-		address: walletAddr,
-		rpc:     m.rpcClient(),
-		txDB:    db,
-		log:     log,
+		address:   walletAddr,
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
 	}
 	w.lastScannedLedger.Store(50)
 
@@ -941,7 +782,7 @@ func TestScanAccountTxsNewPayment(t *testing.T) {
 	if !changed {
 		t.Error("expected balanceChanged=true after storing new payment")
 	}
-	stored, err := db.getTx("BBBB000000000000000000000000000000000000000000000000000000000001")
+	stored, err := n.GetTx("BBBB000000000000000000000000000000000000000000000000000000000001")
 	if err != nil || stored == nil {
 		t.Fatalf("expected stored tx, got %v, %v", stored, err)
 	}
@@ -954,19 +795,16 @@ func TestScanAccountTxsNewPayment(t *testing.T) {
 // balanceChanged=false without making any RPC calls.
 func TestScanAccountTxsAlreadyScanned(t *testing.T) {
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	n, mt := newTestTxDB(t)
 
 	m := newMockRippled(t)
 	// account_tx must not be called — if it were the mock would fatalf.
 	w := &xrpWallet{
-		address: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		rpc:     m.rpcClient(),
-		txDB:    db,
-		log:     log,
+		address:   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
 	}
 	w.lastScannedLedger.Store(100)
 
@@ -980,11 +818,7 @@ func TestScanAccountTxsAlreadyScanned(t *testing.T) {
 // the highest queued tip when multiple tips arrive during a scan.
 func TestTipWorkerCoalescing(t *testing.T) {
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	n, mt := newTestTxDB(t)
 
 	m := newMockRippled(t)
 	m.handle("account_tx", func(_ json.RawMessage) (any, *rpcError) {
@@ -1015,7 +849,8 @@ func TestTipWorkerCoalescing(t *testing.T) {
 	w := &xrpWallet{
 		address:     walletAddr,
 		rpc:         m.rpcClient(),
-		txDB:        db,
+		txDB:        n,
+		metaTable:   mt,
 		log:         log,
 		baseReserve: BaseReserveDrops,
 		tipCh:       tipCh,

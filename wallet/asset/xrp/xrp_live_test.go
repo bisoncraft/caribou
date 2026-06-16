@@ -370,7 +370,7 @@ func TestHarnessConfirmation(t *testing.T) {
 
 	// Both txs must be confirmed in the txdb.
 	for _, txID := range []string{c1.TxID(), c2.TxID()} {
-		dbEntry, err := sender.txDB.getTx(txID)
+		dbEntry, err := sender.txDB.GetTx(txID)
 		if err != nil {
 			t.Fatalf("getTx %s: %v", txID, err)
 		}
