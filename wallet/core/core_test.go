@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +23,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/db"
 	dbtest "github.com/bisoncraft/bosswallet/wallet/db/test"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
@@ -259,13 +257,6 @@ type TXCWallet struct {
 	accelerationEstimate        uint64
 	accelerateOrderErr          error
 	info                        *asset.WalletInfo
-	bondTxCoinID                []byte
-	refundBondCoin              asset.Coin
-	refundBondErr               error
-	makeBondTxErr               error
-	reserves                    atomic.Uint64
-	findBond                    *asset.BondDetails
-	findBondErr                 error
 
 	estFee    uint64
 	estFeeErr error
@@ -283,7 +274,6 @@ func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
 		info: &asset.WalletInfo{
 			SupportedVersions: []uint32{0},
 		},
-		bondTxCoinID: encode.RandomBytes(32),
 	}
 	var broadcasting uint32 = 1
 	xcWallet := &xcWallet{
@@ -469,36 +459,6 @@ func (w *TXCWallet) AccelerationEstimate(swapCoins, accelerationCoins []util.Byt
 	}
 
 	return w.accelerationEstimate, nil
-}
-
-var _ asset.Bonder = (*TXCWallet)(nil)
-
-func (*TXCWallet) BondsFeeBuffer(feeRate uint64) uint64 {
-	return 4 * 1000 * feeRate * 2
-}
-
-func (w *TXCWallet) SetBondReserves(reserves uint64) {
-	w.reserves.Store(reserves)
-}
-
-func (w *TXCWallet) RefundBond(ctx context.Context, ver uint16, coinID, script []byte, amt uint64, privKey *secp256k1.PrivateKey) (asset.Coin, error) {
-	return w.refundBondCoin, w.refundBondErr
-}
-
-func (w *TXCWallet) FindBond(ctx context.Context, coinID []byte, searchUntil time.Time) (bond *asset.BondDetails, err error) {
-	return w.findBond, w.findBondErr
-}
-
-func (w *TXCWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Time, privKey *secp256k1.PrivateKey, acctID []byte) (*asset.Bond, func(), error) {
-	if w.makeBondTxErr != nil {
-		return nil, nil, w.makeBondTxErr
-	}
-	return &asset.Bond{
-		Version: ver,
-		AssetID: tFeeAsset,
-		Amount:  amt,
-		CoinID:  w.bondTxCoinID,
-	}, func() {}, nil
 }
 
 func (w *TXCWallet) TxHistory(*txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {

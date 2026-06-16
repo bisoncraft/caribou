@@ -173,7 +173,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 	return WalletInfo
 }
 
-// MinLotSize calculates the minimum bond size for a given fee rate that avoids
+// MinLotSize calculates the minimum lot size for a given fee rate that avoids
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
@@ -319,8 +319,6 @@ type zecWallet struct {
 
 	tipMtx     sync.RWMutex
 	currentTip *btc.BlockVector
-
-	reserves atomic.Uint64
 
 	pendingTxsMtx sync.RWMutex
 	pendingTxs    map[chainhash.Hash]*btc.ExtendedWalletTx
@@ -729,10 +727,6 @@ func (w *zecWallet) balances() (*balances, error) {
 	}, nil
 }
 
-func (w *zecWallet) SetBondReserves(reserves uint64) {
-	w.reserves.Store(reserves)
-}
-
 type depositAddressJSON struct {
 	Unified     string `json:"unified"`
 	Transparent string `json:"transparent"`
@@ -865,7 +859,7 @@ func (w *zecWallet) EstimateSendTxFee(
 	remain := amt - orchardSum - bal.Sapling /* sapling fees not accounted for */
 
 	const minConfs = 0
-	_, _, spents, _, inputsSize, _, err := w.cm.Fund(w.reserves.Load(), minConfs, false, sendEnough(remain))
+	_, _, spents, _, inputsSize, _, err := w.cm.Fund(0, minConfs, false, sendEnough(remain))
 	if err != nil {
 		return 0, false, fmt.Errorf("error funding value %d with %d transparent and %d orchard balances: %w",
 			amt, bal.Transparent, orchardSum, err)
@@ -953,7 +947,7 @@ func (w *zecWallet) Send(addr string, value, feeRate uint64) (asset.Coin, error)
 		ID:     txHash.String(),
 		Amount: value,
 		Fees:   tx.RequiredTxFeesZIP317(),
-	}, txHash, true)
+	}, txHash)
 
 	return &txCoin{
 		txHash: txHash,
@@ -1071,18 +1065,6 @@ func (w *zecWallet) Balance() (*asset.Balance, error) {
 	bal.Other[asset.BalanceCategoryShielded] = asset.CustomBalance{
 		Amount: bals.orchard.avail, // + bals.orchard.maturing,
 	}
-
-	reserves := w.reserves.Load()
-	if reserves > bal.Available {
-		w.log.Warnf("Available balance is below configured reserves: %s < %s",
-			btcutil.Amount(bal.Available), btcutil.Amount(reserves))
-		bal.ReservesDeficit = reserves - bal.Available
-		reserves = bal.Available
-	}
-
-	bal.BondReserves = reserves
-	bal.Available -= reserves
-	bal.Locked += reserves
 
 	return bal, nil
 }
@@ -1285,7 +1267,7 @@ func (w *zecWallet) listSinceBlock(start int64) ([]btcjson.ListTransactionsResul
 	return res, nil
 }
 
-func (w *zecWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
+func (w *zecWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, skipNotes ...bool) {
 	txHistoryDB := w.txDB()
 	if txHistoryDB == nil {
 		return
@@ -1293,7 +1275,6 @@ func (w *zecWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash
 
 	ewt := &btc.ExtendedWalletTx{
 		WalletTransaction: wt,
-		Submitted:         submitted,
 	}
 
 	if wt.BlockNumber == 0 {
@@ -1308,7 +1289,7 @@ func (w *zecWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash
 	}
 
 	skipNote := len(skipNotes) > 0 && skipNotes[0]
-	if submitted && !skipNote {
+	if !skipNote {
 		w.emit.TransactionNote(wt, true)
 	}
 }
@@ -1409,7 +1390,7 @@ func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*txdb.Wal
 		tx.BlockNumber = uint64(blockHeight)
 		tx.Timestamp = uint64(blockTime)
 		tx.Confirmed = true
-		w.addTxToHistory(tx, txHash, true, false)
+		w.addTxToHistory(tx, txHash, false)
 	}
 
 	// If the wallet knows about the transaction, it will be part of the
@@ -1468,31 +1449,6 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 	}
 
 	fee := msgTx.RequiredTxFeesZIP317()
-
-	txIsBond := func(msgTx *zTx) (bool, *txdb.BondTxInfo) {
-		if len(msgTx.TxOut) < 2 {
-			return false, nil
-		}
-		const scriptVer = 0
-		acctID, lockTime, pkHash, err := btc.ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
-		if err != nil {
-			return false, nil
-		}
-		return true, &txdb.BondTxInfo{
-			AccountID: acctID[:],
-			LockTime:  uint64(lockTime),
-			BondID:    pkHash[:],
-		}
-	}
-	if isBond, bondInfo := txIsBond(msgTx); isBond {
-		return &txdb.WalletTransaction{
-			Type:     txdb.CreateBond,
-			ID:       tx.TxID,
-			Amount:   uint64(msgTx.TxOut[0].Value),
-			Fees:     fee,
-			BondInfo: bondInfo,
-		}, nil
-	}
 
 	// Any other P2SH may be a swap or a send. We cannot determine unless we
 	// look up the transaction that spends this UTXO.
@@ -1557,34 +1513,6 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 			ID:     tx.TxID,
 			Amount: totalOut + fee,
 			Fees:   fee,
-		}, nil
-	}
-
-	// Bond refunds
-	redeemsBond := func(msgTx *zTx) (bool, *txdb.BondTxInfo) {
-		var bondInfo *txdb.BondTxInfo
-		isBond := func(contract []byte) bool {
-			const scriptVer = 0
-			lockTime, pkHash, err := btc.ExtractBondDetailsV0(scriptVer, contract)
-			if err != nil {
-				return false
-			}
-			bondInfo = &txdb.BondTxInfo{
-				AccountID: []byte{}, // Could look for the bond tx to get this, I guess.
-				LockTime:  uint64(lockTime),
-				BondID:    pkHash[:],
-			}
-			return true
-		}
-		return containsContractAtPushIndex(msgTx, 2, isBond), bondInfo
-	}
-	if isBondRedemption, bondInfo := redeemsBond(msgTx); isBondRedemption {
-		return &txdb.WalletTransaction{
-			Type:     txdb.RedeemBond,
-			ID:       tx.TxID,
-			Amount:   totalOut,
-			Fees:     fee,
-			BondInfo: bondInfo,
 		}, nil
 	}
 
@@ -1764,7 +1692,7 @@ func (w *zecWallet) addUnknownTransactionsToHistory(tip uint64) {
 
 		// Don't send notifications for the initial sync to avoid spamming the
 		// front end. A notification is sent at the end of the initial sync.
-		w.addTxToHistory(wt, txHash, true, blockToQuery == 0)
+		w.addTxToHistory(wt, txHash, blockToQuery == 0)
 	}
 
 	w.receiveTxLastQuery.Store(tip)
@@ -1817,10 +1745,6 @@ func (w *zecWallet) syncTxHistory(tip uint64) {
 	w.pendingTxsMtx.RUnlock()
 
 	handlePendingTx := func(txHash chainhash.Hash, tx *btc.ExtendedWalletTx) {
-		if !tx.Submitted {
-			return
-		}
-
 		gtr, err := getTransaction(w, &txHash)
 		if errors.Is(err, asset.CoinNotFoundError) {
 			err = txHistoryDB.RemoveTx(txHash.String())

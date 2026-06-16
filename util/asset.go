@@ -12,25 +12,7 @@ import (
 
 const (
 	UnsupportedScriptError = ErrorKind("unsupported script type")
-
-	secondsPerMinute  int64 = 60
-	secondsPerDay           = 24 * 60 * secondsPerMinute
-	BondExpiryMainnet       = 30 * secondsPerDay     // 30 days
-	BondExpiryTestnet       = 180 * secondsPerMinute // 3 hours
-	BondExpirySimnet        = 4 * secondsPerMinute   // 4 minutes
 )
-
-// BondExpiry returns the bond expiry duration in seconds for a given network.
-func BondExpiry(net Network) int64 {
-	switch net {
-	case Mainnet:
-		return BondExpiryMainnet
-	case Testnet:
-		return BondExpiryTestnet
-	default: // Regtest, Simnet, other
-		return BondExpirySimnet
-	}
-}
 
 // Network flags passed to asset backends to signify which network to use.
 type Network uint8

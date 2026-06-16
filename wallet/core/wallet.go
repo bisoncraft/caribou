@@ -17,7 +17,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encrypt"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 var errWalletNotConnected = errors.New("wallet not connected")
@@ -521,53 +520,13 @@ func (w *xcWallet) pendingTxsCopy() map[string]*txdb.WalletTransaction {
 	return util.CopyMap(w.pendingTxs)
 }
 
-// MakeBondTx authors a time-locked bond transaction if the asset.Wallet
-// implementation is a Bonder.
-func (w *xcWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Time, priv *secp256k1.PrivateKey, acctID []byte) (*asset.Bond, func(), error) {
-	bonder, ok := w.Wallet.(asset.Bonder)
-	if !ok {
-		return nil, nil, errors.New("wallet does not support making bond transactions")
-	}
-	return bonder.MakeBondTx(ver, amt, feeRate, lockTime, priv, acctID)
-}
-
-// BondsFeeBuffer gets the bonds fee buffer based on the provided fee rate.
-func (w *xcWallet) BondsFeeBuffer(feeRate uint64) uint64 {
-	bonder, ok := w.Wallet.(asset.Bonder)
-	if !ok {
-		return 0
-	}
-	return bonder.BondsFeeBuffer(feeRate)
-}
-
-// RefundBond will refund the bond if the asset.Wallet implementation is a
-// Bonder. The lock time must be passed to spend the bond. LockTimeExpired
-// should be used to check first.
-func (w *xcWallet) RefundBond(ctx context.Context, ver uint16, coinID, script []byte, amt uint64, priv *secp256k1.PrivateKey) (asset.Coin, error) {
-	bonder, ok := w.Wallet.(asset.Bonder)
-	if !ok {
-		return nil, errors.New("wallet does not support refunding bond transactions")
-	}
-	return bonder.RefundBond(ctx, ver, coinID, script, amt, priv)
-}
-
-// FindBond finds the bond with coinID and returns the values used to create it.
-// The output should be unspent with the lockTime set to some time in the future.
-func (w *xcWallet) FindBond(ctx context.Context, coinID []byte, searchUntil time.Time) (*asset.BondDetails, error) {
-	bonder, ok := w.Wallet.(asset.Bonder)
-	if !ok {
-		return nil, errors.New("wallet does not support making bond transactions")
-	}
-	return bonder.FindBond(ctx, coinID, searchUntil)
-}
-
 // SendTransaction broadcasts a raw transaction if the wallet is a Broadcaster.
 func (w *xcWallet) SendTransaction(tx []byte) ([]byte, error) {
-	bonder, ok := w.Wallet.(asset.Broadcaster)
+	broadcaster, ok := w.Wallet.(asset.Broadcaster)
 	if !ok {
 		return nil, errors.New("wallet is not a Broadcaster")
 	}
-	return bonder.SendTransaction(tx)
+	return broadcaster.SendTransaction(tx)
 }
 
 func (w *xcWallet) setFeeState(feeRate uint64) {

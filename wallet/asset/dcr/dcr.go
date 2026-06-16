@@ -149,7 +149,7 @@ var (
 				"the order is canceled. This an extra transaction for which network " +
 				"mining fees are paid.",
 			IsBoolean:    true,
-			DefaultValue: "true", // cheap fees, helpful for bond reserves, and adjustable at order-time
+			DefaultValue: "true", // cheap fees, and adjustable at order-time
 		},
 		{
 			Key:         "apifeefallback",
@@ -439,7 +439,7 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		recoveryCfg.NumInternalAddresses, recoveryCfg.GapLimit, chainParams)
 }
 
-// MinLotSize calculates the minimum bond size for a given fee rate that avoids
+// MinLotSize calculates the minimum lot size for a given fee rate that avoids
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
@@ -491,8 +491,7 @@ type rescanProgress struct {
 // client app communicates with the Decred blockchain and wallet. ExchangeWallet
 // satisfies the util.Wallet interface.
 type ExchangeWallet struct {
-	bondReserves atomic.Uint64
-	cfgV         atomic.Pointer[exchangeWalletConfig]
+	cfgV atomic.Pointer[exchangeWalletConfig]
 
 	ctx            context.Context // the asset subsystem starts with Connect(ctx)
 	wg             sync.WaitGroup
@@ -574,7 +573,6 @@ var _ asset.FeeRater = (*ExchangeWallet)(nil)
 var _ asset.Withdrawer = (*ExchangeWallet)(nil)
 var _ asset.LiveReconfigurer = (*ExchangeWallet)(nil)
 var _ asset.TxFeeEstimator = (*ExchangeWallet)(nil)
-var _ asset.Bonder = (*ExchangeWallet)(nil)
 var _ asset.Authenticator = (*ExchangeWallet)(nil)
 var _ asset.TicketBuyer = (*ExchangeWallet)(nil)
 var _ asset.NewAddresser = (*ExchangeWallet)(nil)
@@ -1031,49 +1029,7 @@ func (dcr *ExchangeWallet) balance() (*asset.Balance, error) {
 
 // Balance should return the total available funds in the wallet.
 func (dcr *ExchangeWallet) Balance() (*asset.Balance, error) {
-	bal, err := dcr.balance()
-	if err != nil {
-		return nil, err
-	}
-
-	reserves := dcr.bondReserves.Load()
-	if reserves > bal.Available { // unmixed (immature) probably needs to trickle in
-		dcr.log.Warnf("Available balance is below configured reserves: %f < %f",
-			toDCR(bal.Available), toDCR(reserves))
-		bal.ReservesDeficit = reserves - bal.Available
-		reserves = bal.Available
-	}
-
-	bal.BondReserves = reserves
-	bal.Available -= reserves
-	bal.Locked += reserves
-
-	return bal, nil
-}
-
-func bondsFeeBuffer(highFeeRate uint64) uint64 {
-	const inputCount uint64 = 12 // plan for lots of inputs
-	largeBondTxSize := MsgTxOverhead + P2SHOutputSize + 1 + BondPushDataSize +
-		P2PKHOutputSize + inputCount*P2PKHInputSize
-	// Normally we can plan on just 2 parallel "tracks" (single bond overlap
-	// when bonds are expired and waiting to refund) but that may increase
-	// temporarily if target tier is adjusted up.
-	const parallelTracks uint64 = 4
-	return parallelTracks * largeBondTxSize * highFeeRate
-}
-
-// BondsFeeBuffer suggests how much extra may be required for the transaction
-// fees part of required bond reserves when bond rotation is enabled.
-func (dcr *ExchangeWallet) BondsFeeBuffer(feeRate uint64) uint64 {
-	if feeRate == 0 {
-		feeRate = dcr.targetFeeRateWithFallback(2, 0)
-	}
-	feeRate *= 2 // double the current live fee rate estimate
-	return bondsFeeBuffer(feeRate)
-}
-
-func (dcr *ExchangeWallet) SetBondReserves(reserves uint64) {
-	dcr.bondReserves.Store(reserves)
+	return dcr.balance()
 }
 
 // FeeRate satisfies asset.FeeRater.
@@ -1902,394 +1858,6 @@ func (dcr *ExchangeWallet) Locked() bool {
 	return false
 }
 
-func bondPushDataScript(ver uint16, acctID []byte, lockTimeSec int64, pkh []byte) ([]byte, error) {
-	pushData := make([]byte, 2+len(acctID)+4+20)
-	var offset int
-	binary.BigEndian.PutUint16(pushData[offset:], ver)
-	offset += 2
-	copy(pushData[offset:], acctID[:])
-	offset += len(acctID)
-	binary.BigEndian.PutUint32(pushData[offset:], uint32(lockTimeSec))
-	offset += 4
-	copy(pushData[offset:], pkh)
-	return txscript.NewScriptBuilder().
-		AddOp(txscript.OP_RETURN).
-		AddData(pushData).
-		Script()
-}
-
-// MakeBondTx creates a time-locked fidelity bond transaction. The V0
-// transaction has two required outputs:
-//
-// Output 0 is a the time-locked bond output of type P2SH with the provided
-// value. The redeem script looks similar to the refund path of an atomic swap
-// script, but with a pubkey hash:
-//
-//	<locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP OP_DUP OP_HASH160 <pubkeyhash[20]> OP_EQUALVERIFY OP_CHECKSIG
-//
-// The pubkey referenced by the script is provided by the caller.
-//
-// Output 1 is a DEX Account commitment. This is an OP_RETURN output that
-// references the provided account ID.
-//
-//	OP_RETURN <2-byte version> <32-byte account ID> <4-byte locktime> <20-byte pubkey hash>
-//
-// Having the account ID in the raw allows the txn alone to identify the account
-// without the bond output's redeem script.
-//
-// Output 2 is change, if any.
-//
-// The bond output's redeem script, which is needed to spend the bond output, is
-// returned as the Data field of the Bond. The bond output pays to a pubkeyhash
-// script for a wallet address. Bond.RedeemTx is a backup transaction that
-// spends the bond output after lockTime passes, paying to an address for the
-// current underlying wallet; the bond private key should normally be used to
-// author a new transaction paying to a new address instead.
-func (dcr *ExchangeWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Time,
-	bondKey *secp256k1.PrivateKey, acctID []byte) (*asset.Bond, func(), error) {
-	if ver != 0 {
-		return nil, nil, errors.New("only version 0 bonds supported")
-	}
-	if until := time.Until(lockTime); until >= 365*12*time.Hour /* ~6 months */ {
-		return nil, nil, fmt.Errorf("that lock time is nuts: %v", lockTime)
-	} else if until < 0 {
-		return nil, nil, fmt.Errorf("that lock time is already passed: %v", lockTime)
-	}
-
-	pk := bondKey.PubKey().SerializeCompressed()
-	pkh := stdaddr.Hash160(pk)
-
-	feeRate = dcr.feeRateWithFallback(feeRate)
-	baseTx := wire.NewMsgTx()
-	const scriptVersion = 0
-
-	// TL output.
-	lockTimeSec := lockTime.Unix()
-	if lockTimeSec >= MaxCLTVScriptNum || lockTimeSec <= 0 {
-		return nil, nil, fmt.Errorf("invalid lock time %v", lockTime)
-	}
-	bondScript, err := MakeBondScript(ver, uint32(lockTimeSec), pkh)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
-	}
-	bondAddr, err := stdaddr.NewAddressScriptHash(scriptVersion, bondScript, dcr.chainParams)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build bond output payment script: %w", err)
-	}
-	bondPkScriptVer, bondPkScript := bondAddr.PaymentScript()
-	txOut := newTxOut(int64(amt), bondPkScriptVer, bondPkScript)
-	if IsDust(txOut, feeRate) {
-		return nil, nil, fmt.Errorf("bond output is dust")
-	}
-	baseTx.AddTxOut(txOut)
-
-	// Acct ID commitment and bond details output, v0. The integers are encoded
-	// with big-endian byte order and a fixed number of bytes, unlike in Script,
-	// for natural visual inspection of the version and lock time.
-	commitPkScript, err := bondPushDataScript(ver, acctID, lockTimeSec, pkh)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build acct commit output script: %w", err)
-	}
-	acctOut := newTxOut(0, scriptVersion, commitPkScript) // value zero
-	baseTx.AddTxOut(acctOut)
-
-	// NOTE: this "fund -> addInputCoins -> signTxAndAddChange -> lock prevouts"
-	// sequence might be best encapsulated in a fundRawTransactionMethod.
-	baseSize := uint32(baseTx.SerializeSize()) + P2PKHOutputSize // uint32(MsgTxOverhead + P2PKHOutputSize*3)
-	enough := sendEnough(amt, feeRate, false, baseSize, true)
-	coins, _, _, _, err := dcr.fund(0, enough)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unable to send %s DCR with fee rate of %d atoms/byte: %w",
-			amount(amt), feeRate, err)
-	}
-
-	var txIDToRemoveFromHistory *chainhash.Hash // will be non-nil if tx was added to history
-
-	abandon := func() { // if caller does not broadcast, or we fail in this method
-		_, err := dcr.returnCoins(coins)
-		if err != nil {
-			dcr.log.Errorf("error returning coins for unused bond tx: %v", coins)
-		}
-		if txIDToRemoveFromHistory != nil {
-			dcr.removeTxFromHistory(txIDToRemoveFromHistory)
-		}
-	}
-
-	var success bool
-	defer func() {
-		if !success {
-			abandon()
-		}
-	}()
-
-	_, err = dcr.addInputCoins(baseTx, coins)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	signedTx, _, _, fee, err := dcr.signTxAndAddChange(dcr.ctx, baseTx, feeRate, -1, dcr.depositAccount())
-	if err != nil {
-		return nil, nil, err
-	}
-	txHash := signedTx.CachedTxHash() // spentAmt := amt + fees
-
-	signedTxBytes, err := signedTx.Bytes()
-	if err != nil {
-		return nil, nil, err
-	}
-	unsignedTxBytes, err := baseTx.Bytes()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Prep the redeem / refund tx.
-	redeemMsgTx, err := dcr.makeBondRefundTxV0(txHash, 0, amt, bondScript, bondKey, feeRate)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unable to create bond redemption tx: %w", err)
-	}
-	redeemTx, err := redeemMsgTx.Bytes()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to serialize bond redemption tx: %w", err)
-	}
-
-	bond := &asset.Bond{
-		Version:    ver,
-		AssetID:    BipID,
-		Amount:     amt,
-		CoinID:     ToCoinID(txHash, 0),
-		Data:       bondScript,
-		SignedTx:   signedTxBytes,
-		UnsignedTx: unsignedTxBytes,
-		RedeemTx:   redeemTx,
-	}
-	success = true
-
-	bondInfo := &txdb.BondTxInfo{
-		AccountID: acctID,
-		LockTime:  uint64(lockTimeSec),
-		BondID:    pkh,
-	}
-	dcr.addTxToHistory(&txdb.WalletTransaction{
-		Type:     txdb.CreateBond,
-		ID:       txHash.String(),
-		Amount:   amt,
-		Fees:     fee,
-		BondInfo: bondInfo,
-	}, txHash, false)
-
-	txIDToRemoveFromHistory = txHash
-
-	return bond, abandon, nil
-}
-
-func (dcr *ExchangeWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt uint64,
-	script []byte, priv *secp256k1.PrivateKey, feeRate uint64) (*wire.MsgTx, error) {
-	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
-	if err != nil {
-		return nil, err
-	}
-
-	pk := priv.PubKey().SerializeCompressed()
-	pkh := stdaddr.Hash160(pk)
-	if !bytes.Equal(pkh, pkhPush) {
-		return nil, asset.ErrIncorrectBondKey
-	}
-
-	redeemMsgTx := wire.NewMsgTx()
-	// Transaction LockTime must be <= spend time, and >= the CLTV lockTime, so
-	// we use exactly the CLTV's value. This limits the CLTV value to 32-bits.
-	redeemMsgTx.LockTime = lockTime
-	bondPrevOut := wire.NewOutPoint(txid, vout, wire.TxTreeRegular)
-	txIn := wire.NewTxIn(bondPrevOut, int64(amt), []byte{})
-	txIn.Sequence = wire.MaxTxInSequenceNum - 1 // not finalized, do not disable cltv
-	redeemMsgTx.AddTxIn(txIn)
-
-	// Calculate fees and add the refund output.
-	redeemSize := redeemMsgTx.SerializeSize() + RedeemBondSigScriptSize + P2PKHOutputSize
-	fee := feeRate * uint64(redeemSize)
-	if fee > amt {
-		return nil, fmt.Errorf("irredeemable bond at fee rate %d atoms/byte", feeRate)
-	}
-
-	redeemAddr, err := dcr.wallet.ExternalAddress(dcr.ctx, dcr.wallet.Accounts().PrimaryAccount)
-	if err != nil {
-		return nil, fmt.Errorf("error getting new address from the wallet: %w", translateRPCCancelErr(err))
-	}
-	redeemScriptVer, redeemPkScript := redeemAddr.PaymentScript()
-	redeemTxOut := newTxOut(int64(amt-fee), redeemScriptVer, redeemPkScript)
-	if IsDust(redeemTxOut, feeRate) { // hard to imagine
-		return nil, fmt.Errorf("redeem output is dust")
-	}
-	redeemMsgTx.AddTxOut(redeemTxOut)
-
-	// CalcSignatureHash and ecdsa.Sign with secp256k1 private key.
-	redeemInSig, err := sign.RawTxInSignature(redeemMsgTx, 0, script, txscript.SigHashAll,
-		priv.Serialize(), dcrec.STEcdsaSecp256k1)
-	if err != nil {
-		return nil, fmt.Errorf("error creating signature for bond redeem input script '%v': %w", redeemAddr, err)
-	}
-
-	bondRedeemSigScript, err := RefundBondScript(script, redeemInSig, pk)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build bond redeem input script: %w", err)
-	}
-	redeemMsgTx.TxIn[0].SignatureScript = bondRedeemSigScript
-
-	return redeemMsgTx, nil
-}
-
-// RefundBond refunds a bond output to a new wallet address given the redeem
-// script and private key. After broadcasting, the output paying to the wallet
-// is returned.
-func (dcr *ExchangeWallet) RefundBond(ctx context.Context, ver uint16, coinID, script []byte,
-	amt uint64, privKey *secp256k1.PrivateKey) (asset.Coin, error) {
-	if ver != 0 {
-		return nil, errors.New("only version 0 bonds supported")
-	}
-	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
-	if err != nil {
-		return nil, err
-	}
-	txHash, vout, err := decodeCoinID(coinID)
-	if err != nil {
-		return nil, err
-	}
-
-	feeRate := dcr.targetFeeRateWithFallback(2, 0)
-
-	msgTx, err := dcr.makeBondRefundTxV0(txHash, vout, amt, script, privKey, feeRate)
-	if err != nil {
-		return nil, err
-	}
-
-	redeemHash, err := dcr.wallet.SendRawTransaction(ctx, msgTx, false)
-	if err != nil { // TODO: we need to be much smarter about these send error types/codes
-		return nil, translateRPCCancelErr(err)
-	}
-
-	refundAmt := msgTx.TxOut[0].Value
-	bondInfo := &txdb.BondTxInfo{
-		LockTime: uint64(lockTime),
-		BondID:   pkhPush,
-	}
-	dcr.addTxToHistory(&txdb.WalletTransaction{
-		Type:     txdb.RedeemBond,
-		ID:       redeemHash.String(),
-		Amount:   amt,
-		Fees:     amt - uint64(refundAmt),
-		BondInfo: bondInfo,
-	}, redeemHash, true)
-
-	return newOutput(redeemHash, 0, uint64(refundAmt), wire.TxTreeRegular), nil
-
-}
-
-// FindBond finds the bond with coinID and returns the values used to create it.
-func (dcr *ExchangeWallet) FindBond(ctx context.Context, coinID []byte, searchUntil time.Time) (bond *asset.BondDetails, err error) {
-	txHash, vout, err := decodeCoinID(coinID)
-	if err != nil {
-		return nil, err
-	}
-
-	decodeV0BondTx := func(msgTx *wire.MsgTx) (*asset.BondDetails, error) {
-		if len(msgTx.TxOut) < 2 {
-			return nil, fmt.Errorf("tx %s is not a v0 bond transaction: too few outputs", txHash)
-		}
-		_, lockTime, pkh, err := ExtractBondCommitDataV0(0, msgTx.TxOut[1].PkScript)
-		if err != nil {
-			return nil, fmt.Errorf("unable to extract bond commitment details from output 1 of %s: %v", txHash, err)
-		}
-		// Sanity check.
-		bondScript, err := MakeBondScript(0, lockTime, pkh[:])
-		if err != nil {
-			return nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
-		}
-		bondAddr, err := stdaddr.NewAddressScriptHash(0, bondScript, dcr.chainParams)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build bond output payment script: %w", err)
-		}
-		_, bondScriptWOpcodes := bondAddr.PaymentScript()
-		if !bytes.Equal(bondScriptWOpcodes, msgTx.TxOut[0].PkScript) {
-			return nil, fmt.Errorf("bond script does not match commit data for %s: %x != %x",
-				txHash, bondScript, msgTx.TxOut[0].PkScript)
-		}
-		return &asset.BondDetails{
-			Bond: &asset.Bond{
-				Version: 0,
-				AssetID: BipID,
-				Amount:  uint64(msgTx.TxOut[0].Value),
-				CoinID:  coinID,
-				Data:    bondScript,
-				//
-				// SignedTx and UnsignedTx not populated because this is
-				// an already posted bond and these fields are no longer used.
-				// SignedTx, UnsignedTx []byte
-				//
-				// RedeemTx cannot be populated because we do not have
-				// the private key that only core knows. Core will need
-				// the BondPKH to determine what the private key was.
-				// RedeemTx []byte
-			},
-			LockTime: time.Unix(int64(lockTime), 0),
-			CheckPrivKey: func(bondKey *secp256k1.PrivateKey) bool {
-				pk := bondKey.PubKey().SerializeCompressed()
-				pkhB := stdaddr.Hash160(pk)
-				return bytes.Equal(pkh[:], pkhB)
-			},
-		}, nil
-	}
-
-	// If the bond was funded by this wallet or had a change output paying
-	// to this wallet, it should be found here.
-	tx, err := dcr.wallet.GetTransaction(ctx, txHash)
-	if err == nil {
-		return decodeV0BondTx(tx.MsgTx)
-	}
-	if !errors.Is(err, asset.CoinNotFoundError) {
-		dcr.log.Warnf("Unexpected error looking up bond output %v:%d", txHash, vout)
-	}
-
-	// The bond was not funded by this wallet or had no change output when
-	// restored from seed. This is not a problem. However, we are unable to
-	// use filters because we don't know any output scripts. Brute force
-	// finding the transaction.
-	blockHash, _, err := dcr.wallet.GetBestBlock(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get best hash: %v", err)
-	}
-	var (
-		blk   *wire.MsgBlock
-		msgTx *wire.MsgTx
-	)
-out:
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("bond search stopped: %w", err)
-		}
-		blk, err = dcr.wallet.GetBlock(ctx, blockHash)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving block %s: %w", blockHash, err)
-		}
-		if blk.Header.Timestamp.Before(searchUntil) {
-			return nil, fmt.Errorf("searched blocks until %v but did not find the bond tx %s", searchUntil, txHash)
-		}
-		for _, tx := range blk.Transactions {
-			if tx.TxHash() == *txHash {
-				dcr.log.Debugf("Found mined tx %s in block %s.", txHash, blk.BlockHash())
-				msgTx = tx
-				break out
-			}
-		}
-
-		if string(blk.Header.PrevBlock[:]) == "" {
-			return nil, fmt.Errorf("did not find the bond tx %s", txHash)
-		}
-
-		blockHash = &blk.Header.PrevBlock
-	}
-	return decodeV0BondTx(msgTx)
-}
-
 // SendTransaction broadcasts a valid fully-signed transaction.
 func (dcr *ExchangeWallet) SendTransaction(rawTx []byte) ([]byte, error) {
 	msgTx, err := msgTxFromBytes(rawTx)
@@ -2300,7 +1868,6 @@ func (dcr *ExchangeWallet) SendTransaction(rawTx []byte) ([]byte, error) {
 	if err != nil {
 		return nil, translateRPCCancelErr(err)
 	}
-	dcr.markTxAsSubmitted(txHash)
 	return ToCoinID(txHash, 0), nil
 }
 
@@ -2332,7 +1899,7 @@ func (dcr *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asse
 		Amount:    sentVal,
 		Fees:      value - sentVal,
 		Recipient: &address,
-	}, msgTx.CachedTxHash(), true)
+	}, msgTx.CachedTxHash())
 
 	return newOutput(msgTx.CachedTxHash(), 0, sentVal, wire.TxTreeRegular), nil
 }
@@ -2367,7 +1934,7 @@ func (dcr *ExchangeWallet) Send(address string, value, feeRate uint64) (asset.Co
 		Recipient: &address,
 		Timestamp: uint64(time.Now().Unix()),
 		Confirms:  &txdb.Confirms{Target: confTxFinality},
-	}, msgTx.CachedTxHash(), true)
+	}, msgTx.CachedTxHash())
 	return newOutput(msgTx.CachedTxHash(), 0, sentVal, wire.TxTreeRegular), nil
 }
 
@@ -2398,10 +1965,6 @@ func (dcr *ExchangeWallet) addInputCoins(msgTx *wire.MsgTx, coins asset.Coins) (
 }
 
 func (dcr *ExchangeWallet) shutdown() {
-	dcr.bondReserves.Store(0)
-	// or should it remember reserves in case we reconnect? There's a
-	// reReserveFunds Core method for this... unclear
-
 	// Close all open channels for contract redemption searches
 	// to prevent leakages and ensure goroutines that are started
 	// to wait on these channels end gracefully.
@@ -2553,8 +2116,7 @@ func (dcr *ExchangeWallet) withdraw(addr stdaddr.Address, val, feeRate uint64) (
 	baseSize := uint32(MsgTxOverhead + P2PKHOutputSize*2)
 	reportChange := dcr.wallet.Accounts().UnmixedAccount == "" // otherwise change goes to unmixed account
 	enough := sendEnough(val, feeRate, true, baseSize, reportChange)
-	reserves := dcr.bondReserves.Load()
-	coins, _, _, _, err := dcr.fund(reserves, enough)
+	coins, _, _, _, err := dcr.fund(0, enough)
 	if err != nil {
 		return nil, 0, fmt.Errorf("unable to withdraw %s DCR to address %s with feeRate %d atoms/byte: %w",
 			amount(val), addr, feeRate, err)
@@ -2577,8 +2139,7 @@ func (dcr *ExchangeWallet) sendToAddress(addr stdaddr.Address, amt, feeRate uint
 	baseSize := uint32(MsgTxOverhead + P2PKHOutputSize*2)      // may be extra if change gets omitted (see signTxAndAddChange)
 	reportChange := dcr.wallet.Accounts().UnmixedAccount == "" // otherwise change goes to unmixed account
 	enough := sendEnough(amt, feeRate, false, baseSize, reportChange)
-	reserves := dcr.bondReserves.Load()
-	coins, _, _, _, err := dcr.fund(reserves, enough)
+	coins, _, _, _, err := dcr.fund(0, enough)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("unable to send %s DCR with fee rate of %d atoms/byte: %w",
 			amount(amt), feeRate, err)
@@ -2917,15 +2478,9 @@ func (dcr *ExchangeWallet) EstimateSendTxFee(address string, sendAmount, feeRate
 	minTxSize := uint32(tx.SerializeSize())
 	reportChange := dcr.wallet.Accounts().UnmixedAccount == ""
 	enough := sendEnough(sendAmount, feeRate, subtract, minTxSize, reportChange)
-	sum, extra, inputsSize, _, _, _, err := tryFund(utxos, enough)
+	sum, _, inputsSize, _, _, _, err := tryFund(utxos, enough)
 	if err != nil {
 		return 0, false, err
-	}
-
-	reserves := dcr.bondReserves.Load()
-	avail := sumUTXOs(utxos)
-	if avail-sum+extra /* avail-sendAmount-fees */ < reserves {
-		return 0, false, errors.New("violates reserves")
 	}
 
 	txSize := uint64(minTxSize + inputsSize)
@@ -3343,7 +2898,7 @@ func (dcr *ExchangeWallet) runTicketBuyer() {
 			Fees:      ticket.Tx.Fees,
 			Timestamp: uint64(time.Now().Unix()),
 			Confirms:  &txdb.Confirms{Target: confTxFinality},
-		}, txHash, true)
+		}, txHash)
 	}
 	ok = true
 }
@@ -3902,31 +3457,6 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		}, nil
 	}
 
-	txIsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
-		if len(msgTx.TxOut) < 2 {
-			return false, nil
-		}
-		const scriptVer = 0
-		acctID, lockTime, pkHash, err := ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
-		if err != nil {
-			return false, nil
-		}
-		return true, &txdb.BondTxInfo{
-			AccountID: acctID[:],
-			LockTime:  uint64(lockTime),
-			BondID:    pkHash[:],
-		}
-	}
-	if isBond, bondInfo := txIsBond(tx.MsgTx); isBond {
-		return &txdb.WalletTransaction{
-			Type:     txdb.CreateBond,
-			ID:       ltxr.TxID,
-			Amount:   uint64(tx.MsgTx.TxOut[0].Value),
-			Fees:     fee,
-			BondInfo: bondInfo,
-		}, nil
-	}
-
 	// Any other P2SH may be a swap or a send. We cannot determine unless we
 	// look up the transaction that spends this UTXO.
 	txPaysToScriptHash := func(msgTx *wire.MsgTx) (v uint64) {
@@ -3990,34 +3520,6 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			ID:     ltxr.TxID,
 			Amount: totalOut + fee,
 			Fees:   fee,
-		}, nil
-	}
-
-	// Bond refunds
-	redeemsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
-		var bondInfo *txdb.BondTxInfo
-		isBond := func(contract []byte) bool {
-			const scriptVer = 0
-			lockTime, pkHash, err := ExtractBondDetailsV0(scriptVer, contract)
-			if err != nil {
-				return false
-			}
-			bondInfo = &txdb.BondTxInfo{
-				AccountID: []byte{}, // Could look for the bond tx to get this, I guess.
-				LockTime:  uint64(lockTime),
-				BondID:    pkHash[:],
-			}
-			return true
-		}
-		return containsContractAtPushIndex(msgTx, 2, isBond), bondInfo
-	}
-	if isBondRedemption, bondInfo := redeemsBond(tx.MsgTx); isBondRedemption {
-		return &txdb.WalletTransaction{
-			Type:     txdb.RedeemBond,
-			ID:       ltxr.TxID,
-			Amount:   totalOut,
-			Fees:     fee,
-			BondInfo: bondInfo,
 		}, nil
 	}
 
@@ -4221,7 +3723,7 @@ func (dcr *ExchangeWallet) addUnknownTransactionsToHistory(tip uint64) {
 
 		// Don't send notifications for the initial sync to avoid spamming the
 		// front end. A notification is sent at the end of the initial sync.
-		dcr.addTxToHistory(wt, txHash, true, blockToQuery == 0)
+		dcr.addTxToHistory(wt, txHash, blockToQuery == 0)
 	}
 
 	dcr.receiveTxLastQuery.Store(tip)
@@ -4270,10 +3772,6 @@ func (dcr *ExchangeWallet) syncTxHistory(ctx context.Context, tip uint64) {
 	dcr.pendingTxsMtx.RUnlock()
 
 	handlePendingTx := func(txHash chainhash.Hash, tx *btc.ExtendedWalletTx) {
-		if !tx.Submitted {
-			return
-		}
-
 		gtr, err := dcr.wallet.GetTransaction(ctx, &txHash)
 		if errors.Is(err, asset.CoinNotFoundError) {
 			err = txHistoryDB.RemoveTx(txHash.String())
@@ -4360,33 +3858,6 @@ func (dcr *ExchangeWallet) syncTxHistory(ctx context.Context, tip uint64) {
 	}
 }
 
-func (dcr *ExchangeWallet) markTxAsSubmitted(txHash *chainhash.Hash) {
-	txHistoryDB := dcr.txDB()
-	if txHistoryDB == nil {
-		return
-	}
-
-	dcr.pendingTxsMtx.Lock()
-	wt, found := dcr.pendingTxs[*txHash]
-	if found {
-		wt.Submitted = true
-	}
-	dcr.pendingTxsMtx.Unlock()
-
-	if !found {
-		dcr.log.Errorf("Transaction %s not found in pending txs", txHash)
-		return
-	}
-
-	// The transaction was held back from the shared DB until broadcast; write
-	// it now that it is submitted.
-	if err := txHistoryDB.StoreTx(wt); err != nil {
-		dcr.log.Errorf("failed to store submitted tx in tx history db: %v", err)
-	}
-
-	dcr.emit.TransactionNote(wt.WalletTransaction, true)
-}
-
 func (dcr *ExchangeWallet) removeTxFromHistory(txHash *chainhash.Hash) {
 	txHistoryDB := dcr.txDB()
 	if txHistoryDB == nil {
@@ -4403,7 +3874,7 @@ func (dcr *ExchangeWallet) removeTxFromHistory(txHash *chainhash.Hash) {
 	}
 }
 
-func (dcr *ExchangeWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
+func (dcr *ExchangeWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, skipNotes ...bool) {
 	txHistoryDB := dcr.txDB()
 	if txHistoryDB == nil {
 		return
@@ -4411,7 +3882,6 @@ func (dcr *ExchangeWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *ch
 
 	ewt := &btc.ExtendedWalletTx{
 		WalletTransaction: wt,
-		Submitted:         submitted,
 	}
 
 	if wt.BlockNumber == 0 {
@@ -4420,17 +3890,12 @@ func (dcr *ExchangeWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *ch
 		dcr.pendingTxsMtx.Unlock()
 	}
 
-	// Unsubmitted transactions are held only in the in-memory pending map until
-	// they are broadcast (markTxAsSubmitted writes them to the shared DB), so
-	// the database never contains unsubmitted transactions.
-	if submitted {
-		if err := txHistoryDB.StoreTx(ewt); err != nil {
-			dcr.log.Errorf("failed to store tx in tx history db: %v", err)
-		}
+	if err := txHistoryDB.StoreTx(ewt); err != nil {
+		dcr.log.Errorf("failed to store tx in tx history db: %v", err)
 	}
 
 	skipNote := len(skipNotes) > 0 && skipNotes[0]
-	if submitted && !skipNote {
+	if !skipNote {
 		dcr.emit.TransactionNote(wt, true)
 	}
 }
@@ -4884,7 +4349,7 @@ func (dcr *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (
 	}
 
 	if updated {
-		dcr.addTxToHistory(tx, txHash, true)
+		dcr.addTxToHistory(tx, txHash)
 	}
 
 	// If the wallet knows about the transaction, it will be part of the
@@ -4931,7 +4396,7 @@ func (dcr *ExchangeWallet) RedeemGeocode(code []byte, msg string) (util.Bytes, u
 
 	k, err := hdkeychain.NewMaster(code, dcr.chainParams)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error generating key from bond: %w", err)
+		return nil, 0, fmt.Errorf("error generating key from code: %w", err)
 	}
 	gameKey, err := k.SerializedPrivKey()
 	if err != nil {

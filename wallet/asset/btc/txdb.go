@@ -14,15 +14,9 @@ import (
 )
 
 // ExtendedWalletTx wraps the asset-agnostic WalletTransaction with btc-specific
-// tracking. Submitted marks whether the transaction has been broadcast; an
-// unsubmitted transaction is held only in the in-memory pending map and is not
-// written to the shared transaction database until it is submitted, so every
-// transaction in the database is by definition submitted.
+// tracking.
 type ExtendedWalletTx struct {
 	*txdb.WalletTransaction
-	// Create bond transactions are added to the store before they are
-	// submitted.
-	Submitted bool `json:"submitted"`
 }
 
 const (
@@ -85,7 +79,7 @@ func (db *BadgerTxDB) GetPendingTxs() ([]*ExtendedWalletTx, error) {
 	}
 	txs := make([]*ExtendedWalletTx, len(wts))
 	for i, wt := range wts {
-		txs[i] = &ExtendedWalletTx{WalletTransaction: wt, Submitted: true}
+		txs[i] = &ExtendedWalletTx{WalletTransaction: wt}
 	}
 	return txs, nil
 }

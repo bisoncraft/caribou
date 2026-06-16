@@ -48,10 +48,6 @@ const (
 	createWalletErr
 	activeOrdersErr
 	newAddrErr
-	bondAmtErr
-	bondTimeErr
-	bondAssetErr
-	bondPostErr // TODO
 	insufficientRedeemFundsErr
 	relayRedemptionLotSizeTooSmallErr
 )

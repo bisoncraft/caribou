@@ -75,6 +75,6 @@ func MinHTLCSize(redeemTxFees uint64) uint64 {
 func MinLotSize(maxFeeRate uint64) uint64 {
 	var inputsSize uint64 = dexbtc.TxInOverhead + dexbtc.RefundSigScriptSize + 1
 	var outputsSize uint64 = dexbtc.P2PKHOutputSize + 1
-	refundBondTxFees := TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
-	return MinHTLCSize(refundBondTxFees)
+	refundTxFees := TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
+	return MinHTLCSize(refundTxFees)
 }

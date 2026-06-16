@@ -1473,8 +1473,7 @@ func (c *Core) WalletTraits(assetID uint32) (asset.WalletTrait, error) {
 // walletCheckAndNotify sets the xcWallet's synced and syncProgress fields from
 // the wallet's SyncStatus result, emits a WalletStateNote, and returns the
 // synced value. When synced is true, this also updates the wallet's balance,
-// stores the balance in the DB, emits a BalanceNote, and updates the bond
-// reserves (with balance checking).
+// stores the balance in the DB, and emits a BalanceNote.
 func (c *Core) walletCheckAndNotify(w *xcWallet) bool {
 	ss, err := w.SyncStatus()
 	if err != nil {
@@ -1494,7 +1493,6 @@ func (c *Core) walletCheckAndNotify(w *xcWallet) bool {
 	if ss.Synced && !wasSynced {
 		c.updateWalletBalance(w)
 		c.log.Debugf("Wallet synced for asset %s", unbip(w.AssetID))
-		// bond reserves not applicable in this build
 	}
 	return ss.Synced
 }

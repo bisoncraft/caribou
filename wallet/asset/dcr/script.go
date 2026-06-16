@@ -155,21 +155,6 @@ const (
 	//   - 62 bytes contract script
 	RefundPrivateScriptSigSize = 1 + SchnorrSigLength + 1 + pubkeyLength + 1 + 1 + PrivateSwapContractSize // 164
 
-	// BondScriptSize is the maximum size of a DEX time-locked fidelity bond
-	// output script to which a bond P2SH pays:
-	//   OP_DATA_4/5 (4/5 bytes lockTime) OP_CHECKLOCKTIMEVERIFY OP_DROP OP_DUP OP_HASH160 OP_DATA_20 (20-byte pubkey hash160) OP_EQUALVERIFY OP_CHECKSIG
-	BondScriptSize = 1 + 5 + 1 + 1 + 1 + 1 + 1 + 20 + 1 + 1 // 33
-
-	// RedeemBondSigScriptSize is the worst case size of a fidelity bond
-	// signature script that spends a bond output. It includes a signature, a
-	// compressed pubkey, and the bond script. Each of said data pushes use an
-	// OP_DATA_ code.
-	RedeemBondSigScriptSize = 1 + DERSigLength + 1 + pubkeyLength + 1 + BondScriptSize // 142
-
-	// BondPushDataSize is the size of the nulldata in a bond commitment output:
-	//  OP_RETURN <pushData: ver[2] | account_id[32] | lockTime[4] | pkh[20]>
-	BondPushDataSize = 2 + 32 + 4 + 20
-
 	// MaxStandardTxSize is the maximum size allowed for transactions that
 	// are relayed and accepted into the mempool. This matches the dcrd
 	// mempool policy limit defined in dcrd/internal/mempool/policy.go.
@@ -190,32 +175,20 @@ func redeemSwapTxSize() uint64 {
 	return redeemP2SHTxSize(RedeemSwapSigScriptSize)
 }
 
-// refundBondTxSize returns the size of a bond refund tx.
-func refundBondTxSize() uint64 {
-	return redeemP2SHTxSize(RedeemBondSigScriptSize)
-}
-
 // minHTLCValue calculates the minimum value for the output of a chained
 // P2SH -> P2WPKH transaction pair where the spending tx size is known.
 func minHTLCValue(maxFeeRate, redeemTxSize uint64) uint64 {
 	// Reversing IsDustVal.
 	// totalSize adds some buffer for the spending transaction.
-	var outputSize uint64 = P2PKHOutputSize // larger of bonds p2sh output and refund's p2pkh output.
+	var outputSize uint64 = P2PKHOutputSize // larger of p2sh output and refund's p2pkh output.
 	totalSize := outputSize + 165
 	minInitTxValue := maxFeeRate * totalSize * 3
 
-	// The minInitTxValue would get the bond tx accepted, but when we go to
+	// The minInitTxValue would get the init tx accepted, but when we go to
 	// refund, we need that output to pass too, So let's add the fees for the
 	// refund transaction.
 	redeemFees := redeemTxSize * maxFeeRate
 	return minInitTxValue + redeemFees
-}
-
-// MinBondSize is the minimum bond size that avoids dust for a given max network
-// fee rate.
-func MinBondSize(maxFeeRate uint64) uint64 {
-	refundTxSize := refundBondTxSize()
-	return minHTLCValue(maxFeeRate, refundTxSize)
 }
 
 // MinLotSize is the minimum lot size that avoids dust for a given max network
@@ -486,200 +459,6 @@ func RefundP2SHContract(contract, sig, pubkey []byte) ([]byte, error) {
 		AddInt64(0).
 		AddData(contract).
 		Script()
-}
-
-// OP_RETURN <pushData: ver[2] | account_id[32] | lockTime[4] | pkh[20]>
-func extractBondCommitDataV0(pushData []byte) (acct [32]byte, lockTime uint32, pubkeyHash [20]byte, err error) {
-	if len(pushData) < 2 {
-		err = errors.New("invalid data")
-		return
-	}
-	ver := binary.BigEndian.Uint16(pushData)
-	if ver != 0 {
-		err = fmt.Errorf("unexpected bond commitment version %d, expected 0", ver)
-		return
-	}
-
-	if len(pushData) != BondPushDataSize {
-		err = fmt.Errorf("invalid bond commitment output script length: %d", len(pushData))
-		return
-	}
-
-	pushData = pushData[2:] // pop off ver
-
-	copy(acct[:], pushData)
-	pushData = pushData[32:]
-
-	lockTime = binary.BigEndian.Uint32(pushData)
-	pushData = pushData[4:]
-
-	copy(pubkeyHash[:], pushData)
-
-	return
-}
-
-// ExtractBondCommitDataV0 parses a v0 bond commitment output script. This is
-// the OP_RETURN output, not the P2SH bond output. Use ExtractBondDetailsV0 to
-// parse the P2SH bond output's redeem script.
-//
-// If the decoded commitment data indicates a version other than 0, an error is
-// returned.
-func ExtractBondCommitDataV0(scriptVer uint16, pkScript []byte) (acct [32]byte, lockTime uint32, pubkeyHash [20]byte, err error) {
-	tokenizer := txscript.MakeScriptTokenizer(scriptVer, pkScript)
-	if !tokenizer.Next() {
-		err = tokenizer.Err()
-		return
-	}
-
-	if tokenizer.Opcode() != txscript.OP_RETURN {
-		err = errors.New("not a null data output")
-		return
-	}
-
-	if !tokenizer.Next() {
-		err = tokenizer.Err()
-		return
-	}
-
-	pushData := tokenizer.Data()
-	acct, lockTime, pubkeyHash, err = extractBondCommitDataV0(pushData)
-	if err != nil {
-		return
-	}
-
-	if !tokenizer.Done() {
-		err = errors.New("script has extra opcodes")
-		return
-	}
-
-	return
-}
-
-// MakeBondScript constructs a versioned bond output script for the provided
-// lock time and pubkey hash. Only version 0 is supported at present. The lock
-// time must be less than 2^32-1 so that it uses at most 5 bytes. The lockTime
-// is also required to use at least 4 bytes (time stamp, not block time).
-func MakeBondScript(ver uint16, lockTime uint32, pubkeyHash []byte) ([]byte, error) {
-	if ver != 0 {
-		return nil, errors.New("only version 0 bonds supported")
-	}
-	if lockTime >= MaxCLTVScriptNum { // == should be OK, but let's not
-		return nil, errors.New("invalid lock time")
-	}
-	lockTimeBytes := txscript.ScriptNum(lockTime).Bytes()
-	if n := len(lockTimeBytes); n < 4 || n > 5 {
-		return nil, errors.New("invalid lock time")
-	}
-	if len(pubkeyHash) != 20 {
-		return nil, errors.New("invalid pubkey hash")
-	}
-	return txscript.NewScriptBuilder().
-		AddData(lockTimeBytes).
-		AddOp(txscript.OP_CHECKLOCKTIMEVERIFY).
-		AddOp(txscript.OP_DROP).
-		AddOp(txscript.OP_DUP).
-		AddOp(txscript.OP_HASH160).
-		AddData(pubkeyHash).
-		AddOp(txscript.OP_EQUALVERIFY).
-		AddOp(txscript.OP_CHECKSIG).
-		Script()
-}
-
-// RefundBondScript builds the signature script to refund a time-locked fidelity
-// bond in a P2SH output paying to the provided P2PKH bondScript.
-func RefundBondScript(bondScript, sig, pubkey []byte) ([]byte, error) {
-	return txscript.NewScriptBuilder().
-		AddData(sig).
-		AddData(pubkey).
-		AddData(bondScript).
-		Script()
-}
-
-// ExtractBondDetailsV0 validates the provided bond redeem script, extracting
-// the lock time and pubkey. The V0 format of the script must be as follows:
-//
-//	<lockTime> OP_CHECKLOCKTIMEVERIFY OP_DROP OP_DUP OP_HASH160 <pubkeyhash[20]> OP_EQUALVERIFY OP_CHECKSIG
-//
-// The script version refers to the pkScript version, not bond version, which
-// pertains to DEX's version of the bond script.
-func ExtractBondDetailsV0(scriptVersion uint16, bondScript []byte) (lockTime uint32, pkh []byte, err error) {
-	type templateMatch struct {
-		expectInt     bool
-		maxIntBytes   int
-		opcode        byte
-		extractedInt  int64
-		extractedData []byte
-	}
-	var template = [...]templateMatch{
-		{expectInt: true, maxIntBytes: txscript.CltvMaxScriptNumLen}, // extractedInt
-		{opcode: txscript.OP_CHECKLOCKTIMEVERIFY},
-		{opcode: txscript.OP_DROP},
-		{opcode: txscript.OP_DUP},
-		{opcode: txscript.OP_HASH160},
-		{opcode: txscript.OP_DATA_20}, // extractedData
-		{opcode: txscript.OP_EQUALVERIFY},
-		{opcode: txscript.OP_CHECKSIG},
-	}
-
-	var templateOffset int
-	tokenizer := txscript.MakeScriptTokenizer(scriptVersion, bondScript)
-	for tokenizer.Next() {
-		if templateOffset >= len(template) {
-			return 0, nil, errors.New("too many script elements")
-		}
-
-		op, data := tokenizer.Opcode(), tokenizer.Data()
-		tplEntry := &template[templateOffset]
-		if tplEntry.expectInt {
-			switch {
-			case data != nil:
-				val, err := txscript.MakeScriptNum(data, tplEntry.maxIntBytes)
-				if err != nil {
-					return 0, nil, err
-				}
-				tplEntry.extractedInt = int64(val)
-
-			case txscript.IsSmallInt(op): // not expected for our lockTimes, but it is an integer
-				tplEntry.extractedInt = int64(txscript.AsSmallInt(op))
-
-			default:
-				return 0, nil, errors.New("expected integer")
-			}
-		} else {
-			if op != tplEntry.opcode {
-				return 0, nil, fmt.Errorf("expected opcode %v, got %v", tplEntry.opcode, op)
-			}
-
-			tplEntry.extractedData = data
-		}
-
-		templateOffset++
-	}
-	if err := tokenizer.Err(); err != nil {
-		return 0, nil, err
-	}
-	if !tokenizer.Done() || templateOffset != len(template) {
-		return 0, nil, errors.New("incorrect script length")
-	}
-
-	// The script matches in structure. Now validate the two pushes.
-
-	lockTime64 := template[0].extractedInt
-	if lockTime64 <= 0 || lockTime64 > MaxCLTVScriptNum {
-		return 0, nil, fmt.Errorf("invalid locktime %d", lockTime64)
-	}
-	lockTime = uint32(lockTime64)
-
-	const pubkeyHashLen = 20
-	bondPubKeyHash := template[5].extractedData
-	if len(bondPubKeyHash) != pubkeyHashLen {
-		err = errors.New("missing or invalid pubkeyhash data")
-		return
-	}
-	pkh = make([]byte, pubkeyHashLen)
-	copy(pkh, bondPubKeyHash)
-
-	return
 }
 
 // ExtractSwapDetails extacts the sender and receiver addresses from a swap
