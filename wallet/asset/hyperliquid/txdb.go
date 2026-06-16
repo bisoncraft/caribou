@@ -13,6 +13,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 // ErrTxIsPending is returned by TxHistory when a RefID names a pending tx
@@ -30,10 +31,10 @@ const (
 	pendingIDKey     = "pendingID"
 )
 
-// dbTx wraps asset.WalletTransaction with the submission timestamp for
+// dbTx wraps txdb.WalletTransaction with the submission timestamp for
 // pending-tx age tracking.
 type dbTx struct {
-	*asset.WalletTransaction
+	*txdb.WalletTransaction
 	SubmissionTime uint64 `json:"submissionTime"` // unix seconds
 }
 
@@ -198,7 +199,7 @@ func (db *hyperTxDB) highestPendingNonce() (uint64, error) {
 	return maxNonce, nil
 }
 
-func (db *hyperTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (db *hyperTxDB) getTxs(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	n := req.N
 
 	var opts []lexi.IterationOption
@@ -222,7 +223,7 @@ func (db *hyperTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespon
 		opts = append(opts, lexi.WithSeek(entry))
 	}
 
-	txs := make([]*asset.WalletTransaction, 0, n)
+	txs := make([]*txdb.WalletTransaction, 0, n)
 	var moreAvailable bool
 	ignoreTypes := req.IngoreTypesLookup()
 
@@ -251,7 +252,7 @@ func (db *hyperTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespon
 		return nil, err
 	}
 
-	return &asset.TxHistoryResponse{
+	return &txdb.TxHistoryResponse{
 		Txs:           txs,
 		MoreAvailable: moreAvailable,
 	}, nil

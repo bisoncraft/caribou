@@ -27,6 +27,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/gorilla/websocket"
 )
@@ -982,8 +983,8 @@ func newTestTxDB(t *testing.T) *hyperTxDB {
 func TestTxDBStoreGetDelete(t *testing.T) {
 	db := newTestTxDB(t)
 
-	wtx := &asset.WalletTransaction{
-		Type:        asset.Send,
+	wtx := &txdb.WalletTransaction{
+		Type:        txdb.Send,
 		ID:          "0xaabbcc",
 		Amount:      1e8,
 		BlockNumber: 100,
@@ -1033,8 +1034,8 @@ func TestTxDBGetTxsPagination(t *testing.T) {
 	db := newTestTxDB(t)
 
 	for i := 1; i <= 5; i++ {
-		wtx := &asset.WalletTransaction{
-			Type:        asset.Send,
+		wtx := &txdb.WalletTransaction{
+			Type:        txdb.Send,
 			ID:          fmt.Sprintf("0x%016x", i),
 			Amount:      uint64(i) * 1e8,
 			BlockNumber: uint64(i),
@@ -1046,7 +1047,7 @@ func TestTxDBGetTxsPagination(t *testing.T) {
 	}
 
 	// Fetch 3 most recent.
-	resp, err := db.getTxs(&asset.TxHistoryRequest{N: 3})
+	resp, err := db.getTxs(&txdb.TxHistoryRequest{N: 3})
 	if err != nil {
 		t.Fatalf("getTxs: %v", err)
 	}
@@ -1065,11 +1066,11 @@ func TestTxDBGetTxsPagination(t *testing.T) {
 func TestTxDBGetPendingTxs(t *testing.T) {
 	db := newTestTxDB(t)
 
-	pending := &dbTx{WalletTransaction: &asset.WalletTransaction{
-		ID: "pending-1", Type: asset.Send, Amount: 1e8, BlockNumber: 0,
+	pending := &dbTx{WalletTransaction: &txdb.WalletTransaction{
+		ID: "pending-1", Type: txdb.Send, Amount: 1e8, BlockNumber: 0,
 	}}
-	confirmed := &dbTx{WalletTransaction: &asset.WalletTransaction{
-		ID: "confirmed-1", Type: asset.Send, Amount: 2e8, BlockNumber: 42, Confirmed: true,
+	confirmed := &dbTx{WalletTransaction: &txdb.WalletTransaction{
+		ID: "confirmed-1", Type: txdb.Send, Amount: 2e8, BlockNumber: 42, Confirmed: true,
 	}}
 
 	if err := db.storeTx(pending); err != nil {
@@ -1095,19 +1096,19 @@ func TestTxDBGetTxsRefIDOnPendingReturnsDistinctError(t *testing.T) {
 	db := newTestTxDB(t)
 
 	pendingID := "pending-ref-test"
-	if err := db.storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
-		ID: pendingID, Type: asset.Send, Amount: 1e8, BlockNumber: 0,
+	if err := db.storeTx(&dbTx{WalletTransaction: &txdb.WalletTransaction{
+		ID: pendingID, Type: txdb.Send, Amount: 1e8, BlockNumber: 0,
 	}}); err != nil {
 		t.Fatalf("storeTx: %v", err)
 	}
 
-	_, err := db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &pendingID})
+	_, err := db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &pendingID})
 	if !errors.Is(err, ErrTxIsPending) {
 		t.Errorf("expected ErrTxIsPending, got %v", err)
 	}
 
 	missingID := "does-not-exist"
-	_, err = db.getTxs(&asset.TxHistoryRequest{N: 10, RefID: &missingID})
+	_, err = db.getTxs(&txdb.TxHistoryRequest{N: 10, RefID: &missingID})
 	if !errors.Is(err, asset.CoinNotFoundError) {
 		t.Errorf("expected CoinNotFoundError for missing RefID, got %v", err)
 	}
@@ -1127,9 +1128,9 @@ func TestTxDBPendingIDIndex(t *testing.T) {
 	recipient := "0x1111111111111111111111111111111111111111"
 
 	// Store a confirmed tx that carries the pendingID alias.
-	if err := db.storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
+	if err := db.storeTx(&dbTx{WalletTransaction: &txdb.WalletTransaction{
 		ID:        realHash,
-		Type:      asset.Send,
+		Type:      txdb.Send,
 		Amount:    1e8,
 		Recipient: &recipient,
 		AdditionalData: map[string]string{
@@ -1376,9 +1377,9 @@ func TestExpireOldPending(t *testing.T) {
 	// Store a pending tx with a submission time well past the TTL.
 	staleTime := uint64(time.Now().Unix()) - pendingTTL - 60
 	if err := w.txDB.Load().storeTx(&dbTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:        pendingID,
-			Type:      asset.Send,
+			Type:      txdb.Send,
 			Amount:    1e8,
 			Recipient: &recipient,
 			AdditionalData: map[string]string{
@@ -1423,9 +1424,9 @@ func TestFreshPendingNotExpired(t *testing.T) {
 
 	// Store a fresh pending tx (just submitted).
 	if err := w.txDB.Load().storeTx(&dbTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:        pendingID,
-			Type:      asset.Send,
+			Type:      txdb.Send,
 			Amount:    1e8,
 			Recipient: &recipient,
 			AdditionalData: map[string]string{
@@ -1465,8 +1466,8 @@ func TestConfirmPendingSend(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x1111111111111111111111111111111111111111"
 	pendingTx := &dbTx{
-		WalletTransaction: &asset.WalletTransaction{
-			Type:      asset.Send,
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:      txdb.Send,
 			ID:        pendingID,
 			Amount:    5e8,
 			Recipient: &recipient,
@@ -1531,9 +1532,9 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x2222222222222222222222222222222222222222"
 	if err := w.txDB.Load().storeTx(&dbTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:        pendingID,
-			Type:      asset.Send,
+			Type:      txdb.Send,
 			Amount:    5e8,
 			Recipient: &recipient,
 			AdditionalData: map[string]string{
@@ -1574,9 +1575,9 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 		nonce := baseNonce + uint64(i)
 		pendingID := fmt.Sprintf("0x%016x", nonce)
 		if err := w.txDB.Load().storeTx(&dbTx{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:        pendingID,
-				Type:      asset.Send,
+				Type:      txdb.Send,
 				Amount:    5e8,
 				Recipient: &recipient,
 				AdditionalData: map[string]string{
@@ -1644,9 +1645,9 @@ func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
 		{pendingIDB, nonceB},
 	} {
 		if err := w.txDB.Load().storeTx(&dbTx{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:        entry.id,
-				Type:      asset.Send,
+				Type:      txdb.Send,
 				Amount:    5e8,
 				Recipient: &recipient,
 				AdditionalData: map[string]string{
@@ -1702,9 +1703,9 @@ func TestConfirmPendingSendSlowServer(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x4444444444444444444444444444444444444444"
 	if err := w.txDB.Load().storeTx(&dbTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:        pendingID,
-			Type:      asset.Send,
+			Type:      txdb.Send,
 			Amount:    2e8,
 			Recipient: &recipient,
 			AdditionalData: map[string]string{
@@ -1747,9 +1748,9 @@ func TestWalletTransactionLookupByPendingCoinID(t *testing.T) {
 	pendingID := "0x0000018bcfe56800"
 	recipient := "0x1111111111111111111111111111111111111111"
 
-	if err := w.txDB.Load().storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
+	if err := w.txDB.Load().storeTx(&dbTx{WalletTransaction: &txdb.WalletTransaction{
 		ID:        pendingID,
-		Type:      asset.Send,
+		Type:      txdb.Send,
 		Amount:    1e8,
 		Recipient: &recipient,
 		AdditionalData: map[string]string{
@@ -1780,9 +1781,9 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 	recipient := "0x1111111111111111111111111111111111111111"
 
 	if err := w.txDB.Load().storeTx(&dbTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:        pendingID,
-			Type:      asset.Send,
+			Type:      txdb.Send,
 			Amount:    5e8,
 			Recipient: &recipient,
 			AdditionalData: map[string]string{
@@ -1851,8 +1852,8 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 	if got == nil {
 		t.Fatal("receive tx not stored")
 	}
-	if got.Type != asset.Receive {
-		t.Errorf("type = %d, want Receive (%d)", got.Type, asset.Receive)
+	if got.Type != txdb.Receive {
+		t.Errorf("type = %d, want Receive (%d)", got.Type, txdb.Receive)
 	}
 	wantAmt, _ := parseHYPE("3.5")
 	if got.Amount != wantAmt {
@@ -1887,7 +1888,7 @@ func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 	w.handleTransferUpdate(update, w.txDB.Load())
 	w.handleTransferUpdate(update, w.txDB.Load())
 
-	resp, err := w.txDB.Load().getTxs(&asset.TxHistoryRequest{N: 10})
+	resp, err := w.txDB.Load().getTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("getTxs: %v", err)
 	}
@@ -1909,7 +1910,7 @@ func TestProcessLedgerUpdateNonHYPE(t *testing.T) {
 	// Should be silently ignored (non-HYPE coin).
 	w.processLedgerUpdate(update)
 
-	resp, err := w.txDB.Load().getTxs(&asset.TxHistoryRequest{N: 10})
+	resp, err := w.txDB.Load().getTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("getTxs: %v", err)
 	}

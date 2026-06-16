@@ -6,19 +6,19 @@ package core
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 func TestProcessWalletTransactionsClearsPendingAlias(t *testing.T) {
 	w := &xcWallet{
-		pendingTxs: map[string]*asset.WalletTransaction{
+		pendingTxs: map[string]*txdb.WalletTransaction{
 			"0x0000018bcfe56800": {
 				ID: "0x0000018bcfe56800",
 			},
 		},
 	}
 
-	confirmed := &asset.WalletTransaction{
+	confirmed := &txdb.WalletTransaction{
 		ID:        "0xabc123",
 		Confirmed: true,
 		AdditionalData: map[string]string{
@@ -26,7 +26,7 @@ func TestProcessWalletTransactionsClearsPendingAlias(t *testing.T) {
 		},
 	}
 
-	w.processWalletTransactions([]*asset.WalletTransaction{confirmed})
+	w.processWalletTransactions([]*txdb.WalletTransaction{confirmed})
 
 	if _, found := w.pendingTxs["0x0000018bcfe56800"]; found {
 		t.Fatal("pending alias was not removed")

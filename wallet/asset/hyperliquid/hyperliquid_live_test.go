@@ -43,6 +43,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 const defaultTestnetAPI = "https://api.hyperliquid-testnet.xyz"
@@ -479,7 +480,7 @@ func TestLiveWalletTransaction(t *testing.T) {
 			pending := w.PendingTransactions(ctx)
 			if len(pending) == 0 {
 				t.Log("No more pending txs — checking history...")
-				hist, err := w.TxHistory(&asset.TxHistoryRequest{N: 10})
+				hist, err := w.TxHistory(&txdb.TxHistoryRequest{N: 10})
 				if err != nil {
 					t.Fatalf("TxHistory: %v", err)
 				}
@@ -544,7 +545,7 @@ func TestLiveReceiveDetection(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if txNote.Transaction.Type == asset.Send {
+			if txNote.Transaction.Type == txdb.Send {
 				t.Logf("Detected send: id=%s amount=%d (%.4f HYPE)",
 					txNote.Transaction.ID, txNote.Transaction.Amount,
 					float64(txNote.Transaction.Amount)/1e8)

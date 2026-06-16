@@ -30,6 +30,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/keygen"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"golang.org/x/crypto/scrypt"
 	"golang.org/x/net/proxy"
@@ -418,8 +419,8 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 	// replaces it with the real hash from the ledger once confirmed.
 	txID := fmt.Sprintf("0x%016x", nonce)
 	recipient := address
-	wtx := &asset.WalletTransaction{
-		Type:      asset.Send,
+	wtx := &txdb.WalletTransaction{
+		Type:      txdb.Send,
 		ID:        txID,
 		Amount:    value,
 		Fees:      0,
@@ -479,15 +480,15 @@ func (w *HyperWallet) SyncStatus() (*asset.SyncStatus, error) {
 func (w *HyperWallet) StandardSendFee(_ uint64) uint64 { return 0 }
 func (w *HyperWallet) FeeRate() uint64                 { return 0 }
 
-func (w *HyperWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	db := w.txDB.Load()
 	if db == nil || req == nil {
-		return &asset.TxHistoryResponse{}, nil
+		return &txdb.TxHistoryResponse{}, nil
 	}
 	return db.getTxs(req)
 }
 
-func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*txdb.WalletTransaction, error) {
 	db := w.txDB.Load()
 	if db != nil {
 		for _, lookupID := range walletTransactionLookupIDs(txID) {
@@ -512,7 +513,7 @@ func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*asset.
 	return nil, asset.CoinNotFoundError
 }
 
-func (w *HyperWallet) PendingTransactions(_ context.Context) []*asset.WalletTransaction {
+func (w *HyperWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
 	db := w.txDB.Load()
 	if db == nil {
 		return nil
@@ -522,7 +523,7 @@ func (w *HyperWallet) PendingTransactions(_ context.Context) []*asset.WalletTran
 		w.log.Errorf("Getting pending txs: %v", err)
 		return nil
 	}
-	txs := make([]*asset.WalletTransaction, 0, len(pending))
+	txs := make([]*txdb.WalletTransaction, 0, len(pending))
 	for _, wt := range pending {
 		txs = append(txs, wt.WalletTransaction)
 	}
@@ -738,8 +739,8 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 	w.tipMtx.RUnlock()
 
 	addr := w.address
-	wtx := &asset.WalletTransaction{
-		Type:        asset.Receive,
+	wtx := &txdb.WalletTransaction{
+		Type:        txdb.Receive,
 		ID:          u.Hash,
 		Amount:      amount,
 		BlockNumber: tip,
