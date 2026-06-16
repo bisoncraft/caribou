@@ -10,6 +10,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/db"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
 
@@ -41,25 +42,25 @@ type WalletBalance struct {
 
 // WalletState is the current status of an exchange wallet.
 type WalletState struct {
-	Symbol         string                              `json:"symbol"`
-	AssetID        uint32                              `json:"assetID"`
-	Version        uint32                              `json:"version"`
-	WalletType     string                              `json:"type"`
-	Class          asset.BlockchainClass               `json:"class"`
-	Traits         asset.WalletTrait                   `json:"traits"`
-	Open           bool                                `json:"open"`
-	Running        bool                                `json:"running"`
-	Balance        *WalletBalance                      `json:"balance"`
-	Address        string                              `json:"address"`
-	Encrypted      bool                                `json:"encrypted"`
-	PeerCount      uint32                              `json:"peerCount"`
-	Synced         bool                                `json:"synced"`
-	SyncProgress   float32                             `json:"syncProgress"`
-	SyncStatus     *asset.SyncStatus                   `json:"syncStatus"`
-	Disabled       bool                                `json:"disabled"`
-	BridgeApproved map[string]asset.ApprovalStatus     `json:"bridgeApproved"`
-	FeeState       *FeeState                           `json:"feeState"`
-	PendingTxs     map[string]*asset.WalletTransaction `json:"pendingTxs"`
+	Symbol         string                             `json:"symbol"`
+	AssetID        uint32                             `json:"assetID"`
+	Version        uint32                             `json:"version"`
+	WalletType     string                             `json:"type"`
+	Class          asset.BlockchainClass              `json:"class"`
+	Traits         asset.WalletTrait                  `json:"traits"`
+	Open           bool                               `json:"open"`
+	Running        bool                               `json:"running"`
+	Balance        *WalletBalance                     `json:"balance"`
+	Address        string                             `json:"address"`
+	Encrypted      bool                               `json:"encrypted"`
+	PeerCount      uint32                             `json:"peerCount"`
+	Synced         bool                               `json:"synced"`
+	SyncProgress   float32                            `json:"syncProgress"`
+	SyncStatus     *asset.SyncStatus                  `json:"syncStatus"`
+	Disabled       bool                               `json:"disabled"`
+	BridgeApproved map[string]asset.ApprovalStatus    `json:"bridgeApproved"`
+	FeeState       *FeeState                          `json:"feeState"`
+	PendingTxs     map[string]*txdb.WalletTransaction `json:"pendingTxs"`
 }
 
 // FeeState is information about the current network transaction fees and

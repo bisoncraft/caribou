@@ -12,6 +12,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -30,7 +31,7 @@ func TestTxDB(t *testing.T) {
 		t.Fatalf("error connecting to tx history store: %v", err)
 	}
 
-	r, err := txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{Past: true})
+	r, err := txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{Past: true})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestTxDB(t *testing.T) {
 	newTx := func(nonce uint64) *extendedWalletTx {
 		return eth.extendedTx(&genTxResult{
 			tx:     node.newTransaction(nonce, big.NewInt(1)),
-			txType: asset.Send,
+			txType: txdb.Send,
 			amt:    1,
 		})
 	}
@@ -58,11 +59,11 @@ func TestTxDB(t *testing.T) {
 		t.Fatalf("error storing tx: %v", err)
 	}
 
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{Past: true})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{Past: true})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
-	expectedTxs := []*asset.WalletTransaction{wt1.WalletTransaction}
+	expectedTxs := []*txdb.WalletTransaction{wt1.WalletTransaction}
 	if !reflect.DeepEqual(expectedTxs, r.Txs) {
 		t.Fatalf("expected txs %+v but got %+v", expectedTxs, r.Txs)
 	}
@@ -71,11 +72,11 @@ func TestTxDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error storing tx: %v", err)
 	}
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{Past: true})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{Past: true})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
-	expectedTxs = []*asset.WalletTransaction{wt2.WalletTransaction, wt1.WalletTransaction}
+	expectedTxs = []*txdb.WalletTransaction{wt2.WalletTransaction, wt1.WalletTransaction}
 	if !reflect.DeepEqual(expectedTxs, r.Txs) {
 		t.Fatalf("expected txs %s but got %s", spew.Sdump(expectedTxs), spew.Sdump(r.Txs))
 	}
@@ -84,36 +85,36 @@ func TestTxDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error storing tx: %v", err)
 	}
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{N: 2, Past: true})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{N: 2, Past: true})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
-	expectedTxs = []*asset.WalletTransaction{wt3.WalletTransaction, wt2.WalletTransaction}
+	expectedTxs = []*txdb.WalletTransaction{wt3.WalletTransaction, wt2.WalletTransaction}
 	if !reflect.DeepEqual(expectedTxs, r.Txs) {
 		t.Fatalf("expected txs %+v but got %+v", expectedTxs, r.Txs)
 	}
 
 	s := wt2.txHash.String()
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{RefID: &s, Past: true})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{RefID: &s, Past: true})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
-	expectedTxs = []*asset.WalletTransaction{wt2.WalletTransaction, wt1.WalletTransaction}
+	expectedTxs = []*txdb.WalletTransaction{wt2.WalletTransaction, wt1.WalletTransaction}
 	if !reflect.DeepEqual(expectedTxs, r.Txs) {
 		t.Fatalf("expected txs %+v but got %+v", expectedTxs, r.Txs)
 	}
 
 	s = wt2.txHash.String()
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{RefID: &s})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{RefID: &s})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
-	expectedTxs = []*asset.WalletTransaction{wt2.WalletTransaction, wt3.WalletTransaction}
+	expectedTxs = []*txdb.WalletTransaction{wt2.WalletTransaction, wt3.WalletTransaction}
 	if !reflect.DeepEqual(expectedTxs, r.Txs) {
 		t.Fatalf("expected txs %+v but got %+v", expectedTxs, r.Txs)
 	}
 
-	allTxs := []*asset.WalletTransaction{wt4.WalletTransaction, wt3.WalletTransaction, wt2.WalletTransaction, wt1.WalletTransaction}
+	allTxs := []*txdb.WalletTransaction{wt4.WalletTransaction, wt3.WalletTransaction, wt2.WalletTransaction, wt1.WalletTransaction}
 
 	// Update same tx with new fee
 	wt4.Fees = 300
@@ -121,7 +122,7 @@ func TestTxDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error storing tx: %v", err)
 	}
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestTxDB(t *testing.T) {
 	}
 	defer txHistoryStore.Close()
 
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
@@ -169,7 +170,7 @@ func TestTxDB(t *testing.T) {
 		t.Fatalf("expected txs:\n%s\n\nbut got:\n%s", spew.Sdump(expectedUnconfirmedTxs), spew.Sdump(unconfirmedTxs))
 	}
 
-	r, err = txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{})
+	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
@@ -177,15 +178,15 @@ func TestTxDB(t *testing.T) {
 		t.Fatalf("expected txs %+v but got %+v", expectedTxs, r.Txs)
 	}
 
-	r, err = txHistoryStore.getTxs(&usdcEthID, &asset.TxHistoryRequest{})
+	r, err = txHistoryStore.getTxs(&usdcEthID, &txdb.TxHistoryRequest{})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
-	expectedTxs = []*asset.WalletTransaction{wt1.WalletTransaction}
+	expectedTxs = []*txdb.WalletTransaction{wt1.WalletTransaction}
 	if !reflect.DeepEqual(expectedTxs, r.Txs) {
 		t.Fatalf("expected txs %+v but got %+v", expectedTxs, r.Txs)
 	}
-	r, err = txHistoryStore.getTxs(&usdcEthID, &asset.TxHistoryRequest{IgnoreTypes: []asset.TransactionType{asset.Send}})
+	r, err = txHistoryStore.getTxs(&usdcEthID, &txdb.TxHistoryRequest{IgnoreTypes: []txdb.TransactionType{txdb.Send}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,7 @@ func TestTxDB_relay(t *testing.T) {
 	newTx := func(nonce uint64, blockNumber uint64, isRelay bool) *extendedWalletTx {
 		tx := eth.extendedTx(&genTxResult{
 			tx:     node.newTransaction(nonce, big.NewInt(1)),
-			txType: asset.Send,
+			txType: txdb.Send,
 			amt:    1,
 		})
 		tx.BlockNumber = blockNumber
@@ -236,8 +237,8 @@ func TestTxDB_relay(t *testing.T) {
 		}
 	}
 
-	expectedTxs := []*asset.WalletTransaction{wt4.WalletTransaction, wt3.WalletTransaction, wt2Relay.WalletTransaction, wt2.WalletTransaction, wt1.WalletTransaction}
-	r, err := txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{
+	expectedTxs := []*txdb.WalletTransaction{wt4.WalletTransaction, wt3.WalletTransaction, wt2Relay.WalletTransaction, wt2.WalletTransaction, wt1.WalletTransaction}
+	r, err := txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{
 		N:           0,
 		RefID:       nil,
 		Past:        true,
@@ -267,7 +268,7 @@ func TestTxDBReplaceNonce(t *testing.T) {
 	newTx := func(nonce uint64) *extendedWalletTx {
 		return eth.extendedTx(&genTxResult{
 			tx:     node.newTransaction(nonce, big.NewInt(1)),
-			txType: asset.Send,
+			txType: txdb.Send,
 			amt:    1,
 		})
 	}
@@ -293,7 +294,7 @@ func TestTxDBReplaceNonce(t *testing.T) {
 		t.Fatalf("expected nil tx but got %+v", tx)
 	}
 
-	r, err := txHistoryStore.getTxs(nil, &asset.TxHistoryRequest{})
+	r, err := txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{})
 	if err != nil {
 		t.Fatalf("error retrieving txs: %v", err)
 	}
@@ -338,10 +339,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 	txs := []*extendedWalletTx{
 		// Completed bridge, older submission time
 		{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:   "0x1111111111111111111111111111111111111111111111111111111111111111",
-				Type: asset.InitiateBridge,
-				BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+				Type: txdb.InitiateBridge,
+				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					IDs:      []string{"0x1111111111111111111111111111111111111111111111111111111111111112"},
 					Complete: true,
 				},
@@ -351,10 +352,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		},
 		// Completed bridge, newer submission time
 		{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:   "0x2222222222222222222222222222222222222222222222222222222222222222",
-				Type: asset.InitiateBridge,
-				BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+				Type: txdb.InitiateBridge,
+				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					IDs:      []string{"0x2222222222222222222222222222222222222222222222222222222222222223"},
 					Complete: true,
 				},
@@ -364,10 +365,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		},
 		// Pending bridge, older
 		{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:   "0x3333333333333333333333333333333333333333333333333333333333333333",
-				Type: asset.InitiateBridge,
-				BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+				Type: txdb.InitiateBridge,
+				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					Complete: false,
 				},
 			},
@@ -376,10 +377,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		},
 		// Pending bridge, newer
 		{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:   "0x4444444444444444444444444444444444444444444444444444444444444444",
-				Type: asset.InitiateBridge,
-				BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+				Type: txdb.InitiateBridge,
+				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					Complete: false,
 				},
 			},
@@ -388,9 +389,9 @@ func TestTxDB_GetBridges(t *testing.T) {
 		},
 		// Non-bridge transaction
 		{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:   "0x5555555555555555555555555555555555555555555555555555555555555555",
-				Type: asset.Send,
+				Type: txdb.Send,
 			},
 			Nonce:          big.NewInt(5),
 			SubmissionTime: uint64(now.Add(-5 * time.Hour).Unix()),
@@ -537,10 +538,10 @@ func TestTxDB_GetBridgeCompletions(t *testing.T) {
 
 	// Create first mint transaction that references the burn transaction
 	mintTx1 := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:   "0x2222222222222222222222222222222222222222222222222222222222222222",
-			Type: asset.CompleteBridge,
-			BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+			Type: txdb.CompleteBridge,
+			BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 				IDs: []string{burnTxID},
 			},
 		},
@@ -550,10 +551,10 @@ func TestTxDB_GetBridgeCompletions(t *testing.T) {
 
 	// Create second mint transaction that references the same burn ID
 	mintTx2 := &extendedWalletTx{
-		WalletTransaction: &asset.WalletTransaction{
+		WalletTransaction: &txdb.WalletTransaction{
 			ID:   "0x3333333333333333333333333333333333333333333333333333333333333333",
-			Type: asset.CompleteBridge,
-			BridgeCounterpartTx: &asset.BridgeCounterpartTx{
+			Type: txdb.CompleteBridge,
+			BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 				IDs: []string{burnTxID},
 			},
 		},

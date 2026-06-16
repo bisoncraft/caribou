@@ -23,6 +23,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/core"
 	"github.com/bisoncraft/bosswallet/wallet/db"
 	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 var (
@@ -209,7 +210,7 @@ func (c *TCore) TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*as
 	return nil, nil
 }
 
-func (c *TCore) TxHistory(assetID uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (c *TCore) TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	return nil, nil
 }
 

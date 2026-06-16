@@ -10,6 +10,7 @@ import (
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/bisoncraft/bosswallet/util"
 	pi "github.com/bisoncraft/bosswallet/util/politeia"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/txscript/v4/stdaddr"
@@ -409,26 +410,23 @@ type WalletConfig struct {
 	// TorProxy is the address (host:port) of a SOCKS5 proxy (e.g. Tor) for
 	// outgoing wallet connections such as RPC providers and Electrum servers.
 	TorProxy string
+	// NetworkTxDB is a handle to the master transaction database, scoped to this
+	// wallet's network. The wallet uses it to store and retrieve its own
+	// transactions.
+	NetworkTxDB txdb.NetworkTxDB
 }
 
-type TxHistoryRequest struct {
-	N           int               `json:"n"`
-	RefID       *string           `json:"refID"`
-	Past        bool              `json:"past"`
-	IgnoreTypes []TransactionType `json:"ignoreTypes"`
-}
-
-func (r *TxHistoryRequest) IngoreTypesLookup() map[TransactionType]bool {
-	m := make(map[TransactionType]bool)
-	for _, txType := range r.IgnoreTypes {
-		m[txType] = true
-	}
-	return m
-}
-
-type TxHistoryResponse struct {
-	Txs           []*WalletTransaction `json:"txs"`
-	MoreAvailable bool                 `json:"moreAvailable"`
+// ConfirmTxStatus contains the coinID which redeemed or refunded a swap, the
+// number of confirmations the transaction has, and the number of confirmations
+// required for it to be considered confirmed.
+type ConfirmTxStatus struct {
+	Confs  uint64
+	Req    uint64
+	CoinID util.Bytes
+	// PendingSubmission is true for ETH relay redemptions before the relay
+	// has submitted the transaction on-chain. The redemption message should
+	// only be sent to the server once this is false.
+	PendingSubmission bool
 }
 
 // Wallet is a common interface to be implemented by cryptocurrency wallet
@@ -467,15 +465,15 @@ type Wallet interface {
 	// refID are returned, otherwise the transactions after the refID are
 	// returned. n is the number of transactions to return. If n is <= 0,
 	// all the transactions will be returned.
-	TxHistory(*TxHistoryRequest) (*TxHistoryResponse, error)
+	TxHistory(*txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	// WalletTransaction returns a single transaction that either a wallet
 	// has made or in which the wallet has received funds. This function may
 	// support more transactions than are returned by TxHistory. For example,
 	// ETH/token wallets do not return receiving transactions in TxHistory,
 	// but WalletTransaction will return them.
-	WalletTransaction(ctx context.Context, txID string) (*WalletTransaction, error)
+	WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error)
 	// PendingTransactions loads wallet transactions that are not yet confirmed.
-	PendingTransactions(ctx context.Context) []*WalletTransaction
+	PendingTransactions(ctx context.Context) []*txdb.WalletTransaction
 }
 
 // Authenticator is a wallet implementation that require authentication.
@@ -686,7 +684,7 @@ type Bridger interface {
 	// destination chain to issue the user's tokens. Some assets require
 	// multiple transactions to complete the bridge. Once all the transactions
 	// are confirmed, a BridgeCompletedNote will be emitted.
-	CompleteBridge(ctx context.Context, bridgeTx *BridgeCounterpartTx, amount uint64, mintData []byte, bridgeName string) error
+	CompleteBridge(ctx context.Context, bridgeTx *txdb.BridgeCounterpartTx, amount uint64, mintData []byte, bridgeName string) error
 
 	// MarkBridgeComplete is called when the destination chain sends a
 	// notification regarding the completion of a bridge. The completionTxIDs
@@ -699,11 +697,11 @@ type Bridger interface {
 
 	// PendingBridges lists all uncompleted bridge transactions on the blockchain.
 	// For token wallets, this includes pending bridges for other tokens on the same chain.
-	PendingBridges() ([]*WalletTransaction, error)
+	PendingBridges() ([]*txdb.WalletTransaction, error)
 
 	// BridgeHistory retrieves a record of bridge transactions on the blockchain.
 	// For token wallets, this includes history for other tokens on the same chain.
-	BridgeHistory(n int, refID *string, past bool) ([]*WalletTransaction, error)
+	BridgeHistory(n int, refID *string, past bool) ([]*txdb.WalletTransaction, error)
 
 	// SupportedDestinations returns the list of asset IDs that are supported as destinations for the origin asset.
 	SupportedDestinations() map[uint32][]string
@@ -856,6 +854,10 @@ type TokenConfig struct {
 	Emit *WalletEmitter
 	// PeersChange will be called after the parent's PeersChange.
 	PeersChange func(uint32, error)
+	// NetworkTxDB is a handle to the master transaction database, scoped to the
+	// token's network (its parent chain). The wallet uses it to store and
+	// retrieve its own transactions.
+	NetworkTxDB txdb.NetworkTxDB
 }
 
 // TokenMaster is implemented by assets which support degenerate tokens.
@@ -1097,116 +1099,6 @@ type PoliteiaVoter interface {
 	PoliteiaEnabled() bool
 }
 
-// TransactionType is the type of transaction made by a wallet.
-type TransactionType uint16
-
-const (
-	Unknown TransactionType = iota
-	Send
-	Receive
-	Swap
-	Redeem
-	Refund
-	Split
-	CreateBond
-	RedeemBond
-	ApproveToken
-	Acceleration
-	SelfSend
-	RevokeTokenApproval
-	TicketPurchase
-	TicketVote
-	TicketRevocation
-	// SwapOrSend is used when a wallet scanned its historical transactions
-	// and was unable to determine if the transaction was a swap or a send.
-	SwapOrSend
-	Mix
-	InitiateBridge
-	CompleteBridge
-	DeployContract
-)
-
-// IncomingTxType returns true if the wallet's balance increases due to a
-// transaction.
-func IncomingTxType(txType TransactionType) bool {
-	return txType == Receive || txType == Redeem || txType == Refund || txType == RedeemBond
-}
-
-// BondTxInfo contains information about a CreateBond or RedeemBond
-// transaction.
-type BondTxInfo struct {
-	// AccountID is the account is the account ID that the bond is applied to.
-	AccountID util.Bytes `json:"accountID"`
-	// LockTime is the time until which the bond is locked.
-	LockTime uint64 `json:"lockTime"`
-	// BondID is the ID of the bond.
-	BondID util.Bytes `json:"bondID"`
-}
-
-// BridgeCounterpartTx identifies an initiation transaction if it is part of a
-// completion transaction, or a completion transaction if it is part of an
-// initiation transaction.
-type BridgeCounterpartTx struct {
-	AssetID  uint32   `json:"assetID"`
-	IDs      []string `json:"ids"`
-	Complete bool     `json:"complete"`
-	// AmountReceived is the amount of the asset that was minted
-	// on the destination chain.
-	AmountReceived uint64 `json:"amountReceived"`
-	// Fees are the network fees paid on the destination chain.
-	Fees uint64 `json:"fees"`
-}
-
-type Confirms struct {
-	Current uint32 `json:"current"`
-	Target  uint32 `json:"target"`
-}
-
-// WalletTransaction represents a transaction that was made by a wallet.
-type WalletTransaction struct {
-	Type   TransactionType `json:"type"`
-	ID     string          `json:"id"`
-	Amount uint64          `json:"amount"`
-	Fees   uint64          `json:"fees"`
-	// BlockNumber is 0 for txs in the mempool.
-	BlockNumber uint64 `json:"blockNumber"`
-	// Timestamp is the time the transaction was mined.
-	Timestamp uint64 `json:"timestamp"`
-	// TokenID will be non-nil if the BalanceDelta applies to the balance
-	// of a token.
-	TokenID *uint32 `json:"tokenID,omitempty"`
-	// Recipient will be non-nil for Send/Receive transactions, and specifies the
-	// recipient address of the transaction.
-	Recipient *string `json:"recipient,omitempty"`
-	// BondInfo will be non-nil for CreateBond and RedeemBond transactions.
-	BondInfo *BondTxInfo `json:"bondInfo,omitempty"`
-	// AdditionalData contains asset specific information, i.e. nonce
-	// for ETH.
-	AdditionalData map[string]string `json:"additionalData"`
-	// Confirmed is true when the transaction is considered finalized.
-	// Confirmed transactions are no longer updated and will be considered
-	// finalized forever.
-	Confirmed bool `json:"confirmed"`
-	// Confirms is the number of current confirmations and the number of
-	// confirmations required for finalization.
-	Confirms *Confirms `json:"confirms"`
-	// Rejected will be true the transaction was rejected and did not have any
-	// effect, though fees were incurred.
-	Rejected bool `json:"rejected,omitempty"`
-	// BridgeCounterpartTx is only populated for Bridge related transactions.
-	// It contains the ID and asset ID of the transaction that either initiated
-	// the bridge or completed it.
-	BridgeCounterpartTx *BridgeCounterpartTx `json:"bridgeCounterpartTx,omitempty"`
-	// BridgeName is the name of the bridge. It is only populated for bridge
-	// related transactions.
-	BridgeName string `json:"bridgeName,omitempty"`
-	// RelayTxID is the id of the on-chain transaction submitted by the
-	// relay for a gasless redemption.
-	RelayTxID string `json:"relayTxID,omitempty"`
-	// IsRelay will be true if the transaction is a relay redemption.
-	IsRelay bool `json:"isRelay"`
-}
-
 // Bond is the fidelity bond info generated for a certain account ID, amount,
 // and lock time. These data are intended for the "post bond" request, in which
 // the server pre-validates the unsigned transaction, the client then publishes
@@ -1366,8 +1258,8 @@ type BalanceChangeNote struct {
 // TransactionNote is sent when a transaction is made, seen, or updated.
 type TransactionNote struct {
 	baseWalletNotification
-	Transaction *WalletTransaction `json:"transaction"`
-	New         bool               `json:"new"`
+	Transaction *txdb.WalletTransaction `json:"transaction"`
+	New         bool                    `json:"new"`
 }
 
 // CustomWalletNote is any other information the wallet wishes to convey to
@@ -1456,7 +1348,7 @@ func (e *WalletEmitter) BalanceChange(bal *Balance) {
 }
 
 // TransactionNote sends a TransactionNote.
-func (e *WalletEmitter) TransactionNote(tx *WalletTransaction, new bool) {
+func (e *WalletEmitter) TransactionNote(tx *txdb.WalletTransaction, new bool) {
 	e.emit(&TransactionNote{
 		baseWalletNotification: baseWalletNotification{
 			AssetID: e.assetID,

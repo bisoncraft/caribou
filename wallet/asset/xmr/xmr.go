@@ -20,6 +20,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/xmr/cxmr"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 const (
@@ -1052,7 +1053,7 @@ func (w *ExchangeWallet) StandardSendFee(feeRate uint64) uint64 {
 }
 
 // TxHistory returns transaction history.
-func (w *ExchangeWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *ExchangeWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	w.walletMtx.RLock()
 	defer w.walletMtx.RUnlock()
 
@@ -1068,19 +1069,19 @@ func (w *ExchangeWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistor
 		count = req.N
 	}
 
-	txs := make([]*asset.WalletTransaction, 0, count)
+	txs := make([]*txdb.WalletTransaction, 0, count)
 	for i := 0; i < count; i++ {
 		ti := history.Transaction(i)
 		if ti == nil {
 			continue
 		}
 
-		txType := asset.Send
+		txType := txdb.Send
 		if ti.Direction() == cxmr.DirectionIn {
-			txType = asset.Receive
+			txType = txdb.Receive
 		}
 
-		txs = append(txs, &asset.WalletTransaction{
+		txs = append(txs, &txdb.WalletTransaction{
 			Type:        txType,
 			ID:          ti.Hash(),
 			Amount:      ti.Amount(),
@@ -1091,13 +1092,13 @@ func (w *ExchangeWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistor
 		})
 	}
 
-	return &asset.TxHistoryResponse{
+	return &txdb.TxHistoryResponse{
 		Txs: txs,
 	}, nil
 }
 
 // WalletTransaction returns a single transaction.
-func (w *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	w.walletMtx.RLock()
 	defer w.walletMtx.RUnlock()
 
@@ -1111,11 +1112,11 @@ func (w *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*a
 	for i := 0; i < history.Count(); i++ {
 		ti := history.Transaction(i)
 		if ti != nil && ti.Hash() == txID {
-			txType := asset.Send
+			txType := txdb.Send
 			if ti.Direction() == cxmr.DirectionIn {
-				txType = asset.Receive
+				txType = txdb.Receive
 			}
-			return &asset.WalletTransaction{
+			return &txdb.WalletTransaction{
 				Type:        txType,
 				ID:          ti.Hash(),
 				Amount:      ti.Amount(),
@@ -1131,7 +1132,7 @@ func (w *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*a
 }
 
 // PendingTransactions returns pending (unconfirmed) transactions.
-func (w *ExchangeWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
+func (w *ExchangeWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {
 	w.walletMtx.RLock()
 	defer w.walletMtx.RUnlock()
 
@@ -1142,7 +1143,7 @@ func (w *ExchangeWallet) PendingTransactions(ctx context.Context) []*asset.Walle
 	history := w.wallet.History()
 	history.Refresh()
 
-	var pending []*asset.WalletTransaction
+	var pending []*txdb.WalletTransaction
 	for i := 0; i < history.Count(); i++ {
 		ti := history.Transaction(i)
 		if ti == nil || ti.IsFailed() {
@@ -1154,11 +1155,11 @@ func (w *ExchangeWallet) PendingTransactions(ctx context.Context) []*asset.Walle
 		if ti.Confirmations() > 0 {
 			continue
 		}
-		txType := asset.Send
+		txType := txdb.Send
 		if ti.Direction() == cxmr.DirectionIn {
-			txType = asset.Receive
+			txType = txdb.Receive
 		}
-		pending = append(pending, &asset.WalletTransaction{
+		pending = append(pending, &txdb.WalletTransaction{
 			Type:      txType,
 			ID:        ti.Hash(),
 			Amount:    ti.Amount(),

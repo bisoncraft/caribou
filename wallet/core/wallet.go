@@ -16,6 +16,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/encrypt"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
@@ -68,7 +69,7 @@ type xcWallet struct {
 	disabled   bool
 
 	pendingTxsMtx sync.RWMutex
-	pendingTxs    map[string]*asset.WalletTransaction
+	pendingTxs    map[string]*txdb.WalletTransaction
 
 	// When wallets are being reconfigured and especially when the wallet type
 	// or host is being changed, we want to suppress "walletstate" notes to
@@ -481,7 +482,7 @@ func (w *xcWallet) logFilePath() (string, error) {
 // refID are returned, otherwise the transactions after the refID are
 // returned. n is the number of transactions to return. If n is <= 0,
 // all the transactions will be returned.
-func (w *xcWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *xcWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if !w.connected() {
 		return nil, errWalletNotConnected
 	}
@@ -491,7 +492,7 @@ func (w *xcWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryRespo
 
 // WalletTransaction returns information about a transaction that the wallet
 // has made or one in which that wallet received funds.
-func (w *xcWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *xcWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	if !w.connected() {
 		return nil, errWalletNotConnected
 	}
@@ -499,7 +500,7 @@ func (w *xcWallet) WalletTransaction(ctx context.Context, txID string) (*asset.W
 	return w.Wallet.WalletTransaction(ctx, txID)
 }
 
-func (w *xcWallet) processWalletTransactions(txs []*asset.WalletTransaction) {
+func (w *xcWallet) processWalletTransactions(txs []*txdb.WalletTransaction) {
 	w.pendingTxsMtx.Lock()
 	defer w.pendingTxsMtx.Unlock()
 	for _, tx := range txs {
@@ -511,7 +512,7 @@ func (w *xcWallet) processWalletTransactions(txs []*asset.WalletTransaction) {
 	}
 }
 
-func (w *xcWallet) pendingTxsCopy() map[string]*asset.WalletTransaction {
+func (w *xcWallet) pendingTxsCopy() map[string]*txdb.WalletTransaction {
 	w.pendingTxsMtx.RLock()
 	defer w.pendingTxsMtx.RUnlock()
 	return util.CopyMap(w.pendingTxs)
@@ -629,7 +630,7 @@ func (w *xcWallet) InitiateBridge(ctx context.Context, amt uint64, dest uint32, 
 
 // CompleteBridge completes the bridge on the destination chain if the wallet
 // is a Bridger.
-func (w *xcWallet) CompleteBridge(ctx context.Context, bridgeTx *asset.BridgeCounterpartTx, amount uint64, mintData []byte, bridgeName string) error {
+func (w *xcWallet) CompleteBridge(ctx context.Context, bridgeTx *txdb.BridgeCounterpartTx, amount uint64, mintData []byte, bridgeName string) error {
 	bridger, ok := w.Wallet.(asset.Bridger)
 	if !ok {
 		return fmt.Errorf("%s wallet is not a Bridger", unbip(w.AssetID))
@@ -652,7 +653,7 @@ func (w *xcWallet) MarkBridgeComplete(initiationTxID string, completionTxIDs []s
 
 // PendingBridges returns the pending bridges originating on the chain of the
 // given asset ID.
-func (w *xcWallet) PendingBridges() ([]*asset.WalletTransaction, error) {
+func (w *xcWallet) PendingBridges() ([]*txdb.WalletTransaction, error) {
 	if !w.connected() {
 		return nil, errWalletNotConnected
 	}
@@ -667,7 +668,7 @@ func (w *xcWallet) PendingBridges() ([]*asset.WalletTransaction, error) {
 
 // BridgeHistory returns the bridge history originating on the chain of the
 // given asset ID.
-func (w *xcWallet) BridgeHistory(n int, refID *string, past bool) ([]*asset.WalletTransaction, error) {
+func (w *xcWallet) BridgeHistory(n int, refID *string, past bool) ([]*txdb.WalletTransaction, error) {
 	if !w.connected() {
 		return nil, errWalletNotConnected
 	}

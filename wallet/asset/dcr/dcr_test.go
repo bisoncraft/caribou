@@ -26,6 +26,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v3"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -2149,7 +2150,7 @@ func TestIDUnknownTx(t *testing.T) {
 		ltr             *ListTransactionsResult
 		tx              *wire.MsgTx
 		validateAddress map[string]*walletjson.ValidateAddressResult
-		exp             *asset.WalletTransaction
+		exp             *txdb.WalletTransaction
 	}
 
 	// Ticket Tx
@@ -2180,8 +2181,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   swapTx.TxHash().String(),
 			},
 			tx: swapTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.SwapOrSend,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.SwapOrSend,
 				ID:     swapTx.TxHash().String(),
 				Amount: toAtoms(1),
 				Fees:   toAtoms(0.0000321),
@@ -2194,8 +2195,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   redemptionTx.TxHash().String(),
 			},
 			tx: redemptionTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.Redeem,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.Redeem,
 				ID:     redemptionTx.TxHash().String(),
 				Amount: toAtoms(5 - redeemFee),
 				Fees:   0,
@@ -2209,12 +2210,12 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   createBondTx.TxHash().String(),
 			},
 			tx: createBondTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.CreateBond,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.CreateBond,
 				ID:     createBondTx.TxHash().String(),
 				Amount: toAtoms(2),
 				Fees:   toAtoms(0.0000222),
-				BondInfo: &asset.BondTxInfo{
+				BondInfo: &txdb.BondTxInfo{
 					AccountID: accountID,
 					BondID:    bondID,
 					LockTime:  uint64(bondLockTime),
@@ -2228,11 +2229,11 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   redeemBondTx.TxHash().String(),
 			},
 			tx: redeemBondTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.RedeemBond,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.RedeemBond,
 				ID:     redeemBondTx.TxHash().String(),
 				Amount: toAtoms(5),
-				BondInfo: &asset.BondTxInfo{
+				BondInfo: &txdb.BondTxInfo{
 					AccountID: []byte{},
 					BondID:    bondID,
 					LockTime:  uint64(bondLockTime),
@@ -2248,8 +2249,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   splitTx.TxHash().String(),
 			},
 			tx: splitTx,
-			exp: &asset.WalletTransaction{
-				Type: asset.Split,
+			exp: &txdb.WalletTransaction{
+				Type: txdb.Split,
 				ID:   splitTx.TxHash().String(),
 				Fees: toAtoms(0.0000251),
 			},
@@ -2263,8 +2264,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   sendTx.TxHash().String(),
 			},
 			tx: sendTx,
-			exp: &asset.WalletTransaction{
-				Type:      asset.Send,
+			exp: &txdb.WalletTransaction{
+				Type:      txdb.Send,
 				ID:        sendTx.TxHash().String(),
 				Amount:    toAtoms(4),
 				Recipient: stringPtr(cpAddr.String()),
@@ -2284,8 +2285,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   receiveTx.TxHash().String(),
 			},
 			tx: receiveTx,
-			exp: &asset.WalletTransaction{
-				Type:      asset.Receive,
+			exp: &txdb.WalletTransaction{
+				Type:      txdb.Receive,
 				ID:        receiveTx.TxHash().String(),
 				Amount:    toAtoms(4),
 				Recipient: stringPtr(tPKHAddr.String()),
@@ -2304,8 +2305,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   ticketTx.TxHash().String(),
 			},
 			tx: ticketTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.TicketPurchase,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.TicketPurchase,
 				ID:     ticketTx.TxHash().String(),
 				Amount: toAtoms(1),
 			},
@@ -2317,8 +2318,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   ticketTx.TxHash().String(),
 			},
 			tx: ticketTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.TicketVote,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.TicketVote,
 				ID:     ticketTx.TxHash().String(),
 				Amount: toAtoms(1),
 			},
@@ -2330,8 +2331,8 @@ func TestIDUnknownTx(t *testing.T) {
 				TxID:   ticketTx.TxHash().String(),
 			},
 			tx: ticketTx,
-			exp: &asset.WalletTransaction{
-				Type:   asset.TicketRevocation,
+			exp: &txdb.WalletTransaction{
+				Type:   txdb.TicketRevocation,
 				ID:     ticketTx.TxHash().String(),
 				Amount: toAtoms(1),
 			},

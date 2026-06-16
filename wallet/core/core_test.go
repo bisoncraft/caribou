@@ -23,6 +23,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/db"
 	dbtest "github.com/bisoncraft/bosswallet/wallet/db/test"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -494,14 +495,14 @@ func (w *TXCWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Ti
 	}, func() {}, nil
 }
 
-func (w *TXCWallet) TxHistory(*asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (w *TXCWallet) TxHistory(*txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	return nil, nil
 }
-func (w *TXCWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (w *TXCWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	return nil, nil
 }
 
-func (w *TXCWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
+func (w *TXCWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {
 	return nil
 }
 

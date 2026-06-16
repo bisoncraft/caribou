@@ -28,6 +28,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/broadcast"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcjson"
@@ -2348,8 +2349,8 @@ func accelerateOrder(btc *baseWallet, swapCoins, accelerationCoins []util.Bytes,
 	}
 
 	txHash := btc.hashTx(signedTx)
-	btc.addTxToHistory(&asset.WalletTransaction{
-		Type: asset.Acceleration,
+	btc.addTxToHistory(&txdb.WalletTransaction{
+		Type: txdb.Acceleration,
 		ID:   txHash.String(),
 		Fees: fees,
 	}, txHash, true)
@@ -2705,7 +2706,7 @@ func (btc *baseWallet) removeTxFromHistory(txHash *chainhash.Hash) {
 	btc.pendingTxsMtx.Unlock()
 }
 
-func (btc *baseWallet) addTxToHistory(wt *asset.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
+func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
 	txHistoryDB := btc.txDB()
 	if txHistoryDB == nil {
 		return
@@ -2908,19 +2909,19 @@ func (btc *baseWallet) send(address string, val uint64, feeRate uint64, subtract
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("error checking address ownership: %w", err)
 	}
-	txType := asset.Send
+	txType := txdb.Send
 	if selfSend {
-		txType = asset.SelfSend
+		txType = txdb.SelfSend
 	}
 
-	btc.addTxToHistory(&asset.WalletTransaction{
+	btc.addTxToHistory(&txdb.WalletTransaction{
 		Type:      txType,
 		ID:        txHash.String(),
 		Amount:    toSend,
 		Fees:      totalIn - totalOut,
 		Recipient: &address,
 		Timestamp: uint64(time.Now().Unix()),
-		Confirms:  &asset.Confirms{Target: confTxFinality},
+		Confirms:  &txdb.Confirms{Target: confTxFinality},
 	}, txHash, true)
 
 	return txHash, 0, toSend, nil
@@ -3471,12 +3472,12 @@ func (btc *baseWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time
 	}
 	success = true
 
-	btc.addTxToHistory(&asset.WalletTransaction{
-		Type:   asset.CreateBond,
+	btc.addTxToHistory(&txdb.WalletTransaction{
+		Type:   txdb.CreateBond,
 		ID:     txid.String(),
 		Amount: amt,
 		Fees:   fee,
-		BondInfo: &asset.BondTxInfo{
+		BondInfo: &txdb.BondTxInfo{
 			AccountID: acctID,
 			LockTime:  uint64(lockTimeSec),
 			BondID:    pkh,
@@ -3596,17 +3597,17 @@ func (btc *baseWallet) RefundBond(ctx context.Context, ver uint16, coinID, scrip
 	if len(msgTx.TxOut) == 1 {
 		fees = amt - uint64(msgTx.TxOut[0].Value)
 	}
-	btc.addTxToHistory(&asset.WalletTransaction{
-		Type:   asset.RedeemBond,
+	btc.addTxToHistory(&txdb.WalletTransaction{
+		Type:   txdb.RedeemBond,
 		ID:     txID.String(),
 		Amount: amt,
 		Fees:   fees,
-		BondInfo: &asset.BondTxInfo{
+		BondInfo: &txdb.BondTxInfo{
 			LockTime: uint64(lockTime),
 			BondID:   pkhPush,
 		},
 		Timestamp: uint64(time.Now().Unix()),
-		Confirms:  &asset.Confirms{Target: confTxFinality},
+		Confirms:  &txdb.Confirms{Target: confTxFinality},
 	}, txID, true)
 
 	return NewOutput(txHash, 0, uint64(msgTx.TxOut[0].Value)), nil
@@ -3776,7 +3777,7 @@ func rpcTxFee(tx *ListTransactionsResult) uint64 {
 
 // idUnknownTx identifies the type and details of a transaction either made
 // or received by the wallet.
-func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTransaction, error) {
+func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*txdb.WalletTransaction, error) {
 	txHash, err := chainhash.NewHashFromStr(tx.TxID)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding tx hash %s: %v", tx.TxID, err)
@@ -3797,7 +3798,7 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		totalOut += uint64(txOut.Value)
 	}
 
-	txIsBond := func(msgTx *wire.MsgTx) (bool, *asset.BondTxInfo) {
+	txIsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
 		if len(msgTx.TxOut) < 2 {
 			return false, nil
 		}
@@ -3806,16 +3807,16 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		if err != nil {
 			return false, nil
 		}
-		return true, &asset.BondTxInfo{
+		return true, &txdb.BondTxInfo{
 			AccountID: acctID[:],
 			LockTime:  uint64(lockTime),
 			BondID:    pkHash[:],
 		}
 	}
 	if isBond, bondInfo := txIsBond(msgTx); isBond {
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:       tx.TxID,
-			Type:     asset.CreateBond,
+			Type:     txdb.CreateBond,
 			Amount:   uint64(msgTx.TxOut[0].Value),
 			Fees:     fee,
 			BondInfo: bondInfo,
@@ -3834,9 +3835,9 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		return
 	}
 	if v := txPaysToScriptHash(msgTx); tx.Send && v > 0 {
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:     tx.TxID,
-			Type:   asset.SwapOrSend,
+			Type:   txdb.SwapOrSend,
 			Amount: v,
 			Fees:   fee,
 		}, nil
@@ -3881,9 +3882,9 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		return containsContractAtPushIndex(msgTx, 4, contractIsSwap)
 	}
 	if redeemsSwap(msgTx) {
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:     tx.TxID,
-			Type:   asset.Redeem,
+			Type:   txdb.Redeem,
 			Amount: totalOut + fee,
 			Fees:   fee,
 		}, nil
@@ -3892,24 +3893,24 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		return containsContractAtPushIndex(msgTx, 3, contractIsSwap)
 	}
 	if refundsSwap(msgTx) {
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:     tx.TxID,
-			Type:   asset.Refund,
+			Type:   txdb.Refund,
 			Amount: totalOut + fee,
 			Fees:   fee,
 		}, nil
 	}
 
 	// Bond refunds
-	redeemsBond := func(msgTx *wire.MsgTx) (bool, *asset.BondTxInfo) {
-		var bondInfo *asset.BondTxInfo
+	redeemsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
+		var bondInfo *txdb.BondTxInfo
 		isBond := func(segwit bool, contract []byte) bool {
 			const scriptVer = 0
 			lockTime, pkHash, err := ExtractBondDetailsV0(scriptVer, contract)
 			if err != nil {
 				return false
 			}
-			bondInfo = &asset.BondTxInfo{
+			bondInfo = &txdb.BondTxInfo{
 				AccountID: []byte{}, // Could look for the bond tx to get this, I guess.
 				LockTime:  uint64(lockTime),
 				BondID:    pkHash[:],
@@ -3919,9 +3920,9 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 		return containsContractAtPushIndex(msgTx, 2, isBond), bondInfo
 	}
 	if isBondRedemption, bondInfo := redeemsBond(msgTx); isBondRedemption {
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:       tx.TxID,
-			Type:     asset.RedeemBond,
+			Type:     txdb.RedeemBond,
 			Amount:   totalOut,
 			Fees:     fee,
 			BondInfo: bondInfo,
@@ -3960,17 +3961,17 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 
 	if tx.Send && allOutputsPayUs(msgTx) {
 		if len(msgTx.TxOut) == 1 {
-			return &asset.WalletTransaction{
+			return &txdb.WalletTransaction{
 				ID:     tx.TxID,
-				Type:   asset.Acceleration,
+				Type:   txdb.Acceleration,
 				Amount: 0,
 				Fees:   fee,
 			}, nil
 
 		}
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:     tx.TxID,
-			Type:   asset.Split,
+			Type:   txdb.Split,
 			Amount: 0,
 			Fees:   fee,
 		}, nil
@@ -4032,18 +4033,18 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*asset.WalletTra
 	}
 
 	if tx.Send {
-		return &asset.WalletTransaction{
+		return &txdb.WalletTransaction{
 			ID:        tx.TxID,
-			Type:      asset.Send,
+			Type:      txdb.Send,
 			Amount:    out,
 			Fees:      fee,
 			Recipient: getRecipient(msgTx, false),
 		}, nil
 	}
 
-	return &asset.WalletTransaction{
+	return &txdb.WalletTransaction{
 		ID:        tx.TxID,
-		Type:      asset.Receive,
+		Type:      txdb.Receive,
 		Amount:    in,
 		Fees:      fee,
 		Recipient: getRecipient(msgTx, true),
@@ -4214,7 +4215,7 @@ func (btc *intermediaryWallet) syncTxHistory(tip uint64) {
 		} else {
 			tx.Confirmed = false
 			updated = tx.Confirms == nil || tx.Confirms.Current != uint32(confs)
-			tx.Confirms = &asset.Confirms{
+			tx.Confirms = &txdb.Confirms{
 				Current: uint32(confs),
 				Target:  confTxFinality,
 			}
@@ -4250,7 +4251,7 @@ func (btc *intermediaryWallet) syncTxHistory(tip uint64) {
 // WalletTransaction returns a transaction that either the wallet has made or
 // one in which the wallet has received funds. The txID can be either a byte
 // reversed tx hash or a hex encoded coin ID.
-func (btc *intermediaryWallet) WalletTransaction(ctx context.Context, txID string) (*asset.WalletTransaction, error) {
+func (btc *intermediaryWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	coinID, err := hex.DecodeString(txID)
 	if err == nil {
 		txHash, _, err := decodeCoinID(coinID)
@@ -4313,7 +4314,7 @@ func (btc *intermediaryWallet) WalletTransaction(ctx context.Context, txID strin
 		if tx.Confirmed {
 			tx.Confirms = nil
 		} else {
-			tx.Confirms = &asset.Confirms{
+			tx.Confirms = &txdb.Confirms{
 				Current: 0,
 				Target:  1,
 			}
@@ -4329,10 +4330,10 @@ func (btc *intermediaryWallet) WalletTransaction(ctx context.Context, txID strin
 }
 
 // PendingTransactions loads wallet transactions that are not yet confirmed.
-func (btc *baseWallet) PendingTransactions(ctx context.Context) []*asset.WalletTransaction {
+func (btc *baseWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {
 	btc.pendingTxsMtx.RLock()
 	defer btc.pendingTxsMtx.RUnlock()
-	txs := make([]*asset.WalletTransaction, 0, len(btc.pendingTxs))
+	txs := make([]*txdb.WalletTransaction, 0, len(btc.pendingTxs))
 	for _, tx := range btc.pendingTxs {
 		if tx.Confirmed {
 			continue
@@ -4348,7 +4349,7 @@ func (btc *baseWallet) PendingTransactions(ctx context.Context) []*asset.WalletT
 // If past is true, the transactions prior to the refID are returned, otherwise
 // the transactions after the refID are returned. n is the number of
 // transactions to return. If n is <= 0, all the transactions will be returned.
-func (btc *intermediaryWallet) TxHistory(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (btc *intermediaryWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	txHistoryDB := btc.txDB()
 	if txHistoryDB == nil {
 		return nil, fmt.Errorf("tx database not initialized")

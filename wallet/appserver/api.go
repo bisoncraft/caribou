@@ -21,6 +21,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/core"
 	"github.com/bisoncraft/bosswallet/wallet/db"
 	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 var zero = encode.ClearBytes
@@ -1102,7 +1103,7 @@ func (s *AppServer) apiConfigureMixer(w http.ResponseWriter, r *http.Request) {
 
 func (s *AppServer) apiTxHistory(w http.ResponseWriter, r *http.Request) {
 	var form struct {
-		asset.TxHistoryRequest
+		txdb.TxHistoryRequest
 		AssetID uint32 `json:"assetID"`
 	}
 	if !readPost(w, r, &form) {
@@ -1115,9 +1116,9 @@ func (s *AppServer) apiTxHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, &struct {
-		OK            bool                       `json:"ok"`
-		Txs           []*asset.WalletTransaction `json:"txs"`
-		MoreAvailable bool                       `json:"moreAvailable"`
+		OK            bool                      `json:"ok"`
+		Txs           []*txdb.WalletTransaction `json:"txs"`
+		MoreAvailable bool                      `json:"moreAvailable"`
 	}{
 		OK:            true,
 		Txs:           resp.Txs,
@@ -1412,8 +1413,8 @@ func (s *AppServer) apiPendingBridges(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, &struct {
-		OK      bool                       `json:"ok"`
-		Bridges []*asset.WalletTransaction `json:"bridges"`
+		OK      bool                      `json:"ok"`
+		Bridges []*txdb.WalletTransaction `json:"bridges"`
 	}{
 		OK:      true,
 		Bridges: bridges,
@@ -1439,8 +1440,8 @@ func (s *AppServer) apiBridgeHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, &struct {
-		OK      bool                       `json:"ok"`
-		Bridges []*asset.WalletTransaction `json:"bridges"`
+		OK      bool                      `json:"ok"`
+		Bridges []*txdb.WalletTransaction `json:"bridges"`
 	}{
 		OK:      true,
 		Bridges: bridges,

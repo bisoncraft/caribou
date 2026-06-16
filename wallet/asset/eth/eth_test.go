@@ -22,6 +22,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -367,7 +368,7 @@ func (db *tTxDB) storeTx(wt *extendedWalletTx) error {
 	db.storedTx = wt
 	return db.storeTxErr
 }
-func (db *tTxDB) getTxs(tokenID *uint32, req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (db *tTxDB) getTxs(tokenID *uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	return nil, nil
 }
 
@@ -384,7 +385,7 @@ func (db *tTxDB) getTx(txHash common.Hash) (tx *extendedWalletTx, _ error) {
 func (db *tTxDB) getPendingTxs() ([]*extendedWalletTx, error) {
 	panic("getPendingTxs not implemented")
 }
-func (db *tTxDB) getBridges(tokenID *uint32, n int, refID *common.Hash, past bool) ([]*asset.WalletTransaction, error) {
+func (db *tTxDB) getBridges(tokenID *uint32, n int, refID *common.Hash, past bool) ([]*txdb.WalletTransaction, error) {
 	panic("getBridges not implemented")
 }
 func (db *tTxDB) getPendingBridges(tokenID *uint32) ([]*extendedWalletTx, error) {
@@ -412,7 +413,7 @@ func TestCheckPendingTxs(t *testing.T) {
 	extendedTx := func(nonce, blockNum, blockStamp, submissionStamp uint64) *extendedWalletTx {
 		pendingTx := eth.extendedTx(&genTxResult{
 			tx:     node.newTransaction(nonce, val),
-			txType: asset.Send,
+			txType: txdb.Send,
 			amt:    1,
 		})
 		pendingTx.BlockNumber = blockNum
@@ -589,7 +590,7 @@ func TestTakeAction(t *testing.T) {
 	aGwei := GweiToWei(1)
 	pendingTx := eth.extendedTx(&genTxResult{
 		tx:     node.newTransaction(0, aGwei),
-		txType: asset.Send,
+		txType: txdb.Send,
 		amt:    1,
 	})
 	eth.pendingTxs = []*extendedWalletTx{pendingTx}
@@ -627,7 +628,7 @@ func TestTakeAction(t *testing.T) {
 
 	pendingTx = eth.extendedTx(&genTxResult{
 		tx:     node.newTransaction(1, aGwei),
-		txType: asset.Send,
+		txType: txdb.Send,
 		amt:    1,
 	})
 	eth.pendingTxs = []*extendedWalletTx{pendingTx}
@@ -670,7 +671,7 @@ func TestTakeAction(t *testing.T) {
 	// wrong nonce is an error though
 	pendingTx = eth.extendedTx(&genTxResult{
 		tx:     node.newTransaction(5050, aGwei),
-		txType: asset.Send,
+		txType: txdb.Send,
 		amt:    1,
 	})
 	eth.pendingTxs = []*extendedWalletTx{pendingTx}
@@ -682,7 +683,7 @@ func TestTakeAction(t *testing.T) {
 	// Missing nonces
 	tx5 := eth.extendedTx(&genTxResult{
 		tx:     node.newTransaction(5, aGwei),
-		txType: asset.Send,
+		txType: txdb.Send,
 		amt:    1,
 	})
 	eth.pendingTxs = []*extendedWalletTx{tx5}
@@ -1134,7 +1135,7 @@ func TestBalanceNoMempool(t *testing.T) {
 	t.Parallel()
 	var nonceCounter int64
 
-	newExtendedWalletTx := func(assetID uint32, amt, maxFees, blockNum uint64, txType asset.TransactionType) *extendedWalletTx {
+	newExtendedWalletTx := func(assetID uint32, amt, maxFees, blockNum uint64, txType txdb.TransactionType) *extendedWalletTx {
 		var tokenID *uint32
 		if assetID != BipID {
 			tokenID = &assetID
@@ -1142,7 +1143,7 @@ func TestBalanceNoMempool(t *testing.T) {
 		txHash := common.BytesToHash(encode.RandomBytes(32))
 
 		et := &extendedWalletTx{
-			WalletTransaction: &asset.WalletTransaction{
+			WalletTransaction: &txdb.WalletTransaction{
 				ID:          txHash.String(),
 				Type:        txType,
 				Amount:      amt,
@@ -1169,7 +1170,7 @@ func TestBalanceNoMempool(t *testing.T) {
 			name:    "single eth tx",
 			assetID: BipID,
 			unconfirmedTxs: []*extendedWalletTx{
-				newExtendedWalletTx(BipID, 1, 2, 0, asset.Send),
+				newExtendedWalletTx(BipID, 1, 2, 0, txdb.Send),
 			},
 			expPendingOut: 3,
 		},
@@ -1177,7 +1178,7 @@ func TestBalanceNoMempool(t *testing.T) {
 			name:    "eth with token fees",
 			assetID: BipID,
 			unconfirmedTxs: []*extendedWalletTx{
-				newExtendedWalletTx(usdcEthID, 4, 5, 0, asset.Send),
+				newExtendedWalletTx(usdcEthID, 4, 5, 0, txdb.Send),
 			},
 			expPendingOut: 5,
 		},
@@ -1185,8 +1186,8 @@ func TestBalanceNoMempool(t *testing.T) {
 			name:    "token with 1 tx and other ignored assets",
 			assetID: usdcEthID,
 			unconfirmedTxs: []*extendedWalletTx{
-				newExtendedWalletTx(usdcEthID, 4, 5, 0, asset.Send),
-				newExtendedWalletTx(usdcEthID+1, 8, 9, 0, asset.Send),
+				newExtendedWalletTx(usdcEthID, 4, 5, 0, txdb.Send),
+				newExtendedWalletTx(usdcEthID+1, 8, 9, 0, txdb.Send),
 			},
 			expPendingOut: 4,
 		},
@@ -1194,7 +1195,7 @@ func TestBalanceNoMempool(t *testing.T) {
 			name:    "token with 1 tx incoming",
 			assetID: usdcEthID,
 			unconfirmedTxs: []*extendedWalletTx{
-				newExtendedWalletTx(usdcEthID, 15, 5, 0, asset.Redeem),
+				newExtendedWalletTx(usdcEthID, 15, 5, 0, txdb.Redeem),
 			},
 			expPendingIn: 15,
 		},
@@ -1202,10 +1203,10 @@ func TestBalanceNoMempool(t *testing.T) {
 			name:    "eth mixed txs",
 			assetID: BipID,
 			unconfirmedTxs: []*extendedWalletTx{
-				newExtendedWalletTx(BipID, 1, 2, 0, asset.Swap),     // 3 eth out
-				newExtendedWalletTx(usdcEthID, 3, 4, 1, asset.Send), // confirmed
-				newExtendedWalletTx(usdcEthID, 5, 6, 0, asset.Swap), // 6 eth out
-				newExtendedWalletTx(BipID, 7, 1, 0, asset.Refund),   // 1 eth out, 7 eth in
+				newExtendedWalletTx(BipID, 1, 2, 0, txdb.Swap),     // 3 eth out
+				newExtendedWalletTx(usdcEthID, 3, 4, 1, txdb.Send), // confirmed
+				newExtendedWalletTx(usdcEthID, 5, 6, 0, txdb.Swap), // 6 eth out
+				newExtendedWalletTx(BipID, 7, 1, 0, txdb.Refund),   // 1 eth out, 7 eth in
 			},
 			expPendingOut: 10,
 			expPendingIn:  7,
@@ -1214,7 +1215,7 @@ func TestBalanceNoMempool(t *testing.T) {
 			name:    "already confirmed, but still waiting for txConfsNeededToConfirm",
 			assetID: usdcEthID,
 			unconfirmedTxs: []*extendedWalletTx{
-				newExtendedWalletTx(usdcEthID, 15, 5, 1, asset.Redeem),
+				newExtendedWalletTx(usdcEthID, 15, 5, 1, txdb.Redeem),
 			},
 		},
 	}

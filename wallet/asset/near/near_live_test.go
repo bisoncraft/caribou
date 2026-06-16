@@ -23,6 +23,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 const (
@@ -530,7 +531,7 @@ func TestLiveWalletTransaction(t *testing.T) {
 		t.Fatalf("WalletTransaction error: %v", err)
 	}
 	t.Logf("WalletTransaction right after send: type=%d id=%s confirmed=%v", wtx.Type, wtx.ID, wtx.Confirmed)
-	if wtx.Type != asset.Send {
+	if wtx.Type != txdb.Send {
 		t.Errorf("expected Send type, got %d", wtx.Type)
 	}
 
@@ -562,7 +563,7 @@ confirmed:
 	}
 
 	// TxHistory should contain the confirmed tx.
-	hist, err := w.TxHistory(&asset.TxHistoryRequest{N: 10})
+	hist, err := w.TxHistory(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
 		t.Fatalf("TxHistory error: %v", err)
 	}
@@ -627,11 +628,11 @@ func TestLiveReceiveDetection(t *testing.T) {
 		select {
 		case note := <-noteChan:
 			if txNote, ok := note.(*asset.TransactionNote); ok {
-				if txNote.Transaction.Type == asset.Receive {
+				if txNote.Transaction.Type == txdb.Receive {
 					t.Logf("Detected receive: id=%s amount=%d drops",
 						txNote.Transaction.ID, txNote.Transaction.Amount)
 					// Verify it's in tx history.
-					hist, err := w.TxHistory(&asset.TxHistoryRequest{N: 10})
+					hist, err := w.TxHistory(&txdb.TxHistoryRequest{N: 10})
 					if err != nil {
 						t.Fatalf("TxHistory error: %v", err)
 					}
@@ -639,7 +640,7 @@ func TestLiveReceiveDetection(t *testing.T) {
 					for _, tx := range hist.Txs {
 						if tx.ID == txNote.Transaction.ID {
 							found = true
-							if tx.Type != asset.Receive {
+							if tx.Type != txdb.Receive {
 								t.Errorf("expected Receive type, got %d", tx.Type)
 							}
 							break

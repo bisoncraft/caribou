@@ -12,6 +12,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
 const (
@@ -19,10 +20,10 @@ const (
 	blockIndexName = "block"
 )
 
-// dbTx wraps asset.WalletTransaction with additional tracking
+// dbTx wraps txdb.WalletTransaction with additional tracking
 // fields for the NEAR wallet.
 type dbTx struct {
-	*asset.WalletTransaction
+	*txdb.WalletTransaction
 	SubmissionTime uint64 `json:"submissionTime"` // unix seconds
 }
 
@@ -96,7 +97,7 @@ func (db *nearTxDB) getTx(txID string) (*dbTx, error) {
 }
 
 // getTxs fetches confirmed transactions according to the request parameters.
-func (db *nearTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryResponse, error) {
+func (db *nearTxDB) getTxs(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	n := req.N
 
 	var opts []lexi.IterationOption
@@ -117,7 +118,7 @@ func (db *nearTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespons
 		opts = append(opts, lexi.WithSeek(entry))
 	}
 
-	txs := make([]*asset.WalletTransaction, 0, n)
+	txs := make([]*txdb.WalletTransaction, 0, n)
 	var moreAvailable bool
 	ignoreTypes := req.IngoreTypesLookup()
 
@@ -146,7 +147,7 @@ func (db *nearTxDB) getTxs(req *asset.TxHistoryRequest) (*asset.TxHistoryRespons
 		return nil, err
 	}
 
-	return &asset.TxHistoryResponse{
+	return &txdb.TxHistoryResponse{
 		Txs:           txs,
 		MoreAvailable: moreAvailable,
 	}, nil
