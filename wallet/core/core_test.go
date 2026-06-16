@@ -185,6 +185,12 @@ func (tdb *TDB) SetCompanionToken(token string) error {
 func (tdb *TDB) CompanionToken() (string, error) {
 	return "", nil
 }
+func (tdb *TDB) SetSendRequiresPassword(require bool) error {
+	return nil
+}
+func (tdb *TDB) SendRequiresPassword() (bool, error) {
+	return false, nil
+}
 
 func (tdb *TDB) NextMultisigKeyIndex(assetID uint32) (uint32, error) {
 	return 0, nil

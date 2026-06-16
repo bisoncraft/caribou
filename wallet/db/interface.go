@@ -65,6 +65,12 @@ type DB interface {
 	SetLanguage(lang string) error
 	// Language gets the language stored with SetLanguage.
 	Language() (string, error)
+	// SetSendRequiresPassword stores whether sending funds requires the app
+	// password.
+	SetSendRequiresPassword(require bool) error
+	// SendRequiresPassword gets whether sending requires the app password.
+	// If no value has been stored, false is returned without an error.
+	SendRequiresPassword() (bool, error)
 	// SetCompanionToken stores the companion app auth token hash.
 	SetCompanionToken(token string) error
 	// CompanionToken retrieves the companion app auth token hash stored

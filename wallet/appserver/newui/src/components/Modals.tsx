@@ -1,4 +1,4 @@
-import { MouseEvent } from 'react'
+import { MouseEvent, useRef } from 'react'
 import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
@@ -10,13 +10,24 @@ interface ModalsParams {
   fd: FormData
 }
 
-const onBackgroundClick = (e: MouseEvent) => {
-  if (e.target === e.currentTarget) {
-    app.setForm({ form: '', data: {} })
-  }
-}
-
 export default function Modals ({ fd }: ModalsParams) {
+  // Only close when a full click both starts and ends on the backdrop. The
+  // click event fires on the common ancestor of the mousedown and mouseup
+  // targets, so a drag that starts inside the form (e.g. selecting text in an
+  // input) and releases on the backdrop would otherwise close the modal. We
+  // record whether the press began on the backdrop and require that too.
+  const downOnBackground = useRef(false)
+
+  const onBackgroundMouseDown = (e: MouseEvent) => {
+    downOnBackground.current = e.target === e.currentTarget
+  }
+
+  const onBackgroundClick = (e: MouseEvent) => {
+    const shouldClose = downOnBackground.current && e.target === e.currentTarget
+    downOnBackground.current = false
+    if (shouldClose) app.setForm({ form: '', data: {} })
+  }
+
   const renderContent = () => {
     switch (fd.form) {
       case 'receive': return <Receive ticker={fd.data?.ticker} />
@@ -29,6 +40,7 @@ export default function Modals ({ fd }: ModalsParams) {
 
   return (
     <div className={`fill-abs flex-center modals ${fd.form ? '' : 'd-none'}`}
+      onMouseDown={onBackgroundMouseDown}
       onClick={onBackgroundClick}>
       {fd.form && renderContent()}
     </div>

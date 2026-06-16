@@ -1,6 +1,7 @@
 import { getJSON, postJSON } from './http'
 import {
   AppState,
+  AppSettings,
   User,
   PageData,
   UnitInfo,
@@ -29,6 +30,7 @@ export class Application {
   lang: string
   inited: boolean
   authed: boolean
+  appSettings: AppSettings
   pageLoaded: (d: PageData) => void
   reRender: () => void
   pageData: PageData
@@ -43,6 +45,7 @@ export class Application {
 
   constructor () {
     this.user = null
+    this.appSettings = { sendRequiresPassword: false }
     this.pageData = { pageParts: [''], pageRoot: '', data: {}, query: new URLSearchParams() }
     this.balanceUpdaters = {}
     this.fiatRateUpdaters = {}
@@ -145,6 +148,7 @@ export class Application {
     }
     this.lang = r.lang
     this.langs = r.langs
+    if (r.appSettings) this.appSettings = r.appSettings
     if (needsTickers) this.prepareTickerAssets()
     return r
   }

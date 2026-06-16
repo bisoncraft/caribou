@@ -128,6 +128,8 @@ type clientCore interface {
 	Language() string
 	SetCompanionToken(token string) error
 	CompanionToken() (string, error)
+	SetSendRequiresPassword(require bool) error
+	SendRequiresPassword() (bool, error)
 	TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error
 	BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName string) (*core.BridgeFeesAndLimits, error)
 	AllBridgePaths() (map[uint32]map[uint32][]string, error)
@@ -443,6 +445,7 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/walletsettings", s.apiWalletSettings)
 			apiAuth.Post("/togglewalletstatus", s.apiToggleWalletStatus)
 			apiAuth.Post("/send", s.apiSend)
+			apiAuth.Post("/setsendrequirespassword", s.apiSetSendRequirePassword)
 			apiAuth.Post("/exportseed", s.apiExportSeed)
 			apiAuth.Post("/restorewalletinfo", s.apiRestoreWalletInfo)
 			apiAuth.Post("/toggleratesource", s.apiToggleRateSource)
