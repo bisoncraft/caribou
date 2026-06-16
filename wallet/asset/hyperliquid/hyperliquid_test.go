@@ -759,6 +759,30 @@ func TestRPCSendAssetError(t *testing.T) {
 	}
 }
 
+func TestRPCSendAssetNestedError(t *testing.T) {
+	// Server returns status "ok" but embeds a per-action error in data.statuses.
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		resp := exchangeResponse{
+			Status:   "ok",
+			Response: json.RawMessage(`{"type":"default","data":{"statuses":[{"error":"Insufficient balance"}]}}`),
+		}
+		json.NewEncoder(w).Encode(resp)
+	}
+	c, srv := newTestRPCClient(t, handler)
+	defer srv.Close()
+
+	action := sendAssetAction{Type: "sendAsset"}
+	var sig [65]byte
+	err := c.sendAsset(context.Background(), action, sig, 123)
+	if err == nil {
+		t.Fatal("expected error for nested action error")
+	}
+	var rejection *exchangeRejection
+	if !errors.As(err, &rejection) {
+		t.Errorf("expected *exchangeRejection, got %T: %v", err, err)
+	}
+}
+
 // --- driver ---
 
 func TestDriverInfo(t *testing.T) {
@@ -1089,6 +1113,53 @@ func TestTxDBGetTxsRefIDOnPendingReturnsDistinctError(t *testing.T) {
 	}
 }
 
+func TestTxDBPendingIDIndex(t *testing.T) {
+	dir := t.TempDir()
+	log := util.StdOutLogger("TXDBTEST", util.LevelTrace)
+	db, err := newTxDB(dir, log)
+	if err != nil {
+		t.Fatalf("newTxDB: %v", err)
+	}
+	defer db.Close()
+
+	realHash := "0x" + fmt.Sprintf("%064x", 55)
+	pendingID := fmt.Sprintf("0x%016x", uint64(1700000001000))
+	recipient := "0x1111111111111111111111111111111111111111"
+
+	// Store a confirmed tx that carries the pendingID alias.
+	if err := db.storeTx(&dbTx{WalletTransaction: &asset.WalletTransaction{
+		ID:        realHash,
+		Type:      asset.Send,
+		Amount:    1e8,
+		Recipient: &recipient,
+		AdditionalData: map[string]string{
+			pendingIDKey: pendingID,
+		},
+	}}); err != nil {
+		t.Fatalf("storeTx: %v", err)
+	}
+
+	found, err := db.getTxByPendingID(pendingID)
+	if err != nil {
+		t.Fatalf("getTxByPendingID: %v", err)
+	}
+	if found == nil {
+		t.Fatal("expected tx, got nil")
+	}
+	if found.ID != realHash {
+		t.Errorf("ID = %q, want %q", found.ID, realHash)
+	}
+
+	// A tx without a pendingID must not be found via the index.
+	notFound, err := db.getTxByPendingID("0x0000000000000000")
+	if err != nil {
+		t.Fatalf("getTxByPendingID (missing): %v", err)
+	}
+	if notFound != nil {
+		t.Error("expected nil for unknown pendingID")
+	}
+}
+
 func TestTxDBLastScannedMSRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	log := util.StdOutLogger("TXDBTEST", util.LevelTrace)
@@ -1276,9 +1347,12 @@ func TestSendKeepsPendingOnNetworkError(t *testing.T) {
 	})
 
 	recipient := "0x1234567890123456789012345678901234567890"
-	_, err := w.send(recipient, 1e8)
-	if err == nil {
+	_, sendErr := w.send(recipient, 1e8)
+	if sendErr == nil {
 		t.Fatal("expected error from failed send")
+	}
+	if !errors.Is(sendErr, ErrSendOutcomeUnknown) {
+		t.Errorf("expected ErrSendOutcomeUnknown on transport error, got %v", sendErr)
 	}
 
 	pending, err := w.txDB.Load().getPendingTxs()
@@ -1616,6 +1690,55 @@ func TestConfirmPendingSendPicksClosestNonce(t *testing.T) {
 	}
 	if tx, _ := w.txDB.Load().getTx(pendingIDA); tx == nil {
 		t.Error("pendingIDA should still be pending")
+	}
+}
+
+func TestConfirmPendingSendSlowServer(t *testing.T) {
+	// A single pending send whose ledger echo arrives >5s after nonce mint.
+	// It must still be confirmed — nonce proximity is a tiebreaker, not a gate.
+	w := newTestWalletWithDB(t)
+
+	nonce := uint64(1700000010000)
+	pendingID := fmt.Sprintf("0x%016x", nonce)
+	recipient := "0x4444444444444444444444444444444444444444"
+	if err := w.txDB.Load().storeTx(&dbTx{
+		WalletTransaction: &asset.WalletTransaction{
+			ID:        pendingID,
+			Type:      asset.Send,
+			Amount:    2e8,
+			Recipient: &recipient,
+			AdditionalData: map[string]string{
+				"nonce": strconv.FormatUint(nonce, 10),
+			},
+		},
+		SubmissionTime: uint64(time.Now().Unix()),
+	}); err != nil {
+		t.Fatalf("storeTx: %v", err)
+	}
+
+	// Ledger echo arrives 30 seconds (30000ms) after the nonce was minted.
+	realHash := "0x" + fmt.Sprintf("%064x", 88)
+	w.confirmPendingSend(ledgerUpdate{
+		Time: nonce + 30000,
+		Hash: realHash,
+		Delta: ledgerDelta{
+			Type:        "spotTransfer",
+			Token:       "HYPE",
+			Amount:      "2",
+			User:        w.address,
+			Destination: recipient,
+		},
+	}, 2e8, w.txDB.Load())
+
+	confirmed, err := w.txDB.Load().getTx(realHash)
+	if err != nil {
+		t.Fatalf("getTx: %v", err)
+	}
+	if confirmed == nil {
+		t.Fatal("send should be confirmed even when nonce diff > 5s")
+	}
+	if confirmed.AdditionalData[pendingIDKey] != pendingID {
+		t.Errorf("pendingIDKey = %q, want %q", confirmed.AdditionalData[pendingIDKey], pendingID)
 	}
 }
 

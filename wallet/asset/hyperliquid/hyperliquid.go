@@ -45,6 +45,11 @@ const (
 // so tests can set a lower value to avoid long runtimes.
 var kdfScryptN = 1 << 18
 
+// ErrSendOutcomeUnknown is returned when a send encounters a transport error
+// after the request was dispatched. The transaction may or may not have landed.
+// Callers must not retry without first checking PendingTransactions.
+var ErrSendOutcomeUnknown = errors.New("send outcome unknown")
+
 var (
 	seedDerivationPath = []uint32{
 		hdkeychain.HardenedKeyStart + 44,    // purpose 44'
@@ -446,8 +451,9 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 					w.log.Errorf("Cleaning up pending tx %s after rejection: %v", txID, delErr)
 				}
 			}
+			return nil, fmt.Errorf("spot send: %w", err)
 		}
-		return nil, fmt.Errorf("spot send: %w", err)
+		return nil, fmt.Errorf("%w: spot send: %w", ErrSendOutcomeUnknown, err)
 	}
 
 	if w.emit != nil {
@@ -759,11 +765,12 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 	}
 }
 
-// confirmPendingSend finds the pending send matching ledger update u (matched
-// by nonce stored in AdditionalData) and updates it with the confirmed state.
-// When multiple pending sends share the same recipient and amount within the
-// 5-second window, the one whose nonce is numerically closest to u.Time is
-// chosen, preventing incorrect aliasing on rapid duplicate sends.
+// confirmPendingSend finds the pending send matching ledger update u and
+// updates it with the confirmed state. Candidates are filtered by amount and
+// recipient; when multiple sends share both, the one whose nonce is numerically
+// closest to u.Time is chosen. Nonce proximity is a tiebreaker only — a single
+// candidate always matches regardless of how much time elapsed between nonce
+// mint and ledger echo.
 // Pending entries older than pendingTTL are expired opportunistically.
 func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hyperTxDB) {
 	pending, err := db.getPendingTxs()
@@ -793,18 +800,13 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hype
 		if err != nil {
 			continue
 		}
-		// Match by nonce proximity (within 5 seconds) and amount.
-		diff := int64(u.Time) - int64(nonce)
-		if diff < -5000 || diff > 5000 {
-			continue
-		}
 		if p.Amount != amount {
 			continue
 		}
 		if p.Recipient == nil || !strings.EqualFold(*p.Recipient, u.Delta.Destination) {
 			continue
 		}
-		absDiff := diff
+		absDiff := int64(u.Time) - int64(nonce)
 		if absDiff < 0 {
 			absDiff = -absDiff
 		}

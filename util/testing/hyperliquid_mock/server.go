@@ -31,7 +31,7 @@ import (
 // hypeTokenID is the spot token identifier the mock advertises for HYPE via
 // spotMeta. The wallet only cares that the "HYPE" name resolves to some
 // "HYPE:<id>" string.
-const hypeTokenID = "0x0000000000000000000000000000000000000000000000000000000000000"
+const hypeTokenID = "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 // mockFaucetAddress is the synthetic sender address used for ledger entries
 // created by Fund/-test/fund deposits.
@@ -135,10 +135,9 @@ func New(net util.Network) *Server {
 
 // Fund credits address with amountAtoms of HYPE (in atoms, i.e. 1e-8 HYPE).
 // It is a test-only helper with no equivalent in the real API — there is no
-// faucet here, so tests seed balances directly.
-// Fund credits address and records a "deposit" ledger entry, pushed to any
-// active WS subscription for address so the wallet picks up the new balance
-// immediately rather than waiting for the next WS ping.
+// faucet here, so tests seed balances directly. It records a "deposit" ledger
+// entry and pushes it to any active WS subscription for address so the wallet
+// picks up the new balance immediately rather than waiting for the next ping.
 func (s *Server) Fund(address string, amountAtoms uint64) {
 	addr := strings.ToLower(address)
 	s.mu.Lock()
@@ -544,8 +543,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// atomsToHYPE converts microHYPE atoms to a decimal HYPE string, matching the
-// format the real API returns.
+// atomsToHYPE converts atoms to a decimal HYPE string, matching the format the
+// real API returns.
 func atomsToHYPE(atoms uint64) string {
 	whole := atoms / 1e8
 	frac := atoms % 1e8

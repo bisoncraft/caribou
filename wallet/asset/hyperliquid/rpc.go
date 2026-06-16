@@ -269,5 +269,21 @@ func (c *rpcClient) sendAsset(ctx context.Context, action sendAssetAction, sig [
 	if resp.Status != "ok" {
 		return &exchangeRejection{msg: fmt.Sprintf("exchange error: %s", resp.Response)}
 	}
+	// Check for per-action errors embedded in an otherwise-ok response.
+	var inner struct {
+		Data struct {
+			Statuses []json.RawMessage `json:"statuses"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(resp.Response, &inner) == nil {
+		for _, s := range inner.Data.Statuses {
+			var errStatus struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(s, &errStatus) == nil && errStatus.Error != "" {
+				return &exchangeRejection{msg: fmt.Sprintf("action error: %s", errStatus.Error)}
+			}
+		}
+	}
 	return nil
 }

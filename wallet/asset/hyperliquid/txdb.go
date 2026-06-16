@@ -21,9 +21,10 @@ import (
 var ErrTxIsPending = errors.New("ref tx is pending")
 
 const (
-	txsTableName   = "txs"
-	blockIndexName = "block"
-	metaTableName  = "meta"
+	txsTableName       = "txs"
+	blockIndexName     = "block"
+	pendingIDIndexName = "pendingid"
+	metaTableName      = "meta"
 
 	lastScannedMSKey = "lastScannedMS"
 	pendingIDKey     = "pendingID"
@@ -47,10 +48,11 @@ func (tx *dbTx) UnmarshalBinary(b []byte) error {
 // hyperTxDB stores Hyperliquid wallet transactions using lexi.
 type hyperTxDB struct {
 	*lexi.DB
-	txs        *lexi.Table
-	meta       *lexi.Table
-	blockIndex *lexi.Index // ordered by BlockNumber; BlockNumber==0 for pending
-	log        util.Logger
+	txs            *lexi.Table
+	meta           *lexi.Table
+	blockIndex     *lexi.Index // ordered by BlockNumber; BlockNumber==0 for pending
+	pendingIDIndex *lexi.Index // unique index on AdditionalData["pendingID"]
+	log            util.Logger
 }
 
 func newTxDB(path string, log util.Logger) (*hyperTxDB, error) {
@@ -85,12 +87,28 @@ func newTxDB(path string, log util.Logger) (*hyperTxDB, error) {
 		return nil, err
 	}
 
+	pendingIDIndex, err := txs.AddUniqueIndex(pendingIDIndexName, func(_, v lexi.KV) ([]byte, error) {
+		wt, ok := v.(*dbTx)
+		if !ok {
+			return nil, fmt.Errorf("expected *dbTx, got %T", v)
+		}
+		pid := wt.AdditionalData[pendingIDKey]
+		if pid == "" {
+			return nil, lexi.ErrNotIndexed
+		}
+		return []byte(pid), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &hyperTxDB{
-		DB:         ldb,
-		txs:        txs,
-		meta:       meta,
-		blockIndex: blockIndex,
-		log:        log,
+		DB:             ldb,
+		txs:            txs,
+		meta:           meta,
+		blockIndex:     blockIndex,
+		pendingIDIndex: pendingIDIndex,
+		log:            log,
 	}, nil
 }
 
@@ -115,15 +133,12 @@ func (db *hyperTxDB) deleteTx(txID string) error {
 
 func (db *hyperTxDB) getTxByPendingID(pendingID string) (*dbTx, error) {
 	var found *dbTx
-	err := db.txs.Iterate(nil, func(it *lexi.Iter) error {
+	err := db.pendingIDIndex.Iterate([]byte(pendingID), func(it *lexi.Iter) error {
 		wt := new(dbTx)
 		if err := it.V(func(vB []byte) error {
 			return wt.UnmarshalBinary(vB)
 		}); err != nil {
 			return err
-		}
-		if wt.AdditionalData[pendingIDKey] != pendingID {
-			return nil
 		}
 		found = wt
 		return lexi.ErrEndIteration

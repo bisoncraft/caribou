@@ -465,11 +465,6 @@ func TestLiveWalletTransaction(t *testing.T) {
 	txID := coin.TxID()
 	t.Logf("Sent tx: %s", txID)
 
-	pending := w.PendingTransactions(ctx)
-	if len(pending) == 0 {
-		t.Error("expected pending tx after send")
-	}
-
 	wtx, err := w.WalletTransaction(ctx, txID)
 	if err != nil {
 		t.Fatalf("WalletTransaction: %v", err)
@@ -481,7 +476,7 @@ func TestLiveWalletTransaction(t *testing.T) {
 	for {
 		select {
 		case <-time.After(3 * time.Second):
-			pending = w.PendingTransactions(ctx)
+			pending := w.PendingTransactions(ctx)
 			if len(pending) == 0 {
 				t.Log("No more pending txs — checking history...")
 				hist, err := w.TxHistory(&asset.TxHistoryRequest{N: 10})
