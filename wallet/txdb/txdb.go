@@ -41,7 +41,7 @@ const (
 	// record: network(4) || assetID(4) || effTime(8) || flags(1).
 	metaLen = 4 + 4 + 8 + 1
 
-	flagPending   byte = 1 << 0 // BlockNumber == 0 (in mempool)
+	flagPending   byte = 1 << 0 // !Confirmed (unconfirmed; needs monitoring)
 	flagConfirmed byte = 1 << 1 // finalized
 )
 
@@ -144,7 +144,11 @@ func encodeRecord(wt *WalletTransaction, network uint32, effTime uint64) ([]byte
 		assetID = *wt.TokenID
 	}
 	var flags byte
-	if wt.BlockNumber == 0 {
+	if !wt.Confirmed {
+		// Pending means "not yet finalized, still needs monitoring", matching
+		// the per-wallet tx DBs (eth/btc) whose getPendingTxs return every
+		// unconfirmed tx, not just mempool ones. A mined-but-unconfirmed tx is
+		// therefore still pending.
 		flags |= flagPending
 	}
 	if wt.Confirmed {
@@ -301,6 +305,25 @@ func (db *TxDB) storeTx(network uint32, wt *WalletTransaction) error {
 		return err
 	}
 	return db.txs.Set(txKey(network, wt.ID), rec, true)
+}
+
+// storeTxs writes many transactions in a single batch, collapsing what would
+// be one fsync per tx on mobile (bbolt) into one. Used by bulk paths such as
+// an initial history sync or a migration.
+func (db *TxDB) storeTxs(network uint32, wts []*WalletTransaction) error {
+	if len(wts) == 0 {
+		return nil
+	}
+	now := uint64(time.Now().Unix())
+	entries := make([]BatchEntry, len(wts))
+	for i, wt := range wts {
+		rec, err := encodeRecord(wt, network, effectiveTime(wt, now))
+		if err != nil {
+			return err
+		}
+		entries[i] = BatchEntry{K: txKey(network, wt.ID), V: rec}
+	}
+	return db.txs.SetBatch(entries, true)
 }
 
 func (db *TxDB) getTx(network uint32, id string) (*WalletTransaction, error) {

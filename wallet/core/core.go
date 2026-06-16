@@ -345,11 +345,20 @@ func (c *Core) Run(ctx context.Context) {
 		c.db.Run(ctxDB)
 	}()
 
-	// The master transaction DB monitors the application context; its shutdown
-	// (storage-engine close, GC drain, etc.) runs when ctx is canceled.
-	txDBWG, err := c.txDB.Connect(ctx)
+	// The master transaction DB is bound to its own context rather than the
+	// application ctx so its shutdown (storage-engine close, GC drain, etc.)
+	// can be deferred until after the wallets are disconnected below. This
+	// prevents an in-flight wallet write during wind-down from hitting a
+	// closed DB.
+	ctxTxDB, stopTxDB := context.WithCancel(context.Background())
+	txDBWG, err := c.txDB.Connect(ctxTxDB)
 	if err != nil {
 		c.log.Errorf("Error connecting transaction database: %v", err)
+		// Connect did not take ownership of the DB opened by New(), so close
+		// it here; nothing else will. txDBWG is nil on this path.
+		if closeErr := c.txDB.Close(); closeErr != nil {
+			c.log.Errorf("Error closing transaction database: %v", closeErr)
+		}
 	}
 
 	// Retrieve disabled fiat rate sources from database.
@@ -413,13 +422,6 @@ fetchers:
 	stopDB()
 	dbWG.Wait()
 
-	// Wait for the master transaction database to finish shutting down (it
-	// was bound to ctx by Connect above and is already draining since ctx is
-	// done by the time we reach here).
-	if txDBWG != nil {
-		txDBWG.Wait()
-	}
-
 	// Lock and disconnect the wallets.
 	c.walletMtx.Lock()
 	defer c.walletMtx.Unlock()
@@ -443,6 +445,14 @@ fetchers:
 			}
 		}
 		wallet.Disconnect()
+	}
+
+	// Now that the wallets are disconnected, stop the master transaction DB
+	// and wait for it to finish shutting down. Closing it only here ensures no
+	// in-flight wallet write can race the engine close.
+	stopTxDB()
+	if txDBWG != nil {
+		txDBWG.Wait()
 	}
 
 	c.log.Infof("Boss Wallet core off")

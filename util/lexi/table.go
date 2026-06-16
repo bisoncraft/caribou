@@ -239,6 +239,31 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 	return t.Update(updateFunc)
 }
 
+// KVPair is a key/value pair, used to enqueue writes for SetBatch.
+type KVPair struct {
+	K, V KV
+}
+
+// SetBatch inserts every pair within a single Badger transaction. Badger
+// already absorbs bulk writes through its LSM tree, so unlike glossi/bbolt this
+// is primarily for write atomicity and API parity. If any Set fails (including
+// a unique-index conflict without WithReplace), the whole batch is rolled back.
+// The setOpts apply to every pair.
+func (t *Table) SetBatch(pairs []KVPair, setOpts ...SetOption) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	return t.Update(func(txn *badger.Txn) error {
+		for _, p := range pairs {
+			opts := append([]SetOption{WithTxn(txn)}, setOpts...)
+			if err := t.Set(p.K, p.V, opts...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // Delete deletes the data associated with the key, including any index entries
 // and the id<->key mappings.
 func (t *Table) Delete(kB []byte) error {
