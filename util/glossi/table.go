@@ -156,8 +156,18 @@ func (t *Table) setInTx(tx *bbolt.Tx, k, v []byte, replace bool) error {
 			return fmt.Errorf("index %q error: %w", idx.name, err)
 		}
 		if idx.unique {
-			if err := idx.checkUnique(index, ik, k); err != nil {
-				return err
+			// On a unique-index conflict, reject unless replacing. When
+			// replacing, delete the conflicting entry (a different primary key
+			// sharing this index value), matching lexi: this is how callers
+			// model replacement keyed by an index value rather than the primary
+			// key (e.g. an Ethereum nonce-replacement transaction).
+			if conflict := idx.uniqueConflict(index, ik, k); conflict != nil {
+				if !replace {
+					return fmt.Errorf("%w on %q", ErrUniqueConflict, idx.name)
+				}
+				if err := t.deleteInTx(tb, conflict); err != nil && !errors.Is(err, ErrKeyNotFound) {
+					return fmt.Errorf("error deleting unique-conflict entry: %w", err)
+				}
 			}
 		}
 		if err := index.Put(ik, k); err != nil {
@@ -191,24 +201,29 @@ func (t *Table) Get(k []byte) (v []byte, err error) {
 // It returns ErrKeyNotFound if the key is not present.
 func (t *Table) Delete(k []byte) error {
 	return t.db.Update(func(tx *bbolt.Tx) error {
-		tb := tx.Bucket(t.name)
-		data := tb.Bucket(dataBucketKey)
-		index := tb.Bucket(indexBucketKey)
-		raw := data.Get(k)
-		if raw == nil {
-			return ErrKeyNotFound
-		}
-		_, idxKeys, err := decodeDatum(raw)
-		if err != nil {
-			return err
-		}
-		for _, ik := range idxKeys {
-			if err := index.Delete(ik); err != nil {
-				return fmt.Errorf("error deleting index entry: %w", err)
-			}
-		}
-		return data.Delete(k)
+		return t.deleteInTx(tx.Bucket(t.name), k)
 	})
+}
+
+// deleteInTx removes an entry and its index entries within an existing
+// transaction. Delete and the unique-conflict path in setInTx funnel through it.
+func (t *Table) deleteInTx(tb *bbolt.Bucket, k []byte) error {
+	data := tb.Bucket(dataBucketKey)
+	index := tb.Bucket(indexBucketKey)
+	raw := data.Get(k)
+	if raw == nil {
+		return ErrKeyNotFound
+	}
+	_, idxKeys, err := decodeDatum(raw)
+	if err != nil {
+		return err
+	}
+	for _, ik := range idxKeys {
+		if err := index.Delete(ik); err != nil {
+			return fmt.Errorf("error deleting index entry: %w", err)
+		}
+	}
+	return data.Delete(k)
 }
 
 // Iterate iterates the table's primary keys. If prefix is non-empty, only keys

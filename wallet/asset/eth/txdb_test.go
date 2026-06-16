@@ -17,19 +17,42 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+// newTestTxDBAtPath opens a master tx DB at path and returns an eth TxDB over
+// it plus the master (so callers can close/reopen for persistence tests). The
+// underlying engine is selected by build tag (Badger on desktop, bbolt on
+// mobile).
+func newTestTxDBAtPath(t *testing.T, path string) (*TxDB, *txdb.TxDB) {
+	t.Helper()
+	log := util.StdOutLogger("TXDB", util.LevelTrace)
+	master, err := txdb.New(path, log)
+	if err != nil {
+		t.Fatalf("txdb.New: %v", err)
+	}
+	db, err := NewTxDB(master.NetworkTxDB(BipID), log, BipID)
+	if err != nil {
+		t.Fatalf("NewTxDB: %v", err)
+	}
+	return db, master
+}
+
+// newTestTxDB returns an eth TxDB backed by a master tx DB that is closed on
+// test cleanup.
+func newTestTxDB(t *testing.T) *TxDB {
+	t.Helper()
+	db, master := newTestTxDBAtPath(t, t.TempDir()+"/tx.db")
+	t.Cleanup(func() { master.Close() })
+	return db
+}
+
 func TestTxDB(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
+	dbPath := t.TempDir() + "/tx.db"
 
 	// Grab these for the tx generation utilities
 	_, eth, node, shutdown := tassetWallet(BipID)
 	shutdown()
 
-	txHistoryStore, err := NewTxDB(tempDir, tLogger, BipID)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
+	txHistoryStore, master := newTestTxDBAtPath(t, dbPath)
 
 	r, err := txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{Past: true})
 	if err != nil {
@@ -129,13 +152,10 @@ func TestTxDB(t *testing.T) {
 	if !reflect.DeepEqual(allTxs, r.Txs) {
 		t.Fatalf("expected txs %s but got %s", spew.Sdump(allTxs), spew.Sdump(r.Txs))
 	}
-	txHistoryStore.Close()
+	master.Close()
 
-	txHistoryStore, err = NewTxDB(tempDir, util.StdOutLogger("TXDB", util.LevelTrace), BipID)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
-	defer txHistoryStore.Close()
+	txHistoryStore, master = newTestTxDBAtPath(t, dbPath)
+	defer master.Close()
 
 	r, err = txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{})
 	if err != nil {
@@ -197,17 +217,11 @@ func TestTxDB(t *testing.T) {
 
 func TestTxDB_relay(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
-
 	// Grab these for the tx generation utilities
 	_, eth, node, shutdown := tassetWallet(BipID)
 	shutdown()
 
-	txHistoryStore, err := NewTxDB(tempDir, tLogger, BipID)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
+	txHistoryStore := newTestTxDB(t)
 
 	newTx := func(nonce uint64, blockNumber uint64, isRelay bool) *extendedWalletTx {
 		tx := eth.extendedTx(&genTxResult{
@@ -254,16 +268,10 @@ func TestTxDB_relay(t *testing.T) {
 
 func TestTxDBReplaceNonce(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
-
 	_, eth, node, shutdown := tassetWallet(BipID)
 	shutdown()
 
-	txHistoryStore, err := NewTxDB(tempDir, tLogger, BipID)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
+	txHistoryStore := newTestTxDB(t)
 
 	newTx := func(nonce uint64) *extendedWalletTx {
 		return eth.extendedTx(&genTxResult{
@@ -276,7 +284,7 @@ func TestTxDBReplaceNonce(t *testing.T) {
 	wt1 := newTx(1)
 	wt2 := newTx(1)
 
-	err = txHistoryStore.storeTx(wt1)
+	err := txHistoryStore.storeTx(wt1)
 	if err != nil {
 		t.Fatalf("error storing tx: %v", err)
 	}
@@ -308,13 +316,7 @@ func TestTxDBReplaceNonce(t *testing.T) {
 
 func TestTxDB_getUnknownTx(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
-
-	txHistoryStore, err := NewTxDB(tempDir, tLogger, BipID)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
+	txHistoryStore := newTestTxDB(t)
 
 	tx, err := txHistoryStore.getTx(common.Hash{0x01})
 	if err != nil {
@@ -327,13 +329,7 @@ func TestTxDB_getUnknownTx(t *testing.T) {
 
 func TestTxDB_GetBridges(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
-	db, err := NewTxDB(tempDir, tLogger, BipID)
-	if err != nil {
-		t.Fatalf("error creating txDB: %v", err)
-	}
-	// t.Cleanup rather than defer so the db outlives the parallel subtests.
-	t.Cleanup(func() { db.Close() })
+	db := newTestTxDB(t)
 
 	now := time.Now()
 	txs := []*extendedWalletTx{
@@ -527,12 +523,7 @@ func TestTxDB_GetBridges(t *testing.T) {
 
 func TestTxDB_GetBridgeCompletions(t *testing.T) {
 	t.Parallel()
-	tempDir := t.TempDir()
-	db, err := NewTxDB(tempDir, tLogger, BipID)
-	if err != nil {
-		t.Fatalf("error creating txDB: %v", err)
-	}
-	defer db.Close()
+	db := newTestTxDB(t)
 
 	burnTxID := "0x1111111111111111111111111111111111111111111111111111111111111111"
 
