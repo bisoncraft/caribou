@@ -387,6 +387,17 @@ type cachedBalance struct {
 	bal    *big.Int
 }
 
+// txFetchResult holds pre-fetched data for a pending tx confirmation check,
+// allowing transactionAndReceipt (and headerByHash) to run outside nonceMtx.
+type txFetchResult struct {
+	receipt *types.Receipt
+	tx      *types.Transaction
+	// hdr is non-nil when a block header was fetched (needed when Timestamp==0
+	// or when the receipt's EffectiveGasPrice is nil).
+	hdr *types.Header
+	err error
+}
+
 // Check that assetWallet satisfies the asset.Wallet interface.
 var _ asset.Wallet = (*ETHWallet)(nil)
 var _ asset.Wallet = (*TokenWallet)(nil)
@@ -454,6 +465,9 @@ type baseWallet struct {
 		tipRate  *big.Int
 	}
 
+	pendingTxCheckRunning atomic.Bool
+	pendingTxCheckQueued  atomic.Bool
+
 	l1Fees struct {
 		sync.Mutex
 		sendBlockNum uint64
@@ -519,6 +533,7 @@ type ETHWallet struct {
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	tipAtConnect     int64
 	defaultProviders []string
+	pollingTip       atomic.Bool
 
 	*assetWallet
 }
@@ -2648,9 +2663,14 @@ func (w *ETHWallet) Send(addr string, value, _ uint64) (asset.Coin, error) {
 		return nil, err
 	}
 
-	txHash := tx.Hash()
+	// nonceMtx is released by sendToAddr, so balance() is safe to call here.
+	// Emit an immediate balance update so the UI reflects the pending deduction
+	// without waiting for the next block.
+	if bal, err := w.balance(); err == nil {
+		w.emit.BalanceChange(bal)
+	}
 
-	return &coin{txHash: txHash, value: value}, nil
+	return &coin{txHash: tx.Hash(), value: value}, nil
 }
 
 // Send sends the exact value to the specified address. Fees are taken from the
@@ -2669,6 +2689,13 @@ func (w *TokenWallet) Send(addr string, value, _ uint64) (asset.Coin, error) {
 	tx, err := w.sendToAddr(common.HexToAddress(addr), value, maxFeeRate, tipRate)
 	if err != nil {
 		return nil, err
+	}
+
+	if bal, err := w.balance(); err == nil {
+		w.emit.BalanceChange(bal)
+	}
+	if bal, err := w.parent.balance(); err == nil {
+		w.parent.emit.BalanceChange(bal)
 	}
 
 	return &coin{txHash: tx.Hash(), value: value}, nil
@@ -2813,6 +2840,7 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 	}
 
 	checkNewBlocks := func() {
+		defer eth.pollingTip.Store(false)
 		innerCtx, cancel := context.WithTimeout(ctx, onChainDataFetchTimeout)
 		defer cancel()
 		bestHdr, err := eth.node.bestHeader(innerCtx)
@@ -2830,7 +2858,17 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 				eth.applyTipChange(hdr)
 			}
 		case <-ticker.C:
-			checkNewBlocks()
+			// When the WS subscription is active, run the fallback poll in a
+			// goroutine so a slow or blocked RPC call cannot hold up delivery
+			// of incoming WS headers. applyTipChange is safe to call
+			// concurrently (same-hash calls are no-ops).
+			if newHeadCh != nil {
+				if eth.pollingTip.CompareAndSwap(false, true) {
+					go checkNewBlocks()
+				}
+			} else {
+				checkNewBlocks()
+			}
 		case <-ctx.Done():
 			return
 		}
@@ -2847,24 +2885,60 @@ func (eth *ETHWallet) applyTipChange(bestHdr *types.Header) {
 	bestHash := bestHdr.Hash()
 	// This method is called frequently. Don't hold write lock
 	// unless tip has changed.
-	currentTipHash := eth.tip().Hash()
+	currentTip := eth.tip()
+	currentTipHash := currentTip.Hash()
 	if currentTipHash == bestHash {
 		return
 	}
 
 	eth.tipMtx.Lock()
-	prevTip := eth.currentTip
+	currentTip = eth.currentTip
+	if currentTip.Hash() == bestHash || bestHdr.Number.Cmp(currentTip.Number) < 0 {
+		eth.tipMtx.Unlock()
+		return
+	}
 	eth.currentTip = bestHdr
 	eth.tipMtx.Unlock()
 
-	eth.log.Tracef("tip change: %s (%s) => %s (%s)", prevTip.Number,
-		currentTipHash, bestHdr.Number, bestHash)
-
-	eth.checkPendingTxs()
+	// Run RPC-heavy pending tx checks in a goroutine so TipChange is emitted
+	// without waiting for receipt fetches. checkPendingTxs serializes
+	// internally via nonceMtx, so concurrent calls are safe.
+	eth.queuePendingTxCheck()
 
 	for _, w := range eth.connectedWallets() {
 		w.checkPendingApprovals()
 		w.emit.TipChange(bestHdr.Number.Uint64())
+	}
+}
+
+func (w *baseWallet) queuePendingTxCheck() {
+	if w == nil || w.ctx == nil {
+		return
+	}
+	w.pendingTxCheckQueued.Store(true)
+	if !w.pendingTxCheckRunning.CompareAndSwap(false, true) {
+		return
+	}
+	go w.runPendingTxChecks()
+}
+
+func (w *baseWallet) runPendingTxChecks() {
+	if w == nil || w.ctx == nil {
+		return
+	}
+	defer func() {
+		w.pendingTxCheckRunning.Store(false)
+		if w.ctx != nil && w.pendingTxCheckQueued.Load() && w.pendingTxCheckRunning.CompareAndSwap(false, true) {
+			go w.runPendingTxChecks()
+		}
+	}()
+
+	for {
+		w.pendingTxCheckQueued.Store(false)
+		w.checkPendingTxs()
+		if w.ctx.Err() != nil || !w.pendingTxCheckQueued.Load() {
+			return
+		}
 	}
 }
 
@@ -3375,13 +3449,14 @@ func (w *baseWallet) missingNoncesActionID() string {
 	return fmt.Sprintf("missingNonces_%d", w.baseChainID)
 }
 
-// updatePendingTx checks the confirmation status of a transaction. The
-// BlockNumber, Fees, and Timestamp fields of the extendedWalletTx are updated
-// if the transaction is confirmed, and if the transaction has reached the
-// required number of confirmations, it is removed from w.pendingTxs.
+// updatePendingTx applies a fetch result to a pending tx, updating its
+// confirmation state. fetched carries pre-fetched receipt/tx/header data so
+// the RPC calls can happen outside nonceMtx; when fetched is nil the calls
+// are made inline (fallback for txs that appear between phase-1 and phase-3
+// of checkPendingTxs, e.g. a tx added by a concurrent Send).
 //
-// w.nonceMtx must be held.
-func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
+// w.nonceMtx must be held (write lock).
+func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx, fetched *txFetchResult) {
 	if pendingTx.Confirmed && pendingTx.savedToDB {
 		return
 	}
@@ -3400,8 +3475,9 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
 		}
 		return
 	}
-	// Only check when the tip has changed.
-	if pendingTx.lastCheck == tip {
+	// Use >= so a goroutine carrying an older tip cannot overwrite lastCheck
+	// set by a concurrent goroutine that already processed a newer tip.
+	if pendingTx.lastCheck >= tip {
 		return
 	}
 	pendingTx.lastCheck = tip
@@ -3414,7 +3490,16 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
 		}
 	}()
 
-	receipt, tx, err := w.node.transactionAndReceipt(w.ctx, pendingTx.txHash)
+	var receipt *types.Receipt
+	var tx *types.Transaction
+	var err error
+	if fetched != nil {
+		receipt, tx, err = fetched.receipt, fetched.tx, fetched.err
+	} else {
+		innerCtx, cancel := context.WithTimeout(w.ctx, onChainDataFetchTimeout)
+		receipt, tx, err = w.node.transactionAndReceipt(innerCtx, pendingTx.txHash)
+		cancel()
+	}
 	if w.log.Level() == util.LevelTrace {
 		w.log.Tracef("Attempted to fetch tx and receipt for %s. receipt = %+v, tx = %+v, err = %+v", pendingTx.txHash, receipt, tx, err)
 	}
@@ -3465,14 +3550,21 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
 	// code I'm replacing got it from the header, so I'm gonna add this check
 	// just in case.
 	if pendingTx.Timestamp == 0 || effectiveGasPrice == nil {
-		hdr, err := w.node.headerByHash(w.ctx, receipt.BlockHash)
-		if err != nil {
-			w.log.Errorf("Error getting header for hash %v: %v", receipt.BlockHash, err)
-			return
-		}
-		if hdr == nil {
-			w.log.Errorf("Header for hash %v is nil", receipt.BlockHash)
-			return
+		var hdr *types.Header
+		if fetched != nil && fetched.hdr != nil {
+			hdr = fetched.hdr
+		} else {
+			hdrCtx, hdrCancel := context.WithTimeout(w.ctx, onChainDataFetchTimeout)
+			hdr, err = w.node.headerByHash(hdrCtx, receipt.BlockHash)
+			hdrCancel()
+			if err != nil {
+				w.log.Errorf("Error getting header for hash %v: %v", receipt.BlockHash, err)
+				return
+			}
+			if hdr == nil {
+				w.log.Errorf("Header for hash %v is nil", receipt.BlockHash)
+				return
+			}
 		}
 		gasTip, err := tx.EffectiveGasTip(hdr.BaseFee)
 		if err != nil {
@@ -3515,9 +3607,57 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx) {
 }
 
 // checkPendingTxs checks the confirmation status of all pending transactions.
+// It runs in three phases to keep nonceMtx free during RPC calls:
+//
+//  1. RLock  — identify which txs need a receipt fetch
+//  2. no lock — call transactionAndReceipt (and headerByHash when needed)
+//  3. WLock  — apply results and run the existing cleanup logic
 func (w *baseWallet) checkPendingTxs() {
 	tip := w.tipHeight()
 
+	// Phase 1: identify txs that need a receipt fetch (RLock, read-only).
+	type pendingFetch struct {
+		pendingTx   *extendedWalletTx
+		needsHeader bool // true when Timestamp==0, so we'll also need headerByHash
+	}
+	w.nonceMtx.RLock()
+	var toFetch []pendingFetch
+	for _, pendingTx := range w.pendingTxs {
+		if pendingTx.Confirmed && pendingTx.savedToDB {
+			continue
+		}
+		confs := safeConfs(tip, pendingTx.BlockNumber)
+		if pendingTx.BlockNumber > 0 && confs < w.finalizeConfs {
+			continue // waiting for confs only, no fetch needed
+		}
+		if pendingTx.lastCheck >= tip {
+			continue
+		}
+		toFetch = append(toFetch, pendingFetch{pendingTx, pendingTx.Timestamp == 0})
+	}
+	w.nonceMtx.RUnlock()
+
+	// Phase 2: fetch receipts (and headers when needed) outside any lock.
+	preFetched := make(map[*extendedWalletTx]*txFetchResult, len(toFetch))
+	for _, f := range toFetch {
+		if w.ctx.Err() != nil {
+			break
+		}
+		res := &txFetchResult{}
+		innerCtx, cancel := context.WithTimeout(w.ctx, onChainDataFetchTimeout)
+		res.receipt, res.tx, res.err = w.node.transactionAndReceipt(innerCtx, f.pendingTx.txHash)
+		cancel()
+		if res.err == nil && res.receipt != nil &&
+			res.receipt.BlockNumber != nil && res.receipt.BlockNumber.Sign() > 0 &&
+			(f.needsHeader || res.receipt.EffectiveGasPrice == nil) {
+			hdrCtx, hdrCancel := context.WithTimeout(w.ctx, onChainDataFetchTimeout)
+			res.hdr, _ = w.node.headerByHash(hdrCtx, res.receipt.BlockHash)
+			hdrCancel()
+		}
+		preFetched[f.pendingTx] = res
+	}
+
+	// Phase 3: apply all updates and run cleanup under write lock.
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
 
@@ -3540,7 +3680,7 @@ func (w *baseWallet) checkPendingTxs() {
 		if w.ctx.Err() != nil {
 			return
 		}
-		w.updatePendingTx(tip, pendingTx)
+		w.updatePendingTx(tip, pendingTx, preFetched[pendingTx])
 
 		if pendingTx.Confirmed {
 			lastConfirmed = i

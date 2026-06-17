@@ -3401,7 +3401,6 @@ func (c *Core) runBalanceChange(assetID uint32) {
 // a connection error is encountered such that tip change reporting may be
 // adversely affected.
 func (c *Core) tipChange(assetID uint32, tip uint64) {
-	c.log.Tracef("Processing tip change for %s", unbip(assetID))
 	c.waiterMtx.RLock()
 	for id, waiter := range c.blockWaiters {
 		if waiter.assetID != assetID {
@@ -3429,9 +3428,6 @@ func (c *Core) tipChange(assetID uint32, tip uint64) {
 		ss.Blocks = tip
 		w.syncStatus = &ss
 		w.mtx.Unlock()
-	}
-
-	if _, exists := c.wallet(assetID); exists {
 		c.updateBalances(assetMap{assetID: {}})
 	}
 }
