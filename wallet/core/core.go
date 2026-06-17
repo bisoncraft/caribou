@@ -353,12 +353,22 @@ func (c *Core) Run(ctx context.Context) {
 	ctxTxDB, stopTxDB := context.WithCancel(context.Background())
 	txDBWG, err := c.txDB.Connect(ctxTxDB)
 	if err != nil {
-		c.log.Errorf("Error connecting transaction database: %v", err)
+		// The transaction database is essential: wallets are wired to it
+		// before Run is called, so continuing here would leave them writing
+		// to a closed handle. Treat a connect failure as fatal, mirroring the
+		// initialize() path above.
+		c.log.Critical(fmt.Errorf("error connecting transaction database: %w", err))
 		// Connect did not take ownership of the DB opened by New(), so close
 		// it here; nothing else will. txDBWG is nil on this path.
 		if closeErr := c.txDB.Close(); closeErr != nil {
 			c.log.Errorf("Error closing transaction database: %v", closeErr)
 		}
+		// Tear down the DB goroutine started above before returning so it does
+		// not leak. stopTxDB releases the (unused) tx DB context.
+		stopTxDB()
+		stopDB()
+		dbWG.Wait()
+		return
 	}
 
 	// Retrieve disabled fiat rate sources from database.

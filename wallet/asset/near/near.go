@@ -661,7 +661,12 @@ func (w *NearWallet) scanChunk(chunkHash string, blockHeight, blockTime uint64) 
 		}
 
 		// Check if we already have this tx.
-		if existing, _ := w.txDB.GetTx(ct.Hash); existing != nil {
+		existing, err := w.txDB.GetTx(ct.Hash)
+		if err != nil {
+			w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
+			continue
+		}
+		if existing != nil {
 			continue
 		}
 

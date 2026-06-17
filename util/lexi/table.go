@@ -255,7 +255,10 @@ func (t *Table) SetBatch(pairs []KVPair, setOpts ...SetOption) error {
 	}
 	return t.Update(func(txn *badger.Txn) error {
 		for _, p := range pairs {
-			opts := append([]SetOption{WithTxn(txn)}, setOpts...)
+			// WithTxn(txn) must be applied last so it always wins: options are
+			// applied in order and last-write-wins, so a caller-supplied WithTxn
+			// in setOpts must not be allowed to override the batch transaction.
+			opts := append(append([]SetOption{}, setOpts...), WithTxn(txn))
 			if err := t.Set(p.K, p.V, opts...); err != nil {
 				return err
 			}
