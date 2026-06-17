@@ -679,11 +679,6 @@ func runRubric(t *testing.T, f testFunc) {
 	})
 }
 
-func decodeString(s string) []byte {
-	b, _ := hex.DecodeString(s)
-	return b
-}
-
 // Since ReturnCoins takes the asset.Coin interface, make sure any interface
 // is acceptable.
 type tCoin struct{ id []byte }

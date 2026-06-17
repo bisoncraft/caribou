@@ -1761,7 +1761,7 @@ func (btc *baseWallet) feeRate(confTarget uint64) (feeRate uint64, err error) {
 	}
 
 	// External estimate fallback. Error if it exceeds our limit, and the caller
-	// may use btc.fallbackFeeRate(), as in targetFeeRateWithFallback.
+	// may use btc.fallbackFeeRate(), as in feeRateWithFallback.
 	feeRate, err = btc.feeCache.rate(btc.ctx, btc.Network) // e.g. externalFeeRate
 	if err != nil {
 		btc.log.Meter("feeRate.rate.fail", time.Hour).Errorf("Failed to get fee rate from external API: %v", err)
@@ -1828,19 +1828,6 @@ type amount uint64
 
 func (a amount) String() string {
 	return strconv.FormatFloat(btcutil.Amount(a).ToBTC(), 'f', -1, 64) // dec, but no trailing zeros
-}
-
-// targetFeeRateWithFallback attempts to get a fresh fee rate for the target
-// number of confirmations, but falls back to the suggestion or fallbackFeeRate
-// via feeRateWithFallback.
-func (btc *baseWallet) targetFeeRateWithFallback(confTarget, feeSuggestion uint64) uint64 {
-	feeRate, err := btc.feeRate(confTarget)
-	if err == nil && feeRate > 0 {
-		btc.log.Tracef("Obtained estimate for %d-conf fee rate, %d", confTarget, feeRate)
-		return feeRate
-	}
-	btc.log.Tracef("no %d-conf feeRate available: %v", confTarget, err)
-	return btc.feeRateWithFallback(feeSuggestion)
 }
 
 // feeRateWithFallback filters the suggested fee rate by ensuring it is within
@@ -2560,22 +2547,6 @@ func (btc *baseWallet) txDB() *BadgerTxDB {
 		return nil
 	}
 	return db
-}
-
-func (btc *baseWallet) removeTxFromHistory(txHash *chainhash.Hash) {
-	txHistoryDB := btc.txDB()
-	if txHistoryDB == nil {
-		return
-	}
-
-	err := txHistoryDB.RemoveTx(txHash.String())
-	if err != nil {
-		btc.log.Errorf("failed to remove tx from tx history db: %v", err)
-	}
-
-	btc.pendingTxsMtx.Lock()
-	delete(btc.pendingTxs, *txHash)
-	btc.pendingTxsMtx.Unlock()
 }
 
 func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, skipNotes ...bool) {
@@ -3779,20 +3750,6 @@ func hashContract(segwit bool, contract []byte) []byte {
 		return h[:]
 	}
 	return btcutil.Hash160(contract) // BIP16
-}
-
-// scriptHashAddress returns a new p2sh or p2wsh address, depending on whether
-// the wallet is configured for segwit.
-func (btc *baseWallet) scriptHashAddress(contract []byte) (btcutil.Address, error) {
-	return scriptHashAddress(btc.segwit, contract, btc.chainParams)
-}
-
-func (btc *baseWallet) scriptHashScript(contract []byte) ([]byte, error) {
-	addr, err := btc.scriptHashAddress(contract)
-	if err != nil {
-		return nil, err
-	}
-	return txscript.PayToAddrScript(addr)
 }
 
 // CallRPC is a method for making RPC calls directly on an underlying RPC

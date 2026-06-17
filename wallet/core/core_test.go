@@ -71,12 +71,11 @@ var (
 		MaxFeeRate: 20,
 		SwapConf:   1,
 	}
-	tPW                = []byte("dexpw")
-	wPW                = []byte("walletpw")
-	errTest            = fmt.Errorf("test error")
-	tFeeAsset   uint32 = 42
-	tLogger            = util.StdOutLogger("TCORE", util.LevelInfo)
-	tWalletInfo        = &asset.WalletInfo{
+	tPW         = []byte("dexpw")
+	wPW         = []byte("walletpw")
+	errTest     = fmt.Errorf("test error")
+	tLogger     = util.StdOutLogger("TCORE", util.LevelInfo)
+	tWalletInfo = &asset.WalletInfo{
 		SupportedVersions: []uint32{0},
 		UnitInfo: util.UnitInfo{
 			Conventional: util.Denomination{
