@@ -302,29 +302,6 @@ func listSinceBlock(c rpcCaller, txHash *chainhash.Hash) ([]btcjson.ListTransact
 	return res.Transactions, nil
 }
 
-type walletInfoRes struct {
-	WalletVersion              int     `json:"walletversion"`
-	Balance                    float64 `json:"balance"`
-	UnconfirmedBalance         float64 `json:"unconfirmed_balance"`
-	ImmatureBalance            float64 `json:"immature_balance"`
-	ShieldedBalance            string  `json:"shielded_balance"`
-	ShieldedUnconfirmedBalance string  `json:"shielded_unconfirmed_balance"`
-	TxCount                    int     `json:"txcount"`
-	KeypoolOldest              int     `json:"keypoololdest"`
-	KeypoolSize                int     `json:"keypoolsize"`
-	PayTxFee                   float64 `json:"paytxfee"`
-	MnemonicSeedfp             string  `json:"mnemonic_seedfp"`
-	LegacySeedfp               string  `json:"legacy_seedfp,omitempty"`
-}
-
-func walletInfo(c rpcCaller) (*walletInfoRes, error) {
-	var res walletInfoRes
-	if err := c.CallRPC("getwalletinfo", nil, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
 func getReceivedByAddress(c rpcCaller, addrStr string) (recv uint64, _ error) {
 	const minConf = 0
 	const inZats = true

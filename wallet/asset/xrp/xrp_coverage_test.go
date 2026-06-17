@@ -858,6 +858,13 @@ func TestTipWorkerCoalescing(t *testing.T) {
 	w.running.Store(true)
 	w.tip = 100
 
+	// Queue both tips into the buffered channel before starting the consumer,
+	// so the goroutine cannot wake and drain the channel between the two sends.
+	// Otherwise it may read 101, find the channel empty, and process 101 alone
+	// before 105 is queued (flaky, especially under -race).
+	tipCh <- 101
+	tipCh <- 105
+
 	// Override handleValidatedTip via a thin goroutine that records which tip
 	// reached processing. We run a direct tipWorker loop manually.
 	go func() {
@@ -882,10 +889,6 @@ func TestTipWorkerCoalescing(t *testing.T) {
 			}
 		}
 	}()
-
-	// Queue two tips; only the higher one should be processed in the first pass.
-	tipCh <- 101
-	tipCh <- 105
 
 	select {
 	case tip := <-processed:
