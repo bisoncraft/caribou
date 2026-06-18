@@ -64,15 +64,7 @@ var (
 	// Compatible).
 
 	walletOpts = []*asset.ConfigOption{
-		{
-			Key:         "gasfeelimit",
-			DisplayName: "Gas Fee Limit",
-			Description: "This is the highest network fee rate you are willing to " +
-				"pay on swap transactions. If gasfeelimit is lower than a market's " +
-				"maxfeerate, you will not be able to trade on that market with this " +
-				"wallet.  Units: gwei / gas",
-			DefaultValue: strconv.FormatUint(defaultGasFeeLimit, 10),
-		},
+		eth.GasFeeConfigOption(defaultGasFeeLimit),
 	}
 	rpcWalletDefinition = &asset.WalletDefinition{
 		Type:        walletTypeRPC,

@@ -597,6 +597,103 @@ func TestCheckPendingTxs(t *testing.T) {
 	}
 }
 
+// TestCheckPendingTxsHeaderMiss exercises the path where the phase-2 header
+// pre-fetch returns nil (provider doesn't have the block yet). The tx must not
+// be finalized on the first call, must not trigger a lost-nonce action, and
+// must finalize correctly once the header becomes available on the next tip.
+// It also verifies that subsequent header-miss retries do not write to the DB
+// again (updated=false prevents spam writes).
+func TestCheckPendingTxsHeaderMiss(t *testing.T) {
+	_, eth, node, shutdown := tassetWallet(BipID)
+	defer shutdown()
+
+	const tip1 = uint64(1000)
+	const tip2 = uint64(1001)
+	const tip3 = uint64(1002)
+	now := uint64(time.Now().Unix())
+
+	emitChan := make(chan asset.WalletNotification, 128)
+	eth.emit = asset.NewWalletEmitter(emitChan, BipID, eth.log)
+
+	db := eth.txDB.(*tTxDB)
+
+	val := GweiToWei(1)
+	pendingTx := eth.extendedTx(&genTxResult{
+		tx:     node.newTransaction(0, val),
+		txType: txdb.Send,
+		amt:    1,
+	})
+	// Timestamp=0 forces a header fetch; BlockNumber=0 means not yet mined.
+	pendingTx.Timestamp = 0
+	pendingTx.BlockNumber = 0
+
+	receipt := &types.Receipt{
+		BlockNumber:       big.NewInt(int64(tip1 - 2)),
+		EffectiveGasPrice: big.NewInt(1),
+	}
+	node.receipts[pendingTx.txHash] = receipt
+	node.receiptTxs[pendingTx.txHash], _ = pendingTx.tx()
+	// Deliberately omit node.hdrByHash entry so headerByHash returns (nil, nil).
+
+	eth.currentTip = &types.Header{Number: new(big.Int).SetUint64(tip1)}
+	eth.pendingTxs = []*extendedWalletTx{pendingTx}
+	eth.confirmedNonceAt = pendingTx.Nonce
+	eth.pendingNonceAt = new(big.Int).Add(pendingTx.Nonce, big.NewInt(1))
+
+	eth.checkPendingTxs()
+
+	// Tx must still be pending: header was unavailable so state is incomplete.
+	if len(eth.pendingTxs) != 1 {
+		t.Fatalf("expected 1 pending tx after header miss, got %d", len(eth.pendingTxs))
+	}
+	if pendingTx.Timestamp != 0 {
+		t.Errorf("Timestamp should still be 0 after header miss, got %d", pendingTx.Timestamp)
+	}
+	if pendingTx.BlockNumber != 0 {
+		t.Errorf("BlockNumber should still be 0 after header miss, got %d", pendingTx.BlockNumber)
+	}
+	// First save should have occurred via the !savedToDB path.
+	if !db.storeTxCalled {
+		t.Error("expected first DB save via !savedToDB, but storeTx was not called")
+	}
+	// No spurious action should be queued.
+	select {
+	case n := <-emitChan:
+		if _, ok := n.(*asset.ActionRequiredNote); ok {
+			t.Fatalf("unexpected action note after header miss: %v", n)
+		}
+	default:
+	}
+
+	// Second run: header still missing, tip advanced. Should NOT write to DB
+	// again — updated=false prevents spam writes on every tip.
+	db.storeTxCalled = false
+	eth.currentTip = &types.Header{Number: new(big.Int).SetUint64(tip2)}
+	eth.checkPendingTxs()
+	if db.storeTxCalled {
+		t.Error("DB should not be written again on subsequent header-miss retries")
+	}
+
+	// Third run: header now available. Tx should finalize and DB should be written.
+	node.hdrByHash[receipt.BlockHash] = &types.Header{
+		Number: receipt.BlockNumber,
+		Time:   now,
+	}
+	db.storeTxCalled = false
+	eth.currentTip = &types.Header{Number: new(big.Int).SetUint64(tip3)}
+	eth.checkPendingTxs()
+
+	if pendingTx.Timestamp == 0 {
+		t.Error("Timestamp should be set after header becomes available")
+	}
+	if pendingTx.BlockNumber == 0 {
+		t.Error("BlockNumber should be set after header becomes available")
+	}
+	if !db.storeTxCalled {
+		t.Error("expected DB write after successful finalization")
+	}
+}
+
 func TestTakeAction(t *testing.T) {
 	t.Parallel()
 	_, eth, node, shutdown := tassetWallet(BipID)

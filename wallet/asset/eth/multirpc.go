@@ -433,7 +433,6 @@ type multiRPCClient struct {
 	// subscription, allowing monitorBlocks to react without an additional
 	// HeaderByNumber call.
 	newHeadCh chan *types.Header
-	hasWS     atomic.Bool
 }
 
 var _ ethFetcher = (*multiRPCClient)(nil)
@@ -717,14 +716,6 @@ func (m *multiRPCClient) connect(ctx context.Context) (err error) {
 	m.providerMtx.Lock()
 	m.providers = providers
 	m.providerMtx.Unlock()
-	hasWS := false
-	for _, p := range providers {
-		if p.ws {
-			hasWS = true
-			break
-		}
-	}
-	m.hasWS.Store(hasWS)
 
 	var connections int
 	for _, p := range m.providerList() {
@@ -855,15 +846,6 @@ func (m *multiRPCClient) reconfigure(ctx context.Context, endpoints []string, co
 	if err != nil {
 		return err
 	}
-	hasWS := false
-	for _, p := range providers {
-		if p.ws {
-			hasWS = true
-			break
-		}
-	}
-	m.hasWS.Store(hasWS)
-
 	m.providerMtx.Lock()
 	oldProviders := m.providers
 	m.providers = providers

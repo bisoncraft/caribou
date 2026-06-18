@@ -5,10 +5,8 @@ package polygon
 
 import (
 	"fmt"
-	"os"
 	"os/user"
 	"path/filepath"
-	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
@@ -50,29 +48,10 @@ func NetworkCompatibilityData(net util.Network) (c eth.CompatibilityData, err er
 	if err != nil {
 		return
 	}
-
-	addr := common.HexToAddress("18d65fb8d60c1199bb1ad381be47aa692b482605")
-	var (
-		tTxHashFile    = filepath.Join(tDir, "test_tx_hash.txt")
-		tBlockHashFile = filepath.Join(tDir, "test_block1_hash.txt")
-		tContractFile  = filepath.Join(tDir, "test_usdc_contract_address.txt")
-	)
-	readIt := func(path string) string {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			panic(fmt.Sprintf("Problem reading simnet testing file %q: %v", path, err))
-		}
-		return strings.TrimSpace(string(b)) // mainly the trailing "\r\n"
-	}
-	return eth.CompatibilityData{
-		Addr:      addr,
-		TokenAddr: common.HexToAddress(readIt(tContractFile)),
-		TxHash:    common.HexToHash(readIt(tTxHashFile)),
-		BlockHash: common.HexToHash(readIt(tBlockHashFile)),
-	}, nil
+	return eth.ReadSimnetCompatibilityData(tDir, common.HexToAddress("18d65fb8d60c1199bb1ad381be47aa692b482605"), common.Address{})
 }
 
-// simnetDataDir returns the data directory for Ethereum simnet.
+// simnetDataDir returns the data directory for Polygon simnet.
 func simnetDataDir() (string, error) {
 	u, err := user.Current()
 	if err != nil {

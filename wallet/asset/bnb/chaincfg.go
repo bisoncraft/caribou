@@ -8,7 +8,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
@@ -54,39 +53,11 @@ func simnetCompatibilityData() (eth.CompatibilityData, error) {
 	if err != nil {
 		return eth.CompatibilityData{}, err
 	}
-
-	readIt := func(path string) (string, error) {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(string(b)), nil
-	}
-
-	txHash, err := readIt(filepath.Join(tDir, "test_tx_hash.txt"))
-	if err != nil {
-		return eth.CompatibilityData{}, fmt.Errorf("read test tx hash: %w", err)
-	}
-	blockHash, err := readIt(filepath.Join(tDir, "test_block1_hash.txt"))
-	if err != nil {
-		return eth.CompatibilityData{}, fmt.Errorf("read test block hash: %w", err)
-	}
-
-	tokenAddr := simnetUSDC.Address
-	if tokenAddr == (common.Address{}) {
-		contractAddr, err := readIt(filepath.Join(tDir, "test_usdc_contract_address.txt"))
-		if err != nil {
-			return eth.CompatibilityData{}, fmt.Errorf("read test token address: %w", err)
-		}
-		tokenAddr = common.HexToAddress(contractAddr)
-	}
-
-	return eth.CompatibilityData{
-		Addr:      common.HexToAddress("0x18d65fb8d60c1199bb1ad381be47aa692b482605"),
-		TokenAddr: tokenAddr,
-		TxHash:    common.HexToHash(txHash),
-		BlockHash: common.HexToHash(blockHash),
-	}, nil
+	return eth.ReadSimnetCompatibilityData(
+		tDir,
+		common.HexToAddress("0x18d65fb8d60c1199bb1ad381be47aa692b482605"),
+		simnetUSDC.Address,
+	)
 }
 
 func simnetDataDir() (string, error) {

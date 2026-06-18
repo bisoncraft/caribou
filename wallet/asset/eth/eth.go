@@ -122,24 +122,30 @@ const (
 	txAgeOut = 2 * time.Hour
 	// chainOpTick is used by explicit chain wait/recheck loops that are not
 	// part of the steady-state tip monitoring path.
-	chainOpTick = time.Second * 2
+	chainOpTick = time.Second
 	// maxUnindexedTxs is the number of pending txs we will allow to be
 	// unverified on-chain before we halt broadcasting of new txs.
 	maxUnindexedTxs = 10
 	peerCountTicker = 5 * time.Second // no rpc calls here
 )
 
+// GasFeeConfigOption returns the gasfeelimit ConfigOption with the supplied
+// default (gwei / gas).
+func GasFeeConfigOption(defaultGwei uint64) *asset.ConfigOption {
+	return &asset.ConfigOption{
+		Key:         "gasfeelimit",
+		DisplayName: "Gas Fee Limit",
+		Description: "This is the highest network fee rate you are willing to " +
+			"pay on swap transactions. If gasfeelimit is lower than a market's " +
+			"maxfeerate, you will not be able to trade on that market with this " +
+			"wallet. Units: gwei / gas",
+		DefaultValue: strconv.FormatUint(defaultGwei, 10),
+	}
+}
+
 var (
 	walletOpts = []*asset.ConfigOption{
-		{
-			Key:         "gasfeelimit",
-			DisplayName: "Gas Fee Limit",
-			Description: "This is the highest network fee rate you are willing to " +
-				"pay on swap transactions. If gasfeelimit is lower than a market's " +
-				"maxfeerate, you will not be able to trade on that market with this " +
-				"wallet.  Units: gwei / gas",
-			DefaultValue: strconv.FormatUint(defaultGasFeeLimit, 10),
-		},
+		GasFeeConfigOption(defaultGasFeeLimit),
 	}
 	RPCOpts = []*asset.ConfigOption{
 		{
@@ -3553,7 +3559,17 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx, fe
 		var hdr *types.Header
 		if fetched != nil && fetched.hdr != nil {
 			hdr = fetched.hdr
+		} else if fetched != nil {
+			// Header was pre-fetched outside the lock but failed; skip this
+			// update cycle to avoid a blocking RPC under nonceMtx. The next
+			// tip will trigger a retry. Clear updated so the defer does not
+			// spam DB writes with incomplete state on every tip.
+			updated = false
+			w.log.Warnf("Skipping header-dependent update for %s: header not available, will retry on next tip", pendingTx.txHash)
+			return
 		} else {
+			// No pre-fetch (tx added after phase 1, e.g. by concurrent Send);
+			// fall back to inline fetch.
 			hdrCtx, hdrCancel := context.WithTimeout(w.ctx, onChainDataFetchTimeout)
 			hdr, err = w.node.headerByHash(hdrCtx, receipt.BlockHash)
 			hdrCancel()
@@ -3651,8 +3667,12 @@ func (w *baseWallet) checkPendingTxs() {
 			res.receipt.BlockNumber != nil && res.receipt.BlockNumber.Sign() > 0 &&
 			(f.needsHeader || res.receipt.EffectiveGasPrice == nil) {
 			hdrCtx, hdrCancel := context.WithTimeout(w.ctx, onChainDataFetchTimeout)
-			res.hdr, _ = w.node.headerByHash(hdrCtx, res.receipt.BlockHash)
+			var hdrErr error
+			res.hdr, hdrErr = w.node.headerByHash(hdrCtx, res.receipt.BlockHash)
 			hdrCancel()
+			if hdrErr != nil {
+				w.log.Debugf("Pre-fetch of header for block %v failed: %v", res.receipt.BlockHash, hdrErr)
+			}
 		}
 		preFetched[f.pendingTx] = res
 	}
