@@ -16,7 +16,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -773,6 +772,9 @@ type baseWallet struct {
 	receiveTxLastQuery atomic.Uint64
 
 	txHistoryDB atomic.Value // *BadgerTxDB
+	// netTxDB is the master transaction database handle supplied by Core,
+	// scoped to this wallet's network. It backs txHistoryDB.
+	netTxDB txdb.NetworkTxDB
 
 	ar *AddressRecycler
 }
@@ -1293,6 +1295,7 @@ func newUnconnectedWallet(cfg *BTCCloneCFG, walletCfg *WalletConfig) (*baseWalle
 		Network:           cfg.Network,
 		pendingTxs:        make(map[chainhash.Hash]ExtendedWalletTx),
 		walletDir:         walletDir,
+		netTxDB:           cfg.WalletCFG.NetworkTxDB,
 		ar:                addressRecyler,
 	}
 	w.cfgV.Store(baseCfg)
@@ -1459,84 +1462,20 @@ func (btc *baseWallet) Info() *asset.WalletInfo {
 	return btc.walletInfo
 }
 
-func (btc *baseWallet) txHistoryDBPath(walletID string) string {
-	return filepath.Join(btc.walletDir, fmt.Sprintf("txhistorydb-%s", walletID))
-}
-
-// findExistingAddressBasedTxHistoryDB finds the path of a tx history db that
-// was created using an address controlled by the wallet. This should only be
-// used for wallets that are unable to generate a fingerprint.
-func (btc *baseWallet) findExistingAddressBasedTxHistoryDB() (string, error) {
-	dir, err := os.Open(btc.walletDir)
-	if err != nil {
-		return "", fmt.Errorf("error opening wallet directory: %w", err)
-	}
-	defer dir.Close()
-
-	entries, err := dir.Readdir(0)
-	if err != nil {
-		return "", fmt.Errorf("error reading wallet directory: %w", err)
-	}
-
-	pattern := regexp.MustCompile(`^txhistorydb-(.+)$`)
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		match := pattern.FindStringSubmatch(entry.Name())
-		if match == nil {
-			continue
-		}
-
-		address := match[1]
-		owns, err := btc.OwnsDepositAddress(address)
-		if err != nil {
-			continue
-		}
-		if owns {
-			return filepath.Join(btc.walletDir, entry.Name()), nil
-		}
-	}
-
-	return "", nil
-}
-
 func (btc *baseWallet) startTxHistoryDB(ctx context.Context) (*sync.WaitGroup, error) {
-	var dbPath string
-	fingerPrint, err := btc.node.Fingerprint()
-	if err == nil && fingerPrint != "" {
-		dbPath = btc.txHistoryDBPath(fingerPrint)
+	// The transaction database is the master tx DB handle supplied by Core,
+	// scoped to this wallet's network. Core owns its lifecycle, so there is no
+	// per-wallet database to open or close here and nothing to wait on.
+	var wg sync.WaitGroup
+	if btc.netTxDB == nil {
+		return &wg, nil
 	}
 
-	if dbPath == "" {
-		addressPath, err := btc.findExistingAddressBasedTxHistoryDB()
-		if err != nil {
-			return nil, err
-		}
-		if addressPath != "" {
-			dbPath = addressPath
-		}
-	}
-
-	if dbPath == "" {
-		depositAddr, err := btc.DepositAddress()
-		if err != nil {
-			return nil, fmt.Errorf("error getting deposit address: %w", err)
-		}
-		dbPath = btc.txHistoryDBPath(depositAddr)
-	}
-
-	btc.log.Debugf("Using tx history db at %s", dbPath)
-
-	db := NewBadgerTxDB(dbPath, btc.log)
-	btc.txHistoryDB.Store(db)
-
-	wg, err := db.Connect(ctx)
+	db, err := NewBadgerTxDB(btc.netTxDB, btc.log)
 	if err != nil {
 		return nil, err
 	}
+	btc.txHistoryDB.Store(db)
 
 	pendingTxs, err := db.GetPendingTxs()
 	if err != nil {
@@ -1563,7 +1502,7 @@ func (btc *baseWallet) startTxHistoryDB(ctx context.Context) (*sync.WaitGroup, e
 
 	btc.receiveTxLastQuery.Store(lastQuery)
 
-	return wg, nil
+	return &wg, nil
 }
 
 // connect is shared between Wallet implementations that may have different
@@ -2667,25 +2606,24 @@ func (btc *baseWallet) markTxAsSubmitted(txHash *chainhash.Hash) {
 		return
 	}
 
-	err := txHistoryDB.MarkTxAsSubmitted(txHash.String())
-	if err != nil {
-		btc.log.Errorf("failed to mark tx as submitted in tx history db: %v", err)
-	}
-
-	btc.pendingTxsMtx.RLock()
+	btc.pendingTxsMtx.Lock()
 	wt, found := btc.pendingTxs[*txHash]
-	btc.pendingTxsMtx.RUnlock()
+	if found {
+		wt.Submitted = true
+		btc.pendingTxs[*txHash] = wt
+	}
+	btc.pendingTxsMtx.Unlock()
 
 	if !found {
 		btc.log.Errorf("tx %s not found in pending txs", txHash)
 		return
 	}
 
-	wt.Submitted = true
-
-	btc.pendingTxsMtx.Lock()
-	btc.pendingTxs[*txHash] = wt
-	btc.pendingTxsMtx.Unlock()
+	// The transaction was held back from the shared DB until broadcast; write
+	// it now that it is submitted.
+	if err := txHistoryDB.StoreTx(&wt); err != nil {
+		btc.log.Errorf("failed to store submitted tx in tx history db: %v", err)
+	}
 
 	btc.emit.TransactionNote(wt.WalletTransaction, true)
 }
@@ -2723,9 +2661,13 @@ func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainh
 		btc.pendingTxsMtx.Unlock()
 	}
 
-	err := txHistoryDB.StoreTx(ewt)
-	if err != nil {
-		btc.log.Errorf("failed to store tx in tx history db: %v", err)
+	// Unsubmitted transactions are held only in the in-memory pending map until
+	// they are broadcast (markTxAsSubmitted writes them to the shared DB), so
+	// the database never contains unsubmitted transactions.
+	if submitted {
+		if err := txHistoryDB.StoreTx(ewt); err != nil {
+			btc.log.Errorf("failed to store tx in tx history db: %v", err)
+		}
 	}
 
 	skipNote := len(skipNotes) > 0 && skipNotes[0]

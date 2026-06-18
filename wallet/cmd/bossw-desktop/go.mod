@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	decred.org/cspp/v2 v2.4.0 // indirect
 	decred.org/dcrwallet v1.7.0 // indirect
 	github.com/AndreasBriese/bbloom v0.0.0-20190825152654-46b345b51c96 // indirect
 	github.com/BurntSushi/toml v1.4.0 // indirect
@@ -21,18 +22,26 @@ require (
 	github.com/bisoncraft/op-geth v0.0.0-20250729074358-3cfe4f15e91c // indirect
 	github.com/bits-and-blooms/bitset v1.22.0 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
+	github.com/companyzero/sntrup4591761 v0.0.0-20220309191932-9e0f3af2f07a // indirect
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a // indirect
+	github.com/decred/dcrd/addrmgr/v3 v3.0.0 // indirect
 	github.com/decred/dcrd/blockchain/stake/v3 v3.0.0 // indirect
+	github.com/decred/dcrd/connmgr/v3 v3.1.4 // indirect
+	github.com/decred/dcrd/container/lru v1.0.0 // indirect
 	github.com/decred/dcrd/crypto/rand v1.0.1 // indirect
 	github.com/decred/dcrd/database/v2 v2.0.2 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v3 v3.0.0 // indirect
 	github.com/decred/dcrd/dcrutil/v3 v3.0.0 // indirect
 	github.com/decred/dcrd/gcs/v2 v2.1.0 // indirect
+	github.com/decred/dcrd/mixing v0.6.1 // indirect
 	github.com/decred/dcrd/txscript/v3 v3.0.0 // indirect
 	github.com/decred/dcrtime v0.0.0-20191018193024-8d8b4ef0458e // indirect
 	github.com/decred/politeia v1.5.0 // indirect
+	github.com/decred/vspd/client/v4 v4.0.2 // indirect
+	github.com/decred/vspd/types/v2 v2.1.0 // indirect
+	github.com/decred/vspd/types/v3 v3.0.0 // indirect
 	github.com/dgraph-io/badger v1.6.2 // indirect
 	github.com/dgraph-io/badger/v4 v4.9.1 // indirect
 	github.com/dgraph-io/ristretto v0.0.2 // indirect
@@ -51,6 +60,8 @@ require (
 	github.com/gorilla/schema v1.1.0 // indirect
 	github.com/h2non/go-is-svg v0.0.0-20160927212452-35e8c4b0612c // indirect
 	github.com/holiman/billy v0.0.0-20250707135307-f2f9b9aae7db // indirect
+	github.com/jrick/bitset v1.0.0 // indirect
+	github.com/jrick/wsrpc/v2 v2.3.8 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/marcopeereboom/sbox v1.1.0 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect

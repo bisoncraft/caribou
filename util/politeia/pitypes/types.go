@@ -3,7 +3,12 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-package pi
+// Package pitypes holds the lexi-free Politeia data types shared between the
+// Politeia storage client (util/politeia), Core, the asset interface, and the
+// app server. Keeping these types out of util/politeia lets those consumers
+// reference them without importing the package's Badger (lexi) storage, so a
+// build without the dcr governance feature does not link Badger.
+package pitypes
 
 import (
 	"encoding/json"
@@ -13,6 +18,13 @@ import (
 	"github.com/decred/dcrd/txscript/v4/stdaddr"
 	rv1 "github.com/decred/politeia/politeiawww/api/records/v1"
 	tv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
+)
+
+const (
+	// VoteBitYes is the string value for identifying "yes" vote bits.
+	VoteBitYes = tv1.VoteOptionIDApprove
+	// VoteBitNo is the string value for identifying "no" vote bits.
+	VoteBitNo = tv1.VoteOptionIDReject
 )
 
 type VotingWallet interface {

@@ -4,302 +4,113 @@
 package btc
 
 import (
-	"bytes"
-	"context"
-	"encoding/hex"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
-func TestTxDB(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelInfo)
-
-	txHistoryStore := NewBadgerTxDB(tempDir, tLogger)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	wg, err := txHistoryStore.Connect(ctx)
+// newTestTxDB returns a BadgerTxDB backed by a master tx DB, for use in wallet
+// tests. The underlying storage engine is selected by build tag (Badger on
+// desktop, bbolt on mobile).
+func newTestTxDB(t *testing.T) *BadgerTxDB {
+	t.Helper()
+	log := util.StdOutLogger("TXDB", util.LevelInfo)
+	master, err := txdb.New(t.TempDir()+"/tx.db", log)
 	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
+		t.Fatalf("txdb.New: %v", err)
 	}
-	defer func() {
-		cancel()
-		wg.Wait()
-	}()
-
-	r, err := txHistoryStore.GetTxs(&txdb.TxHistoryRequest{Past: true})
+	t.Cleanup(func() { master.Close() })
+	db, err := NewBadgerTxDB(master.NetworkTxDB(BipID), log)
 	if err != nil {
-		t.Fatalf("error retrieving txs: %v", err)
+		t.Fatalf("NewBadgerTxDB: %v", err)
 	}
-	if len(r.Txs) != 0 {
-		t.Fatalf("expected 0 txs but got %d", len(r.Txs))
-	}
+	return db
+}
 
-	tx1 := &ExtendedWalletTx{
+func ewt(id string, blockNumber uint64) *ExtendedWalletTx {
+	return &ExtendedWalletTx{
 		WalletTransaction: &txdb.WalletTransaction{
 			Type:        txdb.Send,
-			ID:          hex.EncodeToString(encode.RandomBytes(32)),
-			Amount:      1e8,
-			Fees:        1e5,
-			BlockNumber: 0,
-		},
-		Submitted: false,
-	}
-
-	tx2 := &ExtendedWalletTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type:        txdb.Receive,
-			ID:          hex.EncodeToString(encode.RandomBytes(32)),
-			Amount:      1e8,
-			Fees:        3e5,
-			BlockNumber: 0,
+			ID:          id,
+			Amount:      1000,
+			BlockNumber: blockNumber,
+			Confirmed:   blockNumber > 0,
 		},
 		Submitted: true,
 	}
+}
 
-	tx3 := &ExtendedWalletTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type:        txdb.Swap,
-			ID:          hex.EncodeToString(encode.RandomBytes(32)),
-			Amount:      1e8,
-			Fees:        2e5,
-			BlockNumber: 0,
-		},
-		Submitted: true,
-	}
+func TestTxDBStoreGetPending(t *testing.T) {
+	db := newTestTxDB(t)
 
-	GetTxsAndCheck := func(n int, refID *string, past bool, expected []*txdb.WalletTransaction) {
-		t.Helper()
-
-		r, err = txHistoryStore.GetTxs(&txdb.TxHistoryRequest{
-			N:     n,
-			RefID: refID,
-			Past:  past,
-		})
-		if err != nil {
-			t.Fatalf("failed to get txs: %v", err)
-		}
-		if len(r.Txs) != len(expected) {
-			t.Fatalf("expected %d txs but got %d", len(expected), len(r.Txs))
-		}
-		for i, expectedTx := range expected {
-			if !reflect.DeepEqual(expectedTx, r.Txs[i]) {
-				t.Fatalf("transaction %d: %+v != %+v", i, expectedTx, r.Txs[i])
-			}
-		}
-	}
-
-	getPendingTxsAndCheck := func(expected []*ExtendedWalletTx) {
-		t.Helper()
-
-		txs, err := txHistoryStore.GetPendingTxs()
-		if err != nil {
-			t.Fatalf("failed to get unconfirmed txs: %v", err)
-		}
-
-		if len(txs) != len(expected) {
-			t.Fatalf("expected %d txs but got %d", len(expected), len(txs))
-		}
-
-		for i, expectedTx := range expected {
-			if !reflect.DeepEqual(expectedTx.WalletTransaction, txs[i].WalletTransaction) {
-				t.Fatalf("transaction %+v != %+v", expectedTx.WalletTransaction, txs[i].WalletTransaction)
-			}
-		}
-	}
-
-	err = txHistoryStore.StoreTx(tx1)
+	// Empty store.
+	r, err := db.GetTxs(&txdb.TxHistoryRequest{Past: true})
 	if err != nil {
-		t.Fatalf("failed to store tx: %v", err)
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if len(r.Txs) != 0 {
+		t.Fatalf("expected 0 txs, got %d", len(r.Txs))
 	}
 
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
+	if err := db.StoreTx(ewt("confirmed", 100)); err != nil {
+		t.Fatalf("StoreTx confirmed: %v", err)
+	}
+	if err := db.StoreTx(ewt("pending", 0)); err != nil {
+		t.Fatalf("StoreTx pending: %v", err)
+	}
 
-	err = txHistoryStore.MarkTxAsSubmitted(tx1.ID)
+	// GetTx hit and miss.
+	got, err := db.GetTx("confirmed")
+	if err != nil || got == nil || got.BlockNumber != 100 {
+		t.Fatalf("GetTx confirmed = %v, %v", got, err)
+	}
+	if _, err := db.GetTx("nope"); !errors.Is(err, asset.CoinNotFoundError) {
+		t.Fatalf("GetTx missing err = %v, want CoinNotFoundError", err)
+	}
+
+	// Only the unconfirmed tx is pending.
+	pending, err := db.GetPendingTxs()
 	if err != nil {
-		t.Fatalf("failed to mark tx as submitted: %v", err)
+		t.Fatalf("GetPendingTxs: %v", err)
 	}
-	tx1.Submitted = true
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
+	if len(pending) != 1 || pending[0].ID != "pending" || !pending[0].Submitted {
+		t.Fatalf("pending = %v", pending)
+	}
 
-	// Storing same pending tx twice should not change anything.
-	err = txHistoryStore.StoreTx(tx1)
+	// History includes both.
+	r, err = db.GetTxs(&txdb.TxHistoryRequest{Past: true})
 	if err != nil {
-		t.Fatalf("failed to store tx: %v", err)
+		t.Fatalf("GetTxs: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
-
-	tx1.BlockNumber = 100
-	err = txHistoryStore.StoreTx(tx1)
-	if err != nil {
-		t.Fatalf("failed to store tx: %v", err)
+	if len(r.Txs) != 2 {
+		t.Fatalf("history len = %d, want 2", len(r.Txs))
 	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
 
-	err = txHistoryStore.StoreTx(tx2)
-	if err != nil {
-		t.Fatalf("failed to store tx: %v", err)
+	// Remove.
+	if err := db.RemoveTx("confirmed"); err != nil {
+		t.Fatalf("RemoveTx: %v", err)
 	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx2.WalletTransaction, tx1.WalletTransaction})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx2, tx1})
-
-	tx2.BlockNumber = 99
-	tx2.Confirmed = true
-	err = txHistoryStore.StoreTx(tx2)
-	if err != nil {
-		t.Fatalf("failed to store tx: %v", err)
-	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx1.WalletTransaction, tx2.WalletTransaction})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx1})
-
-	err = txHistoryStore.StoreTx(tx3)
-	if err != nil {
-		t.Fatalf("failed to store tx: %v", err)
-	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx3.WalletTransaction, tx1.WalletTransaction, tx2.WalletTransaction})
-	GetTxsAndCheck(2, &tx1.ID, false, []*txdb.WalletTransaction{tx3.WalletTransaction, tx1.WalletTransaction})
-	GetTxsAndCheck(2, &tx1.ID, true, []*txdb.WalletTransaction{tx1.WalletTransaction, tx2.WalletTransaction})
-	getPendingTxsAndCheck([]*ExtendedWalletTx{tx3, tx1})
-
-	err = txHistoryStore.RemoveTx(tx1.ID)
-	if err != nil {
-		t.Fatalf("failed to remove tx: %v", err)
-	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx3.WalletTransaction, tx2.WalletTransaction})
-
-	err = txHistoryStore.RemoveTx(tx2.ID)
-	if err != nil {
-		t.Fatalf("failed to remove tx: %v", err)
-	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{tx3.WalletTransaction})
-
-	err = txHistoryStore.RemoveTx(tx3.ID)
-	if err != nil {
-		t.Fatalf("failed to remove tx: %v", err)
-	}
-	GetTxsAndCheck(0, nil, true, []*txdb.WalletTransaction{})
-
-	_, err = txHistoryStore.GetTx(tx2.ID)
-	if !errors.Is(err, asset.CoinNotFoundError) {
-		t.Fatalf("expected coin not found error but got %v", err)
+	if _, err := db.GetTx("confirmed"); !errors.Is(err, asset.CoinNotFoundError) {
+		t.Fatalf("GetTx after remove = %v, want CoinNotFoundError", err)
 	}
 }
 
 func TestSetAndGetLastQuery(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
+	db := newTestTxDB(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	txHistoryStore := NewBadgerTxDB(tempDir, tLogger)
-	wg, err := txHistoryStore.Connect(ctx)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
-	defer func() {
-		cancel()
-		wg.Wait()
-	}()
-
-	_, err = txHistoryStore.GetLastReceiveTxQuery()
-	if !errors.Is(err, ErrNeverQueried) {
-		t.Fatalf("Failed to get last query: %v", err)
+	if _, err := db.GetLastReceiveTxQuery(); !errors.Is(err, ErrNeverQueried) {
+		t.Fatalf("expected ErrNeverQueried, got %v", err)
 	}
 
-	block := uint64(12345)
-	err = txHistoryStore.SetLastReceiveTxQuery(block)
-	if err != nil {
-		t.Fatalf("Failed to set last query: %v", err)
+	const block = uint64(12345)
+	if err := db.SetLastReceiveTxQuery(block); err != nil {
+		t.Fatalf("SetLastReceiveTxQuery: %v", err)
 	}
-
-	lastQuery, err := txHistoryStore.GetLastReceiveTxQuery()
-	if err != nil {
-		t.Fatalf("Failed to get last query: %v", err)
-	}
-	if lastQuery != block {
-		t.Fatalf("Expected last query to be %d, but got %d", block, lastQuery)
-	}
-}
-
-func TestStoreAndGetSecNonce(t *testing.T) {
-	t.Parallel()
-	tempDir := t.TempDir()
-	tLogger := util.StdOutLogger("TXDB", util.LevelTrace)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	txHistoryStore := NewBadgerTxDB(tempDir, tLogger)
-	wg, err := txHistoryStore.Connect(ctx)
-	if err != nil {
-		t.Fatalf("error connecting to tx history store: %v", err)
-	}
-	defer func() {
-		cancel()
-		wg.Wait()
-	}()
-
-	// Generate random data for testing
-	pubNonce := encode.RandomBytes(32)
-	secNonce := encode.RandomBytes(32)
-	encKey := encode.RandomBytes(32)
-
-	// Store the secret nonce
-	err = txHistoryStore.StoreSecNonce(pubNonce, secNonce, encKey)
-	if err != nil {
-		t.Fatalf("failed to store secret nonce: %v", err)
-	}
-
-	// Retrieve the secret nonce
-	retrievedSecNonce, err := txHistoryStore.GetSecNonce(pubNonce, encKey)
-	if err != nil {
-		t.Fatalf("failed to get secret nonce: %v", err)
-	}
-
-	// Verify the retrieved nonce matches the original
-	if !bytes.Equal(secNonce, retrievedSecNonce) {
-		t.Fatalf("retrieved secret nonce does not match original: got %x, want %x",
-			retrievedSecNonce, secNonce)
-	}
-
-	// Test with wrong encryption key - should fail
-	wrongKey := encode.RandomBytes(32)
-	_, err = txHistoryStore.GetSecNonce(pubNonce, wrongKey)
-	if err == nil {
-		t.Fatalf("expected error when using wrong encryption key, but got none")
-	}
-
-	// Test with non-existent public nonce - should fail
-	nonExistentPubNonce := encode.RandomBytes(32)
-	_, err = txHistoryStore.GetSecNonce(nonExistentPubNonce, encKey)
-	if err == nil {
-		t.Fatalf("expected error when retrieving non-existent nonce, but got none")
-	}
-
-	// Delete the secret nonce
-	err = txHistoryStore.DeleteSecNonce(pubNonce)
-	if err != nil {
-		t.Fatalf("failed to delete secret nonce: %v", err)
-	}
-
-	// Verify the secret nonce is actually deleted by attempting to retrieve it
-	_, err = txHistoryStore.GetSecNonce(pubNonce, encKey)
-	if err == nil {
-		t.Fatalf("expected error when retrieving deleted nonce, but got none")
+	got, err := db.GetLastReceiveTxQuery()
+	if err != nil || got != block {
+		t.Fatalf("GetLastReceiveTxQuery = %d, %v; want %d", got, err, block)
 	}
 }

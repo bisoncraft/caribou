@@ -65,20 +65,17 @@ func TestHandleWSMessageTransactionEmitsBalanceChange(t *testing.T) {
 	})
 
 	log := util.NewLogger("test", util.LevelError, nil)
-	db, err := newTxDB(t.TempDir(), log)
-	if err != nil {
-		t.Fatalf("newTxDB: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	n, mt := newTestTxDB(t)
 
 	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	noteChan := make(chan asset.WalletNotification, 8)
 	w := &xrpWallet{
-		address: walletAddr,
-		rpc:     m.rpcClient(),
-		txDB:    db,
-		log:     log,
-		emit:    asset.NewWalletEmitter(noteChan, BipID, log),
+		address:   walletAddr,
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
+		emit:      asset.NewWalletEmitter(noteChan, BipID, log),
 	}
 	w.running.Store(true)
 
@@ -138,7 +135,7 @@ func TestHandleWSMessageTransactionEmitsBalanceChange(t *testing.T) {
 		t.Fatalf("expected funded balance, got %+v", balNote.Balance)
 	}
 
-	stored, err := db.getTx(txNote.Transaction.ID)
+	stored, err := n.GetTx(txNote.Transaction.ID)
 	if err != nil {
 		t.Fatalf("getTx: %v", err)
 	}

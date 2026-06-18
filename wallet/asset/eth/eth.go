@@ -467,6 +467,9 @@ type baseWallet struct {
 	}
 
 	txDB txDB
+	// netTxDB is the master transaction database handle supplied by Core,
+	// scoped to this wallet's base-chain network. It backs txDB.
+	netTxDB txdb.NetworkTxDB
 
 	bridges       map[string]bridge
 	bridgeManager *bridgeManager
@@ -743,6 +746,7 @@ func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
 		multiBalanceAddress: cfg.MultiBalAddress,
 		maxTxFeeGwei:        cfg.MaxTxFeeGwei,
 		isOpStack:           cfg.IsOpStack,
+		netTxDB:             cfg.AssetCfg.NetworkTxDB,
 	}
 
 	aw := &assetWallet{
@@ -824,13 +828,10 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 		}
 	}
 
-	w.txDB, err = NewTxDB(filepath.Join(w.dir, "txhistorydb-lexi"), w.log.SubLogger("TXDB"), w.baseChainID)
+	// The transaction database is the master tx DB handle supplied by Core,
+	// scoped to this wallet's base-chain network. Core owns its lifecycle.
+	w.txDB, err = NewTxDB(w.netTxDB, w.log.SubLogger("TXDB"), w.baseChainID)
 	if err != nil {
-		return nil, err
-	}
-
-	txCM := util.NewConnectionMaster(w.txDB)
-	if err := txCM.ConnectOnce(ctx); err != nil {
 		return nil, err
 	}
 
@@ -953,7 +954,6 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	w.connected.Store(true)
 	go func() {
 		<-ctx.Done()
-		txCM.Wait()
 		w.connected.Store(false)
 	}()
 

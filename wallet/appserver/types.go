@@ -5,7 +5,7 @@ package appserver
 
 import (
 	"github.com/bisoncraft/bosswallet/util/encode"
-	pi "github.com/bisoncraft/bosswallet/util/politeia"
+	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
 )
 
 // standardResponse is a basic API response when no data needs to be returned.

@@ -203,8 +203,9 @@ type xrpWallet struct {
 	pubKey  *btcec.PublicKey  // write-once in newWallet; safe to read without keyMtx
 	address string            // classic 'r...' address; write-once in newWallet
 
-	rpc  *rpcClient
-	txDB *xrpTxDB
+	rpc       *rpcClient
+	txDB      txdb.NetworkTxDB
+	metaTable txdb.StoreTable // auxiliary table for lastScannedLedger
 
 	tipMtx  sync.RWMutex
 	tip     uint64
@@ -256,6 +257,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		address:      address,
 		baseReserve:  BaseReserveDrops,
 		ownerReserve: OwnerReserveDrops,
+		txDB:         cfg.NetworkTxDB,
 	}, nil
 }
 
@@ -317,17 +319,20 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	rpc := newRPCClient(endpoint, w.log)
 	w.rpc = rpc
 
-	txDBPath := filepath.Join(w.dataDir, "txdb")
-	txDB, err := newTxDB(txDBPath, w.log.SubLogger("TXDB"))
-	if err != nil {
-		return nil, fmt.Errorf("error opening tx database: %w", err)
+	// The transaction database (w.txDB) is the master tx DB handle supplied by
+	// Core via WalletConfig.NetworkTxDB; the wallet does not own its lifecycle.
+	// The auxiliary meta table holds the persisted scan position.
+	if w.txDB != nil {
+		mt, err := w.txDB.Table(metaTableName)
+		if err != nil {
+			return nil, fmt.Errorf("error opening meta table: %w", err)
+		}
+		w.metaTable = mt
 	}
-	w.txDB = txDB
 
 	// Fetch initial chain state.
 	si, err := w.rpc.serverInfo(ctx)
 	if err != nil {
-		txDB.Close()
 		return nil, fmt.Errorf("error fetching server info: %w", err)
 	}
 
@@ -337,7 +342,7 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	w.tipMtx.Unlock()
 
 	// Restore scan position from the last session.
-	lastScanned, err := txDB.getLastScannedLedger()
+	lastScanned, err := w.getLastScannedLedger()
 	if err != nil {
 		w.log.Warnf("Could not load lastScannedLedger: %v", err)
 	}
@@ -350,9 +355,9 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
 	w.running.Store(true)
 
-	// bgWg tracks the three background goroutines that write to txDB.
-	// The returned wg tracks the full shutdown including DB close, so callers
-	// can rely on wg.Wait() guaranteeing the DB is fully closed.
+	// bgWg tracks the three background goroutines that write to txDB. The
+	// returned wg completes once they have exited and in-flight ops have
+	// drained, so the wallet is quiescent before Core closes the master tx DB.
 	var bgWg sync.WaitGroup
 	bgWg.Add(3)
 	go func() {
@@ -369,7 +374,7 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}()
 
 	// Ordered shutdown: wait for background goroutines to exit first (they
-	// write to txDB), then drain externally-initiated ops, then close the DB.
+	// write to txDB), then drain externally-initiated ops.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -382,13 +387,12 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	return &wg, nil
 }
 
-// shutdown stops new public calls and closes the txDB after in-flight ops drain.
+// shutdown stops new public calls and waits for in-flight ops to drain. The
+// transaction database is owned by Core, which closes it only after all wallets
+// have disconnected, so the wallet does not close it here.
 func (w *xrpWallet) shutdown() {
 	w.running.Store(false)
 	w.opWG.Wait()
-	if w.txDB != nil {
-		_ = w.txDB.Close()
-	}
 }
 
 // tipWorker runs the initial account scan on startup, then processes ledger
@@ -699,16 +703,14 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		Fees:      fee,
 		Recipient: &recipient,
 	}
-	dbEntry := &dbTx{
-		WalletTransaction:  wtx,
-		SubmissionTime:     uint64(time.Now().Unix()),
-		LastLedgerSequence: lastLedgerSeq,
-	}
+	// Carry the XRP-specific LastLedgerSequence in RawTx so checkPendingTxs can
+	// detect expiry.
+	setLastLedgerSequence(wtx, lastLedgerSeq)
 
 	// Persist before submit so the tx is tracked even if submit has a network
 	// error. checkPendingTxs resolves the outcome on the next tip.
 	if w.txDB != nil {
-		if err := w.txDB.storeTx(dbEntry); err != nil {
+		if err := w.txDB.StoreTx(wtx); err != nil {
 			w.log.Errorf("Error pre-storing send tx: %v", err)
 		}
 	}
@@ -738,12 +740,13 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 			w.log.Warnf("Submit result %s (%s): tracking as pending", sr.EngineResult, sr.EngineResultMessage)
 		}
 	default:
-		// Deterministic rejection: sequence was not consumed.
+		// Deterministic rejection: sequence was not consumed. This is terminal,
+		// so mark Confirmed (to leave the pending set) and Rejected.
 		rollbackSeq()
-		dbEntry.WalletTransaction.Rejected = true
-		dbEntry.Expired = true
+		wtx.Confirmed = true
+		wtx.Rejected = true
 		if w.txDB != nil {
-			if err := w.txDB.storeTx(dbEntry); err != nil {
+			if err := w.txDB.StoreTx(wtx); err != nil {
 				w.log.Errorf("Error updating rejected tx %s: %v", txID, err)
 			}
 		}
@@ -811,7 +814,11 @@ func (w *xrpWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryRespon
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
 	}
-	return w.txDB.getTxs(req)
+	r := *req
+	if r.N == 0 {
+		r.N = 50
+	}
+	return w.txDB.GetTxs(&r)
 }
 
 func (w *xrpWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
@@ -827,12 +834,12 @@ func (w *xrpWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.W
 	txID = strings.ToUpper(txID) // normalize hash case before DB lookup
 
 	if w.txDB != nil {
-		wt, err := w.txDB.getTx(txID)
+		wt, err := w.txDB.GetTx(txID)
 		if err != nil {
 			return nil, err
 		}
 		if wt != nil {
-			return wt.WalletTransaction, nil
+			return wt, nil
 		}
 	}
 
@@ -859,23 +866,19 @@ func (w *xrpWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransac
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := w.txDB.GetPendingTxs()
 	if err != nil {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return nil
 	}
-	txs := make([]*txdb.WalletTransaction, 0, len(pending))
-	for _, wt := range pending {
-		txs = append(txs, wt.WalletTransaction)
-	}
-	return txs
+	return pending
 }
 
 func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 	if w.txDB == nil {
 		return
 	}
-	pending, err := w.txDB.getPendingTxs()
+	pending, err := w.txDB.GetPendingTxs()
 	if err != nil {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return
@@ -885,18 +888,22 @@ func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 	w.tipMtx.RUnlock()
 
 	for _, tx := range pending {
+		lls := xrpData(tx).LastLedgerSequence
 		tr, err := w.rpc.tx(ctx, tx.ID)
 		if err != nil {
-			if isTxNotFound(err) && tx.LastLedgerSequence > 0 && uint64(tx.LastLedgerSequence) < tip {
-				tx.Expired = true
+			if isTxNotFound(err) && lls > 0 && uint64(lls) < tip {
+				// Expired: never included before its LastLedgerSequence. This is
+				// terminal, so mark Confirmed (to leave the pending set) and
+				// Rejected.
+				tx.Confirmed = true
 				tx.Rejected = true
 
 				// H2: only reset nextSeq if no other pending txs remain.
-				// Counting remaining (non-expired) pending entries prevents
-				// a blanket reset that would race with concurrent Sends.
+				// Counting remaining (still-pending) entries prevents a blanket
+				// reset that would race with concurrent Sends.
 				remaining := 0
 				for _, p := range pending {
-					if p.ID != tx.ID && p.BlockNumber == 0 && !p.Expired {
+					if p.ID != tx.ID && p.BlockNumber == 0 && !p.Confirmed {
 						remaining++
 					}
 				}
@@ -906,13 +913,13 @@ func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 					w.seqMtx.Unlock()
 				}
 
-				if storeErr := w.txDB.storeTx(tx); storeErr != nil {
+				if storeErr := w.txDB.StoreTx(tx); storeErr != nil {
 					w.log.Errorf("Error marking expired tx %s: %v", tx.ID, storeErr)
 				} else {
 					balanceChanged = true
-					w.log.Warnf("Transaction %s expired: LLS %d < tip %d", tx.ID, tx.LastLedgerSequence, tip)
+					w.log.Warnf("Transaction %s expired: LLS %d < tip %d", tx.ID, lls, tip)
 					if w.emit != nil {
-						w.emit.TransactionNote(tx.WalletTransaction, false)
+						w.emit.TransactionNote(tx, false)
 					}
 				}
 			} else {
@@ -925,17 +932,20 @@ func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 		}
 		tx.BlockNumber = tr.LedgerIndex
 		tx.Confirmed = true
+		if ct := tr.closeTime(); ct > 0 {
+			tx.Timestamp = ct
+		}
 		if strings.HasPrefix(tr.Meta.TransactionResult, "tec") {
 			tx.Rejected = true
 		}
-		if err := w.txDB.storeTx(tx); err != nil {
+		if err := w.txDB.StoreTx(tx); err != nil {
 			w.log.Errorf("Error updating confirmed tx %s: %v", tx.ID, err)
 			continue
 		}
 		balanceChanged = true
 		w.log.Infof("Transaction %s confirmed at ledger %d (result: %s)", tx.ID, tr.LedgerIndex, tr.Meta.TransactionResult)
 		if w.emit != nil {
-			w.emit.TransactionNote(tx.WalletTransaction, false)
+			w.emit.TransactionNote(tx, false)
 		}
 	}
 	return
@@ -1058,7 +1068,7 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 			txID := strings.ToUpper(tr.Hash)
 
 			// M10: handle getTx errors instead of silently discarding them.
-			existing, err := w.txDB.getTx(txID)
+			existing, err := w.txDB.GetTx(txID)
 			if err != nil {
 				w.log.Errorf("getTx %s: %v", txID, err)
 				pageAllOK = false
@@ -1120,7 +1130,7 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 		if pageAllOK && pageHigh > 0 {
 			checkpoint := pageHigh - 1
 			if checkpoint > w.lastScannedLedger.Load() {
-				if err := w.txDB.setLastScannedLedger(checkpoint); err != nil {
+				if err := w.setLastScannedLedger(checkpoint); err != nil {
 					w.log.Warnf("Error persisting scan checkpoint: %v", err)
 				} else {
 					w.lastScannedLedger.Store(checkpoint)
@@ -1185,17 +1195,15 @@ func (w *xrpWallet) emitBalanceChange() {
 	w.emit.BalanceChange(bal)
 }
 
-// storeNewTx persists wtx, deriving the submission time from tr's close time
-// and falling back to the current wall clock when close_time_iso is absent.
+// storeNewTx persists wtx, setting its Timestamp from tr's close time and
+// falling back to the current wall clock when close_time_iso is absent.
 func (w *xrpWallet) storeNewTx(wtx *txdb.WalletTransaction, tr *txResult) error {
-	submitTime := tr.closeTime()
-	if submitTime == 0 {
-		submitTime = uint64(time.Now().Unix())
+	ts := tr.closeTime()
+	if ts == 0 {
+		ts = uint64(time.Now().Unix())
 	}
-	return w.txDB.storeTx(&dbTx{
-		WalletTransaction: wtx,
-		SubmissionTime:    submitTime,
-	})
+	wtx.Timestamp = ts
+	return w.txDB.StoreTx(wtx)
 }
 
 // advanceLastScanned persists and updates lastScannedLedger to seq if seq is
@@ -1204,7 +1212,7 @@ func (w *xrpWallet) advanceLastScanned(seq uint64) {
 	if seq <= w.lastScannedLedger.Load() {
 		return
 	}
-	if err := w.txDB.setLastScannedLedger(seq); err != nil {
+	if err := w.setLastScannedLedger(seq); err != nil {
 		w.log.Warnf("Error persisting lastScannedLedger: %v", err)
 		return
 	}

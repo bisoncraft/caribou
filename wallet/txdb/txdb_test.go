@@ -5,6 +5,7 @@ package txdb
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"os"
@@ -372,6 +373,52 @@ func TestStoreTxsBatch(t *testing.T) {
 	}
 }
 
+// TestAddUniqueTxIndexReplace verifies that storing a transaction whose unique
+// index entry collides with a different existing transaction deletes that
+// existing transaction (the semantic eth relies on for nonce replacement).
+func TestAddUniqueTxIndexReplace(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	// Unique index keyed by BlockNumber (fixed 8 bytes).
+	if _, err := n.AddUniqueTxIndex("block", func(wt *WalletTransaction) ([]byte, error) {
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint64(b, wt.BlockNumber)
+		return b, nil
+	}); err != nil {
+		t.Fatalf("AddUniqueTxIndex: %v", err)
+	}
+
+	if err := n.StoreTx(tx("a", 5, 100)); err != nil {
+		t.Fatalf("StoreTx a: %v", err)
+	}
+	// Storing b with the same index value (BlockNumber 5) evicts a.
+	if err := n.StoreTx(tx("b", 5, 200)); err != nil {
+		t.Fatalf("StoreTx b: %v", err)
+	}
+
+	gotA, err := n.GetTx("a")
+	if err != nil {
+		t.Fatalf("GetTx a: %v", err)
+	}
+	if gotA != nil {
+		t.Fatalf("expected a to be evicted by unique-index conflict, got %+v", gotA)
+	}
+	gotB, err := n.GetTx("b")
+	if err != nil || gotB == nil {
+		t.Fatalf("GetTx b = %v, %v; want present", gotB, err)
+	}
+
+	// a must also be gone from history (all of its index entries purged).
+	resp, err := n.GetTxs(&TxHistoryRequest{})
+	if err != nil {
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if !eq(ids(resp.Txs), []string{"b"}) {
+		t.Fatalf("history = %v, want [b]", ids(resp.Txs))
+	}
+}
+
 func TestNetworkIsolation(t *testing.T) {
 	db := newTestTxDB(t)
 	a := db.NetworkTxDB(netA)
@@ -450,11 +497,7 @@ func TestAddTxIndexUsesRawTx(t *testing.T) {
 	n.StoreTx(tx("none", 1, 100))
 
 	var order []string
-	err = idx.Iterate(nil, func(it StoreIter) error {
-		wt, err := decodeIter(it)
-		if err != nil {
-			return err
-		}
+	err = idx.Iterate(nil, func(wt *WalletTransaction) error {
 		order = append(order, wt.ID)
 		return nil
 	}, false, nil)

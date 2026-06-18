@@ -103,14 +103,16 @@ func (idx *Index) entryKey(k, v []byte) ([]byte, error) {
 	return key, nil
 }
 
-// checkUnique returns ErrUniqueConflict if an entry with the same index value
-// (indexID||indexEntry prefix) but a different primary key already exists.
-func (idx *Index) checkUnique(index *bbolt.Bucket, fullKey, k []byte) error {
+// uniqueConflict returns the primary key of an existing entry that shares this
+// unique index's value (indexID||indexEntry prefix) but maps to a different
+// primary key, or nil if there is no conflict. Index entries are fixed-length,
+// so the prefix match is exact.
+func (idx *Index) uniqueConflict(index *bbolt.Bucket, fullKey, k []byte) []byte {
 	prefix := fullKey[:len(fullKey)-len(k)] // indexID||indexEntry
 	c := index.Cursor()
 	for ek, ev := c.Seek(prefix); ek != nil && bytes.HasPrefix(ek, prefix); ek, ev = c.Next() {
 		if !bytes.Equal(ev, k) {
-			return fmt.Errorf("%w on %q", ErrUniqueConflict, idx.name)
+			return append([]byte(nil), ev...)
 		}
 	}
 	return nil

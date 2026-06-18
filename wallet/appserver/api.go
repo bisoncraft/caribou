@@ -16,7 +16,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	pi "github.com/bisoncraft/bosswallet/util/politeia"
+	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/core"
 	"github.com/bisoncraft/bosswallet/wallet/db"

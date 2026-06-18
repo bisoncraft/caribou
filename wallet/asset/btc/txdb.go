@@ -4,684 +4,118 @@
 package btc
 
 import (
-	"bytes"
-	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/lexi"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
-	"github.com/dgraph-io/badger/v4"
 )
 
+// ExtendedWalletTx wraps the asset-agnostic WalletTransaction with btc-specific
+// tracking. Submitted marks whether the transaction has been broadcast; an
+// unsubmitted transaction is held only in the in-memory pending map and is not
+// written to the shared transaction database until it is submitted, so every
+// transaction in the database is by definition submitted.
 type ExtendedWalletTx struct {
 	*txdb.WalletTransaction
-	// Create bond transactions are added to the store before
-	// they are submitted.
+	// Create bond transactions are added to the store before they are
+	// submitted.
 	Submitted bool `json:"submitted"`
 }
 
-// "b" and "c" must be the first two prefixes.
-// getPendingTxs relies on this.
-var blockPrefix = []byte("b")
-var pendingPrefix = []byte("c")
-var lastQueryKey = []byte("lq")
-var txPrefix = []byte("t")
-var secNoncePrefix = []byte("sn")
-var maxPendingKey = pendingKey(math.MaxUint64)
-
-// pendingKey maps an index to an extendedWalletTransaction. The index is
-// required as there may be multiple pending transactions at the same time.
-func pendingKey(i uint64) []byte {
-	key := make([]byte, len(pendingPrefix)+8)
-	copy(key, pendingPrefix)
-	binary.BigEndian.PutUint64(key[len(pendingPrefix):], i)
-	return key
-}
-
-// blockKey maps a block height and an index to an extendedWalletTransaction.
-// The index is required as there may be multiple transactions in the same
-// block.
-func blockKey(blockHeight, index uint64) []byte {
-	key := make([]byte, len(blockPrefix)+16)
-	copy(key, blockPrefix)
-	binary.BigEndian.PutUint64(key[len(blockPrefix):], blockHeight)
-	binary.BigEndian.PutUint64(key[len(blockPrefix)+8:], index)
-	return key
-}
-
-func parseBlockKey(key []byte) (blockHeight, index uint64) {
-	blockHeight = binary.BigEndian.Uint64(key[len(blockPrefix):])
-	index = binary.BigEndian.Uint64(key[len(blockPrefix)+8:])
-	return
-}
-
-// txKey maps a txid to a blockKey or pendingKey.
-func txKey(txid string) []byte {
-	key := make([]byte, len(txPrefix)+len([]byte(txid)))
-	copy(key, txPrefix)
-	copy(key[len(txPrefix):], []byte(txid))
-	return key
-}
-
-type BadgerTxDB struct {
-	*badger.DB
-	filePath string
-	log      util.Logger
-	seq      *badger.Sequence
-	running  atomic.Bool
-	wg       sync.WaitGroup
-	ctx      context.Context
-}
-
-// badgerLoggerWrapper wraps util.Logger and translates Warnf to Warningf to
-// satisfy badger.Logger. It also lowers the log level of Infof to Debugf.
-// Debugf is discarded as badger's debug logs are too noisy even for trace.
-type badgerLoggerWrapper struct {
-	util.Logger
-}
-
-var _ badger.Logger = (*badgerLoggerWrapper)(nil)
-
-// Debugf is discarded - badger's debug logs are too verbose.
-func (log *badgerLoggerWrapper) Debugf(s string, a ...any) {}
-
-// Infof -> util.Logger.Debugf
-func (log *badgerLoggerWrapper) Infof(s string, a ...any) {
-	log.Debugf(s, a...)
-}
-
-// Warningf -> util.Logger.Warnf
-func (log *badgerLoggerWrapper) Warningf(s string, a ...any) {
-	log.Warnf(s, a...)
-}
-
-func NewBadgerTxDB(filePath string, log util.Logger) *BadgerTxDB {
-	return &BadgerTxDB{
-		filePath: filePath,
-		log:      log,
-	}
-}
-
-func (db *BadgerTxDB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	// If memory use is a concern, could try
-	//   .WithValueLogLoadingMode(options.FileIO) // default options.MemoryMap
-	//   .WithMaxTableSize(sz int64); // bytes, default 6MB
-	//   .WithValueLogFileSize(sz int64), bytes, default 1 GB, must be 1MB <= sz <= 1GB
-	v4Path, needs, err := lexi.NeedsV1toV4Update(db.filePath)
-	if err != nil {
-		return nil, err
-	}
-	opts := badger.DefaultOptions(v4Path).WithLogger(&badgerLoggerWrapper{db.log})
-	if needs {
-		db.DB, err = lexi.BadgerV1Update(db.filePath, v4Path, db.log, opts)
-		if err != nil {
-			db.log.Warnf("Unable to update old db, creating new one: %v", err)
-			db.DB, err = badger.Open(opts)
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		db.DB, err = badger.Open(opts)
-		if err != nil {
-			return nil, err
-		}
-	}
-	db.ctx = ctx
-	db.seq, err = db.GetSequence([]byte("seq"), 10)
-	if err != nil {
-		return nil, err
-	}
-
-	db.running.Store(true)
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				err := db.RunValueLogGC(0.5)
-				if err != nil && !errors.Is(err, badger.ErrNoRewrite) {
-					db.log.Errorf("garbage collection error: %v", err)
-				}
-			case <-ctx.Done():
-				db.running.Store(false)
-				db.wg.Wait()
-				if err := db.seq.Release(); err != nil {
-					db.log.Errorf("error releasing sequence: %v", err)
-				}
-				_ = db.Close()
-				return
-			}
-		}
-	}()
-
-	return &wg, nil
-}
-
-// badgerDB returns ErrConflict when a read happening in a update (read/write)
-// transaction is stale. This function retries updates multiple times in
-// case of conflicts.
-func (db *BadgerTxDB) handleConflictWithBackoff(update func() error) (err error) {
-	maxRetries := 10
-	sleepTime := 5 * time.Millisecond
-
-	for i := 0; i < maxRetries; i++ {
-		sleepTime *= 2
-		err = update()
-		if err != badger.ErrConflict {
-			return err
-		}
-		time.Sleep(sleepTime)
-	}
-
-	return err
-}
-
-func (db *BadgerTxDB) newBlockKey(blockNumber uint64) ([]byte, error) {
-	seq, err := db.seq.Next()
-	if err != nil {
-		return nil, err
-	}
-	if blockNumber == 0 {
-		return pendingKey(seq), nil
-	}
-	return blockKey(blockNumber, seq), nil
-}
-
-func hasPrefix(b, prefix []byte) bool {
-	if len(b) < len(prefix) {
-		return false
-	}
-	return bytes.Equal(b[:len(prefix)], prefix)
-}
-
-func (db *BadgerTxDB) storeTx(tx *ExtendedWalletTx) error {
-	return db.Update(func(txn *badger.Txn) error {
-		txKey := txKey(tx.ID)
-		txKeyItem, err := txn.Get(txKey)
-		if err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
-			return err
-		}
-
-		var key []byte
-		if err == nil { // already stored
-			currBlockKey, err := txKeyItem.ValueCopy(nil)
-			if err != nil {
-				return err
-			}
-			err = txn.Delete(currBlockKey)
-			if err != nil {
-				return err
-			}
-			// Keep the same key unless a pending tx that has been confirmed,
-			// or if the block number has changed indicating a reorg.
-			if hasPrefix(currBlockKey, pendingPrefix) && tx.BlockNumber == 0 {
-				key = currBlockKey
-			} else if hasPrefix(currBlockKey, blockPrefix) {
-				blockHeight, _ := parseBlockKey(currBlockKey)
-				if blockHeight == tx.BlockNumber {
-					key = currBlockKey
-				}
-			}
-		}
-
-		if key == nil {
-			key, err = db.newBlockKey(tx.BlockNumber)
-			if err != nil {
-				return err
-			}
-		}
-
-		txB, err := json.Marshal(tx)
-		if err != nil {
-			return err
-		}
-
-		err = txn.Set(txKey, key)
-		if err != nil {
-			return err
-		}
-
-		return txn.Set(key, txB)
-	})
-}
-
-// StoreTx stores a transaction in the database.
-func (db *BadgerTxDB) StoreTx(tx *ExtendedWalletTx) error {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return fmt.Errorf("database is not running")
-	}
-
-	return db.handleConflictWithBackoff(func() error { return db.storeTx(tx) })
-}
-
-func nonceKey(pubNonce []byte) []byte {
-	key := make([]byte, len(secNoncePrefix)+len(pubNonce))
-	copy(key, secNoncePrefix)
-	copy(key[len(secNoncePrefix):], pubNonce)
-	return key
-}
-
-func (db *BadgerTxDB) deleteSecNonce(pubNonce []byte) error {
-	return db.Update(func(txn *badger.Txn) error {
-		return txn.Delete(nonceKey(pubNonce))
-	})
-}
-
-// DeleteSecNonce deletes the secret nonce for a given public nonce.
-// This is used to clean up the database after a private swap is complete.
-func (db *BadgerTxDB) DeleteSecNonce(pubNonce []byte) error {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return fmt.Errorf("database is not running")
-	}
-
-	return db.handleConflictWithBackoff(func() error { return db.deleteSecNonce(pubNonce) })
-}
-
-func (db *BadgerTxDB) storeSecNonce(pubNonce, secNonce []byte) error {
-	return db.Update(func(txn *badger.Txn) error {
-		return txn.Set(nonceKey(pubNonce), secNonce)
-	})
-}
-
 const (
-	gcmNonceSize = 12
+	metaTableName = "meta"
+	lastQueryKey  = "lastReceiveTxQuery"
 )
 
-func encryptAES(key []byte, plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
-	}
+// ErrNeverQueried is returned by GetLastReceiveTxQuery before any query block
+// has been recorded.
+const ErrNeverQueried = util.ErrorKind("never queried")
 
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %v", err)
-	}
-
-	nonce := make([]byte, gcmNonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %v", err)
-	}
-
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
-	return ciphertext, nil
+// BadgerTxDB adapts the master transaction database (NetworkTxDB) to the method
+// surface the btc wallet uses. The name is retained because the wallet refers
+// to it widely; the underlying storage is the shared master tx DB (Badger on
+// desktop, bbolt on mobile), not a btc-owned Badger instance.
+type BadgerTxDB struct {
+	db   txdb.NetworkTxDB
+	meta txdb.StoreTable
+	log  util.Logger
 }
 
-func decryptAES(key []byte, ciphertext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %v", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %v", err)
-	}
-
-	if len(ciphertext) < gcmNonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-	nonce, ciphertext := ciphertext[:gcmNonceSize], ciphertext[gcmNonceSize:]
-
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %v", err)
-	}
-
-	return plaintext, nil
-}
-
-// StoreSecNonce stores the secret nonce for a given public nonce. encKey
-// is used to encrypt the secret nonce before it is stored in the database.
-func (db *BadgerTxDB) StoreSecNonce(pubNonce, secNonce, encKey []byte) error {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return fmt.Errorf("database is not running")
-	}
-
-	encSecNonce, err := encryptAES(encKey, secNonce)
-	if err != nil {
-		return fmt.Errorf("error encrypting secret nonce: %w", err)
-	}
-
-	return db.handleConflictWithBackoff(func() error { return db.storeSecNonce(pubNonce, encSecNonce) })
-}
-
-func (db *BadgerTxDB) getSecNonce(pubNonce []byte) ([]byte, error) {
-	var secNonce []byte
-	err := db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(nonceKey(pubNonce))
-		if err != nil {
-			return err
-		}
-		secNonce, err = item.ValueCopy(nil)
-		return err
-	})
-	return secNonce, err
-}
-
-// GetSecNonce retrieves the secret nonce for a given public nonce. The
-// same encryption key must be used as the one used to encrypt the secret
-// nonce when it was stored.
-func (db *BadgerTxDB) GetSecNonce(pubNonce, encKey []byte) ([]byte, error) {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return nil, fmt.Errorf("database is not running")
-	}
-
-	encSecNonce, err := db.getSecNonce(pubNonce)
+// NewBadgerTxDB wraps a NetworkTxDB handle. The auxiliary meta table holds the
+// last receive-scan query height.
+func NewBadgerTxDB(db txdb.NetworkTxDB, log util.Logger) (*BadgerTxDB, error) {
+	mt, err := db.Table(metaTableName)
 	if err != nil {
 		return nil, err
 	}
-
-	return decryptAES(encKey, encSecNonce)
+	return &BadgerTxDB{db: db, meta: mt, log: log}, nil
 }
 
-func (db *BadgerTxDB) markTxAsSubmitted(txID string) error {
-	return db.Update(func(txn *badger.Txn) error {
-		txKey := txKey(txID)
-		txKeyItem, err := txn.Get(txKey)
-		if err != nil {
-			return asset.CoinNotFoundError
-		}
-
-		blockKey, err := txKeyItem.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-
-		blockItem, err := txn.Get(blockKey)
-		if err != nil {
-			return err
-		}
-
-		wtB, err := blockItem.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-
-		var wt ExtendedWalletTx
-		if err := json.Unmarshal(wtB, &wt); err != nil {
-			return err
-		}
-
-		wt.Submitted = true
-		submittedWt, err := json.Marshal(wt)
-		if err != nil {
-			return err
-		}
-
-		return txn.Set(blockKey, submittedWt)
-	})
+// StoreTx stores (or replaces) a submitted transaction.
+func (db *BadgerTxDB) StoreTx(tx *ExtendedWalletTx) error {
+	return db.db.StoreTx(tx.WalletTransaction)
 }
 
-// MarkTxAsSubmitted should be called when a previously stored transaction
-// that had not yet been sent to the network is sent to the network.
-// asset.CoinNotFoundError is returned if the transaction is not in the
-// database.
-func (db *BadgerTxDB) MarkTxAsSubmitted(txID string) error {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return fmt.Errorf("database is not running")
-	}
-
-	return db.handleConflictWithBackoff(func() error { return db.markTxAsSubmitted(txID) })
-}
-
-// GetTxs retrieves n transactions from the database. refID optionally
-// takes a transaction ID, and returns that transaction and the at most
-// (n - 1) transactions that were made either before or after it, depending
-// on the value of past. If refID is nil, the most recent n transactions
-// are returned, and the value of past is ignored. If the transaction with
-// ID refID is not in the database, asset.CoinNotFoundError is returned.
-// Unsubmitted transactions are not returned.
+// GetTxs returns transaction history. Every stored transaction is submitted.
 func (db *BadgerTxDB) GetTxs(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return nil, fmt.Errorf("database is not running")
-	}
-
-	var txs []*txdb.WalletTransaction
-	var moreAvailable bool
-	ignoreTypes := req.IngoreTypesLookup()
-	if err := db.View(func(txn *badger.Txn) error {
-		var startKey []byte
-		if req.RefID != nil {
-			txKey := txKey(*req.RefID)
-			txKeyItem, err := txn.Get(txKey)
-			if err != nil {
-				return asset.CoinNotFoundError
-			}
-
-			startKey, err = txKeyItem.ValueCopy(nil)
-			if err != nil {
-				return err
-			}
-		}
-		n := req.N
-		past := req.Past
-		if startKey == nil {
-			past = true
-			startKey = maxPendingKey
-		}
-
-		opts := badger.DefaultIteratorOptions
-		opts.Reverse = past
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		canIterate := func() bool {
-			if !(it.ValidForPrefix(blockPrefix) || it.ValidForPrefix(pendingPrefix)) {
-				return false
-			}
-			return n <= 0 || len(txs) <= n
-		}
-		for it.Seek(startKey); canIterate(); it.Next() {
-			item := it.Item()
-			wtB, err := item.ValueCopy(nil)
-			if err != nil {
-				return err
-			}
-			var wt ExtendedWalletTx
-			if err := json.Unmarshal(wtB, &wt); err != nil {
-				return err
-			}
-			if ignoreTypes[wt.Type] {
-				continue
-			}
-			if !wt.Submitted {
-				continue
-			}
-			if n > 0 && len(txs) == n {
-				moreAvailable = true
-				break
-			}
-			if past {
-				txs = append(txs, wt.WalletTransaction)
-			} else {
-				txs = append([]*txdb.WalletTransaction{wt.WalletTransaction}, txs...)
-			}
-		}
-
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return &txdb.TxHistoryResponse{
-		Txs:           txs,
-		MoreAvailable: moreAvailable,
-	}, nil
+	return db.db.GetTxs(req)
 }
 
-// GetTx retrieves a transaction by its ID. If the transaction is not in
-// the database, asset.CoinNotFoundError is returned.
+// GetTx returns a single transaction by ID, or asset.CoinNotFoundError if it is
+// not present.
 func (db *BadgerTxDB) GetTx(txID string) (*txdb.WalletTransaction, error) {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return nil, fmt.Errorf("database is not running")
-	}
-	r, err := db.GetTxs(&txdb.TxHistoryRequest{
-		N:     1,
-		RefID: &txID,
-	})
+	wt, err := db.db.GetTx(txID)
 	if err != nil {
 		return nil, err
 	}
-	if len(r.Txs) == 0 {
-		// This should never happen.
-		return nil, fmt.Errorf("no results returned from getTxs")
+	if wt == nil {
+		return nil, asset.CoinNotFoundError
 	}
-	return r.Txs[0], nil
+	return wt, nil
 }
 
 // GetPendingTxs returns all transactions that have not yet been confirmed.
 func (db *BadgerTxDB) GetPendingTxs() ([]*ExtendedWalletTx, error) {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return nil, fmt.Errorf("database is not running")
+	wts, err := db.db.GetPendingTxs()
+	if err != nil {
+		return nil, err
 	}
-
-	var txs []*ExtendedWalletTx
-	err := db.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Reverse = true
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		for it.Seek(maxPendingKey); it.Valid(); it.Next() {
-			item := it.Item()
-			wtB, err := item.ValueCopy(nil)
-			if err != nil {
-				return err
-			}
-			var wt ExtendedWalletTx
-			if err := json.Unmarshal(wtB, &wt); err != nil {
-				return err
-			}
-
-			if !wt.Confirmed {
-				txs = append(txs, &wt)
-			}
-		}
-
-		return nil
-	})
-
-	return txs, err
+	txs := make([]*ExtendedWalletTx, len(wts))
+	for i, wt := range wts {
+		txs[i] = &ExtendedWalletTx{WalletTransaction: wt, Submitted: true}
+	}
+	return txs, nil
 }
 
-func (db *BadgerTxDB) removeTx(txID string) error {
-	return db.Update(func(txn *badger.Txn) error {
-		txKey := txKey(txID)
-		txKeyItem, err := txn.Get(txKey)
-		if err != nil {
-			return asset.CoinNotFoundError
-		}
-
-		blockKey, err := txKeyItem.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-
-		if err := txn.Delete(txKey); err != nil {
-			return err
-		}
-
-		return txn.Delete(blockKey)
-	})
-}
-
-// RemoveTx removes a transaction from the database. If the transaction is
-// not in the database, asset.CoinNotFoundError is returned.
+// RemoveTx removes a transaction from the database. It is not an error if the
+// transaction does not exist.
 func (db *BadgerTxDB) RemoveTx(txID string) error {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return fmt.Errorf("database is not running")
-	}
-
-	return db.handleConflictWithBackoff(func() error { return db.removeTx(txID) })
+	return db.db.RemoveTx(txID)
 }
 
-func (db *BadgerTxDB) setLastReceiveTxQuery(block uint64) error {
-	return db.Update(func(txn *badger.Txn) error {
-		// use binary big endian
-		b := make([]byte, 8)
-		binary.BigEndian.PutUint64(b, block)
-		return txn.Set(lastQueryKey, b)
-	})
-}
-
-// SetLastReceiveTxQuery stores the last time the wallet was queried for
-// receive transactions. This is required to know how far back to query
-// for incoming transactions that were received while the wallet is
-// offline.
+// SetLastReceiveTxQuery stores the last block height the wallet was queried for
+// receive transactions, so it knows how far back to scan after being offline.
 func (db *BadgerTxDB) SetLastReceiveTxQuery(block uint64) error {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return fmt.Errorf("database is not running")
-	}
-
-	return db.handleConflictWithBackoff(func() error { return db.setLastReceiveTxQuery(block) })
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, block)
+	return db.meta.Set([]byte(lastQueryKey), b, true)
 }
 
-const ErrNeverQueried = util.ErrorKind("never queried")
-
-// GetLastReceiveTxQuery retrieves the last time the wallet was queried for
-// receive transactions.
+// GetLastReceiveTxQuery retrieves the last receive-scan query height, returning
+// ErrNeverQueried if none has been recorded.
 func (db *BadgerTxDB) GetLastReceiveTxQuery() (uint64, error) {
-	db.wg.Add(1)
-	defer db.wg.Done()
-	if !db.running.Load() {
-		return 0, fmt.Errorf("database is not running")
+	b, err := db.meta.Get([]byte(lastQueryKey))
+	if errors.Is(err, txdb.ErrKeyNotFound) {
+		return 0, ErrNeverQueried
 	}
-
-	var block uint64
-	err := db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(lastQueryKey)
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return ErrNeverQueried
-		}
-		if err != nil {
-			return err
-		}
-		b, err := item.ValueCopy(nil)
-		if err != nil {
-			return err
-		}
-		block = binary.BigEndian.Uint64(b)
-		return nil
-	})
-	return block, err
+	if err != nil {
+		return 0, err
+	}
+	if len(b) != 8 {
+		return 0, fmt.Errorf("invalid lastReceiveTxQuery length %d", len(b))
+	}
+	return binary.BigEndian.Uint64(b), nil
 }

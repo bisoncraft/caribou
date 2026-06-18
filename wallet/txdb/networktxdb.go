@@ -35,8 +35,24 @@ type NetworkTxDB interface {
 	Table(name string) (StoreTable, error)
 	// AddTxIndex adds a wallet-defined secondary index over this network's
 	// transactions. The index function receives the full WalletTransaction
-	// (including RawTx) so it may order by network-specific fields.
-	AddTxIndex(name string, f func(*WalletTransaction) ([]byte, error)) (StoreIndex, error)
+	// (including RawTx) so it may order by network-specific fields. The
+	// returned TxIndex iterates the network's transactions in index order.
+	AddTxIndex(name string, f func(*WalletTransaction) ([]byte, error)) (TxIndex, error)
+	// AddUniqueTxIndex is like AddTxIndex but the index is unique: storing a
+	// transaction whose index entry collides with an existing, different
+	// transaction replaces (deletes) that existing transaction. Wallets use
+	// this to key replacement on a network value rather than the primary key
+	// (e.g. an Ethereum account nonce). Index functions must emit fixed-length
+	// entries.
+	AddUniqueTxIndex(name string, f func(*WalletTransaction) ([]byte, error)) (TxIndex, error)
+}
+
+// TxIndex is a wallet-defined secondary index over a network's transactions,
+// returned by AddTxIndex/AddUniqueTxIndex.
+type TxIndex interface {
+	// Iterate visits the network's transactions in index order. prefix and seek
+	// are in index-entry space (the bytes returned by the index function).
+	Iterate(prefix []byte, f func(*WalletTransaction) error, reverse bool, seek []byte) error
 }
 
 // networkTxDB is the concrete NetworkTxDB, a thin view over TxDB scoped to one
@@ -82,10 +98,11 @@ func (n *networkTxDB) Table(name string) (StoreTable, error) {
 	return n.db.store.Table(n.auxTableName(name))
 }
 
-func (n *networkTxDB) AddTxIndex(name string, f func(*WalletTransaction) ([]byte, error)) (StoreIndex, error) {
-	// The custom index lives on the shared txs table but is scoped to this
-	// network: records belonging to other networks are skipped.
-	return n.db.txs.AddIndex(n.auxTableName(name), func(_, v []byte) ([]byte, error) {
+// txIndexFunc wraps a wallet-supplied index function so the index lives on the
+// shared txs table but is scoped to this network: records belonging to other
+// networks are skipped.
+func (n *networkTxDB) txIndexFunc(f func(*WalletTransaction) ([]byte, error)) IndexFunc {
+	return func(_, v []byte) ([]byte, error) {
 		wt, recNet, err := decodeRecord(v)
 		if err != nil {
 			return nil, err
@@ -94,5 +111,38 @@ func (n *networkTxDB) AddTxIndex(name string, f func(*WalletTransaction) ([]byte
 			return nil, ErrNotIndexed
 		}
 		return f(wt)
-	})
+	}
+}
+
+func (n *networkTxDB) AddTxIndex(name string, f func(*WalletTransaction) ([]byte, error)) (TxIndex, error) {
+	idx, err := n.db.txs.AddIndex(n.auxTableName(name), n.txIndexFunc(f))
+	if err != nil {
+		return nil, err
+	}
+	return &txIndex{idx: idx}, nil
+}
+
+func (n *networkTxDB) AddUniqueTxIndex(name string, f func(*WalletTransaction) ([]byte, error)) (TxIndex, error) {
+	idx, err := n.db.txs.AddUniqueIndex(n.auxTableName(name), n.txIndexFunc(f))
+	if err != nil {
+		return nil, err
+	}
+	return &txIndex{idx: idx}, nil
+}
+
+// txIndex wraps a StoreIndex so iteration decodes the stored record into a
+// WalletTransaction, which the engine-internal record format would otherwise
+// hide from wallets.
+type txIndex struct {
+	idx StoreIndex
+}
+
+func (i *txIndex) Iterate(prefix []byte, f func(*WalletTransaction) error, reverse bool, seek []byte) error {
+	return i.idx.Iterate(prefix, func(it StoreIter) error {
+		wt, err := decodeIter(it)
+		if err != nil {
+			return err
+		}
+		return f(wt)
+	}, reverse, seek)
 }
