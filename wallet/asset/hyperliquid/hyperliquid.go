@@ -168,8 +168,10 @@ type HyperWallet struct {
 
 	hypeTokenID string // "HYPE:<tokenId>", resolved on Connect
 
-	rpc  *rpcClient
-	txDB atomic.Pointer[hyperTxDB]
+	rpc            *rpcClient
+	txDB           txdb.NetworkTxDB // nil when not provided (e.g. in tests)
+	metaTable      txdb.StoreTable  // set in Connect; nil if txDB is nil
+	pendingIDIndex txdb.TxIndex     // set in Connect; nil if txDB is nil
 
 	ledgerMtx sync.Mutex
 	scanMtx   sync.Mutex
@@ -203,6 +205,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		settings:    cfg.Settings,
 		pubKey:      kf.PubKey,
 		address:     pubKeyToAddress(kf.PubKey),
+		txDB:        cfg.NetworkTxDB,
 	}, nil
 }
 
@@ -286,23 +289,25 @@ func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	w.hypeTokenID = hypeID
 	w.log.Debugf("HYPE token ID: %s", hypeID)
 
-	// Open transaction database.
-	txDB, err := newTxDB(filepath.Join(w.dataDir, "txdb"), w.log.SubLogger("TXDB"))
-	if err != nil {
-		return nil, fmt.Errorf("opening tx database: %w", err)
-	}
-	w.txDB.Store(txDB)
+	if w.txDB != nil {
+		mt, err := w.txDB.Table(metaTableName)
+		if err != nil {
+			return nil, fmt.Errorf("opening meta table: %w", err)
+		}
+		w.metaTable = mt
 
-	lastScannedMS, err := txDB.getLastScannedMS()
+		idx, err := w.txDB.AddUniqueTxIndex(pendingIDIndexName, pendingIDIndexKey)
+		if err != nil {
+			return nil, fmt.Errorf("creating pending-ID index: %w", err)
+		}
+		w.pendingIDIndex = idx
+	}
+	lastScannedMS, err := w.getLastScannedMS()
 	if err != nil {
-		_ = txDB.Close()
-		w.txDB.Store(nil)
 		return nil, fmt.Errorf("loading persisted scan watermark: %w", err)
 	}
-	maxPendingNonce, err := txDB.highestPendingNonce()
+	maxPendingNonce, err := w.highestPendingNonce()
 	if err != nil {
-		_ = txDB.Close()
-		w.txDB.Store(nil)
 		return nil, fmt.Errorf("loading pending send state: %w", err)
 	}
 
@@ -432,11 +437,9 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 
 	// Store the pending record before broadcasting so a storeTx failure
 	// after a successful send can never leave the transaction untracked.
-	if db := w.txDB.Load(); db != nil {
-		if err := db.storeTx(&dbTx{
-			WalletTransaction: wtx,
-			SubmissionTime:    uint64(time.Now().Unix()),
-		}); err != nil {
+	if w.txDB != nil {
+		setSubmissionTime(wtx, uint64(time.Now().Unix()))
+		if err := w.txDB.StoreTx(wtx); err != nil {
 			return nil, fmt.Errorf("recording pending send: %w", err)
 		}
 	}
@@ -447,8 +450,8 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 		// we leave the record for scanLedger to resolve.
 		var rejection *exchangeRejection
 		if errors.As(err, &rejection) {
-			if db := w.txDB.Load(); db != nil {
-				if delErr := db.deleteTx(txID); delErr != nil {
+			if w.txDB != nil {
+				if delErr := w.txDB.RemoveTx(txID); delErr != nil {
 					w.log.Errorf("Cleaning up pending tx %s after rejection: %v", txID, delErr)
 				}
 			}
@@ -481,32 +484,57 @@ func (w *HyperWallet) StandardSendFee(_ uint64) uint64 { return 0 }
 func (w *HyperWallet) FeeRate() uint64                 { return 0 }
 
 func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
-	db := w.txDB.Load()
-	if db == nil || req == nil {
+	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
 	}
-	return db.getTxs(req)
+	if req.RefID != nil {
+		wt, err := w.txDB.GetTx(*req.RefID)
+		if err != nil {
+			return nil, err
+		}
+		if wt == nil {
+			return nil, asset.CoinNotFoundError
+		}
+		if !wt.Confirmed {
+			return nil, ErrTxIsPending
+		}
+	}
+	resp, err := w.txDB.GetTxs(req)
+	if err != nil {
+		return nil, err
+	}
+	// NetworkTxDB.GetTxs indexes all transactions; filter out pending sends so
+	// that only confirmed entries appear in paginated history. Pending sends are
+	// exposed separately via PendingTransactions.
+	n := 0
+	for _, wt := range resp.Txs {
+		if wt.Confirmed {
+			resp.Txs[n] = wt
+			n++
+		}
+	}
+	resp.Txs = resp.Txs[:n]
+	return resp, nil
 }
 
 func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*txdb.WalletTransaction, error) {
-	db := w.txDB.Load()
-	if db != nil {
+	if w.txDB != nil {
 		for _, lookupID := range walletTransactionLookupIDs(txID) {
-			wt, err := db.getTx(lookupID)
+			wt, err := w.txDB.GetTx(lookupID)
 			if err != nil {
 				return nil, err
 			}
 			if wt != nil {
-				return wt.WalletTransaction, nil
+				return wt, nil
 			}
 		}
 		for _, lookupID := range walletTransactionLookupIDs(txID) {
-			wt, err := db.getTxByPendingID(lookupID)
+			wt, err := w.getTxByPendingID(lookupID)
 			if err != nil {
 				return nil, err
 			}
 			if wt != nil {
-				return wt.WalletTransaction, nil
+				return wt, nil
 			}
 		}
 	}
@@ -514,20 +542,15 @@ func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*txdb.W
 }
 
 func (w *HyperWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
-	db := w.txDB.Load()
-	if db == nil {
+	if w.txDB == nil {
 		return nil
 	}
-	pending, err := db.getPendingTxs()
+	pending, err := w.txDB.GetPendingTxs()
 	if err != nil {
 		w.log.Errorf("Getting pending txs: %v", err)
 		return nil
 	}
-	txs := make([]*txdb.WalletTransaction, 0, len(pending))
-	for _, wt := range pending {
-		txs = append(txs, wt.WalletTransaction)
-	}
-	return txs
+	return pending
 }
 
 func (w *HyperWallet) nextSpotSendNonce() uint64 {
@@ -568,9 +591,6 @@ func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
 // missed while offline, then enters the live message loop.
 func (w *HyperWallet) tipPoller(ctx context.Context) {
 	defer func() {
-		if db := w.txDB.Swap(nil); db != nil {
-			_ = db.Close()
-		}
 		if atomic.SwapUint32(&w.lastPeerCount, 0) != 0 && w.peersChange != nil {
 			w.peersChange(0, nil)
 		}
@@ -673,10 +693,8 @@ func (w *HyperWallet) advanceLastScannedMS(next int64) error {
 		return nil
 	}
 
-	if db := w.txDB.Load(); db != nil {
-		if err := db.setLastScannedMS(next); err != nil {
-			return err
-		}
+	if err := w.setLastScannedMS(next); err != nil {
+		return err
 	}
 
 	w.tipMtx.Lock()
@@ -694,8 +712,7 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
 	w.ledgerMtx.Lock()
 	defer w.ledgerMtx.Unlock()
 
-	db := w.txDB.Load()
-	if db == nil {
+	if w.txDB == nil {
 		return
 	}
 
@@ -705,11 +722,11 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
 
 	switch u.Delta.Type {
 	case "send", "spotTransfer", "transfer", "deposit", "internalTransfer":
-		w.handleTransferUpdate(u, db)
+		w.handleTransferUpdate(u)
 	}
 }
 
-func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
+func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 	amount, err := parseHYPE(u.Delta.Amount)
 	if err != nil {
 		w.log.Warnf("Parsing ledger amount %q: %v", u.Delta.Amount, err)
@@ -721,7 +738,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 
 	if isOutgoing {
 		// Try to match and confirm a pending send tx by nonce proximity.
-		w.confirmPendingSend(u, amount, db)
+		w.confirmPendingSend(u, amount)
 		return
 	}
 
@@ -730,7 +747,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 	}
 
 	// Incoming transfer not already in the DB.
-	if existing, _ := db.getTx(u.Hash); existing != nil {
+	if existing, _ := w.txDB.GetTx(u.Hash); existing != nil {
 		return
 	}
 
@@ -752,10 +769,8 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 		},
 	}
 
-	if err := db.storeTx(&dbTx{
-		WalletTransaction: wtx,
-		SubmissionTime:    uint64(time.Now().Unix()),
-	}); err != nil {
+	setSubmissionTime(wtx, uint64(time.Now().Unix()))
+	if err := w.txDB.StoreTx(wtx); err != nil {
 		w.log.Errorf("Storing receive tx %s: %v", u.Hash, err)
 		return
 	}
@@ -773,21 +788,22 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 // candidate always matches regardless of how much time elapsed between nonce
 // mint and ledger echo.
 // Pending entries older than pendingTTL are expired opportunistically.
-func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hyperTxDB) {
-	pending, err := db.getPendingTxs()
+func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
+	pending, err := w.txDB.GetPendingTxs()
 	if err != nil {
 		w.log.Errorf("Getting pending txs: %v", err)
 		return
 	}
 
 	cutoff := uint64(time.Now().Unix()) - pendingTTL
-	var best *dbTx
+	var best *txdb.WalletTransaction
 	var bestAbsDiff int64
 	for _, p := range pending {
-		if p.SubmissionTime > 0 && p.SubmissionTime < cutoff {
+		subTime := hyperData(p).SubmissionTime
+		if subTime > 0 && subTime < cutoff {
 			w.log.Infof("Expiring stale pending send %s (submitted %ds ago)",
-				p.ID, uint64(time.Now().Unix())-p.SubmissionTime)
-			if err := db.deleteTx(p.ID); err != nil {
+				p.ID, uint64(time.Now().Unix())-subTime)
+			if err := w.txDB.RemoveTx(p.ID); err != nil {
 				w.log.Errorf("Deleting expired pending tx %s: %v", p.ID, err)
 			}
 			continue
@@ -825,28 +841,40 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hype
 	w.tipMtx.RUnlock()
 
 	oldID := best.ID
-	best.ID = u.Hash
-	best.BlockNumber = tip
-	best.Confirmed = true
-	if best.AdditionalData == nil {
-		best.AdditionalData = make(map[string]string, 2)
+
+	// Build the confirmed record as a new struct rather than mutating the
+	// pointer GetPendingTxs returned — guards against any future cache layer.
+	addlData := make(map[string]string, len(best.AdditionalData)+2)
+	for k, v := range best.AdditionalData {
+		addlData[k] = v
 	}
-	best.AdditionalData[pendingIDKey] = oldID
-	best.AdditionalData["txHash"] = u.Hash
+	addlData[pendingIDKey] = oldID
+	addlData["txHash"] = u.Hash
+	confirmed := &txdb.WalletTransaction{
+		Type:           best.Type,
+		ID:             u.Hash,
+		Amount:         best.Amount,
+		Fees:           best.Fees,
+		Recipient:      best.Recipient,
+		BlockNumber:    tip,
+		Confirmed:      true,
+		RawTx:          best.RawTx,
+		AdditionalData: addlData,
+	}
 
 	// Store the confirmed entry before deleting the pending one so the tx
 	// is never lost if the store fails.
-	if err := db.storeTx(best); err != nil {
+	if err := w.txDB.StoreTx(confirmed); err != nil {
 		w.log.Errorf("Storing confirmed send tx %s: %v", u.Hash, err)
 		return
 	}
-	if err := db.deleteTx(oldID); err != nil {
+	if err := w.txDB.RemoveTx(oldID); err != nil {
 		w.log.Warnf("Removing stale pending tx %s: %v", oldID, err)
 	}
 
 	w.log.Infof("Send tx confirmed: %s (%s HYPE)", u.Hash, u.Delta.Amount)
 	if w.emit != nil {
-		w.emit.TransactionNote(best.WalletTransaction, false)
+		w.emit.TransactionNote(confirmed, false)
 	}
 }
 
@@ -856,6 +884,74 @@ func walletTransactionLookupIDs(txID string) []string {
 		ids = append(ids, pendingID)
 	}
 	return ids
+}
+
+func (w *HyperWallet) getLastScannedMS() (int64, error) {
+	if w.metaTable == nil {
+		return 0, nil
+	}
+	b, err := w.metaTable.Get([]byte(lastScannedMSKey))
+	if errors.Is(err, txdb.ErrKeyNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(b) != 8 {
+		return 0, fmt.Errorf("invalid lastScannedMS length %d", len(b))
+	}
+	return int64(binary.BigEndian.Uint64(b)), nil
+}
+
+func (w *HyperWallet) setLastScannedMS(ms int64) error {
+	if w.metaTable == nil {
+		return nil
+	}
+	if ms < 0 {
+		return fmt.Errorf("negative lastScannedMS %d", ms)
+	}
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(ms))
+	return w.metaTable.Set([]byte(lastScannedMSKey), b, true)
+}
+
+func (w *HyperWallet) highestPendingNonce() (uint64, error) {
+	if w.txDB == nil {
+		return 0, nil
+	}
+	pending, err := w.txDB.GetPendingTxs()
+	if err != nil {
+		return 0, err
+	}
+	var max uint64
+	for _, wt := range pending {
+		nonceStr := wt.AdditionalData["nonce"]
+		if nonceStr == "" {
+			continue
+		}
+		n, err := strconv.ParseUint(nonceStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		if n > max {
+			max = n
+		}
+	}
+	return max, nil
+}
+
+func (w *HyperWallet) getTxByPendingID(pendingID string) (*txdb.WalletTransaction, error) {
+	if w.pendingIDIndex == nil {
+		return nil, nil
+	}
+	var found *txdb.WalletTransaction
+	if err := w.pendingIDIndex.Iterate([]byte(pendingID), func(wt *txdb.WalletTransaction) error {
+		found = wt
+		return txdb.ErrEndIteration
+	}, false, nil); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 func (w *HyperWallet) apiEndpoint() string {
