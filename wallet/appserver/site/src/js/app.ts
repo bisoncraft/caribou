@@ -1035,7 +1035,11 @@ export default class Application {
     const w = this.walletMap[assetID]
     if (!w) return
     const tx = note.transaction
-    if (tx.confirmed) delete w.pendingTxs[tx.id]
+    if (tx.confirmed) {
+      const pendingID = tx.additionalData?.pendingID
+      if (pendingID) delete w.pendingTxs[pendingID]
+      delete w.pendingTxs[tx.id]
+    }
     else w.pendingTxs[tx.id] = tx
   }
 

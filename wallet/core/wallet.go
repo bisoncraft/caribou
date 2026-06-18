@@ -505,6 +505,9 @@ func (w *xcWallet) processWalletTransactions(txs []*txdb.WalletTransaction) {
 	defer w.pendingTxsMtx.Unlock()
 	for _, tx := range txs {
 		if tx.Confirmed {
+			if pendingID := tx.AdditionalData["pendingID"]; pendingID != "" {
+				delete(w.pendingTxs, pendingID)
+			}
 			delete(w.pendingTxs, tx.ID)
 		} else {
 			w.pendingTxs[tx.ID] = tx

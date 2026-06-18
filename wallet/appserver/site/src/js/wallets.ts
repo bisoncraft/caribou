@@ -2090,8 +2090,10 @@ export default class WalletsPage extends BasePage {
   handleTxNote (na: NetworkAsset, tx: WalletTransaction) {
     const { page, selectedWalletID, pendingTxs } = this
     this.depositAddrForm.handleTx(selectedWalletID, tx)
-    const pt = pendingTxs[tx.id]
+    const pendingID = tx.additionalData?.pendingID
+    const pt = pendingTxs[tx.id] || (pendingID ? pendingTxs[pendingID] : undefined)
     if (tx.confirmed) {
+      if (pendingID) delete pendingTxs[pendingID]
       delete pendingTxs[tx.id]
       if (pt) pt.tr.remove()
     } else if (tx.timestamp > 0) {
