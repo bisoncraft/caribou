@@ -85,47 +85,87 @@ func (t *Table) Set(k, v []byte, opts ...SetOption) error {
 		opt(&o)
 	}
 	return t.db.Update(func(tx *bbolt.Tx) error {
-		tb := tx.Bucket(t.name)
-		data := tb.Bucket(dataBucketKey)
-		index := tb.Bucket(indexBucketKey)
+		return t.setInTx(tx, k, v, o.replace)
+	})
+}
 
-		// If an entry exists, either reject or purge its old index entries.
-		if old := data.Get(k); old != nil {
-			if !o.replace {
-				return errors.New("glossi: attempted to replace an entry without WithReplace")
-			}
-			_, oldIdxKeys, err := decodeDatum(old)
-			if err != nil {
+// KV is a key/value pair, used to enqueue writes for SetBatch.
+type KV struct {
+	K, V []byte
+}
+
+// SetBatch inserts every entry in a single transaction, collapsing what would
+// otherwise be one bbolt.Update (and one fsync) per Set into one. This is the
+// path bulk inserts should use on mobile - an initial history sync or a
+// migration that stores many transactions at once - where per-call fsync is
+// noticeably slow. If replace is false and any key already exists, the whole
+// batch is rolled back.
+func (t *Table) SetBatch(entries []KV, opts ...SetOption) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	for _, e := range entries {
+		if len(e.K) == 0 {
+			return errors.New("glossi: no zero-length keys allowed")
+		}
+	}
+	var o setOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return t.db.Update(func(tx *bbolt.Tx) error {
+		for _, e := range entries {
+			if err := t.setInTx(tx, e.K, e.V, o.replace); err != nil {
 				return err
 			}
-			for _, ik := range oldIdxKeys {
-				if err := index.Delete(ik); err != nil {
-					return fmt.Errorf("error deleting replaced index entry: %w", err)
-				}
-			}
 		}
-
-		idxKeys := make([][]byte, 0, len(t.indexes))
-		for _, idx := range t.indexes {
-			ik, err := idx.entryKey(k, v)
-			if err != nil {
-				if errors.Is(err, ErrNotIndexed) {
-					continue
-				}
-				return fmt.Errorf("index %q error: %w", idx.name, err)
-			}
-			if idx.unique {
-				if err := idx.checkUnique(index, ik, k); err != nil {
-					return err
-				}
-			}
-			if err := index.Put(ik, k); err != nil {
-				return fmt.Errorf("error writing index entry: %w", err)
-			}
-			idxKeys = append(idxKeys, ik)
-		}
-		return data.Put(k, encodeDatum(v, idxKeys))
+		return nil
 	})
+}
+
+// setInTx performs one Set within an existing transaction. Set and SetBatch
+// both funnel through it so the index bookkeeping lives in a single place.
+func (t *Table) setInTx(tx *bbolt.Tx, k, v []byte, replace bool) error {
+	tb := tx.Bucket(t.name)
+	data := tb.Bucket(dataBucketKey)
+	index := tb.Bucket(indexBucketKey)
+
+	// If an entry exists, either reject or purge its old index entries.
+	if old := data.Get(k); old != nil {
+		if !replace {
+			return errors.New("glossi: attempted to replace an entry without WithReplace")
+		}
+		_, oldIdxKeys, err := decodeDatum(old)
+		if err != nil {
+			return err
+		}
+		for _, ik := range oldIdxKeys {
+			if err := index.Delete(ik); err != nil {
+				return fmt.Errorf("error deleting replaced index entry: %w", err)
+			}
+		}
+	}
+
+	idxKeys := make([][]byte, 0, len(t.indexes))
+	for _, idx := range t.indexes {
+		ik, err := idx.entryKey(k, v)
+		if err != nil {
+			if errors.Is(err, ErrNotIndexed) {
+				continue
+			}
+			return fmt.Errorf("index %q error: %w", idx.name, err)
+		}
+		if idx.unique {
+			if err := idx.checkUnique(index, ik, k); err != nil {
+				return err
+			}
+		}
+		if err := index.Put(ik, k); err != nil {
+			return fmt.Errorf("error writing index entry: %w", err)
+		}
+		idxKeys = append(idxKeys, ik)
+	}
+	return data.Put(k, encodeDatum(v, idxKeys))
 }
 
 // Get retrieves a value from the Table. It returns ErrKeyNotFound if the key is

@@ -85,6 +85,63 @@ func TestZeroLengthKey(t *testing.T) {
 	}
 }
 
+func TestSetBatch(t *testing.T) {
+	db := newTestDB(t)
+	tbl, err := db.Table("things")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+
+	// Empty batch is a no-op.
+	if err := tbl.SetBatch(nil); err != nil {
+		t.Fatalf("SetBatch(nil): %v", err)
+	}
+
+	entries := []KV{
+		{K: []byte("k1"), V: []byte("v1")},
+		{K: []byte("k2"), V: []byte("v2")},
+		{K: []byte("k3"), V: []byte("v3")},
+	}
+	if err := tbl.SetBatch(entries); err != nil {
+		t.Fatalf("SetBatch: %v", err)
+	}
+	for _, e := range entries {
+		got, err := tbl.Get(e.K)
+		if err != nil || !bytes.Equal(got, e.V) {
+			t.Fatalf("Get(%q) = %q, %v", e.K, got, err)
+		}
+	}
+
+	// A zero-length key anywhere in the batch is rejected before any write.
+	if err := tbl.SetBatch([]KV{{K: []byte("k4"), V: []byte("v4")}, {K: nil, V: []byte("x")}}); err == nil {
+		t.Fatal("expected error for zero-length key in batch")
+	}
+	if _, err := tbl.Get([]byte("k4")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("k4 should not have been written, got %v", err)
+	}
+
+	// Without WithReplace, a conflict mid-batch rolls back the whole batch:
+	// the earlier entry in the same batch must not persist.
+	err = tbl.SetBatch([]KV{
+		{K: []byte("fresh"), V: []byte("a")},
+		{K: []byte("k1"), V: []byte("dup")}, // k1 already exists -> conflict
+	})
+	if err == nil {
+		t.Fatal("expected conflict error without WithReplace")
+	}
+	if _, err := tbl.Get([]byte("fresh")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("batch should have rolled back; 'fresh' persisted: %v", err)
+	}
+
+	// With WithReplace, existing keys are updated.
+	if err := tbl.SetBatch([]KV{{K: []byte("k1"), V: []byte("v1-new")}}, WithReplace()); err != nil {
+		t.Fatalf("SetBatch replace: %v", err)
+	}
+	if got, _ := tbl.Get([]byte("k1")); !bytes.Equal(got, []byte("v1-new")) {
+		t.Fatalf("k1 after replace = %q", got)
+	}
+}
+
 // blockIndexFunc indexes a value whose first 8 bytes are a big-endian uint64.
 func blockIndexFunc(_, v []byte) ([]byte, error) {
 	return v[:8], nil

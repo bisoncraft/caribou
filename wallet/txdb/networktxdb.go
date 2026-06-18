@@ -14,12 +14,18 @@ type NetworkTxDB interface {
 	// StoreTx inserts or updates a transaction, keyed by wt.ID. The wallet's
 	// network-specific representation should be encoded into wt.RawTx.
 	StoreTx(wt *WalletTransaction) error
+	// StoreTxs inserts or updates many transactions in a single underlying
+	// write. It is intended for bulk paths - an initial history sync or a
+	// migration - where storing transactions one at a time would incur a
+	// per-transaction fsync on mobile (bbolt).
+	StoreTxs(wts []*WalletTransaction) error
 	// GetTx returns a single transaction, or (nil, nil) if not found.
 	GetTx(txID string) (*WalletTransaction, error)
 	// GetTxs returns transaction history for this network, time-ordered.
 	GetTxs(req *TxHistoryRequest) (*TxHistoryResponse, error)
-	// GetPendingTxs returns this network's unconfirmed (in-mempool)
-	// transactions.
+	// GetPendingTxs returns this network's unconfirmed transactions: every tx
+	// that is not yet finalized (Confirmed), not just those still in the
+	// mempool. This matches the per-wallet tx DBs that wallets migrate from.
 	GetPendingTxs() ([]*WalletTransaction, error)
 	// RemoveTx deletes a transaction. It is not an error if it does not exist.
 	RemoveTx(txID string) error
@@ -44,6 +50,10 @@ var _ NetworkTxDB = (*networkTxDB)(nil)
 
 func (n *networkTxDB) StoreTx(wt *WalletTransaction) error {
 	return n.db.storeTx(n.network, wt)
+}
+
+func (n *networkTxDB) StoreTxs(wts []*WalletTransaction) error {
+	return n.db.storeTxs(n.network, wts)
 }
 
 func (n *networkTxDB) GetTx(txID string) (*WalletTransaction, error) {

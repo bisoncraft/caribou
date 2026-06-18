@@ -34,6 +34,11 @@ const (
 // ErrNotIndexed to skip the datum.
 type IndexFunc func(k, v []byte) ([]byte, error)
 
+// BatchEntry is a single key/value pair for StoreTable.SetBatch.
+type BatchEntry struct {
+	K, V []byte
+}
+
 // Store is an indexed key-value store. It is implemented by adapters over
 // util/lexi (Badger) and util/glossi (bbolt).
 type Store interface {
@@ -57,6 +62,12 @@ type StoreTable interface {
 	// Set inserts a value for the key. If replace is false and the key exists,
 	// an error is returned.
 	Set(k, v []byte, replace bool) error
+	// SetBatch inserts every entry in a single underlying transaction. On
+	// engines that fsync per write (bbolt on mobile) this collapses N fsyncs
+	// into one, which matters for bulk inserts such as an initial history sync
+	// or a migration. replace has the same meaning as in Set; if it is false
+	// and any key already exists, the whole batch is rolled back.
+	SetBatch(entries []BatchEntry, replace bool) error
 	// Get returns the value for the key, or ErrKeyNotFound.
 	Get(k []byte) ([]byte, error)
 	Delete(k []byte) error

@@ -73,6 +73,17 @@ func (t *glossiTable) Set(k, v []byte, replace bool) error {
 	return t.t.Set(k, v)
 }
 
+func (t *glossiTable) SetBatch(entries []BatchEntry, replace bool) error {
+	kvs := make([]glossi.KV, len(entries))
+	for i, e := range entries {
+		kvs[i] = glossi.KV{K: e.K, V: e.V}
+	}
+	if replace {
+		return t.t.SetBatch(kvs, glossi.WithReplace())
+	}
+	return t.t.SetBatch(kvs)
+}
+
 func (t *glossiTable) Get(k []byte) ([]byte, error) {
 	return t.t.Get(k)
 }

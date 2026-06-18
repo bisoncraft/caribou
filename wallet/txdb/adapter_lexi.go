@@ -86,6 +86,17 @@ func (t *lexiTable) Set(k, v []byte, replace bool) error {
 	return t.t.Set(k, v)
 }
 
+func (t *lexiTable) SetBatch(entries []BatchEntry, replace bool) error {
+	pairs := make([]lexi.KVPair, len(entries))
+	for i, e := range entries {
+		pairs[i] = lexi.KVPair{K: e.K, V: e.V}
+	}
+	if replace {
+		return t.t.SetBatch(pairs, lexi.WithReplace())
+	}
+	return t.t.SetBatch(pairs)
+}
+
 func (t *lexiTable) Get(k []byte) ([]byte, error) {
 	b, err := t.t.GetRaw(k)
 	if errors.Is(err, lexi.ErrKeyNotFound) {

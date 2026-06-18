@@ -292,6 +292,86 @@ func TestPendingTxsNetworkScoped(t *testing.T) {
 	}
 }
 
+// TestPendingTxsMinedUnconfirmed verifies the pending set means "unconfirmed",
+// not "mempool-only": a tx that is mined (BlockNumber > 0) but not yet
+// finalized (Confirmed == false) must still be returned as pending, matching
+// the per-wallet tx DBs wallets migrate from.
+func TestPendingTxsMinedUnconfirmed(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	minedUnconfirmed := tx("mined-unconf", 5, 100)
+	minedUnconfirmed.Confirmed = false // mined but not yet finalized
+	n.StoreTx(minedUnconfirmed)
+	n.StoreTx(tx("mempool", 0, 0)) // unconfirmed, still in mempool
+	n.StoreTx(tx("final", 9, 200)) // mined and Confirmed -> not pending
+
+	pending, err := n.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range pending {
+		got[p.ID] = true
+	}
+	if len(pending) != 2 || !got["mined-unconf"] || !got["mempool"] {
+		t.Fatalf("pending = %v, want [mined-unconf mempool]", ids(pending))
+	}
+}
+
+// TestStoreTxsBatch verifies the bulk insert path stores every tx, makes each
+// retrievable, and populates the history and pending indexes.
+func TestStoreTxsBatch(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	// Empty batch is a no-op.
+	if err := n.StoreTxs(nil); err != nil {
+		t.Fatalf("StoreTxs(nil): %v", err)
+	}
+
+	batch := []*WalletTransaction{
+		tx("b1", 1, 100),
+		tx("b2", 2, 200),
+		tx("b3", 0, 0), // unconfirmed
+	}
+	if err := n.StoreTxs(batch); err != nil {
+		t.Fatalf("StoreTxs: %v", err)
+	}
+
+	for _, want := range batch {
+		got, err := n.GetTx(want.ID)
+		if err != nil || got == nil {
+			t.Fatalf("GetTx(%s) = %v, %v", want.ID, got, err)
+		}
+	}
+
+	resp, err := n.GetTxs(&TxHistoryRequest{})
+	if err != nil {
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if len(resp.Txs) != 3 {
+		t.Fatalf("history len = %d, want 3", len(resp.Txs))
+	}
+
+	pending, err := n.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs: %v", err)
+	}
+	if !eq(ids(pending), []string{"b3"}) {
+		t.Fatalf("pending = %v, want [b3]", ids(pending))
+	}
+
+	// A second batch with overlapping IDs updates in place (replace).
+	if err := n.StoreTxs([]*WalletTransaction{tx("b1", 3, 300)}); err != nil {
+		t.Fatalf("StoreTxs replace: %v", err)
+	}
+	got, _ := n.GetTx("b1")
+	if got == nil || got.BlockNumber != 3 {
+		t.Fatalf("b1 not updated by batch: %+v", got)
+	}
+}
+
 func TestNetworkIsolation(t *testing.T) {
 	db := newTestTxDB(t)
 	a := db.NetworkTxDB(netA)

@@ -829,6 +829,45 @@ func TestTransactionOptions(t *testing.T) {
 	}
 }
 
+// TestSetBatchIgnoresCallerTxn verifies that a caller-supplied WithTxn cannot
+// override SetBatch's internal batch transaction. Options are applied
+// last-wins, so SetBatch must append WithTxn(batchTxn) after the caller's
+// options. Otherwise the writes would land in the caller's transaction and
+// break batch atomicity.
+func TestSetBatchIgnoresCallerTxn(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("SetBatchTxnTest")
+	if err != nil {
+		t.Fatalf("Error creating table: %v", err)
+	}
+
+	// A stray transaction that is never committed. If a caller-supplied
+	// WithTxn were allowed to win, SetBatch's writes would land here and be
+	// lost when the txn is discarded.
+	strayTxn := db.NewTransaction(true)
+	defer strayTxn.Discard()
+
+	pairs := []KVPair{
+		{K: []byte("k1"), V: &tValue{v: []byte("v1")}},
+		{K: []byte("k2"), V: &tValue{v: []byte("v2")}},
+	}
+
+	if err := tbl.SetBatch(pairs, WithTxn(strayTxn)); err != nil {
+		t.Fatalf("SetBatch error: %v", err)
+	}
+
+	// Every entry must be readable from committed state, proving it landed in
+	// SetBatch's own committed transaction rather than the stray one.
+	for _, p := range pairs {
+		var got tValue
+		if err := tbl.Get(p.K, &got); err != nil {
+			t.Fatalf("entry %q missing after SetBatch (caller WithTxn leaked): %v", p.K, err)
+		}
+	}
+}
+
 func TestNeedsV1toV4Update(t *testing.T) {
 	tests := []struct {
 		name, addSuffix string
