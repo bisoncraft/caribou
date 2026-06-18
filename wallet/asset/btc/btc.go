@@ -618,7 +618,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 	return WalletInfo
 }
 
-// MinLotSize calculates the minimum bond size for a given fee rate that avoids
+// MinLotSize calculates the minimum lot size for a given fee rate that avoids
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
@@ -761,8 +761,6 @@ type baseWallet struct {
 
 	rf *RedemptionFinder
 
-	bondReserves atomic.Uint64
-
 	pendingTxsMtx sync.RWMutex
 	pendingTxs    map[chainhash.Hash]ExtendedWalletTx
 
@@ -858,7 +856,6 @@ var _ asset.LogFiler = (*ExchangeWalletSPV)(nil)
 var _ asset.Recoverer = (*ExchangeWalletSPV)(nil)
 var _ asset.PeerManager = (*ExchangeWalletSPV)(nil)
 var _ asset.TxFeeEstimator = (*intermediaryWallet)(nil)
-var _ asset.Bonder = (*baseWallet)(nil)
 var _ asset.Authenticator = (*ExchangeWalletSPV)(nil)
 var _ asset.Authenticator = (*ExchangeWalletFullNode)(nil)
 var _ asset.Authenticator = (*ExchangeWalletAccelerator)(nil)
@@ -1715,42 +1712,7 @@ func (btc *baseWallet) balance() (*asset.Balance, error) {
 
 // Balance should return the total available funds in the wallet.
 func (btc *baseWallet) Balance() (*asset.Balance, error) {
-	bal, err := btc.balance()
-	if err != nil {
-		return nil, err
-	}
-
-	reserves := btc.bondReserves.Load()
-	if reserves > bal.Available {
-		btc.log.Warnf("Available balance is below configured reserves: %f < %f",
-			toBTC(bal.Available), toBTC(reserves))
-		bal.ReservesDeficit = reserves - bal.Available
-		reserves = bal.Available
-	}
-
-	bal.BondReserves = reserves
-	bal.Available -= reserves
-	bal.Locked += reserves
-
-	return bal, nil
-}
-
-func bondsFeeBuffer(segwit bool, highFeeRate uint64) uint64 {
-	const inputCount uint64 = 8 // plan for lots of inputs
-	var largeBondTxSize uint64
-	if segwit {
-		largeBondTxSize = MinimumTxOverhead + P2WSHOutputSize + 1 + BondPushDataSize +
-			P2WPKHOutputSize + inputCount*RedeemP2WPKHInputSize
-	} else {
-		largeBondTxSize = MinimumTxOverhead + P2SHOutputSize + 1 + BondPushDataSize +
-			P2PKHOutputSize + inputCount*RedeemP2PKHInputSize
-	}
-
-	// Normally we can plan on just 2 parallel "tracks" (single bond overlap
-	// when bonds are expired and waiting to refund) but that may increase
-	// temporarily if target tier is adjusted up.
-	const parallelTracks uint64 = 4
-	return parallelTracks * largeBondTxSize * highFeeRate
+	return btc.balance()
 }
 
 // legacyBalance is used for clones that are < node version 0.18 and so don't
@@ -1799,7 +1761,7 @@ func (btc *baseWallet) feeRate(confTarget uint64) (feeRate uint64, err error) {
 	}
 
 	// External estimate fallback. Error if it exceeds our limit, and the caller
-	// may use btc.fallbackFeeRate(), as in targetFeeRateWithFallback.
+	// may use btc.fallbackFeeRate(), as in feeRateWithFallback.
 	feeRate, err = btc.feeCache.rate(btc.ctx, btc.Network) // e.g. externalFeeRate
 	if err != nil {
 		btc.log.Meter("feeRate.rate.fail", time.Hour).Errorf("Failed to get fee rate from external API: %v", err)
@@ -1866,19 +1828,6 @@ type amount uint64
 
 func (a amount) String() string {
 	return strconv.FormatFloat(btcutil.Amount(a).ToBTC(), 'f', -1, 64) // dec, but no trailing zeros
-}
-
-// targetFeeRateWithFallback attempts to get a fresh fee rate for the target
-// number of confirmations, but falls back to the suggestion or fallbackFeeRate
-// via feeRateWithFallback.
-func (btc *baseWallet) targetFeeRateWithFallback(confTarget, feeSuggestion uint64) uint64 {
-	feeRate, err := btc.feeRate(confTarget)
-	if err == nil && feeRate > 0 {
-		btc.log.Tracef("Obtained estimate for %d-conf fee rate, %d", confTarget, feeRate)
-		return feeRate
-	}
-	btc.log.Tracef("no %d-conf feeRate available: %v", confTarget, err)
-	return btc.feeRateWithFallback(feeSuggestion)
 }
 
 // feeRateWithFallback filters the suggested fee rate by ensuring it is within
@@ -2200,7 +2149,7 @@ func (btc *baseWallet) signedAccelerationTx(previousTxs []*GetTransactionResult,
 			return totalReq <= totalVal, totalVal - totalReq
 		}
 		minConfs := uint32(1)
-		additionalInputs, _, _, _, _, _, err = btc.cm.Fund(btc.bondReserves.Load(), minConfs, false, enough)
+		additionalInputs, _, _, _, _, _, err = btc.cm.Fund(0, minConfs, false, enough)
 		if err != nil {
 			return makeError(fmt.Errorf("failed to fund acceleration tx: %w", err))
 		}
@@ -2292,7 +2241,7 @@ func accelerateOrder(btc *baseWallet, swapCoins, accelerationCoins []util.Bytes,
 		Type: txdb.Acceleration,
 		ID:   txHash.String(),
 		Fees: fees,
-	}, txHash, true)
+	}, txHash)
 
 	// Delete the old change from the cache
 	btc.cm.ReturnOutPoint(NewOutPoint(changeTxHash, changeVout))
@@ -2600,51 +2549,7 @@ func (btc *baseWallet) txDB() *BadgerTxDB {
 	return db
 }
 
-func (btc *baseWallet) markTxAsSubmitted(txHash *chainhash.Hash) {
-	txHistoryDB := btc.txDB()
-	if txHistoryDB == nil {
-		return
-	}
-
-	btc.pendingTxsMtx.Lock()
-	wt, found := btc.pendingTxs[*txHash]
-	if found {
-		wt.Submitted = true
-		btc.pendingTxs[*txHash] = wt
-	}
-	btc.pendingTxsMtx.Unlock()
-
-	if !found {
-		btc.log.Errorf("tx %s not found in pending txs", txHash)
-		return
-	}
-
-	// The transaction was held back from the shared DB until broadcast; write
-	// it now that it is submitted.
-	if err := txHistoryDB.StoreTx(&wt); err != nil {
-		btc.log.Errorf("failed to store submitted tx in tx history db: %v", err)
-	}
-
-	btc.emit.TransactionNote(wt.WalletTransaction, true)
-}
-
-func (btc *baseWallet) removeTxFromHistory(txHash *chainhash.Hash) {
-	txHistoryDB := btc.txDB()
-	if txHistoryDB == nil {
-		return
-	}
-
-	err := txHistoryDB.RemoveTx(txHash.String())
-	if err != nil {
-		btc.log.Errorf("failed to remove tx from tx history db: %v", err)
-	}
-
-	btc.pendingTxsMtx.Lock()
-	delete(btc.pendingTxs, *txHash)
-	btc.pendingTxsMtx.Unlock()
-}
-
-func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, submitted bool, skipNotes ...bool) {
+func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, skipNotes ...bool) {
 	txHistoryDB := btc.txDB()
 	if txHistoryDB == nil {
 		return
@@ -2652,7 +2557,6 @@ func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainh
 
 	ewt := &ExtendedWalletTx{
 		WalletTransaction: wt,
-		Submitted:         submitted,
 	}
 
 	if wt.BlockNumber == 0 {
@@ -2661,17 +2565,12 @@ func (btc *baseWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainh
 		btc.pendingTxsMtx.Unlock()
 	}
 
-	// Unsubmitted transactions are held only in the in-memory pending map until
-	// they are broadcast (markTxAsSubmitted writes them to the shared DB), so
-	// the database never contains unsubmitted transactions.
-	if submitted {
-		if err := txHistoryDB.StoreTx(ewt); err != nil {
-			btc.log.Errorf("failed to store tx in tx history db: %v", err)
-		}
+	if err := txHistoryDB.StoreTx(ewt); err != nil {
+		btc.log.Errorf("failed to store tx in tx history db: %v", err)
 	}
 
 	skipNote := len(skipNotes) > 0 && skipNotes[0]
-	if submitted && !skipNote {
+	if !skipNote {
 		btc.emit.TransactionNote(wt, true)
 	}
 }
@@ -2779,8 +2678,6 @@ func (btc *baseWallet) SendTransaction(rawTx []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	btc.markTxAsSubmitted(txHash)
-
 	return ToCoinID(txHash, 0), nil
 }
 
@@ -2811,7 +2708,7 @@ func (btc *baseWallet) send(address string, val uint64, feeRate uint64, subtract
 
 	enough := SendEnough(val, feeRate, subtract, uint64(baseSize), btc.segwit, true)
 	minConfs := uint32(0)
-	coins, _, _, _, inputsSize, _, err := btc.cm.Fund(btc.bondReserves.Load(), minConfs, false, enough)
+	coins, _, _, _, inputsSize, _, err := btc.cm.Fund(0, minConfs, false, enough)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("error funding transaction: %w", err)
 	}
@@ -2864,7 +2761,7 @@ func (btc *baseWallet) send(address string, val uint64, feeRate uint64, subtract
 		Recipient: &address,
 		Timestamp: uint64(time.Now().Unix()),
 		Confirms:  &txdb.Confirms{Target: confTxFinality},
-	}, txHash, true)
+	}, txHash)
 
 	return txHash, 0, toSend, nil
 }
@@ -3227,482 +3124,15 @@ func (btc *baseWallet) StandardSendFee(feeRate uint64) uint64 {
 	return feeRate * sz
 }
 
-func (btc *baseWallet) SetBondReserves(reserves uint64) {
-	btc.bondReserves.Store(reserves)
-}
-
-func bondPushData(ver uint16, acctID []byte, lockTimeSec int64, pkh []byte) []byte {
-	pushData := make([]byte, 2+len(acctID)+4+20)
-	var offset int
-	binary.BigEndian.PutUint16(pushData[offset:], ver)
-	offset += 2
-	copy(pushData[offset:], acctID[:])
-	offset += len(acctID)
-	binary.BigEndian.PutUint32(pushData[offset:], uint32(lockTimeSec))
-	offset += 4
-	copy(pushData[offset:], pkh)
-	return pushData
-}
-
-func bondPushDataScript(ver uint16, acctID []byte, lockTimeSec int64, pkh []byte) ([]byte, error) {
-	return txscript.NewScriptBuilder().
-		AddOp(txscript.OP_RETURN).
-		AddData(bondPushData(ver, acctID, lockTimeSec, pkh)).
-		Script()
-}
-
 // LockTimeExpired returns true if the specified locktime has expired, making it
 // possible to spend the time-locked output. For Bitcoin, the median of the last
-// 11 blocks must be past the locktime, not the current time. This is used by the
-// bond refund flow to determine when a bond output can be spent.
+// 11 blocks must be past the locktime, not the current time.
 func (btc *baseWallet) LockTimeExpired(_ context.Context, lockTime time.Time) (bool, error) {
 	medianTime, err := btc.node.MedianTime() // TODO: pass ctx
 	if err != nil {
 		return false, fmt.Errorf("error getting median time: %w", err)
 	}
 	return medianTime.After(lockTime), nil
-}
-
-// MakeBondTx creates a time-locked fidelity bond transaction. The V0
-// transaction has two required outputs:
-//
-// Output 0 is a the time-locked bond output of type P2SH with the provided
-// value. The redeem script looks similar to the refund path of an atomic swap
-// script, but with a pubkey hash:
-//
-//	<locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP OP_DUP OP_HASH160 <pubkeyhash[20]> OP_EQUALVERIFY OP_CHECKSIG
-//
-// The pubkey referenced by the script is provided by the caller.
-//
-// Output 1 is a DEX Account commitment. This is an OP_RETURN output that
-// references the provided account ID.
-//
-//	OP_RETURN <2-byte version> <32-byte account ID> <4-byte locktime> <20-byte pubkey hash>
-//
-// Having the account ID in the raw allows the txn alone to identify the account
-// without the bond output's redeem script.
-//
-// Output 2 is change, if any.
-//
-// The bond output's redeem script, which is needed to spend the bond output, is
-// returned as the Data field of the Bond. The bond output pays to a pubkeyhash
-// script for a wallet address. Bond.RedeemTx is a backup transaction that
-// spends the bond output after lockTime passes, paying to an address for the
-// current underlying wallet; the bond private key should normally be used to
-// author a new transaction paying to a new address instead.
-func (btc *baseWallet) MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Time, bondKey *btcec.PrivateKey, acctID []byte) (*asset.Bond, func(), error) {
-	if ver != 0 {
-		return nil, nil, errors.New("only version 0 bonds supported")
-	}
-	if until := time.Until(lockTime); until >= 365*12*time.Hour /* ~6 months */ {
-		return nil, nil, fmt.Errorf("that lock time is nuts: %v", lockTime)
-	} else if until < 0 {
-		return nil, nil, fmt.Errorf("that lock time is already passed: %v", lockTime)
-	}
-
-	pk := bondKey.PubKey().SerializeCompressed()
-	pkh := btcutil.Hash160(pk)
-
-	feeRate = btc.feeRateWithFallback(feeRate)
-	baseTx := wire.NewMsgTx(btc.txVersion())
-
-	// TL output.
-	lockTimeSec := lockTime.Unix()
-	if lockTimeSec >= MaxCLTVScriptNum || lockTimeSec <= 0 {
-		return nil, nil, fmt.Errorf("invalid lock time %v", lockTime)
-	}
-	bondScript, err := MakeBondScript(ver, uint32(lockTimeSec), pkh)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
-	}
-	pkScript, err := btc.scriptHashScript(bondScript)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error constructing p2sh script: %v", err)
-	}
-	txOut := wire.NewTxOut(int64(amt), pkScript)
-	if btc.IsDust(txOut, feeRate) {
-		return nil, nil, fmt.Errorf("bond output value of %d (fee rate %d) is dust", amt, feeRate)
-	}
-	baseTx.AddTxOut(txOut)
-
-	// Acct ID commitment and bond details output, v0. The integers are encoded
-	// with big-endian byte order and a fixed number of bytes, unlike in Script,
-	// for natural visual inspection of the version and lock time.
-	commitPkScript, err := bondPushDataScript(ver, acctID, lockTimeSec, pkh)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build acct commit output script: %w", err)
-	}
-	acctOut := wire.NewTxOut(0, commitPkScript) // value zero
-	baseTx.AddTxOut(acctOut)
-
-	baseSize := uint32(baseTx.SerializeSize())
-	if btc.segwit {
-		baseSize += P2WPKHOutputSize
-	} else {
-		baseSize += P2PKHOutputSize
-	}
-
-	const subtract = false
-	coins, _, _, _, _, _, err := btc.cm.Fund(0, 0, true, SendEnough(amt, feeRate, subtract, uint64(baseSize), btc.segwit, true))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to fund bond tx: %w", err)
-	}
-
-	var txIDToRemoveFromHistory *chainhash.Hash // will be non-nil if tx was added to history
-
-	abandon := func() { // if caller does not broadcast, or we fail in this method
-		err := btc.ReturnCoins(coins)
-		if err != nil {
-			btc.log.Errorf("error returning coins for unused bond tx: %v", coins)
-		}
-		if txIDToRemoveFromHistory != nil {
-			btc.removeTxFromHistory(txIDToRemoveFromHistory)
-		}
-	}
-
-	var success bool
-	defer func() {
-		if !success {
-			abandon()
-		}
-	}()
-
-	totalIn, _, err := btc.addInputsToTx(baseTx, coins)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to add inputs to bond tx: %w", err)
-	}
-
-	changeAddr, err := btc.node.ChangeAddress(btc.ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error creating change address: %w", err)
-	}
-	signedTx, _, fee, err := btc.signTxAndAddChange(btc.ctx, baseTx, changeAddr, totalIn, amt, feeRate)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to sign bond tx: %w", err)
-	}
-
-	txid := btc.hashTx(signedTx)
-
-	signedTxBytes, err := btc.serializeTx(signedTx)
-	if err != nil {
-		return nil, nil, err
-	}
-	unsignedTxBytes, err := btc.serializeTx(baseTx)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Prep the redeem / refund tx.
-	redeemMsgTx, err := btc.makeBondRefundTxV0(txid, 0, amt, bondScript, bondKey, feeRate)
-	if err != nil {
-		return nil, nil, fmt.Errorf("unable to create bond redemption tx: %w", err)
-	}
-	redeemTx, err := btc.serializeTx(redeemMsgTx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to serialize bond redemption tx: %w", err)
-	}
-
-	bond := &asset.Bond{
-		Version:    ver,
-		AssetID:    btc.cloneParams.AssetID,
-		Amount:     amt,
-		CoinID:     ToCoinID(txid, 0),
-		Data:       bondScript,
-		SignedTx:   signedTxBytes,
-		UnsignedTx: unsignedTxBytes,
-		RedeemTx:   redeemTx,
-	}
-	success = true
-
-	btc.addTxToHistory(&txdb.WalletTransaction{
-		Type:   txdb.CreateBond,
-		ID:     txid.String(),
-		Amount: amt,
-		Fees:   fee,
-		BondInfo: &txdb.BondTxInfo{
-			AccountID: acctID,
-			LockTime:  uint64(lockTimeSec),
-			BondID:    pkh,
-		},
-	}, txid, false)
-
-	txIDToRemoveFromHistory = txid
-
-	return bond, abandon, nil
-}
-
-func (btc *baseWallet) makeBondRefundTxV0(txid *chainhash.Hash, vout uint32, amt uint64,
-	script []byte, priv *btcec.PrivateKey, feeRate uint64) (*wire.MsgTx, error) {
-	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
-	if err != nil {
-		return nil, err
-	}
-
-	pk := priv.PubKey().SerializeCompressed()
-	pkh := btcutil.Hash160(pk)
-	if !bytes.Equal(pkh, pkhPush) {
-		return nil, fmt.Errorf("incorrect private key to spend the bond output")
-	}
-
-	msgTx := wire.NewMsgTx(btc.txVersion())
-	// Transaction LockTime must be <= spend time, and >= the CLTV lockTime, so
-	// we use exactly the CLTV's value. This limits the CLTV value to 32-bits.
-	msgTx.LockTime = lockTime
-	bondPrevOut := wire.NewOutPoint(txid, vout)
-	txIn := wire.NewTxIn(bondPrevOut, []byte{}, nil)
-	txIn.Sequence = wire.MaxTxInSequenceNum - 1 // not finalized, do not disable cltv
-	msgTx.AddTxIn(txIn)
-
-	// Calculate fees and add the refund output.
-	size := btc.calcTxSize(msgTx)
-	if btc.segwit {
-		witnessVBytes := (RedeemBondSigScriptSize + 2 + 3) / 4
-		size += uint64(witnessVBytes) + P2WPKHOutputSize
-	} else {
-		size += RedeemBondSigScriptSize + P2PKHOutputSize
-	}
-	fee := feeRate * size
-	if fee > amt {
-		return nil, fmt.Errorf("irredeemable bond at fee rate %d atoms/byte", feeRate)
-	}
-
-	// Add the refund output.
-	redeemAddr, err := btc.node.ExternalAddress(btc.ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error creating change address: %w", err)
-	}
-	redeemPkScript, err := txscript.PayToAddrScript(redeemAddr)
-	if err != nil {
-		return nil, fmt.Errorf("error creating pubkey script: %w", err)
-	}
-	redeemTxOut := wire.NewTxOut(int64(amt-fee), redeemPkScript)
-	if btc.IsDust(redeemTxOut, feeRate) { // hard to imagine
-		return nil, fmt.Errorf("bond redeem output (amt = %d, feeRate = %d, outputSize = %d) is dust", amt, feeRate, redeemTxOut.SerializeSize())
-	}
-	msgTx.AddTxOut(redeemTxOut)
-
-	if btc.segwit {
-		sigHashes := txscript.NewTxSigHashes(msgTx, new(txscript.CannedPrevOutputFetcher))
-		sig, err := txscript.RawTxInWitnessSignature(msgTx, sigHashes, 0, int64(amt),
-			script, txscript.SigHashAll, priv)
-		if err != nil {
-			return nil, err
-		}
-		txIn.Witness = RefundBondScriptSegwit(script, sig, pk)
-	} else {
-		prevPkScript, err := btc.scriptHashScript(script) // P2SH: OP_HASH160 <script hash> OP_EQUAL
-		if err != nil {
-			return nil, fmt.Errorf("error constructing p2sh script: %w", err)
-		}
-		sig, err := btc.signNonSegwit(msgTx, 0, script, txscript.SigHashAll, priv, []int64{int64(amt)}, [][]byte{prevPkScript})
-		if err != nil {
-			return nil, err
-		}
-		txIn.SignatureScript, err = RefundBondScript(script, sig, pk)
-		if err != nil {
-			return nil, fmt.Errorf("RefundBondScript: %w", err)
-		}
-	}
-
-	return msgTx, nil
-}
-
-// RefundBond refunds a bond output to a new wallet address given the redeem
-// script and private key. After broadcasting, the output paying to the wallet
-// is returned.
-func (btc *baseWallet) RefundBond(ctx context.Context, ver uint16, coinID, script []byte, amt uint64, privKey *btcec.PrivateKey) (asset.Coin, error) {
-	if ver != 0 {
-		return nil, errors.New("only version 0 bonds supported")
-	}
-	lockTime, pkhPush, err := ExtractBondDetailsV0(0, script)
-	if err != nil {
-		return nil, err
-	}
-	txHash, vout, err := decodeCoinID(coinID)
-	if err != nil {
-		return nil, err
-	}
-	feeRate := btc.targetFeeRateWithFallback(2, 0)
-
-	msgTx, err := btc.makeBondRefundTxV0(txHash, vout, amt, script, privKey, feeRate)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = btc.node.SendRawTransaction(ctx, msgTx)
-	if err != nil {
-		return nil, fmt.Errorf("error sending refund bond transaction: %w", err)
-	}
-
-	txID := btc.hashTx(msgTx)
-	var fees uint64
-	if len(msgTx.TxOut) == 1 {
-		fees = amt - uint64(msgTx.TxOut[0].Value)
-	}
-	btc.addTxToHistory(&txdb.WalletTransaction{
-		Type:   txdb.RedeemBond,
-		ID:     txID.String(),
-		Amount: amt,
-		Fees:   fees,
-		BondInfo: &txdb.BondTxInfo{
-			LockTime: uint64(lockTime),
-			BondID:   pkhPush,
-		},
-		Timestamp: uint64(time.Now().Unix()),
-		Confirms:  &txdb.Confirms{Target: confTxFinality},
-	}, txID, true)
-
-	return NewOutput(txHash, 0, uint64(msgTx.TxOut[0].Value)), nil
-}
-
-func (btc *baseWallet) decodeV0BondTx(msgTx *wire.MsgTx, txHash *chainhash.Hash, coinID []byte) (*asset.BondDetails, error) {
-	if len(msgTx.TxOut) < 2 {
-		return nil, fmt.Errorf("tx %s is not a v0 bond transaction: too few outputs", txHash)
-	}
-	_, lockTime, pkh, err := ExtractBondCommitDataV0(0, msgTx.TxOut[1].PkScript)
-	if err != nil {
-		return nil, fmt.Errorf("unable to extract bond commitment details from output 1 of %s: %v", txHash, err)
-	}
-	// Sanity check.
-	bondScript, err := MakeBondScript(0, lockTime, pkh[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to build bond output redeem script: %w", err)
-	}
-	pkScript, err := btc.scriptHashScript(bondScript)
-	if err != nil {
-		return nil, fmt.Errorf("error constructing p2sh script: %v", err)
-	}
-	if !bytes.Equal(pkScript, msgTx.TxOut[0].PkScript) {
-		return nil, fmt.Errorf("bond script does not match commit data for %s: %x != %x",
-			txHash, bondScript, msgTx.TxOut[0].PkScript)
-	}
-	return &asset.BondDetails{
-		Bond: &asset.Bond{
-			Version: 0,
-			AssetID: btc.cloneParams.AssetID,
-			Amount:  uint64(msgTx.TxOut[0].Value),
-			CoinID:  coinID,
-			Data:    bondScript,
-			//
-			// SignedTx and UnsignedTx not populated because this is
-			// an already posted bond and these fields are no longer used.
-			// SignedTx, UnsignedTx []byte
-			//
-			// RedeemTx cannot be populated because we do not have
-			// the private key that only core knows. Core will need
-			// the BondPKH to determine what the private key was.
-			// RedeemTx []byte
-		},
-		LockTime: time.Unix(int64(lockTime), 0),
-		CheckPrivKey: func(bondKey *btcec.PrivateKey) bool {
-			pk := bondKey.PubKey().SerializeCompressed()
-			pkhB := btcutil.Hash160(pk)
-			return bytes.Equal(pkh[:], pkhB)
-		},
-	}, nil
-}
-
-// FindBond finds the bond with coinID and returns the values used to create it.
-func (btc *baseWallet) FindBond(_ context.Context, coinID []byte, _ time.Time) (bond *asset.BondDetails, err error) {
-	txHash, vout, err := decodeCoinID(coinID)
-	if err != nil {
-		return nil, err
-	}
-
-	// If the bond was funded by this wallet or had a change output paying
-	// to this wallet, it should be found here.
-	tx, err := btc.node.GetWalletTransaction(txHash)
-	if err != nil {
-		return nil, fmt.Errorf("did not find the bond output %v:%d", txHash, vout)
-	}
-	msgTx, err := btc.deserializeTx(tx.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hex for tx %s: %v", txHash, err)
-	}
-	return btc.decodeV0BondTx(msgTx, txHash, coinID)
-}
-
-// FindBond finds the bond with coinID and returns the values used to create it.
-// The intermediate wallet is able to brute force finding blocks.
-func (btc *intermediaryWallet) FindBond(
-	ctx context.Context,
-	coinID []byte,
-	searchUntil time.Time,
-) (bond *asset.BondDetails, err error) {
-
-	txHash, vout, err := decodeCoinID(coinID)
-	if err != nil {
-		return nil, err
-	}
-
-	// If the bond was funded by this wallet or had a change output paying
-	// to this wallet, it should be found here.
-	tx, err := btc.node.GetWalletTransaction(txHash)
-	if err == nil {
-		msgTx, err := btc.deserializeTx(tx.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("invalid hex for tx %s: %v", txHash, err)
-		}
-		return btc.decodeV0BondTx(msgTx, txHash, coinID)
-	}
-	if !errors.Is(err, asset.CoinNotFoundError) {
-		btc.log.Warnf("Unexpected error looking up bond output %v:%d", txHash, vout)
-	}
-
-	// The bond was not funded by this wallet or had no change output when
-	// restored from seed. This is not a problem. However, we are unable to
-	// use filters because we don't know any output scripts. Brute force
-	// finding the transaction.
-	bestBlockHdr, err := btc.node.GetBestBlockHeader()
-	if err != nil {
-		return nil, fmt.Errorf("unable to get best hash: %v", err)
-	}
-	blockHash, err := chainhash.NewHashFromStr(bestBlockHdr.Hash)
-	if err != nil {
-		return nil, fmt.Errorf("invalid best block hash from %s node: %v", btc.symbol, err)
-	}
-	var (
-		blk      *wire.MsgBlock
-		msgTx    *wire.MsgTx
-		zeroHash = chainhash.Hash{}
-	)
-out:
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("bond search stopped: %w", err)
-		}
-		blk, err = btc.tipRedeemer.GetBlock(*blockHash)
-		if err != nil {
-			return nil, fmt.Errorf("error retrieving block %s: %w", blockHash, err)
-		}
-		if blk.Header.Timestamp.Before(searchUntil) {
-			return nil, fmt.Errorf("searched blocks until %v but did not find the bond tx %s", searchUntil, txHash)
-		}
-		for _, tx := range blk.Transactions {
-			if tx.TxHash() == *txHash {
-				btc.log.Debugf("Found mined tx %s in block %s.", txHash, blk.BlockHash())
-				msgTx = tx
-				break out
-			}
-		}
-		blockHash = &blk.Header.PrevBlock
-		if blockHash == nil || *blockHash == zeroHash /* genesis */ {
-			return nil, fmt.Errorf("did not find the bond output %v:%d", txHash, vout)
-		}
-	}
-	return btc.decodeV0BondTx(msgTx, txHash, coinID)
-}
-
-// BondsFeeBuffer suggests how much extra may be required for the transaction
-// fees part of required bond reserves when bond rotation is enabled. The
-// provided fee rate may be zero, in which case the wallet will use it's own
-// estimate or fallback value.
-func (btc *baseWallet) BondsFeeBuffer(feeRate uint64) uint64 {
-	if feeRate == 0 {
-		feeRate = btc.targetFeeRateWithFallback(1, 0)
-	}
-	feeRate *= 2 // double the current fee rate estimate so this fee buffer does not get stale too quickly
-	return bondsFeeBuffer(btc.segwit, feeRate)
 }
 
 func rpcTxFee(tx *ListTransactionsResult) uint64 {
@@ -3738,31 +3168,6 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*txdb.WalletTran
 	var totalOut uint64
 	for _, txOut := range msgTx.TxOut {
 		totalOut += uint64(txOut.Value)
-	}
-
-	txIsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
-		if len(msgTx.TxOut) < 2 {
-			return false, nil
-		}
-		const scriptVer = 0
-		acctID, lockTime, pkHash, err := ExtractBondCommitDataV0(scriptVer, msgTx.TxOut[1].PkScript)
-		if err != nil {
-			return false, nil
-		}
-		return true, &txdb.BondTxInfo{
-			AccountID: acctID[:],
-			LockTime:  uint64(lockTime),
-			BondID:    pkHash[:],
-		}
-	}
-	if isBond, bondInfo := txIsBond(msgTx); isBond {
-		return &txdb.WalletTransaction{
-			ID:       tx.TxID,
-			Type:     txdb.CreateBond,
-			Amount:   uint64(msgTx.TxOut[0].Value),
-			Fees:     fee,
-			BondInfo: bondInfo,
-		}, nil
 	}
 
 	// Any other P2SH may be a swap or a send. We cannot determine unless we
@@ -3840,34 +3245,6 @@ func (btc *baseWallet) idUnknownTx(tx *ListTransactionsResult) (*txdb.WalletTran
 			Type:   txdb.Refund,
 			Amount: totalOut + fee,
 			Fees:   fee,
-		}, nil
-	}
-
-	// Bond refunds
-	redeemsBond := func(msgTx *wire.MsgTx) (bool, *txdb.BondTxInfo) {
-		var bondInfo *txdb.BondTxInfo
-		isBond := func(segwit bool, contract []byte) bool {
-			const scriptVer = 0
-			lockTime, pkHash, err := ExtractBondDetailsV0(scriptVer, contract)
-			if err != nil {
-				return false
-			}
-			bondInfo = &txdb.BondTxInfo{
-				AccountID: []byte{}, // Could look for the bond tx to get this, I guess.
-				LockTime:  uint64(lockTime),
-				BondID:    pkHash[:],
-			}
-			return true
-		}
-		return containsContractAtPushIndex(msgTx, 2, isBond), bondInfo
-	}
-	if isBondRedemption, bondInfo := redeemsBond(msgTx); isBondRedemption {
-		return &txdb.WalletTransaction{
-			ID:       tx.TxID,
-			Type:     txdb.RedeemBond,
-			Amount:   totalOut,
-			Fees:     fee,
-			BondInfo: bondInfo,
 		}, nil
 	}
 
@@ -4055,7 +3432,7 @@ func (btc *baseWallet) addUnknownTransactionsToHistory(tip uint64) {
 
 		// Don't send notifications for the initial sync to avoid spamming the
 		// front end. A notification is sent at the end of the initial sync.
-		btc.addTxToHistory(wt, txHash, true, blockToQuery == 0)
+		btc.addTxToHistory(wt, txHash, blockToQuery == 0)
 	}
 
 	btc.receiveTxLastQuery.Store(tip)
@@ -4102,10 +3479,6 @@ func (btc *intermediaryWallet) syncTxHistory(tip uint64) {
 	btc.pendingTxsMtx.RUnlock()
 
 	handlePendingTx := func(txHash chainhash.Hash, tx *ExtendedWalletTx) {
-		if !tx.Submitted {
-			return
-		}
-
 		gtr, err := btc.node.GetWalletTransaction(&txHash)
 		if errors.Is(err, asset.CoinNotFoundError) {
 			err = txHistoryDB.RemoveTx(txHash.String())
@@ -4265,7 +3638,7 @@ func (btc *intermediaryWallet) WalletTransaction(ctx context.Context, txID strin
 	}
 
 	if updated {
-		btc.addTxToHistory(tx, txHash, true, false)
+		btc.addTxToHistory(tx, txHash, false)
 	}
 
 	return tx, nil
@@ -4377,20 +3750,6 @@ func hashContract(segwit bool, contract []byte) []byte {
 		return h[:]
 	}
 	return btcutil.Hash160(contract) // BIP16
-}
-
-// scriptHashAddress returns a new p2sh or p2wsh address, depending on whether
-// the wallet is configured for segwit.
-func (btc *baseWallet) scriptHashAddress(contract []byte) (btcutil.Address, error) {
-	return scriptHashAddress(btc.segwit, contract, btc.chainParams)
-}
-
-func (btc *baseWallet) scriptHashScript(contract []byte) ([]byte, error) {
-	addr, err := btc.scriptHashAddress(contract)
-	if err != nil {
-		return nil, err
-	}
-	return txscript.PayToAddrScript(addr)
 }
 
 // CallRPC is a method for making RPC calls directly on an underlying RPC

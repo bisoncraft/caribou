@@ -5,14 +5,12 @@ package asset
 
 import (
 	"context"
-	"time"
 
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"github.com/bisoncraft/bosswallet/util"
 	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/chaincfg/chainhash"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/txscript/v4/stdaddr"
 )
 
@@ -226,9 +224,6 @@ const (
 	// ErrInsufficientBalance is returned when there is insufficient available
 	// balance for an operation, such as reserving funds for future bonds.
 	ErrInsufficientBalance = util.ErrorKind("insufficient available balance")
-	// ErrIncorrectBondKey is returned when a provided private key is incorrect
-	// for a bond output.
-	ErrIncorrectBondKey = util.ErrorKind("incorrect private key")
 	// ErrUnapprovedToken is returned when trying to fund an order using a token
 	// that has not been approved.
 	ErrUnapprovedToken = util.ErrorKind("token not approved")
@@ -535,58 +530,6 @@ func (ss *SyncStatus) BlockProgress() float32 {
 		return min(prog, 0.999)
 	}
 	return prog
-}
-
-// BondDetails is the return from Bonder.FindBond.
-type BondDetails struct {
-	*Bond
-	LockTime     time.Time
-	CheckPrivKey func(priv *secp256k1.PrivateKey) bool
-}
-
-// Bonder is a wallet capable of creating and redeeming time-locked fidelity
-// bond transaction outputs.
-type Bonder interface {
-	Broadcaster
-
-	// BondsFeeBuffer suggests how much extra may be required for the
-	// transaction fees part of bond reserves when bond rotation is enabled.
-	// This should return an amount larger than the minimum required by the
-	// asset's reserves system for fees, if non-zero, so that a reserves
-	// "deficit" does not appear right after the first bond is posted. The
-	// caller may provide this value to ReserveBondFunds when actually posting
-	// the first bond to ensure it succeeds, assuming balance was checked.
-	BondsFeeBuffer(feeRate uint64) uint64
-
-	// SetBondReserves sets the bond reserve amount for the wallet.
-	SetBondReserves(reserves uint64)
-
-	// MakeBondTx authors a DEX time-locked fidelity bond transaction for the
-	// provided amount, lock time, and dex account ID. An explicit private key
-	// type is used to guarantee it's not bytes from something else like a
-	// public key. If there are insufficient bond reserves, the returned error
-	// should be of kind asset.ErrInsufficientBalance. The returned function may
-	// be used to abandon the bond iff it has not yet been broadcast. Generally
-	// this means unlocking the funds that are used by the transaction and
-	// restoring consumed reserves amounts.
-	MakeBondTx(ver uint16, amt, feeRate uint64, lockTime time.Time, privKey *secp256k1.PrivateKey, acctID []byte) (*Bond, func(), error)
-	// RefundBond will refund the bond given the full bond output details and
-	// private key to spend it. The bond is broadcasted.
-	RefundBond(ctx context.Context, ver uint16, coinID, script []byte, amt uint64, privKey *secp256k1.PrivateKey) (Coin, error)
-
-	// FindBond finds the bond with coinID and returns the values used to
-	// create it. The output should be unspent with the lockTime set to
-	// some time in the future. searchUntil is used for some wallets that
-	// are able to pull blocks.
-	FindBond(ctx context.Context, coinID []byte, searchUntil time.Time) (bondDetails *BondDetails, err error)
-
-	// A RefundBondByCoinID may be created in the future to attempt to refund a
-	// bond by locating it on chain, i.e. without providing the amount or
-	// script, while also verifying the bond output is unspent. However, it's
-	// far more straightforward to generate the refund transaction using the
-	// known values. Further, methods for (1) locking coins for future bonds,
-	// and (2) renewing bonds by spending a bond directly into a new one, may be
-	// required for efficient client bond management.
 }
 
 type PaymentMultisig struct {
@@ -1099,29 +1042,6 @@ type PoliteiaVoter interface {
 	PoliteiaEnabled() bool
 }
 
-// Bond is the fidelity bond info generated for a certain account ID, amount,
-// and lock time. These data are intended for the "post bond" request, in which
-// the server pre-validates the unsigned transaction, the client then publishes
-// the corresponding signed transaction, and a final request is made once the
-// bond is fully confirmed. The caller should manage the private key.
-type Bond struct {
-	Version uint16
-	AssetID uint32
-	Amount  uint64
-	CoinID  []byte
-	Data    []byte // additional data to interpret the bond e.g. redeem script, bond contract, etc.
-	// SignedTx and UnsignedTx are the opaque (raw bytes) signed and unsigned
-	// bond creation transactions, in whatever encoding and funding scheme for
-	// this asset and wallet. The unsigned one is used to pre-validate this bond
-	// with the server prior to publishing it, thus locking funds for a long
-	// period of time. Once the bond is pre-validated, the signed tx may then be
-	// published by the wallet.
-	SignedTx, UnsignedTx []byte
-	// RedeemTx is a backup transaction that spends the bond output. Normally
-	// the a key index will be used to derive the key when the bond expires.
-	RedeemTx []byte
-}
-
 // Balance is categorized information about a wallet's balance.
 type Balance struct {
 	// Available is the balance that is available for trading immediately.
@@ -1132,9 +1052,6 @@ type Balance struct {
 	// Locked is the total amount locked in the wallet which includes but
 	// is not limited to funds locked for swap but not actually swapped yet.
 	Locked uint64 `json:"locked"`
-	// BondReserves is the amount of funds locked in the wallet for expenses
-	// associated with bond maintenance.
-	BondReserves uint64 `json:"bondReserves"`
 	// ReservesDeficit is the difference between the available balance and the
 	// amount reserved for specific purposes.
 	ReservesDeficit uint64 `json:"reservesDeficit"`

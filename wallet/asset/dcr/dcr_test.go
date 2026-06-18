@@ -29,7 +29,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v3"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrjson/v4"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/decred/dcrd/gcs/v4"
@@ -1774,10 +1773,9 @@ func TestPurchaseTickets(t *testing.T) {
 	wallet.connected.Store(true)
 	cl.stakeInfo.Difficulty = dcrutil.Amount(sdiff).ToCoin()
 	cl.balanceResult = &walletjson.GetBalanceResult{Balances: []walletjson.GetAccountBalanceResult{{AccountName: tAcctName}}}
-	setBalance := func(n, reserves uint64) {
+	setBalance := func(n uint64) {
 		ticketCost := n * (sdiff + feeSuggestion*minVSPTicketPurchaseSize)
 		cl.balanceResult.Balances[0].Spendable = dcrutil.Amount(ticketCost).ToCoin()
-		wallet.bondReserves.Store(reserves)
 	}
 
 	var blocksToConfirm atomic.Int64
@@ -1873,13 +1871,13 @@ func TestPurchaseTickets(t *testing.T) {
 
 	// Single ticket purchased right away.
 	cl.purchasedTickets = [][]*chainhash.Hash{tixHashes(1)}
-	setBalance(1, 0)
+	setBalance(1)
 	buyTickets(1, false)
 	checkRemains(1, 0)
 
 	// Multiple tickets purchased right away.
 	cl.purchasedTickets = [][]*chainhash.Hash{tixHashes(2)}
-	setBalance(2, 0)
+	setBalance(2)
 	buyTickets(2, false)
 	checkRemains(2, 0)
 
@@ -1893,167 +1891,9 @@ func TestPurchaseTickets(t *testing.T) {
 	// (Wallet).PurchaseTickets error
 	cl.purchasedTickets = [][]*chainhash.Hash{tixHashes(4)}
 	cl.purchaseTicketsErr = errors.New("test error")
-	setBalance(4, 0)
+	setBalance(4)
 	buyTickets(4, true)
 	checkRemains(4, 0)
-
-	// Low-balance error
-	cl.purchasedTickets = [][]*chainhash.Hash{tixHashes(1)}
-	setBalance(1, 1) // reserves make our available balance 0
-	buyTickets(1, true)
-	checkRemains(1, 0)
-}
-
-func TestFindBond(t *testing.T) {
-	wallet, node, shutdown := tNewWallet()
-	defer shutdown()
-
-	privBytes, _ := hex.DecodeString("b07209eec1a8fb6cfe5cb6ace36567406971a75c330db7101fb21bc679bc5330")
-	bondKey := secp256k1.PrivKeyFromBytes(privBytes)
-
-	amt := uint64(50_000)
-	acctID := [32]byte{}
-	lockTime := time.Now().Add(time.Hour * 12)
-	utxo := walletjson.ListUnspentResult{
-		TxID:          tTxID,
-		Address:       tPKHAddr.String(),
-		Account:       tAcctName,
-		Amount:        1.0,
-		Confirmations: 1,
-		ScriptPubKey:  hex.EncodeToString(tP2PKHScript),
-		Spendable:     true,
-	}
-	node.unspent = []walletjson.ListUnspentResult{utxo}
-	node.newAddr = tPKHAddr
-	node.changeAddr = tPKHAddr
-
-	bond, _, err := wallet.MakeBondTx(0, amt, 200, lockTime, bondKey, acctID[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	txFn := func(err error, tx []byte) func() (*walletjson.GetTransactionResult, error) {
-		return func() (*walletjson.GetTransactionResult, error) {
-			if err != nil {
-				return nil, err
-			}
-			h := hex.EncodeToString(tx)
-			return &walletjson.GetTransactionResult{
-				BlockHash: hex.EncodeToString(randBytes(32)),
-				Hex:       h,
-			}, nil
-		}
-	}
-
-	newBondTx := func() *wire.MsgTx {
-		msgTx := wire.NewMsgTx()
-		if err := msgTx.FromBytes(bond.SignedTx); err != nil {
-			t.Fatal(err)
-		}
-		return msgTx
-	}
-	tooFewOutputs := newBondTx()
-	tooFewOutputs.TxOut = tooFewOutputs.TxOut[2:]
-	tooFewOutputsBytes, err := tooFewOutputs.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	badBondScript := newBondTx()
-	badBondScript.TxOut[1].PkScript = badBondScript.TxOut[1].PkScript[1:]
-	badBondScriptBytes, err := badBondScript.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	noBondMatch := newBondTx()
-	noBondMatch.TxOut[0].PkScript = noBondMatch.TxOut[0].PkScript[1:]
-	noBondMatchBytes, err := noBondMatch.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	node.blockchain.addRawTx(1, newBondTx())
-	verboseBlocks := node.blockchain.verboseBlocks
-
-	tests := []struct {
-		name          string
-		coinID        []byte
-		txRes         func() (*walletjson.GetTransactionResult, error)
-		bestBlockErr  error
-		verboseBlocks map[chainhash.Hash]*wire.MsgBlock
-		searchUntil   time.Time
-		wantErr       bool
-	}{{
-		name:   "ok",
-		coinID: bond.CoinID,
-		txRes:  txFn(nil, bond.SignedTx),
-	}, {
-		name:   "ok with find blocks",
-		coinID: bond.CoinID,
-		txRes:  txFn(asset.CoinNotFoundError, nil),
-	}, {
-		name:    "bad coin id",
-		coinID:  make([]byte, 0),
-		txRes:   txFn(nil, bond.SignedTx),
-		wantErr: true,
-	}, {
-		name:    "missing an output",
-		coinID:  bond.CoinID,
-		txRes:   txFn(nil, tooFewOutputsBytes),
-		wantErr: true,
-	}, {
-		name:    "bad bond commitment script",
-		coinID:  bond.CoinID,
-		txRes:   txFn(nil, badBondScriptBytes),
-		wantErr: true,
-	}, {
-		name:    "bond script does not match commitment",
-		coinID:  bond.CoinID,
-		txRes:   txFn(nil, noBondMatchBytes),
-		wantErr: true,
-	}, {
-		name:    "bad msgtx",
-		coinID:  bond.CoinID,
-		txRes:   txFn(nil, bond.SignedTx[100:]),
-		wantErr: true,
-	}, {
-		name:         "get best block error",
-		coinID:       bond.CoinID,
-		txRes:        txFn(asset.CoinNotFoundError, nil),
-		bestBlockErr: errors.New("some error"),
-		wantErr:      true,
-	}, {
-		name:          "block not found",
-		coinID:        bond.CoinID,
-		txRes:         txFn(asset.CoinNotFoundError, nil),
-		verboseBlocks: map[chainhash.Hash]*wire.MsgBlock{},
-		wantErr:       true,
-	}}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			node.walletTxFn = test.txRes
-			node.bestBlockErr = test.bestBlockErr
-			node.blockchain.verboseBlocks = verboseBlocks
-			if test.verboseBlocks != nil {
-				node.blockchain.verboseBlocks = test.verboseBlocks
-			}
-			bd, err := wallet.FindBond(tCtx, test.coinID, test.searchUntil)
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !bd.CheckPrivKey(bondKey) {
-				t.Fatal("pkh not equal")
-			}
-		})
-	}
 }
 
 func makeSwapContract(lockTimeOffset time.Duration) (pkScriptVer uint16, pkScript []byte) {
@@ -2092,38 +1932,6 @@ func TestIDUnknownTx(t *testing.T) {
 	redemptionTx := &wire.MsgTx{
 		TxIn:  []*wire.TxIn{txIn},
 		TxOut: []*wire.TxOut{wire.NewTxOut(int64(toAtoms(5-redeemFee)), tP2PKH)},
-	}
-
-	h2b := func(h string) []byte {
-		b, _ := hex.DecodeString(h)
-		return b
-	}
-
-	// Create Bond Tx
-	bondLockTime := 1711637410
-	bondID := h2b("0e39bbb09592fd00b7d770cc832ddf4d625ae3a0")
-	accountID := h2b("a0836b39b5ceb84f422b8a8cd5940117087a8522457c6d81d200557652fbe6ea")
-	bondContract, _ := MakeBondScript(0, uint32(bondLockTime), bondID)
-	contractAddr, err := stdaddr.NewAddressScriptHashV0(bondContract, chaincfg.MainNetParams())
-	if err != nil {
-		t.Fatal("error making script address:" + err.Error())
-	}
-	_, bondPkScript := contractAddr.PaymentScript()
-
-	bondOutput := wire.NewTxOut(int64(toAtoms(2)), bondPkScript)
-	bondCommitPkScript, _ := bondPushDataScript(0, accountID, int64(bondLockTime), bondID)
-	bondCommitmentOutput := wire.NewTxOut(0, bondCommitPkScript)
-	createBondTx := &wire.MsgTx{
-		TxIn:  []*wire.TxIn{wire.NewTxIn(&wire.OutPoint{}, 0, nil)},
-		TxOut: []*wire.TxOut{bondOutput, bondCommitmentOutput},
-	}
-
-	// Redeem Bond Tx
-	txIn = wire.NewTxIn(&wire.OutPoint{}, 0, nil)
-	txIn.SignatureScript, _ = RefundBondScript(bondContract, randBytes(73), randBytes(33))
-	redeemBondTx := &wire.MsgTx{
-		TxIn:  []*wire.TxIn{txIn},
-		TxOut: []*wire.TxOut{wire.NewTxOut(int64(toAtoms(5)), tP2PKH)},
 	}
 
 	// Split Tx
@@ -2200,44 +2008,6 @@ func TestIDUnknownTx(t *testing.T) {
 				ID:     redemptionTx.TxHash().String(),
 				Amount: toAtoms(5 - redeemFee),
 				Fees:   0,
-			},
-		},
-		{
-			name: "create bond",
-			ltr: &ListTransactionsResult{
-				TxType: &regularTx,
-				Fee:    float64Ptr(0.0000222),
-				TxID:   createBondTx.TxHash().String(),
-			},
-			tx: createBondTx,
-			exp: &txdb.WalletTransaction{
-				Type:   txdb.CreateBond,
-				ID:     createBondTx.TxHash().String(),
-				Amount: toAtoms(2),
-				Fees:   toAtoms(0.0000222),
-				BondInfo: &txdb.BondTxInfo{
-					AccountID: accountID,
-					BondID:    bondID,
-					LockTime:  uint64(bondLockTime),
-				},
-			},
-		},
-		{
-			name: "redeem bond",
-			ltr: &ListTransactionsResult{
-				TxType: &regularTx,
-				TxID:   redeemBondTx.TxHash().String(),
-			},
-			tx: redeemBondTx,
-			exp: &txdb.WalletTransaction{
-				Type:   txdb.RedeemBond,
-				ID:     redeemBondTx.TxHash().String(),
-				Amount: toAtoms(5),
-				BondInfo: &txdb.BondTxInfo{
-					AccountID: []byte{},
-					BondID:    bondID,
-					LockTime:  uint64(bondLockTime),
-				},
 			},
 		},
 		{

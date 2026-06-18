@@ -69,11 +69,11 @@ type extendedWalletTx struct {
 }
 
 const (
-	bridgeCompletionsTable         = "bridgeCompletions"
 	allAssetIndexName              = "allAssets"
 	assetIndexName                 = "asset"
 	bridgeInitiationIndexName      = "bridgeinit"
 	bridgeInitiationAssetIndexName = "bridgeinitasset"
+	bridgeCompletionIndexName      = "bridgecompletion"
 )
 
 // ethTxData is the eth-specific transaction data persisted in
@@ -188,13 +188,13 @@ type txDB interface {
 // is stored by the master DB; the eth extension rides in its RawTx, and the
 // custom indexes are built over it via the wallet index functions.
 type TxDB struct {
-	db                txdb.NetworkTxDB
-	bridgeCompletions txdb.StoreTable
+	db txdb.NetworkTxDB
 
 	allAssetIndex              txdb.TxIndex
 	assetIndex                 txdb.TxIndex
 	bridgeInitiationIndex      txdb.TxIndex
 	bridgeInitiationAssetIndex txdb.TxIndex
+	bridgeCompletionIndex      txdb.TxIndex
 
 	baseChainID uint32
 	log         util.Logger
@@ -295,11 +295,6 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 	if db == nil {
 		return nil, errors.New("nil network tx DB")
 	}
-	bridgeCompletions, err := db.Table(bridgeCompletionsTable)
-	if err != nil {
-		return nil, err
-	}
-
 	allAssetIndex, err := db.AddUniqueTxIndex(allAssetIndexName, func(wt *txdb.WalletTransaction) ([]byte, error) {
 		return allAssetIndexEntry(wt)
 	})
@@ -334,13 +329,22 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 		return nil, err
 	}
 
+	// bridgeCompletionIndex maps each completion tx to its initiation tx ID, so
+	// completions can be looked up by initiation without a second table write.
+	// Keying it on the txs table means a completion and its index entry are
+	// written in the single StoreTx transaction, keeping the write atomic.
+	bridgeCompletionIndex, err := db.AddTxIndex(bridgeCompletionIndexName, bridgeCompletionIndexEntry)
+	if err != nil {
+		return nil, err
+	}
+
 	return &TxDB{
 		db:                         db,
-		bridgeCompletions:          bridgeCompletions,
 		allAssetIndex:              allAssetIndex,
 		assetIndex:                 assetIndex,
 		bridgeInitiationIndex:      bridgeInitiationIndex,
 		bridgeInitiationAssetIndex: bridgeInitiationAssetIndex,
+		bridgeCompletionIndex:      bridgeCompletionIndex,
 		baseChainID:                baseChainID,
 		log:                        log,
 	}, nil
@@ -348,56 +352,42 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 
 // storeTx stores a transaction. If a transaction with the same hash or nonce
 // already exists, it is replaced (the unique nonce index evicts a prior tx with
-// the same nonce).
+// the same nonce). A bridge completion is recorded purely through
+// bridgeCompletionIndex, so the tx and its completion record are written in this
+// single StoreTx transaction with no separate commit to lose on a crash.
 func (db *TxDB) storeTx(wt *extendedWalletTx) error {
 	if err := wt.encodeRawTx(); err != nil {
 		return err
 	}
-	if err := db.db.StoreTx(wt.WalletTransaction); err != nil {
-		return err
-	}
-	if wt.Type == txdb.CompleteBridge {
-		return db.addBridgeCompletion(wt)
-	}
-	return nil
+	return db.db.StoreTx(wt.WalletTransaction)
 }
 
-// bridgeCompletionKey is the key for the bridge completions table entry that
-// lists the completion tx IDs for a given initiation tx.
+// bridgeCompletionKey is the 32-byte index prefix for the completions of a
+// given initiation tx.
 func bridgeCompletionKey(initiationTxID string) []byte {
 	h := common.HexToHash(initiationTxID)
 	return h[:]
 }
 
-// addBridgeCompletion records a bridge completion against its initiation tx.
-func (db *TxDB) addBridgeCompletion(wt *extendedWalletTx) error {
+// bridgeCompletionIndexEntry indexes a bridge completion tx by its initiation
+// tx ID, suffixed with the submission time so completions of the same
+// initiation iterate in chronological order. Non-completion txs are skipped.
+func bridgeCompletionIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
+	if wt.Type != txdb.CompleteBridge {
+		return nil, txdb.ErrNotIndexed
+	}
 	if wt.BridgeCounterpartTx == nil || len(wt.BridgeCounterpartTx.IDs) < 1 {
-		return fmt.Errorf("bridge completion missing initiation transaction ID")
+		return nil, txdb.ErrNotIndexed
 	}
-
-	key := bridgeCompletionKey(wt.BridgeCounterpartTx.IDs[0])
-
-	existingData, err := db.bridgeCompletions.Get(key)
-	if err != nil && !errors.Is(err, txdb.ErrKeyNotFound) {
-		return err
+	d, err := decodeETHData(wt.RawTx)
+	if err != nil {
+		return nil, err
 	}
-
-	buildy := encode.BuildyBytes{0}
-	if len(existingData) > 0 {
-		_, pushes, err := encode.DecodeBlob(existingData)
-		if err != nil {
-			return fmt.Errorf("error decoding existing bridge completions: %w", err)
-		}
-		for _, push := range pushes {
-			if string(push) == wt.ID {
-				return nil // already recorded
-			}
-			buildy = buildy.AddData(push)
-		}
-	}
-	buildy = buildy.AddData([]byte(wt.ID))
-
-	return db.bridgeCompletions.Set(key, []byte(buildy), true)
+	key := bridgeCompletionKey(wt.BridgeCounterpartTx.IDs[0]) // 32 bytes
+	entry := make([]byte, len(key)+8)
+	copy(entry, key)
+	binary.BigEndian.PutUint64(entry[len(key):], d.SubmissionTime)
+	return entry, nil
 }
 
 // getTx gets a single transaction. It is not an error if the tx is not known.
@@ -591,33 +581,19 @@ func (db *TxDB) getPendingBridges(tokenID *uint32) (txs []*extendedWalletTx, err
 }
 
 // getBridgeCompletions retrieves all bridge completion transactions for the
-// given bridge initiation transaction ID.
+// given bridge initiation transaction ID, in chronological order.
 func (db *TxDB) getBridgeCompletions(initiationTxID string) ([]*extendedWalletTx, error) {
-	data, err := db.bridgeCompletions.Get(bridgeCompletionKey(initiationTxID))
-	if err != nil {
-		if errors.Is(err, txdb.ErrKeyNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if len(data) <= 1 { // version byte only or empty
-		return nil, nil
-	}
-
-	_, pushes, err := encode.DecodeBlob(data)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding bridge completions: %w", err)
-	}
-
 	var txs []*extendedWalletTx
-	for _, push := range pushes {
-		wt, err := db.getTx(common.HexToHash(string(push)))
+	err := db.bridgeCompletionIndex.Iterate(bridgeCompletionKey(initiationTxID), func(wt *txdb.WalletTransaction) error {
+		ewt, err := decodeExtendedTx(wt)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if wt != nil {
-			txs = append(txs, wt)
-		}
+		txs = append(txs, ewt)
+		return nil
+	}, false, nil)
+	if err != nil {
+		return nil, err
 	}
 	return txs, nil
 }

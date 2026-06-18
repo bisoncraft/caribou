@@ -39,7 +39,6 @@ func ewt(id string, blockNumber uint64) *ExtendedWalletTx {
 			BlockNumber: blockNumber,
 			Confirmed:   blockNumber > 0,
 		},
-		Submitted: true,
 	}
 }
 
@@ -76,7 +75,7 @@ func TestTxDBStoreGetPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPendingTxs: %v", err)
 	}
-	if len(pending) != 1 || pending[0].ID != "pending" || !pending[0].Submitted {
+	if len(pending) != 1 || pending[0].ID != "pending" {
 		t.Fatalf("pending = %v", pending)
 	}
 

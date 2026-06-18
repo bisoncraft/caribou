@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -680,11 +679,6 @@ func runRubric(t *testing.T, f testFunc) {
 	})
 }
 
-func decodeString(s string) []byte {
-	b, _ := hex.DecodeString(s)
-	return b
-}
-
 // Since ReturnCoins takes the asset.Coin interface, make sure any interface
 // is acceptable.
 type tCoin struct{ id []byte }
@@ -774,10 +768,9 @@ func testSender(t *testing.T, senderType tSenderType, segwit bool, walletType st
 	}
 
 	type test struct {
-		name         string
-		val          uint64
-		unspents     []*ListUnspentResult
-		bondReserves uint64
+		name     string
+		val      uint64
+		unspents []*ListUnspentResult
 
 		expectedInputs []*OutPoint
 		expectSentVal  uint64
@@ -803,46 +796,6 @@ func testSender(t *testing.T, senderType tSenderType, segwit bool, walletType st
 			},
 			expectSentVal: expectedSentVal(toSatoshi(5), expectedFees(1)),
 			expectChange:  expectedChangeVal(toSatoshi(100), toSatoshi(5), expectedFees(1)),
-		},
-		{
-			name: "just enough change for bond reserves",
-			val:  toSatoshi(5),
-			unspents: []*ListUnspentResult{{
-				TxID:          txHash.String(),
-				Address:       addr.String(),
-				Amount:        5.2,
-				Confirmations: 1,
-				Vout:          0,
-				ScriptPubKey:  pkScript,
-				SafePtr:       boolPtr(true),
-				Spendable:     true,
-			}},
-			expectedInputs: []*OutPoint{
-				{TxHash: txHash,
-					Vout: 0},
-			},
-			expectSentVal: expectedSentVal(toSatoshi(5), expectedFees(1)),
-			expectChange:  expectedChangeVal(toSatoshi(5.2), toSatoshi(5), expectedFees(1)),
-			bondReserves:  expectedChangeVal(toSatoshi(5.2), toSatoshi(5), expectedFees(1)),
-		},
-		{
-			name: "not enough change for bond reserves",
-			val:  toSatoshi(5),
-			unspents: []*ListUnspentResult{{
-				TxID:          txHash.String(),
-				Address:       addr.String(),
-				Amount:        5.2,
-				Confirmations: 1,
-				Vout:          0,
-				ScriptPubKey:  pkScript,
-				SafePtr:       boolPtr(true),
-				Spendable:     true,
-			}},
-			expectedInputs: []*OutPoint{
-				{TxHash: txHash, Vout: 0},
-			},
-			bondReserves: expectedChangeVal(toSatoshi(5.2), toSatoshi(5), expectedFees(1)) + 1,
-			expectErr:    true,
 		},
 		{
 			name: "1 satoshi less than needed",
@@ -882,7 +835,6 @@ func testSender(t *testing.T, senderType tSenderType, segwit bool, walletType st
 
 	for _, test := range tests {
 		node.listUnspent = test.unspents
-		wallet.bondReserves.Store(test.bondReserves)
 
 		_, err := sender(addr.String(), test.val)
 		if test.expectErr {
@@ -1115,167 +1067,6 @@ func TestAddressRecycling(t *testing.T) {
 
 }
 
-func TestFindBond(t *testing.T) {
-	// Subtests share a single wallet/node fixture that each case mutates, so
-	// this test is not parallelized.
-	wallet, node, shutdown := tNewWallet(false, walletTypeRPC)
-	defer shutdown()
-
-	node.signFunc = func(tx *wire.MsgTx) {
-		signFunc(tx, 0, wallet.segwit)
-	}
-
-	privBytes, _ := hex.DecodeString("b07209eec1a8fb6cfe5cb6ace36567406971a75c330db7101fb21bc679bc5330")
-	bondKey, _ := btcec.PrivKeyFromBytes(privBytes)
-
-	amt := uint64(500_000)
-	acctID := [32]byte{}
-	lockTime := time.Now().Add(time.Hour * 12)
-	utxo := &ListUnspentResult{
-		TxID:          tTxID,
-		Address:       tP2PKHAddr,
-		Amount:        1.0,
-		Confirmations: 1,
-		Spendable:     true,
-		ScriptPubKey:  decodeString("76a914e114d5bb20cdbd75f3726f27c10423eb1332576288ac"),
-	}
-	node.listUnspent = []*ListUnspentResult{utxo}
-	node.changeAddr = tP2PKHAddr
-	node.newAddress = tP2PKHAddr
-
-	bond, _, err := wallet.MakeBondTx(0, amt, 200, lockTime, bondKey, acctID[:])
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	txRes := func(tx []byte) *GetTransactionResult {
-		return &GetTransactionResult{
-			BlockHash: hex.EncodeToString(randBytes(32)),
-			Bytes:     tx,
-		}
-	}
-
-	newBondTx := func() *wire.MsgTx {
-		msgTx, err := msgTxFromBytes(bond.SignedTx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return msgTx
-	}
-	tooFewOutputs := newBondTx()
-	tooFewOutputs.TxOut = tooFewOutputs.TxOut[2:]
-	tooFewOutputsBytes, err := serializeMsgTx(tooFewOutputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	badBondScript := newBondTx()
-	badBondScript.TxOut[1].PkScript = badBondScript.TxOut[1].PkScript[1:]
-	badBondScriptBytes, err := serializeMsgTx(badBondScript)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	noBondMatch := newBondTx()
-	noBondMatch.TxOut[0].PkScript = noBondMatch.TxOut[0].PkScript[1:]
-	noBondMatchBytes, err := serializeMsgTx(noBondMatch)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	node.addRawTx(1, newBondTx())
-	verboseBlocks := node.verboseBlocks
-	for _, blk := range verboseBlocks {
-		blk.msgBlock.Header.Timestamp = time.Now()
-	}
-
-	tests := []struct {
-		name              string
-		coinID            []byte
-		txRes             *GetTransactionResult
-		bestBlockErr      error
-		getTransactionErr error
-		verboseBlocks     map[chainhash.Hash]*msgBlockWithHeight
-		searchUntil       time.Time
-		wantErr           bool
-	}{{
-		name:   "ok",
-		coinID: bond.CoinID,
-		txRes:  txRes(bond.SignedTx),
-	}, {
-		name:              "ok with find blocks",
-		coinID:            bond.CoinID,
-		getTransactionErr: asset.CoinNotFoundError,
-	}, {
-		name:    "bad coin id",
-		coinID:  make([]byte, 0),
-		txRes:   txRes(bond.SignedTx),
-		wantErr: true,
-	}, {
-		name:    "missing an output",
-		coinID:  bond.CoinID,
-		txRes:   txRes(tooFewOutputsBytes),
-		wantErr: true,
-	}, {
-		name:    "bad bond commitment script",
-		coinID:  bond.CoinID,
-		txRes:   txRes(badBondScriptBytes),
-		wantErr: true,
-	}, {
-		name:    "bond script does not match commitment",
-		coinID:  bond.CoinID,
-		txRes:   txRes(noBondMatchBytes),
-		wantErr: true,
-	}, {
-		name:    "bad msgtx",
-		coinID:  bond.CoinID,
-		txRes:   txRes(bond.SignedTx[1:]),
-		wantErr: true,
-	}, {
-		name:              "get best block error",
-		coinID:            bond.CoinID,
-		getTransactionErr: asset.CoinNotFoundError,
-		bestBlockErr:      errors.New("some error"),
-		wantErr:           true,
-	}, {
-		name:              "block not found",
-		coinID:            bond.CoinID,
-		getTransactionErr: asset.CoinNotFoundError,
-		verboseBlocks:     map[chainhash.Hash]*msgBlockWithHeight{},
-		wantErr:           true,
-	}, {
-		name:              "did not find by search until time",
-		coinID:            bond.CoinID,
-		getTransactionErr: asset.CoinNotFoundError,
-		searchUntil:       time.Now().Add(time.Hour),
-		wantErr:           true,
-	}}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			node.getTransactionMap["any"] = test.txRes
-			node.getBestBlockHashErr = test.bestBlockErr
-			node.verboseBlocks = verboseBlocks
-			if test.verboseBlocks != nil {
-				node.verboseBlocks = test.verboseBlocks
-			}
-			bd, err := wallet.FindBond(tCtx, test.coinID, test.searchUntil)
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !bd.CheckPrivKey(bondKey) {
-				t.Fatal("pkh not equal")
-			}
-		})
-	}
-}
-
 func TestIDUnknownTx(t *testing.T) {
 	t.Parallel()
 	t.Run("non-segwit", func(t *testing.T) {
@@ -1315,38 +1106,6 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 		TxOut: []*wire.TxOut{wire.NewTxOut(int64(toSatoshi(5-redeemFee)), tP2PKH)},
 	}
 
-	h2b := func(h string) []byte {
-		b, _ := hex.DecodeString(h)
-		return b
-	}
-
-	// Create Bond Tx
-	bondLockTime := 1711637410
-	bondID := h2b("0e39bbb09592fd00b7d770cc832ddf4d625ae3a0")
-	accountID := h2b("a0836b39b5ceb84f422b8a8cd5940117087a8522457c6d81d200557652fbe6ea")
-	bondContract, _ := MakeBondScript(0, uint32(bondLockTime), bondID)
-	contractAddr, _ := scriptHashAddress(segwit, bondContract, &chaincfg.MainNetParams)
-	bondPkScript, _ := txscript.PayToAddrScript(contractAddr)
-	bondOutput := wire.NewTxOut(int64(toSatoshi(2)), bondPkScript)
-	bondCommitPkScript, _ := bondPushDataScript(0, accountID, int64(bondLockTime), bondID)
-	bondCommitmentOutput := wire.NewTxOut(0, bondCommitPkScript)
-	createBondTx := &wire.MsgTx{
-		TxIn:  []*wire.TxIn{wire.NewTxIn(&wire.OutPoint{}, nil, nil)},
-		TxOut: []*wire.TxOut{bondOutput, bondCommitmentOutput},
-	}
-
-	// Redeem Bond Tx
-	txIn = wire.NewTxIn(&wire.OutPoint{}, nil, nil)
-	if segwit {
-		txIn.Witness = RefundBondScriptSegwit(bondContract, randBytes(73), randBytes(33))
-	} else {
-		txIn.SignatureScript, _ = RefundBondScript(bondContract, randBytes(73), randBytes(33))
-	}
-	redeemBondTx := &wire.MsgTx{
-		TxIn:  []*wire.TxIn{txIn},
-		TxOut: []*wire.TxOut{wire.NewTxOut(int64(toSatoshi(5)), tP2PKH)},
-	}
-
 	// Acceleration Tx
 	accelerationTx := &wire.MsgTx{
 		TxIn:  []*wire.TxIn{wire.NewTxIn(&wire.OutPoint{}, nil, nil)},
@@ -1380,10 +1139,6 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 	receiveTx := &wire.MsgTx{
 		TxIn:  []*wire.TxIn{wire.NewTxIn(&wire.OutPoint{}, nil, nil)},
 		TxOut: []*wire.TxOut{wire.NewTxOut(int64(toSatoshi(4)), ourPkScript), wire.NewTxOut(int64(toSatoshi(0.001)), cpPkScript)},
-	}
-
-	floatPtr := func(f float64) *float64 {
-		return &f
 	}
 
 	type test struct {
@@ -1420,42 +1175,6 @@ func testIDUnknownTx(t *testing.T, segwit bool) {
 				ID:     redemptionTx.TxHash().String(),
 				Amount: toSatoshi(5),
 				Fees:   toSatoshi(redeemFee),
-			},
-		},
-		{
-			name: "create bond",
-			ltr: &ListTransactionsResult{
-				Send: true,
-				Fee:  floatPtr(0.0000222),
-			},
-			tx: createBondTx,
-			exp: &txdb.WalletTransaction{
-				Type:   txdb.CreateBond,
-				ID:     createBondTx.TxHash().String(),
-				Amount: toSatoshi(2),
-				Fees:   toSatoshi(0.0000222),
-				BondInfo: &txdb.BondTxInfo{
-					AccountID: accountID,
-					BondID:    bondID,
-					LockTime:  uint64(bondLockTime),
-				},
-			},
-		},
-		{
-			name: "redeem bond",
-			ltr: &ListTransactionsResult{
-				Send: false,
-			},
-			tx: redeemBondTx,
-			exp: &txdb.WalletTransaction{
-				Type:   txdb.RedeemBond,
-				ID:     redeemBondTx.TxHash().String(),
-				Amount: toSatoshi(5),
-				BondInfo: &txdb.BondTxInfo{
-					AccountID: []byte{},
-					BondID:    bondID,
-					LockTime:  uint64(bondLockTime),
-				},
 			},
 		},
 		{

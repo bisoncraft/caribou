@@ -432,9 +432,6 @@ func (btc *ExchangeWalletElectrum) syncTxHistory(tip uint64) {
 	btc.pendingTxsMtx.RUnlock()
 
 	handlePendingTx := func(txHash chainhash.Hash, tx *ExtendedWalletTx) {
-		if !tx.Submitted {
-			return
-		}
 
 		gtr, err := btc.node.GetWalletTransaction(&txHash)
 		if errors.Is(err, asset.CoinNotFoundError) {

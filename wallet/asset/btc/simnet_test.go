@@ -5,7 +5,6 @@ package btc
 // Simnet tests expect the BTC test harness to be running.
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -20,9 +19,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 const (
@@ -214,102 +211,6 @@ func TestMain(m *testing.M) {
 		return m.Run()
 	}
 	os.Exit(doIt())
-}
-
-func TestMakeBondTx(t *testing.T) {
-	rig := newTestRig(t, func(name string, err error) {
-		tLogger.Infof("%s has reported a new block, error = %v", name, err)
-	})
-	defer rig.close(t)
-
-	// Get a private key for the bond script. This would come from the client's
-	// HD key chain.
-	priv, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pubkey := priv.PubKey()
-
-	acctID := randBytes(32)
-	fee := uint64(10_2030_4050) //  ~10.2 DCR
-	const bondVer = 0
-
-	wallet := rig.alpha()
-
-	// Unlock the wallet to sign the tx and get keys.
-	err = wallet.Unlock([]byte("abc"))
-	if err != nil {
-		t.Fatalf("error unlocking beta wallet: %v", err)
-	}
-
-	lockTime := time.Now().Add(10 * time.Second)
-	bond, _, err := wallet.MakeBondTx(bondVer, fee, 10, lockTime, priv, acctID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	coinhash, _, err := decodeCoinID(bond.CoinID)
-	if err != nil {
-		t.Fatalf("decodeCoinID: %v", err)
-	}
-	t.Logf("bond txid %v\n", coinhash)
-	t.Logf("signed tx: %x\n", bond.SignedTx)
-	t.Logf("unsigned tx: %x\n", bond.UnsignedTx)
-	t.Logf("bond script: %x\n", bond.Data)
-	t.Logf("redeem tx: %x\n", bond.RedeemTx)
-	_, err = msgTxFromBytes(bond.SignedTx)
-	if err != nil {
-		t.Fatalf("invalid bond tx: %v", err)
-	}
-
-	pkh := btcutil.Hash160(pubkey.SerializeCompressed())
-
-	lockTimeUint, pkhPush, err := ExtractBondDetailsV0(0, bond.Data)
-	if err != nil {
-		t.Fatalf("ExtractBondDetailsV0: %v", err)
-	}
-	if !bytes.Equal(pkh, pkhPush) {
-		t.Fatalf("mismatching pubkeyhash in bond script and signature (%x != %x)", pkh, pkhPush)
-	}
-
-	if lockTime.Unix() != int64(lockTimeUint) {
-		t.Fatalf("mismatching locktimes (%d != %d)", lockTime.Unix(), lockTimeUint)
-	}
-	lockTimePush := time.Unix(int64(lockTimeUint), 0)
-	t.Logf("lock time in bond script: %v", lockTimePush)
-
-	sendBondTx, err := wallet.SendTransaction(bond.SignedTx)
-	if err != nil {
-		t.Fatalf("RefundBond: %v", err)
-	}
-	sendBondTxid, _, err := decodeCoinID(sendBondTx)
-	if err != nil {
-		t.Fatalf("decodeCoinID: %v", err)
-	}
-	t.Logf("sendBondTxid: %v\n", sendBondTxid)
-
-	waitNetwork() // wait for alpha to see the txn
-	mineAlpha()
-	waitNetwork() // wait for beta to see the new block (bond must be mined for RefundBond)
-
-	var expired bool
-	for !expired {
-		expired, err = wallet.LockTimeExpired(tCtx, lockTime)
-		if err != nil {
-			t.Fatalf("LocktimeExpired: %v", err)
-		}
-		if expired {
-			break
-		}
-		fmt.Println("bond still not expired")
-		time.Sleep(15 * time.Second)
-	}
-
-	refundCoin, err := wallet.RefundBond(context.Background(), bondVer, bond.CoinID,
-		bond.Data, bond.Amount, priv)
-	if err != nil {
-		t.Fatalf("RefundBond: %v", err)
-	}
-	t.Logf("refundCoin: %v\n", refundCoin)
 }
 
 func TestExternalFeeRate(t *testing.T) {

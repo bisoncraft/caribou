@@ -3,10 +3,6 @@
 
 package txdb
 
-import (
-	"github.com/bisoncraft/bosswallet/util"
-)
-
 // TransactionType is the type of transaction made by a wallet.
 type TransactionType uint16
 
@@ -18,8 +14,6 @@ const (
 	Redeem
 	Refund
 	Split
-	CreateBond
-	RedeemBond
 	ApproveToken
 	Acceleration
 	SelfSend
@@ -39,18 +33,7 @@ const (
 // IncomingTxType returns true if the wallet's balance increases due to a
 // transaction.
 func IncomingTxType(txType TransactionType) bool {
-	return txType == Receive || txType == Redeem || txType == Refund || txType == RedeemBond
-}
-
-// BondTxInfo contains information about a CreateBond or RedeemBond
-// transaction.
-type BondTxInfo struct {
-	// AccountID is the account is the account ID that the bond is applied to.
-	AccountID util.Bytes `json:"accountID"`
-	// LockTime is the time until which the bond is locked.
-	LockTime uint64 `json:"lockTime"`
-	// BondID is the ID of the bond.
-	BondID util.Bytes `json:"bondID"`
+	return txType == Receive || txType == Redeem || txType == Refund
 }
 
 // BridgeCounterpartTx identifies an initiation transaction if it is part of a
@@ -88,8 +71,6 @@ type WalletTransaction struct {
 	// Recipient will be non-nil for Send/Receive transactions, and specifies the
 	// recipient address of the transaction.
 	Recipient *string `json:"recipient,omitempty"`
-	// BondInfo will be non-nil for CreateBond and RedeemBond transactions.
-	BondInfo *BondTxInfo `json:"bondInfo,omitempty"`
 	// AdditionalData contains asset specific information, i.e. nonce
 	// for ETH.
 	AdditionalData map[string]string `json:"additionalData"`
