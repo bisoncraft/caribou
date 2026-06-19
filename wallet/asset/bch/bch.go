@@ -36,12 +36,11 @@ const (
 	BipID = 145
 	// The default fee is passed to the user as part of the asset.WalletInfo
 	// structure.
-	defaultFee         = 100
-	minNetworkVersion  = 270000 // v27.0.0-49ad6a9a9
-	walletTypeRPC      = "bitcoindRPC"
-	walletTypeSPV      = "SPV"
-	walletTypeLegacy   = ""
-	walletTypeElectrum = "electrumRPC"
+	defaultFee        = 100
+	minNetworkVersion = 270000 // v27.0.0-49ad6a9a9
+	walletTypeRPC     = "bitcoindRPC"
+	walletTypeSPV     = "SPV"
+	walletTypeLegacy  = ""
 )
 
 var (
@@ -223,12 +222,6 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		// removing the confirmation target argument.
 		cloneCFG.FeeEstimator = estimateFee
 		return btc.BTCCloneWallet(cloneCFG)
-	// case walletTypeElectrum:
-	// 	logger.Warnf("\n\nUNTESTED Bitcoin Cash ELECTRUM WALLET IMPLEMENTATION! DO NOT USE ON mainnet!\n\n")
-	// 	cloneCFG.FeeEstimator = nil        // Electrum can do it, use the feeRate method
-	// 	cloneCFG.LegacyBalance = false
-	// 	cloneCFG.Ports = dexbtc.NetPorts{} // no default ports for Electrum wallet
-	// 	return btc.ElectrumWallet(cloneCFG)
 	case walletTypeSPV:
 		return btc.OpenSPVWallet(cloneCFG, openSPVWallet)
 	}

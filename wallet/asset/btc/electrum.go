@@ -3,612 +3,811 @@
 
 package btc
 
+// Package-level note: this file implements the electrum-backed BTC wallet as a
+// lean, standalone asset.Wallet. It does NOT use ExchangeWalletSPV, baseWallet,
+// intermediaryWallet, or tipRedeemer. All UTXO operations are delegated to
+// wallet.Wallet (the in-tree utxowallet) driven by chain.ElectrumClient. Swap /
+// FindRedemption methods are intentionally absent.
+
 import (
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
-	"strings"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 )
 
-const needElectrumVersion = "4.5.5"
-
-// ExchangeWalletElectrum is the asset.Wallet for an external Electrum wallet.
-type ExchangeWalletElectrum struct {
-	*baseWallet
-	*authAddOn
-	ew                 *electrumWallet
-	minElectrumVersion util.Semver
-
-	findRedemptionMtx   sync.RWMutex
-	findRedemptionQueue map[OutPoint]*FindRedemptionReq
-
-	syncingTxHistory atomic.Bool
+// electrumWalletDefinition is the WalletDefinition for the electrum-backed
+// seeded BTC wallet. No user-configurable server/proxy knobs; the server is
+// chosen automatically from the built-in per-network defaults.
+var electrumWalletDefinition = &asset.WalletDefinition{
+	Type:        walletTypeElectrum,
+	Tab:         "Electrum",
+	Description: "Use the built-in electrum-backed light wallet.",
+	ConfigOpts:  nil,
+	Seeded:      true,
 }
 
-var _ asset.Wallet = (*ExchangeWalletElectrum)(nil)
-var _ asset.Authenticator = (*ExchangeWalletElectrum)(nil)
-
-// ElectrumWallet creates a new ExchangeWalletElectrum for the provided
-// configuration, which must contain the necessary details for accessing the
-// Electrum wallet's RPC server in the WalletCFG.Settings map.
-func ElectrumWallet(cfg *BTCCloneCFG) (*ExchangeWalletElectrum, error) {
-	clientCfg := new(RPCWalletConfig)
-	err := config.Unmapify(cfg.WalletCFG.Settings, clientCfg)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing rpc wallet config: %w", err)
-	}
-
-	btc, err := newUnconnectedWallet(cfg, &clientCfg.WalletConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	rpcCfg := &clientCfg.RPCConfig
-	StandardizeRPCConf(rpcCfg, "")
-	ewc := electrum.NewWalletClient(rpcCfg.RPCUser, rpcCfg.RPCPass,
-		"http://"+rpcCfg.RPCBind, rpcCfg.WalletName)
-	ew := newElectrumWallet(ewc, &electrumWalletConfig{
-		params:       cfg.ChainParams,
-		log:          cfg.Logger.SubLogger("ELECTRUM"),
-		addrDecoder:  cfg.AddressDecoder,
-		addrStringer: cfg.AddressStringer,
-		segwit:       cfg.Segwit,
-		rpcCfg:       rpcCfg,
-		torProxy:     cfg.WalletCFG.TorProxy,
-	})
-	btc.setNode(ew)
-
-	eew := &ExchangeWalletElectrum{
-		baseWallet:          btc,
-		authAddOn:           &authAddOn{btc.node},
-		ew:                  ew,
-		findRedemptionQueue: make(map[OutPoint]*FindRedemptionReq),
-		minElectrumVersion:  cfg.MinElectrumVersion,
-	}
-
-	// In (*baseWallet).feeRate, use ExchangeWalletElectrum's walletFeeRate
-	// override for localFeeRate. No externalFeeRate is required but will be
-	// used if eew.walletFeeRate returned an error and an externalFeeRate is
-	// enabled.
-	btc.localFeeRate = eew.walletFeeRate
-
-	// Firo electrum does not have "onchain_history" method as of firo
-	// electrum 4.1.5.3, find an alternative.
-	btc.noListTxHistory = cfg.Symbol == "firo"
-
-	return eew, nil
+// btcElectrumServers maps chaincfg.Params.Name to a built-in electrumx
+// ServerAddr. The regtest/simnet entry points at the dextest harness address
+// (BTC port 54002, ssl); mainnet and testnet use well-known public servers.
+// Keys are the actual chaincfg.Params.Name values so they cannot drift out of
+// sync with parseChainParams.
+//
+// The server selection is intentionally hard-coded — no user configuration.
+var btcElectrumServers = map[string]*electrum.ServerAddr{
+	chaincfg.MainNetParams.Name:       {Proto: "ssl", Addr: "electrum.blockstream.info:700"},
+	chaincfg.TestNet3Params.Name:      {Proto: "ssl", Addr: "electrum.blockstream.info:993"},
+	chaincfg.RegressionNetParams.Name: {Proto: "ssl", Addr: "127.0.0.1:54002"},
 }
 
-// DepositAddress returns an address for depositing funds into the exchange
-// wallet. The address will be unused but not necessarily new. Use NewAddress to
-// request a new address, but it should be used immediately.
-func (btc *ExchangeWalletElectrum) DepositAddress() (string, error) {
-	return btc.ew.wallet.GetUnusedAddress(btc.ew.ctx)
-}
+// createElectrumWallet creates the on-disk btcwallet database for an electrum
+// wallet. The electrum network itself is not started here.
+func createElectrumWallet(privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
+	if err := logNeutrino(walletDir); err != nil {
+		return fmt.Errorf("error initializing btcwallet logging: %w", err)
+	}
 
-// RedemptionAddress gets an address for use in redeeming the counterparty's
-// swap. This would be included in their swap initialization. The address will
-// be unused but not necessarily new because these addresses often go unused.
-func (btc *ExchangeWalletElectrum) RedemptionAddress() (string, error) {
-	return btc.ew.wallet.GetUnusedAddress(btc.ew.ctx)
-}
+	loader := wallet.NewLoader(btcNetParams(net), walletDir, true, dbTimeout, 0) // recovery_window=0; see Connect
+	pubPass := []byte(wallet.InsecurePubPassphrase)
 
-// Connect connects to the Electrum wallet's RPC server and an electrum server
-// directly. Goroutines are started to monitor for new blocks and server
-// connection changes. Satisfies the util.Connector interface.
-func (btc *ExchangeWalletElectrum) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	wg, err := btc.connect(ctx) // prepares btc.ew.chainV via btc.node.connect()
+	btcw, err := loader.CreateNewWallet(pubPass, privPass, seed, bday)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("CreateNewWallet error: %w", err)
 	}
 
-	commands, err := btc.ew.wallet.Commands(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if !slices.Contains(commands, "freeze_utxo") {
-		return nil, errors.New("wallet does not support the freeze_utxo command")
-	}
-
-	serverFeats, err := btc.ew.chain().Features(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// TODO: for chainforks with the same genesis hash (BTC -> BCH), compare a
-	// block hash at some post-fork height.
-	if genesis := btc.chainParams.GenesisHash; genesis != nil && genesis.String() != serverFeats.Genesis {
-		return nil, fmt.Errorf("wanted genesis hash %v, got %v (wrong network)",
-			genesis.String(), serverFeats.Genesis)
-	}
-
-	verStr, err := btc.ew.wallet.Version(ctx)
-	if err != nil {
-		return nil, err
-	}
-	gotVer, err := util.SemverFromString(verStr)
-	if err != nil {
-		return nil, err
-	}
-	if !util.SemverCompatible(btc.minElectrumVersion, *gotVer) {
-		return nil, fmt.Errorf("wanted electrum wallet version %s but got %s", btc.minElectrumVersion, gotVer)
-	}
-
-	if btc.minElectrumVersion.Major >= 4 && btc.minElectrumVersion.Minor >= 5 {
-		btc.ew.wallet.SetIncludeIgnoreWarnings(true)
-	}
-
-	dbWG, err := btc.startTxHistoryDB(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		dbWG.Wait()
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		btc.watchBlocks(ctx) // ExchangeWalletElectrum override
-		btc.cancelRedemptionSearches()
-	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		btc.monitorPeers(ctx)
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		btc.tipMtx.RLock()
-		tip := btc.currentTip
-		btc.tipMtx.RUnlock()
-		go btc.syncTxHistory(uint64(tip.Height))
-	}()
-
-	return wg, nil
-}
-
-func (btc *ExchangeWalletElectrum) cancelRedemptionSearches() {
-	// Close all open channels for contract redemption searches
-	// to prevent leakages and ensure goroutines that are started
-	// to wait on these channels end gracefully.
-	btc.findRedemptionMtx.Lock()
-	for contractOutpoint, req := range btc.findRedemptionQueue {
-		req.fail("shutting down")
-		delete(btc.findRedemptionQueue, contractOutpoint)
-	}
-	btc.findRedemptionMtx.Unlock()
-}
-
-// walletFeeRate satisfies BTCCloneCFG.FeeEstimator.
-func (btc *ExchangeWalletElectrum) walletFeeRate(ctx context.Context, _ RawRequester, confTarget uint64) (uint64, error) {
-	satPerKB, err := btc.ew.wallet.FeeRate(ctx, int64(confTarget))
-	if err != nil {
-		return 0, err
-	}
-	return uint64(util.IntDivUp(satPerKB, 1000)), nil
-}
-
-// findRedemption will search for the spending transaction of specified
-// outpoint. If found, the secret key will be extracted from the input scripts.
-// If not found, but otherwise without an error, a nil Hash will be returned
-// along with a nil error. Thus, both the error and the Hash should be checked.
-// This convention is only used since this is not part of the public API.
-func (btc *ExchangeWalletElectrum) findRedemption(ctx context.Context, op OutPoint, contractHash []byte) (*chainhash.Hash, uint32, []byte, error) {
-	msgTx, vin, err := btc.ew.findOutputSpender(ctx, &op.TxHash, op.Vout)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	if msgTx == nil {
-		return nil, 0, nil, nil
-	}
-	txHash := msgTx.TxHash()
-	txIn := msgTx.TxIn[vin]
-	secret, err := FindKeyPush(txIn.Witness, txIn.SignatureScript,
-		contractHash, btc.segwit, btc.chainParams)
-	if err != nil {
-		return nil, 0, nil, fmt.Errorf("failed to extract secret key from tx %v input %d: %w",
-			txHash, vin, err) // name the located tx in the error since we found it
-	}
-	return &txHash, vin, secret, nil
-}
-
-func (btc *ExchangeWalletElectrum) tryRedemptionRequests(ctx context.Context) {
-	btc.findRedemptionMtx.RLock()
-	reqs := make([]*FindRedemptionReq, 0, len(btc.findRedemptionQueue))
-	for _, req := range btc.findRedemptionQueue {
-		reqs = append(reqs, req)
-	}
-	btc.findRedemptionMtx.RUnlock()
-
-	for _, req := range reqs {
-		txHash, vin, secret, err := btc.findRedemption(ctx, req.outPt, req.contractHash)
-		if err != nil {
-			req.fail("findRedemption: %w", err)
-			continue
+	bail := func() {
+		if err := loader.UnloadWallet(); err != nil {
+			log.Errorf("Error unloading wallet after createElectrumWallet error: %v", err)
 		}
-		if txHash == nil {
-			continue // maybe next time
+	}
+
+	if extIdx > 0 || intIdx > 0 {
+		if err = extendAddresses(extIdx, intIdx, btcw); err != nil {
+			bail()
+			return fmt.Errorf("failed to set starting address indexes: %w", err)
 		}
-		req.success(&FindRedemptionResult{
-			redemptionCoinID: ToCoinID(txHash, vin),
-			secret:           secret,
-		})
-	}
-}
-
-// FindRedemption locates a swap contract output's redemption transaction input
-// and the secret key used to spend the output.
-func (btc *ExchangeWalletElectrum) FindRedemption(ctx context.Context, coinID, contract util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
-	txHash, vout, err := decodeCoinID(coinID)
-	if err != nil {
-		return nil, nil, err
-	}
-	contractHash := btc.hashContract(contract)
-	// We can verify the contract hash via:
-	// txRes, _ := btc.ewc.getWalletTransaction(txHash)
-	// msgTx, _ := msgTxFromBytes(txRes.Hex)
-	// contractHash := ExtractScriptHash(msgTx.TxOut[vout].PkScript)
-	// OR
-	// txOut, _, _ := btc.ew.getTxOutput(txHash, vout)
-	// contractHash := ExtractScriptHash(txOut.PkScript)
-
-	// Check once before putting this in the queue.
-	outPt := NewOutPoint(txHash, vout)
-	spendTxID, vin, secret, err := btc.findRedemption(ctx, outPt, contractHash)
-	if err != nil {
-		return nil, nil, err
-	}
-	if spendTxID != nil {
-		return ToCoinID(spendTxID, vin), secret, nil
 	}
 
-	req := &FindRedemptionReq{
-		outPt:        outPt,
-		resultChan:   make(chan *FindRedemptionResult, 1),
-		contractHash: contractHash,
-		// blockHash, blockHeight, and pkScript not used by this impl.
-		blockHash: &chainhash.Hash{},
+	if err := loader.UnloadWallet(); err != nil {
+		return fmt.Errorf("error unloading wallet: %w", err)
 	}
-	if err := btc.queueFindRedemptionRequest(req); err != nil {
-		return nil, nil, err
-	}
-
-	var result *FindRedemptionResult
-	select {
-	case result = <-req.resultChan:
-		if result == nil {
-			err = fmt.Errorf("unexpected nil result for redemption search for %s", outPt)
-		}
-	case <-ctx.Done():
-		err = fmt.Errorf("context cancelled during search for redemption for %s", outPt)
-	}
-
-	// If this contract is still in the findRedemptionQueue, remove from the
-	// queue to prevent further redemption search attempts for this contract.
-	btc.findRedemptionMtx.Lock()
-	delete(btc.findRedemptionQueue, outPt)
-	btc.findRedemptionMtx.Unlock()
-
-	// result would be nil if ctx is canceled or the result channel is closed
-	// without data, which would happen if the redemption search is aborted when
-	// this ExchangeWallet is shut down.
-	if result != nil {
-		return result.redemptionCoinID, result.secret, result.err
-	}
-	return nil, nil, err
-}
-
-func (btc *ExchangeWalletElectrum) queueFindRedemptionRequest(req *FindRedemptionReq) error {
-	btc.findRedemptionMtx.Lock()
-	defer btc.findRedemptionMtx.Unlock()
-	if _, exists := btc.findRedemptionQueue[req.outPt]; exists {
-		return fmt.Errorf("duplicate find redemption request for %s", req.outPt)
-	}
-	btc.findRedemptionQueue[req.outPt] = req
 	return nil
 }
 
-// watchBlocks pings for new blocks and runs the tipChange callback function
-// when the block changes.
-func (btc *ExchangeWalletElectrum) watchBlocks(ctx context.Context) {
-	const electrumBlockTick = 5 * time.Second
-	ticker := time.NewTicker(electrumBlockTick)
-	defer ticker.Stop()
+// electrumWallet is a lean asset.Wallet backed by an in-process electrumx
+// connection. It does NOT embed any ExchangeWallet type.
+type electrumWallet struct {
+	log         util.Logger
+	dir         string
+	chainParams *chaincfg.Params
+	netParams   *netparams.ChainParams
+	emit        *asset.WalletEmitter
+	peersChange func(uint32, error)
 
-	bestBlock := func() (*BlockVector, error) {
-		hdr, err := btc.node.GetBestBlockHeader()
-		if err != nil {
-			return nil, fmt.Errorf("getBestBlockHeader: %v", err)
-		}
-		hash, err := chainhash.NewHashFromStr(hdr.Hash)
-		if err != nil {
-			return nil, fmt.Errorf("invalid best block hash %s: %v", hdr.Hash, err)
-		}
-		return &BlockVector{hdr.Height, *hash}, nil
+	// populated during Connect
+	btcw        *wallet.Wallet
+	loader      *wallet.Loader
+	chainClient *chain.ElectrumClient
+	network     *electrum.Network
+	// txdb is the master transaction database handle, scoped to this wallet's
+	// network and supplied by Core via the wallet config. Core owns its lifecycle.
+	txdb txdb.NetworkTxDB
+
+	// pendingTxs caches unconfirmed transactions.
+	pendingMtx sync.RWMutex
+	pendingTxs map[chainhash.Hash]txdb.WalletTransaction
+
+	// receiveTxLastQuery is the block height at which we last scanned for
+	// incoming transactions; 0 means never.
+	receiveTxLastQuery atomic.Uint64
+	syncingTxHistory   atomic.Bool
+}
+
+var _ asset.Wallet = (*electrumWallet)(nil)
+var _ asset.Authenticator = (*electrumWallet)(nil)
+
+// openElectrumWallet constructs an electrumWallet without opening or starting
+// anything. Called by NewWallet for walletTypeElectrum.
+func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *electrumWallet {
+	return &electrumWallet{
+		log:         log,
+		dir:         filepath.Join(cfg.DataDir, chainParams.Name),
+		chainParams: chainParams,
+		netParams:   btcNetParams(chainParams),
+		emit:        cfg.Emit,
+		peersChange: cfg.PeersChange,
+		txdb:        cfg.NetworkTxDB,
+		pendingTxs:  make(map[chainhash.Hash]txdb.WalletTransaction),
+	}
+}
+
+// Info returns the WalletInfo for Bitcoin.
+func (w *electrumWallet) Info() *asset.WalletInfo {
+	return WalletInfo
+}
+
+// Unlock unlocks the underlying wallet for spending. A nil lock channel keeps
+// it unlocked until Lock is called explicitly. Satisfies asset.Authenticator.
+func (w *electrumWallet) Unlock(pw []byte) error {
+	if w.btcw == nil {
+		return errors.New("electrum BTC: wallet not connected")
+	}
+	return w.btcw.Unlock(pw, nil)
+}
+
+// Lock locks the underlying wallet. Satisfies asset.Authenticator.
+func (w *electrumWallet) Lock() error {
+	if w.btcw == nil {
+		return errors.New("electrum BTC: wallet not connected")
+	}
+	w.btcw.Lock()
+	return nil
+}
+
+// Locked reports whether the underlying wallet is locked. Satisfies
+// asset.Authenticator.
+func (w *electrumWallet) Locked() bool {
+	return w.btcw == nil || w.btcw.Locked()
+}
+
+// Connect opens the btcwallet database, starts the electrum network and chain
+// client, and launches background goroutines for tx-history sync and peer
+// monitoring. Satisfies util.Connector.
+func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	if err := logNeutrino(w.dir); err != nil {
+		return nil, fmt.Errorf("electrum BTC: error initializing logging: %w", err)
 	}
 
-	currentTip, err := bestBlock()
+	// recovery_window=0: btcwallet's block-walk recovery is the wrong model for
+	// an electrum backend — one GetHistory returns an address's entire history,
+	// and the block walk is pathologically slow on a deep birthday (it scans the
+	// whole chain and never reaches Synced). Electrum-native gap-limit recovery
+	// is a tracked follow-up; until then a restored seed discovers funds only on
+	// already-derived addresses.
+	w.loader = wallet.NewLoader(w.netParams, w.dir, true, dbTimeout, 0)
+	exists, err := w.loader.WalletExists()
 	if err != nil {
-		btc.log.Errorf("Failed to get best block: %v", err)
-		currentTip = new(BlockVector) // zero height and hash
+		return nil, fmt.Errorf("electrum BTC: error checking wallet existence: %w", err)
+	}
+	if !exists {
+		return nil, errors.New("electrum BTC: wallet not found")
 	}
 
+	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase))
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: couldn't open wallet: %w", err)
+	}
+	w.btcw = btcw
+
+	errCloser := util.NewErrorCloser()
+	defer errCloser.Done(w.log)
+	errCloser.Add(w.loader.UnloadWallet)
+
+	srvAddr := w.serverAddr()
+	if err = srvAddr.Validate(); err != nil {
+		return nil, fmt.Errorf("electrum BTC: invalid built-in server address: %w", err)
+	}
+
+	chainCfg, err := electrum.NewChainConfig(bisonwire.ChainBTC, w.netParams)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: chain config: %w", err)
+	}
+
+	w.network, err = electrum.NewNetwork(&electrum.Config{
+		Chain:         chainCfg,
+		TrustedServer: srvAddr,
+		DataDir:       w.dir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: new network: %w", err)
+	}
+
+	// The chain client owns the electrum network's lifecycle: chainClient.Start
+	// starts the network, chainClient.Stop stops it, and WaitForShutdown blocks
+	// on both. Do not start the network directly here — chainClient.Start would
+	// then try to start it a second time and fail with "already started".
+	w.chainClient, err = chain.NewElectrumClient(w.netParams, w.network)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: new chain client: %w", err)
+	}
+	if err = w.chainClient.Start(); err != nil {
+		return nil, fmt.Errorf("electrum BTC: couldn't start chain client: %w", err)
+	}
+	errCloser.Add(func() error { w.chainClient.Stop(); return nil })
+
+	w.log.Info("Synchronizing BTC wallet with electrum network...")
+	w.btcw.Synchronize(w.chainClient)
+
+	// Restore unconfirmed transactions from previous sessions. The master tx
+	// database handle is supplied by Core via the wallet config and its lifecycle
+	// is owned there, so there is nothing to open or close here.
+	if w.txdb != nil {
+		pendingTxs, err := w.txdb.GetPendingTxs()
+		if err != nil {
+			return nil, fmt.Errorf("electrum BTC: loading pending txs: %w", err)
+		}
+		w.pendingMtx.Lock()
+		for _, tx := range pendingTxs {
+			h, err := chainhash.NewHashFromStr(tx.ID)
+			if err != nil {
+				w.log.Errorf("Invalid txid %q in pending txs: %v", tx.ID, err)
+				continue
+			}
+			w.pendingTxs[*h] = *tx
+		}
+		w.pendingMtx.Unlock()
+	}
+
+	errCloser.Success()
+
+	var wg sync.WaitGroup
+
+	// Tie chain-client teardown (and thus the electrum network) to the Connect
+	// context. Nothing else in the success path stops the chain client, so
+	// without this its goroutines and the network would leak on shutdown.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		w.chainClient.Stop()
+		w.chainClient.WaitForShutdown()
+	}()
+
+	// Block-notification goroutine — watches the wallet's NtfnServer and
+	// triggers tx-history syncs on each new block.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.blockLoop(ctx)
+	}()
+
+	// Peer monitoring goroutine.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.peerLoop(ctx)
+	}()
+
+	// Initial tx-history sync.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Wait briefly so the chain client has a chance to connect before we
+		// check ChainSynced.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		_, tip := w.bestBlock()
+		w.syncTxHistory(ctx, uint64(tip))
+	}()
+
+	return &wg, nil
+}
+
+// serverAddr returns the built-in electrumx server address for the active
+// network.  Falls back to mainnet if the network name is unrecognized.
+func (w *electrumWallet) serverAddr() *electrum.ServerAddr {
+	if sa, ok := btcElectrumServers[w.chainParams.Name]; ok {
+		return sa
+	}
+	return btcElectrumServers[chaincfg.MainNetParams.Name]
+}
+
+// bestBlock returns the hash and height of the best synced block according to
+// the chain client, or zero/genesis values if not yet synced.
+func (w *electrumWallet) bestBlock() (*chainhash.Hash, int32) {
+	if w.chainClient == nil {
+		return &chainhash.Hash{}, 0
+	}
+	h, height, err := w.chainClient.GetBestBlock()
+	if err != nil {
+		return &chainhash.Hash{}, 0
+	}
+	return h, height
+}
+
+// Balance returns the wallet's available, immature, and locked balances.
+func (w *electrumWallet) Balance() (*asset.Balance, error) {
+	if w.btcw == nil {
+		return nil, errors.New("electrum BTC: wallet not connected")
+	}
+	bals, err := w.btcw.CalculateAccountBalances(0, 1)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: balance error: %w", err)
+	}
+	return &asset.Balance{
+		Available: uint64(bals.Spendable),
+		Immature:  uint64(bals.ImmatureReward),
+		Locked:    0,
+		Other:     make(map[asset.BalanceCategory]asset.CustomBalance),
+	}, nil
+}
+
+// DepositAddress returns the next unused external address.
+func (w *electrumWallet) DepositAddress() (string, error) {
+	if w.btcw == nil {
+		return "", errors.New("electrum BTC: wallet not connected")
+	}
+	scope := w.btcw.ScopeForPurpose(84)
+	addr, err := w.btcw.NewAddress(0, scope)
+	if err != nil {
+		return "", fmt.Errorf("electrum BTC: new address: %w", err)
+	}
+	return addr.EncodeAddress(), nil
+}
+
+// OwnsDepositAddress returns true if the address belongs to this wallet.
+func (w *electrumWallet) OwnsDepositAddress(address string) (bool, error) {
+	if w.btcw == nil {
+		return false, errors.New("electrum BTC: wallet not connected")
+	}
+	addr, err := btcutil.DecodeAddress(address, w.chainParams)
+	if err != nil {
+		return false, nil
+	}
+	return w.btcw.HaveAddress(addr)
+}
+
+// ValidateAddress reports whether address is a valid Bitcoin address for the
+// active network.
+func (w *electrumWallet) ValidateAddress(address string) bool {
+	_, err := btcutil.DecodeAddress(address, w.chainParams)
+	return err == nil
+}
+
+// Send sends exactly value satoshis to address, paying feeRate sat/byte.
+// Coin selection is handled by wallet.SendOutputs internally.
+func (w *electrumWallet) Send(address string, value, feeRate uint64) (asset.Coin, error) {
+	if w.btcw == nil {
+		return nil, errors.New("electrum BTC: wallet not connected")
+	}
+
+	addr, err := btcutil.DecodeAddress(address, w.chainParams)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: invalid address %q: %w", address, err)
+	}
+	pkScript, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: pay-to-addr script: %w", err)
+	}
+
+	txOut := wire.NewTxOut(int64(value), pkScript)
+	scope := w.btcw.ScopeForPurpose(84)
+	satPerKB := btcutil.Amount(feeRate * 1000)
+
+	msgTx, err := w.btcw.SendOutputs(
+		[]*wire.TxOut{txOut},
+		&scope,
+		0,        // account
+		1,        // minconf
+		satPerKB, // fee rate as sat/kB
+		wallet.CoinSelectionLargest,
+		"",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: SendOutputs: %w", err)
+	}
+
+	txHash := msgTx.TxHash()
+	addrCopy := address
+
+	// Record in tx history. Fee will be updated by the next syncTxHistory pass.
+	wt := &txdb.WalletTransaction{
+		Type:      txdb.Send,
+		ID:        txHash.String(),
+		Amount:    value,
+		Fees:      0,
+		Recipient: &addrCopy,
+		Timestamp: uint64(time.Now().Unix()),
+		Confirms:  &txdb.Confirms{Target: confTxFinality},
+	}
+	w.storePendingTx(&txHash, wt)
+
+	return &electrumCoin{
+		txHash: txHash,
+		vout:   0,
+		value:  value,
+	}, nil
+}
+
+// StandardSendFee returns the fee for a standard segwit send (1-in 2-out).
+func (w *electrumWallet) StandardSendFee(feeRate uint64) uint64 {
+	// segwit: 1 P2WPKH input + 2 P2WPKH outputs
+	inputSize := uint64(RedeemP2WPKHInputSize) + uint64((RedeemP2PKSigScriptSize+2+3)/4)
+	sz := uint64(MinimumTxOverhead) + inputSize + P2WPKHOutputSize*2
+	return feeRate * sz
+}
+
+// SyncStatus returns the current chain-sync state.
+func (w *electrumWallet) SyncStatus() (*asset.SyncStatus, error) {
+	if w.chainClient == nil || w.network == nil {
+		return &asset.SyncStatus{}, nil
+	}
+
+	tip := w.network.Tip()
+	if tip < 0 {
+		return &asset.SyncStatus{}, nil
+	}
+
+	walletBlock := w.btcw.Manager.SyncedTo()
+	synced := w.network.Synced() && walletBlock.Height > 0 &&
+		walletBlock.Height >= tip
+
+	return &asset.SyncStatus{
+		Synced:       synced,
+		TargetHeight: uint64(tip),
+		Blocks:       uint64(walletBlock.Height),
+	}, nil
+}
+
+// TxHistory returns paginated transaction history from the local txdb.
+func (w *electrumWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+	if w.txdb == nil {
+		return nil, errors.New("electrum BTC: tx database not initialized")
+	}
+	return w.txdb.GetTxs(req)
+}
+
+// WalletTransaction looks up a single transaction. If it is confirmed it is
+// served from the local txdb; otherwise the chain client is queried.
+func (w *electrumWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
+	// Accept either a plain txid or a hex-encoded coin ID.
+	coinID, err := hex.DecodeString(txID)
+	if err == nil {
+		txHash, _, err2 := decodeCoinID(coinID)
+		if err2 == nil {
+			txID = txHash.String()
+		}
+	}
+
+	if w.txdb != nil {
+		tx, err := w.txdb.GetTx(txID)
+		if err == nil && tx != nil && tx.Confirmed {
+			return tx, nil
+		}
+	}
+
+	// Fall through to wallet database lookup.
+	txHash, err := chainhash.NewHashFromStr(txID)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: invalid txid %q: %w", txID, err)
+	}
+	details, err := wallet.UnstableAPI(w.btcw).TxDetails(txHash)
+	if err != nil {
+		return nil, fmt.Errorf("electrum BTC: TxDetails: %w", err)
+	}
+	if details == nil {
+		return nil, asset.CoinNotFoundError
+	}
+
+	wt := &txdb.WalletTransaction{
+		Type:        txdb.Unknown,
+		ID:          txID,
+		BlockNumber: uint64(details.Block.Height),
+		Confirmed:   details.Block.Height > 0,
+	}
+	return wt, nil
+}
+
+// PendingTransactions returns unconfirmed transactions tracked by this wallet.
+func (w *electrumWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
+	w.pendingMtx.RLock()
+	defer w.pendingMtx.RUnlock()
+	txs := make([]*txdb.WalletTransaction, 0, len(w.pendingTxs))
+	for _, tx := range w.pendingTxs {
+		if tx.Confirmed {
+			continue
+		}
+		cp := tx
+		txs = append(txs, &cp)
+	}
+	return txs
+}
+
+// storePendingTx records a sent transaction in the txdb and the in-memory
+// pending map.
+func (w *electrumWallet) storePendingTx(txHash *chainhash.Hash, wt *txdb.WalletTransaction) {
+	if w.txdb == nil {
+		return
+	}
+	w.pendingMtx.Lock()
+	w.pendingTxs[*txHash] = *wt
+	w.pendingMtx.Unlock()
+	if err := w.txdb.StoreTx(wt); err != nil {
+		w.log.Errorf("electrum BTC: storePendingTx %s: %v", txHash, err)
+	}
+	w.emit.TransactionNote(wt, true)
+}
+
+// blockLoop watches the wallet's NtfnServer for block events and triggers
+// tx-history syncs.
+func (w *electrumWallet) blockLoop(ctx context.Context) {
+	cl := w.btcw.NtfnServer.TransactionNotifications()
+	defer cl.Done()
 	for {
 		select {
-		case <-ticker.C:
-			// Don't make server requests on every tick. Wallet has a headers
-			// subscription, so we can just ask wallet the height. That means
-			// only comparing heights instead of hashes, which means we might
-			// not notice a reorg to a block at the same height, which is
-			// unimportant because of how electrum searches for transactions.
-			ss, err := btc.node.SyncStatus()
-			if err != nil {
-				btc.log.Errorf("failed to get sync status: %w", err)
+		case note := <-cl.C:
+			if len(note.AttachedBlocks) == 0 {
 				continue
 			}
-			if ss == nil {
-				continue
-			}
-
-			sameTip := currentTip.Height == int64(ss.Blocks)
-			if sameTip {
-				// Could have actually been a reorg to different block at same
-				// height. We'll report a new tip block on the next block.
-				continue
-			}
-
-			newTip, err := bestBlock()
-			if err != nil {
-				// NOTE: often says "height X out of range", then succeeds on next tick
-				if !strings.Contains(err.Error(), "out of range") {
-					btc.log.Errorf("failed to get best block from %s electrum server: %v", btc.symbol, err)
-				}
-				continue
-			}
-
-			go btc.syncTxHistory(uint64(newTip.Height))
-
-			btc.log.Tracef("tip change: %d (%s) => %d (%s)", currentTip.Height, currentTip.Hash,
-				newTip.Height, newTip.Hash)
-			currentTip = newTip
-			btc.emit.TipChange(uint64(newTip.Height))
-			go btc.tryRedemptionRequests(ctx)
-
+			last := note.AttachedBlocks[len(note.AttachedBlocks)-1]
+			go w.syncTxHistory(ctx, uint64(last.Height))
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-// syncTxHistory checks to see if there are any transactions which the wallet
-// has made or received that are not part of the transaction history, then
-// identifies and adds them. It also checks all the pending transactions to see
-// if they have been mined into a block, and if so, updates the transaction
-// history to reflect the block height.
-func (btc *ExchangeWalletElectrum) syncTxHistory(tip uint64) {
-	if !btc.syncingTxHistory.CompareAndSwap(false, true) {
-		return
-	}
-	defer btc.syncingTxHistory.Store(false)
+// peerLoop periodically checks network connectivity and calls peersChange.
+func (w *electrumWallet) peerLoop(ctx context.Context) {
+	const interval = 5 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
-	txHistoryDB := btc.txDB()
-	if txHistoryDB == nil {
-		return
-	}
-
-	ss, err := btc.SyncStatus()
-	if err != nil {
-		btc.log.Errorf("Error getting sync status: %v", err)
-		return
-	}
-	if !ss.Synced {
-		return
-	}
-
-	btc.addUnknownTransactionsToHistory(tip)
-
-	pendingTxsCopy := make(map[chainhash.Hash]ExtendedWalletTx, len(btc.pendingTxs))
-	btc.pendingTxsMtx.RLock()
-	maps.Copy(pendingTxsCopy, btc.pendingTxs)
-	btc.pendingTxsMtx.RUnlock()
-
-	handlePendingTx := func(txHash chainhash.Hash, tx *ExtendedWalletTx) {
-
-		gtr, err := btc.node.GetWalletTransaction(&txHash)
-		if errors.Is(err, asset.CoinNotFoundError) {
-			err = txHistoryDB.RemoveTx(txHash.String())
-			if err == nil || errors.Is(err, asset.CoinNotFoundError) {
-				btc.pendingTxsMtx.Lock()
-				delete(btc.pendingTxs, txHash)
-				btc.pendingTxsMtx.Unlock()
-			} else {
-				// Leave it in the pendingPendingTxs and attempt to remove it
-				// again next time.
-				btc.log.Errorf("Error removing tx %s from the history store: %v", txHash.String(), err)
-			}
+	var lastCount uint32
+	check := func() {
+		if w.network == nil {
 			return
 		}
-		if err != nil {
-			btc.log.Errorf("Error getting transaction %s: %v", txHash.String(), err)
+		var count uint32
+		select {
+		case <-w.network.Done():
+			count = 0
+		default:
+			count = 1
+		}
+		if count != lastCount {
+			lastCount = count
+			w.peersChange(count, nil)
+		}
+	}
+
+	for {
+		check()
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// syncTxHistory scans for new wallet transactions since the last query and
+// updates pending transactions.
+func (w *electrumWallet) syncTxHistory(ctx context.Context, tip uint64) {
+	if !w.syncingTxHistory.CompareAndSwap(false, true) {
+		return
+	}
+	defer w.syncingTxHistory.Store(false)
+
+	if w.txdb == nil || w.btcw == nil {
+		return
+	}
+
+	ss, err := w.SyncStatus()
+	if err != nil || ss == nil || !ss.Synced {
+		return
+	}
+
+	w.scanNewTransactions(ctx, tip)
+	w.updatePendingTransactions(ctx, tip)
+}
+
+// scanNewTransactions queries the wallet for transactions since the last scan
+// and records any unknown ones in the txdb.
+func (w *electrumWallet) scanNewTransactions(ctx context.Context, tip uint64) {
+	const blockQueryBuffer = 3
+
+	lastQuery := w.receiveTxLastQuery.Load()
+	var fromHeight int32
+	if lastQuery > blockQueryBuffer {
+		fromHeight = int32(lastQuery - blockQueryBuffer)
+	}
+
+	syncHeight := w.btcw.Manager.SyncedTo().Height
+	txs, err := w.btcw.ListSinceBlock(fromHeight, -1, syncHeight)
+	if err != nil {
+		w.log.Errorf("electrum BTC: ListSinceBlock(%d): %v", fromHeight, err)
+		return
+	}
+
+	isInitial := lastQuery == 0
+
+	for i := range txs {
+		if ctx.Err() != nil {
+			return
+		}
+		w.recordBtcjsonTx(ctx, &txs[i], tip, isInitial)
+	}
+
+	w.receiveTxLastQuery.Store(tip)
+
+	if isInitial {
+		w.emit.TransactionHistorySyncedNote()
+	}
+}
+
+// recordBtcjsonTx processes one btcjson.ListTransactionsResult and stores it in
+// the txdb if not already present.
+func (w *electrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransactionsResult, tip uint64, isInitial bool) {
+	txHash, err := chainhash.NewHashFromStr(tx.TxID)
+	if err != nil {
+		w.log.Errorf("electrum BTC: invalid txid %q: %v", tx.TxID, err)
+		return
+	}
+
+	// Skip if already recorded.
+	if existing, err := w.txdb.GetTx(txHash.String()); err == nil && existing != nil {
+		return
+	} else if err != nil && !errors.Is(err, asset.CoinNotFoundError) {
+		w.log.Errorf("electrum BTC: GetTx %s: %v", txHash, err)
+		return
+	}
+
+	txType := txdb.Receive
+	if tx.Category == "send" {
+		txType = txdb.Send
+	}
+
+	amount := tx.Amount
+	if amount < 0 {
+		amount = -amount
+	}
+	amtSats := uint64(amount * 1e8)
+
+	var feeSats uint64
+	if tx.Fee != nil && *tx.Fee < 0 {
+		feeSats = uint64(-*tx.Fee * 1e8)
+	}
+
+	var blockNumber uint64
+	var ts uint64
+	if tx.BlockHeight != nil && *tx.BlockHeight > 0 {
+		blockNumber = uint64(*tx.BlockHeight)
+		ts = uint64(tx.BlockTime)
+	} else {
+		ts = uint64(time.Now().Unix())
+	}
+
+	const blockQueryBuffer = 3
+	if blockNumber > 0 && blockNumber >= tip-blockQueryBuffer {
+		// Too close to the tip; will be confirmed on next pass.
+		blockNumber = 0
+	}
+
+	addrCopy := tx.Address
+	wt := &txdb.WalletTransaction{
+		Type:        txType,
+		ID:          txHash.String(),
+		Amount:      amtSats,
+		Fees:        feeSats,
+		BlockNumber: blockNumber,
+		Timestamp:   ts,
+		Confirmed:   blockNumber > 0,
+		Recipient:   &addrCopy,
+	}
+	if blockNumber == 0 {
+		wt.Confirms = &txdb.Confirms{Target: confTxFinality}
+	}
+
+	if err = w.txdb.StoreTx(wt); err != nil {
+		w.log.Errorf("electrum BTC: StoreTx %s: %v", txHash, err)
+		return
+	}
+	if wt.BlockNumber == 0 {
+		w.pendingMtx.Lock()
+		w.pendingTxs[*txHash] = *wt
+		w.pendingMtx.Unlock()
+	}
+	if !isInitial {
+		w.emit.TransactionNote(wt, false)
+	}
+}
+
+// updatePendingTransactions refreshes confirmation status for all tracked
+// pending transactions.
+func (w *electrumWallet) updatePendingTransactions(ctx context.Context, tip uint64) {
+	w.pendingMtx.RLock()
+	snapshot := make(map[chainhash.Hash]txdb.WalletTransaction, len(w.pendingTxs))
+	for k, v := range w.pendingTxs {
+		snapshot[k] = v
+	}
+	w.pendingMtx.RUnlock()
+
+	for txHash, tx := range snapshot {
+		if ctx.Err() != nil {
+			return
+		}
+
+		details, err := wallet.UnstableAPI(w.btcw).TxDetails(&txHash)
+		if err != nil || details == nil {
+			// Transaction not known to wallet yet; leave pending.
+			continue
+		}
+
+		blockHeight := uint64(details.Block.Height)
+		var confs uint64
+		if blockHeight > 0 && tip >= blockHeight {
+			confs = tip - blockHeight + 1
 		}
 
 		var updated bool
-		if gtr.BlockHash != "" {
-			bestHeight, err := btc.node.GetBestBlockHeight()
-			if err != nil {
-				btc.log.Errorf("GetBestBlockHeader: %v", err)
-				return
+		if tx.BlockNumber != blockHeight {
+			tx.BlockNumber = blockHeight
+			if details.Block.Time != (time.Time{}) {
+				tx.Timestamp = uint64(details.Block.Time.Unix())
 			}
-			// TODO: Just get the block height with the header.
-			blockHeight := bestHeight - int32(gtr.Confirmations) + 1
-			i := 0
-			for {
-				if i > 20 || blockHeight < 0 {
-					btc.log.Errorf("Cannot find mined tx block number for %s", gtr.BlockHash)
-					return
-				}
-				bh, err := btc.ew.GetBlockHash(int64(blockHeight))
-				if err != nil {
-					btc.log.Errorf("Error getting mined tx block number %s: %v", gtr.BlockHash, err)
-					return
-				}
-				if bh.String() == gtr.BlockHash {
-					break
-				}
-				i++
-				blockHeight--
-			}
-			if tx.BlockNumber != uint64(blockHeight) {
-				tx.BlockNumber = uint64(blockHeight)
-				tx.Timestamp = gtr.BlockTime
-				updated = true
-			}
-		} else if gtr.BlockHash == "" && tx.BlockNumber != 0 {
-			tx.BlockNumber = 0
-			tx.Timestamp = 0
 			updated = true
 		}
 
-		var confs uint64
-		if tx.BlockNumber > 0 && tip >= tx.BlockNumber {
-			confs = tip - tx.BlockNumber + 1
-		}
 		if confs >= confTxFinality {
-			tx.Confirmed = true
-			updated = true
+			if !tx.Confirmed {
+				tx.Confirmed = true
+				tx.Confirms = nil
+				updated = true
+			}
+		} else {
+			newConfs := &txdb.Confirms{Current: uint32(confs), Target: confTxFinality}
+			if tx.Confirms == nil || tx.Confirms.Current != newConfs.Current {
+				tx.Confirms = newConfs
+				tx.Confirmed = false
+				updated = true
+			}
 		}
 
 		if updated {
-			err = txHistoryDB.StoreTx(tx)
-			if err != nil {
-				btc.log.Errorf("Error updating tx %s: %v", txHash, err)
-				return
+			if err := w.txdb.StoreTx(&tx); err != nil {
+				w.log.Errorf("electrum BTC: updating pending tx %s: %v", txHash, err)
+				continue
 			}
-
-			btc.pendingTxsMtx.Lock()
+			w.pendingMtx.Lock()
 			if tx.Confirmed {
-				delete(btc.pendingTxs, txHash)
+				delete(w.pendingTxs, txHash)
 			} else {
-				btc.pendingTxs[txHash] = *tx
+				w.pendingTxs[txHash] = tx
 			}
-			btc.pendingTxsMtx.Unlock()
-
-			btc.emit.TransactionNote(tx.WalletTransaction, false)
+			w.pendingMtx.Unlock()
+			w.emit.TransactionNote(&tx, false)
 		}
-	}
-
-	for hash, tx := range pendingTxsCopy {
-		if btc.ctx.Err() != nil {
-			return
-		}
-		handlePendingTx(hash, &tx)
 	}
 }
 
-// WalletTransaction returns a transaction that either the wallet has made or
-// one in which the wallet has received funds. The txID can be either a byte
-// reversed tx hash or a hex encoded coin ID.
-func (btc *ExchangeWalletElectrum) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
-	coinID, err := hex.DecodeString(txID)
-	if err == nil {
-		txHash, _, err := decodeCoinID(coinID)
-		if err == nil {
-			txID = txHash.String()
-		}
-	}
-
-	txHistoryDB := btc.txDB()
-	if txHistoryDB == nil {
-		return nil, fmt.Errorf("tx database not initialized")
-	}
-	tx, err := txHistoryDB.GetTx(txID)
-	if err != nil && !errors.Is(err, asset.CoinNotFoundError) {
-		return nil, err
-	}
-
-	if tx == nil {
-		txHash, err := chainhash.NewHashFromStr(txID)
-		if err != nil {
-			return nil, fmt.Errorf("error decoding txid %s: %w", txID, err)
-		}
-
-		gtr, err := btc.node.GetWalletTransaction(txHash)
-		if err != nil {
-			return nil, fmt.Errorf("error getting transaction %s: %w", txID, err)
-		}
-
-		var blockHeight uint32
-		if gtr.BlockHash != "" {
-			bestHeight, err := btc.node.GetBestBlockHeight()
-			if err != nil {
-				return nil, fmt.Errorf("GetBestBlockHeader: %v", err)
-			}
-			// TODO: Just get the block height with the header.
-			blockHeight := bestHeight - int32(gtr.Confirmations) + 1
-			i := 0
-			for {
-				if i > 20 || blockHeight < 0 {
-					return nil, fmt.Errorf("cannot find mined tx block number for %s", gtr.BlockHash)
-				}
-				bh, err := btc.ew.getBlockHeaderByHeight(btc.ctx, int64(blockHeight))
-				if err != nil {
-					return nil, fmt.Errorf("error getting mined tx block number %s: %v", gtr.BlockHash, err)
-				}
-				if bh.BlockHash().String() == gtr.BlockHash {
-					break
-				}
-				i++
-				blockHeight--
-			}
-		}
-
-		tx, err = btc.idUnknownTx(&ListTransactionsResult{
-			BlockHeight: blockHeight,
-			BlockTime:   gtr.BlockTime,
-			TxID:        txID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("error identifying transaction: %v", err)
-		}
-
-		tx.BlockNumber = uint64(blockHeight)
-		tx.Timestamp = gtr.BlockTime
-		tx.Confirmed = blockHeight > 0
-		btc.addTxToHistory(tx, txHash, true, false)
-	}
-
-	return tx, nil
+// electrumCoin implements asset.Coin for a sent UTXO.
+type electrumCoin struct {
+	txHash chainhash.Hash
+	vout   uint32
+	value  uint64
 }
 
-// TxHistory returns all the transactions the wallet has made. If refID is nil,
-// then transactions starting from the most recent are returned (past is ignored).
-// If past is true, the transactions prior to the refID are returned, otherwise
-// the transactions after the refID are returned. n is the number of
-// transactions to return. If n is <= 0, all the transactions will be returned.
-func (btc *ExchangeWalletElectrum) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
-	txHistoryDB := btc.txDB()
-	if txHistoryDB == nil {
-		return nil, fmt.Errorf("tx database not initialized")
-	}
-	return txHistoryDB.GetTxs(req)
+func (c *electrumCoin) ID() util.Bytes {
+	return ToCoinID(&c.txHash, c.vout)
 }
+
+func (c *electrumCoin) String() string {
+	return fmt.Sprintf("%s:%d", c.txHash, c.vout)
+}
+
+func (c *electrumCoin) Value() uint64 { return c.value }
+
+func (c *electrumCoin) TxID() string { return c.txHash.String() }

@@ -30,20 +30,20 @@ import (
 // ElectrumBackEnd is the BackEnd() string returned by ElectrumClient.
 const ElectrumBackEnd = "electrum"
 
-// ElectrumBackend is the optional capability surface for chain.Interface
+// ElectrumBackend is the optional capability surface for chain.Backend
 // implementations backed by an electrumx server. It is currently a marker
 // interface — callers that need electrum-specific extensions can grow it.
 type ElectrumBackend interface {
-	Interface
+	Backend
 	// Network returns the underlying electrum network for diagnostics
 	// and electrum-specific operations such as peer management.
 	Network() ElectrumNetwork
 }
 
-// ElectrumClient is a chain.Interface implementation backed by an electrumx
+// ElectrumClient is a chain.Backend implementation backed by an electrumx
 // server. The shape mirrors NeutrinoClient: a notification queue goroutine
 // translates events from the underlying network (tip changes, scripthash
-// status changes, completed rescan steps) into chain.Interface notifications
+// status changes, completed rescan steps) into chain.Backend notifications
 // drained via Notifications().
 //
 // ElectrumClient does NOT take a parent context on Start; like NeutrinoClient,
@@ -128,7 +128,7 @@ type scripthashEntry struct {
 	ready       chan struct{}
 }
 
-var _ Interface = (*ElectrumClient)(nil)
+var _ Backend = (*ElectrumClient)(nil)
 var _ ElectrumBackend = (*ElectrumClient)(nil)
 
 // NewElectrumClient constructs an ElectrumClient backed by the given network.
@@ -228,14 +228,14 @@ func (c *ElectrumClient) WaitForShutdown() {
 	c.net.WaitForShutdown()
 }
 
-// Notifications returns the channel from which chain.Interface notifications
+// Notifications returns the channel from which chain.Backend notifications
 // are dequeued.
 func (c *ElectrumClient) Notifications() <-chan any {
 	return c.dequeueNotification
 }
 
 // ----------------------------------------------------------------------------
-// chain.Interface — direct-from-headers methods.
+// chain.Backend — direct-from-headers methods.
 // ----------------------------------------------------------------------------
 
 // GetBestBlock returns the hash and height of the chain tip as we know it.

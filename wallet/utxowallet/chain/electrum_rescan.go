@@ -139,7 +139,7 @@ func (c *ElectrumClient) trySubscribeAddress(addr btcutil.Address) (retry bool, 
 
 // Rescan kicks off a chain rescan: walking from startHash to the current tip,
 // fetching every transaction that involves any of the supplied addresses or
-// outpoints and emitting the chain.Interface notifications a fresh wallet
+// outpoints and emitting the chain.Backend notifications a fresh wallet
 // sync expects (BlockConnected for inert blocks, FilteredBlockConnected for
 // blocks with matches, periodic RescanProgress, terminating RescanFinished).
 //

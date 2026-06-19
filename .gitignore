@@ -59,3 +59,4 @@ wallet/internal/libsecp256k1/secp256k1
 *.db
 *.code-workspace
 .claude/
+.worktrees/

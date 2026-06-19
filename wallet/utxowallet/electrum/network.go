@@ -107,7 +107,7 @@ func NewNetwork(cfg *Config) (*Network, error) {
 	}, nil
 }
 
-// Headers returns the underlying header store. Useful for chain.Interface
+// Headers returns the underlying header store. Useful for chain.Backend
 // implementations that need direct read access.
 func (n *Network) Headers() *Headers { return n.headers }
 

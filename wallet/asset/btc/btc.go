@@ -90,37 +90,6 @@ var (
 	walletBlockAllowance         = time.Second * 10
 	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
 
-	ElectrumConfigOpts = []*asset.ConfigOption{
-		{
-			Key:         "rpcuser",
-			DisplayName: "JSON-RPC Username",
-			Description: "Electrum's 'rpcuser' setting",
-		},
-		{
-			Key:         "rpcpassword",
-			DisplayName: "JSON-RPC Password",
-			Description: "Electrum's 'rpcpassword' setting",
-			NoEcho:      true,
-		},
-		{
-			Key:         "rpcport",
-			DisplayName: "JSON-RPC Port",
-			Description: "Electrum's 'rpcport' (if not set with rpcbind)",
-		},
-		{
-			Key:          "rpcbind", // match RPCConfig struct field tags
-			DisplayName:  "JSON-RPC Address",
-			Description:  "Electrum's 'rpchost' <addr> or <addr>:<port>",
-			DefaultValue: "127.0.0.1",
-		},
-		{
-			Key:          "walletname", // match RPCConfig struct field tags
-			DisplayName:  "Wallet File",
-			Description:  "Full path to the wallet file (empty is default_wallet)",
-			DefaultValue: "", // empty string, not a nil interface
-		},
-	}
-
 	// 02 Jun 21 21:12 CDT
 	defaultWalletBirthdayUnix = 1622668320
 	DefaultWalletBirthday     = time.Unix(int64(defaultWalletBirthdayUnix), 0)
@@ -190,6 +159,7 @@ var (
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
+			electrumWalletDefinition,
 		},
 		LegacyWalletIndex: 1,
 		BlockchainClass:   asset.BlockchainClassUTXO,
@@ -303,14 +273,13 @@ type TxInSigner func(tx *wire.MsgTx, idx int, subScript []byte, hashType txscrip
 
 // BTCCloneCFG holds clone specific parameters.
 type BTCCloneCFG struct {
-	WalletCFG          *asset.WalletConfig
-	MinNetworkVersion  uint64
-	MinElectrumVersion util.Semver
-	WalletInfo         *asset.WalletInfo
-	Symbol             string
-	Logger             util.Logger
-	Network            util.Network
-	ChainParams        *chaincfg.Params
+	WalletCFG         *asset.WalletConfig
+	MinNetworkVersion uint64
+	WalletInfo        *asset.WalletInfo
+	Symbol            string
+	Logger            util.Logger
+	Network           util.Network
+	ChainParams       *chaincfg.Params
 	// Ports is the default wallet RPC tcp ports used when undefined in
 	// WalletConfig.
 	Ports               NetPorts
@@ -534,7 +503,9 @@ var _ asset.Creator = (*Driver)(nil)
 // Exists checks the existence of the wallet. Part of the Creator interface, so
 // only used for wallets with WalletDefinition.Seeded = true.
 func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
-	if walletType != walletTypeSPV {
+	switch walletType {
+	case walletTypeSPV, walletTypeElectrum:
+	default:
 		return false, fmt.Errorf("no Bitcoin wallet of type %q available", walletType)
 	}
 
@@ -560,10 +531,14 @@ type createConfig struct {
 	RecoveryCfg  `ini:",extends"`
 }
 
-// Create creates a new SPV wallet.
+// Create creates a new seeded wallet. Both walletTypeSPV and
+// walletTypeElectrum are supported; they use the same underlying btcwallet
+// database format.
 func (d *Driver) Create(params *asset.CreateWalletParams) error {
-	if params.Type != walletTypeSPV {
-		return fmt.Errorf("SPV is the only seeded wallet type. required = %q, requested = %q", walletTypeSPV, params.Type)
+	switch params.Type {
+	case walletTypeSPV, walletTypeElectrum:
+	default:
+		return fmt.Errorf("unsupported seeded wallet type %q", params.Type)
 	}
 	if len(params.Seed) == 0 {
 		return errors.New("wallet seed cannot be empty")
@@ -593,8 +568,14 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	}
 
 	dir := filepath.Join(params.DataDir, chainParams.Name)
-	return createSPVWallet(params.Pass, params.Seed, bday, dir,
-		params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
+	switch params.Type {
+	case walletTypeElectrum:
+		return createElectrumWallet(params.Pass, params.Seed, bday, dir,
+			params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
+	default: // walletTypeSPV
+		return createSPVWallet(params.Pass, params.Seed, bday, dir,
+			params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
+	}
 }
 
 // Open opens or connects to the BTC exchange wallet. Start the wallet with its
@@ -1056,13 +1037,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		}
 		return &ExchangeWalletAccelerator{rpcWallet}, nil
 	case walletTypeElectrum:
-		cloneCFG.Ports = NetPorts{} // no default ports
-		ver, err := util.SemverFromString(needElectrumVersion)
-		if err != nil {
-			return nil, err
-		}
-		cloneCFG.MinElectrumVersion = *ver
-		return ElectrumWallet(cloneCFG)
+		return openElectrumWallet(cfg, params, logger), nil
 	default:
 		makeCustomWallet, ok := customWalletConstructors[cfg.Type]
 		if !ok {

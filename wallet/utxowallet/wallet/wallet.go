@@ -128,7 +128,7 @@ type Wallet struct {
 	Manager *waddrmgr.Manager
 	TxStore *wtxmgr.Store
 
-	chainClient        chain.Interface
+	chainClient        chain.Backend
 	chainClientLock    sync.Mutex
 	chainClientSynced  bool
 	chainClientSyncMtx sync.Mutex
@@ -208,7 +208,7 @@ func (w *Wallet) Start() {
 }
 
 // Synchronize starts syncing the chain.
-func (w *Wallet) Synchronize(chainClient chain.Interface) {
+func (w *Wallet) Synchronize(chainClient chain.Backend) {
 	w.quitMu.Lock()
 	select {
 	case <-w.quit:
@@ -250,7 +250,7 @@ func (w *Wallet) Synchronize(chainClient chain.Interface) {
 // consensus RPC server is set.  This function and all functions that call it
 // are unstable and will need to be moved when the syncing code is moved out of
 // the wallet.
-func (w *Wallet) requireChainClient() (chain.Interface, error) {
+func (w *Wallet) requireChainClient() (chain.Backend, error) {
 	w.chainClientLock.Lock()
 	chainClient := w.chainClient
 	w.chainClientLock.Unlock()
@@ -265,7 +265,7 @@ func (w *Wallet) requireChainClient() (chain.Interface, error) {
 //
 // This function is unstable and will be removed once sync logic is moved out of
 // the wallet.
-func (w *Wallet) ChainClient() chain.Interface {
+func (w *Wallet) ChainClient() chain.Backend {
 	w.chainClientLock.Lock()
 	chainClient := w.chainClient
 	w.chainClientLock.Unlock()
@@ -588,7 +588,7 @@ func (w *Wallet) isDevEnv() bool {
 
 // waitUntilBackendSynced blocks until the chain backend considers itself
 // "current".
-func (w *Wallet) waitUntilBackendSynced(chainClient chain.Interface) error {
+func (w *Wallet) waitUntilBackendSynced(chainClient chain.Backend) error {
 	// We'll poll every second to determine if our chain considers itself
 	// "current".
 	t := time.NewTicker(time.Second)
@@ -697,7 +697,7 @@ type recoverySyncer struct {
 // recovery attempts to recover any unspent outputs that pay to any of our
 // addresses starting from our birthday, or the wallet's tip (if higher), which
 // would indicate resuming a recovery after a restart.
-func (w *Wallet) recovery(chainClient chain.Interface,
+func (w *Wallet) recovery(chainClient chain.Backend,
 	birthdayBlock *waddrmgr.BlockStamp) error {
 
 	log.Infof("RECOVERY MODE ENABLED -- rescanning for used addresses "+
@@ -845,7 +845,7 @@ func (w *Wallet) recovery(chainClient chain.Interface,
 //
 // TODO(conner): parallelize/pipeline/cache intermediate network requests
 func (w *Wallet) recoverScopedAddresses(
-	chainClient chain.Interface,
+	chainClient chain.Backend,
 	tx walletdb.ReadWriteTx,
 	ns walletdb.ReadWriteBucket,
 	batch []wtxmgr.BlockMeta,

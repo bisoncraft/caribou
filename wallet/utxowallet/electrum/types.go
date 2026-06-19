@@ -69,7 +69,7 @@ type DisconnectedBlock struct {
 }
 
 // TipChange is the structured event Network publishes when its header chain
-// advances or rewinds. Consumers translate it into chain.Interface
+// advances or rewinds. Consumers translate it into chain.Backend
 // notifications: BlockDisconnected for each Disconnected entry (in order,
 // which is newest-first / disconnect order) and BlockConnected for each
 // Connected height (oldest-first / connect order).

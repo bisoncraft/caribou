@@ -233,7 +233,7 @@ func (c *tBtcWallet) ChainSynced() bool {
 	return c.getBlockchainInfo.Blocks >= c.getBlockchainInfo.Headers // -1 ok for chain sync ?
 }
 
-func (c *tBtcWallet) Synchronize(chainClient chain.Interface) {}
+func (c *tBtcWallet) Synchronize(chainClient chain.Backend) {}
 
 func (c *tBtcWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDetails, error) {
 	if c.getTransactionErr != nil {

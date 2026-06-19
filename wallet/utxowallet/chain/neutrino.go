@@ -25,7 +25,7 @@ import (
 // given interface.
 var ErrUnimplemented = errors.New("unimplemented")
 
-// NeutrinoClient is an implementation of the utxowallet chain.Interface interface.
+// NeutrinoClient is an implementation of the utxowallet chain.Backend interface.
 type NeutrinoClient struct {
 	CS NeutrinoChainService
 
@@ -69,9 +69,9 @@ type NeutrinoClient struct {
 	clientMtx sync.Mutex
 }
 
-// A compile-time check to ensure that RPCClient satisfies the chain.Interface
+// A compile-time check to ensure that RPCClient satisfies the chain.Backend
 // interface.
-var _ Interface = (*NeutrinoClient)(nil)
+var _ Backend = (*NeutrinoClient)(nil)
 
 // NewNeutrinoClient creates a new NeutrinoClient struct with a backing
 // ChainService.
