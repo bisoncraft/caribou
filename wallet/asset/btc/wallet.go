@@ -52,8 +52,6 @@ type TipRedemptionWallet interface {
 	GetBlockHeight(*chainhash.Hash) (int32, error)
 	GetBlockHeader(blockHash *chainhash.Hash) (hdr *BlockHeader, mainchain bool, err error)
 	GetBlock(h chainhash.Hash) (*wire.MsgBlock, error)
-	SearchBlockForRedemptions(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq, blockHash chainhash.Hash) (discovered map[OutPoint]*FindRedemptionResult)
-	FindRedemptionsInMempool(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq) (discovered map[OutPoint]*FindRedemptionResult)
 }
 
 type TxFeeEstimator interface {

@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -1319,48 +1318,6 @@ func (w *spvWallet) MatchPkScript(blockHash *chainhash.Hash, scripts [][]byte) (
 		return false, fmt.Errorf("MatchAny error: %w", err)
 	}
 	return matchFound, nil
-}
-
-// SearchBlockForRedemptions attempts to find spending info for the specified
-// contracts by searching every input of all txs in the provided block range.
-func (w *spvWallet) SearchBlockForRedemptions(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq,
-	blockHash chainhash.Hash) (discovered map[OutPoint]*FindRedemptionResult) {
-
-	// Just match all the scripts together.
-	scripts := make([][]byte, 0, len(reqs))
-	for _, req := range reqs {
-		scripts = append(scripts, req.pkScript)
-	}
-
-	discovered = make(map[OutPoint]*FindRedemptionResult, len(reqs))
-
-	matchFound, err := w.MatchPkScript(&blockHash, scripts)
-	if err != nil {
-		w.log.Errorf("matchPkScript error: %v", err)
-		return
-	}
-
-	if !matchFound {
-		return
-	}
-
-	// There is at least one match. Pull the block.
-	block, err := w.cl.GetBlock(blockHash)
-	if err != nil {
-		w.log.Errorf("neutrino GetBlock error: %v", err)
-		return
-	}
-
-	for _, msgTx := range block.MsgBlock().Transactions {
-		newlyDiscovered := FindRedemptionsInTxWithHasher(ctx, true, reqs, msgTx, w.chainParams, hashTx)
-		maps.Copy(discovered, newlyDiscovered)
-	}
-	return
-}
-
-// FindRedemptionsInMempool is unsupported for SPV.
-func (w *spvWallet) FindRedemptionsInMempool(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq) (discovered map[OutPoint]*FindRedemptionResult) {
-	return
 }
 
 // confirmations looks for the confirmation count and spend status on a

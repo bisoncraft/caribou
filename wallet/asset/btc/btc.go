@@ -740,8 +740,6 @@ type baseWallet struct {
 
 	cm *CoinManager
 
-	rf *RedemptionFinder
-
 	pendingTxsMtx sync.RWMutex
 	pendingTxs    map[chainhash.Hash]ExtendedWalletTx
 
@@ -1141,7 +1139,6 @@ func newRPCWallet(requester RawRequester, cfg *BTCCloneCFG, parsedCfg *RPCWallet
 		tipRedeemer:    node,
 	}
 
-	w.prepareRedemptionFinder()
 	return w, nil
 }
 
@@ -1323,7 +1320,6 @@ func OpenCustomWallet(cfg *BTCCloneCFG, walletConstructor CustomWalletConstructo
 		},
 		authAddOn: &authAddOn{customWallet},
 	}
-	w.prepareRedemptionFinder()
 	return w, nil
 }
 
@@ -1370,7 +1366,6 @@ func OpenSPVWallet(cfg *BTCCloneCFG, walletConstructor BTCWalletConstructor) (*E
 		authAddOn: &authAddOn{spvw},
 		spvNode:   spvw,
 	}
-	w.prepareRedemptionFinder()
 	return w, nil
 }
 
@@ -1410,22 +1405,6 @@ func (btc *baseWallet) setNode(node Wallet) {
 		func(addr btcutil.Address) (string, error) {
 			return btc.stringAddr(addr, btc.chainParams)
 		},
-	)
-}
-
-func (btc *intermediaryWallet) prepareRedemptionFinder() {
-	btc.rf = NewRedemptionFinder(
-		btc.log,
-		btc.tipRedeemer.GetWalletTransaction,
-		btc.tipRedeemer.GetBlockHeight,
-		btc.tipRedeemer.GetBlock,
-		btc.tipRedeemer.GetBlockHeader,
-		btc.hashTx,
-		btc.deserializeTx,
-		btc.tipRedeemer.GetBestBlockHeight,
-		btc.tipRedeemer.SearchBlockForRedemptions,
-		btc.tipRedeemer.GetBlockHash,
-		btc.tipRedeemer.FindRedemptionsInMempool,
 	)
 }
 
@@ -1544,7 +1523,6 @@ func (btc *intermediaryWallet) Connect(ctx context.Context) (*sync.WaitGroup, er
 	go func() {
 		defer wg.Done()
 		btc.watchBlocks(ctx)
-		btc.rf.CancelRedemptionSearches()
 	}()
 
 	wg.Add(1)
@@ -2827,7 +2805,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 			// If the wallet is not offering tip reports, send this one right
 			// away.
 			if walletBlock == nil {
-				btc.reportNewTip(ctx, newTip)
+				btc.reportNewTip(newTip)
 			} else {
 				// Queue it for reporting, but don't send it right away. Give the
 				// wallet a chance to provide their block update. SPV wallet may
@@ -2851,7 +2829,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 								"never reported: %d %s. If you see this message repeatedly, it may indicate "+
 								"an issue with the wallet.", newTip.Height, newTip.Hash)
 						}
-						btc.reportNewTip(ctx, newTip)
+						btc.reportNewTip(newTip)
 					}),
 				}
 			}
@@ -2865,7 +2843,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 				}
 				queuedBlock = nil
 			}
-			btc.reportNewTip(ctx, walletTip)
+			btc.reportNewTip(walletTip)
 
 		case <-ctx.Done():
 			return
@@ -2878,9 +2856,8 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 	}
 }
 
-// reportNewTip sets the currentTip. The tipChange callback function is invoked
-// and RedemptionFinder is informed of the new block.
-func (btc *intermediaryWallet) reportNewTip(ctx context.Context, newTip *BlockVector) {
+// reportNewTip sets the currentTip and invokes the tipChange callback.
+func (btc *intermediaryWallet) reportNewTip(newTip *BlockVector) {
 	btc.tipMtx.Lock()
 	defer btc.tipMtx.Unlock()
 
@@ -2890,8 +2867,6 @@ func (btc *intermediaryWallet) reportNewTip(ctx context.Context, newTip *BlockVe
 	btc.emit.TipChange(uint64(newTip.Height))
 
 	go btc.syncTxHistory(uint64(newTip.Height))
-
-	btc.rf.ReportNewTip(ctx, prevTip, newTip)
 }
 
 // sendWithReturn sends the unsigned transaction with an added output (unless

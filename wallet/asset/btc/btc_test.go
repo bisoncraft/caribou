@@ -615,7 +615,6 @@ func tNewWallet(segwit bool, walletType string) (*intermediaryWallet, *testData,
 				txFeeEstimator: spvw,
 				tipRedeemer:    spvw,
 			}
-			wallet.prepareRedemptionFinder()
 		}
 	}
 
