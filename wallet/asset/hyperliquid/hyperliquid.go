@@ -438,7 +438,9 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 	// Store the pending record before broadcasting so a storeTx failure
 	// after a successful send can never leave the transaction untracked.
 	if w.txDB != nil {
-		setSubmissionTime(wtx, uint64(time.Now().Unix()))
+		if err := setSubmissionTime(wtx, uint64(time.Now().Unix())); err != nil {
+			return nil, fmt.Errorf("encoding submission time: %w", err)
+		}
 		if err := w.txDB.StoreTx(wtx); err != nil {
 			return nil, fmt.Errorf("recording pending send: %w", err)
 		}
@@ -769,7 +771,10 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 		},
 	}
 
-	setSubmissionTime(wtx, uint64(time.Now().Unix()))
+	if err := setSubmissionTime(wtx, uint64(time.Now().Unix())); err != nil {
+		w.log.Errorf("Encoding submission time for receive tx %s: %v", u.Hash, err)
+		return
+	}
 	if err := w.txDB.StoreTx(wtx); err != nil {
 		w.log.Errorf("Storing receive tx %s: %v", u.Hash, err)
 		return

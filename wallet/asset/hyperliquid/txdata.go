@@ -5,7 +5,6 @@ package hyperliquid
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
@@ -39,12 +38,10 @@ func hyperData(wt *txdb.WalletTransaction) hyperTxData {
 }
 
 // setSubmissionTime encodes t into wt.RawTx as the HYPE-specific payload.
-func setSubmissionTime(wt *txdb.WalletTransaction, t uint64) {
+func setSubmissionTime(wt *txdb.WalletTransaction, t uint64) error {
 	var err error
 	wt.RawTx, err = json.Marshal(hyperTxData{SubmissionTime: t})
-	if err != nil {
-		panic(fmt.Sprintf("marshal hyperTxData: %v", err))
-	}
+	return err
 }
 
 // pendingIDIndexKey is the index function for the unique pending-ID secondary
