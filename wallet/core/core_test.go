@@ -182,6 +182,12 @@ func (tdb *TDB) SetCompanionToken(token string) error {
 func (tdb *TDB) CompanionToken() (string, error) {
 	return "", nil
 }
+func (tdb *TDB) SetAPIToken(token string) error {
+	return nil
+}
+func (tdb *TDB) APIToken() (string, error) {
+	return "", nil
+}
 func (tdb *TDB) SetSendRequiresPassword(require bool) error {
 	return nil
 }

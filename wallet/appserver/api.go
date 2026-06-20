@@ -605,6 +605,47 @@ func (s *AppServer) apiUnpairCompanionApp(w http.ResponseWriter, r *http.Request
 	writeJSON(w, simpleAck())
 }
 
+// apiGenerateAPIToken mints a local API token for same-machine automation
+// clients. Only the hash is persisted; the raw token is returned once and
+// cannot be recovered later. Any previously issued token is replaced.
+func (s *AppServer) apiGenerateAPIToken(w http.ResponseWriter, r *http.Request) {
+	// A long-lived local credential may only be minted from the same machine.
+	if !s.isLocalRequest(r) {
+		s.writeAPIError(w, errors.New("API tokens can only be generated from a local request"))
+		return
+	}
+	token := hex.EncodeToString(encode.RandomBytes(32))
+	tokenHash := hashToken(token)
+	if err := s.core.SetAPIToken(tokenHash); err != nil {
+		s.writeAPIError(w, fmt.Errorf("error storing API token: %w", err))
+		return
+	}
+	s.authMtx.Lock()
+	s.apiTokenHash = tokenHash
+	s.authMtx.Unlock()
+
+	writeJSON(w, &struct {
+		OK    bool   `json:"ok"`
+		Token string `json:"token"`
+	}{
+		OK:    true,
+		Token: token,
+	})
+}
+
+// apiRevokeAPIToken clears the local API token, immediately invalidating any
+// automation client using it.
+func (s *AppServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	if err := s.core.SetAPIToken(""); err != nil {
+		s.writeAPIError(w, fmt.Errorf("error clearing API token: %w", err))
+		return
+	}
+	s.authMtx.Lock()
+	s.apiTokenHash = ""
+	s.authMtx.Unlock()
+	writeJSON(w, simpleAck())
+}
+
 // apiGetBalance handles the 'balance' API request.
 func (s *AppServer) apiGetBalance(w http.ResponseWriter, r *http.Request) {
 	form := &struct {

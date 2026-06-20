@@ -55,6 +55,10 @@ const (
 	authCK = "dexauth"
 	// pwKeyCK is the cookie used to unencrypt the user's password.
 	pwKeyCK = "sessionkey"
+	// apiTokenHeader is the request header carrying the local API token used
+	// by automation clients (CLI, MCP server, scripts) in place of a browser
+	// session. It is only honored for loopback requests.
+	apiTokenHeader = "X-API-Token"
 	// notifyRoute is a route used for general notifications.
 	notifyRoute = "notify"
 	// The basis for content-security-policy. connect-src must be the final
@@ -128,6 +132,8 @@ type clientCore interface {
 	Language() string
 	SetCompanionToken(token string) error
 	CompanionToken() (string, error)
+	SetAPIToken(token string) error
+	APIToken() (string, error)
 	SetSendRequiresPassword(require bool) error
 	SendRequiresPassword() (bool, error)
 	TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error
@@ -234,6 +240,11 @@ type AppServer struct {
 	companionTokenExpiry  time.Time
 	companionTokenClaimed bool
 	companionExpiryTimer  *time.Timer
+
+	// apiTokenHash is hex(sha256(token)) of the local API token, persisted
+	// to the DB. It survives logout and is only accepted from a loopback
+	// peer (see apiTokenAuthorized). The raw token is never stored.
+	apiTokenHash string
 
 	appVersion             string
 	newAppVersionAvailable bool
@@ -373,6 +384,14 @@ func New(cfg *Config) (*AppServer, error) {
 		s.companionTokenClaimed = true
 	}
 
+	// Restore the persisted local API token hash so automation clients stay
+	// authorized across restarts.
+	if h, err := cfg.Core.APIToken(); err != nil {
+		log.Errorf("Error loading API token hash: %v", err)
+	} else if h != "" {
+		s.apiTokenHash = h
+	}
+
 	// Middleware
 	mux.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{
 		Logger: &chiLogger{ // logs with Trace()
@@ -479,6 +498,8 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/bridgehistory", s.apiBridgeHistory)
 			apiAuth.Post("/castvote", s.apiCastVote)
 			apiAuth.Post("/unpaircompanionapp", s.apiUnpairCompanionApp)
+			apiAuth.Post("/generateapitoken", s.apiGenerateAPIToken)
+			apiAuth.Post("/revokeapitoken", s.apiRevokeAPIToken)
 		})
 	})
 
@@ -809,6 +830,12 @@ func (s *AppServer) restoreCompanionFromHash(token string) bool {
 // to match `AppServer.validAuthToken`. Requests through the Tor hidden
 // service also require an active companion app pairing.
 func (s *AppServer) isAuthed(r *http.Request) bool {
+	// A valid local API token authorizes the request on its own, without a
+	// browser session. It is the credential used by same-machine automation.
+	if s.apiTokenAuthorized(r) {
+		return true
+	}
+
 	authToken := getAuthToken(r)
 	if authToken == "" {
 		return false
@@ -850,6 +877,50 @@ func (s *AppServer) isAuthed(r *http.Request) bool {
 		}
 	}
 	return true
+}
+
+// isLocalRequest reports whether the request originated from the same machine,
+// i.e. a loopback peer over the direct (non-Tor) listener. Onion requests
+// arrive over loopback too, so they are explicitly excluded.
+func (s *AppServer) isLocalRequest(r *http.Request) bool {
+	if s.isOnionRequest(r) {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// apiTokenAuthorized reports whether the request presents a valid local API
+// token. The token is supplied in the apiTokenHeader and is only honored for
+// same-machine (loopback) requests, regardless of how the server is bound.
+func (s *AppServer) apiTokenAuthorized(r *http.Request) bool {
+	tokenStr := r.Header.Get(apiTokenHeader)
+	if tokenStr == "" {
+		return false
+	}
+	if !s.isLocalRequest(r) {
+		return false
+	}
+	tokenHash := hashToken(tokenStr)
+
+	s.authMtx.RLock()
+	stored := s.apiTokenHash
+	s.authMtx.RUnlock()
+	if stored == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(tokenHash)) == 1
+}
+
+// hashToken returns the hex-encoded sha256 of a raw token. Only the hash is
+// ever persisted or compared.
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
 }
 
 // getCachedPassword retrieves the cached password for the user identified by authToken and
