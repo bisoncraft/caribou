@@ -47,6 +47,19 @@ type Backend interface {
 	MapRPCErr(err error) error
 }
 
+// AddressProber is an optional capability for a Backend that can answer, per
+// address and cheaply, whether the address has any history (e.g. electrum's
+// blockchain.scripthash.get_history). It lets the wallet do gap-limit recovery
+// by probing derived addresses directly instead of walking blocks. Backends
+// that don't implement it fall back to block-walk recovery.
+//
+// "Used" means any history, confirmed or in mempool — a used-then-emptied
+// address must still report true, so implementations test history presence,
+// not balance.
+type AddressProber interface {
+	ProbeAddress(addr btcutil.Address) (used bool, err error)
+}
+
 // Notification types.  These are defined here and processed from from reading
 // a notificationChan to avoid handling these notifications directly in
 // rpcclient callbacks, which isn't very Go-like and doesn't allow

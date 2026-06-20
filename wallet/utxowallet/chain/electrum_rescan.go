@@ -137,6 +137,27 @@ func (c *ElectrumClient) trySubscribeAddress(addr btcutil.Address) (retry bool, 
 	return false, nil
 }
 
+// ProbeAddress reports whether addr has any confirmed or mempool history, via a
+// one-shot blockchain.scripthash.get_history with no subscription. It is the
+// gap-limit recovery probe (see chain.AddressProber).
+//
+// TODO(recovery): prime the per-scripthash history cache here so the rescan
+// over a discovered address doesn't refetch it. Today fetchAndCacheHistory only
+// caches subscribed scripthashes, so the discovered-range addresses are fetched
+// twice (once here, once by the rescan). The redundant range is bounded by the
+// last used index, so this is a follow-up optimization, not a correctness gap.
+func (c *ElectrumClient) ProbeAddress(addr btcutil.Address) (bool, error) {
+	sh, err := addrScripthash(addr)
+	if err != nil {
+		return false, err
+	}
+	hist, err := c.net.GetHistory(c.ctx, sh)
+	if err != nil {
+		return false, err
+	}
+	return len(hist) > 0, nil
+}
+
 // Rescan kicks off a chain rescan: walking from startHash to the current tip,
 // fetching every transaction that involves any of the supplied addresses or
 // outpoints and emitting the chain.Backend notifications a fresh wallet

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -103,6 +104,11 @@ type electrumWallet struct {
 	emit        *asset.WalletEmitter
 	peersChange func(uint32, error)
 
+	// recoveryWindow is the address-probe gap limit. 0 (the default) disables
+	// recovery; a restore sets it >0 (via the "recoverywindow" setting) to scan
+	// for funds at gap-limit addresses. See wallet.syncWithChain.
+	recoveryWindow uint32
+
 	// populated during Connect
 	btcw        *wallet.Wallet
 	loader      *wallet.Loader
@@ -128,15 +134,22 @@ var _ asset.Authenticator = (*electrumWallet)(nil)
 // openElectrumWallet constructs an electrumWallet without opening or starting
 // anything. Called by NewWallet for walletTypeElectrum.
 func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *electrumWallet {
+	var recoveryWindow uint32
+	if s := cfg.Settings["recoverywindow"]; s != "" {
+		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
+			recoveryWindow = uint32(n)
+		}
+	}
 	return &electrumWallet{
-		log:         log,
-		dir:         filepath.Join(cfg.DataDir, chainParams.Name),
-		chainParams: chainParams,
-		netParams:   btcNetParams(chainParams),
-		emit:        cfg.Emit,
-		peersChange: cfg.PeersChange,
-		txdb:        cfg.NetworkTxDB,
-		pendingTxs:  make(map[chainhash.Hash]txdb.WalletTransaction),
+		log:            log,
+		dir:            filepath.Join(cfg.DataDir, chainParams.Name),
+		chainParams:    chainParams,
+		netParams:      btcNetParams(chainParams),
+		emit:           cfg.Emit,
+		peersChange:    cfg.PeersChange,
+		recoveryWindow: recoveryWindow,
+		txdb:           cfg.NetworkTxDB,
+		pendingTxs:     make(map[chainhash.Hash]txdb.WalletTransaction),
 	}
 }
 
@@ -177,13 +190,12 @@ func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, fmt.Errorf("electrum BTC: error initializing logging: %w", err)
 	}
 
-	// recovery_window=0: btcwallet's block-walk recovery is the wrong model for
-	// an electrum backend — one GetHistory returns an address's entire history,
-	// and the block walk is pathologically slow on a deep birthday (it scans the
-	// whole chain and never reaches Synced). Electrum-native gap-limit recovery
-	// is a tracked follow-up; until then a restored seed discovers funds only on
-	// already-derived addresses.
-	w.loader = wallet.NewLoader(w.netParams, w.dir, true, dbTimeout, 0)
+	// recoveryWindow gates electrum-native gap-limit recovery: 0 (the default)
+	// runs no recovery; a restore sets it >0 so syncWithChain probes derived
+	// addresses for funds via the AddressProber path, instead of btcwallet's
+	// block-walk recovery (the wrong model for electrum — one GetHistory returns
+	// an address's whole history, and the block walk is O(chain length)).
+	w.loader = wallet.NewLoader(w.netParams, w.dir, true, dbTimeout, w.recoveryWindow)
 	exists, err := w.loader.WalletExists()
 	if err != nil {
 		return nil, fmt.Errorf("electrum BTC: error checking wallet existence: %w", err)

@@ -130,6 +130,7 @@ type scripthashEntry struct {
 
 var _ Backend = (*ElectrumClient)(nil)
 var _ ElectrumBackend = (*ElectrumClient)(nil)
+var _ AddressProber = (*ElectrumClient)(nil)
 
 // NewElectrumClient constructs an ElectrumClient backed by the given network.
 // The network must not be started; ElectrumClient.Start will start it.

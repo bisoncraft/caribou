@@ -22,6 +22,7 @@ package btc
 import (
 	"encoding/hex"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -415,6 +416,99 @@ func TestElectrumReceiveDetection(t *testing.T) {
 	// The receive should appear in TxHistory.
 	htx := waitElectrumTxInHistory(t, w, recvTxID)
 	t.Logf("receive tx in TxHistory: confirmed=%v type=%v", htx.Confirmed, htx.Type)
+}
+
+// connectElectrumWalletAt creates a seeded electrum wallet at dataDir from the
+// given seed and connects it. recoveryWindow > 0 enables the address-probe
+// recovery scan (a restore); 0 disables it. Taking an explicit dir + seed lets
+// a test stand up two wallets from the SAME seed in different directories (the
+// recovery test).
+func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recoveryWindow uint32) (asset.Wallet, *util.ConnectionMaster) {
+	t.Helper()
+	walletDir := filepath.Join(dataDir, chaincfg.RegressionNetParams.Name)
+	// A recent birthday (the test's funds are seconds old) keeps SyncedTo from
+	// walking the whole chain from 2021 — the O(chain) catchUpHashes cost is the
+	// separate Phase-2 concern. It must predate the funding so ingestion sees it.
+	bday := time.Now().Add(-time.Hour)
+	if err := createElectrumWallet(walletPassword, seed, bday, walletDir, tLogger, 0, 0, &chaincfg.RegressionNetParams); err != nil {
+		t.Fatalf("connectElectrumWalletAt: createElectrumWallet: %v", err)
+	}
+	settings := map[string]string{}
+	if recoveryWindow > 0 {
+		settings["recoverywindow"] = strconv.Itoa(int(recoveryWindow))
+	}
+	walletCfg := &asset.WalletConfig{
+		Type:     walletTypeElectrum,
+		DataDir:  dataDir,
+		Settings: settings,
+		Emit:     asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), 0, tLogger),
+		PeersChange: func(n uint32, err error) {
+			tLogger.Debugf("electrum recovery wallet peers=%d err=%v", n, err)
+		},
+	}
+	w, err := NewWallet(walletCfg, tLogger, util.Simnet)
+	if err != nil {
+		t.Fatalf("connectElectrumWalletAt: NewWallet: %v", err)
+	}
+	cm := util.NewConnectionMaster(w)
+	if err = cm.Connect(tCtx); err != nil {
+		t.Fatalf("connectElectrumWalletAt: Connect: %v", err)
+	}
+	return w, cm
+}
+
+// TestElectrumRecovery verifies electrum-native gap-limit recovery. Wallet A
+// funds a run of external addresses; a brand-new wallet B from the SAME seed,
+// created with a recovery window, must rediscover all of those funds on connect
+// (via the address-probe scan in syncWithChain), not just the first few. A
+// fresh random seed keeps the test isolated from the shared gamma seed's
+// accumulated on-chain history.
+func TestElectrumRecovery(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+
+	seed := randBytes(32)
+
+	// Wallet A: fund a sequence of distinct external addresses. No recovery
+	// window — it derives and funds its own addresses, nothing to discover.
+	wA, cmA := connectElectrumWalletAt(t, t.TempDir(), seed, 0)
+	waitElectrumSynced(t, wA)
+
+	const nAddrs = 8
+	const perAddr = 1 // BTC each
+	seen := make(map[string]bool)
+	for i := 0; i < nAddrs; i++ {
+		addr, err := wA.DepositAddress()
+		if err != nil {
+			t.Fatalf("DepositAddress %d: %v", i, err)
+		}
+		if seen[addr] {
+			t.Fatalf("DepositAddress did not advance at i=%d (addr %s reused)", i, addr)
+		}
+		seen[addr] = true
+		if _, err := alpha.Send(addr, toSatoshi(perAddr), 10); err != nil {
+			t.Fatalf("alpha.Send %d: %v", i, err)
+		}
+		if err := mineAlpha(); err != nil {
+			t.Fatalf("mineAlpha %d: %v", i, err)
+		}
+		// Wait for A to register the receive so DepositAddress advances.
+		waitElectrumBalanceAtLeast(t, wA, toSatoshi(float64(i+1)*perAddr))
+	}
+	wantTotal := toSatoshi(nAddrs * perAddr)
+	cmA.Disconnect()
+
+	// Wallet B: fresh wallet, same seed, WITH a recovery window. The gap-limit
+	// scan must rediscover everything wallet A funded.
+	wB, cmB := connectElectrumWalletAt(t, t.TempDir(), seed, 20)
+	defer cmB.Disconnect()
+	waitElectrumSynced(t, wB)
+
+	bal := waitElectrumBalanceAtLeast(t, wB, wantTotal)
+	t.Logf("recovered balance: available=%d (want>=%d across %d addrs)", bal.Available, wantTotal, nAddrs)
 }
 
 // TestElectrumStandardSendFee checks that StandardSendFee returns a positive
