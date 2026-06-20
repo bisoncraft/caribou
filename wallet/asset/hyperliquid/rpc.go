@@ -175,13 +175,24 @@ func hypeTokenIDFromMeta(meta *spotMetaResponse) (string, error) {
 
 // --- ledger updates ---
 
-// ledgerDelta describes a balance change event.
+// ledgerDelta describes a balance change event. Field names mirror the
+// Hyperliquid userNonFundingLedgerUpdates wire format exactly.
 type ledgerDelta struct {
 	Type        string `json:"type"`
 	Token       string `json:"token"` // coin name e.g. "HYPE" (field is "token" in API)
 	Amount      string `json:"amount"`
 	User        string `json:"user"`
 	Destination string `json:"destination"`
+	// Fee and NativeTokenFee are the transfer fee charged to the sender. They
+	// are absent (empty) on inbound transfers and on tokens/networks that do
+	// not charge a transfer fee.
+	Fee            string `json:"fee"`
+	NativeTokenFee string `json:"nativeTokenFee"`
+	// Nonce echoes the nonce of the originating sendAsset action. When present
+	// it is the unambiguous key to match a confirmation back to a pending send;
+	// it is null/absent on inbound transfers. Pointer so a missing field is
+	// distinguishable from nonce 0.
+	Nonce *uint64 `json:"nonce"`
 }
 
 // ledgerUpdate is one entry from userNonFundingLedgerUpdates.
@@ -191,17 +202,98 @@ type ledgerUpdate struct {
 	Delta ledgerDelta `json:"delta"`
 }
 
-// ledgerUpdates returns ledger update events for user since startTimeMS.
-func (c *rpcClient) ledgerUpdates(ctx context.Context, user string, startTimeMS int64) ([]ledgerUpdate, error) {
-	var updates []ledgerUpdate
-	if err := c.infoRequest(ctx, map[string]any{
+// maxLedgerPages bounds a single ledgerUpdates scan. Hyperliquid info endpoints
+// cap rows per response (userFills caps at 2000; several cap at 500), so a long
+// history is returned across multiple windows. This is a runaway guard, not the
+// normal terminator — paging stops as soon as a window advances no further.
+const maxLedgerPages = 1000
+
+// ledgerUpdatesPage fetches one window [startTimeMS, *endTimeMS] of ledger events
+// for user, oldest to newest. endTimeMS is omitted when nil.
+func (c *rpcClient) ledgerUpdatesPage(ctx context.Context, user string, startTimeMS int64, endTimeMS *int64) ([]ledgerUpdate, error) {
+	payload := map[string]any{
 		"type":      "userNonFundingLedgerUpdates",
 		"user":      user,
 		"startTime": startTimeMS,
-	}, &updates); err != nil {
+	}
+	if endTimeMS != nil {
+		payload["endTime"] = *endTimeMS
+	}
+	var updates []ledgerUpdate
+	if err := c.infoRequest(ctx, payload, &updates); err != nil {
 		return nil, fmt.Errorf("ledgerUpdates: %w", err)
 	}
 	return updates, nil
+}
+
+// ledgerUpdates returns all ledger update events for user since startTimeMS,
+// paging forward across the API's per-response row cap. Each window advances
+// startTime to the newest event time (inclusive) and de-duplicates by hash
+// across the boundary, so a same-millisecond bucket that straddles a page is
+// reassembled without loss. Paging stops when the newest timestamp stops
+// advancing.
+//
+// The one case this cannot fully resolve is a single millisecond holding at
+// least a full page of events: startTime paging can never advance past it
+// (every request returns the same capped prefix). That case is logged so the
+// gap is visible; events after such a bucket are still picked up on the next
+// scan once the watermark moves past it, and only the unreadable in-millisecond
+// overflow is lost. For a per-user transfer ledger this requires hundreds of
+// transfers in the same millisecond and is not expected in practice.
+func (c *rpcClient) ledgerUpdates(ctx context.Context, user string, startTimeMS int64) ([]ledgerUpdate, error) {
+	seen := make(map[string]struct{})
+	var all []ledgerUpdate
+	start := startTimeMS
+	maxPageSize := 0
+
+	for page := range maxLedgerPages {
+		batch, err := c.ledgerUpdatesPage(ctx, user, start, nil)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		prevMaxPageSize := maxPageSize
+		if len(batch) > maxPageSize {
+			maxPageSize = len(batch)
+		}
+
+		var maxTime int64 = -1
+		for _, u := range batch {
+			if u.Hash != "" {
+				if _, dup := seen[u.Hash]; dup {
+					continue
+				}
+				seen[u.Hash] = struct{}{}
+			}
+			all = append(all, u)
+			if int64(u.Time) > maxTime {
+				maxTime = int64(u.Time)
+			}
+		}
+
+		// Progress requires the newest timestamp to advance beyond the window
+		// start; the inclusive boundary is reconciled by the hash de-dup above.
+		if maxTime > start {
+			start = maxTime
+			if page == maxLedgerPages-1 {
+				c.log.Warnf("ledgerUpdates hit max page count (%d) for %s; history may be incomplete", maxLedgerPages, user)
+			}
+			continue
+		}
+
+		// No timestamp progress: the whole window sits in one millisecond. If it
+		// is as large as a previously observed full page, that bucket meets the
+		// API's per-response cap and startTime paging cannot advance through it —
+		// surface it instead of treating the repeated rows as the end of history.
+		if len(batch) > 1 && prevMaxPageSize > 0 && len(batch) >= prevMaxPageSize {
+			c.log.Warnf("ledgerUpdates truncated for %s: %d events share timestamp %d and meet the API page cap; "+
+				"in-millisecond overflow cannot be paged", user, len(batch), start)
+		}
+		break
+	}
+	return all, nil
 }
 
 // --- send asset ---

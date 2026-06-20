@@ -171,6 +171,17 @@ type HyperWallet struct {
 	rpc  *rpcClient
 	txDB atomic.Pointer[hyperTxDB]
 
+	// lifecycleMtx guards running and serializes op registration against
+	// shutdown. A public call registers on opWG only while holding lifecycleMtx
+	// with running==true; shutdown clears running under the same lock before
+	// opWG.Wait(), so opWG.Add never races opWG.Wait and the DB is closed only
+	// after every in-flight op has drained. (The atomic.Pointer keeps the txDB
+	// pointer read safe; this pair adds the drain so an in-flight op can't touch
+	// the DB as it closes.)
+	lifecycleMtx sync.Mutex
+	running      bool
+	opWG         sync.WaitGroup
+
 	ledgerMtx sync.Mutex
 	scanMtx   sync.Mutex
 	tipMtx    sync.RWMutex
@@ -188,7 +199,33 @@ var _ asset.Withdrawer = (*HyperWallet)(nil)
 var _ asset.FeeRater = (*HyperWallet)(nil)
 var _ asset.Rescanner = (*HyperWallet)(nil)
 
+// validateNetworkParams ensures every network-keyed lookup the wallet performs
+// has an entry for net, so a network without endpoint/chain entries fails clearly
+// at construction. This keeps `bossw --simnet` (which has no entries yet) from
+// resolving to the mainnet endpoint and domain by default.
+func validateNetworkParams(net util.Network) error {
+	if _, ok := DefaultAPIEndpoints[net]; !ok {
+		return fmt.Errorf("hyperliquid: no API endpoint configured for network %v", net)
+	}
+	if _, ok := DefaultWSEndpoints[net]; !ok {
+		return fmt.Errorf("hyperliquid: no WS endpoint configured for network %v", net)
+	}
+	if _, ok := eip712ChainNames[net]; !ok {
+		return fmt.Errorf("hyperliquid: no EIP-712 chain name configured for network %v", net)
+	}
+	if _, ok := eip712ChainIDs[net]; !ok {
+		return fmt.Errorf("hyperliquid: no EIP-712 chain id configured for network %v", net)
+	}
+	return nil
+}
+
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*HyperWallet, error) {
+	// Fail closed: require explicit endpoint/chain entries for the network so a
+	// misconfigured one is caught here rather than defaulting to mainnet.
+	if err := validateNetworkParams(network); err != nil {
+		return nil, err
+	}
+
 	kf, err := readKeyFile(filepath.Join(cfg.DataDir, keyFileName))
 	if err != nil {
 		return nil, fmt.Errorf("loading key file: %w", err)
@@ -265,9 +302,30 @@ func (w *HyperWallet) Locked() bool {
 	return w.privKey == nil
 }
 
+// enterOp registers an in-flight public op. It returns false when the wallet is
+// not running, in which case the caller must not touch the DB/RPC and must NOT
+// call opWG.Done(). On true the caller owns one opWG token and must release it
+// with defer w.opWG.Done(). Registering under lifecycleMtx (which shutdown also
+// holds while clearing running) guarantees opWG.Add never races opWG.Wait.
+func (w *HyperWallet) enterOp() bool {
+	w.lifecycleMtx.Lock()
+	defer w.lifecycleMtx.Unlock()
+	if !w.running {
+		return false
+	}
+	w.opWG.Add(1)
+	return true
+}
+
 // Connect establishes the API connection, resolves the HYPE token ID, and
 // starts the tip poller.
 func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	w.lifecycleMtx.Lock()
+	already := w.running
+	w.lifecycleMtx.Unlock()
+	if already {
+		return nil, fmt.Errorf("wallet already connected")
+	}
 	rpc, err := newRPCClient(w.apiEndpoint(), w.settings["torproxy"], w.log)
 	if err != nil {
 		return nil, fmt.Errorf("creating RPC client: %w", err)
@@ -320,14 +378,44 @@ func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	w.nextSendNonce = maxPendingNonce
 	w.sendMtx.Unlock()
 
+	w.lifecycleMtx.Lock()
+	w.running = true
+	w.lifecycleMtx.Unlock()
+
+	// bgWg tracks the tip poller, the sole background goroutine that writes the
+	// txDB (via processLedgerUpdate). Shutdown drains it before draining the
+	// externally-initiated ops tracked by opWG.
+	var bgWg sync.WaitGroup
+	bgWg.Add(1)
+	go func() {
+		defer bgWg.Done()
+		w.tipPoller(ctx)
+	}()
+
+	// Ordered shutdown: background writer first, then in-flight public ops, then
+	// close the DB. wg.Wait() guarantees the DB is fully closed on return.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		w.tipPoller(ctx)
+		<-ctx.Done()
+		bgWg.Wait()
+		w.shutdown()
 	}()
 
 	return &wg, nil
+}
+
+// shutdown stops accepting new public calls and closes the txDB only after all
+// in-flight ops have drained, so no caller can touch a closing/closed database.
+func (w *HyperWallet) shutdown() {
+	w.lifecycleMtx.Lock()
+	w.running = false
+	w.lifecycleMtx.Unlock()
+	w.opWG.Wait()
+	if db := w.txDB.Swap(nil); db != nil {
+		_ = db.Close()
+	}
 }
 
 func (w *HyperWallet) Info() *asset.WalletInfo {
@@ -336,9 +424,10 @@ func (w *HyperWallet) Info() *asset.WalletInfo {
 }
 
 func (w *HyperWallet) Balance() (*asset.Balance, error) {
-	if w.rpc == nil {
+	if !w.enterOp() {
 		return nil, asset.ErrConnectionDown
 	}
+	defer w.opWG.Done()
 	available, held, err := w.rpc.spotBalance(context.Background(), w.address)
 	if err != nil {
 		return nil, err
@@ -366,9 +455,10 @@ func (w *HyperWallet) Withdraw(address string, value, _ uint64) (asset.Coin, err
 }
 
 func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
-	if w.rpc == nil {
+	if !w.enterOp() {
 		return nil, asset.ErrConnectionDown
 	}
+	defer w.opWG.Done()
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid Hyperliquid address %q", address)
 	}
@@ -423,7 +513,8 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 		Type:      txdb.Send,
 		ID:        txID,
 		Amount:    value,
-		Fees:      0,
+		Fees:      0, // unknown until the ledger event arrives; set on confirm
+		Timestamp: uint64(time.Now().Unix()),
 		Recipient: &recipient,
 		AdditionalData: map[string]string{
 			"nonce": strconv.FormatUint(nonce, 10),
@@ -481,6 +572,10 @@ func (w *HyperWallet) StandardSendFee(_ uint64) uint64 { return 0 }
 func (w *HyperWallet) FeeRate() uint64                 { return 0 }
 
 func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+	if !w.enterOp() {
+		return &txdb.TxHistoryResponse{}, nil
+	}
+	defer w.opWG.Done()
 	db := w.txDB.Load()
 	if db == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
@@ -489,6 +584,10 @@ func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResp
 }
 
 func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*txdb.WalletTransaction, error) {
+	if !w.enterOp() {
+		return nil, asset.ErrConnectionDown
+	}
+	defer w.opWG.Done()
 	db := w.txDB.Load()
 	if db != nil {
 		for _, lookupID := range walletTransactionLookupIDs(txID) {
@@ -514,6 +613,10 @@ func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*txdb.W
 }
 
 func (w *HyperWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
+	if !w.enterOp() {
+		return nil
+	}
+	defer w.opWG.Done()
 	db := w.txDB.Load()
 	if db == nil {
 		return nil
@@ -544,9 +647,10 @@ func (w *HyperWallet) nextSpotSendNonce() uint64 {
 }
 
 func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
-	if w.rpc == nil {
+	if !w.enterOp() {
 		return asset.ErrConnectionDown
 	}
+	defer w.opWG.Done()
 	updates, err := w.rpc.ledgerUpdates(ctx, w.address, 0)
 	if err != nil {
 		return fmt.Errorf("fetching ledger updates: %w", err)
@@ -567,10 +671,9 @@ func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
 // On each (re)connect it first calls scanLedger to catch up on any events
 // missed while offline, then enters the live message loop.
 func (w *HyperWallet) tipPoller(ctx context.Context) {
+	// The txDB is closed by shutdown() after this goroutine exits and in-flight
+	// public ops drain — not here — so a public call can never race the close.
 	defer func() {
-		if db := w.txDB.Swap(nil); db != nil {
-			_ = db.Close()
-		}
 		if atomic.SwapUint32(&w.lastPeerCount, 0) != 0 && w.peersChange != nil {
 			w.peersChange(0, nil)
 		}
@@ -699,14 +802,28 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
 		return
 	}
 
+	// Non-HYPE deltas (USDC deposits, accountClassTransfer, etc.) carry a `usdc`
+	// field rather than `token` and never move HYPE; ignore them.
 	if u.Delta.Token != "HYPE" {
 		return
 	}
 
+	// Identify a user-to-user HYPE movement structurally (a token amount plus a
+	// counterparty) so confirmation doesn't depend on the exact delta.type
+	// string, which a fixture capture can pin later. "spotTransfer" and "send"
+	// are the known transfer types; any other type that still moves HYPE between
+	// two accounts is handled too and logged, so a real run surfaces the type
+	// rather than skipping the event.
 	switch u.Delta.Type {
-	case "send", "spotTransfer", "transfer", "deposit", "internalTransfer":
-		w.handleTransferUpdate(u, db)
+	case "send", "spotTransfer":
+	default:
+		if u.Delta.User == "" || u.Delta.Destination == "" {
+			return // not a transfer-shaped delta
+		}
+		w.log.Warnf("Handling HYPE ledger delta with unrecognized type %q (user=%s dest=%s); "+
+			"pin this type against a testnet fixture", u.Delta.Type, u.Delta.User, u.Delta.Destination)
 	}
+	w.handleTransferUpdate(u, db)
 }
 
 func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
@@ -744,6 +861,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 		ID:          u.Hash,
 		Amount:      amount,
 		BlockNumber: tip,
+		Timestamp:   u.Time / 1000, // ms -> unix seconds
 		Confirmed:   true,
 		Recipient:   &addr,
 		AdditionalData: map[string]string{
@@ -766,12 +884,14 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, db *hyperTxDB) {
 	}
 }
 
-// confirmPendingSend finds the pending send matching ledger update u and
-// updates it with the confirmed state. Candidates are filtered by amount and
-// recipient; when multiple sends share both, the one whose nonce is numerically
-// closest to u.Time is chosen. Nonce proximity is a tiebreaker only — a single
-// candidate always matches regardless of how much time elapsed between nonce
-// mint and ledger echo.
+// confirmPendingSend finds the pending send matching ledger update u and updates
+// it with the confirmed state, including the real tx hash, fee, and timestamp.
+//
+// When the ledger delta carries the originating nonce (the normal case) the match
+// is exact and unambiguous. Only when it does not does it fall back to matching by
+// (recipient, amount) and the pending send whose nonce is numerically closest to
+// u.Time, which prevents incorrect aliasing on rapid duplicate sends.
+//
 // Pending entries older than pendingTTL are expired opportunistically.
 func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hyperTxDB) {
 	pending, err := db.getPendingTxs()
@@ -780,9 +900,9 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hype
 		return
 	}
 
+	// Opportunistically expire stale pending sends before matching.
 	cutoff := uint64(time.Now().Unix()) - pendingTTL
-	var best *dbTx
-	var bestAbsDiff int64
+	live := make([]*dbTx, 0, len(pending))
 	for _, p := range pending {
 		if p.SubmissionTime > 0 && p.SubmissionTime < cutoff {
 			w.log.Infof("Expiring stale pending send %s (submitted %ds ago)",
@@ -792,30 +912,10 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hype
 			}
 			continue
 		}
-
-		nonceStr, ok := p.AdditionalData["nonce"]
-		if !ok {
-			continue
-		}
-		nonce, err := strconv.ParseUint(nonceStr, 10, 64)
-		if err != nil {
-			continue
-		}
-		if p.Amount != amount {
-			continue
-		}
-		if p.Recipient == nil || !strings.EqualFold(*p.Recipient, u.Delta.Destination) {
-			continue
-		}
-		absDiff := int64(u.Time) - int64(nonce)
-		if absDiff < 0 {
-			absDiff = -absDiff
-		}
-		if best == nil || absDiff < bestAbsDiff {
-			best, bestAbsDiff = p, absDiff
-		}
+		live = append(live, p)
 	}
 
+	best := matchPendingSend(u, amount, live)
 	if best == nil {
 		return
 	}
@@ -828,6 +928,10 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hype
 	best.ID = u.Hash
 	best.BlockNumber = tip
 	best.Confirmed = true
+	best.Fees = feeFromDelta(u.Delta)
+	if u.Time > 0 {
+		best.Timestamp = u.Time / 1000 // ms -> unix seconds
+	}
 	if best.AdditionalData == nil {
 		best.AdditionalData = make(map[string]string, 2)
 	}
@@ -848,6 +952,76 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, db *hype
 	if w.emit != nil {
 		w.emit.TransactionNote(best.WalletTransaction, false)
 	}
+}
+
+// matchPendingSend selects the pending send that ledger update u confirms.
+// Exact nonce match is preferred; the (recipient, amount, closest-nonce) heuristic
+// is used only for ledger deltas that omit the nonce. Returns nil if none match.
+func matchPendingSend(u ledgerUpdate, amount uint64, pending []*dbTx) *dbTx {
+	if u.Delta.Nonce != nil {
+		for _, p := range pending {
+			if n, ok := pendingNonce(p); ok && n == *u.Delta.Nonce {
+				return p
+			}
+		}
+		return nil
+	}
+
+	var best *dbTx
+	var bestAbsDiff int64
+	for _, p := range pending {
+		n, ok := pendingNonce(p)
+		if !ok {
+			continue
+		}
+		if p.Amount != amount {
+			continue
+		}
+		if p.Recipient == nil || !strings.EqualFold(*p.Recipient, u.Delta.Destination) {
+			continue
+		}
+		absDiff := int64(u.Time) - int64(n)
+		if absDiff < 0 {
+			absDiff = -absDiff
+		}
+		if best == nil || absDiff < bestAbsDiff {
+			best, bestAbsDiff = p, absDiff
+		}
+	}
+	return best
+}
+
+// pendingNonce returns the originating send nonce stored on a pending tx.
+func pendingNonce(p *dbTx) (uint64, bool) {
+	if p.AdditionalData == nil {
+		return 0, false
+	}
+	s, ok := p.AdditionalData["nonce"]
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// feeFromDelta returns the transfer fee in atoms from a ledger delta, preferring
+// the explicit fee field and falling back to nativeTokenFee. Returns 0 when
+// neither is present or parseable (e.g. inbound transfers, feeless networks).
+func feeFromDelta(d ledgerDelta) uint64 {
+	if d.Fee != "" {
+		if f, err := parseHYPE(d.Fee); err == nil {
+			return f
+		}
+	}
+	if d.NativeTokenFee != "" {
+		if f, err := parseHYPE(d.NativeTokenFee); err == nil {
+			return f
+		}
+	}
+	return 0
 }
 
 func walletTransactionLookupIDs(txID string) []string {

@@ -935,7 +935,7 @@ func TestSendWithdrawBeforeConnect(t *testing.T) {
 	w, _ := newSendTestWallet(t, func(rw http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(rw).Encode(exchangeResponse{Status: "ok"})
 	})
-	w.rpc = nil
+	w.running = false // simulate not-yet-connected
 
 	tests := []struct {
 		name string
@@ -1210,6 +1210,7 @@ func newTestWalletWithDB(t *testing.T) *HyperWallet {
 		tip:     uint64(1700000000000),
 	}
 	w.txDB.Store(db)
+	w.running = true
 	t.Cleanup(func() { db.Close() })
 	return w
 }
@@ -1286,6 +1287,7 @@ func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWa
 		emit:        asset.NewWalletEmitter(noteChan, BipID, util.StdOutLogger("HLTEST", util.LevelTrace)),
 	}
 	w.txDB.Store(db)
+	w.running = true
 	w.Unlock(pw)
 	t.Cleanup(func() { db.Close(); srv.Close() })
 	return w, srv
@@ -1943,6 +1945,7 @@ func newTestWalletWithRPC(t *testing.T, srv *httptest.Server) *HyperWallet {
 		emit:    asset.NewWalletEmitter(noteChan, BipID, log),
 	}
 	w.txDB.Store(db)
+	w.running = true
 	t.Cleanup(func() { db.Close() })
 	return w
 }

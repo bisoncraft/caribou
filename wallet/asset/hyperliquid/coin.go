@@ -53,8 +53,9 @@ func coinIDBytes(txID string) []byte {
 			return b
 		}
 	}
-	// Last resort: copy raw bytes.
-	copy(b[32-min(len(txID), 32):], []byte(txID))
+	// Unreachable for well-formed coin IDs (always a 64- or 16-hex form). Return
+	// a zeroed ID for anything else, since a non-hex input has no meaningful
+	// 32-byte form to round-trip.
 	return b
 }
 
