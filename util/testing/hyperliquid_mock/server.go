@@ -61,11 +61,14 @@ type spotMetaResponse struct {
 }
 
 type ledgerDelta struct {
-	Type        string `json:"type"`
-	Token       string `json:"token"`
-	Amount      string `json:"amount"`
-	User        string `json:"user"`
-	Destination string `json:"destination"`
+	Type           string  `json:"type"`
+	Token          string  `json:"token"`
+	Amount         string  `json:"amount"`
+	User           string  `json:"user"`
+	Destination    string  `json:"destination"`
+	Fee            string  `json:"fee,omitempty"`
+	NativeTokenFee string  `json:"nativeTokenFee,omitempty"`
+	Nonce          *uint64 `json:"nonce,omitempty"`
 }
 
 type ledgerUpdate struct {
@@ -119,6 +122,41 @@ type Server struct {
 	mu       sync.Mutex
 	accounts map[string]*account // key: lowercase 0x address
 	subs     map[string][]chan ledgerUpdate
+
+	// Test-tunable knobs (guarded by mu). transferFee is the atoms charged to
+	// the sender on a sendAsset; pageCap caps rows per /info ledger response
+	// (0 = unlimited) to model the real API's per-response row cap.
+	transferFee uint64
+	pageCap     int
+}
+
+// SetTransferFee sets the fee (in atoms) charged to the sender on each
+// sendAsset, modeling the real network's transfer fee. Default 0.
+func (s *Server) SetTransferFee(atoms uint64) {
+	s.mu.Lock()
+	s.transferFee = atoms
+	s.mu.Unlock()
+}
+
+// SetPageCap caps the number of ledger rows returned per /info response, so a
+// paging client must advance its window to see the rest. 0 means unlimited.
+func (s *Server) SetPageCap(n int) {
+	s.mu.Lock()
+	s.pageCap = n
+	s.mu.Unlock()
+}
+
+// chainNameFor returns the hyperliquidChain string the mock expects in a signed
+// action for net, mirroring the wallet's networkChainName.
+func chainNameFor(net util.Network) string {
+	switch net {
+	case util.Mainnet:
+		return "Mainnet"
+	case util.Testnet:
+		return "Testnet"
+	default:
+		return ""
+	}
 }
 
 // New creates a mock server for the given network. The network determines
@@ -199,7 +237,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/exchange", s.handleExchange)
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/test/fund", s.handleFund)
+	mux.HandleFunc("/test/config", s.handleConfig)
 	return mux
+}
+
+// --- /test/config ---
+//
+// handleConfig is a test-only endpoint (no real API equivalent) that tunes the
+// transfer fee and ledger page cap at runtime, so a single running mock can be
+// reconfigured per test. Only the fields present are applied.
+
+type configRequest struct {
+	TransferFeeAtoms *uint64 `json:"transferFeeAtoms"`
+	PageCap          *int    `json:"pageCap"`
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	var req configRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decode: %v", err), http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	if req.TransferFeeAtoms != nil {
+		s.transferFee = *req.TransferFeeAtoms
+	}
+	if req.PageCap != nil {
+		s.pageCap = *req.PageCap
+	}
+	s.mu.Unlock()
+	writeJSON(w, struct{}{})
 }
 
 // --- /test/fund ---
@@ -288,6 +355,7 @@ func (s *Server) respondLedgerUpdates(w http.ResponseWriter, req map[string]any)
 
 	s.mu.Lock()
 	acct := s.accounts[addr]
+	pageCap := s.pageCap
 	var updates []ledgerUpdate
 	if acct != nil {
 		for _, u := range acct.ledger {
@@ -298,6 +366,11 @@ func (s *Server) respondLedgerUpdates(w http.ResponseWriter, req map[string]any)
 	}
 	s.mu.Unlock()
 
+	// Model the real API's per-response row cap: return at most pageCap oldest
+	// matching rows so a paging client must advance its window to see the rest.
+	if pageCap > 0 && len(updates) > pageCap {
+		updates = updates[:pageCap]
+	}
 	if updates == nil {
 		updates = []ledgerUpdate{}
 	}
@@ -336,6 +409,14 @@ func (s *Server) handleSendAsset(w http.ResponseWriter, req exchangeRequest) {
 		return
 	}
 
+	// The signature is recovered against net's domain; also check the action's
+	// hyperliquidChain field matches, as real HL does, so the mock exercises that
+	// path too.
+	if want := chainNameFor(s.net); !strings.EqualFold(action.HyperliquidChain, want) {
+		writeJSON(w, exchangeResponse{Status: "err", Response: fmt.Sprintf("wrong hyperliquidChain %q, want %q", action.HyperliquidChain, want)})
+		return
+	}
+
 	sender, err := recoverSendAssetSigner(s.net, action, req.Signature)
 	if err != nil {
 		writeJSON(w, exchangeResponse{Status: "err", Response: fmt.Sprintf("bad signature: %v", err)})
@@ -347,31 +428,43 @@ func (s *Server) handleSendAsset(w http.ResponseWriter, req exchangeRequest) {
 		writeJSON(w, exchangeResponse{Status: "err", Response: fmt.Sprintf("bad amount: %v", err)})
 		return
 	}
+	if amount == 0 {
+		writeJSON(w, exchangeResponse{Status: "err", Response: "zero-amount transfer"})
+		return
+	}
 
 	dest := strings.ToLower(action.Destination)
 
 	s.mu.Lock()
+	fee := s.transferFee
 	senderAcct := s.account(sender)
-	if senderAcct.totalAtoms < amount {
+	if senderAcct.totalAtoms < amount+fee {
 		s.mu.Unlock()
 		writeJSON(w, exchangeResponse{Status: "err", Response: "insufficient balance"})
 		return
 	}
-	senderAcct.totalAtoms -= amount
+	senderAcct.totalAtoms -= amount + fee
 	destAcct := s.account(dest)
 	destAcct.totalAtoms += amount
 
 	hash := fmt.Sprintf("0x%x", gethcrypto.Keccak256(req.Action, []byte(strconv.FormatUint(req.Nonce, 10))))
+	nonce := req.Nonce
+	delta := ledgerDelta{
+		Type:        "spotTransfer",
+		Token:       "HYPE",
+		Amount:      action.Amount,
+		User:        sender,
+		Destination: dest,
+		Nonce:       &nonce,
+	}
+	if fee > 0 {
+		delta.Fee = atomsToHYPE(fee)
+		delta.NativeTokenFee = "0"
+	}
 	update := ledgerUpdate{
-		Time: req.Nonce,
-		Hash: hash,
-		Delta: ledgerDelta{
-			Type:        "spotTransfer",
-			Token:       "HYPE",
-			Amount:      action.Amount,
-			User:        sender,
-			Destination: dest,
-		},
+		Time:  req.Nonce,
+		Hash:  hash,
+		Delta: delta,
 	}
 	senderAcct.ledger = append(senderAcct.ledger, update)
 	if dest != sender {
