@@ -36,6 +36,32 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
+// ChainConfig carries the per-chain values that parameterize the shared
+// electrum ElectrumWallet, so the btc and ltc asset packages can share one
+// asset.Wallet implementation. (The implementation lives here in asset/btc for
+// now; it will move to a neutral home later, together with the other shared
+// wallet.Wallet stack. asset/ltc imports it.)
+type ChainConfig struct {
+	Chain       bisonwire.Chain
+	Servers     map[string]*electrum.ServerAddr // per-net electrumx endpoints
+	ChainParams *chaincfg.Params
+	NetParams   *netparams.ChainParams
+	Info        *asset.WalletInfo
+	LogWallet   func(walletDir string) error // per-asset logger setup (logNeutrino)
+}
+
+// btcChainConfig returns the ChainConfig for the BTC electrum wallet.
+func btcChainConfig(chainParams *chaincfg.Params) ChainConfig {
+	return ChainConfig{
+		Chain:       bisonwire.ChainBTC,
+		Servers:     btcElectrumServers,
+		ChainParams: chainParams,
+		NetParams:   btcNetParams(chainParams),
+		Info:        WalletInfo,
+		LogWallet:   logNeutrino,
+	}
+}
+
 // electrumWalletDefinition is the WalletDefinition for the electrum-backed
 // seeded BTC wallet. No user-configurable server/proxy knobs; the server is
 // chosen automatically from the built-in per-network defaults.
@@ -60,14 +86,15 @@ var btcElectrumServers = map[string]*electrum.ServerAddr{
 	chaincfg.RegressionNetParams.Name: {Proto: "ssl", Addr: "127.0.0.1:54002"},
 }
 
-// createElectrumWallet creates the on-disk btcwallet database for an electrum
-// wallet. The electrum network itself is not started here.
-func createElectrumWallet(privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
-	if err := logNeutrino(walletDir); err != nil {
-		return fmt.Errorf("error initializing btcwallet logging: %w", err)
+// CreateElectrumWallet creates the on-disk btcwallet database for an electrum
+// wallet of the chain described by cc. The electrum network itself is not
+// started here. Shared by the btc and ltc asset packages.
+func CreateElectrumWallet(cc ChainConfig, privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32) error {
+	if err := cc.LogWallet(walletDir); err != nil {
+		return fmt.Errorf("error initializing wallet logging: %w", err)
 	}
 
-	loader := wallet.NewLoader(btcNetParams(net), walletDir, true, dbTimeout, 0) // recovery_window=0; see Connect
+	loader := wallet.NewLoader(cc.NetParams, walletDir, true, dbTimeout, 0) // recovery_window=0; see Connect
 	pubPass := []byte(wallet.InsecurePubPassphrase)
 
 	btcw, err := loader.CreateNewWallet(pubPass, privPass, seed, bday)
@@ -94,9 +121,15 @@ func createElectrumWallet(privPass, seed []byte, bday time.Time, walletDir strin
 	return nil
 }
 
-// electrumWallet is a lean asset.Wallet backed by an in-process electrumx
+// createElectrumWallet creates a BTC electrum wallet's on-disk database.
+func createElectrumWallet(privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
+	return CreateElectrumWallet(btcChainConfig(net), privPass, seed, bday, walletDir, log, extIdx, intIdx)
+}
+
+// ElectrumWallet is a lean asset.Wallet backed by an in-process electrumx
 // connection. It does NOT embed any ExchangeWallet type.
-type electrumWallet struct {
+type ElectrumWallet struct {
+	cfg         ChainConfig
 	log         util.Logger
 	dir         string
 	chainParams *chaincfg.Params
@@ -128,23 +161,25 @@ type electrumWallet struct {
 	syncingTxHistory   atomic.Bool
 }
 
-var _ asset.Wallet = (*electrumWallet)(nil)
-var _ asset.Authenticator = (*electrumWallet)(nil)
+var _ asset.Wallet = (*ElectrumWallet)(nil)
+var _ asset.Authenticator = (*ElectrumWallet)(nil)
 
-// openElectrumWallet constructs an electrumWallet without opening or starting
-// anything. Called by NewWallet for walletTypeElectrum.
-func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *electrumWallet {
+// NewElectrumWallet constructs a shared electrum ElectrumWallet for the chain
+// described by cc, without opening or starting anything. Shared by the btc and
+// ltc asset packages.
+func NewElectrumWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *ElectrumWallet {
 	var recoveryWindow uint32
 	if s := cfg.Settings["recoverywindow"]; s != "" {
 		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
 			recoveryWindow = uint32(n)
 		}
 	}
-	return &electrumWallet{
+	return &ElectrumWallet{
+		cfg:            cc,
 		log:            log,
-		dir:            filepath.Join(cfg.DataDir, chainParams.Name),
-		chainParams:    chainParams,
-		netParams:      btcNetParams(chainParams),
+		dir:            filepath.Join(cfg.DataDir, cc.ChainParams.Name),
+		chainParams:    cc.ChainParams,
+		netParams:      cc.NetParams,
 		emit:           cfg.Emit,
 		peersChange:    cfg.PeersChange,
 		recoveryWindow: recoveryWindow,
@@ -153,24 +188,30 @@ func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, l
 	}
 }
 
-// Info returns the WalletInfo for Bitcoin.
-func (w *electrumWallet) Info() *asset.WalletInfo {
-	return WalletInfo
+// openElectrumWallet constructs a BTC ElectrumWallet. Called by NewWallet for
+// walletTypeElectrum.
+func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *ElectrumWallet {
+	return NewElectrumWallet(btcChainConfig(chainParams), cfg, log)
+}
+
+// Info returns the WalletInfo for the wallet's chain.
+func (w *ElectrumWallet) Info() *asset.WalletInfo {
+	return w.cfg.Info
 }
 
 // Unlock unlocks the underlying wallet for spending. A nil lock channel keeps
 // it unlocked until Lock is called explicitly. Satisfies asset.Authenticator.
-func (w *electrumWallet) Unlock(pw []byte) error {
+func (w *ElectrumWallet) Unlock(pw []byte) error {
 	if w.btcw == nil {
-		return errors.New("electrum BTC: wallet not connected")
+		return errors.New("electrum: wallet not connected")
 	}
 	return w.btcw.Unlock(pw, nil)
 }
 
 // Lock locks the underlying wallet. Satisfies asset.Authenticator.
-func (w *electrumWallet) Lock() error {
+func (w *ElectrumWallet) Lock() error {
 	if w.btcw == nil {
-		return errors.New("electrum BTC: wallet not connected")
+		return errors.New("electrum: wallet not connected")
 	}
 	w.btcw.Lock()
 	return nil
@@ -178,16 +219,16 @@ func (w *electrumWallet) Lock() error {
 
 // Locked reports whether the underlying wallet is locked. Satisfies
 // asset.Authenticator.
-func (w *electrumWallet) Locked() bool {
+func (w *ElectrumWallet) Locked() bool {
 	return w.btcw == nil || w.btcw.Locked()
 }
 
 // Connect opens the btcwallet database, starts the electrum network and chain
 // client, and launches background goroutines for tx-history sync and peer
 // monitoring. Satisfies util.Connector.
-func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	if err := logNeutrino(w.dir); err != nil {
-		return nil, fmt.Errorf("electrum BTC: error initializing logging: %w", err)
+func (w *ElectrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	if err := w.cfg.LogWallet(w.dir); err != nil {
+		return nil, fmt.Errorf("electrum: error initializing logging: %w", err)
 	}
 
 	// recoveryWindow gates electrum-native gap-limit recovery: 0 (the default)
@@ -198,15 +239,15 @@ func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	w.loader = wallet.NewLoader(w.netParams, w.dir, true, dbTimeout, w.recoveryWindow)
 	exists, err := w.loader.WalletExists()
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: error checking wallet existence: %w", err)
+		return nil, fmt.Errorf("electrum: error checking wallet existence: %w", err)
 	}
 	if !exists {
-		return nil, errors.New("electrum BTC: wallet not found")
+		return nil, errors.New("electrum: wallet not found")
 	}
 
 	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase))
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: couldn't open wallet: %w", err)
+		return nil, fmt.Errorf("electrum: couldn't open wallet: %w", err)
 	}
 	w.btcw = btcw
 
@@ -215,13 +256,16 @@ func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	errCloser.Add(w.loader.UnloadWallet)
 
 	srvAddr := w.serverAddr()
+	if srvAddr == nil {
+		return nil, fmt.Errorf("electrum: no built-in server for network %q", w.chainParams.Name)
+	}
 	if err = srvAddr.Validate(); err != nil {
-		return nil, fmt.Errorf("electrum BTC: invalid built-in server address: %w", err)
+		return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
 	}
 
-	chainCfg, err := electrum.NewChainConfig(bisonwire.ChainBTC, w.netParams)
+	chainCfg, err := electrum.NewChainConfig(w.cfg.Chain, w.netParams)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: chain config: %w", err)
+		return nil, fmt.Errorf("electrum: chain config: %w", err)
 	}
 
 	w.network, err = electrum.NewNetwork(&electrum.Config{
@@ -230,7 +274,7 @@ func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		DataDir:       w.dir,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: new network: %w", err)
+		return nil, fmt.Errorf("electrum: new network: %w", err)
 	}
 
 	// The chain client owns the electrum network's lifecycle: chainClient.Start
@@ -239,10 +283,10 @@ func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// then try to start it a second time and fail with "already started".
 	w.chainClient, err = chain.NewElectrumClient(w.netParams, w.network)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: new chain client: %w", err)
+		return nil, fmt.Errorf("electrum: new chain client: %w", err)
 	}
 	if err = w.chainClient.Start(); err != nil {
-		return nil, fmt.Errorf("electrum BTC: couldn't start chain client: %w", err)
+		return nil, fmt.Errorf("electrum: couldn't start chain client: %w", err)
 	}
 	errCloser.Add(func() error { w.chainClient.Stop(); return nil })
 
@@ -319,16 +363,15 @@ func (w *electrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
 // serverAddr returns the built-in electrumx server address for the active
 // network.  Falls back to mainnet if the network name is unrecognized.
-func (w *electrumWallet) serverAddr() *electrum.ServerAddr {
-	if sa, ok := btcElectrumServers[w.chainParams.Name]; ok {
-		return sa
-	}
-	return btcElectrumServers[chaincfg.MainNetParams.Name]
+func (w *ElectrumWallet) serverAddr() *electrum.ServerAddr {
+	// The network is always known, so a missing entry is a real error (handled
+	// by the caller), not a silent fallback to another network.
+	return w.cfg.Servers[w.chainParams.Name]
 }
 
 // bestBlock returns the hash and height of the best synced block according to
 // the chain client, or zero/genesis values if not yet synced.
-func (w *electrumWallet) bestBlock() (*chainhash.Hash, int32) {
+func (w *ElectrumWallet) bestBlock() (*chainhash.Hash, int32) {
 	if w.chainClient == nil {
 		return &chainhash.Hash{}, 0
 	}
@@ -340,13 +383,13 @@ func (w *electrumWallet) bestBlock() (*chainhash.Hash, int32) {
 }
 
 // Balance returns the wallet's available, immature, and locked balances.
-func (w *electrumWallet) Balance() (*asset.Balance, error) {
+func (w *ElectrumWallet) Balance() (*asset.Balance, error) {
 	if w.btcw == nil {
-		return nil, errors.New("electrum BTC: wallet not connected")
+		return nil, errors.New("electrum: wallet not connected")
 	}
 	bals, err := w.btcw.CalculateAccountBalances(0, 1)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: balance error: %w", err)
+		return nil, fmt.Errorf("electrum: balance error: %w", err)
 	}
 	return &asset.Balance{
 		Available: uint64(bals.Spendable),
@@ -357,22 +400,22 @@ func (w *electrumWallet) Balance() (*asset.Balance, error) {
 }
 
 // DepositAddress returns the next unused external address.
-func (w *electrumWallet) DepositAddress() (string, error) {
+func (w *ElectrumWallet) DepositAddress() (string, error) {
 	if w.btcw == nil {
-		return "", errors.New("electrum BTC: wallet not connected")
+		return "", errors.New("electrum: wallet not connected")
 	}
 	scope := w.btcw.ScopeForPurpose(84)
 	addr, err := w.btcw.NewAddress(0, scope)
 	if err != nil {
-		return "", fmt.Errorf("electrum BTC: new address: %w", err)
+		return "", fmt.Errorf("electrum: new address: %w", err)
 	}
 	return addr.EncodeAddress(), nil
 }
 
 // OwnsDepositAddress returns true if the address belongs to this wallet.
-func (w *electrumWallet) OwnsDepositAddress(address string) (bool, error) {
+func (w *ElectrumWallet) OwnsDepositAddress(address string) (bool, error) {
 	if w.btcw == nil {
-		return false, errors.New("electrum BTC: wallet not connected")
+		return false, errors.New("electrum: wallet not connected")
 	}
 	addr, err := btcutil.DecodeAddress(address, w.chainParams)
 	if err != nil {
@@ -383,25 +426,25 @@ func (w *electrumWallet) OwnsDepositAddress(address string) (bool, error) {
 
 // ValidateAddress reports whether address is a valid Bitcoin address for the
 // active network.
-func (w *electrumWallet) ValidateAddress(address string) bool {
+func (w *ElectrumWallet) ValidateAddress(address string) bool {
 	_, err := btcutil.DecodeAddress(address, w.chainParams)
 	return err == nil
 }
 
 // Send sends exactly value satoshis to address, paying feeRate sat/byte.
 // Coin selection is handled by wallet.SendOutputs internally.
-func (w *electrumWallet) Send(address string, value, feeRate uint64) (asset.Coin, error) {
+func (w *ElectrumWallet) Send(address string, value, feeRate uint64) (asset.Coin, error) {
 	if w.btcw == nil {
-		return nil, errors.New("electrum BTC: wallet not connected")
+		return nil, errors.New("electrum: wallet not connected")
 	}
 
 	addr, err := btcutil.DecodeAddress(address, w.chainParams)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: invalid address %q: %w", address, err)
+		return nil, fmt.Errorf("electrum: invalid address %q: %w", address, err)
 	}
 	pkScript, err := txscript.PayToAddrScript(addr)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: pay-to-addr script: %w", err)
+		return nil, fmt.Errorf("electrum: pay-to-addr script: %w", err)
 	}
 
 	txOut := wire.NewTxOut(int64(value), pkScript)
@@ -418,7 +461,7 @@ func (w *electrumWallet) Send(address string, value, feeRate uint64) (asset.Coin
 		"",
 	)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: SendOutputs: %w", err)
+		return nil, fmt.Errorf("electrum: SendOutputs: %w", err)
 	}
 
 	txHash := msgTx.TxHash()
@@ -444,7 +487,7 @@ func (w *electrumWallet) Send(address string, value, feeRate uint64) (asset.Coin
 }
 
 // StandardSendFee returns the fee for a standard segwit send (1-in 2-out).
-func (w *electrumWallet) StandardSendFee(feeRate uint64) uint64 {
+func (w *ElectrumWallet) StandardSendFee(feeRate uint64) uint64 {
 	// segwit: 1 P2WPKH input + 2 P2WPKH outputs
 	inputSize := uint64(RedeemP2WPKHInputSize) + uint64((RedeemP2PKSigScriptSize+2+3)/4)
 	sz := uint64(MinimumTxOverhead) + inputSize + P2WPKHOutputSize*2
@@ -452,7 +495,7 @@ func (w *electrumWallet) StandardSendFee(feeRate uint64) uint64 {
 }
 
 // SyncStatus returns the current chain-sync state.
-func (w *electrumWallet) SyncStatus() (*asset.SyncStatus, error) {
+func (w *ElectrumWallet) SyncStatus() (*asset.SyncStatus, error) {
 	if w.chainClient == nil || w.network == nil {
 		return &asset.SyncStatus{}, nil
 	}
@@ -474,16 +517,16 @@ func (w *electrumWallet) SyncStatus() (*asset.SyncStatus, error) {
 }
 
 // TxHistory returns paginated transaction history from the local txdb.
-func (w *electrumWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+func (w *ElectrumWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if w.txdb == nil {
-		return nil, errors.New("electrum BTC: tx database not initialized")
+		return nil, errors.New("electrum: tx database not initialized")
 	}
 	return w.txdb.GetTxs(req)
 }
 
 // WalletTransaction looks up a single transaction. If it is confirmed it is
 // served from the local txdb; otherwise the chain client is queried.
-func (w *electrumWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
+func (w *ElectrumWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
 	// Accept either a plain txid or a hex-encoded coin ID.
 	coinID, err := hex.DecodeString(txID)
 	if err == nil {
@@ -503,11 +546,11 @@ func (w *electrumWallet) WalletTransaction(ctx context.Context, txID string) (*t
 	// Fall through to wallet database lookup.
 	txHash, err := chainhash.NewHashFromStr(txID)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: invalid txid %q: %w", txID, err)
+		return nil, fmt.Errorf("electrum: invalid txid %q: %w", txID, err)
 	}
 	details, err := wallet.UnstableAPI(w.btcw).TxDetails(txHash)
 	if err != nil {
-		return nil, fmt.Errorf("electrum BTC: TxDetails: %w", err)
+		return nil, fmt.Errorf("electrum: TxDetails: %w", err)
 	}
 	if details == nil {
 		return nil, asset.CoinNotFoundError
@@ -523,7 +566,7 @@ func (w *electrumWallet) WalletTransaction(ctx context.Context, txID string) (*t
 }
 
 // PendingTransactions returns unconfirmed transactions tracked by this wallet.
-func (w *electrumWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
+func (w *ElectrumWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransaction {
 	w.pendingMtx.RLock()
 	defer w.pendingMtx.RUnlock()
 	txs := make([]*txdb.WalletTransaction, 0, len(w.pendingTxs))
@@ -539,7 +582,7 @@ func (w *electrumWallet) PendingTransactions(_ context.Context) []*txdb.WalletTr
 
 // storePendingTx records a sent transaction in the txdb and the in-memory
 // pending map.
-func (w *electrumWallet) storePendingTx(txHash *chainhash.Hash, wt *txdb.WalletTransaction) {
+func (w *ElectrumWallet) storePendingTx(txHash *chainhash.Hash, wt *txdb.WalletTransaction) {
 	if w.txdb == nil {
 		return
 	}
@@ -547,14 +590,14 @@ func (w *electrumWallet) storePendingTx(txHash *chainhash.Hash, wt *txdb.WalletT
 	w.pendingTxs[*txHash] = *wt
 	w.pendingMtx.Unlock()
 	if err := w.txdb.StoreTx(wt); err != nil {
-		w.log.Errorf("electrum BTC: storePendingTx %s: %v", txHash, err)
+		w.log.Errorf("electrum: storePendingTx %s: %v", txHash, err)
 	}
 	w.emit.TransactionNote(wt, true)
 }
 
 // blockLoop watches the wallet's NtfnServer for block events and triggers
 // tx-history syncs.
-func (w *electrumWallet) blockLoop(ctx context.Context) {
+func (w *ElectrumWallet) blockLoop(ctx context.Context) {
 	cl := w.btcw.NtfnServer.TransactionNotifications()
 	defer cl.Done()
 	for {
@@ -572,7 +615,7 @@ func (w *electrumWallet) blockLoop(ctx context.Context) {
 }
 
 // peerLoop periodically checks network connectivity and calls peersChange.
-func (w *electrumWallet) peerLoop(ctx context.Context) {
+func (w *ElectrumWallet) peerLoop(ctx context.Context) {
 	const interval = 5 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -607,7 +650,7 @@ func (w *electrumWallet) peerLoop(ctx context.Context) {
 
 // syncTxHistory scans for new wallet transactions since the last query and
 // updates pending transactions.
-func (w *electrumWallet) syncTxHistory(ctx context.Context, tip uint64) {
+func (w *ElectrumWallet) syncTxHistory(ctx context.Context, tip uint64) {
 	if !w.syncingTxHistory.CompareAndSwap(false, true) {
 		return
 	}
@@ -628,7 +671,7 @@ func (w *electrumWallet) syncTxHistory(ctx context.Context, tip uint64) {
 
 // scanNewTransactions queries the wallet for transactions since the last scan
 // and records any unknown ones in the txdb.
-func (w *electrumWallet) scanNewTransactions(ctx context.Context, tip uint64) {
+func (w *ElectrumWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 	const blockQueryBuffer = 3
 
 	lastQuery := w.receiveTxLastQuery.Load()
@@ -640,7 +683,7 @@ func (w *electrumWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 	syncHeight := w.btcw.Manager.SyncedTo().Height
 	txs, err := w.btcw.ListSinceBlock(fromHeight, -1, syncHeight)
 	if err != nil {
-		w.log.Errorf("electrum BTC: ListSinceBlock(%d): %v", fromHeight, err)
+		w.log.Errorf("electrum: ListSinceBlock(%d): %v", fromHeight, err)
 		return
 	}
 
@@ -662,10 +705,10 @@ func (w *electrumWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 
 // recordBtcjsonTx processes one btcjson.ListTransactionsResult and stores it in
 // the txdb if not already present.
-func (w *electrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransactionsResult, tip uint64, isInitial bool) {
+func (w *ElectrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransactionsResult, tip uint64, isInitial bool) {
 	txHash, err := chainhash.NewHashFromStr(tx.TxID)
 	if err != nil {
-		w.log.Errorf("electrum BTC: invalid txid %q: %v", tx.TxID, err)
+		w.log.Errorf("electrum: invalid txid %q: %v", tx.TxID, err)
 		return
 	}
 
@@ -673,7 +716,7 @@ func (w *electrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTran
 	if existing, err := w.txdb.GetTx(txHash.String()); err == nil && existing != nil {
 		return
 	} else if err != nil && !errors.Is(err, asset.CoinNotFoundError) {
-		w.log.Errorf("electrum BTC: GetTx %s: %v", txHash, err)
+		w.log.Errorf("electrum: GetTx %s: %v", txHash, err)
 		return
 	}
 
@@ -724,7 +767,7 @@ func (w *electrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTran
 	}
 
 	if err = w.txdb.StoreTx(wt); err != nil {
-		w.log.Errorf("electrum BTC: StoreTx %s: %v", txHash, err)
+		w.log.Errorf("electrum: StoreTx %s: %v", txHash, err)
 		return
 	}
 	if wt.BlockNumber == 0 {
@@ -739,7 +782,7 @@ func (w *electrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTran
 
 // updatePendingTransactions refreshes confirmation status for all tracked
 // pending transactions.
-func (w *electrumWallet) updatePendingTransactions(ctx context.Context, tip uint64) {
+func (w *ElectrumWallet) updatePendingTransactions(ctx context.Context, tip uint64) {
 	w.pendingMtx.RLock()
 	snapshot := make(map[chainhash.Hash]txdb.WalletTransaction, len(w.pendingTxs))
 	for k, v := range w.pendingTxs {
@@ -790,7 +833,7 @@ func (w *electrumWallet) updatePendingTransactions(ctx context.Context, tip uint
 
 		if updated {
 			if err := w.txdb.StoreTx(&tx); err != nil {
-				w.log.Errorf("electrum BTC: updating pending tx %s: %v", txHash, err)
+				w.log.Errorf("electrum: updating pending tx %s: %v", txHash, err)
 				continue
 			}
 			w.pendingMtx.Lock()
