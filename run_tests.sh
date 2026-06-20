@@ -59,6 +59,7 @@ go test -c -o /dev/null -tags harness ./wallet/asset/eth
 go test -c -o /dev/null -tags rpclive ./wallet/asset/eth
 go test -c -o /dev/null -tags harness ./wallet/asset/zec
 go test -c -o /dev/null -tags harness ./wallet/asset/dash
+go test -c -o /dev/null -tags harness ./wallet/asset/hyperliquid
 go test -c -o /dev/null -tags rpclive ./wallet/asset/polygon
 go test -c -o /dev/null -tags live ./util/testing/firo/test
 
