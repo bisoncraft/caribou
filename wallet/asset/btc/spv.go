@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
@@ -511,7 +513,10 @@ func logNeutrino(walletDir string) error {
 		return fmt.Errorf("error initializing log rotator: %w", err)
 	}
 
-	backendLog := btclog.NewBackend(logSpinner)
+	// Write to both the rotating log file and stdout, so subsystem logs
+	// (header sync, recovery, tx manager, …) are visible live, not just
+	// buried in a file under the wallet dir.
+	backendLog := btclog.NewBackend(io.MultiWriter(os.Stdout, logSpinner))
 
 	logger := func(name string, lvl btclog.Level) btclog.Logger {
 		l := backendLog.Logger(name)
@@ -523,6 +528,7 @@ func logNeutrino(walletDir string) error {
 	wallet.UseLogger(logger("BTCW", btclog.LevelInfo))
 	wtxmgr.UseLogger(logger("TXMGR", btclog.LevelInfo))
 	chain.UseLogger(logger("CHAIN", btclog.LevelInfo))
+	electrum.UseLogger(logger("ELEC", btclog.LevelDebug))
 
 	return nil
 }
