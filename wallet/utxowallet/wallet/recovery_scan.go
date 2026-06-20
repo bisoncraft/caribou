@@ -21,10 +21,11 @@ import (
 const proberConcurrency = 16
 
 // recoverViaScan performs gap-limit address discovery using a per-address
-// history probe (chain.AddressProber) instead of a block walk. For each active
-// key scope and branch it probes derived addresses in concurrent windows and
-// extends the wallet's address pool to the highest index that has history. A
-// branch is abandoned after gapLimit consecutive unused addresses.
+// history probe (chain.AddressProber) instead of a block walk. For the BIP84
+// scope's external and internal branches it probes derived addresses in
+// concurrent windows and extends the wallet's address pool to the highest index
+// that has history. A branch is abandoned after gapLimit consecutive unused
+// addresses.
 //
 // It is O(used + gapLimit) probes per branch, independent of chain length.
 // Extending the pool makes the discovered addresses "active" (see
@@ -39,32 +40,36 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 	if gapLimit == 0 {
 		return nil
 	}
-	for _, scoped := range w.Manager.ActiveScopedKeyManagers() {
-		scope := scoped.Scope()
 
-		// Default scopes can hold receive and change addresses; non-default
-		// scopes only ever held change (internal), matching
-		// ForEachRelevantActiveAddress.
-		branches := []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch}
-		if !w.Manager.IsDefaultScope(scope) {
-			branches = []uint32{waddrmgr.InternalBranch}
-		}
+	// These wallets generate only BIP84 (native segwit) addresses, so recovery
+	// scans just that scope — both the external (receive) and internal (change)
+	// branches. Probing the other default scopes (BIP44/49/86) would only ever
+	// find empty branches while quadrupling the probe count (and the per-probe
+	// get_history round-trips dominate recovery latency).
+	//
+	// Use ScopeForPurpose so the coin type matches what DepositAddress derives
+	// (BTC coin 0, LTC coin 2); waddrmgr.KeyScopeBIP0084 hardcodes coin 0 and
+	// would miss LTC's addresses.
+	scoped, err := w.Manager.FetchScopedKeyManager(w.ScopeForPurpose(84))
+	if err != nil {
+		return fmt.Errorf("recover: fetch BIP84 scope manager: %w", err)
+	}
+	scope := scoped.Scope()
 
-		for _, branch := range branches {
-			lastUsed, err := w.scanBranch(prober, scoped, branch, gapLimit)
-			if err != nil {
-				return fmt.Errorf("recover: scope %v branch %d: %w", scope, branch, err)
-			}
-			if lastUsed < 0 {
-				continue
-			}
-			if err := w.extendScanBranch(scoped, branch, uint32(lastUsed)); err != nil {
-				return fmt.Errorf("recover: extend scope %v branch %d to %d: %w",
-					scope, branch, lastUsed, err)
-			}
-			log.Infof("Recovery: scope %v branch %d used through index %d",
-				scope, branch, lastUsed)
+	for _, branch := range []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch} {
+		lastUsed, err := w.scanBranch(prober, scoped, branch, gapLimit)
+		if err != nil {
+			return fmt.Errorf("recover: scope %v branch %d: %w", scope, branch, err)
 		}
+		if lastUsed < 0 {
+			continue
+		}
+		if err := w.extendScanBranch(scoped, branch, uint32(lastUsed)); err != nil {
+			return fmt.Errorf("recover: extend scope %v branch %d to %d: %w",
+				scope, branch, lastUsed, err)
+		}
+		log.Infof("Recovery: scope %v branch %d used through index %d",
+			scope, branch, lastUsed)
 	}
 	return nil
 }
