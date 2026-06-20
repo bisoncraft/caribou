@@ -26,11 +26,13 @@ package ltc
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -158,9 +160,11 @@ func newLTCElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 	return w, cm
 }
 
-// ltcElectrumSyncTimeout is how long we wait for the LTC electrum wallet to
-// synchronise with the harness electrumx server.
-const ltcElectrumSyncTimeout = 90 * time.Second
+// ltcElectrumSyncTimeout is how long we wait for an LTC electrum wallet
+// operation (sync, balance) to complete. Generous on purpose: the electrum
+// server can be slow or loaded, and the wallet (and these tests) must tolerate
+// that rather than assume snappy responses.
+const ltcElectrumSyncTimeout = 3 * time.Minute
 
 // waitLTCElectrumSynced polls SyncStatus until synced or timeout.
 func waitLTCElectrumSynced(t *testing.T, w asset.Wallet) {
@@ -183,7 +187,7 @@ func waitLTCElectrumSynced(t *testing.T, w asset.Wallet) {
 func waitLTCBalanceAtLeast(t *testing.T, w asset.Wallet, wantMin uint64) *asset.Balance {
 	t.Helper()
 	const poll = 500 * time.Millisecond
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(ltcElectrumSyncTimeout)
 	for time.Now().Before(deadline) {
 		bal, err := w.Balance()
 		if err == nil && bal != nil && bal.Available >= wantMin {
@@ -191,7 +195,7 @@ func waitLTCBalanceAtLeast(t *testing.T, w asset.Wallet, wantMin uint64) *asset.
 		}
 		time.Sleep(poll)
 	}
-	t.Fatalf("LTC balance did not reach %d litoshi within 60s", wantMin)
+	t.Fatalf("LTC balance did not reach %d litoshi within %v", wantMin, ltcElectrumSyncTimeout)
 	return nil
 }
 
@@ -516,4 +520,106 @@ func TestLTCElectrumInfo(t *testing.T) {
 	if info.Name != "Litecoin" {
 		t.Fatalf("Info.Name = %q, want %q", info.Name, "Litecoin")
 	}
+}
+
+// randLTCBytes returns n cryptographically-random bytes, for a fresh wallet seed
+// isolated from the shared gamma seed's accumulated on-chain history.
+func randLTCBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return b
+}
+
+// connectLTCElectrumWalletAt creates and connects an LTC electrum wallet from
+// the given seed, with the given recovery window (0 disables recovery). It uses
+// a recent birthday so SyncedTo doesn't walk the whole chain from the 2021
+// default; the birthday must predate the funding so ingestion sees it.
+func connectLTCElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recoveryWindow uint32) (asset.Wallet, *util.ConnectionMaster) {
+	t.Helper()
+	walletDir := filepath.Join(dataDir, RegressionNetParams.Name)
+	bday := time.Now().Add(-time.Hour)
+	if err := createLTCElectrumWallet(ltcPassword, seed, bday, walletDir, ltcLogger, 0, 0, RegressionNetParams); err != nil {
+		t.Fatalf("connectLTCElectrumWalletAt: createLTCElectrumWallet: %v", err)
+	}
+	settings := map[string]string{}
+	if recoveryWindow > 0 {
+		settings["recoverywindow"] = strconv.Itoa(int(recoveryWindow))
+	}
+	walletCfg := &asset.WalletConfig{
+		Type:     walletTypeElectrum,
+		DataDir:  dataDir,
+		Settings: settings,
+		Emit:     asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), BipID, ltcLogger),
+		PeersChange: func(n uint32, err error) {
+			ltcLogger.Debugf("electrum LTC recovery peers=%d err=%v", n, err)
+		},
+	}
+	w, err := NewWallet(walletCfg, ltcLogger, util.Regtest)
+	if err != nil {
+		t.Fatalf("connectLTCElectrumWalletAt: NewWallet: %v", err)
+	}
+	cm := util.NewConnectionMaster(w)
+	if err = cm.Connect(ltcCtx); err != nil {
+		t.Fatalf("connectLTCElectrumWalletAt: Connect: %v", err)
+	}
+	return w, cm
+}
+
+// TestLTCElectrumRecovery is the LTC mirror of TestElectrumRecovery: wallet A
+// funds a run of external addresses; a brand-new wallet B from the SAME seed,
+// created with a recovery window, must rediscover all of those funds on connect
+// via the address-probe gap-limit scan. This exercises the shared electrum
+// wrapper's recovery path under LTC's coin type (m/84'/2'), which the BIP84
+// scope fix made correct.
+func TestLTCElectrumRecovery(t *testing.T) {
+	alpha, alphaCM := newLTCAlphaBackend(t)
+	defer alphaCM.Disconnect()
+	if auth, ok := alpha.(asset.Authenticator); ok {
+		if err := auth.Unlock(ltcPassword); err != nil {
+			t.Fatalf("unlock alpha: %v", err)
+		}
+	}
+
+	seed := randLTCBytes(t, 32)
+
+	// Wallet A: fund a sequence of distinct external addresses. No recovery
+	// window — it derives and funds its own addresses, nothing to discover.
+	wA, cmA := connectLTCElectrumWalletAt(t, t.TempDir(), seed, 0)
+	waitLTCElectrumSynced(t, wA)
+
+	const nAddrs = 8
+	const perAddr = 1 // LTC each
+	seen := make(map[string]bool)
+	for i := 0; i < nAddrs; i++ {
+		addr, err := wA.DepositAddress()
+		if err != nil {
+			t.Fatalf("DepositAddress %d: %v", i, err)
+		}
+		if seen[addr] {
+			t.Fatalf("DepositAddress did not advance at i=%d (addr %s reused)", i, addr)
+		}
+		seen[addr] = true
+		if _, err := alpha.Send(addr, toSatoshiLTC(perAddr), 10); err != nil {
+			t.Fatalf("alpha.Send %d: %v", i, err)
+		}
+		if err := mineLTCAlpha(); err != nil {
+			t.Fatalf("mineLTCAlpha %d: %v", i, err)
+		}
+		// Wait for A to register the receive so DepositAddress advances.
+		waitLTCBalanceAtLeast(t, wA, toSatoshiLTC(float64(i+1)*perAddr))
+	}
+	wantTotal := toSatoshiLTC(nAddrs * perAddr)
+	cmA.Disconnect()
+
+	// Wallet B: fresh wallet, same seed, WITH a recovery window. The gap-limit
+	// scan must rediscover everything wallet A funded.
+	wB, cmB := connectLTCElectrumWalletAt(t, t.TempDir(), seed, 20)
+	defer cmB.Disconnect()
+	waitLTCElectrumSynced(t, wB)
+
+	bal := waitLTCBalanceAtLeast(t, wB, wantTotal)
+	t.Logf("LTC recovered balance: available=%d (want>=%d across %d addrs)", bal.Available, wantTotal, nAddrs)
 }
