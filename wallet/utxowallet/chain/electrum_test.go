@@ -100,6 +100,20 @@ func (s *stubNetwork) addBlock(t *testing.T, ts time.Time) *wire.BlockHeader {
 	return hdr
 }
 
+// rewindTo drops every header above `height`, modelling a reorg in which the
+// server's chain diverges below our tip. After this, Tip() reports `height` and
+// the dropped heights are unknown to HeaderByHeight — so the chain client's
+// contiguous reconnect path delivers the NEW chain that addBlock appends next.
+func (s *stubNetwork) rewindTo(t *testing.T, height int32) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := int(height) + 1; i < len(s.headers); i++ {
+		delete(s.hashIdx, s.headers[i].BlockHash())
+	}
+	s.headers = s.headers[:height+1]
+}
+
 func (s *stubNetwork) Start(_ context.Context) error { return nil }
 func (s *stubNetwork) Stop()                         { close(s.done) }
 func (s *stubNetwork) Done() <-chan struct{}         { return s.done }
@@ -284,6 +298,45 @@ func drain(t *testing.T, c *ElectrumClient, n int, d time.Duration) []any {
 		}
 	}
 	return out
+}
+
+// newGatedClient starts a client in its real initial state: the live-tip gate is
+// CLOSED (liveDelivery false), as it is before the first rescan completes. Unlike
+// makeClient it does not mark the client live, so tests can exercise tip
+// suppression and the rescan->live handoff.
+func newGatedClient(t *testing.T, blocks int) (*ElectrumClient, *stubNetwork) {
+	t.Helper()
+	stub := newStubNetwork()
+	for i := range blocks {
+		stub.addBlock(t, time.Unix(int64(1_700_000_000+i*60), 0))
+	}
+	stub.synced = true
+	c, err := NewElectrumClient(testParams(), stub)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		c.Stop()
+		c.WaitForShutdown()
+	})
+	drain(t, c, 1, time.Second) // ClientConnected
+	return c, stub
+}
+
+// assertNoNtfn fails if any notification arrives within d. Used to assert the
+// live-tip gate is suppressing BlockConnected.
+func assertNoNtfn(t *testing.T, c *ElectrumClient, d time.Duration) {
+	t.Helper()
+	select {
+	case n, ok := <-c.Notifications():
+		if ok {
+			t.Fatalf("unexpected notification while gate closed: %#v", n)
+		}
+	case <-time.After(d):
+	}
 }
 
 func TestElectrumBackEndAndCapability(t *testing.T) {
@@ -527,6 +580,10 @@ func TestElectrumTipChangeMultiBlock(t *testing.T) {
 func TestElectrumBlockDisconnectedOnRewind(t *testing.T) {
 	c, stub := makeClient(t, 5)
 
+	// A pure rewind with no replacement chain yet: the tip drops to height 1, so
+	// the contiguous reconnect path has nothing to re-deliver and we see only
+	// the disconnects.
+	stub.rewindTo(t, 1)
 	disc := []electrum.DisconnectedBlock{
 		{Hash: [32]byte{1}, Height: 4, Time: 1_700_001_000},
 		{Hash: [32]byte{2}, Height: 3, Time: 1_700_000_940},
@@ -584,6 +641,126 @@ func TestElectrumReorgEvent(t *testing.T) {
 		if bc.Height != wantHeight {
 			t.Fatalf("got[%d] BlockConnected.Height = %d, want %d", 2+i, bc.Height, wantHeight)
 		}
+	}
+}
+
+// TestElectrumRescanLiveHandoff is the regression for the rescan->live sync gap:
+// blocks mined DURING the initial rescan must not be dropped. Until the first
+// rescan completes the client suppresses live tip changes (the rescan owns
+// SyncedTo); at the handoff (goLive) it delivers a contiguous BlockConnected
+// catch-up for every block mined during the rescan, so SyncedTo advances to the
+// real tip without a gap. Before the fix, a block mined mid-rescan broke
+// waddrmgr.PutSyncedTo's prev-block chain and the wallet hung forever.
+func TestElectrumRescanLiveHandoff(t *testing.T) {
+	c, stub := newGatedClient(t, 6) // heights 0..5, tip=5, gate CLOSED
+
+	// Two blocks are mined "during the rescan", arriving as live tip changes
+	// while the gate is still closed. They must be suppressed, not delivered.
+	stub.addBlock(t, time.Unix(1_700_001_000, 0)) // tip 6
+	stub.addBlock(t, time.Unix(1_700_001_060, 0)) // tip 7
+	stub.pushConnected(t, 6)
+	stub.pushConnected(t, 7)
+	assertNoNtfn(t, c, 300*time.Millisecond)
+
+	// The rescan finished at the tip it froze (5). goLive hands off and must
+	// deliver the two blocks mined during the rescan, contiguously from 6.
+	c.goLive(5)
+	got := drain(t, c, 2, 2*time.Second)
+	for i, n := range got {
+		bc, ok := n.(BlockConnected)
+		if !ok {
+			t.Fatalf("handoff ntfn[%d] = %T, want BlockConnected", i, n)
+		}
+		if want := int32(6 + i); bc.Height != want {
+			t.Fatalf("handoff ntfn[%d].Height = %d, want %d", i, bc.Height, want)
+		}
+	}
+
+	// Now live: a subsequent block is delivered normally and contiguously.
+	stub.addBlock(t, time.Unix(1_700_001_120, 0)) // tip 8
+	stub.pushConnected(t, 8)
+	got = drain(t, c, 1, 2*time.Second)
+	if bc, ok := got[0].(BlockConnected); !ok || bc.Height != 8 {
+		t.Fatalf("post-handoff ntfn = %#v, want BlockConnected height 8", got[0])
+	}
+}
+
+// TestElectrumGoLiveIdempotent confirms the handoff happens once: a later
+// rescan's goLive (already live, possibly at a lower tip) re-opens nothing and
+// re-delivers nothing, so SyncedTo isn't perturbed once the wallet is live.
+func TestElectrumGoLiveIdempotent(t *testing.T) {
+	c, stub := newGatedClient(t, 4) // heights 0..3, tip=3, gate CLOSED
+
+	stub.addBlock(t, time.Unix(1_700_001_000, 0)) // tip 4
+	c.goLive(3)                                   // first handoff: delivers 4
+	got := drain(t, c, 1, 2*time.Second)
+	if bc, ok := got[0].(BlockConnected); !ok || bc.Height != 4 {
+		t.Fatalf("first goLive ntfn = %#v, want BlockConnected height 4", got[0])
+	}
+
+	// A later rescan finishes (at the same or a lower height). goLive must be a
+	// no-op: it neither resets the delivered watermark nor re-delivers blocks.
+	c.goLive(2)
+	assertNoNtfn(t, c, 300*time.Millisecond)
+
+	// And live delivery still continues contiguously from where it left off.
+	stub.addBlock(t, time.Unix(1_700_001_060, 0)) // tip 5
+	stub.pushConnected(t, 5)
+	got = drain(t, c, 1, 2*time.Second)
+	if bc, ok := got[0].(BlockConnected); !ok || bc.Height != 5 {
+		t.Fatalf("post-idempotent ntfn = %#v, want BlockConnected height 5", got[0])
+	}
+}
+
+// TestElectrumReorgReconnectsNewChain exercises a realistic reorg: the server's
+// chain diverges below our tip (headers dropped), so after emitting a
+// BlockDisconnected per orphaned block the client must reconnect the WHOLE new
+// chain from the fork point up to the new tip — contiguously, so PutSyncedTo's
+// prev-block chain holds across the reorg, not just deliver the new tip.
+func TestElectrumReorgReconnectsNewChain(t *testing.T) {
+	c, stub := makeClient(t, 6) // heights 0..5, tip=5, live, lastConnected=5
+
+	// Reorg: drop 3,4,5 and build a different chain to height 4.
+	stub.rewindTo(t, 2)
+	stub.addBlock(t, time.Unix(1_700_002_000, 0)) // new height 3
+	stub.addBlock(t, time.Unix(1_700_002_060, 0)) // new height 4
+	stub.tipCh <- &electrum.TipChange{
+		Disconnected: []electrum.DisconnectedBlock{
+			{Hash: [32]byte{0x05}, Height: 5, Time: 1_700_001_300},
+			{Hash: [32]byte{0x04}, Height: 4, Time: 1_700_001_240},
+			{Hash: [32]byte{0x03}, Height: 3, Time: 1_700_001_180},
+		},
+	}
+
+	// 3 disconnects (5,4,3 newest-first), then a contiguous reconnect of the new
+	// chain from the fork point (3,4).
+	got := drain(t, c, 5, 2*time.Second)
+	for i, wantHeight := range []int32{5, 4, 3} {
+		bd, ok := got[i].(BlockDisconnected)
+		if !ok {
+			t.Fatalf("got[%d] = %T, want BlockDisconnected", i, got[i])
+		}
+		if bd.Height != wantHeight {
+			t.Fatalf("got[%d] BlockDisconnected.Height = %d, want %d", i, bd.Height, wantHeight)
+		}
+	}
+	newTip := stub.Tip()
+	for i, wantHeight := range []int32{3, 4} {
+		bc, ok := got[3+i].(BlockConnected)
+		if !ok {
+			t.Fatalf("got[%d] = %T, want BlockConnected", 3+i, got[3+i])
+		}
+		if bc.Height != wantHeight {
+			t.Fatalf("got[%d] BlockConnected.Height = %d, want %d", 3+i, bc.Height, wantHeight)
+		}
+		// The reconnected blocks must be the NEW chain (from the post-rewind
+		// header store), not the orphaned ones.
+		if hdr := stub.HeaderByHeight(wantHeight); hdr == nil || bc.Hash != hdr.BlockHash() {
+			t.Fatalf("got[%d] reconnect hash != new-chain header at height %d", 3+i, wantHeight)
+		}
+	}
+	if got[4].(BlockConnected).Height != newTip {
+		t.Fatalf("final reconnect height = %d, want new tip %d", got[4].(BlockConnected).Height, newTip)
 	}
 }
 
