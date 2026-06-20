@@ -32,9 +32,12 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
-// electrumSyncTimeout is how long we wait for the electrum wallet to
-// synchronise with the harness electrumx server.
-const electrumSyncTimeout = 60 * time.Second
+// electrumSyncTimeout is how long we wait for an electrum wallet operation
+// (sync, balance, confirmation) to complete against the harness electrumx
+// server. It is generous on purpose: public/over-loaded electrum servers can be
+// slow, and the wallet (and these tests) must tolerate that rather than assume
+// snappy responses.
+const electrumSyncTimeout = 3 * time.Minute
 
 // electrumPollInterval is the interval between SyncStatus polls.
 const electrumPollInterval = 500 * time.Millisecond
@@ -115,7 +118,7 @@ func waitElectrumSynced(t *testing.T, w asset.Wallet) {
 // WalletTransaction for further assertions.
 func waitElectrumTxConfirmed(t *testing.T, w asset.Wallet, txID string) *txdb.WalletTransaction {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(electrumSyncTimeout)
 	for time.Now().Before(deadline) {
 		wt, err := w.WalletTransaction(tCtx, txID)
 		if err == nil && wt != nil && wt.Confirmed {
@@ -123,7 +126,7 @@ func waitElectrumTxConfirmed(t *testing.T, w asset.Wallet, txID string) *txdb.Wa
 		}
 		time.Sleep(electrumPollInterval)
 	}
-	t.Fatalf("tx %s not confirmed within 60s", txID)
+	t.Fatalf("tx %s not confirmed within %v", txID, electrumSyncTimeout)
 	return nil
 }
 
@@ -131,7 +134,7 @@ func waitElectrumTxConfirmed(t *testing.T, w asset.Wallet, txID string) *txdb.Wa
 // timeout.
 func waitElectrumBalanceAtLeast(t *testing.T, w asset.Wallet, wantMin uint64) *asset.Balance {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(electrumSyncTimeout)
 	for time.Now().Before(deadline) {
 		bal, err := w.Balance()
 		if err == nil && bal != nil && bal.Available >= wantMin {
@@ -139,7 +142,7 @@ func waitElectrumBalanceAtLeast(t *testing.T, w asset.Wallet, wantMin uint64) *a
 		}
 		time.Sleep(electrumPollInterval)
 	}
-	t.Fatalf("balance did not reach %d satoshis within 60s", wantMin)
+	t.Fatalf("balance did not reach %d satoshis within %v", wantMin, electrumSyncTimeout)
 	return nil
 }
 

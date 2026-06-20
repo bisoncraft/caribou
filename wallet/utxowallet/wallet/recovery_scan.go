@@ -55,12 +55,16 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		return fmt.Errorf("recover: fetch BIP84 scope manager: %w", err)
 	}
 	scope := scoped.Scope()
+	log.Infof("Recovery: BIP84 gap-limit scan starting on scope %v (gap limit %d)",
+		scope, gapLimit)
 
 	for _, branch := range []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch} {
 		lastUsed, err := w.scanBranch(prober, scoped, branch, gapLimit)
 		if err != nil {
 			return fmt.Errorf("recover: scope %v branch %d: %w", scope, branch, err)
 		}
+		log.Infof("Recovery: scope %v branch %d scan complete: highest used index = %d",
+			scope, branch, lastUsed)
 		if lastUsed < 0 {
 			continue
 		}
