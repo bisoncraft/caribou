@@ -92,6 +92,21 @@ type ElectrumClient struct {
 	rescanMtx    sync.Mutex
 	rescanCancel context.CancelFunc
 	rescanDone   chan struct{}
+
+	// connMtx guards the live tip-delivery state below. It serializes the
+	// rescan-finished handoff (goLive) against tipChangeLoop so live
+	// BlockConnected notifications can't race the initial rescan.
+	connMtx sync.Mutex
+	// liveDelivery is false until the first rescan completes. While false,
+	// tipChangeLoop suppresses BlockConnected — the rescan owns SyncedTo, and
+	// a BlockConnected mined during the rescan would break PutSyncedTo's
+	// prev-block chain (the wallet stores only recent hashes post-birthday).
+	// goLive flips it true and delivers a contiguous catch-up.
+	liveDelivery bool
+	// lastConnected is the highest height delivered as BlockConnected. New
+	// blocks are always delivered contiguously from lastConnected+1 to the
+	// header-store tip, so a suppressed or skipped tip can't leave a gap.
+	lastConnected int32
 }
 
 // scripthashEntry captures per-scripthash state.
@@ -382,10 +397,36 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 	if ev == nil {
 		return
 	}
-	// Disconnects first (review2 #1). The metadata is carried by the
-	// event because the headers store has already removed these blocks
-	// from its maps by the time we see them here.
-	for _, d := range ev.Disconnected {
+	connected := c.applyTip(ev)
+	// Review2 #6: a scripthash status may have arrived while these headers
+	// were still in flight. Now that the headers are local and connected,
+	// flush any deferred entries so confirmed txs aren't stuck unmined.
+	// flushPending is called without connMtx held (it takes addrCacheMtx).
+	if connected > 0 {
+		c.flushPending()
+	}
+}
+
+// applyTip processes a single network tip change under connMtx, returning the
+// number of BlockConnected notifications delivered. While the initial rescan is
+// still running (liveDelivery false) it suppresses connects entirely — goLive
+// will deliver the contiguous catch-up at RescanFinished.
+func (c *ElectrumClient) applyTip(ev *electrum.TipChange) int {
+	c.connMtx.Lock()
+	defer c.connMtx.Unlock()
+	if !c.liveDelivery {
+		return 0
+	}
+	c.deliverDisconnectsLocked(ev.Disconnected)
+	return c.deliverConnectsLocked()
+}
+
+// deliverDisconnectsLocked emits a BlockDisconnected per reorged-out block and
+// rolls lastConnected back so the subsequent re-connects stay contiguous. The
+// metadata is carried by the event because the headers store has already
+// removed these blocks from its maps by the time we see them. connMtx held.
+func (c *ElectrumClient) deliverDisconnectsLocked(disc []electrum.DisconnectedBlock) {
+	for _, d := range disc {
 		ntfn := BlockDisconnected(wtxmgr.BlockMeta{
 			Block: wtxmgr.Block{Hash: chainhash.Hash(d.Hash), Height: d.Height},
 			Time:  time.Unix(d.Time, 0),
@@ -393,26 +434,56 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 		if err := c.enqueue(ntfn); err != nil {
 			return
 		}
+		if d.Height-1 < c.lastConnected {
+			c.lastConnected = d.Height - 1
+		}
 	}
-	// Then connects, one BlockConnected per height (review2 #3).
-	for _, h := range ev.Connected {
+}
+
+// deliverConnectsLocked emits one BlockConnected per height from lastConnected+1
+// up to the current header-store tip, advancing lastConnected as it goes. By
+// always filling from lastConnected (rather than the event's delta), a tip that
+// was suppressed during the initial rescan — or any other gap — is closed here,
+// so waddrmgr.PutSyncedTo can chain prev-hash → hash for every block instead of
+// being asked to jump forward and failing. connMtx held. Returns the count
+// delivered.
+func (c *ElectrumClient) deliverConnectsLocked() int {
+	tip := c.net.Tip()
+	n := 0
+	for h := c.lastConnected + 1; h <= tip; h++ {
 		hdr := c.net.HeaderByHeight(h)
 		if hdr == nil {
-			log.Warnf("electrum: tip-change connect at %d but no local header", h)
-			continue
+			log.Warnf("electrum: connect at %d but no local header", h)
+			break
 		}
 		ntfn := BlockConnected{
 			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: h},
 			Time:  hdr.Timestamp,
 		}
 		if err := c.enqueue(ntfn); err != nil {
-			return
+			break
 		}
+		c.lastConnected = h
+		n++
 	}
-	// Review2 #6: a scripthash status may have arrived while these
-	// headers were still in flight. Now that the headers are local,
-	// flush any deferred entries so confirmed txs aren't stuck unmined.
-	if len(ev.Connected) > 0 {
+	return n
+}
+
+// goLive transitions from rescan-driven sync to live tip delivery. It is called
+// right after a RescanFinished is enqueued. On the first rescan it opens the
+// gate at the rescan's tip and delivers a contiguous BlockConnected catch-up for
+// any blocks mined during the rescan, so the wallet's SyncedTo advances to the
+// real tip without a gap. On later rescans (already live) it only delivers any
+// blocks not yet connected — a no-op when already caught up.
+func (c *ElectrumClient) goLive(rescanTip int32) {
+	c.connMtx.Lock()
+	if !c.liveDelivery {
+		c.liveDelivery = true
+		c.lastConnected = rescanTip
+	}
+	n := c.deliverConnectsLocked()
+	c.connMtx.Unlock()
+	if n > 0 {
 		c.flushPending()
 	}
 }

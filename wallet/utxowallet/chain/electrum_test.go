@@ -248,6 +248,14 @@ func makeClient(t *testing.T, blocks int) (*ElectrumClient, *stubNetwork) {
 	// ClientConnected is always enqueued by Start; drain it so tests
 	// start from a stable baseline.
 	drain(t, c, 1, time.Second)
+	// These unit tests exercise live tip delivery and reorgs, not the
+	// initial-sync rescan gate (covered by the harness). Mark the client live
+	// at one block behind the tip — as the first rescan's handoff would — so the
+	// initial tip-change below and the tests' subsequent pushes are dispatched.
+	c.connMtx.Lock()
+	c.liveDelivery = true
+	c.lastConnected = stub.Tip() - 1
+	c.connMtx.Unlock()
 	if blocks > 0 {
 		// Mirror network.headersLoop's "initial tip-change after
 		// applying the subscription's initial reply" emission, and
@@ -558,19 +566,24 @@ func TestElectrumReorgEvent(t *testing.T) {
 		Connected: []int32{5},
 	}
 
-	got := drain(t, c, 3, 2*time.Second)
+	got := drain(t, c, 5, 2*time.Second)
 	if _, ok := got[0].(BlockDisconnected); !ok {
 		t.Fatalf("got[0] = %T, want BlockDisconnected", got[0])
 	}
 	if _, ok := got[1].(BlockDisconnected); !ok {
 		t.Fatalf("got[1] = %T, want BlockDisconnected", got[1])
 	}
-	bc, ok := got[2].(BlockConnected)
-	if !ok {
-		t.Fatalf("got[2] = %T, want BlockConnected", got[2])
-	}
-	if bc.Height != 5 {
-		t.Fatalf("BlockConnected.Height = %d, want 5", bc.Height)
+	// After rolling back past the reorg point, the chain reconnects every block
+	// from the common ancestor up to the new tip — contiguously, so
+	// PutSyncedTo's prev-block chain holds — ending at the new tip (height 5).
+	for i, wantHeight := range []int32{3, 4, 5} {
+		bc, ok := got[2+i].(BlockConnected)
+		if !ok {
+			t.Fatalf("got[%d] = %T, want BlockConnected", 2+i, got[2+i])
+		}
+		if bc.Height != wantHeight {
+			t.Fatalf("got[%d] BlockConnected.Height = %d, want %d", 2+i, bc.Height, wantHeight)
+		}
 	}
 }
 
@@ -667,6 +680,13 @@ func TestElectrumNotificationHandlerSurvivesNoInitialTip(t *testing.T) {
 		c.Stop()
 		c.WaitForShutdown()
 	})
+
+	// Mark the client live (as the first rescan's handoff would) so the
+	// tip-change below is dispatched. No blocks yet, so lastConnected is -1.
+	c.connMtx.Lock()
+	c.liveDelivery = true
+	c.lastConnected = stub.Tip()
+	c.connMtx.Unlock()
 
 	// ClientConnected must be deliverable: the handler is alive.
 	got := drain(t, c, 1, 2*time.Second)

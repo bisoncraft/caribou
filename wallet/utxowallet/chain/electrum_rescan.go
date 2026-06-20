@@ -325,7 +325,14 @@ func (c *ElectrumClient) tryDispatchRescanFinished(tip int32) {
 		Time:   hdr.Timestamp,
 	}); err != nil {
 		log.Debugf("electrum: enqueue RescanFinished: %v", err)
+		return
 	}
+	// Hand off from rescan-driven sync to live tip delivery. RescanFinished is
+	// already queued (so the wallet sets SyncedTo to tip first); goLive then
+	// delivers a contiguous BlockConnected catch-up for blocks mined during the
+	// rescan and opens the gate for tipChangeLoop. Without this, a block mined
+	// mid-rescan is dropped and the wallet can never advance past tip.
+	c.goLive(tip)
 }
 
 // collectHistories fetches the history for every scripthash and groups the
