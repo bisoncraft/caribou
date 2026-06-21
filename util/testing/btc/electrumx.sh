@@ -40,6 +40,15 @@ fi
 git fetch --depth 1 origin 914938264e5621ea8980be6d3e69964e7f219d16
 git reset --hard FETCH_HEAD
 
+# Harness responsiveness: electrumx hard-codes a 5s block-poll and 5s mempool
+# refresh, so on regtest a balance/tx update can lag detection by up to ~5s each
+# (and a tx can be picked up already-confirmed, skipping the unconfirmed phase).
+# Lower both to 1s so the harness reflects a responsive server and tests aren't
+# masked by polling latency. Patches the source before `pip install .` below
+# installs it into the venv.
+sed -i 's/self.polling_delay = 5/self.polling_delay = 1/' electrumx/server/block_processor.py
+sed -i 's/refresh_secs=5.0/refresh_secs=1.0/' electrumx/server/mempool.py
+
 if [ ! -d "${ELECTRUMX_DIR}/venv" ]; then
     python -m venv ${ELECTRUMX_DIR}/venv
 fi
