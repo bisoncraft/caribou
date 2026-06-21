@@ -591,7 +591,7 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 	// the header arrives". Already-seen entries are not re-emitted but
 	// stay in the carry-forward list.
 	emitted := make([]electrum.HistoryEntry, 0, len(hist))
-	var deferred []electrum.HistoryEntry
+	var deferred, toEmit []electrum.HistoryEntry
 	for _, h := range hist {
 		if alreadySeen(prev, h.TxHash, h.Height) {
 			emitted = append(emitted, h)
@@ -607,12 +607,11 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 			deferred = append(deferred, h)
 			continue
 		}
-		if err := c.emitRelevantTx(h); err != nil {
-			log.Debugf("electrum: emit %s: %v", h.TxHash, err)
-			continue
-		}
-		emitted = append(emitted, h)
+		toEmit = append(toEmit, h)
 	}
+	// Fetch the new txs' raw bytes concurrently and enqueue them; only the
+	// successfully-emitted ones join lastHistory so failures are retried.
+	emitted = append(emitted, c.emitRelevantTxs(toEmit)...)
 	// Re-fetch under the lock and confirm it's still the same entry before
 	// committing. A subscribed entry is never deleted today (the only
 	// addrCache delete is the subscribe-failure rollback, which can't apply
@@ -698,11 +697,7 @@ func (c *ElectrumClient) flushPending() {
 		entry.pending = remain
 		c.addrCacheMtx.Unlock()
 
-		for _, e := range ready {
-			if err := c.emitRelevantTx(e); err != nil {
-				log.Debugf("electrum: flush emit %s: %v", e.TxHash, err)
-			}
-		}
+		c.emitRelevantTxs(ready)
 
 		c.addrCacheMtx.Lock()
 		entry.lastHistory = append(entry.lastHistory, ready...)
@@ -723,20 +718,20 @@ func alreadySeen(prev []electrum.HistoryEntry, txid string, height int32) bool {
 	return false
 }
 
-// emitRelevantTx fetches the raw transaction and enqueues a chain.RelevantTx
-// notification for it.
-func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
+// buildRelevantTx fetches the raw transaction for a history entry and builds the
+// corresponding RelevantTx (the network round-trip + decode, without enqueuing).
+func (c *ElectrumClient) buildRelevantTx(h electrum.HistoryEntry) (RelevantTx, error) {
 	rawHex, err := c.net.GetRawTransaction(c.ctx, h.TxHash)
 	if err != nil {
-		return err
+		return RelevantTx{}, err
 	}
 	raw, err := hex.DecodeString(rawHex)
 	if err != nil {
-		return fmt.Errorf("decode raw tx: %w", err)
+		return RelevantTx{}, fmt.Errorf("decode raw tx: %w", err)
 	}
 	rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, time.Now())
 	if err != nil {
-		return fmt.Errorf("new tx record: %w", err)
+		return RelevantTx{}, fmt.Errorf("new tx record: %w", err)
 	}
 	var blockMeta *wtxmgr.BlockMeta
 	if h.Height > 0 {
@@ -748,11 +743,60 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 			}
 		}
 	}
-	select {
-	case c.enqueueNotification <- RelevantTx{TxRecord: rec, Block: blockMeta}:
-	case <-c.quit:
+	return RelevantTx{TxRecord: rec, Block: blockMeta}, nil
+}
+
+// maxRawTxFetches bounds the concurrent GetRawTransaction round-trips in
+// emitRelevantTxs.
+const maxRawTxFetches = 8
+
+// emitRelevantTxs fetches the raw transactions for the given history entries
+// CONCURRENTLY, then enqueues a RelevantTx notification for each in the original
+// order, returning the entries that were successfully enqueued.
+//
+// The fetch is parallelized on purpose: GetRawTransaction is a per-tx network
+// round-trip and the scripthash processor that calls this is single-threaded, so
+// fetching serially made detection latency grow with the number of new
+// transactions — e.g. several receives to the same address arriving close
+// together would each wait behind the previous one's round-trip. Enqueue order
+// is preserved so any in-batch parent→child dependency stays intact for the
+// wallet.
+func (c *ElectrumClient) emitRelevantTxs(entries []electrum.HistoryEntry) []electrum.HistoryEntry {
+	if len(entries) == 0 {
+		return nil
 	}
-	return nil
+	built := make([]*RelevantTx, len(entries))
+	sem := make(chan struct{}, maxRawTxFetches)
+	var wg sync.WaitGroup
+	for i := range entries {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rtx, err := c.buildRelevantTx(entries[i])
+			if err != nil {
+				log.Debugf("electrum: build relevant tx %s: %v", entries[i].TxHash, err)
+				return
+			}
+			built[i] = &rtx
+		}(i)
+	}
+	wg.Wait()
+
+	emitted := make([]electrum.HistoryEntry, 0, len(entries))
+	for i, rtx := range built {
+		if rtx == nil {
+			continue
+		}
+		select {
+		case c.enqueueNotification <- *rtx:
+			emitted = append(emitted, entries[i])
+		case <-c.quit:
+			return emitted
+		}
+	}
+	return emitted
 }
 
 // ----------------------------------------------------------------------------

@@ -59,6 +59,16 @@ const electrumPollInterval = 500 * time.Millisecond
 //     harness's wait logic.
 func newElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 	t.Helper()
+	w, cm, _ := newElectrumWalletWithNotes(t)
+	return w, cm
+}
+
+// newElectrumWalletWithNotes is newElectrumWallet but also returns the wallet's
+// notification channel so a test can assert on emitted notes (TipChange,
+// BalanceChange, ...). Callers that care about the notes must drain the channel
+// promptly: WalletEmitter.emit drops notes when the channel is full.
+func newElectrumWalletWithNotes(t *testing.T) (asset.Wallet, *util.ConnectionMaster, chan asset.WalletNotification) {
+	t.Helper()
 
 	seed, err := hex.DecodeString(gammaSeed)
 	if err != nil {
@@ -72,13 +82,12 @@ func newElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 		t.Fatalf("newElectrumWallet: createElectrumWallet: %v", err)
 	}
 
+	notes := make(chan asset.WalletNotification, 256)
 	walletCfg := &asset.WalletConfig{
 		Type:     walletTypeElectrum,
 		DataDir:  dataDir,
 		Settings: map[string]string{},
-		Emit: asset.NewWalletEmitter(
-			make(chan asset.WalletNotification, 128), 0, tLogger,
-		),
+		Emit:     asset.NewWalletEmitter(notes, 0, tLogger),
 		PeersChange: func(n uint32, err error) {
 			tLogger.Debugf("electrum wallet peers=%d err=%v", n, err)
 		},
@@ -94,7 +103,18 @@ func newElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 		t.Fatalf("newElectrumWallet: Connect: %v", err)
 	}
 
-	return w, cm
+	return w, cm, notes
+}
+
+// drainNotes empties any buffered notifications without blocking.
+func drainNotes(c <-chan asset.WalletNotification) {
+	for {
+		select {
+		case <-c:
+		default:
+			return
+		}
+	}
 }
 
 // waitElectrumSynced polls SyncStatus until synced or timeout.
@@ -419,6 +439,242 @@ func TestElectrumReceiveDetection(t *testing.T) {
 	// The receive should appear in TxHistory.
 	htx := waitElectrumTxInHistory(t, w, recvTxID)
 	t.Logf("receive tx in TxHistory: confirmed=%v type=%v", htx.Confirmed, htx.Type)
+}
+
+// TestElectrumReceiveEmitsNotification verifies that a confirmed receive
+// propagates to core through the wallet's notification channel. blockLoop
+// previously emitted no TipChange/BalanceChange, so core never re-polled the
+// balance and the UI never updated — even on a manual refresh — despite the
+// wallet itself seeing the funds. The fix emits a TipChange on each new block
+// (which drives core's balance re-poll) and a BalanceChange on unmined-tx
+// changes.
+func TestElectrumReceiveEmitsNotification(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+
+	w, cm, notes := newElectrumWalletWithNotes(t)
+	defer cm.Disconnect()
+
+	waitElectrumSynced(t, w)
+
+	// Discard notes emitted during the sync phase so we only observe those
+	// caused by the receive below.
+	drainNotes(notes)
+
+	recvAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+
+	const recvAmt = 7 // BTC
+	if _, err = alpha.Send(recvAddr, toSatoshi(recvAmt), 10); err != nil {
+		t.Fatalf("alpha.Send: %v", err)
+	}
+	if err = mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha after receive: %v", err)
+	}
+
+	// The confirmed receive must surface as a tip or balance notification so
+	// core re-polls and the UI updates.
+	deadline := time.After(electrumSyncTimeout)
+	for {
+		select {
+		case n := <-notes:
+			switch n.(type) {
+			case *asset.TipChangeNote:
+				t.Logf("got TipChangeNote after confirmed receive")
+				return
+			case *asset.BalanceChangeNote:
+				t.Logf("got BalanceChangeNote after confirmed receive")
+				return
+			}
+		case <-deadline:
+			t.Fatalf("no TipChange/BalanceChange emitted within %v after confirmed receive", electrumSyncTimeout)
+		}
+	}
+}
+
+// TestElectrumUnconfirmedReceiveSurfaces verifies that an incoming receive
+// surfaces as an unconfirmed transaction notification while it is still in the
+// mempool, i.e. before it is mined. Outgoing sends already surfaced via
+// storePendingTx; incoming receives previously had no emit path until a block
+// confirmed them. blockLoop now routes mempool arrivals (btcwallet's NtfnServer
+// UnminedTransactions) through the tx-recording path.
+func TestElectrumUnconfirmedReceiveSurfaces(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+
+	w, cm, notes := newElectrumWalletWithNotes(t)
+	defer cm.Disconnect()
+
+	waitElectrumSynced(t, w)
+	drainNotes(notes)
+
+	recvAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+
+	const recvAmt = 5 // BTC
+	coin, err := alpha.Send(recvAddr, toSatoshi(recvAmt), 10)
+	if err != nil {
+		t.Fatalf("alpha.Send: %v", err)
+	}
+	recvTxID := coin.TxID()
+	t.Logf("unconfirmed receive txid: %s", recvTxID)
+
+	// Deliberately do NOT mine: the receive must surface while still in the
+	// mempool.
+	deadline := time.After(electrumSyncTimeout)
+	for {
+		select {
+		case n := <-notes:
+			tn, ok := n.(*asset.TransactionNote)
+			if !ok || tn.Transaction == nil || tn.Transaction.ID != recvTxID {
+				continue
+			}
+			if tn.Transaction.Confirmed {
+				t.Fatalf("receive %s reported confirmed before mining", recvTxID)
+			}
+			t.Logf("unconfirmed receive surfaced via TransactionNote (confirmed=%v)", tn.Transaction.Confirmed)
+			return
+		case <-deadline:
+			t.Fatalf("unconfirmed receive %s did not surface within %v", recvTxID, electrumSyncTimeout)
+		}
+	}
+}
+
+// TestElectrumZeroConfBalanceAvailable verifies that an unconfirmed (0-conf)
+// receive is spendable immediately: it raises Available and pushes a
+// BalanceChange to the UI WITHOUT mining, surfaces as an unconfirmed
+// transaction, and later flips to confirmed. minconf 0 in Balance is what makes
+// the mempool funds count. The specific receive txid is tracked so the shared
+// gamma wallet's unrelated activity can't produce a false positive.
+func TestElectrumZeroConfBalanceAvailable(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+	w, cm, notes := newElectrumWalletWithNotes(t)
+	defer cm.Disconnect()
+	waitElectrumSynced(t, w)
+
+	balBefore, err := w.Balance()
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	recvAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+	const recvAmt = 6
+	coin, err := alpha.Send(recvAddr, toSatoshi(recvAmt), 10)
+	if err != nil {
+		t.Fatalf("alpha.Send: %v", err)
+	}
+	recvTxID := coin.TxID()
+	wantMin := balBefore.Available + toSatoshi(recvAmt)
+
+	// Mempool, no mining: the receive must surface as an unconfirmed tx AND a
+	// BalanceChange carrying the raised (0-conf-inclusive) Available must fire.
+	var gotUnconfirmed, gotBalanceNote bool
+	deadline := time.After(electrumSyncTimeout)
+	for !(gotUnconfirmed && gotBalanceNote) {
+		select {
+		case n := <-notes:
+			switch v := n.(type) {
+			case *asset.TransactionNote:
+				if v.Transaction.ID == recvTxID && !v.Transaction.Confirmed {
+					gotUnconfirmed = true
+				}
+			case *asset.BalanceChangeNote:
+				if v.Balance.Available >= wantMin {
+					gotBalanceNote = true
+				}
+			}
+		case <-deadline:
+			t.Fatalf("mempool receive not reflected without mining: unconfirmedTx=%v balanceNote>=want=%v",
+				gotUnconfirmed, gotBalanceNote)
+		}
+	}
+
+	// Balance() itself must agree the 0-conf funds are available pre-mine.
+	if bal, err := w.Balance(); err != nil {
+		t.Fatalf("Balance: %v", err)
+	} else if bal.Available < wantMin {
+		t.Fatalf("0-conf not in Available pre-mine: Available=%d want>=%d", bal.Available, wantMin)
+	}
+	t.Logf("0-conf receive spendable before mining")
+
+	// Mining flips the receive to confirmed in the tx list.
+	if err := mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha: %v", err)
+	}
+	deadline = time.After(electrumSyncTimeout)
+	for {
+		select {
+		case n := <-notes:
+			if tn, ok := n.(*asset.TransactionNote); ok && tn.Transaction.ID == recvTxID && tn.Transaction.Confirmed {
+				t.Logf("receive confirmed")
+				return
+			}
+		case <-deadline:
+			t.Fatalf("receive %s did not confirm", recvTxID)
+		}
+	}
+}
+
+// TestElectrumMultipleReceivesToSameAddress verifies that several back-to-back
+// receives to the same (already-subscribed) deposit address are each detected.
+// This exercises the concurrent raw-tx fetch in the scripthash processor: with
+// the previous serial fetch, later receives queued behind each earlier one's
+// network round-trip.
+func TestElectrumMultipleReceivesToSameAddress(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+	w, cm, notes := newElectrumWalletWithNotes(t)
+	defer cm.Disconnect()
+	waitElectrumSynced(t, w)
+
+	recvAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+
+	const n = 3
+	want := make(map[string]bool, n)
+	for i := 0; i < n; i++ {
+		coin, err := alpha.Send(recvAddr, toSatoshi(2), 10)
+		if err != nil {
+			t.Fatalf("send #%d: %v", i, err)
+		}
+		want[coin.TxID()] = true
+	}
+
+	seen := make(map[string]bool, n)
+	deadline := time.After(electrumSyncTimeout)
+	for len(seen) < n {
+		select {
+		case note := <-notes:
+			if tn, ok := note.(*asset.TransactionNote); ok && want[tn.Transaction.ID] {
+				seen[tn.Transaction.ID] = true
+			}
+		case <-deadline:
+			t.Fatalf("only %d/%d receives detected within %v", len(seen), n, electrumSyncTimeout)
+		}
+	}
 }
 
 // connectElectrumWalletAt creates a seeded electrum wallet at dataDir from the

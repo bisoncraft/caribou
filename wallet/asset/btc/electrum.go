@@ -159,6 +159,10 @@ type ElectrumWallet struct {
 	// incoming transactions; 0 means never.
 	receiveTxLastQuery atomic.Uint64
 	syncingTxHistory   atomic.Bool
+	// updatingPending guards updatePendingTransactions, which is reachable both
+	// from syncTxHistory and from pendingTxLoop; without it the two could
+	// process the same pending tx concurrently and emit duplicate notes.
+	updatingPending atomic.Bool
 }
 
 var _ asset.Wallet = (*ElectrumWallet)(nil)
@@ -343,6 +347,13 @@ func (w *ElectrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		w.peerLoop(ctx)
 	}()
 
+	// Pending-tx reconciliation goroutine.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.pendingTxLoop(ctx)
+	}()
+
 	// Initial tx-history sync.
 	wg.Add(1)
 	go func() {
@@ -387,7 +398,11 @@ func (w *ElectrumWallet) Balance() (*asset.Balance, error) {
 	if w.btcw == nil {
 		return nil, errors.New("electrum: wallet not connected")
 	}
-	bals, err := w.btcw.CalculateAccountBalances(0, 1)
+	// minconf 0: an unconfirmed (0-conf) output is spendable immediately — a
+	// standard mempool tx is usable right away — so it counts toward Available.
+	// Send() uses the same minconf for coin selection so what we report as
+	// available is exactly what we can actually spend.
+	bals, err := w.btcw.CalculateAccountBalances(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("electrum: balance error: %w", err)
 	}
@@ -455,7 +470,7 @@ func (w *ElectrumWallet) Send(address string, value, feeRate uint64) (asset.Coin
 		[]*wire.TxOut{txOut},
 		&scope,
 		0,        // account
-		1,        // minconf
+		0,        // minconf: spend unconfirmed (0-conf) outputs too, matching Balance
 		satPerKB, // fee rate as sat/kB
 		wallet.CoinSelectionLargest,
 		"",
@@ -606,21 +621,96 @@ func (w *ElectrumWallet) storePendingTx(txHash *chainhash.Hash, wt *txdb.WalletT
 	w.emit.TransactionNote(wt, true)
 }
 
-// blockLoop watches the wallet's NtfnServer for block events and triggers
-// tx-history syncs.
+// blockLoop watches the wallet's NtfnServer for transaction and block events,
+// relays them to core, and triggers tx-history syncs.
+//
+// btcwallet's wtxmgr learns about received funds (via the scripthash
+// subscription) and confirmations (via block connects) on its own, but nothing
+// reaches core unless we emit it here. TipChange drives core's per-block balance
+// re-poll and updates the displayed sync height; BalanceChange surfaces balance
+// movement that isn't tied to a new block (e.g. an outgoing send that spends
+// inputs while still unconfirmed). Without these, a balance change the wallet
+// already sees never propagates to the UI, even on a manual refresh — core only
+// re-reads its cached balance, which these notifications are what update.
 func (w *ElectrumWallet) blockLoop(ctx context.Context) {
 	cl := w.btcw.NtfnServer.TransactionNotifications()
 	defer cl.Done()
 	for {
 		select {
 		case note := <-cl.C:
-			if len(note.AttachedBlocks) == 0 {
-				continue
+			// CRITICAL: NtfnServer delivers on an UNBUFFERED channel and
+			// broadcasts with a blocking send while holding its lock and a live
+			// db transaction (see notifyUnminedTransaction / notifyAttachedBlock
+			// in utxowallet/wallet/notifications.go). This loop must receive and
+			// move on without blocking. Blocking here back-pressures btcwallet's
+			// notification dispatch, which stops it draining the chain client,
+			// which stalls delivery of new transactions and blocks — i.e.
+			// delayed or missing tx detection. So all real work (balance reads,
+			// tx-history scans) runs in goroutines; emit calls are themselves
+			// non-blocking (they drop on a full channel).
+			switch {
+			case len(note.AttachedBlocks) > 0:
+				last := note.AttachedBlocks[len(note.AttachedBlocks)-1]
+				// New block(s): advance the tip so core re-polls the balance
+				// and updates the sync height, then refresh tx history.
+				w.emit.TipChange(uint64(last.Height))
+				go w.syncTxHistory(ctx, uint64(last.Height))
+			case len(note.UnminedTransactions) > 0:
+				// A new unconfirmed tx: an incoming receive still in the
+				// mempool, or an outgoing send. Surface it and push the balance.
+				go w.handleUnminedTxChange(ctx)
 			}
-			last := note.AttachedBlocks[len(note.AttachedBlocks)-1]
-			go w.syncTxHistory(ctx, uint64(last.Height))
 		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// handleUnminedTxChange records newly-seen unconfirmed transactions and pushes
+// an updated balance. It records and emits the unconfirmed tx so it surfaces in
+// the UI immediately instead of waiting for a block: scanNewTransactions'
+// ListSinceBlock includes mempool txs (end height -1) and recordBtcjsonTx skips
+// any already recorded, so an outgoing send that storePendingTx already emitted
+// is not duplicated while an incoming receive (which has no other emit path
+// until mined) now surfaces. The balance push lets an outgoing spend reflect
+// before it confirms.
+//
+// This MUST run off blockLoop (see the comment there): it does blocking db work
+// and the NtfnServer channel that drives blockLoop is unbuffered.
+func (w *ElectrumWallet) handleUnminedTxChange(ctx context.Context) {
+	w.syncTxHistory(ctx, uint64(w.btcw.Manager.SyncedTo().Height))
+	if bal, err := w.Balance(); err != nil {
+		w.log.Errorf("electrum: balance after unmined tx change: %v", err)
+	} else {
+		w.emit.BalanceChange(bal)
+	}
+}
+
+// pendingTxLoop periodically reconciles unconfirmed transactions while any are
+// tracked, flipping them to confirmed (and emitting the updated TransactionNote)
+// as they reach finality. btcwallet learns of a confirmation via the scripthash
+// subscription but coalesces the resulting notification and only flushes it on a
+// subsequent block connect, which on mainnet can be ~10 minutes away; polling
+// here surfaces the confirmed status within the interval instead. Spendable
+// balance does not depend on this — 0-conf outputs already count as available
+// (see Balance) — so this is purely about timely confirmation status. The loop
+// is idle when there are no pending txs.
+func (w *ElectrumWallet) pendingTxLoop(ctx context.Context) {
+	const interval = 5 * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			w.pendingMtx.RLock()
+			n := len(w.pendingTxs)
+			w.pendingMtx.RUnlock()
+			if n == 0 {
+				continue
+			}
+			w.updatePendingTransactions(ctx, uint64(w.btcw.Manager.SyncedTo().Height))
 		}
 	}
 }
@@ -792,8 +882,16 @@ func (w *ElectrumWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTran
 }
 
 // updatePendingTransactions refreshes confirmation status for all tracked
-// pending transactions.
+// pending transactions. It is reachable from both syncTxHistory and
+// pendingTxLoop, so a CAS guard keeps concurrent invocations from processing the
+// same tx twice (which would emit duplicate notes and double-write the txdb); a
+// skipped run loses nothing — the next trigger reconciles.
 func (w *ElectrumWallet) updatePendingTransactions(ctx context.Context, tip uint64) {
+	if !w.updatingPending.CompareAndSwap(false, true) {
+		return
+	}
+	defer w.updatingPending.Store(false)
+
 	w.pendingMtx.RLock()
 	snapshot := make(map[chainhash.Hash]txdb.WalletTransaction, len(w.pendingTxs))
 	for k, v := range w.pendingTxs {
