@@ -75,6 +75,13 @@ type Network struct {
 
 	tipChangeChan chan *TipChange
 	scripthashCh  chan *ScripthashStatus
+
+	// serverTipMu guards serverTip, which tracks the highest block height
+	// reported by the electrumx server (from SubscribeHeaders at start and
+	// from tip-change notifications thereafter). It is used by TargetTip to
+	// report meaningful sync progress before the local store catches up.
+	serverTipMu sync.RWMutex
+	serverTip   int32
 }
 
 // NewNetwork constructs a Network ready to be Started.
@@ -111,13 +118,32 @@ func NewNetwork(cfg *Config) (*Network, error) {
 // implementations that need direct read access.
 func (n *Network) Headers() *Headers { return n.headers }
 
-// Start connects to the trusted server, syncs headers, and begins listening
-// for tip and scripthash notifications. The provided ctx is the network's
-// lifetime: cancelling ctx is equivalent to calling Stop.
+// Start connects to the trusted server, subscribes to header notifications,
+// and returns promptly. The initial header chain download (which can take
+// minutes on a cold start) runs in a background goroutine so the caller is
+// not blocked. Synced() / Tip() report progress; TargetTip() reports the
+// server's current best height so callers can show meaningful progress.
 //
-// On any error Start unwinds — cancels the internal context, closes the
-// partially-initialised node (if any), and closes the done channel so a
-// caller doing `defer net.WaitForShutdown()` doesn't deadlock.
+// What happens synchronously (fast, verifies server reachability):
+//   - NewNode: dial + version handshake with the electrumx server.
+//   - SubscribeHeaders: one round trip that confirms the connection and returns
+//     the server's current chain tip height.
+//
+// Any error from those two steps is returned directly, so a genuinely
+// unreachable or incompatible server still fails Start quickly rather than
+// silently.
+//
+// What happens in the background (after Start returns):
+//   - syncHeaders: downloads the header chain batch-by-batch.
+//   - headersLoop: processes ongoing tip-change notifications once sync is done.
+//
+// Sync failure after Start returns is handled the same way a node-drop is: via
+// Stop() / watchNode, NOT via the failed() closure (which is only used in the
+// synchronous phase, before launched is set, so it cannot race the goroutines).
+//
+// On any synchronous error Start unwinds — cancels the internal context,
+// closes the partially-initialised node (if any), and closes the done channel
+// so a caller doing `defer net.WaitForShutdown()` doesn't deadlock.
 func (n *Network) Start(parent context.Context) error {
 	n.mu.Lock()
 	if n.started {
@@ -130,6 +156,9 @@ func (n *Network) Start(parent context.Context) error {
 	n.ctx, n.cancel = context.WithCancel(parent)
 	n.mu.Unlock()
 
+	// failed is only called during the synchronous phase (before launched is
+	// set). Once launched is true, teardown ownership transfers to watchNode,
+	// and callers must use Stop() instead to avoid double-closing channels.
 	failed := func(err error) error {
 		if n.cancel != nil {
 			n.cancel()
@@ -154,39 +183,59 @@ func (n *Network) Start(parent context.Context) error {
 	// validated only by checkpoint match + retarget structure (much
 	// faster than per-header scrypt over millions of LTC blocks).
 	//
-	// Tip-change notifications that arrive during sync are buffered by
-	// the server's headersNotify channel; we drain them via headersLoop
-	// after sync completes.
+	// Tip-change notifications that arrive during the background sync are
+	// buffered by the server's headersNotify channel; headersLoop drains
+	// them after sync completes.
 	tip, err := node.SubscribeHeaders(n.ctx)
 	if err != nil {
 		node.Close()
 		return failed(fmt.Errorf("electrum: subscribe headers: %w", err))
 	}
 
-	if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
-		node.Close()
-		return failed(fmt.Errorf("electrum: initial header sync: %w", err))
-	}
+	// Record the server's reported tip so TargetTip() can report meaningful
+	// progress from the moment Start returns.
+	n.serverTipMu.Lock()
+	n.serverTip = tip.Height
+	n.serverTipMu.Unlock()
 
-	// Commit: everything is up, publish the node and flip `started`. Mark
-	// launched too — from here on watchNode owns the channel close.
+	// Commit: publish the node and flip started/launched. From here on,
+	// watchNode owns the channel-close — never call failed() after this point.
 	n.mu.Lock()
 	n.node = node
 	n.started = true
 	n.launched = true
 	n.mu.Unlock()
 
-	// The first subscribe payload is the current tip. If we're already at
-	// or above that height our sync is a no-op; otherwise the subscription
-	// loop will pull us forward.
+	// scripthashLoop and watchNode start immediately; they don't depend on
+	// the header sync completing.
 	n.wg.Add(2)
-	go n.headersLoop(tip)
 	go n.scripthashLoop()
-
-	// Background watcher: when the node drops, tear the network down. A
-	// future phase will rotate to a fallback peer here.
-	n.wg.Add(1)
 	go n.watchNode(node)
+
+	// The background sync goroutine is wg-tracked so WaitForShutdown waits
+	// for it. It runs syncHeaders, then (on success) hands off to headersLoop.
+	// On failure it calls Stop(), which triggers the same teardown path that a
+	// node-drop uses (Stop → cancel/node.Close → watchNode unblocks → child
+	// goroutine closes channels after wg.Wait). It does NOT call failed()
+	// because launched is already true and failed() would double-close.
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
+			if n.ctx.Err() == nil {
+				// Context is still live, so this is a real sync error
+				// (not a graceful shutdown). Log it before tearing down.
+				log.Errorf("electrum: initial header sync failed: %v", err)
+			}
+			n.Stop()
+			return
+		}
+		// Sync succeeded. headersLoop must run AFTER syncHeaders so it
+		// doesn't race the initial batch-writes to the header store. It is
+		// wg-tracked so WaitForShutdown correctly waits for it.
+		n.wg.Add(1)
+		go n.headersLoop(tip)
+	}()
 
 	return nil
 }
@@ -256,6 +305,20 @@ func (n *Network) Tip() int32 { return n.headers.Tip() }
 
 // Synced reports whether the initial header sync has completed.
 func (n *Network) Synced() bool { return n.headers.Synced() }
+
+// TargetTip returns the highest block height reported by the electrumx server.
+// It is set from the SubscribeHeaders response in Start and updated as new
+// tip-change notifications arrive, so it reflects the server's live best
+// height rather than the locally-synced tip. Returns 0 if the server height
+// is not yet known (i.e. before Start returns).
+//
+// Use Tip() for the locally-synced height and TargetTip() for the server's
+// reported best height to compute meaningful sync progress.
+func (n *Network) TargetTip() int32 {
+	n.serverTipMu.RLock()
+	defer n.serverTipMu.RUnlock()
+	return n.serverTip
+}
 
 // HeaderByHeight returns the block header at height, or nil if unknown.
 func (n *Network) HeaderByHeight(height int32) *wire.BlockHeader {
@@ -496,6 +559,13 @@ func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
 			t.Height, n.cfg.Chain.StartHeight)
 		return
 	}
+	// Keep the server-reported target height current so TargetTip() always
+	// reflects the latest best height the server has advertised.
+	n.serverTipMu.Lock()
+	if t.Height > n.serverTip {
+		n.serverTip = t.Height
+	}
+	n.serverTipMu.Unlock()
 	ourTip := n.headers.Tip()
 	switch {
 	case t.Height <= ourTip:

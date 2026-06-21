@@ -500,18 +500,29 @@ func (w *ElectrumWallet) SyncStatus() (*asset.SyncStatus, error) {
 		return &asset.SyncStatus{}, nil
 	}
 
-	tip := w.network.Tip()
-	if tip < 0 {
+	localTip := w.network.Tip()
+	if localTip < 0 {
 		return &asset.SyncStatus{}, nil
+	}
+
+	// TargetTip() is the server's reported best height — available from the
+	// moment Connect returns (set synchronously in Network.Start before it
+	// returns). This is always >= the locally-synced tip, so progress goes
+	// from near-0% to 100% as headers download rather than showing ~100% the
+	// entire time. Fall back to localTip when the server height is unknown (0).
+	serverTip := w.network.TargetTip()
+	targetHeight := serverTip
+	if targetHeight <= 0 {
+		targetHeight = localTip
 	}
 
 	walletBlock := w.btcw.Manager.SyncedTo()
 	synced := w.network.Synced() && walletBlock.Height > 0 &&
-		walletBlock.Height >= tip
+		walletBlock.Height >= localTip
 
 	return &asset.SyncStatus{
 		Synced:       synced,
-		TargetHeight: uint64(tip),
+		TargetHeight: uint64(targetHeight),
 		Blocks:       uint64(walletBlock.Height),
 	}, nil
 }

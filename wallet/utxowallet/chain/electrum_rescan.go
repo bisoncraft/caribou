@@ -178,6 +178,14 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 		return fmt.Errorf("electrum: rescan on stopped client: %w", err)
 	}
 
+	// A rescan before the initial header sync has a tip would walk an empty
+	// chain and never emit RescanFinished (tryDispatchRescanFinished has no
+	// header at tip -1). Callers must wait for IsCurrent first; surface a
+	// clear error rather than hanging if they don't.
+	if c.net.Tip() < 0 {
+		return fmt.Errorf("electrum: rescan before initial header sync")
+	}
+
 	// Subscribe to every address we plan to scan so we keep receiving
 	// updates after the rescan completes. Watched outpoints arrive on
 	// every FilterBlocksRequest, so we don't cache them here — the

@@ -156,8 +156,12 @@ func TestElectrumClientLiveSync(t *testing.T) {
 				t.Fatal("timeout waiting for ClientConnected")
 			}
 
-			if !c.IsCurrent() {
-				t.Fatal("IsCurrent should be true after sync")
+			// Start now returns once connected and subscribed; the
+			// header sync runs in the background, so poll until the
+			// client reports current rather than asserting it
+			// immediately.
+			if !waitForCurrent(t, c, 30*time.Second) {
+				t.Fatal("IsCurrent never became true after sync")
 			}
 			hash, height, err := c.GetBestBlock()
 			if err != nil {
@@ -233,6 +237,13 @@ func TestElectrumClientLiveRescanEmptyWallet(t *testing.T) {
 			// the rescan so the notification stream is empty.
 			<-c.Notifications()
 
+			// Start returns before the background header sync
+			// completes; a rescan launched before headers exist
+			// would walk an empty chain. Wait until current.
+			if !waitForCurrent(t, c, 30*time.Second) {
+				t.Fatal("IsCurrent never became true before rescan")
+			}
+
 			start := time.Now()
 			var rescanErr error
 			rescanDone := make(chan struct{})
@@ -295,4 +306,25 @@ func parseChain(t *testing.T, s string) bisonwire.Chain {
 		t.Fatalf("chain: %v", err)
 	}
 	return c
+}
+
+// waitForCurrent polls c.IsCurrent until it reports true or the timeout
+// elapses, returning whether the client became current. Start now returns
+// before the background header sync finishes, so callers that need a usable
+// tip must wait on this rather than assuming Start implies synced.
+func waitForCurrent(t *testing.T, c *ElectrumClient, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.After(timeout)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if c.IsCurrent() {
+			return true
+		}
+		select {
+		case <-deadline:
+			return c.IsCurrent()
+		case <-tick.C:
+		}
+	}
 }

@@ -763,17 +763,33 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 func (c *ElectrumClient) notificationHandler() {
 	defer c.wg.Done()
 
-	// Do NOT prime bs by calling GetBestBlock here. That call would race
-	// against the network's tip-subscription delivering the first
-	// BlockConnected, and it has two failure modes — server returning an
-	// empty first batch while Tip() is still -1, and the brief window
-	// during a reorg rewind where Tip() points at a header we've already
-	// deleted. The previous implementation tore the whole handler down on
-	// either of those, which made Start() silently advertise success
-	// while leaving the wallet unable to sync. Instead we let bs stay nil
-	// until the first BlockConnected arrives; BlockStamp callers wait
-	// (which is what NeutrinoClient does pre-first-block as well).
+	// bs is the block stamp delivered to BlockStamp() callers. It is primed by
+	// whichever of the following happens first, then kept current by subsequent
+	// BlockConnected notifications:
+	//
+	//   1. GetBestBlock once the network reports Synced(). This matches
+	//      NeutrinoClient, which stamps the current tip at handler startup so
+	//      BlockStamp() returns as soon as the chain is synced — even on a
+	//      quiescent chain that never delivers a new BlockConnected, and even
+	//      before the rescan->live handoff opens the connect gate. We can't call
+	//      GetBestBlock at startup the way Neutrino does, because the header sync
+	//      now runs in the background and Tip() may still be -1; instead we poll
+	//      with primeTicker and only stamp once IsCurrent() is true. GetBestBlock
+	//      can still transiently error during a reorg rewind (Tip() pointing at a
+	//      just-deleted header); we simply retry on the next tick.
+	//
+	//   2. A BlockConnected from the live-delivery path, which advances bs as new
+	//      blocks arrive.
+	//
+	// Until bs is primed, BlockStamp() callers block (the nil send-case below is
+	// never selectable), which is what callers expect pre-first-block.
 	var bs *waddrmgr.BlockStamp
+
+	// primeTicker drives the Synced()->GetBestBlock priming described above. It
+	// only matters until bs is set (by either path), after which its select case
+	// is disabled so it adds no ongoing overhead.
+	primeTicker := time.NewTicker(200 * time.Millisecond)
+	defer primeTicker.Stop()
 
 	var notifications []any
 	enqueue := c.enqueueNotification
@@ -787,6 +803,12 @@ func (c *ElectrumClient) notificationHandler() {
 		var blockStampCh chan *waddrmgr.BlockStamp
 		if bs != nil {
 			blockStampCh = c.currentBlock
+		}
+
+		// Poll for Synced()->GetBestBlock priming only until bs is set.
+		var primeCh <-chan time.Time
+		if bs == nil {
+			primeCh = primeTicker.C
 		}
 
 		select {
@@ -825,6 +847,19 @@ func (c *ElectrumClient) notificationHandler() {
 					return
 				}
 				dequeue = nil
+			}
+
+		case <-primeCh:
+			// The network has caught up but no BlockConnected has primed bs
+			// yet (a quiescent chain, or the pre-rescan window where connects
+			// are still gated). Stamp the current tip directly, matching
+			// NeutrinoClient. IsCurrent guards against Tip() == -1; a reorg
+			// rewind can still make GetBestBlock error transiently, so we just
+			// retry on the next tick.
+			if c.IsCurrent() {
+				if hash, height, err := c.GetBestBlock(); err == nil {
+					bs = &waddrmgr.BlockStamp{Hash: *hash, Height: height}
+				}
 			}
 
 		case blockStampCh <- bs:

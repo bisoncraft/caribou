@@ -407,12 +407,21 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 	neutrinoRecovery := chainClient.BackEnd() == "neutrino" &&
 		w.recoveryWindow > 0
 
+	// The electrum backend connects and then syncs headers in the
+	// background, so chainClient.Start returning does not imply a usable
+	// tip. Unlike a generic full node on a dev chain, electrum's IsCurrent
+	// (server-reported tip vs. our header store) is reliable even on
+	// regtest/simnet, so we always wait for it here — without this, the
+	// birthday-block lookup and rollback below would call GetBestBlock /
+	// GetBlockHash before any header is synced and fail.
+	electrumBackend := chainClient.BackEnd() == chain.ElectrumBackEnd
+
 	// We'll wait until the backend is synced to ensure we get the latest
 	// MaxReorgDepth blocks to store. We don't do this for development
 	// environments as we can't guarantee a lively chain, except for
 	// Neutrino, where the cfheader server tells us what it believes the
-	// chain tip is.
-	if !w.isDevEnv() || neutrinoRecovery {
+	// chain tip is, and electrum, whose tip is server-reported.
+	if !w.isDevEnv() || neutrinoRecovery || electrumBackend {
 		log.Debug("Waiting for chain backend to sync to tip")
 		if err := w.waitUntilBackendSynced(chainClient); err != nil {
 			return err

@@ -127,6 +127,11 @@ func (s *stubNetwork) Tip() int32 {
 
 func (s *stubNetwork) Synced() bool { return s.synced }
 
+// TargetTip returns the stub's server-reported tip (same as Tip for the stub,
+// since there is no separate notion of "server ahead of local" in tests that
+// don't exercise the sync-in-progress scenario).
+func (s *stubNetwork) TargetTip() int32 { return s.Tip() }
+
 func (s *stubNetwork) HeaderByHeight(height int32) *wire.BlockHeader {
 	s.mu.Lock()
 	defer s.mu.Unlock()
