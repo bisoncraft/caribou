@@ -367,10 +367,13 @@ img.logo-full {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+}
 
-  &.asset-status-syncing {
-    background-color: var(--accent-syncing);
-  }
+// Wrapper for the inline sync spinner so it aligns with the text baseline.
+.asset-status-syncing-spinner {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 .asset-status-locked {
@@ -595,6 +598,84 @@ img.logo-full {
     stroke-width: 3.5;
     stroke-linecap: round;
     stroke-linejoin: round;
+  }
+}
+
+// -----------------------------------------------------------------------
+// SPV/Electrum mode selector — shown in NativeActivate for BTC and LTC.
+
+// Tighter padding on the checkbox row used in the SPV mode toggle so it
+// sits snugly within the px-3 container without double-padding.
+.spv-mode-row {
+  margin: 0;
+  padding: 8px 0;
+}
+
+// Small circular "i" info button beside the SPV mode checkbox.
+.spv-info-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--accent-blue-border) 65%, transparent);
+  background: transparent;
+  color: var(--accent-blue-text);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: var(--demi-bold);
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.12s, color 0.12s;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+    color: var(--accent-blue-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent-blue-border);
+    outline-offset: 2px;
+  }
+}
+
+// Popover card that appears below the SPV mode row when the "i" is clicked.
+.spv-info-popover {
+  margin-top: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--form-input-bg);
+  padding: 10px 12px;
+}
+
+.spv-info-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.spv-info-title {
+  font-weight: var(--demi-bold);
+}
+
+.spv-info-close {
+  background: transparent;
+  border: none;
+  color: var(--text-grey);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+
+  &:hover { color: var(--text-color); }
+}
+
+.spv-info-body {
+  p {
+    margin: 0 0 8px;
+
+    &:last-child { margin-bottom: 0; }
   }
 }
 

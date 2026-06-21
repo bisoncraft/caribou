@@ -7,6 +7,11 @@ import CoinLogo from './CoinLogo'
 import Spinner from './Spinner'
 import Checkbox from './Checkbox'
 
+// Wallet type string constants that match the Go-side constants in
+// wallet/asset/btc and wallet/asset/ltc.
+const walletTypeElectrum = 'electrumRPC'
+const walletTypeSPV = 'SPV'
+
 interface ActivateAssetParams {
   ticker: string
 }
@@ -67,17 +72,53 @@ export default function ActivateAsset ({ ticker }: ActivateAssetParams) {
   return <MultiNetActivate ticker={ticker} close={close} />
 }
 
+// SpvInfoPopover is a small popover that explains the "Increased security and
+// privacy mode" (SPV/BIP-157/158) option and its tradeoffs vs. Electrum.
+function SpvInfoPopover ({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="spv-info-popover" role="dialog" aria-label={t('spv_info_title')}>
+      <div className="spv-info-popover-header">
+        <span className="fs14 spv-info-title">{t('spv_info_title')}</span>
+        <button type="button" className="spv-info-close" onClick={onClose} aria-label={t('Close')}>✕</button>
+      </div>
+      <div className="fs13 grey spv-info-body">
+        <p>{t('spv_info_what')}</p>
+        <p>{t('spv_info_tradeoffs')}</p>
+      </div>
+    </div>
+  )
+}
+
 // NativeActivate handles single-chain native assets: one click, done.
+// For assets that support both Electrum and SPV (BIP-157/158) wallet types
+// (currently BTC and LTC), it defaults to Electrum and provides an
+// "Increased security and privacy mode" checkbox to opt into SPV.
 function NativeActivate ({ ticker, close }: { ticker: string, close: () => void }) {
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState('')
+  const [spvMode, setSpvMode] = useState(false)
+  const [showInfo, setShowInfo] = useState(false)
 
   const ta = app.tickerMap![ticker]
   // The native variant is the one without a .token.
   const v = ta.variants.find(v => !v.token) ?? ta.variants[0]
   const networkID = activationNetworkID(v)
   const asset = app.user?.assets[networkID]
-  const walletDef = asset?.info?.availablewallets?.[0]
+  const availableWallets = asset?.info?.availablewallets ?? []
+
+  // Detect whether this asset supports both Electrum and SPV wallet types.
+  // When it does, we show the simplified "Increased security and privacy mode"
+  // checkbox rather than a raw wallet-type selector.
+  const electrumDef = availableWallets.find(d => d.type === walletTypeElectrum)
+  const spvDef = availableWallets.find(d => d.type === walletTypeSPV)
+  const hasElectrumSpvChoice = Boolean(electrumDef && spvDef)
+
+  // Pick the active wallet definition: if the asset has Electrum+SPV choice,
+  // use the checkbox state; otherwise fall back to the first available wallet.
+  let walletDef = availableWallets[0]
+  if (hasElectrumSpvChoice) {
+    walletDef = spvMode ? spvDef! : electrumDef!
+  }
 
   if (!walletDef) {
     return (
@@ -112,16 +153,58 @@ function NativeActivate ({ ticker, close }: { ticker: string, close: () => void 
     close()
   }
 
+  const toggleInfo = () => setShowInfo(v => !v)
+
   return (
     <form className="modal form-width-300" onSubmit={noSubmit}>
       <header>
         <CoinLogo ticker={ticker} className="mini-icon me-2" />
         <span>{tvar('Activate {{ name }}', { name: ta.name })}</span>
       </header>
-      <div className="px-3 pb-2 fs14 grey">
-        {walletDef.description}
+      {hasElectrumSpvChoice
+        ? (
+          <div className="px-3 pb-2 fs13 grey text-center">
+            {t('activate_electrum_desc')}
+          </div>
+          )
+        : (
+          <div className="px-3 pb-2 fs14 grey">
+            {walletDef.description}
+          </div>
+          )
+      }
+      {hasElectrumSpvChoice && (
+        <div className="px-3 pb-3">
+          <label className="checkbox-row spv-mode-row">
+            <Checkbox
+              checked={spvMode}
+              onChange={checked => { setSpvMode(checked) }}
+              disabled={submitting}
+              ariaLabel={t('spv_mode_label')}
+            />
+            <span className="flex-grow-1 fs13">{t('spv_mode_label')}</span>
+            <button
+              type="button"
+              className="spv-info-btn"
+              onClick={toggleInfo}
+              aria-label={t('spv_info_title')}
+              aria-expanded={showInfo}
+            >
+              i
+            </button>
+          </label>
+          {showInfo && (
+            <SpvInfoPopover onClose={() => setShowInfo(false)} />
+          )}
+        </div>
+      )}
+      <div aria-live="polite">
+        {err && (
+          <div key={err} className="form-err flex-center errcolor px-3 pb-2 text-center fs13">
+            {err}
+          </div>
+        )}
       </div>
-      <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
       <div className="flex-stretch-column p-3">
         <button type="button" className="feature" onClick={submit} disabled={submitting}>
           {submitting ? <><Spinner className="me-2" />{t('Activating...')}</> : t('Activate Now')}
