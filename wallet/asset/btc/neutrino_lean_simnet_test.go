@@ -44,17 +44,15 @@ func TestNeutrinoLeanWalletSync(t *testing.T) {
 	}
 	t.Cleanup(func() { masterDB.Close() })
 
-	// The lean wallet with the NEUTRINO backend rather than electrum.
-	cc := btcChainConfig(&chaincfg.RegressionNetParams)
-	cc.NewBackend = neutrinoBackendFactory(cc)
+	// The lean wallet with the SPV (neutrino) config — exactly what
+	// openSPVLeanWallet / walletTypeSPV builds, including the recovery-window
+	// default that drives the cfilter scan. No manual settings.
+	cc := btcSPVChainConfig(&chaincfg.RegressionNetParams)
 
 	walletCfg := &asset.WalletConfig{
-		Type:    walletTypeSPV,
-		DataDir: dataDir,
-		// Neutrino is filter-scan: btcwallet must rescan cfilters for the
-		// wallet's addresses to discover funds. A recovery window drives that
-		// scan; electrum (address-query) doesn't need it.
-		Settings:    map[string]string{"recoverywindow": "250"},
+		Type:        walletTypeSPV,
+		DataDir:     dataDir,
+		Settings:    map[string]string{},
 		Emit:        asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), 0, tLogger),
 		NetworkTxDB: masterDB.NetworkTxDB(BipID),
 		PeersChange: func(n uint32, err error) {

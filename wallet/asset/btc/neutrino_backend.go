@@ -9,11 +9,18 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/wire"
 )
+
+// neutrinoRecoveryWindow is the address gap limit btcwallet recovers across when
+// opening a neutrino-backed wallet. Neutrino is filter-scan, so this recovery is
+// what drives the compact-filter scan that discovers the wallet's funds. Matches
+// the window the previous SPV wallet used.
+const neutrinoRecoveryWindow = 250
 
 // neutrinoBackend is a chainBackend driven by a built-in neutrino (BIP-157/158)
 // chain service — the SPV counterpart to the electrum backend. The lean wallet
@@ -46,7 +53,14 @@ func (b *neutrinoBackend) Stop() {
 	_ = b.neutrinoDB.Close()
 }
 
+// Peers, AddPeer, and RemovePeer expose the neutrino peer manager so the wallet
+// can satisfy asset.PeerManager when driven by this backend.
+func (b *neutrinoBackend) Peers() ([]*asset.WalletPeer, error) { return b.peerManager.Peers() }
+func (b *neutrinoBackend) AddPeer(addr string) error           { return b.peerManager.AddPeer(addr) }
+func (b *neutrinoBackend) RemovePeer(addr string) error        { return b.peerManager.RemovePeer(addr) }
+
 var _ chainBackend = (*neutrinoBackend)(nil)
+var _ peerManagedBackend = (*neutrinoBackend)(nil)
 
 // neutrinoBackendFactory returns a ChainConfig.NewBackend that stands up a
 // neutrino chain service + NeutrinoClient for cc's chain. Assigning it to

@@ -573,7 +573,9 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		return createElectrumWallet(params.Pass, params.Seed, bday, dir,
 			params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
 	default: // walletTypeSPV
-		return createSPVWallet(params.Pass, params.Seed, bday, dir,
+		// SPV and electrum share the same lean wallet (an in-tree btcwallet);
+		// the same create path serves both.
+		return createElectrumWallet(params.Pass, params.Seed, bday, dir,
 			params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
 	}
 }
@@ -1027,7 +1029,9 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 
 	switch cfg.Type {
 	case walletTypeSPV:
-		return OpenSPVWallet(cloneCFG, openSPVWallet)
+		// The SPV wallet is the same lean wallet as electrum, driven by the
+		// neutrino backend instead of an electrum client.
+		return openSPVLeanWallet(cfg, params, logger), nil
 	case walletTypeRPC, walletTypeLegacy:
 		rpcWallet, err := BTCCloneWallet(cloneCFG)
 		if err != nil {

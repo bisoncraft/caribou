@@ -47,6 +47,15 @@ type chainBackend interface {
 	Connected() bool
 }
 
+// peerManagedBackend is an optional capability of a chainBackend: backends with
+// a peer concept (neutrino) implement it so the wallet can satisfy
+// asset.PeerManager; the electrum backend does not.
+type peerManagedBackend interface {
+	Peers() ([]*asset.WalletPeer, error)
+	AddPeer(addr string) error
+	RemovePeer(addr string) error
+}
+
 // ChainConfig carries the per-chain values that parameterize the shared
 // electrum ElectrumWallet, so the btc and ltc asset packages can share one
 // asset.Wallet implementation. (The implementation lives here in asset/btc for
@@ -65,6 +74,12 @@ type ChainConfig struct {
 	// Start/Stop/WaitForShutdown. Defaults to the electrum backend when nil
 	// (see NewElectrumWallet).
 	NewBackend func(dir string, log util.Logger) (chainBackend, error)
+	// RecoveryWindow is the default address-recovery window the wallet opens
+	// with. Electrum leaves it 0 (it queries address history directly and only
+	// recovers on an explicit restore); neutrino sets it >0 so btcwallet's
+	// recovery drives the compact-filter scan that discovers funds. The
+	// "recoverywindow" wallet setting, when present, overrides this.
+	RecoveryWindow uint32
 }
 
 // electrumBackendFactory returns a NewBackend that stands up an electrumx
@@ -213,6 +228,33 @@ type ElectrumWallet struct {
 
 var _ asset.Wallet = (*ElectrumWallet)(nil)
 var _ asset.Authenticator = (*ElectrumWallet)(nil)
+var _ asset.PeerManager = (*ElectrumWallet)(nil)
+
+// Peers returns the wallet's network peers when the backend manages peers
+// (neutrino/SPV); the electrum backend has no peer concept. Satisfies
+// asset.PeerManager.
+func (w *ElectrumWallet) Peers() ([]*asset.WalletPeer, error) {
+	if pm, ok := w.chainClient.(peerManagedBackend); ok {
+		return pm.Peers()
+	}
+	return nil, nil
+}
+
+// AddPeer adds a persistent peer, when the backend manages peers.
+func (w *ElectrumWallet) AddPeer(addr string) error {
+	if pm, ok := w.chainClient.(peerManagedBackend); ok {
+		return pm.AddPeer(addr)
+	}
+	return errors.New("this wallet's backend does not support peer management")
+}
+
+// RemovePeer removes a peer added with AddPeer, when the backend manages peers.
+func (w *ElectrumWallet) RemovePeer(addr string) error {
+	if pm, ok := w.chainClient.(peerManagedBackend); ok {
+		return pm.RemovePeer(addr)
+	}
+	return errors.New("this wallet's backend does not support peer management")
+}
 
 // NewElectrumWallet constructs a shared electrum ElectrumWallet for the chain
 // described by cc, without opening or starting anything. Shared by the btc and
@@ -221,7 +263,7 @@ func NewElectrumWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger)
 	if cc.NewBackend == nil {
 		cc.NewBackend = electrumBackendFactory(cc)
 	}
-	var recoveryWindow uint32
+	recoveryWindow := cc.RecoveryWindow
 	if s := cfg.Settings["recoverywindow"]; s != "" {
 		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
 			recoveryWindow = uint32(n)
@@ -245,6 +287,22 @@ func NewElectrumWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger)
 // walletTypeElectrum.
 func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *ElectrumWallet {
 	return NewElectrumWallet(btcChainConfig(chainParams), cfg, log)
+}
+
+// btcSPVChainConfig returns the ChainConfig for a BTC SPV wallet: the same lean
+// wallet as electrum, but driven by the neutrino backend and opened with a
+// recovery window so btcwallet's compact-filter scan discovers funds.
+func btcSPVChainConfig(chainParams *chaincfg.Params) ChainConfig {
+	cc := btcChainConfig(chainParams)
+	cc.NewBackend = neutrinoBackendFactory(cc)
+	cc.RecoveryWindow = neutrinoRecoveryWindow
+	return cc
+}
+
+// openSPVLeanWallet constructs the shared lean wallet driven by the neutrino
+// (BIP-157/158) backend. Called by NewWallet for walletTypeSPV.
+func openSPVLeanWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *ElectrumWallet {
+	return NewElectrumWallet(btcSPVChainConfig(chainParams), cfg, log)
 }
 
 // Info returns the WalletInfo for the wallet's chain.
