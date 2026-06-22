@@ -83,11 +83,24 @@ func newElectrumWalletWithNotes(t *testing.T) (asset.Wallet, *util.ConnectionMas
 	}
 
 	notes := make(chan asset.WalletNotification, 256)
+
+	// Provide a master tx database scoped to this asset, the way Core does via
+	// the wallet config; the electrum wallet uses this handle for tx history.
+	masterDB, err := txdb.New(filepath.Join(dataDir, "txdb"), tLogger.SubLogger("TXDB"))
+	if err != nil {
+		t.Fatalf("newElectrumWallet: txdb.New: %v", err)
+	}
+	if _, err = masterDB.Connect(tCtx); err != nil {
+		t.Fatalf("newElectrumWallet: txdb.Connect: %v", err)
+	}
+	t.Cleanup(func() { masterDB.Close() })
+
 	walletCfg := &asset.WalletConfig{
-		Type:     walletTypeElectrum,
-		DataDir:  dataDir,
-		Settings: map[string]string{},
-		Emit:     asset.NewWalletEmitter(notes, 0, tLogger),
+		Type:        walletTypeElectrum,
+		DataDir:     dataDir,
+		Settings:    map[string]string{},
+		Emit:        asset.NewWalletEmitter(notes, 0, tLogger),
+		NetworkTxDB: masterDB.NetworkTxDB(BipID),
 		PeersChange: func(n uint32, err error) {
 			tLogger.Debugf("electrum wallet peers=%d err=%v", n, err)
 		},
@@ -696,11 +709,22 @@ func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recovery
 	if recoveryWindow > 0 {
 		settings["recoverywindow"] = strconv.Itoa(int(recoveryWindow))
 	}
+
+	masterDB, err := txdb.New(filepath.Join(dataDir, "txdb"), tLogger.SubLogger("TXDB"))
+	if err != nil {
+		t.Fatalf("connectElectrumWalletAt: txdb.New: %v", err)
+	}
+	if _, err = masterDB.Connect(tCtx); err != nil {
+		t.Fatalf("connectElectrumWalletAt: txdb.Connect: %v", err)
+	}
+	t.Cleanup(func() { masterDB.Close() })
+
 	walletCfg := &asset.WalletConfig{
-		Type:     walletTypeElectrum,
-		DataDir:  dataDir,
-		Settings: settings,
-		Emit:     asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), 0, tLogger),
+		Type:        walletTypeElectrum,
+		DataDir:     dataDir,
+		Settings:    settings,
+		Emit:        asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), 0, tLogger),
+		NetworkTxDB: masterDB.NetworkTxDB(BipID),
 		PeersChange: func(n uint32, err error) {
 			tLogger.Debugf("electrum recovery wallet peers=%d err=%v", n, err)
 		},
