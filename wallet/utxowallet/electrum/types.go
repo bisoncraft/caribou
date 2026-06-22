@@ -6,6 +6,8 @@
 package electrum
 
 import (
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
 )
@@ -18,6 +20,31 @@ type ServerAddr struct {
 	Addr string
 	// Onion is true if Addr is a Tor hidden service.
 	Onion bool
+	// Cert, when set, is the DER-encoded leaf certificate this ssl server is
+	// pinned to: the certificate the server presents must byte-match it. Use it
+	// for servers with self-signed certificates that cannot be validated against
+	// a public CA. Mutually exclusive with SkipVerify.
+	Cert []byte
+	// SkipVerify disables TLS certificate verification entirely. Use it ONLY for
+	// dev/testnet/simnet servers with throwaway self-signed certificates. When
+	// neither Cert nor SkipVerify is set, an ssl server's certificate is
+	// verified against the system CA roots.
+	SkipVerify bool
+}
+
+// MustParseCertPEM decodes a single PEM-encoded X.509 certificate and returns
+// its raw DER bytes, suitable for ServerAddr.Cert. It panics on malformed input,
+// which is appropriate for the hard-coded pinned certificates decoded at package
+// initialization — a bad constant should fail loudly at startup, not at connect.
+func MustParseCertPEM(pemData string) []byte {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil || block.Type != "CERTIFICATE" {
+		panic("electrum: pinned certificate is not valid PEM")
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		panic(fmt.Sprintf("electrum: pinned certificate does not parse: %v", err))
+	}
+	return block.Bytes
 }
 
 // Network satisfies net.Addr.

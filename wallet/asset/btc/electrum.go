@@ -81,9 +81,12 @@ var electrumWalletDefinition = &asset.WalletDefinition{
 //
 // The server selection is intentionally hard-coded — no user configuration.
 var btcElectrumServers = map[string]*electrum.ServerAddr{
+	// Mainnet uses Blockstream's server, which presents a publicly CA-issued
+	// (Let's Encrypt) certificate, so it is verified against the system roots
+	// rather than pinned: a pinned leaf would break on every ~90-day renewal.
 	chaincfg.MainNetParams.Name:       {Proto: "ssl", Addr: "electrum.blockstream.info:700"},
-	chaincfg.TestNet3Params.Name:      {Proto: "ssl", Addr: "electrum.blockstream.info:993"},
-	chaincfg.RegressionNetParams.Name: {Proto: "ssl", Addr: "127.0.0.1:54002"},
+	chaincfg.TestNet3Params.Name:      {Proto: "ssl", Addr: "electrum.blockstream.info:993", SkipVerify: true},
+	chaincfg.RegressionNetParams.Name: {Proto: "ssl", Addr: "127.0.0.1:54002", SkipVerify: true},
 }
 
 // CreateElectrumWallet creates the on-disk btcwallet database for an electrum
