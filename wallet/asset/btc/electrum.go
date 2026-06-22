@@ -36,6 +36,17 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
+// chainBackend is the chain.Backend a wallet drives, plus the two
+// backend-specific signals the wallet needs for status reporting: sync progress
+// and connectivity. chain.ElectrumClient satisfies it today; chain.NeutrinoClient
+// will once the SPV wallet is unified onto this type, so the wallet stays
+// backend-agnostic.
+type chainBackend interface {
+	chain.Backend
+	SyncHeight() (localTip, targetTip int32, synced bool)
+	Connected() bool
+}
+
 // ChainConfig carries the per-chain values that parameterize the shared
 // electrum ElectrumWallet, so the btc and ltc asset packages can share one
 // asset.Wallet implementation. (The implementation lives here in asset/btc for
@@ -48,6 +59,39 @@ type ChainConfig struct {
 	NetParams   *netparams.ChainParams
 	Info        *asset.WalletInfo
 	LogWallet   func(walletDir string) error // per-asset logger setup (logNeutrino)
+	// NewBackend stands up the chain backend for this wallet — an electrum
+	// network + client today, a neutrino chain service + client once SPV is
+	// unified onto this type. It returns an unstarted backend; the wallet owns
+	// Start/Stop/WaitForShutdown. Defaults to the electrum backend when nil
+	// (see NewElectrumWallet).
+	NewBackend func(dir string, log util.Logger) (chainBackend, error)
+}
+
+// electrumBackendFactory returns a NewBackend that stands up an electrumx
+// network + ElectrumClient for cc's chain. It is the default backend.
+func electrumBackendFactory(cc ChainConfig) func(dir string, log util.Logger) (chainBackend, error) {
+	return func(dir string, log util.Logger) (chainBackend, error) {
+		srvAddr := cc.Servers[cc.ChainParams.Name]
+		if srvAddr == nil {
+			return nil, fmt.Errorf("electrum: no built-in server for network %q", cc.ChainParams.Name)
+		}
+		if err := srvAddr.Validate(); err != nil {
+			return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
+		}
+		chainCfg, err := electrum.NewChainConfig(cc.Chain, cc.NetParams)
+		if err != nil {
+			return nil, fmt.Errorf("electrum: chain config: %w", err)
+		}
+		network, err := electrum.NewNetwork(&electrum.Config{
+			Chain:         chainCfg,
+			TrustedServer: srvAddr,
+			DataDir:       dir,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("electrum: new network: %w", err)
+		}
+		return chain.NewElectrumClient(cc.NetParams, network)
+	}
 }
 
 // btcChainConfig returns the ChainConfig for the BTC electrum wallet.
@@ -148,8 +192,7 @@ type ElectrumWallet struct {
 	// populated during Connect
 	btcw        *wallet.Wallet
 	loader      *wallet.Loader
-	chainClient *chain.ElectrumClient
-	network     *electrum.Network
+	chainClient chainBackend
 	// txdb is the master transaction database handle, scoped to this wallet's
 	// network and supplied by Core via the wallet config. Core owns its lifecycle.
 	txdb txdb.NetworkTxDB
@@ -175,6 +218,9 @@ var _ asset.Authenticator = (*ElectrumWallet)(nil)
 // described by cc, without opening or starting anything. Shared by the btc and
 // ltc asset packages.
 func NewElectrumWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *ElectrumWallet {
+	if cc.NewBackend == nil {
+		cc.NewBackend = electrumBackendFactory(cc)
+	}
 	var recoveryWindow uint32
 	if s := cfg.Settings["recoverywindow"]; s != "" {
 		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
@@ -262,38 +308,16 @@ func (w *ElectrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	defer errCloser.Done(w.log)
 	errCloser.Add(w.loader.UnloadWallet)
 
-	srvAddr := w.serverAddr()
-	if srvAddr == nil {
-		return nil, fmt.Errorf("electrum: no built-in server for network %q", w.chainParams.Name)
-	}
-	if err = srvAddr.Validate(); err != nil {
-		return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
-	}
-
-	chainCfg, err := electrum.NewChainConfig(w.cfg.Chain, w.netParams)
+	// Stand up the chain backend (electrum network + client by default; a
+	// neutrino backend once SPV is unified onto this wallet). The backend owns
+	// its own resources (e.g. the electrum network) — its Start launches them
+	// and Stop/WaitForShutdown tear them down.
+	w.chainClient, err = w.cfg.NewBackend(w.dir, w.log)
 	if err != nil {
-		return nil, fmt.Errorf("electrum: chain config: %w", err)
-	}
-
-	w.network, err = electrum.NewNetwork(&electrum.Config{
-		Chain:         chainCfg,
-		TrustedServer: srvAddr,
-		DataDir:       w.dir,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("electrum: new network: %w", err)
-	}
-
-	// The chain client owns the electrum network's lifecycle: chainClient.Start
-	// starts the network, chainClient.Stop stops it, and WaitForShutdown blocks
-	// on both. Do not start the network directly here — chainClient.Start would
-	// then try to start it a second time and fail with "already started".
-	w.chainClient, err = chain.NewElectrumClient(w.netParams, w.network)
-	if err != nil {
-		return nil, fmt.Errorf("electrum: new chain client: %w", err)
+		return nil, fmt.Errorf("electrum: new chain backend: %w", err)
 	}
 	if err = w.chainClient.Start(); err != nil {
-		return nil, fmt.Errorf("electrum: couldn't start chain client: %w", err)
+		return nil, fmt.Errorf("electrum: couldn't start chain backend: %w", err)
 	}
 	errCloser.Add(func() error { w.chainClient.Stop(); return nil })
 
@@ -373,14 +397,6 @@ func (w *ElectrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}()
 
 	return &wg, nil
-}
-
-// serverAddr returns the built-in electrumx server address for the active
-// network.  Falls back to mainnet if the network name is unrecognized.
-func (w *ElectrumWallet) serverAddr() *electrum.ServerAddr {
-	// The network is always known, so a missing entry is a real error (handled
-	// by the caller), not a silent fallback to another network.
-	return w.cfg.Servers[w.chainParams.Name]
 }
 
 // bestBlock returns the hash and height of the best synced block according to
@@ -514,28 +530,26 @@ func (w *ElectrumWallet) StandardSendFee(feeRate uint64) uint64 {
 
 // SyncStatus returns the current chain-sync state.
 func (w *ElectrumWallet) SyncStatus() (*asset.SyncStatus, error) {
-	if w.chainClient == nil || w.network == nil {
+	if w.chainClient == nil {
 		return &asset.SyncStatus{}, nil
 	}
 
-	localTip := w.network.Tip()
+	// localTip is our synced header tip; targetTip is the height the backend is
+	// syncing toward (the electrum server's reported best, the neutrino sync
+	// target). targetTip is always >= localTip, so progress climbs from near-0%
+	// to 100% as headers download rather than pinning at ~100%.
+	localTip, targetTip, backendSynced := w.chainClient.SyncHeight()
 	if localTip < 0 {
 		return &asset.SyncStatus{}, nil
 	}
 
-	// TargetTip() is the server's reported best height — available from the
-	// moment Connect returns (set synchronously in Network.Start before it
-	// returns). This is always >= the locally-synced tip, so progress goes
-	// from near-0% to 100% as headers download rather than showing ~100% the
-	// entire time. Fall back to localTip when the server height is unknown (0).
-	serverTip := w.network.TargetTip()
-	targetHeight := serverTip
+	targetHeight := targetTip
 	if targetHeight <= 0 {
 		targetHeight = localTip
 	}
 
 	walletBlock := w.btcw.Manager.SyncedTo()
-	synced := w.network.Synced() && walletBlock.Height > 0 &&
+	synced := backendSynced && walletBlock.Height > 0 &&
 		walletBlock.Height >= localTip
 
 	return &asset.SyncStatus{
@@ -726,14 +740,11 @@ func (w *ElectrumWallet) peerLoop(ctx context.Context) {
 
 	var lastCount uint32
 	check := func() {
-		if w.network == nil {
+		if w.chainClient == nil {
 			return
 		}
 		var count uint32
-		select {
-		case <-w.network.Done():
-			count = 0
-		default:
+		if w.chainClient.Connected() {
 			count = 1
 		}
 		if count != lastCount {

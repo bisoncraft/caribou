@@ -301,6 +301,26 @@ func (c *ElectrumClient) GetBlockHeader(hash *chainhash.Hash) (*wire.BlockHeader
 // IsCurrent reports whether our header chain has caught up to the server.
 func (c *ElectrumClient) IsCurrent() bool { return c.net.Synced() }
 
+// SyncHeight reports the locally-synced header tip, the target height the
+// backend is syncing toward (the server's reported best), and whether the
+// backend considers itself synced. It lets a wallet report sync progress
+// without knowing the backend is electrum.
+func (c *ElectrumClient) SyncHeight() (localTip, targetTip int32, synced bool) {
+	return c.net.Tip(), c.net.TargetTip(), c.net.Synced()
+}
+
+// Connected reports whether the backend currently has a live connection. It
+// abstracts the electrum network's Done channel so peer monitoring is
+// backend-agnostic.
+func (c *ElectrumClient) Connected() bool {
+	select {
+	case <-c.net.Done():
+		return false
+	default:
+		return true
+	}
+}
+
 // BlockStamp returns the latest block notified by the client, or an error
 // if the client has been shut down.
 func (c *ElectrumClient) BlockStamp() (*waddrmgr.BlockStamp, error) {
