@@ -159,6 +159,10 @@ func (m *mockChainService) PeerByAddr(string) *spv.ServerPeer {
 	panic(errNotImplemented)
 }
 
+func (m *mockChainService) Peers() []*spv.ServerPeer {
+	return nil
+}
+
 // mockRPCClient mocks the rpcClient interface.
 type mockRPCClient struct {
 	mock.Mock
