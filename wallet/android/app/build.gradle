@@ -20,15 +20,38 @@ android {
         ndk {
             abiFilters 'arm64-v8a'
         }
-        // Network the wallet boots on: "mainnet" (default), "testnet", or
-        // "simnet". Override at build time, e.g. for a simnet dev build:
-        //   gradle assembleDebug -PwalletNet=simnet
-        def walletNet = (project.findProperty('walletNet') ?: 'mainnet').toString()
-        buildConfigField 'String', 'WALLET_NET', "\"${walletNet}\""
     }
 
     buildFeatures {
         buildConfig true
+    }
+
+    // One flavor per network. Each gets a distinct applicationId suffix and
+    // launcher label so mainnet/testnet/simnet can be installed side by side,
+    // and sets BuildConfig.WALLET_NET, which MainActivity passes to App.start.
+    // Flavor names are "net"-prefixed because Gradle reserves names starting
+    // with "test". Build a specific one, e.g.: gradle assembleNetSimnetDebug
+    flavorDimensions 'network'
+    productFlavors {
+        netMainnet {
+            dimension 'network'
+            buildConfigField 'String', 'WALLET_NET', '"mainnet"'
+            manifestPlaceholders = [appName: 'Boss Wallet']
+        }
+        netTestnet {
+            dimension 'network'
+            applicationIdSuffix '.testnet'
+            versionNameSuffix '-testnet'
+            buildConfigField 'String', 'WALLET_NET', '"testnet"'
+            manifestPlaceholders = [appName: 'Boss Wallet testnet']
+        }
+        netSimnet {
+            dimension 'network'
+            applicationIdSuffix '.simnet'
+            versionNameSuffix '-simnet'
+            buildConfigField 'String', 'WALLET_NET', '"simnet"'
+            manifestPlaceholders = [appName: 'Boss Wallet simnet']
+        }
     }
 
     buildTypes {
