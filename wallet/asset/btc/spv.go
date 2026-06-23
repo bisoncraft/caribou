@@ -1,8 +1,6 @@
 package btc
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,21 +9,15 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txauthor"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btclog"
 	"github.com/jrick/logrotate/rotator"
 )
@@ -33,27 +25,6 @@ import (
 const (
 	dbTimeout = 20 * time.Second
 )
-
-// btcSPVWallet implements BTCWallet for Bitcoin.
-type btcSPVWallet struct {
-	*wallet.Wallet
-	chainParams    *chaincfg.Params
-	netChainParams *netparams.ChainParams
-	log            util.Logger
-	dir            string
-
-	// Below fields are populated in Start.
-	loader      *wallet.Loader
-	chainClient *chain.NeutrinoClient
-	cl          *spv.ChainService
-	neutrinoDB  walletdb.DB
-
-	// rescanStarting is set while reloading the wallet and dropping
-	// transactions from the wallet db.
-	rescanStarting uint32 // atomic
-
-	peerManager *SPVPeerManager
-}
 
 // btcNetParams wraps a *chaincfg.Params in a *netparams.ChainParams suitable
 // for the in-tree utxowallet library. The btcdParams field is set so that
@@ -93,8 +64,6 @@ func btcNetParams(p *chaincfg.Params) *netparams.ChainParams {
 	}
 	return np
 }
-
-var _ BTCWallet = (*btcSPVWallet)(nil)
 
 // createSPVWallet creates a new SPV wallet.
 func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
@@ -143,339 +112,6 @@ func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir str
 	}
 
 	return nil
-}
-
-// openSPVWallet is the BTCWalletConstructor for Bitcoin.
-func openSPVWallet(dir string, cfg *WalletConfig,
-	chainParams *chaincfg.Params, log util.Logger) BTCWallet {
-
-	w := &btcSPVWallet{
-		dir:            dir,
-		chainParams:    chainParams,
-		netChainParams: btcNetParams(chainParams),
-		log:            log,
-	}
-	return w
-}
-
-func (w *btcSPVWallet) Birthday() time.Time {
-	return w.Manager.Birthday()
-}
-
-// Start initializes the *btcwallet.Wallet and its supporting players and
-// starts syncing.
-func (w *btcSPVWallet) Start() (SPVService, error) {
-	if err := logNeutrino(w.dir); err != nil {
-		return nil, fmt.Errorf("error initializing btcwallet+neutrino logging: %v", err)
-	}
-	// timeout and recoverWindow arguments borrowed from btcwallet directly.
-	w.loader = wallet.NewLoader(w.netChainParams, w.dir, true, dbTimeout, 250)
-
-	exists, err := w.loader.WalletExists()
-	if err != nil {
-		return nil, fmt.Errorf("error verifying wallet existence: %v", err)
-	}
-	if !exists {
-		return nil, errors.New("wallet not found")
-	}
-
-	w.log.Debug("Starting native BTC wallet...")
-	btcw, err := w.loader.OpenExistingWallet([]byte(wallet.InsecurePubPassphrase))
-	if err != nil {
-		return nil, fmt.Errorf("couldn't load wallet: %w", err)
-	}
-
-	errCloser := util.NewErrorCloser()
-	defer errCloser.Done(w.log)
-	errCloser.Add(w.loader.UnloadWallet)
-
-	neutrinoDBPath := filepath.Join(w.dir, neutrinoDBName)
-	w.neutrinoDB, err = walletdb.Create("bdb", neutrinoDBPath, true, dbTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("unable to create wallet db at %q: %v", neutrinoDBPath, err)
-	}
-	errCloser.Add(w.neutrinoDB.Close)
-
-	// TODO: Route SPV peer connections through Tor when TorProxy is
-	// configured. Requires upstream library support.
-	w.log.Debug("Starting neutrino chain service...")
-	w.cl, err = spv.NewChainService(spv.Config{
-		DataDir:       w.dir,
-		Database:      w.neutrinoDB,
-		Chain:         "btc",
-		ChainParams:   w.netChainParams,
-		PersistToDisk: true, // keep cfilter headers on disk for efficient rescanning
-		// AddPeers:      addPeers,
-		// ConnectPeers:  connectPeers,
-		// WARNING: PublishTransaction currently uses the entire duration
-		// because if an external bug, but even if the resolved, a typical
-		// inv/getdata round trip is ~4 seconds, so we set this so neutrino does
-		// not cancel queries too readily.
-		BroadcastTimeout: 6 * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("couldn't create Neutrino ChainService: %w", err)
-	}
-	errCloser.Add(w.cl.Stop)
-
-	var defaultPeers []string
-	switch w.chainParams.Net {
-	case wire.TestNet3:
-		defaultPeers = []string{"dex-test.ssgen.io:18333"}
-	case wire.TestNet, wire.SimNet: // plain "wire.TestNet" is regnet!
-		defaultPeers = []string{"127.0.0.1:20575"}
-	}
-	peerManager := NewSPVPeerManager(&btcChainService{w.cl}, defaultPeers, w.dir, w.log, w.chainParams.DefaultPort)
-	w.peerManager = peerManager
-
-	w.chainClient = chain.NewNeutrinoClient(w.netChainParams, w.cl)
-	w.Wallet = btcw
-
-	if err = w.chainClient.Start(); err != nil { // lazily starts connmgr
-		return nil, fmt.Errorf("couldn't start Neutrino client: %v", err)
-	}
-
-	w.log.Info("Synchronizing wallet with network...")
-	btcw.Synchronize(w.chainClient)
-
-	errCloser.Success()
-
-	w.peerManager.ConnectToInitialWalletPeers()
-
-	return &btcChainService{w.cl}, nil
-}
-
-// Stop stops the wallet and database threads.
-func (w *btcSPVWallet) Stop() {
-	w.log.Info("Unloading wallet")
-	if err := w.loader.UnloadWallet(); err != nil {
-		w.log.Errorf("UnloadWallet error: %v", err)
-	}
-	if w.chainClient != nil {
-		w.log.Trace("Stopping neutrino client chain interface")
-		w.chainClient.Stop()
-		w.chainClient.WaitForShutdown()
-	}
-	w.log.Trace("Stopping neutrino chain sync service")
-	if err := w.cl.Stop(); err != nil {
-		w.log.Errorf("error stopping neutrino chain service: %v", err)
-	}
-	w.log.Trace("Stopping neutrino DB.")
-	if err := w.neutrinoDB.Close(); err != nil {
-		w.log.Errorf("wallet db close error: %v", err)
-	}
-
-	// NOTE: Do we need w.Wallet.Stop()
-
-	w.log.Info("SPV wallet closed")
-}
-
-// RescanAsync initiates a full wallet recovery (used address discovery
-// and transaction scanning) by stopping the btcwallet, dropping the transaction
-// history from the wallet db, resetting the synced-to height of the wallet
-// manager, restarting the wallet and its chain client, and finally commanding
-// the wallet to resynchronize, which starts asynchronous wallet recovery.
-// Progress of the rescan should be monitored with syncStatus. During the rescan
-// wallet balances and known transactions may not be reported accurately or
-// located. The SPVService is not stopped, so most spvWallet methods will
-// continue to work without error, but methods using the btcWallet will likely
-// return incorrect results or errors.
-func (w *btcSPVWallet) RescanAsync() error {
-	if !atomic.CompareAndSwapUint32(&w.rescanStarting, 0, 1) {
-		w.log.Error("rescan already in progress")
-	}
-	defer atomic.StoreUint32(&w.rescanStarting, 0)
-	w.log.Info("Stopping wallet and chain client...")
-	w.Wallet.Stop() // stops Wallet and chainClient (not chainService)
-	w.Wallet.WaitForShutdown()
-	w.chainClient.WaitForShutdown()
-
-	w.ForceRescan()
-
-	w.log.Info("Starting wallet...")
-	w.Wallet.Start()
-
-	if err := w.chainClient.Start(); err != nil {
-		return fmt.Errorf("couldn't start Neutrino client: %v", err)
-	}
-
-	w.log.Info("Synchronizing wallet with network...")
-	w.Wallet.Synchronize(w.chainClient)
-	return nil
-}
-
-// ForceRescan forces a full rescan with active address discovery on wallet
-// restart by dropping the complete transaction history and setting the
-// "synced to" field to nil. See the btcwallet/cmd/dropwtxmgr app for more
-// information.
-func (w *btcSPVWallet) ForceRescan() {
-	wdb := w.Wallet.Database()
-
-	w.log.Info("Dropping transaction history to perform full rescan...")
-	err := wallet.DropTransactionHistory(wdb, false)
-	if err != nil {
-		w.log.Errorf("Failed to drop wallet transaction history: %v", err)
-		// Continue to attempt restarting the wallet anyway.
-	}
-
-	err = walletdb.Update(wdb, func(dbtx walletdb.ReadWriteTx) error {
-		ns := dbtx.ReadWriteBucket(wAddrMgrBkt)      // it'll be fine
-		return w.Wallet.Manager.SetSyncedTo(ns, nil) // never synced, forcing recover from birthday
-	})
-	if err != nil {
-		w.log.Errorf("Failed to reset wallet manager sync height: %v", err)
-	}
-}
-
-// WalletTransaction pulls the transaction from the database.
-func (w *btcSPVWallet) WalletTransaction(txHash *chainhash.Hash) (*wtxmgr.TxDetails, error) {
-	details, err := wallet.UnstableAPI(w.Wallet).TxDetails(txHash)
-	if err != nil {
-		return nil, err
-	}
-	if details == nil {
-		return nil, WalletTransactionNotFound
-	}
-
-	return details, nil
-}
-
-func (w *btcSPVWallet) SyncedTo() waddrmgr.BlockStamp {
-	return w.Wallet.Manager.SyncedTo()
-}
-
-// getWalletBirthdayBlock retrieves the wallet's birthday block.
-//
-// NOTE: The wallet birthday block hash is NOT SET until the chain service
-// passes the birthday block and the wallet looks it up based on the birthday
-// Time and the downloaded block headers.
-// This is presently unused, but I have plans for it with a wallet rescan.
-// func (w *btcSPVWallet) getWalletBirthdayBlock() (*waddrmgr.BlockStamp, error) {
-// 	var birthdayBlock waddrmgr.BlockStamp
-// 	err := walletdb.View(w.Database(), func(dbtx walletdb.ReadTx) error {
-// 		ns := dbtx.ReadBucket([]byte("waddrmgr")) // it'll be fine
-// 		var err error
-// 		birthdayBlock, _, err = w.Manager.BirthdayBlock(ns)
-// 		return err
-// 	})
-// 	if err != nil {
-// 		return nil, err // sadly, waddrmgr.ErrBirthdayBlockNotSet is expected during most of the chain sync
-// 	}
-// 	return &birthdayBlock, nil
-// }
-
-// SignTx signs the transaction inputs.
-func (w *btcSPVWallet) SignTx(tx *wire.MsgTx) error {
-	var prevPkScripts [][]byte
-	var inputValues []btcutil.Amount
-	for _, txIn := range tx.TxIn {
-		// NOTE: The BitcoinCash implementation of BTCWallet ONLY produces the
-		// *wire.TxOut.
-		_, txOut, _, _, err := w.Wallet.FetchInputInfo(&txIn.PreviousOutPoint)
-		if err != nil {
-			return err
-		}
-		inputValues = append(inputValues, btcutil.Amount(txOut.Value))
-		prevPkScripts = append(prevPkScripts, txOut.PkScript)
-		// Zero the previous witness and signature script or else
-		// AddAllInputScripts does some weird stuff.
-		txIn.SignatureScript = nil
-		txIn.Witness = nil
-	}
-	return txauthor.AddAllInputScripts(tx, prevPkScripts, inputValues, &secretSource{w, w.chainParams})
-}
-
-func (w *btcSPVWallet) BlockNotifications(ctx context.Context) <-chan *BlockNotification {
-	cl := w.Wallet.NtfnServer.TransactionNotifications()
-	ch := make(chan *BlockNotification, 1)
-	go func() {
-		defer cl.Done()
-		for {
-			select {
-			case note := <-cl.C:
-				if len(note.AttachedBlocks) > 0 {
-					lastBlock := note.AttachedBlocks[len(note.AttachedBlocks)-1]
-					select {
-					case ch <- &BlockNotification{
-						Hash:   *lastBlock.Hash,
-						Height: lastBlock.Height,
-					}:
-					default:
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return ch
-}
-
-func (w *btcSPVWallet) AddPeer(addr string) error {
-	return w.peerManager.AddPeer(addr)
-}
-
-func (w *btcSPVWallet) RemovePeer(addr string) error {
-	return w.peerManager.RemovePeer(addr)
-}
-
-func (w *btcSPVWallet) Peers() ([]*asset.WalletPeer, error) {
-	return w.peerManager.Peers()
-}
-
-func (w *btcSPVWallet) GetTransactions(startHeight, endHeight int32, accountName string, cancel <-chan struct{}) (*wallet.GetTransactionsResult, error) {
-	startID := wallet.NewBlockIdentifierFromHeight(startHeight)
-	endID := wallet.NewBlockIdentifierFromHeight(endHeight)
-	return w.Wallet.GetTransactions(startID, endID, accountName, cancel)
-}
-
-// secretSource is used to locate keys and redemption scripts while signing a
-// transaction. secretSource satisfies the txauthor.SecretsSource interface.
-type secretSource struct {
-	w           *btcSPVWallet
-	chainParams *chaincfg.Params
-}
-
-// ChainParams returns the chain parameters.
-func (s *secretSource) ChainParams() *chaincfg.Params {
-	return s.chainParams
-}
-
-// GetKey fetches a private key for the specified address.
-func (s *secretSource) GetKey(addr btcutil.Address) (*btcec.PrivateKey, bool, error) {
-	ma, err := s.w.Wallet.AddressInfo(addr)
-	if err != nil {
-		return nil, false, err
-	}
-
-	mpka, ok := ma.(waddrmgr.ManagedPubKeyAddress)
-	if !ok {
-		e := fmt.Errorf("managed address type for %v is `%T` but "+
-			"want waddrmgr.ManagedPubKeyAddress", addr, ma)
-		return nil, false, e
-	}
-
-	privKey, err := mpka.PrivKey()
-	if err != nil {
-		return nil, false, err
-	}
-	return privKey, ma.Compressed(), nil
-}
-
-// GetScript fetches the redemption script for the specified p2sh/p2wsh address.
-func (s *secretSource) GetScript(addr btcutil.Address) ([]byte, error) {
-	ma, err := s.w.Wallet.AddressInfo(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	msa, ok := ma.(waddrmgr.ManagedScriptAddress)
-	if !ok {
-		e := fmt.Errorf("managed address type for %v is `%T` but "+
-			"want waddrmgr.ManagedScriptAddress", addr, ma)
-		return nil, e
-	}
-	return msa.Script()
 }
 
 var (

@@ -369,9 +369,9 @@ func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, l
 	return NewNativeWallet(btcElectrumChainConfig(chainParams), cfg, log)
 }
 
-// openSPVLeanWallet constructs a NativeWallet driven by the neutrino
+// openSPVWallet constructs a NativeWallet driven by the neutrino
 // (BIP-157/158) backend. Called by NewWallet for walletTypeSPV.
-func openSPVLeanWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *NativeWallet {
+func openSPVWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *NativeWallet {
 	return NewNativeWallet(btcSPVChainConfig(chainParams), cfg, log)
 }
 
@@ -480,14 +480,20 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
 	var wg sync.WaitGroup
 
-	// Tie chain-backend teardown to the Connect context. Nothing else in the
-	// success path shuts the backend down, so without this its goroutines and
-	// resources (the electrum network, or the neutrino service and db) would leak
-	// on shutdown.
+	// Tie wallet and chain-backend teardown to the Connect context. Nothing else
+	// in the success path shuts them down, so without this the wallet db stays
+	// open (leaking its handle and blocking a later reconnect via the bdb file
+	// lock) and the backend's goroutines and resources (the electrum network, or
+	// the neutrino service and db) leak. Unload the wallet first (it stops
+	// btcwallet and closes its db), then tear the backend down — mirroring the
+	// previous SPV wallet's Stop.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		<-ctx.Done()
+		if err := w.loader.UnloadWallet(); err != nil {
+			w.log.Errorf("native: error unloading wallet on shutdown: %v", err)
+		}
 		w.chainClient.Shutdown()
 		w.chainClient.WaitForShutdown()
 	}()

@@ -1031,7 +1031,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 	case walletTypeSPV:
 		// The SPV wallet is the same lean wallet as electrum, driven by the
 		// neutrino backend instead of an electrum client.
-		return openSPVLeanWallet(cfg, params, logger), nil
+		return openSPVWallet(cfg, params, logger), nil
 	case walletTypeRPC, walletTypeLegacy:
 		rpcWallet, err := BTCCloneWallet(cloneCFG)
 		if err != nil {

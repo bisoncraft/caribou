@@ -45,7 +45,7 @@ func TestNeutrinoLeanWalletSync(t *testing.T) {
 	t.Cleanup(func() { masterDB.Close() })
 
 	// The lean wallet with the SPV (neutrino) config — exactly what
-	// openSPVLeanWallet / walletTypeSPV builds, including the recovery-window
+	// openSPVWallet / walletTypeSPV builds, including the recovery-window
 	// default that drives the cfilter scan. No manual settings.
 	cc := btcSPVChainConfig(&chaincfg.RegressionNetParams)
 
