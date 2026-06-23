@@ -19,7 +19,9 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btclog"
 )
 
 const (
@@ -204,6 +206,9 @@ func waitNetwork() {
 
 func TestMain(m *testing.M) {
 	tLogger = util.StdOutLogger("TEST", util.LevelTrace)
+	// Connect no longer sets up the utxowallet (btclog) subsystem logging, so
+	// route it to stdout here to keep NTRNO/TXMGR/CHAIN/… visible in tests.
+	utxowallet.UseLogger(btclog.NewBackend(os.Stdout))
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {

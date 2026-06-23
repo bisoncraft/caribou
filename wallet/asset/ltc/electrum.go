@@ -29,7 +29,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
@@ -96,7 +95,6 @@ func ltcElectrumChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 		ChainParams: chainParams,
 		NetParams:   ltcNetParams(chainParams),
 		Info:        WalletInfo,
-		LogWallet:   logNeutrino,
 	}
 }
 
@@ -113,11 +111,10 @@ func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params
 }
 
 // ltcSPVChainConfig is the LTC parameterization of the shared NativeWallet driven
-// by the neutrino (SPV) backend rather than electrum: same wallet, LTC's seeds
-// and chain-service wrapper.
+// by the neutrino (SPV) backend rather than electrum: same wallet, LTC's seeds.
+// The neutrino chain-service wrapper is shared (btc.btcChainService).
 func ltcSPVChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
-	return btc.SPVChainConfig(ltcElectrumChainConfig(chainParams), ltcNeutrinoSeeds(chainParams),
-		func(cs *spv.ChainService) btc.PeerManagerChainService { return &ltcChainService{cs} })
+	return btc.SPVChainConfig(ltcElectrumChainConfig(chainParams), ltcNeutrinoSeeds(chainParams))
 }
 
 // ltcNeutrinoSeeds returns the default neutrino seed peers for an LTC network.

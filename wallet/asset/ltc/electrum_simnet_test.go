@@ -41,6 +41,8 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
+	"github.com/btcsuite/btclog"
 )
 
 // ltcGammaSeed is the HD seed for the LTC gamma wallet, matching
@@ -61,6 +63,9 @@ var (
 // here. Non-harness TestMains live in other files with !harness constraints.
 func TestMain(m *testing.M) {
 	ltcLogger = util.StdOutLogger("LTCTEST", util.LevelTrace)
+	// Connect no longer sets up the utxowallet (btclog) subsystem logging, so
+	// route it to stdout here to keep NTRNO/TXMGR/CHAIN/… visible in tests.
+	utxowallet.UseLogger(btclog.NewBackend(os.Stdout))
 	var shutdown func()
 	ltcCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {

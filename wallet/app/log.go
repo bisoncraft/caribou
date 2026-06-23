@@ -10,6 +10,8 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
+	"github.com/btcsuite/btclog"
 	"github.com/decred/slog"
 	"github.com/jrick/logrotate/rotator"
 )
@@ -65,6 +67,12 @@ func InitLogging(logFilename, lvl string, stdout bool, utc bool) (lm *util.Logge
 		os.Exit(1)
 	}
 	lm.SetLevelsFromMap(defaultLogLevelMap)
+
+	// Route the shared utxowallet subsystems (which use btclog, not slog) to the
+	// same destination as the app loggers, so their output lands in the single
+	// app log file (and stdout) rather than a parallel per-wallet file.
+	utxowallet.UseLogger(btclog.NewBackend(&logWriter{logRotator, stdout}))
+
 	return lm, func() {
 		_ = logRotator.Close()
 	}

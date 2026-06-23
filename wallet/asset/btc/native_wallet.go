@@ -81,7 +81,6 @@ type ChainConfig struct {
 	ChainParams *chaincfg.Params
 	NetParams   *netparams.ChainParams
 	Info        *asset.WalletInfo
-	LogWallet   func(walletDir string) error // per-asset logger setup (logNeutrino)
 	// NewBackend stands up the chain backend for this wallet — an electrum
 	// network + client for electrum wallets, a neutrino chain service + client
 	// for SPV wallets. It returns an unstarted backend; the wallet owns
@@ -131,7 +130,6 @@ func btcElectrumChainConfig(chainParams *chaincfg.Params) ChainConfig {
 		ChainParams: chainParams,
 		NetParams:   btcNetParams(chainParams),
 		Info:        WalletInfo,
-		LogWallet:   logNeutrino,
 	}
 }
 
@@ -167,9 +165,6 @@ var btcElectrumServers = map[string]*electrum.ServerAddr{
 // wallet types. No chain backend is started here. Shared by the btc and ltc
 // asset packages.
 func CreateElectrumWallet(cc ChainConfig, privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32) error {
-	if err := cc.LogWallet(walletDir); err != nil {
-		return fmt.Errorf("error initializing wallet logging: %w", err)
-	}
 
 	loader := wallet.NewLoader(cc.NetParams, walletDir, true, dbTimeout, 0) // recovery_window=0; see Connect
 	pubPass := []byte(wallet.InsecurePubPassphrase)
@@ -408,9 +403,6 @@ func (w *NativeWallet) Locked() bool {
 // (electrum or neutrino), and launches background goroutines for tx-history sync
 // and peer monitoring. Satisfies util.Connector.
 func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	if err := w.cfg.LogWallet(w.dir); err != nil {
-		return nil, fmt.Errorf("native: error initializing logging: %w", err)
-	}
 
 	// recoveryWindow drives address recovery on open, and the two backends use it
 	// differently. The electrum client probes each derived address's history

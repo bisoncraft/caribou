@@ -83,10 +83,10 @@ var _ peerManagedBackend = (*neutrinoBackend)(nil)
 
 // neutrinoBackendFactory returns a ChainConfig.NewBackend that stands up a
 // neutrino chain service + NeutrinoClient for cc's chain. seeds are the
-// network's default peers and newSPVService wraps the chain service into the
-// peer manager's SPVService — both chain-specific (btc and ltc serve some
-// neutrino queries differently), supplied by the chain's SPVChainConfig call.
-func neutrinoBackendFactory(cc ChainConfig, seeds []string, newSPVService func(*spv.ChainService) PeerManagerChainService) func(dir string, log util.Logger) (chainBackend, error) {
+// network's default peers. The chain service is wrapped in btcChainService for
+// the peer manager (which needs only AddPeer/RemovePeer/Peers) — a chain-
+// agnostic adapter shared by btc and ltc.
+func neutrinoBackendFactory(cc ChainConfig, seeds []string) func(dir string, log util.Logger) (chainBackend, error) {
 	return func(dir string, log util.Logger) (chainBackend, error) {
 		neutrinoDBPath := filepath.Join(dir, neutrinoDBName)
 		db, err := walletdb.Create("bdb", neutrinoDBPath, true, dbTimeout)
@@ -109,7 +109,7 @@ func neutrinoBackendFactory(cc ChainConfig, seeds []string, newSPVService func(*
 			return nil, fmt.Errorf("neutrino: create chain service: %w", err)
 		}
 
-		pm := NewSPVPeerManager(newSPVService(cs), seeds, dir, log, cc.ChainParams.DefaultPort)
+		pm := NewSPVPeerManager(&btcChainService{cs}, seeds, dir, log, cc.ChainParams.DefaultPort)
 
 		return &neutrinoBackend{
 			NeutrinoClient: chain.NewNeutrinoClient(cc.NetParams, cs),
@@ -122,19 +122,17 @@ func neutrinoBackendFactory(cc ChainConfig, seeds []string, newSPVService func(*
 
 // SPVChainConfig returns base configured to drive the shared NativeWallet with
 // the neutrino (BIP-157/158) backend — i.e. as an SPV wallet rather than an
-// electrum one. seeds are the network's default peers and newSPVService wraps
-// the neutrino chain service for the peer manager; both are chain-specific. btc
-// and ltc build their SPV wallet by passing their electrum ChainConfig here.
-func SPVChainConfig(base ChainConfig, seeds []string, newSPVService func(*spv.ChainService) PeerManagerChainService) ChainConfig {
-	base.NewBackend = neutrinoBackendFactory(base, seeds, newSPVService)
+// electrum one. seeds are the network's default peers. btc and ltc build their
+// SPV wallet by passing their electrum ChainConfig here.
+func SPVChainConfig(base ChainConfig, seeds []string) ChainConfig {
+	base.NewBackend = neutrinoBackendFactory(base, seeds)
 	base.RecoveryWindow = neutrinoRecoveryWindow
 	return base
 }
 
 // btcSPVChainConfig returns the ChainConfig for a BTC SPV wallet.
 func btcSPVChainConfig(chainParams *chaincfg.Params) ChainConfig {
-	return SPVChainConfig(btcElectrumChainConfig(chainParams), btcNeutrinoSeeds(chainParams.Net),
-		func(cs *spv.ChainService) PeerManagerChainService { return &btcChainService{cs} })
+	return SPVChainConfig(btcElectrumChainConfig(chainParams), btcNeutrinoSeeds(chainParams.Net))
 }
 
 // btcNeutrinoSeeds returns the default neutrino seed peers for a BTC network.

@@ -25,8 +25,7 @@ func TestLtcNetParamsMappings(t *testing.T) {
 		t.Fatal("ltcNetParams(regtest) returned nil")
 	}
 
-	// Compile-time check: verify createSPVWallet and openSPVWallet exist with
-	// the signatures expected by btc.OpenSPVWallet / btc.Create.
+	// Compile-time check: verify createSPVWallet exists with the signature
+	// expected by btc.Create.
 	_ = createSPVWallet
-	_ = openSPVWallet
 }
