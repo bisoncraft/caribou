@@ -52,15 +52,26 @@ class MainActivity : AppCompatActivity() {
         }
         setContentView(webView)
 
-        // Start the core off the main thread; wallet boot can be slow.
+        // Start the core off the main thread; wallet boot can be slow. The
+        // start thread can outlive this Activity (e.g. a destroy during boot),
+        // so use the application context for the Toast rather than the Activity,
+        // and skip loadUrl if the Activity is already gone.
+        val appCtx = applicationContext
         thread(name = "bossw-start") {
             try {
-                // "mainnet" / "testnet" / "simnet". filesDir is app-private storage.
-                val url = app.start(filesDir.absolutePath, "simnet")
-                runOnUiThread { webView.loadUrl(url) }
+                // Network is set at build time via BuildConfig.WALLET_NET
+                // (default mainnet; override with -PwalletNet=simnet). filesDir
+                // is app-private storage.
+                val url = app.start(filesDir.absolutePath, BuildConfig.WALLET_NET)
+                // Hand the build-time network to the SPA (query param) so it can
+                // surface a non-mainnet indicator; a wallet must never be
+                // mistaken for one running on a different network.
+                val sep = if (url.contains('?')) '&' else '?'
+                val webUrl = "$url${sep}net=${BuildConfig.WALLET_NET}"
+                runOnUiThread { if (!isDestroyed) webView.loadUrl(webUrl) }
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(this, "Failed to start: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(appCtx, "Failed to start: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
