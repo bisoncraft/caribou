@@ -29,6 +29,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
@@ -109,4 +110,29 @@ func createLTCElectrumWallet(privPass, seed []byte, bday time.Time, walletDir st
 // Called by NewWallet for walletTypeElectrum.
 func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.ElectrumWallet {
 	return btc.NewElectrumWallet(ltcChainConfig(chainParams), cfg, log)
+}
+
+// ltcSPVChainConfig is the LTC parameterization of the shared lean wallet driven
+// by the neutrino (SPV) backend rather than electrum: same wallet, LTC's seeds
+// and chain-service wrapper.
+func ltcSPVChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
+	return btc.SPVChainConfig(ltcChainConfig(chainParams), ltcNeutrinoSeeds(chainParams),
+		func(cs *spv.ChainService) btc.PeerManagerChainService { return &ltcChainService{cs} })
+}
+
+// ltcNeutrinoSeeds returns the default neutrino seed peers for an LTC network.
+func ltcNeutrinoSeeds(chainParams *chaincfg.Params) []string {
+	switch chainParams.Name {
+	case TestNet4Params.Name:
+		return append([]string{"127.0.0.1:19335"}, testnet4Seeds...)
+	case RegressionNetParams.Name:
+		return []string{"127.0.0.1:20585"}
+	}
+	return nil
+}
+
+// openLTCSPVWallet constructs the shared lean wallet driven by the neutrino
+// backend with LTC's config. Called by NewWallet for walletTypeSPV.
+func openLTCSPVWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.ElectrumWallet {
+	return btc.NewElectrumWallet(ltcSPVChainConfig(chainParams), cfg, log)
 }

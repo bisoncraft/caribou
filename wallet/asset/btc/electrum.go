@@ -289,16 +289,6 @@ func openElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, l
 	return NewElectrumWallet(btcChainConfig(chainParams), cfg, log)
 }
 
-// btcSPVChainConfig returns the ChainConfig for a BTC SPV wallet: the same lean
-// wallet as electrum, but driven by the neutrino backend and opened with a
-// recovery window so btcwallet's compact-filter scan discovers funds.
-func btcSPVChainConfig(chainParams *chaincfg.Params) ChainConfig {
-	cc := btcChainConfig(chainParams)
-	cc.NewBackend = neutrinoBackendFactory(cc)
-	cc.RecoveryWindow = neutrinoRecoveryWindow
-	return cc
-}
-
 // openSPVLeanWallet constructs the shared lean wallet driven by the neutrino
 // (BIP-157/158) backend. Called by NewWallet for walletTypeSPV.
 func openSPVLeanWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *ElectrumWallet {
