@@ -60,26 +60,7 @@ func NetworkCompatibilityData(net util.Network) (c CompatibilityData, err error)
 	if err != nil {
 		return
 	}
-
-	addr := common.HexToAddress("18d65fb8d60c1199bb1ad381be47aa692b482605")
-	var (
-		tTxHashFile    = filepath.Join(tDir, "test_tx_hash.txt")
-		tBlockHashFile = filepath.Join(tDir, "test_block1_hash.txt")
-		tContractFile  = filepath.Join(tDir, "test_usdc_contract_address.txt")
-	)
-	readIt := func(path string) string {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			panic(fmt.Sprintf("Problem reading simnet testing file %q: %v", path, err))
-		}
-		return strings.TrimSpace(string(b)) // mainly the trailing "\r\n"
-	}
-	return CompatibilityData{
-		Addr:      addr,
-		TokenAddr: common.HexToAddress(readIt(tContractFile)),
-		TxHash:    common.HexToHash(readIt(tTxHashFile)),
-		BlockHash: common.HexToHash(readIt(tBlockHashFile)),
-	}, nil
+	return ReadSimnetCompatibilityData(tDir, common.HexToAddress("18d65fb8d60c1199bb1ad381be47aa692b482605"), common.Address{})
 }
 
 // simnetDataDir returns the data directory for Ethereum simnet.
@@ -90,6 +71,42 @@ func simnetDataDir() (string, error) {
 	}
 
 	return filepath.Join(u.HomeDir, "dextest", "eth"), nil
+}
+
+// ReadSimnetCompatibilityData reads simnet compatibility data from the harness
+// info files in tDir. tokenAddr may be the zero address, in which case it is
+// read from test_usdc_contract_address.txt.
+func ReadSimnetCompatibilityData(tDir string, walletAddr common.Address, tokenAddr common.Address) (CompatibilityData, error) {
+	readFile := func(path string) (string, error) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+
+	txHash, err := readFile(filepath.Join(tDir, "test_tx_hash.txt"))
+	if err != nil {
+		return CompatibilityData{}, fmt.Errorf("read test tx hash: %w", err)
+	}
+	blockHash, err := readFile(filepath.Join(tDir, "test_block1_hash.txt"))
+	if err != nil {
+		return CompatibilityData{}, fmt.Errorf("read test block hash: %w", err)
+	}
+	if tokenAddr == (common.Address{}) {
+		contractAddr, err := readFile(filepath.Join(tDir, "test_usdc_contract_address.txt"))
+		if err != nil {
+			return CompatibilityData{}, fmt.Errorf("read test token address: %w", err)
+		}
+		tokenAddr = common.HexToAddress(contractAddr)
+	}
+
+	return CompatibilityData{
+		Addr:      walletAddr,
+		TokenAddr: tokenAddr,
+		TxHash:    common.HexToHash(txHash),
+		BlockHash: common.HexToHash(blockHash),
+	}, nil
 }
 
 // ETHConfig returns the ETH protocol configuration for the specified network.

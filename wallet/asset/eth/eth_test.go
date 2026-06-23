@@ -88,6 +88,8 @@ type testNode struct {
 	tokenParent       *assetWallet // only set for tokens
 	txConfirmations   map[common.Hash]uint32
 	txConfsErr        map[common.Hash]error
+	txAndReceiptBlock <-chan struct{}
+	txAndReceiptHit   chan<- struct{}
 }
 
 func newBalance(current, in, out uint64) *Balance {
@@ -265,6 +267,19 @@ func (n *testNode) transactionReceipt(ctx context.Context, txHash common.Hash) (
 }
 
 func (n *testNode) transactionAndReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, *types.Transaction, error) {
+	if n.txAndReceiptHit != nil {
+		select {
+		case n.txAndReceiptHit <- struct{}{}:
+		default:
+		}
+	}
+	if n.txAndReceiptBlock != nil {
+		select {
+		case <-n.txAndReceiptBlock:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
 	if n.receiptErr != nil {
 		return nil, nil, n.receiptErr
 	}
@@ -582,6 +597,103 @@ func TestCheckPendingTxs(t *testing.T) {
 	}
 }
 
+// TestCheckPendingTxsHeaderMiss exercises the path where the phase-2 header
+// pre-fetch returns nil (provider doesn't have the block yet). The tx must not
+// be finalized on the first call, must not trigger a lost-nonce action, and
+// must finalize correctly once the header becomes available on the next tip.
+// It also verifies that subsequent header-miss retries do not write to the DB
+// again (updated=false prevents spam writes).
+func TestCheckPendingTxsHeaderMiss(t *testing.T) {
+	_, eth, node, shutdown := tassetWallet(BipID)
+	defer shutdown()
+
+	const tip1 = uint64(1000)
+	const tip2 = uint64(1001)
+	const tip3 = uint64(1002)
+	now := uint64(time.Now().Unix())
+
+	emitChan := make(chan asset.WalletNotification, 128)
+	eth.emit = asset.NewWalletEmitter(emitChan, BipID, eth.log)
+
+	db := eth.txDB.(*tTxDB)
+
+	val := GweiToWei(1)
+	pendingTx := eth.extendedTx(&genTxResult{
+		tx:     node.newTransaction(0, val),
+		txType: txdb.Send,
+		amt:    1,
+	})
+	// Timestamp=0 forces a header fetch; BlockNumber=0 means not yet mined.
+	pendingTx.Timestamp = 0
+	pendingTx.BlockNumber = 0
+
+	receipt := &types.Receipt{
+		BlockNumber:       big.NewInt(int64(tip1 - 2)),
+		EffectiveGasPrice: big.NewInt(1),
+	}
+	node.receipts[pendingTx.txHash] = receipt
+	node.receiptTxs[pendingTx.txHash], _ = pendingTx.tx()
+	// Deliberately omit node.hdrByHash entry so headerByHash returns (nil, nil).
+
+	eth.currentTip = &types.Header{Number: new(big.Int).SetUint64(tip1)}
+	eth.pendingTxs = []*extendedWalletTx{pendingTx}
+	eth.confirmedNonceAt = pendingTx.Nonce
+	eth.pendingNonceAt = new(big.Int).Add(pendingTx.Nonce, big.NewInt(1))
+
+	eth.checkPendingTxs()
+
+	// Tx must still be pending: header was unavailable so state is incomplete.
+	if len(eth.pendingTxs) != 1 {
+		t.Fatalf("expected 1 pending tx after header miss, got %d", len(eth.pendingTxs))
+	}
+	if pendingTx.Timestamp != 0 {
+		t.Errorf("Timestamp should still be 0 after header miss, got %d", pendingTx.Timestamp)
+	}
+	if pendingTx.BlockNumber != 0 {
+		t.Errorf("BlockNumber should still be 0 after header miss, got %d", pendingTx.BlockNumber)
+	}
+	// First save should have occurred via the !savedToDB path.
+	if !db.storeTxCalled {
+		t.Error("expected first DB save via !savedToDB, but storeTx was not called")
+	}
+	// No spurious action should be queued.
+	select {
+	case n := <-emitChan:
+		if _, ok := n.(*asset.ActionRequiredNote); ok {
+			t.Fatalf("unexpected action note after header miss: %v", n)
+		}
+	default:
+	}
+
+	// Second run: header still missing, tip advanced. Should NOT write to DB
+	// again — updated=false prevents spam writes on every tip.
+	db.storeTxCalled = false
+	eth.currentTip = &types.Header{Number: new(big.Int).SetUint64(tip2)}
+	eth.checkPendingTxs()
+	if db.storeTxCalled {
+		t.Error("DB should not be written again on subsequent header-miss retries")
+	}
+
+	// Third run: header now available. Tx should finalize and DB should be written.
+	node.hdrByHash[receipt.BlockHash] = &types.Header{
+		Number: receipt.BlockNumber,
+		Time:   now,
+	}
+	db.storeTxCalled = false
+	eth.currentTip = &types.Header{Number: new(big.Int).SetUint64(tip3)}
+	eth.checkPendingTxs()
+
+	if pendingTx.Timestamp == 0 {
+		t.Error("Timestamp should be set after header becomes available")
+	}
+	if pendingTx.BlockNumber == 0 {
+		t.Error("BlockNumber should be set after header becomes available")
+	}
+	if !db.storeTxCalled {
+		t.Error("expected DB write after successful finalization")
+	}
+}
+
 func TestTakeAction(t *testing.T) {
 	t.Parallel()
 	_, eth, node, shutdown := tassetWallet(BipID)
@@ -700,15 +812,14 @@ func TestTakeAction(t *testing.T) {
 
 }
 
-func TestCheckForNewBlocks(t *testing.T) {
+func TestApplyTipChange(t *testing.T) {
 	t.Parallel()
 	header0 := &types.Header{Number: new(big.Int)}
 	header1 := &types.Header{Number: big.NewInt(1)}
 	tests := []struct {
-		name              string
-		hashErr, blockErr error
-		bestHeader        *types.Header
-		hasTipChange      bool
+		name         string
+		bestHeader   *types.Header
+		hasTipChange bool
 	}{{
 		name:         "ok",
 		bestHeader:   header1,
@@ -716,6 +827,9 @@ func TestCheckForNewBlocks(t *testing.T) {
 	}, {
 		name:       "ok same hash",
 		bestHeader: header0,
+	}, {
+		name:       "ignore lower height",
+		bestHeader: &types.Header{Number: big.NewInt(-1)},
 	}}
 
 	for _, test := range tests {
@@ -725,7 +839,6 @@ func TestCheckForNewBlocks(t *testing.T) {
 		emit := asset.NewWalletEmitter(notes, BipID, tLogger)
 
 		node.bestHdr = test.bestHeader
-		node.bestHdrErr = test.blockErr
 		w := &ETHWallet{
 			assetWallet: &assetWallet{
 				baseWallet: &baseWallet{
@@ -746,7 +859,7 @@ func TestCheckForNewBlocks(t *testing.T) {
 		}
 		w.wallets = map[uint32]*assetWallet{BipID: w.assetWallet}
 		w.assetWallet.connected.Store(true)
-		w.checkForNewBlocks(ctx)
+		w.applyTipChange(test.bestHeader)
 
 		if test.hasTipChange {
 		out:
@@ -765,12 +878,182 @@ func TestCheckForNewBlocks(t *testing.T) {
 				}
 			}
 		} else {
-			if w.currentTip.Number.Cmp(test.bestHeader.Number) != 0 {
+			if w.currentTip.Number.Cmp(header0.Number) != 0 {
 				t.Fatalf("tip was changed. wasn't supposed to be changed")
 			}
 		}
 		cancel()
 
+	}
+}
+
+func TestApplyTipChangeDoesNotWaitForPendingTxChecks(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	header0 := &types.Header{Number: big.NewInt(0)}
+	header1 := &types.Header{Number: big.NewInt(1)}
+	blockRPC := make(chan struct{})
+	rpcHit := make(chan struct{}, 1)
+	node := &testNode{
+		bestHdr:           header1,
+		txAndReceiptBlock: blockRPC,
+		txAndReceiptHit:   rpcHit,
+	}
+	notes := make(chan asset.WalletNotification, 2)
+	emit := asset.NewWalletEmitter(notes, BipID, tLogger)
+
+	pendingTx := &extendedWalletTx{
+		WalletTransaction: &txdb.WalletTransaction{
+			Type:   txdb.Send,
+			Amount: 1,
+			Fees:   1,
+		},
+		txHash: common.HexToHash("0x1"),
+		Nonce:  big.NewInt(1),
+	}
+	w := &ETHWallet{
+		assetWallet: &assetWallet{
+			baseWallet: &baseWallet{
+				node:             node,
+				addr:             node.address(),
+				ctx:              ctx,
+				log:              tLogger,
+				currentTip:       header0,
+				confirmedNonceAt: new(big.Int),
+				pendingNonceAt:   big.NewInt(2),
+				pendingTxs:       []*extendedWalletTx{pendingTx},
+				txDB:             &tTxDB{},
+				finalizeConfs:    txConfsNeededToConfirm,
+			},
+			log:     tLogger.SubLogger("ETH"),
+			emit:    emit,
+			assetID: BipID,
+		},
+	}
+	w.wallets = map[uint32]*assetWallet{BipID: w.assetWallet}
+	w.assetWallet.connected.Store(true)
+
+	w.applyTipChange(header1)
+
+	select {
+	case <-rpcHit:
+	case <-time.After(time.Second):
+		t.Fatal("transactionAndReceipt was not called")
+	}
+
+	select {
+	case ni := <-notes:
+		tipNote, ok := ni.(*asset.TipChangeNote)
+		if !ok {
+			t.Fatalf("expected tip change note, got %T", ni)
+		}
+		if tipNote.Tip != 1 {
+			t.Fatalf("expected tip 1, got %d", tipNote.Tip)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("tip change blocked on pending tx receipt fetch")
+	}
+
+	close(blockRPC)
+}
+
+func TestApplyTipChangeCoalescesPendingTxChecks(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	header0 := &types.Header{Number: big.NewInt(0)}
+	blockRPC := make(chan struct{})
+	rpcHit := make(chan struct{}, 4)
+	node := &testNode{
+		txAndReceiptBlock: blockRPC,
+		txAndReceiptHit:   rpcHit,
+		receiptErr:        asset.CoinNotFoundError,
+	}
+	w := &ETHWallet{
+		assetWallet: &assetWallet{
+			baseWallet: &baseWallet{
+				node:             node,
+				addr:             node.address(),
+				ctx:              ctx,
+				log:              tLogger,
+				currentTip:       header0,
+				confirmedNonceAt: new(big.Int),
+				pendingNonceAt:   big.NewInt(2),
+				pendingTxs: []*extendedWalletTx{{
+					WalletTransaction: &txdb.WalletTransaction{Type: txdb.Send, Amount: 1, Fees: 1},
+					txHash:            common.HexToHash("0x1"),
+					Nonce:             big.NewInt(1),
+				}},
+				txDB:          &tTxDB{},
+				finalizeConfs: txConfsNeededToConfirm,
+			},
+			log:     tLogger.SubLogger("ETH"),
+			emit:    asset.NewWalletEmitter(make(chan asset.WalletNotification, 4), BipID, tLogger),
+			assetID: BipID,
+		},
+	}
+	w.wallets = map[uint32]*assetWallet{BipID: w.assetWallet}
+	w.assetWallet.connected.Store(true)
+
+	w.applyTipChange(&types.Header{Number: big.NewInt(1)})
+	select {
+	case <-rpcHit:
+	case <-time.After(time.Second):
+		t.Fatal("first pending tx check did not start")
+	}
+
+	w.applyTipChange(&types.Header{Number: big.NewInt(2)})
+	select {
+	case <-rpcHit:
+		t.Fatal("pending tx checks ran concurrently")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(blockRPC)
+
+	select {
+	case <-rpcHit:
+	case <-time.After(time.Second):
+		t.Fatal("queued pending tx check did not run after the first completed")
+	}
+}
+
+func TestSendLatestHeader(t *testing.T) {
+	t.Parallel()
+
+	hdr1 := &types.Header{Number: big.NewInt(1)}
+	hdr2 := &types.Header{Number: big.NewInt(2)}
+	ch := make(chan *types.Header, 1)
+	ch <- hdr1
+
+	sendLatestHeader(ch, hdr2)
+
+	select {
+	case hdr := <-ch:
+		if hdr != hdr2 {
+			t.Fatalf("expected latest header %v, got %v", hdr2.Number, hdr.Number)
+		}
+	default:
+		t.Fatal("expected header in channel")
+	}
+}
+
+func TestQueuePendingTxCheckNilContext(t *testing.T) {
+	t.Parallel()
+
+	w := &baseWallet{}
+	w.queuePendingTxCheck()
+
+	if w.pendingTxCheckQueued.Load() {
+		t.Fatal("nil-context wallet should not queue pending tx checks")
+	}
+	if w.pendingTxCheckRunning.Load() {
+		t.Fatal("nil-context wallet should not start pending tx checks")
 	}
 }
 
@@ -945,13 +1228,15 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 		}
 	} else {
 		node.tokenParent = &assetWallet{
-			baseWallet:       aw.baseWallet,
-			log:              tLogger.SubLogger("ETH"),
-			assetID:          BipID,
-			atomize:          WeiToGwei,
-			pendingApprovals: make(map[common.Address]*pendingApproval),
-			approvalCache:    make(map[common.Address]bool),
-			emit:             asset.NewWalletEmitter(emitChan, BipID, tLogger),
+			baseWallet:        aw.baseWallet,
+			log:               tLogger.SubLogger("ETH"),
+			assetID:           BipID,
+			evmify:            GweiToWei,
+			atomize:           WeiToGwei,
+			pendingTxCheckBal: new(big.Int),
+			pendingApprovals:  make(map[common.Address]*pendingApproval),
+			approvalCache:     make(map[common.Address]bool),
+			emit:              asset.NewWalletEmitter(emitChan, BipID, tLogger),
 		}
 		w = &TokenWallet{
 			assetWallet: aw,
@@ -1580,6 +1865,52 @@ func TestSend(t *testing.T) {
 	t.Run("eth", func(t *testing.T) { t.Parallel(); testSend(t, BipID) })
 	t.Run("token", func(t *testing.T) { t.Parallel(); testSend(t, usdcEthID) })
 	t.Run("link", func(t *testing.T) { t.Parallel(); testSend(t, linkEthID) })
+}
+
+func TestTokenSendEmitsParentBalanceChange(t *testing.T) {
+	t.Parallel()
+
+	w, eth, node, shutdown := tassetWallet(usdcEthID)
+	defer shutdown()
+
+	tokenWallet := w.(*TokenWallet)
+	notes := make(chan asset.WalletNotification, 8)
+	tokenWallet.emit = asset.NewWalletEmitter(notes, usdcEthID, tLogger)
+	tokenWallet.parent.emit = asset.NewWalletEmitter(notes, BipID, tLogger)
+
+	tx := tTx(0, 0, 0, &testAddressA, nil, 21000)
+	node.sendTxTx = tx
+	node.tokenContractor.transferTx = tx
+
+	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
+	tokenFees := WeiToGwei(maxFeeRate) * tokenGasesV1.Transfer
+
+	const val = 10e9
+	node.tokenContractor.bal = GweiToWei(val)
+	node.bal = GweiToWei(tokenFees)
+
+	if _, err := w.Send("dd93b447f7eBCA361805eBe056259853F3912E04", val, 0); err != nil {
+		t.Fatalf("unexpected send error: %v", err)
+	}
+
+	var seenToken, seenParent bool
+	for !(seenToken && seenParent) {
+		select {
+		case note := <-notes:
+			balNote, ok := note.(*asset.BalanceChangeNote)
+			if !ok {
+				continue
+			}
+			switch balNote.AssetID {
+			case usdcEthID:
+				seenToken = true
+			case BipID:
+				seenParent = true
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("expected token and parent balance updates, saw token=%v parent=%v", seenToken, seenParent)
+		}
+	}
 }
 
 func testSend(t *testing.T, assetID uint32) {

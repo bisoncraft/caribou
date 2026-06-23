@@ -279,7 +279,7 @@ func (m *MRPCTest) TestMainnetCompliance(t *testing.T) {
 	}
 
 	log := util.StdOutLogger("T", util.LevelTrace)
-	providers, err := connectProviders(ctx, providerLookup, log, cfg.ChainID, util.Mainnet, "")
+	providers, err := connectProviders(ctx, providerLookup, log, cfg.ChainID, util.Mainnet, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
