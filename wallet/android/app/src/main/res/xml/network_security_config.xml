@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The appserver runs on loopback in-process and the WebView loads it over
+     plaintext HTTP. Loopback traffic never leaves the device, so cleartext is
+     permitted only for localhost. Note that on Android the loopback interface
+     is shared by every app on the device, so this is not private to this app:
+     the appserver's token auth, not network isolation, is what gates wallet
+     operations. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
