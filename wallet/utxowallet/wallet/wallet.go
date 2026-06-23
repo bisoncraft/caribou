@@ -133,6 +133,13 @@ type Wallet struct {
 	chainClientSynced  bool
 	chainClientSyncMtx sync.Mutex
 
+	// Owned backend — set when BackendKind and dataDir are provided via the
+	// Loader. When non-nil, Synchronize() builds and starts it automatically;
+	// the wallet is then responsible for the full backend lifecycle.
+	backendKind BackendKind
+	backend     walletBackend
+	dataDir     string
+
 	newAddrMtx sync.Mutex
 
 	lockedOutpoints    map[wire.OutPoint]struct{}
@@ -207,8 +214,58 @@ func (w *Wallet) Start() {
 	go w.walletLocker()
 }
 
-// Synchronize starts syncing the chain.
-func (w *Wallet) Synchronize(chainClient chain.Backend) {
+// Synchronize starts syncing the chain. When the wallet owns its backend
+// (backendKind + dataDir were set via the Loader and no backend has been built
+// yet), it builds and starts the backend first, then wires it as the chain
+// client. When a backend has already been started (e.g. across a rescan),
+// Synchronize re-wires it without rebuilding.
+//
+// Callers that manage their own chain backend (legacy SPV path, tests) may
+// continue to call SynchronizeWith instead.
+func (w *Wallet) Synchronize() error {
+	w.quitMu.Lock()
+	select {
+	case <-w.quit:
+		w.quitMu.Unlock()
+		return nil
+	default:
+	}
+	w.quitMu.Unlock()
+
+	// Build the owned backend on first call (or after a full Shutdown).
+	if w.dataDir != "" && w.backend == nil {
+		b, err := newBackend(w.backendKind, w.chainParams, w.dataDir, log)
+		if err != nil {
+			return fmt.Errorf("wallet: build backend: %w", err)
+		}
+		w.backend = b
+	}
+
+	var chainClient chain.Backend
+	if w.backend != nil {
+		// Start the backend when it hasn't been started yet (normal connect)
+		// or it was stopped and needs restarting (rescan path calls Start
+		// before re-calling Synchronize). Start is idempotent; calling it
+		// on an already-running backend is a no-op.
+		if err := w.backend.Start(); err != nil {
+			return fmt.Errorf("wallet: start backend: %w", err)
+		}
+		chainClient = w.backend
+	}
+
+	if chainClient == nil {
+		return errors.New("wallet: no chain client available (call SynchronizeWith to provide one)")
+	}
+
+	return w.synchronize(chainClient)
+}
+
+// SynchronizeWith wires an externally-provided chain backend and launches the
+// sync goroutines. It is the legacy path used by callers that build and manage
+// their own backend (the old SPV wallet, tests). Callers that want the wallet
+// to own its backend should use Synchronize() after setting the loader's
+// BackendKind.
+func (w *Wallet) SynchronizeWith(chainClient chain.Backend) {
 	w.quitMu.Lock()
 	select {
 	case <-w.quit:
@@ -218,12 +275,18 @@ func (w *Wallet) Synchronize(chainClient chain.Backend) {
 	}
 	w.quitMu.Unlock()
 
+	_ = w.synchronize(chainClient)
+}
+
+// synchronize is the shared implementation: it wires chainClient and starts the
+// sync goroutines. The lock-then-bail pattern matches the original Synchronize.
+func (w *Wallet) synchronize(chainClient chain.Backend) error {
 	// TODO: Ignoring the new client when one is already set breaks callers
 	// who are replacing the client, perhaps after a disconnect.
 	w.chainClientLock.Lock()
 	if w.chainClient != nil {
 		w.chainClientLock.Unlock()
-		return
+		return nil
 	}
 	w.chainClient = chainClient
 
@@ -244,6 +307,7 @@ func (w *Wallet) Synchronize(chainClient chain.Backend) {
 	go w.rescanBatchHandler()
 	go w.rescanProgressHandler()
 	go w.rescanRPCHandler()
+	return nil
 }
 
 // requireChainClient marks that a wallet method can only be completed when the
@@ -312,7 +376,9 @@ func (w *Wallet) ShuttingDown() bool {
 	}
 }
 
-// WaitForShutdown blocks until all wallet goroutines have finished executing.
+// WaitForShutdown blocks until all wallet goroutines have finished executing and,
+// when the wallet owns its backend, until the backend's own goroutines have also
+// stopped. This ensures a clean stop-then-restart cycle (e.g. across a rescan).
 func (w *Wallet) WaitForShutdown() {
 	w.chainClientLock.Lock()
 	if w.chainClient != nil {
@@ -320,7 +386,89 @@ func (w *Wallet) WaitForShutdown() {
 	}
 	w.chainClientLock.Unlock()
 	w.wg.Wait()
+	// For the owned backend, wait after the wallet goroutines have exited, not
+	// before. The wallet goroutines interact with the backend; waiting here
+	// ensures the rescan restart can safely call backend.Start() next.
+	if w.backend != nil {
+		w.backend.WaitForShutdown()
+	}
 }
+
+// ─── Owned-backend methods ────────────────────────────────────────────────────
+
+// Shutdown fully tears down the wallet's owned chain backend (if any). Unlike
+// Stop (which only stops the wallet goroutines and the chain client, preserving
+// a neutrino service across rescans), Shutdown releases all backend resources:
+// the electrum network connection, or the neutrino chain service + database.
+// The wallet goroutines must be stopped (via Stop + WaitForShutdown) before
+// calling Shutdown to avoid a race between the goroutines and the teardown.
+//
+// Callers that manage their own backend (legacy SPV path) do not use this method.
+func (w *Wallet) Shutdown() {
+	if w.backend != nil {
+		w.backend.Shutdown()
+	}
+}
+
+// SyncHeight reports the locally-synced header tip, the target height, and
+// whether the backend considers itself current. It delegates to the owned backend
+// when present; if the wallet has no backend it returns (0, 0, false).
+func (w *Wallet) SyncHeight() (localTip, targetTip int32, synced bool) {
+	if w.backend != nil {
+		return w.backend.SyncHeight()
+	}
+	return 0, 0, false
+}
+
+// Connected reports whether the backend has a live server/peer connection.
+func (w *Wallet) Connected() bool {
+	if w.backend != nil {
+		return w.backend.Connected()
+	}
+	return false
+}
+
+// CanRescan reports whether the backend supports in-place rescanning. Neutrino
+// backends return true; electrum backends return false.
+func (w *Wallet) CanRescan() bool {
+	if w.backend != nil {
+		return w.backend.CanRescan()
+	}
+	return false
+}
+
+// Peers returns the wallet's network peers when the backend manages peers
+// (neutrino); the electrum backend has no peer concept and returns nil.
+func (w *Wallet) Peers() ([]Peer, error) {
+	if pb, ok := w.backend.(peerBackend); ok {
+		return pb.walletPeers()
+	}
+	return nil, nil
+}
+
+// AddPeer adds a persistent peer, when the backend manages peers.
+func (w *Wallet) AddPeer(addr string) error {
+	if pb, ok := w.backend.(peerBackend); ok {
+		return pb.walletAddPeer(addr)
+	}
+	return errors.New("this wallet's backend does not support peer management")
+}
+
+// RemovePeer removes a peer added with AddPeer, when the backend manages peers.
+func (w *Wallet) RemovePeer(addr string) error {
+	if pb, ok := w.backend.(peerBackend); ok {
+		return pb.walletRemovePeer(addr)
+	}
+	return errors.New("this wallet's backend does not support peer management")
+}
+
+// BackendKind returns the kind of backend this wallet owns, or BackendElectrum
+// if no backend has been assigned.
+func (w *Wallet) BackendKind() BackendKind {
+	return w.backendKind
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // SynchronizingToNetwork returns whether the wallet is currently synchronizing
 // with the Bitcoin network.

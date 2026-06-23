@@ -8,8 +8,8 @@ package btc
 // and SPV wallet types — they differ only in the chain backend it builds. It
 // does NOT use ExchangeWalletSPV, baseWallet, intermediaryWallet, or tipRedeemer.
 // All UTXO operations are delegated to wallet.Wallet (the in-tree utxowallet)
-// driven by a chainBackend (chain.ElectrumClient or chain.NeutrinoClient). Swap /
-// FindRedemption methods are intentionally absent.
+// which owns and manages its chain backend. Swap / FindRedemption methods are
+// intentionally absent.
 
 import (
 	"context"
@@ -27,8 +27,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
@@ -40,86 +38,25 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// chainBackend is the chain.Backend a wallet drives, plus the two
-// backend-specific signals the wallet needs for status reporting: sync progress
-// and connectivity. Both chain.ElectrumClient and chain.NeutrinoClient satisfy
-// it, so the wallet stays backend-agnostic.
-type chainBackend interface {
-	chain.Backend
-	SyncHeight() (localTip, targetTip int32, synced bool)
-	Connected() bool
-	// Shutdown fully tears the backend down. chain.Backend.Stop may stop only a
-	// client while keeping a service running (neutrino does this so the wallet
-	// can restart the client across a rescan without re-downloading the chain);
-	// Shutdown always releases everything and is what the wallet calls on
-	// disconnect.
-	Shutdown()
-	// CanRescan reports whether the wallet can perform an in-place rescan with
-	// this backend — i.e. its client can be stopped and restarted (keeping any
-	// synced service). Neutrino can; the electrum backend cannot restart its
-	// network, and never offered a rescan anyway.
-	CanRescan() bool
-}
-
-// peerManagedBackend is an optional capability of a chainBackend: backends with
-// a peer concept (neutrino) implement it so the wallet can satisfy
-// asset.PeerManager; the electrum backend does not.
-type peerManagedBackend interface {
-	Peers() ([]*asset.WalletPeer, error)
-	AddPeer(addr string) error
-	RemovePeer(addr string) error
-}
-
 // ChainConfig carries the per-chain values that parameterize the shared
 // NativeWallet, so the btc and ltc asset packages can share one asset.Wallet
 // implementation across both the electrum and SPV wallet types. (The
 // implementation lives here in asset/btc for now; it will move to a neutral home
-// later, together with the other shared wallet.Wallet stack. asset/ltc imports
-// it.)
+// later, together with the other shared wallet.Wallet stack. asset/ltc imports it.)
 type ChainConfig struct {
 	Chain       bisonwire.Chain
 	ChainParams *chaincfg.Params
 	NetParams   *netparams.ChainParams
 	Info        *asset.WalletInfo
-	// NewBackend stands up the chain backend for this wallet — an electrum
-	// network + client for electrum wallets, a neutrino chain service + client
-	// for SPV wallets. It returns an unstarted backend; the wallet owns
-	// Start/Stop/Shutdown/WaitForShutdown. Defaults to the electrum backend when
-	// nil (see NewNativeWallet).
-	NewBackend func(dir string, log util.Logger) (chainBackend, error)
-	// RecoveryWindow is the default address-recovery window the wallet opens
-	// with. Electrum leaves it 0 (it queries address history directly and only
-	// recovers on an explicit restore); neutrino sets it >0 so btcwallet's
-	// recovery drives the compact-filter scan that discovers funds. The
-	// "recoverywindow" wallet setting, when present, overrides this.
+	// BackendKind selects the chain backend the wallet.Wallet builds and owns.
+	// Electrum wallets use BackendElectrum (default); SPV wallets use
+	// BackendNeutrino. The wallet constructs the backend from its chainParams and
+	// dataDir on the first Synchronize() call.
+	BackendKind wallet.BackendKind
+	// RecoveryWindow is the default address-recovery window. Electrum leaves it 0;
+	// neutrino sets it >0 so btcwallet's recovery drives the compact-filter scan.
+	// The "recoverywindow" wallet setting, when present, overrides this.
 	RecoveryWindow uint32
-}
-
-// electrumBackendFactory returns a NewBackend that stands up an electrumx
-// network + ElectrumClient for cc's chain. It is the default backend.
-func electrumBackendFactory(cc ChainConfig) func(dir string, log util.Logger) (chainBackend, error) {
-	return func(dir string, log util.Logger) (chainBackend, error) {
-		if len(cc.NetParams.ElectrumServers) == 0 {
-			return nil, fmt.Errorf("electrum: no built-in server for network %q", cc.ChainParams.Name)
-		}
-		srvAddr := cc.NetParams.ElectrumServers[0]
-		if err := srvAddr.Validate(); err != nil {
-			return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
-		}
-		chainCfg, err := electrum.NewChainConfig(cc.Chain, cc.NetParams)
-		if err != nil {
-			return nil, fmt.Errorf("electrum: chain config: %w", err)
-		}
-		network, err := electrum.NewNetwork(&electrum.Config{
-			Chain:         chainCfg,
-			TrustedServer: srvAddr,
-			DataDir:       dir,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("electrum: new network: %w", err)
-		}
-		return chain.NewElectrumClient(cc.NetParams, network)
-	}
 }
 
 // btcElectrumChainConfig returns the ChainConfig for the BTC electrum wallet.
@@ -129,6 +66,7 @@ func btcElectrumChainConfig(chainParams *chaincfg.Params) ChainConfig {
 		ChainParams: chainParams,
 		NetParams:   btcTableNetParams(chainParams),
 		Info:        WalletInfo,
+		BackendKind: wallet.BackendElectrum,
 	}
 }
 
@@ -199,7 +137,8 @@ func createElectrumWallet(privPass, seed []byte, bday time.Time, walletDir strin
 
 // NativeWallet is an asset.Wallet backed by an in-process chain backend — an
 // electrumx connection (electrum wallets) or a neutrino chain service (SPV
-// wallets). It does NOT embed any ExchangeWallet type.
+// wallets). It does NOT embed any ExchangeWallet type. The chain backend is owned
+// by the underlying wallet.Wallet, which builds and starts it on Synchronize().
 type NativeWallet struct {
 	cfg         ChainConfig
 	log         util.Logger
@@ -215,11 +154,10 @@ type NativeWallet struct {
 	recoveryWindow uint32
 
 	// populated during Connect
-	btcw        *wallet.Wallet
-	loader      *wallet.Loader
-	chainClient chainBackend
+	btcw   *wallet.Wallet
+	loader *wallet.Loader
 	// rescanMtx serializes Rescan, which stops and restarts the wallet and the
-	// chain client underneath the running notification goroutines.
+	// chain backend underneath the running notification goroutines.
 	rescanMtx sync.Mutex
 	// txdb is the master transaction database handle, scoped to this wallet's
 	// network and supplied by Core via the wallet config. Core owns its lifecycle.
@@ -247,26 +185,59 @@ var _ asset.PeerManager = (*NativeWallet)(nil)
 // (neutrino/SPV); the electrum backend has no peer concept. Satisfies
 // asset.PeerManager.
 func (w *NativeWallet) Peers() ([]*asset.WalletPeer, error) {
-	if pm, ok := w.chainClient.(peerManagedBackend); ok {
-		return pm.Peers()
+	if w.btcw == nil {
+		return nil, nil
 	}
-	return nil, nil
+	walletPeers, err := w.btcw.Peers()
+	if err != nil {
+		return nil, err
+	}
+	return walletPeersToAsset(walletPeers), nil
 }
 
 // AddPeer adds a persistent peer, when the backend manages peers.
 func (w *NativeWallet) AddPeer(addr string) error {
-	if pm, ok := w.chainClient.(peerManagedBackend); ok {
-		return pm.AddPeer(addr)
+	if w.btcw == nil {
+		return errors.New("native: wallet not connected")
 	}
-	return errors.New("this wallet's backend does not support peer management")
+	return w.btcw.AddPeer(addr)
 }
 
 // RemovePeer removes a peer added with AddPeer, when the backend manages peers.
 func (w *NativeWallet) RemovePeer(addr string) error {
-	if pm, ok := w.chainClient.(peerManagedBackend); ok {
-		return pm.RemovePeer(addr)
+	if w.btcw == nil {
+		return errors.New("native: wallet not connected")
 	}
-	return errors.New("this wallet's backend does not support peer management")
+	return w.btcw.RemovePeer(addr)
+}
+
+// walletPeersToAsset maps []wallet.Peer to []*asset.WalletPeer at the
+// asset-package boundary.
+func walletPeersToAsset(peers []wallet.Peer) []*asset.WalletPeer {
+	if len(peers) == 0 {
+		return nil
+	}
+	out := make([]*asset.WalletPeer, len(peers))
+	for i, p := range peers {
+		out[i] = &asset.WalletPeer{
+			Addr:      p.Addr,
+			Connected: p.Connected,
+			Source:    walletPeerSourceToAsset(p.Source),
+		}
+	}
+	return out
+}
+
+// walletPeerSourceToAsset maps wallet.PeerSource → asset.PeerSource.
+func walletPeerSourceToAsset(s wallet.PeerSource) asset.PeerSource {
+	switch s {
+	case wallet.PeerDefault:
+		return asset.WalletDefault
+	case wallet.PeerUserAdded:
+		return asset.UserAdded
+	default:
+		return asset.Discovered
+	}
 }
 
 var _ asset.Rescanner = (*NativeWallet)(nil)
@@ -285,10 +256,10 @@ func (w *NativeWallet) Rescan(_ context.Context, _ uint64) error {
 	w.rescanMtx.Lock()
 	defer w.rescanMtx.Unlock()
 
-	if w.btcw == nil || w.chainClient == nil {
+	if w.btcw == nil {
 		return errors.New("native: cannot rescan, wallet not connected")
 	}
-	if !w.chainClient.CanRescan() {
+	if !w.btcw.CanRescan() {
 		// The electrum backend can't restart its network in place, and electrum
 		// rediscovers funds by re-querying address history on every sync anyway,
 		// so an explicit rescan isn't offered.
@@ -296,9 +267,8 @@ func (w *NativeWallet) Rescan(_ context.Context, _ uint64) error {
 	}
 
 	w.log.Info("Stopping wallet for full rescan...")
-	w.btcw.Stop() // also stops the chain client
+	w.btcw.Stop() // also stops the chain client (neutrino: client only)
 	w.btcw.WaitForShutdown()
-	w.chainClient.WaitForShutdown()
 
 	if err := w.forceRescan(); err != nil {
 		// Press on and restart so the wallet isn't left stopped.
@@ -307,10 +277,9 @@ func (w *NativeWallet) Rescan(_ context.Context, _ uint64) error {
 
 	w.log.Info("Restarting wallet to perform rescan...")
 	w.btcw.Start()
-	if err := w.chainClient.Start(); err != nil {
+	if err := w.btcw.Synchronize(); err != nil {
 		return fmt.Errorf("native: restarting chain backend for rescan: %w", err)
 	}
-	w.btcw.Synchronize(w.chainClient)
 	w.receiveTxLastQuery.Store(0)
 	return nil
 }
@@ -333,9 +302,6 @@ func (w *NativeWallet) forceRescan() error {
 // by cc, without opening or starting anything. Shared by the btc and ltc asset
 // packages for both the electrum and SPV wallet types.
 func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *NativeWallet {
-	if cc.NewBackend == nil {
-		cc.NewBackend = electrumBackendFactory(cc)
-	}
 	recoveryWindow := cc.RecoveryWindow
 	if s := cfg.Settings["recoverywindow"]; s != "" {
 		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
@@ -397,9 +363,9 @@ func (w *NativeWallet) Locked() bool {
 	return w.btcw == nil || w.btcw.Locked()
 }
 
-// Connect opens the btcwallet database, stands up and starts the chain backend
-// (electrum or neutrino), and launches background goroutines for tx-history sync
-// and peer monitoring. Satisfies util.Connector.
+// Connect opens the btcwallet database, wires the chain backend (which is built
+// and started inside wallet.Wallet via Synchronize), and launches background
+// goroutines for tx-history sync and peer monitoring. Satisfies util.Connector.
 func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
 	// recoveryWindow drives address recovery on open, and the two backends use it
@@ -411,7 +377,10 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// the wallet's addresses, so SPV wallets default the window >0 (see
 	// RecoveryWindow). 0 (the electrum default) runs no recovery; the
 	// "recoverywindow" setting overrides either default.
-	w.loader = wallet.NewLoader(w.netParams, w.dir, true, dbTimeout, w.recoveryWindow)
+	w.loader = wallet.NewLoader(
+		w.netParams, w.dir, true, dbTimeout, w.recoveryWindow,
+		wallet.WithBackendKind(w.cfg.BackendKind),
+	)
 	exists, err := w.loader.WalletExists()
 	if err != nil {
 		return nil, fmt.Errorf("native: error checking wallet existence: %w", err)
@@ -430,25 +399,18 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	defer errCloser.Done(w.log)
 	errCloser.Add(w.loader.UnloadWallet)
 
-	// Stand up the chain backend (electrum network + client for electrum wallets,
-	// a neutrino chain service + client for SPV wallets). The backend owns its own
-	// resources — its Start launches them and Shutdown/WaitForShutdown tear them
-	// down.
-	w.chainClient, err = w.cfg.NewBackend(w.dir, w.log)
-	if err != nil {
-		return nil, fmt.Errorf("native: new chain backend: %w", err)
+	// Synchronize builds the chain backend (if not built), starts it, and wires
+	// it as the wallet's chain client. The wallet owns the backend lifecycle.
+	w.log.Info("Synchronizing wallet with the chain backend...")
+	if err = w.btcw.Synchronize(); err != nil {
+		return nil, fmt.Errorf("native: synchronize: %w", err)
 	}
-	if err = w.chainClient.Start(); err != nil {
-		return nil, fmt.Errorf("native: couldn't start chain backend: %w", err)
-	}
-	errCloser.Add(func() error { w.chainClient.Shutdown(); return nil })
+	errCloser.Add(func() error {
+		w.btcw.Shutdown()
+		return nil
+	})
 
-	w.log.Info("Synchronizing BTC wallet with the chain backend...")
-	w.btcw.Synchronize(w.chainClient)
-
-	// Restore unconfirmed transactions from previous sessions. The master tx
-	// database handle is supplied by Core via the wallet config and its lifecycle
-	// is owned there, so there is nothing to open or close here.
+	// Restore unconfirmed transactions from previous sessions.
 	if w.txdb != nil {
 		pendingTxs, err := w.txdb.GetPendingTxs()
 		if err != nil {
@@ -470,13 +432,9 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
 	var wg sync.WaitGroup
 
-	// Tie wallet and chain-backend teardown to the Connect context. Nothing else
-	// in the success path shuts them down, so without this the wallet db stays
-	// open (leaking its handle and blocking a later reconnect via the bdb file
-	// lock) and the backend's goroutines and resources (the electrum network, or
-	// the neutrino service and db) leak. Unload the wallet first (it stops
-	// btcwallet and closes its db), then tear the backend down — mirroring the
-	// previous SPV wallet's Stop.
+	// Tie wallet and backend teardown to the Connect context. Unload the wallet
+	// first (it stops btcwallet and closes its db), then fully shut down the
+	// backend — mirroring the previous SPV wallet's Stop.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -484,8 +442,8 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		if err := w.loader.UnloadWallet(); err != nil {
 			w.log.Errorf("native: error unloading wallet on shutdown: %v", err)
 		}
-		w.chainClient.Shutdown()
-		w.chainClient.WaitForShutdown()
+		w.btcw.Shutdown()
+		w.btcw.WaitForShutdown()
 	}()
 
 	// Block-notification goroutine — watches the wallet's NtfnServer and
@@ -531,10 +489,14 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 // bestBlock returns the hash and height of the best synced block according to
 // the chain client, or zero/genesis values if not yet synced.
 func (w *NativeWallet) bestBlock() (*chainhash.Hash, int32) {
-	if w.chainClient == nil {
+	if w.btcw == nil {
 		return &chainhash.Hash{}, 0
 	}
-	h, height, err := w.chainClient.GetBestBlock()
+	cc := w.btcw.ChainClient()
+	if cc == nil {
+		return &chainhash.Hash{}, 0
+	}
+	h, height, err := cc.GetBestBlock()
 	if err != nil {
 		return &chainhash.Hash{}, 0
 	}
@@ -659,7 +621,7 @@ func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
 
 // SyncStatus returns the current chain-sync state.
 func (w *NativeWallet) SyncStatus() (*asset.SyncStatus, error) {
-	if w.chainClient == nil {
+	if w.btcw == nil {
 		return &asset.SyncStatus{}, nil
 	}
 
@@ -667,7 +629,7 @@ func (w *NativeWallet) SyncStatus() (*asset.SyncStatus, error) {
 	// syncing toward (the electrum server's reported best, the neutrino sync
 	// target). targetTip is always >= localTip, so progress climbs from near-0%
 	// to 100% as headers download rather than pinning at ~100%.
-	localTip, targetTip, backendSynced := w.chainClient.SyncHeight()
+	localTip, targetTip, backendSynced := w.btcw.SyncHeight()
 	if localTip < 0 {
 		return &asset.SyncStatus{}, nil
 	}
@@ -870,11 +832,11 @@ func (w *NativeWallet) peerLoop(ctx context.Context) {
 
 	var lastCount uint32
 	check := func() {
-		if w.chainClient == nil {
+		if w.btcw == nil {
 			return
 		}
 		var count uint32
-		if w.chainClient.Connected() {
+		if w.btcw.Connected() {
 			count = 1
 		}
 		if count != lastCount {

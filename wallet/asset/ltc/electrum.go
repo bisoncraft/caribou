@@ -85,7 +85,7 @@ func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params
 // Neutrino seeds are sourced from the assets table via the NetParams field.
 func ltcSPVChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 	base := ltcElectrumChainConfig(chainParams)
-	return btc.SPVChainConfig(base, base.NetParams.NeutrinoSeeds)
+	return btc.SPVChainConfig(base)
 }
 
 // openLTCSPVWallet constructs the shared NativeWallet driven by the neutrino
