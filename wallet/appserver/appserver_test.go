@@ -786,8 +786,14 @@ func TestPasswordCache(t *testing.T) {
 	defer shutdown()
 
 	password := encode.PassBytes("def")
-	authToken1 := s.authorize()
-	authToken2 := s.authorize()
+	authToken1, err := s.authorize()
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	authToken2, err := s.authorize()
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
 
 	key1, err := s.cacheAppPassword(password, authToken1)
 	if err != nil {

@@ -45,6 +45,7 @@ type App struct {
 	core     *core.Core
 	srv      *appserver.AppServer
 	srvCM    *util.ConnectionMaster
+	capToken string
 }
 
 // NewApp constructs an App. It does no work until Start is called.
@@ -58,6 +59,11 @@ func NewApp() *App {
 // (empty means mainnet). The appserver binds 127.0.0.1 on a random high port
 // with plaintext HTTP: loopback traffic never leaves the device, so there is no
 // TLS/self-signed-cert story, and the existing token auth is retained.
+//
+// Android loopback is shared by every app on the device, so the returned URL
+// carries a per-run capability token (?k=...) that the appserver requires on
+// every request. Only this WebView gets the token, so other local apps cannot
+// reach the server even though they can open the port.
 func (a *App) Start(dataDir, net string) (string, error) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
@@ -66,10 +72,18 @@ func (a *App) Start(dataDir, net string) (string, error) {
 		// Already running. The native shell shares one App across Activity
 		// instances, so a recreate can call Start while the core is still up;
 		// hand back the live URL so the WebView reattaches instead of erroring.
-		return "http://" + a.srv.Addr(), nil
+		return a.bootstrapURL(), nil
 	}
 	if dataDir == "" {
 		return "", errors.New("no data directory")
+	}
+
+	// Mint a per-run capability token. It is embedded in the bootstrap URL and
+	// required on every request, so only this WebView can reach the loopback
+	// server, not other apps on the device that can also open 127.0.0.1.
+	capToken, err := util.RandomHex(32)
+	if err != nil {
+		return "", fmt.Errorf("generate capability token: %w", err)
 	}
 
 	cfg := app.DefaultConfig
@@ -132,7 +146,9 @@ func (a *App) Start(dataDir, net string) (string, error) {
 	default:
 	}
 
-	srv, err := appserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), false))
+	webCfg := cfg.Web(clientCore, logMaker.Logger("WEB"), false)
+	webCfg.CapabilityToken = capToken
+	srv, err := appserver.New(webCfg)
 	if err != nil {
 		cancel()
 		a.wg.Wait()
@@ -174,10 +190,18 @@ func (a *App) Start(dataDir, net string) (string, error) {
 	a.core = clientCore
 	a.srv = srv
 	a.srvCM = srvCM
+	a.capToken = capToken
 
-	url := "http://" + srv.Addr()
-	a.log.Infof("Boss Wallet mobile listening at %s", url)
-	return url, nil
+	// Log the address, never the token.
+	a.log.Infof("Boss Wallet mobile listening at http://%s", srv.Addr())
+	return a.bootstrapURL(), nil
+}
+
+// bootstrapURL is the loopback URL the WebView loads. It carries the capability
+// token as a query param; the appserver swaps it for a cookie on first load and
+// strips it from the URL. a.srv and a.capToken must be set.
+func (a *App) bootstrapURL() string {
+	return "http://" + a.srv.Addr() + "/?k=" + a.capToken
 }
 
 // Stop locks wallets and tears down the appserver and core, waiting for clean
@@ -214,5 +238,6 @@ func (a *App) Stop() error {
 	a.core = nil
 	a.srv = nil
 	a.srvCM = nil
+	a.capToken = ""
 	return nil
 }

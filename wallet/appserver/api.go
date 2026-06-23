@@ -512,8 +512,28 @@ func (s *AppServer) apiBuildInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// errBadCredentials marks a login failure caused by rejected credentials (a
+// wrong password). Environmental failures (e.g. the companion app is not
+// paired, or caching the password failed after a valid login) are not tagged
+// with it, so only genuine credential rejections feed the brute-force throttle.
+var errBadCredentials = errors.New("bad credentials")
+
+// badCredentials tags err as a credential rejection (detected via
+// errors.Is(err, errBadCredentials)) while keeping a single-error unwrap chain,
+// so writeAPIError still resolves the user-facing message to err's root cause.
+type badCredentials struct{ err error }
+
+func (e badCredentials) Error() string        { return e.err.Error() }
+func (e badCredentials) Unwrap() error        { return e.err }
+func (e badCredentials) Is(target error) bool { return target == errBadCredentials }
+
 // apiLogin handles the 'login' API request.
 func (s *AppServer) apiLogin(w http.ResponseWriter, r *http.Request) {
+	if d := s.loginThrottle(); d > 0 {
+		s.writeAPIError(w, fmt.Errorf("too many failed login attempts, try again in %s", d.Round(time.Second)))
+		return
+	}
+
 	login := new(loginForm)
 	defer login.Pass.Clear()
 	if !readPost(w, r, login) {
@@ -522,9 +542,15 @@ func (s *AppServer) apiLogin(w http.ResponseWriter, r *http.Request) {
 
 	err := s.actuallyLogin(w, r, login)
 	if err != nil {
+		// Only a rejected password counts toward the throttle; environmental
+		// errors must not lock out the (single) legitimate client.
+		if errors.Is(err, errBadCredentials) {
+			s.noteLoginFailure()
+		}
 		s.writeAPIError(w, err)
 		return
 	}
+	s.noteLoginSuccess()
 
 	notes, pokes, err := s.core.Notifications(100)
 	if err != nil {
@@ -788,7 +814,11 @@ func (s *AppServer) apiChangeAppPass(w http.ResponseWriter, r *http.Request) {
 	// and cached passwords. However, we assign a new auth token and cache
 	// the new password (if it was previously cached) for this session.
 	s.deauth()
-	authToken := s.authorize()
+	authToken, err := s.authorize()
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("authorize: %w", err))
+		return
+	}
 	setCookie(authCK, authToken, w)
 	if passwordIsCached {
 		key, err := s.cacheAppPassword(form.NewAppPW, authToken)
@@ -939,15 +969,18 @@ func (s *AppServer) actuallyLogin(w http.ResponseWriter, r *http.Request, login 
 	pass, err := s.resolvePass(login.Pass, r)
 	defer zero(pass)
 	if err != nil {
-		return fmt.Errorf("password error: %w", err)
+		return badCredentials{fmt.Errorf("password error: %w", err)}
 	}
 	err = s.core.Login(pass)
 	if err != nil {
-		return fmt.Errorf("login error: %w", err)
+		return badCredentials{fmt.Errorf("login error: %w", err)}
 	}
 
 	if !s.isAuthed(r) {
-		authToken := s.authorize()
+		authToken, err := s.authorize()
+		if err != nil {
+			return fmt.Errorf("authorize: %w", err)
+		}
 		setCookie(authCK, authToken, w)
 		key, err := s.cacheAppPassword(pass, authToken)
 		if err != nil {

@@ -6,7 +6,6 @@ package appserver
 import (
 	"context"
 	"crypto/elliptic"
-	crand "crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
@@ -60,6 +59,15 @@ const (
 	// by automation clients (CLI, MCP server, scripts) in place of a browser
 	// session. It is only honored for loopback requests.
 	apiTokenHeader = "X-API-Token"
+	// capCK is the capability token cookie key. See capabilityMiddleware.
+	capCK = "capkey"
+	// loginFailFree is the number of consecutive failed logins allowed before
+	// the throttle starts delaying further attempts.
+	loginFailFree = 5
+	// loginBackoffBase and loginBackoffMax bound the capped exponential
+	// lockout applied to /api/login once loginFailFree is exceeded.
+	loginBackoffBase = time.Second
+	loginBackoffMax  = 5 * time.Minute
 	// notifyRoute is a route used for general notifications.
 	notifyRoute = "notify"
 	// The basis for content-security-policy. connect-src must be the final
@@ -213,6 +221,12 @@ type Config struct {
 	HttpProf        bool
 	Tor             bool
 	MainLogFilePath string
+	// CapabilityToken, when non-empty, gates every request on a secret the
+	// caller must present (mobile). It is handed to the WebView in the bootstrap
+	// URL and exchanged for the capCK cookie on first load, so only the WebView
+	// we launched can reach the loopback server, not other apps on the device
+	// that can also open 127.0.0.1. Empty disables the gate (desktop).
+	CapabilityToken string
 }
 
 // AppServer is a single-client http and websocket server enabling a browser
@@ -232,9 +246,15 @@ type AppServer struct {
 	tor      bool
 	onion    string
 
+	capToken string // see Config.CapabilityToken
+
 	authMtx         sync.RWMutex
 	authTokens      map[string]bool
 	cachedPasswords map[string]*cachedPassword // cached passwords keyed by auth token
+
+	loginMtx       sync.Mutex
+	loginFails     int
+	loginLockUntil time.Time
 
 	companionToken        string
 	companionTokenHash    string // hex(sha256(token)), persisted to DB
@@ -360,6 +380,7 @@ func New(cfg *Config) (*AppServer, error) {
 	s := &AppServer{
 		langs:           langs,
 		core:            cfg.Core,
+		capToken:        cfg.CapabilityToken,
 		siteDir:         siteDir,
 		mux:             mux,
 		srv:             httpServer,
@@ -393,14 +414,19 @@ func New(cfg *Config) (*AppServer, error) {
 		s.apiTokenHash = h
 	}
 
-	// Middleware
+	// Middleware. securityMiddleware is outermost so its headers also cover the
+	// capability gate's redirect and 404 responses. The capability gate runs
+	// before the request logger so the bootstrap token in the ?k= query never
+	// reaches the log, and so rejected scanner/other-app requests do not
+	// generate log noise (no-op on desktop).
+	mux.Use(s.securityMiddleware)
+	mux.Use(s.capabilityMiddleware)
 	mux.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{
 		Logger: &chiLogger{ // logs with Trace()
 			Logger: util.StdOutLogger("MUX", log.Level(), cfg.UTC),
 		},
 		NoColor: runtime.GOOS == "windows",
 	}))
-	mux.Use(s.securityMiddleware)
 	mux.Use(middleware.Recoverer)
 
 	// Compress responses if using tor.
@@ -743,15 +769,15 @@ func (s *AppServer) isOnionRequest(r *http.Request) bool {
 
 // authorize creates, stores, and returns a new auth token to identify the user.
 // deauth should be used to invalidate tokens on logout.
-func (s *AppServer) authorize() string {
-	b := make([]byte, 32)
-	crand.Read(b)
-	token := hex.EncodeToString(b)
-	zero(b)
+func (s *AppServer) authorize() (string, error) {
+	token, err := util.RandomHex(32)
+	if err != nil {
+		return "", err
+	}
 	s.authMtx.Lock()
 	s.authTokens[token] = true
 	s.authMtx.Unlock()
-	return token
+	return token, nil
 }
 
 // deauth invalidates all current auth tokens. All existing sessions will need
@@ -939,6 +965,42 @@ func (s *AppServer) apiTokenAuthorized(r *http.Request) bool {
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
+}
+
+// loginThrottle returns the remaining lockout duration, or 0 if a login may be
+// attempted now. The counter is a single global one, not per-IP: the wallet is
+// single-client and the gate above already limits who can reach /api/login.
+func (s *AppServer) loginThrottle() time.Duration {
+	s.loginMtx.Lock()
+	defer s.loginMtx.Unlock()
+	if d := time.Until(s.loginLockUntil); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// noteLoginFailure records a failed login. Once the free-attempt budget is
+// exhausted it extends a capped exponential lockout window, blunting password
+// brute-force from anything that can reach the loopback server.
+func (s *AppServer) noteLoginFailure() {
+	s.loginMtx.Lock()
+	defer s.loginMtx.Unlock()
+	s.loginFails++
+	if n := s.loginFails - loginFailFree; n > 0 {
+		backoff := loginBackoffBase << min(n-1, 20) // cap the shift well short of overflow
+		if backoff <= 0 || backoff > loginBackoffMax {
+			backoff = loginBackoffMax
+		}
+		s.loginLockUntil = time.Now().Add(backoff)
+	}
+}
+
+// noteLoginSuccess clears the failed-login state.
+func (s *AppServer) noteLoginSuccess() {
+	s.loginMtx.Lock()
+	defer s.loginMtx.Unlock()
+	s.loginFails = 0
+	s.loginLockUntil = time.Time{}
 }
 
 // getCachedPassword retrieves the cached password for the user identified by authToken and
