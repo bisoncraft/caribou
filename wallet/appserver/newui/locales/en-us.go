@@ -46,8 +46,8 @@ var EnUS = map[string]*intl.Translation{
 	"activate_electrum_desc": {T: "Uses a fast, lightweight Electrum connection by default. You can opt into self-validated chain mode below."},
 	"spv_mode_label":         {T: "Increased security and privacy mode"},
 	"spv_info_title":         {T: "Increased security and privacy mode"},
-	"spv_info_what": {T: "In this mode the wallet uses BIP-157/158 compact block filters to verify transactions against the Bitcoin/Litecoin blockchain directly, without relying on any third-party servers. Your addresses are never sent to external servers."},
-	"spv_info_tradeoffs": {T: "Tradeoffs: the initial block filter download is significantly slower than Electrum and uses more CPU. Electrum is fast and lightweight but connects to public Electrum servers that can observe which addresses you query."},
+	"spv_info_what":          {T: "In this mode the wallet uses BIP-157/158 compact block filters to verify transactions against the Bitcoin/Litecoin blockchain directly, without relying on any third-party servers. Your addresses are never sent to external servers."},
+	"spv_info_tradeoffs":     {T: "Tradeoffs: the initial block filter download is significantly slower than Electrum and uses more CPU. Electrum is fast and lightweight but connects to public Electrum servers that can observe which addresses you query."},
 
 	// Settings / seed export
 	"Backup Wallet Seed":        {T: "Backup Wallet Seed"},
