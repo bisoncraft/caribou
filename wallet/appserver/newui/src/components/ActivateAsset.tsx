@@ -190,7 +190,7 @@ function NativeActivate ({ ticker, close }: { ticker: string, close: () => void 
               aria-label={t('spv_info_title')}
               aria-expanded={showInfo}
             >
-              i
+              <span className="ico-info" aria-hidden="true" />
             </button>
           </label>
           {showInfo && (
