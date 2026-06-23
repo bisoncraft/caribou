@@ -112,7 +112,7 @@ func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params
 	return btc.NewNativeWallet(ltcElectrumChainConfig(chainParams), cfg, log)
 }
 
-// ltcSPVChainConfig is the LTC parameterization of the shared lean wallet driven
+// ltcSPVChainConfig is the LTC parameterization of the shared NativeWallet driven
 // by the neutrino (SPV) backend rather than electrum: same wallet, LTC's seeds
 // and chain-service wrapper.
 func ltcSPVChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
@@ -131,7 +131,7 @@ func ltcNeutrinoSeeds(chainParams *chaincfg.Params) []string {
 	return nil
 }
 
-// openLTCSPVWallet constructs the shared lean wallet driven by the neutrino
+// openLTCSPVWallet constructs the shared NativeWallet driven by the neutrino
 // backend with LTC's config. Called by NewWallet for walletTypeSPV.
 func openLTCSPVWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.NativeWallet {
 	return btc.NewNativeWallet(ltcSPVChainConfig(chainParams), cfg, log)

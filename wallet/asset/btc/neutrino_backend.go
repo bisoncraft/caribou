@@ -25,7 +25,7 @@ import (
 const neutrinoRecoveryWindow = 250
 
 // neutrinoBackend is a chainBackend driven by a built-in neutrino (BIP-157/158)
-// chain service — the SPV counterpart to the electrum backend. The lean wallet
+// chain service — the SPV counterpart to the electrum backend. The NativeWallet
 // drives it through the same chainBackend surface; only the construction here
 // differs from electrum. It embeds *chain.NeutrinoClient (which provides the
 // chain.Backend + SyncHeight/Connected surface) and overrides Start/Stop to
@@ -120,7 +120,7 @@ func neutrinoBackendFactory(cc ChainConfig, seeds []string, newSPVService func(*
 	}
 }
 
-// SPVChainConfig returns base configured to drive the shared lean wallet with
+// SPVChainConfig returns base configured to drive the shared NativeWallet with
 // the neutrino (BIP-157/158) backend — i.e. as an SPV wallet rather than an
 // electrum one. seeds are the network's default peers and newSPVService wraps
 // the neutrino chain service for the peer manager; both are chain-specific. btc
