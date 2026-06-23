@@ -127,7 +127,7 @@ func newLTCAlphaBackend(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 //   - Returns asset.Wallet (not any LTC-specific concrete type) because
 //     ltcElectrumWallet implements only the lean asset.Wallet interface.
 //   - Does not read any config file; the electrumx server address is built-in
-//     (ssl://127.0.0.1:55002, the regtest entry in ltcElectrumServers).
+//     (ssl://127.0.0.1:55002, the regtest entry in electrum.DefaultServers(ChainLTC)).
 func newLTCElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 	t.Helper()
 

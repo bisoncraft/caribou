@@ -25,6 +25,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
@@ -77,7 +78,6 @@ type peerManagedBackend interface {
 // it.)
 type ChainConfig struct {
 	Chain       bisonwire.Chain
-	Servers     map[string]*electrum.ServerAddr // per-net electrumx endpoints
 	ChainParams *chaincfg.Params
 	NetParams   *netparams.ChainParams
 	Info        *asset.WalletInfo
@@ -99,10 +99,10 @@ type ChainConfig struct {
 // network + ElectrumClient for cc's chain. It is the default backend.
 func electrumBackendFactory(cc ChainConfig) func(dir string, log util.Logger) (chainBackend, error) {
 	return func(dir string, log util.Logger) (chainBackend, error) {
-		srvAddr := cc.Servers[cc.ChainParams.Name]
-		if srvAddr == nil {
+		if len(cc.NetParams.ElectrumServers) == 0 {
 			return nil, fmt.Errorf("electrum: no built-in server for network %q", cc.ChainParams.Name)
 		}
+		srvAddr := cc.NetParams.ElectrumServers[0]
 		if err := srvAddr.Validate(); err != nil {
 			return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
 		}
@@ -126,10 +126,24 @@ func electrumBackendFactory(cc ChainConfig) func(dir string, log util.Logger) (c
 func btcElectrumChainConfig(chainParams *chaincfg.Params) ChainConfig {
 	return ChainConfig{
 		Chain:       bisonwire.ChainBTC,
-		Servers:     btcElectrumServers,
 		ChainParams: chainParams,
-		NetParams:   btcNetParams(chainParams),
+		NetParams:   btcTableNetParams(chainParams),
 		Info:        WalletInfo,
+	}
+}
+
+// btcTableNetParams looks up the *netparams.ChainParams for chainParams from the
+// assets table, which carries ElectrumServers and NeutrinoSeeds. It does NOT
+// call chaincfg.Register; registration is only done when explicitly required
+// (e.g. assets.NetParams) and must not happen on every wallet open.
+func btcTableNetParams(chainParams *chaincfg.Params) *netparams.ChainParams {
+	switch chainParams.Name {
+	case "testnet3":
+		return assets.BTCParams["testnet"]
+	case "regtest":
+		return assets.BTCParams["simnet"]
+	default:
+		return assets.BTCParams["mainnet"]
 	}
 }
 
@@ -142,22 +156,6 @@ var electrumWalletDefinition = &asset.WalletDefinition{
 	Description: "Use the built-in electrum-backed light wallet.",
 	ConfigOpts:  nil,
 	Seeded:      true,
-}
-
-// btcElectrumServers maps chaincfg.Params.Name to a built-in electrumx
-// ServerAddr. The regtest/simnet entry points at the dextest harness address
-// (BTC port 54002, ssl); mainnet and testnet use well-known public servers.
-// Keys are the actual chaincfg.Params.Name values so they cannot drift out of
-// sync with parseChainParams.
-//
-// The server selection is intentionally hard-coded — no user configuration.
-var btcElectrumServers = map[string]*electrum.ServerAddr{
-	// Mainnet uses Blockstream's server, which presents a publicly CA-issued
-	// (Let's Encrypt) certificate, so it is verified against the system roots
-	// rather than pinned: a pinned leaf would break on every ~90-day renewal.
-	chaincfg.MainNetParams.Name:       {Proto: "ssl", Addr: "electrum.blockstream.info:700"},
-	chaincfg.TestNet3Params.Name:      {Proto: "ssl", Addr: "electrum.blockstream.info:993", SkipVerify: true},
-	chaincfg.RegressionNetParams.Name: {Proto: "ssl", Addr: "127.0.0.1:54002", SkipVerify: true},
 }
 
 // CreateElectrumWallet creates the on-disk btcwallet database for a NativeWallet

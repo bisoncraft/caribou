@@ -5,24 +5,15 @@ import (
 )
 
 func TestLtcNetParamsMappings(t *testing.T) {
-	// Verify ltcNetParams returns non-nil for all supported networks.
-	for _, p := range []*struct {
-		name string
-	}{
-		{"mainnet"},
-		{"testnet4"},
-		{"regtest"},
-	} {
-		_ = p
+	// Verify ltcTableNetParams returns non-nil for all supported networks.
+	if np := ltcTableNetParams(MainNetParams); np == nil {
+		t.Fatal("ltcTableNetParams(mainnet) returned nil")
 	}
-	if np := ltcNetParams(MainNetParams); np == nil {
-		t.Fatal("ltcNetParams(mainnet) returned nil")
+	if np := ltcTableNetParams(TestNet4Params); np == nil {
+		t.Fatal("ltcTableNetParams(testnet4) returned nil")
 	}
-	if np := ltcNetParams(TestNet4Params); np == nil {
-		t.Fatal("ltcNetParams(testnet4) returned nil")
-	}
-	if np := ltcNetParams(RegressionNetParams); np == nil {
-		t.Fatal("ltcNetParams(regtest) returned nil")
+	if np := ltcTableNetParams(RegressionNetParams); np == nil {
+		t.Fatal("ltcTableNetParams(regtest) returned nil")
 	}
 
 	// Compile-time check: verify createSPVWallet exists with the signature

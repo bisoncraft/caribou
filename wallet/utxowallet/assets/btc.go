@@ -156,6 +156,7 @@ var BTCParams = map[string]*netparams.ChainParams{
 		BIP0066Height:    363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
 		CoinbaseMaturity: 100,
 		MaxSatoshi:       btcutil.MaxSatoshi,
+		ElectrumServers:  btcMainnetElectrumServers,
 	},
 	"testnet": {
 		Chain:       "btc",
@@ -282,6 +283,8 @@ var BTCParams = map[string]*netparams.ChainParams{
 		BIP0066Height:    330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 		CoinbaseMaturity: 100,
 		MaxSatoshi:       btcutil.MaxSatoshi,
+		ElectrumServers:  btcTestnetElectrumServers,
+		NeutrinoSeeds:    btcTestnetNeutrinoSeeds,
 	},
 	"simnet": {
 		Chain:       "btc",
@@ -370,5 +373,32 @@ var BTCParams = map[string]*netparams.ChainParams{
 		BIP0066Height:    1251,      // Used by regression tests
 		CoinbaseMaturity: 100,
 		MaxSatoshi:       btcutil.MaxSatoshi,
+		ElectrumServers:  btcSimnetElectrumServers,
+		NeutrinoSeeds:    btcSimnetNeutrinoSeeds,
 	},
 }
+
+// btcMainnetElectrumServers is the built-in electrumx server for BTC mainnet.
+// Blockstream's server presents a publicly CA-issued (Let's Encrypt) certificate,
+// so it is verified against the system roots rather than pinned — a pinned leaf
+// would break on every ~90-day renewal.
+var btcMainnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "electrum.blockstream.info:700"},
+}
+
+// btcTestnetElectrumServers is the built-in electrumx server for BTC testnet3.
+var btcTestnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "electrum.blockstream.info:993", SkipVerify: true},
+}
+
+// btcSimnetElectrumServers is the built-in electrumx server for BTC
+// regtest/simnet — points at the dextest harness (BTC port 54002, ssl).
+var btcSimnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "127.0.0.1:54002", SkipVerify: true},
+}
+
+// btcTestnetNeutrinoSeeds are the default neutrino peers for BTC testnet.
+var btcTestnetNeutrinoSeeds = []string{"dex-test.ssgen.io:18333"}
+
+// btcSimnetNeutrinoSeeds are the default neutrino peers for BTC simnet/regtest.
+var btcSimnetNeutrinoSeeds = []string{"127.0.0.1:20575"}

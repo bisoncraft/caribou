@@ -125,7 +125,7 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 		return false, err
 	}
 	walletDir := filepath.Join(dataDir, chainParams.Name)
-	loader := inWallet.NewLoader(ltcNetParams(chainParams), walletDir, true, dbTimeout, 250)
+	loader := inWallet.NewLoader(ltcTableNetParams(chainParams), walletDir, true, dbTimeout, 250)
 	return loader.WalletExists()
 }
 

@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
@@ -27,38 +25,11 @@ const (
 
 var (
 	waddrmgrNamespace = []byte("waddrmgr")
-
-	// Snapshot of valid peers. 10 May 2024
-	testnet4Seeds = []string{
-		"13.200.66.216:19335",
-		"208.91.111.150:18333",
-		"92.244.111.167:19335",
-		"164.92.171.95:8333",
-		"204.16.244.114:18333",
-		"34.227.13.195:19335",
-		"18.192.56.149:18333",
-	}
 )
-
-// ltcNetParams returns the *netparams.ChainParams for a given *chaincfg.Params
-// by looking up the LTC network in the assets table.
-func ltcNetParams(btcParams *chaincfg.Params) *netparams.ChainParams {
-	switch btcParams.Name {
-	case MainNetParams.Name:
-		return assets.LTCParams["mainnet"]
-	case TestNet4Params.Name:
-		return assets.LTCParams["testnet"]
-	case RegressionNetParams.Name:
-		return assets.LTCParams["simnet"]
-	default:
-		return assets.LTCParams["mainnet"]
-	}
-}
 
 // createSPVWallet creates a new SPV wallet.
 func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
-	np := ltcNetParams(net)
-	loader := wallet.NewLoader(np, walletDir, true, dbTimeout, 250)
+	loader := wallet.NewLoader(ltcTableNetParams(net), walletDir, true, dbTimeout, 250)
 
 	pubPass := []byte(wallet.InsecurePubPassphrase)
 

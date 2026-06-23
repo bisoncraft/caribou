@@ -15,7 +15,6 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/btcsuite/btcd/wire"
 )
 
 // neutrinoRecoveryWindow is the address gap limit btcwallet recovers across when
@@ -130,18 +129,9 @@ func SPVChainConfig(base ChainConfig, seeds []string) ChainConfig {
 	return base
 }
 
-// btcSPVChainConfig returns the ChainConfig for a BTC SPV wallet.
+// btcSPVChainConfig returns the ChainConfig for a BTC SPV wallet. Neutrino
+// seeds are sourced from the assets table via the NetParams field.
 func btcSPVChainConfig(chainParams *chaincfg.Params) ChainConfig {
-	return SPVChainConfig(btcElectrumChainConfig(chainParams), btcNeutrinoSeeds(chainParams.Net))
-}
-
-// btcNeutrinoSeeds returns the default neutrino seed peers for a BTC network.
-func btcNeutrinoSeeds(net wire.BitcoinNet) []string {
-	switch net {
-	case wire.TestNet3:
-		return []string{"dex-test.ssgen.io:18333"}
-	case wire.TestNet, wire.SimNet: // plain wire.TestNet is regnet
-		return []string{"127.0.0.1:20575"}
-	}
-	return nil
+	base := btcElectrumChainConfig(chainParams)
+	return SPVChainConfig(base, base.NetParams.NeutrinoSeeds)
 }

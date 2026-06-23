@@ -6,10 +6,8 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
@@ -17,48 +15,9 @@ const (
 	dbTimeout = 20 * time.Second
 )
 
-// btcNetParams wraps a *chaincfg.Params in a *netparams.ChainParams suitable
-// for the in-tree utxowallet library. The btcdParams field is set so that
-// netparams.ChainParams.BTCDParams() returns the original *chaincfg.Params.
-func btcNetParams(p *chaincfg.Params) *netparams.ChainParams {
-	np := &netparams.ChainParams{
-		Chain:                    "btc",
-		Name:                     p.Name,
-		Net:                      p.Net,
-		GenesisBlock:             p.GenesisBlock,
-		GenesisHash:              p.GenesisHash,
-		TargetTimespan:           p.TargetTimespan,
-		TargetTimePerBlock:       p.TargetTimePerBlock,
-		RetargetAdjustmentFactor: p.RetargetAdjustmentFactor,
-		ReduceMinDifficulty:      p.ReduceMinDifficulty,
-		MinDiffReductionTime:     p.MinDiffReductionTime,
-		Checkpoints:              p.Checkpoints,
-		PowLimit:                 p.PowLimit,
-		PowLimitBits:             p.PowLimitBits,
-		PoWNoRetargeting:         p.PoWNoRetargeting,
-		DNSSeeds:                 p.DNSSeeds,
-		DefaultPort:              p.DefaultPort,
-		Bech32HRPSegwit:          p.Bech32HRPSegwit,
-		PubKeyHashAddrID:         p.PubKeyHashAddrID,
-		ScriptHashAddrID:         p.ScriptHashAddrID,
-		PrivateKeyID:             p.PrivateKeyID,
-		WitnessPubKeyHashAddrID:  p.WitnessPubKeyHashAddrID,
-		WitnessScriptHashAddrID:  p.WitnessScriptHashAddrID,
-		HDPrivateKeyID:           p.HDPrivateKeyID,
-		HDPublicKeyID:            p.HDPublicKeyID,
-		HDCoinType:               p.HDCoinType,
-		BIP0034Height:            p.BIP0034Height,
-		BIP0065Height:            p.BIP0065Height,
-		BIP0066Height:            p.BIP0066Height,
-		CoinbaseMaturity:         p.CoinbaseMaturity,
-		MaxSatoshi:               btcutil.MaxSatoshi,
-	}
-	return np
-}
-
 // createSPVWallet creates a new SPV wallet.
 func createSPVWallet(privPass []byte, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
-	loader := wallet.NewLoader(btcNetParams(net), walletDir, true, dbTimeout, 250)
+	loader := wallet.NewLoader(btcTableNetParams(net), walletDir, true, dbTimeout, 250)
 
 	pubPass := []byte(wallet.InsecurePubPassphrase)
 

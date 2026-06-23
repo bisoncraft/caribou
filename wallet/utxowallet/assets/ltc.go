@@ -131,6 +131,7 @@ var LTCParams = map[string]*netparams.ChainParams{
 		CheckPoW:                checkPoWScrypt,
 		CoinbaseMaturity:        100,
 		MaxSatoshi:              84e6 * btcutil.SatoshiPerBitcoin,
+		ElectrumServers:         ltcMainnetElectrumServers,
 	},
 	"testnet": {
 		Chain:       "ltc",
@@ -189,6 +190,8 @@ var LTCParams = map[string]*netparams.ChainParams{
 		CheckPoW:                checkPoWScrypt,
 		CoinbaseMaturity:        100,
 		MaxSatoshi:              84e6 * btcutil.SatoshiPerBitcoin,
+		ElectrumServers:         ltcTestnetElectrumServers,
+		NeutrinoSeeds:           ltcTestnetNeutrinoSeeds,
 	},
 	"simnet": {
 		Chain:       "ltc",
@@ -239,6 +242,8 @@ var LTCParams = map[string]*netparams.ChainParams{
 		CheckPoW:         checkPoWScrypt,
 		CoinbaseMaturity: 100,
 		MaxSatoshi:       84e6 * btcutil.SatoshiPerBitcoin,
+		ElectrumServers:  ltcSimnetElectrumServers,
+		NeutrinoSeeds:    ltcSimnetNeutrinoSeeds,
 	},
 }
 
@@ -260,3 +265,68 @@ func checkPoWScrypt(hdr *wire.BlockHeader) error {
 	}
 	return nil
 }
+
+// ltcMainnetCertPEM is the pinned TLS leaf certificate served by the built-in
+// mainnet LTC electrumx server (electrum-ltc.bysh.me:50002). It is self-signed
+// and long-lived (valid until 2036), so it cannot be verified against a public
+// CA and is pinned instead. If the server rotates its certificate this must be
+// refreshed; re-fetch with:
+//
+//	openssl s_client -connect electrum-ltc.bysh.me:50002 </dev/null | openssl x509
+const ltcMainnetCertPEM = `-----BEGIN CERTIFICATE-----
+MIIDcjCCAloCCQDghQZwjGMwajANBgkqhkiG9w0BAQsFADB7MQswCQYDVQQGEwJO
+TDEWMBQGA1UECAwNTm9vcmQtSG9sbGFuZDESMBAGA1UEBwwJQW1zdGVyZGFtMSEw
+HwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRzIFB0eSBMdGQxHTAbBgNVBAMMFGVsZWN0
+cnVtLWx0Yy5ieXNoLm1lMB4XDTI2MDUwNDA4MTQ0NVoXDTM2MDUwMzA4MTQ0NVow
+ezELMAkGA1UEBhMCTkwxFjAUBgNVBAgMDU5vb3JkLUhvbGxhbmQxEjAQBgNVBAcM
+CUFtc3RlcmRhbTEhMB8GA1UECgwYSW50ZXJuZXQgV2lkZ2l0cyBQdHkgTHRkMR0w
+GwYDVQQDDBRlbGVjdHJ1bS1sdGMuYnlzaC5tZTCCASIwDQYJKoZIhvcNAQEBBQAD
+ggEPADCCAQoCggEBAPqzSqn/9DPbD5LFp50+QaJWE+i2P/fSmbHzWW6fWSRPNFkM
+UEm/fvxtNNwqZxIMXBNsO79KBNazIbQGZ1BszF98zlHRu0bu6NPlB0HbCjO8nAl/
+3JNnJscEnXvDc2qc6A2azHYO4Lo1v5GH0XPL19PUaOVAFLUq9cCNLfKeAxdIdbOV
+IZa/3fU3Xp+hAXrNba4irIZYVfu4102uRt2rvbODY8LyAMaQil3h2ao3ODBxL+qB
+avQUdYnVgD6GmV3kaWM93Stt/lXuSddh1o6b43GA6z/jS7+3zenu03RCIdZNwOdL
+kY5u+bKSsRy551ZMtTB++FFoDzaizZEdJtvVIaECAwEAATANBgkqhkiG9w0BAQsF
+AAOCAQEAUcyVcngv5eaUvYL2Cw7zdGfM/aNkTmDSdZGkRhQ9oofWCtDXuzoN5ggK
+tIcrAVr+itI684aHKqFgEmuKYGq9+L8T+v1x51vYUgOdqlZi4Z3EVqXqPuZGZZmS
+ZXIruwgA+fVVqtKiH/RQSyuBnFSb0h3//Jf5QC31I/WxwMPDoHOpwX2J7qv++erO
+v39IxLT/zL+e8s2QgE7qTn2Fof6QG6Gg7Dg/ipuWIn7iRagaz5yd/RVdoGyGgvkG
+C3ReuQrfaqq2jkZp7LJL2zi3L98bqdKfp4kLkqw8+pFVPQy4E6VdYwh0H7tNYYAv
+JF0LTH0Kr986wDhHDvdCIaV6DR4s7w==
+-----END CERTIFICATE-----`
+
+// ltcMainnetCert is the DER form of ltcMainnetCertPEM, pinned for the mainnet
+// LTC electrumx server. Decoded at init; a malformed constant panics at startup.
+var ltcMainnetCert = netparams.MustParseCertPEM(ltcMainnetCertPEM)
+
+// ltcMainnetElectrumServers is the built-in electrumx server for LTC mainnet.
+// The certificate is self-signed and pinned.
+var ltcMainnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "electrum-ltc.bysh.me:50002", Cert: ltcMainnetCert},
+}
+
+// ltcTestnetElectrumServers is the built-in electrumx server for LTC testnet4.
+var ltcTestnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "electrum-ltc.bysh.me:51002", SkipVerify: true},
+}
+
+// ltcSimnetElectrumServers is the built-in electrumx server for LTC
+// regtest/simnet — points at the dextest harness (LTC port 55002, ssl).
+var ltcSimnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "127.0.0.1:55002", SkipVerify: true},
+}
+
+// ltcTestnetNeutrinoSeeds are the default neutrino peers for LTC testnet.
+// Snapshot of valid LTC testnet4 peers. 10 May 2024.
+var ltcTestnetNeutrinoSeeds = append([]string{"127.0.0.1:19335"},
+	"13.200.66.216:19335",
+	"208.91.111.150:18333",
+	"92.244.111.167:19335",
+	"164.92.171.95:8333",
+	"204.16.244.114:18333",
+	"34.227.13.195:19335",
+	"18.192.56.149:18333",
+)
+
+// ltcSimnetNeutrinoSeeds are the default neutrino peers for LTC simnet/regtest.
+var ltcSimnetNeutrinoSeeds = []string{"127.0.0.1:20585"}
