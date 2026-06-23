@@ -464,8 +464,16 @@ func TestAPITokenEndpoints(t *testing.T) {
 		t.Fatalf("freshly generated token should authorize")
 	}
 
-	// Revoke succeeds (no loopback requirement) and clears the token.
-	if resp := call(s.apiRevokeAPIToken, "10.0.0.5:5555", "", "{}"); !strings.Contains(resp, `"ok":true`) {
+	// Revoke is rejected from a non-loopback peer and leaves the token intact.
+	if resp := call(s.apiRevokeAPIToken, "10.0.0.5:5555", "", "{}"); !strings.Contains(resp, `"ok":false`) {
+		t.Fatalf("non-loopback revoke should be rejected, got %s", resp)
+	}
+	if s.apiTokenHash == "" {
+		t.Fatalf("token hash must survive a rejected revoke")
+	}
+
+	// Revoke succeeds from loopback and clears the token.
+	if resp := call(s.apiRevokeAPIToken, "127.0.0.1:5555", "", "{}"); !strings.Contains(resp, `"ok":true`) {
 		t.Fatalf("revoke should succeed, got %s", resp)
 	}
 	if s.apiTokenHash != "" {

@@ -636,6 +636,12 @@ func (s *AppServer) apiGenerateAPIToken(w http.ResponseWriter, r *http.Request) 
 // apiRevokeAPIToken clears the local API token, immediately invalidating any
 // automation client using it.
 func (s *AppServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
+	// A local credential may only be revoked from the same machine, mirroring
+	// the restriction on minting it.
+	if !s.isLocalRequest(r) {
+		s.writeAPIError(w, errors.New("API tokens can only be revoked from a local request"))
+		return
+	}
 	if err := s.core.SetAPIToken(""); err != nil {
 		s.writeAPIError(w, fmt.Errorf("error clearing API token: %w", err))
 		return
