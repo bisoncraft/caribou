@@ -2,7 +2,7 @@
 
 package btc
 
-// Proves the unification end-to-end: the same lean ElectrumWallet, given the
+// Proves the unification end-to-end: the same lean NativeWallet, given the
 // neutrino backend factory instead of the electrum one, connects to the SPV
 // harness and syncs the pre-funded gamma seed — i.e. SPV and electrum differ
 // only in which chain.Backend they build. Does NOT yet rewire walletTypeSPV;
@@ -60,7 +60,7 @@ func TestNeutrinoLeanWalletSync(t *testing.T) {
 		},
 	}
 
-	w := NewElectrumWallet(cc, walletCfg, tLogger)
+	w := NewNativeWallet(cc, walletCfg, tLogger)
 	cm := util.NewConnectionMaster(w)
 	if err = cm.Connect(tCtx); err != nil {
 		t.Fatalf("Connect: %v", err)

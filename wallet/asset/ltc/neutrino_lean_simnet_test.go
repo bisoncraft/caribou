@@ -3,7 +3,7 @@
 package ltc
 
 // Proves the SPV unification for LTC: walletTypeSPV, routed through NewWallet,
-// builds the same lean wallet electrum does (btc.ElectrumWallet) driven by the
+// builds the same lean wallet electrum does (btc.NativeWallet) driven by the
 // neutrino backend with LTC's seeds and chain-service wrapper, and discovers
 // funds paid to it over neutrino — the LTC counterpart to btc's
 // TestNeutrinoLeanWalletSync.

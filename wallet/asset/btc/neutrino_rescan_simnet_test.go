@@ -51,7 +51,7 @@ func TestNeutrinoRescan(t *testing.T) {
 		PeersChange: func(n uint32, err error) {},
 	}
 
-	w := NewElectrumWallet(btcSPVChainConfig(&chaincfg.RegressionNetParams), walletCfg, tLogger)
+	w := NewNativeWallet(btcSPVChainConfig(&chaincfg.RegressionNetParams), walletCfg, tLogger)
 	cm := util.NewConnectionMaster(w)
 	if err = cm.Connect(tCtx); err != nil {
 		t.Fatalf("Connect: %v", err)

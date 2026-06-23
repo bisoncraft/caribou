@@ -133,7 +133,7 @@ func SPVChainConfig(base ChainConfig, seeds []string, newSPVService func(*spv.Ch
 
 // btcSPVChainConfig returns the ChainConfig for a BTC SPV wallet.
 func btcSPVChainConfig(chainParams *chaincfg.Params) ChainConfig {
-	return SPVChainConfig(btcChainConfig(chainParams), btcNeutrinoSeeds(chainParams.Net),
+	return SPVChainConfig(btcElectrumChainConfig(chainParams), btcNeutrinoSeeds(chainParams.Net),
 		func(cs *spv.ChainService) PeerManagerChainService { return &btcChainService{cs} })
 }
 

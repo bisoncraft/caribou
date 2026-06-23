@@ -4,7 +4,7 @@
 package ltc
 
 // This file wires the electrum-backed LTC wallet. The actual asset.Wallet
-// implementation is shared with BTC — btc.ElectrumWallet, parameterized by a
+// implementation is shared with BTC — btc.NativeWallet, parameterized by a
 // btc.ChainConfig. LTC only supplies its chain-specific config (servers, params,
 // wallet info, logger) plus driver registration; everything else (Connect,
 // Balance, Send, SyncStatus, tx-history sync, recovery, …) is the shared code,
@@ -88,8 +88,8 @@ var ltcElectrumServers = map[string]*electrum.ServerAddr{
 	RegressionNetParams.Name: {Proto: "ssl", Addr: "127.0.0.1:55002", SkipVerify: true},
 }
 
-// ltcChainConfig is the LTC parameterization of the shared electrum wallet.
-func ltcChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
+// ltcElectrumChainConfig is the LTC parameterization of the shared electrum wallet.
+func ltcElectrumChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 	return btc.ChainConfig{
 		Chain:       bisonwire.ChainLTC,
 		Servers:     ltcElectrumServers,
@@ -103,20 +103,20 @@ func ltcChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 // createLTCElectrumWallet creates an LTC electrum wallet's on-disk database via
 // the shared implementation. The electrum network is not started here.
 func createLTCElectrumWallet(privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
-	return btc.CreateElectrumWallet(ltcChainConfig(net), privPass, seed, bday, walletDir, log, extIdx, intIdx)
+	return btc.CreateElectrumWallet(ltcElectrumChainConfig(net), privPass, seed, bday, walletDir, log, extIdx, intIdx)
 }
 
 // openLTCElectrumWallet constructs the shared electrum wallet with LTC's config.
 // Called by NewWallet for walletTypeElectrum.
-func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.ElectrumWallet {
-	return btc.NewElectrumWallet(ltcChainConfig(chainParams), cfg, log)
+func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.NativeWallet {
+	return btc.NewNativeWallet(ltcElectrumChainConfig(chainParams), cfg, log)
 }
 
 // ltcSPVChainConfig is the LTC parameterization of the shared lean wallet driven
 // by the neutrino (SPV) backend rather than electrum: same wallet, LTC's seeds
 // and chain-service wrapper.
 func ltcSPVChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
-	return btc.SPVChainConfig(ltcChainConfig(chainParams), ltcNeutrinoSeeds(chainParams),
+	return btc.SPVChainConfig(ltcElectrumChainConfig(chainParams), ltcNeutrinoSeeds(chainParams),
 		func(cs *spv.ChainService) btc.PeerManagerChainService { return &ltcChainService{cs} })
 }
 
@@ -133,6 +133,6 @@ func ltcNeutrinoSeeds(chainParams *chaincfg.Params) []string {
 
 // openLTCSPVWallet constructs the shared lean wallet driven by the neutrino
 // backend with LTC's config. Called by NewWallet for walletTypeSPV.
-func openLTCSPVWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.ElectrumWallet {
-	return btc.NewElectrumWallet(ltcSPVChainConfig(chainParams), cfg, log)
+func openLTCSPVWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params, log util.Logger) *btc.NativeWallet {
+	return btc.NewNativeWallet(ltcSPVChainConfig(chainParams), cfg, log)
 }
