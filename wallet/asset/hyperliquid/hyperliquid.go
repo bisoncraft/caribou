@@ -501,22 +501,68 @@ func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResp
 			return nil, ErrTxIsPending
 		}
 	}
-	resp, err := w.txDB.GetTxs(req)
-	if err != nil {
-		return nil, err
-	}
-	// NetworkTxDB.GetTxs indexes all transactions; filter out pending sends so
-	// that only confirmed entries appear in paginated history. Pending sends are
-	// exposed separately via PendingTransactions.
-	n := 0
-	for _, wt := range resp.Txs {
-		if wt.Confirmed {
-			resp.Txs[n] = wt
-			n++
+	// NetworkTxDB.GetTxs indexes all transactions, including pending sends.
+	// Accumulate confirmed-only entries across pages so that pending sends
+	// never consume the N budget or leave MoreAvailable in an inconsistent
+	// state. GetTxs uses an inclusive seek (RefID tx is the first result),
+	// so internal page-advance iterations skip the cursor tx to avoid
+	// duplicates. Pending sends are exposed separately via PendingTransactions.
+	//
+	// getTxs computes: reverse := req.Past || req.RefID == nil. For the default
+	// request (Past=false, RefID=nil) reverse=true (newest-first). Internal
+	// pages always carry a cursor, so capture the effective direction now so
+	// those pages also walk newest-first.
+	if req.N <= 0 {
+		resp, err := w.txDB.GetTxs(req)
+		if err != nil {
+			return nil, err
 		}
+		all := resp.Txs[:0]
+		for _, wt := range resp.Txs {
+			if wt.Confirmed {
+				all = append(all, wt)
+			}
+		}
+		return &txdb.TxHistoryResponse{Txs: all}, nil
 	}
-	resp.Txs = resp.Txs[:n]
-	return resp, nil
+	past := req.Past || req.RefID == nil
+	confirmed := make([]*txdb.WalletTransaction, 0, req.N)
+	cursor := req.RefID
+	skipFirst := false
+	for len(confirmed) < req.N {
+		pageReq := &txdb.TxHistoryRequest{
+			N:           req.N,
+			RefID:       cursor,
+			Past:        past,
+			IgnoreTypes: req.IgnoreTypes,
+		}
+		resp, err := w.txDB.GetTxs(pageReq)
+		if err != nil {
+			return nil, err
+		}
+		anyProcessed := false
+		for i, wt := range resp.Txs {
+			if i == 0 && skipFirst {
+				continue
+			}
+			anyProcessed = true
+			if !wt.Confirmed {
+				continue
+			}
+			confirmed = append(confirmed, wt)
+			if len(confirmed) == req.N {
+				more := i < len(resp.Txs)-1 || resp.MoreAvailable
+				return &txdb.TxHistoryResponse{Txs: confirmed, MoreAvailable: more}, nil
+			}
+		}
+		if !anyProcessed || !resp.MoreAvailable {
+			break
+		}
+		last := resp.Txs[len(resp.Txs)-1]
+		cursor = &last.ID
+		skipFirst = true
+	}
+	return &txdb.TxHistoryResponse{Txs: confirmed}, nil
 }
 
 func (w *HyperWallet) WalletTransaction(_ context.Context, txID string) (*txdb.WalletTransaction, error) {
@@ -763,6 +809,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 		ID:          u.Hash,
 		Amount:      amount,
 		BlockNumber: tip,
+		Timestamp:   u.Time / 1000,
 		Confirmed:   true,
 		Recipient:   &addr,
 		AdditionalData: map[string]string{
@@ -862,6 +909,7 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 		Fees:           best.Fees,
 		Recipient:      best.Recipient,
 		BlockNumber:    tip,
+		Timestamp:      u.Time / 1000,
 		Confirmed:      true,
 		RawTx:          best.RawTx,
 		AdditionalData: addlData,

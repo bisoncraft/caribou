@@ -1115,6 +1115,144 @@ func TestTxDBGetTxsRefIDOnPendingReturnsDistinctError(t *testing.T) {
 	}
 }
 
+// storeTxHistory stores txs in order, optionally injecting a 1ms sleep
+// between each so that pending txs stored after confirmed ones always have a
+// strictly newer store-time effective-time in the index.
+func storeTxHistory(t *testing.T, db txdb.NetworkTxDB, txs []*txdb.WalletTransaction) {
+	t.Helper()
+	for _, wt := range txs {
+		if err := db.StoreTx(wt); err != nil {
+			t.Fatalf("StoreTx %s: %v", wt.ID, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// confirmedIDs returns the IDs of txs in order, for use in failure messages.
+func confirmedIDs(txs []*txdb.WalletTransaction) []string {
+	ids := make([]string, 0, len(txs))
+	for _, wt := range txs {
+		ids = append(ids, wt.ID)
+	}
+	return ids
+}
+
+func TestTxHistoryPendingAcrossPages(t *testing.T) {
+	// 5 confirmed + 3 pending. Pending txs are stored after confirmed ones so
+	// their store-time effective-time sorts them to the front of the
+	// newest-first index. With N=5, the first raw page returns
+	// [P3,P2,P1,C5,C4] (MoreAvailable=true). The loop must advance the cursor
+	// past the pending items and collect all 5 confirmed across two raw pages.
+	w := newTestWalletWithDB(t)
+
+	confirmed := []*txdb.WalletTransaction{
+		{Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
+		{Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
+		{Type: txdb.Send, ID: "c3", Amount: 3e8, Timestamp: 3000, Confirmed: true},
+		{Type: txdb.Send, ID: "c4", Amount: 4e8, Timestamp: 4000, Confirmed: true},
+		{Type: txdb.Send, ID: "c5", Amount: 5e8, Timestamp: 5000, Confirmed: true},
+	}
+	pending := []*txdb.WalletTransaction{
+		{Type: txdb.Send, ID: "p1", Amount: 1e8},
+		{Type: txdb.Send, ID: "p2", Amount: 2e8},
+		{Type: txdb.Send, ID: "p3", Amount: 3e8},
+	}
+	storeTxHistory(t, w.txDB, confirmed)
+	storeTxHistory(t, w.txDB, pending)
+
+	resp, err := w.TxHistory(&txdb.TxHistoryRequest{N: 5})
+	if err != nil {
+		t.Fatalf("TxHistory: %v", err)
+	}
+	if len(resp.Txs) != 5 {
+		t.Fatalf("expected 5 confirmed txs, got %d: %v", len(resp.Txs), confirmedIDs(resp.Txs))
+	}
+	for _, wt := range resp.Txs {
+		if !wt.Confirmed {
+			t.Errorf("pending tx %q in TxHistory result", wt.ID)
+		}
+	}
+	if resp.MoreAvailable {
+		t.Error("MoreAvailable should be false: all confirmed txs returned")
+	}
+}
+
+func TestTxHistoryMoreAvailableWithPending(t *testing.T) {
+	// 7 confirmed + 2 pending. Pending sort to the front. With N=5, the first
+	// raw page is [P2,P1,C7,C6,C5] (MoreAvailable=true). After filtering, only
+	// C7,C6,C5 are collected. The second raw page [C5,C4,C3,C2,C1] is fetched;
+	// C5 is the cursor (skipped), and we hit N=5 at C3 (i=2 of 5 entries).
+	// MoreAvailable must be true because C2 and C1 remain.
+	w := newTestWalletWithDB(t)
+
+	var allConfirmed []*txdb.WalletTransaction
+	for i := 1; i <= 7; i++ {
+		allConfirmed = append(allConfirmed, &txdb.WalletTransaction{
+			Type:      txdb.Send,
+			ID:        fmt.Sprintf("c%d", i),
+			Amount:    uint64(i) * 1e8,
+			Timestamp: uint64(i) * 1000,
+			Confirmed: true,
+		})
+	}
+	pending := []*txdb.WalletTransaction{
+		{Type: txdb.Send, ID: "p1", Amount: 1e8},
+		{Type: txdb.Send, ID: "p2", Amount: 2e8},
+	}
+	storeTxHistory(t, w.txDB, allConfirmed)
+	storeTxHistory(t, w.txDB, pending)
+
+	resp, err := w.TxHistory(&txdb.TxHistoryRequest{N: 5})
+	if err != nil {
+		t.Fatalf("TxHistory: %v", err)
+	}
+	if len(resp.Txs) != 5 {
+		t.Fatalf("expected 5 confirmed txs, got %d: %v", len(resp.Txs), confirmedIDs(resp.Txs))
+	}
+	for _, wt := range resp.Txs {
+		if !wt.Confirmed {
+			t.Errorf("pending tx %q in TxHistory result", wt.ID)
+		}
+	}
+	if !resp.MoreAvailable {
+		t.Error("MoreAvailable should be true: c1 and c2 not yet returned")
+	}
+}
+
+func TestTxHistoryPendingOnlyPage(t *testing.T) {
+	// Edge case: the first raw page contains only pending txs (N=3, 3 pending
+	// + 2 confirmed). The loop must advance the cursor past all 3 pending txs
+	// and collect the 2 confirmed from the second raw page. MoreAvailable must
+	// be false because all confirmed txs are returned.
+	w := newTestWalletWithDB(t)
+
+	storeTxHistory(t, w.txDB, []*txdb.WalletTransaction{
+		{Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
+		{Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
+	})
+	storeTxHistory(t, w.txDB, []*txdb.WalletTransaction{
+		{Type: txdb.Send, ID: "p1", Amount: 1e8},
+		{Type: txdb.Send, ID: "p2", Amount: 2e8},
+		{Type: txdb.Send, ID: "p3", Amount: 3e8},
+	})
+
+	resp, err := w.TxHistory(&txdb.TxHistoryRequest{N: 3})
+	if err != nil {
+		t.Fatalf("TxHistory: %v", err)
+	}
+	if len(resp.Txs) != 2 {
+		t.Fatalf("expected 2 confirmed txs, got %d", len(resp.Txs))
+	}
+	for _, wt := range resp.Txs {
+		if !wt.Confirmed {
+			t.Errorf("pending tx %q in TxHistory result", wt.ID)
+		}
+	}
+	if resp.MoreAvailable {
+		t.Error("MoreAvailable should be false: all confirmed txs returned")
+	}
+}
+
 func TestTxDBPendingIDIndex(t *testing.T) {
 	w := newTestWalletWithDB(t)
 
