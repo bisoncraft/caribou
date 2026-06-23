@@ -242,7 +242,15 @@ func (s *NotificationServer) notifyUnminedTransaction(dbtx walletdb.ReadWriteTx,
 		clients := s.transactions
 		s.mu.Unlock()
 		for _, c := range clients {
-			c <- n
+			// A subscriber may be torn down (its channel closed by Done)
+			// concurrently during shutdown, in the window after the lock is
+			// dropped. Tolerate a send on a closed channel rather than holding
+			// s.mu across the blocking send — doing so would deadlock if the
+			// subscriber has stopped receiving while Done waits on s.mu.
+			func(c chan *TransactionNotifications) {
+				defer func() { _ = recover() }()
+				c <- n
+			}(c)
 		}
 	})
 }

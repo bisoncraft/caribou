@@ -38,6 +38,9 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
+// dbTimeout is the bbolt open timeout for the wallet and neutrino databases.
+const dbTimeout = 20 * time.Second
+
 // ChainConfig carries the per-chain values that parameterize the shared
 // NativeWallet, so the btc and ltc asset packages can share one asset.Wallet
 // implementation across both the electrum and SPV wallet types. (The

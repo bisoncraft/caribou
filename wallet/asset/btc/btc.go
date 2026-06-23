@@ -568,16 +568,10 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	}
 
 	dir := filepath.Join(params.DataDir, chainParams.Name)
-	switch params.Type {
-	case walletTypeElectrum:
-		return createElectrumWallet(params.Pass, params.Seed, bday, dir,
-			params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
-	default: // walletTypeSPV
-		// SPV and electrum share the same lean wallet (an in-tree btcwallet);
-		// the same create path serves both.
-		return createElectrumWallet(params.Pass, params.Seed, bday, dir,
-			params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
-	}
+	// SPV and electrum share the same lean wallet (an in-tree btcwallet); the
+	// same create path serves both wallet types.
+	return createElectrumWallet(params.Pass, params.Seed, bday, dir,
+		params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
 }
 
 // Open opens or connects to the BTC exchange wallet. Start the wallet with its
@@ -3694,10 +3688,6 @@ type BlockHeader struct {
 // hashContract hashes the contract for use in a p2sh or p2wsh pubkey script.
 // The hash function used depends on whether the wallet is configured for
 // segwit. Non-segwit uses Hash160, segwit uses SHA256.
-func (btc *baseWallet) hashContract(contract []byte) []byte {
-	return hashContract(btc.segwit, contract)
-}
-
 func hashContract(segwit bool, contract []byte) []byte {
 	if segwit {
 		h := sha256.Sum256(contract) // BIP141

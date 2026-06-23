@@ -168,16 +168,10 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	}
 
 	walletDir := filepath.Join(params.DataDir, chainParams.Name)
-	switch params.Type {
-	case walletTypeElectrum:
-		return createLTCElectrumWallet(params.Pass, params.Seed, bday, walletDir,
-			params.Logger, recoveryCfg.NumExternalAddresses, recoveryCfg.NumInternalAddresses, chainParams)
-	default: // walletTypeSPV
-		// SPV and electrum share the same lean wallet; the same create path
-		// serves both.
-		return createLTCElectrumWallet(params.Pass, params.Seed, bday, walletDir,
-			params.Logger, recoveryCfg.NumExternalAddresses, recoveryCfg.NumInternalAddresses, chainParams)
-	}
+	// SPV and electrum share the same lean wallet; the same create path serves
+	// both wallet types.
+	return createLTCElectrumWallet(params.Pass, params.Seed, bday, walletDir,
+		params.Logger, recoveryCfg.NumExternalAddresses, recoveryCfg.NumInternalAddresses, chainParams)
 }
 
 // customWalletConstructors are functions for setting up btc.CustomWallet

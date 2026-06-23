@@ -67,7 +67,6 @@ const (
 	defaultBroadcastWait = 2 * time.Second
 
 	maxFutureBlockTime = 2 * time.Hour // see MaxTimeOffsetSeconds in btcd/blockchain/validate.go
-	neutrinoDBName     = "neutrino.db"
 	logDirName         = "logs"
 	logFileName        = "neutrino.log"
 	defaultAcctNum     = 0

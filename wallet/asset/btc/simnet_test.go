@@ -91,7 +91,7 @@ func tBackend(t *testing.T, name string, isInternal bool, blkFunc func(string, e
 		}
 		dataDir := t.TempDir()
 		regtestDir := filepath.Join(dataDir, chaincfg.RegressionNetParams.Name)
-		err = createSPVWallet(walletPassword, seed, DefaultWalletBirthday, regtestDir, tLogger, 0, 0, &chaincfg.RegressionNetParams)
+		err = createElectrumWallet(walletPassword, seed, DefaultWalletBirthday, regtestDir, tLogger, 0, 0, &chaincfg.RegressionNetParams)
 		if err != nil {
 			t.Fatal(err)
 		}
