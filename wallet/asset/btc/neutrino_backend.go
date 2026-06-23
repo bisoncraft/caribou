@@ -6,6 +6,7 @@ package btc
 import (
 	"fmt"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -34,25 +35,42 @@ type neutrinoBackend struct {
 	chainService *spv.ChainService
 	neutrinoDB   walletdb.DB
 	peerManager  *SPVPeerManager
+	// connectPeersOnce ensures the initial wallet peers are connected only on the
+	// first Start. A rescan restarts the client (Stop is client-only, so the
+	// chain service and its peers stay up), and re-adding an already-connected
+	// peer logs a spurious error.
+	connectPeersOnce sync.Once
 }
 
-// Start starts the neutrino client (which lazily starts the chain service) and
-// connects to the initial wallet peers.
+// Start starts the neutrino client (which lazily starts the chain service) and,
+// on the first start, connects to the initial wallet peers.
 func (b *neutrinoBackend) Start() error {
 	if err := b.NeutrinoClient.Start(); err != nil {
 		return err
 	}
-	b.peerManager.ConnectToInitialWalletPeers()
+	b.connectPeersOnce.Do(b.peerManager.ConnectToInitialWalletPeers)
 	return nil
 }
 
-// Stop stops the neutrino client and chain service and closes the neutrino db.
-// It is best-effort; errors closing down are not actionable.
+// Stop stops only the neutrino client, leaving the chain service (and its synced
+// headers) running. This mirrors the standalone NeutrinoClient.Stop and lets the
+// wallet restart the client — e.g. across a rescan, where btcwallet.Stop stops
+// the client — without re-downloading the chain. Full teardown is Shutdown.
 func (b *neutrinoBackend) Stop() {
+	b.NeutrinoClient.Stop()
+}
+
+// Shutdown stops the client, stops the chain service, and closes the neutrino
+// db. It is best-effort; errors closing down are not actionable.
+func (b *neutrinoBackend) Shutdown() {
 	b.NeutrinoClient.Stop()
 	_ = b.chainService.Stop()
 	_ = b.neutrinoDB.Close()
 }
+
+// CanRescan reports true: a neutrino rescan stops only the client (Stop) and
+// restarts it, leaving the synced chain service running.
+func (b *neutrinoBackend) CanRescan() bool { return true }
 
 // Peers, AddPeer, and RemovePeer expose the neutrino peer manager so the wallet
 // can satisfy asset.PeerManager when driven by this backend.

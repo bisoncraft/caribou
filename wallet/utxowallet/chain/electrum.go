@@ -238,6 +238,17 @@ func (c *ElectrumClient) Stop() {
 	c.started = false
 }
 
+// Shutdown fully tears down the electrum backend. Electrum has no client/service
+// split, so it is identical to Stop; the chainBackend interface distinguishes
+// the two so the neutrino backend can stop just its client (e.g. across a
+// rescan) while keeping its synced chain service, reserving full teardown for
+// Shutdown.
+func (c *ElectrumClient) Shutdown() { c.Stop() }
+
+// CanRescan reports false: the electrum network cannot be restarted in place, so
+// the wallet cannot perform an in-place rescan over this backend.
+func (c *ElectrumClient) CanRescan() bool { return false }
+
 // WaitForShutdown blocks until Stop has fully completed.
 func (c *ElectrumClient) WaitForShutdown() {
 	c.wg.Wait()

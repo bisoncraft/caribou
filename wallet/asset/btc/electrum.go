@@ -28,6 +28,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -45,6 +46,17 @@ type chainBackend interface {
 	chain.Backend
 	SyncHeight() (localTip, targetTip int32, synced bool)
 	Connected() bool
+	// Shutdown fully tears the backend down. chain.Backend.Stop may stop only a
+	// client while keeping a service running (neutrino does this so the wallet
+	// can restart the client across a rescan without re-downloading the chain);
+	// Shutdown always releases everything and is what the wallet calls on
+	// disconnect.
+	Shutdown()
+	// CanRescan reports whether the wallet can perform an in-place rescan with
+	// this backend — i.e. its client can be stopped and restarted (keeping any
+	// synced service). Neutrino can; the electrum backend cannot restart its
+	// network, and never offered a rescan anyway.
+	CanRescan() bool
 }
 
 // peerManagedBackend is an optional capability of a chainBackend: backends with
@@ -208,6 +220,9 @@ type ElectrumWallet struct {
 	btcw        *wallet.Wallet
 	loader      *wallet.Loader
 	chainClient chainBackend
+	// rescanMtx serializes Rescan, which stops and restarts the wallet and the
+	// chain client underneath the running notification goroutines.
+	rescanMtx sync.Mutex
 	// txdb is the master transaction database handle, scoped to this wallet's
 	// network and supplied by Core via the wallet config. Core owns its lifecycle.
 	txdb txdb.NetworkTxDB
@@ -254,6 +269,66 @@ func (w *ElectrumWallet) RemovePeer(addr string) error {
 		return pm.RemovePeer(addr)
 	}
 	return errors.New("this wallet's backend does not support peer management")
+}
+
+var _ asset.Rescanner = (*ElectrumWallet)(nil)
+
+// Rescan drops the wallet's transaction history and re-scans the chain from the
+// seed birthday, rediscovering all funds. It satisfies asset.Rescanner; the
+// caller should poll SyncStatus to follow progress. The bday argument is ignored
+// — the wallet rescans from the birthday stored with its seed.
+//
+// The mechanics mirror the previous SPV wallet's RescanAsync: stop the wallet
+// (which stops the chain client — for neutrino only the client, leaving the
+// synced chain service running; for electrum the network), drop the transaction
+// history and reset the synced-to height, then restart and re-synchronize so the
+// next sync recovers from the birthday. rescanMtx serializes this against itself.
+func (w *ElectrumWallet) Rescan(_ context.Context, _ uint64) error {
+	w.rescanMtx.Lock()
+	defer w.rescanMtx.Unlock()
+
+	if w.btcw == nil || w.chainClient == nil {
+		return errors.New("electrum: cannot rescan, wallet not connected")
+	}
+	if !w.chainClient.CanRescan() {
+		// The electrum backend can't restart its network in place, and electrum
+		// rediscovers funds by re-querying address history on every sync anyway,
+		// so an explicit rescan isn't offered.
+		return errors.New("this wallet's backend does not support rescanning")
+	}
+
+	w.log.Info("Stopping wallet for full rescan...")
+	w.btcw.Stop() // also stops the chain client
+	w.btcw.WaitForShutdown()
+	w.chainClient.WaitForShutdown()
+
+	if err := w.forceRescan(); err != nil {
+		// Press on and restart so the wallet isn't left stopped.
+		w.log.Errorf("rescan: %v", err)
+	}
+
+	w.log.Info("Restarting wallet to perform rescan...")
+	w.btcw.Start()
+	if err := w.chainClient.Start(); err != nil {
+		return fmt.Errorf("electrum: restarting chain backend for rescan: %w", err)
+	}
+	w.btcw.Synchronize(w.chainClient)
+	w.receiveTxLastQuery.Store(0)
+	return nil
+}
+
+// forceRescan drops the wallet's transaction history and resets its synced-to
+// height to nil, so the next synchronization recovers from the seed birthday.
+// The wallet must be stopped.
+func (w *ElectrumWallet) forceRescan() error {
+	wdb := w.btcw.Database()
+	if err := wallet.DropTransactionHistory(wdb, false); err != nil {
+		return fmt.Errorf("dropping transaction history: %w", err)
+	}
+	return walletdb.Update(wdb, func(dbtx walletdb.ReadWriteTx) error {
+		ns := dbtx.ReadWriteBucket(wAddrMgrBkt)
+		return w.btcw.Manager.SetSyncedTo(ns, nil)
+	})
 }
 
 // NewElectrumWallet constructs a shared electrum ElectrumWallet for the chain
@@ -367,7 +442,7 @@ func (w *ElectrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if err = w.chainClient.Start(); err != nil {
 		return nil, fmt.Errorf("electrum: couldn't start chain backend: %w", err)
 	}
-	errCloser.Add(func() error { w.chainClient.Stop(); return nil })
+	errCloser.Add(func() error { w.chainClient.Shutdown(); return nil })
 
 	w.log.Info("Synchronizing BTC wallet with electrum network...")
 	w.btcw.Synchronize(w.chainClient)
@@ -403,7 +478,7 @@ func (w *ElectrumWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	go func() {
 		defer wg.Done()
 		<-ctx.Done()
-		w.chainClient.Stop()
+		w.chainClient.Shutdown()
 		w.chainClient.WaitForShutdown()
 	}()
 
