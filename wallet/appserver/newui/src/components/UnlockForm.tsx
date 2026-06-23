@@ -1,9 +1,9 @@
 import { useState, ChangeEvent, FormEvent } from 'react'
-import t from '../js/intl'
+import t from '@bossw/shared/intl'
 import PasswordInput from './PasswordInput'
 import LocaleSelector from './LocaleSelector'
 import Spinner from './Spinner'
-import { postJSON } from '../js/http'
+import { postJSON } from '@bossw/shared/http'
 
 interface UnlockedFormParams {
   setUnlocked: () => void

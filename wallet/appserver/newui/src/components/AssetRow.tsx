@@ -1,7 +1,7 @@
-import t, { tvar } from '../js/intl'
-import app from '../js/application'
-import { TickerAsset } from '../js/assets'
-import CoinLogo from './CoinLogo'
+import t, { tvar } from '@bossw/shared/intl'
+import app from '@bossw/shared/application'
+import { TickerAsset } from '@bossw/shared/assets'
+import CoinLogo from '@bossw/shared/components/CoinLogo'
 import Spinner from './Spinner'
 
 const languages = navigator.languages as string[]

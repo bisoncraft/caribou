@@ -62,14 +62,18 @@ jobs:
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 #v5.0.0
       with:
         node-version: ${{ matrix.node-version }}
+    # The UI is an npm workspace (shared + newui + mobile) with a single
+    # lockfile at wallet/appserver. Install/lint/build from the workspace root
+    # so the pinned toolchain (incl. TypeScript) is used and every workspace is
+    # covered, not just newui.
     - name: npm clean-install
-      working-directory: ./wallet/appserver/newui
+      working-directory: ./wallet/appserver
       run: npm ci
     - name: npm run lint
-      working-directory: ./wallet/appserver/newui
+      working-directory: ./wallet/appserver
       run: npm run lint
     - name: npm run build
-      working-directory: ./wallet/appserver/newui
+      working-directory: ./wallet/appserver
       run: npm run build
 
   lint-docs:

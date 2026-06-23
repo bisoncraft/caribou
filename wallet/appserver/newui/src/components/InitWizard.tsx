@@ -1,9 +1,10 @@
 import { useState, FormEvent } from 'react'
-import t from '../js/intl'
+import t from '@bossw/shared/intl'
 import PasswordInput from './PasswordInput'
 import LocaleSelector from './LocaleSelector'
 import Spinner from './Spinner'
-import { postJSON } from '../js/http'
+import { postJSON } from '@bossw/shared/http'
+import { normalizeSeed, seedWordCount } from '@bossw/shared/seed'
 
 /*
  * SeedPromptForm asks the user whether they are restoring from an existing
@@ -139,13 +140,9 @@ export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
 
   const onGoBackClicked = () => setUsingSeed(undefined)
 
-  // Normalize whitespace: collapse runs of whitespace/newlines to single
-  // spaces and trim so stray formatting does not break validation.
-  const normalizedSeed = () => workingSeed.trim().replace(/\s+/g, ' ')
-
   const submitSeed = async () => {
     if (submitting) return
-    const seed = normalizedSeed()
+    const seed = normalizeSeed(workingSeed)
     setErr('')
     setSubmitting(true)
     const r = await postJSON('/api/validateseed', { seed })
@@ -162,7 +159,7 @@ export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
     submitSeed()
   }
 
-  const wordCount = workingSeed.trim() === '' ? 0 : workingSeed.trim().split(/\s+/).length
+  const wordCount = seedWordCount(workingSeed)
   const canSubmit = wordCount > 0 && !submitting
 
   return (

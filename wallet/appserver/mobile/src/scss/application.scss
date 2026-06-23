@@ -1,0 +1,525 @@
+// Mobile bundle styles. Foundations only for the scaffold: the responsive rules
+// the design doc calls for (dvh sizing, safe-area insets, bottom tab bar, touch
+// targets >= 44px). Component styling lands with the real panes.
+
+:root {
+  --mb-bg: #ffffff;
+  --mb-fg: #1a1a1a;
+  --mb-muted: #6b7280;
+  --mb-accent: #2563eb;
+  --mb-border: #e5e7eb;
+  --mb-tabbar-h: 56px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --mb-bg: #0f1115;
+    --mb-fg: #f3f4f6;
+    --mb-muted: #9ca3af;
+    --mb-accent: #60a5fa;
+    --mb-border: #1f2937;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--mb-bg);
+  color: var(--mb-fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  // dvh tracks the viewport correctly as mobile browser chrome shows/hides.
+  min-height: 100dvh;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+.mb-screen {
+  min-height: 100dvh;
+  // Respect notches / status bar / home indicator.
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.mb-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  text-align: center;
+  padding: 1.5rem;
+}
+
+.mb-brand {
+  margin: 0;
+}
+
+.mb-muted {
+  color: var(--mb-muted);
+}
+
+// Non-mainnet network indicator: a fixed banner pinned to the top of every
+// screen so the active network is never ambiguous.
+.mb-net-badge {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  text-align: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fff;
+  background: #b45309;
+  pointer-events: none;
+}
+
+// App shell: scrollable content above a fixed bottom tab bar.
+.mb-app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.mb-content {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 1rem;
+  padding-top: calc(1rem + env(safe-area-inset-top));
+}
+
+.mb-tabbar {
+  display: flex;
+  border-top: 1px solid var(--mb-border);
+  background: var(--mb-bg);
+  // Keep the tab row above the home indicator.
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.mb-tab {
+  flex: 1;
+  // Touch target >= 44px.
+  min-height: 44px;
+  height: var(--mb-tabbar-h);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: none;
+  color: var(--mb-muted);
+  font: inherit;
+  cursor: pointer;
+
+  &.active {
+    color: var(--mb-accent);
+  }
+}
+
+.mb-tab-icon {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.mb-tab-label {
+  font-size: 0.7rem;
+}
+
+// Unlock screen.
+.mb-unlock {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 0.75rem;
+  max-width: 360px;
+  margin: 0 auto;
+  text-align: center;
+
+  .mb-brand {
+    margin: 0 0 0.25rem;
+  }
+}
+
+.mb-input {
+  width: 100%;
+  // Touch target >= 44px.
+  min-height: 44px;
+  padding: 0 0.85rem;
+  border: 1px solid var(--mb-border);
+  border-radius: 10px;
+  background: var(--mb-bg);
+  color: var(--mb-fg);
+  font: inherit;
+  font-size: 1rem; // >= 16px avoids iOS input zoom
+
+  &:focus {
+    outline: none;
+    border-color: var(--mb-accent);
+  }
+}
+
+.mb-btn {
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: var(--mb-accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.mb-btn-secondary {
+  background: transparent;
+  color: var(--mb-fg);
+  border: 1px solid var(--mb-border);
+}
+
+.mb-err {
+  min-height: 1.2em;
+  color: #dc2626;
+  font-size: 0.85rem;
+}
+
+// Init / wallet-creation wizard.
+.mb-init {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.mb-init-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+  text-align: center;
+
+  h2 {
+    margin: 0;
+  }
+
+  .mb-brand {
+    margin: 0 0 0.25rem;
+  }
+}
+
+.mb-init-hint {
+  font-size: 0.8rem;
+  min-height: 1.1em;
+}
+
+.mb-textarea {
+  width: 100%;
+  min-height: 7rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--mb-border);
+  border-radius: 10px;
+  background: var(--mb-bg);
+  color: var(--mb-fg);
+  font: inherit;
+  font-size: 1rem;
+  resize: vertical;
+
+  &:focus {
+    outline: none;
+    border-color: var(--mb-accent);
+  }
+}
+
+.mb-seed {
+  padding: 0.85rem;
+  border: 1px solid var(--mb-border);
+  border-radius: 10px;
+  background: var(--mb-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  word-spacing: 0.15rem;
+  text-align: left;
+}
+
+// Portfolio.
+.mb-portfolio {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.mb-totals {
+  text-align: center;
+  padding: 0.5rem 0 0.75rem;
+}
+
+.mb-totals-value {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.mb-totals-sub {
+  font-size: 0.85rem;
+  margin-top: 0.15rem;
+}
+
+.mb-totals-empty {
+  padding: 1.5rem 0;
+}
+
+.mb-asset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mb-asset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--mb-border);
+}
+
+.mb-coin-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.mb-asset-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.mb-asset-ticker {
+  font-weight: 600;
+}
+
+.mb-asset-name {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mb-asset-bal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  flex: 0 0 auto;
+}
+
+.mb-asset-fiat {
+  font-weight: 600;
+}
+
+.mb-asset-amt {
+  font-size: 0.8rem;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+// Portfolio action buttons (Send / Receive).
+.mb-actions {
+  display: flex;
+  gap: 0.5rem;
+
+  .mb-btn {
+    flex: 1;
+  }
+}
+
+.mb-btn-small {
+  min-height: 36px;
+  padding: 0 0.85rem;
+  flex: 0 0 auto;
+}
+
+.mb-row-err {
+  flex-basis: 100%;
+  text-align: right;
+}
+
+// Full-screen overlay (Send / Receive / Activate).
+.mb-overlay {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.mb-overlay-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: calc(0.5rem + env(safe-area-inset-top)) 1rem 0.5rem;
+  border-bottom: 1px solid var(--mb-border);
+  font-weight: 600;
+}
+
+.mb-back {
+  border: none;
+  background: none;
+  color: var(--mb-fg);
+  font-size: 1.6rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+  min-width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.mb-overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 1rem;
+}
+
+.mb-pad {
+  padding: 1rem 0;
+  text-align: center;
+}
+
+.mb-tappable {
+  cursor: pointer;
+}
+
+// Receive address display.
+.mb-receive {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  text-align: center;
+}
+
+.mb-address {
+  word-break: break-all;
+  text-align: center;
+}
+
+// Settings.
+.mb-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.mb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+
+  h2 {
+    margin: 0;
+    text-align: center;
+  }
+}
+
+.mb-check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 44px;
+
+  input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+    flex: 0 0 auto;
+  }
+}
+
+// Send form.
+.mb-send {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mb-field-label {
+  font-size: 0.8rem;
+  color: var(--mb-muted);
+}
+
+.mb-field-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.mb-link {
+  font-size: 0.8rem;
+  color: var(--mb-accent);
+  cursor: pointer;
+}
+
+.mb-amt {
+  display: flex;
+  gap: 0.5rem;
+
+  .mb-input {
+    flex: 1;
+  }
+}
+
+.mb-input-bad {
+  border-color: #dc2626;
+}
+
+.mb-send-summary {
+  padding: 0.25rem 0;
+}
+
+.mb-summary-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  padding: 0.2rem 0;
+}
+
+.mb-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--mb-border);
+  border-top-color: var(--mb-accent);
+  border-radius: 50%;
+  animation: mb-spin 0.8s linear infinite;
+}
+
+@keyframes mb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -3,8 +3,8 @@ import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
 import ActivateAsset from './ActivateAsset'
-import { FormData } from '../js/registry'
-import app from '../js/application'
+import { FormData } from '@bossw/shared/registry'
+import app from '@bossw/shared/application'
 
 interface ModalsParams {
   fd: FormData

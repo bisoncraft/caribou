@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -503,11 +504,24 @@ func New(cfg *Config) (*AppServer, error) {
 		})
 	})
 
-	// Files
-	fileServer(mux, "/js", siteDir, "dist", "text/javascript")
-	fileServer(mux, "/css", siteDir, "dist", "text/css")
-	fileServer(mux, "/img", siteDir, "src/img", "")
-	fileServer(mux, "/font", siteDir, "src/font", "")
+	// Files. The built bundle (js/css) is served from the per-build site dir;
+	// images and fonts are shared across bundles and served from the shared
+	// dir. When siteDir is set (on-disk dev override), the shared dir is its
+	// sibling. If that sibling is missing (an unusual --sitedir layout), fall
+	// back to the embedded shared assets rather than 404ing every image/font.
+	var sharedDir string
+	if siteDir != "" {
+		d := filepath.Join(siteDir, "..", sharedAssetsDir)
+		if _, err := os.Stat(d); err == nil {
+			sharedDir = d
+		} else {
+			log.Warnf("Shared assets dir %q not found; serving embedded img/font.", d)
+		}
+	}
+	fileServer(mux, "/js", siteDir, staticSiteRes, site, "dist", "text/javascript")
+	fileServer(mux, "/css", siteDir, staticSiteRes, site, "dist", "text/css")
+	fileServer(mux, "/img", sharedDir, sharedAssets, sharedAssetsDir, "img", "")
+	fileServer(mux, "/font", sharedDir, sharedAssets, sharedAssetsDir, "font", "")
 
 	// The SPA performs its own client-side routing (/portfolio,
 	// /trade, /activity, etc.). Serve the SPA shell for any unmatched
@@ -668,30 +682,34 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		s.readNotifications(ctx)
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	if checkAppVersion {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		// Perform initial fetch of the latest version.
-		s.fetchLatestVersion(ctx)
+			// Perform initial fetch of the latest version.
+			s.fetchLatestVersion(ctx)
 
-		for {
-			select {
-			case <-time.After(24 * time.Hour):
-				s.fetchLatestVersion(ctx)
-			case <-ctx.Done():
-				return
+			for {
+				select {
+				case <-time.After(24 * time.Hour):
+					s.fetchLatestVersion(ctx)
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	log.Infof("Web server listening on %s (https = %v)", s.addr, https)
 	scheme := "http"
 	if https {
 		scheme = "https"
 	}
-	fmt.Printf("\n\t****  OPEN IN YOUR BROWSER TO LOGIN AND TRADE  --->  %s://%s  ****\n\n",
-		scheme, s.addr)
+	if printBrowserBanner {
+		fmt.Printf("\n\t****  OPEN IN YOUR BROWSER TO LOGIN AND TRADE  --->  %s://%s  ****\n\n",
+			scheme, s.addr)
+	}
 
 	success = true
 	return &wg, nil
@@ -1066,10 +1084,11 @@ func serveFile(w http.ResponseWriter, r *http.Request, fullFilePath string) {
 	http.ServeFile(w, r, fullFilePath)
 }
 
-// fileServer is a file server for files in subDir with the parent folder
-// siteDire. An empty siteDir means embedded files only are served. The
-// pathPrefix is stripped from the request path when locating the file.
-func fileServer(r chi.Router, pathPrefix, siteDir, subDir, forceContentType string) {
+// fileServer is a file server for files in subDir. When diskDir is non-empty
+// (on-disk dev override), files are read from diskDir/subDir; otherwise they are
+// read from the embedded fsys at embedPrefix/subDir. The pathPrefix is stripped
+// from the request path when locating the file.
+func fileServer(r chi.Router, pathPrefix, diskDir string, fsys embed.FS, embedPrefix, subDir, forceContentType string) {
 	if strings.ContainsAny(pathPrefix, "{}*") {
 		panic("FileServer does not permit URL parameters.")
 	}
@@ -1106,16 +1125,16 @@ func fileServer(r chi.Router, pathPrefix, siteDir, subDir, forceContentType stri
 			w.Header().Set("Content-Type", forceContentType)
 		}
 
-		// If siteDir is set, use system file system only.
-		if siteDir != "" {
-			fullFilePath := filepath.Join(siteDir, subDir, upath)
+		// If diskDir is set, use system file system only.
+		if diskDir != "" {
+			fullFilePath := filepath.Join(diskDir, subDir, upath)
 			serveFile(w, r, fullFilePath)
 			return
 		}
 
 		// Use the embedded files only.
-		fs := http.FS(staticSiteRes) // so f is an http.File instead of fs.File
-		f, err := fs.Open(path.Join(site, subDir, upath))
+		fs := http.FS(fsys) // so f is an http.File instead of fs.File
+		f, err := fs.Open(path.Join(embedPrefix, subDir, upath))
 		if err != nil {
 			http.NotFound(w, r)
 			return

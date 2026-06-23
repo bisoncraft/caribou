@@ -1,10 +1,10 @@
 import { useState, FormEvent } from 'react'
-import t from '../js/intl'
-import app from '../js/application'
+import t from '@bossw/shared/intl'
+import app from '@bossw/shared/application'
 import PasswordInput from './PasswordInput'
 import Spinner from './Spinner'
 import Checkbox from './Checkbox'
-import { postJSON } from '../js/http'
+import { postJSON } from '@bossw/shared/http'
 
 /*
  * SendSettings exposes app-level send preferences. Currently the only toggle

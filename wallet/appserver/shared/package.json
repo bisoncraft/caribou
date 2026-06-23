@@ -1,0 +1,15 @@
+{
+  "name": "@bossw/shared",
+  "version": "1.0.0",
+  "description": "Framework-agnostic core shared by the desktop (newui) and mobile bundles: loopback WS/HTTP transport, API request/response types, and app state.",
+  "private": true,
+  "license": "ISC",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "tsc --noEmit && eslint src --ext .ts --ext .tsx"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  }
+}

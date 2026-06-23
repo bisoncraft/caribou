@@ -59,6 +59,11 @@ export interface SyncStatus {
   txs: number | undefined
 }
 
+// traitWithdrawer marks wallets that subtract the network fee from the sent
+// amount (e.g. account-based chains). Mirrors the asset.WalletTrait bit in Go;
+// test against WalletState.traits.
+export const traitWithdrawer = 1 << 6
+
 export interface WalletState {
   symbol: string
   assetID: number

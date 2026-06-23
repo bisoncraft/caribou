@@ -5,9 +5,15 @@ package appserver
 
 import "embed"
 
-// site is the common prefix for the SPA's bundled resources with respect to
-// this appserver package.
-const site = "newui"
+// sharedAssetsDir is the prefix of the shared assets within sharedAssets, and
+// the directory name on disk (a sibling of the desktop/mobile bundles).
+const sharedAssetsDir = "shared"
 
-//go:embed newui/dist newui/src/img newui/src/font
-var staticSiteRes embed.FS
+// sharedAssets holds static assets (images, fonts) referenced by the SPAs as
+// runtime URLs (/img/..., /font/...) and served as-is. They are common to both
+// the desktop (newui) and mobile bundles, so they live in one place rather than
+// being duplicated per bundle. The per-bundle built output (dist) is embedded
+// separately by the build-tagged embed_desktop.go / embed_mobile.go.
+//
+//go:embed shared/img shared/font
+var sharedAssets embed.FS

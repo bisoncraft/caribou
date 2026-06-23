@@ -1,6 +1,11 @@
 {
     "compilerOptions": {
         "outDir": "./dist/",
+        "baseUrl": ".",
+        "paths": {
+            "@bossw/shared": ["../shared/src/index.ts"],
+            "@bossw/shared/*": ["../shared/src/*"]
+        },
         "sourceMap": true,
         "noImplicitAny": true,
         "module": "es6",

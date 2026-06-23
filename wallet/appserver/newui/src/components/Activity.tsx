@@ -1,4 +1,4 @@
-import t from '../js/intl'
+import t from '@bossw/shared/intl'
 
 export default function Activity () {
   return (
