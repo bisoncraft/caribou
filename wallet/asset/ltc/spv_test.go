@@ -15,8 +15,4 @@ func TestLtcNetParamsMappings(t *testing.T) {
 	if np := ltcTableNetParams(RegressionNetParams); np == nil {
 		t.Fatal("ltcTableNetParams(regtest) returned nil")
 	}
-
-	// Compile-time check: verify createSPVWallet exists with the signature
-	// expected by btc.Create.
-	_ = createSPVWallet
 }

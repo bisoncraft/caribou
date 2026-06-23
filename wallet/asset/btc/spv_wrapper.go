@@ -131,9 +131,8 @@ type BlockNotification struct {
 	Height int32
 }
 
-// SPVService is satisfied by *spv.ChainService (via btcChainService), with the
-// exception of the Peers method, which has a generic interface in place of
-// spv.ServerPeer.
+// SPVService is satisfied by *spv.ChainService, with the exception of the
+// Peers method, which has a generic interface in place of spv.ServerPeer.
 type SPVService interface {
 	GetBlockHash(int64) (*chainhash.Hash, error)
 	BestBlock() (*headerfs.BlockStamp, error)
@@ -153,44 +152,6 @@ type SPVPeer interface {
 	LastBlock() int32
 	Addr() string
 }
-
-// btcChainService wraps *spv.ChainService in order to translate the
-// spv.ServerPeer to the SPVPeer interface type, and to convert GetBlock's
-// return type from *bisonwire.BlockWithHeight to *btcutil.Block.
-type btcChainService struct {
-	*spv.ChainService
-}
-
-func (s *btcChainService) Peers() []SPVPeer {
-	rawPeers := s.ChainService.Peers()
-	peers := make([]SPVPeer, 0, len(rawPeers))
-	for _, p := range rawPeers {
-		peers = append(peers, p)
-	}
-	return peers
-}
-
-func (s *btcChainService) AddPeer(addr string) error {
-	return s.ChainService.ConnectNode(addr, true)
-}
-
-func (s *btcChainService) RemovePeer(addr string) error {
-	return s.ChainService.RemoveNodeByAddr(addr)
-}
-
-// GetBlock wraps spv.ChainService.GetBlock, converting the returned
-// *bisonwire.BlockWithHeight to a *btcutil.Block as expected by SPVService.
-func (s *btcChainService) GetBlock(blockHash chainhash.Hash, options ...spv.QueryOption) (*btcutil.Block, error) {
-	bwh, err := s.ChainService.GetBlock(blockHash, options...)
-	if err != nil {
-		return nil, err
-	}
-	msgBlock := bwh.Block.MsgBlock()
-	btcBlock := btcutil.NewBlock(msgBlock)
-	return btcBlock, nil
-}
-
-var _ SPVService = (*btcChainService)(nil)
 
 // BTCWalletConstructor is a function to construct a BTCWallet.
 type BTCWalletConstructor func(dir string, cfg *WalletConfig, chainParams *chaincfg.Params, log util.Logger) BTCWallet

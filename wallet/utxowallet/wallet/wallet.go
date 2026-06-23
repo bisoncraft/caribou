@@ -219,9 +219,6 @@ func (w *Wallet) Start() {
 // yet), it builds and starts the backend first, then wires it as the chain
 // client. When a backend has already been started (e.g. across a rescan),
 // Synchronize re-wires it without rebuilding.
-//
-// Callers that manage their own chain backend (legacy SPV path, tests) may
-// continue to call SynchronizeWith instead.
 func (w *Wallet) Synchronize() error {
 	w.quitMu.Lock()
 	select {
@@ -254,32 +251,13 @@ func (w *Wallet) Synchronize() error {
 	}
 
 	if chainClient == nil {
-		return errors.New("wallet: no chain client available (call SynchronizeWith to provide one)")
+		return errors.New("wallet: no chain client available; set a backend via the Loader's WithBackendKind option")
 	}
 
 	return w.synchronize(chainClient)
 }
 
-// SynchronizeWith wires an externally-provided chain backend and launches the
-// sync goroutines. It is the legacy path used by callers that build and manage
-// their own backend (the old SPV wallet, tests). Callers that want the wallet
-// to own its backend should use Synchronize() after setting the loader's
-// BackendKind.
-func (w *Wallet) SynchronizeWith(chainClient chain.Backend) {
-	w.quitMu.Lock()
-	select {
-	case <-w.quit:
-		w.quitMu.Unlock()
-		return
-	default:
-	}
-	w.quitMu.Unlock()
-
-	_ = w.synchronize(chainClient)
-}
-
-// synchronize is the shared implementation: it wires chainClient and starts the
-// sync goroutines. The lock-then-bail pattern matches the original Synchronize.
+// synchronize wires chainClient and starts the sync goroutines.
 func (w *Wallet) synchronize(chainClient chain.Backend) error {
 	// TODO: Ignoring the new client when one is already set breaks callers
 	// who are replacing the client, perhaps after a disconnect.

@@ -81,8 +81,7 @@ func WithScryptOptions(opts *waddrmgr.ScryptOptions) LoaderOption {
 // WithBackendKind tells the loader which chain backend the wallet should own.
 // When this option is present, the opened/created Wallet records the backend
 // kind and its data directory; a subsequent Synchronize() call builds, starts,
-// and wires the backend automatically. Without this option, callers must manage
-// their own backend and call SynchronizeWith.
+// and wires the backend automatically.
 func WithBackendKind(kind BackendKind) LoaderOption {
 	return func(c *loaderConfig) {
 		c.backendKind = kind

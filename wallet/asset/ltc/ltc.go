@@ -34,6 +34,7 @@ const (
 	walletTypeSPV       = "SPV"
 	walletTypeLegacy    = ""
 	walletTypeElectrum  = "electrumRPC"
+	dbTimeout           = 20 * time.Second
 )
 
 var (

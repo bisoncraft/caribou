@@ -80,9 +80,8 @@ func openLTCElectrumWallet(cfg *asset.WalletConfig, chainParams *chaincfg.Params
 }
 
 // ltcSPVChainConfig is the LTC parameterization of the shared NativeWallet driven
-// by the neutrino (SPV) backend rather than electrum: same wallet, LTC's seeds.
-// The neutrino chain-service wrapper is shared (btc.btcChainService).
-// Neutrino seeds are sourced from the assets table via the NetParams field.
+// by the neutrino (BIP-157/158) backend rather than electrum: same wallet, LTC's
+// seeds. Neutrino seeds are sourced from the assets table via the NetParams field.
 func ltcSPVChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 	base := ltcElectrumChainConfig(chainParams)
 	return btc.SPVChainConfig(base)
