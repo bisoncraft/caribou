@@ -76,6 +76,9 @@ fi
 # pinned linter binary was not built for: a golangci-lint built with go1.25
 # panics on go1.26 std-lib files. Linting is Go-version-agnostic, so running it
 # on a single matrix entry is enough. Unset means run.
+#
+# TODO: remove SKIP_GO_LINT (and the matrix env in build.yml) once the pinned
+# golangci-lint is bumped to a release built with go1.26.
 if [ -n "$SKIP_GO_LINT" ]; then
 	echo "Skipping golangci-lint (SKIP_GO_LINT set)."
 else

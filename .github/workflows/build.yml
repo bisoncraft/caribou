@@ -32,6 +32,9 @@ jobs:
       # --i-still-use-this), which broke every CI run. Tests are
       # correct without it; CI is just slower on cache misses.
       - name: Install Linters
+        # Skip on 1.26: the pinned linter is skipped there via SKIP_GO_LINT, so
+        # installing it just wastes CI time. Bump when the matrix changes.
+        if: matrix.go != '1.26'
         run: "curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.6.2"
 
       - name: Test
