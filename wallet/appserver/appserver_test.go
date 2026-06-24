@@ -464,6 +464,16 @@ func TestAPITokenEndpoints(t *testing.T) {
 		t.Fatalf("freshly generated token should authorize")
 	}
 
+	// Logout does not revoke the API token: it survives deauth so in-flight
+	// automation clients keep working until /revokeapitoken is called.
+	s.deauth()
+	if s.apiTokenHash == "" {
+		t.Fatalf("API token hash must survive logout")
+	}
+	if !s.isAuthed(useReq) {
+		t.Fatalf("API token should still authorize after logout")
+	}
+
 	// Revoke is rejected from a non-loopback peer and leaves the token intact.
 	if resp := call(s.apiRevokeAPIToken, "10.0.0.5:5555", "", "{}"); !strings.Contains(resp, `"ok":false`) {
 		t.Fatalf("non-loopback revoke should be rejected, got %s", resp)
