@@ -3,7 +3,7 @@
 # Devs should install gencerts
 # go install github.com/decred/dcrd/cmd/gencerts@release-v1.7
 
-# ./electrumx.sh (Bitcoin/Litecoin) (20556/20566) (54002/55002)
+# ./electrumx.sh (Bitcoin/Litecoin/Dash) (20556/20566/20777) (54002/55002/55021)
 
 set -ex
 
@@ -16,6 +16,10 @@ case $COIN in
 
   Litecoin)
     SYMBOL=ltc
+    ;;
+
+  Dash)
+    SYMBOL=dash
     ;;
 
   *)
@@ -55,6 +59,12 @@ fi
 source ${ELECTRUMX_DIR}/venv/bin/activate
 python -m ensurepip --upgrade
 pip install .
+
+# Dash's electrumx coin module hashes block headers with X11 and imports the
+# x11_hash package, which electrumx does not pull in by default.
+if [ "${COIN}" = "Dash" ]; then
+    pip install x11_hash
+fi
 
 gencerts -L ${DATA_DIR}/ssl.cert ${DATA_DIR}/ssl.key
 

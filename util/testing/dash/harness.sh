@@ -63,11 +63,17 @@ NODES_ROOT=~/dextest/${SYMBOL}
 rm -rf "${NODES_ROOT}"
 ## Tree clean ##
 
-ALPHA_CLI_CFG="-rpcwallet=       -rpcport=${ALPHA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
-BETA_CLI_CFG="-rpcwallet=        -rpcport=${BETA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
+# -datadir is required: Dash Core v23+ dash-cli treats a missing default config
+# file (~/.dashcore/dash.conf) as a fatal "Error reading configuration file:"
+# rather than a warning, so without it every harness-ctl command fails. Pointing
+# at the node's (existing) datadir satisfies the config read; the RPC connection
+# itself uses -rpcport/-rpcuser/-rpcpassword. gamma lives in the alpha node and
+# delta in the beta node, so they use the corresponding datadir.
+ALPHA_CLI_CFG="-datadir=${NODES_ROOT}/alpha -rpcwallet= -rpcport=${ALPHA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
+BETA_CLI_CFG="-datadir=${NODES_ROOT}/beta -rpcwallet= -rpcport=${BETA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
 
-GAMMA_CLI_CFG="-rpcwallet=gamma -rpcport=${ALPHA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
-DELTA_CLI_CFG="-rpcwallet=delta -rpcport=${BETA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
+GAMMA_CLI_CFG="-datadir=${NODES_ROOT}/alpha -rpcwallet=gamma -rpcport=${ALPHA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
+DELTA_CLI_CFG="-datadir=${NODES_ROOT}/beta -rpcwallet=delta -rpcport=${BETA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass"
 
 # DONE can be used in a send-keys call along with a `wait-for dash` command to
 # wait for process termination.
@@ -132,6 +138,7 @@ tmux send-keys -t $SESSION:0 "${DAEMON} -rpcuser=user -rpcpassword=pass \
   -rpcport=${ALPHA_RPC_PORT} -datadir=${ALPHA_DIR} \
   -debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
   -whitelist=127.0.0.0/8 -whitelist=::1 \
+  -peerblockfilters=1 -blockfilterindex=basic \
   -txindex=1 -regtest=1 -port=${ALPHA_LISTEN_PORT} -fallbackfee=0.00001 \
   ${EXTRA_ARGS}; tmux wait-for -S alpha${SYMBOL}" C-m
 sleep 3
@@ -149,6 +156,7 @@ tmux send-keys -t $SESSION:1 "${DAEMON} -rpcuser=user -rpcpassword=pass \
   -rpcport=${BETA_RPC_PORT} -datadir=${BETA_DIR} \
   -debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
   -whitelist=127.0.0.0/8 -whitelist=::1 \
+  -peerblockfilters=1 -blockfilterindex=basic \
   -txindex=1 -regtest=1 -port=${BETA_LISTEN_PORT} -fallbackfee=0.00001 \
   ${EXTRA_ARGS}; tmux wait-for -S beta${SYMBOL}" C-m
 sleep 3
