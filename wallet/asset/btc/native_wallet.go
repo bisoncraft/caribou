@@ -48,10 +48,14 @@ const defaultAcctNum = 0
 // wAddrMgrBkt is the waddrmgr namespace bucket key in the wallet database.
 var wAddrMgrBkt = []byte("waddrmgr")
 
-// extendAddresses pre-derives extIdx external and intIdx internal BIP-84
-// addresses so recovery scans cover previously-used addresses.
+// extendAddresses pre-derives extIdx external and intIdx internal addresses
+// on the wallet's primary key scope so recovery scans cover previously-used
+// addresses. The primary scope is chain-dependent (BIP84 for BTC/LTC, BIP44
+// for non-segwit chains like Dash), so it must not be hardcoded — extending a
+// non-primary scope would leave the branches actually used for derivation at
+// index 0.
 func extendAddresses(extIdx, intIdx uint32, btcw *wallet.Wallet) error {
-	scopedKeyManager, err := btcw.Manager.FetchScopedKeyManager(btcw.ScopeForPurpose(84))
+	scopedKeyManager, err := btcw.Manager.FetchScopedKeyManager(btcw.PrimaryScope())
 	if err != nil {
 		return err
 	}
@@ -563,7 +567,7 @@ func (w *NativeWallet) DepositAddress() (string, error) {
 	if w.btcw == nil {
 		return "", errors.New("native: wallet not connected")
 	}
-	scope := w.btcw.ScopeForPurpose(84)
+	scope := w.btcw.PrimaryScope()
 	addr, err := w.btcw.NewAddress(0, scope)
 	if err != nil {
 		return "", fmt.Errorf("native: new address: %w", err)
@@ -607,7 +611,7 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 	}
 
 	txOut := wire.NewTxOut(int64(value), pkScript)
-	scope := w.btcw.ScopeForPurpose(84)
+	scope := w.btcw.PrimaryScope()
 	satPerKB := btcutil.Amount(feeRate * 1000)
 
 	msgTx, err := w.btcw.SendOutputs(
@@ -656,11 +660,19 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 	}, nil
 }
 
-// StandardSendFee returns the fee for a standard segwit send (1-in 2-out).
+// StandardSendFee returns the fee for a standard send (1-in 2-out), sized for
+// the wallet's address type: legacy P2PKH for non-segwit chains (Dash), native
+// segwit P2WPKH otherwise (BTC/LTC).
 func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
-	// segwit: 1 P2WPKH input + 2 P2WPKH outputs
-	inputSize := uint64(RedeemP2WPKHInputSize) + uint64((RedeemP2PKSigScriptSize+2+3)/4)
-	sz := uint64(MinimumTxOverhead) + inputSize + P2WPKHOutputSize*2
+	var sz uint64
+	if w.netParams.AddrPurpose == 44 {
+		// legacy: 1 P2PKH input + 2 P2PKH outputs
+		sz = uint64(MinimumTxOverhead) + uint64(RedeemP2PKHInputSize) + P2PKHOutputSize*2
+	} else {
+		// segwit: 1 P2WPKH input + 2 P2WPKH outputs
+		inputSize := uint64(RedeemP2WPKHInputSize) + uint64((RedeemP2PKSigScriptSize+2+3)/4)
+		sz = uint64(MinimumTxOverhead) + inputSize + P2WPKHOutputSize*2
+	}
 	return feeRate * sz
 }
 
