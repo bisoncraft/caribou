@@ -111,7 +111,15 @@ final class AppModel: ObservableObject {
                              create: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try? dir.setResourceValues(values)
+        do {
+            try dir.setResourceValues(values)
+        } catch {
+            // Non-fatal: the dir is usable either way, so don't abort startup.
+            // But this flag is what keeps the (encrypted) wallet DB out of
+            // iCloud/iTunes backups, so a silent lapse of that guarantee should
+            // at least be visible.
+            NSLog("bossw: failed to exclude data dir from backup: \(error)")
+        }
         return dir.path
     }
 
