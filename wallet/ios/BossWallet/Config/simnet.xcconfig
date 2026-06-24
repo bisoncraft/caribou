@@ -1,0 +1,5 @@
+// Simnet flavor. Mirrors Android's netSimnet product flavor: distinct bundle id
+// + display name so it installs side by side with mainnet.
+WALLET_NET = simnet
+PRODUCT_BUNDLE_IDENTIFIER = com.bisoncraft.bosswallet.simnet
+BOSSW_DISPLAY_NAME = Boss Wallet simnet

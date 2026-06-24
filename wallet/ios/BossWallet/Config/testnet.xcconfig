@@ -1,0 +1,5 @@
+// Testnet flavor. Mirrors Android's netTestnet product flavor: distinct bundle
+// id + display name so it installs side by side with mainnet.
+WALLET_NET = testnet
+PRODUCT_BUNDLE_IDENTIFIER = com.bisoncraft.bosswallet.testnet
+BOSSW_DISPLAY_NAME = Boss Wallet testnet

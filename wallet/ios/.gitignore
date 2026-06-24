@@ -1,0 +1,12 @@
+# Generated Xcode project (regenerate from project.yml with: xcodegen generate).
+BossWallet.xcodeproj/
+
+# gomobile-bound framework (build it with ./bind.sh).
+Frameworks/Mobile.xcframework/
+
+# Xcode user state / build output.
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
+.DS_Store

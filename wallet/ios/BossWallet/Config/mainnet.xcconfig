@@ -1,0 +1,4 @@
+// Mainnet flavor. Mirrors Android's netMainnet product flavor.
+WALLET_NET = mainnet
+PRODUCT_BUNDLE_IDENTIFIER = com.bisoncraft.bosswallet
+BOSSW_DISPLAY_NAME = Boss Wallet
