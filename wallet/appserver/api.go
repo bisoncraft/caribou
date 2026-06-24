@@ -969,7 +969,9 @@ func (s *AppServer) actuallyLogin(w http.ResponseWriter, r *http.Request, login 
 	pass, err := s.resolvePass(login.Pass, r)
 	defer zero(pass)
 	if err != nil {
-		return badCredentials{fmt.Errorf("password error: %w", err)}
+		// A missing or unreadable cached password is environmental, not a
+		// rejected credential, so it must not feed the brute-force throttle.
+		return fmt.Errorf("password error: %w", err)
 	}
 	err = s.core.Login(pass)
 	if err != nil {

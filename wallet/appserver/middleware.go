@@ -49,6 +49,9 @@ func (s *AppServer) capabilityMiddleware(next http.Handler) http.Handler {
 				Path:     "/",
 				HttpOnly: true,
 				SameSite: http.SameSiteStrictMode,
+				// Secure is omitted intentionally: the loopback server is
+				// HTTP-only, and a Secure cookie would never be sent over
+				// http://, breaking the WebView bootstrap.
 			})
 			stripTokenRedirect(w, r)
 			return

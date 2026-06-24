@@ -4,6 +4,7 @@
 package appserver
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -155,5 +156,26 @@ func TestLoginThrottle(t *testing.T) {
 	s.noteLoginSuccess()
 	if d := s.loginThrottle(); d != 0 {
 		t.Fatalf("lockout not cleared after success: %v", d)
+	}
+}
+
+// An environmental resolvePass failure (e.g. a cached-password lookup that
+// fails on the mobile flow) must not be tagged badCredentials, so it does not
+// feed the brute-force throttle and lock out the legitimate client.
+func TestResolvePassFailureDoesNotThrottle(t *testing.T) {
+	s := &AppServer{}
+
+	// Empty password plus cookies that point at a non-existent cached
+	// password forces resolvePass down the retrieval-error path.
+	req := httptest.NewRequest(http.MethodPost, "/api/login", nil)
+	req.AddCookie(&http.Cookie{Name: authCK, Value: "deadbeef"})
+	req.AddCookie(&http.Cookie{Name: pwKeyCK, Value: "00112233445566778899aabbccddeeff"})
+
+	err := s.actuallyLogin(httptest.NewRecorder(), req, &loginForm{})
+	if err == nil {
+		t.Fatal("expected resolvePass failure, got nil")
+	}
+	if errors.Is(err, errBadCredentials) {
+		t.Fatalf("resolvePass failure tagged as bad credentials: %v", err)
 	}
 }
