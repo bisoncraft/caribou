@@ -153,6 +153,16 @@ func (h *Headers) ByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) 
 	return height, h.byHeight[height], true
 }
 
+// headerHash returns the chain's canonical block-header hash (block identity).
+// For Dash this is X11; for BTC/LTC it is the standard double-SHA256. All
+// linkage, indexing, and lookup must go through this rather than
+// wire.BlockHeader.BlockHash() directly, so chains whose identity is not
+// double-SHA256 (Dash) link and index correctly. It is nil-safe via
+// ChainParams.HeaderHash, so tests without params still get the default.
+func (h *Headers) headerHash(hdr *wire.BlockHeader) chainhash.Hash {
+	return h.cfg.Params.HeaderHash(hdr)
+}
+
 // TipHash returns the hash of the highest connected header. Returns the zero
 // hash if no headers are connected.
 func (h *Headers) TipHash() chainhash.Hash {
@@ -162,7 +172,7 @@ func (h *Headers) TipHash() chainhash.Hash {
 	if hdr == nil {
 		return chainhash.Hash{}
 	}
-	return hdr.BlockHash()
+	return h.headerHash(hdr)
 }
 
 // AppendBatch appends a batch of raw headers (concatenated, headerSize bytes
@@ -221,7 +231,7 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 				return 0, fmt.Errorf("electrum: header at %d: %w", height, err)
 			}
 		}
-		prevHash = hdr.BlockHash()
+		prevHash = h.headerHash(hdr)
 	}
 
 	// Persist before mutating in-memory state so an interrupted write
@@ -232,7 +242,7 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 	for i, hdr := range headers {
 		height := startHeight + int32(i)
 		h.byHeight[height] = hdr
-		h.byHash[hdr.BlockHash()] = height
+		h.byHash[h.headerHash(hdr)] = height
 	}
 	h.tip.Store(startHeight + int32(len(headers)) - 1)
 	return len(headers), nil
@@ -299,7 +309,7 @@ func (h *Headers) AppendOne(hdr *wire.BlockHeader) (connected bool, disconnected
 		return false, nil, err
 	}
 	h.byHeight[newHeight] = hdr
-	h.byHash[hdr.BlockHash()] = newHeight
+	h.byHash[h.headerHash(hdr)] = newHeight
 	h.tip.Store(newHeight)
 	return true, nil, nil
 }
@@ -317,7 +327,7 @@ func (h *Headers) VerifyAll() error {
 		if this == nil || prev == nil {
 			return fmt.Errorf("electrum: gap at height %d", height)
 		}
-		if this.PrevBlock != prev.BlockHash() {
+		if this.PrevBlock != h.headerHash(prev) {
 			return fmt.Errorf("electrum: chain break at height %d", height)
 		}
 	}
@@ -357,7 +367,7 @@ func (h *Headers) rewindLocked(depth int32) ([]DisconnectedBlock, error) {
 			continue
 		}
 		disc = append(disc, DisconnectedBlock{
-			Hash:   hdr.BlockHash(),
+			Hash:   h.headerHash(hdr),
 			Height: height,
 			Time:   hdr.Timestamp.Unix(),
 		})
@@ -372,7 +382,7 @@ func (h *Headers) rewindLocked(depth int32) ([]DisconnectedBlock, error) {
 		height := tip - int32(i)
 		hdr := h.byHeight[height]
 		if hdr != nil {
-			delete(h.byHash, hdr.BlockHash())
+			delete(h.byHash, h.headerHash(hdr))
 		}
 		delete(h.byHeight, height)
 	}
@@ -415,7 +425,7 @@ func (h *Headers) validateCheckpoint(height int32, hdr *wire.BlockHeader) error 
 		if cp.Height != height {
 			continue
 		}
-		got := hdr.BlockHash()
+		got := h.headerHash(hdr)
 		if cp.Hash == nil {
 			continue
 		}
@@ -553,7 +563,7 @@ func (h *Headers) prevHashAt(height int32) (chainhash.Hash, error) {
 	if prev == nil {
 		return chainhash.Hash{}, fmt.Errorf("electrum: missing header at %d", height-1)
 	}
-	return prev.BlockHash(), nil
+	return h.headerHash(prev), nil
 }
 
 // appendToFile appends raw header bytes to the persistent header file. The
@@ -606,7 +616,7 @@ func (h *Headers) loadFromDisk() error {
 	for i, hdr := range hdrs {
 		height := h.cfg.StartHeight + int32(i)
 		h.byHeight[height] = hdr
-		h.byHash[hdr.BlockHash()] = height
+		h.byHash[h.headerHash(hdr)] = height
 	}
 	h.tip.Store(h.cfg.StartHeight + count - 1)
 	log.Infof("electrum: loaded %d headers, tip at %d", count, h.tip.Load())

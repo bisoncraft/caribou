@@ -191,6 +191,19 @@ func (w *Wallet) ScopeForPurpose(purpose uint32) waddrmgr.KeyScope {
 	return waddrmgr.KeyScope{Purpose: purpose, Coin: w.chainParams.HDCoinType}
 }
 
+// PrimaryScope returns the key scope for the wallet's primary (and, for
+// non-segwit chains, only) address type. The BIP-43 purpose comes from
+// netparams.ChainParams.AddrPurpose, defaulting to BIP-84 (native segwit) when
+// unset. Dash sets it to 44 (legacy P2PKH, no segwit). Address derivation,
+// sends, and gap-limit recovery all use this scope so they stay consistent.
+func (w *Wallet) PrimaryScope() waddrmgr.KeyScope {
+	purpose := w.chainParams.AddrPurpose
+	if purpose == 0 {
+		purpose = 84
+	}
+	return w.ScopeForPurpose(purpose)
+}
+
 // Start starts the goroutines necessary to manage a wallet.
 func (w *Wallet) Start() {
 	w.quitMu.Lock()

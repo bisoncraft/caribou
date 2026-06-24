@@ -453,7 +453,7 @@ func (s *NeutrinoClient) Rescan(startHash *chainhash.Hash, addrs []btcutil.Addre
 	// If the wallet is already fully caught up, or the rescan has started
 	// with state that indicates a "fresh" wallet, we'll send a
 	// notification indicating the rescan has "finished".
-	if header.BlockHash() == *startHash {
+	if s.chainParams.HeaderHash(header) == *startHash {
 		s.clientMtx.Lock()
 		s.finished = true
 		rescanQuit := s.rescanQuit
@@ -586,7 +586,7 @@ func (s *NeutrinoClient) onFilteredBlockConnected(height int32,
 	ntfn := FilteredBlockConnected{
 		Block: &wtxmgr.BlockMeta{
 			Block: wtxmgr.Block{
-				Hash:   header.BlockHash(),
+				Hash:   s.chainParams.HeaderHash(header),
 				Height: height,
 			},
 			Time: header.Timestamp,
@@ -718,7 +718,7 @@ func (s *NeutrinoClient) dispatchRescanFinished() {
 
 	// Only send the RescanFinished notification once the underlying chain
 	// service sees itself as current.
-	if bs.Hash != s.lastFilteredBlockHeader.BlockHash() {
+	if bs.Hash != s.chainParams.HeaderHash(s.lastFilteredBlockHeader) {
 		s.clientMtx.Unlock()
 		return
 	}

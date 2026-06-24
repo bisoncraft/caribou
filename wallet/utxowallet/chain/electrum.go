@@ -275,7 +275,7 @@ func (c *ElectrumClient) GetBestBlock() (*chainhash.Hash, int32, error) {
 	if hdr == nil {
 		return nil, 0, fmt.Errorf("electrum: missing header at tip %d", tip)
 	}
-	h := hdr.BlockHash()
+	h := c.chainParams.HeaderHash(hdr)
 	return &h, tip, nil
 }
 
@@ -296,7 +296,7 @@ func (c *ElectrumClient) GetBlockHash(height int64) (*chainhash.Hash, error) {
 	if hdr == nil {
 		return nil, fmt.Errorf("electrum: no header at height %d", height)
 	}
-	h := hdr.BlockHash()
+	h := c.chainParams.HeaderHash(hdr)
 	return &h, nil
 }
 
@@ -488,7 +488,7 @@ func (c *ElectrumClient) deliverConnectsLocked() int {
 			break
 		}
 		ntfn := BlockConnected{
-			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: h},
+			Block: wtxmgr.Block{Hash: c.chainParams.HeaderHash(hdr), Height: h},
 			Time:  hdr.Timestamp,
 		}
 		if err := c.enqueue(ntfn); err != nil {
@@ -769,7 +769,7 @@ func (c *ElectrumClient) buildRelevantTx(h electrum.HistoryEntry) (RelevantTx, e
 		hdr := c.net.HeaderByHeight(h.Height)
 		if hdr != nil {
 			blockMeta = &wtxmgr.BlockMeta{
-				Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: h.Height},
+				Block: wtxmgr.Block{Hash: c.chainParams.HeaderHash(hdr), Height: h.Height},
 				Time:  hdr.Timestamp,
 			}
 		}

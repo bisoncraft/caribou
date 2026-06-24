@@ -41,21 +41,21 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		return nil
 	}
 
-	// These wallets generate only BIP84 (native segwit) addresses, so recovery
-	// scans just that scope — both the external (receive) and internal (change)
-	// branches. Probing the other default scopes (BIP44/49/86) would only ever
-	// find empty branches while quadrupling the probe count (and the per-probe
-	// get_history round-trips dominate recovery latency).
+	// These wallets generate only their primary scope's addresses (BIP84 native
+	// segwit for BTC/LTC; BIP44 legacy P2PKH for non-segwit chains like Dash),
+	// so recovery scans just that scope — both the external (receive) and
+	// internal (change) branches. Probing the other default scopes would only
+	// ever find empty branches while multiplying the probe count (and the
+	// per-probe get_history round-trips dominate recovery latency).
 	//
-	// Use ScopeForPurpose so the coin type matches what DepositAddress derives
-	// (BTC coin 0, LTC coin 2); waddrmgr.KeyScopeBIP0084 hardcodes coin 0 and
-	// would miss LTC's addresses.
-	scoped, err := w.Manager.FetchScopedKeyManager(w.ScopeForPurpose(84))
+	// PrimaryScope is coin-type-aware (BTC coin 0, LTC coin 2, Dash coin 5) and
+	// honors netparams.AddrPurpose, so it matches what DepositAddress derives.
+	scoped, err := w.Manager.FetchScopedKeyManager(w.PrimaryScope())
 	if err != nil {
-		return fmt.Errorf("recover: fetch BIP84 scope manager: %w", err)
+		return fmt.Errorf("recover: fetch primary scope manager: %w", err)
 	}
 	scope := scoped.Scope()
-	log.Infof("Recovery: BIP84 gap-limit scan starting on scope %v (gap limit %d)",
+	log.Infof("Recovery: gap-limit scan starting on scope %v (gap limit %d)",
 		scope, gapLimit)
 
 	for _, branch := range []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch} {

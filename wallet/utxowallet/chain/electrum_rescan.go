@@ -292,7 +292,7 @@ func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
 		}
 		if entries := matches[height]; len(entries) > 0 {
 			block := wtxmgr.BlockMeta{
-				Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
+				Block: wtxmgr.Block{Hash: c.chainParams.HeaderHash(hdr), Height: height},
 				Time:  hdr.Timestamp,
 			}
 			if err := c.emitFilteredBlock(ctx, block, entries); err != nil {
@@ -301,7 +301,7 @@ func (c *ElectrumClient) runRescan(ctx context.Context, startHeight int32,
 		}
 		if height%rescanProgressInterval == 0 && height != startHeight {
 			if err := c.enqueueCtx(ctx, &RescanProgress{
-				Hash:   hdr.BlockHash(),
+				Hash:   c.chainParams.HeaderHash(hdr),
 				Height: height,
 				Time:   hdr.Timestamp,
 			}); err != nil {
@@ -326,7 +326,7 @@ func (c *ElectrumClient) tryDispatchRescanFinished(tip int32) {
 		log.Warnf("electrum: rescan finished but no header at %d", tip)
 		return
 	}
-	h := hdr.BlockHash()
+	h := c.chainParams.HeaderHash(hdr)
 	if err := c.enqueue(&RescanFinished{
 		Hash:   &h,
 		Height: tip,
