@@ -53,6 +53,12 @@ type ChainParams struct {
 	// address generation.
 	HDCoinType uint32
 
+	// AddrPurpose is the BIP-43 purpose of the key scope the wallet uses for its
+	// primary (and, for non-segwit chains, only) address type. 0 means the
+	// default, BIP-84 (native segwit, P2WPKH) — used by BTC and LTC. Chains
+	// without SegWit set it to 44 (legacy P2PKH); Dash uses 44.
+	AddrPurpose uint32
+
 	BIP0034Height int32
 	BIP0065Height int32
 	BIP0066Height int32
@@ -62,6 +68,18 @@ type ChainParams struct {
 	// CheckPoW is a function that will check the proof-of-work validity for a
 	// block header. If CheckPoW is nil, the standard Bitcoin protocol is used.
 	CheckPoW func(*wire.BlockHeader) error
+
+	// HeaderHashFunc, when non-nil, computes the chain's canonical block-header
+	// hash — i.e. the block identity used for prev-block linkage, indexing, and
+	// genesis/checkpoint comparison. Most chains identify blocks by
+	// double-SHA256, which is exactly wire.BlockHeader.BlockHash(), so they leave
+	// this nil. Chains whose block identity differs set it: Dash identifies
+	// blocks by the X11 hash of the serialized 80-byte header (the same value as
+	// its PoW hash), so wire.BlockHeader.BlockHash() (sha256d) is wrong for it.
+	// Any code that links or indexes headers by hash must go through HeaderHash,
+	// not BlockHash() directly. Transaction ids are unaffected (still sha256d).
+	HeaderHashFunc func(*wire.BlockHeader) chainhash.Hash
+
 	// MaxSatoshi varies between assets.
 	MaxSatoshi int64
 
@@ -76,6 +94,17 @@ type ChainParams struct {
 
 	btcdParamsOnce sync.Once
 	btcdParams     *chaincfg.Params
+}
+
+// HeaderHash returns the canonical block-header hash (block identity) for hdr on
+// this chain. It uses HeaderHashFunc when set and otherwise falls back to the
+// standard double-SHA256 (wire.BlockHeader.BlockHash). It is nil-safe so callers
+// that may not have chain params (e.g. some tests) still get the default.
+func (c *ChainParams) HeaderHash(hdr *wire.BlockHeader) chainhash.Hash {
+	if c != nil && c.HeaderHashFunc != nil {
+		return c.HeaderHashFunc(hdr)
+	}
+	return hdr.BlockHash()
 }
 
 // BTCDParams are the btcd.chaincfg.Params that correspond the ChainParams.

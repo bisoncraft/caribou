@@ -37,10 +37,11 @@ type ChainConfig struct {
 // NewChainConfig returns a ChainConfig for the given chain and params, using
 // the standard defaults (80-byte header, sync-from-genesis on regtest).
 //
-// Only bisonwire.ChainBTC and bisonwire.ChainLTC are supported in this phase.
+// Dash uses the same 80-byte header layout as BTC/LTC; only its header hash
+// differs (X11), which is handled via the netparams HeaderHash hook, not here.
 func NewChainConfig(chain bisonwire.Chain, params *netparams.ChainParams) (*ChainConfig, error) {
 	switch chain {
-	case bisonwire.ChainBTC, bisonwire.ChainLTC:
+	case bisonwire.ChainBTC, bisonwire.ChainLTC, bisonwire.ChainDASH:
 	default:
 		return nil, fmt.Errorf("electrum: unsupported chain %q", chain)
 	}

@@ -11,6 +11,7 @@ require (
 	github.com/bisoncraft/go-bip39 v1.0.1
 	github.com/bisoncraft/go-monero v0.1.1
 	github.com/bisoncraft/op-geth v0.0.0-20250729074358-3cfe4f15e91c
+	github.com/bitbandi/go-x11 v0.0.0-20171024232457-5fddbc9b2b09
 	github.com/btcsuite/btcd v0.24.2-beta.rc1.0.20240625142744-cc26860b4026
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/btcsuite/btcd/btcutil v1.1.5

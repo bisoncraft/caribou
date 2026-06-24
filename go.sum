@@ -201,6 +201,8 @@ github.com/bisoncraft/go-monero v0.1.1 h1:XfZYfUigkdTeU8oVq5X08X8tO59EyVwRKDIXbk
 github.com/bisoncraft/go-monero v0.1.1/go.mod h1:HE9dCbZhK0tVgMfQoYOVX8cP0lihcg6pHojBF+YeOXo=
 github.com/bisoncraft/op-geth v0.0.0-20250729074358-3cfe4f15e91c h1:cmK4HxTpEutYvsKiRlsibMuzdgAr9vRokgFLTvrCMZ0=
 github.com/bisoncraft/op-geth v0.0.0-20250729074358-3cfe4f15e91c/go.mod h1:AVdw4MgxUWZ0mhB+VxKOfXH2Z6WJA6rX6YrYrY2bii0=
+github.com/bitbandi/go-x11 v0.0.0-20171024232457-5fddbc9b2b09 h1:Gv0u6/aDygacB8WwTZCQURvifjTit87CdXAMuD+OEAY=
+github.com/bitbandi/go-x11 v0.0.0-20171024232457-5fddbc9b2b09/go.mod h1:p4/CBgPWeJOuTuVf7TfNjYuqwIgP9MGdZ5NhaW4zF/E=
 github.com/bits-and-blooms/bitset v1.22.0 h1:Tquv9S8+SGaS3EhyA+up3FXzmkhxPGjQQCkcs2uw7w4=
 github.com/bits-and-blooms/bitset v1.22.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/bketelsen/crypt v0.0.3-0.20200106085610-5cbc8cc4026c/go.mod h1:MKsuJmJgSg28kpZDP6UIiPt0e0Oz0kqKNGyRaWEPv84=

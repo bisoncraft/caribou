@@ -9,13 +9,15 @@ import (
 type Chain string
 
 const (
-	ChainBTC Chain = "btc"
-	ChainLTC Chain = "ltc"
+	ChainBTC  Chain = "btc"
+	ChainLTC  Chain = "ltc"
+	ChainDASH Chain = "dash"
 )
 
 var KnownChains = []Chain{
 	ChainBTC,
 	ChainLTC,
+	ChainDASH,
 }
 
 func ChainFromString(s string) (Chain, error) {

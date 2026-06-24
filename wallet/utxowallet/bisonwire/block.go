@@ -67,6 +67,13 @@ func (b *Block) BtcDecode(r io.Reader, pver uint32, enc wire.MessageEncoding) er
 		}
 		b.Header = blk.Header
 		b.Transactions = blk.Transactions
+	case "dash":
+		blk, err := deserializeDashBlock(r)
+		if err != nil {
+			return fmt.Errorf("error decoding Dash block: %w", err)
+		}
+		b.Header = blk.Header
+		b.Transactions = blk.Transactions
 	default:
 		return fmt.Errorf("unknown chain %q specified for block decoding", b.Chain)
 	}
