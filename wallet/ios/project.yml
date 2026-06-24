@@ -25,9 +25,12 @@ settings:
     SWIFT_VERSION: "5.0"
     # iPhone + iPad.
     TARGETED_DEVICE_FAMILY: "1,2"
-    # Release builds are intentionally left without a signing identity while the
-    # app is pre-public (mirrors the Android shell's unsigned release). Set
-    # DEVELOPMENT_TEAM / a signing config before any distribution.
+    # Automatic signing. The team id is NOT committed (it is developer-specific):
+    # each network xcconfig optionally includes a git-ignored
+    # BossWallet/Config/Local.xcconfig that sets DEVELOPMENT_TEAM, so once you've
+    # created that file, `xcodegen generate` + an -allowProvisioningUpdates build
+    # provisions without picking a team in Xcode's GUI. Release builds are left
+    # unshrunk while the app is pre-public (mirrors the Android shell).
     CODE_SIGN_STYLE: Automatic
 
 targets:

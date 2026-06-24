@@ -4,6 +4,9 @@ BossWallet.xcodeproj/
 # gomobile-bound framework (build it with ./bind.sh).
 Frameworks/Mobile.xcframework/
 
+# Local signing override (developer-specific DEVELOPMENT_TEAM).
+BossWallet/Config/Local.xcconfig
+
 # Xcode user state / build output.
 xcuserdata/
 *.xcuserstate

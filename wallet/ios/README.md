@@ -21,6 +21,12 @@ seam where the biometric idle-timer work will land.
   go install golang.org/x/mobile/cmd/gobind@latest
   gomobile init
   ```
+- For device builds, a signing team. Create the git-ignored
+  `BossWallet/Config/Local.xcconfig` with your Apple Developer team:
+  ```
+  DEVELOPMENT_TEAM = YOURTEAMID
+  ```
+  (or set the team in Xcode's Signing & Capabilities). Simulator builds need none.
 
 ## Build & run
 

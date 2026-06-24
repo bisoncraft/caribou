@@ -22,6 +22,15 @@ struct WebView: UIViewRepresentable {
         webView.isOpaque = false
         webView.backgroundColor = .black
 
+        // Debug builds opt the WebView into Safari Web Inspector (Develop menu)
+        // so the SPA can be inspected on-device; left off in release. iOS 16.4+
+        // gates WKWebView inspection behind this flag.
+        #if DEBUG
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = true
+        }
+        #endif
+
         context.coordinator.loadedURL = url
         webView.load(URLRequest(url: url))
         return webView
