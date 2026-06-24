@@ -1,6 +1,6 @@
 module github.com/bisoncraft/bosswallet
 
-go 1.24.0
+go 1.25.0
 
 require (
 	decred.org/dcrwallet/v5 v5.0.3
