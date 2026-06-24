@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -34,7 +35,7 @@ func createTestBlockHeaderStore() (func(), walletdb.DB, string,
 		return nil, nil, "", nil, err
 	}
 
-	hStore, err := NewBlockHeaderStore(tempDir, db, &chaincfg.SimNetParams.GenesisBlock.Header)
+	hStore, err := NewBlockHeaderStore(tempDir, db, &chaincfg.SimNetParams.GenesisBlock.Header, bisonwire.ChainBTC)
 	if err != nil {
 		return nil, nil, "", nil, err
 	}
@@ -200,7 +201,7 @@ func TestBlockHeaderStoreRecovery(t *testing.T) {
 
 	// Next, we'll re-create the block header store in order to trigger the
 	// recovery logic.
-	hs, err := NewBlockHeaderStore(tempDir, db, &chaincfg.SimNetParams.GenesisBlock.Header)
+	hs, err := NewBlockHeaderStore(tempDir, db, &chaincfg.SimNetParams.GenesisBlock.Header, bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("unable to re-create bhs: %v", err)
 	}

@@ -3,6 +3,7 @@ package filterdb
 import (
 	"fmt"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil/gcs"
@@ -105,8 +106,12 @@ func New(db walletdb.DB, params *netparams.ChainParams) (*FilterStore, error) {
 		}
 
 		// With the bucket created, we'll now construct the initial
-		// basic genesis filter and store it within the database.
-		basicFilter, err := builder.BuildBasicFilter(genesisBlock, nil)
+		// basic genesis filter and store it within the database. Use the
+		// chain-aware builder so the filter's SipHash key is the block's
+		// canonical identity (X11 for Dash) rather than double-SHA256.
+		basicFilter, err := bisonwire.BuildBasicFilter(
+			bisonwire.Chain(params.Chain), genesisBlock,
+		)
 		if err != nil {
 			return err
 		}

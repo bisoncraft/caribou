@@ -95,6 +95,23 @@ func isDevNetwork(net wire.BitcoinNet) bool {
 		net == chaincfg.RegressionNetParams.Net
 }
 
+// dashMinProtocolVersion is Dash's MIN_PEER_PROTO_VERSION (src/version.h). A
+// Dash node disconnects any peer whose version message advertises less than
+// this, so we must advertise at least it. The wire message formats we exchange
+// (headers, cfilters, addr) are gated by service bits and explicit negotiation
+// messages (sendheaders, sendaddrv2), not the raw version number, so advertising
+// a higher version does not change how we parse them.
+const dashMinProtocolVersion = 70221
+
+// protocolVersionForChain returns the protocol version to advertise in our
+// version handshake. Dash requires a higher minimum than btcd's default.
+func protocolVersionForChain(chain bisonwire.Chain) uint32 {
+	if chain == bisonwire.ChainDASH {
+		return dashMinProtocolVersion
+	}
+	return wire.AddrV2Version
+}
+
 // updatePeerHeightsMsg is a message sent from the blockmanager to the server
 // after a new block has been accepted. The purpose of the message is to update
 // the heights of peers that were known to announce the block before we
@@ -206,7 +223,7 @@ func (sp *ServerPeer) newestBlock() (*chainhash.Hash, int32, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	bestHash := bestHeader.BlockHash()
+	bestHash := bisonwire.HeaderHash(sp.chain, bestHeader)
 	return &bestHash, int32(bestHeight), nil
 }
 
@@ -239,10 +256,16 @@ func (sp *ServerPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 
 	// Check to see if the peer supports the latest protocol version and
 	// service bits required to service us. If not, then we'll disconnect
-	// so we can find compatible peers.
+	// so we can find compatible peers. NODE_NETWORK is deliberately not
+	// required at the handshake: pruned peers can serve compact filters and
+	// recent blocks without it, so banning them here would strand a directly
+	// configured filter-serving peer. The full requiredServices mask (which
+	// includes NODE_NETWORK) still gates address-gossip and DNS-seed
+	// candidates. requiredServices already has SFNodeWitness stripped for
+	// chains without segwit (Dash).
 	peerServices := sp.Services()
-	if peerServices&wire.SFNodeWitness != wire.SFNodeWitness ||
-		peerServices&wire.SFNodeCF != wire.SFNodeCF {
+	handshakeServices := sp.server.requiredServices &^ wire.SFNodeNetwork
+	if peerServices&handshakeServices != handshakeServices {
 
 		peerAddr := sp.Addr()
 		err := sp.server.BanPeer(peerAddr, banman.NoCompactFilters)
@@ -357,7 +380,7 @@ func (sp *ServerPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 		}
 
 		// Skip any that don't advertise our required services.
-		if na.Services&RequiredServices != RequiredServices {
+		if na.Services&sp.server.requiredServices != sp.server.requiredServices {
 			continue
 		}
 
@@ -418,7 +441,7 @@ func (sp *ServerPeer) OnAddrV2(_ *peer.Peer, msg *wire.MsgAddrV2) {
 		}
 
 		// Skip any that don't advertise our required services.
-		if na.Services&RequiredServices != RequiredServices {
+		if na.Services&sp.server.requiredServices != sp.server.requiredServices {
 			continue
 		}
 
@@ -660,6 +683,7 @@ type ChainService struct { // nolint:maligned
 	quit                 chan struct{}
 	timeSource           blockchain.MedianTimeSource
 	services             wire.ServiceFlag
+	requiredServices     wire.ServiceFlag
 	utxoScanner          *UtxoScanner
 	broadcaster          *pushtx.Broadcaster
 	banStore             banman.Store
@@ -735,6 +759,7 @@ func NewChainService(cfg Config) (*ChainService, error) {
 		peerHeightsUpdate: make(chan updatePeerHeightsMsg),
 		timeSource:        blockchain.NewMedianTime(),
 		services:          Services,
+		requiredServices:  RequiredServices,
 		userAgentName:     UserAgentName,
 		userAgentVersion:  UserAgentVersion,
 		nameResolver:      nameResolver,
@@ -742,6 +767,17 @@ func NewChainService(cfg Config) (*ChainService, error) {
 		persistToDisk:     cfg.PersistToDisk,
 		broadcastTimeout:  cfg.BroadcastTimeout,
 	}
+
+	// Dash has no SegWit, so its peers never advertise NODE_WITNESS
+	// (SFNodeWitness). Requiring it would reject every Dash peer (and
+	// advertising it ourselves is meaningless), so strip it from both masks.
+	// We keep SFNodeNetwork + SFNodeCF — the compact-filter serving bit that
+	// neutrino actually needs, which Dash masternodes advertise.
+	if cfg.Chain == bisonwire.ChainDASH {
+		s.services &^= wire.SFNodeWitness
+		s.requiredServices &^= wire.SFNodeWitness
+	}
+
 	s.workManager = query.NewWorkManager(&query.Config{
 		ConnectedPeers: s.ConnectedPeers,
 		NewWorker:      query.NewWorker,
@@ -788,7 +824,7 @@ func NewChainService(cfg Config) (*ChainService, error) {
 	}
 
 	s.BlockHeaders, err = headerfs.NewBlockHeaderStore(
-		cfg.DataDir, cfg.Database, &cfg.ChainParams.GenesisBlock.Header,
+		cfg.DataDir, cfg.Database, &cfg.ChainParams.GenesisBlock.Header, cfg.Chain,
 	)
 	if err != nil {
 		return nil, err
@@ -861,7 +897,7 @@ func NewChainService(cfg Config) (*ChainService, error) {
 
 				// The peer behind this address should support
 				// all of our required services.
-				if addr.Services()&RequiredServices != RequiredServices {
+				if addr.Services()&s.requiredServices != s.requiredServices {
 					continue
 				}
 
@@ -1019,7 +1055,7 @@ func (s *ChainService) BestBlock() (*headerfs.BlockStamp, error) {
 
 	return &headerfs.BlockStamp{
 		Height:    int32(bestHeight),
-		Hash:      bestHeader.BlockHash(),
+		Hash:      bisonwire.HeaderHash(s.chain, bestHeader),
 		Timestamp: bestHeader.Timestamp,
 	}, nil
 }
@@ -1030,7 +1066,7 @@ func (s *ChainService) GetBlockHash(height int64) (*chainhash.Hash, error) {
 	if err != nil {
 		return nil, err
 	}
-	hash := header.BlockHash()
+	hash := bisonwire.HeaderHash(s.chain, header)
 	return &hash, err
 }
 
@@ -1168,11 +1204,11 @@ func (s *ChainService) peerHandler() {
 
 	if !DisableDNSSeed {
 		// Add peers discovered through DNS to the address manager.
-		connmgr.SeedFromDNS(s.btcdParams, RequiredServices,
+		connmgr.SeedFromDNS(s.btcdParams, s.requiredServices,
 			s.nameResolver, func(addrs []*wire.NetAddressV2) {
 				var validAddrs []*wire.NetAddressV2
 				for _, addr := range addrs {
-					addr.Services = RequiredServices
+					addr.Services = s.requiredServices
 
 					validAddrs = append(validAddrs, addr)
 				}
@@ -1519,7 +1555,7 @@ func NewPeerConfig(sp *ServerPeer) *peer.Config {
 		UserAgentName:    sp.server.userAgentName,
 		UserAgentVersion: sp.server.userAgentVersion,
 		Services:         sp.server.services,
-		ProtocolVersion:  wire.AddrV2Version,
+		ProtocolVersion:  protocolVersionForChain(sp.chain),
 		DisableRelayTx:   true,
 	}
 }
@@ -1613,6 +1649,12 @@ func (s *ChainService) UpdatePeerHeights(latestBlkHash *chainhash.Hash,
 // ChainParams returns a copy of the ChainService's chaincfg.Params.
 func (s *ChainService) ChainParams() chaincfg.Params {
 	return *s.chainParams.BTCDParams()
+}
+
+// Chain returns the bisonwire chain identifier, for chain-aware block-header
+// hashing (Dash uses X11 rather than double-SHA256).
+func (s *ChainService) Chain() bisonwire.Chain {
+	return s.chain
 }
 
 // Start begins connecting to peers and syncing the blockchain.

@@ -15,7 +15,11 @@ import (
 func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 	error) {
 
-	blockHash := block.Header.BlockHash()
+	// blockHash is the chain's canonical block identity (X11 for Dash,
+	// double-SHA256 otherwise). It is the GCS filter's SipHash key per BIP-158,
+	// so it MUST match what the network used to build the filter, or every
+	// Match below fails and no relevant scripts are found.
+	blockHash := block.HeaderHash()
 
 	var (
 		opReturnMatches int
@@ -74,7 +78,7 @@ func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 			if err != nil {
 				return 0, fmt.Errorf("error validating block "+
 					"%v outpoint %v:%d script %x: %v",
-					block.Header.BlockHash(), tx.TxHash(), outIdx,
+					blockHash, tx.TxHash(), outIdx,
 					txOut.PkScript, err)
 			}
 
@@ -82,7 +86,7 @@ func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 				return 0, fmt.Errorf("filter for block %v is "+
 					"invalid, outpoint %v:%d script %x "+
 					"wasn't matched by filter",
-					block.Header.BlockHash(), tx.TxHash(), outIdx,
+					blockHash, tx.TxHash(), outIdx,
 					txOut.PkScript)
 			}
 		}
@@ -117,7 +121,7 @@ func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 					"input %d of tx %v in block %v "+
 					"because script type is not supported "+
 					"for validating against filter", inIdx,
-					tx.TxHash(), block.Header.BlockHash())
+					tx.TxHash(), blockHash)
 
 				continue
 			}
@@ -129,7 +133,7 @@ func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 				log.Debug("Skipping filter validation for "+
 					"input %d of tx %v in block %v "+
 					"because computing the script failed: "+
-					"%v", inIdx, block.Header.BlockHash(), err)
+					"%v", inIdx, blockHash, err)
 
 				continue
 			}
@@ -138,7 +142,7 @@ func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 			if err != nil {
 				return 0, fmt.Errorf("error validating block "+
 					"%v input %d of tx %v script %x: %v",
-					block.Header.BlockHash(), inIdx, tx.TxHash(),
+					blockHash, inIdx, tx.TxHash(),
 					script.Script(), err)
 			}
 
@@ -148,7 +152,7 @@ func VerifyBasicBlockFilter(filter *gcs.Filter, block *bisonwire.Block) (int,
 					"pk script %x which wasn't matched by "+
 					"filter. The input likely spends a "+
 					"taproot output which is not yet"+
-					"supported", block.Header.BlockHash(), inIdx,
+					"supported", blockHash, inIdx,
 					tx.TxHash(), script.Script())
 			}
 		}

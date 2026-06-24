@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/blockchain"
@@ -98,6 +99,12 @@ type headerStore struct {
 
 	file *os.File
 
+	// chain identifies the chain, so block-header hashing can be chain-aware
+	// (Dash uses X11 rather than double-SHA256 for the block identity). See
+	// bisonwire.HeaderHash. Only the block header store uses this; the filter
+	// header store hashes filter headers, not block headers.
+	chain bisonwire.Chain
+
 	*headerIndex
 }
 
@@ -105,7 +112,7 @@ type headerStore struct {
 // target file path for the flat-file and a particular header type. The target
 // file will be created as necessary.
 func newHeaderStore(db walletdb.DB, filePath string,
-	hType HeaderType) (*headerStore, error) {
+	hType HeaderType, chain bisonwire.Chain) (*headerStore, error) {
 
 	var flatFileName string
 	switch hType {
@@ -137,6 +144,7 @@ func newHeaderStore(db walletdb.DB, filePath string,
 	return &headerStore{
 		fileName:    flatFileName,
 		file:        headerFile,
+		chain:       chain,
 		headerIndex: index,
 	}, nil
 }
@@ -159,9 +167,9 @@ var _ BlockHeaderStore = (*blockHeaderStore)(nil)
 // the initial start up of the blockHeaderStore, then the initial genesis
 // header will need to be inserted.
 func NewBlockHeaderStore(filePath string, db walletdb.DB,
-	genesisHeader *wire.BlockHeader) (BlockHeaderStore, error) {
+	genesisHeader *wire.BlockHeader, chain bisonwire.Chain) (BlockHeaderStore, error) {
 
-	hStore, err := newHeaderStore(db, filePath, Block)
+	hStore, err := newHeaderStore(db, filePath, Block, chain)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +219,7 @@ func NewBlockHeaderStore(filePath string, db walletdb.DB,
 
 	// If the index's tip hash, and the file on-disk match, then we're
 	// done here.
-	latestBlockHash := latestFileHeader.BlockHash()
+	latestBlockHash := bisonwire.HeaderHash(chain, &latestFileHeader)
 	if tipHash.IsEqual(&latestBlockHash) {
 		return bhs, nil
 	}
@@ -338,7 +346,7 @@ func (h *blockHeaderStore) RollbackLastBlock() (*BlockStamp, error) {
 		return nil, err
 	}
 
-	prevHeaderHash := prevHeader.BlockHash()
+	prevHeaderHash := bisonwire.HeaderHash(h.chain, &prevHeader)
 
 	// Now that we have the information we need to return from this
 	// function, we can now truncate the header file, and then use the hash
@@ -367,10 +375,12 @@ type BlockHeader struct {
 }
 
 // toIndexEntry converts the BlockHeader into a matching headerEntry. This
-// method is used when a header is to be written to disk.
-func (b *BlockHeader) toIndexEntry() headerEntry {
+// method is used when a header is to be written to disk. The chain determines
+// how the block-identity hash is computed (X11 for Dash, double-SHA256
+// otherwise).
+func (b *BlockHeader) toIndexEntry(chain bisonwire.Chain) headerEntry {
 	return headerEntry{
-		hash:   b.BlockHash(),
+		hash:   bisonwire.HeaderHash(chain, b.BlockHeader),
 		height: b.Height,
 	}
 }
@@ -410,7 +420,7 @@ func (h *blockHeaderStore) WriteHeaders(hdrs ...BlockHeader) error {
 	// single atomic batch.
 	headerLocs := make([]headerEntry, len(hdrs))
 	for i, header := range hdrs {
-		headerLocs[i] = header.toIndexEntry()
+		headerLocs[i] = header.toIndexEntry(h.chain)
 	}
 
 	return h.addHeaders(headerLocs)
@@ -455,7 +465,7 @@ func (h *blockHeaderStore) blockLocatorFromHash(hash *chainhash.Hash) (
 		if err != nil {
 			return locator, err
 		}
-		headerHash := blockHeader.BlockHash()
+		headerHash := bisonwire.HeaderHash(h.chain, blockHeader)
 
 		locator = append(locator, &headerHash)
 	}
@@ -532,7 +542,7 @@ func (h *blockHeaderStore) CheckConnectivity() error {
 				return fmt.Errorf("couldn't retrieve header "+
 					"%s: %s", header.PrevBlock, err)
 			}
-			newHeaderHash := newHeader.BlockHash()
+			newHeaderHash := bisonwire.HeaderHash(h.chain, &newHeader)
 
 			// With the header retrieved, we'll now fetch the
 			// height for this current header hash to ensure the
@@ -556,11 +566,11 @@ func (h *blockHeaderStore) CheckConnectivity() error {
 			// Finally, we'll assert that this new header is
 			// actually the prev header of the target header from
 			// the last loop. This ensures connectivity.
-			if newHeader.BlockHash() != header.PrevBlock {
+			if newHeaderHash != header.PrevBlock {
 				return fmt.Errorf("block %s doesn't match "+
 					"block %s's PrevBlock (%s)",
-					newHeader.BlockHash(),
-					header.BlockHash(), header.PrevBlock)
+					newHeaderHash,
+					bisonwire.HeaderHash(h.chain, &header), header.PrevBlock)
 			}
 
 			// As all the checks have passed, we'll now reset our
@@ -612,7 +622,7 @@ func NewFilterHeaderStore(filePath string, db walletdb.DB,
 	filterType HeaderType, netParams *netparams.ChainParams,
 	headerStateAssertion *FilterHeader) (*FilterHeaderStore, error) {
 
-	fStore, err := newHeaderStore(db, filePath, filterType)
+	fStore, err := newHeaderStore(db, filePath, filterType, bisonwire.Chain(netParams.Chain))
 	if err != nil {
 		return nil, err
 	}
@@ -637,8 +647,8 @@ func NewFilterHeaderStore(filePath string, db walletdb.DB,
 		var genesisFilterHash chainhash.Hash
 		switch filterType {
 		case RegularFilter:
-			basicFilter, err := builder.BuildBasicFilter(
-				netParams.GenesisBlock, nil,
+			basicFilter, err := bisonwire.BuildBasicFilter(
+				bisonwire.Chain(netParams.Chain), netParams.GenesisBlock,
 			)
 			if err != nil {
 				return nil, err

@@ -267,7 +267,7 @@ func newBlockManager(cfg *blockManagerCfg) (*blockManager, error) {
 		Height: int32(height),
 	})
 	bm.headerTip = height
-	bm.headerTipHash = header.BlockHash()
+	bm.headerTipHash = cfg.ChainParams.HeaderHash(header)
 
 	// Finally, we'll set the filter header tip so any goroutines waiting
 	// on the condition obtain the correct initial state.
@@ -282,7 +282,7 @@ func newBlockManager(cfg *blockManagerCfg) (*blockManager, error) {
 	if err != nil {
 		return nil, err
 	}
-	bm.filterHeaderTipHash = fh.BlockHash()
+	bm.filterHeaderTipHash = cfg.ChainParams.HeaderHash(fh)
 
 	return &bm, nil
 }
@@ -528,13 +528,13 @@ waitForHeaders:
 		log.Critical(err)
 		return
 	}
-	lastHash := lastHeader.BlockHash()
+	lastHash := b.cfg.ChainParams.HeaderHash(lastHeader)
 
 	b.newFilterHeadersMtx.RLock()
 	log.Infof("Starting cfheaders sync from (block_height=%v, "+
 		"block_hash=%v) to (block_height=%v, block_hash=%v)",
 		b.filterHeaderTip, b.filterHeaderTipHash, lastHeight,
-		lastHeader.BlockHash())
+		b.cfg.ChainParams.HeaderHash(lastHeader))
 	b.newFilterHeadersMtx.RUnlock()
 
 	fType := wire.GCSFilterRegular
@@ -736,7 +736,7 @@ func (b *blockManager) getUncheckpointedCFHeaders(
 	}
 
 	log.Infof("Attempting to fetch set of un-checkpointed filters "+
-		"at height=%v, hash=%v", blockHeight, blockHeader.BlockHash())
+		"at height=%v, hash=%v", blockHeight, b.cfg.ChainParams.HeaderHash(blockHeader))
 
 	// Query all peers for the responses.
 	startHeight := filtHeight + 1
@@ -1005,7 +1005,7 @@ func (b *blockManager) getCheckpointedCFHeaders(checkpoints []*chainhash.Hash,
 			panic(fmt.Sprintf("failed getting block header at "+
 				"height %v: %v", endHeightRange, err))
 		}
-		stopHash := stopHeader.BlockHash()
+		stopHash := b.cfg.ChainParams.HeaderHash(stopHeader)
 
 		// Once we have the stop hash, we can construct the query
 		// message itself.
@@ -1226,7 +1226,7 @@ func (b *blockManager) writeCFHeadersMsg(msg *wire.MsgCFHeaders,
 	// particular checkpoint interval.
 	lastHeight := startHeight + uint32(numHeaders) - 1
 	lastBlockHeader := matchingBlockHeaders[numHeaders-1]
-	lastHash := lastBlockHeader.BlockHash()
+	lastHash := b.cfg.ChainParams.HeaderHash(&lastBlockHeader)
 
 	// We only need to set the height and hash of the very last filter
 	// header in the range to ensure that the index properly updates the
@@ -1278,7 +1278,7 @@ func (b *blockManager) rollBackToHeight(height uint32) error {
 	}
 	bs := &headerfs.BlockStamp{
 		Height:    int32(headerHeight),
-		Hash:      header.BlockHash(),
+		Hash:      b.cfg.ChainParams.HeaderHash(header),
 		Timestamp: header.Timestamp,
 	}
 
@@ -1566,7 +1566,7 @@ func (b *blockManager) detectBadPeers(headers map[string]*wire.MsgCFHeaders,
 	// Fetch filters from the peers in question.
 	// TODO(halseth): query only peers from headers map.
 	filtersFromPeers := b.fetchFilterFromAllPeers(
-		targetHeight, header.BlockHash(), fType,
+		targetHeight, b.cfg.ChainParams.HeaderHash(header), fType,
 	)
 
 	var badPeers []string
@@ -1600,7 +1600,7 @@ func (b *blockManager) detectBadPeers(headers map[string]*wire.MsgCFHeaders,
 
 	// If all peers responded with consistent filters and hashes, get the
 	// block and use it to detect who is serving bad filters.
-	block, err := b.cfg.GetBlock(header.BlockHash())
+	block, err := b.cfg.GetBlock(b.cfg.ChainParams.HeaderHash(header))
 	if err != nil {
 		return nil, err
 	}
@@ -1641,7 +1641,7 @@ func resolveFilterMismatchFromBlock(block *bisonwire.Block,
 	badPeers := make(map[string]struct{})
 
 	log.Infof("Attempting to pinpoint mismatch in cfheaders for block=%v",
-		block.Header.BlockHash())
+		block.HeaderHash())
 
 	// Based on the type of filter, our verification algorithm will differ.
 	// Only regular filters are currently defined.
@@ -1802,7 +1802,7 @@ func (b *blockManager) getCFHeadersForAllPeers(height uint32,
 	}
 
 	// Calculate the hash and use it to create the query message.
-	stopHash := stopHeader.BlockHash()
+	stopHash := b.cfg.ChainParams.HeaderHash(stopHeader)
 	msg := wire.NewMsgGetCFHeaders(fType, height, &stopHash)
 	numHeaders := int(stopHeight - height + 1)
 
@@ -2316,7 +2316,7 @@ func (b *blockManager) handleInvMsg(imsg *invMsg) {
 		lastEl := b.headerList.Back()
 		var lastHash chainhash.Hash
 		if lastEl != nil {
-			lastHash = lastEl.Header.BlockHash()
+			lastHash = b.cfg.ChainParams.HeaderHash(&lastEl.Header)
 		}
 
 		// Only send getheaders if we don't already know about the last
@@ -2382,7 +2382,7 @@ func (b *blockManager) handleHeadersMsg(hmsg *headersMsg) {
 	// Explicitly check that each header in msg.Headers builds off of the
 	// previous one. This is a quick sanity check to avoid doing the more
 	// expensive checks below if we know the headers are invalid.
-	if !areHeadersConnected(msg.Headers) {
+	if !areHeadersConnected(msg.Headers, bisonwire.Chain(b.cfg.ChainParams.Chain)) {
 		log.Warnf("Headers received from peer don't connect")
 		hmsg.peer.Disconnect()
 		return
@@ -2396,7 +2396,7 @@ func (b *blockManager) handleHeadersMsg(hmsg *headersMsg) {
 		finalHeight int32
 	)
 	for i, blockHeader := range msg.Headers {
-		blockHash := blockHeader.BlockHash()
+		blockHash := b.cfg.ChainParams.HeaderHash(blockHeader)
 		finalHash = &blockHash
 
 		// Ensure there is a previous header to compare against.
@@ -2414,7 +2414,7 @@ func (b *blockManager) handleHeadersMsg(hmsg *headersMsg) {
 		// list of headers.
 		node := headerlist.Node{Header: *blockHeader}
 		prevNode := prevNodeEl
-		prevHash := prevNode.Header.BlockHash()
+		prevHash := b.cfg.ChainParams.HeaderHash(&prevNode.Header)
 		if prevHash.IsEqual(&blockHeader.PrevBlock) {
 			prevNodeHeight := prevNode.Height
 			prevNodeHeader := prevNode.Header
@@ -2652,7 +2652,7 @@ func (b *blockManager) handleHeadersMsg(hmsg *headersMsg) {
 
 		// Verify the header at the next checkpoint height matches.
 		if b.nextCheckpoint != nil && node.Height == b.nextCheckpoint.Height {
-			nodeHash := node.Header.BlockHash()
+			nodeHash := b.cfg.ChainParams.HeaderHash(&node.Header)
 			if nodeHash.IsEqual(b.nextCheckpoint.Hash) {
 				receivedCheckpoint = true
 				log.Infof("Verified downloaded block "+
@@ -2738,13 +2738,13 @@ func (b *blockManager) handleHeadersMsg(hmsg *headersMsg) {
 
 // areHeadersConnected returns true if the passed block headers are connected to
 // each other correctly.
-func areHeadersConnected(headers []*wire.BlockHeader) bool {
+func areHeadersConnected(headers []*wire.BlockHeader, chain bisonwire.Chain) bool {
 	var (
 		lastHeader chainhash.Hash
 		emptyHash  chainhash.Hash
 	)
 	for _, blockHeader := range headers {
-		blockHash := blockHeader.BlockHash()
+		blockHash := bisonwire.HeaderHash(chain, blockHeader)
 
 		// If we haven't yet set lastHeader, set it now.
 		if lastHeader == emptyHash {
@@ -3146,11 +3146,19 @@ func checkBlockSanity(block *bisonwire.Block, chainParams *netparams.ChainParams
 	// checks.  Bitcoind builds the tree here and checks the merkle root
 	// after the following checks, but there is no reason not to check the
 	// merkle root matches here.
+	// Compute transaction hashes with the chain-aware txid. Dash special
+	// transactions pack version|type and append an extra payload, so their
+	// txid differs from wire.MsgTx.TxHash() — the merkle root and the
+	// duplicate check below must use these. btcutilTxs is still built for the
+	// signature-operation count further down, which inspects scripts, not
+	// hashes.
 	btcutilTxs := make([]*btcutil.Tx, len(block.Transactions))
+	txHashes := make([]chainhash.Hash, len(block.Transactions))
 	for i, tx := range block.Transactions {
 		btcutilTxs[i] = btcutil.NewTx(&tx.MsgTx)
+		txHashes[i] = tx.TxHash()
 	}
-	calcMerkleRoot := blockchain.CalcMerkleRoot(btcutilTxs, false)
+	calcMerkleRoot := calcMerkleRootFromHashes(txHashes)
 	if !header.MerkleRoot.IsEqual(&calcMerkleRoot) {
 		str := fmt.Sprintf("block merkle root is invalid - block "+
 			"header indicates %v, but calculated value is %v",
@@ -3162,14 +3170,13 @@ func checkBlockSanity(block *bisonwire.Block, chainParams *netparams.ChainParams
 	// since the transaction hashes are already cached due to building the
 	// merkle tree above.
 	existingTxHashes := make(map[chainhash.Hash]struct{})
-	for _, tx := range btcutilTxs {
-		hash := tx.Hash()
-		if _, exists := existingTxHashes[*hash]; exists {
+	for _, hash := range txHashes {
+		if _, exists := existingTxHashes[hash]; exists {
 			str := fmt.Sprintf("block contains duplicate "+
 				"transaction %v", hash)
 			return ruleError(blockchain.ErrDuplicateTx, str)
 		}
-		existingTxHashes[*hash] = struct{}{}
+		existingTxHashes[hash] = struct{}{}
 	}
 
 	// The number of signature operations must be less than the maximum
@@ -3189,6 +3196,41 @@ func checkBlockSanity(block *bisonwire.Block, chainParams *netparams.ChainParams
 	}
 
 	return nil
+}
+
+// calcMerkleRootFromHashes computes a block's merkle root from its transaction
+// hashes using the standard Bitcoin/Dash algorithm: pairwise double-SHA256,
+// duplicating the final hash whenever a level has an odd number of entries. It
+// takes hashes rather than transactions so the caller can supply chain-aware
+// txids (e.g. Dash special-transaction ids, which btcutil cannot compute).
+func calcMerkleRootFromHashes(hashes []chainhash.Hash) chainhash.Hash {
+	if len(hashes) == 0 {
+		return chainhash.Hash{}
+	}
+	// Work on a copy so we never mutate the caller's slice. The extra cap
+	// leaves room for duplicating the final hash on an odd level.
+	level := make([]chainhash.Hash, 0, len(hashes)+1)
+	level = append(level, hashes...)
+	for len(level) > 1 {
+		if len(level)%2 != 0 {
+			level = append(level, level[len(level)-1])
+		}
+		next := make([]chainhash.Hash, 0, len(level)/2)
+		for i := 0; i < len(level); i += 2 {
+			next = append(next, hashMerkleBranches(&level[i], &level[i+1]))
+		}
+		level = next
+	}
+	return level[0]
+}
+
+// hashMerkleBranches concatenates two merkle tree branches and returns their
+// double-SHA256 hash.
+func hashMerkleBranches(left, right *chainhash.Hash) chainhash.Hash {
+	var data [chainhash.HashSize * 2]byte
+	copy(data[:chainhash.HashSize], left[:])
+	copy(data[chainhash.HashSize:], right[:])
+	return chainhash.DoubleHashH(data[:])
 }
 
 // isNullOutpoint determines whether or not a previous transaction output point

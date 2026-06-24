@@ -43,6 +43,10 @@ type ChainSource interface {
 	// ChainParams returns the parameters of the current chain.
 	ChainParams() chaincfg.Params
 
+	// Chain returns the bisonwire chain identifier, used for chain-aware
+	// block-header hashing (Dash uses X11 rather than double-SHA256).
+	Chain() bisonwire.Chain
+
 	// BestBlock retrieves the most recent block's height and hash where we
 	// have both the header and filter header ready.
 	BestBlock() (*headerfs.BlockStamp, error)
@@ -274,6 +278,11 @@ func (q *blockRetryQueue) pop() *blockntfns.Connected {
 // block doesn't exit within the queue, then this acts as a NOP.
 func (q *blockRetryQueue) remove(header wire.BlockHeader) {
 	headerIdx := -1
+	// BlockHash() (double-SHA256) is fine here even on chains whose identity is
+	// X11 (Dash): it is only an in-queue equality key, comparing the passed
+	// header against queued headers hashed the same way, never against a stored
+	// chain-identity hash. So the hash function only needs to be consistent, not
+	// chain-canonical, and threading the chain in here would buy nothing.
 	targetHash := header.BlockHash()
 	for i, block := range q.blocks {
 		blockHeader := block.Header()
@@ -320,6 +329,12 @@ type rescanState struct {
 	// scanning is true if the current block should be scanned for filter
 	// matches.
 	scanning bool
+}
+
+// headerHash returns the chain-aware block-header hash for hdr (X11 for Dash,
+// double-SHA256 otherwise), via the rescan's chain source.
+func (rs *rescanState) headerHash(hdr *wire.BlockHeader) chainhash.Hash {
+	return bisonwire.HeaderHash(rs.chain.Chain(), hdr)
 }
 
 // newRescanState constructs a new rescanState.
@@ -380,7 +395,7 @@ func newRescanState(chain ChainSource, options ...RescanOption) (*rescanState,
 					uint32(ro.endBlock.Height),
 				)
 				if err == nil {
-					ro.endBlock.Hash = header.BlockHash()
+					ro.endBlock.Hash = bisonwire.HeaderHash(chain.Chain(), header)
 				} else {
 					ro.endBlock = &headerfs.BlockStamp{}
 				}
@@ -429,7 +444,7 @@ func newRescanState(chain ChainSource, options ...RescanOption) (*rescanState,
 			)
 			if err == nil {
 				rs.curHeader = *header
-				rs.curStamp.Hash = rs.curHeader.BlockHash()
+				rs.curStamp.Hash = bisonwire.HeaderHash(chain.Chain(), &rs.curHeader)
 			} else {
 				chainParams := chain.ChainParams()
 				rs.curHeader = chainParams.GenesisBlock.Header
@@ -766,7 +781,7 @@ rescanLoop:
 
 			rs.curHeader = *header
 			rs.curStamp.Height++
-			rs.curStamp.Hash = header.BlockHash()
+			rs.curStamp.Hash = rs.headerHash(header)
 
 			if !rs.scanning {
 				rs.scanning = ro.startTime.Before(
@@ -836,7 +851,7 @@ waitUntilSynced:
 			}
 
 			header := cNtfn.Header()
-			if predicate(header.BlockHash(), cNtfn.Height()) {
+			if predicate(rs.headerHash(&header), cNtfn.Height()) {
 				break waitUntilSynced
 			}
 
@@ -915,7 +930,7 @@ func (rs *rescanState) handleBlockConnected(ntfn *blockntfns.Connected) error {
 	header := ntfn.Header()
 	if header.PrevBlock != rs.curStamp.Hash {
 		return fmt.Errorf("out of order block %v: expected PrevBlock "+
-			"%v, got %v", header.BlockHash(), rs.curStamp.Hash,
+			"%v, got %v", rs.headerHash(&header), rs.curStamp.Hash,
 			header.PrevBlock)
 	}
 
@@ -930,7 +945,7 @@ func (rs *rescanState) handleBlockConnected(ntfn *blockntfns.Connected) error {
 	}
 
 	newStamp := headerfs.BlockStamp{
-		Hash:      header.BlockHash(),
+		Hash:      rs.headerHash(&header),
 		Height:    int32(nextBlockHeight),
 		Timestamp: header.Timestamp,
 	}
@@ -1062,11 +1077,11 @@ func (rs *rescanState) handleBlockDisconnected(ntfn *blockntfns.Disconnected) {
 
 	blockDisconnected := ntfn.Header()
 	log.Debugf("Rescan got disconnected block %d (%s)", ntfn.Height(),
-		blockDisconnected.BlockHash())
+		rs.headerHash(&blockDisconnected))
 
 	// Only deal with it if it's the current block we know about. Otherwise,
 	// it's in the future.
-	if blockDisconnected.BlockHash() != rs.curStamp.Hash {
+	if rs.headerHash(&blockDisconnected) != rs.curStamp.Hash {
 		return
 	}
 
@@ -1085,7 +1100,7 @@ func (rs *rescanState) handleBlockDisconnected(ntfn *blockntfns.Disconnected) {
 	}
 
 	rs.curHeader = ntfn.ChainTip()
-	rs.curStamp.Hash = rs.curHeader.BlockHash()
+	rs.curStamp.Hash = rs.headerHash(&rs.curHeader)
 	rs.curStamp.Height--
 }
 
@@ -1256,7 +1271,7 @@ func (ro *rescanOptions) updateFilter(chain ChainSource, update *updateOptions,
 
 		*curHeader = *header
 		curStamp.Height = int32(height)
-		curStamp.Hash = curHeader.BlockHash()
+		curStamp.Hash = bisonwire.HeaderHash(chain.Chain(), curHeader)
 	}
 
 	return rewound, nil

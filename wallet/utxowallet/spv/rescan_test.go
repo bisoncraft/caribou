@@ -190,6 +190,10 @@ func (c *mockChainSource) ChainParams() chaincfg.Params {
 	return chaincfg.MainNetParams
 }
 
+func (c *mockChainSource) Chain() bisonwire.Chain {
+	return bisonwire.ChainBTC
+}
+
 // BestBlock retrieves the most recent block's height and hash where we have
 // both the header and filter header ready.
 func (c *mockChainSource) BestBlock() (*headerfs.BlockStamp, error) {

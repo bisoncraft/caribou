@@ -211,7 +211,7 @@ func (b *batchSpendReporter) findInitialTransactions(block *bisonwire.Block,
 				continue
 			}
 
-			h := block.Header.BlockHash()
+			h := block.HeaderHash()
 
 			initialTxns[op] = &SpendReport{
 				Output:      txOuts[op.Index],

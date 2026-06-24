@@ -672,7 +672,7 @@ func (s *ChainService) prepareCFiltersQuery(blockHash chainhash.Hash,
 	headerIndex := make(map[chainhash.Hash]int, len(blockHeaders)-1)
 	for i := 1; i < len(blockHeaders); i++ {
 		block := blockHeaders[i]
-		headerIndex[block.BlockHash()] = i
+		headerIndex[bisonwire.HeaderHash(s.chain, &block)] = i
 	}
 
 	return &cfiltersQuery{
@@ -804,7 +804,7 @@ func (s *ChainService) GetBlock(blockHash chainhash.Hash,
 	// isn't found, then we don't have the header for this block so we
 	// can't request it.
 	blockHeader, height, err := s.BlockHeaders.FetchHeader(&blockHash)
-	if err != nil || blockHeader.BlockHash() != blockHash {
+	if err != nil || bisonwire.HeaderHash(s.chain, blockHeader) != blockHash {
 		return nil, fmt.Errorf("couldn't get header for block %s "+
 			"from database", blockHash)
 	}
@@ -815,7 +815,10 @@ func (s *ChainService) GetBlock(blockHash chainhash.Hash,
 	qo := defaultQueryOptions()
 	qo.applyQueryOptions(options...)
 	invType := wire.InvTypeWitnessBlock
-	if qo.encoding == wire.BaseEncoding {
+	if qo.encoding == wire.BaseEncoding || s.chain == bisonwire.ChainDASH {
+		// Dash has no SegWit, so the peer never serves witness blocks; a
+		// MSG_WITNESS_BLOCK getdata is silently dropped, stalling the fetch
+		// until timeout. Request a plain block instead.
 		invType = wire.InvTypeBlock
 	}
 
@@ -854,7 +857,7 @@ func (s *ChainService) GetBlock(blockHash chainhash.Hash,
 		}
 
 		// If this isn't the block we asked for, ignore it.
-		if response.Header.BlockHash() != blockHash {
+		if bisonwire.HeaderHash(s.chain, &response.Header) != blockHash {
 			return noProgress
 		}
 		block := &bisonwire.BlockWithHeight{
@@ -963,7 +966,9 @@ func (s *ChainService) sendTransaction(tx *wire.MsgTx, options ...QueryOption) e
 	qo := defaultQueryOptions()
 	qo.applyQueryOptions(options...)
 	invType := wire.InvTypeWitnessTx
-	if qo.encoding == wire.BaseEncoding {
+	if qo.encoding == wire.BaseEncoding || s.chain == bisonwire.ChainDASH {
+		// Dash has no SegWit; a node won't request a tx advertised as
+		// MSG_WITNESS_TX, so the broadcast never reaches its mempool.
 		invType = wire.InvTypeTx
 	}
 

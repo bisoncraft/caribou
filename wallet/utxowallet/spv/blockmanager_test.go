@@ -80,7 +80,7 @@ func setupBlockManager(t *testing.T) (*blockManager, headerfs.BlockHeaderStore,
 	// consistent with each other and with the blockManager that consumes
 	// `params` below.
 	hdrStore, err := headerfs.NewBlockHeaderStore(
-		tempDir, db, &params.GenesisBlock.Header,
+		tempDir, db, &params.GenesisBlock.Header, bisonwire.ChainBTC,
 	)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("error creating block "+

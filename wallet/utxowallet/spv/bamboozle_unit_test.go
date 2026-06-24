@@ -536,7 +536,7 @@ func runCheckCFCheckptSanityTestCase(t *testing.T, testCase *cfCheckptTestCase) 
 	params := assets.BTCParams["simnet"]
 
 	hdrStore, err := headerfs.NewBlockHeaderStore(
-		tempDir, db, &params.GenesisBlock.Header,
+		tempDir, db, &params.GenesisBlock.Header, bisonwire.ChainBTC,
 	)
 	if err != nil {
 		t.Fatalf("Error creating block header store: %s", err)
