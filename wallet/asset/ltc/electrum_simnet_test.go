@@ -143,11 +143,25 @@ func newLTCElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 		t.Fatalf("newLTCElectrumWallet: createLTCElectrumWallet: %v", err)
 	}
 
+	// Provide a master tx database scoped to this asset, the way Core does via
+	// the wallet config; the electrum wallet uses this handle for tx history and
+	// pending-tx tracking. Without it, PendingTransactions and TxHistory stay
+	// empty even though balances update.
+	masterDB, err := txdb.New(filepath.Join(dataDir, "txdb"), ltcLogger.SubLogger("TXDB"))
+	if err != nil {
+		t.Fatalf("newLTCElectrumWallet: txdb.New: %v", err)
+	}
+	if _, err = masterDB.Connect(ltcCtx); err != nil {
+		t.Fatalf("newLTCElectrumWallet: txdb.Connect: %v", err)
+	}
+	t.Cleanup(func() { masterDB.Close() })
+
 	walletCfg := &asset.WalletConfig{
-		Type:     walletTypeElectrum,
-		DataDir:  dataDir,
-		Settings: map[string]string{},
-		Emit:     asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), BipID, ltcLogger),
+		Type:        walletTypeElectrum,
+		DataDir:     dataDir,
+		Settings:    map[string]string{},
+		Emit:        asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), BipID, ltcLogger),
+		NetworkTxDB: masterDB.NetworkTxDB(BipID),
 		PeersChange: func(n uint32, err error) {
 			ltcLogger.Debugf("electrum LTC peers=%d err=%v", n, err)
 		},
