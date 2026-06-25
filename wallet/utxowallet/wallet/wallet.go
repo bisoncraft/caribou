@@ -257,6 +257,23 @@ func (w *Wallet) Synchronize() error {
 	return w.synchronize(chainClient)
 }
 
+// startTimeSetter is implemented by the neutrino backend via its embedded
+// *chain.NeutrinoClient. The wallet owns its backend as a wrapper type
+// (neutrinoWalletBackend), so a type switch on the concrete *chain.NeutrinoClient
+// no longer matches the dynamic type; asserting the method set reaches the
+// promoted method through the wrapper. The electrum client has no SetStartTime,
+// so it never matches.
+type startTimeSetter interface {
+	SetStartTime(time.Time)
+}
+
+// blockHeighter is implemented by the neutrino backend via its embedded
+// *chain.NeutrinoClient. Asserted by method set for the same wrapper reason as
+// startTimeSetter; the electrum client has no GetBlockHeight.
+type blockHeighter interface {
+	GetBlockHeight(*chainhash.Hash) (int32, error)
+}
+
 // synchronize wires chainClient and starts the sync goroutines.
 func (w *Wallet) synchronize(chainClient chain.Backend) error {
 	// TODO: Ignoring the new client when one is already set breaks callers
@@ -268,10 +285,9 @@ func (w *Wallet) synchronize(chainClient chain.Backend) error {
 	}
 	w.chainClient = chainClient
 
-	// If the chain client is a NeutrinoClient instance, set a birthday so
-	// we don't download all the filters as we go.
-	switch cc := chainClient.(type) {
-	case *chain.NeutrinoClient:
+	// If the chain backend supports a sync start time (neutrino), set the
+	// wallet birthday so we don't download all the compact filters from genesis.
+	if cc, ok := chainClient.(startTimeSetter); ok {
 		cc.SetStartTime(w.Manager.Birthday())
 	}
 	w.chainClientLock.Unlock()
@@ -2576,8 +2592,7 @@ func (w *Wallet) GetTransactions(startBlock, endBlock *BlockIdentifier,
 			if chainClient == nil {
 				return nil, errors.New("no chain server client")
 			}
-			switch client := chainClient.(type) {
-			case *chain.NeutrinoClient:
+			if client, ok := chainClient.(blockHeighter); ok {
 				var err error
 				start, err = client.GetBlockHeight(startBlock.hash)
 				if err != nil {
@@ -2593,8 +2608,7 @@ func (w *Wallet) GetTransactions(startBlock, endBlock *BlockIdentifier,
 			if chainClient == nil {
 				return nil, errors.New("no chain server client")
 			}
-			switch client := chainClient.(type) {
-			case *chain.NeutrinoClient:
+			if client, ok := chainClient.(blockHeighter); ok {
 				var err error
 				end, err = client.GetBlockHeight(endBlock.hash)
 				if err != nil {

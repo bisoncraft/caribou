@@ -12,6 +12,7 @@ package btc
 // intentionally absent.
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -309,6 +310,8 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 	if s := cfg.Settings["recoverywindow"]; s != "" {
 		if n, err := strconv.ParseUint(s, 10, 32); err == nil {
 			recoveryWindow = uint32(n)
+		} else {
+			log.Errorf("native: ignoring invalid recoverywindow setting %q: %v", s, err)
 		}
 	}
 	return &NativeWallet{
@@ -371,15 +374,15 @@ func (w *NativeWallet) Locked() bool {
 // goroutines for tx-history sync and peer monitoring. Satisfies util.Connector.
 func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
-	// recoveryWindow drives address recovery on open, and the two backends use it
-	// differently. The electrum client probes each derived address's history
-	// directly (the AddressProber path in syncWithChain); for electrum btcwallet's
-	// block-walk recovery is the wrong model — one GetHistory returns an address's
-	// whole history, while a block walk is O(chain length). The neutrino client
-	// instead relies on that block-walk: it is what scans the compact filters for
-	// the wallet's addresses, so SPV wallets default the window >0 (see
-	// RecoveryWindow). 0 (the electrum default) runs no recovery; the
-	// "recoverywindow" setting overrides either default.
+	// recoveryWindow drives on-open address recovery, and the two backends use it
+	// differently. Recovery only runs when the window is > 0 (syncWithChain). For
+	// neutrino it gates the block-walk that scans compact filters for the wallet's
+	// addresses, so SPV wallets default the window > 0 (see RecoveryWindow). For
+	// electrum a window > 0 instead drives the AddressProber path (per-address
+	// GetHistory probing, not an O(chain length) block walk), but electrum
+	// defaults the window to 0, so a default electrum wallet runs NO recovery —
+	// from-seed restore discovery is a follow-up. The "recoverywindow" setting
+	// overrides either default and is the only way to enable electrum probing today.
 	w.loader = wallet.NewLoader(
 		w.netParams, w.dir, true, dbTimeout, w.recoveryWindow,
 		wallet.WithBackendKind(w.cfg.BackendKind),
@@ -595,6 +598,17 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 	txHash := msgTx.TxHash()
 	addrCopy := address
 
+	// SendOutputs builds the payment and change outputs in no guaranteed order,
+	// so locate the payment output by its script and value rather than assuming
+	// index 0 — otherwise the returned coin can point at the change output.
+	vout := uint32(0)
+	for i, out := range msgTx.TxOut {
+		if out.Value == int64(value) && bytes.Equal(out.PkScript, pkScript) {
+			vout = uint32(i)
+			break
+		}
+	}
+
 	// Record in tx history. Fee will be updated by the next syncTxHistory pass.
 	wt := &txdb.WalletTransaction{
 		Type:      txdb.Send,
@@ -609,7 +623,7 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 
 	return &electrumCoin{
 		txHash: txHash,
-		vout:   0,
+		vout:   vout,
 		value:  value,
 	}, nil
 }
@@ -696,7 +710,7 @@ func (w *NativeWallet) WalletTransaction(ctx context.Context, txID string) (*txd
 	wt := &txdb.WalletTransaction{
 		Type:        txdb.Unknown,
 		ID:          txID,
-		BlockNumber: uint64(details.Block.Height),
+		BlockNumber: blockNumberFromHeight(details.Block.Height),
 		Confirmed:   details.Block.Height > 0,
 	}
 	return wt, nil
@@ -715,6 +729,31 @@ func (w *NativeWallet) PendingTransactions(_ context.Context) []*txdb.WalletTran
 		txs = append(txs, &cp)
 	}
 	return txs
+}
+
+// blockNumberFromHeight converts a wtxmgr block height to the txdb BlockNumber
+// representation. wtxmgr uses -1 as the "unmined" sentinel, so a naive
+// uint64(details.Block.Height) becomes ~1.8e19 for any unmined tx; persisting
+// that as the tx's block height corrupts history sorting/grouping. Any
+// non-positive height (unmined, or the genesis sentinel) maps to 0, matching the
+// "Height > 0" convention used to decide Confirmed elsewhere.
+func blockNumberFromHeight(h int32) uint64 {
+	if h <= 0 {
+		return 0
+	}
+	return uint64(h)
+}
+
+// btcToSats converts a BTC-denominated float (as returned by btcjson results)
+// to satoshis, rounding to the nearest satoshi. A raw uint64(v*1e8) truncates
+// (e.g. 0.29 → 28999999 instead of 29000000) because the product is not exactly
+// representable; btcutil.NewAmount rounds. Negative/NaN inputs map to 0.
+func btcToSats(v float64) uint64 {
+	amt, err := btcutil.NewAmount(v)
+	if err != nil || amt < 0 {
+		return 0
+	}
+	return uint64(amt)
 }
 
 // storePendingTx records a sent transaction in the txdb and the in-memory
@@ -939,11 +978,11 @@ func (w *NativeWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransa
 	if amount < 0 {
 		amount = -amount
 	}
-	amtSats := uint64(amount * 1e8)
+	amtSats := btcToSats(amount)
 
 	var feeSats uint64
 	if tx.Fee != nil && *tx.Fee < 0 {
-		feeSats = uint64(-*tx.Fee * 1e8)
+		feeSats = btcToSats(-*tx.Fee)
 	}
 
 	var blockNumber uint64
@@ -956,8 +995,12 @@ func (w *NativeWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransa
 	}
 
 	const blockQueryBuffer = 3
-	if blockNumber > 0 && blockNumber >= tip-blockQueryBuffer {
-		// Too close to the tip; will be confirmed on next pass.
+	// Within blockQueryBuffer of the tip: treat as not-yet-final (it will be
+	// confirmed on a later pass). The tip < blockQueryBuffer guard avoids a
+	// uint64 underflow of tip-blockQueryBuffer on a very short chain
+	// (regtest/simnet or early sync), where every positive height is within the
+	// buffer anyway.
+	if blockNumber > 0 && (tip < blockQueryBuffer || blockNumber >= tip-blockQueryBuffer) {
 		blockNumber = 0
 	}
 
@@ -1019,7 +1062,7 @@ func (w *NativeWallet) updatePendingTransactions(ctx context.Context, tip uint64
 			continue
 		}
 
-		blockHeight := uint64(details.Block.Height)
+		blockHeight := blockNumberFromHeight(details.Block.Height)
 		var confs uint64
 		if blockHeight > 0 && tip >= blockHeight {
 			confs = tip - blockHeight + 1

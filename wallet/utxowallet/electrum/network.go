@@ -560,11 +560,15 @@ func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
 		return
 	}
 	// Keep the server-reported target height current so TargetTip() always
-	// reflects the latest best height the server has advertised.
+	// reflects the latest best height the server has advertised. Track it
+	// unconditionally rather than as a running max: on a server-side reorg the
+	// tip can move strictly lower, and a monotonic max would pin TargetTip()
+	// above the real tip, leaving sync progress stuck below 100% until a new
+	// block climbed back past the stale value. (Notifications arrive in order on
+	// the single server connection, and the start-height guard above already
+	// rejects garbage, so there is no stale-low value to defend against.)
 	n.serverTipMu.Lock()
-	if t.Height > n.serverTip {
-		n.serverTip = t.Height
-	}
+	n.serverTip = t.Height
 	n.serverTipMu.Unlock()
 	ourTip := n.headers.Tip()
 	switch {

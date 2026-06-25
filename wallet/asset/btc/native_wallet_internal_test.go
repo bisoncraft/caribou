@@ -1,0 +1,61 @@
+//go:build !harness
+
+// This code is available on the terms of the project LICENSE.md file,
+// also available online at https://blueoakcouncil.org/license/1.0.0.
+
+package btc
+
+import (
+	"math"
+	"testing"
+)
+
+// TestBlockNumberFromHeight guards the unmined-sentinel overflow: wtxmgr returns
+// Block.Height == -1 for an unmined tx, and a raw uint64(-1) is ~1.8e19. That
+// value used to be persisted as the tx's BlockNumber and corrupt history.
+func TestBlockNumberFromHeight(t *testing.T) {
+	tests := []struct {
+		name string
+		h    int32
+		want uint64
+	}{
+		{"unmined sentinel", -1, 0},
+		{"arbitrary negative", -1000, 0},
+		{"genesis", 0, 0},
+		{"height 1", 1, 1},
+		{"typical height", 670, 670},
+		{"max int32", math.MaxInt32, uint64(math.MaxInt32)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := blockNumberFromHeight(tt.h); got != tt.want {
+				t.Fatalf("blockNumberFromHeight(%d) = %d, want %d", tt.h, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBtcToSats guards the float-truncation bug: uint64(v*1e8) truncates because
+// the product is not exactly representable (0.29 → 28999999), so history amounts
+// were off by a satoshi for a large class of ordinary values.
+func TestBtcToSats(t *testing.T) {
+	tests := []struct {
+		name string
+		v    float64
+		want uint64
+	}{
+		{"truncation case", 0.29, 29000000},
+		{"another truncation case", 0.07, 7000000},
+		{"whole coin", 1.0, 100000000},
+		{"one satoshi", 0.00000001, 1},
+		{"zero", 0.0, 0},
+		{"negative guards to zero", -1.0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := btcToSats(tt.v); got != tt.want {
+				t.Fatalf("btcToSats(%v) = %d, want %d", tt.v, got, tt.want)
+			}
+		})
+	}
+}
