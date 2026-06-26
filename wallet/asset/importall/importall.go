@@ -6,6 +6,7 @@ import (
 	// _ "github.com/bisoncraft/bosswallet/wallet/asset/bch"          // register bch asset
 	_ "github.com/bisoncraft/bosswallet/wallet/asset/btc"         // register btc asset
 	_ "github.com/bisoncraft/bosswallet/wallet/asset/hyperliquid" // register hyperliquid asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/sol"         // register sol asset
 
 	// _ "github.com/bisoncraft/bosswallet/wallet/asset/dash" // register dash asset
 	// dcr is registered in importall_dcr.go under the "dcr" build tag.
