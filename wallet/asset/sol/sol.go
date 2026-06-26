@@ -34,9 +34,10 @@ const (
 	scryptP       = 1
 )
 
-// kdfScryptN is the scrypt work factor for seed encryption. Package-level so
-// tests can lower it to avoid slow runtimes.
-var kdfScryptN = 1 << 18
+// kdfScryptN is the scrypt work factor for seed encryption. 2^15 (~32 MiB)
+// balances security with mobile device constraints. Package-level so tests can
+// lower it.
+var kdfScryptN = 1 << 15
 
 var (
 	rpcWalletDefinition = &asset.WalletDefinition{
@@ -319,6 +320,9 @@ func (w *Wallet) OwnsDepositAddress(address string) (bool, error) {
 }
 
 func (w *Wallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	if w.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid address %q", address)
 	}
