@@ -77,6 +77,12 @@ type DB interface {
 	// with SetCompanionToken. If no value has been stored, an empty
 	// string is returned without an error.
 	CompanionToken() (string, error)
+	// SetAPIToken stores the local API token hash.
+	SetAPIToken(token string) error
+	// APIToken retrieves the local API token hash stored with SetAPIToken.
+	// If no value has been stored, an empty string is returned without an
+	// error.
+	APIToken() (string, error)
 	// NextMultisigKeyIndex returns the next multisig key index and increments the
 	// stored value so that subsequent calls will always return a higher index.
 	NextMultisigKeyIndex(assetID uint32) (uint32, error)

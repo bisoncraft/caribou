@@ -105,6 +105,15 @@ Boss Wallet is under active development. Our near-term goals are:
   gate tests requiring real network access, running nodes, or platform
   features. `mobile` / `!mobile` will gate the mobile vs. desktop binary.
 
+## Documentation
+
+- [Local Automation with API Tokens](docs/automation.md) — drive a running
+  `bossw` from scripts, a CLI, or an MCP server over the appserver API.
+- [Simnet Development Guide](docs/simnet-dev.md) — local regtest harnesses and
+  running the wallet against them.
+- [Desktop UI Development Guide](docs/desktop-ui-dev.md) — developing the
+  desktop wallet UI.
+
 ## Contributing
 
 Boss Wallet is in heavy flux right now; large surfaces are being removed,

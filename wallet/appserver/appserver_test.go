@@ -229,6 +229,8 @@ func (*TCore) SetLanguage(string) error              { return nil }
 func (*TCore) Language() string                      { return "en-US" }
 func (*TCore) SetCompanionToken(token string) error  { return nil }
 func (*TCore) CompanionToken() (string, error)       { return "", nil }
+func (*TCore) SetAPIToken(token string) error        { return nil }
+func (*TCore) APIToken() (string, error)             { return "", nil }
 func (c *TCore) SetSendRequiresPassword(bool) error  { return c.setSendRequiresPWErr }
 func (c *TCore) SendRequiresPassword() (bool, error) { return c.sendRequiresPW, c.sendRequiresPWErr }
 
@@ -356,6 +358,142 @@ func ensureResponse(t *testing.T, f func(w http.ResponseWriter, r *http.Request)
 		t.Fatalf("wrong response. expected %s, got %s", want, errMsg)
 	}
 	writer.b = nil
+}
+
+func TestAPITokenAuth(t *testing.T) {
+	s, _, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	const token = "f00dcafe"
+	s.apiTokenHash = hashToken(token)
+
+	newReq := func(remoteAddr, headerToken string) *http.Request {
+		req, err := http.NewRequest("POST", "/api/balance", nil)
+		if err != nil {
+			t.Fatalf("error creating request: %v", err)
+		}
+		req.RemoteAddr = remoteAddr
+		if headerToken != "" {
+			req.Header.Set(apiTokenHeader, headerToken)
+		}
+		return req
+	}
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		headerTok  string
+		storedHash string
+		want       bool
+	}{
+		{"valid token from loopback", "127.0.0.1:5555", token, s.apiTokenHash, true},
+		{"valid token from loopback ipv6", "[::1]:5555", token, s.apiTokenHash, true},
+		{"valid token from non-loopback", "10.0.0.5:5555", token, s.apiTokenHash, false},
+		{"wrong token from loopback", "127.0.0.1:5555", "deadbeef", s.apiTokenHash, false},
+		{"no header", "127.0.0.1:5555", "", s.apiTokenHash, false},
+		{"no token configured", "127.0.0.1:5555", token, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s.apiTokenHash = tt.storedHash
+			req := newReq(tt.remoteAddr, tt.headerTok)
+			if got := s.apiTokenAuthorized(req); got != tt.want {
+				t.Fatalf("apiTokenAuthorized = %v, want %v", got, tt.want)
+			}
+			// isAuthed must agree: a valid local token authorizes with no
+			// cookie session present.
+			if got := s.isAuthed(req); got != tt.want {
+				t.Fatalf("isAuthed = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAPITokenEndpoints exercises the generate/revoke handlers at the HTTP
+// level and the full generate -> use -> revoke flow.
+func TestAPITokenEndpoints(t *testing.T) {
+	s, _, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	// call invokes a handler with the given remote address, optional
+	// X-API-Token header, and JSON body, returning the response bytes.
+	call := func(h http.HandlerFunc, remoteAddr, headerTok, body string) string {
+		req, err := http.NewRequest("POST", "/", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.RemoteAddr = remoteAddr
+		if headerTok != "" {
+			req.Header.Set(apiTokenHeader, headerTok)
+		}
+		w := new(TWriter)
+		h(w, req)
+		return string(w.b)
+	}
+
+	// Generation is rejected from a non-loopback peer and stores nothing.
+	if resp := call(s.apiGenerateAPIToken, "10.0.0.5:5555", "", "{}"); !strings.Contains(resp, `"ok":false`) {
+		t.Fatalf("non-loopback generation should be rejected, got %s", resp)
+	}
+	if s.apiTokenHash != "" {
+		t.Fatalf("token hash must not be set after a rejected generation")
+	}
+
+	// Generation succeeds from loopback and returns a usable token whose
+	// hash is what gets stored.
+	var gen struct {
+		OK    bool   `json:"ok"`
+		Token string `json:"token"`
+	}
+	resp := call(s.apiGenerateAPIToken, "127.0.0.1:5555", "", "{}")
+	if err := json.Unmarshal([]byte(resp), &gen); err != nil {
+		t.Fatalf("unmarshal generate response %q: %v", resp, err)
+	}
+	if !gen.OK || gen.Token == "" {
+		t.Fatalf("expected ok response with a token, got %s", resp)
+	}
+	if s.apiTokenHash != hashToken(gen.Token) {
+		t.Fatalf("stored hash does not match the generated token")
+	}
+
+	// The fresh token authorizes a request from loopback.
+	useReq, _ := http.NewRequest("POST", "/", nil)
+	useReq.RemoteAddr = "127.0.0.1:5555"
+	useReq.Header.Set(apiTokenHeader, gen.Token)
+	if !s.isAuthed(useReq) {
+		t.Fatalf("freshly generated token should authorize")
+	}
+
+	// Logout does not revoke the API token: it survives deauth so in-flight
+	// automation clients keep working until /revokeapitoken is called.
+	s.deauth()
+	if s.apiTokenHash == "" {
+		t.Fatalf("API token hash must survive logout")
+	}
+	if !s.isAuthed(useReq) {
+		t.Fatalf("API token should still authorize after logout")
+	}
+
+	// Revoke is rejected from a non-loopback peer and leaves the token intact.
+	if resp := call(s.apiRevokeAPIToken, "10.0.0.5:5555", "", "{}"); !strings.Contains(resp, `"ok":false`) {
+		t.Fatalf("non-loopback revoke should be rejected, got %s", resp)
+	}
+	if s.apiTokenHash == "" {
+		t.Fatalf("token hash must survive a rejected revoke")
+	}
+
+	// Revoke succeeds from loopback and clears the token.
+	if resp := call(s.apiRevokeAPIToken, "127.0.0.1:5555", "", "{}"); !strings.Contains(resp, `"ok":true`) {
+		t.Fatalf("revoke should succeed, got %s", resp)
+	}
+	if s.apiTokenHash != "" {
+		t.Fatalf("token hash should be cleared after revoke")
+	}
+
+	// The revoked token no longer authorizes.
+	if s.isAuthed(useReq) {
+		t.Fatalf("revoked token should not authorize")
+	}
 }
 
 func TestMain(m *testing.M) {

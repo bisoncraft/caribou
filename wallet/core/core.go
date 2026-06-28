@@ -529,6 +529,16 @@ func (c *Core) CompanionToken() (string, error) {
 	return c.db.CompanionToken()
 }
 
+// SetAPIToken stores the local API token hash in the database.
+func (c *Core) SetAPIToken(token string) error {
+	return c.db.SetAPIToken(token)
+}
+
+// APIToken retrieves the local API token hash from the database.
+func (c *Core) APIToken() (string, error) {
+	return c.db.APIToken()
+}
+
 // SetSendRequiresPassword stores whether sending funds requires the app
 // password.
 func (c *Core) SetSendRequiresPassword(require bool) error {

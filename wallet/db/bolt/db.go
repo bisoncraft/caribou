@@ -79,6 +79,7 @@ var (
 	walletDisabledKey     = []byte("walletDisabled")
 	langKey               = []byte("lang")
 	companionTokenKey     = []byte("companionToken")
+	apiTokenKey           = []byte("apiToken")
 	sendRequiresPwKey     = []byte("sendRequiresPassword")
 
 	// values
@@ -969,6 +970,33 @@ func (db *BoltDB) CompanionToken() (token string, _ error) {
 		bkt := dbTx.Bucket(appBucket)
 		if bkt != nil {
 			token = string(bkt.Get(companionTokenKey))
+		}
+		return nil
+	})
+}
+
+// SetAPIToken stores the local API token hash. An empty value deletes the
+// key from the database.
+func (db *BoltDB) SetAPIToken(token string) error {
+	return db.Update(func(dbTx *bbolt.Tx) error {
+		bkt := dbTx.Bucket(appBucket)
+		if bkt == nil {
+			return fmt.Errorf("app bucket not found")
+		}
+		if token == "" {
+			return bkt.Delete(apiTokenKey)
+		}
+		return bkt.Put(apiTokenKey, []byte(token))
+	})
+}
+
+// APIToken retrieves the local API token hash stored with SetAPIToken. If no
+// value has been stored, an empty string is returned without an error.
+func (db *BoltDB) APIToken() (token string, _ error) {
+	return token, db.View(func(dbTx *bbolt.Tx) error {
+		bkt := dbTx.Bucket(appBucket)
+		if bkt != nil {
+			token = string(bkt.Get(apiTokenKey))
 		}
 		return nil
 	})
