@@ -1670,10 +1670,19 @@ func (c *Core) RecoverWallet(assetID uint32, appPW []byte, force bool) error {
 		return fmt.Errorf("failed to move wallet data to backup folder: %w", err)
 	}
 
+	// Carry the seed's birthday into the rebuilt wallet. Without this the
+	// wallet defaults to DefaultWalletBirthday (2021) and re-scans the whole
+	// chain from there even for a wallet created today.
+	var bday uint64
+	if creds := c.creds(); !creds.Birthday.IsZero() {
+		bday = uint64(creds.Birthday.Unix())
+	}
+
 	if err = asset.CreateWallet(assetID, &asset.CreateWalletParams{
 		Type:     dbWallet.Type,
 		Seed:     seed,
 		Pass:     pw,
+		Birthday: bday,
 		Settings: dbWallet.Settings,
 		DataDir:  c.assetDataDirectory(assetID),
 		Net:      c.net,

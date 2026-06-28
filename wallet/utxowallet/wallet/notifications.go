@@ -194,7 +194,16 @@ func relevantAccounts(_ *Wallet, m map[uint32]btcutil.Amount, txs []TransactionS
 	}
 }
 
-func (s *NotificationServer) notifyUnminedTransaction(dbtx walletdb.ReadTx, details *wtxmgr.TxDetails) {
+// notifyUnminedTransaction delivers an unmined-transaction notification. The
+// dbtx is the still-open write transaction that recorded the transaction, so the
+// notification is built from it (its NewBalances already include this tx's
+// credits) but delivered via OnCommit — AFTER the transaction durably commits.
+//
+// Delivery must not happen inside the open write tx: the send is a blocking
+// handoff and some subscribers re-query the wallet (e.g. for balance) on
+// receipt; a fresh read tx opened then sees the pre-commit snapshot and misses
+// this transaction's credits, so the subscriber would observe a stale balance.
+func (s *NotificationServer) notifyUnminedTransaction(dbtx walletdb.ReadWriteTx, details *wtxmgr.TxDetails) {
 	// Sanity check: should not be currently coalescing a notification for
 	// mined transactions at the same time that an unmined tx is notified.
 	if s.currentTxNtfn != nil {
@@ -202,10 +211,10 @@ func (s *NotificationServer) notifyUnminedTransaction(dbtx walletdb.ReadTx, deta
 			details.Hash)
 	}
 
-	defer s.mu.Unlock()
 	s.mu.Lock()
-	clients := s.transactions
-	if len(clients) == 0 {
+	noClients := len(s.transactions) == 0
+	s.mu.Unlock()
+	if noClients {
 		return
 	}
 
@@ -227,9 +236,23 @@ func (s *NotificationServer) notifyUnminedTransaction(dbtx walletdb.ReadTx, deta
 		UnminedTransactionHashes: unminedHashes,
 		NewBalances:              flattenBalanceMap(bals),
 	}
-	for _, c := range clients {
-		c <- n
-	}
+
+	dbtx.OnCommit(func() {
+		s.mu.Lock()
+		clients := s.transactions
+		s.mu.Unlock()
+		for _, c := range clients {
+			// A subscriber may be torn down (its channel closed by Done)
+			// concurrently during shutdown, in the window after the lock is
+			// dropped. Tolerate a send on a closed channel rather than holding
+			// s.mu across the blocking send — doing so would deadlock if the
+			// subscriber has stopped receiving while Done waits on s.mu.
+			func(c chan *TransactionNotifications) {
+				defer func() { _ = recover() }()
+				c <- n
+			}(c)
+		}
+	})
 }
 
 func (s *NotificationServer) notifyDetachedBlock(hash *chainhash.Hash) {

@@ -34,7 +34,7 @@ const (
 	walletTypeSPV       = "SPV"
 	walletTypeLegacy    = ""
 	walletTypeElectrum  = "electrumRPC"
-	needElectrumVersion = "4.2.2"
+	dbTimeout           = 20 * time.Second
 )
 
 var (
@@ -67,6 +67,7 @@ var (
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
+			ltcElectrumWalletDefinition,
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
 		Network: &asset.Network{
@@ -114,8 +115,10 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 // Exists checks the existence of the wallet. Part of the Creator interface, so
 // only used for wallets with WalletDefinition.Seeded = true.
 func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
-	if walletType != walletTypeSPV {
-		return false, fmt.Errorf("no Bitcoin wallet of type %q available", walletType)
+	switch walletType {
+	case walletTypeSPV, walletTypeElectrum:
+	default:
+		return false, fmt.Errorf("no Litecoin wallet of type %q available", walletType)
 	}
 
 	chainParams, err := parseChainParams(net)
@@ -123,14 +126,18 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 		return false, err
 	}
 	walletDir := filepath.Join(dataDir, chainParams.Name)
-	loader := inWallet.NewLoader(ltcNetParams(chainParams), walletDir, true, dbTimeout, 250)
+	loader := inWallet.NewLoader(ltcTableNetParams(chainParams), walletDir, true, dbTimeout, 250)
 	return loader.WalletExists()
 }
 
-// Create creates a new SPV wallet.
+// Create creates a new seeded wallet. Both walletTypeSPV and
+// walletTypeElectrum are supported; they use the same underlying btcwallet
+// database format.
 func (d *Driver) Create(params *asset.CreateWalletParams) error {
-	if params.Type != walletTypeSPV {
-		return fmt.Errorf("SPV is the only seeded wallet type. required = %q, requested = %q", walletTypeSPV, params.Type)
+	switch params.Type {
+	case walletTypeSPV, walletTypeElectrum:
+	default:
+		return fmt.Errorf("unsupported seeded wallet type %q", params.Type)
 	}
 	if len(params.Seed) == 0 {
 		return errors.New("wallet seed cannot be empty")
@@ -161,7 +168,9 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	}
 
 	walletDir := filepath.Join(params.DataDir, chainParams.Name)
-	return createSPVWallet(params.Pass, params.Seed, bday, walletDir,
+	// SPV and electrum share the same lean wallet; the same create path serves
+	// both wallet types.
+	return createLTCElectrumWallet(params.Pass, params.Seed, bday, walletDir,
 		params.Logger, recoveryCfg.NumExternalAddresses, recoveryCfg.NumInternalAddresses, chainParams)
 }
 
@@ -226,15 +235,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	case walletTypeRPC, walletTypeLegacy:
 		return btc.BTCCloneWallet(cloneCFG)
 	case walletTypeSPV:
-		return btc.OpenSPVWallet(cloneCFG, openSPVWallet)
+		// The SPV wallet is the same lean wallet as electrum, driven by the
+		// neutrino backend instead of an electrum client.
+		return openLTCSPVWallet(cfg, cloneParams, logger), nil
 	case walletTypeElectrum:
-		cloneCFG.Ports = dexbtc.NetPorts{} // no default ports
-		ver, err := util.SemverFromString(needElectrumVersion)
-		if err != nil {
-			return nil, err
-		}
-		cloneCFG.MinElectrumVersion = *ver
-		return btc.ElectrumWallet(cloneCFG)
+		return openLTCElectrumWallet(cfg, cloneParams, logger), nil
 	default:
 		makeCustomWallet, ok := customWalletConstructors[cfg.Type]
 		if !ok {

@@ -61,18 +61,8 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 	}
 
 	opts := &dialOptions{SOCKS5Proxy: torProxy}
-	switch addr.Proto {
-	case "ssl":
-		// Use the system root pool but allow insecure-skip-verify so
-		// self-signed certificates (regtest, dev electrumx) work. A
-		// future tightening can pin specific certificates.
-		roots, _ := x509.SystemCertPool()
-		opts.TLSConfig = &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec
-			RootCAs:            roots,
-			MinVersion:         tls.VersionTLS12,
-			ServerName:         host,
-		}
+	if addr.Proto == "ssl" {
+		opts.TLSConfig = serverTLSConfig(addr, host)
 	}
 
 	srv, err := dial(ctx, addr.Addr, opts)
@@ -108,6 +98,47 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 		addr.Addr, addr.Proto, n.softwareVersion, n.protocolVersion, feats.GenesisHash)
 
 	return n, nil
+}
+
+// serverTLSConfig builds the tls.Config for an "ssl" electrum server, selecting
+// one of three verification modes:
+//
+//   - Pinned (addr.Cert set): the leaf certificate the server presents must
+//     byte-match the pinned DER. Used for self-signed servers that cannot chain
+//     to a public CA. Default chain/hostname verification is disabled in favor
+//     of the exact-cert pin.
+//   - Skip (addr.SkipVerify): no verification at all. Only for dev/testnet/simnet
+//     servers with throwaway self-signed certificates.
+//   - CA (neither set): standard verification against the host's system root
+//     store. Used for public mainnet servers with CA-issued certificates, and
+//     survives certificate rotation (e.g. Let's Encrypt renewals).
+func serverTLSConfig(addr *ServerAddr, host string) *tls.Config {
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: host,
+	}
+	switch {
+	case len(addr.Cert) > 0:
+		pinned := addr.Cert
+		// Disable the default chain/hostname check; the pin below is the
+		// verification. The pinned leaf is the server's identity, so the
+		// hostname is not separately checked.
+		cfg.InsecureSkipVerify = true //nolint:gosec // verified by the pin in VerifyPeerCertificate
+		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return errors.New("electrum: server presented no certificate")
+			}
+			if !bytes.Equal(rawCerts[0], pinned) {
+				return fmt.Errorf("electrum: %s certificate does not match the pinned certificate", addr.Addr)
+			}
+			return nil
+		}
+	case addr.SkipVerify:
+		cfg.InsecureSkipVerify = true //nolint:gosec // dev/testnet/simnet self-signed certificates
+	}
+	// Default: InsecureSkipVerify false and RootCAs nil → verify against the
+	// system root store.
+	return cfg
 }
 
 // Addr returns the server address this node is connected to.

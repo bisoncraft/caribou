@@ -90,37 +90,6 @@ var (
 	walletBlockAllowance         = time.Second * 10
 	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
 
-	ElectrumConfigOpts = []*asset.ConfigOption{
-		{
-			Key:         "rpcuser",
-			DisplayName: "JSON-RPC Username",
-			Description: "Electrum's 'rpcuser' setting",
-		},
-		{
-			Key:         "rpcpassword",
-			DisplayName: "JSON-RPC Password",
-			Description: "Electrum's 'rpcpassword' setting",
-			NoEcho:      true,
-		},
-		{
-			Key:         "rpcport",
-			DisplayName: "JSON-RPC Port",
-			Description: "Electrum's 'rpcport' (if not set with rpcbind)",
-		},
-		{
-			Key:          "rpcbind", // match RPCConfig struct field tags
-			DisplayName:  "JSON-RPC Address",
-			Description:  "Electrum's 'rpchost' <addr> or <addr>:<port>",
-			DefaultValue: "127.0.0.1",
-		},
-		{
-			Key:          "walletname", // match RPCConfig struct field tags
-			DisplayName:  "Wallet File",
-			Description:  "Full path to the wallet file (empty is default_wallet)",
-			DefaultValue: "", // empty string, not a nil interface
-		},
-	}
-
 	// 02 Jun 21 21:12 CDT
 	defaultWalletBirthdayUnix = 1622668320
 	DefaultWalletBirthday     = time.Unix(int64(defaultWalletBirthdayUnix), 0)
@@ -190,6 +159,7 @@ var (
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			rpcWalletDefinition,
+			electrumWalletDefinition,
 		},
 		LegacyWalletIndex: 1,
 		BlockchainClass:   asset.BlockchainClassUTXO,
@@ -303,14 +273,13 @@ type TxInSigner func(tx *wire.MsgTx, idx int, subScript []byte, hashType txscrip
 
 // BTCCloneCFG holds clone specific parameters.
 type BTCCloneCFG struct {
-	WalletCFG          *asset.WalletConfig
-	MinNetworkVersion  uint64
-	MinElectrumVersion util.Semver
-	WalletInfo         *asset.WalletInfo
-	Symbol             string
-	Logger             util.Logger
-	Network            util.Network
-	ChainParams        *chaincfg.Params
+	WalletCFG         *asset.WalletConfig
+	MinNetworkVersion uint64
+	WalletInfo        *asset.WalletInfo
+	Symbol            string
+	Logger            util.Logger
+	Network           util.Network
+	ChainParams       *chaincfg.Params
 	// Ports is the default wallet RPC tcp ports used when undefined in
 	// WalletConfig.
 	Ports               NetPorts
@@ -534,7 +503,9 @@ var _ asset.Creator = (*Driver)(nil)
 // Exists checks the existence of the wallet. Part of the Creator interface, so
 // only used for wallets with WalletDefinition.Seeded = true.
 func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, net util.Network) (bool, error) {
-	if walletType != walletTypeSPV {
+	switch walletType {
+	case walletTypeSPV, walletTypeElectrum:
+	default:
 		return false, fmt.Errorf("no Bitcoin wallet of type %q available", walletType)
 	}
 
@@ -550,7 +521,7 @@ func (d *Driver) Exists(walletType, dataDir string, settings map[string]string, 
 // walletExists checks the existence of the wallet.
 func walletExists(dir string, chainParams *chaincfg.Params) (bool, error) {
 	// timeout and recoverWindow arguments borrowed from btcwallet directly.
-	loader := wallet.NewLoader(btcNetParams(chainParams), dir, true, dbTimeout, 250)
+	loader := wallet.NewLoader(btcTableNetParams(chainParams), dir, true, dbTimeout, 250)
 	return loader.WalletExists()
 }
 
@@ -560,10 +531,14 @@ type createConfig struct {
 	RecoveryCfg  `ini:",extends"`
 }
 
-// Create creates a new SPV wallet.
+// Create creates a new seeded wallet. Both walletTypeSPV and
+// walletTypeElectrum are supported; they use the same underlying btcwallet
+// database format.
 func (d *Driver) Create(params *asset.CreateWalletParams) error {
-	if params.Type != walletTypeSPV {
-		return fmt.Errorf("SPV is the only seeded wallet type. required = %q, requested = %q", walletTypeSPV, params.Type)
+	switch params.Type {
+	case walletTypeSPV, walletTypeElectrum:
+	default:
+		return fmt.Errorf("unsupported seeded wallet type %q", params.Type)
 	}
 	if len(params.Seed) == 0 {
 		return errors.New("wallet seed cannot be empty")
@@ -593,7 +568,9 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	}
 
 	dir := filepath.Join(params.DataDir, chainParams.Name)
-	return createSPVWallet(params.Pass, params.Seed, bday, dir,
+	// SPV and electrum share the same lean wallet (an in-tree btcwallet); the
+	// same create path serves both wallet types.
+	return createElectrumWallet(params.Pass, params.Seed, bday, dir,
 		params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
 }
 
@@ -758,8 +735,6 @@ type baseWallet struct {
 	currentTip *BlockVector
 
 	cm *CoinManager
-
-	rf *RedemptionFinder
 
 	pendingTxsMtx sync.RWMutex
 	pendingTxs    map[chainhash.Hash]ExtendedWalletTx
@@ -1048,7 +1023,9 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 
 	switch cfg.Type {
 	case walletTypeSPV:
-		return OpenSPVWallet(cloneCFG, openSPVWallet)
+		// The SPV wallet is the same lean wallet as electrum, driven by the
+		// neutrino backend instead of an electrum client.
+		return openSPVWallet(cfg, params, logger), nil
 	case walletTypeRPC, walletTypeLegacy:
 		rpcWallet, err := BTCCloneWallet(cloneCFG)
 		if err != nil {
@@ -1056,13 +1033,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		}
 		return &ExchangeWalletAccelerator{rpcWallet}, nil
 	case walletTypeElectrum:
-		cloneCFG.Ports = NetPorts{} // no default ports
-		ver, err := util.SemverFromString(needElectrumVersion)
-		if err != nil {
-			return nil, err
-		}
-		cloneCFG.MinElectrumVersion = *ver
-		return ElectrumWallet(cloneCFG)
+		return openElectrumWallet(cfg, params, logger), nil
 	default:
 		makeCustomWallet, ok := customWalletConstructors[cfg.Type]
 		if !ok {
@@ -1166,7 +1137,6 @@ func newRPCWallet(requester RawRequester, cfg *BTCCloneCFG, parsedCfg *RPCWallet
 		tipRedeemer:    node,
 	}
 
-	w.prepareRedemptionFinder()
 	return w, nil
 }
 
@@ -1348,7 +1318,6 @@ func OpenCustomWallet(cfg *BTCCloneCFG, walletConstructor CustomWalletConstructo
 		},
 		authAddOn: &authAddOn{customWallet},
 	}
-	w.prepareRedemptionFinder()
 	return w, nil
 }
 
@@ -1395,7 +1364,6 @@ func OpenSPVWallet(cfg *BTCCloneCFG, walletConstructor BTCWalletConstructor) (*E
 		authAddOn: &authAddOn{spvw},
 		spvNode:   spvw,
 	}
-	w.prepareRedemptionFinder()
 	return w, nil
 }
 
@@ -1435,22 +1403,6 @@ func (btc *baseWallet) setNode(node Wallet) {
 		func(addr btcutil.Address) (string, error) {
 			return btc.stringAddr(addr, btc.chainParams)
 		},
-	)
-}
-
-func (btc *intermediaryWallet) prepareRedemptionFinder() {
-	btc.rf = NewRedemptionFinder(
-		btc.log,
-		btc.tipRedeemer.GetWalletTransaction,
-		btc.tipRedeemer.GetBlockHeight,
-		btc.tipRedeemer.GetBlock,
-		btc.tipRedeemer.GetBlockHeader,
-		btc.hashTx,
-		btc.deserializeTx,
-		btc.tipRedeemer.GetBestBlockHeight,
-		btc.tipRedeemer.SearchBlockForRedemptions,
-		btc.tipRedeemer.GetBlockHash,
-		btc.tipRedeemer.FindRedemptionsInMempool,
 	)
 }
 
@@ -1569,7 +1521,6 @@ func (btc *intermediaryWallet) Connect(ctx context.Context) (*sync.WaitGroup, er
 	go func() {
 		defer wg.Done()
 		btc.watchBlocks(ctx)
-		btc.rf.CancelRedemptionSearches()
 	}()
 
 	wg.Add(1)
@@ -2852,7 +2803,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 			// If the wallet is not offering tip reports, send this one right
 			// away.
 			if walletBlock == nil {
-				btc.reportNewTip(ctx, newTip)
+				btc.reportNewTip(newTip)
 			} else {
 				// Queue it for reporting, but don't send it right away. Give the
 				// wallet a chance to provide their block update. SPV wallet may
@@ -2876,7 +2827,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 								"never reported: %d %s. If you see this message repeatedly, it may indicate "+
 								"an issue with the wallet.", newTip.Height, newTip.Hash)
 						}
-						btc.reportNewTip(ctx, newTip)
+						btc.reportNewTip(newTip)
 					}),
 				}
 			}
@@ -2890,7 +2841,7 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 				}
 				queuedBlock = nil
 			}
-			btc.reportNewTip(ctx, walletTip)
+			btc.reportNewTip(walletTip)
 
 		case <-ctx.Done():
 			return
@@ -2903,9 +2854,8 @@ func (btc *intermediaryWallet) watchBlocks(ctx context.Context) {
 	}
 }
 
-// reportNewTip sets the currentTip. The tipChange callback function is invoked
-// and RedemptionFinder is informed of the new block.
-func (btc *intermediaryWallet) reportNewTip(ctx context.Context, newTip *BlockVector) {
+// reportNewTip sets the currentTip and invokes the tipChange callback.
+func (btc *intermediaryWallet) reportNewTip(newTip *BlockVector) {
 	btc.tipMtx.Lock()
 	defer btc.tipMtx.Unlock()
 
@@ -2915,8 +2865,6 @@ func (btc *intermediaryWallet) reportNewTip(ctx context.Context, newTip *BlockVe
 	btc.emit.TipChange(uint64(newTip.Height))
 
 	go btc.syncTxHistory(uint64(newTip.Height))
-
-	btc.rf.ReportNewTip(ctx, prevTip, newTip)
 }
 
 // sendWithReturn sends the unsigned transaction with an added output (unless
@@ -3740,10 +3688,6 @@ type BlockHeader struct {
 // hashContract hashes the contract for use in a p2sh or p2wsh pubkey script.
 // The hash function used depends on whether the wallet is configured for
 // segwit. Non-segwit uses Hash160, segwit uses SHA256.
-func (btc *baseWallet) hashContract(contract []byte) []byte {
-	return hashContract(btc.segwit, contract)
-}
-
 func hashContract(segwit bool, contract []byte) []byte {
 	if segwit {
 		h := sha256.Sum256(contract) // BIP141

@@ -217,12 +217,20 @@ func TestLiveNetworkSyncHeaders(t *testing.T) {
 			}
 			defer net.Stop()
 
+			// Start now returns promptly; the initial header sync runs in
+			// the background. Poll until Synced() is true or the context
+			// deadline fires.
+			for !net.Synced() {
+				select {
+				case <-ctx.Done():
+					t.Fatalf("timed out waiting for header sync (tip=%d)", net.Tip())
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+
 			tip := net.Tip()
 			if tip <= 0 {
 				t.Fatalf("expected positive tip after sync, got %d", tip)
-			}
-			if !net.Synced() {
-				t.Fatal("network should report synced after Start")
 			}
 			// Spot-check that genesis decodes correctly and chains.
 			h0 := net.HeaderByHeight(0)

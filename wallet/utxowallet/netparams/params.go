@@ -65,6 +65,15 @@ type ChainParams struct {
 	// MaxSatoshi varies between assets.
 	MaxSatoshi int64
 
+	// ElectrumServers is the list of built-in electrumx servers for this
+	// (chain, network) combination. Consumers pick the first entry; the list
+	// exists to allow a fallback hierarchy in the future.
+	ElectrumServers []*ServerAddr
+
+	// NeutrinoSeeds is the list of default peer addresses for the neutrino
+	// (BIP-157/158) chain service. Nil/empty on mainnet (DNS seeds suffice).
+	NeutrinoSeeds []string
+
 	btcdParamsOnce sync.Once
 	btcdParams     *chaincfg.Params
 }

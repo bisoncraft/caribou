@@ -2,6 +2,7 @@ import t, { tvar } from '../js/intl'
 import app from '../js/application'
 import { TickerAsset } from '../js/assets'
 import CoinLogo from './CoinLogo'
+import Spinner from './Spinner'
 
 const languages = navigator.languages as string[]
 
@@ -42,9 +43,12 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-dot asset-status-syncing has-tip"
-        aria-label={`${t('Syncing')}: ${pct}%`}
-      />
+        className="asset-status-syncing-spinner has-tip"
+        aria-label={tvar('syncing_pct', { pct: String(pct) })}
+        style={{ color: 'var(--accent-syncing)' }}
+      >
+        <Spinner size={10} />
+      </span>
     )
   }
 

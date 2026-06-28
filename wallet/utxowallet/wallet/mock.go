@@ -17,7 +17,7 @@ type mockChainClient struct {
 	getBlockHeader     *wire.BlockHeader
 }
 
-var _ chain.Interface = (*mockChainClient)(nil)
+var _ chain.Backend = (*mockChainClient)(nil)
 
 func (m *mockChainClient) Start() error {
 	return nil

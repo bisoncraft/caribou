@@ -137,9 +137,30 @@ func (c *ElectrumClient) trySubscribeAddress(addr btcutil.Address) (retry bool, 
 	return false, nil
 }
 
+// ProbeAddress reports whether addr has any confirmed or mempool history, via a
+// one-shot blockchain.scripthash.get_history with no subscription. It is the
+// gap-limit recovery probe (see chain.AddressProber).
+//
+// TODO(recovery): prime the per-scripthash history cache here so the rescan
+// over a discovered address doesn't refetch it. Today fetchAndCacheHistory only
+// caches subscribed scripthashes, so the discovered-range addresses are fetched
+// twice (once here, once by the rescan). The redundant range is bounded by the
+// last used index, so this is a follow-up optimization, not a correctness gap.
+func (c *ElectrumClient) ProbeAddress(addr btcutil.Address) (bool, error) {
+	sh, err := addrScripthash(addr)
+	if err != nil {
+		return false, err
+	}
+	hist, err := c.net.GetHistory(c.ctx, sh)
+	if err != nil {
+		return false, err
+	}
+	return len(hist) > 0, nil
+}
+
 // Rescan kicks off a chain rescan: walking from startHash to the current tip,
 // fetching every transaction that involves any of the supplied addresses or
-// outpoints and emitting the chain.Interface notifications a fresh wallet
+// outpoints and emitting the chain.Backend notifications a fresh wallet
 // sync expects (BlockConnected for inert blocks, FilteredBlockConnected for
 // blocks with matches, periodic RescanProgress, terminating RescanFinished).
 //
@@ -155,6 +176,14 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 	// already been stopped.
 	if err := c.ctx.Err(); err != nil {
 		return fmt.Errorf("electrum: rescan on stopped client: %w", err)
+	}
+
+	// A rescan before the initial header sync has a tip would walk an empty
+	// chain and never emit RescanFinished (tryDispatchRescanFinished has no
+	// header at tip -1). Callers must wait for IsCurrent first; surface a
+	// clear error rather than hanging if they don't.
+	if c.net.Tip() < 0 {
+		return fmt.Errorf("electrum: rescan before initial header sync")
 	}
 
 	// Subscribe to every address we plan to scan so we keep receiving
@@ -304,7 +333,14 @@ func (c *ElectrumClient) tryDispatchRescanFinished(tip int32) {
 		Time:   hdr.Timestamp,
 	}); err != nil {
 		log.Debugf("electrum: enqueue RescanFinished: %v", err)
+		return
 	}
+	// Hand off from rescan-driven sync to live tip delivery. RescanFinished is
+	// already queued (so the wallet sets SyncedTo to tip first); goLive then
+	// delivers a contiguous BlockConnected catch-up for blocks mined during the
+	// rescan and opens the gate for tipChangeLoop. Without this, a block mined
+	// mid-rescan is dropped and the wallet can never advance past tip.
+	c.goLive(tip)
 }
 
 // collectHistories fetches the history for every scripthash and groups the

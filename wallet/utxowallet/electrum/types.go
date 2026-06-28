@@ -6,43 +6,17 @@
 package electrum
 
 import (
-	"fmt"
-	"net"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 )
 
-// ServerAddr identifies an electrumx server endpoint.
-type ServerAddr struct {
-	// Proto is "ssl" or "tcp".
-	Proto string
-	// Addr is the host:port endpoint.
-	Addr string
-	// Onion is true if Addr is a Tor hidden service.
-	Onion bool
-}
+// ServerAddr identifies an electrumx server endpoint. It is an alias of
+// netparams.ServerAddr so the two types are interchangeable without conversion.
+type ServerAddr = netparams.ServerAddr
 
-// Network satisfies net.Addr.
-func (a *ServerAddr) Network() string { return a.Proto }
-
-// String satisfies net.Addr.
-func (a *ServerAddr) String() string { return a.Addr }
-
-// Equal reports whether two server addresses are the same.
-func (a *ServerAddr) Equal(b *ServerAddr) bool {
-	return a.Proto == b.Proto && a.Addr == b.Addr
-}
-
-// Validate sanity-checks a ServerAddr.
-func (a *ServerAddr) Validate() error {
-	switch a.Proto {
-	case "ssl", "tcp":
-	default:
-		return fmt.Errorf("electrum: unknown proto %q (want ssl or tcp)", a.Proto)
-	}
-	if _, _, err := net.SplitHostPort(a.Addr); err != nil {
-		return fmt.Errorf("electrum: invalid addr %q: %w", a.Addr, err)
-	}
-	return nil
-}
+// MustParseCertPEM decodes a single PEM-encoded X.509 certificate and returns
+// its raw DER bytes, suitable for ServerAddr.Cert. It panics on malformed input.
+// Delegates to netparams.MustParseCertPEM.
+var MustParseCertPEM = netparams.MustParseCertPEM
 
 // ScripthashStatus is a notification or response for a scripthash subscription.
 // Status is a 32-byte SHA-256 hex digest of the address history; empty when
@@ -69,7 +43,7 @@ type DisconnectedBlock struct {
 }
 
 // TipChange is the structured event Network publishes when its header chain
-// advances or rewinds. Consumers translate it into chain.Interface
+// advances or rewinds. Consumers translate it into chain.Backend
 // notifications: BlockDisconnected for each Disconnected entry (in order,
 // which is newest-first / disconnect order) and BlockConnected for each
 // Connected height (oldest-first / connect order).

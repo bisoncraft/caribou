@@ -30,11 +30,9 @@ const (
 	// Zcoin XZC
 	BipID = 136
 	//  https://github.com/firoorg/firo/releases/tag/v0.14.14.1
-	minNetworkVersion   = 141401
-	walletTypeRPC       = "firodRPC"
-	walletTypeElectrum  = "electrumRPC"
-	estimateFeeConfs    = 2 // 2 blocks should be enough
-	needElectrumVersion = "4.1.5"
+	minNetworkVersion = 141401
+	walletTypeRPC     = "firodRPC"
+	estimateFeeConfs  = 2 // 2 blocks should be enough
 )
 
 var (
@@ -80,13 +78,6 @@ var (
 		UnitInfo:          UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			rpcWalletDefinition,
-			// {
-			// 	Type:             walletTypeElectrum,
-			// 	Tab:              "Electrum-Firo (external)",
-			// 	Description:      "Use an external Electrum-Firo Wallet",
-			// 	ConfigOpts:       append(btc.ElectrumConfigOpts, btc.CommonConfigOpts("FIRO", true)...),
-			// 	MultiFundingOpts: btc.MultiFundingOpts,
-			// }, // TODO: Broken. Investigate and re-enable.
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
 		Network: &asset.Network{
@@ -188,15 +179,6 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		var err error
 		exw, err = btc.BTCCloneWallet(cloneCFG)
 		return exw, err
-	case walletTypeElectrum:
-		// override Ports - no default ports
-		cloneCFG.Ports = dexbtc.NetPorts{}
-		ver, err := util.SemverFromString(needElectrumVersion)
-		if err != nil {
-			return nil, err
-		}
-		cloneCFG.MinElectrumVersion = *ver
-		return btc.ElectrumWallet(cloneCFG)
 	default:
 		return nil, fmt.Errorf("unknown wallet type %q for firo", cfg.Type)
 	}

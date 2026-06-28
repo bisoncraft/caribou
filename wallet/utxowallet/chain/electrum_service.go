@@ -25,6 +25,11 @@ type ElectrumNetwork interface {
 	// Header state served from the local store.
 	Tip() int32
 	Synced() bool
+	// TargetTip returns the server's reported best height (from the initial
+	// SubscribeHeaders reply and updated on each tip-change notification). It
+	// is always >= Tip() and lets callers show meaningful sync progress while
+	// the local store is still catching up. Returns 0 if not yet known.
+	TargetTip() int32
 	HeaderByHeight(height int32) *wire.BlockHeader
 	HeaderByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool)
 	TipHash() chainhash.Hash

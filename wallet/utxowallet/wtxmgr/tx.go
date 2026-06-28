@@ -141,7 +141,11 @@ func NewTxRecord(chain string, serializedTx []byte, received time.Time) (*TxReco
 		str := "failed to deserialize transaction"
 		return nil, storeError(ErrInput, str, err)
 	}
-	copy(rec.Hash[:], chainhash.DoubleHashB(serializedTx))
+	// Use the chain-aware canonical txid, not DoubleHashB(serializedTx).
+	// serializedTx from an electrum server includes the segwit witness, so
+	// double-hashing the raw bytes yields the wtxid rather than the txid;
+	// rec.Tx.TxHash() strips the witness for btc and is MWEB-aware for ltc.
+	rec.Hash = rec.Tx.TxHash()
 	return rec, nil
 }
 

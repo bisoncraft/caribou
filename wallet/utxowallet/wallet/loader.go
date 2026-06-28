@@ -46,6 +46,8 @@ var (
 type loaderConfig struct {
 	walletSyncRetryInterval time.Duration
 	scryptOpts              *waddrmgr.ScryptOptions
+	backendKind             BackendKind
+	hasBackendKind          bool // true when WithBackendKind was called
 }
 
 // defaultLoaderConfig returns the default configuration options for the loader.
@@ -73,6 +75,17 @@ func WithWalletSyncRetryInterval(interval time.Duration) LoaderOption {
 func WithScryptOptions(opts *waddrmgr.ScryptOptions) LoaderOption {
 	return func(c *loaderConfig) {
 		c.scryptOpts = opts
+	}
+}
+
+// WithBackendKind tells the loader which chain backend the wallet should own.
+// When this option is present, the opened/created Wallet records the backend
+// kind and its data directory; a subsequent Synchronize() call builds, starts,
+// and wires the backend automatically.
+func WithBackendKind(kind BackendKind) LoaderOption {
+	return func(c *loaderConfig) {
+		c.backendKind = kind
+		c.hasBackendKind = true
 	}
 }
 
@@ -158,6 +171,13 @@ func NewLoaderWithDB(chainParams *netparams.ChainParams, recoveryWindow uint32,
 // onLoaded executes each added callback and prevents loader from loading any
 // additional wallets.  Requires mutex to be locked.
 func (l *Loader) onLoaded(w *Wallet) {
+	// Thread the backend kind and data directory into the wallet so that
+	// Synchronize() can build the owned backend automatically.
+	if l.cfg.hasBackendKind {
+		w.backendKind = l.cfg.backendKind
+		w.dataDir = l.netDir
+	}
+
 	for _, fn := range l.callbacks {
 		fn(w)
 	}

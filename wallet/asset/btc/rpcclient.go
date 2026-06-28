@@ -1053,10 +1053,6 @@ func (wc *rpcClient) getVersion() (uint64, uint64, error) {
 
 // FindRedemptionsInMempool attempts to find spending info for the specified
 // contracts by searching every input of all txs in the mempool.
-func (wc *rpcClient) FindRedemptionsInMempool(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq) (discovered map[OutPoint]*FindRedemptionResult) {
-	return FindRedemptionsInMempool(ctx, wc.log, reqs, wc.GetRawMempool, wc.GetRawTransaction, wc.segwit, wc.hashTx, wc.chainParams)
-}
-
 func FindRedemptionsInMempool(
 	ctx context.Context,
 	log util.Logger,
@@ -1109,15 +1105,6 @@ func FindRedemptionsInMempool(
 
 // SearchBlockForRedemptions attempts to find spending info for the specified
 // contracts by searching every input of all txs in the provided block range.
-func (wc *rpcClient) SearchBlockForRedemptions(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq, blockHash chainhash.Hash) (discovered map[OutPoint]*FindRedemptionResult) {
-	msgBlock, err := wc.GetBlock(blockHash)
-	if err != nil {
-		wc.log.Errorf("RPC GetBlock error: %v", err)
-		return
-	}
-	return SearchBlockForRedemptions(ctx, reqs, msgBlock, wc.segwit, wc.hashTx, wc.chainParams)
-}
-
 func SearchBlockForRedemptions(
 	ctx context.Context,
 	reqs map[OutPoint]*FindRedemptionReq,

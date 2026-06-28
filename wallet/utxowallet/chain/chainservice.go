@@ -35,6 +35,7 @@ type NeutrinoChainService interface {
 	ChainParams() chaincfg.Params
 	Stop() error
 	PeerByAddr(string) *spv.ServerPeer
+	Peers() []*spv.ServerPeer
 }
 
 var _ NeutrinoChainService = (*spv.ChainService)(nil)

@@ -25,7 +25,7 @@ import (
 // given interface.
 var ErrUnimplemented = errors.New("unimplemented")
 
-// NeutrinoClient is an implementation of the utxowallet chain.Interface interface.
+// NeutrinoClient is an implementation of the utxowallet chain.Backend interface.
 type NeutrinoClient struct {
 	CS NeutrinoChainService
 
@@ -69,9 +69,9 @@ type NeutrinoClient struct {
 	clientMtx sync.Mutex
 }
 
-// A compile-time check to ensure that RPCClient satisfies the chain.Interface
+// A compile-time check to ensure that RPCClient satisfies the chain.Backend
 // interface.
-var _ Interface = (*NeutrinoClient)(nil)
+var _ Backend = (*NeutrinoClient)(nil)
 
 // NewNeutrinoClient creates a new NeutrinoClient struct with a backing
 // ChainService.
@@ -213,6 +213,32 @@ func (s *NeutrinoClient) GetBlockHeader(
 // as "current".
 func (s *NeutrinoClient) IsCurrent() bool {
 	return s.CS.IsCurrent()
+}
+
+// SyncHeight reports the locally-synced tip, the height the backend is syncing
+// toward (the best height advertised by connected peers), and whether neutrino
+// considers itself current. It mirrors ElectrumClient.SyncHeight so a wallet can
+// report sync progress without knowing the backend is neutrino.
+func (s *NeutrinoClient) SyncHeight() (localTip, targetTip int32, synced bool) {
+	if bs, err := s.CS.BestBlock(); err == nil {
+		localTip = bs.Height
+	}
+	for _, p := range s.CS.Peers() {
+		h := p.StartingHeight()
+		if lb := p.LastBlock(); lb > h {
+			h = lb
+		}
+		if h > targetTip {
+			targetTip = h
+		}
+	}
+	return localTip, targetTip, s.CS.IsCurrent()
+}
+
+// Connected reports whether neutrino currently has any peers. It mirrors
+// ElectrumClient.Connected for backend-agnostic peer monitoring.
+func (s *NeutrinoClient) Connected() bool {
+	return len(s.CS.Peers()) > 0
 }
 
 // SendRawTransaction replicates the RPC client's SendRawTransaction command.

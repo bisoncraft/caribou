@@ -128,10 +128,17 @@ type Wallet struct {
 	Manager *waddrmgr.Manager
 	TxStore *wtxmgr.Store
 
-	chainClient        chain.Interface
+	chainClient        chain.Backend
 	chainClientLock    sync.Mutex
 	chainClientSynced  bool
 	chainClientSyncMtx sync.Mutex
+
+	// Owned backend — set when BackendKind and dataDir are provided via the
+	// Loader. When non-nil, Synchronize() builds and starts it automatically;
+	// the wallet is then responsible for the full backend lifecycle.
+	backendKind BackendKind
+	backend     walletBackend
+	dataDir     string
 
 	newAddrMtx sync.Mutex
 
@@ -207,30 +214,80 @@ func (w *Wallet) Start() {
 	go w.walletLocker()
 }
 
-// Synchronize starts syncing the chain.
-func (w *Wallet) Synchronize(chainClient chain.Interface) {
+// Synchronize starts syncing the chain. When the wallet owns its backend
+// (backendKind + dataDir were set via the Loader and no backend has been built
+// yet), it builds and starts the backend first, then wires it as the chain
+// client. When a backend has already been started (e.g. across a rescan),
+// Synchronize re-wires it without rebuilding.
+func (w *Wallet) Synchronize() error {
 	w.quitMu.Lock()
 	select {
 	case <-w.quit:
 		w.quitMu.Unlock()
-		return
+		return nil
 	default:
 	}
 	w.quitMu.Unlock()
 
+	// Build the owned backend on first call (or after a full Shutdown).
+	if w.dataDir != "" && w.backend == nil {
+		b, err := newBackend(w.backendKind, w.chainParams, w.dataDir, log)
+		if err != nil {
+			return fmt.Errorf("wallet: build backend: %w", err)
+		}
+		w.backend = b
+	}
+
+	var chainClient chain.Backend
+	if w.backend != nil {
+		// Start the backend when it hasn't been started yet (normal connect)
+		// or it was stopped and needs restarting (rescan path calls Start
+		// before re-calling Synchronize). Start is idempotent; calling it
+		// on an already-running backend is a no-op.
+		if err := w.backend.Start(); err != nil {
+			return fmt.Errorf("wallet: start backend: %w", err)
+		}
+		chainClient = w.backend
+	}
+
+	if chainClient == nil {
+		return errors.New("wallet: no chain client available; set a backend via the Loader's WithBackendKind option")
+	}
+
+	return w.synchronize(chainClient)
+}
+
+// startTimeSetter is implemented by the neutrino backend via its embedded
+// *chain.NeutrinoClient. The wallet owns its backend as a wrapper type
+// (neutrinoWalletBackend), so a type switch on the concrete *chain.NeutrinoClient
+// no longer matches the dynamic type; asserting the method set reaches the
+// promoted method through the wrapper. The electrum client has no SetStartTime,
+// so it never matches.
+type startTimeSetter interface {
+	SetStartTime(time.Time)
+}
+
+// blockHeighter is implemented by the neutrino backend via its embedded
+// *chain.NeutrinoClient. Asserted by method set for the same wrapper reason as
+// startTimeSetter; the electrum client has no GetBlockHeight.
+type blockHeighter interface {
+	GetBlockHeight(*chainhash.Hash) (int32, error)
+}
+
+// synchronize wires chainClient and starts the sync goroutines.
+func (w *Wallet) synchronize(chainClient chain.Backend) error {
 	// TODO: Ignoring the new client when one is already set breaks callers
 	// who are replacing the client, perhaps after a disconnect.
 	w.chainClientLock.Lock()
 	if w.chainClient != nil {
 		w.chainClientLock.Unlock()
-		return
+		return nil
 	}
 	w.chainClient = chainClient
 
-	// If the chain client is a NeutrinoClient instance, set a birthday so
-	// we don't download all the filters as we go.
-	switch cc := chainClient.(type) {
-	case *chain.NeutrinoClient:
+	// If the chain backend supports a sync start time (neutrino), set the
+	// wallet birthday so we don't download all the compact filters from genesis.
+	if cc, ok := chainClient.(startTimeSetter); ok {
 		cc.SetStartTime(w.Manager.Birthday())
 	}
 	w.chainClientLock.Unlock()
@@ -244,13 +301,14 @@ func (w *Wallet) Synchronize(chainClient chain.Interface) {
 	go w.rescanBatchHandler()
 	go w.rescanProgressHandler()
 	go w.rescanRPCHandler()
+	return nil
 }
 
 // requireChainClient marks that a wallet method can only be completed when the
 // consensus RPC server is set.  This function and all functions that call it
 // are unstable and will need to be moved when the syncing code is moved out of
 // the wallet.
-func (w *Wallet) requireChainClient() (chain.Interface, error) {
+func (w *Wallet) requireChainClient() (chain.Backend, error) {
 	w.chainClientLock.Lock()
 	chainClient := w.chainClient
 	w.chainClientLock.Unlock()
@@ -265,7 +323,7 @@ func (w *Wallet) requireChainClient() (chain.Interface, error) {
 //
 // This function is unstable and will be removed once sync logic is moved out of
 // the wallet.
-func (w *Wallet) ChainClient() chain.Interface {
+func (w *Wallet) ChainClient() chain.Backend {
 	w.chainClientLock.Lock()
 	chainClient := w.chainClient
 	w.chainClientLock.Unlock()
@@ -312,7 +370,9 @@ func (w *Wallet) ShuttingDown() bool {
 	}
 }
 
-// WaitForShutdown blocks until all wallet goroutines have finished executing.
+// WaitForShutdown blocks until all wallet goroutines have finished executing and,
+// when the wallet owns its backend, until the backend's own goroutines have also
+// stopped. This ensures a clean stop-then-restart cycle (e.g. across a rescan).
 func (w *Wallet) WaitForShutdown() {
 	w.chainClientLock.Lock()
 	if w.chainClient != nil {
@@ -320,7 +380,89 @@ func (w *Wallet) WaitForShutdown() {
 	}
 	w.chainClientLock.Unlock()
 	w.wg.Wait()
+	// For the owned backend, wait after the wallet goroutines have exited, not
+	// before. The wallet goroutines interact with the backend; waiting here
+	// ensures the rescan restart can safely call backend.Start() next.
+	if w.backend != nil {
+		w.backend.WaitForShutdown()
+	}
 }
+
+// ─── Owned-backend methods ────────────────────────────────────────────────────
+
+// Shutdown fully tears down the wallet's owned chain backend (if any). Unlike
+// Stop (which only stops the wallet goroutines and the chain client, preserving
+// a neutrino service across rescans), Shutdown releases all backend resources:
+// the electrum network connection, or the neutrino chain service + database.
+// The wallet goroutines must be stopped (via Stop + WaitForShutdown) before
+// calling Shutdown to avoid a race between the goroutines and the teardown.
+//
+// Callers that manage their own backend (legacy SPV path) do not use this method.
+func (w *Wallet) Shutdown() {
+	if w.backend != nil {
+		w.backend.Shutdown()
+	}
+}
+
+// SyncHeight reports the locally-synced header tip, the target height, and
+// whether the backend considers itself current. It delegates to the owned backend
+// when present; if the wallet has no backend it returns (0, 0, false).
+func (w *Wallet) SyncHeight() (localTip, targetTip int32, synced bool) {
+	if w.backend != nil {
+		return w.backend.SyncHeight()
+	}
+	return 0, 0, false
+}
+
+// Connected reports whether the backend has a live server/peer connection.
+func (w *Wallet) Connected() bool {
+	if w.backend != nil {
+		return w.backend.Connected()
+	}
+	return false
+}
+
+// CanRescan reports whether the backend supports in-place rescanning. Neutrino
+// backends return true; electrum backends return false.
+func (w *Wallet) CanRescan() bool {
+	if w.backend != nil {
+		return w.backend.CanRescan()
+	}
+	return false
+}
+
+// Peers returns the wallet's network peers when the backend manages peers
+// (neutrino); the electrum backend has no peer concept and returns nil.
+func (w *Wallet) Peers() ([]Peer, error) {
+	if pb, ok := w.backend.(peerBackend); ok {
+		return pb.walletPeers()
+	}
+	return nil, nil
+}
+
+// AddPeer adds a persistent peer, when the backend manages peers.
+func (w *Wallet) AddPeer(addr string) error {
+	if pb, ok := w.backend.(peerBackend); ok {
+		return pb.walletAddPeer(addr)
+	}
+	return errors.New("this wallet's backend does not support peer management")
+}
+
+// RemovePeer removes a peer added with AddPeer, when the backend manages peers.
+func (w *Wallet) RemovePeer(addr string) error {
+	if pb, ok := w.backend.(peerBackend); ok {
+		return pb.walletRemovePeer(addr)
+	}
+	return errors.New("this wallet's backend does not support peer management")
+}
+
+// BackendKind returns the kind of backend this wallet owns, or BackendElectrum
+// if no backend has been assigned.
+func (w *Wallet) BackendKind() BackendKind {
+	return w.backendKind
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // SynchronizingToNetwork returns whether the wallet is currently synchronizing
 // with the Bitcoin network.
@@ -407,12 +549,21 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 	neutrinoRecovery := chainClient.BackEnd() == "neutrino" &&
 		w.recoveryWindow > 0
 
+	// The electrum backend connects and then syncs headers in the
+	// background, so chainClient.Start returning does not imply a usable
+	// tip. Unlike a generic full node on a dev chain, electrum's IsCurrent
+	// (server-reported tip vs. our header store) is reliable even on
+	// regtest/simnet, so we always wait for it here — without this, the
+	// birthday-block lookup and rollback below would call GetBestBlock /
+	// GetBlockHash before any header is synced and fail.
+	electrumBackend := chainClient.BackEnd() == chain.ElectrumBackEnd
+
 	// We'll wait until the backend is synced to ensure we get the latest
 	// MaxReorgDepth blocks to store. We don't do this for development
 	// environments as we can't guarantee a lively chain, except for
 	// Neutrino, where the cfheader server tells us what it believes the
-	// chain tip is.
-	if !w.isDevEnv() || neutrinoRecovery {
+	// chain tip is, and electrum, whose tip is server-reported.
+	if !w.isDevEnv() || neutrinoRecovery || electrumBackend {
 		log.Debug("Waiting for chain backend to sync to tip")
 		if err := w.waitUntilBackendSynced(chainClient); err != nil {
 			return err
@@ -468,9 +619,16 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 	}
 
 	// If the wallet requested an on-chain recovery of its funds, we'll do
-	// so now.
+	// so now. Backends that can probe per-address history (electrum) discover
+	// used addresses by gap-limit scanning instead of walking blocks; the scan
+	// extends the address pool so the rescan below ingests the funds. A probe
+	// error is logged, not fatal — the rescan still syncs the known addresses.
 	if w.recoveryWindow > 0 {
-		if err := w.recovery(chainClient, birthdayStamp); err != nil {
+		if prober, ok := chainClient.(chain.AddressProber); ok {
+			if err := w.recoverViaScan(prober, w.recoveryWindow); err != nil {
+				log.Errorf("Address-probe recovery failed: %v", err)
+			}
+		} else if err := w.recovery(chainClient, birthdayStamp); err != nil {
 			return fmt.Errorf("unable to perform wallet recovery: "+
 				"%w", err)
 		}
@@ -588,7 +746,7 @@ func (w *Wallet) isDevEnv() bool {
 
 // waitUntilBackendSynced blocks until the chain backend considers itself
 // "current".
-func (w *Wallet) waitUntilBackendSynced(chainClient chain.Interface) error {
+func (w *Wallet) waitUntilBackendSynced(chainClient chain.Backend) error {
 	// We'll poll every second to determine if our chain considers itself
 	// "current".
 	t := time.NewTicker(time.Second)
@@ -697,7 +855,7 @@ type recoverySyncer struct {
 // recovery attempts to recover any unspent outputs that pay to any of our
 // addresses starting from our birthday, or the wallet's tip (if higher), which
 // would indicate resuming a recovery after a restart.
-func (w *Wallet) recovery(chainClient chain.Interface,
+func (w *Wallet) recovery(chainClient chain.Backend,
 	birthdayBlock *waddrmgr.BlockStamp) error {
 
 	log.Infof("RECOVERY MODE ENABLED -- rescanning for used addresses "+
@@ -845,7 +1003,7 @@ func (w *Wallet) recovery(chainClient chain.Interface,
 //
 // TODO(conner): parallelize/pipeline/cache intermediate network requests
 func (w *Wallet) recoverScopedAddresses(
-	chainClient chain.Interface,
+	chainClient chain.Backend,
 	tx walletdb.ReadWriteTx,
 	ns walletdb.ReadWriteBucket,
 	batch []wtxmgr.BlockMeta,
@@ -2434,8 +2592,7 @@ func (w *Wallet) GetTransactions(startBlock, endBlock *BlockIdentifier,
 			if chainClient == nil {
 				return nil, errors.New("no chain server client")
 			}
-			switch client := chainClient.(type) {
-			case *chain.NeutrinoClient:
+			if client, ok := chainClient.(blockHeighter); ok {
 				var err error
 				start, err = client.GetBlockHeight(startBlock.hash)
 				if err != nil {
@@ -2451,8 +2608,7 @@ func (w *Wallet) GetTransactions(startBlock, endBlock *BlockIdentifier,
 			if chainClient == nil {
 				return nil, errors.New("no chain server client")
 			}
-			switch client := chainClient.(type) {
-			case *chain.NeutrinoClient:
+			if client, ok := chainClient.(blockHeighter); ok {
 				var err error
 				end, err = client.GetBlockHeight(endBlock.hash)
 				if err != nil {

@@ -33,7 +33,7 @@ func (w *Wallet) handleChainNotifications() {
 		return
 	}
 
-	catchUpHashes := func(w *Wallet, client chain.Interface,
+	catchUpHashes := func(w *Wallet, client chain.Backend,
 		height int32) error {
 		// TODO(aakselrod): There's a race condition here, which
 		// happens when a reorg occurs between the

@@ -30,20 +30,20 @@ import (
 // ElectrumBackEnd is the BackEnd() string returned by ElectrumClient.
 const ElectrumBackEnd = "electrum"
 
-// ElectrumBackend is the optional capability surface for chain.Interface
+// ElectrumBackend is the optional capability surface for chain.Backend
 // implementations backed by an electrumx server. It is currently a marker
 // interface — callers that need electrum-specific extensions can grow it.
 type ElectrumBackend interface {
-	Interface
+	Backend
 	// Network returns the underlying electrum network for diagnostics
 	// and electrum-specific operations such as peer management.
 	Network() ElectrumNetwork
 }
 
-// ElectrumClient is a chain.Interface implementation backed by an electrumx
+// ElectrumClient is a chain.Backend implementation backed by an electrumx
 // server. The shape mirrors NeutrinoClient: a notification queue goroutine
 // translates events from the underlying network (tip changes, scripthash
-// status changes, completed rescan steps) into chain.Interface notifications
+// status changes, completed rescan steps) into chain.Backend notifications
 // drained via Notifications().
 //
 // ElectrumClient does NOT take a parent context on Start; like NeutrinoClient,
@@ -92,6 +92,21 @@ type ElectrumClient struct {
 	rescanMtx    sync.Mutex
 	rescanCancel context.CancelFunc
 	rescanDone   chan struct{}
+
+	// connMtx guards the live tip-delivery state below. It serializes the
+	// rescan-finished handoff (goLive) against tipChangeLoop so live
+	// BlockConnected notifications can't race the initial rescan.
+	connMtx sync.Mutex
+	// liveDelivery is false until the first rescan completes. While false,
+	// tipChangeLoop suppresses BlockConnected — the rescan owns SyncedTo, and
+	// a BlockConnected mined during the rescan would break PutSyncedTo's
+	// prev-block chain (the wallet stores only recent hashes post-birthday).
+	// goLive flips it true and delivers a contiguous catch-up.
+	liveDelivery bool
+	// lastConnected is the highest height delivered as BlockConnected. New
+	// blocks are always delivered contiguously from lastConnected+1 to the
+	// header-store tip, so a suppressed or skipped tip can't leave a gap.
+	lastConnected int32
 }
 
 // scripthashEntry captures per-scripthash state.
@@ -128,8 +143,9 @@ type scripthashEntry struct {
 	ready       chan struct{}
 }
 
-var _ Interface = (*ElectrumClient)(nil)
+var _ Backend = (*ElectrumClient)(nil)
 var _ ElectrumBackend = (*ElectrumClient)(nil)
+var _ AddressProber = (*ElectrumClient)(nil)
 
 // NewElectrumClient constructs an ElectrumClient backed by the given network.
 // The network must not be started; ElectrumClient.Start will start it.
@@ -222,20 +238,31 @@ func (c *ElectrumClient) Stop() {
 	c.started = false
 }
 
+// Shutdown fully tears down the electrum backend. Electrum has no client/service
+// split, so it is identical to Stop; the chainBackend interface distinguishes
+// the two so the neutrino backend can stop just its client (e.g. across a
+// rescan) while keeping its synced chain service, reserving full teardown for
+// Shutdown.
+func (c *ElectrumClient) Shutdown() { c.Stop() }
+
+// CanRescan reports false: the electrum network cannot be restarted in place, so
+// the wallet cannot perform an in-place rescan over this backend.
+func (c *ElectrumClient) CanRescan() bool { return false }
+
 // WaitForShutdown blocks until Stop has fully completed.
 func (c *ElectrumClient) WaitForShutdown() {
 	c.wg.Wait()
 	c.net.WaitForShutdown()
 }
 
-// Notifications returns the channel from which chain.Interface notifications
+// Notifications returns the channel from which chain.Backend notifications
 // are dequeued.
 func (c *ElectrumClient) Notifications() <-chan any {
 	return c.dequeueNotification
 }
 
 // ----------------------------------------------------------------------------
-// chain.Interface — direct-from-headers methods.
+// chain.Backend — direct-from-headers methods.
 // ----------------------------------------------------------------------------
 
 // GetBestBlock returns the hash and height of the chain tip as we know it.
@@ -284,6 +311,26 @@ func (c *ElectrumClient) GetBlockHeader(hash *chainhash.Hash) (*wire.BlockHeader
 
 // IsCurrent reports whether our header chain has caught up to the server.
 func (c *ElectrumClient) IsCurrent() bool { return c.net.Synced() }
+
+// SyncHeight reports the locally-synced header tip, the target height the
+// backend is syncing toward (the server's reported best), and whether the
+// backend considers itself synced. It lets a wallet report sync progress
+// without knowing the backend is electrum.
+func (c *ElectrumClient) SyncHeight() (localTip, targetTip int32, synced bool) {
+	return c.net.Tip(), c.net.TargetTip(), c.net.Synced()
+}
+
+// Connected reports whether the backend currently has a live connection. It
+// abstracts the electrum network's Done channel so peer monitoring is
+// backend-agnostic.
+func (c *ElectrumClient) Connected() bool {
+	select {
+	case <-c.net.Done():
+		return false
+	default:
+		return true
+	}
+}
 
 // BlockStamp returns the latest block notified by the client, or an error
 // if the client has been shut down.
@@ -381,10 +428,36 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 	if ev == nil {
 		return
 	}
-	// Disconnects first (review2 #1). The metadata is carried by the
-	// event because the headers store has already removed these blocks
-	// from its maps by the time we see them here.
-	for _, d := range ev.Disconnected {
+	connected := c.applyTip(ev)
+	// Review2 #6: a scripthash status may have arrived while these headers
+	// were still in flight. Now that the headers are local and connected,
+	// flush any deferred entries so confirmed txs aren't stuck unmined.
+	// flushPending is called without connMtx held (it takes addrCacheMtx).
+	if connected > 0 {
+		c.flushPending()
+	}
+}
+
+// applyTip processes a single network tip change under connMtx, returning the
+// number of BlockConnected notifications delivered. While the initial rescan is
+// still running (liveDelivery false) it suppresses connects entirely — goLive
+// will deliver the contiguous catch-up at RescanFinished.
+func (c *ElectrumClient) applyTip(ev *electrum.TipChange) int {
+	c.connMtx.Lock()
+	defer c.connMtx.Unlock()
+	if !c.liveDelivery {
+		return 0
+	}
+	c.deliverDisconnectsLocked(ev.Disconnected)
+	return c.deliverConnectsLocked()
+}
+
+// deliverDisconnectsLocked emits a BlockDisconnected per reorged-out block and
+// rolls lastConnected back so the subsequent re-connects stay contiguous. The
+// metadata is carried by the event because the headers store has already
+// removed these blocks from its maps by the time we see them. connMtx held.
+func (c *ElectrumClient) deliverDisconnectsLocked(disc []electrum.DisconnectedBlock) {
+	for _, d := range disc {
 		ntfn := BlockDisconnected(wtxmgr.BlockMeta{
 			Block: wtxmgr.Block{Hash: chainhash.Hash(d.Hash), Height: d.Height},
 			Time:  time.Unix(d.Time, 0),
@@ -392,26 +465,56 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 		if err := c.enqueue(ntfn); err != nil {
 			return
 		}
+		if d.Height-1 < c.lastConnected {
+			c.lastConnected = d.Height - 1
+		}
 	}
-	// Then connects, one BlockConnected per height (review2 #3).
-	for _, h := range ev.Connected {
+}
+
+// deliverConnectsLocked emits one BlockConnected per height from lastConnected+1
+// up to the current header-store tip, advancing lastConnected as it goes. By
+// always filling from lastConnected (rather than the event's delta), a tip that
+// was suppressed during the initial rescan — or any other gap — is closed here,
+// so waddrmgr.PutSyncedTo can chain prev-hash → hash for every block instead of
+// being asked to jump forward and failing. connMtx held. Returns the count
+// delivered.
+func (c *ElectrumClient) deliverConnectsLocked() int {
+	tip := c.net.Tip()
+	n := 0
+	for h := c.lastConnected + 1; h <= tip; h++ {
 		hdr := c.net.HeaderByHeight(h)
 		if hdr == nil {
-			log.Warnf("electrum: tip-change connect at %d but no local header", h)
-			continue
+			log.Warnf("electrum: connect at %d but no local header", h)
+			break
 		}
 		ntfn := BlockConnected{
 			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: h},
 			Time:  hdr.Timestamp,
 		}
 		if err := c.enqueue(ntfn); err != nil {
-			return
+			break
 		}
+		c.lastConnected = h
+		n++
 	}
-	// Review2 #6: a scripthash status may have arrived while these
-	// headers were still in flight. Now that the headers are local,
-	// flush any deferred entries so confirmed txs aren't stuck unmined.
-	if len(ev.Connected) > 0 {
+	return n
+}
+
+// goLive transitions from rescan-driven sync to live tip delivery. It is called
+// right after a RescanFinished is enqueued. On the first rescan it opens the
+// gate at the rescan's tip and delivers a contiguous BlockConnected catch-up for
+// any blocks mined during the rescan, so the wallet's SyncedTo advances to the
+// real tip without a gap. On later rescans (already live) it only delivers any
+// blocks not yet connected — a no-op when already caught up.
+func (c *ElectrumClient) goLive(rescanTip int32) {
+	c.connMtx.Lock()
+	if !c.liveDelivery {
+		c.liveDelivery = true
+		c.lastConnected = rescanTip
+	}
+	n := c.deliverConnectsLocked()
+	c.connMtx.Unlock()
+	if n > 0 {
 		c.flushPending()
 	}
 }
@@ -519,7 +622,7 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 	// the header arrives". Already-seen entries are not re-emitted but
 	// stay in the carry-forward list.
 	emitted := make([]electrum.HistoryEntry, 0, len(hist))
-	var deferred []electrum.HistoryEntry
+	var deferred, toEmit []electrum.HistoryEntry
 	for _, h := range hist {
 		if alreadySeen(prev, h.TxHash, h.Height) {
 			emitted = append(emitted, h)
@@ -535,12 +638,11 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 			deferred = append(deferred, h)
 			continue
 		}
-		if err := c.emitRelevantTx(h); err != nil {
-			log.Debugf("electrum: emit %s: %v", h.TxHash, err)
-			continue
-		}
-		emitted = append(emitted, h)
+		toEmit = append(toEmit, h)
 	}
+	// Fetch the new txs' raw bytes concurrently and enqueue them; only the
+	// successfully-emitted ones join lastHistory so failures are retried.
+	emitted = append(emitted, c.emitRelevantTxs(toEmit)...)
 	// Re-fetch under the lock and confirm it's still the same entry before
 	// committing. A subscribed entry is never deleted today (the only
 	// addrCache delete is the subscribe-failure rollback, which can't apply
@@ -626,11 +728,7 @@ func (c *ElectrumClient) flushPending() {
 		entry.pending = remain
 		c.addrCacheMtx.Unlock()
 
-		for _, e := range ready {
-			if err := c.emitRelevantTx(e); err != nil {
-				log.Debugf("electrum: flush emit %s: %v", e.TxHash, err)
-			}
-		}
+		c.emitRelevantTxs(ready)
 
 		c.addrCacheMtx.Lock()
 		entry.lastHistory = append(entry.lastHistory, ready...)
@@ -651,20 +749,20 @@ func alreadySeen(prev []electrum.HistoryEntry, txid string, height int32) bool {
 	return false
 }
 
-// emitRelevantTx fetches the raw transaction and enqueues a chain.RelevantTx
-// notification for it.
-func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
+// buildRelevantTx fetches the raw transaction for a history entry and builds the
+// corresponding RelevantTx (the network round-trip + decode, without enqueuing).
+func (c *ElectrumClient) buildRelevantTx(h electrum.HistoryEntry) (RelevantTx, error) {
 	rawHex, err := c.net.GetRawTransaction(c.ctx, h.TxHash)
 	if err != nil {
-		return err
+		return RelevantTx{}, err
 	}
 	raw, err := hex.DecodeString(rawHex)
 	if err != nil {
-		return fmt.Errorf("decode raw tx: %w", err)
+		return RelevantTx{}, fmt.Errorf("decode raw tx: %w", err)
 	}
 	rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, time.Now())
 	if err != nil {
-		return fmt.Errorf("new tx record: %w", err)
+		return RelevantTx{}, fmt.Errorf("new tx record: %w", err)
 	}
 	var blockMeta *wtxmgr.BlockMeta
 	if h.Height > 0 {
@@ -676,11 +774,60 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 			}
 		}
 	}
-	select {
-	case c.enqueueNotification <- RelevantTx{TxRecord: rec, Block: blockMeta}:
-	case <-c.quit:
+	return RelevantTx{TxRecord: rec, Block: blockMeta}, nil
+}
+
+// maxRawTxFetches bounds the concurrent GetRawTransaction round-trips in
+// emitRelevantTxs.
+const maxRawTxFetches = 8
+
+// emitRelevantTxs fetches the raw transactions for the given history entries
+// CONCURRENTLY, then enqueues a RelevantTx notification for each in the original
+// order, returning the entries that were successfully enqueued.
+//
+// The fetch is parallelized on purpose: GetRawTransaction is a per-tx network
+// round-trip and the scripthash processor that calls this is single-threaded, so
+// fetching serially made detection latency grow with the number of new
+// transactions — e.g. several receives to the same address arriving close
+// together would each wait behind the previous one's round-trip. Enqueue order
+// is preserved so any in-batch parent→child dependency stays intact for the
+// wallet.
+func (c *ElectrumClient) emitRelevantTxs(entries []electrum.HistoryEntry) []electrum.HistoryEntry {
+	if len(entries) == 0 {
+		return nil
 	}
-	return nil
+	built := make([]*RelevantTx, len(entries))
+	sem := make(chan struct{}, maxRawTxFetches)
+	var wg sync.WaitGroup
+	for i := range entries {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rtx, err := c.buildRelevantTx(entries[i])
+			if err != nil {
+				log.Debugf("electrum: build relevant tx %s: %v", entries[i].TxHash, err)
+				return
+			}
+			built[i] = &rtx
+		}(i)
+	}
+	wg.Wait()
+
+	emitted := make([]electrum.HistoryEntry, 0, len(entries))
+	for i, rtx := range built {
+		if rtx == nil {
+			continue
+		}
+		select {
+		case c.enqueueNotification <- *rtx:
+			emitted = append(emitted, entries[i])
+		case <-c.quit:
+			return emitted
+		}
+	}
+	return emitted
 }
 
 // ----------------------------------------------------------------------------
@@ -691,17 +838,33 @@ func (c *ElectrumClient) emitRelevantTx(h electrum.HistoryEntry) error {
 func (c *ElectrumClient) notificationHandler() {
 	defer c.wg.Done()
 
-	// Do NOT prime bs by calling GetBestBlock here. That call would race
-	// against the network's tip-subscription delivering the first
-	// BlockConnected, and it has two failure modes — server returning an
-	// empty first batch while Tip() is still -1, and the brief window
-	// during a reorg rewind where Tip() points at a header we've already
-	// deleted. The previous implementation tore the whole handler down on
-	// either of those, which made Start() silently advertise success
-	// while leaving the wallet unable to sync. Instead we let bs stay nil
-	// until the first BlockConnected arrives; BlockStamp callers wait
-	// (which is what NeutrinoClient does pre-first-block as well).
+	// bs is the block stamp delivered to BlockStamp() callers. It is primed by
+	// whichever of the following happens first, then kept current by subsequent
+	// BlockConnected notifications:
+	//
+	//   1. GetBestBlock once the network reports Synced(). This matches
+	//      NeutrinoClient, which stamps the current tip at handler startup so
+	//      BlockStamp() returns as soon as the chain is synced — even on a
+	//      quiescent chain that never delivers a new BlockConnected, and even
+	//      before the rescan->live handoff opens the connect gate. We can't call
+	//      GetBestBlock at startup the way Neutrino does, because the header sync
+	//      now runs in the background and Tip() may still be -1; instead we poll
+	//      with primeTicker and only stamp once IsCurrent() is true. GetBestBlock
+	//      can still transiently error during a reorg rewind (Tip() pointing at a
+	//      just-deleted header); we simply retry on the next tick.
+	//
+	//   2. A BlockConnected from the live-delivery path, which advances bs as new
+	//      blocks arrive.
+	//
+	// Until bs is primed, BlockStamp() callers block (the nil send-case below is
+	// never selectable), which is what callers expect pre-first-block.
 	var bs *waddrmgr.BlockStamp
+
+	// primeTicker drives the Synced()->GetBestBlock priming described above. It
+	// only matters until bs is set (by either path), after which its select case
+	// is disabled so it adds no ongoing overhead.
+	primeTicker := time.NewTicker(200 * time.Millisecond)
+	defer primeTicker.Stop()
 
 	var notifications []any
 	enqueue := c.enqueueNotification
@@ -715,6 +878,12 @@ func (c *ElectrumClient) notificationHandler() {
 		var blockStampCh chan *waddrmgr.BlockStamp
 		if bs != nil {
 			blockStampCh = c.currentBlock
+		}
+
+		// Poll for Synced()->GetBestBlock priming only until bs is set.
+		var primeCh <-chan time.Time
+		if bs == nil {
+			primeCh = primeTicker.C
 		}
 
 		select {
@@ -753,6 +922,19 @@ func (c *ElectrumClient) notificationHandler() {
 					return
 				}
 				dequeue = nil
+			}
+
+		case <-primeCh:
+			// The network has caught up but no BlockConnected has primed bs
+			// yet (a quiescent chain, or the pre-rescan window where connects
+			// are still gated). Stamp the current tip directly, matching
+			// NeutrinoClient. IsCurrent guards against Tip() == -1; a reorg
+			// rewind can still make GetBestBlock error transiently, so we just
+			// retry on the next tick.
+			if c.IsCurrent() {
+				if hash, height, err := c.GetBestBlock(); err == nil {
+					bs = &waddrmgr.BlockStamp{Hash: *hash, Height: height}
+				}
 			}
 
 		case blockStampCh <- bs:

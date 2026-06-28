@@ -24,10 +24,10 @@ func BackEnds() []string {
 	}
 }
 
-// Interface allows more than one backing blockchain source, such as a
+// Backend allows more than one backing blockchain source, such as a
 // btcd RPC chain server, or an SPV library, as long as we write a driver for
 // it.
-type Interface interface {
+type Backend interface {
 	Start() error
 	Stop()
 	WaitForShutdown()
@@ -45,6 +45,19 @@ type Interface interface {
 	Notifications() <-chan interface{}
 	BackEnd() string
 	MapRPCErr(err error) error
+}
+
+// AddressProber is an optional capability for a Backend that can answer, per
+// address and cheaply, whether the address has any history (e.g. electrum's
+// blockchain.scripthash.get_history). It lets the wallet do gap-limit recovery
+// by probing derived addresses directly instead of walking blocks. Backends
+// that don't implement it fall back to block-walk recovery.
+//
+// "Used" means any history, confirmed or in mempool — a used-then-emptied
+// address must still report true, so implementations test history presence,
+// not balance.
+type AddressProber interface {
+	ProbeAddress(addr btcutil.Address) (used bool, err error)
 }
 
 // Notification types.  These are defined here and processed from from reading
