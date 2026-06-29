@@ -411,6 +411,7 @@ func TestSendToUnfundedDestination(t *testing.T) {
 			rpc:         m.rpcClient(),
 			log:         log,
 			baseReserve: BaseReserveDrops,
+			ctx:         context.Background(),
 		}
 		w.running.Store(true)
 		if _, err := w.Send(destAddr, BaseReserveDrops, 0); err != nil {
@@ -428,6 +429,7 @@ func TestSendToUnfundedDestination(t *testing.T) {
 			rpc:         m.rpcClient(),
 			log:         log,
 			baseReserve: BaseReserveDrops,
+			ctx:         context.Background(),
 		}
 		w.running.Store(true)
 		_, err := w.Send(destAddr, BaseReserveDrops-1, 0)
@@ -450,6 +452,7 @@ func makeBalanceWallet(t *testing.T, m *mockRippled) *xrpWallet {
 		log:          util.NewLogger("test", util.LevelError, nil),
 		baseReserve:  BaseReserveDrops,
 		ownerReserve: OwnerReserveDrops,
+		ctx:          context.Background(),
 	}
 	w.running.Store(true)
 	return w

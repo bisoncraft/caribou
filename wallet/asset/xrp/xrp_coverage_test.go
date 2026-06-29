@@ -592,6 +592,7 @@ func TestHandleValidatedTipUpdates(t *testing.T) {
 		log:         log,
 		emit:        asset.NewWalletEmitter(noteChan, BipID, log),
 		baseReserve: BaseReserveDrops,
+		ctx:         context.Background(),
 	}
 	w.running.Store(true)
 	w.tip = 100

@@ -203,6 +203,8 @@ type xrpWallet struct {
 	pubKey  *btcec.PublicKey  // write-once in newWallet; safe to read without keyMtx
 	address string            // classic 'r...' address; write-once in newWallet
 
+	ctx       context.Context    // set in Connect; cancelled on shutdown
+	ctxCancel context.CancelFunc // cancels ctx
 	rpc       *rpcClient
 	txDB      txdb.NetworkTxDB
 	metaTable txdb.StoreTable // auxiliary table for lastScannedLedger
@@ -311,10 +313,16 @@ func (w *xrpWallet) Locked() bool {
 	return w.privKey == nil
 }
 
-func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+func (w *xrpWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) {
 	if w.running.Load() {
 		return nil, fmt.Errorf("wallet already connected")
 	}
+	w.ctx, w.ctxCancel = context.WithCancel(ctx)
+	defer func() {
+		if err != nil {
+			w.ctxCancel()
+		}
+	}()
 	endpoint := w.rpcEndpoint()
 	rpc := newRPCClient(endpoint, w.log)
 	w.rpc = rpc
@@ -331,7 +339,7 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}
 
 	// Fetch initial chain state.
-	si, err := w.rpc.serverInfo(ctx)
+	si, err := w.rpc.serverInfo(w.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error fetching server info: %w", err)
 	}
@@ -348,7 +356,7 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}
 	w.lastScannedLedger.Store(lastScanned)
 
-	w.fetchReserves(ctx)
+	w.fetchReserves(w.ctx)
 
 	ch := make(chan uint64, 2)
 	w.tipCh = ch
@@ -362,15 +370,15 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	bgWg.Add(3)
 	go func() {
 		defer bgWg.Done()
-		w.tipWorker(ctx, ch)
+		w.tipWorker(w.ctx, ch)
 	}()
 	go func() {
 		defer bgWg.Done()
-		w.subscriptionLoop(ctx)
+		w.subscriptionLoop(w.ctx)
 	}()
 	go func() {
 		defer bgWg.Done()
-		w.pollTips(ctx)
+		w.pollTips(w.ctx)
 	}()
 
 	// Ordered shutdown: wait for background goroutines to exit first (they
@@ -379,7 +387,7 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		<-ctx.Done()
+		<-w.ctx.Done()
 		bgWg.Wait()
 		w.shutdown()
 	}()
@@ -391,6 +399,7 @@ func (w *xrpWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 // transaction database is owned by Core, which closes it only after all wallets
 // have disconnected, so the wallet does not close it here.
 func (w *xrpWallet) shutdown() {
+	w.ctxCancel()
 	w.running.Store(false)
 	w.opWG.Wait()
 }
@@ -477,8 +486,6 @@ func (w *xrpWallet) Balance() (*asset.Balance, error) {
 		return nil, fmt.Errorf("wallet not running")
 	}
 
-	ctx := context.Background()
-
 	// Fetch validated and current ledger account state concurrently.
 	// Validated gives confirmed balance; current accounts for pending outgoing
 	// sends. Both calls are independent so parallelising halves RPC latency.
@@ -489,11 +496,11 @@ func (w *xrpWallet) Balance() (*asset.Balance, error) {
 	validatedCh := make(chan infoResult, 1)
 	currentCh := make(chan infoResult, 1)
 	go func() {
-		info, err := w.rpc.accountInfo(ctx, w.address)
+		info, err := w.rpc.accountInfo(w.ctx, w.address)
 		validatedCh <- infoResult{info, err}
 	}()
 	go func() {
-		info, err := w.rpc.accountInfoCurrent(ctx, w.address)
+		info, err := w.rpc.accountInfoCurrent(w.ctx, w.address)
 		currentCh <- infoResult{info, err}
 	}()
 
@@ -571,8 +578,6 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		return nil, fmt.Errorf("wallet not connected")
 	}
 
-	ctx := context.Background()
-
 	// Check whether the wallet is locked before we do any network I/O or
 	// reserve a sequence number. This avoids burning a sequence when the common
 	// locked-wallet error is hit. A concurrent lock between this check and the
@@ -588,7 +593,7 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	// without one would be rejected on-chain with tecDST_TAG_NEEDED.
 	// An actNotFound error means the destination account has never been funded;
 	// enforce the base-reserve minimum to avoid a fee-burning tecNO_DST_INSUF_XRP.
-	destInfo, err := w.rpc.accountInfo(ctx, address)
+	destInfo, err := w.rpc.accountInfo(w.ctx, address)
 	if err != nil && !isAccountNotFound(err) {
 		return nil, fmt.Errorf("error checking destination account info: %w", err)
 	}
@@ -604,7 +609,7 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		}
 	}
 
-	feeInfo, err := w.rpc.fee(ctx)
+	feeInfo, err := w.rpc.fee(w.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error querying fee: %w", err)
 	}
@@ -623,7 +628,7 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	w.seqMtx.Lock()
 	if w.nextSeq == 0 {
 		w.seqMtx.Unlock()
-		firstSendInfo, err = w.rpc.accountInfoCurrent(ctx, w.address)
+		firstSendInfo, err = w.rpc.accountInfoCurrent(w.ctx, w.address)
 		if err != nil {
 			return nil, fmt.Errorf("error querying account info: %w", err)
 		}
@@ -715,7 +720,7 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		}
 	}
 
-	sr, err := w.rpc.submit(ctx, txBlob)
+	sr, err := w.rpc.submit(w.ctx, txBlob)
 	if err != nil {
 		// Network error: the node may have received the signed blob. Do NOT
 		// roll back the sequence — reusing it would cause tefPAST_SEQ if the
@@ -794,7 +799,7 @@ func (w *xrpWallet) StandardSendFee(_ uint64) uint64 {
 	if w.rpc == nil {
 		return DefaultFeeDrops
 	}
-	fr, err := w.rpc.fee(context.Background())
+	fr, err := w.rpc.fee(w.ctx)
 	if err != nil {
 		return DefaultFeeDrops
 	}

@@ -203,13 +203,13 @@ func (w *xrpWallet) runSubscription(ctx context.Context, endpoint string) (subsc
 			}
 			return subscribed, err
 		}
-		if err := w.handleWSMessage(ctx, msg); err != nil {
+		if err := w.handleWSMessage(msg); err != nil {
 			w.log.Warnf("Ignoring malformed XRP websocket notification: %v", err)
 		}
 	}
 }
 
-func (w *xrpWallet) handleWSMessage(ctx context.Context, msg []byte) error {
+func (w *xrpWallet) handleWSMessage(msg []byte) error {
 	var env wsEnvelope
 	if err := json.Unmarshal(msg, &env); err != nil {
 		return fmt.Errorf("error decoding websocket envelope: %w", err)

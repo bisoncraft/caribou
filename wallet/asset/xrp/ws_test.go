@@ -76,6 +76,7 @@ func TestHandleWSMessageTransactionEmitsBalanceChange(t *testing.T) {
 		metaTable: mt,
 		log:       log,
 		emit:      asset.NewWalletEmitter(noteChan, BipID, log),
+		ctx:       context.Background(),
 	}
 	w.running.Store(true)
 
@@ -96,7 +97,7 @@ func TestHandleWSMessageTransactionEmitsBalanceChange(t *testing.T) {
 		}
 	}`)
 
-	if err := w.handleWSMessage(context.Background(), msg); err != nil {
+	if err := w.handleWSMessage(msg); err != nil {
 		t.Fatalf("handleWSMessage: %v", err)
 	}
 

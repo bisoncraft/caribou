@@ -168,6 +168,9 @@ type HyperWallet struct {
 
 	hypeTokenID string // "HYPE:<tokenId>", resolved on Connect
 
+	running        atomic.Bool
+	ctx            context.Context    // set in Connect; cancelled on shutdown
+	ctxCancel      context.CancelFunc // cancels ctx
 	rpc            *rpcClient
 	txDB           txdb.NetworkTxDB // nil when not provided (e.g. in tests)
 	metaTable      txdb.StoreTable  // set in Connect; nil if txDB is nil
@@ -270,7 +273,16 @@ func (w *HyperWallet) Locked() bool {
 
 // Connect establishes the API connection, resolves the HYPE token ID, and
 // starts the tip poller.
-func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+func (w *HyperWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) {
+	if w.running.Load() {
+		return nil, fmt.Errorf("wallet already connected")
+	}
+	w.ctx, w.ctxCancel = context.WithCancel(ctx)
+	defer func() {
+		if err != nil {
+			w.ctxCancel()
+		}
+	}()
 	rpc, err := newRPCClient(w.apiEndpoint(), w.settings["torproxy"], w.log)
 	if err != nil {
 		return nil, fmt.Errorf("creating RPC client: %w", err)
@@ -278,7 +290,7 @@ func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	w.rpc = rpc
 
 	// Resolve HYPE token identifier from spot meta.
-	meta, err := rpc.spotMeta(ctx)
+	meta, err := rpc.spotMeta(w.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetching spot meta: %w", err)
 	}
@@ -325,11 +337,15 @@ func (w *HyperWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	w.nextSendNonce = maxPendingNonce
 	w.sendMtx.Unlock()
 
+	w.running.Store(true)
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		w.tipPoller(ctx)
+		defer w.running.Store(false)
+		defer w.ctxCancel()
+		w.tipPoller(w.ctx)
 	}()
 
 	return &wg, nil
@@ -344,7 +360,7 @@ func (w *HyperWallet) Balance() (*asset.Balance, error) {
 	if w.rpc == nil {
 		return nil, asset.ErrConnectionDown
 	}
-	available, held, err := w.rpc.spotBalance(context.Background(), w.address)
+	available, held, err := w.rpc.spotBalance(w.ctx, w.address)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +462,7 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 		}
 	}
 
-	if err := w.rpc.sendAsset(context.Background(), action, sig, nonce); err != nil {
+	if err := w.rpc.sendAsset(w.ctx, action, sig, nonce); err != nil {
 		// Only remove the pending record on an explicit server rejection. For
 		// transport errors (network drop, timeout) the tx may have landed, so
 		// we leave the record for scanLedger to resolve.
