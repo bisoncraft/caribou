@@ -70,6 +70,7 @@ var (
 	maticEthID, _   = util.BipSymbolID("matic.eth")
 	polygonEthID, _ = util.BipSymbolID("polygon.eth")
 	linkEthID, _    = util.BipSymbolID("link.eth")
+	paxgEthID, _    = util.BipSymbolID("paxg.eth")
 	// Polygon
 	polygonID, _     = util.BipSymbolID("polygon")
 	wethPolygonID, _ = util.BipSymbolID("weth.polygon")
@@ -89,6 +90,7 @@ func init() {
 	registerToken(maticEthID, "The MATIC Ethereum ERC20 token.")
 	registerToken(polygonEthID, "The POL Ethereum ERC20 token.")
 	registerToken(linkEthID, "The LINK Chainlink Ethereum ERC20 token.")
+	registerToken(paxgEthID, "The PAXG PAX Gold Ethereum ERC20 token.")
 }
 
 const (
