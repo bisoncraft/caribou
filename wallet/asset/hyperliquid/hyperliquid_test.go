@@ -6,9 +6,6 @@ package hyperliquid
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -27,15 +24,11 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/gorilla/websocket"
 )
-
-func init() {
-	// Use a minimal scrypt work factor so key-derivation tests finish quickly.
-	kdfScryptN = 1 << 5
-}
 
 // --- params ---
 
@@ -243,40 +236,6 @@ func TestPubKeyToAddress(t *testing.T) {
 
 // --- keyfile ---
 
-func TestEncryptDecryptSeed(t *testing.T) {
-	seed := make([]byte, 32)
-	for i := range seed {
-		seed[i] = byte(i)
-	}
-	pw := []byte("test-password-32-bytes-exactly!!")
-
-	salt := make([]byte, scryptSaltLen)
-	rand.Read(salt)
-
-	encrypted, err := encryptSeed(seed, pw, salt)
-	if err != nil {
-		t.Fatalf("encryptSeed error: %v", err)
-	}
-	if bytes.Contains(encrypted, seed) {
-		t.Fatal("ciphertext contains plaintext seed")
-	}
-
-	decrypted, err := decryptSeed(encrypted, pw, salt)
-	if err != nil {
-		t.Fatalf("decryptSeed error: %v", err)
-	}
-	defer encode.ClearBytes(decrypted)
-
-	if !bytes.Equal(decrypted, seed) {
-		t.Error("decrypted seed does not match original")
-	}
-
-	_, err = decryptSeed(encrypted, []byte("wrong-password!!"), salt)
-	if err == nil {
-		t.Fatal("expected error with wrong password")
-	}
-}
-
 func TestKeyFileRoundTrip(t *testing.T) {
 	seed := make([]byte, 32)
 	for i := range seed {
@@ -293,23 +252,22 @@ func TestKeyFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, keyFileName)
 
-	if err := saveKeyFile(path, priv, pw); err != nil {
-		t.Fatalf("saveKeyFile error: %v", err)
-	}
-
-	kf, err := readKeyFile(path)
-	if err != nil {
-		t.Fatalf("readKeyFile error: %v", err)
-	}
-
 	expectedPub := gethcrypto.CompressPubkey(&priv.PublicKey)
-	if !bytes.Equal(kf.PubKey, expectedPub) {
+	if err := keystore.Save(path, gethcrypto.FromECDSA(priv), expectedPub, pw); err != nil {
+		t.Fatalf("keystore.Save error: %v", err)
+	}
+
+	gotPub, err := keystore.PubKey(path)
+	if err != nil {
+		t.Fatalf("keystore.PubKey error: %v", err)
+	}
+	if !bytes.Equal(gotPub, expectedPub) {
 		t.Error("stored pubkey doesn't match")
 	}
 
-	decSeed, err := decryptSeed(kf.EncryptedSeed, pw, kf.Salt)
+	decSeed, err := keystore.Open(path, pw)
 	if err != nil {
-		t.Fatalf("decryptSeed error: %v", err)
+		t.Fatalf("keystore.Open error: %v", err)
 	}
 	defer encode.ClearBytes(decSeed)
 
@@ -324,101 +282,9 @@ func TestKeyFileRoundTrip(t *testing.T) {
 }
 
 func TestKeyFileNotExist(t *testing.T) {
-	_, err := readKeyFile("/nonexistent/path/hl-keyfile.json")
+	_, err := keystore.PubKey("/nonexistent/path/hl-keyfile.json")
 	if !os.IsNotExist(err) {
 		t.Errorf("expected os.IsNotExist, got: %v", err)
-	}
-}
-
-// writeLegacyKeyFile creates a key file using the old keccak256 KDF (no salt)
-// so that TestUnlockMigratesLegacyKeyFile can verify the auto-migration path.
-func writeLegacyKeyFile(t *testing.T, path string, priv *ecdsa.PrivateKey, pw []byte) {
-	t.Helper()
-	raw := gethcrypto.FromECDSA(priv)
-	defer encode.ClearBytes(raw)
-
-	key := gethcrypto.Keccak256(pw)
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatal(err)
-	}
-	encrypted := gcm.Seal(nonce, nonce, raw, nil)
-
-	kf := keyFile{
-		PubKey:        gethcrypto.CompressPubkey(&priv.PublicKey),
-		EncryptedSeed: encrypted,
-		// no Salt — legacy format
-	}
-	data, err := json.Marshal(kf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestUnlockMigratesLegacyKeyFile(t *testing.T) {
-	seed := make([]byte, 32)
-	rand.Read(seed)
-	pw := []byte("migration-test-password-32bytes!")
-
-	priv, _, zero, err := privKeyFromSeed(seed)
-	if err != nil {
-		t.Fatalf("privKeyFromSeed: %v", err)
-	}
-	defer zero()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, keyFileName)
-	writeLegacyKeyFile(t, path, priv, pw)
-
-	// Confirm the file starts without a salt.
-	kfBefore, err := readKeyFile(path)
-	if err != nil {
-		t.Fatalf("readKeyFile before: %v", err)
-	}
-	if len(kfBefore.Salt) != 0 {
-		t.Fatal("expected no salt in legacy file")
-	}
-
-	log := util.StdOutLogger("HLTEST", util.LevelTrace)
-	w := &HyperWallet{
-		log:     log,
-		dataDir: dir,
-		pubKey:  gethcrypto.CompressPubkey(&priv.PublicKey),
-		address: pubKeyToAddress(gethcrypto.CompressPubkey(&priv.PublicKey)),
-	}
-	if err := w.Unlock(pw); err != nil {
-		t.Fatalf("Unlock: %v", err)
-	}
-
-	// After migration the key file must have a salt.
-	kfAfter, err := readKeyFile(path)
-	if err != nil {
-		t.Fatalf("readKeyFile after: %v", err)
-	}
-	if len(kfAfter.Salt) == 0 {
-		t.Error("expected salt after KDF migration")
-	}
-
-	// The migrated file must still unlock correctly.
-	w2 := &HyperWallet{
-		log:     log,
-		dataDir: dir,
-		pubKey:  kfAfter.PubKey,
-		address: pubKeyToAddress(kfAfter.PubKey),
-	}
-	if err := w2.Unlock(pw); err != nil {
-		t.Fatalf("Unlock after migration: %v", err)
 	}
 }
 
@@ -436,19 +302,15 @@ func TestAuthenticator(t *testing.T) {
 	defer zero()
 
 	dir := t.TempDir()
-	if err := saveKeyFile(filepath.Join(dir, keyFileName), priv, pw); err != nil {
-		t.Fatalf("saveKeyFile error: %v", err)
-	}
-
-	kf, err := readKeyFile(filepath.Join(dir, keyFileName))
-	if err != nil {
-		t.Fatalf("readKeyFile error: %v", err)
+	pubKey := gethcrypto.CompressPubkey(&priv.PublicKey)
+	if err := keystore.Save(filepath.Join(dir, keyFileName), gethcrypto.FromECDSA(priv), pubKey, pw); err != nil {
+		t.Fatalf("keystore.Save error: %v", err)
 	}
 
 	w := &HyperWallet{
 		dataDir: dir,
-		pubKey:  kf.PubKey,
-		address: pubKeyToAddress(kf.PubKey),
+		pubKey:  pubKey,
+		address: pubKeyToAddress(pubKey),
 	}
 
 	if !w.Locked() {
@@ -1423,18 +1285,18 @@ func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWa
 
 	netDB := newTestTxDB(t)
 
-	kf, err := readKeyFile(filepath.Join(dir, keyFileName))
+	pubKey, err := keystore.PubKey(filepath.Join(dir, keyFileName))
 	if err != nil {
 		srv.Close()
-		t.Fatalf("readKeyFile: %v", err)
+		t.Fatalf("keystore.PubKey: %v", err)
 	}
 
 	noteChan := make(chan asset.WalletNotification, 16)
 	w := &HyperWallet{
 		log:         util.StdOutLogger("HLTEST", util.LevelTrace),
 		net:         util.Testnet,
-		address:     pubKeyToAddress(kf.PubKey),
-		pubKey:      kf.PubKey,
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
 		dataDir:     dir,
 		settings:    map[string]string{},
 		hypeTokenID: "HYPE:0x1234",

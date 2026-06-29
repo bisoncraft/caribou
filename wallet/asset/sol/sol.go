@@ -5,12 +5,7 @@ package sol
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -22,22 +17,14 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/base58"
-	"golang.org/x/crypto/scrypt"
 )
 
 const (
-	pollInterval  = 2 * time.Second
-	scryptSaltLen = 32
-	scryptR       = 8
-	scryptP       = 1
+	pollInterval = 2 * time.Second
 )
-
-// kdfScryptN is the scrypt work factor for seed encryption. 2^15 (~32 MiB)
-// balances security with mobile device constraints. Package-level so tests can
-// lower it.
-var kdfScryptN = 1 << 15
 
 var (
 	rpcWalletDefinition = &asset.WalletDefinition{
@@ -119,7 +106,10 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	if err := os.MkdirAll(params.DataDir, 0o700); err != nil {
 		return fmt.Errorf("error creating data directory: %w", err)
 	}
-	return saveKeyFile(filepath.Join(params.DataDir, keyFileName), privKey, params.Pass)
+	seed := privKey.Seed()
+	defer encode.ClearBytes(seed)
+	pubKey := privKey.Public().(ed25519.PublicKey)
+	return keystore.Save(filepath.Join(params.DataDir, keyFileName), seed, pubKey, params.Pass)
 }
 
 type Wallet struct {
@@ -151,11 +141,11 @@ var _ asset.Wallet = (*Wallet)(nil)
 var _ asset.Authenticator = (*Wallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*Wallet, error) {
-	kf, err := readKeyFile(filepath.Join(cfg.DataDir, keyFileName))
+	pubKeyB, err := keystore.PubKey(filepath.Join(cfg.DataDir, keyFileName))
 	if err != nil {
 		return nil, fmt.Errorf("error loading key file: %w", err)
 	}
-	pubKey := ed25519.PublicKey(kf.PubKey)
+	pubKey := ed25519.PublicKey(pubKeyB)
 	return &Wallet{
 		log:         logger,
 		net:         network,
@@ -170,11 +160,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 }
 
 func (w *Wallet) Unlock(pw []byte) error {
-	kf, err := readKeyFile(filepath.Join(w.dataDir, keyFileName))
-	if err != nil {
-		return fmt.Errorf("error reading key file: %w", err)
-	}
-	seed, err := decryptSeed(kf.EncryptedSeed, pw, kf.Salt)
+	seed, err := keystore.Open(filepath.Join(w.dataDir, keyFileName), pw)
 	if err != nil {
 		return fmt.Errorf("error decrypting key: %w", err)
 	}
@@ -849,98 +835,4 @@ func (w *Wallet) wsEndpoint() string {
 		return ep
 	}
 	return DefaultWSEndpoints[util.Mainnet]
-}
-
-type keyFileData struct {
-	PubKey        util.Bytes `json:"pubKey"`
-	Salt          util.Bytes `json:"salt"`
-	EncryptedSeed util.Bytes `json:"encryptedSeed"`
-}
-
-func saveKeyFile(path string, privKey ed25519.PrivateKey, pw []byte) error {
-	seed := privKey.Seed()
-	defer encode.ClearBytes(seed)
-
-	salt := make([]byte, scryptSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("generating salt: %w", err)
-	}
-	encrypted, err := encryptSeed(seed, pw, salt)
-	if err != nil {
-		return fmt.Errorf("error encrypting seed: %w", err)
-	}
-	pubKey := make([]byte, ed25519.PublicKeySize)
-	copy(pubKey, privKey.Public().(ed25519.PublicKey))
-	b, err := json.Marshal(keyFileData{PubKey: pubKey, Salt: salt, EncryptedSeed: encrypted})
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0o600)
-}
-
-func readKeyFile(path string) (*keyFileData, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var data keyFileData
-	if err := json.Unmarshal(b, &data); err != nil {
-		return nil, err
-	}
-	return &data, nil
-}
-
-// encryptSeed encrypts seed with pw and salt using scrypt + AES-256-GCM.
-// Output: nonce(12) || ciphertext+tag.
-func encryptSeed(seed, pw, salt []byte) ([]byte, error) {
-	key, err := deriveAESKey(pw, salt)
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	return gcm.Seal(nonce, nonce, seed, nil), nil
-}
-
-// decryptSeed decrypts a blob produced by encryptSeed.
-func decryptSeed(ciphertext, pw, salt []byte) ([]byte, error) {
-	if len(salt) == 0 {
-		return nil, errors.New("key file missing salt")
-	}
-	key, err := deriveAESKey(pw, salt)
-	if err != nil {
-		return nil, fmt.Errorf("key derivation: %w", err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	ns := gcm.NonceSize()
-	if len(ciphertext) < ns {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-	plaintext, err := gcm.Open(nil, ciphertext[:ns], ciphertext[ns:], nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed (wrong password?): %w", err)
-	}
-	return plaintext, nil
-}
-
-// deriveAESKey stretches pw and salt to a 32-byte AES key using scrypt.
-func deriveAESKey(pw, salt []byte) ([]byte, error) {
-	return scrypt.Key(pw, salt, kdfScryptN, scryptR, scryptP, 32)
 }

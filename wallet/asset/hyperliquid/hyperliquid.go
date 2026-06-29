@@ -6,12 +6,8 @@ package hyperliquid
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdsa"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -30,21 +26,11 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/keygen"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/dcrd/hdkeychain/v3"
-	"golang.org/x/crypto/scrypt"
 	"golang.org/x/net/proxy"
 )
-
-const (
-	scryptSaltLen = 32
-	scryptR       = 8
-	scryptP       = 1
-)
-
-// kdfScryptN is the scrypt N (work factor) for key derivation. Package-level
-// so tests can set a lower value to avoid long runtimes.
-var kdfScryptN = 1 << 18
 
 // ErrSendOutcomeUnknown is returned when a send encounters a transport error
 // after the request was dispatched. The transaction may or may not have landed.
@@ -145,7 +131,10 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	}
 
 	_ = addr
-	return saveKeyFile(filepath.Join(params.DataDir, keyFileName), privKey, params.Pass)
+	raw := gethcrypto.FromECDSA(privKey)
+	defer encode.ClearBytes(raw)
+	pubKey := gethcrypto.CompressPubkey(&privKey.PublicKey)
+	return keystore.Save(filepath.Join(params.DataDir, keyFileName), raw, pubKey, params.Pass)
 }
 
 // HyperWallet implements asset.Wallet for the Hyperliquid L1.
@@ -191,7 +180,7 @@ var _ asset.FeeRater = (*HyperWallet)(nil)
 var _ asset.Rescanner = (*HyperWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*HyperWallet, error) {
-	kf, err := readKeyFile(filepath.Join(cfg.DataDir, keyFileName))
+	pubKey, err := keystore.PubKey(filepath.Join(cfg.DataDir, keyFileName))
 	if err != nil {
 		return nil, fmt.Errorf("loading key file: %w", err)
 	}
@@ -203,22 +192,15 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		peersChange: cfg.PeersChange,
 		dataDir:     cfg.DataDir,
 		settings:    cfg.Settings,
-		pubKey:      kf.PubKey,
-		address:     pubKeyToAddress(kf.PubKey),
+		pubKey:      pubKey,
+		address:     pubKeyToAddress(pubKey),
 		txDB:        cfg.NetworkTxDB,
 	}, nil
 }
 
-// Unlock decrypts the private key with the wallet password. Legacy key files
-// (no scrypt salt) are automatically re-encrypted with the scrypt KDF on
-// first successful unlock.
+// Unlock decrypts the private key with the wallet password.
 func (w *HyperWallet) Unlock(pw []byte) error {
-	kf, err := readKeyFile(filepath.Join(w.dataDir, keyFileName))
-	if err != nil {
-		return fmt.Errorf("reading key file: %w", err)
-	}
-
-	privBytes, err := decryptSeed(kf.EncryptedSeed, pw, kf.Salt)
+	privBytes, err := keystore.Open(filepath.Join(w.dataDir, keyFileName), pw)
 	if err != nil {
 		return fmt.Errorf("decrypting key: %w", err)
 	}
@@ -233,15 +215,6 @@ func (w *HyperWallet) Unlock(pw []byte) error {
 	if !bytes.Equal(derivedPub, w.pubKey) {
 		encode.ClearBytes(privBytes)
 		return fmt.Errorf("decrypted key does not match stored public key")
-	}
-
-	// Migrate legacy key files (no salt) to the scrypt KDF.
-	if len(kf.Salt) == 0 {
-		if merr := saveKeyFile(filepath.Join(w.dataDir, keyFileName), priv, pw); merr != nil {
-			w.log.Warnf("Key file migration to scrypt KDF failed: %v", merr)
-		} else {
-			w.log.Infof("Key file migrated to scrypt KDF")
-		}
 	}
 	priv = nil
 
@@ -1015,137 +988,6 @@ func (w *HyperWallet) apiEndpoint() string {
 		return ep
 	}
 	return DefaultAPIEndpoints[util.Mainnet]
-}
-
-// --- key management ---
-
-// keyFile stores the public key and AES-GCM encrypted private key seed.
-// Salt is nil in files written by the legacy keccak256 KDF; always present in
-// files written by the current scrypt KDF.
-type keyFile struct {
-	PubKey        []byte `json:"pubKey"`         // compressed secp256k1 (33 bytes)
-	Salt          []byte `json:"salt,omitempty"` // scrypt salt; nil for legacy files
-	EncryptedSeed []byte `json:"encryptedSeed"`  // AES-GCM encrypted 32-byte key
-}
-
-func saveKeyFile(path string, privKey *ecdsa.PrivateKey, pw []byte) error {
-	raw := gethcrypto.FromECDSA(privKey)
-	defer encode.ClearBytes(raw)
-
-	salt := make([]byte, scryptSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("generating salt: %w", err)
-	}
-
-	encrypted, err := encryptSeed(raw, pw, salt)
-	if err != nil {
-		return fmt.Errorf("encrypting private key: %w", err)
-	}
-
-	kf := keyFile{
-		PubKey:        gethcrypto.CompressPubkey(&privKey.PublicKey),
-		Salt:          salt,
-		EncryptedSeed: encrypted,
-	}
-
-	data, err := json.Marshal(kf)
-	if err != nil {
-		return fmt.Errorf("marshaling key file: %w", err)
-	}
-
-	// Write atomically via temp-file + rename so a crash mid-write cannot
-	// corrupt an existing key file.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".keyfile-*.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp key file: %w", err)
-	}
-	tmpName := tmp.Name()
-	if err := tmp.Chmod(0600); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("chmod temp key file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("writing temp key file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return fmt.Errorf("closing temp key file: %w", err)
-	}
-	return os.Rename(tmpName, path)
-}
-
-func readKeyFile(path string) (*keyFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var kf keyFile
-	if err := json.Unmarshal(data, &kf); err != nil {
-		return nil, fmt.Errorf("parsing key file: %w", err)
-	}
-	return &kf, nil
-}
-
-// encryptSeed encrypts seed with pw and salt using AES-256-GCM.
-// Output: nonce(12) || ciphertext+tag.
-func encryptSeed(seed, pw, salt []byte) ([]byte, error) {
-	key, err := deriveAESKey(pw, salt)
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	return gcm.Seal(nonce, nonce, seed, nil), nil
-}
-
-// decryptSeed decrypts a seed encrypted by encryptSeed. When salt is nil the
-// file predates the scrypt KDF and the legacy keccak256 derivation is used.
-func decryptSeed(encrypted, pw, salt []byte) ([]byte, error) {
-	var key []byte
-	if len(salt) == 0 {
-		key = gethcrypto.Keccak256(pw)
-	} else {
-		var err error
-		key, err = deriveAESKey(pw, salt)
-		if err != nil {
-			return nil, fmt.Errorf("key derivation: %w", err)
-		}
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	ns := gcm.NonceSize()
-	if len(encrypted) < ns {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-	plaintext, err := gcm.Open(nil, encrypted[:ns], encrypted[ns:], nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed (wrong password?): %w", err)
-	}
-	return plaintext, nil
-}
-
-// deriveAESKey stretches pw and salt to a 32-byte AES key using scrypt.
-func deriveAESKey(pw, salt []byte) ([]byte, error) {
-	return scrypt.Key(pw, salt, kdfScryptN, scryptR, scryptP, 32)
 }
 
 // privKeyFromSeed derives the secp256k1 private key and Ethereum address from

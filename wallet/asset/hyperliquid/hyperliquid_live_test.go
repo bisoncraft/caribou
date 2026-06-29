@@ -43,6 +43,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 )
 
@@ -114,11 +115,11 @@ func fundMockAddress(t *testing.T, address string, amountAtoms uint64) {
 // funds it directly via the mock's /test/fund endpoint, so no pre-funded
 // account is needed.
 //
-// We call saveKeyFile directly rather than Driver.Create because Create expects
-// a seed and derives the key via HD derivation, which would produce a different
-// address than the MetaMask account the test key belongs to. Create performs no
-// other initialization beyond saveKeyFile — DB setup and metadata happen in
-// Connect, which the tests call normally.
+// We write the key file directly rather than via Driver.Create because Create
+// expects a seed and derives the key via HD derivation, which would produce a
+// different address than the MetaMask account the test key belongs to. Create
+// performs no other initialization beyond writing the key file — DB setup and
+// metadata happen in Connect, which the tests call normally.
 func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 	t.Helper()
 
@@ -154,8 +155,9 @@ func createTestWallet(t *testing.T) (*HyperWallet, []byte) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := saveKeyFile(filepath.Join(dir, keyFileName), privKey, pw); err != nil {
-		t.Fatalf("saveKeyFile: %v", err)
+	pubKey := gethcrypto.CompressPubkey(&privKey.PublicKey)
+	if err := keystore.Save(filepath.Join(dir, keyFileName), gethcrypto.FromECDSA(privKey), pubKey, pw); err != nil {
+		t.Fatalf("keystore.Save: %v", err)
 	}
 
 	noteChan := make(chan asset.WalletNotification, 128)

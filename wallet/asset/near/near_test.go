@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 )
 
 func TestValidateAddress(t *testing.T) {
@@ -245,70 +246,33 @@ func TestMarshalU128LE(t *testing.T) {
 	}
 }
 
-func TestEncryptDecryptSeed(t *testing.T) {
-	seed := make([]byte, 32)
-	for i := range seed {
-		seed[i] = byte(i)
-	}
-	pw := []byte("test-password-that-is-32-bytes!!")
-
-	encrypted, err := encryptSeed(seed, pw)
-	if err != nil {
-		t.Fatalf("encryptSeed error: %v", err)
-	}
-
-	if len(encrypted) <= len(seed) {
-		t.Fatalf("encrypted length %d should be > seed length %d", len(encrypted), len(seed))
-	}
-
-	if bytes.Contains(encrypted, seed) {
-		t.Fatal("ciphertext contains plaintext seed")
-	}
-
-	decrypted, err := decryptSeed(encrypted, pw)
-	if err != nil {
-		t.Fatalf("decryptSeed error: %v", err)
-	}
-
-	if !bytes.Equal(decrypted, seed) {
-		t.Errorf("decrypted seed does not match original")
-	}
-
-	// Wrong password should fail.
-	_, err = decryptSeed(encrypted, []byte("wrong-password-that-is-32-bytes"))
-	if err == nil {
-		t.Fatal("expected error with wrong password")
-	}
-}
-
 func TestKeyFileRoundTrip(t *testing.T) {
 	seed := make([]byte, 32)
 	for i := range seed {
 		seed[i] = byte(i + 100)
 	}
 	privKey := ed25519.NewKeyFromSeed(seed)
+	pubKey := privKey.Public().(ed25519.PublicKey)
 	pw := []byte("key-file-password-for-testing!!!")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, keyFileName)
 
-	if err := saveKeyFile(path, privKey, pw); err != nil {
-		t.Fatalf("saveKeyFile error: %v", err)
+	if err := keystore.Save(path, privKey.Seed(), pubKey, pw); err != nil {
+		t.Fatalf("keystore.Save error: %v", err)
 	}
 
-	kf, err := readKeyFile(path)
+	gotPub, err := keystore.PubKey(path)
 	if err != nil {
-		t.Fatalf("readKeyFile error: %v", err)
+		t.Fatalf("keystore.PubKey error: %v", err)
 	}
-
-	expectedPub := privKey.Public().(ed25519.PublicKey)
-	if !bytes.Equal(kf.PubKey, expectedPub) {
+	if !bytes.Equal(gotPub, pubKey) {
 		t.Errorf("stored pubkey doesn't match")
 	}
 
-	decSeed, err := decryptSeed(kf.EncryptedSeed, pw)
+	decSeed, err := keystore.Open(path, pw)
 	if err != nil {
-		t.Fatalf("decryptSeed error: %v", err)
+		t.Fatalf("keystore.Open error: %v", err)
 	}
 	defer encode.ClearBytes(decSeed)
 
@@ -324,24 +288,20 @@ func TestAuthenticator(t *testing.T) {
 		seed[i] = byte(i + 50)
 	}
 	privKey := ed25519.NewKeyFromSeed(seed)
+	pubKey := privKey.Public().(ed25519.PublicKey)
 	pw := []byte("authenticator-test-password-32b!")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, keyFileName)
 
-	if err := saveKeyFile(path, privKey, pw); err != nil {
-		t.Fatalf("saveKeyFile error: %v", err)
-	}
-
-	kf, err := readKeyFile(path)
-	if err != nil {
-		t.Fatalf("readKeyFile error: %v", err)
+	if err := keystore.Save(path, privKey.Seed(), pubKey, pw); err != nil {
+		t.Fatalf("keystore.Save error: %v", err)
 	}
 
 	w := &NearWallet{
 		dataDir:   dir,
-		pubKey:    ed25519.PublicKey(kf.PubKey),
-		accountID: hex.EncodeToString(kf.PubKey),
+		pubKey:    pubKey,
+		accountID: hex.EncodeToString(pubKey),
 	}
 
 	if !w.Locked() {
@@ -383,7 +343,7 @@ func TestAuthenticator(t *testing.T) {
 }
 
 func TestKeyFileNotExist(t *testing.T) {
-	_, err := readKeyFile("/nonexistent/path/keyfile.json")
+	_, err := keystore.PubKey("/nonexistent/path/keyfile.json")
 	if !os.IsNotExist(err) {
 		t.Errorf("expected os.IsNotExist, got: %v", err)
 	}
