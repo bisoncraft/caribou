@@ -44,7 +44,10 @@ module.exports = {
     ]
   },
   resolve: {
-    extensions: ['.tsx', '.ts', '.js']
+    extensions: ['.tsx', '.ts', '.js'],
+    alias: {
+      '@bossw/shared': path.resolve(__dirname, '../shared/src')
+    }
   },
   output: {
     filename: 'bundle.js',

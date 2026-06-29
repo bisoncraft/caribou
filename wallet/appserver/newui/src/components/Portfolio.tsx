@@ -1,17 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import t, { tvar } from '../js/intl'
-import app from '../js/application'
-import { CoreNote } from '../js/registry'
-import { TickerAsset, AssetVariant } from '../js/assets'
+import t, { tvar } from '@bossw/shared/intl'
+import app from '@bossw/shared/application'
+import { CoreNote } from '@bossw/shared/registry'
+import { TickerAsset, networkID } from '@bossw/shared/assets'
 import PortfolioTotals from './PortfolioTotals'
 import AssetPills from './AssetPills'
 import AssetRow from './AssetRow'
 import InactiveAssetRow from './InactiveAssetRow'
-
-// networkIDFor returns the settlement network's assetID for a variant.
-function networkIDFor (v: AssetVariant): number {
-  return v.token ? v.token.networkID : v.assetID
-}
 
 export default function Portfolio () {
   const [, setTick] = useState(0)
@@ -77,7 +72,7 @@ export default function Portfolio () {
   // Distinct settlement networks across inactive variants.
   const inactiveNetworks = new Set<number>()
   for (const ta of inactiveAssets) {
-    for (const v of ta.variants) inactiveNetworks.add(networkIDFor(v))
+    for (const v of ta.variants) inactiveNetworks.add(networkID(v))
   }
   const inactiveCount = inactiveAssets.length
   const inactiveNetworkCount = inactiveNetworks.size

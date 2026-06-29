@@ -1,7 +1,7 @@
-import t from '../js/intl'
-import app from '../js/application'
-import { TickerAsset } from '../js/assets'
-import CoinLogo from './CoinLogo'
+import t from '@bossw/shared/intl'
+import app from '@bossw/shared/application'
+import { TickerAsset } from '@bossw/shared/assets'
+import CoinLogo from '@bossw/shared/components/CoinLogo'
 
 interface InactiveAssetRowProps {
   asset: TickerAsset

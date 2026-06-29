@@ -1,7 +1,7 @@
-import t, { tvar } from '../js/intl'
-import { PortfolioTotals as PortfolioTotalsData } from '../js/registry'
-import { TickerAsset } from '../js/assets'
-import CoinLogo from './CoinLogo'
+import t, { tvar } from '@bossw/shared/intl'
+import { PortfolioTotals as PortfolioTotalsData } from '@bossw/shared/registry'
+import { TickerAsset } from '@bossw/shared/assets'
+import CoinLogo from '@bossw/shared/components/CoinLogo'
 
 const usdFmt = new Intl.NumberFormat(navigator.languages as string[], {
   style: 'currency',

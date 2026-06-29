@@ -147,3 +147,21 @@ export function normalizedTicker (a: SupportedAsset): string {
   const ticker = a.unitInfo.conventional.unit
   return ticker === 'WETH' ? 'ETH' : ticker === 'WBTC' ? 'BTC' : ticker
 }
+
+// networkID is the asset whose wallet settles a variant: the parent network for
+// tokens, the asset itself for natives. Token activation, deposit addresses and
+// fee assets all resolve through it.
+export function networkID (v: AssetVariant): number {
+  return v.token ? v.token.networkID : v.assetID
+}
+
+// networkAsset is the SupportedAsset for a variant's settlement network, or
+// undefined when user state is not loaded.
+export function networkAsset (v: AssetVariant) {
+  return app.user?.assets[networkID(v)]
+}
+
+// isVariantActive reports whether the variant's settlement-network wallet exists.
+export function isVariantActive (v: AssetVariant): boolean {
+  return Boolean(networkAsset(v)?.wallet)
+}

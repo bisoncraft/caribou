@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import app from '../js/application'
+import app from '@bossw/shared/application'
 
 export default function LocaleSelector () {
   const [lang, setLang] = useState<string>(app.lang)

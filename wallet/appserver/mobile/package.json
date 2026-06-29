@@ -1,0 +1,17 @@
+{
+  "name": "@bossw/mobile",
+  "version": "1.0.0",
+  "description": "Boss Wallet mobile UI bundle (consumes @bossw/shared)",
+  "private": true,
+  "license": "ISC",
+  "scripts": {
+    "watch": "webpack --watch --mode development",
+    "build": "webpack --mode production",
+    "lint": "tsc --noEmit && eslint src --ext .js --ext .ts --ext .tsx"
+  },
+  "dependencies": {
+    "@bossw/shared": "*",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, FormEvent } from 'react'
-import t, { tvar } from '../js/intl'
-import app from '../js/application'
-import { postJSON } from '../js/http'
-import { TickerAsset, AssetVariant } from '../js/assets'
-import CoinLogo from './CoinLogo'
+import t, { tvar } from '@bossw/shared/intl'
+import app from '@bossw/shared/application'
+import { postJSON } from '@bossw/shared/http'
+import { TickerAsset, AssetVariant, networkAsset, isVariantActive } from '@bossw/shared/assets'
+import CoinLogo from '@bossw/shared/components/CoinLogo'
 import Spinner from './Spinner'
 
 // activeVariants returns the variants of a ticker whose underlying wallet
@@ -11,10 +11,7 @@ import Spinner from './Spinner'
 // means its own wallet exists; for a token it means the parent (network)
 // wallet exists, because tokens share the network's deposit address.
 function activeVariants (ta: TickerAsset): AssetVariant[] {
-  return ta.variants.filter(v => {
-    const networkID = v.token ? v.token.networkID : v.assetID
-    return Boolean(app.user.assets[networkID]?.wallet)
-  })
+  return ta.variants.filter(isVariantActive)
 }
 
 // allVariants returns all variants, active or not.
@@ -22,20 +19,9 @@ function allVariants (ta: TickerAsset): AssetVariant[] {
   return ta.variants
 }
 
-// networkAsset returns the SupportedAsset for the variant's settlement
-// chain (the variant itself for natives, the parent for tokens).
-function networkAsset (v: AssetVariant) {
-  const networkID = v.token ? v.token.networkID : v.assetID
-  return app.user.assets[networkID]
-}
-
 function networkTicker (v: AssetVariant): string {
   const n = networkAsset(v)
   return n ? n.unitInfo.conventional.unit : ''
-}
-
-function isVariantActive (v: AssetVariant): boolean {
-  return Boolean(networkAsset(v)?.wallet)
 }
 
 const noSubmit = (e: FormEvent) => e.preventDefault()
@@ -148,8 +134,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
 
   // Inline activate: fires a single-network activation from the network picker.
   const inlineActivate = async (v: AssetVariant) => {
-    const networkID = v.token ? v.token.networkID : v.assetID
-    const netAsset = app.user?.assets[networkID]
+    const netAsset = networkAsset(v)
     const walletDef = netAsset?.info?.availablewallets?.[0]
     if (!walletDef) {
       setActivateErr(prev => ({ ...prev, [v.assetID]: t('No wallet definition available') }))
@@ -158,7 +143,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
     setActivating(v.assetID)
     setActivateErr(prev => { const next = { ...prev }; delete next[v.assetID]; return next })
     const r = await postJSON('/api/newwallet', {
-      assetID: networkID,
+      assetID: netAsset.id,
       walletType: walletDef.type,
       config: {}
     })

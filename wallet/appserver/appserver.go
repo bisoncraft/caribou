@@ -6,10 +6,10 @@ package appserver
 import (
 	"context"
 	"crypto/elliptic"
-	crand "crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -59,6 +59,15 @@ const (
 	// by automation clients (CLI, MCP server, scripts) in place of a browser
 	// session. It is only honored for loopback requests.
 	apiTokenHeader = "X-API-Token"
+	// capCK is the capability token cookie key. See capabilityMiddleware.
+	capCK = "capkey"
+	// loginFailFree is the number of consecutive failed logins allowed before
+	// the throttle starts delaying further attempts.
+	loginFailFree = 5
+	// loginBackoffBase and loginBackoffMax bound the capped exponential
+	// lockout applied to /api/login once loginFailFree is exceeded.
+	loginBackoffBase = time.Second
+	loginBackoffMax  = 5 * time.Minute
 	// notifyRoute is a route used for general notifications.
 	notifyRoute = "notify"
 	// The basis for content-security-policy. connect-src must be the final
@@ -212,6 +221,12 @@ type Config struct {
 	HttpProf        bool
 	Tor             bool
 	MainLogFilePath string
+	// CapabilityToken, when non-empty, gates every request on a secret the
+	// caller must present (mobile). It is handed to the WebView in the bootstrap
+	// URL and exchanged for the capCK cookie on first load, so only the WebView
+	// we launched can reach the loopback server, not other apps on the device
+	// that can also open 127.0.0.1. Empty disables the gate (desktop).
+	CapabilityToken string
 }
 
 // AppServer is a single-client http and websocket server enabling a browser
@@ -231,9 +246,15 @@ type AppServer struct {
 	tor      bool
 	onion    string
 
+	capToken string // see Config.CapabilityToken
+
 	authMtx         sync.RWMutex
 	authTokens      map[string]bool
 	cachedPasswords map[string]*cachedPassword // cached passwords keyed by auth token
+
+	loginMtx       sync.Mutex
+	loginFails     int
+	loginLockUntil time.Time
 
 	companionToken        string
 	companionTokenHash    string // hex(sha256(token)), persisted to DB
@@ -359,6 +380,7 @@ func New(cfg *Config) (*AppServer, error) {
 	s := &AppServer{
 		langs:           langs,
 		core:            cfg.Core,
+		capToken:        cfg.CapabilityToken,
 		siteDir:         siteDir,
 		mux:             mux,
 		srv:             httpServer,
@@ -392,14 +414,19 @@ func New(cfg *Config) (*AppServer, error) {
 		s.apiTokenHash = h
 	}
 
-	// Middleware
+	// Middleware. securityMiddleware is outermost so its headers also cover the
+	// capability gate's redirect and 404 responses. The capability gate runs
+	// before the request logger so the bootstrap token in the ?k= query never
+	// reaches the log, and so rejected scanner/other-app requests do not
+	// generate log noise (no-op on desktop).
+	mux.Use(s.securityMiddleware)
+	mux.Use(s.capabilityMiddleware)
 	mux.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{
 		Logger: &chiLogger{ // logs with Trace()
 			Logger: util.StdOutLogger("MUX", log.Level(), cfg.UTC),
 		},
 		NoColor: runtime.GOOS == "windows",
 	}))
-	mux.Use(s.securityMiddleware)
 	mux.Use(middleware.Recoverer)
 
 	// Compress responses if using tor.
@@ -503,11 +530,24 @@ func New(cfg *Config) (*AppServer, error) {
 		})
 	})
 
-	// Files
-	fileServer(mux, "/js", siteDir, "dist", "text/javascript")
-	fileServer(mux, "/css", siteDir, "dist", "text/css")
-	fileServer(mux, "/img", siteDir, "src/img", "")
-	fileServer(mux, "/font", siteDir, "src/font", "")
+	// Files. The built bundle (js/css) is served from the per-build site dir;
+	// images and fonts are shared across bundles and served from the shared
+	// dir. When siteDir is set (on-disk dev override), the shared dir is its
+	// sibling. If that sibling is missing (an unusual --sitedir layout), fall
+	// back to the embedded shared assets rather than 404ing every image/font.
+	var sharedDir string
+	if siteDir != "" {
+		d := filepath.Join(siteDir, "..", sharedAssetsDir)
+		if _, err := os.Stat(d); err == nil {
+			sharedDir = d
+		} else {
+			log.Warnf("Shared assets dir %q not found; serving embedded img/font.", d)
+		}
+	}
+	fileServer(mux, "/js", siteDir, staticSiteRes, site, "dist", "text/javascript")
+	fileServer(mux, "/css", siteDir, staticSiteRes, site, "dist", "text/css")
+	fileServer(mux, "/img", sharedDir, sharedAssets, sharedAssetsDir, "img", "")
+	fileServer(mux, "/font", sharedDir, sharedAssets, sharedAssetsDir, "font", "")
 
 	// The SPA performs its own client-side routing (/portfolio,
 	// /trade, /activity, etc.). Serve the SPA shell for any unmatched
@@ -668,30 +708,34 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		s.readNotifications(ctx)
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	if checkAppVersion {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		// Perform initial fetch of the latest version.
-		s.fetchLatestVersion(ctx)
+			// Perform initial fetch of the latest version.
+			s.fetchLatestVersion(ctx)
 
-		for {
-			select {
-			case <-time.After(24 * time.Hour):
-				s.fetchLatestVersion(ctx)
-			case <-ctx.Done():
-				return
+			for {
+				select {
+				case <-time.After(24 * time.Hour):
+					s.fetchLatestVersion(ctx)
+				case <-ctx.Done():
+					return
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	log.Infof("Web server listening on %s (https = %v)", s.addr, https)
 	scheme := "http"
 	if https {
 		scheme = "https"
 	}
-	fmt.Printf("\n\t****  OPEN IN YOUR BROWSER TO LOGIN AND TRADE  --->  %s://%s  ****\n\n",
-		scheme, s.addr)
+	if printBrowserBanner {
+		fmt.Printf("\n\t****  OPEN IN YOUR BROWSER TO LOGIN AND TRADE  --->  %s://%s  ****\n\n",
+			scheme, s.addr)
+	}
 
 	success = true
 	return &wg, nil
@@ -725,15 +769,15 @@ func (s *AppServer) isOnionRequest(r *http.Request) bool {
 
 // authorize creates, stores, and returns a new auth token to identify the user.
 // deauth should be used to invalidate tokens on logout.
-func (s *AppServer) authorize() string {
-	b := make([]byte, 32)
-	crand.Read(b)
-	token := hex.EncodeToString(b)
-	zero(b)
+func (s *AppServer) authorize() (string, error) {
+	token, err := util.RandomHex(32)
+	if err != nil {
+		return "", err
+	}
 	s.authMtx.Lock()
 	s.authTokens[token] = true
 	s.authMtx.Unlock()
-	return token
+	return token, nil
 }
 
 // deauth invalidates all current auth tokens. All existing sessions will need
@@ -923,6 +967,42 @@ func hashToken(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// loginThrottle returns the remaining lockout duration, or 0 if a login may be
+// attempted now. The counter is a single global one, not per-IP: the wallet is
+// single-client and the gate above already limits who can reach /api/login.
+func (s *AppServer) loginThrottle() time.Duration {
+	s.loginMtx.Lock()
+	defer s.loginMtx.Unlock()
+	if d := time.Until(s.loginLockUntil); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// noteLoginFailure records a failed login. Once the free-attempt budget is
+// exhausted it extends a capped exponential lockout window, blunting password
+// brute-force from anything that can reach the loopback server.
+func (s *AppServer) noteLoginFailure() {
+	s.loginMtx.Lock()
+	defer s.loginMtx.Unlock()
+	s.loginFails++
+	if n := s.loginFails - loginFailFree; n > 0 {
+		backoff := loginBackoffBase << min(n-1, 20) // cap the shift well short of overflow
+		if backoff <= 0 || backoff > loginBackoffMax {
+			backoff = loginBackoffMax
+		}
+		s.loginLockUntil = time.Now().Add(backoff)
+	}
+}
+
+// noteLoginSuccess clears the failed-login state.
+func (s *AppServer) noteLoginSuccess() {
+	s.loginMtx.Lock()
+	defer s.loginMtx.Unlock()
+	s.loginFails = 0
+	s.loginLockUntil = time.Time{}
+}
+
 // getCachedPassword retrieves the cached password for the user identified by authToken and
 // presenting the specified key in their cookies.
 func (s *AppServer) getCachedPassword(key []byte, authToken string) ([]byte, error) {
@@ -1066,10 +1146,11 @@ func serveFile(w http.ResponseWriter, r *http.Request, fullFilePath string) {
 	http.ServeFile(w, r, fullFilePath)
 }
 
-// fileServer is a file server for files in subDir with the parent folder
-// siteDire. An empty siteDir means embedded files only are served. The
-// pathPrefix is stripped from the request path when locating the file.
-func fileServer(r chi.Router, pathPrefix, siteDir, subDir, forceContentType string) {
+// fileServer is a file server for files in subDir. When diskDir is non-empty
+// (on-disk dev override), files are read from diskDir/subDir; otherwise they are
+// read from the embedded fsys at embedPrefix/subDir. The pathPrefix is stripped
+// from the request path when locating the file.
+func fileServer(r chi.Router, pathPrefix, diskDir string, fsys embed.FS, embedPrefix, subDir, forceContentType string) {
 	if strings.ContainsAny(pathPrefix, "{}*") {
 		panic("FileServer does not permit URL parameters.")
 	}
@@ -1106,16 +1187,16 @@ func fileServer(r chi.Router, pathPrefix, siteDir, subDir, forceContentType stri
 			w.Header().Set("Content-Type", forceContentType)
 		}
 
-		// If siteDir is set, use system file system only.
-		if siteDir != "" {
-			fullFilePath := filepath.Join(siteDir, subDir, upath)
+		// If diskDir is set, use system file system only.
+		if diskDir != "" {
+			fullFilePath := filepath.Join(diskDir, subDir, upath)
 			serveFile(w, r, fullFilePath)
 			return
 		}
 
 		// Use the embedded files only.
-		fs := http.FS(staticSiteRes) // so f is an http.File instead of fs.File
-		f, err := fs.Open(path.Join(site, subDir, upath))
+		fs := http.FS(fsys) // so f is an http.File instead of fs.File
+		f, err := fs.Open(path.Join(embedPrefix, subDir, upath))
 		if err != nil {
 			http.NotFound(w, r)
 			return

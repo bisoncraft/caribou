@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import t from '../js/intl'
-import app from '../js/application'
-import Doc from '../js/doc'
-import { PortfolioTotals } from '../js/registry'
+import t from '@bossw/shared/intl'
+import app from '@bossw/shared/application'
+import Doc from '@bossw/shared/doc'
+import { PortfolioTotals } from '@bossw/shared/registry'
 
 export default function TopBar () {
   const [totals, setTotals] = useState<PortfolioTotals>(app.portfolioTotals())

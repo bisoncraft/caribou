@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import app from '../js/application'
+import app from '@bossw/shared/application'
 import TopBar from './TopBar'
 import Sidebar from './Sidebar'
 import Portfolio from './Portfolio'
@@ -7,7 +7,7 @@ import Trade from './Trade'
 import Settings from './Settings'
 import Activity from './Activity'
 import Modals from './Modals'
-import { PageData, FormData } from '../js/registry'
+import { PageData, FormData } from '@bossw/shared/registry'
 
 interface MainFrameParams {
   pd: PageData
