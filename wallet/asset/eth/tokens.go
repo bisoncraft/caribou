@@ -306,6 +306,11 @@ var Tokens = map[uint32]*Token{
 		},
 	},
 
+	// PAXG has a Paxos-controlled feeRate and can deduct a transfer fee from
+	// the sent amount, so transfer(to, amount) may credit the recipient less
+	// than amount. feeRate is currently 0, so sent == received in practice,
+	// but if Paxos ever enables it, balance/tx accounting here (which assumes
+	// standard ERC-20 semantics) could drift.
 	paxgTokenID: {
 		Token: &util.Token{
 			NetworkID: EthBipID,
@@ -322,6 +327,12 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x45804880De22913dAFE09f4980848ECE6EcbAf78"),
+				Gas: map[uint32]*Gases{
+					1: &tokenV1Gases,
+				},
+			},
+			util.Testnet: {
+				Address: common.HexToAddress("0xe0d215bc63580325794d858c9c49f61e77704501"), // Sepolia, per https://docs.paxos.com/guides/stablecoin/paxg/testnet
 				Gas: map[uint32]*Gases{
 					1: &tokenV1Gases,
 				},
