@@ -32,15 +32,15 @@ Embedded in Tmux
 
 ### Prerequisites
 
-- **monero-x86_64-linux-gnu-v0.18.3.3** or later <https://downloads.getmonero.org/cli/linux64>
+- **monero-x86_64-linux-gnu-v0.18.4.6** or later <https://downloads.getmonero.org/cli/linux64>
 - **linux** (tested on Ubuntu 22.04)
 - **jq** (1.6)
 
 ### Setup
 
-**monero-x86_64-linux-gnu-v0.18.3.3** should be in PATH
+**monero-x86_64-linux-gnu-v0.18.4.6** should be in PATH
 
-`export PATH=$PATH:[path-to]/monero-x86_64-linux-gnu-v0.18.3.3`
+`export PATH=$PATH:[path-to]/monero-x86_64-linux-gnu-v0.18.4.6`
 
 ### Background Mining
 

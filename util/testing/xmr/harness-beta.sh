@@ -12,7 +12,7 @@
 # Development
 ################################################################################
 
-# export PATH=$PATH:~/monero-x86_64-linux-gnu-v0.18.4.2
+# export PATH=$PATH:~/monero-x86_64-linux-gnu-v0.18.4.6
 
 export DUMMY=45GjcbHh1fvEyXEA6mDAKqNDMmy1Gon6CNHrdhp9hghfLXQNQj4J76TLtwYGoooKApWLM7kaZwdAxLycceHmuVcELCSFPHq
 
