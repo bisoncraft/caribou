@@ -1,0 +1,20 @@
+simplybs: only give up early on failed mirror lookups.
+
+simplybs fetches sources via ftpmirror.gnu.org, which load-balances to random
+mirrors that occasionally 403/time out. Its download loop aborts on the first
+0-byte response instead of using its own 15-retry loop, so a single bad mirror
+kills the whole build. Limit that early give-up to mirror lookups (isMirror),
+so the origin URL keeps retrying through the redirect roulette until it lands
+on a working mirror.
+
+--- a/simplybs/utils/download/download.go
++++ b/simplybs/utils/download/download.go
+@@ -129,7 +129,7 @@
+ 		bytesReceived, err := downloadWithResume(path, url, expectedSha256)
+ 		if err != nil {
+ 			// If no data was received on first try, give up immediately
+-			if bytesReceived == 0 && attempt == 0 {
++			if bytesReceived == 0 && attempt == 0 && isMirror {
+ 				return fmt.Errorf("no data received from server: %v", err)
+ 			}
+ 			if attempt == maxRetries {

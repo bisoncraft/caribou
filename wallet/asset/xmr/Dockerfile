@@ -59,23 +59,25 @@ RUN ./apply_patches.sh monero \
 
 # macOS only: the .exp symbol-export list gates exported symbols on Darwin.
 # Add our new wrapper symbol so it is visible in the dylib (Linux/Windows export
-# the library's MONERO_* symbols by default).
+# the library's MONERO_* symbols by default). A sed append after an existing
+# entry is deliberate here rather than a patch: it survives upstream reordering
+# of the export list, whereas a unified diff would need the neighbours unchanged.
 RUN sed -i '/_MONERO_Wallet_setTrustedDaemon/a _MONERO_Wallet_setAllowMismatchedDaemonVersion' \
     monero_libwallet2_api_c/monero_libwallet2_api_c.exp
 
 # Build robustness for simplybs source downloads. simplybs fetches sources via
 # ftpmirror.gnu.org, which load-balances to random mirrors that occasionally
 # 403/time out, and it aborts on the first 0-byte response instead of using its
-# own 15-retry loop. Two fixes:
-#   1) limit that early give-up to mirror lookups, so the origin URL keeps
-#      retrying through the redirect roulette until it lands on a working mirror;
-#   2) stop the depends Makefile from git-resetting simplybs on every build,
-#      which would otherwise revert fix (1).
+# own 15-retry loop. `make simplybs` clones it at SIMPLYBS_HASH; then two patches:
+#   0004 limits that early give-up to mirror lookups, so the origin URL keeps
+#        retrying through the redirect roulette until it lands on a working mirror;
+#   0005 stops the depends Makefile from git-resetting simplybs on every build,
+#        which would otherwise revert 0004 before the next target builds.
+COPY 0004-simplybs-retry-mirrors-only.patch /tmp/
+COPY 0005-depends-keep-simplybs-checkout.patch /tmp/
 RUN cd contrib/depends && make simplybs \
-    && sed -i 's/bytesReceived == 0 && attempt == 0 {/bytesReceived == 0 \&\& attempt == 0 \&\& isMirror {/' \
-        simplybs/utils/download/download.go \
-    && sed -i 's|^\(\tcd simplybs && git fetch\)|#\1|; s|^\(\tcd simplybs && git checkout\)|#\1|; s|^\(\tcd simplybs && git reset\)|#\1|' \
-        Makefile
+    && git apply /tmp/0004-simplybs-retry-mirrors-only.patch \
+    && git apply /tmp/0005-depends-keep-simplybs-checkout.patch
 
 # Build libmonero_wallet2_api_c for each desktop target. Each target builds its
 # full cross toolchain + deps from source (long); sbs-cleanup frees the

@@ -1,0 +1,22 @@
+depends: stop re-checking-out simplybs on every build.
+
+The depends Makefile git-fetches, checks out and hard-resets simplybs each
+time the `simplybs` target runs, which every build_single.sh invocation
+triggers. That would revert the download.go fix from 0004 before the second
+target builds. Comment out the fetch/checkout/reset now that simplybs is
+already checked out at SIMPLYBS_HASH.
+
+--- a/Makefile
++++ b/Makefile
+@@ -25,8 +25,8 @@
+
+ simplybs:
+ 	git clone https://github.com/mrcyjanek/simplybs || true
+-	cd simplybs && git fetch -a
+-	cd simplybs && git checkout $(SIMPLYBS_HASH) --force
+-	cd simplybs && git reset --hard
++#	cd simplybs && git fetch -a
++#	cd simplybs && git checkout $(SIMPLYBS_HASH) --force
++#	cd simplybs && git reset --hard
+
+ sbs-build-%:
