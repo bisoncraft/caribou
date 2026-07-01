@@ -12,6 +12,6 @@ import (
 	// _ "github.com/bisoncraft/bosswallet/wallet/asset/firo" // register firo asset
 	_ "github.com/bisoncraft/bosswallet/wallet/asset/ltc" // register ltc asset
 	// _ "github.com/bisoncraft/bosswallet/wallet/asset/near" // register near asset
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/xmr"  // register xmr asset
+	_ "github.com/bisoncraft/bosswallet/wallet/asset/xmr" // register xmr asset
 	// _ "github.com/bisoncraft/bosswallet/wallet/asset/zec"  // register zec asset
 )
