@@ -6,7 +6,7 @@ Monero's wallet2 library.
 
 ## Building dcrdex with XMR Support
 
-The `libwallet2_api_c` shared library must be built before compiling with XMR
+The `libmonero_wallet2_api_c` shared library must be built before compiling with XMR
 support. See [Rebuilding the Libraries](#rebuilding-the-libraries) for
 instructions on building the library using the provided Dockerfile.
 
@@ -27,21 +27,21 @@ The shared library must also be available at runtime.
 
 ```bash
 # Linux x86_64
-cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so ./
+cp wallet/asset/xmr/lib/linux-amd64/libmonero_wallet2_api_c.so ./
 
 # Linux ARM64
-cp wallet/asset/xmr/lib/linux-arm64/libwallet2_api_c.so ./
+cp wallet/asset/xmr/lib/linux-arm64/libmonero_wallet2_api_c.so ./
 
 # macOS ARM64 (Apple Silicon)
-cp wallet/asset/xmr/lib/darwin-arm64/libwallet2_api_c.dylib ./
+cp wallet/asset/xmr/lib/darwin-arm64/libmonero_wallet2_api_c.dylib ./
 codesign -s - bossw
 
 # macOS x86_64 (Intel)
-cp wallet/asset/xmr/lib/darwin-amd64/libwallet2_api_c.dylib ./
+cp wallet/asset/xmr/lib/darwin-amd64/libmonero_wallet2_api_c.dylib ./
 codesign -s - bossw
 
 # Windows
-copy client\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll .\
+copy client\asset\xmr\lib\windows-amd64\libmonero_wallet2_api_c.dll .\
 ```
 
 **Option 2: Install to application library directory (for system packaging)**
@@ -49,7 +49,7 @@ copy client\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll .\
 ```bash
 # Linux - use /usr/lib/bossw to avoid conflicts with other apps using monero_c
 sudo mkdir -p /usr/lib/bossw
-sudo cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so /usr/lib/bossw/
+sudo cp wallet/asset/xmr/lib/linux-amd64/libmonero_wallet2_api_c.so /usr/lib/bossw/
 ```
 
 The binary's rpath is configured to search both the executable's directory and
@@ -268,7 +268,7 @@ set PATH=C:\path\to\library;%PATH%
 macOS requires the binary to be ad-hoc signed after building with a dynamic
 library. Run `codesign -s - bossw` after building. If the library was
 downloaded rather than built locally, you may also need to remove the quarantine
-attribute: `xattr -d com.apple.quarantine libwallet2_api_c.dylib`.
+attribute: `xattr -d com.apple.quarantine libmonero_wallet2_api_c.dylib`.
 
 **Wallet sync is slow**
 
@@ -285,23 +285,24 @@ provided Dockerfile:
 docker build -t monero_c_builder .
 
 # Extract libraries to lib/ directories
-docker run --rm monero_c_builder cat /monero_c/release/monero/x86_64-linux-gnu_libwallet2_api_c.so.xz | xz -d > lib/linux-amd64/libwallet2_api_c.so
+# (monero_c emits release/<tag>/<triple>/, uncompressed)
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-linux-gnu/libmonero_wallet2_api_c.so > lib/linux-amd64/libmonero_wallet2_api_c.so
 
-docker run --rm monero_c_builder cat /monero_c/release/monero/aarch64-linux-gnu_libwallet2_api_c.so.xz | xz -d > lib/linux-arm64/libwallet2_api_c.so
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-linux-gnu/libmonero_wallet2_api_c.so > lib/linux-arm64/libmonero_wallet2_api_c.so
 
-docker run --rm monero_c_builder cat /monero_c/release/monero/x86_64-w64-mingw32_libwallet2_api_c.dll.xz | xz -d > lib/windows-amd64/libwallet2_api_c.dll
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-w64-mingw32/libmonero_wallet2_api_c.dll > lib/windows-amd64/libmonero_wallet2_api_c.dll
 
-docker run --rm monero_c_builder cat /monero_c/release/monero/x86_64-apple-darwin11_libwallet2_api_c.dylib.xz | xz -d > lib/darwin-amd64/libwallet2_api_c.dylib
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-apple-darwin/libmonero_wallet2_api_c.dylib > lib/darwin-amd64/libmonero_wallet2_api_c.dylib
 
-docker run --rm monero_c_builder cat /monero_c/release/monero/aarch64-apple-darwin11_libwallet2_api_c.dylib.xz | xz -d > lib/darwin-arm64/libwallet2_api_c.dylib
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-apple-darwin/libmonero_wallet2_api_c.dylib > lib/darwin-arm64/libmonero_wallet2_api_c.dylib
 ```
 
 **Supported targets:**
 - Linux x86_64 (`x86_64-linux-gnu`)
 - Linux ARM64 (`aarch64-linux-gnu`)
 - Windows x86_64 (`x86_64-w64-mingw32`)
-- macOS x86_64 (`x86_64-apple-darwin11`)
-- macOS ARM64 (`aarch64-apple-darwin11`)
+- macOS x86_64 (`x86_64-apple-darwin`)
+- macOS ARM64 (`aarch64-apple-darwin`)
 
 **Build notes:**
 

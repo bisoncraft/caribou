@@ -5,13 +5,13 @@
 
 package cxmr
 
-// On Windows, the libwallet2_api_c.dll library is included in
+// On Windows, the libmonero_wallet2_api_c.dll library is included in
 // wallet/asset/xmr/lib/windows-amd64/ and linked automatically via cgo
 // LDFLAGS in wallet.go.
 //
 // At runtime, copy the DLL next to the executable:
 //
-//	copy client\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll .\
+//	copy client\asset\xmr\lib\windows-amd64\libmonero_wallet2_api_c.dll .\
 //
 // Windows searches for DLLs in the executable's directory first, so this
 // is the simplest approach.

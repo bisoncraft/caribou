@@ -5,18 +5,18 @@
 
 package cxmr
 
-// On macOS, the libwallet2_api_c.dylib library is included in
+// On macOS, the libmonero_wallet2_api_c.dylib library is included in
 // wallet/asset/xmr/lib/darwin-amd64/ (Intel) or darwin-arm64/ (Apple Silicon)
 // and linked automatically via cgo LDFLAGS in wallet.go.
 //
 // At runtime, copy the appropriate library next to the executable:
 //
 //	# Apple Silicon (M1/M2/M3)
-//	cp wallet/asset/xmr/lib/darwin-arm64/libwallet2_api_c.dylib ./
+//	cp wallet/asset/xmr/lib/darwin-arm64/libmonero_wallet2_api_c.dylib ./
 //
 //	# Intel
-//	cp wallet/asset/xmr/lib/darwin-amd64/libwallet2_api_c.dylib ./
+//	cp wallet/asset/xmr/lib/darwin-amd64/libmonero_wallet2_api_c.dylib ./
 //
 // Or install system-wide:
 //
-//	sudo cp wallet/asset/xmr/lib/darwin-*/libwallet2_api_c.dylib /usr/local/lib/
+//	sudo cp wallet/asset/xmr/lib/darwin-*/libmonero_wallet2_api_c.dylib /usr/local/lib/
