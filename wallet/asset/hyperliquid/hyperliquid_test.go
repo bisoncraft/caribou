@@ -1441,6 +1441,7 @@ func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWa
 		rpc:         rpc,
 		emit:        asset.NewWalletEmitter(noteChan, BipID, util.StdOutLogger("HLTEST", util.LevelTrace)),
 		txDB:        netDB,
+		ctx:         context.Background(),
 	}
 	mustSetupWalletTxDB(t, w)
 	w.Unlock(pw)
