@@ -66,3 +66,7 @@ wallet/internal/libsecp256k1/secp256k1
 
 # Staged native libs for the mobile APK (built out-of-tree, not committed)
 wallet/android/app/src/main/jniLibs/*/*.so
+
+# Staged libc++ for android XMR (built artifact, from simplybs NDK)
+wallet/asset/xmr/lib/*/libc++_shared.so
+wallet/android/app/src/main/jniLibs/*/libc++_shared.so

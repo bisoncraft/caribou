@@ -62,16 +62,24 @@ if [[ "${BOSSW_XMR:-}" == "1" ]]; then
     # APK's jniLibs/<abi>/ at runtime. Stage the wallet lib there.
     mkdir -p "$jni"
     cp "$xmrlib" "$jni/"
-    # Monero needs libc++_shared.so at runtime too. Pull it from the NDK that
-    # gomobile links against so the ABI matches. Warn (do not fail) if it cannot
-    # be located; the build still links, but the APK will crash without it.
-    ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
-    libcxx="$(find "$ndk" -path '*aarch64-linux-android/libc++_shared.so' 2>/dev/null | head -1)"
-    if [[ -n "$libcxx" ]]; then
-        cp "$libcxx" "$jni/"
+    # Monero needs libc++_shared.so at runtime. Prefer the copy staged next to
+    # the wallet lib: it comes from the same NDK simplybs built the lib with, so
+    # the libc++ ABI matches AND it is 16 KB-page aligned (Play API 35+). Fall
+    # back to the local NDK, whose prebuilt libc++ may be 4 KB-aligned (NDK < 27)
+    # and trip Android's 16 KB page-size check on device.
+    colocated="$repo_root/wallet/asset/xmr/lib/android-arm64/libc++_shared.so"
+    if [[ -f "$colocated" ]]; then
+        cp "$colocated" "$jni/"
     else
-        echo "warning: libc++_shared.so not found under NDK ($ndk); the XMR" >&2
-        echo "APK will need it in jniLibs/$abi/ or it will crash on launch." >&2
+        ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+        libcxx="$(find "$ndk" -path '*aarch64-linux-android/libc++_shared.so' 2>/dev/null | head -1)"
+        if [[ -n "$libcxx" ]]; then
+            cp "$libcxx" "$jni/"
+            echo "warning: staged libc++_shared.so from NDK ($ndk); if it is 4 KB" >&2
+            echo "aligned (NDK < 27) the app shows a 16 KB page-size warning." >&2
+        else
+            echo "warning: no libc++_shared.so found; the APK will crash on launch." >&2
+        fi
     fi
     echo "XMR enabled: staged $(basename "$xmrlib") into jniLibs/$abi/" >&2
 fi
