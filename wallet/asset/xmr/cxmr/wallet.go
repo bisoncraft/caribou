@@ -14,6 +14,13 @@ package cxmr
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/../lib/darwin-amd64
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../lib/darwin-arm64
 #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../lib/windows-amd64
+// Mobile targets. Android links the per-ABI shared lib, which the loader finds
+// in the APK's jniLibs/<abi>/ dir at runtime (no rpath). iOS links the static
+// archive into the gomobile xcframework. See cgo_android.go / cgo_ios.go.
+#cgo android,arm64 LDFLAGS: -L${SRCDIR}/../lib/android-arm64
+#cgo android,amd64 LDFLAGS: -L${SRCDIR}/../lib/android-amd64
+#cgo android,arm LDFLAGS: -L${SRCDIR}/../lib/android-arm
+#cgo ios,arm64 LDFLAGS: -L${SRCDIR}/../lib/ios-arm64
 
 // Network types
 #define NetworkType_MAINNET  0

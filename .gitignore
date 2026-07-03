@@ -63,3 +63,6 @@ wallet/internal/libsecp256k1/secp256k1
 *.code-workspace
 .claude/
 .worktrees/
+
+# Staged native libs for the mobile APK (built out-of-tree, not committed)
+wallet/android/app/src/main/jniLibs/*/*.so

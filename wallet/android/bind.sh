@@ -41,6 +41,41 @@ mkdir -p "$here/app/libs"
 
 cd "$repo_root"
 
+# XMR is opt-in: it links the native libmonero_wallet2_api_c.so, which must be
+# built for android first (wallet/asset/xmr/Dockerfile, aarch64-linux-android
+# target) and staged as a jniLib. Default builds omit it so a plain ./bind.sh
+# always works. Enable with BOSSW_XMR=1.
+tags="mobile"
+if [[ "${BOSSW_XMR:-}" == "1" ]]; then
+    tags="mobile xmr"
+    abi="arm64-v8a"
+    xmrlib="$repo_root/wallet/asset/xmr/lib/android-arm64/libmonero_wallet2_api_c.so"
+    jni="$here/app/src/main/jniLibs/$abi"
+    if [[ ! -f "$xmrlib" ]]; then
+        echo "error: BOSSW_XMR=1 but $xmrlib is missing." >&2
+        echo "Build it first: the aarch64-linux-android target in" >&2
+        echo "wallet/asset/xmr/Dockerfile, then drop the .so into that dir." >&2
+        exit 1
+    fi
+    # cgo links -lmonero_wallet2_api_c from lib/android-arm64 at bind time; the
+    # produced Go .so then carries a NEEDED entry the loader resolves from the
+    # APK's jniLibs/<abi>/ at runtime. Stage the wallet lib there.
+    mkdir -p "$jni"
+    cp "$xmrlib" "$jni/"
+    # Monero needs libc++_shared.so at runtime too. Pull it from the NDK that
+    # gomobile links against so the ABI matches. Warn (do not fail) if it cannot
+    # be located; the build still links, but the APK will crash without it.
+    ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+    libcxx="$(find "$ndk" -path '*aarch64-linux-android/libc++_shared.so' 2>/dev/null | head -1)"
+    if [[ -n "$libcxx" ]]; then
+        cp "$libcxx" "$jni/"
+    else
+        echo "warning: libc++_shared.so not found under NDK ($ndk); the XMR" >&2
+        echo "APK will need it in jniLibs/$abi/ or it will crash on launch." >&2
+    fi
+    echo "XMR enabled: staged $(basename "$xmrlib") into jniLibs/$abi/" >&2
+fi
+
 # arm64 covers modern devices. Add other ABIs (e.g. amd64 for the emulator) to
 # -target as needed: -target=android/arm64,android/amd64
 # -Wl,-z,max-page-size=16384 makes the produced .so use 16 KB-aligned LOAD
@@ -49,7 +84,7 @@ cd "$repo_root"
 gomobile bind \
     -target=android/arm64 \
     -androidapi 21 \
-    -tags mobile \
+    -tags "$tags" \
     -ldflags="-extldflags=-Wl,-z,max-page-size=16384" \
     -o "$out" \
     ./wallet/mobile

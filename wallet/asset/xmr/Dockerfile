@@ -73,11 +73,14 @@ RUN sed -i '/_MONERO_Wallet_setTrustedDaemon/a _MONERO_Wallet_setAllowMismatched
 #        retrying through the redirect roulette until it lands on a working mirror;
 #   0005 stops the depends Makefile from git-resetting simplybs on every build,
 #        which would otherwise revert 0004 before the next target builds.
+#   0006 16 KB-aligns the aarch64-linux-android shared lib (Play API 35+).
 COPY 0004-simplybs-retry-mirrors-only.patch /tmp/
 COPY 0005-depends-keep-simplybs-checkout.patch /tmp/
+COPY 0006-simplybs-android-16k-pages.patch /tmp/
 RUN cd contrib/depends && make simplybs \
     && git apply /tmp/0004-simplybs-retry-mirrors-only.patch \
-    && git apply /tmp/0005-depends-keep-simplybs-checkout.patch
+    && git apply /tmp/0005-depends-keep-simplybs-checkout.patch \
+    && git apply /tmp/0006-simplybs-android-16k-pages.patch
 
 # Build libmonero_wallet2_api_c for each desktop target. Each target builds its
 # full cross toolchain + deps from source (long); sbs-cleanup frees the
@@ -87,6 +90,14 @@ RUN ./build_single.sh monero aarch64-linux-gnu  -j$(nproc) && (cd contrib/depend
 RUN ./build_single.sh monero x86_64-w64-mingw32 -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 RUN ./build_single.sh monero x86_64-apple-darwin  -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 RUN ./build_single.sh monero aarch64-apple-darwin -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
+
+# Mobile: Android arm64-v8a. simplybs supplies its own NDK toolchain (targets
+# API 21, links libc++), so this builds in the Debian image with no host NDK.
+# The .so is 16 KB-aligned by patch 0006 (Play API 35+). It ships as a jniLib in
+# the APK (see wallet/android/bind.sh, BOSSW_XMR=1). iOS targets exist in
+# simplybs (aarch64-apple-ios[-simulator]) but need the Apple SDK, so they run
+# in a separate macOS job, not this image.
+RUN ./build_single.sh monero aarch64-linux-android -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 
 # macOS: simplybs links the dylib with install_name @rpath/libmonero_wallet2_api_c.dylib.
 # cgo rejects -Wl,-rpath, so the bossw binary carries no LC_RPATH for @rpath to
