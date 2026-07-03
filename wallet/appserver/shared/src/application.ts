@@ -216,6 +216,26 @@ export class Application {
       const bal = wallet.balance
       available += ((bal.available ?? 0) / cFactor) * fiatRate
       locked += ((bal.locked ?? 0) / cFactor) * fiatRate
+      // TODO: bal.immature is dropped here (and nowhere else in newui renders
+      // it). Immature is funds the wallet owns but that are not yet spendable
+      // pending confirmations, e.g. coinbase outputs or transaction change.
+      // Because it is added to neither `available` nor `locked` nor `total`,
+      // such funds visually disappear from the portfolio until they mature.
+      //
+      // This is most visible on XMR: Monero spends whole outputs, so every send
+      // returns the remainder as a change output that is locked for 10
+      // confirmations (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE). Send from a single
+      // large output and almost the entire balance drops to immature for ~10
+      // blocks, then reappears. Coinbase outputs lock for 60 blocks. The XMR
+      // wallet reports this correctly as Balance.Immature (see
+      // wallet/asset/xmr/xmr.go Balance: Immature = total - unlocked); the gap
+      // is purely on the display side.
+      //
+      // Fix should surface immature rather than hide it: include it in `total`
+      // and show a distinct "Maturing"/"Immature" line in PortfolioTotals and in
+      // the per-wallet balance view so users see the funds are still theirs and
+      // simply pending. Keep it out of `available` (it is not spendable) and
+      // consider whether it belongs under `locked` or its own category.
     }
 
     return { total: available + locked, available, locked, numWallets, ratesComplete }

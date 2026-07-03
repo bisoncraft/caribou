@@ -5,7 +5,7 @@
 
 package cxmr
 
-// On Linux, the libwallet2_api_c.so library is included in
+// On Linux, the libmonero_wallet2_api_c.so library is included in
 // wallet/asset/xmr/lib/linux-amd64/ (x86_64) or linux-arm64/ (aarch64)
 // and linked automatically via cgo LDFLAGS in wallet.go.
 //
@@ -15,10 +15,10 @@ package cxmr
 //
 // For development, copy the library next to the executable:
 //
-//	cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so ./   # x86_64
-//	cp wallet/asset/xmr/lib/linux-arm64/libwallet2_api_c.so ./   # aarch64
+//	cp wallet/asset/xmr/lib/linux-amd64/libmonero_wallet2_api_c.so ./   # x86_64
+//	cp wallet/asset/xmr/lib/linux-arm64/libmonero_wallet2_api_c.so ./   # aarch64
 //
 // For system packaging, install to the application library directory:
 //
 //	sudo mkdir -p /usr/lib/bossw
-//	sudo cp wallet/asset/xmr/lib/linux-amd64/libwallet2_api_c.so /usr/lib/bossw/
+//	sudo cp wallet/asset/xmr/lib/linux-amd64/libmonero_wallet2_api_c.so /usr/lib/bossw/

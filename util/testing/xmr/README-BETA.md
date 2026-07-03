@@ -6,15 +6,15 @@ A Monero daemon harness for Dex application development.
 
 ## Prerequisites
 
-- **monero-x86_64-linux-gnu-v0.18.4.2** or later <https://github.com/monero-project/monero/releases>
+- **monero-x86_64-linux-gnu-v0.18.4.6** or later <https://github.com/monero-project/monero/releases>
 - **linux** (tested on Ubuntu 22.04, 24.04)
 - **jq** (1.6)
 
 ## Setup
 
-**monero-x86_64-linux-gnu-v0.18.4.2** folder should be in PATH
+**monero-x86_64-linux-gnu-v0.18.4.6** folder should be in PATH
 
-`export PATH=$PATH:[path-to]/monero-x86_64-linux-gnu-v0.18.4.2`
+`export PATH=$PATH:[path-to]/monero-x86_64-linux-gnu-v0.18.4.6`
 
 ## Run
 
