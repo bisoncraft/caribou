@@ -15,12 +15,19 @@ package cxmr
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/../lib/darwin-arm64
 #cgo windows,amd64 LDFLAGS: -L${SRCDIR}/../lib/windows-amd64
 // Mobile targets. Android links the per-ABI shared lib, which the loader finds
-// in the APK's jniLibs/<abi>/ dir at runtime (no rpath). iOS links the static
-// archive into the gomobile xcframework. See cgo_android.go / cgo_ios.go.
+// in the APK's jniLibs/<abi>/ dir at runtime (no rpath). See cgo_android.go.
 #cgo android,arm64 LDFLAGS: -L${SRCDIR}/../lib/android-arm64
 #cgo android,amd64 LDFLAGS: -L${SRCDIR}/../lib/android-amd64
 #cgo android,arm LDFLAGS: -L${SRCDIR}/../lib/android-arm
-#cgo ios,arm64 LDFLAGS: -L${SRCDIR}/../lib/ios-arm64
+//
+// iOS deliberately adds no -L here. gomobile builds the Go side as a c-archive
+// (a static .a), which does not resolve -l libraries at build time: the monero
+// symbols stay undefined in the archive and are resolved when Xcode links the
+// app against the Monero.xcframework (device + simulator slices). A per-arch -L
+// could not distinguish the arm64 device slice from the arm64 simulator slice
+// anyway, since gomobile builds both as GOOS=ios/arm64. The global
+// -lmonero_wallet2_api_c above is inert for the iOS c-archive. See cgo_ios.go
+// and wallet/ios/bind.sh.
 
 // Network types
 #define NetworkType_MAINNET  0

@@ -1,0 +1,32 @@
+# XcodeGen overlay that adds the Monero (XMR) native framework to the app.
+#
+# Generate the XMR build with:
+#   xcodegen generate --spec project.xmr.yml
+# Plain `xcodegen generate` uses project.yml and omits XMR (the safe default).
+#
+# The base project.yml already links Frameworks/Mobile.xcframework. XcodeGen's
+# `include` appends array values, so this only adds the monero dependency; the
+# Mobile dependency, configs, schemes, and settings are all inherited unchanged.
+#
+# Monero.xcframework is a dynamic framework (built by
+# wallet/asset/xmr/build-ios.sh, assembled into wallet/ios/Frameworks/ by
+# `BOSSW_XMR=1 ./bind.sh`), so it is embedded and signed into the app bundle.
+# Xcode selects the device or simulator slice per build destination, which is
+# why the arm64 device/simulator ambiguity never reaches cgo. See
+# wallet/asset/xmr/cxmr/cgo_ios.go.
+include:
+  - project.yml
+targets:
+  BossWallet:
+    # simplybs builds an arm64-only iOS simulator lib (aarch64-apple-ios-simulator);
+    # there is no x86_64 simulator monero slice at this pin. So XMR simulator
+    # builds are Apple-Silicon only — exclude x86_64 for the simulator SDK so the
+    # build doesn't try to link an x86_64 slice that does not exist. Device
+    # (arm64) is unaffected. Intel-Mac simulator is not supported for XMR builds.
+    settings:
+      base:
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+    dependencies:
+      - framework: Frameworks/Monero.xcframework
+        embed: true
+        codeSign: true
