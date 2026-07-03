@@ -51,8 +51,14 @@ form.modal {
 img.logo-full {
   content: url("/img/bison-full_97x50.png");
 
-  &.small  { height: 25px; width: 48.5px; }
-  &.medium { height: 40px; width: 77.6px; }
+  &.small {
+    height: 25px;
+    width: 48.5px;
+  }
+  &.medium {
+    height: 40px;
+    width: 77.6px;
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -80,7 +86,9 @@ img.logo-full {
   textarea {
     background-color: transparent;
 
-    &:focus { border: none; }
+    &:focus {
+      border: none;
+    }
   }
 }
 
@@ -287,8 +295,12 @@ img.logo-full {
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
 
-  &.asset-th-asset { text-align: left; }
-  &.asset-th-num   { text-align: right; }
+  &.asset-th-asset {
+    text-align: left;
+  }
+  &.asset-th-num {
+    text-align: right;
+  }
 }
 
 .asset-row td {
@@ -297,7 +309,9 @@ img.logo-full {
   vertical-align: middle;
 }
 
-.asset-row-asset { text-align: left; }
+.asset-row-asset {
+  text-align: left;
+}
 
 .asset-row-num {
   text-align: right;
@@ -339,7 +353,9 @@ img.logo-full {
     outline-offset: 1px;
   }
 
-  & + .asset-action-icon { margin-left: 4px; }
+  &+.asset-action-icon {
+    margin-left: 4px;
+  }
 }
 
 .asset-logo {
@@ -384,9 +400,15 @@ img.logo-full {
 
 // Row highlight flash, triggered by clicking a ticker pill.
 @keyframes rowHighlight {
-  0%   { background-color: color-mix(in srgb, var(--accent-blue-border) 20%, transparent); }
-  60%  { background-color: color-mix(in srgb, var(--accent-blue-border) 13%, transparent); }
-  100% { background-color: transparent; }
+  0% {
+    background-color: color-mix(in srgb, var(--accent-blue-border) 20%, transparent);
+  }
+  60% {
+    background-color: color-mix(in srgb, var(--accent-blue-border) 13%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
 }
 
 .asset-row-highlight {
@@ -411,9 +433,13 @@ img.logo-full {
   &:hover {
     background-color: color-mix(in srgb, var(--accent-blue) 13%, transparent);
 
-    td { opacity: 1; }
+    td {
+      opacity: 1;
+    }
 
-    .asset-row-add-wallet { color: var(--accent-blue-hover); }
+    .asset-row-add-wallet {
+      color: var(--accent-blue-hover);
+    }
   }
 }
 
@@ -422,7 +448,7 @@ img.logo-full {
 }
 
 .asset-row-add-wallet {
-  text-align: center;
+  text-align: right;
   vertical-align: middle;
   color: var(--accent-blue-text);
   font-size: 12px;
@@ -442,7 +468,9 @@ img.logo-full {
   opacity: 0.65;
   border-bottom: 1px solid var(--border-color);
 
-  &:last-child { border-bottom: none; }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 .receive-inactive-logo {
@@ -493,9 +521,11 @@ img.logo-full {
   cursor: pointer;
   z-index: 1;
 
-  &:disabled { cursor: default; }
+  &:disabled {
+    cursor: default;
+  }
 
-  &:focus-visible + .checkbox-pip {
+  &:focus-visible+.checkbox-pip {
     outline: 2px solid var(--accent-blue-border);
     outline-offset: 2px;
   }
@@ -526,7 +556,7 @@ img.logo-full {
   transition: opacity 0.1s, transform 0.1s;
 }
 
-.checkbox-input:checked + .checkbox-pip {
+.checkbox-input:checked+.checkbox-pip {
   background: var(--accent-blue);
   border-color: var(--accent-blue);
 
@@ -536,7 +566,7 @@ img.logo-full {
   }
 }
 
-.checkbox-input:disabled + .checkbox-pip {
+.checkbox-input:disabled+.checkbox-pip {
   opacity: 0.5;
 }
 
@@ -663,14 +693,18 @@ img.logo-full {
   padding: 0 2px;
   line-height: 1;
 
-  &:hover { color: var(--text-color); }
+  &:hover {
+    color: var(--text-color);
+  }
 }
 
 .spv-info-body {
   p {
     margin: 0 0 8px;
 
-    &:last-child { margin-bottom: 0; }
+    &:last-child {
+      margin-bottom: 0;
+    }
   }
 }
 
@@ -692,7 +726,9 @@ img.logo-full {
   &.send-addr--invalid {
     border-color: var(--accent-syncing);
 
-    &:focus { border-color: var(--accent-syncing); }
+    &:focus {
+      border-color: var(--accent-syncing);
+    }
   }
 }
 
@@ -714,7 +750,10 @@ img.logo-full {
     border: none;
     font-size: 18px;
 
-    &:focus { border: none; outline: none; }
+    &:focus {
+      border: none;
+      outline: none;
+    }
   }
 }
 
@@ -722,10 +761,242 @@ img.logo-full {
 .send-maxlink {
   color: var(--accent-blue-text);
 
-  &:hover { color: var(--accent-blue-hover); }
+  &:hover {
+    color: var(--accent-blue-hover);
+  }
 }
 
 .send-summary {
   border-top: 1px solid var(--border-color);
   margin-top: 0.25rem;
+}
+
+// -----------------------------------------------------------------------
+// Networks view — grid of network cards + single-network detail view.
+
+.networks-view {
+  overflow-y: auto;
+}
+
+.networks-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 2rem 4rem;
+  width: 100%;
+}
+
+.networks-title {
+  font-weight: var(--demi-bold);
+}
+
+.networks-subtitle {
+  margin: 0.35rem 0 1.5rem;
+}
+
+.networks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 1rem;
+}
+
+.network-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background-color: var(--form-input-bg);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background-color 0.15s, transform 0.08s;
+
+  &:hover {
+    border-color: var(--accent-blue-border);
+    background-color: color-mix(in srgb, var(--accent-blue) 10%, var(--form-input-bg));
+  }
+
+  &:active {
+    transform: translateY(1px);
+  }
+}
+
+.network-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.network-card-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: contain;
+  flex-shrink: 0;
+
+  &.network-card-logo--off {
+    filter: grayscale(70%);
+    opacity: 0.7;
+  }
+}
+
+.network-card-name {
+  font-size: 17px;
+  font-weight: var(--demi-bold);
+}
+
+.network-card-meta {
+  font-size: 13px;
+  color: var(--text-grey);
+}
+
+.network-card-assets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.network-card-asset-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.network-card-asset-more {
+  font-size: 11px;
+  font-weight: var(--demi-bold);
+  color: var(--text-grey);
+  margin-left: 2px;
+}
+
+.network-card-footer {
+  display: flex;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 0.25rem;
+}
+
+.network-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12px;
+  font-weight: var(--demi-bold);
+  letter-spacing: 0.03em;
+}
+
+.network-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.network-status--on {
+  color: var(--accent-green);
+
+  .network-status-dot {
+    background-color: var(--accent-green);
+  }
+}
+
+.network-status--off {
+  color: var(--text-grey);
+
+  .network-status-dot {
+    background-color: transparent;
+    border: 1.5px solid var(--text-grey);
+  }
+}
+
+// Single-network detail view.
+
+.network-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.network-detail-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+// Sections stacked below the header: network status, fees, and per-asset
+// balances. Each section is a titled group of rows with hairline separators.
+.network-section {
+  margin-top: 2rem;
+}
+
+.network-section-title {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--text-grey);
+  font-weight: var(--demi-bold);
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.network-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 14px;
+
+  &:last-child { border-bottom: none; }
+}
+
+.network-stat-label {
+  color: var(--text-grey);
+  font-size: 13px;
+}
+
+.network-asset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--border-color);
+
+  &:last-child { border-bottom: none; }
+}
+
+.network-asset-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+// Clickable transaction rows in the asset view.
+.tx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: background-color 0.12s;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  }
+
+  &:last-child { border-bottom: none; }
+}
+
+// Incoming (balance-increasing) transaction amounts.
+.tx-amt-pos {
+  color: var(--accent-green);
 }

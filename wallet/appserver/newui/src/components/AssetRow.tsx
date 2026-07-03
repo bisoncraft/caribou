@@ -62,7 +62,10 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
   const pctDisplay = portfolioPct !== null ? `${portfolioPct.toFixed(1)}%` : '—'
 
   return (
-    <tr className={`asset-row ${isHighlighted ? 'asset-row-highlight' : ''}`}>
+    <tr
+      className={`asset-row pointer hoverbg ${isHighlighted ? 'asset-row-highlight' : ''}`}
+      onClick={() => app.loadPage(`asset/${asset.ticker}`)}
+    >
       <td className="asset-row-asset">
         <div className="d-flex align-items-center">
           <CoinLogo ticker={asset.ticker} className="asset-logo" />
@@ -92,13 +95,13 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
           type="button"
           className="asset-action-icon has-tip ico-download fs16"
           aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
-          onClick={() => app.setForm({ form: 'receive', data: { ticker: asset.ticker } })}
+          onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'receive', data: { ticker: asset.ticker } }) }}
         />
         <button
           type="button"
           className="asset-action-icon has-tip ico-upload fs16"
           aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
-          onClick={() => app.setForm({ form: 'send', data: { ticker: asset.ticker } })}
+          onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'send', data: { ticker: asset.ticker } }) }}
         />
       </td>
     </tr>

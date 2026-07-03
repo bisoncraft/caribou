@@ -26,7 +26,8 @@ export default function TopBar () {
 
       <div className="topbar-right d-flex align-items-center justify-content-end flex-grow-1">
         {totals.numWallets > 0 && (
-          <div className="topbar-total d-flex flex-column align-items-end me-4">
+          <div className="topbar-total d-flex flex-column align-items-end me-4 pointer hoverbg br5"
+            onClick={() => app.loadPage('portfolio')}>
             <span className="topbar-total-value">{totalDisplay}</span>
             <span className="topbar-total-label">{t('TOTAL VALUE')}</span>
           </div>

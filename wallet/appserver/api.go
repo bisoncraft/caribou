@@ -1252,6 +1252,31 @@ func (s *AppServer) apiTxHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *AppServer) apiTxHistoryByTicker(w http.ResponseWriter, r *http.Request) {
+	var form struct {
+		txdb.TxHistoryRequest
+		Ticker string `json:"ticker"`
+	}
+	if !readPost(w, r, &form) {
+		return
+	}
+
+	resp, err := s.core.TxHistoryByTicker(form.Ticker, &form.TxHistoryRequest)
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("error getting ticker transaction history: %w", err))
+		return
+	}
+	writeJSON(w, &struct {
+		OK            bool                      `json:"ok"`
+		Txs           []*txdb.WalletTransaction `json:"txs"`
+		MoreAvailable bool                      `json:"moreAvailable"`
+	}{
+		OK:            true,
+		Txs:           resp.Txs,
+		MoreAvailable: resp.MoreAvailable,
+	})
+}
+
 func (s *AppServer) apiTakeAction(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AssetID  uint32          `json:"assetID"`

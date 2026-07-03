@@ -135,6 +135,7 @@ type clientCore interface {
 	ListVSPs(assetID uint32) ([]*asset.VotingServiceProvider, error)
 	TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*asset.Ticket, error)
 	TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
+	TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	FundsMixingStats(assetID uint32) (*asset.FundsMixingStats, error)
 	ConfigureFundsMixer(appPW []byte, assetID uint32, enabled bool) error
 	SetLanguage(string) error
@@ -501,6 +502,7 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/addwalletpeer", s.apiAddWalletPeer)
 			apiAuth.Post("/removewalletpeer", s.apiRemoveWalletPeer)
 			apiAuth.Post("/txhistory", s.apiTxHistory)
+			apiAuth.Post("/txhistoryticker", s.apiTxHistoryByTicker)
 			apiAuth.Post("/takeaction", s.apiTakeAction)
 			apiAuth.Get("/exportapplog", s.apiExportAppLogs)
 

@@ -25,6 +25,11 @@ export default function Sidebar () {
         <span className="ico-bell me-3" />
         <span>{t('Activity')}</span>
       </button>
+      <button className={sidebarButtonClass(page, 'networks')}
+        onClick={() => app.loadPage('networks')}>
+        <span className="ico-network me-3" />
+        <span>{t('Networks')}</span>
+      </button>
       <span className="mt-4 fs12 grey">{t('FAVORITES')}</span>
       <button className={sidebarButtonClass(page, '')}>
         <span className="ico-add me-3" />

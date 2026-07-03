@@ -3,6 +3,8 @@ import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
 import ActivateAsset from './ActivateAsset'
+import ActivateNetwork from './ActivateNetwork'
+import TxDetail from './TxDetail'
 import { FormData } from '@bossw/shared/registry'
 import app from '@bossw/shared/application'
 
@@ -34,6 +36,8 @@ export default function Modals ({ fd }: ModalsParams) {
       case 'send': return <Send ticker={fd.data?.ticker} />
       case 'swap': return <Swap />
       case 'activateasset': return <ActivateAsset ticker={fd.data.ticker} />
+      case 'activatenetwork': return <ActivateNetwork assetID={fd.data.assetID} />
+      case 'txdetail': return <TxDetail assetID={fd.data.assetID} tx={fd.data.tx} />
       default: return (<div className="flex-center">Unknown form: {fd.form}</div>)
     }
   }

@@ -34,6 +34,7 @@ const (
 	networkTimeIndexName  = "networkTime"
 	timeIndexName         = "time"
 	assetTimeIndexName    = "assetTime"
+	tickerTimeIndexName   = "tickerTime"
 	pendingIndexName      = "pending"
 	assetPendingIndexName = "assetPending"
 	finalityIndexName     = "finality"
@@ -54,12 +55,27 @@ type TxDB struct {
 	txs   StoreTable
 	log   util.Logger
 
+	// assetTicker resolves an asset ID to its ticker group (e.g. USDC.eth and
+	// USDC.polygon both map to "USDC"), used to populate the tickerTime index at
+	// write time. It is injected by Core, which owns the asset metadata, so the
+	// txdb stays asset-agnostic. When nil, transactions are not ticker-indexed.
+	// Set once at construction, before any wallet writes.
+	assetTicker func(assetID uint32) string
+
 	networkTimeIndex  StoreIndex
 	timeIndex         StoreIndex
 	assetTimeIndex    StoreIndex
+	tickerTimeIndex   StoreIndex
 	pendingIndex      StoreIndex
 	assetPendingIndex StoreIndex
 	finalityIndex     StoreIndex
+}
+
+// SetTickerResolver installs the asset-ID-to-ticker-group resolver used to
+// populate the ticker index. It must be called before any transactions are
+// stored (i.e. before wallets connect).
+func (db *TxDB) SetTickerResolver(f func(assetID uint32) string) {
+	db.assetTicker = f
 }
 
 // New opens the master transaction database at path using the build-selected
@@ -94,6 +110,7 @@ func newTxDB(store Store, log util.Logger) (*TxDB, error) {
 		{networkTimeIndexName, indexNetworkTime, &db.networkTimeIndex},
 		{timeIndexName, indexTime, &db.timeIndex},
 		{assetTimeIndexName, indexAssetTime, &db.assetTimeIndex},
+		{tickerTimeIndexName, indexTickerTime, &db.tickerTimeIndex},
 		{pendingIndexName, indexPending, &db.pendingIndex},
 		{assetPendingIndexName, indexAssetPending, &db.assetPendingIndex},
 		{finalityIndexName, indexFinality, &db.finalityIndex},
@@ -141,7 +158,8 @@ func effectiveTime(wt *WalletTransaction, fallback uint64) uint64 {
 //	push0: JSON(WalletTransaction)   (RawTx excluded via json:"-")
 //	push1: WalletTransaction.RawTx   (opaque network blob)
 //	push2: meta                      (network||assetID||effTime||flags)
-func encodeRecord(wt *WalletTransaction, network uint32, effTime uint64) ([]byte, error) {
+//	push3: ticker                    (ticker group, "" when unresolved)
+func encodeRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker string) ([]byte, error) {
 	assetID := network
 	if wt.TokenID != nil {
 		assetID = *wt.TokenID
@@ -167,7 +185,20 @@ func encodeRecord(wt *WalletTransaction, network uint32, effTime uint64) ([]byte
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling transaction: %w", err)
 	}
-	return encode.BuildyBytes{recordVersion}.AddData(js).AddData(wt.RawTx).AddData(meta), nil
+	return encode.BuildyBytes{recordVersion}.AddData(js).AddData(wt.RawTx).AddData(meta).AddData([]byte(ticker)), nil
+}
+
+// recordTicker extracts the ticker push from a stored record. Records written
+// before the ticker push existed, or with no resolver set, return "".
+func recordTicker(b []byte) (string, error) {
+	_, pushes, err := encode.DecodeBlob(b)
+	if err != nil {
+		return "", err
+	}
+	if len(pushes) < 4 {
+		return "", nil
+	}
+	return string(pushes[3]), nil
 }
 
 // decodeRecord decodes a stored record into a WalletTransaction (with RawTx
@@ -264,6 +295,34 @@ func indexAssetTime(k, v []byte) ([]byte, error) {
 	return e, nil
 }
 
+// indexTickerTime orders transactions within a ticker group, across networks,
+// by effective time. Entry: ticker || 0x00 || effTime(8) || id. The 0x00
+// separator keeps a shorter ticker from prefix-matching a longer one (e.g. a
+// "ETH" scan will not catch "ETHW"), and the trailing id makes every entry
+// unique so pagination lands unambiguously. Records with an unresolved ("")
+// ticker are skipped.
+func indexTickerTime(k, v []byte) ([]byte, error) {
+	_, _, effTime, _, err := recordMeta(v)
+	if err != nil {
+		return nil, err
+	}
+	ticker, err := recordTicker(v)
+	if err != nil {
+		return nil, err
+	}
+	if ticker == "" {
+		return nil, ErrNotIndexed
+	}
+	// k is the primary key, txKey(network, id) = network(4) || id.
+	id := k[4:]
+	e := make([]byte, len(ticker)+1+8+len(id))
+	copy(e, ticker)
+	e[len(ticker)] = 0x00
+	binary.BigEndian.PutUint64(e[len(ticker)+1:], effTime)
+	copy(e[len(ticker)+9:], id)
+	return e, nil
+}
+
 // indexPending partitions transactions by pending state and network,
 // time-ordered within each partition.
 // Entry: pendingByte(1) || network(4) || effTime(8). The network component lets
@@ -324,9 +383,23 @@ func txKey(network uint32, id string) []byte {
 	return append(encode.Uint32Bytes(network), []byte(id)...)
 }
 
+// tickerFor resolves the ticker group for a transaction via the injected
+// resolver, or "" when none is set. The resolver keys on the transaction's
+// asset: its token ID for token transfers, else the network's native asset.
+func (db *TxDB) tickerFor(wt *WalletTransaction, network uint32) string {
+	if db.assetTicker == nil {
+		return ""
+	}
+	assetID := network
+	if wt.TokenID != nil {
+		assetID = *wt.TokenID
+	}
+	return db.assetTicker(assetID)
+}
+
 func (db *TxDB) storeTx(network uint32, wt *WalletTransaction) error {
 	effTime := effectiveTime(wt, uint64(time.Now().Unix()))
-	rec, err := encodeRecord(wt, network, effTime)
+	rec, err := encodeRecord(wt, network, effTime, db.tickerFor(wt, network))
 	if err != nil {
 		return err
 	}
@@ -343,7 +416,7 @@ func (db *TxDB) storeTxs(network uint32, wts []*WalletTransaction) error {
 	now := uint64(time.Now().Unix())
 	entries := make([]BatchEntry, len(wts))
 	for i, wt := range wts {
-		rec, err := encodeRecord(wt, network, effectiveTime(wt, now))
+		rec, err := encodeRecord(wt, network, effectiveTime(wt, now), db.tickerFor(wt, network))
 		if err != nil {
 			return err
 		}
@@ -480,6 +553,55 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 		txs = append(txs, wt)
 		return nil
 	}, reverse, seek)
+	if err != nil {
+		return nil, err
+	}
+	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
+}
+
+// GetTxsByTicker returns transaction history for a ticker group across all of
+// its networks, time-ordered, using the tickerTime index. The ticker must match
+// the value produced by the resolver installed via SetTickerResolver.
+//
+// Unlike the network-scoped getTxs, a RefID here cannot be resolved to a
+// primary key (the ticker query spans networks and has no single network to
+// rebuild network||id from), so pagination skips forward to the RefID in index
+// order rather than seeking. The common case — the most recent page, RefID nil
+// — is a direct bounded scan.
+func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistoryResponse, error) {
+	if ticker == "" {
+		return &TxHistoryResponse{}, nil
+	}
+	n := req.N
+	prefix := append([]byte(ticker), 0x00)
+	reverse := req.Past || req.RefID == nil
+
+	txs := make([]*WalletTransaction, 0, n)
+	var moreAvailable bool
+	ignore := req.IngoreTypesLookup()
+	skipping := req.RefID != nil
+
+	err := db.tickerTimeIndex.Iterate(prefix, func(it StoreIter) error {
+		wt, err := decodeIter(it)
+		if err != nil {
+			return err
+		}
+		if skipping {
+			if wt.ID == *req.RefID {
+				skipping = false
+			}
+			return nil
+		}
+		if ignore[wt.Type] {
+			return nil
+		}
+		if n > 0 && len(txs) == n {
+			moreAvailable = true
+			return ErrEndIteration
+		}
+		txs = append(txs, wt)
+		return nil
+	}, reverse, nil)
 	if err != nil {
 		return nil, err
 	}

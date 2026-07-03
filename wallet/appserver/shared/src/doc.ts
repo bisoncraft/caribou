@@ -106,6 +106,52 @@ export default class Doc {
   static formatFourSigFigs (n: number, maxDecimals?: number): string {
     return formatSigFigsWithFormatters(intFormatter, fourSigFigs, n, maxDecimals)
   }
+
+  /*
+   * timeSince returns a coarse, human-readable duration since the given
+   * timestamp in milliseconds, e.g. "3 h 20 m" or "5 d 2 h".
+   */
+  static timeSince (ms: number): string {
+    return Doc.formatDuration(new Date().getTime() - ms)
+  }
+
+  /* formatDuration returns a string representation of a duration in ms. */
+  static formatDuration (dur: number): string {
+    let seconds = Math.floor(dur)
+    let result = ''
+    let count = 0
+    const add = (n: number, s: string) => {
+      if (n > 0 || count > 0) count++
+      if (n > 0) result += `${n} ${s} `
+      return count >= 2
+    }
+    let y, mo, d, h, m, s
+    [y, seconds] = timeMod(seconds, aYear)
+    if (add(y, 'y')) { return result.trim() }
+    [mo, seconds] = timeMod(seconds, aMonth)
+    if (add(mo, 'mo')) { return result.trim() }
+    [d, seconds] = timeMod(seconds, aDay)
+    if (add(d, 'd')) { return result.trim() }
+    [h, seconds] = timeMod(seconds, anHour)
+    if (add(h, 'h')) { return result.trim() }
+    [m, seconds] = timeMod(seconds, aMinute)
+    if (add(m, 'm')) { return result.trim() }
+    [s, seconds] = timeMod(seconds, 1000)
+    add(s, 's')
+    return result.trim() || '0 s'
+  }
+}
+
+const aYear = 31536000000
+const aMonth = 2592000000
+const aDay = 86400000
+const anHour = 3600000
+const aMinute = 60000
+
+/* timeMod returns the quotient and remainder of t / dur. */
+function timeMod (t: number, dur: number): [number, number] {
+  const n = Math.floor(t / dur)
+  return [n, t - n * dur]
 }
 
 function formatSigFigsWithFormatters (intFormatter: Intl.NumberFormat, sigFigFormatter: Intl.NumberFormat, n: number, maxDecimals?: number, locales?: string | string[]): string {

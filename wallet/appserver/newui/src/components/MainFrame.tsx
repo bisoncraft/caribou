@@ -6,6 +6,9 @@ import Portfolio from './Portfolio'
 import Trade from './Trade'
 import Settings from './Settings'
 import Activity from './Activity'
+import Networks from './Networks'
+import Network from './Network'
+import Asset from './Asset'
 import Modals from './Modals'
 import { PageData, FormData } from '@bossw/shared/registry'
 
@@ -27,6 +30,14 @@ export default function MainFrame ({ pd }: MainFrameParams) {
       case 'trade': return <Trade />
       case 'settings': return <Settings />
       case 'activity': return <Activity />
+      case 'networks':
+        return pd.pageParts[1]
+          ? <Network assetID={parseInt(pd.pageParts[1], 10)} />
+          : <Networks />
+      case 'asset':
+        return pd.pageParts[1]
+          ? <Asset ticker={pd.pageParts[1]} />
+          : (<div className="flex-center">Unknown page: {pd.pageRoot}</div>)
       default: return (<div className="flex-center">Unknown page: {pd.pageRoot}</div>)
     }
   }

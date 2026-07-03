@@ -185,6 +185,10 @@ func New(cfg *Config) (*Core, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transaction database initialization error: %w", err)
 	}
+	// The txdb is asset-agnostic and cannot group transactions by ticker on its
+	// own; supply the mapping from asset metadata. Must be set before any wallet
+	// connects and begins storing transactions.
+	masterTxDB.SetTickerResolver(assetTickerGroup)
 	if cfg.TorProxy != "" {
 		if _, _, err = net.SplitHostPort(cfg.TorProxy); err != nil {
 			return nil, err
@@ -3137,6 +3141,37 @@ func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, 
 // refID are returned, otherwise the transactions after the refID are
 // returned. n is the number of transactions to return. If n is <= 0,
 // all the transactions will be returned
+// assetTickerGroup returns the ticker group an asset belongs to: its
+// conventional unit, with wrapped natives folded onto their base asset
+// (WETH->ETH, WBTC->BTC) so that, for example, WETH on Polygon groups with
+// ETH. It mirrors the front end's normalizedTicker so that the stored ticker
+// index and ticker-scoped queries agree.
+func assetTickerGroup(assetID uint32) string {
+	ui, err := asset.UnitInfo(assetID)
+	if err != nil {
+		return ""
+	}
+	return normalizeTickerUnit(ui.Conventional.Unit)
+}
+
+// normalizeTickerUnit folds wrapped-native conventional units onto their base.
+func normalizeTickerUnit(unit string) string {
+	switch unit {
+	case "WETH":
+		return "ETH"
+	case "WBTC":
+		return "BTC"
+	}
+	return unit
+}
+
+// TxHistoryByTicker returns merged, time-ordered transaction history for a
+// ticker group across every network it settles on (e.g. USDC on Ethereum and
+// Polygon), served directly from the master txdb's ticker index.
+func (c *Core) TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+	return c.txDB.GetTxsByTicker(normalizeTickerUnit(ticker), req)
+}
+
 func (c *Core) TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	wallet, found := c.wallet(assetID)
 	if !found {

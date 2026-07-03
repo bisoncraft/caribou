@@ -165,3 +165,58 @@ export function networkAsset (v: AssetVariant) {
 export function isVariantActive (v: AssetVariant): boolean {
   return Boolean(networkAsset(v)?.wallet)
 }
+
+// NetworkAssetRef identifies one asset that settles on a network, carrying just
+// enough to render a logo and label.
+export interface NetworkAssetRef {
+  assetID: number
+  ticker: string
+}
+
+// NetworkSummary describes one settlement network — a native blockchain asset —
+// and the assets that settle on it. supportedAssets lists the native asset
+// first, followed by its tokens sorted by ticker; assetCount is its length.
+export interface NetworkSummary {
+  nativeAssetID: number
+  name: string
+  ticker: string
+  assetCount: number
+  activated: boolean
+  supportedAssets: NetworkAssetRef[]
+}
+
+// networkList enumerates the settlement networks. A network corresponds to a
+// native asset (one without a token); tokens are grouped under their parent
+// network rather than listed as networks of their own. The list is sorted
+// alphabetically by name for a stable ordering across renders.
+export function networkList (): NetworkSummary[] {
+  const assets = app.user?.assets ?? {}
+  const tokensByNetwork: Record<number, NetworkAssetRef[]> = {}
+  for (const a of Object.values(assets)) {
+    if (!a.token) continue
+    const list = tokensByNetwork[a.token.networkID] ?? (tokensByNetwork[a.token.networkID] = [])
+    list.push({ assetID: a.id, ticker: a.unitInfo.conventional.unit })
+  }
+  const networks: NetworkSummary[] = []
+  for (const a of Object.values(assets)) {
+    if (a.token) continue
+    const tokens = (tokensByNetwork[a.id] ?? []).sort((x, y) => x.ticker.localeCompare(y.ticker))
+    const supportedAssets = [{ assetID: a.id, ticker: a.unitInfo.conventional.unit }, ...tokens]
+    networks.push({
+      nativeAssetID: a.id,
+      name: a.name,
+      ticker: a.unitInfo.conventional.unit,
+      assetCount: supportedAssets.length,
+      activated: Boolean(a.wallet),
+      supportedAssets
+    })
+  }
+  networks.sort((x, y) => x.name.localeCompare(y.name))
+  return networks
+}
+
+// networkSummary returns the summary for a single network by its native asset
+// ID, or undefined when the ID is not a known native asset.
+export function networkSummary (nativeAssetID: number): NetworkSummary | undefined {
+  return networkList().find(n => n.nativeAssetID === nativeAssetID)
+}

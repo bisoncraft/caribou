@@ -25,11 +25,9 @@ export default function InactiveAssetRow ({ asset }: InactiveAssetRowProps) {
           </div>
         </div>
       </td>
-      <td className="asset-row-add-wallet" colSpan={3}>
+      <td className="asset-row-add-wallet" colSpan={5}>
         + {t('Activate')}
       </td>
-      <td className="asset-row-num" />
-      <td className="asset-row-actions" />
     </tr>
   )
 }

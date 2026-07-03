@@ -601,3 +601,72 @@ func TestAddTxIndexUsesRawTx(t *testing.T) {
 		t.Fatalf("custom index order = %v", order)
 	}
 }
+
+// TestTickerIndex verifies the ticker index merges a ticker group's
+// transactions across networks in time order, isolates one ticker from another,
+// and paginates.
+func TestTickerIndex(t *testing.T) {
+	db := newTestTxDB(t)
+	db.SetTickerResolver(func(assetID uint32) string {
+		switch assetID {
+		case netA: // btc native
+			return "BTC"
+		case netB: // eth native
+			return "ETH"
+		case 100, 200: // usdc token on two networks
+			return "USDC"
+		}
+		return ""
+	})
+
+	usdcA, usdcB := uint32(100), uint32(200)
+	// USDC on netA at t=10, USDC on netB at t=30, and a native BTC tx at t=20.
+	txA := &WalletTransaction{Type: Send, ID: "usdcA", Amount: 1, BlockNumber: 1, Timestamp: 10, Confirmed: true, TokenID: &usdcA}
+	txB := &WalletTransaction{Type: Receive, ID: "usdcB", Amount: 2, BlockNumber: 1, Timestamp: 30, Confirmed: true, TokenID: &usdcB}
+	if err := db.NetworkTxDB(netA).StoreTx(txA); err != nil {
+		t.Fatalf("store usdcA: %v", err)
+	}
+	if err := db.NetworkTxDB(netB).StoreTx(txB); err != nil {
+		t.Fatalf("store usdcB: %v", err)
+	}
+	if err := db.NetworkTxDB(netA).StoreTx(tx("btc", 1, 20)); err != nil {
+		t.Fatalf("store btc: %v", err)
+	}
+
+	// Most-recent-first across both networks; the BTC tx is excluded.
+	resp, err := db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true})
+	if err != nil {
+		t.Fatalf("GetTxsByTicker USDC: %v", err)
+	}
+	if got := ids(resp.Txs); !eq(got, []string{"usdcB", "usdcA"}) {
+		t.Fatalf("USDC order = %v, want [usdcB usdcA]", got)
+	}
+
+	// A different ticker returns only its own transactions.
+	resp, err = db.GetTxsByTicker("BTC", &TxHistoryRequest{N: 10, Past: true})
+	if err != nil {
+		t.Fatalf("GetTxsByTicker BTC: %v", err)
+	}
+	if got := ids(resp.Txs); !eq(got, []string{"btc"}) {
+		t.Fatalf("BTC = %v, want [btc]", got)
+	}
+
+	// N caps the page and reports more available.
+	resp, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 1, Past: true})
+	if err != nil {
+		t.Fatalf("GetTxsByTicker N=1: %v", err)
+	}
+	if got := ids(resp.Txs); !eq(got, []string{"usdcB"}) || !resp.MoreAvailable {
+		t.Fatalf("paged = %v more=%v, want [usdcB] more=true", got, resp.MoreAvailable)
+	}
+
+	// RefID skips forward past the reference in index order.
+	ref := "usdcB"
+	resp, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref})
+	if err != nil {
+		t.Fatalf("GetTxsByTicker refID: %v", err)
+	}
+	if got := ids(resp.Txs); !eq(got, []string{"usdcA"}) {
+		t.Fatalf("refID page = %v, want [usdcA]", got)
+	}
+}
