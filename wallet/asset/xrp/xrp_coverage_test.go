@@ -249,7 +249,7 @@ func TestWalletLifecycle(t *testing.T) {
 	for i := range seed {
 		seed[i] = byte(i + 1)
 	}
-	pw := []byte("lifecycle-test-password")
+	pw := []byte("lifecycle-test-password-padded32")
 	dir := t.TempDir()
 
 	d := &Driver{}

@@ -12,14 +12,10 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/base58"
 )
-
-func init() {
-	// Use a minimal scrypt work factor so key-derivation tests finish quickly.
-	kdfScryptN = 1 << 5
-}
 
 // --- mocks ---
 
@@ -868,23 +864,24 @@ func TestKeyFileRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pw := []byte("test-password")
+	pw := []byte("sol-keyfile-test-password-32byte")
 
-	if err := saveKeyFile(path, privKey, pw); err != nil {
-		t.Fatalf("saveKeyFile: %v", err)
+	pubKey := privKey.Public().(ed25519.PublicKey)
+	if err := keystore.Save(path, privKey.Seed(), pubKey, pw); err != nil {
+		t.Fatalf("keystore.Save: %v", err)
 	}
 
-	kf, err := readKeyFile(path)
+	gotPub, err := keystore.PubKey(path)
 	if err != nil {
-		t.Fatalf("readKeyFile: %v", err)
+		t.Fatalf("keystore.PubKey: %v", err)
 	}
-	if len(kf.Salt) == 0 {
-		t.Fatal("key file should have a salt")
+	if !bytes.Equal(gotPub, pubKey) {
+		t.Fatal("stored pubkey does not match original")
 	}
 
-	seed, err := decryptSeed(kf.EncryptedSeed, pw, kf.Salt)
+	seed, err := keystore.Open(path, pw)
 	if err != nil {
-		t.Fatalf("decryptSeed: %v", err)
+		t.Fatalf("keystore.Open: %v", err)
 	}
 	if !bytes.Equal(seed, privKey.Seed()) {
 		t.Fatal("decrypted seed does not match original")

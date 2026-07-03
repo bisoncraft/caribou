@@ -5,13 +5,9 @@ package near
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +20,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/util/keygen"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/decred/base58"
 	"github.com/decred/dcrd/hdkeychain/v3"
@@ -126,7 +123,10 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		return fmt.Errorf("error creating data directory: %w", err)
 	}
 
-	return saveKeyFile(filepath.Join(params.DataDir, keyFileName), privKey, params.Pass)
+	seed := privKey.Seed()
+	defer encode.ClearBytes(seed)
+	pubKey := privKey.Public().(ed25519.PublicKey)
+	return keystore.Save(filepath.Join(params.DataDir, keyFileName), seed, pubKey, params.Pass)
 }
 
 // NearWallet implements asset.Wallet and asset.Authenticator for the NEAR
@@ -165,12 +165,12 @@ var _ asset.Authenticator = (*NearWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*NearWallet, error) {
 	keyFile := filepath.Join(cfg.DataDir, keyFileName)
-	kf, err := readKeyFile(keyFile)
+	pubKeyB, err := keystore.PubKey(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("error loading key file: %w", err)
 	}
 
-	pubKey := ed25519.PublicKey(kf.PubKey)
+	pubKey := ed25519.PublicKey(pubKeyB)
 	accountID := hex.EncodeToString(pubKey)
 
 	return &NearWallet{
@@ -189,12 +189,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 // Unlock decrypts the private key using the wallet password.
 func (w *NearWallet) Unlock(pw []byte) error {
 	keyFile := filepath.Join(w.dataDir, keyFileName)
-	kf, err := readKeyFile(keyFile)
-	if err != nil {
-		return fmt.Errorf("error reading key file: %w", err)
-	}
-
-	seed, err := decryptSeed(kf.EncryptedSeed, pw)
+	seed, err := keystore.Open(keyFile, pw)
 	if err != nil {
 		return fmt.Errorf("error decrypting key: %w", err)
 	}
@@ -729,92 +724,6 @@ func privKeyFromSeed(seed []byte) (ed25519.PrivateKey, func(), error) {
 	}
 
 	return privKey, zero, nil
-}
-
-// keyFileData is the structure stored on disk.
-type keyFileData struct {
-	EncryptedSeed util.Bytes `json:"encryptedSeed"`
-	PubKey        util.Bytes `json:"pubKey"`
-}
-
-// saveKeyFile encrypts the ed25519 seed with AES-256-GCM and writes it to disk.
-// The password (already a 32-byte blake256 hash from core) is used as the
-// AES key directly.
-func saveKeyFile(path string, privKey ed25519.PrivateKey, pw []byte) error {
-	seed := privKey.Seed()
-	defer encode.ClearBytes(seed)
-
-	encrypted, err := encryptSeed(seed, pw)
-	if err != nil {
-		return fmt.Errorf("error encrypting seed: %w", err)
-	}
-
-	pubKey := make([]byte, ed25519.PublicKeySize)
-	copy(pubKey, privKey.Public().(ed25519.PublicKey))
-
-	data := keyFileData{
-		EncryptedSeed: encrypted,
-		PubKey:        pubKey,
-	}
-
-	b, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(path, b, 0600)
-}
-
-// readKeyFile reads and parses the key file without decrypting the seed.
-func readKeyFile(path string) (*keyFileData, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var data keyFileData
-	if err := json.Unmarshal(b, &data); err != nil {
-		return nil, err
-	}
-	return &data, nil
-}
-
-// encryptSeed encrypts the seed using AES-256-GCM. The password is hashed
-// with SHA-256 to produce the 32-byte AES key. The returned ciphertext
-// includes the nonce prepended.
-func encryptSeed(seed, pw []byte) ([]byte, error) {
-	key := sha256.Sum256(pw)
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-	return gcm.Seal(nonce, nonce, seed, nil), nil
-}
-
-// decryptSeed decrypts the seed from the ciphertext (nonce prepended) using
-// the wallet password.
-func decryptSeed(ciphertext, pw []byte) ([]byte, error) {
-	key := sha256.Sum256(pw)
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
-	}
-	return gcm.Open(nil, ciphertext[:nonceSize], ciphertext[nonceSize:], nil)
 }
 
 // decodeBlockHash decodes a base58-encoded NEAR block hash.

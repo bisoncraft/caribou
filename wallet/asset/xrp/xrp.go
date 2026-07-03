@@ -26,9 +26,9 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/util/encrypt"
 	"github.com/bisoncraft/bosswallet/util/keygen"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
@@ -186,7 +186,10 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		return fmt.Errorf("error creating data directory: %w", err)
 	}
 
-	return saveKeyFile(filepath.Join(params.DataDir, keyFileName), privKey, params.Pass)
+	privKeyBytes := privKey.Serialize()
+	defer encode.ClearBytes(privKeyBytes)
+	pubKey := privKey.PubKey().SerializeCompressed()
+	return keystore.Save(filepath.Join(params.DataDir, keyFileName), privKeyBytes, pubKey, params.Pass)
 }
 
 // xrpWallet implements asset.Wallet and asset.Authenticator for the XRP Ledger.
@@ -236,12 +239,12 @@ var _ asset.Authenticator = (*xrpWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*xrpWallet, error) {
 	keyFile := filepath.Join(cfg.DataDir, keyFileName)
-	kf, err := readKeyFile(keyFile)
+	pubKeyB, err := keystore.PubKey(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("error loading key file: %w", err)
 	}
 
-	pubKey, err := btcec.ParsePubKey(kf.PubKey)
+	pubKey, err := btcec.ParsePubKey(pubKeyB)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing public key: %w", err)
 	}
@@ -266,16 +269,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 // Unlock decrypts the private key using the wallet password.
 func (w *xrpWallet) Unlock(pw []byte) error {
 	keyFile := filepath.Join(w.dataDir, keyFileName)
-	kf, err := readKeyFile(keyFile)
-	if err != nil {
-		return fmt.Errorf("error reading key file: %w", err)
-	}
-
-	if kf.KeyType != "" && kf.KeyType != "secp256k1" {
-		return fmt.Errorf("unsupported key type %q", kf.KeyType)
-	}
-
-	privKeyBytes, err := decryptKey(kf.EncryptedKey, pw)
+	privKeyBytes, err := keystore.Open(keyFile, pw)
 	if err != nil {
 		return fmt.Errorf("error decrypting key: %w", err)
 	}
@@ -1588,12 +1582,6 @@ func decodeXRPBase58(s string) ([]byte, error) {
 
 // ---- Key management ----
 
-type keyFileData struct {
-	EncryptedKey util.Bytes `json:"encryptedKey"`
-	PubKey       util.Bytes `json:"pubKey"`  // 33-byte compressed secp256k1
-	KeyType      string     `json:"keyType"` // "secp256k1"; empty for legacy files
-}
-
 func privKeyFromSeed(seed []byte) (*btcec.PrivateKey, func(), error) {
 	extKey, err := keygen.GenDeepChild(seed, seedDerivationPath)
 	if err != nil {
@@ -1614,72 +1602,4 @@ func privKeyFromSeed(seed []byte) (*btcec.PrivateKey, func(), error) {
 	}
 
 	return privKey, zero, nil
-}
-
-func saveKeyFile(path string, privKey *btcec.PrivateKey, pw []byte) error {
-	privKeyBytes := privKey.Serialize()
-	defer encode.ClearBytes(privKeyBytes)
-
-	encrypted, err := encryptKey(privKeyBytes, pw)
-	if err != nil {
-		return fmt.Errorf("error encrypting key: %w", err)
-	}
-
-	data := keyFileData{
-		EncryptedKey: encrypted,
-		PubKey:       privKey.PubKey().SerializeCompressed(),
-		KeyType:      "secp256k1",
-	}
-
-	b, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, b, 0600)
-}
-
-func readKeyFile(path string) (*keyFileData, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var data keyFileData
-	if err := json.Unmarshal(b, &data); err != nil {
-		return nil, err
-	}
-	return &data, nil
-}
-
-// encryptKey encrypts the private key bytes using argon2id key derivation and
-// xchacha20poly1305 authenticated encryption via util/encrypt. The returned
-// blob bundles the KDF parameters (salt, argon2 params, poly1305 auth tag)
-// with the ciphertext so that decryptKey only needs the password.
-func encryptKey(privKeyBytes, pw []byte) ([]byte, error) {
-	c := encrypt.NewCrypter(pw)
-	defer c.Close()
-	ciphertext, err := c.Encrypt(privKeyBytes)
-	if err != nil {
-		return nil, err
-	}
-	return encode.BuildyBytes{0}.AddData(c.Serialize()).AddData(ciphertext), nil
-}
-
-// decryptKey decrypts a blob produced by encryptKey.
-func decryptKey(blob, pw []byte) ([]byte, error) {
-	ver, pushes, err := encode.DecodeBlob(blob)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding key blob: %w", err)
-	}
-	if ver != 0 {
-		return nil, fmt.Errorf("unknown key blob version %d", ver)
-	}
-	if len(pushes) != 2 {
-		return nil, fmt.Errorf("expected 2 pushes in key blob, got %d", len(pushes))
-	}
-	c, err := encrypt.Deserialize(pw, pushes[0])
-	if err != nil {
-		return nil, fmt.Errorf("error deserializing crypter: %w", err)
-	}
-	defer c.Close()
-	return c.Decrypt(pushes[1])
 }

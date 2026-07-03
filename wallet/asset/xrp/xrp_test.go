@@ -12,6 +12,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
 )
 
@@ -273,76 +274,33 @@ func TestPubKeyToAddress(t *testing.T) {
 	}
 }
 
-// TestEncryptDecryptKey verifies the AES-256-GCM key encryption roundtrip and
-// error paths.
-func TestEncryptDecryptKey(t *testing.T) {
-	privKeyBytes := make([]byte, 32)
-	for i := range privKeyBytes {
-		privKeyBytes[i] = byte(i + 1)
-	}
-	pw := []byte("test-password")
-
-	encrypted, err := encryptKey(privKeyBytes, pw)
-	if err != nil {
-		t.Fatalf("encryptKey error: %v", err)
-	}
-
-	// Ciphertext must be longer than plaintext (nonce + GCM tag overhead).
-	if len(encrypted) <= len(privKeyBytes) {
-		t.Fatalf("encrypted length %d should be > %d", len(encrypted), len(privKeyBytes))
-	}
-	if bytes.Contains(encrypted, privKeyBytes) {
-		t.Fatal("ciphertext must not contain plaintext")
-	}
-
-	decrypted, err := decryptKey(encrypted, pw)
-	if err != nil {
-		t.Fatalf("decryptKey error: %v", err)
-	}
-	defer encode.ClearBytes(decrypted)
-
-	if !bytes.Equal(decrypted, privKeyBytes) {
-		t.Error("decrypted bytes do not match original")
-	}
-
-	// Wrong password must fail.
-	if _, err := decryptKey(encrypted, []byte("wrong")); err == nil {
-		t.Fatal("expected error with wrong password")
-	}
-
-	// Truncated ciphertext must fail.
-	if _, err := decryptKey(encrypted[:4], pw); err == nil {
-		t.Fatal("expected error with truncated ciphertext")
-	}
-}
-
-// TestKeyFileRoundTrip verifies that saveKeyFile and readKeyFile are inverse
-// operations and that the stored encrypted key decrypts to the original.
+// TestKeyFileRoundTrip verifies that a key file written via keystore.Save can be
+// read back and decrypts to the original key.
 func TestKeyFileRoundTrip(t *testing.T) {
 	privKeyBytes := make([]byte, 32)
 	privKeyBytes[31] = 99
 	privKey, _ := btcec.PrivKeyFromBytes(privKeyBytes)
-	pw := []byte("keyfile-test-password")
+	pubKey := privKey.PubKey().SerializeCompressed()
+	pw := []byte("keyfile-test-password-padded32by")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, keyFileName)
 
-	if err := saveKeyFile(path, privKey, pw); err != nil {
-		t.Fatalf("saveKeyFile error: %v", err)
+	if err := keystore.Save(path, privKey.Serialize(), pubKey, pw); err != nil {
+		t.Fatalf("keystore.Save error: %v", err)
 	}
 
-	kf, err := readKeyFile(path)
+	gotPub, err := keystore.PubKey(path)
 	if err != nil {
-		t.Fatalf("readKeyFile error: %v", err)
+		t.Fatalf("keystore.PubKey error: %v", err)
 	}
-
-	if !bytes.Equal(kf.PubKey, privKey.PubKey().SerializeCompressed()) {
+	if !bytes.Equal(gotPub, pubKey) {
 		t.Error("stored public key does not match")
 	}
 
-	decrypted, err := decryptKey(kf.EncryptedKey, pw)
+	decrypted, err := keystore.Open(path, pw)
 	if err != nil {
-		t.Fatalf("decryptKey error: %v", err)
+		t.Fatalf("keystore.Open error: %v", err)
 	}
 	defer encode.ClearBytes(decrypted)
 
