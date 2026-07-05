@@ -330,6 +330,12 @@ func (w *TokenWallet) StandardSendFee(_ uint64) uint64 {
 	return DefaultFee
 }
 
+// FeeRate satisfies asset.Wallet. Token transaction fees are paid in the
+// parent asset, so the rate is the parent chain's.
+func (w *TokenWallet) FeeRate() uint64 {
+	return w.parent.FeeRate()
+}
+
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid address %q", address)

@@ -318,7 +318,6 @@ var _ asset.Wallet = (*ExchangeWallet)(nil)
 var _ asset.Opener = (*ExchangeWallet)(nil)
 var _ asset.NewAddresser = (*ExchangeWallet)(nil)
 var _ asset.Withdrawer = (*ExchangeWallet)(nil)
-var _ asset.FeeRater = (*ExchangeWallet)(nil)
 var _ asset.TxFeeEstimator = (*ExchangeWallet)(nil)
 var _ asset.Rescanner = (*ExchangeWallet)(nil)
 

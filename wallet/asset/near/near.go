@@ -422,6 +422,12 @@ func (w *NearWallet) StandardSendFee(_ uint64) uint64 {
 	return DefaultFee
 }
 
+// FeeRate satisfies asset.Wallet, returning the standard per-transaction fee
+// in drops.
+func (w *NearWallet) FeeRate() uint64 {
+	return w.StandardSendFee(0)
+}
+
 func (w *NearWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil

@@ -332,7 +332,6 @@ type zecWallet struct {
 	netTxDB txdb.NetworkTxDB
 }
 
-var _ asset.FeeRater = (*zecWallet)(nil)
 var _ asset.Wallet = (*zecWallet)(nil)
 var _ asset.NewAddresser = (*zecWallet)(nil)
 

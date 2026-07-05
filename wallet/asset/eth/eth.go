@@ -2785,7 +2785,7 @@ func (w *baseWallet) recommendedMaxFeeRateGwei(ctx context.Context) (uint64, err
 	return WeiToGweiSafe(feeRate)
 }
 
-// FeeRate satisfies asset.FeeRater.
+// FeeRate satisfies asset.Wallet.
 func (eth *baseWallet) FeeRate() uint64 {
 	r, err := eth.recommendedMaxFeeRateGwei(eth.ctx)
 	if err != nil {

@@ -2856,10 +2856,7 @@ func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, sub
 		return nil, err
 	}
 
-	var feeSuggestion uint64
-	if fr, is := wallet.Wallet.(asset.FeeRater); is {
-		feeSuggestion = fr.FeeRate()
-	}
+	feeSuggestion := wallet.Wallet.FeeRate()
 	var coin asset.Coin
 	if !subtract {
 		coin, err = wallet.Wallet.Send(address, value, feeSuggestion)
@@ -4043,10 +4040,7 @@ func (c *Core) NetworkFeeRate(assetID uint32) uint64 {
 	if !found {
 		return 0
 	}
-	if fr, is := w.Wallet.(asset.FeeRater); is {
-		return fr.FeeRate()
-	}
-	return 0
+	return w.Wallet.FeeRate()
 }
 
 func (c *Core) deleteRequestedAction(uniqueID string) {

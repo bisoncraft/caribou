@@ -538,12 +538,10 @@ func (w *xcWallet) setFeeState(feeRate uint64) {
 	})
 }
 
-// feeRate returns a fee rate for a FeeRater is available and generates a
-// non-zero rate.
+// feeRate returns the wallet's fee-rate estimate, recording it in fee state
+// when non-zero. A zero return indicates no estimate is currently available.
 func (w *xcWallet) feeRate() uint64 {
-	if rater, is := w.Wallet.(asset.FeeRater); !is {
-		return 0
-	} else if r := rater.FeeRate(); r != 0 {
+	if r := w.Wallet.FeeRate(); r != 0 {
 		w.setFeeState(r)
 		return r
 	}

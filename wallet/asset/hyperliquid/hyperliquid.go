@@ -179,7 +179,6 @@ type HyperWallet struct {
 var _ asset.Wallet = (*HyperWallet)(nil)
 var _ asset.Authenticator = (*HyperWallet)(nil)
 var _ asset.Withdrawer = (*HyperWallet)(nil)
-var _ asset.FeeRater = (*HyperWallet)(nil)
 var _ asset.Rescanner = (*HyperWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*HyperWallet, error) {

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
@@ -93,16 +94,34 @@ type ChainConfig struct {
 	// neutrino sets it >0 so btcwallet's recovery drives the compact-filter scan.
 	// The "recoverywindow" wallet setting, when present, overrides this.
 	RecoveryWindow uint32
+	// FeeRateSources are the external fee-rate APIs the wallet composites into
+	// its FeeRate estimate. The lean native wallet has no local fee-estimation
+	// RPC, so an empty list makes FeeRate return zero.
+	FeeRateSources []*feeratefetcher.SourceConfig
 }
 
 // btcElectrumChainConfig returns the ChainConfig for the BTC electrum wallet.
 func btcElectrumChainConfig(chainParams *chaincfg.Params) ChainConfig {
 	return ChainConfig{
-		Chain:       bisonwire.ChainBTC,
-		ChainParams: chainParams,
-		NetParams:   btcTableNetParams(chainParams),
-		Info:        WalletInfo,
-		BackendKind: wallet.BackendElectrum,
+		Chain:          bisonwire.ChainBTC,
+		ChainParams:    chainParams,
+		NetParams:      btcTableNetParams(chainParams),
+		Info:           WalletInfo,
+		BackendKind:    wallet.BackendElectrum,
+		FeeRateSources: BitcoinFeeSources(networkFromChainParams(chainParams)),
+	}
+}
+
+// networkFromChainParams maps chaincfg params to the util.Network used to select
+// external fee-rate sources.
+func networkFromChainParams(chainParams *chaincfg.Params) util.Network {
+	switch chainParams.Name {
+	case "testnet3", "testnet4":
+		return util.Testnet
+	case "regtest", "simnet":
+		return util.Regtest
+	default:
+		return util.Mainnet
 	}
 }
 
@@ -183,6 +202,10 @@ type NativeWallet struct {
 	netParams   *netparams.ChainParams
 	emit        *asset.WalletEmitter
 	peersChange func(uint32, error)
+
+	// feeFetcher composites external fee-rate sources for FeeRate. It is nil
+	// when the chain has no configured sources (e.g. on regtest).
+	feeFetcher *feeratefetcher.Fetcher
 
 	// recoveryWindow is the address-probe gap limit. 0 (the default) disables
 	// recovery; a restore sets it >0 (via the "recoverywindow" setting) to scan
@@ -346,6 +369,10 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 			log.Errorf("native: ignoring invalid recoverywindow setting %q: %v", s, err)
 		}
 	}
+	var feeFetcher *feeratefetcher.Fetcher
+	if len(cc.FeeRateSources) > 0 {
+		feeFetcher = feeratefetcher.New(cc.FeeRateSources, log.SubLogger("FEE"))
+	}
 	return &NativeWallet{
 		cfg:            cc,
 		log:            log,
@@ -354,6 +381,7 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 		netParams:      cc.NetParams,
 		emit:           cfg.Emit,
 		peersChange:    cfg.PeersChange,
+		feeFetcher:     feeFetcher,
 		recoveryWindow: recoveryWindow,
 		txdb:           cfg.NetworkTxDB,
 		pendingTxs:     make(map[chainhash.Hash]txdb.WalletTransaction),
@@ -674,6 +702,17 @@ func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
 		sz = uint64(MinimumTxOverhead) + inputSize + P2WPKHOutputSize*2
 	}
 	return feeRate * sz
+}
+
+// FeeRate satisfies asset.Wallet, returning a composite external fee-rate
+// estimate in sats/vByte. The lean native wallet has no local estimatesmartfee
+// RPC, so it relies entirely on the configured external sources and returns
+// zero when none can provide a rate (callers fall back to a default).
+func (w *NativeWallet) FeeRate() uint64 {
+	if w.feeFetcher == nil {
+		return 0
+	}
+	return w.feeFetcher.Rate(context.Background())
 }
 
 // SyncStatus returns the current chain-sync state.

@@ -837,6 +837,12 @@ func (w *xrpWallet) StandardSendFee(_ uint64) uint64 {
 	return fee
 }
 
+// FeeRate satisfies asset.Wallet, returning the current open-ledger fee in
+// drops (falling back to the default when the live fee is unavailable).
+func (w *xrpWallet) FeeRate() uint64 {
+	return w.StandardSendFee(0)
+}
+
 func (w *xrpWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	w.opWG.Add(1)
 	defer w.opWG.Done()

@@ -569,7 +569,6 @@ func (dcr *ExchangeWallet) config() *exchangeWalletConfig {
 
 // Check that ExchangeWallet satisfies the Wallet interface.
 var _ asset.Wallet = (*ExchangeWallet)(nil)
-var _ asset.FeeRater = (*ExchangeWallet)(nil)
 var _ asset.Withdrawer = (*ExchangeWallet)(nil)
 var _ asset.LiveReconfigurer = (*ExchangeWallet)(nil)
 var _ asset.TxFeeEstimator = (*ExchangeWallet)(nil)
@@ -1032,7 +1031,7 @@ func (dcr *ExchangeWallet) Balance() (*asset.Balance, error) {
 	return dcr.balance()
 }
 
-// FeeRate satisfies asset.FeeRater.
+// FeeRate satisfies asset.Wallet.
 func (dcr *ExchangeWallet) FeeRate() uint64 {
 	const confTarget = 2 // 1 historically gives crazy rates
 	rate, err := dcr.feeRate(confTarget)

@@ -175,6 +175,12 @@ func (w *TokenWallet) StandardSendFee(feeRate uint64) uint64 {
 	return w.parent.StandardSendFee(feeRate)
 }
 
+// FeeRate satisfies asset.Wallet. Token transaction fees are paid in the
+// parent asset, so the rate is the parent chain's.
+func (w *TokenWallet) FeeRate() uint64 {
+	return w.parent.FeeRate()
+}
+
 // trustlineLimitAtomic is the TrustSet limit used when establishing a
 // trustline. XRPL trust limits only cap how much of the currency the
 // account can hold; they don't lock or reserve funds, so there's no

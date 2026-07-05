@@ -430,6 +430,12 @@ func (w *Wallet) tokenAccountRent(ctx context.Context) (uint64, error) {
 	return rent, nil
 }
 
+// FeeRate satisfies asset.Wallet, returning the standard per-transaction fee
+// in lamports.
+func (w *Wallet) FeeRate() uint64 {
+	return w.StandardSendFee(0)
+}
+
 func (w *Wallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil

@@ -61,8 +61,9 @@ func (wt WalletTrait) IsLogFiler() bool {
 	return wt&WalletTraitLogFiler != 0
 }
 
-// IsFeeRater tests if the WalletTrait has the WalletTraitFeeRater bit set,
-// which indicates the presence of a FeeRate method.
+// IsFeeRater tests if the WalletTrait has the WalletTraitFeeRater bit set. Every
+// Wallet implements FeeRate, so this is always true; the trait is retained for
+// bit-order stability.
 func (wt WalletTrait) IsFeeRater() bool {
 	return wt&WalletTraitFeeRater != 0
 }
@@ -144,9 +145,9 @@ func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	if _, is := w.(LogFiler); is {
 		t |= WalletTraitLogFiler
 	}
-	if _, is := w.(FeeRater); is {
-		t |= WalletTraitFeeRater
-	}
+	// Every Wallet implements FeeRate, so this trait is always set. It is
+	// retained for wallet-trait bit-order stability.
+	t |= WalletTraitFeeRater
 	if _, is := w.(Accelerator); is {
 		t |= WalletTraitAccelerator
 	}
@@ -454,6 +455,12 @@ type Wallet interface {
 	SyncStatus() (*SyncStatus, error)
 	// StandardSendFee returns the fee for a "standard" send tx.
 	StandardSendFee(feeRate uint64) uint64
+	// FeeRate returns a non-critical fee-rate estimate for the asset. The rate
+	// is for the wallet's own Send and Withdraw, and is not a server-validated
+	// swap fee suggestion. Some wallets cannot always provide an estimate (an
+	// SPV or freshly-started wallet, for example), so a zero rate may be
+	// returned; callers should check for zero and fall back to a default.
+	FeeRate() uint64
 	// TxHistory returns all the transactions a wallet has made. If refID
 	// is nil, then transactions starting from the most recent are returned
 	// (past is ignored). If past is true, the transactions prior to the
@@ -673,18 +680,6 @@ type NewAddresser interface {
 // LogFiler is a wallet that allows for downloading of its log file.
 type LogFiler interface {
 	LogFilePath() string
-}
-
-// FeeRater is capable of retrieving a non-critical fee rate estimate for an
-// asset. Some SPV wallets, for example, cannot provide a fee rate estimate, so
-// shouldn't implement FeeRater. However, since the mode of external wallets may
-// not be known on construction, only connect, a zero rate may be returned. The
-// caller should always check for zero and have a fallback rate. The rates from
-// FeeRate should be used for rates that are not validated by the server
-// Withdraw and Send, and will/should not be used to generate a fee
-// suggestion for swap operations.
-type FeeRater interface {
-	FeeRate() uint64
 }
 
 // FundsMixingStats describes the current state of a wallet's funds mixer.

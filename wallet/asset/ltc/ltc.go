@@ -4,16 +4,14 @@
 package ltc
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	"github.com/bisoncraft/bosswallet/util/dexnet"
+	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
@@ -188,32 +186,23 @@ func parseChainParams(net util.Network) (*chaincfg.Params, error) {
 	return nil, fmt.Errorf("unknown network ID %v", net)
 }
 
-func externalFeeRate(ctx context.Context, net util.Network) (uint64, error) {
+// feeRateSources returns the ranked external fee-rate sources for LTC. External
+// APIs are mainnet-focused; on other networks the wallet relies primarily on
+// the local node.
+func feeRateSources(net util.Network) []*feeratefetcher.SourceConfig {
 	switch net {
-	case util.Mainnet, util.Simnet:
-		return fetchBlockCypherFees(ctx)
+	case util.Mainnet:
+		return []*feeratefetcher.SourceConfig{
+			btc.MempoolSpaceSource("litecoinspace.org", "https://litecoinspace.org", 1),
+			btc.BlockcypherSource("ltc", 1),
+			btc.BitcoreSource("LTC", net, 2),
+			btc.BlockchairSource("litecoin", 3),
+		}
+	case util.Testnet:
+		return []*feeratefetcher.SourceConfig{
+			btc.BitcoreSource("LTC", net, 1),
+		}
+	default:
+		return nil
 	}
-	return bitcoreFeeRate(ctx, net)
-}
-
-var bitcoreFeeRate = btc.BitcoreRateFetcher("LTC")
-
-func fetchBlockCypherFees(ctx context.Context) (uint64, error) {
-	// Posted rate limits for blockcypher are 3/sec, 100/hr, 1000/day. 1000/day
-	// is once per 86.4 seconds, but I've seen unexpected metering before.
-	// Once per 5 minutes is a good rate, and that's the default.
-	// Can't find a source for testnet. Just using mainnet rate for everything.
-	const uri = "https://api.blockcypher.com/v1/ltc/main"
-	var res struct {
-		Low    float64 `json:"low_fee_per_kb"`
-		Medium float64 `json:"medium_fee_per_kb"`
-		High   float64 `json:"high_fee_per_kb"`
-	}
-	if err := dexnet.Get(ctx, uri, &res); err != nil {
-		return 0, err
-	}
-	if res.Low == 0 {
-		return 0, errors.New("no fee rate in result")
-	}
-	return uint64(math.Round(res.Low / 1000)), nil
 }

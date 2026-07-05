@@ -232,6 +232,7 @@ func (c *tCoin) Value() uint64 {
 type TXCWallet struct {
 	swapSize           uint64
 	sendFeeSuggestion  uint64
+	feeRate            uint64
 	sendCoin           *tCoin
 	sendErr            error
 	addrErr            error
@@ -486,12 +487,7 @@ func (w *TXCWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTrans
 	return nil
 }
 
-type TFeeRater struct {
-	*TXCWallet
-	feeRate uint64
-}
-
-func (w *TFeeRater) FeeRate() uint64 {
+func (w *TXCWallet) FeeRate() uint64 {
 	return w.feeRate
 }
 
@@ -833,24 +829,18 @@ func TestSend(t *testing.T) {
 	}
 
 	const feeRate = 54321
-
-	feeRater := &TFeeRater{
-		TXCWallet: tWallet,
-		feeRate:   feeRate,
-	}
-
-	wallet.Wallet = feeRater
+	tWallet.feeRate = feeRate
 
 	coin, err = tCore.Send(tPW, tUTXOAssetA.ID, 2e8, address, false)
 	if err != nil {
-		t.Fatalf("FeeRater Withdraw/send error: %v", err)
+		t.Fatalf("fee rate Withdraw/send error: %v", err)
 	}
 	if coin.Value() != 2e8 {
 		t.Fatalf("Expected sent value to be %v, got %v", 2e8, coin.Value())
 	}
 
 	if tWallet.sendFeeSuggestion != feeRate {
-		t.Fatalf("unexpected fee rate from FeeRater. wanted %d, got %d", feeRate, tWallet.sendFeeSuggestion)
+		t.Fatalf("unexpected fee rate from wallet. wanted %d, got %d", feeRate, tWallet.sendFeeSuggestion)
 	}
 
 	// wallet is not synced

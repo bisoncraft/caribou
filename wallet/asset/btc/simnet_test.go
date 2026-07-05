@@ -19,6 +19,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
+	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
 	"github.com/btcsuite/btcd/btcutil"
@@ -159,11 +160,12 @@ func TestExternalFeeRate(t *testing.T) {
 }
 
 func fetchRateWithTimeout(t *testing.T, net util.Network) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
-	feeRate, err := externalFeeRate(ctx, net)
-	if err != nil {
-		t.Fatalf("error fetching %s fees: %v", net, err)
+	f := feeratefetcher.New(BitcoinFeeSources(net), tLogger)
+	feeRate := f.Rate(ctx)
+	if feeRate == 0 {
+		t.Fatalf("no fee rate fetched for %s", net)
 	}
 	fmt.Printf("##### Fee rate fetched for %s! %d Sats/vB \n", net, feeRate)
 }
