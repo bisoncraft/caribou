@@ -30,9 +30,9 @@ const noSubmit = (e: FormEvent) => e.preventDefault()
 
 function Row ({ label, children }: { label: string, children: ReactNode }) {
   return (
-    <div className="network-stat">
-      <span className="network-stat-label">{label}</span>
-      <span className="network-stat-value text-right">{children}</span>
+    <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+      <span className="grey fs13">{label}</span>
+      <span className="text-right">{children}</span>
     </div>
   )
 }

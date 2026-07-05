@@ -16,14 +16,20 @@
   font-style: normal;
 }
 
-.demi { font-weight: var(--demi-bold); }
-.mono { font-family: var(--mono); }
+.demi {
+  font-weight: var(--demi-bold);
+}
+.mono {
+  font-family: var(--mono);
+}
 
 // Font-size utility classes. Generated for the sizes actually used in the
 // codebase — add a new entry if you start using a new size, don't sprinkle
 // inline styles.
-$font-sizes: 8, 10, 11, 12, 13, 14, 16, 18, 24, 50;
+$font-sizes: 8, 10, 11, 12, 13, 14, 16, 18, 24, 26, 28, 50;
 
 @each $size in $font-sizes {
-  .fs#{$size} { font-size: #{$size}px; }
+  .fs#{$size} {
+    font-size: #{$size}px;
+  }
 }

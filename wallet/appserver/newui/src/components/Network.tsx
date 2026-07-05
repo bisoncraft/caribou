@@ -3,12 +3,12 @@ import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import Doc from '@bossw/shared/doc'
 import { CoreNote, WalletState, UnitInfo } from '@bossw/shared/registry'
-import { networkSummary, normalizedTicker, NetworkAssetRef } from '@bossw/shared/assets'
+import { networkBySymbol, NetworkAssetRef } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
 import Spinner from './Spinner'
 
 interface NetworkParams {
-  assetID: number
+  symbol: string
 }
 
 const languages = navigator.languages as string[]
@@ -40,9 +40,9 @@ function BackButton ({ onClick }: { onClick: () => void }) {
 // Stat is a labeled key/value row used in the status and fee sections.
 function Stat ({ label, value }: { label: string, value: ReactNode }) {
   return (
-    <div className="network-stat">
-      <span className="network-stat-label">{label}</span>
-      <span className="network-stat-value">{value}</span>
+    <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+      <span className="grey fs13">{label}</span>
+      <span>{value}</span>
     </div>
   )
 }
@@ -63,7 +63,7 @@ function StatusSection ({ wallet }: { wallet: WalletState }) {
 
   return (
     <div className="network-section">
-      <div className="network-section-title">{t('NETWORK STATUS')}</div>
+      <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('NETWORK STATUS')}</div>
       <Stat label={t('Status')} value={status} />
       <Stat label={t('Network type')} value={wallet.class || '—'} />
       <Stat label={t('Peers')} value={intFmt.format(wallet.peerCount ?? 0)} />
@@ -86,38 +86,44 @@ function FeeSection ({ wallet, ui, ticker, rate }: { wallet: WalletState, ui: Un
 
   return (
     <div className="network-section">
-      <div className="network-section-title">{t('FEES')}</div>
+      <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('FEES')}</div>
       <Stat label={t('Network fee rate')} value={rateValue} />
       <Stat label={t('Cost of a standard send')} value={sendValue} />
     </div>
   )
 }
 
-function AssetBalanceRow ({ a }: { a: NetworkAssetRef }) {
+// TokenRow renders one token's logo, name, and balance as a row in the tokens
+// table.
+function TokenRow ({ a }: { a: NetworkAssetRef }) {
   const asset = app.asset(a.assetID)
   const ui = asset.unitInfo
-  const rate = app.idRate(a.assetID) ?? 0
   const available = asset.wallet?.balance?.available ?? 0
-  const open = () => app.loadPage(`asset/${normalizedTicker(asset)}`)
+  const rate = app.idRate(a.assetID) ?? 0
+  const usd = usdString(available, ui.conventional.conversionFactor, rate)
 
   return (
-    <div className="network-asset-row pointer hoverbg" onClick={open}>
-      <CoinLogo ticker={a.ticker} className="network-asset-logo" />
-      <div className="flex-grow-1">
-        <div className="fs14">{asset.name}</div>
-        <div className="grey fs12">{a.ticker}</div>
-      </div>
-      <div className="text-right">
-        <div className="fs14 mono">{Doc.formatCoinValue(available, ui)} {a.ticker}</div>
-        {rate > 0 && <div className="grey fs12">{usdString(available, ui.conventional.conversionFactor, rate)}</div>}
-      </div>
-    </div>
+    <tr className="asset-row">
+      <td className="asset-row-asset">
+        <div className="d-flex align-items-center">
+          <CoinLogo ticker={a.ticker} className="icon-24 me-2" />
+          <div>
+            <div className="fs14">{asset.name}</div>
+            <div className="grey fs12">{a.ticker}</div>
+          </div>
+        </div>
+      </td>
+      <td className="asset-row-num">
+        <div className="mono">{Doc.formatCoinValue(available, ui)} {a.ticker}</div>
+        {usd && <div className="grey fs12">{usd}</div>}
+      </td>
+    </tr>
   )
 }
 
 // Network is the detail view for a single settlement network. It is reached by
 // clicking an activated network's card in the Networks list.
-export default function Network ({ assetID }: NetworkParams) {
+export default function Network ({ symbol }: NetworkParams) {
   const [, setTick] = useState(0)
   const redraw = useCallback(() => setTick(x => x + 1), [])
 
@@ -140,13 +146,13 @@ export default function Network ({ assetID }: NetworkParams) {
     }
   }, [redraw])
 
-  const n = networkSummary(assetID)
+  const n = networkBySymbol(symbol)
   const back = () => app.loadPage('networks')
 
   if (!n) {
     return (
       <div className="networks-view fill-abs">
-        <div className="networks-inner">
+        <div className="networks-inner mx-auto w-100">
           <BackButton onClick={back} />
           <div className="grey flex-center py-5">{t('Unknown network')}</div>
         </div>
@@ -154,23 +160,46 @@ export default function Network ({ assetID }: NetworkParams) {
     )
   }
 
+  const assetID = n.nativeAssetID
   const wallet = app.wallet(assetID)
   const ui = app.unitInfo(assetID)
-  const assetWord = n.assetCount === 1 ? t('asset') : t('assets')
+  const tokens = n.supportedAssets.filter(a => a.assetID !== n.nativeAssetID)
+  const nativeAvailable = wallet?.balance?.available ?? 0
+  const nativeUsd = usdString(nativeAvailable, ui.conventional.conversionFactor, app.idRate(assetID) ?? 0)
 
   return (
     <div className="networks-view fill-abs">
-      <div className="networks-inner">
+      <div className="networks-inner mx-auto w-100">
         <BackButton onClick={back} />
-        <div className="network-detail-header">
-          <CoinLogo ticker={n.ticker} className="network-detail-logo" />
-          <div>
-            <div className="fs22">{n.name}</div>
-            <div className="grey fs13">
-              {tvar('Supports {{ count }} {{ assetWord }}', { count: String(n.assetCount), assetWord })}
+        <div className="network-detail-header d-flex align-items-center">
+          <div className="fs28">{tvar('{{name}} Network', { name: n.name })}</div>
+        </div>
+        <div className="network-section">
+          <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('NATIVE ASSET')}</div>
+          <div className="d-flex align-items-center">
+            <CoinLogo ticker={n.ticker} className="icon-40 me-3" />
+            <div>
+              <div className="fs26 mono demi">{Doc.formatCoinValue(nativeAvailable, ui)} {n.ticker}</div>
+              {nativeUsd && <div className="grey">{nativeUsd}</div>}
             </div>
           </div>
         </div>
+        {tokens.length > 0 && (
+          <div className="network-section">
+            <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('TOKENS')}</div>
+            <table className="asset-table w-100">
+              <thead>
+                <tr className="asset-table-header">
+                  <th className="asset-th-asset">{t('Token')}</th>
+                  <th className="asset-th-num">{tvar('Balance on {{ network }}', { network: n.name })}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tokens.map(a => <TokenRow key={a.assetID} a={a} />)}
+              </tbody>
+            </table>
+          </div>
+        )}
         {wallet
           ? (
             <>
@@ -179,10 +208,6 @@ export default function Network ({ assetID }: NetworkParams) {
             </>
             )
           : <div className="grey py-4">{t('This network is not activated.')}</div>}
-        <div className="network-section">
-          <div className="network-section-title">{t('ASSETS')}</div>
-          {n.supportedAssets.map(a => <AssetBalanceRow key={a.assetID} a={a} />)}
-        </div>
       </div>
     </div>
   )

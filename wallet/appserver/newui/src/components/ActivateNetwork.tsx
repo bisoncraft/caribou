@@ -57,7 +57,7 @@ export default function ActivateNetwork ({ assetID }: ActivateNetworkParams) {
       return
     }
     close()
-    app.loadPage(`networks/${assetID}`)
+    app.loadPage(`networks/${app.asset(assetID).symbol}`)
   }
 
   return (

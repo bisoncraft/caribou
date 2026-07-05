@@ -26,6 +26,17 @@
   width: 20px;
 }
 
+// Square icon/logo size utilities. Coin logos are square artwork, so an equal
+// width and height is all they need; see the icon-* utilities below.
+$icon-sizes: 16, 24, 32, 40, 48;
+
+@each $size in $icon-sizes {
+  .icon-#{$size} {
+    width: #{$size}px;
+    height: #{$size}px;
+  }
+}
+
 .ico-add:before {
   content: "\f460";
 }

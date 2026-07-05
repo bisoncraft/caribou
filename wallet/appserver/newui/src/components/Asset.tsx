@@ -75,7 +75,7 @@ function TxRow ({ item }: { item: TxItem }) {
     : '—'
 
   return (
-    <div className="tx-row" onClick={open}>
+    <div className="tx-row d-flex align-items-center justify-content-between border-bottom pointer" onClick={open}>
       <div>
         <div className="fs14">{txTypeLabel(tx.type)}</div>
         <div className="grey fs12">{variant.ticker}</div>
@@ -159,7 +159,7 @@ export default function Asset ({ ticker }: AssetParams) {
   if (!ta) {
     return (
       <div className="networks-view fill-abs">
-        <div className="networks-inner">
+        <div className="networks-inner mx-auto w-100">
           <button type="button" className="subtle d-inline-flex align-items-center mb-4 fs14 py-1 px-2 hoverbg" onClick={back}>
             <span className="ico-arrowleft me-2 fs10" />{t('Portfolio')}
           </button>
@@ -176,13 +176,13 @@ export default function Asset ({ ticker }: AssetParams) {
 
   return (
     <div className="networks-view fill-abs">
-      <div className="networks-inner">
+      <div className="networks-inner mx-auto w-100">
         <button type="button" className="subtle d-inline-flex align-items-center mb-4 fs14 py-1 px-2 hoverbg" onClick={back}>
           <span className="ico-arrowleft me-2 fs10" />{t('Portfolio')}
         </button>
 
-        <div className="network-detail-header">
-          <CoinLogo ticker={ta.ticker} className="network-detail-logo" />
+        <div className="network-detail-header d-flex align-items-center">
+          <CoinLogo ticker={ta.ticker} className="icon-48" />
           <div className="flex-grow-1">
             <div className="fs22">{ta.name}</div>
             <div className="grey fs13">{ta.ticker}</div>
@@ -198,30 +198,30 @@ export default function Asset ({ ticker }: AssetParams) {
         </div>
 
         <div className="network-section">
-          <div className="network-section-title">{t('BALANCE')}</div>
-          <div className="network-stat">
-            <span className="network-stat-label">{t('Total')}</span>
-            <span className="network-stat-value">
+          <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('BALANCE')}</div>
+          <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+            <span className="grey fs13">{t('Total')}</span>
+            <span>
               <span className="mono">{Doc.formatCoinValue(ta.total, ta.ui)} {ta.ticker}</span>
               {rate > 0 && <span className="grey"> ({usdString(ta.total, totalConvFactor, rate)})</span>}
             </span>
           </div>
           {hasUnavailable && (
             <>
-              <div className="network-stat">
-                <span className="network-stat-label">{t('Available')}</span>
-                <span className="network-stat-value mono">{Doc.formatCoinValue(ta.avail, ta.ui)} {ta.ticker}</span>
+              <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+                <span className="grey fs13">{t('Available')}</span>
+                <span className="mono">{Doc.formatCoinValue(ta.avail, ta.ui)} {ta.ticker}</span>
               </div>
               {ta.locked > 0 && (
-                <div className="network-stat">
-                  <span className="network-stat-label">{t('Locked')}</span>
-                  <span className="network-stat-value mono">{Doc.formatCoinValue(ta.locked, ta.ui)} {ta.ticker}</span>
+                <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+                  <span className="grey fs13">{t('Locked')}</span>
+                  <span className="mono">{Doc.formatCoinValue(ta.locked, ta.ui)} {ta.ticker}</span>
                 </div>
               )}
               {ta.immature > 0 && (
-                <div className="network-stat">
-                  <span className="network-stat-label">{t('Immature')}</span>
-                  <span className="network-stat-value mono">{Doc.formatCoinValue(ta.immature, ta.ui)} {ta.ticker}</span>
+                <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+                  <span className="grey fs13">{t('Immature')}</span>
+                  <span className="mono">{Doc.formatCoinValue(ta.immature, ta.ui)} {ta.ticker}</span>
                 </div>
               )}
             </>
@@ -230,7 +230,7 @@ export default function Asset ({ ticker }: AssetParams) {
 
         {isMultiNet && (
           <div className="network-section">
-            <div className="network-section-title">{t('NETWORKS')}</div>
+            <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('NETWORKS')}</div>
             {ta.variants.map(v => {
               const netAsset = networkAsset(v)
               const vConvFactor = v.ui.conventional.conversionFactor
@@ -242,8 +242,8 @@ export default function Asset ({ ticker }: AssetParams) {
               const vConv = vTotalAtomic / vConvFactor
               const pct = totalConv > 0 ? (vConv / totalConv) * 100 : 0
               return (
-                <div key={v.assetID} className="network-asset-row">
-                  <CoinLogo ticker={netAsset?.unitInfo.conventional.unit ?? ''} className="network-asset-logo" />
+                <div key={v.assetID} className="network-asset-row d-flex align-items-center border-bottom">
+                  <CoinLogo ticker={netAsset?.unitInfo.conventional.unit ?? ''} className="icon-24" />
                   <div className="flex-grow-1">
                     <div className="fs14">{netAsset?.name ?? ''}</div>
                     <div className="grey fs12">{pct.toFixed(1)}% {t('of total')}</div>
@@ -261,7 +261,7 @@ export default function Asset ({ ticker }: AssetParams) {
         )}
 
         <div className="network-section">
-          <div className="network-section-title">{t('TRANSACTIONS')}</div>
+          <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('TRANSACTIONS')}</div>
           {loadingTxns
             ? <div className="flex-center py-4"><Spinner size={20} /></div>
             : txns.length === 0

@@ -32,7 +32,7 @@ export default function MainFrame ({ pd }: MainFrameParams) {
       case 'activity': return <Activity />
       case 'networks':
         return pd.pageParts[1]
-          ? <Network assetID={parseInt(pd.pageParts[1], 10)} />
+          ? <Network symbol={pd.pageParts[1]} />
           : <Networks />
       case 'asset':
         return pd.pageParts[1]

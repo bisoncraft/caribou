@@ -180,6 +180,9 @@ export interface NetworkSummary {
   nativeAssetID: number
   name: string
   ticker: string
+  // symbol is the native asset's bip symbol (e.g. "polygon", "hype"), used as
+  // the URL path for the network view.
+  symbol: string
   assetCount: number
   activated: boolean
   supportedAssets: NetworkAssetRef[]
@@ -206,6 +209,7 @@ export function networkList (): NetworkSummary[] {
       nativeAssetID: a.id,
       name: a.name,
       ticker: a.unitInfo.conventional.unit,
+      symbol: a.symbol,
       assetCount: supportedAssets.length,
       activated: Boolean(a.wallet),
       supportedAssets
@@ -219,4 +223,10 @@ export function networkList (): NetworkSummary[] {
 // ID, or undefined when the ID is not a known native asset.
 export function networkSummary (nativeAssetID: number): NetworkSummary | undefined {
   return networkList().find(n => n.nativeAssetID === nativeAssetID)
+}
+
+// networkBySymbol returns the summary for a network by its native asset's bip
+// symbol (e.g. "polygon", "hype"), or undefined when no such network exists.
+export function networkBySymbol (symbol: string): NetworkSummary | undefined {
+  return networkList().find(n => n.symbol === symbol)
 }
