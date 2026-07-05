@@ -3,8 +3,9 @@ import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import Doc from '@bossw/shared/doc'
 import { CoreNote, WalletState, UnitInfo } from '@bossw/shared/registry'
-import { networkBySymbol, NetworkAssetRef } from '@bossw/shared/assets'
+import { networkBySymbol, normalizedTicker, NetworkAssetRef } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
+import NetworkedTokenLogo from '@bossw/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
 
 interface NetworkParams {
@@ -94,19 +95,21 @@ function FeeSection ({ wallet, ui, ticker, rate }: { wallet: WalletState, ui: Un
 }
 
 // TokenRow renders one token's logo, name, and balance as a row in the tokens
-// table.
-function TokenRow ({ a }: { a: NetworkAssetRef }) {
+// table. Every token shares the same network badge (networkTicker) since they
+// all settle on this view's network.
+function TokenRow ({ a, networkTicker }: { a: NetworkAssetRef, networkTicker: string }) {
   const asset = app.asset(a.assetID)
   const ui = asset.unitInfo
   const available = asset.wallet?.balance?.available ?? 0
   const rate = app.idRate(a.assetID) ?? 0
   const usd = usdString(available, ui.conventional.conversionFactor, rate)
+  const open = () => app.loadPage(`asset/${normalizedTicker(asset)}`)
 
   return (
-    <tr className="asset-row">
+    <tr className="asset-row pointer hoverbg" onClick={open}>
       <td className="asset-row-asset">
         <div className="d-flex align-items-center">
-          <CoinLogo ticker={a.ticker} className="icon-24 me-2" />
+          <NetworkedTokenLogo token={a.ticker} network={networkTicker} className="icon-32 me-2" />
           <div>
             <div className="fs14">{asset.name}</div>
             <div className="grey fs12">{a.ticker}</div>
@@ -195,7 +198,7 @@ export default function Network ({ symbol }: NetworkParams) {
                 </tr>
               </thead>
               <tbody>
-                {tokens.map(a => <TokenRow key={a.assetID} a={a} />)}
+                {tokens.map(a => <TokenRow key={a.assetID} a={a} networkTicker={n.ticker} />)}
               </tbody>
             </table>
           </div>

@@ -899,3 +899,20 @@ img.logo-full {
 .tx-amt-pos {
   color: var(--accent-green);
 }
+
+// Superscript network badge over a token logo (see NetworkedTokenLogo). Size,
+// offset, and ring are proportions of the token logo (the position-relative
+// parent, sized by an icon-N class), so the composite scales as one unit. The
+// ring lives on this wrapper, not the logo img, so the coin artwork is never
+// clipped; the body-bg fill separates the badge from the logo beneath.
+.networked-token-badge {
+  position: absolute;
+  top: -8%;
+  right: -8%;
+  width: 48%;
+  height: 48%;
+  border-radius: 50%;
+  border: 1.5px solid var(--body-bg);
+  background-color: var(--body-bg);
+  box-sizing: border-box;
+}

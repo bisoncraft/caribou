@@ -7,6 +7,7 @@ import { CoreNote, WalletNote, WalletTransaction } from '@bossw/shared/registry'
 import { AssetVariant, TickerAsset, networkAsset } from '@bossw/shared/assets'
 import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@bossw/shared/tx'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
+import NetworkedTokenLogo from '@bossw/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
 
 interface AssetParams {
@@ -183,29 +184,26 @@ export default function Asset ({ ticker }: AssetParams) {
 
         <div className="network-detail-header d-flex align-items-center">
           <CoinLogo ticker={ta.ticker} className="icon-48" />
-          <div className="flex-grow-1">
-            <div className="fs22">{ta.name}</div>
-            <div className="grey fs13">{ta.ticker}</div>
-          </div>
-          <div className="d-flex">
-            <button type="button" className="d-inline-flex align-items-center me-2" onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}>
-              <span className="ico-download me-2" />{t('Receive')}
-            </button>
-            <button type="button" className="feature d-inline-flex align-items-center" onClick={() => app.setForm({ form: 'send', data: { ticker: ta.ticker } })}>
-              <span className="ico-upload me-2" />{t('Send')}
-            </button>
+          <div>
+            <div className="fs28">{ta.name}</div>
+            <div className="grey fs18">{ta.ticker}</div>
           </div>
         </div>
 
         <div className="network-section">
           <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('BALANCE')}</div>
-          <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
-            <span className="grey fs13">{t('Total')}</span>
-            <span>
-              <span className="mono">{Doc.formatCoinValue(ta.total, ta.ui)} {ta.ticker}</span>
-              {rate > 0 && <span className="grey"> ({usdString(ta.total, totalConvFactor, rate)})</span>}
-            </span>
+          <div className="d-flex justify-content-between align-items-start">
+            <div className="fs28 mono demi">{Doc.formatCoinValue(ta.total, ta.ui)} {ta.ticker}</div>
+            <div className="d-flex">
+              <button type="button" className="d-inline-flex align-items-center me-2" onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}>
+                <span className="ico-qrcode me-2" />{t('Receive')}
+              </button>
+              <button type="button" className="feature d-inline-flex align-items-center" onClick={() => app.setForm({ form: 'send', data: { ticker: ta.ticker } })}>
+                <span className="ico-send me-2" />{t('Send')}
+              </button>
+            </div>
           </div>
+          {rate > 0 && <div className="grey mb-2">{usdString(ta.total, totalConvFactor, rate)}</div>}
           {hasUnavailable && (
             <>
               <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
@@ -230,7 +228,7 @@ export default function Asset ({ ticker }: AssetParams) {
 
         {isMultiNet && (
           <div className="network-section">
-            <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('NETWORKS')}</div>
+            <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('NETWORK BALANCES')}</div>
             {ta.variants.map(v => {
               const netAsset = networkAsset(v)
               const vConvFactor = v.ui.conventional.conversionFactor
@@ -243,7 +241,7 @@ export default function Asset ({ ticker }: AssetParams) {
               const pct = totalConv > 0 ? (vConv / totalConv) * 100 : 0
               return (
                 <div key={v.assetID} className="network-asset-row d-flex align-items-center border-bottom">
-                  <CoinLogo ticker={netAsset?.unitInfo.conventional.unit ?? ''} className="icon-24" />
+                  <NetworkedTokenLogo token={ta.ticker} network={netAsset?.unitInfo.conventional.unit ?? ''} className="icon-32" />
                   <div className="flex-grow-1">
                     <div className="fs14">{netAsset?.name ?? ''}</div>
                     <div className="grey fs12">{pct.toFixed(1)}% {t('of total')}</div>
