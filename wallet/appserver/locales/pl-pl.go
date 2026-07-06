@@ -546,4 +546,15 @@ var PlPL = map[string]*intl.Translation{
 	"API Key":                     {T: "Klucz API"},
 	"API Secret":                  {T: "Sekret API"},
 	"API Passphrase":              {T: "Hasło API"},
+
+	// Mobile session-lock settings (Security pane).
+	"Security":               {T: "Bezpieczeństwo"},
+	"Unlock with biometrics": {T: "Odblokuj biometrią"},
+	"Lock after":             {T: "Zablokuj po"},
+	"Evict keys after":       {T: "Usuń klucze po"},
+	"Immediately":            {T: "Natychmiast"},
+	"Never":                  {T: "Nigdy"},
+	"1 hour":                 {T: "1 godzina"},
+	"{{ n }} min":            {T: "{{ n }} min"},
+	"{{ n }} hours":          {T: "{{ n }} godz."},
 }

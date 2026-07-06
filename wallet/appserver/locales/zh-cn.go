@@ -679,4 +679,15 @@ var ZhCN = map[string]*intl.Translation{
 	"Wallet Balances":             {T: "钱包余额"},
 	"Placements":                  {T: "投放"},
 	"removing_bot_config":         {T: "正在删除机器人配置"},
+
+	// Mobile session-lock settings (Security pane).
+	"Security":               {T: "安全"},
+	"Unlock with biometrics": {T: "使用生物识别解锁"},
+	"Lock after":             {T: "锁定延时"},
+	"Evict keys after":       {T: "清除密钥延时"},
+	"Immediately":            {T: "立即"},
+	"Never":                  {T: "从不"},
+	"1 hour":                 {T: "1 小时"},
+	"{{ n }} min":            {T: "{{ n }} 分钟"},
+	"{{ n }} hours":          {T: "{{ n }} 小时"},
 }

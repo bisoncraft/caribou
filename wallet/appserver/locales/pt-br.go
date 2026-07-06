@@ -198,4 +198,15 @@ var PtBr = map[string]*intl.Translation{
 	"worst_case_conditions":      {T: "O pior caso pode ocorrer se a ordem corresponder em um lote de cada vez ao longo de muitos epoques."},
 	"Maximum Possible Swap Fees": {T: "Taxas Máximas de Troca Possíveis"},
 	"max_fee_conditions":         {T: "Este é o máximo que você pagaria em taxas em sua troca. As taxas são normalmente avaliadas em uma fração dessa taxa. O máximo não está sujeito a alterações uma vez que seu pedido é feito."},
+
+	// Mobile session-lock settings (Security pane).
+	"Security":               {T: "Segurança"},
+	"Unlock with biometrics": {T: "Destrancar com biometria"},
+	"Lock after":             {T: "Trancar após"},
+	"Evict keys after":       {T: "Remover chaves após"},
+	"Immediately":            {T: "Imediatamente"},
+	"Never":                  {T: "Nunca"},
+	"1 hour":                 {T: "1 hora"},
+	"{{ n }} min":            {T: "{{ n }} min"},
+	"{{ n }} hours":          {T: "{{ n }} horas"},
 }

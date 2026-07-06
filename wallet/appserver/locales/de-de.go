@@ -679,4 +679,15 @@ var DeDE = map[string]*intl.Translation{
 	"Wallet Balances":             {T: "Wallet Guthaben"},
 	"Placements":                  {T: "Platzierungen"},
 	"delete_bot":                  {T: "Bot Löschen"},
+
+	// Mobile session-lock settings (Security pane).
+	"Security":               {T: "Sicherheit"},
+	"Unlock with biometrics": {T: "Mit Biometrie entsperren"},
+	"Lock after":             {T: "Sperren nach"},
+	"Evict keys after":       {T: "Schlüssel entfernen nach"},
+	"Immediately":            {T: "Sofort"},
+	"Never":                  {T: "Nie"},
+	"1 hour":                 {T: "1 Stunde"},
+	"{{ n }} min":            {T: "{{ n }} Min."},
+	"{{ n }} hours":          {T: "{{ n }} Stunden"},
 }

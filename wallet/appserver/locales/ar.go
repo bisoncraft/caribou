@@ -553,4 +553,15 @@ var Ar = map[string]*intl.Translation{
 	"Token on":                        {T: "التوكن مُفعَّل"},
 	"bond_cost_breakdown":             {T: "يشمل \u003cspan data-tmpl=\"bondLockNoFees\"\u003e\u003c/span\u003e لسندك و \u003cspan data-tmpl=\"bondLockFees\"\u003e\u003c/span\u003e لرسوم المعاملة"},
 	"token_approval_tx_msg":           {T: "تم إرسال الموافقة بالتوكن الخاص بك مع معرف المعاملة:"},
+
+	// Mobile session-lock settings (Security pane).
+	"Security":               {T: "الأمان"},
+	"Unlock with biometrics": {T: "إلغاء القفل بالمقاييس الحيوية"},
+	"Lock after":             {T: "القفل بعد"},
+	"Evict keys after":       {T: "إزالة المفاتيح بعد"},
+	"Immediately":            {T: "فورًا"},
+	"Never":                  {T: "أبدًا"},
+	"1 hour":                 {T: "ساعة واحدة"},
+	"{{ n }} min":            {T: "{{ n }} دقيقة"},
+	"{{ n }} hours":          {T: "{{ n }} ساعات"},
 }
