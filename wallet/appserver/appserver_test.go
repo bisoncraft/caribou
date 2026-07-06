@@ -64,6 +64,7 @@ type TCore struct {
 	balanceErr           error
 	loginErr             error
 	logoutErr            error
+	logoutCalls          int
 	initErr              error
 	isInited             bool
 	createWalletErr      error
@@ -163,7 +164,7 @@ func (c *TCore) NotificationFeed() *core.NoteFeed {
 
 func (c *TCore) AckNotes(ids []util.Bytes) {}
 
-func (c *TCore) Logout() error { return c.logoutErr }
+func (c *TCore) Logout() error { c.logoutCalls++; return c.logoutErr }
 
 func (c *TCore) ExportSeed(pw []byte) (string, error) {
 	return "seed words here", nil

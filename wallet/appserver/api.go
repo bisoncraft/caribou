@@ -588,15 +588,12 @@ func (s *AppServer) apiNotes(w http.ResponseWriter, r *http.Request) {
 
 // apiLogout handles the 'logout' API request.
 func (s *AppServer) apiLogout(w http.ResponseWriter, r *http.Request) {
-	err := s.core.Logout()
-	if err != nil {
+	// Lock locks core and invalidates all known auth tokens and cached passwords,
+	// forcing any other sessions to login again.
+	if err := s.Lock(); err != nil {
 		s.writeAPIError(w, fmt.Errorf("logout error: %w", err))
 		return
 	}
-
-	// With Core locked up, invalidate all known auth tokens and cached passwords
-	// to force any other sessions to login again.
-	s.deauth()
 
 	clearCookie(authCK, w)
 	clearCookie(pwKeyCK, w)
@@ -801,6 +798,13 @@ func (s *AppServer) apiChangeAppPass(w http.ResponseWriter, r *http.Request) {
 	if !readPost(w, r, form) {
 		return
 	}
+
+	// Serialize against Lock/Unlock. Changing the password tears down every
+	// session (deauth) and mints a fresh one; without this a concurrent biometric
+	// Unlock could mint a grant against a token this deauth is about to drop,
+	// leaving that unlock stranded on the login gate.
+	s.sessionMtx.Lock()
+	defer s.sessionMtx.Unlock()
 
 	// Update application password.
 	err := s.core.ChangeAppPass(form.AppPW, form.NewAppPW)

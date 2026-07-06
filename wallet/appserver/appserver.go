@@ -200,6 +200,27 @@ type cachedPassword struct {
 	SerializedCrypter []byte
 }
 
+// sessionGrant is a consumed-once mapping from a URL grant token to the session
+// cookies it authorizes. See Unlock and grantMiddleware.
+type sessionGrant struct {
+	authToken string // dexauth cookie value
+	pwKey     string // sessionkey cookie value (hex)
+	// ttlTimer evicts the grant after grantTTL if it is never consumed.
+	// grantMiddleware stops it when it consumes the grant so the timer and its
+	// closure do not linger for the full TTL after a normal unlock.
+	ttlTimer *time.Timer
+}
+
+// grantTTL bounds how long an unconsumed session grant (and the password key it
+// carries) stays resident before it is evicted. The shell loads the grant URL
+// immediately after Unlock, so this only fires if the shell died or never
+// navigated between Unlock and consumption.
+const grantTTL = 2 * time.Minute
+
+// newGrantToken generates a one-time session grant token. It is a var so a test
+// can force the post-login failure in Unlock and exercise the rollback path.
+var newGrantToken = func() (string, error) { return util.RandomHex(32) }
+
 type Config struct {
 	DataDir       string
 	Core          clientCore // *core.Core
@@ -248,9 +269,21 @@ type AppServer struct {
 
 	capToken string // see Config.CapabilityToken
 
+	// sessionMtx serializes the whole-session Lock and Unlock operations. Lock is
+	// reachable both from the mobile App (under its own lifecycle mutex) and from
+	// the HTTP apiLogout handler (which is not), so without this an HTTP logout
+	// could interleave with a biometric Unlock and leave a grant referencing an
+	// auth token the logout just cleared.
+	sessionMtx sync.Mutex
+
 	authMtx         sync.RWMutex
 	authTokens      map[string]bool
 	cachedPasswords map[string]*cachedPassword // cached passwords keyed by auth token
+	// pendingGrants holds one-time session grants minted by Unlock. The mobile
+	// shell hands a grant to the WebView in the bootstrap URL (?g=<grant>) and
+	// grantMiddleware swaps it for the session cookies, consuming it. Guarded by
+	// authMtx.
+	pendingGrants map[string]*sessionGrant
 
 	loginMtx       sync.Mutex
 	loginFails     int
@@ -389,6 +422,7 @@ func New(cfg *Config) (*AppServer, error) {
 		wsServer:        websocket.New(cfg.Core, log.SubLogger("WS")),
 		authTokens:      make(map[string]bool),
 		cachedPasswords: make(map[string]*cachedPassword),
+		pendingGrants:   make(map[string]*sessionGrant),
 		tor:             cfg.Tor,
 		appVersion:      userAppVersion(cfg.AppVersion, false),
 		mainLogFilePath: cfg.MainLogFilePath,
@@ -421,6 +455,9 @@ func New(cfg *Config) (*AppServer, error) {
 	// generate log noise (no-op on desktop).
 	mux.Use(s.securityMiddleware)
 	mux.Use(s.capabilityMiddleware)
+	// grantMiddleware runs after the capability gate (so the gate still protects
+	// it) and before the logger (so a ?g= session grant never reaches the log).
+	mux.Use(s.grantMiddleware)
 	mux.Use(middleware.RequestLogger(&middleware.DefaultLogFormatter{
 		Logger: &chiLogger{ // logs with Trace()
 			Logger: util.StdOutLogger("MUX", log.Level(), cfg.UTC),
@@ -767,6 +804,79 @@ func (s *AppServer) isOnionRequest(r *http.Request) bool {
 	return r.Host == host
 }
 
+// Lock locks wallets and tears down every session. It performs the same work as
+// the POST /api/logout handler (Core.Logout followed by deauth) but without an
+// HTTP context, so the mobile shell can drive the key-eviction tier through the
+// bound App surface. Any pending one-time grants are dropped as well.
+func (s *AppServer) Lock() error {
+	s.sessionMtx.Lock()
+	defer s.sessionMtx.Unlock()
+	if err := s.core.Logout(); err != nil {
+		return err
+	}
+	// deauth clears the auth tokens, cached passwords, and any pending grants.
+	s.deauth()
+	return nil
+}
+
+// Unlock re-establishes a session after Lock. It logs core back in with pw,
+// mints a fresh auth token and cached password, and returns a one-time grant
+// token. The mobile shell hands the grant to the WebView in a bootstrap URL
+// (?g=<grant>); grantMiddleware swaps it for the session cookies on first load.
+// pw is treated as read-only and is not retained.
+func (s *AppServer) Unlock(pw []byte) (grant string, err error) {
+	s.sessionMtx.Lock()
+	defer s.sessionMtx.Unlock()
+	if err = s.core.Login(pw); err != nil {
+		return "", err
+	}
+	// Core is now logged in with the wallet keys resident. If any later step
+	// fails we must roll that login back: otherwise Unlock returns an error, the
+	// shell mints no session and shows a locked screen, yet the wallets sit
+	// decrypted in memory with no way to reach them. Re-lock and drop any auth
+	// token / cached password already created so no partial session survives.
+	defer func() {
+		if err != nil {
+			if logoutErr := s.core.Logout(); logoutErr != nil {
+				log.Errorf("Unlock rollback logout failed: %v", logoutErr)
+			}
+			s.deauth()
+		}
+	}()
+
+	authToken, err := s.authorize()
+	if err != nil {
+		return "", err
+	}
+	key, err := s.cacheAppPassword(pw, authToken)
+	if err != nil {
+		return "", err
+	}
+	defer zero(key)
+
+	grant, err = newGrantToken()
+	if err != nil {
+		return "", err
+	}
+	// Bound the grant's lifetime: if it is not consumed within grantTTL the shell
+	// never loaded the grant URL, so evict it rather than let the password key it
+	// carries sit resident until the next Lock. grantMiddleware stops this timer
+	// when it consumes the grant.
+	sg := &sessionGrant{
+		authToken: authToken,
+		pwKey:     hex.EncodeToString(key),
+	}
+	sg.ttlTimer = time.AfterFunc(grantTTL, func() {
+		s.authMtx.Lock()
+		delete(s.pendingGrants, grant)
+		s.authMtx.Unlock()
+	})
+	s.authMtx.Lock()
+	s.pendingGrants[grant] = sg
+	s.authMtx.Unlock()
+	return grant, nil
+}
+
 // authorize creates, stores, and returns a new auth token to identify the user.
 // deauth should be used to invalidate tokens on logout.
 func (s *AppServer) authorize() (string, error) {
@@ -788,6 +898,14 @@ func (s *AppServer) deauth() {
 	s.authMtx.Lock()
 	s.authTokens = make(map[string]bool)
 	s.cachedPasswords = make(map[string]*cachedPassword)
+	// Drop any pending unlock grants too: they carry an auth token and password
+	// key that must not outlive the session they belonged to.
+	for _, sg := range s.pendingGrants {
+		if sg.ttlTimer != nil {
+			sg.ttlTimer.Stop()
+		}
+	}
+	s.pendingGrants = make(map[string]*sessionGrant)
 	// Preserve a claimed companion token so the pairing survives logout.
 	if s.companionToken != "" && s.companionTokenClaimed {
 		s.authTokens[s.companionToken] = true

@@ -197,6 +197,57 @@ func (a *App) Start(dataDir, net string) (string, error) {
 	return a.bootstrapURL(), nil
 }
 
+// Lock locks wallets and tears down the session, delegating to the appserver's
+// Lock (Core.Logout + deauth). This is the expensive key-eviction path: the
+// native shell calls it only on the escalation tier (an explicit "lock now" or a
+// long idle window), NOT on every background. The cheap UI gate is a native
+// biometric overlay that keeps keys resident and needs no core call. After Lock,
+// the WebView's session cookies are dead; a later Unlock restores them.
+func (a *App) Lock() error {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+
+	// Nothing bound means nothing is unlocked. An eviction alarm that fires after
+	// the core was already torn down (or before it finished starting) has no work
+	// to do, so report success rather than surfacing a spurious "not running"
+	// error toast for an already-locked wallet. Lock is meant to be idempotent.
+	if a.srv == nil {
+		return nil
+	}
+	return a.srv.Lock()
+}
+
+// Unlock re-establishes the session after Lock, using a password the shell just
+// released from the OS keystore after a successful biometric/PIN check. It logs
+// core back in (returning only once wallets are re-unlocked, so the shell knows
+// when to drop the overlay) and returns a fresh bootstrap URL carrying a
+// one-time session grant. The shell loads that URL in the WebView, which swaps
+// the grant for its session cookies. The password is never held in JS or passed
+// through the WebView.
+func (a *App) Unlock(pw string) (string, error) {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+
+	if a.srv == nil {
+		return "", errors.New("not running")
+	}
+
+	// gomobile hands pw over as an immutable Go string we cannot wipe; the []byte
+	// copy is the one secret-bearing buffer we control, so zero it before return.
+	pwb := []byte(pw)
+	defer func() {
+		for i := range pwb {
+			pwb[i] = 0
+		}
+	}()
+
+	grant, err := a.srv.Unlock(pwb)
+	if err != nil {
+		return "", err
+	}
+	return a.bootstrapURL() + "&g=" + grant, nil
+}
+
 // bootstrapURL is the loopback URL the WebView loads. It carries the capability
 // token as a query param; the appserver swaps it for a cookie on first load and
 // strips it from the URL. a.srv and a.capToken must be set.

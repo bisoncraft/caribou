@@ -131,6 +131,95 @@ func TestCapabilityMiddleware(t *testing.T) {
 	})
 }
 
+func TestGrantMiddleware(t *testing.T) {
+	const (
+		grant     = "abcdef0123456789"
+		authToken = "aatoken"
+		pwKey     = "deadbeef"
+	)
+
+	run := func(s *AppServer, req *http.Request) (*httptest.ResponseRecorder, bool) {
+		t.Helper()
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		rec := httptest.NewRecorder()
+		s.grantMiddleware(next).ServeHTTP(rec, req)
+		return rec, nextCalled
+	}
+
+	newServer := func() *AppServer {
+		return &AppServer{pendingGrants: map[string]*sessionGrant{
+			grant: {authToken: authToken, pwKey: pwKey},
+		}}
+	}
+
+	cookieVal := func(rec *httptest.ResponseRecorder, name string) string {
+		for _, c := range rec.Result().Cookies() {
+			if c.Name == name {
+				return c.Value
+			}
+		}
+		return ""
+	}
+
+	// No grant in the query: pass straight through (desktop no-op).
+	t.Run("passthrough without grant", func(t *testing.T) {
+		s := newServer()
+		_, called := run(s, httptest.NewRequest(http.MethodGet, "/?net=simnet", nil))
+		if !called {
+			t.Fatal("request without a grant was blocked")
+		}
+	})
+
+	// A valid grant swaps to session cookies, redirects with g stripped (other
+	// params preserved), does not serve the handler, and is consumed.
+	t.Run("valid grant sets cookies and is consumed", func(t *testing.T) {
+		s := newServer()
+		req := httptest.NewRequest(http.MethodGet, "/?k=tok&g="+grant+"&net=simnet", nil)
+		rec, called := run(s, req)
+		if called {
+			t.Fatal("served the handler instead of redirecting")
+		}
+		if rec.Code != http.StatusFound {
+			t.Fatalf("want 302, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/?k=tok&net=simnet" {
+			t.Fatalf("grant not stripped from redirect: %q", loc)
+		}
+		if got := cookieVal(rec, authCK); got != authToken {
+			t.Fatalf("dexauth cookie = %q, want %q", got, authToken)
+		}
+		if got := cookieVal(rec, pwKeyCK); got != pwKey {
+			t.Fatalf("sessionkey cookie = %q, want %q", got, pwKey)
+		}
+		if _, ok := s.pendingGrants[grant]; ok {
+			t.Fatal("grant was not consumed")
+		}
+	})
+
+	// A reused (already-consumed) grant sets no cookies and continues unauthed.
+	t.Run("reused grant sets no cookies", func(t *testing.T) {
+		s := &AppServer{pendingGrants: map[string]*sessionGrant{}}
+		req := httptest.NewRequest(http.MethodGet, "/?g="+grant, nil)
+		rec, called := run(s, req)
+		if called {
+			t.Fatal("served the handler instead of stripping")
+		}
+		if rec.Code != http.StatusFound {
+			t.Fatalf("want 302, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "/" {
+			t.Fatalf("grant not stripped: %q", loc)
+		}
+		if got := cookieVal(rec, authCK); got != "" {
+			t.Fatalf("unexpected dexauth cookie for unknown grant: %q", got)
+		}
+	})
+}
+
 func TestLoginThrottle(t *testing.T) {
 	s := &AppServer{}
 

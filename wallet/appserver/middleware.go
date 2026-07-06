@@ -32,7 +32,9 @@ func (s *AppServer) capabilityMiddleware(next http.Handler) http.Handler {
 		if c, err := r.Cookie(capCK); err == nil &&
 			subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.capToken)) == 1 {
 			if r.URL.Query().Has("k") {
-				stripTokenRedirect(w, r)
+				// Strip only the capability token; a session grant (?g=) may ride
+				// along on the same reattach URL and is consumed by grantMiddleware.
+				stripTokenRedirect(w, r, "k")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -53,7 +55,9 @@ func (s *AppServer) capabilityMiddleware(next http.Handler) http.Handler {
 				// HTTP-only, and a Secure cookie would never be sent over
 				// http://, breaking the WebView bootstrap.
 			})
-			stripTokenRedirect(w, r)
+			// Strip only "k"; any ?g= grant is preserved for grantMiddleware on
+			// the redirected request (which now carries the capability cookie).
+			stripTokenRedirect(w, r, "k")
 			return
 		}
 		// Anything else (port scanners, other local apps) gets nothing useful.
@@ -61,11 +65,44 @@ func (s *AppServer) capabilityMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// stripTokenRedirect 302s back to the same path with the capability token
-// removed from the query, so it does not linger in the document URL.
-func stripTokenRedirect(w http.ResponseWriter, r *http.Request) {
+// grantMiddleware swaps a one-time session grant (?g=<grant>, minted by Unlock)
+// for the dexauth and sessionkey cookies, then redirects with the token stripped
+// so it does not linger in the document URL. It runs after capabilityMiddleware,
+// so the capability gate still protects it, and before the request logger, so
+// the grant never reaches the log. A request without ?g= passes straight
+// through, making this a no-op on desktop (which never mints grants).
+func (s *AppServer) grantMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		grant := r.URL.Query().Get("g")
+		if grant == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Consume the grant. An unknown or already-used grant just gets stripped;
+		// the request continues unauthed and the SPA falls back to its login gate.
+		s.authMtx.Lock()
+		sg := s.pendingGrants[grant]
+		delete(s.pendingGrants, grant)
+		s.authMtx.Unlock()
+
+		if sg != nil {
+			if sg.ttlTimer != nil {
+				sg.ttlTimer.Stop()
+			}
+			setCookie(authCK, sg.authToken, w)
+			setCookie(pwKeyCK, sg.pwKey, w)
+		}
+		stripTokenRedirect(w, r, "g")
+	})
+}
+
+// stripTokenRedirect 302s back to the same path with the named query params
+// removed, so tokens do not linger in the document URL.
+func stripTokenRedirect(w http.ResponseWriter, r *http.Request, params ...string) {
 	q := r.URL.Query()
-	q.Del("k")
+	for _, p := range params {
+		q.Del(p)
+	}
 	dest := r.URL.Path
 	if enc := q.Encode(); enc != "" {
 		dest += "?" + enc
