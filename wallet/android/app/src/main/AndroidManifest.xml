@@ -12,7 +12,7 @@
 
         <activity
             android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|uiMode|locale|layoutDirection|fontScale|density|navigation"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|uiMode|locale|layoutDirection|fontScale|density|navigation|colorMode|fontWeightAdjustment"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

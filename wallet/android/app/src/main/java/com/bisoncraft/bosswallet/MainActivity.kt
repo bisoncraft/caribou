@@ -7,17 +7,25 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.InputType
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -45,15 +53,25 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private val app: App = Mobile.newApp()
 
-        // EVICTION_IDLE_MS is how long the app may sit backgrounded before the
-        // Go core is locked (app.lock(): wallets locked, keys zeroed, sessions
-        // torn down). This is the expensive key-eviction tier from
-        // ~/ocean/bossmobile/biometrics.md, deliberately rare: normal app
-        // switching stays well under it and never re-auths. Short here for
-        // testing; production is ~1 hour (and should be user-configurable).
-        // TODO(biometrics): raise to ~1h and make configurable; add the cheaper
-        // ~10 min UI-gate tier once BiometricPrompt lands (increment B).
-        private const val EVICTION_IDLE_MS = 30_000L
+        // Two idle tiers from ~/ocean/bossmobile/biometrics.md, measured as
+        // continuous time backgrounded. Normal app switching stays well under
+        // GATE and never re-auths.
+        //
+        // GATE_IDLE_MS: the cheap UI gate. Past it, a resume paints a native
+        // biometric overlay but the core stays logged in and keys stay resident,
+        // so clearing it is instant (no re-login). Only applies when the device
+        // has biometrics; without them the gate would need the password, which is
+        // eviction, so a non-biometric device escalates straight to eviction.
+        //
+        // EVICTION_IDLE_MS: the expensive key-eviction tier. Past it the core is
+        // locked (app.lock(): wallets locked, keys zeroed, sessions torn down),
+        // fired on a background timer so keys do not sit resident for the whole
+        // window, with a resume-time backstop. Rare by construction.
+        //
+        // TODO(biometrics): make both user-configurable (with a "require unlock
+        // immediately" option) instead of these fixed defaults.
+        private const val GATE_IDLE_MS = 10 * 60 * 1000L // 10 min
+        private const val EVICTION_IDLE_MS = 60 * 60 * 1000L // 1 hour
 
         // Private broadcast action for the key-eviction alarm (see evictReceiver).
         private const val ACTION_EVICT = "com.bisoncraft.bosswallet.ACTION_EVICT"
@@ -61,6 +79,19 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var alarmManager: AlarmManager
     private lateinit var biometricAuth: BiometricAuth
+
+    // lockOverlay is the opaque native view painted over the WebView during the
+    // UI gate, so the still-resident session's content is hidden behind a
+    // biometric check. gated tracks whether it is up.
+    private lateinit var lockOverlay: View
+    private var gated = false
+
+    // revealOnLoad keeps the lock overlay up across the eviction reload: eviction
+    // raises the overlay before the (blocking) lock, then reloads into the
+    // logged-out SPA; the overlay only clears once that page has finished loading
+    // (onWebViewPageFinished), so no authed frame flashes through in between. It
+    // does not clear the UI gate, which does no page load.
+    private var revealOnLoad = false
 
     // elapsedRealtime when the app was last backgrounded (0 = never / foreground).
     // elapsedRealtime keeps counting across device sleep, so onStart can measure
@@ -127,14 +158,20 @@ class MainActivity : AppCompatActivity() {
             settings.allowContentAccess = false
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
-            webViewClient = LoopbackWebViewClient()
+            webViewClient = LoopbackWebViewClient { onWebViewPageFinished() }
             // Expose the biometric opt-in bridge to the SPA as window.bossw. The
             // WebView only ever loads our own SPA over locked-down loopback, and
             // no bridge method returns a secret or accepts a password (the
             // password is captured in a native field), so this surface is safe.
             addJavascriptInterface(BiometricBridge(), "bossw")
         }
-        setContentView(webView)
+        // Host the WebView in a FrameLayout so the lock overlay can sit on top of
+        // it during the UI gate.
+        val root = FrameLayout(this)
+        root.addView(webView, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        lockOverlay = buildLockOverlay().apply { visibility = View.GONE }
+        root.addView(lockOverlay, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+        setContentView(root)
 
         // Start the core off the main thread; wallet boot can be slow. The
         // start thread can outlive this Activity (e.g. a destroy during boot),
@@ -192,43 +229,147 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // onStart fires when the app becomes visible again. Cancel any pending
-    // eviction, then decide from the idle time whether this stint crossed the
-    // eviction threshold. If so, ensure the core is locked (the background timer
-    // usually already did it; this also covers the timer being frozen by Doze)
-    // and reload the WebView into the SPA's unlock screen once the lock lands. A
-    // quick switch falls under the threshold and resumes untouched.
+    // onStart fires when the app becomes visible again. Cancel the pending
+    // eviction, then pick a tier from how long we were backgrounded:
+    //   - under GATE: quick switch, resume untouched.
+    //   - GATE..EVICTION with biometrics: the cheap UI gate - overlay + biometric,
+    //     core still logged in, keys resident, so success is instant.
+    //   - past EVICTION, or in the gate band with no biometrics: full eviction
+    //     (lock + SPA unlock, biometric-assisted if enrolled).
+    // If the overlay is already up (we backgrounded mid-gate), a sub-GATE return
+    // leaves it up rather than clearing it.
     override fun onStart() {
         super.onStart()
         alarmManager.cancel(evictPendingIntent)
 
         val idleMs = if (backgroundedAt == 0L) 0L else SystemClock.elapsedRealtime() - backgroundedAt
         backgroundedAt = 0L
-        if (idleMs < EVICTION_IDLE_MS) return
 
-        // Lock (idempotent), then reload only after it completes so the SPA does
-        // not briefly re-render the still-authed view before the session is torn
-        // down. app.lock() invalidated the session server-side, so the reloaded
-        // SPA sees itself as logged out and shows its unlock screen (its normal
-        // /api/login flow); the capability cookie is still valid, so the shell
-        // still loads.
+        when {
+            idleMs >= EVICTION_IDLE_MS -> { clearGate(); evictAndReauth() }
+            idleMs >= GATE_IDLE_MS ->
+                if (biometricAuth.canAuthenticate(this)) enterUiGate() else evictAndReauth()
+            else -> { /* under the gate: resume as-is (overlay, if any, stays) */ }
+        }
+    }
+
+    // enterUiGate paints the overlay over the still-authed WebView and asks for a
+    // biometric. On success the overlay clears and the resident session shows
+    // through - no reload, no re-login. If already gated (we backgrounded
+    // mid-gate and came back), it re-presents the prompt rather than stranding
+    // the user on the overlay's manual retry button.
+    private fun enterUiGate() {
+        gated = true
+        lockOverlay.visibility = View.VISIBLE
+        uiGateBiometric()
+    }
+
+    // uiGateBiometric runs the presence check for the UI gate (no CryptoObject:
+    // it decrypts nothing, since the session is still resident).
+    private fun uiGateBiometric() {
+        if (!gated) return
+        biometricAuth.authenticateSimple(this) { ok -> if (ok) clearGate() }
+    }
+
+    private fun clearGate() {
+        gated = false
+        if (::lockOverlay.isInitialized) lockOverlay.visibility = View.GONE
+    }
+
+    // evictAndReauth is the expensive tier: lock the core, then re-establish a
+    // session. If biometric unlock is enrolled (the expected opted-in path), try
+    // it first and skip the logged-out SPA entirely - on success we load straight
+    // into the authed grant URL. Only if biometrics are absent, cancelled, or fail
+    // do we reload into the SPA unlock screen (reloadToLoggedOutSpa), so the common
+    // path avoids a wasted full SPA boot and the login-screen flash behind the
+    // biometric dialog.
+    private fun evictAndReauth() {
+        // Raise the overlay before the (blocking) lock so the authed WebView is
+        // not left on screen while app.lock() runs. It stays up until the follow-up
+        // page (grant URL or logged-out SPA) lands (onWebViewPageFinished clears it).
+        if (::lockOverlay.isInitialized) lockOverlay.visibility = View.VISIBLE
         lockCoreAsync {
-            if (::webView.isInitialized) webView.reload()
-            // If biometric unlock is enrolled, offer it over the (now neutral)
-            // unlock screen: on success it releases the password and re-unlocks
-            // the core, skipping the manual password entry. On cancel/error the
-            // user is left on the SPA unlock screen to type the password.
-            if (biometricAuth.isEnrolled()) promptBiometricUnlock()
+            if (biometricAuth.isEnrolled()) {
+                promptBiometricUnlock(::reloadToLoggedOutSpa)
+            } else {
+                reloadToLoggedOutSpa()
+            }
+        }
+    }
+
+    // reloadToLoggedOutSpa reloads the WebView into the SPA unlock screen after an
+    // eviction. app.lock() invalidated the session server-side, so the reloaded SPA
+    // sees itself as logged out; the capability cookie is still valid, so the shell
+    // still loads. Safe to call from any thread. onWebViewPageFinished clears the
+    // overlay once it paints (revealOnLoad).
+    private fun reloadToLoggedOutSpa() = runOnUiThread {
+        if (isDestroyed) return@runOnUiThread
+        revealOnLoad = true
+        if (::webView.isInitialized) webView.reload()
+    }
+
+    // onWebViewPageFinished clears the eviction overlay once the post-lock reload
+    // has painted the logged-out SPA. Gated only by revealOnLoad so an unrelated
+    // page load (or the UI gate, which does no load) never drops the overlay.
+    private fun onWebViewPageFinished() {
+        if (revealOnLoad) {
+            revealOnLoad = false
+            clearGate()
+        }
+    }
+
+    // buildLockOverlay is the opaque UI-gate view: it hides content behind a
+    // "locked" panel with a retry button and a password escape hatch, in case the
+    // biometric prompt is dismissed or the sensor is unusable.
+    private fun buildLockOverlay(): View {
+        fun dp(v: Int) = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#111417"))
+            // Swallow taps so nothing behind the overlay is interactable.
+            isClickable = true
+
+            addView(TextView(this@MainActivity).apply {
+                text = "Boss Wallet"
+                setTextColor(Color.WHITE)
+                textSize = 24f
+                gravity = Gravity.CENTER
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Locked"
+                setTextColor(Color.parseColor("#8a9099"))
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(8), 0, dp(24))
+            })
+            addView(Button(this@MainActivity).apply {
+                text = "Unlock"
+                setOnClickListener { uiGateBiometric() }
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Use password instead"
+                setTextColor(Color.parseColor("#8a9099"))
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(16), 0, 0)
+                // Escape hatch: drop to full eviction so the user can re-auth with
+                // the app password if biometrics are unavailable.
+                setOnClickListener { clearGate(); evictAndReauth() }
+            })
         }
     }
 
     // promptBiometricUnlock shows the system biometric prompt and, on success,
     // uses the released password to re-unlock the core, then loads the returned
-    // grant URL so the WebView regains an authed session. Any failure leaves the
-    // user on the SPA unlock screen.
-    private fun promptBiometricUnlock() {
+    // grant URL so the WebView regains an authed session. If the prompt is
+    // cancelled, the biometric fails, or the unlock errors, it runs onFallback
+    // (which reloads the logged-out SPA so the user can enter the password).
+    private fun promptBiometricUnlock(onFallback: () -> Unit) {
         biometricAuth.unlock(this) { pw ->
-            if (pw == null) return@unlock // cancelled/failed; SPA unlock stands
+            if (pw == null) { onFallback(); return@unlock } // cancelled/failed
             thread(name = "bossw-unlock") {
                 val url = try {
                     app.unlock(String(pw))
@@ -259,7 +400,16 @@ class MainActivity : AppCompatActivity() {
                 } finally {
                     pw.fill(0)
                 }
-                if (url != null) loadAppUrl(url)
+                runOnUiThread {
+                    if (url != null) {
+                        // Clear the overlay once the authed grant page paints.
+                        revealOnLoad = true
+                        loadAppUrl(url)
+                    } else {
+                        // Unlock failed: fall back to the logged-out SPA.
+                        onFallback()
+                    }
+                }
             }
         }
     }
@@ -394,7 +544,9 @@ class MainActivity : AppCompatActivity() {
 // served entirely by the in-process appserver, so any attempt to navigate
 // elsewhere (an external link, a redirect, a file:// URL) is refused rather
 // than loaded.
-private class LoopbackWebViewClient : WebViewClient() {
+private class LoopbackWebViewClient(private val onLoaded: () -> Unit) : WebViewClient() {
+    override fun onPageFinished(view: WebView, url: String) = onLoaded()
+
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
         !isLoopback(request.url)
 

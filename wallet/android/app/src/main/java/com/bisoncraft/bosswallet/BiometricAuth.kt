@@ -126,6 +126,29 @@ class BiometricAuth(context: Context) {
             })
     }
 
+    // authenticateSimple runs a biometric check with no CryptoObject. It is for
+    // the UI gate, which only needs to confirm the user is present before
+    // revealing the already-resident session - it decrypts nothing and touches
+    // no keystore key. onResult(true) on success, onResult(false) on cancel/error.
+    // Must be called on the main thread.
+    fun authenticateSimple(activity: AppCompatActivity, onResult: (Boolean) -> Unit) {
+        val prompt = BiometricPrompt(
+            activity,
+            ContextCompat.getMainExecutor(activity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationError(code: Int, msg: CharSequence) = onResult(false)
+                override fun onAuthenticationFailed() {}
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) =
+                    onResult(true)
+            })
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Unlock Boss Wallet")
+            .setNegativeButtonText("Cancel")
+            .setAllowedAuthenticators(AUTHENTICATORS)
+            .build()
+        prompt.authenticate(info)
+    }
+
     private fun authenticate(
         activity: AppCompatActivity,
         cipher: Cipher,
