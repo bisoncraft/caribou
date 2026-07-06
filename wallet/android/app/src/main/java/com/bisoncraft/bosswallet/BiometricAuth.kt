@@ -1,6 +1,7 @@
 package com.bisoncraft.bosswallet
 
 import android.content.Context
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -23,8 +24,9 @@ import javax.crypto.spec.GCMParameterSpec
 // The key is marked setUserAuthenticationRequired, so the OS only lets a Cipher
 // bound to it run inside a BiometricPrompt CryptoObject that the user just
 // authenticated - the key material never leaves the TEE/StrongBox and the
-// plaintext password is only recoverable behind a live biometric. Only the
-// ciphertext and IV live in app prefs; both are useless without the Keystore key.
+// plaintext password is only recoverable behind a live biometric (or, on API
+// 30+, the device credential). Only the ciphertext and IV live in app prefs;
+// both are useless without the Keystore key.
 //
 // setInvalidatedByBiometricEnrollment means adding a new fingerprint/face
 // permanently invalidates the key: unlock then clears the stored secret and the
@@ -41,22 +43,31 @@ class BiometricAuth(context: Context) {
         private const val PREF_IV = "iv" // base64 GCM IV
         private const val GCM_TAG_BITS = 128
 
-        // BIOMETRIC_STRONG only (Class 3). Device-credential (PIN/pattern)
-        // fallback is intentionally omitted for now: mixing DEVICE_CREDENTIAL
-        // with a CryptoObject is only supported on API 30+, and minSdk is 21.
-        // The prompt's Cancel button drops the user back to the SPA password
-        // screen. TODO(biometrics): add device-credential fallback on API 30+.
-        private const val AUTHENTICATORS = BiometricManager.Authenticators.BIOMETRIC_STRONG
+        // Class 3 biometrics, plus the device credential (PIN/pattern/password)
+        // as a fallback on API 30+, where DEVICE_CREDENTIAL can be combined with
+        // a CryptoObject. Below 30 that combination is unsupported, so it is
+        // biometric-only and the prompt's Cancel button drops the user back to
+        // the SPA password screen.
+        private val hasDeviceCredentialFallback = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+
+        private fun authenticators(): Int =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            } else {
+                BiometricManager.Authenticators.BIOMETRIC_STRONG
+            }
     }
 
     // isEnrolled reports whether a password has been stored for biometric unlock.
     fun isEnrolled(): Boolean =
         prefs.contains(PREF_CT) && prefs.contains(PREF_IV) && keyExists()
 
-    // canAuthenticate reports whether the device has usable, enrolled biometric
-    // hardware, so the SPA can decide whether to offer the opt-in toggle.
+    // canAuthenticate reports whether the device can authenticate the user - an
+    // enrolled biometric, or a device credential on API 30+ - so the SPA can
+    // decide whether to offer the opt-in toggle.
     fun canAuthenticate(context: Context): Boolean =
-        BiometricManager.from(context).canAuthenticate(AUTHENTICATORS) ==
+        BiometricManager.from(context).canAuthenticate(authenticators()) ==
             BiometricManager.BIOMETRIC_SUCCESS
 
     // clear removes the stored secret and its Keystore key (opt-out, or after a
@@ -132,21 +143,9 @@ class BiometricAuth(context: Context) {
     // no keystore key. onResult(true) on success, onResult(false) on cancel/error.
     // Must be called on the main thread.
     fun authenticateSimple(activity: AppCompatActivity, onResult: (Boolean) -> Unit) {
-        val prompt = BiometricPrompt(
-            activity,
-            ContextCompat.getMainExecutor(activity),
-            object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationError(code: Int, msg: CharSequence) = onResult(false)
-                override fun onAuthenticationFailed() {}
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) =
-                    onResult(true)
-            })
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock Boss Wallet")
-            .setNegativeButtonText("Cancel")
-            .setAllowedAuthenticators(AUTHENTICATORS)
-            .build()
-        prompt.authenticate(info)
+        runPrompt(activity, "Unlock Boss Wallet", crypto = null,
+            onError = { onResult(false) },
+            onSuccess = { onResult(true) })
     }
 
     private fun authenticate(
@@ -156,26 +155,48 @@ class BiometricAuth(context: Context) {
         onError: () -> Unit,
         onSuccess: (Cipher) -> Unit,
     ) {
+        runPrompt(activity, title, BiometricPrompt.CryptoObject(cipher), onError) { result ->
+            val c = result.cryptoObject?.cipher
+            if (c == null) onError() else onSuccess(c)
+        }
+    }
+
+    // runPrompt builds and shows a BiometricPrompt wired to onError/onSuccess,
+    // sharing the executor and callback that the crypto path (authenticate) and
+    // the presence-only UI gate (authenticateSimple) both need. Pass a
+    // CryptoObject to bind a keystore Cipher, or null for the gate, which decrypts
+    // nothing. A single non-match is swallowed so the system prompt stays up for a
+    // retry.
+    private fun runPrompt(
+        activity: AppCompatActivity,
+        title: String,
+        crypto: BiometricPrompt.CryptoObject?,
+        onError: () -> Unit,
+        onSuccess: (BiometricPrompt.AuthenticationResult) -> Unit,
+    ) {
         val prompt = BiometricPrompt(
             activity,
             ContextCompat.getMainExecutor(activity),
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationError(code: Int, msg: CharSequence) = onError()
-
-                // A single non-match; the system prompt stays up for a retry.
                 override fun onAuthenticationFailed() {}
-
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    val c = result.cryptoObject?.cipher
-                    if (c == null) onError() else onSuccess(c)
-                }
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) =
+                    onSuccess(result)
             })
-        val info = BiometricPrompt.PromptInfo.Builder()
+        if (crypto != null) prompt.authenticate(promptInfo(title), crypto)
+        else prompt.authenticate(promptInfo(title))
+    }
+
+    // promptInfo builds the prompt configuration. When the device credential is
+    // an allowed authenticator it also serves as the fallback control, and a
+    // negative button must not be set (the two are mutually exclusive); otherwise
+    // a Cancel button is required.
+    private fun promptInfo(title: String): BiometricPrompt.PromptInfo {
+        val b = BiometricPrompt.PromptInfo.Builder()
             .setTitle(title)
-            .setNegativeButtonText("Cancel")
-            .setAllowedAuthenticators(AUTHENTICATORS)
-            .build()
-        prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
+            .setAllowedAuthenticators(authenticators())
+        if (!hasDeviceCredentialFallback) b.setNegativeButtonText("Cancel")
+        return b.build()
     }
 
     private fun initEncryptCipher(): Cipher =
@@ -199,17 +220,24 @@ class BiometricAuth(context: Context) {
     private fun getOrCreateKey(): SecretKey {
         if (keyExists()) return getKey()
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
-        gen.init(
-            KeyGenParameterSpec.Builder(
-                KEY_NAME,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setUserAuthenticationRequired(true)
-                .setInvalidatedByBiometricEnrollment(true)
-                .build(),
+        val spec = KeyGenParameterSpec.Builder(
+            KEY_NAME,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Authorize the key for a strong biometric OR the device credential,
+            // per operation (timeout 0), matching the prompt's authenticators so
+            // a PIN/pattern unlock can also decrypt.
+            spec.setUserAuthenticationParameters(
+                0,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+            )
+        }
+        gen.init(spec.build())
         return gen.generateKey()
     }
 
