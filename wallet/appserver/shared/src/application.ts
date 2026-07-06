@@ -254,7 +254,7 @@ export class Application {
   }
 
   wallet (assetID: number) {
-    return this.user.assets[assetID].wallet
+    return this.user.assets[assetID]?.wallet
   }
 
   registerBalanceUpdater (updater: () => void): string {
@@ -315,7 +315,15 @@ export class Application {
   notify (note: CoreNote) {
     // Handle type-specific updates.
     this.log('notes', 'notify', note)
-    if (this.user) this.updateUser(note)
+    if (this.user) {
+      try {
+        this.updateUser(note)
+      } catch (error) {
+        console.error('updateUser error:', error.message ? error.message : error)
+        console.log(note)
+        console.log(error.stack)
+      }
+    }
     // Inform the view.
     for (const f of Object.values(this.noteReceivers)) {
       try {
@@ -333,7 +341,12 @@ export class Application {
     switch (note.type) {
       case 'balance': {
         const n: BalanceNote = note as BalanceNote
-        user.assets[n.assetID].wallet.balance = n.balance
+        const asset = user.assets[n.assetID]
+        if (!asset) {
+          console.error(`balance note for unknown asset ${n.assetID}`)
+          break
+        }
+        asset.wallet.balance = n.balance
         Object.values(this.balanceUpdaters).forEach(u => u())
         break
       }
@@ -342,6 +355,10 @@ export class Application {
         const wallet = (note as WalletConfigNote)?.wallet
         if (!wallet) return
         const asset = user.assets[wallet.assetID]
+        if (!asset) {
+          console.error(`${note.type} note for unknown asset ${wallet.assetID}`)
+          break
+        }
         asset.wallet = wallet
         // Refresh every ticker that contains this asset as a variant OR as a
         // token's parent network — creating ETH unlocks every ERC-20 ticker.
@@ -386,7 +403,7 @@ export class Application {
           }
           case 'tipChange': {
             const note = n.payload as TipChangeNote
-            const w = user.assets[note.assetID].wallet
+            const w = user.assets[note.assetID]?.wallet
             if (w) w.syncStatus.blocks = note.tip
           }
         }
