@@ -22,7 +22,7 @@ afterEach(() => {
 describe('TopBar', () => {
   it('re-renders the total when a balance updater fires, and unregisters both updaters on unmount', () => {
     const { unmount } = render(<TopBar />)
-    expect(screen.getByText('$200.0 USD')).toBeInTheDocument()
+    expect(screen.getByText('$200.0 USD')).toBeDefined()
 
     // Simulate a balance note landing: bump available balance and fire the
     // updater the same way Application.updateUser() does.
@@ -30,7 +30,7 @@ describe('TopBar', () => {
     act(() => {
       Object.values(app.balanceUpdaters).forEach(u => u())
     })
-    expect(screen.getByText('$400.0 USD')).toBeInTheDocument()
+    expect(screen.getByText('$400.0 USD')).toBeDefined()
 
     expect(Object.keys(app.balanceUpdaters)).toHaveLength(1)
     expect(Object.keys(app.fiatRateUpdaters)).toHaveLength(1)

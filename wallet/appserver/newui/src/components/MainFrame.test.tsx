@@ -22,7 +22,7 @@ describe('MainFrame form-setter registration', () => {
     act(() => {
       app.setForm({ form: 'unknown-form', data: {} })
     })
-    expect(screen.getByText('Unknown form: unknown-form')).toBeInTheDocument()
+    expect(screen.getByText('Unknown form: unknown-form')).toBeDefined()
 
     unmount()
 

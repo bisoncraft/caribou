@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { postJSON } from '@bossw/shared/http'
 import app from '@bossw/shared/application'
-import { makeAsset, makeUser, makeWallet, resetApp } from '@bossw/shared/testUtils'
+import { makeAsset, makeUser, makeWallet, makeWalletDefinition, resetApp } from '@bossw/shared/testUtils'
 import Receive from './Receive'
 
 vi.mock('@bossw/shared/http', () => ({ postJSON: vi.fn() }))
@@ -21,11 +21,11 @@ function setUpUsdcTicker () {
     makeAsset(polyID, 'POLYGON', { name: 'Polygon', wallet: makeWallet(polyID) }),
     makeAsset(usdcEthID, 'USDC', {
       wallet: makeWallet(usdcEthID),
-      token: { networkID: ethID, name: 'Ethereum', unitInfo: makeAsset(ethID, 'ETH').unitInfo, contractAddress: '0x1', supportedAssetVersions: [0] }
+      token: { networkID: ethID, name: 'Ethereum', unitInfo: makeAsset(ethID, 'ETH').unitInfo, contractAddress: '0x1', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
     }),
     makeAsset(usdcPolyID, 'USDC', {
       wallet: makeWallet(usdcPolyID),
-      token: { networkID: polyID, name: 'Polygon', unitInfo: makeAsset(polyID, 'POLYGON').unitInfo, contractAddress: '0x2', supportedAssetVersions: [0] }
+      token: { networkID: polyID, name: 'Polygon', unitInfo: makeAsset(polyID, 'POLYGON').unitInfo, contractAddress: '0x2', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
     })
   ])
   app.prepareTickerAssets()
@@ -68,7 +68,7 @@ describe('Receive stale-response race', () => {
     // Request A (Ethereum) finally resolves after the fact — must be a no-op.
     resolveEth!({ ok: true, address: 'eth-address' })
     await new Promise(resolve => setTimeout(resolve, 0))
-    expect(screen.getByText('poly-address')).toBeInTheDocument()
-    expect(screen.queryByText('eth-address')).not.toBeInTheDocument()
+    expect(screen.getByText('poly-address')).toBeDefined()
+    expect(screen.queryByText('eth-address')).toBeNull()
   })
 })

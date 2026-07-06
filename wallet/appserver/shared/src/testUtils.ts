@@ -2,7 +2,7 @@
 // by application.test.ts and the newui/mobile component test suites. It is
 // deliberately not re-exported from index.ts so it never ends up in a
 // production bundle.
-import type { SupportedAsset, User, UnitInfo, WalletState, SyncStatus } from './registry'
+import type { SupportedAsset, User, UnitInfo, WalletState, SyncStatus, WalletDefinition } from './registry'
 import app from './application'
 
 export function makeUnitInfo (unit: string, conversionFactor = 1e8): UnitInfo {
@@ -11,6 +11,20 @@ export function makeUnitInfo (unit: string, conversionFactor = 1e8): UnitInfo {
     conventional: { unit, conversionFactor },
     denominations: [{ unit, conversionFactor }],
     feeRateDenom: unit
+  }
+}
+
+export function makeWalletDefinition (overrides: Partial<WalletDefinition> = {}): WalletDefinition {
+  return {
+    seeded: true,
+    type: '',
+    tab: '',
+    description: '',
+    configpath: '',
+    configopts: [],
+    noauth: false,
+    guidelink: '',
+    ...overrides
   }
 }
 

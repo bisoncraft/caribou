@@ -45,7 +45,7 @@ describe('Settings > SendSettings', () => {
 
     fireEvent.click(checkbox)
     await waitFor(() => expect(checkbox.checked).toBe(false))
-    expect(await screen.findByText('save failed')).toBeInTheDocument()
+    expect(await screen.findByText('save failed')).toBeDefined()
     expect(app.appSettings.sendRequiresPassword).toBe(false)
   })
 })
