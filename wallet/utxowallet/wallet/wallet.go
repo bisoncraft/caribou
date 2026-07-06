@@ -761,11 +761,11 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 		}
 		if applyWatchFilter {
 			tip := w.Manager.SyncedTo().Height
-			hot, err := w.hotInternalAddrs(dbtx, tip)
+			hot, err := w.hotAddrs(dbtx, tip)
 			if err != nil {
 				return err
 			}
-			addrs, unspent, err = w.filterColdInternalAddrs(dbtx, hot, addrs, unspent)
+			addrs, unspent, err = w.filterColdAddrs(dbtx, hot, addrs, unspent)
 			if err != nil {
 				return err
 			}

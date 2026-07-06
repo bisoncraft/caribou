@@ -29,10 +29,10 @@ func TestWatchPolicyReap(t *testing.T) {
 	tx1, tx2 := chainhash.Hash{1}, chainhash.Hash{2}
 
 	// a1: mined at 100. a2: unmined. a3: mined at 100, then another unmined.
-	p.note(a1, tx1, 100)
-	p.note(a2, tx2, 0)
-	p.note(a3, tx1, 100)
-	p.note(a3, tx2, 0)
+	p.note(a1, true, tx1, 100)
+	p.note(a2, true, tx2, 0)
+	p.note(a3, true, tx1, 100)
+	p.note(a3, true, tx2, 0)
 
 	// One block after mining: nothing is deep enough, unmined never reaps.
 	if got := p.reap(100); len(got) != 0 {
@@ -52,20 +52,35 @@ func TestWatchPolicyReap(t *testing.T) {
 	}
 
 	// a3's unmined tx confirms; both remaining reap at depth.
-	p.note(a3, tx2, 200)
-	p.note(a2, tx2, 200)
+	p.note(a3, true, tx2, 200)
+	p.note(a2, true, tx2, 200)
 	tip = int32(200 + watchFinalityDepth - 1)
 	if got := p.reap(tip); len(got) != 2 {
 		t.Fatalf("reap(%d) = %v, want a2+a3", tip, got)
 	}
 
 	// Re-noting after a reap re-tracks (spend-from-cold re-watch path).
-	p.note(a1, tx2, 0)
+	p.note(a1, true, tx2, 0)
 	if got := p.reap(tip + 100); len(got) != 0 {
 		t.Fatalf("unmined re-track reaped: %v", got)
 	}
-	p.note(a1, tx2, 300)
+	p.note(a1, true, tx2, 300)
 	if got := p.reap(300 + watchFinalityDepth - 1); len(got) != 1 {
 		t.Fatalf("re-tracked a1 did not reap")
+	}
+}
+
+func TestWatchPolicyReapExternal(t *testing.T) {
+	var p watchPolicy
+	ext := tAddr(t, 4)
+	tx := chainhash.Hash{3}
+
+	// External addresses reap at externalQuietDepth, not watchFinalityDepth.
+	p.note(ext, false, tx, 500)
+	if got := p.reap(500 + watchFinalityDepth); len(got) != 0 {
+		t.Fatalf("external reaped at internal depth: %v", got)
+	}
+	if got := p.reap(500 + externalQuietDepth - 1); len(got) != 1 {
+		t.Fatalf("external did not reap at externalQuietDepth")
 	}
 }

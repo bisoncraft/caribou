@@ -58,6 +58,40 @@ Backends without `AddressWatcher` (neutrino today) keep the add-only
 behaviour: the tracker still runs but its unwatch calls no-op, and the sync
 filter only applies when the capability is present.
 
+### Increment 2 design: cold-external demotion + metered sweep
+
+The remaining unbounded set: every used external (deposit) address stays
+subscribed forever. Unlike internals, a third party can pay a cold external
+at any time (saved withdrawal addresses etc.), so demotion trades instant
+detection for sweep-interval latency — acceptable for a wallet, per §10's
+latency budget.
+
+Policy (extends the increment-1 tracker to the external branch):
+
+- **Hot external**: unused (the lookahead window, bounded by the gap limit),
+  or used with activity within `externalQuietDepth` (144 blocks ≈ one day) —
+  which always covers the current/next deposit address.
+- **Cold external**: used and quiet ≥ 144 blocks → unwatched by the
+  block-connected reaper and excluded from the sync watch set (same
+  wtxmgr-reconstruction as internals, with the deeper window; the same
+  "wtxmgr must be current" guard applies).
+- **Metered sweep (2b)**: every `sweepInterval` blocks (144) and once after
+  each sync, a background pass batches `get_history` over the cold set. A
+  hit re-subscribes the address (re-promotion) and ingests the new entries
+  height-bucketed through the rescan emission path (`emitFilteredBlock`,
+  dependency-ordered, floored at the last rescan start) — not the per-address
+  live path, so cross-address chains ingest in order. Ingestion feeds the
+  tracker, so a swept-hot address demotes again naturally. Enumerating the
+  cold set walks the external branch (used minus hot); histories the wallet
+  already ingested re-emit harmlessly (InsertTx is idempotent).
+
+Sequencing note: 2a (demotion) must not ship in a release without 2b (the
+sweep) — demotion alone loses cold-address receive detection entirely. They
+land on the same branch in either order for development.
+
+The neutrino mechanics (Phase 2 of the original plan) and reconnect
+persistence hardening remain untouched by this increment.
+
 ## 1. Background: how watching works today
 
 Both the electrum and neutrino backends implement the same

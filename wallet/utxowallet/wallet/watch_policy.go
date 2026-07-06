@@ -27,9 +27,20 @@ import (
 // in wallet activity; see docs/address-watching-plan.md.
 const watchFinalityDepth = 6
 
-// internalWatch is the tracker state for one watched internal address.
-type internalWatch struct {
+// externalQuietDepth is the quiet depth after which a used external address
+// with no unmined activity is demoted from its persistent watch: a third
+// party can pay a cold external at any time, so demotion trades instant
+// detection for sweep-interval latency (docs/address-watching-plan.md,
+// increment 2). Unused externals — the gap-limit lookahead — are never
+// tracked and stay watched. ~One day of blocks.
+const externalQuietDepth = 144
+
+// addrWatch is the tracker state for one watched address.
+type addrWatch struct {
 	addr btcutil.Address
+	// internal marks the address's branch; it selects the quiet depth at
+	// which the watch is reaped (watchFinalityDepth vs externalQuietDepth).
+	internal bool
 	// lastMined is the highest block height at which a relevant tx touched
 	// this address.
 	lastMined int32
@@ -38,30 +49,33 @@ type internalWatch struct {
 	unmined map[chainhash.Hash]struct{}
 }
 
-// watchPolicy tracks watched internal-branch addresses so their backend
-// watches can be dropped at finality (docs/address-watching-plan.md,
-// increment 1). State is in-memory only: it is rebuilt on every sync from
-// wtxmgr (see hotInternalAddrs), so restarts and reconnects need no
-// persistence. External addresses are not tracked — their inbound timing is
-// third-party-controlled, so they keep the historical persistent watch.
+// watchPolicy tracks watched addresses with activity so their backend
+// watches can be dropped once quiet: internal (change) addresses at
+// watchFinalityDepth — every event on them is wallet-originated — and used
+// external addresses at the deeper externalQuietDepth
+// (docs/address-watching-plan.md, increments 1 and 2). State is in-memory
+// only: it is rebuilt on every sync from wtxmgr (see hotAddrs), so restarts
+// and reconnects need no persistence. Unused externals (the lookahead) are
+// never tracked and keep their persistent watch.
 type watchPolicy struct {
 	mtx     sync.Mutex
-	tracked map[string]*internalWatch
+	tracked map[string]*addrWatch
 }
 
-// note records relevant-tx activity on an internal address. Mined activity
+// note records relevant-tx activity on an address. Mined activity
 // (height > 0) clears the tx from the unmined set and advances lastMined;
 // unmined activity parks the hash until it is seen mined.
-func (p *watchPolicy) note(addr btcutil.Address, txHash chainhash.Hash, height int32) {
+func (p *watchPolicy) note(addr btcutil.Address, internal bool, txHash chainhash.Hash, height int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	if p.tracked == nil {
-		p.tracked = make(map[string]*internalWatch)
+		p.tracked = make(map[string]*addrWatch)
 	}
 	key := addr.String()
 	iw, ok := p.tracked[key]
 	if !ok {
-		iw = &internalWatch{addr: addr, unmined: make(map[chainhash.Hash]struct{})}
+		iw = &addrWatch{addr: addr, internal: internal,
+			unmined: make(map[chainhash.Hash]struct{})}
 		p.tracked[key] = iw
 	}
 	if height > 0 {
@@ -72,13 +86,13 @@ func (p *watchPolicy) note(addr btcutil.Address, txHash chainhash.Hash, height i
 	} else {
 		iw.unmined[txHash] = struct{}{}
 	}
-	log.Debugf("Watch policy: noted internal %s tx %s at height %d "+
-		"(unmined touches: %d)", addr, txHash, height, len(iw.unmined))
+	log.Debugf("Watch policy: noted %s (internal=%v) tx %s at height %d "+
+		"(unmined touches: %d)", addr, internal, txHash, height, len(iw.unmined))
 }
 
 // reap returns and forgets the tracked addresses whose observable window has
 // closed at the given tip: no unmined activity and the last mined activity at
-// least watchFinalityDepth deep.
+// least the branch's quiet depth deep.
 func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
@@ -87,7 +101,11 @@ func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 		if len(iw.unmined) > 0 || iw.lastMined <= 0 {
 			continue
 		}
-		if tip-iw.lastMined+1 < watchFinalityDepth {
+		quietDepth := int32(watchFinalityDepth)
+		if !iw.internal {
+			quietDepth = externalQuietDepth
+		}
+		if tip-iw.lastMined+1 < quietDepth {
 			continue
 		}
 		done = append(done, iw.addr)
@@ -96,12 +114,12 @@ func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 	return done
 }
 
-// noteInternalActivity feeds the watch policy from a just-ingested relevant
-// tx: every internal-branch address the tx credits or debits is noted, with
-// debit addresses resolved through the previous transactions' outputs (all of
+// noteActivity feeds the watch policy from a just-ingested relevant tx:
+// every wallet address the tx credits or debits is noted, with debit
+// addresses resolved through the previous transactions' outputs (all of
 // which are wallet transactions, or the input would not be a debit). Called
 // from addRelevantTx inside its database transaction.
-func (w *Wallet) noteInternalActivity(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxRecord,
+func (w *Wallet) noteActivity(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxRecord,
 	block *wtxmgr.BlockMeta) {
 
 	addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
@@ -119,10 +137,10 @@ func (w *Wallet) noteInternalActivity(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxR
 		}
 		for _, addr := range addrs {
 			ma, err := w.Manager.Address(addrmgrNs, addr)
-			if err != nil || !ma.Internal() {
+			if err != nil {
 				continue
 			}
-			w.watchPol.note(addr, rec.Hash, height)
+			w.watchPol.note(addr, ma.Internal(), rec.Hash, height)
 		}
 	}
 
@@ -140,10 +158,10 @@ func (w *Wallet) noteInternalActivity(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxR
 	}
 }
 
-// reapInternalWatches drops the backend watches of tracked internal addresses
-// whose observable window has closed at tip. A no-op for backends without the
+// reapWatches drops the backend watches of tracked addresses whose
+// observable window has closed at tip. A no-op for backends without the
 // AddressWatcher capability.
-func (w *Wallet) reapInternalWatches(chainClient chain.Backend, tip int32) {
+func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 	watcher, ok := chainClient.(chain.AddressWatcher)
 	if !ok {
 		return
@@ -153,20 +171,21 @@ func (w *Wallet) reapInternalWatches(chainClient chain.Backend, tip int32) {
 		return
 	}
 	if err := watcher.Unwatch(done); err != nil {
-		log.Errorf("Failed to unwatch %d finalized internal addresses: %v",
+		log.Errorf("Failed to unwatch %d quiet addresses: %v",
 			len(done), err)
 		return
 	}
-	log.Debugf("Unwatched %d finalized internal addresses", len(done))
+	log.Debugf("Unwatched %d quiet addresses", len(done))
 }
 
-// hotInternalAddrs rebuilds the set of internal addresses that are still
-// observationally open — touched by an unmined tx or by a tx mined within
-// watchFinalityDepth of the tip — and seeds the watch policy with them. The
-// two RangeTransactions passes cover unmined txs and the recent window;
-// everything older is final by definition, so no persistent tiering state is
-// needed.
-func (w *Wallet) hotInternalAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]struct{}, error) {
+// hotAddrs rebuilds the set of addresses that are still observationally
+// open — touched by an unmined tx, or by a tx mined within the branch's
+// quiet depth of the tip (watchFinalityDepth for internal,
+// externalQuietDepth for external) — and seeds the watch policy with them.
+// The RangeTransactions passes cover unmined txs and the deeper of the two
+// windows; everything older is quiet by definition, so no persistent tiering
+// state is needed.
+func (w *Wallet) hotAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]struct{}, error) {
 	addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
 	txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
 
@@ -179,11 +198,18 @@ func (w *Wallet) hotInternalAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]s
 		}
 		for _, addr := range addrs {
 			ma, err := w.Manager.Address(addrmgrNs, addr)
-			if err != nil || !ma.Internal() {
+			if err != nil {
 				continue
 			}
+			quietDepth := int32(externalQuietDepth)
+			if ma.Internal() {
+				quietDepth = watchFinalityDepth
+			}
+			if height > 0 && tip-height+1 >= quietDepth {
+				continue // quiet for this branch
+			}
 			hot[addr.String()] = struct{}{}
-			w.watchPol.note(addr, txHash, height)
+			w.watchPol.note(addr, ma.Internal(), txHash, height)
 		}
 	}
 
@@ -218,7 +244,7 @@ func (w *Wallet) hotInternalAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]s
 	if err := w.TxStore.RangeTransactions(txmgrNs, -1, -1, rangeF); err != nil {
 		return nil, err
 	}
-	begin := tip - watchFinalityDepth + 1
+	begin := tip - externalQuietDepth + 1
 	if begin < 0 {
 		begin = 0
 	}
@@ -228,21 +254,26 @@ func (w *Wallet) hotInternalAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]s
 	return hot, nil
 }
 
-// filterColdInternalAddrs partitions the sync watch set: internal-branch
-// addresses outside the hot set (no unmined activity, nothing mined within
-// watchFinalityDepth) are dropped from both the address list and the watched-
-// outpoint credits, so a reconnect re-establishes only the live window.
-// External addresses always pass through. hot is the set from
-// hotInternalAddrs.
-func (w *Wallet) filterColdInternalAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
+// filterColdAddrs partitions the sync watch set: addresses outside the hot
+// set (no unmined activity, nothing mined within their branch's quiet depth)
+// are dropped from both the address list and the watched-outpoint credits,
+// so a reconnect re-establishes only the live window. Unused external
+// addresses — the gap-limit lookahead, whose first payment can arrive at any
+// time — always pass through; a used external goes cold like an internal
+// does, just at the deeper depth, and the metered sweep is its safety net.
+// hot is the set from hotAddrs.
+func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
 	addrs []btcutil.Address, unspent []wtxmgr.Credit) ([]btcutil.Address, []wtxmgr.Credit, error) {
 
 	addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
 
-	isColdInternal := func(addr btcutil.Address) bool {
+	isCold := func(addr btcutil.Address) bool {
 		ma, err := w.Manager.Address(addrmgrNs, addr)
-		if err != nil || !ma.Internal() {
+		if err != nil {
 			return false
+		}
+		if !ma.Internal() && !ma.Used(addrmgrNs) {
+			return false // lookahead: always watched
 		}
 		_, isHot := hot[addr.String()]
 		return !isHot
@@ -250,19 +281,19 @@ func (w *Wallet) filterColdInternalAddrs(dbtx walletdb.ReadTx, hot map[string]st
 
 	keptAddrs := addrs[:0]
 	for _, addr := range addrs {
-		if !isColdInternal(addr) {
+		if !isCold(addr) {
 			keptAddrs = append(keptAddrs, addr)
 		}
 	}
 	keptUnspent := unspent[:0]
 	for _, credit := range unspent {
 		_, cAddrs, _, err := txscript.ExtractPkScriptAddrs(credit.PkScript, w.btcParams)
-		if err != nil || len(cAddrs) != 1 || !isColdInternal(cAddrs[0]) {
+		if err != nil || len(cAddrs) != 1 || !isCold(cAddrs[0]) {
 			keptUnspent = append(keptUnspent, credit)
 		}
 	}
 	if dropped := len(addrs) - len(keptAddrs); dropped > 0 {
-		log.Infof("Watch policy: excluding %d finalized internal addresses "+
+		log.Infof("Watch policy: excluding %d quiet addresses "+
 			"(%d outpoints) from the watch set", dropped,
 			len(unspent)-len(keptUnspent))
 	}

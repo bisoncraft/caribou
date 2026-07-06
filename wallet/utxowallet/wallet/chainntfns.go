@@ -163,7 +163,7 @@ func (w *Wallet) handleChainNotifications() {
 				if err == nil {
 					// Outside the db tx: unwatching does a
 					// network round-trip per backend call.
-					w.reapInternalWatches(chainClient, n.Height)
+					w.reapWatches(chainClient, n.Height)
 				}
 			case chain.BlockDisconnected:
 				err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
@@ -427,7 +427,7 @@ func (w *Wallet) addRelevantTx(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxRecord,
 
 	// Feed the watch policy so internal addresses this tx touches can be
 	// unwatched once their activity finalizes.
-	w.noteInternalActivity(dbtx, rec, block)
+	w.noteActivity(dbtx, rec, block)
 
 	return nil
 }
