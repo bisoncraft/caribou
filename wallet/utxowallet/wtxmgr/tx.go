@@ -348,6 +348,72 @@ func (s *Store) updateMinedBalance(ns walletdb.ReadWriteBucket, rec *TxRecord,
 		}
 
 		newMinedBalance += amount
+
+		// A spender of this output may already have confirmed — a
+		// child mined in the same block and processed first (its
+		// updateMinedBalance found no mined credit to debit, and
+		// deleteUnminedTx preserved its unmined-input record for this
+		// moment). Transfer the preserved spend into a proper mined
+		// debit now, so the output isn't left listed unspent.
+		opKey := canonicalOutPoint(&cred.outPoint.Hash, index)
+		for _, spenderHash := range fetchUnminedInputSpendTxHashes(ns, opKey) {
+			if existsRawUnmined(ns, spenderHash[:]) != nil {
+				// Still unmined; the query-side unmined-input
+				// checks keep the output out of UnspentOutputs.
+				continue
+			}
+			sk, sv := latestTxRecord(ns, &spenderHash)
+			if sv == nil {
+				continue
+			}
+			// Chain must be set before deserialization (bisonwire).
+			spenderRec := TxRecord{Tx: bisonwire.Tx{Chain: rec.Tx.Chain}}
+			if err := readRawTxRecord(&spenderHash, sv, &spenderRec); err != nil {
+				return err
+			}
+			var spenderBlock Block
+			if err := readRawTxRecordBlock(sk, &spenderBlock); err != nil {
+				return err
+			}
+			inputIndex := ^uint32(0)
+			for i, txIn := range spenderRec.Tx.TxIn {
+				if txIn.PreviousOutPoint == cred.outPoint {
+					inputIndex = uint32(i)
+					break
+				}
+			}
+			if inputIndex == ^uint32(0) {
+				continue
+			}
+			credKey := keyCredit(&rec.Hash, index, &block.Block)
+			spender := indexedIncidence{
+				incidence: incidence{
+					txHash: spenderHash,
+					block:  spenderBlock,
+				},
+				index: inputIndex,
+			}
+			amt, err := spendCredit(ns, credKey, &spender)
+			if err != nil {
+				return err
+			}
+			err = putDebit(ns, &spenderHash, inputIndex, amt,
+				&spenderBlock, credKey)
+			if err != nil {
+				return err
+			}
+			unspentKey, _ := existsUnspent(ns, &cred.outPoint)
+			if err := deleteRawUnspent(ns, unspentKey); err != nil {
+				return err
+			}
+			if err := deleteRawUnminedInput(ns, opKey, spenderHash); err != nil {
+				return err
+			}
+			newMinedBalance -= amt
+			log.Debugf("Recorded deferred debit: %v:%d spent by "+
+				"already-mined %v", rec.Hash, index, spenderHash)
+			break
+		}
 	}
 	if it.err != nil {
 		return it.err
@@ -368,6 +434,19 @@ func (s *Store) deleteUnminedTx(ns walletdb.ReadWriteBucket, rec *TxRecord) erro
 	for _, input := range rec.Tx.TxIn {
 		prevOut := input.PreviousOutPoint
 		k := canonicalOutPoint(&prevOut.Hash, prevOut.Index)
+		// If the spent output's own transaction is still unmined, the
+		// spend could not be recorded as a mined debit yet
+		// (updateMinedBalance skips inputs with no mined credit), so
+		// this record is the only marker that the output is spent.
+		// Keep it: when the funding transaction confirms, its
+		// credit-move consults these records to write the debit
+		// retroactively. Without this, a child confirming before its
+		// parent within the same block leaves the parent's output
+		// listed unspent — a stale credit the wallet later
+		// double-spends.
+		if existsRawUnminedCredit(ns, k) != nil {
+			continue
+		}
 		if err := deleteRawUnminedInput(ns, k, rec.Hash); err != nil {
 			return err
 		}
