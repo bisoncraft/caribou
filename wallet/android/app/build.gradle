@@ -84,4 +84,6 @@ dependencies {
     // The gomobile-bound library (build it with ./bind.sh).
     implementation files('libs/mobile.aar')
     implementation 'androidx.appcompat:appcompat:1.7.0'
+    // BiometricPrompt + CryptoObject for the keystore-backed biometric unlock.
+    implementation 'androidx.biometric:biometric:1.1.0'
 }

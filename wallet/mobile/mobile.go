@@ -197,6 +197,19 @@ func (a *App) Start(dataDir, net string) (string, error) {
 	return a.bootstrapURL(), nil
 }
 
+// secretBytes copies pw into a mutable buffer and returns it alongside a wipe
+// func that zeros the buffer. gomobile hands pw over as an immutable Go string
+// we cannot wipe, so this []byte copy is the one secret-bearing buffer we
+// control; callers defer wipe so the password does not linger after use.
+func secretBytes(pw string) (pwb []byte, wipe func()) {
+	pwb = []byte(pw)
+	return pwb, func() {
+		for i := range pwb {
+			pwb[i] = 0
+		}
+	}
+}
+
 // Lock locks wallets and tears down the session, delegating to the appserver's
 // Lock (Core.Logout + deauth). This is the expensive key-eviction path: the
 // native shell calls it only on the escalation tier (an explicit "lock now" or a
@@ -232,20 +245,31 @@ func (a *App) Unlock(pw string) (string, error) {
 		return "", errors.New("not running")
 	}
 
-	// gomobile hands pw over as an immutable Go string we cannot wipe; the []byte
-	// copy is the one secret-bearing buffer we control, so zero it before return.
-	pwb := []byte(pw)
-	defer func() {
-		for i := range pwb {
-			pwb[i] = 0
-		}
-	}()
+	pwb, wipe := secretBytes(pw)
+	defer wipe()
 
 	grant, err := a.srv.Unlock(pwb)
 	if err != nil {
 		return "", err
 	}
 	return a.bootstrapURL() + "&g=" + grant, nil
+}
+
+// VerifyPassword reports whether pw is the correct app password, without
+// changing session state. The native shell calls it during biometric opt-in to
+// confirm the password before storing it in the Android Keystore. A nil error
+// means the password is correct.
+func (a *App) VerifyPassword(pw string) error {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+
+	if a.core == nil {
+		return errors.New("not running")
+	}
+
+	pwb, wipe := secretBytes(pw)
+	defer wipe()
+	return a.core.VerifyPassword(pwb)
 }
 
 // bootstrapURL is the loopback URL the WebView loads. It carries the capability

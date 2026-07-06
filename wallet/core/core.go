@@ -695,6 +695,20 @@ func (c *Core) encryptionKey(pw []byte) (encrypt.Crypter, error) {
 	return innerCrypter, nil
 }
 
+// VerifyPassword reports whether pw is the correct application password. It
+// derives the encryption key and discards it, touching no session state, so it
+// is safe to call while logged in (e.g. the mobile biometric opt-in confirms
+// the password before storing it in the OS keystore). A nil return means the
+// password is correct.
+func (c *Core) VerifyPassword(pw []byte) error {
+	crypter, err := c.encryptionKey(pw)
+	if err != nil {
+		return err
+	}
+	crypter.Close()
+	return nil
+}
+
 func (c *Core) storeDepositAddress(wdbID []byte, addr string) error {
 	// Store the new address in the DB.
 	dbWallet, err := c.db.Wallet(wdbID)

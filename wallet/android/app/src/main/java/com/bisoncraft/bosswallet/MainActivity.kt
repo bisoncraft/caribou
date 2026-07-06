@@ -11,11 +11,15 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.text.InputType
 import android.view.WindowManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.EditText
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import kotlin.concurrent.thread
@@ -56,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var alarmManager: AlarmManager
+    private lateinit var biometricAuth: BiometricAuth
 
     // elapsedRealtime when the app was last backgrounded (0 = never / foreground).
     // elapsedRealtime keeps counting across device sleep, so onStart can measure
@@ -97,6 +102,8 @@ class MainActivity : AppCompatActivity() {
             WindowManager.LayoutParams.FLAG_SECURE,
         )
 
+        biometricAuth = BiometricAuth(this)
+
         // Key-eviction alarm plumbing: register the private, non-exported receiver
         // the backgrounded eviction alarm targets (see onStop/scheduleEviction).
         // RECEIVER_NOT_EXPORTED keeps other apps on the device from reaching it.
@@ -121,6 +128,11 @@ class MainActivity : AppCompatActivity() {
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
             webViewClient = LoopbackWebViewClient()
+            // Expose the biometric opt-in bridge to the SPA as window.bossw. The
+            // WebView only ever loads our own SPA over locked-down loopback, and
+            // no bridge method returns a secret or accepts a password (the
+            // password is captured in a native field), so this surface is safe.
+            addJavascriptInterface(BiometricBridge(), "bossw")
         }
         setContentView(webView)
 
@@ -135,18 +147,24 @@ class MainActivity : AppCompatActivity() {
                 // (default mainnet; override with -PwalletNet=simnet). filesDir
                 // is app-private storage.
                 val url = app.start(filesDir.absolutePath, BuildConfig.WALLET_NET)
-                // Hand the build-time network to the SPA (query param) so it can
-                // surface a non-mainnet indicator; a wallet must never be
-                // mistaken for one running on a different network.
-                val sep = if (url.contains('?')) '&' else '?'
-                val webUrl = "$url${sep}net=${BuildConfig.WALLET_NET}"
-                runOnUiThread { if (!isDestroyed) webView.loadUrl(webUrl) }
+                loadAppUrl(url)
             } catch (e: Exception) {
                 runOnUiThread {
                     Toast.makeText(appCtx, "Failed to start: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
+    }
+
+    // loadAppUrl loads a loopback app URL in the WebView, always appending the
+    // build-time network as a query param so the SPA can surface a non-mainnet
+    // indicator; a wallet must never be mistaken for one on a different network.
+    // Both the boot URL and the post-unlock grant URL go through here so neither
+    // path can drop the indicator. Safe to call from any thread.
+    private fun loadAppUrl(url: String) {
+        val sep = if (url.contains('?')) '&' else '?'
+        val webUrl = "$url${sep}net=${BuildConfig.WALLET_NET}"
+        runOnUiThread { if (!isDestroyed && ::webView.isInitialized) webView.loadUrl(webUrl) }
     }
 
     // onStop fires when the app is no longer visible (backgrounded). Stamp the
@@ -191,12 +209,141 @@ class MainActivity : AppCompatActivity() {
         // Lock (idempotent), then reload only after it completes so the SPA does
         // not briefly re-render the still-authed view before the session is torn
         // down. app.lock() invalidated the session server-side, so the reloaded
-        // SPA sees itself as logged out and prompts for the password (its normal
+        // SPA sees itself as logged out and shows its unlock screen (its normal
         // /api/login flow); the capability cookie is still valid, so the shell
-        // still loads. Once biometric unlock lands (increment B), a BiometricPrompt
-        // gates here instead of the SPA showing its password field.
+        // still loads.
         lockCoreAsync {
             if (::webView.isInitialized) webView.reload()
+            // If biometric unlock is enrolled, offer it over the (now neutral)
+            // unlock screen: on success it releases the password and re-unlocks
+            // the core, skipping the manual password entry. On cancel/error the
+            // user is left on the SPA unlock screen to type the password.
+            if (biometricAuth.isEnrolled()) promptBiometricUnlock()
+        }
+    }
+
+    // promptBiometricUnlock shows the system biometric prompt and, on success,
+    // uses the released password to re-unlock the core, then loads the returned
+    // grant URL so the WebView regains an authed session. Any failure leaves the
+    // user on the SPA unlock screen.
+    private fun promptBiometricUnlock() {
+        biometricAuth.unlock(this) { pw ->
+            if (pw == null) return@unlock // cancelled/failed; SPA unlock stands
+            thread(name = "bossw-unlock") {
+                val url = try {
+                    app.unlock(String(pw))
+                } catch (e: Exception) {
+                    // app.unlock() failed. Only drop the stored secret if the
+                    // password itself is wrong (most likely the app password was
+                    // changed after enrolling): a transient failure - a wallet
+                    // failing to open, core mid-restart - must not cost the user
+                    // their enrollment. The biometric decrypt already succeeded, so
+                    // BiometricAuth cannot tell a stale password from a hiccup;
+                    // verifyPassword re-checks just the password, isolating it from
+                    // wallet/session errors, so we clear only when it is genuinely
+                    // stale and otherwise leave enrollment intact for a retry.
+                    val stalePassword = try {
+                        app.verifyPassword(String(pw))
+                        false
+                    } catch (_: Exception) {
+                        true
+                    }
+                    if (stalePassword) {
+                        biometricAuth.clear()
+                        notifyBiometricChanged()
+                    }
+                    runOnUiThread {
+                        Toast.makeText(applicationContext, "Unlock failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                    null
+                } finally {
+                    pw.fill(0)
+                }
+                if (url != null) loadAppUrl(url)
+            }
+        }
+    }
+
+    // BiometricBridge is the window.bossw interface exposed to the SPA so its
+    // Settings pane can drive the biometric opt-in. Methods are invoked on a
+    // WebView binder thread, so UI work is posted to the main thread. No method
+    // accepts or returns the app password: the password is captured natively in
+    // showEnrollDialog and released natively in promptBiometricUnlock, never
+    // crossing the JS boundary.
+    private inner class BiometricBridge {
+        // biometricAvailable reports whether the device has enrolled biometric
+        // hardware, so the SPA can decide whether to show the opt-in toggle.
+        @JavascriptInterface
+        fun biometricAvailable(): Boolean = biometricAuth.canAuthenticate(this@MainActivity)
+
+        // biometricEnrolled reports whether biometric unlock is currently on.
+        @JavascriptInterface
+        fun biometricEnrolled(): Boolean = biometricAuth.isEnrolled()
+
+        // enrollBiometrics starts the opt-in (native password sheet + biometric).
+        @JavascriptInterface
+        fun enrollBiometrics() {
+            runOnUiThread { showEnrollDialog() }
+        }
+
+        // disableBiometrics turns biometric unlock off and drops the stored secret.
+        @JavascriptInterface
+        fun disableBiometrics() {
+            biometricAuth.clear()
+            notifyBiometricChanged()
+        }
+    }
+
+    // showEnrollDialog captures the app password in a native field (never through
+    // JS), verifies it against the core, then stores it behind a biometric prompt.
+    private fun showEnrollDialog() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            hint = "password"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Enable biometric unlock")
+            .setMessage("Confirm your wallet password to store it securely.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Enable") { _, _ -> verifyThenEnroll(input.text.toString()) }
+            .show()
+    }
+
+    // verifyThenEnroll confirms pw against the core off-thread, then (on success)
+    // stores it behind a biometric prompt on the main thread.
+    private fun verifyThenEnroll(pw: String) {
+        thread(name = "bossw-verify") {
+            val ok = try {
+                app.verifyPassword(pw) // throws on a wrong password
+                true
+            } catch (_: Exception) {
+                false
+            }
+            runOnUiThread {
+                if (!ok) {
+                    Toast.makeText(applicationContext, "Incorrect password", Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                val pwb = pw.toByteArray()
+                biometricAuth.enroll(this, pwb) { enrolled ->
+                    pwb.fill(0)
+                    val msg = if (enrolled) "Biometric unlock enabled" else "Enrollment cancelled"
+                    Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
+                    notifyBiometricChanged()
+                }
+            }
+        }
+    }
+
+    // notifyBiometricChanged nudges the SPA to re-read the opt-in state after an
+    // enroll/disable so its toggle reflects reality.
+    private fun notifyBiometricChanged() {
+        runOnUiThread {
+            if (::webView.isInitialized) {
+                webView.evaluateJavascript(
+                    "window.dispatchEvent(new Event('bossw-biometric-changed'))", null)
+            }
         }
     }
 

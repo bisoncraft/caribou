@@ -41,6 +41,12 @@ done
 
 cd "$dir"
 
+# The mobile package is gated by the 'mobile' build tag (it is the gomobile bind
+# target), so the ./... run above skips it. Run its tests explicitly. Its logic
+# is host-portable; the instrumented Android tests that need a device/emulator
+# are documented in wallet/android/README.md and run separately.
+env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/mobile/
+
 # Print missing Core notification translations.
 go run ./wallet/core/localetest/main.go
 

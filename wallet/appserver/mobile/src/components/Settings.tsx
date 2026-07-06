@@ -1,7 +1,21 @@
-import { useState, FormEvent, ChangeEvent } from 'react'
+import { useState, useEffect, FormEvent, ChangeEvent } from 'react'
 import t from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import { postJSON } from '@bossw/shared/http'
+
+// bossw is the native bridge the Android shell injects (window.bossw). It is
+// absent on desktop and on the web, so every use is guarded. No method takes or
+// returns the app password: enrollBiometrics captures it in a native field, and
+// unlock releases it natively, so the secret never reaches this JS.
+interface BosswBridge {
+  biometricAvailable(): boolean
+  biometricEnrolled(): boolean
+  enrollBiometrics(): void
+  disableBiometrics(): void
+}
+declare global {
+  interface Window { bossw?: BosswBridge }
+}
 
 // SendSettings mirrors the desktop app-level send preference: whether sending
 // requires the app password. The value is written back to app.appSettings so
@@ -105,9 +119,68 @@ function SeedExport () {
   )
 }
 
+// BiometricSettings offers the native biometric-unlock opt-in. It renders only
+// on the mobile shell (window.bossw present) and only when the device has usable
+// biometric hardware. Toggling calls into the native bridge; the actual enroll
+// or disable completes natively (a biometric prompt), and the shell fires a
+// 'bossw-biometric-changed' event when done, which we use to re-read the state.
+function BiometricSettings () {
+  const bridge = typeof window !== 'undefined' ? window.bossw : undefined
+  const [available, setAvailable] = useState(() => {
+    try { return !!bridge && bridge.biometricAvailable() } catch { return false }
+  })
+  const [enrolled, setEnrolled] = useState(() => {
+    try { return !!bridge && bridge.biometricEnrolled() } catch { return false }
+  })
+
+  useEffect(() => {
+    if (!bridge) return
+    const refresh = () => {
+      // Only touch the native bridge when the document is actually visible. The
+      // visibilitychange handler fires on hide too, and re-reading state then
+      // would burn synchronous JNI round-trips on a lifecycle hot path for a
+      // view no one is looking at.
+      if (document.visibilityState !== 'visible') return
+      try {
+        setAvailable(bridge.biometricAvailable())
+        setEnrolled(bridge.biometricEnrolled())
+      } catch { /* bridge gone */ }
+    }
+    window.addEventListener('bossw-biometric-changed', refresh)
+    // The user may enroll a fingerprint in system settings while this pane stays
+    // mounted; re-check availability when the app regains focus so the toggle
+    // appears without a full reload.
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('bossw-biometric-changed', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [bridge])
+
+  if (!bridge || !available) return null
+
+  // Don't flip optimistically: enrollment is an async native prompt the user can
+  // cancel. The checkbox reflects the real stored state, updated via the event.
+  const toggle = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) bridge.enrollBiometrics()
+    else bridge.disableBiometrics()
+  }
+
+  return (
+    <div className='mb-card'>
+      <h2>{t('Security')}</h2>
+      <label className='mb-check-row'>
+        <input type='checkbox' checked={enrolled} onChange={toggle} />
+        <span>{t('Unlock with biometrics')}</span>
+      </label>
+    </div>
+  )
+}
+
 export default function Settings () {
   return (
     <div className='mb-settings'>
+      <BiometricSettings />
       <SendSettings />
       <SeedExport />
     </div>
