@@ -164,6 +164,7 @@ func (w *Wallet) handleChainNotifications() {
 					// Outside the db tx: unwatching does a
 					// network round-trip per backend call.
 					w.reapWatches(chainClient, n.Height)
+					w.maybeSweep(chainClient, n.Height)
 				}
 			case chain.BlockDisconnected:
 				err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
@@ -74,6 +75,117 @@ func (c *ElectrumClient) SubscriptionCount() int {
 	c.addrCacheMtx.Lock()
 	defer c.addrCacheMtx.Unlock()
 	return len(c.addrCache)
+}
+
+// sweepConcurrency bounds the concurrent get_history calls of a Sweep, for
+// the same reason as proberConcurrency in the wallet's recovery scan:
+// unbounded concurrency risks rate-limiting on public servers.
+const sweepConcurrency = 16
+
+// Sweep implements the chain.AddressWatcher metered safety net for cold
+// (unwatched) addresses. Each address's history is fetched with bounded
+// concurrency and parked in the probe cache; an address hits when any entry
+// is above fromHeight or in the mempool. Hits are re-subscribed through the
+// rescan-setup path (mempool-only initial emission, reusing the parked
+// reply), and their confirmed entries above fromHeight are then emitted in
+// ascending block order through emitFilteredBlock — the per-address live
+// path cannot order cross-address chains, which corrupts wtxmgr's spend
+// tracking (see subscribeAddress).
+func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) ([]btcutil.Address, error) {
+	if err := c.ctx.Err(); err != nil {
+		return nil, fmt.Errorf("electrum: sweep on stopped client: %w", err)
+	}
+
+	type result struct {
+		addr btcutil.Address
+		hist []electrum.HistoryEntry
+		err  error
+	}
+	results := make([]result, len(addrs))
+	sem := make(chan struct{}, sweepConcurrency)
+	var wg sync.WaitGroup
+	for i, addr := range addrs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, addr btcutil.Address) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			sh, err := addrScripthash(addr)
+			if err != nil {
+				results[i] = result{addr: addr, err: err}
+				return
+			}
+			hist, err := c.net.GetHistory(c.ctx, sh)
+			if err != nil {
+				results[i] = result{addr: addr, err: err}
+				return
+			}
+			c.probeMtx.Lock()
+			c.probeCache[sh] = &probeHistory{status: statusFromHistory(hist), hist: hist}
+			c.probeMtx.Unlock()
+			results[i] = result{addr: addr, hist: hist}
+		}(i, addr)
+	}
+	wg.Wait()
+
+	var hits []btcutil.Address
+	matches := make(map[int32][]electrum.HistoryEntry)
+	for _, r := range results {
+		if r.err != nil {
+			// A failed check is retried next sweep; don't fail the
+			// batch.
+			log.Warnf("electrum: sweep %s: %v", r.addr, r.err)
+			continue
+		}
+		hit := false
+		for _, h := range r.hist {
+			if h.Height <= 0 || h.Height > fromHeight {
+				hit = true
+			}
+			if h.Height > fromHeight {
+				matches[h.Height] = append(matches[h.Height], h)
+			}
+		}
+		if !hit {
+			continue
+		}
+		hits = append(hits, r.addr)
+		// Re-promotion: subscribe through the rescan-setup path so the
+		// initial emission is mempool-only and the parked history
+		// becomes the diff baseline without a refetch.
+		if err := c.subscribeAddress(r.addr, true); err != nil {
+			return nil, err
+		}
+	}
+
+	// Ingest the new confirmed history in ascending block order.
+	heights := make([]int32, 0, len(matches))
+	for h := range matches {
+		heights = append(heights, h)
+	}
+	sort.Slice(heights, func(i, j int) bool { return heights[i] < heights[j] })
+	for _, height := range heights {
+		hdr := c.net.HeaderByHeight(height)
+		if hdr == nil {
+			log.Warnf("electrum: sweep missing header at %d", height)
+			continue
+		}
+		block := wtxmgr.BlockMeta{
+			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
+			Time:  hdr.Timestamp,
+		}
+		if err := c.emitFilteredBlock(c.ctx, block, matches[height]); err != nil {
+			return nil, err
+		}
+	}
+
+	c.clearProbeCache()
+	if len(hits) > 0 {
+		log.Infof("electrum: sweep re-promoted %d of %d cold addresses "+
+			"(%d subscriptions now held)", len(hits), len(addrs),
+			c.SubscriptionCount())
+	}
+	return hits, nil
 }
 
 // subscribeAddress computes the scripthash for addr, subscribes if not

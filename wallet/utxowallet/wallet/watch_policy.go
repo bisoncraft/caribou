@@ -60,6 +60,19 @@ type addrWatch struct {
 type watchPolicy struct {
 	mtx     sync.Mutex
 	tracked map[string]*addrWatch
+
+	// coldExternal holds demoted (unwatched) used external addresses
+	// awaiting metered sweeps; a sweep hit promotes an address back out.
+	coldExternal map[string]btcutil.Address
+	// sweeping is the single-flight guard for the sweep goroutine.
+	sweeping bool
+	// lastSweepTip is the tip at which the last sweep launched; zero means
+	// no sweep since (re)sync, so the next block triggers one.
+	lastSweepTip int32
+	// sweepFrom is the height above which the first post-sync sweep looks
+	// for activity: the previous session's synced height less a reorg
+	// margin, captured in syncWithChain.
+	sweepFrom int32
 }
 
 // note records relevant-tx activity on an address. Mined activity
@@ -110,6 +123,12 @@ func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 		}
 		done = append(done, iw.addr)
 		delete(p.tracked, key)
+		if !iw.internal {
+			if p.coldExternal == nil {
+				p.coldExternal = make(map[string]btcutil.Address)
+			}
+			p.coldExternal[key] = iw.addr
+		}
 	}
 	return done
 }
@@ -283,6 +302,10 @@ func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
 	for _, addr := range addrs {
 		if !isCold(addr) {
 			keptAddrs = append(keptAddrs, addr)
+			continue
+		}
+		if ma, err := w.Manager.Address(addrmgrNs, addr); err == nil && !ma.Internal() {
+			w.watchPol.demote(addr)
 		}
 	}
 	keptUnspent := unspent[:0]
@@ -298,4 +321,88 @@ func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
 			len(unspent)-len(keptUnspent))
 	}
 	return keptAddrs, keptUnspent, nil
+}
+
+// sweepInterval is how many blocks pass between metered sweeps of the cold
+// external set. Detection latency on a cold address is bounded by this; the
+// post-sync sweep covers the offline gap.
+const sweepInterval = 144
+
+// demote moves an address into the cold-external set awaiting sweeps.
+func (p *watchPolicy) demote(addr btcutil.Address) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	if p.coldExternal == nil {
+		p.coldExternal = make(map[string]btcutil.Address)
+	}
+	p.coldExternal[addr.String()] = addr
+}
+
+// promote removes addresses from the cold set (a sweep hit re-established
+// their watch; ingestion re-tracks them).
+func (p *watchPolicy) promote(addrs []btcutil.Address) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	for _, addr := range addrs {
+		delete(p.coldExternal, addr.String())
+	}
+}
+
+// coldSet returns a snapshot of the cold-external addresses.
+func (p *watchPolicy) coldSet() []btcutil.Address {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	out := make([]btcutil.Address, 0, len(p.coldExternal))
+	for _, addr := range p.coldExternal {
+		out = append(out, addr)
+	}
+	return out
+}
+
+// maybeSweep launches the cold-external sweep when due: on the first block
+// after a sync (lastSweepTip zero) and every sweepInterval blocks after. The
+// sweep runs on its own goroutine — it is a batch of network calls and must
+// not block the notification loop — with single-flight protection.
+func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
+	watcher, ok := chainClient.(chain.AddressWatcher)
+	if !ok {
+		return
+	}
+	p := &w.watchPol
+	p.mtx.Lock()
+	due := p.lastSweepTip == 0 || tip-p.lastSweepTip >= sweepInterval
+	if !due || p.sweeping || len(p.coldExternal) == 0 {
+		p.mtx.Unlock()
+		return
+	}
+	p.sweeping = true
+	fromHeight := p.sweepFrom
+	if p.lastSweepTip > 0 {
+		fromHeight = p.lastSweepTip - watchFinalityDepth
+	}
+	p.lastSweepTip = tip
+	p.mtx.Unlock()
+
+	cold := p.coldSet()
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		defer func() {
+			p.mtx.Lock()
+			p.sweeping = false
+			p.mtx.Unlock()
+		}()
+		hits, err := watcher.Sweep(cold, fromHeight)
+		if err != nil {
+			log.Errorf("Cold-address sweep failed: %v", err)
+			// Retry from the same floor next interval.
+			p.mtx.Lock()
+			p.lastSweepTip = tip - sweepInterval
+			p.mtx.Unlock()
+			return
+		}
+		p.promote(hits)
+		log.Debugf("Cold-address sweep: %d checked from height %d, %d promoted",
+			len(cold), fromHeight, len(hits))
+	}()
 }

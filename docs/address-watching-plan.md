@@ -79,11 +79,30 @@ Policy (extends the increment-1 tracker to the external branch):
   each sync, a background pass batches `get_history` over the cold set. A
   hit re-subscribes the address (re-promotion) and ingests the new entries
   height-bucketed through the rescan emission path (`emitFilteredBlock`,
-  dependency-ordered, floored at the last rescan start) — not the per-address
-  live path, so cross-address chains ingest in order. Ingestion feeds the
-  tracker, so a swept-hot address demotes again naturally. Enumerating the
-  cold set walks the external branch (used minus hot); histories the wallet
-  already ingested re-emit harmlessly (InsertTx is idempotent).
+  dependency-ordered) — not the per-address live path, so cross-address
+  chains ingest in order. Ingestion feeds the tracker, so a swept-hot
+  address demotes again naturally.
+
+  Mechanics pinned during implementation:
+  - `AddressWatcher` gains `Sweep(addrs, fromHeight) (hits, err)`: bounded-
+    concurrency `get_history`, parking replies in the probe cache; an
+    address hits when it has an entry above fromHeight or in the mempool.
+    Hits are subscribed via the rescan-setup path (mempool-only initial
+    emission against the parked reply), then their confirmed entries above
+    fromHeight are emitted ascending-height through `emitFilteredBlock`.
+  - The policy layer owns the cold set: `filterColdAddrs` records the used
+    externals it drops, the reaper records external reaps, and sweep hits
+    leave the set (re-tracked by ingestion).
+  - fromHeight semantics: the wallet knew everything up to the moment an
+    address was watched last. The post-sync sweep — the offline catch-up,
+    since cold externals are excluded from the sync rescan — uses the
+    previous session's `SyncedTo` minus a `watchFinalityDepth` reorg margin,
+    captured in `syncWithChain` when the filter applies. Steady-state sweeps
+    use the previous sweep tip minus the same margin.
+  - The sweep runs as a single-flight goroutine triggered from the
+    block-connected path (network calls must not block the notification
+    loop); the first trigger after sync fires immediately, then every
+    `sweepInterval` blocks.
 
 Sequencing note: 2a (demotion) must not ship in a release without 2b (the
 sweep) — demotion alone loses cold-address receive detection entirely. They
