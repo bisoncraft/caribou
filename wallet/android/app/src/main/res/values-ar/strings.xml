@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="start_failed">فشل بدء التشغيل: %1$s</string>
+    <string name="lock_error">خطأ في القفل: %1$s</string>
+    <string name="unlock_failed">فشل إلغاء القفل: %1$s</string>
+
+    <string name="enroll_title">تفعيل إلغاء القفل بالمقاييس الحيوية</string>
+    <string name="enroll_message">أكِّد كلمة مرور محفظتك لتخزينها بأمان.</string>
+    <string name="password_hint">كلمة المرور</string>
+    <string name="cancel">إلغاء</string>
+    <string name="enable">تفعيل</string>
+    <string name="incorrect_password">كلمة مرور غير صحيحة</string>
+    <string name="biometric_enabled">تم تفعيل إلغاء القفل بالمقاييس الحيوية</string>
+    <string name="enrollment_cancelled">تم إلغاء التسجيل</string>
+
+    <string name="unlock_prompt_title">إلغاء قفل Boss Wallet</string>
+
+    <string name="lock_overlay_locked">مقفل</string>
+    <string name="lock_overlay_unlock">إلغاء القفل</string>
+    <string name="lock_overlay_use_password">استخدام كلمة المرور بدلاً من ذلك</string>
+</resources>

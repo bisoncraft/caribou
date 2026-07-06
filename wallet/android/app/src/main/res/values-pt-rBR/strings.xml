@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="start_failed">Falha ao iniciar: %1$s</string>
+    <string name="lock_error">Erro ao bloquear: %1$s</string>
+    <string name="unlock_failed">Falha ao destrancar: %1$s</string>
+
+    <string name="enroll_title">Ativar desbloqueio por biometria</string>
+    <string name="enroll_message">Confirme a senha da sua carteira para armazená-la com segurança.</string>
+    <string name="password_hint">senha</string>
+    <string name="cancel">Cancelar</string>
+    <string name="enable">Ativar</string>
+    <string name="incorrect_password">Senha incorreta</string>
+    <string name="biometric_enabled">Desbloqueio por biometria ativado</string>
+    <string name="enrollment_cancelled">Cadastro cancelado</string>
+
+    <string name="unlock_prompt_title">Destrancar a Boss Wallet</string>
+
+    <string name="lock_overlay_locked">Bloqueado</string>
+    <string name="lock_overlay_unlock">Destrancar</string>
+    <string name="lock_overlay_use_password">Usar senha</string>
+</resources>

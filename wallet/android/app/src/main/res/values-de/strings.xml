@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="start_failed">Start fehlgeschlagen: %1$s</string>
+    <string name="lock_error">Sperrfehler: %1$s</string>
+    <string name="unlock_failed">Entsperren fehlgeschlagen: %1$s</string>
+
+    <string name="enroll_title">Biometrische Entsperrung aktivieren</string>
+    <string name="enroll_message">Bestätigen Sie Ihr Wallet-Passwort, um es sicher zu speichern.</string>
+    <string name="password_hint">Passwort</string>
+    <string name="cancel">Abbrechen</string>
+    <string name="enable">Aktivieren</string>
+    <string name="incorrect_password">Falsches Passwort</string>
+    <string name="biometric_enabled">Biometrische Entsperrung aktiviert</string>
+    <string name="enrollment_cancelled">Einrichtung abgebrochen</string>
+
+    <string name="unlock_prompt_title">Boss Wallet entsperren</string>
+
+    <string name="lock_overlay_locked">Gesperrt</string>
+    <string name="lock_overlay_unlock">Entsperren</string>
+    <string name="lock_overlay_use_password">Stattdessen Passwort verwenden</string>
+</resources>
