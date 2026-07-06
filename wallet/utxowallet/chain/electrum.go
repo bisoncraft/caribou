@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
@@ -60,6 +61,24 @@ type ElectrumClient struct {
 	// changes via the subscription notifications. Mutex-guarded.
 	addrCacheMtx sync.Mutex
 	addrCache    map[string]*scripthashEntry
+
+	// probeCache parks get_history replies fetched by ProbeAddress (gap-limit
+	// discovery) so the rescan that follows discovery doesn't refetch them,
+	// keyed by scripthash. Each entry carries the electrum status derived from
+	// its history; consumers holding a server-reported status may reuse the
+	// parked history iff the statuses match, which makes staleness between
+	// probe time and use time detectable exactly. Cleared once the rescan
+	// setup has consumed it. Guarded by probeMtx (never held together with
+	// addrCacheMtx or an entry's proc lock).
+	probeMtx   sync.Mutex
+	probeCache map[string]*probeHistory
+
+	// rescanFloor is the confirmed-ingestion floor: the start height of the
+	// most recent Rescan (the wallet's birthday block on initial sync).
+	// History entries confirmed below it are contractually pre-birthday and
+	// are skipped by the notification path (the rescan walk applies the same
+	// bound via collectHistories). Zero until the first Rescan.
+	rescanFloor atomic.Int32
 
 	// dirtyMtx guards dirty/dirtyWake, the coalescing buffer between the
 	// scripthash reader and processor goroutines. A scripthash status is
@@ -171,6 +190,7 @@ func NewElectrumClient(chainParams *netparams.ChainParams, network ElectrumNetwo
 		btcParams:   chainParams.BTCDParams(),
 		chain:       chain,
 		addrCache:   make(map[string]*scripthashEntry),
+		probeCache:  make(map[string]*probeHistory),
 	}, nil
 }
 
@@ -614,17 +634,34 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 	prev := append([]electrum.HistoryEntry(nil), entry.lastHistory...)
 	c.addrCacheMtx.Unlock()
 
-	hist, err := c.net.GetHistory(c.ctx, st.Scripthash)
-	if err != nil {
-		return fmt.Errorf("get history: %w", err)
+	// A discovery probe may have parked this scripthash's history; reuse it
+	// iff its derived status matches the server-reported one (i.e. nothing
+	// changed since the probe), else fetch fresh.
+	hist, ok := c.probedHistory(st.Scripthash, st.Status)
+	if ok {
+		log.Debugf("electrum: status handler using probed history for %s", st.Scripthash)
+	} else {
+		var err error
+		hist, err = c.net.GetHistory(c.ctx, st.Scripthash)
+		if err != nil {
+			return fmt.Errorf("get history: %w", err)
+		}
 	}
 	// Partition the new entries into "ready to emit" and "deferred until
 	// the header arrives". Already-seen entries are not re-emitted but
 	// stay in the carry-forward list.
+	floor := c.rescanFloor.Load()
 	emitted := make([]electrum.HistoryEntry, 0, len(hist))
 	var deferred, toEmit []electrum.HistoryEntry
 	for _, h := range hist {
 		if alreadySeen(prev, h.TxHash, h.Height) {
+			emitted = append(emitted, h)
+			continue
+		}
+		if h.Height > 0 && h.Height < floor {
+			// Confirmed below the rescan floor: contractually
+			// pre-birthday, not ours. Mark seen without emitting so
+			// the entry doesn't reappear on every future diff.
 			emitted = append(emitted, h)
 			continue
 		}

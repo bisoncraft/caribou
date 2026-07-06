@@ -36,7 +36,7 @@ func UseLogger(backend *btclog.Backend) {
 	}
 
 	spv.UseLogger(sub("NTRNO", btclog.LevelDebug))
-	chain.UseLogger(sub("CHAIN", btclog.LevelInfo))
+	chain.UseLogger(sub("CHAIN", btclog.LevelDebug))
 	electrum.UseLogger(sub("ELEC", btclog.LevelDebug))
 	peer.UseLogger(sub("PEER", btclog.LevelInfo))
 	wallet.UseLogger(sub("WLLT", btclog.LevelInfo))
