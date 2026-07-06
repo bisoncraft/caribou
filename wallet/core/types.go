@@ -59,12 +59,12 @@ type WalletState struct {
 	SyncStatus     *asset.SyncStatus                  `json:"syncStatus"`
 	Disabled       bool                               `json:"disabled"`
 	BridgeApproved map[string]asset.ApprovalStatus    `json:"bridgeApproved"`
-	FeeState       *FeeState                          `json:"feeState"`
 	PendingTxs     map[string]*txdb.WalletTransaction `json:"pendingTxs"`
 }
 
-// FeeState is information about the current network transaction fees and
-// estimates of standard operations.
+// FeeState is an on-demand estimate of the current network fee rate and the
+// fee for a standard send, returned by Core.WalletFeeState. It is computed when
+// requested rather than cached on the wallet.
 type FeeState struct {
 	Rate    uint64 `json:"rate"`
 	Send    uint64 `json:"send"`

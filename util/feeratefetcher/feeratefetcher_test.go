@@ -32,7 +32,6 @@ func TestComposite(t *testing.T) {
 		constSource("s1", 1, 4, &c1),
 		constSource("s2", 1, 6, &c2),
 	}, util.Disabled)
-	f.shelfLife = 0 // consider a refresh on every call; Period still gates fetches.
 
 	if r := f.Rate(context.Background()); r != 5 {
 		t.Fatalf("expected composite 5, got %d", r)
@@ -53,7 +52,6 @@ func TestPrefersHigherRank(t *testing.T) {
 		constSource("hi", 1, 3, &hi),
 		constSource("lo", 2, 9, &lo),
 	}, util.Disabled)
-	f.shelfLife = 0
 
 	if r := f.Rate(context.Background()); r != 3 {
 		t.Fatalf("expected 3 from rank-1 source, got %d", r)
@@ -75,7 +73,6 @@ func TestRankFallback(t *testing.T) {
 	}
 	var lo int
 	f := New([]*SourceConfig{failing, constSource("lo", 2, 9, &lo)}, util.Disabled)
-	f.shelfLife = 0
 
 	if r := f.Rate(context.Background()); r != 9 {
 		t.Fatalf("expected fallback rate 9, got %d", r)
@@ -89,7 +86,6 @@ func TestZeroRateIsFailure(t *testing.T) {
 	// A source returning a zero rate is treated as having no data.
 	var c int
 	f := New([]*SourceConfig{constSource("z", 1, 0, &c)}, util.Disabled)
-	f.shelfLife = 0
 
 	if r := f.Rate(context.Background()); r != 0 {
 		t.Fatalf("expected 0 from zero-rate source, got %d", r)
@@ -109,11 +105,66 @@ func TestErrorBackoff(t *testing.T) {
 		},
 	}
 	f := New([]*SourceConfig{src}, util.Disabled)
-	f.shelfLife = 0
 
 	f.Rate(context.Background())
 	f.Rate(context.Background())
 	if c != 1 {
 		t.Fatalf("expected a single fetch during backoff, got %d", c)
 	}
+}
+
+func TestErroredSourceServesCachedRate(t *testing.T) {
+	// A source whose most recent fetch errored still contributes its last good
+	// rate until that rate expires; the error only defers the next fetch.
+	s := &source{
+		SourceConfig: &SourceConfig{Name: "s", Rank: 1, Period: time.Hour},
+		log:          util.Disabled,
+		rate:         5,
+		stamp:        time.Now(),
+		failUntil:    time.Now().Add(time.Minute * 10), // recently errored, in backoff
+	}
+	if wr, w := s.weightedRate(); w == 0 || wr != 5 {
+		t.Fatalf("fresh cached rate should be served despite error backoff, got rate=%v weight=%v", wr, w)
+	}
+	if s.due() {
+		t.Fatal("source in error backoff should not be due for refetch")
+	}
+	// Once the cached rate is older than the expiration window, it drops out.
+	s.stamp = time.Now().Add(-expiration)
+	if _, w := s.weightedRate(); w != 0 {
+		t.Fatal("expired cached rate should not contribute")
+	}
+}
+
+func TestConcurrentCallerDoesNotBlock(t *testing.T) {
+	// While one caller is blocked in a slow refresh, a concurrent caller must
+	// return the cached composite immediately rather than block on the refresh.
+	enter := make(chan struct{})
+	release := make(chan struct{})
+	slow := &SourceConfig{
+		Name:   "slow",
+		Rank:   1,
+		Period: time.Hour,
+		F: func(ctx context.Context) (uint64, time.Duration, error) {
+			enter <- struct{}{} // signal the fetch has started
+			<-release           // block until the test releases it
+			return 7, 0, nil
+		},
+	}
+	f := New([]*SourceConfig{slow}, util.Disabled)
+
+	go f.Rate(context.Background()) // caller A: holds refreshMtx, blocks in F
+	<-enter                         // A is now inside the fetch
+
+	done := make(chan uint64, 1)
+	go func() { done <- f.Rate(context.Background()) }() // caller B
+	select {
+	case r := <-done:
+		if r != 0 {
+			t.Fatalf("expected cached 0 while refresh in flight, got %d", r)
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("concurrent Rate() blocked behind an in-flight refresh")
+	}
+	close(release)
 }

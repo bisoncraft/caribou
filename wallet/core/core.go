@@ -396,25 +396,6 @@ fetchers:
 	}
 	c.fetchFiatExchangeRates(ctx)
 
-	// Start a goroutine to keep the FeeState updated.
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		for {
-			tick := time.NewTicker(time.Minute * 5)
-			select {
-			case <-tick.C:
-				for _, w := range c.xcWallets() {
-					if w.connected() {
-						w.feeRate() // updates the fee state internally.
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	// Handle wallet notifications.
 	c.wg.Add(1)
 	go func() {
@@ -4033,14 +4014,22 @@ func (c *Core) ConfigureFundsMixer(pw []byte, assetID uint32, isMixerEnabled boo
 	return mw.ConfigureFundsMixer(isMixerEnabled)
 }
 
-// NetworkFeeRate returns the network fee rate for the specified asset.
-// Falls back to the wallet's fee rate estimate if available, otherwise 0.
-func (c *Core) NetworkFeeRate(assetID uint32) uint64 {
+// WalletFeeState returns an on-demand fee-rate estimate for the asset, computed
+// when called rather than cached or pushed. Front ends should call this only
+// when a fee figure is needed for display. The returned Rate may be zero when
+// no estimate is currently available, in which case callers should present it
+// as unavailable rather than as a zero rate.
+func (c *Core) WalletFeeState(assetID uint32) (*FeeState, error) {
 	w, found := c.wallet(assetID)
 	if !found {
-		return 0
+		return nil, newError(missingWalletErr, "no wallet for %s", unbip(assetID))
 	}
-	return w.Wallet.FeeRate()
+	rate := w.FeeRate()
+	return &FeeState{
+		Rate:    rate,
+		Send:    w.StandardSendFee(rate),
+		StampMS: time.Now().UnixMilli(),
+	}, nil
 }
 
 func (c *Core) deleteRequestedAction(uniqueID string) {

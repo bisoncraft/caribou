@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -53,7 +52,6 @@ type xcWallet struct {
 	walletType        string
 	traits            asset.WalletTrait
 	network           *xcWallet
-	feeState          atomic.Value // *FeeState
 	connectMtx        sync.Mutex
 
 	mtx        sync.RWMutex
@@ -256,15 +254,6 @@ func (w *xcWallet) state() *WalletState {
 		peerCount = uint32(w.peerCount)
 	}
 
-	var feeState *FeeState
-	if feeStateI := w.feeState.Load(); feeStateI != nil {
-		var ok bool
-		feeState, ok = feeStateI.(*FeeState)
-		if !ok {
-			w.log.Warnf("unexpected type for feeState: %T", feeStateI)
-		}
-	}
-
 	state := &WalletState{
 		Symbol:       unbip(w.AssetID),
 		AssetID:      w.AssetID,
@@ -281,7 +270,6 @@ func (w *xcWallet) state() *WalletState {
 		Class:        winfo.BlockchainClass,
 		Traits:       w.traits,
 		Disabled:     w.disabled,
-		FeeState:     feeState,
 		PendingTxs:   w.pendingTxsCopy(),
 	}
 	w.mtx.RUnlock()
@@ -418,7 +406,6 @@ func (w *xcWallet) Connect() error {
 			return fmt.Errorf("DepositAddress error: %w", err)
 		}
 	}
-	w.feeRate() // prime the feeState
 	w.hookedUp = true
 	w.syncStatus = ss
 	ready = true
@@ -527,25 +514,6 @@ func (w *xcWallet) SendTransaction(tx []byte) ([]byte, error) {
 		return nil, errors.New("wallet is not a Broadcaster")
 	}
 	return broadcaster.SendTransaction(tx)
-}
-
-func (w *xcWallet) setFeeState(feeRate uint64) {
-	sendFees := w.StandardSendFee(feeRate)
-	w.feeState.Store(&FeeState{
-		Rate:    feeRate,
-		Send:    sendFees,
-		StampMS: time.Now().UnixMilli(),
-	})
-}
-
-// feeRate returns the wallet's fee-rate estimate, recording it in fee state
-// when non-zero. A zero return indicates no estimate is currently available.
-func (w *xcWallet) feeRate() uint64 {
-	if r := w.Wallet.FeeRate(); r != 0 {
-		w.setFeeState(r)
-		return r
-	}
-	return 0
 }
 
 // BridgeContractApprovalStatus returns the approval status of the bridge

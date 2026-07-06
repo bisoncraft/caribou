@@ -106,6 +106,7 @@ func (c *TCore) InitializeClient(pw []byte, seed *string) (string, error) {
 func (c *TCore) Login(pw []byte) error                                    { return c.loginErr }
 func (c *TCore) IsInitialized() bool                                      { return c.isInited }
 func (c *TCore) AssetBalance(assetID uint32) (*core.WalletBalance, error) { return nil, c.balanceErr }
+func (c *TCore) WalletFeeState(assetID uint32) (*core.FeeState, error)    { return &core.FeeState{}, nil }
 func (c *TCore) WalletState(assetID uint32) *core.WalletState {
 	if c.notHas {
 		return nil

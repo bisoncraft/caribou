@@ -58,10 +58,6 @@ const (
 	fullValidity  = time.Minute * 5
 	decayValidity = time.Minute * 10
 	expiration    = fullValidity + decayValidity
-	// defaultShelfLife coalesces bursts of Rate calls: after an attempt, further
-	// calls reuse the cached composite for this long before another refresh pass
-	// is considered. Per-source Period still governs actual network requests.
-	defaultShelfLife = time.Second * 20
 )
 
 type source struct {
@@ -87,9 +83,11 @@ func (s *source) due() bool {
 }
 
 // update fetches a fresh rate, recording the result or scheduling a backoff. A
-// failed or zero-valued fetch leaves any previously-cached rate in place but
-// marks the source failed so it is excluded from the composite until its next
-// successful refresh.
+// failed or zero-valued fetch leaves any previously-cached rate in place and
+// only schedules an error backoff (failUntil), so the cached rate keeps
+// contributing to the composite until it expires. This avoids dropping to a
+// static fallback on a single transient error, which matters most for
+// single-source chains.
 func (s *source) update(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
@@ -113,11 +111,14 @@ func (s *source) update(ctx context.Context) {
 }
 
 // weightedRate returns the source's decay-weighted rate contribution and its
-// weight. A zero weight means the source has no valid data to contribute.
+// weight. A zero weight means the source has no valid data to contribute. A
+// recent fetch error (failUntil) does not exclude the source: its last good
+// rate keeps contributing until it expires. failUntil only governs when the
+// source is re-fetched (see due).
 func (s *source) weightedRate() (weightedRate, weight float64) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	if !s.failUntil.IsZero() || s.stamp.IsZero() {
+	if s.stamp.IsZero() {
 		return 0, 0
 	}
 	age := time.Since(s.stamp)
@@ -149,20 +150,21 @@ func groupRate(group []*source) uint64 {
 // Fetcher composites fee rates from a set of ranked sources, refreshing them
 // lazily on demand.
 type Fetcher struct {
-	log       util.Logger
-	groups    [][]*source
-	shelfLife time.Duration
+	log    util.Logger
+	groups [][]*source
 
-	mtx         sync.Mutex
-	lastAttempt time.Time
+	// refreshMtx single-flights refresh: at most one caller refreshes at a time.
+	// It is not held while reading the composite, so concurrent callers never
+	// block on another caller's network I/O. Per-source Period/failUntil govern
+	// whether a refresh actually issues requests.
+	refreshMtx sync.Mutex
 }
 
 // New creates a Fetcher for the provided sources.
 func New(sources []*SourceConfig, log util.Logger) *Fetcher {
 	return &Fetcher{
-		log:       log,
-		groups:    groupSources(sources, log),
-		shelfLife: defaultShelfLife,
+		log:    log,
+		groups: groupSources(sources, log),
 	}
 }
 
@@ -190,20 +192,25 @@ next:
 // unit, refreshing stale sources as needed. It returns zero if no source can
 // currently provide a rate; callers should treat zero as "unavailable" and use
 // a fallback.
+//
+// Only one caller performs the (blocking) refresh at a time; other callers that
+// arrive while a refresh is in flight return the current cached composite
+// immediately rather than blocking on network I/O. The refreshing caller blocks
+// briefly to obtain a fresh rate, which suits send/withdraw callers that need a
+// current estimate.
 func (f *Fetcher) Rate(ctx context.Context) uint64 {
-	f.mtx.Lock()
-	defer f.mtx.Unlock()
-	if time.Since(f.lastAttempt) >= f.shelfLife {
-		f.lastAttempt = time.Now()
-		f.refresh(ctx)
+	if f.refreshMtx.TryLock() {
+		defer f.refreshMtx.Unlock()
+		return f.refresh(ctx)
 	}
 	return f.compositeRate()
 }
 
 // refresh queries due sources one rank group at a time, stopping at the first
-// group that yields a composite rate. Lower-ranked groups are only touched if
-// the higher-ranked ones produce nothing.
-func (f *Fetcher) refresh(ctx context.Context) {
+// group that yields a composite rate, and returns that rate. Lower-ranked
+// groups are only touched if the higher-ranked ones produce nothing. It must be
+// called with refreshMtx held.
+func (f *Fetcher) refresh(ctx context.Context) uint64 {
 	for _, group := range f.groups {
 		var wg sync.WaitGroup
 		for _, s := range group {
@@ -217,10 +224,11 @@ func (f *Fetcher) refresh(ctx context.Context) {
 			}(s)
 		}
 		wg.Wait()
-		if groupRate(group) > 0 {
-			return
+		if r := groupRate(group); r > 0 {
+			return r
 		}
 	}
+	return 0
 }
 
 // compositeRate returns the rate of the highest-ranked group with valid data.

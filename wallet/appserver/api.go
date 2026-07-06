@@ -703,6 +703,31 @@ func (s *AppServer) apiGetBalance(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// apiWalletFeeState returns an on-demand fee-rate estimate for a wallet. The
+// estimate is computed when requested; it is not cached or pushed to the front
+// end, so callers should request it only when a fee figure is needed.
+func (s *AppServer) apiWalletFeeState(w http.ResponseWriter, r *http.Request) {
+	form := &struct {
+		AssetID uint32 `json:"assetID"`
+	}{}
+	if !readPost(w, r, form) {
+		return
+	}
+	feeState, err := s.core.WalletFeeState(form.AssetID)
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("fee state error: %w", err))
+		return
+	}
+	resp := &struct {
+		OK       bool           `json:"ok"`
+		FeeState *core.FeeState `json:"feeState"`
+	}{
+		OK:       true,
+		FeeState: feeState,
+	}
+	writeJSON(w, resp)
+}
+
 // apiParseConfig parses an INI config file into a map[string]string.
 func (s *AppServer) apiParseConfig(w http.ResponseWriter, r *http.Request) {
 	form := &struct {

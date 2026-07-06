@@ -704,15 +704,27 @@ func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
 	return feeRate * sz
 }
 
-// FeeRate satisfies asset.Wallet, returning a composite external fee-rate
-// estimate in sats/vByte. The lean native wallet has no local estimatesmartfee
-// RPC, so it relies entirely on the configured external sources and returns
-// zero when none can provide a rate (callers fall back to a default).
+// FeeRate satisfies asset.Wallet, returning a fee-rate estimate in sats/vByte.
+// The lean native wallet has no local estimatesmartfee RPC, so it composites the
+// configured external sources first, then falls back to an electrum server
+// estimate via the underlying wallet. It returns zero only when neither can
+// provide a rate, in which case callers fall back to a default.
 func (w *NativeWallet) FeeRate() uint64 {
-	if w.feeFetcher == nil {
-		return 0
+	if w.feeFetcher != nil {
+		if r := w.feeFetcher.Rate(context.Background()); r != 0 {
+			return r
+		}
 	}
-	return w.feeFetcher.Rate(context.Background())
+	// Fall back to an electrum fee estimate from the wallet's configured servers,
+	// available regardless of the chain backend (including neutrino). It is an
+	// estimatesmartfee-derived value of variable quality, so it is used only when
+	// the external sources above yield nothing.
+	if w.btcw != nil {
+		if r, err := w.btcw.FeeRate(context.Background()); err == nil {
+			return r
+		}
+	}
+	return 0
 }
 
 // SyncStatus returns the current chain-sync state.
