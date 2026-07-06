@@ -628,6 +628,11 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 	if w.btcw == nil {
 		return nil, errors.New("native: wallet not connected")
 	}
+	// The caller-approved rate is used exactly as given (no fallback), so a
+	// zero rate is a hard error rather than a zero-fee transaction.
+	if feeRate == 0 {
+		return nil, errors.New("native: no fee rate specified")
+	}
 
 	addr, err := btcutil.DecodeAddress(address, w.chainParams)
 	if err != nil {
@@ -725,6 +730,59 @@ func (w *NativeWallet) FeeRate() uint64 {
 		}
 	}
 	return 0
+}
+
+var _ asset.TxFeeEstimator = (*NativeWallet)(nil)
+
+// EstimateSendTxFee estimates the network fee, in atoms, for sending value to
+// address at feeRate (atoms/byte). It satisfies asset.TxFeeEstimator. The
+// estimate runs the same coin-selection and tx-construction path Send uses, but
+// without signing or broadcasting, so it matches what a subsequent Send at this
+// rate would pay. When feeRate is zero it falls back to the wallet's own
+// fee-rate estimate. The subtract and maxWithdraw flags are accepted for
+// interface compatibility; the native wallet does not subtract the fee from the
+// sent amount.
+func (w *NativeWallet) EstimateSendTxFee(address string, value, feeRate uint64, _, _ bool) (fee uint64, isValidAddress bool, err error) {
+	if w.btcw == nil {
+		return 0, false, errors.New("native: wallet not connected")
+	}
+	if value == 0 {
+		return 0, false, errors.New("native: cannot estimate fee for zero value")
+	}
+	if feeRate == 0 {
+		feeRate = w.FeeRate()
+	}
+	if feeRate == 0 {
+		return 0, false, errors.New("native: no fee rate available")
+	}
+
+	// A dummy P2WPKH script keeps the size estimate realistic while the user is
+	// still typing an incomplete address.
+	pkScript := append([]byte{txscript.OP_0, txscript.OP_DATA_20}, make([]byte, 20)...)
+	if addr, decErr := btcutil.DecodeAddress(address, w.chainParams); decErr == nil {
+		if s, scriptErr := txscript.PayToAddrScript(addr); scriptErr == nil {
+			pkScript = s
+			isValidAddress = true
+		}
+	}
+
+	txOut := wire.NewTxOut(int64(value), pkScript)
+	scope := w.btcw.ScopeForPurpose(84)
+	satPerKB := btcutil.Amount(feeRate * 1000)
+
+	// CreateSimpleTx's final argument builds the transaction without signing it
+	// and rolls back the wallet db, so this is safe to call on a locked wallet
+	// (e.g. while the send form is being filled in).
+	authoredTx, err := w.btcw.CreateSimpleTx(&scope, 0, []*wire.TxOut{txOut}, 0, satPerKB, wallet.CoinSelectionLargest, true)
+	if err != nil {
+		return 0, isValidAddress, fmt.Errorf("native: fee estimation: %w", err)
+	}
+
+	var out uint64
+	for _, o := range authoredTx.Tx.TxOut {
+		out += uint64(o.Value)
+	}
+	return uint64(authoredTx.TotalInput) - out, isValidAddress, nil
 }
 
 // SyncStatus returns the current chain-sync state.

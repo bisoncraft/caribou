@@ -2807,7 +2807,7 @@ func (c *Core) removeWaiter(id string) {
 // Send initiates either send or withdraw from an exchange wallet. if subtract
 // is true, fees are subtracted from the value else fees are taken from the
 // exchange wallet.
-func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, subtract bool) (asset.Coin, error) {
+func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, subtract bool, feeRate uint64) (asset.Coin, error) {
 	var crypter encrypt.Crypter
 	// Empty password can be provided if wallet is already unlocked. Webserver
 	// and RPCServer should not allow empty password, but this is used for
@@ -2837,13 +2837,16 @@ func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, sub
 		return nil, err
 	}
 
-	feeSuggestion := wallet.Wallet.FeeRate()
+	// feeRate is the caller-approved rate, passed through unchanged so the fee
+	// the user saw is the fee that is used. UTXO wallets treat it as
+	// authoritative and reject an invalid rate; account/EVM wallets ignore it
+	// (they cannot price a send to a specific rate) and compute their own.
 	var coin asset.Coin
 	if !subtract {
-		coin, err = wallet.Wallet.Send(address, value, feeSuggestion)
+		coin, err = wallet.Wallet.Send(address, value, feeRate)
 	} else {
 		if withdrawer, isWithdrawer := wallet.Wallet.(asset.Withdrawer); isWithdrawer {
-			coin, err = withdrawer.Withdraw(address, value, feeSuggestion)
+			coin, err = withdrawer.Withdraw(address, value, feeRate)
 		} else {
 			return nil, fmt.Errorf("wallet does not support subtracting network fee from withdraw amount")
 		}
@@ -4024,7 +4027,17 @@ func (c *Core) WalletFeeState(assetID uint32) (*FeeState, error) {
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet for %s", unbip(assetID))
 	}
+	// Return the rate the wallet would actually use, so the number the user
+	// approves is the number that is charged. When no live estimate is
+	// available, fall back to the wallet's configured fallback rate (if any), so
+	// the fallback is a value the user sees and approves rather than a silent
+	// substitution at send time.
 	rate := w.FeeRate()
+	if rate == 0 {
+		if fallbacker, ok := w.Wallet.(asset.FeeRateFallbacker); ok {
+			rate = fallbacker.FallbackFeeRate()
+		}
+	}
 	return &FeeState{
 		Rate:    rate,
 		Send:    w.StandardSendFee(rate),

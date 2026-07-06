@@ -64,11 +64,16 @@ type walletStatusForm struct {
 
 // sendForm is sent to initiate either send tx.
 type sendForm struct {
-	AssetID  uint32           `json:"assetID"`
-	Value    uint64           `json:"value"`
-	Address  string           `json:"address"`
-	Subtract bool             `json:"subtract"`
-	Pass     encode.PassBytes `json:"pw"`
+	AssetID  uint32 `json:"assetID"`
+	Value    uint64 `json:"value"`
+	Address  string `json:"address"`
+	Subtract bool   `json:"subtract"`
+	// FeeRate is the fee rate the user approved for the send. It is required and
+	// used as-is for UTXO assets (so the approved rate is the rate charged), and
+	// ignored for account/EVM assets, which cannot price a send to a specific
+	// rate. Obtain it from /api/feestate.
+	FeeRate uint64           `json:"feeRate"`
+	Pass    encode.PassBytes `json:"pw"`
 }
 
 // appSettings carries user-configurable application settings surfaced on the

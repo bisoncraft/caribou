@@ -954,7 +954,7 @@ func (s *AppServer) apiSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer zero(pass)
-	coin, err := s.core.Send(pass, form.AssetID, form.Value, form.Address, form.Subtract)
+	coin, err := s.core.Send(pass, form.AssetID, form.Value, form.Address, form.Subtract, form.FeeRate)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("send/withdraw error: %w", err))
 		return
