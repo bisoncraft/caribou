@@ -27,15 +27,26 @@ const proberConcurrency = 16
 // that has history. A branch is abandoned after gapLimit consecutive unused
 // addresses.
 //
-// It is O(used + gapLimit) probes per branch, independent of chain length.
-// Extending the pool makes the discovered addresses "active" (see
-// ForEachRelevantActiveAddress), so the rescanWithTarget that follows in
-// syncWithChain watches and ingests them — no separate re-trigger.
+// Each branch is scanned from its current pool top (the next-to-derive index),
+// not from zero. Addresses below the pool top are already active — the
+// rescanWithTarget that follows in syncWithChain watches and ingests their
+// history regardless — so discovery's only job is extending the pool. On a
+// fresh-seed restore the pool is empty and the scan covers the branch from
+// index 0; on an ordinary reconnect it probes just gapLimit addresses beyond
+// the pool top, which bounds the steady-state cost at O(gapLimit + newly
+// found) probes per branch per connect and doubles as detection of another
+// wallet instance (same seed elsewhere) having extended the branch.
 //
-// The scan is idempotent: ExtendExternal/InternalAddresses only ever extends
-// the pool, so re-running on an already-synced wallet (or one a rebuild already
-// extended via RecoveryCfg) is a no-op. A run-once gate is a future
-// optimization, not a correctness requirement.
+// Gap-limit semantics survive the pool-top start: a gap-limit peer never uses
+// an address more than gapLimit past its own last-used index, which is at most
+// the pool top here, so probing [top, top+gapLimit) covers every index a peer
+// could have reached beyond what this wallet already derived.
+//
+// Extending the pool makes the discovered addresses "active" (see
+// ForEachRelevantActiveAddress), so the rescan that follows ingests them — no
+// separate re-trigger. The scan is idempotent: ExtendExternal/InternalAddresses
+// only ever extends the pool, so re-running (or running on a rebuild already
+// extended via RecoveryCfg) cannot lose state.
 func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) error {
 	if gapLimit == 0 {
 		return nil
@@ -55,11 +66,33 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		return fmt.Errorf("recover: fetch primary scope manager: %w", err)
 	}
 	scope := scoped.Scope()
-	log.Infof("Recovery: gap-limit scan starting on scope %v (gap limit %d)",
-		scope, gapLimit)
+
+	// The branch pool tops: ExternalKeyCount/InternalKeyCount are the
+	// next-to-derive indices for the default account.
+	var branchStart map[uint32]uint32
+	err = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		ns := tx.ReadBucket(waddrmgrNamespaceKey)
+		props, err := scoped.AccountProperties(ns, waddrmgr.DefaultAccountNum)
+		if err != nil {
+			return err
+		}
+		branchStart = map[uint32]uint32{
+			waddrmgr.ExternalBranch: props.ExternalKeyCount,
+			waddrmgr.InternalBranch: props.InternalKeyCount,
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("recover: scope %v account properties: %w", scope, err)
+	}
+
+	log.Infof("Recovery: gap-limit scan starting on scope %v "+
+		"(gap limit %d, external start %d, internal start %d)",
+		scope, gapLimit, branchStart[waddrmgr.ExternalBranch],
+		branchStart[waddrmgr.InternalBranch])
 
 	for _, branch := range []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch} {
-		lastUsed, err := w.scanBranch(prober, scoped, branch, gapLimit)
+		lastUsed, err := w.scanBranch(prober, scoped, branch, branchStart[branch], gapLimit)
 		if err != nil {
 			return fmt.Errorf("recover: scope %v branch %d: %w", scope, branch, err)
 		}
@@ -78,14 +111,16 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 	return nil
 }
 
-// scanBranch probes (scope, branch) in concurrent windows of gapLimit addresses,
-// returning the highest index with any history, or -1 if none. It stops after
-// gapLimit consecutive unused addresses.
+// scanBranch probes (scope, branch) in concurrent windows of gapLimit
+// addresses beginning at index start, returning the highest index with any
+// history, or -1 if none. It stops after gapLimit consecutive unused
+// addresses.
 func (w *Wallet) scanBranch(prober chain.AddressProber,
-	scoped *waddrmgr.ScopedKeyManager, branch, gapLimit uint32) (int64, error) {
+	scoped *waddrmgr.ScopedKeyManager, branch, start, gapLimit uint32) (int64, error) {
 
 	lastUsed := int64(-1)
-	var gap, idx uint32
+	var gap uint32
+	idx := start
 	for gap < gapLimit {
 		used, err := w.probeWindow(prober, scoped, branch, idx, gapLimit)
 		if err != nil {

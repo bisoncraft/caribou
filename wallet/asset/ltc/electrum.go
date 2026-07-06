@@ -51,6 +51,7 @@ func ltcElectrumChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 		NetParams:      ltcTableNetParams(chainParams),
 		Info:           WalletInfo,
 		FeeRateSources: feeRateSources(),
+		RecoveryWindow: btc.ElectrumRecoveryWindow,
 	}
 }
 

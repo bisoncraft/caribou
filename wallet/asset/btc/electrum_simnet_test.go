@@ -682,10 +682,11 @@ func TestElectrumMultipleReceivesToSameAddress(t *testing.T) {
 }
 
 // connectElectrumWalletAt creates a seeded electrum wallet at dataDir from the
-// given seed and connects it. recoveryWindow > 0 enables the address-probe
-// recovery scan (a restore); 0 disables it. Taking an explicit dir + seed lets
-// a test stand up two wallets from the SAME seed in different directories (the
-// recovery test).
+// given seed and connects it. The recoveryWindow is set explicitly via the
+// "recoverywindow" setting — including 0, which disables the address-probe
+// recovery scan that electrum wallets otherwise run by default
+// (ElectrumRecoveryWindow). Taking an explicit dir + seed lets a test stand up
+// two wallets from the SAME seed in different directories (the recovery test).
 func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recoveryWindow uint32) (asset.Wallet, *util.ConnectionMaster) {
 	t.Helper()
 	walletDir := filepath.Join(dataDir, chaincfg.RegressionNetParams.Name)
@@ -696,9 +697,8 @@ func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recovery
 	if err := createElectrumWallet(walletPassword, seed, bday, walletDir, tLogger, 0, 0, &chaincfg.RegressionNetParams); err != nil {
 		t.Fatalf("connectElectrumWalletAt: createElectrumWallet: %v", err)
 	}
-	settings := map[string]string{}
-	if recoveryWindow > 0 {
-		settings["recoverywindow"] = strconv.Itoa(int(recoveryWindow))
+	settings := map[string]string{
+		"recoverywindow": strconv.Itoa(int(recoveryWindow)),
 	}
 
 	masterDB, err := txdb.New(filepath.Join(dataDir, "txdb"), tLogger.SubLogger("TXDB"))
