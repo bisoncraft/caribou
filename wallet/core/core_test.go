@@ -1459,7 +1459,7 @@ func TestEstimateSendTxFee(t *testing.T) {
 		if test.wantErr {
 			tWallet.estFeeErr = errTest
 		}
-		estimate, _, err := tCore.EstimateSendTxFee("addr", test.asset, test.value, test.subtract, false)
+		estimate, err := tCore.EstimateSendTxFee("addr", test.asset, test.value, test.subtract, false)
 		if test.wantErr {
 			if err != nil {
 				continue
@@ -1470,8 +1470,8 @@ func TestEstimateSendTxFee(t *testing.T) {
 			t.Fatalf("%s: unexpected error: %v", test.name, err)
 		}
 
-		if estimate != test.estFee {
-			t.Fatalf("%s: expected fee %v, got %v", test.name, test.estFee, estimate)
+		if estimate.Fee != test.estFee {
+			t.Fatalf("%s: expected fee %v, got %v", test.name, test.estFee, estimate.Fee)
 		}
 		if !test.wantErr && err != nil {
 			t.Fatalf("%s: unexpected error", test.name)

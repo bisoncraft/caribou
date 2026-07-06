@@ -80,6 +80,7 @@ type TCore struct {
 	notOpen              bool
 	rateSourceErr        error
 	estFee               uint64
+	estFeeRate           uint64
 	estFeeErr            error
 	validAddr            bool
 	walletDisabled       bool
@@ -154,8 +155,11 @@ func (c *TCore) Send(pw []byte, assetID uint32, value uint64, address string, su
 func (c *TCore) ValidateAddress(address string, assetID uint32) (bool, error) {
 	return c.validAddr, nil
 }
-func (c *TCore) EstimateSendTxFee(addr string, assetID uint32, value uint64, subtract, maxWithdraw bool) (fee uint64, isValidAddress bool, err error) {
-	return c.estFee, true, c.estFeeErr
+func (c *TCore) EstimateSendTxFee(addr string, assetID uint32, value uint64, subtract, maxWithdraw bool) (*core.SendFeeEstimate, error) {
+	if c.estFeeErr != nil {
+		return nil, c.estFeeErr
+	}
+	return &core.SendFeeEstimate{Fee: c.estFee, FeeRate: c.estFeeRate, ValidAddress: true}, nil
 }
 func (c *TCore) NotificationFeed() *core.NoteFeed {
 	return &core.NoteFeed{
@@ -959,8 +963,9 @@ func TestAPIEstimateSendTxFee(t *testing.T) {
 		AssetID:  &testID,
 	}
 
-	want := `{"ok":true,"txfee":10000,"validaddress":true}`
+	want := `{"ok":true,"txfee":10000,"feeRate":42,"validaddress":true}`
 	tCore.estFee = 10000
+	tCore.estFeeRate = 42
 	ensureResponse(t, s.apiEstimateSendTxFee, want, reader, writer, body, nil)
 
 	want = fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest)

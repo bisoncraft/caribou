@@ -61,6 +61,10 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   // Monotonic guards so stale validate/txfee responses can't clobber newer ones.
   const validateRef = useRef(0)
   const feeRef = useRef(0)
+  // feeRateRef holds the fee rate from the latest estimate. It is submitted with
+  // the send so the rate the user approved is the rate that is charged (UTXO);
+  // account/EVM wallets ignore it and compute their own.
+  const feeRateRef = useRef(0)
 
   const requirePW = app.appSettings.sendRequiresPassword
 
@@ -101,7 +105,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   // would otherwise fail anyway.
   useEffect(() => {
     if (!variant) return
-    setFeeKnown(false); setTxFee(0); setFeeErr('')
+    setFeeKnown(false); setTxFee(0); setFeeErr(''); feeRateRef.current = 0
     if (!addrValid || value <= 0) { setEstimating(false); return }
     const id = ++feeRef.current
     setEstimating(true)
@@ -109,7 +113,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
       const r = await postJSON('/api/txfee', { addr: address.trim(), assetID: variant.assetID, value, subtract })
       if (id !== feeRef.current) return
       setEstimating(false)
-      if (r.ok && r.validaddress) { setTxFee(r.txfee); setFeeKnown(true); return }
+      if (r.ok && r.validaddress) { setTxFee(r.txfee); feeRateRef.current = r.feeRate ?? 0; setFeeKnown(true); return }
       // For a token the fee is paid in the parent gas asset, and the amount is
       // already bounded by the balance check, so an estimate failure here means
       // there isn't enough gas — say so plainly. Natives surface the raw error.
@@ -180,6 +184,9 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
     setErr('')
     if (!addrValid) { setErr(t('Enter a valid address.')); return }
     if (value <= 0) { setErr(t('Enter an amount greater than zero.')); return }
+    // The submitted fee rate is the one behind the fee just estimated and shown,
+    // so wait for a pending estimate rather than send at a stale/zero rate.
+    if (estimating) { setErr(t('Waiting for the fee estimate.')); return }
     if (requirePW && pw === '') { setErr(t('Password required.')); return }
     setSending(true)
     const r = await postJSON('/api/send', {
@@ -187,6 +194,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
       address: address.trim(),
       value,
       subtract,
+      feeRate: feeRateRef.current,
       pw: requirePW ? pw : undefined
     })
     setSending(false)

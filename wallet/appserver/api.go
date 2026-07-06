@@ -62,7 +62,7 @@ func (s *AppServer) apiEstimateSendTxFee(w http.ResponseWriter, r *http.Request)
 		s.writeAPIError(w, errors.New("missing asset ID"))
 		return
 	}
-	txFee, validAddress, err := s.core.EstimateSendTxFee(form.Addr, *form.AssetID, form.Value, form.Subtract, form.MaxWithdraw)
+	est, err := s.core.EstimateSendTxFee(form.Addr, *form.AssetID, form.Value, form.Subtract, form.MaxWithdraw)
 	if err != nil {
 		s.writeAPIError(w, err)
 		return
@@ -70,11 +70,13 @@ func (s *AppServer) apiEstimateSendTxFee(w http.ResponseWriter, r *http.Request)
 	resp := struct {
 		OK           bool   `json:"ok"`
 		TxFee        uint64 `json:"txfee"`
+		FeeRate      uint64 `json:"feeRate"`
 		ValidAddress bool   `json:"validaddress"`
 	}{
 		OK:           true,
-		TxFee:        txFee,
-		ValidAddress: validAddress,
+		TxFee:        est.Fee,
+		FeeRate:      est.FeeRate,
+		ValidAddress: est.ValidAddress,
 	}
 	writeJSON(w, resp)
 }

@@ -516,6 +516,20 @@ func (w *xcWallet) SendTransaction(tx []byte) ([]byte, error) {
 	return broadcaster.SendTransaction(tx)
 }
 
+// usableFeeRate returns the wallet's live fee-rate estimate, falling back to the
+// wallet's configured fallback rate when no live estimate is available, so the
+// caller always has a concrete rate to present and use. It is zero only when
+// neither is available.
+func (w *xcWallet) usableFeeRate() uint64 {
+	rate := w.FeeRate()
+	if rate == 0 {
+		if fallbacker, ok := w.Wallet.(asset.FeeRateFallbacker); ok {
+			rate = fallbacker.FallbackFeeRate()
+		}
+	}
+	return rate
+}
+
 // BridgeContractApprovalStatus returns the approval status of the bridge
 // contract if the wallet is a Bridger.
 func (w *xcWallet) BridgeContractApprovalStatus(ctx context.Context, bridgeName string) (asset.ApprovalStatus, error) {

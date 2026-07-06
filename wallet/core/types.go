@@ -71,6 +71,18 @@ type FeeState struct {
 	StampMS int64  `json:"stampMS"`
 }
 
+// SendFeeEstimate is the result of estimating the network fee for a send,
+// returned by Core.EstimateSendTxFee. Fee is the total fee at FeeRate, computed
+// against the wallet's actual funds where possible. The front end submits
+// FeeRate to Send so the rate the user approved is the rate that is charged. For
+// account/EVM assets the wallet computes its own rate or fee cap, so FeeRate is
+// informational and ignored by the send.
+type SendFeeEstimate struct {
+	Fee          uint64 `json:"fee"`
+	FeeRate      uint64 `json:"feeRate"`
+	ValidAddress bool   `json:"validAddress"`
+}
+
 // BridgeFeesAndLimits contains the fees and limits for a bridge operation.
 type BridgeFeesAndLimits struct {
 	Fees      map[uint32]uint64 `json:"fees"`

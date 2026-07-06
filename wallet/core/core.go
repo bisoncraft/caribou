@@ -3110,31 +3110,45 @@ func (c *Core) AllBridgePaths() (map[uint32]map[uint32][]string, error) {
 	return paths, nil
 }
 
-// EstimateSendTxFee returns an estimate of the tx fee needed to send or
-// withdraw the specified amount.
-func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, subtract, maxWithdraw bool) (fee uint64, isValidAddress bool, err error) {
+// EstimateSendTxFee estimates the network fee for sending or withdrawing the
+// specified amount, and reports the fee rate used. The front end submits the
+// returned FeeRate to Send so that the fee the user approved is the fee that is
+// charged.
+func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, subtract, maxWithdraw bool) (*SendFeeEstimate, error) {
 	if amount == 0 {
-		return 0, false, fmt.Errorf("cannot check fee for zero %s", unbip(assetID))
+		return nil, fmt.Errorf("cannot check fee for zero %s", unbip(assetID))
 	}
 
 	wallet, found := c.wallet(assetID)
 	if !found {
-		return 0, false, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
+		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
 	}
 
 	if !wallet.traits.IsTxFeeEstimator() {
-		return 0, false, fmt.Errorf("wallet does not support fee estimation")
+		return nil, fmt.Errorf("wallet does not support fee estimation")
 	}
 
 	if subtract && !wallet.traits.IsWithdrawer() {
-		return 0, false, fmt.Errorf("wallet does not support checking network fee for withdrawal")
+		return nil, fmt.Errorf("wallet does not support checking network fee for withdrawal")
 	}
 	estimator, is := wallet.Wallet.(asset.TxFeeEstimator)
 	if !is {
-		return 0, false, fmt.Errorf("wallet does not support fee estimation")
+		return nil, fmt.Errorf("wallet does not support fee estimation")
 	}
 
-	return estimator.EstimateSendTxFee(address, amount, 0, subtract, maxWithdraw)
+	// Determine the rate here and compute the fee against it, so the estimate
+	// and the rate the front end submits to Send are consistent. UTXO wallets
+	// use this rate; account/EVM wallets ignore it and compute their own.
+	feeRate := wallet.usableFeeRate()
+	fee, isValidAddress, err := estimator.EstimateSendTxFee(address, amount, feeRate, subtract, maxWithdraw)
+	if err != nil {
+		return nil, err
+	}
+	return &SendFeeEstimate{
+		Fee:          fee,
+		FeeRate:      feeRate,
+		ValidAddress: isValidAddress,
+	}, nil
 }
 
 // assetTickerGroup returns the ticker group an asset belongs to: its
@@ -4028,16 +4042,8 @@ func (c *Core) WalletFeeState(assetID uint32) (*FeeState, error) {
 		return nil, newError(missingWalletErr, "no wallet for %s", unbip(assetID))
 	}
 	// Return the rate the wallet would actually use, so the number the user
-	// approves is the number that is charged. When no live estimate is
-	// available, fall back to the wallet's configured fallback rate (if any), so
-	// the fallback is a value the user sees and approves rather than a silent
-	// substitution at send time.
-	rate := w.FeeRate()
-	if rate == 0 {
-		if fallbacker, ok := w.Wallet.(asset.FeeRateFallbacker); ok {
-			rate = fallbacker.FallbackFeeRate()
-		}
-	}
+	// approves is the number that is charged.
+	rate := w.usableFeeRate()
 	return &FeeState{
 		Rate:    rate,
 		Send:    w.StandardSendFee(rate),
