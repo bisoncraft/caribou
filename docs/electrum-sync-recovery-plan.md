@@ -7,8 +7,51 @@ seed-restore recovery, and `SyncedTo` advancement.
 
 ## Status
 
-Analysis + plan. Not started. Supersedes the ad-hoc recovery attempt (reverted)
-that bolted gap-limit discovery synchronously onto `Connect`.
+Phase 1 landed with the native electrum wallets (#91): the birthday fix (1a),
+the `chain.AddressProber` capability + `recoverViaScan` gap-limit discovery
+(1b, bounded concurrency, hooked in `syncWithChain` before `rescanWithTarget`),
+and the `TestElectrumRecovery` harness test. The gating concern in 1b resolved
+more simply than anticipated: `ExtendExternal/InternalAddresses` only ever
+extends the pool, so the scan is idempotent and needs no restore/rebuild/
+reconnect marker.
+
+The `utxosync` branch completes Phase 1:
+
+- **Discovery on by default.** #91 left the electrum `RecoveryWindow` at 0
+  (probing ran only via the `recoverywindow` setting, which nothing in
+  production set). Electrum wallets now default to `ElectrumRecoveryWindow`
+  (20), and `recoverViaScan` starts each branch at its pool top rather than
+  index 0: an empty pool (fresh create or seed restore) scans the branch from
+  0, while an ordinary reconnect probes only the window beyond the pool top —
+  O(gapLimit) per branch per connect regardless of wallet age, doubling as
+  detection of another instance of the seed having extended the pool.
+  Addresses below the pool top are already active and rescan-ingested, so
+  discovery's only job is extending the pool.
+- **Probe cache-priming (fix D).** `ProbeAddress` parks its `get_history`
+  reply keyed by the electrum status derived from it; the subscribe-time
+  status handler and the rescan's `collectHistories` reuse the parked history
+  when the server-reported status matches (exact staleness detection), so
+  discovered addresses are fetched once, not three times.
+- **Launch-date default birthday.** `DefaultWalletBirthday` moved to
+  `utxowallet/wallet`, pinned near launch (bump on release), deferring
+  Phase 2 as described below.
+- **Confirmed ingestion is rescan-only (ordering invariant).** Discovery made
+  multi-address first-subscribes the norm and exposed an ordering hazard in
+  the subscribe-time synthesized emission: per-address full-history emission
+  has no cross-address ordering, and `wtxmgr` never retroactively marks a
+  credit spent when the spender is inserted first, so a cross-address spend
+  chain ingested out of order left a stale "unspent" credit the wallet later
+  tried to double-spend (observed as `bad-txns-inputs-missingorspent` on the
+  LTC harness). Rescan-setup subscriptions now emit only mempool entries and
+  commit the full history as the subscription diff baseline; the rescan walk
+  ingests confirmed history in global block order, bounded below by the start
+  height. The same start height is enforced as a floor in the live
+  notification path (confirmed entries below it are pre-birthday by contract:
+  marked seen, never emitted), and within-block rescan emission is
+  dependency-ordered (parent before child), as `FilterBlocks` already was.
+
+Phases 2–5 remain deferred/strategic. Supersedes the ad-hoc recovery attempt
+(reverted) that bolted gap-limit discovery synchronously onto `Connect`.
 
 ## 1. The conundrum, restated
 
@@ -244,23 +287,30 @@ by making the block-walk faster.
 
 ## 8. Open questions / verification
 
-- **Birthday (1a):** the create path is verified correct and `RecoverWallet`'s
-  omission is the fix; still worth confirming `creds.Birthday` is populated on
-  the recover path and that no other `CreateWallet` caller drops `Birthday`.
+Resolved in Phase 1 (see Status):
+
+- **Birthday (1a):** resolved — both `CreateWallet` callers
+  (`createSeededWallet`, `RecoverWallet`) pass `creds.Birthday`.
+- **Discovery gating (1b):** resolved without a marker — the scan is
+  idempotent (pool extension only) and starts at each branch's pool top, so
+  restore/rebuild/reconnect all take the same path with the right cost. The
+  `RecoveryCfg` count-transfer question is moot for now: the lean
+  `NativeWallet` does not implement `asset.Recoverer`, so `core.RecoverWallet`
+  is unavailable for electrum wallets until that lands; a rebuild path that
+  pre-extends via counts composes fine (the scan then starts above them).
+- **`AddressProber` shape (1b):** resolved — `ProbeAddress` parks each
+  `get_history` reply keyed by its derived electrum status; the subscribe-time
+  handler and rescan reuse it on status match. The `AddressWatcher`
+  composition remains future work in `address-watching-plan.md`.
+- **Recovery test:** `TestElectrumRecovery` (harness) funds a run of external
+  addresses and asserts a fresh same-seed wallet rediscovers the full balance.
+
+Still open:
+
 - **Jump margin K (2):** pin the value (a `confTxFinality`-sized margin, bounded
   by `MaxReorgDepth = 10000`) and the seed-write helper (a low-level
   `addBlockHash` for the boundary, or a `PutSyncedToJump` that skips the
   `Height-1` check).
-- **Discovery gating (1b) — the main design risk:** distinguish mnemonic
-  restore (run) from rebuild (counts already via `RecoveryCfg`) from reconnect
-  (skip). Where the "discovery complete" marker lives (waddrmgr? asset txdb?),
-  how it composes with `RecoveryCfg`, whether the lean electrum wallet emits
-  recovery counts at all, and whether a later "re-scan on demand" path is wanted
-  (composes with cold-address metering in `address-watching-plan.md`).
-- **`AddressProber` shape (1b):** the capability interface, shared with the
-  neutrino fallback; must make discovery→ingestion cache-priming part of its
-  contract (electrum_rescan.go:647); composes with the `AddressWatcher`
-  interface in `address-watching-plan.md`.
-- **Recovery test:** fund a gap-limit address, create a fresh wallet from the
-  same seed, assert discovery + balance (the harness test drafted during the
-  reverted attempt).
+- **Re-scan on demand:** whether a user-triggered full-branch re-scan (from
+  index 0, ignoring the pool top) is wanted; composes with cold-address
+  metering in `address-watching-plan.md`.
