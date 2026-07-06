@@ -54,24 +54,28 @@ class MainActivity : AppCompatActivity() {
         private val app: App = Mobile.newApp()
 
         // Two idle tiers from ~/ocean/bossmobile/biometrics.md, measured as
-        // continuous time backgrounded. Normal app switching stays well under
-        // GATE and never re-auths.
+        // continuous time backgrounded. Normal app switching stays well under the
+        // gate and never re-auths. Both thresholds are user-configurable (see
+        // gateIdleMs/evictionIdleMs, set from the SPA via the bridge); these are
+        // the defaults.
         //
-        // GATE_IDLE_MS: the cheap UI gate. Past it, a resume paints a native
-        // biometric overlay but the core stays logged in and keys stay resident,
-        // so clearing it is instant (no re-login). Only applies when the device
-        // has biometrics; without them the gate would need the password, which is
-        // eviction, so a non-biometric device escalates straight to eviction.
+        // Gate: the cheap UI gate. Past it, a resume paints a native biometric
+        // overlay but the core stays logged in and keys stay resident, so clearing
+        // it is instant (no re-login). Only applies when the device has
+        // biometrics; without them the gate would need the password, which is
+        // eviction, so a non-biometric device escalates straight to eviction. A
+        // gate of 0 means "require unlock immediately" (gate on every resume).
         //
-        // EVICTION_IDLE_MS: the expensive key-eviction tier. Past it the core is
-        // locked (app.lock(): wallets locked, keys zeroed, sessions torn down),
-        // fired on a background timer so keys do not sit resident for the whole
-        // window, with a resume-time backstop. Rare by construction.
-        //
-        // TODO(biometrics): make both user-configurable (with a "require unlock
-        // immediately" option) instead of these fixed defaults.
-        private const val GATE_IDLE_MS = 10 * 60 * 1000L // 10 min
-        private const val EVICTION_IDLE_MS = 60 * 60 * 1000L // 1 hour
+        // Eviction: the expensive key-eviction tier. Past it the core is locked
+        // (app.lock(): wallets locked, keys zeroed, sessions torn down), fired on
+        // a background timer so keys do not sit resident for the whole window,
+        // with a resume-time backstop. EVICTION_NEVER disables it (gate only).
+        private const val DEFAULT_GATE_MS = 10 * 60 * 1000L // 10 min
+        private const val DEFAULT_EVICTION_MS = 60 * 60 * 1000L // 1 hour
+        private const val EVICTION_NEVER = Long.MAX_VALUE
+        private const val LOCK_PREFS = "bossw_lock"
+        private const val PREF_GATE_MS = "gate_ms"
+        private const val PREF_EVICT_MS = "evict_ms"
 
         // Private broadcast action for the key-eviction alarm (see evictReceiver).
         private const val ACTION_EVICT = "com.bisoncraft.bosswallet.ACTION_EVICT"
@@ -92,6 +96,13 @@ class MainActivity : AppCompatActivity() {
     // (onWebViewPageFinished), so no authed frame flashes through in between. It
     // does not clear the UI gate, which does no page load.
     private var revealOnLoad = false
+
+    // Idle thresholds, persisted so the SPA Settings pane can tune them via the
+    // bridge and they survive restarts. Read fresh each lifecycle callback so a
+    // change takes effect on the next background/resume.
+    private val lockPrefs by lazy { getSharedPreferences(LOCK_PREFS, MODE_PRIVATE) }
+    private fun gateIdleMs(): Long = lockPrefs.getLong(PREF_GATE_MS, DEFAULT_GATE_MS)
+    private fun evictionIdleMs(): Long = lockPrefs.getLong(PREF_EVICT_MS, DEFAULT_EVICTION_MS)
 
     // elapsedRealtime when the app was last backgrounded (0 = never / foreground).
     // elapsedRealtime keeps counting across device sleep, so onStart can measure
@@ -211,7 +222,8 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         if (isFinishing) return
         backgroundedAt = SystemClock.elapsedRealtime()
-        scheduleEviction(backgroundedAt + EVICTION_IDLE_MS)
+        val evict = evictionIdleMs()
+        if (evict != EVICTION_NEVER) scheduleEviction(backgroundedAt + evict)
     }
 
     // scheduleEviction arms the key-eviction alarm for triggerAtElapsed (an
@@ -242,14 +254,36 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         alarmManager.cancel(evictPendingIntent)
 
-        val idleMs = if (backgroundedAt == 0L) 0L else SystemClock.elapsedRealtime() - backgroundedAt
+        val bg = backgroundedAt
         backgroundedAt = 0L
+        // bg == 0 means this is not a resume from background (e.g. first launch);
+        // never gate. Guards a 0 gate ("require unlock immediately") from firing
+        // on the initial start.
+        if (bg == 0L) return
+        val idleMs = SystemClock.elapsedRealtime() - bg
 
         when {
-            idleMs >= EVICTION_IDLE_MS -> { clearGate(); evictAndReauth() }
-            idleMs >= GATE_IDLE_MS ->
-                if (biometricAuth.canAuthenticate(this)) enterUiGate() else evictAndReauth()
-            else -> { /* under the gate: resume as-is (overlay, if any, stays) */ }
+            idleMs >= evictionIdleMs() -> { clearGate(); evictAndReauth() }
+            idleMs >= gateIdleMs() -> {
+                if (biometricAuth.canAuthenticate(this)) {
+                    enterUiGate()
+                } else {
+                    // No biometric to run the cheap UI gate with (never enrolled,
+                    // or biometrics/credentials were removed after enrolling).
+                    // Escalate to full eviction rather than leave the authed
+                    // session exposed past the gate window - even when eviction is
+                    // set to Never, since Never assumes the biometric gate is the
+                    // thing doing the locking.
+                    evictAndReauth()
+                }
+            }
+            else -> {
+                // Under the gate window. If the overlay is already up (we
+                // backgrounded mid-gate), re-present the biometric so a quick
+                // return re-prompts instead of leaving the user on the manual
+                // retry button; otherwise resume as-is.
+                if (gated) uiGateBiometric()
+            }
         }
     }
 
@@ -441,6 +475,31 @@ class MainActivity : AppCompatActivity() {
         fun disableBiometrics() {
             biometricAuth.clear()
             notifyBiometricChanged()
+        }
+
+        // getLockConfig returns the idle thresholds as JSON minutes for the SPA
+        // Settings pane: gateMin (0 = require unlock immediately), evictMin
+        // (0 = never evict).
+        @JavascriptInterface
+        fun getLockConfig(): String {
+            val gateMin = gateIdleMs() / 60_000L
+            val evict = evictionIdleMs()
+            val evictMin = if (evict == EVICTION_NEVER) 0L else evict / 60_000L
+            return "{\"gateMin\":$gateMin,\"evictMin\":$evictMin}"
+        }
+
+        // setLockConfig persists the idle thresholds (minutes). gateMin 0 means
+        // gate on every resume; evictMin 0 means never evict.
+        @JavascriptInterface
+        fun setLockConfig(gateMin: Int, evictMin: Int) {
+            val gateMs0 = gateMin.coerceAtLeast(0).toLong() * 60_000L
+            val evictMs = if (evictMin <= 0) EVICTION_NEVER else evictMin.toLong() * 60_000L
+            // The gate is the cheaper tier and must sit strictly below eviction, or
+            // its band is empty and it never fires. The SPA enforces this, but
+            // clamp defensively so a stale or out-of-band pair cannot disable the
+            // gate. Eviction options are >= 30 min, so evictMs - 1 min stays > 0.
+            val gateMs = if (evictMs != EVICTION_NEVER && gateMs0 >= evictMs) evictMs - 60_000L else gateMs0
+            lockPrefs.edit().putLong(PREF_GATE_MS, gateMs).putLong(PREF_EVICT_MS, evictMs).apply()
         }
     }
 

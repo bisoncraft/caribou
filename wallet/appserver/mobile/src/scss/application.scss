@@ -461,6 +461,24 @@ body {
   }
 }
 
+.mb-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-height: 44px;
+
+  select {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0.25rem 0.5rem;
+    color: var(--mb-fg);
+    background: var(--mb-bg);
+    border: 1px solid var(--mb-border);
+    border-radius: 0.375rem;
+  }
+}
+
 // Send form.
 .mb-send {
   display: flex;

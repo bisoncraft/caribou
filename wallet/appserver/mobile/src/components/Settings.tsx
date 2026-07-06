@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent, ChangeEvent } from 'react'
-import t from '@bossw/shared/intl'
+import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import { postJSON } from '@bossw/shared/http'
 
@@ -12,6 +12,10 @@ interface BosswBridge {
   biometricEnrolled(): boolean
   enrollBiometrics(): void
   disableBiometrics(): void
+  // Idle-lock thresholds in minutes: gateMin (0 = require unlock immediately),
+  // evictMin (0 = never evict). getLockConfig returns JSON {gateMin, evictMin}.
+  getLockConfig(): string
+  setLockConfig(gateMin: number, evictMin: number): void
 }
 declare global {
   interface Window { bossw?: BosswBridge }
@@ -157,7 +161,7 @@ function BiometricSettings () {
     }
   }, [bridge])
 
-  if (!bridge || !available) return null
+  if (!bridge) return null
 
   // Don't flip optimistically: enrollment is an async native prompt the user can
   // cancel. The checkbox reflects the real stored state, updated via the event.
@@ -169,11 +173,101 @@ function BiometricSettings () {
   return (
     <div className='mb-card'>
       <h2>{t('Security')}</h2>
-      <label className='mb-check-row'>
-        <input type='checkbox' checked={enrolled} onChange={toggle} />
-        <span>{t('Unlock with biometrics')}</span>
-      </label>
+      {available && (
+        <label className='mb-check-row'>
+          <input type='checkbox' checked={enrolled} onChange={toggle} />
+          <span>{t('Unlock with biometrics')}</span>
+        </label>
+      )}
+      <LockTiming bridge={bridge} available={available} />
     </div>
+  )
+}
+
+// Minute values offered for each threshold. 0 is a sentinel: for the gate it
+// means "require unlock immediately", for eviction it means "never".
+const GATE_OPTIONS = [0, 1, 5, 10, 30]
+const EVICT_OPTIONS = [30, 60, 120, 0]
+
+function gateLabel (m: number): string {
+  return m === 0 ? t('Immediately') : tvar('{{ n }} min', { n: String(m) })
+}
+function evictLabel (m: number): string {
+  if (m === 0) return t('Never')
+  if (m % 60 === 0) return m === 60 ? t('1 hour') : tvar('{{ n }} hours', { n: String(m / 60) })
+  return tvar('{{ n }} min', { n: String(m) })
+}
+
+// LockTiming lets the user tune the two idle thresholds. Reads the current
+// values from the native bridge and writes both back on any change. The gate row
+// only shows when the device can actually gate (biometrics available); without
+// them the gate has no mechanism and only eviction applies.
+function LockTiming ({ bridge, available }: { bridge: BosswBridge, available: boolean }) {
+  const [gateMin, setGateMin] = useState(10)
+  const [evictMin, setEvictMin] = useState(60)
+
+  useEffect(() => {
+    try {
+      const cfg = JSON.parse(bridge.getLockConfig())
+      if (typeof cfg.gateMin === 'number') setGateMin(cfg.gateMin)
+      if (typeof cfg.evictMin === 'number') setEvictMin(cfg.evictMin)
+    } catch { /* older shell without the config bridge */ }
+  }, [bridge])
+
+  // Native owns persistence and is the single authority on the stored pair: it
+  // clamps the gate to sit strictly below eviction so the band never goes empty.
+  // Write through the bridge, then read back what it actually stored rather than
+  // trusting our optimistic values, so the UI can never drift from the truth even
+  // if the native clamp adjusts the pair.
+  const save = (gate: number, evict: number) => {
+    bridge.setLockConfig(gate, evict)
+    try {
+      const cfg = JSON.parse(bridge.getLockConfig())
+      setGateMin(typeof cfg.gateMin === 'number' ? cfg.gateMin : gate)
+      setEvictMin(typeof cfg.evictMin === 'number' ? cfg.evictMin : evict)
+    } catch {
+      setGateMin(gate)
+      setEvictMin(evict)
+    }
+  }
+
+  // The gate is the cheaper tier and must sit strictly below eviction, or its
+  // band [gate, evict) is empty and it would never fire. Offer only gate values
+  // below the chosen eviction (Never, 0, is always above), and when eviction
+  // drops to at or below the current gate, pull the gate down with it. Native
+  // clamps regardless; this just keeps the offered choices coherent.
+  const gateChoices = GATE_OPTIONS.filter((m) => evictMin === 0 || m < evictMin)
+  // Always include the persisted gate so the controlled select can render it even
+  // if the native clamp landed on a value not in GATE_OPTIONS.
+  const gateOptions = gateChoices.includes(gateMin)
+    ? gateChoices
+    : [...gateChoices, gateMin].sort((a, b) => a - b)
+  const onEvictChange = (evict: number) => {
+    let gate = gateMin
+    if (evict !== 0 && gate >= evict) {
+      const below = GATE_OPTIONS.filter((m) => m < evict)
+      gate = below.length ? Math.max(...below) : 0
+    }
+    save(gate, evict)
+  }
+
+  return (
+    <>
+      {available && (
+        <label className='mb-select-row'>
+          <span>{t('Lock after')}</span>
+          <select value={gateMin} onChange={(e) => save(Number(e.target.value), evictMin)}>
+            {gateOptions.map((m) => <option key={m} value={m}>{gateLabel(m)}</option>)}
+          </select>
+        </label>
+      )}
+      <label className='mb-select-row'>
+        <span>{t('Evict keys after')}</span>
+        <select value={evictMin} onChange={(e) => onEvictChange(Number(e.target.value))}>
+          {EVICT_OPTIONS.map((m) => <option key={m} value={m}>{evictLabel(m)}</option>)}
+        </select>
+      </label>
+    </>
   )
 }
 
