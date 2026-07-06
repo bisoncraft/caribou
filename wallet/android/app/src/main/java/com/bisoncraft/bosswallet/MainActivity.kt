@@ -1,13 +1,23 @@
 package com.bisoncraft.bosswallet
 
 import android.annotation.SuppressLint
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.WindowManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import kotlin.concurrent.thread
 import mobile.App
 import mobile.Mobile
@@ -30,11 +40,73 @@ class MainActivity : AppCompatActivity() {
     // Start returns the live URL if the core is still up).
     companion object {
         private val app: App = Mobile.newApp()
+
+        // EVICTION_IDLE_MS is how long the app may sit backgrounded before the
+        // Go core is locked (app.lock(): wallets locked, keys zeroed, sessions
+        // torn down). This is the expensive key-eviction tier from
+        // ~/ocean/bossmobile/biometrics.md, deliberately rare: normal app
+        // switching stays well under it and never re-auths. Short here for
+        // testing; production is ~1 hour (and should be user-configurable).
+        // TODO(biometrics): raise to ~1h and make configurable; add the cheaper
+        // ~10 min UI-gate tier once BiometricPrompt lands (increment B).
+        private const val EVICTION_IDLE_MS = 30_000L
+
+        // Private broadcast action for the key-eviction alarm (see evictReceiver).
+        private const val ACTION_EVICT = "com.bisoncraft.bosswallet.ACTION_EVICT"
+    }
+
+    private lateinit var alarmManager: AlarmManager
+
+    // elapsedRealtime when the app was last backgrounded (0 = never / foreground).
+    // elapsedRealtime keeps counting across device sleep, so onStart can measure
+    // true wall-clock idle as a backstop even if the eviction alarm is deferred.
+    private var backgroundedAt = 0L
+
+    // evictReceiver fires the eviction while the app is still backgrounded, so
+    // keys do not sit resident for the whole idle window. It is driven by an
+    // AlarmManager alarm rather than a main-looper Handler so it still fires while
+    // the device is dozing (a Handler's uptime clock is frozen in deep sleep). A
+    // runtime-registered receiver is enough: the alarm only needs to reach a
+    // still-alive backgrounded process - if the process was killed the keys went
+    // with it. app.lock() is idempotent, so an onStart backstop re-lock is
+    // harmless. No reload here: nothing is visible while backgrounded.
+    private val evictReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = lockCoreAsync(null)
+    }
+
+    // evictPendingIntent is the alarm target. FLAG_IMMUTABLE is required on API
+    // 31+; the explicit package keeps delivery to our own receiver.
+    private val evictPendingIntent: PendingIntent by lazy {
+        PendingIntent.getBroadcast(
+            this,
+            0,
+            Intent(ACTION_EVICT).setPackage(packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Mark the window secure so backgrounded wallet content is excluded from
+        // the OS recents/app-switcher thumbnail (the snapshot is taken at onStop)
+        // and blocked from screenshots and screen recording.
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE,
+        )
+
+        // Key-eviction alarm plumbing: register the private, non-exported receiver
+        // the backgrounded eviction alarm targets (see onStop/scheduleEviction).
+        // RECEIVER_NOT_EXPORTED keeps other apps on the device from reaching it.
+        alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        ContextCompat.registerReceiver(
+            this,
+            evictReceiver,
+            IntentFilter(ACTION_EVICT),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -77,7 +149,78 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // onStop fires when the app is no longer visible (backgrounded). Stamp the
+    // time and arm the eviction timer. onStart cancels it if the user comes back
+    // in time. isFinishing means a real teardown, handled by onDestroy.
+    override fun onStop() {
+        super.onStop()
+        if (isFinishing) return
+        backgroundedAt = SystemClock.elapsedRealtime()
+        scheduleEviction(backgroundedAt + EVICTION_IDLE_MS)
+    }
+
+    // scheduleEviction arms the key-eviction alarm for triggerAtElapsed (an
+    // elapsedRealtime deadline, matching backgroundedAt). setAndAllowWhileIdle lets
+    // it fire even while the device is dozing, unlike a Handler; below API 23
+    // (pre-Doze) a plain set suffices. The onStart backstop still re-checks on
+    // resume in case the OS coalesced or deferred the alarm.
+    private fun scheduleEviction(triggerAtElapsed: Long) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, evictPendingIntent)
+        } else {
+            alarmManager.set(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtElapsed, evictPendingIntent)
+        }
+    }
+
+    // onStart fires when the app becomes visible again. Cancel any pending
+    // eviction, then decide from the idle time whether this stint crossed the
+    // eviction threshold. If so, ensure the core is locked (the background timer
+    // usually already did it; this also covers the timer being frozen by Doze)
+    // and reload the WebView into the SPA's unlock screen once the lock lands. A
+    // quick switch falls under the threshold and resumes untouched.
+    override fun onStart() {
+        super.onStart()
+        alarmManager.cancel(evictPendingIntent)
+
+        val idleMs = if (backgroundedAt == 0L) 0L else SystemClock.elapsedRealtime() - backgroundedAt
+        backgroundedAt = 0L
+        if (idleMs < EVICTION_IDLE_MS) return
+
+        // Lock (idempotent), then reload only after it completes so the SPA does
+        // not briefly re-render the still-authed view before the session is torn
+        // down. app.lock() invalidated the session server-side, so the reloaded
+        // SPA sees itself as logged out and prompts for the password (its normal
+        // /api/login flow); the capability cookie is still valid, so the shell
+        // still loads. Once biometric unlock lands (increment B), a BiometricPrompt
+        // gates here instead of the SPA showing its password field.
+        lockCoreAsync {
+            if (::webView.isInitialized) webView.reload()
+        }
+    }
+
+    // lockCoreAsync runs app.lock() off the main thread (it locks wallets and can
+    // block) and, if given, invokes onLocked on the main thread once it returns.
+    // Concurrent calls serialize on the Go-side App mutex, and app.lock() is
+    // idempotent, so the background timer and an onStart backstop can both fire
+    // safely.
+    private fun lockCoreAsync(onLocked: (() -> Unit)?) {
+        thread(name = "bossw-lock") {
+            try {
+                app.lock()
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(applicationContext, "Lock error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            if (onLocked != null) runOnUiThread { if (!isDestroyed) onLocked() }
+        }
+    }
+
     override fun onDestroy() {
+        if (::alarmManager.isInitialized) alarmManager.cancel(evictPendingIntent)
+        runCatching { unregisterReceiver(evictReceiver) }
         // Only tear the core down when the Activity is actually finishing. On a
         // configuration-change recreation isFinishing is false, so the
         // process-wide core stays up and the recreated Activity's start()
