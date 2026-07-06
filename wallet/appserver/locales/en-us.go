@@ -783,4 +783,15 @@ var EnUS = map[string]*intl.Translation{
 	"view":                        {T: "View"},
 	"no_proposals_in_progress":    {T: "No proposals in progress."},
 	"view_all":                    {T: "View All"},
+
+	// Mobile session-lock settings (Security pane).
+	"Security":               {T: "Security"},
+	"Unlock with biometrics": {T: "Unlock with biometrics"},
+	"Lock after":             {T: "Lock after"},
+	"Evict keys after":       {T: "Evict keys after"},
+	"Immediately":            {T: "Immediately"},
+	"Never":                  {T: "Never"},
+	"1 hour":                 {T: "1 hour"},
+	"{{ n }} min":            {T: "{{ n }} min"},
+	"{{ n }} hours":          {T: "{{ n }} hours"},
 }

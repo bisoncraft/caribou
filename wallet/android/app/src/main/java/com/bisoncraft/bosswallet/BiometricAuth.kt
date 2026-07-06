@@ -33,8 +33,8 @@ import javax.crypto.spec.GCMParameterSpec
 // caller falls back to password login, so a newly-enrolled biometric cannot
 // unlock an existing wallet.
 class BiometricAuth(context: Context) {
-    private val prefs = context.applicationContext
-        .getSharedPreferences("bossw_biometric", Context.MODE_PRIVATE)
+    private val ctx = context.applicationContext
+    private val prefs = ctx.getSharedPreferences("bossw_biometric", Context.MODE_PRIVATE)
 
     companion object {
         private const val KEY_NAME = "bossw_pw_key"
@@ -90,7 +90,7 @@ class BiometricAuth(context: Context) {
         } catch (_: Exception) {
             onResult(false); return
         }
-        authenticate(activity, cipher, "Enable biometric unlock",
+        authenticate(activity, cipher, ctx.getString(R.string.enroll_title),
             onError = { onResult(false) },
             onSuccess = { authed ->
                 try {
@@ -125,7 +125,7 @@ class BiometricAuth(context: Context) {
         } catch (_: Exception) {
             onResult(null); return
         }
-        authenticate(activity, cipher, "Unlock Boss Wallet",
+        authenticate(activity, cipher, ctx.getString(R.string.unlock_prompt_title),
             onError = { onResult(null) },
             onSuccess = { authed ->
                 try {
@@ -143,7 +143,7 @@ class BiometricAuth(context: Context) {
     // no keystore key. onResult(true) on success, onResult(false) on cancel/error.
     // Must be called on the main thread.
     fun authenticateSimple(activity: AppCompatActivity, onResult: (Boolean) -> Unit) {
-        runPrompt(activity, "Unlock Boss Wallet", crypto = null,
+        runPrompt(activity, ctx.getString(R.string.unlock_prompt_title), crypto = null,
             onError = { onResult(false) },
             onSuccess = { onResult(true) })
     }
@@ -195,7 +195,7 @@ class BiometricAuth(context: Context) {
         val b = BiometricPrompt.PromptInfo.Builder()
             .setTitle(title)
             .setAllowedAuthenticators(authenticators())
-        if (!hasDeviceCredentialFallback) b.setNegativeButtonText("Cancel")
+        if (!hasDeviceCredentialFallback) b.setNegativeButtonText(ctx.getString(R.string.cancel))
         return b.build()
     }
 

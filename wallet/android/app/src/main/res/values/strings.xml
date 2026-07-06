@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Native shell strings for the session-lock / biometric flows. Externalized
+         so they can be translated under res/values-<lang>/. The SPA has its own
+         locale system (wallet/appserver/locales). -->
+
+    <!-- Lifecycle / error toasts. %1$s is the underlying error message. -->
+    <string name="start_failed">Failed to start: %1$s</string>
+    <string name="lock_error">Lock error: %1$s</string>
+    <string name="unlock_failed">Unlock failed: %1$s</string>
+
+    <!-- Biometric opt-in dialog. -->
+    <string name="enroll_title">Enable biometric unlock</string>
+    <string name="enroll_message">Confirm your wallet password to store it securely.</string>
+    <string name="password_hint">password</string>
+    <string name="cancel">Cancel</string>
+    <string name="enable">Enable</string>
+    <string name="incorrect_password">Incorrect password</string>
+    <string name="biometric_enabled">Biometric unlock enabled</string>
+    <string name="enrollment_cancelled">Enrollment cancelled</string>
+
+    <!-- Biometric prompt title shown when unlocking. -->
+    <string name="unlock_prompt_title">Unlock Boss Wallet</string>
+
+    <!-- UI-gate lock overlay. -->
+    <string name="lock_overlay_title">Boss Wallet</string>
+    <string name="lock_overlay_locked">Locked</string>
+    <string name="lock_overlay_unlock">Unlock</string>
+    <string name="lock_overlay_use_password">Use password instead</string>
+</resources>

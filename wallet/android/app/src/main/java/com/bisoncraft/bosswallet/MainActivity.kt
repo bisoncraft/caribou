@@ -198,7 +198,7 @@ class MainActivity : AppCompatActivity() {
                 loadAppUrl(url)
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(appCtx, "Failed to start: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(appCtx, getString(R.string.start_failed, e.message), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -367,24 +367,24 @@ class MainActivity : AppCompatActivity() {
             isClickable = true
 
             addView(TextView(this@MainActivity).apply {
-                text = "Boss Wallet"
+                setText(R.string.lock_overlay_title)
                 setTextColor(Color.WHITE)
                 textSize = 24f
                 gravity = Gravity.CENTER
             })
             addView(TextView(this@MainActivity).apply {
-                text = "Locked"
+                setText(R.string.lock_overlay_locked)
                 setTextColor(Color.parseColor("#8a9099"))
                 textSize = 14f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(8), 0, dp(24))
             })
             addView(Button(this@MainActivity).apply {
-                text = "Unlock"
+                setText(R.string.lock_overlay_unlock)
                 setOnClickListener { uiGateBiometric() }
             })
             addView(TextView(this@MainActivity).apply {
-                text = "Use password instead"
+                setText(R.string.lock_overlay_use_password)
                 setTextColor(Color.parseColor("#8a9099"))
                 textSize = 14f
                 gravity = Gravity.CENTER
@@ -428,7 +428,7 @@ class MainActivity : AppCompatActivity() {
                         notifyBiometricChanged()
                     }
                     runOnUiThread {
-                        Toast.makeText(applicationContext, "Unlock failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(applicationContext, getString(R.string.unlock_failed, e.message), Toast.LENGTH_SHORT).show()
                     }
                     null
                 } finally {
@@ -508,14 +508,14 @@ class MainActivity : AppCompatActivity() {
     private fun showEnrollDialog() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            hint = "password"
+            hint = getString(R.string.password_hint)
         }
         AlertDialog.Builder(this)
-            .setTitle("Enable biometric unlock")
-            .setMessage("Confirm your wallet password to store it securely.")
+            .setTitle(R.string.enroll_title)
+            .setMessage(R.string.enroll_message)
             .setView(input)
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Enable") { _, _ -> verifyThenEnroll(input.text.toString()) }
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton(R.string.enable) { _, _ -> verifyThenEnroll(input.text.toString()) }
             .show()
     }
 
@@ -531,13 +531,13 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (!ok) {
-                    Toast.makeText(applicationContext, "Incorrect password", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(applicationContext, R.string.incorrect_password, Toast.LENGTH_SHORT).show()
                     return@runOnUiThread
                 }
                 val pwb = pw.toByteArray()
                 biometricAuth.enroll(this, pwb) { enrolled ->
                     pwb.fill(0)
-                    val msg = if (enrolled) "Biometric unlock enabled" else "Enrollment cancelled"
+                    val msg = if (enrolled) R.string.biometric_enabled else R.string.enrollment_cancelled
                     Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
                     notifyBiometricChanged()
                 }
@@ -567,7 +567,7 @@ class MainActivity : AppCompatActivity() {
                 app.lock()
             } catch (e: Exception) {
                 runOnUiThread {
-                    Toast.makeText(applicationContext, "Lock error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(applicationContext, getString(R.string.lock_error, e.message), Toast.LENGTH_SHORT).show()
                 }
             }
             if (onLocked != null) runOnUiThread { if (!isDestroyed) onLocked() }
