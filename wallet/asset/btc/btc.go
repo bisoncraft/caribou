@@ -36,9 +36,10 @@ const (
 var (
 	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
 
-	// 02 Jun 21 21:12 CDT
-	defaultWalletBirthdayUnix = 1622668320
-	DefaultWalletBirthday     = time.Unix(int64(defaultWalletBirthdayUnix), 0)
+	// DefaultWalletBirthday re-exports the utxowallet fallback birthday
+	// (pinned near launch) for the asset packages; ltc and bch reference it
+	// through this package.
+	DefaultWalletBirthday = wallet.DefaultWalletBirthday
 
 	spvWalletDefinition = &asset.WalletDefinition{
 		Type:        walletTypeSPV,
