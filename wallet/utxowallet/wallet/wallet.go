@@ -128,6 +128,10 @@ type Wallet struct {
 	Manager *waddrmgr.Manager
 	TxStore *wtxmgr.Store
 
+	// watchPol tracks watched internal addresses for unwatch-at-finality;
+	// see watch_policy.go. The zero value is ready to use.
+	watchPol watchPolicy
+
 	chainClient        chain.Backend
 	chainClientLock    sync.Mutex
 	chainClientSynced  bool
@@ -734,9 +738,39 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 		addrs   []btcutil.Address
 		unspent []wtxmgr.Credit
 	)
+	// Watch policy: when the backend can unwatch, establish only the live
+	// window of internal addresses — everything colder has no wallet-
+	// uncontrolled events left to observe. Valid only when wtxmgr is
+	// already current: judging hotness needs the addresses' history, so on
+	// a first sync, restore, or deep catch-up (SyncedTo more than the
+	// finality window behind the chain) nothing is filtered — the rescan
+	// ingests everything and the post-sync reaper prunes instead. Seeds
+	// the finality tracker as a side effect, so that reaper picks up where
+	// the filter leaves off.
+	applyWatchFilter := false
+	if _, ok := chainClient.(chain.AddressWatcher); ok {
+		if _, chainTip, err := chainClient.GetBestBlock(); err == nil {
+			applyWatchFilter = w.Manager.SyncedTo().Height+watchFinalityDepth >= chainTip
+		}
+	}
+
 	err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
 		addrs, unspent, err = w.activeData(dbtx)
-		return err
+		if err != nil {
+			return err
+		}
+		if applyWatchFilter {
+			tip := w.Manager.SyncedTo().Height
+			hot, err := w.hotInternalAddrs(dbtx, tip)
+			if err != nil {
+				return err
+			}
+			addrs, unspent, err = w.filterColdInternalAddrs(dbtx, hot, addrs, unspent)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return err

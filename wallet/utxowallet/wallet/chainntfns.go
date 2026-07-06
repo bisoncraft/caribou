@@ -160,6 +160,11 @@ func (w *Wallet) handleChainNotifications() {
 					return w.connectBlock(tx, wtxmgr.BlockMeta(n))
 				})
 				notificationName = "block connected"
+				if err == nil {
+					// Outside the db tx: unwatching does a
+					// network round-trip per backend call.
+					w.reapInternalWatches(chainClient, n.Height)
+				}
 			case chain.BlockDisconnected:
 				err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
 					return w.disconnectBlock(tx, wtxmgr.BlockMeta(n))
@@ -419,6 +424,10 @@ func (w *Wallet) addRelevantTx(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxRecord,
 			w.NtfnServer.notifyMinedTransaction(dbtx, details, block)
 		}
 	}
+
+	// Feed the watch policy so internal addresses this tx touches can be
+	// unwatched once their activity finalizes.
+	w.noteInternalActivity(dbtx, rec, block)
 
 	return nil
 }

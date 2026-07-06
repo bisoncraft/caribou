@@ -40,6 +40,42 @@ func (c *ElectrumClient) NotifyReceived(addrs []btcutil.Address) error {
 	return nil
 }
 
+// Unwatch drops the scripthash subscriptions for the given addresses (see
+// chain.AddressWatcher). Unknown or never-subscribed addresses are skipped;
+// an address whose subscription is still in flight is left alone (a later
+// Unwatch gets it once the entry settles). A handleScripthashStatus run
+// concurrent with the removal re-checks entry identity before committing, so
+// dropping the entry mid-flight is safe.
+func (c *ElectrumClient) Unwatch(addrs []btcutil.Address) error {
+	for _, addr := range addrs {
+		sh, err := addrScripthash(addr)
+		if err != nil {
+			return err
+		}
+		c.addrCacheMtx.Lock()
+		entry, ok := c.addrCache[sh]
+		if !ok || entry.ready != nil {
+			c.addrCacheMtx.Unlock()
+			continue
+		}
+		delete(c.addrCache, sh)
+		c.addrCacheMtx.Unlock()
+		c.net.UnsubscribeScripthash(c.ctx, sh)
+	}
+	log.Debugf("electrum: unwatched %d addresses, %d subscriptions remain",
+		len(addrs), c.SubscriptionCount())
+	return nil
+}
+
+// SubscriptionCount reports the number of scripthash subscriptions currently
+// held — the persistent watch-set gauge (docs/address-watching-plan.md
+// Phase 0).
+func (c *ElectrumClient) SubscriptionCount() int {
+	c.addrCacheMtx.Lock()
+	defer c.addrCacheMtx.Unlock()
+	return len(c.addrCache)
+}
+
 // subscribeAddress computes the scripthash for addr, subscribes if not
 // already, and primes the cached entry so future notifications can diff
 // against it.
@@ -364,6 +400,12 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 	// above the cache is left in place — a retried sync re-probes, and stale
 	// leftovers are inert behind the status check.)
 	c.clearProbeCache()
+
+	// Watch-set gauge (docs/address-watching-plan.md Phase 0): electrumx
+	// enforces a per-session subscription cap, so growth here is the number
+	// to watch as a wallet ages.
+	log.Infof("electrum: rescan established %d scripthash subscriptions",
+		c.SubscriptionCount())
 
 	// Cancel any in-flight rescan and wait for its goroutine to exit
 	// before starting ours. This keeps the notification stream coherent.

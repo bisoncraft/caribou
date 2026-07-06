@@ -839,3 +839,91 @@ func TestElectrumInfo(t *testing.T) {
 		t.Fatal("wallet reports unlocked after Lock")
 	}
 }
+
+// TestElectrumChangeUnwatch verifies the internal-address watch lifecycle
+// (docs/address-watching-plan.md increment 1): a change address is watched
+// while its transaction is live, unwatched once the transaction is
+// watch-finality deep, and its UTXO remains spendable after the watch drops.
+func TestElectrumChangeUnwatch(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+
+	// Fresh random seed for isolation from the shared gamma history.
+	w, cm := connectElectrumWalletAt(t, t.TempDir(), randBytes(32), 20)
+	defer cm.Disconnect()
+	waitElectrumSynced(t, w)
+	if err := w.(asset.Authenticator).Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	subCount := func() int {
+		// The wallet wraps *chain.ElectrumClient in a walletBackend;
+		// SubscriptionCount is available via embedding.
+		ec := w.(*NativeWallet).btcw.ChainClient().(interface{ SubscriptionCount() int })
+		return ec.SubscriptionCount()
+	}
+
+	// Fund the wallet.
+	fundAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+	if _, err = alpha.Send(fundAddr, toSatoshi(20), 10); err != nil {
+		t.Fatalf("alpha.Send: %v", err)
+	}
+	if err = mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha: %v", err)
+	}
+	waitElectrumBalanceAtLeast(t, w, toSatoshi(20))
+
+	// Self-send: creates a change output on the internal branch, whose
+	// address gets watched at tx-creation/broadcast time.
+	destAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress for dest: %v", err)
+	}
+	coin, err := w.Send(destAddr, toSatoshi(5), 10)
+	if err != nil {
+		t.Fatalf("Send self: %v", err)
+	}
+	if err = mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha after self-send: %v", err)
+	}
+	waitElectrumTxConfirmed(t, w, coin.TxID())
+	before := subCount()
+	t.Logf("subscriptions with live change watch: %d", before)
+
+	// Mine past the finality window (wallet-layer watchFinalityDepth = 6);
+	// the block-connected reaper should drop the change-address watch.
+	for i := 0; i < 7; i++ {
+		if err = mineAlpha(); err != nil {
+			t.Fatalf("mineAlpha %d: %v", i, err)
+		}
+	}
+	// Generous deadline: header propagation to the wallet can lag well
+	// behind the instant mining above.
+	deadline := time.Now().Add(electrumSyncTimeout)
+	for subCount() >= before {
+		if time.Now().After(deadline) {
+			t.Fatalf("subscription count never dropped below %d (now %d)",
+				before, subCount())
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Logf("subscriptions after finality reap: %d", subCount())
+
+	// Spending must still work with the change UTXO unwatched: 16 BTC
+	// needs both the 5 BTC external output and the ~15 BTC change output.
+	coin2, err := w.Send(destAddr, toSatoshi(16), 10)
+	if err != nil {
+		t.Fatalf("Send spending unwatched change: %v", err)
+	}
+	if err = mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha after change spend: %v", err)
+	}
+	waitElectrumTxConfirmed(t, w, coin2.TxID())
+	t.Logf("spend of unwatched change confirmed: %s", coin2.TxID())
+}

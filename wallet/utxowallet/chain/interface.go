@@ -60,6 +60,21 @@ type AddressProber interface {
 	ProbeAddress(addr btcutil.Address) (used bool, err error)
 }
 
+// AddressWatcher is an optional capability for a Backend whose per-address
+// watches (established via NotifyReceived) can be dropped again. It lets the
+// wallet bound its persistent watch set by ending an address's watch once no
+// time-uncontrolled event can occur on it — e.g. a change address whose every
+// transaction is final. Backends that don't implement it (neutrino's cfilter
+// watch list is add-only today) keep the historical watch-forever behaviour;
+// see docs/address-watching-plan.md.
+//
+// Watch remains NotifyReceived: every existing feed watches at a hot moment
+// (address creation, change creation, broadcast), so only the removal verb is
+// new.
+type AddressWatcher interface {
+	Unwatch(addrs []btcutil.Address) error
+}
+
 // Notification types.  These are defined here and processed from from reading
 // a notificationChan to avoid handling these notifications directly in
 // rpcclient callbacks, which isn't very Go-like and doesn't allow

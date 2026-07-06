@@ -10,10 +10,53 @@ two `chain.Backend` implementations, so this document covers both.
 
 ## Status
 
-Proposed. Not started. The companion electrum-recovery work (electrum-native
-gap-limit discovery, currently stubbed out by `recovery_window=0`) shares the
-same `get_history` primitive and metering machinery and should be designed
-alongside this — see "Interaction with recovery" below.
+Increment 1 (internal-address lifecycle) in progress on the `utxosync` branch;
+the rest is proposed. The companion electrum-recovery work landed first (see
+`electrum-sync-recovery-plan.md` Status): gap-limit discovery is on by default,
+probes park their `get_history` replies for the rescan, and — most relevant
+here — confirmed ingestion is rescan-only, so subscriptions now exist purely
+for mempool visibility and future status changes.
+
+### Increment 1 design: internal-address lifecycle (unwatch at finality)
+
+Scope: bound the electrum subscription set by ending internal (change)
+subscriptions when their observable window closes. Cold-external demotion and
+the neutrino mechanics remain later phases.
+
+A review of the actual watch feeds showed the doc's §10 concern ("the shared
+layer re-adds internals behind any pruning") resolves more cheaply than
+anticipated: every feed fires at a genuinely hot moment — new-address creation
+(`wallet.go`), change-output creation (`createtx.go`), broadcast
+(`NotifyReceived(ourAddrs)` post-publish) — so the feeds stay as they are.
+What is missing is the other half of the lifecycle:
+
+1. **Unwatch at finality.** The shared wallet layer tracks watched
+   internal-branch addresses in memory: last mined-activity height plus any
+   unmined touches, updated as relevant txs are ingested. On each connected
+   block, tracked addresses with no unmined touches and no activity within
+   `watchFinalityDepth` blocks are unwatched via the backend's
+   `AddressWatcher` capability. Spending from an unwatched internal address
+   re-watches it (the broadcast feed already does this), covering the
+   no-change-output spend whose confirmation would otherwise be invisible.
+2. **Cold internals excluded at sync.** `syncWithChain`'s watch set
+   (`activeData`) includes an internal-branch address only if it has unmined
+   touches or mined activity within `watchFinalityDepth` of the tip —
+   reconstructed from one `RangeTransactions` pass, so the tiering needs no
+   persistence. Reconnects therefore re-establish only the live window, which
+   is what keeps electrum reconnect cheap as the wallet ages.
+3. **Unused internals are never watched.** A change address only becomes
+   observable when a tx pays it, and `createtx` watches it at that moment.
+
+`watchFinalityDepth` is a wallet-layer constant (6). The asset layer's
+`confTxFinality` (1) is a display threshold, not a reorg-safety margin, and is
+deliberately not reused. `AddressWatcher` starts as the minimal optional
+capability — `Unwatch` — since Watch is `NotifyReceived` and the metered
+`Scan` belongs to the cold-external/sweep work (Phase 3); the interface grows
+when its next consumer lands.
+
+Backends without `AddressWatcher` (neutrino today) keep the add-only
+behaviour: the tracker still runs but its unwatch calls no-op, and the sync
+filter only applies when the capability is present.
 
 ## 1. Background: how watching works today
 
