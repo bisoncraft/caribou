@@ -7,7 +7,7 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {
-    "lint": "tsc --noEmit && eslint src --ext .ts --ext .tsx"
+    "lint": "tsc --noEmit -p tsconfig.lint.json && eslint src --ext .ts --ext .tsx"
   },
   "peerDependencies": {
     "react": "^18.2.0"
