@@ -7,9 +7,10 @@ the Go core (`wallet/mobile`, gomobile-bound) and the React bundle
 `WKWebView`, confines it to loopback, and manages lifecycle.
 
 See `~/ocean/bossmobile/gomobile.md` for the architecture (issue #74). Session
-lock / biometrics (`biometrics.md`) and XMR (`xmr.md`) are separate slices and
-are **not** implemented here — `AppModel.scenePhaseChanged` marks the lifecycle
-seam where the biometric idle-timer work will land.
+lock / biometrics (`biometrics.md`) is a separate slice and is **not**
+implemented here — `AppModel.scenePhaseChanged` marks the lifecycle seam where
+the biometric idle-timer work will land. XMR (`xmr.md`) is opt-in and wired via
+`BOSSW_XMR=1 ./bind.sh` + `project.xmr.yml` (see [XMR (Monero)](#xmr-monero)).
 
 ## Prerequisites
 
@@ -55,12 +56,48 @@ skip if you just built it. Re-run `./bind.sh` whenever the Go core or the mobile
 bundle changes; re-run `xcodegen generate` only when `project.yml` or the file
 layout changes.
 
+## XMR (Monero)
+
+XMR is opt-in because it links the native `libmonero_wallet2_api_c` library.
+Default builds omit it (`-tags mobile`); everything else still works. To include
+it:
+
+```sh
+# 1. Build the native monero libs for the two iOS triples (macOS only; needs the
+#    Apple SDK provisioned into simplybs — see the header of build-ios.sh).
+#    Produces the per-triple dylibs under wallet/asset/xmr/lib/ios-arm64{,-simulator}/.
+../asset/xmr/build-ios.sh
+
+# 2. Bind with the xmr tag and assemble Monero.xcframework from those dylibs.
+BOSSW_XMR=1 ./bind.sh
+
+# 3. Generate the project with the XMR overlay so Xcode embeds + links monero.
+xcodegen generate --spec project.xmr.yml
+```
+
+How it fits together (details in `../asset/xmr/cxmr/cgo_ios.go`):
+
+- gomobile binds the Go core as a **c-archive** (static), so the monero symbols
+  are left undefined and resolved when **Xcode links the app** — nothing about
+  monero is linked at `gomobile bind` time.
+- `BOSSW_XMR=1 ./bind.sh` wraps each triple's dylib as a `Monero.framework` and
+  packs the device + simulator slices into `Frameworks/Monero.xcframework`.
+- `project.xmr.yml` includes `project.yml` and adds that xcframework as an
+  embedded, signed app dependency. Xcode picks the device or simulator slice per
+  destination, so there is no arm64 device/simulator ambiguity to resolve in cgo.
+
+The native library build (step 1) is the one piece that cannot run from the
+Debian Dockerfile that produces the desktop/Android libs: it needs the Apple SDK.
+It realistically runs in a macOS CI job with Apple credentials.
+
 ## Layout
 
 | Path | Role |
 |------|------|
 | `project.yml` | XcodeGen project spec (source of truth; the `.xcodeproj` is generated and git-ignored) |
-| `bind.sh` | Builds `Frameworks/Mobile.xcframework` via `gomobile bind -target=ios,iossimulator -tags mobile` |
+| `project.xmr.yml` | XcodeGen overlay (`include`s `project.yml`) that adds `Monero.xcframework`; used for XMR builds |
+| `bind.sh` | Builds `Frameworks/Mobile.xcframework` via `gomobile bind`; `BOSSW_XMR=1` adds the xmr tag and assembles `Monero.xcframework` |
+| `../asset/xmr/build-ios.sh` | Builds the native `libmonero_wallet2_api_c` dylibs for the two iOS triples (macOS; needs the Apple SDK) |
 | `BossWallet/BossWalletApp.swift` | `@main` entry; owns the app lifecycle |
 | `BossWallet/AppModel.swift` | Boots/stops the bound Go `App`; supplies dataDir + network |
 | `BossWallet/ContentView.swift` | Boot / error / WebView states |

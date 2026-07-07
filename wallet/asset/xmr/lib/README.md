@@ -12,6 +12,20 @@ Libraries must be built using the Dockerfile in the parent directory (see below)
 | `windows-amd64/` | Windows x86_64 | `libmonero_wallet2_api_c.dll` |
 | `darwin-amd64/` | macOS x86_64 | `libmonero_wallet2_api_c.dylib` |
 | `darwin-arm64/` | macOS ARM64 | `libmonero_wallet2_api_c.dylib` |
+| `android-arm64/` | Android arm64-v8a | `libmonero_wallet2_api_c.so` |
+| `android-amd64/` | Android x86_64 (emulator) | `libmonero_wallet2_api_c.so` |
+| `android-arm/` | Android armeabi-v7a | `libmonero_wallet2_api_c.so` |
+| `ios-arm64/` | iOS device | `libmonero_wallet2_api_c.dylib` |
+| `ios-arm64-simulator/` | iOS simulator | `libmonero_wallet2_api_c.dylib` |
+
+The desktop libraries are built with the Dockerfile (below). Mobile libraries
+are built and packaged differently: Android `.so`s come from the Dockerfile's
+`aarch64-linux-android` target and ship as `jniLibs` (see `wallet/android/bind.sh`);
+iOS `.dylib`s are built by `../build-ios.sh` on macOS (the Apple SDK cannot live
+in the Debian image) and packaged into `Monero.xcframework` by
+`wallet/ios/bind.sh` with `BOSSW_XMR=1`. Mobile libs are embedded in the app
+package rather than copied next to an executable, so the runtime notes below
+apply to the desktop builds only.
 
 ## Building the Libraries
 
