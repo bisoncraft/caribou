@@ -6,6 +6,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.annotation.VisibleForTesting
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -32,12 +33,23 @@ import javax.crypto.spec.GCMParameterSpec
 // permanently invalidates the key: unlock then clears the stored secret and the
 // caller falls back to password login, so a newly-enrolled biometric cannot
 // unlock an existing wallet.
-class BiometricAuth(context: Context) {
+// keyName, prefsName, and userAuthRequired are injectable so instrumented tests
+// can drive the real keystore and cipher paths against a throwaway alias -
+// without touching a user's live enrollment, and (with userAuthRequired = false)
+// without a live biometric prompt so the AES/GCM round-trip runs headless.
+// Production always uses the defaults.
+class BiometricAuth(
+    context: Context,
+    private val keyName: String = KEY_NAME,
+    prefsName: String = PREFS_NAME,
+    private val userAuthRequired: Boolean = true,
+) {
     private val ctx = context.applicationContext
-    private val prefs = ctx.getSharedPreferences("bossw_biometric", Context.MODE_PRIVATE)
+    private val prefs = ctx.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
 
     companion object {
         private const val KEY_NAME = "bossw_pw_key"
+        private const val PREFS_NAME = "bossw_biometric"
         private const val KEYSTORE = "AndroidKeyStore"
         private const val PREF_CT = "ct" // base64 ciphertext
         private const val PREF_IV = "iv" // base64 GCM IV
@@ -75,7 +87,7 @@ class BiometricAuth(context: Context) {
     fun clear() {
         prefs.edit().remove(PREF_CT).remove(PREF_IV).apply()
         try {
-            keystore().deleteEntry(KEY_NAME)
+            keystore().deleteEntry(keyName)
         } catch (_: Exception) {
         }
     }
@@ -199,43 +211,49 @@ class BiometricAuth(context: Context) {
         return b.build()
     }
 
-    private fun initEncryptCipher(): Cipher =
+    @VisibleForTesting
+    internal fun initEncryptCipher(): Cipher =
         Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, getOrCreateKey()) }
 
-    private fun initDecryptCipher(iv: ByteArray): Cipher =
+    @VisibleForTesting
+    internal fun initDecryptCipher(iv: ByteArray): Cipher =
         Cipher.getInstance(TRANSFORMATION).apply {
             init(Cipher.DECRYPT_MODE, getKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
         }
 
     private fun keystore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
 
-    private fun keyExists(): Boolean = try {
-        keystore().containsAlias(KEY_NAME)
+    @VisibleForTesting
+    internal fun keyExists(): Boolean = try {
+        keystore().containsAlias(keyName)
     } catch (_: Exception) {
         false
     }
 
-    private fun getKey(): SecretKey = keystore().getKey(KEY_NAME, null) as SecretKey
+    private fun getKey(): SecretKey = keystore().getKey(keyName, null) as SecretKey
 
-    private fun getOrCreateKey(): SecretKey {
+    @VisibleForTesting
+    internal fun getOrCreateKey(): SecretKey {
         if (keyExists()) return getKey()
         val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(
-            KEY_NAME,
+            keyName,
             KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setUserAuthenticationRequired(true)
-            .setInvalidatedByBiometricEnrollment(true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Authorize the key for a strong biometric OR the device credential,
-            // per operation (timeout 0), matching the prompt's authenticators so
-            // a PIN/pattern unlock can also decrypt.
-            spec.setUserAuthenticationParameters(
-                0,
-                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
-            )
+        if (userAuthRequired) {
+            spec.setUserAuthenticationRequired(true)
+                .setInvalidatedByBiometricEnrollment(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Authorize the key for a strong biometric OR the device
+                // credential, per operation (timeout 0), matching the prompt's
+                // authenticators so a PIN/pattern unlock can also decrypt.
+                spec.setUserAuthenticationParameters(
+                    0,
+                    KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+                )
+            }
         }
         gen.init(spec.build())
         return gen.generateKey()

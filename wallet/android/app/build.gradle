@@ -15,6 +15,7 @@ android {
         targetSdk 34
         versionCode 1
         versionName '0.1.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         // gomobile produces native .so per ABI inside the .aar; arm64 covers
         // modern devices. Add others as the bind targets grow.
         ndk {
@@ -86,4 +87,8 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.7.0'
     // BiometricPrompt + CryptoObject for the keystore-backed biometric unlock.
     implementation 'androidx.biometric:biometric:1.1.0'
+
+    // Instrumented tests (run on a device/emulator) for the keystore/cipher paths.
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test:runner:1.5.2'
 }
