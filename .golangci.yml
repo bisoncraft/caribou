@@ -25,6 +25,9 @@ linters:
   exclusions:
     paths:
       - docs/examples
+      # Vendored npm dependencies (untracked, pulled in by the SPA build) that
+      # happen to ship Go sources - not our code to lint.
+      - node_modules
 formatters:
   enable:
     - gofmt
@@ -32,3 +35,4 @@ formatters:
   exclusions:
     paths:
       - docs/examples
+      - node_modules

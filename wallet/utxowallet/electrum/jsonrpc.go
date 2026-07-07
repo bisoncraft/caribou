@@ -79,7 +79,7 @@ func prepareRequest(id uint64, method string, args any) ([]byte, error) {
 	}
 	switch rt := reflect.TypeOf(args); rt.Kind() {
 	case reflect.Struct, reflect.Slice:
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if rt.Elem().Kind() != reflect.Struct {
 			return nil, fmt.Errorf("electrum: invalid arg type %v, want slice or struct", rt)
 		}
