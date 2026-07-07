@@ -611,6 +611,7 @@ var bipIDs = map[uint32]string{
 	60003: "matic.eth", // Old MATIC token on Ethereum, not POL token
 	60004: "polygon.eth",
 	60005: "link.eth",
+	60006: "paxg.eth",
 	// END Ethereum reserved token range
 	// Base reserved token range 61000-61999
 	61000: "usdc.base",

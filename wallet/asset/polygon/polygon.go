@@ -11,7 +11,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
-	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
 )
 
 func init() {
@@ -144,7 +143,7 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		WalletInfo:       WalletInfo,
 		Net:              net,
 		DefaultProviders: defaultProviders,
-		MaxTxFeeGwei:     1000 * dexeth.GweiFactor, // 1000 POL
+		MaxTxFeeGwei:     1000 * eth.GweiFactor, // 1000 POL
 	})
 	if err != nil {
 		return nil, err
