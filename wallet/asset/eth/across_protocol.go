@@ -249,6 +249,7 @@ func acrossSupportedDestinations(ctx context.Context, assetID uint32, net util.N
 
 // acrossBridge implements the bridge interface for the Across protocol.
 type acrossBridge struct {
+	ctx           context.Context
 	cb            bind.ContractBackend
 	spokePool     *across.SpokePool
 	spokePoolAddr common.Address
@@ -280,6 +281,7 @@ func newAcrossBridge(ctx context.Context, cb bind.ContractBackend, node ethFetch
 	apiBaseURL := acrossBaseURL(net)
 
 	return &acrossBridge{
+		ctx:           ctx,
 		cb:            cb,
 		spokePool:     spokePool,
 		spokePoolAddr: spokePoolAddr,
@@ -406,7 +408,7 @@ func (b *acrossBridge) initiateBridge(txOpts *bind.TransactOpts, sourceAssetID, 
 	var res suggestedFeesRes
 	ctx := txOpts.Context
 	if ctx == nil {
-		ctx = context.Background()
+		ctx = b.ctx
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -529,7 +531,7 @@ func (b *acrossBridge) verifyBridgeCompletion(ctx context.Context, data []byte) 
 }
 
 func (b *acrossBridge) supportedDestinations(sourceAssetID uint32) []uint32 {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
 	defer cancel()
 	destinations, err := acrossSupportedDestinations(ctx, sourceAssetID, b.net, b.log)
 	if err != nil {
@@ -570,7 +572,7 @@ func (b *acrossBridge) bridgeLimits(sourceAssetID, destAssetID uint32) (*big.Int
 	url := fmt.Sprintf("%s/api/limits?inputToken=%s&outputToken=%s&originChainId=%d&destinationChainId=%d",
 		b.apiBaseURL, sourceAsset.address.Hex(), destAsset.address.Hex(), b.chainID, destAsset.chainID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
 	defer cancel()
 
 	var res struct {
