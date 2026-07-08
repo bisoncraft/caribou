@@ -18,7 +18,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
@@ -44,7 +43,7 @@ const (
 )
 
 var (
-	netPorts = dexbtc.NetPorts{
+	netPorts = btc.NetPorts{
 		Mainnet: "8332",
 		Testnet: "28332",
 		Simnet:  "18443",
@@ -54,7 +53,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "External",
 		Description:       "Connect to bitcoind",
-		DefaultConfigPath: dexbtc.SystemConfigPath("bitcoin"), // Same as bitcoin. That's dumb.
+		DefaultConfigPath: btc.SystemConfigPath("bitcoin"), // Same as bitcoin. That's dumb.
 		ConfigOpts:        append(btc.RPCConfigOpts("Bitcoin Cash", ""), btc.CommonConfigOpts("BCH", true)...),
 		MultiFundingOpts:  btc.MultiFundingOpts,
 	}
@@ -169,7 +168,7 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexbtc.MinLotSize(maxFeeRate, false)
+	return btc.MinLotSize(maxFeeRate, false)
 }
 
 // NewWallet is the exported constructor by which the DEX will import the
@@ -194,8 +193,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		Ports:                netPorts,
 		DefaultFallbackFee:   defaultFee,
 		Segwit:               false,
-		InitTxSizeBase:       dexbtc.InitTxSizeBase,
-		InitTxSize:           dexbtc.InitTxSize,
+		InitTxSizeBase:       btc.InitTxSizeBase,
+		InitTxSize:           btc.InitTxSize,
 		ExternalFeeEstimator: externalFeeRate,
 		LegacyBalance:        cfg.Type != walletTypeSPV,
 		// Bitcoin Cash uses the Cash Address encoding, which is Bech32, but not

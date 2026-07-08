@@ -10,7 +10,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )
@@ -71,7 +70,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "External",
 		Description:       "Connect to digibyted",
-		DefaultConfigPath: dexbtc.SystemConfigPath("digibyte"),
+		DefaultConfigPath: btc.SystemConfigPath("digibyte"),
 		ConfigOpts:        configOpts,
 	}
 	// WalletInfo defines some general information about a DigiByte wallet.
@@ -117,7 +116,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexbtc.MinLotSize(maxFeeRate, false)
+	return btc.MinLotSize(maxFeeRate, false)
 }
 
 // NewWallet is the exported constructor by which the DEX will import the
@@ -141,7 +140,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 
 	// Designate the clone ports. These will be overwritten by any explicit
 	// settings in the configuration file.
-	ports := dexbtc.NetPorts{
+	ports := btc.NetPorts{
 		Mainnet: "14022",
 		Testnet: "14023",
 		Simnet:  "18443",
@@ -161,10 +160,10 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		DefaultFeeRateLimit: DefaultFeeRateLimit,
 		LegacyBalance:       true,
 		Segwit:              true,
-		InitTxSize:          dexbtc.InitTxSizeSegwit,
-		InitTxSizeBase:      dexbtc.InitTxSizeBaseSegwit,
+		InitTxSize:          btc.InitTxSizeSegwit,
+		InitTxSizeBase:      btc.InitTxSizeBaseSegwit,
 		// UnlockSpends:        false, // check listlockunspent after a swap: https://github.com/decred/dcrdex/pull/1558#issuecomment-1096912520
-		// ConstantDustLimit:   dustLimit, // commented to use dexbtc.IsDust, but investigate for DGB
+		// ConstantDustLimit:   dustLimit, // commented to use btc.IsDust, but investigate for DGB
 		AssetID: BipID,
 	}
 

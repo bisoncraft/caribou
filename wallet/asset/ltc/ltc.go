@@ -16,7 +16,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg"
 )
@@ -38,7 +37,7 @@ const (
 )
 
 var (
-	NetPorts = dexbtc.NetPorts{
+	NetPorts = btc.NetPorts{
 		Mainnet: "9332",
 		Testnet: "19332",
 		Simnet:  "19443",
@@ -47,7 +46,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "Litecoin Core (external)",
 		Description:       "Connect to litecoind",
-		DefaultConfigPath: dexbtc.SystemConfigPath("litecoin"),
+		DefaultConfigPath: btc.SystemConfigPath("litecoin"),
 		ConfigOpts:        append(btc.RPCConfigOpts("Litecoin", "9332"), btc.CommonConfigOpts("LTC", true)...),
 		MultiFundingOpts:  btc.MultiFundingOpts,
 	}
@@ -109,7 +108,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexbtc.MinLotSize(maxFeeRate, true)
+	return btc.MinLotSize(maxFeeRate, true)
 }
 
 // Exists checks the existence of the wallet. Part of the Creator interface, so
@@ -224,8 +223,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		LegacyBalance:        false,
 		LegacyRawFeeLimit:    false,
 		Segwit:               true,
-		InitTxSize:           dexbtc.InitTxSizeSegwit,
-		InitTxSizeBase:       dexbtc.InitTxSizeBaseSegwit,
+		InitTxSize:           btc.InitTxSizeSegwit,
+		InitTxSizeBase:       btc.InitTxSizeBaseSegwit,
 		BlockDeserializer:    DeserializeBlockBytes,
 		ExternalFeeEstimator: externalFeeRate,
 		AssetID:              BipID,

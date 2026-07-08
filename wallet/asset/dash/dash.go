@@ -10,7 +10,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )
@@ -64,7 +63,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "Dash Core (external)",
 		Description:       "Connect to dashd",
-		DefaultConfigPath: dexbtc.SystemConfigPath("dash"),
+		DefaultConfigPath: btc.SystemConfigPath("dash"),
 		ConfigOpts:        configOpts,
 	}
 
@@ -110,7 +109,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexbtc.MinLotSize(maxFeeRate, false)
+	return btc.MinLotSize(maxFeeRate, false)
 }
 
 // newWallet constructs a new client wallet for Dash based on the WalletDefinition.Type
@@ -128,7 +127,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	}
 
 	// Designate the clone ports.
-	ports := dexbtc.NetPorts{
+	ports := btc.NetPorts{
 		Mainnet: "9998",
 		Testnet: "19998",
 		Simnet:  "19898",
@@ -150,8 +149,8 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		// Dash v19.1.0 has a breaking change from the true/false 'allowhighfees'
 		// to 'maxfeerate' in DASH/kB, the same as btc.
 		LegacyRawFeeLimit:        false,
-		InitTxSize:               dexbtc.InitTxSize,
-		InitTxSizeBase:           dexbtc.InitTxSizeBase,
+		InitTxSize:               btc.InitTxSize,
+		InitTxSizeBase:           btc.InitTxSizeBase,
 		PrivKeyFunc:              nil,
 		AddressDecoder:           nil,
 		AddressStringer:          nil,

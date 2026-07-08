@@ -17,7 +17,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
@@ -67,7 +66,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "Firo Core (external)",
 		Description:       "Connect to firod",
-		DefaultConfigPath: dexbtc.SystemConfigPath("firo"),
+		DefaultConfigPath: btc.SystemConfigPath("firo"),
 		ConfigOpts:        configOpts,
 		MultiFundingOpts:  btc.MultiFundingOpts,
 	}
@@ -116,7 +115,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dexbtc.MinLotSize(maxFeeRate, false)
+	return btc.MinLotSize(maxFeeRate, false)
 }
 
 // NewWallet is the exported constructor by which the DEX will import the
@@ -148,8 +147,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		DefaultFallbackFee:       DefaultFee,
 		DefaultFeeRateLimit:      DefaultFeeRateLimit,
 		Segwit:                   false,
-		InitTxSize:               dexbtc.InitTxSize,
-		InitTxSizeBase:           dexbtc.InitTxSizeBase,
+		InitTxSize:               btc.InitTxSize,
+		InitTxSizeBase:           btc.InitTxSizeBase,
 		LegacyBalance:            cfg.Type == walletTypeRPC,
 		LegacyRawFeeLimit:        true, // sendrawtransaction Has single arg allowhighfees
 		ArglessChangeAddrRPC:     true, // getrawchangeaddress has No address-type arg
