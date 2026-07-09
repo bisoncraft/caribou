@@ -39,7 +39,23 @@ const (
 
 // ObserverCount reports the number of live observer connections; primarily
 // a test and diagnostics hook.
-func (n *Network) ObserverCount() int { return int(n.observerCount.Load()) }
+func (n *Network) ObserverCount() int {
+	n.obsMtx.Lock()
+	defer n.obsMtx.Unlock()
+	return len(n.observers)
+}
+
+// observerNodes snapshots the live observer connections, for broadcast
+// fan-out.
+func (n *Network) observerNodes() []*Node {
+	n.obsMtx.Lock()
+	defer n.obsMtx.Unlock()
+	out := make([]*Node, 0, len(n.observers))
+	for _, o := range n.observers {
+		out = append(out, o.node)
+	}
+	return out
+}
 
 // observer is one header-only server connection.
 type observer struct {
@@ -78,11 +94,16 @@ func (o *observer) setTip(t *HeadersTip) {
 func (n *Network) runObservers(walletAddr string) {
 	defer n.wg.Done()
 
-	obs := make(map[string]*observer)
+	n.obsMtx.Lock()
+	n.observers = make(map[string]*observer)
+	n.obsMtx.Unlock()
 	defer func() {
-		for _, o := range obs {
+		n.obsMtx.Lock()
+		for _, o := range n.observers {
 			o.node.Close()
 		}
+		n.observers = nil
+		n.obsMtx.Unlock()
 	}()
 
 	var lagSince time.Time
@@ -90,7 +111,7 @@ func (n *Network) runObservers(walletAddr string) {
 	defer ticker.Stop()
 
 	for {
-		n.fillObservers(obs, walletAddr)
+		n.fillObservers(walletAddr)
 
 		select {
 		case <-n.ctx.Done():
@@ -100,14 +121,19 @@ func (n *Network) runObservers(walletAddr string) {
 
 		// Drop dead observers (demoted at death by their drain
 		// goroutines); fillObservers replaces them next pass.
-		for addr, o := range obs {
+		n.obsMtx.Lock()
+		for addr, o := range n.observers {
 			select {
 			case <-o.node.Done():
-				delete(obs, addr)
-				n.observerCount.Add(-1)
+				delete(n.observers, addr)
 			default:
 			}
 		}
+		obs := make([]*observer, 0, len(n.observers))
+		for _, o := range n.observers {
+			obs = append(obs, o)
+		}
+		n.obsMtx.Unlock()
 
 		localTip := n.headers.Tip()
 		bestObs := int32(-1)
@@ -156,18 +182,22 @@ func (n *Network) runObservers(walletAddr string) {
 
 // fillObservers tops the set up to maxObservers from the candidates not in
 // use, in health-scored order.
-func (n *Network) fillObservers(obs map[string]*observer, walletAddr string) {
-	if len(obs) >= maxObservers {
+func (n *Network) fillObservers(walletAddr string) {
+	have := func(addr string) (int, bool) {
+		n.obsMtx.Lock()
+		defer n.obsMtx.Unlock()
+		_, ok := n.observers[addr]
+		return len(n.observers), ok
+	}
+	if count, _ := have(""); count >= maxObservers {
 		return
 	}
 	for _, sv := range orderCandidates(n.candidates()) {
-		if len(obs) >= maxObservers {
+		count, ok := have(sv.Addr)
+		if count >= maxObservers {
 			break
 		}
-		if sv.Addr == walletAddr {
-			continue
-		}
-		if _, ok := obs[sv.Addr]; ok {
+		if sv.Addr == walletAddr || ok {
 			continue
 		}
 		node, err := NewNode(n.ctx, sv, n.cfg.TorProxy,
@@ -184,8 +214,9 @@ func (n *Network) fillObservers(obs map[string]*observer, walletAddr string) {
 		}
 		o := &observer{node: node}
 		o.setTip(tip)
-		obs[sv.Addr] = o
-		n.observerCount.Add(1)
+		n.obsMtx.Lock()
+		n.observers[sv.Addr] = o
+		n.obsMtx.Unlock()
 		log.Debugf("electrum: observer connected: %s (tip %d)", sv.Addr, tip.Height)
 
 		// Drain tip notifications for this observer's lifetime.

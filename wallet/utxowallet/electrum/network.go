@@ -11,10 +11,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -99,8 +101,11 @@ type Network struct {
 	// proactively — the error reaches the user only if they act.
 	spendSuspect atomic.Bool
 
-	// observerCount tracks live observer connections (see observers.go).
-	observerCount atomic.Int32
+	// obsMtx guards observers, the live observer connections maintained by
+	// runObservers (observers.go). nil outside the observer loop's
+	// lifetime.
+	obsMtx    sync.Mutex
+	observers map[string]*observer
 }
 
 // NewNetwork constructs a Network ready to be Started.
@@ -472,7 +477,90 @@ func (n *Network) Broadcast(ctx context.Context, rawTxHex string) (string, error
 	if err != nil {
 		return "", err
 	}
-	return node.Broadcast(ctx, rawTxHex)
+
+	// Broadcast fan-out (multi-server phase 3): the wallet server's answer
+	// is authoritative, but a lone server can accept a transaction and
+	// silently never relay it, so the observers get it too — censorship
+	// then requires every connected operator to collude. The transaction is
+	// being published to the whole network, so fanning it out costs no
+	// privacy.
+	observers := n.observerNodes()
+	txid, err := node.Broadcast(ctx, rawTxHex)
+	if err == nil {
+		for _, on := range observers {
+			n.wg.Add(1)
+			go func(on *Node) {
+				defer n.wg.Done()
+				if _, oerr := on.Broadcast(n.ctx, rawTxHex); oerr != nil &&
+					!broadcastDuplicate(oerr) {
+					log.Debugf("electrum: observer %s broadcast fan-out: %v",
+						on.Addr().Addr, oerr)
+				}
+			}(on)
+		}
+		return txid, nil
+	}
+	// A duplicate response means the network already has the transaction —
+	// success for (re)broadcast purposes.
+	if broadcastDuplicate(err) {
+		log.Debugf("electrum: broadcast: %s reports tx already known", node.Addr().Addr)
+		return txidFromRaw(n.cfg.Chain.Chain, rawTxHex)
+	}
+	// The wallet server refused. Try the observers synchronously — an
+	// accept here both publishes the transaction and flags the wallet
+	// server's refusal as suspect.
+	log.Warnf("electrum: wallet server %s rejected broadcast (%v); trying %d observers",
+		node.Addr().Addr, err, len(observers))
+	for _, on := range observers {
+		otxid, oerr := on.Broadcast(ctx, rawTxHex)
+		if oerr == nil {
+			log.Warnf("electrum: observer %s accepted a broadcast the wallet "+
+				"server rejected", on.Addr().Addr)
+			return otxid, nil
+		}
+		if broadcastDuplicate(oerr) {
+			return txidFromRaw(n.cfg.Chain.Chain, rawTxHex)
+		}
+	}
+	// Unanimous rejection: surface the wallet server's error.
+	return "", err
+}
+
+// broadcastDuplicate reports whether a broadcast error means the transaction
+// is already known to the server — success for our purposes. Server
+// implementations word this differently (electrumx, Fulcrum, and the daemons
+// behind them), so this is substring matching over the known variants rather
+// than error codes.
+func broadcastDuplicate(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"already known",
+		"already in block chain",
+		"already in the mempool",
+		"already in mempool",
+		"txn-already",
+		"duplicate transaction",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// txidFromRaw computes the transaction id of a raw hex transaction, used
+// when every server reported the transaction as already known and none
+// returned an id.
+func txidFromRaw(chain bisonwire.Chain, rawTxHex string) (string, error) {
+	raw, err := hex.DecodeString(rawTxHex)
+	if err != nil {
+		return "", fmt.Errorf("electrum: undecodable raw tx: %w", err)
+	}
+	tx := bisonwire.Tx{Chain: string(chain)}
+	if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
+		return "", fmt.Errorf("electrum: undecodable raw tx: %w", err)
+	}
+	return tx.TxHash().String(), nil
 }
 
 // EstimateFee returns satoshis per kilobyte for confTarget confirmations.

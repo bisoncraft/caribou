@@ -5,9 +5,15 @@
 package electrum
 
 import (
+	"bytes"
+	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/btcsuite/btcd/wire"
 )
 
 func TestOrderCandidates(t *testing.T) {
@@ -60,5 +66,41 @@ func TestOrderCandidates(t *testing.T) {
 	serverHealth.mtx.Unlock()
 	if got := names(orderCandidates(servers)); got != "a:1 b:1 c:1 " {
 		t.Fatalf("after backoff expires = %q", got)
+	}
+}
+
+func TestBroadcastDuplicate(t *testing.T) {
+	dups := []string{
+		"transaction already in block chain",
+		"258: txn-already-known",
+		"Transaction already in the mempool",
+		"tx already known",
+	}
+	for _, msg := range dups {
+		if !broadcastDuplicate(errors.New(msg)) {
+			t.Errorf("%q not classified as duplicate", msg)
+		}
+	}
+	for _, msg := range []string{"insufficient fee", "dust", "bad-txns-inputs-missingorspent"} {
+		if broadcastDuplicate(errors.New(msg)) {
+			t.Errorf("%q wrongly classified as duplicate", msg)
+		}
+	}
+}
+
+func TestTxidFromRaw(t *testing.T) {
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 1}, nil, nil))
+	tx.AddTxOut(wire.NewTxOut(5e8, []byte{0x51}))
+	var buf bytes.Buffer
+	if err := tx.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := txidFromRaw(bisonwire.ChainBTC, hex.EncodeToString(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("txidFromRaw: %v", err)
+	}
+	if want := tx.TxHash().String(); got != want {
+		t.Fatalf("txid = %s, want %s", got, want)
 	}
 }

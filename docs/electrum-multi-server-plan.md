@@ -102,9 +102,14 @@ continuously. Policy (decided):
 
 ### Phase 3 — Broadcast fan-out
 
-Submit transactions through the wallet server and all observers; success on
-any one counts. Cheap censorship insurance, no privacy change worth noting
-(the transaction is being published).
+Implemented. The wallet server's answer stays authoritative: on its accept,
+the observers receive the transaction asynchronously (censorship then
+requires every connected operator to collude); on its rejection, the
+observers are tried synchronously and any accept both publishes the
+transaction and logs the wallet server's refusal as suspect. Responses
+meaning "already known" — worded differently across server implementations —
+count as success, with the txid derived locally when no server returns one.
+No privacy change (the transaction is being published).
 
 ### Phase 4 — Peer discovery + list hygiene
 
