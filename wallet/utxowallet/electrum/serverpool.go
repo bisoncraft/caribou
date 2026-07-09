@@ -20,7 +20,12 @@ import (
 var serverHealth = struct {
 	mtx sync.Mutex
 	m   map[string]*serverRecord
-}{m: make(map[string]*serverRecord)}
+	// quarantined is the process-lifetime misbehavior blacklist. Unlike
+	// failure backoff (transient, retried), quarantine is earned by
+	// protocol violations and never expires within the process; the
+	// persisted 24-hour term (poolEntry.QuarantinedUntil) covers restarts.
+	quarantined map[string]bool
+}{m: make(map[string]*serverRecord), quarantined: make(map[string]bool)}
 
 type serverRecord struct {
 	failures    int
@@ -101,6 +106,11 @@ const (
 	// maxRecommenders caps the recommender list per entry.
 	maxRecommenders = 5
 
+	// quarantineTerm is the persisted exclusion for misbehavior (checkpoint
+	// or retarget violations, invalid work, losing a verified divergence).
+	// In-process the exclusion never expires; the term covers restarts.
+	quarantineTerm = 24 * time.Hour
+
 	// serverDBName is the pool database filename, beside the header store.
 	serverDBName = "servers.json"
 )
@@ -116,6 +126,20 @@ type poolEntry struct {
 	LastSuccess  time.Time   `json:"lastSuccess,omitempty"`
 	Successes    int         `json:"successes"`
 	Failures     int         `json:"failures"`
+
+	// QuarantinedUntil/QuarantineReason record a persisted misbehavior
+	// exclusion; see quarantineTerm.
+	QuarantinedUntil time.Time `json:"quarantinedUntil,omitempty"`
+	QuarantineReason string    `json:"quarantineReason,omitempty"`
+}
+
+// quarantinedLocked reports whether the entry is currently excluded for
+// misbehavior — by the process-lifetime blacklist or the persisted term.
+func quarantinedLocked(e *poolEntry, now time.Time) bool {
+	serverHealth.mtx.Lock()
+	inProc := serverHealth.quarantined[e.Server.Addr]
+	serverHealth.mtx.Unlock()
+	return inProc || now.Before(e.QuarantinedUntil)
 }
 
 // serverPool is the per-chain server database: the shipped seeds plus
@@ -238,6 +262,24 @@ func (p *serverPool) recordSuccess(addr string) {
 	}
 }
 
+// quarantine excludes a misbehaving server from every election: process-
+// lifetime in memory, quarantineTerm on disk. Slowness and connection
+// failures do NOT belong here — they take the backoff path (recordFailure).
+func (p *serverPool) quarantine(addr, reason string) {
+	serverHealth.mtx.Lock()
+	serverHealth.quarantined[addr] = true
+	serverHealth.mtx.Unlock()
+	log.Warnf("electrum: quarantining %s for %v: %s", addr, quarantineTerm, reason)
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	if e := p.entries[addr]; e != nil {
+		e.QuarantinedUntil = time.Now().Add(quarantineTerm)
+		e.QuarantineReason = reason
+		e.Failures++
+		p.save()
+	}
+}
+
 func (p *serverPool) recordFailure(addr string) {
 	recordServerFailure(addr)
 	p.mtx.Lock()
@@ -295,10 +337,10 @@ func (p *serverPool) agedDiscoveredLocked(now time.Time) []*ServerAddr {
 func (p *serverPool) walletCandidates() []*ServerAddr {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	out := orderCandidates(p.shipped)
 	now := time.Now()
+	out := orderCandidates(p.notQuarantinedLocked(p.shipped, now))
 	if p.fallbackEligibleLocked(now) {
-		aged := orderCandidates(p.agedDiscoveredLocked(now))
+		aged := orderCandidates(p.notQuarantinedLocked(p.agedDiscoveredLocked(now), now))
 		if len(aged) > 0 {
 			log.Errorf("electrum: every shipped server failing for %v; opening "+
 				"wallet-server election to %d aged discovered servers",
@@ -317,10 +359,11 @@ func (p *serverPool) walletCandidates() []*ServerAddr {
 func (p *serverPool) observerCandidates() []*ServerAddr {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	out := orderCandidates(p.shipped)
+	now := time.Now()
+	out := orderCandidates(p.notQuarantinedLocked(p.shipped, now))
 	var discovered []*poolEntry
 	for _, e := range p.entries {
-		if !e.Shipped {
+		if !e.Shipped && !quarantinedLocked(e, now) {
 			discovered = append(discovered, e)
 		}
 	}
@@ -351,4 +394,19 @@ func firstRec(e *poolEntry) string {
 		return e.Recommenders[0]
 	}
 	return ""
+}
+
+// notQuarantinedLocked filters servers currently excluded for misbehavior.
+// Must be called with p.mtx held.
+func (p *serverPool) notQuarantinedLocked(servers []*ServerAddr, now time.Time) []*ServerAddr {
+	// Fresh slice: filtering in place would corrupt the caller's backing
+	// array (p.shipped is long-lived).
+	out := make([]*ServerAddr, 0, len(servers))
+	for _, sv := range servers {
+		if e := p.entries[sv.Addr]; e != nil && quarantinedLocked(e, now) {
+			continue
+		}
+		out = append(out, sv)
+	}
+	return out
 }

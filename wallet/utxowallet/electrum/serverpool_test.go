@@ -168,3 +168,54 @@ func TestServerPoolTiering(t *testing.T) {
 		t.Fatalf("reloaded disc1 = %+v", e)
 	}
 }
+
+func TestServerPoolQuarantine(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	dir := t.TempDir()
+	shipped := []*ServerAddr{{Proto: "ssl", Addr: "q1:1"}, {Proto: "ssl", Addr: "q2:1"}}
+	p := newServerPool(dir, shipped)
+
+	p.quarantine("q1:1", "checkpoint mismatch")
+
+	// Excluded from both elections outright — no least-recently-failed
+	// mercy.
+	if wc := p.walletCandidates(); len(wc) != 1 || wc[0].Addr != "q2:1" {
+		t.Fatalf("wallet candidates with quarantine = %v", wc)
+	}
+	if oc := p.observerCandidates(); len(oc) != 1 || oc[0].Addr != "q2:1" {
+		t.Fatalf("observer candidates with quarantine = %v", oc)
+	}
+
+	// In-process, the blacklist holds even past the persisted term.
+	p.mtx.Lock()
+	p.entries["q1:1"].QuarantinedUntil = time.Now().Add(-time.Minute)
+	p.mtx.Unlock()
+	if wc := p.walletCandidates(); len(wc) != 1 {
+		t.Fatalf("process-lifetime quarantine did not hold: %v", wc)
+	}
+
+	// The persisted term survives a reload (fresh process: in-memory
+	// blacklist cleared). The pool file still carries the original
+	// 24-hour term written at quarantine time.
+	serverHealth.mtx.Lock()
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+	p2 := newServerPool(dir, shipped)
+	if wc := p2.walletCandidates(); len(wc) != 1 || wc[0].Addr != "q2:1" {
+		t.Fatalf("reloaded wallet candidates = %v", wc)
+	}
+	p2.mtx.Lock()
+	if r := p2.entries["q1:1"].QuarantineReason; r != "checkpoint mismatch" {
+		t.Fatalf("persisted reason = %q", r)
+	}
+	// An expired persisted term readmits (new process, >24h later).
+	p2.entries["q1:1"].QuarantinedUntil = time.Now().Add(-time.Minute)
+	p2.mtx.Unlock()
+	if wc := p2.walletCandidates(); len(wc) != 2 {
+		t.Fatalf("expired quarantine still excluding: %v", wc)
+	}
+}
