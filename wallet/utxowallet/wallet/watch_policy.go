@@ -399,11 +399,22 @@ func (p *watchPolicy) coldSet() ([]btcutil.Address, int32) {
 }
 
 // bumpCold records that a completed sweep verified the remaining cold set
-// through tip, advancing every entry's known-up-to height.
-func (p *watchPolicy) bumpCold(tip int32) {
+// through tip, advancing each verified entry's known-up-to height. Entries
+// in failed were NOT verified — a transient per-address error mid-sweep —
+// and their floors must stay put, or the heights the failed check skipped
+// would never be examined again (a silently missed payment until seed
+// restore).
+func (p *watchPolicy) bumpCold(tip int32, failed []btcutil.Address) {
+	skip := make(map[string]struct{}, len(failed))
+	for _, addr := range failed {
+		skip[addr.String()] = struct{}{}
+	}
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	for _, e := range p.coldExternal {
+	for key, e := range p.coldExternal {
+		if _, ok := skip[key]; ok {
+			continue
+		}
 		if tip > e.upTo {
 			e.upTo = tip
 		}
@@ -439,7 +450,7 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 			p.sweeping = false
 			p.mtx.Unlock()
 		}()
-		hits, err := watcher.Sweep(cold, fromHeight)
+		hits, failed, err := watcher.Sweep(cold, fromHeight)
 		if err != nil {
 			log.Errorf("Cold-address sweep failed: %v", err)
 			// Retry from the same floor next interval.
@@ -449,7 +460,12 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 			return
 		}
 		p.promote(hits)
-		p.bumpCold(tip)
+		p.bumpCold(tip, failed)
+		if len(failed) > 0 {
+			log.Warnf("Cold-address sweep: %d of %d checks failed; their "+
+				"floors stay at their last verified heights for the next sweep",
+				len(failed), len(cold))
+		}
 		log.Debugf("Cold-address sweep: %d checked from height %d, %d promoted",
 			len(cold), fromHeight, len(hits))
 	}()

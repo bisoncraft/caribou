@@ -99,3 +99,30 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 		t.Fatalf("cold set after promote = %v, want empty", got)
 	}
 }
+
+// TestWatchPolicySweepPartialFailureFloor pins the fund-loss regression where
+// a sweep with a failed per-address check advanced every cold entry's floor,
+// leaving the failed address's skipped heights permanently unexamined.
+func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
+	var p watchPolicy
+	ok, bad := tAddr(t, 10), tAddr(t, 11)
+	p.demote(ok, 100)
+	p.demote(bad, 100)
+
+	p.bumpCold(200, []btcutil.Address{bad})
+
+	p.mtx.Lock()
+	okUpTo := p.coldExternal[ok.String()].upTo
+	badUpTo := p.coldExternal[bad.String()].upTo
+	p.mtx.Unlock()
+	if okUpTo != 200 {
+		t.Fatalf("verified entry floor = %d, want 200", okUpTo)
+	}
+	if badUpTo != 100 {
+		t.Fatalf("failed entry floor advanced to %d, want 100", badUpTo)
+	}
+	// The next sweep must look from the failed entry's old floor.
+	if _, from := p.coldSet(); from != 100 {
+		t.Fatalf("next sweep floor = %d, want 100", from)
+	}
+}

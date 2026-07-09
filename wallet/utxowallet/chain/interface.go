@@ -76,10 +76,12 @@ type AddressWatcher interface {
 
 	// Sweep is the metered safety net for unwatched (cold) addresses: it
 	// checks each address for activity above fromHeight (or in the
-	// mempool), re-establishes the watch for those with hits, ingests the
-	// new history in block order, and returns the hit addresses so the
-	// caller can promote them out of its cold set.
-	Sweep(addrs []btcutil.Address, fromHeight int32) ([]btcutil.Address, error)
+	// mempool), re-establishes the watch for those with hits, and ingests
+	// the new history in block order. It returns the hit addresses (for
+	// promotion out of the cold set) and the addresses whose check FAILED —
+	// the caller must not advance any known-history floor past a failed
+	// address, or the heights it skipped are never examined again.
+	Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error)
 }
 
 // Notification types.  These are defined here and processed from from reading

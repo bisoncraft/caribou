@@ -94,11 +94,12 @@ Policy (extends the increment-1 tracker to the external branch):
     externals it drops, the reaper records external reaps, and sweep hits
     leave the set (re-tracked by ingestion).
   - fromHeight semantics: the wallet knew everything up to the moment an
-    address was watched last. The post-sync sweep — the offline catch-up,
-    since cold externals are excluded from the sync rescan — uses the
-    previous session's `SyncedTo` minus a `watchFinalityDepth` reorg margin,
-    captured in `syncWithChain` when the filter applies. Steady-state sweeps
-    use the previous sweep tip minus the same margin.
+    address was watched last, so each cold entry records that height and a
+    sweep looks above the minimum over the set. No reorg margin is
+    subtracted: dipping below the known-up-to point makes already-ingested
+    history register as hits (instant false re-promotion), while a
+    transaction reorged back in confirms at a new height above the floor
+    and is caught without one.
   - The sweep runs as a single-flight goroutine triggered from the
     block-connected path (network calls must not block the notification
     loop); the first trigger after sync fires immediately, then every

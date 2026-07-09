@@ -104,7 +104,7 @@ func NewHeaders(cfg *ChainConfig, dataDir string) (*Headers, error) {
 		anchored := false
 		if cfg.Params != nil {
 			for _, cp := range cfg.Params.Checkpoints {
-				if cp.Height == cfg.StartHeight {
+				if cp.Height == cfg.StartHeight && cp.Hash != nil {
 					anchored = true
 					break
 				}
@@ -583,12 +583,6 @@ func (h *Headers) checkPoW(hdr *wire.BlockHeader) error {
 	return nil
 }
 
-// prevHashAt returns the hash that a header at `height` must reference as
-// PrevBlock. For the very first header (at StartHeight) there is no local
-// parent to compare against — at StartHeight == 0 the parent is genesis and
-// PrevBlock is the zero hash; at a non-zero StartHeight checkpoint we'd need
-// a stored checkpoint hash to validate against, which we don't yet support,
-// so we accept what the server gave us.
 // anchoredStart reports whether height is a non-genesis sync anchor: the
 // first stored header, whose parent is deliberately absent. Linkage cannot be
 // checked there; the checkpoint at that height authenticates it instead
@@ -666,4 +660,19 @@ func (h *Headers) loadFromDisk() error {
 	h.tip.Store(h.cfg.StartHeight + count - 1)
 	log.Infof("electrum: loaded %d headers, tip at %d", count, h.tip.Load())
 	return nil
+}
+
+// workRange returns the cumulative proof-of-work of the stored headers over
+// [from, to], for comparison against a dissenting chain's claimed work.
+// Missing headers contribute nothing (the range is clamped to what exists).
+func (h *Headers) workRange(from, to int32) *big.Int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	work := new(big.Int)
+	for height := from; height <= to; height++ {
+		if hdr := h.byHeight[height]; hdr != nil {
+			work.Add(work, blockchain.CalcWork(hdr.Bits))
+		}
+	}
+	return work
 }

@@ -499,9 +499,11 @@ func (n *Network) Broadcast(ctx context.Context, rawTxHex string) (string, error
 	txid, err := node.Broadcast(ctx, rawTxHex)
 	if err == nil {
 		for _, on := range observers {
-			n.wg.Add(1)
+			// Deliberately NOT wg-tracked: Broadcast can race Stop, and
+			// wg.Add concurrent with the teardown path's wg.Wait is
+			// WaitGroup misuse. These goroutines touch no Network
+			// channels and their requests die with n.ctx/node.Close.
 			go func(on *Node) {
-				defer n.wg.Done()
 				if _, oerr := on.Broadcast(n.ctx, rawTxHex); oerr != nil &&
 					!broadcastDuplicate(oerr) {
 					log.Debugf("electrum: observer %s broadcast fan-out: %v",

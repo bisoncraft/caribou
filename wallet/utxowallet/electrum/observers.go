@@ -7,9 +7,15 @@ package electrum
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"math/big"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcd/blockchain"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -280,6 +286,7 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		o.node.Close()
 		return
 	}
+	batch := make([]*wire.BlockHeader, 0, len(raw)/n.cfg.Chain.HeaderSize)
 	for off := 0; off+n.cfg.Chain.HeaderSize <= len(raw); off += n.cfg.Chain.HeaderSize {
 		var hdr wire.BlockHeader
 		if err := hdr.Deserialize(bytes.NewReader(raw[off : off+n.cfg.Chain.HeaderSize])); err != nil {
@@ -289,19 +296,37 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 			o.node.Close()
 			return
 		}
-		if err := n.headers.checkPoW(&hdr); err != nil {
-			// Fabricated chain: demote and drop the observer, keep
-			// the wallet stream untouched.
-			log.Warnf("electrum: observer %s served a chain without valid "+
-				"work; demoting: %v", o.node.Addr().Addr, err)
-			n.pool.recordFailure(o.node.Addr().Addr)
-			o.node.Close()
-			return
-		}
+		batch = append(batch, &hdr)
 	}
-	// The dissenting chain carries real work: our wallet server may be on
-	// the wrong chain. Suspend spends and rotate; the rebuilt network
-	// re-elects and re-validates.
+	_, tipHdr := o.tip()
+	dissentWork, err := auditDissent(batch, tipHdr.BlockHash(), n.headers.checkPoW)
+	if err != nil {
+		// Fabricated or incoherent chain: demote and drop the observer,
+		// keep the wallet stream untouched.
+		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
+			"work audit; demoting: %v", o.node.Addr().Addr, h, err)
+		n.pool.recordFailure(o.node.Addr().Addr)
+		o.node.Close()
+		return
+	}
+	// Self-attested Bits are only meaningful in comparison: a header's PoW
+	// check proves the hash beats its OWN claimed target, so a liar can
+	// claim trivial difficulty and "pass". The dissent is credible only if
+	// its cumulative work over the contested span meets or exceeds our own
+	// chain's — claiming low difficulty then loses the comparison, and
+	// claiming high difficulty fails the hash check.
+	localWork := n.headers.workRange(start, n.headers.Tip())
+	if dissentWork.Cmp(localWork) < 0 {
+		log.Warnf("electrum: observer %s presents a linked, PoW-valid chain at "+
+			"height %d with less cumulative work than ours (%s < %s); stale or "+
+			"losing fork, demoting", o.node.Addr().Addr, h, dissentWork, localWork)
+		n.pool.recordFailure(o.node.Addr().Addr)
+		o.node.Close()
+		return
+	}
+	// The dissenting chain carries at least as much real work as ours: our
+	// wallet server may be on the wrong chain. Suspend spends and rotate;
+	// the rebuilt network re-elects and re-validates.
 	log.Errorf("electrum: observer %s presents a conflicting chain with valid "+
 		"work at height %d — possible eclipse or fork; suspending broadcasts "+
 		"and rotating away from %s", o.node.Addr().Addr, h, walletAddr)
@@ -325,9 +350,50 @@ func (n *Network) discoverPeers() {
 			log.Debugf("electrum: peer discovery via %s: %v", node.Addr().Addr, err)
 			continue
 		}
+		// Onion peers are undialable without a Tor proxy; admitting them
+		// burns a dial timeout and a failure record per election cycle.
+		if n.cfg.TorProxy == "" {
+			kept := peers[:0]
+			for _, sv := range peers {
+				if !strings.HasSuffix(strings.Split(sv.Addr, ":")[0], ".onion") {
+					kept = append(kept, sv)
+				}
+			}
+			peers = kept
+		}
 		if len(peers) > 0 {
 			n.pool.addDiscovered(node.Addr().Addr, peers)
 			log.Debugf("electrum: %s advertised %d usable peers", node.Addr().Addr, len(peers))
 		}
 	}
+}
+
+// auditDissent validates a dissenting header batch's internal coherence and
+// returns its cumulative work. Requirements: non-empty, internally linked
+// (each header's PrevBlock is the previous header's hash), terminating in
+// claimedTip (the batch actually ends at the chain the observer advertised),
+// and every header passing the hash-beats-claimed-target check. The CALLER
+// must compare the returned work against the local chain's over the same
+// span — self-attested difficulty is only bounded by that comparison.
+func auditDissent(batch []*wire.BlockHeader, claimedTip chainhash.Hash,
+	checkPoW func(*wire.BlockHeader) error) (*big.Int, error) {
+
+	if len(batch) == 0 {
+		return nil, errors.New("electrum: empty dissent batch")
+	}
+	work := new(big.Int)
+	for i, hdr := range batch {
+		if i > 0 && hdr.PrevBlock != batch[i-1].BlockHash() {
+			return nil, fmt.Errorf("electrum: dissent batch does not link at index %d", i)
+		}
+		if err := checkPoW(hdr); err != nil {
+			return nil, err
+		}
+		work.Add(work, blockchain.CalcWork(hdr.Bits))
+	}
+	if got := batch[len(batch)-1].BlockHash(); got != claimedTip {
+		return nil, fmt.Errorf("electrum: dissent batch ends at %s, not the "+
+			"advertised tip %s", got, claimedTip)
+	}
+	return work, nil
 }

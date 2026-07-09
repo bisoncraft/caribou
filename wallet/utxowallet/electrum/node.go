@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/btcsuite/btcd/wire"
@@ -404,9 +405,7 @@ func (n *Node) ServerPeers(ctx context.Context) ([]*ServerAddr, error) {
 		if sslPort == "" || version == "" {
 			continue
 		}
-		// Require protocol 1.4+ (all modern servers; simple string
-		// comparison suffices for 1.x versions).
-		if version < "1.4" {
+		if !protoAtLeast(version, 1, 4) {
 			continue
 		}
 		out = append(out, &ServerAddr{
@@ -416,4 +415,20 @@ func (n *Node) ServerPeers(ctx context.Context) ([]*ServerAddr, error) {
 		})
 	}
 	return out, nil
+}
+
+// protoAtLeast reports whether a server-advertised protocol version string
+// ("1.4", "1.4.2", "1.10") is at least major.minor. Numeric comparison —
+// lexicographic ordering would reject a future "1.10".
+func protoAtLeast(version string, major, minor int) bool {
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) < 2 {
+		return false
+	}
+	maj, err1 := strconv.Atoi(parts[0])
+	min_, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return maj > major || (maj == major && min_ >= minor)
 }

@@ -48,6 +48,11 @@ func (c *ElectrumClient) NotifyReceived(addrs []btcutil.Address) error {
 // concurrent with the removal re-checks entry identity before committing, so
 // dropping the entry mid-flight is safe.
 func (c *ElectrumClient) Unwatch(addrs []btcutil.Address) error {
+	if err := c.ctx.Err(); err != nil {
+		// Refuse rather than silently dropping cache entries whose
+		// server-side unsubscribes can no longer be delivered.
+		return fmt.Errorf("electrum: unwatch on stopped client: %w", err)
+	}
 	for _, addr := range addrs {
 		sh, err := addrScripthash(addr)
 		if err != nil {
@@ -91,9 +96,9 @@ const sweepConcurrency = 16
 // ascending block order through emitFilteredBlock — the per-address live
 // path cannot order cross-address chains, which corrupts wtxmgr's spend
 // tracking (see subscribeAddress).
-func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) ([]btcutil.Address, error) {
+func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error) {
 	if err := c.ctx.Err(); err != nil {
-		return nil, fmt.Errorf("electrum: sweep on stopped client: %w", err)
+		return nil, nil, fmt.Errorf("electrum: sweep on stopped client: %w", err)
 	}
 
 	type result struct {
@@ -128,13 +133,15 @@ func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) ([]btc
 	}
 	wg.Wait()
 
-	var hits []btcutil.Address
 	matches := make(map[int32][]electrum.HistoryEntry)
 	for _, r := range results {
 		if r.err != nil {
 			// A failed check is retried next sweep; don't fail the
-			// batch.
+			// batch — but the caller must know this address was NOT
+			// verified, so its known-history floor doesn't advance
+			// past heights that were never examined.
 			log.Warnf("electrum: sweep %s: %v", r.addr, r.err)
+			failed = append(failed, r.addr)
 			continue
 		}
 		hit := false
@@ -154,7 +161,7 @@ func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) ([]btc
 		// initial emission is mempool-only and the parked history
 		// becomes the diff baseline without a refetch.
 		if err := c.subscribeAddress(r.addr, true); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -167,15 +174,19 @@ func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) ([]btc
 	for _, height := range heights {
 		hdr := c.net.HeaderByHeight(height)
 		if hdr == nil {
-			log.Warnf("electrum: sweep missing header at %d", height)
-			continue
+			// Do NOT skip: the subscribe pass above already committed
+			// these entries to the diff baseline, so a dropped emission
+			// here would never be retried by the status path. Failing
+			// the sweep leaves the cold floors unadvanced and the next
+			// interval re-delivers (ingestion is idempotent).
+			return nil, nil, fmt.Errorf("electrum: sweep missing header at %d", height)
 		}
 		block := wtxmgr.BlockMeta{
 			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
 			Time:  hdr.Timestamp,
 		}
 		if err := c.emitFilteredBlock(c.ctx, block, matches[height]); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -185,7 +196,7 @@ func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) ([]btc
 			"(%d subscriptions now held)", len(hits), len(addrs),
 			c.SubscriptionCount())
 	}
-	return hits, nil
+	return hits, failed, nil
 }
 
 // subscribeAddress computes the scripthash for addr, subscribes if not
