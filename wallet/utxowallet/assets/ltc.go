@@ -289,12 +289,21 @@ JF0LTH0Kr986wDhHDvdCIaV6DR4s7w==
 // LTC electrumx server. Decoded at init; a malformed constant panics at startup.
 var ltcMainnetCert = netparams.MustParseCertPEM(ltcMainnetCertPEM)
 
-// ltcMainnetElectrumServers is the built-in electrumx server for LTC mainnet.
-// The certificate is self-signed and pinned.
+// ltcMainnetElectrumServers are the built-in electrum servers for LTC
+// mainnet, in preference order (see the BTC list comment for the election
+// and certificate conventions; entries without SkipVerify present CA-issued
+// certificates). Sourced from live server.peers.subscribe discovery and
+// verified with a protocol handshake and genesis check 2026-07-09; the
+// bysh.me certificate is self-signed and pinned.
 var ltcMainnetElectrumServers = []*netparams.ServerAddr{
 	{Proto: "ssl", Addr: "electrum-ltc.bysh.me:50002", Cert: ltcMainnetCert},
+	{Proto: "ssl", Addr: "ltc.rentonisk.com:50002"},
+	{Proto: "ssl", Addr: "electrum.jhoenicke.de:50091"},
+	{Proto: "ssl", Addr: "electrum.petrkr.net:60002"},
+	{Proto: "ssl", Addr: "fallacy.fiatfaucet.com:50002"},
 	{Proto: "ssl", Addr: "backup.electrum-ltc.org:443", SkipVerify: true},
 	{Proto: "ssl", Addr: "electrum.ltc.xurious.com:50002", SkipVerify: true},
+	{Proto: "ssl", Addr: "ltc.aftrek.org:50002", SkipVerify: true},
 }
 
 // ltcTestnetElectrumServers is the built-in electrumx server for LTC testnet4.
