@@ -21,6 +21,16 @@ import Security
 //
 // There is no separate key to manage (unlike Android's Keystore AES/GCM key)
 // because on iOS the Keychain item is itself the biometric-gated secret store.
+//
+// Enrollment-change handling has a platform wrinkle: .biometryCurrentSet still
+// cryptographically invalidates the item when the biometric set changes (the
+// secret is never released to a newly-added face/finger), but iOS 15+ no longer
+// reports that through a distinct Keychain status — a read of an invalidated
+// item returns errSecAuthFailed, the same as a plain mismatch. So the at-rest
+// guarantee holds, but to keep isEnrolled() honest (and stop offering a dead
+// unlock that always falls back to password) the change is detected out of band:
+// snapshot the biometric domain-state hash at enroll time and compare it on read.
+// See enrollmentInvalidated.
 final class BiometricAuth {
     // service+account identify the single app-password item. Kept device-local
     // and non-syncing via the access group defaults (no kSecAttrSynchronizable).
@@ -28,6 +38,14 @@ final class BiometricAuth {
     // enrollment; production uses the default.
     private let service: String
     private let account = "app-password"
+
+    // Baseline of the enrolled biometric set, captured at enroll time and compared
+    // on each isEnrolled() to detect an enrollment change (see enrollmentInvalid-
+    // ated). It is an opaque hash, not a secret, so UserDefaults is fine; keyed by
+    // service so a test's throwaway service cannot collide with production. Cleared
+    // alongside the Keychain item.
+    private let defaults = UserDefaults.standard
+    private var domainStateKey: String { "bossw_biometry_domain_state.\(service)" }
 
     init(service: String = "com.bisoncraft.bosswallet.biometric") {
         self.service = service
@@ -53,6 +71,14 @@ final class BiometricAuth {
     // isEnrolled reports whether a password has been stored for biometric unlock.
     // Attribute-only lookup with the auth UI suppressed, so it never prompts.
     func isEnrolled() -> Bool {
+        // iOS 15+ no longer reports an enrollment-change invalidation through a
+        // distinct Keychain status (see the type header), so detect it here and
+        // drop the now-dead enrollment: the app stops offering a broken unlock and
+        // the SPA toggle reflects reality. clear() also removes the stale baseline.
+        if enrollmentInvalidated() {
+            clear()
+            return false
+        }
         // interactionNotAllowed makes a data read fail fast instead of prompting;
         // we only ask for attributes here, so the lookup never shows UI.
         let context = LAContext()
@@ -97,7 +123,16 @@ final class BiometricAuth {
         var add = baseQuery()
         add[kSecValueData as String] = pw
         add[kSecAttrAccessControl as String] = access
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { return false }
+        // Snapshot the current biometric set so a later change is detectable.
+        // enroll() has just evaluated biometrics, so a fresh hash is available;
+        // if it somehow is not, drop any stale baseline rather than keep an old one.
+        if let hash = currentDomainStateHash() {
+            defaults.set(hash, forKey: domainStateKey)
+        } else {
+            defaults.removeObject(forKey: domainStateKey)
+        }
+        return true
     }
 
     // unlock releases the stored password behind a biometric prompt.
@@ -123,18 +158,14 @@ final class BiometricAuth {
                     completion(data)
                     return
                 }
-                // errSecUserCanceled (the user dismissed the prompt) and
-                // errSecAuthFailed (a biometric that did not match after the
-                // system's own retries) are transient — keep the enrollment for a
-                // later retry, mirroring Android swallowing onAuthenticationFailed
-                // and only ending on a hard error. Any other status means the
-                // stored item is unusable — most often invalidated by a biometric
-                // enrollment change (the analog of KeyPermanentlyInvalidated-
-                // Exception), where the item reads back as gone — so drop it to
-                // flip isEnrolled false and fall back to password login.
-                if status != errSecUserCanceled && status != errSecAuthFailed {
-                    self.clear()
-                }
+                // Any non-success status is a failed release: a cancel, a biometric
+                // mismatch, a lockout, or an enrollment-change invalidation. On iOS
+                // 15+ these are not distinguishable by status (an invalidated
+                // .biometryCurrentSet read returns errSecAuthFailed, the same as a
+                // plain mismatch), so we do NOT decide enrollment lifecycle from it
+                // — a lockout must not cost the user their enrollment. Just report
+                // the failure; a genuine invalidation is caught out of band by
+                // enrollmentInvalidated() on the next isEnrolled(), which clears it.
                 completion(nil)
             }
         }
@@ -152,9 +183,68 @@ final class BiometricAuth {
         }
     }
 
-    // clear removes the stored secret (opt-out, or after an invalidation).
+    // clear removes the stored secret (opt-out, or after an invalidation) and the
+    // domain-state baseline that tracked its enrollment, so the two never drift.
     func clear() {
         SecItemDelete(baseQuery() as CFDictionary)
+        defaults.removeObject(forKey: domainStateKey)
+    }
+
+    // enrollmentInvalidated reports whether a stored enrollment is now permanently
+    // unusable because the enrolled biometric set changed or was removed — the case
+    // iOS 15+ no longer surfaces as a distinct Keychain status. It compares the
+    // domain-state hash captured at enroll time against the current one:
+    //   - current hash readable and differs -> the set changed: invalidated.
+    //   - biometrics explicitly not enrolled -> nothing can ever release the item:
+    //     invalidated.
+    //   - a lockout, or a hash we cannot read right now -> transient/unknown: NOT
+    //     invalidated (a lockout must never cost the user their enrollment).
+    //   - no baseline stored (never enrolled, or enrolled before this shipped) ->
+    //     nothing to compare: not invalidated.
+    private func enrollmentInvalidated() -> Bool {
+        guard let baseline = defaults.data(forKey: domainStateKey) else { return false }
+        let ctx = LAContext()
+        var err: NSError?
+        if ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err) {
+            // ctx has passed canEvaluatePolicy, so it can read the hash directly.
+            guard let current = domainStateHash(ctx) else { return false }
+            return current != baseline
+        }
+        return err?.domain == LAErrorDomain
+            && err?.code == LAError.Code.biometryNotEnrolled.rawValue
+    }
+
+    // currentDomainStateHash reads the enrolled-set hash on a fresh context,
+    // running canEvaluatePolicy first (it gates availability and, pre-iOS 18, is
+    // what populates the property). nil if biometrics are unusable.
+    private func currentDomainStateHash() -> Data? {
+        let ctx = LAContext()
+        guard ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else {
+            return nil
+        }
+        return domainStateHash(ctx)
+    }
+
+    // domainStateHash reads the opaque hash identifying the currently enrolled
+    // biometric set off a context that has ALREADY passed canEvaluatePolicy. The
+    // hash changes whenever a face/finger is added, removed, or re-enrolled. On
+    // iOS 18+ the modern domainState replaces the deprecated property.
+    private func domainStateHash(_ ctx: LAContext) -> Data? {
+        if #available(iOS 18.0, *) {
+            // domainState and .biometry are non-optional; only stateHash is Data?
+            // (nil when nothing is enrolled — but the caller has already passed
+            // canEvaluatePolicy(.biometrics), so a hash is present here).
+            return ctx.domainState.biometry.stateHash
+        }
+        return legacyDomainState(ctx)
+    }
+
+    // legacyDomainState isolates the pre-iOS 18 evaluatedPolicyDomainState so its
+    // deprecation warning is confined to this one function and never reaches the
+    // iOS 18+ path. Requires a prior canEvaluatePolicy on ctx to be populated.
+    @available(iOS, introduced: 15.0, deprecated: 18.0)
+    private func legacyDomainState(_ ctx: LAContext) -> Data? {
+        ctx.evaluatedPolicyDomainState
     }
 
     private func baseQuery() -> [String: Any] {
