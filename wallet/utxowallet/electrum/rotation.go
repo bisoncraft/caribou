@@ -72,6 +72,31 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	// server outside the eligible set is ignored, and convergence comes
 	// from wrong-chain servers repeatedly losing divergence audits until
 	// a heavier-chain server holds the slot.
+	if n.tryElect(dead.Addr().Addr, preferred) {
+		return
+	}
+
+	// No candidate answered. Enter the degraded state instead of dying:
+	// wallet slot empty (getNode callers error), observers as they are,
+	// and an internal timer re-runs the election until a candidate
+	// answers. Channels close only on Stop; the degraded loop owns the
+	// closer while no loop group exists.
+	log.Errorf("electrum: no usable wallet server; degraded — retrying every %v",
+		degradedRetryInterval)
+	n.mu.Lock()
+	n.node = nil
+	n.loops = nil
+	n.mu.Unlock()
+	n.wg.Add(1)
+	go n.degradedLoop()
+}
+
+// tryElect walks the wallet-eligible election order — preferred first when
+// the tiers admit it, exclude skipped — and attaches the first candidate
+// that answers, preferring adoption of a live observer over a fresh dial.
+// Caller holds the rotation mutex. Returns true when a successor is
+// installed.
+func (n *Network) tryElect(exclude, preferred string) bool {
 	candidates := n.pool.walletCandidates()
 	if preferred != "" {
 		for i, sv := range candidates {
@@ -83,7 +108,7 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 		}
 	}
 	for _, sv := range candidates {
-		if sv.Addr == dead.Addr().Addr {
+		if sv.Addr == exclude {
 			continue
 		}
 		node, tip := n.adoptObserver(sv.Addr)
@@ -118,14 +143,42 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 		}
 		log.Infof("electrum: rotated wallet server to %s (tip %d)",
 			sv.Addr, tip.Height)
-		return
+		return true
 	}
+	return false
+}
 
-	// No candidate answered. Until degraded self-healing (R6), this falls
-	// back to a full stop; the closer is ours.
-	log.Errorf("electrum: rotation found no usable wallet server; stopping")
-	n.Stop()
-	n.spawnCloser()
+// degradedRetryInterval paces re-elections while no wallet server exists. A
+// variable so tests can tighten it.
+var degradedRetryInterval = 30 * time.Second
+
+// degradedLoop re-runs the election until a candidate answers or the network
+// stops. While it runs, no loop group exists, so it owns the closer on the
+// Stop path.
+func (n *Network) degradedLoop() {
+	defer n.wg.Done()
+	ticker := time.NewTicker(degradedRetryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-n.ctx.Done():
+			n.spawnCloser()
+			return
+		case <-ticker.C:
+		}
+		n.rot.mtx.Lock()
+		if n.ctx.Err() != nil {
+			n.rot.mtx.Unlock()
+			n.spawnCloser()
+			return
+		}
+		ok := n.tryElect("", "")
+		n.rot.mtx.Unlock()
+		if ok {
+			log.Infof("electrum: recovered from degraded state")
+			return
+		}
+	}
 }
 
 // adoptObserver removes the observer at addr from the set (if live) and

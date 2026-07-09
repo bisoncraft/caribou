@@ -11,7 +11,14 @@ dial time.
 
 ## Status
 
-Plan. Not started.
+Implemented through R6 (fake-server test infrastructure, loop groups,
+subscription replay, quarantine tier, same-chain promotion on death and
+lag, reorg promotion on verified divergence with forced chain
+reconciliation, degraded self-healing). R7 (merkle inclusion verification)
+remains open. The rotation scenarios are covered by deterministic
+fake-server tests (kill, lag, equal-work fork, all-candidates-down) rather
+than a harness kill-test — the dextest electrumx serves other suites and
+restarting it mid-test would disturb them.
 
 ## 1. Why surgical
 

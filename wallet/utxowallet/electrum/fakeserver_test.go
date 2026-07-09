@@ -672,3 +672,56 @@ func TestDivergenceReorgPromotion(t *testing.T) {
 	default:
 	}
 }
+
+// TestDegradedSelfHealing covers rotation plan R6: when every candidate is
+// down, the network idles degraded — wallet slot empty, channels open — and
+// recovers by itself once a server answers again.
+func TestDegradedSelfHealing(t *testing.T) {
+	oldRetry := degradedRetryInterval
+	degradedRetryInterval = 50 * time.Millisecond
+	t.Cleanup(func() { degradedRetryInterval = oldRetry })
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	fA, params := newFakeServer(t, 10)
+	deadAddr := &ServerAddr{Proto: "tcp", Addr: "127.0.0.1:1"}
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{fA.addr(), deadAddr},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net_.Stop()
+	waitFor(t, "sync", func() bool { return net_.Synced() })
+
+	// Drop A's connections. rotate excludes the just-dead server and the
+	// only other candidate refuses, so the network degrades — then the
+	// retry loop re-elects A (its listener is still up).
+	fA.KillConns()
+
+	waitFor(t, "self-healed back onto A", func() bool {
+		return net_.currentWalletAddr() == fA.addr().Addr
+	})
+	tipBefore := net_.Tip()
+	fA.MineBlocks(1)
+	waitFor(t, "tip advances after recovery", func() bool {
+		return net_.Tip() == tipBefore+1
+	})
+	select {
+	case <-net_.Done():
+		t.Fatal("network shut down while degraded")
+	default:
+	}
+}
