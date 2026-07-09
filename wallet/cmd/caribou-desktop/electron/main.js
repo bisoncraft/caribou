@@ -280,7 +280,7 @@ function setApplicationMenu() {
 function openLog() {
   const logPath = path.join(
     app.getPath("appData"),
-    "Dexc",
+    "Caribou",
     network || "mainnet",
     "logs"
   );
