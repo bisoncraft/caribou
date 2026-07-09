@@ -334,16 +334,30 @@ var BTCParams = map[string]*netparams.ChainParams{
 	},
 }
 
-// btcMainnetElectrumServers is the built-in electrumx server for BTC mainnet.
-// Blockstream's server presents a publicly CA-issued (Let's Encrypt) certificate,
-// so it is verified against the system roots rather than pinned — a pinned leaf
-// would break on every ~90-day renewal.
+// btcMainnetElectrumServers are the built-in electrumx servers for BTC
+// mainnet, in preference order; the network layer elects one and rotates
+// past failures (electrum/serverpool.go). Operators are deliberately
+// diverse. Most public electrum servers present self-signed certificates
+// (the electrum ecosystem's norm), hence SkipVerify; Blockstream's uses a
+// publicly CA-issued certificate verified against the system roots — a
+// pinned leaf would break on every ~90-day renewal. Liveness and genesis
+// verified 2026-07-09; blockstream was unreachable that day and is kept as
+// a trailing candidate.
 var btcMainnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "electrum.emzy.de:50002", SkipVerify: true},
+	{Proto: "ssl", Addr: "electrum.bitaroo.net:50002", SkipVerify: true},
+	{Proto: "ssl", Addr: "bitcoin.lu.ke:50002", SkipVerify: true},
+	{Proto: "ssl", Addr: "fortress.qtornado.com:443", SkipVerify: true},
 	{Proto: "ssl", Addr: "electrum.blockstream.info:700"},
 }
 
-// btcTestnetElectrumServers is the built-in electrumx server for BTC testnet3.
+// btcTestnetElectrumServers are the built-in electrumx servers for BTC
+// testnet3; see the mainnet comment. blackie.c3-soft.com presents a
+// CA-issued certificate.
 var btcTestnetElectrumServers = []*netparams.ServerAddr{
+	{Proto: "ssl", Addr: "testnet.aranguren.org:51002", SkipVerify: true},
+	{Proto: "ssl", Addr: "blackie.c3-soft.com:57006"},
+	{Proto: "ssl", Addr: "testnet.qtornado.com:51002", SkipVerify: true},
 	{Proto: "ssl", Addr: "electrum.blockstream.info:993", SkipVerify: true},
 }
 

@@ -52,14 +52,16 @@ func TestAnchorHeaderSync(t *testing.T) {
 		params *netparams.ChainParams
 		server *netparams.ServerAddr
 	}{
+		// First entry of each shipped list: the test doubles as a
+		// liveness check on the default election leaders.
 		{"btc-mainnet", bisonwire.ChainBTC, assets.BTCParams["mainnet"],
-			&netparams.ServerAddr{Proto: "ssl", Addr: "electrum.emzy.de:50002", SkipVerify: true}},
+			assets.BTCParams["mainnet"].ElectrumServers[0]},
 		{"btc-testnet", bisonwire.ChainBTC, assets.BTCParams["testnet"],
-			&netparams.ServerAddr{Proto: "ssl", Addr: "testnet.aranguren.org:51002", SkipVerify: true}},
+			assets.BTCParams["testnet"].ElectrumServers[0]},
 		{"ltc-mainnet", bisonwire.ChainLTC, assets.LTCParams["mainnet"],
-			&netparams.ServerAddr{Proto: "ssl", Addr: "electrum-ltc.bysh.me:50002", SkipVerify: true}},
+			assets.LTCParams["mainnet"].ElectrumServers[0]},
 		{"ltc-testnet", bisonwire.ChainLTC, assets.LTCParams["testnet"],
-			&netparams.ServerAddr{Proto: "ssl", Addr: "electrum-ltc.bysh.me:51002", SkipVerify: true}},
+			assets.LTCParams["testnet"].ElectrumServers[0]},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

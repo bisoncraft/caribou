@@ -293,11 +293,14 @@ var ltcMainnetCert = netparams.MustParseCertPEM(ltcMainnetCertPEM)
 // The certificate is self-signed and pinned.
 var ltcMainnetElectrumServers = []*netparams.ServerAddr{
 	{Proto: "ssl", Addr: "electrum-ltc.bysh.me:50002", Cert: ltcMainnetCert},
+	{Proto: "ssl", Addr: "backup.electrum-ltc.org:443", SkipVerify: true},
+	{Proto: "ssl", Addr: "electrum.ltc.xurious.com:50002", SkipVerify: true},
 }
 
 // ltcTestnetElectrumServers is the built-in electrumx server for LTC testnet4.
 var ltcTestnetElectrumServers = []*netparams.ServerAddr{
 	{Proto: "ssl", Addr: "electrum-ltc.bysh.me:51002", SkipVerify: true},
+	{Proto: "ssl", Addr: "electrum.ltc.xurious.com:51002", SkipVerify: true},
 }
 
 // ltcSimnetElectrumServers is the built-in electrumx server for LTC
