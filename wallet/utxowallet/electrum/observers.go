@@ -35,9 +35,12 @@ const (
 	// time ahead at the chain's target spacing. Two blocks mined seconds
 	// apart and seen by an observer first must not trigger a switch, so
 	// the lag must also persist for lagPatience before rotating.
-	lagWindow   = 20 * time.Minute
-	lagPatience = 10 * time.Minute
+	lagWindow = 20 * time.Minute
 )
+
+// lagPatience is how long a lag must persist before rotating. A variable so
+// rotation tests can tighten it.
+var lagPatience = 10 * time.Minute
 
 // ObserverCount reports the number of live observer connections; primarily
 // a test and diagnostics hook.
@@ -194,9 +197,8 @@ func (n *Network) runObservers() {
 				log.Warnf("electrum: wallet server %s lagging %d blocks behind "+
 					"observers for %v; rotating", walletAddr, bestObs-localTip,
 					time.Since(lagSince).Round(time.Second))
-				n.pool.recordFailure(walletAddr)
-				n.Stop()
-				return
+				n.lagRotate(bestObs-localTip, time.Since(lagSince))
+				lagSince = time.Time{}
 			}
 		} else {
 			lagSince = time.Time{}
@@ -277,7 +279,14 @@ func (n *Network) fillObservers(walletAddr string) {
 // and rotates away from the wallet server so the reconnect can resolve which
 // chain is canonical.
 func (n *Network) handleDivergence(o *observer, walletAddr string) {
-	h, _ := o.tip()
+	// One snapshot: the drain goroutine advances the observer tip
+	// concurrently, and reading height and header separately could fetch a
+	// batch for the old height while auditing against the new tip hash,
+	// spuriously demoting an honest observer.
+	h, tipHdr := o.tip()
+	if tipHdr == nil {
+		return
+	}
 	start := h - reorgRewindDepth
 	if start < n.headers.StartHeight() {
 		start = n.headers.StartHeight()
@@ -310,7 +319,6 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		}
 		batch = append(batch, &hdr)
 	}
-	_, tipHdr := o.tip()
 	dissentWork, err := auditDissent(batch, tipHdr.BlockHash(), n.headers.checkPoW)
 	if err != nil {
 		// Fabricated or incoherent chain: demote and drop the observer,

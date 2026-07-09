@@ -731,3 +731,52 @@ func TestDegradedSelfHealing(t *testing.T) {
 	default:
 	}
 }
+
+// TestLagRotation covers the CONC-2 regression: a wallet server that lags the
+// observers rotates surgically (demote + promote), it does NOT tear the
+// network down (the pre-fix behavior called Stop directly).
+func TestLagRotation(t *testing.T) {
+	oldInterval, oldPatience := observerCompareInterval, lagPatience
+	observerCompareInterval = 50 * time.Millisecond
+	lagPatience = 100 * time.Millisecond
+	t.Cleanup(func() { observerCompareInterval = oldInterval; lagPatience = oldPatience })
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	fA, params := newFakeServer(t, 12) // wallet server, will lag
+	fB, _ := newFakeServer(t, 12)      // observer, mines ahead
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{fA.addr(), fB.addr()},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net_.Stop()
+	waitFor(t, "sync on A", func() bool { return net_.Synced() && net_.Tip() == 11 })
+	waitFor(t, "observer on B", func() bool { return net_.ObserverCount() == 1 })
+
+	// B (deterministic same chain) mines several blocks ahead; A stays put,
+	// so the wallet server lags past the 2-block threshold.
+	fB.MineBlocks(4)
+
+	waitFor(t, "rotation to the caught-up server", func() bool {
+		return net_.currentWalletAddr() == fB.addr().Addr && net_.Tip() == 15
+	})
+	select {
+	case <-net_.Done():
+		t.Fatal("network torn down on lag instead of rotating")
+	default:
+	}
+}

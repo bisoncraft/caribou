@@ -740,9 +740,19 @@ func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.Blo
 			log.Warnf("electrum: rescan fetch %s: %v", e.TxHash, err)
 			continue
 		}
+		if len(raw) == 64 {
+			log.Errorf("electrum: refusing 64-byte tx %s", e.TxHash)
+			continue
+		}
 		rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, block.Time)
 		if err != nil {
 			log.Warnf("electrum: tx record %s: %v", e.TxHash, err)
+			continue
+		}
+		// Bind fetched bytes to the merkle-proven txid (see buildRelevantTx).
+		if rec.Hash.String() != e.TxHash {
+			log.Errorf("electrum: server returned tx %s for requested %s",
+				rec.Hash, e.TxHash)
 			continue
 		}
 		ntfn.RelevantTxs = append(ntfn.RelevantTxs, rec)

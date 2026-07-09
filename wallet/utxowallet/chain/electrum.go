@@ -804,9 +804,23 @@ func (c *ElectrumClient) buildRelevantTx(h electrum.HistoryEntry) (RelevantTx, e
 	if err != nil {
 		return RelevantTx{}, fmt.Errorf("decode raw tx: %w", err)
 	}
+	// A 64-byte "transaction" can be a merkle interior node; reject it so a
+	// proof cannot authenticate a fabricated node as a leaf (CVE-2017-12842
+	// class), independent of the binding check below.
+	if len(raw) == 64 {
+		return RelevantTx{}, fmt.Errorf("electrum: refusing 64-byte tx %s", h.TxHash)
+	}
 	rec, err := wtxmgr.NewTxRecord(string(c.chain), raw, time.Now())
 	if err != nil {
 		return RelevantTx{}, fmt.Errorf("new tx record: %w", err)
+	}
+	// Bind the fetched bytes to the txid the merkle proof authenticated:
+	// verifyInclusion proved h.TxHash is in the block, so a server serving
+	// different bytes for that txid would otherwise slip an unproven tx into
+	// the wallet as confirmed.
+	if rec.Hash.String() != h.TxHash {
+		return RelevantTx{}, fmt.Errorf("electrum: server returned tx %s for "+
+			"requested %s", rec.Hash, h.TxHash)
 	}
 	var blockMeta *wtxmgr.BlockMeta
 	if h.Height > 0 {

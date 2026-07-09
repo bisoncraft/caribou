@@ -50,7 +50,18 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 		dead.Addr().Addr, reason)
 
 	// Make sure the old node is fully dead (the lag path hands us a live
-	// one) and its loop group has drained before any successor attaches.
+	// one) and its loop group has drained before any successor attaches —
+	// two groups must never interleave header appends or status forwards.
+	//
+	// join() is held under rotMtx intentionally. It waits for the old
+	// loops to exit; a loop parked in a blocking send unblocks when the
+	// consumer drains. That consumer is the chain client's
+	// notificationHandler, which buffers into an unbounded slice and
+	// always drains unless the wallet above it has itself stopped
+	// consuming — so the wait is bounded in a healthy wallet. Aborting the
+	// sends instead would drop an in-flight reorg Disconnected that the
+	// successor's header sync rewinds at the store level but does not
+	// re-emit to the consumer, so the bounded wait is the safe choice.
 	dead.Close()
 	n.mu.Lock()
 	group := n.loops

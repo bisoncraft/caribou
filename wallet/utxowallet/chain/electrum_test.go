@@ -1567,3 +1567,49 @@ func TestVerifyInclusionRejectsFabrication(t *testing.T) {
 		t.Fatalf("honest inclusion rejected: %v", err)
 	}
 }
+
+// TestBuildRelevantTxBindsTxid covers SEC-1: a server that returns raw bytes
+// whose hash differs from the requested (merkle-proven) txid is refused, so
+// the merkle authentication cannot be bypassed at the fetch hop.
+func TestBuildRelevantTxBindsTxid(t *testing.T) {
+	stub := newStubNetwork()
+	stub.synced = true
+	c, err := NewElectrumClient(testParams(), stub)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(c.Stop)
+
+	// A real transaction the stub will serve.
+	realTx := wire.NewMsgTx(2)
+	realTx.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 3}, nil, nil))
+	realTx.AddTxOut(wire.NewTxOut(1e8, []byte{0x51}))
+	var buf bytes.Buffer
+	if err := realTx.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	realHex := hex.EncodeToString(buf.Bytes())
+
+	// The server answers get_raw for the WRONG txid with realTx's bytes.
+	wanted := chainhash.DoubleHashH([]byte("some-other-txid")).String()
+	stub.mu.Lock()
+	stub.rawTxs[wanted] = realHex
+	stub.mu.Unlock()
+
+	if _, err := c.buildRelevantTx(electrum.HistoryEntry{TxHash: wanted, Height: 1}); err == nil {
+		t.Fatal("accepted raw bytes whose hash differs from the requested txid")
+	}
+
+	// Sanity: the correct txid for those bytes is accepted.
+	stub.mu.Lock()
+	stub.rawTxs[realTx.TxHash().String()] = realHex
+	stub.mu.Unlock()
+	if _, err := c.buildRelevantTx(electrum.HistoryEntry{
+		TxHash: realTx.TxHash().String(), Height: 1,
+	}); err != nil {
+		t.Fatalf("rejected the correct bytes: %v", err)
+	}
+}
