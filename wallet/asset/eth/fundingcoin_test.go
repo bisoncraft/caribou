@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util/encode"
 )
 
 func TestFundingCoinID(t *testing.T) {

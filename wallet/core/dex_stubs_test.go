@@ -6,10 +6,10 @@ package core
 import (
 	"sort"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/order"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/db"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/order"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/db"
 )
 
 // tDriver implements asset.Driver for testing.

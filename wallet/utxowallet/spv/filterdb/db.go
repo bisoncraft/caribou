@@ -3,9 +3,9 @@ package filterdb
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/btcutil/gcs/builder"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

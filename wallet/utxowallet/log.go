@@ -8,18 +8,18 @@ package utxowallet
 import (
 	"github.com/btcsuite/btclog"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/peer"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/blockntfns"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/chanutils"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/filterdb"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/pushtx"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/query"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/chain"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/peer"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/blockntfns"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/chanutils"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/filterdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/pushtx"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/query"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 )
 
 // UseLogger points every utxowallet subsystem at backend. Each subpackage holds

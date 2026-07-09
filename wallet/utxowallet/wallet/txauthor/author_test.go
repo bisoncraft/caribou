@@ -7,8 +7,8 @@ package txauthor
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txrules"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txsizes"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txrules"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txsizes"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 )

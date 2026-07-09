@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/db"
-	dbtest "github.com/bisoncraft/bosswallet/wallet/db/test"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/db"
+	dbtest "github.com/bisoncraft/caribou/wallet/db/test"
 	"go.etcd.io/bbolt"
 )
 

@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

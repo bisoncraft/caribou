@@ -13,8 +13,8 @@ import (
 
 	"decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/wallet/udb"
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/lexi"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/lexi"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	tkv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
 	piclient "github.com/decred/politeia/politeiawww/client"

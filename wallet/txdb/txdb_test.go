@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // newTestTxDB builds a TxDB backed by the build-selected storage engine (Badger

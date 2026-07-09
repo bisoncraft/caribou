@@ -6,7 +6,7 @@ package test
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/caribou/wallet/asset/btc"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"

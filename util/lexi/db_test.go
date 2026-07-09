@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/encode"
 	v1badger "github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger/v4"
 )

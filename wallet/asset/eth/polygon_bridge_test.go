@@ -19,8 +19,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/dexnet"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 )
 
 // stateSyncedEventHash is the StateSynced event topic that

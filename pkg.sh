@@ -59,7 +59,7 @@ LDFLAGS_BOSSW="${LDFLAGS_BASE} -H=windowsgui"
 build_targets
 
 echo "Files embedded in the Go appserver package:"
-go list -f '{{ .EmbedFiles }}' github.com/bisoncraft/bosswallet/wallet/appserver
+go list -f '{{ .EmbedFiles }}' github.com/bisoncraft/caribou/wallet/appserver
 # NOTE: before embedding, we needed to grab: dist, src/font, src/html, src/img.
 
 pushd bin

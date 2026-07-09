@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 
 	"fyne.io/systray"
-	"github.com/bisoncraft/bosswallet/wallet/app"
+	"github.com/bisoncraft/caribou/wallet/app"
 	"github.com/pkg/browser"
 )
 

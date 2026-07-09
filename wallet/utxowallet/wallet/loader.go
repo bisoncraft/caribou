@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
 )

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/headerfs"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"

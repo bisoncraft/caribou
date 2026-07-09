@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/app"
-	"github.com/bisoncraft/bosswallet/wallet/appserver"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/importall"
-	"github.com/bisoncraft/bosswallet/wallet/core"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/app"
+	"github.com/bisoncraft/caribou/wallet/appserver"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	_ "github.com/bisoncraft/caribou/wallet/asset/importall"
+	"github.com/bisoncraft/caribou/wallet/core"
 )
 
 // appName defines the application name.

@@ -9,11 +9,11 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txrules"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txsizes"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txrules"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txsizes"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/txscript"

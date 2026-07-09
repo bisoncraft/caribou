@@ -1,8 +1,8 @@
 package wallet
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 )
 
 // The wallet tests build BTC test wallets and exercise multiple address types,

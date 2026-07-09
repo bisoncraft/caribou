@@ -1,6 +1,6 @@
 package locales
 
-import "github.com/bisoncraft/bosswallet/wallet/intl"
+import "github.com/bisoncraft/caribou/wallet/intl"
 
 var EnUS = map[string]*intl.Translation{
 	"Language":                       {T: "en-US"},   // the bcp47 lang tag

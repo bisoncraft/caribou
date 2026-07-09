@@ -4,7 +4,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 )
 
 // Harness holds the BranchRecoveryState being tested, the recovery window being

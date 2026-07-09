@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 func TestConnect(t *testing.T) {

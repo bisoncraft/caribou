@@ -4,7 +4,7 @@
 package btc
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 

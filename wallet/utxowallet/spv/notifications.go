@@ -9,7 +9,7 @@ package spv
 import (
 	"errors"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/query"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/query"
 	"github.com/btcsuite/btcd/addrmgr"
 	"github.com/btcsuite/btcd/connmgr"
 )

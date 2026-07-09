@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"time"
 
-	xrp "github.com/bisoncraft/bosswallet/wallet/asset/xrp"
+	xrp "github.com/bisoncraft/caribou/wallet/asset/xrp"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
 )
 

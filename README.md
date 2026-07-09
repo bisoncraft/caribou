@@ -1,7 +1,7 @@
 # Boss Wallet
 
 [![ISC License](https://img.shields.io/badge/license-Blue_Oak-007788.svg)](https://blueoakcouncil.org/license/1.0.0)
-[![GoDoc](https://img.shields.io/badge/go.dev-reference-blue.svg?logo=go&logoColor=lightblue)](https://pkg.go.dev/github.com/bisoncraft/bosswallet)
+[![GoDoc](https://img.shields.io/badge/go.dev-reference-blue.svg?logo=go&logoColor=lightblue)](https://pkg.go.dev/github.com/bisoncraft/caribou)
 
 Boss Wallet is a non-custodial, multi-chain wallet, from the developers of Bison Wallet.
 

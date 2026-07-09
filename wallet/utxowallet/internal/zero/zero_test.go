@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/bisoncraft/bosswallet/wallet/utxowallet/internal/zero"
+	. "github.com/bisoncraft/caribou/wallet/utxowallet/internal/zero"
 )
 
 func makeOneBytes(n int) []byte {

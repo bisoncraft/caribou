@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
 )
 
 // coin represents a sent XRP transaction.

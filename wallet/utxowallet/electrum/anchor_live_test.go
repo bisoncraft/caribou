@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/btcsuite/btclog"
 )
 

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/util/lexi"
+	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/lexi"
 	cv1 "github.com/decred/politeia/politeiawww/api/comments/v1"
 	rv1 "github.com/decred/politeia/politeiawww/api/records/v1"
 	tv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"

@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/txscript"
 )

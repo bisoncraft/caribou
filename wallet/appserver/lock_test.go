@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util/encode"
 )
 
 // grantCookie returns the value of the named response cookie, or "".

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // nettedToken is a Token with its available networks. Saving the valid

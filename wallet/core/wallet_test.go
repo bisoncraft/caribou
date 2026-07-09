@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
 // walletOnly embeds asset.Wallet by interface, not by concrete type, so it

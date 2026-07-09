@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/config"
-	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/config"
+	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"golang.org/x/crypto/blake2s"
 )
 

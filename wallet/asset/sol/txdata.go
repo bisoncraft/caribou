@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
 const (

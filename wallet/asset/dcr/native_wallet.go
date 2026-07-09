@@ -16,8 +16,8 @@ import (
 
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrutil/v4"
 )

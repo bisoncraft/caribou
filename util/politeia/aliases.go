@@ -3,7 +3,7 @@
 
 package pi
 
-import pt "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
+import pt "github.com/bisoncraft/caribou/util/politeia/pitypes"
 
 // The Politeia data types live in the lexi-free pitypes leaf package so that
 // consumers needing only the types (Core, the asset interface, the app server)

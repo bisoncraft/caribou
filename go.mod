@@ -1,4 +1,4 @@
-module github.com/bisoncraft/bosswallet
+module github.com/bisoncraft/caribou
 
 go 1.25.0
 

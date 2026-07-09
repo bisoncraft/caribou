@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util/encode"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/schnorr"
 )

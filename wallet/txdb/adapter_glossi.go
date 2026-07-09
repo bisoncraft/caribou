@@ -9,8 +9,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/glossi"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/glossi"
 )
 
 // glossiStore adapts a *glossi.DB (bbolt) to the Store interface. glossi's

@@ -14,12 +14,12 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/dexnet"
-	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/erc20"
-	"github.com/bisoncraft/bosswallet/wallet/asset/erc20/cctp"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
+	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/asset/erc20"
+	"github.com/bisoncraft/caribou/wallet/asset/erc20/cctp"
 )
 
 // bridge is the interface that must be implemented by a bridge.

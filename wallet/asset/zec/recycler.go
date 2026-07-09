@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 type addressRecycler struct {

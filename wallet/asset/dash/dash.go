@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/config"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	inWallet "github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/config"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/asset/btc"
+	inWallet "github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 
 	"github.com/btcsuite/btcd/chaincfg"
 )

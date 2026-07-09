@@ -1,6 +1,6 @@
 package waddrmgr
 
-import "github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
+import "github.com/bisoncraft/caribou/wallet/utxowallet/assets"
 
 // The address manager's multi-scope machinery (BIP-44/49/84/86) is exercised by
 // the package tests independently of what any asset configures in production,

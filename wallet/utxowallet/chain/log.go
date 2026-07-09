@@ -5,7 +5,7 @@
 package chain
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/query"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/query"
 	"github.com/btcsuite/btclog"
 )
 

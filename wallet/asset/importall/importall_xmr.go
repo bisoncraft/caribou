@@ -8,5 +8,5 @@ package importall
 // registers, and -tags xmr adds Monero on top. Build with -tags xmr to enable
 // Monero support.
 import (
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/xmr" // register xmr asset
+	_ "github.com/bisoncraft/caribou/wallet/asset/xmr" // register xmr asset
 )

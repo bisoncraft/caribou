@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util/encode"
 )
 
 var (

@@ -4,11 +4,11 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	dexbase "github.com/bisoncraft/bosswallet/wallet/asset/base"
-	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
-	dexpolygon "github.com/bisoncraft/bosswallet/wallet/asset/polygon"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	dexbase "github.com/bisoncraft/caribou/wallet/asset/base"
+	"github.com/bisoncraft/caribou/wallet/asset/eth"
+	dexpolygon "github.com/bisoncraft/caribou/wallet/asset/polygon"
 	"github.com/ethereum/go-ethereum/common"
 )
 

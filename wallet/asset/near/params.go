@@ -6,7 +6,7 @@ package near
 import (
 	"math/big"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 const (

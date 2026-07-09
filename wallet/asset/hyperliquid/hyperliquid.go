@@ -22,12 +22,12 @@ import (
 
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/util/keygen"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/keygen"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/asset/keystore"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/dcrd/hdkeychain/v3"
 	"golang.org/x/net/proxy"
 )

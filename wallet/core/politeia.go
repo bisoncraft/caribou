@@ -3,7 +3,7 @@ package core
 import (
 	"fmt"
 
-	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
+	pi "github.com/bisoncraft/caribou/util/politeia/pitypes"
 )
 
 // PoliteiaDetails retrieves the current Politeia state from the DCR wallet.

@@ -3,7 +3,7 @@
 
 package dcr
 
-import "github.com/bisoncraft/bosswallet/util"
+import "github.com/bisoncraft/caribou/util"
 
 var UnitInfo = util.UnitInfo{
 	AtomicUnit: "atoms",

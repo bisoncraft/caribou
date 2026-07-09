@@ -3,9 +3,9 @@ package chain
 import (
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/rpcclient"

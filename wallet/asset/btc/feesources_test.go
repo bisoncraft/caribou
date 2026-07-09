@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util/dexnet"
-	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
+	"github.com/bisoncraft/caribou/util/dexnet"
+	"github.com/bisoncraft/caribou/util/feeratefetcher"
 )
 
 // roundTripFunc lets tests intercept HTTP requests without standing up a

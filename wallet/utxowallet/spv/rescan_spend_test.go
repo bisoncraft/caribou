@@ -7,7 +7,7 @@ package spv
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

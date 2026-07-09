@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/dexnet"
-	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
+	"github.com/bisoncraft/caribou/util/dexnet"
+	"github.com/bisoncraft/caribou/util/feeratefetcher"
 )
 
 // The constructors below build feeratefetcher.SourceConfig values for the

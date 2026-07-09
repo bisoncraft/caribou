@@ -9,7 +9,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 

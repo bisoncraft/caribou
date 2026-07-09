@@ -7,10 +7,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/db"
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/db"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )
 

@@ -10,8 +10,8 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/lexi"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/lexi"
 )
 
 // lexiStore adapts a *lexi.DB (Badger) to the Store interface. lexi's

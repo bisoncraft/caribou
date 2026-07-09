@@ -7,7 +7,7 @@ package chain
 import (
 	"context"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )

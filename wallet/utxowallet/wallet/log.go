@@ -5,8 +5,8 @@
 package wallet
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btclog"
 )
 

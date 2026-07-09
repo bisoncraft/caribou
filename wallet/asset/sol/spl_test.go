@@ -8,7 +8,7 @@ import (
 	"crypto/ed25519"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 	"github.com/decred/base58"
 )
 

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // constSource returns a source that always yields rate and counts its calls.

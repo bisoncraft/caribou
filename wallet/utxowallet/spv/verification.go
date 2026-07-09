@@ -3,7 +3,7 @@ package spv
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/btcutil/gcs/builder"
 	"github.com/btcsuite/btcd/txscript"

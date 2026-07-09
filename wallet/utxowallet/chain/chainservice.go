@@ -1,10 +1,10 @@
 package chain
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/banman"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/banman"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/headerfs"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

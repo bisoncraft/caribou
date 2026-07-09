@@ -3,7 +3,7 @@ package bisonwire
 import (
 	"bytes"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/dashhash"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/dashhash"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )

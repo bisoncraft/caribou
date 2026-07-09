@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset/eth"
 )
 
 var mt *eth.MRPCTest

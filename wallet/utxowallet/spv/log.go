@@ -1,12 +1,12 @@
 package spv
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/peer"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/blockntfns"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/chanutils"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/filterdb"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/pushtx"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/query"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/peer"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/blockntfns"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/chanutils"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/filterdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/pushtx"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/query"
 	"github.com/btcsuite/btcd/addrmgr"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/connmgr"

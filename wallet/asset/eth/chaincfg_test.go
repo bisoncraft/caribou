@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // unknownNet is a Network value that isn't Mainnet/Testnet/Simnet, used to

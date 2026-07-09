@@ -1,12 +1,12 @@
-module github.com/bisoncraft/bosswallet/wallet/cmd/bossw-desktop
+module github.com/bisoncraft/caribou/wallet/cmd/bossw-desktop
 
 go 1.25.0
 
-replace github.com/bisoncraft/bosswallet => ../../..
+replace github.com/bisoncraft/caribou => ../../..
 
 require (
 	fyne.io/systray v1.10.1-0.20230403195833-7dc3c09283d6
-	github.com/bisoncraft/bosswallet v0.6.3
+	github.com/bisoncraft/caribou v0.6.3
 	github.com/bisoncraft/webview_go v0.1.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 )

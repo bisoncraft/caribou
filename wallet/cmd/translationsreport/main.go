@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/appserver"
-	"github.com/bisoncraft/bosswallet/wallet/appserver/locales"
-	"github.com/bisoncraft/bosswallet/wallet/core"
-	"github.com/bisoncraft/bosswallet/wallet/intl"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/appserver"
+	"github.com/bisoncraft/caribou/wallet/appserver/locales"
+	"github.com/bisoncraft/caribou/wallet/core"
+	"github.com/bisoncraft/caribou/wallet/intl"
 )
 
 func main() {

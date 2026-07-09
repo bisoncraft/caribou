@@ -5,7 +5,7 @@
 
 package txdb
 
-import "github.com/bisoncraft/bosswallet/util"
+import "github.com/bisoncraft/caribou/util"
 
 // newStore opens the desktop transaction store, backed by Badger via util/lexi.
 func newStore(path string, log util.Logger) (Store, error) {

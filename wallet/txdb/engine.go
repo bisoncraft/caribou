@@ -7,7 +7,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // The transaction database is built on a small storage abstraction so that the

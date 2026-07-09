@@ -5,7 +5,7 @@
 
 package txdb
 
-import "github.com/bisoncraft/bosswallet/util"
+import "github.com/bisoncraft/caribou/util"
 
 // newStore opens the mobile transaction store, backed by bbolt via
 // util/glossi.

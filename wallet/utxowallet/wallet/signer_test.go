@@ -7,7 +7,7 @@ package wallet
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"

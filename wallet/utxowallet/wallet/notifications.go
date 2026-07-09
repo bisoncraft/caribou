@@ -8,9 +8,9 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"

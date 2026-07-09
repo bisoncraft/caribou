@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 	"go.etcd.io/bbolt"
 )
 

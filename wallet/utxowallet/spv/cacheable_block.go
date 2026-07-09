@@ -1,6 +1,6 @@
 package spv
 
-import "github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+import "github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 
 // CacheableBlock is a wrapper around the btcutil.Block type which provides a
 // Size method used by the cache to target certain memory usage.

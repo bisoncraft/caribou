@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util/order"
+	"github.com/bisoncraft/caribou/util/order"
 )
 
 func TestOrderReader_StatusString(t *testing.T) {

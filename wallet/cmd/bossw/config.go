@@ -5,7 +5,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/bisoncraft/bosswallet/wallet/app"
+	"github.com/bisoncraft/caribou/wallet/app"
 )
 
 func configure() (*app.Config, error) {

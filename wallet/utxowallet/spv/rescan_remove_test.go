@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/headerfs"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"

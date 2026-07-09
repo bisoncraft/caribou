@@ -6,7 +6,7 @@ package zec
 import (
 	"math"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/caribou/wallet/asset/btc"
 	"github.com/btcsuite/btcd/wire"
 )
 

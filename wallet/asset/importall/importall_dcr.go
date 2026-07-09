@@ -7,5 +7,5 @@ package importall
 // default build omits dcr and does not link Badger. Build with -tags dcr to
 // re-enable Decred support.
 import (
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/dcr" // register dcr asset
+	_ "github.com/bisoncraft/caribou/wallet/asset/dcr" // register dcr asset
 )

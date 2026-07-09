@@ -24,8 +24,8 @@ import (
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/gorilla/websocket"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset/hyperliquid"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset/hyperliquid"
 )
 
 // hypeTokenID is the spot token identifier the mock advertises for HYPE via

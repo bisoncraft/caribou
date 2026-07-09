@@ -22,9 +22,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/asset/btc"
 )
 
 func TestLTCNeutrinoLeanWalletSync(t *testing.T) {

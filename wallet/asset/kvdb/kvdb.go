@@ -9,8 +9,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/lexi"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/lexi"
 	"github.com/dgraph-io/badger/v4"
 )
 

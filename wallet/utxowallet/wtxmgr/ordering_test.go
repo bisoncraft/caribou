@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 

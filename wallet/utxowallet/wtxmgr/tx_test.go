@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"

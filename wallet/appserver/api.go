@@ -14,14 +14,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/config"
-	"github.com/bisoncraft/bosswallet/util/encode"
-	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/core"
-	"github.com/bisoncraft/bosswallet/wallet/db"
-	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/util/config"
+	"github.com/bisoncraft/caribou/util/encode"
+	pi "github.com/bisoncraft/caribou/util/politeia/pitypes"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/core"
+	"github.com/bisoncraft/caribou/wallet/db"
+	"github.com/bisoncraft/caribou/wallet/mnemonic"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
 var zero = encode.ClearBytes

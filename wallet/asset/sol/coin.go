@@ -6,8 +6,8 @@ package sol
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/decred/base58"
 )
 

@@ -6,8 +6,8 @@ package hyperliquid
 import (
 	"encoding/json"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
 // ErrTxIsPending is returned by TxHistory when the caller-supplied RefID

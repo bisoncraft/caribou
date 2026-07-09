@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
-	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
+	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"

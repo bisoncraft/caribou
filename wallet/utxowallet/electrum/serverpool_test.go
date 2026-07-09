@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/btcsuite/btcd/wire"
 )
 

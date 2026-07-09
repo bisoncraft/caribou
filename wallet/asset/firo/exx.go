@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/caribou/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/base58"
 	"github.com/btcsuite/btcd/chaincfg"

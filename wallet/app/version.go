@@ -4,7 +4,7 @@
 package app
 
 import (
-	"github.com/bisoncraft/bosswallet/util/version"
+	"github.com/bisoncraft/caribou/util/version"
 )
 
 var (

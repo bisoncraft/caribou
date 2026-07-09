@@ -1,6 +1,6 @@
 package locales
 
-import "github.com/bisoncraft/bosswallet/wallet/intl"
+import "github.com/bisoncraft/caribou/wallet/intl"
 
 var PtBr = map[string]*intl.Translation{
 	"Language":                       {T: "pt-BR"},

@@ -1,6 +1,6 @@
 # Build Instructions for bossw-desktop
 
-bossw-desktop is a cross-platform desktop application for Boss Wallet. The instructions below are for building the client from source. If you are looking for pre-built binaries, see the [releases page](https://github.com/bisoncraft/bosswallet/releases).
+bossw-desktop is a cross-platform desktop application for Boss Wallet. The instructions below are for building the client from source. If you are looking for pre-built binaries, see the [releases page](https://github.com/bisoncraft/caribou/releases).
 
 **Note**: The instructions below are to be run in your CLI from the `bossw-desktop` directory.
 

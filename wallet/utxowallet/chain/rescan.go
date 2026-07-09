@@ -1,6 +1,6 @@
 package chain
 
-import "github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
+import "github.com/bisoncraft/caribou/wallet/utxowallet/spv"
 
 var _ rescanner = (*spv.Rescan)(nil)
 

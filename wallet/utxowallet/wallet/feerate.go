@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
 )
 
 const (

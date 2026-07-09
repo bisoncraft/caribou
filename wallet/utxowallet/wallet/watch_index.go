@@ -9,7 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 )
 
 // The watch-tier index persists, per scripthash, the highest block height at

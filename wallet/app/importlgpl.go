@@ -10,7 +10,7 @@
 package app
 
 import (
-	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	dexeth "github.com/bisoncraft/caribou/wallet/asset/eth"
 )
 
 func init() {

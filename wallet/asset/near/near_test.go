@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/wallet/asset/keystore"
+	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/wallet/asset/keystore"
 )
 
 func TestValidateAddress(t *testing.T) {

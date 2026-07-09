@@ -14,8 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/dexnet"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 )
 
 // Across mainnet ETH chain ID; mirrors the value in across_protocol.go so the

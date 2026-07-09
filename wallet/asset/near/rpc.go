@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 	"golang.org/x/net/proxy"
 )
 

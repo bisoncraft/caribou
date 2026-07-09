@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	ordertest "github.com/bisoncraft/bosswallet/util/order/test"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/db"
+	ordertest "github.com/bisoncraft/caribou/util/order/test"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/db"
 )
 
 var (

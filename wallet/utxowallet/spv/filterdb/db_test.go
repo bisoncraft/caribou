@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/btcutil/gcs/builder"
 	"github.com/btcsuite/btcd/chaincfg"

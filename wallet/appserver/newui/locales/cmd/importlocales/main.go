@@ -10,9 +10,9 @@ import (
 	"slices"
 	"strings"
 
-	oldloc "github.com/bisoncraft/bosswallet/wallet/appserver/locales"
-	newloc "github.com/bisoncraft/bosswallet/wallet/appserver/newui/locales"
-	"github.com/bisoncraft/bosswallet/wallet/intl"
+	oldloc "github.com/bisoncraft/caribou/wallet/appserver/locales"
+	newloc "github.com/bisoncraft/caribou/wallet/appserver/newui/locales"
+	"github.com/bisoncraft/caribou/wallet/intl"
 )
 
 /*

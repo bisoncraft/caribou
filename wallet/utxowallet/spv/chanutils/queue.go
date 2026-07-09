@@ -3,7 +3,7 @@ package chanutils
 import (
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/cache/lru"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/cache/lru"
 )
 
 const (

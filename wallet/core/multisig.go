@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/keygen"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/caribou/util/keygen"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/hdkeychain/v3"
 )

@@ -2,7 +2,7 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 package locales
 
-import "github.com/bisoncraft/bosswallet/wallet/intl"
+import "github.com/bisoncraft/caribou/wallet/intl"
 
 var EnUS = map[string]*intl.Translation{
 	"prompt_for_seed":                {T: "Are you restoring Boss Wallet from a seed?"},

@@ -7,7 +7,7 @@ package zero_test
 import (
 	"testing"
 
-	. "github.com/bisoncraft/bosswallet/wallet/utxowallet/internal/zero"
+	. "github.com/bisoncraft/caribou/wallet/utxowallet/internal/zero"
 )
 
 var (

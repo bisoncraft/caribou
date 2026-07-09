@@ -14,7 +14,7 @@ Download and run setup as Administrator (privileges are required in order to set
  setup-windows.cmd <branch> <repoUrl>
  ```
 
- Both `branch` and `repoUrl` are optional.  If not specified, it will clone the `master` branch in the default [bosswallet repository](https://github.com/bisoncraft/bosswallet).
+ Both `branch` and `repoUrl` are optional.  If not specified, it will clone the `master` branch in the default [bosswallet repository](https://github.com/bisoncraft/caribou).
 
  This will download and install `git` and `PowerShell`, clone the repo and install the build toolchain and required SDKs for the build.  Once completed, close the above command prompt, open a new prompt in order to effectuate `PATH` and other environment variables configured by the setup script.  Administrator privileges are NOT required for the rest of the steps.
 

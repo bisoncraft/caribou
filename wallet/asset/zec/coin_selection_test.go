@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/caribou/wallet/asset/btc"
 )
 
 func Test_leastOverFund(t *testing.T) {

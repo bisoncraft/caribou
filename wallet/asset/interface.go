@@ -7,9 +7,9 @@ import (
 	"context"
 
 	dcrwalletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
-	"github.com/bisoncraft/bosswallet/util"
-	pi "github.com/bisoncraft/bosswallet/util/politeia/pitypes"
-	"github.com/bisoncraft/bosswallet/wallet/txdb"
+	"github.com/bisoncraft/caribou/util"
+	pi "github.com/bisoncraft/caribou/util/politeia/pitypes"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/txscript/v4/stdaddr"
 )

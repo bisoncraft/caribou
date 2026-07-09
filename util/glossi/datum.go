@@ -6,7 +6,7 @@ package glossi
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util/encode"
 )
 
 // datumVersion is the version of the datum encoding.

@@ -3,7 +3,7 @@
 
 package sol
 
-import "github.com/bisoncraft/bosswallet/util"
+import "github.com/bisoncraft/caribou/util"
 
 const (
 	BipID = 501

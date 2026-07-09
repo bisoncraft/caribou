@@ -8,7 +8,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util/order"
+	"github.com/bisoncraft/caribou/util/order"
 )
 
 const (

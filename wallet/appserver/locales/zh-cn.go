@@ -1,6 +1,6 @@
 package locales
 
-import "github.com/bisoncraft/bosswallet/wallet/intl"
+import "github.com/bisoncraft/caribou/wallet/intl"
 
 var ZhCN = map[string]*intl.Translation{
 	"Language":                       {T: "zh-CN"},

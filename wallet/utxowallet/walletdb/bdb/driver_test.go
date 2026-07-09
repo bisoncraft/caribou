@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
-	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
 )
 
 const (

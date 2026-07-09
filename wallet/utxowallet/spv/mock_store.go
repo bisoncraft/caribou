@@ -3,7 +3,7 @@ package spv
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/headerfs"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/headerfs"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"

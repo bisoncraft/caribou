@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/msgjson"
-	"github.com/bisoncraft/bosswallet/util/ws"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/msgjson"
+	"github.com/bisoncraft/caribou/util/ws"
 )
 
 var (

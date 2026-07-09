@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"

@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/bisoncraft/bosswallet/util"
-	hyperliquidmock "github.com/bisoncraft/bosswallet/util/testing/hyperliquid_mock"
+	"github.com/bisoncraft/caribou/util"
+	hyperliquidmock "github.com/bisoncraft/caribou/util/testing/hyperliquid_mock"
 )
 
 func main() {

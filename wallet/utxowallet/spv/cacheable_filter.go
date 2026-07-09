@@ -1,7 +1,7 @@
 package spv
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/filterdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/filterdb"
 	"github.com/btcsuite/btcd/btcutil/gcs"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )

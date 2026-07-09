@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/webserver"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/webserver"
 	"github.com/go-chi/chi/v5"
 	"github.com/jrick/logrotate/rotator"
 )

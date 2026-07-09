@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	"go.etcd.io/bbolt"
 	bberrors "go.etcd.io/bbolt/errors"
 )

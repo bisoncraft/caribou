@@ -10,9 +10,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	multibal "github.com/bisoncraft/bosswallet/wallet/asset/eth/contracts/multibalance"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	multibal "github.com/bisoncraft/caribou/wallet/asset/eth/contracts/multibalance"
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"

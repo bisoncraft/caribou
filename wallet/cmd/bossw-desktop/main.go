@@ -54,8 +54,8 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/bisoncraft/bosswallet/util"
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/importall"
+	"github.com/bisoncraft/caribou/util"
+	_ "github.com/bisoncraft/caribou/wallet/asset/importall"
 )
 
 const (

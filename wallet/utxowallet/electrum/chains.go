@@ -7,8 +7,8 @@ package electrum
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 )
 
 // ChainConfig captures the per-chain knobs needed to drive an electrumx

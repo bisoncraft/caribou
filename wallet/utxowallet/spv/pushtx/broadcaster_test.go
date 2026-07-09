@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/blockntfns"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/blockntfns"
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/wire"
 )

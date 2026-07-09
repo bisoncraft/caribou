@@ -7,8 +7,8 @@ package wtxmgr
 import (
 	"fmt"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )

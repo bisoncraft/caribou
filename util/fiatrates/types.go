@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // reactivateDuration is how long it'll take before an auto disabled rate source

@@ -4,8 +4,8 @@
 package base
 
 import (
-	"github.com/bisoncraft/bosswallet/util"
-	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
+	"github.com/bisoncraft/caribou/util"
+	dexeth "github.com/bisoncraft/caribou/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 )
 

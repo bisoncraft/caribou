@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/caribou/util"
 )
 
 // FetchFunc fetches a fee rate in the asset's atoms-per-byte unit. When an

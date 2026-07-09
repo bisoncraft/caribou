@@ -3,7 +3,7 @@ package pushtx_test
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/pushtx"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/pushtx"
 	"github.com/btcsuite/btcd/wire"
 )
 

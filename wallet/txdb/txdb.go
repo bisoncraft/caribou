@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/encode"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/encode"
 )
 
 // ErrUnknownTx is returned when a referenced transaction is not found.

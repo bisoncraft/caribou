@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/config"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/config"
 	"github.com/decred/dcrd/rpcclient/v8"
 )
 

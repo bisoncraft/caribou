@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv/cache"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/cache"
 	"github.com/stretchr/testify/require"
 )
 

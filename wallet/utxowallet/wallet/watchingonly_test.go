@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
-	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
+	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
 )
 
 // TestCreateWatchingOnly checks that we can construct a watching-only

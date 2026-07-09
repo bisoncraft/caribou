@@ -17,12 +17,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/electrum"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/spv"
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/chain"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/spv"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 )
 
 // BackendKind selects the chain backend the wallet constructs and owns.

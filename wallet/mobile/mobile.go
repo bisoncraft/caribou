@@ -23,14 +23,14 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/app"
-	"github.com/bisoncraft/bosswallet/wallet/appserver"
-	"github.com/bisoncraft/bosswallet/wallet/core"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/app"
+	"github.com/bisoncraft/caribou/wallet/appserver"
+	"github.com/bisoncraft/caribou/wallet/core"
 
 	// Register the assets compiled into the mobile build. The build tags on the
 	// importall files select the set (e.g. add -tags xmr to include Monero).
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/importall"
+	_ "github.com/bisoncraft/caribou/wallet/asset/importall"
 )
 
 // App is the bound application handle. The native shell creates one with

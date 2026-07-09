@@ -19,9 +19,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	dexerc20 "github.com/bisoncraft/bosswallet/wallet/asset/erc20"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	dexerc20 "github.com/bisoncraft/caribou/wallet/asset/erc20"
 )
 
 const simnetBridgeName = "simnet"

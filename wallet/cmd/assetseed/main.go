@@ -11,9 +11,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/asset"
-	"github.com/bisoncraft/bosswallet/wallet/core"
-	"github.com/bisoncraft/bosswallet/wallet/mnemonic"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/core"
+	"github.com/bisoncraft/caribou/wallet/mnemonic"
 )
 
 func main() {

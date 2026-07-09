@@ -4,8 +4,8 @@
 package appserver
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/appserver/newui/locales"
-	"github.com/bisoncraft/bosswallet/wallet/intl"
+	"github.com/bisoncraft/caribou/wallet/appserver/newui/locales"
+	"github.com/bisoncraft/caribou/wallet/intl"
 )
 
 var localesMap = locales.Locales

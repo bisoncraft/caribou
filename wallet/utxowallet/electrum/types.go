@@ -6,7 +6,7 @@
 package electrum
 
 import (
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 )
 
 // ServerAddr identifies an electrumx server endpoint. It is an alias of

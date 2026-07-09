@@ -13,7 +13,7 @@ import (
 	"io"
 	"runtime/debug"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/internal/zero"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/internal/zero"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/crypto/scrypt"
 )

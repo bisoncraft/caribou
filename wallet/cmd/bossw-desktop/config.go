@@ -8,7 +8,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/bisoncraft/bosswallet/wallet/app"
+	"github.com/bisoncraft/caribou/wallet/app"
 )
 
 // Config is the configuration for Boss Wallet.

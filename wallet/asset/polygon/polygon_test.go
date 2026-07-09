@@ -6,9 +6,9 @@ package polygon
 import (
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
-	"github.com/bisoncraft/bosswallet/util/encode"
-	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/ethereum/go-ethereum/common"
 )
 
