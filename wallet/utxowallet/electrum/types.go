@@ -136,3 +136,12 @@ type ServerFeatures struct {
 	Version      string `json:"server_version"`
 	HashFunction string `json:"hash_function"`
 }
+
+// MerkleProof is the reply to `blockchain.transaction.get_merkle`: the
+// sibling hashes (hex, display byte order) from the transaction up to the
+// block's merkle root, and the transaction's position in the block.
+type MerkleProof struct {
+	BlockHeight int32    `json:"block_height"`
+	Merkle      []string `json:"merkle"`
+	Pos         uint32   `json:"pos"`
+}

@@ -836,6 +836,50 @@ const maxRawTxFetches = 8
 // together would each wait behind the previous one's round-trip. Enqueue order
 // is preserved so any in-batch parent→child dependency stays intact for the
 // wallet.
+// verifyInclusion checks a confirmed transaction's merkle proof against the
+// LOCAL validated header at its height (multi-server rotation plan R7). The
+// header chain is anchored, retarget-checked, and PoW-bounded, so a proof
+// folding to its merkle root makes fabrication as hard as producing that
+// work; a server that cannot produce a valid proof is lying. Mempool
+// entries (height <= 0) have no proof and are not checked.
+func (c *ElectrumClient) verifyInclusion(txid string, height int32) error {
+	hdr := c.net.HeaderByHeight(height)
+	if hdr == nil {
+		return fmt.Errorf("electrum: no local header at %d for inclusion proof", height)
+	}
+	proof, err := c.net.GetMerkle(c.ctx, txid, height)
+	if err != nil {
+		return fmt.Errorf("electrum: get_merkle %s: %w", txid, err)
+	}
+	node, err := chainhash.NewHashFromStr(txid)
+	if err != nil {
+		return err
+	}
+	cur := *node
+	pos := proof.Pos
+	for _, sibHex := range proof.Merkle {
+		sib, err := chainhash.NewHashFromStr(sibHex)
+		if err != nil {
+			return fmt.Errorf("electrum: bad merkle sibling: %w", err)
+		}
+		var cat [64]byte
+		if pos&1 == 1 {
+			copy(cat[:32], sib[:])
+			copy(cat[32:], cur[:])
+		} else {
+			copy(cat[:32], cur[:])
+			copy(cat[32:], sib[:])
+		}
+		cur = chainhash.DoubleHashH(cat[:])
+		pos >>= 1
+	}
+	if cur != hdr.MerkleRoot {
+		return fmt.Errorf("electrum: merkle proof for %s does not fold to the "+
+			"validated root at %d", txid, height)
+	}
+	return nil
+}
+
 func (c *ElectrumClient) emitRelevantTxs(entries []electrum.HistoryEntry) []electrum.HistoryEntry {
 	if len(entries) == 0 {
 		return nil
@@ -849,6 +893,17 @@ func (c *ElectrumClient) emitRelevantTxs(entries []electrum.HistoryEntry) []elec
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Confirmed entries must prove inclusion against our own
+			// validated header before they may enter the wallet; a
+			// failed proof is a lying server and the entry is refused
+			// (a future honest status diff re-delivers it).
+			if h := entries[i].Height; h > 0 {
+				if err := c.verifyInclusion(entries[i].TxHash, h); err != nil {
+					log.Errorf("electrum: refusing tx %s at %d: %v",
+						entries[i].TxHash, h, err)
+					return
+				}
+			}
 			rtx, err := c.buildRelevantTx(entries[i])
 			if err != nil {
 				log.Debugf("electrum: build relevant tx %s: %v", entries[i].TxHash, err)

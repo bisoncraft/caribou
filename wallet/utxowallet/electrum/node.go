@@ -432,3 +432,14 @@ func protoAtLeast(version string, major, minor int) bool {
 	}
 	return maj > major || (maj == major && min_ >= minor)
 }
+
+// GetMerkle issues `blockchain.transaction.get_merkle`: the merkle branch
+// proving a confirmed transaction's inclusion in the block at height.
+func (n *Node) GetMerkle(ctx context.Context, txid string, height int32) (*MerkleProof, error) {
+	var out MerkleProof
+	if err := n.server.request(ctx, "blockchain.transaction.get_merkle",
+		positional{txid, height}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

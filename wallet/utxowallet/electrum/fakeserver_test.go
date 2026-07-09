@@ -378,6 +378,12 @@ func (f *fakeServer) handle(cs *fakeConnState, method string, params []json.RawM
 			return nil, "bad tx"
 		}
 		return tx.TxHash().String(), ""
+	case "blockchain.transaction.get_merkle":
+		// Single-tx block: empty branch, root == txid. Tests that need
+		// real inclusion checking set the header root to match.
+		return map[string]interface{}{
+			"block_height": num(1), "merkle": []string{}, "pos": 0,
+		}, ""
 	case "blockchain.estimatefee":
 		return 0.0001, ""
 	}

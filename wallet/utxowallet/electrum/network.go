@@ -516,6 +516,15 @@ func (n *Network) replaySubscriptions(ctx context.Context, node *Node) error {
 	return nil
 }
 
+// GetMerkle fetches the merkle inclusion proof for a confirmed transaction.
+func (n *Network) GetMerkle(ctx context.Context, txid string, height int32) (*MerkleProof, error) {
+	node, err := n.getNode()
+	if err != nil {
+		return nil, err
+	}
+	return node.GetMerkle(ctx, txid, height)
+}
+
 // UnsubscribeScripthash undoes a previous subscription.
 func (n *Network) UnsubscribeScripthash(ctx context.Context, scripthash string) {
 	n.subsMtx.Lock()

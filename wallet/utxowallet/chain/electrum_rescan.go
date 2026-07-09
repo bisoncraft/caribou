@@ -730,6 +730,11 @@ func (c *ElectrumClient) emitFilteredBlock(ctx context.Context, block wtxmgr.Blo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if err := c.verifyInclusion(e.TxHash, block.Height); err != nil {
+			log.Errorf("electrum: refusing tx %s at %d: %v", e.TxHash,
+				block.Height, err)
+			continue
+		}
 		raw, err := c.fetchRawTx(ctx, e.TxHash)
 		if err != nil {
 			log.Warnf("electrum: rescan fetch %s: %v", e.TxHash, err)

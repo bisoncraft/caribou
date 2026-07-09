@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,15 +31,16 @@ import (
 // deterministically. It owns its own header chain and notification channels;
 // no actual electrumx server is contacted.
 type stubNetwork struct {
-	mu       sync.Mutex
-	headers  []*wire.BlockHeader
-	hashIdx  map[chainhash.Hash]int32
-	synced   bool
-	subs     map[string]string // scripthash → status
-	history  map[string][]electrum.HistoryEntry
-	rawTxs   map[string]string // txid → hex
-	bcasted  []string
-	bcastErr error
+	lyingMerkle bool
+	mu          sync.Mutex
+	headers     []*wire.BlockHeader
+	hashIdx     map[chainhash.Hash]int32
+	synced      bool
+	subs        map[string]string // scripthash → status
+	history     map[string][]electrum.HistoryEntry
+	rawTxs      map[string]string // txid → hex
+	bcasted     []string
+	bcastErr    error
 
 	// subscribeHook, if non-nil, is invoked at the top of each
 	// SubscribeScripthash call (under s.mu). The returned error is
@@ -192,6 +195,97 @@ func (s *stubNetwork) GetHistory(_ context.Context, sh string) ([]electrum.Histo
 
 func (s *stubNetwork) ListUnspent(_ context.Context, _ string) ([]electrum.UnspentEntry, error) {
 	return nil, nil
+}
+
+// GetMerkle returns a genuine inclusion proof against a real merkle tree the
+// stub builds from every txid it serves at the height — so distinct txids in
+// one block fold, via distinct branches, to a single shared root. The header
+// root is fixed on first query for the height (write-once under the mutex),
+// keeping HeaderByHeight and GetMerkle consistent and race-free. Tests
+// exercising a LYING server override stub behavior instead.
+func (s *stubNetwork) GetMerkle(_ context.Context, txid string, height int32) (*electrum.MerkleProof, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lyingMerkle {
+		// Empty branch: the fold yields the txid, deliberately NOT the
+		// header root, modeling a server that cannot prove inclusion.
+		return &electrum.MerkleProof{BlockHeight: height, Pos: 0}, nil
+	}
+	if height < 0 || int(height) >= len(s.headers) {
+		return nil, fmt.Errorf("stub: no header at %d", height)
+	}
+	// Leaves: distinct txids the stub has at this height, sorted for
+	// determinism.
+	seen := map[string]struct{}{}
+	var leaves []chainhash.Hash
+	for _, entries := range s.history {
+		for _, e := range entries {
+			if e.Height != height {
+				continue
+			}
+			if _, ok := seen[e.TxHash]; ok {
+				continue
+			}
+			seen[e.TxHash] = struct{}{}
+			h, err := chainhash.NewHashFromStr(e.TxHash)
+			if err != nil {
+				return nil, err
+			}
+			leaves = append(leaves, *h)
+		}
+	}
+	sort.Slice(leaves, func(i, j int) bool {
+		return leaves[i].String() < leaves[j].String()
+	})
+	root, branch, pos, err := stubMerkle(leaves, txid)
+	if err != nil {
+		return nil, err
+	}
+	s.headers[height].MerkleRoot = root
+	sib := make([]string, len(branch))
+	for i, b := range branch {
+		sib[i] = b.String()
+	}
+	return &electrum.MerkleProof{BlockHeight: height, Merkle: sib, Pos: pos}, nil
+}
+
+// stubMerkle builds a bitcoin-style merkle tree over leaves and returns the
+// root plus the inclusion branch and position for target.
+func stubMerkle(leaves []chainhash.Hash, target string) (chainhash.Hash, []chainhash.Hash, uint32, error) {
+	tgt, err := chainhash.NewHashFromStr(target)
+	if err != nil {
+		return chainhash.Hash{}, nil, 0, err
+	}
+	pos := -1
+	for i, l := range leaves {
+		if l == *tgt {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		return chainhash.Hash{}, nil, 0, fmt.Errorf("stub: %s not among height leaves", target)
+	}
+	level := append([]chainhash.Hash(nil), leaves...)
+	var branch []chainhash.Hash
+	idx := pos
+	for len(level) > 1 {
+		if len(level)%2 == 1 {
+			level = append(level, level[len(level)-1])
+		}
+		sibIdx := idx ^ 1
+		branch = append(branch, level[sibIdx])
+		var next []chainhash.Hash
+		for i := 0; i < len(level); i += 2 {
+			var cat [64]byte
+			copy(cat[:32], level[i][:])
+			copy(cat[32:], level[i+1][:])
+			next = append(next, chainhash.DoubleHashH(cat[:]))
+		}
+		level = next
+		idx /= 2
+	}
+	return level[0], branch, uint32(pos), nil
 }
 
 func (s *stubNetwork) GetRawTransaction(_ context.Context, txid string) (string, error) {
@@ -1429,4 +1523,47 @@ func synthTxWithScript(t *testing.T, pkScript []byte) (txid, rawHex string) {
 		t.Fatalf("Serialize: %v", err)
 	}
 	return tx.TxHash().String(), hex.EncodeToString(buf.Bytes())
+}
+
+// TestVerifyInclusionRejectsFabrication covers rotation plan R7: a proof that
+// does not fold to the validated local header's merkle root is refused, so a
+// server cannot inject a confirmed transaction that was never mined.
+func TestVerifyInclusionRejectsFabrication(t *testing.T) {
+	stub := newStubNetwork()
+	// Two real headers; height 1 carries a known merkle root.
+	genesis := &wire.BlockHeader{}
+	realRoot := chainhash.DoubleHashH([]byte("real-block"))
+	blk1 := &wire.BlockHeader{PrevBlock: genesis.BlockHash(), MerkleRoot: realRoot}
+	stub.headers = []*wire.BlockHeader{genesis, blk1}
+	stub.hashIdx = map[chainhash.Hash]int32{
+		genesis.BlockHash(): 0, blk1.BlockHash(): 1,
+	}
+
+	stub.synced = true
+	c, err := NewElectrumClient(testParams(), stub)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(c.Stop)
+
+	// A tx whose (empty-branch) proof folds to txid != realRoot must be
+	// refused. lyingMerkle returns an empty branch for any txid, so the
+	// fold yields the txid, which cannot equal realRoot.
+	stub.lyingMerkle = true
+	fake := chainhash.DoubleHashH([]byte("never-mined")).String()
+	if err := c.verifyInclusion(fake, 1); err == nil {
+		t.Fatal("fabricated transaction accepted")
+	}
+
+	// The honest single-tx case: set the header root to the txid so the
+	// empty-branch proof folds cleanly.
+	honest := chainhash.DoubleHashH([]byte("mined")).String()
+	h, _ := chainhash.NewHashFromStr(honest)
+	blk1.MerkleRoot = *h
+	if err := c.verifyInclusion(honest, 1); err != nil {
+		t.Fatalf("honest inclusion rejected: %v", err)
+	}
 }
