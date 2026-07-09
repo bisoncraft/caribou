@@ -738,34 +738,20 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 		addrs   []btcutil.Address
 		unspent []wtxmgr.Credit
 	)
-	// Watch policy: when the backend can unwatch, establish only the live
-	// window of internal addresses — everything colder has no wallet-
-	// uncontrolled events left to observe. Valid only when wtxmgr is
-	// already current: judging hotness needs the addresses' history, so on
-	// a first sync, restore, or deep catch-up (SyncedTo more than the
-	// finality window behind the chain) nothing is filtered — the rescan
-	// ingests everything and the post-sync reaper prunes instead. Seeds
-	// the finality tracker as a side effect, so that reaper picks up where
-	// the filter leaves off.
-	applyWatchFilter := false
-	if _, ok := chainClient.(chain.AddressWatcher); ok {
-		if _, chainTip, err := chainClient.GetBestBlock(); err == nil {
-			applyWatchFilter = w.Manager.SyncedTo().Height+watchFinalityDepth >= chainTip
-		}
-	}
+	// Watch policy: when the backend can unwatch, load only the hot
+	// addresses into the watch set — hot judged from the persisted
+	// last-active index against the on-disk SyncedTo (the header at last
+	// shutdown), so an aged wallet does not re-watch its whole accumulated
+	// address set on restart. Cold addresses drop to the metered sweep.
+	_, watchTiered := chainClient.(chain.AddressWatcher)
 
 	err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
 		addrs, unspent, err = w.activeData(dbtx)
 		if err != nil {
 			return err
 		}
-		if applyWatchFilter {
-			tip := w.Manager.SyncedTo().Height
-			hot, err := w.hotAddrs(dbtx, tip)
-			if err != nil {
-				return err
-			}
-			addrs, unspent, err = w.filterColdAddrs(dbtx, hot, tip, addrs, unspent)
+		if watchTiered {
+			addrs, unspent, err = w.classifyWatchSet(dbtx, addrs, unspent)
 			if err != nil {
 				return err
 			}
@@ -4300,5 +4286,21 @@ func OpenWithRetry(db walletdb.DB, pubPass []byte,
 		w.NtfnServer.notifyUnspentOutput(0, hash, index)
 	}
 
+	// The external-quiet depth is "~one day of blocks" — derived from the
+	// chain's target block time, not a fixed count, so it means a day on
+	// every chain (144 on BTC, 576 on LTC) rather than only on BTC.
+	w.watchPol.extQuietDefault = chainQuietDepth(chainParams)
+
 	return w, nil
+}
+
+// chainQuietDepth returns the number of blocks in roughly one day at the
+// chain's target block time, the depth after which a quiet address is
+// considered cold. Falls back to the BTC-scale default if the params omit a
+// block time.
+func chainQuietDepth(params *netparams.ChainParams) int32 {
+	if params == nil || params.TargetTimePerBlock <= 0 {
+		return externalQuietDepth
+	}
+	return int32(24 * time.Hour / params.TargetTimePerBlock)
 }
