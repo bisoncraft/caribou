@@ -29,6 +29,13 @@
     <key>WalletNet</key>
     <string>$(WALLET_NET)</string>
 
+    <!-- Required for Face ID: iOS crashes any LocalAuthentication / biometric
+         Keychain call if this usage string is absent. Shown in the Face ID
+         consent prompt. Backs the session-lock re-auth (biometrics.md); Touch ID
+         needs no separate key. -->
+    <key>NSFaceIDUsageDescription</key>
+    <string>Unlock Boss Wallet with Face ID.</string>
+
     <!-- The appserver runs on loopback in-process and the WebView loads it over
          plaintext HTTP. Loopback never leaves the device; NSAllowsLocalNetworking
          permits cleartext to localhost/loopback only, without disabling ATS

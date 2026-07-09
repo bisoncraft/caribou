@@ -7,10 +7,12 @@ the Go core (`wallet/mobile`, gomobile-bound) and the React bundle
 `WKWebView`, confines it to loopback, and manages lifecycle.
 
 See `~/ocean/bossmobile/gomobile.md` for the architecture (issue #74). Session
-lock / biometrics (`biometrics.md`) is a separate slice and is **not**
-implemented here — `AppModel.scenePhaseChanged` marks the lifecycle seam where
-the biometric idle-timer work will land. XMR (`xmr.md`) is opt-in and wired via
-`BOSSW_XMR=1 ./bind.sh` + `project.xmr.yml` (see [XMR (Monero)](#xmr-monero)).
+lock / biometrics (`biometrics.md`) is implemented here, mirroring the Android
+shell — `AppModel` drives the idle-gate / key-eviction tiers off the SwiftUI
+scene lifecycle, with `BiometricAuth` backing the Keychain re-auth (see
+[Session lock & biometrics](#session-lock--biometrics)). XMR (`xmr.md`) is opt-in
+and wired via `BOSSW_XMR=1 ./bind.sh` + `project.xmr.yml` (see
+[XMR (Monero)](#xmr-monero)).
 
 ## Prerequisites
 
@@ -56,6 +58,47 @@ skip if you just built it. Re-run `./bind.sh` whenever the Go core or the mobile
 bundle changes; re-run `xcodegen generate` only when `project.yml` or the file
 layout changes.
 
+## Session lock & biometrics
+
+The shell locks the wallet when the user is away and re-authenticates on return,
+per `~/ocean/bossmobile/biometrics.md`. The shared halves (the `App.Lock` /
+`App.Unlock` / `App.VerifyPassword` bound surface, the appserver's grant-URL
+session restore) are platform-neutral and already built; this shell adds the iOS
+native pieces, mirroring Android's `MainActivity` + `BiometricAuth`:
+
+- **Two idle tiers, fed by the scene lifecycle.** `AppModel.scenePhaseChanged`
+  stamps a "backgrounded at" time on `.background` and, on `.active`, picks a
+  tier from how long the app was away: under the gate → resume untouched;
+  past the gate → a cheap biometric **UI gate** (an opaque overlay over the still
+  logged-in WebView, cleared by a presence check, no re-login); past the eviction
+  window → **key eviction** (`App.Lock`: wallets locked, keys zeroed, session
+  torn down), then a biometric-assisted `App.Unlock`. Normal app switching stays
+  under the gate and never re-auths. Both thresholds are user-configurable from
+  the SPA Settings pane (defaults: 10 min gate, 1 hour eviction).
+- **Keychain-backed re-auth (`BiometricAuth.swift`).** The app password is stored
+  as a `.biometryCurrentSet` Keychain item — released only behind Face ID /
+  Touch ID, invalidated on a biometric enrollment change, device-bound and
+  non-syncing. `Info.plist` carries the required `NSFaceIDUsageDescription`.
+- **`window.bossw` bridge.** The SPA's biometric opt-in and lock-timing controls
+  call a native bridge. iOS message handlers are async/void, but the SPA reads
+  `biometricAvailable()` / `getLockConfig()` synchronously, so the injected
+  `window.bossw` getters read a native-pushed `window.__bossw_lock` object while
+  the void actions (enroll/disable/setLockConfig) post messages. State is
+  re-pushed and a `bossw-biometric-changed` event fired on every change and page
+  load.
+- **Privacy cover.** An opaque brand screen covers the WebView whenever the app
+  is not active, so wallet content stays out of the OS app-switcher snapshot (the
+  closest iOS analog of Android's `FLAG_SECURE` for the recents thumbnail; iOS
+  has no API to block user-initiated screenshots).
+
+One deliberate platform difference: unlike Android's `AlarmManager`, iOS cannot
+run a timer to evict keys at an arbitrary future time while suspended, so
+eviction is primarily the **resume-time backstop** (plus a best-effort
+background-task timer for short windows) — exactly the "best-effort, resume
+re-checks" policy the design doc calls for; an OS process-kill evicts the keys
+for free. The native lock strings are English constants (`LockStrings`); an
+`.xcstrings` catalog can follow the same i18n slice Android did.
+
 ## XMR (Monero)
 
 XMR is opt-in because it links the native `libmonero_wallet2_api_c` library.
@@ -99,8 +142,10 @@ It realistically runs in a macOS CI job with Apple credentials.
 | `bind.sh` | Builds `Frameworks/Mobile.xcframework` via `gomobile bind`; `BOSSW_XMR=1` adds the xmr tag and assembles `Monero.xcframework` |
 | `../asset/xmr/build-ios.sh` | Builds the native `libmonero_wallet2_api_c` dylibs for the two iOS triples (macOS; needs the Apple SDK) |
 | `BossWallet/BossWalletApp.swift` | `@main` entry; owns the app lifecycle |
-| `BossWallet/AppModel.swift` | Boots/stops the bound Go `App`; supplies dataDir + network |
-| `BossWallet/ContentView.swift` | Boot / error / WebView states |
-| `BossWallet/WebView.swift` | `WKWebView` wrapper + loopback navigation confinement |
+| `BossWallet/AppModel.swift` | Boots/stops the bound Go `App`; supplies dataDir + network; drives the session-lock tiers and the `window.bossw` bridge |
+| `BossWallet/BiometricAuth.swift` | Keychain-backed app-password store, released behind Face ID / Touch ID |
+| `BossWallet/LockOverlay.swift` | UI-gate overlay + app-switcher privacy cover + native lock strings |
+| `BossWallet/ContentView.swift` | Boot / error / WebView states, with the lock + privacy overlays on top |
+| `BossWallet/WebView.swift` | `WKWebView` wrapper + loopback navigation confinement + bridge wiring |
 | `BossWallet/Info.plist` | ATS local-networking exception, `WalletNet`, launch screen |
 | `BossWallet/Config/*.xcconfig` | Per-network bundle id, display name, `WALLET_NET` |
