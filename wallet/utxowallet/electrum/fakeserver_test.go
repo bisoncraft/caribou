@@ -525,3 +525,74 @@ func TestReplaySubscriptions(t *testing.T) {
 		}
 	}
 }
+
+// TestSurgicalRotation kills the wallet server mid-session and asserts the
+// full R4 story: the live observer is promoted in place, the subscription
+// replay delivers a payment the dead server never reported, the header
+// stream continues from the successor, and nothing above ElectrumNetwork
+// observes the swap (no channel close).
+func TestSurgicalRotation(t *testing.T) {
+	// Deterministic mining makes two independently constructed fakes carry
+	// the identical chain — B is a same-chain peer of A.
+	fA, params := newFakeServer(t, 15)
+	fB, _ := newFakeServer(t, 15)
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{fA.addr(), fB.addr()},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net_.Stop()
+	waitFor(t, "sync", func() bool { return net_.Synced() })
+	waitFor(t, "observer on B", func() bool { return net_.ObserverCount() == 1 })
+
+	sh := fakeStatus([]HistoryEntry{{TxHash: "rot"}})
+	if _, err := net_.SubscribeScripthash(t.Context(), sh); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// A payment lands that only B knows about — A is about to die and
+	// never reports it.
+	missed := []HistoryEntry{{Height: 14, TxHash: "cafe"}}
+	fB.mtx.Lock()
+	fB.hist[sh] = missed
+	fB.mtx.Unlock()
+
+	fA.Close()
+
+	waitFor(t, "rotation to B", func() bool {
+		return net_.currentWalletAddr() == fB.addr().Addr
+	})
+	waitFor(t, "replayed missed payment", func() bool {
+		select {
+		case st, ok := <-net_.ScripthashChan():
+			if !ok {
+				t.Fatal("scripthash channel closed during rotation")
+			}
+			return st.Scripthash == sh && st.Status == fakeStatus(missed)
+		default:
+			return false
+		}
+	})
+
+	// The header stream continues from the successor.
+	tipBefore := net_.Tip()
+	fB.MineBlocks(2)
+	waitFor(t, "tip advances via B", func() bool { return net_.Tip() == tipBefore+2 })
+
+	select {
+	case <-net_.Done():
+		t.Fatal("network shut down during surgical rotation")
+	default:
+	}
+}

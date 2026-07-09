@@ -66,6 +66,9 @@ func (n *Network) observerNodes() []*Node {
 // observer is one header-only server connection.
 type observer struct {
 	node *Node
+	// stopDrain, when closed, releases the drain goroutine so an adopted
+	// node's notify channel has exactly one reader (the new headersLoop).
+	stopDrain chan struct{}
 
 	mtx       sync.Mutex
 	tipHeight int32
@@ -97,7 +100,7 @@ func (o *observer) setTip(t *HeadersTip) {
 // exits on context cancellation. Wallet-server rotation is delegated to the
 // C1 mechanism: demote and Stop, and the wallet-level reconnect elects a
 // better candidate.
-func (n *Network) runObservers(walletAddr string) {
+func (n *Network) runObservers() {
 	defer n.wg.Done()
 
 	n.obsMtx.Lock()
@@ -123,6 +126,7 @@ func (n *Network) runObservers(walletAddr string) {
 	tick := 0
 
 	for {
+		walletAddr := n.currentWalletAddr()
 		n.fillObservers(walletAddr)
 		if tick%discoverEvery == 0 {
 			n.discoverPeers()
@@ -228,7 +232,7 @@ func (n *Network) fillObservers(walletAddr string) {
 			n.pool.recordFailure(sv.Addr)
 			continue
 		}
-		o := &observer{node: node}
+		o := &observer{node: node, stopDrain: make(chan struct{})}
 		o.setTip(tip)
 		n.obsMtx.Lock()
 		n.observers[sv.Addr] = o
@@ -246,6 +250,10 @@ func (n *Network) fillObservers(walletAddr string) {
 						return
 					}
 					o.setTip(t)
+				case <-o.stopDrain:
+					// Adopted as wallet server; failure handling
+					// belongs to its watchNode now.
+					return
 				case <-o.node.Done():
 					n.pool.recordFailure(o.node.Addr().Addr)
 					return

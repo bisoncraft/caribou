@@ -118,6 +118,9 @@ type Network struct {
 	subsMtx sync.Mutex
 	subs    map[string]struct{}
 
+	// rot serializes rotations (rotation.go).
+	rot rotationGuard
+
 	// loops is the goroutine group bound to the current wallet node
 	// (headersLoop, scripthashLoop, watchNode). Rotation joins the old
 	// group before attaching a successor so two groups never interleave
@@ -326,7 +329,7 @@ func (n *Network) Start(parent context.Context) error {
 	// ask.
 	if len(n.candidates()) > 1 {
 		n.wg.Add(1)
-		go n.runObservers(node.Addr().Addr)
+		go n.runObservers()
 	}
 
 	// The background sync goroutine is wg-tracked so WaitForShutdown waits
@@ -1049,20 +1052,22 @@ func (n *Network) scripthashLoop(node *Node) {
 func (n *Network) watchNode(node *Node) {
 	select {
 	case <-node.Done():
-		// Unexpected death (graceful Stop cancels the context first, so
-		// it takes the other arm). Demote the server so the wallet-level
-		// reconnect that follows elects the next candidate.
-		n.pool.recordFailure(node.Addr().Addr)
-		log.Warnf("electrum: server %s disconnected; stopping network", node.Addr())
-		n.Stop()
+		if n.ctx.Err() == nil {
+			// Unexpected death with the network still live: demote and
+			// hand off to surgical rotation, which owns teardown from
+			// here (installs a successor group or spawns the closer).
+			// rotate runs outside this loop group — it joins the group,
+			// and a member joining itself would deadlock.
+			n.pool.recordFailure(node.Addr().Addr)
+			log.Warnf("electrum: wallet server %s disconnected; rotating", node.Addr())
+			n.wg.Add(1)
+			go func() {
+				defer n.wg.Done()
+				n.rotate(node, "connection lost")
+			}()
+			return
+		}
 	case <-n.ctx.Done():
 	}
-	go func() {
-		n.wg.Wait()
-		n.doneClosed.Do(func() {
-			close(n.tipChangeChan)
-			close(n.scripthashCh)
-			close(n.done)
-		})
-	}()
+	n.spawnCloser()
 }
