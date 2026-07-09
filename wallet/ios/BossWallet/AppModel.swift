@@ -243,7 +243,7 @@ final class AppModel: ObservableObject {
         switch lockTier(idleMs: idleMs, gateMs: gateMs(), evictMs: evictMs(),
                         canGate: biometric.canGate()) {
         case .evict:
-            clearGate()
+            // evictAndReauth sets gated/unlocking itself, so no clearGate() first.
             evictAndReauth()
         case .gate:
             enterUiGate()
