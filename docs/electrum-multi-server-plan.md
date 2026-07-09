@@ -113,7 +113,7 @@ No privacy change (the transaction is being published).
 
 ### Phase 4 — Peer discovery + list hygiene
 
-Policy (decided):
+Implemented. Policy (decided):
 
 - **Discovery.** Poll `server.peers.subscribe` on connected servers at low
   cadence; accept candidates with an SSL port and protocol >= 1.4, onion

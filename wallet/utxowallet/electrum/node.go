@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/btcsuite/btcd/wire"
 )
@@ -367,4 +368,52 @@ func (n *Node) EstimateFee(ctx context.Context, confTarget int32) (int64, error)
 		return 0, errors.New("electrum: server cannot estimate fee for given target")
 	}
 	return int64(coinsPerKB * 1e8), nil
+}
+
+// ServerPeers issues `server.peers.subscribe` (a one-shot query despite the
+// name) and parses the reply into dialable ssl candidates. Each raw entry is
+// [ip, hostname, [features...]] where features include a protocol version
+// ("v1.4") and port tags ("s50002" = ssl, "t50001" = tcp). Only ssl-capable
+// peers speaking protocol 1.4+ are returned; the recommendation conveys no
+// trust — candidates prove themselves at handshake like any other server.
+func (n *Node) ServerPeers(ctx context.Context) ([]*ServerAddr, error) {
+	var raw [][]interface{}
+	if err := n.server.request(ctx, "server.peers.subscribe", nil, &raw); err != nil {
+		return nil, err
+	}
+	var out []*ServerAddr
+	for _, entry := range raw {
+		if len(entry) < 3 {
+			continue
+		}
+		host, _ := entry[1].(string)
+		feats, _ := entry[2].([]interface{})
+		if host == "" || feats == nil {
+			continue
+		}
+		var sslPort, version string
+		for _, f := range feats {
+			fs, _ := f.(string)
+			switch {
+			case strings.HasPrefix(fs, "s") && len(fs) > 1:
+				sslPort = fs[1:]
+			case strings.HasPrefix(fs, "v"):
+				version = fs[1:]
+			}
+		}
+		if sslPort == "" || version == "" {
+			continue
+		}
+		// Require protocol 1.4+ (all modern servers; simple string
+		// comparison suffices for 1.x versions).
+		if version < "1.4" {
+			continue
+		}
+		out = append(out, &ServerAddr{
+			Proto:      "ssl",
+			Addr:       host + ":" + sslPort,
+			SkipVerify: true,
+		})
+	}
+	return out, nil
 }

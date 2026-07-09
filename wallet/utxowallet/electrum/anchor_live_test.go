@@ -143,4 +143,22 @@ func TestLiveObservers(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 	t.Logf("observers connected: %d", net.ObserverCount())
+
+	// Discovery runs on the observer loop's first pass: the pool should
+	// grow past the shipped seeds.
+	shipped := len(params.ElectrumServers)
+	deadline = time.Now().Add(60 * time.Second)
+	for {
+		net.pool.mtx.Lock()
+		known := len(net.pool.entries)
+		net.pool.mtx.Unlock()
+		if known > shipped {
+			t.Logf("pool grew to %d servers from %d shipped", known, shipped)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("discovery added nothing (%d known, %d shipped)", known, shipped)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }

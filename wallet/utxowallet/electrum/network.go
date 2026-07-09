@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,6 +107,9 @@ type Network struct {
 	// lifetime.
 	obsMtx    sync.Mutex
 	observers map[string]*observer
+
+	// pool is the persistent, tiered server database (serverpool.go).
+	pool *serverPool
 }
 
 // NewNetwork constructs a Network ready to be Started.
@@ -129,13 +133,20 @@ func NewNetwork(cfg *Config) (*Network, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Network{
+	n := &Network{
 		cfg:           cfg,
 		headers:       h,
 		done:          make(chan struct{}),
 		tipChangeChan: make(chan *TipChange, notifyBufSize),
 		scripthashCh:  make(chan *ScripthashStatus, notifyBufSize),
-	}, nil
+	}
+	// The persistent server pool lives beside the header store (created by
+	// NewHeaders above): shipped seeds plus discovered peers with durable
+	// reputation (multi-server phase 4).
+	n.pool = newServerPool(
+		filepath.Join(cfg.DataDir, "electrum", string(cfg.Chain.Chain)),
+		n.candidates())
+	return n, nil
 }
 
 // Headers returns the underlying header store. Useful for chain.Backend
@@ -222,26 +233,26 @@ func (n *Network) Start(parent context.Context) error {
 	// notifications that arrive during the background sync are buffered by
 	// the server's headersNotify channel; headersLoop drains them after
 	// sync completes.
-	candidates := n.candidates()
+	candidates := n.pool.walletCandidates()
 	var node *Node
 	var tip *HeadersTip
 	var dialErr error
-	for _, sv := range orderCandidates(candidates) {
+	for _, sv := range candidates {
 		node, dialErr = NewNode(n.ctx, sv, n.cfg.TorProxy,
 			n.cfg.Chain.Params.GenesisHash.String())
 		if dialErr != nil {
-			recordServerFailure(sv.Addr)
+			n.pool.recordFailure(sv.Addr)
 			log.Warnf("electrum: server %s failed: %v", sv.Addr, dialErr)
 			continue
 		}
 		tip, dialErr = node.SubscribeHeaders(n.ctx)
 		if dialErr != nil {
 			node.Close()
-			recordServerFailure(sv.Addr)
+			n.pool.recordFailure(sv.Addr)
 			log.Warnf("electrum: server %s failed: subscribe headers: %v", sv.Addr, dialErr)
 			continue
 		}
-		recordServerSuccess(sv.Addr)
+		n.pool.recordSuccess(sv.Addr)
 		break
 	}
 	if dialErr != nil {
@@ -292,7 +303,7 @@ func (n *Network) Start(parent context.Context) error {
 				// Context is still live, so this is a real sync error
 				// (not a graceful shutdown) — bad or hostile server.
 				// Demote it so the reconnect rotates.
-				recordServerFailure(node.Addr().Addr)
+				n.pool.recordFailure(node.Addr().Addr)
 				log.Errorf("electrum: initial header sync failed: %v", err)
 			}
 			n.Stop()
@@ -974,7 +985,7 @@ func (n *Network) watchNode(node *Node) {
 		// Unexpected death (graceful Stop cancels the context first, so
 		// it takes the other arm). Demote the server so the wallet-level
 		// reconnect that follows elects the next candidate.
-		recordServerFailure(node.Addr().Addr)
+		n.pool.recordFailure(node.Addr().Addr)
 		log.Warnf("electrum: server %s disconnected; stopping network", node.Addr())
 		n.Stop()
 	case <-n.ctx.Done():

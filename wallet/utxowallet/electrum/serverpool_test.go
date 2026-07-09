@@ -104,3 +104,67 @@ func TestTxidFromRaw(t *testing.T) {
 		t.Fatalf("txid = %s, want %s", got, want)
 	}
 }
+
+func TestServerPoolTiering(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.mtx.Unlock()
+
+	dir := t.TempDir()
+	shipped := []*ServerAddr{{Proto: "ssl", Addr: "ship1:1"}, {Proto: "ssl", Addr: "ship2:1"}}
+	p := newServerPool(dir, shipped)
+
+	// Discovered peers: aged+multi-recommended, aged+single, fresh.
+	p.addDiscovered("recA:1", []*ServerAddr{{Proto: "ssl", Addr: "disc1:1"}, {Proto: "ssl", Addr: "disc2:1"}})
+	p.addDiscovered("recB:1", []*ServerAddr{{Proto: "ssl", Addr: "disc1:1"}})
+	p.mtx.Lock()
+	p.entries["disc1:1"].FirstSeen = time.Now().Add(-2 * discoveredAgeMin)
+	p.entries["disc2:1"].FirstSeen = time.Now().Add(-2 * discoveredAgeMin)
+	p.mtx.Unlock()
+
+	// Healthy shipped: wallet candidates are shipped-only.
+	wc := p.walletCandidates()
+	if len(wc) != 2 || wc[0].Addr != "ship1:1" {
+		t.Fatalf("healthy wallet candidates = %v", wc)
+	}
+
+	// All shipped failing, but window not yet elapsed: still shipped-only.
+	p.recordFailure("ship1:1")
+	p.recordFailure("ship2:1")
+	if wc := p.walletCandidates(); len(wc) != 2 {
+		t.Fatalf("fallback opened before window: %v", wc)
+	}
+
+	// Backdate the sustained-down marker: fallback opens, but only for
+	// disc1 (multi-recommender); disc2 (single, no successes) and fresh
+	// servers stay ineligible.
+	p.mtx.Lock()
+	p.shippedDownSince = time.Now().Add(-shippedDownWindow - time.Minute)
+	p.mtx.Unlock()
+	wc = p.walletCandidates()
+	if len(wc) != 3 || wc[2].Addr != "disc1:1" {
+		t.Fatalf("fallback candidates = %v", wc)
+	}
+
+	// A shipped success closes the fallback.
+	p.recordSuccess("ship1:1")
+	if wc := p.walletCandidates(); len(wc) != 2 {
+		t.Fatalf("fallback still open after shipped recovery: %v", wc)
+	}
+
+	// Observer candidates: shipped first, then discovered.
+	oc := p.observerCandidates()
+	if len(oc) != 4 || oc[0].Addr != "ship1:1" {
+		t.Fatalf("observer candidates = %v", oc)
+	}
+
+	// Persistence round-trip: reload keeps the discovered entries and
+	// reputation.
+	p2 := newServerPool(dir, shipped)
+	p2.mtx.Lock()
+	e := p2.entries["disc1:1"]
+	p2.mtx.Unlock()
+	if e == nil || len(e.Recommenders) != 2 || e.Shipped {
+		t.Fatalf("reloaded disc1 = %+v", e)
+	}
+}

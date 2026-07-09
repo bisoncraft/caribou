@@ -110,8 +110,18 @@ func (n *Network) runObservers(walletAddr string) {
 	ticker := time.NewTicker(observerCompareInterval)
 	defer ticker.Stop()
 
+	// Discovery (multi-server phase 4): poll server.peers.subscribe on the
+	// connected servers, folding advertised peers into the persistent pool.
+	// Hourly, plus once at startup.
+	const discoverEvery = int(time.Hour / observerCompareInterval)
+	tick := 0
+
 	for {
 		n.fillObservers(walletAddr)
+		if tick%discoverEvery == 0 {
+			n.discoverPeers()
+		}
+		tick++
 
 		select {
 		case <-n.ctx.Done():
@@ -170,7 +180,7 @@ func (n *Network) runObservers(walletAddr string) {
 				log.Warnf("electrum: wallet server %s lagging %d blocks behind "+
 					"observers for %v; rotating", walletAddr, bestObs-localTip,
 					time.Since(lagSince).Round(time.Second))
-				recordServerFailure(walletAddr)
+				n.pool.recordFailure(walletAddr)
 				n.Stop()
 				return
 			}
@@ -192,7 +202,7 @@ func (n *Network) fillObservers(walletAddr string) {
 	if count, _ := have(""); count >= maxObservers {
 		return
 	}
-	for _, sv := range orderCandidates(n.candidates()) {
+	for _, sv := range n.pool.observerCandidates() {
 		count, ok := have(sv.Addr)
 		if count >= maxObservers {
 			break
@@ -203,13 +213,13 @@ func (n *Network) fillObservers(walletAddr string) {
 		node, err := NewNode(n.ctx, sv, n.cfg.TorProxy,
 			n.cfg.Chain.Params.GenesisHash.String())
 		if err != nil {
-			recordServerFailure(sv.Addr)
+			n.pool.recordFailure(sv.Addr)
 			continue
 		}
 		tip, err := node.SubscribeHeaders(n.ctx)
 		if err != nil {
 			node.Close()
-			recordServerFailure(sv.Addr)
+			n.pool.recordFailure(sv.Addr)
 			continue
 		}
 		o := &observer{node: node}
@@ -231,7 +241,7 @@ func (n *Network) fillObservers(walletAddr string) {
 					}
 					o.setTip(t)
 				case <-o.node.Done():
-					recordServerFailure(o.node.Addr().Addr)
+					n.pool.recordFailure(o.node.Addr().Addr)
 					return
 				case <-n.ctx.Done():
 					return
@@ -258,7 +268,7 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 	if err != nil {
 		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
 			"work audit (header fetch: %v); demoting", o.node.Addr().Addr, h, err)
-		recordServerFailure(o.node.Addr().Addr)
+		n.pool.recordFailure(o.node.Addr().Addr)
 		o.node.Close()
 		return
 	}
@@ -266,7 +276,7 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 	if err != nil || len(raw) < n.cfg.Chain.HeaderSize {
 		log.Warnf("electrum: observer %s diverged at height %d but returned an "+
 			"unusable header batch; demoting", o.node.Addr().Addr, h)
-		recordServerFailure(o.node.Addr().Addr)
+		n.pool.recordFailure(o.node.Addr().Addr)
 		o.node.Close()
 		return
 	}
@@ -275,7 +285,7 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		if err := hdr.Deserialize(bytes.NewReader(raw[off : off+n.cfg.Chain.HeaderSize])); err != nil {
 			log.Warnf("electrum: observer %s diverged at height %d but served an "+
 				"undecodable header; demoting: %v", o.node.Addr().Addr, h, err)
-			recordServerFailure(o.node.Addr().Addr)
+			n.pool.recordFailure(o.node.Addr().Addr)
 			o.node.Close()
 			return
 		}
@@ -284,7 +294,7 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 			// the wallet stream untouched.
 			log.Warnf("electrum: observer %s served a chain without valid "+
 				"work; demoting: %v", o.node.Addr().Addr, err)
-			recordServerFailure(o.node.Addr().Addr)
+			n.pool.recordFailure(o.node.Addr().Addr)
 			o.node.Close()
 			return
 		}
@@ -296,6 +306,28 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		"work at height %d — possible eclipse or fork; suspending broadcasts "+
 		"and rotating away from %s", o.node.Addr().Addr, h, walletAddr)
 	n.spendSuspect.Store(true)
-	recordServerFailure(walletAddr)
+	n.pool.recordFailure(walletAddr)
 	n.Stop()
+}
+
+// discoverPeers polls server.peers.subscribe on every connected server and
+// folds the advertised peers into the persistent pool. Recommendations
+// convey no trust (candidates prove themselves at handshake); they gate
+// which servers may ever be elected, per the tier rules in serverpool.go.
+func (n *Network) discoverPeers() {
+	nodes := n.observerNodes()
+	if wn, err := n.getNode(); err == nil {
+		nodes = append(nodes, wn)
+	}
+	for _, node := range nodes {
+		peers, err := node.ServerPeers(n.ctx)
+		if err != nil {
+			log.Debugf("electrum: peer discovery via %s: %v", node.Addr().Addr, err)
+			continue
+		}
+		if len(peers) > 0 {
+			n.pool.addDiscovered(node.Addr().Addr, peers)
+			log.Debugf("electrum: %s advertised %d usable peers", node.Addr().Addr, len(peers))
+		}
+	}
 }

@@ -5,6 +5,9 @@
 package electrum
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -77,4 +80,275 @@ func orderCandidates(servers []*ServerAddr) []*ServerAddr {
 		}
 	}
 	return append(healthy, backedOff...)
+}
+
+// ─── Persistent server pool (multi-server phase 4) ──────────────────────────
+
+const (
+	// discoveredAgeMin is how long a discovered server must have been known
+	// before it is eligible as a fallback wallet server — freshly appeared
+	// servers (an attacker's sybils arriving just in time) never qualify.
+	discoveredAgeMin = 24 * time.Hour
+
+	// shippedDownWindow is how long every shipped server must have been
+	// failing continuously before the fallback tier opens.
+	shippedDownWindow = 30 * time.Minute
+
+	// discoveredExpiry ages a discovered server out of the database when it
+	// has neither been seen advertised nor answered for this long.
+	discoveredExpiry = 30 * 24 * time.Hour
+
+	// maxRecommenders caps the recommender list per entry.
+	maxRecommenders = 5
+
+	// serverDBName is the pool database filename, beside the header store.
+	serverDBName = "servers.json"
+)
+
+// poolEntry is one known server: a shipped seed or a discovered peer, with
+// its durable reputation.
+type poolEntry struct {
+	Server       *ServerAddr `json:"server"`
+	Shipped      bool        `json:"shipped"`
+	Recommenders []string    `json:"recommenders,omitempty"`
+	FirstSeen    time.Time   `json:"firstSeen"`
+	LastSeen     time.Time   `json:"lastSeen"`
+	LastSuccess  time.Time   `json:"lastSuccess,omitempty"`
+	Successes    int         `json:"successes"`
+	Failures     int         `json:"failures"`
+}
+
+// serverPool is the per-chain server database: the shipped seeds plus
+// discovered peers, persisted beside the header store. Election ordering
+// within a tier still uses the process-lifetime health registry (fast
+// backoff); the pool carries the durable, cross-restart reputation and the
+// shipped/discovered tiering.
+type serverPool struct {
+	mtx     sync.Mutex
+	path    string
+	shipped []*ServerAddr
+	entries map[string]*poolEntry
+
+	// shippedDownSince is set when every shipped server is observed in
+	// failure backoff, and cleared by any shipped success. It gates the
+	// discovered-fallback tier.
+	shippedDownSince time.Time
+}
+
+// newServerPool loads (or initializes) the pool database at dir, merging the
+// shipped servers as permanent seeds.
+func newServerPool(dir string, shipped []*ServerAddr) *serverPool {
+	p := &serverPool{
+		path:    filepath.Join(dir, serverDBName),
+		shipped: shipped,
+		entries: make(map[string]*poolEntry),
+	}
+	if raw, err := os.ReadFile(p.path); err == nil {
+		var stored []*poolEntry
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			log.Warnf("electrum: unreadable server database %s: %v", p.path, err)
+		} else {
+			now := time.Now()
+			for _, e := range stored {
+				if e.Server == nil || e.Server.Addr == "" {
+					continue
+				}
+				if !e.Shipped && now.Sub(e.LastSeen) > discoveredExpiry &&
+					now.Sub(e.LastSuccess) > discoveredExpiry {
+					continue // aged out
+				}
+				p.entries[e.Server.Addr] = e
+			}
+		}
+	}
+	now := time.Now()
+	for _, sv := range shipped {
+		e := p.entries[sv.Addr]
+		if e == nil {
+			e = &poolEntry{Server: sv, FirstSeen: now}
+			p.entries[sv.Addr] = e
+		}
+		e.Shipped = true
+		e.LastSeen = now
+	}
+	return p
+}
+
+// save persists the pool; best-effort (logged, never fatal — the pool
+// rebuilds from shipped seeds and discovery).
+func (p *serverPool) save() {
+	entries := make([]*poolEntry, 0, len(p.entries))
+	for _, e := range p.entries {
+		entries = append(entries, e)
+	}
+	raw, err := json.MarshalIndent(entries, "", "\t")
+	if err == nil {
+		err = os.WriteFile(p.path, raw, 0o600)
+	}
+	if err != nil {
+		log.Warnf("electrum: persist server database: %v", err)
+	}
+}
+
+// addDiscovered folds peers advertised by recommender into the pool.
+func (p *serverPool) addDiscovered(recommender string, peers []*ServerAddr) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	now := time.Now()
+	changed := false
+	for _, sv := range peers {
+		e := p.entries[sv.Addr]
+		if e == nil {
+			e = &poolEntry{Server: sv, FirstSeen: now}
+			p.entries[sv.Addr] = e
+			changed = true
+		}
+		e.LastSeen = now
+		found := false
+		for _, r := range e.Recommenders {
+			if r == recommender {
+				found = true
+				break
+			}
+		}
+		if !found && len(e.Recommenders) < maxRecommenders {
+			e.Recommenders = append(e.Recommenders, recommender)
+			changed = true
+		}
+	}
+	if changed {
+		p.save()
+	}
+}
+
+// recordSuccess/recordFailure update both the fast health registry and the
+// durable reputation.
+func (p *serverPool) recordSuccess(addr string) {
+	recordServerSuccess(addr)
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	if e := p.entries[addr]; e != nil {
+		e.Successes++
+		e.LastSuccess = time.Now()
+		e.LastSeen = e.LastSuccess
+		if e.Shipped {
+			p.shippedDownSince = time.Time{}
+		}
+		p.save()
+	}
+}
+
+func (p *serverPool) recordFailure(addr string) {
+	recordServerFailure(addr)
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	if e := p.entries[addr]; e != nil {
+		e.Failures++
+		p.save()
+	}
+}
+
+// fallbackEligible reports whether the discovered tier may serve as wallet
+// server: every shipped server has been failing continuously for
+// shippedDownWindow. Must be called with mtx held.
+func (p *serverPool) fallbackEligibleLocked(now time.Time) bool {
+	serverHealth.mtx.Lock()
+	allDown := true
+	for _, sv := range p.shipped {
+		r := serverHealth.m[sv.Addr]
+		if r == nil || now.Sub(r.lastFailure) >= serverFailureBackoff {
+			allDown = false
+			break
+		}
+	}
+	serverHealth.mtx.Unlock()
+	if !allDown {
+		p.shippedDownSince = time.Time{}
+		return false
+	}
+	if p.shippedDownSince.IsZero() {
+		p.shippedDownSince = now
+	}
+	return now.Sub(p.shippedDownSince) >= shippedDownWindow
+}
+
+// agedDiscoveredLocked returns discovered servers eligible for wallet-server
+// fallback: known for at least discoveredAgeMin AND either previously
+// successful or advertised by multiple independent recommenders.
+func (p *serverPool) agedDiscoveredLocked(now time.Time) []*ServerAddr {
+	var out []*ServerAddr
+	for _, e := range p.entries {
+		if e.Shipped || now.Sub(e.FirstSeen) < discoveredAgeMin {
+			continue
+		}
+		if e.Successes > 0 || len(e.Recommenders) >= 2 {
+			out = append(out, e.Server)
+		}
+	}
+	return out
+}
+
+// walletCandidates returns the wallet-server election order: the shipped
+// tier (health-ordered), extended by aged discovered servers only when the
+// gated fallback is open. Entering fallback is logged at error level; the
+// UI stays quiet per policy.
+func (p *serverPool) walletCandidates() []*ServerAddr {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	out := orderCandidates(p.shipped)
+	now := time.Now()
+	if p.fallbackEligibleLocked(now) {
+		aged := orderCandidates(p.agedDiscoveredLocked(now))
+		if len(aged) > 0 {
+			log.Errorf("electrum: every shipped server failing for %v; opening "+
+				"wallet-server election to %d aged discovered servers",
+				time.Since(p.shippedDownSince).Round(time.Second), len(aged))
+			out = append(out, aged...)
+		}
+	}
+	return out
+}
+
+// observerCandidates returns the observer election order: shipped first (so
+// the observer set always prefers, and with slots available includes, a
+// shipped server), then discovered peers ordered for recommender diversity —
+// one per recommender before seconds, limiting how far a single
+// recommending operator can stack the observer panel.
+func (p *serverPool) observerCandidates() []*ServerAddr {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	out := orderCandidates(p.shipped)
+	var discovered []*poolEntry
+	for _, e := range p.entries {
+		if !e.Shipped {
+			discovered = append(discovered, e)
+		}
+	}
+	seenRec := make(map[string]int)
+	// Stable pass: take servers whose first recommender is least used so
+	// far; repeat until exhausted.
+	for len(discovered) > 0 {
+		best := -1
+		for i, e := range discovered {
+			rec := ""
+			if len(e.Recommenders) > 0 {
+				rec = e.Recommenders[0]
+			}
+			if best == -1 || seenRec[rec] < seenRec[firstRec(discovered[best])] {
+				best = i
+			}
+		}
+		e := discovered[best]
+		seenRec[firstRec(e)]++
+		out = append(out, e.Server)
+		discovered = append(discovered[:best], discovered[best+1:]...)
+	}
+	return out
+}
+
+func firstRec(e *poolEntry) string {
+	if len(e.Recommenders) > 0 {
+		return e.Recommenders[0]
+	}
+	return ""
 }
