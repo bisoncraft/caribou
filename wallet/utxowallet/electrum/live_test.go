@@ -287,3 +287,52 @@ func TestLiveGetTransaction(t *testing.T) {
 		})
 	}
 }
+
+// TestLiveFailover verifies the server-pool election: with a dead candidate
+// listed first, Start rotates to the live harness server, and the dead
+// candidate is demoted so the next election tries the healthy one first.
+func TestLiveFailover(t *testing.T) {
+	useTestLogger(t)
+	tc := liveCases(t)[0] // btc harness
+
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.mtx.Unlock()
+
+	dead := &ServerAddr{Proto: "ssl", Addr: "127.0.0.1:1", SkipVerify: true}
+	live := &ServerAddr{Proto: "ssl", Addr: tc.addr, SkipVerify: true}
+
+	chainCfg, err := NewChainConfig(tc.chain, tc.params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{dead, live},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := net.Start(ctx); err != nil {
+		t.Fatalf("Start did not fail over past the dead candidate: %v", err)
+	}
+	defer net.Stop()
+
+	net.mu.RLock()
+	got := net.node.Addr().Addr
+	net.mu.RUnlock()
+	if got != live.Addr {
+		t.Fatalf("elected %s, want %s", got, live.Addr)
+	}
+
+	// The dead candidate is demoted: a fresh election orders the live
+	// server first.
+	ordered := orderCandidates([]*ServerAddr{dead, live})
+	if ordered[0].Addr != live.Addr {
+		t.Fatalf("dead candidate not demoted: order %s first", ordered[0].Addr)
+	}
+	t.Logf("failover elected %s; dead candidate demoted", got)
+}

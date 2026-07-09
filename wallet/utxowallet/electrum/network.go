@@ -23,8 +23,16 @@ type Config struct {
 	// Chain identifies the chain and provides chain parameters.
 	Chain *ChainConfig
 
-	// TrustedServer is the initial server to dial. It is required.
+	// TrustedServer is the preferred server to dial. At least one of
+	// TrustedServer/Servers is required.
 	TrustedServer *ServerAddr
+
+	// Servers are additional candidate servers, in preference order. Start
+	// elects one connection: candidates are tried in health-scored order
+	// (recent failures deprioritized; see serverpool.go) until a dial and
+	// handshake succeed, and a server whose connection later fails is
+	// demoted so the next (re)connect rotates instead of retrying it.
+	Servers []*ServerAddr
 
 	// TorProxy is an optional SOCKS5 proxy address (host:port). When set,
 	// onion services in TrustedServer/Servers are dialed via this proxy.
@@ -92,8 +100,8 @@ func NewNetwork(cfg *Config) (*Network, error) {
 	if cfg.Chain == nil {
 		return nil, errors.New("electrum: network config missing Chain")
 	}
-	if cfg.TrustedServer == nil {
-		return nil, errors.New("electrum: network config missing TrustedServer")
+	if cfg.TrustedServer == nil && len(cfg.Servers) == 0 {
+		return nil, errors.New("electrum: network config has no servers")
 	}
 	if cfg.DataDir == "" {
 		return nil, errors.New("electrum: network config missing DataDir")
@@ -171,25 +179,52 @@ func (n *Network) Start(parent context.Context) error {
 		return err
 	}
 
-	node, err := NewNode(n.ctx, n.cfg.TrustedServer, n.cfg.TorProxy,
-		n.cfg.Chain.Params.GenesisHash.String())
-	if err != nil {
-		return failed(err)
-	}
-
-	// Subscribe FIRST so syncHeaders knows the server-reported tip. That
-	// height becomes the tipHint for AppendBatch: headers within the
-	// trailing recentPoWWindow get per-header PoW, older headers are
-	// validated only by checkpoint match + retarget structure (much
-	// faster than per-header scrypt over millions of LTC blocks).
+	// Elect one connection from the candidate pool: dial in health-scored
+	// order until a handshake and header subscription succeed. Failures are
+	// recorded so subsequent elections (including full wallet reconnects,
+	// which rebuild this Network) rotate away from dead servers.
 	//
-	// Tip-change notifications that arrive during the background sync are
-	// buffered by the server's headersNotify channel; headersLoop drains
-	// them after sync completes.
-	tip, err := node.SubscribeHeaders(n.ctx)
-	if err != nil {
-		node.Close()
-		return failed(fmt.Errorf("electrum: subscribe headers: %w", err))
+	// The subscribe happens FIRST so syncHeaders knows the server-reported
+	// tip. That height becomes the tipHint for AppendBatch: headers within
+	// the trailing recentPoWWindow get per-header PoW, older headers are
+	// validated only by checkpoint match + retarget structure (much faster
+	// than per-header scrypt over millions of LTC blocks). Tip-change
+	// notifications that arrive during the background sync are buffered by
+	// the server's headersNotify channel; headersLoop drains them after
+	// sync completes.
+	candidates := make([]*ServerAddr, 0, len(n.cfg.Servers)+1)
+	seen := make(map[string]bool)
+	for _, sv := range append([]*ServerAddr{n.cfg.TrustedServer}, n.cfg.Servers...) {
+		if sv == nil || seen[sv.Addr] {
+			continue
+		}
+		seen[sv.Addr] = true
+		candidates = append(candidates, sv)
+	}
+	var node *Node
+	var tip *HeadersTip
+	var dialErr error
+	for _, sv := range orderCandidates(candidates) {
+		node, dialErr = NewNode(n.ctx, sv, n.cfg.TorProxy,
+			n.cfg.Chain.Params.GenesisHash.String())
+		if dialErr != nil {
+			recordServerFailure(sv.Addr)
+			log.Warnf("electrum: server %s failed: %v", sv.Addr, dialErr)
+			continue
+		}
+		tip, dialErr = node.SubscribeHeaders(n.ctx)
+		if dialErr != nil {
+			node.Close()
+			recordServerFailure(sv.Addr)
+			log.Warnf("electrum: server %s failed: subscribe headers: %v", sv.Addr, dialErr)
+			continue
+		}
+		recordServerSuccess(sv.Addr)
+		break
+	}
+	if dialErr != nil {
+		return failed(fmt.Errorf("electrum: all %d candidate servers failed, last: %w",
+			len(candidates), dialErr))
 	}
 
 	// Record the server's reported tip so TargetTip() can report meaningful
@@ -224,7 +259,9 @@ func (n *Network) Start(parent context.Context) error {
 		if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
 			if n.ctx.Err() == nil {
 				// Context is still live, so this is a real sync error
-				// (not a graceful shutdown). Log it before tearing down.
+				// (not a graceful shutdown) — bad or hostile server.
+				// Demote it so the reconnect rotates.
+				recordServerFailure(node.Addr().Addr)
 				log.Errorf("electrum: initial header sync failed: %v", err)
 			}
 			n.Stop()
@@ -814,7 +851,11 @@ func (n *Network) watchNode(node *Node) {
 	defer n.wg.Done()
 	select {
 	case <-node.Done():
-		log.Warnf("electrum: trusted server %s disconnected; stopping network", node.Addr())
+		// Unexpected death (graceful Stop cancels the context first, so
+		// it takes the other arm). Demote the server so the wallet-level
+		// reconnect that follows elects the next candidate.
+		recordServerFailure(node.Addr().Addr)
+		log.Warnf("electrum: server %s disconnected; stopping network", node.Addr())
 		n.Stop()
 	case <-n.ctx.Done():
 	}

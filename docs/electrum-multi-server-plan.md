@@ -7,10 +7,17 @@ document covers connection topology, failover, and tip integrity.
 
 ## Status
 
-Proposed. Not started. `electrum.Network` is explicitly phase-1 single-server
-("multi-peer failover will be added in a later phase" — `network.go`), and the
-wallet consumes only the first entry of the built-in server lists
-(`wallet/backends.go`: `np.ElectrumServers[0]`).
+Phase 1 (failover) implemented on `utxosync`: the wallet passes the full
+built-in list, `Start` elects one connection in health-scored order
+(`serverpool.go` — process-lifetime failure records, 10-minute backoff,
+least-recently-failed retry ordering), and every failure path (dial,
+handshake, header-sync, unexpected disconnect) demotes the server so the
+next election — including the wallet-level reconnect that follows a
+mid-session death — rotates instead of retrying it. In-place rotation
+without the network rebuild was considered and deliberately deferred: the
+rebuild path is cheap post-anchor (seconds) and reuses hardened machinery,
+while an in-place node swap would rewire the delicate loop/teardown
+ownership for little gain. Phases 2–4 remain proposed.
 
 ## 1. Why
 
@@ -56,12 +63,15 @@ Existing machinery makes the switch-over cheap:
 
 ### Phase 1 — Failover (availability)
 
-Consume the full `ElectrumServers` list. Maintain a health-scored candidate
-set; on wallet-server failure, rotate in place: dial the next candidate,
-re-validate its chain against the header store (anchor-bounded), replay the
-subscription set, and resume the notification stream. The wallet's existing
-reconnect loop remains the backstop, not the mechanism. No `chain` package
-changes — the rotation happens beneath `ElectrumNetwork`.
+Consume the full `ElectrumServers` list and maintain a health-scored
+candidate set. `Start` elects one connection, dialing candidates in scored
+order; every failure path demotes the failing server. As built, the
+wallet-level reconnect IS the rotation mechanism for mid-session failures:
+the death demotes the server, teardown proceeds as before, and the rebuilt
+Network elects the next candidate — whose chain is re-validated against the
+header store (anchor-bounded) and whose subscriptions are re-established by
+the normal sync. An in-place swap (no rebuild) is a possible later
+refinement if reconnect cost ever matters.
 
 ### Phase 2 — Observer tips (integrity)
 

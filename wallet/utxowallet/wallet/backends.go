@@ -87,9 +87,10 @@ func newElectrumBackend(np *netparams.ChainParams, dataDir string) (walletBacken
 	if len(np.ElectrumServers) == 0 {
 		return nil, fmt.Errorf("electrum: no built-in server for network %q", np.BTCDParams().Name)
 	}
-	srvAddr := np.ElectrumServers[0]
-	if err := srvAddr.Validate(); err != nil {
-		return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
+	for _, srvAddr := range np.ElectrumServers {
+		if err := srvAddr.Validate(); err != nil {
+			return nil, fmt.Errorf("electrum: invalid built-in server address: %w", err)
+		}
 	}
 	bwChain, err := bisonwire.ChainFromString(np.Chain)
 	if err != nil {
@@ -99,10 +100,13 @@ func newElectrumBackend(np *netparams.ChainParams, dataDir string) (walletBacken
 	if err != nil {
 		return nil, fmt.Errorf("electrum: chain config: %w", err)
 	}
+	// The full built-in list, in preference order: Start elects one
+	// connection, rotating past recently-failed candidates (electrum
+	// serverpool).
 	network, err := electrum.NewNetwork(&electrum.Config{
-		Chain:         chainCfg,
-		TrustedServer: srvAddr,
-		DataDir:       dataDir,
+		Chain:   chainCfg,
+		Servers: np.ElectrumServers,
+		DataDir: dataDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("electrum: new network: %w", err)
