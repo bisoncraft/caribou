@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent, ChangeEvent } from 'react'
+import { useState, useEffect, FormEvent, ChangeEvent, ReactNode } from 'react'
 import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import { postJSON } from '@bossw/shared/http'
@@ -170,16 +170,23 @@ function BiometricSettings () {
     else bridge.disableBiometrics()
   }
 
+  // The biometric toggle governs only how keys are re-acquired once they are gone
+  // (after eviction, or on a cold-start boot): released from the Keychain via
+  // Face/Touch ID vs. retyping the password. It does not touch the gate ("Lock
+  // after"), which is a presence check over a still-resident session. So it is
+  // handed to LockTiming to render between the two tiers — just above "Evict keys
+  // after", where it applies — rather than as a master switch atop the card.
+  const biometricToggle = available && (
+    <label className='mb-check-row'>
+      <input type='checkbox' checked={enrolled} onChange={toggle} />
+      <span>{t('Get keys with biometrics')}</span>
+    </label>
+  )
+
   return (
     <div className='mb-card'>
       <h2>{t('Security')}</h2>
-      {available && (
-        <label className='mb-check-row'>
-          <input type='checkbox' checked={enrolled} onChange={toggle} />
-          <span>{t('Unlock with biometrics')}</span>
-        </label>
-      )}
-      <LockTiming bridge={bridge} available={available} />
+      <LockTiming bridge={bridge} available={available} biometricToggle={biometricToggle} />
     </div>
   )
 }
@@ -198,11 +205,15 @@ function evictLabel (m: number): string {
   return tvar('{{ n }} min', { n: String(m) })
 }
 
-// LockTiming lets the user tune the two idle thresholds. Reads the current
-// values from the native bridge and writes both back on any change. The gate row
-// only shows when the device can actually gate (biometrics available); without
-// them the gate has no mechanism and only eviction applies.
-function LockTiming ({ bridge, available }: { bridge: BosswBridge, available: boolean }) {
+// LockTiming lays out the Security card's lock controls in tier order: the gate
+// threshold ("Lock after"), then the caller-supplied biometric toggle, then the
+// eviction threshold ("Evict keys after"). It reads the two thresholds from the
+// native bridge and writes both back on any change. The gate row only shows when
+// the device can gate (biometrics available); without them the gate has no
+// mechanism and only eviction applies. biometricToggle is placed between the
+// tiers because it governs re-acquiring keys after eviction, not the gate; it is
+// already nil when biometrics are unavailable (the caller gates it on available).
+function LockTiming ({ bridge, available, biometricToggle }: { bridge: BosswBridge, available: boolean, biometricToggle: ReactNode }) {
   const [gateMin, setGateMin] = useState(10)
   const [evictMin, setEvictMin] = useState(60)
 
@@ -261,6 +272,7 @@ function LockTiming ({ bridge, available }: { bridge: BosswBridge, available: bo
           </select>
         </label>
       )}
+      {biometricToggle}
       <label className='mb-select-row'>
         <span>{t('Evict keys after')}</span>
         <select value={evictMin} onChange={(e) => onEvictChange(Number(e.target.value))}>
