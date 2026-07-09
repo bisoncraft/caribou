@@ -24,6 +24,7 @@ type ElectrumNetwork interface {
 
 	// Header state served from the local store.
 	Tip() int32
+	StartHeight() int32
 	Synced() bool
 	// TargetTip returns the server's reported best height (from the initial
 	// SubscribeHeaders reply and updated on each tip-change notification). It

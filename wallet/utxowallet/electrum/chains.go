@@ -51,10 +51,23 @@ func NewChainConfig(chain bisonwire.Chain, params *netparams.ChainParams) (*Chai
 	if params.GenesisHash == nil {
 		return nil, fmt.Errorf("electrum: chain params missing genesis hash")
 	}
+	// Anchor the header store at the first checkpoint: prevHashAt accepts
+	// the header at StartHeight without linkage, and validateCheckpoint
+	// then authenticates it against the checkpoint hash — an unanchored
+	// non-zero StartHeight would let a hostile server pick the chain. The
+	// checkpoint lists carry a single post-launch anchor (the last
+	// retarget boundary before DefaultWalletBirthday), so mainnet and
+	// testnet sync a few thousand headers instead of the whole chain.
+	// Networks without checkpoints (regtest) sync from genesis, where the
+	// genesis hash itself anchors height 0.
+	startHeight := int32(0)
+	if len(params.Checkpoints) > 0 {
+		startHeight = params.Checkpoints[0].Height
+	}
 	return &ChainConfig{
 		Chain:       chain,
 		Params:      params,
 		HeaderSize:  80,
-		StartHeight: 0,
+		StartHeight: startHeight,
 	}, nil
 }

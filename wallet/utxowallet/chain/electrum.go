@@ -198,6 +198,12 @@ func NewElectrumClient(chainParams *netparams.ChainParams, network ElectrumNetwo
 // BackEnd returns the name of the backend.
 func (c *ElectrumClient) BackEnd() string { return ElectrumBackEnd }
 
+// EarliestBlockHeight returns the lowest height for which the backend can
+// serve headers — the checkpoint anchor the header store starts at. Callers
+// walking or bisecting the chain (e.g. the wallet's birthday-block search)
+// must not probe below it.
+func (c *ElectrumClient) EarliestBlockHeight() int32 { return c.net.StartHeight() }
+
 // Network returns the underlying ElectrumNetwork. Useful for asset-layer
 // callers that need direct access to electrum-specific operations.
 func (c *ElectrumClient) Network() ElectrumNetwork { return c.net }

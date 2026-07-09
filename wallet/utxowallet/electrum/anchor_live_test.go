@@ -1,0 +1,110 @@
+// Copyright (c) 2024 The Bison Wallet developers
+// Use of this source code is governed by an ISC
+// license that can be found in the LICENSE file.
+
+//go:build livenet
+
+// Live verification of the checkpoint anchors against public electrum
+// servers. Unlike the harness tests (build tag "harness", local regtest),
+// these dial real mainnet/testnet infrastructure, so they are opt-in:
+//
+//	go test -tags livenet -run TestAnchorHeaderSync -v ./wallet/utxowallet/electrum/
+//
+// Each case syncs headers from the network's checkpoint anchor (the header
+// store's StartHeight) to the live tip, which exercises the anchor base case
+// (first header accepted by checkpoint hash, not linkage), the retarget
+// validation across real boundaries, and VerifyAll over the synced range.
+
+package electrum
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/assets"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btclog"
+)
+
+type anchorTestWriter struct{ t *testing.T }
+
+func (w anchorTestWriter) Write(p []byte) (int, error) {
+	w.t.Log(string(p))
+	return len(p), nil
+}
+
+func anchorTestLogger(t *testing.T) {
+	t.Helper()
+	backend := btclog.NewBackend(anchorTestWriter{t: t})
+	logger := backend.Logger("ELEC")
+	logger.SetLevel(btclog.LevelTrace)
+	UseLogger(logger)
+	t.Cleanup(func() { DisableLog() })
+}
+
+func TestAnchorHeaderSync(t *testing.T) {
+	anchorTestLogger(t)
+	cases := []struct {
+		name   string
+		chain  bisonwire.Chain
+		params *netparams.ChainParams
+		server *netparams.ServerAddr
+	}{
+		{"btc-mainnet", bisonwire.ChainBTC, assets.BTCParams["mainnet"],
+			&netparams.ServerAddr{Proto: "ssl", Addr: "electrum.emzy.de:50002", SkipVerify: true}},
+		{"btc-testnet", bisonwire.ChainBTC, assets.BTCParams["testnet"],
+			&netparams.ServerAddr{Proto: "ssl", Addr: "testnet.aranguren.org:51002", SkipVerify: true}},
+		{"ltc-mainnet", bisonwire.ChainLTC, assets.LTCParams["mainnet"],
+			&netparams.ServerAddr{Proto: "ssl", Addr: "electrum-ltc.bysh.me:50002", SkipVerify: true}},
+		{"ltc-testnet", bisonwire.ChainLTC, assets.LTCParams["testnet"],
+			&netparams.ServerAddr{Proto: "ssl", Addr: "electrum-ltc.bysh.me:51002", SkipVerify: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chainCfg, err := NewChainConfig(tc.chain, tc.params)
+			if err != nil {
+				t.Fatalf("NewChainConfig: %v", err)
+			}
+			cps := tc.params.Checkpoints
+			if len(cps) == 0 || chainCfg.StartHeight != cps[0].Height {
+				t.Fatalf("StartHeight %d not anchored to first checkpoint (%v)",
+					chainCfg.StartHeight, cps)
+			}
+			net, err := NewNetwork(&Config{
+				Chain:         chainCfg,
+				TrustedServer: tc.server,
+				DataDir:       t.TempDir(),
+			})
+			if err != nil {
+				t.Fatalf("NewNetwork: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			defer cancel()
+			if err := net.Start(ctx); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer net.Stop()
+			for !net.Synced() {
+				select {
+				case <-ctx.Done():
+					t.Fatalf("timed out syncing from anchor (tip=%d)", net.Tip())
+				case <-time.After(500 * time.Millisecond):
+				}
+			}
+			anchor := net.HeaderByHeight(chainCfg.StartHeight)
+			if anchor == nil {
+				t.Fatalf("missing anchor header at %d", chainCfg.StartHeight)
+			}
+			if h := anchor.BlockHash(); h != *cps[0].Hash {
+				t.Fatalf("anchor hash %s, checkpoint %s", h, cps[0].Hash)
+			}
+			if err := net.Headers().VerifyAll(); err != nil {
+				t.Fatalf("VerifyAll: %v", err)
+			}
+			t.Logf("%s: synced %d headers from anchor %d to tip %d",
+				tc.name, net.Tip()-chainCfg.StartHeight+1, chainCfg.StartHeight, net.Tip())
+		})
+	}
+}

@@ -119,6 +119,8 @@ func (s *stubNetwork) Stop()                         { close(s.done) }
 func (s *stubNetwork) Done() <-chan struct{}         { return s.done }
 func (s *stubNetwork) WaitForShutdown()              { <-s.done }
 
+func (s *stubNetwork) StartHeight() int32 { return 0 }
+
 func (s *stubNetwork) Tip() int32 {
 	s.mu.Lock()
 	defer s.mu.Unlock()

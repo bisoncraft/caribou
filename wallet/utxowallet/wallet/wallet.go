@@ -817,8 +817,14 @@ func (w *Wallet) waitUntilBackendSynced(chainClient chain.Backend) error {
 func locateBirthdayBlock(chainClient chainConn,
 	birthday time.Time) (*waddrmgr.BlockStamp, error) {
 
-	// Retrieve the lookup range for our block.
+	// Retrieve the lookup range for our block. Backends whose header store
+	// starts at a checkpoint anchor (electrum) cannot serve anything below
+	// it, so the bisection floor comes from the backend; probing below
+	// would error out the sync.
 	startHeight := int32(0)
+	if e, ok := chainClient.(interface{ EarliestBlockHeight() int32 }); ok {
+		startHeight = e.EarliestBlockHeight()
+	}
 	_, bestHeight, err := chainClient.GetBestBlock()
 	if err != nil {
 		return nil, err

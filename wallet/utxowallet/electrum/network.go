@@ -303,6 +303,11 @@ func (n *Network) ScripthashChan() <-chan *ScripthashStatus { return n.scripthas
 // Tip returns the current best block height as known to this network.
 func (n *Network) Tip() int32 { return n.headers.Tip() }
 
+// StartHeight returns the lowest header height the store syncs from — the
+// checkpoint anchor on mainnet/testnet, 0 on regtest. Headers below it do
+// not exist locally.
+func (n *Network) StartHeight() int32 { return n.headers.StartHeight() }
+
 // Synced reports whether the initial header sync has completed.
 func (n *Network) Synced() bool { return n.headers.Synced() }
 

@@ -98,23 +98,15 @@ var LTCParams = map[string]*netparams.ChainParams{
 		RetargetAdjustmentFactor: 4,                                       // 25% less, 400% more
 		ReduceMinDifficulty:      false,
 		MinDiffReductionTime:     0,
+		// A single post-launch anchor: the last retarget boundary mined before
+		// DefaultWalletBirthday (2026-07-01). The electrum header store starts
+		// here (see electrum.NewChainConfig) and the checkpoint authenticates
+		// that anchor header; no wallet birthday can predate it, so nothing
+		// below is ever needed. Refresh together with DefaultWalletBirthday
+		// on release. Hash cross-checked via litecoinspace.org and
+		// blockchair.com.
 		Checkpoints: []chaincfg.Checkpoint{
-			{Height: 1500, Hash: newHashFromStr("841a2965955dd288cfa707a755d05a54e45f8bd476835ec9af4402a2b59a2967")},
-			{Height: 4032, Hash: newHashFromStr("9ce90e427198fc0ef05e5905ce3503725b80e26afd35a987965fd7e3d9cf0846")},
-			{Height: 8064, Hash: newHashFromStr("eb984353fc5190f210651f150c40b8a4bab9eeeff0b729fcb3987da694430d70")},
-			{Height: 16128, Hash: newHashFromStr("602edf1859b7f9a6af809f1d9b0e6cb66fdc1d4d9dcd7a4bec03e12a1ccd153d")},
-			{Height: 23420, Hash: newHashFromStr("d80fdf9ca81afd0bd2b2a90ac3a9fe547da58f2530ec874e978fce0b5101b507")},
-			{Height: 50000, Hash: newHashFromStr("69dc37eb029b68f075a5012dcc0419c127672adb4f3a32882b2b3e71d07a20a6")},
-			{Height: 80000, Hash: newHashFromStr("4fcb7c02f676a300503f49c764a89955a8f920b46a8cbecb4867182ecdb2e90a")},
-			{Height: 120000, Hash: newHashFromStr("bd9d26924f05f6daa7f0155f32828ec89e8e29cee9e7121b026a7a3552ac6131")},
-			{Height: 161500, Hash: newHashFromStr("dbe89880474f4bb4f75c227c77ba1cdc024991123b28b8418dbbf7798471ff43")},
-			{Height: 179620, Hash: newHashFromStr("2ad9c65c990ac00426d18e446e0fd7be2ffa69e9a7dcb28358a50b2b78b9f709")},
-			{Height: 240000, Hash: newHashFromStr("7140d1c4b4c2157ca217ee7636f24c9c73db39c4590c4e6eab2e3ea1555088aa")},
-			{Height: 383640, Hash: newHashFromStr("2b6809f094a9215bafc65eb3f110a35127a34be94b7d0590a096c3f126c6f364")},
-			{Height: 409004, Hash: newHashFromStr("487518d663d9f1fa08611d9395ad74d982b667fbdc0e77e9cf39b4f1355908a3")},
-			{Height: 456000, Hash: newHashFromStr("bf34f71cc6366cd487930d06be22f897e34ca6a40501ac7d401be32456372004")},
-			{Height: 638902, Hash: newHashFromStr("15238656e8ec63d28de29a8c75fcf3a5819afc953dcd9cc45cecc53baec74f38")},
-			{Height: 721000, Hash: newHashFromStr("198a7b4de1df9478e2463bd99d75b714eab235a2e63e741641dc8a759a9840e5")},
+			{Height: 3132864, Hash: newHashFromStr("22076f9f6295e025e4b53c021b936e9f482888734536e86b6ffb7442038c14f4")},
 		},
 		Bech32HRPSegwit:         "ltc",                           // always ltc for main net
 		PubKeyHashAddrID:        0x30,                            // starts with L
@@ -170,13 +162,11 @@ var LTCParams = map[string]*netparams.ChainParams{
 		RetargetAdjustmentFactor: 4,
 		ReduceMinDifficulty:      true,
 		MinDiffReductionTime:     time.Minute * 5, // TargetTimePerBlock * 2
+		// See the mainnet Checkpoints comment: the last retarget boundary
+		// mined before DefaultWalletBirthday. Cross-checked via
+		// litecoinspace.org and the bysh.me electrum server.
 		Checkpoints: []chaincfg.Checkpoint{
-			{Height: 26115, Hash: newHashFromStr("817d5b509e91ab5e439652eee2f59271bbc7ba85021d720cdb6da6565b43c14f")},
-			{Height: 43928, Hash: newHashFromStr("7d86614c153f5ef6ad878483118ae523e248cd0dd0345330cb148e812493cbb4")},
-			{Height: 69296, Hash: newHashFromStr("66c2f58da3cfd282093b55eb09c1f5287d7a18801a8ff441830e67e8771010df")},
-			{Height: 99949, Hash: newHashFromStr("8dd471cb5aecf5ead91e7e4b1e932c79a0763060f8d93671b6801d115bfc6cde")},
-			{Height: 159256, Hash: newHashFromStr("ab5b0b9968842f5414804591119d6db829af606864b1959a25d6f5c114afb2b7")},
-			{Height: 2394367, Hash: newHashFromStr("bc5829f4973d0797755efee11313687b3c63ee2f70b60b62eebcd10283534327")},
+			{Height: 4775904, Hash: newHashFromStr("34e2595bb4c0e4017924e9f618a4482d3f8fd121fee1794b61e7b17684d18502")},
 		},
 		Bech32HRPSegwit:         "tltc",                          // always tltc for test net
 		PubKeyHashAddrID:        0x6f,                            // starts with m or n
