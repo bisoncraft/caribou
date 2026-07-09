@@ -499,16 +499,20 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // lockStateJSON is the {available, enrolled, gateMin, evictMin} object literal
-    // the bridge getters read. gateMin 0 = require unlock immediately; evictMin 0 =
-    // never evict.
+    // lockStateJSON is the {available, canGate, enrolled, gateMin, evictMin} object
+    // literal the bridge getters read. available gates the enroll toggle (biometrics
+    // only, since enrollment needs .biometryCurrentSet); canGate gates the "Lock
+    // after" row (biometrics OR the device passcode), so a passcode-only device can
+    // still tune the gate that already runs for it. gateMin 0 = require unlock
+    // immediately; evictMin 0 = never evict.
     private func lockStateJSON() -> String {
         let available = biometric.biometricsAvailable()
+        let canGate = biometric.canGate()
         let enrolled = biometric.isEnrolled()
         let gateMin = Int(gateMs() / 60_000)
         let ev = evictMs()
         let evictMin = ev == evictionNever ? 0 : Int(ev / 60_000)
-        return "{available:\(available),enrolled:\(enrolled),gateMin:\(gateMin),evictMin:\(evictMin)}"
+        return "{available:\(available),canGate:\(canGate),enrolled:\(enrolled),gateMin:\(gateMin),evictMin:\(evictMin)}"
     }
 
     // handleBridgeMessage dispatches a window.bossw void action posted from the SPA.
@@ -651,11 +655,12 @@ final class AppModel: ObservableObject {
     private static let bosswShimJS = """
     (function () {
       if (!window.__bossw_lock) {
-        window.__bossw_lock = { available: false, enrolled: false, gateMin: 10, evictMin: 60 };
+        window.__bossw_lock = { available: false, canGate: false, enrolled: false, gateMin: 10, evictMin: 60 };
       }
       var post = function (msg) { window.webkit.messageHandlers.bossw.postMessage(msg); };
       window.bossw = {
         biometricAvailable: function () { return !!window.__bossw_lock.available; },
+        canGate: function () { return !!window.__bossw_lock.canGate; },
         biometricEnrolled: function () { return !!window.__bossw_lock.enrolled; },
         getLockConfig: function () {
           return JSON.stringify({

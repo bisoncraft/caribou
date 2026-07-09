@@ -525,6 +525,15 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun biometricAvailable(): Boolean = biometricAuth.canAuthenticate(this@MainActivity)
 
+        // canGate reports whether the cheap UI gate has any mechanism to clear with
+        // (biometric or device credential), so the SPA can decide whether to show
+        // the "Lock after" row. On Android this equals biometricAvailable - both are
+        // canAuthenticate, which already includes the device credential on API 30+.
+        // It is a distinct getter only so iOS, where enrollment needs biometrics but
+        // the gate accepts the device passcode, can report the two independently.
+        @JavascriptInterface
+        fun canGate(): Boolean = biometricAuth.canAuthenticate(this@MainActivity)
+
         // biometricEnrolled reports whether biometric unlock is currently on.
         @JavascriptInterface
         fun biometricEnrolled(): Boolean = biometricAuth.isEnrolled()

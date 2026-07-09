@@ -8,7 +8,15 @@ import { postJSON } from '@bossw/shared/http'
 // returns the app password: enrollBiometrics captures it in a native field, and
 // unlock releases it natively, so the secret never reaches this JS.
 interface BosswBridge {
+  // biometricAvailable reports whether the device can ENROLL biometric key-release
+  // (iOS: actual biometrics only, since the Keychain item needs .biometryCurrentSet).
+  // Gates the enroll toggle.
   biometricAvailable(): boolean
+  // canGate reports whether the cheap UI gate has any mechanism to clear with -
+  // biometrics OR the device passcode. On Android this equals biometricAvailable
+  // (both are canAuthenticate); on iOS it is broader, so a passcode-only device can
+  // still configure and run the gate. Gates the "Lock after" row.
+  canGate(): boolean
   biometricEnrolled(): boolean
   enrollBiometrics(): void
   disableBiometrics(): void
@@ -133,6 +141,9 @@ function BiometricSettings () {
   const [available, setAvailable] = useState(() => {
     try { return !!bridge && bridge.biometricAvailable() } catch { return false }
   })
+  const [canGate, setCanGate] = useState(() => {
+    try { return !!bridge && bridge.canGate() } catch { return false }
+  })
   const [enrolled, setEnrolled] = useState(() => {
     try { return !!bridge && bridge.biometricEnrolled() } catch { return false }
   })
@@ -147,6 +158,7 @@ function BiometricSettings () {
       if (document.visibilityState !== 'visible') return
       try {
         setAvailable(bridge.biometricAvailable())
+        setCanGate(bridge.canGate())
         setEnrolled(bridge.biometricEnrolled())
       } catch { /* bridge gone */ }
     }
@@ -186,7 +198,7 @@ function BiometricSettings () {
   return (
     <div className='mb-card'>
       <h2>{t('Security')}</h2>
-      <LockTiming bridge={bridge} available={available} biometricToggle={biometricToggle} />
+      <LockTiming bridge={bridge} canGate={canGate} biometricToggle={biometricToggle} />
     </div>
   )
 }
@@ -209,11 +221,13 @@ function evictLabel (m: number): string {
 // threshold ("Lock after"), then the caller-supplied biometric toggle, then the
 // eviction threshold ("Evict keys after"). It reads the two thresholds from the
 // native bridge and writes both back on any change. The gate row only shows when
-// the device can gate (biometrics available); without them the gate has no
-// mechanism and only eviction applies. biometricToggle is placed between the
-// tiers because it governs re-acquiring keys after eviction, not the gate; it is
-// already nil when biometrics are unavailable (the caller gates it on available).
-function LockTiming ({ bridge, available, biometricToggle }: { bridge: BosswBridge, available: boolean, biometricToggle: ReactNode }) {
+// the device can gate (canGate: biometrics OR the device passcode); without any
+// such mechanism the gate has nothing to clear with and only eviction applies.
+// biometricToggle is placed between the tiers because it governs re-acquiring keys
+// after eviction, not the gate; it is already nil when the device cannot enroll
+// (the caller gates it on the narrower biometricAvailable), so on a passcode-only
+// iOS device the gate row shows without an enroll toggle above it.
+function LockTiming ({ bridge, canGate, biometricToggle }: { bridge: BosswBridge, canGate: boolean, biometricToggle: ReactNode }) {
   const [gateMin, setGateMin] = useState(10)
   const [evictMin, setEvictMin] = useState(60)
 
@@ -264,7 +278,7 @@ function LockTiming ({ bridge, available, biometricToggle }: { bridge: BosswBrid
 
   return (
     <>
-      {available && (
+      {canGate && (
         <label className='mb-select-row'>
           <span>{t('Lock after')}</span>
           <select value={gateMin} onChange={(e) => save(Number(e.target.value), evictMin)}>
