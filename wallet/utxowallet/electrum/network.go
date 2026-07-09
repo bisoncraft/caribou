@@ -111,6 +111,13 @@ type Network struct {
 	// pool is the persistent, tiered server database (serverpool.go).
 	pool *serverPool
 
+	// subsMtx guards subs, the scripthashes with live subscriptions. The
+	// Network brokers every subscribe/unsubscribe, so this registry is the
+	// authoritative set a rotation must replay onto a successor node —
+	// server-side session state dies with the old connection.
+	subsMtx sync.Mutex
+	subs    map[string]struct{}
+
 	// loops is the goroutine group bound to the current wallet node
 	// (headersLoop, scripthashLoop, watchNode). Rotation joins the old
 	// group before attaching a successor so two groups never interleave
@@ -459,11 +466,58 @@ func (n *Network) SubscribeScripthash(ctx context.Context, scripthash string) (*
 	if err != nil {
 		return nil, err
 	}
-	return node.SubscribeScripthash(ctx, scripthash)
+	st, err := node.SubscribeScripthash(ctx, scripthash)
+	if err != nil {
+		return nil, err
+	}
+	n.subsMtx.Lock()
+	if n.subs == nil {
+		n.subs = make(map[string]struct{})
+	}
+	n.subs[scripthash] = struct{}{}
+	n.subsMtx.Unlock()
+	return st, nil
+}
+
+// replaySubscriptions re-establishes every registered scripthash
+// subscription on node — a rotation successor holds none — and forwards each
+// returned status through the normal notification channel. The consumer's
+// status/history diff then delivers exactly the activity missed while blind:
+// an unchanged status is a hash commitment that nothing happened, a changed
+// one triggers a full-history diff. Returns the first error so the caller
+// can treat the successor as failed.
+func (n *Network) replaySubscriptions(ctx context.Context, node *Node) error {
+	n.subsMtx.Lock()
+	subs := make([]string, 0, len(n.subs))
+	for sh := range n.subs {
+		subs = append(subs, sh)
+	}
+	n.subsMtx.Unlock()
+	for _, sh := range subs {
+		st, err := node.SubscribeScripthash(ctx, sh)
+		if err != nil {
+			return fmt.Errorf("electrum: replay subscribe %s: %w", sh, err)
+		}
+		if st.Status == "" {
+			continue // no history; nothing to reconcile
+		}
+		select {
+		case n.scripthashCh <- st:
+		case <-n.ctx.Done():
+			return n.ctx.Err()
+		}
+	}
+	if len(subs) > 0 {
+		log.Infof("electrum: replayed %d scripthash subscriptions", len(subs))
+	}
+	return nil
 }
 
 // UnsubscribeScripthash undoes a previous subscription.
 func (n *Network) UnsubscribeScripthash(ctx context.Context, scripthash string) {
+	n.subsMtx.Lock()
+	delete(n.subs, scripthash)
+	n.subsMtx.Unlock()
 	node, err := n.getNode()
 	if err != nil {
 		return

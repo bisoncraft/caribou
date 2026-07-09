@@ -452,3 +452,76 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestReplaySubscriptions covers rotation plan R2: subscriptions registered
+// through the Network are replayed onto a fresh node, and activity that
+// occurred while blind is delivered through the replayed status.
+func TestReplaySubscriptions(t *testing.T) {
+	fA, params := newFakeServer(t, 12)
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:         chainCfg,
+		TrustedServer: fA.addr(),
+		DataDir:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net_.Stop()
+	waitFor(t, "sync", func() bool { return net_.Synced() })
+
+	// Subscribe two scripthashes; one unsubscribes again and must NOT be
+	// replayed.
+	sh1, sh2 := fakeStatus([]HistoryEntry{{TxHash: "s1"}}), fakeStatus([]HistoryEntry{{TxHash: "s2"}})
+	for _, sh := range []string{sh1, sh2} {
+		if _, err := net_.SubscribeScripthash(t.Context(), sh); err != nil {
+			t.Fatalf("subscribe %s: %v", sh, err)
+		}
+	}
+	net_.UnsubscribeScripthash(t.Context(), sh2)
+
+	// Server B saw a payment to sh1 that A's subscription never reported
+	// (the blind gap).
+	fB, _ := newFakeServer(t, 12)
+	missed := []HistoryEntry{{Height: 9, TxHash: "feed"}}
+	fB.mtx.Lock()
+	fB.hist[sh1] = missed
+	fB.mtx.Unlock()
+
+	nodeB, err := NewNode(t.Context(), fB.addr(), "", params.GenesisHash.String())
+	if err != nil {
+		t.Fatalf("NewNode(B): %v", err)
+	}
+	defer nodeB.Close()
+
+	if err := net_.replaySubscriptions(t.Context(), nodeB); err != nil {
+		t.Fatalf("replaySubscriptions: %v", err)
+	}
+
+	waitFor(t, "replayed status for sh1", func() bool {
+		select {
+		case st := <-net_.ScripthashChan():
+			return st.Scripthash == sh1 && st.Status == fakeStatus(missed)
+		default:
+			return false
+		}
+	})
+
+	// The unsubscribed scripthash must not have been re-established on B.
+	fB.mtx.Lock()
+	defer fB.mtx.Unlock()
+	for _, cs := range fB.conns {
+		if cs.scripthash[sh2] {
+			t.Fatal("unsubscribed scripthash was replayed")
+		}
+		if !cs.scripthash[sh1] {
+			t.Fatal("sh1 not subscribed on successor")
+		}
+	}
+}
