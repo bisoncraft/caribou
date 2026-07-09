@@ -106,6 +106,64 @@ func TestPAXGTokenDefinition(t *testing.T) {
 	}
 }
 
+func TestXAUTTokenDefinition(t *testing.T) {
+	t.Parallel()
+	tokenID, ok := util.BipSymbolID("xaut.eth")
+	if !ok {
+		t.Fatal("xaut.eth not registered")
+	}
+
+	token, ok := Tokens[tokenID]
+	if !ok {
+		t.Fatal("xaut.eth not in Tokens map")
+	}
+
+	// Decimal invariant: log10(ConversionFactor) + EVMFactor(0) = 6.
+	cf := token.UnitInfo.Conventional.ConversionFactor
+	if cf != 1e6 {
+		t.Fatalf("unexpected ConversionFactor: got %d, want 1e6", cf)
+	}
+	if token.EVMFactor == nil || *token.EVMFactor != 0 {
+		t.Fatalf("EVMFactor should be 0, got %v", token.EVMFactor)
+	}
+
+	// v1-only gas tables on mainnet and simnet.
+	for _, net := range []util.Network{util.Mainnet, util.Simnet} {
+		netToken, ok := token.NetTokens[net]
+		if !ok {
+			t.Fatalf("missing NetToken for network %v", net)
+		}
+		if _, hasV0 := netToken.Gas[0]; hasV0 {
+			t.Fatalf("network %v: unexpected v0 gas table", net)
+		}
+		if _, hasV1 := netToken.Gas[1]; !hasV1 {
+			t.Fatalf("network %v: missing v1 gas table", net)
+		}
+	}
+
+	// No official testnet deployment.
+	if _, ok := token.NetTokens[util.Testnet]; ok {
+		t.Fatal("unexpected Testnet entry for xaut.eth")
+	}
+
+	// Mainnet address must be non-zero.
+	if addr := token.NetTokens[util.Mainnet].Address; addr == (common.Address{}) {
+		t.Fatal("mainnet: token address is zero")
+	}
+
+	// Simnet address starts zero in source; MaybeReadSimnetAddrs (called from
+	// init) populates it only when harness files exist. Skip on harness machines.
+	usr, err := user.Current()
+	if err == nil {
+		harnessDir := filepath.Join(usr.HomeDir, "dextest", "eth")
+		if _, err := os.Stat(harnessDir); os.IsNotExist(err) {
+			if token.NetTokens[util.Simnet].Address != (common.Address{}) {
+				t.Fatal("simnet address should be zero before harness runs")
+			}
+		}
+	}
+}
+
 func TestLinkTokenDefinition(t *testing.T) {
 	t.Parallel()
 	tokenID, ok := util.BipSymbolID("link.eth")

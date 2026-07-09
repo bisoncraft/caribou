@@ -151,6 +151,7 @@ var (
 	maticTokenID, _   = util.BipSymbolID("matic.eth") // old matic 0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0
 	linkTokenID, _    = util.BipSymbolID("link.eth")
 	paxgTokenID, _    = util.BipSymbolID("paxg.eth")
+	xautTokenID, _    = util.BipSymbolID("xaut.eth")
 )
 
 // Gases lists the expected gas required for token wallet operations.

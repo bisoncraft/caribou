@@ -612,6 +612,7 @@ var bipIDs = map[uint32]string{
 	60004: "polygon.eth",
 	60005: "link.eth",
 	60006: "paxg.eth",
+	60007: "xaut.eth",
 	// END Ethereum reserved token range
 	// Base reserved token range 61000-61999
 	61000: "usdc.base",

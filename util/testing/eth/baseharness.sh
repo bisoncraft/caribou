@@ -129,6 +129,9 @@ TEST_LINK_CONTRACT_HASH=$(gethDeploy "deployERC20(\"${TEST_TOKEN}\",18)")
 echo "Deploying PAXG contract."
 TEST_PAXG_CONTRACT_HASH=$(gethDeploy "deployERC20(\"${TEST_TOKEN}\",18)")
 
+echo "Deploying XAUT contract."
+TEST_XAUT_CONTRACT_HASH=$(gethDeploy "deployERC20(\"${TEST_TOKEN}\",6)")
+
 echo "Deploying MultiBalance contract."
 MULTIBALANCE_CONTRACT_HASH=$(gethDeploy "deploy(\"${MULTIBALANCE_BIN}\")")
 
@@ -168,6 +171,12 @@ TEST_PAXG_CONTRACT_ADDR=$("${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${
 echo "Test PAXG contract address is ${TEST_PAXG_CONTRACT_ADDR}. Saving to ${NODES_ROOT}/test_paxg_contract_address.txt"
 cat > "${NODES_ROOT}/test_paxg_contract_address.txt" <<EOF
 ${TEST_PAXG_CONTRACT_ADDR}
+EOF
+
+TEST_XAUT_CONTRACT_ADDR=$("${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/contractAddress.js --exec contractAddress(\"${TEST_XAUT_CONTRACT_HASH}\")" | sed 's/"//g')
+echo "Test XAUT contract address is ${TEST_XAUT_CONTRACT_ADDR}. Saving to ${NODES_ROOT}/test_xaut_contract_address.txt"
+cat > "${NODES_ROOT}/test_xaut_contract_address.txt" <<EOF
+${TEST_XAUT_CONTRACT_ADDR}
 EOF
 
 cat > "${NODES_ROOT}/harness-ctl/loadTestToken.js" <<EOF
@@ -219,6 +228,12 @@ cat > "${NODES_ROOT}/harness-ctl/sendPAXG" <<EOF
 EOF
 chmod +x "${NODES_ROOT}/harness-ctl/sendPAXG"
 
+cat > "${NODES_ROOT}/harness-ctl/sendXAUT" <<EOF
+#!/usr/bin/env bash
+./alpha attach --preload loadTestToken.js --exec "transfer(\"${TEST_XAUT_CONTRACT_ADDR}\",6,\"\$1\",\$2)"
+EOF
+chmod +x "${NODES_ROOT}/harness-ctl/sendXAUT"
+
 mine_pending_txs
 
 MULTIBALANCE_CONTRACT_ADDR=$("${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/contractAddress.js --exec contractAddress(\"${MULTIBALANCE_CONTRACT_HASH}\")" | sed 's/"//g')
@@ -232,6 +247,7 @@ EOF
 "${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_USDT_CONTRACT_ADDR}\",4400000000000000000)"  # 4.4 trillion USDT x 10^6 (6 decimals)
 "${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_LINK_CONTRACT_ADDR}\",4400000000000000000000)"  # 4400 LINK x 10^18 (18 decimals)
 "${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_PAXG_CONTRACT_ADDR}\",4400000000000000000000)"  # 4400 PAXG x 10^18 (18 decimals)
+"${NODES_ROOT}/harness-ctl/alpha" "attach --preload ${NODES_ROOT}/harness-ctl/loadTestToken.js --exec airdrop(\"${TEST_XAUT_CONTRACT_ADDR}\",4400000000000000000)"  # 4.4 trillion XAUT x 10^6 (6 decimals)
 
 cd "${NODES_ROOT}/harness-ctl"
 
