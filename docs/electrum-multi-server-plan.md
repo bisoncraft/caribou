@@ -113,11 +113,39 @@ No privacy change (the transaction is being published).
 
 ### Phase 4 — Peer discovery + list hygiene
 
-Seed from the shipped lists, expand via `server.peers.subscribe`, persist a
-scored server database across restarts. The shipped lists become bootstrap
-rather than the universe. Refresh the shipped lists as part of this work
-(the BTC mainnet list currently leads with a server that was observed down;
-each network should ship several vetted entries).
+Policy (decided):
+
+- **Discovery.** Poll `server.peers.subscribe` on connected servers at low
+  cadence; accept candidates with an SSL port and protocol >= 1.4, onion
+  addresses only when a Tor proxy is configured. A discovered server proves
+  itself the same way shipped ones do — genesis at handshake, header
+  validation if it ever serves headers; the recommendation itself conveys
+  no trust.
+- **Persistence.** A per-chain server database lives beside the header
+  store (`DataDir/electrum/<chain>/servers.json`) — NOT in the wallet
+  database: server reputation is environmental, chain-scoped knowledge with
+  the header store's lifecycle, while wallet.db is seed-derived state that
+  rebuilds (RecoverWallet) exactly when server memory matters most. Entries
+  carry source (shipped or discovered, with recommenders), first/last seen,
+  and success/failure history; dead discovered entries age out. The shipped
+  list merges in as permanent seeds on every load.
+- **Tiered election (Sybil defense).** Discovery is an eclipse vector — an
+  attacker recommends its own clones. The wallet server is elected from the
+  shipped tier; at least one observer is always shipped; remaining observer
+  slots fill from discovered peers preferring recommender/network
+  diversity; broadcast fan-out accepts anyone (a bad server can only fail
+  to relay).
+- **Gated fallback.** When every shipped server has been failing
+  continuously for a sustained window (30 minutes), an aged discovered
+  server — prior successes or multiple independent recommenders, not
+  freshly appeared — may be elected wallet server, logged at error level.
+  Shipped servers keep being re-dialed each election and win back the slot
+  as soon as one answers. Spends stay enabled: UTXO validity comes from the
+  wallet's own validated history, and checkpoint anchors plus the PoW
+  window bound what any wallet server can fabricate.
+
+The shipped lists become bootstrap seeds rather than the universe; the
+release-time probe of the lists stays on the release checklist.
 
 ## 4. Interactions
 
