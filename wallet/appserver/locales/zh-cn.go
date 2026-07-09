@@ -338,8 +338,8 @@ var ZhCN = map[string]*intl.Translation{
 	"archived_date_tooltip":       {T: "在您指定的日期和时间之前创建的已归档订单和匹配将从数据库中删除。"},
 	"save_matches_to_file":        {T: "保存匹配到 CSV 文件"},
 	"save_orders_to_file":         {T: "将订单保存为 CSV 文件"},
-	"save_orders_to_file_msg":     {T: "可选：是否将删除的订单保存到bossw数据目录中的CSV文件。默认值为否。"},
-	"save_matches_to_file_msg":    {T: "可选：是否将已删除的匹配保存到 bossw 数据目录的 CSV 文件中。默认值为 false。"},
+	"save_orders_to_file_msg":     {T: "可选：是否将删除的订单保存到caribou数据目录中的CSV文件。默认值为否。"},
+	"save_matches_to_file_msg":    {T: "可选：是否将已删除的匹配保存到 caribou 数据目录的 CSV 文件中。默认值为 false。"},
 	// Market maker bot
 	"Market Making":          {T: "做市"},
 	"Off":                    {T: "关闭"},

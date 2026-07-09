@@ -1,12 +1,12 @@
 # Simnet Development Guide
 
-This guide covers Boss Wallet's local simnet (a.k.a. regtest / `--dev` mode)
+This guide covers Caribou's local simnet (a.k.a. regtest / `--dev` mode)
 test harnesses: what they are, how to drive them, and how the wallet code
 talks to them.
 
 A "simnet" here means a fully local, deterministic blockchain network — not the
 public testnets. The wallet refers to this network as `Simnet` in
-`util.Network`, and `bossw --simnet` selects it. The default host for the
+`util.Network`, and `caribou --simnet` selects it. The default host for the
 simnet wallet's HTTP server is `127.0.0.3:5758` (note the third `.3`), so you can run mainnet,
 testnet, and simnet wallets side-by-side on one box.
 
@@ -150,7 +150,7 @@ The wallet binary on `--simnet` listens on `127.0.0.3:5758` by default
 dev session is:
 
 - Window A: harness shell (`./harness.sh` for one or more chains)
-- Window B: `cd wallet/cmd/bossw && ./bossw --simnet --log=debug`
+- Window B: `cd wallet/cmd/caribou && ./caribou --simnet --log=debug`
 - Browser: `http://127.0.0.3:5758`
 
 ## How the wallet finds the harness
@@ -165,7 +165,7 @@ Each asset package's (`wallet/asset/<asset>`) simnet config points at the harnes
 
 The internal client uses the same default credentials as the harness
 (`user`/`pass` for BTC, no-password JSON-RPC for ETH dev mode), so a freshly
-booted `bossw --simnet` "just works" against a fresh harness on the same
+booted `caribou --simnet` "just works" against a fresh harness on the same
 machine.
 
 ## Running tests against a harness

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import { postJSON } from '@bossw/shared/http'
-import { TickerAsset, AssetVariant, networkAsset, isVariantActive } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import { postJSON } from '@caribou/shared/http'
+import { TickerAsset, AssetVariant, networkAsset, isVariantActive } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface ReceiveProps {
   ticker?: string

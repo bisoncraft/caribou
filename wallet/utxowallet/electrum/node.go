@@ -1,4 +1,4 @@
-// Copyright (c) 2024 The Bison Wallet developers
+// Copyright (c) 2024 The Caribou Developers
 // Copyright (c) The go-electrum-client authors
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
@@ -31,7 +31,7 @@ const (
 	protoMax = "1.4.2"
 
 	// userAgent identifies the client to the server in server.version.
-	userAgent = "Bison Wallet"
+	userAgent = "Caribou"
 )
 
 // Node is a single connected electrumx peer. It wraps a Server and exposes

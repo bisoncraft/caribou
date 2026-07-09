@@ -253,7 +253,7 @@ type Config struct {
 }
 
 // AppServer is a single-client http and websocket server enabling a browser
-// interface to Boss Wallet.
+// interface to Caribou.
 type AppServer struct {
 	ctx      context.Context
 	dataDir  string
@@ -322,12 +322,12 @@ func New(cfg *Config) (*AppServer, error) {
 	var siteDir string // empty signals embedded files only
 	if cfg.NoEmbed {
 		// Look for the "site" folder in the executable's path, the working
-		// directory, or relative to [repo root]/wallet/cmd/bossw.
-		execPath, err := os.Executable() // e.g. /usr/bin/bossw
+		// directory, or relative to [repo root]/wallet/cmd/caribou.
+		execPath, err := os.Executable() // e.g. /usr/bin/caribou
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
 		}
-		execPath, err = filepath.EvalSymlinks(execPath) // e.g. /opt/decred/dex/bossw
+		execPath, err = filepath.EvalSymlinks(execPath) // e.g. /opt/decred/dex/caribou
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
 		}
@@ -353,8 +353,8 @@ func New(cfg *Config) (*AppServer, error) {
 		if siteDir == "" {
 			return nil, fmt.Errorf("no HTML template files found. "+
 				"Place the 'site' folder in the executable's directory %q or the working directory, "+
-				"or run bossw from within the wallet/cmd/bossw source workspace folder, or specify the"+
-				"'sitedir' configuration directive to bossw", execPath)
+				"or run caribou from within the wallet/cmd/caribou source workspace folder, or specify the"+
+				"'sitedir' configuration directive to caribou", execPath)
 		}
 
 		log.Infof("Located \"site\" folder at %v", siteDir)

@@ -1,7 +1,7 @@
 import { useState, FormEvent, ChangeEvent } from 'react'
-import t from '@bossw/shared/intl'
-import { postJSON } from '@bossw/shared/http'
-import { normalizeSeed, seedWordCount } from '@bossw/shared/seed'
+import t from '@caribou/shared/intl'
+import { postJSON } from '@caribou/shared/http'
+import { normalizeSeed, seedWordCount } from '@caribou/shared/seed'
 
 // InitWizard is the mobile wallet-creation flow. It mirrors the desktop wizard
 // state machine (seed prompt -> optional seed restore -> password -> seed
@@ -14,7 +14,7 @@ interface SeedPromptProps {
 
 const SeedPrompt = ({ setUsingSeed }: SeedPromptProps) => (
   <div className='mb-init-card'>
-    <h1 className='mb-brand'>{t('Welcome to Boss Wallet!')}</h1>
+    <h1 className='mb-brand'>{t('Welcome to Caribou!')}</h1>
     <p className='mb-muted'>{t('prompt_for_seed')}</p>
     <button className='mb-btn' type='button' onClick={() => setUsingSeed(false)}>{t('No')}</button>
     <button className='mb-btn mb-btn-secondary' type='button' onClick={() => setUsingSeed(true)}>{t('Yes')}</button>

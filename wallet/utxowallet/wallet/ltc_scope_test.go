@@ -45,7 +45,7 @@ func TestScopeForPurposeBTC(t *testing.T) {
 //     the resolved scope produces a pubkey whose DerivationInfo() return
 //     value embeds the same KeyScope.
 //
-// This is the production path for every Litecoin address Boss Wallet will
+// This is the production path for every Litecoin address Caribou will
 // ever derive. Closes audit finding C2.
 func TestScopeForPurposeLTC(t *testing.T) {
 	w, cleanup := testWalletForLTC(t)

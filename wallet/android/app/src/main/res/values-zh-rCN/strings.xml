@@ -15,7 +15,7 @@
     <string name="biometric_enabled">已启用生物识别解锁</string>
     <string name="enrollment_cancelled">注册已取消</string>
 
-    <string name="unlock_prompt_title">解锁 Boss Wallet</string>
+    <string name="unlock_prompt_title">解锁 Caribou</string>
 
     <string name="lock_overlay_locked">已锁定</string>
     <string name="lock_overlay_unlocking">正在解锁…</string>

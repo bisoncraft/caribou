@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import app from '@bossw/shared/application'
-import { resetApp } from '@bossw/shared/testUtils'
+import app from '@caribou/shared/application'
+import { resetApp } from '@caribou/shared/testUtils'
 import Portfolio from './Portfolio'
 
 beforeEach(() => {

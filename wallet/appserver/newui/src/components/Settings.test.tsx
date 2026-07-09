@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { postJSON } from '@bossw/shared/http'
-import app from '@bossw/shared/application'
-import { resetApp } from '@bossw/shared/testUtils'
+import { postJSON } from '@caribou/shared/http'
+import app from '@caribou/shared/application'
+import { resetApp } from '@caribou/shared/testUtils'
 import Settings from './Settings'
 
-vi.mock('@bossw/shared/http', () => ({ postJSON: vi.fn() }))
+vi.mock('@caribou/shared/http', () => ({ postJSON: vi.fn() }))
 
 beforeEach(() => {
   resetApp()

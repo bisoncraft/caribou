@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { postJSON } from '@bossw/shared/http'
-import app from '@bossw/shared/application'
-import { makeAsset, makeUser, makeWallet, makeWalletDefinition, resetApp } from '@bossw/shared/testUtils'
+import { postJSON } from '@caribou/shared/http'
+import app from '@caribou/shared/application'
+import { makeAsset, makeUser, makeWallet, makeWalletDefinition, resetApp } from '@caribou/shared/testUtils'
 import Receive from './Receive'
 
-vi.mock('@bossw/shared/http', () => ({ postJSON: vi.fn() }))
+vi.mock('@caribou/shared/http', () => ({ postJSON: vi.fn() }))
 
 // USDC on two networks (Ethereum=asset 60, Polygon=asset 966), both active
 // (settlement-network wallets exist), so Receive lands straight on the

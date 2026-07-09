@@ -1,5 +1,5 @@
 {
-  "name": "@bossw/shared",
+  "name": "@caribou/shared",
   "version": "1.0.0",
   "description": "Framework-agnostic core shared by the desktop (newui) and mobile bundles: loopback WS/HTTP transport, API request/response types, and app state.",
   "private": true,

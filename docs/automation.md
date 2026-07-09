@@ -1,6 +1,6 @@
 # Local Automation with API Tokens
 
-This guide covers driving a running `bossw` instance from scripts, a CLI, or an
+This guide covers driving a running `caribou` instance from scripts, a CLI, or an
 MCP server using the appserver's HTTP API and a local API token.
 
 There is no separate RPC server. The appserver that serves the web UI is the

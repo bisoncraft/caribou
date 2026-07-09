@@ -1,4 +1,4 @@
-// Copyright 2026 The Boss Wallet developers.
+// Copyright 2026 The Caribou Developers.
 // Use of this source code is governed by an ISC license that can be found in
 // the LICENSE file.
 

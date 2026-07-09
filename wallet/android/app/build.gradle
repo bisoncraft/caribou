@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace 'com.bisoncraft.bosswallet'
+    namespace 'com.bisoncraft.caribou'
     compileSdk 34
     // build-tools 35+ zipaligns uncompressed native libs to 16 KB pages.
     buildToolsVersion '35.0.0'
 
     defaultConfig {
-        applicationId 'com.bisoncraft.bosswallet'
+        applicationId 'com.bisoncraft.caribou'
         minSdk 21
         targetSdk 34
         versionCode 1
@@ -37,21 +37,21 @@ android {
         netMainnet {
             dimension 'network'
             buildConfigField 'String', 'WALLET_NET', '"mainnet"'
-            manifestPlaceholders = [appName: 'Boss Wallet']
+            manifestPlaceholders = [appName: 'Caribou']
         }
         netTestnet {
             dimension 'network'
             applicationIdSuffix '.testnet'
             versionNameSuffix '-testnet'
             buildConfigField 'String', 'WALLET_NET', '"testnet"'
-            manifestPlaceholders = [appName: 'Boss Wallet testnet']
+            manifestPlaceholders = [appName: 'Caribou testnet']
         }
         netSimnet {
             dimension 'network'
             applicationIdSuffix '.simnet'
             versionNameSuffix '-simnet'
             buildConfigField 'String', 'WALLET_NET', '"simnet"'
-            manifestPlaceholders = [appName: 'Boss Wallet simnet']
+            manifestPlaceholders = [appName: 'Caribou simnet']
         }
     }
 

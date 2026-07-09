@@ -116,7 +116,7 @@ func (w *xrpWallet) runSubscription(ctx context.Context, endpoint string) (subsc
 	}()
 
 	subscribeReq := map[string]any{
-		"id":          "bosswallet-xrp",
+		"id":          "caribou-xrp",
 		"command":     "subscribe",
 		"api_version": 2,
 		"streams":     []string{"ledger"},

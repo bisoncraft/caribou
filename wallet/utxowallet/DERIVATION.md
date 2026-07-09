@@ -1,11 +1,11 @@
-# HD key derivation in Boss Wallet's vendored `utxowallet`
+# HD key derivation in Caribou's vendored `utxowallet`
 
-This note documents two places where Boss Wallet's vendored `utxowallet` deliberately departs from the behaviour of upstream `btcsuite/btcwallet` (and `dcrlabs/ltcwallet`, which Bison Wallet previously consumed for Litecoin). Both changes are intentional. Both are user-visible. If you are wiring up a new chain or auditing how addresses get derived, read this first.
+This note documents two places where Caribou's vendored `utxowallet` deliberately departs from the behaviour of upstream `btcsuite/btcwallet` (and `dcrlabs/ltcwallet`, which Bison Wallet previously consumed for Litecoin). Both changes are intentional. Both are user-visible. If you are wiring up a new chain or auditing how addresses get derived, read this first.
 
 ## TL;DR
 
-- Boss Wallet uses standards-compliant BIP-32 derivation (`hdkeychain.ExtendedKey.Derive`) at every level of the path. Bison Wallet inherited `btcwallet`'s legacy buggy derivation (`DeriveNonStandard`) for backwards compatibility with itself; we do not.
-- Boss Wallet's Litecoin wallet derives at SLIP-44 coin type `2'` (`m/{44,49,84,86}'/2'/...`). Bison Wallet derived Litecoin at coin type `0'`, the same path Bitcoin uses, as a workaround for an unrelated bug in `btcwallet`'s coin-type plumbing. We do not.
+- Caribou uses standards-compliant BIP-32 derivation (`hdkeychain.ExtendedKey.Derive`) at every level of the path. Bison Wallet inherited `btcwallet`'s legacy buggy derivation (`DeriveNonStandard`) for backwards compatibility with itself; we do not.
+- Caribou's Litecoin wallet derives at SLIP-44 coin type `2'` (`m/{44,49,84,86}'/2'/...`). Bison Wallet derived Litecoin at coin type `0'`, the same path Bitcoin uses, as a workaround for an unrelated bug in `btcwallet`'s coin-type plumbing. We do not.
 
 The implication of both changes is the same: a seed that is valid in *both* wallets does not necessarily address the same coins on disk in both wallets. Anyone migrating funds between the two should read the rest of this document.
 
@@ -27,7 +27,7 @@ The `btcsuite/btcd/btcutil/hdkeychain` package originally shipped a `Child` meth
 
 Bison Wallet inherited that decision wholesale.
 
-### What Boss Wallet does
+### What Caribou does
 
 Every site that walks the BIP-32 hierarchy in the vendored tree (purpose, coin type, account, branch, address index) uses the standards-compliant `hdkeychain.ExtendedKey.Derive`. Sites:
 
@@ -38,7 +38,7 @@ There is no `nolint:staticcheck` suppression in the tree. If you see one being a
 
 ### Implications
 
-A seed produced by a wallet that depended on `btcsuite/btcwallet` or `dcrlabs/ltcwallet` (this includes Bison Wallet) may not properly restore in Boss Wallet: the buggy derivation will, on a small fraction of seeds, place funds at addresses Boss Wallet does not derive. Boss Wallet does not raise an error in that case — it simply reports a zero (or partial) balance. The funds are not lost; they are still recoverable from a wallet that uses the legacy derivation. To recover them, either restore the seed in the originating wallet (Bison Wallet, or another `btcwallet`/`ltcwallet`-derived client) and send the funds to a fresh Boss Wallet address, or use a recovery tool that walks both the standard and `DeriveNonStandard` paths.
+A seed produced by a wallet that depended on `btcsuite/btcwallet` or `dcrlabs/ltcwallet` (this includes Bison Wallet) may not properly restore in Caribou: the buggy derivation will, on a small fraction of seeds, place funds at addresses Caribou does not derive. Caribou does not raise an error in that case — it simply reports a zero (or partial) balance. The funds are not lost; they are still recoverable from a wallet that uses the legacy derivation. To recover them, either restore the seed in the originating wallet (Bison Wallet, or another `btcwallet`/`ltcwallet`-derived client) and send the funds to a fresh Caribou address, or use a recovery tool that walks both the standard and `DeriveNonStandard` paths.
 
 ---
 
@@ -56,7 +56,7 @@ When `dcrlabs` forked `btcwallet` to support Litecoin, they took the path of lea
 
 The result: Litecoin wallets in the Bison Wallet ecosystem have funds at `m/{44,49,84,86}'/0'/...`, which no third-party Litecoin wallet recognises as Litecoin paths. They are SLIP-44-incompatible.
 
-### What Boss Wallet does
+### What Caribou does
 
 The vendored `utxowallet`'s key-scope helpers are coin-type-aware. `waddrmgr.DefaultKeyScopesForCoin(coinType)` and `waddrmgr.ScopeAddrMapForCoin(coinType)` build scopes using the *chain's* coin type, not a hardcoded `0`. The convenience helper `Wallet.ScopeForPurpose(purpose)` returns `KeyScope{Purpose: purpose, Coin: w.chainParams.HDCoinType}`.
 
@@ -66,7 +66,7 @@ Litecoin's chain params at `wallet/utxowallet/assets/ltc.go` set:
 - `testnet4`: `HDCoinType: 1`
 - `simnet`: `HDCoinType: 1`
 
-The Litecoin asset wrapper at `wallet/asset/ltc/spv.go` calls `w.Wallet.ScopeForPurpose(84)` everywhere it used to call `KeyScopeBIP0084WithBitcoinCoinID`. Mainnet Litecoin wallets created by Boss Wallet derive at `m/{44,49,84,86}'/2'/...`; testnet4 and regtest at `m/.../1'/...`. There is no `KeyScopeBIP0084WithBitcoinCoinID` in the vendored tree, intentionally.
+The Litecoin asset wrapper at `wallet/asset/ltc/spv.go` calls `w.Wallet.ScopeForPurpose(84)` everywhere it used to call `KeyScopeBIP0084WithBitcoinCoinID`. Mainnet Litecoin wallets created by Caribou derive at `m/{44,49,84,86}'/2'/...`; testnet4 and regtest at `m/.../1'/...`. There is no `KeyScopeBIP0084WithBitcoinCoinID` in the vendored tree, intentionally.
 
 The Bitcoin asset wrapper at `wallet/asset/btc/spv_wrapper.go` follows the same pattern: `NewChangeAddress`, `NewAddress`, `AccountProperties`, and `extendAddresses` all look up scopes via `wallet.ScopeForPurpose(84)` rather than the package-level `waddrmgr.KeyScopeBIP0084` constant. The `BTCWallet` interface includes `ScopeForPurpose(purpose uint32) waddrmgr.KeyScope` so non-`*wallet.Wallet` implementations (BCH, the in-tree test fakes) can answer for themselves; BCH always returns `{Purpose: 44, Coin: 0}` because the BCH SPV wallet derives through a separately-vendored bchwallet stack. Bitcoin's chain params follow `btcd`'s `chaincfg`: mainnet uses `HDCoinType: 0`, testnet3/regtest use `HDCoinType: 1` per BIP-44, and the asset wrapper now picks up the correct coin type for the network rather than forcing `0`.
 
@@ -78,7 +78,7 @@ The Bitcoin entries in `wallet/utxowallet/assets/BTCParams` are *not* what the B
 
 ### Implications
 
-A Litecoin seed produced by a wallet that depended on `dcrlabs/ltcwallet` (this includes Bison Wallet) will not properly restore in Boss Wallet: Boss Wallet looks at `m/.../2'/...` while the source wallet's funds sit at `m/.../0'/...`. Boss Wallet will report a zero balance. To recover, either restore the seed in the originating wallet and send the funds to a fresh Boss Wallet Litecoin address, or import the seed into a third-party wallet that lets you override the derivation path (Electrum-LTC, Sparrow's "advanced" derivation field, etc.), specify `m/84'/0'/...`, and forward the funds from there.
+A Litecoin seed produced by a wallet that depended on `dcrlabs/ltcwallet` (this includes Bison Wallet) will not properly restore in Caribou: Caribou looks at `m/.../2'/...` while the source wallet's funds sit at `m/.../0'/...`. Caribou will report a zero balance. To recover, either restore the seed in the originating wallet and send the funds to a fresh Caribou Litecoin address, or import the seed into a third-party wallet that lets you override the derivation path (Electrum-LTC, Sparrow's "advanced" derivation field, etc.), specify `m/84'/0'/...`, and forward the funds from there.
 
 ---
 

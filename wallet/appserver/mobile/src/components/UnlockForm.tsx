@@ -1,6 +1,6 @@
 import { useState, ChangeEvent, FormEvent } from 'react'
-import t from '@bossw/shared/intl'
-import { postJSON } from '@bossw/shared/http'
+import t from '@caribou/shared/intl'
+import { postJSON } from '@caribou/shared/http'
 
 interface UnlockFormProps {
   onUnlocked: () => void
@@ -34,7 +34,7 @@ export default function UnlockForm ({ onUnlocked }: UnlockFormProps) {
 
   return (
     <form className='mb-screen mb-unlock' onSubmit={onSubmit}>
-      <h1 className='mb-brand'>Boss Wallet</h1>
+      <h1 className='mb-brand'>Caribou</h1>
       <p className='mb-muted'>{t('Welcome Back!')}</p>
       <input
         className='mb-input'

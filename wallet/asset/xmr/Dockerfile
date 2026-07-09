@@ -35,8 +35,8 @@ RUN apt-get update && apt-get install -y \
     git clang llvm gcc g++ \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git config --global user.name "bossw" \
-    && git config --global user.email "bossw@nowhere" \
+RUN git config --global user.name "caribou" \
+    && git config --global user.email "caribou@nowhere" \
     && git config --global --add safe.directory '*'
 
 # Clone monero_c at our pin (== tag v0.18.4.6-RC2), without --recursive so
@@ -94,13 +94,13 @@ RUN ./build_single.sh monero aarch64-apple-darwin -j$(nproc) && (cd contrib/depe
 # Mobile: Android arm64-v8a. simplybs supplies its own NDK toolchain (targets
 # API 21, links libc++), so this builds in the Debian image with no host NDK.
 # The .so is 16 KB-aligned by patch 0006 (Play API 35+). It ships as a jniLib in
-# the APK (see wallet/android/bind.sh, BOSSW_XMR=1). iOS targets exist in
+# the APK (see wallet/android/bind.sh, CARIBOU_XMR=1). iOS targets exist in
 # simplybs (aarch64-apple-ios[-simulator]) but need the Apple SDK, so they run
 # in a separate macOS job, not this image.
 RUN ./build_single.sh monero aarch64-linux-android -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 
 # macOS: simplybs links the dylib with install_name @rpath/libmonero_wallet2_api_c.dylib.
-# cgo rejects -Wl,-rpath, so the bossw binary carries no LC_RPATH for @rpath to
+# cgo rejects -Wl,-rpath, so the caribou binary carries no LC_RPATH for @rpath to
 # resolve against. Rewrite the id to @executable_path/... so the loader finds
 # the dylib next to the executable (matches the runtime layout in lib/README.md).
 RUN INT=$(command -v llvm-install-name-tool || ls /usr/bin/llvm-install-name-tool-* | head -1) \

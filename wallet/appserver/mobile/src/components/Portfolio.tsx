@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from 'react'
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import Doc from '@bossw/shared/doc'
-import { CoreNote } from '@bossw/shared/registry'
-import { TickerAsset } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import Doc from '@caribou/shared/doc'
+import { CoreNote } from '@caribou/shared/registry'
+import { TickerAsset } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface PortfolioProps {
   onSend: () => void

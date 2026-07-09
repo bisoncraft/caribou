@@ -4,11 +4,11 @@ This guide is for contributors who want to develop the desktop wallet UI.
 
 ## Architecture at a glance
 
-The wallet binary (`bossw`) interacts with the browser via an HTTP server (`wallet/appserver`)
+The wallet binary (`caribou`) interacts with the browser via an HTTP server (`wallet/appserver`)
 that serves a single-page React app. The web assets are built using a node script
 that runs Webpack and TypeScript, compiling the .tsx and .scss files into the `/newui/dist/` folder.
 The web assets from `/newui/dist/`, as well as fonts and images from `/newui/src/`, are embedded
-(`go:embed`) into the `bossw` binary (see `wallet/appserver/embed.go`).
+(`go:embed`) into the `caribou` binary (see `wallet/appserver/embed.go`).
 
 The React app communicates with the wallet core through the HTTP server via two mechanisms:
 
@@ -69,7 +69,7 @@ with `pattern newui/dist: no matching files found` if you skipped
 checkout.
 
 **If you are doing significant work on the UI**, you will want to run
-`npm run watch` instead of `npm run build`, and pass the `--no-embed-site` flag to `bossw`.
+`npm run watch` instead of `npm run build`, and pass the `--no-embed-site` flag to `caribou`.
 The `watch` script will monitor the `src` directory and rebuild the web assets when changes are made.
 
 ## Getting Started
@@ -87,14 +87,14 @@ cd wallet/appserver/newui
 npm run watch
 ```
 
-### Terminal 2 - Bossw
+### Terminal 2 - Caribou
 
 ```bash
-cd wallet/cmd/bossw
-go build && ./bossw --simnet --no-embed-site
+cd wallet/cmd/caribou
+go build && ./caribou --simnet --no-embed-site
 ```
 
-To start with a fresh wallet, shut down `bossw`, delete the files in `~/.bossw/simnet`, and restart.
+To start with a fresh wallet, shut down `caribou`, delete the files in `~/.caribou/simnet`, and restart.
 
 ## App lifecycle
 
@@ -186,7 +186,7 @@ Missing translations are logged to console; enable
 `window.dumpMissingTranslations()` to extract a list for a translator
 worksheet.
 
-`bossw` must be restarted after adding a new entry under `appserver/locales` before
+`caribou` must be restarted after adding a new entry under `appserver/locales` before
 the entry is returned via `/api/locale`.
 
 ## Styling

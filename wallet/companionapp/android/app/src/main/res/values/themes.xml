@@ -1,10 +1,10 @@
 <resources>
     <!-- Base application theme. -->
-    <style name="Base.Theme.BisonWallet" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Base.Theme.Caribou" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/topBarBlue</item>
         <item name="android:textColor">@color/textPrimary</item>
         <item name="android:windowBackground">@color/backgroundBlue</item>
     </style>
 
-    <style name="Theme.BisonWallet" parent="Base.Theme.BisonWallet" />
+    <style name="Theme.Caribou" parent="Base.Theme.Caribou" />
 </resources>

@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import { CoreNote } from '@bossw/shared/registry'
-import { TickerAsset, networkID } from '@bossw/shared/assets'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import { CoreNote } from '@caribou/shared/registry'
+import { TickerAsset, networkID } from '@caribou/shared/assets'
 import PortfolioTotals from './PortfolioTotals'
 import AssetPills from './AssetPills'
 import AssetRow from './AssetRow'
@@ -124,7 +124,7 @@ export default function Portfolio () {
           <>
             <div className="portfolio-section-header">{t('ACTIVATE NEW ASSETS')}</div>
             <p className="portfolio-section-copy grey fs13">
-              {tvar('Boss Wallet supports {{ assets }} other {{ assetWord }} across {{ networks }} {{ networkWord }} with more on the roadmap.', {
+              {tvar('Caribou supports {{ assets }} other {{ assetWord }} across {{ networks }} {{ networkWord }} with more on the roadmap.', {
                 assets: String(inactiveCount),
                 assetWord: inactiveCount === 1 ? t('asset') : t('assets'),
                 networks: String(inactiveNetworkCount),

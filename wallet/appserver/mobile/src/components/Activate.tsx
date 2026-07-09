@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import t from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import { postJSON } from '@bossw/shared/http'
-import { CoreNote } from '@bossw/shared/registry'
-import { TickerAsset, AssetVariant, networkID } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import { postJSON } from '@caribou/shared/http'
+import { CoreNote } from '@caribou/shared/registry'
+import { TickerAsset, AssetVariant, networkID } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface ActivateProps {
   onClose: () => void

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import app from '@bossw/shared/application'
+import app from '@caribou/shared/application'
 import TopBar from './TopBar'
 import Sidebar from './Sidebar'
 import Portfolio from './Portfolio'
@@ -10,7 +10,7 @@ import Networks from './Networks'
 import Network from './Network'
 import Asset from './Asset'
 import Modals from './Modals'
-import { PageData, FormData } from '@bossw/shared/registry'
+import { PageData, FormData } from '@caribou/shared/registry'
 
 interface MainFrameParams {
   pd: PageData

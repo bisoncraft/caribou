@@ -1,5 +1,5 @@
-import t from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
+import t from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
 
 function sidebarButtonClass (page: string, button: string) {
   return `p-2 pe-3 d-flex align-items-center subtle mt-2 text-left fs18 ${page === button ? 'selected' : ''}`

@@ -1,5 +1,5 @@
 import { useState, ChangeEvent } from 'react'
-import t from '@bossw/shared/intl'
+import t from '@caribou/shared/intl'
 
 interface PasswordInputParams {
   onChange: (e: ChangeEvent<HTMLInputElement>) => void

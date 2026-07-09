@@ -53,8 +53,8 @@ fi
 CLIENT_1_DIR="${PAIR_ROOT}/dexc1"
 CLIENT_2_DIR="${PAIR_ROOT}/dexc2"
 HARNESS_DIR="${PAIR_ROOT}/harness-ctl"
-BW_DIR=$(realpath ../../../wallet/cmd/bossw)
-BOSSW="${BW_DIR}/bossw"
+BW_DIR=$(realpath ../../../wallet/cmd/caribou)
+CARIBOU="${BW_DIR}/caribou"
 
 cd "${BW_DIR}"
 go build
@@ -64,7 +64,7 @@ mkdir -p "${HARNESS_DIR}"
 mkdir -p "${CLIENT_1_DIR}"
 mkdir -p "${CLIENT_2_DIR}"
 
-CLIENT_1_CONF="${CLIENT_1_DIR}/bossw.conf"
+CLIENT_1_CONF="${CLIENT_1_DIR}/caribou.conf"
 rm -f "${CLIENT_1_CONF}"
 CLIENT_1_CTL_KEY="${CLIENT_1_DIR}/ctl.key"
 rm -f "$CLIENT_1_CTL_KEY"
@@ -91,7 +91,7 @@ simnet=${SIMNET}
 testnet=${TESTNET}
 EOF
 
-CLIENT_2_CONF="${CLIENT_2_DIR}/bossw.conf"
+CLIENT_2_CONF="${CLIENT_2_DIR}/caribou.conf"
 rm -f "$CLIENT_2_CONF"
 CLIENT_2_CTL_KEY="${CLIENT_2_DIR}/ctl.key"
 rm -f "$CLIENT_2_CTL_KEY"
@@ -130,14 +130,14 @@ tmux kill-session
 EOF
 chmod +x "${QUIT_FILE}"
 
-echo "xdg-open http://${CLIENT_1_ADDR} > /dev/null 2>&1" > "${HARNESS_DIR}/bossw1"
-chmod +x "${HARNESS_DIR}/bossw1"
+echo "xdg-open http://${CLIENT_1_ADDR} > /dev/null 2>&1" > "${HARNESS_DIR}/caribou1"
+chmod +x "${HARNESS_DIR}/caribou1"
 
 echo "bwctl -C ${CLIENT_1_CTL_CONF} \$1" > "${HARNESS_DIR}/bw1ctl"
 chmod +x "${HARNESS_DIR}/bw1ctl"
 
-echo "xdg-open http://${CLIENT_2_ADDR} > /dev/null 2>&1" > "${HARNESS_DIR}/bossw2"
-chmod +x "${HARNESS_DIR}/bossw2"
+echo "xdg-open http://${CLIENT_2_ADDR} > /dev/null 2>&1" > "${HARNESS_DIR}/caribou2"
+chmod +x "${HARNESS_DIR}/caribou2"
 
 echo "bwctl -C ${CLIENT_2_CTL_CONF} \$1" > "${HARNESS_DIR}/bw2ctl"
 chmod +x "${HARNESS_DIR}/bw2ctl"
@@ -146,15 +146,15 @@ tmux new-session -d -s $SESSION $SHELL
 tmux rename-window -t $SESSION:0 'harness-ctl'
 
 if [ -z "${ONLY_TWO}" ]; then
-  tmux new-window -t $SESSION:1 -n 'bossw1' $SHELL
+  tmux new-window -t $SESSION:1 -n 'caribou1' $SHELL
   tmux send-keys -t $SESSION:1 "cd ${PAIR_ROOT}/dexc1" C-m
-  tmux send-keys -t $SESSION:1 "${BOSSW} --appdata=${CLIENT_1_DIR} ${BW_ARGS[*]}" C-m
+  tmux send-keys -t $SESSION:1 "${CARIBOU} --appdata=${CLIENT_1_DIR} ${BW_ARGS[*]}" C-m
 fi
 
 if [ -z "${ONLY_ONE}" ]; then
-  tmux new-window -t $SESSION:2 -n 'bossw2' $SHELL
+  tmux new-window -t $SESSION:2 -n 'caribou2' $SHELL
   tmux send-keys -t $SESSION:2 "cd ${PAIR_ROOT}/dexc1" C-m
-  tmux send-keys -t $SESSION:2 "${BOSSW} --appdata=${CLIENT_2_DIR} ${BW_ARGS[*]}" C-m
+  tmux send-keys -t $SESSION:2 "${CARIBOU} --appdata=${CLIENT_2_DIR} ${BW_ARGS[*]}" C-m
 fi
 
 tmux select-window -t $SESSION:0
@@ -162,11 +162,11 @@ sleep 1
 tmux send-keys -t $SESSION:0 "cd ${HARNESS_DIR}; tmux wait-for -S walletpair" C-m\; wait-for walletpair
 
 if [ -z "${ONLY_TWO}" ]; then
-  tmux send-keys -t $SESSION:0 "./bossw1; tmux wait-for -S walletpair" C-m\; wait-for walletpair
+  tmux send-keys -t $SESSION:0 "./caribou1; tmux wait-for -S walletpair" C-m\; wait-for walletpair
 fi
 
 if [ -z "${ONLY_ONE}" ]; then
-  tmux send-keys -t $SESSION:0 "./bossw2" C-m
+  tmux send-keys -t $SESSION:0 "./caribou2" C-m
 fi
 
 tmux attach-session -t $SESSION

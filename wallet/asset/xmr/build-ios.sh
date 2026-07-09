@@ -14,7 +14,7 @@
 #   lib/ios-arm64-simulator/libmonero_wallet2_api_c.dylib  (simulator)
 #
 # Then package + wire into the app:
-#   cd ../../ios && BOSSW_XMR=1 ./bind.sh          # assembles Monero.xcframework
+#   cd ../../ios && CARIBOU_XMR=1 ./bind.sh          # assembles Monero.xcframework
 #   xcodegen generate --spec project.xmr.yml       # links it into the app
 #
 # ============================================================================
@@ -79,7 +79,7 @@ apply_once() { # $1=dir-to-run-in  $2=patch-file
 # a connection reset) re-runs cleanly instead of being skipped with patches
 # unapplied. The heavy build below is outside this gate; simplybs caches its own
 # work, so re-running resumes it.
-if [[ ! -f "$MONERO_C_DIR/.bossw-prepared" ]]; then
+if [[ ! -f "$MONERO_C_DIR/.caribou-prepared" ]]; then
     if [[ ! -d "$MONERO_C_DIR/.git" ]]; then
         echo "==> cloning monero_c into $MONERO_C_DIR"
         git clone https://github.com/MrCyjaneK/monero_c.git "$MONERO_C_DIR"
@@ -126,7 +126,7 @@ _MONERO_Wallet_setAllowMismatchedDaemonVersion' "$exp"
     # checkout can build android too.
     apply_once "$MONERO_C_DIR/contrib/depends" "$here/0006-simplybs-android-16k-pages.patch"
 
-    touch "$MONERO_C_DIR/.bossw-prepared"
+    touch "$MONERO_C_DIR/.caribou-prepared"
 else
     echo "==> reusing prepared checkout at $MONERO_C_DIR (skipping clone/patch)"
 fi
@@ -191,5 +191,5 @@ for triple in "${TRIPLES[@]}"; do
     echo "  ${LIBDIR[$triple]#$repo_root/}/libmonero_wallet2_api_c.dylib"
 done
 echo
-echo "Next: cd $repo_root/wallet/ios && BOSSW_XMR=1 ./bind.sh"
+echo "Next: cd $repo_root/wallet/ios && CARIBOU_XMR=1 ./bind.sh"
 echo "      xcodegen generate --spec project.xmr.yml"

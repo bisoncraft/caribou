@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "BisonWallet"
+rootProject.name = "Caribou"
 include ':app'

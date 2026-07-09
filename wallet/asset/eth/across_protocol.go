@@ -225,7 +225,7 @@ func acrossSupportedDestinations(ctx context.Context, assetID uint32, net util.N
 			return nil, fmt.Errorf("token info mismatch for asset %d: %s != %s", assetID, route.OriginToken, originAsset.address.Hex())
 		}
 
-		// Check if the asset is supported by Boss Wallet.
+		// Check if the asset is supported by Caribou.
 		destAssetID, found := acrossAssetToAssetID(net, route.DestinationTokenSymbol, uint64(route.DestinationChainID))
 		if !found {
 			continue

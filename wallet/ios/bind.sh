@@ -34,8 +34,8 @@ fi
 # The Go binary embeds wallet/appserver/mobile/dist (the built JS/CSS bundle).
 # This script does not run webpack, so build the web bundle first; otherwise the
 # embed picks up only the committed `placeholder` file and the app serves a
-# blank page. Set BOSSW_SKIP_WEB_BUILD=1 to skip (e.g. you just built it).
-if [[ "${BOSSW_SKIP_WEB_BUILD:-}" != "1" ]]; then
+# blank page. Set CARIBOU_SKIP_WEB_BUILD=1 to skip (e.g. you just built it).
+if [[ "${CARIBOU_SKIP_WEB_BUILD:-}" != "1" ]]; then
     echo "Building web bundle (npm run build in wallet/appserver)..." >&2
     (cd "$repo_root/wallet/appserver" && npm run build)
 fi
@@ -49,7 +49,7 @@ cd "$repo_root"
 # XMR is opt-in: it links the native libmonero_wallet2_api_c, which must be
 # built for the two iOS triples first (wallet/asset/xmr/build-ios.sh) and staged
 # as per-triple dylibs. Default builds omit it so a plain ./bind.sh always works.
-# Enable with BOSSW_XMR=1.
+# Enable with CARIBOU_XMR=1.
 #
 # Note the split from Android: gomobile binds the Go core as a c-archive, which
 # does not resolve -l libraries at bind time (the monero symbols are resolved by
@@ -58,14 +58,14 @@ cd "$repo_root"
 # dylibs into Monero.xcframework so the Xcode project (project.xmr.yml) can embed
 # and sign it. See wallet/asset/xmr/cxmr/cgo_ios.go.
 tags="mobile"
-if [[ "${BOSSW_XMR:-}" == "1" ]]; then
+if [[ "${CARIBOU_XMR:-}" == "1" ]]; then
     tags="mobile xmr"
     xmrlibdir="$repo_root/wallet/asset/xmr/lib"
     dev="$xmrlibdir/ios-arm64/libmonero_wallet2_api_c.dylib"
     sim="$xmrlibdir/ios-arm64-simulator/libmonero_wallet2_api_c.dylib"
     for f in "$dev" "$sim"; do
         if [[ ! -f "$f" ]]; then
-            echo "error: BOSSW_XMR=1 but $f is missing." >&2
+            echo "error: CARIBOU_XMR=1 but $f is missing." >&2
             echo "Build the iOS monero libs first: wallet/asset/xmr/build-ios.sh" >&2
             echo "(needs macOS + the Apple SDK provisioned into simplybs)." >&2
             exit 1
@@ -125,7 +125,7 @@ gomobile bind \
     ./wallet/mobile
 
 echo "Wrote $out"
-if [[ "${BOSSW_XMR:-}" == "1" ]]; then
+if [[ "${CARIBOU_XMR:-}" == "1" ]]; then
     echo "XMR: generate the project with the XMR overlay so Xcode links monero:" >&2
     echo "  xcodegen generate --spec project.xmr.yml" >&2
 fi

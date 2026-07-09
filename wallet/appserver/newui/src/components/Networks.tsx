@@ -1,8 +1,8 @@
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import { useForceUpdate, useCoreSubscriptions } from '@bossw/shared/hooks'
-import { networkList, NetworkSummary } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import { useForceUpdate, useCoreSubscriptions } from '@caribou/shared/hooks'
+import { networkList, NetworkSummary } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 // Cap on the number of asset logos shown per card. When exceeded, the last slot
 // becomes a "+N" overflow chip so the row stays compact.

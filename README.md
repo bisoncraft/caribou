@@ -1,18 +1,18 @@
-# Boss Wallet
+# Caribou
 
 [![ISC License](https://img.shields.io/badge/license-Blue_Oak-007788.svg)](https://blueoakcouncil.org/license/1.0.0)
 [![GoDoc](https://img.shields.io/badge/go.dev-reference-blue.svg?logo=go&logoColor=lightblue)](https://pkg.go.dev/github.com/bisoncraft/caribou)
 
-Boss Wallet is a non-custodial, multi-chain wallet, from the developers of Bison Wallet.
+Caribou is a non-custodial, multi-chain wallet, from the developers of Bison Wallet.
 
 ## Guiding principles
 
 - **Self-custody.** Your keys, your coins. You, and only you, control your funds.
 - **Non-KYC.** No accounts, no identity verification, no address whitelisting,
-  no third-party KYC/AML gates. Boss Wallet does not require, collect, or
+  no third-party KYC/AML gates. Caribou does not require, collect, or
   forward identifying information to use any of its features, including
   swaps. Where a chain or swap counterparty is operated by a third party,
-  Boss Wallet prefers backends that do not impose KYC and surfaces the
+  Caribou prefers backends that do not impose KYC and surfaces the
   trade-off plainly when a non-KYC option is unavailable.
 
 These principles are load-bearing — features that conflict with them do not
@@ -24,13 +24,13 @@ gated access is out of scope on its own merits, regardless of convenience.
 ### Wallet binary
 
 ```bash
-cd wallet/cmd/bossw && go build -o bossw
+cd wallet/cmd/caribou && go build -o caribou
 ```
 
 ### Desktop wallet
 
 ```bash
-cd wallet/cmd/bossw-desktop && go build -o bossw-desktop
+cd wallet/cmd/caribou-desktop && go build -o caribou-desktop
 ```
 
 ### Cross-platform release packaging
@@ -73,7 +73,7 @@ if the bundle has not been built.
 
 ## Roadmap
 
-Boss Wallet is under active development. Our near-term goals are:
+Caribou is under active development. Our near-term goals are:
 
 - **May 2026**: Complete a comprehensive code refactor and achieve high test coverage for all core wallet components.
 - **June - July 2026**:
@@ -108,7 +108,7 @@ Boss Wallet is under active development. Our near-term goals are:
 ## Documentation
 
 - [Local Automation with API Tokens](docs/automation.md) — drive a running
-  `bossw` from scripts, a CLI, or an MCP server over the appserver API.
+  `caribou` from scripts, a CLI, or an MCP server over the appserver API.
 - [Simnet Development Guide](docs/simnet-dev.md) — local regtest harnesses and
   running the wallet against them.
 - [Desktop UI Development Guide](docs/desktop-ui-dev.md) — developing the
@@ -116,13 +116,13 @@ Boss Wallet is under active development. Our near-term goals are:
 
 ## Contributing
 
-Boss Wallet is in heavy flux right now; large surfaces are being removed,
+Caribou is in heavy flux right now; large surfaces are being removed,
 rewritten, or first introduced. Check with @buck54321 or @JoeGruffins if you're
 interested in helping out.
 
 ## Heritage
 
-Boss Wallet descends from Bison Wallet, which itself was developed alongside
+Caribou descends from Bison Wallet, which itself was developed alongside
 DCRDEX. The non-trading wallet, atomic-swap settlement, EVM relay, and Monero
 adaptor-signature code are retained from that lineage; the credit for that
 work belongs to the DCRDEX / Bison Wallet contributors.

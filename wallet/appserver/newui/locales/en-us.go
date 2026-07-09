@@ -5,11 +5,11 @@ package locales
 import "github.com/bisoncraft/caribou/wallet/intl"
 
 var EnUS = map[string]*intl.Translation{
-	"prompt_for_seed":                {T: "Are you restoring Boss Wallet from a seed?"},
+	"prompt_for_seed":                {T: "Are you restoring Caribou from a seed?"},
 	"seed_display_warning":           {T: "Your seed is shown below. Write it down and keep it safe. You will need it to restore your wallet if you lose your device."},
 	"seed_textarea_placeholder":      {T: "Enter your 15 space-separated seed words"},
 	"Welcome Back!":                  {T: "Welcome Back!"},
-	"Welcome to Boss Wallet!":        {T: "Welcome to Boss Wallet!"},
+	"Welcome to Caribou!":            {T: "Welcome to Caribou!"},
 	"Unlock":                         {T: "Unlock"},
 	"Unlocking...":                   {T: "Unlocking..."},
 	"password":                       {T: "password"},

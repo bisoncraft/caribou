@@ -30,7 +30,7 @@ Run `harness-beta` once for each time `simnet-walletpair` folder tree is deleted
 - start all other needed harnesses: `dcr`, `btc`, ... `dcrdex`.
 - start simnet-walletpair ...
 - create new dex monero wallet(s) - the wallet password always will be 'sim'.
-- get the wallet primary address from **monero-rpc-log** or **bossw log** on wallet creation - this is the only wallet address that can be mined to.
+- get the wallet primary address from **monero-rpc-log** or **caribou log** on wallet creation - this is the only wallet address that can be mined to.
 - `start-mining <wallet-primary-address>` to the wallet primary address to fund the wallet.
 
 When continuous mining into the wallet is not desired `stop-mining` to the wallet primary address. Continuous mining into a random but primary wallet address can be done. For example you could `start-mining` `4B2u3Ba6Fwu8mebFKELcDc1mjVUkDzMxdYwaAQUmi3G6fhcw9gU5NHp7WiYZ9hJmFvFogHYnEHu3ian8jJhukySDF4GnFcH` `30` to progress the chain every 30 seconds.

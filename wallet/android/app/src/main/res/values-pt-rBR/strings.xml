@@ -15,7 +15,7 @@
     <string name="biometric_enabled">Desbloqueio por biometria ativado</string>
     <string name="enrollment_cancelled">Cadastro cancelado</string>
 
-    <string name="unlock_prompt_title">Destrancar a Boss Wallet</string>
+    <string name="unlock_prompt_title">Destrancar a Caribou</string>
 
     <string name="lock_overlay_locked">Bloqueado</string>
     <string name="lock_overlay_unlocking">Desbloqueando…</string>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.bisoncraft.caribou</id>
+  <launchable type="desktop-id">org.bisoncraft.caribou.desktop</launchable>
+  <name>Decred DEX Client</name>
+  <summary>Multi-wallet backed by Decred DEX</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>BlueOak-1.0.0</project_license>
+  <url type="homepage">https://dex.decred.org</url>
+  <url type="help">https://chat.decred.org/#/room/#dex:decred.org</url>
+  <developer_name>The Decred Developers</developer_name>
+  <description>
+    <p>
+      Self-custodial multi-wallet with built-in peer-to-peer exchange.
+    </p>
+  </description>
+</component>

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { postJSON } from '@bossw/shared/http'
+import { postJSON } from '@caribou/shared/http'
 import InitWizard from './InitWizard'
 
-vi.mock('@bossw/shared/http', () => ({ postJSON: vi.fn() }))
+vi.mock('@caribou/shared/http', () => ({ postJSON: vi.fn() }))
 
 afterEach(() => {
   cleanup()

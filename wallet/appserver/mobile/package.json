@@ -1,7 +1,7 @@
 {
-  "name": "@bossw/mobile",
+  "name": "@caribou/mobile",
   "version": "1.0.0",
-  "description": "Boss Wallet mobile UI bundle (consumes @bossw/shared)",
+  "description": "Caribou mobile UI bundle (consumes @caribou/shared)",
   "private": true,
   "license": "ISC",
   "scripts": {
@@ -10,7 +10,7 @@
     "lint": "tsc --noEmit && eslint src --ext .js --ext .ts --ext .tsx"
   },
   "dependencies": {
-    "@bossw/shared": "*",
+    "@caribou/shared": "*",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   }

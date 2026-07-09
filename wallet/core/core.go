@@ -331,7 +331,7 @@ func New(cfg *Config) (*Core, error) {
 
 // Run runs the core. Satisfies the runner.Runner interface.
 func (c *Core) Run(ctx context.Context) {
-	c.log.Infof("Starting Boss Wallet core")
+	c.log.Infof("Starting Caribou core")
 	// Store the context as a field for use by goroutines spawned during
 	// initialization.
 	c.ctx = ctx
@@ -453,7 +453,7 @@ fetchers:
 		txDBWG.Wait()
 	}
 
-	c.log.Infof("Boss Wallet core off")
+	c.log.Infof("Caribou core off")
 }
 
 // Ready returns a channel that is closed when Run completes its initialization

@@ -1,13 +1,13 @@
 import { useState, useEffect, FormEvent, ChangeEvent, ReactNode } from 'react'
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import { postJSON } from '@bossw/shared/http'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import { postJSON } from '@caribou/shared/http'
 
-// bossw is the native bridge the Android shell injects (window.bossw). It is
+// caribou is the native bridge the Android shell injects (window.caribou). It is
 // absent on desktop and on the web, so every use is guarded. No method takes or
 // returns the app password: enrollBiometrics captures it in a native field, and
 // unlock releases it natively, so the secret never reaches this JS.
-interface BosswBridge {
+interface CaribouBridge {
   // biometricAvailable reports whether the device can ENROLL biometric key-release
   // (iOS: actual biometrics only, since the Keychain item needs .biometryCurrentSet).
   // Gates the enroll toggle.
@@ -26,7 +26,7 @@ interface BosswBridge {
   setLockConfig(gateMin: number, evictMin: number): void
 }
 declare global {
-  interface Window { bossw?: BosswBridge }
+  interface Window { caribou?: CaribouBridge }
 }
 
 // SendSettings mirrors the desktop app-level send preference: whether sending
@@ -132,12 +132,12 @@ function SeedExport () {
 }
 
 // BiometricSettings offers the native biometric-unlock opt-in. It renders only
-// on the mobile shell (window.bossw present) and only when the device has usable
+// on the mobile shell (window.caribou present) and only when the device has usable
 // biometric hardware. Toggling calls into the native bridge; the actual enroll
 // or disable completes natively (a biometric prompt), and the shell fires a
-// 'bossw-biometric-changed' event when done, which we use to re-read the state.
+// 'caribou-biometric-changed' event when done, which we use to re-read the state.
 function BiometricSettings () {
-  const bridge = typeof window !== 'undefined' ? window.bossw : undefined
+  const bridge = typeof window !== 'undefined' ? window.caribou : undefined
   const [available, setAvailable] = useState(() => {
     try { return !!bridge && bridge.biometricAvailable() } catch { return false }
   })
@@ -162,13 +162,13 @@ function BiometricSettings () {
         setEnrolled(bridge.biometricEnrolled())
       } catch { /* bridge gone */ }
     }
-    window.addEventListener('bossw-biometric-changed', refresh)
+    window.addEventListener('caribou-biometric-changed', refresh)
     // The user may enroll a fingerprint in system settings while this pane stays
     // mounted; re-check availability when the app regains focus so the toggle
     // appears without a full reload.
     document.addEventListener('visibilitychange', refresh)
     return () => {
-      window.removeEventListener('bossw-biometric-changed', refresh)
+      window.removeEventListener('caribou-biometric-changed', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [bridge])
@@ -235,7 +235,7 @@ function evictLabel (m: number): string {
 // enroll nor has an existing enrollment to turn off (the caller gates it on
 // biometricAvailable || biometricEnrolled), so on a passcode-only iOS device with
 // nothing enrolled the gate row shows without an enroll toggle above it.
-function LockTiming ({ bridge, canGate, biometricToggle }: { bridge: BosswBridge, canGate: boolean, biometricToggle: ReactNode }) {
+function LockTiming ({ bridge, canGate, biometricToggle }: { bridge: CaribouBridge, canGate: boolean, biometricToggle: ReactNode }) {
   const [gateMin, setGateMin] = useState(10)
   const [evictMin, setEvictMin] = useState(60)
 

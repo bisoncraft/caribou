@@ -1355,7 +1355,7 @@ func (s *AppServer) apiExportAppLogs(w http.ResponseWriter, r *http.Request) {
 
 	lf, err := os.Open(s.mainLogFilePath)
 	if err != nil {
-		log.Errorf("error opening bossw log file: %v", err)
+		log.Errorf("error opening caribou log file: %v", err)
 		return
 	}
 	defer lf.Close()
@@ -1368,7 +1368,7 @@ func (s *AppServer) apiExportAppLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := io.Copy(iow, lf); err != nil {
-		log.Errorf("error copying bossw log to zip writer: %v", err)
+		log.Errorf("error copying caribou log to zip writer: %v", err)
 		return
 	}
 }

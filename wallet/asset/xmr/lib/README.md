@@ -23,7 +23,7 @@ are built and packaged differently: Android `.so`s come from the Dockerfile's
 `aarch64-linux-android` target and ship as `jniLibs` (see `wallet/android/bind.sh`);
 iOS `.dylib`s are built by `../build-ios.sh` on macOS (the Apple SDK cannot live
 in the Debian image) and packaged into `Monero.xcframework` by
-`wallet/ios/bind.sh` with `BOSSW_XMR=1`. Mobile libs are embedded in the app
+`wallet/ios/bind.sh` with `CARIBOU_XMR=1`. Mobile libs are embedded in the app
 package rather than copied next to an executable, so the runtime notes below
 apply to the desktop builds only.
 
@@ -49,7 +49,7 @@ docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-app
 
 ## Runtime Requirements
 
-After building bossw with XMR support, the library must be available at runtime:
+After building caribou with XMR support, the library must be available at runtime:
 
 **Option 1: Copy library next to executable (recommended for development)**
 ```bash
@@ -68,10 +68,10 @@ copy lib\windows-amd64\libmonero_wallet2_api_c.dll .\
 
 **Option 2: Install to application library directory (for system packaging)**
 ```bash
-# Linux - use /usr/lib/bossw to avoid conflicts with other apps using monero_c
-sudo mkdir -p /usr/lib/bossw
-sudo cp lib/linux-amd64/libmonero_wallet2_api_c.so /usr/lib/bossw/
+# Linux - use /usr/lib/caribou to avoid conflicts with other apps using monero_c
+sudo mkdir -p /usr/lib/caribou
+sudo cp lib/linux-amd64/libmonero_wallet2_api_c.so /usr/lib/caribou/
 ```
 
 The binary's rpath is configured to search both the executable's directory and
-`/usr/lib/bossw`, so either location works without setting `LD_LIBRARY_PATH`.
+`/usr/lib/caribou`, so either location works without setting `LD_LIBRARY_PATH`.

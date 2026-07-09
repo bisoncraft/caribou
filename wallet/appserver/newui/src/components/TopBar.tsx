@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import t from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import Doc from '@bossw/shared/doc'
-import { PortfolioTotals } from '@bossw/shared/registry'
+import t from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import Doc from '@caribou/shared/doc'
+import { PortfolioTotals } from '@caribou/shared/registry'
 
 export default function TopBar () {
   const [totals, setTotals] = useState<PortfolioTotals>(app.portfolioTotals())
@@ -21,7 +21,7 @@ export default function TopBar () {
   return (
     <div className="topbar d-flex align-items-stretch">
       <div className="topbar-left d-flex align-items-center">
-        <img className="logo-full medium" alt="Boss Wallet" />
+        <img className="logo-full medium" alt="Caribou" />
       </div>
 
       <div className="topbar-right d-flex align-items-center justify-content-end flex-grow-1">

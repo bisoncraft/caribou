@@ -32,7 +32,7 @@ package cxmr
 //   - libc++ is a system dylib on iOS; the dynamic monero framework links it
 //     itself (simplybs passes -lc++ -lc++abi), so nothing extra is bundled.
 //
-// Build with: cd wallet/ios && BOSSW_XMR=1 ./bind.sh  (see that script and
+// Build with: cd wallet/ios && CARIBOU_XMR=1 ./bind.sh  (see that script and
 // wallet/ios/README.md). The library build needs the Apple SDK provisioned into
 // simplybs' native prefix, so it runs on macOS, not the Debian Dockerfile that
 // produces the desktop/Android libs.

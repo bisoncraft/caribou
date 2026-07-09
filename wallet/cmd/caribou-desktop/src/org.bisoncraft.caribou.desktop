@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Caribou
+Comment=Multi-wallet backed by Decred DEX
+Categories=Office;Finance;
+Icon=org.bisoncraft.caribou
+Exec=dexc
+Terminal=false
+StartupWMClass=Caribou

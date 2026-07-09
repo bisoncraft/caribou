@@ -10,14 +10,14 @@
 #
 # Monero.xcframework is a dynamic framework (built by
 # wallet/asset/xmr/build-ios.sh, assembled into wallet/ios/Frameworks/ by
-# `BOSSW_XMR=1 ./bind.sh`), so it is embedded and signed into the app bundle.
+# `CARIBOU_XMR=1 ./bind.sh`), so it is embedded and signed into the app bundle.
 # Xcode selects the device or simulator slice per build destination, which is
 # why the arm64 device/simulator ambiguity never reaches cgo. See
 # wallet/asset/xmr/cxmr/cgo_ios.go.
 include:
   - project.yml
 targets:
-  BossWallet:
+  Caribou:
     # simplybs builds an arm64-only iOS simulator lib (aarch64-apple-ios-simulator);
     # there is no x86_64 simulator monero slice at this pin. So XMR simulator
     # builds are Apple-Silicon only — exclude x86_64 for the simulator SDK so the

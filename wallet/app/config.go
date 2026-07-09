@@ -23,11 +23,11 @@ const (
 	defaultSimnetHost  = "127.0.0.3"
 	defaultWebPort     = "5758"
 	defaultLogLevel    = "debug"
-	configFilename     = "bossw.conf"
+	configFilename     = "caribou.conf"
 )
 
 var (
-	defaultApplicationDirectory = dcrutil.AppDataDir("bossw", false)
+	defaultApplicationDirectory = dcrutil.AppDataDir("caribou", false)
 	defaultConfigPath           = filepath.Join(defaultApplicationDirectory, configFilename)
 )
 
@@ -259,7 +259,7 @@ func ResolveConfig(appData string, cfg *Config) error {
 func setNet(applicationDirectory, net string) (dbPath, logPath string) {
 	netDirectory := filepath.Join(applicationDirectory, net)
 	logDirectory := filepath.Join(netDirectory, "logs")
-	logFilename := filepath.Join(logDirectory, "bossw.log")
+	logFilename := filepath.Join(logDirectory, "caribou.log")
 	err := os.MkdirAll(netDirectory, 0700)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create net directory: %v\n", err)
@@ -270,7 +270,7 @@ func setNet(applicationDirectory, net string) (dbPath, logPath string) {
 		fmt.Fprintf(os.Stderr, "failed to create log directory: %v\n", err)
 		os.Exit(1)
 	}
-	return filepath.Join(netDirectory, "bossw.db"), logFilename
+	return filepath.Join(netDirectory, "caribou.db"), logFilename
 }
 
 // DefaultHostByNetwork accepts configured network and returns the network

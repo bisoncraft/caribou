@@ -27,21 +27,21 @@ build_targets (){
     ARCH=${TARGET##*/}
     echo "Building for ${OS}-${ARCH}"
 
-    mkdir -p "bin/bossw-${OS}-${ARCH}-v${VER}"
+    mkdir -p "bin/caribou-${OS}-${ARCH}-v${VER}"
 
-    pushd wallet/cmd/bossw
-    GOOS=${OS} GOARCH=${ARCH} go build -trimpath ${TAGS_BOSSW:+-tags ${TAGS_BOSSW}} -o "../../../bin/bossw-${OS}-${ARCH}-v${VER}/${BOSSW_EXE}" -ldflags "${LDFLAGS_BOSSW:-${LDFLAGS_BASE}}"
+    pushd wallet/cmd/caribou
+    GOOS=${OS} GOARCH=${ARCH} go build -trimpath ${TAGS_CARIBOU:+-tags ${TAGS_CARIBOU}} -o "../../../bin/caribou-${OS}-${ARCH}-v${VER}/${CARIBOU_EXE}" -ldflags "${LDFLAGS_CARIBOU:-${LDFLAGS_BASE}}"
     popd
 
     pushd wallet/cmd/bwctl
-    GOOS=${OS} GOARCH=${ARCH} go build -trimpath -o "../../../bin/bossw-${OS}-${ARCH}-v${VER}" -ldflags "${LDFLAGS_BASE}"
+    GOOS=${OS} GOARCH=${ARCH} go build -trimpath -o "../../../bin/caribou-${OS}-${ARCH}-v${VER}" -ldflags "${LDFLAGS_BASE}"
     popd
 
     pushd bin
     if [[ "$OS" == "windows" ]]; then
-      zip -9 -r -q "bossw-${OS}-${ARCH}-v${VER}.zip" "bossw-${OS}-${ARCH}-v${VER}"
+      zip -9 -r -q "caribou-${OS}-${ARCH}-v${VER}.zip" "caribou-${OS}-${ARCH}-v${VER}"
     else
-      tar -I 'gzip -9' --owner=0 --group=0 -cf "bossw-${OS}-${ARCH}-v${VER}.tar.gz" "bossw-${OS}-${ARCH}-v${VER}"
+      tar -I 'gzip -9' --owner=0 --group=0 -cf "caribou-${OS}-${ARCH}-v${VER}.tar.gz" "caribou-${OS}-${ARCH}-v${VER}"
     fi
     popd
   done
@@ -53,9 +53,9 @@ build_targets
 
 # Only Windows gets the systray build
 TARGETS="windows/amd64"
-TAGS_BOSSW="systray"
-BOSSW_EXE="bossw.exe"
-LDFLAGS_BOSSW="${LDFLAGS_BASE} -H=windowsgui"
+TAGS_CARIBOU="systray"
+CARIBOU_EXE="caribou.exe"
+LDFLAGS_CARIBOU="${LDFLAGS_BASE} -H=windowsgui"
 build_targets
 
 echo "Files embedded in the Go appserver package:"
@@ -63,5 +63,5 @@ go list -f '{{ .EmbedFiles }}' github.com/bisoncraft/caribou/wallet/appserver
 # NOTE: before embedding, we needed to grab: dist, src/font, src/html, src/img.
 
 pushd bin
-sha256sum *.gz *.zip *.deb *.msi *.dmg > bossw-v${VER}-manifest.txt
+sha256sum *.gz *.zip *.deb *.msi *.dmg > caribou-v${VER}-manifest.txt
 popd

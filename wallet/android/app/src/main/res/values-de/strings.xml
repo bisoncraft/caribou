@@ -15,7 +15,7 @@
     <string name="biometric_enabled">Biometrische Entsperrung aktiviert</string>
     <string name="enrollment_cancelled">Einrichtung abgebrochen</string>
 
-    <string name="unlock_prompt_title">Boss Wallet entsperren</string>
+    <string name="unlock_prompt_title">Caribou entsperren</string>
 
     <string name="lock_overlay_locked">Gesperrt</string>
     <string name="lock_overlay_unlocking">Wird entsperrt…</string>

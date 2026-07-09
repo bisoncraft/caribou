@@ -1,8 +1,8 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
-import app from '@bossw/shared/application'
-import { makeAsset, makeUser, makeWallet, resetApp } from '@bossw/shared/testUtils'
+import app from '@caribou/shared/application'
+import { makeAsset, makeUser, makeWallet, resetApp } from '@caribou/shared/testUtils'
 import TopBar from './TopBar'
 
 const dcrID = 42

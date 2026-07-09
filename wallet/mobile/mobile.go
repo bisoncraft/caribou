@@ -108,7 +108,7 @@ func (a *App) Start(dataDir, net string) (string, error) {
 
 	logMaker, closeLog := app.InitLogging(cfg.LogPath, cfg.DebugLevel, true, false)
 	a.log = logMaker.Logger("MOBILE")
-	a.log.Infof("Boss Wallet mobile starting for network %q", cfg.Net)
+	a.log.Infof("Caribou mobile starting for network %q", cfg.Net)
 
 	clientCore, err := core.New(cfg.Core(logMaker.Logger("CORE")))
 	if err != nil {
@@ -193,7 +193,7 @@ func (a *App) Start(dataDir, net string) (string, error) {
 	a.capToken = capToken
 
 	// Log the address, never the token.
-	a.log.Infof("Boss Wallet mobile listening at http://%s", srv.Addr())
+	a.log.Infof("Caribou mobile listening at http://%s", srv.Addr())
 	return a.bootstrapURL(), nil
 }
 

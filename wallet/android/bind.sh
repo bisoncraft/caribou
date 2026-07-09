@@ -31,8 +31,8 @@ fi
 # The Go binary embeds wallet/appserver/mobile/dist (the built JS/CSS bundle).
 # This script does not run webpack, so build the web bundle first; otherwise the
 # embed picks up only the committed `placeholder` file and the app serves a
-# blank page. Set BOSSW_SKIP_WEB_BUILD=1 to skip (e.g. you just built it).
-if [[ "${BOSSW_SKIP_WEB_BUILD:-}" != "1" ]]; then
+# blank page. Set CARIBOU_SKIP_WEB_BUILD=1 to skip (e.g. you just built it).
+if [[ "${CARIBOU_SKIP_WEB_BUILD:-}" != "1" ]]; then
     echo "Building web bundle (npm run build in wallet/appserver)..." >&2
     (cd "$repo_root/wallet/appserver" && npm run build)
 fi
@@ -44,15 +44,15 @@ cd "$repo_root"
 # XMR is opt-in: it links the native libmonero_wallet2_api_c.so, which must be
 # built for android first (wallet/asset/xmr/Dockerfile, aarch64-linux-android
 # target) and staged as a jniLib. Default builds omit it so a plain ./bind.sh
-# always works. Enable with BOSSW_XMR=1.
+# always works. Enable with CARIBOU_XMR=1.
 tags="mobile"
-if [[ "${BOSSW_XMR:-}" == "1" ]]; then
+if [[ "${CARIBOU_XMR:-}" == "1" ]]; then
     tags="mobile xmr"
     abi="arm64-v8a"
     xmrlib="$repo_root/wallet/asset/xmr/lib/android-arm64/libmonero_wallet2_api_c.so"
     jni="$here/app/src/main/jniLibs/$abi"
     if [[ ! -f "$xmrlib" ]]; then
-        echo "error: BOSSW_XMR=1 but $xmrlib is missing." >&2
+        echo "error: CARIBOU_XMR=1 but $xmrlib is missing." >&2
         echo "Build it first: the aarch64-linux-android target in" >&2
         echo "wallet/asset/xmr/Dockerfile, then drop the .so into that dir." >&2
         exit 1

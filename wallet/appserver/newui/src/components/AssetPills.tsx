@@ -1,4 +1,4 @@
-import { TickerAsset } from '@bossw/shared/assets'
+import { TickerAsset } from '@caribou/shared/assets'
 
 interface AssetPillsProps {
   walletAssets: TickerAsset[]

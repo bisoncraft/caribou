@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState } from 'react'
-import app from '@bossw/shared/application'
+import app from '@caribou/shared/application'
 import UnlockForm from './components/UnlockForm'
 import MainFrame from './components/MainFrame'
 import InitWizard from './components/InitWizard'
@@ -7,7 +7,7 @@ import Loading from './components/Loading'
 import {
   AppState,
   PageData
-} from '@bossw/shared/registry'
+} from '@caribou/shared/registry'
 
 // Disable form submissions (we handle them ourselves) at a global level.
 document.addEventListener('submit', e => e.preventDefault())

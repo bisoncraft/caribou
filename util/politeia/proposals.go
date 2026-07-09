@@ -167,7 +167,7 @@ func (p *Politeia) ProposalByToken(token string) (*Proposal, error) {
 // fetchProposalsData returns the parsed vetted proposals from politeia's
 // API. It cooks up the data needed to save the proposals in the db. It
 // first fetches the proposal details, then comments and then vote summary.
-// This data is needed for the information provided in the Boss Wallet UI. The
+// This data is needed for the information provided in the Caribou UI. The
 // data returned does not include ticket vote data.
 func (p *Politeia) fetchProposalsData(tokens []string) ([]*Proposal, error) {
 	// Fetch record details for each token from the inventory.
@@ -188,7 +188,7 @@ func (p *Politeia) fetchProposalsData(tokens []string) ([]*Proposal, error) {
 		return nil, err
 	}
 
-	// Iterate through every record and feed data used by Boss Wallet.
+	// Iterate through every record and feed data used by Caribou.
 	proposals := make([]*Proposal, 0, len(recordDetails))
 	for _, record := range recordDetails {
 		if err := p.ctx.Err(); err != nil {
@@ -474,7 +474,7 @@ func (p *Politeia) proposalsNewUpdate() error {
 
 // ProposalsInProgress returns the mini proposals for the proposals that are currently in
 // progress, meaning their vote status is unauthorized, authorized or started.
-// This is used to display the in progress proposals on the Boss Wallet UI.
+// This is used to display the in progress proposals on the Caribou UI.
 func (p *Politeia) ProposalsInProgress() ([]*MiniProposal, error) {
 	var propsInProgress []*MiniProposal
 	for _, status := range inProgressStatuses {

@@ -1,4 +1,4 @@
-import t from '@bossw/shared/intl'
+import t from '@caribou/shared/intl'
 
 export default function Activity () {
   return (

@@ -5,8 +5,8 @@ import Swap from './Swap'
 import ActivateAsset from './ActivateAsset'
 import ActivateNetwork from './ActivateNetwork'
 import TxDetail from './TxDetail'
-import { FormData } from '@bossw/shared/registry'
-import app from '@bossw/shared/application'
+import { FormData } from '@caribou/shared/registry'
+import app from '@caribou/shared/application'
 
 interface ModalsParams {
   fd: FormData

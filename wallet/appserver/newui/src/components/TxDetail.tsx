@@ -1,11 +1,11 @@
 import { useState, FormEvent, ReactNode } from 'react'
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import Doc from '@bossw/shared/doc'
-import { WalletTransaction } from '@bossw/shared/registry'
-import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@bossw/shared/tx'
-import { explorerTxURL } from '@bossw/shared/coinexplorers'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import Doc from '@caribou/shared/doc'
+import { WalletTransaction } from '@caribou/shared/registry'
+import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@caribou/shared/tx'
+import { explorerTxURL } from '@caribou/shared/coinexplorers'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface TxDetailParams {
   assetID: number

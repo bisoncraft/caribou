@@ -1,9 +1,9 @@
-import t, { tvar } from '@bossw/shared/intl'
-import { AssetVariant, networkAsset, isVariantActive } from '@bossw/shared/assets'
-import { useSendForm } from '@bossw/shared/useSendForm'
-import app from '@bossw/shared/application'
-import Doc from '@bossw/shared/doc'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import { AssetVariant, networkAsset, isVariantActive } from '@caribou/shared/assets'
+import { useSendForm } from '@caribou/shared/useSendForm'
+import app from '@caribou/shared/application'
+import Doc from '@caribou/shared/doc'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface SendProps {
   ticker?: string

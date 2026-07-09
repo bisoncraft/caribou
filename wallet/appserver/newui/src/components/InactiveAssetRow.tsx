@@ -1,7 +1,7 @@
-import t from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import { TickerAsset } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import { TickerAsset } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface InactiveAssetRowProps {
   asset: TickerAsset

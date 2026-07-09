@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useState } from 'react'
-import app from '@bossw/shared/application'
-import { AppState } from '@bossw/shared/registry'
+import app from '@caribou/shared/application'
+import { AppState } from '@caribou/shared/registry'
 import UnlockForm from './components/UnlockForm'
 import InitWizard from './components/InitWizard'
 import Portfolio from './components/Portfolio'

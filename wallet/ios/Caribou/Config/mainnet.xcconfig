@@ -1,0 +1,7 @@
+// Pulls in DEVELOPMENT_TEAM from a local, git-ignored override if present.
+#include? "Local.xcconfig"
+
+// Mainnet flavor. Mirrors Android's netMainnet product flavor.
+WALLET_NET = mainnet
+PRODUCT_BUNDLE_IDENTIFIER = com.bisoncraft.caribou
+CARIBOU_DISPLAY_NAME = Caribou

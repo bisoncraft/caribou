@@ -108,7 +108,7 @@ div.note-indicator {
 }
 
 span.brand::before {
-  content: "Bison Wallet";
+  content: "Caribou";
 }
 
 img.dex-logo {
@@ -116,7 +116,7 @@ img.dex-logo {
 }
 
 img.logo-square {
-  content: url("/img/bison-square_50.png");
+  content: url("/img/logo-square.png");
 
   &.small {
     height: 25px;
@@ -125,7 +125,7 @@ img.logo-square {
 }
 
 img.logo-full {
-  content: url("/img/bison-full_97x50.png");
+  content: url("/img/logo-full.png");
 
   &.small {
     height: 25px;

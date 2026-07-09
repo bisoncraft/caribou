@@ -1,7 +1,7 @@
 {
-  "name": "@bossw/appserver-ui",
+  "name": "@caribou/appserver-ui",
   "version": "1.0.0",
-  "description": "Boss Wallet appserver UI workspaces (shared core + desktop/mobile bundles)",
+  "description": "Caribou appserver UI workspaces (shared core + desktop/mobile bundles)",
   "private": true,
   "license": "ISC",
   "workspaces": [

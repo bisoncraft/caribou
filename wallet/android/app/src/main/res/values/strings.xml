@@ -22,10 +22,10 @@
     <string name="enrollment_cancelled">Enrollment cancelled</string>
 
     <!-- Biometric prompt title shown when unlocking. -->
-    <string name="unlock_prompt_title">Unlock Boss Wallet</string>
+    <string name="unlock_prompt_title">Unlock Caribou</string>
 
     <!-- UI-gate lock overlay. -->
-    <string name="lock_overlay_title">Boss Wallet</string>
+    <string name="lock_overlay_title">Caribou</string>
     <string name="lock_overlay_locked">Locked</string>
     <string name="lock_overlay_unlocking">Unlocking…</string>
     <string name="lock_overlay_unlock">Unlock</string>

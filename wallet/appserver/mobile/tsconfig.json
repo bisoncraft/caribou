@@ -3,8 +3,8 @@
         "outDir": "./dist/",
         "baseUrl": ".",
         "paths": {
-            "@bossw/shared": ["../shared/src/index.ts"],
-            "@bossw/shared/*": ["../shared/src/*"]
+            "@caribou/shared": ["../shared/src/index.ts"],
+            "@caribou/shared/*": ["../shared/src/*"]
         },
         "sourceMap": true,
         "noImplicitAny": true,

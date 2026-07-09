@@ -1,8 +1,8 @@
-import t, { tvar } from '@bossw/shared/intl'
-import Doc from '@bossw/shared/doc'
-import { PortfolioTotals as PortfolioTotalsData } from '@bossw/shared/registry'
-import { TickerAsset } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import Doc from '@caribou/shared/doc'
+import { PortfolioTotals as PortfolioTotalsData } from '@caribou/shared/registry'
+import { TickerAsset } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 
 interface PortfolioTotalsProps {
   totals: PortfolioTotalsData

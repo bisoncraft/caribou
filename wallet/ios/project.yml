@@ -1,4 +1,4 @@
-name: BossWallet
+name: Caribou
 options:
   bundleIdPrefix: com.bisoncraft
   createIntermediateGroups: true
@@ -7,7 +7,7 @@ options:
 
 # One configuration per (network x debug/release), mirroring Android's product
 # flavors x build types. The active network is selected by the xcconfig attached
-# to the target for each config (see targets.BossWallet.configFiles); the schemes
+# to the target for each config (see targets.Caribou.configFiles); the schemes
 # below pick which config a Run/Archive uses. Build a specific network by
 # selecting its scheme, the iOS analog of `gradle assembleNetSimnetDebug`.
 configs:
@@ -27,33 +27,33 @@ settings:
     TARGETED_DEVICE_FAMILY: "1,2"
     # Automatic signing. The team id is NOT committed (it is developer-specific):
     # each network xcconfig optionally includes a git-ignored
-    # BossWallet/Config/Local.xcconfig that sets DEVELOPMENT_TEAM, so once you've
+    # Caribou/Config/Local.xcconfig that sets DEVELOPMENT_TEAM, so once you've
     # created that file, `xcodegen generate` + an -allowProvisioningUpdates build
     # provisions without picking a team in Xcode's GUI. Release builds are left
     # unshrunk while the app is pre-public (mirrors the Android shell).
     CODE_SIGN_STYLE: Automatic
 
 targets:
-  BossWallet:
+  Caribou:
     type: application
     platform: iOS
     sources:
-      - path: BossWallet
+      - path: Caribou
         # Info.plist is referenced via INFOPLIST_FILE and the xcconfigs via
         # configFiles; keep them out of the compile/resource phases.
         excludes:
           - Info.plist
           - Config/*.xcconfig
     configFiles:
-      Debug-mainnet: BossWallet/Config/mainnet.xcconfig
-      Release-mainnet: BossWallet/Config/mainnet.xcconfig
-      Debug-testnet: BossWallet/Config/testnet.xcconfig
-      Release-testnet: BossWallet/Config/testnet.xcconfig
-      Debug-simnet: BossWallet/Config/simnet.xcconfig
-      Release-simnet: BossWallet/Config/simnet.xcconfig
+      Debug-mainnet: Caribou/Config/mainnet.xcconfig
+      Release-mainnet: Caribou/Config/mainnet.xcconfig
+      Debug-testnet: Caribou/Config/testnet.xcconfig
+      Release-testnet: Caribou/Config/testnet.xcconfig
+      Debug-simnet: Caribou/Config/simnet.xcconfig
+      Release-simnet: Caribou/Config/simnet.xcconfig
     settings:
       base:
-        INFOPLIST_FILE: BossWallet/Info.plist
+        INFOPLIST_FILE: Caribou/Info.plist
         # PRODUCT_BUNDLE_IDENTIFIER and the display name come from the
         # per-network xcconfig.
         ENABLE_USER_SCRIPT_SANDBOXING: "YES"
@@ -69,43 +69,43 @@ targets:
   # app) so the tier tests run without a host app, the gomobile Mobile.xcframework,
   # or a bind.sh step — the iOS analog of Android's JVM-side unit tests. Add a host
   # app + @testable import here if a test ever needs AppModel's UIKit/core surface.
-  BossWalletTests:
+  CaribouTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - BossWalletTests
-      - path: BossWallet/LockTier.swift
+      - CaribouTests
+      - path: Caribou/LockTier.swift
     settings:
       base:
         # Logic-test bundle with no committed Info.plist; let Xcode synthesize one.
         GENERATE_INFOPLIST_FILE: "YES"
 
 schemes:
-  BossWallet (mainnet):
+  Caribou (mainnet):
     build:
       targets:
-        BossWallet: all
-        BossWalletTests: [test]
+        Caribou: all
+        CaribouTests: [test]
     run:
       config: Debug-mainnet
     test:
       config: Debug-mainnet
       targets:
-        - BossWalletTests
+        - CaribouTests
     archive:
       config: Release-mainnet
-  BossWallet (testnet):
+  Caribou (testnet):
     build:
       targets:
-        BossWallet: all
+        Caribou: all
     run:
       config: Debug-testnet
     archive:
       config: Release-testnet
-  BossWallet (simnet):
+  Caribou (simnet):
     build:
       targets:
-        BossWallet: all
+        Caribou: all
     run:
       config: Debug-simnet
     archive:

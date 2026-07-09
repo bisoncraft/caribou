@@ -1,6 +1,6 @@
-# Boss Wallet — iOS shell
+# Caribou — iOS shell
 
-Thin SwiftUI WebView shell that hosts the Boss Wallet mobile SPA over the
+Thin SwiftUI WebView shell that hosts the Caribou mobile SPA over the
 in-process loopback appserver, mirroring `wallet/android`. All app logic lives in
 the Go core (`wallet/mobile`, gomobile-bound) and the React bundle
 (`wallet/appserver/mobile`); this target only boots the core, hosts a full-screen
@@ -11,7 +11,7 @@ lock / biometrics (`biometrics.md`) is implemented here, mirroring the Android
 shell — `AppModel` drives the idle-gate / key-eviction tiers off the SwiftUI
 scene lifecycle, with `BiometricAuth` backing the Keychain re-auth (see
 [Session lock & biometrics](#session-lock--biometrics)). XMR (`xmr.md`) is opt-in
-and wired via `BOSSW_XMR=1 ./bind.sh` + `project.xmr.yml` (see
+and wired via `CARIBOU_XMR=1 ./bind.sh` + `project.xmr.yml` (see
 [XMR (Monero)](#xmr-monero)).
 
 ## Prerequisites
@@ -25,7 +25,7 @@ and wired via `BOSSW_XMR=1 ./bind.sh` + `project.xmr.yml` (see
   gomobile init
   ```
 - For device builds, a signing team. Create the git-ignored
-  `BossWallet/Config/Local.xcconfig` with your Apple Developer team:
+  `Caribou/Config/Local.xcconfig` with your Apple Developer team:
   ```
   DEVELOPMENT_TEAM = YOURTEAMID
   ```
@@ -36,24 +36,24 @@ and wired via `BOSSW_XMR=1 ./bind.sh` + `project.xmr.yml` (see
 ```sh
 cd wallet/ios
 ./bind.sh              # builds Frameworks/Mobile.xcframework (runs webpack first)
-xcodegen generate      # generates BossWallet.xcodeproj from project.yml
-open BossWallet.xcodeproj
+xcodegen generate      # generates Caribou.xcodeproj from project.yml
+open Caribou.xcodeproj
 ```
 
 Pick a scheme and Run:
 
 | Scheme                  | Bundle id                              |
 |-------------------------|----------------------------------------|
-| `BossWallet (mainnet)`  | `com.bisoncraft.bosswallet`            |
-| `BossWallet (testnet)`  | `com.bisoncraft.bosswallet.testnet`    |
-| `BossWallet (simnet)`   | `com.bisoncraft.bosswallet.simnet`     |
+| `Caribou (mainnet)`  | `com.bisoncraft.caribou`            |
+| `Caribou (testnet)`  | `com.bisoncraft.caribou.testnet`    |
+| `Caribou (simnet)`   | `com.bisoncraft.caribou.simnet`     |
 
 Each scheme selects a network the same way Android's product flavors do: the
-`WALLET_NET` build setting (from `BossWallet/Config/<net>.xcconfig`) is injected
+`WALLET_NET` build setting (from `Caribou/Config/<net>.xcconfig`) is injected
 into `Info.plist` as `WalletNet` and read at runtime by `AppModel`, which passes
 it to `App.start`. The three bundle ids install side by side.
 
-`./bind.sh` rebuilds the web bundle each run; set `BOSSW_SKIP_WEB_BUILD=1` to
+`./bind.sh` rebuilds the web bundle each run; set `CARIBOU_SKIP_WEB_BUILD=1` to
 skip if you just built it. Re-run `./bind.sh` whenever the Go core or the mobile
 bundle changes; re-run `xcodegen generate` only when `project.yml` or the file
 layout changes.
@@ -79,12 +79,12 @@ native pieces, mirroring Android's `MainActivity` + `BiometricAuth`:
   as a `.biometryCurrentSet` Keychain item — released only behind Face ID /
   Touch ID, invalidated on a biometric enrollment change, device-bound and
   non-syncing. `Info.plist` carries the required `NSFaceIDUsageDescription`.
-- **`window.bossw` bridge.** The SPA's biometric opt-in and lock-timing controls
+- **`window.caribou` bridge.** The SPA's biometric opt-in and lock-timing controls
   call a native bridge. iOS message handlers are async/void, but the SPA reads
   `biometricAvailable()` / `getLockConfig()` synchronously, so the injected
-  `window.bossw` getters read a native-pushed `window.__bossw_lock` object while
+  `window.caribou` getters read a native-pushed `window.__caribou_lock` object while
   the void actions (enroll/disable/setLockConfig) post messages. State is
-  re-pushed and a `bossw-biometric-changed` event fired on every change and page
+  re-pushed and a `caribou-biometric-changed` event fired on every change and page
   load.
 - **Privacy cover.** An opaque brand screen covers the WebView whenever the app
   is not active, so wallet content stays out of the OS app-switcher snapshot (the
@@ -112,7 +112,7 @@ it:
 ../asset/xmr/build-ios.sh
 
 # 2. Bind with the xmr tag and assemble Monero.xcframework from those dylibs.
-BOSSW_XMR=1 ./bind.sh
+CARIBOU_XMR=1 ./bind.sh
 
 # 3. Generate the project with the XMR overlay so Xcode embeds + links monero.
 xcodegen generate --spec project.xmr.yml
@@ -123,7 +123,7 @@ How it fits together (details in `../asset/xmr/cxmr/cgo_ios.go`):
 - gomobile binds the Go core as a **c-archive** (static), so the monero symbols
   are left undefined and resolved when **Xcode links the app** — nothing about
   monero is linked at `gomobile bind` time.
-- `BOSSW_XMR=1 ./bind.sh` wraps each triple's dylib as a `Monero.framework` and
+- `CARIBOU_XMR=1 ./bind.sh` wraps each triple's dylib as a `Monero.framework` and
   packs the device + simulator slices into `Frameworks/Monero.xcframework`.
 - `project.xmr.yml` includes `project.yml` and adds that xcframework as an
   embedded, signed app dependency. Xcode picks the device or simulator slice per
@@ -139,13 +139,13 @@ It realistically runs in a macOS CI job with Apple credentials.
 |------|------|
 | `project.yml` | XcodeGen project spec (source of truth; the `.xcodeproj` is generated and git-ignored) |
 | `project.xmr.yml` | XcodeGen overlay (`include`s `project.yml`) that adds `Monero.xcframework`; used for XMR builds |
-| `bind.sh` | Builds `Frameworks/Mobile.xcframework` via `gomobile bind`; `BOSSW_XMR=1` adds the xmr tag and assembles `Monero.xcframework` |
+| `bind.sh` | Builds `Frameworks/Mobile.xcframework` via `gomobile bind`; `CARIBOU_XMR=1` adds the xmr tag and assembles `Monero.xcframework` |
 | `../asset/xmr/build-ios.sh` | Builds the native `libmonero_wallet2_api_c` dylibs for the two iOS triples (macOS; needs the Apple SDK) |
-| `BossWallet/BossWalletApp.swift` | `@main` entry; owns the app lifecycle |
-| `BossWallet/AppModel.swift` | Boots/stops the bound Go `App`; supplies dataDir + network; drives the session-lock tiers and the `window.bossw` bridge |
-| `BossWallet/BiometricAuth.swift` | Keychain-backed app-password store, released behind Face ID / Touch ID |
-| `BossWallet/LockOverlay.swift` | UI-gate overlay + app-switcher privacy cover + native lock strings |
-| `BossWallet/ContentView.swift` | Boot / error / WebView states, with the lock + privacy overlays on top |
-| `BossWallet/WebView.swift` | `WKWebView` wrapper + loopback navigation confinement + bridge wiring |
-| `BossWallet/Info.plist` | ATS local-networking exception, `WalletNet`, launch screen |
-| `BossWallet/Config/*.xcconfig` | Per-network bundle id, display name, `WALLET_NET` |
+| `Caribou/CaribouApp.swift` | `@main` entry; owns the app lifecycle |
+| `Caribou/AppModel.swift` | Boots/stops the bound Go `App`; supplies dataDir + network; drives the session-lock tiers and the `window.caribou` bridge |
+| `Caribou/BiometricAuth.swift` | Keychain-backed app-password store, released behind Face ID / Touch ID |
+| `Caribou/LockOverlay.swift` | UI-gate overlay + app-switcher privacy cover + native lock strings |
+| `Caribou/ContentView.swift` | Boot / error / WebView states, with the lock + privacy overlays on top |
+| `Caribou/WebView.swift` | `WKWebView` wrapper + loopback navigation confinement + bridge wiring |
+| `Caribou/Info.plist` | ATS local-networking exception, `WalletNet`, launch screen |
+| `Caribou/Config/*.xcconfig` | Per-network bundle id, display name, `WALLET_NET` |

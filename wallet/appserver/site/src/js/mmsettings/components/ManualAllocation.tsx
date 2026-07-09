@@ -86,7 +86,7 @@ const ManualAllocationView: React.FC = () => {
           <div className="border rounded p-3 h-100">
             <div className="d-flex align-items-center mb-3">
               <img className="logo-square mini-icon me-3" src={Doc.logoPath('DEX')} alt="DEX" />
-              <span className="fs16 demi">Boss Wallet Balances</span>
+              <span className="fs16 demi">Caribou Balances</span>
             </div>
             {dexAssetIDs.map(assetID => (
               <ManualBalanceEntry key={assetID} assetID={assetID} location='dex' />

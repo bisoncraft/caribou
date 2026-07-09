@@ -58,7 +58,7 @@ func New(dataDir string, log util.Logger) (_ *HiddenService, err error) {
 	}, nil
 }
 
-const torrcTemplate = `#Boss Wallet tor relay configuration
+const torrcTemplate = `#Caribou tor relay configuration
 SOCKSPort %s
 DataDirectory %s
 

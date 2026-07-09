@@ -11,7 +11,7 @@ package cxmr
 //
 // At runtime, the library is searched for in the following order:
 //  1. Same directory as the executable ($ORIGIN)
-//  2. /usr/lib/bossw/
+//  2. /usr/lib/caribou/
 //
 // For development, copy the library next to the executable:
 //
@@ -20,5 +20,5 @@ package cxmr
 //
 // For system packaging, install to the application library directory:
 //
-//	sudo mkdir -p /usr/lib/bossw
-//	sudo cp wallet/asset/xmr/lib/linux-amd64/libmonero_wallet2_api_c.so /usr/lib/bossw/
+//	sudo mkdir -p /usr/lib/caribou
+//	sudo cp wallet/asset/xmr/lib/linux-amd64/libmonero_wallet2_api_c.so /usr/lib/caribou/

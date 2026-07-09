@@ -2,7 +2,7 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 // Package hyperliquidmock implements a minimal in-memory reproduction of the
-// Hyperliquid REST and WebSocket APIs that the bosswallet HYPE wallet relies
+// Hyperliquid REST and WebSocket APIs that the caribou HYPE wallet relies
 // on (spotClearinghouseState, spotMeta, userNonFundingLedgerUpdates, and the
 // sendAsset exchange action). It exists so wallet behavior — including
 // EIP-712 signature verification — can be exercised end-to-end without a

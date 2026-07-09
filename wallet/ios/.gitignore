@@ -1,14 +1,14 @@
 # Generated Xcode project (regenerate from project.yml with: xcodegen generate).
-BossWallet.xcodeproj/
+Caribou.xcodeproj/
 
 # gomobile-bound framework (build it with ./bind.sh).
 Frameworks/Mobile.xcframework/
 
-# Native monero framework for XMR builds (assembled by BOSSW_XMR=1 ./bind.sh).
+# Native monero framework for XMR builds (assembled by CARIBOU_XMR=1 ./bind.sh).
 Frameworks/Monero.xcframework/
 
 # Local signing override (developer-specific DEVELOPMENT_TEAM).
-BossWallet/Config/Local.xcconfig
+Caribou/Config/Local.xcconfig
 
 # Xcode user state / build output.
 xcuserdata/

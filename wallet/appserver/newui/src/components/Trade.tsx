@@ -1,4 +1,4 @@
-import t, { tvar } from '@bossw/shared/intl'
+import t, { tvar } from '@caribou/shared/intl'
 
 // Trade is a placeholder. DEX trading is not yet implemented in this UI.
 export default function Trade () {

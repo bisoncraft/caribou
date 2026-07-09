@@ -1,10 +1,10 @@
 import { useState, FormEvent } from 'react'
-import t from '@bossw/shared/intl'
+import t from '@caribou/shared/intl'
 import PasswordInput from './PasswordInput'
 import LocaleSelector from './LocaleSelector'
 import Spinner from './Spinner'
-import { postJSON } from '@bossw/shared/http'
-import { normalizeSeed, seedWordCount } from '@bossw/shared/seed'
+import { postJSON } from '@caribou/shared/http'
+import { normalizeSeed, seedWordCount } from '@caribou/shared/seed'
 
 /*
  * SeedPromptForm asks the user whether they are restoring from an existing
@@ -20,7 +20,7 @@ const SeedPromptForm = ({ setUsingSeed }: SeedPromptFormParams) => {
     <form className="modal" onSubmit={(e: FormEvent) => e.preventDefault()}>
       <header>
         <img className="logo-full small me-2" />
-        <span>{t('Welcome to Boss Wallet!')}</span>
+        <span>{t('Welcome to Caribou!')}</span>
       </header>
       <div className="px-3">{t('prompt_for_seed')}</div>
       <div className="d-flex align-items-center p-3">

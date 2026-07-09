@@ -1,7 +1,7 @@
 {
-  "name": "bossw",
+  "name": "caribou",
   "version": "1.2.0",
-  "description": "bossw browser frontend",
+  "description": "caribou browser frontend",
   "private": true,
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

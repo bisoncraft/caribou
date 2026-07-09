@@ -1,8 +1,8 @@
-import t, { tvar } from '@bossw/shared/intl'
-import app from '@bossw/shared/application'
-import Doc from '@bossw/shared/doc'
-import { TickerAsset } from '@bossw/shared/assets'
-import CoinLogo from '@bossw/shared/components/CoinLogo'
+import t, { tvar } from '@caribou/shared/intl'
+import app from '@caribou/shared/application'
+import Doc from '@caribou/shared/doc'
+import { TickerAsset } from '@caribou/shared/assets'
+import CoinLogo from '@caribou/shared/components/CoinLogo'
 import Spinner from './Spinner'
 
 interface AssetRowProps {

@@ -1,4 +1,4 @@
-# Boss Wallet Android shell
+# Caribou Android shell
 
 The Android app is a thin native shell (`MainActivity`) hosting the SPA in a
 WebView over a loopback server, plus a keystore-backed biometric unlock
