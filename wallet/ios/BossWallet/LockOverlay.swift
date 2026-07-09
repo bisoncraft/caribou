@@ -9,6 +9,7 @@ import SwiftUI
 enum LockStrings {
     static let overlayTitle = "Boss Wallet"
     static let overlayLocked = "Locked"
+    static let overlayUnlocking = "Unlocking…"
     static let overlayUnlock = "Unlock"
     static let overlayUsePassword = "Use password instead"
 
@@ -29,6 +30,12 @@ enum LockStrings {
 // retry and a password escape hatch in case the biometric prompt is dismissed
 // or the sensor is unusable.
 struct LockOverlay: View {
+    // unlocking = true during the eviction re-auth: the biometric is the automatic
+    // system dialog and the core is re-logging-in, so the overlay is passive (a
+    // spinner) with no button — offering an "Unlock" here would fire a second,
+    // redundant presence check on top of the automatic unlock. When false (the UI
+    // gate), the overlay offers the retry + password escape hatch.
+    let unlocking: Bool
     // retry re-presents the biometric prompt (the UI gate). usePassword drops to
     // full eviction so the user can re-auth with the app password instead.
     let retry: () -> Void
@@ -43,23 +50,35 @@ struct LockOverlay: View {
                 Text(LockStrings.overlayTitle)
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(.white)
-                Text(LockStrings.overlayLocked)
-                    .font(.callout)
-                    .foregroundStyle(Color(red: 0x8a / 255, green: 0x90 / 255, blue: 0x99 / 255))
-                    .padding(.bottom, 16)
-                Button(action: retry) {
-                    Text(LockStrings.overlayUnlock)
-                        .font(.body.weight(.semibold))
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-                Button(action: usePassword) {
-                    Text(LockStrings.overlayUsePassword)
+                if unlocking {
+                    // Eviction re-auth in flight: passive progress, no tappable
+                    // control (the system biometric dialog drives it).
+                    ProgressView()
+                        .tint(.white)
+                        .padding(.top, 16)
+                    Text(LockStrings.overlayUnlocking)
                         .font(.callout)
                         .foregroundStyle(Color(red: 0x8a / 255, green: 0x90 / 255, blue: 0x99 / 255))
+                        .padding(.top, 8)
+                } else {
+                    Text(LockStrings.overlayLocked)
+                        .font(.callout)
+                        .foregroundStyle(Color(red: 0x8a / 255, green: 0x90 / 255, blue: 0x99 / 255))
+                        .padding(.bottom, 16)
+                    Button(action: retry) {
+                        Text(LockStrings.overlayUnlock)
+                            .font(.body.weight(.semibold))
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 10)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button(action: usePassword) {
+                        Text(LockStrings.overlayUsePassword)
+                            .font(.callout)
+                            .foregroundStyle(Color(red: 0x8a / 255, green: 0x90 / 255, blue: 0x99 / 255))
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
             }
             .padding()
         }

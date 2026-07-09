@@ -40,6 +40,7 @@ struct ContentView: View {
             // "use password" drops to full eviction.
             if model.gated {
                 LockOverlay(
+                    unlocking: model.unlocking,
                     retry: { model.retryGate() },
                     usePassword: { model.usePasswordInstead() }
                 )

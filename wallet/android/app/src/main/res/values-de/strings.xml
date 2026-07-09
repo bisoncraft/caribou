@@ -16,6 +16,7 @@
     <string name="unlock_prompt_title">Boss Wallet entsperren</string>
 
     <string name="lock_overlay_locked">Gesperrt</string>
+    <string name="lock_overlay_unlocking">Wird entsperrt…</string>
     <string name="lock_overlay_unlock">Entsperren</string>
     <string name="lock_overlay_use_password">Stattdessen Passwort verwenden</string>
 </resources>

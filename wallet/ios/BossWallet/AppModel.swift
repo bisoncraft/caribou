@@ -29,6 +29,14 @@ final class AppModel: ObservableObject {
     @Published var gated = false
     @Published var obscured = false
 
+    // unlocking is true during the eviction re-auth (core locked, biometric
+    // release + App.Unlock in flight). The overlay renders differently then: a
+    // passive "Unlocking…" spinner rather than the gate's tappable "Unlock"
+    // button, because during eviction the biometric is the automatic system
+    // dialog + grant-URL reload — a manual button here would fire a second,
+    // redundant presence check on top of the automatic unlock.
+    @Published var unlocking = false
+
     // Build-time network, read from Info.plist (WalletNet <- WALLET_NET, set per
     // network by Config/<net>.xcconfig). Empty/nil means mainnet. This mirrors
     // Android's BuildConfig.WALLET_NET.
@@ -113,6 +121,7 @@ final class AppModel: ObservableObject {
                 await MainActor.run {
                     guard let parsed = self.appURL(from: base) else { return }
                     self.url = parsed
+                    self.maybeColdStartUnlock()
                 }
             } catch {
                 await MainActor.run {
@@ -122,6 +131,24 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // maybeColdStartUnlock offers biometric unlock on a cold start (a fresh launch,
+    // where the core boots logged-out) when enrolled, so the user unlocks with
+    // Face/Touch ID instead of retyping their password — the "unlock once at launch"
+    // from biometrics.md. The boot URL (the logged-out SPA) loads behind the
+    // overlay; on success App.Unlock swaps it for an authed grant page, on cancel
+    // the overlay drops to reveal the password screen. Unlike the eviction tier
+    // there is nothing to lock first, so it goes straight to the biometric prompt.
+    private func maybeColdStartUnlock() {
+        guard biometric.isEnrolled() else { return }
+        gated = true
+        unlocking = true
+        promptBiometricUnlock(onFallback: { [weak self] in
+            // Cancelled/failed: the logged-out SPA is already loaded behind the
+            // overlay, so just drop it to reveal the password screen.
+            self?.clearGate()
+        })
     }
 
     // scenePhaseChanged feeds the idle timer from the SwiftUI scene lifecycle.
@@ -168,8 +195,15 @@ final class AppModel: ObservableObject {
     private func scheduleEviction(afterMs ms: Double) {
         beginBgTask()
         let work = DispatchWorkItem { [weak self] in
-            self?.lockCore(then: nil)
-            self?.endBgTask()
+            // asyncAfter runs this on the main queue, which is the MainActor's
+            // executor, but DispatchWorkItem is not statically isolated. Assert the
+            // isolation to call the MainActor-bound methods without an async hop —
+            // the same pattern as the WebKit callbacks (WebView.didFinish,
+            // BridgeProxy). Correct under strict (Swift 6) concurrency checking.
+            MainActor.assumeIsolated {
+                self?.lockCore(then: nil)
+                self?.endBgTask()
+            }
         }
         evictWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000.0, execute: work)
@@ -204,24 +238,25 @@ final class AppModel: ObservableObject {
         backgroundedAt = nil
         let idleMs = Date().timeIntervalSince(bg) * 1000.0
 
-        if idleMs >= evictMs() {
+        // The tier decision itself is the pure lockTier() (unit-tested in
+        // LockTierTests); this only wires each tier to its side effects.
+        switch lockTier(idleMs: idleMs, gateMs: gateMs(), evictMs: evictMs(),
+                        canGate: biometric.canGate()) {
+        case .evict:
             clearGate()
             evictAndReauth()
-        } else if idleMs >= gateMs() {
-            if biometric.canGate() {
-                enterUiGate()
-            } else {
-                // No biometric/passcode to run the cheap UI gate with. Escalate to
-                // full eviction rather than leave the authed session exposed past
-                // the gate window — even when eviction is set to Never, which
-                // assumes the gate is the thing doing the locking.
-                evictAndReauth()
+        case .gate:
+            enterUiGate()
+        case .none:
+            if gated && !unlocking {
+                // Under the gate window but the UI-gate overlay is already up (we
+                // backgrounded mid-gate): re-present the prompt so a quick return
+                // re-prompts instead of stranding the user on the manual retry
+                // button. Skip this while unlocking (an eviction / cold-start
+                // re-auth is in flight, driven by its own automatic prompt — a
+                // presence check here would be the wrong tier).
+                uiGateBiometric()
             }
-        } else if gated {
-            // Under the gate window but the overlay is already up (we backgrounded
-            // mid-gate): re-present the prompt so a quick return re-prompts instead
-            // of stranding the user on the manual retry button.
-            uiGateBiometric()
         }
     }
 
@@ -232,6 +267,13 @@ final class AppModel: ObservableObject {
     // shows through — no reload, no re-login.
     private func enterUiGate() {
         gated = true
+        // Reset unlocking so the overlay shows the interactive gate (retry +
+        // password escape hatch), not the passive "Unlocking…" spinner. It can be
+        // stale-true if an eviction / cold-start re-auth was interrupted without
+        // ever reaching clearGate (e.g. its reveal reload never finished before the
+        // app was backgrounded); leaving it set would strand the user on a spinner
+        // with no controls. Android does the same via setOverlayUnlocking(false).
+        unlocking = false
         uiGateBiometric()
     }
 
@@ -244,6 +286,7 @@ final class AppModel: ObservableObject {
 
     private func clearGate() {
         gated = false
+        unlocking = false
     }
 
     // retryGate re-presents the UI-gate biometric from the overlay's manual retry
@@ -269,7 +312,10 @@ final class AppModel: ObservableObject {
         // Raise the overlay before the (blocking) lock so the authed WebView is not
         // left on screen while App.lock() runs. It stays up until the follow-up
         // page (grant URL or reloaded logged-out SPA) paints (onPageFinished).
+        // unlocking = true so the overlay shows the passive "Unlocking…" spinner,
+        // not the gate's tappable Unlock button (which would fire a second prompt).
         gated = true
+        unlocking = true
         lockCore { [weak self] in
             guard let self else { return }
             if self.biometric.isEnrolled() {
@@ -375,6 +421,20 @@ final class AppModel: ObservableObject {
             clearGate()
         }
         pushLockState()
+    }
+
+    // onPageLoadFailed is the safety net for a navigation that errors while we were
+    // waiting on it to reveal (e.g. a post-eviction grant load). Rather than strand
+    // the user on the "Unlocking…" overlay, reload the base loopback URL so they
+    // land on the logged-out SPA and can enter their password.
+    func onPageLoadFailed() {
+        guard revealOnLoad else { return }
+        NSLog("bossw: page load failed while revealing; reloading base URL")
+        revealOnLoad = false
+        if let url = self.url {
+            webView?.load(URLRequest(url: url))
+        }
+        clearGate()
     }
 
     // attach wires the hosted WKWebView into the lock flow. Called from WebView's
@@ -605,7 +665,20 @@ final class AppModel: ObservableObject {
         },
         enrollBiometrics: function () { post({ m: 'enroll' }); },
         disableBiometrics: function () { post({ m: 'disable' }); },
-        setLockConfig: function (g, e) { post({ m: 'setLockConfig', gateMin: g, evictMin: e }); }
+        setLockConfig: function (g, e) {
+          // The SPA reads getLockConfig() back synchronously right after this call
+          // (it relies on Android's bridge being synchronous). Our native handler
+          // is async, so update the cached state here first — applying the same
+          // clamp native uses (the gate must sit strictly below eviction) — so the
+          // immediate readback is correct. The posted message persists the same
+          // values natively, where the identical clamp runs again.
+          var gate = Math.max(0, g | 0);
+          var evict = (e | 0) <= 0 ? 0 : (e | 0);
+          if (evict !== 0 && gate >= evict) { gate = evict - 1; }
+          window.__bossw_lock.gateMin = gate;
+          window.__bossw_lock.evictMin = evict;
+          post({ m: 'setLockConfig', gateMin: g, evictMin: e });
+        }
       };
     })();
     """

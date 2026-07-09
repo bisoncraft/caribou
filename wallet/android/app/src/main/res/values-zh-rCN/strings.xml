@@ -16,6 +16,7 @@
     <string name="unlock_prompt_title">解锁 Boss Wallet</string>
 
     <string name="lock_overlay_locked">已锁定</string>
+    <string name="lock_overlay_unlocking">正在解锁…</string>
     <string name="lock_overlay_unlock">解锁</string>
     <string name="lock_overlay_use_password">改用密码</string>
 </resources>

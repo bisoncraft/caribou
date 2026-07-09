@@ -64,13 +64,34 @@ targets:
         embed: true
         codeSign: true
 
+  # Hermetic logic-test bundle for the pure session-lock policy. It compiles the
+  # dependency-free LockTier.swift directly (rather than @testable-importing the
+  # app) so the tier tests run without a host app, the gomobile Mobile.xcframework,
+  # or a bind.sh step — the iOS analog of Android's JVM-side unit tests. Add a host
+  # app + @testable import here if a test ever needs AppModel's UIKit/core surface.
+  BossWalletTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - BossWalletTests
+      - path: BossWallet/LockTier.swift
+    settings:
+      base:
+        # Logic-test bundle with no committed Info.plist; let Xcode synthesize one.
+        GENERATE_INFOPLIST_FILE: "YES"
+
 schemes:
   BossWallet (mainnet):
     build:
       targets:
         BossWallet: all
+        BossWalletTests: [test]
     run:
       config: Debug-mainnet
+    test:
+      config: Debug-mainnet
+      targets:
+        - BossWalletTests
     archive:
       config: Release-mainnet
   BossWallet (testnet):

@@ -16,6 +16,7 @@
     <string name="unlock_prompt_title">إلغاء قفل Boss Wallet</string>
 
     <string name="lock_overlay_locked">مقفل</string>
+    <string name="lock_overlay_unlocking">جارٍ إلغاء القفل…</string>
     <string name="lock_overlay_unlock">إلغاء القفل</string>
     <string name="lock_overlay_use_password">استخدام كلمة المرور بدلاً من ذلك</string>
 </resources>

@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -25,6 +26,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -89,6 +91,14 @@ class MainActivity : AppCompatActivity() {
     // biometric check. gated tracks whether it is up.
     private lateinit var lockOverlay: View
     private var gated = false
+
+    // Overlay pieces toggled by setOverlayUnlocking: the passive "Unlocking…"
+    // progress shown while a cold-start / eviction re-auth is in flight vs. the
+    // interactive UI-gate controls (retry button + password escape hatch).
+    private lateinit var lockStatusText: TextView
+    private lateinit var lockSpinner: ProgressBar
+    private lateinit var lockUnlockButton: Button
+    private lateinit var lockUsePassword: TextView
 
     // revealOnLoad keeps the lock overlay up across the eviction reload: eviction
     // raises the overlay before the (blocking) lock, then reloads into the
@@ -195,7 +205,7 @@ class MainActivity : AppCompatActivity() {
                 // (default mainnet; override with -PwalletNet=simnet). filesDir
                 // is app-private storage.
                 val url = app.start(filesDir.absolutePath, BuildConfig.WALLET_NET)
-                loadAppUrl(url)
+                runOnUiThread { coldStart(url) }
             } catch (e: Exception) {
                 runOnUiThread {
                     Toast.makeText(appCtx, getString(R.string.start_failed, e.message), Toast.LENGTH_LONG).show()
@@ -213,6 +223,27 @@ class MainActivity : AppCompatActivity() {
         val sep = if (url.contains('?')) '&' else '?'
         val webUrl = "$url${sep}net=${BuildConfig.WALLET_NET}"
         runOnUiThread { if (!isDestroyed && ::webView.isInitialized) webView.loadUrl(webUrl) }
+    }
+
+    // coldStart shows the freshly-booted SPA. On a cold launch the core is logged
+    // out, so if biometric unlock is enrolled, offer it (the "unlock once at
+    // launch" from biometrics.md) instead of leaving the user to retype their
+    // password: the logged-out SPA loads behind the overlay, a biometric unlock
+    // swaps it for an authed grant page, and a cancel drops the overlay to reveal
+    // the password screen. Unlike the eviction tier there is nothing to lock first,
+    // so it goes straight to the biometric prompt. Must run on the UI thread
+    // (BiometricPrompt requirement).
+    private fun coldStart(url: String) {
+        loadAppUrl(url)
+        if (!biometricAuth.isEnrolled()) return
+        // Passive overlay: the biometric prompt drives the unlock, so show the
+        // "Unlocking…" spinner rather than the gate's tappable controls (which
+        // would fire a second prompt / drop to the wrong tier).
+        setOverlayUnlocking(true)
+        lockOverlay.visibility = View.VISIBLE
+        // On cancel/failure the logged-out SPA is already loaded behind the overlay,
+        // so just drop it to reveal the password screen.
+        promptBiometricUnlock(::clearGate)
     }
 
     // onStop fires when the app is no longer visible (backgrounded). Stamp the
@@ -294,6 +325,7 @@ class MainActivity : AppCompatActivity() {
     // the user on the overlay's manual retry button.
     private fun enterUiGate() {
         gated = true
+        setOverlayUnlocking(false)
         lockOverlay.visibility = View.VISIBLE
         uiGateBiometric()
     }
@@ -321,6 +353,8 @@ class MainActivity : AppCompatActivity() {
         // Raise the overlay before the (blocking) lock so the authed WebView is
         // not left on screen while app.lock() runs. It stays up until the follow-up
         // page (grant URL or logged-out SPA) lands (onWebViewPageFinished clears it).
+        // Passive "Unlocking…" look: the re-auth is automatic, so no tappable control.
+        setOverlayUnlocking(true)
         if (::lockOverlay.isInitialized) lockOverlay.visibility = View.VISIBLE
         lockCoreAsync {
             if (biometricAuth.isEnrolled()) {
@@ -352,9 +386,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // buildLockOverlay is the opaque UI-gate view: it hides content behind a
-    // "locked" panel with a retry button and a password escape hatch, in case the
-    // biometric prompt is dismissed or the sensor is unusable.
+    // buildLockOverlay is the opaque cover painted over the WebView. It has two
+    // looks, switched by setOverlayUnlocking: the interactive UI gate (a "locked"
+    // panel with a retry button and a password escape hatch, in case the biometric
+    // prompt is dismissed or the sensor is unusable) and, while a cold-start /
+    // eviction re-auth is in flight, a passive "Unlocking…" spinner with no
+    // tappable control. It builds in the interactive look; enterUiGate keeps it,
+    // coldStart/evictAndReauth flip it to the passive look.
     private fun buildLockOverlay(): View {
         fun dp(v: Int) = TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -372,18 +410,28 @@ class MainActivity : AppCompatActivity() {
                 textSize = 24f
                 gravity = Gravity.CENTER
             })
-            addView(TextView(this@MainActivity).apply {
+            // Passive-mode spinner, hidden in the interactive UI gate.
+            lockSpinner = ProgressBar(this@MainActivity).apply {
+                isIndeterminate = true
+                indeterminateTintList = ColorStateList.valueOf(Color.WHITE)
+                setPadding(0, dp(16), 0, 0)
+                visibility = View.GONE
+            }
+            addView(lockSpinner)
+            lockStatusText = TextView(this@MainActivity).apply {
                 setText(R.string.lock_overlay_locked)
                 setTextColor(Color.parseColor("#8a9099"))
                 textSize = 14f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(8), 0, dp(24))
-            })
-            addView(Button(this@MainActivity).apply {
+            }
+            addView(lockStatusText)
+            lockUnlockButton = Button(this@MainActivity).apply {
                 setText(R.string.lock_overlay_unlock)
                 setOnClickListener { uiGateBiometric() }
-            })
-            addView(TextView(this@MainActivity).apply {
+            }
+            addView(lockUnlockButton)
+            lockUsePassword = TextView(this@MainActivity).apply {
                 setText(R.string.lock_overlay_use_password)
                 setTextColor(Color.parseColor("#8a9099"))
                 textSize = 14f
@@ -392,8 +440,25 @@ class MainActivity : AppCompatActivity() {
                 // Escape hatch: drop to full eviction so the user can re-auth with
                 // the app password if biometrics are unavailable.
                 setOnClickListener { clearGate(); evictAndReauth() }
-            })
+            }
+            addView(lockUsePassword)
         }
+    }
+
+    // setOverlayUnlocking switches the overlay between its passive "Unlocking…"
+    // look (a spinner, no tappable control) while a cold-start / eviction re-auth
+    // is in flight, and its interactive UI-gate look (retry button + password
+    // escape hatch). The passive look matches iOS's `unlocking` state: the system
+    // biometric prompt drives the re-auth, so an Unlock button here would fire a
+    // second, redundant presence check on top of it, and the gate's password
+    // escape hatch is the wrong tier when the core is already being unlocked.
+    private fun setOverlayUnlocking(unlocking: Boolean) {
+        if (!::lockStatusText.isInitialized) return
+        lockStatusText.setText(
+            if (unlocking) R.string.lock_overlay_unlocking else R.string.lock_overlay_locked)
+        lockSpinner.visibility = if (unlocking) View.VISIBLE else View.GONE
+        lockUnlockButton.visibility = if (unlocking) View.GONE else View.VISIBLE
+        lockUsePassword.visibility = if (unlocking) View.GONE else View.VISIBLE
     }
 
     // promptBiometricUnlock shows the system biometric prompt and, on success,

@@ -75,11 +75,9 @@ struct WebView: UIViewRepresentable {
         func webView(_ webView: WKWebView,
                      decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            if let target = navigationAction.request.url, Coordinator.isLoopback(target) {
-                decisionHandler(.allow)
-            } else {
-                decisionHandler(.cancel)
-            }
+            let target = navigationAction.request.url
+            let ok = target.map(Coordinator.isLoopback) ?? false
+            decisionHandler(ok ? .allow : .cancel)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -88,6 +86,33 @@ struct WebView: UIViewRepresentable {
             MainActor.assumeIsolated {
                 model.onPageFinished()
             }
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            guard !Coordinator.isCancelled(error) else { return }
+            MainActor.assumeIsolated {
+                NSLog("bossw: nav didFailProvisional: \(error.localizedDescription)")
+                model.onPageLoadFailed()
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            guard !Coordinator.isCancelled(error) else { return }
+            MainActor.assumeIsolated {
+                NSLog("bossw: nav didFail: \(error.localizedDescription)")
+                model.onPageLoadFailed()
+            }
+        }
+
+        // isCancelled reports whether an error is just WebKit superseding one load
+        // with another (NSURLErrorCancelled), not a real navigation failure. This
+        // fires on the cold-start reveal: setting url starts the boot-URL load, and
+        // a biometric unlock that completes before it finishes issues the grant-URL
+        // load, cancelling the boot navigation. Treating that as a failure would run
+        // onPageLoadFailed and drop the just-unlocked session back to the login
+        // screen, so ignore it — the superseding load will report its own outcome.
+        static func isCancelled(_ error: Error) -> Bool {
+            (error as NSError).code == NSURLErrorCancelled
         }
 
         // isLoopback reports whether url targets the in-process appserver:

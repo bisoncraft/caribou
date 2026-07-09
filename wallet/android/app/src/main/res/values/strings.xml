@@ -25,6 +25,7 @@
     <!-- UI-gate lock overlay. -->
     <string name="lock_overlay_title">Boss Wallet</string>
     <string name="lock_overlay_locked">Locked</string>
+    <string name="lock_overlay_unlocking">Unlocking…</string>
     <string name="lock_overlay_unlock">Unlock</string>
     <string name="lock_overlay_use_password">Use password instead</string>
 </resources>

@@ -16,6 +16,7 @@
     <string name="unlock_prompt_title">Destrancar a Boss Wallet</string>
 
     <string name="lock_overlay_locked">Bloqueado</string>
+    <string name="lock_overlay_unlocking">Desbloqueando…</string>
     <string name="lock_overlay_unlock">Destrancar</string>
     <string name="lock_overlay_use_password">Usar senha</string>
 </resources>
