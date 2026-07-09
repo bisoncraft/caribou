@@ -94,7 +94,7 @@ func fileServer(rr chi.Router, pathPrefix string) {
 	// For the chi.Mux, make sure a path that ends in "/" and append a "*".
 	muxRoot := pathPrefix
 	if pathPrefix != "/" && pathPrefix[len(pathPrefix)-1] != '/' {
-		rr.Get(pathPrefix, http.RedirectHandler(pathPrefix+"/", 301).ServeHTTP)
+		rr.Get(pathPrefix, http.RedirectHandler(pathPrefix+"/", http.StatusMovedPermanently).ServeHTTP)
 		muxRoot += "/"
 	}
 	muxRoot += "*"

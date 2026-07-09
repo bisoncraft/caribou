@@ -148,9 +148,17 @@ func writeFileAtomic(path string, data []byte) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("writing temp key file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("syncing temp key file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("closing temp key file: %w", err)
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("renaming temp key file: %w", err)
+	}
+	return syncDir(filepath.Dir(path))
 }

@@ -398,6 +398,7 @@ func TestAcrossBridgeLimits(t *testing.T) {
 		stubDexnetClient(t, h.transport())
 
 		b := &acrossBridge{
+			ctx:        context.Background(),
 			net:        util.Mainnet,
 			chainID:    testAcrossEthChainID,
 			apiBaseURL: "https://app.across.to",
@@ -434,7 +435,7 @@ func TestAcrossBridgeLimits(t *testing.T) {
 			return http.StatusOK, `{"minDeposit":"notanumber","maxDeposit":"5000000"}`
 		})
 		stubDexnetClient(t, h.transport())
-		b := &acrossBridge{net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
+		b := &acrossBridge{ctx: context.Background(), net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
 		if _, _, _, err := b.bridgeLimits(ethID, baseID); err == nil {
 			t.Error("expected error for malformed minDeposit")
 		}
@@ -446,7 +447,7 @@ func TestAcrossBridgeLimits(t *testing.T) {
 			return http.StatusOK, `{"minDeposit":"1000","maxDeposit":"notanumber"}`
 		})
 		stubDexnetClient(t, h.transport())
-		b := &acrossBridge{net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
+		b := &acrossBridge{ctx: context.Background(), net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
 		if _, _, _, err := b.bridgeLimits(ethID, baseID); err == nil {
 			t.Error("expected error for malformed maxDeposit")
 		}
@@ -458,7 +459,7 @@ func TestAcrossBridgeLimits(t *testing.T) {
 			return http.StatusServiceUnavailable, `down`
 		})
 		stubDexnetClient(t, h.transport())
-		b := &acrossBridge{net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
+		b := &acrossBridge{ctx: context.Background(), net: util.Mainnet, chainID: testAcrossEthChainID, apiBaseURL: "https://app.across.to"}
 		if _, _, _, err := b.bridgeLimits(ethID, baseID); err == nil {
 			t.Error("expected error on 503")
 		}
@@ -476,7 +477,7 @@ func TestAcrossBridgeSupportedAsset(t *testing.T) {
 }
 
 // TestAcrossBridgeSupportedDestinations covers the supportedDestinations method,
-// which wraps acrossSupportedDestinations with a background context and swallows
+// which wraps acrossSupportedDestinations with the bridge's context and swallows
 // errors into a nil return after logging.
 func TestAcrossBridgeSupportedDestinations(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
@@ -488,7 +489,7 @@ func TestAcrossBridgeSupportedDestinations(t *testing.T) {
 		stubDexnetClient(t, h.transport())
 
 		log := newFakeLogger()
-		b := &acrossBridge{net: util.Mainnet, log: log}
+		b := &acrossBridge{ctx: context.Background(), net: util.Mainnet, log: log}
 		dests := b.supportedDestinations(ethID)
 		if len(dests) != 1 || dests[0] != baseID {
 			t.Fatalf("dests = %v, want [%d]", dests, baseID)
@@ -507,7 +508,7 @@ func TestAcrossBridgeSupportedDestinations(t *testing.T) {
 		stubDexnetClient(t, h.transport())
 
 		log := newFakeLogger()
-		b := &acrossBridge{net: util.Mainnet, log: log}
+		b := &acrossBridge{ctx: context.Background(), net: util.Mainnet, log: log}
 		// Unknown source asset makes acrossSupportedDestinations error; the
 		// wrapper must log and return nil rather than propagate.
 		if dests := b.supportedDestinations(0xDEADBEEF); dests != nil {
@@ -541,6 +542,7 @@ func TestAcrossInitiateBridgeErrors(t *testing.T) {
 		})
 		stubDexnetClient(t, h.transport())
 		return &acrossBridge{
+			ctx:          context.Background(),
 			net:          util.Mainnet,
 			chainAssetID: ethID,
 			chainID:      testAcrossEthChainID,

@@ -3858,22 +3858,6 @@ func (dcr *ExchangeWallet) syncTxHistory(ctx context.Context, tip uint64) {
 	}
 }
 
-func (dcr *ExchangeWallet) removeTxFromHistory(txHash *chainhash.Hash) {
-	txHistoryDB := dcr.txDB()
-	if txHistoryDB == nil {
-		return
-	}
-
-	dcr.pendingTxsMtx.Lock()
-	delete(dcr.pendingTxs, *txHash)
-	dcr.pendingTxsMtx.Unlock()
-
-	err := txHistoryDB.RemoveTx(txHash.String())
-	if err != nil {
-		dcr.log.Errorf("failed to remove tx from tx history db: %v", err)
-	}
-}
-
 func (dcr *ExchangeWallet) addTxToHistory(wt *txdb.WalletTransaction, txHash *chainhash.Hash, skipNotes ...bool) {
 	txHistoryDB := dcr.txDB()
 	if txHistoryDB == nil {

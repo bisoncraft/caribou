@@ -13,7 +13,6 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 )
 
@@ -90,7 +89,7 @@ var (
 		Type:              walletTypeRPC,
 		Tab:               "External",
 		Description:       "Connect to dogecoind",
-		DefaultConfigPath: dexbtc.SystemConfigPath("dogecoin"),
+		DefaultConfigPath: btc.SystemConfigPath("dogecoin"),
 		ConfigOpts:        configOpts,
 	}
 	// WalletInfo defines some general information about a Dogecoin wallet.
@@ -136,7 +135,7 @@ func (d *Driver) Info() *asset.WalletInfo {
 // dust outputs on the swap and refund txs, assuming the maxFeeRate doesn't
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
-	return dustLimit + dexbtc.RedeemSwapTxSize(false)*maxFeeRate
+	return dustLimit + btc.RedeemSwapTxSize(false)*maxFeeRate
 }
 
 // NewWallet is the exported constructor by which the DEX will import the
@@ -158,7 +157,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 
 	// Designate the clone ports. These will be overwritten by any explicit
 	// settings in the configuration file.
-	ports := dexbtc.NetPorts{
+	ports := btc.NetPorts{
 		Mainnet: "22555",
 		Testnet: "44555",
 		Simnet:  "18332",
@@ -176,8 +175,8 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		DefaultFeeRateLimit:      DefaultFeeRateLimit,
 		LegacyBalance:            true,
 		Segwit:                   false,
-		InitTxSize:               dexbtc.InitTxSize,
-		InitTxSizeBase:           dexbtc.InitTxSizeBase,
+		InitTxSize:               btc.InitTxSize,
+		InitTxSizeBase:           btc.InitTxSizeBase,
 		OmitAddressType:          true,
 		LegacySignTxRPC:          true,
 		LegacyValidateAddressRPC: true,
