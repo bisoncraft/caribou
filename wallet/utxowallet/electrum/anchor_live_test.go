@@ -110,3 +110,37 @@ func TestAnchorHeaderSync(t *testing.T) {
 		})
 	}
 }
+
+// TestLiveObservers verifies phase-2 observer connections against public
+// infrastructure: with the full shipped BTC mainnet list, Start elects a
+// wallet server and brings up header-only observers on other candidates.
+func TestLiveObservers(t *testing.T) {
+	anchorTestLogger(t)
+	params := assets.BTCParams["mainnet"]
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: params.ElectrumServers,
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	if err := net.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net.Stop()
+	deadline := time.Now().Add(90 * time.Second)
+	for net.ObserverCount() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no observers connected within 90s")
+		}
+		time.Sleep(time.Second)
+	}
+	t.Logf("observers connected: %d", net.ObserverCount())
+}

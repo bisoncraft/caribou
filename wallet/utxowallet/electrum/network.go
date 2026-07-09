@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -90,6 +91,16 @@ type Network struct {
 	// report meaningful sync progress before the local store catches up.
 	serverTipMu sync.RWMutex
 	serverTip   int32
+
+	// spendSuspect is set when an observer presented a conflicting chain
+	// that demonstrated valid work (multi-server phase 2): the wallet
+	// server may be lying, so spend-affecting operations error until a
+	// rotation re-establishes a trusted view. Nothing is surfaced
+	// proactively — the error reaches the user only if they act.
+	spendSuspect atomic.Bool
+
+	// observerCount tracks live observer connections (see observers.go).
+	observerCount atomic.Int32
 }
 
 // NewNetwork constructs a Network ready to be Started.
@@ -125,6 +136,20 @@ func NewNetwork(cfg *Config) (*Network, error) {
 // Headers returns the underlying header store. Useful for chain.Backend
 // implementations that need direct read access.
 func (n *Network) Headers() *Headers { return n.headers }
+
+// candidates returns the deduplicated configured server pool.
+func (n *Network) candidates() []*ServerAddr {
+	out := make([]*ServerAddr, 0, len(n.cfg.Servers)+1)
+	seen := make(map[string]bool)
+	for _, sv := range append([]*ServerAddr{n.cfg.TrustedServer}, n.cfg.Servers...) {
+		if sv == nil || seen[sv.Addr] {
+			continue
+		}
+		seen[sv.Addr] = true
+		out = append(out, sv)
+	}
+	return out
+}
 
 // Start connects to the trusted server, subscribes to header notifications,
 // and returns promptly. The initial header chain download (which can take
@@ -192,15 +217,7 @@ func (n *Network) Start(parent context.Context) error {
 	// notifications that arrive during the background sync are buffered by
 	// the server's headersNotify channel; headersLoop drains them after
 	// sync completes.
-	candidates := make([]*ServerAddr, 0, len(n.cfg.Servers)+1)
-	seen := make(map[string]bool)
-	for _, sv := range append([]*ServerAddr{n.cfg.TrustedServer}, n.cfg.Servers...) {
-		if sv == nil || seen[sv.Addr] {
-			continue
-		}
-		seen[sv.Addr] = true
-		candidates = append(candidates, sv)
-	}
+	candidates := n.candidates()
 	var node *Node
 	var tip *HeadersTip
 	var dialErr error
@@ -246,6 +263,15 @@ func (n *Network) Start(parent context.Context) error {
 	n.wg.Add(2)
 	go n.scripthashLoop()
 	go n.watchNode(node)
+
+	// Observer connections (multi-server phase 2): header-only
+	// subscriptions on the remaining candidates, watching for a lagging or
+	// lying wallet server. Only meaningful when there is anyone else to
+	// ask.
+	if len(n.candidates()) > 1 {
+		n.wg.Add(1)
+		go n.runObservers(node.Addr().Addr)
+	}
 
 	// The background sync goroutine is wg-tracked so WaitForShutdown waits
 	// for it. It runs syncHeaders, then (on success) hands off to headersLoop.
@@ -436,6 +462,10 @@ func (n *Network) GetTransactionVerbose(ctx context.Context, txid string) (*Verb
 
 // Broadcast issues `blockchain.transaction.broadcast`.
 func (n *Network) Broadcast(ctx context.Context, rawTxHex string) (string, error) {
+	if n.spendSuspect.Load() {
+		return "", errors.New("electrum: chain integrity suspect (conflicting " +
+			"chain with valid work observed); broadcasts suspended pending rotation")
+	}
 	node, err := n.getNode()
 	if err != nil {
 		return "", err
