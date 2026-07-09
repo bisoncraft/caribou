@@ -596,3 +596,79 @@ func TestSurgicalRotation(t *testing.T) {
 	default:
 	}
 }
+
+// TestDivergenceReorgPromotion covers rotation plan R5: an observer serving
+// an equal-work conflicting chain passes the dissent audit; the wallet
+// server is quarantined, broadcasts suspend, the dissenter is promoted, the
+// header store reorgs onto its chain, and the suspension lifts.
+func TestDivergenceReorgPromotion(t *testing.T) {
+	oldInterval := observerCompareInterval
+	observerCompareInterval = 50 * time.Millisecond
+	t.Cleanup(func() { observerCompareInterval = oldInterval })
+
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	fA, params := newFakeServer(t, 15)
+	fB, _ := newFakeServer(t, 15)
+	// B forks three blocks below the tip and mines back to the SAME height:
+	// equal cumulative work, which the audit treats as credible dissent.
+	fB.Fork(11, 3)
+	if fB.Tip() != fA.Tip() {
+		t.Fatalf("fork setup: tips %d vs %d", fB.Tip(), fA.Tip())
+	}
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{fA.addr(), fB.addr()},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net_.Stop()
+	waitFor(t, "sync on A's chain", func() bool { return net_.Synced() && net_.Tip() == 14 })
+
+	// Drain tip notifications so the reorg delivery below can't block on
+	// the unbuffered-ish channel.
+	go func() {
+		for range net_.TipChangeChan() { //nolint:revive
+		}
+	}()
+
+	fBTip := fB.Tip()
+	fB.mtx.Lock()
+	wantTip := fB.chain[fBTip].BlockHash()
+	fB.mtx.Unlock()
+
+	// The observer connects to B, sees the conflicting tip at a height we
+	// have, and the divergence machinery takes it from there. The compare
+	// loop ticks every observerCompareInterval (30s) — nudge it by forcing
+	// an immediate pass through fill+compare via a fresh notification.
+	waitFor(t, "rotation to the dissenter", func() bool {
+		return net_.currentWalletAddr() == fB.addr().Addr
+	})
+	waitFor(t, "reorg onto B's chain", func() bool {
+		return net_.TipHash() == wantTip
+	})
+	if !serverHealth.quarantined[fA.addr().Addr] {
+		t.Fatal("losing wallet server not quarantined")
+	}
+	waitFor(t, "broadcast suspension lifted", func() bool {
+		return !net_.spendSuspect.Load()
+	})
+	select {
+	case <-net_.Done():
+		t.Fatal("network shut down during reorg promotion")
+	default:
+	}
+}

@@ -1063,7 +1063,7 @@ func (n *Network) watchNode(node *Node) {
 			n.wg.Add(1)
 			go func() {
 				defer n.wg.Done()
-				n.rotate(node, "connection lost")
+				n.rotate(node, "", "connection lost")
 			}()
 			return
 		}

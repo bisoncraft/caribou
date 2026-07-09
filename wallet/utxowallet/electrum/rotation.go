@@ -7,8 +7,12 @@ package electrum
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/btcsuite/btcd/wire"
 )
 
 // Surgical wallet-server rotation (docs/electrum-surgical-rotation-plan.md
@@ -31,7 +35,7 @@ type rotationGuard struct {
 // installed (its watchNode owns the eventual close), or the closer is
 // spawned here (Stop/failure paths). The old group's watchNode deliberately
 // does not spawn the closer when handing off to rotation.
-func (n *Network) rotate(dead *Node, reason string) {
+func (n *Network) rotate(dead *Node, preferred, reason string) {
 	n.rot.mtx.Lock()
 	defer n.rot.mtx.Unlock()
 
@@ -63,7 +67,22 @@ func (n *Network) rotate(dead *Node, reason string) {
 	// reachability, genesis, and chain agreement — restricted to the
 	// wallet-eligible tier (shipped first; discovered only under the
 	// gated fallback) — else a fresh dial down the same election order.
-	for _, sv := range n.pool.walletCandidates() {
+	// A caller-preferred successor (the winning side of a verified
+	// divergence) moves to the front IF the tiers admit it; a preferred
+	// server outside the eligible set is ignored, and convergence comes
+	// from wrong-chain servers repeatedly losing divergence audits until
+	// a heavier-chain server holds the slot.
+	candidates := n.pool.walletCandidates()
+	if preferred != "" {
+		for i, sv := range candidates {
+			if sv.Addr == preferred && i > 0 {
+				candidates = append([]*ServerAddr{sv},
+					append(append([]*ServerAddr{}, candidates[:i]...), candidates[i+1:]...)...)
+				break
+			}
+		}
+	}
+	for _, sv := range candidates {
 		if sv.Addr == dead.Addr().Addr {
 			continue
 		}
@@ -91,6 +110,12 @@ func (n *Network) rotate(dead *Node, reason string) {
 			continue
 		}
 		n.pool.recordSuccess(sv.Addr)
+		// Any successful attachment re-validated a chain end to end
+		// (anchored headers, subscriptions replayed); a divergence
+		// suspension no longer reflects the wallet's view.
+		if n.spendSuspect.CompareAndSwap(true, false) {
+			log.Infof("electrum: broadcast suspension lifted after rotation")
+		}
 		log.Infof("electrum: rotated wallet server to %s (tip %d)",
 			sv.Addr, tip.Height)
 		return
@@ -137,6 +162,52 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
 		return err
 	}
+
+	// A successor whose tip CONFLICTS at our height (a verified-divergence
+	// tie) needs forced reconciliation: the passive path keeps first-seen
+	// on equal work, but this node's histories reference ITS chain — the
+	// store must follow or replayed confirmed entries would bind to the
+	// wrong block hashes. Rewind and refill from the successor via the
+	// standard reorg-recovery catch-up, publishing the disconnects.
+	rawTip, err := hex.DecodeString(tip.Hex)
+	if err != nil {
+		return fmt.Errorf("electrum: successor tip header: %w", err)
+	}
+	var tipHdr wire.BlockHeader
+	if err := tipHdr.Deserialize(bytes.NewReader(rawTip)); err != nil {
+		return fmt.Errorf("electrum: successor tip header: %w", err)
+	}
+	claimed := tipHdr.BlockHash()
+	fetch := func(startHeight, count int32) ([]byte, int, error) {
+		batch, err := node.BlockHeaders(n.ctx, startHeight, int(count))
+		if err != nil {
+			return nil, 0, err
+		}
+		if batch.Count == 0 {
+			return nil, 0, nil
+		}
+		raw, err := hex.DecodeString(batch.HexConcat)
+		if err != nil {
+			return nil, 0, err
+		}
+		return raw, batch.Count, nil
+	}
+	for n.ctx.Err() == nil && tip.Height == n.headers.Tip() &&
+		n.headers.TipHash() != claimed {
+		disc, err := n.headers.Rewind(reorgRewindDepth)
+		if err != nil {
+			return fmt.Errorf("electrum: reconcile rewind: %w", err)
+		}
+		more, err := n.catchUpFrom(tip.Height, fetch)
+		if err != nil {
+			return fmt.Errorf("electrum: reconcile catch-up: %w", err)
+		}
+		disc = append(disc, more...)
+		if len(disc) > 0 && !n.deliverTipChange(&TipChange{Disconnected: disc}) {
+			return errors.New("electrum: shutdown during reconciliation")
+		}
+	}
+
 	if err := n.replaySubscriptions(n.ctx, node); err != nil {
 		return err
 	}
@@ -196,7 +267,7 @@ func (n *Network) lagRotate(lagBlocks int32, lagFor time.Duration) {
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
-		n.rotate(node, "lagging observers by "+lagFor.Round(time.Second).String())
+		n.rotate(node, "", "lagging observers by "+lagFor.Round(time.Second).String())
 	}()
 	_ = lagBlocks
 }

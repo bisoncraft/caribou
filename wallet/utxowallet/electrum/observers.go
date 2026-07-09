@@ -30,10 +30,6 @@ const (
 	// maxObservers bounds the observer connections per network.
 	maxObservers = 3
 
-	// observerCompareInterval is how often observer tips are compared
-	// against the local chain.
-	observerCompareInterval = 30 * time.Second
-
 	// lagWindow converts to the lag threshold in blocks: the wallet server
 	// is a lag candidate when the best observer is at least this much work
 	// time ahead at the chain's target spacing. Two blocks mined seconds
@@ -62,6 +58,11 @@ func (n *Network) observerNodes() []*Node {
 	}
 	return out
 }
+
+// observerCompareInterval is how often observer tips are compared against
+// the local chain. A variable rather than a constant so rotation tests can
+// tighten the loop.
+var observerCompareInterval = 30 * time.Second
 
 // observer is one header-only server connection.
 type observer struct {
@@ -122,7 +123,10 @@ func (n *Network) runObservers() {
 	// Discovery (multi-server phase 4): poll server.peers.subscribe on the
 	// connected servers, folding advertised peers into the persistent pool.
 	// Hourly, plus once at startup.
-	const discoverEvery = int(time.Hour / observerCompareInterval)
+	discoverEvery := int(time.Hour / observerCompareInterval)
+	if discoverEvery < 1 {
+		discoverEvery = 1
+	}
 	tick := 0
 
 	for {
@@ -332,15 +336,32 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		o.node.Close()
 		return
 	}
-	// The dissenting chain carries at least as much real work as ours: our
-	// wallet server may be on the wrong chain. Suspend spends and rotate;
-	// the rebuilt network re-elects and re-validates.
+	// The dissenting chain carries at least as much real work as ours: the
+	// wallet server lost a verified divergence. Suspend broadcasts,
+	// quarantine the loser (misbehavior, not slowness), and rotate
+	// surgically — preferring the dissenter, whose chain won the
+	// comparison and whose fork segment just passed the audit. The header
+	// reorg rides the successor's initial tip application through the
+	// existing rewind machinery; the suspension lifts when a rotation
+	// succeeds.
 	log.Errorf("electrum: observer %s presents a conflicting chain with valid "+
 		"work at height %d — possible eclipse or fork; suspending broadcasts "+
 		"and rotating away from %s", o.node.Addr().Addr, h, walletAddr)
 	n.spendSuspect.Store(true)
-	n.pool.recordFailure(walletAddr)
-	n.Stop()
+	n.pool.quarantine(walletAddr, fmt.Sprintf(
+		"lost a verified divergence at height %d to %s", h, o.node.Addr().Addr))
+	n.mu.Lock()
+	walletNode := n.node
+	n.mu.Unlock()
+	if walletNode == nil {
+		return
+	}
+	dissenter := o.node.Addr().Addr
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		n.rotate(walletNode, dissenter, "lost verified divergence")
+	}()
 }
 
 // discoverPeers polls server.peers.subscribe on every connected server and
