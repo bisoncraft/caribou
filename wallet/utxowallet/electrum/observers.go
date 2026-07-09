@@ -225,12 +225,16 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 	}
 	res, err := o.node.BlockHeaders(n.ctx, start, int(h-start)+1)
 	if err != nil {
+		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
+			"work audit (header fetch: %v); demoting", o.node.Addr().Addr, h, err)
 		recordServerFailure(o.node.Addr().Addr)
 		o.node.Close()
 		return
 	}
 	raw, err := hex.DecodeString(res.HexConcat)
 	if err != nil || len(raw) < n.cfg.Chain.HeaderSize {
+		log.Warnf("electrum: observer %s diverged at height %d but returned an "+
+			"unusable header batch; demoting", o.node.Addr().Addr, h)
 		recordServerFailure(o.node.Addr().Addr)
 		o.node.Close()
 		return
@@ -238,6 +242,8 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 	for off := 0; off+n.cfg.Chain.HeaderSize <= len(raw); off += n.cfg.Chain.HeaderSize {
 		var hdr wire.BlockHeader
 		if err := hdr.Deserialize(bytes.NewReader(raw[off : off+n.cfg.Chain.HeaderSize])); err != nil {
+			log.Warnf("electrum: observer %s diverged at height %d but served an "+
+				"undecodable header; demoting: %v", o.node.Addr().Addr, h, err)
 			recordServerFailure(o.node.Addr().Addr)
 			o.node.Close()
 			return
@@ -255,8 +261,9 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 	// The dissenting chain carries real work: our wallet server may be on
 	// the wrong chain. Suspend spends and rotate; the rebuilt network
 	// re-elects and re-validates.
-	log.Warnf("electrum: observer %s presents a conflicting chain with valid "+
-		"work at height %d; suspending spends and rotating", o.node.Addr().Addr, h)
+	log.Errorf("electrum: observer %s presents a conflicting chain with valid "+
+		"work at height %d — possible eclipse or fork; suspending broadcasts "+
+		"and rotating away from %s", o.node.Addr().Addr, h, walletAddr)
 	n.spendSuspect.Store(true)
 	recordServerFailure(walletAddr)
 	n.Stop()

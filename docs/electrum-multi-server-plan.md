@@ -93,10 +93,12 @@ continuously. Policy (decided):
   observer must not be able to freeze the wallet — work is unforgeable,
   majorities of three are not). Verified divergence suspends
   spend-affecting operations and attempts resolution by rotation.
-- **No proactive UI.** Degraded states (lag, divergence, observer loss)
-  surface nothing. The user sees an error only when they attempt an
-  operation that cannot be performed safely — including the case where
-  every connection is down.
+- **No proactive UI; full logging.** Degraded states (lag, divergence,
+  observer loss, refused broadcasts) surface nothing in the UI but are
+  always logged — verified divergence and refused broadcasts at error
+  level. The user sees an error only when they attempt an operation that
+  cannot be performed safely — including the case where every connection
+  is down.
 
 ### Phase 3 — Broadcast fan-out
 

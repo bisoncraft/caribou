@@ -463,6 +463,8 @@ func (n *Network) GetTransactionVerbose(ctx context.Context, txid string) (*Verb
 // Broadcast issues `blockchain.transaction.broadcast`.
 func (n *Network) Broadcast(ctx context.Context, rawTxHex string) (string, error) {
 	if n.spendSuspect.Load() {
+		log.Errorf("electrum: refusing broadcast: chain integrity suspect " +
+			"(conflicting chain with valid work observed); pending rotation")
 		return "", errors.New("electrum: chain integrity suspect (conflicting " +
 			"chain with valid work observed); broadcasts suspended pending rotation")
 	}
