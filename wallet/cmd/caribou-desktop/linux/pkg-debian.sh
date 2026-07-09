@@ -35,7 +35,7 @@ CONTROL_DIR="${DEB_DIR}/DEBIAN"
 POSTINST_PATH="${CONTROL_DIR}/postinst"
 POSTRM_PATH="${CONTROL_DIR}/postrm"
 
-# The dexc binary.
+# The caribou binary.
 BIN_TARGETDIR="/usr/bin"
 BIN_BUILDDIR="${DEB_DIR}${BIN_TARGETDIR}"
 BIN_FILENAME="${APP}"
@@ -46,7 +46,7 @@ BIN_BUILDPATH="${BIN_BUILDDIR}/${BIN_FILENAME}"
 # https://specifications.freedesktop.org/desktop-entry-spec/latest/
 DOT_DESKTOP_TARGETDIR="/usr/share/applications"
 DOT_DESKTOP_BUILDDIR="${DEB_DIR}${DOT_DESKTOP_TARGETDIR}"
-DOT_DESKTOP_FILENAME="caribou.desktop"
+DOT_DESKTOP_FILENAME="org.bisoncraft.caribou.desktop"
 DOT_DESKTOP_BUILDPATH="${DOT_DESKTOP_BUILDDIR}/${DOT_DESKTOP_FILENAME}"
 
 # Prepare the directory structure.
@@ -76,12 +76,12 @@ fi
 # Full control file specification -
 # https://www.debian.org/doc/debian-policy/ch-controlfields.html
 cat > "${CONTROL_DIR}/control" <<EOF
-Package: caribou
+Package: ${PKG}
 Version: ${VER}
 Architecture: ${ARCH}
-Maintainer: Decred developers <briantstafford@gmail.com>
+Maintainer: The Caribou Developers <briantstafford@gmail.com>
 Depends: libgtk-3-0, libwebkit2gtk-4.1-0
-Description: A multi-wallet backed by Decred DEX
+Description: A non-custodial, multi-chain wallet
 EOF
 
 # Copy icons
@@ -108,7 +108,7 @@ cat > "${DOT_DESKTOP_BUILDPATH}" <<EOF
 [Desktop Entry]
 Version=1.5
 Name=Caribou
-Comment=Multi-wallet backed by Decred DEX
+Comment=Non-custodial, multi-chain wallet
 Exec=${BIN_FILENAME}
 Icon=${APP}
 Terminal=false

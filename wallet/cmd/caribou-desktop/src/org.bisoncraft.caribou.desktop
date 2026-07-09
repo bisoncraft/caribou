@@ -2,9 +2,9 @@
 Version=1.0
 Type=Application
 Name=Caribou
-Comment=Multi-wallet backed by Decred DEX
+Comment=Non-custodial, multi-chain wallet
 Categories=Office;Finance;
 Icon=org.bisoncraft.caribou
-Exec=dexc
+Exec=caribou
 Terminal=false
 StartupWMClass=Caribou

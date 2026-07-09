@@ -251,7 +251,7 @@ function setApplicationMenu() {
           label: "Website",
           click: async () => {
             const { shell } = require("electron");
-            await shell.openExternal("https://bisonwallet.com");
+            await shell.openExternal("https://github.com/bisoncraft/caribou");
           },
         },
         {
@@ -265,7 +265,7 @@ function setApplicationMenu() {
           label: "Documentation",
           click: async () => {
             const { shell } = require("electron");
-            await shell.openExternal("https://github.com/decred/dcrdex/wiki");
+            await shell.openExternal("https://github.com/bisoncraft/caribou#readme");
           },
         },
       ],

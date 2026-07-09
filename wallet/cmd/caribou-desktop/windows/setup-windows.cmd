@@ -78,11 +78,11 @@ if %errorlevel% neq 0 (
 del %PowerShellInstaller%
 
 :: Clone the dcrdex repository
-if exist dcrdex rd /s /q dcrdex
+if exist caribou rd /s /q caribou
 @echo Cloning %repoUrl%@%repoBranch%...
 "c:\Program Files\Git\bin\git.exe" clone -b %repoBranch% %repoUrl%
 
-cd dcrdex\client\cmd\caribou-desktop
+cd caribou\wallet\cmd\caribou-desktop
 
 :: Install toolchain and SDKs
 powershell  -ExecutionPolicy Bypass -File windows\setup-windows-stage2.ps1

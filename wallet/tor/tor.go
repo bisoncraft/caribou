@@ -35,7 +35,7 @@ func New(dataDir string, log util.Logger) (_ *HiddenService, err error) {
 	if len(torBinary) == 0 {
 		log.Error("It doesn't look like tor was packaged correctly")
 		log.Error("Tor is only available on Linux for now")
-		log.Error("If you are on linux and building bisonwallet from source, run wallet/tor/build_linux.sh and then rebuild bisonwallet")
+		log.Error("If you are on linux and building Caribou from source, run wallet/tor/build_linux.sh and then rebuild Caribou")
 		log.Error("If this is a release, we really botched it")
 		return nil, errors.New("tor not packaged")
 	}

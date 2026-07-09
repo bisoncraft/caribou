@@ -8,6 +8,10 @@ META= # "release"
 REV="0"
 
 APP="caribou"
+
+# The Debian package name. Deliberately not plain "caribou": the Ubuntu/Debian
+# archives already carry a (dead) GNOME package by that name.
+PKG="caribou-wallet"
 ARCH="amd64"
 
 # The build directory will be deleted at the beginning of every build. The
@@ -15,5 +19,5 @@ ARCH="amd64"
 BUILD_DIR="./build"
 
 # DEB_NAME follows the prescribed format for debian packaging.
-DEB_NAME="${APP}_${VER}-${REV}_${ARCH}"
+DEB_NAME="${PKG}_${VER}-${REV}_${ARCH}"
 

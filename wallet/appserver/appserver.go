@@ -327,11 +327,11 @@ func New(cfg *Config) (*AppServer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
 		}
-		execPath, err = filepath.EvalSymlinks(execPath) // e.g. /opt/decred/dex/caribou
+		execPath, err = filepath.EvalSymlinks(execPath) // e.g. /opt/caribou/caribou
 		if err != nil {
 			return nil, fmt.Errorf("unable to locate executable path: %w", err)
 		}
-		execPath = filepath.Dir(execPath) // e.g. /opt/decred/dex
+		execPath = filepath.Dir(execPath) // e.g. /opt/caribou
 
 		absDir, _ := filepath.Abs(site)
 		for _, dir := range []string{

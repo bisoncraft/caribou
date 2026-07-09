@@ -15,8 +15,8 @@ module.exports = {
     junk: true,
     platforms: ['darwin', 'win32', 'linux'],
     win32metadata: {
-      CompanyName: 'The Decred Developers',
-      FileDescription: 'A multi-coin wallet with DEX in-built.',
+      CompanyName: 'The Caribou Developers',
+      FileDescription: 'A non-custodial, multi-chain wallet.',
       OriginalFilename: 'Caribou.exe',
       ProductName: 'Caribou',
       InternalName: 'Caribou'
@@ -37,8 +37,8 @@ module.exports = {
       name: '@electron-forge/maker-squirrel',
       config: {
         name: 'Caribou',
-        authors: 'The Decred Developers',
-        description: 'A multi-coin wallet with DEX in-built.',
+        authors: 'The Caribou Developers',
+        description: 'A non-custodial, multi-chain wallet.',
         setupIcon: '../src/favicon-32.ico',
         setupExe: 'Caribou.exe',
         noMsi: true,
@@ -57,11 +57,11 @@ module.exports = {
       name: '@electron-forge/maker-deb',
       config: {
         options: {
-          maintainer: 'The Decred Developers',
-          homepage: 'https://bisonwallet.com',
+          maintainer: 'The Caribou Developers',
+          homepage: 'https://github.com/bisoncraft/caribou',
           icon: '../src/caribou.png',
           categories: ['Office', 'Finance'],
-          description: 'A multi-coin wallet with DEX in-built.',
+          description: 'A non-custodial, multi-chain wallet.',
         },
       },
     },
@@ -69,8 +69,8 @@ module.exports = {
       name: '@electron-forge/maker-rpm',
       config: {
         options: {
-          maintainer: 'The Decred Developers',
-          summary: 'A multi-coin wallet with DEX in-built.',
+          maintainer: 'The Caribou Developers',
+          summary: 'A non-custodial, multi-chain wallet.',
           icon: '../src/caribou.png',
           categories: ['Office', 'Finance'],
         },

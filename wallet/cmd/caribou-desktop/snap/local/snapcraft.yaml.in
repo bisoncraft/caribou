@@ -29,7 +29,7 @@ apps:
   caribou:
     common-id: org.bisoncraft.caribou
     command: usr/bin/caribou
-    desktop: usr/share/applications/caribou.desktop
+    desktop: usr/share/applications/org.bisoncraft.caribou.desktop
     extensions: [gnome]
     environment:
       GTK_USE_PORTAL: "1"
@@ -63,7 +63,7 @@ parts:
     override-build: |
       craftctl default
       # Point icon to the correct location
-      sed -i -e 's|Icon=.*$|Icon=usr/share/icons/hicolor/scalable/apps/caribou.svg|' $SNAPCRAFT_PART_INSTALL/usr/share/applications/caribou.desktop
+      sed -i -e 's|Icon=.*$|Icon=usr/share/icons/hicolor/scalable/apps/caribou.svg|' $SNAPCRAFT_PART_INSTALL/usr/share/applications/org.bisoncraft.caribou.desktop
   
     # prune unused libs added by .deb dependencies from the .snap
     prime:

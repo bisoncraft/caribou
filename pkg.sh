@@ -33,10 +33,6 @@ build_targets (){
     GOOS=${OS} GOARCH=${ARCH} go build -trimpath ${TAGS_CARIBOU:+-tags ${TAGS_CARIBOU}} -o "../../../bin/caribou-${OS}-${ARCH}-v${VER}/${CARIBOU_EXE}" -ldflags "${LDFLAGS_CARIBOU:-${LDFLAGS_BASE}}"
     popd
 
-    pushd wallet/cmd/bwctl
-    GOOS=${OS} GOARCH=${ARCH} go build -trimpath -o "../../../bin/caribou-${OS}-${ARCH}-v${VER}" -ldflags "${LDFLAGS_BASE}"
-    popd
-
     pushd bin
     if [[ "$OS" == "windows" ]]; then
       zip -9 -r -q "caribou-${OS}-${ARCH}-v${VER}.zip" "caribou-${OS}-${ARCH}-v${VER}"

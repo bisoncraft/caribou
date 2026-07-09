@@ -1,7 +1,7 @@
 {
   "name": "@caribou/newui",
   "version": "1.0.0",
-  "description": "React UI for dcrdex",
+  "description": "React UI for Caribou",
   "main": "index.js",
   "scripts": {
     "start": "webpack serve --mode development --open",

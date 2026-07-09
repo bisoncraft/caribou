@@ -2,16 +2,16 @@
 <component type="desktop-application">
   <id>org.bisoncraft.caribou</id>
   <launchable type="desktop-id">org.bisoncraft.caribou.desktop</launchable>
-  <name>Decred DEX Client</name>
-  <summary>Multi-wallet backed by Decred DEX</summary>
+  <name>Caribou</name>
+  <summary>Non-custodial, multi-chain wallet</summary>
   <metadata_license>MIT</metadata_license>
   <project_license>BlueOak-1.0.0</project_license>
-  <url type="homepage">https://dex.decred.org</url>
-  <url type="help">https://chat.decred.org/#/room/#dex:decred.org</url>
-  <developer_name>The Decred Developers</developer_name>
+  <url type="homepage">https://github.com/bisoncraft/caribou</url>
+  <url type="help">https://github.com/bisoncraft/caribou/issues</url>
+  <developer_name>The Caribou Developers</developer_name>
   <description>
     <p>
-      Self-custodial multi-wallet with built-in peer-to-peer exchange.
+      Caribou is a non-custodial, multi-chain cryptocurrency wallet.
     </p>
   </description>
 </component>
