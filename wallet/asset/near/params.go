@@ -32,6 +32,9 @@ var (
 				ConversionFactor: 1e5,
 			},
 		},
+		// The NEAR fee is a flat per-transaction amount, not a per-byte/per-gas
+		// rate.
+		FeeRateDenom: "tx",
 	}
 
 	// YoctoPerDrop is the number of yoctoNEAR per drop.

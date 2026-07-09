@@ -162,7 +162,7 @@ func TestExternalFeeRate(t *testing.T) {
 func fetchRateWithTimeout(t *testing.T, net util.Network) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
-	f := feeratefetcher.New(BitcoinFeeSources(net), tLogger)
+	f := feeratefetcher.New(BitcoinFeeSources(), tLogger)
 	feeRate := f.Rate(ctx)
 	if feeRate == 0 {
 		t.Fatalf("no fee rate fetched for %s", net)

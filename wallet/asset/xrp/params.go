@@ -35,6 +35,9 @@ var (
 			Unit:             "XRP",
 			ConversionFactor: 1e6,
 		},
+		// The XRP fee is a flat per-transaction amount (the load-scaled open
+		// ledger fee), not a per-byte/per-gas rate.
+		FeeRateDenom: "tx",
 	}
 
 	DefaultRPCEndpoints = map[util.Network]string{

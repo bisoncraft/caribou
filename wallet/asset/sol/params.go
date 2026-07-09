@@ -25,6 +25,9 @@ var (
 			Unit:             "SOL",
 			ConversionFactor: 1e9,
 		},
+		// The Solana fee is a flat per-transaction amount (base fee per
+		// signature), not a per-byte/per-gas rate.
+		FeeRateDenom: "tx",
 	}
 
 	DefaultRPCEndpoints = map[util.Network]string{

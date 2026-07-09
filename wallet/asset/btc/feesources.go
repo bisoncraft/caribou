@@ -160,24 +160,16 @@ func BitcoinerLiveSource(rank uint) *feeratefetcher.SourceConfig {
 	}
 }
 
-// BitcoinFeeSources returns the ranked fee-rate sources for BTC on the given
-// network. External APIs are mainnet-focused; on non-mainnet networks the
-// wallet relies primarily on the local node, so only sources with a usable
-// endpoint for the network are returned.
-func BitcoinFeeSources(net util.Network) []*feeratefetcher.SourceConfig {
-	switch net {
-	case util.Mainnet:
-		return []*feeratefetcher.SourceConfig{
-			MempoolSpaceSource("mempool.space", "https://mempool.space", 1),
-			BlockcypherSource("btc", 1),
-			BitcoinerLiveSource(1),
-			BlockchairSource("bitcoin", 3),
-		}
-	case util.Testnet:
-		return []*feeratefetcher.SourceConfig{
-			MempoolSpaceSource("mempool.space", "https://mempool.space/testnet", 1),
-		}
-	default:
-		return nil
+// BitcoinFeeSources returns the ranked fee-rate sources for BTC. The mainnet
+// sources are used on every network: on test networks a mainnet fee rate is a
+// reasonable proxy and avoids maintaining separate, less-reliable test
+// endpoints. bitcoiner.live reports a 30-minute-target rate, so it is ranked
+// below the next-block/medium sources rather than averaged with them.
+func BitcoinFeeSources() []*feeratefetcher.SourceConfig {
+	return []*feeratefetcher.SourceConfig{
+		MempoolSpaceSource("mempool.space", "https://mempool.space", 1),
+		BlockcypherSource("btc", 1),
+		BitcoinerLiveSource(2),
+		BlockchairSource("bitcoin", 3),
 	}
 }

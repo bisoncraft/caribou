@@ -186,23 +186,14 @@ func parseChainParams(net util.Network) (*chaincfg.Params, error) {
 	return nil, fmt.Errorf("unknown network ID %v", net)
 }
 
-// feeRateSources returns the ranked external fee-rate sources for LTC. External
-// APIs are mainnet-focused; on other networks the wallet relies primarily on
-// the local node.
-func feeRateSources(net util.Network) []*feeratefetcher.SourceConfig {
-	switch net {
-	case util.Mainnet:
-		return []*feeratefetcher.SourceConfig{
-			btc.MempoolSpaceSource("litecoinspace.org", "https://litecoinspace.org", 1),
-			btc.BlockcypherSource("ltc", 1),
-			btc.BitcoreSource("LTC", net, 2),
-			btc.BlockchairSource("litecoin", 3),
-		}
-	case util.Testnet:
-		return []*feeratefetcher.SourceConfig{
-			btc.BitcoreSource("LTC", net, 1),
-		}
-	default:
-		return nil
+// feeRateSources returns the ranked external fee-rate sources for LTC. The
+// mainnet sources are used on every network; on test networks a mainnet fee
+// rate is a reasonable proxy.
+func feeRateSources() []*feeratefetcher.SourceConfig {
+	return []*feeratefetcher.SourceConfig{
+		btc.MempoolSpaceSource("litecoinspace.org", "https://litecoinspace.org", 1),
+		btc.BlockcypherSource("ltc", 1),
+		btc.BitcoreSource("LTC", util.Mainnet, 2),
+		btc.BlockchairSource("litecoin", 3),
 	}
 }

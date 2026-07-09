@@ -50,20 +50,7 @@ func ltcElectrumChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 		ChainParams:    chainParams,
 		NetParams:      ltcTableNetParams(chainParams),
 		Info:           WalletInfo,
-		FeeRateSources: feeRateSources(ltcNetFromChainParams(chainParams)),
-	}
-}
-
-// ltcNetFromChainParams maps chaincfg params to the util.Network used to select
-// external fee-rate sources.
-func ltcNetFromChainParams(chainParams *chaincfg.Params) util.Network {
-	switch chainParams.Name {
-	case TestNet4Params.Name:
-		return util.Testnet
-	case RegressionNetParams.Name:
-		return util.Regtest
-	default:
-		return util.Mainnet
+		FeeRateSources: feeRateSources(),
 	}
 }
 

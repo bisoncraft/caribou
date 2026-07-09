@@ -108,20 +108,7 @@ func btcElectrumChainConfig(chainParams *chaincfg.Params) ChainConfig {
 		NetParams:      btcTableNetParams(chainParams),
 		Info:           WalletInfo,
 		BackendKind:    wallet.BackendElectrum,
-		FeeRateSources: BitcoinFeeSources(networkFromChainParams(chainParams)),
-	}
-}
-
-// networkFromChainParams maps chaincfg params to the util.Network used to select
-// external fee-rate sources.
-func networkFromChainParams(chainParams *chaincfg.Params) util.Network {
-	switch chainParams.Name {
-	case "testnet3", "testnet4":
-		return util.Testnet
-	case "regtest", "simnet":
-		return util.Regtest
-	default:
-		return util.Mainnet
+		FeeRateSources: BitcoinFeeSources(),
 	}
 }
 
@@ -202,6 +189,10 @@ type NativeWallet struct {
 	netParams   *netparams.ChainParams
 	emit        *asset.WalletEmitter
 	peersChange func(uint32, error)
+
+	// ctx is the wallet's lifetime context, set in Connect. It is used for
+	// on-demand fee-rate fetches so they cancel with the wallet.
+	ctx context.Context
 
 	// feeFetcher composites external fee-rate sources for FeeRate. It is nil
 	// when the chain has no configured sources (e.g. on regtest).
@@ -433,6 +424,7 @@ func (w *NativeWallet) Locked() bool {
 // and started inside wallet.Wallet via Synchronize), and launches background
 // goroutines for tx-history sync and peer monitoring. Satisfies util.Connector.
 func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	w.ctx = ctx
 
 	// recoveryWindow drives on-open address recovery, and the two backends use it
 	// differently. Recovery only runs when the window is > 0 (syncWithChain). For
@@ -715,8 +707,12 @@ func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
 // estimate via the underlying wallet. It returns zero only when neither can
 // provide a rate, in which case callers fall back to a default.
 func (w *NativeWallet) FeeRate() uint64 {
+	ctx := w.ctx
+	if ctx == nil {
+		return 0 // not connected
+	}
 	if w.feeFetcher != nil {
-		if r := w.feeFetcher.Rate(context.Background()); r != 0 {
+		if r := w.feeFetcher.Rate(ctx); r != 0 {
 			return r
 		}
 	}
@@ -725,7 +721,7 @@ func (w *NativeWallet) FeeRate() uint64 {
 	// estimatesmartfee-derived value of variable quality, so it is used only when
 	// the external sources above yield nothing.
 	if w.btcw != nil {
-		if r, err := w.btcw.FeeRate(context.Background()); err == nil {
+		if r, err := w.btcw.FeeRate(ctx); err == nil {
 			return r
 		}
 	}
