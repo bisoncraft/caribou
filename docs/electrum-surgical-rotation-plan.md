@@ -159,12 +159,52 @@ The headaches, named and contained:
   `electrum-multi-server-plan.md` phase 1; harness kill-server test via
   the dextest electrumx.
 
-## 8. Open questions
+## 8. Replay reconciliation: what the swap guarantees about missed activity
 
-- Quarantine duration/persistence (proposed 24h in the pool db; permanent
-  within the process) — confirm.
-- Whether lag-triggered rotation should quarantine or merely demote the
-  laggard (proposed: demote only — slowness is not hostility).
-- Whether R5's reorg promotion should require the dissenting observer to
-  serve the full fork segment before adoption (proposed: yes, bounded by
-  the checkpoint anchor).
+The subscription push is a cache-invalidation hint, not the source of
+truth. The electrum status is a hash commitment over an address's entire
+history (confirmed + mempool), and a subscribe returns the current status
+immediately — so the replay does not wait for future activity to close the
+gap:
+
+- **Status equal** to the stored baseline ⇒ the address's history is
+  byte-identical to what was already processed; nothing was missed while
+  blind. The equality is meaningful because the status commits to the full
+  history.
+- **Status differs** ⇒ the handler fetches the full history from the NEW
+  server and diffs against the processed baseline by (txid, height):
+  missed mempool arrivals, missed confirmations, and reorged entries
+  (height changes produce new pairs) are all delivered at promotion time.
+  Suppressed notifications from a misbehaving old server are therefore
+  recovered — omission self-heals.
+
+Preconditions already in place: the header catch-up precedes the replay
+(so confirmed entries are not parked awaiting headers), and the wtxmgr
+same-block ordering fixes make the per-address replay order safe at the
+store level.
+
+**The honest asymmetry — fabrication.** A hostile old wallet server that
+INVENTED history (a fake confirmed transaction) is not unwound by the
+replay: the diff drops fabricated entries from the subscription baseline,
+but the transaction already ingested into wtxmgr persists. This is the
+standing single-server electrum trust gap (transactions are ingested
+without merkle inclusion proofs) and is not introduced by rotation — but
+rotation is where it becomes visible. The structural fix is **R7**.
+
+## 9. Increment R7 — merkle inclusion verification (proposed)
+
+Verify confirmed transactions at ingestion with
+`blockchain.transaction.get_merkle` against the validated local header's
+merkle root, at least for transactions crossing a trust boundary (initial
+sync from a new server, sweep re-promotion, post-rotation replay deltas).
+Closes fabrication at the source; makes every confirmed entry in wtxmgr
+provably committed to by a header the store validated. Sized and sequenced
+after R6.
+
+## 10. Decisions (settled)
+
+- Quarantine: 24 hours, persisted in the pool database with the reason;
+  process-lifetime exclusion regardless.
+- Lag-triggered rotation demotes only — slowness is not hostility.
+- Reorg promotion requires the dissenting observer to serve the full fork
+  segment (anchor-bounded) before adoption.
