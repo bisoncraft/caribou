@@ -110,6 +110,34 @@ type Network struct {
 
 	// pool is the persistent, tiered server database (serverpool.go).
 	pool *serverPool
+
+	// loops is the goroutine group bound to the current wallet node
+	// (headersLoop, scripthashLoop, watchNode). Rotation joins the old
+	// group before attaching a successor so two groups never interleave
+	// header appends or status forwards. Guarded by mu.
+	loops *loopGroup
+}
+
+// loopGroup tracks the goroutines bound to one wallet node. join blocks
+// until every loop in the group has exited — they do so when their node's
+// notify channels close (node death) or the network context ends.
+type loopGroup struct {
+	node *Node
+	wg   sync.WaitGroup
+}
+
+func (g *loopGroup) join() { g.wg.Wait() }
+
+// spawnLoop runs fn tracked by both the group (rotation joins it) and the
+// network WaitGroup (WaitForShutdown waits for it).
+func (n *Network) spawnLoop(g *loopGroup, fn func()) {
+	g.wg.Add(1)
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		defer g.wg.Done()
+		fn()
+	}()
 }
 
 // NewNetwork constructs a Network ready to be Started.
@@ -275,10 +303,15 @@ func (n *Network) Start(parent context.Context) error {
 	n.mu.Unlock()
 
 	// scripthashLoop and watchNode start immediately; they don't depend on
-	// the header sync completing.
-	n.wg.Add(2)
-	go n.scripthashLoop()
-	go n.watchNode(node)
+	// the header sync completing. headersLoop joins the group after the
+	// initial sync (below): the group spans staggered starts, and join
+	// waits for whichever loops have been spawned by then.
+	group := &loopGroup{node: node}
+	n.mu.Lock()
+	n.loops = group
+	n.mu.Unlock()
+	n.spawnLoop(group, func() { n.scripthashLoop(node) })
+	n.spawnLoop(group, func() { n.watchNode(node) })
 
 	// Observer connections (multi-server phase 2): header-only
 	// subscriptions on the remaining candidates, watching for a lagging or
@@ -310,10 +343,8 @@ func (n *Network) Start(parent context.Context) error {
 			return
 		}
 		// Sync succeeded. headersLoop must run AFTER syncHeaders so it
-		// doesn't race the initial batch-writes to the header store. It is
-		// wg-tracked so WaitForShutdown correctly waits for it.
-		n.wg.Add(1)
-		go n.headersLoop(tip)
+		// doesn't race the initial batch-writes to the header store.
+		n.spawnLoop(group, func() { n.headersLoop(node, tip) })
 	}()
 
 	return nil
@@ -653,9 +684,7 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) er
 
 // headersLoop consumes tip notifications from the node and applies them to
 // the headers store, fanning out structured TipChange events to subscribers.
-func (n *Network) headersLoop(initialTip *HeadersTip) {
-	defer n.wg.Done()
-
+func (n *Network) headersLoop(node *Node, initialTip *HeadersTip) {
 	// lastDeliveredTip is the highest height we've published in a
 	// Connected entry. The first iteration uses the headers-store tip
 	// after we apply the subscription's initial reply, then walks forward
@@ -679,10 +708,6 @@ func (n *Network) headersLoop(initialTip *HeadersTip) {
 		}
 	}
 
-	node := n.peekNode()
-	if node == nil {
-		return
-	}
 	ch := node.HeadersNotifyChan()
 	for {
 		select {
@@ -710,14 +735,6 @@ func (n *Network) deliverConnectRange(lastDelivered, newTip int32) bool {
 		connected = append(connected, h)
 	}
 	return n.deliverTipChange(&TipChange{Connected: connected})
-}
-
-// peekNode returns the current node without an error path, for goroutines
-// that have already verified Start succeeded and just want a snapshot.
-func (n *Network) peekNode() *Node {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	return n.node
 }
 
 // applyTipNotification processes one tip notification from the server and
@@ -943,12 +960,7 @@ func (n *Network) deliverTipChange(tc *TipChange) bool {
 
 // scripthashLoop fans out scripthash notifications from the node to the
 // per-network channel.
-func (n *Network) scripthashLoop() {
-	defer n.wg.Done()
-	node := n.peekNode()
-	if node == nil {
-		return
-	}
+func (n *Network) scripthashLoop(node *Node) {
 	ch := node.ScripthashNotifyChan()
 	for {
 		select {
@@ -981,7 +993,6 @@ func (n *Network) scripthashLoop() {
 // waitgroup. Returning lets our own `defer n.wg.Done()` fire so the wait can
 // complete; the child then closes the public channels and signals done.
 func (n *Network) watchNode(node *Node) {
-	defer n.wg.Done()
 	select {
 	case <-node.Done():
 		// Unexpected death (graceful Stop cancels the context first, so
