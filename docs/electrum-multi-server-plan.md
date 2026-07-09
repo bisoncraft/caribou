@@ -75,17 +75,28 @@ refinement if reconnect cost ever matters.
 
 ### Phase 2 — Observer tips (integrity)
 
-Hold header subscriptions on 2–3 observers. Compare tips against the wallet
-server continuously:
+Hold header subscriptions on 2–3 observers (the next candidates after the
+wallet server; an observer death demotes it and elects a replacement without
+touching the wallet stream). Compare tips against the wallet server
+continuously. Policy (decided):
 
-- **Lagging** wallet server (observers several blocks ahead for longer than a
-  threshold) → rotate to the best observer.
-- **Diverging** chains past the reorg window → surface a wallet alert and
-  suspend spend-affecting operations until resolved; this is the
-  eclipse/fork signal a single connection cannot produce.
-
-Policy for thresholds and the user-facing alert shape is the main design
-work; the mechanics reuse the existing header validation.
+- **Lag → rotate, silently.** The wallet server is lagging when the best
+  observer tip is at least 20 minutes' worth of blocks ahead at the chain's
+  target spacing (BTC 2 blocks, LTC 8), and that state has persisted
+  through a time buffer (10 minutes) — two blocks mined seconds apart and
+  reported by an observer first is not a reason to switch. Rotation is the
+  C1 mechanism: demote and re-elect.
+- **Divergence → verify work, then suspend spends, silently.** When an
+  observer's chain conflicts beyond the reorg window, first make the
+  dissenter demonstrate work: fetch the divergent headers and PoW-check
+  them. Unverified dissent just demotes the observer (a lone malicious
+  observer must not be able to freeze the wallet — work is unforgeable,
+  majorities of three are not). Verified divergence suspends
+  spend-affecting operations and attempts resolution by rotation.
+- **No proactive UI.** Degraded states (lag, divergence, observer loss)
+  surface nothing. The user sees an error only when they attempt an
+  operation that cannot be performed safely — including the case where
+  every connection is down.
 
 ### Phase 3 — Broadcast fan-out
 
@@ -114,14 +125,15 @@ each network should ship several vetted entries).
 
 ## 5. Risks and open questions
 
-- **Divergence policy.** What exactly suspends on a fork signal, and what
-  does the user see? Needs a decision before Phase 2 ships.
 - **Connection budget.** 3–4 sockets per asset is trivial on desktop;
   confirm acceptable for mobile battery/network profiles before defaulting
   observers on there.
 - **Observer set quality.** Observers drawn from one operator (or one
   hosting provider) give false confidence; selection should prefer operator
-  diversity once discovery (Phase 4) lands.
+  diversity once discovery (Phase 4) lands. LTC is the acute case: only
+  three known-live public mainnet servers exist (two tied to the
+  electrum-ltc project), so LTC observation is one observer with no spares
+  until discovery lands or a project-operated server ships.
 - **Wallet-server stickiness.** Rotating the wallet server changes which
   operator sees the wallet's addresses. Prefer sticky election with health
   hysteresis over frequent rotation.
