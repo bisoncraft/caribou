@@ -106,3 +106,68 @@ func TestInsertMinedChildBeforeParent(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestInsertMinedChildBeforeParentBlockOnly is the block-only variant: F and
+// S are never seen unmined (no mempool phase), S is inserted first. The
+// unmined-credit machinery is entirely bypassed, so the deferred debit must
+// come from the same-block sibling scan in addCredit's mined branch.
+func TestInsertMinedChildBeforeParentBlockOnly(t *testing.T) {
+	s, db, teardown, err := testStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer teardown()
+
+	now := time.Now()
+	parent := spendOutput(&chainhash.Hash{2}, 0, 2e8)
+	parentRec, err := NewTxRecordFromMsgTx("btc", parent, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := spendOutput(&parentRec.Hash, 0, 1e8)
+	childRec, err := NewTxRecordFromMsgTx("btc", child, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b200 := BlockMeta{Block: Block{Hash: chainhash.Hash{200}, Height: 200}, Time: now}
+
+	err = walletdb.Update(db, func(dbtx walletdb.ReadWriteTx) error {
+		ns := dbtx.ReadWriteBucket(namespaceKey)
+		// CHILD first, block-only.
+		if err := s.InsertTx(ns, childRec, &b200); err != nil {
+			return err
+		}
+		if err := s.AddCredit(ns, childRec, &b200, 0, true); err != nil {
+			return err
+		}
+		if err := s.InsertTx(ns, parentRec, &b200); err != nil {
+			return err
+		}
+		return s.AddCredit(ns, parentRec, &b200, 0, false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = walletdb.View(db, func(dbtx walletdb.ReadTx) error {
+		ns := dbtx.ReadBucket(namespaceKey)
+		unspent, err := s.UnspentOutputs(ns)
+		if err != nil {
+			return err
+		}
+		if len(unspent) != 1 || unspent[0].OutPoint.Hash != childRec.Hash {
+			t.Errorf("unspent = %v, want only %v:0", unspent, childRec.Hash)
+		}
+		bal, err := s.Balance(ns, 1, 200)
+		if err != nil {
+			return err
+		}
+		if bal != 1e8 {
+			t.Errorf("balance = %v, want %v", bal, 1e8)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

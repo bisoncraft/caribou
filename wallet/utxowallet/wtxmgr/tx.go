@@ -642,6 +642,36 @@ func (s *Store) addCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Blo
 		return false, err
 	}
 
+	// A same-block sibling may already have confirmed spending this output
+	// before the credit existed to debit (the per-address live path cannot
+	// order cross-address chains, and a spender never seen unmined leaves
+	// no unmined-input record for the credit-move fix to consume). Write
+	// the deferred debit now rather than leaving a phantom unspent credit.
+	// Only the credit's own block needs scanning: a spender in a LATER
+	// block finds this credit already present and debits normally.
+	spender, spenderIdx, err := s.sameBlockSpender(ns, rec, &cred.outPoint, &block.Block)
+	if err != nil {
+		return false, err
+	}
+	if spender != nil {
+		amt, err := spendCredit(ns, k, &indexedIncidence{
+			incidence: incidence{txHash: *spender, block: block.Block},
+			index:     spenderIdx,
+		})
+		if err != nil {
+			return false, err
+		}
+		err = putDebit(ns, spender, spenderIdx, amt, &block.Block, k)
+		if err != nil {
+			return false, err
+		}
+		log.Debugf("Recorded deferred debit: %v:%d spent by same-block "+
+			"already-mined %v", rec.Hash, index, spender)
+		// Spent on arrival: no unspent entry, no balance change (the
+		// credit and its debit cancel).
+		return true, nil
+	}
+
 	minedBalance, err := fetchMinedBalance(ns)
 	if err != nil {
 		return false, err
@@ -652,6 +682,43 @@ func (s *Store) addCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Blo
 	}
 
 	return true, putUnspent(ns, &cred.outPoint, &block.Block)
+}
+
+// sameBlockSpender scans the credit's own block record for a mined sibling
+// transaction whose input spends op, returning the spender's hash and input
+// index, or nil when unspent within the block.
+func (s *Store) sameBlockSpender(ns walletdb.ReadBucket, rec *TxRecord,
+	op *wire.OutPoint, block *Block) (*chainhash.Hash, uint32, error) {
+
+	_, brv := existsBlockRecord(ns, block.Height)
+	if brv == nil {
+		return nil, 0, nil
+	}
+	var br blockRecord
+	if err := readRawBlockRecord(keyBlockRecord(block.Height), brv, &br); err != nil {
+		return nil, 0, err
+	}
+	for i := range br.transactions {
+		sib := &br.transactions[i]
+		if *sib == rec.Hash {
+			continue
+		}
+		_, sv := existsTxRecord(ns, sib, block)
+		if sv == nil {
+			continue
+		}
+		// Chain must be set before deserialization (bisonwire).
+		sibRec := TxRecord{Tx: bisonwire.Tx{Chain: rec.Tx.Chain}}
+		if err := readRawTxRecord(sib, sv, &sibRec); err != nil {
+			return nil, 0, err
+		}
+		for idx, txIn := range sibRec.Tx.TxIn {
+			if txIn.PreviousOutPoint == *op {
+				return sib, uint32(idx), nil
+			}
+		}
+	}
+	return nil, 0, nil
 }
 
 // Rollback removes all blocks at height onwards, moving any transactions within
