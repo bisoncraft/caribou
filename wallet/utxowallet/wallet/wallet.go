@@ -761,19 +761,11 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 		}
 		if applyWatchFilter {
 			tip := w.Manager.SyncedTo().Height
-			// Arm the post-sync sweep: cold externals are excluded
-			// from the rescan, so anything they received while
-			// offline is only caught by sweeping from the previous
-			// session's synced height (less a reorg margin).
-			w.watchPol.mtx.Lock()
-			w.watchPol.sweepFrom = tip - watchFinalityDepth
-			w.watchPol.lastSweepTip = 0
-			w.watchPol.mtx.Unlock()
 			hot, err := w.hotAddrs(dbtx, tip)
 			if err != nil {
 				return err
 			}
-			addrs, unspent, err = w.filterColdAddrs(dbtx, hot, addrs, unspent)
+			addrs, unspent, err = w.filterColdAddrs(dbtx, hot, tip, addrs, unspent)
 			if err != nil {
 				return err
 			}

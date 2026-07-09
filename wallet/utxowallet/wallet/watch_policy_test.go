@@ -86,12 +86,16 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 
 	// A reaped external lands in the cold set awaiting sweeps; a sweep hit
 	// promotes it back out.
-	cold := p.coldSet()
+	cold, from := p.coldSet()
 	if len(cold) != 1 || cold[0].String() != ext.String() {
 		t.Fatalf("cold set = %v, want [%s]", cold, ext)
 	}
+	// The reap tip was recorded as known-up-to.
+	if want := int32(500 + externalQuietDepth - 1); from != want {
+		t.Fatalf("sweep fromHeight = %d, want %d", from, want)
+	}
 	p.promote(cold)
-	if got := p.coldSet(); len(got) != 0 {
+	if got, _ := p.coldSet(); len(got) != 0 {
 		t.Fatalf("cold set after promote = %v, want empty", got)
 	}
 }

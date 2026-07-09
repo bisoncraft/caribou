@@ -221,6 +221,11 @@ type NativeWallet struct {
 	// wallet.syncWithChain.
 	recoveryWindow uint32
 
+	// watchDepths carries the "externalquietdepth" and "sweepinterval"
+	// settings (0 = default) into the loader; test knobs for the watch
+	// policy's cold-address lifecycle.
+	watchDepths [2]int32
+
 	// populated during Connect
 	btcw   *wallet.Wallet
 	loader *wallet.Loader
@@ -382,6 +387,16 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 	if len(cc.FeeRateSources) > 0 {
 		feeFetcher = feeratefetcher.New(cc.FeeRateSources, log.SubLogger("FEE"))
 	}
+	var watchDepths [2]int32
+	for i, key := range []string{"externalquietdepth", "sweepinterval"} {
+		if s := cfg.Settings[key]; s != "" {
+			if n, err := strconv.ParseInt(s, 10, 32); err == nil {
+				watchDepths[i] = int32(n)
+			} else {
+				log.Errorf("native: ignoring invalid %s setting %q: %v", key, s, err)
+			}
+		}
+	}
 	return &NativeWallet{
 		cfg:            cc,
 		log:            log,
@@ -392,6 +407,7 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 		peersChange:    cfg.PeersChange,
 		feeFetcher:     feeFetcher,
 		recoveryWindow: recoveryWindow,
+		watchDepths:    watchDepths,
 		txdb:           cfg.NetworkTxDB,
 		pendingTxs:     make(map[chainhash.Hash]txdb.WalletTransaction),
 	}
@@ -453,9 +469,16 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// restore's empty pool gets a branch-wide discovery scan, while an ordinary
 	// reconnect probes only the window beyond each branch's pool top. The
 	// "recoverywindow" setting overrides either default ("0" disables).
+	loaderOpts := []wallet.LoaderOption{wallet.WithBackendKind(w.cfg.BackendKind)}
+	// Undocumented test knobs: shrink the watch policy's depths so harness
+	// tests can exercise the cold-address lifecycle in a few blocks.
+	if w.watchDepths[0] > 0 || w.watchDepths[1] > 0 {
+		loaderOpts = append(loaderOpts,
+			wallet.WithWatchDepths(w.watchDepths[0], w.watchDepths[1]))
+	}
 	w.loader = wallet.NewLoader(
 		w.netParams, w.dir, true, dbTimeout, w.recoveryWindow,
-		wallet.WithBackendKind(w.cfg.BackendKind),
+		loaderOpts...,
 	)
 	exists, err := w.loader.WalletExists()
 	if err != nil {

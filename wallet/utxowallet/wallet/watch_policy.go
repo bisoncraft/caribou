@@ -63,16 +63,42 @@ type watchPolicy struct {
 
 	// coldExternal holds demoted (unwatched) used external addresses
 	// awaiting metered sweeps; a sweep hit promotes an address back out.
-	coldExternal map[string]btcutil.Address
+	coldExternal map[string]*coldEntry
 	// sweeping is the single-flight guard for the sweep goroutine.
 	sweeping bool
 	// lastSweepTip is the tip at which the last sweep launched; zero means
 	// no sweep since (re)sync, so the next block triggers one.
 	lastSweepTip int32
-	// sweepFrom is the height above which the first post-sync sweep looks
-	// for activity: the previous session's synced height less a reorg
-	// margin, captured in syncWithChain.
-	sweepFrom int32
+
+	// extQuiet and sweepEvery override externalQuietDepth and sweepInterval
+	// when positive — test knobs, set via the wallet settings.
+	extQuiet   int32
+	sweepEvery int32
+}
+
+// coldEntry is one demoted external address and the height up to which its
+// history is fully known (the tip at which it was last provably watched or
+// swept). The sweep's fromHeight is the minimum over the cold set, so a
+// stale entry can never false-hit on history the wallet already ingested.
+type coldEntry struct {
+	addr btcutil.Address
+	upTo int32
+}
+
+// externalQuiet and sweepDue return the effective depths (test overrides or
+// the defaults).
+func (p *watchPolicy) externalQuiet() int32 {
+	if p.extQuiet > 0 {
+		return p.extQuiet
+	}
+	return externalQuietDepth
+}
+
+func (p *watchPolicy) sweepDue() int32 {
+	if p.sweepEvery > 0 {
+		return p.sweepEvery
+	}
+	return sweepInterval
 }
 
 // note records relevant-tx activity on an address. Mined activity
@@ -116,7 +142,7 @@ func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 		}
 		quietDepth := int32(watchFinalityDepth)
 		if !iw.internal {
-			quietDepth = externalQuietDepth
+			quietDepth = p.externalQuiet()
 		}
 		if tip-iw.lastMined+1 < quietDepth {
 			continue
@@ -125,9 +151,9 @@ func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 		delete(p.tracked, key)
 		if !iw.internal {
 			if p.coldExternal == nil {
-				p.coldExternal = make(map[string]btcutil.Address)
+				p.coldExternal = make(map[string]*coldEntry)
 			}
-			p.coldExternal[key] = iw.addr
+			p.coldExternal[key] = &coldEntry{addr: iw.addr, upTo: tip}
 		}
 	}
 	return done
@@ -220,7 +246,7 @@ func (w *Wallet) hotAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]struct{},
 			if err != nil {
 				continue
 			}
-			quietDepth := int32(externalQuietDepth)
+			quietDepth := w.watchPol.externalQuiet()
 			if ma.Internal() {
 				quietDepth = watchFinalityDepth
 			}
@@ -263,7 +289,7 @@ func (w *Wallet) hotAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]struct{},
 	if err := w.TxStore.RangeTransactions(txmgrNs, -1, -1, rangeF); err != nil {
 		return nil, err
 	}
-	begin := tip - externalQuietDepth + 1
+	begin := tip - w.watchPol.externalQuiet() + 1
 	if begin < 0 {
 		begin = 0
 	}
@@ -281,7 +307,7 @@ func (w *Wallet) hotAddrs(dbtx walletdb.ReadTx, tip int32) (map[string]struct{},
 // time — always pass through; a used external goes cold like an internal
 // does, just at the deeper depth, and the metered sweep is its safety net.
 // hot is the set from hotAddrs.
-func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
+func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{}, tip int32,
 	addrs []btcutil.Address, unspent []wtxmgr.Credit) ([]btcutil.Address, []wtxmgr.Credit, error) {
 
 	addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
@@ -305,7 +331,9 @@ func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
 			continue
 		}
 		if ma, err := w.Manager.Address(addrmgrNs, addr); err == nil && !ma.Internal() {
-			w.watchPol.demote(addr)
+			// History is known up to the previous session's synced
+			// height: the address was watched through it.
+			w.watchPol.demote(addr, tip)
 		}
 	}
 	keptUnspent := unspent[:0]
@@ -328,14 +356,16 @@ func (w *Wallet) filterColdAddrs(dbtx walletdb.ReadTx, hot map[string]struct{},
 // post-sync sweep covers the offline gap.
 const sweepInterval = 144
 
-// demote moves an address into the cold-external set awaiting sweeps.
-func (p *watchPolicy) demote(addr btcutil.Address) {
+// demote moves an address into the cold-external set awaiting sweeps. upTo
+// is the height through which its history is fully known — the tip at which
+// it was last watched.
+func (p *watchPolicy) demote(addr btcutil.Address, upTo int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	if p.coldExternal == nil {
-		p.coldExternal = make(map[string]btcutil.Address)
+		p.coldExternal = make(map[string]*coldEntry)
 	}
-	p.coldExternal[addr.String()] = addr
+	p.coldExternal[addr.String()] = &coldEntry{addr: addr, upTo: upTo}
 }
 
 // promote removes addresses from the cold set (a sweep hit re-established
@@ -348,15 +378,36 @@ func (p *watchPolicy) promote(addrs []btcutil.Address) {
 	}
 }
 
-// coldSet returns a snapshot of the cold-external addresses.
-func (p *watchPolicy) coldSet() []btcutil.Address {
+// coldSet returns a snapshot of the cold-external addresses and the height
+// above which a sweep must look — the minimum known-up-to over the set. No
+// reorg margin is subtracted: dipping below the known-up-to point makes
+// already-ingested history register as hits (instant false re-promotion),
+// while a transaction reorged back in confirms at a new post-reorg height
+// above upTo and is caught without one.
+func (p *watchPolicy) coldSet() ([]btcutil.Address, int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	out := make([]btcutil.Address, 0, len(p.coldExternal))
-	for _, addr := range p.coldExternal {
-		out = append(out, addr)
+	from := int32(0)
+	for _, e := range p.coldExternal {
+		out = append(out, e.addr)
+		if from == 0 || e.upTo < from {
+			from = e.upTo
+		}
 	}
-	return out
+	return out, from
+}
+
+// bumpCold records that a completed sweep verified the remaining cold set
+// through tip, advancing every entry's known-up-to height.
+func (p *watchPolicy) bumpCold(tip int32) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	for _, e := range p.coldExternal {
+		if tip > e.upTo {
+			e.upTo = tip
+		}
+	}
 }
 
 // maybeSweep launches the cold-external sweep when due: on the first block
@@ -370,20 +421,16 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	}
 	p := &w.watchPol
 	p.mtx.Lock()
-	due := p.lastSweepTip == 0 || tip-p.lastSweepTip >= sweepInterval
+	due := p.lastSweepTip == 0 || tip-p.lastSweepTip >= p.sweepDue()
 	if !due || p.sweeping || len(p.coldExternal) == 0 {
 		p.mtx.Unlock()
 		return
 	}
 	p.sweeping = true
-	fromHeight := p.sweepFrom
-	if p.lastSweepTip > 0 {
-		fromHeight = p.lastSweepTip - watchFinalityDepth
-	}
 	p.lastSweepTip = tip
 	p.mtx.Unlock()
 
-	cold := p.coldSet()
+	cold, fromHeight := p.coldSet()
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -397,11 +444,12 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 			log.Errorf("Cold-address sweep failed: %v", err)
 			// Retry from the same floor next interval.
 			p.mtx.Lock()
-			p.lastSweepTip = tip - sweepInterval
+			p.lastSweepTip = tip - p.sweepDue()
 			p.mtx.Unlock()
 			return
 		}
 		p.promote(hits)
+		p.bumpCold(tip)
 		log.Debugf("Cold-address sweep: %d checked from height %d, %d promoted",
 			len(cold), fromHeight, len(hits))
 	}()

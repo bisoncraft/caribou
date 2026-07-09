@@ -59,6 +59,11 @@ type loaderConfig struct {
 	scryptOpts              *waddrmgr.ScryptOptions
 	backendKind             BackendKind
 	hasBackendKind          bool // true when WithBackendKind was called
+
+	// externalQuietDepth/sweepInterval override the watch policy's depths
+	// when positive. Test knobs; see WithWatchDepths.
+	externalQuietDepth int32
+	sweepInterval      int32
 }
 
 // defaultLoaderConfig returns the default configuration options for the loader.
@@ -70,6 +75,17 @@ func defaultLoaderConfig() *loaderConfig {
 
 // LoaderOption is a configuration option for the loader.
 type LoaderOption func(*loaderConfig)
+
+// WithWatchDepths overrides the watch policy's external quiet depth and sweep
+// interval. Harness tests use it to run the cold-address lifecycle
+// (demote -> sweep -> re-promote) in a few blocks instead of a day's worth;
+// production wallets leave the defaults.
+func WithWatchDepths(externalQuietDepth, sweepInterval int32) LoaderOption {
+	return func(c *loaderConfig) {
+		c.externalQuietDepth = externalQuietDepth
+		c.sweepInterval = sweepInterval
+	}
+}
 
 // WithWalletSyncRetryInterval specifies the interval at which the wallet
 // should retry syncing to the chain if it encounters an error.
@@ -188,6 +204,8 @@ func (l *Loader) onLoaded(w *Wallet) {
 		w.backendKind = l.cfg.backendKind
 		w.dataDir = l.netDir
 	}
+	w.watchPol.extQuiet = l.cfg.externalQuietDepth
+	w.watchPol.sweepEvery = l.cfg.sweepInterval
 
 	for _, fn := range l.callbacks {
 		fn(w)

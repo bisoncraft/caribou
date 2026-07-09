@@ -687,7 +687,7 @@ func TestElectrumMultipleReceivesToSameAddress(t *testing.T) {
 // recovery scan that electrum wallets otherwise run by default
 // (ElectrumRecoveryWindow). Taking an explicit dir + seed lets a test stand up
 // two wallets from the SAME seed in different directories (the recovery test).
-func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recoveryWindow uint32) (asset.Wallet, *util.ConnectionMaster) {
+func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recoveryWindow uint32, extraSettings ...map[string]string) (asset.Wallet, *util.ConnectionMaster) {
 	t.Helper()
 	walletDir := filepath.Join(dataDir, chaincfg.RegressionNetParams.Name)
 	// A recent birthday (the test's funds are seconds old) keeps SyncedTo from
@@ -699,6 +699,11 @@ func connectElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recovery
 	}
 	settings := map[string]string{
 		"recoverywindow": strconv.Itoa(int(recoveryWindow)),
+	}
+	for _, extra := range extraSettings {
+		for k, v := range extra {
+			settings[k] = v
+		}
 	}
 
 	masterDB, err := txdb.New(filepath.Join(dataDir, "txdb"), tLogger.SubLogger("TXDB"))
@@ -926,4 +931,86 @@ func TestElectrumChangeUnwatch(t *testing.T) {
 	}
 	waitElectrumTxConfirmed(t, w, coin2.TxID())
 	t.Logf("spend of unwatched change confirmed: %s", coin2.TxID())
+}
+
+// TestElectrumColdSweepLifecycle exercises the full cold-external arc
+// (docs/address-watching-plan.md increment 2) with the watch depths shrunk
+// via the test knobs: a used deposit address goes quiet, is demoted
+// (unwatched), receives a third-party payment while cold, and the metered
+// sweep detects it — re-promoting the address and crediting the funds.
+func TestElectrumColdSweepLifecycle(t *testing.T) {
+	alpha, alphaCM := tBackend(t, "alpha", false, nil)
+	defer alphaCM.Disconnect()
+	if err := alpha.Unlock(walletPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
+	}
+
+	w, cm := connectElectrumWalletAt(t, t.TempDir(), randBytes(32), 20,
+		map[string]string{"externalquietdepth": "3", "sweepinterval": "3"})
+	defer cm.Disconnect()
+	waitElectrumSynced(t, w)
+
+	subCount := func() int {
+		ec := w.(*NativeWallet).btcw.ChainClient().(interface{ SubscriptionCount() int })
+		return ec.SubscriptionCount()
+	}
+
+	// Fund the deposit address; it is now used, hot, and watched.
+	addr0, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+	if _, err = alpha.Send(addr0, toSatoshi(5), 10); err != nil {
+		t.Fatalf("alpha.Send: %v", err)
+	}
+	if err = mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha: %v", err)
+	}
+	waitElectrumBalanceAtLeast(t, w, toSatoshi(5))
+	hotCount := subCount()
+	t.Logf("subscriptions with hot deposit address: %d", hotCount)
+
+	// Quiet the address past externalquietdepth: mine until the reaper
+	// demotes it (subscription count drops).
+	deadline := time.Now().Add(electrumSyncTimeout)
+	for subCount() >= hotCount {
+		if time.Now().After(deadline) {
+			t.Fatalf("address never demoted (subs %d)", subCount())
+		}
+		if err = mineAlpha(); err != nil {
+			t.Fatalf("mineAlpha (quiet): %v", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Logf("subscriptions after demotion: %d", subCount())
+
+	// Pay the COLD address. No subscription exists, so only the sweep can
+	// find this.
+	if _, err = alpha.Send(addr0, toSatoshi(3), 10); err != nil {
+		t.Fatalf("alpha.Send to cold: %v", err)
+	}
+	if err = mineAlpha(); err != nil {
+		t.Fatalf("mineAlpha (cold pay): %v", err)
+	}
+
+	// Keep mining so a sweep comes due; the sweep must detect the payment,
+	// re-promote the address, and credit the funds.
+	deadline = time.Now().Add(electrumSyncTimeout)
+	for {
+		bal, err := w.Balance()
+		if err == nil && bal != nil && bal.Available >= toSatoshi(8) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sweep never credited the cold payment (bal %+v)", bal)
+		}
+		if err = mineAlpha(); err != nil {
+			t.Fatalf("mineAlpha (sweep): %v", err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if subCount() < hotCount {
+		t.Fatalf("address not re-promoted: subs %d < %d", subCount(), hotCount)
+	}
+	t.Logf("cold payment credited; subscriptions after re-promotion: %d", subCount())
 }
