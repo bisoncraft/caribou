@@ -371,6 +371,15 @@ final class AppModel: ObservableObject {
                     guard let grantURL, let parsed = self.appURL(from: grantURL) else {
                         onFallback(); return
                     }
+                    // The reveal is driven by the grant page's load finishing
+                    // (onPageFinished clears revealOnLoad). With no WebView attached
+                    // there is nothing to load it into and nothing to fire that
+                    // callback, so setting revealOnLoad would strand the overlay on
+                    // the spinner. Fall back instead (drops to the password screen /
+                    // clears the gate). Not reachable in practice — the biometric
+                    // prompt's latency guarantees attach() has run — but there is no
+                    // other backstop for this path.
+                    guard self.webView != nil else { onFallback(); return }
                     // Clear the overlay once the authed grant page paints.
                     self.revealOnLoad = true
                     self.load(parsed)
@@ -406,8 +415,13 @@ final class AppModel: ObservableObject {
     // sees itself as logged out; the capability cookie is still valid, so the shell
     // still loads. onPageFinished clears the overlay once it paints (revealOnLoad).
     private func reloadToLoggedOutSpa() {
+        // The overlay clears on the reload finishing (onPageFinished). With no
+        // WebView to reload, that callback never fires, so don't raise revealOnLoad
+        // — just drop the overlay so it can't stick on the spinner. (Defensive: the
+        // WebView is attached throughout an eviction re-auth in practice.)
+        guard let webView else { clearGate(); return }
         revealOnLoad = true
-        webView?.reload()
+        webView.reload()
     }
 
     // MARK: - WebView wiring
