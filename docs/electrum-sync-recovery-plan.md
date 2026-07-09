@@ -5,6 +5,8 @@ sync and recovery. Companion to `address-watching-plan.md` (which covers the
 steady-state subscription set); this document covers initial catch-up,
 seed-restore recovery, and `SyncedTo` advancement.
 
+> **Superseded for planning and status by `docs/utxosync-master-plan.md`.** Retained as a detailed design record.
+
 ## Status
 
 Phase 1 landed with the native electrum wallets (#91): the birthday fix (1a),

@@ -9,6 +9,8 @@ mechanism" description, which overstated what exists: nothing restarts the
 sync after a mid-session backend death today, so rotation only occurs at
 dial time.
 
+> **Superseded for planning and status by `docs/utxosync-master-plan.md`.** Retained as a detailed design record.
+
 ## Status
 
 Implemented through R6 (fake-server test infrastructure, loop groups,

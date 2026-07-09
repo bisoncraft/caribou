@@ -5,6 +5,8 @@ server to a server pool. Companion to `electrum-sync-recovery-plan.md` (initial
 sync) and `address-watching-plan.md` (steady-state subscriptions); this
 document covers connection topology, failover, and tip integrity.
 
+> **Superseded for planning and status by `docs/utxosync-master-plan.md`.** Retained as a detailed design record.
+
 ## Status
 
 Phase 1 (failover) implemented on `utxosync`: the wallet passes the full

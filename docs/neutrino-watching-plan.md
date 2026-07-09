@@ -6,6 +6,8 @@ the watch policy to the neutrino (BIP157/158) backend. Extends
 `address-watching-plan.md` (the in-memory tiering increments 1–2, electrum) —
 this document persists the tier and covers the neutrino backend.
 
+> **Superseded for planning and status by `docs/utxosync-master-plan.md`.** Retained as a detailed design record.
+
 ## Status
 
 Proposed. Not started. Parameters settled (see §7).

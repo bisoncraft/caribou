@@ -8,6 +8,8 @@ internal (change/non-displayed) addresses and cold external addresses.
 The scheme is backend-agnostic in policy but differs in mechanism between the
 two `chain.Backend` implementations, so this document covers both.
 
+> **Superseded for planning and status by `docs/utxosync-master-plan.md`.** Retained as a detailed design record.
+
 ## Status
 
 Increment 1 (internal-address lifecycle) in progress on the `utxosync` branch;
