@@ -15,9 +15,9 @@ package btc
 //	go test -tags harness ./wallet/asset/btc/ -run TestElectrum
 //
 // NOTE: walletTypeElectrum, createElectrumWallet, and openElectrumWallet all
-// live in electrum.go (same package). TestMain, tBackend, mineAlpha, mineBeta,
-// gammaSeed, walletPassword, toSatoshi, tCtx, tLogger, waitNetwork, newTestRig,
-// and randBytes are declared in simnet_test.go — do NOT redeclare them here.
+// live in electrum.go (same package). TestMain, tBackend, mineAlpha, gammaSeed,
+// walletPassword, toSatoshi, tCtx, tLogger, and randBytes are declared in
+// simnet_test.go — do NOT redeclare them here.
 
 import (
 	"encoding/hex"
@@ -48,15 +48,6 @@ const electrumPollInterval = 500 * time.Millisecond
 // ConnectionMaster. The wallet is created in a fresh temp directory and uses
 // the same gamma seed as the SPV gamma wallet so that pre-funded UTXOs are
 // visible.
-//
-// Differences from tBackend:
-//   - Uses walletTypeElectrum / createElectrumWallet instead of walletTypeSPV /
-//     createSPVWallet.
-//   - Returns asset.Wallet (not *ExchangeWalletFullNode) because electrumWallet
-//     is not an ExchangeWalletFullNode and only implements the lean interface.
-//   - Does NOT perform the SPV-specific type-assert or the SPV sync wait inside
-//     tBackend; instead it polls SyncStatus until Synced, mirroring the
-//     harness's wait logic.
 func newElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 	t.Helper()
 	w, cm, _ := newElectrumWalletWithNotes(t)

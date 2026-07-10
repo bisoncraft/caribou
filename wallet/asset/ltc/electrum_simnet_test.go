@@ -28,11 +28,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,7 +45,10 @@ import (
 	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
+	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btclog"
+	"github.com/decred/dcrd/rpcclient/v8"
 )
 
 // ltcGammaSeed is the HD seed for the LTC gamma wallet, matching
@@ -83,38 +89,88 @@ func mineLTCAlpha() error {
 	return exec.Command("tmux", "send-keys", "-t", "ltc-harness:2", "./mine-alpha 1", "C-m").Run()
 }
 
-// newLTCAlphaBackend opens an asset.Wallet backed by the harness alpha
-// litecoind node. It reads the standard harness config file at
-// ~/dextest/ltc/alpha/alpha.conf. Wallet type is walletTypeRPC.
-func newLTCAlphaBackend(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
+// ltcHarnessNode is a thin funding node backed by the harness litecoind's RPC
+// interface, providing only the connect/unlock/send surface the simnet tests
+// need from the alpha funder. Wallet-under-test coverage lives in the electrum
+// and neutrino simnet tests; this only drives the funder.
+type ltcHarnessNode struct {
+	cl *rpcclient.Client
+}
+
+// Connect satisfies util.Connector. The RPC client is HTTP-POST based, so there
+// is no persistent connection; the client is shut down when ctx is canceled.
+func (h *ltcHarnessNode) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		h.cl.Shutdown()
+	}()
+	return &wg, nil
+}
+
+// Unlock unlocks the node's wallet via walletpassphrase.
+func (h *ltcHarnessNode) Unlock(pw []byte) error {
+	passJSON, _ := json.Marshal(string(pw))
+	_, err := h.cl.RawRequest(ltcCtx, "walletpassphrase", []json.RawMessage{passJSON, json.RawMessage("600")})
+	return err
+}
+
+// Send sends value (in atoms) to addr via sendtoaddress and returns the funding
+// output. feeRate is ignored; the harness node uses its own fee policy.
+func (h *ltcHarnessNode) Send(addr string, val, _ uint64) (asset.Coin, error) {
+	addrJSON, _ := json.Marshal(addr)
+	amtJSON, _ := json.Marshal(btcutil.Amount(val).ToBTC())
+	b, err := h.cl.RawRequest(ltcCtx, "sendtoaddress", []json.RawMessage{addrJSON, amtJSON})
+	if err != nil {
+		return nil, err
+	}
+	var txID string
+	if err := json.Unmarshal(b, &txID); err != nil {
+		return nil, fmt.Errorf("error decoding sendtoaddress result: %w", err)
+	}
+	txHash, err := chainhash.NewHashFromStr(txID)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding txid %q: %w", txID, err)
+	}
+	return dexbtc.NewOutput(txHash, 0, val), nil
+}
+
+// newLTCAlphaBackend connects a thin funding node to the harness alpha
+// litecoind, reading its config at ~/dextest/ltc/alpha/alpha.conf.
+func newLTCAlphaBackend(t *testing.T) (*ltcHarnessNode, *util.ConnectionMaster) {
 	t.Helper()
 	u, err := user.Current()
 	if err != nil {
 		t.Fatalf("user.Current: %v", err)
 	}
 	cfgPath := filepath.Join(u.HomeDir, "dextest", "ltc", "alpha", "alpha.conf")
-	settings, err := config.Parse(cfgPath)
+	var rpcCfg dexbtc.RPCConfig
+	if err := config.ParseInto(cfgPath, &rpcCfg); err != nil {
+		t.Fatalf("config.ParseInto(%s): %v", cfgPath, err)
+	}
+	if err := dexbtc.CheckRPCConfig(&rpcCfg, "alpha", util.Regtest, NetPorts); err != nil {
+		t.Fatalf("bad alpha rpc config: %v", err)
+	}
+	cl, err := rpcclient.New(&rpcclient.ConnConfig{
+		HTTPPostMode: true,
+		DisableTLS:   true,
+		// The harness litecoind is multi-wallet, so wallet RPCs must target the
+		// /wallet/<name> URI path. An empty walletname selects the default wallet.
+		Host: rpcCfg.RPCBind + "/wallet/" + rpcCfg.WalletName,
+		User: rpcCfg.RPCUser,
+		Pass: rpcCfg.RPCPass,
+	}, nil)
 	if err != nil {
-		t.Fatalf("config.Parse(%s): %v", cfgPath, err)
+		t.Fatalf("rpcclient.New(alpha): %v", err)
 	}
-
-	walletCfg := &asset.WalletConfig{
-		Type:     walletTypeRPC,
-		Settings: settings,
-		Emit:     asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), dexbtc.BipID, ltcLogger),
-		PeersChange: func(n uint32, err error) {
-			ltcLogger.Debugf("alpha peers=%d err=%v", n, err)
-		},
-	}
-	w, err := NewWallet(walletCfg, ltcLogger, util.Regtest)
-	if err != nil {
-		t.Fatalf("NewWallet(alpha): %v", err)
-	}
-	cm := util.NewConnectionMaster(w)
+	node := &ltcHarnessNode{cl: cl}
+	cm := util.NewConnectionMaster(node)
 	if err = cm.Connect(ltcCtx); err != nil {
 		t.Fatalf("Connect(alpha): %v", err)
 	}
-	return w, cm
+	return node, cm
 }
 
 // newLTCElectrumWallet constructs a seeded ltcElectrumWallet for the LTC
@@ -356,10 +412,8 @@ func TestLTCElectrumBalanceAfterFunding(t *testing.T) {
 	alpha, alphaCM := newLTCAlphaBackend(t)
 	defer alphaCM.Disconnect()
 
-	if auth, ok := alpha.(asset.Authenticator); ok {
-		if err := auth.Unlock(ltcPassword); err != nil {
-			t.Fatalf("unlock alpha: %v", err)
-		}
+	if err := alpha.Unlock(ltcPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
 	}
 
 	w, cm := newLTCElectrumWallet(t)
@@ -399,10 +453,8 @@ func TestLTCElectrumSendSelfPendingToConfirmed(t *testing.T) {
 	alpha, alphaCM := newLTCAlphaBackend(t)
 	defer alphaCM.Disconnect()
 
-	if auth, ok := alpha.(asset.Authenticator); ok {
-		if err := auth.Unlock(ltcPassword); err != nil {
-			t.Fatalf("unlock alpha: %v", err)
-		}
+	if err := alpha.Unlock(ltcPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
 	}
 
 	w, cm := newLTCElectrumWallet(t)
@@ -466,10 +518,8 @@ func TestLTCElectrumReceiveDetection(t *testing.T) {
 	alpha, alphaCM := newLTCAlphaBackend(t)
 	defer alphaCM.Disconnect()
 
-	if auth, ok := alpha.(asset.Authenticator); ok {
-		if err := auth.Unlock(ltcPassword); err != nil {
-			t.Fatalf("unlock alpha: %v", err)
-		}
+	if err := alpha.Unlock(ltcPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
 	}
 
 	w, cm := newLTCElectrumWallet(t)
@@ -596,10 +646,8 @@ func connectLTCElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recov
 func TestLTCElectrumRecovery(t *testing.T) {
 	alpha, alphaCM := newLTCAlphaBackend(t)
 	defer alphaCM.Disconnect()
-	if auth, ok := alpha.(asset.Authenticator); ok {
-		if err := auth.Unlock(ltcPassword); err != nil {
-			t.Fatalf("unlock alpha: %v", err)
-		}
+	if err := alpha.Unlock(ltcPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
 	}
 
 	seed := randLTCBytes(t, 32)

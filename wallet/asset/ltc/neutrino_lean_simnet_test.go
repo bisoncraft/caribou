@@ -31,10 +31,8 @@ func TestLTCNeutrinoLeanWalletSync(t *testing.T) {
 	// Funding source: the harness alpha litecoind wallet.
 	alpha, alphaCM := newLTCAlphaBackend(t)
 	defer alphaCM.Disconnect()
-	if auth, ok := alpha.(asset.Authenticator); ok {
-		if err := auth.Unlock(ltcPassword); err != nil {
-			t.Fatalf("unlock alpha: %v", err)
-		}
+	if err := alpha.Unlock(ltcPassword); err != nil {
+		t.Fatalf("unlock alpha: %v", err)
 	}
 
 	seed, err := hex.DecodeString(ltcGammaSeed)

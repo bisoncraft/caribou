@@ -6,13 +6,14 @@ package btc
 
 import (
 	"context"
-	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +21,10 @@ import (
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
-	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btclog"
+	"github.com/decred/dcrd/rpcclient/v8"
 )
 
 const (
@@ -29,17 +32,8 @@ const (
 )
 
 var (
-	tLogger   util.Logger
-	tCtx      context.Context
-	tLotSize  uint64 = 1e7
-	tRateStep uint64 = 100
-	tBTC             = &util.Asset{
-		ID:         0,
-		Symbol:     "btc",
-		Version:    version,
-		MaxFeeRate: 10,
-		SwapConf:   1,
-	}
+	tLogger        util.Logger
+	tCtx           context.Context
 	walletPassword = []byte("abc")
 )
 
@@ -47,161 +41,99 @@ func mineAlpha() error {
 	return exec.Command("tmux", "send-keys", "-t", "btc-harness:0", "./mine-alpha 1", "C-m").Run()
 }
 
-func mineBeta() error {
-	return exec.Command("tmux", "send-keys", "-t", "btc-harness:0", "./mine-beta 1", "C-m").Run()
+// harnessNode is a thin funding node backed by a harness bitcoind's RPC
+// interface. It provides the small surface the simnet tests need from the
+// alpha/beta funders — connect, unlock, and send — without depending on any
+// wallet implementation. Wallet-under-test coverage lives in the electrum,
+// neutrino, and native-reconnect simnet tests; this only drives the funder.
+type harnessNode struct {
+	cl *rpcclient.Client
 }
 
-func tBackend(t *testing.T, name string, isInternal bool, blkFunc func(string, error)) (*ExchangeWalletFullNode, *util.ConnectionMaster) {
+// Connect satisfies util.Connector so the node can be managed by a
+// util.ConnectionMaster. The RPC client is HTTP-POST based, so there is no
+// persistent connection to maintain; the client is shut down when ctx is
+// canceled (i.e. on ConnectionMaster.Disconnect).
+func (h *harnessNode) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		h.cl.Shutdown()
+	}()
+	return &wg, nil
+}
+
+// Unlock unlocks the node's wallet via walletpassphrase.
+func (h *harnessNode) Unlock(pw []byte) error {
+	passJSON, _ := json.Marshal(string(pw))
+	_, err := h.cl.RawRequest(tCtx, "walletpassphrase", []json.RawMessage{passJSON, json.RawMessage("600")})
+	return err
+}
+
+// Send sends value (in atoms) to addr via sendtoaddress and returns the funding
+// output. feeRate is ignored; the harness node uses its own fee policy.
+func (h *harnessNode) Send(addr string, val, _ uint64) (asset.Coin, error) {
+	addrJSON, _ := json.Marshal(addr)
+	amtJSON, _ := json.Marshal(btcutil.Amount(val).ToBTC())
+	b, err := h.cl.RawRequest(tCtx, "sendtoaddress", []json.RawMessage{addrJSON, amtJSON})
+	if err != nil {
+		return nil, err
+	}
+	var txID string
+	if err := json.Unmarshal(b, &txID); err != nil {
+		return nil, fmt.Errorf("error decoding sendtoaddress result: %w", err)
+	}
+	txHash, err := chainhash.NewHashFromStr(txID)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding txid %q: %w", txID, err)
+	}
+	return NewOutput(txHash, 0, val), nil
+}
+
+// tBackend connects a harnessNode to the named harness bitcoind (alpha, beta)
+// using its dextest config file, and wraps it in a ConnectionMaster. isInternal
+// and blkFunc are retained for call-site compatibility and unused.
+func tBackend(t *testing.T, name string, _ bool, _ func(string, error)) (*harnessNode, *util.ConnectionMaster) {
 	t.Helper()
-	user, err := user.Current()
+	u, err := user.Current()
 	if err != nil {
 		t.Fatalf("error getting current user: %v", err)
 	}
-	settings := make(map[string]string)
-	if !isInternal {
-		cfgPath := filepath.Join(user.HomeDir, "dextest", "btc", name, name+".conf")
-		settings, err = config.Parse(cfgPath)
-		if err != nil {
-			t.Fatalf("error reading config options: %v", err)
-		}
+	cfgPath := filepath.Join(u.HomeDir, "dextest", "btc", name, name+".conf")
+	var rpcCfg RPCConfig
+	if err := config.ParseInto(cfgPath, &rpcCfg); err != nil {
+		t.Fatalf("error reading %s config: %v", name, err)
 	}
-
-	noteChan := make(chan asset.WalletNotification, 128)
-	go func() {
-		for {
-			select {
-			case <-noteChan:
-			case <-tCtx.Done():
-				return
-			}
-		}
-	}()
-
-	walletCfg := &asset.WalletConfig{
-		Settings: settings,
-		Emit:     asset.NewWalletEmitter(make(chan asset.WalletNotification, 128), 0, tLogger),
-		PeersChange: func(num uint32, err error) {
-			t.Logf("peer count = %d, err = %v", num, err)
-		},
+	if err := CheckRPCConfig(&rpcCfg, name, util.Simnet, RPCPorts); err != nil {
+		t.Fatalf("bad %s rpc config: %v", name, err)
 	}
-	if isInternal {
-		seed, err := hex.DecodeString(gammaSeed)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dataDir := t.TempDir()
-		regtestDir := filepath.Join(dataDir, chaincfg.RegressionNetParams.Name)
-		err = createElectrumWallet(walletPassword, seed, DefaultWalletBirthday, regtestDir, tLogger, 0, 0, &chaincfg.RegressionNetParams)
-		if err != nil {
-			t.Fatal(err)
-		}
-		walletCfg.Type = walletTypeSPV
-		walletCfg.DataDir = dataDir
-	}
-	var backend asset.Wallet
-	backend, err = NewWallet(walletCfg, tLogger, util.Simnet)
+	cl, err := rpcclient.New(&rpcclient.ConnConfig{
+		HTTPPostMode: true,
+		DisableTLS:   true,
+		// The harness bitcoind is multi-wallet, so wallet RPCs must target the
+		// /wallet/<name> URI path. An empty walletname selects the default wallet.
+		Host: rpcCfg.RPCBind + "/wallet/" + rpcCfg.WalletName,
+		User: rpcCfg.RPCUser,
+		Pass: rpcCfg.RPCPass,
+	}, nil)
 	if err != nil {
-		t.Fatalf("error creating backend: %v", err)
-	}
-	cm := util.NewConnectionMaster(backend)
-	err = cm.Connect(tCtx)
-	if err != nil {
-		t.Fatalf("error connecting backend: %v", err)
+		t.Fatalf("error creating %s rpc client: %v", name, err)
 	}
 
-	if isInternal {
-		i := 0
-		for {
-			syncStatus, err := backend.SyncStatus()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if syncStatus.Synced {
-				break
-			}
-			if i == 5 {
-				t.Fatal("spv wallet not synced after 5 seconds")
-			}
-			i++
-			time.Sleep(time.Second)
-		}
-
-		spv := backend.(*ExchangeWalletSPV)
-		fullNode := &ExchangeWalletFullNode{
-			intermediaryWallet: spv.intermediaryWallet,
-			authAddOn:          spv.authAddOn,
-		}
-
-		return fullNode, cm
+	node := &harnessNode{cl: cl}
+	cm := util.NewConnectionMaster(node)
+	if err := cm.Connect(tCtx); err != nil {
+		t.Fatalf("error connecting %s backend: %v", name, err)
 	}
-
-	accelerator := backend.(*ExchangeWalletAccelerator)
-	return accelerator.ExchangeWalletFullNode, cm
-}
-
-type testRig struct {
-	backends          map[string]*ExchangeWalletFullNode
-	connectionMasters map[string]*util.ConnectionMaster
-}
-
-func newTestRig(t *testing.T, blkFunc func(string, error)) *testRig {
-	t.Helper()
-	rig := &testRig{
-		backends:          make(map[string]*ExchangeWalletFullNode),
-		connectionMasters: make(map[string]*util.ConnectionMaster, 3),
-	}
-	rig.backends["alpha"], rig.connectionMasters["alpha"] = tBackend(t, "alpha", false, blkFunc)
-	rig.backends["beta"], rig.connectionMasters["beta"] = tBackend(t, "beta", false, blkFunc)
-	rig.backends["gamma"], rig.connectionMasters["gamma"] = tBackend(t, "gamma", true, blkFunc)
-
-	gammaAddr, err := rig.backends["gamma"].DepositAddress()
-	if err != nil {
-		t.Fatalf("error getting gamma deposit address: %v", err)
-	}
-
-	_, err = rig.alpha().Send(gammaAddr, toSatoshi(100), 10)
-	if err != nil {
-		t.Fatalf("error sending to gamma: %v", err)
-	}
-
-	mineAlpha()
-
-	return rig
-}
-
-func (rig *testRig) alpha() *ExchangeWalletFullNode {
-	return rig.backends["alpha"]
-}
-func (rig *testRig) beta() *ExchangeWalletFullNode {
-	return rig.backends["beta"]
-}
-func (rig *testRig) gamma() *ExchangeWalletFullNode {
-	return rig.backends["gamma"]
-}
-func (rig *testRig) close(t *testing.T) {
-	t.Helper()
-	for name, cm := range rig.connectionMasters {
-		closed := make(chan struct{})
-		go func() {
-			cm.Disconnect()
-			close(closed)
-		}()
-		select {
-		case <-closed:
-		case <-time.NewTimer(60 * time.Second).C:
-			t.Fatalf("failed to disconnect from %s", name)
-		}
-	}
+	return node, cm
 }
 
 func randBytes(l int) []byte {
 	b := make([]byte, l)
 	rand.Read(b)
 	return b
-}
-
-func waitNetwork() {
-	time.Sleep(time.Second * 3 / 2)
 }
 
 func TestMain(m *testing.M) {
