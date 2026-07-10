@@ -36,12 +36,10 @@ var (
 		Simnet:  "19443",
 	}
 	spvWalletDefinition = &asset.WalletDefinition{
-		Type:             walletTypeSPV,
-		Tab:              "Native",
-		Description:      "Use the built-in SPV wallet",
-		ConfigOpts:       btc.CommonConfigOpts("LTC", true),
-		Seeded:           true,
-		MultiFundingOpts: btc.MultiFundingOpts,
+		Type:        walletTypeSPV,
+		Tab:         "Native",
+		Description: "Use the built-in SPV wallet",
+		Seeded:      true,
 	}
 	// WalletInfo defines some general information about a Litecoin wallet.
 	WalletInfo = &asset.WalletInfo{
@@ -131,12 +129,6 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	chainParams, err := parseChainParams(params.Net)
 	if err != nil {
 		return fmt.Errorf("error parsing chain: %w", err)
-	}
-
-	walletCfg := new(btc.WalletConfig)
-	err = config.Unmapify(params.Settings, walletCfg)
-	if err != nil {
-		return err
 	}
 
 	recoveryCfg := new(btc.RecoveryCfg)

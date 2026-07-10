@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -18,11 +17,8 @@ import (
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
-	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
-	"github.com/btcsuite/btcd/wire"
 )
 
 const (
@@ -31,21 +27,8 @@ const (
 	// BipID is the BIP-0044 asset ID.
 	BipID = 0
 
-	// The default fee is passed to the user as part of the asset.WalletInfo
-	// structure.
-	defaultFee = 100
-	// defaultFeeRateLimit is the default value for the feeratelimit.
-	defaultFeeRateLimit = 1400
-	// defaultRedeemConfTarget is the default redeem transaction confirmation
-	// target in blocks used by estimatesmartfee to get the optimal fee for a
-	// redeem transaction.
-	defaultRedeemConfTarget = 2
-
 	walletTypeSPV      = "SPV"
 	walletTypeElectrum = "electrumRPC"
-
-	multiSplitKey       = "multisplit"
-	multiSplitBufferKey = "multisplitbuffer"
 
 	// confTxFinality is the amount of confirms a redeem or refund
 	// transaction needs before the trade is considered confirmed. The tx is
@@ -54,64 +37,17 @@ const (
 )
 
 var (
-	// ContractSearchLimit is how far back in time AuditContract in SPV mode
-	// will search for a contract if no txData is provided. This should be a
-	// positive duration.
-	ContractSearchLimit = 48 * time.Hour
-
 	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
 
 	// 02 Jun 21 21:12 CDT
 	defaultWalletBirthdayUnix = 1622668320
 	DefaultWalletBirthday     = time.Unix(int64(defaultWalletBirthdayUnix), 0)
 
-	MultiFundingOpts = []*asset.OrderOption{
-		{
-			ConfigOption: asset.ConfigOption{
-				Key:         multiSplitKey,
-				DisplayName: "Allow multi split",
-				Description: "Allow split funding transactions that pre-size outputs to " +
-					"prevent excessive overlock.",
-				IsBoolean:    true,
-				DefaultValue: "true",
-			},
-		},
-		{
-			ConfigOption: asset.ConfigOption{
-				Key:         multiSplitBufferKey,
-				DisplayName: "Multi split buffer",
-				Description: "Add an integer percent buffer to split output amounts to " +
-					"facilitate output reuse. This is only required for quote assets.",
-				DefaultValue: "5",
-				DependsOn:    multiSplitKey,
-			},
-			QuoteAssetOnly: true,
-			XYRange: &asset.XYRange{
-				Start: asset.XYRangePoint{
-					Label: "0%",
-					X:     0,
-					Y:     0,
-				},
-				End: asset.XYRangePoint{
-					Label: "100%",
-					X:     100,
-					Y:     100,
-				},
-				XUnit:  "%",
-				YUnit:  "%",
-				RoundX: true,
-				RoundY: true,
-			},
-		},
-	}
-
 	spvWalletDefinition = &asset.WalletDefinition{
-		Type:             walletTypeSPV,
-		Tab:              "Native",
-		Description:      "Use the built-in SPV wallet",
-		ConfigOpts:       CommonConfigOpts("BTC", true),
-		Seeded:           true,
-		MultiFundingOpts: MultiFundingOpts,
+		Type:        walletTypeSPV,
+		Tab:         "Native",
+		Description: "Use the built-in SPV wallet",
+		Seeded:      true,
 	}
 
 	// WalletInfo defines some general information about a Bitcoin wallet.
@@ -132,119 +68,9 @@ var (
 	}
 )
 
-func apiFallbackOpt(defaultV bool) *asset.ConfigOption {
-	return &asset.ConfigOption{
-		Key:         "apifeefallback",
-		DisplayName: "External fee rate estimates",
-		Description: "Allow fee rate estimation from a block explorer API. " +
-			"This is useful as a fallback for light wallets that have recently " +
-			"been started.",
-		IsBoolean:    true,
-		DefaultValue: strconv.FormatBool(defaultV),
-	}
-}
-
-// CommonConfigOpts are the common options that the Wallets recognize.
-func CommonConfigOpts(symbol string /* upper-case */, withApiFallback bool) []*asset.ConfigOption {
-	opts := []*asset.ConfigOption{
-		{
-			Key:         "fallbackfee",
-			DisplayName: "Fallback fee rate",
-			Description: fmt.Sprintf("The fee rate to use for sending or withdrawing funds and fee payment when"+
-				" estimatesmartfee is not available. Units: %s/kB", symbol),
-			DefaultValue: strconv.FormatFloat(defaultFee*1000/1e8, 'f', -1, 64),
-		},
-		{
-			Key:         "feeratelimit",
-			DisplayName: "Highest acceptable fee rate",
-			Description: fmt.Sprintf("This is the highest network fee rate you are willing to "+
-				"pay on swap transactions. If feeratelimit is lower than a market's "+
-				"maxfeerate, you will not be able to trade on that market with this "+
-				"wallet.  Units: %s/kB", symbol),
-			DefaultValue: strconv.FormatFloat(defaultFeeRateLimit*1000/1e8, 'f', -1, 64),
-		},
-		{
-			Key:         "redeemconftarget",
-			DisplayName: "Redeem confirmation target",
-			Description: "The target number of blocks for the redeem transaction " +
-				"to be mined. Used to set the transaction's fee rate. " +
-				"(default: 2 blocks)",
-			DefaultValue: strconv.FormatUint(defaultRedeemConfTarget, 10),
-		},
-		{
-			Key:         "txsplit",
-			DisplayName: "Pre-size funding inputs",
-			Description: "When placing an order, create a \"split\" transaction to " +
-				"fund the order without locking more of the wallet balance than " +
-				"necessary. Otherwise, excess funds may be reserved to fund the order " +
-				"until the first swap contract is broadcast during match settlement, " +
-				"or the order is canceled. This an extra transaction for which network " +
-				"mining fees are paid.",
-			IsBoolean:    true,
-			DefaultValue: "false",
-		},
-	}
-
-	if withApiFallback {
-		opts = append(opts, apiFallbackOpt(true))
-	}
-	return opts
-}
-
-// TxInSigner is a transaction input signer. In addition to the standard Bitcoin
-// arguments, TxInSigner receives all values and pubkey scripts for previous
-// outpoints spent in this transaction.
-type TxInSigner func(tx *wire.MsgTx, idx int, subScript []byte, hashType txscript.SigHashType,
-	key *btcec.PrivateKey, vals []int64, prevScripts [][]byte) ([]byte, error)
-
 // PaymentScripter can be implemented to make non-standard payment scripts.
 type PaymentScripter interface {
 	PaymentScript() ([]byte, error)
-}
-
-// WalletConfig are wallet-level configuration settings.
-type WalletConfig struct {
-	UseSplitTx       bool    `ini:"txsplit"`
-	FallbackFeeRate  float64 `ini:"fallbackfee"`
-	FeeRateLimit     float64 `ini:"feeratelimit"`
-	RedeemConfTarget uint64  `ini:"redeemconftarget"`
-	ActivelyUsed     bool    `ini:"special_activelyUsed"` // injected by core
-	ApiFeeFallback   bool    `ini:"apifeefallback"`
-}
-
-func readBaseWalletConfig(walletCfg *WalletConfig) (*baseWalletConfig, error) {
-	cfg := &baseWalletConfig{}
-	// if values not specified, use defaults. As they are validated as BTC/KB,
-	// we need to convert first.
-	if walletCfg.FallbackFeeRate == 0 {
-		walletCfg.FallbackFeeRate = float64(defaultFee) * 1000 / 1e8
-	}
-	if walletCfg.FeeRateLimit == 0 {
-		walletCfg.FeeRateLimit = float64(defaultFeeRateLimit) * 1000 / 1e8
-	}
-	if walletCfg.RedeemConfTarget == 0 {
-		walletCfg.RedeemConfTarget = defaultRedeemConfTarget
-	}
-	// If set in the user config, the fallback fee will be in conventional units
-	// per kB, e.g. BTC/kB. Translate that to sats/byte.
-	cfg.fallbackFeeRate = toSatoshi(walletCfg.FallbackFeeRate / 1000)
-	if cfg.fallbackFeeRate == 0 {
-		return nil, fmt.Errorf("fallback fee rate limit is smaller than the minimum 1000 sats/byte: %v",
-			walletCfg.FallbackFeeRate)
-	}
-	// If set in the user config, the fee rate limit will be in units of BTC/KB.
-	// Convert to sats/byte & error if value is smaller than smallest unit.
-	cfg.feeRateLimit = toSatoshi(walletCfg.FeeRateLimit / 1000)
-	if cfg.feeRateLimit == 0 {
-		return nil, fmt.Errorf("fee rate limit is smaller than the minimum 1000 sats/byte: %v",
-			walletCfg.FeeRateLimit)
-	}
-
-	cfg.redeemConfTarget = walletCfg.RedeemConfTarget
-	cfg.useSplitTx = walletCfg.UseSplitTx
-	cfg.apiFeeFallback = walletCfg.ApiFeeFallback
-
-	return cfg, nil
 }
 
 // Driver implements asset.Driver.
@@ -279,12 +105,6 @@ func walletExists(dir string, chainParams *chaincfg.Params) (bool, error) {
 	return loader.WalletExists()
 }
 
-// createConfig combines the configuration settings used for wallet creation.
-type createConfig struct {
-	WalletConfig `ini:",extends"`
-	RecoveryCfg  `ini:",extends"`
-}
-
 // Create creates a new seeded wallet. Both walletTypeSPV and
 // walletTypeElectrum are supported; they use the same underlying btcwallet
 // database format.
@@ -305,13 +125,8 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		return fmt.Errorf("error parsing chain: %w", err)
 	}
 
-	cfg := new(createConfig)
+	cfg := new(RecoveryCfg)
 	err = config.Unmapify(params.Settings, cfg)
-	if err != nil {
-		return err
-	}
-
-	_, err = readBaseWalletConfig(&cfg.WalletConfig)
 	if err != nil {
 		return err
 	}
@@ -358,16 +173,6 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 
 func init() {
 	asset.Register(BipID, &Driver{})
-}
-
-// baseWalletConfig is the validated, unit-converted, user-configurable wallet
-// settings.
-type baseWalletConfig struct {
-	fallbackFeeRate  uint64 // atoms/byte
-	feeRateLimit     uint64 // atoms/byte
-	redeemConfTarget uint64
-	useSplitTx       bool
-	apiFeeFallback   bool
 }
 
 // RecoveryCfg is the information that is transferred from the old wallet
