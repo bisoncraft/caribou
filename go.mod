@@ -8,10 +8,8 @@ require (
 	fyne.io/systray v1.10.1-0.20220621085403-9a2652634e93
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412
 	github.com/athanorlabs/go-dleq v0.1.0
-	github.com/bisoncraft/bchwallet v1.0.2
 	github.com/bisoncraft/go-bip39 v1.0.1
 	github.com/bisoncraft/go-monero v0.1.1
-	github.com/bisoncraft/neutrino-bch v1.0.1
 	github.com/bisoncraft/op-geth v0.0.0-20250729074358-3cfe4f15e91c
 	github.com/btcsuite/btcd v0.24.2-beta.rc1.0.20240625142744-cc26860b4026
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
@@ -49,7 +47,6 @@ require (
 	github.com/ethereum/go-ethereum v1.17.1
 	github.com/fatih/color v1.18.0
 	github.com/gcash/bchd v0.19.0
-	github.com/gcash/bchlog v0.0.0-20180913005452-b4f036f92fa6
 	github.com/gcash/bchutil v0.0.0-20210113190856-6ea28dff4000
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/gorilla/websocket v1.5.3
@@ -113,7 +110,6 @@ require (
 	github.com/aead/siphash v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.22.0 // indirect
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
-	github.com/btcsuite/golangcrypto v0.0.0-20150304025918-53f62d9b43e8 // indirect
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/companyzero/sntrup4591761 v0.0.0-20220309191932-9e0f3af2f07a // indirect
@@ -149,7 +145,6 @@ require (
 	github.com/kkdai/bstream v1.0.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
-	github.com/lightninglabs/gozmq v0.0.0-20191113021534-d20a764486bf // indirect
 	github.com/lightningnetwork/lnd/clock v1.0.1
 	github.com/lightningnetwork/lnd/queue v1.0.1
 	github.com/lightningnetwork/lnd/ticker v1.0.0 // indirect
@@ -171,7 +166,6 @@ require (
 	github.com/tevino/abool v1.2.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
-	github.com/zquestz/grab v0.0.0-20190224022517-abcee96e61b1 // indirect
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.46.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
