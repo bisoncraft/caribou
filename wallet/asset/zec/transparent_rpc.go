@@ -12,15 +12,15 @@ import (
 	"github.com/decred/dcrd/rpcclient/v8"
 )
 
-func listUnspent(c rpcCaller) (res []*btc.ListUnspentResult, err error) {
+func listUnspent(c rpcCaller) (res []*listUnspentResult, err error) {
 	const minConf = 0
 	return res, c.CallRPC("listunspent", []any{minConf}, &res)
 }
 
 func lockUnspent(c rpcCaller, unlock bool, ops []*btc.Output) error {
-	var rpcops []*btc.RPCOutpoint // To clear all, this must be nil->null, not empty slice.
+	var rpcops []*rpcOutpoint // To clear all, this must be nil->null, not empty slice.
 	for _, op := range ops {
-		rpcops = append(rpcops, &btc.RPCOutpoint{
+		rpcops = append(rpcops, &rpcOutpoint{
 			TxID: op.Pt.TxHash.String(),
 			Vout: op.Pt.Vout,
 		})
@@ -83,8 +83,8 @@ func callHashGetter(c rpcCaller, method string, args []any) (*chainhash.Hash, er
 	return chainhash.NewHashFromStr(txid)
 }
 
-func listLockUnspent(c rpcCaller, log util.Logger) ([]*btc.RPCOutpoint, error) {
-	var unspents []*btc.RPCOutpoint
+func listLockUnspent(c rpcCaller, log util.Logger) ([]*rpcOutpoint, error) {
+	var unspents []*rpcOutpoint
 	err := c.CallRPC("listlockunspent", nil, &unspents)
 	if err != nil {
 		return nil, err
@@ -106,7 +106,7 @@ func listLockUnspent(c rpcCaller, log util.Logger) ([]*btc.RPCOutpoint, error) {
 		}
 		// actually spent, unlock
 		var success bool
-		op := []*btc.RPCOutpoint{{
+		op := []*rpcOutpoint{{
 			TxID: utxo.TxID,
 			Vout: utxo.Vout,
 		}}
@@ -136,8 +136,8 @@ func getVersion(c rpcCaller) (uint64, uint64, error) {
 	return r.Version, r.ProtocolVersion, nil
 }
 
-func getBlockchainInfo(c rpcCaller) (*btc.GetBlockchainInfoResult, error) {
-	chainInfo := new(btc.GetBlockchainInfoResult)
+func getBlockchainInfo(c rpcCaller) (*getBlockchainInfoResult, error) {
+	chainInfo := new(getBlockchainInfoResult)
 	err := c.CallRPC("getblockchaininfo", nil, chainInfo)
 	if err != nil {
 		return nil, err
@@ -181,7 +181,7 @@ func getWalletTransaction(c rpcCaller, txHash *chainhash.Hash) (*GetTransactionR
 	var tx GetTransactionResult
 	err := c.CallRPC("gettransaction", []any{txHash.String()}, &tx)
 	if err != nil {
-		if btc.IsTxNotFoundErr(err) {
+		if isTxNotFoundErr(err) {
 			return nil, asset.CoinNotFoundError
 		}
 		return nil, err

@@ -236,7 +236,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		return nil, fmt.Errorf("error creating data directory at %q: %w", cfg.DataDir, err)
 	}
 
-	ar, err := btc.NewAddressRecycler(filepath.Join(cfg.DataDir, "recycled-addrs.txt"), logger)
+	ar, err := newAddressRecycler(filepath.Join(cfg.DataDir, "recycled-addrs.txt"), logger)
 	if err != nil {
 		return nil, fmt.Errorf("error creating address recycler: %w", err)
 	}
@@ -302,9 +302,9 @@ type zecWallet struct {
 	lastAddress   atomic.Pointer[string]
 	btcParams     *chaincfg.Params
 	addrParams    *AddressParams
-	node          btc.RawRequester
-	ar            *btc.AddressRecycler
-	rf            *btc.RedemptionFinder
+	node          rawRequester
+	ar            *addressRecycler
+	rf            *redemptionFinder
 	decodeAddr    btc.AddressDecoder
 	lastPeerCount uint32
 	peersChange   func(uint32, error)
@@ -313,12 +313,12 @@ type zecWallet struct {
 	walletDir     string
 
 	// Coins returned by Fund are cached for quick reference.
-	cm *btc.CoinManager
+	cm *coinManager
 
 	tipAtConnect atomic.Uint64
 
 	tipMtx     sync.RWMutex
-	currentTip *btc.BlockVector
+	currentTip *blockVector
 
 	pendingTxsMtx sync.RWMutex
 	pendingTxs    map[chainhash.Hash]*btc.ExtendedWalletTx
@@ -340,7 +340,7 @@ var _ asset.NewAddresser = (*zecWallet)(nil)
 // var _ asset.LiveReconfigurer = (*zecWallet)(nil)
 
 func (w *zecWallet) CallRPC(method string, args []any, thing any) error {
-	return btc.Call(w.ctx, w.node, method, args, thing)
+	return call(w.ctx, w.node, method, args, thing)
 }
 
 // FeeRate returns the asset standard fee rate for Zcash.
@@ -389,7 +389,7 @@ func (w *zecWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, fmt.Errorf("invalid best block hash from node: %v", err)
 	}
 
-	bestBlock := &btc.BlockVector{Height: bestBlockHdr.Height, Hash: *bestBlockHash}
+	bestBlock := &blockVector{Height: bestBlockHdr.Height, Hash: *bestBlockHash}
 	w.log.Infof("Connected wallet with current best block %v (%d)", bestBlock.Hash, bestBlock.Height)
 	w.tipMtx.Lock()
 	w.currentTip = bestBlock
@@ -460,10 +460,10 @@ func (w *zecWallet) checkPeers() {
 }
 
 func (w *zecWallet) prepareCoinManager() {
-	w.cm = btc.NewCoinManager(
+	w.cm = newCoinManager(
 		w.log,
 		w.btcParams,
-		func(val, lots, maxFeeRate uint64, reportChange bool) btc.EnoughFunc { // orderEnough
+		func(val, lots, maxFeeRate uint64, reportChange bool) enoughFunc { // orderEnough
 			return func(inputCount, inputsSize, sum uint64) (bool, uint64) {
 				req := RequiredOrderFunds(val, inputCount, inputsSize, lots)
 				if sum >= req {
@@ -476,13 +476,13 @@ func (w *zecWallet) prepareCoinManager() {
 				return false, 0
 			}
 		},
-		func() ([]*btc.ListUnspentResult, error) { // list
+		func() ([]*listUnspentResult, error) { // list
 			return listUnspent(w)
 		},
 		func(unlock bool, ops []*btc.Output) error { // lock
 			return lockUnspent(w, unlock, ops)
 		},
-		func() ([]*btc.RPCOutpoint, error) { // listLocked
+		func() ([]*rpcOutpoint, error) { // listLocked
 			return listLockUnspent(w, w.log)
 		},
 		func(txHash *chainhash.Hash, vout uint32) (*wire.TxOut, error) {
@@ -508,9 +508,9 @@ func (w *zecWallet) prepareCoinManager() {
 }
 
 func (w *zecWallet) prepareRedemptionFinder() {
-	w.rf = btc.NewRedemptionFinder(
+	w.rf = newRedemptionFinder(
 		w.log,
-		func(h *chainhash.Hash) (*btc.GetTransactionResult, error) {
+		func(h *chainhash.Hash) (*getTransactionResult, error) {
 			tx, err := getWalletTransaction(w, h)
 			if err != nil {
 				return nil, err
@@ -518,7 +518,7 @@ func (w *zecWallet) prepareRedemptionFinder() {
 			if tx.Confirmations < 0 {
 				tx.Confirmations = 0
 			}
-			return &btc.GetTransactionResult{
+			return &getTransactionResult{
 				Confirmations: uint64(tx.Confirmations),
 				BlockHash:     tx.BlockHash,
 				BlockTime:     tx.BlockTime,
@@ -546,18 +546,18 @@ func (w *zecWallet) prepareRedemptionFinder() {
 		func() (int32, error) {
 			return getBestBlockHeight(w)
 		},
-		func(ctx context.Context, reqs map[btc.OutPoint]*btc.FindRedemptionReq, blockHash chainhash.Hash) (discovered map[btc.OutPoint]*btc.FindRedemptionResult) {
+		func(ctx context.Context, reqs map[btc.OutPoint]*findRedemptionReq, blockHash chainhash.Hash) (discovered map[btc.OutPoint]*findRedemptionResult) {
 			blk, err := getBlock(w, blockHash)
 			if err != nil {
 				w.log.Errorf("RPC GetBlock error: %v", err)
 				return
 			}
-			return btc.SearchBlockForRedemptions(ctx, reqs, &blk.MsgBlock, false, hashTx, w.btcParams)
+			return searchBlockForRedemptions(ctx, reqs, &blk.MsgBlock, false, hashTx, w.btcParams)
 		},
 		func(h int64) (*chainhash.Hash, error) {
 			return getBlockHash(w, h)
 		},
-		func(ctx context.Context, reqs map[btc.OutPoint]*btc.FindRedemptionReq) (discovered map[btc.OutPoint]*btc.FindRedemptionResult) {
+		func(ctx context.Context, reqs map[btc.OutPoint]*findRedemptionReq) (discovered map[btc.OutPoint]*findRedemptionResult) {
 			getRawMempool := func() ([]*chainhash.Hash, error) {
 				return getRawMempool(w)
 			}
@@ -568,7 +568,7 @@ func (w *zecWallet) prepareRedemptionFinder() {
 				}
 				return tx.MsgTx, nil
 			}
-			return btc.FindRedemptionsInMempool(ctx, w.log, reqs, getRawMempool, getMsgTx, false, hashTx, w.btcParams)
+			return findRedemptionsInMempool(ctx, w.log, reqs, getRawMempool, getMsgTx, false, hashTx, w.btcParams)
 		},
 	)
 }
@@ -585,7 +585,7 @@ func (w *zecWallet) connectRPC(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("getblockchaininfo error: %w", err)
 	}
-	if !btc.ChainOK(w.net, chainInfo.Chain) {
+	if !chainOK(w.net, chainInfo.Chain) {
 		return errors.New("wrong net")
 	}
 	// Make sure we have zeroth and first account or are able to create them.
@@ -648,7 +648,7 @@ func (w *zecWallet) watchBlocks(ctx context.Context) {
 				continue
 			}
 
-			newTip := &btc.BlockVector{Height: newTipHdr.Height, Hash: *newTipHash}
+			newTip := &blockVector{Height: newTipHdr.Height, Hash: *newTipHash}
 			w.reportNewTip(ctx, newTip)
 
 		case <-ctx.Done():
@@ -665,7 +665,7 @@ func (w *zecWallet) watchBlocks(ctx context.Context) {
 // reportNewTip sets the currentTip. The tipChange callback function is invoked
 // and a goroutine is started to check if any contracts in the
 // findRedemptionQueue are redeemed in the new blocks.
-func (w *zecWallet) reportNewTip(ctx context.Context, newTip *btc.BlockVector) {
+func (w *zecWallet) reportNewTip(ctx context.Context, newTip *blockVector) {
 	w.tipMtx.Lock()
 	defer w.tipMtx.Unlock()
 
@@ -786,7 +786,7 @@ func (w *zecWallet) OwnsDepositAddress(addrStr string) (bool, error) {
 	return res.IsMine, nil
 }
 
-func sendEnough(val uint64) btc.EnoughFunc {
+func sendEnough(val uint64) enoughFunc {
 	return func(inputCount, inputsSize, sum uint64) (bool, uint64) {
 		fees := TxFeesZIP317(inputCount*btc.RedeemP2PKHInputSize+1, 2*btc.P2PKHOutputSize+1, 0, 0, 0, 0)
 		total := fees + val
@@ -1091,7 +1091,7 @@ func (w *zecWallet) lockedZats() (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		txOut, err := btc.TxOutFromTxBytes(tx.Bytes, rpcOP.Vout, deserializeTx, hashTx)
+		txOut, err := txOutFromTxBytes(tx.Bytes, rpcOP.Vout, deserializeTx, hashTx)
 		if err != nil {
 			return 0, err
 		}

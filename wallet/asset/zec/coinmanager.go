@@ -1,4 +1,4 @@
-package btc
+package zec
 
 import (
 	"errors"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -16,58 +17,54 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// CompositeUTXO combines utxo info with the spending input information.
-type CompositeUTXO struct {
-	*UTxO
+// compositeUTXO combines utxo info with the spending input information.
+type compositeUTXO struct {
+	*btc.UTxO
 	Confs        uint32
 	RedeemScript []byte
-	Input        *SpendInfo
+	Input        *btc.SpendInfo
 }
 
-// EnoughFunc considers information about funding inputs and indicates whether
-// it is enough to fund an order. EnoughFunc is bound to an order by the
-// OrderFundingThresholder.
-type EnoughFunc func(inputCount, inputsSize, sum uint64) (bool, uint64)
+// enoughFunc considers information about funding inputs and indicates whether
+// it is enough to fund an order. enoughFunc is bound to an order by the
+// orderFundingThresholder.
+type enoughFunc func(inputCount, inputsSize, sum uint64) (bool, uint64)
 
-// OrderEstimator is a function that accepts information about an order and
-// estimates the total required funds needed for the order.
-type OrderEstimator func(swapVal, inputCount, inputsSize, maxSwaps, feeRate uint64) uint64
+// orderFundingThresholder accepts information about an order and generates an
+// enoughFunc that can be used to test funding input combinations.
+type orderFundingThresholder func(val, lots, maxFeeRate uint64, reportChange bool) enoughFunc
 
-// OrderFundingThresholder accepts information about an order and generates an
-// EnoughFunc that can be used to test funding input combinations.
-type OrderFundingThresholder func(val, lots, maxFeeRate uint64, reportChange bool) EnoughFunc
-
-// CoinManager provides utilities for working with unspent transaction outputs.
+// coinManager provides utilities for working with unspent transaction outputs.
 // In addition to translation to and from custom wallet types, there are
-// CoinManager methods to help pick UTXOs for funding in various contexts.
-type CoinManager struct {
+// coinManager methods to help pick UTXOs for funding in various contexts.
+type coinManager struct {
 	// Coins returned by Fund are cached for quick reference.
 	mtx sync.RWMutex
 	log util.Logger
 
-	orderEnough OrderFundingThresholder
+	orderEnough orderFundingThresholder
 	chainParams *chaincfg.Params
-	listUnspent func() ([]*ListUnspentResult, error)
-	lockUnspent func(unlock bool, ops []*Output) error
-	listLocked  func() ([]*RPCOutpoint, error)
+	listUnspent func() ([]*listUnspentResult, error)
+	lockUnspent func(unlock bool, ops []*btc.Output) error
+	listLocked  func() ([]*rpcOutpoint, error)
 	getTxOut    func(txHash *chainhash.Hash, vout uint32) (*wire.TxOut, error)
 	stringAddr  func(btcutil.Address) (string, error)
 
-	lockedOutputs map[OutPoint]*UTxO
+	lockedOutputs map[btc.OutPoint]*btc.UTxO
 }
 
-func NewCoinManager(
+func newCoinManager(
 	log util.Logger,
 	chainParams *chaincfg.Params,
-	orderEnough OrderFundingThresholder,
-	listUnspent func() ([]*ListUnspentResult, error),
-	lockUnspent func(unlock bool, ops []*Output) error,
-	listLocked func() ([]*RPCOutpoint, error),
+	orderEnough orderFundingThresholder,
+	listUnspent func() ([]*listUnspentResult, error),
+	lockUnspent func(unlock bool, ops []*btc.Output) error,
+	listLocked func() ([]*rpcOutpoint, error),
 	getTxOut func(txHash *chainhash.Hash, vout uint32) (*wire.TxOut, error),
 	stringAddr func(btcutil.Address) (string, error),
-) *CoinManager {
+) *coinManager {
 
-	return &CoinManager{
+	return &coinManager{
 		log:           log,
 		orderEnough:   orderEnough,
 		chainParams:   chainParams,
@@ -75,19 +72,19 @@ func NewCoinManager(
 		lockUnspent:   lockUnspent,
 		listLocked:    listLocked,
 		getTxOut:      getTxOut,
-		lockedOutputs: make(map[OutPoint]*UTxO),
+		lockedOutputs: make(map[btc.OutPoint]*btc.UTxO),
 		stringAddr:    stringAddr,
 	}
 }
 
 // FundWithUTXOs attempts to find the best combination of UTXOs to satisfy the
-// given EnoughFunc while respecting the specified keep reserves (if non-zero).
-func (c *CoinManager) FundWithUTXOs(
-	utxos []*CompositeUTXO,
+// given enoughFunc while respecting the specified keep reserves (if non-zero).
+func (c *coinManager) FundWithUTXOs(
+	utxos []*compositeUTXO,
 	keep uint64,
 	lockUnspents bool,
-	enough EnoughFunc,
-) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
+	enough enoughFunc,
+) (coins asset.Coins, fundingCoins map[btc.OutPoint]*btc.UTxO, spents []*btc.Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 	var avail uint64
 	for _, utxo := range utxos {
 		avail += utxo.Amount
@@ -98,19 +95,19 @@ func (c *CoinManager) FundWithUTXOs(
 	return c.fundWithUTXOs(utxos, avail, keep, lockUnspents, enough)
 }
 
-func (c *CoinManager) fundWithUTXOs(
-	utxos []*CompositeUTXO,
+func (c *coinManager) fundWithUTXOs(
+	utxos []*compositeUTXO,
 	avail, keep uint64,
 	lockUnspents bool,
-	enough EnoughFunc,
-) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
+	enough enoughFunc,
+) (coins asset.Coins, fundingCoins map[btc.OutPoint]*btc.UTxO, spents []*btc.Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 
 	if keep > 0 {
 		kept := leastOverFund(reserveEnough(keep), utxos)
 		c.log.Debugf("Setting aside %v BTC in %d UTXOs to respect the %v BTC reserved amount",
-			toBTC(SumUTXOs(kept)), len(kept), toBTC(keep))
-		utxosPruned := UTxOSetDiff(utxos, kept)
-		sum, _, size, coins, fundingCoins, redeemScripts, spents, err = TryFund(utxosPruned, enough)
+			toBTC(sumUTXOs(kept)), len(kept), toBTC(keep))
+		utxosPruned := uTxOSetDiff(utxos, kept)
+		sum, _, size, coins, fundingCoins, redeemScripts, spents, err = tryFund(utxosPruned, enough)
 		if err != nil {
 			c.log.Debugf("Unable to fund order with UTXOs set aside (%v), trying again with full UTXO set.", err)
 		}
@@ -120,7 +117,7 @@ func (c *CoinManager) fundWithUTXOs(
 		// change (extra) that the enough func grants us.
 
 		var extra uint64
-		sum, extra, size, coins, fundingCoins, redeemScripts, spents, err = TryFund(utxos, enough)
+		sum, extra, size, coins, fundingCoins, redeemScripts, spents, err = tryFund(utxos, enough)
 		if err != nil {
 			return nil, nil, nil, nil, 0, 0, err
 		}
@@ -145,9 +142,9 @@ func (c *CoinManager) fundWithUTXOs(
 	return coins, fundingCoins, spents, redeemScripts, size, sum, err
 }
 
-func (c *CoinManager) fund(keep uint64, minConfs uint32, lockUnspents bool,
+func (c *coinManager) fund(keep uint64, minConfs uint32, lockUnspents bool,
 	enough func(_, size, sum uint64) (bool, uint64)) (
-	coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
+	coins asset.Coins, fundingCoins map[btc.OutPoint]*btc.UTxO, spents []*btc.Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 	utxos, _, avail, err := c.spendableUTXOs(minConfs)
 	if err != nil {
 		return nil, nil, nil, nil, 0, 0, fmt.Errorf("error getting spendable utxos: %w", err)
@@ -155,15 +152,15 @@ func (c *CoinManager) fund(keep uint64, minConfs uint32, lockUnspents bool,
 	return c.fundWithUTXOs(utxos, avail, keep, lockUnspents, enough)
 }
 
-// Fund attempts to satisfy the given EnoughFunc with all available UTXOs. For
+// Fund attempts to satisfy the given enoughFunc with all available UTXOs. For
 // situations where Fund might be called repeatedly, the caller should instead
 // do SpendableUTXOs and use the results in FundWithUTXOs.
-func (c *CoinManager) Fund(
+func (c *coinManager) Fund(
 	keep uint64,
 	minConfs uint32,
 	lockUnspents bool,
-	enough EnoughFunc,
-) (coins asset.Coins, fundingCoins map[OutPoint]*UTxO, spents []*Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
+	enough enoughFunc,
+) (coins asset.Coins, fundingCoins map[btc.OutPoint]*btc.UTxO, spents []*btc.Output, redeemScripts []util.Bytes, size, sum uint64, err error) {
 
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
@@ -175,34 +172,34 @@ func (c *CoinManager) Fund(
 // regards to the DEX's configuration, and considered safe to spend according to
 // confirmations and coin source. The UTXOs will be sorted by ascending value.
 // spendableUTXOs should only be called with the fundingMtx RLock'ed.
-func (c *CoinManager) SpendableUTXOs(confs uint32) ([]*CompositeUTXO, map[OutPoint]*CompositeUTXO, uint64, error) {
+func (c *coinManager) SpendableUTXOs(confs uint32) ([]*compositeUTXO, map[btc.OutPoint]*compositeUTXO, uint64, error) {
 	c.mtx.RLock()
 	defer c.mtx.RUnlock()
 	return c.spendableUTXOs(confs)
 }
 
-func (c *CoinManager) spendableUTXOs(confs uint32) ([]*CompositeUTXO, map[OutPoint]*CompositeUTXO, uint64, error) {
+func (c *coinManager) spendableUTXOs(confs uint32) ([]*compositeUTXO, map[btc.OutPoint]*compositeUTXO, uint64, error) {
 	unspents, err := c.listUnspent()
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	utxos, utxoMap, sum, err := ConvertUnspent(confs, unspents, c.chainParams)
+	utxos, utxoMap, sum, err := convertUnspent(confs, unspents, c.chainParams)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	var relock []*Output
+	var relock []*btc.Output
 	var i int
 	for _, utxo := range utxos {
 		// Guard against inconsistencies between the wallet's view of
 		// spendable unlocked UTXOs and ExchangeWallet's. e.g. User manually
 		// unlocked something or even restarted the wallet software.
-		pt := NewOutPoint(utxo.TxHash, utxo.Vout)
+		pt := btc.NewOutPoint(utxo.TxHash, utxo.Vout)
 		if c.lockedOutputs[pt] != nil {
 			c.log.Warnf("Known order-funding coin %s returned by listunspent!", pt)
 			delete(utxoMap, pt)
-			relock = append(relock, &Output{pt, utxo.Amount})
+			relock = append(relock, &btc.Output{Pt: pt, Val: utxo.Amount})
 		} else { // in-place filter maintaining order
 			utxos[i] = utxo
 			i++
@@ -218,7 +215,7 @@ func (c *CoinManager) spendableUTXOs(confs uint32) ([]*CompositeUTXO, map[OutPoi
 }
 
 // ReturnCoins makes the locked utxos available for use again.
-func (c *CoinManager) ReturnCoins(unspents asset.Coins) error {
+func (c *coinManager) ReturnCoins(unspents asset.Coins) error {
 	if unspents == nil { // not just empty to make this harder to do accidentally
 		c.log.Debugf("Returning all coins.")
 		c.mtx.Lock()
@@ -226,19 +223,19 @@ func (c *CoinManager) ReturnCoins(unspents asset.Coins) error {
 		if err := c.lockUnspent(true, nil); err != nil {
 			return err
 		}
-		c.lockedOutputs = make(map[OutPoint]*UTxO)
+		c.lockedOutputs = make(map[btc.OutPoint]*btc.UTxO)
 		return nil
 	}
 	if len(unspents) == 0 {
 		return fmt.Errorf("cannot return zero coins")
 	}
 
-	ops := make([]*Output, 0, len(unspents))
+	ops := make([]*btc.Output, 0, len(unspents))
 	c.log.Debugf("returning coins %s", unspents)
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	for _, unspent := range unspents {
-		op, err := ConvertCoin(unspent)
+		op, err := btc.ConvertCoin(unspent)
 		if err != nil {
 			return fmt.Errorf("error converting coin: %w", err)
 		}
@@ -253,12 +250,12 @@ func (c *CoinManager) ReturnCoins(unspents asset.Coins) error {
 	return nil
 }
 
-// ReturnOutPoint makes the UTXO represented by the OutPoint available for use
+// ReturnOutPoint makes the UTXO represented by the btc.OutPoint available for use
 // again.
-func (c *CoinManager) ReturnOutPoint(pt OutPoint) error {
+func (c *coinManager) ReturnOutPoint(pt btc.OutPoint) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
-	if err := c.lockUnspent(true, []*Output{NewOutput(&pt.TxHash, pt.Vout, 0)}); err != nil {
+	if err := c.lockUnspent(true, []*btc.Output{btc.NewOutput(&pt.TxHash, pt.Vout, 0)}); err != nil {
 		return err // could it have unlocked some of them? we may want to loop instead if that's the case
 	}
 	delete(c.lockedOutputs, pt)
@@ -266,10 +263,10 @@ func (c *CoinManager) ReturnOutPoint(pt OutPoint) error {
 }
 
 // FundingCoins attempts to find the specified utxos and locks them.
-func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
+func (c *coinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 	// First check if we have the coins in cache.
 	coins := make(asset.Coins, 0, len(ids))
-	notFound := make(map[OutPoint]bool)
+	notFound := make(map[btc.OutPoint]bool)
 	c.mtx.Lock()
 	defer c.mtx.Unlock() // stay locked until we update the map at the end
 	for _, id := range ids {
@@ -277,10 +274,10 @@ func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 		if err != nil {
 			return nil, err
 		}
-		pt := NewOutPoint(txHash, vout)
+		pt := btc.NewOutPoint(txHash, vout)
 		fundingCoin, found := c.lockedOutputs[pt]
 		if found {
-			coins = append(coins, NewOutput(txHash, vout, fundingCoin.Amount))
+			coins = append(coins, btc.NewOutput(txHash, vout, fundingCoin.Amount))
 			continue
 		}
 		notFound[pt] = true
@@ -300,7 +297,7 @@ func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error decoding txid from rpc server %s: %w", rpcOP.TxID, err)
 		}
-		pt := NewOutPoint(txHash, rpcOP.Vout)
+		pt := btc.NewOutPoint(txHash, rpcOP.Vout)
 		if !notFound[pt] {
 			continue // unrelated to the order
 		}
@@ -330,13 +327,13 @@ func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 			c.log.Errorf("Failed to stringify address %v (default encoding): %v", addrs[0], err)
 			addrStr = addrs[0].String() // may or may not be able to retrieve the private keys by address!
 		}
-		utxo := &UTxO{
+		utxo := &btc.UTxO{
 			TxHash:  txHash,
 			Vout:    rpcOP.Vout,
 			Address: addrStr, // for retrieving private key by address string
 			Amount:  uint64(txOut.Value),
 		}
-		coin := NewOutput(txHash, rpcOP.Vout, uint64(txOut.Value))
+		coin := btc.NewOutput(txHash, rpcOP.Vout, uint64(txOut.Value))
 		coins = append(coins, coin)
 		c.lockedOutputs[pt] = utxo
 		delete(notFound, pt)
@@ -351,14 +348,14 @@ func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 	if err != nil {
 		return nil, err
 	}
-	coinsToLock := make([]*Output, 0, len(notFound))
+	coinsToLock := make([]*btc.Output, 0, len(notFound))
 	for pt := range notFound {
 		utxo, found := utxoMap[pt]
 		if !found {
 			return nil, fmt.Errorf("funding coin not found: %s", pt.String())
 		}
 		c.lockedOutputs[pt] = utxo.UTxO
-		coin := NewOutput(utxo.TxHash, utxo.Vout, utxo.Amount)
+		coin := btc.NewOutput(utxo.TxHash, utxo.Vout, utxo.Amount)
 		coins = append(coins, coin)
 		coinsToLock = append(coinsToLock, coin)
 		delete(notFound, pt)
@@ -374,23 +371,23 @@ func (c *CoinManager) FundingCoins(ids []util.Bytes) (asset.Coins, error) {
 // LockUTXOs locks the specified utxos.
 // TODO: Move lockUnspent calls into this method instead of the caller doing it
 // at every callsite, and because that's what we do with unlocking.
-func (c *CoinManager) LockUTXOs(utxos []*UTxO) {
+func (c *coinManager) LockUTXOs(utxos []*btc.UTxO) {
 	c.mtx.Lock()
 	for _, utxo := range utxos {
-		c.lockedOutputs[NewOutPoint(utxo.TxHash, utxo.Vout)] = utxo
+		c.lockedOutputs[btc.NewOutPoint(utxo.TxHash, utxo.Vout)] = utxo
 	}
 	c.mtx.Unlock()
 }
 
 // LockOutputsMap locks the utxos in the provided mapping.
-func (c *CoinManager) LockOutputsMap(utxos map[OutPoint]*UTxO) {
+func (c *coinManager) LockOutputsMap(utxos map[btc.OutPoint]*btc.UTxO) {
 	c.mtx.Lock()
 	maps.Copy(c.lockedOutputs, utxos)
 	c.mtx.Unlock()
 }
 
 // UnlockOutPoints unlocks the utxos represented by the provided outpoints.
-func (c *CoinManager) UnlockOutPoints(pts []OutPoint) {
+func (c *coinManager) UnlockOutPoints(pts []btc.OutPoint) {
 	c.mtx.Lock()
 	for _, pt := range pts {
 		delete(c.lockedOutputs, pt)
@@ -400,17 +397,17 @@ func (c *CoinManager) UnlockOutPoints(pts []OutPoint) {
 
 // LockedOutput returns the currently locked utxo represented by the provided
 // outpoint, or nil if there is no record of the utxo in the local map.
-func (c *CoinManager) LockedOutput(pt OutPoint) *UTxO {
+func (c *coinManager) LockedOutput(pt btc.OutPoint) *btc.UTxO {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	return c.lockedOutputs[pt]
 }
 
-func ConvertUnspent(confs uint32, unspents []*ListUnspentResult, chainParams *chaincfg.Params) ([]*CompositeUTXO, map[OutPoint]*CompositeUTXO, uint64, error) {
+func convertUnspent(confs uint32, unspents []*listUnspentResult, chainParams *chaincfg.Params) ([]*compositeUTXO, map[btc.OutPoint]*compositeUTXO, uint64, error) {
 	sort.Slice(unspents, func(i, j int) bool { return unspents[i].Amount < unspents[j].Amount })
 	var sum uint64
-	utxos := make([]*CompositeUTXO, 0, len(unspents))
-	utxoMap := make(map[OutPoint]*CompositeUTXO, len(unspents))
+	utxos := make([]*compositeUTXO, 0, len(unspents))
+	utxoMap := make(map[btc.OutPoint]*compositeUTXO, len(unspents))
 	for _, txout := range unspents {
 		if txout.Confirmations >= confs && txout.Safe() && txout.Spendable {
 			txHash, err := chainhash.NewHashFromStr(txout.TxID)
@@ -418,21 +415,21 @@ func ConvertUnspent(confs uint32, unspents []*ListUnspentResult, chainParams *ch
 				return nil, nil, 0, fmt.Errorf("error decoding txid in ListUnspentResult: %w", err)
 			}
 
-			nfo, err := InputInfo(txout.ScriptPubKey, txout.RedeemScript, chainParams)
+			nfo, err := btc.InputInfo(txout.ScriptPubKey, txout.RedeemScript, chainParams)
 			if err != nil {
 				if errors.Is(err, util.UnsupportedScriptError) {
 					continue
 				}
 				return nil, nil, 0, fmt.Errorf("error reading asset info: %w", err)
 			}
-			if nfo.ScriptType == ScriptUnsupported || nfo.NonStandardScript {
-				// InputInfo sets NonStandardScript for P2SH with non-standard
+			if nfo.ScriptType == btc.ScriptUnsupported || nfo.NonStandardScript {
+				// btc.InputInfo sets NonStandardScript for P2SH with non-standard
 				// redeem scripts. Don't return these since they cannot fund
 				// arbitrary txns.
 				continue
 			}
-			utxo := &CompositeUTXO{
-				UTxO: &UTxO{
+			utxo := &compositeUTXO{
+				UTxO: &btc.UTxO{
 					TxHash:  txHash,
 					Vout:    txout.Vout,
 					Address: txout.Address,
@@ -443,35 +440,35 @@ func ConvertUnspent(confs uint32, unspents []*ListUnspentResult, chainParams *ch
 				Input:        nfo,
 			}
 			utxos = append(utxos, utxo)
-			utxoMap[NewOutPoint(txHash, txout.Vout)] = utxo
+			utxoMap[btc.NewOutPoint(txHash, txout.Vout)] = utxo
 			sum += toSatoshi(txout.Amount)
 		}
 	}
 	return utxos, utxoMap, sum, nil
 }
 
-func TryFund(
-	utxos []*CompositeUTXO,
-	enough EnoughFunc,
+func tryFund(
+	utxos []*compositeUTXO,
+	enough enoughFunc,
 ) (
 	sum, extra, size uint64,
 	coins asset.Coins,
-	fundingCoins map[OutPoint]*UTxO,
+	fundingCoins map[btc.OutPoint]*btc.UTxO,
 	redeemScripts []util.Bytes,
-	spents []*Output,
+	spents []*btc.Output,
 	err error,
 ) {
 
-	fundingCoins = make(map[OutPoint]*UTxO)
+	fundingCoins = make(map[btc.OutPoint]*btc.UTxO)
 
-	isEnoughWith := func(count int, unspent *CompositeUTXO) bool {
+	isEnoughWith := func(count int, unspent *compositeUTXO) bool {
 		ok, _ := enough(uint64(count), size+uint64(unspent.Input.VBytes()), sum+unspent.Amount)
 		return ok
 	}
 
-	addUTXO := func(unspent *CompositeUTXO) {
+	addUTXO := func(unspent *compositeUTXO) {
 		v := unspent.Amount
-		op := NewOutput(unspent.TxHash, unspent.Vout, v)
+		op := btc.NewOutput(unspent.TxHash, unspent.Vout, v)
 		coins = append(coins, op)
 		redeemScripts = append(redeemScripts, unspent.RedeemScript)
 		spents = append(spents, op)
@@ -483,9 +480,9 @@ func TryFund(
 	tryUTXOs := func(minconf uint32) bool {
 		sum, size = 0, 0
 		coins, spents, redeemScripts = nil, nil, nil
-		fundingCoins = make(map[OutPoint]*UTxO)
+		fundingCoins = make(map[btc.OutPoint]*btc.UTxO)
 
-		okUTXOs := make([]*CompositeUTXO, 0, len(utxos)) // over-allocate
+		okUTXOs := make([]*compositeUTXO, 0, len(utxos)) // over-allocate
 		for _, cu := range utxos {
 			if cu.Confs >= minconf {
 				okUTXOs = append(okUTXOs, cu)
@@ -522,7 +519,7 @@ func TryFund(
 	if !tryUTXOs(1) {
 		if !tryUTXOs(0) {
 			return 0, 0, 0, nil, nil, nil, nil, fmt.Errorf("not enough to cover requested funds. "+
-				"%d available in %d UTXOs", amount(sum), len(coins))
+				"%d available in %d UTXOs", sum, len(coins))
 		}
 	}
 

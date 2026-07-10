@@ -1,4 +1,4 @@
-package btc
+package zec
 
 import (
 	"math/rand"
@@ -6,6 +6,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 )
 
 func Test_leastOverFund(t *testing.T) {
@@ -13,72 +15,72 @@ func Test_leastOverFund(t *testing.T) {
 	enough := func(_, _, sum uint64) (bool, uint64) {
 		return sum >= 10e8, 0
 	}
-	newU := func(amt float64) *CompositeUTXO {
-		return &CompositeUTXO{
-			UTxO: &UTxO{
+	newU := func(amt float64) *compositeUTXO {
+		return &compositeUTXO{
+			UTxO: &btc.UTxO{
 				Amount: uint64(amt) * 1e8,
 			},
-			Input: &SpendInfo{},
+			Input: &btc.SpendInfo{},
 		}
 	}
 	tests := []struct {
 		name  string
-		utxos []*CompositeUTXO
-		want  []*CompositeUTXO
+		utxos []*compositeUTXO
+		want  []*compositeUTXO
 	}{
 		{
 			"1,3",
-			[]*CompositeUTXO{newU(1), newU(8), newU(9)},
-			[]*CompositeUTXO{newU(1), newU(9)},
+			[]*compositeUTXO{newU(1), newU(8), newU(9)},
+			[]*compositeUTXO{newU(1), newU(9)},
 		},
 		{
 			"1,2",
-			[]*CompositeUTXO{newU(1), newU(9)},
-			[]*CompositeUTXO{newU(1), newU(9)},
+			[]*compositeUTXO{newU(1), newU(9)},
+			[]*compositeUTXO{newU(1), newU(9)},
 		},
 		{
 			"1,2++",
-			[]*CompositeUTXO{newU(2), newU(9)},
-			[]*CompositeUTXO{newU(2), newU(9)},
+			[]*compositeUTXO{newU(2), newU(9)},
+			[]*compositeUTXO{newU(2), newU(9)},
 		},
 		{
 			"2,3++",
-			[]*CompositeUTXO{newU(0), newU(2), newU(9)},
-			[]*CompositeUTXO{newU(2), newU(9)},
+			[]*compositeUTXO{newU(0), newU(2), newU(9)},
+			[]*compositeUTXO{newU(2), newU(9)},
 		},
 		{
 			"3",
-			[]*CompositeUTXO{newU(0), newU(2), newU(10)},
-			[]*CompositeUTXO{newU(10)},
+			[]*compositeUTXO{newU(0), newU(2), newU(10)},
+			[]*compositeUTXO{newU(10)},
 		},
 		{
 			"subset",
-			[]*CompositeUTXO{newU(1), newU(9), newU(11)},
-			[]*CompositeUTXO{newU(1), newU(9)},
+			[]*compositeUTXO{newU(1), newU(9), newU(11)},
+			[]*compositeUTXO{newU(1), newU(9)},
 		},
 		{
 			"subset small bias",
-			[]*CompositeUTXO{newU(3), newU(6), newU(7)},
-			[]*CompositeUTXO{newU(3), newU(7)},
+			[]*compositeUTXO{newU(3), newU(6), newU(7)},
+			[]*compositeUTXO{newU(3), newU(7)},
 		},
 		{
 			"single exception",
-			[]*CompositeUTXO{newU(5), newU(7), newU(11)},
-			[]*CompositeUTXO{newU(11)},
+			[]*compositeUTXO{newU(5), newU(7), newU(11)},
+			[]*compositeUTXO{newU(11)},
 		},
 		{
 			"1 of 1",
-			[]*CompositeUTXO{newU(10)},
-			[]*CompositeUTXO{newU(10)},
+			[]*compositeUTXO{newU(10)},
+			[]*compositeUTXO{newU(10)},
 		},
 		{
 			"ok nil",
-			[]*CompositeUTXO{newU(1), newU(8)},
+			[]*compositeUTXO{newU(1), newU(8)},
 			nil,
 		},
 		{
 			"ok",
-			[]*CompositeUTXO{newU(1)},
+			[]*compositeUTXO{newU(1)},
 			nil,
 		},
 	}
@@ -101,30 +103,30 @@ func Test_leastOverFundWithLimit(t *testing.T) {
 	enough := func(_, _, sum uint64) (bool, uint64) {
 		return sum >= 10e8, 0
 	}
-	newU := func(amt float64) *CompositeUTXO {
-		return &CompositeUTXO{
-			UTxO: &UTxO{
+	newU := func(amt float64) *compositeUTXO {
+		return &compositeUTXO{
+			UTxO: &btc.UTxO{
 				Amount: uint64(amt) * 1e8,
 			},
-			Input: &SpendInfo{},
+			Input: &btc.SpendInfo{},
 		}
 	}
 	tests := []struct {
 		name  string
 		limit uint64
-		utxos []*CompositeUTXO
-		want  []*CompositeUTXO
+		utxos []*compositeUTXO
+		want  []*compositeUTXO
 	}{
 		{
 			"1,3",
 			10e8,
-			[]*CompositeUTXO{newU(1), newU(8), newU(9)},
-			[]*CompositeUTXO{newU(1), newU(9)},
+			[]*compositeUTXO{newU(1), newU(8), newU(9)},
+			[]*compositeUTXO{newU(1), newU(9)},
 		},
 		{
 			"max fund too low",
 			9e8,
-			[]*CompositeUTXO{newU(1), newU(8), newU(9)},
+			[]*compositeUTXO{newU(1), newU(8), newU(9)},
 			nil,
 		},
 	}
@@ -162,12 +164,12 @@ func Fuzz_leastOverFund(f *testing.F) {
 		f.Add(seed.amt, seed.n)
 	}
 
-	newU := func(amt float64) *CompositeUTXO {
-		return &CompositeUTXO{
-			UTxO: &UTxO{
+	newU := func(amt float64) *compositeUTXO {
+		return &compositeUTXO{
+			UTxO: &btc.UTxO{
 				Amount: uint64(amt * 1e8),
 			},
-			Input: &SpendInfo{},
+			Input: &btc.SpendInfo{},
 		}
 	}
 
@@ -179,7 +181,7 @@ func Fuzz_leastOverFund(f *testing.F) {
 			t.Skip()
 		}
 		m := 2 * amt / uint64(n)
-		utxos := make([]*CompositeUTXO, n)
+		utxos := make([]*compositeUTXO, n)
 		for i := range utxos {
 			var v float64
 			if rand.Intn(2) > 0 {
@@ -208,13 +210,13 @@ func Fuzz_leastOverFund(f *testing.F) {
 func BenchmarkLeastOverFund(b *testing.B) {
 	// Same amounts every time.
 	rnd := rand.New(rand.NewSource(1))
-	utxos := make([]*CompositeUTXO, 2_000)
+	utxos := make([]*compositeUTXO, 2_000)
 	for i := range utxos {
-		utxo := &CompositeUTXO{
-			UTxO: &UTxO{
+		utxo := &compositeUTXO{
+			UTxO: &btc.UTxO{
 				Amount: uint64(rnd.Int31n(100) * 1e8),
 			},
-			Input: &SpendInfo{},
+			Input: &btc.SpendInfo{},
 		}
 		utxos[i] = utxo
 	}

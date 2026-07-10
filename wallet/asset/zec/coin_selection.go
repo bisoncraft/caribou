@@ -1,80 +1,32 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-package btc
+package zec
 
 import (
 	"math"
 	"math/rand"
 	"sort"
 	"time"
-
-	"github.com/bisoncraft/bosswallet/util/calc"
 )
-
-// SendEnough generates a function that can be used as the enough argument to
-// the fund method when creating transactions to send funds. If fees are to be
-// subtracted from the inputs, set subtract so that the required amount excludes
-// the transaction fee. If change from the transaction should be considered
-// immediately available, set reportChange to indicate this and the returned
-// enough func will return a non-zero excess value. Otherwise, the enough func
-// will always return 0, leaving only unselected UTXOs to cover any required
-// reserves.
-func SendEnough(amt, feeRate uint64, subtract bool, baseTxSize uint64, segwit, reportChange bool) EnoughFunc {
-	return func(_, inputSize, sum uint64) (bool, uint64) {
-		txFee := (baseTxSize + inputSize) * feeRate
-		req := amt
-		if !subtract { // add the fee to required
-			req += txFee
-		}
-		if sum < req {
-			return false, 0
-		}
-		excess := sum - req
-		if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate, segwit) {
-			excess = 0
-		}
-		return true, excess
-	}
-}
-
-// orderEnough generates a function that can be used as the enough argument to
-// the fund method. If change from a split transaction will be created AND
-// immediately available, set reportChange to indicate this and the returned
-// enough func will return a non-zero excess value reflecting this potential
-// spit tx change. Otherwise, the enough func will always return 0, leaving
-// only unselected UTXOs to cover any required reserves.
-func orderEnough(val, lots, feeRate, initTxSizeBase, initTxSize uint64, segwit, reportChange bool) EnoughFunc {
-	return func(_, inputsSize, sum uint64) (bool, uint64) {
-		reqFunds := calc.RequiredOrderFunds(val, inputsSize, lots, initTxSizeBase, initTxSize, feeRate)
-		if sum >= reqFunds {
-			excess := sum - reqFunds
-			if !reportChange || IsDustVal(P2PKHOutputSize, excess, feeRate, segwit) {
-				excess = 0
-			}
-			return true, excess
-		}
-		return false, 0
-	}
-}
 
 // reserveEnough generates a function that can be used as the enough argument
 // to the fund method. The function returns true if sum is greater than equal
 // to amt.
-func reserveEnough(amt uint64) EnoughFunc {
+func reserveEnough(amt uint64) enoughFunc {
 	return func(_, _, sum uint64) (bool, uint64) {
 		return sum >= amt, 0
 	}
 }
 
-func sumUTXOSize(set []*CompositeUTXO) (tot uint64) {
+func sumUTXOSize(set []*compositeUTXO) (tot uint64) {
 	for _, utxo := range set {
 		tot += uint64(utxo.Input.VBytes())
 	}
 	return tot
 }
 
-func SumUTXOs(set []*CompositeUTXO) (tot uint64) {
+func sumUTXOs(set []*compositeUTXO) (tot uint64) {
 	for _, utxo := range set {
 		tot += utxo.Amount
 	}
@@ -87,14 +39,14 @@ func SumUTXOs(set []*CompositeUTXO) (tot uint64) {
 // involves two passes over the UTXOs. The first pass randomly selects
 // each UTXO with 50% probability. Then, the second pass selects any
 // unused UTXOs until the total value is enough.
-func subsetWithLeastOverFund(enough EnoughFunc, maxFund uint64, utxos []*CompositeUTXO) []*CompositeUTXO {
+func subsetWithLeastOverFund(enough enoughFunc, maxFund uint64, utxos []*compositeUTXO) []*compositeUTXO {
 	best := uint64(1 << 62)
 	var bestIncluded []bool
 	bestNumIncluded := 0
 
 	rnd := rand.New(rand.NewSource(time.Now().Unix()))
 
-	shuffledUTXOs := make([]*CompositeUTXO, len(utxos))
+	shuffledUTXOs := make([]*compositeUTXO, len(utxos))
 	copy(shuffledUTXOs, utxos)
 	rnd.Shuffle(len(shuffledUTXOs), func(i, j int) {
 		shuffledUTXOs[i], shuffledUTXOs[j] = shuffledUTXOs[j], shuffledUTXOs[i]
@@ -147,7 +99,7 @@ func subsetWithLeastOverFund(enough EnoughFunc, maxFund uint64, utxos []*Composi
 		return nil
 	}
 
-	set := make([]*CompositeUTXO, 0, len(shuffledUTXOs))
+	set := make([]*compositeUTXO, 0, len(shuffledUTXOs))
 	for i, inc := range bestIncluded {
 		if inc {
 			set = append(set, shuffledUTXOs[i])
@@ -175,16 +127,16 @@ func subsetWithLeastOverFund(enough EnoughFunc, maxFund uint64, utxos []*Composi
 //
 // If the provided UTXO set has less combined value than the requested amount a
 // nil slice is returned.
-func leastOverFund(enough EnoughFunc, utxos []*CompositeUTXO) []*CompositeUTXO {
+func leastOverFund(enough enoughFunc, utxos []*compositeUTXO) []*compositeUTXO {
 	return leastOverFundWithLimit(enough, math.MaxUint64, utxos)
 }
 
 // leastOverFundWithLimit is the same as leastOverFund, but with an additional
 // maxFund parameter. The total value of the returned UTXOs will not exceed
 // maxFund.
-func leastOverFundWithLimit(enough EnoughFunc, maxFund uint64, utxos []*CompositeUTXO) []*CompositeUTXO {
+func leastOverFundWithLimit(enough enoughFunc, maxFund uint64, utxos []*compositeUTXO) []*compositeUTXO {
 	// Remove the UTXOs that are larger than maxFund
-	var smallEnoughUTXOs []*CompositeUTXO
+	var smallEnoughUTXOs []*compositeUTXO
 	idx := sort.Search(len(utxos), func(i int) bool {
 		utxo := utxos[i]
 		return utxo.Amount > maxFund
@@ -202,8 +154,8 @@ func leastOverFundWithLimit(enough EnoughFunc, maxFund uint64, utxos []*Composit
 		e, _ := enough(1, uint64(utxo.Input.VBytes()), utxo.Amount)
 		return e
 	})
-	var small []*CompositeUTXO
-	var single *CompositeUTXO         // only return this if smaller ones would use more
+	var small []*compositeUTXO
+	var single *compositeUTXO         // only return this if smaller ones would use more
 	if idx == len(smallEnoughUTXOs) { // no one is enough
 		small = smallEnoughUTXOs
 	} else {
@@ -211,12 +163,12 @@ func leastOverFundWithLimit(enough EnoughFunc, maxFund uint64, utxos []*Composit
 		single = smallEnoughUTXOs[idx]
 	}
 
-	var set []*CompositeUTXO
-	smallSetTotalValue := SumUTXOs(small)
+	var set []*compositeUTXO
+	smallSetTotalValue := sumUTXOs(small)
 	smallSetTotalSize := sumUTXOSize(small)
 	if e, _ := enough(uint64(len(small)), smallSetTotalSize, smallSetTotalValue); !e {
 		if single != nil {
-			return []*CompositeUTXO{single}
+			return []*compositeUTXO{single}
 		} else {
 			return nil
 		}
@@ -225,18 +177,18 @@ func leastOverFundWithLimit(enough EnoughFunc, maxFund uint64, utxos []*Composit
 	}
 
 	// Return the small UTXO subset if it is less than the single big UTXO.
-	if single != nil && single.Amount < SumUTXOs(set) {
-		return []*CompositeUTXO{single}
+	if single != nil && single.Amount < sumUTXOs(set) {
+		return []*compositeUTXO{single}
 	}
 
 	return set
 }
 
-// UTxOSetDiff performs the setdiff(set,sub) of two UTXO sets. That is, any
+// uTxOSetDiff performs the setdiff(set,sub) of two UTXO sets. That is, any
 // UTXOs that are both sets are removed from the first. The comparison is done
-// *by pointer*, with no regard to the values of the CompositeUTXO elements.
-func UTxOSetDiff(set, sub []*CompositeUTXO) []*CompositeUTXO {
-	var availUTXOs []*CompositeUTXO
+// *by pointer*, with no regard to the values of the compositeUTXO elements.
+func uTxOSetDiff(set, sub []*compositeUTXO) []*compositeUTXO {
+	var availUTXOs []*compositeUTXO
 avail:
 	for _, utxo := range set {
 		for _, kept := range sub {

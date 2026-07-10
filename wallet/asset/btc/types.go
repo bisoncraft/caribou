@@ -1,7 +1,6 @@
 package btc
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
@@ -98,28 +97,4 @@ func ConvertCoin(coin asset.Coin) (*Output, error) {
 		return nil, err
 	}
 	return NewOutput(txHash, vout, coin.Value()), nil
-}
-
-type BlockVector struct {
-	Height int64
-	Hash   chainhash.Hash
-}
-
-// TxOutFromTxBytes parses the specified *wire.TxOut from the serialized
-// transaction.
-func TxOutFromTxBytes(
-	txB []byte,
-	vout uint32,
-	deserializeTx func([]byte) (*wire.MsgTx, error),
-	hashTx func(*wire.MsgTx) *chainhash.Hash,
-) (*wire.TxOut, error) {
-	msgTx, err := deserializeTx(txB)
-	if err != nil {
-		return nil, fmt.Errorf("error decoding transaction bytes: %v", err)
-	}
-
-	if len(msgTx.TxOut) <= int(vout) {
-		return nil, fmt.Errorf("no vout %d in tx %s", vout, hashTx(msgTx))
-	}
-	return msgTx.TxOut[vout], nil
 }

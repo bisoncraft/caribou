@@ -1,4 +1,4 @@
-package btc
+package zec
 
 import (
 	"bytes"
@@ -11,31 +11,32 @@ import (
 	"time"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
 
-// FindRedemptionReq represents a request to find a contract's redemption,
-// which is submitted to the RedemptionFinder.
-type FindRedemptionReq struct {
-	outPt        OutPoint
+// findRedemptionReq represents a request to find a contract's redemption,
+// which is submitted to the redemptionFinder.
+type findRedemptionReq struct {
+	outPt        btc.OutPoint
 	blockHash    *chainhash.Hash
 	blockHeight  int32
-	resultChan   chan *FindRedemptionResult
+	resultChan   chan *findRedemptionResult
 	pkScript     []byte
 	contractHash []byte
 }
 
-func (req *FindRedemptionReq) fail(s string, a ...any) {
-	req.sendResult(&FindRedemptionResult{err: fmt.Errorf(s, a...)})
+func (req *findRedemptionReq) fail(s string, a ...any) {
+	req.sendResult(&findRedemptionResult{err: fmt.Errorf(s, a...)})
 }
 
-func (req *FindRedemptionReq) success(res *FindRedemptionResult) {
+func (req *findRedemptionReq) success(res *findRedemptionResult) {
 	req.sendResult(res)
 }
 
-func (req *FindRedemptionReq) sendResult(res *FindRedemptionResult) {
+func (req *findRedemptionReq) sendResult(res *findRedemptionResult) {
 	select {
 	case req.resultChan <- res:
 	default:
@@ -43,49 +44,49 @@ func (req *FindRedemptionReq) sendResult(res *FindRedemptionResult) {
 	}
 }
 
-func (req *FindRedemptionReq) PkScript() []byte {
+func (req *findRedemptionReq) PkScript() []byte {
 	return req.pkScript
 }
 
-// FindRedemptionResult models the result of a find redemption attempt.
-type FindRedemptionResult struct {
+// findRedemptionResult models the result of a find redemption attempt.
+type findRedemptionResult struct {
 	redemptionCoinID util.Bytes
 	secret           util.Bytes
 	err              error
 }
 
-// RedemptionFinder searches on-chain for the redemption of a swap transactions.
-type RedemptionFinder struct {
+// redemptionFinder searches on-chain for the redemption of a swap transactions.
+type redemptionFinder struct {
 	mtx         sync.RWMutex
 	log         util.Logger
-	redemptions map[OutPoint]*FindRedemptionReq
+	redemptions map[btc.OutPoint]*findRedemptionReq
 
-	getWalletTransaction      func(txHash *chainhash.Hash) (*GetTransactionResult, error)
+	getWalletTransaction      func(txHash *chainhash.Hash) (*getTransactionResult, error)
 	getBlockHeight            func(*chainhash.Hash) (int32, error)
 	getBlock                  func(h chainhash.Hash) (*wire.MsgBlock, error)
-	getBlockHeader            func(blockHash *chainhash.Hash) (hdr *BlockHeader, mainchain bool, err error)
+	getBlockHeader            func(blockHash *chainhash.Hash) (hdr *btc.BlockHeader, mainchain bool, err error)
 	hashTx                    func(*wire.MsgTx) *chainhash.Hash
 	deserializeTx             func([]byte) (*wire.MsgTx, error)
 	getBestBlockHeight        func() (int32, error)
-	searchBlockForRedemptions func(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq, blockHash chainhash.Hash) (discovered map[OutPoint]*FindRedemptionResult)
+	searchBlockForRedemptions func(ctx context.Context, reqs map[btc.OutPoint]*findRedemptionReq, blockHash chainhash.Hash) (discovered map[btc.OutPoint]*findRedemptionResult)
 	getBlockHash              func(blockHeight int64) (*chainhash.Hash, error)
-	findRedemptionsInMempool  func(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq) (discovered map[OutPoint]*FindRedemptionResult)
+	findRedemptionsInMempool  func(ctx context.Context, reqs map[btc.OutPoint]*findRedemptionReq) (discovered map[btc.OutPoint]*findRedemptionResult)
 }
 
-func NewRedemptionFinder(
+func newRedemptionFinder(
 	log util.Logger,
-	getWalletTransaction func(txHash *chainhash.Hash) (*GetTransactionResult, error),
+	getWalletTransaction func(txHash *chainhash.Hash) (*getTransactionResult, error),
 	getBlockHeight func(*chainhash.Hash) (int32, error),
 	getBlock func(h chainhash.Hash) (*wire.MsgBlock, error),
-	getBlockHeader func(blockHash *chainhash.Hash) (hdr *BlockHeader, mainchain bool, err error),
+	getBlockHeader func(blockHash *chainhash.Hash) (hdr *btc.BlockHeader, mainchain bool, err error),
 	hashTx func(*wire.MsgTx) *chainhash.Hash,
 	deserializeTx func([]byte) (*wire.MsgTx, error),
 	getBestBlockHeight func() (int32, error),
-	searchBlockForRedemptions func(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq, blockHash chainhash.Hash) (discovered map[OutPoint]*FindRedemptionResult),
+	searchBlockForRedemptions func(ctx context.Context, reqs map[btc.OutPoint]*findRedemptionReq, blockHash chainhash.Hash) (discovered map[btc.OutPoint]*findRedemptionResult),
 	getBlockHash func(blockHeight int64) (*chainhash.Hash, error),
-	findRedemptionsInMempool func(ctx context.Context, reqs map[OutPoint]*FindRedemptionReq) (discovered map[OutPoint]*FindRedemptionResult),
-) *RedemptionFinder {
-	return &RedemptionFinder{
+	findRedemptionsInMempool func(ctx context.Context, reqs map[btc.OutPoint]*findRedemptionReq) (discovered map[btc.OutPoint]*findRedemptionResult),
+) *redemptionFinder {
+	return &redemptionFinder{
 		log:                       log,
 		getWalletTransaction:      getWalletTransaction,
 		getBlockHeight:            getBlockHeight,
@@ -97,24 +98,24 @@ func NewRedemptionFinder(
 		searchBlockForRedemptions: searchBlockForRedemptions,
 		getBlockHash:              getBlockHash,
 		findRedemptionsInMempool:  findRedemptionsInMempool,
-		redemptions:               make(map[OutPoint]*FindRedemptionReq),
+		redemptions:               make(map[btc.OutPoint]*findRedemptionReq),
 	}
 }
 
-func (r *RedemptionFinder) FindRedemption(ctx context.Context, coinID util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
+func (r *redemptionFinder) FindRedemption(ctx context.Context, coinID util.Bytes) (redemptionCoin, secret util.Bytes, err error) {
 	txHash, vout, err := decodeCoinID(coinID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cannot decode contract coin id: %w", err)
 	}
 
-	outPt := NewOutPoint(txHash, vout)
+	outPt := btc.NewOutPoint(txHash, vout)
 
 	tx, err := r.getWalletTransaction(txHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error finding wallet transaction: %v", err)
 	}
 
-	txOut, err := TxOutFromTxBytes(tx.Bytes, vout, r.deserializeTx, r.hashTx)
+	txOut, err := txOutFromTxBytes(tx.Bytes, vout, r.deserializeTx, r.hashTx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,22 +140,22 @@ func (r *RedemptionFinder) FindRedemption(ctx context.Context, coinID util.Bytes
 		}
 	}
 
-	req := &FindRedemptionReq{
+	req := &findRedemptionReq{
 		outPt:        outPt,
 		blockHash:    blockHash,
 		blockHeight:  blockHeight,
-		resultChan:   make(chan *FindRedemptionResult, 1),
+		resultChan:   make(chan *findRedemptionResult, 1),
 		pkScript:     pkScript,
-		contractHash: ExtractScriptHash(pkScript),
+		contractHash: btc.ExtractScriptHash(pkScript),
 	}
 
 	if err := r.queueFindRedemptionRequest(req); err != nil {
 		return nil, nil, fmt.Errorf("queueFindRedemptionRequest error for redemption %s: %w", outPt, err)
 	}
 
-	go r.tryRedemptionRequests(ctx, nil, []*FindRedemptionReq{req})
+	go r.tryRedemptionRequests(ctx, nil, []*findRedemptionReq{req})
 
-	var result *FindRedemptionResult
+	var result *findRedemptionResult
 	select {
 	case result = <-req.resultChan:
 		if result == nil {
@@ -179,7 +180,7 @@ func (r *RedemptionFinder) FindRedemption(ctx context.Context, coinID util.Bytes
 	return nil, nil, err
 }
 
-func (r *RedemptionFinder) checkRedemptionBlockDetails(outPt OutPoint, blockHash *chainhash.Hash, pkScript []byte) (int32, error) {
+func (r *redemptionFinder) checkRedemptionBlockDetails(outPt btc.OutPoint, blockHash *chainhash.Hash, pkScript []byte) (int32, error) {
 	blockHeight, err := r.getBlockHeight(blockHash)
 	if err != nil {
 		return 0, fmt.Errorf("GetBlockHeight for redemption block %s error: %w", blockHash, err)
@@ -223,7 +224,7 @@ func (r *RedemptionFinder) checkRedemptionBlockDetails(outPt OutPoint, blockHash
 	return blockHeight, nil
 }
 
-func (r *RedemptionFinder) queueFindRedemptionRequest(req *FindRedemptionReq) error {
+func (r *redemptionFinder) queueFindRedemptionRequest(req *findRedemptionReq) error {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
 	if _, exists := r.redemptions[req.outPt]; exists {
@@ -235,9 +236,9 @@ func (r *RedemptionFinder) queueFindRedemptionRequest(req *FindRedemptionReq) er
 
 // tryRedemptionRequests searches all mainchain blocks with height >= startBlock
 // for redemptions.
-func (r *RedemptionFinder) tryRedemptionRequests(ctx context.Context, startBlock *chainhash.Hash, reqs []*FindRedemptionReq) {
-	undiscovered := make(map[OutPoint]*FindRedemptionReq, len(reqs))
-	mempoolReqs := make(map[OutPoint]*FindRedemptionReq)
+func (r *redemptionFinder) tryRedemptionRequests(ctx context.Context, startBlock *chainhash.Hash, reqs []*findRedemptionReq) {
+	undiscovered := make(map[btc.OutPoint]*findRedemptionReq, len(reqs))
+	mempoolReqs := make(map[btc.OutPoint]*findRedemptionReq)
 	for _, req := range reqs {
 		// If there is no block hash yet, this request hasn't been mined, and a
 		// spending tx cannot have been mined. Only check mempool.
@@ -293,13 +294,13 @@ func (r *RedemptionFinder) tryRedemptionRequests(ctx context.Context, startBlock
 
 	// Helper function to check that the request hasn't been located in another
 	// thread and removed from queue already.
-	reqStillQueued := func(outPt OutPoint) bool {
+	reqStillQueued := func(outPt btc.OutPoint) bool {
 		_, found := r.redemptions[outPt]
 		return found
 	}
 
 	for iHeight <= tipHeight {
-		validReqs := make(map[OutPoint]*FindRedemptionReq, len(undiscovered))
+		validReqs := make(map[btc.OutPoint]*findRedemptionReq, len(undiscovered))
 		r.mtx.RLock()
 		for outPt, req := range undiscovered {
 			if iHeight >= req.blockHeight && reqStillQueued(req.outPt) {
@@ -373,12 +374,12 @@ func (r *RedemptionFinder) tryRedemptionRequests(ctx context.Context, startBlock
 
 // prepareRedemptionRequestsForBlockCheck prepares a copy of the currently
 // tracked redemptions, checking for missing block data along the way.
-func (r *RedemptionFinder) prepareRedemptionRequestsForBlockCheck() []*FindRedemptionReq {
+func (r *redemptionFinder) prepareRedemptionRequestsForBlockCheck() []*findRedemptionReq {
 	// Search for contract redemption in new blocks if there
 	// are contracts pending redemption.
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
-	reqs := make([]*FindRedemptionReq, 0, len(r.redemptions))
+	reqs := make([]*findRedemptionReq, 0, len(r.redemptions))
 	for _, req := range r.redemptions {
 		// If the request doesn't have a block hash yet, check if we can get one
 		// now.
@@ -393,7 +394,7 @@ func (r *RedemptionFinder) prepareRedemptionRequestsForBlockCheck() []*FindRedem
 // ReportNewTip sets the currentTip. The tipChange callback function is invoked
 // and a goroutine is started to check if any contracts in the
 // findRedemptionQueue are redeemed in the new blocks.
-func (r *RedemptionFinder) ReportNewTip(ctx context.Context, prevTip, newTip *BlockVector) {
+func (r *redemptionFinder) ReportNewTip(ctx context.Context, prevTip, newTip *blockVector) {
 	reqs := r.prepareRedemptionRequestsForBlockCheck()
 	// Redemption search would be compromised if the starting point cannot
 	// be determined, as searching just the new tip might result in blocks
@@ -405,7 +406,7 @@ func (r *RedemptionFinder) ReportNewTip(ctx context.Context, prevTip, newTip *Bl
 		}
 	}
 
-	var startPoint *BlockVector
+	var startPoint *blockVector
 	// Check if the previous tip is still part of the mainchain (prevTip confs >= 0).
 	// Redemption search would typically resume from prevTipHeight + 1 unless the
 	// previous tip was re-orged out of the mainchain, in which case redemption
@@ -436,7 +437,7 @@ func (r *RedemptionFinder) ReportNewTip(ctx context.Context, prevTip, newTip *Bl
 			}
 			if isMainchain {
 				// Found the mainchain ancestor of previous tip.
-				startPoint = &BlockVector{Height: aBlock.Height, Hash: *ancestorBlockHash}
+				startPoint = &blockVector{Height: aBlock.Height, Hash: *ancestorBlockHash}
 				r.log.Debugf("reorg detected from height %d to %d", aBlock.Height, newTip.Height)
 				break
 			}
@@ -461,7 +462,7 @@ func (r *RedemptionFinder) ReportNewTip(ctx context.Context, prevTip, newTip *Bl
 			notifyFatalFindRedemptionError("getBlockHash error for height %d: %w", afterPrivTip, err)
 			return
 		}
-		startPoint = &BlockVector{Hash: *hashAfterPrevTip, Height: afterPrivTip}
+		startPoint = &blockVector{Hash: *hashAfterPrevTip, Height: afterPrivTip}
 
 	default:
 		// Just 1 new block since last tip report, search the lone block.
@@ -474,7 +475,7 @@ func (r *RedemptionFinder) ReportNewTip(ctx context.Context, prevTip, newTip *Bl
 }
 
 // trySetRedemptionRequestBlock should be called with findRedemptionMtx Lock'ed.
-func (r *RedemptionFinder) trySetRedemptionRequestBlock(req *FindRedemptionReq) {
+func (r *redemptionFinder) trySetRedemptionRequestBlock(req *findRedemptionReq) {
 	tx, err := r.getWalletTransaction(&req.outPt.TxHash)
 	if err != nil {
 		r.log.Errorf("getWalletTransaction error for FindRedemption transaction: %v", err)
@@ -495,9 +496,9 @@ func (r *RedemptionFinder) trySetRedemptionRequestBlock(req *FindRedemptionReq) 
 		r.log.Error(err)
 		return
 	}
-	// Don't update the FindRedemptionReq, since the findRedemptionMtx only
+	// Don't update the findRedemptionReq, since the findRedemptionMtx only
 	// protects the map.
-	req = &FindRedemptionReq{
+	req = &findRedemptionReq{
 		outPt:        req.outPt,
 		blockHash:    blockHash,
 		blockHeight:  blockHeight,
@@ -508,7 +509,7 @@ func (r *RedemptionFinder) trySetRedemptionRequestBlock(req *FindRedemptionReq) 
 	r.redemptions[req.outPt] = req
 }
 
-func (r *RedemptionFinder) CancelRedemptionSearches() {
+func (r *redemptionFinder) CancelRedemptionSearches() {
 	// Close all open channels for contract redemption searches
 	// to prevent leakages and ensure goroutines that are started
 	// to wait on these channels end gracefully.
@@ -520,10 +521,10 @@ func (r *RedemptionFinder) CancelRedemptionSearches() {
 	r.mtx.Unlock()
 }
 
-func FindRedemptionsInTxWithHasher(ctx context.Context, segwit bool, reqs map[OutPoint]*FindRedemptionReq, msgTx *wire.MsgTx,
-	chainParams *chaincfg.Params, hashTx func(*wire.MsgTx) *chainhash.Hash) (discovered map[OutPoint]*FindRedemptionResult) {
+func findRedemptionsInTxWithHasher(ctx context.Context, segwit bool, reqs map[btc.OutPoint]*findRedemptionReq, msgTx *wire.MsgTx,
+	chainParams *chaincfg.Params, hashTx func(*wire.MsgTx) *chainhash.Hash) (discovered map[btc.OutPoint]*findRedemptionResult) {
 
-	discovered = make(map[OutPoint]*FindRedemptionResult, len(reqs))
+	discovered = make(map[btc.OutPoint]*findRedemptionResult, len(reqs))
 
 	for vin, txIn := range msgTx.TxIn {
 		if ctx.Err() != nil {
@@ -537,14 +538,14 @@ func FindRedemptionsInTxWithHasher(ctx context.Context, segwit bool, reqs map[Ou
 			if outPt.TxHash == poHash && outPt.Vout == poVout {
 				// Match!
 				txHash := hashTx(msgTx)
-				secret, err := FindKeyPush(txIn.Witness, txIn.SignatureScript, req.contractHash[:], segwit, chainParams)
+				secret, err := btc.FindKeyPush(txIn.Witness, txIn.SignatureScript, req.contractHash[:], segwit, chainParams)
 				if err != nil {
 					req.fail("no secret extracted from redemption input %s:%d for swap output %s: %v",
 						txHash, vin, outPt, err)
 					continue
 				}
-				discovered[outPt] = &FindRedemptionResult{
-					redemptionCoinID: ToCoinID(txHash, uint32(vin)),
+				discovered[outPt] = &findRedemptionResult{
+					redemptionCoinID: btc.ToCoinID(txHash, uint32(vin)),
 					secret:           secret,
 				}
 			}

@@ -86,7 +86,7 @@ type tRPCClient struct {
 
 	// If there is an "any" key in the getTransactionMap, that value will be
 	// returned for all requests. Otherwise the tx id is looked up.
-	getTransactionMap map[string]*btc.GetTransactionResult
+	getTransactionMap map[string]*getTransactionResult
 	getTransactionErr error
 
 	blockchainMtx       sync.RWMutex
@@ -258,19 +258,19 @@ func (c *tRPCClient) RawRequest(ctx context.Context, method string, args []json.
 		if err := json.Unmarshal(args[0], &txID); err != nil {
 			panic(fmt.Sprintf("error unmarshaling block hash: %v", err))
 		}
-		var txData *btc.GetTransactionResult
+		var txData *getTransactionResult
 		if c.getTransactionMap != nil {
 			if txData = c.getTransactionMap["any"]; txData == nil {
 				txData = c.getTransactionMap[txID]
 			}
 		}
 		if txData == nil {
-			return nil, btc.WalletTransactionNotFound
+			return nil, walletTransactionNotFound
 		}
 		return respond(txData)
 	case "signrawtransaction":
 		_, txB := signRawJSONTx(args[0])
-		return respond(&btc.SignTxResult{
+		return respond(&signTxResult{
 			Hex:      txB,
 			Complete: true,
 		})
@@ -306,7 +306,7 @@ func tNewWallet() (*zecWallet, *tRPCClient, func()) {
 	w := wi.(*zecWallet)
 	w.node = cl
 	bestHash, _ := cl.bestBlock()
-	w.currentTip = &btc.BlockVector{
+	w.currentTip = &blockVector{
 		Height: cl.getBestBlockHeight(),
 		Hash:   *bestHash,
 	}
@@ -356,7 +356,7 @@ func TestSend(t *testing.T) {
 
 	dTx := dummyTx()
 	txB, _ := dTx.Bytes()
-	tx := &btc.GetTransactionResult{
+	tx := &getTransactionResult{
 		Bytes: txB,
 	}
 
@@ -385,7 +385,7 @@ func TestSyncStatus(t *testing.T) {
 	defer shutdown()
 	defer cl.checkEmptiness(t)
 
-	bci := &btc.GetBlockchainInfoResult{
+	bci := &getBlockchainInfoResult{
 		Headers: 100,
 		Blocks:  99, // full node allowed to be synced when 1 block behind
 	}
