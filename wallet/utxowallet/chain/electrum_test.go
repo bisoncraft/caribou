@@ -143,7 +143,63 @@ func (s *stubNetwork) HeaderByHeight(height int32) *wire.BlockHeader {
 	if height < 0 || int(height) >= len(s.headers) {
 		return nil
 	}
-	return s.headers[height]
+	// Fix the header's merkle root before handing it out, then return a
+	// COPY. The real Network serves headers read-only; the stub instead
+	// derives each seeded height's root from its leaves. Stamping here — the
+	// single choke point every header consumer passes through, including the
+	// single-threaded pre-fan-out defer/flush checks and both concurrent
+	// fan-out readers — and returning a copy keeps the s.headers mutation
+	// entirely under s.mu, so the lock-free header serialization in
+	// buildRelevantTx never races a concurrent stamp.
+	s.stampMerkleRootLocked(height)
+	hdr := *s.headers[height]
+	return &hdr
+}
+
+// leavesAtHeight returns the distinct txids the stub serves at the given
+// height, sorted for determinism. Callers must hold s.mu.
+func (s *stubNetwork) leavesAtHeight(height int32) ([]chainhash.Hash, error) {
+	seen := map[string]struct{}{}
+	var leaves []chainhash.Hash
+	for _, entries := range s.history {
+		for _, e := range entries {
+			if e.Height != height {
+				continue
+			}
+			if _, ok := seen[e.TxHash]; ok {
+				continue
+			}
+			seen[e.TxHash] = struct{}{}
+			h, err := chainhash.NewHashFromStr(e.TxHash)
+			if err != nil {
+				return nil, err
+			}
+			leaves = append(leaves, *h)
+		}
+	}
+	sort.Slice(leaves, func(i, j int) bool {
+		return leaves[i].String() < leaves[j].String()
+	})
+	return leaves, nil
+}
+
+// stampMerkleRootLocked fixes the header at height to the merkle root of the
+// tree over that height's leaves, so a GetMerkle proof folds to it. It is a
+// no-op for a height with no seeded leaves, preserving any root a test set
+// directly. Callers must hold s.mu.
+func (s *stubNetwork) stampMerkleRootLocked(height int32) {
+	if height < 0 || int(height) >= len(s.headers) {
+		return
+	}
+	leaves, err := s.leavesAtHeight(height)
+	if err != nil || len(leaves) == 0 {
+		return
+	}
+	root, _, _, err := stubMerkle(leaves, leaves[0].String())
+	if err != nil {
+		return
+	}
+	s.headers[height].MerkleRoot = root
 }
 
 func (s *stubNetwork) HeaderByHash(h *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
@@ -199,9 +255,10 @@ func (s *stubNetwork) ListUnspent(_ context.Context, _ string) ([]electrum.Unspe
 
 // GetMerkle returns a genuine inclusion proof against a real merkle tree the
 // stub builds from every txid it serves at the height — so distinct txids in
-// one block fold, via distinct branches, to a single shared root. The header
-// root is fixed on first query for the height (write-once under the mutex),
-// keeping HeaderByHeight and GetMerkle consistent and race-free. Tests
+// one block fold, via distinct branches, to a single shared root. It is a pure
+// reader: the header's merkle root is stamped by HeaderByHeight (which every
+// verifyInclusion call goes through first), so GetMerkle never mutates a header
+// and cannot race the concurrent header serialization in buildRelevantTx. Tests
 // exercising a LYING server override stub behavior instead.
 func (s *stubNetwork) GetMerkle(_ context.Context, txid string, height int32) (*electrum.MerkleProof, error) {
 	s.mu.Lock()
@@ -214,34 +271,14 @@ func (s *stubNetwork) GetMerkle(_ context.Context, txid string, height int32) (*
 	if height < 0 || int(height) >= len(s.headers) {
 		return nil, fmt.Errorf("stub: no header at %d", height)
 	}
-	// Leaves: distinct txids the stub has at this height, sorted for
-	// determinism.
-	seen := map[string]struct{}{}
-	var leaves []chainhash.Hash
-	for _, entries := range s.history {
-		for _, e := range entries {
-			if e.Height != height {
-				continue
-			}
-			if _, ok := seen[e.TxHash]; ok {
-				continue
-			}
-			seen[e.TxHash] = struct{}{}
-			h, err := chainhash.NewHashFromStr(e.TxHash)
-			if err != nil {
-				return nil, err
-			}
-			leaves = append(leaves, *h)
-		}
-	}
-	sort.Slice(leaves, func(i, j int) bool {
-		return leaves[i].String() < leaves[j].String()
-	})
-	root, branch, pos, err := stubMerkle(leaves, txid)
+	leaves, err := s.leavesAtHeight(height)
 	if err != nil {
 		return nil, err
 	}
-	s.headers[height].MerkleRoot = root
+	_, branch, pos, err := stubMerkle(leaves, txid)
+	if err != nil {
+		return nil, err
+	}
 	sib := make([]string, len(branch))
 	for i, b := range branch {
 		sib[i] = b.String()
