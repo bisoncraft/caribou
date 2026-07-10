@@ -1,9 +1,9 @@
 # utxosync: light-wallet sync, watching, recovery, and trust master plan
 
-Master planning document for the `utxosync` branch. It subsumes the five
-workstream docs listed in §10 — they remain as detailed design records; this
-document is the single source of truth for scope, status, decisions, and
-remaining work.
+Master planning document for the `utxosync` branch. It subsumes and replaces the
+five per-workstream docs listed in §10 (now removed; their rationale is in
+git history) and is the single source of truth for scope, status, decisions,
+and remaining work.
 
 ## 1. Through-line
 
@@ -206,8 +206,11 @@ motivated by a field report of slow high-CPU neutrino restart.
 
 ## 10. Superseded workstream docs
 
-Retained as detailed design records; this document is authoritative for
-status and roadmap.
+Five per-workstream planning docs were consolidated into this document and
+removed. Their detailed design rationale is preserved in git history
+(retrievable with `git log --follow --diff-filter=D -- <path>` and
+`git show <rev>:<path>`). The mapping from removed doc to the section that
+now covers it:
 
 - `electrum-sync-recovery-plan.md` → §3, §4
 - `address-watching-plan.md` → §5
