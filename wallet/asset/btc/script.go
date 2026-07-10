@@ -11,8 +11,6 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/bosswallet/util"
-	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
@@ -476,31 +474,6 @@ func IsDustVal(txOutSize, value, minRelayTxFee uint64, segwit bool) bool {
 	return int64(value)/(3*int64(totalSize)) < int64(minRelayTxFee)
 }
 
-// ExtractScriptData extracts script type, addresses, and required signature
-// count from a pkScript. Non-standard scripts are not necessarily an error;
-// non-nil errors are only returned if the script cannot be parsed. See also
-// InputInfo for additional signature script size data
-func ExtractScriptData(script []byte, chainParams *chaincfg.Params) (BTCScriptType, []string, int, error) {
-	class, addrs, numRequired, err := txscript.ExtractPkScriptAddrs(script, chainParams)
-	if err != nil {
-		return ScriptUnsupported, nil, 0, err
-	}
-	if class == txscript.NonStandardTy {
-		return ScriptUnsupported, nil, 0, nil
-	}
-
-	// Could switch on class from ExtractPkScriptAddrs, but use ParseScriptType
-	// for internal consistency.
-	scriptType := ParseScriptType(script, nil)
-
-	addresses := make([]string, len(addrs))
-	for i, addr := range addrs {
-		addresses[i] = addr.String()
-	}
-
-	return scriptType, addresses, numRequired, nil
-}
-
 // BtcScriptAddrs is information about the pubkeys or pubkey hashes present in
 // a scriptPubKey (and the redeem script, for p2sh). This information can be
 // used to estimate the spend script size, e.g. pubkeys in a redeem script don't
@@ -666,18 +639,6 @@ func RedeemP2WSHContract(contract, sig, pubkey, secret []byte) [][]byte {
 	}
 }
 
-// RefundP2SHContract returns the signature script to refund a contract output
-// using the contract author's signature after the locktime has been reached.
-// This function assumes P2SH and appends the contract as the final data push.
-func RefundP2SHContract(contract, sig, pubkey []byte) ([]byte, error) {
-	return txscript.NewScriptBuilder().
-		AddData(sig).
-		AddData(pubkey).
-		AddInt64(0).
-		AddData(contract).
-		Script()
-}
-
 // MsgTxVBytes returns the transaction's virtual size, which accounts for the
 // segwit input weighting.
 func MsgTxVBytes(msgTx *wire.MsgTx) uint64 {
@@ -690,18 +651,6 @@ func MsgTxVBytes(msgTx *wire.MsgTx) uint64 {
 	// tx := btcutil.NewTx(msgTx)
 	// return uint64(blockchain.GetTransactionWeight(tx)+(blockchain.WitnessScaleFactor-1)) /
 	// 	blockchain.WitnessScaleFactor // mempool.GetTxVirtualSize(tx)
-}
-
-// RefundP2WSHContract returns the witness to refund a contract output
-// using the contract author's signature after the locktime has been reached.
-// This function assumes P2WSH and appends the contract as the final data push.
-func RefundP2WSHContract(contract, sig, pubkey []byte) [][]byte {
-	return [][]byte{
-		sig,
-		pubkey,
-		{},
-		contract,
-	}
 }
 
 // SpendInfo is information about an input and it's previous outpoint.
@@ -899,25 +848,4 @@ func ExtractScriptHash(script []byte) []byte {
 		return script[2:34]
 	}
 	return nil
-}
-
-// PrivateSwapRefundScript is the script placed into a leaf of the taproot
-// tree when creating a private swap that allows the contract to be refunded
-// by the creator after locktime has expired.
-func PrivateSwapRefundScript(pubKey *btcec.PublicKey, lockTime int64) ([]byte, error) {
-	return txscript.NewScriptBuilder().
-		AddInt64(lockTime).
-		AddOp(txscript.OP_CHECKLOCKTIMEVERIFY).
-		AddOp(txscript.OP_DROP).
-		AddData(schnorr.SerializePubKey(pubKey)).
-		AddOp(txscript.OP_CHECKSIG).
-		Script()
-}
-
-// PayToTaprootScript returns the PKScript for a pay-to-taproot output.
-func PayToTaprootScript(taprootKey *btcec.PublicKey) ([]byte, error) {
-	return txscript.NewScriptBuilder().
-		AddOp(txscript.OP_1).
-		AddData(schnorr.SerializePubKey(taprootKey)).
-		Script()
 }

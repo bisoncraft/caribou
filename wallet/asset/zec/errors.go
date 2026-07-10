@@ -67,13 +67,3 @@ func errorHasCode(err error, code int) bool {
 	var e *Error
 	return errors.As(err, &e) && e.code == code
 }
-
-// UnwrapErr returns the result of calling the Unwrap method on err,
-// until it returns a non-wrapped error.
-func UnwrapErr(err error) error {
-	InnerErr := errors.Unwrap(err)
-	if InnerErr == nil {
-		return err
-	}
-	return UnwrapErr(InnerErr)
-}

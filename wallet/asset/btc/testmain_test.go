@@ -4,8 +4,8 @@ package btc
 
 import (
 	"context"
+	crand "crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"os"
 	"testing"
 
@@ -13,17 +13,19 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 
+func randBytes(l int) []byte {
+	b := make([]byte, l)
+	crand.Read(b)
+	return b
+}
+
 var (
-	tLogger        util.Logger
-	tCtx           context.Context
-	optimalFeeRate uint64 = 24
-	errTest               = fmt.Errorf("test error")
-	tTxID                 = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
-	tTxHash        *chainhash.Hash
-	tP2PKHAddr     = "1Bggq7Vu5oaoLFV1NNp5KhAzcku83qQhgi"
-	tP2PKH         []byte
-	tP2WPKH        []byte
-	tP2WPKHAddr    = "bc1qq49ypf420s0kh52l9pk7ha8n8nhsugdpculjas"
+	tLogger util.Logger
+	tCtx    context.Context
+	tTxID   = "308e9a3675fc3ea3862b7863eeead08c621dcc37ff59de597dd3cdab41450ad9"
+	tTxHash *chainhash.Hash
+	tP2PKH  []byte
+	tP2WPKH []byte
 )
 
 func TestMain(m *testing.M) {
