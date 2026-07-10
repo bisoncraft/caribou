@@ -72,6 +72,7 @@ type NeutrinoClient struct {
 // A compile-time check to ensure that RPCClient satisfies the chain.Backend
 // interface.
 var _ Backend = (*NeutrinoClient)(nil)
+var _ AddressWatcher = (*NeutrinoClient)(nil)
 
 // NewNeutrinoClient creates a new NeutrinoClient struct with a backing
 // ChainService.
@@ -558,6 +559,154 @@ func (s *NeutrinoClient) NotifyReceived(addrs []btcutil.Address) error {
 	s.rescan = newRescan
 	s.rescanErr = s.rescan.Start()
 	s.clientMtx.Unlock()
+	return nil
+}
+
+// Unwatch drops addresses from the cfilter watch list so an aged wallet stops
+// matching its cold addresses on every block (chain.AddressWatcher). When no
+// rescan is running there is nothing being watched, so it is a no-op; while
+// one runs, the removal is applied on the rescan goroutine and the ongoing
+// per-block match uses the reduced set.
+func (s *NeutrinoClient) Unwatch(addrs []btcutil.Address) error {
+	s.rescanMtx.Lock()
+	defer s.rescanMtx.Unlock()
+
+	s.clientMtx.Lock()
+	scanning := s.scanning
+	s.clientMtx.Unlock()
+	if !scanning {
+		return nil
+	}
+	return s.rescan.Update(spv.RemoveAddrs(addrs...))
+}
+
+// sweepBlockDelay throttles the cold-address sweep: a pause between blocks so
+// the background range rescan caps CPU and never spins the fan, unlike the
+// critical-path catch-up. A variable so tests can tighten it.
+var sweepBlockDelay = 2 * time.Millisecond
+
+// Sweep is the chain.AddressWatcher metered check for cold (unwatched)
+// addresses on neutrino: a bounded, THROTTLED cfilter rescan over
+// [fromHeight, tip]. For each block it tests the block's compact filter
+// against the cold scripts and, on a match, fetches the block and emits the
+// transactions that pay a cold address so the wallet ingests them. Hits are
+// re-added to the watch list (re-promotion). The check is all-or-nothing:
+// any error fails the whole range (retried next interval, ingestion is
+// idempotent), so failed is always nil and errors flow through err.
+func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error) {
+	if len(addrs) == 0 {
+		return nil, nil, nil
+	}
+	scripts := make([][]byte, 0, len(addrs))
+	byScript := make(map[string]btcutil.Address, len(addrs))
+	for _, a := range addrs {
+		script, err := txscript.PayToAddrScript(a)
+		if err != nil {
+			return nil, nil, err
+		}
+		scripts = append(scripts, script)
+		byScript[string(script)] = a
+	}
+
+	best, err := s.CS.BestBlock()
+	if err != nil {
+		return nil, nil, err
+	}
+	tip := best.Height
+	if fromHeight < 0 {
+		fromHeight = 0
+	}
+
+	hitAddrs := make(map[string]btcutil.Address)
+	for height := fromHeight; height <= tip; height++ {
+		select {
+		case <-s.quit:
+			return nil, nil, errors.New("neutrino: sweep aborted")
+		default:
+		}
+		hash, err := s.CS.GetBlockHash(int64(height))
+		if err != nil {
+			return nil, nil, err
+		}
+		filter, err := s.CS.GetCFilter(*hash, wire.GCSFilterRegular)
+		if err != nil {
+			return nil, nil, err
+		}
+		if filter != nil {
+			key := builder.DeriveKey(hash)
+			matched, err := filter.MatchAny(key, scripts)
+			if err != nil {
+				return nil, nil, err
+			}
+			if matched {
+				if err := s.sweepMatchedBlock(height, hash, byScript, hitAddrs); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		time.Sleep(sweepBlockDelay)
+	}
+
+	for _, a := range hitAddrs {
+		hits = append(hits, a)
+	}
+	if len(hits) > 0 {
+		// Re-promote: re-establish the watch on the hit addresses.
+		if err := s.NotifyReceived(hits); err != nil {
+			return nil, nil, err
+		}
+		log.Infof("neutrino: sweep re-promoted %d of %d cold addresses",
+			len(hits), len(addrs))
+	}
+	return hits, nil, nil
+}
+
+// sweepMatchedBlock fetches a filter-matched block, emits the transactions
+// that pay a cold address, and records the hit addresses. A cfilter match is
+// probabilistic, so the block is scanned to confirm the actual payments.
+func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
+	byScript map[string]btcutil.Address, hitAddrs map[string]btcutil.Address) error {
+
+	blk, err := s.CS.GetBlock(*hash)
+	if err != nil {
+		return err
+	}
+	var relevant []*bisonwire.Tx
+	for _, tx := range blk.Block.Transactions {
+		for _, out := range tx.TxOut {
+			a, ok := byScript[string(out.PkScript)]
+			if !ok {
+				continue
+			}
+			relevant = append(relevant, tx)
+			hitAddrs[a.String()] = a
+			break
+		}
+	}
+	if len(relevant) == 0 {
+		return nil // false positive
+	}
+	header := blk.Block.Header
+	ntfn := FilteredBlockConnected{
+		Block: &wtxmgr.BlockMeta{
+			Block: wtxmgr.Block{Hash: *hash, Height: height},
+			Time:  header.Timestamp,
+		},
+	}
+	for _, tx := range relevant {
+		rec, err := wtxmgr.NewTxRecordFromMsgTx(s.chainParams.Chain, &tx.MsgTx,
+			header.Timestamp)
+		if err != nil {
+			log.Errorf("neutrino: sweep tx record: %v", err)
+			continue
+		}
+		ntfn.RelevantTxs = append(ntfn.RelevantTxs, rec)
+	}
+	select {
+	case s.enqueueNotification <- ntfn:
+	case <-s.quit:
+		return errors.New("neutrino: sweep aborted")
+	}
 	return nil
 }
 
