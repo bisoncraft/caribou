@@ -1227,6 +1227,34 @@ func (ro *rescanOptions) updateFilter(chain ChainSource, update *updateOptions,
 		ro.watchList = append(ro.watchList, txid[:])
 	}
 
+	// Drop any removed addresses and their scripts from the filter. This
+	// runs on the rescan goroutine, the only mutator of ro, so no extra
+	// locking is needed (symmetric with the add loops above).
+	if len(update.rmAddrs) > 0 {
+		rmScripts := make(map[string]struct{}, len(update.rmAddrs))
+		rmAddrs := make(map[string]struct{}, len(update.rmAddrs))
+		for _, addr := range update.rmAddrs {
+			rmAddrs[addr.EncodeAddress()] = struct{}{}
+			if script, err := txscript.PayToAddrScript(addr); err == nil {
+				rmScripts[string(script)] = struct{}{}
+			}
+		}
+		keptAddrs := ro.watchAddrs[:0]
+		for _, addr := range ro.watchAddrs {
+			if _, drop := rmAddrs[addr.EncodeAddress()]; !drop {
+				keptAddrs = append(keptAddrs, addr)
+			}
+		}
+		ro.watchAddrs = keptAddrs
+		keptList := ro.watchList[:0]
+		for _, script := range ro.watchList {
+			if _, drop := rmScripts[string(script)]; !drop {
+				keptList = append(keptList, script)
+			}
+		}
+		ro.watchList = keptList
+	}
+
 	// If we don't need to rewind, then we can exit early.
 	if update.rewind == 0 {
 		return false, nil
@@ -1429,6 +1457,7 @@ func (r *Rescan) Start() <-chan error {
 // updateOptions are a set of functional parameters for Update.
 type updateOptions struct {
 	addrs                    []btcutil.Address
+	rmAddrs                  []btcutil.Address
 	inputs                   []InputWithScript
 	txIDs                    []chainhash.Hash
 	rewind                   uint32
@@ -1446,6 +1475,17 @@ func defaultUpdateOptions() *updateOptions {
 func AddAddrs(addrs ...btcutil.Address) UpdateOption {
 	return func(uo *updateOptions) {
 		uo.addrs = append(uo.addrs, addrs...)
+	}
+}
+
+// RemoveAddrs drops addresses from the filter, so an aged wallet can shed its
+// cold addresses from the cfilter watch list instead of matching them on
+// every block forever. It is the inverse of AddAddrs and, like it, is applied
+// on the rescan goroutine (updateFilter), so the ongoing per-block match uses
+// the reduced set.
+func RemoveAddrs(addrs ...btcutil.Address) UpdateOption {
+	return func(uo *updateOptions) {
+		uo.rmAddrs = append(uo.rmAddrs, addrs...)
 	}
 }
 
