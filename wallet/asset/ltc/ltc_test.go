@@ -26,9 +26,9 @@ func TestDriverInfo(t *testing.T) {
 	if info.Network == nil || info.Network.ID != BipID {
 		t.Fatalf("Info.Network.ID = %v, want %d", info.Network, BipID)
 	}
-	// SPV and RPC must both be advertised as available wallet types so that
-	// users can either run litecoind or use the built-in wallet.
-	wantTypes := map[string]bool{walletTypeSPV: false, walletTypeRPC: false}
+	// SPV and Electrum must both be advertised as available wallet types so
+	// that users can use either the neutrino- or electrum-backed light wallet.
+	wantTypes := map[string]bool{walletTypeSPV: false, walletTypeElectrum: false}
 	for _, wd := range info.AvailableWallets {
 		if _, ok := wantTypes[wd.Type]; ok {
 			wantTypes[wd.Type] = true
@@ -115,7 +115,7 @@ func TestDriverCreateValidation(t *testing.T) {
 	}{
 		{
 			"wrong wallet type",
-			&asset.CreateWalletParams{Type: walletTypeRPC, Seed: seed, DataDir: tmp, Net: util.Regtest},
+			&asset.CreateWalletParams{Type: "not-a-seeded-type", Seed: seed, DataDir: tmp, Net: util.Regtest},
 		},
 		{
 			"empty seed",
@@ -140,15 +140,15 @@ func TestDriverCreateValidation(t *testing.T) {
 }
 
 func TestNewWalletDispatch(t *testing.T) {
-	cfg := &asset.WalletConfig{Type: walletTypeRPC, Settings: map[string]string{}}
+	cfg := &asset.WalletConfig{Type: walletTypeSPV, Settings: map[string]string{}}
 
 	if _, err := NewWallet(cfg, nil, util.Network(99)); err == nil {
 		t.Fatal("expected error for unknown network")
 	}
 
 	// A network that resolves to chain params but a walletType that isn't
-	// RPC/SPV/Electrum and isn't a registered custom constructor must fall
-	// through to the dispatch error rather than silently doing nothing.
+	// SPV/Electrum must fall through to the dispatch error rather than silently
+	// doing nothing.
 	bogus := &asset.WalletConfig{Type: "totally-bogus", Settings: map[string]string{}}
 	if _, err := NewWallet(bogus, nil, util.Regtest); err == nil {
 		t.Fatal("expected error for unknown wallet type")

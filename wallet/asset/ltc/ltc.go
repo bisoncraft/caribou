@@ -23,17 +23,10 @@ import (
 const (
 	version = 1
 	// BipID is the BIP-0044 asset ID.
-	BipID = 2
-	// defaultFee is the default value for the fallbackfee.
-	defaultFee = 10
-	// defaultFeeRateLimit is the default value for the feeratelimit.
-	defaultFeeRateLimit = 100
-	minNetworkVersion   = 210201
-	walletTypeRPC       = "litecoindRPC"
-	walletTypeSPV       = "SPV"
-	walletTypeLegacy    = ""
-	walletTypeElectrum  = "electrumRPC"
-	dbTimeout           = 20 * time.Second
+	BipID              = 2
+	walletTypeSPV      = "SPV"
+	walletTypeElectrum = "electrumRPC"
+	dbTimeout          = 20 * time.Second
 )
 
 var (
@@ -41,14 +34,6 @@ var (
 		Mainnet: "9332",
 		Testnet: "19332",
 		Simnet:  "19443",
-	}
-	rpcWalletDefinition = &asset.WalletDefinition{
-		Type:              walletTypeRPC,
-		Tab:               "Litecoin Core (external)",
-		Description:       "Connect to litecoind",
-		DefaultConfigPath: btc.SystemConfigPath("litecoin"),
-		ConfigOpts:        append(btc.RPCConfigOpts("Litecoin", "9332"), btc.CommonConfigOpts("LTC", true)...),
-		MultiFundingOpts:  btc.MultiFundingOpts,
 	}
 	spvWalletDefinition = &asset.WalletDefinition{
 		Type:             walletTypeSPV,
@@ -65,7 +50,6 @@ var (
 		UnitInfo:          UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
-			rpcWalletDefinition,
 			ltcElectrumWalletDefinition,
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
@@ -173,25 +157,6 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		params.Logger, recoveryCfg.NumExternalAddresses, recoveryCfg.NumInternalAddresses, chainParams)
 }
 
-// customWalletConstructors are functions for setting up btc.CustomWallet
-// implementations used by btc.ExchangeWalletCustom.
-var customWalletConstructors = map[string]btc.CustomWalletConstructor{}
-
-// RegisterCustomWallet registers a function that should be used in creating a
-// btc.CustomWallet implementation for btc.ExchangeWalletCustom. External
-// consumers can use this function to provide btc.CustomWallet implementation,
-// and must do so before attempting to create an btc.ExchangeWalletCustom
-// instance of this type. It'll panic if callers try to register a wallet twice.
-func RegisterCustomWallet(constructor btc.CustomWalletConstructor, def *asset.WalletDefinition) {
-	for _, availableWallets := range WalletInfo.AvailableWallets {
-		if def.Type == availableWallets.Type {
-			panic(fmt.Sprintf("wallet type (%q) is already registered", def.Type))
-		}
-	}
-	customWalletConstructors[def.Type] = constructor
-	WalletInfo.AvailableWallets = append(WalletInfo.AvailableWallets, def)
-}
-
 // NewWallet is the exported constructor by which the DEX will import the
 // exchange wallet.
 func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
@@ -207,32 +172,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		return nil, fmt.Errorf("unknown network ID %v", network)
 	}
 
-	// Designate the clone ports. These will be overwritten by any explicit
-	// settings in the configuration file.
-	cloneCFG := &btc.BTCCloneCFG{
-		WalletCFG:            cfg,
-		MinNetworkVersion:    minNetworkVersion,
-		WalletInfo:           WalletInfo,
-		Symbol:               "ltc",
-		Logger:               logger,
-		Network:              network,
-		ChainParams:          cloneParams,
-		Ports:                NetPorts,
-		DefaultFallbackFee:   defaultFee,
-		DefaultFeeRateLimit:  defaultFeeRateLimit,
-		LegacyBalance:        false,
-		LegacyRawFeeLimit:    false,
-		Segwit:               true,
-		InitTxSize:           btc.InitTxSizeSegwit,
-		InitTxSizeBase:       btc.InitTxSizeBaseSegwit,
-		BlockDeserializer:    DeserializeBlockBytes,
-		ExternalFeeEstimator: externalFeeRate,
-		AssetID:              BipID,
-	}
-
 	switch cfg.Type {
-	case walletTypeRPC, walletTypeLegacy:
-		return btc.BTCCloneWallet(cloneCFG)
 	case walletTypeSPV:
 		// The SPV wallet is the same lean wallet as electrum, driven by the
 		// neutrino backend instead of an electrum client.
@@ -240,11 +180,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	case walletTypeElectrum:
 		return openLTCElectrumWallet(cfg, cloneParams, logger), nil
 	default:
-		makeCustomWallet, ok := customWalletConstructors[cfg.Type]
-		if !ok {
-			return nil, fmt.Errorf("unknown wallet type %q", cfg.Type)
-		}
-		return btc.OpenCustomWallet(cloneCFG, makeCustomWallet)
+		return nil, fmt.Errorf("unknown wallet type %q", cfg.Type)
 	}
 }
 

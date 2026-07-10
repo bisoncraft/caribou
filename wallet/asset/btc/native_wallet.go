@@ -5,10 +5,9 @@ package btc
 
 // Package-level note: this file implements NativeWallet, a standalone
 // asset.Wallet shared by the btc and ltc packages and used for both the electrum
-// and SPV wallet types — they differ only in the chain backend it builds. It
-// does NOT use ExchangeWalletSPV, baseWallet, intermediaryWallet, or tipRedeemer.
-// All UTXO operations are delegated to wallet.Wallet (the in-tree utxowallet)
-// which owns and manages its chain backend. Swap / FindRedemption methods are
+// and SPV wallet types — they differ only in the chain backend it builds. All
+// UTXO operations are delegated to wallet.Wallet (the in-tree utxowallet) which
+// owns and manages its chain backend. Swap / FindRedemption methods are
 // intentionally absent.
 
 import (
@@ -31,6 +30,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
+	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb" // bdb init() registers the walletdb driver
 	"github.com/btcsuite/btcd/btcjson"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -41,6 +41,34 @@ import (
 
 // dbTimeout is the bbolt open timeout for the wallet and neutrino databases.
 const dbTimeout = 20 * time.Second
+
+// defaultAcctNum is the wallet's default account number.
+const defaultAcctNum = 0
+
+// wAddrMgrBkt is the waddrmgr namespace bucket key in the wallet database.
+var wAddrMgrBkt = []byte("waddrmgr")
+
+// extendAddresses pre-derives extIdx external and intIdx internal BIP-84
+// addresses so recovery scans cover previously-used addresses.
+func extendAddresses(extIdx, intIdx uint32, btcw *wallet.Wallet) error {
+	scopedKeyManager, err := btcw.Manager.FetchScopedKeyManager(btcw.ScopeForPurpose(84))
+	if err != nil {
+		return err
+	}
+
+	return walletdb.Update(btcw.Database(), func(dbtx walletdb.ReadWriteTx) error {
+		ns := dbtx.ReadWriteBucket(wAddrMgrBkt)
+		if extIdx > 0 {
+			if err := scopedKeyManager.ExtendExternalAddresses(ns, defaultAcctNum, extIdx); err != nil {
+				return err
+			}
+		}
+		if intIdx > 0 {
+			return scopedKeyManager.ExtendInternalAddresses(ns, defaultAcctNum, intIdx)
+		}
+		return nil
+	})
+}
 
 // ChainConfig carries the per-chain values that parameterize the shared
 // NativeWallet, so the btc and ltc asset packages can share one asset.Wallet
