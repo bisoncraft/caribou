@@ -78,6 +78,14 @@ final class AppModel: ObservableObject {
     // Wall-clock instant the app was last backgrounded (nil = never / foreground).
     private var backgroundedAt: Date?
 
+    // gateGeneration disambiguates overlapping UI-gate biometric prompts. Each
+    // prompt snapshots it; a stronger tier taking over (evictAndReauth) or a fresh
+    // prompt bumps it, so a stale completion from a superseded prompt cannot
+    // clearGate() a gate it no longer owns. There is no LAContext.invalidate() to
+    // lean on here, so this is the guard against a late callback dropping the
+    // overlay while a newer reauth is still in flight.
+    private var gateGeneration = 0
+
     // revealOnLoad keeps the lock overlay up across an eviction reload: eviction
     // raises the overlay before the (blocking) lock, then loads the grant URL or
     // reloads the logged-out SPA; the overlay only clears once that page finishes
@@ -279,8 +287,16 @@ final class AppModel: ObservableObject {
 
     private func uiGateBiometric() {
         guard gated else { return }
+        gateGeneration += 1
+        let generation = gateGeneration
         biometric.authenticateSimple(reason: LockStrings.unlockPromptTitle) { [weak self] ok in
-            if ok { self?.clearGate() }
+            guard let self else { return }
+            // Ignore a stale success: a newer prompt or an escalation to the
+            // eviction tier has since bumped gateGeneration, so this callback no
+            // longer owns the overlay and must not clear it out from under the
+            // tier now in charge.
+            guard ok, generation == self.gateGeneration else { return }
+            self.clearGate()
         }
     }
 
@@ -314,6 +330,10 @@ final class AppModel: ObservableObject {
         // page (grant URL or reloaded logged-out SPA) paints (onPageFinished).
         // unlocking = true so the overlay shows the passive "Unlocking…" spinner,
         // not the gate's tappable Unlock button (which would fire a second prompt).
+        // Bump gateGeneration so any in-flight UI-gate biometric completion is
+        // stale: this stronger tier now owns the overlay and a late gate success
+        // must not clearGate() while this reauth is still in flight.
+        gateGeneration += 1
         gated = true
         unlocking = true
         lockCore { [weak self] in

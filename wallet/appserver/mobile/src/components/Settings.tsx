@@ -191,7 +191,7 @@ function BiometricSettings () {
   const biometricToggle = available && (
     <label className='mb-check-row'>
       <input type='checkbox' checked={enrolled} onChange={toggle} />
-      <span>{t('Get keys with biometrics')}</span>
+      <span>{t('Unlock with biometrics')}</span>
     </label>
   )
 

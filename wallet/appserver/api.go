@@ -959,6 +959,13 @@ func (s *AppServer) apiSetSendRequirePassword(w http.ResponseWriter, r *http.Req
 // apiActuallyLogin logs the user in. login form private data is expected to be
 // cleared by the caller.
 func (s *AppServer) actuallyLogin(w http.ResponseWriter, r *http.Request, login *loginForm) error {
+	// Serialize against Lock/Unlock. Both mint a session (auth token + cached
+	// password); without this a concurrent biometric Unlock could roll back and
+	// deauth() — wiping the token this login just created — leaving an unrelated,
+	// successful session silently stranded on the login gate.
+	s.sessionMtx.Lock()
+	defer s.sessionMtx.Unlock()
+
 	// Only allow login from the onion address when a companion app is
 	// actively paired. This prevents an unpaired companion app from
 	// re-authenticating with saved credentials.
