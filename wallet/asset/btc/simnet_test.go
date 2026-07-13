@@ -37,8 +37,11 @@ var (
 	walletPassword = []byte("abc")
 )
 
+// mineAlpha sends the mine-alpha script to the btc-harness tmux session. The
+// script lives in the harness-ctl window (window 2); window 0 runs the alpha
+// daemon in the foreground and would swallow the keystrokes.
 func mineAlpha() error {
-	return exec.Command("tmux", "send-keys", "-t", "btc-harness:0", "./mine-alpha 1", "C-m").Run()
+	return exec.Command("tmux", "send-keys", "-t", "btc-harness:2", "./mine-alpha 1", "C-m").Run()
 }
 
 // harnessNode is a thin funding node backed by a harness bitcoind's RPC
