@@ -66,10 +66,11 @@ func init() {
 // Driver implements asset.Driver.
 type Driver struct{}
 
-// Check that Driver implements asset.Driver.
+// Check that Driver implements asset.Driver and asset.Creator.
 var _ asset.Driver = (*Driver)(nil)
+var _ asset.Creator = (*Driver)(nil)
 
-// Open creates the LTC exchange wallet. Start the wallet with its Run method.
+// Open creates the LTC wallet. Start the wallet with its Connect method.
 func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
@@ -149,8 +150,7 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		params.Logger, recoveryCfg.NumExternalAddresses, recoveryCfg.NumInternalAddresses, chainParams)
 }
 
-// NewWallet is the exported constructor by which the DEX will import the
-// exchange wallet.
+// NewWallet is the exported constructor for the Litecoin wallet.
 func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	var cloneParams *chaincfg.Params
 	switch network {

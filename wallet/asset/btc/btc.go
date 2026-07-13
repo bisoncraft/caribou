@@ -30,9 +30,8 @@ const (
 	walletTypeSPV      = "SPV"
 	walletTypeElectrum = "electrumRPC"
 
-	// confTxFinality is the amount of confirms a redeem or refund
-	// transaction needs before the trade is considered confirmed. The tx is
-	// monitored until this number of confirms is reached.
+	// confTxFinality is the number of confirmations after which a wallet
+	// transaction is treated as final and no longer monitored.
 	confTxFinality = 1
 )
 
@@ -143,8 +142,8 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 		params.Logger, cfg.NumExternalAddresses, cfg.NumInternalAddresses, chainParams)
 }
 
-// Open opens or connects to the BTC exchange wallet. Start the wallet with its
-// Run method.
+// Open opens or connects to the BTC wallet. Start the wallet with its Connect
+// method.
 func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (asset.Wallet, error) {
 	return NewWallet(cfg, logger, network)
 }
@@ -194,8 +193,7 @@ func parseChainParams(net util.Network) (*chaincfg.Params, error) {
 	return nil, fmt.Errorf("unknown network ID %v", net)
 }
 
-// NewWallet is the exported constructor by which the DEX will import the
-// exchange wallet.
+// NewWallet is the exported constructor for the Bitcoin wallet.
 func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (asset.Wallet, error) {
 	params, err := parseChainParams(net)
 	if err != nil {
