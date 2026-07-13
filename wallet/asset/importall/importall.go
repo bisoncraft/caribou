@@ -1,5 +1,3 @@
-//go:build !xmr
-
 package importall
 
 import (

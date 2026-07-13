@@ -2,16 +2,11 @@
 
 package importall
 
+// Monero links the native libmonero_wallet2_api_c through cgo, which must be
+// built and staged first, so the xmr wallet is registered only under the "xmr"
+// build tag. This is additive: the default set in importall.go always
+// registers, and -tags xmr adds Monero on top. Build with -tags xmr to enable
+// Monero support.
 import (
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/bch"  // register bch asset
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/btc" // register btc asset
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/dash" // register dash asset
-	// dcr is registered in importall_dcr.go under the "dcr" build tag.
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/dgb"  // register dgb asset
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/doge" // register doge asset
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/firo" // register firo asset
-	_ "github.com/bisoncraft/bosswallet/wallet/asset/ltc" // register ltc asset
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/near" // register near asset
 	_ "github.com/bisoncraft/bosswallet/wallet/asset/xmr" // register xmr asset
-	// _ "github.com/bisoncraft/bosswallet/wallet/asset/zec"  // register zec asset
 )
