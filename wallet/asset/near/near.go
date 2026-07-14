@@ -73,6 +73,7 @@ var (
 
 func init() {
 	asset.Register(BipID, &Driver{})
+	registerToken(usdcTokenID, "Circle's USDC NEP-141 token on NEAR.", util.Mainnet, util.Testnet)
 }
 
 // Driver implements asset.Driver and asset.Creator.
@@ -301,6 +302,25 @@ func (w *NearWallet) OwnsDepositAddress(address string) (bool, error) {
 	return strings.EqualFold(address, w.accountID), nil
 }
 
+// reserveNonce reserves the next access-key nonce for a transaction. Callers
+// must hold nonceMtx. It advances past both the network's current view of
+// the account's nonce and any nonce already reserved by an earlier call, so
+// two sends issued back-to-back don't compute the same nonce before the
+// first transaction has been included in a block (broadcastTxAsync returns
+// before confirmation, so the network's nonce doesn't reflect it yet).
+func (w *NearWallet) reserveNonce() (uint64, error) {
+	akInfo, err := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58())
+	if err != nil {
+		return 0, fmt.Errorf("error querying access key: %w", err)
+	}
+	nonce := akInfo.Nonce + 1
+	if w.nonce+1 > nonce {
+		nonce = w.nonce + 1
+	}
+	w.nonce = nonce
+	return nonce, nil
+}
+
 func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid NEAR address %q", address)
@@ -322,17 +342,14 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
 
-	// Get access key for nonce and block hash.
-	akInfo, err := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58())
+	nonce, err := w.reserveNonce()
 	if err != nil {
-		return nil, fmt.Errorf("error querying access key: %w", err)
+		return nil, err
 	}
 
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
 	w.tipMtx.RUnlock()
-
-	nonce := akInfo.Nonce + 1
 
 	tx := &nearTransaction{
 		signerID:   w.accountID,
@@ -354,8 +371,6 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if _, err := w.rpc.broadcastTxAsync(encoded); err != nil {
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}
-
-	w.nonce = nonce
 
 	recipient := address
 	wtx := &txdb.WalletTransaction{
@@ -747,5 +762,5 @@ func isAccountNotFound(err error) bool {
 	if rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_ACCOUNT" {
 		return true
 	}
-	return strings.Contains(rpcErr.Data, "does not exist")
+	return strings.Contains(string(rpcErr.Data), "does not exist")
 }

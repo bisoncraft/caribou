@@ -68,11 +68,11 @@ type jsonRPCResponse struct {
 }
 
 type rpcError struct {
-	Name    string         `json:"name"`
-	Cause   *rpcErrorCause `json:"cause"`
-	Code    int            `json:"code"`
-	Message string         `json:"message"`
-	Data    string         `json:"data"`
+	Name    string          `json:"name"`
+	Cause   *rpcErrorCause  `json:"cause"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type rpcErrorCause struct {
@@ -183,6 +183,34 @@ func (c *rpcClient) viewAccessKey(accountID string, pubKeyBase58 string) (*acces
 		return nil, fmt.Errorf("error decoding access key info: %w", err)
 	}
 	return &info, nil
+}
+
+// callFunction invokes a read-only ("view") contract method and returns its
+// raw JSON-encoded return value.
+func (c *rpcClient) callFunction(contractID, methodName string, args interface{}) (json.RawMessage, error) {
+	argsJSON, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling args: %w", err)
+	}
+	result, err := c.call("query", map[string]interface{}{
+		"request_type": "call_function",
+		"finality":     "final",
+		"account_id":   contractID,
+		"method_name":  methodName,
+		"args_base64":  base64.StdEncoding.EncodeToString(argsJSON),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		// Result is the UTF-8-encoded return value, transmitted as a JSON
+		// array of byte values rather than a base64 string.
+		Result []byte `json:"result"`
+	}
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return nil, fmt.Errorf("error decoding call_function result: %w", err)
+	}
+	return json.RawMessage(resp.Result), nil
 }
 
 // blockInfo holds selected fields from a block response.

@@ -49,6 +49,20 @@ func transferAction(yoctoNEAR *big.Int) action {
 	}
 }
 
+// functionCallAction creates a FunctionCall action invoking methodName with
+// JSON-encoded args, the given gas budget, and an attached yoctoNEAR deposit.
+func functionCallAction(methodName string, args []byte, gas uint64, deposit *big.Int) action {
+	var data []byte
+	data = appendString(data, methodName)
+	data = appendBytes(data, args)
+	data = appendU64LE(data, gas)
+	data = append(data, marshalU128LE(deposit)...)
+	return action{
+		variant: actionFunctionCall,
+		data:    data,
+	}
+}
+
 // serializeTransaction Borsh-encodes a NEAR transaction.
 func serializeTransaction(tx *nearTransaction) []byte {
 	var b []byte
@@ -91,6 +105,12 @@ func appendU64LE(b []byte, v uint64) []byte {
 func appendString(b []byte, s string) []byte {
 	b = appendU32LE(b, uint32(len(s)))
 	return append(b, s...)
+}
+
+// appendBytes writes a Borsh Vec<u8>: 4-byte LE length prefix + raw bytes.
+func appendBytes(b []byte, data []byte) []byte {
+	b = appendU32LE(b, uint32(len(data)))
+	return append(b, data...)
 }
 
 // appendKeyED25519 writes a NEAR public key: 1-byte type prefix + 32 bytes.

@@ -8,7 +8,14 @@
 #
 set -e
 
-DOCKER_IMAGE="ghcr.io/near/sandbox:latest"
+# The near/sandbox "latest" tag is an amd64-only image; it segfaults under
+# emulation on arm64 hosts (e.g. Apple Silicon). Use the native aarch64 tag
+# there instead.
+if [ "$(uname -m)" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then
+  DOCKER_IMAGE="ghcr.io/near/sandbox:latest-aarch64"
+else
+  DOCKER_IMAGE="ghcr.io/near/sandbox:latest"
+fi
 CONTAINER_NAME="near-sandbox"
 RPC_PORT="23456"
 NODES_ROOT=~/dextest/near
