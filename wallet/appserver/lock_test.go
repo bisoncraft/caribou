@@ -167,13 +167,27 @@ func TestLockClearsSession(t *testing.T) {
 }
 
 // TestLockLogoutError surfaces a Core.Logout failure rather than reporting a
-// lock that did not happen.
+// lock that did not happen, but still tears the session down: the native callers
+// show the locked UI regardless of the return, so a "locked" screen must never
+// sit over a still-valid server-side session.
 func TestLockLogoutError(t *testing.T) {
 	s, c, shutdown := newTServer(t, false)
 	defer shutdown()
+	if _, err := s.Unlock([]byte("apppass")); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
 	c.logoutErr = errors.New("logout boom")
 	if err := s.Lock(); err == nil {
 		t.Fatal("Lock did not surface the Logout error")
+	}
+
+	// deauth must have run despite the Logout error: no session state may survive.
+	s.authMtx.RLock()
+	defer s.authMtx.RUnlock()
+	if len(s.authTokens) != 0 || len(s.cachedPasswords) != 0 || len(s.pendingGrants) != 0 {
+		t.Fatalf("Lock left session state after a Logout error: tokens=%d cached=%d grants=%d",
+			len(s.authTokens), len(s.cachedPasswords), len(s.pendingGrants))
 	}
 }
 

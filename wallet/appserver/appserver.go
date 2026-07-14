@@ -811,12 +811,16 @@ func (s *AppServer) isOnionRequest(r *http.Request) bool {
 func (s *AppServer) Lock() error {
 	s.sessionMtx.Lock()
 	defer s.sessionMtx.Unlock()
-	if err := s.core.Logout(); err != nil {
-		return err
-	}
+	// Tear the session down even if Logout errors. Both native callers show the
+	// locked UI regardless of what Lock returns, so skipping deauth on a Logout
+	// failure would leave a "locked" screen sitting over a still-valid server-side
+	// session (auth tokens, cached passwords, pending grants). deauth is
+	// unconditional; the Logout error is still returned so the caller can surface
+	// it.
+	logoutErr := s.core.Logout()
 	// deauth clears the auth tokens, cached passwords, and any pending grants.
 	s.deauth()
-	return nil
+	return logoutErr
 }
 
 // Unlock re-establishes a session after Lock. It logs core back in with pw,
