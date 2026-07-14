@@ -5,14 +5,44 @@ package bnb
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/asset/eth"
 )
 
+func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
+	token, found := Tokens[tokenID]
+	if !found {
+		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
+	}
+	netAddrs := make(map[util.Network]string)
+	netVersions := make(map[util.Network][]uint32, 3)
+	for net, netToken := range token.NetTokens {
+		if !slices.Contains(allowedNets, net) {
+			continue
+		}
+		netAddrs[net] = netToken.Address.String()
+		netVersions[net] = make([]uint32, 0, 1)
+		for ver := range netToken.Gas {
+			netVersions[net] = append(netVersions[net], ver)
+		}
+	}
+	asset.RegisterToken(tokenID, token.Token, &asset.WalletDefinition{
+		Type:        walletTypeToken,
+		Tab:         "BNB token",
+		Description: desc,
+	}, netAddrs, netVersions)
+}
+
 func init() {
+	MaybeReadSimnetAddrs()
 	asset.Register(BipID, &Driver{})
+	eth.RegisterEVMTokens(Tokens)
+	registerToken(usdcTokenID, "The USDC BEP-20 token.", util.Mainnet, util.Simnet)
+	registerToken(usdtTokenID, "The USDT BEP-20 token.", util.Mainnet, util.Simnet)
 }
 
 const (
@@ -20,6 +50,7 @@ const (
 	BipID              = 714
 	defaultGasFeeLimit = 200
 	walletTypeRPC      = "rpc"
+	walletTypeToken    = "token"
 )
 
 var (
@@ -84,6 +115,7 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		AssetCfg:         cfg,
 		CompatData:       &compat,
 		VersionedGases:   VersionedGases,
+		Tokens:           Tokens,
 		FinalizeConfs:    3,
 		Logger:           logger,
 		MultiBalAddress:  MultiBalanceAddresses[net],

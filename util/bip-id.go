@@ -633,6 +633,10 @@ var bipIDs = map[uint32]string{
 	966003: "wbtc.polygon",
 	966004: "usdt.polygon",
 	// END Polygon reserved token range
+	// BNB reserved token range 714000-714999
+	714001: "usdc.bnb",
+	714002: "usdt.bnb",
+	// END BNB reserved token range
 	1171337:  "ilt",
 	1313114:  "etho",
 	1313500:  "xero",
