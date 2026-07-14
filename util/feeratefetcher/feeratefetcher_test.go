@@ -6,6 +6,7 @@ package feeratefetcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -110,6 +111,35 @@ func TestErrorBackoff(t *testing.T) {
 	f.Rate(context.Background())
 	if c != 1 {
 		t.Fatalf("expected a single fetch during backoff, got %d", c)
+	}
+}
+
+func TestCanceledContextDoesNotBackOff(t *testing.T) {
+	// A canceled parent context says nothing about source health: the source
+	// must be retried on the next call rather than sitting in backoff.
+	var c int
+	src := &SourceConfig{
+		Name:   "healthy",
+		Rank:   1,
+		Period: time.Hour,
+		F: func(ctx context.Context) (uint64, time.Duration, error) {
+			c++
+			if c == 1 {
+				return 0, time.Hour, fmt.Errorf("request aborted: %w", context.Canceled)
+			}
+			return 7, 0, nil
+		},
+	}
+	f := New([]*SourceConfig{src}, util.Disabled)
+
+	if r := f.Rate(context.Background()); r != 0 {
+		t.Fatalf("expected no rate from the canceled fetch, got %d", r)
+	}
+	if r := f.Rate(context.Background()); r != 7 {
+		t.Fatalf("expected an immediate refetch after cancellation, got %d", r)
+	}
+	if c != 2 {
+		t.Fatalf("expected 2 fetches, got %d", c)
 	}
 }
 

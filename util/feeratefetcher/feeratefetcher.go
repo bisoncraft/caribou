@@ -19,6 +19,7 @@ package feeratefetcher
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
 	"sync"
@@ -96,6 +97,12 @@ func (s *source) update(ctx context.Context) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	switch {
+	case errors.Is(err, context.Canceled):
+		// The parent context was canceled (e.g. shutdown), which says nothing
+		// about the source's health — leave failUntil alone so the source
+		// isn't in backoff when a fresh context comes along. A timeout of the
+		// per-fetch deadline is a real source failure and is not matched here.
+		s.log.Tracef("Fetch canceled: %v", err)
 	case err != nil:
 		s.log.Meter("fetch-error", time.Minute*30).Errorf("Fetch error: %v", err)
 		s.failUntil = time.Now().Add(max(minErrorDelay, errDelay))
