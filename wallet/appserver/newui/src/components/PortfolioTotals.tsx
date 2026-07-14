@@ -1,14 +1,8 @@
 import t, { tvar } from '@bossw/shared/intl'
+import Doc from '@bossw/shared/doc'
 import { PortfolioTotals as PortfolioTotalsData } from '@bossw/shared/registry'
 import { TickerAsset } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
-
-const usdFmt = new Intl.NumberFormat(navigator.languages as string[], {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
 
 interface PortfolioTotalsProps {
   totals: PortfolioTotalsData
@@ -46,11 +40,11 @@ export default function PortfolioTotals ({ totals, walletAssets }: PortfolioTota
           </span>
         ))}
       </div>
-      <div className="portfolio-totals-heading">{usdFmt.format(total)}</div>
+      <div className="portfolio-totals-heading">{Doc.formatUSD(total)}</div>
       <div className="portfolio-totals-stats d-flex justify-content-center align-items-center">
         <span className="portfolio-stat">{tvar('{{ n }} Assets', { n: String(numWallets) })}</span>
         <span className="portfolio-stat-sep" />
-        <span className="portfolio-stat">{tvar('{{ amt }} Available', { amt: usdFmt.format(available) })}</span>
+        <span className="portfolio-stat">{tvar('{{ amt }} Available', { amt: Doc.formatUSD(available) })}</span>
         <span className="portfolio-stat-sep" />
         <span className="portfolio-stat">{tvar('{{ pct }}% Locked', { pct: String(lockedPct) })}</span>
       </div>

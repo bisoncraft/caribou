@@ -10,14 +10,6 @@ import Spinner from './Spinner'
 import Checkbox from './Checkbox'
 import PasswordInput from './PasswordInput'
 
-const languages = navigator.languages as string[]
-const usdFmt = new Intl.NumberFormat(languages, {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
-
 function networkTicker (v: AssetVariant): string {
   return networkAsset(v)?.unitInfo.conventional.unit ?? ''
 }
@@ -30,8 +22,7 @@ function cFactorOf (v: AssetVariant): number {
 // usd renders an atomic value at the given conversion factor / rate as a USD
 // string, or an em dash when no rate is available.
 function usd (atomic: number, cFactor: number, rate: number): string {
-  if (!rate) return '—'
-  return usdFmt.format((atomic / cFactor) * rate)
+  return Doc.usdString(atomic, cFactor, rate) || '—'
 }
 
 const noSubmit = (e: FormEvent) => e.preventDefault()

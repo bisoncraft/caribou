@@ -592,9 +592,14 @@ export default class Doc {
     return `${h.padStart(2, '0')}:${m.padStart(2, '0')}:${s.padStart(2, '0')}`
   }
 
-  /* formatDuration returns a string representation of the duration */
+  /*
+   * formatDuration returns a string representation of the duration. A
+   * non-positive duration (e.g. a block timestamp slightly ahead of the local
+   * clock) renders as "0 s"; without the clamp, Math.floor on a negative
+   * quotient would cascade a huge positive remainder into the smaller units.
+   */
   static formatDuration (dur: number): string {
-    let seconds = Math.floor(dur)
+    let seconds = Math.floor(Math.max(dur, 0))
     let result = ''
     let count = 0
     const add = (n: number, s: string) => {

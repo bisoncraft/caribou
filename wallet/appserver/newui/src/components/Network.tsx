@@ -12,23 +12,7 @@ interface NetworkParams {
   symbol: string
 }
 
-const languages = navigator.languages as string[]
-
-const usdFmt = new Intl.NumberFormat(languages, {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
-
-const intFmt = new Intl.NumberFormat(languages, { maximumFractionDigits: 0 })
-
-// usdString converts an atomic amount to a formatted USD string, or '' when the
-// fiat rate is unknown.
-function usdString (atomic: number, cFactor: number, rate: number): string {
-  if (!rate) return ''
-  return usdFmt.format((atomic / cFactor) * rate)
-}
+const intFmt = new Intl.NumberFormat(navigator.languages as string[], { maximumFractionDigits: 0 })
 
 function BackButton ({ onClick }: { onClick: () => void }) {
   return (
@@ -80,7 +64,7 @@ function FeeSection ({ wallet, ui, ticker, rate }: { wallet: WalletState, ui: Un
     ? `${intFmt.format(fee.rate)} ${ui.atomicUnit}/${ui.feeRateDenom}`
     : t('Unavailable')
 
-  const sendUsd = fee ? usdString(fee.send, ui.conventional.conversionFactor, rate) : ''
+  const sendUsd = fee ? Doc.usdString(fee.send, ui.conventional.conversionFactor, rate) : ''
   const sendValue = fee
     ? <>{Doc.formatCoinValue(fee.send, ui)} {ticker}{sendUsd && <span className="grey"> ({sendUsd})</span>}</>
     : t('Unavailable')
@@ -102,7 +86,7 @@ function TokenRow ({ a, networkTicker }: { a: NetworkAssetRef, networkTicker: st
   const ui = asset.unitInfo
   const available = asset.wallet?.balance?.available ?? 0
   const rate = app.idRate(a.assetID) ?? 0
-  const usd = usdString(available, ui.conventional.conversionFactor, rate)
+  const usd = Doc.usdString(available, ui.conventional.conversionFactor, rate)
   const open = () => app.loadPage(`asset/${normalizedTicker(asset)}`)
 
   return (
@@ -168,7 +152,7 @@ export default function Network ({ symbol }: NetworkParams) {
   const ui = app.unitInfo(assetID)
   const tokens = n.supportedAssets.filter(a => a.assetID !== n.nativeAssetID)
   const nativeAvailable = wallet?.balance?.available ?? 0
-  const nativeUsd = usdString(nativeAvailable, ui.conventional.conversionFactor, app.idRate(assetID) ?? 0)
+  const nativeUsd = Doc.usdString(nativeAvailable, ui.conventional.conversionFactor, app.idRate(assetID) ?? 0)
 
   return (
     <div className="networks-view fill-abs">

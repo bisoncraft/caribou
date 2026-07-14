@@ -641,6 +641,12 @@ func TestTickerIndex(t *testing.T) {
 	if got := ids(resp.Txs); !eq(got, []string{"usdcB", "usdcA"}) {
 		t.Fatalf("USDC order = %v, want [usdcB usdcA]", got)
 	}
+	// Token transactions are attributed to their token asset ID.
+	for i, wantID := range []uint32{usdcB, usdcA} {
+		if wt := resp.Txs[i]; wt.AssetID == nil || *wt.AssetID != wantID {
+			t.Fatalf("tx %s AssetID = %v, want %d", wt.ID, wt.AssetID, wantID)
+		}
+	}
 
 	// A different ticker returns only its own transactions.
 	resp, err = db.GetTxsByTicker("BTC", &TxHistoryRequest{N: 10, Past: true})
@@ -649,6 +655,10 @@ func TestTickerIndex(t *testing.T) {
 	}
 	if got := ids(resp.Txs); !eq(got, []string{"btc"}) {
 		t.Fatalf("BTC = %v, want [btc]", got)
+	}
+	// A native transaction is attributed to its network's native asset.
+	if wt := resp.Txs[0]; wt.AssetID == nil || *wt.AssetID != netA {
+		t.Fatalf("native tx AssetID = %v, want %d", wt.AssetID, netA)
 	}
 
 	// N caps the page and reports more available.
@@ -668,5 +678,12 @@ func TestTickerIndex(t *testing.T) {
 	}
 	if got := ids(resp.Txs); !eq(got, []string{"usdcA"}) {
 		t.Fatalf("refID page = %v, want [usdcA]", got)
+	}
+
+	// A RefID not in this ticker's index (stale cursor, or another ticker's
+	// tx) is an error, not an empty final page.
+	ref = "btc"
+	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref}); err != ErrUnknownTx {
+		t.Fatalf("foreign refID err = %v, want ErrUnknownTx", err)
 	}
 }

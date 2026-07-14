@@ -26,6 +26,11 @@ const polygonExplorers: Record<number, txURL> = {
   [Simnet]: (cid) => `https://polygonscan.com/tx/${hash(cid)}`
 }
 
+const baseExplorers: Record<number, txURL> = {
+  [Mainnet]: (cid) => `https://basescan.org/tx/${hash(cid)}`,
+  [Testnet]: (cid) => `https://base-sepolia.blockscout.com/tx/${hash(cid)}`
+}
+
 // Explorers keyed by base-chain asset ID, then by network.
 const explorers: Record<number, Record<number, txURL>> = {
   42: { // dcr
@@ -51,6 +56,10 @@ const explorers: Record<number, Record<number, txURL>> = {
   60: ethExplorers, // eth
   60001: ethExplorers,
   60002: ethExplorers,
+  8453: baseExplorers, // base (weth.base)
+  61000: baseExplorers,
+  61001: baseExplorers,
+  61002: baseExplorers,
   3: { // doge
     [Mainnet]: (cid) => `https://dogeblocks.com/tx/${hash(cid)}`,
     [Testnet]: (cid) => `https://blockexplorer.one/dogecoin/testnet/tx/${hash(cid)}`,
@@ -81,7 +90,9 @@ const explorers: Record<number, Record<number, txURL>> = {
   },
   966: polygonExplorers, // polygon
   966001: polygonExplorers,
-  966002: polygonExplorers
+  966002: polygonExplorers,
+  966003: polygonExplorers,
+  966004: polygonExplorers
 }
 
 // baseChainID returns the settlement-network asset ID for an asset: the parent

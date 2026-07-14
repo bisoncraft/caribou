@@ -12,20 +12,6 @@ interface TxDetailParams {
   tx: WalletTransaction
 }
 
-const languages = navigator.languages as string[]
-
-const usdFmt = new Intl.NumberFormat(languages, {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
-
-function usdString (atomic: number, cFactor: number, rate: number): string {
-  if (!rate) return ''
-  return usdFmt.format((atomic / cFactor) * rate)
-}
-
 const noSubmit = (e: FormEvent) => e.preventDefault()
 
 function Row ({ label, children }: { label: string, children: ReactNode }) {
@@ -60,8 +46,8 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
   const feeRate = app.idRate(feeAssetID) ?? 0
 
   const sign = txAmountSign(tx.type)
-  const amountUsd = usdString(tx.amount, ui.conventional.conversionFactor, rate)
-  const feeUsd = usdString(tx.fees, feeUI.conventional.conversionFactor, feeRate)
+  const amountUsd = Doc.usdString(tx.amount, ui.conventional.conversionFactor, rate)
+  const feeUsd = Doc.usdString(tx.fees, feeUI.conventional.conversionFactor, feeRate)
 
   const status = (!tx.confirmed && tx.confirms)
     ? tvar('{{ current }}/{{ target }} confs', { current: String(tx.confirms.current), target: String(tx.confirms.target) })

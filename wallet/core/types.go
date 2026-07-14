@@ -130,6 +130,11 @@ type SupportedAsset struct {
 	// Token is only populated for token assets.
 	Token    *asset.Token  `json:"token"`
 	UnitInfo util.UnitInfo `json:"unitInfo"`
+	// TickerGroup is the normalized ticker that groups this asset with its
+	// deployments on other networks (e.g. USDC on Ethereum and Polygon), with
+	// wrapped natives folded onto their base asset (WETH->ETH). It is the key
+	// for ticker-scoped transaction history.
+	TickerGroup string `json:"tickerGroup"`
 }
 
 // MiniOrder is minimal information about an order in a market's order book.

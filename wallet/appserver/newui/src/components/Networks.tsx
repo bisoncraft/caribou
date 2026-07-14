@@ -34,7 +34,7 @@ function NetworkCard ({ n }: { n: NetworkSummary }) {
           ticker={n.ticker}
           className={`icon-32 ${n.activated ? '' : 'logo-off'}`}
         />
-        <span className="network-card-name demi">{n.name}</span>
+        <span className="fs18 demi">{n.name}</span>
       </div>
       <div className="fs13 grey">
         {tvar('Supports {{ count }} {{ assetWord }}', { count: String(n.assetCount), assetWord })}

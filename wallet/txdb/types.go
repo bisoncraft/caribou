@@ -68,6 +68,12 @@ type WalletTransaction struct {
 	// TokenID will be non-nil if the BalanceDelta applies to the balance
 	// of a token.
 	TokenID *uint32 `json:"tokenID,omitempty"`
+	// AssetID identifies the transaction's asset exactly: the token ID for
+	// token transactions, otherwise the native asset of the network the
+	// transaction was made on. It is populated on reads from cross-network
+	// queries (GetTxsByTicker), where the caller cannot otherwise attribute a
+	// native transaction to its network. Wallets do not set it.
+	AssetID *uint32 `json:"assetID,omitempty"`
 	// Recipient will be non-nil for Send/Receive transactions, and specifies the
 	// recipient address of the transaction.
 	Recipient *string `json:"recipient,omitempty"`

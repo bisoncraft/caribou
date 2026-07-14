@@ -217,6 +217,10 @@ func (c *TCore) TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxH
 	return nil, nil
 }
 
+func (c *TCore) TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+	return nil, nil
+}
+
 func (c *TCore) FundsMixingStats(assetID uint32) (*asset.FundsMixingStats, error) {
 	return nil, nil
 }

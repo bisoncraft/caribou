@@ -47,7 +47,6 @@ export class AssetVariant {
 export class TickerAsset {
   ticker: string // normalized e.g. WETH -> ETH
   hasWallets: boolean
-  cFactor: number
   bestID: number
   name: string
   variants: AssetVariant[]
@@ -58,15 +57,20 @@ export class TickerAsset {
   ui: UnitInfo
 
   constructor (a: SupportedAsset) {
-    const { id: assetID, name, unitInfo: ui, unitInfo: { conventional: { conversionFactor: cFactor } } } = a
+    const { id: assetID, name, unitInfo: ui } = a
     this.ticker = normalizedTicker(a)
-    this.cFactor = cFactor
     this.variants = []
     this.variantLookup = {}
     this.bestID = assetID
     this.name = name
     this.ui = ui
     this.addVariant(a)
+  }
+
+  // cFactor is the conversion factor of the group's preferred (native) unit
+  // info — the denomination in which the aggregate balance getters report.
+  get cFactor () {
+    return this.ui.conventional.conversionFactor
   }
 
   addVariant (a: SupportedAsset) {
@@ -120,21 +124,32 @@ export class TickerAsset {
     }
   }
 
+  /*
+   * toGroupAtoms converts a variant's atomic amount into the group's preferred
+   * atomic denomination (see cFactor), so cross-variant sums stay meaningful
+   * even if variants denominate with different conversion factors. For every
+   * current group the factors match and this is the identity.
+   */
+  toGroupAtoms (v: AssetVariant, atomic: number): number {
+    return atomic * (this.cFactor / v.ui.conventional.conversionFactor)
+  }
+
   get avail () {
-    return this.variants.reduce((sum: number, v: AssetVariant) => sum + v.bal.available, 0)
+    return this.variants.reduce((sum: number, v: AssetVariant) => sum + this.toGroupAtoms(v, v.bal.available), 0)
   }
 
   get immature () {
-    return this.variants.reduce((sum: number, v: AssetVariant) => sum + v.bal.immature, 0)
+    return this.variants.reduce((sum: number, v: AssetVariant) => sum + this.toGroupAtoms(v, v.bal.immature), 0)
   }
 
   get locked () {
-    return this.variants.reduce((sum: number, v: AssetVariant) => sum + v.bal.locked, 0)
+    return this.variants.reduce((sum: number, v: AssetVariant) => sum + this.toGroupAtoms(v, v.bal.locked), 0)
   }
 
   get total () {
-    return this.variants.reduce((sum: number, { bal: { available, locked, immature } }: AssetVariant) => {
-      return sum + available + locked + immature
+    return this.variants.reduce((sum: number, v: AssetVariant) => {
+      const { available, locked, immature } = v.bal
+      return sum + this.toGroupAtoms(v, available + locked + immature)
     }, 0)
   }
 
@@ -144,8 +159,7 @@ export class TickerAsset {
 }
 
 export function normalizedTicker (a: SupportedAsset): string {
-  const ticker = a.unitInfo.conventional.unit
-  return ticker === 'WETH' ? 'ETH' : ticker === 'WBTC' ? 'BTC' : ticker
+  return a.tickerGroup || a.unitInfo.conventional.unit
 }
 
 // networkID is the asset whose wallet settles a variant: the parent network for
@@ -188,33 +202,34 @@ export interface NetworkSummary {
   supportedAssets: NetworkAssetRef[]
 }
 
+// summarizeNetwork builds the NetworkSummary for one native asset, collecting
+// the tokens that settle on it from the full asset map. supportedAssets lists
+// the native asset first, then its tokens sorted by ticker.
+function summarizeNetwork (a: SupportedAsset, assets: Record<number, SupportedAsset>): NetworkSummary {
+  const tokens: NetworkAssetRef[] = []
+  for (const t of Object.values(assets)) {
+    if (t.token?.networkID === a.id) tokens.push({ assetID: t.id, ticker: t.unitInfo.conventional.unit })
+  }
+  tokens.sort((x, y) => x.ticker.localeCompare(y.ticker))
+  const supportedAssets = [{ assetID: a.id, ticker: a.unitInfo.conventional.unit }, ...tokens]
+  return {
+    nativeAssetID: a.id,
+    name: a.name,
+    ticker: a.unitInfo.conventional.unit,
+    symbol: a.symbol,
+    assetCount: supportedAssets.length,
+    activated: Boolean(a.wallet),
+    supportedAssets
+  }
+}
+
 // networkList enumerates the settlement networks. A network corresponds to a
 // native asset (one without a token); tokens are grouped under their parent
 // network rather than listed as networks of their own. The list is sorted
 // alphabetically by name for a stable ordering across renders.
 export function networkList (): NetworkSummary[] {
   const assets = app.user?.assets ?? {}
-  const tokensByNetwork: Record<number, NetworkAssetRef[]> = {}
-  for (const a of Object.values(assets)) {
-    if (!a.token) continue
-    const list = tokensByNetwork[a.token.networkID] ?? (tokensByNetwork[a.token.networkID] = [])
-    list.push({ assetID: a.id, ticker: a.unitInfo.conventional.unit })
-  }
-  const networks: NetworkSummary[] = []
-  for (const a of Object.values(assets)) {
-    if (a.token) continue
-    const tokens = (tokensByNetwork[a.id] ?? []).sort((x, y) => x.ticker.localeCompare(y.ticker))
-    const supportedAssets = [{ assetID: a.id, ticker: a.unitInfo.conventional.unit }, ...tokens]
-    networks.push({
-      nativeAssetID: a.id,
-      name: a.name,
-      ticker: a.unitInfo.conventional.unit,
-      symbol: a.symbol,
-      assetCount: supportedAssets.length,
-      activated: Boolean(a.wallet),
-      supportedAssets
-    })
-  }
+  const networks = Object.values(assets).filter(a => !a.token).map(a => summarizeNetwork(a, assets))
   networks.sort((x, y) => x.name.localeCompare(y.name))
   return networks
 }
@@ -222,11 +237,15 @@ export function networkList (): NetworkSummary[] {
 // networkSummary returns the summary for a single network by its native asset
 // ID, or undefined when the ID is not a known native asset.
 export function networkSummary (nativeAssetID: number): NetworkSummary | undefined {
-  return networkList().find(n => n.nativeAssetID === nativeAssetID)
+  const assets = app.user?.assets ?? {}
+  const a = assets[nativeAssetID]
+  return a && !a.token ? summarizeNetwork(a, assets) : undefined
 }
 
 // networkBySymbol returns the summary for a network by its native asset's bip
 // symbol (e.g. "polygon", "hype"), or undefined when no such network exists.
 export function networkBySymbol (symbol: string): NetworkSummary | undefined {
-  return networkList().find(n => n.symbol === symbol)
+  const assets = app.user?.assets ?? {}
+  const a = Object.values(assets).find(x => !x.token && x.symbol === symbol)
+  return a ? summarizeNetwork(a, assets) : undefined
 }

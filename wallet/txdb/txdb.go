@@ -567,7 +567,12 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 // primary key (the ticker query spans networks and has no single network to
 // rebuild network||id from), so pagination skips forward to the RefID in index
 // order rather than seeking. The common case — the most recent page, RefID nil
-// — is a direct bounded scan.
+// — is a direct bounded scan. A RefID not present in the ticker's index
+// returns ErrUnknownTx, matching getTxs.
+//
+// Each returned transaction has its AssetID populated, since a merged
+// cross-network result would otherwise leave native transactions (no TokenID)
+// unattributable to a network.
 func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistoryResponse, error) {
 	if ticker == "" {
 		return &TxHistoryResponse{}, nil
@@ -582,7 +587,7 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 	skipping := req.RefID != nil
 
 	err := db.tickerTimeIndex.Iterate(prefix, func(it StoreIter) error {
-		wt, err := decodeIter(it)
+		wt, network, err := decodeIterWithNetwork(it)
 		if err != nil {
 			return err
 		}
@@ -599,11 +604,22 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 			moreAvailable = true
 			return ErrEndIteration
 		}
+		assetID := network
+		if wt.TokenID != nil {
+			assetID = *wt.TokenID
+		}
+		wt.AssetID = &assetID
 		txs = append(txs, wt)
 		return nil
 	}, reverse, nil)
 	if err != nil {
 		return nil, err
+	}
+	if skipping {
+		// The RefID was never seen, so the cursor is stale or belongs to
+		// another ticker. Report it rather than returning what would read as
+		// an empty final page.
+		return nil, ErrUnknownTx
 	}
 	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
 }

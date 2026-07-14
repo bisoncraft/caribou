@@ -1,19 +1,11 @@
 import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
+import Doc from '@bossw/shared/doc'
 import { TickerAsset } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
 import Spinner from './Spinner'
 
-const languages = navigator.languages as string[]
-
-const usdFmt = new Intl.NumberFormat(languages, {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
-
-const balFmt = new Intl.NumberFormat(languages, {
+const balFmt = new Intl.NumberFormat(navigator.languages as string[], {
   minimumFractionDigits: 0,
   maximumFractionDigits: 8
 })
@@ -79,13 +71,13 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
         </div>
       </td>
       <td className="asset-row-num">
-        {fiatRate > 0 ? usdFmt.format(usdValue) : '—'}
+        {fiatRate > 0 ? Doc.formatUSD(usdValue) : '—'}
       </td>
       <td className="asset-row-num">
         <span className="mono">{availFmt}</span>
       </td>
       <td className="asset-row-num">
-        {fiatRate > 0 ? usdFmt.format(fiatRate) : '—'}
+        {fiatRate > 0 ? Doc.formatUSD(fiatRate) : '—'}
       </td>
       <td className="asset-row-num">
         {pctDisplay}

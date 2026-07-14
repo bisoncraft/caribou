@@ -13,6 +13,13 @@ const fourSigFigs = new Intl.NumberFormat(languages, {
   maximumSignificantDigits: 4
 })
 
+const usdFormatter = new Intl.NumberFormat(languages, {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2
+})
+
 /* A cache for formatters used for Doc.formatCoinValue. */
 const decimalFormatters: Record<number, Intl.NumberFormat> = {}
 
@@ -107,6 +114,21 @@ export default class Doc {
     return formatSigFigsWithFormatters(intFormatter, fourSigFigs, n, maxDecimals)
   }
 
+  /* formatUSD formats a dollar amount as a USD currency string. */
+  static formatUSD (usd: number): string {
+    return usdFormatter.format(usd)
+  }
+
+  /*
+   * usdString converts an atomic amount to a USD currency string via the
+   * asset's conventional conversion factor and fiat rate, or '' when the rate
+   * is unknown.
+   */
+  static usdString (atomic: number, cFactor: number, rate: number): string {
+    if (!rate) return ''
+    return usdFormatter.format((atomic / cFactor) * rate)
+  }
+
   /*
    * timeSince returns a coarse, human-readable duration since the given
    * timestamp in milliseconds, e.g. "3 h 20 m" or "5 d 2 h".
@@ -115,9 +137,14 @@ export default class Doc {
     return Doc.formatDuration(new Date().getTime() - ms)
   }
 
-  /* formatDuration returns a string representation of a duration in ms. */
+  /*
+   * formatDuration returns a string representation of a duration in ms. A
+   * non-positive duration (e.g. a block timestamp slightly ahead of the local
+   * clock) renders as "0 s"; without the clamp, Math.floor on a negative
+   * quotient would cascade a huge positive remainder into the smaller units.
+   */
   static formatDuration (dur: number): string {
-    let seconds = Math.floor(dur)
+    let seconds = Math.floor(Math.max(dur, 0))
     let result = ''
     let count = 0
     const add = (n: number, s: string) => {

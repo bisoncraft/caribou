@@ -17,20 +17,6 @@ interface AssetParams {
 // Number of transactions fetched per network wallet.
 const TX_PAGE_SIZE = 25
 
-const languages = navigator.languages as string[]
-
-const usdFmt = new Intl.NumberFormat(languages, {
-  style: 'currency',
-  currency: 'USD',
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2
-})
-
-function usdString (atomic: number, cFactor: number, rate: number): string {
-  if (!rate) return ''
-  return usdFmt.format((atomic / cFactor) * rate)
-}
-
 // TxItem pairs a transaction with the network variant it belongs to, which
 // carries the units and asset ID needed to render and link it.
 interface TxItem {
@@ -46,9 +32,11 @@ function variantTotal (v: AssetVariant): number {
 }
 
 // variantForTx maps a merged-history transaction back to the network variant it
-// belongs to. Token transactions carry the token's asset ID; native ones have
-// no tokenID and resolve to the group's native variant.
+// belongs to. Ticker-history responses attribute every transaction exactly via
+// assetID. Single-asset responses lack it, so token transactions resolve via
+// their tokenID and native ones to the group's native variant.
 function variantForTx (ta: TickerAsset, tx: WalletTransaction): AssetVariant | undefined {
+  if (tx.assetID != null) return ta.variantLookup[tx.assetID]
   if (tx.tokenID != null) return ta.variantLookup[tx.tokenID]
   return ta.variants.find(v => !v.token)
 }
@@ -203,7 +191,7 @@ export default function Asset ({ ticker }: AssetParams) {
               </button>
             </div>
           </div>
-          {rate > 0 && <div className="grey mb-2">{usdString(ta.total, totalConvFactor, rate)}</div>}
+          {rate > 0 && <div className="grey mb-2">{Doc.usdString(ta.total, totalConvFactor, rate)}</div>}
           {hasUnavailable && (
             <>
               <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
@@ -249,7 +237,7 @@ export default function Asset ({ ticker }: AssetParams) {
                   <div className="text-right">
                     <div className="fs14 mono">{Doc.formatCoinValue(vTotalAtomic, v.ui)} {v.ticker}</div>
                     {app.idRate(v.assetID) > 0 && (
-                      <div className="grey fs12">{usdString(vTotalAtomic, vConvFactor, app.idRate(v.assetID))}</div>
+                      <div className="grey fs12">{Doc.usdString(vTotalAtomic, vConvFactor, app.idRate(v.assetID))}</div>
                     )}
                   </div>
                 </div>
