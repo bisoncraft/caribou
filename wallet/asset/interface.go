@@ -488,12 +488,6 @@ type Authenticator interface {
 	Locked() bool
 }
 
-// FeeRateFallbacker is a wallet with a configured fallback fee rate, used to
-// present an approvable rate to the user when a live estimate is unavailable.
-type FeeRateFallbacker interface {
-	FallbackFeeRate() uint64
-}
-
 // TxFeeEstimator is a wallet implementation with fee estimation functionality.
 type TxFeeEstimator interface {
 	// EstimateSendTxFee returns a tx fee rate estimate for sending or withdrawing

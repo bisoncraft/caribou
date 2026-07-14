@@ -212,34 +212,6 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 	}
 }
 
-// externalFeeRate gets the fee rate from the external API and returns it
-// in sats/vByte.
-func externalFeeRate(ctx context.Context, net util.Network) (uint64, error) {
-	// https://mempool.space/docs/api
-	var uri string
-	if net == util.Testnet {
-		uri = "https://mempool.space/testnet/api/v1/fees/recommended"
-	} else {
-		uri = "https://mempool.space/api/v1/fees/recommended"
-	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-	var resp struct {
-		Fastest  uint64 `json:"fastestFee"`
-		HalfHour uint64 `json:"halfHourFee"`
-		Hour     uint64 `json:"hourFee"`
-		Economy  uint64 `json:"economyFee"`
-		Minimum  uint64 `json:"minimumFee"`
-	}
-	if err := dexnet.Get(ctx, uri, &resp, dexnet.WithSizeLimit(1<<14)); err != nil {
-		return 0, err
-	}
-	if resp.Fastest == 0 {
-		return 0, errors.New("no fee rate found")
-	}
-	return resp.Fastest, nil
-}
-
 // Convert the BTC value to satoshi.
 func toSatoshi(v float64) uint64 {
 	return uint64(math.Round(v * conventionalConversionFactor))
