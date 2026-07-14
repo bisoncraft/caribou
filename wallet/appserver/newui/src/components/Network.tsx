@@ -1,9 +1,10 @@
-import { ReactNode } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
 import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import Doc from '@bossw/shared/doc'
+import { postJSON } from '@bossw/shared/http'
 import { useForceUpdate, useCoreSubscriptions } from '@bossw/shared/hooks'
-import { WalletState, UnitInfo } from '@bossw/shared/registry'
+import { WalletState, UnitInfo, FeeState } from '@bossw/shared/registry'
 import { networkBySymbol, normalizedTicker, NetworkAssetRef } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@bossw/shared/components/NetworkedTokenLogo'
@@ -56,17 +57,32 @@ function StatusSection ({ wallet }: { wallet: WalletState }) {
   )
 }
 
-function FeeSection ({ wallet, ui, ticker, rate }: { wallet: WalletState, ui: UnitInfo, ticker: string, rate: number }) {
-  const fee = wallet.feeState
+// FeeSection shows the network fee rate and the cost of a standard send. Fee
+// state is computed on demand — it is not part of WalletState — so it is
+// fetched from /api/feestate when the section mounts.
+function FeeSection ({ assetID, ui, ticker, rate }: { assetID: number, ui: UnitInfo, ticker: string, rate: number }) {
+  const [fee, setFee] = useState<FeeState | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => {
+    let stale = false
+    const fetchFeeState = async () => {
+      const r = await postJSON('/api/feestate', { assetID })
+      if (stale) return
+      setFee(r.ok && r.feeState?.rate ? r.feeState : null)
+      setLoaded(true)
+    }
+    fetchFeeState()
+    return () => { stale = true }
+  }, [assetID])
 
   const rateValue = fee
     ? `${Doc.formatInt(fee.rate)} ${ui.atomicUnit}/${ui.feeRateDenom}`
-    : t('Unavailable')
+    : loaded ? t('Unavailable') : '—'
 
   const sendUsd = fee ? Doc.usdString(fee.send, ui.conventional.conversionFactor, rate) : ''
   const sendValue = fee
     ? <>{Doc.formatCoinValue(fee.send, ui)} {ticker}{sendUsd && <span className="grey"> ({sendUsd})</span>}</>
-    : t('Unavailable')
+    : loaded ? t('Unavailable') : '—'
 
   return (
     <div className="network-section">
@@ -184,7 +200,7 @@ export default function Network ({ symbol }: NetworkParams) {
           ? (
             <>
               <StatusSection wallet={wallet} />
-              <FeeSection wallet={wallet} ui={ui} ticker={n.ticker} rate={app.idRate(assetID) ?? 0} />
+              <FeeSection assetID={assetID} ui={ui} ticker={n.ticker} rate={app.idRate(assetID) ?? 0} />
             </>
             )
           : <div className="grey py-4">{t('This network is not activated.')}</div>}

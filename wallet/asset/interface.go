@@ -459,7 +459,9 @@ type Wallet interface {
 	// is for the wallet's own Send and Withdraw, and is not a server-validated
 	// swap fee suggestion. Some wallets cannot always provide an estimate (an
 	// SPV or freshly-started wallet, for example), so a zero rate may be
-	// returned; callers should check for zero and fall back to a default.
+	// returned; a zero rate means no estimate is available, and callers must
+	// treat fee-dependent operations as blocked rather than substituting a
+	// made-up rate.
 	FeeRate() uint64
 	// TxHistory returns all the transactions a wallet has made. If refID
 	// is nil, then transactions starting from the most recent are returned

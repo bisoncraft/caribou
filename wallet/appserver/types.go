@@ -71,7 +71,7 @@ type sendForm struct {
 	// FeeRate is the fee rate the user approved for the send. It is required and
 	// used as-is for UTXO assets (so the approved rate is the rate charged), and
 	// ignored for account/EVM assets, which cannot price a send to a specific
-	// rate. Obtain it from /api/feestate.
+	// rate. Obtain it from the /api/txfee estimate response.
 	FeeRate uint64           `json:"feeRate"`
 	Pass    encode.PassBytes `json:"pw"`
 }

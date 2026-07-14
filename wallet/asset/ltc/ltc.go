@@ -193,7 +193,7 @@ func feeRateSources() []*feeratefetcher.SourceConfig {
 	return []*feeratefetcher.SourceConfig{
 		btc.MempoolSpaceSource("litecoinspace.org", "https://litecoinspace.org", 1),
 		btc.BlockcypherSource("ltc", 1),
-		btc.BitcoreSource("LTC", util.Mainnet, 2),
+		btc.BitcoreSource("LTC", 2),
 		btc.BlockchairSource("litecoin", 3),
 	}
 }

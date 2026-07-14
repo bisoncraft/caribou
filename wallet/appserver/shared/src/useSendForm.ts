@@ -187,6 +187,9 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
     // The submitted fee rate is the one behind the fee just estimated and shown,
     // so wait for a pending estimate rather than send at a stale/zero rate.
     if (estimating) { setErr(t('Waiting for the fee estimate.')); return }
+    // The submit buttons are disabled without a confirmed estimate, but guard
+    // here too so no path can send at a zero rate after a failed estimate.
+    if (!feeKnown) { setErr(t('A fee estimate is required.')); return }
     if (requirePW && pw === '') { setErr(t('Password required.')); return }
     setSending(true)
     const r = await postJSON('/api/send', {

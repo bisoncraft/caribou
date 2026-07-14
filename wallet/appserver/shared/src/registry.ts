@@ -47,12 +47,11 @@ export enum ApprovalStatus {
   NotApproved = 2
 }
 
+// FeeState mirrors core.FeeState, the response shape of /api/feestate. It is
+// fetched on demand; it is not part of WalletState.
 export interface FeeState {
   rate: number
   send: number
-  swap: number
-  redeem: number
-  refund: number
   stampMS: number
 }
 
@@ -87,7 +86,6 @@ export interface WalletState {
   syncProgress: number
   syncStatus: SyncStatus
   approved: Record<number, ApprovalStatus>
-  feeState?: FeeState
   pendingTxs: Record<string, WalletTransaction>
 }
 

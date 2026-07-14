@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
 )
@@ -69,18 +68,11 @@ func TestFeeSources(t *testing.T) {
 		want:   5, // round(5000/1000)
 	}, {
 		name:             "bitcore coins/kB to atoms/byte",
-		src:              BitcoreSource("LTC", util.Mainnet, 1),
+		src:              BitcoreSource("LTC", 1),
 		status:           http.StatusOK,
 		body:             `{"feerate":0.00002}`,
 		want:             2, // round(0.00002 * 1e5)
 		wantPathContains: "/LTC/mainnet/",
-	}, {
-		name:             "bitcore testnet path",
-		src:              BitcoreSource("LTC", util.Testnet, 1),
-		status:           http.StatusOK,
-		body:             `{"feerate":0.00001}`,
-		want:             1,
-		wantPathContains: "/LTC/testnet/",
 	}, {
 		name:   "blockchair suggested per-byte",
 		src:    BlockchairSource("bitcoin", 3),
@@ -95,13 +87,13 @@ func TestFeeSources(t *testing.T) {
 		want:   3, // round(3.4)
 	}, {
 		name:    "bitcore http error propagates",
-		src:     BitcoreSource("LTC", util.Mainnet, 1),
+		src:     BitcoreSource("LTC", 1),
 		status:  http.StatusInternalServerError,
 		body:    `boom`,
 		wantErr: true,
 	}, {
 		name:    "bitcore zero rate is error",
-		src:     BitcoreSource("LTC", util.Mainnet, 1),
+		src:     BitcoreSource("LTC", 1),
 		status:  http.StatusOK,
 		body:    `{"feerate":0}`,
 		wantErr: true,

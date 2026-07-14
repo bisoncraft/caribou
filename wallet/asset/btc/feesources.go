@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/util/feeratefetcher"
 )
@@ -24,8 +23,8 @@ import (
 
 // MempoolSpaceSource builds a fee source backed by a mempool.space-style REST
 // API. This covers mempool.space (BTC) and its forks such as litecoinspace.org
-// (LTC). baseURI is the API root without a trailing slash, e.g.
-// "https://mempool.space" or "https://mempool.space/testnet".
+// (LTC). baseURI is the mainnet API root without a trailing slash, e.g.
+// "https://mempool.space".
 func MempoolSpaceSource(name, baseURI string, rank uint) *feeratefetcher.SourceConfig {
 	uri := baseURI + "/api/v1/fees/recommended"
 	return &feeratefetcher.SourceConfig{
@@ -75,13 +74,10 @@ func BlockcypherSource(coin string, rank uint) *feeratefetcher.SourceConfig {
 
 // BitcoreSource builds a fee source backed by the api.bitcore.io API. ticker is
 // the upper-case symbol in the API path (BTC, LTC, DOGE, BCH). The reported
-// feerate is in whole coins per kB.
-func BitcoreSource(ticker string, net util.Network, rank uint) *feeratefetcher.SourceConfig {
-	network := "mainnet"
-	if net == util.Testnet {
-		network = "testnet"
-	}
-	uri := fmt.Sprintf("https://api.bitcore.io/api/%s/%s/fee/1", ticker, network)
+// feerate is in whole coins per kB. Like every source in this file, the
+// mainnet endpoint serves all networks.
+func BitcoreSource(ticker string, rank uint) *feeratefetcher.SourceConfig {
+	uri := fmt.Sprintf("https://api.bitcore.io/api/%s/mainnet/fee/1", ticker)
 	return &feeratefetcher.SourceConfig{
 		Name:   "bitcore.io",
 		Rank:   rank,

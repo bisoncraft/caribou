@@ -4,7 +4,6 @@
 package btc
 
 import (
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	"github.com/bisoncraft/bosswallet/util/dexnet"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -244,31 +242,4 @@ func decodeCoinID(coinID util.Bytes) (*chainhash.Hash, uint32, error) {
 	var txHash chainhash.Hash
 	copy(txHash[:], coinID[:32])
 	return &txHash, binary.BigEndian.Uint32(coinID[32:]), nil
-}
-
-// BitcoreRateFetcher generates a rate fetching function for the bitcore.io API.
-func BitcoreRateFetcher(ticker string) func(ctx context.Context, net util.Network) (uint64, error) {
-	const uriTemplate = "https://api.bitcore.io/api/%s/%s/fee/1"
-	mainnetURI, testnetURI := fmt.Sprintf(uriTemplate, ticker, "mainnet"), fmt.Sprintf(uriTemplate, ticker, "testnet")
-
-	return func(ctx context.Context, net util.Network) (uint64, error) {
-		var uri string
-		if net == util.Testnet {
-			uri = testnetURI
-		} else {
-			uri = mainnetURI
-		}
-		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		defer cancel()
-		var resp struct {
-			RatePerKB float64 `json:"feerate"`
-		}
-		if err := dexnet.Get(ctx, uri, &resp); err != nil {
-			return 0, err
-		}
-		if resp.RatePerKB <= 0 {
-			return 0, fmt.Errorf("zero or negative fee rate")
-		}
-		return uint64(math.Round(resp.RatePerKB * 1e5)), nil // 1/kB => 1/B
-	}
 }

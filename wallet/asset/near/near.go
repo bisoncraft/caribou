@@ -423,7 +423,7 @@ func (w *NearWallet) StandardSendFee(_ uint64) uint64 {
 }
 
 // FeeRate satisfies asset.Wallet, returning the standard per-transaction fee
-// in drops.
+// in the wallet's atomic unit.
 func (w *NearWallet) FeeRate() uint64 {
 	return w.StandardSendFee(0)
 }

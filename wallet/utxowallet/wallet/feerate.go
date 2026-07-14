@@ -30,8 +30,9 @@ const (
 //
 // The estimate is electrum's blockchain.estimatefee (the backing daemon's
 // estimatesmartfee), which is of variable quality, so it is intended as a
-// fallback. It returns an error when no server can provide an estimate; callers
-// should have a default rate.
+// fallback after external fee-rate APIs. It returns an error when no server
+// can provide an estimate, in which case the caller has no rate and
+// fee-dependent operations must error rather than substitute a default.
 func (w *Wallet) FeeRate(ctx context.Context) (uint64, error) {
 	servers := w.chainParams.ElectrumServers
 	if len(servers) == 0 {
