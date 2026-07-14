@@ -812,6 +812,16 @@ type TokenMaster interface {
 	OpenTokenWallet(cfg *TokenConfig) (Wallet, error)
 }
 
+// TrustlineEstablisher is implemented by token wallets whose token requires
+// an explicit opt-in transaction (e.g. an XRPL TrustSet) before the account
+// can receive it.
+type TrustlineEstablisher interface {
+	// EstablishTrustline authorizes this account to hold up to limitAtomic
+	// units of the wallet's token. Must succeed before the wallet can
+	// receive the token via Send from another wallet.
+	EstablishTrustline(limitAtomic uint64) error
+}
+
 // LiveReconfigurer is a wallet that can possibly handle a reconfiguration
 // without the need for re-initialization.
 type LiveReconfigurer interface {

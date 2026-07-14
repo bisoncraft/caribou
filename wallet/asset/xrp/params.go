@@ -48,4 +48,56 @@ var (
 		util.Testnet: "wss://s.altnet.rippletest.net:51233/",
 		util.Simnet:  "ws://localhost:16006",
 	}
+
+	usdcTokenID, _ = util.BipSymbolID("usdc.xrp")
+
+	Tokens = map[uint32]*Token{
+		usdcTokenID: TokenUSDC,
+	}
+
+	// TokenUSDC is Circle's USDC issued currency on the XRP Ledger. Circle
+	// uses a non-standard currency code — the hex encoding of ASCII "USDC"
+	// left-justified at byte 0 — rather than the generic 3-letter "USD"
+	// code most gateways use. Currency code and mainnet issuer verified
+	// directly against developers.circle.com/stablecoins/usdc-contract-addresses
+	// (2026-07-13). No devnet/testnet issuer is known, so USDC is
+	// mainnet-only for now.
+	//
+	// No canonical Tether-issued USDT trustline on XRPL mainnet exists —
+	// confirmed via web search (2026-07-13): Tether does not list XRPL among
+	// the networks it issues USDT on. USDT is not registered here (see
+	// reviews/stablecoin-support-plan.md Step 3).
+	TokenUSDC = &Token{
+		Name: "USDC",
+		// Hex encoding of ASCII "USDC" left-justified at byte 0, per
+		// Circle's non-standard XRPL currency code.
+		Currency: "5553444300000000000000000000000000000000",
+		Decimals: 6,
+		UnitInfo: util.UnitInfo{
+			AtomicUnit: "µUSD",
+			Conventional: util.Denomination{
+				Unit:             "USDC",
+				ConversionFactor: 1e6,
+			},
+			Alternatives: []util.Denomination{
+				{
+					Unit:             "cents",
+					ConversionFactor: 1e2,
+				},
+			},
+		},
+		NetIssuers: map[util.Network]string{
+			// https://developers.circle.com/stablecoins/usdc-contract-addresses
+			util.Mainnet: "rGm7WCVp9gb4jZHWTEtGUr4dd74z2XuWhE",
+		},
+	}
 )
+
+// Token describes an issued currency supported alongside native XRP.
+type Token struct {
+	Name       string
+	Currency   string
+	Decimals   int
+	UnitInfo   util.UnitInfo
+	NetIssuers map[util.Network]string
+}

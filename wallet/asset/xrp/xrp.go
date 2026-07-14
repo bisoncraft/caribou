@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -135,6 +136,7 @@ var (
 
 func init() {
 	asset.Register(BipID, &Driver{})
+	registerToken(usdcTokenID, "Circle's USDC issued currency on the XRP Ledger.", util.Mainnet)
 }
 
 // Driver implements asset.Driver and asset.Creator.
@@ -216,8 +218,9 @@ type xrpWallet struct {
 	tip     uint64
 	tipTime time.Time
 
-	seqMtx  sync.Mutex
-	nextSeq uint32 // 0 = uninitialized; advance locally after each submit
+	seqMtx   sync.Mutex
+	nextSeq  uint32   // 0 = uninitialized; advance locally after each submit
+	freeSeqs []uint32 // sorted ascending; sequences reserved then rolled back, reused before minting new ones
 
 	reserveMtx   sync.RWMutex
 	baseReserve  uint64 // drops; from server_state, falls back to BaseReserveDrops
@@ -549,6 +552,57 @@ func (w *xrpWallet) OwnsDepositAddress(address string) (bool, error) {
 	return address == w.address, nil
 }
 
+// reserveSequence reserves an account sequence number, querying the network
+// to initialize it on first use. It returns the reserved sequence and a
+// rollback function that returns it if the transaction is known to have
+// never been submitted (or was deterministically rejected).
+//
+// A rolled-back sequence is added to freeSeqs and handed out again before any
+// new sequence is minted, so a rollback that races with a concurrent
+// reservation (which will have already advanced nextSeq past it) doesn't
+// strand the sequence forever — XRPL requires an account's sequences to be
+// consumed in order, so an un-reused gap would block every later send until
+// reconciled.
+func (w *xrpWallet) reserveSequence() (sequence uint32, rollback func(), err error) {
+	// Fetch from the network before taking the lock so seqMtx is not held
+	// across a blocking RPC call.
+	var firstSendInfo *accountInfoResult
+	w.seqMtx.Lock()
+	if w.nextSeq == 0 {
+		w.seqMtx.Unlock()
+		firstSendInfo, err = w.rpc.accountInfoCurrent(w.ctx, w.address)
+		if err != nil {
+			return 0, nil, fmt.Errorf("error querying account info: %w", err)
+		}
+		w.seqMtx.Lock()
+	}
+	// Re-check after re-acquiring the lock; a concurrent send may have
+	// initialized nextSeq while we were fetching.
+	if w.nextSeq == 0 {
+		w.nextSeq = nextAccountSequence(firstSendInfo)
+	}
+	// Reuse a rolled-back sequence before minting a new one, so concurrent
+	// sends each still get a unique value without holding the lock across I/O.
+	if len(w.freeSeqs) > 0 {
+		sequence = w.freeSeqs[0]
+		w.freeSeqs = w.freeSeqs[1:]
+	} else {
+		sequence = w.nextSeq
+		w.nextSeq++
+	}
+	w.seqMtx.Unlock()
+
+	rollback = func() {
+		w.seqMtx.Lock()
+		i, found := slices.BinarySearch(w.freeSeqs, sequence)
+		if !found {
+			w.freeSeqs = slices.Insert(w.freeSeqs, i, sequence)
+		}
+		w.seqMtx.Unlock()
+	}
+	return sequence, rollback, nil
+}
+
 func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	w.opWG.Add(1)
 	defer w.opWG.Done()
@@ -615,39 +669,9 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	}
 	lastLedgerSeq := uint32(feeInfo.LedgerCurrentIndex + lastLedgerWindow)
 
-	// Initialize nextSeq from current open-ledger account state on first send.
-	// Fetch from the network before taking the lock so seqMtx is not held
-	// across a blocking RPC call.
-	var firstSendInfo *accountInfoResult
-	w.seqMtx.Lock()
-	if w.nextSeq == 0 {
-		w.seqMtx.Unlock()
-		firstSendInfo, err = w.rpc.accountInfoCurrent(w.ctx, w.address)
-		if err != nil {
-			return nil, fmt.Errorf("error querying account info: %w", err)
-		}
-		w.seqMtx.Lock()
-	}
-	// Re-check after re-acquiring the lock; a concurrent send may have
-	// initialized nextSeq while we were fetching.
-	if w.nextSeq == 0 {
-		w.nextSeq = nextAccountSequence(firstSendInfo)
-	}
-	// Reserve this sequence number and pre-increment so concurrent sends
-	// each get a unique value without holding the lock across I/O.
-	sequence := w.nextSeq
-	w.nextSeq++
-	w.seqMtx.Unlock()
-
-	// rollbackSeq attempts to return the reserved sequence when we know the
-	// transaction was never submitted. It only succeeds if no concurrent send
-	// has advanced nextSeq past our reservation.
-	rollbackSeq := func() {
-		w.seqMtx.Lock()
-		if w.nextSeq == sequence+1 {
-			w.nextSeq = sequence
-		}
-		w.seqMtx.Unlock()
+	sequence, rollbackSeq, err := w.reserveSequence()
+	if err != nil {
+		return nil, err
 	}
 
 	// addressToAccountID calls below are effectively unreachable (the address
@@ -909,6 +933,7 @@ func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 				if remaining == 0 {
 					w.seqMtx.Lock()
 					w.nextSeq = 0
+					w.freeSeqs = nil
 					w.seqMtx.Unlock()
 				}
 
@@ -1008,6 +1033,9 @@ func (w *xrpWallet) reconcileSeq(ctx context.Context) {
 	w.seqMtx.Lock()
 	if w.nextSeq == 0 || next > w.nextSeq {
 		w.nextSeq = next
+		// Any tracked rollbacks are for sequences now behind the resynced
+		// truth; they no longer mean anything.
+		w.freeSeqs = nil
 	}
 	w.seqMtx.Unlock()
 }

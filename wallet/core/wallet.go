@@ -580,6 +580,16 @@ func (w *xcWallet) UnapproveBridgeContract(ctx context.Context, bridgeName strin
 	return approver.UnapproveBridgeContract(ctx, bridgeName, onConfirm)
 }
 
+// EstablishTrustline authorizes the wallet to hold its token if the wallet
+// is a TrustlineEstablisher.
+func (w *xcWallet) EstablishTrustline(limitAtomic uint64) error {
+	establisher, ok := w.Wallet.(asset.TrustlineEstablisher)
+	if !ok {
+		return fmt.Errorf("%s wallet is not a TrustlineEstablisher", unbip(w.AssetID))
+	}
+	return establisher.EstablishTrustline(limitAtomic)
+}
+
 // InitiateBridge initiates the bridge on the source chain if the wallet is a
 // Bridger.
 func (w *xcWallet) InitiateBridge(ctx context.Context, amt uint64, dest uint32, bridgeName string) (txID string, err error) {

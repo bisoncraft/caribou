@@ -641,6 +641,9 @@ var bipIDs = map[uint32]string{
 	501001: "usdc.sol",
 	501002: "usdt.sol",
 	// END Solana reserved token range
+	// XRP reserved token range 144000-144999
+	144001: "usdc.xrp",
+	// END XRP reserved token range
 	1171337:  "ilt",
 	1313114:  "etho",
 	1313500:  "xero",

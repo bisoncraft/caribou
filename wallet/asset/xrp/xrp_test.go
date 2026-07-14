@@ -414,6 +414,42 @@ func TestNextAccountSequence(t *testing.T) {
 	}
 }
 
+// TestReserveSequenceRollbackReuse guards against a stranded sequence gap: if
+// a reservation is rolled back after a concurrent reservation has already
+// advanced nextSeq past it, the rolled-back sequence must still be handed
+// out to the next caller instead of being silently dropped, since XRPL
+// requires an account's sequences to be consumed in order.
+func TestReserveSequenceRollbackReuse(t *testing.T) {
+	w := &xrpWallet{nextSeq: 5}
+
+	seqA, rollbackA, err := w.reserveSequence()
+	if err != nil {
+		t.Fatalf("reserveSequence (A) error: %v", err)
+	}
+	if seqA != 5 {
+		t.Fatalf("seqA = %d, want 5", seqA)
+	}
+
+	seqB, _, err := w.reserveSequence()
+	if err != nil {
+		t.Fatalf("reserveSequence (B) error: %v", err)
+	}
+	if seqB != 6 {
+		t.Fatalf("seqB = %d, want 6", seqB)
+	}
+
+	// A rolls back after B has already advanced nextSeq past it.
+	rollbackA()
+
+	seqC, _, err := w.reserveSequence()
+	if err != nil {
+		t.Fatalf("reserveSequence (C) error: %v", err)
+	}
+	if seqC != seqA {
+		t.Fatalf("seqC = %d, want reused seqA %d (sequence gap was stranded)", seqC, seqA)
+	}
+}
+
 func TestWalletTransactionFromTx(t *testing.T) {
 	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const otherAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
