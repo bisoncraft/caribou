@@ -1039,8 +1039,7 @@ export default class Application {
       const pendingID = tx.additionalData?.pendingID
       if (pendingID) delete w.pendingTxs[pendingID]
       delete w.pendingTxs[tx.id]
-    }
-    else w.pendingTxs[tx.id] = tx
+    } else w.pendingTxs[tx.id] = tx
   }
 
   loggedIn (notes: CoreNote[], pokes: CoreNote[]) {
