@@ -1411,8 +1411,13 @@ out:
 			// If the wallet can be locked because it contains
 			// private key material, we need to prevent it from
 			// doing so while we are assembling the transaction.
+			// A dry run never reaches signing (txToOutputs rolls
+			// back at ErrDryRunRollBack before input scripts), and
+			// coin selection and change-address derivation are
+			// public-key work, so fee estimation stays available
+			// while the wallet is locked.
 			release := func() {}
-			if !w.Manager.WatchOnly() {
+			if !w.Manager.WatchOnly() && !txr.dryRun {
 				heldUnlock, err := w.holdUnlock()
 				if err != nil {
 					txr.resp <- createTxResponse{nil, err}
