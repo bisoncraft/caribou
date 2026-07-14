@@ -587,7 +587,7 @@ var sweepBlockDelay = 2 * time.Millisecond
 
 // Sweep is the chain.AddressWatcher metered check for cold (unwatched)
 // addresses on neutrino: a bounded, THROTTLED cfilter rescan over
-// [fromHeight, tip]. For each block it tests the block's compact filter
+// (fromHeight, tip]. For each block it tests the block's compact filter
 // against the cold scripts and, on a match, fetches the block and emits the
 // transactions that pay to or spend from a cold address so the wallet
 // ingests them. Hits are re-added to the watch list (re-promotion). The
@@ -614,12 +614,16 @@ func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 		return nil, nil, err
 	}
 	tip := best.Height
-	if fromHeight < 0 {
-		fromHeight = 0
+	// The range is exclusive of fromHeight — activity strictly above it, per
+	// chain.AddressWatcher and matching the electrum backend's h > fromHeight
+	// — so the caller's reorg-margin arithmetic holds exactly. Clamp to -1 so
+	// a fromHeight of -1 (or below) scans from genesis.
+	if fromHeight < -1 {
+		fromHeight = -1
 	}
 
 	hitAddrs := make(map[string]btcutil.Address)
-	for height := fromHeight; height <= tip; height++ {
+	for height := fromHeight + 1; height <= tip; height++ {
 		select {
 		case <-s.quit:
 			return nil, nil, errors.New("neutrino: sweep aborted")

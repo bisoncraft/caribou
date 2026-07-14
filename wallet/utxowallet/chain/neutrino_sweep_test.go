@@ -240,3 +240,77 @@ func TestNeutrinoUnwatchNotScanning(t *testing.T) {
 		t.Fatalf("Unwatch(not scanning) = %v, want nil", err)
 	}
 }
+
+// TestNeutrinoSweepExclusiveFloor pins the (fromHeight, tip] contract: a
+// block AT fromHeight is already verified and must not be rescanned, or the
+// wallet's reorg-margin arithmetic (which relies on the boundary being
+// exclusive, like the electrum backend's h > fromHeight) would false-promote
+// boundary activity. A sweep from one block lower still hits.
+func TestNeutrinoSweepExclusiveFloor(t *testing.T) {
+	old := sweepBlockDelay
+	sweepBlockDelay = 0
+	t.Cleanup(func() { sweepBlockDelay = old })
+
+	var h20 [20]byte
+	h20[0] = 0xcd
+	addr, err := btcutil.NewAddressWitnessPubKeyHash(h20[:], &chaincfg.RegressionNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pay := wire.NewMsgTx(2)
+	pay.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 0}, nil, nil))
+	pay.AddTxOut(wire.NewTxOut(1e8, script))
+	block := &wire.MsgBlock{
+		Header:       wire.BlockHeader{Version: 4, Timestamp: time.Unix(1_700_000_000, 0)},
+		Transactions: []*wire.MsgTx{pay},
+	}
+	hash := block.BlockHash()
+	filter, err := builder.BuildBasicFilter(block, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cs := &sweepChainService{
+		mockChainService: &mockChainService{},
+		tip:              100,
+		hashAt:           map[int32]chainhash.Hash{100: hash},
+		filterAt:         map[chainhash.Hash]*gcs.Filter{hash: filter},
+		blockByHsh:       map[chainhash.Hash]*wire.MsgBlock{hash: block},
+	}
+	client := &NeutrinoClient{
+		CS:                  cs,
+		chainParams:         &netparams.ChainParams{Chain: "btc"},
+		enqueueNotification: make(chan interface{}, 4),
+		quit:                make(chan struct{}),
+		scanning:            true,
+		rescan:              &mockRescanner{updateArgs: list.New()},
+	}
+
+	// fromHeight == the block's height: outside the range, no hit.
+	hits, _, err := client.Sweep([]btcutil.Address{addr}, 100)
+	if err != nil {
+		t.Fatalf("Sweep(100): %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("hits = %v, want none for a block at fromHeight", hits)
+	}
+	select {
+	case n := <-client.enqueueNotification:
+		t.Fatalf("unexpected notification %T for a block at fromHeight", n)
+	default:
+	}
+
+	// One block lower: in range, hit.
+	hits, _, err = client.Sweep([]btcutil.Address{addr}, 99)
+	if err != nil {
+		t.Fatalf("Sweep(99): %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits = %v, want the boundary block's payment", hits)
+	}
+}

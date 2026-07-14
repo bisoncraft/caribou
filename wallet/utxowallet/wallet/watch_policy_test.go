@@ -5,9 +5,12 @@
 package wallet
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -180,5 +183,117 @@ func TestDemoteFundedInternals(t *testing.T) {
 	}
 	if from != 1234 {
 		t.Fatalf("sweep floor = %d, want 1234", from)
+	}
+}
+
+// sweepStub is a chain.Backend with the AddressWatcher capability whose
+// Sweep records its fromHeight arguments and returns canned hits.
+type sweepStub struct {
+	*mockChainClient
+	mtx  sync.Mutex
+	from []int32
+	hits []btcutil.Address
+}
+
+func (s *sweepStub) Unwatch([]btcutil.Address) error { return nil }
+
+func (s *sweepStub) Sweep(addrs []btcutil.Address, fromHeight int32) (
+	hits, failed []btcutil.Address, err error) {
+
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.from = append(s.from, fromHeight)
+	return s.hits, nil, nil
+}
+
+func (s *sweepStub) setHits(hits []btcutil.Address) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.hits = hits
+}
+
+func (s *sweepStub) froms() []int32 {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	return append([]int32(nil), s.from...)
+}
+
+// TestMaybeSweepWatermark verifies the persisted cold-set watermark: a
+// completed sweep records the post-bump set minimum, an all-promoted sweep
+// and an empty-set interval record the launch tip, and the Sweep call itself
+// dips coldSweepReorgMargin below the verified floor.
+func TestMaybeSweepWatermark(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+	p := &w.watchPol
+
+	waitWatermark := func(want int32) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var got int32
+			_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+				got, _ = coldSweptTo(tx)
+				return nil
+			})
+			if got == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("watermark = %d, want %d", got, want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	waitIdle := func() {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			p.mtx.Lock()
+			sweeping := p.sweeping
+			p.mtx.Unlock()
+			if !sweeping {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("sweep goroutine did not finish")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	stub := &sweepStub{mockChainClient: &mockChainClient{}}
+	a1, a2 := tAddr(t, 20), tAddr(t, 21)
+	p.demote(a1, 100)
+	p.demote(a2, 200)
+
+	// First due sweep (lastSweepTip zero). No hits: floors bump to the
+	// launch tip and the watermark persists as the post-bump set minimum.
+	w.maybeSweep(stub, 500)
+	waitWatermark(500)
+	waitIdle()
+
+	// The backend was asked to look a reorg margin below the floor.
+	if from := stub.froms(); len(from) != 1 || from[0] != 100-coldSweepReorgMargin {
+		t.Fatalf("sweep fromHeight = %v, want [%d]",
+			from, 100-coldSweepReorgMargin)
+	}
+
+	// All-promoted sweep: the cold set empties and the watermark records
+	// the launch tip.
+	stub.setHits([]btcutil.Address{a1, a2})
+	w.maybeSweep(stub, 700)
+	waitWatermark(700)
+	waitIdle()
+	if cold, _ := p.coldSet(); len(cold) != 0 {
+		t.Fatalf("cold set = %v, want empty after promotion", cold)
+	}
+
+	// Empty-set interval: no Sweep call, but the watermark stays current so
+	// the next startup's demotion floors don't regress to the last sweep.
+	w.maybeSweep(stub, 900)
+	waitWatermark(900)
+	if from := stub.froms(); len(from) != 2 {
+		t.Fatalf("sweep calls = %d, want 2 (empty set must not sweep)", len(from))
 	}
 }

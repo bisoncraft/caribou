@@ -28,6 +28,36 @@ func tempIndexDB(t *testing.T) walletdb.DB {
 	return db
 }
 
+// TestColdSweptTo exercises the cold-set verified watermark: absent until
+// written, and monotonic — a lower write can only be stale and must not
+// regress the verified height.
+func TestColdSweptTo(t *testing.T) {
+	db := tempIndexDB(t)
+
+	_ = walletdb.View(db, func(tx walletdb.ReadTx) error {
+		if h, ok := coldSweptTo(tx); ok {
+			t.Fatalf("watermark %d present in empty db", h)
+		}
+		return nil
+	})
+
+	_ = walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+		for _, h := range []int32{500, 700, 600} { // 600 must not lower 700
+			if err := putColdSweptTo(tx, h); err != nil {
+				t.Fatalf("putColdSweptTo(%d): %v", h, err)
+			}
+		}
+		return putColdSweptTo(tx, 0) // ignored
+	})
+	_ = walletdb.View(db, func(tx walletdb.ReadTx) error {
+		h, ok := coldSweptTo(tx)
+		if !ok || h != 700 {
+			t.Fatalf("coldSweptTo = %d,%v; want 700,true", h, ok)
+		}
+		return nil
+	})
+}
+
 func TestLastActiveIndex(t *testing.T) {
 	db := tempIndexDB(t)
 	script := []byte{0x00, 0x14, 0x01, 0x02, 0x03}
@@ -141,6 +171,12 @@ func TestClassifyWatchSet(t *testing.T) {
 				return err
 			}
 		}
+		// The last sweep of the prior run verified the cold set through
+		// here; demotion floors must land on it, not on ref — the window
+		// (watermark, ref] was neither watched nor swept.
+		if err := putColdSweptTo(tx, ref-500); err != nil {
+			return err
+		}
 		return markBackfilled(tx)
 	})
 	if err != nil {
@@ -184,7 +220,7 @@ func TestClassifyWatchSet(t *testing.T) {
 		t.Fatalf("classify: %v", err)
 	}
 
-	cold, _ := w.watchPol.coldSet()
+	cold, from := w.watchPol.coldSet()
 	coldMap := map[string]bool{}
 	for _, a := range cold {
 		coldMap[a.String()] = true
@@ -194,5 +230,8 @@ func TestClassifyWatchSet(t *testing.T) {
 	}
 	if coldMap[chEmpty.String()] {
 		t.Fatal("empty internal was demoted to the sweep set")
+	}
+	if from != ref-500 {
+		t.Fatalf("demotion floor = %d, want the watermark %d", from, ref-500)
 	}
 }

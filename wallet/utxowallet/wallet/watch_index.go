@@ -29,6 +29,16 @@ var watchTierNamespaceKey = []byte("watchtier")
 // The 0x00 prefix keeps it out of the 32-byte scripthash keyspace.
 var backfilledKey = []byte{0x00}
 
+// coldSweptToKey stores the cold-set verified watermark: the height through
+// which every cold address's history has provably been examined (the minimum
+// sweep floor, or the tip when the cold set is empty). The in-memory floors
+// die with the process, and a cold address is NOT watched between its last
+// sweep and shutdown — without this watermark, startup classification would
+// claim cold addresses as known through the on-disk SyncedTo and the next
+// sweep would skip the pre-shutdown window (up to a full sweep interval) for
+// good. The 0x01 prefix keeps it out of the scripthash keyspace.
+var coldSweptToKey = []byte{0x01}
+
 // scriptHashKey is the 32-byte index key for a pkScript: sha256 of the
 // script. This is the canonical form both backends watch — electrum's
 // scripthash without its wire byte-reversal, and the script neutrino adds to
@@ -69,6 +79,43 @@ func lastActive(tx walletdb.ReadTx, pkScript []byte) (int32, bool) {
 	}
 	key := scriptHashKey(pkScript)
 	v := ns.Get(key[:])
+	if v == nil {
+		return 0, false
+	}
+	return int32(binary.BigEndian.Uint32(v)), true
+}
+
+// putColdSweptTo records the cold-set verified watermark when it exceeds the
+// stored value. Sweep floors only advance and a set's minimum only rises as
+// entries are verified or promoted out, so a lower write can only be stale.
+func putColdSweptTo(tx walletdb.ReadWriteTx, height int32) error {
+	if height <= 0 {
+		return nil
+	}
+	ns, err := tx.CreateTopLevelBucket(watchTierNamespaceKey)
+	if err != nil {
+		return err
+	}
+	if cur := ns.Get(coldSweptToKey); cur != nil &&
+		int32(binary.BigEndian.Uint32(cur)) >= height {
+		return nil
+	}
+	var v [4]byte
+	binary.BigEndian.PutUint32(v[:], uint32(height))
+	return ns.Put(coldSweptToKey, v[:])
+}
+
+// coldSweptTo returns the persisted cold-set verified watermark and whether
+// one exists. Absent bucket or entry reports (0, false) — a wallet from
+// before the watermark, whose cold history is treated as known through the
+// on-disk SyncedTo (the pre-watermark behavior, correct for a wallet that
+// watched everything).
+func coldSweptTo(tx walletdb.ReadTx) (int32, bool) {
+	ns := tx.ReadBucket(watchTierNamespaceKey)
+	if ns == nil {
+		return 0, false
+	}
+	v := ns.Get(coldSweptToKey)
 	if v == nil {
 		return 0, false
 	}
