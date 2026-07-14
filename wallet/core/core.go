@@ -2804,6 +2804,45 @@ func (c *Core) removeWaiter(id string) {
 	c.waiterMtx.Unlock()
 }
 
+// maxSendFeeUSD caps the estimated network fee of a send when a fiat exchange
+// rate is available. A caller-approved fee rate that prices the transaction
+// beyond this is more likely a client bug or a units mixup than intent.
+const maxSendFeeUSD = 25.0
+
+// validateSendFeeRate sanity-checks the caller-approved fee rate for a
+// UTXO-wallet send, where the submitted rate is used exactly as given. The
+// rate must be within a factor of two of the wallet's own current estimate
+// (when one is available — fee markets move between estimate and approval, but
+// not that much), and the fee it prices for this transaction, converted at the
+// current fiat exchange rate (when one is available), must not exceed
+// maxSendFeeUSD.
+func (c *Core) validateSendFeeRate(w *xcWallet, address string, value, feeRate uint64, subtract bool) error {
+	if liveRate := w.usableFeeRate(); liveRate > 0 && (feeRate > liveRate*2 || feeRate*2 < liveRate) {
+		return fmt.Errorf("submitted fee rate %d is not within a factor of 2 of the current estimate %d",
+			feeRate, liveRate)
+	}
+
+	estimator, ok := w.Wallet.(asset.TxFeeEstimator)
+	if !ok {
+		return nil
+	}
+	fee, _, err := estimator.EstimateSendTxFee(address, value, feeRate, subtract, false)
+	if err != nil {
+		return fmt.Errorf("fee pre-check failed: %w", err)
+	}
+	fiatRate := c.fiatConversions()[w.AssetID]
+	if fiatRate == 0 {
+		return nil
+	}
+	ui := w.Info().UnitInfo
+	feeUSD := float64(fee) / float64(ui.Conventional.ConversionFactor) * fiatRate
+	if feeUSD > maxSendFeeUSD {
+		return fmt.Errorf("estimated fee %s %s (%.2f USD) exceeds the sanity limit of %.0f USD",
+			ui.ConventionalString(fee), ui.Conventional.Unit, feeUSD, maxSendFeeUSD)
+	}
+	return nil
+}
+
 // Send initiates either send or withdraw from an exchange wallet. if subtract
 // is true, fees are subtracted from the value else fees are taken from the
 // exchange wallet.
@@ -2837,10 +2876,19 @@ func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, sub
 		return nil, err
 	}
 
-	// feeRate is the caller-approved rate, passed through unchanged so the fee
-	// the user saw is the fee that is used. UTXO wallets treat it as
-	// authoritative and reject an invalid rate; account/EVM wallets ignore it
-	// (they cannot price a send to a specific rate) and compute their own.
+	// feeRate is the caller-approved rate. Only UTXO wallets price a
+	// transaction to a specific rate, and they treat it as authoritative, so
+	// the fee the user saw is the fee that is paid — sanity-check it first.
+	// Account and EVM wallets compute their own fees; the rate is zeroed
+	// rather than forwarded so a stray value can't be misinterpreted.
+	if wallet.Info().BlockchainClass == asset.BlockchainClassUTXO {
+		if err := c.validateSendFeeRate(wallet, address, value, feeRate, subtract); err != nil {
+			return nil, err
+		}
+	} else {
+		feeRate = 0
+	}
+
 	var coin asset.Coin
 	if !subtract {
 		coin, err = wallet.Wallet.Send(address, value, feeRate)

@@ -77,6 +77,7 @@ var (
 	tLogger     = util.StdOutLogger("TCORE", util.LevelInfo)
 	tWalletInfo = &asset.WalletInfo{
 		SupportedVersions: []uint32{0},
+		BlockchainClass:   asset.BlockchainClassUTXO,
 		UnitInfo: util.UnitInfo{
 			Conventional: util.Denomination{
 				ConversionFactor: 1e8,
@@ -288,6 +289,7 @@ func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
 		ownsAddress: true,
 		info: &asset.WalletInfo{
 			SupportedVersions: []uint32{0},
+			BlockchainClass:   asset.BlockchainClassUTXO,
 		},
 	}
 	var broadcasting uint32 = 1
@@ -785,6 +787,25 @@ func TestSend(t *testing.T) {
 	if tWallet.sendFeeSuggestion != feeRate {
 		t.Fatalf("expected caller fee rate %d passed to wallet, got %d", feeRate, tWallet.sendFeeSuggestion)
 	}
+
+	// A rate more than a factor of 2 from the wallet's live estimate is
+	// rejected, in both directions.
+	tWallet.feeRate = feeRate / 3
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+		t.Fatalf("no error for a fee rate more than 2x the live estimate")
+	}
+	tWallet.feeRate = feeRate * 3
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+		t.Fatalf("no error for a fee rate less than half the live estimate")
+	}
+	tWallet.feeRate = 0
+
+	// A failed fee pre-check estimate fails the send.
+	tWallet.estFeeErr = errTest
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+		t.Fatalf("no error when the fee pre-check estimator errors")
+	}
+	tWallet.estFeeErr = nil
 
 	// 0 value
 	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 0, address, false, feeRate)
