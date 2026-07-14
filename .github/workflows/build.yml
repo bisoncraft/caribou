@@ -75,6 +75,9 @@ jobs:
     - name: npm run build
       working-directory: ./wallet/appserver
       run: npm run build
+    - name: npm run test
+      working-directory: ./wallet/appserver
+      run: npm run test
 
   lint-docs:
     name: Lint Markdown
