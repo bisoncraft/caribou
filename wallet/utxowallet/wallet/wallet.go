@@ -4288,16 +4288,18 @@ func OpenWithRetry(db walletdb.DB, pubPass []byte,
 
 	// The external-quiet depth is "~one day of blocks" — derived from the
 	// chain's target block time, not a fixed count, so it means a day on
-	// every chain (144 on BTC, 576 on LTC) rather than only on BTC.
+	// every chain (144 on BTC, 576 on LTC) rather than only on BTC. The
+	// cold-set sweep cadence defaults to the same chain-derived day (see
+	// sweepDue).
 	w.watchPol.extQuietDefault = chainQuietDepth(chainParams)
 
 	return w, nil
 }
 
 // chainQuietDepth returns the number of blocks in roughly one day at the
-// chain's target block time, the depth after which a quiet address is
-// considered cold. Falls back to the BTC-scale default if the params omit a
-// block time.
+// chain's target block time: the depth after which a quiet address is
+// considered cold, and the default cadence of the cold-set sweep. Falls back
+// to the BTC-scale default if the params omit a block time.
 func chainQuietDepth(params *netparams.ChainParams) int32 {
 	if params == nil || params.TargetTimePerBlock <= 0 {
 		return externalQuietDepth

@@ -297,3 +297,21 @@ func TestMaybeSweepWatermark(t *testing.T) {
 		t.Fatalf("sweep calls = %d, want 2 (empty set must not sweep)", len(from))
 	}
 }
+
+// TestSweepDueChainScaled pins the sweep-cadence resolution: the explicit
+// test knob wins, then the chain-derived day (24h / target block time, the
+// same value driving the external quiet depth), then the BTC-scale fallback.
+func TestSweepDueChainScaled(t *testing.T) {
+	var p watchPolicy
+	if got := p.sweepDue(); got != sweepInterval {
+		t.Fatalf("fallback sweepDue = %d, want %d", got, sweepInterval)
+	}
+	p.extQuietDefault = 576 // an LTC-scale day
+	if got := p.sweepDue(); got != 576 {
+		t.Fatalf("chain-scaled sweepDue = %d, want 576", got)
+	}
+	p.sweepEvery = 10
+	if got := p.sweepDue(); got != 10 {
+		t.Fatalf("override sweepDue = %d, want 10", got)
+	}
+}

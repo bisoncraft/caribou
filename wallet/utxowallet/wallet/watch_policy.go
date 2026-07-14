@@ -113,6 +113,9 @@ func (p *watchPolicy) sweepDue() int32 {
 	if p.sweepEvery > 0 {
 		return p.sweepEvery
 	}
+	if p.extQuietDefault > 0 {
+		return p.extQuietDefault
+	}
 	return sweepInterval
 }
 
@@ -511,9 +514,12 @@ func (w *Wallet) unminedHotScripts(dbtx walletdb.ReadTx) (map[[32]byte]struct{},
 	return hot, err
 }
 
-// sweepInterval is how many blocks pass between metered sweeps of the cold
-// set. Detection latency on a cold address is bounded by this; the post-sync
-// sweep covers the offline gap.
+// sweepInterval is the BTC-scale fallback sweep cadence, used only when the
+// chain params omit a target block time. The effective cadence is the
+// chain-derived day (chainQuietDepth: 24h / target block time — 144 on BTC,
+// 576 on LTC), so "swept daily" means daily on every chain, not a fixed
+// block count that is a day only on BTC. Detection latency on a cold
+// address is bounded by this; the post-sync sweep covers the offline gap.
 const sweepInterval = 144
 
 // coldSweepReorgMargin is how far below the verified floor each sweep looks.
