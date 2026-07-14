@@ -35,9 +35,8 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-syncing-spinner has-tip"
+        className="asset-status-syncing-spinner has-tip accent-syncing"
         aria-label={tvar('syncing_pct', { pct: String(pct) })}
-        style={{ color: 'var(--accent-syncing)' }}
       >
         <Spinner size={10} />
       </span>
@@ -48,9 +47,8 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
 }
 
 export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted }: AssetRowProps) {
-  const totalConv = asset.total / asset.cFactor
-  const usdValue = totalConv * fiatRate
-  const availFmt = balFmt.format(asset.avail / asset.cFactor)
+  const usdValue = asset.total * fiatRate
+  const availFmt = balFmt.format(asset.avail)
   const pctDisplay = portfolioPct !== null ? `${portfolioPct.toFixed(1)}%` : '—'
 
   return (

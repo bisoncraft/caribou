@@ -175,7 +175,7 @@ export const SeedInput = ({ setSeed, setUsingSeed }: SeedInputParams) => {
           autoFocus
         />
       </div>
-      <div className="px-3 pt-1 fs12 text-center" style={{ opacity: wordCount === 0 ? 0 : 1 }}>
+      <div className={`px-3 pt-1 fs12 text-center ${wordCount === 0 ? 'o-0' : ''}`}>
         {wordCount} {wordCount === 1 ? t('word') : t('words')}
       </div>
       <div className="px-3 pt-1" aria-live="polite">

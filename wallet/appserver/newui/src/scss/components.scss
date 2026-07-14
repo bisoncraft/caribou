@@ -463,6 +463,12 @@ img.logo-full {
   user-select: all;
 }
 
+// Seed/mnemonic display box. Only the line spacing needs a custom rule; the rest
+// (padding, mono, break-all, …) is utilities on the element.
+.seed-phrase {
+  line-height: 1.6;
+}
+
 // Inactive network row in the Receive network picker.
 .receive-inactive-net {
   opacity: 0.65;

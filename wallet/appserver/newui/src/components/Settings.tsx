@@ -104,10 +104,10 @@ function SeedExport () {
       <div className="form-width-300">
         <div className="fs18 pb-2 text-center">{t('Backup Wallet Seed')}</div>
         <div className="fs13 pb-3 text-center errcolor">{t('export_seed_warning')}</div>
-        <div className="p-2 fs14 form-input-bg mono br5 mb-2" style={{ wordBreak: 'break-all', lineHeight: 1.6 }}>
+        <div className="p-2 fs14 form-input-bg mono br5 mb-2 break-all seed-phrase">
           {seed}
         </div>
-        <div className="fs12 pb-3 text-center" style={{ opacity: 0.7 }}>
+        <div className="fs12 pb-3 text-center o-70">
           {t('export_seed_copy_reminder')}
         </div>
         <div className="d-flex flex-column">
@@ -125,7 +125,7 @@ function SeedExport () {
   return (
     <form className="form-width-300" onSubmit={onSubmit}>
       <div className="fs18 pb-2 text-center">{t('Backup Wallet Seed')}</div>
-      <div className="fs13 pb-3 text-center" style={{ opacity: 0.7 }}>
+      <div className="fs13 pb-3 text-center o-70">
         {t('export_seed_warning')}
       </div>
       <div className="mb-3">

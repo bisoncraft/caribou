@@ -98,6 +98,18 @@ export default class Doc {
   }
 
   /*
+   * formatConventionalValue formats a value that is already in conventional
+   * (whole) units — e.g. an aggregate summed across an asset's network variants
+   * — rather than atomic units plus a UnitInfo. Rendering mirrors
+   * formatCoinValue: integers show no decimals, otherwise up to 8 fractional
+   * digits with insignificant trailing zeros trimmed.
+   */
+  static formatConventionalValue (v: number): string {
+    if (Number.isInteger(v)) return intFormatter.format(v)
+    return decimalFormatter(8).format(v)
+  }
+
+  /*
    * formatRateFullPrecision formats rate to represent it exactly at rate step
    * precision, trimming non-effectual zeros if there are any.
    */

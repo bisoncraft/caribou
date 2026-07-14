@@ -563,12 +563,15 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 // its networks, time-ordered, using the tickerTime index. The ticker must match
 // the value produced by the resolver installed via SetTickerResolver.
 //
-// Unlike the network-scoped getTxs, a RefID here cannot be resolved to a
-// primary key (the ticker query spans networks and has no single network to
-// rebuild network||id from), so pagination skips forward to the RefID in index
-// order rather than seeking. The common case — the most recent page, RefID nil
-// — is a direct bounded scan. A RefID not present in the ticker's index
-// returns ErrUnknownTx, matching getTxs.
+// A RefID here cannot be resolved to a primary key from RefID alone (the ticker
+// query spans networks and has no single network to rebuild network||id from).
+// When the caller supplies RefNetwork, the cursor record is looked up to seek
+// straight to its ticker-index entry (ticker||0x00||effTime||id), matching how
+// getTxs resolves its seek; otherwise pagination scans forward from the start of
+// the group to the RefID. Either way the RefID transaction itself is excluded
+// from the page. The common case — the most recent page, RefID nil — is a
+// direct bounded scan. A RefID not present in the ticker's index returns
+// ErrUnknownTx, matching getTxs.
 //
 // Each returned transaction has its AssetID populated, since a merged
 // cross-network result would otherwise leave native transactions (no TokenID)
@@ -580,6 +583,30 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 	n := req.N
 	prefix := append([]byte(ticker), 0x00)
 	reverse := req.Past || req.RefID == nil
+
+	// With RefNetwork, seek directly to the RefID's ticker-index entry instead
+	// of scanning to it. The trailing skip below still drops the RefID entry, so
+	// the page starts at the next transaction in iteration order.
+	var seek []byte
+	if req.RefID != nil && req.RefNetwork != nil {
+		raw, err := db.txs.Get(txKey(*req.RefNetwork, *req.RefID))
+		if err != nil {
+			if err == ErrKeyNotFound {
+				return nil, ErrUnknownTx
+			}
+			return nil, err
+		}
+		_, _, effTime, _, err := recordMeta(raw)
+		if err != nil {
+			return nil, err
+		}
+		id := []byte(*req.RefID)
+		seek = make([]byte, len(ticker)+1+8+len(id))
+		copy(seek, ticker)
+		seek[len(ticker)] = 0x00
+		binary.BigEndian.PutUint64(seek[len(ticker)+1:], effTime)
+		copy(seek[len(ticker)+9:], id)
+	}
 
 	txs := make([]*WalletTransaction, 0, n)
 	var moreAvailable bool
@@ -611,7 +638,7 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 		wt.AssetID = &assetID
 		txs = append(txs, wt)
 		return nil
-	}, reverse, nil)
+	}, reverse, seek)
 	if err != nil {
 		return nil, err
 	}

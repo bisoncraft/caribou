@@ -4,6 +4,7 @@
 
 export * from './application'
 export * from './assets'
+export * from './hooks'
 export * from './http'
 export * from './intl'
 export * from './registry'

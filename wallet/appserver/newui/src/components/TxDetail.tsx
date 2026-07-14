@@ -91,7 +91,7 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
         </Row>
         {tx.recipient && (
           <Row label={t('Recipient')}>
-            <span className="mono fs12" style={{ wordBreak: 'break-all' }}>{tx.recipient}</span>
+            <span className="mono fs12 break-all">{tx.recipient}</span>
           </Row>
         )}
         <Row label={t('Date')}>{dateStr}</Row>
@@ -100,7 +100,7 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
       <div className="px-3 pt-2">
         <div className="fs12 grey">{t('Transaction ID')}</div>
         <div className="d-flex align-items-center">
-          <span className="mono fs12 flex-grow-1" style={{ wordBreak: 'break-all' }}>{tx.id}</span>
+          <span className="mono fs12 flex-grow-1 break-all">{tx.id}</span>
           <button type="button" className="small subtle ms-2 hoverbg" onClick={copy}>
             {copied ? t('Copied!') : t('Copy')}
           </button>
@@ -113,8 +113,7 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
             href={explorer}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-center fs13 pb-3"
-            style={{ color: 'var(--accent-blue-text)' }}
+            className="text-center fs13 pb-3 accent-blue-text"
           >
             {t('View in block explorer')}
           </a>

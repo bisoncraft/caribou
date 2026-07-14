@@ -108,13 +108,19 @@ type ExtensionModeConfig struct {
 
 // User is information about the user's wallets.
 type User struct {
-	Initialized        bool                        `json:"inited"`
-	SeedGenerationTime uint64                      `json:"seedgentime"`
-	Assets             map[uint32]*SupportedAsset  `json:"assets"`
-	FiatRates          map[uint32]float64          `json:"fiatRates"`
-	Net                util.Network                `json:"net"`
-	ExtensionConfig    *ExtensionModeConfig        `json:"extensionModeConfig,omitempty"`
-	Actions            []*asset.ActionRequiredNote `json:"actions,omitempty"`
+	Initialized        bool                       `json:"inited"`
+	SeedGenerationTime uint64                     `json:"seedgentime"`
+	Assets             map[uint32]*SupportedAsset `json:"assets"`
+	FiatRates          map[uint32]float64         `json:"fiatRates"`
+	// TickerRates is the fiat rate for each ticker group, keyed by the
+	// normalized ticker (see SupportedAsset.TickerGroup). Variants of a group
+	// share an economic value, so their per-asset rates are collapsed into one
+	// entry; the front end uses it to price ticker-aggregated balances without
+	// having to pick a representative asset ID.
+	TickerRates     map[string]float64          `json:"tickerRates"`
+	Net             util.Network                `json:"net"`
+	ExtensionConfig *ExtensionModeConfig        `json:"extensionModeConfig,omitempty"`
+	Actions         []*asset.ActionRequiredNote `json:"actions,omitempty"`
 }
 
 // SupportedAsset is data about an asset and possibly the wallet associated

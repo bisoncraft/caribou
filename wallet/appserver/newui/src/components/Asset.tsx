@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import Doc from '@bossw/shared/doc'
 import { postJSON } from '@bossw/shared/http'
-import { CoreNote, WalletNote, WalletTransaction } from '@bossw/shared/registry'
+import { useForceUpdate, useCoreSubscriptions } from '@bossw/shared/hooks'
+import { WalletNote, WalletTransaction } from '@bossw/shared/registry'
 import { AssetVariant, TickerAsset, networkAsset } from '@bossw/shared/assets'
 import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@bossw/shared/tx'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
@@ -78,8 +79,7 @@ function TxRow ({ item }: { item: TxItem }) {
 }
 
 export default function Asset ({ ticker }: AssetParams) {
-  const [, setTick] = useState(0)
-  const redraw = useCallback(() => setTick(x => x + 1), [])
+  const redraw = useForceUpdate()
   const [txns, setTxns] = useState<TxItem[]>([])
   const [loadingTxns, setLoadingTxns] = useState(true)
 
@@ -116,10 +116,12 @@ export default function Asset ({ ticker }: AssetParams) {
   useEffect(() => {
     setLoadingTxns(true)
     fetchTxnsRef.current?.()
+  }, [assetIDsKey])
 
-    const balK = app.registerBalanceUpdater(redraw)
-    const rateK = app.registerFiatRateUpdater(redraw)
-    const noteK = app.registerNoteFeed((note: CoreNote) => {
+  useCoreSubscriptions({
+    onBalance: redraw,
+    onRate: redraw,
+    onNote: (note) => {
       switch (note.type) {
         case 'balance':
         case 'walletstate':
@@ -135,11 +137,6 @@ export default function Asset ({ ticker }: AssetParams) {
           break
         }
       }
-    })
-    return () => {
-      app.unregisterBalanceUpdater(balK)
-      app.unregisterFiatRateUpdater(rateK)
-      app.unregisterNoteFeed(noteK)
     }
   }, [assetIDsKey, redraw])
 
@@ -159,7 +156,6 @@ export default function Asset ({ ticker }: AssetParams) {
   }
 
   const rate = ta.xcRate ?? 0
-  const totalConvFactor = ta.cFactor
   const hasUnavailable = ta.immature > 0 || ta.locked > 0
   const isMultiNet = ta.variants.length > 1
 
@@ -181,7 +177,7 @@ export default function Asset ({ ticker }: AssetParams) {
         <div className="network-section">
           <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('BALANCE')}</div>
           <div className="d-flex justify-content-between align-items-start">
-            <div className="fs28 mono demi">{Doc.formatCoinValue(ta.total, ta.ui)} {ta.ticker}</div>
+            <div className="fs28 mono demi">{Doc.formatConventionalValue(ta.total)} {ta.ticker}</div>
             <div className="d-flex">
               <button type="button" className="d-inline-flex align-items-center me-2" onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}>
                 <span className="ico-qrcode me-2" />{t('Receive')}
@@ -191,23 +187,23 @@ export default function Asset ({ ticker }: AssetParams) {
               </button>
             </div>
           </div>
-          {rate > 0 && <div className="grey mb-2">{Doc.usdString(ta.total, totalConvFactor, rate)}</div>}
+          {rate > 0 && <div className="grey mb-2">{Doc.formatUSD(ta.total * rate)}</div>}
           {hasUnavailable && (
             <>
               <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                 <span className="grey fs13">{t('Available')}</span>
-                <span className="mono">{Doc.formatCoinValue(ta.avail, ta.ui)} {ta.ticker}</span>
+                <span className="mono">{Doc.formatConventionalValue(ta.avail)} {ta.ticker}</span>
               </div>
               {ta.locked > 0 && (
                 <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                   <span className="grey fs13">{t('Locked')}</span>
-                  <span className="mono">{Doc.formatCoinValue(ta.locked, ta.ui)} {ta.ticker}</span>
+                  <span className="mono">{Doc.formatConventionalValue(ta.locked)} {ta.ticker}</span>
                 </div>
               )}
               {ta.immature > 0 && (
                 <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                   <span className="grey fs13">{t('Immature')}</span>
-                  <span className="mono">{Doc.formatCoinValue(ta.immature, ta.ui)} {ta.ticker}</span>
+                  <span className="mono">{Doc.formatConventionalValue(ta.immature)} {ta.ticker}</span>
                 </div>
               )}
             </>
@@ -221,12 +217,11 @@ export default function Asset ({ ticker }: AssetParams) {
               const netAsset = networkAsset(v)
               const vConvFactor = v.ui.conventional.conversionFactor
               const vTotalAtomic = variantTotal(v)
-              // Portion of the ticker's total value that lives on this network,
-              // computed in conventional units to be robust to differing
-              // per-variant conversion factors.
-              const totalConv = ta.total / totalConvFactor
+              // Portion of the ticker's total value that lives on this network.
+              // ta.total is already conventional; convert this variant likewise
+              // so the ratio is unit-consistent.
               const vConv = vTotalAtomic / vConvFactor
-              const pct = totalConv > 0 ? (vConv / totalConv) * 100 : 0
+              const pct = ta.total > 0 ? (vConv / ta.total) * 100 : 0
               return (
                 <div key={v.assetID} className="network-asset-row d-flex align-items-center border-bottom">
                   <NetworkedTokenLogo token={ta.ticker} network={netAsset?.unitInfo.conventional.unit ?? ''} className="icon-32" />

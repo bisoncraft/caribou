@@ -33,6 +33,12 @@ export class AssetVariant {
     }
   }
 
+  // cFactor is the variant's conventional conversion factor (atomic units per
+  // whole unit).
+  get cFactor () {
+    return this.ui.conventional.conversionFactor
+  }
+
   get bal () {
     const w = app.user.assets[this.assetID].wallet
     return w?.balance ?? { available: 0, locked: 0, immature: 0 }
@@ -46,43 +52,26 @@ export class AssetVariant {
 
 export class TickerAsset {
   ticker: string // normalized e.g. WETH -> ETH
-  hasWallets: boolean
-  bestID: number
   name: string
+  hasWallets: boolean
   variants: AssetVariant[]
   variantLookup: Record<number, AssetVariant>
   haveAllFiatRates: boolean
   isMultiNet: boolean
   hasTokens: boolean
-  ui: UnitInfo
 
   constructor (a: SupportedAsset) {
-    const { id: assetID, name, unitInfo: ui } = a
     this.ticker = normalizedTicker(a)
+    this.name = a.name
     this.variants = []
     this.variantLookup = {}
-    this.bestID = assetID
-    this.name = name
-    this.ui = ui
     this.addVariant(a)
   }
 
-  // cFactor is the conversion factor of the group's preferred (native) unit
-  // info — the denomination in which the aggregate balance getters report.
-  get cFactor () {
-    return this.ui.conventional.conversionFactor
-  }
-
   addVariant (a: SupportedAsset) {
-    const { id: assetID, name, wallet: w, token, unitInfo: ui } = a
-    const xcRate = app.idRate(assetID)
-    if (!xcRate) this.haveAllFiatRates = false
+    const { wallet: w, token } = a
+    if (!app.idRate(a.id)) this.haveAllFiatRates = false
     this.hasTokens = this.hasTokens || Boolean(token)
-    if (!token) { // prefer the native asset data, e.g. weth.polygon -> eth}
-      this.bestID = assetID
-      this.name = name
-      this.ui = ui
-    }
     const v = new AssetVariant(a)
     this.hasWallets = this.hasWallets || Boolean(w) || Boolean(v.token?.networkMade)
     this.variants.push(v)
@@ -90,7 +79,11 @@ export class TickerAsset {
     this.variants.sort((a: AssetVariant, b: AssetVariant) => {
       if (a.token && !b.token) return 1
       if (!a.token && b.token) return -1
-      return a.ticker.localeCompare(b.ticker)
+      // Variants of an all-token group share a conventional ticker, so tie-break
+      // on assetID for a stable, deterministic ordering across app restarts (the
+      // variants render as the per-network balance breakdown).
+      const byTicker = a.ticker.localeCompare(b.ticker)
+      return byTicker !== 0 ? byTicker : a.assetID - b.assetID
     })
     this.isMultiNet = this.variants.length > 1
   }
@@ -124,37 +117,32 @@ export class TickerAsset {
     }
   }
 
-  /*
-   * toGroupAtoms converts a variant's atomic amount into the group's preferred
-   * atomic denomination (see cFactor), so cross-variant sums stay meaningful
-   * even if variants denominate with different conversion factors. For every
-   * current group the factors match and this is the identity.
-   */
-  toGroupAtoms (v: AssetVariant, atomic: number): number {
-    return atomic * (this.cFactor / v.ui.conventional.conversionFactor)
-  }
-
+  // avail, locked, immature, and total report the group's balance as conventional
+  // (whole-unit) numbers, summed across network variants. Each variant is divided
+  // by its own conversion factor before summing, so the result is directly
+  // displayable and priceable (multiply by xcRate for fiat) and stays correct
+  // regardless of whether variants share a conversion factor.
   get avail () {
-    return this.variants.reduce((sum: number, v: AssetVariant) => sum + this.toGroupAtoms(v, v.bal.available), 0)
+    return this.variants.reduce((sum: number, v: AssetVariant) => sum + v.bal.available / v.cFactor, 0)
   }
 
   get immature () {
-    return this.variants.reduce((sum: number, v: AssetVariant) => sum + this.toGroupAtoms(v, v.bal.immature), 0)
+    return this.variants.reduce((sum: number, v: AssetVariant) => sum + v.bal.immature / v.cFactor, 0)
   }
 
   get locked () {
-    return this.variants.reduce((sum: number, v: AssetVariant) => sum + this.toGroupAtoms(v, v.bal.locked), 0)
+    return this.variants.reduce((sum: number, v: AssetVariant) => sum + v.bal.locked / v.cFactor, 0)
   }
 
   get total () {
     return this.variants.reduce((sum: number, v: AssetVariant) => {
       const { available, locked, immature } = v.bal
-      return sum + this.toGroupAtoms(v, available + locked + immature)
+      return sum + (available + locked + immature) / v.cFactor
     }, 0)
   }
 
   get xcRate () {
-    return app.idRate(this.bestID)
+    return app.tickerRate(this.ticker)
   }
 }
 

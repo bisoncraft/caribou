@@ -112,8 +112,16 @@ type WalletTransaction struct {
 
 // TxHistoryRequest is a request for transaction history.
 type TxHistoryRequest struct {
-	N           int               `json:"n"`
-	RefID       *string           `json:"refID"`
+	N     int     `json:"n"`
+	RefID *string `json:"refID"`
+	// RefNetwork is the settlement network (primary-key network) of the RefID
+	// transaction. It is only consulted by ticker-scoped history: the ticker
+	// index spans networks and cannot rebuild a primary key from RefID alone,
+	// so RefNetwork lets GetTxsByTicker look up the cursor's effective time and
+	// seek straight to it instead of scanning the group from the start. Ignored
+	// by network-scoped getTxs, which already has its network. Zero (unset)
+	// falls back to the linear scan.
+	RefNetwork  *uint32           `json:"refNetwork"`
 	Past        bool              `json:"past"`
 	IgnoreTypes []TransactionType `json:"ignoreTypes"`
 }

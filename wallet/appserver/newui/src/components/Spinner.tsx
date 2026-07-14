@@ -1,11 +1,11 @@
 interface SpinnerProps {
   className?: string
-  size?: number // px
+  size?: number // px — must have a matching .spinner-N class (see animations.scss)
 }
 
-// Spinner is a small inline CSS spinner suitable for buttons and inputs.
-// Styling lives in main.scss under .spinner-circle.
+// Spinner is a small CSS spinner suitable for buttons and inputs. Size maps to a
+// .spinner-N modifier class; styling lives in animations.scss under
+// .spinner-circle.
 export default function Spinner ({ className, size = 14 }: SpinnerProps) {
-  const style: React.CSSProperties = { width: size, height: size, borderWidth: Math.max(2, Math.round(size / 7)) }
-  return <span className={`spinner-circle ${className ?? ''}`} style={style} role="status" aria-label="loading" />
+  return <span className={`spinner-circle spinner-${size} ${className ?? ''}`} role="status" aria-label="loading" />
 }

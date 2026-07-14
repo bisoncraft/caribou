@@ -217,18 +217,22 @@ func newSendNote(topic Topic, subject, details string, severity db.Severity) *Se
 	}
 }
 
-// FiatRatesNote is an update of fiat rate data for assets.
+// FiatRatesNote is an update of fiat rate data for assets. FiatRates is keyed by
+// asset ID; TickerRates carries the same rates collapsed to one entry per ticker
+// group (see User.TickerRates).
 type FiatRatesNote struct {
 	db.Notification
-	FiatRates map[uint32]float64 `json:"fiatRates"`
+	FiatRates   map[uint32]float64 `json:"fiatRates"`
+	TickerRates map[string]float64 `json:"tickerRates"`
 }
 
 const TopicFiatRatesUpdate Topic = "fiatrateupdate"
 
-func newFiatRatesUpdate(rates map[uint32]float64) *FiatRatesNote {
+func newFiatRatesUpdate(rates map[uint32]float64, tickerRates map[string]float64) *FiatRatesNote {
 	return &FiatRatesNote{
 		Notification: db.NewNotification(NoteTypeFiatRates, TopicFiatRatesUpdate, "", "", db.Data),
 		FiatRates:    rates,
+		TickerRates:  tickerRates,
 	}
 }
 

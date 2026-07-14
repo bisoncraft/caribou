@@ -190,6 +190,7 @@ export interface BalanceNote extends CoreNote {
 
 export interface RateNote extends CoreNote {
   fiatRates: Record<number, number>
+  tickerRates: Record<string, number>
 }
 
 export interface WalletConfigNote extends CoreNote {

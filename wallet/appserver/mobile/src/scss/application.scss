@@ -237,6 +237,12 @@ body {
   min-height: 1.1em;
 }
 
+// Hides an element while preserving its layout box (e.g. the word-count hint,
+// which reserves space via min-height so the form does not jump).
+.mb-hidden {
+  visibility: hidden;
+}
+
 .mb-textarea {
   width: 100%;
   min-height: 7rem;

@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, ReactNode } from 'react'
+import { ReactNode } from 'react'
 import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
 import Doc from '@bossw/shared/doc'
-import { CoreNote, WalletState, UnitInfo } from '@bossw/shared/registry'
+import { useForceUpdate, useCoreSubscriptions } from '@bossw/shared/hooks'
+import { WalletState, UnitInfo } from '@bossw/shared/registry'
 import { networkBySymbol, normalizedTicker, NetworkAssetRef } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@bossw/shared/components/NetworkedTokenLogo'
@@ -35,9 +36,9 @@ function Stat ({ label, value }: { label: string, value: ReactNode }) {
 function StatusSection ({ wallet }: { wallet: WalletState }) {
   const ss = wallet.syncStatus
   const status = wallet.synced
-    ? <span style={{ color: 'var(--accent-green)' }}>{t('Synced')}</span>
+    ? <span className="accent-green">{t('Synced')}</span>
     : (
-      <span className="d-inline-flex align-items-center" style={{ color: 'var(--accent-syncing)' }}>
+      <span className="d-inline-flex align-items-center accent-syncing">
         <Spinner size={12} className="me-2" />
         {tvar('Syncing {{ pct }}%', { pct: String(Math.round((wallet.syncProgress ?? 0) * 100)) })}
       </span>
@@ -111,13 +112,12 @@ function TokenRow ({ a, networkTicker }: { a: NetworkAssetRef, networkTicker: st
 // Network is the detail view for a single settlement network. It is reached by
 // clicking an activated network's card in the Networks list.
 export default function Network ({ symbol }: NetworkParams) {
-  const [, setTick] = useState(0)
-  const redraw = useCallback(() => setTick(x => x + 1), [])
+  const redraw = useForceUpdate()
 
-  useEffect(() => {
-    const balK = app.registerBalanceUpdater(redraw)
-    const rateK = app.registerFiatRateUpdater(redraw)
-    const noteK = app.registerNoteFeed((note: CoreNote) => {
+  useCoreSubscriptions({
+    onBalance: redraw,
+    onRate: redraw,
+    onNote: (note) => {
       switch (note.type) {
         case 'walletstate':
         case 'walletconfig':
@@ -125,11 +125,6 @@ export default function Network ({ symbol }: NetworkParams) {
           redraw()
           break
       }
-    })
-    return () => {
-      app.unregisterBalanceUpdater(balK)
-      app.unregisterFiatRateUpdater(rateK)
-      app.unregisterNoteFeed(noteK)
     }
   }, [redraw])
 

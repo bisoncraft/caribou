@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
 import t, { tvar } from '@bossw/shared/intl'
 import app from '@bossw/shared/application'
-import { CoreNote } from '@bossw/shared/registry'
+import { useForceUpdate, useCoreSubscriptions } from '@bossw/shared/hooks'
 import { networkList, NetworkSummary } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
 
@@ -65,22 +64,20 @@ function NetworkCard ({ n }: { n: NetworkSummary }) {
 }
 
 export default function Networks () {
-  const [, setTick] = useState(0)
-  const redraw = useCallback(() => setTick(n => n + 1), [])
+  const redraw = useForceUpdate()
 
   // Networks activate/deactivate via wallet state changes — redraw so the
   // status badges and click behavior stay current (e.g. after an activation
   // completes elsewhere, or in the activation dialog opened from here).
-  useEffect(() => {
-    const noteK = app.registerNoteFeed((note: CoreNote) => {
+  useCoreSubscriptions({
+    onNote: (note) => {
       switch (note.type) {
         case 'walletstate':
         case 'walletconfig':
           redraw()
           break
       }
-    })
-    return () => app.unregisterNoteFeed(noteK)
+    }
   }, [redraw])
 
   const networks = networkList()

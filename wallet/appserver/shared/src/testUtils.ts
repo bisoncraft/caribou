@@ -72,7 +72,15 @@ export function makeAsset (id: number, symbol: string, overrides: Partial<Suppor
 export function makeUser (assets: SupportedAsset[], fiatRates: Record<number, number> = {}): User {
   const assetMap: Record<number, SupportedAsset> = {}
   for (const a of assets) assetMap[a.id] = a
-  return { inited: true, seedgentime: 0, assets: assetMap, fiatRates, tickerRates: {}, net: 0 }
+  // Mirror core.tickerConversions: collapse per-asset fiat rates to one rate per
+  // ticker group, so a fixture with fiatRates also exposes the matching
+  // tickerRates that TickerAsset.xcRate reads.
+  const tickerRates: Record<string, number> = {}
+  for (const [id, rate] of Object.entries(fiatRates)) {
+    const a = assetMap[Number(id)]
+    if (a) tickerRates[a.tickerGroup || a.unitInfo.conventional.unit] = rate
+  }
+  return { inited: true, seedgentime: 0, assets: assetMap, fiatRates, tickerRates, net: 0 }
 }
 
 // resetApp restores the shared Application singleton to a clean baseline.

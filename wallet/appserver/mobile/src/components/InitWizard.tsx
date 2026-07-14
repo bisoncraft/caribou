@@ -61,7 +61,7 @@ const SeedInput = ({ setSeed, goBack }: SeedInputProps) => {
         disabled={submitting}
         autoFocus
       />
-      <div className='mb-muted mb-init-hint' style={{ visibility: wordCount === 0 ? 'hidden' : 'visible' }}>
+      <div className={`mb-muted mb-init-hint ${wordCount === 0 ? 'mb-hidden' : ''}`}>
         {wordCount} {wordCount === 1 ? t('word') : t('words')}
       </div>
       <div className='mb-err' aria-live='polite'>{err}</div>

@@ -1060,11 +1060,13 @@ func (c *Core) assetMap() map[uint32]*SupportedAsset {
 
 // User is a thread-safe getter for the User.
 func (c *Core) User() *User {
+	fiatRates := c.fiatConversions()
 	return &User{
 		Assets:             c.assetMap(),
 		Initialized:        c.IsInitialized(),
 		SeedGenerationTime: c.seedGenerationTime,
-		FiatRates:          c.fiatConversions(),
+		FiatRates:          fiatRates,
+		TickerRates:        c.tickerConversions(fiatRates),
 		Net:                c.net,
 		ExtensionConfig:    c.extensionModeConfig,
 		Actions:            c.requestedActionsList(),
@@ -3651,7 +3653,7 @@ func (c *Core) refreshFiatRates(ctx context.Context) {
 
 	fiatRatesMap := c.fiatConversions()
 	if len(fiatRatesMap) != 0 {
-		c.notify(newFiatRatesUpdate(fiatRatesMap))
+		c.notify(newFiatRatesUpdate(fiatRatesMap, c.tickerConversions(fiatRatesMap)))
 	}
 }
 
@@ -3708,6 +3710,36 @@ func (c *Core) fiatConversions() map[uint32]float64 {
 		}
 	}
 	return fiatRatesMap
+}
+
+// tickerConversions collapses per-asset fiat rates into one rate per ticker
+// group, keyed by the normalized ticker (see assetTickerGroup). A group's
+// variants are the same asset economically (USDC on Ethereum and Polygon, ETH
+// and WETH), so their rates are averaged into a single entry.
+func (c *Core) tickerConversions(fiatRates map[uint32]float64) map[string]float64 {
+	type acc struct {
+		sum float64
+		n   int
+	}
+	groups := make(map[string]*acc)
+	for assetID, rate := range fiatRates {
+		ticker := assetTickerGroup(assetID, c.log)
+		if ticker == "" {
+			continue
+		}
+		g := groups[ticker]
+		if g == nil {
+			g = new(acc)
+			groups[ticker] = g
+		}
+		g.sum += rate
+		g.n++
+	}
+	tickerRates := make(map[string]float64, len(groups))
+	for ticker, g := range groups {
+		tickerRates[ticker] = g.sum / float64(g.n)
+	}
+	return tickerRates
 }
 
 // ToggleRateSourceStatus toggles a fiat rate source status. If disable is true,

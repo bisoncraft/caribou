@@ -253,6 +253,10 @@ export class Application {
     return this.user.fiatRates[assetID]
   }
 
+  tickerRate (ticker: string) {
+    return this.user.tickerRates[ticker]
+  }
+
   wallet (assetID: number) {
     return this.user.assets[assetID]?.wallet
   }
@@ -381,7 +385,9 @@ export class Application {
         break
       }
       case 'fiatrateupdate': {
-        this.user.fiatRates = (note as RateNote).fiatRates
+        const rn = note as RateNote
+        this.user.fiatRates = rn.fiatRates
+        this.user.tickerRates = rn.tickerRates
         Object.values(this.fiatRateUpdaters).forEach(u => u())
         break
       }

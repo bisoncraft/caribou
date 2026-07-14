@@ -146,10 +146,18 @@ button {
 .position-relative     { position: relative; }
 .pointer               { cursor: pointer !important; }
 .br5                   { border-radius: 5px; }
+.break-all             { word-break: break-all; }
+.overflow-y-auto       { overflow-y: auto; }
+.o-0                   { opacity: 0; }
+.o-70                  { opacity: 0.7; }
 
 .grey      { color: var(--text-grey); }
 .errcolor  { color: var(--text-error); }
 .warncolor { color: var(--text-warning); }
+
+.accent-green     { color: var(--accent-green); }
+.accent-syncing   { color: var(--accent-syncing); }
+.accent-blue-text { color: var(--accent-blue-text); }
 
 // Styled tooltip primitive. Opt in by adding the .has-tip class; the
 // label text is read from the element's aria-label so the same attribute

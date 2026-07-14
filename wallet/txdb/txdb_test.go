@@ -686,4 +686,24 @@ func TestTickerIndex(t *testing.T) {
 	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref}); err != ErrUnknownTx {
 		t.Fatalf("foreign refID err = %v, want ErrUnknownTx", err)
 	}
+
+	// RefNetwork lets the cursor seek straight to its index entry instead of
+	// scanning the group; the result matches the scan path above.
+	ref = "usdcB"
+	refNet := netB
+	resp, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref, RefNetwork: &refNet})
+	if err != nil {
+		t.Fatalf("GetTxsByTicker refID+refNetwork: %v", err)
+	}
+	if got := ids(resp.Txs); !eq(got, []string{"usdcA"}) {
+		t.Fatalf("refID+refNetwork page = %v, want [usdcA]", got)
+	}
+
+	// A RefNetwork that does not carry RefID (wrong network / stale cursor)
+	// fails the primary-key lookup and reports ErrUnknownTx.
+	ref = "usdcB"
+	refNet = netA
+	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref, RefNetwork: &refNet}); err != ErrUnknownTx {
+		t.Fatalf("wrong refNetwork err = %v, want ErrUnknownTx", err)
+	}
 }

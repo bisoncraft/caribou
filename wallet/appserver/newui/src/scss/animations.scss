@@ -30,9 +30,9 @@
   &.fast { animation-duration: 1s; }
 }
 
-// Inline CSS spinner — pair with the <Spinner /> component. Size via
-// inline width/height + border-width on the element; color via
-// currentColor.
+// CSS spinner — pair with the <Spinner /> component. Color follows
+// currentColor; size comes from a .spinner-N modifier class (the component maps
+// its `size` prop to one). The base size (14) applies when no modifier matches.
 .spinner-circle {
   display: inline-block;
   vertical-align: middle;
@@ -41,6 +41,21 @@
   border-right-color: transparent;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
+// Spinner size modifiers, keyed by pixel size to border-width. Add a step here
+// (not an inline style) when a new <Spinner size> is needed.
+$spinner-sizes: (10: 2, 12: 2, 20: 3);
+
+@each $size, $border in $spinner-sizes {
+  .spinner-#{$size} {
+    width: #{$size}px;
+    height: #{$size}px;
+    border-width: #{$border}px;
+  }
 }
 
 // Apply with `key={err}` on the message node so the animation retriggers

@@ -55,7 +55,6 @@ export default function Portfolio () {
 
   const totals = app.portfolioTotals()
   const tickerList: TickerAsset[] = app.tickerList ?? []
-  const fiatRates = app.user?.fiatRates ?? {}
 
   const sortedWalletAssets: TickerAsset[] = []
   const inactiveAssets: TickerAsset[] = []
@@ -64,8 +63,8 @@ export default function Portfolio () {
     else inactiveAssets.push(ta)
   }
   sortedWalletAssets.sort((a, b) => {
-    const aVal = (a.total / a.cFactor) * (fiatRates[a.bestID] ?? 0)
-    const bVal = (b.total / b.cFactor) * (fiatRates[b.bestID] ?? 0)
+    const aVal = a.total * (a.xcRate ?? 0)
+    const bVal = b.total * (b.xcRate ?? 0)
     return bVal - aVal
   })
 
@@ -78,7 +77,7 @@ export default function Portfolio () {
   const inactiveNetworkCount = inactiveNetworks.size
 
   return (
-    <div className="portfolio-view fill-abs" style={{ overflowY: 'auto' }}>
+    <div className="portfolio-view fill-abs overflow-y-auto">
       <div className="portfolio-inner">
         <PortfolioTotals totals={totals} walletAssets={sortedWalletAssets} />
 
@@ -104,8 +103,8 @@ export default function Portfolio () {
             </thead>
             <tbody>
               {sortedWalletAssets.map(ta => {
-                const rate = fiatRates[ta.bestID] ?? 0
-                const usdVal = (ta.total / ta.cFactor) * rate
+                const rate = ta.xcRate ?? 0
+                const usdVal = ta.total * rate
                 const pct = totals.total > 0 ? (usdVal / totals.total) * 100 : null
                 return (
                   <AssetRow
