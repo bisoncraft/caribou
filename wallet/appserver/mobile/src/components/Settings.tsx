@@ -188,7 +188,14 @@ function BiometricSettings () {
   // after"), which is a presence check over a still-resident session. So it is
   // handed to LockTiming to render between the two tiers — just above "Evict keys
   // after", where it applies — rather than as a master switch atop the card.
-  const biometricToggle = available && (
+  //
+  // Show it when the device can enroll (available) OR when an enrollment already
+  // exists (enrolled). The second case matters when biometrics/credentials were
+  // removed after enrolling: available flips false, but the stored secret is still
+  // live and the shell keeps prompting for it on every resume, so the user needs a
+  // control to turn it off. Without the `|| enrolled`, hiding the toggle strands
+  // that stale enrollment with no in-app recovery.
+  const biometricToggle = (available || enrolled) && (
     <label className='mb-check-row'>
       <input type='checkbox' checked={enrolled} onChange={toggle} />
       <span>{t('Unlock with biometrics')}</span>
@@ -224,9 +231,10 @@ function evictLabel (m: number): string {
 // the device can gate (canGate: biometrics OR the device passcode); without any
 // such mechanism the gate has nothing to clear with and only eviction applies.
 // biometricToggle is placed between the tiers because it governs re-acquiring keys
-// after eviction, not the gate; it is already nil when the device cannot enroll
-// (the caller gates it on the narrower biometricAvailable), so on a passcode-only
-// iOS device the gate row shows without an enroll toggle above it.
+// after eviction, not the gate; it is already nil when the device can neither
+// enroll nor has an existing enrollment to turn off (the caller gates it on
+// biometricAvailable || biometricEnrolled), so on a passcode-only iOS device with
+// nothing enrolled the gate row shows without an enroll toggle above it.
 function LockTiming ({ bridge, canGate, biometricToggle }: { bridge: BosswBridge, canGate: boolean, biometricToggle: ReactNode }) {
   const [gateMin, setGateMin] = useState(10)
   const [evictMin, setEvictMin] = useState(60)
