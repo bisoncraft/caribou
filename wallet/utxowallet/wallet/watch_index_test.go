@@ -12,6 +12,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wtxmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/txscript"
 )
@@ -84,8 +85,9 @@ func TestLastActiveIndex(t *testing.T) {
 
 // TestClassifyWatchSet drives the load-time classification on a real wallet:
 // an unused (lookahead) external is always hot; a used external active within
-// quietDepth of the reference is hot; and one active before it is cold and
-// gets demoted to the sweep set.
+// quietDepth of the reference is hot; one active before it is cold and gets
+// demoted to the sweep set; a quiet internal joins the sweep set only while
+// it still holds an unspent credit.
 func TestClassifyWatchSet(t *testing.T) {
 	w, cleanup := testWallet(t)
 	defer cleanup()
@@ -104,9 +106,22 @@ func TestClassifyWatchSet(t *testing.T) {
 		}
 		return a, pk
 	}
-	fresh, _ := newAddr()         // unused lookahead
-	recent, recentPk := newAddr() // used, recent
-	old, oldPk := newAddr()       // used, quiet
+	newChange := func() (btcutil.Address, []byte) {
+		a, err := w.NewChangeAddress(0, waddrmgr.KeyScopeBIP0084)
+		if err != nil {
+			t.Fatalf("NewChangeAddress: %v", err)
+		}
+		pk, err := txscript.PayToAddrScript(a)
+		if err != nil {
+			t.Fatalf("PayToAddrScript: %v", err)
+		}
+		return a, pk
+	}
+	fresh, _ := newAddr()               // unused lookahead
+	recent, recentPk := newAddr()       // used, recent
+	old, oldPk := newAddr()             // used, quiet
+	chFunded, chFundedPk := newChange() // internal, quiet, still funded
+	chEmpty, chEmptyPk := newChange()   // internal, quiet, spent out
 
 	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
 		ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
@@ -121,8 +136,10 @@ func TestClassifyWatchSet(t *testing.T) {
 		if err := putLastActive(tx, recentPk, ref-depth+2); err != nil {
 			return err
 		}
-		if err := putLastActive(tx, oldPk, ref-depth-100); err != nil {
-			return err
+		for _, pk := range [][]byte{oldPk, chFundedPk, chEmptyPk} {
+			if err := putLastActive(tx, pk, ref-depth-100); err != nil {
+				return err
+			}
 		}
 		return markBackfilled(tx)
 	})
@@ -130,9 +147,13 @@ func TestClassifyWatchSet(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
+	// The unspent set carries a credit on chFunded only; classification
+	// judges internal sweepability from it.
+	unspent := []wtxmgr.Credit{{PkScript: chFundedPk}}
+
 	err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
-		kept, _, err := w.classifyWatchSet(tx,
-			[]btcutil.Address{fresh, recent, old}, nil)
+		kept, keptUnspent, err := w.classifyWatchSet(tx,
+			[]btcutil.Address{fresh, recent, old, chFunded, chEmpty}, unspent)
 		if err != nil {
 			return err
 		}
@@ -149,13 +170,29 @@ func TestClassifyWatchSet(t *testing.T) {
 		if got[old.String()] {
 			t.Error("quiet external was kept hot")
 		}
+		if got[chFunded.String()] || got[chEmpty.String()] {
+			t.Error("quiet internal was kept hot")
+		}
+		// The cold internal's credit leaves the live watch too — the sweep
+		// covers it.
+		if len(keptUnspent) != 0 {
+			t.Errorf("keptUnspent = %v, want none", keptUnspent)
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("classify: %v", err)
 	}
 
-	if cold, _ := w.watchPol.coldSet(); len(cold) != 1 || cold[0].String() != old.String() {
-		t.Fatalf("cold set = %v, want [%s]", cold, old)
+	cold, _ := w.watchPol.coldSet()
+	coldMap := map[string]bool{}
+	for _, a := range cold {
+		coldMap[a.String()] = true
+	}
+	if len(cold) != 2 || !coldMap[old.String()] || !coldMap[chFunded.String()] {
+		t.Fatalf("cold set = %v, want [%s %s]", cold, old, chFunded)
+	}
+	if coldMap[chEmpty.String()] {
+		t.Fatal("empty internal was demoted to the sweep set")
 	}
 }

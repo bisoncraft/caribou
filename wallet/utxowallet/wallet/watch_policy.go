@@ -19,9 +19,13 @@ import (
 // (change) address with no unmined activity is considered observationally
 // closed and its backend watch is dropped. A persistent watch only earns its
 // cost when it observes an event whose timing the wallet does not control;
-// every spend of an internal address is wallet-originated, so once its last
-// transaction is this deep the address has nothing left to report. The value
-// is a reorg-safety margin — deliberately deeper than the asset layer's
+// a spend of an internal address is normally wallet-originated, so once its
+// last transaction is this deep the address has nothing left to report to
+// the LIVE watch. The exception is a spend authored by the same seed loaded
+// in another wallet — for that, an internal that still holds an unspent
+// credit joins the metered sweep set when its live watch drops (see
+// reapWatches); an empty internal is done for good. The value is a
+// reorg-safety margin — deliberately deeper than the asset layer's
 // display-oriented confTxFinality (1). A reorg deeper than this after an
 // address was forgotten is not observed until the address is next involved
 // in wallet activity; see docs/address-watching-plan.md.
@@ -53,8 +57,8 @@ type addrWatch struct {
 
 // watchPolicy tracks watched addresses with activity so their backend
 // watches can be dropped once quiet: internal (change) addresses at
-// watchFinalityDepth — every event on them is wallet-originated — and used
-// external addresses at the deeper externalQuietDepth
+// watchFinalityDepth — events on them are normally wallet-originated — and
+// used external addresses at the deeper externalQuietDepth
 // (docs/address-watching-plan.md, increments 1 and 2). State is in-memory
 // only: it is rebuilt on every sync from wtxmgr (see hotAddrs), so restarts
 // and reconnects need no persistence. Unused externals (the lookahead) are
@@ -63,9 +67,12 @@ type watchPolicy struct {
 	mtx     sync.Mutex
 	tracked map[string]*addrWatch
 
-	// coldExternal holds demoted (unwatched) used external addresses
-	// awaiting metered sweeps; a sweep hit promotes an address back out.
-	coldExternal map[string]*coldEntry
+	// cold holds demoted (unwatched) addresses awaiting metered sweeps: the
+	// used externals, which any third party can pay at any time, and the
+	// internals that still hold an unspent credit, which the same seed
+	// loaded in another wallet can spend. A sweep hit promotes an address
+	// back out.
+	cold map[string]*coldEntry
 	// sweeping is the single-flight guard for the sweep goroutine.
 	sweeping bool
 	// lastSweepTip is the tip at which the last sweep launched; zero means
@@ -81,10 +88,10 @@ type watchPolicy struct {
 	sweepEvery      int32
 }
 
-// coldEntry is one demoted external address and the height up to which its
-// history is fully known (the tip at which it was last provably watched or
-// swept). The sweep's fromHeight is the minimum over the cold set, so a
-// stale entry can never false-hit on history the wallet already ingested.
+// coldEntry is one demoted address and the height up to which its history is
+// fully known (the tip at which it was last provably watched or swept). The
+// sweep's fromHeight is the minimum over the cold set, so a stale entry can
+// never false-hit on history the wallet already ingested.
 type coldEntry struct {
 	addr btcutil.Address
 	upTo int32
@@ -139,11 +146,13 @@ func (p *watchPolicy) note(addr btcutil.Address, internal bool, txHash chainhash
 
 // reap returns and forgets the tracked addresses whose observable window has
 // closed at the given tip: no unmined activity and the last mined activity at
-// least the branch's quiet depth deep.
-func (p *watchPolicy) reap(tip int32) []btcutil.Address {
+// least the branch's quiet depth deep. Reaped externals are demoted into the
+// cold sweep set here; reaped internals are also returned separately so the
+// caller can demote the ones that still hold an unspent credit — a judgement
+// that needs the database (see reapWatches).
+func (p *watchPolicy) reap(tip int32) (done, internals []btcutil.Address) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	var done []btcutil.Address
 	for key, iw := range p.tracked {
 		if len(iw.unmined) > 0 || iw.lastMined <= 0 {
 			continue
@@ -157,14 +166,16 @@ func (p *watchPolicy) reap(tip int32) []btcutil.Address {
 		}
 		done = append(done, iw.addr)
 		delete(p.tracked, key)
-		if !iw.internal {
-			if p.coldExternal == nil {
-				p.coldExternal = make(map[string]*coldEntry)
-			}
-			p.coldExternal[key] = &coldEntry{addr: iw.addr, upTo: tip}
+		if iw.internal {
+			internals = append(internals, iw.addr)
+			continue
 		}
+		if p.cold == nil {
+			p.cold = make(map[string]*coldEntry)
+		}
+		p.cold[key] = &coldEntry{addr: iw.addr, upTo: tip}
 	}
-	return done
+	return done, internals
 }
 
 // noteActivity feeds the watch policy from a just-ingested relevant tx:
@@ -218,15 +229,28 @@ func (w *Wallet) noteActivity(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxRecord,
 
 // reapWatches drops the backend watches of tracked addresses whose
 // observable window has closed at tip. A no-op for backends without the
-// AddressWatcher capability.
+// AddressWatcher capability. Reaped externals join the cold sweep set (any
+// third party can pay them at any time); a reaped internal joins it only
+// while it still holds an unspent credit — the credit is spendable by the
+// same seed loaded in another wallet, and with the live watch dropped only
+// the sweep can observe such a spend. An empty internal is done for good:
+// never handed out, nothing left to spend.
 func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 	watcher, ok := chainClient.(chain.AddressWatcher)
 	if !ok {
 		return
 	}
-	done := w.watchPol.reap(tip)
+	done, internals := w.watchPol.reap(tip)
 	if len(done) == 0 {
 		return
+	}
+	if len(internals) > 0 {
+		if err := w.demoteFundedInternals(internals, tip); err != nil {
+			// Not demoted means not swept: an external spend of these
+			// credits goes unobserved until a recovery scan.
+			log.Errorf("Failed to demote %d reaped internal addresses: %v",
+				len(internals), err)
+		}
 	}
 	if err := watcher.Unwatch(done); err != nil {
 		log.Errorf("Failed to unwatch %d quiet addresses: %v",
@@ -234,6 +258,32 @@ func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 		return
 	}
 	log.Debugf("Unwatched %d quiet addresses", len(done))
+}
+
+// demoteFundedInternals moves the reaped internal addresses that still hold
+// an unspent credit into the cold sweep set.
+func (w *Wallet) demoteFundedInternals(addrs []btcutil.Address, tip int32) error {
+	return walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+		txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
+		unspent, err := w.TxStore.UnspentOutputs(txmgrNs)
+		if err != nil {
+			return err
+		}
+		funded := make(map[string]struct{}, len(unspent))
+		for i := range unspent {
+			funded[string(unspent[i].PkScript)] = struct{}{}
+		}
+		for _, addr := range addrs {
+			script, err := txscript.PayToAddrScript(addr)
+			if err != nil {
+				continue
+			}
+			if _, ok := funded[string(script)]; ok {
+				w.watchPol.demote(addr, tip)
+			}
+		}
+		return nil
+	})
 }
 
 // classifyWatchSet partitions the sync watch set by the persisted last-active
@@ -300,6 +350,13 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 		return true
 	}
 
+	// Unspent-credit scripts: a cold internal is only sweepable while it is
+	// still funded.
+	funded := make(map[string]struct{}, len(unspent))
+	for i := range unspent {
+		funded[string(unspent[i].PkScript)] = struct{}{}
+	}
+
 	keptAddrs := addrs[:0]
 	for _, addr := range addrs {
 		pkScript, err := txscript.PayToAddrScript(addr)
@@ -311,10 +368,17 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 			keptAddrs = append(keptAddrs, addr)
 			continue
 		}
-		// Cold used external: hand to the sweep, known through the
-		// reference height (the address was watched up to it).
-		if ma, err := w.Manager.Address(addrmgrNs, addr); err == nil && !ma.Internal() {
-			w.watchPol.demote(addr, ref)
+		// Cold addresses that remain observable hand off to the sweep,
+		// known through the reference height (the address was watched up
+		// to it): every used external — any third party can pay it at any
+		// time — and an internal that still holds an unspent credit, which
+		// the same seed loaded in another wallet can spend. An empty
+		// internal stays retired: never handed out, nothing left to spend.
+		if ma, err := w.Manager.Address(addrmgrNs, addr); err == nil {
+			_, isFunded := funded[string(pkScript)]
+			if !ma.Internal() || isFunded {
+				w.watchPol.demote(addr, ref)
+			}
 		}
 	}
 	keptUnspent := unspent[:0]
@@ -435,20 +499,20 @@ func (w *Wallet) unminedHotScripts(dbtx walletdb.ReadTx) (map[[32]byte]struct{},
 }
 
 // sweepInterval is how many blocks pass between metered sweeps of the cold
-// external set. Detection latency on a cold address is bounded by this; the
-// post-sync sweep covers the offline gap.
+// set. Detection latency on a cold address is bounded by this; the post-sync
+// sweep covers the offline gap.
 const sweepInterval = 144
 
-// demote moves an address into the cold-external set awaiting sweeps. upTo
-// is the height through which its history is fully known — the tip at which
-// it was last watched.
+// demote moves an address into the cold sweep set. upTo is the height
+// through which its history is fully known — the tip at which it was last
+// watched.
 func (p *watchPolicy) demote(addr btcutil.Address, upTo int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	if p.coldExternal == nil {
-		p.coldExternal = make(map[string]*coldEntry)
+	if p.cold == nil {
+		p.cold = make(map[string]*coldEntry)
 	}
-	p.coldExternal[addr.String()] = &coldEntry{addr: addr, upTo: upTo}
+	p.cold[addr.String()] = &coldEntry{addr: addr, upTo: upTo}
 }
 
 // promote removes addresses from the cold set (a sweep hit re-established
@@ -457,12 +521,12 @@ func (p *watchPolicy) promote(addrs []btcutil.Address) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	for _, addr := range addrs {
-		delete(p.coldExternal, addr.String())
+		delete(p.cold, addr.String())
 	}
 }
 
-// coldSet returns a snapshot of the cold-external addresses and the height
-// above which a sweep must look — the minimum known-up-to over the set. No
+// coldSet returns a snapshot of the cold addresses and the height above
+// which a sweep must look — the minimum known-up-to over the set. No
 // reorg margin is subtracted: dipping below the known-up-to point makes
 // already-ingested history register as hits (instant false re-promotion),
 // while a transaction reorged back in confirms at a new post-reorg height
@@ -470,9 +534,9 @@ func (p *watchPolicy) promote(addrs []btcutil.Address) {
 func (p *watchPolicy) coldSet() ([]btcutil.Address, int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	out := make([]btcutil.Address, 0, len(p.coldExternal))
+	out := make([]btcutil.Address, 0, len(p.cold))
 	from := int32(0)
-	for _, e := range p.coldExternal {
+	for _, e := range p.cold {
 		out = append(out, e.addr)
 		if from == 0 || e.upTo < from {
 			from = e.upTo
@@ -494,7 +558,7 @@ func (p *watchPolicy) bumpCold(tip int32, failed []btcutil.Address) {
 	}
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	for key, e := range p.coldExternal {
+	for key, e := range p.cold {
 		if _, ok := skip[key]; ok {
 			continue
 		}
@@ -504,7 +568,7 @@ func (p *watchPolicy) bumpCold(tip int32, failed []btcutil.Address) {
 	}
 }
 
-// maybeSweep launches the cold-external sweep when due: on the first block
+// maybeSweep launches the cold-set sweep when due: on the first block
 // after a sync (lastSweepTip zero) and every sweepInterval blocks after. The
 // sweep runs on its own goroutine — it is a batch of network calls and must
 // not block the notification loop — with single-flight protection.
@@ -516,7 +580,7 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	p := &w.watchPol
 	p.mtx.Lock()
 	due := p.lastSweepTip == 0 || tip-p.lastSweepTip >= p.sweepDue()
-	if !due || p.sweeping || len(p.coldExternal) == 0 {
+	if !due || p.sweeping || len(p.cold) == 0 {
 		p.mtx.Unlock()
 		return
 	}

@@ -7,9 +7,12 @@ package wallet
 import (
 	"testing"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 )
 
 func tAddr(t *testing.T, b byte) btcutil.Address {
@@ -35,19 +38,27 @@ func TestWatchPolicyReap(t *testing.T) {
 	p.note(a3, true, tx2, 0)
 
 	// One block after mining: nothing is deep enough, unmined never reaps.
-	if got := p.reap(100); len(got) != 0 {
+	if got, _ := p.reap(100); len(got) != 0 {
 		t.Fatalf("reap(100) = %v, want none", got)
 	}
 
 	// a1 reaps once tip-lastMined+1 >= watchFinalityDepth; a2 and a3 have
 	// unmined activity and must not.
 	tip := int32(100 + watchFinalityDepth - 1)
-	got := p.reap(tip)
+	got, internals := p.reap(tip)
 	if len(got) != 1 || got[0].String() != a1.String() {
 		t.Fatalf("reap(%d) = %v, want [%s]", tip, got, a1)
 	}
+	// Reaped internals are returned for the caller's funded-credit check,
+	// and are NOT demoted here.
+	if len(internals) != 1 || internals[0].String() != a1.String() {
+		t.Fatalf("internals = %v, want [%s]", internals, a1)
+	}
+	if cold, _ := p.coldSet(); len(cold) != 0 {
+		t.Fatalf("reap demoted internal(s) %v", cold)
+	}
 	// Reaped addresses are forgotten.
-	if got := p.reap(tip + 100); len(got) != 0 {
+	if got, _ := p.reap(tip + 100); len(got) != 0 {
 		t.Fatalf("second reap returned %v, want none", got)
 	}
 
@@ -55,17 +66,17 @@ func TestWatchPolicyReap(t *testing.T) {
 	p.note(a3, true, tx2, 200)
 	p.note(a2, true, tx2, 200)
 	tip = int32(200 + watchFinalityDepth - 1)
-	if got := p.reap(tip); len(got) != 2 {
+	if got, _ := p.reap(tip); len(got) != 2 {
 		t.Fatalf("reap(%d) = %v, want a2+a3", tip, got)
 	}
 
 	// Re-noting after a reap re-tracks (spend-from-cold re-watch path).
 	p.note(a1, true, tx2, 0)
-	if got := p.reap(tip + 100); len(got) != 0 {
+	if got, _ := p.reap(tip + 100); len(got) != 0 {
 		t.Fatalf("unmined re-track reaped: %v", got)
 	}
 	p.note(a1, true, tx2, 300)
-	if got := p.reap(300 + watchFinalityDepth - 1); len(got) != 1 {
+	if got, _ := p.reap(300 + watchFinalityDepth - 1); len(got) != 1 {
 		t.Fatalf("re-tracked a1 did not reap")
 	}
 }
@@ -77,11 +88,15 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 
 	// External addresses reap at externalQuietDepth, not watchFinalityDepth.
 	p.note(ext, false, tx, 500)
-	if got := p.reap(500 + watchFinalityDepth); len(got) != 0 {
+	if got, _ := p.reap(500 + watchFinalityDepth); len(got) != 0 {
 		t.Fatalf("external reaped at internal depth: %v", got)
 	}
-	if got := p.reap(500 + externalQuietDepth - 1); len(got) != 1 {
+	got, internals := p.reap(500 + externalQuietDepth - 1)
+	if len(got) != 1 {
 		t.Fatalf("external did not reap at externalQuietDepth")
+	}
+	if len(internals) != 0 {
+		t.Fatalf("external returned as internal: %v", internals)
 	}
 
 	// A reaped external lands in the cold set awaiting sweeps; a sweep hit
@@ -112,8 +127,8 @@ func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 	p.bumpCold(200, []btcutil.Address{bad})
 
 	p.mtx.Lock()
-	okUpTo := p.coldExternal[ok.String()].upTo
-	badUpTo := p.coldExternal[bad.String()].upTo
+	okUpTo := p.cold[ok.String()].upTo
+	badUpTo := p.cold[bad.String()].upTo
 	p.mtx.Unlock()
 	if okUpTo != 200 {
 		t.Fatalf("verified entry floor = %d, want 200", okUpTo)
@@ -124,5 +139,46 @@ func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 	// The next sweep must look from the failed entry's old floor.
 	if _, from := p.coldSet(); from != 100 {
 		t.Fatalf("next sweep floor = %d, want 100", from)
+	}
+}
+
+// TestDemoteFundedInternals verifies that a reaped internal address joins the
+// cold sweep set only while it still holds an unspent credit: funded change
+// is spendable by the same seed loaded in another wallet, and with the live
+// watch dropped only the sweep can observe such a spend. Empty change is
+// retired for good.
+func TestDemoteFundedInternals(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+
+	newChange := func() (btcutil.Address, []byte) {
+		a, err := w.NewChangeAddress(0, waddrmgr.KeyScopeBIP0084)
+		if err != nil {
+			t.Fatalf("NewChangeAddress: %v", err)
+		}
+		pk, err := txscript.PayToAddrScript(a)
+		if err != nil {
+			t.Fatalf("PayToAddrScript: %v", err)
+		}
+		return a, pk
+	}
+	funded, fundedPk := newChange()
+	empty, _ := newChange()
+
+	// A confirmed credit paying only the funded address.
+	incoming := wire.NewMsgTx(1)
+	incoming.AddTxIn(wire.NewTxIn(&wire.OutPoint{}, nil, nil))
+	incoming.AddTxOut(wire.NewTxOut(1e8, fundedPk))
+	addUtxo(t, w, incoming)
+
+	if err := w.demoteFundedInternals([]btcutil.Address{funded, empty}, 1234); err != nil {
+		t.Fatalf("demoteFundedInternals: %v", err)
+	}
+	cold, from := w.watchPol.coldSet()
+	if len(cold) != 1 || cold[0].String() != funded.String() {
+		t.Fatalf("cold set = %v, want [%s]", cold, funded)
+	}
+	if from != 1234 {
+		t.Fatalf("sweep floor = %d, want 1234", from)
 	}
 }
