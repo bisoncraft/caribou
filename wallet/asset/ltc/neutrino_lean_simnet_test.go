@@ -24,7 +24,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 )
 
 func TestLTCNeutrinoLeanWalletSync(t *testing.T) {
@@ -42,7 +42,7 @@ func TestLTCNeutrinoLeanWalletSync(t *testing.T) {
 
 	dataDir := t.TempDir()
 	walletDir := filepath.Join(dataDir, RegressionNetParams.Name)
-	if err = createLTCElectrumWallet(ltcPassword, seed, dexbtc.DefaultWalletBirthday, walletDir, ltcLogger, 0, 0, RegressionNetParams); err != nil {
+	if err = createLTCElectrumWallet(ltcPassword, seed, btc.DefaultWalletBirthday, walletDir, ltcLogger, 0, 0, RegressionNetParams); err != nil {
 		t.Fatalf("createLTCElectrumWallet: %v", err)
 	}
 

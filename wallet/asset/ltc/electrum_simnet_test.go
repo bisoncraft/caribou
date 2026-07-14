@@ -42,7 +42,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet"
 	"github.com/btcsuite/btcd/btcutil"
@@ -134,7 +134,7 @@ func (h *ltcHarnessNode) Send(addr string, val, _ uint64) (asset.Coin, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error decoding txid %q: %w", txID, err)
 	}
-	return dexbtc.NewOutput(txHash, 0, val), nil
+	return btc.NewOutput(txHash, 0, val), nil
 }
 
 // newLTCAlphaBackend connects a thin funding node to the harness alpha
@@ -146,11 +146,11 @@ func newLTCAlphaBackend(t *testing.T) (*ltcHarnessNode, *util.ConnectionMaster) 
 		t.Fatalf("user.Current: %v", err)
 	}
 	cfgPath := filepath.Join(u.HomeDir, "dextest", "ltc", "alpha", "alpha.conf")
-	var rpcCfg dexbtc.RPCConfig
+	var rpcCfg btc.RPCConfig
 	if err := config.ParseInto(cfgPath, &rpcCfg); err != nil {
 		t.Fatalf("config.ParseInto(%s): %v", cfgPath, err)
 	}
-	if err := dexbtc.CheckRPCConfig(&rpcCfg, "alpha", util.Regtest, NetPorts); err != nil {
+	if err := btc.CheckRPCConfig(&rpcCfg, "alpha", util.Regtest, NetPorts); err != nil {
 		t.Fatalf("bad alpha rpc config: %v", err)
 	}
 	cl, err := rpcclient.New(&rpcclient.ConnConfig{
@@ -195,7 +195,7 @@ func newLTCElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) {
 	dataDir := t.TempDir()
 	walletDir := filepath.Join(dataDir, RegressionNetParams.Name)
 
-	if err = createLTCElectrumWallet(ltcPassword, seed, dexbtc.DefaultWalletBirthday, walletDir, ltcLogger, 0, 0, RegressionNetParams); err != nil {
+	if err = createLTCElectrumWallet(ltcPassword, seed, btc.DefaultWalletBirthday, walletDir, ltcLogger, 0, 0, RegressionNetParams); err != nil {
 		t.Fatalf("newLTCElectrumWallet: createLTCElectrumWallet: %v", err)
 	}
 

@@ -10,7 +10,7 @@ import (
 
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/config"
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/decred/dcrd/rpcclient/v8"
 )
@@ -30,12 +30,12 @@ func TestScanMainnetRecentBlocks(t *testing.T) {
 func testScanBlocks(t *testing.T, net util.Network, startHeight, endHeight int64, port string) {
 	u, _ := user.Current()
 	configPath := filepath.Join(u.HomeDir, ".firo", "firo.conf")
-	var cfg dexbtc.RPCConfig
+	var cfg btc.RPCConfig
 
 	if err := config.ParseInto(configPath, &cfg); err != nil {
 		t.Fatalf("ParseInto error: %v", err)
 	}
-	dexbtc.StandardizeRPCConf(&cfg, port)
+	btc.StandardizeRPCConf(&cfg, port)
 	cl, err := rpcclient.New(&rpcclient.ConnConfig{
 		HTTPPostMode: true,
 		DisableTLS:   true,

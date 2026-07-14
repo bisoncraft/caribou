@@ -6,7 +6,7 @@ package zec
 import (
 	"math"
 
-	dexbtc "github.com/bisoncraft/bosswallet/wallet/asset/btc"
+	"github.com/bisoncraft/bosswallet/wallet/asset/btc"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -43,14 +43,14 @@ func TxFeesZIP317(transparentTxInsSize, transparentTxOutsSize uint64, nSpendsSap
 // calc.RequiredOrderFunds.
 func RequiredOrderFunds(swapVal, inputCount, inputsSize, maxSwaps uint64) uint64 {
 	// One p2sh output for the contract, 1 change output.
-	const txOutsSize = dexbtc.P2PKHOutputSize + dexbtc.P2SHOutputSize + 1 /* wire.VarIntSerializeSize(2) */
+	const txOutsSize = btc.P2PKHOutputSize + btc.P2SHOutputSize + 1 /* wire.VarIntSerializeSize(2) */
 	txInsSize := inputsSize + uint64(wire.VarIntSerializeSize(inputCount))
 	firstTxFees := TransparentTxFeesZIP317(txInsSize, txOutsSize)
 	if maxSwaps == 1 {
 		return swapVal + firstTxFees
 	}
 
-	otherTxsFees := TransparentTxFeesZIP317(dexbtc.RedeemP2PKHInputSize+1, txOutsSize)
+	otherTxsFees := TransparentTxFeesZIP317(btc.RedeemP2PKHInputSize+1, txOutsSize)
 	fees := firstTxFees + (maxSwaps-1)*otherTxsFees
 	return swapVal + fees
 }
@@ -58,7 +58,7 @@ func RequiredOrderFunds(swapVal, inputCount, inputsSize, maxSwaps uint64) uint64
 // MinHTLCSize calculates the minimum value for the output of a chained
 // P2SH -> P2WPKH transaction pair where the spending tx size is known.
 func MinHTLCSize(redeemTxFees uint64) uint64 {
-	var outputSize uint64 = dexbtc.P2PKHOutputSize
+	var outputSize uint64 = btc.P2PKHOutputSize
 	sz := outputSize + 148                        // 148 accounts for an input on spending tx
 	const oneThirdDustThresholdRate = 100         // zats / kB
 	nFee := oneThirdDustThresholdRate * sz / 1000 // This is different from BTC
@@ -73,8 +73,8 @@ func MinHTLCSize(redeemTxFees uint64) uint64 {
 // MinLotSize is the minimum lot size that avoids dust for a given max network
 // fee rate.
 func MinLotSize(maxFeeRate uint64) uint64 {
-	var inputsSize uint64 = dexbtc.TxInOverhead + dexbtc.RefundSigScriptSize + 1
-	var outputsSize uint64 = dexbtc.P2PKHOutputSize + 1
+	var inputsSize uint64 = btc.TxInOverhead + btc.RefundSigScriptSize + 1
+	var outputsSize uint64 = btc.P2PKHOutputSize + 1
 	refundTxFees := TxFeesZIP317(inputsSize, outputsSize, 0, 0, 0, 0)
 	return MinHTLCSize(refundTxFees)
 }
