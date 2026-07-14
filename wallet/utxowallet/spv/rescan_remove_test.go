@@ -103,6 +103,50 @@ func TestUpdateFilterRemoveAddrs(t *testing.T) {
 	}
 }
 
+// TestUpdateFilterRemoveAddrsPrunesInputs verifies that a RemoveAddrs update
+// also drops the input watches whose prevout script belongs to a removed
+// address, so demoting an address doesn't strand unreachable watchInputs
+// entries (the watchList gate would never match their blocks again).
+func TestUpdateFilterRemoveAddrsPrunesInputs(t *testing.T) {
+	addr1, script1 := testWitnessAddr(t, 0x01)
+	addr2, script2 := testWitnessAddr(t, 0x02)
+	op1 := wire.OutPoint{Index: 1}
+	op2 := wire.OutPoint{Index: 2}
+
+	ro := &rescanOptions{}
+	add := defaultUpdateOptions()
+	AddAddrs(addr1, addr2)(add)
+	AddInputs(
+		InputWithScript{OutPoint: op1, PkScript: script1},
+		InputWithScript{OutPoint: op2, PkScript: script2},
+	)(add)
+	if _, err := ro.updateFilter(nil, add, &headerfs.BlockStamp{}, &wire.BlockHeader{}); err != nil {
+		t.Fatalf("updateFilter(add): %v", err)
+	}
+	if len(ro.watchInputs) != 2 || len(ro.watchList) != 4 {
+		t.Fatalf("after add: watchInputs=%d watchList=%d, want 2/4",
+			len(ro.watchInputs), len(ro.watchList))
+	}
+
+	rm := defaultUpdateOptions()
+	RemoveAddrs(addr1)(rm)
+	if _, err := ro.updateFilter(nil, rm, &headerfs.BlockStamp{}, &wire.BlockHeader{}); err != nil {
+		t.Fatalf("updateFilter(remove): %v", err)
+	}
+
+	if len(ro.watchInputs) != 1 || ro.watchInputs[0].OutPoint != op2 {
+		t.Fatalf("watchInputs=%v, want [%v]", ro.watchInputs, op2)
+	}
+	if len(ro.watchList) != 2 {
+		t.Fatalf("watchList=%d, want 2", len(ro.watchList))
+	}
+	for _, s := range ro.watchList {
+		if bytes.Equal(s, script1) {
+			t.Fatal("removed script still in watchList")
+		}
+	}
+}
+
 // TestUpdateFilterRemoveUnknownAddr verifies that removing an address that was
 // never watched is a harmless no-op — the existing watch set is untouched.
 func TestUpdateFilterRemoveUnknownAddr(t *testing.T) {

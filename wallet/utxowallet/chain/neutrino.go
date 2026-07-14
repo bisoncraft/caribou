@@ -589,10 +589,11 @@ var sweepBlockDelay = 2 * time.Millisecond
 // addresses on neutrino: a bounded, THROTTLED cfilter rescan over
 // [fromHeight, tip]. For each block it tests the block's compact filter
 // against the cold scripts and, on a match, fetches the block and emits the
-// transactions that pay a cold address so the wallet ingests them. Hits are
-// re-added to the watch list (re-promotion). The check is all-or-nothing:
-// any error fails the whole range (retried next interval, ingestion is
-// idempotent), so failed is always nil and errors flow through err.
+// transactions that pay to or spend from a cold address so the wallet
+// ingests them. Hits are re-added to the watch list (re-promotion). The
+// check is all-or-nothing: any error fails the whole range (retried next
+// interval, ingestion is idempotent), so failed is always nil and errors
+// flow through err.
 func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error) {
 	if len(addrs) == 0 {
 		return nil, nil, nil
@@ -662,8 +663,9 @@ func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 }
 
 // sweepMatchedBlock fetches a filter-matched block, emits the transactions
-// that pay a cold address, and records the hit addresses. A cfilter match is
-// probabilistic, so the block is scanned to confirm the actual payments.
+// that pay to or spend from a cold address, and records the hit addresses. A
+// cfilter match is probabilistic, so the block is scanned to confirm the
+// actual matches.
 func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 	byScript map[string]btcutil.Address, hitAddrs map[string]btcutil.Address) error {
 
@@ -673,14 +675,34 @@ func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 	}
 	var relevant []*bisonwire.Tx
 	for _, tx := range blk.Block.Transactions {
+		var matched bool
 		for _, out := range tx.TxOut {
-			a, ok := byScript[string(out.PkScript)]
-			if !ok {
-				continue
+			if a, ok := byScript[string(out.PkScript)]; ok {
+				hitAddrs[a.String()] = a
+				matched = true
 			}
+		}
+		// A spend of a cold address's UTXO also matches the block filter:
+		// BIP-158 filters commit the prevout scripts of inputs. The prevout
+		// script is reconstructed from the input's signature data — without
+		// the input side, an externally-spent cold UTXO (the same seed
+		// loaded elsewhere) would be dropped here as a false positive and
+		// never re-examined once the sweep floor advances, leaving the
+		// credit unspent in the wallet forever.
+		for _, in := range tx.TxIn {
+			pkScript, err := txscript.ComputePkScript(
+				in.SignatureScript, in.Witness,
+			)
+			if err != nil {
+				continue // e.g. a coinbase or non-standard input
+			}
+			if a, ok := byScript[string(pkScript.Script())]; ok {
+				hitAddrs[a.String()] = a
+				matched = true
+			}
+		}
+		if matched {
 			relevant = append(relevant, tx)
-			hitAddrs[a.String()] = a
-			break
 		}
 	}
 	if len(relevant) == 0 {

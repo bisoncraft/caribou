@@ -132,6 +132,106 @@ func TestNeutrinoSweep(t *testing.T) {
 	}
 }
 
+// TestNeutrinoSweepSpend verifies that the sweep detects a block that SPENDS
+// a cold address's UTXO — not just one that pays the address. BIP-158 filters
+// commit the prevout scripts of inputs, so the filter matches such a block;
+// the block scan must then recognize the input-side match (by reconstructing
+// the prevout script from the witness) or the spend would be dropped as a
+// false positive and lost for good once the sweep floor advances.
+func TestNeutrinoSweepSpend(t *testing.T) {
+	old := sweepBlockDelay
+	sweepBlockDelay = 0
+	t.Cleanup(func() { sweepBlockDelay = old })
+
+	// The cold address, derived from a pubkey so the spending witness
+	// reconstructs to its script.
+	pubKey := make([]byte, 33)
+	pubKey[0] = 0x02
+	pubKey[1] = 0x5a
+	addr, err := btcutil.NewAddressWitnessPubKeyHash(
+		btcutil.Hash160(pubKey), &chaincfg.RegressionNetParams,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A block at height 100 whose only tx spends the cold address's UTXO
+	// and pays an unrelated script. The filter includes the prevout script,
+	// as a real BIP-158 basic filter would.
+	dummySig := make([]byte, 71)
+	dummySig[0] = 0x30
+	spend := wire.NewMsgTx(2)
+	spend.AddTxIn(wire.NewTxIn(
+		&wire.OutPoint{Hash: chainhash.Hash{0: 0x01}, Index: 1},
+		nil, wire.TxWitness{dummySig, pubKey},
+	))
+	spend.AddTxOut(wire.NewTxOut(1e8, []byte{txscript.OP_TRUE}))
+	block := &wire.MsgBlock{
+		Header:       wire.BlockHeader{Version: 4, Timestamp: time.Unix(1_700_000_000, 0)},
+		Transactions: []*wire.MsgTx{spend},
+	}
+	hash := block.BlockHash()
+	filter, err := builder.BuildBasicFilter(block, [][]byte{script})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cs := &sweepChainService{
+		mockChainService: &mockChainService{},
+		tip:              100,
+		hashAt:           map[int32]chainhash.Hash{100: hash},
+		filterAt:         map[chainhash.Hash]*gcs.Filter{hash: filter},
+		blockByHsh:       map[chainhash.Hash]*wire.MsgBlock{hash: block},
+	}
+
+	client := &NeutrinoClient{
+		CS:                  cs,
+		chainParams:         &netparams.ChainParams{Chain: "btc"},
+		enqueueNotification: make(chan interface{}, 4),
+		quit:                make(chan struct{}),
+		scanning:            true,
+		rescan:              &mockRescanner{updateArgs: list.New()},
+	}
+
+	hits, failed, err := client.Sweep([]btcutil.Address{addr}, 99)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if failed != nil {
+		t.Fatalf("failed = %v, want nil (all-or-nothing)", failed)
+	}
+	if len(hits) != 1 || hits[0].String() != addr.String() {
+		t.Fatalf("hits = %v, want [%s]", hits, addr)
+	}
+
+	// The spending tx was emitted so the wallet marks the credit spent.
+	select {
+	case n := <-client.enqueueNotification:
+		fb, ok := n.(FilteredBlockConnected)
+		if !ok {
+			t.Fatalf("notification type %T, want FilteredBlockConnected", n)
+		}
+		if fb.Block.Height != 100 || len(fb.RelevantTxs) != 1 {
+			t.Fatalf("emitted block = %+v", fb)
+		}
+		if fb.RelevantTxs[0].Hash != spend.TxHash() {
+			t.Fatalf("emitted tx %s, want the spend %s",
+				fb.RelevantTxs[0].Hash, spend.TxHash())
+		}
+	default:
+		t.Fatal("no FilteredBlockConnected emitted for the swept spend")
+	}
+
+	// The spender was re-promoted via a rescan Update(AddAddrs).
+	if got := client.rescan.(*mockRescanner).updateArgs.Len(); got != 1 {
+		t.Fatalf("rescan updates = %d, want 1 (re-promotion)", got)
+	}
+}
+
 func TestNeutrinoUnwatchNotScanning(t *testing.T) {
 	client := newMockNeutrinoClient()
 	// scanning is false: nothing is watched, so Unwatch is a no-op and must
