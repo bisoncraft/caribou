@@ -637,6 +637,10 @@ var bipIDs = map[uint32]string{
 	714001: "usdc.bnb",
 	714002: "usdt.bnb",
 	// END BNB reserved token range
+	// Solana reserved token range 501000-501999
+	501001: "usdc.sol",
+	501002: "usdt.sol",
+	// END Solana reserved token range
 	1171337:  "ilt",
 	1313114:  "etho",
 	1313500:  "xero",

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,6 +29,7 @@ type rpcI interface {
 	getTransaction(ctx context.Context, sig string) (*rpcTransaction, error)
 	getSignaturesForAddress(ctx context.Context, addr string, before, until *string, limit int) ([]signatureInfo, error)
 	getSignatureStatuses(ctx context.Context, sigs []string) ([]*signatureStatus, error)
+	getTokenAccountBalance(ctx context.Context, addr string) (amount uint64, exists bool, err error)
 }
 
 type rpcClient struct {
@@ -112,6 +115,29 @@ func (c *rpcClient) getBalance(ctx context.Context, addr string) (uint64, error)
 		return 0, err
 	}
 	return resp.Value, nil
+}
+
+// getTokenAccountBalance returns the SPL token balance of the account at
+// addr. If the account does not exist (e.g. it has never received tokens),
+// exists is false and amount is 0, which is not treated as an error.
+func (c *rpcClient) getTokenAccountBalance(ctx context.Context, addr string) (amount uint64, exists bool, err error) {
+	var resp struct {
+		Value struct {
+			Amount string `json:"amount"`
+		} `json:"value"`
+	}
+	err = c.call(ctx, "getTokenAccountBalance", []any{addr, map[string]any{"commitment": "confirmed"}}, &resp)
+	if err != nil {
+		if strings.Contains(err.Error(), "could not find account") {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+	amount, err = strconv.ParseUint(resp.Value.Amount, 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("getTokenAccountBalance: invalid amount %q: %w", resp.Value.Amount, err)
+	}
+	return amount, true, nil
 }
 
 func (c *rpcClient) getMinimumBalanceForRentExemption(ctx context.Context, size uint64) (uint64, error) {
@@ -218,13 +244,26 @@ type rpcAccountKey struct {
 type rpcInstruction struct {
 	Program string `json:"program"`
 	Parsed  *struct {
-		Type string `json:"type"`
-		Info struct {
-			Source      string `json:"source"`
-			Destination string `json:"destination"`
-			Lamports    uint64 `json:"lamports"`
-		} `json:"info"`
+		Type string             `json:"type"`
+		Info rpcInstructionInfo `json:"info"`
 	} `json:"parsed"`
+}
+
+// rpcInstructionInfo covers both native "system" transfer instructions and
+// "spl-token" transfer/transferChecked instructions.
+type rpcInstructionInfo struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Lamports    uint64 `json:"lamports"`
+	Authority   string `json:"authority"`
+	Mint        string `json:"mint"`
+	// Amount is the atomic token amount for the legacy spl-token "transfer"
+	// instruction, reported as a decimal string.
+	Amount      string `json:"amount"`
+	TokenAmount *struct {
+		Amount   string `json:"amount"`
+		Decimals uint8  `json:"decimals"`
+	} `json:"tokenAmount"`
 }
 
 func (c *rpcClient) getTransaction(ctx context.Context, sig string) (*rpcTransaction, error) {

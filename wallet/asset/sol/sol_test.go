@@ -20,10 +20,15 @@ import (
 // --- mocks ---
 
 type mockRPC struct {
-	sigsFunc        func(before, until *string, limit int) ([]signatureInfo, error)
-	txFunc          func(sig string) (*rpcTransaction, error)
-	blockHeightFunc func() (uint64, error)
-	sigStatusesFunc func(ids []string) ([]*signatureStatus, error)
+	sigsFunc         func(before, until *string, limit int) ([]signatureInfo, error)
+	txFunc           func(sig string) (*rpcTransaction, error)
+	blockHeightFunc  func() (uint64, error)
+	sigStatusesFunc  func(ids []string) ([]*signatureStatus, error)
+	tokenBalanceFunc func(addr string) (uint64, bool, error)
+	rentFunc         func(size uint64) (uint64, error)
+	blockhashFunc    func() (string, uint64, error)
+	sendTxFunc       func(txB []byte) (string, error)
+	balanceFunc      func() (uint64, error)
 }
 
 func (m *mockRPC) getSignaturesForAddress(_ context.Context, _ string, before, until *string, limit int) ([]signatureInfo, error) {
@@ -39,20 +44,42 @@ func (m *mockRPC) getBlockHeight(_ context.Context) (uint64, error) {
 	}
 	return 0, nil
 }
-func (m *mockRPC) getBalance(_ context.Context, _ string) (uint64, error) { return 0, nil }
-func (m *mockRPC) getMinimumBalanceForRentExemption(_ context.Context, _ uint64) (uint64, error) {
+func (m *mockRPC) getBalance(_ context.Context, _ string) (uint64, error) {
+	if m.balanceFunc != nil {
+		return m.balanceFunc()
+	}
+	return 0, nil
+}
+func (m *mockRPC) getMinimumBalanceForRentExemption(_ context.Context, size uint64) (uint64, error) {
+	if m.rentFunc != nil {
+		return m.rentFunc(size)
+	}
 	return 0, nil
 }
 func (m *mockRPC) getFeeForMessage(_ context.Context, _ []byte) (uint64, error) { return 0, nil }
 func (m *mockRPC) getLatestBlockhash(_ context.Context) (string, uint64, error) {
+	if m.blockhashFunc != nil {
+		return m.blockhashFunc()
+	}
 	return "", 0, nil
 }
-func (m *mockRPC) sendTransaction(_ context.Context, _ []byte) (string, error) { return "", nil }
+func (m *mockRPC) sendTransaction(_ context.Context, txB []byte) (string, error) {
+	if m.sendTxFunc != nil {
+		return m.sendTxFunc(txB)
+	}
+	return "", nil
+}
 func (m *mockRPC) getSignatureStatuses(_ context.Context, ids []string) ([]*signatureStatus, error) {
 	if m.sigStatusesFunc != nil {
 		return m.sigStatusesFunc(ids)
 	}
 	return nil, nil
+}
+func (m *mockRPC) getTokenAccountBalance(_ context.Context, addr string) (uint64, bool, error) {
+	if m.tokenBalanceFunc != nil {
+		return m.tokenBalanceFunc(addr)
+	}
+	return 0, false, nil
 }
 
 type mockTxDB struct {
@@ -202,19 +229,33 @@ func parsedInstruction(src, dst string, lamports uint64) rpcInstruction {
 	return rpcInstruction{
 		Program: "system",
 		Parsed: &struct {
-			Type string `json:"type"`
-			Info struct {
-				Source      string `json:"source"`
-				Destination string `json:"destination"`
-				Lamports    uint64 `json:"lamports"`
-			} `json:"info"`
+			Type string             `json:"type"`
+			Info rpcInstructionInfo `json:"info"`
 		}{
 			Type: "transfer",
-			Info: struct {
-				Source      string `json:"source"`
-				Destination string `json:"destination"`
-				Lamports    uint64 `json:"lamports"`
-			}{Source: src, Destination: dst, Lamports: lamports},
+			Info: rpcInstructionInfo{Source: src, Destination: dst, Lamports: lamports},
+		},
+	}
+}
+
+// parsedSPLInstruction builds an spl-token transferChecked instruction for
+// tests.
+func parsedSPLInstruction(src, dst string, amount uint64) rpcInstruction {
+	return rpcInstruction{
+		Program: "spl-token",
+		Parsed: &struct {
+			Type string             `json:"type"`
+			Info rpcInstructionInfo `json:"info"`
+		}{
+			Type: "transferChecked",
+			Info: rpcInstructionInfo{
+				Source:      src,
+				Destination: dst,
+				TokenAmount: &struct {
+					Amount   string `json:"amount"`
+					Decimals uint8  `json:"decimals"`
+				}{Amount: fmt.Sprintf("%d", amount), Decimals: 6},
+			},
 		},
 	}
 }

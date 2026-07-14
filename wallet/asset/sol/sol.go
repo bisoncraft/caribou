@@ -59,6 +59,8 @@ var (
 
 func init() {
 	asset.Register(BipID, &Driver{})
+	registerToken(usdcTokenID, "The USDC SPL token.", util.Mainnet, util.Testnet)
+	registerToken(usdtTokenID, "The USDT SPL token.", util.Mainnet)
 }
 
 type Driver struct{}
