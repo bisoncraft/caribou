@@ -599,6 +599,93 @@ func TestHeadersPersistence(t *testing.T) {
 	}
 }
 
+// TestHeadersAnchorMove covers loadFromDisk's anchor identity check. The
+// header file carries no record of which height its first entry belongs to —
+// entries are indexed as StartHeight+i on every load. When a release moves
+// the anchor checkpoint, a file persisted under the old anchor would be
+// silently re-labeled: headers really covering blocks N..M come back indexed
+// as StartHeight..StartHeight+count-1, typically overshooting the real tip so
+// the first sync request returns empty and stale headers get served as
+// current. loadFromDisk must instead notice that the first stored header does
+// not hash to the anchor checkpoint and discard the file for a clean resync.
+func TestHeadersAnchorMove(t *testing.T) {
+	chain := synthChain(30, 7)
+	cfgAt := func(anchor int32) *ChainConfig {
+		cpHash := chain[anchor].BlockHash()
+		return &ChainConfig{
+			Chain:       bisonwire.ChainBTC,
+			Params:      paramsWithCheckpoints([]chaincfg.Checkpoint{{Height: anchor, Hash: &cpHash}}),
+			HeaderSize:  80,
+			StartHeight: anchor,
+		}
+	}
+	const seedAnchor = int32(10)
+	tip := int32(len(chain) - 1)
+	// seed persists headers seedAnchor..tip under the seed anchor and
+	// returns the data dir for a reopen under a possibly-moved anchor.
+	seed := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		h, err := NewHeaders(cfgAt(seedAnchor), dir)
+		if err != nil {
+			t.Fatalf("NewHeaders (seed): %v", err)
+		}
+		if _, err := h.AppendBatch(seedAnchor, serializeBatch(t, chain[seedAnchor:]), 0); err != nil {
+			t.Fatalf("seed AppendBatch: %v", err)
+		}
+		return dir
+	}
+
+	t.Run("same anchor keeps stored headers", func(t *testing.T) {
+		dir := seed(t)
+		h, err := NewHeaders(cfgAt(seedAnchor), dir)
+		if err != nil {
+			t.Fatalf("reopen: %v", err)
+		}
+		if h.Tip() != tip {
+			t.Fatalf("reopen tip = %d, want %d", h.Tip(), tip)
+		}
+		if got := h.ByHeight(seedAnchor); got == nil || got.BlockHash() != chain[seedAnchor].BlockHash() {
+			t.Fatal("anchor header missing or mismatched after reopen")
+		}
+	})
+
+	for _, tc := range []struct {
+		name      string
+		newAnchor int32
+	}{
+		{"anchor bumped up discards stale file", 20},
+		{"anchor bumped down discards stale file", 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := seed(t)
+			h, err := NewHeaders(cfgAt(tc.newAnchor), dir)
+			if err != nil {
+				t.Fatalf("reopen with moved anchor: %v", err)
+			}
+			// The stale file must be discarded, not re-indexed: the
+			// reopened store starts fresh at the new anchor.
+			if got, want := h.Tip(), tc.newAnchor-1; got != want {
+				t.Fatalf("tip after anchor move = %d, want %d (fresh store)", got, want)
+			}
+			if hdr := h.ByHeight(tc.newAnchor); hdr != nil {
+				t.Fatalf("unexpected header at new anchor height %d", tc.newAnchor)
+			}
+			// The normal first sync must be able to repopulate from the
+			// new anchor.
+			if _, err := h.AppendBatch(tc.newAnchor, serializeBatch(t, chain[tc.newAnchor:]), 0); err != nil {
+				t.Fatalf("resync after discard: %v", err)
+			}
+			if h.Tip() != tip {
+				t.Fatalf("resync tip = %d, want %d", h.Tip(), tip)
+			}
+			if got := h.ByHeight(tc.newAnchor); got == nil || got.BlockHash() != chain[tc.newAnchor].BlockHash() {
+				t.Fatal("resynced anchor header mismatched")
+			}
+		})
+	}
+}
+
 func TestHeadersFilePathLayout(t *testing.T) {
 	_, dir := newTestHeaders(t)
 	want := filepath.Join(dir, "electrum", "btc", "blockchain_headers")

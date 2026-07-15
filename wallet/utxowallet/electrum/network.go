@@ -122,15 +122,21 @@ type Network struct {
 	rot rotationGuard
 
 	// loops is the goroutine group bound to the current wallet node
-	// (headersLoop, scripthashLoop, watchNode). Rotation joins the old
-	// group before attaching a successor so two groups never interleave
-	// header appends or status forwards. Guarded by mu.
+	// (scripthashLoop, watchNode, and headersLoop — which in Start's group
+	// is preceded, in the same member, by the initial header sync).
+	// Rotation joins the old group before attaching a successor so two
+	// groups never interleave header appends or status forwards. Guarded
+	// by mu. Every member is spawned before its group is joined anywhere:
+	// a late Add on a group whose counter already hit zero would race a
+	// concurrent join (sync.WaitGroup forbids Add-from-zero during Wait).
 	loops *loopGroup
 }
 
 // loopGroup tracks the goroutines bound to one wallet node. join blocks
 // until every loop in the group has exited — they do so when their node's
-// notify channels close (node death) or the network context ends.
+// notify channels close (node death) or the network context ends; Start's
+// initial-sync member instead exits when syncHeaders errors on the dead
+// connection.
 type loopGroup struct {
 	node *Node
 	wg   sync.WaitGroup
@@ -322,9 +328,10 @@ func (n *Network) Start(parent context.Context) error {
 	n.mu.Unlock()
 
 	// scripthashLoop and watchNode start immediately; they don't depend on
-	// the header sync completing. headersLoop joins the group after the
-	// initial sync (below): the group spans staggered starts, and join
-	// waits for whichever loops have been spawned by then.
+	// the header sync completing. The group's third member (spawned below)
+	// runs the initial header sync and then headersLoop inline, so the
+	// group's membership is complete before Start returns — join() never
+	// races a late Add.
 	group := &loopGroup{node: node}
 	n.mu.Lock()
 	n.loops = group
@@ -341,15 +348,22 @@ func (n *Network) Start(parent context.Context) error {
 		go n.runObservers()
 	}
 
-	// The background sync goroutine is wg-tracked so WaitForShutdown waits
-	// for it. It runs syncHeaders, then (on success) hands off to headersLoop.
-	// On failure it calls Stop(), which triggers the same teardown path that a
-	// node-drop uses (Stop → cancel/node.Close → watchNode unblocks → child
-	// goroutine closes channels after wg.Wait). It does NOT call failed()
-	// because launched is already true and failed() would double-close.
-	n.wg.Add(1)
-	go func() {
-		defer n.wg.Done()
+	// The background sync runs as a member of the node's loop group from
+	// the start, with headersLoop running inline in the same member once
+	// sync succeeds. Group membership from the start matters: spawning
+	// headersLoop as a separate loop AFTER the sync would be a late
+	// group.wg.Add(1), which could land after the group's counter hit zero
+	// while a rotation's join() was already in Wait — an Add-from-zero
+	// concurrent with Wait, which sync.WaitGroup forbids. Membership also
+	// means a rotation's join() waits out a still-running initial sync;
+	// that wait is bounded because rotate closes the node before joining
+	// and BlockHeaders fails fast on a dead connection. On sync failure
+	// this member calls Stop(), which triggers the same teardown path that
+	// a node-drop uses (Stop → cancel/node.Close → watchNode unblocks →
+	// closer closes channels after wg.Wait; Stop itself never waits on the
+	// group, so a member may call it). It does NOT call failed() because
+	// launched is already true and failed() would double-close.
+	n.spawnLoop(group, func() {
 		if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
 			if n.ctx.Err() == nil {
 				// Context is still live, so this is a real sync error
@@ -362,9 +376,10 @@ func (n *Network) Start(parent context.Context) error {
 			return
 		}
 		// Sync succeeded. headersLoop must run AFTER syncHeaders so it
-		// doesn't race the initial batch-writes to the header store.
-		n.spawnLoop(group, func() { n.headersLoop(node, tip) })
-	}()
+		// doesn't race the initial batch-writes to the header store —
+		// hence inline here rather than as a separately spawned loop.
+		n.headersLoop(node, tip)
+	})
 
 	return nil
 }

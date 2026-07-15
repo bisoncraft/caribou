@@ -81,6 +81,10 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	// sends instead would drop an in-flight reorg Disconnected that the
 	// successor's header sync rewinds at the store level but does not
 	// re-emit to the consumer, so the bounded wait is the safe choice.
+	// Start's group also carries the initial-sync member (which runs
+	// headersLoop inline on success); its exit is bounded by the Close
+	// above — a mid-sync BlockHeaders call fails fast on the dead
+	// connection.
 	dead.Close()
 	if group != nil {
 		group.join()

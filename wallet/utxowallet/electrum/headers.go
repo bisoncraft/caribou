@@ -96,31 +96,20 @@ func NewHeaders(cfg *ChainConfig, dataDir string) (*Headers, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("electrum: create %s: %w", dir, err)
 	}
-	// A non-zero StartHeight skips the linkage check for its first header
-	// (there is no parent in the store), so its identity MUST be pinned by
-	// a checkpoint at exactly that height — otherwise a hostile server
-	// could seed an arbitrary chain.
-	if cfg.StartHeight > 0 {
-		anchored := false
-		if cfg.Params != nil {
-			for _, cp := range cfg.Params.Checkpoints {
-				if cp.Height == cfg.StartHeight && cp.Hash != nil {
-					anchored = true
-					break
-				}
-			}
-		}
-		if !anchored {
-			return nil, fmt.Errorf("electrum: StartHeight %d has no checkpoint anchor",
-				cfg.StartHeight)
-		}
-	}
 	h := &Headers{
 		cfg:      cfg,
 		dir:      dir,
 		filePath: filepath.Join(dir, headerFileName),
 		byHeight: make(map[int32]*wire.BlockHeader, 4096),
 		byHash:   make(map[chainhash.Hash]int32, 4096),
+	}
+	// A non-zero StartHeight skips the linkage check for its first header
+	// (there is no parent in the store), so its identity MUST be pinned by
+	// a checkpoint at exactly that height — otherwise a hostile server
+	// could seed an arbitrary chain.
+	if cfg.StartHeight > 0 && h.anchorCheckpointHash() == nil {
+		return nil, fmt.Errorf("electrum: StartHeight %d has no checkpoint anchor",
+			cfg.StartHeight)
 	}
 	h.tip.Store(cfg.StartHeight - 1) // pre-genesis if StartHeight == 0
 	if err := h.loadFromDisk(); err != nil {
@@ -583,6 +572,23 @@ func (h *Headers) checkPoW(hdr *wire.BlockHeader) error {
 	return nil
 }
 
+// anchorCheckpointHash returns the checkpoint hash pinning the header at
+// StartHeight, or nil when no checkpoint applies there. NewHeaders requires
+// an anchor checkpoint for any non-zero StartHeight, so nil means
+// StartHeight is 0 (regtest and no-checkpoint test configs), where genesis
+// linkage authenticates the chain instead.
+func (h *Headers) anchorCheckpointHash() *chainhash.Hash {
+	if h.cfg.Params == nil {
+		return nil
+	}
+	for _, cp := range h.cfg.Params.Checkpoints {
+		if cp.Height == h.cfg.StartHeight && cp.Hash != nil {
+			return cp.Hash
+		}
+	}
+	return nil
+}
+
 // anchoredStart reports whether height is a non-genesis sync anchor: the
 // first stored header, whose parent is deliberately absent. Linkage cannot be
 // checked there; the checkpoint at that height authenticates it instead
@@ -651,6 +657,29 @@ func (h *Headers) loadFromDisk() error {
 	hdrs, err := h.parseBatch(raw)
 	if err != nil {
 		return err
+	}
+	// The file carries no record of which height its first entry belongs
+	// to — entries are indexed as StartHeight+i on every load. If the
+	// configured anchor moved since the file was written (the checkpoint
+	// lists are refreshed at each release), that re-indexing silently
+	// mislabels every stored header; with a newer anchor the relabeled tip
+	// typically overshoots the real chain, so the first sync request comes
+	// back empty and stale headers are served as current. Pin the file's
+	// identity the same way the append path does: the first stored header
+	// must hash to the anchor checkpoint. On mismatch (either bump
+	// direction), discard the file and start clean from the configured
+	// anchor; the normal first sync repopulates it.
+	if want := h.anchorCheckpointHash(); want != nil {
+		if got := hdrs[0].BlockHash(); got != *want {
+			log.Warnf("electrum: stored %s header file does not match the anchor "+
+				"checkpoint at height %d (stored %s, want %s); the anchor has "+
+				"moved — discarding %d stale headers and resyncing",
+				h.cfg.Chain, h.cfg.StartHeight, got, want, count)
+			if err := os.Remove(h.filePath); err != nil {
+				return fmt.Errorf("electrum: remove stale header file: %w", err)
+			}
+			return nil
+		}
 	}
 	for i, hdr := range hdrs {
 		height := h.cfg.StartHeight + int32(i)
