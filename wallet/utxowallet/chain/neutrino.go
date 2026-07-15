@@ -601,6 +601,7 @@ func (s *NeutrinoClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 	}
 	scripts := make([][]byte, 0, len(entries))
 	byScript := make(map[string]SweepEntry, len(entries))
+	byOutpoint := make(map[wire.OutPoint]SweepEntry)
 	// The walk covers every entry's range in one pass: it starts just above
 	// the lowest floor, exclusive — activity strictly above an entry's own
 	// floor, per chain.AddressWatcher and matching the electrum backend's
@@ -617,6 +618,9 @@ func (s *NeutrinoClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 			e.FromHeight = -1
 		}
 		byScript[string(script)] = e
+		for _, op := range e.OutPoints {
+			byOutpoint[op] = e
+		}
 		if i == 0 || e.FromHeight < minFrom {
 			minFrom = e.FromHeight
 		}
@@ -650,7 +654,8 @@ func (s *NeutrinoClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 				return nil, nil, err
 			}
 			if matched {
-				if err := s.sweepMatchedBlock(height, hash, byScript, hitAddrs); err != nil {
+				if err := s.sweepMatchedBlock(height, hash, byScript,
+					byOutpoint, hitAddrs); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -680,7 +685,8 @@ func (s *NeutrinoClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 // matches at or below an entry's own FromHeight are that entry's
 // already-ingested history, not activity.
 func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
-	byScript map[string]SweepEntry, hitAddrs map[string]btcutil.Address) error {
+	byScript map[string]SweepEntry, byOutpoint map[wire.OutPoint]SweepEntry,
+	hitAddrs map[string]btcutil.Address) error {
 
 	blk, err := s.CS.GetBlock(*hash)
 	if err != nil {
@@ -696,13 +702,22 @@ func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 			}
 		}
 		// A spend of a cold address's UTXO also matches the block filter:
-		// BIP-158 filters commit the prevout scripts of inputs. The prevout
-		// script is reconstructed from the input's signature data — without
-		// the input side, an externally-spent cold UTXO (the same seed
-		// loaded elsewhere) would be dropped here as a false positive and
-		// never re-examined once the sweep floor advances, leaving the
-		// credit unspent in the wallet forever.
+		// BIP-158 filters commit the prevout scripts of inputs. Without the
+		// input side, an externally-spent cold UTXO (the same seed loaded
+		// elsewhere) would be dropped here as a false positive and never
+		// re-examined once the sweep floor advances, leaving the credit
+		// unspent in the wallet forever. Known outpoints are matched
+		// exactly; the script reconstruction covers spends of UTXOs the
+		// wallet has not ingested, but only for the classes
+		// ComputePkScript understands — a taproot keyspend witness
+		// reconstructs to a WRONG script with a nil error, which is why
+		// the outpoint match exists and comes first.
 		for _, in := range tx.TxIn {
+			if e, ok := byOutpoint[in.PreviousOutPoint]; ok && height > e.FromHeight {
+				hitAddrs[e.Addr.String()] = e.Addr
+				matched = true
+				continue
+			}
 			pkScript, err := txscript.ComputePkScript(
 				in.SignatureScript, in.Witness,
 			)

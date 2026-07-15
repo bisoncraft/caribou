@@ -13,6 +13,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 )
 
 // watchFinalityDepth is the confirmation depth after which an internal
@@ -805,6 +806,7 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	// otherwise never revisit. The margin can't false-hit ingested history
 	// (see the const).
 	entries, swept := p.sweepSet(slowDue)
+	w.attachSweepOutpoints(entries)
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -865,6 +867,45 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 		log.Debugf("Cold-address sweep: %d checked (slow tier included: %v), "+
 			"%d promoted", len(entries), slowDue, len(hits))
 	}()
+}
+
+// attachSweepOutpoints fills each sweep entry's known unspent outpoints from
+// the transaction store. Block-scanning backends match spends against them
+// exactly — the only reliable signal for script classes whose prevout script
+// cannot be reconstructed from witness data (see chain.SweepEntry). A read
+// failure is tolerated: the entries sweep without outpoints, which weakens
+// spend detection to script reconstruction until the next interval.
+func (w *Wallet) attachSweepOutpoints(entries []chain.SweepEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	byScript := make(map[string][]wire.OutPoint)
+	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+		txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
+		unspent, err := w.TxStore.UnspentOutputs(txmgrNs)
+		if err != nil {
+			return err
+		}
+		for i := range unspent {
+			key := string(unspent[i].PkScript)
+			byScript[key] = append(byScript[key], unspent[i].OutPoint)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Errorf("Cold-address sweep: unspent-outpoint read: %v", err)
+		return
+	}
+	if len(byScript) == 0 {
+		return
+	}
+	for i := range entries {
+		script, err := txscript.PayToAddrScript(entries[i].Addr)
+		if err != nil {
+			continue
+		}
+		entries[i].OutPoints = byScript[string(script)]
+	}
 }
 
 // persistColdSweptTo records a tier's verified watermark (see coldSweptToKey

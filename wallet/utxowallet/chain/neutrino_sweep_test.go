@@ -232,6 +232,92 @@ func TestNeutrinoSweepSpend(t *testing.T) {
 	}
 }
 
+// TestNeutrinoSweepTaprootSpendByOutpoint pins the outpoint-match path: a
+// taproot keyspend witness (a single schnorr signature) cannot have its
+// prevout script reconstructed — txscript.ComputePkScript returns a WRONG
+// (P2WSH) script with a nil error for any witness that is not [sig, 33-byte
+// pubkey] — so a spend of a cold taproot UTXO reads as a filter false
+// positive under script matching alone, and the advancing sweep floor buries
+// it forever. Known unspent outpoints are matched exactly instead.
+func TestNeutrinoSweepTaprootSpendByOutpoint(t *testing.T) {
+	old := sweepBlockDelay
+	sweepBlockDelay = 0
+	t.Cleanup(func() { sweepBlockDelay = old })
+
+	program := make([]byte, 32)
+	program[0] = 0x77
+	addr, err := btcutil.NewAddressTaproot(program, &chaincfg.RegressionNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := txscript.PayToAddrScript(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A block whose only tx is a keyspend of the cold taproot UTXO. The
+	// filter commits the real P2TR prevout script, as BIP-158 requires, so
+	// the block matches; only the outpoint identifies the spend inside it.
+	spentOp := wire.OutPoint{Hash: chainhash.Hash{0: 0x02}, Index: 3}
+	schnorrSig := make([]byte, 64)
+	schnorrSig[0] = 0x1f
+	spend := wire.NewMsgTx(2)
+	spend.AddTxIn(wire.NewTxIn(&spentOp, nil, wire.TxWitness{schnorrSig}))
+	spend.AddTxOut(wire.NewTxOut(1e8, []byte{txscript.OP_TRUE}))
+	block := &wire.MsgBlock{
+		Header:       wire.BlockHeader{Version: 4, Timestamp: time.Unix(1_700_000_000, 0)},
+		Transactions: []*wire.MsgTx{spend},
+	}
+	hash := block.BlockHash()
+	filter, err := builder.BuildBasicFilter(block, [][]byte{script})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cs := &sweepChainService{
+		mockChainService: &mockChainService{},
+		tip:              100,
+		hashAt:           map[int32]chainhash.Hash{100: hash},
+		filterAt:         map[chainhash.Hash]*gcs.Filter{hash: filter},
+		blockByHsh:       map[chainhash.Hash]*wire.MsgBlock{hash: block},
+	}
+	client := &NeutrinoClient{
+		CS:                  cs,
+		chainParams:         &netparams.ChainParams{Chain: "btc"},
+		enqueueNotification: make(chan interface{}, 4),
+		quit:                make(chan struct{}),
+		scanning:            true,
+		rescan:              &mockRescanner{updateArgs: list.New()},
+	}
+
+	hits, failed, err := client.Sweep([]SweepEntry{{
+		Addr:       addr,
+		FromHeight: 99,
+		OutPoints:  []wire.OutPoint{spentOp},
+	}})
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if failed != nil {
+		t.Fatalf("failed = %v, want nil", failed)
+	}
+	if len(hits) != 1 || hits[0].String() != addr.String() {
+		t.Fatalf("hits = %v, want the taproot spend via outpoint match", hits)
+	}
+	select {
+	case n := <-client.enqueueNotification:
+		fb, ok := n.(FilteredBlockConnected)
+		if !ok {
+			t.Fatalf("notification type %T, want FilteredBlockConnected", n)
+		}
+		if len(fb.RelevantTxs) != 1 || fb.RelevantTxs[0].Hash != spend.TxHash() {
+			t.Fatalf("emitted block = %+v, want the taproot spend", fb)
+		}
+	default:
+		t.Fatal("no FilteredBlockConnected emitted for the taproot spend")
+	}
+}
+
 func TestNeutrinoUnwatchNotScanning(t *testing.T) {
 	client := newMockNeutrinoClient()
 	// scanning is false: nothing is watched, so Unwatch is a no-op and must

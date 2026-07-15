@@ -96,6 +96,16 @@ type SweepEntry struct {
 	Addr btcutil.Address
 	// FromHeight is exclusive: activity strictly above it counts as a hit.
 	FromHeight int32
+	// OutPoints are the address's known unspent outpoints. A block-scanning
+	// backend (neutrino) matches spends against them exactly: the prevout
+	// script reconstructed from an input's signature data covers only the
+	// classes ComputePkScript understands, and a taproot keyspend witness
+	// reconstructs to a wrong script with no error — an outpoint match
+	// cannot be fooled that way, and the phantom-balance harm of a missed
+	// spend is confined to exactly these known UTXOs. History-based
+	// backends (electrum) see spends in the address's own history and may
+	// ignore this.
+	OutPoints []wire.OutPoint
 }
 
 // Notification types.  These are defined here and processed from from reading
