@@ -81,7 +81,7 @@ func (m *mockNearRPC) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *mockNearRPC) client() *rpcClient {
-	c, err := newRPCClient(m.srv.URL, "", util.Disabled)
+	c, err := newRPCClient([]string{m.srv.URL}, "", util.Disabled)
 	if err != nil {
 		m.t.Fatalf("newRPCClient: %v", err)
 	}
@@ -189,8 +189,8 @@ func TestTokenWalletSendHappyPathRegistersStorage(t *testing.T) {
 		}
 		return nil, &rpcError{Message: "unexpected query", Code: -1}
 	})
-	m.handle("broadcast_tx_async", func(_ json.RawMessage) (any, *rpcError) {
-		return "somehash", nil
+	m.handle("send_tx", func(_ json.RawMessage) (any, *rpcError) {
+		return successOutcome("22770000000000000000"), nil
 	})
 
 	_, err := tw.Send(dest, 1_000_000, 0)
@@ -201,7 +201,7 @@ func TestTokenWalletSendHappyPathRegistersStorage(t *testing.T) {
 
 // TestReserveNonceAdvancesPastPending guards against a nonce collision: NEAR
 // only advances an account's on-chain nonce once a transaction is included
-// in a block, but broadcastTxAsync returns before that happens. Two sends
+// in a block, and the final access-key view lags further still. Two sends
 // issued back-to-back (native or token, sharing nonceMtx) must not both
 // compute the same nonce from a still-stale access-key view.
 func TestReserveNonceAdvancesPastPending(t *testing.T) {

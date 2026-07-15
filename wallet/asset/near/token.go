@@ -159,7 +159,7 @@ func (w *TokenWallet) Balance() (*asset.Balance, error) {
 }
 
 func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
-	raw, err := w.parent.rpc.callFunction(w.parent.ctx, w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
+	raw, err := w.parent.rpc.callFunction(w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return 0, fmt.Errorf("ft_balance_of: %w", err)
 	}
@@ -177,7 +177,7 @@ func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
 // storageRegistered reports whether accountID is registered to hold this
 // token, per storage_balance_of.
 func (w *TokenWallet) storageRegistered(accountID string) (bool, error) {
-	raw, err := w.parent.rpc.callFunction(w.parent.ctx, w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
+	raw, err := w.parent.rpc.callFunction(w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return false, fmt.Errorf("storage_balance_of: %w", err)
 	}
@@ -286,7 +286,18 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	txID := base58.Encode(hash[:])
 
-	if _, err := w.parent.rpc.broadcastTxAsync(w.parent.ctx, encoded); err != nil {
+	result, err := w.parent.rpc.sendTx(encoded)
+	switch {
+	case err == nil:
+		if result.Status.Failure != nil {
+			return nil, fmt.Errorf("token transfer failed on-chain: %s", string(result.Status.Failure))
+		}
+	case isTimeoutError(err):
+		// The broadcast was accepted but execution didn't complete within
+		// the RPC wait window. Record the transaction as pending; the tip
+		// poller resolves its final status.
+		w.parent.log.Warnf("Token transfer %s execution outcome not yet known: %v", txID, err)
+	default:
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}
 

@@ -69,7 +69,7 @@ func manualMasterKey(t *testing.T) (ed25519.PrivateKey, ed25519.PublicKey) {
 
 func manualTestRPC(t *testing.T) *rpcClient {
 	t.Helper()
-	c, err := newRPCClient(manualHarnessRPC, "", util.Disabled)
+	c, err := newRPCClient([]string{manualHarnessRPC}, "", util.Disabled)
 	if err != nil {
 		t.Fatalf("newRPCClient: %v", err)
 	}

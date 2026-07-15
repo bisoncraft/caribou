@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,8 +44,8 @@ var (
 		Description: "NEAR Protocol wallet",
 		ConfigOpts: []*asset.ConfigOption{{
 			Key:         "rpcprovider",
-			DisplayName: "RPC Provider",
-			Description: "NEAR RPC endpoint URL",
+			DisplayName: "RPC Providers",
+			Description: "Comma-separated list of NEAR RPC endpoint URLs. Leave empty to use the built-in providers.",
 		}},
 	}
 
@@ -145,10 +146,8 @@ type NearWallet struct {
 	pubKey    ed25519.PublicKey
 	accountID string // hex-encoded public key (implicit account)
 
-	ctx       context.Context    // set in Connect; cancelled on shutdown
-	ctxCancel context.CancelFunc // cancels ctx
-	rpc       *rpcClient
-	txDB      txdb.NetworkTxDB
+	rpc  *rpcClient
+	txDB txdb.NetworkTxDB
 
 	tipMtx  sync.RWMutex
 	tipHash [32]byte
@@ -158,6 +157,11 @@ type NearWallet struct {
 	nonceMtx sync.Mutex
 	nonce    uint64
 
+	// gasMtx guards the cached network gas price used for fee estimates.
+	gasMtx        sync.Mutex
+	gasPrice      *big.Int
+	gasPriceStamp time.Time
+
 	// lastScannedHeight is the last block height that was scanned for
 	// incoming transactions.
 	lastScannedHeight uint64
@@ -165,6 +169,8 @@ type NearWallet struct {
 
 var _ asset.Wallet = (*NearWallet)(nil)
 var _ asset.Authenticator = (*NearWallet)(nil)
+var _ asset.Withdrawer = (*NearWallet)(nil)
+var _ asset.TxFeeEstimator = (*NearWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*NearWallet, error) {
 	keyFile := filepath.Join(cfg.DataDir, keyFileName)
@@ -231,16 +237,8 @@ func (w *NearWallet) Locked() bool {
 	return w.privKey == nil
 }
 
-func (w *NearWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) {
-	w.ctx, w.ctxCancel = context.WithCancel(ctx)
-	defer func() {
-		if err != nil {
-			w.ctxCancel()
-		}
-	}()
-
-	endpoint := w.rpcEndpoint()
-	rpc, err := newRPCClient(endpoint, "", w.log)
+func (w *NearWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	rpc, err := newRPCClient(w.rpcEndpoints(), "", w.log)
 	if err != nil {
 		return nil, fmt.Errorf("error creating RPC client: %w", err)
 	}
@@ -250,7 +248,7 @@ func (w *NearWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error)
 	// Core via WalletConfig.NetworkTxDB; the wallet does not own its lifecycle.
 
 	// Fetch initial block.
-	block, err := w.rpc.getBlock(w.ctx, "final")
+	block, err := w.rpc.getBlock("final")
 	if err != nil {
 		return nil, fmt.Errorf("error fetching initial block: %w", err)
 	}
@@ -266,7 +264,7 @@ func (w *NearWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		w.tipPoller(w.ctx)
+		w.tipPoller(ctx)
 	}()
 
 	return &wg, nil
@@ -278,7 +276,7 @@ func (w *NearWallet) Info() *asset.WalletInfo {
 }
 
 func (w *NearWallet) Balance() (*asset.Balance, error) {
-	info, err := w.rpc.viewAccount(w.ctx, w.accountID)
+	info, err := w.rpc.viewAccount(w.accountID)
 	if err != nil {
 		// Account may not exist yet (no funds received). Return zero balance.
 		if isAccountNotFound(err) {
@@ -314,11 +312,10 @@ func (w *NearWallet) OwnsDepositAddress(address string) (bool, error) {
 // reserveNonce reserves the next access-key nonce for a transaction. Callers
 // must hold nonceMtx. It advances past both the network's current view of
 // the account's nonce and any nonce already reserved by an earlier call, so
-// two sends issued back-to-back don't compute the same nonce before the
-// first transaction has been included in a block (broadcastTxAsync returns
-// before confirmation, so the network's nonce doesn't reflect it yet).
+// two sends issued back-to-back don't compute the same nonce while the
+// first transaction has yet to be reflected in the final access-key view.
 func (w *NearWallet) reserveNonce() (uint64, error) {
-	akInfo, err := w.rpc.viewAccessKey(w.ctx, w.accountID, w.pubKeyBase58())
+	akInfo, err := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
 	if err != nil {
 		return 0, fmt.Errorf("error querying access key: %w", err)
 	}
@@ -337,7 +334,14 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if value == 0 {
 		return nil, fmt.Errorf("cannot send zero value")
 	}
+	return w.sendYocto(address, DropsToYocto(value))
+}
 
+// sendYocto signs and broadcasts a transfer, retrying once with a refreshed
+// nonce if the network rejects the first attempt for a stale nonce. On-chain
+// execution failures are returned as errors; only transfers that executed
+// (or may yet execute, when the broadcast wait times out) are recorded.
+func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin, error) {
 	w.keyMtx.RLock()
 	if w.privKey == nil {
 		w.keyMtx.RUnlock()
@@ -346,16 +350,88 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	privKey := w.privKey
 	w.keyMtx.RUnlock()
 
-	yoctoAmount := DropsToYocto(value)
-
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
 
-	nonce, err := w.reserveNonce()
+	akInfo, err := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
 	if err != nil {
 		return nil, err
 	}
 
+	// The final-view nonce lags transactions executed in the last block or
+	// two, so a local watermark protects rapid sequential sends.
+	nonce := akInfo.Nonce + 1
+	if w.nonce >= nonce {
+		nonce = w.nonce + 1
+	}
+
+	result, hash, err := w.broadcastTransfer(privKey, address, yoctoAmount, nonce)
+	if err != nil && isInvalidNonce(err) {
+		// Lost a nonce race (e.g. the same key in use by another wallet
+		// instance). Refresh from the optimistic view and retry once.
+		akInfo, akErr := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "optimistic")
+		if akErr != nil {
+			return nil, fmt.Errorf("nonce refresh failed after %v: %w", err, akErr)
+		}
+		if akInfo.Nonce >= nonce {
+			nonce = akInfo.Nonce + 1
+		} else {
+			nonce++
+		}
+		result, hash, err = w.broadcastTransfer(privKey, address, yoctoAmount, nonce)
+	}
+
+	fees := w.estimateFee()
+
+	switch {
+	case err == nil:
+		if result.Status.Failure != nil {
+			// The transaction executed but its actions failed. The nonce was
+			// consumed, so advance the watermark before reporting.
+			w.nonce = nonce
+			return nil, fmt.Errorf("transfer failed on-chain: %s", string(result.Status.Failure))
+		}
+		if f := result.feeDrops(); f > 0 {
+			fees = f
+		}
+	case isTimeoutError(err):
+		// The broadcast was accepted but execution didn't complete within
+		// the RPC wait window. Record the transaction as pending; the tip
+		// poller resolves its final status.
+		w.log.Warnf("Transfer %s execution outcome not yet known: %v", base58.Encode(hash[:]), err)
+	default:
+		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
+	}
+
+	w.nonce = nonce
+
+	value := YoctoToDrops(yoctoAmount)
+	txID := base58.Encode(hash[:])
+	recipient := address
+	wtx := &txdb.WalletTransaction{
+		Type:      txdb.Send,
+		ID:        txID,
+		Amount:    value,
+		Fees:      fees,
+		Recipient: &recipient,
+	}
+
+	if w.txDB != nil {
+		if err := w.txDB.StoreTx(wtx); err != nil {
+			w.log.Errorf("Error storing send tx: %v", err)
+		}
+	}
+
+	if w.emit != nil {
+		w.emit.TransactionNote(wtx, true)
+	}
+
+	return &coin{txHash: hash, value: value}, nil
+}
+
+// broadcastTransfer builds, signs, and submits a single transfer transaction
+// with the given nonce, waiting for optimistic execution.
+func (w *NearWallet) broadcastTransfer(privKey ed25519.PrivateKey, address string, yoctoAmount *big.Int, nonce uint64) (*txResult, [32]byte, error) {
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
 	w.tipMtx.RUnlock()
@@ -373,34 +449,9 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	hash := sha256.Sum256(txBytes)
 	sig := ed25519.Sign(privKey, hash[:])
 	signedTx := serializeSignedTransaction(txBytes, sig)
-	encoded := encodeSignedTx(signedTx)
 
-	txID := base58.Encode(hash[:])
-
-	if _, err := w.rpc.broadcastTxAsync(w.ctx, encoded); err != nil {
-		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
-	}
-
-	recipient := address
-	wtx := &txdb.WalletTransaction{
-		Type:      txdb.Send,
-		ID:        txID,
-		Amount:    value,
-		Fees:      DefaultFee,
-		Recipient: &recipient,
-	}
-
-	if w.txDB != nil {
-		if err = w.txDB.StoreTx(wtx); err != nil {
-			w.log.Errorf("Error storing send tx: %v", err)
-		}
-	}
-
-	if w.emit != nil {
-		w.emit.TransactionNote(wtx, true)
-	}
-
-	return &coin{txHash: hash, value: value}, nil
+	result, err := w.rpc.sendTx(encodeSignedTx(signedTx))
+	return result, hash, err
 }
 
 func (w *NearWallet) ValidateAddress(address string) bool {
@@ -427,8 +478,137 @@ func (w *NearWallet) SyncStatus() (*asset.SyncStatus, error) {
 	}, nil
 }
 
+// StandardSendFee returns the estimated fee in drops for a simple transfer,
+// derived from the current network gas price. The feeRate argument is
+// ignored; NEAR fees are protocol-priced.
 func (w *NearWallet) StandardSendFee(_ uint64) uint64 {
-	return DefaultFee
+	return w.estimateFee()
+}
+
+// estimateFee is estimateFeeYocto in drops, rounded up.
+func (w *NearWallet) estimateFee() uint64 {
+	return YoctoToDropsCeil(w.estimateFeeYocto())
+}
+
+// estimateFeeYocto returns the estimated cost of a simple transfer at the
+// current (cached) gas price, falling back to DefaultFee when no gas price
+// has ever been obtained.
+func (w *NearWallet) estimateFeeYocto() *big.Int {
+	if gp := w.cachedGasPrice(); gp != nil {
+		return new(big.Int).Mul(gp, big.NewInt(transferGas))
+	}
+	return DropsToYocto(DefaultFee)
+}
+
+// gasPriceTTL is how long a fetched gas price is considered fresh. NEAR's
+// gas price moves slowly (at most ~1%/block under congestion), so a short
+// TTL tracks it closely without an RPC round trip per estimate.
+const gasPriceTTL = time.Minute
+
+// cachedGasPrice returns the network gas price, refreshed at most once per
+// gasPriceTTL. Returns the last known price if the RPC is unavailable, or
+// nil if no price was ever fetched.
+func (w *NearWallet) cachedGasPrice() *big.Int {
+	w.gasMtx.Lock()
+	defer w.gasMtx.Unlock()
+	if w.gasPrice != nil && time.Since(w.gasPriceStamp) < gasPriceTTL {
+		return w.gasPrice
+	}
+	gp, err := w.rpc.gasPrice()
+	if err != nil {
+		w.log.Warnf("Error fetching gas price: %v", err)
+		return w.gasPrice
+	}
+	w.gasPrice = gp
+	w.gasPriceStamp = time.Now()
+	return gp
+}
+
+// withdrawFeeMargin scales the fee reserved when computing a maximum
+// spendable amount. Gas prices can rise between estimation and the blocks
+// where the transfer's receipts execute; the unspent margin simply remains
+// in the account.
+const withdrawFeeMargin = 2
+
+// spendableYocto returns the balance available to a transfer's deposit after
+// reserving the protocol storage stake for the account's current size and a
+// fee allowance with margin.
+func (w *NearWallet) spendableYocto() (*big.Int, error) {
+	info, err := w.rpc.viewAccount(w.accountID)
+	if err != nil {
+		if isAccountNotFound(err) {
+			return new(big.Int), nil
+		}
+		return nil, fmt.Errorf("error querying account: %w", err)
+	}
+	bal, ok := parseYoctoNEAR(info.Amount)
+	if !ok {
+		return nil, fmt.Errorf("error parsing account balance %q", info.Amount)
+	}
+	reserve := new(big.Int).Mul(new(big.Int).SetUint64(info.StorageUsed), storageAmountPerByte)
+	fee := new(big.Int).Mul(w.estimateFeeYocto(), big.NewInt(withdrawFeeMargin))
+	spendable := bal.Sub(bal, reserve)
+	spendable.Sub(spendable, fee)
+	if spendable.Sign() < 0 {
+		spendable.SetUint64(0)
+	}
+	return spendable, nil
+}
+
+// Withdraw sends funds to address with the fee subtracted from value. The
+// amount is additionally capped so the account retains its storage stake:
+// requesting the full balance withdraws the maximum the protocol allows.
+func (w *NearWallet) Withdraw(address string, value, _ uint64) (asset.Coin, error) {
+	if !w.ValidateAddress(address) {
+		return nil, fmt.Errorf("invalid NEAR address %q", address)
+	}
+	if value == 0 {
+		return nil, fmt.Errorf("cannot withdraw zero value")
+	}
+	spendable, err := w.spendableYocto()
+	if err != nil {
+		return nil, err
+	}
+	amt := DropsToYocto(value)
+	amt.Sub(amt, w.estimateFeeYocto())
+	if amt.Cmp(spendable) > 0 {
+		amt.Set(spendable)
+	}
+	if amt.Sign() <= 0 {
+		return nil, fmt.Errorf("withdraw value %d drops cannot cover the fee and storage reserve", value)
+	}
+	return w.sendYocto(address, amt)
+}
+
+// EstimateSendTxFee returns the estimated fee for a simple transfer,
+// verifying that the balance covers the send. The provided feeRate is
+// ignored; NEAR fees are protocol-priced.
+func (w *NearWallet) EstimateSendTxFee(address string, value, _ uint64, subtract, maxWithdraw bool) (fee uint64, isValidAddress bool, err error) {
+	fee = w.estimateFee()
+	if value == 0 && !maxWithdraw {
+		return 0, false, fmt.Errorf("cannot send zero value")
+	}
+	spendable, err := w.spendableYocto()
+	if err != nil {
+		return 0, false, err
+	}
+	switch {
+	case maxWithdraw:
+		if spendable.Sign() <= 0 {
+			return 0, false, fmt.Errorf("balance cannot cover the fee and storage reserve")
+		}
+	case subtract:
+		amt := DropsToYocto(value)
+		amt.Sub(amt, w.estimateFeeYocto())
+		if amt.Sign() <= 0 || amt.Cmp(spendable) > 0 {
+			return 0, false, fmt.Errorf("insufficient balance to send %d drops fee-inclusive", value)
+		}
+	default:
+		if DropsToYocto(value).Cmp(spendable) > 0 {
+			return 0, false, fmt.Errorf("insufficient balance to send %d drops plus %d fee", value, fee)
+		}
+	}
+	return fee, w.ValidateAddress(address), nil
 }
 
 // FeeRate satisfies asset.Wallet, returning the standard per-transaction fee
@@ -459,7 +639,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 
 	// Try querying the RPC.
-	result, err := w.rpc.txStatus(ctx, txID, w.accountID)
+	result, err := w.rpc.txStatus(txID, w.accountID)
 	if err != nil {
 		return nil, asset.CoinNotFoundError
 	}
@@ -469,11 +649,15 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 		txType = txdb.Receive
 	}
 
+	fees := result.feeDrops()
+	if fees == 0 {
+		fees = w.estimateFee()
+	}
 	wt := &txdb.WalletTransaction{
 		Type:      txType,
 		ID:        txID,
 		Amount:    result.transferAmount(),
-		Fees:      DefaultFee,
+		Fees:      fees,
 		Confirmed: result.Status.isSuccess(),
 	}
 
@@ -483,7 +667,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 
 	if result.Status.isSuccess() {
-		wt.BlockNumber, wt.Timestamp = w.resolveBlock(ctx, result.TransactionOutcome.BlockHash)
+		wt.BlockNumber, wt.Timestamp = w.resolveBlock(result.TransactionOutcome.BlockHash)
 	}
 
 	return wt, nil
@@ -509,7 +693,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			block, err := w.rpc.getBlock(ctx, "final")
+			block, err := w.rpc.getBlock("final")
 			if err != nil {
 				w.log.Errorf("Error fetching block: %v", err)
 				continue
@@ -528,8 +712,8 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 				if w.emit != nil {
 					w.emit.TipChange(block.Header.Height)
 				}
-				w.checkPendingTxs(ctx)
-				w.scanIncomingTxs(ctx, block.Header.Height)
+				w.checkPendingTxs()
+				w.scanIncomingTxs(block.Header.Height)
 			}
 
 		case <-ctx.Done():
@@ -546,7 +730,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 // re-derives a tx's type/amount from the wallet's own address — it only
 // updates BlockNumber/Timestamp/Confirmed/Rejected on the existing record
 // looked up by the tx's own ID.
-func (w *NearWallet) checkPendingTxs(ctx context.Context) {
+func (w *NearWallet) checkPendingTxs() {
 	if w.txDB == nil {
 		return
 	}
@@ -556,16 +740,19 @@ func (w *NearWallet) checkPendingTxs(ctx context.Context) {
 		return
 	}
 	for _, tx := range pending {
-		result, err := w.rpc.txStatus(ctx, tx.ID, w.accountID)
+		result, err := w.rpc.txStatus(tx.ID, w.accountID)
 		if err != nil {
 			w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
 			continue
 		}
-		blockHeight, blockTime := w.resolveBlock(ctx, result.TransactionOutcome.BlockHash)
+		blockHeight, blockTime := w.resolveBlock(result.TransactionOutcome.BlockHash)
 		if result.Status.isSuccess() {
 			tx.BlockNumber = blockHeight
 			tx.Timestamp = blockTime
 			tx.Confirmed = true
+			if fees := result.feeDrops(); fees > 0 {
+				tx.Fees = fees
+			}
 			if err := w.txDB.StoreTx(tx); err != nil {
 				w.log.Errorf("Error updating confirmed tx %s: %v", tx.ID, err)
 				continue
@@ -593,9 +780,9 @@ func (w *NearWallet) checkPendingTxs(ctx context.Context) {
 
 // resolveBlock looks up the height and timestamp (unix seconds) for a block
 // hash. Falls back to the current tip if the lookup fails.
-func (w *NearWallet) resolveBlock(ctx context.Context, blockHash string) (height, tsSec uint64) {
+func (w *NearWallet) resolveBlock(blockHash string) (height, tsSec uint64) {
 	if blockHash != "" {
-		block, err := w.rpc.getBlockByHash(ctx, blockHash)
+		block, err := w.rpc.getBlockByHash(blockHash)
 		if err == nil {
 			return block.Header.Height, block.Header.Timestamp / 1_000_000_000
 		}
@@ -613,7 +800,7 @@ const maxScanBlocks = 10
 // scanIncomingTxs checks whether our account balance increased since the last
 // scan. Only when an increase is detected does it scan the intervening blocks
 // for the actual incoming transfer transactions.
-func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
+func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 	if w.txDB == nil {
 		return
 	}
@@ -625,7 +812,7 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 
 	// Compare account balance at the two block heights. If the balance
 	// didn't increase we can skip the expensive block/chunk scanning.
-	prevAcct, err := w.rpc.viewAccountAt(ctx, w.accountID, w.lastScannedHeight)
+	prevAcct, err := w.rpc.viewAccountAt(w.accountID, w.lastScannedHeight)
 	if err != nil {
 		// Account may not exist yet at the earlier height.
 		if !isAccountNotFound(err) {
@@ -634,7 +821,7 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 		w.lastScannedHeight = newTip
 		return
 	}
-	curAcct, err := w.rpc.viewAccountAt(ctx, w.accountID, newTip)
+	curAcct, err := w.rpc.viewAccountAt(w.accountID, newTip)
 	if err != nil {
 		w.log.Warnf("Error querying account at block %d: %v", newTip, err)
 		return
@@ -653,14 +840,14 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 	}
 
 	for height := startHeight; height <= newTip; height++ {
-		block, err := w.rpc.getBlockByHeight(ctx, height)
+		block, err := w.rpc.getBlockByHeight(height)
 		if err != nil {
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
 			break
 		}
 		blockTime := block.Header.Timestamp / 1_000_000_000
 		for _, chunk := range block.Chunks {
-			w.scanChunk(ctx, chunk.ChunkHash, height, blockTime)
+			w.scanChunk(chunk.ChunkHash, height, blockTime)
 		}
 	}
 
@@ -668,8 +855,8 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 }
 
 // scanChunk fetches a chunk and stores any incoming transfer transactions.
-func (w *NearWallet) scanChunk(ctx context.Context, chunkHash string, blockHeight, blockTime uint64) {
-	chunk, err := w.rpc.getChunk(ctx, chunkHash)
+func (w *NearWallet) scanChunk(chunkHash string, blockHeight, blockTime uint64) {
+	chunk, err := w.rpc.getChunk(chunkHash)
 	if err != nil {
 		w.log.Warnf("Error fetching chunk %s: %v", chunkHash, err)
 		return
@@ -726,12 +913,23 @@ func (w *NearWallet) scanChunk(ctx context.Context, chunkHash string, blockHeigh
 	}
 }
 
-func (w *NearWallet) rpcEndpoint() string {
-	if ep, ok := w.settings["rpcprovider"]; ok && ep != "" {
-		return ep
+// rpcEndpoints returns the RPC endpoints to use: the comma-separated
+// "rpcprovider" setting when present, else the network's default provider
+// ranking.
+func (w *NearWallet) rpcEndpoints() []string {
+	if setting, ok := w.settings["rpcprovider"]; ok {
+		var eps []string
+		for _, u := range strings.Split(setting, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				eps = append(eps, u)
+			}
+		}
+		if len(eps) > 0 {
+			return eps
+		}
 	}
-	if ep, ok := DefaultRPCEndpoints[w.net]; ok {
-		return ep
+	if eps, ok := DefaultRPCEndpoints[w.net]; ok {
+		return eps
 	}
 	return DefaultRPCEndpoints[util.Mainnet]
 }

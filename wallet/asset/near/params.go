@@ -11,12 +11,20 @@ import (
 
 const (
 	BipID = 397
-	// DefaultFee is the default transfer fee in drops. A basic NEAR transfer
-	// costs approximately 0.00045 NEAR = 45000 drops.
+	// DefaultFee is the fallback transfer fee in drops, used when no gas
+	// price is available from the RPC. It is deliberately conservative
+	// (~10x the typical cost of a transfer at the minimum gas price).
 	DefaultFee = 45_000
 	// MaxBlockInterval is the number of seconds since the last header came
 	// in over which we consider the chain to be out of sync.
 	MaxBlockInterval = 30
+
+	// transferGas is the total gas consumed by a simple transfer to an
+	// existing account: action-receipt creation plus the Transfer action,
+	// send and execution sides (~450 Ggas under current protocol config).
+	// Transfers that implicitly create the receiving account cost more; fee
+	// consumers that must not underestimate apply a margin on top.
+	transferGas = 450_000_000_000
 )
 
 var (
@@ -41,10 +49,31 @@ var (
 	// 1 NEAR = 1e24 yoctoNEAR = 1e8 drops, so 1 drop = 1e16 yoctoNEAR.
 	YoctoPerDrop = new(big.Int).SetUint64(1e16)
 
-	DefaultRPCEndpoints = map[util.Network]string{
-		util.Mainnet: "https://rpc.mainnet.near.org",
-		util.Testnet: "https://rpc.testnet.near.org",
-		util.Simnet:  "https://rpc.testnet.near.org",
+	// storageAmountPerByte is the protocol's storage staking price in
+	// yoctoNEAR per byte of account storage (1e19 = 0.00001 NEAR/byte). An
+	// account whose balance would drop below storage_usage bytes at this
+	// price cannot transact, so sends must leave this amount untouched.
+	storageAmountPerByte = new(big.Int).SetUint64(1e19)
+
+	// DefaultRPCEndpoints ranks public RPC providers per network, best
+	// first. rpc.mainnet.near.org is deprecated and aggressively
+	// rate-limited but still answers, so it remains as a last resort.
+	// All listed endpoints were verified to serve the block, query,
+	// gas_price, and tx method families.
+	DefaultRPCEndpoints = map[util.Network][]string{
+		util.Mainnet: {
+			"https://free.rpc.fastnear.com",
+			"https://near.lava.build",
+			"https://near.drpc.org",
+			"https://rpc.mainnet.near.org",
+		},
+		util.Testnet: {
+			"https://test.rpc.fastnear.com",
+			"https://rpc.testnet.near.org",
+		},
+		util.Simnet: {
+			"https://rpc.testnet.near.org",
+		},
 	}
 
 	usdcTokenID, _ = util.BipSymbolID("usdc.near")
@@ -111,4 +140,14 @@ func DropsToYocto(drops uint64) *big.Int {
 // YoctoToDrops converts yoctoNEAR to drops (atomic units), truncating.
 func YoctoToDrops(yocto *big.Int) uint64 {
 	return new(big.Int).Div(yocto, YoctoPerDrop).Uint64()
+}
+
+// YoctoToDropsCeil converts yoctoNEAR to drops, rounding up, so that fee
+// amounts displayed or reserved in drops never understate the yocto cost.
+func YoctoToDropsCeil(yocto *big.Int) uint64 {
+	d, m := new(big.Int).DivMod(yocto, YoctoPerDrop, new(big.Int))
+	if m.Sign() > 0 {
+		d.Add(d, big.NewInt(1))
+	}
+	return d.Uint64()
 }
