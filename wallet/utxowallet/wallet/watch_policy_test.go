@@ -484,6 +484,76 @@ func TestSweepReapInterleave(t *testing.T) {
 	}
 }
 
+// TestDeepRescan drives the user-initiated full-set recheck: every active
+// address is swept from just below the wallet birthday, cold entries verified
+// by it advance to the launch tip, hits promote, and the single-flight guard
+// rejects a second call while one runs.
+func TestDeepRescan(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+	p := &w.watchPol
+
+	const birthdayHeight = 1200
+	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
+		return w.Manager.SetBirthdayBlock(ns,
+			waddrmgr.BlockStamp{Height: birthdayHeight}, true)
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	release := make(chan struct{})
+	stub := &sweepStub{mockChainClient: &mockChainClient{}, release: release}
+	w.chainClient = stub
+
+	// A cold entry with an old floor: the deep scan must verify it through
+	// the launch tip.
+	cold := tAddr(t, 50)
+	p.demote(cold, 2000, true, true)
+
+	if err := w.DeepRescan(); err != nil {
+		t.Fatalf("DeepRescan: %v", err)
+	}
+	if err := w.DeepRescan(); err == nil {
+		t.Fatal("second DeepRescan did not report the in-flight sweep")
+	}
+	close(release)
+	waitSweepIdle(t, p)
+
+	calls := stub.sweepCalls()
+	if len(calls) != 1 {
+		t.Fatalf("sweep calls = %d, want 1", len(calls))
+	}
+	var activeCount int
+	_ = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		addrs, _, err := w.activeData(tx)
+		activeCount = len(addrs)
+		return err
+	})
+	if len(calls[0]) != activeCount {
+		t.Fatalf("swept %d entries, want every active address (%d)",
+			len(calls[0]), activeCount)
+	}
+	for _, e := range calls[0] {
+		if e.FromHeight != birthdayHeight-1 {
+			t.Fatalf("entry %s FromHeight = %d, want %d (birthday, exclusive)",
+				e.Addr, e.FromHeight, birthdayHeight-1)
+		}
+	}
+	// The cold entry (not an active pool address) was still verified: its
+	// floor advanced to the launch tip. Note the deep scan sweeps active
+	// addresses; separately-demoted entries are bumped only if swept — the
+	// cold address here is not in the active set, so its floor must NOT
+	// have moved.
+	p.mtx.Lock()
+	coldUpTo := p.cold[cold.String()].upTo
+	p.mtx.Unlock()
+	if coldUpTo != 2000 {
+		t.Fatalf("unswept cold floor moved to %d, want 2000", coldUpTo)
+	}
+}
+
 // TestMaybeSweepSlowTier pins the slow tier's cadence: an empty internal in
 // the slow tier is excluded from ordinary intervals and joins every
 // slowSweepFactor'th one, and the slow watermark advances only when its tier

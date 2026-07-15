@@ -5,6 +5,7 @@
 package wallet
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
@@ -810,63 +811,153 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		defer func() {
-			p.mtx.Lock()
-			p.sweeping = false
-			p.mtx.Unlock()
-		}()
-		hits, failed, err := watcher.Sweep(entries)
-		if err != nil {
-			log.Errorf("Cold-address sweep failed: %v", err)
-			// Retry from the same floors next interval. The persisted
-			// watermarks are untouched: nothing new was verified.
-			p.mtx.Lock()
-			p.lastSweepTip = tip - p.sweepDue()
-			if slowDue {
-				p.lastSlowSweepTip = tip - slowSweepFactor*p.sweepDue()
-			}
-			p.mtx.Unlock()
-			return
-		}
-		// The rewatch-then-promote pair is atomic under gate against the
-		// reaper's demote-then-Unwatch (see watchPolicy.gate). The backend
-		// re-watched the hits inside Sweep, but a reap interleaving between
-		// that and this completion can have unwatched them again (a
-		// mid-sweep ingestion makes a hit instantly reap-eligible off its
-		// true height); re-asserting under gate makes the terminal state
-		// watched-and-tracked no matter how the two flows interleaved.
-		p.gate.Lock()
-		defer p.gate.Unlock()
-		if len(hits) > 0 {
-			if err := chainClient.NotifyReceived(hits); err != nil {
-				log.Errorf("Cold-address sweep: re-watch of %d hits: %v",
-					len(hits), err)
-			}
-		}
-		p.promote(hits, tip)
-		p.bumpCold(tip, swept, failed)
-		// Persist each swept tier's verified watermark for the next
-		// startup's demotion floors: the tier minimum after this sweep's
-		// bumps (a failed address pins it), or tip when the tier emptied.
-		persistTier := func(slow bool) {
-			if from, ok := p.tierMin(slow); ok {
-				w.persistColdSweptTo(from, slow)
-			} else {
-				w.persistColdSweptTo(tip, slow)
-			}
-		}
-		persistTier(false)
-		if slowDue {
-			persistTier(true)
-		}
-		if len(failed) > 0 {
-			log.Warnf("Cold-address sweep: %d of %d checks failed; their "+
-				"floors stay at their last verified heights for the next sweep",
-				len(failed), len(entries))
-		}
-		log.Debugf("Cold-address sweep: %d checked (slow tier included: %v), "+
-			"%d promoted", len(entries), slowDue, len(hits))
+		w.runSweepJob(chainClient, watcher, entries, swept, tip, slowDue,
+			func() {
+				// Retry from the same floors next interval. The persisted
+				// watermarks are untouched: nothing new was verified.
+				p.mtx.Lock()
+				p.lastSweepTip = tip - p.sweepDue()
+				if slowDue {
+					p.lastSlowSweepTip = tip - slowSweepFactor*p.sweepDue()
+				}
+				p.mtx.Unlock()
+			})
 	}()
+}
+
+// runSweepJob executes one launched sweep to completion: the backend batch,
+// then the gate-serialized bookkeeping. Called on a dedicated goroutine with
+// the single-flight flag already held; clears it on exit. onErr runs after a
+// failed batch so the launcher can restore its cadence state.
+func (w *Wallet) runSweepJob(chainClient chain.Backend, watcher chain.AddressWatcher,
+	entries []chain.SweepEntry, swept []btcutil.Address, tip int32,
+	includeSlow bool, onErr func()) {
+
+	p := &w.watchPol
+	defer func() {
+		p.mtx.Lock()
+		p.sweeping = false
+		p.mtx.Unlock()
+	}()
+	hits, failed, err := watcher.Sweep(entries)
+	if err != nil {
+		log.Errorf("Cold-address sweep failed: %v", err)
+		onErr()
+		return
+	}
+	// The rewatch-then-promote pair is atomic under gate against the
+	// reaper's demote-then-Unwatch (see watchPolicy.gate). The backend
+	// re-watched the hits inside Sweep, but a reap interleaving between
+	// that and this completion can have unwatched them again (a
+	// mid-sweep ingestion makes a hit instantly reap-eligible off its
+	// true height); re-asserting under gate makes the terminal state
+	// watched-and-tracked no matter how the two flows interleaved.
+	p.gate.Lock()
+	defer p.gate.Unlock()
+	if len(hits) > 0 {
+		if err := chainClient.NotifyReceived(hits); err != nil {
+			log.Errorf("Cold-address sweep: re-watch of %d hits: %v",
+				len(hits), err)
+		}
+	}
+	p.promote(hits, tip)
+	p.bumpCold(tip, swept, failed)
+	// Persist each swept tier's verified watermark for the next
+	// startup's demotion floors: the tier minimum after this sweep's
+	// bumps (a failed address pins it), or tip when the tier emptied.
+	persistTier := func(slow bool) {
+		if from, ok := p.tierMin(slow); ok {
+			w.persistColdSweptTo(from, slow)
+		} else {
+			w.persistColdSweptTo(tip, slow)
+		}
+	}
+	persistTier(false)
+	if includeSlow {
+		persistTier(true)
+	}
+	if len(failed) > 0 {
+		log.Warnf("Cold-address sweep: %d of %d checks failed; their "+
+			"floors stay at their last verified heights for the next sweep",
+			len(failed), len(entries))
+	}
+	log.Debugf("Cold-address sweep: %d checked (slow tier included: %v), "+
+		"%d promoted", len(entries), includeSlow, len(hits))
+}
+
+// DeepRescan re-examines every derived address from the wallet's birthday
+// through the synced tip via the sweep machinery: per-address history checks
+// on electrum, a throttled cfilter walk on neutrino. It is the user-initiated
+// safety net for the events no automatic cadence can observe — reorgs deeper
+// than the sweep margin, and omissions by a previously elected server — and
+// turns those remediations from a seed restore into an online recheck. Hits
+// ingest through the sweep's ordered path and promote into the live tracker;
+// verified floors and watermarks advance for both tiers.
+//
+// The scan shares the periodic sweep's single-flight guard; a call while any
+// sweep is running returns an error rather than queueing. On neutrino the
+// walk covers every block since the birthday — a restore-grade scan whose
+// pacing (and any user confirmation) is the caller's responsibility.
+func (w *Wallet) DeepRescan() error {
+	chainClient, err := w.requireChainClient()
+	if err != nil {
+		return err
+	}
+	watcher, ok := chainClient.(chain.AddressWatcher)
+	if !ok {
+		return errors.New("chain backend cannot sweep addresses")
+	}
+
+	var addrs []btcutil.Address
+	floor := int32(0)
+	err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
+		addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
+		if birthday, _, err := w.Manager.BirthdayBlock(addrmgrNs); err == nil {
+			floor = birthday.Height
+		}
+		addrs, _, err = w.activeData(dbtx)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	// The backend cannot serve below its earliest block (electrum's
+	// checkpoint-anchored header store).
+	if e, ok := chainClient.(interface{ EarliestBlockHeight() int32 }); ok {
+		if s := e.EarliestBlockHeight(); s > floor {
+			floor = s
+		}
+	}
+
+	p := &w.watchPol
+	tip := w.Manager.SyncedTo().Height
+	p.mtx.Lock()
+	if p.sweeping {
+		p.mtx.Unlock()
+		return errors.New("an address sweep is already running")
+	}
+	p.sweeping = true
+	// The deep scan covers a superset of both tiers, so it satisfies both
+	// cadences for this interval.
+	p.lastSweepTip = tip
+	p.lastSlowSweepTip = tip
+	p.mtx.Unlock()
+
+	// FromHeight is exclusive; activity in the birthday block itself must
+	// count.
+	from := floor - 1
+	entries := make([]chain.SweepEntry, len(addrs))
+	for i, addr := range addrs {
+		entries[i] = chain.SweepEntry{Addr: addr, FromHeight: from}
+	}
+	w.attachSweepOutpoints(entries)
+	log.Infof("Deep rescan: checking %d addresses above height %d", len(addrs), from)
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		w.runSweepJob(chainClient, watcher, entries, addrs, tip, true, func() {})
+	}()
+	return nil
 }
 
 // attachSweepOutpoints fills each sweep entry's known unspent outpoints from
