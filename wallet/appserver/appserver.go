@@ -137,6 +137,12 @@ type clientCore interface {
 	TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*asset.Ticket, error)
 	TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
+	IntentsAssets(ctx context.Context) ([]*core.IntentsAsset, error)
+	IntentsPreview(ctx context.Context, originAssetID, destAssetID uint32, atoms uint64, slippageBps int) (*core.IntentsPreview, error)
+	IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int) (*core.IntentsSwap, error)
+	IntentsSwaps() ([]*core.IntentsSwap, error)
+	IntentsRefresh(ctx context.Context, depositAddress string) (*core.IntentsSwap, error)
+	IntentsReconstruct(ctx context.Context) (int, error)
 	FundsMixingStats(assetID uint32) (*asset.FundsMixingStats, error)
 	ConfigureFundsMixer(appPW []byte, assetID uint32, enabled bool) error
 	SetLanguage(string) error
@@ -542,6 +548,12 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/removewalletpeer", s.apiRemoveWalletPeer)
 			apiAuth.Post("/txhistory", s.apiTxHistory)
 			apiAuth.Post("/txhistoryticker", s.apiTxHistoryByTicker)
+			apiAuth.Get("/intents/assets", s.apiIntentsAssets)
+			apiAuth.Post("/intents/preview", s.apiIntentsPreview)
+			apiAuth.Post("/intents/execute", s.apiIntentsExecute)
+			apiAuth.Get("/intents/swaps", s.apiIntentsSwaps)
+			apiAuth.Post("/intents/refresh", s.apiIntentsRefresh)
+			apiAuth.Post("/intents/reconstruct", s.apiIntentsReconstruct)
 			apiAuth.Post("/takeaction", s.apiTakeAction)
 			apiAuth.Get("/exportapplog", s.apiExportAppLogs)
 

@@ -1125,3 +1125,201 @@ body.sidebar-collapsed .sidebar-label {
   background-color: var(--body-bg);
   box-sizing: border-box;
 }
+// Swap dialog.
+
+// The swap modal is wider than the standard form-width-300 to accommodate
+// both the swap form and the history list.
+form.modal.swap-modal {
+  width: 440px;
+}
+
+// Asset picker row: a select element with a coin logo beside it.
+.swap-asset-pick {
+  select {
+    flex: 1 1 auto;
+    padding: 0.375rem 0.75rem;
+    background: transparent;
+    border: none;
+    color: var(--text-color);
+    font-size: 16px;
+    cursor: pointer;
+
+    &:focus-visible { outline: none; }
+  }
+}
+
+// Preview panel box.
+.swap-preview {
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.5rem;
+}
+
+// Fee section within the preview panel.
+.swap-fee-section {
+  border-top: 1px solid var(--border-color);
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+}
+
+// Persistent one-line custody notice.
+.swap-custody-notice {
+  border: 1px solid color-mix(in srgb, var(--accent-syncing) 35%, transparent);
+  border-radius: var(--border-radius);
+  padding: 6px 10px;
+  background-color: color-mix(in srgb, var(--accent-syncing) 8%, transparent);
+}
+
+// Small "ⓘ" button that opens the trust/custody popover.
+.swap-info-btn {
+  padding: 0 2px;
+  color: var(--accent-blue-text);
+  cursor: pointer;
+  flex-shrink: 0;
+
+  &:hover { color: var(--accent-blue-hover); }
+}
+
+.swap-info-close {
+  background: transparent;
+  border: none;
+  color: var(--text-grey);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+
+  &:hover { color: var(--text-color); }
+}
+
+// Popover card below the custody notice.
+.swap-trust-popover {
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--form-input-bg);
+  padding: 10px 12px;
+}
+
+// First-use custody disclosure modal overlay (sits inside the standard
+// .modals scrim so we just need the inner card layout).
+.swap-custody-modal-scrim {
+  position: fixed;
+  inset: 0;
+  background-color: var(--scrim-bg);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.swap-custody-modal {
+  background-color: var(--body-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  max-width: 360px;
+  width: 100%;
+}
+
+.swap-custody-modal-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.swap-custody-modal-body {
+  padding: 1rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.swap-custody-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--text-grey);
+
+  li {
+    margin-bottom: 0.6rem;
+    line-height: 1.5;
+
+    &:last-child { margin-bottom: 0; }
+  }
+}
+
+// Confirmation step pair display.
+.swap-confirm-pair {
+  gap: 0;
+}
+
+// Summary row box in confirm step.
+.swap-summary {
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.25rem;
+}
+
+// Swap history section below the form.
+.swap-history {
+  border-top: 1px solid var(--border-color);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.swap-history-header {
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid var(--border-color);
+}
+
+// Individual swap history row.
+.swap-history-item {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.12s;
+
+  &:last-child { border-bottom: none; }
+
+  &:hover { background-color: color-mix(in srgb, var(--accent-blue) 6%, transparent); }
+
+  &.swap-history-attention {
+    border-left: 3px solid var(--accent-syncing);
+  }
+}
+
+// Expanded detail area inside a history item.
+.swap-history-details {
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.5rem;
+}
+
+// Status color classes.
+.swap-status-success  { color: var(--accent-syncing); }
+.swap-status-refunded { color: var(--accent-blue-text); }
+.swap-status-failed   { color: var(--text-error); }
+.swap-status-expired  { color: var(--text-grey); }
+.swap-status-active   { color: var(--accent-syncing); }
+
+// "recovered" badge on reconstructed swaps.
+.swap-recovered-badge {
+  border: 1px solid color-mix(in srgb, var(--accent-blue-border) 50%, transparent);
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: var(--accent-blue-text);
+  letter-spacing: 0.04em;
+}
+
+// Deposit/tx address display — wraps long hex strings.
+.swap-addr-wrap {
+  word-break: break-all;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-grey);
+}
+
+// Explorer / status links.
+.swap-link {
+  color: var(--accent-blue-text);
+  text-decoration: none;
+
+  &:hover { color: var(--accent-blue-hover); text-decoration: underline; }
+}
+
+.swap-escalation-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

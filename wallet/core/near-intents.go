@@ -30,6 +30,7 @@ import (
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encrypt"
 	"github.com/bisoncraft/caribou/util/lexi"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/db"
 	"github.com/bisoncraft/caribou/wallet/intents"
 	"github.com/bisoncraft/caribou/wallet/txdb"
@@ -216,19 +217,24 @@ func (c *Core) startIntentsEngine(ctx context.Context) {
 		// The DB gets its own context so it outlives the poller: writes
 		// triggered by in-flight API methods during wind-down land before
 		// the storage engine closes, mirroring the master tx DB pattern.
+		// Cancellation must precede the Wait — lexi's Connect goroutine
+		// exits only on context cancellation — so both run in one deferred
+		// closure rather than as separate LIFO defers.
 		dbCtx, stopDB := context.WithCancel(context.Background())
-		defer stopDB()
 		dbWG, err := ldb.Connect(dbCtx)
 		if err != nil {
+			stopDB()
 			logger.Errorf("Error connecting intents database: %v", err)
 			return
 		}
-		defer dbWG.Wait()
+		defer func() {
+			stopDB()
+			dbWG.Wait()
+		}()
 
 		swaps, err := ldb.Table("swaps")
 		if err != nil {
 			logger.Errorf("Error creating swaps table: %v", err)
-			stopDB()
 			return
 		}
 
@@ -582,13 +588,19 @@ func (c *Core) intentsQuoteRequest(dry bool, origin, dest *intents.Token, origin
 }
 
 // IntentsAsset describes one asset available for cross-chain swaps.
+// AtomDecimals is the decimal exponent of the wallet's atomic unit, which
+// is what the atoms fields of IntentsPreview and IntentsSwap are expressed
+// in. It can differ from Decimals (the Intents-side scale, e.g. NEAR: 8
+// wallet drops vs 24 Intents decimals); consumers must use AtomDecimals to
+// convert those atoms to display units, not Decimals.
 type IntentsAsset struct {
-	AssetID     uint32  `json:"assetID"`
-	Symbol      string  `json:"symbol"`
-	IntentsID   string  `json:"intentsID"`
-	Decimals    int     `json:"decimals"`
-	PriceUSD    float64 `json:"priceUSD"`
-	WalletReady bool    `json:"walletReady"`
+	AssetID      uint32  `json:"assetID"`
+	Symbol       string  `json:"symbol"`
+	IntentsID    string  `json:"intentsID"`
+	Decimals     int     `json:"decimals"`
+	AtomDecimals int     `json:"atomDecimals"`
+	PriceUSD     float64 `json:"priceUSD"`
+	WalletReady  bool    `json:"walletReady"`
 }
 
 // IntentsAssets returns the swappable assets: the intersection of the
@@ -607,13 +619,20 @@ func (c *Core) IntentsAssets(ctx context.Context) ([]*IntentsAsset, error) {
 	for _, chainID := range cat.Chains() {
 		tok := cat.Native(chainID)
 		wallet, found := c.wallet(chainID)
+		atomDecimals := tok.Decimals
+		if unitInfo, err := asset.UnitInfo(chainID); err == nil {
+			if exp, ok := pow10Exp(unitInfo.Conventional.ConversionFactor); ok {
+				atomDecimals = exp
+			}
+		}
 		assets = append(assets, &IntentsAsset{
-			AssetID:     chainID,
-			Symbol:      unbip(chainID),
-			IntentsID:   tok.AssetID,
-			Decimals:    tok.Decimals,
-			PriceUSD:    tok.Price,
-			WalletReady: found && wallet.connected(),
+			AssetID:      chainID,
+			Symbol:       unbip(chainID),
+			IntentsID:    tok.AssetID,
+			Decimals:     tok.Decimals,
+			AtomDecimals: atomDecimals,
+			PriceUSD:     tok.Price,
+			WalletReady:  found && wallet.connected(),
 		})
 	}
 	sort.Slice(assets, func(i, j int) bool { return assets[i].AssetID < assets[j].AssetID })
