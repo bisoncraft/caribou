@@ -45,6 +45,15 @@ func TerminalStatus(status string) bool {
 	return false
 }
 
+// DefaultAppFeeBps is the application fee to configure on quote requests,
+// in basis points. Under the service's observed keyless fee mechanics
+// (see AppFee), the configured recipient receives half the configured
+// fee, so this value is set to twice the intended net revenue: 20 bps
+// configured nets 10 bps. The user's marginal cost equals the full
+// configured value. Verify net receipt against this assumption whenever
+// the service's fee handling changes.
+const DefaultAppFeeBps = 20
+
 // AppFee is an application fee collected in-quote. Fee is in basis points
 // of the swap amount. The service rewrites the fee array on keyless
 // quotes: a configured fee of N becomes N/2 to the configured recipient

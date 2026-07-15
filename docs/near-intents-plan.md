@@ -36,17 +36,20 @@ primarily a core-level feature rather than a NEAR-wallet feature.
   Ltd), creates a revocable dependency, and an API key cannot be kept secret
   inside an open-source client with no server component. Keyless first;
   revisit with volume data. Switching later is additive.
-- **Application fee: 10 bps (0.1%) via `appFees`.** The quote request's
-  `appFees: [{recipient, fee}]` parameter is honored on unauthenticated
-  quotes. Measured mechanics (paired live dry quotes, 2026-07-15): the
-  service rewrites the fee array — a configured fee of N bps becomes N/2 to
-  the configured recipient plus N/2 on top of the surcharge to the protocol
-  account, so the user's total app-fee cost is N plus the surcharge, and
-  the marginal cost of the application fee to the user is exactly N. The
-  rewritten array is echoed on every quote, giving the UI an exact,
-  displayable fee breakdown. Fees accrue in the traded token as NEP-245
-  balances credited to the recipient account inside `intents.near`
-  (denomination to confirm in Phase 5).
+- **Application fee: 20 bps configured, netting 10 bps (0.1%).** The
+  quote request's `appFees: [{recipient, fee}]` parameter is honored on
+  unauthenticated quotes. Measured mechanics (paired live dry quotes,
+  2026-07-15): the service rewrites the fee array — a configured fee of N
+  bps becomes N/2 to the configured recipient plus N/2 on top of the
+  surcharge to the protocol account, so the user's total app-fee cost is N
+  plus the surcharge, and the marginal cost of the application fee to the
+  user is exactly N. The revenue target is 10 bps net, hence
+  `DefaultAppFeeBps = 20` (user marginal cost 20 bps; ~30 bps all-in with
+  the current surcharge). The rewritten array is echoed on every quote,
+  giving the UI an exact, displayable fee breakdown. Fees accrue in the
+  traded token as NEP-245 balances credited to the recipient account
+  inside `intents.near` (denomination to confirm in Phase 5, along with
+  the 10 bps net-receipt assumption).
 - **Treasury: 0x-style secp256k1 account.** The verifier derives account
   identities from public keys with no registration; an ECDSA key yields an
   0x-style identity whose withdrawals are signed with ERC-191
