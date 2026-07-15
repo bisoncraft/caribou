@@ -159,6 +159,10 @@ type Core struct {
 
 	requestedActionMtx sync.RWMutex
 	requestedActions   map[string]*asset.ActionRequiredNote
+
+	// intentsEng holds the *intentsEngine for cross-chain swaps. All
+	// engine logic lives in near-intents.go.
+	intentsEng atomic.Value
 }
 
 // New is the constructor for a new Core.
@@ -434,6 +438,9 @@ func (c *Core) Run(ctx context.Context) {
 			}
 		}
 	}()
+
+	// Cross-chain swap engine (near-intents.go).
+	c.startIntentsEngine(ctx)
 
 	c.wg.Wait() // block here until all goroutines except DB complete
 

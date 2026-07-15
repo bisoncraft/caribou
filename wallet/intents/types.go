@@ -152,6 +152,21 @@ func (r *QuoteResponse) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Envelope reconstructs the signed response envelope for persistence. A
+// quote's signature only verifies against the raw bytes of the original
+// /quote response (the status endpoint re-serializes and breaks
+// verification), so callers that need an auditable record persist this
+// envelope at quote time.
+func (r *QuoteResponse) Envelope() (json.RawMessage, error) {
+	return json.Marshal(map[string]any{
+		"timestamp":     r.Timestamp,
+		"signature":     r.Signature,
+		"correlationId": r.CorrelationID,
+		"quote":         r.rawQuote,
+		"quoteRequest":  r.rawRequest,
+	})
+}
+
 // TxHashRef is a transaction reference in swap details. The service has
 // used both bare-string and object encodings; both are accepted.
 type TxHashRef struct {

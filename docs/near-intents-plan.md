@@ -164,27 +164,36 @@ Deferred until PR #113 (NEP-141 token layer) merges:
 - [x] Dry quotes for price preview (dry quotes skip the service's
   compliance screening; committed quotes run it).
 
-## Phase 3 — swap engine in `wallet/core/near-intents.go`
+## Phase 3 — swap engine in `wallet/core/near-intents.go` (complete)
 
-- [ ] Persistent swap records keyed by deposit address (lexi table):
-  quote terms, signature, state, origin/destination assets, txids.
-  States: `QUOTED → DEPOSIT_SENT → PROCESSING → SUCCESS | REFUNDED |
-  FAILED`, plus `INCOMPLETE_DEPOSIT` handling with its deadline countdown.
-- [ ] Execution: origin wallet `Send()` (or `Withdraw` for max) to the
-  deposit address; `refundTo` = origin wallet's deposit address;
-  `recipient` = destination wallet's deposit address (both always
-  seed-derived); `/deposit/submit` hint with the txid.
-- [ ] Status polling with restart resumption; refund transactions detected
-  on the origin wallet and attached to the swap record.
-- [ ] Per-chain deadline defaults covering origin confirmation times;
-  min/max clamps from the catalog; slippage configuration.
-- [ ] Swap-state reconstruction after seed restore: probe `GET /status`
-  with the counterparty addresses of otherwise-unexplained outgoing
-  transactions and rebuild records for matches. (No key-level recovery is
-  possible or needed: deposit addresses are service-controlled, and all
-  value paths terminate at seed-derived addresses.)
-- [ ] Capability gating at core level: a pair is offered when both wallets
-  exist and the catalog lists both assets.
+- [x] Persistent swap records keyed by deposit address, in a dedicated
+  database (`intents.db`): quote terms, the signed quote envelope
+  (verified at quote time; the status endpoint's copy is not
+  re-verifiable), state, assets, and transaction references. States:
+  `QUOTED → DEPOSIT_SENT →` service statuses `→ SUCCESS | REFUNDED |
+  FAILED`, plus local `EXPIRED` for quotes never funded.
+- [x] Execution (`IntentsExecute`): committed quote → persist → origin
+  wallet `Send()` to the deposit address; `refundTo`/`recipient` are
+  always the wallets' own seed-derived addresses; `/deposit/submit` hint
+  with the txid; memo-mode deposits refused. A failed send leaves the
+  record `QUOTED` to expire unfunded.
+- [x] Status poller with restart resumption (persisted records are polled
+  from engine start); service-reported origin/destination/NEAR
+  transaction hashes attached, including refund transactions on
+  `REFUNDED`; balance refresh on terminal states; notifications on every
+  state change.
+- [x] Per-chain deadline defaults (2 h BTC, 1 h other UTXO chains, 45 min
+  account chains); slippage parameter with a 1% default; quote-time
+  min-amount surfacing in previews (`IntentsPreview`, dry quotes).
+- [x] Swap-state reconstruction (`IntentsReconstruct`): probes `/status`
+  with recipients of recent outgoing transactions across wallets,
+  rate-limited, rebuilding records flagged `Reconstructed`. (No key-level
+  recovery is possible or needed: deposit addresses are
+  service-controlled, and all value paths terminate at seed-derived
+  addresses.)
+- [x] Capability gating (`IntentsAssets`): catalog ∩ chain mapping,
+  flagged by wallet availability. Native assets only until the token
+  layer (PR #113) lands.
 
 ## Phase 4 — API and UI
 
