@@ -34,6 +34,11 @@ the seam and the port is contained.
 On-disk today: `<appdata>/<net>/bossw.db`, a single bbolt file, from
 `app.ResolveConfig` via the `--db` flag.
 
+Of the three frontend bundles, only two are live: `embed_desktop.go` serves
+`newui` and `embed_mobile.go` serves `mobile`. `wallet/appserver/site` is served
+by no build and is not one of the `shared`/`newui`/`mobile` npm workspaces, so
+it is left untouched throughout. `shared` is live — both live bundles import it.
+
 `wallet/db/types.go` encodes every record as a versioned `encode.DecodeBlob`
 blob with per-version decoders. The blob envelope is engine-agnostic and carries
 over unchanged; only the key/bucket layout is bbolt-specific. The `_v0` decoders
@@ -149,9 +154,9 @@ it needs no changes. Its `datumVersion` is a wire-format guard, not migration.
 | `creds()`'s empty-`EncInnerKey` nil return | `wallet/core/core.go` | same unreachable condition |
 | `TopicUpgradedToSeed` + 6 locale entries | `wallet/core/notification.go`, `locale_ntfn.go` | sole emitter is `initializePrimaryCredentials` |
 | `LegacyWalletIndex` | `wallet/asset/interface.go`, `driver.go` | no driver sets it; always 0. Consumed only for empty `walletType`, which only `decodeWallet_v0` produces |
-| `emptyidx` / empty-`walletType` branch | `appserver/site/src/js/registry.ts`, `shared/src/registry.ts`, `site/src/js/app.ts` | frontend twin of `LegacyWalletIndex` |
+| `emptyidx` | `appserver/shared/src/registry.ts` | frontend twin of `LegacyWalletIndex`; `shared` is a live npm workspace that newui imports |
 | `legacySeedLength`, `ExportSeed`'s hex branch, `decodeSeedString`'s hex fallback | `wallet/core/core.go` | 64-byte hex seeds are a dcrdex-era restore format; `wallet/mnemonic` has no legacy path |
-| `legacySeed` element + 128-char sniff | `appserver/site/src/html/settings.tmpl`, `site/src/js/settings.ts` | frontend twin of the hex seed branch |
+| — | `appserver/newui` | no frontend change needed: newui has no 128-char seed sniff and never reads `emptyidx` |
 
 Two adjacent defects to fix rather than delete, both inherited:
 
@@ -275,7 +280,7 @@ before a second backend exists to check it against.
 Every phase ends with `gofmt` applied and `golangci-lint` clean. Phases touching
 `.ts` also run `npx eslint` on the touched files.
 
-### Phase 1 — Strip lexi's upgrade machinery
+### Phase 1 — Strip lexi's upgrade machinery — done (743f00169)
 
 Self-contained in `util/lexi`, `util/politeia`, and go.mod.
 
@@ -294,10 +299,11 @@ Self-contained in `util/lexi`, `util/politeia`, and go.mod.
   the two removed migration functions — it cannot compile without them).
 - Drop `v1badger` from `util/lexi/log.go` (import + the redundant `Logger`
   assertion) and `util/lexi/lexi.go`.
-- `go mod tidy`: drops `github.com/dgraph-io/badger v1.6.2` (direct),
-  `AndreasBriese/bbloom`, `dgraph-io/ristretto v0.0.2`, and
-  `cespare/xxhash v1.1.0`, plus their go.sum entries. `ristretto/v2` stays — it
-  is badger v4's cache.
+- `go mod tidy`: drops `github.com/dgraph-io/badger v1.6.2` (direct) and four
+  modules reachable only through it — `AndreasBriese/bbloom`,
+  `dgraph-io/ristretto v0.0.2`, `cespare/xxhash v1.1.0` and
+  `golang/protobuf` — plus 13 go.sum lines. `ristretto/v2` stays; it is badger
+  v4's cache.
 - Delete the ~16 upgrade tests across `util/lexi/db_test.go` and `more_test.go`
   (`TestNeedsV1toV4Update`, `TestBadgerV1Update`, `TestBadgerV1UpdateWithLargeData`,
   `TestNewWithMigration`, `TestDBVersion`, `TestUpgradeTransaction`,
@@ -315,7 +321,7 @@ Verify: `go build ./... && go build -tags mobile ./...`;
 `go test ./util/lexi/... ./util/glossi/... ./wallet/txdb/...` under both tags;
 `grep -rn "dgraph-io/badger\"" .` clean.
 
-### Phase 2 — Extract the engine abstraction to `util/kvstore`
+### Phase 2 — Extract the engine abstraction to `util/kvstore` — done (f726fd86b)
 
 Pure code motion. No behavior change.
 
@@ -344,13 +350,17 @@ Pure code motion. No behavior change.
   )
   ```
 
+Two doc comments cite the moved files as precedent and are repointed at
+`util/kvstore`: `txdb.go`'s package comment, and the build-tag note in
+`wallet/appserver/embed_desktop.go` / `embed_mobile.go`.
+
 Success criterion: `wallet/txdb`'s existing tests pass **unmodified**, and the
 five asset packages are not touched.
 
 Verify: `go build ./... && go build -tags mobile ./...`;
 `go test ./wallet/txdb/... ./util/kvstore/...` under both tags.
 
-### Phase 3 — Remove the dead and legacy surface, still on bolt
+### Phase 3 — Remove the dead and legacy surface, still on bolt — done (8d4305890)
 
 Deleting first keeps Phase 5's diff to the migration, and stops the `_v0`
 decoders and `creds.Version` from being carried into the new schema. Follow the
@@ -367,8 +377,7 @@ dependency order below; each step orphans the next.
    de-DE, ar).
 5. `decodeWallet_v0` and its `case 0`, then the orphaned `LegacyWalletIndex`
    (`wallet/asset/interface.go`, `driver.go`) and its frontend twin `emptyidx`
-   (`registry.ts` in both `site/src/js` and `shared/src`, and the empty-
-   `walletType` branch in `app.ts`). Rename `decodeWallet_v1` to
+   (`appserver/shared/src/registry.ts`). Rename `decodeWallet_v1` to
    `decodeWallet_v0`, collapse the dispatch to `case 0`, and change
    `(*Wallet).Encode` to `versionedBytes(0)`.
 6. `decodeNotification_v0` and its `case 0`, then the `NotificationsN`
@@ -377,9 +386,9 @@ dependency order below; each step orphans the next.
    Rename `decodeNotification_v1` to `decodeNotification_v0`, collapse the
    dispatch to `case 0`, and change `(*Notification).Encode` to
    `versionedBytes(0)`.
-7. `legacySeedLength`, `ExportSeed`'s hex branch, `decodeSeedString`'s hex
-   fallback (which collapses to `mnemonic.DecodeMnemonic`), and the frontend
-   `legacySeed` element plus its 128-char sniff (`settings.tmpl`, `settings.ts`).
+7. `legacySeedLength`, `ExportSeed`'s hex branch, and `decodeSeedString`'s hex
+   fallback, which collapses to `mnemonic.DecodeMnemonic`. No frontend change:
+   newui has no legacy-seed sniff.
 8. `Backup`, `BackupTo`, `backup`, `compact`, `ovrFlag`, `fileSize`, `backupDir`,
    `Opts`/`BackupOnShutdown` and `Recrypt` from `wallet/db`; `BackupDB`, the
    `bolt.Opts` literal, `Config.NoAutoDBBackup` and `recrypt` from
@@ -421,19 +430,30 @@ dependency order below; each step orphans the next.
 13. Tests: delete `TestBackup`, `TestBackupTo`, `TestRecrypt` and
     `testCredentialsUpdate`; drop `TDB.BackupTo` from `core_test.go`.
 
-Note that `decodeSeedString` losing its fallback changes an error message: a bad
-mnemonic now surfaces the real checksum/word error instead of the catch-all
-`"unabled to decode provided seed"`. That is an improvement, but it is a
-user-visible string change.
+Two user-visible behavior changes fall out of this phase, both belonging in
+release notes alongside `--no-db-backup`:
+
+- Removing `LegacyWalletIndex` means a wallet-creation request that omits
+  `"type"` now errors instead of resolving to `AvailableWallets[0]`. Nothing
+  in-tree relied on the fallback: no driver ever set the index, newui always
+  sends a concrete type, and `createDBWallet` normalizes the stored type to
+  `walletDef.Type` — so `dbWallet.Type`, and every `xcWallet.walletType` read
+  from it, is always populated. Only an external API client omitting the field
+  is affected.
+- `decodeSeedString` losing its fallback means a bad mnemonic surfaces the real
+  checksum/word error rather than the catch-all `"unabled to decode provided
+  seed"`.
 
 `--no-db-backup` is user-facing: an INI file setting it will fail to parse after
 this. Acceptable pre-release, but it belongs in release notes.
 
-Verify: both build tags; `go test ./wallet/...`; `npm run build` and
-`npx eslint` on the touched `.ts`; `BackupDB`, `Recrypt`, `no-db-backup`,
-`legacySeed`, `emptyidx`, `LegacyWalletIndex` grep clean.
+Verify: both build tags; `go test ./wallet/...`; `npx eslint` on the touched
+`.ts` plus `npm run build` in the `newui` and `mobile` workspaces, since both
+consume `shared`; `BackupDB`, `Recrypt`, `no-db-backup`, `legacySeedLength` and
+`LegacyWalletIndex` grep clean. `emptyidx` deliberately survives in
+`wallet/appserver/site`, which keeps its own copy of the declaration.
 
-### Phase 4 — Backend-agnostic conformance suite, still on bolt
+### Phase 4 — Backend-agnostic conformance suite, still on bolt — pending
 
 Build the equivalence harness while bolt is still the only backend, so the suite
 is validated against known-good behavior before it is used to judge a new one.
@@ -455,7 +475,7 @@ engine rather than the contract, and stays behind.
 Verify: `go test ./wallet/db/...` green — same assertions, now routed through
 the interface.
 
-### Phase 5 — The port
+### Phase 5 — The port — pending
 
 - Add `wallet/db/db.go` implementing `db.DB` over `kvstore.Store` with the
   schema above. Exported `db.New(path, log)` builds its own store; unexported
