@@ -342,13 +342,8 @@ func (w *Wallet) tierInternals(addrs []btcutil.Address, tip int32) {
 func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 	addrs []btcutil.Address, unspent []wtxmgr.Credit) ([]btcutil.Address, []wtxmgr.Credit, error) {
 
-	if !indexBackfilled(dbtx) {
-		if err := w.backfillTierIndex(dbtx); err != nil {
-			return nil, nil, err
-		}
-		if err := markBackfilled(dbtx); err != nil {
-			return nil, nil, err
-		}
+	if err := w.ensureTierIndex(dbtx); err != nil {
+		return nil, nil, err
 	}
 	if !indexHasEntries(dbtx) {
 		// No prior history: watch everything, let the rescan ingest and
@@ -420,6 +415,24 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 			keptAddrs = append(keptAddrs, addr) // can't script it; keep watching
 			continue
 		}
+		// A persisted discovery seed marks an address whose probed history
+		// was never ingested (recoverViaScan): its floor must survive
+		// restarts, because discovery only probes above the pool top and
+		// will never re-find it. Once a last-active entry exists the
+		// history was ingested and the seed is consumed; until then the
+		// address re-enters the fast sweep tier at the seed floor,
+		// independent of the hot/cold judgment below (which cannot see
+		// never-ingested history).
+		if sf, ok := seedFloor(dbtx, pkScript); ok {
+			if _, ingested := lastActive(dbtx, pkScript); ingested {
+				if err := deleteSeedFloor(dbtx, pkScript); err != nil {
+					log.Errorf("Watch policy: delete consumed seed for %s: %v",
+						addr, err)
+				}
+			} else if ma, err := w.Manager.Address(addrmgrNs, addr); err == nil {
+				w.watchPol.demote(addr, sf, false, ma.Internal())
+			}
+		}
 		if !isCold(pkScript, addr) {
 			keptAddrs = append(keptAddrs, addr)
 			continue
@@ -453,6 +466,21 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 			dropped, len(unspent)-len(keptUnspent), ref)
 	}
 	return keptAddrs, keptUnspent, nil
+}
+
+// ensureTierIndex runs the one-time last-active backfill if it has not run
+// yet. Every consumer that judges wallet age or hotness from the index must
+// call this first: a pre-index wallet with history reads as fresh otherwise,
+// and the two judges (discovery seeding and classification) must agree
+// within a startup.
+func (w *Wallet) ensureTierIndex(dbtx walletdb.ReadWriteTx) error {
+	if indexBackfilled(dbtx) {
+		return nil
+	}
+	if err := w.backfillTierIndex(dbtx); err != nil {
+		return err
+	}
+	return markBackfilled(dbtx)
 }
 
 // backfillTierIndex populates the last-active index from transaction history
@@ -907,6 +935,13 @@ func (w *Wallet) DeepRescan() error {
 	if !ok {
 		return errors.New("chain backend cannot sweep addresses")
 	}
+	if !w.ChainSynced() {
+		// The initial catch-up rescan owns block-ordered ingestion until
+		// it finishes; a concurrent deep scan's emission stream would
+		// interleave with it for no benefit — the catch-up already covers
+		// everything a fresh sync needs.
+		return errors.New("wallet is still syncing; retry when synced")
+	}
 
 	var addrs []btcutil.Address
 	floor := int32(0)
@@ -955,7 +990,15 @@ func (w *Wallet) DeepRescan() error {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		w.runSweepJob(chainClient, watcher, entries, addrs, tip, true, func() {})
+		w.runSweepJob(chainClient, watcher, entries, addrs, tip, true, func() {
+			// Nothing was verified; hand the interval back to the periodic
+			// sweep rather than leaving both cadences stamped as satisfied
+			// by a scan that never ran.
+			p.mtx.Lock()
+			p.lastSweepTip = tip - p.sweepDue()
+			p.lastSlowSweepTip = tip - slowSweepFactor*p.sweepDue()
+			p.mtx.Unlock()
+		})
 	}()
 	return nil
 }

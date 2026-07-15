@@ -11,6 +11,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/txscript"
 )
 
 // stubProber marks a fixed set of addresses used, each with an earliest
@@ -103,6 +104,74 @@ func TestRecoverViaScanSeedsSweep(t *testing.T) {
 			t.Fatalf("branch flags = ext.internal=%v int.internal=%v",
 				extEntry.internal, intEntry.internal)
 		}
+
+		// The seeds are durable: discovery only probes above the pool top,
+		// so a restart before the first successful sweep must re-apply
+		// them from disk. Simulate the restart with an emptied policy and
+		// a classification pass.
+		extPk, perr := txscript.PayToAddrScript(extAddr)
+		if perr != nil {
+			t.Fatalf("PayToAddrScript: %v", perr)
+		}
+		intPk, perr := txscript.PayToAddrScript(intAddr)
+		if perr != nil {
+			t.Fatalf("PayToAddrScript: %v", perr)
+		}
+		_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+			if f, ok := seedFloor(tx, extPk); !ok || f != 699 {
+				t.Fatalf("persisted external seed = %d,%v; want 699,true", f, ok)
+			}
+			if f, ok := seedFloor(tx, intPk); !ok || f != 849 {
+				t.Fatalf("persisted internal seed = %d,%v; want 849,true", f, ok)
+			}
+			return nil
+		})
+		p.mtx.Lock()
+		p.cold = nil
+		p.mtx.Unlock()
+		err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+			ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
+			if err := w.Manager.SetSyncedTo(ns,
+				&waddrmgr.BlockStamp{Height: 10_000}); err != nil {
+				return err
+			}
+			_, _, err := w.classifyWatchSet(tx,
+				[]btcutil.Address{extAddr, intAddr}, nil)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("restart classify: %v", err)
+		}
+		p.mtx.Lock()
+		extEntry = p.cold[extAddr.String()]
+		intEntry = p.cold[intAddr.String()]
+		p.mtx.Unlock()
+		if extEntry == nil || extEntry.upTo != 699 ||
+			intEntry == nil || intEntry.upTo != 849 {
+			t.Fatalf("restart lost the seeds: ext=%+v int=%+v", extEntry, intEntry)
+		}
+		if extEntry.slow || intEntry.slow {
+			t.Fatal("re-applied seeds not in the fast tier")
+		}
+
+		// Ingestion consumes the seed: once a last-active entry exists,
+		// the next classification deletes the record.
+		err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+			if err := putLastActive(tx, extPk, 700); err != nil {
+				return err
+			}
+			_, _, err := w.classifyWatchSet(tx, []btcutil.Address{extAddr}, nil)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("post-ingestion classify: %v", err)
+		}
+		_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+			if f, ok := seedFloor(tx, extPk); ok {
+				t.Fatalf("consumed seed still present (floor %d)", f)
+			}
+			return nil
+		})
 	}
 	t.Run("aged", func(t *testing.T) { run(t, true) })
 	t.Run("fresh", func(t *testing.T) { run(t, false) })

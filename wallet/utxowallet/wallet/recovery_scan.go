@@ -12,6 +12,7 @@ import (
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil"
+	"github.com/btcsuite/btcd/txscript"
 )
 
 // proberConcurrency bounds how many address probes run at once. Probing the gap
@@ -104,12 +105,21 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 	// can sit far below SyncedTo — would never be ingested by either. On a
 	// fresh or restored wallet (empty index) classification watches
 	// everything and the rescan walks from the birthday, which covers the
-	// discoveries by itself.
+	// discoveries by itself. The one-time backfill must run BEFORE the
+	// judgment: a pre-index wallet with history would otherwise read as
+	// fresh here while classifying (post-backfill) as aged — skipping the
+	// seed on the only startup that can create it.
 	aged := false
-	_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+	err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		if err := w.ensureTierIndex(tx); err != nil {
+			return err
+		}
 		aged = indexHasEntries(tx)
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("recover: tier index: %w", err)
+	}
 
 	for _, branch := range []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch} {
 		lastUsed, found, err := w.scanBranch(prober, scoped, branch, branchStart[branch], gapLimit)
@@ -135,14 +145,36 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		// hit then promotes the address into the tracked set and normal
 		// tiering takes over. Classification's own later demotion merges
 		// harmlessly: demote keeps the lower floor and the faster tier.
+		//
+		// The floor is also persisted (seedFloor): the pool extension above
+		// is durable and discovery only probes above the pool top, so this
+		// is the ONLY connect that will ever find the address — a restart
+		// before the first successful sweep would otherwise lose the floor
+		// for good. Classification re-applies the persisted seed each
+		// startup and consumes it once the history has been ingested.
 		if aged {
-			for _, d := range found {
-				floor := d.earliest - 1
-				if floor < 0 {
-					floor = 0
+			err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+				for _, d := range found {
+					floor := d.earliest - 1
+					if floor < 0 {
+						floor = 0
+					}
+					internal := branch == waddrmgr.InternalBranch
+					w.watchPol.demote(d.addr, floor, false, internal)
+					script, err := txscript.PayToAddrScript(d.addr)
+					if err != nil {
+						continue
+					}
+					if err := putSeedFloor(tx, script, floor); err != nil {
+						return err
+					}
 				}
-				w.watchPol.demote(d.addr, floor, false,
-					branch == waddrmgr.InternalBranch)
+				return nil
+			})
+			if err != nil {
+				// The in-memory seeds still cover this process lifetime;
+				// only restart durability is degraded.
+				log.Errorf("Recovery: persist discovery seeds: %v", err)
 			}
 		}
 		log.Infof("Recovery: scope %v branch %d used through index %d",

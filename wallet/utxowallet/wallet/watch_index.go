@@ -55,6 +55,67 @@ func sweptToKey(slow bool) []byte {
 	return coldSweptToKey
 }
 
+// seedFloorPrefix namespaces discovery-seed records: 0x03 followed by the
+// 32-byte scripthash (33-byte keys, disjoint from the bare 32-byte
+// last-active keys and the 1-byte markers). A record holds the sweep floor
+// for an address discovered by the gap-limit probe whose history has not
+// been ingested yet. Discovery only probes above the pool top, so once the
+// pool is extended the address is never re-probed — without a durable
+// record, a restart between discovery and the first successful sweep would
+// lose the floor, and classification (which sees no last-active entry and no
+// unspent credit) would file the address far above its history. The record
+// is consumed at classification time once a last-active entry exists.
+const seedFloorPrefix = 0x03
+
+func seedFloorKey(pkScript []byte) [sha256.Size + 1]byte {
+	var key [sha256.Size + 1]byte
+	key[0] = seedFloorPrefix
+	h := scriptHashKey(pkScript)
+	copy(key[1:], h[:])
+	return key
+}
+
+// putSeedFloor records a discovery seed's sweep floor. Lower floors win,
+// mirroring the in-memory demote merge.
+func putSeedFloor(tx walletdb.ReadWriteTx, pkScript []byte, floor int32) error {
+	ns, err := tx.CreateTopLevelBucket(watchTierNamespaceKey)
+	if err != nil {
+		return err
+	}
+	key := seedFloorKey(pkScript)
+	if cur := ns.Get(key[:]); cur != nil &&
+		int32(binary.BigEndian.Uint32(cur)) <= floor {
+		return nil
+	}
+	var v [4]byte
+	binary.BigEndian.PutUint32(v[:], uint32(floor))
+	return ns.Put(key[:], v[:])
+}
+
+// seedFloor returns a pkScript's persisted discovery-seed floor, if any.
+func seedFloor(tx walletdb.ReadTx, pkScript []byte) (int32, bool) {
+	ns := tx.ReadBucket(watchTierNamespaceKey)
+	if ns == nil {
+		return 0, false
+	}
+	key := seedFloorKey(pkScript)
+	v := ns.Get(key[:])
+	if v == nil {
+		return 0, false
+	}
+	return int32(binary.BigEndian.Uint32(v)), true
+}
+
+// deleteSeedFloor removes a consumed discovery-seed record.
+func deleteSeedFloor(tx walletdb.ReadWriteTx, pkScript []byte) error {
+	ns := tx.ReadWriteBucket(watchTierNamespaceKey)
+	if ns == nil {
+		return nil
+	}
+	key := seedFloorKey(pkScript)
+	return ns.Delete(key[:])
+}
+
 // scriptHashKey is the 32-byte index key for a pkScript: sha256 of the
 // script. This is the canonical form both backends watch — electrum's
 // scripthash without its wire byte-reversal, and the script neutrino adds to

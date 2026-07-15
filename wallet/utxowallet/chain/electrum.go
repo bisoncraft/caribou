@@ -777,10 +777,32 @@ func (c *ElectrumClient) flushPending() {
 		entry.pending = remain
 		c.addrCacheMtx.Unlock()
 
-		c.emitRelevantTxs(ready)
+		// Only what was actually emitted joins the diff baseline; a
+		// transient per-entry failure (a merkle or raw-tx fetch error)
+		// returns to pending for the next flush. Committing an unemitted
+		// entry would suppress it forever — everything in lastHistory is
+		// treated as already seen, the wallet's synced height keeps
+		// advancing past it, and no future rescan walks below that — and
+		// pending now carries rescan-critical history (setup entries above
+		// the walk tip and the deferred tail of an early-finished walk),
+		// not just the rare live-path header race.
+		emitted := c.emitRelevantTxs(ready)
 
 		c.addrCacheMtx.Lock()
-		entry.lastHistory = append(entry.lastHistory, ready...)
+		entry.lastHistory = append(entry.lastHistory, emitted...)
+		if len(emitted) < len(ready) {
+			ok := make(map[string]struct{}, len(emitted))
+			for _, e := range emitted {
+				ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)] = struct{}{}
+			}
+			var failed []electrum.HistoryEntry
+			for _, e := range ready {
+				if _, did := ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)]; !did {
+					failed = append(failed, e)
+				}
+			}
+			entry.pending = mergePendingEntries(entry.pending, failed)
+		}
 		c.addrCacheMtx.Unlock()
 
 		entry.proc.Unlock()

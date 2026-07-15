@@ -644,6 +644,16 @@ func (c *ElectrumClient) runRescan(ctx context.Context, startHeight, tip int32,
 				"%d retries; finishing at %d and deferring %d heights",
 				height, missingHeaderRetries, height-1, tip-height+1)
 			c.deferMatchesFrom(matches, height)
+			// Same M4 guard as the normal completion below: a newer Rescan
+			// may have cancelled this walk during the retries or the
+			// deferral (deferMatchesFrom blocks on per-entry proc locks); a
+			// stale RescanFinished would rotate the wallet's batch state
+			// and set ChainSynced under the superseding walk. The deferral
+			// itself is safe to have run — the new walk's emissions
+			// duplicate idempotently.
+			if ctx.Err() != nil {
+				return
+			}
 			c.tryDispatchRescanFinished(height - 1)
 			return
 		}
@@ -700,6 +710,13 @@ func (c *ElectrumClient) deferMatchesFrom(matches map[int32][]shHistoryEntry, cu
 		}
 	}
 	for sh, entries := range bySh {
+		// Ascending heights: the flush emits pending in slice order, and
+		// while the store tolerates child-before-parent arrivals (the
+		// deferred-debit scan), delivering funding before spends keeps
+		// that path the backstop rather than the norm.
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Height < entries[j].Height
+		})
 		c.addrCacheMtx.Lock()
 		entry := c.addrCache[sh]
 		c.addrCacheMtx.Unlock()
@@ -727,18 +744,20 @@ func histEntries(entries []shHistoryEntry) []electrum.HistoryEntry {
 // (but not propagating) any error so the caller doesn't have to.
 func (c *ElectrumClient) tryDispatchRescanFinished(tip int32) {
 	hdr := c.net.HeaderByHeight(tip)
-	if hdr == nil {
-		// The requested tip can be gone after a mid-rescan rewind. The
-		// store's current tip always has a header; finish there rather
-		// than skipping the terminal protocol — RescanFinished plus the
-		// goLive handoff below is the only opener of live tip delivery,
-		// and skipping it wedges the client until restart.
+	// The requested tip can be gone after a mid-rescan rewind. The store's
+	// current tip always has a header, but Tip() and HeaderByHeight() are
+	// separate reads, so another rewind can land between them; retry the
+	// pair rather than skipping the terminal protocol — RescanFinished plus
+	// the goLive handoff below is the only opener of live tip delivery, and
+	// skipping it wedges the client until restart. Rewinds arrive at most
+	// once per server notification, so consecutive losses exhaust fast.
+	for tries := 0; hdr == nil && tries < 5; tries++ {
 		tip = c.net.Tip()
 		hdr = c.net.HeaderByHeight(tip)
-		if hdr == nil {
-			log.Errorf("electrum: rescan finished but no header at store tip %d", tip)
-			return
-		}
+	}
+	if hdr == nil {
+		log.Errorf("electrum: rescan finished but no header at store tip %d", tip)
+		return
 	}
 	h := c.chainParams.HeaderHash(hdr)
 	if err := c.enqueue(&RescanFinished{

@@ -506,6 +506,7 @@ func TestDeepRescan(t *testing.T) {
 	release := make(chan struct{})
 	stub := &sweepStub{mockChainClient: &mockChainClient{}, release: release}
 	w.chainClient = stub
+	w.SetChainSynced(true)
 
 	// A cold entry with an old floor: the deep scan must verify it through
 	// the launch tip.

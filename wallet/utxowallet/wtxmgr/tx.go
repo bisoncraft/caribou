@@ -693,6 +693,14 @@ func (s *Store) addCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Blo
 // are sparse (only blocks containing wallet transactions have records), so
 // the iteration visits only those. A spender cannot confirm below the
 // funding output's block, so earlier records need no scanning.
+//
+// Cost profile: the common no-spender outcome deserializes every wallet
+// transaction recorded above the credit's block. Credits normally arrive
+// near the tip (few or no records above), but a bulk ingestion delivering
+// low-height credits after high-height blocks are recorded pays the full
+// scan per credit — quadratic in the delivered set. The ordered ingestion
+// paths (rescan walk, sweep) avoid that shape by construction; only
+// unordered live-path deliveries hit it, in small batches.
 func (s *Store) minedSpender(ns walletdb.ReadBucket, rec *TxRecord,
 	op *wire.OutPoint, block *Block) (*chainhash.Hash, uint32, *Block, error) {
 
