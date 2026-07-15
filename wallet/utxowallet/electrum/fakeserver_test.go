@@ -702,11 +702,15 @@ func TestDivergenceReorgPromotion(t *testing.T) {
 	// And rotation must still function end to end: kill the successor —
 	// with A quarantined and B excluded as the failed node, the rotation
 	// lands degraded — then let the degraded loop re-elect B once it
-	// answers again. Observing the empty wallet slot first keeps the
-	// recovery check from passing vacuously on the pre-rotation state.
+	// answers again. The degraded state is observed via the transition
+	// counter rather than the (transient) empty wallet slot, which the
+	// degraded loop can re-fill within one polling interval; requiring a
+	// transition keeps the recovery check from passing vacuously on the
+	// pre-rotation state.
+	degradedBefore := degradedEntries.Load()
 	fB.KillConns()
 	waitFor(t, "degraded after successor death", func() bool {
-		return net_.currentWalletAddr() == ""
+		return degradedEntries.Load() > degradedBefore
 	})
 	waitFor(t, "re-election after successor death", func() bool {
 		return net_.currentWalletAddr() == fB.addr().Addr && rotMtxFree()

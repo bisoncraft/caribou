@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/btcsuite/btcd/wire"
@@ -62,6 +63,17 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	current, group := n.node, n.loops
 	n.mu.Unlock()
 	if current != dead {
+		// A divergence verdict may have suspended broadcasts just before
+		// spawning this rotation, expecting it to lift the suspension via
+		// a successful re-attach. When the replacement rotation's own lift
+		// ran BEFORE the verdict's Store, nothing else clears the flag and
+		// broadcasts stay suspended with no rotation pending. The node in
+		// the slot got there through a full attach — anchored headers,
+		// replayed subscriptions — which is exactly the re-validation the
+		// suspension waits for, so lifting here is sound.
+		if n.spendSuspect.CompareAndSwap(true, false) {
+			log.Infof("electrum: broadcast suspension lifted by superseded rotation")
+		}
 		return
 	}
 
@@ -118,6 +130,7 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	n.node = nil
 	n.loops = nil
 	n.mu.Unlock()
+	degradedEntries.Add(1)
 	n.wg.Add(1)
 	go n.degradedLoop()
 }
@@ -182,6 +195,11 @@ func (n *Network) tryElect(exclude, preferred string) bool {
 // degradedRetryInterval paces re-elections while no wallet server exists. A
 // variable so tests can tighten it.
 var degradedRetryInterval = 30 * time.Second
+
+// degradedEntries counts transitions into the degraded state. Observability
+// hook: the state itself (an empty wallet slot) can be entered and re-exited
+// within one polling interval, so tests assert on the transition count.
+var degradedEntries atomic.Int64
 
 // degradedLoop re-runs the election until a candidate answers or the network
 // stops. While it runs, no loop group exists, so it owns the closer on the
@@ -355,16 +373,19 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	n.loops = group
 	n.mu.Unlock()
 
-	// fillObservers re-checks the wallet address before inserting an
-	// observer, but that read races the publication above: a pass that read
-	// the PREVIOUS wallet address can insert an observer for this node's
-	// address concurrently with the attach. Purge any such observer now
-	// that the publication is visible (adoptObserver already removed the
-	// promoted observer itself, so anything found here is a duplicate
-	// connection). stopDrain is closed before the node so the drain
-	// goroutine exits without recording a spurious failure against the new
-	// wallet server's address.
+	// Record the new wallet address for observer bookkeeping and purge any
+	// observer already sitting at it, in ONE obsMtx section. fillObservers
+	// inserts under the same lock after re-reading obsWalletAddr, so every
+	// interleaving converges: an insert that won the lock first is purged
+	// here; one that runs after sees the new address and skips. (The
+	// mu-read pre-checks in fillObservers are only dial-saving filters;
+	// this section is what makes a self-observer impossible.) adoptObserver
+	// already removed the promoted observer itself, so anything found here
+	// is a duplicate connection. stopDrain is closed before the node so the
+	// drain goroutine exits without recording a spurious failure against
+	// the new wallet server's address.
 	n.obsMtx.Lock()
+	n.obsWalletAddr = node.Addr().Addr
 	if o, ok := n.observers[node.Addr().Addr]; ok {
 		delete(n.observers, node.Addr().Addr)
 		close(o.stopDrain)

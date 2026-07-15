@@ -49,12 +49,17 @@ const notifyBufSize = 16
 
 // maxFrameSize bounds a single JSON-RPC frame read from the server. The
 // largest routine reply is a full 2016-header batch (2016 × 80 bytes,
-// hex-encoded ≈ 320 KiB); 8 MiB leaves ample margin for verbose transactions
-// and large address histories. Without a bound, the read loop's line buffer
-// grows with whatever the server sends, so a hostile server could stream an
-// endless newline-free "frame". Exceeding the bound is treated as hostility:
-// the connection is dropped, and the reconnect/rotation machinery replaces it.
-const maxFrameSize = 1 << 23 // 8 MiB
+// hex-encoded ≈ 320 KiB), but legitimate outliers run far larger: a verbose
+// near-max-weight transaction duplicates its witness data across the hex and
+// decoded fields (~16 MiB), and permissive servers (Fulcrum's default
+// max_history is 125k entries) can serve address histories past 10 MiB.
+// Since exceeding the bound is treated as hostility — the connection is
+// dropped and the rotation machinery replaces it, which for a reply every
+// server serves identically becomes a rotation loop — the bound is sized
+// well past any reply a real wallet triggers, purely as a cap on what a
+// hostile server can force the line buffer to hold. The buffer grows on
+// demand; the cap is not allocated up front.
+const maxFrameSize = 1 << 25 // 32 MiB
 
 // Errors that may be returned by Server methods.
 var (

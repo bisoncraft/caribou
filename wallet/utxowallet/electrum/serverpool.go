@@ -62,11 +62,18 @@ func recordServerSuccess(addr string) {
 // wallet-server election is sticky by construction elsewhere — this ordering
 // only decides who is dialed next after a failure or restart.
 func orderCandidates(servers []*ServerAddr) []*ServerAddr {
+	healthy, backedOff := partitionBackoff(servers)
+	return append(healthy, backedOff...)
+}
+
+// partitionBackoff splits servers into those with no recent dial failure and
+// those still inside the failure backoff, the latter ordered
+// least-recently-failed first.
+func partitionBackoff(servers []*ServerAddr) (healthy, backedOff []*ServerAddr) {
 	now := time.Now()
 	serverHealth.mtx.Lock()
 	defer serverHealth.mtx.Unlock()
 
-	var healthy, backedOff []*ServerAddr
 	for _, s := range servers {
 		r := serverHealth.m[s.Addr]
 		if r == nil || now.Sub(r.lastFailure) >= serverFailureBackoff {
@@ -85,7 +92,7 @@ func orderCandidates(servers []*ServerAddr) []*ServerAddr {
 			}
 		}
 	}
-	return append(healthy, backedOff...)
+	return healthy, backedOff
 }
 
 // ─── Persistent server pool (multi-server phase 4) ──────────────────────────
@@ -317,6 +324,13 @@ func (p *serverPool) pruneExpiredLocked(now time.Time) bool {
 		if e.Shipped {
 			continue
 		}
+		if quarantinedLocked(e, now) {
+			// Dropping an actively quarantined entry would erase its
+			// persisted exclusion (the load trim protects these for the
+			// same reason). The quarantine term is far shorter than the
+			// expiry, so the entry prunes on a later pass.
+			continue
+		}
 		if now.Sub(e.LastSeen) > discoveredExpiry &&
 			now.Sub(e.LastSuccess) > discoveredExpiry {
 			delete(p.entries, addr)
@@ -505,7 +519,7 @@ func (p *serverPool) observerCandidates() []*ServerAddr {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	now := time.Now()
-	out := orderCandidates(p.notQuarantinedLocked(p.shipped, now))
+	shipped := p.notQuarantinedLocked(p.shipped, now)
 	groups := make(map[string][]*poolEntry)
 	var order []string
 	for _, e := range p.entries {
@@ -518,18 +532,37 @@ func (p *serverPool) observerCandidates() []*ServerAddr {
 		}
 		groups[rec] = append(groups[rec], e)
 	}
+	var disc []*ServerAddr
 	for round := 0; ; round++ {
 		took := false
 		for _, rec := range order {
 			if g := groups[rec]; round < len(g) {
-				out = append(out, g[round].Server)
+				disc = append(disc, g[round].Server)
 				took = true
 			}
 		}
 		if !took {
-			return out
+			break
 		}
 	}
+	// Backoff partitioning spans BOTH tiers: shipped servers are preferred
+	// among candidates in equal standing, but a recently-failed shipped
+	// server sorts after a fresh discovered one. fillObservers dials a
+	// bounded number of candidates per pass, so keeping dead shipped
+	// servers at the front would burn the whole budget re-dialing them
+	// every tick — with a shipped list at least as long as the budget (LTC
+	// ships eight, matching maxObserverDialsPerPass), discovered candidates
+	// would never be dialed at all, and the all-shipped-down case is
+	// exactly when the wallet is running on a discovered fallback server
+	// and observer oversight matters most.
+	shippedHealthy, shippedBacked := partitionBackoff(shipped)
+	discHealthy, discBacked := partitionBackoff(disc)
+	out := make([]*ServerAddr, 0,
+		len(shippedHealthy)+len(discHealthy)+len(shippedBacked)+len(discBacked))
+	out = append(out, shippedHealthy...)
+	out = append(out, discHealthy...)
+	out = append(out, shippedBacked...)
+	return append(out, discBacked...)
 }
 
 func firstRec(e *poolEntry) string {

@@ -103,10 +103,17 @@ type Network struct {
 	spendSuspect atomic.Bool
 
 	// obsMtx guards observers, the live observer connections maintained by
-	// runObservers (observers.go). nil outside the observer loop's
-	// lifetime.
-	obsMtx    sync.Mutex
-	observers map[string]*observer
+	// runObservers (observers.go), and obsWalletAddr, the wallet server's
+	// address as visible to observer bookkeeping. The wallet server must
+	// never be its own observer; obsWalletAddr is written in the same
+	// obsMtx section that purges a conflicting observer (attachNode) and
+	// read in the same obsMtx section that inserts one (fillObservers), so
+	// the pair cannot interleave into a self-observer no matter how the
+	// mu-guarded publication and the insert race. nil outside the observer
+	// loop's lifetime.
+	obsMtx        sync.Mutex
+	observers     map[string]*observer
+	obsWalletAddr string
 
 	// pool is the persistent, tiered server database (serverpool.go).
 	pool *serverPool
@@ -126,9 +133,12 @@ type Network struct {
 	// is preceded, in the same member, by the initial header sync).
 	// Rotation joins the old group before attaching a successor so two
 	// groups never interleave header appends or status forwards. Guarded
-	// by mu. Every member is spawned before its group is joined anywhere:
-	// a late Add on a group whose counter already hit zero would race a
-	// concurrent join (sync.WaitGroup forbids Add-from-zero during Wait).
+	// by mu, and always published together with node, with every member's
+	// count already reserved: a group observable before its full count is
+	// raised can transiently drain to zero under a joiner's Wait, making
+	// the remaining Add an add-from-zero during Wait (sync.WaitGroup
+	// misuse). Start reserves then spawns; attachNode spawns under rotMtx
+	// before any joiner can run.
 	loops *loopGroup
 }
 
@@ -322,25 +332,37 @@ func (n *Network) Start(parent context.Context) error {
 	n.serverTip = tip.Height
 	n.serverTipMu.Unlock()
 
-	// Commit: publish the node and flip started/launched. From here on,
-	// watchNode owns the channel-close — never call failed() after this point.
+	// Commit: publish the node and its loop group together, with every
+	// member's group count RESERVED up front. From here on, watchNode owns
+	// the channel-close — never call failed() after this point.
+	//
+	// The reservation and the single publication section both matter. A
+	// node that dies instantly fires watchNode's rotate the moment the
+	// member spawns; rotate reads (n.node, n.loops) and joins the group.
+	// Publishing the node before the group would let that rotation observe
+	// a nil group and skip the join — proceeding while this node's loops
+	// spawn around it. Publishing the group with fewer than its final
+	// member count would let the counter transiently drain to zero with
+	// the join in Wait, making the remaining spawn's Add an add-from-zero
+	// concurrent with Wait, which sync.WaitGroup forbids. attachNode needs
+	// neither precaution: its spawns complete under rotMtx before any
+	// joiner can observe the group.
+	group := &loopGroup{node: node}
+	group.wg.Add(3)
 	n.mu.Lock()
 	n.node = node
 	n.started = true
 	n.launched = true
-	n.mu.Unlock()
-
-	// scripthashLoop and watchNode start immediately; they don't depend on
-	// the header sync completing. The group's third member (spawned below)
-	// runs the initial header sync and then headersLoop inline, so the
-	// group's membership is complete before Start returns — join() never
-	// races a late Add.
-	group := &loopGroup{node: node}
-	n.mu.Lock()
 	n.loops = group
 	n.mu.Unlock()
-	n.spawnLoop(group, func() { n.scripthashLoop(node) })
-	n.spawnLoop(group, func() { n.watchNode(node) })
+	n.spawnReserved(group, func() { n.scripthashLoop(node) })
+	n.spawnReserved(group, func() { n.watchNode(node) })
+
+	// Seed the observer-side wallet address before the observer loop can
+	// run its first fill (see obsWalletAddr).
+	n.obsMtx.Lock()
+	n.obsWalletAddr = node.Addr().Addr
+	n.obsMtx.Unlock()
 
 	// Observer connections (multi-server phase 2): header-only
 	// subscriptions on the remaining candidates, watching for a lagging or
@@ -351,22 +373,20 @@ func (n *Network) Start(parent context.Context) error {
 		go n.runObservers()
 	}
 
-	// The background sync runs as a member of the node's loop group from
-	// the start, with headersLoop running inline in the same member once
-	// sync succeeds. Group membership from the start matters: spawning
-	// headersLoop as a separate loop AFTER the sync would be a late
-	// group.wg.Add(1), which could land after the group's counter hit zero
-	// while a rotation's join() was already in Wait — an Add-from-zero
-	// concurrent with Wait, which sync.WaitGroup forbids. Membership also
-	// means a rotation's join() waits out a still-running initial sync;
-	// that wait is bounded because rotate closes the node before joining
-	// and BlockHeaders fails fast on a dead connection. On sync failure
-	// this member calls Stop(), which triggers the same teardown path that
-	// a node-drop uses (Stop → cancel/node.Close → watchNode unblocks →
-	// closer closes channels after wg.Wait; Stop itself never waits on the
-	// group, so a member may call it). It does NOT call failed() because
-	// launched is already true and failed() would double-close.
-	n.spawnLoop(group, func() {
+	// The background sync runs as a member of the node's loop group, with
+	// headersLoop running inline in the same member once sync succeeds
+	// (headersLoop must not race the initial batch-writes to the header
+	// store). Membership means a rotation's join() waits out a
+	// still-running initial sync; that wait is bounded because rotate
+	// closes the node before joining and BlockHeaders fails fast on a dead
+	// connection. On sync failure this member calls Stop() — the same
+	// teardown path a node-drop uses — but only while this node still
+	// holds the wallet slot: a rotation may already have replaced a node
+	// that died mid-sync, and tearing the network down then would kill a
+	// healthy successor. Stop itself never waits on the group, so a member
+	// may call it; failed() is off-limits here because launched is already
+	// true and it would double-close the channels.
+	n.spawnReserved(group, func() {
 		if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
 			if n.ctx.Err() == nil {
 				// Context is still live, so this is a real sync error
@@ -375,16 +395,29 @@ func (n *Network) Start(parent context.Context) error {
 				n.pool.recordFailure(node.Addr().Addr)
 				log.Errorf("electrum: initial header sync failed: %v", err)
 			}
-			n.Stop()
+			n.mu.Lock()
+			current := n.node
+			n.mu.Unlock()
+			if current == node {
+				n.Stop()
+			}
 			return
 		}
-		// Sync succeeded. headersLoop must run AFTER syncHeaders so it
-		// doesn't race the initial batch-writes to the header store —
-		// hence inline here rather than as a separately spawned loop.
 		n.headersLoop(node, tip)
 	})
 
 	return nil
+}
+
+// spawnReserved runs fn as a member of a group whose counter was reserved at
+// construction (see Start); it adds only the network-level tracking.
+func (n *Network) spawnReserved(g *loopGroup, fn func()) {
+	n.wg.Add(1)
+	go func() {
+		defer n.wg.Done()
+		defer g.wg.Done()
+		fn()
+	}()
 }
 
 // Stop initiates teardown. Done closes once teardown finishes. Safe to call

@@ -258,16 +258,23 @@ func (n *Network) fillObservers(walletAddr string) {
 		o.setTip(tip)
 		// The walletAddr snapshot can go stale during the dials above (a
 		// rotation completing mid-pass), and the wallet server must never
-		// be its own observer. Re-check against the CURRENT wallet address
-		// with no lock held — currentWalletAddr takes mu, and the
-		// documented lock order (rotMtx → mu → obsMtx) forbids acquiring
-		// mu after obsMtx. A rotation publishing this address between the
-		// check and the insert below is closed out by attachNode's purge.
+		// be its own observer. currentWalletAddr is re-read with no lock
+		// held (it takes mu, and the documented rotMtx → mu → obsMtx order
+		// forbids acquiring mu after obsMtx) purely to save the insert
+		// work; the authoritative check is obsWalletAddr inside the insert
+		// section below, which attachNode writes in the same obsMtx section
+		// that purges a conflicting observer — the pair cannot interleave
+		// into a self-observer.
 		if sv.Addr == n.currentWalletAddr() {
 			node.Close()
 			continue
 		}
 		n.obsMtx.Lock()
+		if sv.Addr == n.obsWalletAddr {
+			n.obsMtx.Unlock()
+			node.Close()
+			continue
+		}
 		n.observers[sv.Addr] = o
 		n.obsMtx.Unlock()
 		log.Debugf("electrum: observer connected: %s (tip %d)", sv.Addr, tip.Height)
