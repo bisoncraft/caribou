@@ -597,8 +597,9 @@ func (s *Store) AddCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Blo
 }
 
 // addCredit is an AddCredit helper that runs in an update transaction.  The
-// bool return specifies whether the unspent output is newly added (true) or a
-// duplicate (false).
+// bool return specifies whether a new unspent output was added (true).  It is
+// false for duplicates and for credits already spent by a mined transaction
+// on arrival, which never enter the unspent set.
 func (s *Store) addCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *BlockMeta, index uint32, change bool) (bool, error) {
 	if block == nil {
 		// If the outpoint that we should mark as credit already exists
@@ -642,34 +643,36 @@ func (s *Store) addCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Blo
 		return false, err
 	}
 
-	// A same-block sibling may already have confirmed spending this output
-	// before the credit existed to debit (the per-address live path cannot
-	// order cross-address chains, and a spender never seen unmined leaves
-	// no unmined-input record for the credit-move fix to consume). Write
-	// the deferred debit now rather than leaving a phantom unspent credit.
-	// Only the credit's own block needs scanning: a spender in a LATER
-	// block finds this credit already present and debits normally.
-	spender, spenderIdx, err := s.sameBlockSpender(ns, rec, &cred.outPoint, &block.Block)
+	// A spender of this output may already have confirmed before the
+	// credit existed to debit (the per-address live path cannot order
+	// cross-address chains, and a spender never seen unmined leaves no
+	// unmined-input record for the credit-move fix to consume). The
+	// spender's updateMinedBalance found no unspent credit and recorded
+	// nothing, so it can sit in the credit's own block or any later one.
+	// Write the deferred debit now rather than leaving a phantom unspent
+	// credit.
+	spender, spenderIdx, spenderBlock, err := s.minedSpender(ns, rec, &cred.outPoint, &block.Block)
 	if err != nil {
 		return false, err
 	}
 	if spender != nil {
 		amt, err := spendCredit(ns, k, &indexedIncidence{
-			incidence: incidence{txHash: *spender, block: block.Block},
+			incidence: incidence{txHash: *spender, block: *spenderBlock},
 			index:     spenderIdx,
 		})
 		if err != nil {
 			return false, err
 		}
-		err = putDebit(ns, spender, spenderIdx, amt, &block.Block, k)
+		err = putDebit(ns, spender, spenderIdx, amt, spenderBlock, k)
 		if err != nil {
 			return false, err
 		}
-		log.Debugf("Recorded deferred debit: %v:%d spent by same-block "+
+		log.Debugf("Recorded deferred debit: %v:%d spent by "+
 			"already-mined %v", rec.Hash, index, spender)
 		// Spent on arrival: no unspent entry, no balance change (the
-		// credit and its debit cancel).
-		return true, nil
+		// credit and its debit cancel), and no NotifyUnspent — the
+		// output was never in the unspent set.
+		return false, nil
 	}
 
 	minedBalance, err := fetchMinedBalance(ns)
@@ -684,41 +687,43 @@ func (s *Store) addCredit(ns walletdb.ReadWriteBucket, rec *TxRecord, block *Blo
 	return true, putUnspent(ns, &cred.outPoint, &block.Block)
 }
 
-// sameBlockSpender scans the credit's own block record for a mined sibling
-// transaction whose input spends op, returning the spender's hash and input
-// index, or nil when unspent within the block.
-func (s *Store) sameBlockSpender(ns walletdb.ReadBucket, rec *TxRecord,
-	op *wire.OutPoint, block *Block) (*chainhash.Hash, uint32, error) {
+// minedSpender scans block records at heights >= the credit's block for a
+// mined transaction whose input spends op, returning the spender's hash,
+// input index, and block, or nil when no mined spender exists. Block records
+// are sparse (only blocks containing wallet transactions have records), so
+// the iteration visits only those. A spender cannot confirm below the
+// funding output's block, so earlier records need no scanning.
+func (s *Store) minedSpender(ns walletdb.ReadBucket, rec *TxRecord,
+	op *wire.OutPoint, block *Block) (*chainhash.Hash, uint32, *Block, error) {
 
-	_, brv := existsBlockRecord(ns, block.Height)
-	if brv == nil {
-		return nil, 0, nil
-	}
-	var br blockRecord
-	if err := readRawBlockRecord(keyBlockRecord(block.Height), brv, &br); err != nil {
-		return nil, 0, err
-	}
-	for i := range br.transactions {
-		sib := &br.transactions[i]
-		if *sib == rec.Hash {
-			continue
-		}
-		_, sv := existsTxRecord(ns, sib, block)
-		if sv == nil {
-			continue
-		}
-		// Chain must be set before deserialization (bisonwire).
-		sibRec := TxRecord{Tx: bisonwire.Tx{Chain: rec.Tx.Chain}}
-		if err := readRawTxRecord(sib, sv, &sibRec); err != nil {
-			return nil, 0, err
-		}
-		for idx, txIn := range sibRec.Tx.TxIn {
-			if txIn.PreviousOutPoint == *op {
-				return sib, uint32(idx), nil
+	it := makeReadBlockIterator(ns, block.Height)
+	for it.next() {
+		for i := range it.elem.transactions {
+			sib := &it.elem.transactions[i]
+			if *sib == rec.Hash {
+				continue
+			}
+			_, sv := existsTxRecord(ns, sib, &it.elem.Block)
+			if sv == nil {
+				continue
+			}
+			// Chain must be set before deserialization (bisonwire).
+			sibRec := TxRecord{Tx: bisonwire.Tx{Chain: rec.Tx.Chain}}
+			if err := readRawTxRecord(sib, sv, &sibRec); err != nil {
+				return nil, 0, nil, err
+			}
+			for idx, txIn := range sibRec.Tx.TxIn {
+				if txIn.PreviousOutPoint == *op {
+					spenderBlock := it.elem.Block
+					return sib, uint32(idx), &spenderBlock, nil
+				}
 			}
 		}
 	}
-	return nil, 0, nil
+	if it.err != nil {
+		return nil, 0, nil, it.err
+	}
+	return nil, 0, nil, nil
 }
 
 // Rollback removes all blocks at height onwards, moving any transactions within

@@ -1191,9 +1191,17 @@ func (it *unminedCreditIterator) next() bool {
 
 // putRawUnminedInput maintains a list of unmined transaction hashes that have
 // spent an outpoint. Each entry in the bucket is keyed by the outpoint being
-// spent.
+// spent. A hash already present in the list is not appended again: the record
+// can outlive its writer (deleteUnminedTx preserves entries whose funding
+// output is still unmined), so a later rollback re-adding the same spender
+// would otherwise grow the record on every mine/rollback cycle.
 func putRawUnminedInput(ns walletdb.ReadWriteBucket, k, v []byte) error {
 	spendTxHashes := ns.NestedReadBucket(bucketUnminedInputs).Get(k)
+	for i := 0; i+chainhash.HashSize <= len(spendTxHashes); i += chainhash.HashSize {
+		if bytes.Equal(spendTxHashes[i:i+chainhash.HashSize], v) {
+			return nil
+		}
+	}
 	spendTxHashes = append(spendTxHashes, v...)
 	err := ns.NestedReadWriteBucket(bucketUnminedInputs).Put(k, spendTxHashes)
 	if err != nil {
