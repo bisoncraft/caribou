@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -19,29 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 )
-
-const aggregatorV3ABI = `[
-  {
-    "inputs": [],
-    "name": "latestRoundData",
-    "outputs": [
-      {"internalType": "uint80",  "name": "roundId",         "type": "uint80"},
-      {"internalType": "int256",  "name": "answer",          "type": "int256"},
-      {"internalType": "uint256", "name": "startedAt",       "type": "uint256"},
-      {"internalType": "uint256", "name": "updatedAt",       "type": "uint256"},
-      {"internalType": "uint80",  "name": "answeredInRound", "type": "uint80"}
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "decimals",
-    "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
-    "stateMutability": "view",
-    "type": "function"
-  }
-]`
 
 const multiAggregatorABI = `[
   {
@@ -65,7 +41,8 @@ const multiAggregatorABI = `[
 
 const (
 	chainlinkDialTimeout = 5 * time.Second
-	chainlinkInitTimeout = 5 * time.Second
+	// chainlinkReadTimeout bounds the single batch read that a refresh makes.
+	chainlinkReadTimeout = 5 * time.Second
 	// chainlinkMaxAge is the maximum age of a Chainlink price before it is
 	// rejected. Polygon BTC/USD updates every ~27s with a 1h heartbeat, so
 	// 10 minutes is a tight but reasonable bound.
@@ -84,11 +61,6 @@ type MultiAggregatorReading struct {
 	UpdatedAt *big.Int
 	Decimals  uint8
 	Ok        bool
-}
-
-type chainlinkAggregatorContract interface {
-	latestRoundData(ctx context.Context) (*big.Int, time.Time, error)
-	decimals(ctx context.Context) (uint8, error)
 }
 
 type chainlinkBatchContract interface {
@@ -212,60 +184,6 @@ type batchBoundContract struct {
 	bound *bind.BoundContract
 }
 
-type aggregatorBoundContract struct {
-	bound *bind.BoundContract
-}
-
-func (c *aggregatorBoundContract) latestRoundData(ctx context.Context) (*big.Int, time.Time, error) {
-	var out []interface{}
-	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "latestRoundData"); err != nil {
-		return nil, time.Time{}, err
-	}
-
-	if len(out) < 4 {
-		return nil, time.Time{}, fmt.Errorf("invalid latestRoundData response: expected at least 4 outputs, got %d", len(out))
-	}
-
-	converted := abi.ConvertType(out[1], new(*big.Int))
-	answerPtr, ok := converted.(**big.Int)
-	if !ok {
-		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData answer to *big.Int")
-	}
-
-	answer := *answerPtr
-	if answer.Sign() <= 0 {
-		return nil, time.Time{}, fmt.Errorf("non-positive answer: %s", answer)
-	}
-
-	convertedUpdated := abi.ConvertType(out[3], new(*big.Int))
-	updatedAtPtr, ok := convertedUpdated.(**big.Int)
-	if !ok {
-		return nil, time.Time{}, fmt.Errorf("failed to convert latestRoundData updatedAt to *big.Int")
-	}
-
-	updatedAt := *updatedAtPtr
-	if !updatedAt.IsInt64() {
-		return nil, time.Time{}, fmt.Errorf("latestRoundData updatedAt overflows int64: %s", updatedAt)
-	}
-
-	return answer, time.Unix(updatedAt.Int64(), 0), nil
-}
-
-func (c *aggregatorBoundContract) decimals(ctx context.Context) (uint8, error) {
-	var out []interface{}
-	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "decimals"); err != nil {
-		return 0, err
-	}
-	if len(out) < 1 {
-		return 0, fmt.Errorf("invalid decimals response: expected at least 1 output, got %d", len(out))
-	}
-	decimalsPtr, ok := abi.ConvertType(out[0], new(uint8)).(*uint8)
-	if !ok {
-		return 0, fmt.Errorf("failed to convert decimals to uint8")
-	}
-	return *decimalsPtr, nil
-}
-
 func (c *batchBoundContract) read(ctx context.Context, addrs []common.Address) ([]MultiAggregatorReading, error) {
 	var out []interface{}
 	if err := c.bound.Call(&bind.CallOpts{Context: ctx}, &out, "read", addrs); err != nil {
@@ -307,8 +225,16 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 // Verified source: https://polygonscan.com/address/0x71eCdcF7F77765F0f596c03C63c80541733fd060#code
 var chainlinkPolygonBatchAddr = common.HexToAddress("0x71eCdcF7F77765F0f596c03C63c80541733fd060")
 
-// chainlinkDefaultProviders are free public Polygon RPC endpoints used as
-// fallback if no providers are explicitly configured.
+// chainlinkDefaultProviders are free public Polygon mainnet RPC endpoints used
+// as a fallback if no providers are explicitly configured. These are mainnet
+// regardless of the network the wallets are running on; see
+// ChainlinkRateFetcher.
+//
+// This list is intentionally separate from the one in wallet/asset/polygon,
+// which is switched per network and includes ws:// and loopback entries that
+// neither validateRPCURL nor the http-only dial accept. Sharing it would also
+// make util/fiatrates depend on the Polygon wallet, which would rule out that
+// package ever depending on this one.
 var chainlinkDefaultProviders = []string{
 	"https://polygon.drpc.org",
 	"https://polygon.publicnode.com",
@@ -347,6 +273,13 @@ func validateRPCURL(urlStr string) error {
 // configured feed are ignored rather than erroring, so callers may pass their
 // full ticker set. A zero Config selects the built-in Polygon mainnet feeds,
 // batch contract, and public RPC providers.
+//
+// Rates always come from Polygon mainnet, whatever network the caller's wallets
+// are on: a fiat rate is a real-world price, so a testnet or simnet wallet still
+// wants the true figure. There is deliberately no network parameter, and
+// ChainlinkProviders must name Polygon mainnet endpoints. Pointing it at a
+// testnet would read the mainnet feed addresses below on a chain that does not
+// host them and return nothing.
 //
 // The returned fetcher owns a ref-counted RPC connection and a feed decimals
 // cache, so it is built once and reused for the life of the process rather than
@@ -402,21 +335,6 @@ func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 
 	maxAge := chainlinkMaxAge
 
-	if batchAddr == (common.Address{}) {
-		aggregatorABI, err := parseABI(aggregatorV3ABI)
-		if err != nil {
-			return nil, fmt.Errorf("chainlink: %w", err)
-		}
-		return chainlinkLegacyFetcherCore(
-			feeds,
-			dialFn,
-			func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract {
-				return &aggregatorBoundContract{bound: bind.NewBoundContract(addr, *aggregatorABI, client, nil, nil)}
-			},
-			maxAge,
-		), nil
-	}
-
 	batchABI, err := parseABI(multiAggregatorABI)
 	if err != nil {
 		return nil, fmt.Errorf("chainlink: %w", err)
@@ -429,109 +347,6 @@ func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		},
 		maxAge,
 	), nil
-}
-
-// chainlinkLegacyFetcherCore is the testable per-feed fallback used until the
-// batch contract is deployed and configured.
-func chainlinkLegacyFetcherCore(
-	feeds map[string]common.Address,
-	dialFn func() (chainRPCClient, error),
-	newContract func(addr common.Address, client chainRPCClient) chainlinkAggregatorContract,
-	maxAge time.Duration,
-) func(context.Context, []string, util.Logger) (map[string]float64, error) {
-	var (
-		conn     sharedConn
-		divisors = newDivisorCache()
-	)
-
-	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
-		hasAny := false
-		for _, t := range tickers {
-			if _, ok := feeds[t]; ok {
-				hasAny = true
-				break
-			}
-		}
-		if !hasAny {
-			return map[string]float64{}, nil
-		}
-
-		current, err := conn.acquire(dialFn)
-		if err != nil {
-			return nil, fmt.Errorf("chainlink: %w", err)
-		}
-
-		var (
-			ratesMtx   sync.Mutex
-			rates      = make(map[string]float64)
-			connFailed atomic.Bool
-			wg         sync.WaitGroup
-		)
-
-		for _, ticker := range tickers {
-			addr, ok := feeds[ticker]
-			if !ok {
-				continue
-			}
-			wg.Add(1)
-			go func(ticker string, addr common.Address) {
-				defer wg.Done()
-				contract := newContract(addr, current.client)
-
-				initCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
-				d, err := contract.decimals(initCtx)
-				cancel()
-				if err != nil {
-					log.Warnf("chainlink: failed to query decimals for %s: %v", ticker, err)
-					if isConnErr(err) {
-						connFailed.Store(true)
-					}
-					return
-				}
-				div := divisors.getOrCreate(ticker, d)
-
-				rateCtx, rateCancel := context.WithTimeout(ctx, chainlinkInitTimeout)
-				answer, updatedAt, err := contract.latestRoundData(rateCtx)
-				rateCancel()
-				if err != nil {
-					log.Warnf("chainlink: %s/USD: %v", ticker, err)
-					if isConnErr(err) {
-						connFailed.Store(true)
-					}
-					return
-				}
-
-				if time.Until(updatedAt) > chainlinkFutureSkew {
-					log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
-					return
-				}
-				if time.Since(updatedAt) > maxAge {
-					log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
-					return
-				}
-
-				f, _ := new(big.Float).Quo(new(big.Float).SetInt(answer), div).Float64()
-				ratesMtx.Lock()
-				rates[ticker] = f
-				ratesMtx.Unlock()
-			}(ticker, addr)
-		}
-		wg.Wait()
-
-		if connFailed.Load() {
-			conn.reset(current)
-			if len(rates) == 0 {
-				return nil, fmt.Errorf("chainlink: all feed reads failed")
-			}
-			return rates, nil
-		}
-
-		current.release()
-		if len(rates) == 0 {
-			return nil, fmt.Errorf("chainlink: no valid prices returned")
-		}
-		return rates, nil
-	}
 }
 
 // chainlinkBatchFetcherCore is the testable batched implementation used once
@@ -589,7 +404,7 @@ func chainlinkBatchFetcherCore(
 			return nil, fmt.Errorf("chainlink: %w", err)
 		}
 
-		readCtx, cancel := context.WithTimeout(ctx, chainlinkInitTimeout)
+		readCtx, cancel := context.WithTimeout(ctx, chainlinkReadTimeout)
 		readings, err := newBatchContract(current.client).read(readCtx, addrs)
 		cancel()
 		if err != nil {

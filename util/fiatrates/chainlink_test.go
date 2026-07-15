@@ -52,37 +52,6 @@ func TestChainlinkDialsThroughDexnet(t *testing.T) {
 	}
 }
 
-// mockAggregatorContract is a test mock of chainlinkAggregatorContract.
-type mockAggregatorContract struct {
-	answer        *big.Int
-	decimalPlaces uint8
-	updatedAt     time.Time
-	err           error
-
-	mtx           sync.Mutex
-	decimalsCalls int
-}
-
-func (m *mockAggregatorContract) latestRoundData(_ context.Context) (*big.Int, time.Time, error) {
-	if m.updatedAt.IsZero() {
-		return m.answer, time.Now(), m.err
-	}
-	return m.answer, m.updatedAt, m.err
-}
-
-func (m *mockAggregatorContract) decimals(_ context.Context) (uint8, error) {
-	m.mtx.Lock()
-	m.decimalsCalls++
-	m.mtx.Unlock()
-	return m.decimalPlaces, nil
-}
-
-func (m *mockAggregatorContract) decimalCallCount() int {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-	return m.decimalsCalls
-}
-
 // TestChainlinkLive tests the Chainlink price feeds on Polygon mainnet end-to-end.
 func TestChainlinkLive(t *testing.T) {
 	if testing.Short() {
@@ -244,40 +213,6 @@ func TestChainlinkRateFetcherEmptyProviders(t *testing.T) {
 		if err == nil {
 			t.Errorf("ChainlinkProviders=%q: expected error, got nil", val)
 		}
-	}
-}
-
-// TestChainlinkLegacyFetcherDecimalsEachCycle verifies that the legacy fetcher
-// calls decimals() on every cycle so a bad first response cannot permanently
-// corrupt a ticker's divisor until process restart.
-func TestChainlinkLegacyFetcherDecimalsEachCycle(t *testing.T) {
-	mock := &mockAggregatorContract{
-		answer:        big.NewInt(5000000000000),
-		decimalPlaces: 8,
-		updatedAt:     time.Now().Add(-time.Minute),
-	}
-
-	fetch := chainlinkLegacyFetcherCore(
-		map[string]common.Address{"BTC": mockFeedAddr},
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
-		func(_ common.Address, _ chainRPCClient) chainlinkAggregatorContract { return mock },
-		chainlinkMaxAge,
-	)
-
-	const cycles = 3
-	log := util.NewLogger("test", util.LevelDebug, io.Discard)
-	for i := 0; i < cycles; i++ {
-		rates, err := fetch(context.Background(), []string{"BTC"}, log)
-		if err != nil {
-			t.Fatalf("fetch %d: unexpected error: %v", i+1, err)
-		}
-		if _, ok := rates["BTC"]; !ok {
-			t.Fatalf("fetch %d: expected BTC price in results", i+1)
-		}
-	}
-
-	if got := mock.decimalCallCount(); got != cycles {
-		t.Fatalf("expected decimals() called once per cycle (%d), got %d", cycles, got)
 	}
 }
 
