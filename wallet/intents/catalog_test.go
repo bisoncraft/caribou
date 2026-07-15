@@ -55,6 +55,41 @@ func TestCatalogIndexing(t *testing.T) {
 	}
 }
 
+func TestAssetChain(t *testing.T) {
+	tokens := []*Token{
+		{AssetID: "1cs_v1:btc:native:coin", Blockchain: "btc", Decimals: 8, ContractAddress: "coin"},
+		{AssetID: "nep141:btc.omft.near", Blockchain: "btc", Decimals: 8},
+		{AssetID: "nep141:sol-abc.omft.near", Blockchain: "sol", Decimals: 6, ContractAddress: "EPjF"},
+		{AssetID: "nep245:v2_1.omni.hot.tg:137_111", Blockchain: "pol", Decimals: 18},
+		{AssetID: "nep245:v2_1.omni.hot.tg:1117_x", Blockchain: "ton", Decimals: 9}, // unmapped chain
+	}
+	c := newCatalog(tokens)
+
+	// Both BTC ID schemes resolve to chain 0, native — the property the
+	// quote-echo asset check relies on to tolerate service normalization.
+	for _, id := range []string{"1cs_v1:btc:native:coin", "nep141:btc.omft.near"} {
+		chainID, native, ok := c.AssetChain(id)
+		if !ok || chainID != 0 || !native {
+			t.Errorf("AssetChain(%s) = %d, native=%v, ok=%v; want 0, true, true", id, chainID, native, ok)
+		}
+	}
+	// SPL token: chain 501, not native.
+	if chainID, native, ok := c.AssetChain("nep141:sol-abc.omft.near"); !ok || chainID != 501 || native {
+		t.Errorf("SPL AssetChain = %d, native=%v, ok=%v; want 501, false, true", chainID, native, ok)
+	}
+	// nep245 Polygon native resolves (the case the old string parser missed).
+	if chainID, native, ok := c.AssetChain("nep245:v2_1.omni.hot.tg:137_111"); !ok || chainID != 966 || !native {
+		t.Errorf("POL AssetChain = %d, native=%v, ok=%v; want 966, true, true", chainID, native, ok)
+	}
+	// Unmapped chain and unknown ID both fail cleanly.
+	if _, _, ok := c.AssetChain("nep245:v2_1.omni.hot.tg:1117_x"); ok {
+		t.Errorf("unmapped-chain asset unexpectedly resolved")
+	}
+	if _, _, ok := c.AssetChain("nep141:not.in.catalog"); ok {
+		t.Errorf("unknown asset unexpectedly resolved")
+	}
+}
+
 func TestChainBipID(t *testing.T) {
 	for slug, want := range map[string]uint32{
 		"btc": 0, "ltc": 2, "doge": 3, "dash": 5, "eth": 60, "zec": 133,

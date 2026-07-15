@@ -134,6 +134,25 @@ func (c *Catalog) FindContract(chainBipID uint32, contractAddress string) *Token
 	return c.byContract[chainContract{chainBipID, strings.ToLower(contractAddress)}]
 }
 
+// AssetChain resolves an Intents asset ID to the wallet chain asset ID it
+// belongs to (via the catalog) and whether it is that chain's native
+// asset. ok is false if the asset ID is not in the catalog or its chain is
+// unmapped. Because it resolves through the catalog rather than parsing the
+// ID string, it tolerates the service's normalization between ID schemes
+// (nep141 ↔ 1cs_v1) — useful for verifying that a quote's echoed asset is
+// the one that was requested.
+func (c *Catalog) AssetChain(assetID string) (chainID uint32, native, ok bool) {
+	t := c.byAssetID[assetID]
+	if t == nil {
+		return 0, false, false
+	}
+	chainID, ok = ChainBipID(t.Blockchain)
+	if !ok {
+		return 0, false, false
+	}
+	return chainID, isNative(t), true
+}
+
 // Chains returns the mapped chain asset IDs with at least a native entry
 // in the catalog.
 func (c *Catalog) Chains() []uint32 {

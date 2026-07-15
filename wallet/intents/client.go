@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 )
 
 // DefaultBaseURL is the production 1Click service.
@@ -48,6 +49,11 @@ type Config struct {
 	// AppFees are applied to every quote request that does not carry its
 	// own. See AppFee.
 	AppFees []AppFee
+	// Proxy is the address (host:port) of a SOCKS5 proxy (e.g. Tor) to
+	// route all requests through. Empty means direct connections. Swap
+	// traffic (quotes, deposit addresses, status) is sensitive, so a
+	// privacy-configured wallet must supply this.
+	Proxy string
 }
 
 // Client is a 1Click API client.
@@ -77,9 +83,13 @@ func NewClient(cfg *Config, log util.Logger) (*Client, error) {
 	if len(key) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("bad signing key %q", keyStr)
 	}
+	httpClient := &http.Client{Timeout: requestTimeout}
+	if cfg.Proxy != "" {
+		httpClient.Transport = dexnet.ProxyTransport(cfg.Proxy)
+	}
 	return &Client{
 		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: requestTimeout},
+		httpClient: httpClient,
 		signingKey: ed25519.PublicKey(key),
 		appFees:    cfg.AppFees,
 		log:        log,
