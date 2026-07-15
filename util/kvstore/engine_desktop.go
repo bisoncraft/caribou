@@ -3,11 +3,12 @@
 
 //go:build !mobile
 
-package txdb
+package kvstore
 
 import "github.com/bisoncraft/caribou/util"
 
-// newStore opens the desktop transaction store, backed by Badger via util/lexi.
-func newStore(path string, log util.Logger) (Store, error) {
+// New opens the desktop store at path, backed by Badger via util/lexi. The
+// path names a directory.
+func New(path string, log util.Logger) (Store, error) {
 	return newLexiStore(path, log)
 }

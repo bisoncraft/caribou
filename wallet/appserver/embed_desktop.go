@@ -9,7 +9,7 @@ import "embed"
 
 // site is the bundle directory whose dist is served (js/css/index.html). The
 // desktop build serves the newui bundle. Mirrors the storage-engine build-tag
-// split (txdb/engine_desktop.go).
+// split (util/kvstore/engine_desktop.go).
 const site = "newui"
 
 // checkAppVersion enables the periodic GitHub release poll. The desktop build

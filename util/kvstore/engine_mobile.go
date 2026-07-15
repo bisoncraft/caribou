@@ -3,12 +3,12 @@
 
 //go:build mobile
 
-package txdb
+package kvstore
 
 import "github.com/bisoncraft/caribou/util"
 
-// newStore opens the mobile transaction store, backed by bbolt via
-// util/glossi.
-func newStore(path string, log util.Logger) (Store, error) {
+// New opens the mobile store at path, backed by bbolt via util/glossi. The
+// path names a file.
+func New(path string, log util.Logger) (Store, error) {
 	return newGlossiStore(path, log)
 }

@@ -7,8 +7,8 @@
 // WalletTransaction is the unit of storage; a wallet's network-specific
 // representation rides along inside it via WalletTransaction.RawTx.
 //
-// The underlying storage engine is selected at build time (see engine_*.go):
-// Badger (util/lexi) on desktop and bbolt (util/glossi) on mobile.
+// Storage is delegated to util/kvstore, which selects the underlying engine at
+// build time: Badger (util/lexi) on desktop and bbolt (util/glossi) on mobile.
 package txdb
 
 import (
@@ -21,6 +21,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/kvstore"
 )
 
 // ErrUnknownTx is returned when a referenced transaction is not found.
@@ -85,7 +86,7 @@ func (db *TxDB) SetTickerResolver(f func(assetID uint32) string) {
 // New opens the master transaction database at path using the build-selected
 // storage engine.
 func New(path string, log util.Logger) (*TxDB, error) {
-	store, err := newStore(path, log)
+	store, err := kvstore.New(path, log)
 	if err != nil {
 		return nil, err
 	}

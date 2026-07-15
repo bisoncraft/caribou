@@ -3,7 +3,7 @@
 
 //go:build !mobile
 
-package txdb
+package kvstore
 
 import (
 	"context"

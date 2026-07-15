@@ -1,7 +1,16 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-package txdb
+// Package kvstore is a small storage abstraction that lets the backing engine
+// be swapped at build time: Badger (util/lexi) on desktop and bbolt
+// (util/glossi) on mobile. The interfaces here capture the common surface of
+// those two engines, so a database built on them works under either.
+//
+// The abstraction deliberately omits transactions. lexi can compose an atomic
+// write across tables and glossi cannot, so the honest intersection is the
+// per-table atomicity that SetBatch provides on both. A database needing more
+// than that cannot be expressed against both engines.
+package kvstore
 
 import (
 	"context"
@@ -10,16 +19,12 @@ import (
 	"github.com/bisoncraft/caribou/util"
 )
 
-// The transaction database is built on a small storage abstraction so that the
-// backing engine can be swapped at build time: Badger (util/lexi) on desktop and
-// bbolt (util/glossi) on mobile. The interfaces below capture the common
-// surface of those two engines.
-//
 // The sentinel errors deliberately use the same string values as both engines
 // (util.ErrorKind compares by value), so ErrEndIteration and ErrNotIndexed
-// returned by txdb-level callbacks/index functions are recognized by whichever
-// engine is in use without translation. Only ErrKeyNotFound differs between the
-// engines and is translated to this one inside the Store.Get adapters.
+// returned by caller-supplied callbacks and index functions are recognized by
+// whichever engine is in use without translation. Only ErrKeyNotFound differs
+// between the engines and is translated to this one inside the Store.Get
+// adapters.
 const (
 	// ErrKeyNotFound is returned by Table.Get when a key is absent.
 	ErrKeyNotFound = util.ErrorKind("key not found")

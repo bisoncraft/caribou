@@ -9,7 +9,7 @@ import "embed"
 
 // site is the bundle directory whose dist is served (js/css/index.html). The
 // mobile build serves the mobile bundle. Mirrors the storage-engine build-tag
-// split (txdb/engine_mobile.go).
+// split (util/kvstore/engine_mobile.go).
 const site = "mobile"
 
 // checkAppVersion enables the periodic GitHub release poll. The desktop build
