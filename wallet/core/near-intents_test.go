@@ -65,30 +65,6 @@ func TestIntentsAmountScaling(t *testing.T) {
 	}
 }
 
-func TestIntentsChainOf(t *testing.T) {
-	tests := []struct {
-		assetID string
-		want    uint32
-		ok      bool
-	}{
-		{"nep141:btc.omft.near", 0, true},
-		{"nep141:zec.omft.near", 133, true},
-		{"nep141:sol.omft.near", 501, true},
-		{"nep141:sol-b9c68f94ec8fd160137af8cdfe5e61cd68e2afba.omft.near", 501, true},
-		{"nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near", 60, true},
-		{"nep141:wrap.near", 397, true},
-		{"nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1", 397, true},
-		{"nep245:v2_1.omni.hot.tg:137_11111111111111111111", 0, false},
-		{"1cs_v1:btc:native:coin", 0, false},
-	}
-	for _, tt := range tests {
-		got, ok := intentsChainOf(tt.assetID)
-		if ok != tt.ok || (ok && got != tt.want) {
-			t.Errorf("intentsChainOf(%s) = %d, %v; want %d, %v", tt.assetID, got, ok, tt.want, tt.ok)
-		}
-	}
-}
-
 func TestIntentsSwapStates(t *testing.T) {
 	for state, terminal := range map[string]bool{
 		IntentsStateQuoted:              false,
@@ -148,7 +124,14 @@ func TestSwapFromStatus(t *testing.T) {
 		t.Fatalf("error decoding fixture: %v", err)
 	}
 
-	swap, err := swapFromStatus(0, "bc1qdepositaddr", "sometxid", status)
+	// Stub resolver: the fixture's destination is nep141:sol.omft.near.
+	resolve := func(assetID string) (uint32, bool) {
+		if assetID == "nep141:sol.omft.near" {
+			return 501, true
+		}
+		return 0, false
+	}
+	swap, err := swapFromStatus(resolve, 0, "bc1qdepositaddr", "sometxid", status)
 	if err != nil {
 		t.Fatalf("swapFromStatus: %v", err)
 	}
@@ -171,6 +154,30 @@ func TestSwapFromStatus(t *testing.T) {
 	}
 	if len(swap.QuoteEnvelope) == 0 {
 		t.Fatalf("no quote envelope retained")
+	}
+}
+
+// TestSwapFromStatusUnknownChain covers the DestAssetID sentinel: an
+// unresolved destination must be intentsAssetUnknown, never 0 (BTC).
+func TestSwapFromStatusUnknownChain(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "intents", "testdata", "status-pending.json"))
+	if err != nil {
+		t.Fatalf("error reading fixture: %v", err)
+	}
+	status := new(intents.StatusResponse)
+	if err := json.Unmarshal(b, status); err != nil {
+		t.Fatalf("error decoding fixture: %v", err)
+	}
+	resolve := func(string) (uint32, bool) { return 0, false } // nothing resolves
+	swap, err := swapFromStatus(resolve, 0, "bc1qdepositaddr", "sometxid", status)
+	if err != nil {
+		t.Fatalf("swapFromStatus: %v", err)
+	}
+	if swap.DestAssetID != intentsAssetUnknown {
+		t.Fatalf("unresolved dest = %d, want sentinel %d (must not be 0/BTC)", swap.DestAssetID, intentsAssetUnknown)
+	}
+	if got := intentsAssetLabel(swap.DestAssetID, swap.DestAsset); got != swap.DestAsset {
+		t.Fatalf("unknown asset label = %q, want the Intents asset ID %q", got, swap.DestAsset)
 	}
 }
 
