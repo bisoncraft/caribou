@@ -46,6 +46,25 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 		return
 	}
 
+	// A rotation away from a LIVE node (the lag and divergence paths)
+	// closes it below, which wakes that node's own watchNode, which hands
+	// off a duplicate rotate for the same node. By the time the duplicate
+	// wins rotMtx, the node has already been replaced — a successor group
+	// is installed, or the slot was cleared for the degraded loop — and
+	// joining the CURRENT loop group here would block until the healthy
+	// successor itself dies, holding rotMtx and wedging every rotation
+	// after it. Teardown is owned downstream in both replacement shapes
+	// (the successor's watchNode, or the degraded loop), so a stale
+	// rotation has nothing to do. Reading node and group under one lock
+	// also guarantees the group joined below belongs to `dead`, never to
+	// a successor.
+	n.mu.Lock()
+	current, group := n.node, n.loops
+	n.mu.Unlock()
+	if current != dead {
+		return
+	}
+
 	log.Warnf("electrum: rotating away from wallet server %s: %s",
 		dead.Addr().Addr, reason)
 
@@ -63,9 +82,6 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	// successor's header sync rewinds at the store level but does not
 	// re-emit to the consumer, so the bounded wait is the safe choice.
 	dead.Close()
-	n.mu.Lock()
-	group := n.loops
-	n.mu.Unlock()
 	if group != nil {
 		group.join()
 	}

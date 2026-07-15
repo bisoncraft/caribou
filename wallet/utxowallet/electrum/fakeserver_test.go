@@ -611,6 +611,9 @@ func TestDivergenceReorgPromotion(t *testing.T) {
 	oldInterval := observerCompareInterval
 	observerCompareInterval = 50 * time.Millisecond
 	t.Cleanup(func() { observerCompareInterval = oldInterval })
+	oldRetry := degradedRetryInterval
+	degradedRetryInterval = 50 * time.Millisecond
+	t.Cleanup(func() { degradedRetryInterval = oldRetry })
 
 	serverHealth.mtx.Lock()
 	serverHealth.m = make(map[string]*serverRecord)
@@ -672,6 +675,34 @@ func TestDivergenceReorgPromotion(t *testing.T) {
 	waitFor(t, "broadcast suspension lifted", func() bool {
 		return !net_.spendSuspect.Load()
 	})
+
+	// The divergence path rotates away from a LIVE node, so rotate itself
+	// closes it, waking the dead node's watchNode, which hands off a
+	// duplicate rotate. That duplicate must bail instead of joining the
+	// successor's healthy loop group — a join there holds the rotation
+	// mutex until the successor dies, wedging every future rotation.
+	rotMtxFree := func() bool {
+		if !net_.rot.mtx.TryLock() {
+			return false
+		}
+		net_.rot.mtx.Unlock()
+		return true
+	}
+	waitFor(t, "rotation mutex released", rotMtxFree)
+
+	// And rotation must still function end to end: kill the successor —
+	// with A quarantined and B excluded as the failed node, the rotation
+	// lands degraded — then let the degraded loop re-elect B once it
+	// answers again. Observing the empty wallet slot first keeps the
+	// recovery check from passing vacuously on the pre-rotation state.
+	fB.KillConns()
+	waitFor(t, "degraded after successor death", func() bool {
+		return net_.currentWalletAddr() == ""
+	})
+	waitFor(t, "re-election after successor death", func() bool {
+		return net_.currentWalletAddr() == fB.addr().Addr && rotMtxFree()
+	})
+
 	select {
 	case <-net_.Done():
 		t.Fatal("network shut down during reorg promotion")
