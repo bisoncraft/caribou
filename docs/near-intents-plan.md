@@ -28,18 +28,25 @@ primarily a core-level feature rather than a NEAR-wallet feature.
 ### Architecture decisions
 
 - **Keyless operation.** The API works unauthenticated at the cost of a
-  20 bps (0.20%) platform surcharge priced into quotes. A partner API key
-  would remove the surcharge and halve fee revenue share terms, but ties the
+  platform surcharge priced into quotes (documented as 20 bps; measured at
+  10 bps on 2026-07-15, injected as an `appFees` entry paying the
+  protocol's collection account on every keyless quote). A partner API key
+  would remove the surcharge and improve fee share terms, but ties the
   project to an identified Gibraltar-law business relationship (Defuse Labs
   Ltd), creates a revocable dependency, and an API key cannot be kept secret
   inside an open-source client with no server component. Keyless first;
   revisit with volume data. Switching later is additive.
 - **Application fee: 10 bps (0.1%) via `appFees`.** The quote request's
   `appFees: [{recipient, fee}]` parameter is honored on unauthenticated
-  quotes (verified empirically 2026-07-14: a 30 bps entry reduced
-  `amountOut` by exactly 30 bps plus quote drift). The protocol retains 50%
-  of the configured fee. Fees accrue in the traded token as NEP-245
-  balances credited to the recipient account inside `intents.near`.
+  quotes. Measured mechanics (paired live dry quotes, 2026-07-15): the
+  service rewrites the fee array — a configured fee of N bps becomes N/2 to
+  the configured recipient plus N/2 on top of the surcharge to the protocol
+  account, so the user's total app-fee cost is N plus the surcharge, and
+  the marginal cost of the application fee to the user is exactly N. The
+  rewritten array is echoed on every quote, giving the UI an exact,
+  displayable fee breakdown. Fees accrue in the traded token as NEP-245
+  balances credited to the recipient account inside `intents.near`
+  (denomination to confirm in Phase 5).
 - **Treasury: 0x-style secp256k1 account.** The verifier derives account
   identities from public keys with no registration; an ECDSA key yields an
   0x-style identity whose withdrawals are signed with ERC-191
@@ -74,9 +81,21 @@ primarily a core-level feature rather than a NEAR-wallet feature.
   never in third-party custody; the disclosure copy leans on that
   guarantee.
 
-### Verified protocol behavior (2026-07-14)
+### Verified protocol behavior (2026-07-14/15)
 
-- `appFees` is honored without authentication (see above).
+- `appFees` is honored without authentication and rewritten by the service
+  (split + surcharge injection; see above). It is excluded from the quote
+  signature's signed payload.
+- The `/tokens` catalog carries no min/max bounds; limits surface at quote
+  time (`minAmountIn`/`minAmountOut`), and quotes disclose `refundFee`
+  (origin asset) and `withdrawFee` (destination asset) upfront.
+- The service normalizes asset IDs across its schemes (`nep141:` ↔
+  `1cs_v1:`), so echoed asset IDs cannot be compared byte-wise against the
+  request; the nep141 form is preferred for requests.
+- Quote signatures verify only against the original `/quote` response
+  bytes. The `/status` endpoint re-serializes the stored request (asset
+  IDs come back un-normalized), so status-embedded quote responses do NOT
+  re-verify. Quotes are verified once at quote time and persisted.
 - Deposit addresses are unique per quote: two identical non-dry quote
   requests returned distinct BTC addresses. The deposit address is the
   swap's identity and primary key. Memo-mode chains use a shared address
@@ -119,24 +138,27 @@ Deferred until PR #113 (NEP-141 token layer) merges:
 - [ ] Token-send fee estimation (storage-deposit action doubles gas).
 - [ ] Native USDT (`usdt.tether-token.near`).
 
-## Phase 2 — `wallet/intents` package: 1Click client
+## Phase 2 — `wallet/intents` package: 1Click client (complete)
 
-- [ ] REST client for the v0 endpoints used by the wallet: `/tokens`,
-  `/quote` (dry and committed), `/status`, `/deposit/submit`. Hand-written;
-  the official Go SDK is stale codegen pinned to an old spec.
-- [ ] Token catalog: fetch, cache, and map Intents asset IDs
-  (`nep141:btc.omft.near`, …) to wallet asset IDs; expose min/max bounds
-  and decimals. Unknown catalog entries are ignored, never fatal.
-- [ ] Quote signature verification: every quote carries an Ed25519
-  signature over deterministic JSON; verify before displaying or paying a
-  deposit address (defense against deposit-address substitution). Pin the
-  service public key (extracted from the reference SDK) with a
-  configuration override.
-- [ ] Application fee injection (`appFees`, 10 bps) and the fee-mechanism
-  seam: quote construction goes through a small interface so the fee path
-  can be swapped (contingency: origin-side fee outputs) without touching
-  the engine.
-- [ ] Dry quotes for price preview (dry quotes skip the service's
+- [x] REST client for the v0 endpoints used by the wallet: `/tokens`,
+  `/quote` (dry and committed), `/status` (404 → `ErrSwapNotFound`, for
+  restore-time probing), `/deposit/submit`. Hand-written; the official Go
+  SDK is stale codegen pinned to an old spec.
+- [x] Token catalog: fetch and index Intents assets; per-chain native
+  resolution (`nep141:` preferred over `1cs_v1:` duplicates, `wrap.near`
+  special-cased for NEAR) and case-insensitive contract lookup for tokens;
+  chain-slug → BIP-44 ID mapping for implemented chains. Unknown catalog
+  entries are retained but unmapped, never fatal.
+- [x] Quote signature verification, ported from the reference SDK's
+  canonicalization (whitelisted flat payload with JavaScript-falsy
+  omission, stable stringify, SHA-256, base58 digest string as the Ed25519
+  message). Validated against captured production-signed responses in
+  `wallet/intents/testdata/`. Key pinned with configuration override.
+- [x] Application fee injection via client configuration, plus an echo
+  cross-check of recipient/refundTo/amount/swapType after signature
+  verification (the signature proves what the service signed, not what
+  the client sent).
+- [x] Dry quotes for price preview (dry quotes skip the service's
   compliance screening; committed quotes run it).
 
 ## Phase 3 — swap engine in `wallet/core/near-intents.go`
