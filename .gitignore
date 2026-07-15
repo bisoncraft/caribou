@@ -72,3 +72,9 @@ wallet/android/app/src/main/jniLibs/*/*.so
 # Staged libc++ for android XMR (built artifact, from simplybs NDK)
 wallet/asset/xmr/lib/*/libc++_shared.so
 wallet/android/app/src/main/jniLibs/*/libc++_shared.so
+
+# dnldd's local workflow files (notes, reviews, harness scripts) - not for commit
+CLAUDE.md
+reviews/
+scripts/
+notes/
