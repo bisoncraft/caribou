@@ -763,6 +763,40 @@ func TestDegradedSelfHealing(t *testing.T) {
 	}
 }
 
+// TestStartEmptyCandidates: Start with every shipped server quarantined must
+// fail with an error, not panic. A divergence audit quarantines the wallet
+// server for 24 hours (persisted), and the wallet rebuilds the Network on
+// every reconnect — on a chain with a short shipped list the election can
+// come up empty, and Start's dial loop leaves its tip nil in that case.
+func TestStartEmptyCandidates(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	f, params := newFakeServer(t, 10)
+	serverHealth.mtx.Lock()
+	serverHealth.quarantined[f.addr().Addr] = true
+	serverHealth.mtx.Unlock()
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:         chainCfg,
+		TrustedServer: f.addr(),
+		DataDir:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err == nil {
+		net_.Stop()
+		t.Fatal("Start succeeded with every candidate quarantined")
+	}
+}
+
 // TestLagRotation covers the CONC-2 regression: a wallet server that lags the
 // observers rotates surgically (demote + promote), it does NOT tear the
 // network down (the pre-fix behavior called Stop directly).

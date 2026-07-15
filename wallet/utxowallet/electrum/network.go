@@ -272,6 +272,15 @@ func (n *Network) Start(parent context.Context) error {
 	// the server's headersNotify channel; headersLoop drains them after
 	// sync completes.
 	candidates := n.pool.walletCandidates()
+	if len(candidates) == 0 {
+		// Every shipped server is quarantined (divergence audits persist
+		// quarantine for 24 hours, and the discovered fallback opens only
+		// on recorded failures, not quarantine). tryElect and the degraded
+		// loop tolerate an empty election; Start must too, or the dial
+		// loop below leaves tip nil and the publish dereferences it.
+		return failed(errors.New(
+			"electrum: no eligible wallet servers (all quarantined)"))
+	}
 	var node *Node
 	var tip *HeadersTip
 	var dialErr error
