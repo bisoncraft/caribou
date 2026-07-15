@@ -638,8 +638,11 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 	// If the wallet requested an on-chain recovery of its funds, we'll do
 	// so now. Backends that can probe per-address history (electrum) discover
 	// used addresses by gap-limit scanning instead of walking blocks; the scan
-	// extends the address pool so the rescan below ingests the funds. A probe
-	// error is logged, not fatal — the rescan still syncs the known addresses.
+	// extends the address pool — on a fresh or restored wallet the rescan
+	// below ingests the funds, and on an aged wallet (whose rescan starts at
+	// SyncedTo, above the discovered history) the scan seeds the sweep tier
+	// to ingest them (see recoverViaScan). A probe error is logged, not
+	// fatal — the rescan still syncs the known addresses.
 	if w.recoveryWindow > 0 {
 		if prober, ok := chainClient.(chain.AddressProber); ok {
 			if err := w.recoverViaScan(prober, w.recoveryWindow); err != nil {

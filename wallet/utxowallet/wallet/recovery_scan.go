@@ -43,10 +43,17 @@ const proberConcurrency = 16
 // could have reached beyond what this wallet already derived.
 //
 // Extending the pool makes the discovered addresses "active" (see
-// ForEachRelevantActiveAddress), so the rescan that follows ingests them — no
-// separate re-trigger. The scan is idempotent: ExtendExternal/InternalAddresses
-// only ever extends the pool, so re-running (or running on a rebuild already
-// extended via RecoveryCfg) cannot lose state.
+// ForEachRelevantActiveAddress). Ingestion of their history depends on the
+// wallet's age: a fresh or restored wallet (empty watch-tier index) watches
+// everything and rescans from the birthday, which covers them; an aged
+// wallet filters its watch set and rescans only from SyncedTo, so each
+// discovery is also seeded into the fast sweep tier with a floor below its
+// earliest known activity — the first sweep ingests the history the catch-up
+// rescan cannot see. The scan is idempotent:
+// ExtendExternal/InternalAddresses only ever extends the pool, and a re-seed
+// merges into an existing cold entry keeping the lower floor, so re-running
+// (or running on a rebuild already extended via RecoveryCfg) cannot lose
+// state.
 func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) error {
 	if gapLimit == 0 {
 		return nil
@@ -91,8 +98,21 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		scope, gapLimit, branchStart[waddrmgr.ExternalBranch],
 		branchStart[waddrmgr.InternalBranch])
 
+	// Discovery seeding is for AGED wallets only: with last-active entries
+	// on disk, classifyWatchSet filters the watch set and rescanWithTarget
+	// catches up from SyncedTo, so a discovered address's history — which
+	// can sit far below SyncedTo — would never be ingested by either. On a
+	// fresh or restored wallet (empty index) classification watches
+	// everything and the rescan walks from the birthday, which covers the
+	// discoveries by itself.
+	aged := false
+	_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		aged = indexHasEntries(tx)
+		return nil
+	})
+
 	for _, branch := range []uint32{waddrmgr.ExternalBranch, waddrmgr.InternalBranch} {
-		lastUsed, err := w.scanBranch(prober, scoped, branch, branchStart[branch], gapLimit)
+		lastUsed, found, err := w.scanBranch(prober, scoped, branch, branchStart[branch], gapLimit)
 		if err != nil {
 			return fmt.Errorf("recover: scope %v branch %d: %w", scope, branch, err)
 		}
@@ -105,48 +125,79 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 			return fmt.Errorf("recover: extend scope %v branch %d to %d: %w",
 				scope, branch, lastUsed, err)
 		}
+		// Seed each discovered address into the fast sweep tier with its
+		// floor just below its earliest known activity. Discovered
+		// addresses have history the wallet has never ingested, so
+		// classification alone would misfile them: no last-active entry
+		// reads as quiet, and an internal's never-ingested credit reads as
+		// unfunded. The seed's floor makes the first sweep (due at the
+		// first block after sync) fetch and ingest the full history; the
+		// hit then promotes the address into the tracked set and normal
+		// tiering takes over. Classification's own later demotion merges
+		// harmlessly: demote keeps the lower floor and the faster tier.
+		if aged {
+			for _, d := range found {
+				floor := d.earliest - 1
+				if floor < 0 {
+					floor = 0
+				}
+				w.watchPol.demote(d.addr, floor, false,
+					branch == waddrmgr.InternalBranch)
+			}
+		}
 		log.Infof("Recovery: scope %v branch %d used through index %d",
 			scope, branch, lastUsed)
 	}
 	return nil
 }
 
+// discoveredAddr is one probe-used address found beyond the pool top, with
+// the lowest confirmed height of its (never-ingested) history.
+type discoveredAddr struct {
+	addr     btcutil.Address
+	earliest int32
+}
+
 // scanBranch probes (scope, branch) in concurrent windows of gapLimit
 // addresses beginning at index start, returning the highest index with any
-// history, or -1 if none. It stops after gapLimit consecutive unused
-// addresses.
+// history (or -1 if none) and every used address found. It stops after
+// gapLimit consecutive unused addresses.
 func (w *Wallet) scanBranch(prober chain.AddressProber,
-	scoped *waddrmgr.ScopedKeyManager, branch, start, gapLimit uint32) (int64, error) {
+	scoped *waddrmgr.ScopedKeyManager, branch, start, gapLimit uint32) (int64, []discoveredAddr, error) {
 
 	lastUsed := int64(-1)
+	var found []discoveredAddr
 	var gap uint32
 	idx := start
 	for gap < gapLimit {
-		used, err := w.probeWindow(prober, scoped, branch, idx, gapLimit)
+		used, earliest, addrs, err := w.probeWindow(prober, scoped, branch, idx, gapLimit)
 		if err != nil {
-			return -1, err
+			return -1, nil, err
 		}
 		// Process in order so the consecutive-gap count is exact.
 		for i := uint32(0); i < gapLimit && gap < gapLimit; i++ {
 			if used[i] {
 				lastUsed = int64(idx + i)
 				gap = 0
+				found = append(found, discoveredAddr{addr: addrs[i], earliest: earliest[i]})
 			} else {
 				gap++
 			}
 		}
 		idx += gapLimit
 	}
-	return lastUsed, nil
+	return lastUsed, found, nil
 }
 
 // probeWindow derives [start, start+n) on (scope, branch) and probes each
 // address concurrently, bounded by proberConcurrency. Derivation is local and
 // runs on the caller's goroutine; only the history probes are concurrent.
 func (w *Wallet) probeWindow(prober chain.AddressProber,
-	scoped *waddrmgr.ScopedKeyManager, branch, start, n uint32) ([]bool, error) {
+	scoped *waddrmgr.ScopedKeyManager, branch, start, n uint32) ([]bool, []int32, []btcutil.Address, error) {
 
 	used := make([]bool, n)
+	earliest := make([]int32, n)
+	addrs := make([]btcutil.Address, n)
 	errs := make([]error, n)
 	sem := make(chan struct{}, proberConcurrency)
 	var wg sync.WaitGroup
@@ -154,23 +205,24 @@ func (w *Wallet) probeWindow(prober chain.AddressProber,
 		addr, err := w.deriveScanAddr(scoped, branch, start+i)
 		if err != nil {
 			wg.Wait()
-			return nil, err
+			return nil, nil, nil, err
 		}
+		addrs[i] = addr
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i uint32, addr btcutil.Address) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			used[i], errs[i] = prober.ProbeAddress(addr)
+			used[i], earliest[i], errs[i] = prober.ProbeAddress(addr)
 		}(i, addr)
 	}
 	wg.Wait()
 	for _, err := range errs {
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return used, nil
+	return used, earliest, addrs, nil
 }
 
 // deriveScanAddr derives the address at (branch, index) for the default account

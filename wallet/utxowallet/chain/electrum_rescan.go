@@ -395,28 +395,35 @@ func statusFromHistory(hist []electrum.HistoryEntry) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ProbeAddress reports whether addr has any confirmed or mempool history, via a
-// one-shot blockchain.scripthash.get_history with no subscription. It is the
+// ProbeAddress reports whether addr has any confirmed or mempool history —
+// and the lowest confirmed height in it — via a one-shot
+// blockchain.scripthash.get_history with no subscription. It is the
 // gap-limit recovery probe (see chain.AddressProber).
 //
 // The reply is parked in probeCache — priming discovery→ingestion reuse is part
-// of the AddressProber contract, since the rescan that follows discovery
+// of the AddressProber contract, since the sweep that follows discovery
 // otherwise refetches every probed address (the subscribe-time status fetch and
 // collectHistories both call get_history). Empty replies are parked too: they
 // let the rescan skip the fetch for the gap-window addresses inside the pool.
-func (c *ElectrumClient) ProbeAddress(addr btcutil.Address) (bool, error) {
+func (c *ElectrumClient) ProbeAddress(addr btcutil.Address) (bool, int32, error) {
 	sh, err := addrScripthash(addr)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	hist, err := c.net.GetHistory(c.ctx, sh)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	c.probeMtx.Lock()
 	c.probeCache[sh] = &probeHistory{status: statusFromHistory(hist), hist: hist}
 	c.probeMtx.Unlock()
-	return len(hist) > 0, nil
+	earliest := int32(0)
+	for _, h := range hist {
+		if h.Height > 0 && (earliest == 0 || h.Height < earliest) {
+			earliest = h.Height
+		}
+	}
+	return len(hist) > 0, earliest, nil
 }
 
 // probedHistory returns the history ProbeAddress parked for the scripthash iff

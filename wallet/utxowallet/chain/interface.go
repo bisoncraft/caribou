@@ -55,9 +55,12 @@ type Backend interface {
 //
 // "Used" means any history, confirmed or in mempool — a used-then-emptied
 // address must still report true, so implementations test history presence,
-// not balance.
+// not balance. earliest is the lowest CONFIRMED height in the history (0
+// when the history is empty or mempool-only): the caller needs it to place a
+// discovered address's sweep floor below its first activity, since the
+// history predates anything the wallet has ingested.
 type AddressProber interface {
-	ProbeAddress(addr btcutil.Address) (used bool, err error)
+	ProbeAddress(addr btcutil.Address) (used bool, earliest int32, err error)
 }
 
 // AddressWatcher is an optional capability for a Backend whose per-address
