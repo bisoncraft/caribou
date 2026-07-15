@@ -21,13 +21,27 @@ const (
 	fiatRateRequestInterval = 12 * time.Minute
 	// fiatRateDataExpiry : Any data older than fiatRateDataExpiry will be discarded.
 	fiatRateDataExpiry = 60 * time.Minute
-	fiatRequestTimeout = time.Second * 5
+	// fiatRateSourceRetryInterval is how long a rate source removed for serving
+	// only expired data is left alone before it is rebuilt and retried. A
+	// source reaches that state by going dark after having worked, which is an
+	// outage rather than a statement about the source, so the removal has to be
+	// temporary.
+	fiatRateSourceRetryInterval = time.Hour
+	fiatRequestTimeout          = time.Second * 5
+	// chainlinkRequestTimeout bounds a full Chainlink refresh. It is much
+	// larger than fiatRequestTimeout because a refresh is a chain of on-chain
+	// RPC calls rather than a single HTTP request: a cold cycle may dial
+	// several providers in sequence at chainlinkDialTimeout each before it
+	// reads any feed. It still has to stay well inside
+	// fiatRateRequestInterval, since refreshFiatRates waits on every source.
+	chainlinkRequestTimeout = time.Second * 30
 
 	// Tokens. Used to identify fiat rate source, source name must not contain a
 	// comma.
 	messari       = "Messari"
 	coinpaprika   = "Coinpaprika"
 	dcrdataDotOrg = "dcrdata"
+	chainlink     = "Chainlink"
 )
 
 var (
@@ -49,9 +63,18 @@ var (
 var fiatRateFetchers = map[string]rateFetcher{
 	coinpaprika:   FetchCoinpaprikaRates,
 	dcrdataDotOrg: FetchDcrdataRates,
+	chainlink:     FetchChainlinkRates,
 	// TODO: messari is temporarily disabled until it is decided to procure an API Key.
 	// messari:       FetchMessariRates,
 }
+
+// chainlinkFetcher constructs the ticker-keyed Chainlink fetcher on first use.
+// The fetcher caches an RPC connection and per-feed decimals internally, so it
+// is built once and shared across refreshes. Construction only fails on invalid
+// configuration, so a failure is permanent and is not retried.
+var chainlinkFetcher = sync.OnceValues(func() (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
+	return fiatrates.ChainlinkRateFetcher(fiatrates.Config{})
+})
 
 // fiatRateInfo holds the fiat rate and the last update time for an
 // asset.
@@ -134,6 +157,57 @@ func FetchCoinpaprikaRates(ctx context.Context, log util.Logger, assets map[uint
 		})
 	}
 	return fiatrates.FetchCoinpaprikaRates(ctx, coinpapAssets, log)
+}
+
+// FetchChainlinkRates retrieves USD rates from Chainlink Data Feeds. Chainlink
+// is keyed on ticker rather than asset ID, so assets are collapsed to tickers
+// on the way in and the resulting rates are fanned back out on the way out. A
+// ticker may carry more than one asset ID, since an asset and its bridged
+// representations on other chains share a ticker and therefore a price. Assets
+// with no configured feed are dropped by the fetcher, which is expected: the
+// feed set is much smaller than the supported asset set.
+func FetchChainlinkRates(ctx context.Context, log util.Logger, assets map[uint32]*SupportedAsset) map[uint32]float64 {
+	fetchRates, err := chainlinkFetcher()
+	if err != nil {
+		log.Errorf("Error building chainlink fiat rate fetcher: %v", err)
+		return nil
+	}
+	return chainlinkRates(ctx, log, assets, fetchRates)
+}
+
+// chainlinkRates translates between core's asset IDs and a ticker-keyed
+// Chainlink fetcher. The fetcher is a parameter so the translation can be
+// exercised without an RPC connection.
+func chainlinkRates(ctx context.Context, log util.Logger, assets map[uint32]*SupportedAsset,
+	fetchRates func(context.Context, []string, util.Logger) (map[string]float64, error)) map[uint32]float64 {
+
+	tickerAssets := make(map[string][]uint32, len(assets))
+	for assetID, sa := range assets {
+		ticker := fiatrates.ParseTicker(util.TokenSymbol(sa.Symbol))
+		tickerAssets[ticker] = append(tickerAssets[ticker], assetID)
+	}
+
+	tickers := make([]string, 0, len(tickerAssets))
+	for ticker := range tickerAssets {
+		tickers = append(tickers, ticker)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, chainlinkRequestTimeout)
+	defer cancel()
+
+	rates, err := fetchRates(ctx, tickers, log)
+	if err != nil {
+		log.Errorf("Error getting fiat exchange rates from chainlink: %v", err)
+		return nil
+	}
+
+	fiatRates := make(map[uint32]float64, len(rates))
+	for ticker, rate := range rates {
+		for _, assetID := range tickerAssets[ticker] {
+			fiatRates[assetID] = rate
+		}
+	}
+	return fiatRates
 }
 
 // FetchDcrdataRates retrieves and parses fiat rate data from dcrdata

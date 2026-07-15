@@ -96,6 +96,9 @@ type TDB struct {
 	setWalletPwErr  error
 	creds           *db.PrimaryCredentials
 	setCredsErr     error
+	// savedDisabledRateSources records the last SaveDisabledRateSources
+	// argument. nil means the method was never called.
+	savedDisabledRateSources []string
 }
 
 func (tdb *TDB) Connect(context.Context) (*sync.WaitGroup, error) {
@@ -153,6 +156,7 @@ func (tdb *TDB) DisabledRateSources() ([]string, error) {
 	return nil, nil
 }
 func (tdb *TDB) SaveDisabledRateSources(disableSources []string) error {
+	tdb.savedDisabledRateSources = disableSources
 	return nil
 }
 func (tdb *TDB) AckNotification(id []byte) error { return nil }
@@ -591,7 +595,9 @@ func newTestRig() *testRig {
 			balPending:   make(map[uint32]*asset.Balance),
 			balActive:    make(map[uint32]bool),
 
-			fiatRateSources:  make(map[string]*commonRateSource),
+			fiatRateSources:         make(map[string]*commonRateSource),
+			autoDisabledRateSources: make(map[string]time.Time),
+
 			notes:            make(chan asset.WalletNotification, 128),
 			requestedActions: make(map[string]*asset.ActionRequiredNote),
 		},

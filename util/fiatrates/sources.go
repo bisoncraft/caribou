@@ -99,7 +99,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 				for ticker, rates := range response {
 					rate, ok := rates["USD"]
 					if ok {
-						fiatRates[parseTicker(ticker)] = rate
+						fiatRates[ParseTicker(ticker)] = rate
 					}
 				}
 
@@ -128,7 +128,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 						log.Errorf("%s: failed to convert fiat rate for %s to float64: %v", kuCoin, ticker, err)
 						continue
 					}
-					fiatRates[parseTicker(ticker)] = rate
+					fiatRates[ParseTicker(ticker)] = rate
 				}
 
 				return fiatRates, nil
@@ -162,7 +162,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 
 				fiatRates := make(map[string]float64)
 				for _, asset := range response {
-					ticker := parseTicker(strings.TrimSuffix(asset.Symbol, "USDT"))
+					ticker := ParseTicker(strings.TrimSuffix(asset.Symbol, "USDT"))
 					rate, err := strconv.ParseFloat(asset.Price, 64)
 					if err != nil {
 						log.Errorf("%s: failed to convert fiat rate for %s to float64: %v", binance, ticker, err)
@@ -181,7 +181,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 			getRates: func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
 				fiatRates := make(map[string]float64, len(tickers))
 				for _, a := range tickers {
-					fiatRates[parseTicker(a)] = 0
+					fiatRates[ParseTicker(a)] = 0
 				}
 
 				var res []*struct {
@@ -198,7 +198,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 				}
 
 				for _, coinInfo := range res {
-					ticker := parseTicker(coinInfo.Symbol)
+					ticker := ParseTicker(coinInfo.Symbol)
 					_, found := fiatRates[ticker]
 					if !found {
 						continue
@@ -237,7 +237,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 						continue // fetch other tickers
 					}
 
-					fiatRates[parseTicker(ticker)] = res.Data.MarketData.Price
+					fiatRates[ParseTicker(ticker)] = res.Data.MarketData.Price
 				}
 
 				return fiatRates, nil
@@ -246,7 +246,7 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 	}
 
 	if !strings.Contains(disabledSources, strings.ToLower(chainlink)) {
-		getRates, err := chainlinkRateFetcher(cfg)
+		getRates, err := ChainlinkRateFetcher(cfg)
 		if err != nil {
 			flog.Errorf("chainlink: %v", err)
 		} else {
@@ -268,12 +268,15 @@ func fiatSources(cfg Config, flog util.Logger) []*source {
 func parseTickers(tickerSymbols ...string) string {
 	var tickers strings.Builder
 	for _, ticker := range tickerSymbols {
-		tickers.WriteString(parseTicker(ticker) + ",")
+		tickers.WriteString(ParseTicker(ticker) + ",")
 	}
 	return strings.Trim(tickers.String(), ",")
 }
 
-func parseTicker(ticker string) string {
+// ParseTicker normalizes an asset symbol into the upper-cased ticker used to
+// key rates from every source. A few assets are known to the rate APIs under a
+// symbol that differs from the one used internally, and are remapped here.
+func ParseTicker(ticker string) string {
 	if strings.EqualFold(ticker, "polygon") {
 		return "MATIC"
 	} else if strings.EqualFold(ticker, "usdc.eth") || strings.EqualFold(ticker, "usdc.polygon") {
@@ -285,7 +288,7 @@ func parseTicker(ticker string) string {
 func parseBinanceTickers(tickerSymbols []string) string {
 	var tickers strings.Builder
 	for _, ticker := range tickerSymbols {
-		ticker = parseTicker(ticker)
+		ticker = ParseTicker(ticker)
 		tickers.WriteString(fmt.Sprintf("%q,", ticker+"USDT"))
 	}
 	return strings.Trim(tickers.String(), ",")

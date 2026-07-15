@@ -146,6 +146,11 @@ type Core struct {
 
 	ratesMtx        sync.RWMutex
 	fiatRateSources map[string]*commonRateSource
+	// autoDisabledRateSources maps a rate source to the time it was removed for
+	// serving only expired data. Removal is a reaction to an outage rather than
+	// a user preference, so these entries are never persisted and are retried
+	// after fiatRateSourceRetryInterval. Guarded by ratesMtx.
+	autoDisabledRateSources map[string]time.Time
 
 	reFiat chan struct{}
 
@@ -321,7 +326,10 @@ func New(cfg *Config) (*Core, error) {
 		seedGenerationTime:  seedGenerationTime,
 
 		fiatRateSources: make(map[string]*commonRateSource),
-		reFiat:          make(chan struct{}, 1),
+
+		autoDisabledRateSources: make(map[string]time.Time),
+
+		reFiat: make(chan struct{}, 1),
 
 		notes:            make(chan asset.WalletNotification, 128),
 		requestedActions: make(map[string]*asset.ActionRequiredNote),
@@ -3636,6 +3644,8 @@ func (c *Core) fiatSources() []*commonRateSource {
 // not been updated since fiatRateRequestInterval. It also checks if fiat rates
 // are expired and does some clean-up.
 func (c *Core) refreshFiatRates(ctx context.Context) {
+	c.retryAutoDisabledRateSources()
+
 	var wg sync.WaitGroup
 	supportedAssets := c.SupportedAssets()
 	for _, source := range c.fiatSources() {
@@ -3760,6 +3770,10 @@ func (c *Core) enableRateSource(source string) error {
 
 	c.ratesMtx.Lock()
 	defer c.ratesMtx.Unlock()
+
+	// An explicit enable takes the source back from the expiry retry.
+	delete(c.autoDisabledRateSources, source)
+
 	if c.fiatRateSources[source] != nil {
 		return nil // already enabled.
 	}
@@ -3792,7 +3806,13 @@ func (c *Core) disableRateSource(source string) error {
 	c.ratesMtx.Lock()
 	defer c.ratesMtx.Unlock()
 
-	if c.fiatRateSources[source] == nil {
+	// A source removed for expired data is not a user preference. An explicit
+	// disable takes ownership of it, so the entry is dropped and the disable is
+	// persisted rather than being undone by the expiry retry.
+	_, autoDisabled := c.autoDisabledRateSources[source]
+	delete(c.autoDisabledRateSources, source)
+
+	if c.fiatRateSources[source] == nil && !autoDisabled {
 		return nil // already disabled.
 	}
 
@@ -3811,19 +3831,51 @@ func (c *Core) removeExpiredRateSources() {
 	c.ratesMtx.Lock()
 	defer c.ratesMtx.Unlock()
 
-	// Remove fiat rate source with expired exchange rate data.
+	// Remove fiat rate source with expired exchange rate data. The removal is
+	// recorded rather than persisted: a source only reaches this state by going
+	// dark after having worked, which is a transient failure, so it is retried
+	// by retryAutoDisabledRateSources instead of being disabled for good.
 	var disabledSources []string
 	for token, source := range c.fiatRateSources {
 		if source.isExpired(fiatRateDataExpiry) {
 			delete(c.fiatRateSources, token)
+			c.autoDisabledRateSources[token] = time.Now()
 			disabledSources = append(disabledSources, token)
 		}
 	}
 
-	// Ensure disabled fiat rate fetchers are saved to database.
 	if len(disabledSources) > 0 {
-		c.saveDisabledRateSources()
-		c.log.Warnf("Expired rate source(s) has been disabled: %v", strings.Join(disabledSources, ", "))
+		c.log.Warnf("Rate source(s) serving only expired data, will retry in %v: %v",
+			fiatRateSourceRetryInterval, strings.Join(disabledSources, ", "))
+	}
+}
+
+// retryAutoDisabledRateSources restores rate sources that were removed for
+// serving expired data once fiatRateSourceRetryInterval has passed, so that an
+// outage at a source does not silently cost the wallet that source forever.
+func (c *Core) retryAutoDisabledRateSources() {
+	c.ratesMtx.Lock()
+	defer c.ratesMtx.Unlock()
+
+	// An explicit enable or disable in the meantime drops the source's entry
+	// here, so anything still present is owned by the retry rather than by a
+	// user preference.
+	var retried []string
+	for token, disabledAt := range c.autoDisabledRateSources {
+		if time.Since(disabledAt) < fiatRateSourceRetryInterval {
+			continue
+		}
+		delete(c.autoDisabledRateSources, token)
+		rateFetcher, found := fiatRateFetchers[token]
+		if !found || c.fiatRateSources[token] != nil {
+			continue
+		}
+		c.fiatRateSources[token] = newCommonRateSource(rateFetcher)
+		retried = append(retried, token)
+	}
+
+	if len(retried) > 0 {
+		c.log.Infof("Retrying rate source(s) after expiry: %v", strings.Join(retried, ", "))
 	}
 }
 
@@ -3833,6 +3885,13 @@ func (c *Core) removeExpiredRateSources() {
 func (c *Core) saveDisabledRateSources() {
 	var disabled []string
 	for token := range fiatRateFetchers {
+		// Skip sources removed for expired data. They are absent from
+		// fiatRateSources but are awaiting a retry, not disabled by the user,
+		// and persisting them here would make an outage permanent the next time
+		// any source is toggled.
+		if _, autoDisabled := c.autoDisabledRateSources[token]; autoDisabled {
+			continue
+		}
 		if c.fiatRateSources[token] == nil {
 			disabled = append(disabled, token)
 		}

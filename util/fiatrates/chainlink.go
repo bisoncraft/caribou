@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 const aggregatorV3ABI = `[
@@ -340,7 +342,16 @@ func validateRPCURL(urlStr string) error {
 	return nil
 }
 
-func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
+// ChainlinkRateFetcher builds a fetcher that reads USD prices from Chainlink
+// Data Feeds, keyed on the tickers produced by ParseTicker. Tickers without a
+// configured feed are ignored rather than erroring, so callers may pass their
+// full ticker set. A zero Config selects the built-in Polygon mainnet feeds,
+// batch contract, and public RPC providers.
+//
+// The returned fetcher owns a ref-counted RPC connection and a feed decimals
+// cache, so it is built once and reused for the life of the process rather than
+// per request.
+func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
 	feeds := chainlinkPolygonFeeds
 	batchAddr := chainlinkPolygonBatchAddr
 	if cfg.ChainlinkBatchAddr != "" {
@@ -368,14 +379,21 @@ func chainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		}
 	}
 
+	// Dial through dexnet's shared client rather than ethclient's default
+	// transport. dexnet.SetProxy rewrites that client's transport when a SOCKS5
+	// proxy is configured, so routing every provider through it keeps Chainlink
+	// on the same path as the HTTP rate sources. Dialing directly would send
+	// requests to the providers in the clear even when the rest of the process
+	// is proxied, revealing the origin address. Providers are restricted to
+	// https, so an http.Client is always sufficient to reach them.
 	dialFn := func() (chainRPCClient, error) {
 		var lastErr error
 		for _, provider := range providers {
 			dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
-			newEC, err := ethclient.DialContext(dialCtx, provider)
+			rpcClient, err := rpc.DialOptions(dialCtx, provider, rpc.WithHTTPClient(dexnet.Client))
 			cancel()
 			if err == nil {
-				return newEC, nil
+				return ethclient.NewClient(rpcClient), nil
 			}
 			lastErr = err
 		}

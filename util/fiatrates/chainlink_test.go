@@ -6,15 +6,51 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 )
+
+// TestChainlinkDialsThroughDexnet asserts that Chainlink RPC traffic is carried
+// by dexnet's shared client. dexnet.SetProxy applies a SOCKS5 proxy by
+// rewriting that client's transport, so a fetcher that dialed ethclient
+// directly would keep reaching the providers in the clear while the rest of the
+// process was proxied, disclosing the origin address on every refresh.
+func TestChainlinkDialsThroughDexnet(t *testing.T) {
+	var reached atomic.Bool
+
+	old := dexnet.Client
+	defer func() { dexnet.Client = old }()
+	dexnet.Client = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			reached.Store(true)
+			// Fail the request. Only the transport it took is under test.
+			return nil, fmt.Errorf("blocked by test transport")
+		}),
+	}
+
+	getRates, err := ChainlinkRateFetcher(Config{})
+	if err != nil {
+		t.Fatalf("ChainlinkRateFetcher error: %v", err)
+	}
+
+	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
+	if _, err := getRates(context.Background(), []string{"BTC"}, log); err == nil {
+		t.Fatal("expected an error from the blocked transport")
+	}
+
+	if !reached.Load() {
+		t.Fatal("chainlink RPC bypassed dexnet.Client; a configured proxy would not apply")
+	}
+}
 
 // mockAggregatorContract is a test mock of chainlinkAggregatorContract.
 type mockAggregatorContract struct {
@@ -54,7 +90,7 @@ func TestChainlinkLive(t *testing.T) {
 	}
 	cfg := Config{}
 
-	getRates, err := chainlinkRateFetcher(cfg)
+	getRates, err := ChainlinkRateFetcher(cfg)
 	if err != nil {
 		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
@@ -95,7 +131,7 @@ func TestChainlinkMissingTicker(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live test")
 	}
-	getRates, err := chainlinkRateFetcher(Config{})
+	getRates, err := ChainlinkRateFetcher(Config{})
 	if err != nil {
 		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
@@ -122,7 +158,7 @@ func TestChainlinkMixedValidInvalidTickers(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live test")
 	}
-	getRates, err := chainlinkRateFetcher(Config{})
+	getRates, err := ChainlinkRateFetcher(Config{})
 	if err != nil {
 		t.Fatalf("failed to initialize chainlink fetcher: %v", err)
 	}
@@ -204,7 +240,7 @@ func TestValidateRPCURL(t *testing.T) {
 // dial-time error.
 func TestChainlinkRateFetcherEmptyProviders(t *testing.T) {
 	for _, val := range []string{" ", "\t", " \n\t "} {
-		_, err := chainlinkRateFetcher(Config{ChainlinkProviders: val})
+		_, err := ChainlinkRateFetcher(Config{ChainlinkProviders: val})
 		if err == nil {
 			t.Errorf("ChainlinkProviders=%q: expected error, got nil", val)
 		}
@@ -475,7 +511,7 @@ func TestChainlinkRateFetcherInvalidBatchAddress(t *testing.T) {
 
 	for _, addr := range tests {
 		t.Run(addr, func(t *testing.T) {
-			_, err := chainlinkRateFetcher(Config{ChainlinkBatchAddr: addr})
+			_, err := ChainlinkRateFetcher(Config{ChainlinkBatchAddr: addr})
 			if err == nil {
 				t.Fatalf("expected error for ChainlinkBatchAddr=%q", addr)
 			}

@@ -48,7 +48,7 @@ func NewFiatOracle(cfg Config, tickerSymbols string, log util.Logger) (*Oracle, 
 		}
 
 		// Initialize entry for this asset.
-		fiatOracle.rates[parseTicker(ticker)] = new(FiatRateInfo)
+		fiatOracle.rates[ParseTicker(ticker)] = new(FiatRateInfo)
 	}
 
 	if len(fiatOracle.rates) == 0 {

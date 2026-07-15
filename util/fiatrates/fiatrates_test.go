@@ -86,9 +86,9 @@ func TestParseTicker(t *testing.T) {
 		{"eth", "ETH"},
 	}
 	for _, tc := range tests {
-		got := parseTicker(tc.ticker)
+		got := ParseTicker(tc.ticker)
 		if got != tc.want {
-			t.Errorf("parseTicker(%q) = %q, want %q", tc.ticker, got, tc.want)
+			t.Errorf("ParseTicker(%q) = %q, want %q", tc.ticker, got, tc.want)
 		}
 	}
 }
