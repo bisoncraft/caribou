@@ -195,23 +195,63 @@ Deferred until PR #113 (NEP-141 token layer) merges:
   flagged by wallet availability. Native assets only until the token
   layer (PR #113) lands.
 
-## Phase 4 — API and UI
+## Phase 4 — API and UI (complete)
 
-- [ ] Appserver endpoints (dedicated handler file): quote preview,
-  execute, status/history.
-- [ ] Fill the `Swap.tsx` skeleton: pair selection from the eligible set,
-  dry-quote preview with full fee breakdown (application fee, platform
-  surcharge, solver spread in the rate, network costs), commit flow,
-  status timeline mirroring the real state machine.
-- [ ] Custody-honesty framing: one-time first-use disclosure; persistent
-  one-line notice on the swap form; per-pair details popover with operator
-  identity, custody window, per-leg bridge trust (data-driven), refund
-  behavior; plain-language status copy ("Swapping — funds with the
-  service", "Refunded — funds returned to your wallet").
-- [ ] Failure states surface the swap explorer link, the service status
-  page, and the identifiers needed for a support escalation.
+- [x] Appserver endpoints in a dedicated handler file
+  (`wallet/appserver/near-intents.go`): assets, preview, execute, swaps,
+  refresh, reconstruct. Execute mirrors the send handler's password flow.
+- [x] Filled the `Swap.tsx` skeleton: pair selection from the eligible set
+  (origin restricted to available wallets), live debounced dry-quote
+  preview with the full itemized fee breakdown, password-gated confirmation,
+  and a swaps activity list live-updated via the `intentsswap`
+  notification. `IntentsAsset.atomDecimals` (the wallet atomic-unit
+  exponent) carries the scale the UI must use to convert the API's atoms
+  fields — distinct from the Intents catalog decimals (e.g. NEAR 8 vs 24).
+- [x] Custody-honesty framing: one-time first-use disclosure modal;
+  persistent third-party-custody notice on the swap form; per-pair
+  bridge-trust popover driven by a data map (PoA federation vs Omni/HOT
+  MPC); plain-language status labels.
+- [x] Failure/attention states surface the deposit address, transaction
+  hashes, the NEAR Intents explorer, and the service status page.
 - [ ] README/site principles carve-out describing third-party in-transit
-  services.
+  services (still open).
+
+## Review and remediation (2026-07-15) — complete
+
+An 8-angle high-effort code review of the branch produced 17 confirmed
+findings. All are fixed and committed (`34d811b68` near, `9f0a1cf2a`
+intents, `cad3f2875` core; the engine shutdown-ordering fix landed with
+Phase 4). This section is a record of that closed work, not outstanding
+items. Full build, race, lint, and tests are green.
+
+- Fund-safety (NEAR send path): a broadcast is no longer failed over or
+  retried on an ambiguous outcome (transport failure or the server's
+  `TIMEOUT_ERROR`) — it is recorded pending, eliminating the double-send
+  and the "no funds moved" misreport. The `InvalidNonce` retry runs only
+  for an authoritative rejection.
+- RPC robustness: failover try-order fixed so a recovered cooling endpoint
+  is retried; the client is read atomically through a guard that closes a
+  nil-client panic (via `/txfee` on a never-connected wallet) and a data
+  race; the gas-price cache no longer holds its mutex across the RPC and
+  backs off on failure.
+- `EstimateSendTxFee`'s fee-inclusive branch caps like `Withdraw`, so the
+  UI's Max flow is no longer rejected for NEAR.
+- Privacy: both the NEAR RPC client and the 1Click client now honor the
+  configured Tor proxy.
+- Quote integrity: a core-side check rejects a quote whose echoed assets do
+  not resolve (through the catalog) to the requested chains, closing a
+  same-chain token-substitution vector the signature alone does not cover.
+- Engine concurrency: swap-record updates are serialized and reload under
+  the lock, so a stale poll cannot regress state or drop the deposit txid.
+- Reconstruction resolves the destination chain through the catalog with an
+  explicit unknown sentinel, fixing a `DestAssetID = 0` (BTC) misread.
+- A `DEPOSIT_SENT` swap the service never observes is timed out past its
+  deadline instead of polled forever; the poller parks when idle; the
+  catalog is served stale-while-revalidate.
+
+One finding was refuted: the max-withdraw fee margin is adequate (implicit
+account creation costs ~1.9× the fee estimate, not the ~9× claimed), though
+headroom is only ~6% and worth watching under gas-price spikes.
 
 ## Phase 5 — live mainnet validation
 
