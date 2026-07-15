@@ -371,12 +371,21 @@ func (n *Node) EstimateFee(ctx context.Context, confTarget int32) (int64, error)
 	return int64(coinsPerKB * 1e8), nil
 }
 
+// maxAdvertisedPeers bounds how many peers ServerPeers parses from a single
+// server.peers.subscribe reply. Honest deployments advertise a few dozen
+// peers; a hostile server can pack tens of thousands of fabricated entries
+// into one reply, each of which would become a stored pool candidate and a
+// potential dial. Entries past the cap are ignored. (The wire-level frame
+// size is separately bounded by maxFrameSize in server.go.)
+const maxAdvertisedPeers = 64
+
 // ServerPeers issues `server.peers.subscribe` (a one-shot query despite the
-// name) and parses the reply into dialable ssl candidates. Each raw entry is
-// [ip, hostname, [features...]] where features include a protocol version
-// ("v1.4") and port tags ("s50002" = ssl, "t50001" = tcp). Only ssl-capable
-// peers speaking protocol 1.4+ are returned; the recommendation conveys no
-// trust — candidates prove themselves at handshake like any other server.
+// name) and parses the reply into dialable ssl candidates, at most
+// maxAdvertisedPeers of them. Each raw entry is [ip, hostname, [features...]]
+// where features include a protocol version ("v1.4") and port tags ("s50002"
+// = ssl, "t50001" = tcp). Only ssl-capable peers speaking protocol 1.4+ are
+// returned; the recommendation conveys no trust — candidates prove themselves
+// at handshake like any other server.
 func (n *Node) ServerPeers(ctx context.Context) ([]*ServerAddr, error) {
 	var raw [][]interface{}
 	if err := n.server.request(ctx, "server.peers.subscribe", nil, &raw); err != nil {
@@ -384,6 +393,9 @@ func (n *Node) ServerPeers(ctx context.Context) ([]*ServerAddr, error) {
 	}
 	var out []*ServerAddr
 	for _, entry := range raw {
+		if len(out) == maxAdvertisedPeers {
+			break
+		}
 		if len(entry) < 3 {
 			continue
 		}

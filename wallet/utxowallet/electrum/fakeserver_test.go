@@ -422,7 +422,7 @@ func TestFakeServerSmoke(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 
 	waitFor(t, "header sync", func() bool { return net_.Synced() && net_.Tip() == 24 })
 
@@ -446,6 +446,14 @@ func TestFakeServerSmoke(t *testing.T) {
 			return false
 		}
 	})
+}
+
+// stopAndWait stops the network and blocks until teardown finishes. The
+// closer flushes the server pool's coalesced save as its last write, so a
+// test that removes its TempDir without waiting on Done races that write.
+func stopAndWait(net_ *Network) {
+	net_.Stop()
+	<-net_.Done()
 }
 
 // waitFor polls cond until true or fails the test after 10 seconds.
@@ -480,7 +488,7 @@ func TestReplaySubscriptions(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 	waitFor(t, "sync", func() bool { return net_.Synced() })
 
 	// Subscribe two scripthashes; one unsubscribes again and must NOT be
@@ -559,7 +567,7 @@ func TestSurgicalRotation(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 	waitFor(t, "sync", func() bool { return net_.Synced() })
 	waitFor(t, "observer on B", func() bool { return net_.ObserverCount() == 1 })
 
@@ -645,7 +653,7 @@ func TestDivergenceReorgPromotion(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 	waitFor(t, "sync on A's chain", func() bool { return net_.Synced() && net_.Tip() == 14 })
 
 	// Drain tip notifications so the reorg delivery below can't block on
@@ -741,7 +749,7 @@ func TestDegradedSelfHealing(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 	waitFor(t, "sync", func() bool { return net_.Synced() })
 
 	// Drop A's connections. rotate excludes the just-dead server and the
@@ -795,7 +803,7 @@ func TestRotationRecoversReorg(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 	waitFor(t, "sync", func() bool { return net_.Synced() && net_.Tip() == 14 })
 
 	// Drain tip events so reorg disconnect delivery can't block.
@@ -975,7 +983,7 @@ func TestLagRotation(t *testing.T) {
 	if err := net_.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer net_.Stop()
+	defer stopAndWait(net_)
 	waitFor(t, "sync on A", func() bool { return net_.Synced() && net_.Tip() == 11 })
 	waitFor(t, "observer on B", func() bool { return net_.ObserverCount() == 1 })
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -106,6 +107,24 @@ const (
 	// maxRecommenders caps the recommender list per entry.
 	maxRecommenders = 5
 
+	// maxDiscoveredPerRecommender caps how many pool entries a single
+	// recommender may introduce (be the first to advertise).
+	// maxRecommenders bounds the list per entry, not entries per
+	// recommender, so without this cap one hostile server could flood the
+	// pool with thousands of sybils in a single server.peers reply. 16
+	// comfortably exceeds what observer election ever consumes from one
+	// operator while keeping a lone recommender's footprint small.
+	maxDiscoveredPerRecommender = 16
+
+	// maxDiscovered caps the total discovered (non-shipped) entries. 256
+	// is far more fallback depth than elections ever walk, and it bounds
+	// both the persisted file size and the cost of any full scan of the
+	// entry set. When the cap is hit, existing entries are preferred over
+	// new ones: an established entry has age working toward fallback
+	// eligibility (discoveredAgeMin), and evicting it for an unknown would
+	// let an attacker churn honest servers out of the pool.
+	maxDiscovered = 256
+
 	// quarantineTerm is the persisted exclusion for misbehavior (checkpoint
 	// or retarget violations, invalid work, losing a verified divergence).
 	// In-process the exclusion never expires; the term covers restarts.
@@ -114,6 +133,14 @@ const (
 	// serverDBName is the pool database filename, beside the header store.
 	serverDBName = "servers.json"
 )
+
+// saveDelay coalesces routine pool writes. A save rewrites the whole file,
+// and reputation updates arrive one per dial outcome — a flooded candidate
+// list would otherwise turn every failed dial into a full-file rewrite.
+// Losing the final delay's worth of health scores in a crash is acceptable;
+// quarantines bypass the delay (written immediately) because a misbehavior
+// verdict must survive a crash. A variable so tests can tighten it.
+var saveDelay = 2 * time.Second
 
 // poolEntry is one known server: a shipped seed or a discovered peer, with
 // its durable reputation.
@@ -152,6 +179,12 @@ type serverPool struct {
 	path    string
 	shipped []*ServerAddr
 	entries map[string]*poolEntry
+
+	// dirty and saveTimer implement the coalesced save (see saveDelay).
+	// saveCount counts completed writes; test instrumentation.
+	dirty     bool
+	saveTimer *time.Timer
+	saveCount int
 
 	// shippedDownSince is set when every shipped server is observed in
 	// failure backoff, and cleared by any shipped success. It gates the
@@ -195,12 +228,42 @@ func newServerPool(dir string, shipped []*ServerAddr) *serverPool {
 		e.Shipped = true
 		e.LastSeen = now
 	}
+	// Enforce the discovered cap on load too: a database written before the
+	// caps existed (or flooded on disk by an attacker) must not carry an
+	// oversized set into the election scans. Actively quarantined entries
+	// are kept first — dropping one would erase its persisted exclusion —
+	// then previously successful ones, then the oldest.
+	var discovered []*poolEntry
+	for _, e := range p.entries {
+		if !e.Shipped {
+			discovered = append(discovered, e)
+		}
+	}
+	if len(discovered) > maxDiscovered {
+		sort.Slice(discovered, func(i, j int) bool {
+			a, b := discovered[i], discovered[j]
+			if aq, bq := now.Before(a.QuarantinedUntil), now.Before(b.QuarantinedUntil); aq != bq {
+				return aq
+			}
+			if as, bs := a.Successes > 0, b.Successes > 0; as != bs {
+				return as
+			}
+			return a.FirstSeen.Before(b.FirstSeen)
+		})
+		for _, e := range discovered[maxDiscovered:] {
+			delete(p.entries, e.Server.Addr)
+		}
+	}
 	return p
 }
 
-// save persists the pool; best-effort (logged, never fatal — the pool
-// rebuilds from shipped seeds and discovery).
-func (p *serverPool) save() {
+// saveLocked persists the pool immediately; best-effort (logged, never fatal
+// — the pool rebuilds from shipped seeds and discovery). Must be called with
+// mtx held. Routine reputation updates should go through scheduleSaveLocked
+// instead; only writes that must survive a crash (quarantines) belong here.
+func (p *serverPool) saveLocked() {
+	p.dirty = false
+	p.saveCount++
 	entries := make([]*poolEntry, 0, len(p.entries))
 	for _, e := range p.entries {
 		entries = append(entries, e)
@@ -214,17 +277,93 @@ func (p *serverPool) save() {
 	}
 }
 
-// addDiscovered folds peers advertised by recommender into the pool.
+// scheduleSaveLocked marks the pool dirty and arms the coalescing timer if it
+// is not already armed; the pending flush picks up whatever is dirty when it
+// fires. Must be called with mtx held.
+func (p *serverPool) scheduleSaveLocked() {
+	p.dirty = true
+	if p.saveTimer == nil {
+		p.saveTimer = time.AfterFunc(saveDelay, p.flush)
+	}
+}
+
+// flush disarms the coalescing timer and persists the pool if it is dirty.
+// Runs as the timer callback and at network teardown.
+func (p *serverPool) flush() {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	p.flushLocked()
+}
+
+func (p *serverPool) flushLocked() {
+	if p.saveTimer != nil {
+		p.saveTimer.Stop()
+		p.saveTimer = nil
+	}
+	if p.dirty {
+		p.saveLocked()
+	}
+}
+
+// pruneExpiredLocked drops discovered entries neither seen advertised nor
+// successful within discoveredExpiry. newServerPool applies the same filter
+// at load, but a long-lived process never reloads, so expiry must also run
+// at runtime; addDiscovered calls this before admitting new peers, which
+// keeps the discovered set's turnover paced by real discovery traffic.
+// Returns whether anything was pruned. Must be called with mtx held.
+func (p *serverPool) pruneExpiredLocked(now time.Time) bool {
+	changed := false
+	for addr, e := range p.entries {
+		if e.Shipped {
+			continue
+		}
+		if now.Sub(e.LastSeen) > discoveredExpiry &&
+			now.Sub(e.LastSuccess) > discoveredExpiry {
+			delete(p.entries, addr)
+			changed = true
+		}
+	}
+	return changed
+}
+
+// addDiscovered folds peers advertised by recommender into the pool, bounded
+// two ways: a recommender may introduce at most maxDiscoveredPerRecommender
+// entries, and the discovered set never grows past maxDiscovered. Both
+// bounds prefer keeping existing entries over inserting new ones (see the
+// constants' comments); an existing entry advertised again still refreshes
+// its LastSeen and may gain the recommender.
 func (p *serverPool) addDiscovered(recommender string, peers []*ServerAddr) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	now := time.Now()
-	changed := false
+	changed := p.pruneExpiredLocked(now)
+
+	// Current bound usage. An entry's introducer is its first recommender:
+	// addDiscovered always appends the recommender to a freshly created
+	// entry (the list is empty, under maxRecommenders), so Recommenders[0]
+	// is whoever first advertised it.
+	discovered, introduced := 0, 0
+	for _, e := range p.entries {
+		if e.Shipped {
+			continue
+		}
+		discovered++
+		if firstRec(e) == recommender {
+			introduced++
+		}
+	}
+
 	for _, sv := range peers {
 		e := p.entries[sv.Addr]
 		if e == nil {
+			if discovered >= maxDiscovered ||
+				introduced >= maxDiscoveredPerRecommender {
+				continue
+			}
 			e = &poolEntry{Server: sv, FirstSeen: now}
 			p.entries[sv.Addr] = e
+			discovered++
+			introduced++
 			changed = true
 		}
 		e.LastSeen = now
@@ -241,7 +380,7 @@ func (p *serverPool) addDiscovered(recommender string, peers []*ServerAddr) {
 		}
 	}
 	if changed {
-		p.save()
+		p.scheduleSaveLocked()
 	}
 }
 
@@ -258,7 +397,7 @@ func (p *serverPool) recordSuccess(addr string) {
 		if e.Shipped {
 			p.shippedDownSince = time.Time{}
 		}
-		p.save()
+		p.scheduleSaveLocked()
 	}
 }
 
@@ -276,7 +415,11 @@ func (p *serverPool) quarantine(addr, reason string) {
 		e.QuarantinedUntil = time.Now().Add(quarantineTerm)
 		e.QuarantineReason = reason
 		e.Failures++
-		p.save()
+		// Immediate write, bypassing the coalescing delay: losing a few
+		// seconds of health scores in a crash is fine, losing a
+		// quarantine is not.
+		p.dirty = true
+		p.flushLocked()
 	}
 }
 
@@ -286,7 +429,7 @@ func (p *serverPool) recordFailure(addr string) {
 	defer p.mtx.Unlock()
 	if e := p.entries[addr]; e != nil {
 		e.Failures++
-		p.save()
+		p.scheduleSaveLocked()
 	}
 }
 
@@ -354,39 +497,39 @@ func (p *serverPool) walletCandidates() []*ServerAddr {
 // observerCandidates returns the observer election order: shipped first (so
 // the observer set always prefers, and with slots available includes, a
 // shipped server), then discovered peers ordered for recommender diversity —
-// one per recommender before seconds, limiting how far a single
-// recommending operator can stack the observer panel.
+// one per introducing recommender before seconds, limiting how far a single
+// recommending operator can stack the observer panel. The interleave is
+// group-then-round-robin (linear in the discovered set, which maxDiscovered
+// also bounds) rather than a per-pick rescan.
 func (p *serverPool) observerCandidates() []*ServerAddr {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	now := time.Now()
 	out := orderCandidates(p.notQuarantinedLocked(p.shipped, now))
-	var discovered []*poolEntry
+	groups := make(map[string][]*poolEntry)
+	var order []string
 	for _, e := range p.entries {
-		if !e.Shipped && !quarantinedLocked(e, now) {
-			discovered = append(discovered, e)
+		if e.Shipped || quarantinedLocked(e, now) {
+			continue
+		}
+		rec := firstRec(e)
+		if _, seen := groups[rec]; !seen {
+			order = append(order, rec)
+		}
+		groups[rec] = append(groups[rec], e)
+	}
+	for round := 0; ; round++ {
+		took := false
+		for _, rec := range order {
+			if g := groups[rec]; round < len(g) {
+				out = append(out, g[round].Server)
+				took = true
+			}
+		}
+		if !took {
+			return out
 		}
 	}
-	seenRec := make(map[string]int)
-	// Stable pass: take servers whose first recommender is least used so
-	// far; repeat until exhausted.
-	for len(discovered) > 0 {
-		best := -1
-		for i, e := range discovered {
-			rec := ""
-			if len(e.Recommenders) > 0 {
-				rec = e.Recommenders[0]
-			}
-			if best == -1 || seenRec[rec] < seenRec[firstRec(discovered[best])] {
-				best = i
-			}
-		}
-		e := discovered[best]
-		seenRec[firstRec(e)]++
-		out = append(out, e.Server)
-		discovered = append(discovered[:best], discovered[best+1:]...)
-	}
-	return out
 }
 
 func firstRec(e *poolEntry) string {

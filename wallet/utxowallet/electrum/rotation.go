@@ -355,6 +355,23 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	n.loops = group
 	n.mu.Unlock()
 
+	// fillObservers re-checks the wallet address before inserting an
+	// observer, but that read races the publication above: a pass that read
+	// the PREVIOUS wallet address can insert an observer for this node's
+	// address concurrently with the attach. Purge any such observer now
+	// that the publication is visible (adoptObserver already removed the
+	// promoted observer itself, so anything found here is a duplicate
+	// connection). stopDrain is closed before the node so the drain
+	// goroutine exits without recording a spurious failure against the new
+	// wallet server's address.
+	n.obsMtx.Lock()
+	if o, ok := n.observers[node.Addr().Addr]; ok {
+		delete(n.observers, node.Addr().Addr)
+		close(o.stopDrain)
+		o.node.Close()
+	}
+	n.obsMtx.Unlock()
+
 	n.spawnLoop(group, func() { n.scripthashLoop(node) })
 	n.spawnLoop(group, func() { n.watchNode(node) })
 	n.spawnLoop(group, func() { n.headersLoop(node, tip) })
@@ -368,6 +385,9 @@ func (n *Network) spawnCloser() {
 	go func() {
 		n.wg.Wait()
 		n.doneClosed.Do(func() {
+			// Persist any reputation still waiting on the pool's
+			// coalescing delay; every writer has exited by now.
+			n.pool.flush()
 			close(n.tipChangeChan)
 			close(n.scripthashCh)
 			close(n.done)

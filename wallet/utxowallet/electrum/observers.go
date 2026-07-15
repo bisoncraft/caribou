@@ -206,8 +206,19 @@ func (n *Network) runObservers() {
 	}
 }
 
+// maxObserverDialsPerPass caps connection attempts per fillObservers pass.
+// The candidate list can be flooded with unreachable sybils, each failed
+// dial costs a timeout, and fillObservers runs on the observer tick loop —
+// which also drives divergence and lag detection — so an unbounded pass
+// would wedge those checks behind serial dial timeouts. Unfilled slots are
+// retried next tick. 8 gives a full pass (maxObservers slots) several
+// failures of headroom while keeping the worst-case pass short.
+const maxObserverDialsPerPass = 8
+
 // fillObservers tops the set up to maxObservers from the candidates not in
-// use, in health-scored order.
+// use, in health-scored order. walletAddr is the caller's snapshot of the
+// wallet server; because a rotation may complete while this runs, the wallet
+// address is re-checked at insertion time.
 func (n *Network) fillObservers(walletAddr string) {
 	have := func(addr string) (int, bool) {
 		n.obsMtx.Lock()
@@ -218,6 +229,7 @@ func (n *Network) fillObservers(walletAddr string) {
 	if count, _ := have(""); count >= maxObservers {
 		return
 	}
+	dials := 0
 	for _, sv := range n.pool.observerCandidates() {
 		count, ok := have(sv.Addr)
 		if count >= maxObservers {
@@ -226,6 +238,10 @@ func (n *Network) fillObservers(walletAddr string) {
 		if sv.Addr == walletAddr || ok {
 			continue
 		}
+		if dials == maxObserverDialsPerPass {
+			break
+		}
+		dials++
 		node, err := NewNode(n.ctx, sv, n.cfg.TorProxy,
 			n.cfg.Chain.Params.GenesisHash.String())
 		if err != nil {
@@ -240,6 +256,17 @@ func (n *Network) fillObservers(walletAddr string) {
 		}
 		o := &observer{node: node, stopDrain: make(chan struct{})}
 		o.setTip(tip)
+		// The walletAddr snapshot can go stale during the dials above (a
+		// rotation completing mid-pass), and the wallet server must never
+		// be its own observer. Re-check against the CURRENT wallet address
+		// with no lock held — currentWalletAddr takes mu, and the
+		// documented lock order (rotMtx → mu → obsMtx) forbids acquiring
+		// mu after obsMtx. A rotation publishing this address between the
+		// check and the insert below is closed out by attachNode's purge.
+		if sv.Addr == n.currentWalletAddr() {
+			node.Close()
+			continue
+		}
 		n.obsMtx.Lock()
 		n.observers[sv.Addr] = o
 		n.obsMtx.Unlock()
@@ -345,25 +372,36 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		return
 	}
 	// The dissenting chain carries at least as much real work as ours: the
-	// wallet server lost a verified divergence. Suspend broadcasts,
-	// quarantine the loser (misbehavior, not slowness), and rotate
-	// surgically — preferring the dissenter, whose chain won the
-	// comparison and whose fork segment just passed the audit. The header
-	// reorg rides the successor's initial tip application through the
-	// existing rewind machinery; the suspension lifts when a rotation
-	// succeeds.
+	// wallet server lost a verified divergence. Before acting, capture the
+	// current wallet node once and require it to still be the server the
+	// verdict was judged against. The walletAddr snapshot was taken at the
+	// top of the tick, and the audit above involves network round trips —
+	// a rotation completing in between replaces the wallet server, making
+	// both actions below wrong: the quarantine would hit a server no
+	// longer in the wallet slot, and the rotate would evict an innocent,
+	// freshly attached successor. On a mismatch, abort entirely — the
+	// intervening rotation re-validated a chain end to end, and the next
+	// tick re-evaluates this observer against the reconciled store.
+	n.mu.Lock()
+	walletNode := n.node
+	n.mu.Unlock()
+	if walletNode == nil || walletNode.Addr().Addr != walletAddr {
+		log.Infof("electrum: discarding divergence verdict against %s: wallet "+
+			"server rotated during the audit", walletAddr)
+		return
+	}
+	// Suspend broadcasts, quarantine the loser (misbehavior, not
+	// slowness), and rotate surgically — preferring the dissenter, whose
+	// chain won the comparison and whose fork segment just passed the
+	// audit. The header reorg rides the successor's initial tip
+	// application through the existing rewind machinery; the suspension
+	// lifts when a rotation succeeds.
 	log.Errorf("electrum: observer %s presents a conflicting chain with valid "+
 		"work at height %d — possible eclipse or fork; suspending broadcasts "+
 		"and rotating away from %s", o.node.Addr().Addr, h, walletAddr)
 	n.spendSuspect.Store(true)
 	n.pool.quarantine(walletAddr, fmt.Sprintf(
 		"lost a verified divergence at height %d to %s", h, o.node.Addr().Addr))
-	n.mu.Lock()
-	walletNode := n.node
-	n.mu.Unlock()
-	if walletNode == nil {
-		return
-	}
 	dissenter := o.node.Addr().Addr
 	n.wg.Add(1)
 	go func() {

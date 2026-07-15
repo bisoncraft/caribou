@@ -7,8 +7,10 @@ package electrum
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -108,4 +110,74 @@ func chainhashFromByte(b byte) (h chainhash.Hash) {
 		h[i] = b
 	}
 	return h
+}
+
+// TestServerPeersBounded: a server advertising more peers than
+// maxAdvertisedPeers gets only the cap parsed; the rest of the reply is
+// ignored rather than becoming pool candidates.
+func TestServerPeersBounded(t *testing.T) {
+	f, params := newFakeServer(t, 3)
+	peers := make([][]interface{}, 0, maxAdvertisedPeers*3)
+	for i := 0; i < maxAdvertisedPeers*3; i++ {
+		peers = append(peers, []interface{}{
+			"203.0.113.1",
+			fmt.Sprintf("peer%d.example", i),
+			[]interface{}{"v1.4", "s50002"},
+		})
+	}
+	f.mtx.Lock()
+	f.peers = peers
+	f.mtx.Unlock()
+
+	node, err := NewNode(t.Context(), f.addr(), "", params.GenesisHash.String())
+	if err != nil {
+		t.Fatalf("NewNode: %v", err)
+	}
+	defer node.Close()
+	got, err := node.ServerPeers(t.Context())
+	if err != nil {
+		t.Fatalf("ServerPeers: %v", err)
+	}
+	if len(got) != maxAdvertisedPeers {
+		t.Fatalf("parsed %d peers, want the %d cap", len(got), maxAdvertisedPeers)
+	}
+}
+
+// TestOversizedFrameDropsConnection: a single reply frame past maxFrameSize
+// must not grow the read buffer without bound. The read loop treats it as
+// hostile: the in-flight request fails and the connection is dropped (the
+// reconnect/rotation machinery owns replacement).
+func TestOversizedFrameDropsConnection(t *testing.T) {
+	f, params := newFakeServer(t, 3)
+
+	node, err := NewNode(t.Context(), f.addr(), "", params.GenesisHash.String())
+	if err != nil {
+		t.Fatalf("NewNode: %v", err)
+	}
+	defer node.Close()
+
+	// Enough advertised peers to push one server.peers reply past
+	// maxFrameSize (each entry is ~140 bytes of JSON). Installed after the
+	// handshake so NewNode itself is unaffected.
+	entry := []interface{}{
+		"203.0.113.1",
+		strings.Repeat("a", 100) + ".example",
+		[]interface{}{"v1.4", "s50002"},
+	}
+	peers := make([][]interface{}, maxFrameSize/140+1024)
+	for i := range peers {
+		peers[i] = entry
+	}
+	f.mtx.Lock()
+	f.peers = peers
+	f.mtx.Unlock()
+
+	if _, err := node.ServerPeers(t.Context()); err == nil {
+		t.Fatal("oversized reply returned no error")
+	}
+	select {
+	case <-node.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("connection not dropped after an oversized frame")
+	}
 }

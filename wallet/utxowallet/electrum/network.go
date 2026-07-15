@@ -257,6 +257,9 @@ func (n *Network) Start(parent context.Context) error {
 			n.cancel()
 		}
 		n.doneClosed.Do(func() {
+			// Persist failures recorded by the dial loop that are still
+			// waiting on the pool's coalescing delay.
+			n.pool.flush()
 			close(n.tipChangeChan)
 			close(n.scripthashCh)
 			close(n.done)
@@ -399,6 +402,7 @@ func (n *Network) Stop() {
 		// watchNode) closes directly; there are no senders to race.
 		if !launched {
 			n.doneClosed.Do(func() {
+				n.pool.flush()
 				close(n.tipChangeChan)
 				close(n.scripthashCh)
 				close(n.done)

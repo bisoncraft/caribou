@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -159,13 +160,215 @@ func TestServerPoolTiering(t *testing.T) {
 	}
 
 	// Persistence round-trip: reload keeps the discovered entries and
-	// reputation.
+	// reputation. Routine writes are coalesced, so force the pending one.
+	p.flush()
 	p2 := newServerPool(dir, shipped)
 	p2.mtx.Lock()
 	e := p2.entries["disc1:1"]
 	p2.mtx.Unlock()
 	if e == nil || len(e.Recommenders) != 2 || e.Shipped {
 		t.Fatalf("reloaded disc1 = %+v", e)
+	}
+}
+
+// TestServerPoolDiscoveredCaps covers the pool's flood bounds: a single
+// recommender may introduce at most maxDiscoveredPerRecommender entries, the
+// discovered set never grows past maxDiscovered, and entries already in the
+// pool are preferred over new ones when a bound is hit.
+func TestServerPoolDiscoveredCaps(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	p := newServerPool(t.TempDir(), []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}})
+
+	mk := func(prefix string, n int) []*ServerAddr {
+		out := make([]*ServerAddr, n)
+		for i := range out {
+			out[i] = &ServerAddr{Proto: "ssl", Addr: fmt.Sprintf("%s%d:1", prefix, i)}
+		}
+		return out
+	}
+	discoveredCount := func() int {
+		p.mtx.Lock()
+		defer p.mtx.Unlock()
+		count := 0
+		for _, e := range p.entries {
+			if !e.Shipped {
+				count++
+			}
+		}
+		return count
+	}
+
+	// One recommender advertising far more than its cap introduces only
+	// maxDiscoveredPerRecommender entries...
+	p.addDiscovered("hostile:1", mk("sybil", 100))
+	if got := discoveredCount(); got != maxDiscoveredPerRecommender {
+		t.Fatalf("one recommender introduced %d entries, want %d",
+			got, maxDiscoveredPerRecommender)
+	}
+	// ...and re-advertising doesn't grow the set (the cap counts entries
+	// introduced, not calls).
+	p.addDiscovered("hostile:1", mk("sybil", 100))
+	if got := discoveredCount(); got != maxDiscoveredPerRecommender {
+		t.Fatalf("re-advertisement grew the set to %d entries", got)
+	}
+
+	// Many distinct recommenders (a sybil recommender ring) cannot grow
+	// past the total cap.
+	for i := 0; i < 64; i++ {
+		p.addDiscovered(fmt.Sprintf("rec%d:1", i),
+			mk(fmt.Sprintf("d%d-", i), maxDiscoveredPerRecommender))
+	}
+	if got := discoveredCount(); got != maxDiscovered {
+		t.Fatalf("total discovered = %d, want cap %d", got, maxDiscovered)
+	}
+
+	// Existing entries were preferred over the flood: the first
+	// recommender's entries all survived.
+	p.mtx.Lock()
+	survived := p.entries["sybil0:1"] != nil && p.entries["sybil15:1"] != nil
+	p.mtx.Unlock()
+	if !survived {
+		t.Fatal("existing entries evicted by a later flood")
+	}
+}
+
+// TestServerPoolLoadCap: an on-disk database holding more discovered entries
+// than maxDiscovered (written before the caps, or flooded on disk) is trimmed
+// at load, keeping actively quarantined entries over the rest.
+func TestServerPoolLoadCap(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	dir := t.TempDir()
+	shipped := []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}}
+	p := newServerPool(dir, shipped)
+	now := time.Now()
+	p.mtx.Lock()
+	// Bypass addDiscovered's caps to fabricate an oversized database.
+	for i := 0; i < maxDiscovered*2; i++ {
+		addr := fmt.Sprintf("flood%d:1", i)
+		p.entries[addr] = &poolEntry{
+			Server:    &ServerAddr{Proto: "ssl", Addr: addr},
+			FirstSeen: now,
+			LastSeen:  now,
+		}
+	}
+	p.entries["flood500:1"].QuarantinedUntil = now.Add(time.Hour)
+	p.dirty = true
+	p.flushLocked()
+	p.mtx.Unlock()
+
+	p2 := newServerPool(dir, shipped)
+	p2.mtx.Lock()
+	defer p2.mtx.Unlock()
+	count := 0
+	for _, e := range p2.entries {
+		if !e.Shipped {
+			count++
+		}
+	}
+	if count != maxDiscovered {
+		t.Fatalf("loaded %d discovered entries, want trim to %d", count, maxDiscovered)
+	}
+	if p2.entries["flood500:1"] == nil {
+		t.Fatal("actively quarantined entry dropped by the load trim")
+	}
+	if p2.entries["ship:1"] == nil {
+		t.Fatal("shipped entry dropped by the load trim")
+	}
+}
+
+// TestServerPoolRuntimePrune: discovered entries past discoveredExpiry are
+// pruned by later discovery passes, not only at load time — a long-lived
+// process never reloads the pool.
+func TestServerPoolRuntimePrune(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	p := newServerPool(t.TempDir(), []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}})
+	p.addDiscovered("rec:1", []*ServerAddr{{Proto: "ssl", Addr: "stale:1"}})
+	p.mtx.Lock()
+	e := p.entries["stale:1"]
+	e.FirstSeen = time.Now().Add(-discoveredExpiry - time.Hour)
+	e.LastSeen = e.FirstSeen
+	p.mtx.Unlock()
+
+	p.addDiscovered("rec:1", []*ServerAddr{{Proto: "ssl", Addr: "fresh:1"}})
+	p.mtx.Lock()
+	_, staleKept := p.entries["stale:1"]
+	_, freshKept := p.entries["fresh:1"]
+	_, shipKept := p.entries["ship:1"]
+	p.mtx.Unlock()
+	if staleKept {
+		t.Fatal("expired discovered entry not pruned at runtime")
+	}
+	if !freshKept || !shipKept {
+		t.Fatal("prune removed a live entry")
+	}
+}
+
+// TestServerPoolSaveDebounce: bursts of routine reputation updates coalesce
+// into a bounded number of file writes, while a quarantine is written
+// through immediately.
+func TestServerPoolSaveDebounce(t *testing.T) {
+	oldDelay := saveDelay
+	saveDelay = 20 * time.Millisecond
+	t.Cleanup(func() { saveDelay = oldDelay })
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	dir := t.TempDir()
+	shipped := []*ServerAddr{{Proto: "ssl", Addr: "dbn1:1"}, {Proto: "ssl", Addr: "dbn2:1"}}
+	p := newServerPool(dir, shipped)
+
+	writes := func() int {
+		p.mtx.Lock()
+		defer p.mtx.Unlock()
+		return p.saveCount
+	}
+
+	// A burst of updates: far fewer writes than updates, and the full
+	// count eventually persists.
+	const burst = 100
+	for i := 0; i < burst; i++ {
+		p.recordFailure("dbn1:1")
+	}
+	if w := writes(); w > 1 {
+		t.Fatalf("burst of %d updates wrote %d times before the delay elapsed", burst, w)
+	}
+	waitFor(t, "coalesced write to land", func() bool {
+		p2 := newServerPool(dir, shipped)
+		p2.mtx.Lock()
+		defer p2.mtx.Unlock()
+		return p2.entries["dbn1:1"].Failures == burst
+	})
+	if w := writes(); w > 2 {
+		t.Fatalf("burst of %d updates took %d writes, want coalescing", burst, w)
+	}
+
+	// Quarantine persists synchronously — the write count bumps before the
+	// call returns, no delay to survive.
+	before := writes()
+	p.quarantine("dbn2:1", "debounce test")
+	if w := writes(); w != before+1 {
+		t.Fatalf("quarantine wrote %d times, want exactly 1 immediate write", w-before)
+	}
+	p3 := newServerPool(dir, shipped)
+	p3.mtx.Lock()
+	reason := p3.entries["dbn2:1"].QuarantineReason
+	p3.mtx.Unlock()
+	if reason != "debounce test" {
+		t.Fatalf("quarantine not persisted immediately: reason = %q", reason)
 	}
 }
 
