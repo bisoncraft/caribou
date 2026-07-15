@@ -467,15 +467,20 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 
 // applyTip processes a single network tip change under connMtx, returning the
 // number of BlockConnected notifications delivered. While the initial rescan is
-// still running (liveDelivery false) it suppresses connects entirely — goLive
-// will deliver the contiguous catch-up at RescanFinished.
+// still running (liveDelivery false) it suppresses connects — goLive will
+// deliver the contiguous catch-up at RescanFinished — but NOT disconnects: the
+// header store is already truncated by the time the event arrives and the
+// rollback cannot be regenerated later (goLive's catch-up delivers connects
+// only), so dropping one would leave the wallet holding orphaned blocks. The
+// wallet's rollback path is safe at any point in the sync, and the rescan
+// handlers re-advance SyncedTo from the wallet's own (rolled-back) position.
 func (c *ElectrumClient) applyTip(ev *electrum.TipChange) int {
 	c.connMtx.Lock()
 	defer c.connMtx.Unlock()
+	c.deliverDisconnectsLocked(ev.Disconnected)
 	if !c.liveDelivery {
 		return 0
 	}
-	c.deliverDisconnectsLocked(ev.Disconnected)
 	return c.deliverConnectsLocked()
 }
 
