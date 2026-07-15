@@ -13,6 +13,9 @@ beforeEach(() => {
     [makeAsset(dcrID, 'DCR', { wallet: makeWallet(dcrID, { balance: { available: 10 * 1e8, immature: 0, locked: 0, stamp: '', other: {} } }) })],
     { [dcrID]: 20 } // $20/DCR fiat rate
   )
+  // Portfolio totals are priced per ticker group, so the groups have to exist.
+  // fetchAppState does this on the first user load.
+  app.prepareTickerAssets()
 })
 
 afterEach(() => {

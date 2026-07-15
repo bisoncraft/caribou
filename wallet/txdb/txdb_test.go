@@ -670,33 +670,30 @@ func TestTickerIndex(t *testing.T) {
 		t.Fatalf("paged = %v more=%v, want [usdcB] more=true", got, resp.MoreAvailable)
 	}
 
-	// RefID skips forward past the reference in index order.
+	// The cursor seeks to the RefID's index entry and the RefID transaction is
+	// the first row of the page, matching GetTxs (see TestGetTxs).
 	ref := "usdcB"
-	resp, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref})
-	if err != nil {
-		t.Fatalf("GetTxsByTicker refID: %v", err)
-	}
-	if got := ids(resp.Txs); !eq(got, []string{"usdcA"}) {
-		t.Fatalf("refID page = %v, want [usdcA]", got)
-	}
-
-	// A RefID not in this ticker's index (stale cursor, or another ticker's
-	// tx) is an error, not an empty final page.
-	ref = "btc"
-	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref}); err != ErrUnknownTx {
-		t.Fatalf("foreign refID err = %v, want ErrUnknownTx", err)
-	}
-
-	// RefNetwork lets the cursor seek straight to its index entry instead of
-	// scanning the group; the result matches the scan path above.
-	ref = "usdcB"
 	refNet := netB
 	resp, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref, RefNetwork: &refNet})
 	if err != nil {
-		t.Fatalf("GetTxsByTicker refID+refNetwork: %v", err)
+		t.Fatalf("GetTxsByTicker refID: %v", err)
 	}
-	if got := ids(resp.Txs); !eq(got, []string{"usdcA"}) {
-		t.Fatalf("refID+refNetwork page = %v, want [usdcA]", got)
+	if got := ids(resp.Txs); !eq(got, []string{"usdcB", "usdcA"}) {
+		t.Fatalf("refID page = %v, want [usdcB usdcA] (inclusive)", got)
+	}
+
+	// A RefID cannot be resolved to a primary key without its network.
+	ref = "usdcB"
+	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref}); err != ErrMissingRefNetwork {
+		t.Fatalf("refID without refNetwork err = %v, want ErrMissingRefNetwork", err)
+	}
+
+	// A RefID naming a real transaction in another ticker's group would seek
+	// outside the prefix, so it is rejected rather than silently mis-paging.
+	ref = "btc"
+	refNet = netA
+	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref, RefNetwork: &refNet}); err != ErrUnknownTx {
+		t.Fatalf("foreign-ticker refID err = %v, want ErrUnknownTx", err)
 	}
 
 	// A RefNetwork that does not carry RefID (wrong network / stale cursor)

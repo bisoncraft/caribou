@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import app from './application'
-import { BalanceNote, CoreNote, TipChangeNote, WalletConfigNote, WalletNote } from './registry'
-import { makeAsset, makeUser, makeWallet, resetApp } from './testUtils'
+import { BalanceNote, Balance, CoreNote, TipChangeNote, WalletConfigNote, WalletNote } from './registry'
+import { makeAsset, makeUnitInfo, makeUser, makeWallet, resetApp } from './testUtils'
 
 function baseNote (type: string): CoreNote {
   return { type, topic: '', subject: '', details: '', severity: 0, stamp: 0, acked: false, id: '1', data: {} }
@@ -97,5 +97,91 @@ describe('Application.notify / updateUser', () => {
     const note: BalanceNote = { ...baseNote('balance'), assetID: 42, balance: { available: 1, immature: 0, locked: 0, stamp: '', other: {} } }
     app.notify(note)
     expect(updater).not.toHaveBeenCalled()
+  })
+})
+
+describe('Application.portfolioTotals', () => {
+  // USDC deployed on two networks: one ticker group, two variants, 6 decimals.
+  const usdcEthID = 60001
+  const usdcPolyID = 966001
+
+  function bal (overrides: Partial<Balance> = {}): Balance {
+    return { available: 0, immature: 0, locked: 0, stamp: '', other: {}, ...overrides }
+  }
+
+  function usdcVariant (id: number, balance: Balance) {
+    return makeAsset(id, `usdc.${id}`, {
+      tickerGroup: 'USDC',
+      unitInfo: makeUnitInfo('USDC', 1e6),
+      wallet: makeWallet(id, { balance })
+    })
+  }
+
+  // rowValue is how the Portfolio prices a row (see newui Portfolio.tsx and the
+  // mobile Portfolio): the group's conventional total times the group's rate.
+  function rowValue (): number {
+    return (app.tickerList ?? []).reduce((sum, ta) => sum + ta.total * (ta.xcRate ?? 0), 0)
+  }
+
+  beforeEach(() => {
+    resetApp()
+  })
+
+  it('prices a multi-network group with the group rate, counting a wallet per variant', () => {
+    app.user = makeUser(
+      [usdcVariant(usdcEthID, bal({ available: 100 * 1e6 })), usdcVariant(usdcPolyID, bal({ available: 50 * 1e6 }))],
+      { [usdcEthID]: 1, [usdcPolyID]: 1 }
+    )
+    app.prepareTickerAssets()
+
+    const totals = app.portfolioTotals()
+    expect(totals.total).toBeCloseTo(150)
+    expect(totals.available).toBeCloseTo(150)
+    expect(totals.numWallets).toBe(2)
+    expect(totals.ratesComplete).toBe(true)
+  })
+
+  // The header total and the rows must be computed on one basis. Pricing the
+  // header per asset from user.fiatRates while the rows price per ticker group
+  // let them disagree, which also broke the portfolio-% column.
+  it('totals on the same basis as the rows when a group\'s variants quote different rates', () => {
+    app.user = makeUser(
+      [usdcVariant(usdcEthID, bal({ available: 100 * 1e6 })), usdcVariant(usdcPolyID, bal({ available: 50 * 1e6 }))],
+      { [usdcEthID]: 1, [usdcPolyID]: 1.1 } // group rate is the 1.05 average
+    )
+    app.prepareTickerAssets()
+
+    expect(app.tickerRate('USDC')).toBeCloseTo(1.05)
+    const totals = app.portfolioTotals()
+    expect(totals.total).toBeCloseTo(157.5) // 150 USDC * 1.05
+    expect(rowValue()).toBeCloseTo(totals.total)
+  })
+
+  // TickerAsset.total includes immature, so the header has to as well or a row
+  // and the total it sums into disagree for any wallet holding immature funds.
+  it('counts immature funds in the total but not in available', () => {
+    app.user = makeUser(
+      [usdcVariant(usdcEthID, bal({ available: 100 * 1e6, locked: 20 * 1e6, immature: 30 * 1e6 }))],
+      { [usdcEthID]: 1 }
+    )
+    app.prepareTickerAssets()
+
+    const totals = app.portfolioTotals()
+    expect(totals.available).toBeCloseTo(100)
+    expect(totals.locked).toBeCloseTo(20)
+    expect(totals.immature).toBeCloseTo(30)
+    expect(totals.total).toBeCloseTo(150)
+    expect(totals.total).toBeCloseTo(totals.available + totals.locked + totals.immature)
+    expect(rowValue()).toBeCloseTo(totals.total)
+  })
+
+  it('reports incomplete rates for a wallet group with no rate, without dropping the wallet count', () => {
+    app.user = makeUser([usdcVariant(usdcEthID, bal({ available: 100 * 1e6 }))])
+    app.prepareTickerAssets()
+
+    const totals = app.portfolioTotals()
+    expect(totals.ratesComplete).toBe(false)
+    expect(totals.total).toBe(0)
+    expect(totals.numWallets).toBe(1)
   })
 })

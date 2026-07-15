@@ -193,34 +193,45 @@ export class Application {
   }
 
   // portfolioTotals returns a breakdown of the portfolio value in USD.
-  // Only assets with a known fiat rate are included in the totals.
-  // ratesComplete is false if any wallet asset is missing a rate.
+  // Only ticker groups with a known fiat rate are included in the totals.
+  // ratesComplete is false if any group holding a wallet is missing a rate.
+  //
+  // Totals are priced per ticker group with the group's rate, the same basis
+  // the portfolio rows use (TickerAsset.xcRate). Pricing the header per asset
+  // with user.fiatRates while the rows price per group would let the rows, the
+  // header, and the portfolio-% column disagree with each other.
   portfolioTotals (): PortfolioTotals {
     let available = 0
     let locked = 0
+    let immature = 0
     let numWallets = 0
     let ratesComplete = true
 
-    if (!this.user) return { total: 0, available: 0, locked: 0, numWallets: 0, ratesComplete: false }
+    if (!this.user) return { total: 0, available: 0, locked: 0, immature: 0, numWallets: 0, ratesComplete: false }
 
-    for (const asset of Object.values(this.user.assets)) {
-      const { wallet } = asset
-      if (!wallet) continue
-      numWallets++
-      const fiatRate = this.user.fiatRates[asset.id]
+    for (const ta of this.tickerList ?? []) {
+      // numWallets counts wallets, not groups: a group spanning several
+      // networks holds one wallet per variant.
+      for (const v of ta.variants) if (this.wallet(v.assetID)) numWallets++
+      if (!ta.hasWallets) continue
+      const fiatRate = this.tickerRate(ta.ticker)
       if (!fiatRate) {
         ratesComplete = false
         continue
       }
-      const cFactor = asset.unitInfo.conventional.conversionFactor
-      const bal = wallet.balance
-      available += ((bal.available ?? 0) / cFactor) * fiatRate
-      locked += ((bal.locked ?? 0) / cFactor) * fiatRate
-      // TODO: bal.immature is dropped here (and nowhere else in newui renders
-      // it). Immature is funds the wallet owns but that are not yet spendable
-      // pending confirmations, e.g. coinbase outputs or transaction change.
-      // Because it is added to neither `available` nor `locked` nor `total`,
-      // such funds visually disappear from the portfolio until they mature.
+      // avail, locked and immature are already conventional units summed across
+      // the group's variants. Immature counts toward the total but not toward
+      // available, matching TickerAsset.total, which the portfolio rows price:
+      // were it excluded here, a row's value and the header it sums into would
+      // disagree for any wallet holding immature funds.
+      available += ta.avail * fiatRate
+      locked += ta.locked * fiatRate
+      immature += ta.immature * fiatRate
+      // TODO: immature is counted in `total` but not surfaced on its own
+      // anywhere in newui. Immature is funds the wallet owns but that are not
+      // yet spendable pending confirmations, e.g. coinbase outputs or
+      // transaction change, so a user watching the "Available" stat sees the
+      // funds vanish until they mature even though the total still holds them.
       //
       // This is most visible on XMR: Monero spends whole outputs, so every send
       // returns the remainder as a change output that is locked for 10
@@ -231,14 +242,13 @@ export class Application {
       // wallet/asset/xmr/xmr.go Balance: Immature = total - unlocked); the gap
       // is purely on the display side.
       //
-      // Fix should surface immature rather than hide it: include it in `total`
-      // and show a distinct "Maturing"/"Immature" line in PortfolioTotals and in
-      // the per-wallet balance view so users see the funds are still theirs and
-      // simply pending. Keep it out of `available` (it is not spendable) and
-      // consider whether it belongs under `locked` or its own category.
+      // Remaining fix is presentational: show a distinct "Maturing"/"Immature"
+      // line in PortfolioTotals and in the per-wallet balance view, reading
+      // PortfolioTotals.immature, so users see the funds are still theirs and
+      // simply pending. Keep it out of `available` (it is not spendable).
     }
 
-    return { total: available + locked, available, locked, numWallets, ratesComplete }
+    return { total: available + locked + immature, available, locked, immature, numWallets, ratesComplete }
   }
 
   asset (assetID: number) {

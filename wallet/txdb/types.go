@@ -118,9 +118,11 @@ type TxHistoryRequest struct {
 	// transaction. It is only consulted by ticker-scoped history: the ticker
 	// index spans networks and cannot rebuild a primary key from RefID alone,
 	// so RefNetwork lets GetTxsByTicker look up the cursor's effective time and
-	// seek straight to it instead of scanning the group from the start. Ignored
-	// by network-scoped getTxs, which already has its network. Zero (unset)
-	// falls back to the linear scan.
+	// seek straight to it. It is required whenever RefID is set on a
+	// ticker-scoped request; GetTxsByTicker returns ErrMissingRefNetwork
+	// otherwise. Callers always have it: every returned transaction carries an
+	// AssetID, and a token's network resolves through its Token.NetworkID.
+	// Ignored by network-scoped getTxs, which already has its network.
 	RefNetwork  *uint32           `json:"refNetwork"`
 	Past        bool              `json:"past"`
 	IgnoreTypes []TransactionType `json:"ignoreTypes"`

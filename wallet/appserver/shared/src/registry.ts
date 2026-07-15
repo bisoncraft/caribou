@@ -368,10 +368,14 @@ export interface PageData {
   query: URLSearchParams
 }
 
+// PortfolioTotals is a fiat-valued breakdown of the portfolio, priced per
+// ticker group. The parts decompose the whole: total = available + locked +
+// immature.
 export interface PortfolioTotals {
   total: number
   available: number
   locked: number
+  immature: number
   numWallets: number
   ratesComplete: boolean
 }

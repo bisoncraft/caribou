@@ -97,12 +97,21 @@ export default function Asset ({ ticker }: AssetParams) {
   // the per-asset endpoint: it is one call either way, and it also covers
   // wallets that keep their own history store rather than the master txdb (only
   // xmr today), which the ticker index does not see.
+  //
+  // Fetches are fired from both the assetIDsKey effect and every transaction
+  // walletnote, and the two endpoints have unrelated latencies, so responses can
+  // land out of order — switching assets mid-flight would otherwise let the
+  // previous asset's slower response overwrite this one's rows. fetchGenRef
+  // stamps each fetch and only the newest is allowed to apply.
   const fetchTxnsRef = useRef<() => Promise<void>>()
+  const fetchGenRef = useRef(0)
   fetchTxnsRef.current = async () => {
     if (!ta) return
+    const gen = ++fetchGenRef.current
     const r = ta.variants.length > 1
       ? await postJSON('/api/txhistoryticker', { ticker: ta.ticker, n: TX_PAGE_SIZE, past: true })
       : await postJSON('/api/txhistory', { assetID: ta.variants[0].assetID, n: TX_PAGE_SIZE, past: true })
+    if (gen !== fetchGenRef.current) return
     const txs: WalletTransaction[] = r.ok && r.txs ? r.txs : []
     const items: TxItem[] = []
     for (const tx of txs) {
@@ -177,7 +186,7 @@ export default function Asset ({ ticker }: AssetParams) {
         <div className="network-section">
           <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('BALANCE')}</div>
           <div className="d-flex justify-content-between align-items-start">
-            <div className="fs28 mono demi">{Doc.formatConventionalValue(ta.total)} {ta.ticker}</div>
+            <div className="fs28 mono demi">{Doc.formatConventionalValue(ta.total, ta.precision)} {ta.ticker}</div>
             <div className="d-flex">
               <button type="button" className="d-inline-flex align-items-center me-2" onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}>
                 <span className="ico-qrcode me-2" />{t('Receive')}
@@ -192,18 +201,18 @@ export default function Asset ({ ticker }: AssetParams) {
             <>
               <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                 <span className="grey fs13">{t('Available')}</span>
-                <span className="mono">{Doc.formatConventionalValue(ta.avail)} {ta.ticker}</span>
+                <span className="mono">{Doc.formatConventionalValue(ta.avail, ta.precision)} {ta.ticker}</span>
               </div>
               {ta.locked > 0 && (
                 <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                   <span className="grey fs13">{t('Locked')}</span>
-                  <span className="mono">{Doc.formatConventionalValue(ta.locked)} {ta.ticker}</span>
+                  <span className="mono">{Doc.formatConventionalValue(ta.locked, ta.precision)} {ta.ticker}</span>
                 </div>
               )}
               {ta.immature > 0 && (
                 <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                   <span className="grey fs13">{t('Immature')}</span>
-                  <span className="mono">{Doc.formatConventionalValue(ta.immature)} {ta.ticker}</span>
+                  <span className="mono">{Doc.formatConventionalValue(ta.immature, ta.precision)} {ta.ticker}</span>
                 </div>
               )}
             </>

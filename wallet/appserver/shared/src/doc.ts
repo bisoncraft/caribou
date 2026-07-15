@@ -101,12 +101,17 @@ export default class Doc {
    * formatConventionalValue formats a value that is already in conventional
    * (whole) units — e.g. an aggregate summed across an asset's network variants
    * — rather than atomic units plus a UnitInfo. Rendering mirrors
-   * formatCoinValue: integers show no decimals, otherwise up to 8 fractional
+   * formatCoinValue: integers show no decimals, otherwise up to prec fractional
    * digits with insignificant trailing zeros trimmed.
+   *
+   * prec must come from the value's own conversion factor (log10 of it, as
+   * formatCoinValue derives it), not a fixed guess. Assets differ: ETH's atomic
+   * unit is gwei (factor 1e9), so a value smaller than a gwei needs 9 digits and
+   * anything less silently renders it as zero.
    */
-  static formatConventionalValue (v: number): string {
+  static formatConventionalValue (v: number, prec: number): string {
     if (Number.isInteger(v)) return intFormatter.format(v)
-    return decimalFormatter(8).format(v)
+    return decimalFormatter(prec).format(v)
   }
 
   /*
@@ -129,6 +134,16 @@ export default class Doc {
   /* formatUSD formats a dollar amount as a USD currency string. */
   static formatUSD (usd: number): string {
     return usdFormatter.format(usd)
+  }
+
+  /*
+   * formatInt formats a whole number — block heights, peer counts, fee rates —
+   * with locale grouping and no decimals. Callers use this rather than their own
+   * Intl.NumberFormat so the locale list stays filtered (see `languages`); an
+   * unfiltered navigator.languages throws on an invalid tag.
+   */
+  static formatInt (n: number): string {
+    return intFormatter.format(n)
   }
 
   /*

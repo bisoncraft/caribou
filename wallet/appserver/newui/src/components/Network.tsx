@@ -13,8 +13,6 @@ interface NetworkParams {
   symbol: string
 }
 
-const intFmt = new Intl.NumberFormat(navigator.languages as string[], { maximumFractionDigits: 0 })
-
 function BackButton ({ onClick }: { onClick: () => void }) {
   return (
     <button type="button" className="subtle d-inline-flex align-items-center mb-4 fs14 py-1 px-2 hoverbg" onClick={onClick}>
@@ -44,15 +42,15 @@ function StatusSection ({ wallet }: { wallet: WalletState }) {
       </span>
       )
   const blockHeight = wallet.synced
-    ? intFmt.format(ss?.blocks ?? 0)
-    : `${intFmt.format(ss?.blocks ?? 0)} / ${intFmt.format(ss?.targetHeight ?? 0)}`
+    ? Doc.formatInt(ss?.blocks ?? 0)
+    : `${Doc.formatInt(ss?.blocks ?? 0)} / ${Doc.formatInt(ss?.targetHeight ?? 0)}`
 
   return (
     <div className="network-section">
       <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('NETWORK STATUS')}</div>
       <Stat label={t('Status')} value={status} />
       <Stat label={t('Network type')} value={wallet.class || '—'} />
-      <Stat label={t('Peers')} value={intFmt.format(wallet.peerCount ?? 0)} />
+      <Stat label={t('Peers')} value={Doc.formatInt(wallet.peerCount ?? 0)} />
       <Stat label={t('Block height')} value={blockHeight} />
     </div>
   )
@@ -62,7 +60,7 @@ function FeeSection ({ wallet, ui, ticker, rate }: { wallet: WalletState, ui: Un
   const fee = wallet.feeState
 
   const rateValue = fee
-    ? `${intFmt.format(fee.rate)} ${ui.atomicUnit}/${ui.feeRateDenom}`
+    ? `${Doc.formatInt(fee.rate)} ${ui.atomicUnit}/${ui.feeRateDenom}`
     : t('Unavailable')
 
   const sendUsd = fee ? Doc.usdString(fee.send, ui.conventional.conversionFactor, rate) : ''

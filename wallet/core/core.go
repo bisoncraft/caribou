@@ -3175,8 +3175,30 @@ func normalizeTickerUnit(unit string) string {
 // TxHistoryByTicker returns merged, time-ordered transaction history for a
 // ticker group across every network it settles on (e.g. USDC on Ethereum and
 // Polygon), served directly from the master txdb's ticker index.
+//
+// A ticker group with no wallet is an error rather than an empty history, so a
+// caller naming an unknown or unactivated ticker is told so instead of reading
+// the empty result as "no transactions yet". This mirrors TxHistory's
+// missingWalletErr.
 func (c *Core) TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
-	return c.txDB.GetTxsByTicker(normalizeTickerUnit(ticker), req)
+	ticker = normalizeTickerUnit(ticker)
+	if !c.tickerHasWallet(ticker) {
+		return nil, newError(missingWalletErr, "no wallet found for ticker %s", ticker)
+	}
+	return c.txDB.GetTxsByTicker(ticker, req)
+}
+
+// tickerHasWallet reports whether any existing wallet's asset belongs to the
+// ticker group.
+func (c *Core) tickerHasWallet(ticker string) bool {
+	c.walletMtx.RLock()
+	defer c.walletMtx.RUnlock()
+	for assetID := range c.wallets {
+		if assetTickerGroup(assetID, c.log) == ticker {
+			return true
+		}
+	}
+	return false
 }
 
 // TxHistory returns all the transactions a wallet has made. If refID is nil,

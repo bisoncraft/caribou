@@ -56,7 +56,6 @@ export class TickerAsset {
   hasWallets: boolean
   variants: AssetVariant[]
   variantLookup: Record<number, AssetVariant>
-  haveAllFiatRates: boolean
   isMultiNet: boolean
   hasTokens: boolean
 
@@ -70,7 +69,6 @@ export class TickerAsset {
 
   addVariant (a: SupportedAsset) {
     const { wallet: w, token } = a
-    if (!app.idRate(a.id)) this.haveAllFiatRates = false
     this.hasTokens = this.hasTokens || Boolean(token)
     const v = new AssetVariant(a)
     this.hasWallets = this.hasWallets || Boolean(w) || Boolean(v.token?.networkMade)
@@ -139,6 +137,14 @@ export class TickerAsset {
       const { available, locked, immature } = v.bal
       return sum + (available + locked + immature) / v.cFactor
     }, 0)
+  }
+
+  // precision is the number of fractional digits needed to render the group's
+  // conventional balances losslessly: the maximum across variants, since a
+  // variant with a larger conversion factor can contribute a quantity the
+  // others cannot represent. Pair it with Doc.formatConventionalValue.
+  get precision () {
+    return this.variants.reduce((max: number, v: AssetVariant) => Math.max(max, Math.round(Math.log10(v.cFactor))), 0)
   }
 
   get xcRate () {

@@ -5,11 +5,6 @@ import { TickerAsset } from '@bossw/shared/assets'
 import CoinLogo from '@bossw/shared/components/CoinLogo'
 import Spinner from './Spinner'
 
-const balFmt = new Intl.NumberFormat(navigator.languages as string[], {
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 8
-})
-
 interface AssetRowProps {
   asset: TickerAsset
   fiatRate: number
@@ -48,7 +43,7 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
 
 export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted }: AssetRowProps) {
   const usdValue = asset.total * fiatRate
-  const availFmt = balFmt.format(asset.avail)
+  const availFmt = Doc.formatConventionalValue(asset.avail, asset.precision)
   const pctDisplay = portfolioPct !== null ? `${portfolioPct.toFixed(1)}%` : '—'
 
   return (
