@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -167,46 +168,50 @@ func (c *rpcClient) call(method string, params interface{}) (json.RawMessage, er
 		return nil, fmt.Errorf("error marshaling request: %w", err)
 	}
 
+	// Build the try order: endpoints not in cooldown first (starting from the
+	// active one), then cooling endpoints as a fallback. Each endpoint is
+	// tried at most once, so a mix of one cooling and one transiently-failing
+	// endpoint still reaches the cooling one — which may have recovered, since
+	// the cooldown is not a proof of unavailability.
 	c.mtx.Lock()
 	start := c.active
 	n := len(c.endpoints)
+	now := time.Now()
+	order := make([]int, 0, n)
+	var cooling []int
+	for i := 0; i < n; i++ {
+		idx := (start + i) % n
+		if c.endpoints[idx].downTil.After(now) {
+			cooling = append(cooling, idx)
+		} else {
+			order = append(order, idx)
+		}
+	}
+	order = append(order, cooling...)
 	c.mtx.Unlock()
 
 	var lastErr error
-	// The first pass honors cooldowns. The second pass runs only when every
-	// endpoint was cooling (nothing was attempted), so a full outage still
-	// tries each endpoint rather than failing with nothing attempted.
-	for _, honorCooldown := range []bool{true, false} {
-		for i := 0; i < n; i++ {
-			idx := (start + i) % n
-			c.mtx.Lock()
-			ep := c.endpoints[idx]
-			cooling := ep.downTil.After(time.Now())
-			c.mtx.Unlock()
-			if cooling && honorCooldown {
-				continue
-			}
+	for _, idx := range order {
+		c.mtx.Lock()
+		ep := c.endpoints[idx]
+		c.mtx.Unlock()
 
-			result, endpointBad, err := c.doRequest(ep.url, body)
-			if err == nil {
-				c.mtx.Lock()
-				ep.downTil = time.Time{}
-				c.active = idx
-				c.mtx.Unlock()
-				return result, nil
-			}
-			if !endpointBad {
-				return nil, err
-			}
-			lastErr = err
+		result, endpointBad, err := c.doRequest(ep.url, body)
+		if err == nil {
 			c.mtx.Lock()
-			ep.downTil = time.Now().Add(endpointCooldown)
+			ep.downTil = time.Time{}
+			c.active = idx
 			c.mtx.Unlock()
-			c.log.Warnf("NEAR RPC endpoint %s failed (%s): %v", ep.url, method, err)
+			return result, nil
 		}
-		if lastErr != nil {
-			break
+		if !endpointBad {
+			return nil, err
 		}
+		lastErr = err
+		c.mtx.Lock()
+		ep.downTil = time.Now().Add(endpointCooldown)
+		c.mtx.Unlock()
+		c.log.Warnf("NEAR RPC endpoint %s failed (%s): %v", ep.url, method, err)
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no NEAR RPC endpoints available")
@@ -478,15 +483,43 @@ func (r *txResult) feeDrops() uint64 {
 // send time. If the wait window elapses first, the error satisfies
 // isTimeoutError and the transaction may still complete.
 func (c *rpcClient) sendTx(signedTxBase64 string) (*txResult, error) {
-	result, err := c.call("send_tx", map[string]interface{}{
-		"signed_tx_base64": signedTxBase64,
-		"wait_until":       "EXECUTED_OPTIMISTIC",
+	body, err := json.Marshal(jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      "bosswallet",
+		Method:  "send_tx",
+		Params: map[string]interface{}{
+			"signed_tx_base64": signedTxBase64,
+			"wait_until":       "EXECUTED_OPTIMISTIC",
+		},
 	})
 	if err != nil {
+		return nil, fmt.Errorf("error marshaling send_tx request: %w", err)
+	}
+
+	// A broadcast is sent to a single endpoint and never failed over. Once
+	// the request has left the client, a transport failure (timeout, reset)
+	// cannot be distinguished from an accepted-but-slow transaction, so
+	// re-sending to another endpoint could double-broadcast. The active
+	// endpoint is the last one to answer a query (e.g. the access-key lookup
+	// that precedes every send), so it is the best single choice.
+	c.mtx.Lock()
+	ep := c.endpoints[c.active]
+	c.mtx.Unlock()
+
+	raw, endpointBad, err := c.doRequest(ep.url, body)
+	if err != nil {
+		// Transport-level failure, or the server's own TIMEOUT_ERROR: the node
+		// may or may not have accepted the transaction. Report as ambiguous so
+		// the caller records it pending rather than retrying.
+		if endpointBad || isTimeoutError(err) {
+			return nil, fmt.Errorf("%w: %v", errBroadcastAmbiguous, err)
+		}
+		// Any other authoritative JSON-RPC error (e.g. InvalidNonce,
+		// NotEnoughBalance) is a definitive rejection.
 		return nil, err
 	}
 	var res txResult
-	if err := json.Unmarshal(result, &res); err != nil {
+	if err := json.Unmarshal(raw, &res); err != nil {
 		return nil, fmt.Errorf("error decoding send_tx result: %w", err)
 	}
 	return &res, nil
@@ -528,12 +561,19 @@ func (c *rpcClient) gasPrice() (*big.Int, error) {
 	return price, nil
 }
 
+// errBroadcastAmbiguous indicates a broadcast whose outcome is unknown: the
+// signed transaction may or may not have reached the network. The caller
+// must treat the transaction as possibly live — record it as pending and
+// never construct a replacement transaction — because it may still execute.
+var errBroadcastAmbiguous = errors.New("broadcast outcome unknown")
+
 // isTimeoutError reports whether an error is the RPC server's indication
 // that a transaction did not reach the requested execution level within the
 // wait window. The transaction remains in flight and may still complete.
+// errors.As is used so the classification survives error wrapping.
 func isTimeoutError(err error) bool {
-	rpcErr, ok := err.(*rpcError)
-	if !ok {
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) {
 		return false
 	}
 	if rpcErr.Name == "TIMEOUT_ERROR" || strings.Contains(rpcErr.Message, "Timeout") {
@@ -543,10 +583,11 @@ func isTimeoutError(err error) bool {
 }
 
 // isInvalidNonce reports whether an error is a transaction rejection for a
-// stale or reused access-key nonce.
+// stale or reused access-key nonce. errors.As is used so the classification
+// survives error wrapping.
 func isInvalidNonce(err error) bool {
-	rpcErr, ok := err.(*rpcError)
-	if !ok {
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) {
 		return false
 	}
 	return bytes.Contains(rpcErr.Data, []byte("InvalidNonce"))

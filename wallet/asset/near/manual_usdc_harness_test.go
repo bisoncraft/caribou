@@ -290,10 +290,10 @@ func TestManualNEP141TokenRoundTrip(t *testing.T) {
 		pubKey:    senderPub,
 		privKey:   senderPriv,
 		accountID: senderAccountID,
-		rpc:       rpc,
 		log:       util.Disabled,
 		net:       util.Simnet,
 	}
+	parent.rpc.Store(rpc)
 	// Send() reads a cached tipHash normally kept fresh by the background
 	// tip poller started in Connect(), which this harness never runs.
 	// Without this, tipHash is the zero value, and NEAR silently rejects

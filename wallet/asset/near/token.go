@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"slices"
@@ -135,8 +136,8 @@ type TokenWallet struct {
 var _ asset.Wallet = (*TokenWallet)(nil)
 
 func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	if w.parent.rpc == nil {
-		return nil, fmt.Errorf("parent wallet not connected")
+	if _, err := w.parent.client(); err != nil {
+		return nil, fmt.Errorf("parent wallet not connected: %w", err)
 	}
 	var wg sync.WaitGroup
 	return &wg, nil
@@ -159,7 +160,11 @@ func (w *TokenWallet) Balance() (*asset.Balance, error) {
 }
 
 func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
-	raw, err := w.parent.rpc.callFunction(w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
+	rpc, err := w.parent.client()
+	if err != nil {
+		return 0, err
+	}
+	raw, err := rpc.callFunction(w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return 0, fmt.Errorf("ft_balance_of: %w", err)
 	}
@@ -177,7 +182,11 @@ func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
 // storageRegistered reports whether accountID is registered to hold this
 // token, per storage_balance_of.
 func (w *TokenWallet) storageRegistered(accountID string) (bool, error) {
-	raw, err := w.parent.rpc.callFunction(w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
+	rpc, err := w.parent.client()
+	if err != nil {
+		return false, err
+	}
+	raw, err := rpc.callFunction(w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return false, fmt.Errorf("storage_balance_of: %w", err)
 	}
@@ -257,10 +266,15 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 	actions = append(actions, functionCallAction("ft_transfer", amountArgs, ftTransferGas, big.NewInt(ftTransferDepositYocto)))
 
+	rpc, err := w.parent.client()
+	if err != nil {
+		return nil, err
+	}
+
 	w.parent.nonceMtx.Lock()
 	defer w.parent.nonceMtx.Unlock()
 
-	nonce, err := w.parent.reserveNonce()
+	nonce, err := w.parent.reserveNonce(rpc)
 	if err != nil {
 		return nil, err
 	}
@@ -286,17 +300,18 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	txID := base58.Encode(hash[:])
 
-	result, err := w.parent.rpc.sendTx(encoded)
+	result, err := rpc.sendTx(encoded)
 	switch {
 	case err == nil:
 		if result.Status.Failure != nil {
 			return nil, fmt.Errorf("token transfer failed on-chain: %s", string(result.Status.Failure))
 		}
-	case isTimeoutError(err):
-		// The broadcast was accepted but execution didn't complete within
-		// the RPC wait window. Record the transaction as pending; the tip
-		// poller resolves its final status.
-		w.parent.log.Warnf("Token transfer %s execution outcome not yet known: %v", txID, err)
+	case errors.Is(err, errBroadcastAmbiguous):
+		// The broadcast may or may not have been accepted. Record the
+		// transaction as pending; the tip poller resolves the final status.
+		// Returning an error here would invite a retry that could
+		// double-send. The nonce was already reserved, so it is not reused.
+		w.parent.log.Warnf("Token transfer %s broadcast outcome unknown; recording as pending: %v", txID, err)
 	default:
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}

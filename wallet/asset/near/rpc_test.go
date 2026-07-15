@@ -232,14 +232,15 @@ func newTestWallet(t *testing.T, f *fakeRPCServer) *NearWallet {
 	if err != nil {
 		t.Fatalf("newRPCClient: %v", err)
 	}
-	return &NearWallet{
+	w := &NearWallet{
 		log:       testLogger,
 		net:       util.Simnet,
 		privKey:   priv,
 		pubKey:    pub,
 		accountID: hex.EncodeToString(pub),
-		rpc:       rpc,
 	}
+	w.rpc.Store(rpc)
+	return w
 }
 
 // parseSignedTransfer extracts the nonce and transfer deposit from a
@@ -389,6 +390,62 @@ func TestSendExecutionFailure(t *testing.T) {
 	}
 	if w.nonce != 42 {
 		t.Fatalf("failed execution must still consume the nonce: watermark %d, expected 42", w.nonce)
+	}
+}
+
+// TestSendAmbiguousBroadcast covers the fund-safety invariant: when a
+// broadcast's outcome is unknown — a transport-level failure (here a
+// method-not-found response, which is endpoint-attributable) or the
+// server's authoritative TIMEOUT_ERROR — the transfer is recorded as
+// possibly-live rather than retried, so no second transaction is
+// constructed and no error is returned to prompt a caller retry.
+func TestSendAmbiguousBroadcast(t *testing.T) {
+	timeoutHandler := func(json.RawMessage) (any, *rpcError) {
+		return nil, &rpcError{
+			Name:    "TIMEOUT_ERROR",
+			Cause:   &rpcErrorCause{Name: "TIMEOUT_ERROR"},
+			Code:    -32000,
+			Message: "Timeout",
+			Data:    json.RawMessage(`"timeout"`),
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		// register controls whether a send_tx handler is registered; when
+		// false the fake returns method-not-found (endpoint-attributable).
+		register bool
+		handler  func(json.RawMessage) (any, *rpcError)
+	}{
+		{name: "endpoint failure", register: false},
+		{name: "server timeout", register: true, handler: timeoutHandler},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRPCServer(t)
+			w := newTestWallet(t, f)
+			f.handle("gas_price", func(json.RawMessage) (any, *rpcError) {
+				return map[string]any{"gas_price": "100000000"}, nil
+			})
+			f.handle("query", func(json.RawMessage) (any, *rpcError) {
+				return map[string]any{"nonce": 7}, nil
+			})
+			if tc.register {
+				f.handle("send_tx", tc.handler)
+			}
+
+			coin, err := w.Send("alice.near", 1_000_000, 0)
+			if err != nil {
+				t.Fatalf("ambiguous broadcast must not error: %v", err)
+			}
+			if coin == nil {
+				t.Fatalf("expected a coin for the possibly-live transfer")
+			}
+			if n := f.callCount("send_tx"); n != 1 {
+				t.Fatalf("ambiguous broadcast must not retry: %d send_tx calls", n)
+			}
+			if w.nonce != 8 {
+				t.Fatalf("nonce must advance past a possibly-live tx: got %d, want 8", w.nonce)
+			}
+		})
 	}
 }
 

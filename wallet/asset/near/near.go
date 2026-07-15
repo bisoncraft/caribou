@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -140,13 +142,17 @@ type NearWallet struct {
 	peersChange func(uint32, error)
 	dataDir     string
 	settings    map[string]string
+	torProxy    string
 
 	keyMtx    sync.RWMutex
 	privKey   ed25519.PrivateKey // nil when locked
 	pubKey    ed25519.PublicKey
 	accountID string // hex-encoded public key (implicit account)
 
-	rpc  *rpcClient
+	// rpc is set on Connect. It is accessed atomically because the
+	// trait-exposed fee-estimate methods can be reached (via Core) before
+	// or concurrently with Connect. Read it through client().
+	rpc  atomic.Pointer[rpcClient]
 	txDB txdb.NetworkTxDB
 
 	tipMtx  sync.RWMutex
@@ -189,10 +195,26 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		peersChange: cfg.PeersChange,
 		dataDir:     cfg.DataDir,
 		settings:    cfg.Settings,
+		torProxy:    cfg.TorProxy,
 		pubKey:      pubKey,
 		accountID:   accountID,
 		txDB:        cfg.NetworkTxDB,
 	}, nil
+}
+
+// errNotConnected is returned by client() when the wallet's RPC client has
+// not been set (Connect not yet run).
+var errNotConnected = errors.New("wallet not connected")
+
+// client returns the wallet's RPC client, or errNotConnected if Connect has
+// not run. It reads the pointer atomically, so it is safe to call
+// concurrently with Connect.
+func (w *NearWallet) client() (*rpcClient, error) {
+	rpc := w.rpc.Load()
+	if rpc == nil {
+		return nil, errNotConnected
+	}
+	return rpc, nil
 }
 
 // Unlock decrypts the private key using the wallet password.
@@ -238,17 +260,17 @@ func (w *NearWallet) Locked() bool {
 }
 
 func (w *NearWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	rpc, err := newRPCClient(w.rpcEndpoints(), "", w.log)
+	rpc, err := newRPCClient(w.rpcEndpoints(), w.torProxy, w.log)
 	if err != nil {
 		return nil, fmt.Errorf("error creating RPC client: %w", err)
 	}
-	w.rpc = rpc
+	w.rpc.Store(rpc)
 
 	// The transaction database (w.txDB) is the master tx DB handle supplied by
 	// Core via WalletConfig.NetworkTxDB; the wallet does not own its lifecycle.
 
 	// Fetch initial block.
-	block, err := w.rpc.getBlock("final")
+	block, err := rpc.getBlock("final")
 	if err != nil {
 		return nil, fmt.Errorf("error fetching initial block: %w", err)
 	}
@@ -276,7 +298,11 @@ func (w *NearWallet) Info() *asset.WalletInfo {
 }
 
 func (w *NearWallet) Balance() (*asset.Balance, error) {
-	info, err := w.rpc.viewAccount(w.accountID)
+	rpc, err := w.client()
+	if err != nil {
+		return nil, err
+	}
+	info, err := rpc.viewAccount(w.accountID)
 	if err != nil {
 		// Account may not exist yet (no funds received). Return zero balance.
 		if isAccountNotFound(err) {
@@ -314,8 +340,8 @@ func (w *NearWallet) OwnsDepositAddress(address string) (bool, error) {
 // the account's nonce and any nonce already reserved by an earlier call, so
 // two sends issued back-to-back don't compute the same nonce while the
 // first transaction has yet to be reflected in the final access-key view.
-func (w *NearWallet) reserveNonce() (uint64, error) {
-	akInfo, err := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
+func (w *NearWallet) reserveNonce(rpc *rpcClient) (uint64, error) {
+	akInfo, err := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
 	if err != nil {
 		return 0, fmt.Errorf("error querying access key: %w", err)
 	}
@@ -350,10 +376,15 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 	privKey := w.privKey
 	w.keyMtx.RUnlock()
 
+	rpc, err := w.client()
+	if err != nil {
+		return nil, err
+	}
+
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
 
-	akInfo, err := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
+	akInfo, err := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
 	if err != nil {
 		return nil, err
 	}
@@ -365,11 +396,15 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		nonce = w.nonce + 1
 	}
 
-	result, hash, err := w.broadcastTransfer(privKey, address, yoctoAmount, nonce)
+	result, hash, err := w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
 	if err != nil && isInvalidNonce(err) {
-		// Lost a nonce race (e.g. the same key in use by another wallet
-		// instance). Refresh from the optimistic view and retry once.
-		akInfo, akErr := w.rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "optimistic")
+		// An authoritative InvalidNonce means this transaction was rejected
+		// and did not execute, so a fresh-nonce retry is a new send rather
+		// than a duplicate of a possibly-live transaction. (An ambiguous
+		// broadcast is never an InvalidNonce error, so it cannot reach here.)
+		// The nonce may have been consumed by our own lagging watermark or by
+		// the same key in another wallet instance; refresh and retry once.
+		akInfo, akErr := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "optimistic")
 		if akErr != nil {
 			return nil, fmt.Errorf("nonce refresh failed after %v: %w", err, akErr)
 		}
@@ -378,10 +413,8 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		} else {
 			nonce++
 		}
-		result, hash, err = w.broadcastTransfer(privKey, address, yoctoAmount, nonce)
+		result, hash, err = w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
 	}
-
-	fees := w.estimateFee()
 
 	switch {
 	case err == nil:
@@ -391,19 +424,27 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 			w.nonce = nonce
 			return nil, fmt.Errorf("transfer failed on-chain: %s", string(result.Status.Failure))
 		}
-		if f := result.feeDrops(); f > 0 {
-			fees = f
-		}
-	case isTimeoutError(err):
-		// The broadcast was accepted but execution didn't complete within
-		// the RPC wait window. Record the transaction as pending; the tip
-		// poller resolves its final status.
-		w.log.Warnf("Transfer %s execution outcome not yet known: %v", base58.Encode(hash[:]), err)
+	case errors.Is(err, errBroadcastAmbiguous):
+		// The broadcast may or may not have been accepted. Record the
+		// transaction as pending and advance the nonce so it is not reused;
+		// the tip poller resolves the final status. Returning an error here
+		// would invite a retry that could double-send.
+		w.log.Warnf("Transfer %s broadcast outcome unknown; recording as pending: %v", base58.Encode(hash[:]), err)
 	default:
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}
 
 	w.nonce = nonce
+
+	// Prefer the actual fee burnt; fall back to an estimate only when the
+	// execution outcome is not yet known (ambiguous broadcast).
+	var fees uint64
+	if err == nil {
+		fees = result.feeDrops()
+	}
+	if fees == 0 {
+		fees = w.estimateFee()
+	}
 
 	value := YoctoToDrops(yoctoAmount)
 	txID := base58.Encode(hash[:])
@@ -431,7 +472,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 
 // broadcastTransfer builds, signs, and submits a single transfer transaction
 // with the given nonce, waiting for optimistic execution.
-func (w *NearWallet) broadcastTransfer(privKey ed25519.PrivateKey, address string, yoctoAmount *big.Int, nonce uint64) (*txResult, [32]byte, error) {
+func (w *NearWallet) broadcastTransfer(rpc *rpcClient, privKey ed25519.PrivateKey, address string, yoctoAmount *big.Int, nonce uint64) (*txResult, [32]byte, error) {
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
 	w.tipMtx.RUnlock()
@@ -450,7 +491,7 @@ func (w *NearWallet) broadcastTransfer(privKey ed25519.PrivateKey, address strin
 	sig := ed25519.Sign(privKey, hash[:])
 	signedTx := serializeSignedTransaction(txBytes, sig)
 
-	result, err := w.rpc.sendTx(encodeSignedTx(signedTx))
+	result, err := rpc.sendTx(encodeSignedTx(signedTx))
 	return result, hash, err
 }
 
@@ -507,20 +548,35 @@ const gasPriceTTL = time.Minute
 
 // cachedGasPrice returns the network gas price, refreshed at most once per
 // gasPriceTTL. Returns the last known price if the RPC is unavailable, or
-// nil if no price was ever fetched.
+// nil if no price was ever fetched. The RPC call is made without holding
+// gasMtx, so estimate callers never serialize behind an in-flight fetch,
+// and the stamp is advanced on failure too so a persistent outage backs off
+// for gasPriceTTL rather than re-sweeping every endpoint on every estimate.
 func (w *NearWallet) cachedGasPrice() *big.Int {
 	w.gasMtx.Lock()
-	defer w.gasMtx.Unlock()
-	if w.gasPrice != nil && time.Since(w.gasPriceStamp) < gasPriceTTL {
-		return w.gasPrice
+	cached, stamp := w.gasPrice, w.gasPriceStamp
+	w.gasMtx.Unlock()
+	// Back off for gasPriceTTL after any attempt, success or failure, so a
+	// persistent outage does not re-sweep every endpoint on every estimate;
+	// callers get the last known price (nil → DefaultFee) meanwhile.
+	if !stamp.IsZero() && time.Since(stamp) < gasPriceTTL {
+		return cached
 	}
-	gp, err := w.rpc.gasPrice()
+
+	rpc, err := w.client()
+	if err != nil {
+		return cached
+	}
+	gp, err := rpc.gasPrice()
+
+	w.gasMtx.Lock()
+	defer w.gasMtx.Unlock()
+	w.gasPriceStamp = time.Now()
 	if err != nil {
 		w.log.Warnf("Error fetching gas price: %v", err)
-		return w.gasPrice
+		return w.gasPrice // last known (may be nil)
 	}
 	w.gasPrice = gp
-	w.gasPriceStamp = time.Now()
 	return gp
 }
 
@@ -534,7 +590,11 @@ const withdrawFeeMargin = 2
 // reserving the protocol storage stake for the account's current size and a
 // fee allowance with margin.
 func (w *NearWallet) spendableYocto() (*big.Int, error) {
-	info, err := w.rpc.viewAccount(w.accountID)
+	rpc, err := w.client()
+	if err != nil {
+		return nil, err
+	}
+	info, err := rpc.viewAccount(w.accountID)
 	if err != nil {
 		if isAccountNotFound(err) {
 			return new(big.Int), nil
@@ -598,10 +658,16 @@ func (w *NearWallet) EstimateSendTxFee(address string, value, _ uint64, subtract
 			return 0, false, fmt.Errorf("balance cannot cover the fee and storage reserve")
 		}
 	case subtract:
+		// Mirror Withdraw, which subtracts the fee and caps the amount at the
+		// spendable balance. Erroring when value-fee exceeds spendable would
+		// reject exactly the max-balance withdrawal Withdraw fulfills.
 		amt := DropsToYocto(value)
 		amt.Sub(amt, w.estimateFeeYocto())
-		if amt.Sign() <= 0 || amt.Cmp(spendable) > 0 {
-			return 0, false, fmt.Errorf("insufficient balance to send %d drops fee-inclusive", value)
+		if amt.Cmp(spendable) > 0 {
+			amt.Set(spendable)
+		}
+		if amt.Sign() <= 0 {
+			return 0, false, fmt.Errorf("value %d drops cannot cover the fee and storage reserve", value)
 		}
 	default:
 		if DropsToYocto(value).Cmp(spendable) > 0 {
@@ -639,7 +705,11 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 
 	// Try querying the RPC.
-	result, err := w.rpc.txStatus(txID, w.accountID)
+	rpc, err := w.client()
+	if err != nil {
+		return nil, err
+	}
+	result, err := rpc.txStatus(txID, w.accountID)
 	if err != nil {
 		return nil, asset.CoinNotFoundError
 	}
@@ -667,7 +737,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 
 	if result.Status.isSuccess() {
-		wt.BlockNumber, wt.Timestamp = w.resolveBlock(result.TransactionOutcome.BlockHash)
+		wt.BlockNumber, wt.Timestamp = w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
 	}
 
 	return wt, nil
@@ -685,15 +755,22 @@ func (w *NearWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransa
 	return pending
 }
 
-// tipPoller polls for new blocks and checks pending transactions.
+// tipPoller polls for new blocks and checks pending transactions. The RPC
+// client is stable for the poller's lifetime — a reconfigure spawns a fresh
+// Connect and poller — so it is loaded once here.
 func (w *NearWallet) tipPoller(ctx context.Context) {
 	ticker := time.NewTicker(tipPollInterval)
 	defer ticker.Stop()
 
+	rpc := w.rpc.Load()
+	if rpc == nil {
+		return
+	}
+
 	for {
 		select {
 		case <-ticker.C:
-			block, err := w.rpc.getBlock("final")
+			block, err := rpc.getBlock("final")
 			if err != nil {
 				w.log.Errorf("Error fetching block: %v", err)
 				continue
@@ -712,8 +789,8 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 				if w.emit != nil {
 					w.emit.TipChange(block.Header.Height)
 				}
-				w.checkPendingTxs()
-				w.scanIncomingTxs(block.Header.Height)
+				w.checkPendingTxs(rpc)
+				w.scanIncomingTxs(rpc, block.Header.Height)
 			}
 
 		case <-ctx.Done():
@@ -730,7 +807,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 // re-derives a tx's type/amount from the wallet's own address — it only
 // updates BlockNumber/Timestamp/Confirmed/Rejected on the existing record
 // looked up by the tx's own ID.
-func (w *NearWallet) checkPendingTxs() {
+func (w *NearWallet) checkPendingTxs(rpc *rpcClient) {
 	if w.txDB == nil {
 		return
 	}
@@ -740,12 +817,12 @@ func (w *NearWallet) checkPendingTxs() {
 		return
 	}
 	for _, tx := range pending {
-		result, err := w.rpc.txStatus(tx.ID, w.accountID)
+		result, err := rpc.txStatus(tx.ID, w.accountID)
 		if err != nil {
 			w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
 			continue
 		}
-		blockHeight, blockTime := w.resolveBlock(result.TransactionOutcome.BlockHash)
+		blockHeight, blockTime := w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
 		if result.Status.isSuccess() {
 			tx.BlockNumber = blockHeight
 			tx.Timestamp = blockTime
@@ -780,9 +857,9 @@ func (w *NearWallet) checkPendingTxs() {
 
 // resolveBlock looks up the height and timestamp (unix seconds) for a block
 // hash. Falls back to the current tip if the lookup fails.
-func (w *NearWallet) resolveBlock(blockHash string) (height, tsSec uint64) {
+func (w *NearWallet) resolveBlock(rpc *rpcClient, blockHash string) (height, tsSec uint64) {
 	if blockHash != "" {
-		block, err := w.rpc.getBlockByHash(blockHash)
+		block, err := rpc.getBlockByHash(blockHash)
 		if err == nil {
 			return block.Header.Height, block.Header.Timestamp / 1_000_000_000
 		}
@@ -800,7 +877,7 @@ const maxScanBlocks = 10
 // scanIncomingTxs checks whether our account balance increased since the last
 // scan. Only when an increase is detected does it scan the intervening blocks
 // for the actual incoming transfer transactions.
-func (w *NearWallet) scanIncomingTxs(newTip uint64) {
+func (w *NearWallet) scanIncomingTxs(rpc *rpcClient, newTip uint64) {
 	if w.txDB == nil {
 		return
 	}
@@ -812,7 +889,7 @@ func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 
 	// Compare account balance at the two block heights. If the balance
 	// didn't increase we can skip the expensive block/chunk scanning.
-	prevAcct, err := w.rpc.viewAccountAt(w.accountID, w.lastScannedHeight)
+	prevAcct, err := rpc.viewAccountAt(w.accountID, w.lastScannedHeight)
 	if err != nil {
 		// Account may not exist yet at the earlier height.
 		if !isAccountNotFound(err) {
@@ -821,7 +898,7 @@ func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 		w.lastScannedHeight = newTip
 		return
 	}
-	curAcct, err := w.rpc.viewAccountAt(w.accountID, newTip)
+	curAcct, err := rpc.viewAccountAt(w.accountID, newTip)
 	if err != nil {
 		w.log.Warnf("Error querying account at block %d: %v", newTip, err)
 		return
@@ -840,14 +917,14 @@ func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 	}
 
 	for height := startHeight; height <= newTip; height++ {
-		block, err := w.rpc.getBlockByHeight(height)
+		block, err := rpc.getBlockByHeight(height)
 		if err != nil {
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
 			break
 		}
 		blockTime := block.Header.Timestamp / 1_000_000_000
 		for _, chunk := range block.Chunks {
-			w.scanChunk(chunk.ChunkHash, height, blockTime)
+			w.scanChunk(rpc, chunk.ChunkHash, height, blockTime)
 		}
 	}
 
@@ -855,8 +932,8 @@ func (w *NearWallet) scanIncomingTxs(newTip uint64) {
 }
 
 // scanChunk fetches a chunk and stores any incoming transfer transactions.
-func (w *NearWallet) scanChunk(chunkHash string, blockHeight, blockTime uint64) {
-	chunk, err := w.rpc.getChunk(chunkHash)
+func (w *NearWallet) scanChunk(rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) {
+	chunk, err := rpc.getChunk(chunkHash)
 	if err != nil {
 		w.log.Warnf("Error fetching chunk %s: %v", chunkHash, err)
 		return
