@@ -21,14 +21,14 @@ import (
 // cost when it observes an event whose timing the wallet does not control;
 // a spend of an internal address is normally wallet-originated, so once its
 // last transaction is this deep the address has nothing left to report to
-// the LIVE watch. The exception is a spend authored by the same seed loaded
-// in another wallet — for that, an internal that still holds an unspent
-// credit joins the metered sweep set when its live watch drops (see
-// reapWatches); an empty internal is done for good. The value is a
-// reorg-safety margin — deliberately deeper than the asset layer's
-// display-oriented confTxFinality (1). A reorg deeper than this after an
-// address was forgotten is not observed until the address is next involved
-// in wallet activity; see docs/address-watching-plan.md.
+// the LIVE watch. Dropped internals hand off to the metered sweep at a
+// cadence matching their event probability (see tierInternals): a funded
+// internal — spendable by the same seed loaded in another wallet — at the
+// fast cadence, an empty internal — payable only by mistake or a
+// refund-to-sender — at the slow one. No address is ever unobserved
+// outright. The value is a reorg-safety margin — deliberately deeper than
+// the asset layer's display-oriented confTxFinality (1); see
+// docs/address-watching-plan.md.
 const watchFinalityDepth = 6
 
 // externalQuietDepth is the BTC-scale fallback external quiet depth, used
@@ -67,17 +67,21 @@ type watchPolicy struct {
 	mtx     sync.Mutex
 	tracked map[string]*addrWatch
 
-	// cold holds demoted (unwatched) addresses awaiting metered sweeps: the
-	// used externals, which any third party can pay at any time, and the
-	// internals that still hold an unspent credit, which the same seed
-	// loaded in another wallet can spend. A sweep hit promotes an address
-	// back out.
+	// cold holds demoted (unwatched) addresses awaiting metered sweeps,
+	// tiered by event probability: the fast tier holds used externals (any
+	// third party can pay them at any time) and funded internals (the same
+	// seed loaded in another wallet can spend the credit); the slow tier
+	// holds empty internals, whose only plausible events are a mistaken
+	// payment or a refund-to-sender — improbable, but never invisible. A
+	// sweep hit promotes an address back out.
 	cold map[string]*coldEntry
 	// sweeping is the single-flight guard for the sweep goroutine.
 	sweeping bool
-	// lastSweepTip is the tip at which the last sweep launched; zero means
-	// no sweep since (re)sync, so the next block triggers one.
-	lastSweepTip int32
+	// lastSweepTip and lastSlowSweepTip are the tips at which each tier's
+	// last sweep launched; zero means no sweep since (re)sync, so the next
+	// block triggers one.
+	lastSweepTip     int32
+	lastSlowSweepTip int32
 
 	// extQuietDefault is the chain-derived external quiet depth
 	// (24h / target block time), set at wallet open. extQuiet and sweepEvery
@@ -97,6 +101,10 @@ type watchPolicy struct {
 type coldEntry struct {
 	addr btcutil.Address
 	upTo int32
+	// slow assigns the entry to the slow sweep cadence (empty internals);
+	// fast-tier entries (used externals, funded internals) sweep every
+	// interval.
+	slow bool
 }
 
 // externalQuiet and sweepDue return the effective depths (test overrides or
@@ -152,9 +160,9 @@ func (p *watchPolicy) note(addr btcutil.Address, internal bool, txHash chainhash
 // reap returns and forgets the tracked addresses whose observable window has
 // closed at the given tip: no unmined activity and the last mined activity at
 // least the branch's quiet depth deep. Reaped externals are demoted into the
-// cold sweep set here; reaped internals are also returned separately so the
-// caller can demote the ones that still hold an unspent credit — a judgement
-// that needs the database (see reapWatches).
+// fast sweep tier here; reaped internals are also returned separately so the
+// caller can tier them by whether they still hold an unspent credit — a
+// judgement that needs the database (see tierInternals).
 func (p *watchPolicy) reap(tip int32) (done, internals []btcutil.Address) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
@@ -175,10 +183,7 @@ func (p *watchPolicy) reap(tip int32) (done, internals []btcutil.Address) {
 			internals = append(internals, iw.addr)
 			continue
 		}
-		if p.cold == nil {
-			p.cold = make(map[string]*coldEntry)
-		}
-		p.cold[key] = &coldEntry{addr: iw.addr, upTo: tip}
+		p.demoteLocked(iw.addr, tip, false)
 	}
 	return done, internals
 }
@@ -234,12 +239,10 @@ func (w *Wallet) noteActivity(dbtx walletdb.ReadWriteTx, rec *wtxmgr.TxRecord,
 
 // reapWatches drops the backend watches of tracked addresses whose
 // observable window has closed at tip. A no-op for backends without the
-// AddressWatcher capability. Reaped externals join the cold sweep set (any
-// third party can pay them at any time); a reaped internal joins it only
-// while it still holds an unspent credit — the credit is spendable by the
-// same seed loaded in another wallet, and with the live watch dropped only
-// the sweep can observe such a spend. An empty internal is done for good:
-// never handed out, nothing left to spend.
+// AddressWatcher capability. Every reaped address hands off to the metered
+// sweep: externals at the fast cadence (any third party can pay them at any
+// time), internals tiered by whether they still hold an unspent credit
+// (tierInternals). Nothing is unwatched without a sweep tier owning it.
 func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 	watcher, ok := chainClient.(chain.AddressWatcher)
 	if !ok {
@@ -250,12 +253,7 @@ func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 		return
 	}
 	if len(internals) > 0 {
-		if err := w.demoteFundedInternals(internals, tip); err != nil {
-			// Not demoted means not swept: an external spend of these
-			// credits goes unobserved until a recovery scan.
-			log.Errorf("Failed to demote %d reaped internal addresses: %v",
-				len(internals), err)
-		}
+		w.tierInternals(internals, tip)
 	}
 	if err := watcher.Unwatch(done); err != nil {
 		log.Errorf("Failed to unwatch %d quiet addresses: %v",
@@ -265,30 +263,45 @@ func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 	log.Debugf("Unwatched %d quiet addresses", len(done))
 }
 
-// demoteFundedInternals moves the reaped internal addresses that still hold
-// an unspent credit into the cold sweep set.
-func (w *Wallet) demoteFundedInternals(addrs []btcutil.Address, tip int32) error {
-	return walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+// tierInternals demotes every reaped internal address into the cold sweep
+// set: funded internals — the credit is spendable by the same seed loaded in
+// another wallet, and with the live watch dropped only the sweep can observe
+// such a spend — at the fast cadence; empty internals at the slow cadence,
+// where the only plausible events (a mistaken payment, a refund-to-sender)
+// are improbable but must not be invisible forever. When the funded
+// judgment itself fails, everything is demoted at the fast cadence: the
+// failure mode is a more frequent sweep, never an unwatched, unswept
+// address.
+func (w *Wallet) tierInternals(addrs []btcutil.Address, tip int32) {
+	funded := make(map[string]struct{})
+	err := walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
 		txmgrNs := dbtx.ReadBucket(wtxmgrNamespaceKey)
 		unspent, err := w.TxStore.UnspentOutputs(txmgrNs)
 		if err != nil {
 			return err
 		}
-		funded := make(map[string]struct{}, len(unspent))
 		for i := range unspent {
 			funded[string(unspent[i].PkScript)] = struct{}{}
 		}
-		for _, addr := range addrs {
-			script, err := txscript.PayToAddrScript(addr)
-			if err != nil {
-				continue
-			}
-			if _, ok := funded[string(script)]; ok {
-				w.watchPol.demote(addr, tip)
-			}
-		}
 		return nil
 	})
+	if err != nil {
+		log.Errorf("Watch policy: funded-internal judgment failed (%v); "+
+			"demoting all %d reaped internals at the fast cadence",
+			err, len(addrs))
+		for _, addr := range addrs {
+			w.watchPol.demote(addr, tip, false)
+		}
+		return
+	}
+	for _, addr := range addrs {
+		slow := false
+		if script, err := txscript.PayToAddrScript(addr); err == nil {
+			_, isFunded := funded[string(script)]
+			slow = !isFunded
+		}
+		w.watchPol.demote(addr, tip, slow)
+	}
 }
 
 // classifyWatchSet partitions the sync watch set by the persisted last-active
@@ -362,17 +375,21 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 		funded[string(unspent[i].PkScript)] = struct{}{}
 	}
 
-	// The demotion floor. An address classified cold here was already cold
-	// at shutdown — had it been hot, its activity would be within its quiet
-	// depth of ref and it would classify hot — so it was NOT watched between
-	// the last completed sweep and shutdown. The persisted watermark, not
-	// ref, is the height through which its history is verified; demoting at
-	// ref would put anything that landed in that window below every future
-	// sweep floor, unexamined until a recovery scan. A watermark lower than
-	// an address's true floor only causes an idempotent re-sweep.
-	coldFloor := ref
-	if sweptTo, ok := coldSweptTo(dbtx); ok && sweptTo < ref {
-		coldFloor = sweptTo
+	// The demotion floors, one per tier. An address classified cold here
+	// was already cold at shutdown — had it been hot, its activity would be
+	// within its quiet depth of ref and it would classify hot — so it was
+	// NOT watched between its tier's last completed sweep and shutdown. The
+	// persisted watermark, not ref, is the height through which its history
+	// is verified; demoting at ref would put anything that landed in that
+	// window below every future sweep floor, unexamined until a recovery
+	// scan. A watermark lower than an address's true floor only causes an
+	// idempotent re-sweep.
+	fastFloor, slowFloor := ref, ref
+	if sweptTo, ok := coldSweptTo(dbtx, false); ok && sweptTo < ref {
+		fastFloor = sweptTo
+	}
+	if sweptTo, ok := coldSweptTo(dbtx, true); ok && sweptTo < ref {
+		slowFloor = sweptTo
 	}
 
 	keptAddrs := addrs[:0]
@@ -386,17 +403,20 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 			keptAddrs = append(keptAddrs, addr)
 			continue
 		}
-		// Cold addresses that remain observable hand off to the sweep at
-		// the verified floor: every used external — any third party can
-		// pay it at any time — and an internal that still holds an unspent
-		// credit, which the same seed loaded in another wallet can spend.
-		// An empty internal stays retired: never handed out, nothing left
-		// to spend.
+		// Every cold address hands off to the sweep at its tier's verified
+		// floor: used externals — any third party can pay them at any time
+		// — and funded internals — spendable by the same seed loaded in
+		// another wallet — at the fast cadence; empty internals at the slow
+		// one, whose improbable events (a mistaken payment, a
+		// refund-to-sender) must not be invisible forever.
 		if ma, err := w.Manager.Address(addrmgrNs, addr); err == nil {
 			_, isFunded := funded[string(pkScript)]
-			if !ma.Internal() || isFunded {
-				w.watchPol.demote(addr, coldFloor)
+			slow := ma.Internal() && !isFunded
+			floor := fastFloor
+			if slow {
+				floor = slowFloor
 			}
+			w.watchPol.demote(addr, floor, slow)
 		}
 	}
 	keptUnspent := unspent[:0]
@@ -540,14 +560,24 @@ const sweepInterval = 144
 // watchFinalityDepth.
 const coldSweepReorgMargin = watchFinalityDepth - 1
 
-// demote moves an address into the cold sweep set. upTo is the height
-// through which its history is fully known — the tip at which it was last
-// watched. Demoting an address that is already cold keeps the LOWER floor:
-// a duplicate demotion carries no new verification (only bumpCold does), and
-// raising the floor could lift it past unexamined heights.
-func (p *watchPolicy) demote(addr btcutil.Address, upTo int32) {
+// demote moves an address into the cold sweep set at the given cadence tier.
+// upTo is the height through which its history is fully known — the tip at
+// which it was last watched. Demoting an address that is already cold keeps
+// the LOWER floor — a duplicate demotion carries no new verification (only
+// bumpCold does), and raising the floor could lift it past unexamined
+// heights — and the FASTER tier: examining an entry more often than its
+// judgment requires is always safe, and the one same-startup collision
+// (discovery seeding an entry fast before classification re-judges it slow)
+// must keep the sooner sweep.
+func (p *watchPolicy) demote(addr btcutil.Address, upTo int32, slow bool) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
+	p.demoteLocked(addr, upTo, slow)
+}
+
+// demoteLocked is demote with p.mtx already held (the reaper demotes inside
+// its scan).
+func (p *watchPolicy) demoteLocked(addr btcutil.Address, upTo int32, slow bool) {
 	if p.cold == nil {
 		p.cold = make(map[string]*coldEntry)
 	}
@@ -556,9 +586,10 @@ func (p *watchPolicy) demote(addr btcutil.Address, upTo int32) {
 		if upTo < e.upTo {
 			e.upTo = upTo
 		}
+		e.slow = e.slow && slow
 		return
 	}
-	p.cold[key] = &coldEntry{addr: addr, upTo: upTo}
+	p.cold[key] = &coldEntry{addr: addr, upTo: upTo, slow: slow}
 }
 
 // promote removes addresses from the cold set (a sweep hit re-established
@@ -593,13 +624,17 @@ func (p *watchPolicy) coldSet() ([]btcutil.Address, int32) {
 // FromHeight is its own verified floor less the reorg margin — plus the
 // swept-address snapshot for the post-sweep bump. Only addresses in the
 // snapshot are bumped: an entry demoted after the sweep launches was not
-// examined by it and keeps its own floor.
-func (p *watchPolicy) sweepSet() ([]chain.SweepEntry, []btcutil.Address) {
+// examined by it and keeps its own floor. Slow-tier entries join only when
+// their cadence is due (includeSlow).
+func (p *watchPolicy) sweepSet(includeSlow bool) ([]chain.SweepEntry, []btcutil.Address) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	entries := make([]chain.SweepEntry, 0, len(p.cold))
 	swept := make([]btcutil.Address, 0, len(p.cold))
 	for _, e := range p.cold {
+		if e.slow && !includeSlow {
+			continue
+		}
 		from := e.upTo - coldSweepReorgMargin
 		if from < 0 {
 			from = 0
@@ -608,6 +643,25 @@ func (p *watchPolicy) sweepSet() ([]chain.SweepEntry, []btcutil.Address) {
 		swept = append(swept, e.addr)
 	}
 	return entries, swept
+}
+
+// tierMin returns the minimum known-up-to height over one tier's entries —
+// the tier's persisted-watermark value — and whether the tier has any.
+func (p *watchPolicy) tierMin(slow bool) (int32, bool) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	var from int32
+	found := false
+	for _, e := range p.cold {
+		if e.slow != slow {
+			continue
+		}
+		if !found || e.upTo < from {
+			from = e.upTo
+			found = true
+		}
+	}
+	return from, found
 }
 
 // bumpCold records that a completed sweep verified the swept entries through
@@ -637,10 +691,21 @@ func (p *watchPolicy) bumpCold(tip int32, swept, failed []btcutil.Address) {
 	}
 }
 
+// slowSweepFactor is the slow tier's cadence in fast-sweep intervals: empty
+// internals are examined every slowSweepFactor'th sweep (weekly at the
+// chain-derived daily interval). Their plausible events — a mistaken payment,
+// a refund-to-sender — are improbable enough that a daily per-address check
+// (a get_history RPC per entry on electrum) isn't warranted for what can be
+// a change-heavy wallet's largest address class, but "improbable" must never
+// mean invisible: detection latency is bounded by this cadence rather than
+// by a seed restore.
+const slowSweepFactor = 7
+
 // maybeSweep launches the cold-set sweep when due: on the first block
-// after a sync (lastSweepTip zero) and every sweepInterval blocks after. The
-// sweep runs on its own goroutine — it is a batch of network calls and must
-// not block the notification loop — with single-flight protection.
+// after a sync (lastSweepTip zero) and every sweepDue() blocks after, with
+// the slow tier joining every slowSweepFactor'th interval. The sweep runs on
+// its own goroutine — it is a batch of network calls and must not block the
+// notification loop — with single-flight protection across both tiers.
 func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	watcher, ok := chainClient.(chain.AddressWatcher)
 	if !ok {
@@ -653,19 +718,38 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 		p.mtx.Unlock()
 		return
 	}
-	if len(p.cold) == 0 {
-		// Nothing to sweep, but keep the persisted watermark current: with
-		// no demoted addresses, the cold set is trivially verified through
+	slowDue := p.lastSlowSweepTip == 0 ||
+		tip-p.lastSlowSweepTip >= slowSweepFactor*p.sweepDue()
+	var fastN, slowN int
+	for _, e := range p.cold {
+		if e.slow {
+			slowN++
+		} else {
+			fastN++
+		}
+	}
+	if fastN == 0 && (!slowDue || slowN == 0) {
+		// Nothing to sweep this interval, but keep the persisted
+		// watermarks current: an empty tier is trivially verified through
 		// tip. An address demoted at the next startup then gets a floor
 		// near this tip instead of one pinned at the last nonempty sweep,
 		// which would trigger a wide (harmless, but wasteful) re-sweep.
 		p.lastSweepTip = tip
+		if slowDue {
+			p.lastSlowSweepTip = tip
+		}
 		p.mtx.Unlock()
-		w.persistColdSweptTo(tip)
+		w.persistColdSweptTo(tip, false)
+		if slowDue && slowN == 0 {
+			w.persistColdSweptTo(tip, true)
+		}
 		return
 	}
 	p.sweeping = true
 	p.lastSweepTip = tip
+	if slowDue {
+		p.lastSlowSweepTip = tip
+	}
 	p.mtx.Unlock()
 
 	// Each entry is swept from its own floor less the reorg margin: a
@@ -673,7 +757,7 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	// below a floor, which the strict above-FromHeight hit check would
 	// otherwise never revisit. The margin can't false-hit ingested history
 	// (see the const).
-	entries, swept := p.sweepSet()
+	entries, swept := p.sweepSet(slowDue)
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -686,39 +770,48 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 		if err != nil {
 			log.Errorf("Cold-address sweep failed: %v", err)
 			// Retry from the same floors next interval. The persisted
-			// watermark is untouched: nothing new was verified.
+			// watermarks are untouched: nothing new was verified.
 			p.mtx.Lock()
 			p.lastSweepTip = tip - p.sweepDue()
+			if slowDue {
+				p.lastSlowSweepTip = tip - slowSweepFactor*p.sweepDue()
+			}
 			p.mtx.Unlock()
 			return
 		}
 		p.promote(hits)
 		p.bumpCold(tip, swept, failed)
-		// Persist the verified watermark for the next startup's demotion
-		// floors: the set minimum after this sweep's bumps (a failed
-		// address pins it), or tip when everything was promoted out.
-		if remaining, from := p.coldSet(); len(remaining) == 0 {
-			w.persistColdSweptTo(tip)
-		} else {
-			w.persistColdSweptTo(from)
+		// Persist each swept tier's verified watermark for the next
+		// startup's demotion floors: the tier minimum after this sweep's
+		// bumps (a failed address pins it), or tip when the tier emptied.
+		persistTier := func(slow bool) {
+			if from, ok := p.tierMin(slow); ok {
+				w.persistColdSweptTo(from, slow)
+			} else {
+				w.persistColdSweptTo(tip, slow)
+			}
+		}
+		persistTier(false)
+		if slowDue {
+			persistTier(true)
 		}
 		if len(failed) > 0 {
 			log.Warnf("Cold-address sweep: %d of %d checks failed; their "+
 				"floors stay at their last verified heights for the next sweep",
 				len(failed), len(entries))
 		}
-		log.Debugf("Cold-address sweep: %d checked, %d promoted",
-			len(entries), len(hits))
+		log.Debugf("Cold-address sweep: %d checked (slow tier included: %v), "+
+			"%d promoted", len(entries), slowDue, len(hits))
 	}()
 }
 
-// persistColdSweptTo records the cold-set verified watermark (see
-// coldSweptToKey in watch_index.go). Failures are logged and tolerated: a
-// stale watermark only lowers the next startup's demotion floors, and a
-// too-low floor over-sweeps idempotently rather than missing anything.
-func (w *Wallet) persistColdSweptTo(height int32) {
+// persistColdSweptTo records a tier's verified watermark (see coldSweptToKey
+// in watch_index.go). Failures are logged and tolerated: a stale watermark
+// only lowers the next startup's demotion floors, and a too-low floor
+// over-sweeps idempotently rather than missing anything.
+func (w *Wallet) persistColdSweptTo(height int32, slow bool) {
 	err := walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
-		return putColdSweptTo(dbtx, height)
+		return putColdSweptTo(dbtx, height, slow)
 	})
 	if err != nil {
 		log.Errorf("Failed to persist cold-swept watermark %d: %v", height, err)

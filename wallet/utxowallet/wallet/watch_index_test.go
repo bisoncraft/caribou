@@ -28,31 +28,43 @@ func tempIndexDB(t *testing.T) walletdb.DB {
 	return db
 }
 
-// TestColdSweptTo exercises the cold-set verified watermark: absent until
-// written, and monotonic — a lower write can only be stale and must not
-// regress the verified height.
+// TestColdSweptTo exercises the per-tier verified watermarks: absent until
+// written, monotonic — a lower write can only be stale and must not regress
+// the verified height — and independent between tiers, since the slow tier's
+// floors lag the fast tier's by design.
 func TestColdSweptTo(t *testing.T) {
 	db := tempIndexDB(t)
 
 	_ = walletdb.View(db, func(tx walletdb.ReadTx) error {
-		if h, ok := coldSweptTo(tx); ok {
-			t.Fatalf("watermark %d present in empty db", h)
+		for _, slow := range []bool{false, true} {
+			if h, ok := coldSweptTo(tx, slow); ok {
+				t.Fatalf("watermark(slow=%v) %d present in empty db", slow, h)
+			}
 		}
 		return nil
 	})
 
 	_ = walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
 		for _, h := range []int32{500, 700, 600} { // 600 must not lower 700
-			if err := putColdSweptTo(tx, h); err != nil {
+			if err := putColdSweptTo(tx, h, false); err != nil {
 				t.Fatalf("putColdSweptTo(%d): %v", h, err)
 			}
 		}
-		return putColdSweptTo(tx, 0) // ignored
+		if err := putColdSweptTo(tx, 300, true); err != nil {
+			t.Fatalf("putColdSweptTo(slow): %v", err)
+		}
+		return putColdSweptTo(tx, 0, false) // ignored
 	})
 	_ = walletdb.View(db, func(tx walletdb.ReadTx) error {
-		h, ok := coldSweptTo(tx)
+		h, ok := coldSweptTo(tx, false)
 		if !ok || h != 700 {
-			t.Fatalf("coldSweptTo = %d,%v; want 700,true", h, ok)
+			t.Fatalf("coldSweptTo(fast) = %d,%v; want 700,true", h, ok)
+		}
+		// The fast tier's writes must not have touched the slow tier's
+		// (lower) watermark.
+		h, ok = coldSweptTo(tx, true)
+		if !ok || h != 300 {
+			t.Fatalf("coldSweptTo(slow) = %d,%v; want 300,true", h, ok)
 		}
 		return nil
 	})
@@ -116,8 +128,8 @@ func TestLastActiveIndex(t *testing.T) {
 // TestClassifyWatchSet drives the load-time classification on a real wallet:
 // an unused (lookahead) external is always hot; a used external active within
 // quietDepth of the reference is hot; one active before it is cold and gets
-// demoted to the sweep set; a quiet internal joins the sweep set only while
-// it still holds an unspent credit.
+// demoted to the fast sweep tier; a quiet internal is tiered by whether it
+// still holds an unspent credit — fast while funded, slow once empty.
 func TestClassifyWatchSet(t *testing.T) {
 	w, cleanup := testWallet(t)
 	defer cleanup()
@@ -171,10 +183,14 @@ func TestClassifyWatchSet(t *testing.T) {
 				return err
 			}
 		}
-		// The last sweep of the prior run verified the cold set through
-		// here; demotion floors must land on it, not on ref — the window
-		// (watermark, ref] was neither watched nor swept.
-		if err := putColdSweptTo(tx, ref-500); err != nil {
+		// The last sweeps of the prior run verified the tiers through
+		// here; demotion floors must land on them, not on ref — the window
+		// (watermark, ref] was neither watched nor swept. The slow tier's
+		// watermark lags the fast tier's, as it does in practice.
+		if err := putColdSweptTo(tx, ref-500, false); err != nil {
+			return err
+		}
+		if err := putColdSweptTo(tx, ref-900, true); err != nil {
 			return err
 		}
 		return markBackfilled(tx)
@@ -220,18 +236,36 @@ func TestClassifyWatchSet(t *testing.T) {
 		t.Fatalf("classify: %v", err)
 	}
 
-	cold, from := w.watchPol.coldSet()
+	cold, _ := w.watchPol.coldSet()
 	coldMap := map[string]bool{}
 	for _, a := range cold {
 		coldMap[a.String()] = true
 	}
-	if len(cold) != 2 || !coldMap[old.String()] || !coldMap[chFunded.String()] {
-		t.Fatalf("cold set = %v, want [%s %s]", cold, old, chFunded)
+	if len(cold) != 3 || !coldMap[old.String()] || !coldMap[chFunded.String()] ||
+		!coldMap[chEmpty.String()] {
+		t.Fatalf("cold set = %v, want [%s %s %s]", cold, old, chFunded, chEmpty)
 	}
-	if coldMap[chEmpty.String()] {
-		t.Fatal("empty internal was demoted to the sweep set")
+	// Tiers: the used external and the funded internal sweep at the fast
+	// cadence from the fast watermark; the empty internal is slow-tier —
+	// improbable events, but never invisible — from the slow watermark.
+	w.watchPol.mtx.Lock()
+	oldEntry := w.watchPol.cold[old.String()]
+	fundedEntry := w.watchPol.cold[chFunded.String()]
+	emptyEntry := w.watchPol.cold[chEmpty.String()]
+	w.watchPol.mtx.Unlock()
+	if oldEntry.slow || fundedEntry.slow {
+		t.Fatalf("fast-tier entries misfiled: external slow=%v, funded internal slow=%v",
+			oldEntry.slow, fundedEntry.slow)
 	}
-	if from != ref-500 {
-		t.Fatalf("demotion floor = %d, want the watermark %d", from, ref-500)
+	if !emptyEntry.slow {
+		t.Fatal("empty internal not in the slow tier")
+	}
+	if oldEntry.upTo != ref-500 || fundedEntry.upTo != ref-500 {
+		t.Fatalf("fast floors = %d/%d, want the fast watermark %d",
+			oldEntry.upTo, fundedEntry.upTo, ref-500)
+	}
+	if emptyEntry.upTo != ref-900 {
+		t.Fatalf("slow floor = %d, want the slow watermark %d",
+			emptyEntry.upTo, ref-900)
 	}
 }

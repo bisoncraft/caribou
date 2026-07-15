@@ -127,14 +127,14 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 	var p watchPolicy
 	ok, bad := tAddr(t, 10), tAddr(t, 11)
-	p.demote(ok, 100)
-	p.demote(bad, 100)
+	p.demote(ok, 100, false)
+	p.demote(bad, 100, false)
 
-	_, swept := p.sweepSet()
+	_, swept := p.sweepSet(false)
 
 	// Demoted mid-sweep: not in the snapshot, floor must survive the bump.
 	late := tAddr(t, 12)
-	p.demote(late, 150)
+	p.demote(late, 150, false)
 
 	p.bumpCold(200, swept, []btcutil.Address{bad})
 
@@ -166,16 +166,21 @@ func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 func TestDemoteKeepsLowerFloor(t *testing.T) {
 	var p watchPolicy
 	a := tAddr(t, 13)
-	p.demote(a, 100)
-	p.demote(a, 500)
+	p.demote(a, 100, false)
+	p.demote(a, 500, true)
 	p.mtx.Lock()
-	upTo := p.cold[a.String()].upTo
+	upTo, slow := p.cold[a.String()].upTo, p.cold[a.String()].slow
 	p.mtx.Unlock()
 	if upTo != 100 {
 		t.Fatalf("floor after re-demotion = %d, want 100", upTo)
 	}
+	// The tier merge keeps the FASTER cadence too: a slow re-judgment must
+	// not delay an entry another demotion wants examined sooner.
+	if slow {
+		t.Fatal("fast entry downgraded to slow by a re-demotion")
+	}
 	// A lower re-demotion (e.g. a discovery seed) does take effect.
-	p.demote(a, 50)
+	p.demote(a, 50, false)
 	p.mtx.Lock()
 	upTo = p.cold[a.String()].upTo
 	p.mtx.Unlock()
@@ -184,12 +189,11 @@ func TestDemoteKeepsLowerFloor(t *testing.T) {
 	}
 }
 
-// TestDemoteFundedInternals verifies that a reaped internal address joins the
-// cold sweep set only while it still holds an unspent credit: funded change
-// is spendable by the same seed loaded in another wallet, and with the live
-// watch dropped only the sweep can observe such a spend. Empty change is
-// retired for good.
-func TestDemoteFundedInternals(t *testing.T) {
+// TestTierInternals verifies that every reaped internal address joins the
+// cold sweep set, tiered by whether it still holds an unspent credit: funded
+// change — spendable by the same seed loaded in another wallet — at the fast
+// cadence, empty change at the slow cadence. Nothing is left unobserved.
+func TestTierInternals(t *testing.T) {
 	w, cleanup := testWallet(t)
 	defer cleanup()
 
@@ -213,15 +217,23 @@ func TestDemoteFundedInternals(t *testing.T) {
 	incoming.AddTxOut(wire.NewTxOut(1e8, fundedPk))
 	addUtxo(t, w, incoming)
 
-	if err := w.demoteFundedInternals([]btcutil.Address{funded, empty}, 1234); err != nil {
-		t.Fatalf("demoteFundedInternals: %v", err)
+	w.tierInternals([]btcutil.Address{funded, empty}, 1234)
+	p := &w.watchPol
+	p.mtx.Lock()
+	fundedEntry := p.cold[funded.String()]
+	emptyEntry := p.cold[empty.String()]
+	p.mtx.Unlock()
+	if fundedEntry == nil || emptyEntry == nil {
+		t.Fatalf("cold entries missing: funded=%v empty=%v", fundedEntry, emptyEntry)
 	}
-	cold, from := w.watchPol.coldSet()
-	if len(cold) != 1 || cold[0].String() != funded.String() {
-		t.Fatalf("cold set = %v, want [%s]", cold, funded)
+	if fundedEntry.slow {
+		t.Fatal("funded internal filed in the slow tier")
 	}
-	if from != 1234 {
-		t.Fatalf("sweep floor = %d, want 1234", from)
+	if !emptyEntry.slow {
+		t.Fatal("empty internal not filed in the slow tier")
+	}
+	if fundedEntry.upTo != 1234 || emptyEntry.upTo != 1234 {
+		t.Fatalf("floors = %d/%d, want 1234", fundedEntry.upTo, emptyEntry.upTo)
 	}
 }
 
@@ -272,7 +284,7 @@ func TestMaybeSweepWatermark(t *testing.T) {
 		for {
 			var got int32
 			_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
-				got, _ = coldSweptTo(tx)
+				got, _ = coldSweptTo(tx, false)
 				return nil
 			})
 			if got == want {
@@ -303,8 +315,8 @@ func TestMaybeSweepWatermark(t *testing.T) {
 
 	stub := &sweepStub{mockChainClient: &mockChainClient{}}
 	a1, a2 := tAddr(t, 20), tAddr(t, 21)
-	p.demote(a1, 100)
-	p.demote(a2, 200)
+	p.demote(a1, 100, false)
+	p.demote(a2, 200, false)
 
 	// First due sweep (lastSweepTip zero). No hits: floors bump to the
 	// launch tip and the watermark persists as the post-bump set minimum.
@@ -365,4 +377,95 @@ func TestSweepDueChainScaled(t *testing.T) {
 	if got := p.sweepDue(); got != 10 {
 		t.Fatalf("override sweepDue = %d, want 10", got)
 	}
+}
+
+// TestMaybeSweepSlowTier pins the slow tier's cadence: an empty internal in
+// the slow tier is excluded from ordinary intervals and joins every
+// slowSweepFactor'th one, and the slow watermark advances only when its tier
+// was actually swept.
+func TestMaybeSweepSlowTier(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+	p := &w.watchPol
+	p.sweepEvery = 10
+
+	waitIdle := func() {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			p.mtx.Lock()
+			sweeping := p.sweeping
+			p.mtx.Unlock()
+			if !sweeping {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("sweep goroutine did not finish")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	entriesOf := func(call []chain.SweepEntry) map[string]bool {
+		got := make(map[string]bool, len(call))
+		for _, e := range call {
+			got[e.Addr.String()] = true
+		}
+		return got
+	}
+
+	stub := &sweepStub{mockChainClient: &mockChainClient{}}
+	fast, slow := tAddr(t, 30), tAddr(t, 31)
+	p.demote(fast, 100, false)
+	p.demote(slow, 100, true)
+
+	// First sweep: both cadences start at zero, so the slow tier joins.
+	w.maybeSweep(stub, 1000)
+	waitIdle()
+	calls := stub.sweepCalls()
+	if len(calls) != 1 || len(calls[0]) != 2 {
+		t.Fatalf("first sweep = %v, want both tiers", calls)
+	}
+
+	// Next interval: fast due, slow not — the slow entry sits out.
+	w.maybeSweep(stub, 1010)
+	waitIdle()
+	calls = stub.sweepCalls()
+	if len(calls) != 2 {
+		t.Fatalf("sweep calls = %d, want 2", len(calls))
+	}
+	got := entriesOf(calls[1])
+	if !got[fast.String()] || got[slow.String()] {
+		t.Fatalf("interval sweep = %v, want fast only", calls[1])
+	}
+
+	// The slow watermark held at the first sweep's tip while the tier sat
+	// out; the fast watermark tracked the second sweep.
+	_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		if h, _ := coldSweptTo(tx, true); h != 1000 {
+			t.Fatalf("slow watermark = %d, want 1000", h)
+		}
+		if h, _ := coldSweptTo(tx, false); h != 1010 {
+			t.Fatalf("fast watermark = %d, want 1010", h)
+		}
+		return nil
+	})
+
+	// At slowSweepFactor intervals past the slow tier's last sweep, it
+	// rejoins.
+	w.maybeSweep(stub, 1000+slowSweepFactor*10)
+	waitIdle()
+	calls = stub.sweepCalls()
+	if len(calls) != 3 {
+		t.Fatalf("sweep calls = %d, want 3", len(calls))
+	}
+	got = entriesOf(calls[2])
+	if !got[fast.String()] || !got[slow.String()] {
+		t.Fatalf("factor-due sweep = %v, want both tiers", calls[2])
+	}
+	_ = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		if h, _ := coldSweptTo(tx, true); h != 1000+slowSweepFactor*10 {
+			t.Fatalf("slow watermark = %d, want %d", h, 1000+slowSweepFactor*10)
+		}
+		return nil
+	})
 }
