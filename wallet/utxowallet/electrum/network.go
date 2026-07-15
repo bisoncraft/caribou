@@ -709,10 +709,22 @@ func (n *Network) getNode() (*Node, error) {
 
 // syncHeaders pulls headers from `Tip()+1` until the server reports a short
 // batch (i.e. we've caught up). It runs as a single-threaded blocking call
-// during Start. tipHint is the server-reported best height learned from the
-// initial subscribe; it lets AppendBatch decide which trailing window of
-// headers gets full per-header PoW.
+// during Start and during attachNode's rotation catch-up. tipHint is the
+// server-reported best height learned from the initial subscribe; it lets
+// AppendBatch decide which trailing window of headers gets full per-header
+// PoW.
+//
+// When the server's chain diverges below the stored tip — a reorg landed
+// while no node was attached: a successor after a fork, or a restart against
+// a moved chain — the first batch fails to connect. That is recoverable, not
+// fatal: rewind toward the fork point (bounded like catchUpFrom) and retry,
+// surfacing the disconnects so consumers roll back what the store dropped.
+// Treating it as fatal made every candidate on the honest chain fail
+// identically after an ordinary one-block reorg, leaving rotation degraded
+// forever and Start unable to open the wallet until the header file was
+// deleted by hand.
 func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) error {
+	var rewound int32
 	for {
 		nextHeight := max(n.headers.Tip()+1, n.cfg.Chain.StartHeight)
 		batch, err := node.BlockHeaders(ctx, nextHeight, n.cfg.HeaderBatchSize)
@@ -727,7 +739,23 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) er
 			return fmt.Errorf("electrum: decode header batch: %w", err)
 		}
 		if _, err := n.headers.AppendBatch(nextHeight, raw, tipHint); err != nil {
-			return err
+			if !errors.Is(err, errHeaderDoesNotConnect) {
+				return err
+			}
+			rewound += reorgRewindDepth
+			if rewound > maxReorgDepth {
+				return fmt.Errorf("electrum: reorg deeper than %d blocks "+
+					"near height %d; resync required: %w",
+					maxReorgDepth, nextHeight, err)
+			}
+			disc, rerr := n.headers.Rewind(reorgRewindDepth)
+			if rerr != nil {
+				return fmt.Errorf("electrum: reorg rewind: %w", rerr)
+			}
+			if len(disc) > 0 && !n.deliverTipChange(&TipChange{Disconnected: disc}) {
+				return ctx.Err()
+			}
+			continue
 		}
 		log.Debugf("electrum: appended %d headers at height %d (tip now %d)",
 			batch.Count, nextHeight, n.headers.Tip())

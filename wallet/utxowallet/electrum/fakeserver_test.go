@@ -7,6 +7,7 @@ package electrum
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -761,6 +762,152 @@ func TestDegradedSelfHealing(t *testing.T) {
 		t.Fatal("network shut down while degraded")
 	default:
 	}
+}
+
+// TestRotationRecoversReorg: the wallet server dies and the chain reorgs
+// below our stored tip before a successor attaches, so every candidate's
+// headers fail to connect. attachNode's header sync must rewind to the fork
+// and follow the successor's chain — without that, every candidate on the
+// honest chain fails identically and the network degrades permanently (and
+// a restart dies the same way in Start's sync).
+func TestRotationRecoversReorg(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	// Deterministic mining: A and B carry identical chains.
+	fA, params := newFakeServer(t, 15)
+	fB, _ := newFakeServer(t, 15)
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{fA.addr(), fB.addr()},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net_.Stop()
+	waitFor(t, "sync", func() bool { return net_.Synced() && net_.Tip() == 14 })
+
+	// Drain tip events so reorg disconnect delivery can't block.
+	go func() {
+		for range net_.TipChangeChan() { //nolint:revive
+		}
+	}()
+
+	// B reorgs one block below our tip and extends past it, then A dies.
+	// The successor's chain now conflicts below every candidate's first
+	// header batch.
+	fB.Fork(13, 2)
+	fB.mtx.Lock()
+	wantTip := fB.chain[15].BlockHash()
+	fB.mtx.Unlock()
+	fA.Close()
+
+	waitFor(t, "rotation onto the reorged successor", func() bool {
+		return net_.currentWalletAddr() == fB.addr().Addr &&
+			net_.Tip() == 15 && net_.TipHash() == wantTip
+	})
+	select {
+	case <-net_.Done():
+		t.Fatal("network shut down during reorg rotation")
+	default:
+	}
+}
+
+// TestAttachNodeReconcileTerminates: attachNode's tip-conflict reconciliation
+// is handed a tip snapshot whose hash the server does not serve (a stale
+// observer snapshot after a server-side reorg, or a lying server). The loop
+// must terminate — by aligning with the chain the server serves NOW or by
+// erroring out — rather than rewinding and refilling the same blocks against
+// the stale target forever while flooding the consumer with disconnects.
+func TestAttachNodeReconcileTerminates(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	fB, params := newFakeServer(t, 15)
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:         chainCfg,
+		TrustedServer: fB.addr(),
+		DataDir:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	// No Start: drive attachNode directly against a live node, the shape
+	// tryElect uses under rotMtx.
+	net_.ctx, net_.cancel = context.WithCancel(t.Context())
+	defer net_.cancel()
+
+	node, err := NewNode(net_.ctx, fB.addr(), "",
+		params.GenesisHash.String())
+	if err != nil {
+		t.Fatalf("NewNode: %v", err)
+	}
+	defer node.Close()
+	nodeTip, err := node.SubscribeHeaders(net_.ctx)
+	if err != nil {
+		t.Fatalf("SubscribeHeaders: %v", err)
+	}
+	if err := net_.syncHeaders(net_.ctx, node, nodeTip.Height); err != nil {
+		t.Fatalf("syncHeaders: %v", err)
+	}
+	if net_.Tip() != 14 {
+		t.Fatalf("tip = %d, want 14", net_.Tip())
+	}
+
+	// The server reorgs at our tip height (same height, new hash), and the
+	// snapshot handed to attachNode claims a THIRD hash neither chain has:
+	// the loop's exit test can never match it.
+	fB.Fork(13, 1)
+	bogus := mineTestHeader(t, net_.TipHash(), easyBits, 424242)
+	var buf bytes.Buffer
+	if err := bogus.Serialize(&buf); err != nil {
+		t.Fatalf("serialize bogus header: %v", err)
+	}
+	staleTip := &HeadersTip{Height: 14, Hex: hex.EncodeToString(buf.Bytes())}
+
+	go func() {
+		for range net_.TipChangeChan() { //nolint:revive
+		}
+	}()
+
+	attachDone := make(chan error, 1)
+	go func() { attachDone <- net_.attachNode(node, staleTip) }()
+	select {
+	case err := <-attachDone:
+		if err != nil {
+			t.Fatalf("attachNode: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("attachNode still spinning after 15s")
+	}
+
+	// Terminated by following the server's CURRENT chain.
+	fB.mtx.Lock()
+	wantTip := fB.chain[14].BlockHash()
+	fB.mtx.Unlock()
+	if net_.TipHash() != wantTip {
+		t.Fatalf("tip hash = %s, want the server's current tip %s",
+			net_.TipHash(), wantTip)
+	}
+	net_.cancel()
+	net_.wg.Wait()
 }
 
 // TestStartEmptyCandidates: Start with every shipped server quarantined must

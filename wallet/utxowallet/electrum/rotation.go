@@ -234,6 +234,14 @@ func (n *Network) adoptObserver(addr string) (*Node, *HeadersTip) {
 	return o.node, &HeadersTip{Height: height, Hex: hex.EncodeToString(buf.Bytes())}
 }
 
+// maxReconcileRounds bounds attachNode's tip-conflict reconciliation. Each
+// round re-reads the header the server currently serves at the snapshot
+// height, so rounds are consumed only when the server's answer keeps
+// changing: an honest reorg mid-attach costs one extra round, while a
+// flapping or hostile server exhausts the budget and the election moves on.
+// Depth within a round is bounded by catchUpFrom's maxReorgDepth.
+const maxReconcileRounds = 4
+
 // attachNode makes node the wallet server: header catch-up, subscription
 // replay, publication, and a fresh loop group.
 func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
@@ -249,6 +257,19 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	// store must follow or replayed confirmed entries would bind to the
 	// wrong block hashes. Rewind and refill from the successor via the
 	// standard reorg-recovery catch-up, publishing the disconnects.
+	//
+	// The exit test compares the store against the header the server
+	// serves NOW — the snapshot in `tip` only short-circuits the common
+	// already-aligned case. The snapshot goes stale the moment the server
+	// reorgs again (an adopted observer's last-drained tip, or a lying
+	// server), and reconciling toward a hash the server no longer serves
+	// makes zero progress per round: each rewind refills the same blocks
+	// from the server's current chain, forever, under rotMtx, flooding the
+	// consumer with disconnect batches. Rounds are consumed only when the
+	// server's answer keeps changing — an honest mid-attach reorg costs
+	// one extra round — so the small budget is purely a flap/hostility
+	// backstop; depth within a round is bounded by catchUpFrom's
+	// maxReorgDepth.
 	rawTip, err := hex.DecodeString(tip.Hex)
 	if err != nil {
 		return fmt.Errorf("electrum: successor tip header: %w", err)
@@ -272,19 +293,45 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 		}
 		return raw, batch.Count, nil
 	}
-	for n.ctx.Err() == nil && tip.Height == n.headers.Tip() &&
-		n.headers.TipHash() != claimed {
+	for round := 0; n.ctx.Err() == nil && tip.Height == n.headers.Tip() &&
+		n.headers.TipHash() != claimed; round++ {
+		raw, count, err := fetch(tip.Height, 1)
+		if err != nil {
+			return fmt.Errorf("electrum: reconcile tip fetch: %w", err)
+		}
+		if count == 0 {
+			// The server no longer serves this height; headersLoop
+			// reconciles from live notifications once attached.
+			break
+		}
+		var served wire.BlockHeader
+		if err := served.Deserialize(bytes.NewReader(raw)); err != nil {
+			return fmt.Errorf("electrum: reconcile tip header: %w", err)
+		}
+		if served.BlockHash() == n.headers.TipHash() {
+			// The store already follows the chain the server is serving;
+			// the snapshot was stale.
+			break
+		}
+		if round >= maxReconcileRounds {
+			return fmt.Errorf("electrum: successor %s still conflicts at "+
+				"height %d after %d reconcile rounds",
+				node.Addr(), tip.Height, round)
+		}
 		disc, err := n.headers.Rewind(reorgRewindDepth)
 		if err != nil {
 			return fmt.Errorf("electrum: reconcile rewind: %w", err)
 		}
-		more, err := n.catchUpFrom(tip.Height, fetch)
-		if err != nil {
-			return fmt.Errorf("electrum: reconcile catch-up: %w", err)
-		}
+		// Deliver the disconnects before any error return: the store is
+		// already truncated, and an undelivered rollback permanently
+		// diverges the consumer's view from the store.
+		more, cerr := n.catchUpFrom(tip.Height, fetch)
 		disc = append(disc, more...)
 		if len(disc) > 0 && !n.deliverTipChange(&TipChange{Disconnected: disc}) {
 			return errors.New("electrum: shutdown during reconciliation")
+		}
+		if cerr != nil {
+			return fmt.Errorf("electrum: reconcile catch-up: %w", cerr)
 		}
 	}
 
