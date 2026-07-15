@@ -100,7 +100,6 @@ export interface WalletInfo {
   version: number
   availablewallets: WalletDefinition[]
   versions: number[]
-  emptyidx: number
   unitinfo: UnitInfo
   network?: NetworkInfo
 }

@@ -5,7 +5,6 @@ package db
 
 import (
 	"github.com/bisoncraft/caribou/util"
-	"github.com/bisoncraft/caribou/util/encrypt"
 )
 
 // DB is an interface that must be satisfied by Caribou persistent storage
@@ -16,10 +15,6 @@ type DB interface {
 	SetPrimaryCredentials(creds *PrimaryCredentials) error
 	// PrimaryCredentials fetches the *PrimaryCredentials.
 	PrimaryCredentials() (*PrimaryCredentials, error)
-	// Recrypt re-encrypts the wallet passwords and stores the new
-	// *PrimaryCredentials.
-	Recrypt(creds *PrimaryCredentials, oldCrypter, newCrypter encrypt.Crypter) (
-		walletUpdates map[uint32][]byte, err error)
 	// UpdateWallet adds a wallet to the database, or updates the wallet
 	// credentials if the wallet already exists. A wallet is specified by the
 	// pair (asset ID, account name).
@@ -34,11 +29,6 @@ type DB interface {
 	Wallet(wid []byte) (*Wallet, error)
 	// UpdateWalletStatus updates a wallet's status.
 	UpdateWalletStatus(wid []byte, disable bool) error
-	// Backup makes a copy of the database to the default "backups" folder.
-	Backup() error
-	// BackupTo makes a backup of the database at the specified location,
-	// optionally overwriting any existing file and compacting the database.
-	BackupTo(dst string, overwrite, compact bool) error
 	// SaveNotification saves the notification.
 	SaveNotification(*Notification) error
 	// NotificationsN reads out the N most recent notifications.

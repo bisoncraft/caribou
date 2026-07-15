@@ -77,8 +77,6 @@ type PrimaryCredentials struct {
 	OuterKeyParams []byte
 	// Birthday is the time stamp associated with seed creation.
 	Birthday time.Time
-	// Version is the current PrimaryCredentials version.
-	Version uint16
 }
 
 // encodeAssetBalance serializes an asset.Balance.
@@ -140,15 +138,12 @@ func DecodeBalance(b []byte) (*Balance, error) {
 }
 
 func decodeBalance_v0(pushes [][]byte) (*Balance, error) {
-	if len(pushes) < 2 {
-		return nil, fmt.Errorf("decodeBalances_v0: expected >= 2 pushes. got %d", len(pushes))
-	}
-	if len(pushes)%2 != 0 {
-		return nil, fmt.Errorf("decodeBalances_v0: expected an even number of pushes, got %d", len(pushes))
+	if len(pushes) != 2 {
+		return nil, fmt.Errorf("decodeBalance_v0: expected 2 pushes, got %d", len(pushes))
 	}
 	bal, err := decodeAssetBalance(pushes[0])
 	if err != nil {
-		return nil, fmt.Errorf("decodeBalances_v0: error decoding zero conf balance: %w", err)
+		return nil, fmt.Errorf("decodeBalance_v0: error decoding zero conf balance: %w", err)
 	}
 
 	return &Balance{
@@ -170,7 +165,7 @@ type Wallet struct {
 
 // Encode encodes the Wallet to a versioned blob.
 func (w *Wallet) Encode() []byte {
-	return versionedBytes(1).
+	return versionedBytes(0).
 		AddData(uint32Bytes(w.AssetID)).
 		AddData(config.Data(w.Settings)).
 		AddData(w.EncryptedPW).
@@ -188,21 +183,13 @@ func DecodeWallet(b []byte) (*Wallet, error) {
 	switch ver {
 	case 0:
 		return decodeWallet_v0(pushes)
-	case 1:
-		return decodeWallet_v1(pushes)
 	}
 	return nil, fmt.Errorf("unknown DecodeWallet version %d", ver)
 }
 
 func decodeWallet_v0(pushes [][]byte) (*Wallet, error) {
-	// Add a push for wallet type.
-	pushes = append(pushes, []byte(""))
-	return decodeWallet_v1(pushes)
-}
-
-func decodeWallet_v1(pushes [][]byte) (*Wallet, error) {
 	if len(pushes) != 5 {
-		return nil, fmt.Errorf("decodeWallet_v1: expected 5 pushes, got %d", len(pushes))
+		return nil, fmt.Errorf("decodeWallet_v0: expected 5 pushes, got %d", len(pushes))
 	}
 	idB, settingsB, keyB := pushes[0], pushes[1], pushes[2]
 	addressB, typeB := pushes[3], pushes[4]
@@ -351,8 +338,6 @@ func DecodeNotification(b []byte) (*Notification, error) {
 		return nil, err
 	}
 	switch ver {
-	case 1:
-		return decodeNotification_v1(pushes)
 	case 0:
 		return decodeNotification_v0(pushes)
 	}
@@ -360,15 +345,11 @@ func DecodeNotification(b []byte) (*Notification, error) {
 }
 
 func decodeNotification_v0(pushes [][]byte) (*Notification, error) {
-	return decodeNotification_v1(append(pushes, []byte{}))
-}
-
-func decodeNotification_v1(pushes [][]byte) (*Notification, error) {
 	if len(pushes) != 6 {
-		return nil, fmt.Errorf("decodeNotification_v0: expected 5 pushes, got %d", len(pushes))
+		return nil, fmt.Errorf("decodeNotification_v0: expected 6 pushes, got %d", len(pushes))
 	}
 	if len(pushes[3]) != 1 {
-		return nil, fmt.Errorf("decodeNotification_v0: severity push is supposed to be length 1. got %d", len(pushes[2]))
+		return nil, fmt.Errorf("decodeNotification_v0: severity push is supposed to be length 1. got %d", len(pushes[3]))
 	}
 
 	return &Notification{
@@ -383,7 +364,7 @@ func decodeNotification_v1(pushes [][]byte) (*Notification, error) {
 
 // Encode encodes the Notification to a versioned blob.
 func (n *Notification) Encode() []byte {
-	return versionedBytes(1).
+	return versionedBytes(0).
 		AddData([]byte(n.NoteType)).
 		AddData([]byte(n.SubjectText)).
 		AddData([]byte(n.DetailText)).

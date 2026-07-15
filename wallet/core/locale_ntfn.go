@@ -61,10 +61,6 @@ var originLocale = map[Topic]*translation{
 		subject:  intl.Translation{T: "Don't forget to back up your application seed"},
 		template: intl.Translation{T: "A new application seed has been created. Make a back up now in the settings view."},
 	},
-	TopicUpgradedToSeed: {
-		subject:  intl.Translation{T: "Back up your new application seed"},
-		template: intl.Translation{T: "The client has been upgraded to use an application seed. Back up the seed now in the settings view."},
-	},
 }
 
 var ptBR = map[Topic]*translation{
@@ -95,10 +91,6 @@ var ptBR = map[Topic]*translation{
 	TopicSeedNeedsSaving: {
 		subject:  intl.Translation{T: "Não se esqueça de guardar a seed do app"},
 		template: intl.Translation{T: "Uma nova seed para a aplicação foi criada. Faça um backup agora na página de configurações."},
-	},
-	TopicUpgradedToSeed: {
-		subject:  intl.Translation{T: "Guardar nova seed do app"},
-		template: intl.Translation{T: "O cliente foi atualizado para usar uma seed. Faça backup dessa seed na página de configurações."},
 	},
 	TopicWalletCommsWarning: {
 		subject:  intl.Translation{T: "Problema de conexão da carteira"},
@@ -148,10 +140,6 @@ var zhCN = map[Topic]*translation{
 		subject:  intl.Translation{T: "不要忘记备份你的应用程序种子"},
 		template: intl.Translation{T: "已创建新的应用程序种子。请立刻在设置界面中进行备份。"},
 	},
-	TopicUpgradedToSeed: {
-		subject:  intl.Translation{T: "备份您的新应用程序种子"},
-		template: intl.Translation{T: "客户端已升级为使用应用程序种子。请切换至设置界面备份种子。"},
-	},
 	TopicWalletPeersWarning: {
 		subject:  intl.Translation{T: "钱包网络问题"},
 		template: intl.Translation{T: "%v 钱包没有网络对等节点！", Notes: "args: [asset name]"},
@@ -198,10 +186,6 @@ var plPL = map[Topic]*translation{
 	TopicSeedNeedsSaving: {
 		subject:  intl.Translation{T: "Nie zapomnij zrobić kopii ziarna aplikacji"},
 		template: intl.Translation{T: "Utworzono nowe ziarno aplikacji. Zrób jego kopię w zakładce ustawień."},
-	},
-	TopicUpgradedToSeed: {
-		subject:  intl.Translation{T: "Zrób kopię nowego ziarna aplikacji"},
-		template: intl.Translation{T: "Klient został zaktualizowany, by korzystać z ziarna aplikacji. Zrób jego kopię w zakładce ustawień."},
 	},
 	TopicWalletPeersRestored: {
 		subject:  intl.Translation{T: "Przywrócono łączność z portfelem"},
@@ -263,10 +247,6 @@ var deDE = map[Topic]*translation{
 		subject:  intl.Translation{T: "Vergiss nicht deinen App-Seed zu sichern"},
 		template: intl.Translation{T: "Es wurde ein neuer App-Seed erstellt. Erstelle jetzt eine Sicherungskopie in den Einstellungen."},
 	},
-	TopicUpgradedToSeed: {
-		subject:  intl.Translation{T: "Sichere deinen neuen App-Seed"},
-		template: intl.Translation{T: "Dein Klient wurde aktualisiert und nutzt nun einen App-Seed. Erstelle jetzt eine Sicherungskopie in den Einstellungen."},
-	},
 	TopicWalletTypeDeprecated: {
 		subject:  intl.Translation{T: "Wallet Disabled"},
 		template: intl.Translation{T: "Dein %s Wallet wird nicht länger unterstützt. Erstelle eine neues Wallet."},
@@ -314,10 +294,6 @@ var ar = map[Topic]*translation{
 	TopicSeedNeedsSaving: {
 		subject:  intl.Translation{T: "لا تنس عمل نسخة احتياطية من بذرة التطبيق"},
 		template: intl.Translation{T: "تم إنشاء بذرة تطبيق جديدة. قم بعمل نسخة احتياطية الآن في عرض الإعدادات."},
-	},
-	TopicUpgradedToSeed: {
-		subject:  intl.Translation{T: "قم بعمل نسخة احتياطية من بذرة التطبيق الجديدة"},
-		template: intl.Translation{T: "تم تحديث العميل لاستخدام بذرة التطبيق. قم بعمل نسخة احتياطية من البذرة الآن في عرض الإعدادات."},
 	},
 	TopicWalletTypeDeprecated: {
 		subject:  intl.Translation{T: "المحفظة معطلة"},

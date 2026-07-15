@@ -293,12 +293,6 @@ func WalletDef(assetID uint32, walletType string) (*WalletDefinition, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Info error: %w", err)
 	}
-	if walletType == "" {
-		if len(winfo.AvailableWallets) <= winfo.LegacyWalletIndex {
-			return nil, fmt.Errorf("legacy wallet index out of range")
-		}
-		return winfo.AvailableWallets[winfo.LegacyWalletIndex], nil
-	}
 	var wd *WalletDefinition
 	for _, def := range winfo.AvailableWallets {
 		if def.Type == walletType {

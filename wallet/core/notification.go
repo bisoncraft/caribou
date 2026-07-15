@@ -185,7 +185,6 @@ type SecurityNote struct {
 
 const (
 	TopicSeedNeedsSaving Topic = "SeedNeedsSaving"
-	TopicUpgradedToSeed  Topic = "UpgradedToSeed"
 )
 
 func newSecurityNote(topic Topic, subject, details string, severity db.Severity) *SecurityNote {

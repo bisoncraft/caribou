@@ -9,16 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
-	"github.com/bisoncraft/caribou/util/encrypt"
 	dexdb "github.com/bisoncraft/caribou/wallet/db"
 	"go.etcd.io/bbolt"
 	bolterr "go.etcd.io/bbolt/errors"
@@ -74,7 +70,6 @@ var (
 	innerKeyParamsKey     = []byte("innerKeyParams")
 	outerKeyParamsKey     = []byte("outerKeyParams")
 	birthdayKey           = []byte("birthday")
-	credsVersionKey       = []byte("credsVersion")
 	disabledRateSourceKey = []byte("disabledRateSources")
 	walletDisabledKey     = []byte("walletDisabled")
 	langKey               = []byte("lang")
@@ -84,32 +79,20 @@ var (
 
 	// values
 	byteTrue = encode.ByteTrue
-
-	backupDir = "backup"
 )
-
-// Opts is a set of options for the DB.
-type Opts struct {
-	BackupOnShutdown bool // default is true
-}
-
-var defaultOpts = Opts{
-	BackupOnShutdown: true,
-}
 
 // BoltDB is a bbolt-based database backend for Caribou. BoltDB satisfies
 // the db.DB interface defined at github.com/bisoncraft/caribou/wallet/db.
 type BoltDB struct {
 	*bbolt.DB
-	opts Opts
-	log  util.Logger
+	log util.Logger
 }
 
 // Check that BoltDB satisfies the db.DB interface.
 var _ dexdb.DB = (*BoltDB)(nil)
 
 // NewDB is a constructor for a *BoltDB.
-func NewDB(dbPath string, logger util.Logger, opts ...Opts) (dexdb.DB, error) {
+func NewDB(dbPath string, logger util.Logger) (dexdb.DB, error) {
 	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{Timeout: 3 * time.Second})
 	if err != nil {
 		if errors.Is(err, bolterr.ErrTimeout) {
@@ -120,12 +103,8 @@ func NewDB(dbPath string, logger util.Logger, opts ...Opts) (dexdb.DB, error) {
 
 	// Release the file lock on exit.
 	bdb := &BoltDB{
-		DB:   db,
-		opts: defaultOpts,
-		log:  logger,
-	}
-	if len(opts) > 0 {
-		bdb.opts = opts[0]
+		DB:  db,
+		log: logger,
 	}
 
 	if err = bdb.makeTopLevelBuckets([][]byte{
@@ -140,128 +119,10 @@ func NewDB(dbPath string, logger util.Logger, opts ...Opts) (dexdb.DB, error) {
 	return bdb, nil
 }
 
-func (db *BoltDB) fileSize(path string) int64 {
-	stat, err := os.Stat(path)
-	if err != nil {
-		db.log.Errorf("Failed to stat %v: %v", path, err)
-		return 0
-	}
-	return stat.Size()
-}
-
 // Run waits for context cancellation and closes the database.
 func (db *BoltDB) Run(ctx context.Context) {
-	<-ctx.Done() // wait for shutdown to backup and compact
-
-	// Create a backup in the backups folder.
-	if db.opts.BackupOnShutdown {
-		db.log.Infof("Backing up database...")
-		if err := db.Backup(); err != nil {
-			db.log.Errorf("Unable to backup database: %v", err)
-		}
-	}
-
-	// Only compact the current DB file if there is excessive free space, in
-	// terms of bytes AND relative to total DB size.
-	const byteThresh = 1 << 18 // 256 KiB free
-	const pctThresh = 0.05     // 5% free
-	var dbSize int64
-	_ = db.View(func(tx *bbolt.Tx) error {
-		dbSize = tx.Size() // db size including free bytes
-		return nil
-	})
-	dbStats := db.Stats()
-	// FreeAlloc is (FreePageN + PendingPageN) * db.Info().PageSize
-	// FreelistInuse seems to be page header overhead (much smaller). Add them.
-	// https://github.com/etcd-io/bbolt/blob/020684ea1eb7b5574a8007c8d69605b1de8d9ec4/tx.go#L308-L309
-	freeBytes := int64(dbStats.FreeAlloc + dbStats.FreelistInuse)
-	pctFree := float64(freeBytes) / float64(dbSize)
-	db.log.Debugf("Total DB size %d bytes, %d bytes unused (%.2f%%)",
-		dbSize, freeBytes, 100*pctFree)
-	// Only compact if free space is at least the byte threshold AND that fee
-	// space accounts for a significant percent of the file.
-	if freeBytes < byteThresh || pctFree < pctThresh {
-		_ = db.Close()
-		return
-	}
-
-	// TODO: If we never see trouble with the compacted DB files when caribou
-	// starts up, we can just compact to the backups folder and copy that backup
-	// file back on top of the main DB file after it is closed.  For now, the
-	// backup above is a direct (not compacted) copy.
-
-	// Compact the database by writing into a temporary file, closing the source
-	// DB, and overwriting the original with the compacted temporary file.
-	db.log.Infof("Compacting database to reclaim at least %d bytes...", freeBytes)
-	srcPath := db.Path()                     // before db.Close
-	compFile := srcPath + ".tmp"             // deterministic on *same fs*
-	err := db.BackupTo(compFile, true, true) // overwrite and compact
-	if err != nil {
-		_ = db.Close()
-		db.log.Errorf("Unable to compact database: %v", err)
-		return
-	}
-
-	_ = db.Close() // close db file at srcPath
-
-	initSize, compSize := db.fileSize(srcPath), db.fileSize(compFile)
-	db.log.Infof("Compacted database file from %v => %v bytes (%.2f%% reduction)",
-		initSize, compSize, 100*float64(initSize-compSize)/float64(initSize))
-
-	err = os.Rename(compFile, srcPath) // compFile => srcPath
-	if err != nil {
-		db.log.Errorf("Unable to switch to compacted database: %v", err)
-		return
-	}
-}
-
-// Recrypt re-encrypts the wallet passwords. As a convenience, the provided
-// *PrimaryCredentials are stored under the same transaction.
-func (db *BoltDB) Recrypt(creds *dexdb.PrimaryCredentials, oldCrypter, newCrypter encrypt.Crypter) (walletUpdates map[uint32][]byte, err error) {
-	if err := validateCreds(creds); err != nil {
-		return nil, err
-	}
-
-	walletUpdates = make(map[uint32][]byte)
-
-	return walletUpdates, db.Update(func(tx *bbolt.Tx) error {
-		wallets := tx.Bucket(walletsBucket)
-		if wallets == nil {
-			return fmt.Errorf("no wallets bucket")
-		}
-
-		if err := wallets.ForEach(func(wid, _ []byte) error {
-			wBkt := wallets.Bucket(wid)
-			w, err := makeWallet(wBkt)
-			if err != nil {
-				return err
-			}
-			if len(w.EncryptedPW) == 0 {
-				return nil
-			}
-
-			pw, err := oldCrypter.Decrypt(w.EncryptedPW)
-			if err != nil {
-				return fmt.Errorf("decrypt error: %w", err)
-			}
-			w.EncryptedPW, err = newCrypter.Encrypt(pw)
-			if err != nil {
-				return fmt.Errorf("encrypt error: %w", err)
-			}
-			err = wBkt.Put(walletKey, w.Encode())
-			if err != nil {
-				return err
-			}
-			walletUpdates[w.AssetID] = w.EncryptedPW
-			return nil
-
-		}); err != nil {
-			return fmt.Errorf("wallets update error: %w", err)
-		}
-
-		// Store the new credentials.
-		return db.setCreds(tx, creds)
-	})
+	<-ctx.Done()
+	_ = db.Close()
 }
 
 // SetPrimaryCredentials validates and stores the PrimaryCredentials.
@@ -304,11 +165,6 @@ func (db *BoltDB) primaryCreds() (creds *dexdb.PrimaryCredentials, err error) {
 			return dexdb.ErrNoCredentials
 		}
 
-		versionB := getCopy(bkt, credsVersionKey)
-		if len(versionB) != 2 {
-			versionB = []byte{0x00, 0x00}
-		}
-
 		bdayB := getCopy(bkt, birthdayKey)
 		bday := time.Time{}
 		if len(bdayB) > 0 {
@@ -321,7 +177,6 @@ func (db *BoltDB) primaryCreds() (creds *dexdb.PrimaryCredentials, err error) {
 			InnerKeyParams: getCopy(bkt, innerKeyParamsKey),
 			OuterKeyParams: getCopy(bkt, outerKeyParamsKey),
 			Birthday:       bday,
-			Version:        intCoder.Uint16(versionB),
 		}
 		return nil
 	})
@@ -339,7 +194,6 @@ func (db *BoltDB) setCreds(tx *bbolt.Tx, creds *dexdb.PrimaryCredentials) error 
 		put(innerKeyParamsKey, creds.InnerKeyParams).
 		put(outerKeyParamsKey, creds.OuterKeyParams).
 		put(birthdayKey, uint64Bytes(uint64(creds.Birthday.Unix()))).
-		put(credsVersionKey, uint16Bytes(creds.Version)).
 		err()
 }
 
@@ -612,7 +466,7 @@ func (db *BoltDB) AckNotification(id []byte) error {
 // NotificationsN reads out the N most recent notifications.
 func (db *BoltDB) NotificationsN(n int) ([]*dexdb.Notification, error) {
 	notes := make([]*dexdb.Notification, 0, n)
-	return notes, db.notesUpdate(func(master *bbolt.Bucket) error {
+	return notes, db.notesView(func(master *bbolt.Bucket) error {
 		trios := newestBuckets([]*bbolt.Bucket{master}, n, stampKey, nil)
 		for _, trio := range trios {
 			note, err := dexdb.DecodeNotification(getCopy(trio.b, noteKey))
@@ -621,21 +475,15 @@ func (db *BoltDB) NotificationsN(n int) ([]*dexdb.Notification, error) {
 			}
 			note.Ack = bEqual(trio.b.Get(ackKey), byteTrue)
 			note.Id = note.ID()
-			if !bytes.Equal(note.Id, trio.k) {
-				// This notification was initially stored when the serialization
-				// and thus note ID did not include the TopicID. Ignore it, and
-				// flag it acknowledged so we don't have to hear about it again.
-				if !note.Ack {
-					db.log.Tracef("Ignoring stored note with bad key: %x != %x \"%s\"",
-						[]byte(note.Id), trio.k, note.String())
-					_ = trio.b.Put(ackKey, byteTrue)
-				}
-				continue
-			}
 			notes = append(notes, note)
 		}
 		return nil
 	})
+}
+
+// notesView is a convenience function for reading the notifications bucket.
+func (db *BoltDB) notesView(f bucketFunc) error {
+	return db.withBucket(notesBucket, db.View, f)
 }
 
 // notesUpdate is a convenience function for updating the notifications bucket.
@@ -715,95 +563,6 @@ func (db *BoltDB) withBucket(bkt []byte, viewer txFunc, f bucketFunc) error {
 		}
 		return f(bucket)
 	})
-}
-
-func ovrFlag(overwrite bool) int {
-	if overwrite {
-		return os.O_TRUNC
-	}
-	return os.O_EXCL
-}
-
-// compact writes a compacted copy of the DB into the specified destination
-// file. This function should be called from BackupTo to validate the
-// destination file and create any needed parent folders.
-func (db *BoltDB) compact(dst string, overwrite bool) error {
-	opts := bbolt.Options{
-		OpenFile: func(path string, _ int, mode os.FileMode) (*os.File, error) {
-			return os.OpenFile(path, os.O_RDWR|os.O_CREATE|ovrFlag(overwrite), mode)
-		},
-	}
-	newDB, err := bbolt.Open(dst, 0600, &opts)
-	if err != nil {
-		return fmt.Errorf("unable to compact database: %w", err)
-	}
-
-	const txMaxSize = 1 << 19 // 512 KiB
-	err = bbolt.Compact(newDB, db.DB, txMaxSize)
-	if err != nil {
-		_ = newDB.Close()
-		return fmt.Errorf("unable to compact database: %w", err)
-	}
-	return newDB.Close()
-}
-
-// backup writes a direct copy of the DB into the specified destination file.
-// This function should be called from BackupTo to validate the destination file
-// and create any needed parent folders.
-func (db *BoltDB) backup(dst string, overwrite bool) error {
-	// Just copy. This is like tx.CopyFile but with the overwrite flag set
-	// as specified.
-	f, err := os.OpenFile(dst, os.O_RDWR|os.O_CREATE|ovrFlag(overwrite), 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	err = db.View(func(tx *bbolt.Tx) error {
-		_, err = tx.WriteTo(f)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	return f.Sync()
-}
-
-// BackupTo makes a copy of the database to the specified file, optionally
-// overwriting and compacting the DB.
-func (db *BoltDB) BackupTo(dst string, overwrite, compact bool) error {
-	// If relative path, use current db path.
-	var dir string
-	if !filepath.IsAbs(dst) {
-		dir = filepath.Dir(db.Path())
-		dst = filepath.Join(dir, dst)
-	}
-	dst = filepath.Clean(dst)
-	dir = filepath.Dir(dst)
-	if dst == filepath.Clean(db.Path()) {
-		return errors.New("destination is the active DB")
-	}
-
-	// Make the parent folder if it does not exists.
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		err = os.MkdirAll(dir, 0700)
-		if err != nil {
-			return fmt.Errorf("unable to create backup directory: %w", err)
-		}
-	}
-
-	if compact {
-		return db.compact(dst, overwrite)
-	}
-
-	return db.backup(dst, overwrite)
-}
-
-// Backup makes a copy of the database in the "backup" folder, overwriting any
-// existing backup.
-func (db *BoltDB) Backup() error {
-	dir, file := filepath.Split(db.Path())
-	return db.BackupTo(filepath.Join(dir, backupDir, file), true, false)
 }
 
 // bucketPutter enables chained calls to (*bbolt.Bucket).Put with error

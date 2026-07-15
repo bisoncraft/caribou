@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	crand "crypto/rand"
-	"errors"
-	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -16,7 +14,6 @@ import (
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/db"
 	dbtest "github.com/bisoncraft/caribou/wallet/db/test"
-	"go.etcd.io/bbolt"
 )
 
 var (
@@ -51,67 +48,6 @@ func newTestDB(t *testing.T) (*BoltDB, func()) {
 func TestMain(m *testing.M) {
 	defer os.Stdout.Sync()
 	os.Exit(m.Run())
-}
-
-func TestBackup(t *testing.T) {
-	db, shutdown := newTestDB(t)
-	defer shutdown()
-
-	// Backup the database.
-	err := db.Backup()
-	if err != nil {
-		t.Fatalf("unable to backup database: %v", err)
-	}
-
-	// Ensure the backup exists.
-	path := filepath.Join(filepath.Dir(db.Path()), backupDir, filepath.Base(db.Path()))
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Fatalf("backup file does not exist: %v", err)
-	}
-
-	// Overwrite the backup.
-	err = db.Backup()
-	if err != nil {
-		t.Fatalf("unable to overwrite backup: %v", err)
-	}
-}
-
-func TestBackupTo(t *testing.T) {
-	db, shutdown := newTestDB(t)
-	defer shutdown()
-
-	// Backup the database.
-	testBackup := "asdf.db"
-	err := db.BackupTo(testBackup, false, false)
-	if err != nil {
-		t.Fatalf("unable to backup database: %v", err)
-	}
-
-	// Ensure the backup exists.
-	path := filepath.Join(filepath.Dir(db.Path()), testBackup)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Fatalf("backup file does not exist: %v", err)
-	}
-
-	// Don't overwrite existing.
-	same := db.Path()
-	err = db.BackupTo(same, false, false)
-	if err == nil {
-		t.Fatalf("overwrote file!")
-	}
-	err = db.BackupTo(testBackup, false, false)
-	if err == nil {
-		t.Fatalf("overwrote file!")
-	}
-	// Allow overwrite
-	err = db.BackupTo(testBackup, true, false) // no compact
-	if err != nil {
-		t.Fatalf("unable to backup database: %v", err)
-	}
-	err = db.BackupTo(testBackup, true, true) // compact
-	if err != nil {
-		t.Fatalf("unable to backup database: %v", err)
-	}
 }
 
 func TestStorePrimaryCredentials(t *testing.T) {
@@ -327,94 +263,6 @@ func TestNotifications(t *testing.T) {
 			t.Fatalf("order acknowledgement not recorded")
 		}
 	}
-}
-
-type tCrypter struct {
-	enc []byte
-}
-
-func (c *tCrypter) Encrypt(b []byte) ([]byte, error) {
-	return c.enc, nil
-}
-
-func (c *tCrypter) Decrypt(b []byte) ([]byte, error) {
-	return b, nil
-}
-
-func (c *tCrypter) Serialize() []byte {
-	return nil
-}
-
-func (c *tCrypter) Close() {}
-
-func TestRecrypt(t *testing.T) {
-	boltdb, shutdown := newTestDB(t)
-	defer shutdown()
-
-	tester := func(walletID []byte, creds *db.PrimaryCredentials) error {
-		encPW := randBytes(5)
-		oldCrypter, newCrypter := &tCrypter{}, &tCrypter{encPW}
-		walletUpdates, err := boltdb.Recrypt(creds, oldCrypter, newCrypter)
-		if err != nil {
-			return err
-		}
-
-		if len(walletUpdates) != 1 {
-			return fmt.Errorf("expected 1 wallet update, got %d", len(walletUpdates))
-		}
-		for _, newEncPW := range walletUpdates {
-			if len(newEncPW) == 0 {
-				return errors.New("no updated key")
-			}
-			if !bytes.Equal(newEncPW, encPW) {
-				return fmt.Errorf("wrong encrypted password. wanted %x, got %x", encPW, newEncPW)
-			}
-		}
-
-		w, err := boltdb.Wallet(walletID)
-		if err != nil {
-			return fmt.Errorf("error retrieving wallet: %v", err)
-		}
-		if !bytes.Equal(w.EncryptedPW, encPW) {
-			return fmt.Errorf("wallet not wallet updated")
-		}
-
-		return nil
-	}
-	testCredentialsUpdate(t, boltdb, tester)
-}
-
-func testCredentialsUpdate(t *testing.T, boltdb *BoltDB, tester func([]byte, *db.PrimaryCredentials) error) {
-	t.Helper()
-	w := dbtest.RandomWallet()
-	w.EncryptedPW = randBytes(6)
-	walletID := w.ID()
-	boltdb.UpdateWallet(w)
-
-	clearCreds := func() {
-		boltdb.Update(func(tx *bbolt.Tx) error {
-			credsBkt := tx.Bucket(credentialsBucket)
-			credsBkt.Delete(encSeedKey)
-			credsBkt.Delete(encInnerKeyKey)
-			credsBkt.Delete(innerKeyParamsKey)
-			credsBkt.Delete(outerKeyParamsKey)
-			return nil
-		})
-	}
-
-	numToDo := 100
-	if testing.Short() {
-		numToDo = 5
-	}
-
-	nTimes(numToDo, func(int) {
-		clearCreds()
-		creds := dbtest.RandomPrimaryCredentials()
-		err := tester(walletID, creds)
-		if err != nil {
-			t.Fatalf("%T error: %v", tester, err)
-		}
-	})
 }
 
 func TestPokes(t *testing.T) {

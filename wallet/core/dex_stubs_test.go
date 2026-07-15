@@ -1,5 +1,5 @@
-// dex_stubs_test.go provides minimal type stubs so test files compile.
-// The DEX trading layer has been removed; only wallet/swap infrastructure remains.
+// dex_stubs_test.go provides shared test scaffolding: asset driver stubs and
+// the poke cache used by the core tests.
 
 package core
 
@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/bisoncraft/caribou/util"
-	"github.com/bisoncraft/caribou/util/order"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/db"
 )
@@ -90,106 +89,4 @@ func init() {
 			AvailableWallets: []*asset.WalletDefinition{{Type: "type"}},
 		}}, true)
 	}
-}
-
-// Match is a stub for the removed DEX match type.
-// Referenced by helpers_test.go.
-type Match struct {
-	MatchID  util.Bytes        `json:"matchID"`
-	Status   order.MatchStatus `json:"status"`
-	Active   bool              `json:"active"`
-	Revoked  bool              `json:"revoked"`
-	Rate     uint64            `json:"rate"`
-	Qty      uint64            `json:"qty"`
-	Side     order.MatchSide   `json:"side"`
-	FeeRate  uint64            `json:"feeRate"`
-	Stamp    uint64            `json:"stamp"`
-	IsCancel bool              `json:"isCancel"`
-}
-
-// Order is a stub for the removed DEX order type.
-// Referenced by helpers_test.go.
-type Order struct {
-	Host        string            `json:"host"`
-	BaseID      uint32            `json:"baseID"`
-	BaseSymbol  string            `json:"baseSymbol"`
-	QuoteID     uint32            `json:"quoteID"`
-	QuoteSymbol string            `json:"quoteSymbol"`
-	MarketID    string            `json:"market"`
-	Type        order.OrderType   `json:"type"`
-	ID          util.Bytes        `json:"id"`
-	Stamp       uint64            `json:"stamp"`
-	Status      order.OrderStatus `json:"status"`
-	Qty         uint64            `json:"qty"`
-	Sell        bool              `json:"sell"`
-	Filled      uint64            `json:"filled"`
-	Matches     []*Match          `json:"matches"`
-	Cancelling  bool              `json:"cancelling"`
-	Canceled    bool              `json:"canceled"`
-	Rate        uint64            `json:"rate"`
-	TimeInForce order.TimeInForce `json:"tif"`
-}
-
-// OrderReader is a stub for the removed order reader helper type.
-// Referenced by helpers_test.go.
-type OrderReader struct {
-	*Order
-}
-
-// StatusString returns the order status as a string.
-// Used by helpers_test.go.
-func (ord *OrderReader) StatusString() string {
-	isLive := false
-	for _, m := range ord.Matches {
-		if m.Active {
-			isLive = true
-			break
-		}
-	}
-	hasFills := false
-	for _, m := range ord.Matches {
-		if !m.IsCancel {
-			hasFills = true
-			break
-		}
-	}
-	switch ord.Status {
-	case order.OrderStatusUnknown:
-		return "unknown"
-	case order.OrderStatusEpoch:
-		return "epoch"
-	case order.OrderStatusBooked:
-		if ord.Cancelling {
-			return "cancelling"
-		}
-		if isLive {
-			return "booked/settling"
-		}
-		return "booked"
-	case order.OrderStatusExecuted:
-		if isLive {
-			return "settling"
-		}
-		if !hasFills && ord.Type != order.CancelOrderType {
-			return "no match"
-		}
-		return "executed"
-	case order.OrderStatusCanceled:
-		if isLive {
-			return "canceled/settling"
-		}
-		if hasFills {
-			return "canceled/partially filled"
-		}
-		return "canceled"
-	case order.OrderStatusRevoked:
-		if isLive {
-			return "revoked/settling"
-		}
-		if hasFills {
-			return "revoked/partially filled"
-		}
-		return "revoked"
-	}
-	return "unknown"
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	ordertest "github.com/bisoncraft/caribou/util/order/test"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/db"
 )
@@ -36,7 +35,6 @@ func RandomPrimaryCredentials() *db.PrimaryCredentials {
 		InnerKeyParams: randBytes(10),
 		OuterKeyParams: randBytes(10),
 		Birthday:       time.Unix(rand.Int64(), 0),
-		Version:        1,
 	}
 }
 
@@ -45,16 +43,16 @@ func RandomWallet() *db.Wallet {
 	return &db.Wallet{
 		AssetID: rand.Uint32(),
 		Settings: map[string]string{
-			ordertest.RandomAddress(): ordertest.RandomAddress(),
-			ordertest.RandomAddress(): ordertest.RandomAddress(),
-			ordertest.RandomAddress(): ordertest.RandomAddress(),
-			ordertest.RandomAddress(): ordertest.RandomAddress(),
+			randomAddress(): randomAddress(),
+			randomAddress(): randomAddress(),
+			randomAddress(): randomAddress(),
+			randomAddress(): randomAddress(),
 		},
 		Balance: &db.Balance{
 			Balance: *RandomBalance(),
 			Stamp:   time.Unix(rand.Int64()/(1<<31), 0),
 		},
-		Address: ordertest.RandomAddress(),
+		Address: randomAddress(),
 	}
 }
 
@@ -64,11 +62,24 @@ func randBytes(l int) []byte {
 	return b
 }
 
+const b58Set = "123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ"
+
+// randomAddress generates a random base-58 string of address length. The value
+// is only used to populate fields that the DB stores opaquely, so it need not
+// be a valid address for any network.
+func randomAddress() string {
+	b := make([]byte, 35)
+	for i := range b {
+		b[i] = b58Set[rand.IntN(len(b58Set))]
+	}
+	return string(b)
+}
+
 func RandomNotification(maxTime uint64) *db.Notification {
 	return &db.Notification{
-		NoteType:    ordertest.RandomAddress(),
-		SubjectText: ordertest.RandomAddress(),
-		DetailText:  ordertest.RandomAddress(),
+		NoteType:    randomAddress(),
+		SubjectText: randomAddress(),
+		DetailText:  randomAddress(),
 		// Since this is for DB tests, only use severity level >= Success.
 		Severeness: db.Severity(rand.IntN(3)) + db.Success,
 		TimeStamp:  uint64(rand.Int64N(int64(maxTime))),
