@@ -26,7 +26,20 @@ type NetworkTxDB interface {
 	// GetPendingTxs returns this network's unconfirmed transactions: every tx
 	// that is not yet finalized (Confirmed), not just those still in the
 	// mempool. This matches the per-wallet tx DBs that wallets migrate from.
+	// Note that on a network hosting token wallets that share this
+	// NetworkTxDB, this returns every asset's pending transactions mixed
+	// together; use GetAssetPendingTxs for a single asset's view.
 	GetPendingTxs() ([]*WalletTransaction, error)
+	// GetAssetTxs is like GetTxs, but scoped to a single asset within this
+	// network: assetID nil selects the network's own native-asset
+	// transactions (those with WalletTransaction.TokenID unset); non-nil
+	// selects that TokenID's transactions only. A network hosting token
+	// wallets that share this NetworkTxDB should use this instead of GetTxs
+	// so history isn't a cross-asset mix.
+	GetAssetTxs(assetID *uint32, req *TxHistoryRequest) (*TxHistoryResponse, error)
+	// GetAssetPendingTxs is like GetPendingTxs, scoped the same way
+	// GetAssetTxs is.
+	GetAssetPendingTxs(assetID *uint32) ([]*WalletTransaction, error)
 	// RemoveTx deletes a transaction. It is not an error if it does not exist.
 	RemoveTx(txID string) error
 
@@ -82,6 +95,24 @@ func (n *networkTxDB) GetTxs(req *TxHistoryRequest) (*TxHistoryResponse, error) 
 
 func (n *networkTxDB) GetPendingTxs() ([]*WalletTransaction, error) {
 	return n.db.getPendingTxs(n.network)
+}
+
+func (n *networkTxDB) GetAssetTxs(assetID *uint32, req *TxHistoryRequest) (*TxHistoryResponse, error) {
+	return n.db.getAssetTxs(n.network, n.resolveAssetID(assetID), req)
+}
+
+func (n *networkTxDB) GetAssetPendingTxs(assetID *uint32) ([]*WalletTransaction, error) {
+	return n.db.getAssetPendingTxs(n.resolveAssetID(assetID))
+}
+
+// resolveAssetID returns assetID if set, otherwise this network's own
+// native-asset ID (the ID that WalletTransaction.TokenID-unset records are
+// stored under; see encodeRecord).
+func (n *networkTxDB) resolveAssetID(assetID *uint32) uint32 {
+	if assetID != nil {
+		return *assetID
+	}
+	return n.network
 }
 
 func (n *networkTxDB) RemoveTx(txID string) error {

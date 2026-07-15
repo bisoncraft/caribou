@@ -55,15 +55,53 @@ func TestTokenWalletDepositAddress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DepositAddress error: %v", err)
 	}
-	if addr != tw.ataAddr {
-		t.Fatalf("DepositAddress = %q, want %q", addr, tw.ataAddr)
+	// The deposit address must be the owner address, not the ATA: senders
+	// derive the destination ATA from it themselves (matching Send and
+	// ecosystem convention), so publishing the ATA would make senders
+	// derive an ATA-of-ATA and strand funds.
+	if addr != tw.parent.address {
+		t.Fatalf("DepositAddress = %q, want %q", addr, tw.parent.address)
 	}
 	owns, err := tw.OwnsDepositAddress(addr)
 	if err != nil || !owns {
 		t.Fatalf("OwnsDepositAddress(%q) = %v, %v; want true, nil", addr, owns, err)
 	}
-	if owns2, _ := tw.OwnsDepositAddress(tw.parent.address); owns2 {
-		t.Fatal("token wallet should not own the parent's native address as its deposit address")
+	if owns2, _ := tw.OwnsDepositAddress(tw.ataAddr); owns2 {
+		t.Fatal("token wallet should not own its own ATA as a deposit address")
+	}
+}
+
+// TestTokenMetaTableNameDistinctPerAsset guards against the scan-cursor
+// collision bug: token wallets share their parent network's NetworkTxDB,
+// whose Table namespacing is per-network only, so a fixed "meta" table name
+// for every token (and the native wallet's own "meta" table) would collide
+// and cause native/usdc/usdt to overwrite each other's
+// lastScannedSignature cursor.
+func TestTokenMetaTableNameDistinctPerAsset(t *testing.T) {
+	usdc := tokenMetaTableName(usdcTokenID)
+	usdt := tokenMetaTableName(usdtTokenID)
+	if usdc == usdt {
+		t.Fatalf("usdc and usdt token meta tables must differ, both = %q", usdc)
+	}
+	if usdc == metaTableName || usdt == metaTableName {
+		t.Fatalf("token meta table must differ from the native wallet's %q", metaTableName)
+	}
+}
+
+// TestUSDCNoTestnetMint guards against listing a mint for a cluster it
+// doesn't actually exist on: Circle's only public test mint is on the
+// devnet cluster, but DefaultRPCEndpoints[util.Testnet] points at the
+// testnet cluster, so a util.Testnet mint entry here would make USDC dead
+// on arrival there (balance always empty, sends rejected) instead of
+// simply being unavailable, as OpenTokenWallet reports when unlisted.
+func TestUSDCNoTestnetMint(t *testing.T) {
+	if _, ok := TokenUSDC.NetMints[util.Testnet]; ok {
+		t.Fatal("TokenUSDC must not list a util.Testnet mint: Circle has no public mint on the testnet cluster")
+	}
+
+	w := &Wallet{net: util.Testnet}
+	if _, err := w.OpenTokenWallet(&asset.TokenConfig{AssetID: usdcTokenID}); err == nil {
+		t.Fatal("expected OpenTokenWallet to fail for usdc on testnet (no mint), not silently succeed")
 	}
 }
 
@@ -127,6 +165,13 @@ func TestTokenWalletSend(t *testing.T) {
 	}
 	if db.stored[0].Amount != 1_000_000 {
 		t.Fatalf("stored amount = %d, want 1000000", db.stored[0].Amount)
+	}
+	// TokenID must be set: token wallets share their parent network's
+	// NetworkTxDB, and GetAssetTxs/GetAssetPendingTxs rely on it to
+	// distinguish this record from the native wallet's (and sibling
+	// tokens') transactions.
+	if db.stored[0].TokenID == nil || *db.stored[0].TokenID != usdcTokenID {
+		t.Fatalf("stored TokenID = %v, want %d", db.stored[0].TokenID, usdcTokenID)
 	}
 }
 
@@ -199,7 +244,7 @@ func TestWalletTransactionFromSPLRPC(t *testing.T) {
 		parsedSPLInstruction(other, ataAddr, 2_500_000),
 	}
 
-	wt := walletTransactionFromSPLRPC(tx, ataAddr)
+	wt := walletTransactionFromSPLRPC(tx, ataAddr, usdcTokenID)
 	if wt == nil {
 		t.Fatal("expected a parsed wallet transaction")
 	}
@@ -225,7 +270,70 @@ func TestWalletTransactionFromSPLRPCIrrelevant(t *testing.T) {
 		parsedSPLInstruction(a, b, 2_500_000),
 	}
 
-	if wt := walletTransactionFromSPLRPC(tx, ataAddr); wt != nil {
+	if wt := walletTransactionFromSPLRPC(tx, ataAddr, usdcTokenID); wt != nil {
 		t.Fatal("expected nil for a transaction not touching our ATA")
 	}
+}
+
+// TestTokenWalletCheckPendingTxs guards against a token Send staying pending
+// forever: before TokenWallet had its own checkPendingTxs, only syncHistory
+// tracked confirmations, which never learns about a tx that expired without
+// landing on-chain.
+func TestTokenWalletCheckPendingTxs(t *testing.T) {
+	ctx := context.Background()
+	tokenID := usdcTokenID
+
+	makePendingTx := func(id string, lastValidHeight uint64) *txdb.WalletTransaction {
+		wt := &txdb.WalletTransaction{ID: id, TokenID: &tokenID}
+		setTxData(wt, solTxData{LastValidBlockHeight: lastValidHeight})
+		return wt
+	}
+
+	t.Run("expired and absent on-chain marks tx rejected", func(t *testing.T) {
+		tx := makePendingTx("tok-pend", 100)
+		db := &mockTxDB{pending: []*txdb.WalletTransaction{tx}}
+		rpc := &mockRPC{
+			txFunc: func(_ string) (*rpcTransaction, error) {
+				return nil, nil // confirmed absent
+			},
+			sigStatusesFunc: func(_ []string) ([]*signatureStatus, error) {
+				return []*signatureStatus{nil}, nil
+			},
+			blockHeightFunc: func() (uint64, error) {
+				return 200, nil // past LastValidBlockHeight
+			},
+		}
+		tw := newTestTokenWallet(t, rpc, db)
+
+		if err := tw.checkPendingTxs(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if len(db.stored) != 1 {
+			t.Fatalf("want 1 stored (rejected), got %d", len(db.stored))
+		}
+		if !db.stored[0].Rejected {
+			t.Fatal("tx should be marked Rejected")
+		}
+	})
+
+	t.Run("still within window and no status leaves tx pending", func(t *testing.T) {
+		tx := makePendingTx("tok-pend2", 100)
+		db := &mockTxDB{pending: []*txdb.WalletTransaction{tx}}
+		rpc := &mockRPC{
+			sigStatusesFunc: func(_ []string) ([]*signatureStatus, error) {
+				return []*signatureStatus{nil}, nil
+			},
+			blockHeightFunc: func() (uint64, error) {
+				return 50, nil // still before LastValidBlockHeight
+			},
+		}
+		tw := newTestTokenWallet(t, rpc, db)
+
+		if err := tw.checkPendingTxs(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if len(db.stored) != 0 {
+			t.Fatalf("tx should not have been stored while still within its valid window, got %d stored", len(db.stored))
+		}
+	})
 }

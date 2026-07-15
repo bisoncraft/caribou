@@ -79,15 +79,14 @@ func (w *xrpWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error
 		return nil, fmt.Errorf("error decoding issuer address: %w", err)
 	}
 	return &TokenWallet{
-		parent:      w,
-		assetID:     cfg.AssetID,
-		token:       token,
-		issuerAddr:  issuerAddr,
-		currency:    currency,
-		issuer:      [20]byte(issuerAccountID),
-		emit:        cfg.Emit,
-		peersChange: cfg.PeersChange,
-		txDB:        cfg.NetworkTxDB,
+		parent:     w,
+		assetID:    cfg.AssetID,
+		token:      token,
+		issuerAddr: issuerAddr,
+		currency:   currency,
+		issuer:     [20]byte(issuerAccountID),
+		emit:       cfg.Emit,
+		txDB:       cfg.NetworkTxDB,
 		wi: asset.WalletInfo{
 			Name:              token.Name,
 			SupportedVersions: []uint32{version},
@@ -103,16 +102,15 @@ func (w *xrpWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error
 // native XRP address; the recipient must have an established trustline with
 // the issuer before receiving funds.
 type TokenWallet struct {
-	parent      *xrpWallet
-	assetID     uint32
-	token       *Token
-	issuerAddr  string
-	currency    [20]byte
-	issuer      [20]byte
-	emit        *asset.WalletEmitter
-	peersChange func(uint32, error)
-	txDB        txdb.NetworkTxDB
-	wi          asset.WalletInfo
+	parent     *xrpWallet
+	assetID    uint32
+	token      *Token
+	issuerAddr string
+	currency   [20]byte
+	issuer     [20]byte
+	emit       *asset.WalletEmitter
+	txDB       txdb.NetworkTxDB
+	wi         asset.WalletInfo
 }
 
 var _ asset.Wallet = (*TokenWallet)(nil)
@@ -177,10 +175,21 @@ func (w *TokenWallet) StandardSendFee(feeRate uint64) uint64 {
 	return w.parent.StandardSendFee(feeRate)
 }
 
+// trustlineLimitAtomic is the TrustSet limit used when establishing a
+// trustline. XRPL trust limits only cap how much of the currency the
+// account can hold; they don't lock or reserve funds, so there's no
+// downside to setting the highest value IOU precision allows (see
+// normalizeIOUValue) rather than asking the caller to pick one.
+const trustlineLimitAtomic = 999_999_999_999_999
+
 // EstablishTrustline submits a TrustSet transaction authorizing this
-// account to hold up to limitAtomic units of the token. This must succeed
-// before the account can receive the token via Send from another wallet.
-func (w *TokenWallet) EstablishTrustline(limitAtomic uint64) error {
+// account to hold the token, up to trustlineLimitAtomic units. This must
+// succeed before the account can receive the token via Send from another
+// wallet. A nil return means the transaction was accepted for inclusion, not
+// that the trustline is guaranteed to exist: a tec/ter result (e.g.
+// tecINSUF_RESERVE_LINE) is tracked as a pending tx and reconciled
+// asynchronously by the parent wallet's checkPendingTxs loop, same as Send.
+func (w *TokenWallet) EstablishTrustline() error {
 	w.parent.keyMtx.RLock()
 	if w.parent.privKey == nil {
 		w.parent.keyMtx.RUnlock()
@@ -213,7 +222,7 @@ func (w *TokenWallet) EstablishTrustline(limitAtomic uint64) error {
 		account:       [20]byte(srcAccountID),
 		currency:      w.currency,
 		issuer:        w.issuer,
-		limitAtomic:   limitAtomic,
+		limitAtomic:   trustlineLimitAtomic,
 		limitDecimals: w.token.Decimals,
 		flags:         tfSetNoRipple,
 		fee:           fee,
@@ -242,9 +251,35 @@ func (w *TokenWallet) EstablishTrustline(limitAtomic uint64) error {
 		return fmt.Errorf("error encoding transaction: %w", err)
 	}
 	txBlob := strings.ToUpper(hex.EncodeToString(rawTxBytes))
+	txHash := computeTxHash(rawTxBytes)
+	txID := strings.ToUpper(hex.EncodeToString(txHash[:]))
+
+	// tec/ter results still consume the fee and sequence and are included in
+	// a validated ledger, but do not guarantee the TrustSet took effect (e.g.
+	// tecINSUF_RESERVE_LINE for a reserve-starved account). Pre-store as
+	// pending, like Send, so the parent wallet's checkPendingTxs loop
+	// reconciles the real outcome once the tx is validated — surfacing a
+	// tec/ter rejection instead of silently reporting success.
+	wtx := &txdb.WalletTransaction{
+		Type:    txdb.ApproveToken,
+		ID:      txID,
+		Amount:  trustlineLimitAtomic,
+		Fees:    fee,
+		TokenID: &w.assetID,
+	}
+	setLastLedgerSequence(wtx, lastLedgerSeq)
+	if w.txDB != nil {
+		if err := w.txDB.StoreTx(wtx); err != nil {
+			w.parent.log.Errorf("Error pre-storing trustline tx: %v", err)
+		}
+	}
 
 	sr, err := w.parent.rpc.submit(w.parent.ctx, txBlob)
 	if err != nil {
+		// Network error: the node may have received the signed blob. Do NOT
+		// roll back the sequence — reusing it would cause tefPAST_SEQ if the
+		// node did process the tx. The pre-stored entry will be resolved by
+		// checkPendingTxs.
 		w.parent.log.Warnf("TrustSet submit network error (outcome unknown): %v", err)
 		return fmt.Errorf("error submitting transaction: %w", err)
 	}
@@ -254,9 +289,22 @@ func (w *TokenWallet) EstablishTrustline(limitAtomic uint64) error {
 	}
 	switch class {
 	case "tes", "tec", "ter":
+		if class != "tes" {
+			w.parent.log.Warnf("TrustSet submit result %s (%s): tracking as pending", sr.EngineResult, sr.EngineResultMessage)
+		}
 		return nil
 	default:
+		// Deterministic rejection: sequence was not consumed. This is
+		// terminal, so mark Confirmed (to leave the pending set) and
+		// Rejected.
 		rollbackSeq()
+		wtx.Confirmed = true
+		wtx.Rejected = true
+		if w.txDB != nil {
+			if err := w.txDB.StoreTx(wtx); err != nil {
+				w.parent.log.Errorf("Error updating rejected trustline tx %s: %v", txID, err)
+			}
+		}
 		return fmt.Errorf("trustline transaction rejected: %s — %s", sr.EngineResult, sr.EngineResultMessage)
 	}
 }
@@ -372,6 +420,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		Amount:    value,
 		Fees:      fee,
 		Recipient: &recipient,
+		TokenID:   &w.assetID,
 	}
 	setLastLedgerSequence(wtx, lastLedgerSeq)
 	if w.txDB != nil {
@@ -418,7 +467,7 @@ func (w *TokenWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResp
 	if r.N == 0 {
 		r.N = 50
 	}
-	return w.txDB.GetTxs(&r)
+	return w.txDB.GetAssetTxs(&w.assetID, &r)
 }
 
 func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
@@ -449,7 +498,7 @@ func (w *TokenWallet) PendingTransactions(_ context.Context) []*txdb.WalletTrans
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.GetPendingTxs()
+	pending, err := w.txDB.GetAssetPendingTxs(&w.assetID)
 	if err != nil {
 		w.parent.log.Errorf("Error getting pending token txs: %v", err)
 		return nil
@@ -463,7 +512,23 @@ func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransact
 	if tr == nil || tr.TransactionType != "Payment" {
 		return nil
 	}
-	ia := tr.issuedAmount()
+	// For incoming payments, credit what meta.delivered_amount reports was
+	// actually delivered, not the sender-stated Amount/DeliverMax: a
+	// tfPartialPayment transaction validates tesSUCCESS while delivering
+	// far less than Amount (see deliveredIssuedAmount). If delivered_amount
+	// can't be determined for a successful incoming payment, the actually
+	// credited amount is unknown, so don't record it rather than trusting
+	// the sender-stated amount, which is exactly what a spoofed
+	// tfPartialPayment forges.
+	var ia *issuedAmount
+	if tr.Destination == w.parent.address && tr.Meta.TransactionResult == "tesSUCCESS" {
+		ia = tr.Meta.deliveredIssuedAmount()
+		if ia == nil {
+			return nil
+		}
+	} else {
+		ia = tr.issuedAmount()
+	}
 	if ia == nil || ia.Issuer != w.issuerAddr || ia.Currency != w.token.Currency {
 		return nil
 	}
@@ -500,6 +565,7 @@ func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransact
 		Recipient:   recipient,
 		Rejected:    tr.Meta.TransactionResult != "tesSUCCESS",
 		Confirmed:   tr.Validated,
+		TokenID:     &w.assetID,
 	}
 }
 

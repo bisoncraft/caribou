@@ -40,6 +40,15 @@ func tx(id string, blockNum, timestamp uint64) *WalletTransaction {
 	}
 }
 
+// tokenTx is like tx, but stamped with TokenID, as a token wallet sharing its
+// parent network's NetworkTxDB must for GetAssetTxs/GetAssetPendingTxs to
+// scope it correctly.
+func tokenTx(id string, tokenID uint32, blockNum, timestamp uint64) *WalletTransaction {
+	wt := tx(id, blockNum, timestamp)
+	wt.TokenID = &tokenID
+	return wt
+}
+
 const netA, netB uint32 = 0, 60
 
 func ids(txs []*WalletTransaction) []string {
@@ -317,6 +326,90 @@ func TestPendingTxsMinedUnconfirmed(t *testing.T) {
 	}
 	if len(pending) != 2 || !got["mined-unconf"] || !got["mempool"] {
 		t.Fatalf("pending = %v, want [mined-unconf mempool]", ids(pending))
+	}
+}
+
+// TestGetAssetTxsScoped guards against a token wallet sharing its parent
+// network's NetworkTxDB seeing the parent's (or a sibling token's)
+// transactions and vice versa: GetAssetTxs(nil, ...) must return only the
+// network's own native-asset records, and GetAssetTxs(&tokenID, ...) must
+// return only that token's.
+func TestGetAssetTxsScoped(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+	usdcID, usdtID := uint32(1001), uint32(1002)
+
+	n.StoreTx(tx("native", 1, 100))
+	n.StoreTx(tokenTx("usdc-tx", usdcID, 1, 200))
+	n.StoreTx(tokenTx("usdt-tx", usdtID, 1, 300))
+
+	nativeResp, err := n.GetAssetTxs(nil, &TxHistoryRequest{})
+	if err != nil {
+		t.Fatalf("GetAssetTxs(nil): %v", err)
+	}
+	if !eq(ids(nativeResp.Txs), []string{"native"}) {
+		t.Fatalf("native asset txs = %v, want [native]", ids(nativeResp.Txs))
+	}
+
+	usdcResp, err := n.GetAssetTxs(&usdcID, &TxHistoryRequest{})
+	if err != nil {
+		t.Fatalf("GetAssetTxs(usdc): %v", err)
+	}
+	if !eq(ids(usdcResp.Txs), []string{"usdc-tx"}) {
+		t.Fatalf("usdc txs = %v, want [usdc-tx]", ids(usdcResp.Txs))
+	}
+
+	usdtResp, err := n.GetAssetTxs(&usdtID, &TxHistoryRequest{})
+	if err != nil {
+		t.Fatalf("GetAssetTxs(usdt): %v", err)
+	}
+	if !eq(ids(usdtResp.Txs), []string{"usdt-tx"}) {
+		t.Fatalf("usdt txs = %v, want [usdt-tx]", ids(usdtResp.Txs))
+	}
+}
+
+// TestGetAssetPendingTxsScoped is the pending-set analog of
+// TestGetAssetTxsScoped: without it, a native wallet's checkPendingTxs-style
+// user-facing queries would see (and could misinterpret/overwrite) a
+// sibling token wallet's in-flight transactions, and vice versa.
+func TestGetAssetPendingTxsScoped(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+	usdcID := uint32(1001)
+
+	n.StoreTx(tx("native-pend", 0, 0))
+	n.StoreTx(tokenTx("usdc-pend", usdcID, 0, 0))
+	n.StoreTx(tx("native-mined", 5, 100))
+
+	nativePending, err := n.GetAssetPendingTxs(nil)
+	if err != nil {
+		t.Fatalf("GetAssetPendingTxs(nil): %v", err)
+	}
+	if !eq(ids(nativePending), []string{"native-pend"}) {
+		t.Fatalf("native pending = %v, want [native-pend]", ids(nativePending))
+	}
+
+	usdcPending, err := n.GetAssetPendingTxs(&usdcID)
+	if err != nil {
+		t.Fatalf("GetAssetPendingTxs(usdc): %v", err)
+	}
+	if !eq(ids(usdcPending), []string{"usdc-pend"}) {
+		t.Fatalf("usdc pending = %v, want [usdc-pend]", ids(usdcPending))
+	}
+
+	// GetPendingTxs (unfiltered) must still return everything mixed
+	// together, since e.g. XRP's sequence accounting relies on seeing every
+	// asset's pending transactions in the network.
+	allPending, err := n.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range allPending {
+		got[p.ID] = true
+	}
+	if len(allPending) != 2 || !got["native-pend"] || !got["usdc-pend"] {
+		t.Fatalf("GetPendingTxs = %v, want [native-pend usdc-pend]", ids(allPending))
 	}
 }
 

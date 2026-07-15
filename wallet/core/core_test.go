@@ -266,10 +266,19 @@ type TXCWallet struct {
 	estFee    uint64
 	estFeeErr error
 	validAddr bool
+
+	trustlineErr   error
+	trustlineCalls int
 }
 
 var _ asset.Accelerator = (*TXCWallet)(nil)
 var _ asset.Withdrawer = (*TXCWallet)(nil)
+var _ asset.TrustlineEstablisher = (*TXCWallet)(nil)
+
+func (w *TXCWallet) EstablishTrustline() error {
+	w.trustlineCalls++
+	return w.trustlineErr
+}
 
 func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
 	w := &TXCWallet{

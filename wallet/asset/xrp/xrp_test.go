@@ -450,6 +450,29 @@ func TestReserveSequenceRollbackReuse(t *testing.T) {
 	}
 }
 
+// TestReserveSequenceDropsPoisonedFreeSeq guards against handing out a
+// cross-frame-poisoned freeSeqs entry: a rollback that races a concurrent
+// nextSeq reset can plant a sequence >= nextSeq, which was never validly
+// minted (a legitimate freeSeqs entry always satisfies seq < nextSeq at
+// insertion time). Handing such an entry out would submit a sequence ahead
+// of what the account can accept.
+func TestReserveSequenceDropsPoisonedFreeSeq(t *testing.T) {
+	w := &xrpWallet{nextSeq: 11, freeSeqs: []uint32{15}} // poisoned: 15 >= nextSeq
+
+	seq, _, err := w.reserveSequence()
+	if err != nil {
+		t.Fatalf("reserveSequence error: %v", err)
+	}
+	if seq != 11 {
+		t.Fatalf("seq = %d, want 11 (poisoned freeSeqs entry 15 should have been dropped)", seq)
+	}
+	w.seqMtx.Lock()
+	defer w.seqMtx.Unlock()
+	if len(w.freeSeqs) != 0 {
+		t.Fatalf("freeSeqs = %v, want empty", w.freeSeqs)
+	}
+}
+
 func TestWalletTransactionFromTx(t *testing.T) {
 	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const otherAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"

@@ -426,7 +426,9 @@ func (w *NearWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryRespo
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
 	}
-	return w.txDB.GetTxs(req)
+	// nil selects this network's native-asset records, excluding any token
+	// wallet's transactions sharing this NetworkTxDB.
+	return w.txDB.GetAssetTxs(nil, req)
 }
 
 func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
@@ -476,7 +478,7 @@ func (w *NearWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransa
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.GetPendingTxs()
+	pending, err := w.txDB.GetAssetPendingTxs(nil)
 	if err != nil {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return nil
@@ -522,7 +524,13 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 }
 
 // checkPendingTxs queries the RPC for pending transactions and updates the
-// database when they confirm or fail.
+// database when they confirm or fail. Deliberately unfiltered (every asset
+// sharing this NetworkTxDB, not just the native one): TokenWallet has no
+// poller of its own, so this is the only reconciliation loop for token
+// pending txs too. That's safe here (unlike SOL) because this loop never
+// re-derives a tx's type/amount from the wallet's own address — it only
+// updates BlockNumber/Timestamp/Confirmed/Rejected on the existing record
+// looked up by the tx's own ID.
 func (w *NearWallet) checkPendingTxs() {
 	if w.txDB == nil {
 		return

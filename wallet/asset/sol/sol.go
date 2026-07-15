@@ -45,7 +45,7 @@ var (
 
 	WalletInfo = asset.WalletInfo{
 		Name:              "Solana",
-		SupportedVersions: []uint32{0},
+		SupportedVersions: []uint32{version},
 		UnitInfo:          UnitInfo,
 		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
 		BlockchainClass:   asset.BlockchainClassAccount,
@@ -59,7 +59,7 @@ var (
 
 func init() {
 	asset.Register(BipID, &Driver{})
-	registerToken(usdcTokenID, "The USDC SPL token.", util.Mainnet, util.Testnet)
+	registerToken(usdcTokenID, "The USDC SPL token.", util.Mainnet)
 	registerToken(usdtTokenID, "The USDT SPL token.", util.Mainnet)
 }
 
@@ -137,6 +137,15 @@ type Wallet struct {
 	tipMtx  sync.RWMutex
 	tip     uint64
 	tipTime time.Time
+
+	// tokenAccountRentMtx guards tokenAccountRentLamports, the cached
+	// rent-exempt minimum for a new SPL token account (splTokenAccountSize
+	// bytes). It's a cluster-wide constant that essentially never changes,
+	// so fetching it once per wallet session (rather than on every token
+	// Send that creates a new destination ATA) avoids a redundant RPC
+	// round-trip; 0 means not yet fetched.
+	tokenAccountRentMtx      sync.Mutex
+	tokenAccountRentLamports uint64
 }
 
 var _ asset.Wallet = (*Wallet)(nil)
@@ -405,6 +414,22 @@ func (w *Wallet) StandardSendFee(_ uint64) uint64 {
 	return DefaultFee
 }
 
+// tokenAccountRent returns the rent-exempt minimum balance for a new SPL
+// token account, caching it after the first successful fetch.
+func (w *Wallet) tokenAccountRent(ctx context.Context) (uint64, error) {
+	w.tokenAccountRentMtx.Lock()
+	defer w.tokenAccountRentMtx.Unlock()
+	if w.tokenAccountRentLamports > 0 {
+		return w.tokenAccountRentLamports, nil
+	}
+	rent, err := w.rpc.getMinimumBalanceForRentExemption(ctx, splTokenAccountSize)
+	if err != nil {
+		return 0, err
+	}
+	w.tokenAccountRentLamports = rent
+	return rent, nil
+}
+
 func (w *Wallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
@@ -413,7 +438,9 @@ func (w *Wallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse,
 	if r.N == 0 {
 		r.N = 50
 	}
-	return w.txDB.GetTxs(&r)
+	// nil selects this network's native-asset records, excluding any token
+	// wallet's transactions sharing this NetworkTxDB.
+	return w.txDB.GetAssetTxs(nil, &r)
 }
 
 func (w *Wallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
@@ -444,7 +471,7 @@ func (w *Wallet) PendingTransactions(_ context.Context) []*txdb.WalletTransactio
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.GetPendingTxs()
+	pending, err := w.txDB.GetAssetPendingTxs(nil)
 	if err != nil {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return nil
@@ -612,7 +639,13 @@ func (w *Wallet) checkPendingTxs(ctx context.Context) error {
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.GetPendingTxs()
+	// Scoped to the native asset only: unlike XRP, SOL sequencing is
+	// per-transaction (a blockhash + nonce, not a shared account counter),
+	// so there's no cross-asset reconciliation dependency here. Reparsing a
+	// token wallet's pending tx from this wallet's own lamport-transfer
+	// perspective (walletTransactionFromRPC below) would misclassify it and
+	// overwrite the token record.
+	pending, err := w.txDB.GetAssetPendingTxs(nil)
 	if err != nil || len(pending) == 0 {
 		return err
 	}

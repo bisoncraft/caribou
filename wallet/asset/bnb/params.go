@@ -54,6 +54,11 @@ var (
 	usdcTokenID, _ = util.BipSymbolID("usdc.bnb")
 	usdtTokenID, _ = util.BipSymbolID("usdt.bnb")
 
+	// bep20StablecoinEVMFactor accounts for Binance-Peg USDC/USDT using 18
+	// on-chain decimals, unlike their 6-decimal Ethereum counterparts:
+	// log10(ConversionFactor=1e6) + 12 = 18.
+	bep20StablecoinEVMFactor = int64(12)
+
 	Tokens = map[uint32]*dexeth.Token{
 		usdcTokenID: TokenUSDC,
 		usdtTokenID: TokenUSDT,
@@ -65,7 +70,7 @@ var (
 	// hex digit (39 chars instead of 40) and would not have been a valid
 	// address at all.
 	TokenUSDC = &dexeth.Token{
-		EVMFactor: new(int64),
+		EVMFactor: &bep20StablecoinEVMFactor,
 		Token: &util.Token{
 			NetworkID: BipID,
 			Name:      "USDC",
@@ -104,7 +109,7 @@ var (
 	// TokenUSDT is Binance-Peg BSC-USD (BEP-20). Verified against
 	// bscscan.com and the trustwallet/assets BEP-20 token list (2026-07-13).
 	TokenUSDT = &dexeth.Token{
-		EVMFactor: new(int64),
+		EVMFactor: &bep20StablecoinEVMFactor,
 		Token: &util.Token{
 			NetworkID: BipID,
 			Name:      "Tether",

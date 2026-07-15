@@ -1128,6 +1128,12 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 		return fmt.Errorf("%s wallet authentication error: %w", symbol, err)
 	}
 
+	if token != nil {
+		if err := wallet.establishTrustline(); err != nil {
+			return initErr("error establishing trustline for %s: %w", symbol, err)
+		}
+	}
+
 	balances, err := c.walletBalance(wallet)
 	if err != nil {
 		return initErr("error getting wallet balance for %s: %w", symbol, err)
@@ -2875,26 +2881,6 @@ func (c *Core) BridgeContractApprovalStatus(assetID uint32, bridgeName string) (
 	}
 
 	return wallet.BridgeContractApprovalStatus(c.ctx, bridgeName)
-}
-
-// EstablishTrustline authorizes the token wallet for the specified asset to
-// receive its token, for assets (e.g. XRPL issued currencies) that require
-// an explicit opt-in transaction before the wallet can receive funds.
-func (c *Core) EstablishTrustline(assetID uint32, limitAtomic uint64) error {
-	wallet, err := c.connectedWallet(assetID)
-	if err != nil {
-		return err
-	}
-
-	if !wallet.locallyUnlocked() {
-		return fmt.Errorf("wallet %s must be unlocked", unbip(assetID))
-	}
-
-	if err := wallet.checkPeersAndSyncStatus(); err != nil {
-		return err
-	}
-
-	return wallet.EstablishTrustline(limitAtomic)
 }
 
 // ApproveBridgeContract approves the bridge contract for the specified asset.

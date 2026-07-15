@@ -14,6 +14,8 @@ const (
 
 	keyFileName   = "sol-keyfile.json"
 	walletTypeRPC = "rpc"
+
+	version = 0
 )
 
 var (
@@ -46,8 +48,10 @@ var (
 	}
 
 	// TokenUSDC is Circle's USDC SPL token. Mainnet mint verified against
-	// the solana-labs/token-list registry; devnet mint verified against
-	// Circle's own developer docs (2026-07-13).
+	// the solana-labs/token-list registry. Circle's only public test mint is
+	// on the devnet cluster, not testnet (DefaultRPCEndpoints[util.Testnet]
+	// points at the testnet cluster, and util.Network has no separate Devnet
+	// value), so no testnet mint is listed here — same as USDT below.
 	TokenUSDC = &Token{
 		Name:     "USDC",
 		Decimals: 6,
@@ -67,8 +71,6 @@ var (
 		NetMints: map[util.Network]string{
 			// https://solscan.io/token/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
 			util.Mainnet: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-			// Circle's devnet USDC faucet mint, per Circle's developer docs.
-			util.Testnet: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
 		},
 	}
 

@@ -19,7 +19,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
 	netAddrs := make(map[util.Network]string)
-	netVersions := make(map[util.Network][]uint32, 3)
+	netVersions := make(map[util.Network][]uint32, len(allowedNets))
 	for net, netToken := range token.NetTokens {
 		if !slices.Contains(allowedNets, net) {
 			continue

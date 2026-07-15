@@ -235,6 +235,16 @@ func (m *txMeta) deliveredAmountDrops() uint64 {
 	return v
 }
 
+// deliveredIssuedAmount returns the actual delivered issued-currency amount,
+// or nil for XRP amounts, pre-2014 transactions where the field is the
+// literal string "unavailable", or when the field is absent. Callers must
+// use this instead of Amount/DeliverMax to credit an incoming IOU payment:
+// a Payment with the tfPartialPayment flag set can validate tesSUCCESS while
+// delivering far less than Amount states.
+func (m *txMeta) deliveredIssuedAmount() *issuedAmount {
+	return issuedAmountFrom(m.DeliveredAmount)
+}
+
 // txResult holds fields from a transaction lookup.
 type txResult struct {
 	Account         string      `json:"Account"`

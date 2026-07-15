@@ -5,13 +5,11 @@ package xrp
 
 import (
 	"bytes"
-	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
 	btcec "github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 )
 
 const (
@@ -173,12 +171,7 @@ func signTrustSet(t *xrpTrustSet, privKey *btcec.PrivateKey) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := sha512.New()
-	h.Write(txSigningPrefix)
-	h.Write(txBytes)
-	msgHash := h.Sum(nil)[:32]
-	sig := ecdsa.Sign(privKey, msgHash)
-	return sig.Serialize(), nil
+	return signTxBytes(txBytes, privKey), nil
 }
 
 // xrpIOUPayment holds the fields needed to build a signed issued-currency
@@ -199,52 +192,14 @@ type xrpIOUPayment struct {
 }
 
 // encodeIOUPayment serializes an issued-currency Payment transaction. Field
-// order mirrors encodePayment, substituting an IOU Amount for the native
-// drops Amount.
+// order mirrors encodePayment (via the shared encodePaymentFields), only
+// substituting an IOU Amount for the native drops Amount.
 func encodeIOUPayment(p *xrpIOUPayment, forSigning bool) ([]byte, error) {
-	var b bytes.Buffer
-
-	b.WriteByte(fieldHdrTransactionType)
-	writeUInt16(&b, 0) // Payment = 0
-
-	b.WriteByte(fieldHdrFlags)
-	writeUInt32(&b, 0)
-
-	b.WriteByte(fieldHdrSequence)
-	writeUInt32(&b, p.sequence)
-
-	if p.destinationTag != nil {
-		b.WriteByte(fieldHdrDestTag)
-		writeUInt32(&b, *p.destinationTag)
-	}
-
-	b.WriteByte(fieldHdrLastLedgerSeq0)
-	b.WriteByte(fieldHdrLastLedgerSeq1)
-	writeUInt32(&b, p.lastLedgerSeq)
-
-	b.WriteByte(fieldHdrAmount)
-	if err := writeIOUAmount(&b, p.amountAtomic, p.amountDecimals, p.currency, p.issuer); err != nil {
-		return nil, err
-	}
-
-	b.WriteByte(fieldHdrFee)
-	writeXRPAmount(&b, p.fee)
-
-	b.WriteByte(fieldHdrSigningPubKey)
-	writeVarBlob(&b, p.signingPubKey)
-
-	if !forSigning && len(p.txnSig) > 0 {
-		b.WriteByte(fieldHdrTxnSignature)
-		writeVarBlob(&b, p.txnSig)
-	}
-
-	b.WriteByte(fieldHdrAccount)
-	writeVarBlob(&b, p.account[:])
-
-	b.WriteByte(fieldHdrDestination)
-	writeVarBlob(&b, p.destination[:])
-
-	return b.Bytes(), nil
+	return encodePaymentFields(p.account, p.destination, p.sequence, p.destinationTag, p.lastLedgerSeq,
+		func(b *bytes.Buffer) error {
+			return writeIOUAmount(b, p.amountAtomic, p.amountDecimals, p.currency, p.issuer)
+		},
+		p.fee, p.signingPubKey, p.txnSig, forSigning)
 }
 
 func signIOUPayment(p *xrpIOUPayment, privKey *btcec.PrivateKey) ([]byte, error) {
@@ -252,10 +207,5 @@ func signIOUPayment(p *xrpIOUPayment, privKey *btcec.PrivateKey) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	h := sha512.New()
-	h.Write(txSigningPrefix)
-	h.Write(txBytes)
-	msgHash := h.Sum(nil)[:32]
-	sig := ecdsa.Sign(privKey, msgHash)
-	return sig.Serialize(), nil
+	return signTxBytes(txBytes, privKey), nil
 }

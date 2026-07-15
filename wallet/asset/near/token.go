@@ -40,6 +40,16 @@ const (
 	standardStorageDepositYocto = "1250000000000000000000"
 )
 
+// standardStorageDepositAmount is standardStorageDepositYocto parsed once at
+// package init, rather than on every Send.
+var standardStorageDepositAmount = func() *big.Int {
+	amt, ok := new(big.Int).SetString(standardStorageDepositYocto, 10)
+	if !ok {
+		panic("invalid standardStorageDepositYocto constant")
+	}
+	return amt
+}()
+
 var _ asset.TokenMaster = (*NearWallet)(nil)
 
 // registerToken registers a NEP-141 token with the asset package for the
@@ -91,13 +101,12 @@ func (w *NearWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, erro
 		return nil, fmt.Errorf("no %s network contract for token %s (%d)", w.net, token.Name, cfg.AssetID)
 	}
 	return &TokenWallet{
-		parent:      w,
-		assetID:     cfg.AssetID,
-		token:       token,
-		contractID:  contractID,
-		emit:        cfg.Emit,
-		peersChange: cfg.PeersChange,
-		txDB:        cfg.NetworkTxDB,
+		parent:     w,
+		assetID:    cfg.AssetID,
+		token:      token,
+		contractID: contractID,
+		emit:       cfg.Emit,
+		txDB:       cfg.NetworkTxDB,
 		wi: asset.WalletInfo{
 			Name:              token.Name,
 			SupportedVersions: []uint32{version},
@@ -114,14 +123,13 @@ func (w *NearWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, erro
 // registered on the token contract before it can hold a balance, which
 // this wallet's Send establishes automatically via storage_deposit.
 type TokenWallet struct {
-	parent      *NearWallet
-	assetID     uint32
-	token       *Token
-	contractID  string
-	emit        *asset.WalletEmitter
-	peersChange func(uint32, error)
-	txDB        txdb.NetworkTxDB
-	wi          asset.WalletInfo
+	parent     *NearWallet
+	assetID    uint32
+	token      *Token
+	contractID string
+	emit       *asset.WalletEmitter
+	txDB       txdb.NetworkTxDB
+	wi         asset.WalletInfo
 }
 
 var _ asset.Wallet = (*TokenWallet)(nil)
@@ -239,8 +247,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		if err != nil {
 			return nil, fmt.Errorf("error encoding storage_deposit args: %w", err)
 		}
-		depositYocto, _ := new(big.Int).SetString(standardStorageDepositYocto, 10)
-		actions = append(actions, functionCallAction("storage_deposit", depositArgs, storageDepositGas, depositYocto))
+		actions = append(actions, functionCallAction("storage_deposit", depositArgs, storageDepositGas, standardStorageDepositAmount))
 	}
 	actions = append(actions, functionCallAction("ft_transfer", amountArgs, ftTransferGas, big.NewInt(ftTransferDepositYocto)))
 
@@ -284,6 +291,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		Amount:    value,
 		Fees:      0, // fee is paid in NEAR gas, not the token itself
 		Recipient: &recipient,
+		TokenID:   &w.assetID,
 	}
 	if w.txDB != nil {
 		if err := w.txDB.StoreTx(wtx); err != nil {
@@ -301,7 +309,7 @@ func (w *TokenWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResp
 	if w.txDB == nil || req == nil {
 		return &txdb.TxHistoryResponse{}, nil
 	}
-	return w.txDB.GetTxs(req)
+	return w.txDB.GetAssetTxs(&w.assetID, req)
 }
 
 func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
@@ -321,7 +329,7 @@ func (w *TokenWallet) PendingTransactions(_ context.Context) []*txdb.WalletTrans
 	if w.txDB == nil {
 		return nil
 	}
-	pending, err := w.txDB.GetPendingTxs()
+	pending, err := w.txDB.GetAssetPendingTxs(&w.assetID)
 	if err != nil {
 		w.parent.log.Errorf("Error getting pending token txs: %v", err)
 		return nil

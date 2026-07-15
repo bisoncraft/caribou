@@ -104,8 +104,23 @@ func (m *mockTxDB) GetTxs(_ *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, er
 	return nil, nil
 }
 func (m *mockTxDB) GetPendingTxs() ([]*txdb.WalletTransaction, error) { return m.pending, nil }
-func (m *mockTxDB) RemoveTx(_ string) error                           { return nil }
-func (m *mockTxDB) Table(_ string) (txdb.StoreTable, error)           { return nil, nil }
+func (m *mockTxDB) GetAssetTxs(_ *uint32, _ *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+	return nil, nil
+}
+func (m *mockTxDB) GetAssetPendingTxs(assetID *uint32) ([]*txdb.WalletTransaction, error) {
+	var out []*txdb.WalletTransaction
+	for _, tx := range m.pending {
+		switch {
+		case assetID == nil && tx.TokenID == nil:
+			out = append(out, tx)
+		case assetID != nil && tx.TokenID != nil && *tx.TokenID == *assetID:
+			out = append(out, tx)
+		}
+	}
+	return out, nil
+}
+func (m *mockTxDB) RemoveTx(_ string) error                 { return nil }
+func (m *mockTxDB) Table(_ string) (txdb.StoreTable, error) { return nil, nil }
 func (m *mockTxDB) AddTxIndex(_ string, _ func(*txdb.WalletTransaction) ([]byte, error)) (txdb.TxIndex, error) {
 	return nil, nil
 }
@@ -895,6 +910,75 @@ func TestCheckPendingTxs(t *testing.T) {
 			t.Fatal("tx should be marked Rejected")
 		}
 	})
+}
+
+// TestCheckPendingTxsIgnoresTokenPending guards against the native wallet's
+// checkPendingTxs reconciling a token wallet's pending transactions: before
+// scoping GetPendingTxs to the native asset, this loop would fetch a token
+// tx's on-chain data and reparse it via walletTransactionFromRPC from the
+// native wallet's own lamport-transfer perspective, storing wrong data over
+// the token record and misattributing the confirmation note to SOL.
+func TestCheckPendingTxsIgnoresTokenPending(t *testing.T) {
+	ctx := context.Background()
+	tokenID := usdcTokenID
+
+	nativePend := &txdb.WalletTransaction{ID: "native-pend"}
+	setTxData(nativePend, solTxData{LastValidBlockHeight: 100})
+	tokenPend := &txdb.WalletTransaction{ID: "token-pend", TokenID: &tokenID}
+	setTxData(tokenPend, solTxData{LastValidBlockHeight: 100})
+
+	db := &mockTxDB{pending: []*txdb.WalletTransaction{nativePend, tokenPend}}
+	table := newMockTable()
+	var queriedIDs []string
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) { return nil, nil },
+		txFunc: func(_ string) (*rpcTransaction, error) {
+			return nil, fmt.Errorf("rpc timeout") // transient; leaves tx pending either way
+		},
+		sigStatusesFunc: func(ids []string) ([]*signatureStatus, error) {
+			queriedIDs = append(queriedIDs, ids...)
+			statuses := make([]*signatureStatus, len(ids))
+			return statuses, nil
+		},
+	}
+	w := newTestWallet("addr", rpc, db, table)
+
+	if err := w.checkPendingTxs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(queriedIDs) != 1 || queriedIDs[0] != "native-pend" {
+		t.Fatalf("getSignatureStatuses queried %v, want only [native-pend]", queriedIDs)
+	}
+}
+
+// TestTokenAccountRentCached guards against re-fetching a cluster-wide
+// constant on every send: getMinimumBalanceForRentExemption must only be
+// called once across repeated tokenAccountRent calls on the same wallet.
+func TestTokenAccountRentCached(t *testing.T) {
+	calls := 0
+	rpc := &mockRPC{
+		rentFunc: func(size uint64) (uint64, error) {
+			calls++
+			if size != splTokenAccountSize {
+				t.Fatalf("rent query size = %d, want %d", size, splTokenAccountSize)
+			}
+			return 2_039_280, nil
+		},
+	}
+	w := newTestWallet("addr", rpc, nil, nil)
+
+	for i := 0; i < 3; i++ {
+		rent, err := w.tokenAccountRent(context.Background())
+		if err != nil {
+			t.Fatalf("tokenAccountRent: %v", err)
+		}
+		if rent != 2_039_280 {
+			t.Fatalf("rent = %d, want 2039280", rent)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("getMinimumBalanceForRentExemption called %d times, want 1", calls)
+	}
 }
 
 func TestKeyFileRoundTrip(t *testing.T) {

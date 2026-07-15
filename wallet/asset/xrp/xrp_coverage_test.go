@@ -737,6 +737,50 @@ func TestReconcileSeqDoesNotRewind(t *testing.T) {
 	}
 }
 
+// TestReconcileSeqPurgesConsumedFreeSeq guards against the freeSeqs
+// poisoning bug: a rollback that races a concurrent nextSeq reset can
+// re-insert a sequence the chain has already consumed. Because next ==
+// nextSeq in the poisoned steady state, the "next > nextSeq" advance branch
+// never fires and never clears it — reconcileSeq must also purge freeSeqs
+// entries below the account's live next sequence even when nextSeq itself
+// doesn't move, or every later reservation keeps handing out the already-
+// consumed sequence and failing with tefPAST_SEQ forever.
+func TestReconcileSeqPurgesConsumedFreeSeq(t *testing.T) {
+	log := util.NewLogger("test", util.LevelError, nil)
+	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status": "success",
+			"account_data": map[string]any{
+				"Account":    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"Balance":    "10000000",
+				"Sequence":   uint32(11),
+				"OwnerCount": uint32(0),
+				"Flags":      uint32(0),
+			},
+			"ledger_index": uint64(100),
+		}, nil
+	})
+	w := &xrpWallet{
+		address: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		rpc:     m.rpcClient(),
+		log:     log,
+	}
+	w.nextSeq = 11
+	w.freeSeqs = []uint32{10} // already consumed on-chain per account_info above
+
+	w.reconcileSeq(context.Background())
+
+	w.seqMtx.Lock()
+	defer w.seqMtx.Unlock()
+	if w.nextSeq != 11 {
+		t.Fatalf("nextSeq = %d, want unchanged 11", w.nextSeq)
+	}
+	if len(w.freeSeqs) != 0 {
+		t.Fatalf("freeSeqs = %v, want empty (consumed sequence must be purged)", w.freeSeqs)
+	}
+}
+
 // TestScanAccountTxsNewPayment verifies that scanAccountTxs stores a new inbound
 // payment and reports balanceChanged=true.
 func TestScanAccountTxsNewPayment(t *testing.T) {

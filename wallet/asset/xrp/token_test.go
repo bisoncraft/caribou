@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/bosswallet/util"
+	"github.com/bisoncraft/bosswallet/wallet/txdb"
 	btcec "github.com/btcsuite/btcd/btcec/v2"
 )
 
@@ -102,6 +103,83 @@ func TestTokenWalletBalanceWithTrustline(t *testing.T) {
 	}
 }
 
+func TestWalletTransactionFromTxPartialPayment(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	issuerAddr := tw.issuerAddr
+
+	// A tfPartialPayment transaction can validate tesSUCCESS while
+	// delivering far less than Amount states; the wallet must credit
+	// meta.delivered_amount, not Amount, or it can be tricked into
+	// recording funds that were never actually received.
+	tr := &txResult{
+		Account:         "rOtherSender11111111111111111111",
+		Destination:     tw.parent.address,
+		TransactionType: "Payment",
+		Amount: map[string]interface{}{
+			"currency": TokenUSDC.Currency,
+			"issuer":   issuerAddr,
+			"value":    "10000",
+		},
+		Hash: "0123abcd",
+		Meta: txMeta{
+			TransactionResult: "tesSUCCESS",
+			DeliveredAmount: map[string]interface{}{
+				"currency": TokenUSDC.Currency,
+				"issuer":   issuerAddr,
+				"value":    "0.0001",
+			},
+		},
+	}
+	wt := tw.walletTransactionFromTx(tr)
+	if wt == nil {
+		t.Fatal("expected wallet transaction")
+	}
+	if wt.Type != txdb.Receive {
+		t.Fatalf("Type = %v, want Receive", wt.Type)
+	}
+	if wt.Amount != 100 {
+		t.Fatalf("Amount = %d, want 100 (delivered), not the stated 10000", wt.Amount)
+	}
+}
+
+func TestWalletTransactionFromTxIndeterminateDeliveredAmount(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	issuerAddr := tw.issuerAddr
+
+	// A tesSUCCESS payment whose delivered_amount is absent or "unavailable"
+	// gives no trustworthy record of what was actually delivered. The
+	// sender-stated Amount is exactly what a spoofed tfPartialPayment forges,
+	// so the wallet must not fall back to it and credit a possibly-fabricated
+	// amount.
+	for name, deliveredAmount := range map[string]interface{}{
+		"absent":      nil,
+		"unavailable": "unavailable",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := &txResult{
+				Account:         "rOtherSender11111111111111111111",
+				Destination:     tw.parent.address,
+				TransactionType: "Payment",
+				Amount: map[string]interface{}{
+					"currency": TokenUSDC.Currency,
+					"issuer":   issuerAddr,
+					"value":    "10000",
+				},
+				Hash: "0123abcd",
+				Meta: txMeta{
+					TransactionResult: "tesSUCCESS",
+					DeliveredAmount:   deliveredAmount,
+				},
+			}
+			if wt := tw.walletTransactionFromTx(tr); wt != nil {
+				t.Fatalf("expected nil wallet transaction (indeterminate delivered amount), got Amount=%d", wt.Amount)
+			}
+		})
+	}
+}
+
 func TestTokenWalletSendNoDestinationTrustline(t *testing.T) {
 	m := newMockRippled(t)
 	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
@@ -119,6 +197,77 @@ func TestTokenWalletSendInvalidAddress(t *testing.T) {
 	tw := makeTokenTestWallet(t, m)
 	if _, err := tw.Send("not-an-address", 1_000_000, 0); err == nil {
 		t.Fatal("expected error for invalid recipient address")
+	}
+}
+
+func trustlineTestHandlers(m *mockRippled, engineResult, engineResultMsg string) {
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, 0), nil
+	})
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":                "success",
+			"engine_result":         engineResult,
+			"engine_result_message": engineResultMsg,
+			"tx_json":               map[string]any{},
+		}, nil
+	})
+}
+
+// A tec result means the TrustSet was included in a validated ledger but the
+// trustline was NOT actually created (e.g. tecINSUF_RESERVE_LINE for a
+// reserve-starved account). Before this fix, EstablishTrustline returned nil
+// in this case with nothing recorded anywhere, so the failure was invisible.
+func TestEstablishTrustlineTecTrackedAsPending(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	txDB, _ := newTestTxDB(t)
+	tw.txDB = txDB
+	trustlineTestHandlers(m, "tecINSUF_RESERVE_LINE", "Insufficient reserve to add trust line.")
+
+	if err := tw.EstablishTrustline(); err != nil {
+		t.Fatalf("EstablishTrustline error: %v", err)
+	}
+
+	pending, err := txDB.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending trustline tx for checkPendingTxs to reconcile, got %d", len(pending))
+	}
+	if pending[0].Type != txdb.ApproveToken {
+		t.Fatalf("Type = %v, want ApproveToken", pending[0].Type)
+	}
+	if pending[0].Confirmed {
+		t.Fatal("tec result should remain pending here; checkPendingTxs resolves confirmation/rejection")
+	}
+}
+
+func TestEstablishTrustlineDeterministicRejection(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	txDB, _ := newTestTxDB(t)
+	tw.txDB = txDB
+	trustlineTestHandlers(m, "temBAD_AMOUNT", "bad amount")
+
+	if err := tw.EstablishTrustline(); err == nil {
+		t.Fatal("expected error for deterministically rejected trustline tx")
+	}
+
+	pending, err := txDB.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected 0 pending trustline txs after deterministic rejection, got %d", len(pending))
 	}
 }
 

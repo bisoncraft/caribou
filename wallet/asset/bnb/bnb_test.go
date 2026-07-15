@@ -13,6 +13,7 @@ import (
 	"github.com/bisoncraft/bosswallet/util"
 	"github.com/bisoncraft/bosswallet/util/encode"
 	"github.com/bisoncraft/bosswallet/wallet/asset"
+	dexeth "github.com/bisoncraft/bosswallet/wallet/asset/eth"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -324,6 +325,21 @@ func TestTokenRegistration(t *testing.T) {
 		}
 		if tok.Definition.Tab != "BNB token" {
 			t.Fatalf("%s Definition.Tab = %q, want %q", tc.name, tok.Definition.Tab, "BNB token")
+		}
+	}
+}
+
+// TestTokenEVMFactor guards against Binance-Peg USDC/USDT being registered
+// with Ethereum's 6-decimal EVMFactor: both use 18 on-chain decimals, unlike
+// their Ethereum counterparts.
+func TestTokenEVMFactor(t *testing.T) {
+	for _, tok := range []*dexeth.Token{TokenUSDC, TokenUSDT} {
+		if tok.EVMFactor == nil || *tok.EVMFactor != 12 {
+			t.Fatalf("%s EVMFactor = %v, want 12 (6 conventional + 12 = 18 on-chain decimals)", tok.Name, tok.EVMFactor)
+		}
+		oneToken := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil) // 1 token at 18 decimals
+		if atomic := tok.EVMToAtomic(oneToken); atomic != 1_000_000 {
+			t.Fatalf("%s EVMToAtomic(1e18) = %d, want 1_000_000 (1 %s)", tok.Name, atomic, tok.Name)
 		}
 	}
 }

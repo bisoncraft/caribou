@@ -31,11 +31,12 @@ const (
 
 	txsTableName = "txs"
 
-	networkTimeIndexName = "networkTime"
-	timeIndexName        = "time"
-	assetTimeIndexName   = "assetTime"
-	pendingIndexName     = "pending"
-	finalityIndexName    = "finality"
+	networkTimeIndexName  = "networkTime"
+	timeIndexName         = "time"
+	assetTimeIndexName    = "assetTime"
+	pendingIndexName      = "pending"
+	assetPendingIndexName = "assetPending"
+	finalityIndexName     = "finality"
 
 	// metaLen is the fixed-width index metadata stored as the third push of a
 	// record: network(4) || assetID(4) || effTime(8) || flags(1).
@@ -53,11 +54,12 @@ type TxDB struct {
 	txs   StoreTable
 	log   util.Logger
 
-	networkTimeIndex StoreIndex
-	timeIndex        StoreIndex
-	assetTimeIndex   StoreIndex
-	pendingIndex     StoreIndex
-	finalityIndex    StoreIndex
+	networkTimeIndex  StoreIndex
+	timeIndex         StoreIndex
+	assetTimeIndex    StoreIndex
+	pendingIndex      StoreIndex
+	assetPendingIndex StoreIndex
+	finalityIndex     StoreIndex
 }
 
 // New opens the master transaction database at path using the build-selected
@@ -93,6 +95,7 @@ func newTxDB(store Store, log util.Logger) (*TxDB, error) {
 		{timeIndexName, indexTime, &db.timeIndex},
 		{assetTimeIndexName, indexAssetTime, &db.assetTimeIndex},
 		{pendingIndexName, indexPending, &db.pendingIndex},
+		{assetPendingIndexName, indexAssetPending, &db.assetPendingIndex},
 		{finalityIndexName, indexFinality, &db.finalityIndex},
 	} {
 		idx, err := txs.AddIndex(spec.name, spec.f)
@@ -246,15 +249,18 @@ func indexTime(_, v []byte) ([]byte, error) {
 }
 
 // indexAssetTime orders transactions within an asset (token or base chain) by
-// effective time. Entry: assetID(4) || effTime(8).
-func indexAssetTime(_, v []byte) ([]byte, error) {
+// effective time. Entry: assetID(4) || effTime(8) || k. The trailing primary
+// key makes every entry unique, so a RefID seek lands exactly even when
+// transactions share an effective time (mirrors indexNetworkTime).
+func indexAssetTime(k, v []byte) ([]byte, error) {
 	_, assetID, effTime, _, err := recordMeta(v)
 	if err != nil {
 		return nil, err
 	}
-	e := make([]byte, 12)
+	e := make([]byte, 12+len(k))
 	binary.BigEndian.PutUint32(e[0:], assetID)
 	binary.BigEndian.PutUint64(e[4:], effTime)
+	copy(e[12:], k)
 	return e, nil
 }
 
@@ -273,6 +279,26 @@ func indexPending(_, v []byte) ([]byte, error) {
 		e[0] = 1
 	}
 	binary.BigEndian.PutUint32(e[1:], network)
+	binary.BigEndian.PutUint64(e[5:], effTime)
+	return e, nil
+}
+
+// indexAssetPending partitions transactions by pending state and asset
+// (token or base chain), time-ordered within each partition. Entry:
+// pendingByte(1) || assetID(4) || effTime(8). Mirrors indexPending, but
+// scoped to an asset instead of a whole network, so a token wallet sharing
+// its parent network's NetworkTxDB can query its own pending set without
+// picking up sibling assets' records.
+func indexAssetPending(_, v []byte) ([]byte, error) {
+	_, assetID, effTime, flags, err := recordMeta(v)
+	if err != nil {
+		return nil, err
+	}
+	e := make([]byte, 13)
+	if flags&flagPending != 0 {
+		e[0] = 1
+	}
+	binary.BigEndian.PutUint32(e[1:], assetID)
 	binary.BigEndian.PutUint64(e[5:], effTime)
 	return e, nil
 }
@@ -399,6 +425,86 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 		return nil, err
 	}
 	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
+}
+
+// getAssetTxs is like getTxs, but scoped to a single asset (assetID) within
+// network rather than every transaction in the network. network is only
+// needed to resolve a RefID to its primary-key record; the actual scan uses
+// assetTimeIndex, scoped by assetID.
+func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*TxHistoryResponse, error) {
+	n := req.N
+	prefix := encode.Uint32Bytes(assetID)
+	reverse := req.Past || req.RefID == nil
+
+	var seek []byte
+	if req.RefID != nil {
+		k := txKey(network, *req.RefID)
+		raw, err := db.txs.Get(k)
+		if err != nil {
+			if err == ErrKeyNotFound {
+				return nil, ErrUnknownTx
+			}
+			return nil, err
+		}
+		_, refAssetID, effTime, _, err := recordMeta(raw)
+		if err != nil {
+			return nil, err
+		}
+		if refAssetID != assetID {
+			return nil, fmt.Errorf("reference transaction belongs to asset %d, not %d", refAssetID, assetID)
+		}
+		// Seek to the exact assetTime index entry for this tx:
+		// assetID(4) || effTime(8) || k.
+		seek = make([]byte, 12+len(k))
+		binary.BigEndian.PutUint32(seek[0:], assetID)
+		binary.BigEndian.PutUint64(seek[4:], effTime)
+		copy(seek[12:], k)
+	}
+
+	txs := make([]*WalletTransaction, 0, n)
+	var moreAvailable bool
+	ignore := req.IngoreTypesLookup()
+
+	err := db.assetTimeIndex.Iterate(prefix, func(it StoreIter) error {
+		wt, err := decodeIter(it)
+		if err != nil {
+			return err
+		}
+		if ignore[wt.Type] {
+			return nil
+		}
+		if n > 0 && len(txs) == n {
+			moreAvailable = true
+			return ErrEndIteration
+		}
+		txs = append(txs, wt)
+		return nil
+	}, reverse, seek)
+	if err != nil {
+		return nil, err
+	}
+	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
+}
+
+// getAssetPendingTxs is like getPendingTxs, but scoped to a single asset
+// within a network instead of the whole network.
+func (db *TxDB) getAssetPendingTxs(assetID uint32) ([]*WalletTransaction, error) {
+	var txs []*WalletTransaction
+	// The asset-pending index entry is pendingByte(1) || assetID(4) ||
+	// effTime(8), so this 5-byte prefix scopes the scan to one asset's
+	// pending partition.
+	prefix := make([]byte, 5)
+	prefix[0] = 1
+	binary.BigEndian.PutUint32(prefix[1:], assetID)
+	err := db.assetPendingIndex.Iterate(prefix, func(it StoreIter) error {
+		wt, err := decodeIter(it)
+		if err != nil {
+			return err
+		}
+		txs = append(txs, wt)
+		return nil
+	}, false, nil)
+	return txs, err
 }
 
 func (db *TxDB) getPendingTxs(network uint32) ([]*WalletTransaction, error) {
