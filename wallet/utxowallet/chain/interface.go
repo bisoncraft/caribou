@@ -75,13 +75,24 @@ type AddressWatcher interface {
 	Unwatch(addrs []btcutil.Address) error
 
 	// Sweep is the metered safety net for unwatched (cold) addresses: it
-	// checks each address for activity above fromHeight (or in the
-	// mempool), re-establishes the watch for those with hits, and ingests
-	// the new history in block order. It returns the hit addresses (for
-	// promotion out of the cold set) and the addresses whose check FAILED —
-	// the caller must not advance any known-history floor past a failed
-	// address, or the heights it skipped are never examined again.
-	Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error)
+	// checks each entry for activity strictly above its own FromHeight (or
+	// in the mempool), re-establishes the watch for those with hits, and
+	// ingests the new history in block order. It returns the hit addresses
+	// (for promotion out of the cold set) and the addresses whose check
+	// FAILED — the caller must not advance any known-history floor past a
+	// failed address, or the heights it skipped are never examined again.
+	Sweep(entries []SweepEntry) (hits, failed []btcutil.Address, err error)
+}
+
+// SweepEntry is one cold address in a Sweep request. Floors are per-entry
+// because cold addresses are demoted at different tips: judging every entry
+// against a set-wide minimum floor sweeps each entry above the minimum from
+// below its own verified floor, re-hitting its own already-ingested history
+// on every sweep.
+type SweepEntry struct {
+	Addr btcutil.Address
+	// FromHeight is exclusive: activity strictly above it counts as a hit.
+	FromHeight int32
 }
 
 // Notification types.  These are defined here and processed from from reading

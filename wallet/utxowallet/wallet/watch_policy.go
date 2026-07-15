@@ -89,9 +89,11 @@ type watchPolicy struct {
 }
 
 // coldEntry is one demoted address and the height up to which its history is
-// fully known (the tip at which it was last provably watched or swept). The
-// sweep's fromHeight is the minimum over the cold set, so a stale entry can
-// never false-hit on history the wallet already ingested.
+// fully known (the tip at which it was last provably watched or swept). Each
+// entry is swept from its OWN floor (chain.SweepEntry): entries join the set
+// at different tips, and judging them against a set-wide minimum would sweep
+// every entry above the minimum from below its own verified floor, re-hitting
+// its own already-ingested history on every sweep.
 type coldEntry struct {
 	addr btcutil.Address
 	upTo int32
@@ -522,29 +524,41 @@ func (w *Wallet) unminedHotScripts(dbtx walletdb.ReadTx) (map[[32]byte]struct{},
 // address is bounded by this; the post-sync sweep covers the offline gap.
 const sweepInterval = 144
 
-// coldSweepReorgMargin is how far below the verified floor each sweep looks.
-// Floors are bumped to sweep-launch tips, so a reorg deeper than the blocks
-// since the last sweep can seat NEW transactions in replacement blocks at or
-// below a floor, where the strict above-fromHeight hit check would never
-// revisit them. The margin must stay below every branch's quiet depth to be
-// free of false re-promotions: an address is reaped only once its last mined
-// activity is at least quietDepth-1 below the reap tip, and floors never
-// fall, so its ingested history sits at least quietDepth-1 below its floor —
-// a margin of watchFinalityDepth-1 (the minimum branch depth, minus one) can
-// never re-hit it. Reorgs deeper than the margin are out of scope, matching
-// the tolerance documented at watchFinalityDepth.
+// coldSweepReorgMargin is how far below its verified floor each entry is
+// swept. Floors are bumped to sweep-launch tips, so a reorg deeper than the
+// blocks since the last sweep can seat NEW transactions in replacement
+// blocks at or below a floor, where the strict above-FromHeight hit check
+// would never revisit them. The margin must stay below every branch's quiet
+// depth to be free of false re-promotions: an address is reaped only once
+// its last mined activity is at least quietDepth-1 below the reap tip, and
+// an entry's floor never falls below its reap tip, so its ingested history
+// sits at least quietDepth-1 below its OWN floor — a margin of
+// watchFinalityDepth-1 (the minimum branch depth, minus one) can never
+// re-hit it. The proof is per-entry, which is why the margin is applied to
+// per-entry floors (sweepSet) and never to a set-wide minimum. Reorgs deeper
+// than the margin are out of scope, matching the tolerance documented at
+// watchFinalityDepth.
 const coldSweepReorgMargin = watchFinalityDepth - 1
 
 // demote moves an address into the cold sweep set. upTo is the height
 // through which its history is fully known — the tip at which it was last
-// watched.
+// watched. Demoting an address that is already cold keeps the LOWER floor:
+// a duplicate demotion carries no new verification (only bumpCold does), and
+// raising the floor could lift it past unexamined heights.
 func (p *watchPolicy) demote(addr btcutil.Address, upTo int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	if p.cold == nil {
 		p.cold = make(map[string]*coldEntry)
 	}
-	p.cold[addr.String()] = &coldEntry{addr: addr, upTo: upTo}
+	key := addr.String()
+	if e, ok := p.cold[key]; ok {
+		if upTo < e.upTo {
+			e.upTo = upTo
+		}
+		return
+	}
+	p.cold[key] = &coldEntry{addr: addr, upTo: upTo}
 }
 
 // promote removes addresses from the cold set (a sweep hit re-established
@@ -557,11 +571,10 @@ func (p *watchPolicy) promote(addrs []btcutil.Address) {
 	}
 }
 
-// coldSet returns a snapshot of the cold addresses and the height above
-// which a sweep must look — the minimum known-up-to over the set. The floor
-// is pure: maybeSweep subtracts coldSweepReorgMargin at the Sweep call, and
-// the persisted watermark records the unmargined value, so the margin is
-// applied exactly once per sweep and never compounds across restarts.
+// coldSet returns a snapshot of the cold addresses and the minimum
+// known-up-to height over the set — the persisted-watermark value. Floors
+// are unmargined here: the margin is applied per entry at sweep time
+// (sweepSet), exactly once per sweep, and never compounds across restarts.
 func (p *watchPolicy) coldSet() ([]btcutil.Address, int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
@@ -576,22 +589,47 @@ func (p *watchPolicy) coldSet() ([]btcutil.Address, int32) {
 	return out, from
 }
 
-// bumpCold records that a completed sweep verified the remaining cold set
-// through tip, advancing each verified entry's known-up-to height. Entries
-// in failed were NOT verified — a transient per-address error mid-sweep —
-// and their floors must stay put, or the heights the failed check skipped
-// would never be examined again (a silently missed payment until seed
-// restore).
-func (p *watchPolicy) bumpCold(tip int32, failed []btcutil.Address) {
+// sweepSet returns the sweep request for the current cold set — each entry's
+// FromHeight is its own verified floor less the reorg margin — plus the
+// swept-address snapshot for the post-sweep bump. Only addresses in the
+// snapshot are bumped: an entry demoted after the sweep launches was not
+// examined by it and keeps its own floor.
+func (p *watchPolicy) sweepSet() ([]chain.SweepEntry, []btcutil.Address) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	entries := make([]chain.SweepEntry, 0, len(p.cold))
+	swept := make([]btcutil.Address, 0, len(p.cold))
+	for _, e := range p.cold {
+		from := e.upTo - coldSweepReorgMargin
+		if from < 0 {
+			from = 0
+		}
+		entries = append(entries, chain.SweepEntry{Addr: e.addr, FromHeight: from})
+		swept = append(swept, e.addr)
+	}
+	return entries, swept
+}
+
+// bumpCold records that a completed sweep verified the swept entries through
+// tip, advancing each one's known-up-to height. Entries in failed were NOT
+// verified — a transient per-address error mid-sweep — and their floors must
+// stay put, or the heights the failed check skipped would never be examined
+// again (a silently missed payment until seed restore).
+func (p *watchPolicy) bumpCold(tip int32, swept, failed []btcutil.Address) {
 	skip := make(map[string]struct{}, len(failed))
 	for _, addr := range failed {
 		skip[addr.String()] = struct{}{}
 	}
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	for key, e := range p.cold {
+	for _, addr := range swept {
+		key := addr.String()
 		if _, ok := skip[key]; ok {
 			continue
+		}
+		e, ok := p.cold[key]
+		if !ok {
+			continue // promoted out mid-sweep
 		}
 		if tip > e.upTo {
 			e.upTo = tip
@@ -630,15 +668,12 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 	p.lastSweepTip = tip
 	p.mtx.Unlock()
 
-	cold, fromHeight := p.coldSet()
-	// Look coldSweepReorgMargin below the verified floor: a shallow reorg
-	// can seat new transactions in replacement blocks at or below the floor,
-	// which the strict above-fromHeight hit check would otherwise never
-	// revisit. The margin can't false-hit ingested history (see the const).
-	fromHeight -= coldSweepReorgMargin
-	if fromHeight < 0 {
-		fromHeight = 0
-	}
+	// Each entry is swept from its own floor less the reorg margin: a
+	// shallow reorg can seat new transactions in replacement blocks at or
+	// below a floor, which the strict above-FromHeight hit check would
+	// otherwise never revisit. The margin can't false-hit ingested history
+	// (see the const).
+	entries, swept := p.sweepSet()
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
@@ -647,10 +682,10 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 			p.sweeping = false
 			p.mtx.Unlock()
 		}()
-		hits, failed, err := watcher.Sweep(cold, fromHeight)
+		hits, failed, err := watcher.Sweep(entries)
 		if err != nil {
 			log.Errorf("Cold-address sweep failed: %v", err)
-			// Retry from the same floor next interval. The persisted
+			// Retry from the same floors next interval. The persisted
 			// watermark is untouched: nothing new was verified.
 			p.mtx.Lock()
 			p.lastSweepTip = tip - p.sweepDue()
@@ -658,7 +693,7 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 			return
 		}
 		p.promote(hits)
-		p.bumpCold(tip, failed)
+		p.bumpCold(tip, swept, failed)
 		// Persist the verified watermark for the next startup's demotion
 		// floors: the set minimum after this sweep's bumps (a failed
 		// address pins it), or tip when everything was promoted out.
@@ -670,10 +705,10 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 		if len(failed) > 0 {
 			log.Warnf("Cold-address sweep: %d of %d checks failed; their "+
 				"floors stay at their last verified heights for the next sweep",
-				len(failed), len(cold))
+				len(failed), len(entries))
 		}
-		log.Debugf("Cold-address sweep: %d checked from height %d, %d promoted",
-			len(cold), fromHeight, len(hits))
+		log.Debugf("Cold-address sweep: %d checked, %d promoted",
+			len(entries), len(hits))
 	}()
 }
 

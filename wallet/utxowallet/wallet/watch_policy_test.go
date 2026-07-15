@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/bosswallet/wallet/utxowallet/chain"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	"github.com/btcsuite/btcd/btcutil"
@@ -120,18 +121,27 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 
 // TestWatchPolicySweepPartialFailureFloor pins the fund-loss regression where
 // a sweep with a failed per-address check advanced every cold entry's floor,
-// leaving the failed address's skipped heights permanently unexamined.
+// leaving the failed address's skipped heights permanently unexamined — and
+// the snapshot rule: an entry demoted after the sweep launched was not
+// examined by it, so the bump must not touch it either.
 func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 	var p watchPolicy
 	ok, bad := tAddr(t, 10), tAddr(t, 11)
 	p.demote(ok, 100)
 	p.demote(bad, 100)
 
-	p.bumpCold(200, []btcutil.Address{bad})
+	_, swept := p.sweepSet()
+
+	// Demoted mid-sweep: not in the snapshot, floor must survive the bump.
+	late := tAddr(t, 12)
+	p.demote(late, 150)
+
+	p.bumpCold(200, swept, []btcutil.Address{bad})
 
 	p.mtx.Lock()
 	okUpTo := p.cold[ok.String()].upTo
 	badUpTo := p.cold[bad.String()].upTo
+	lateUpTo := p.cold[late.String()].upTo
 	p.mtx.Unlock()
 	if okUpTo != 200 {
 		t.Fatalf("verified entry floor = %d, want 200", okUpTo)
@@ -139,9 +149,38 @@ func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 	if badUpTo != 100 {
 		t.Fatalf("failed entry floor advanced to %d, want 100", badUpTo)
 	}
+	if lateUpTo != 150 {
+		t.Fatalf("mid-sweep demotion floor = %d, want 150", lateUpTo)
+	}
 	// The next sweep must look from the failed entry's old floor.
 	if _, from := p.coldSet(); from != 100 {
 		t.Fatalf("next sweep floor = %d, want 100", from)
+	}
+}
+
+// TestDemoteKeepsLowerFloor pins demote's floor merge: re-demoting an address
+// that is already cold must never RAISE its floor — a duplicate demotion
+// (e.g. the reaper re-judging an address whose known transaction a sweep
+// block re-delivered) carries no new verification, and raising the floor
+// would lift it past unexamined heights.
+func TestDemoteKeepsLowerFloor(t *testing.T) {
+	var p watchPolicy
+	a := tAddr(t, 13)
+	p.demote(a, 100)
+	p.demote(a, 500)
+	p.mtx.Lock()
+	upTo := p.cold[a.String()].upTo
+	p.mtx.Unlock()
+	if upTo != 100 {
+		t.Fatalf("floor after re-demotion = %d, want 100", upTo)
+	}
+	// A lower re-demotion (e.g. a discovery seed) does take effect.
+	p.demote(a, 50)
+	p.mtx.Lock()
+	upTo = p.cold[a.String()].upTo
+	p.mtx.Unlock()
+	if upTo != 50 {
+		t.Fatalf("floor after lower re-demotion = %d, want 50", upTo)
 	}
 }
 
@@ -187,22 +226,22 @@ func TestDemoteFundedInternals(t *testing.T) {
 }
 
 // sweepStub is a chain.Backend with the AddressWatcher capability whose
-// Sweep records its fromHeight arguments and returns canned hits.
+// Sweep records its entry arguments and returns canned hits.
 type sweepStub struct {
 	*mockChainClient
-	mtx  sync.Mutex
-	from []int32
-	hits []btcutil.Address
+	mtx   sync.Mutex
+	calls [][]chain.SweepEntry
+	hits  []btcutil.Address
 }
 
 func (s *sweepStub) Unwatch([]btcutil.Address) error { return nil }
 
-func (s *sweepStub) Sweep(addrs []btcutil.Address, fromHeight int32) (
+func (s *sweepStub) Sweep(entries []chain.SweepEntry) (
 	hits, failed []btcutil.Address, err error) {
 
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	s.from = append(s.from, fromHeight)
+	s.calls = append(s.calls, append([]chain.SweepEntry(nil), entries...))
 	return s.hits, nil, nil
 }
 
@@ -212,10 +251,10 @@ func (s *sweepStub) setHits(hits []btcutil.Address) {
 	s.hits = hits
 }
 
-func (s *sweepStub) froms() []int32 {
+func (s *sweepStub) sweepCalls() [][]chain.SweepEntry {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	return append([]int32(nil), s.from...)
+	return append([][]chain.SweepEntry(nil), s.calls...)
 }
 
 // TestMaybeSweepWatermark verifies the persisted cold-set watermark: a
@@ -273,10 +312,22 @@ func TestMaybeSweepWatermark(t *testing.T) {
 	waitWatermark(500)
 	waitIdle()
 
-	// The backend was asked to look a reorg margin below the floor.
-	if from := stub.froms(); len(from) != 1 || from[0] != 100-coldSweepReorgMargin {
-		t.Fatalf("sweep fromHeight = %v, want [%d]",
-			from, 100-coldSweepReorgMargin)
+	// The backend was asked to look a reorg margin below each entry's OWN
+	// floor — never below a set-wide minimum, which would re-hit every
+	// higher entry's already-ingested history on every sweep.
+	calls := stub.sweepCalls()
+	if len(calls) != 1 || len(calls[0]) != 2 {
+		t.Fatalf("sweep calls = %v, want one call with two entries", calls)
+	}
+	froms := make(map[string]int32, 2)
+	for _, e := range calls[0] {
+		froms[e.Addr.String()] = e.FromHeight
+	}
+	if got := froms[a1.String()]; got != 100-coldSweepReorgMargin {
+		t.Fatalf("a1 fromHeight = %d, want %d", got, 100-coldSweepReorgMargin)
+	}
+	if got := froms[a2.String()]; got != 200-coldSweepReorgMargin {
+		t.Fatalf("a2 fromHeight = %d, want %d", got, 200-coldSweepReorgMargin)
 	}
 
 	// All-promoted sweep: the cold set empties and the watermark records
@@ -293,8 +344,8 @@ func TestMaybeSweepWatermark(t *testing.T) {
 	// the next startup's demotion floors don't regress to the last sweep.
 	w.maybeSweep(stub, 900)
 	waitWatermark(900)
-	if from := stub.froms(); len(from) != 2 {
-		t.Fatalf("sweep calls = %d, want 2 (empty set must not sweep)", len(from))
+	if calls := stub.sweepCalls(); len(calls) != 2 {
+		t.Fatalf("sweep calls = %d, want 2 (empty set must not sweep)", len(calls))
 	}
 }
 

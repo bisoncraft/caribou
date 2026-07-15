@@ -88,48 +88,49 @@ func (c *ElectrumClient) SubscriptionCount() int {
 const sweepConcurrency = 16
 
 // Sweep implements the chain.AddressWatcher metered safety net for cold
-// (unwatched) addresses. Each address's history is fetched with bounded
-// concurrency and parked in the probe cache; an address hits when any entry
-// is above fromHeight or in the mempool. Hits are re-subscribed through the
-// rescan-setup path (mempool-only initial emission, reusing the parked
-// reply), and their confirmed entries above fromHeight are then emitted in
-// ascending block order through emitFilteredBlock — the per-address live
-// path cannot order cross-address chains, which corrupts wtxmgr's spend
-// tracking (see subscribeAddress).
-func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error) {
+// (unwatched) addresses. Each entry's history is fetched with bounded
+// concurrency and parked in the probe cache; an entry hits when any history
+// entry is above its own FromHeight or in the mempool (per-entry floors,
+// chain.SweepEntry). Hits are re-subscribed through the rescan-setup path
+// (mempool-only initial emission, reusing the parked reply), and their
+// confirmed entries above their floors are then emitted in ascending block
+// order through emitFilteredBlock — the per-address live path cannot order
+// cross-address chains, which corrupts wtxmgr's spend tracking (see
+// subscribeAddress).
+func (c *ElectrumClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Address, err error) {
 	if err := c.ctx.Err(); err != nil {
 		return nil, nil, fmt.Errorf("electrum: sweep on stopped client: %w", err)
 	}
 
 	type result struct {
-		addr btcutil.Address
-		hist []electrum.HistoryEntry
-		err  error
+		entry SweepEntry
+		hist  []electrum.HistoryEntry
+		err   error
 	}
-	results := make([]result, len(addrs))
+	results := make([]result, len(entries))
 	sem := make(chan struct{}, sweepConcurrency)
 	var wg sync.WaitGroup
-	for i, addr := range addrs {
+	for i, entry := range entries {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, addr btcutil.Address) {
+		go func(i int, entry SweepEntry) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			sh, err := addrScripthash(addr)
+			sh, err := addrScripthash(entry.Addr)
 			if err != nil {
-				results[i] = result{addr: addr, err: err}
+				results[i] = result{entry: entry, err: err}
 				return
 			}
 			hist, err := c.net.GetHistory(c.ctx, sh)
 			if err != nil {
-				results[i] = result{addr: addr, err: err}
+				results[i] = result{entry: entry, err: err}
 				return
 			}
 			c.probeMtx.Lock()
 			c.probeCache[sh] = &probeHistory{status: statusFromHistory(hist), hist: hist}
 			c.probeMtx.Unlock()
-			results[i] = result{addr: addr, hist: hist}
-		}(i, addr)
+			results[i] = result{entry: entry, hist: hist}
+		}(i, entry)
 	}
 	wg.Wait()
 
@@ -140,27 +141,27 @@ func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 			// batch — but the caller must know this address was NOT
 			// verified, so its known-history floor doesn't advance
 			// past heights that were never examined.
-			log.Warnf("electrum: sweep %s: %v", r.addr, r.err)
-			failed = append(failed, r.addr)
+			log.Warnf("electrum: sweep %s: %v", r.entry.Addr, r.err)
+			failed = append(failed, r.entry.Addr)
 			continue
 		}
 		hit := false
 		for _, h := range r.hist {
-			if h.Height <= 0 || h.Height > fromHeight {
+			if h.Height <= 0 || h.Height > r.entry.FromHeight {
 				hit = true
 			}
-			if h.Height > fromHeight {
+			if h.Height > r.entry.FromHeight {
 				matches[h.Height] = append(matches[h.Height], h)
 			}
 		}
 		if !hit {
 			continue
 		}
-		hits = append(hits, r.addr)
+		hits = append(hits, r.entry.Addr)
 		// Re-promotion: subscribe through the rescan-setup path so the
 		// initial emission is mempool-only and the parked history
 		// becomes the diff baseline without a refetch.
-		if err := c.subscribeAddress(r.addr, true); err != nil {
+		if err := c.subscribeAddress(r.entry.Addr, true); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -193,7 +194,7 @@ func (c *ElectrumClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 	c.clearProbeCache()
 	if len(hits) > 0 {
 		log.Infof("electrum: sweep re-promoted %d of %d cold addresses "+
-			"(%d subscriptions now held)", len(hits), len(addrs),
+			"(%d subscriptions now held)", len(hits), len(entries),
 			c.SubscriptionCount())
 	}
 	return hits, failed, nil

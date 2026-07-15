@@ -101,7 +101,7 @@ func TestNeutrinoSweep(t *testing.T) {
 		rescan:              &mockRescanner{updateArgs: list.New()},
 	}
 
-	hits, failed, err := client.Sweep([]btcutil.Address{addr}, 99)
+	hits, failed, err := client.Sweep([]SweepEntry{{Addr: addr, FromHeight: 99}})
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestNeutrinoSweepSpend(t *testing.T) {
 		rescan:              &mockRescanner{updateArgs: list.New()},
 	}
 
-	hits, failed, err := client.Sweep([]btcutil.Address{addr}, 99)
+	hits, failed, err := client.Sweep([]SweepEntry{{Addr: addr, FromHeight: 99}})
 	if err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
@@ -291,8 +291,8 @@ func TestNeutrinoSweepExclusiveFloor(t *testing.T) {
 		rescan:              &mockRescanner{updateArgs: list.New()},
 	}
 
-	// fromHeight == the block's height: outside the range, no hit.
-	hits, _, err := client.Sweep([]btcutil.Address{addr}, 100)
+	// FromHeight == the block's height: outside the range, no hit.
+	hits, _, err := client.Sweep([]SweepEntry{{Addr: addr, FromHeight: 100}})
 	if err != nil {
 		t.Fatalf("Sweep(100): %v", err)
 	}
@@ -305,8 +305,37 @@ func TestNeutrinoSweepExclusiveFloor(t *testing.T) {
 	default:
 	}
 
+	// The floor is per entry: a second entry with a deep floor extends the
+	// WALK below the first entry's floor, but must not drag the first
+	// entry's hit judgment down with it — the boundary block is still the
+	// first entry's already-verified history. (This is the set-wide-minimum
+	// regression: every entry above the minimum re-hit its own history on
+	// every sweep.)
+	var h20b [20]byte
+	h20b[0] = 0xef
+	other, err := btcutil.NewAddressWitnessPubKeyHash(h20b[:], &chaincfg.RegressionNetParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hits, _, err = client.Sweep([]SweepEntry{
+		{Addr: addr, FromHeight: 100},
+		{Addr: other, FromHeight: 50},
+	})
+	if err != nil {
+		t.Fatalf("Sweep(per-entry): %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("hits = %v, want none: a deep co-entry floor must not "+
+			"re-hit another entry's verified history", hits)
+	}
+	select {
+	case n := <-client.enqueueNotification:
+		t.Fatalf("unexpected notification %T from a co-entry's deep floor", n)
+	default:
+	}
+
 	// One block lower: in range, hit.
-	hits, _, err = client.Sweep([]btcutil.Address{addr}, 99)
+	hits, _, err = client.Sweep([]SweepEntry{{Addr: addr, FromHeight: 99}})
 	if err != nil {
 		t.Fatalf("Sweep(99): %v", err)
 	}

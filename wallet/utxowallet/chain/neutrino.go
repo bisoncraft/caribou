@@ -587,26 +587,39 @@ var sweepBlockDelay = 2 * time.Millisecond
 
 // Sweep is the chain.AddressWatcher metered check for cold (unwatched)
 // addresses on neutrino: a bounded, THROTTLED cfilter rescan over
-// (fromHeight, tip]. For each block it tests the block's compact filter
+// (min FromHeight, tip]. For each block it tests the block's compact filter
 // against the cold scripts and, on a match, fetches the block and emits the
 // transactions that pay to or spend from a cold address so the wallet
-// ingests them. Hits are re-added to the watch list (re-promotion). The
-// check is all-or-nothing: any error fails the whole range (retried next
-// interval, ingestion is idempotent), so failed is always nil and errors
-// flow through err.
-func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits, failed []btcutil.Address, err error) {
-	if len(addrs) == 0 {
+// ingests them — an address's matches count only strictly above its own
+// entry's FromHeight (per-entry floors, chain.SweepEntry). Hits are re-added
+// to the watch list (re-promotion). The check is all-or-nothing: any error
+// fails the whole range (retried next interval, ingestion is idempotent), so
+// failed is always nil and errors flow through err.
+func (s *NeutrinoClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Address, err error) {
+	if len(entries) == 0 {
 		return nil, nil, nil
 	}
-	scripts := make([][]byte, 0, len(addrs))
-	byScript := make(map[string]btcutil.Address, len(addrs))
-	for _, a := range addrs {
-		script, err := txscript.PayToAddrScript(a)
+	scripts := make([][]byte, 0, len(entries))
+	byScript := make(map[string]SweepEntry, len(entries))
+	// The walk covers every entry's range in one pass: it starts just above
+	// the lowest floor, exclusive — activity strictly above an entry's own
+	// floor, per chain.AddressWatcher and matching the electrum backend's
+	// h > FromHeight — so the caller's reorg-margin arithmetic holds
+	// exactly. Clamp to -1 so a floor of -1 (or below) scans from genesis.
+	minFrom := int32(-1)
+	for i, e := range entries {
+		script, err := txscript.PayToAddrScript(e.Addr)
 		if err != nil {
 			return nil, nil, err
 		}
 		scripts = append(scripts, script)
-		byScript[string(script)] = a
+		if e.FromHeight < -1 {
+			e.FromHeight = -1
+		}
+		byScript[string(script)] = e
+		if i == 0 || e.FromHeight < minFrom {
+			minFrom = e.FromHeight
+		}
 	}
 
 	best, err := s.CS.BestBlock()
@@ -614,16 +627,9 @@ func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 		return nil, nil, err
 	}
 	tip := best.Height
-	// The range is exclusive of fromHeight — activity strictly above it, per
-	// chain.AddressWatcher and matching the electrum backend's h > fromHeight
-	// — so the caller's reorg-margin arithmetic holds exactly. Clamp to -1 so
-	// a fromHeight of -1 (or below) scans from genesis.
-	if fromHeight < -1 {
-		fromHeight = -1
-	}
 
 	hitAddrs := make(map[string]btcutil.Address)
-	for height := fromHeight + 1; height <= tip; height++ {
+	for height := minFrom + 1; height <= tip; height++ {
 		select {
 		case <-s.quit:
 			return nil, nil, errors.New("neutrino: sweep aborted")
@@ -661,7 +667,7 @@ func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 			return nil, nil, err
 		}
 		log.Infof("neutrino: sweep re-promoted %d of %d cold addresses",
-			len(hits), len(addrs))
+			len(hits), len(entries))
 	}
 	return hits, nil, nil
 }
@@ -669,9 +675,12 @@ func (s *NeutrinoClient) Sweep(addrs []btcutil.Address, fromHeight int32) (hits,
 // sweepMatchedBlock fetches a filter-matched block, emits the transactions
 // that pay to or spend from a cold address, and records the hit addresses. A
 // cfilter match is probabilistic, so the block is scanned to confirm the
-// actual matches.
+// actual matches. A script match counts for its entry only strictly above
+// the entry's own floor: the single walk starts at the set's minimum, and
+// matches at or below an entry's own FromHeight are that entry's
+// already-ingested history, not activity.
 func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
-	byScript map[string]btcutil.Address, hitAddrs map[string]btcutil.Address) error {
+	byScript map[string]SweepEntry, hitAddrs map[string]btcutil.Address) error {
 
 	blk, err := s.CS.GetBlock(*hash)
 	if err != nil {
@@ -681,8 +690,8 @@ func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 	for _, tx := range blk.Block.Transactions {
 		var matched bool
 		for _, out := range tx.TxOut {
-			if a, ok := byScript[string(out.PkScript)]; ok {
-				hitAddrs[a.String()] = a
+			if e, ok := byScript[string(out.PkScript)]; ok && height > e.FromHeight {
+				hitAddrs[e.Addr.String()] = e.Addr
 				matched = true
 			}
 		}
@@ -700,8 +709,8 @@ func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 			if err != nil {
 				continue // e.g. a coinbase or non-standard input
 			}
-			if a, ok := byScript[string(pkScript.Script())]; ok {
-				hitAddrs[a.String()] = a
+			if e, ok := byScript[string(pkScript.Script())]; ok && height > e.FromHeight {
+				hitAddrs[e.Addr.String()] = e.Addr
 				matched = true
 			}
 		}
