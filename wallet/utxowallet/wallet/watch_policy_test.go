@@ -5,6 +5,7 @@
 package wallet
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -113,7 +114,7 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 	if want := int32(500 + externalQuietDepth - 1); from != want {
 		t.Fatalf("sweep fromHeight = %d, want %d", from, want)
 	}
-	p.promote(cold)
+	p.promote(cold, 600+externalQuietDepth)
 	if got, _ := p.coldSet(); len(got) != 0 {
 		t.Fatalf("cold set after promote = %v, want empty", got)
 	}
@@ -127,14 +128,14 @@ func TestWatchPolicyReapExternal(t *testing.T) {
 func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 	var p watchPolicy
 	ok, bad := tAddr(t, 10), tAddr(t, 11)
-	p.demote(ok, 100, false)
-	p.demote(bad, 100, false)
+	p.demote(ok, 100, false, false)
+	p.demote(bad, 100, false, false)
 
 	_, swept := p.sweepSet(false)
 
 	// Demoted mid-sweep: not in the snapshot, floor must survive the bump.
 	late := tAddr(t, 12)
-	p.demote(late, 150, false)
+	p.demote(late, 150, false, false)
 
 	p.bumpCold(200, swept, []btcutil.Address{bad})
 
@@ -166,8 +167,8 @@ func TestWatchPolicySweepPartialFailureFloor(t *testing.T) {
 func TestDemoteKeepsLowerFloor(t *testing.T) {
 	var p watchPolicy
 	a := tAddr(t, 13)
-	p.demote(a, 100, false)
-	p.demote(a, 500, true)
+	p.demote(a, 100, false, false)
+	p.demote(a, 500, true, false)
 	p.mtx.Lock()
 	upTo, slow := p.cold[a.String()].upTo, p.cold[a.String()].slow
 	p.mtx.Unlock()
@@ -180,7 +181,7 @@ func TestDemoteKeepsLowerFloor(t *testing.T) {
 		t.Fatal("fast entry downgraded to slow by a re-demotion")
 	}
 	// A lower re-demotion (e.g. a discovery seed) does take effect.
-	p.demote(a, 50, false)
+	p.demote(a, 50, false, false)
 	p.mtx.Lock()
 	upTo = p.cold[a.String()].upTo
 	p.mtx.Unlock()
@@ -238,23 +239,47 @@ func TestTierInternals(t *testing.T) {
 }
 
 // sweepStub is a chain.Backend with the AddressWatcher capability whose
-// Sweep records its entry arguments and returns canned hits.
+// Sweep records its entry arguments and returns canned hits. It logs watch
+// and unwatch operations in order, and can hold an in-flight Sweep open
+// (release) so tests can interleave the reaper with a running sweep.
 type sweepStub struct {
 	*mockChainClient
-	mtx   sync.Mutex
-	calls [][]chain.SweepEntry
-	hits  []btcutil.Address
+	mtx     sync.Mutex
+	calls   [][]chain.SweepEntry
+	hits    []btcutil.Address
+	release chan struct{}
+	ops     []string
 }
 
-func (s *sweepStub) Unwatch([]btcutil.Address) error { return nil }
+func (s *sweepStub) Unwatch(addrs []btcutil.Address) error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	for _, a := range addrs {
+		s.ops = append(s.ops, "unwatch:"+a.String())
+	}
+	return nil
+}
+
+func (s *sweepStub) NotifyReceived(addrs []btcutil.Address) error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	for _, a := range addrs {
+		s.ops = append(s.ops, "watch:"+a.String())
+	}
+	return nil
+}
 
 func (s *sweepStub) Sweep(entries []chain.SweepEntry) (
 	hits, failed []btcutil.Address, err error) {
 
 	s.mtx.Lock()
-	defer s.mtx.Unlock()
 	s.calls = append(s.calls, append([]chain.SweepEntry(nil), entries...))
-	return s.hits, nil, nil
+	release, canned := s.release, s.hits
+	s.mtx.Unlock()
+	if release != nil {
+		<-release
+	}
+	return canned, nil, nil
 }
 
 func (s *sweepStub) setHits(hits []btcutil.Address) {
@@ -267,6 +292,30 @@ func (s *sweepStub) sweepCalls() [][]chain.SweepEntry {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	return append([][]chain.SweepEntry(nil), s.calls...)
+}
+
+func (s *sweepStub) opsLog() []string {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	return append([]string(nil), s.ops...)
+}
+
+// waitSweepIdle polls until no sweep goroutine is in flight.
+func waitSweepIdle(t *testing.T, p *watchPolicy) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		p.mtx.Lock()
+		sweeping := p.sweeping
+		p.mtx.Unlock()
+		if !sweeping {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sweep goroutine did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // TestMaybeSweepWatermark verifies the persisted cold-set watermark: a
@@ -315,8 +364,8 @@ func TestMaybeSweepWatermark(t *testing.T) {
 
 	stub := &sweepStub{mockChainClient: &mockChainClient{}}
 	a1, a2 := tAddr(t, 20), tAddr(t, 21)
-	p.demote(a1, 100, false)
-	p.demote(a2, 200, false)
+	p.demote(a1, 100, false, false)
+	p.demote(a2, 200, false, false)
 
 	// First due sweep (lastSweepTip zero). No hits: floors bump to the
 	// launch tip and the watermark persists as the post-bump set minimum.
@@ -379,6 +428,62 @@ func TestSweepDueChainScaled(t *testing.T) {
 	}
 }
 
+// TestSweepReapInterleave pins the serialization of the sweep completion
+// against the reaper: a sweep hit whose transactions ingest mid-sweep is
+// instantly reap-eligible off its true (old) height, so the reaper's
+// demote-then-Unwatch can run against an in-flight sweep's hit. The hit must
+// terminate tracked and watched — the unserialized pair left it in neither
+// set with its backend watch dropped, invisible until seed restore.
+func TestSweepReapInterleave(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+	p := &w.watchPol
+	p.sweepEvery = 10
+
+	release := make(chan struct{})
+	stub := &sweepStub{mockChainClient: &mockChainClient{}, release: release}
+	a := tAddr(t, 40)
+	p.demote(a, 100, false, true)
+	stub.setHits([]btcutil.Address{a})
+
+	// Launch the sweep; it parks inside the stub's Sweep.
+	w.maybeSweep(stub, 500)
+
+	// Mid-sweep, the sweep's block emission ingests a's transaction: the
+	// tracker re-notes it at its true (old) height — instantly
+	// reap-eligible.
+	p.note(a, true, chainhash.Hash{9}, 200)
+
+	// The reaper runs while the sweep is still in flight: a reaps, is
+	// re-tiered, and unwatched.
+	w.reapWatches(stub, 500)
+
+	// The sweep completes with a as a hit. The completion must re-assert
+	// the watch and re-track the hit under the same gate the reaper used.
+	close(release)
+	waitSweepIdle(t, p)
+
+	p.mtx.Lock()
+	_, tracked := p.tracked[a.String()]
+	_, cold := p.cold[a.String()]
+	p.mtx.Unlock()
+	if !tracked || cold {
+		t.Fatalf("hit ended tracked=%v cold=%v, want tracked and not cold",
+			tracked, cold)
+	}
+	// The hit's final watch operation must be the completion's re-watch,
+	// not the reaper's unwatch.
+	var last string
+	for _, op := range stub.opsLog() {
+		if strings.HasSuffix(op, a.String()) {
+			last = op
+		}
+	}
+	if !strings.HasPrefix(last, "watch:") {
+		t.Fatalf("final watch op = %q, want the completion's re-watch", last)
+	}
+}
+
 // TestMaybeSweepSlowTier pins the slow tier's cadence: an empty internal in
 // the slow tier is excluded from ordinary intervals and joins every
 // slowSweepFactor'th one, and the slow watermark advances only when its tier
@@ -415,8 +520,8 @@ func TestMaybeSweepSlowTier(t *testing.T) {
 
 	stub := &sweepStub{mockChainClient: &mockChainClient{}}
 	fast, slow := tAddr(t, 30), tAddr(t, 31)
-	p.demote(fast, 100, false)
-	p.demote(slow, 100, true)
+	p.demote(fast, 100, false, false)
+	p.demote(slow, 100, true, true)
 
 	// First sweep: both cadences start at zero, so the slow tier joins.
 	w.maybeSweep(stub, 1000)

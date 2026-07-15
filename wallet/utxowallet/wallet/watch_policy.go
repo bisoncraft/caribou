@@ -67,6 +67,18 @@ type watchPolicy struct {
 	mtx     sync.Mutex
 	tracked map[string]*addrWatch
 
+	// gate serializes the two compound set-plus-backend transitions against
+	// each other: the reaper's demote-then-Unwatch (reapWatches) and the
+	// sweep completion's rewatch-then-promote (maybeSweep). Each is atomic
+	// under gate, so their interleavings compose to a consistent terminal
+	// state; unserialized, the pair could strand a sweep hit outside both
+	// sets with its backend watch dropped (reap moves the address to cold
+	// and, after the sweep's completion deletes that cold entry, unwatches
+	// it — nothing owns the address anymore). gate is taken before mtx and
+	// never the other way around; backend calls under gate take only their
+	// own internal locks.
+	gate sync.Mutex
+
 	// cold holds demoted (unwatched) addresses awaiting metered sweeps,
 	// tiered by event probability: the fast tier holds used externals (any
 	// third party can pay them at any time) and funded internals (the same
@@ -105,6 +117,9 @@ type coldEntry struct {
 	// fast-tier entries (used externals, funded internals) sweep every
 	// interval.
 	slow bool
+	// internal records the address's branch so a promotion can rebuild the
+	// tracker entry with the right quiet depth.
+	internal bool
 }
 
 // externalQuiet and sweepDue return the effective depths (test overrides or
@@ -183,7 +198,7 @@ func (p *watchPolicy) reap(tip int32) (done, internals []btcutil.Address) {
 			internals = append(internals, iw.addr)
 			continue
 		}
-		p.demoteLocked(iw.addr, tip, false)
+		p.demoteLocked(iw.addr, tip, false, false)
 	}
 	return done, internals
 }
@@ -248,6 +263,10 @@ func (w *Wallet) reapWatches(chainClient chain.Backend, tip int32) {
 	if !ok {
 		return
 	}
+	// The demote-then-Unwatch pair is atomic under gate against the sweep
+	// completion's rewatch-then-promote (see watchPolicy.gate).
+	w.watchPol.gate.Lock()
+	defer w.watchPol.gate.Unlock()
 	done, internals := w.watchPol.reap(tip)
 	if len(done) == 0 {
 		return
@@ -290,7 +309,7 @@ func (w *Wallet) tierInternals(addrs []btcutil.Address, tip int32) {
 			"demoting all %d reaped internals at the fast cadence",
 			err, len(addrs))
 		for _, addr := range addrs {
-			w.watchPol.demote(addr, tip, false)
+			w.watchPol.demote(addr, tip, false, true)
 		}
 		return
 	}
@@ -300,7 +319,7 @@ func (w *Wallet) tierInternals(addrs []btcutil.Address, tip int32) {
 			_, isFunded := funded[string(script)]
 			slow = !isFunded
 		}
-		w.watchPol.demote(addr, tip, slow)
+		w.watchPol.demote(addr, tip, slow, true)
 	}
 }
 
@@ -416,7 +435,7 @@ func (w *Wallet) classifyWatchSet(dbtx walletdb.ReadWriteTx,
 			if slow {
 				floor = slowFloor
 			}
-			w.watchPol.demote(addr, floor, slow)
+			w.watchPol.demote(addr, floor, slow, ma.Internal())
 		}
 	}
 	keptUnspent := unspent[:0]
@@ -569,15 +588,15 @@ const coldSweepReorgMargin = watchFinalityDepth - 1
 // judgment requires is always safe, and the one same-startup collision
 // (discovery seeding an entry fast before classification re-judges it slow)
 // must keep the sooner sweep.
-func (p *watchPolicy) demote(addr btcutil.Address, upTo int32, slow bool) {
+func (p *watchPolicy) demote(addr btcutil.Address, upTo int32, slow, internal bool) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
-	p.demoteLocked(addr, upTo, slow)
+	p.demoteLocked(addr, upTo, slow, internal)
 }
 
 // demoteLocked is demote with p.mtx already held (the reaper demotes inside
 // its scan).
-func (p *watchPolicy) demoteLocked(addr btcutil.Address, upTo int32, slow bool) {
+func (p *watchPolicy) demoteLocked(addr btcutil.Address, upTo int32, slow, internal bool) {
 	if p.cold == nil {
 		p.cold = make(map[string]*coldEntry)
 	}
@@ -589,16 +608,44 @@ func (p *watchPolicy) demoteLocked(addr btcutil.Address, upTo int32, slow bool) 
 		e.slow = e.slow && slow
 		return
 	}
-	p.cold[key] = &coldEntry{addr: addr, upTo: upTo, slow: slow}
+	p.cold[key] = &coldEntry{addr: addr, upTo: upTo, slow: slow, internal: internal}
 }
 
-// promote removes addresses from the cold set (a sweep hit re-established
-// their watch; ingestion re-tracks them).
-func (p *watchPolicy) promote(addrs []btcutil.Address) {
+// promote moves sweep hits out of the cold set and back into the tracked
+// set, seeded with lastMined = tip so the reaper holds them hot for a full
+// quiet depth from now. Relying on ingestion to re-track them instead is a
+// hole: the hit's transactions may have been ingested BEFORE the promotion
+// runs (the sweep emits per matched block mid-walk), and a re-delivered
+// known transaction may be judged reapable off its true (old) height
+// immediately — the hit must end tracked regardless of how its ingestion
+// interleaved. Addresses not in the cold set are skipped: nothing else
+// removes entries mid-sweep, so a miss means the address is already owned
+// elsewhere.
+func (p *watchPolicy) promote(addrs []btcutil.Address, tip int32) {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 	for _, addr := range addrs {
-		delete(p.cold, addr.String())
+		key := addr.String()
+		e, ok := p.cold[key]
+		if !ok {
+			continue
+		}
+		delete(p.cold, key)
+		if p.tracked == nil {
+			p.tracked = make(map[string]*addrWatch)
+		}
+		if iw, ok := p.tracked[key]; ok {
+			if tip > iw.lastMined {
+				iw.lastMined = tip
+			}
+			continue
+		}
+		p.tracked[key] = &addrWatch{
+			addr:      addr,
+			internal:  e.internal,
+			lastMined: tip,
+			unmined:   make(map[chainhash.Hash]struct{}),
+		}
 	}
 }
 
@@ -779,7 +826,22 @@ func (w *Wallet) maybeSweep(chainClient chain.Backend, tip int32) {
 			p.mtx.Unlock()
 			return
 		}
-		p.promote(hits)
+		// The rewatch-then-promote pair is atomic under gate against the
+		// reaper's demote-then-Unwatch (see watchPolicy.gate). The backend
+		// re-watched the hits inside Sweep, but a reap interleaving between
+		// that and this completion can have unwatched them again (a
+		// mid-sweep ingestion makes a hit instantly reap-eligible off its
+		// true height); re-asserting under gate makes the terminal state
+		// watched-and-tracked no matter how the two flows interleaved.
+		p.gate.Lock()
+		defer p.gate.Unlock()
+		if len(hits) > 0 {
+			if err := chainClient.NotifyReceived(hits); err != nil {
+				log.Errorf("Cold-address sweep: re-watch of %d hits: %v",
+					len(hits), err)
+			}
+		}
+		p.promote(hits, tip)
 		p.bumpCold(tip, swept, failed)
 		// Persist each swept tier's verified watermark for the next
 		// startup's demotion floors: the tier minimum after this sweep's
