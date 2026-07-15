@@ -2,7 +2,6 @@ package lexi
 
 import (
 	"github.com/bisoncraft/caribou/util"
-	v1badger "github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -14,7 +13,6 @@ type badgerLoggerWrapper struct {
 }
 
 var _ badger.Logger = (*badgerLoggerWrapper)(nil)
-var _ v1badger.Logger = (*badgerLoggerWrapper)(nil)
 
 // Debugf -> util.Logger.Tracef
 func (log *badgerLoggerWrapper) Debugf(s string, a ...any) {

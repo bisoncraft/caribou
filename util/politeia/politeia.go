@@ -25,9 +25,6 @@ import (
 
 const (
 	PoliteiaMainnetHost = "https://proposals.decred.org"
-
-	// dbVersion is the current required version of the proposals db.
-	dbVersion = 1
 )
 
 type Politeia struct {
@@ -54,35 +51,6 @@ func New(ctx context.Context, politeiaURL string, dbPath string, log util.Logger
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error initializing db: %w", err)
-	}
-
-	version, err := db.GetDBVersion()
-	if err != nil {
-		return nil, err
-	}
-
-	// Checks if the correct db version has been set. Must happen before
-	// table/index setup since DropAll destroys lexi internal mappings.
-	if version == 0 {
-		if err = db.SetDBVersion(dbVersion); err != nil {
-			return nil, fmt.Errorf("error setting db version: %w", err)
-		}
-
-		log.Infof("Proposals DB version %v was set...", dbVersion)
-	} else if version > dbVersion {
-		return nil, fmt.Errorf("db version is newer than expected: got %v, want %v", version, dbVersion)
-	} else if version < dbVersion {
-		log.Warnf("Proposals DB version is outdated: got %v, want %v. Attempting to update...", version, dbVersion)
-
-		if err = db.DropAll(); err != nil {
-			return nil, fmt.Errorf("error dropping db: %w", err)
-		}
-
-		if err = db.SetDBVersion(dbVersion); err != nil {
-			return nil, fmt.Errorf("error setting db version: %w", err)
-		}
-
-		log.Infof("Proposals DB version %v was set...", dbVersion)
 	}
 
 	proposalsTable, err := db.Table(proposalsTable)

@@ -9,13 +9,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
-	v1badger "github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -36,11 +33,10 @@ func convertError(err error) error {
 // the ability to add indexed data.
 type DB struct {
 	*badger.DB
-	log        util.Logger
-	idSeq      *badger.Sequence
-	wg         sync.WaitGroup
-	updateWG   sync.WaitGroup
-	upgradeTxn *badger.Txn
+	log      util.Logger
+	idSeq    *badger.Sequence
+	wg       sync.WaitGroup
+	updateWG sync.WaitGroup
 }
 
 // Config is the configuration settings for the Lexi DB.
@@ -49,108 +45,13 @@ type Config struct {
 	Log  util.Logger
 }
 
-// BadgerV1Update attempts to update old badger databases from v1 to v4.
-func BadgerV1Update(path string, v4Path string, logger util.Logger, opts badger.Options) (*badger.DB, error) {
-	// Copy the old db directory as is.
-	logger.Warnf("Detected incompatible database version at %s. "+
-		"Attempting to update.", path)
-	// Open the old db using v1 badger.
-	v1opts := v1badger.DefaultOptions(path).WithLogger(&badgerLoggerWrapper{logger})
-	oldDB, err := v1badger.Open(v1opts)
-	if err != nil {
-		return nil, err
-	}
-	defer oldDB.Close()
-	// Back up values to a temporary file.
-	tempPath := path + ".temp"
-	tempF, err := os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(tempPath)
-	if _, err := oldDB.Backup(tempF, 0); err != nil {
-		tempF.Close()
-		return nil, err
-	}
-	tempF.Close()
-	tempF, err = os.OpenFile(tempPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, err
-	}
-	defer tempF.Close()
-	// Open a new database at the v4 path and attempt to load. Delete if that fails.
-	db, err := badger.Open(opts)
-	if err != nil {
-		return nil, err
-	}
-	maxPendingWrites := 16
-	if err := db.Load(tempF, maxPendingWrites); err != nil {
-		db.Close()
-		defer os.Remove(v4Path)
-		return nil, err
-	}
-	return db, nil
-}
-
-const version4Suffix = "_v4"
-
-// NeedsV1toV4Update returns whether the database needs an upgrade from v1 to
-// v4. Works by searching for a directory with the v4 suffix.
-func NeedsV1toV4Update(path string) (string, bool, error) {
-	path = strings.TrimRight(path, "/")
-	lenDiff := len(path) - len(version4Suffix)
-	var v4Path string
-	// May be already pointing to a v4 directory.
-	if lenDiff >= 0 && path[lenDiff:] == version4Suffix {
-		v4Path = path
-		path = path[:lenDiff]
-	} else {
-		v4Path = fmt.Sprintf("%s%s", path, version4Suffix)
-	}
-	_, err := os.Stat(v4Path)
-	if err == nil {
-		// v4 directory exists where expected
-		return v4Path, false, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", false, err
-	}
-	_, err = os.Stat(path)
-	if err == nil {
-		// v1 directory found, update it
-		return v4Path, true, nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return "", false, err
-	}
-	// Neither directory exists, new db.
-	return v4Path, false, nil
-}
-
-// New constructs a new Lexi DB. Starting at badger v4, badger versions are
-// appended to the directory path, i.e. "path_v4".
+// New constructs a new Lexi DB at the directory named by cfg.Path.
 func New(cfg *Config) (*DB, error) {
-	v4Path, needs, err := NeedsV1toV4Update(cfg.Path)
+	logger := cfg.Log.SubLogger("BADG")
+	opts := badger.DefaultOptions(cfg.Path).WithLogger(&badgerLoggerWrapper{logger})
+	bdb, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
-	}
-	logger := cfg.Log.SubLogger("BADG")
-	opts := badger.DefaultOptions(v4Path).WithLogger(&badgerLoggerWrapper{logger})
-	var bdb *badger.DB
-	if needs {
-		bdb, err = BadgerV1Update(cfg.Path, v4Path, logger, opts)
-		if err != nil {
-			logger.Warnf("Unable to update old db, creating new one: %v", err)
-			bdb, err = badger.Open(opts)
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		bdb, err = badger.Open(opts)
-		if err != nil {
-			return nil, err
-		}
 	}
 	idSeq, err := bdb.GetSequence(PrefixedKey(primarySequencePrefix, []byte{0x00}), 1000)
 	if err != nil {
@@ -195,39 +96,6 @@ func (db *DB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	return &db.wg, nil
 }
 
-// GetDBVersion retrieves the current database version.
-// If the version was never set, 0 is returned.
-func (db *DB) GetDBVersion() (version uint32, err error) {
-	err = db.View(func(txn *badger.Txn) error {
-		versionItem, err := txn.Get(versionPrefix[:])
-		if err != nil {
-			if err == badger.ErrKeyNotFound {
-				version = 0
-				return nil
-			}
-			return err
-		}
-		return versionItem.Value(func(b []byte) error {
-			version = binary.BigEndian.Uint32(b)
-			return nil
-		})
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	return
-}
-
-// SetDBVersion sets the current database version in the DB.
-func (db *DB) SetDBVersion(version uint32) error {
-	return db.Update(func(txn *badger.Txn) error {
-		b := make([]byte, 4)
-		binary.BigEndian.PutUint32(b[:], version)
-		return txn.Set(versionPrefix[:], b)
-	})
-}
-
 // Update: badger can return an ErrConflict if a read and write happen
 // concurrently. This bugs the hell out of me, because I though that if a
 // database was ACID-compliant, this was impossible, but I guess not. Either
@@ -240,11 +108,7 @@ func (db *DB) Update(f func(txn *badger.Txn) error) (err error) {
 	sleepTime := 5 * time.Millisecond
 
 	for i := 0; i < maxRetries; i++ {
-		if db.upgradeTxn == nil {
-			err = db.DB.Update(f)
-		} else {
-			err = f(db.upgradeTxn)
-		}
+		err = db.DB.Update(f)
 		if err == nil || !errors.Is(err, badger.ErrConflict) {
 			return err
 		}
@@ -256,20 +120,10 @@ func (db *DB) Update(f func(txn *badger.Txn) error) (err error) {
 	return err
 }
 
-// Upgrade provides a way to perform a series of db updates under a single
-// transaction. All calls to Upgrade must happen synchronously when the
-// database is initialized and not being used by any other goroutines.
-func (db *DB) Upgrade(upgrade func() error) error {
-	return db.DB.Update(func(txn *badger.Txn) error {
-		db.upgradeTxn = txn
-		defer func() {
-			db.upgradeTxn = nil
-		}()
-		return upgrade()
-	})
-}
-
-func (db *DB) prefixForNameImpl(name string, existing bool) (prefix keyPrefix, _ error) {
+// prefixForName returns a unique prefix for the provided name and logs the
+// relationship in the DB. Repeated calls to prefixForName with the same name
+// will return the same prefix, including through restarts.
+func (db *DB) prefixForName(name string) (prefix keyPrefix, _ error) {
 	nameKey := PrefixedKey(nameToPrefixPrefix, []byte(name))
 	return prefix, db.Update(func(txn *badger.Txn) error {
 		it, err := txn.Get(nameKey)
@@ -278,9 +132,6 @@ func (db *DB) prefixForNameImpl(name string, existing bool) (prefix keyPrefix, _
 				prefix = bytesToPrefix(b)
 				return nil
 			})
-		}
-		if errors.Is(err, badger.ErrKeyNotFound) && existing {
-			return badger.ErrKeyNotFound
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return fmt.Errorf("error getting name: %w", err)
@@ -299,20 +150,6 @@ func (db *DB) prefixForNameImpl(name string, existing bool) (prefix keyPrefix, _
 		}
 		return nil
 	})
-}
-
-// existingPrefixForName is like prefixForName, but it does not create a
-// new prefix if the name is not found. Instead, it returns
-// badger.ErrKeyNotFound.
-func (db *DB) existingPrefixForName(name string) (prefix keyPrefix, _ error) {
-	return db.prefixForNameImpl(name, true)
-}
-
-// prefixForName returns a unique prefix for the provided name and logs the
-// relationship in the DB. Repeated calls to prefixForName with the same name
-// will return the same prefix, including through restarts.
-func (db *DB) prefixForName(name string) (prefix keyPrefix, _ error) {
-	return db.prefixForNameImpl(name, false)
 }
 
 func (db *DB) nextID() (dbID DBID, _ error) {
