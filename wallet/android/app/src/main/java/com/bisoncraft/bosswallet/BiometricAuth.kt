@@ -99,6 +99,17 @@ class BiometricAuth(
     fun enroll(activity: AppCompatActivity, pw: ByteArray, onResult: (Boolean) -> Unit) {
         val cipher = try {
             initEncryptCipher()
+        } catch (_: KeyPermanentlyInvalidatedException) {
+            // An enrollment change killed the key. Drop it and make a fresh one:
+            // getOrCreateKey would otherwise keep handing back the dead key,
+            // failing every future enroll with no in-app way out. Nothing is lost
+            // - enroll overwrites the stored secret anyway.
+            clear()
+            try {
+                initEncryptCipher()
+            } catch (_: Exception) {
+                onResult(false); return
+            }
         } catch (_: Exception) {
             onResult(false); return
         }
