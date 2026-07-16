@@ -421,20 +421,14 @@ func inputYieldsPositively(credit *wire.TxOut,
 	return inputFee < btcutil.Amount(credit.Value)
 }
 
-// addrMgrWithChangeSource returns the address manager bucket and a change
-// source that returns change addresses from said address manager. The change
-// addresses will come from the specified key scope and account, unless a key
-// scope is not specified. In that case, change addresses will always come from
-// the P2WKH key scope.
-func (w *Wallet) addrMgrWithChangeSource(dbtx walletdb.ReadWriteTx,
-	changeKeyScope *waddrmgr.KeyScope, account uint32) (
-	walletdb.ReadWriteBucket, *txauthor.ChangeSource, error) {
+// changeScriptSize returns the expected script size for a change output in
+// the given key scope and account, honoring any account address-schema
+// override. A nil changeKeyScope selects the default change scope (taproot,
+// purpose 86), matching addrMgrWithChangeSource.
+func (w *Wallet) changeScriptSize(addrmgrNs walletdb.ReadBucket,
+	changeKeyScope *waddrmgr.KeyScope, account uint32) (int, error) {
 
-	// Determine the address type for change addresses of the given
-	// account.
 	if changeKeyScope == nil {
-		// Default to taproot (purpose 86) with the correct coin type for
-		// this chain.
 		defaultScope := w.ScopeForPurpose(86)
 		changeKeyScope = &defaultScope
 	}
@@ -442,33 +436,51 @@ func (w *Wallet) addrMgrWithChangeSource(dbtx walletdb.ReadWriteTx,
 
 	// It's possible for the account to have an address schema override, so
 	// prefer that if it exists.
-	addrmgrNs := dbtx.ReadWriteBucket(waddrmgrNamespaceKey)
 	scopeMgr, err := w.Manager.FetchScopedKeyManager(*changeKeyScope)
 	if err != nil {
-		return nil, nil, err
+		return 0, err
 	}
 	accountInfo, err := scopeMgr.AccountProperties(addrmgrNs, account)
 	if err != nil {
-		return nil, nil, err
+		return 0, err
 	}
 	if accountInfo.AddrSchema != nil {
 		addrType = accountInfo.AddrSchema.InternalAddrType
 	}
 
-	// Compute the expected size of the script for the change address type.
-	var scriptSize int
 	switch addrType {
 	case waddrmgr.PubKeyHash:
-		scriptSize = txsizes.P2PKHPkScriptSize
+		return txsizes.P2PKHPkScriptSize, nil
 	case waddrmgr.NestedWitnessPubKey:
-		scriptSize = txsizes.NestedP2WPKHPkScriptSize
+		return txsizes.NestedP2WPKHPkScriptSize, nil
 	case waddrmgr.WitnessPubKey:
-		scriptSize = txsizes.P2WPKHPkScriptSize
+		return txsizes.P2WPKHPkScriptSize, nil
 	case waddrmgr.TaprootPubKey:
-		scriptSize = txsizes.P2TRPkScriptSize
+		return txsizes.P2TRPkScriptSize, nil
 	default:
-		return nil, nil, fmt.Errorf("unsupported address type: %v",
-			addrType)
+		return 0, fmt.Errorf("unsupported address type: %v", addrType)
+	}
+}
+
+// addrMgrWithChangeSource returns the address manager bucket and a change
+// source that returns change addresses from said address manager. The change
+// addresses will come from the specified key scope and account, unless a key
+// scope is not specified. In that case, change addresses will always come from
+// the default (taproot) key scope.
+func (w *Wallet) addrMgrWithChangeSource(dbtx walletdb.ReadWriteTx,
+	changeKeyScope *waddrmgr.KeyScope, account uint32) (
+	walletdb.ReadWriteBucket, *txauthor.ChangeSource, error) {
+
+	if changeKeyScope == nil {
+		// Default to taproot (purpose 86) with the correct coin type for
+		// this chain.
+		defaultScope := w.ScopeForPurpose(86)
+		changeKeyScope = &defaultScope
+	}
+	addrmgrNs := dbtx.ReadWriteBucket(waddrmgrNamespaceKey)
+	scriptSize, err := w.changeScriptSize(addrmgrNs, changeKeyScope, account)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	newChangeScript := func() ([]byte, error) {

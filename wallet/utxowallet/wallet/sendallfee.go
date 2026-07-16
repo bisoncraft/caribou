@@ -21,8 +21,19 @@ import (
 // Output eligibility matches txToOutputs' coin selection (same maturity,
 // locked-outpoint, and account filters), and the size estimate uses the same
 // txsizes math txauthor uses to compute fees during selection, so the estimate
-// matches the fee such a send actually pays. The transaction is not
-// constructed and the wallet is not modified; a locked wallet is fine.
+// matches the fee such a send actually pays.
+//
+// The size includes space for a change output even though the constructed
+// transaction has none: txauthor.NewUnsignedTransaction always requires inputs
+// to cover the fee at the change-inclusive size before it will build the
+// transaction, so a send of (balance − fee) only funds if fee was computed the
+// same way. The built transaction then has exactly zero left over for change
+// and pays this same fee (the change-inclusive rate applied to a changeless
+// transaction). Change sizing assumes the default change scope, matching
+// CreateSimpleTx called with no change-scope option.
+//
+// The transaction is not constructed and the wallet is not modified; a locked
+// wallet is fine.
 func (w *Wallet) EstimateSendAllFee(coinSelectKeyScope *waddrmgr.KeyScope,
 	account uint32, minconf int32, feeSatPerKB btcutil.Amount,
 	outputs []*wire.TxOut) (btcutil.Amount, error) {
@@ -36,8 +47,13 @@ func (w *Wallet) EstimateSendAllFee(coinSelectKeyScope *waddrmgr.KeyScope,
 		return 0, err
 	}
 
-	var nP2PKH, nP2TR, nP2WPKH, nNested int
+	var nP2PKH, nP2TR, nP2WPKH, nNested, changeScriptSize int
 	err = walletdb.View(w.db, func(dbtx walletdb.ReadTx) error {
+		addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
+		changeScriptSize, err = w.changeScriptSize(addrmgrNs, nil, account)
+		if err != nil {
+			return err
+		}
 		eligible, err := w.findEligibleOutputs(
 			dbtx, coinSelectKeyScope, account, minconf, bs, nil,
 		)
@@ -68,6 +84,6 @@ func (w *Wallet) EstimateSendAllFee(coinSelectKeyScope *waddrmgr.KeyScope,
 		return 0, err
 	}
 
-	vSize := txsizes.EstimateVirtualSize(nP2PKH, nP2TR, nP2WPKH, nNested, outputs, 0)
+	vSize := txsizes.EstimateVirtualSize(nP2PKH, nP2TR, nP2WPKH, nNested, outputs, changeScriptSize)
 	return txrules.FeeForSerializeSize(feeSatPerKB, vSize), nil
 }
