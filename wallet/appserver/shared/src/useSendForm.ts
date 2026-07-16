@@ -57,6 +57,13 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState('')
   const [netErr, setNetErr] = useState<Record<number, string>>({})
+  // estimateNonce forces the fee-estimate effect to re-run without any form
+  // input changing. Bumped when a send is rejected: core validates the
+  // submitted rate against its own current estimate, so a rejection can mean
+  // the market moved since our estimate, and retrying with the same stale rate
+  // would fail identically. A fresh estimate re-arms the form with a current
+  // rate.
+  const [estimateNonce, setEstimateNonce] = useState(0)
 
   // Monotonic guards so stale validate/txfee responses can't clobber newer ones.
   const validateRef = useRef(0)
@@ -123,7 +130,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
         : (r.msg || r.errMsg || tvar('Could not estimate the network fee. You may need {{ ticker }} for gas.', { ticker: feeTicker })))
     }, 350)
     return () => clearTimeout(h)
-  }, [address, value, subtract, addrValid, variant])
+  }, [address, value, subtract, addrValid, variant, estimateNonce])
 
   // selectVariant advances to the send form for the chosen variant, resetting
   // the form state. No balance guard — that belongs to the explicit picker
@@ -202,7 +209,11 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
     })
     setSending(false)
     setPW('')
-    if (!r.ok) { setErr(r.errMsg || r.msg || t('Send failed.')); return }
+    if (!r.ok) {
+      setErr(r.errMsg || r.msg || t('Send failed.'))
+      setEstimateNonce(n => n + 1)
+      return
+    }
     onSent()
   }
 
