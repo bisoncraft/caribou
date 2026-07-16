@@ -710,12 +710,16 @@ func (s *AppServer) apiGetBalance(w http.ResponseWriter, r *http.Request) {
 // end, so callers should request it only when a fee figure is needed.
 func (s *AppServer) apiWalletFeeState(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
-		AssetID uint32 `json:"assetID"`
+		AssetID *uint32 `json:"assetID"`
 	}{}
 	if !readPost(w, r, form) {
 		return
 	}
-	feeState, err := s.core.WalletFeeState(form.AssetID)
+	if form.AssetID == nil {
+		s.writeAPIError(w, errors.New("missing asset ID"))
+		return
+	}
+	feeState, err := s.core.WalletFeeState(*form.AssetID)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("fee state error: %w", err))
 		return
