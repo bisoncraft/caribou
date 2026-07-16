@@ -200,7 +200,7 @@ func (c *ElectrumClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 			return nil, nil, fmt.Errorf("electrum: sweep missing header at %d", height)
 		}
 		block := wtxmgr.BlockMeta{
-			Block: wtxmgr.Block{Hash: hdr.BlockHash(), Height: height},
+			Block: wtxmgr.Block{Hash: c.chainParams.HeaderHash(hdr), Height: height},
 			Time:  hdr.Timestamp,
 		}
 		if err := c.emitFilteredBlock(c.ctx, block, matches[height]); err != nil {

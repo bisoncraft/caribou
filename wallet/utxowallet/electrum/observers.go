@@ -178,7 +178,7 @@ func (n *Network) runObservers() {
 			// action is taken (see handleDivergence).
 			if h <= localTip {
 				ours := n.headers.ByHeight(h)
-				if ours != nil && ours.BlockHash() != hdr.BlockHash() {
+				if ours != nil && n.headers.headerHash(ours) != n.headers.headerHash(hdr) {
 					n.handleDivergence(o, walletAddr)
 				}
 			}
@@ -353,7 +353,8 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		}
 		batch = append(batch, &hdr)
 	}
-	dissentWork, err := auditDissent(batch, tipHdr.BlockHash(), n.headers.checkPoW)
+	dissentWork, err := auditDissent(batch, n.headers.headerHash(tipHdr),
+		n.headers.headerHash, n.headers.checkPoW)
 	if err != nil {
 		// Fabricated or incoherent chain: demote and drop the observer,
 		// keep the wallet stream untouched.
@@ -457,7 +458,10 @@ func (n *Network) discoverPeers() {
 // and every header passing the hash-beats-claimed-target check. The CALLER
 // must compare the returned work against the local chain's over the same
 // span — self-attested difficulty is only bounded by that comparison.
+// headerHash supplies the chain's block identity (PrevBlock linkage is X11
+// on Dash, for example, so raw wire.BlockHeader.BlockHash cannot be used).
 func auditDissent(batch []*wire.BlockHeader, claimedTip chainhash.Hash,
+	headerHash func(*wire.BlockHeader) chainhash.Hash,
 	checkPoW func(*wire.BlockHeader) error) (*big.Int, error) {
 
 	if len(batch) == 0 {
@@ -465,7 +469,7 @@ func auditDissent(batch []*wire.BlockHeader, claimedTip chainhash.Hash,
 	}
 	work := new(big.Int)
 	for i, hdr := range batch {
-		if i > 0 && hdr.PrevBlock != batch[i-1].BlockHash() {
+		if i > 0 && hdr.PrevBlock != headerHash(batch[i-1]) {
 			return nil, fmt.Errorf("electrum: dissent batch does not link at index %d", i)
 		}
 		if err := checkPoW(hdr); err != nil {
@@ -473,7 +477,7 @@ func auditDissent(batch []*wire.BlockHeader, claimedTip chainhash.Hash,
 		}
 		work.Add(work, blockchain.CalcWork(hdr.Bits))
 	}
-	if got := batch[len(batch)-1].BlockHash(); got != claimedTip {
+	if got := headerHash(batch[len(batch)-1]); got != claimedTip {
 		return nil, fmt.Errorf("electrum: dissent batch ends at %s, not the "+
 			"advertised tip %s", got, claimedTip)
 	}

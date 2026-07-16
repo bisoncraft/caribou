@@ -670,7 +670,7 @@ func (h *Headers) loadFromDisk() error {
 	// direction), discard the file and start clean from the configured
 	// anchor; the normal first sync repopulates it.
 	if want := h.anchorCheckpointHash(); want != nil {
-		if got := hdrs[0].BlockHash(); got != *want {
+		if got := h.headerHash(hdrs[0]); got != *want {
 			log.Warnf("electrum: stored %s header file does not match the anchor "+
 				"checkpoint at height %d (stored %s, want %s); the anchor has "+
 				"moved — discarding %d stale headers and resyncing",

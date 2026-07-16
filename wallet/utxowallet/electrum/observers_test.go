@@ -199,6 +199,10 @@ func TestAuditDissent(t *testing.T) {
 	const easyBits = 0x207fffff   // regtest-grade: nearly free to "mine"
 	const harderBits = 0x1f00ffff // 128x more work per header
 
+	headerHash := func(hdr *wire.BlockHeader) chainhash.Hash {
+		return hdr.BlockHash()
+	}
+
 	pow := func(hdr *wire.BlockHeader) error {
 		hash := hdr.BlockHash()
 		if blockchain.HashToBig(&hash).Cmp(blockchain.CompactToBig(hdr.Bits)) > 0 {
@@ -222,7 +226,7 @@ func TestAuditDissent(t *testing.T) {
 	tip := linked[len(linked)-1].BlockHash()
 
 	// A linked, PoW-valid batch audits clean and reports its work.
-	work, err := auditDissent(linked, tip, pow)
+	work, err := auditDissent(linked, tip, headerHash, pow)
 	if err != nil {
 		t.Fatalf("linked batch rejected: %v", err)
 	}
@@ -237,18 +241,18 @@ func TestAuditDissent(t *testing.T) {
 	// Broken linkage is rejected.
 	broken := mkChain(4, easyBits)
 	broken[2].PrevBlock = chainhash.Hash{0xde, 0xad}
-	if _, err := auditDissent(broken, broken[3].BlockHash(), pow); err == nil {
+	if _, err := auditDissent(broken, broken[3].BlockHash(), headerHash, pow); err == nil {
 		t.Fatal("unlinked batch accepted")
 	}
 
 	// A batch not ending at the advertised tip is rejected — the observer
 	// must be audited on the chain it actually advertised.
-	if _, err := auditDissent(linked, chainhash.Hash{1}, pow); err == nil {
+	if _, err := auditDissent(linked, chainhash.Hash{1}, headerHash, pow); err == nil {
 		t.Fatal("wrong-tip batch accepted")
 	}
 
 	// Empty batches are rejected.
-	if _, err := auditDissent(nil, tip, pow); err == nil {
+	if _, err := auditDissent(nil, tip, headerHash, pow); err == nil {
 		t.Fatal("empty batch accepted")
 	}
 }

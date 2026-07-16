@@ -300,7 +300,7 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	if err := tipHdr.Deserialize(bytes.NewReader(rawTip)); err != nil {
 		return fmt.Errorf("electrum: successor tip header: %w", err)
 	}
-	claimed := tipHdr.BlockHash()
+	claimed := n.headers.headerHash(&tipHdr)
 	fetch := func(startHeight, count int32) ([]byte, int, error) {
 		batch, err := node.BlockHeaders(n.ctx, startHeight, int(count))
 		if err != nil {
@@ -330,7 +330,7 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 		if err := served.Deserialize(bytes.NewReader(raw)); err != nil {
 			return fmt.Errorf("electrum: reconcile tip header: %w", err)
 		}
-		if served.BlockHash() == n.headers.TipHash() {
+		if n.headers.headerHash(&served) == n.headers.TipHash() {
 			// The store already follows the chain the server is serving;
 			// the snapshot was stale.
 			break
