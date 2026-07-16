@@ -167,8 +167,53 @@ func TestErroredSourceServesCachedRate(t *testing.T) {
 }
 
 func TestConcurrentCallerDoesNotBlock(t *testing.T) {
-	// While one caller is blocked in a slow refresh, a concurrent caller must
-	// return the cached composite immediately rather than block on the refresh.
+	// While one caller is blocked in a slow refresh, a concurrent caller with a
+	// populated cache must return the cached composite immediately rather than
+	// block on the refresh.
+	enter := make(chan struct{})
+	release := make(chan struct{})
+	var calls int
+	slow := &SourceConfig{
+		Name: "slow",
+		Rank: 1,
+		// Period 0: due on every refresh, so the second Rate call re-fetches
+		// even though the first has already populated the cache.
+		F: func(ctx context.Context) (uint64, time.Duration, error) {
+			calls++
+			if calls == 1 {
+				return 7, 0, nil
+			}
+			enter <- struct{}{} // signal the fetch has started
+			<-release           // block until the test releases it
+			return 9, 0, nil
+		},
+	}
+	f := New([]*SourceConfig{slow}, util.Disabled)
+
+	if r := f.Rate(context.Background()); r != 7 { // populate the cache
+		t.Fatalf("expected 7 from the priming refresh, got %d", r)
+	}
+
+	go f.Rate(context.Background()) // caller A: holds refreshMtx, blocks in F
+	<-enter                         // A is now inside the fetch
+
+	done := make(chan uint64, 1)
+	go func() { done <- f.Rate(context.Background()) }() // caller B
+	select {
+	case r := <-done:
+		if r != 7 {
+			t.Fatalf("expected cached 7 while refresh in flight, got %d", r)
+		}
+	case <-time.After(time.Second * 2):
+		t.Fatal("concurrent Rate() blocked behind an in-flight refresh")
+	}
+	close(release)
+}
+
+func TestColdCacheWaitsForRefresh(t *testing.T) {
+	// A caller that loses the refresh race on a COLD cache has no rate to
+	// return, so it must wait for the in-flight refresh rather than report
+	// zero while a real rate is seconds away.
 	enter := make(chan struct{})
 	release := make(chan struct{})
 	slow := &SourceConfig{
@@ -183,18 +228,23 @@ func TestConcurrentCallerDoesNotBlock(t *testing.T) {
 	}
 	f := New([]*SourceConfig{slow}, util.Disabled)
 
-	go f.Rate(context.Background()) // caller A: holds refreshMtx, blocks in F
-	<-enter                         // A is now inside the fetch
+	rateA := make(chan uint64, 1)
+	go func() { rateA <- f.Rate(context.Background()) }() // caller A refreshes
+	<-enter                                               // A is now inside the fetch
 
-	done := make(chan uint64, 1)
-	go func() { done <- f.Rate(context.Background()) }() // caller B
+	rateB := make(chan uint64, 1)
+	go func() { rateB <- f.Rate(context.Background()) }() // caller B must wait
 	select {
-	case r := <-done:
-		if r != 0 {
-			t.Fatalf("expected cached 0 while refresh in flight, got %d", r)
-		}
-	case <-time.After(time.Second * 2):
-		t.Fatal("concurrent Rate() blocked behind an in-flight refresh")
+	case r := <-rateB:
+		t.Fatalf("cold-cache caller returned %d before the refresh completed", r)
+	case <-time.After(time.Millisecond * 50):
 	}
+
 	close(release)
+	if r := <-rateA; r != 7 {
+		t.Fatalf("refreshing caller got %d, want 7", r)
+	}
+	if r := <-rateB; r != 7 {
+		t.Fatalf("waiting caller got %d, want 7", r)
+	}
 }

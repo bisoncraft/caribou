@@ -197,20 +197,29 @@ next:
 
 // Rate returns the current composite fee rate in the asset's atoms-per-byte
 // unit, refreshing stale sources as needed. It returns zero if no source can
-// currently provide a rate; callers should treat zero as "unavailable" and use
-// a fallback.
+// currently provide a rate; callers should treat zero as "unavailable".
 //
-// Only one caller performs the (blocking) refresh at a time; other callers that
+// Only one caller performs the (blocking) refresh at a time. Other callers that
 // arrive while a refresh is in flight return the current cached composite
-// immediately rather than blocking on network I/O. The refreshing caller blocks
-// briefly to obtain a fresh rate, which suits send/withdraw callers that need a
-// current estimate.
+// immediately rather than blocking on network I/O — unless the cache is empty,
+// in which case they have no answer to give and instead wait for the in-flight
+// refresh. Without that wait, two overlapping calls on a cold cache would give
+// the loser a zero (and whatever fallback the caller applies) while a real rate
+// is seconds away.
 func (f *Fetcher) Rate(ctx context.Context) uint64 {
 	if f.refreshMtx.TryLock() {
 		defer f.refreshMtx.Unlock()
 		return f.refresh(ctx)
 	}
-	return f.compositeRate()
+	if r := f.compositeRate(); r > 0 {
+		return r
+	}
+	f.refreshMtx.Lock()
+	defer f.refreshMtx.Unlock()
+	// Usually the completed refresh has populated the cache and this refresh
+	// issues no requests (nothing is due). It only re-fetches if the previous
+	// refresh failed or was canceled and sources remain due.
+	return f.refresh(ctx)
 }
 
 // refresh queries due sources one rank group at a time, stopping at the first
