@@ -1412,19 +1412,24 @@ out:
 			// private key material, we need to prevent it from
 			// doing so while we are assembling the transaction.
 			// A dry run never reaches signing (txToOutputs rolls
-			// back at ErrDryRunRollBack before input scripts), and
+			// back at ErrDryRunRollBack before input scripts), so
+			// it tolerates a locked wallet: on a locked manager,
 			// coin selection and change-address derivation are
-			// public-key work, so fee estimation stays available
-			// while the wallet is locked.
+			// public-key work, and fee estimation stays available.
+			// On an UNLOCKED manager, though, address derivation
+			// reads the private branch key, so even a dry run must
+			// hold the unlock — otherwise a concurrent Lock could
+			// zero the account key mid-derivation.
 			release := func() {}
-			if !w.Manager.WatchOnly() && !txr.dryRun {
+			if !w.Manager.WatchOnly() {
 				heldUnlock, err := w.holdUnlock()
-				if err != nil {
+				switch {
+				case err == nil:
+					release = heldUnlock.release
+				case !txr.dryRun:
 					txr.resp <- createTxResponse{nil, err}
 					continue
 				}
-
-				release = heldUnlock.release
 			}
 
 			tx, err := w.txToOutputs(
