@@ -193,8 +193,10 @@ type NativeWallet struct {
 	peersChange func(uint32, error)
 
 	// ctx is the wallet's lifetime context, set in Connect. It is used for
-	// on-demand fee-rate fetches so they cancel with the wallet.
-	ctx context.Context
+	// on-demand fee-rate fetches so they cancel with the wallet. It is
+	// atomic because FeeRate is reachable from request goroutines that have
+	// no happens-before edge to an in-flight Connect.
+	ctx atomic.Value // context.Context
 
 	// feeFetcher composites external fee-rate sources for FeeRate. The
 	// mainnet sources are configured on every network for BTC and LTC; it is
@@ -427,7 +429,7 @@ func (w *NativeWallet) Locked() bool {
 // and started inside wallet.Wallet via Synchronize), and launches background
 // goroutines for tx-history sync and peer monitoring. Satisfies util.Connector.
 func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	w.ctx = ctx
+	w.ctx.Store(ctx)
 
 	// recoveryWindow drives on-open address recovery, and the two backends use it
 	// differently. Recovery only runs when the window is > 0 (syncWithChain). For
@@ -711,7 +713,7 @@ func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
 // provide a rate, in which case fee-dependent operations like sends error
 // rather than proceed at a made-up rate.
 func (w *NativeWallet) FeeRate() uint64 {
-	ctx := w.ctx
+	ctx, _ := w.ctx.Load().(context.Context)
 	if ctx == nil {
 		return 0 // not connected
 	}
