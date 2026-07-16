@@ -281,6 +281,9 @@ var (
 			},
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
+		// DCR fee rates sit near the 10 atoms/B relay floor; 1,000 never
+		// binds on a real market but catches units mixups.
+		MaxFeeRate: 1_000,
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

@@ -800,6 +800,14 @@ func TestSend(t *testing.T) {
 	}
 	tWallet.feeRate = 0
 
+	// A rate beyond the asset's absolute ceiling is rejected even when no
+	// live estimate is available to band-check against.
+	tWallet.info.MaxFeeRate = feeRate - 1
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+		t.Fatalf("no error for a fee rate beyond the asset's sanity ceiling")
+	}
+	tWallet.info.MaxFeeRate = 0
+
 	// A failed fee pre-check estimate fails the send.
 	tWallet.estFeeErr = errTest
 	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {

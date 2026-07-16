@@ -337,6 +337,14 @@ type WalletInfo struct {
 	UnitInfo util.UnitInfo `json:"unitinfo"`
 	// BlockchainClass is the type of the wallet's blockchain.
 	BlockchainClass BlockchainClass
+	// MaxFeeRate is an absolute ceiling on caller-approved fee rates, in the
+	// asset's atomic unit per (virtual) byte. It is set far above any
+	// plausible fee market; a submitted rate beyond it indicates a client bug
+	// (e.g. a units mixup) and is rejected regardless of whether live fee or
+	// fiat estimates are available. Zero means no ceiling; only assets whose
+	// wallets price transactions at a caller-approved rate (UTXO chains) need
+	// one.
+	MaxFeeRate uint64 `json:"maxfeerate"`
 	// Network describes the chain this wallet operates on. For chains that
 	// host tokens, this is the network referenced by token Token.NetworkID.
 	Network *Network `json:"network"`

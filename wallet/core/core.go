@@ -2804,19 +2804,33 @@ func (c *Core) removeWaiter(id string) {
 	c.waiterMtx.Unlock()
 }
 
-// maxSendFeeUSD caps the estimated network fee of a send when a fiat exchange
-// rate is available. A caller-approved fee rate that prices the transaction
-// beyond this is more likely a client bug or a units mixup than intent.
-const maxSendFeeUSD = 25.0
+// maxSendFeeUSD caps the estimated network fee of a mainnet send when a fiat
+// exchange rate is available. A caller-approved fee rate that prices the
+// transaction beyond this is more likely a client bug or a units mixup than
+// intent. Sweeps that consume the whole balance are exempt: spending a large
+// UTXO set is legitimately expensive, and the alternative is a balance that
+// cannot be fully withdrawn during a fee spike.
+const maxSendFeeUSD = 100.0
 
 // validateSendFeeRate sanity-checks the caller-approved fee rate for a
-// UTXO-wallet send, where the submitted rate is used exactly as given. The
-// rate must be within a factor of two of the wallet's own current estimate
-// (when one is available — fee markets move between estimate and approval, but
-// not that much), and the fee it prices for this transaction, converted at the
-// current fiat exchange rate (when one is available), must not exceed
-// maxSendFeeUSD.
+// UTXO-wallet send, where the submitted rate is used exactly as given. Three
+// checks apply, each guarding a different failure with the reference data it
+// has: an absolute per-asset rate ceiling (WalletInfo.MaxFeeRate) that needs no
+// live data at all; a factor-of-two band around the wallet's own current
+// estimate, when one is available (fee markets move between estimate and
+// approval, but not that much); and the maxSendFeeUSD cap on the priced fee,
+// when a fiat exchange rate is available.
 func (c *Core) validateSendFeeRate(w *xcWallet, address string, value, feeRate uint64, subtract bool) error {
+	// The ceiling is the only check that doesn't depend on live reference
+	// data, so it is what stands between a units mixup and a burned balance
+	// when the fee and fiat oracles are all unavailable. It also can't be
+	// satisfied trivially the way the band check can when a poisoned fee
+	// source is feeding both the estimate and the validation.
+	if maxRate := w.Info().MaxFeeRate; maxRate > 0 && feeRate > maxRate {
+		return fmt.Errorf("submitted fee rate %d exceeds the %s sanity ceiling of %d",
+			feeRate, unbip(w.AssetID), maxRate)
+	}
+
 	if liveRate := w.usableFeeRate(); liveRate > 0 && (feeRate > liveRate*2 || feeRate*2 < liveRate) {
 		return fmt.Errorf("submitted fee rate %d is not within a factor of 2 of the current estimate %d",
 			feeRate, liveRate)
@@ -2830,8 +2844,21 @@ func (c *Core) validateSendFeeRate(w *xcWallet, address string, value, feeRate u
 	if err != nil {
 		return fmt.Errorf("fee pre-check failed: %w", err)
 	}
+
+	// The USD cap only means anything where the coins have fiat value.
+	if c.net != util.Mainnet {
+		return nil
+	}
 	fiatRate := c.fiatConversions()[w.AssetID]
 	if fiatRate == 0 {
+		return nil
+	}
+	// value plus fee spanning the entire available balance is the max-withdraw
+	// shape — a sweep, exempt from the cap.
+	w.mtx.RLock()
+	bal := w.balance
+	w.mtx.RUnlock()
+	if bal != nil && value <= bal.Available && bal.Available-value <= fee {
 		return nil
 	}
 	ui := w.Info().UnitInfo

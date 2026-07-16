@@ -57,6 +57,9 @@ var (
 			electrumWalletDefinition,
 		},
 		BlockchainClass: asset.BlockchainClassUTXO,
+		// Historical extremes are in the several-hundred sat/vB range, so
+		// 5,000 never binds on a real market but catches units mixups.
+		MaxFeeRate: 5_000,
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,
