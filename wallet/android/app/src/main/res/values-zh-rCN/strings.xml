@@ -6,6 +6,8 @@
 
     <string name="enroll_title">启用生物识别解锁</string>
     <string name="enroll_message">确认您的钱包密码以安全存储。</string>
+    <string name="allow_credential_fallback">允许使用 PIN/图案作为后备</string>
+    <string name="allow_credential_fallback_note">关闭更安全：新添加的指纹将无法解锁钱包。</string>
     <string name="password_hint">密码</string>
     <string name="cancel">取消</string>
     <string name="enable">启用</string>

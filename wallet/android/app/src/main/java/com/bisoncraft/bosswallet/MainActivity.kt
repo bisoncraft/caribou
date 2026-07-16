@@ -23,6 +23,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -579,23 +580,57 @@ class MainActivity : AppCompatActivity() {
 
     // showEnrollDialog captures the app password in a native field (never through
     // JS), verifies it against the core, then stores it behind a biometric prompt.
+    // It also carries the one choice that has to be made here rather than in the
+    // SPA Settings pane: a key's authorizations are frozen when it is generated, so
+    // the PIN/pattern fallback can only be decided at enrollment. Changing it later
+    // means turning biometric unlock off and back on, which is why this is a
+    // checkbox on the opt-in rather than a settings row.
     private fun showEnrollDialog() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             hint = getString(R.string.password_hint)
         }
+        // Only offer the choice where it exists: below API 30 the credential cannot
+        // back a CryptoObject, and with no biometric enrolled a biometric-only key
+        // cannot be generated at all. In both cases the mode is forced and a
+        // checkbox would only mislead.
+        val offerChoice = biometricAuth.credentialFallbackApplies() &&
+            biometricAuth.canEnrollWithoutCredential(this)
+        val credBox = CheckBox(this).apply {
+            setText(R.string.allow_credential_fallback)
+            isChecked = true // default on, matching the behavior before it was a choice
+        }
+        val credNote = TextView(this).apply {
+            setText(R.string.allow_credential_fallback_note)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        }
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val view = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad / 2, pad, 0)
+            addView(input)
+            if (offerChoice) {
+                addView(credBox)
+                addView(credNote)
+            }
+        }
         AlertDialog.Builder(this)
             .setTitle(R.string.enroll_title)
             .setMessage(R.string.enroll_message)
-            .setView(input)
+            .setView(view)
             .setNegativeButton(R.string.cancel, null)
-            .setPositiveButton(R.string.enable) { _, _ -> verifyThenEnroll(input.text.toString()) }
+            .setPositiveButton(R.string.enable) { _, _ ->
+                // Forced on when the choice was not offered: with no biometric
+                // enrolled the credential is the only authenticator the key can
+                // have, and below API 30 the flag is ignored anyway.
+                verifyThenEnroll(input.text.toString(), !offerChoice || credBox.isChecked)
+            }
             .show()
     }
 
     // verifyThenEnroll confirms pw against the core off-thread, then (on success)
     // stores it behind a biometric prompt on the main thread.
-    private fun verifyThenEnroll(pw: String) {
+    private fun verifyThenEnroll(pw: String, allowCredential: Boolean) {
         thread(name = "bossw-verify") {
             val ok = try {
                 app.verifyPassword(pw) // throws on a wrong password
@@ -609,7 +644,7 @@ class MainActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 val pwb = pw.toByteArray()
-                biometricAuth.enroll(this, pwb) { enrolled ->
+                biometricAuth.enroll(this, pwb, allowCredential) { enrolled ->
                     pwb.fill(0)
                     val msg = if (enrolled) R.string.biometric_enabled else R.string.enrollment_cancelled
                     Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()

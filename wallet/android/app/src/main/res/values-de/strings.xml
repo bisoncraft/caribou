@@ -6,6 +6,8 @@
 
     <string name="enroll_title">Biometrische Entsperrung aktivieren</string>
     <string name="enroll_message">Bestätigen Sie Ihr Wallet-Passwort, um es sicher zu speichern.</string>
+    <string name="allow_credential_fallback">PIN/Muster als Ausweichoption erlauben</string>
+    <string name="allow_credential_fallback_note">Aus ist sicherer: Ein neu hinzugefügter Fingerabdruck kann die Wallet dann nicht mehr entsperren.</string>
     <string name="password_hint">Passwort</string>
     <string name="cancel">Abbrechen</string>
     <string name="enable">Aktivieren</string>

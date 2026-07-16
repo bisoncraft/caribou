@@ -12,6 +12,8 @@
     <!-- Biometric opt-in dialog. -->
     <string name="enroll_title">Enable biometric unlock</string>
     <string name="enroll_message">Confirm your wallet password to store it securely.</string>
+    <string name="allow_credential_fallback">Allow PIN/pattern as fallback</string>
+    <string name="allow_credential_fallback_note">Off is more secure: a newly added fingerprint can then no longer unlock the wallet.</string>
     <string name="password_hint">password</string>
     <string name="cancel">Cancel</string>
     <string name="enable">Enable</string>

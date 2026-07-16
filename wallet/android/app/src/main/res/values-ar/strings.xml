@@ -6,6 +6,8 @@
 
     <string name="enroll_title">تفعيل إلغاء القفل بالمقاييس الحيوية</string>
     <string name="enroll_message">أكِّد كلمة مرور محفظتك لتخزينها بأمان.</string>
+    <string name="allow_credential_fallback">السماح برمز PIN/النمط كخيار بديل</string>
+    <string name="allow_credential_fallback_note">إيقافه أكثر أمانًا: لن تتمكن بصمة مضافة حديثًا من إلغاء قفل المحفظة.</string>
     <string name="password_hint">كلمة المرور</string>
     <string name="cancel">إلغاء</string>
     <string name="enable">تفعيل</string>

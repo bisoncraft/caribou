@@ -6,6 +6,8 @@
 
     <string name="enroll_title">Ativar desbloqueio por biometria</string>
     <string name="enroll_message">Confirme a senha da sua carteira para armazená-la com segurança.</string>
+    <string name="allow_credential_fallback">Permitir PIN/padrão como alternativa</string>
+    <string name="allow_credential_fallback_note">Desativado é mais seguro: uma impressão digital recém-adicionada não poderá mais desbloquear a carteira.</string>
     <string name="password_hint">senha</string>
     <string name="cancel">Cancelar</string>
     <string name="enable">Ativar</string>

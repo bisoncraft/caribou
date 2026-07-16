@@ -6,6 +6,8 @@
 
     <string name="enroll_title">Włącz odblokowywanie biometryczne</string>
     <string name="enroll_message">Potwierdź hasło portfela, aby bezpiecznie je zapisać.</string>
+    <string name="allow_credential_fallback">Zezwalaj na PIN/wzór jako rezerwę</string>
+    <string name="allow_credential_fallback_note">Wyłączenie jest bezpieczniejsze: nowo dodany odcisk palca nie odblokuje wtedy portfela.</string>
     <string name="password_hint">hasło</string>
     <string name="cancel">Anuluj</string>
     <string name="enable">Włącz</string>
