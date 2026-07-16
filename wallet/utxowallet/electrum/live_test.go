@@ -168,7 +168,7 @@ func TestLiveNodeConnect(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			node, err := NewNode(ctx, &ServerAddr{Proto: "ssl", Addr: tc.addr}, "",
+			node, err := NewNode(ctx, &ServerAddr{Proto: "ssl", Addr: tc.addr, SkipVerify: true}, "",
 				tc.params.GenesisHash.String())
 			if err != nil {
 				t.Fatalf("NewNode: %v", err)
@@ -200,7 +200,7 @@ func TestLiveNetworkSyncHeaders(t *testing.T) {
 			}
 			net, err := NewNetwork(&Config{
 				Chain:         chainCfg,
-				TrustedServer: &ServerAddr{Proto: "ssl", Addr: tc.addr},
+				TrustedServer: &ServerAddr{Proto: "ssl", Addr: tc.addr, SkipVerify: true},
 				DataDir:       t.TempDir(),
 			})
 			if err != nil {
@@ -255,7 +255,7 @@ func TestLiveGetTransaction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			node, err := NewNode(ctx, &ServerAddr{Proto: "ssl", Addr: tc.addr}, "",
+			node, err := NewNode(ctx, &ServerAddr{Proto: "ssl", Addr: tc.addr, SkipVerify: true}, "",
 				tc.params.GenesisHash.String())
 			if err != nil {
 				t.Fatalf("NewNode: %v", err)

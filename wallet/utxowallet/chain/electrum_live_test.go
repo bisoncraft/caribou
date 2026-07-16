@@ -115,7 +115,7 @@ func TestElectrumClientLiveSync(t *testing.T) {
 					HeaderSize:  80,
 					StartHeight: 0,
 				},
-				TrustedServer: &electrum.ServerAddr{Proto: "ssl", Addr: lc.addr},
+				TrustedServer: &electrum.ServerAddr{Proto: "ssl", Addr: lc.addr, SkipVerify: true},
 				DataDir:       t.TempDir(),
 			})
 			if err != nil {
@@ -214,7 +214,7 @@ func TestElectrumClientLiveRescanEmptyWallet(t *testing.T) {
 					HeaderSize:  80,
 					StartHeight: 0,
 				},
-				TrustedServer: &electrum.ServerAddr{Proto: "ssl", Addr: lc.addr},
+				TrustedServer: &electrum.ServerAddr{Proto: "ssl", Addr: lc.addr, SkipVerify: true},
 				DataDir:       t.TempDir(),
 			})
 			if err != nil {
