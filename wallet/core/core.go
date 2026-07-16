@@ -3171,6 +3171,9 @@ func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, 
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
 	}
+	if !wallet.connected() {
+		return nil, fmt.Errorf("%s wallet is not connected", unbip(assetID))
+	}
 
 	if !wallet.traits.IsTxFeeEstimator() {
 		return nil, fmt.Errorf("wallet does not support fee estimation")
@@ -3186,8 +3189,13 @@ func (c *Core) EstimateSendTxFee(address string, assetID uint32, amount uint64, 
 
 	// Determine the rate here and compute the fee against it, so the estimate
 	// and the rate the front end submits to Send are consistent. UTXO wallets
-	// use this rate; account/EVM wallets ignore it and compute their own.
+	// price at exactly this rate, so a zero rate must error here rather than
+	// let the wallet quietly price at a rate other than the one reported.
+	// Account and EVM wallets ignore the rate and compute their own.
 	feeRate := wallet.usableFeeRate()
+	if feeRate == 0 && wallet.Info().BlockchainClass == asset.BlockchainClassUTXO {
+		return nil, fmt.Errorf("no %s fee rate is currently available", unbip(assetID))
+	}
 	fee, isValidAddress, err := estimator.EstimateSendTxFee(address, amount, feeRate, subtract, maxWithdraw)
 	if err != nil {
 		return nil, err
@@ -4088,6 +4096,12 @@ func (c *Core) WalletFeeState(assetID uint32) (*FeeState, error) {
 	w, found := c.wallet(assetID)
 	if !found {
 		return nil, newError(missingWalletErr, "no wallet for %s", unbip(assetID))
+	}
+	// FeeRate implementations assume Connect-time state (contexts, cached
+	// tips), so don't call into a wallet that isn't connected — and a display
+	// poll is no reason to connect one.
+	if !w.connected() {
+		return nil, fmt.Errorf("%s wallet is not connected", unbip(assetID))
 	}
 	// Return the rate the wallet would actually use, so the number the user
 	// approves is the number that is charged.

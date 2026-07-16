@@ -738,8 +738,10 @@ var _ asset.TxFeeEstimator = (*NativeWallet)(nil)
 // address at feeRate (atoms/byte). It satisfies asset.TxFeeEstimator. The
 // estimate runs the same coin-selection and tx-construction path Send uses, but
 // without signing or broadcasting, so it matches what a subsequent Send at this
-// rate would pay. When feeRate is zero it falls back to the wallet's own
-// fee-rate estimate. With subtract or maxWithdraw the fee comes out of value
+// rate would pay. The caller supplies the rate (core sources it from FeeRate),
+// and the estimate prices at exactly that rate — a zero rate is an error, never
+// a cue to substitute a different rate than the one the caller will report and
+// validate against. With subtract or maxWithdraw the fee comes out of value
 // rather than on top of it; maxWithdraw additionally means value is the whole
 // balance, so the estimate is for the changeless transaction that spends every
 // eligible output.
@@ -751,10 +753,7 @@ func (w *NativeWallet) EstimateSendTxFee(address string, value, feeRate uint64, 
 		return 0, false, errors.New("native: cannot estimate fee for zero value")
 	}
 	if feeRate == 0 {
-		feeRate = w.FeeRate()
-	}
-	if feeRate == 0 {
-		return 0, false, errors.New("native: no fee rate available")
+		return 0, false, errors.New("native: no fee rate specified")
 	}
 
 	// A dummy P2WPKH script keeps the size estimate realistic while the user is

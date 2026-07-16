@@ -1438,27 +1438,40 @@ func TestEstimateSendTxFee(t *testing.T) {
 		name              string
 		asset             uint32
 		estFee            uint64
+		feeRate           uint64
 		value             uint64
 		subtract          bool
 		wantMissingWallet bool
+		estFeeErr         error
 		wantErr           bool
 	}{{
 		name:     "ok",
 		asset:    tUTXOAssetA.ID,
 		subtract: true,
 		estFee:   1e8,
+		feeRate:  100,
 		value:    1e8,
 	}, {
-		name:     "zero amount",
-		asset:    tACCTAsset.ID,
-		subtract: true,
-		wantErr:  true,
+		name:      "zero amount",
+		asset:     tACCTAsset.ID,
+		subtract:  true,
+		estFeeErr: errTest,
+		wantErr:   true,
 	}, {
-		name:     "subtract true and not withdrawer",
-		asset:    tACCTAsset.ID,
-		subtract: true,
-		wantErr:  true,
-		value:    1e8,
+		name:      "estimator error",
+		asset:     tACCTAsset.ID,
+		subtract:  true,
+		feeRate:   100,
+		estFeeErr: errTest,
+		wantErr:   true,
+		value:     1e8,
+	}, {
+		// A UTXO wallet prices at exactly the rate the estimate reports, so
+		// no live rate must be an error, not an estimate at some other rate.
+		name:    "no UTXO fee rate available",
+		asset:   tUTXOAssetA.ID,
+		value:   1e8,
+		wantErr: true,
 	}, {
 		name:              "wallet not found",
 		asset:             tUTXOAssetA.ID,
@@ -1475,11 +1488,9 @@ func TestEstimateSendTxFee(t *testing.T) {
 		}
 
 		tWallet.estFee = test.estFee
+		tWallet.feeRate = test.feeRate
+		tWallet.estFeeErr = test.estFeeErr
 
-		tWallet.estFeeErr = nil
-		if test.wantErr {
-			tWallet.estFeeErr = errTest
-		}
 		estimate, err := tCore.EstimateSendTxFee("addr", test.asset, test.value, test.subtract, false)
 		if test.wantErr {
 			if err != nil {
@@ -1494,8 +1505,8 @@ func TestEstimateSendTxFee(t *testing.T) {
 		if estimate.Fee != test.estFee {
 			t.Fatalf("%s: expected fee %v, got %v", test.name, test.estFee, estimate.Fee)
 		}
-		if !test.wantErr && err != nil {
-			t.Fatalf("%s: unexpected error", test.name)
+		if estimate.FeeRate != test.feeRate {
+			t.Fatalf("%s: expected fee rate %v, got %v", test.name, test.feeRate, estimate.FeeRate)
 		}
 	}
 }
