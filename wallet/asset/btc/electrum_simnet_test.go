@@ -945,8 +945,15 @@ func TestElectrumColdSweepLifecycle(t *testing.T) {
 		t.Fatalf("unlock alpha: %v", err)
 	}
 
+	// externalquietdepth must comfortably exceed sweepinterval: the sweep's
+	// promotion seeds the address with the tip captured at sweep LAUNCH, and
+	// the balance-wait loop below keeps mining while it polls, so a shallow
+	// quiet depth lets the reaper legitimately re-demote the re-promoted
+	// address before the loop observes the credit (each poll cycle ages the
+	// address by a block). Depth 8 vs interval 3 leaves ~5 blocks (~10s at
+	// the loop's cadence) between promotion and the earliest re-demotion.
 	w, cm := connectElectrumWalletAt(t, t.TempDir(), randBytes(32), 20,
-		map[string]string{"externalquietdepth": "3", "sweepinterval": "3"})
+		map[string]string{"externalquietdepth": "8", "sweepinterval": "3"})
 	defer cm.Disconnect()
 	waitElectrumSynced(t, w)
 
@@ -1009,8 +1016,16 @@ func TestElectrumColdSweepLifecycle(t *testing.T) {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	if subCount() < hotCount {
-		t.Fatalf("address not re-promoted: subs %d < %d", subCount(), hotCount)
+	// Poll rather than assert instantly: the sweep emits the credit during
+	// its block walk but re-subscribes at completion, so the balance can be
+	// visible a beat before the subscription count ticks. No mining here —
+	// every block ages the re-promoted address back toward demotion.
+	deadline = time.Now().Add(electrumSyncTimeout)
+	for subCount() < hotCount {
+		if time.Now().After(deadline) {
+			t.Fatalf("address not re-promoted: subs %d < %d", subCount(), hotCount)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	t.Logf("cold payment credited; subscriptions after re-promotion: %d", subCount())
 }
