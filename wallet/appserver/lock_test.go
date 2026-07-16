@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/bosswallet/util/encode"
 )
@@ -23,6 +24,18 @@ func grantCookie(rec *httptest.ResponseRecorder, name string) string {
 		}
 	}
 	return ""
+}
+
+// respCookie returns the named response cookie, or nil if it was not set. Unlike
+// grantCookie it distinguishes an absent cookie from a cleared one, which is set
+// with an empty value.
+func respCookie(rec *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 // TestUnlockMintsConsumableGrant covers the biometric-unlock session-restore
@@ -188,6 +201,45 @@ func TestLockLogoutError(t *testing.T) {
 	if len(s.authTokens) != 0 || len(s.cachedPasswords) != 0 || len(s.pendingGrants) != 0 {
 		t.Fatalf("Lock left session state after a Logout error: tokens=%d cached=%d grants=%d",
 			len(s.authTokens), len(s.cachedPasswords), len(s.pendingGrants))
+	}
+}
+
+// TestLogoutClearsCookiesOnLogoutError guards that apiLogout expires the session
+// cookies even when core.Logout errors. Lock deauths unconditionally, so the
+// session those cookies name is gone either way; leaving them set would point the
+// client at a destroyed session, turning a retry into a confusing auth failure
+// instead of a clean re-login. The Logout error is still reported.
+func TestLogoutClearsCookiesOnLogoutError(t *testing.T) {
+	s, c, shutdown := newTServer(t, false)
+	defer shutdown()
+	if _, err := s.Unlock([]byte("apppass")); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+
+	c.logoutErr = errors.New("logout boom")
+
+	rec := httptest.NewRecorder()
+	s.apiLogout(rec, httptest.NewRequest(http.MethodPost, "/api/logout", nil))
+
+	for _, name := range []string{authCK, pwKeyCK} {
+		ck := respCookie(rec, name)
+		if ck == nil {
+			t.Fatalf("%s cookie was not cleared after a Logout error", name)
+		}
+		if ck.Value != "" || !ck.Expires.Before(time.Now()) {
+			t.Fatalf("%s cookie not expired: value=%q expires=%v", name, ck.Value, ck.Expires)
+		}
+	}
+
+	// The Logout error must still reach the caller.
+	var resp struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.OK {
+		t.Fatal("apiLogout reported success despite a Logout error")
 	}
 }
 

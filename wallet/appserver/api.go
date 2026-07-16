@@ -589,14 +589,18 @@ func (s *AppServer) apiNotes(w http.ResponseWriter, r *http.Request) {
 // apiLogout handles the 'logout' API request.
 func (s *AppServer) apiLogout(w http.ResponseWriter, r *http.Request) {
 	// Lock locks core and invalidates all known auth tokens and cached passwords,
-	// forcing any other sessions to login again.
-	if err := s.Lock(); err != nil {
-		s.writeAPIError(w, fmt.Errorf("logout error: %w", err))
-		return
-	}
-
+	// forcing any other sessions to login again. It deauths even when Logout
+	// errors, so the session these cookies name is gone either way: clear them
+	// regardless, and before the response is written, so a retry starts from a
+	// clean login instead of riding stale cookies into an auth failure.
+	logoutErr := s.Lock()
 	clearCookie(authCK, w)
 	clearCookie(pwKeyCK, w)
+
+	if logoutErr != nil {
+		s.writeAPIError(w, fmt.Errorf("logout error: %w", logoutErr))
+		return
+	}
 
 	response := struct {
 		OK bool `json:"ok"`
