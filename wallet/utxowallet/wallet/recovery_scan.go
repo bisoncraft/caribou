@@ -131,52 +131,70 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		if lastUsed < 0 {
 			continue
 		}
-		if err := w.extendScanBranch(scoped, branch, uint32(lastUsed)); err != nil {
-			return fmt.Errorf("recover: extend scope %v branch %d to %d: %w",
+		internal := branch == waddrmgr.InternalBranch
+
+		// Extend the address pool and persist the discovery sweep floors in a
+		// SINGLE transaction. Discovery only ever probes above the pool top, so
+		// this is the only connect that will find these addresses; extending
+		// the pool without their floors and then restarting would leave them
+		// below the new top (never re-probed) with no floor to sweep from,
+		// while the catch-up rescan starts at SyncedTo — above their history —
+		// so their funds would stay undiscovered until a DeepRescan. Atomicity
+		// makes it all-or-nothing: on failure nothing commits, recoverViaScan
+		// returns the error, and the caller's sync-retry reruns the idempotent
+		// scan.
+		//
+		// Seeding is for AGED wallets only: with last-active entries on disk,
+		// classifyWatchSet filters the watch set and rescanWithTarget catches
+		// up from SyncedTo, so a discovered address's history — which can sit
+		// far below SyncedTo — would never be ingested. A discovered address
+		// otherwise misfiles: no last-active entry reads as quiet, and an
+		// internal's never-ingested credit reads as unfunded. A fresh or
+		// restored wallet (empty index) instead watches everything and rescans
+		// from the birthday, which covers the discoveries by itself.
+		var seeded []discoveredAddr
+		err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+			ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
+			var extErr error
+			if internal {
+				extErr = scoped.ExtendInternalAddresses(ns, waddrmgr.DefaultAccountNum, uint32(lastUsed))
+			} else {
+				extErr = scoped.ExtendExternalAddresses(ns, waddrmgr.DefaultAccountNum, uint32(lastUsed))
+			}
+			if extErr != nil {
+				return extErr
+			}
+			if !aged {
+				return nil
+			}
+			for _, d := range found {
+				script, err := txscript.PayToAddrScript(d.addr)
+				if err != nil {
+					continue
+				}
+				if err := putSeedFloor(tx, script, discoveryFloor(d.earliest)); err != nil {
+					return err
+				}
+				seeded = append(seeded, d)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("recover: extend+seed scope %v branch %d to %d: %w",
 				scope, branch, lastUsed, err)
 		}
-		// Seed each discovered address into the fast sweep tier with its
-		// floor just below its earliest known activity. Discovered
-		// addresses have history the wallet has never ingested, so
-		// classification alone would misfile them: no last-active entry
-		// reads as quiet, and an internal's never-ingested credit reads as
-		// unfunded. The seed's floor makes the first sweep (due at the
-		// first block after sync) fetch and ingest the full history; the
-		// hit then promotes the address into the tracked set and normal
-		// tiering takes over. Classification's own later demotion merges
-		// harmlessly: demote keeps the lower floor and the faster tier.
-		//
-		// The floor is also persisted (seedFloor): the pool extension above
-		// is durable and discovery only probes above the pool top, so this
-		// is the ONLY connect that will ever find the address — a restart
-		// before the first successful sweep would otherwise lose the floor
-		// for good. Classification re-applies the persisted seed each
-		// startup and consumes it once the history has been ingested.
-		if aged {
-			err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
-				for _, d := range found {
-					floor := d.earliest - 1
-					if floor < 0 {
-						floor = 0
-					}
-					internal := branch == waddrmgr.InternalBranch
-					w.watchPol.demote(d.addr, floor, false, internal)
-					script, err := txscript.PayToAddrScript(d.addr)
-					if err != nil {
-						continue
-					}
-					if err := putSeedFloor(tx, script, floor); err != nil {
-						return err
-					}
-				}
-				return nil
-			})
-			if err != nil {
-				// The in-memory seeds still cover this process lifetime;
-				// only restart durability is degraded.
-				log.Errorf("Recovery: persist discovery seeds: %v", err)
-			}
+
+		// With the pool extension and floors durable, apply the in-memory
+		// sweep-tier demotions for the seeded addresses. The floor makes the
+		// first sweep (due at the first block after sync) fetch and ingest the
+		// full history; the hit then promotes the address into the tracked set
+		// and normal tiering takes over. Classification's own later demotion
+		// merges harmlessly, keeping the lower floor. Done after the commit so
+		// in-memory state never runs ahead of what a restart would reload.
+		for _, d := range seeded {
+			w.watchPol.demote(d.addr, discoveryFloor(d.earliest), false, internal)
 		}
+
 		log.Infof("Recovery: scope %v branch %d used through index %d",
 			scope, branch, lastUsed)
 	}
@@ -281,16 +299,11 @@ func (w *Wallet) deriveScanAddr(scoped *waddrmgr.ScopedKeyManager,
 	return addr, err
 }
 
-// extendScanBranch derives and stores all keys on the branch through lastIndex,
-// catching the wallet's persistent state up to the highest used index found.
-func (w *Wallet) extendScanBranch(scoped *waddrmgr.ScopedKeyManager,
-	branch, lastIndex uint32) error {
-
-	return walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
-		ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
-		if branch == waddrmgr.ExternalBranch {
-			return scoped.ExtendExternalAddresses(ns, waddrmgr.DefaultAccountNum, lastIndex)
-		}
-		return scoped.ExtendInternalAddresses(ns, waddrmgr.DefaultAccountNum, lastIndex)
-	})
+// discoveryFloor returns the sweep floor for a discovered address: one block
+// below its earliest known activity, clamped at 0.
+func discoveryFloor(earliest int32) int32 {
+	if earliest < 1 {
+		return 0
+	}
+	return earliest - 1
 }

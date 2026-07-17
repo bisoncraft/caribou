@@ -636,12 +636,16 @@ func (w *Wallet) syncWithChain(birthdayStamp *waddrmgr.BlockStamp) error {
 	// extends the address pool — on a fresh or restored wallet the rescan
 	// below ingests the funds, and on an aged wallet (whose rescan starts at
 	// SyncedTo, above the discovered history) the scan seeds the sweep tier
-	// to ingest them (see recoverViaScan). A probe error is logged, not
-	// fatal — the rescan still syncs the known addresses.
+	// to ingest them (see recoverViaScan). A probe error is fatal: it aborts
+	// syncWithChain so the caller's sync-retry loop reruns discovery. Swallowing
+	// it would let a seed restore report fully synced with an omitted balance
+	// when a transient get_history failure or a server rotation interrupts the
+	// probes; recoverViaScan is idempotent, so the retry is safe.
 	if w.recoveryWindow > 0 {
 		if prober, ok := chainClient.(chain.AddressProber); ok {
 			if err := w.recoverViaScan(prober, w.recoveryWindow); err != nil {
-				log.Errorf("Address-probe recovery failed: %v", err)
+				return fmt.Errorf("unable to perform address-probe "+
+					"recovery: %w", err)
 			}
 		} else if err := w.recovery(chainClient, birthdayStamp); err != nil {
 			return fmt.Errorf("unable to perform wallet recovery: "+
