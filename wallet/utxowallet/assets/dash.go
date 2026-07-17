@@ -140,7 +140,7 @@ var DashParams = map[string]*netparams.ChainParams{
 		Name:            "mainnet",
 		Net:             0xbd6b0cbf, // pchMessageStart bf 0c 6b bd
 		DefaultPort:     "9999",
-		AddrPurpose:     44, // legacy P2PKH; Dash has no SegWit
+		KeyPurposes:     []uint32{44}, // legacy P2PKH; Dash has no SegWit
 		ElectrumServers: dashMainnetElectrumServers,
 		DNSSeeds: []chaincfg.DNSSeed{
 			{Host: "dnsseed.dash.org", HasFiltering: false},
@@ -185,7 +185,7 @@ var DashParams = map[string]*netparams.ChainParams{
 		Name:        "testnet3",
 		Net:         0xffcae2ce, // pchMessageStart ce e2 ca ff
 		DefaultPort: "19999",
-		AddrPurpose: 44, // legacy P2PKH; Dash has no SegWit
+		KeyPurposes: []uint32{44}, // legacy P2PKH; Dash has no SegWit
 		// No reliable public Dash testnet electrumx server; bring your own.
 		DNSSeeds: []chaincfg.DNSSeed{
 			{Host: "testnet-seed.dashdot.io", HasFiltering: false},
@@ -230,7 +230,7 @@ var DashParams = map[string]*netparams.ChainParams{
 		Name:            "regtest",
 		Net:             0xdcb7c1fc, // pchMessageStart fc c1 b7 dc
 		DefaultPort:     "19899",
-		AddrPurpose:     44, // legacy P2PKH; Dash has no SegWit
+		KeyPurposes:     []uint32{44}, // legacy P2PKH; Dash has no SegWit
 		ElectrumServers: dashSimnetElectrumServers,
 		NeutrinoSeeds:   dashSimnetNeutrinoSeeds,
 		DNSSeeds:        []chaincfg.DNSSeed{},

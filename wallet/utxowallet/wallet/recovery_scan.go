@@ -68,7 +68,7 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 	// per-probe get_history round-trips dominate recovery latency).
 	//
 	// PrimaryScope is coin-type-aware (BTC coin 0, LTC coin 2, Dash coin 5) and
-	// honors netparams.AddrPurpose, so it matches what DepositAddress derives.
+	// honors netparams.KeyPurposes, so it matches what DepositAddress derives.
 	scoped, err := w.Manager.FetchScopedKeyManager(w.PrimaryScope())
 	if err != nil {
 		return fmt.Errorf("recover: fetch primary scope manager: %w", err)

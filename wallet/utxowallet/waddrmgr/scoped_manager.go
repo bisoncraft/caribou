@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/internal/zero"
@@ -167,67 +166,6 @@ type ScopeAddrSchema struct {
 }
 
 var (
-	// KeyScopeBIP0049Plus is the key scope of our modified BIP0049
-	// derivation. We say this is BIP0049 "plus", as we'll actually use
-	// p2wkh change all change addresses.
-	KeyScopeBIP0049Plus = KeyScope{
-		Purpose: 49,
-		Coin:    0,
-	}
-
-	// KeyScopeBIP0084 is the key scope for BIP0084 derivation. BIP0084
-	// will be used to derive all p2wkh addresses.
-	KeyScopeBIP0084 = KeyScope{
-		Purpose: 84,
-		Coin:    0,
-	}
-
-	// KeyScopeBIP0086 is the key scope for BIP0086 derivation. BIP0086
-	// will be used to derive all p2tr addresses.
-	KeyScopeBIP0086 = KeyScope{
-		Purpose: 86,
-		Coin:    0,
-	}
-
-	// KeyScopeBIP0044 is the key scope for BIP0044 derivation. Legacy
-	// wallets will only be able to use this key scope, and no keys beyond
-	// it.
-	KeyScopeBIP0044 = KeyScope{
-		Purpose: 44,
-		Coin:    0,
-	}
-
-	// DefaultKeyScopes is the set of default key scopes that will be
-	// created by the root manager upon initial creation.
-	DefaultKeyScopes = []KeyScope{
-		KeyScopeBIP0049Plus,
-		KeyScopeBIP0084,
-		KeyScopeBIP0086,
-		KeyScopeBIP0044,
-	}
-
-	// ScopeAddrMap is a map from the default key scopes to the scope
-	// address schema for each scope type. This will be consulted during
-	// the initial creation of the root key manager.
-	ScopeAddrMap = map[KeyScope]ScopeAddrSchema{
-		KeyScopeBIP0049Plus: {
-			ExternalAddrType: NestedWitnessPubKey,
-			InternalAddrType: WitnessPubKey,
-		},
-		KeyScopeBIP0084: {
-			ExternalAddrType: WitnessPubKey,
-			InternalAddrType: WitnessPubKey,
-		},
-		KeyScopeBIP0086: {
-			ExternalAddrType: TaprootPubKey,
-			InternalAddrType: TaprootPubKey,
-		},
-		KeyScopeBIP0044: {
-			InternalAddrType: PubKeyHash,
-			ExternalAddrType: PubKeyHash,
-		},
-	}
-
 	// KeyScopeBIP0049AddrSchema is the address schema for the traditional
 	// BIP-0049 derivation scheme. This exists in order to support importing
 	// accounts from other wallets that don't use our modified BIP-0049
@@ -244,23 +182,6 @@ var (
 		InternalAccount: ImportedAddrAccount,
 	}
 )
-
-// IsDefaultScope return true if the given scope belongs to the list of default
-// BTC scopes (Coin == 0). For coin-aware checks, use Manager.IsDefaultScope.
-func IsDefaultScope(scope KeyScope) bool {
-	return slices.Contains(DefaultKeyScopes, scope)
-}
-
-// DefaultKeyScopesForCoin returns the default key scopes for the given BIP-44
-// coin type. When coinType is 0 (BTC), this is equivalent to DefaultKeyScopes.
-func DefaultKeyScopesForCoin(coinType uint32) []KeyScope {
-	return []KeyScope{
-		{Purpose: 49, Coin: coinType},
-		{Purpose: 84, Coin: coinType},
-		{Purpose: 86, Coin: coinType},
-		{Purpose: 44, Coin: coinType},
-	}
-}
 
 // ScopeAddrMapForCoin returns the default scope-to-address-schema map for the
 // given BIP-44 coin type.

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/wallet/txauthor"
 	"github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb"
 	_ "github.com/bisoncraft/bosswallet/wallet/utxowallet/walletdb/bdb"
@@ -42,7 +41,7 @@ func TestTxToOutputsDryRun(t *testing.T) {
 	defer cleanup()
 
 	// Create an address we can use to send some coins to.
-	keyScope := waddrmgr.KeyScopeBIP0049Plus
+	keyScope := keyScopeBIP0049Plus
 	addr, err := w.CurrentAddress(0, keyScope)
 	if err != nil {
 		t.Fatalf("unable to get current address: %v", addr)
@@ -241,7 +240,7 @@ func TestTxToOutputsRandom(t *testing.T) {
 	defer cleanup()
 
 	// Create an address we can use to send some coins to.
-	keyScope := waddrmgr.KeyScopeBIP0049Plus
+	keyScope := keyScopeBIP0049Plus
 	addr, err := w.CurrentAddress(0, keyScope)
 	if err != nil {
 		t.Fatalf("unable to get current address: %v", addr)
@@ -323,10 +322,10 @@ func TestCreateSimpleCustomChange(t *testing.T) {
 
 	// First, we'll make a P2TR and a P2WKH address to send some coins to
 	// (two different coin scopes).
-	p2wkhAddr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	p2wkhAddr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	require.NoError(t, err)
 
-	p2trAddr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0086)
+	p2trAddr, err := w.CurrentAddress(0, keyScopeBIP0086)
 	require.NoError(t, err)
 
 	// We'll now make a transaction that'll send coins to both outputs,
@@ -361,17 +360,22 @@ func TestCreateSimpleCustomChange(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// We expect that all inputs were used and also the change output is a
-	// taproot output (the current default).
+	// We expect that all inputs were used. The recipient output is taproot
+	// (as sent), while the change output uses the wallet's primary scope
+	// (native segwit, P2WKH) by default.
 	require.Len(t, tx1.Tx.TxIn, 2)
 	require.Len(t, tx1.Tx.TxOut, 2)
-	for _, txOut := range tx1.Tx.TxOut {
+	for i, txOut := range tx1.Tx.TxOut {
 		scriptType, _, _, err := txscript.ExtractPkScriptAddrs(
 			txOut.PkScript, w.btcParams,
 		)
 		require.NoError(t, err)
 
-		require.Equal(t, scriptType, txscript.WitnessV1TaprootTy)
+		if i == tx1.ChangeIndex {
+			require.Equal(t, txscript.WitnessV0PubKeyHashTy, scriptType)
+		} else {
+			require.Equal(t, txscript.WitnessV1TaprootTy, scriptType)
+		}
 	}
 
 	// Next, we'll do another dry run, but this time, specify a custom
@@ -381,8 +385,8 @@ func TestCreateSimpleCustomChange(t *testing.T) {
 		PkScript: p2trScript,
 	}
 	tx2, err := w.txToOutputs(
-		[]*wire.TxOut{targetTxOut}, &waddrmgr.KeyScopeBIP0086,
-		&waddrmgr.KeyScopeBIP0084, 0, 1, 1000, CoinSelectionLargest,
+		[]*wire.TxOut{targetTxOut}, &keyScopeBIP0086,
+		&keyScopeBIP0084, 0, 1, 1000, CoinSelectionLargest,
 		true, nil, alwaysAllowUtxo,
 	)
 	require.NoError(t, err)
@@ -414,10 +418,10 @@ func TestSelectUtxosTxoToOutpoint(t *testing.T) {
 	defer cleanup()
 
 	// First, we'll make a P2TR and a P2WKH address to send some coins to.
-	p2wkhAddr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	p2wkhAddr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	require.NoError(t, err)
 
-	p2trAddr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0086)
+	p2trAddr, err := w.CurrentAddress(0, keyScopeBIP0086)
 	require.NoError(t, err)
 
 	// We'll now make a transaction that'll send coins to both outputs,

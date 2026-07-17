@@ -117,6 +117,7 @@ var LTCParams = map[string]*netparams.ChainParams{
 		HDPrivateKeyID:          [4]byte{0x04, 0x88, 0xad, 0xe4}, // starts with xprv
 		HDPublicKeyID:           [4]byte{0x04, 0x88, 0xb2, 0x1e}, // starts with xpub
 		HDCoinType:              2,
+		KeyPurposes:             []uint32{84},
 		BIP0034Height:           710000,
 		BIP0065Height:           918684,
 		BIP0066Height:           811879,
@@ -177,6 +178,7 @@ var LTCParams = map[string]*netparams.ChainParams{
 		HDPrivateKeyID:          [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
 		HDPublicKeyID:           [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
 		HDCoinType:              1,
+		KeyPurposes:             []uint32{84},
 		CheckPoW:                checkPoWScrypt,
 		CoinbaseMaturity:        100,
 		MaxSatoshi:              84e6 * btcutil.SatoshiPerBitcoin,
@@ -229,6 +231,7 @@ var LTCParams = map[string]*netparams.ChainParams{
 		HDPrivateKeyID:   [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
 		HDPublicKeyID:    [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
 		HDCoinType:       1,
+		KeyPurposes:      []uint32{84},
 		CheckPoW:         checkPoWScrypt,
 		CoinbaseMaturity: 100,
 		MaxSatoshi:       84e6 * btcutil.SatoshiPerBitcoin,

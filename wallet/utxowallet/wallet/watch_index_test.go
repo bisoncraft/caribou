@@ -138,7 +138,7 @@ func TestClassifyWatchSet(t *testing.T) {
 	depth := w.watchPol.externalQuiet()
 
 	newAddr := func() (btcutil.Address, []byte) {
-		a, err := w.NewAddress(0, waddrmgr.KeyScopeBIP0084)
+		a, err := w.NewAddress(0, keyScopeBIP0084)
 		if err != nil {
 			t.Fatalf("NewAddress: %v", err)
 		}
@@ -149,7 +149,7 @@ func TestClassifyWatchSet(t *testing.T) {
 		return a, pk
 	}
 	newChange := func() (btcutil.Address, []byte) {
-		a, err := w.NewChangeAddress(0, waddrmgr.KeyScopeBIP0084)
+		a, err := w.NewChangeAddress(0, keyScopeBIP0084)
 		if err != nil {
 			t.Fatalf("NewChangeAddress: %v", err)
 		}

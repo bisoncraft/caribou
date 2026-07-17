@@ -270,12 +270,12 @@ func (w *Wallet) txToOutputs(outputs []*wire.TxOut,
 		// private key information stored, so we'll skip signing such.
 		var watchOnly bool
 		if coinSelectKeyScope == nil {
-			// If a key scope wasn't specified, then coin selection
-			// was performed from the default wallet accounts
-			// (NP2WKH, P2WKH, P2TR), so any key scope provided
-			// doesn't impact the result of this call.
+			// If a key scope wasn't specified, coin selection drew from
+			// all of the wallet's accounts, so the specific scope used
+			// for this watch-only check doesn't affect the result; use
+			// the primary scope, which always exists for the chain.
 			watchOnly, err = w.Manager.IsWatchOnlyAccount(
-				addrmgrNs, w.ScopeForPurpose(86), account,
+				addrmgrNs, w.PrimaryScope(), account,
 			)
 		} else {
 			watchOnly, err = w.Manager.IsWatchOnlyAccount(
@@ -423,13 +423,13 @@ func inputYieldsPositively(credit *wire.TxOut,
 
 // changeScriptSize returns the expected script size for a change output in
 // the given key scope and account, honoring any account address-schema
-// override. A nil changeKeyScope selects the default change scope (taproot,
-// purpose 86), matching addrMgrWithChangeSource.
+// override. A nil changeKeyScope selects the wallet's primary scope, matching
+// addrMgrWithChangeSource.
 func (w *Wallet) changeScriptSize(addrmgrNs walletdb.ReadBucket,
 	changeKeyScope *waddrmgr.KeyScope, account uint32) (int, error) {
 
 	if changeKeyScope == nil {
-		defaultScope := w.ScopeForPurpose(86)
+		defaultScope := w.PrimaryScope()
 		changeKeyScope = &defaultScope
 	}
 	addrType := waddrmgr.ScopeAddrMapForCoin(w.chainParams.HDCoinType)[*changeKeyScope].InternalAddrType
@@ -472,9 +472,10 @@ func (w *Wallet) addrMgrWithChangeSource(dbtx walletdb.ReadWriteTx,
 	walletdb.ReadWriteBucket, *txauthor.ChangeSource, error) {
 
 	if changeKeyScope == nil {
-		// Default to taproot (purpose 86) with the correct coin type for
-		// this chain.
-		defaultScope := w.ScopeForPurpose(86)
+		// Default to the wallet's primary scope, so change matches the
+		// wallet's own address type (84 for BTC/LTC, 44 for Dash). This is
+		// the only scope guaranteed to exist for the chain.
+		defaultScope := w.PrimaryScope()
 		changeKeyScope = &defaultScope
 	}
 	addrmgrNs := dbtx.ReadWriteBucket(waddrmgrNamespaceKey)

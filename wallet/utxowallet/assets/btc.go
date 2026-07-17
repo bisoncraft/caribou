@@ -124,6 +124,7 @@ var BTCParams = map[string]*netparams.ChainParams{
 		HDPrivateKeyID:   [4]byte{0x04, 0x88, 0xad, 0xe4}, // starts with xprv
 		HDPublicKeyID:    [4]byte{0x04, 0x88, 0xb2, 0x1e}, // starts with xpub
 		HDCoinType:       0,
+		KeyPurposes:      []uint32{84},
 		BIP0034Height:    227931, // 000000000000024b89b42a942fe0d9fea3bb44ab7bd1b19115dd6a759c0808b8
 		BIP0065Height:    388381, // 000000000000000004c2b624ed5d7756c508d90fd0da2c7c679febfa6c4735f0
 		BIP0066Height:    363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
@@ -226,14 +227,15 @@ var BTCParams = map[string]*netparams.ChainParams{
 		HDPublicKeyID:           [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
 		// BIP-44 says HDCoinType should be 1 for testnet, but the wallet- and
 		// wtxmgr-package unit tests load wallets via this entry and reference
-		// the legacy waddrmgr.KeyScopeBIP00xx constants (all Coin=0) directly,
-		// so the in-tree scope lookups only resolve when the wallet is also
-		// rooted at Coin=0. Production BTC consumers (wallet/asset/btc) read
+		// fixed Coin=0 key-scope constants (defined in the test packages)
+		// directly, so the in-tree scope lookups only resolve when the wallet is
+		// also rooted at Coin=0. Production BTC consumers (wallet/asset/btc) read
 		// chain params from btcd's chaincfg, not from this map, and route
 		// scope lookups through wallet.ScopeForPurpose which honors the real
 		// HDCoinType — see DERIVATION.md. Bump this to 1 once the affected
-		// tests are migrated off the package-level KeyScope constants.
+		// tests are migrated off the Coin=0 key-scope constants.
 		HDCoinType:       0,
+		KeyPurposes:      []uint32{84},
 		BIP0034Height:    21111,  // 0000000023b3a96d3484e5abb3755c413e7d41500f8e2a5c3f0dd01299cd8ef8
 		BIP0065Height:    581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 		BIP0066Height:    330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
@@ -321,9 +323,10 @@ var BTCParams = map[string]*netparams.ChainParams{
 		HDPrivateKeyID:           [4]byte{0x04, 0x35, 0x83, 0x94}, // starts with tprv
 		HDPublicKeyID:            [4]byte{0x04, 0x35, 0x87, 0xcf}, // starts with tpub
 		// See the testnet entry above for why this is 0 rather than the
-		// BIP-44 standard 1. Same rationale: in-tree tests use the legacy
-		// waddrmgr.KeyScopeBIP00xx Coin=0 constants.
+		// BIP-44 standard 1. Same rationale: in-tree tests use fixed Coin=0
+		// key-scope constants.
 		HDCoinType:       0,
+		KeyPurposes:      []uint32{84},
 		BIP0034Height:    100000000, // Not active - Permit ver 1 blocks
 		BIP0065Height:    1351,      // Used by regression tests
 		BIP0066Height:    1251,      // Used by regression tests

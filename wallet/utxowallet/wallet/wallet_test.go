@@ -334,7 +334,7 @@ func TestDuplicateAddressDerivation(t *testing.T) {
 				addrs := make([]btcutil.Address, 10)
 				for i := 0; i < 10; i++ {
 					addr, err := w.NewAddress(
-						0, waddrmgr.KeyScopeBIP0084,
+						0, keyScopeBIP0084,
 					)
 					if err != nil {
 						return err

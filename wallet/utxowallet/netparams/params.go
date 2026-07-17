@@ -53,11 +53,14 @@ type ChainParams struct {
 	// address generation.
 	HDCoinType uint32
 
-	// AddrPurpose is the BIP-43 purpose of the key scope the wallet uses for its
-	// primary (and, for non-segwit chains, only) address type. 0 means the
-	// default, BIP-84 (native segwit, P2WPKH) — used by BTC and LTC. Chains
-	// without SegWit set it to 44 (legacy P2PKH); Dash uses 44.
-	AddrPurpose uint32
+	// KeyPurposes are the BIP-43 purposes of the key scopes the wallet creates
+	// and derives addresses under, one per address type the chain uses. The
+	// zeroth entry is the primary scope, used for receiving, change, and
+	// gap-limit recovery. BTC and LTC use {84} (native segwit, P2WPKH); Dash,
+	// which has no SegWit, uses {44} (legacy P2PKH). The seed is app-specific and
+	// never shared with externally-created wallets, so only these scopes are ever
+	// created — there are no additional default scopes to discover.
+	KeyPurposes []uint32
 
 	BIP0034Height int32
 	BIP0065Height int32

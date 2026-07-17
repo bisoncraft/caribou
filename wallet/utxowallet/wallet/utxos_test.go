@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/bisoncraft/bosswallet/wallet/utxowallet/waddrmgr"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -24,7 +23,7 @@ func TestFetchInputInfo(t *testing.T) {
 	defer cleanup()
 
 	// Create an address we can use to send some coins to.
-	addr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	addr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	if err != nil {
 		t.Fatalf("unable to get current address: %v", addr)
 	}
@@ -63,15 +62,15 @@ func TestFetchInputInfo(t *testing.T) {
 			len(derivationPath.Bip32Path))
 	}
 	if derivationPath.Bip32Path[0] !=
-		waddrmgr.KeyScopeBIP0084.Purpose+hdkeychain.HardenedKeyStart {
+		keyScopeBIP0084.Purpose+hdkeychain.HardenedKeyStart {
 		t.Fatalf("expected purpose %v, got %v",
-			waddrmgr.KeyScopeBIP0084.Purpose,
+			keyScopeBIP0084.Purpose,
 			derivationPath.Bip32Path[0])
 	}
 	if derivationPath.Bip32Path[1] !=
-		waddrmgr.KeyScopeBIP0084.Coin+hdkeychain.HardenedKeyStart {
+		keyScopeBIP0084.Coin+hdkeychain.HardenedKeyStart {
 		t.Fatalf("expected coin type %v, got %v",
-			waddrmgr.KeyScopeBIP0084.Coin,
+			keyScopeBIP0084.Coin,
 			derivationPath.Bip32Path[1])
 	}
 	if derivationPath.Bip32Path[2] != hdkeychain.HardenedKeyStart {
@@ -101,7 +100,7 @@ func TestFetchOutpointInfo(t *testing.T) {
 	defer cleanup()
 
 	// Create an address we can use to send some coins to.
-	addr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	addr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	require.NoError(t, err)
 	p2shAddr, err := txscript.PayToAddrScript(addr)
 	require.NoError(t, err)
@@ -138,7 +137,7 @@ func TestFetchDerivationInfo(t *testing.T) {
 	defer cleanup()
 
 	// Create an address we can use to send some coins to.
-	addr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	addr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	require.NoError(t, err)
 	p2shAddr, err := txscript.PayToAddrScript(addr)
 	require.NoError(t, err)
@@ -155,9 +154,9 @@ func TestFetchDerivationInfo(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, info.Bip32Path, 5)
-	require.Equal(t, waddrmgr.KeyScopeBIP0084.Purpose+
+	require.Equal(t, keyScopeBIP0084.Purpose+
 		hdkeychain.HardenedKeyStart, info.Bip32Path[0])
-	require.Equal(t, waddrmgr.KeyScopeBIP0084.Coin+
+	require.Equal(t, keyScopeBIP0084.Coin+
 		hdkeychain.HardenedKeyStart, info.Bip32Path[1])
 	require.EqualValues(t, hdkeychain.HardenedKeyStart, info.Bip32Path[2])
 	require.Equal(t, uint32(0), info.Bip32Path[3])

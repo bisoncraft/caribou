@@ -27,8 +27,8 @@ func TestDashSPVChainConfig(t *testing.T) {
 	if cc.RecoveryWindow == 0 {
 		t.Fatal("SPV RecoveryWindow should be >0 (drives the neutrino filter scan)")
 	}
-	if cc.NetParams.AddrPurpose != 44 {
-		t.Fatalf("AddrPurpose = %d, want 44 (legacy P2PKH)", cc.NetParams.AddrPurpose)
+	if len(cc.NetParams.KeyPurposes) != 1 || cc.NetParams.KeyPurposes[0] != 44 {
+		t.Fatalf("KeyPurposes = %v, want [44] (legacy P2PKH)", cc.NetParams.KeyPurposes)
 	}
 	if len(cc.NetParams.NeutrinoSeeds) == 0 {
 		t.Fatal("regtest has no neutrino seeds")
@@ -68,8 +68,11 @@ func TestDashElectrumChainConfig(t *testing.T) {
 	if cc.Chain != bisonwire.ChainDASH {
 		t.Fatalf("chain = %q, want %q", cc.Chain, bisonwire.ChainDASH)
 	}
-	if cc.NetParams.AddrPurpose != 44 {
-		t.Fatalf("AddrPurpose = %d, want 44 (legacy P2PKH, no SegWit)", cc.NetParams.AddrPurpose)
+	if len(cc.NetParams.KeyPurposes) != 1 || cc.NetParams.KeyPurposes[0] != 44 {
+		t.Fatalf("KeyPurposes = %v, want [44] (legacy P2PKH, no SegWit)", cc.NetParams.KeyPurposes)
+	}
+	if cc.RecoveryWindow == 0 {
+		t.Fatal("electrum RecoveryWindow should be >0 (drives the gap-limit restore scan)")
 	}
 	if cc.NetParams.Bech32HRPSegwit != "" {
 		t.Fatalf("unexpected bech32 HRP %q", cc.NetParams.Bech32HRPSegwit)
@@ -103,7 +106,7 @@ func TestDashCloneAssetsConsistency(t *testing.T) {
 
 // TestDashP2PKHAddressPrefix confirms the chain params produce Dash-style
 // legacy P2PKH addresses: mainnet starts with 'X', testnet/regtest with 'y'.
-// The native wallet derives BIP-44 P2PKH addresses (AddrPurpose 44), so these
+// The native wallet derives BIP-44 P2PKH addresses (KeyPurposes {44}), so these
 // are the address forms users will see.
 func TestDashP2PKHAddressPrefix(t *testing.T) {
 	pkHash := make([]byte, 20) // all-zero hash is fine for a prefix check

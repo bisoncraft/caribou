@@ -731,7 +731,7 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 // segwit P2WPKH otherwise (BTC/LTC).
 func (w *NativeWallet) StandardSendFee(feeRate uint64) uint64 {
 	var sz uint64
-	if w.netParams.AddrPurpose == 44 {
+	if w.netParams.KeyPurposes[0] == 44 {
 		// legacy: 1 P2PKH input + 2 P2PKH outputs
 		sz = uint64(MinimumTxOverhead) + uint64(RedeemP2PKHInputSize) + P2PKHOutputSize*2
 	} else {
@@ -805,7 +805,7 @@ func (w *NativeWallet) EstimateSendTxFee(address string, value, feeRate uint64, 
 	}
 
 	txOut := wire.NewTxOut(int64(value), pkScript)
-	scope := w.btcw.ScopeForPurpose(84)
+	scope := w.btcw.PrimaryScope()
 	satPerKB := btcutil.Amount(feeRate * 1000)
 
 	sendAllFee := func() (uint64, error) {

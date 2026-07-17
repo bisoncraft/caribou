@@ -822,12 +822,11 @@ func (m *Manager) ForEachRelevantActiveAddress(ns walletdb.ReadBucket,
 	return nil
 }
 
-// IsDefaultScope returns true if the given scope belongs to the set of default
-// key scopes for this manager's chain. Unlike the package-level IsDefaultScope,
-// this method is coin-type-aware and correctly handles non-BTC chains (e.g.
-// LTC uses Coin=2 for its default scopes).
+// IsDefaultScope returns true if the given scope is one the wallet creates for
+// this chain: a configured key purpose (KeyPurposes) at the chain's coin type.
 func (m *Manager) IsDefaultScope(scope KeyScope) bool {
-	return slices.Contains(DefaultKeyScopesForCoin(m.chainParams.HDCoinType), scope)
+	return scope.Coin == m.chainParams.HDCoinType &&
+		slices.Contains(m.chainParams.KeyPurposes, scope.Purpose)
 }
 
 // ForEachAccountAddress calls the given function with each address of
@@ -1797,14 +1796,23 @@ func Create(ns walletdb.ReadWriteBucket, rootKey *hdkeychain.ExtendedKey,
 		return managerError(ErrEmptyPassphrase, str, nil)
 	}
 
-	// Perform the initial bucket creation and database namespace setup.
-	// Use the chain's HD coin type so that non-BTC chains (e.g. LTC with
-	// coinType=2) derive keys under the correct BIP-44 coin-type path.
-	defaultScopes := map[KeyScope]ScopeAddrSchema{}
+	// Perform the initial bucket creation and database namespace setup. The
+	// wallet creates one key scope per configured purpose (KeyPurposes) at the
+	// chain's HD coin type — 84 for BTC/LTC, 44 for Dash. The app-specific seed
+	// is never shared with externally-created wallets, so no other scope can hold
+	// funds and none is created; this keeps unused scopes out of the database and
+	// off the neutrino recovery filter horizon.
+	var scopeList []KeyScope
+	scopeSchemas := map[KeyScope]ScopeAddrSchema{}
 	if !isWatchingOnly {
-		defaultScopes = ScopeAddrMapForCoin(chainParams.HDCoinType)
+		schemaForCoin := ScopeAddrMapForCoin(chainParams.HDCoinType)
+		for _, purpose := range chainParams.KeyPurposes {
+			scope := KeyScope{Purpose: purpose, Coin: chainParams.HDCoinType}
+			scopeList = append(scopeList, scope)
+			scopeSchemas[scope] = schemaForCoin[scope]
+		}
 	}
-	if err := createManagerNS(ns, defaultScopes); err != nil {
+	if err := createManagerNS(ns, scopeSchemas); err != nil {
 		return maybeConvertDbError(err)
 	}
 
@@ -1906,12 +1914,9 @@ func Create(ns walletdb.ReadWriteBucket, rootKey *hdkeychain.ExtendedKey,
 			return managerError(ErrKeyChain, str, err)
 		}
 
-		// Next, for each registered default manager scope, we'll
-		// create the hardened cointype key for it, as well as the
-		// first default account. Use coin-type-aware scopes so that
-		// non-BTC chains (e.g. LTC with coinType=2) use the correct
-		// derivation path.
-		for _, defaultScope := range DefaultKeyScopesForCoin(chainParams.HDCoinType) {
+		// Next, for each configured key scope, we'll create the hardened
+		// cointype key for it, as well as the first default account.
+		for _, defaultScope := range scopeList {
 			err := createManagerKeyScope(
 				ns, defaultScope, rootKey, cryptoKeyPub, cryptoKeyPriv,
 			)

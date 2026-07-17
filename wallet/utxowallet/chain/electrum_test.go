@@ -1304,7 +1304,7 @@ func TestElectrumFilterBlocks(t *testing.T) {
 	stub.history[sh] = []electrum.HistoryEntry{{Height: 3, TxHash: txid}}
 	stub.rawTxs[txid] = rawHex
 
-	scopedIdx := waddrmgr.ScopedIndex{Scope: waddrmgr.KeyScopeBIP0084}
+	scopedIdx := waddrmgr.ScopedIndex{Scope: waddrmgr.KeyScope{Purpose: 84, Coin: 0}}
 	req := &FilterBlocksRequest{
 		ExternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{scopedIdx: addr},
 	}
@@ -1474,7 +1474,7 @@ func TestElectrumFilterBlocksSameBlockParentChild(t *testing.T) {
 		{Height: 3, TxHash: parentTxid},
 	}
 
-	scopedIdx := waddrmgr.ScopedIndex{Scope: waddrmgr.KeyScopeBIP0084}
+	scopedIdx := waddrmgr.ScopedIndex{Scope: waddrmgr.KeyScope{Purpose: 84, Coin: 0}}
 	req := &FilterBlocksRequest{
 		ExternalAddrs: map[waddrmgr.ScopedIndex]btcutil.Address{scopedIdx: addr},
 	}

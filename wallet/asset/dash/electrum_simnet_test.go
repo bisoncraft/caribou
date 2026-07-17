@@ -134,6 +134,20 @@ func (h *dashHarnessNode) Send(addr string, val, _ uint64) (asset.Coin, error) {
 	return btc.NewOutput(txHash, 0, val), nil
 }
 
+// NewAddress returns a fresh receiving address from the harness alpha wallet,
+// used as an external spend destination in recovery tests.
+func (h *dashHarnessNode) NewAddress() (string, error) {
+	b, err := h.cl.RawRequest(dashCtx, "getnewaddress", nil)
+	if err != nil {
+		return "", err
+	}
+	var addr string
+	if err := json.Unmarshal(b, &addr); err != nil {
+		return "", fmt.Errorf("decode getnewaddress: %w", err)
+	}
+	return addr, nil
+}
+
 // newDashAlphaBackend connects a thin funding node to the harness alpha dashd,
 // reading its config at ~/dextest/dash/alpha/alpha.conf.
 func newDashAlphaBackend(t *testing.T) (*dashHarnessNode, *util.ConnectionMaster) {
@@ -183,7 +197,9 @@ func newDashElectrumWallet(t *testing.T) (asset.Wallet, *util.ConnectionMaster) 
 }
 
 // connectDashElectrumWalletAt creates and connects an electrum Dash wallet from
-// the given seed/birthday with the given recovery window (0 disables recovery).
+// the given seed/birthday. A positive recoveryWindow sets the "recoverywindow"
+// wallet setting, overriding the ChainConfig default; 0 leaves it unset, so the
+// wallet uses its built-in default (ElectrumRecoveryWindow for Dash electrum).
 func connectDashElectrumWalletAt(t *testing.T, dataDir string, seed []byte, recoveryWindow uint32, bday time.Time) (asset.Wallet, *util.ConnectionMaster) {
 	t.Helper()
 	walletDir := filepath.Join(dataDir, RegressionNetParams.Name)
@@ -528,6 +544,150 @@ func TestDashElectrumStandardSendFee(t *testing.T) {
 	if fee2 := w.StandardSendFee(feeRate * 2); fee2 <= fee {
 		t.Fatalf("StandardSendFee not monotonic: %d then %d", fee, fee2)
 	}
+}
+
+// TestDashElectrumEstimateSendTxFee funds the wallet and exercises
+// EstimateSendTxFee (the "Network fee" preview behind apiEstimateSendTxFee) for
+// a regular send, a max withdraw, and a subtract-fee send. Dash creates only the
+// legacy m/44' scope, so this guards the send/coin-select/change paths against
+// reintroducing a hardcoded segwit (m/84') or taproot (m/86') scope that Dash
+// does not have.
+func TestDashElectrumEstimateSendTxFee(t *testing.T) {
+	alpha, alphaCM := newDashAlphaBackend(t)
+	defer alphaCM.Disconnect()
+	unlock(t, alpha)
+
+	w, cm := newDashElectrumWallet(t)
+	defer cm.Disconnect()
+	waitDashSynced(t, w)
+	unlock(t, w)
+
+	estimator, ok := w.(asset.TxFeeEstimator)
+	if !ok {
+		t.Fatal("Dash wallet does not implement asset.TxFeeEstimator")
+	}
+
+	fundAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress for funding: %v", err)
+	}
+	if _, err = alpha.Send(fundAddr, toSatoshiDash(20), 10); err != nil {
+		t.Fatalf("alpha.Send for funding: %v", err)
+	}
+	if err = mineDashAlpha(); err != nil {
+		t.Fatalf("mineDashAlpha after funding: %v", err)
+	}
+	bal := waitDashBalanceAtLeast(t, w, toSatoshiDash(20))
+
+	destAddr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress for dest: %v", err)
+	}
+
+	const feeRate = 10
+
+	// Regular send: builds coin selection and a change output. This is the
+	// exact path that failed with "scope m/84'/1' not found".
+	fee, valid, err := estimator.EstimateSendTxFee(destAddr, toSatoshiDash(5), feeRate, false, false)
+	if err != nil {
+		t.Fatalf("EstimateSendTxFee regular: %v", err)
+	}
+	if !valid {
+		t.Fatal("EstimateSendTxFee regular: address reported invalid")
+	}
+	if fee == 0 {
+		t.Fatal("EstimateSendTxFee regular: zero fee")
+	}
+
+	// Max withdraw: routes through the send-all estimate, whose change-size
+	// helper previously defaulted to the taproot (m/86') scope.
+	maxFee, valid, err := estimator.EstimateSendTxFee(destAddr, bal.Available, feeRate, false, true)
+	if err != nil {
+		t.Fatalf("EstimateSendTxFee max: %v", err)
+	}
+	if !valid || maxFee == 0 {
+		t.Fatalf("EstimateSendTxFee max: valid=%v fee=%d", valid, maxFee)
+	}
+
+	// Subtract-fee send: fee comes out of the value.
+	subFee, valid, err := estimator.EstimateSendTxFee(destAddr, toSatoshiDash(5), feeRate, true, false)
+	if err != nil {
+		t.Fatalf("EstimateSendTxFee subtract: %v", err)
+	}
+	if !valid || subFee == 0 {
+		t.Fatalf("EstimateSendTxFee subtract: valid=%v fee=%d", valid, subFee)
+	}
+}
+
+// TestDashElectrumRecoverySpentChange reproduces the real restore scenario the
+// gap-limit test omits: receive funds, then spend twice to an external (harness)
+// address so the wallet's remaining balance lives on change (internal-branch)
+// addresses. A fresh wallet from the SAME seed with a recovery window must
+// rediscover that change balance — exercising internal-branch discovery and
+// spent-output ingestion under Dash's legacy scope and X11 block identity.
+func TestDashElectrumRecoverySpentChange(t *testing.T) {
+	alpha, alphaCM := newDashAlphaBackend(t)
+	defer alphaCM.Disconnect()
+	unlock(t, alpha)
+
+	seed := randBytes(t, 32)
+	bday := time.Now().Add(-time.Hour)
+
+	wA, cmA := connectDashElectrumWalletAt(t, t.TempDir(), seed, 0, bday)
+	waitDashSynced(t, wA)
+	unlock(t, wA)
+
+	// Receive 20 DASH on an external address.
+	fundAddr, err := wA.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+	if _, err = alpha.Send(fundAddr, toSatoshiDash(20), 10); err != nil {
+		t.Fatalf("alpha.Send funding: %v", err)
+	}
+	if err = mineDashAlpha(); err != nil {
+		t.Fatalf("mineDashAlpha funding: %v", err)
+	}
+	waitDashBalanceAtLeast(t, wA, toSatoshiDash(20))
+
+	// Spend twice to an external harness address, leaving the remaining balance
+	// on change (internal-branch) outputs.
+	sink, err := alpha.NewAddress()
+	if err != nil {
+		t.Fatalf("alpha.NewAddress: %v", err)
+	}
+	for i, amt := range []float64{5, 3} {
+		coin, err := wA.Send(sink, toSatoshiDash(amt), 10)
+		if err != nil {
+			t.Fatalf("Send %d: %v", i, err)
+		}
+		if err = mineDashAlpha(); err != nil {
+			t.Fatalf("mineDashAlpha spend %d: %v", i, err)
+		}
+		waitDashTxConfirmed(t, wA, coin.TxID())
+	}
+
+	balA, err := wA.Balance()
+	if err != nil {
+		t.Fatalf("wA.Balance: %v", err)
+	}
+	want := balA.Available
+	t.Logf("wA available after spends (change): %d", want)
+	if want == 0 || want >= toSatoshiDash(20) {
+		t.Fatalf("unexpected wA available %d; want change 0 < x < 20 DASH", want)
+	}
+	cmA.Disconnect()
+
+	// Restore from the same seed WITHOUT an explicit recovery-window setting, so
+	// recovery is driven by the wallet's built-in default (ChainConfig.Recovery
+	// Window) exactly as the app's restore-from-seed flow does. This must still
+	// recover the change balance.
+	wB, cmB := connectDashElectrumWalletAt(t, t.TempDir(), seed, 0, bday)
+	defer cmB.Disconnect()
+	waitDashSynced(t, wB)
+
+	balB := waitDashBalanceAtLeast(t, wB, want)
+	t.Logf("wB recovered available: %d (want>=%d)", balB.Available, want)
 }
 
 // TestDashElectrumInfo verifies Info returns the Dash WalletInfo.

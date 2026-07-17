@@ -39,13 +39,13 @@ func TestFundPsbt(t *testing.T) {
 	defer cleanup()
 
 	// Create a P2WKH address we can use to send some coins to.
-	addr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	addr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	require.NoError(t, err)
 	p2wkhAddr, err := txscript.PayToAddrScript(addr)
 	require.NoError(t, err)
 
 	// Also create a nested P2WKH address we can use to send some coins to.
-	addr, err = w.CurrentAddress(0, waddrmgr.KeyScopeBIP0049Plus)
+	addr, err = w.CurrentAddress(0, keyScopeBIP0049Plus)
 	require.NoError(t, err)
 	np2wkhAddr, err := txscript.PayToAddrScript(addr)
 	require.NoError(t, err)
@@ -231,7 +231,7 @@ func TestFundPsbt(t *testing.T) {
 		},
 		feeRateSatPerKB:         20000,
 		validatePackage:         true,
-		changeKeyScope:          &waddrmgr.KeyScopeBIP0084,
+		changeKeyScope:          &keyScopeBIP0084,
 		expectedInputs:          []wire.OutPoint{utxo1},
 		expectedChangeBeforeFee: utxo1Amount,
 	}, {
@@ -251,7 +251,7 @@ func TestFundPsbt(t *testing.T) {
 		feeRateSatPerKB:         2000, // 2 sat/byte
 		expectedErr:             "",
 		validatePackage:         true,
-		changeKeyScope:          &waddrmgr.KeyScopeBIP0084,
+		changeKeyScope:          &keyScopeBIP0084,
 		expectedChangeBeforeFee: utxo1Amount - 150000,
 		expectedInputs:          []wire.OutPoint{utxo1},
 	}}
@@ -400,16 +400,16 @@ func assertTxInputs(t *testing.T, packet *psbt.Packet,
 func assertChangeOutputScope(t *testing.T, pkScript []byte,
 	changeScope *waddrmgr.KeyScope) {
 
-	// By default (changeScope == nil), the script should
-	// be a pay-to-taproot one.
+	// By default (changeScope == nil), change uses the wallet's primary scope,
+	// which is native segwit (P2WKH) for the BTC test wallet.
 	switch changeScope {
-	case nil, &waddrmgr.KeyScopeBIP0086:
+	case &keyScopeBIP0086:
 		require.True(t, txscript.IsPayToTaproot(pkScript))
 
-	case &waddrmgr.KeyScopeBIP0049Plus, &waddrmgr.KeyScopeBIP0084:
+	case nil, &keyScopeBIP0049Plus, &keyScopeBIP0084:
 		require.True(t, txscript.IsPayToWitnessPubKeyHash(pkScript))
 
-	case &waddrmgr.KeyScopeBIP0044:
+	case &keyScopeBIP0044:
 		require.True(t, txscript.IsPayToPubKeyHash(pkScript))
 
 	default:
@@ -436,7 +436,7 @@ func TestFinalizePsbt(t *testing.T) {
 	defer cleanup()
 
 	// Create a P2WKH address we can use to send some coins to.
-	addr, err := w.CurrentAddress(0, waddrmgr.KeyScopeBIP0084)
+	addr, err := w.CurrentAddress(0, keyScopeBIP0084)
 	if err != nil {
 		t.Fatalf("unable to get current address: %v", addr)
 	}
@@ -446,7 +446,7 @@ func TestFinalizePsbt(t *testing.T) {
 	}
 
 	// Also create a nested P2WKH address we can send coins to.
-	addr, err = w.CurrentAddress(0, waddrmgr.KeyScopeBIP0049Plus)
+	addr, err = w.CurrentAddress(0, keyScopeBIP0049Plus)
 	if err != nil {
 		t.Fatalf("unable to get current address: %v", addr)
 	}
