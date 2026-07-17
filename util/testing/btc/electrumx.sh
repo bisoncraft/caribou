@@ -53,6 +53,20 @@ git reset --hard FETCH_HEAD
 sed -i 's/self.polling_delay = 5/self.polling_delay = 1/' electrumx/server/block_processor.py
 sed -i 's/refresh_secs=5.0/refresh_secs=1.0/' electrumx/server/mempool.py
 
+# Dash Core 20+ serializes the coinbase special transaction (cbTx) at version 3,
+# appending bestCLHeightDiff/bestCLSignature/creditPoolBalance. This electrumx's
+# DashCbTx handler only parses cbTx v1/v2, so on a v3 coinbase it under-reads the
+# payload and `assert self.cursor == end` aborts the block processor, taking the
+# whole server down on every block past the activation height. spesmilo dropped
+# Dash upstream, so there is no newer release to move to. Trust the serialized
+# extra-payload length instead of asserting exact consumption: seek to the
+# declared end, which stays forward-compatible with any future special-tx
+# version (electrumx indexes by input/output scripts and does not need the
+# special-tx payload).
+if [ "${COIN}" = "Dash" ]; then
+    sed -i 's/assert self.cursor == end/self.cursor = end/' electrumx/lib/tx_dash.py
+fi
+
 if [ ! -d "${ELECTRUMX_DIR}/venv" ]; then
     python -m venv ${ELECTRUMX_DIR}/venv
 fi
