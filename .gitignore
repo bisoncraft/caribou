@@ -51,7 +51,6 @@ wallet/asset/btc/electrum/example/wallet/wallet
 wallet/asset/eth/cmd/getgas/getgas
 wallet/asset/eth/cmd/deploy/deploy
 wallet/appserver/site/template-builder/template-builder
-wallet/tor/build
 util/politeia/politeia_test.db
 util/lexi/cmd/lexidbexplorer/lexidbexplorer
 util/evmrelay/cmd/evmrelay/evmrelay

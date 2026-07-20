@@ -355,7 +355,6 @@ export interface AppState {
   langs: string[]
   inited: boolean
   ok: boolean
-  onionUrl: string
   appSettings: AppSettings
 }
 

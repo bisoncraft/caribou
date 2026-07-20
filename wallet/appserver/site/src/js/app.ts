@@ -96,7 +96,6 @@ interface UserResponse extends APIResponse {
   lang: string
   langs: string[]
   inited: boolean
-  onionUrl: string
   mmStatus: MarketMakingStatus
 }
 
@@ -188,7 +187,6 @@ export default class Application {
   popupTmpl: HTMLElement
   noteReceivers: Record<string, (n: CoreNote) => void>[]
   requiredActions: Record<string, requiredAction>
-  onionUrl: string
   dynamicUnits: {
     div: PageElement
     rows: PageElement
@@ -352,7 +350,6 @@ export default class Application {
     if (!this.checkResponse(resp)) return
     this.inited = resp.inited
     this.authed = Boolean(resp.user)
-    this.onionUrl = resp.onionUrl
     this.lang = resp.lang
     this.langs = resp.langs
     this.mmStatus = resp.mmStatus

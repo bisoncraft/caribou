@@ -38,7 +38,6 @@ import (
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/core"
 	"github.com/bisoncraft/caribou/wallet/db"
-	"github.com/bisoncraft/caribou/wallet/tor"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/bisoncraft/caribou/wallet/websocket"
 	"github.com/decred/dcrd/certgen"
@@ -224,7 +223,6 @@ const grantTTL = 2 * time.Minute
 var newGrantToken = func() (string, error) { return util.RandomHex(32) }
 
 type Config struct {
-	DataDir       string
 	Core          clientCore // *core.Core
 	Addr          string
 	CustomSiteDir string
@@ -242,7 +240,6 @@ type Config struct {
 	// and execution of html templates on each request.
 	NoEmbed         bool
 	HttpProf        bool
-	Tor             bool
 	MainLogFilePath string
 	// CapabilityToken, when non-empty, gates every request on a secret the
 	// caller must present (mobile). It is handed to the WebView in the bootstrap
@@ -256,7 +253,6 @@ type Config struct {
 // interface to Caribou.
 type AppServer struct {
 	ctx      context.Context
-	dataDir  string
 	wsServer *websocket.Server
 	mux      *chi.Mux
 	siteDir  string
@@ -266,8 +262,6 @@ type AppServer struct {
 	addr     string
 	csp      string
 	srv      *http.Server
-	tor      bool
-	onion    string
 
 	capToken string // see Config.CapabilityToken
 
@@ -420,12 +414,10 @@ func New(cfg *Config) (*AppServer, error) {
 		mux:             mux,
 		srv:             httpServer,
 		addr:            cfg.Addr,
-		dataDir:         cfg.DataDir,
 		wsServer:        websocket.New(cfg.Core, log.SubLogger("WS")),
 		authTokens:      make(map[string]bool),
 		cachedPasswords: make(map[string]*cachedPassword),
 		pendingGrants:   make(map[string]*sessionGrant),
-		tor:             cfg.Tor,
 		appVersion:      userAppVersion(cfg.AppVersion, false),
 		mainLogFilePath: cfg.MainLogFilePath,
 	}
@@ -467,11 +459,6 @@ func New(cfg *Config) (*AppServer, error) {
 		NoColor: runtime.GOOS == "windows",
 	}))
 	mux.Use(middleware.Recoverer)
-
-	// Compress responses if using tor.
-	if cfg.Tor {
-		mux.Use(middleware.Compress(9))
-	}
 
 	// HTTP profiler
 	if cfg.HttpProf {
@@ -647,41 +634,6 @@ func (s *AppServer) Addr() string {
 // Connect starts the web server. Satisfies the util.Connector interface.
 func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
-	listeners := make([]net.Listener, 0)
-	var success bool
-
-	if s.tor {
-		if s.dataDir == "" {
-			return nil, errors.New("tor enabled but no data directory was specified")
-		}
-		dataDir := filepath.Join(s.dataDir, "tor")
-		svc, err := tor.New(dataDir, log.SubLogger("TOR"))
-		if err != nil {
-			return nil, fmt.Errorf("error intializing hidden service: %w", err)
-		}
-		cm := util.NewConnectionMaster(svc)
-		if err := cm.ConnectOnce(ctx); err != nil {
-			return nil, fmt.Errorf("error connecting hidden service: %w", err)
-		}
-		defer func() {
-			if !success {
-				cm.Disconnect()
-			}
-		}()
-		wg.Add(1)
-		go func() {
-			cm.Wait()
-			wg.Done()
-		}()
-		s.onion = svc.OnionAddress()
-		log.Infof("Hidden service address: %s", s.onion)
-
-		listener, err := net.Listen("tcp4", svc.ServerAddress())
-		if err != nil {
-			return nil, fmt.Errorf("error generating listener for tor relay: %w", err)
-		}
-		listeners = append(listeners, listener)
-	}
 
 	// Start serving.
 	listener, err := net.Listen("tcp", s.addr)
@@ -692,7 +644,6 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if https {
 		listener = tls.NewListener(listener, s.srv.TLSConfig)
 	}
-	listeners = append(listeners, listener)
 	s.ctx = ctx
 
 	addr, allowInCSP := prepareAddr(listener.Addr())
@@ -730,18 +681,16 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		s.wsServer.HandleConnect(ctx, w, r)
 	})
 
-	for _, listener := range listeners {
-		wg.Add(1)
-		go func(listener net.Listener) {
-			log.Infof("Server listening on %s", listener.Addr())
-			err := s.srv.Serve(listener)
-			if !errors.Is(err, http.ErrServerClosed) {
-				log.Warnf("unexpected (http.Server).Serve error: %v", err)
-			}
-			log.Debugf("RPC listener done for %s", listener.Addr())
-			wg.Done()
-		}(listener)
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Infof("Server listening on %s", listener.Addr())
+		err := s.srv.Serve(listener)
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Warnf("unexpected (http.Server).Serve error: %v", err)
+		}
+		log.Debugf("RPC listener done for %s", listener.Addr())
+	}()
 
 	wg.Add(1)
 	go func() {
@@ -778,7 +727,6 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 			scheme, s.addr)
 	}
 
-	success = true
 	return &wg, nil
 }
 
@@ -795,17 +743,6 @@ func prepareAddr(addr net.Addr) (string, bool) {
 	}
 
 	return addr.String(), false
-}
-
-// isOnionRequest returns true if the request was made through the Tor hidden
-// service.
-func (s *AppServer) isOnionRequest(r *http.Request) bool {
-	if s.onion == "" {
-		return false
-	}
-	// s.onion is "http://host.onion", strip the scheme to compare.
-	host := strings.TrimPrefix(s.onion, "http://")
-	return r.Host == host
 }
 
 // Lock locks wallets and tears down every session. It performs the same work as
@@ -997,8 +934,7 @@ func (s *AppServer) restoreCompanionFromHash(token string) bool {
 
 // isAuthed checks if the incoming request is from an authorized user/device.
 // Requires the auth token cookie to be set in the request and for the token
-// to match `AppServer.validAuthToken`. Requests through the Tor hidden
-// service also require an active companion app pairing.
+// to match `AppServer.validAuthToken`.
 func (s *AppServer) isAuthed(r *http.Request) bool {
 	// A valid local API token authorizes the request on its own, without a
 	// browser session. It is the credential used by same-machine automation.
@@ -1010,23 +946,17 @@ func (s *AppServer) isAuthed(r *http.Request) bool {
 	if authToken == "" {
 		return false
 	}
-	onion := s.isOnionRequest(r)
 
 	// Single read-lock section for the common case.
 	s.authMtx.RLock()
 	ok := s.authTokens[authToken]
 	needsExpiryCheck := ok && authToken == s.companionToken && !s.companionTokenClaimed
-	paired := s.companionToken != "" && s.companionTokenClaimed
 	s.authMtx.RUnlock()
 
 	if !ok {
 		// Try to restore the companion token from the persisted
 		// hash (e.g. after a server restart).
 		return s.restoreCompanionFromHash(authToken)
-	}
-	// Reject authenticated onion requests when no companion app is paired.
-	if onion && !paired {
-		return false
 	}
 	if !needsExpiryCheck {
 		return true
@@ -1050,12 +980,8 @@ func (s *AppServer) isAuthed(r *http.Request) bool {
 }
 
 // isLocalRequest reports whether the request originated from the same machine,
-// i.e. a loopback peer over the direct (non-Tor) listener. Onion requests
-// arrive over loopback too, so they are explicitly excluded.
+// i.e. a loopback peer.
 func (s *AppServer) isLocalRequest(r *http.Request) bool {
-	if s.isOnionRequest(r) {
-		return false
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr

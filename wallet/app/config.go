@@ -54,7 +54,6 @@ type WebConfig struct {
 	HTTPProfile bool   `long:"httpprof" description:"Start HTTP profiler on /pprof."`
 	// Deprecated
 	Experimental bool `long:"experimental" description:"DEPRECATED: Enable experimental features"`
-	Tor          bool `long:"tor" description:"Enable tor hidden service"`
 }
 
 // LogConfig encapsulates the logging-related settings.
@@ -107,7 +106,6 @@ func (cfg *Config) Web(c *core.Core, log util.Logger, utc bool) *appserver.Confi
 	}
 
 	return &appserver.Config{
-		DataDir:         filepath.Join(cfg.AppData, "srv"),
 		Core:            c,
 		Addr:            cfg.WebAddr,
 		CustomSiteDir:   cfg.SiteDir,
@@ -119,7 +117,6 @@ func (cfg *Config) Web(c *core.Core, log util.Logger, utc bool) *appserver.Confi
 		HttpProf:        cfg.HTTPProfile,
 		AppVersion:      Version,
 		Language:        cfg.Language,
-		Tor:             cfg.Tor,
 		MainLogFilePath: cfg.LogPath,
 	}
 }

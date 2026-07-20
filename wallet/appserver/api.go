@@ -1001,17 +1001,6 @@ func (s *AppServer) actuallyLogin(w http.ResponseWriter, r *http.Request, login 
 	s.sessionMtx.Lock()
 	defer s.sessionMtx.Unlock()
 
-	// Only allow login from the onion address when a companion app is
-	// actively paired. This prevents an unpaired companion app from
-	// re-authenticating with saved credentials.
-	if s.isOnionRequest(r) {
-		s.authMtx.RLock()
-		paired := s.companionToken != "" && s.companionTokenClaimed
-		s.authMtx.RUnlock()
-		if !paired {
-			return errors.New("companion app is not paired")
-		}
-	}
 	pass, err := s.resolvePass(login.Pass, r)
 	defer zero(pass)
 	if err != nil {
@@ -1071,7 +1060,6 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		Langs              []string    `json:"langs"`
 		Inited             bool        `json:"inited"`
 		OK                 bool        `json:"ok"`
-		OnionUrl           string      `json:"onionUrl"`
 		CompanionAppPaired bool        `json:"companionAppPaired"`
 		AppSettings        appSettings `json:"appSettings"`
 	}{
@@ -1080,7 +1068,6 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		Langs:              s.langs,
 		Inited:             s.core.IsInitialized(),
 		OK:                 true,
-		OnionUrl:           s.onion,
 		CompanionAppPaired: paired,
 		AppSettings:        settings,
 	}
