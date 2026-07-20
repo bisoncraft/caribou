@@ -82,9 +82,6 @@
       <div id="gameCodeLink" class="py-3 mb-3 border-bottom pointer hoverbg">
         <span class="ico-ticket"></span> [[[Redeem game code]]]
       </div>
-      <div class="mb-3 pb-3 border-bottom {{if not $authed}}d-hide{{end}}">
-        <button id="companionAppBtn" class="fs15">[[[Pair companion app]]]</button>
-      </div>
       <p class="grey">[[[Build ID]]]: <span class="mono">{{commitHash false}}</span></p>
     </div>
   </section>
@@ -119,11 +116,6 @@
     {{- /* CHANGE APP PASSWORD */ -}}
     <form class="d-hide" id="changeAppPWForm">
       {{template "changeAppPWForm"}}
-    </form>
-
-    {{- /* COMPANION APP PAIRING */ -}}
-    <form class="d-hide" id="companionAppForm">
-      {{template "companionAppForm"}}
     </form>
 
     {{- /* RESET APP PASSWORD */ -}}

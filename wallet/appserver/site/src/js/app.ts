@@ -98,7 +98,6 @@ interface UserResponse extends APIResponse {
   inited: boolean
   onionUrl: string
   mmStatus: MarketMakingStatus
-  companionAppPaired: boolean
 }
 
 /* constructors is a map to page constructors. */
@@ -190,7 +189,6 @@ export default class Application {
   noteReceivers: Record<string, (n: CoreNote) => void>[]
   requiredActions: Record<string, requiredAction>
   onionUrl: string
-  companionAppPaired: boolean
   dynamicUnits: {
     div: PageElement
     rows: PageElement
@@ -355,7 +353,6 @@ export default class Application {
     this.inited = resp.inited
     this.authed = Boolean(resp.user)
     this.onionUrl = resp.onionUrl
-    this.companionAppPaired = resp.companionAppPaired
     this.lang = resp.lang
     this.langs = resp.langs
     this.mmStatus = resp.mmStatus

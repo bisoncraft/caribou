@@ -1369,7 +1369,6 @@ export interface Application {
   commitHash: string
   authed: boolean
   onionUrl: string
-  companionAppPaired: boolean
   start (): Promise<void>
   reconnected (): void
   fetchUser (): Promise<User | void>
