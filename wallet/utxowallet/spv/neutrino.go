@@ -46,7 +46,7 @@ var (
 
 	// UserAgentName is the user agent name and is used to help identify
 	// ourselves to other bitcoin peers.
-	UserAgentName = "BisonSPV"
+	UserAgentName = "CaribouSPV"
 
 	// UserAgentVersion is the user agent version and is used to help
 	// identify ourselves to other bitcoin peers.

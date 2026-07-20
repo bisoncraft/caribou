@@ -20,6 +20,7 @@ to adapt an existing clone, fork, or in-flight branch.
 | Application data dir | `~/.bossw` (or platform equivalent) | `~/.caribou` |
 | Log / database files | `bossw.log` / `bossw.db` | `caribou.log` / `caribou.db` |
 | SPV saved-peers file | `dexc-peers.json` | `caribou-peers.json` |
+| SPV peer user agent | `BisonSPV` | `CaribouSPV` |
 | npm workspaces | `dcrdex-ui`, `@bossw/*` | `@caribou/newui`, `@caribou/*` |
 
 Application and packaging identifiers:
