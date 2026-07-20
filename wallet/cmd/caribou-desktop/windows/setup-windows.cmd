@@ -1,11 +1,11 @@
 :: This script bootstraps the build environment for Windows.  It installs git and
-:: PowerShell, clones the dcrdex repo and runs the setup-windows-stage2.ps1 script 
+:: PowerShell, clones the caribou repo and runs the setup-windows-stage2.ps1 script
 :: which will install the toolchain and libraries required for the build.
 ::
 :: Running the script:
 :: setup-windows.cmd <repoBranch> <repoUrl> 
 ::
-:: Both parameters are optional.  If not provided, https://github.com/decred/dcrdex@master
+:: Both parameters are optional.  If not provided, https://github.com/bisoncraft/caribou@master
 :: will be cloned.
 
 @echo off
@@ -22,7 +22,7 @@ if "%1" neq "" (
 if "%2" neq "" (
     set repoUrl=%2
 ) else (
-    set repoUrl=https://github.com/decred/dcrdex
+    set repoUrl=https://github.com/bisoncraft/caribou
 )
 
 @echo Installing git... 
@@ -77,7 +77,7 @@ if %errorlevel% neq 0 (
 )
 del %PowerShellInstaller%
 
-:: Clone the dcrdex repository
+:: Clone the caribou repository
 if exist caribou rd /s /q caribou
 @echo Cloning %repoUrl%@%repoBranch%...
 "c:\Program Files\Git\bin\git.exe" clone -b %repoBranch% %repoUrl%

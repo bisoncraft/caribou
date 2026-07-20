@@ -1,13 +1,13 @@
-# This script creates a self signed certificate to sign the DCRDEX executable
+# This script creates a self signed certificate to sign the Caribou executable
 # and installer, suitable for testing.
 
 # If the default PowerShell Execution Policy is set to Restricted, run this using:
 # powershell -ExecutionPolicy Bypass -File windows\makecert.ps1
 
 # Set variables
-$certSubject = "CN=DCRDEXCodeSigningCertificate"
+$certSubject = "CN=CaribouCodeSigningCertificate"
 $certPassword = "YourPassword"
-$certFriendlyName = "DCRDEX Code Signing Cert"
+$certFriendlyName = "Caribou Code Signing Cert"
 $certPath = "certs"
 $certExportPath = "$certPath\Certificate.pfx"
 

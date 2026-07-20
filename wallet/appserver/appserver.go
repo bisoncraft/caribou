@@ -612,7 +612,7 @@ func (w *AppServer) fetchLatestVersion(ctx context.Context) {
 		TagName string `json:"tag_name"`
 	}
 
-	err := dexnet.Get(ctx, "https://api.github.com/repos/decred/dcrdex/releases/latest", &response, dexnet.WithSizeLimit(1<<22))
+	err := dexnet.Get(ctx, "https://api.github.com/repos/bisoncraft/caribou/releases/latest", &response, dexnet.WithSizeLimit(1<<22))
 	if err != nil {
 		log.Debugf("Error getting latest version: %v", err)
 		return

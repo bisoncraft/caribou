@@ -15,4 +15,4 @@ echo '
 
 '
 
-git log $1..$2 --format="- %s" | gawk '{print gensub(/\(#([^)]*)\)/, "([#\\1](https://github.com/decred/dcrdex/pull/\\1))", "g")}'
+git log $1..$2 --format="- %s" | gawk '{print gensub(/\(#([^)]*)\)/, "([#\\1](https://github.com/bisoncraft/caribou/pull/\\1))", "g")}'

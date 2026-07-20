@@ -717,7 +717,7 @@
             </p>
             <div class="mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-4">
                 <div class="flex items-stretch border-solid border-gray-400 border-2 rounded-lg cursor-pointer relative">
-                  <a id="downloadLink" href="https://github.com/decred/dcrdex/releases/latest/download/caribou-desktop-windows-amd64-v1.0.3.msi" class="flex py-2 px-6 justify-center items-center text-lg leading-none btn-primary">
+                  <a id="downloadLink" href="https://github.com/bisoncraft/caribou/releases/latest/download/caribou-desktop-windows-amd64-v1.0.3.msi" class="flex py-2 px-6 justify-center items-center text-lg leading-none btn-primary">
                     <img id="downloadImg">
                     <span id="downloadText">Download for Windows (installer)</span>
                   </a>
@@ -739,7 +739,7 @@
                 </div>
             </div>
              <div class="mt-8">
-                 <a href="https://github.com/decred/dcrdex" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold leading-6 text-gray-400 hover:text-white transition duration-200 ease-in-out inline-flex items-center gap-1">
+                 <a href="https://github.com/bisoncraft/caribou" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold leading-6 text-gray-400 hover:text-white transition duration-200 ease-in-out inline-flex items-center gap-1">
                     View Source Code on GitHub <span data-lucide="external-link"></span>
                 </a>
             </div>
@@ -802,7 +802,7 @@
                     <a href="#support" class="text-base text-gray-400 hover:text-gray-300 transition-colors duration-200">Support</a>
                 </div>
                 <div class="px-5 py-2">
-                    <a href="https://github.com/decred/dcrdex" target="_blank" rel="noopener noreferrer" class="text-base text-gray-400 hover:text-gray-300 transition-colors duration-200">GitHub</a>
+                    <a href="https://github.com/bisoncraft/caribou" target="_blank" rel="noopener noreferrer" class="text-base text-gray-400 hover:text-gray-300 transition-colors duration-200">GitHub</a>
                 </div>
                 <div class="px-5 py-2">
                   <a href="https://decred.org/" target="_blank" rel="noopener noreferrer" class="text-base text-gray-400 hover:text-gray-300 transition-colors duration-200">Decred.org</a>
@@ -854,7 +854,7 @@
       const downloadImg = document.getElementById("downloadImg")
       const changeDownloadLink = (bttn) => {
           downloadText.textContent = `Download for ${bttn.textContent}`
-          downloadLink.href = `https://github.com/decred/dcrdex/releases/latest/download/${bttn.dataset.link}`
+          downloadLink.href = `https://github.com/bisoncraft/caribou/releases/latest/download/${bttn.dataset.link}`
           downloadDropdown.classList.add('hidden')
           const osVar = bttn.dataset.osVariant.split("-")[0]
           downloadImg.classList.remove('hidden')

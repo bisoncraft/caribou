@@ -283,7 +283,7 @@ func newWalletSPVPeerManager(cs peerChainService, defaultPeers []string, dir str
 		cs:                 cs,
 		defaultPeers:       defaultPeers,
 		trackedPeers:       make(map[string]*walletTrackedPeer),
-		savedPeersFilePath: filepath.Join(dir, "dexc-peers.json"),
+		savedPeersFilePath: filepath.Join(dir, "caribou-peers.json"),
 		log:                log,
 		defaultPort:        defaultPort,
 	}

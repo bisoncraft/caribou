@@ -21,7 +21,7 @@ Download and run setup as Administrator (privileges are required in order to set
  ### Running the build
 
  ```batch
- cd dcrdex\client\cmd\caribou-desktop
+ cd caribou\wallet\cmd\caribou-desktop
  ```
 
 Build the Windows binary:

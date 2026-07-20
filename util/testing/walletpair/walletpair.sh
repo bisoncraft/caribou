@@ -50,8 +50,8 @@ else
   CLIENT_2_RPC_ADDR="127.0.0.5:5763"
 fi
 
-CLIENT_1_DIR="${PAIR_ROOT}/dexc1"
-CLIENT_2_DIR="${PAIR_ROOT}/dexc2"
+CLIENT_1_DIR="${PAIR_ROOT}/caribou1"
+CLIENT_2_DIR="${PAIR_ROOT}/caribou2"
 HARNESS_DIR="${PAIR_ROOT}/harness-ctl"
 BW_DIR=$(realpath ../../../wallet/cmd/caribou)
 CARIBOU="${BW_DIR}/caribou"
@@ -80,7 +80,7 @@ rpcpass=pass
 rpcaddr=${CLIENT_1_RPC_ADDR}
 EOF
 
-CLIENT_1_CTL_CONF="${CLIENT_1_DIR}/dexcctl.conf"
+CLIENT_1_CTL_CONF="${CLIENT_1_DIR}/caribouctl.conf"
 rm -f "$CLIENT_1_CTL_CONF"
 cat > "$CLIENT_1_CTL_CONF" <<EOF
 rpcuser=user
@@ -107,7 +107,7 @@ rpcpass=pass
 rpcaddr=${CLIENT_2_RPC_ADDR}
 EOF
 
-CLIENT_2_CTL_CONF="${CLIENT_2_DIR}/dexcctl.conf"
+CLIENT_2_CTL_CONF="${CLIENT_2_DIR}/caribouctl.conf"
 rm -f "$CLIENT_2_CTL_CONF"
 
 cat > "$CLIENT_2_CTL_CONF" <<EOF
@@ -147,13 +147,13 @@ tmux rename-window -t $SESSION:0 'harness-ctl'
 
 if [ -z "${ONLY_TWO}" ]; then
   tmux new-window -t $SESSION:1 -n 'caribou1' $SHELL
-  tmux send-keys -t $SESSION:1 "cd ${PAIR_ROOT}/dexc1" C-m
+  tmux send-keys -t $SESSION:1 "cd ${CLIENT_1_DIR}" C-m
   tmux send-keys -t $SESSION:1 "${CARIBOU} --appdata=${CLIENT_1_DIR} ${BW_ARGS[*]}" C-m
 fi
 
 if [ -z "${ONLY_ONE}" ]; then
   tmux new-window -t $SESSION:2 -n 'caribou2' $SHELL
-  tmux send-keys -t $SESSION:2 "cd ${PAIR_ROOT}/dexc1" C-m
+  tmux send-keys -t $SESSION:2 "cd ${CLIENT_2_DIR}" C-m
   tmux send-keys -t $SESSION:2 "${CARIBOU} --appdata=${CLIENT_2_DIR} ${BW_ARGS[*]}" C-m
 fi
 

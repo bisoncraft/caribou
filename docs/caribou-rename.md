@@ -19,6 +19,7 @@ to adapt an existing clone, fork, or in-flight branch.
 | Config file | `bossw.conf` | `caribou.conf` |
 | Application data dir | `~/.bossw` (or platform equivalent) | `~/.caribou` |
 | Log / database files | `bossw.log` / `bossw.db` | `caribou.log` / `caribou.db` |
+| SPV saved-peers file | `dexc-peers.json` | `caribou-peers.json` |
 | npm workspaces | `dcrdex-ui`, `@bossw/*` | `@caribou/newui`, `@caribou/*` |
 
 Application and packaging identifiers:
@@ -35,6 +36,11 @@ Names that intentionally did **not** change: the `bisonwire` package, the
 "Bison Wallet" reference in `README.md` and `wallet/utxowallet/DERIVATION.md`
 where it names the ancestor project, and the BIP-39 wordlist and HD key-version
 constants (functional values, not branding).
+
+The rename did not touch **artwork**. Icon files were renamed to `caribou-*`
+but still contain the Bison Wallet bison, so a filename search looks clean while
+the shipped icons are off-brand. See [`branding/README.md`](branding/README.md)
+for the inventory of images still needing replacement.
 
 ## Updating remotes
 
