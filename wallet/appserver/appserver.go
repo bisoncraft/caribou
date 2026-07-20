@@ -140,8 +140,6 @@ type clientCore interface {
 	ConfigureFundsMixer(appPW []byte, assetID uint32, enabled bool) error
 	SetLanguage(string) error
 	Language() string
-	SetCompanionToken(token string) error
-	CompanionToken() (string, error)
 	SetAPIToken(token string) error
 	APIToken() (string, error)
 	SetSendRequiresPassword(require bool) error
@@ -285,12 +283,6 @@ type AppServer struct {
 	loginFails     int
 	loginLockUntil time.Time
 
-	companionToken        string
-	companionTokenHash    string // hex(sha256(token)), persisted to DB
-	companionTokenExpiry  time.Time
-	companionTokenClaimed bool
-	companionExpiryTimer  *time.Timer
-
 	// apiTokenHash is hex(sha256(token)) of the local API token, persisted
 	// to the DB. It survives logout and is only accepted from a loopback
 	// peer (see apiTokenAuthorized). The raw token is never stored.
@@ -423,17 +415,6 @@ func New(cfg *Config) (*AppServer, error) {
 	}
 	s.lang.Store(&lang)
 
-	// Restore a persisted companion token hash so the companion app
-	// stays paired across restarts. The raw token is not stored; it
-	// will be re-established when the companion app reconnects and
-	// presents its cookie or URL token.
-	if h, err := cfg.Core.CompanionToken(); err != nil {
-		log.Errorf("Error loading companion token hash: %v", err)
-	} else if h != "" {
-		s.companionTokenHash = h
-		s.companionTokenClaimed = true
-	}
-
 	// Restore the persisted local API token hash so automation clients stay
 	// authorized across restarts.
 	if h, err := cfg.Core.APIToken(); err != nil {
@@ -552,7 +533,6 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/pendingbridges", s.apiPendingBridges)
 			apiAuth.Post("/bridgehistory", s.apiBridgeHistory)
 			apiAuth.Post("/castvote", s.apiCastVote)
-			apiAuth.Post("/unpaircompanionapp", s.apiUnpairCompanionApp)
 			apiAuth.Post("/generateapitoken", s.apiGenerateAPIToken)
 			apiAuth.Post("/revokeapitoken", s.apiRevokeAPIToken)
 		})
@@ -836,10 +816,8 @@ func (s *AppServer) authorize() (string, error) {
 }
 
 // deauth invalidates all current auth tokens. All existing sessions will need
-// to login again. A claimed companion token is preserved so that the
-// companion app stays paired across logout/login cycles.
+// to login again.
 func (s *AppServer) deauth() {
-	var clearDB bool
 	s.authMtx.Lock()
 	s.authTokens = make(map[string]bool)
 	s.cachedPasswords = make(map[string]*cachedPassword)
@@ -851,28 +829,7 @@ func (s *AppServer) deauth() {
 		}
 	}
 	s.pendingGrants = make(map[string]*sessionGrant)
-	// Preserve a claimed companion token so the pairing survives logout.
-	if s.companionToken != "" && s.companionTokenClaimed {
-		s.authTokens[s.companionToken] = true
-	} else if s.companionToken != "" {
-		// Discard any unclaimed (pending) companion token and clear
-		// the DB so a stale token doesn't load on restart.
-		if s.companionExpiryTimer != nil {
-			s.companionExpiryTimer.Stop()
-			s.companionExpiryTimer = nil
-		}
-		s.companionToken = ""
-		s.companionTokenHash = ""
-		s.companionTokenClaimed = false
-		s.companionTokenExpiry = time.Time{}
-		clearDB = true
-	}
 	s.authMtx.Unlock()
-	if clearDB {
-		if err := s.core.SetCompanionToken(""); err != nil {
-			log.Errorf("Error clearing companion token from DB: %v", err)
-		}
-	}
 }
 
 // getAuthToken checks the request for an auth token cookie and returns it.
@@ -909,29 +866,6 @@ func getPWKey(r *http.Request) ([]byte, error) {
 	}
 }
 
-// restoreCompanionFromHash checks whether token hashes to the persisted
-// companion token hash. If so it re-establishes the companion token in
-// memory so subsequent requests use the fast path. This is the recovery
-// path after a server restart when the raw token is no longer in memory
-// but the companion app still holds it. Must be called without authMtx.
-func (s *AppServer) restoreCompanionFromHash(token string) bool {
-	h := sha256.Sum256([]byte(token))
-	tokenHash := hex.EncodeToString(h[:])
-
-	s.authMtx.Lock()
-	defer s.authMtx.Unlock()
-	if s.companionTokenHash == "" || !s.companionTokenClaimed {
-		return false
-	}
-	if subtle.ConstantTimeCompare([]byte(s.companionTokenHash), []byte(tokenHash)) != 1 {
-		return false
-	}
-	// Re-establish the companion token in memory.
-	s.authTokens[token] = true
-	s.companionToken = token
-	return true
-}
-
 // isAuthed checks if the incoming request is from an authorized user/device.
 // Requires the auth token cookie to be set in the request and for the token
 // to match `AppServer.validAuthToken`.
@@ -947,36 +881,9 @@ func (s *AppServer) isAuthed(r *http.Request) bool {
 		return false
 	}
 
-	// Single read-lock section for the common case.
 	s.authMtx.RLock()
-	ok := s.authTokens[authToken]
-	needsExpiryCheck := ok && authToken == s.companionToken && !s.companionTokenClaimed
-	s.authMtx.RUnlock()
-
-	if !ok {
-		// Try to restore the companion token from the persisted
-		// hash (e.g. after a server restart).
-		return s.restoreCompanionFromHash(authToken)
-	}
-	if !needsExpiryCheck {
-		return true
-	}
-	// Slow path: write lock to potentially revoke an expired unclaimed
-	// companion token.
-	s.authMtx.Lock()
-	defer s.authMtx.Unlock()
-	// Re-check under write lock.
-	if !s.authTokens[authToken] {
-		return false
-	}
-	if authToken == s.companionToken && !s.companionTokenClaimed {
-		if time.Now().After(s.companionTokenExpiry) {
-			delete(s.authTokens, authToken)
-			s.companionToken = ""
-			return false
-		}
-	}
-	return true
+	defer s.authMtx.RUnlock()
+	return s.authTokens[authToken]
 }
 
 // isLocalRequest reports whether the request originated from the same machine,

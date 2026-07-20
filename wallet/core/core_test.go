@@ -177,12 +177,6 @@ func (tdb *TDB) SetLanguage(lang string) error {
 func (tdb *TDB) Language() (string, error) {
 	return "en-US", nil
 }
-func (tdb *TDB) SetCompanionToken(token string) error {
-	return nil
-}
-func (tdb *TDB) CompanionToken() (string, error) {
-	return "", nil
-}
 func (tdb *TDB) SetAPIToken(token string) error {
 	return nil
 }

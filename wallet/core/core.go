@@ -507,16 +507,6 @@ func (c *Core) Language() string {
 	return c.locale().lang.String()
 }
 
-// SetCompanionToken stores the companion app auth token in the database.
-func (c *Core) SetCompanionToken(token string) error {
-	return c.db.SetCompanionToken(token)
-}
-
-// CompanionToken retrieves the companion app auth token from the database.
-func (c *Core) CompanionToken() (string, error) {
-	return c.db.CompanionToken()
-}
-
 // SetAPIToken stores the local API token hash in the database.
 func (c *Core) SetAPIToken(token string) error {
 	return c.db.SetAPIToken(token)

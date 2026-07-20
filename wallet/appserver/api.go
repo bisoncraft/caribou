@@ -515,9 +515,9 @@ func (s *AppServer) apiBuildInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 // errBadCredentials marks a login failure caused by rejected credentials (a
-// wrong password). Environmental failures (e.g. the companion app is not
-// paired, or caching the password failed after a valid login) are not tagged
-// with it, so only genuine credential rejections feed the brute-force throttle.
+// wrong password). Environmental failures (e.g. caching the password failed
+// after a valid login) are not tagged with it, so only genuine credential
+// rejections feed the brute-force throttle.
 var errBadCredentials = errors.New("bad credentials")
 
 // badCredentials tags err as a credential rejection (detected via
@@ -610,28 +610,6 @@ func (s *AppServer) apiLogout(w http.ResponseWriter, r *http.Request) {
 		OK: true,
 	}
 	writeJSON(w, response)
-}
-
-// apiUnpairCompanionApp removes the companion app pairing.
-func (s *AppServer) apiUnpairCompanionApp(w http.ResponseWriter, r *http.Request) {
-	if err := s.core.SetCompanionToken(""); err != nil {
-		s.writeAPIError(w, fmt.Errorf("error clearing companion token: %w", err))
-		return
-	}
-	s.authMtx.Lock()
-	if s.companionToken != "" {
-		delete(s.authTokens, s.companionToken)
-		s.companionToken = ""
-		s.companionTokenHash = ""
-		s.companionTokenClaimed = false
-		s.companionTokenExpiry = time.Time{}
-		if s.companionExpiryTimer != nil {
-			s.companionExpiryTimer.Stop()
-			s.companionExpiryTimer = nil
-		}
-	}
-	s.authMtx.Unlock()
-	writeJSON(w, simpleAck())
 }
 
 // apiGenerateAPIToken mints a local API token for same-machine automation
@@ -1038,10 +1016,6 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		u = s.core.User()
 	}
 
-	s.authMtx.RLock()
-	paired := s.companionToken != "" && s.companionTokenClaimed
-	s.authMtx.RUnlock()
-
 	// appSettings carries user-configurable settings surfaced on the
 	// /settings page. They are only meaningful once authed; the zero value
 	// is a harmless default otherwise.
@@ -1055,21 +1029,19 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := struct {
-		User               *core.User  `json:"user"`
-		Lang               string      `json:"lang"`
-		Langs              []string    `json:"langs"`
-		Inited             bool        `json:"inited"`
-		OK                 bool        `json:"ok"`
-		CompanionAppPaired bool        `json:"companionAppPaired"`
-		AppSettings        appSettings `json:"appSettings"`
+		User        *core.User  `json:"user"`
+		Lang        string      `json:"lang"`
+		Langs       []string    `json:"langs"`
+		Inited      bool        `json:"inited"`
+		OK          bool        `json:"ok"`
+		AppSettings appSettings `json:"appSettings"`
 	}{
-		User:               u,
-		Lang:               *s.lang.Load(),
-		Langs:              s.langs,
-		Inited:             s.core.IsInitialized(),
-		OK:                 true,
-		CompanionAppPaired: paired,
-		AppSettings:        settings,
+		User:        u,
+		Lang:        *s.lang.Load(),
+		Langs:       s.langs,
+		Inited:      s.core.IsInitialized(),
+		OK:          true,
+		AppSettings: settings,
 	}
 	writeJSON(w, response)
 }

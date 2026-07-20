@@ -71,12 +71,6 @@ type DB interface {
 	// SendRequiresPassword gets whether sending requires the app password.
 	// If no value has been stored, false is returned without an error.
 	SendRequiresPassword() (bool, error)
-	// SetCompanionToken stores the companion app auth token hash.
-	SetCompanionToken(token string) error
-	// CompanionToken retrieves the companion app auth token hash stored
-	// with SetCompanionToken. If no value has been stored, an empty
-	// string is returned without an error.
-	CompanionToken() (string, error)
 	// SetAPIToken stores the local API token hash.
 	SetAPIToken(token string) error
 	// APIToken retrieves the local API token hash stored with SetAPIToken.

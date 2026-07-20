@@ -237,8 +237,6 @@ func (c *TCore) ConfigureFundsMixer(appPW []byte, assetID uint32, enabled bool) 
 
 func (*TCore) SetLanguage(string) error              { return nil }
 func (*TCore) Language() string                      { return "en-US" }
-func (*TCore) SetCompanionToken(token string) error  { return nil }
-func (*TCore) CompanionToken() (string, error)       { return "", nil }
 func (*TCore) SetAPIToken(token string) error        { return nil }
 func (*TCore) APIToken() (string, error)             { return "", nil }
 func (c *TCore) SetSendRequiresPassword(bool) error  { return c.setSendRequiresPWErr }
