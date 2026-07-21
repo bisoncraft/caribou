@@ -1412,7 +1412,17 @@ func (w *ExchangeWallet) seedFeeFromMeta(meta *walletMeta) {
 }
 
 // TxHistory returns transaction history.
+//
+// NOTE: only req.N is honored. The refID and past fields, which asset.Wallet
+// documents for pagination, are ignored, so paging through XMR history does
+// not work.
 func (w *ExchangeWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
+	// A nil request is treated as an empty result, as the other assets do,
+	// rather than dereferenced.
+	if req == nil {
+		return &txdb.TxHistoryResponse{}, nil
+	}
+
 	w.walletMtx.RLock()
 	defer w.walletMtx.RUnlock()
 
