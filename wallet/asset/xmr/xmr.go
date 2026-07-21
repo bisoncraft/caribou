@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -61,6 +63,12 @@ type walletMeta struct {
 	Birthday uint64 `json:"birthday"`
 	// IsRecovery indicates this wallet needs recovery scanning.
 	IsRecovery bool `json:"isRecovery"`
+	// LastFee is the fee, in atoms, of the last transaction this wallet
+	// broadcast, and LastFeePriority is the priority it was built at. The
+	// priority is stored alongside because a fee is only meaningful at the
+	// priority that produced it. See StandardSendFee.
+	LastFee         uint64 `json:"lastFee,omitempty"`
+	LastFeePriority int    `json:"lastFeePriority,omitempty"`
 }
 
 var (
@@ -297,6 +305,27 @@ type ExchangeWallet struct {
 	isOpen        atomic.Bool
 	rescanning    atomic.Bool
 
+	// feeRPC queries the daemon for live fee rates. See rpc.go for why the
+	// daemon is asked directly rather than through monero_c.
+	feeRPC   *daemonRPC
+	feeCache feeEstimateCache
+
+	// feeMtx serializes fetches on a cache miss. Concurrent fetches would
+	// each open a connection to the daemon, defeating the single pooled
+	// connection monerod's connection-scoped digest nonce depends on (see
+	// drainAndClose), and during an outage would each stall for a full
+	// feeRequestTimeout rather than sharing the one attempt per
+	// feeRetryInterval that the cooldown allows.
+	feeMtx sync.Mutex
+
+	// observedFee is the last fee this wallet actually paid, in atoms. It
+	// backs StandardSendFee when the daemon cannot be reached.
+	observedFee atomic.Uint64
+
+	// metaMtx guards read-modify-write cycles on the wallet meta file, which
+	// are performed from the monitor goroutine and from caller goroutines.
+	metaMtx sync.Mutex
+
 	syncStatus atomic.Value // *asset.SyncStatus
 
 	// Monero's sweep skips outputs below the marginal fee cost of spending
@@ -309,9 +338,26 @@ type ExchangeWallet struct {
 	cachedDust     uint64
 	cachedDustTime time.Time
 
-	ctx    context.Context
+	// ctx is the context Connect was called with. It is stored atomically
+	// rather than in a plain field because FeeRate and StandardSendFee are
+	// exported, error-free and reachable from a UI poll, so they can read it
+	// while Connect is writing it.
+	ctx    atomic.Pointer[connCtx]
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+}
+
+// connCtx wraps a context so it can live in an atomic.Pointer, which an
+// interface value cannot.
+type connCtx struct{ context.Context }
+
+// context returns the context Connect was called with, or a background
+// context if Connect has not run yet.
+func (w *ExchangeWallet) context() context.Context {
+	if ctx := w.ctx.Load(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
 }
 
 var _ asset.Wallet = (*ExchangeWallet)(nil)
@@ -340,11 +386,14 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 
 	var feePriority cxmr.Priority
 	if fp := cfg.Settings["feepriority"]; fp != "" {
-		var p int
-		fmt.Sscanf(fp, "%d", &p)
-		if p >= 0 && p <= 4 {
-			feePriority = cxmr.Priority(p)
+		p, err := strconv.Atoi(fp)
+		if err != nil {
+			return nil, fmt.Errorf("invalid feepriority %q: %w", fp, err)
 		}
+		if p < 0 || p > 4 {
+			return nil, fmt.Errorf("feepriority %d out of range, must be 0-4", p)
+		}
+		feePriority = cxmr.Priority(p)
 	}
 
 	walletPath := filepath.Join(cfg.DataDir, walletName)
@@ -362,6 +411,19 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		feePriority: feePriority,
 		peersChange: cfg.PeersChange,
 	}
+
+	// monerod scopes digest nonces to the TCP connection, so the authenticated
+	// retry has to reuse the connection that was challenged. Keeping a single
+	// idle connection to the daemon makes that reliable for these serialized
+	// requests. See drainAndClose.
+	w.feeRPC = newDaemonRPC(daemonAddr, w.daemonUser, w.daemonPass, &http.Client{
+		Timeout: feeRequestTimeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        1,
+			MaxIdleConnsPerHost: 1,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	})
 
 	w.syncStatus.Store(&asset.SyncStatus{})
 
@@ -419,7 +481,9 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, errors.New("wallet not open; call OpenWithPW first")
 	}
 
-	w.ctx, w.cancel = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	w.ctx.Store(&connCtx{ctx})
+	w.cancel = cancel
 
 	w.walletMtx.RLock()
 	wallet := w.wallet
@@ -479,6 +543,10 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		w.tipAtConnect = meta.RestoreHeight
 	}
 
+	// Prime the standard send fee from the last broadcast, reusing the meta
+	// just loaded.
+	w.seedFeeFromMeta(meta)
+
 	refreshHeight := wallet.GetRefreshFromBlockHeight()
 	w.log.Debugf("Wallet refresh from block height: %d", refreshHeight)
 
@@ -491,7 +559,7 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	})
 
 	if !synced {
-		blocksRemaining := daemonHeight - walletHeight
+		blocksRemaining := satSub(daemonHeight, walletHeight)
 		w.log.Infof("XMR wallet syncing: %d blocks remaining (wallet: %d, daemon: %d)",
 			blocksRemaining, walletHeight, daemonHeight)
 	} else {
@@ -513,6 +581,8 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 
 func (w *ExchangeWallet) monitorBlocks() {
 	defer w.wg.Done()
+
+	ctx := w.context()
 
 	// Use faster polling during initial sync for better progress reporting.
 	// The actual refresh is handled by the background thread started via
@@ -584,11 +654,18 @@ func (w *ExchangeWallet) monitorBlocks() {
 				}
 			}
 
-		case <-w.ctx.Done():
+		case <-ctx.Done():
 			// Pause the background refresh thread FIRST to stop any ongoing
 			// rescan/refresh operations. This must happen before saveWallet()
 			// because Store() can block if a refresh is in progress.
-			w.wallet.PauseRefresh()
+			//
+			// Take the lock and nil-check as every other w.wallet access does:
+			// a concurrent Close() nils the handle, which would panic here.
+			w.walletMtx.RLock()
+			if w.wallet != nil {
+				w.wallet.PauseRefresh()
+			}
+			w.walletMtx.RUnlock()
 			// Now save the wallet state.
 			w.saveWallet()
 			return
@@ -612,24 +689,26 @@ func (w *ExchangeWallet) saveWallet() {
 
 // clearRecoveryState updates the metadata to mark recovery as complete.
 func (w *ExchangeWallet) clearRecoveryState() {
-	meta, err := loadWalletMeta(w.dataDir)
+	var cleared bool
+	err := w.updateWalletMeta(func(meta *walletMeta) bool {
+		if !meta.IsRecovery {
+			return false // Nothing to clear
+		}
+		meta.IsRecovery = false
+		cleared = true
+		return true
+	})
 	if err != nil {
-		w.log.Warnf("Failed to load wallet meta to clear recovery state: %v", err)
-		return
-	}
-	if meta == nil || !meta.IsRecovery {
-		return // Nothing to clear
-	}
-	meta.IsRecovery = false
-	if err := saveWalletMeta(w.dataDir, meta); err != nil {
-		w.log.Warnf("Failed to save wallet meta after clearing recovery state: %v", err)
-	} else {
+		w.log.Warnf("Failed to clear recovery state: %v", err)
+	} else if cleared {
 		w.log.Infof("Recovery complete, cleared recovery state")
 	}
 }
 
 func (w *ExchangeWallet) monitorPeers() {
 	defer w.wg.Done()
+
+	ctx := w.context()
 
 	ticker := time.NewTicker(peerCountTicker)
 	defer ticker.Stop()
@@ -639,7 +718,7 @@ func (w *ExchangeWallet) monitorPeers() {
 
 		select {
 		case <-ticker.C:
-		case <-w.ctx.Done():
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -694,9 +773,21 @@ func (w *ExchangeWallet) Balance() (*asset.Balance, error) {
 	dust := w.dustTotal()
 
 	return &asset.Balance{
-		Available: unlocked - dust,
-		Immature:  total - unlocked,
+		Available: satSub(unlocked, dust),
+		Immature:  satSub(total, unlocked),
 	}, nil
+}
+
+// satSub is a saturating uint64 subtraction, returning zero rather than
+// underflowing when b > a. The wallet2 balance and height getters are read at
+// different instants and the dust total is cached (see dustCacheDuration), so
+// these operands can legitimately disagree — an unguarded subtraction would
+// turn a transient skew into a ~1.8e19 balance or block count.
+func satSub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
 }
 
 // dustThreshold is the minimum output value considered spendable. Outputs
@@ -765,8 +856,19 @@ func (w *ExchangeWallet) NewAddress() (string, error) {
 
 // AddressUsed checks if an address has been used (received funds).
 func (w *ExchangeWallet) AddressUsed(addr string) (bool, error) {
-	// Monero doesn't easily expose per-address usage tracking.
-	// For now, return false. A full implementation would scan tx history.
+	// TODO: Always reporting false is a stub, not a real answer — callers
+	// cannot distinguish a fresh subaddress from one that has received funds.
+	//
+	// wallet2 does not expose per-subaddress usage directly, so implementing
+	// this means resolving addr to its subaddress index (a linear scan, as in
+	// OwnsDepositAddress) and then finding an incoming transfer to that index.
+	//
+	// Nothing external blocks this: the shipped libmonero_wallet2_api_c.so
+	// exports MONERO_TransactionInfo_subaddrIndex and
+	// MONERO_CoinsInfo_subaddrIndex, neither of which cxmr binds yet (it binds
+	// only the subaddrAccount half of each). Bind one in cxmr, then match it
+	// against the resolved index. Both halves are O(n) cgo calls, so cache the
+	// result per index.
 	return false, nil
 }
 
@@ -825,7 +927,7 @@ func (w *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asset.
 
 	unlocked := w.wallet.UnlockedBalance(0)
 	dust := w.dustTotalFromCoins() // Fresh computation for accuracy.
-	spendable := unlocked - dust
+	spendable := satSub(unlocked, dust)
 
 	// Max withdraw detection. When value >= spendable, sweep the wallet
 	// using createTransactionMultDest with amount_sweep_all. This
@@ -928,10 +1030,24 @@ func (w *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asset.
 	return nil, fmt.Errorf("failed to create withdrawal transaction for %d after fee adjustments", value)
 }
 
-// estimateFee creates a test transaction to estimate the fee. If creating a
-// test tx for the full value fails (e.g. because value + fee > balance), a
-// reduced value is used. The fee may differ from the actual transaction's fee
-// if a different number of inputs is selected; callers should verify and retry.
+// estimateFee returns the fee wallet2 would charge to send value to address,
+// by building the transaction and reading its fee. If building for the full
+// value fails (e.g. because value + fee > balance), a reduced value is used.
+// The fee may differ from the actual transaction's fee if a different number
+// of inputs is selected; callers should verify and retry.
+//
+// TODO: This leaks. wallet2_api hands out a PendingTransaction the caller owns
+// and must return via Wallet::disposeTransaction, but the monero_c build
+// pinned in the Dockerfile exports no disposeTransaction wrapper — verified
+// against the shipped libmonero_wallet2_api_c.so, whose only disposal-shaped
+// exports are MONERO_WalletManager_closeWallet and MONERO_AddressBook_deleteRow.
+// So every CreateTransaction and SweepAll in this file leaks its transaction:
+// one or two per call here, and up to eight per withdrawal in Withdraw's
+// convergence loop. Fixing it means adding a monero_c patch exposing
+// disposeTransaction — the Dockerfile already carries six local patches —
+// rebuilding the shared library per platform, binding it in cxmr, and
+// disposing at every construction site. Until then, do not call any of these
+// on a timer.
 func (w *ExchangeWallet) estimateFee(address string, value uint64) (uint64, error) {
 	testTx, err := w.wallet.CreateTransaction(address, value, w.feePriority, 0)
 	if err == nil {
@@ -964,6 +1080,12 @@ func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64
 		return nil, fmt.Errorf("failed to broadcast transaction: %w", err)
 	}
 
+	// Only now, past the broadcast: an actually-broadcast transaction is the
+	// most authoritative fee this wallet can observe, but one that failed to
+	// send is not a fee anyone paid. See StandardSendFee.
+	w.recordFee(fee)
+	w.persistFee(fee)
+
 	// Try post-commit if pre-commit was empty.
 	if txid == "" {
 		txid = tx.TxID()
@@ -990,9 +1112,122 @@ func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64
 	}, nil
 }
 
-// FeeRate returns the current fee rate (as a priority level for Monero).
+// FeeRate returns the daemon's current dynamic base fee, in atoms per weight
+// unit, for the configured priority. It returns zero when the daemon cannot be
+// reached, which the interface documents as "no estimate available".
+//
+// This is a real rate in the unit XMR's UnitInfo advertises (FeeRateDenom
+// "B"), not the priority level. Callers still cannot steer the fee with it:
+// Send, Withdraw and EstimateSendTxFee ignore their feeRate argument, because
+// wallet2 prices from the priority rather than a caller-supplied rate.
 func (w *ExchangeWallet) FeeRate() uint64 {
-	return uint64(w.feePriority)
+	est := w.feeEstimate()
+	if est == nil {
+		return 0
+	}
+	return est.feeForPriority(int(w.feePriority))
+}
+
+// feeEstimate returns the daemon's fee estimate, refreshing the cache when
+// stale. It returns nil if the daemon has never answered.
+func (w *ExchangeWallet) feeEstimate() *feeEstimate {
+	if cached := w.feeCache.get(); cached != nil &&
+		time.Since(time.Unix(0, cached.fetched)) < feeCacheDuration {
+		return cached.est
+	}
+
+	// One fetch at a time, so the cooldown below actually bounds an outage to
+	// one stalled caller per interval and the daemon sees one connection. See
+	// feeMtx.
+	w.feeMtx.Lock()
+	defer w.feeMtx.Unlock()
+
+	// Re-check: a fetch may have finished while this caller waited for the
+	// lock, in which case it is already serving what this one would ask for.
+	now := time.Now()
+	cached := w.feeCache.get()
+	if cached != nil && now.Sub(time.Unix(0, cached.fetched)) < feeCacheDuration {
+		return cached.est
+	}
+
+	// Serving a stale rate beats stalling the caller. These lookups happen
+	// behind the send form's debounced fee estimate, so retrying an
+	// unreachable daemon on every call would block a caller for
+	// feeRequestTimeout each time an amount changes.
+	if w.feeCache.coolingDown(now, feeRetryInterval) {
+		if cached != nil {
+			return cached.est
+		}
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(w.context(), feeRequestTimeout)
+	defer cancel()
+
+	est, err := w.feeRPC.getFeeEstimate(ctx)
+
+	// Stamp both outcomes at completion rather than with the now taken above.
+	// A request can take up to feeRequestTimeout, and dating the result from
+	// before it was made would shorten both the cache window and the cooldown
+	// by however long it ran — most of it, in the timeout case the cooldown
+	// exists for.
+	done := time.Now().UnixNano()
+
+	if err != nil {
+		// The cooldown set here also throttles this log line.
+		w.feeCache.fail(done)
+		w.log.Warnf("Failed to fetch fee estimate from daemon: %v", err)
+		if cached != nil {
+			return cached.est
+		}
+		return nil
+	}
+	w.feeCache.set(est, done)
+	return est
+}
+
+// StandardSendFee returns the fee for a standard send at the given rate.
+//
+// Monero's fee is base_fee * tx_weight * priority_multiplier, quantized. The
+// daemon supplies the first and third (folded together into the per-priority
+// rate feeRate carries), but the weight depends on how many inputs coin
+// selection picks, which is unknowable before a transaction is built. So a
+// typical transfer's weight is assumed — see standardTxWeight.
+//
+// When no rate is available the last fee this wallet actually paid is used,
+// which is exact for the transaction that produced it, and failing that a
+// fixed estimate.
+//
+// The result is rounded up to the daemon's quantization mask only when an
+// estimate is on hand to supply one, so an unreachable daemon can return a fee
+// a few atoms below what the mask would round it to.
+//
+// feeRate is treated as untrusted. It arrives from an exported interface
+// method, and the rate a caller would normally pass came from a daemon that
+// may be a public third-party node, so a rate past the sanity ceiling is
+// refused rather than multiplied into an overflow.
+func (w *ExchangeWallet) StandardSendFee(feeRate uint64) uint64 {
+	est := w.feeEstimate()
+	if feeRate == 0 && est != nil {
+		feeRate = est.feeForPriority(int(w.feePriority))
+	}
+	if feeRate == 0 || feeRate > maxBaseFee {
+		if feeRate > maxBaseFee {
+			w.log.Warnf("Ignoring fee rate %d atoms per weight unit, above the %d sanity ceiling",
+				feeRate, maxBaseFee)
+		}
+		if observed := w.observedFee.Load(); observed > 0 {
+			return observed
+		}
+		return w.fallbackFee()
+	}
+
+	// maxBaseFee bounds feeRate, so this cannot overflow.
+	fee := feeRate * standardTxWeight
+	if est != nil {
+		fee = est.quantize(fee)
+	}
+	return fee
 }
 
 // EstimateSendTxFee estimates the fee for sending a transaction.
@@ -1029,7 +1264,9 @@ func (w *ExchangeWallet) EstimateSendTxFee(address string, value, feeRate uint64
 		return 0, true, nil
 	}
 
-	return tx.Fee(), true, nil
+	fee := tx.Fee()
+	w.recordFee(fee)
+	return fee, true, nil
 }
 
 // SyncStatus returns the wallet sync status.
@@ -1045,10 +1282,133 @@ func (w *ExchangeWallet) SyncStatus() (*asset.SyncStatus, error) {
 	return status, nil
 }
 
-// StandardSendFee returns the standard send fee.
-func (w *ExchangeWallet) StandardSendFee(feeRate uint64) uint64 {
-	// Monero fees are dynamic; return an estimate based on typical tx size
-	return 10000000 // 0.00001 XMR as placeholder
+const (
+	// standardTxWeight is the assumed weight of a "standard" send: a
+	// 2-input/2-output transfer with ring size 16 and bulletproofs+. For a
+	// transaction of ordinary shape, weight equals serialized size in bytes.
+	// Real sends vary with the number of inputs coin selection picks, so a fee
+	// derived from this is an estimate; the fee actually charged is the one
+	// wallet2 computes when the transaction is built.
+	standardTxWeight = 1500
+
+	// fallbackSendFee is the last resort, used only when the daemon is
+	// unreachable and this wallet has never paid a fee. It is standardTxWeight
+	// times the base fee observed on mainnet in July 2026 (20000 atoms per
+	// weight unit at default priority), so it starts out close to real rather
+	// than merely plausible. It cannot track the dynamic fee, which is the
+	// whole reason the daemon is asked first.
+	//
+	// This is the default-priority figure. Scale it with fallbackFee rather
+	// than using it directly.
+	fallbackSendFee = 30_000_000 // 0.00003 XMR
+
+	// feeCacheDuration bounds how stale a reported rate can be. The dynamic
+	// base fee moves with median block weight, so it barely changes within a
+	// ~2 minute block interval.
+	feeCacheDuration = 60 * time.Second
+
+	// feeRequestTimeout caps a daemon fee request. These calls sit behind
+	// synchronous, error-free interface methods invoked from UI polls, so
+	// they must fail fast rather than stall a caller.
+	feeRequestTimeout = 10 * time.Second
+
+	// feeRetryInterval is how long to wait after a failed fetch before trying
+	// the daemon again, bounding an outage to one attempt per interval no
+	// matter how often callers ask. Callers that arrive while an attempt is in
+	// flight wait behind it on feeMtx, so they can still stall for up to
+	// feeRequestTimeout; what the interval bounds is how often that recurs.
+	feeRetryInterval = 15 * time.Second
+)
+
+// fallbackFeeMultipliers are the multipliers monerod applies to the dynamic
+// base fee, for priorities Low(1) through Last(4). Confirmed against mainnet
+// in July 2026, where a base fee of 20000 atoms per weight unit yields a fees
+// array of [20000, 80000, 320000, 4000000].
+//
+// These are the daemon's numbers rather than a consensus rule, and monerod has
+// changed them at past hardforks. Going stale is tolerable: they only scale
+// fallbackSendFee, which is reached solely when the daemon is unreachable and
+// this wallet has never paid a fee. Whenever the daemon answers, its own fees
+// array is used and is authoritative.
+var fallbackFeeMultipliers = [4]uint64{1, 4, 16, 200}
+
+// fallbackFee scales fallbackSendFee, which is quoted at the default priority,
+// to the priority this wallet is configured for. Without this a wallet set to
+// Last would report a fee 200x below what its send actually costs, on exactly
+// the cold-start path the fallback exists to serve.
+func (w *ExchangeWallet) fallbackFee() uint64 {
+	idx := priorityIndex(int(w.feePriority), len(fallbackFeeMultipliers))
+	return fallbackSendFee * fallbackFeeMultipliers[idx]
+}
+
+// recordFee stores a fee observed from a transaction this wallet constructed.
+// It is only ever called with a fee built at w.feePriority, so the in-memory
+// value always matches the current priority.
+func (w *ExchangeWallet) recordFee(fee uint64) {
+	if fee > 0 {
+		w.observedFee.Store(fee)
+	}
+}
+
+// persistFee records a broadcast fee, and the priority it was built at, to the
+// meta file so StandardSendFee can report a real number immediately on the
+// next startup. Only called for actually-broadcast transactions: fee estimates
+// can fire on every keystroke of a send form and are not worth the file churn.
+func (w *ExchangeWallet) persistFee(fee uint64) {
+	if fee == 0 {
+		return
+	}
+	priority := int(w.feePriority)
+	err := w.updateWalletMeta(func(meta *walletMeta) bool {
+		if meta.LastFee == fee && meta.LastFeePriority == priority {
+			return false
+		}
+		meta.LastFee, meta.LastFeePriority = fee, priority
+		return true
+	})
+	if err != nil {
+		w.log.Warnf("Failed to persist observed fee: %v", err)
+	}
+}
+
+// updateWalletMeta applies mutate to the stored wallet meta and writes it back
+// if mutate reports a change. A missing meta file is treated as an empty one.
+func (w *ExchangeWallet) updateWalletMeta(mutate func(*walletMeta) bool) error {
+	w.metaMtx.Lock()
+	defer w.metaMtx.Unlock()
+
+	meta, err := loadWalletMeta(w.dataDir)
+	if err != nil {
+		return err
+	}
+	if meta == nil {
+		meta = new(walletMeta)
+	}
+	if !mutate(meta) {
+		return nil
+	}
+	return saveWalletMeta(w.dataDir, meta)
+}
+
+// seedFeeFromMeta primes observedFee from the last broadcast fee, but only if
+// it was built at the priority now configured. Nothing else can supply a
+// priority-attributed fee at startup: wallet2's TransactionInfo exposes no
+// priority accessor, so a fee read back from transaction history cannot be
+// told apart from one built at a different priority. Reporting such a fee
+// after the user changed feepriority would be confidently wrong, and since XMR
+// implements no LiveReconfigurer, a priority change always arrives as a
+// restart — exactly this path.
+func (w *ExchangeWallet) seedFeeFromMeta(meta *walletMeta) {
+	if meta == nil || meta.LastFee == 0 {
+		return
+	}
+	if meta.LastFeePriority != int(w.feePriority) {
+		w.log.Debugf("Ignoring stored fee %d atoms: built at priority %d, now configured for %d",
+			meta.LastFee, meta.LastFeePriority, w.feePriority)
+		return
+	}
+	w.observedFee.Store(meta.LastFee)
+	w.log.Debugf("Seeded standard send fee from meta: %d atoms", meta.LastFee)
 }
 
 // TxHistory returns transaction history.
@@ -1171,10 +1531,19 @@ func (w *ExchangeWallet) PendingTransactions(ctx context.Context) []*txdb.Wallet
 	return pending
 }
 
-// Rescan performs a wallet rescan from the specified birthday. The birthday
-// parameter is a unix timestamp in seconds, which is converted to an approximate
-// block height. Passing 0 will rescan from genesis.
-// Implements asset.Rescanner.
+// Rescan starts a rescan from the given birthday and returns as soon as it has
+// been scheduled. The birthday is a unix timestamp in seconds, converted to an
+// approximate block height; 0 rescans from genesis. Implements
+// asset.Rescanner.
+//
+// NOTE: this deviates from asset.Rescanner, which documents Rescan as blocking
+// until the rescan is done. A Monero rescan re-scans every block from the
+// restore height and can take hours, so blocking would hang the caller for the
+// entire duration. The rescan is handed to wallet2's background refresh thread
+// via RescanBlockchainAsync and its progress is reported through SyncStatus:
+// w.rescanning suppresses Synced until the wallet height catches back up to
+// the daemon (see monitorBlocks). Callers that need completion must poll
+// SyncStatus rather than wait on this return.
 func (w *ExchangeWallet) Rescan(_ context.Context, bday uint64) error {
 	return w.rescanFromHeight(birthdayToHeight(bday, w.net), bday)
 }
@@ -1255,13 +1624,14 @@ func (w *ExchangeWallet) rescanFromHeight(height, bday uint64) error {
 		return errors.New("wallet not connected")
 	}
 
-	// Update our metadata file with the new restore height.
-	meta := &walletMeta{
-		RestoreHeight: height,
-		Birthday:      bday,
-		IsRecovery:    true,
-	}
-	if err := saveWalletMeta(w.dataDir, meta); err != nil {
+	// Update our metadata file with the new restore height. Read-modify-write
+	// rather than replacing the file: a rescan changes nothing about the fee,
+	// so the stored LastFee/LastFeePriority must survive it.
+	err := w.updateWalletMeta(func(meta *walletMeta) bool {
+		meta.RestoreHeight, meta.Birthday, meta.IsRecovery = height, bday, true
+		return true
+	})
+	if err != nil {
 		w.log.Warnf("Failed to save wallet metadata: %v", err)
 	}
 
