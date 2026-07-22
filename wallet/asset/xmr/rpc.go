@@ -51,8 +51,13 @@ const digestAttempts = 3
 // fresh one whose nonce the daemon rejects. Verified against monerod v0.18.4.6,
 // where even curl fails digest auth if forced to use Connection: close.
 //
-// The body here is a small error page, but it is bounded anyway so a
-// misbehaving daemon cannot make this read forever.
+// This matters on the success path too, not just the 401 retries: a JSON
+// decoder stops as soon as it has read a complete value and is not guaranteed
+// to have driven the body to EOF, so the connection carrying the nonce would
+// be discarded even when nothing went wrong.
+//
+// The body here is a small error page or an already-decoded result, but it is
+// bounded anyway so a misbehaving daemon cannot make this read forever.
 func drainAndClose(resp *http.Response) {
 	io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes)) //nolint:errcheck // Best effort.
 	resp.Body.Close()
@@ -60,6 +65,13 @@ func drainAndClose(resp *http.Response) {
 
 // maxDrainBytes caps how much of an unwanted response body is read back.
 const maxDrainBytes = 1 << 16
+
+// maxRespBytes caps how much of a response body is decoded. The daemon may be
+// a public third-party node, so its response length is untrusted input: an
+// unbounded decode buffers whatever it sends for as long as feeRequestTimeout
+// allows. The replies this client asks for run to a few hundred bytes, so this
+// is orders of magnitude of headroom.
+const maxRespBytes = 1 << 20
 
 // feeEstimate is the result of monerod's get_fee_estimate.
 type feeEstimate struct {
@@ -262,14 +274,14 @@ func (d *daemonRPC) call(ctx context.Context, method string, result any) error {
 	if resp == nil {
 		return fmt.Errorf("daemon rejected credentials after %d attempts", digestAttempts)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp)
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("daemon returned %s", resp.Status)
 	}
 
 	var rpcResp rpcResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxRespBytes)).Decode(&rpcResp); err != nil {
 		return fmt.Errorf("failed to decode %s response: %w", method, err)
 	}
 	if rpcResp.Error != nil {

@@ -322,6 +322,12 @@ type ExchangeWallet struct {
 	// backs StandardSendFee when the daemon cannot be reached.
 	observedFee atomic.Uint64
 
+	// pendingFee is a broadcast fee awaiting a write to the meta file. commitTx
+	// stores it under walletMtx and flushPendingFee performs the write after
+	// that lock is released, so file I/O never stalls the readers that take
+	// walletMtx.RLock. See flushPendingFee.
+	pendingFee atomic.Uint64
+
 	// metaMtx guards read-modify-write cycles on the wallet meta file, which
 	// are performed from the monitor goroutine and from caller goroutines.
 	metaMtx sync.Mutex
@@ -899,6 +905,9 @@ func (w *ExchangeWallet) ValidateAddress(address string) bool {
 
 // Send sends XMR to an address.
 func (w *ExchangeWallet) Send(address string, value, feeRate uint64) (asset.Coin, error) {
+	// Defers run last-in-first-out, so this one runs after the unlock below.
+	defer w.flushPendingFee()
+
 	w.walletMtx.Lock()
 	defer w.walletMtx.Unlock()
 
@@ -918,6 +927,10 @@ func (w *ExchangeWallet) Send(address string, value, feeRate uint64) (asset.Coin
 func (w *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asset.Coin, error) {
 	// For Monero, Withdraw subtracts the fee from value, sending
 	// (value - fee) to the recipient.
+
+	// Defers run last-in-first-out, so this one runs after the unlock below.
+	defer w.flushPendingFee()
+
 	w.walletMtx.Lock()
 	defer w.walletMtx.Unlock()
 
@@ -1070,6 +1083,9 @@ func (w *ExchangeWallet) estimateFee(address string, value uint64) (uint64, erro
 // commitTx commits a pending transaction and returns the resulting Coin.
 // sendAmount is the expected send amount, used as fallback if the library
 // returns 0 for Amount().
+//
+// Callers hold walletMtx exclusively, so they must also arrange for
+// flushPendingFee to run once they have released it.
 func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64) (*Coin, error) {
 	// Capture values before commit — the library may clear them after.
 	amount := tx.Amount()
@@ -1084,7 +1100,7 @@ func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64
 	// most authoritative fee this wallet can observe, but one that failed to
 	// send is not a fee anyone paid. See StandardSendFee.
 	w.recordFee(fee)
-	w.persistFee(fee)
+	w.pendingFee.Store(fee)
 
 	// Try post-commit if pre-commit was empty.
 	if txid == "" {
@@ -1347,6 +1363,23 @@ func (w *ExchangeWallet) fallbackFee() uint64 {
 func (w *ExchangeWallet) recordFee(fee uint64) {
 	if fee > 0 {
 		w.observedFee.Store(fee)
+	}
+}
+
+// flushPendingFee writes any fee commitTx left behind to the meta file. It is
+// deferred by the methods that call commitTx, registered ahead of their
+// walletMtx unlock so that defer ordering runs it after the lock is released:
+// persistFee reads and rewrites a file, and every Balance, TxHistory or
+// NewAddress caller would otherwise wait on that write for the whole of each
+// broadcast.
+//
+// Taking the fee rather than reading it means a broadcast that lands between
+// the unlock and this call is persisted by its own flush and skipped here. The
+// value is the same kind either way, and observedFee already carries the
+// latest one in memory.
+func (w *ExchangeWallet) flushPendingFee() {
+	if fee := w.pendingFee.Swap(0); fee != 0 {
+		w.persistFee(fee)
 	}
 }
 

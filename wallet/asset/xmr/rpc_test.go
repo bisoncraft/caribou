@@ -6,10 +6,14 @@
 package xmr
 
 import (
+	"bytes"
 	"context"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,6 +210,51 @@ func TestStandardSendFeeRejectsAbsurdRate(t *testing.T) {
 	}
 }
 
+// TestFlushPendingFee covers the handoff commitTx uses to keep the meta-file
+// write out of the walletMtx critical section.
+func TestFlushPendingFee(t *testing.T) {
+	dir := t.TempDir()
+	w := &ExchangeWallet{
+		dataDir:     dir,
+		log:         util.NewLogger("T", util.LevelError, os.Stdout),
+		feePriority: cxmr.PriorityMedium,
+	}
+
+	// With nothing pending there is nothing to write, so a send that never
+	// reached a broadcast must not touch the file at all.
+	w.flushPendingFee()
+	meta, err := loadWalletMeta(dir)
+	if err != nil {
+		t.Fatalf("loadWalletMeta: %v", err)
+	}
+	if meta != nil {
+		t.Fatalf("an empty flush wrote a meta file: %+v", meta)
+	}
+
+	w.pendingFee.Store(12345)
+	w.flushPendingFee()
+
+	meta, err = loadWalletMeta(dir)
+	if err != nil {
+		t.Fatalf("loadWalletMeta: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("no meta file written")
+	}
+	if meta.LastFee != 12345 {
+		t.Errorf("LastFee = %d, want 12345", meta.LastFee)
+	}
+	if meta.LastFeePriority != int(cxmr.PriorityMedium) {
+		t.Errorf("LastFeePriority = %d, want %d", meta.LastFeePriority, cxmr.PriorityMedium)
+	}
+
+	// The fee is taken rather than read, so a broadcast is persisted once no
+	// matter how many flushes follow it.
+	if pending := w.pendingFee.Load(); pending != 0 {
+		t.Errorf("pendingFee = %d after a flush, want it cleared", pending)
+	}
+}
+
 func TestFeeCacheCooldown(t *testing.T) {
 	var c feeEstimateCache
 	now := time.Now()
@@ -229,6 +278,128 @@ func TestFeeCacheCooldown(t *testing.T) {
 	c.set(&feeEstimate{Fee: 1}, now.UnixNano())
 	if c.coolingDown(now, time.Minute) {
 		t.Error("cooldown survived a successful fetch")
+	}
+}
+
+// singleConnClient mirrors the transport Connect builds: one pooled
+// connection, because monerod scopes its digest nonce to the connection that
+// issued it. See drainAndClose.
+func singleConnClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        1,
+			MaxIdleConnsPerHost: 1,
+		},
+	}
+}
+
+const feeEstimateJSON = `{"jsonrpc":"2.0","id":"0","result":` +
+	`{"fee":20000,"fees":[20000,80000,320000,4000000],"quantization_mask":10000,"status":"OK"}}`
+
+// TestCallReusesConnection checks that a response this client does not want
+// still leaves the connection reusable. Every exit path has to drain the body:
+// Go only returns a connection to the idle pool once the body is read to EOF
+// and closed, and a discarded connection costs the daemon-scoped digest nonce
+// with it, so the next call has to re-challenge from scratch.
+func TestCallReusesConnection(t *testing.T) {
+	var mtx sync.Mutex
+	var addrs []string
+	var failing bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(wr http.ResponseWriter, r *http.Request) {
+		mtx.Lock()
+		addrs = append(addrs, r.RemoteAddr)
+		fail := failing
+		mtx.Unlock()
+
+		if fail {
+			// A daemon error carries a body, same as the 401 challenge does.
+			wr.WriteHeader(http.StatusInternalServerError)
+			wr.Write(bytes.Repeat([]byte("x"), 4096)) //nolint:errcheck // Test server.
+			return
+		}
+		wr.Write([]byte(feeEstimateJSON)) //nolint:errcheck // Test server.
+	}))
+	defer srv.Close()
+
+	d := newDaemonRPC(srv.URL, "", "", singleConnClient())
+	ctx := context.Background()
+
+	if _, err := d.getFeeEstimate(ctx); err != nil {
+		t.Fatalf("first getFeeEstimate: %v", err)
+	}
+
+	mtx.Lock()
+	failing = true
+	mtx.Unlock()
+	if _, err := d.getFeeEstimate(ctx); err == nil {
+		t.Fatal("a 500 response was not reported as an error")
+	}
+
+	mtx.Lock()
+	failing = false
+	mtx.Unlock()
+	if _, err := d.getFeeEstimate(ctx); err != nil {
+		t.Fatalf("getFeeEstimate after a 500: %v", err)
+	}
+
+	mtx.Lock()
+	defer mtx.Unlock()
+	if len(addrs) != 3 {
+		t.Fatalf("got %d requests, want 3", len(addrs))
+	}
+	for i, addr := range addrs {
+		if addr != addrs[0] {
+			t.Errorf("request %d came from %s, want the pooled connection %s", i, addr, addrs[0])
+		}
+	}
+}
+
+// TestCallBoundsResponseBody checks that a daemon cannot make this client
+// buffer an unbounded response. The mainnet default is a public third-party
+// node, so the length of what it sends is untrusted input.
+func TestCallBoundsResponseBody(t *testing.T) {
+	// backstop keeps a client that reads without limit from running until the
+	// deadline instead of failing the test. It is far above what a bounded
+	// client can pull, and reaching it is itself the failure.
+	const backstop = 64 << 20
+
+	var served atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(wr http.ResponseWriter, r *http.Request) {
+		// A reply that never terminates: valid JSON so far, then filler for as
+		// long as the client keeps reading.
+		wr.Write([]byte(`{"jsonrpc":"2.0","id":"0","result":{"status":"`)) //nolint:errcheck // Test server.
+		chunk := bytes.Repeat([]byte("A"), 1<<16)
+		for served.Load() < backstop {
+			n, err := wr.Write(chunk)
+			served.Add(int64(n))
+			if err != nil {
+				return // Client hung up, which is the point of the test.
+			}
+		}
+	}))
+	defer srv.Close()
+
+	d := newDaemonRPC(srv.URL, "", "", singleConnClient())
+
+	// Comfortably longer than reading maxRespBytes off a loopback socket, so a
+	// failure here is the decode giving up rather than the deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := d.getFeeEstimate(ctx); err == nil {
+		t.Fatal("an oversized response was accepted")
+	} else if ctx.Err() != nil {
+		t.Fatalf("the request ran out the clock rather than the byte limit: %v", err)
+	}
+
+	// The client stops at maxRespBytes plus the drain, but the server can run
+	// ahead of it by whatever the socket buffers hold, so this checks the order
+	// of magnitude rather than an exact figure.
+	if got := served.Load(); got > 8*maxRespBytes {
+		t.Errorf("the daemon pushed %d bytes before the client gave up, want it bounded near %d",
+			got, maxRespBytes)
 	}
 }
 
