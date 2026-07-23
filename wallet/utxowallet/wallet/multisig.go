@@ -7,6 +7,7 @@ package wallet
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
@@ -56,8 +57,12 @@ func (w *Wallet) MakeMultiSigScript(addrs []btcutil.Address, nRequired int) ([]b
 			if err != nil {
 				return nil, err
 			}
-			serializedPubKey := addrInfo.(waddrmgr.ManagedPubKeyAddress).
-				PubKey().SerializeCompressed()
+			pubKeyAddrInfo, ok := addrInfo.(waddrmgr.ManagedPubKeyAddress)
+			if !ok {
+				return nil, fmt.Errorf("address %v is not a managed "+
+					"pubkey address", addr)
+			}
+			serializedPubKey := pubKeyAddrInfo.PubKey().SerializeCompressed()
 
 			pubKeyAddr, err := btcutil.NewAddressPubKey(
 				serializedPubKey, w.btcParams)
@@ -107,7 +112,12 @@ func (w *Wallet) ImportP2SHRedeemScript(script []byte) (*btcutil.AddressScriptHa
 			return err
 		}
 
-		p2shAddr = addrInfo.Address().(*btcutil.AddressScriptHash)
+		scriptHashAddr, ok := addrInfo.Address().(*btcutil.AddressScriptHash)
+		if !ok {
+			return fmt.Errorf("imported script address %v is not a "+
+				"P2SH address", addrInfo.Address())
+		}
+		p2shAddr = scriptHashAddr
 		return nil
 	})
 	return p2shAddr, err

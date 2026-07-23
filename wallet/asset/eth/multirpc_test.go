@@ -1,13 +1,17 @@
+//go:build !harness && !rpclive
+
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 package eth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,6 +20,51 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 )
+
+func TestMultiRPCClientReconfigureNoopWhenEndpointsUnchanged(t *testing.T) {
+	t.Parallel()
+	endpoints := []string{"https://a.example", "https://b.example"}
+	origProviders := []*provider{{host: "a.example"}, {host: "b.example"}}
+	m := &multiRPCClient{
+		log:       tLogger,
+		endpoints: endpoints,
+		providers: origProviders,
+	}
+
+	// createAndCheckProviders and connectProviders both dial out; reaching
+	// them here would hang/fail in a unit test. Reconfiguring with the same
+	// endpoint list must return before either is called.
+	if err := m.reconfigure(context.Background(), slices.Clone(endpoints), nil, "", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !slices.Equal(m.providers, origProviders) {
+		t.Fatal("providers should not have been replaced when endpoints are unchanged")
+	}
+}
+
+func TestMultiRPCClientReconfigureRetriesOnPartialConnect(t *testing.T) {
+	t.Parallel()
+	endpoints := []string{"https://a.example", "https://b.example"}
+	// Only one of the two endpoints is actually connected, simulating a
+	// wallet that started with a partial connect.
+	origProviders := []*provider{{host: "a.example"}}
+	m := &multiRPCClient{
+		log:       tLogger,
+		endpoints: endpoints,
+		providers: origProviders,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A canceled context makes any dial attempt fail fast. Reconfiguring
+	// with the same endpoint list must not take the no-op early return when
+	// the connected provider count doesn't match the endpoint count, so this
+	// should reach createAndCheckProviders and return its error rather than
+	// nil.
+	if err := m.reconfigure(ctx, slices.Clone(endpoints), nil, t.TempDir(), false); err == nil {
+		t.Fatal("expected error from attempted reconnect on partial connect, got nil")
+	}
+}
 
 func TestProviderString(t *testing.T) {
 	t.Parallel()

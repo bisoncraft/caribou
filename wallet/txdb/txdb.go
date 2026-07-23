@@ -91,7 +91,9 @@ func New(path string, log util.Logger) (*TxDB, error) {
 	}
 	db, err := newTxDB(store, log)
 	if err != nil {
-		store.Close()
+		if cerr := store.Close(); cerr != nil {
+			log.Errorf("error closing store after newTxDB failure: %v", cerr)
+		}
 		return nil, err
 	}
 	return db, nil

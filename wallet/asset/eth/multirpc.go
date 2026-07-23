@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -837,11 +838,17 @@ func failedProviders(succeeded []*provider, tried []string) string {
 }
 
 func (m *multiRPCClient) reconfigure(ctx context.Context, endpoints []string, compat *CompatibilityData, walletDir string, defaultProviders bool) error {
+	m.providerMtx.RLock()
+	unchanged := slices.Equal(m.endpoints, endpoints) && len(m.providers) == len(m.endpoints)
+	m.providerMtx.RUnlock()
+	if unchanged {
+		return nil
+	}
+
 	if err := createAndCheckProviders(ctx, walletDir, endpoints, m.chainID, compat, m.net, m.log, !defaultProviders, m.torProxy); err != nil {
 		return fmt.Errorf("create and check providers: %v", err)
 	}
 
-	// TODO: If endpoints haven't change, do nothing.
 	providers, err := connectProviders(ctx, endpoints, m.log, m.chainID, m.net, m.torProxy, m.newHeadCh)
 	if err != nil {
 		return err

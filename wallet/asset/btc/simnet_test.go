@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -132,6 +133,11 @@ func tBackend(t *testing.T, name string, _ bool, _ func(string, error)) (*harnes
 		t.Fatalf("error connecting %s backend: %v", name, err)
 	}
 	return node, cm
+}
+
+// toSatoshi converts BTC to satoshi.
+func toSatoshi(v float64) uint64 {
+	return uint64(math.Round(v * float64(UnitInfo.Conventional.ConversionFactor)))
 }
 
 func randBytes(l int) []byte {

@@ -30,23 +30,6 @@ var (
 	ExxVersionedPrefix = [2]byte{0x01, 0xb9}
 )
 
-// isExxAddress determines whether the address encoding is an EXX, EXT address
-// for mainnet, testnet or regtest networks.
-func isExxAddress(addr string) bool {
-	b, ver, err := base58.CheckDecode(addr)
-	switch {
-	case err != nil:
-		return false
-	case ver != ExxVersionedPrefix[0]:
-		return false
-	case len(b) != ripemd160HashSize+2:
-		return false
-	case b[0] != ExxVersionedPrefix[1]:
-		return false
-	}
-	return true
-}
-
 func checksum(input []byte) (csum [4]byte) {
 	h0 := sha256.Sum256(input)
 	h1 := sha256.Sum256(h0[:])

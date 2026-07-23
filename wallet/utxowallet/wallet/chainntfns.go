@@ -223,10 +223,14 @@ func (w *Wallet) handleChainNotifications() {
 					waddrmgr.IsError(err, waddrmgr.ErrBlockNotFound) &&
 					!w.ChainSynced() {
 
+					height := int32(0)
+					if bc, ok := n.(chain.BlockConnected); ok {
+						height = bc.Height
+					}
 					log.Debugf("Received block connected "+
 						"notification for height %v "+
 						"while rescanning",
-						n.(chain.BlockConnected).Height)
+						height)
 					continue
 				}
 

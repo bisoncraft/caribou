@@ -129,7 +129,9 @@ func dial(ctx context.Context, addr string, opts *dialOptions) (*Server, error) 
 	if opts.TLSConfig != nil {
 		tlsConn := tls.Client(conn, opts.TLSConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			conn.Close()
+			if cerr := conn.Close(); cerr != nil {
+				log.Warnf("electrum %s: error closing connection after failed TLS handshake: %v", addr, cerr)
+			}
 			return nil, fmt.Errorf("electrum: TLS handshake to %s: %w", addr, err)
 		}
 		conn = tlsConn

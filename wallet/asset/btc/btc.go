@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 	"path/filepath"
 	"time"
 
@@ -34,8 +33,6 @@ const (
 )
 
 var (
-	conventionalConversionFactor = float64(UnitInfo.Conventional.ConversionFactor)
-
 	// DefaultWalletBirthday re-exports the utxowallet fallback birthday
 	// (pinned near launch) for the asset packages; ltc and bch reference it
 	// through this package.
@@ -212,11 +209,6 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 	default:
 		return nil, fmt.Errorf("unknown wallet type %q", cfg.Type)
 	}
-}
-
-// Convert the BTC value to satoshi.
-func toSatoshi(v float64) uint64 {
-	return uint64(math.Round(v * conventionalConversionFactor))
 }
 
 // BlockHeader is a partial btcjson.GetBlockHeaderVerboseResult with mediantime
