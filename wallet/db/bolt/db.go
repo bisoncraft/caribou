@@ -40,7 +40,6 @@ func getCopy(bkt *bbolt.Bucket, key []byte) []byte {
 var (
 	intCoder    = encode.IntCoder
 	bEqual      = bytes.Equal
-	uint16Bytes = encode.Uint16Bytes
 	uint32Bytes = encode.Uint32Bytes
 	uint64Bytes = encode.Uint64Bytes
 )

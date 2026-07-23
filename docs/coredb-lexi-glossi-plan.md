@@ -453,27 +453,32 @@ consume `shared`; `BackupDB`, `Recrypt`, `no-db-backup`, `legacySeedLength` and
 `LegacyWalletIndex` grep clean. `emptyidx` deliberately survives in
 `wallet/appserver/site`, which keeps its own copy of the declaration.
 
-### Phase 4 — Backend-agnostic conformance suite, still on bolt — pending
+### Phase 4 — Backend-agnostic conformance suite, still on bolt — done
 
 Build the equivalence harness while bolt is still the only backend, so the suite
 is validated against known-good behavior before it is used to judge a new one.
 
 - Add `wallet/db/test/suite.go` exporting
   `RunSuite(t *testing.T, newDB func(*testing.T) db.DB)`, lifting the
-  table-driven bodies out of `wallet/db/bolt/db_test.go`: credentials, wallets,
-  notifications, pokes, multisig, seed-generation time, language, tokens, and
-  send-requires-password.
-- Reduce `wallet/db/bolt/db_test.go` to a driver that constructs a `*BoltDB` and
-  calls `RunSuite`. Tests that deliberately reach into bbolt stay local to that
-  file.
-- `dbtest.go`'s generators and comparators are reused verbatim; they have no
-  dependency on the `DB` interface.
+  table-driven bodies out of `wallet/db/bolt/db_test.go` and extending coverage
+  to the rest of the interface: credentials, wallets, wallet status,
+  notifications, pokes, multisig, seed-generation time, disabled rate sources,
+  language, tokens, and send-requires-password. The suite pins the contracts a
+  new backend must honor for `core`: the `ErrNoCredentials` and
+  `ErrNoSeedGenTime` sentinels that `core` matches with `errors.Is`, the
+  partial-update semantics of `UpdateBalance` / `SetWalletPassword` /
+  `UpdateWalletStatus`, credential overwrite (`changeAppPass`), empty-token and
+  cleared-token reads, per-asset `NextMultisigKeyIndex` sequencing, and
+  newest-first `NotificationsN` ordering with `Ack`/`Id` population.
+- Reduce `wallet/db/bolt/db_test.go` to a driver that constructs a `*BoltDB`
+  and calls `RunSuite`. No existing test reached into bbolt internals, so
+  nothing stays behind.
+- `dbtest.go`'s generators and comparators are reused; `RandomWallet` and
+  `MustCompareWallets` additionally gain `Wallet.Type` coverage, which no test
+  previously exercised.
 
-Any assertion that cannot be expressed without touching bbolt is testing the
-engine rather than the contract, and stays behind.
-
-Verify: `go test ./wallet/db/...` green — same assertions, now routed through
-the interface.
+Verify: `go test ./wallet/db/...` green — the lifted assertions, now routed
+through the interface.
 
 ### Phase 5 — The port — pending
 
