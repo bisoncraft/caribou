@@ -61,7 +61,7 @@ parse); wallet creation omitting `"type"` errors instead of defaulting to
   notifications, an index iteration would return none, and the only
   production caller passes 100.
 
-## Phase 5 — The port
+## Phase 5 — The port (b1825231d)
 
 - [x] Add `wallet/db/db.go` implementing `db.DB` over `kvstore.Store`:
   exported `db.New(path, log)` builds its own store, unexported
