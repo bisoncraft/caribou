@@ -280,7 +280,7 @@ before a second backend exists to check it against.
 Every phase ends with `gofmt` applied and `golangci-lint` clean. Phases touching
 `.ts` also run `npx eslint` on the touched files.
 
-### Phase 1 — Strip lexi's upgrade machinery — done (743f00169)
+### Phase 1 — Strip lexi's upgrade machinery — done (d76af68e9)
 
 Self-contained in `util/lexi`, `util/politeia`, and go.mod.
 
@@ -303,7 +303,9 @@ Self-contained in `util/lexi`, `util/politeia`, and go.mod.
   modules reachable only through it — `AndreasBriese/bbloom`,
   `dgraph-io/ristretto v0.0.2`, `cespare/xxhash v1.1.0` and
   `golang/protobuf` — plus 13 go.sum lines. `ristretto/v2` stays; it is badger
-  v4's cache.
+  v4's cache. The nested `wallet/cmd/caribou-desktop` module has its own
+  `go.mod` with a `replace` to the root, which a root-level tidy does not
+  cover; it is tidied separately and sheds the same five modules.
 - Delete the ~16 upgrade tests across `util/lexi/db_test.go` and `more_test.go`
   (`TestNeedsV1toV4Update`, `TestBadgerV1Update`, `TestBadgerV1UpdateWithLargeData`,
   `TestNewWithMigration`, `TestDBVersion`, `TestUpgradeTransaction`,
@@ -321,7 +323,7 @@ Verify: `go build ./... && go build -tags mobile ./...`;
 `go test ./util/lexi/... ./util/glossi/... ./wallet/txdb/...` under both tags;
 `grep -rn "dgraph-io/badger\"" .` clean.
 
-### Phase 2 — Extract the engine abstraction to `util/kvstore` — done (f726fd86b)
+### Phase 2 — Extract the engine abstraction to `util/kvstore` — done (c4f31a121)
 
 Pure code motion. No behavior change.
 
@@ -360,7 +362,7 @@ five asset packages are not touched.
 Verify: `go build ./... && go build -tags mobile ./...`;
 `go test ./wallet/txdb/... ./util/kvstore/...` under both tags.
 
-### Phase 3 — Remove the dead and legacy surface, still on bolt — done (8d4305890)
+### Phase 3 — Remove the dead and legacy surface, still on bolt — done (67d984534)
 
 Deleting first keeps Phase 5's diff to the migration, and stops the `_v0`
 decoders and `creds.Version` from being carried into the new schema. Follow the
@@ -453,7 +455,7 @@ consume `shared`; `BackupDB`, `Recrypt`, `no-db-backup`, `legacySeedLength` and
 `LegacyWalletIndex` grep clean. `emptyidx` deliberately survives in
 `wallet/appserver/site`, which keeps its own copy of the declaration.
 
-### Phase 4 — Backend-agnostic conformance suite, still on bolt — done
+### Phase 4 — Backend-agnostic conformance suite, still on bolt — done (d32b4a7b8)
 
 Build the equivalence harness while bolt is still the only backend, so the suite
 is validated against known-good behavior before it is used to judge a new one.
