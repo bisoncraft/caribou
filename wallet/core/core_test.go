@@ -98,7 +98,11 @@ type TDB struct {
 	setCredsErr     error
 }
 
-func (tdb *TDB) Run(context.Context) {}
+func (tdb *TDB) Connect(context.Context) (*sync.WaitGroup, error) {
+	return &sync.WaitGroup{}, nil
+}
+
+func (tdb *TDB) Close() error { return nil }
 
 func (tdb *TDB) UpdateWallet(wallet *db.Wallet) error {
 	tdb.wallet = wallet

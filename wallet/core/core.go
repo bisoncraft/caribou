@@ -27,7 +27,6 @@ import (
 	"github.com/bisoncraft/caribou/util/encrypt"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/db"
-	"github.com/bisoncraft/caribou/wallet/db/bolt"
 	"github.com/bisoncraft/caribou/wallet/mnemonic"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/dcrd/crypto/blake256"
@@ -161,7 +160,7 @@ func New(cfg *Config) (*Core, error) {
 	if cfg.Logger == nil {
 		return nil, fmt.Errorf("Core.Config must specify a Logger")
 	}
-	boltDB, err := bolt.NewDB(cfg.DBPath, cfg.Logger.SubLogger("DB"))
+	coreDB, err := db.New(cfg.DBPath, cfg.Logger.SubLogger("DB"))
 	if err != nil {
 		return nil, fmt.Errorf("database initialization error: %w", err)
 	}
@@ -226,7 +225,7 @@ func New(cfg *Config) (*Core, error) {
 	lang := language.Und
 
 	// Check if the user has set a language with SetLanguage.
-	if langStr, err := boltDB.Language(); err != nil {
+	if langStr, err := coreDB.Language(); err != nil {
 		cfg.Logger.Errorf("Error loading language from database: %v", err)
 	} else if len(langStr) > 0 {
 		if lang, err = parseLanguage(langStr); err != nil {
@@ -258,12 +257,12 @@ func New(cfg *Config) (*Core, error) {
 
 	// Try to get the primary credentials, but ignore no-credentials error here
 	// because the client may not be initialized.
-	creds, err := boltDB.PrimaryCredentials()
+	creds, err := coreDB.PrimaryCredentials()
 	if err != nil && !errors.Is(err, db.ErrNoCredentials) {
 		return nil, err
 	}
 
-	seedGenerationTime, err := boltDB.SeedGenerationTime()
+	seedGenerationTime, err := coreDB.SeedGenerationTime()
 	if err != nil && !errors.Is(err, db.ErrNoSeedGenTime) {
 		return nil, err
 	}
@@ -284,7 +283,7 @@ func New(cfg *Config) (*Core, error) {
 		credentials:  creds,
 		ready:        make(chan struct{}),
 		log:          cfg.Logger,
-		db:           boltDB,
+		db:           coreDB,
 		txDB:         masterTxDB,
 		wallets:      make(map[uint32]*xcWallet),
 		net:          cfg.Net,
@@ -332,20 +331,29 @@ func (c *Core) Run(ctx context.Context) {
 	}
 	close(c.ready)
 
-	// The DB starts first and stops last.
+	// The DB starts first and stops last. Both databases are bound to their
+	// own contexts rather than the application ctx so their shutdown
+	// (storage-engine close, GC drain, etc.) can be deferred until after the
+	// wallets are locked and disconnected below. This prevents an in-flight
+	// write during wind-down — a wallet transaction or a shutdown
+	// notification — from hitting a closed DB.
 	ctxDB, stopDB := context.WithCancel(context.Background())
-	var dbWG sync.WaitGroup
-	dbWG.Add(1)
-	go func() {
-		defer dbWG.Done()
-		c.db.Run(ctxDB)
-	}()
+	dbWG, err := c.db.Connect(ctxDB)
+	if err != nil {
+		c.log.Critical(fmt.Errorf("error connecting database: %w", err))
+		// Connect did not take ownership of the DBs opened by New(), so close
+		// them here; nothing else will. dbWG is nil on this path, and the tx
+		// DB is not yet connected.
+		if closeErr := c.db.Close(); closeErr != nil {
+			c.log.Errorf("Error closing database: %v", closeErr)
+		}
+		if closeErr := c.txDB.Close(); closeErr != nil {
+			c.log.Errorf("Error closing transaction database: %v", closeErr)
+		}
+		stopDB()
+		return
+	}
 
-	// The master transaction DB is bound to its own context rather than the
-	// application ctx so its shutdown (storage-engine close, GC drain, etc.)
-	// can be deferred until after the wallets are disconnected below. This
-	// prevents an in-flight wallet write during wind-down from hitting a
-	// closed DB.
 	ctxTxDB, stopTxDB := context.WithCancel(context.Background())
 	txDBWG, err := c.txDB.Connect(ctxTxDB)
 	if err != nil {
@@ -359,8 +367,7 @@ func (c *Core) Run(ctx context.Context) {
 		if closeErr := c.txDB.Close(); closeErr != nil {
 			c.log.Errorf("Error closing transaction database: %v", closeErr)
 		}
-		// Tear down the DB goroutine started above before returning so it does
-		// not leak. stopTxDB releases the (unused) tx DB context.
+		// Release the main DB context, which closes the connected main DB.
 		stopTxDB()
 		stopDB()
 		dbWG.Wait()
@@ -405,10 +412,6 @@ fetchers:
 		c.log.Errorf("Error saving pokes: %v", err)
 	}
 
-	// Stop the DB after dexConnections and other goroutines are done.
-	stopDB()
-	dbWG.Wait()
-
 	// Lock and disconnect the wallets.
 	c.walletMtx.Lock()
 	defer c.walletMtx.Unlock()
@@ -434,9 +437,12 @@ fetchers:
 		wallet.Disconnect()
 	}
 
-	// Now that the wallets are disconnected, stop the master transaction DB
-	// and wait for it to finish shutting down. Closing it only here ensures no
-	// in-flight wallet write can race the engine close.
+	// Now that the wallets are disconnected, stop the databases and wait for
+	// them to finish shutting down. Closing them only here ensures no
+	// in-flight write — a wallet transaction, or a notification fired from
+	// the lock/disconnect path above — can race the engine close.
+	stopDB()
+	dbWG.Wait()
 	stopTxDB()
 	if txDBWG != nil {
 		txDBWG.Wait()

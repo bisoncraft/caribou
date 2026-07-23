@@ -4,13 +4,21 @@
 package db
 
 import (
-	"github.com/bisoncraft/caribou/util"
+	"context"
+	"sync"
 )
 
 // DB is an interface that must be satisfied by Caribou persistent storage
 // manager.
 type DB interface {
-	util.Runner
+	// Connect ties the DB's shutdown to ctx: when ctx is canceled, the
+	// underlying database is closed. The returned WaitGroup completes once
+	// shutdown is finished.
+	Connect(ctx context.Context) (*sync.WaitGroup, error)
+	// Close closes the database. Only safe to call when Connect has not been
+	// called; for the managed lifecycle, cancel the context passed to Connect
+	// and wait the returned WaitGroup.
+	Close() error
 	// SetPrimaryCredentials sets the initial *PrimaryCredentials.
 	SetPrimaryCredentials(creds *PrimaryCredentials) error
 	// PrimaryCredentials fetches the *PrimaryCredentials.

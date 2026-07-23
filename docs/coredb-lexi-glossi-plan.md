@@ -63,7 +63,7 @@ parse); wallet creation omitting `"type"` errors instead of defaulting to
 
 ## Phase 5 — The port
 
-- [ ] Add `wallet/db/db.go` implementing `db.DB` over `kvstore.Store`:
+- [x] Add `wallet/db/db.go` implementing `db.DB` over `kvstore.Store`:
   exported `db.New(path, log)` builds its own store, unexported
   `newDB(store, log)` accepts one for tests, mirroring `txdb.newTxDB`. Lands
   in package `db` beside the interface, which is retained for
@@ -97,26 +97,26 @@ parse); wallet creation omitting `"type"` errors instead of defaulting to
     `NextMultisigKeyIndex` (a lost update there is a duplicate key index,
     i.e. address reuse). All three are cold paths; both engines hold an
     exclusive file lock, so there is no cross-process case.
-- [ ] `wallet/db/interface.go`: swap `util.Runner` for
+- [x] `wallet/db/interface.go`: swap `util.Runner` for
   `Connect(ctx) (*sync.WaitGroup, error)` and `Close() error`, matching
   `txdb` and both engines' native shape.
-- [ ] `wallet/core/core.go`: construct via `db.New`; replace the hand-rolled
+- [x] `wallet/core/core.go`: construct via `db.New`; replace the hand-rolled
   DB goroutine and `sync.WaitGroup` with `Connect`; move
   `stopDB()`/`dbWG.Wait()` down beside `stopTxDB()` — the early stop only
   served bolt's backup/compact and loses `SaveNotification` writes fired
   from the wallet lock/disconnect path after the DB closes. Correct the
   stale "The DB starts first and stops last" comment.
-- [ ] `wallet/core/core_test.go`: `TDB.Run` becomes
+- [x] `wallet/core/core_test.go`: `TDB.Run` becomes
   `TDB.Connect`/`TDB.Close`.
-- [ ] `wallet/app/config.go`: default DB path `bossw.db` becomes `coredb` —
+- [x] `wallet/app/config.go`: default DB path `caribou.db` becomes `coredb` —
   a directory on desktop, a file on mobile, the same split `tx.db` already
   has. A stale bbolt file is ignored and can be deleted by hand;
   `filepath.Dir(cfg.DBPath)` still parents `assetdb/` and `tx.db`.
-- [ ] Delete `wallet/db/bolt`.
-- [ ] Add `wallet/db/db_lexi_test.go` (`//go:build !mobile`) and
+- [x] Delete `wallet/db/bolt`.
+- [x] Add `wallet/db/db_lexi_test.go` (`//go:build !mobile`) and
   `wallet/db/db_glossi_test.go` (`//go:build mobile`), each a driver calling
   `dbtest.RunSuite` — the first time both engines get identical coverage.
-- [ ] Verify: `go test ./wallet/...` and
+- [x] Verify: `go test ./wallet/...` and
   `go test -tags mobile ./wallet/db/...` (the Phase 4 suite passes against
   both engines); `go build -tags mobile ./...`; the artifact is
   `<net>/coredb` — a directory on desktop, a file on mobile;

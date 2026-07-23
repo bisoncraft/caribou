@@ -79,6 +79,43 @@ type PrimaryCredentials struct {
 	Birthday time.Time
 }
 
+// Encode encodes the PrimaryCredentials to a versioned blob. The Birthday is
+// stored at second precision.
+func (c *PrimaryCredentials) Encode() []byte {
+	return versionedBytes(0).
+		AddData(c.EncSeed).
+		AddData(c.EncInnerKey).
+		AddData(c.InnerKeyParams).
+		AddData(c.OuterKeyParams).
+		AddData(uint64Bytes(uint64(c.Birthday.Unix())))
+}
+
+// DecodeCredentials decodes the versioned blob to *PrimaryCredentials.
+func DecodeCredentials(b []byte) (*PrimaryCredentials, error) {
+	ver, pushes, err := encode.DecodeBlob(b)
+	if err != nil {
+		return nil, err
+	}
+	switch ver {
+	case 0:
+		return decodeCredentials_v0(pushes)
+	}
+	return nil, fmt.Errorf("unknown PrimaryCredentials version %d", ver)
+}
+
+func decodeCredentials_v0(pushes [][]byte) (*PrimaryCredentials, error) {
+	if len(pushes) != 5 {
+		return nil, fmt.Errorf("decodeCredentials_v0: expected 5 pushes, got %d", len(pushes))
+	}
+	return &PrimaryCredentials{
+		EncSeed:        pushes[0],
+		EncInnerKey:    pushes[1],
+		InnerKeyParams: pushes[2],
+		OuterKeyParams: pushes[3],
+		Birthday:       time.Unix(int64(intCoder.Uint64(pushes[4])), 0),
+	}, nil
+}
+
 // encodeAssetBalance serializes an asset.Balance.
 func encodeAssetBalance(bal *asset.Balance) []byte {
 	return versionedBytes(0).
