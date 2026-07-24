@@ -1673,3 +1673,86 @@ func TestPokesCachePokes(t *testing.T) {
 		}
 	}
 }
+
+// TestSuspendResume verifies the mobile pause/resume round-trip: Suspend
+// disconnects every wallet without logging out, Resume reconnects them with no
+// password, and a logout while suspended makes Resume refuse rather than
+// reconnect.
+func TestSuspendResume(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	var assetID uint32 = 42 // dcr
+	w, _ := newTWallet(assetID)
+	w.hookedUp = false
+	tCore.wallets[assetID] = w
+
+	// Connect the wallet the way login would, so the connector is live.
+	if err := w.Connect(); err != nil {
+		t.Fatalf("initial Connect: %v", err)
+	}
+	if !w.connected() {
+		t.Fatal("wallet should be connected after Connect")
+	}
+	tCore.loginMtx.Lock()
+	tCore.loggedIn = true
+	tCore.loginMtx.Unlock()
+
+	// Suspend disconnects without logging out and records the connected set.
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	if w.connected() {
+		t.Fatal("wallet should be disconnected after Suspend")
+	}
+	tCore.suspendMtx.Lock()
+	suspendedOK := tCore.suspended && len(tCore.suspendedWallets) == 1 &&
+		tCore.suspendedWallets[0] == assetID
+	tCore.suspendMtx.Unlock()
+	if !suspendedOK {
+		t.Fatal("suspend state not recorded correctly")
+	}
+
+	// Suspend is idempotent.
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("second Suspend: %v", err)
+	}
+
+	// Resume reconnects with no crypter, proving password-free resume.
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if !w.connected() {
+		t.Fatal("wallet should be reconnected after Resume")
+	}
+	tCore.suspendMtx.Lock()
+	cleared := !tCore.suspended && tCore.suspendedWallets == nil
+	tCore.suspendMtx.Unlock()
+	if !cleared {
+		t.Fatal("suspend state should be cleared after Resume")
+	}
+
+	// Resume is a no-op when not suspended.
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("no-op Resume: %v", err)
+	}
+
+	// Suspend, then a logout: Resume must refuse and clear state, leaving the
+	// shell to run a full Unlock instead.
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend before logout: %v", err)
+	}
+	tCore.loginMtx.Lock()
+	tCore.loggedIn = false
+	tCore.loginMtx.Unlock()
+	if err := tCore.Resume(); err == nil {
+		t.Fatal("Resume should error when logged out while suspended")
+	}
+	tCore.suspendMtx.Lock()
+	stillSuspended := tCore.suspended
+	tCore.suspendMtx.Unlock()
+	if stillSuspended {
+		t.Fatal("suspend state should be cleared after a logged-out Resume")
+	}
+}

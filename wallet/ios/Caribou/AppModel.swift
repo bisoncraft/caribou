@@ -71,6 +71,23 @@ final class AppModel: ObservableObject {
     private let defaultGateMs = 10.0 * 60_000     // 10 min
     private let defaultEvictMs = 60.0 * 60_000    // 1 hour
     private let evictionNever = Double.greatestFiniteMagnitude
+    // Pause: the cheapest tier. After a short grace, disconnect wallets (App.pause)
+    // so polling stops and the radio can sleep, keeping the session and keys
+    // resident so a foreground resume needs no re-auth. The grace only exists to
+    // avoid thrashing the network on a quick app switch.
+    // Shorter than Android's 30s grace, and necessarily so: here the grace runs
+    // inside a beginBackgroundTask assertion, and iOS reclaims that window about
+    // 30s after backgrounding. A 30s grace loses that race on essentially every
+    // background, dropping the pause onto the expiration handler — which must
+    // return promptly and so cannot hold the assertion across App.pause, leaving
+    // the disconnect to run as the process is being suspended. At 15s the pause
+    // fires with half the window still in hand (measured on an iPhone SE 3rd gen,
+    // iOS 26.5: t+15.7s, 14.5s remaining; in the Simulator, a 30s grace had
+    // already fallen to the expiration handler, at t+26s with 4.5s left). The
+    // window cannot be measured and clamped to instead: backgroundTimeRemaining
+    // still reads greatestFiniteMagnitude when the scene phase turns .background,
+    // even with the assertion already begun.
+    private let pauseMs = 15.0 * 1_000            // 15 sec
 
     private func gateMs() -> Double { defaults.object(forKey: kGateMs) as? Double ?? defaultGateMs }
     private func evictMs() -> Double { defaults.object(forKey: kEvictMs) as? Double ?? defaultEvictMs }
@@ -98,6 +115,29 @@ final class AppModel: ObservableObject {
     // execution window; the real mechanism is the resume-time backstop.
     private var bgTaskId: UIBackgroundTaskIdentifier = .invalid
     private var evictWork: DispatchWorkItem?
+
+    // Background pause state: whether wallets are currently disconnected by the
+    // pause tier, the timer that arms it pauseMs after backgrounding, and the
+    // background-task assertion that keeps the process alive across the grace.
+    // The assertion is the pause tier's own, separate from bgTaskId: eviction's
+    // window does not exist at all in the gate-only configuration (evictMs ==
+    // never), and beginBgTask/endBgTask manage a single identifier, so sharing
+    // one would let either tier tear down the other's window.
+    private var paused = false
+    private var pauseWork: DispatchWorkItem?
+    private var pauseBgTaskId: UIBackgroundTaskIdentifier = .invalid
+
+    // walletLifecycleQueue serializes App.pause against App.resume. Ordering, not
+    // just mutual exclusion, is the requirement: the Go App mutex guarantees only
+    // that one runs at a time, and two Task.detached calls have no ordering
+    // between them. On wake, a pause whose grace elapsed while the process was
+    // suspended is dispatched with no defined order against the .active scene
+    // phase, so a resume can be issued moments after it. If that resume won the
+    // mutex, the pause would land last and leave every wallet disconnected in the
+    // foreground, with nothing to re-arm until the next background cycle. A serial
+    // queue makes the pair FIFO, so the pause always settles before the resume.
+    private let walletLifecycleQueue = DispatchQueue(label: "com.bisoncraft.caribou.wallet-lifecycle",
+                                                     qos: .userInitiated)
 
     // MARK: - Lifecycle
 
@@ -183,12 +223,111 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // enterBackground stamps the time and arms the best-effort eviction timer.
+    // enterBackground stamps the time and arms the best-effort pause and eviction
+    // timers. Pause is armed first and unconditionally, so wallets disconnect even
+    // when eviction is set to Never (the gate-only configuration).
     private func enterBackground() {
         backgroundedAt = Date()
+        schedulePause()
         let evict = evictMs()
         guard evict != evictionNever else { return }
         scheduleEviction(afterMs: evict)
+    }
+
+    // schedulePause arms the background pause timer under its own background-task
+    // assertion. The assertion is what makes the tier work at all: without one iOS
+    // suspends the process within a few seconds of .background, so a pauseMs grace
+    // would never elapse and the wallets would never disconnect — least of all in
+    // the gate-only configuration this tier most needs to cover, where eviction is
+    // Never and holds no window of its own. Measured with the assertion removed
+    // and no eviction window (iPhone SE 3rd gen, iOS 26.5): execution stopped
+    // between 1 and 2s after .background and did not resume for 89s, until
+    // foreground, at which point the long-elapsed grace fired the pause in the
+    // foreground instead — wallets stayed connected for the whole background. The assertion covers the grace and the
+    // App.pause call that follows it, and is released as soon as that returns. If
+    // the system reclaims it first, the expiration handler pauses immediately
+    // rather than losing the work. A quick return cancels the timer in
+    // resumeFromBackground before it runs.
+    private func schedulePause() {
+        pauseWork?.cancel()
+        beginPauseBgTask()
+        let work = DispatchWorkItem { [weak self] in
+            // asyncAfter runs this on the main queue, the MainActor's executor;
+            // assert the isolation as scheduleEviction does.
+            MainActor.assumeIsolated {
+                self?.firePause()
+            }
+        }
+        pauseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + pauseMs / 1000.0, execute: work)
+    }
+
+    // firePause disconnects the wallets and holds the background-task assertion
+    // until App.pause returns, so the process is not suspended partway through the
+    // per-wallet shutdown. Reached from the grace timer or, if the system reclaims
+    // the window first, from its expiration handler. Guarded so the two cannot
+    // double-fire.
+    private func firePause() {
+        guard !paused else { return }
+        pauseWork?.cancel(); pauseWork = nil
+        paused = true
+        // Release the assertion this pause runs under, not whichever is current
+        // when App.pause returns: a background/foreground/background cycle can arm
+        // a fresh one meanwhile, and ending that would cut the new grace short.
+        let id = pauseBgTaskId
+        pauseCore { [weak self] in self?.endPauseBgTask(id) }
+    }
+
+    private func beginPauseBgTask() {
+        endPauseBgTask()
+        pauseBgTaskId = UIApplication.shared.beginBackgroundTask(withName: "caribou-pause") { [weak self] in
+            // Out of time. Pause now rather than lose it, then release the
+            // assertion — the handler must return promptly or the app is killed.
+            // If the process is suspended mid-pause the freeze quiets the radio
+            // anyway and App.pause finishes on the next wake.
+            self?.firePause()
+            self?.endPauseBgTask()
+        }
+    }
+
+    // endPauseBgTask releases the pause assertion, defaulting to the current one.
+    // An explicit id that no longer matches belongs to a superseded grace that was
+    // already ended, so it is dropped: ending one identifier twice is a UIKit
+    // error, not a no-op.
+    private func endPauseBgTask(_ id: UIBackgroundTaskIdentifier? = nil) {
+        let target = id ?? pauseBgTaskId
+        guard target != .invalid, target == pauseBgTaskId else { return }
+        UIApplication.shared.endBackgroundTask(target)
+        pauseBgTaskId = .invalid
+    }
+
+    // pauseCore drops wallet connections off the main actor (App.pause blocks on
+    // per-wallet shutdown), then runs onPaused on the main actor once it returns.
+    // Unlike lockCore it keeps the session resident: no lock, no re-auth, nothing
+    // user-visible. resumeCore reconnects on foreground; the two share
+    // walletLifecycleQueue so they can never land out of order, and App.resume
+    // no-ops once the session was evicted, so a pause and resume racing across
+    // tiers are safe.
+    private func pauseCore(then onPaused: (() -> Void)?) {
+        walletLifecycleQueue.async {
+            do {
+                try boundApp?.pause()
+            } catch {
+                NSLog("caribou: pause error: \(error.localizedDescription)")
+            }
+            guard let onPaused else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { onPaused() } }
+        }
+    }
+
+    private func resumeCore() {
+        walletLifecycleQueue.async {
+            do {
+                try boundApp?.resume()
+            } catch {
+                NSLog("caribou: resume skipped: \(error.localizedDescription)")
+            }
+        }
     }
 
     // scheduleEviction arms a best-effort key-eviction timer. Unlike Android's
@@ -241,6 +380,25 @@ final class AppModel: ObservableObject {
     private func resumeFromBackground() {
         evictWork?.cancel(); evictWork = nil
         endBgTask()
+
+        // Cancel a still-pending pause (quick return, no disconnect happened) or,
+        // if the grace elapsed and we disconnected, reconnect. Orthogonal to the
+        // gate/eviction tiers below: this restores connections, they restore the
+        // session. If eviction already logged the core out, App.resume no-ops and
+        // the eviction tier's Unlock reconnects.
+        if let work = pauseWork {
+            // The grace never elapsed, so nothing was disconnected and nothing
+            // holds the assertion any more; release it here. The paused branch
+            // below deliberately does not, because there App.pause is either in
+            // flight or done and owns the release.
+            work.cancel()
+            pauseWork = nil
+            endPauseBgTask()
+        }
+        if paused {
+            paused = false
+            resumeCore()
+        }
 
         guard let bg = backgroundedAt else { return } // not a resume (first launch)
         backgroundedAt = nil

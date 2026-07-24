@@ -114,6 +114,12 @@ type Core struct {
 	loggedIn      bool
 	multisigXPriv *hdkeychain.ExtendedKey // derived from creds.EncSeed on login
 
+	// suspendMtx guards the mobile pause/resume state. Global lock order is
+	// suspendMtx before loginMtx. See Suspend/Resume.
+	suspendMtx       sync.Mutex
+	suspended        bool
+	suspendedWallets []uint32
+
 	seedGenerationTime uint64
 
 	newCrypter func([]byte) encrypt.Crypter
@@ -2638,6 +2644,11 @@ func (c *Core) Active() bool {
 
 // Logout logs the user out
 func (c *Core) Logout() error {
+	// Lock order: suspendMtx before loginMtx (see Suspend/Resume), so that
+	// clearing the pause state below cannot deadlock against a concurrent
+	// Suspend/Resume.
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
 	c.loginMtx.Lock()
 	defer c.loginMtx.Unlock()
 
@@ -2670,11 +2681,118 @@ func (c *Core) Logout() error {
 		c.wg.Done()
 	}
 
+	// Disconnect wallets so a locked, backgrounded app stops polling and its
+	// sockets close. Logout previously locked but left every wallet connected,
+	// so the radio never quieted on the escalation-tier lock. Disconnect is
+	// idempotent, so this composes with a prior Suspend (already-disconnected
+	// wallets are skipped). xmr's Disconnect also closes it, which is correct
+	// here since the session is ending.
+	for _, w := range c.xcWallets() {
+		if w.connected() {
+			w.Disconnect()
+		}
+	}
+	c.suspended = false
+	c.suspendedWallets = nil
+
 	c.multisigXPriv.Zero()
 	c.multisigXPriv = nil
 
 	c.loggedIn = false
 
+	return nil
+}
+
+// Suspend drops every connected wallet's network connection without logging out
+// or locking, so a backgrounded mobile app stops polling and lets the radio
+// sleep while keys and the session stay resident. Resume reconnects the same
+// set. It is a no-op if not logged in or already suspended. The native shell
+// calls it (via mobile.App.Pause) after a short background grace, not on a quick
+// app switch.
+func (c *Core) Suspend() error {
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	if c.suspended {
+		return nil
+	}
+
+	c.loginMtx.Lock()
+	loggedIn := c.loggedIn
+	c.loginMtx.Unlock()
+	if !loggedIn {
+		return nil
+	}
+
+	// Suspend token wallets before their network wallets: a token's connection
+	// rides on its network wallet's context, so tear the leaves down first.
+	var tokens, networks []*xcWallet
+	for _, w := range c.xcWallets() {
+		if asset.TokenInfo(w.AssetID) != nil {
+			tokens = append(tokens, w)
+		} else {
+			networks = append(networks, w)
+		}
+	}
+
+	var suspended []uint32
+	for _, w := range append(tokens, networks...) {
+		if w.suspend() {
+			suspended = append(suspended, w.AssetID)
+			c.log.Infof("Suspended %s wallet", unbip(w.AssetID))
+		}
+	}
+
+	c.suspendedWallets = suspended
+	c.suspended = true
+	return nil
+}
+
+// Resume reconnects the wallets that Suspend disconnected, restoring polling and
+// sync when the mobile app returns to the foreground. connectAndUpdateWallet
+// reconnects a token's network wallet first, refreshes balances, restarts the
+// sync monitor, and emits a WalletState note, so the foregrounded UI repaints.
+// No app password is needed: the wallets were never closed. If a Lock/Logout
+// tore down the session while suspended, Resume reconnects nothing and returns
+// an error so the shell routes through a full Unlock instead.
+func (c *Core) Resume() error {
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	if !c.suspended {
+		return nil
+	}
+
+	c.loginMtx.Lock()
+	loggedIn := c.loggedIn
+	c.loginMtx.Unlock()
+
+	suspended := c.suspendedWallets
+	c.suspended = false
+	c.suspendedWallets = nil
+
+	if !loggedIn {
+		return errors.New("cannot resume: logged out while suspended")
+	}
+
+	for _, assetID := range suspended {
+		w, found := c.wallet(assetID)
+		if !found || w.isDisabled() {
+			continue
+		}
+		// Skip a token whose network wallet was disabled while suspended; its
+		// network wallet won't reconnect, so the token can't either.
+		if token := asset.TokenInfo(assetID); token != nil {
+			if nw, ok := c.wallet(token.NetworkID); ok && nw.isDisabled() {
+				continue
+			}
+		}
+		if err := c.connectAndUpdateWallet(w); err != nil {
+			c.log.Errorf("Unable to resume %s wallet: %v", unbip(assetID), err)
+			continue
+		}
+		c.log.Infof("Resumed %s wallet", unbip(assetID))
+	}
 	return nil
 }
 

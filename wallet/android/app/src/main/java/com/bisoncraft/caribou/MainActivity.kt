@@ -12,8 +12,11 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -33,6 +36,8 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 import mobile.App
 import mobile.Mobile
@@ -56,6 +61,21 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private val app: App = Mobile.newApp()
 
+        // walletLifecycleExecutor serializes app.pause() against app.resume().
+        // Ordering, not just mutual exclusion, is the requirement: the Go App
+        // mutex guarantees only that one runs at a time, so two bare threads can
+        // land in either order. A pause whose grace elapsed while the process was
+        // frozen is dispatched with no defined order against onStart, so a resume
+        // can be issued moments after it; if that resume ran first the pause would
+        // land last and leave every wallet disconnected in the foreground, with
+        // nothing to re-arm until the next background cycle. One serial worker
+        // makes the pair FIFO. Process-wide alongside app for the same reason it
+        // is: an Activity-scoped executor would leak a thread per recreation and
+        // would not order a pause from the outgoing instance against a resume from
+        // the incoming one.
+        private val walletLifecycleExecutor: ExecutorService =
+            Executors.newSingleThreadExecutor { r -> Thread(r, "caribou-wallet-lifecycle") }
+
         // Two idle tiers from ~/ocean/bossmobile/biometrics.md, measured as
         // continuous time backgrounded. Normal app switching stays well under the
         // gate and never re-auths. Both thresholds are user-configurable (see
@@ -76,6 +96,13 @@ class MainActivity : AppCompatActivity() {
         private const val DEFAULT_GATE_MS = 10 * 60 * 1000L // 10 min
         private const val DEFAULT_EVICTION_MS = 60 * 60 * 1000L // 1 hour
         private const val EVICTION_NEVER = Long.MAX_VALUE
+
+        // Pause: the cheapest tier. After a short background grace, disconnect the
+        // wallets (app.pause()) so polling stops and the radio can sleep, while the
+        // session and keys stay resident so a foreground resume needs no re-auth.
+        // Far shorter than the gate: the grace only exists to avoid thrashing the
+        // network on a quick app switch.
+        private const val PAUSE_MS = 30 * 1000L // 30 sec
         private const val LOCK_PREFS = "caribou_lock"
         private const val PREF_GATE_MS = "gate_ms"
         private const val PREF_EVICT_MS = "evict_ms"
@@ -119,6 +146,19 @@ class MainActivity : AppCompatActivity() {
     // elapsedRealtime keeps counting across device sleep, so onStart can measure
     // true wall-clock idle as a backstop even if the eviction alarm is deferred.
     private var backgroundedAt = 0L
+
+    // pause state: whether wallets are currently disconnected by the background
+    // pause tier, and the main-looper timer that arms it PAUSE_MS after onStop.
+    // A Handler (not an alarm) is right here: if the device dozes before the grace
+    // elapses it freezes the process, quieting the radio anyway, and onStart
+    // re-checks. removeCallbacks in onStart cancels a still-pending pause on a
+    // quick return.
+    private var paused = false
+    private val pauseHandler = Handler(Looper.getMainLooper())
+    private val pauseRunnable = Runnable {
+        paused = true
+        pauseCoreAsync()
+    }
 
     // evictReceiver fires the eviction while the app is still backgrounded, so
     // keys do not sit resident for the whole idle window. It is driven by an
@@ -256,6 +296,9 @@ class MainActivity : AppCompatActivity() {
         backgroundedAt = SystemClock.elapsedRealtime()
         val evict = evictionIdleMs()
         if (evict != EVICTION_NEVER) scheduleEviction(backgroundedAt + evict)
+        // Arm the background pause: disconnect wallets after a short grace unless
+        // the user comes right back (onStart removes the callback).
+        pauseHandler.postDelayed(pauseRunnable, PAUSE_MS)
     }
 
     // scheduleEviction arms the key-eviction alarm for triggerAtElapsed (an
@@ -285,6 +328,17 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         alarmManager.cancel(evictPendingIntent)
+
+        // Cancel a still-pending pause (quick return, no disconnect happened) or,
+        // if the grace already elapsed and we disconnected, reconnect. This is
+        // orthogonal to the gate/eviction tiers below: it restores connections,
+        // they restore the session. If eviction already logged the core out,
+        // app.resume() is a no-op and the eviction tier's Unlock reconnects.
+        pauseHandler.removeCallbacks(pauseRunnable)
+        if (paused) {
+            paused = false
+            resumeCoreAsync()
+        }
 
         val bg = backgroundedAt
         backgroundedAt = 0L
@@ -680,6 +734,37 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (onLocked != null) runOnUiThread { if (!isDestroyed) onLocked() }
+        }
+    }
+
+    // pauseCoreAsync drops wallet connections off the main thread (app.pause()
+    // blocks on per-wallet shutdown). Unlike lockCoreAsync it keeps the session:
+    // no overlay, no re-auth, nothing user-visible. A failure is non-fatal and
+    // only logged - the wallets simply stay connected until the next pause. It
+    // runs on walletLifecycleExecutor so a resume issued right behind it can never
+    // overtake it.
+    private fun pauseCoreAsync() {
+        walletLifecycleExecutor.execute {
+            try {
+                app.pause()
+            } catch (e: Exception) {
+                Log.w("MainActivity", "wallet pause failed: ${e.message}")
+            }
+        }
+    }
+
+    // resumeCoreAsync reconnects the paused wallets off the main thread on
+    // foreground, behind any pause still queued on walletLifecycleExecutor. If the
+    // session was evicted while backgrounded, app.resume() returns an error and
+    // reconnects nothing; the eviction tier's Unlock does the reconnect instead,
+    // so the error is expected and only logged.
+    private fun resumeCoreAsync() {
+        walletLifecycleExecutor.execute {
+            try {
+                app.resume()
+            } catch (e: Exception) {
+                Log.w("MainActivity", "wallet resume skipped: ${e.message}")
+            }
         }
     }
 

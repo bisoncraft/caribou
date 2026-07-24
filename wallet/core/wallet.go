@@ -441,6 +441,29 @@ func (w *xcWallet) Disconnect() {
 	}
 }
 
+// suspend drops the wallet's network connection the way Disconnect does, but
+// deliberately leaves an asset.Opener wallet open so it can be reconnected later
+// without the app password. It is the connection half of a mobile background
+// pause: connector.Disconnect cancels the wallet's context, stopping its tickers
+// and closing its sockets, while the wallet handle (and for xmr the open wallet2
+// instance) stays resident. Returns whether the wallet was connected, so the
+// caller knows to reconnect it on resume. xmr is the only asset.Opener, so for
+// every other asset this is exactly Disconnect minus the Close it would skip
+// anyway. Takes connectMtx to serialize against Connect.
+func (w *xcWallet) suspend() bool {
+	w.connectMtx.Lock()
+	defer w.connectMtx.Unlock()
+
+	if w.isDisabled() || !w.connected() {
+		return false
+	}
+	w.connector.Disconnect()
+	w.mtx.Lock()
+	w.hookedUp = false
+	w.mtx.Unlock()
+	return true
+}
+
 // rescan will initiate a rescan of the wallet if the asset.Wallet
 // implementation is a Rescanner.
 func (w *xcWallet) rescan(ctx context.Context, bday /* unix time seconds*/ uint64) error {

@@ -255,6 +255,40 @@ func (a *App) Unlock(pw string) (string, error) {
 	return a.bootstrapURL() + "&g=" + grant, nil
 }
 
+// Pause drops every wallet's network connection without logging out, so a
+// backgrounded app stops polling and lets the radio sleep while keys and the
+// session stay resident. The native shell calls it after a short background
+// grace (not on a quick app switch). Unlike Lock it does not touch the
+// appserver: the session, cached password, and WebView cookies stay valid, so
+// Resume needs no password. Idempotent; named Pause because "suspend" is a
+// Kotlin soft keyword (the core method is Suspend).
+func (a *App) Pause() error {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+
+	// Nothing bound means nothing is connected; a pause timer that fires after
+	// teardown (or before startup finishes) has no work to do. Report success,
+	// matching Lock's idempotence.
+	if a.core == nil {
+		return nil
+	}
+	return a.core.Suspend()
+}
+
+// Resume reconnects the wallets Pause disconnected when the app returns to the
+// foreground. It returns an error (and reconnects nothing) if the session was
+// locked out while backgrounded, signalling the shell to run a full Unlock
+// instead.
+func (a *App) Resume() error {
+	a.mtx.Lock()
+	defer a.mtx.Unlock()
+
+	if a.core == nil {
+		return errors.New("not running")
+	}
+	return a.core.Resume()
+}
+
 // VerifyPassword reports whether pw is the correct app password, without
 // changing session state. The native shell calls it during biometric opt-in to
 // confirm the password before storing it in the Android Keystore. A nil error
