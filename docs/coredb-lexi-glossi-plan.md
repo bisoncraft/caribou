@@ -121,3 +121,37 @@ parse); wallet creation omitting `"type"` errors instead of defaulting to
   both engines); `go build -tags mobile ./...`; the artifact is
   `<net>/coredb` — a directory on desktop, a file on mobile;
   `grep -rn bbolt wallet/db` is empty.
+
+## Phase 6 — Shed bolt-era interface baggage (e86df528d)
+
+A post-port review pass over `db.DB` for shapes that existed only because of
+bolt (or its dcrdex heritage) and cost something on the new engines.
+
+- [x] Decompose the wallet record along writer lines: `addressTag 0x04` and
+  `encPWTag 0x05` join the existing field tags, so every wallet write is a
+  blind `Set`/`SetBatch` of exactly the fields its caller owns.
+  `SetWalletPassword` and the new `SetWalletAddress` drop their
+  read-modify-write cycles (db-layer and core-layer respectively), the db
+  mutex no longer covers any wallet operation, and the wallet encoding
+  shrinks to the configuration pair (type + settings) with the asset ID
+  supplied by the record key. `UpdateWallet` is the full upsert of all four
+  field keys; only `UpdateWalletStatus` writes the disabled flag.
+- [x] Key wallets by `assetID uint32` rather than a caller-encoded `[]byte`
+  ID — the byte keys were bolt bucket paths leaking through the API.
+  `xcWallet.dbID`, `Wallet.ID` and `Wallet.SID` are deleted. Absent wallets
+  report a matchable `ErrWalletNotFound` from every wallet method. The
+  existence guard on the single-field setters is kept deliberately: a stray
+  write would otherwise create an orphaned field row that poisons
+  `Wallets()`, and wallets are never deleted, so the check has no TOCTOU
+  window.
+- [x] Delete `SeedGenerationTime`/`SetSeedGenerationTime`/`ErrNoSeedGenTime`.
+  The only writer stored `uint64(creds.Birthday.Unix())` immediately after
+  the credentials carrying that Birthday; core derives the value instead.
+- [x] Store disabled fiat rate sources as a JSON array, dropping the comma
+  join and its no-commas-in-names constraint.
+- [x] Rename `stampIdx` to `noteStampIdx`; extend the conformance suite to
+  pin the sentinel, the `SetWalletAddress` semantics, and the new encodings.
+- [ ] Left alone for now: the INI text encoding of wallet settings inside
+  the configuration blob (`config.Data`/`config.Parse`, which lowercases
+  keys on read). Whether that encoding is load-bearing for frontend
+  text-input coercion is still being evaluated; revisit before release.
