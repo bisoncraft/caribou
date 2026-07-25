@@ -53,7 +53,8 @@ func RandomWallet() *db.Wallet {
 			Balance: *RandomBalance(),
 			Stamp:   time.Unix(rand.Int64()/(1<<31), 0),
 		},
-		Address: randomAddress(),
+		EncryptedPW: randBytes(32),
+		Address:     randomAddress(),
 	}
 }
 

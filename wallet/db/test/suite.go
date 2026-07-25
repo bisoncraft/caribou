@@ -32,7 +32,6 @@ func RunSuite(t *testing.T, newDB func(t *testing.T) db.DB) {
 	run("WalletStatus", testWalletStatus)
 	run("Notifications", testNotifications)
 	run("Pokes", testPokes)
-	run("SeedGenerationTime", testSeedGenerationTime)
 	run("DisabledRateSources", testDisabledRateSources)
 	run("Language", testLanguage)
 	run("SendRequiresPassword", testSendRequiresPassword)
@@ -139,16 +138,20 @@ func testWallets(t *testing.T, d db.DB) {
 		t.Fatalf("no error for UpdateWallet with nil Balance")
 	}
 
-	// Operations on an unknown wallet ID error.
-	unknownID := []byte{0xde, 0xad, 0xbe, 0xef}
-	if _, err := d.Wallet(unknownID); err == nil {
-		t.Fatalf("no error retrieving unknown wallet")
+	// Operations on an unknown asset ID are ErrWalletNotFound; wallet/core
+	// distinguishes absence from database corruption.
+	const unknownID uint32 = 0xdeadbeef
+	if _, err := d.Wallet(unknownID); !errors.Is(err, db.ErrWalletNotFound) {
+		t.Fatalf("expected ErrWalletNotFound retrieving unknown wallet, got %v", err)
 	}
-	if err := d.UpdateBalance(unknownID, &db.Balance{}); err == nil {
-		t.Fatalf("no error for UpdateBalance on unknown wallet")
+	if err := d.UpdateBalance(unknownID, &db.Balance{}); !errors.Is(err, db.ErrWalletNotFound) {
+		t.Fatalf("expected ErrWalletNotFound for UpdateBalance on unknown wallet, got %v", err)
 	}
-	if err := d.SetWalletPassword(unknownID, randBytes(32)); err == nil {
-		t.Fatalf("no error for SetWalletPassword on unknown wallet")
+	if err := d.SetWalletPassword(unknownID, randBytes(32)); !errors.Is(err, db.ErrWalletNotFound) {
+		t.Fatalf("expected ErrWalletNotFound for SetWalletPassword on unknown wallet, got %v", err)
+	}
+	if err := d.SetWalletAddress(unknownID, "addr"); !errors.Is(err, db.ErrWalletNotFound) {
+		t.Fatalf("expected ErrWalletNotFound for SetWalletAddress on unknown wallet, got %v", err)
 	}
 
 	// Create and insert 1,000 wallets.
@@ -157,12 +160,12 @@ func testWallets(t *testing.T, d db.DB) {
 		numToDo = 50
 	}
 	wallets = make([]*db.Wallet, 0, numToDo)
-	walletMap := make(map[string]*db.Wallet)
+	walletMap := make(map[uint32]*db.Wallet)
 	tStart := time.Now()
 	nTimes(numToDo, func(int) {
 		w := RandomWallet()
 		wallets = append(wallets, w)
-		walletMap[w.SID()] = w
+		walletMap[w.AssetID] = w
 		if err := d.UpdateWallet(w); err != nil {
 			t.Fatalf("UpdateWallet error: %v", err)
 		}
@@ -178,10 +181,9 @@ func testWallets(t *testing.T, d db.DB) {
 		t.Fatalf("expected %d wallets, got %d", numToDo, len(reWallets))
 	}
 	for _, reW := range reWallets {
-		wid := reW.SID()
-		ogWallet, found := walletMap[wid]
+		ogWallet, found := walletMap[reW.AssetID]
 		if !found {
-			t.Fatalf("wallet %s not found after retrieval", wid)
+			t.Fatalf("wallet %d not found after retrieval", reW.AssetID)
 		}
 		MustCompareWallets(t, reW, ogWallet)
 	}
@@ -193,10 +195,10 @@ func testWallets(t *testing.T, d db.DB) {
 	newBal.Locked += 2e8
 	newBal.Immature += 3e8
 	newBal.Stamp = newBal.Stamp.Add(time.Second)
-	if err := d.UpdateBalance(w.ID(), &newBal); err != nil {
+	if err := d.UpdateBalance(w.AssetID, &newBal); err != nil {
 		t.Fatalf("UpdateBalance error: %v", err)
 	}
-	reW, err := d.Wallet(w.ID())
+	reW, err := d.Wallet(w.AssetID)
 	if err != nil {
 		t.Fatalf("failed to retrieve wallet for balance check")
 	}
@@ -207,10 +209,10 @@ func testWallets(t *testing.T, d db.DB) {
 
 	// Test changing the password.
 	newPW := randBytes(32)
-	if err := d.SetWalletPassword(w.ID(), newPW); err != nil {
+	if err := d.SetWalletPassword(w.AssetID, newPW); err != nil {
 		t.Fatalf("SetWalletPassword error: %v", err)
 	}
-	reW, err = d.Wallet(w.ID())
+	reW, err = d.Wallet(w.AssetID)
 	if err != nil {
 		t.Fatalf("failed to retrieve wallet for new password check")
 	}
@@ -218,16 +220,31 @@ func testWallets(t *testing.T, d db.DB) {
 		t.Fatalf("failed to set password. wanted %x, got %x", newPW, reW.EncryptedPW)
 	}
 
-	// Neither partial update disturbed the other fields.
-	reW.Balance = w.Balance
-	reW.EncryptedPW = walletMap[w.SID()].EncryptedPW
-	MustCompareWallets(t, reW, walletMap[w.SID()])
+	// Test changing the deposit address.
+	newAddr := "newDepositAddress"
+	if err := d.SetWalletAddress(w.AssetID, newAddr); err != nil {
+		t.Fatalf("SetWalletAddress error: %v", err)
+	}
+	reW, err = d.Wallet(w.AssetID)
+	if err != nil {
+		t.Fatalf("failed to retrieve wallet for new address check")
+	}
+	if reW.Address != newAddr {
+		t.Fatalf("failed to set address. wanted %s, got %s", newAddr, reW.Address)
+	}
+
+	// None of the partial updates disturbed the other fields.
+	og := walletMap[w.AssetID]
+	reW.Balance = og.Balance
+	reW.EncryptedPW = og.EncryptedPW
+	reW.Address = og.Address
+	MustCompareWallets(t, reW, og)
 	t.Logf("%d milliseconds to read and compare %d Wallet", time.Since(tStart)/time.Millisecond, numToDo)
 }
 
 func testWalletStatus(t *testing.T, d db.DB) {
-	if err := d.UpdateWalletStatus([]byte{0xde, 0xad, 0xbe, 0xef}, true); err == nil {
-		t.Fatalf("no error for UpdateWalletStatus on unknown wallet")
+	if err := d.UpdateWalletStatus(0xdeadbeef, true); !errors.Is(err, db.ErrWalletNotFound) {
+		t.Fatalf("expected ErrWalletNotFound for UpdateWalletStatus on unknown wallet, got %v", err)
 	}
 
 	w := RandomWallet()
@@ -237,7 +254,7 @@ func testWalletStatus(t *testing.T, d db.DB) {
 
 	ensureDisabled := func(tag string, want bool) {
 		t.Helper()
-		reW, err := d.Wallet(w.ID())
+		reW, err := d.Wallet(w.AssetID)
 		if err != nil {
 			t.Fatalf("%s: Wallet error: %v", tag, err)
 		}
@@ -248,19 +265,19 @@ func testWalletStatus(t *testing.T, d db.DB) {
 
 	ensureDisabled("fresh wallet", false)
 
-	if err := d.UpdateWalletStatus(w.ID(), true); err != nil {
+	if err := d.UpdateWalletStatus(w.AssetID, true); err != nil {
 		t.Fatalf("UpdateWalletStatus(true) error: %v", err)
 	}
 	ensureDisabled("after disable", true)
 
-	// The disabled flag survives an UpdateWallet, which writes only the
-	// wallet and balance fields.
+	// The disabled flag survives an UpdateWallet, which writes every wallet
+	// field except the flag.
 	if err := d.UpdateWallet(w); err != nil {
 		t.Fatalf("UpdateWallet error on disabled wallet: %v", err)
 	}
 	ensureDisabled("after UpdateWallet", true)
 
-	if err := d.UpdateWalletStatus(w.ID(), false); err != nil {
+	if err := d.UpdateWalletStatus(w.AssetID, false); err != nil {
 		t.Fatalf("UpdateWalletStatus(false) error: %v", err)
 	}
 	ensureDisabled("after re-enable", false)
@@ -396,26 +413,6 @@ func testPokes(t *testing.T, d db.DB) {
 	}
 }
 
-func testSeedGenerationTime(t *testing.T, d db.DB) {
-	// Unset must be db.ErrNoSeedGenTime; wallet/core distinguishes it from
-	// real errors during initialization.
-	if _, err := d.SeedGenerationTime(); !errors.Is(err, db.ErrNoSeedGenTime) {
-		t.Fatalf("expected ErrNoSeedGenTime for unset time, got %v", err)
-	}
-
-	seedGenTime := rand.Uint64()
-	if err := d.SetSeedGenerationTime(seedGenTime); err != nil {
-		t.Fatalf("SetSeedGenerationTime error: %v", err)
-	}
-	reTime, err := d.SeedGenerationTime()
-	if err != nil {
-		t.Fatalf("SeedGenerationTime error: %v", err)
-	}
-	if reTime != seedGenTime {
-		t.Fatalf("seed generation time wrong, wanted %d, got %d", seedGenTime, reTime)
-	}
-}
-
 func testDisabledRateSources(t *testing.T, d db.DB) {
 	sources, err := d.DisabledRateSources()
 	if err != nil {
@@ -425,7 +422,8 @@ func testDisabledRateSources(t *testing.T, d db.DB) {
 		t.Fatalf("unexpected disabled rate sources in fresh DB")
 	}
 
-	disabled := []string{"Fake News Network", "dcrdata", "Messari"}
+	// The comma tests that source names are not mangled by the encoding.
+	disabled := []string{"Fake News Network", "dcrdata", "Messari, Inc."}
 	if err := d.SaveDisabledRateSources(disabled); err != nil {
 		t.Fatalf("SaveDisabledRateSources error: %v", err)
 	}

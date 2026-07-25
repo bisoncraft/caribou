@@ -262,9 +262,11 @@ func New(cfg *Config) (*Core, error) {
 		return nil, err
 	}
 
-	seedGenerationTime, err := coreDB.SeedGenerationTime()
-	if err != nil && !errors.Is(err, db.ErrNoSeedGenTime) {
-		return nil, err
+	// The seed generation time is the credentials' Birthday; there is no
+	// separate database record.
+	var seedGenerationTime uint64
+	if creds != nil && !creds.Birthday.IsZero() {
+		seedGenerationTime = uint64(creds.Birthday.Unix())
 	}
 
 	var xCfg *ExtensionModeConfig
@@ -679,14 +681,8 @@ func (c *Core) VerifyPassword(pw []byte) error {
 	return nil
 }
 
-func (c *Core) storeDepositAddress(wdbID []byte, addr string) error {
-	// Store the new address in the DB.
-	dbWallet, err := c.db.Wallet(wdbID)
-	if err != nil {
-		return fmt.Errorf("error retrieving DB wallet: %w", err)
-	}
-	dbWallet.Address = addr
-	return c.db.UpdateWallet(dbWallet)
+func (c *Core) storeDepositAddress(assetID uint32, addr string) error {
+	return c.db.SetWalletAddress(assetID, addr)
 }
 
 // connectAndUpdateWallet creates a connection to a wallet and updates the
@@ -716,7 +712,7 @@ func (c *Core) connectAndUpdateWallet(w *xcWallet) error {
 	}
 	if newAddr != addr {
 		c.log.Infof("New deposit address for %v wallet: %v", unbip(assetID), newAddr)
-		if err = c.storeDepositAddress(w.dbID, newAddr); err != nil {
+		if err = c.storeDepositAddress(w.AssetID, newAddr); err != nil {
 			return fmt.Errorf("storeDepositAddress: %w", err)
 		}
 	}
@@ -845,7 +841,7 @@ func (c *Core) storeAndSendWalletBalance(wallet *xcWallet, walletBal *WalletBala
 	wallet.setBalance(walletBal)
 
 	// Store the db.Balance.
-	err := c.db.UpdateBalance(wallet.dbID, walletBal.Balance)
+	err := c.db.UpdateBalance(wallet.AssetID, walletBal.Balance)
 	if err != nil {
 		return fmt.Errorf("error updating %s balance in database: %w", unbip(wallet.AssetID), err)
 	}
@@ -978,7 +974,7 @@ func (c *Core) ToggleWalletStatus(assetID uint32, disable bool) error {
 
 	for _, wallet := range affectedWallets {
 		// Update db with wallet status.
-		err := c.db.UpdateWalletStatus(wallet.dbID, disable)
+		err := c.db.UpdateWalletStatus(wallet.AssetID, disable)
 		if err != nil {
 			return fmt.Errorf("db.UpdateWalletStatus error: %w", err)
 		}
@@ -1360,7 +1356,6 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 		encPass:      dbWallet.EncryptedPW,
 		address:      dbWallet.Address,
 		peerCount:    -1, // no count yet
-		dbID:         dbWallet.ID(),
 		walletType:   dbWallet.Type,
 		broadcasting: new(uint32),
 		disabled:     dbWallet.Disabled,
@@ -1645,7 +1640,7 @@ func (c *Core) RecoverWallet(assetID uint32, appPW []byte, force bool) error {
 		return fmt.Errorf("can only recover a seeded wallet")
 	}
 
-	dbWallet, err := c.db.Wallet(oldWallet.dbID)
+	dbWallet, err := c.db.Wallet(oldWallet.AssetID)
 	if err != nil {
 		return fmt.Errorf("error retrieving DB wallet: %w", err)
 	}
@@ -1788,7 +1783,7 @@ func (c *Core) WalletSettings(assetID uint32) (map[string]string, error) {
 		return nil, newError(missingWalletErr, "%d -> %s wallet not found", assetID, unbip(assetID))
 	}
 	// Get the settings from the database.
-	dbWallet, err := c.db.Wallet(wallet.dbID)
+	dbWallet, err := c.db.Wallet(wallet.AssetID)
 	if err != nil {
 		return nil, codedError(dbErr, err)
 	}
@@ -2111,7 +2106,7 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 	for tokenID := range asset.Asset(assetID).Tokens {
 		tokenWallet, found := c.wallet(tokenID)
 		if found {
-			tokenDBWallet, err := c.db.Wallet((&db.Wallet{AssetID: tokenID}).ID())
+			tokenDBWallet, err := c.db.Wallet(tokenID)
 			if err != nil {
 				c.log.Errorf("Error getting db wallet for token %s: %w", unbip(tokenID), err)
 				continue
@@ -2228,7 +2223,7 @@ func (c *Core) setWalletPassword(wallet *xcWallet, newPW []byte, crypter encrypt
 		wallet.setEncPW(nil)
 	}
 
-	err = c.db.SetWalletPassword(wallet.dbID, wallet.encPW())
+	err = c.db.SetWalletPassword(wallet.AssetID, wallet.encPW())
 	if err != nil {
 		return codedError(dbErr, err)
 	}
@@ -2266,7 +2261,7 @@ func (c *Core) NewDepositAddress(assetID uint32) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err = c.storeDepositAddress(w.dbID, addr); err != nil {
+		if err = c.storeDepositAddress(w.AssetID, addr); err != nil {
 			return "", err
 		}
 		// Update wallet state in the User data struct and emit a WalletStateNote.
@@ -2339,12 +2334,9 @@ func (c *Core) InitializeClient(pw []byte, restorationSeed *string) (string, err
 		return "", fmt.Errorf("SetPrimaryCredentials error: %w", err)
 	}
 
-	seedGenTime := uint64(creds.Birthday.Unix())
-	err = c.db.SetSeedGenerationTime(seedGenTime)
-	if err != nil {
-		return "", fmt.Errorf("SetSeedGenerationTime error: %w", err)
-	}
-	c.seedGenerationTime = seedGenTime
+	// The seed generation time is the credentials' Birthday, already stored
+	// with the credentials.
+	c.seedGenerationTime = uint64(creds.Birthday.Unix())
 
 	freshSeed := restorationSeed == nil
 	if freshSeed {

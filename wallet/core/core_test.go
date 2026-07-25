@@ -109,15 +109,19 @@ func (tdb *TDB) UpdateWallet(wallet *db.Wallet) error {
 	return tdb.updateWalletErr
 }
 
-func (tdb *TDB) SetWalletPassword(wid []byte, newPW []byte) error {
+func (tdb *TDB) SetWalletPassword(assetID uint32, newPW []byte) error {
 	return tdb.setWalletPwErr
 }
 
-func (tdb *TDB) UpdateBalance(wid []byte, balance *db.Balance) error {
+func (tdb *TDB) SetWalletAddress(assetID uint32, addr string) error {
 	return nil
 }
 
-func (tdb *TDB) UpdateWalletStatus(wid []byte, disable bool) error {
+func (tdb *TDB) UpdateBalance(assetID uint32, balance *db.Balance) error {
+	return nil
+}
+
+func (tdb *TDB) UpdateWalletStatus(assetID uint32, disable bool) error {
 	return nil
 }
 
@@ -125,7 +129,7 @@ func (tdb *TDB) Wallets() ([]*db.Wallet, error) {
 	return nil, nil
 }
 
-func (tdb *TDB) Wallet([]byte) (*db.Wallet, error) {
+func (tdb *TDB) Wallet(uint32) (*db.Wallet, error) {
 	return tdb.wallet, tdb.walletErr
 }
 
@@ -144,12 +148,6 @@ func (tdb *TDB) SetPrimaryCredentials(creds *db.PrimaryCredentials) error {
 
 func (tdb *TDB) PrimaryCredentials() (*db.PrimaryCredentials, error) {
 	return tdb.creds, nil
-}
-func (tdb *TDB) SetSeedGenerationTime(time uint64) error {
-	return nil
-}
-func (tdb *TDB) SeedGenerationTime() (uint64, error) {
-	return 0, nil
 }
 func (tdb *TDB) DisabledRateSources() ([]string, error) {
 	return nil, nil
@@ -290,7 +288,6 @@ func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
 		AssetID:           assetID,
 		walletType:        "type",
 		hookedUp:          true,
-		dbID:              encode.Uint32Bytes(assetID),
 		encPass:           []byte{0x01},
 		peerCount:         1,
 		syncStatus:        &asset.SyncStatus{Synced: true},

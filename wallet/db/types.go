@@ -5,7 +5,6 @@ package db
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -37,8 +36,8 @@ const (
 )
 
 const (
-	ErrNoCredentials = util.ErrorKind("no credentials have been stored")
-	ErrNoSeedGenTime = util.ErrorKind("seed generation time has not been stored")
+	ErrNoCredentials  = util.ErrorKind("no credentials have been stored")
+	ErrWalletNotFound = util.ErrorKind("wallet not found")
 )
 
 // String satisfies fmt.Stringer for Severity.
@@ -200,18 +199,19 @@ type Wallet struct {
 	Disabled    bool
 }
 
-// Encode encodes the Wallet to a versioned blob.
+// Encode encodes the Wallet's configuration — its type and settings — to a
+// versioned blob. The other fields are stored under their own keys: they have
+// different writers and write cadences, so bundling them here would force
+// read-modify-write cycles on the single-field setters.
 func (w *Wallet) Encode() []byte {
 	return versionedBytes(0).
-		AddData(uint32Bytes(w.AssetID)).
 		AddData(config.Data(w.Settings)).
-		AddData(w.EncryptedPW).
-		AddData([]byte(w.Address)).
 		AddData([]byte(w.Type))
 }
 
-// DecodeWallet decodes the versioned blob to a *Wallet. The Balance is NOT set;
-// the caller must retrieve it. See for example makeWallet and DecodeBalance.
+// DecodeWallet decodes the versioned blob to a *Wallet. Only the fields in the
+// configuration encoding — Type and Settings — are set; the caller supplies
+// AssetID (the record key) and retrieves the separately-stored fields.
 func DecodeWallet(b []byte) (*Wallet, error) {
 	ver, pushes, err := encode.DecodeBlob(b)
 	if err != nil {
@@ -225,32 +225,18 @@ func DecodeWallet(b []byte) (*Wallet, error) {
 }
 
 func decodeWallet_v0(pushes [][]byte) (*Wallet, error) {
-	if len(pushes) != 5 {
-		return nil, fmt.Errorf("decodeWallet_v0: expected 5 pushes, got %d", len(pushes))
+	if len(pushes) != 2 {
+		return nil, fmt.Errorf("decodeWallet_v0: expected 2 pushes, got %d", len(pushes))
 	}
-	idB, settingsB, keyB := pushes[0], pushes[1], pushes[2]
-	addressB, typeB := pushes[3], pushes[4]
+	settingsB, typeB := pushes[0], pushes[1]
 	settings, err := config.Parse(settingsB)
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode wallet settings")
 	}
 	return &Wallet{
-		AssetID:     intCoder.Uint32(idB),
-		Type:        string(typeB),
-		Settings:    settings,
-		EncryptedPW: keyB,
-		Address:     string(addressB),
+		Type:     string(typeB),
+		Settings: settings,
 	}, nil
-}
-
-// ID is the byte-encoded asset ID for this wallet.
-func (w *Wallet) ID() []byte {
-	return uint32Bytes(w.AssetID)
-}
-
-// SID is a string representation of the wallet's asset ID.
-func (w *Wallet) SID() string {
-	return strconv.Itoa(int(w.AssetID))
 }
 
 func versionedBytes(v byte) encode.BuildyBytes {

@@ -48,7 +48,6 @@ type xcWallet struct {
 	AssetID           uint32
 	Symbol            string
 	supportedVersions []uint32
-	dbID              []byte
 	walletType        string
 	traits            asset.WalletTrait
 	network           *xcWallet
