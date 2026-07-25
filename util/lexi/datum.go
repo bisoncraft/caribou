@@ -6,6 +6,7 @@ package lexi
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"github.com/decred/dcrd/wire"
 )
@@ -56,8 +57,10 @@ func (d *datum) bytes() ([]byte, error) {
 }
 
 func decodeDatum(blob []byte) (*datum, error) {
-	if len(blob) < 4 {
-		return nil, fmt.Errorf("datum blob length cannot be < 4. got %d", len(blob))
+	// The minimum legal datum is 3 bytes: a version byte and two zero varints,
+	// i.e. an empty value with no index entries.
+	if len(blob) < 3 {
+		return nil, fmt.Errorf("datum blob length cannot be < 3. got %d", len(blob))
 	}
 	d := &datum{version: blob[0]}
 	if d.version != 0 {
@@ -75,16 +78,16 @@ func decodeDatum(blob []byte) (*datum, error) {
 			return nil, fmt.Errorf("error reading index length: %w", err)
 		}
 		d.indexes[i] = make([]byte, indexLen)
-		if _, err := b.Read(d.indexes[i]); err != nil {
+		if _, err := io.ReadFull(b, d.indexes[i]); err != nil {
 			return nil, fmt.Errorf("error reading index: %w", err)
 		}
 	}
 	valueLen, err := wire.ReadVarInt(b, 0)
 	if err != nil {
-		return nil, fmt.Errorf("erro reading value var int: %w", err)
+		return nil, fmt.Errorf("error reading value var int: %w", err)
 	}
 	d.v = make([]byte, valueLen)
-	if _, err := b.Read(d.v); err != nil {
+	if _, err := io.ReadFull(b, d.v); err != nil {
 		return nil, fmt.Errorf("error reading value: %w", err)
 	}
 	return d, nil

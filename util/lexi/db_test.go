@@ -276,10 +276,63 @@ func TestDatum(t *testing.T) {
 
 	testEncodeDecode("simple", d)
 
+	// An empty value with no indexes is the minimum legal datum, 3 bytes:
+	// a version byte and two zero varints.
+	testEncodeDecode("empty", &datum{})
+	testEncodeDecode("empty value with index", &datum{indexes: [][]byte{encode.RandomBytes(5)}})
+
 	d = &datum{v: encode.RandomBytes(300)}
 	d.indexes = append(d.indexes, encode.RandomBytes(5))
 	d.indexes = append(d.indexes, encode.RandomBytes(300))
 	testEncodeDecode("complex", d)
+
+	// A truncated blob is an error, not a short read.
+	full, err := d.bytes()
+	if err != nil {
+		t.Fatalf("error encoding datum for truncation check: %v", err)
+	}
+	if _, err := decodeDatum(full[:len(full)-1]); err == nil {
+		t.Fatalf("no error decoding truncated datum")
+	}
+}
+
+// TestEmptyValue ensures a zero-length value survives the full table
+// round-trip: Set, Get, and iteration.
+func TestEmptyValue(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("empties")
+	if err != nil {
+		t.Fatalf("Table error: %v", err)
+	}
+	k := []byte("k")
+	if err := tbl.Set(k, []byte{}, WithReplace()); err != nil {
+		t.Fatalf("Set error: %v", err)
+	}
+	b, err := tbl.GetRaw(k)
+	if err != nil {
+		t.Fatalf("GetRaw error: %v", err)
+	}
+	if len(b) != 0 {
+		t.Fatalf("expected empty value, got %d bytes", len(b))
+	}
+	var n int
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		n++
+		return it.V(func(v []byte) error {
+			if len(v) != 0 {
+				return fmt.Errorf("expected empty value in iteration, got %d bytes", len(v))
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("Iterate error: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 iteration, got %d", n)
+	}
 }
 
 func TestUniqueIndex(t *testing.T) {
