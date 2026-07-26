@@ -3,10 +3,12 @@ package fiatrates
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -49,6 +51,147 @@ func TestChainlinkDialsThroughDexnet(t *testing.T) {
 
 	if !reached.Load() {
 		t.Fatal("chainlink RPC bypassed dexnet.Client; a configured proxy would not apply")
+	}
+}
+
+// rpcReqInfo carries the fields of a JSON-RPC request body that fake
+// transports need: the method to dispatch on and the id to echo back.
+type rpcReqInfo struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+}
+
+func parseRPCRequest(req *http.Request) (*rpcReqInfo, error) {
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	info := new(rpcReqInfo)
+	if err := json.Unmarshal(body, info); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func rpcResponse(id json.RawMessage, result string) *http.Response {
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":%q}`, id, result)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+// TestChainlinkProviderFailover asserts that a provider failing its probe is
+// skipped for the next one in the list, and that the batch read is issued
+// against the provider that answered. Constructing an HTTP RPC client performs
+// no I/O, so without the probe the first provider would be pinned even while
+// unreachable and the rest of the list would be dead weight.
+func TestChainlinkProviderFailover(t *testing.T) {
+	deadHost := "polygon.drpc.org"       // chainlinkDefaultProviders[0]
+	liveHost := "polygon.publicnode.com" // chainlinkDefaultProviders[1]
+
+	var deadProbes atomic.Int32
+	var readHost atomic.Value // string
+
+	old := dexnet.Client
+	defer func() { dexnet.Client = old }()
+	dexnet.Client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			info, err := parseRPCRequest(req)
+			if err != nil {
+				return nil, err
+			}
+			if req.URL.Host == deadHost {
+				deadProbes.Add(1)
+				return nil, fmt.Errorf("host down")
+			}
+			switch info.Method {
+			case "eth_chainId":
+				return rpcResponse(info.ID, "0x89"), nil // 137, Polygon mainnet
+			case "eth_call":
+				readHost.Store(req.URL.Host)
+				// Fail the read; only its routing is under test.
+				return nil, fmt.Errorf("read blocked by test transport")
+			}
+			return nil, fmt.Errorf("unexpected method %s", info.Method)
+		}),
+	}
+
+	getRates, err := ChainlinkRateFetcher(Config{})
+	if err != nil {
+		t.Fatalf("ChainlinkRateFetcher error: %v", err)
+	}
+
+	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
+	if _, err := getRates(context.Background(), []string{"BTC"}, log); err == nil {
+		t.Fatal("expected an error from the blocked batch read")
+	}
+
+	if deadProbes.Load() == 0 {
+		t.Fatal("first provider was never attempted")
+	}
+	if got, _ := readHost.Load().(string); got != liveHost {
+		t.Fatalf("batch read went to %q, want %q", got, liveHost)
+	}
+}
+
+// TestChainlinkRejectsWrongChainProvider asserts that a provider answering for
+// a chain other than Polygon mainnet fails its probe. The feed addresses exist
+// only on Polygon mainnet, so accepting such a provider would yield empty
+// results every cycle with nothing to point at the misconfiguration.
+func TestChainlinkRejectsWrongChainProvider(t *testing.T) {
+	old := dexnet.Client
+	defer func() { dexnet.Client = old }()
+	dexnet.Client = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			info, err := parseRPCRequest(req)
+			if err != nil {
+				return nil, err
+			}
+			if info.Method != "eth_chainId" {
+				return nil, fmt.Errorf("unexpected method %s", info.Method)
+			}
+			return rpcResponse(info.ID, "0x1"), nil // Ethereum mainnet
+		}),
+	}
+
+	getRates, err := ChainlinkRateFetcher(Config{})
+	if err != nil {
+		t.Fatalf("ChainlinkRateFetcher error: %v", err)
+	}
+
+	log := util.NewLogger("chainlink-test", util.LevelDebug, io.Discard)
+	_, err = getRates(context.Background(), []string{"BTC"}, log)
+	if err == nil || !strings.Contains(err.Error(), "chain ID") {
+		t.Fatalf("want a chain-ID rejection, got: %v", err)
+	}
+}
+
+// TestIsConnErr covers the caller-vs-provider distinction: a per-call timeout
+// under a live caller context is a hung provider and must fail over, while a
+// dead caller context must not churn the shared connection.
+func TestIsConnErr(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		err  error
+		want bool
+	}{
+		{"generic error", context.Background(), fmt.Errorf("connection refused"), true},
+		{"per-call timeout, live caller", context.Background(), context.DeadlineExceeded, true},
+		{"wrapped per-call timeout", context.Background(), fmt.Errorf("post: %w", context.DeadlineExceeded), true},
+		{"caller canceled", canceled, context.Canceled, false},
+		{"caller ctx done, provider error", canceled, fmt.Errorf("connection refused"), false},
+		{"execution revert", context.Background(), fmt.Errorf("execution reverted"), false},
+	}
+	for _, tt := range tests {
+		if got := isConnErr(tt.ctx, tt.err); got != tt.want {
+			t.Errorf("%s: isConnErr = %v, want %v", tt.name, got, tt.want)
+		}
 	}
 }
 
@@ -246,7 +389,7 @@ func (m *mockBatchContract) read(_ context.Context, addrs []common.Address) ([]M
 func newMockCoreFetch(ticker string, mock *mockBatchContract) func(context.Context, []string, util.Logger) (map[string]float64, error) {
 	return chainlinkBatchFetcherCore(
 		map[string]common.Address{ticker: mockFeedAddr},
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(context.Context) (chainRPCClient, error) { return newMockRPCClient(), nil },
 		func(_ chainRPCClient) chainlinkBatchContract { return mock },
 		chainlinkMaxAge,
 	)
@@ -345,7 +488,7 @@ func TestChainlinkClosureDecimals(t *testing.T) {
 func TestChainlinkClosureMissingTicker(t *testing.T) {
 	fetch := chainlinkBatchFetcherCore(
 		map[string]common.Address{}, // no feeds configured
-		func() (chainRPCClient, error) {
+		func(context.Context) (chainRPCClient, error) {
 			t.Fatal("dial should not happen when no requested ticker has a feed")
 			return nil, nil
 		},
@@ -557,7 +700,7 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 		dialCount   int
 		firstClient *mockRPCClient
 	)
-	dialFn := func() (chainRPCClient, error) {
+	dialFn := func(context.Context) (chainRPCClient, error) {
 		dialCount++
 		c := newMockRPCClient()
 		if firstClient == nil {
@@ -601,7 +744,7 @@ func TestChainlinkConnFailedReset(t *testing.T) {
 func TestChainlinkConcurrentRates(t *testing.T) {
 	fetch := chainlinkBatchFetcherCore(
 		chainlinkPolygonFeeds,
-		func() (chainRPCClient, error) { return newMockRPCClient(), nil },
+		func(context.Context) (chainRPCClient, error) { return newMockRPCClient(), nil },
 		func(_ chainRPCClient) chainlinkBatchContract {
 			return &mockBatchContract{readings: map[common.Address]MultiAggregatorReading{
 				chainlinkPolygonFeeds["BTC"]: {

@@ -40,6 +40,10 @@ const multiAggregatorABI = `[
 ]`
 
 const (
+	// chainlinkDialTimeout bounds the chain-ID probe made to each candidate
+	// provider in turn. Constructing an HTTP RPC client performs no I/O, so
+	// the probe is what establishes that a provider is reachable; a provider
+	// that fails or times out is skipped for the one that follows it.
 	chainlinkDialTimeout = 5 * time.Second
 	// chainlinkReadTimeout bounds the single batch read that a refresh makes.
 	chainlinkReadTimeout = 5 * time.Second
@@ -129,7 +133,7 @@ type sharedConn struct {
 	conn *connRef
 }
 
-func (s *sharedConn) acquire(dialFn func() (chainRPCClient, error)) (*connRef, error) {
+func (s *sharedConn) acquire(ctx context.Context, dialFn func(context.Context) (chainRPCClient, error)) (*connRef, error) {
 	s.mtx.Lock()
 	if s.conn != nil {
 		current := s.conn
@@ -139,7 +143,7 @@ func (s *sharedConn) acquire(dialFn func() (chainRPCClient, error)) (*connRef, e
 	}
 	s.mtx.Unlock()
 
-	newEC, err := dialFn()
+	newEC, err := dialFn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -166,9 +170,19 @@ func (s *sharedConn) reset(current *connRef) {
 	current.closeWhenDone()
 }
 
-func isConnErr(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+// isConnErr reports whether err indicates a failed provider, in which case the
+// shared connection is reset so the next cycle re-probes the provider list. ctx
+// is the caller's context, NOT the per-call one: when the caller has abandoned
+// the request, the error is theirs and the connection is kept.
+func isConnErr(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return false
+	}
+	// With the caller's context still live, a deadline can only be the
+	// per-call timeout: the provider is hung, which fails over like any other
+	// connection error.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	// EIP-3 execution reverts carry error code 3 in the JSON-RPC layer;
 	// use the typed interface where available to avoid string matching.
@@ -225,6 +239,11 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 // Verified source: https://polygonscan.com/address/0x71eCdcF7F77765F0f596c03C63c80541733fd060#code
 var chainlinkPolygonBatchAddr = common.HexToAddress("0x71eCdcF7F77765F0f596c03C63c80541733fd060")
 
+// polygonChainID is Polygon mainnet's chain ID. A provider on any other chain
+// cannot host the feed addresses above, so it is rejected at dial time with a
+// clear error rather than returning empty results every cycle.
+var polygonChainID = big.NewInt(137)
+
 // chainlinkDefaultProviders are free public Polygon mainnet RPC endpoints used
 // as a fallback if no providers are explicitly configured. These are mainnet
 // regardless of the network the wallets are running on; see
@@ -277,9 +296,9 @@ func validateRPCURL(urlStr string) error {
 // Rates always come from Polygon mainnet, whatever network the caller's wallets
 // are on: a fiat rate is a real-world price, so a testnet or simnet wallet still
 // wants the true figure. There is deliberately no network parameter, and
-// ChainlinkProviders must name Polygon mainnet endpoints. Pointing it at a
-// testnet would read the mainnet feed addresses below on a chain that does not
-// host them and return nothing.
+// ChainlinkProviders must name Polygon mainnet endpoints. A provider serving
+// any other chain is rejected at dial time by a chain-ID check, since the feed
+// addresses below exist only on Polygon mainnet.
 //
 // The returned fetcher owns a ref-counted RPC connection and a feed decimals
 // cache, so it is built once and reused for the life of the process rather than
@@ -319,16 +338,22 @@ func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	// requests to the providers in the clear even when the rest of the process
 	// is proxied, revealing the origin address. Providers are restricted to
 	// https, so an http.Client is always sufficient to reach them.
-	dialFn := func() (chainRPCClient, error) {
+	//
+	// Constructing an HTTP RPC client performs no I/O and cannot fail for a
+	// well-formed URL, so each candidate is probed with a chain-ID read before
+	// it is accepted. Without the probe the first provider would always be
+	// selected whether or not it is reachable, and the rest of the list would
+	// be dead weight. The probe also pins the chain: a provider that answers
+	// for the wrong network is as useless as one that is down.
+	dialFn := func(ctx context.Context) (chainRPCClient, error) {
 		var lastErr error
 		for _, provider := range providers {
-			dialCtx, cancel := context.WithTimeout(context.Background(), chainlinkDialTimeout)
-			rpcClient, err := rpc.DialOptions(dialCtx, provider, rpc.WithHTTPClient(dexnet.Client))
-			cancel()
-			if err == nil {
-				return ethclient.NewClient(rpcClient), nil
+			client, err := probeProvider(ctx, provider)
+			if err != nil {
+				lastErr = fmt.Errorf("%s: %w", provider, err)
+				continue
 			}
-			lastErr = err
+			return client, nil
 		}
 		return nil, fmt.Errorf("dial all providers failed: %w", lastErr)
 	}
@@ -349,11 +374,36 @@ func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 	), nil
 }
 
+// probeProvider connects to a single RPC provider and verifies with a chain-ID
+// read that it is reachable and serving Polygon mainnet. The caller owns the
+// returned client and must Close it.
+func probeProvider(ctx context.Context, provider string) (chainRPCClient, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, chainlinkDialTimeout)
+	defer cancel()
+
+	rpcClient, err := rpc.DialOptions(probeCtx, provider, rpc.WithHTTPClient(dexnet.Client))
+	if err != nil {
+		return nil, err
+	}
+	client := ethclient.NewClient(rpcClient)
+
+	chainID, err := client.ChainID(probeCtx)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	if chainID.Cmp(polygonChainID) != 0 {
+		client.Close()
+		return nil, fmt.Errorf("reports chain ID %s, want %s (Polygon mainnet)", chainID, polygonChainID)
+	}
+	return client, nil
+}
+
 // chainlinkBatchFetcherCore is the testable batched implementation used once
 // the deployed batch contract address is configured.
 func chainlinkBatchFetcherCore(
 	feeds map[string]common.Address,
-	dialFn func() (chainRPCClient, error),
+	dialFn func(context.Context) (chainRPCClient, error),
 	newBatchContract func(client chainRPCClient) chainlinkBatchContract,
 	maxAge time.Duration,
 ) func(context.Context, []string, util.Logger) (map[string]float64, error) {
@@ -363,11 +413,12 @@ func chainlinkBatchFetcherCore(
 	// endpoints in production.
 	//
 	// The provider connection is established lazily on the first getRates call.
-	// If the batch read call fails, the connection is reset and re-dialed from
-	// the beginning of the provider list on the next call. Failover is between
-	// cycles, not within: a provider that dies mid-cycle costs that cycle's
-	// rates entirely, since the pinned client is not swapped until the next
-	// getRates invocation observes a failure.
+	// If the batch read fails, the connection is reset and the next call
+	// re-probes the provider list in order, pinning the first endpoint that
+	// answers, so a dead provider is skipped rather than re-selected. Failover
+	// is between cycles, not within: a provider that dies mid-cycle costs that
+	// cycle's rates entirely, since the pinned client is not swapped until the
+	// next getRates invocation observes a failure.
 	//
 	// divisors caches the 10^decimals factor keyed by "ticker:decimals". Keying
 	// on both fields means a bad first read (malicious RPC returning wrong
@@ -399,7 +450,7 @@ func chainlinkBatchFetcherCore(
 			addrs[i] = e.addr
 		}
 
-		current, err := conn.acquire(dialFn)
+		current, err := conn.acquire(ctx, dialFn)
 		if err != nil {
 			return nil, fmt.Errorf("chainlink: %w", err)
 		}
@@ -409,7 +460,7 @@ func chainlinkBatchFetcherCore(
 		cancel()
 		if err != nil {
 			log.Warnf("chainlink: batch read failed: %v", err)
-			if isConnErr(err) {
+			if isConnErr(ctx, err) {
 				conn.reset(current)
 			} else {
 				current.release()

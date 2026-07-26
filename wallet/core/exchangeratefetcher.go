@@ -29,11 +29,11 @@ const (
 	fiatRateSourceRetryInterval = time.Hour
 	fiatRequestTimeout          = time.Second * 5
 	// chainlinkRequestTimeout bounds a full Chainlink refresh. It is much
-	// larger than fiatRequestTimeout because a refresh is a chain of on-chain
-	// RPC calls rather than a single HTTP request: a cold cycle may dial
-	// several providers in sequence at chainlinkDialTimeout each before it
-	// reads any feed. It still has to stay well inside
-	// fiatRateRequestInterval, since refreshFiatRates waits on every source.
+	// larger than fiatRequestTimeout because a cold cycle may probe several
+	// providers in sequence, each at up to chainlinkDialTimeout, before the
+	// batch read: black-holed providers burn their full probe timeout. It
+	// still has to stay well inside fiatRateRequestInterval, since
+	// refreshFiatRates waits on every source.
 	chainlinkRequestTimeout = time.Second * 30
 
 	// Tokens. Used to identify fiat rate source, source name must not contain a
