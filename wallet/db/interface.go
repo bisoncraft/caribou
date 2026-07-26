@@ -93,4 +93,18 @@ type DB interface {
 	// MultisigIndexForPubkey returns the key index for the compressed
 	// pubkey bytes of assetID if stored.
 	MultisigIndexForPubkey(assetID uint32, pubkey [33]byte) (uint32, error)
+	// StoreIntentsSwap stores the NEAR Intents swap record under its
+	// deposit address, stamping UpdatedAt and replacing any existing
+	// record. CreatedAt orders the listing and must not change across
+	// re-stores of the same swap. A record stored in a terminal state
+	// leaves the active set.
+	StoreIntentsSwap(swap *IntentsSwap) error
+	// IntentsSwap fetches the swap record stored under the deposit
+	// address. It is ErrIntentsSwapNotFound if no record exists.
+	IntentsSwap(depositAddress string) (*IntentsSwap, error)
+	// IntentsSwaps returns every stored swap record, newest first.
+	IntentsSwaps() ([]*IntentsSwap, error)
+	// ActiveIntentsSwaps returns the swap records in a non-terminal
+	// state, oldest first.
+	ActiveIntentsSwaps() ([]*IntentsSwap, error)
 }

@@ -200,6 +200,22 @@ func (tdb *TDB) MultisigIndexForPubkey(assetID uint32, pubkey [33]byte) (uint32,
 	return 0, nil
 }
 
+func (tdb *TDB) StoreIntentsSwap(swap *db.IntentsSwap) error {
+	return nil
+}
+
+func (tdb *TDB) IntentsSwap(depositAddress string) (*db.IntentsSwap, error) {
+	return nil, db.ErrIntentsSwapNotFound
+}
+
+func (tdb *TDB) IntentsSwaps() ([]*db.IntentsSwap, error) {
+	return nil, nil
+}
+
+func (tdb *TDB) ActiveIntentsSwaps() ([]*db.IntentsSwap, error) {
+	return nil, nil
+}
+
 type tCoin struct {
 	id []byte
 

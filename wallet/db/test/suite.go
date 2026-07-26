@@ -40,6 +40,7 @@ func RunSuite(t *testing.T, newDB func(t *testing.T) db.DB) {
 	run("Tokens", testTokens)
 	run("Multisig", testMultisig)
 	run("ConnectLifecycle", testConnectLifecycle)
+	run("IntentsSwaps", testIntentsSwaps)
 }
 
 func testConnectLifecycle(t *testing.T, d db.DB) {

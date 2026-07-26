@@ -77,40 +77,9 @@ func TestIntentsSwapStates(t *testing.T) {
 		intents.StatusRefunded:          true,
 		intents.StatusFailed:            true,
 	} {
-		if got := intentsSwapTerminal(state); got != terminal {
-			t.Errorf("intentsSwapTerminal(%s) = %v, want %v", state, got, terminal)
+		if got := (&IntentsSwap{State: state}).Terminal(); got != terminal {
+			t.Errorf("Terminal(%s) = %v, want %v", state, got, terminal)
 		}
-	}
-}
-
-func TestIntentsSwapRecordRoundTrip(t *testing.T) {
-	swap := &IntentsSwap{
-		DepositAddress: "bc1qdeposit",
-		State:          IntentsStateDepositSent,
-		OriginAssetID:  0,
-		DestAssetID:    501,
-		OriginAsset:    "nep141:btc.omft.near",
-		DestAsset:      "nep141:sol.omft.near",
-		AtomsIn:        10_000_000,
-		AmountIn:       "10000000",
-		AmountOut:      "83000000000",
-		AtomsOut:       83_000_000_000,
-		Deadline:       time.Now().Round(time.Second),
-		AppFees:        []intents.AppFee{{Recipient: "x", Fee: 10}},
-		QuoteEnvelope:  json.RawMessage(`{"signature":"sig"}`),
-		CreatedAt:      time.Now().Round(time.Second),
-	}
-	b, err := swap.MarshalBinary()
-	if err != nil {
-		t.Fatalf("MarshalBinary: %v", err)
-	}
-	back := new(IntentsSwap)
-	if err := back.UnmarshalBinary(b); err != nil {
-		t.Fatalf("UnmarshalBinary: %v", err)
-	}
-	if back.DepositAddress != swap.DepositAddress || back.AtomsIn != swap.AtomsIn ||
-		back.State != swap.State || string(back.QuoteEnvelope) != string(swap.QuoteEnvelope) {
-		t.Fatalf("round trip mismatch: %+v vs %+v", back, swap)
 	}
 }
 

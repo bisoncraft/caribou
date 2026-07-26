@@ -166,12 +166,14 @@ Deferred until PR #113 (NEP-141 token layer) merges:
 
 ## Phase 3 — swap engine in `wallet/core/near-intents.go` (complete)
 
-- [x] Persistent swap records keyed by deposit address, in a dedicated
-  database (`intents.db`): quote terms, the signed quote envelope
-  (verified at quote time; the status endpoint's copy is not
-  re-verifiable), state, assets, and transaction references. States:
-  `QUOTED → DEPOSIT_SENT →` service statuses `→ SUCCESS | REFUNDED |
-  FAILED`, plus local `EXPIRED` for quotes never funded.
+- [x] Persistent swap records keyed by deposit address, in a table of the
+  core database indexed by creation time (newest-first listing) and by
+  activity (the poller reads only swaps that still need polling): quote
+  terms, the signed quote envelope (verified at quote time; the status
+  endpoint's copy is not re-verifiable), state, assets, and transaction
+  references. States: `QUOTED → DEPOSIT_SENT →` service statuses `→
+  SUCCESS | REFUNDED | FAILED`, plus local `EXPIRED` for quotes never
+  funded.
 - [x] Execution (`IntentsExecute`): committed quote → persist → origin
   wallet `Send()` to the deposit address; `refundTo`/`recipient` are
   always the wallets' own seed-derived addresses; `/deposit/submit` hint

@@ -6,22 +6,22 @@
 // is wallet/intents. Design and trust model: docs/near-intents-plan.md.
 //
 // A swap is identified by its single-use deposit address. Records persist
-// in a dedicated key-value database (intents.db) through the state
-// machine QUOTED → DEPOSIT_SENT → (service statuses) → SUCCESS | REFUNDED
-// | FAILED, with EXPIRED for quotes that were never funded. Quote
-// signatures are verified once, at quote time, and the signed envelope is
-// persisted; the service's status endpoint re-serializes quotes in a form
-// that cannot be re-verified.
+// in a table of the core database, indexed by creation time (for
+// newest-first listing) and by activity (so the poller reads only swaps
+// that still need polling), through the state machine QUOTED →
+// DEPOSIT_SENT → (service statuses) → SUCCESS | REFUNDED | FAILED, with
+// EXPIRED for quotes that were never funded. Quote signatures are verified
+// once, at quote time, and the signed envelope is persisted; the service's
+// status endpoint re-serializes quotes in a form that cannot be
+// re-verified.
 
 package core
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -29,7 +29,6 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encrypt"
-	"github.com/bisoncraft/caribou/util/lexi"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/db"
 	"github.com/bisoncraft/caribou/wallet/intents"
@@ -60,33 +59,23 @@ const (
 	// intentsCatalogTTL is how long a fetched asset catalog stays fresh.
 	intentsCatalogTTL = 15 * time.Minute
 
-	// intentsDBFilename is the swap-record database, beside the main DB.
-	intentsDBFilename = "intents.db"
-
 	// intentsExpiryGrace pads the quote deadline before an unfunded quote
 	// is locally marked EXPIRED.
 	intentsExpiryGrace = 10 * time.Minute
 )
 
+// IntentsSwap is the persisted cross-chain swap record. The type and its
+// storage (including the engine-local states below) live in wallet/db; the
+// state machine that drives it lives here.
+type IntentsSwap = db.IntentsSwap
+
 // Engine-local swap states. All other states mirror the service statuses
 // in the intents package (StatusProcessing, StatusSuccess, ...).
 const (
-	// IntentsStateQuoted: a committed quote exists but the deposit has not
-	// been broadcast.
-	IntentsStateQuoted = "QUOTED"
-	// IntentsStateDepositSent: the origin-chain deposit is broadcast but
-	// the service hasn't yet observed it.
-	IntentsStateDepositSent = "DEPOSIT_SENT"
-	// IntentsStateExpired: never funded and the deadline (plus grace) has
-	// passed. Terminal, local-only.
-	IntentsStateExpired = "EXPIRED"
+	IntentsStateQuoted      = db.IntentsStateQuoted
+	IntentsStateDepositSent = db.IntentsStateDepositSent
+	IntentsStateExpired     = db.IntentsStateExpired
 )
-
-// intentsSwapTerminal reports whether a swap record needs no further
-// polling.
-func intentsSwapTerminal(state string) bool {
-	return state == IntentsStateExpired || intents.TerminalStatus(state)
-}
 
 // intentsDeadlines is the quote deadline (refund-activation time)
 // requested per origin chain. The window must cover deposit confirmation
@@ -107,56 +96,6 @@ func intentsDeadline(originAssetID uint32) time.Duration {
 	return 45 * time.Minute // account-based chains confirm in seconds
 }
 
-// IntentsSwap is a persisted cross-chain swap record, keyed by its
-// single-use deposit address. Amount strings are in the Intents-side base
-// units; Atoms fields are wallet atomic units.
-type IntentsSwap struct {
-	DepositAddress string    `json:"depositAddress"`
-	DepositMemo    string    `json:"depositMemo,omitempty"`
-	State          string    `json:"state"`
-	OriginAssetID  uint32    `json:"originAssetID"`
-	DestAssetID    uint32    `json:"destAssetID"`
-	OriginAsset    string    `json:"originAsset"` // Intents asset ID
-	DestAsset      string    `json:"destAsset"`   // Intents asset ID
-	AtomsIn        uint64    `json:"atomsIn"`
-	AmountIn       string    `json:"amountIn"`
-	AmountOut      string    `json:"amountOut"` // quoted, destination units
-	AtomsOut       uint64    `json:"atomsOut"`  // quoted, destination wallet atoms
-	Recipient      string    `json:"recipient"`
-	RefundTo       string    `json:"refundTo"`
-	Deadline       time.Time `json:"deadline"`
-	TimeEstimate   int64     `json:"timeEstimate"` // seconds, from the quote
-
-	DepositTxID    string   `json:"depositTxID,omitempty"`
-	NearTxHashes   []string `json:"nearTxHashes,omitempty"`
-	DestinationTxs []string `json:"destinationTxs,omitempty"`
-	RefundTxs      []string `json:"refundTxs,omitempty"`
-	RefundedAmount string   `json:"refundedAmount,omitempty"`
-	RefundReason   string   `json:"refundReason,omitempty"`
-
-	// AppFees is the service-rewritten fee breakdown echoed with the
-	// quote: the application fee split plus the keyless surcharge entry.
-	AppFees []intents.AppFee `json:"appFees,omitempty"`
-
-	// QuoteEnvelope is the full signed /quote response, verified at quote
-	// time and retained for audit. Reconstructed records (post-restore)
-	// carry the status endpoint's re-serialized, non-verifiable copy and
-	// set Reconstructed.
-	QuoteEnvelope json.RawMessage `json:"quoteEnvelope,omitempty"`
-	Reconstructed bool            `json:"reconstructed,omitempty"`
-
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-func (s *IntentsSwap) MarshalBinary() ([]byte, error) {
-	return json.Marshal(s)
-}
-
-func (s *IntentsSwap) UnmarshalBinary(b []byte) error {
-	return json.Unmarshal(b, s)
-}
-
 // IntentsSwapNote reports a new or updated swap record.
 type IntentsSwapNote struct {
 	db.Notification
@@ -170,14 +109,13 @@ func newIntentsSwapNote(swap *IntentsSwap, subject, details string, severity db.
 	}
 }
 
-// intentsEngine owns the swap-record database, the 1Click client, the
-// cached asset catalog, and the status poller.
+// intentsEngine owns the swap records (a table of the core database), the
+// 1Click client, the cached asset catalog, and the status poller.
 type intentsEngine struct {
 	c      *Core
 	log    util.Logger
 	client *intents.Client
-	db     *lexi.DB
-	swaps  *lexi.Table
+	db     db.DB
 	ctx    context.Context // the engine's run context, for background refreshes
 
 	catMtx       sync.Mutex
@@ -216,44 +154,15 @@ func (c *Core) startIntentsEngine(ctx context.Context) {
 			logger.Errorf("Error creating 1Click client: %v", err)
 			return
 		}
-		ldb, err := lexi.New(&lexi.Config{
-			Path: filepath.Join(filepath.Dir(c.cfg.DBPath), intentsDBFilename),
-			Log:  logger.SubLogger("DB"),
-		})
-		if err != nil {
-			logger.Errorf("Error opening intents database: %v", err)
-			return
-		}
-		// The DB gets its own context so it outlives the poller: writes
+		// Swap records live in the core database (c.db), whose lifecycle
+		// Core.Run already manages to outlive the poller, so writes
 		// triggered by in-flight API methods during wind-down land before
-		// the storage engine closes, mirroring the master tx DB pattern.
-		// Cancellation must precede the Wait — lexi's Connect goroutine
-		// exits only on context cancellation — so both run in one deferred
-		// closure rather than as separate LIFO defers.
-		dbCtx, stopDB := context.WithCancel(context.Background())
-		dbWG, err := ldb.Connect(dbCtx)
-		if err != nil {
-			stopDB()
-			logger.Errorf("Error connecting intents database: %v", err)
-			return
-		}
-		defer func() {
-			stopDB()
-			dbWG.Wait()
-		}()
-
-		swaps, err := ldb.Table("swaps")
-		if err != nil {
-			logger.Errorf("Error creating swaps table: %v", err)
-			return
-		}
-
+		// the storage engine closes.
 		eng := &intentsEngine{
 			c:       c,
 			log:     logger,
 			client:  client,
-			db:      ldb,
-			swaps:   swaps,
+			db:      c.db,
 			ctx:     ctx,
 			trigger: make(chan struct{}, 1),
 		}
@@ -303,47 +212,18 @@ func (e *intentsEngine) poke() {
 	}
 }
 
-// allSwaps loads every persisted swap record.
-func (e *intentsEngine) allSwaps() ([]*IntentsSwap, error) {
-	var swaps []*IntentsSwap
-	err := e.swaps.Iterate(nil, func(it *lexi.Iter) error {
-		return it.V(func(vB []byte) error {
-			swap := new(IntentsSwap)
-			if err := swap.UnmarshalBinary(vB); err != nil {
-				return fmt.Errorf("error decoding swap record: %w", err)
-			}
-			swaps = append(swaps, swap)
-			return nil
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(swaps, func(i, j int) bool { return swaps[i].CreatedAt.After(swaps[j].CreatedAt) })
-	return swaps, nil
-}
-
-// storeSwap persists a swap record, stamping UpdatedAt.
-func (e *intentsEngine) storeSwap(swap *IntentsSwap) error {
-	swap.UpdatedAt = time.Now()
-	return e.swaps.Set([]byte(swap.DepositAddress), swap, lexi.WithReplace())
-}
-
 // pollActive refreshes all non-terminal swaps from the service and returns
 // the number of active swaps found, so the caller can park the poller when
 // none remain.
 func (e *intentsEngine) pollActive(ctx context.Context) (active int) {
-	swaps, err := e.allSwaps()
+	swaps, err := e.db.ActiveIntentsSwaps()
 	if err != nil {
-		e.log.Errorf("Error loading swap records: %v", err)
+		e.log.Errorf("Error loading active swap records: %v", err)
 		return 0
 	}
 	for _, swap := range swaps {
 		if ctx.Err() != nil {
 			return active
-		}
-		if intentsSwapTerminal(swap.State) {
-			continue
 		}
 		active++
 		if err := e.refreshSwap(ctx, swap); err != nil {
@@ -378,7 +258,7 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 	if note != nil {
 		e.c.notify(note)
 	}
-	if updated != nil && intentsSwapTerminal(updated.State) {
+	if updated != nil && updated.Terminal() {
 		if updated.DestAssetID != intentsAssetUnknown {
 			e.c.updateAssetBalance(updated.DestAssetID)
 		}
@@ -398,12 +278,12 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	e.swapMtx.Lock()
 	defer e.swapMtx.Unlock()
 
-	swap := new(IntentsSwap)
-	if err := e.swaps.Get([]byte(depositAddress), swap); err != nil {
+	swap, err := e.db.IntentsSwap(depositAddress)
+	if err != nil {
 		e.log.Errorf("Error reloading swap %s: %v", depositAddress, err)
 		return nil, nil
 	}
-	if intentsSwapTerminal(swap.State) {
+	if swap.Terminal() {
 		return nil, nil // never regress a terminal record
 	}
 
@@ -427,7 +307,7 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	if newState == intents.StatusRefunded {
 		swap.RefundTxs = txHashes(details.OriginChainTxs)
 	}
-	if err := e.storeSwap(swap); err != nil {
+	if err := e.db.StoreIntentsSwap(swap); err != nil {
 		e.log.Errorf("Error storing swap %s: %v", depositAddress, err)
 		return nil, nil
 	}
@@ -453,8 +333,8 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 // swapMtx so a concurrent writer's newer state is not overwritten.
 func (e *intentsEngine) applyTimeout(depositAddress string) {
 	e.swapMtx.Lock()
-	swap := new(IntentsSwap)
-	if err := e.swaps.Get([]byte(depositAddress), swap); err != nil {
+	swap, err := e.db.IntentsSwap(depositAddress)
+	if err != nil {
 		e.swapMtx.Unlock()
 		return
 	}
@@ -466,7 +346,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 	switch swap.State {
 	case IntentsStateQuoted:
 		swap.State = IntentsStateExpired
-		if err := e.storeSwap(swap); err == nil {
+		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			note = newIntentsSwapNote(swap, "Swap expired",
 				"The quote expired before a deposit was sent. No funds moved.", db.WarningLevel)
 		} else {
@@ -475,7 +355,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 	case IntentsStateDepositSent:
 		swap.State = intents.StatusFailed
 		swap.RefundReason = "the service did not observe a deposit before the quote deadline"
-		if err := e.storeSwap(swap); err == nil {
+		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			note = newIntentsSwapNote(swap, "Swap needs attention",
 				"The service did not observe the deposit before the deadline. If a deposit left your wallet, check its transaction and the service status page.", db.ErrorLevel)
 		} else {
@@ -934,7 +814,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		QuoteEnvelope:  envelope,
 		CreatedAt:      time.Now(),
 	}
-	if err := eng.storeSwap(swap); err != nil {
+	if err := eng.db.StoreIntentsSwap(swap); err != nil {
 		return nil, fmt.Errorf("error persisting swap record: %w", err)
 	}
 
@@ -957,15 +837,15 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	// Record the deposit under swapMtx, reloading so a concurrent poll that
 	// already advanced the state is not regressed to DEPOSIT_SENT.
 	eng.swapMtx.Lock()
-	fresh := new(IntentsSwap)
-	if err := eng.swaps.Get([]byte(swap.DepositAddress), fresh); err == nil {
+	fresh, err := eng.db.IntentsSwap(swap.DepositAddress)
+	if err == nil {
 		if fresh.State == IntentsStateQuoted {
 			fresh.State = IntentsStateDepositSent
 		}
 		if fresh.DepositTxID == "" {
 			fresh.DepositTxID = coin.TxID()
 		}
-		if err := eng.storeSwap(fresh); err != nil {
+		if err := eng.db.StoreIntentsSwap(fresh); err != nil {
 			eng.log.Errorf("Error updating swap record %s after deposit: %v", swap.DepositAddress, err)
 		}
 		swap = fresh
@@ -995,7 +875,7 @@ func (c *Core) IntentsSwaps() ([]*IntentsSwap, error) {
 	if err != nil {
 		return nil, err
 	}
-	return eng.allSwaps()
+	return eng.db.IntentsSwaps()
 }
 
 // IntentsRefresh polls the service for one swap immediately.
@@ -1004,11 +884,11 @@ func (c *Core) IntentsRefresh(ctx context.Context, depositAddress string) (*Inte
 	if err != nil {
 		return nil, err
 	}
-	swap := new(IntentsSwap)
-	if err := eng.swaps.Get([]byte(depositAddress), swap); err != nil {
+	swap, err := eng.db.IntentsSwap(depositAddress)
+	if err != nil {
 		return nil, fmt.Errorf("no swap record for %s: %w", depositAddress, err)
 	}
-	if !intentsSwapTerminal(swap.State) {
+	if !swap.Terminal() {
 		if err := eng.refreshSwap(ctx, swap); err != nil {
 			return nil, err
 		}
@@ -1042,7 +922,7 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 	}
 
 	known := make(map[string]bool)
-	swaps, err := eng.allSwaps()
+	swaps, err := eng.db.IntentsSwaps()
 	if err != nil {
 		return 0, err
 	}
@@ -1081,7 +961,7 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 				eng.log.Warnf("Error reconstructing swap %s: %v", *tx.Recipient, err)
 				continue
 			}
-			if err := eng.storeSwap(swap); err != nil {
+			if err := eng.db.StoreIntentsSwap(swap); err != nil {
 				return found, err
 			}
 			found++

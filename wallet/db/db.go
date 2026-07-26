@@ -89,6 +89,10 @@ type kvDB struct {
 	noteStampIdx    kvstore.StoreIndex
 	multisigIndexes kvstore.StoreTable
 	multisigPubkeys kvstore.StoreTable
+
+	intentsSwaps     kvstore.StoreTable
+	intentsStampIdx  kvstore.StoreIndex
+	intentsActiveIdx kvstore.StoreIndex
 }
 
 var _ DB = (*kvDB)(nil)
@@ -131,6 +135,15 @@ func newDB(store kvstore.Store, log util.Logger) (*kvDB, error) {
 		return nil, err
 	}
 	if d.multisigPubkeys, err = store.Table(multisigPubkeysTable); err != nil {
+		return nil, err
+	}
+	if d.intentsSwaps, err = store.Table(intentsSwapsTable); err != nil {
+		return nil, err
+	}
+	if d.intentsStampIdx, err = d.intentsSwaps.AddIndex(intentsStampIndexName, intentsStampIndexFunc); err != nil {
+		return nil, err
+	}
+	if d.intentsActiveIdx, err = d.intentsSwaps.AddIndex(intentsActiveIndexName, intentsActiveIndexFunc); err != nil {
 		return nil, err
 	}
 	return d, nil
