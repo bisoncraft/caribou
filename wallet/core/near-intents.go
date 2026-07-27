@@ -730,13 +730,23 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 // wallet, and hands tracking to the status poller. The returned record is
 // in state DEPOSIT_SENT on success. If the deposit send fails the record
 // remains QUOTED and expires unfunded; no service-side action is needed.
-func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int) (*IntentsSwap, error) {
+//
+// minAtomsOut is the MinAtomsOut of the IntentsPreview the caller
+// displayed, echoed back as the accept bound: a committed quote whose
+// output falls below it — the rate moved more than the slippage tolerance
+// since the preview — is rejected before any funds move, and the caller
+// should obtain a fresh preview. It is required; a swap cannot be executed
+// against terms the user never saw.
+func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, minAtomsOut uint64) (*IntentsSwap, error) {
 	eng, err := c.intentsEngine()
 	if err != nil {
 		return nil, err
 	}
 	if atoms == 0 {
 		return nil, fmt.Errorf("cannot swap zero %s", unbip(originAssetID))
+	}
+	if minAtomsOut == 0 {
+		return nil, fmt.Errorf("no previewed minimum output supplied")
 	}
 	var crypter encrypt.Crypter
 	if len(pw) > 0 {
@@ -788,6 +798,15 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	atomsOut, err := fromIntentsAmount(quote.AmountOut, &destWallet.Info().UnitInfo, dest.Decimals)
 	if err != nil {
 		return nil, err
+	}
+	// The committed quote is a fresh quote, not the previewed one. Honor
+	// the terms the user actually accepted: if its output has drifted
+	// below the previewed minimum, reject before anything is persisted or
+	// sent. The unfunded quote expires service-side with no consequence.
+	if atomsOut < minAtomsOut {
+		destUnits := &destWallet.Info().UnitInfo
+		return nil, fmt.Errorf("the rate moved: the committed quote pays %s, below the quoted minimum of %s; get a fresh quote",
+			destUnits.FormatAtoms(atomsOut), destUnits.FormatAtoms(minAtomsOut))
 	}
 	deadline, err := time.Parse(time.RFC3339, quote.Deadline)
 	if err != nil {

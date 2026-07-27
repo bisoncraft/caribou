@@ -139,7 +139,7 @@ type clientCore interface {
 	TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	IntentsAssets(ctx context.Context) ([]*core.IntentsAsset, error)
 	IntentsPreview(ctx context.Context, originAssetID, destAssetID uint32, atoms uint64, slippageBps int) (*core.IntentsPreview, error)
-	IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int) (*core.IntentsSwap, error)
+	IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, minAtomsOut uint64) (*core.IntentsSwap, error)
 	IntentsSwaps() ([]*core.IntentsSwap, error)
 	IntentsRefresh(ctx context.Context, depositAddress string) (*core.IntentsSwap, error)
 	IntentsReconstruct(ctx context.Context) (int, error)

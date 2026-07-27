@@ -71,13 +71,15 @@ type intentsExecuteForm struct {
 	DestAssetID   *uint32          `json:"destAssetID"`
 	Value         uint64           `json:"value"`
 	SlippageBps   int              `json:"slippageBps"`
+	MinAtomsOut   uint64           `json:"minAtomsOut"`
 	Pass          encode.PassBytes `json:"pass"`
 }
 
 // apiIntentsExecute is the handler for the '/intents/execute' API request.
 // It obtains a committed quote and funds it from the origin wallet. A
 // committed quote creates a real deposit address and is screened by the
-// service; callers should preview with a dry quote first.
+// service. minAtomsOut echoes the displayed preview's minimum output; a
+// committed quote paying less is rejected before any funds move.
 func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 	form := new(intentsExecuteForm)
 	defer form.Pass.Clear()
@@ -88,6 +90,10 @@ func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, errors.New("missing origin or destination asset ID"))
 		return
 	}
+	if form.MinAtomsOut == 0 {
+		s.writeAPIError(w, errors.New("missing previewed minimum output"))
+		return
+	}
 	pass, err := s.resolvePass(form.Pass, r)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
@@ -95,7 +101,7 @@ func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer zero(pass)
 
-	swap, err := s.core.IntentsExecute(pass, *form.OriginAssetID, *form.DestAssetID, form.Value, form.SlippageBps)
+	swap, err := s.core.IntentsExecute(pass, *form.OriginAssetID, *form.DestAssetID, form.Value, form.SlippageBps, form.MinAtomsOut)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("swap error: %w", err))
 		return

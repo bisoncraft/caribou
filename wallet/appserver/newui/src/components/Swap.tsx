@@ -619,6 +619,10 @@ export default function Swap () {
   const [preview, setPreview] = useState<IntentsPreview | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [previewErr, setPreviewErr] = useState('')
+  // Bumped to force a fresh preview with unchanged inputs, e.g. after the
+  // server rejects an execute because the rate moved past the previewed
+  // minimum.
+  const [previewNonce, setPreviewNonce] = useState(0)
 
   // Trust popover toggle
   const [showTrust, setShowTrust] = useState(false)
@@ -725,7 +729,7 @@ export default function Swap () {
       setPreview(r.preview)
     }, 500)
     return () => { clearTimeout(h); setPreviewing(false) }
-  }, [originID, destID, amount, assets, slippageBps])
+  }, [originID, destID, amount, assets, slippageBps, previewNonce])
 
   const originAsset = assets.find(a => a.assetID === originID) ?? null
   const destAsset = assets.find(a => a.assetID === destID) ?? null
@@ -741,9 +745,12 @@ export default function Swap () {
   const canPreview = originID !== null && destID !== null && originID !== destID && atomsIn > 0
   const canConfirm = canPreview && preview !== null && !previewing && !previewErr
 
-  // Confirm → execute
+  // Confirm → execute. The previewed minimum output is echoed so the
+  // server rejects a committed quote that pays less than the terms shown
+  // here; on any failure the preview is refreshed so a retry runs against
+  // current numbers.
   const executeSwap = async () => {
-    if (!originAsset || !destAsset || atomsIn <= 0 || submitting) return
+    if (!originAsset || !destAsset || atomsIn <= 0 || submitting || !preview) return
     setSubmitting(true)
     setExecErr('')
     const r = await postJSON('/api/intents/execute', {
@@ -751,11 +758,13 @@ export default function Swap () {
       destAssetID: destID,
       value: atomsIn,
       slippageBps,
+      minAtomsOut: preview.minAtomsOut,
       pass: pw
     })
     setSubmitting(false)
     if (!r.ok) {
       setExecErr(r.errMsg || r.msg || t('Swap failed. Please try again.'))
+      setPreviewNonce(n => n + 1)
       return
     }
     const swap: IntentsSwap = r.swap

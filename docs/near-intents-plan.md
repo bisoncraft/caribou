@@ -178,7 +178,10 @@ Deferred until PR #113 (NEP-141 token layer) merges:
   wallet `Send()` to the deposit address; `refundTo`/`recipient` are
   always the wallets' own seed-derived addresses; `/deposit/submit` hint
   with the txid; memo-mode deposits refused. A failed send leaves the
-  record `QUOTED` to expire unfunded.
+  record `QUOTED` to expire unfunded. The caller echoes the displayed
+  preview's minimum output (`minAtomsOut`, required); a committed quote
+  paying less — the rate moved past the slippage tolerance since the
+  preview — is rejected before anything is persisted or sent.
 - [x] Status poller with restart resumption (persisted records are polled
   from engine start); service-reported origin/destination/NEAR
   transaction hashes attached, including refund transactions on
