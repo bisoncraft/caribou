@@ -42,6 +42,7 @@ wallet/cmd/testbinance/testbinance
 wallet/cmd/translationsreport/translationsreport
 wallet/cmd/translationsreport/worksheets
 wallet/cmd/treasurykey/treasurykey
+wallet/cmd/treasurysweep/treasurysweep
 wallet/cmd/verifymm/verifymm
 wallet/asset/xmr/lib/*/libmonero_wallet2_api_c*
 # monero_c checkouts used by build-ios.sh / build-darwin.sh (built out-of-tree,

@@ -272,7 +272,13 @@ No testnet exists; validate with small amounts on mainnet.
   are recoverable from it.
 - [ ] Deadline override behavior per chain.
 - [ ] Treasury sweep rehearsal: ERC-191-signed withdrawal from the
-  verifier balance to the target chain.
+  verifier balance to the target chain, using `wallet/cmd/treasurysweep`
+  (balances → build → sign → simulate → submit). The signing path is
+  already validated against the deployed verifier: a simulated
+  throwaway-identity withdrawal fails with "insufficient balance", i.e.
+  past signature recovery, nonce-salt, and deadline checks. The rehearsal
+  still must confirm the external-chain (`WITHDRAW_TO`) conventions per
+  bridge and an actual funded withdrawal end to end.
 
 ## Phase 6 — later work
 
