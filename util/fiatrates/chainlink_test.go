@@ -168,6 +168,14 @@ func TestChainlinkRejectsWrongChainProvider(t *testing.T) {
 	}
 }
 
+// rpcCodedError mimics geth's jsonError for isConnErr's typed check. Its
+// message deliberately avoids the substrings the fallback matches on, so the
+// typed classification is what the tests exercise.
+type rpcCodedError struct{ code int }
+
+func (e *rpcCodedError) Error() string  { return "call failed" }
+func (e *rpcCodedError) ErrorCode() int { return e.code }
+
 // TestIsConnErr covers the caller-vs-provider distinction: a per-call timeout
 // under a live caller context is a hung provider and must fail over, while a
 // dead caller context must not churn the shared connection.
@@ -187,6 +195,9 @@ func TestIsConnErr(t *testing.T) {
 		{"caller canceled", canceled, context.Canceled, false},
 		{"caller ctx done, provider error", canceled, fmt.Errorf("connection refused"), false},
 		{"execution revert", context.Background(), fmt.Errorf("execution reverted"), false},
+		{"typed revert code 3", context.Background(), &rpcCodedError{3}, false},
+		{"wrapped typed revert code 3", context.Background(), fmt.Errorf("read: %w", &rpcCodedError{3}), false},
+		{"typed non-revert code", context.Background(), &rpcCodedError{-32000}, true},
 	}
 	for _, tt := range tests {
 		if got := isConnErr(tt.ctx, tt.err); got != tt.want {

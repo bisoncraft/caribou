@@ -28,13 +28,6 @@ const (
 	// temporary.
 	fiatRateSourceRetryInterval = time.Hour
 	fiatRequestTimeout          = time.Second * 5
-	// chainlinkRequestTimeout bounds a full Chainlink refresh. It is much
-	// larger than fiatRequestTimeout because a cold cycle may probe several
-	// providers in sequence, each at up to chainlinkDialTimeout, before the
-	// batch read: black-holed providers burn their full probe timeout. It
-	// still has to stay well inside fiatRateRequestInterval, since
-	// refreshFiatRates waits on every source.
-	chainlinkRequestTimeout = time.Second * 30
 
 	// Tokens. Used to identify fiat rate source, source name must not contain a
 	// comma.
@@ -72,6 +65,14 @@ var fiatRateFetchers = map[string]rateFetcher{
 // The fetcher caches an RPC connection and per-feed decimals internally, so it
 // is built once and shared across refreshes. Construction only fails on invalid
 // configuration, so a failure is permanent and is not retried.
+//
+// There is deliberately no teardown path: geth's Close is a no-op for HTTP RPC
+// clients, and the sockets belong to the shared dexnet.Client pool, so the
+// cached connection holds no resources of its own. Note that the
+// fiatRateSourceRetryInterval retry rebuilds only the source's rate cache;
+// errors the fetcher classifies as non-connection (revert-shaped) leave its
+// pinned provider in place, since a genuine revert comes from the contract and
+// would follow the call to any endpoint.
 var chainlinkFetcher = sync.OnceValues(func() (func(context.Context, []string, util.Logger) (map[string]float64, error), error) {
 	return fiatrates.ChainlinkRateFetcher(fiatrates.Config{})
 })
@@ -192,7 +193,12 @@ func chainlinkRates(ctx context.Context, log util.Logger, assets map[uint32]*Sup
 		tickers = append(tickers, ticker)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, chainlinkRequestTimeout)
+	// The budget is derived in util/fiatrates from the provider-probe and
+	// batch-read timeouts. It far exceeds fiatRequestTimeout because a cold
+	// cycle may probe several providers in sequence, but stays well inside
+	// fiatRateRequestInterval, which matters because refreshFiatRates waits
+	// on every source.
+	ctx, cancel := context.WithTimeout(ctx, fiatrates.ChainlinkFetchTimeout)
 	defer cancel()
 
 	rates, err := fetchRates(ctx, tickers, log)

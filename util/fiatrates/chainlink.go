@@ -187,7 +187,8 @@ func isConnErr(ctx context.Context, err error) bool {
 	// EIP-3 execution reverts carry error code 3 in the JSON-RPC layer;
 	// use the typed interface where available to avoid string matching.
 	type rpcError interface{ ErrorCode() int }
-	if rpcErr, ok := err.(rpcError); ok && rpcErr.ErrorCode() == 3 {
+	var rpcErr rpcError
+	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == 3 {
 		return false
 	}
 	msg := err.Error()
@@ -261,6 +262,16 @@ var chainlinkDefaultProviders = []string{
 	"https://polygon-public.nodies.app/",
 	"https://1rpc.io/matic",
 }
+
+// ChainlinkFetchTimeout bounds one full fetch through the fetcher returned by
+// ChainlinkRateFetcher. A cold cycle probes providers sequentially, each
+// burning up to chainlinkDialTimeout before the batch read gets its
+// chainlinkReadTimeout, so the budget is derived from those values and the
+// default provider count rather than hardcoded, with headroom so the final
+// stage is never left with a clipped deadline. A configured provider list
+// longer than the default needs a proportionally larger budget.
+var ChainlinkFetchTimeout = time.Duration(len(chainlinkDefaultProviders))*chainlinkDialTimeout +
+	chainlinkReadTimeout + 5*time.Second
 
 func parseABI(abiStr string) (*abi.ABI, error) {
 	parsed, err := abi.JSON(strings.NewReader(abiStr))
@@ -418,7 +429,10 @@ func chainlinkBatchFetcherCore(
 	// answers, so a dead provider is skipped rather than re-selected. Failover
 	// is between cycles, not within: a provider that dies mid-cycle costs that
 	// cycle's rates entirely, since the pinned client is not swapped until the
-	// next getRates invocation observes a failure.
+	// next getRates invocation observes a failure. Only connection-shaped
+	// failures reset it: a revert-shaped error keeps the pinned provider,
+	// since a genuine revert comes from the contract and would follow the
+	// call to any endpoint.
 	//
 	// divisors caches the 10^decimals factor keyed by "ticker:decimals". Keying
 	// on both fields means a bad first read (malicious RPC returning wrong
