@@ -1,3 +1,4 @@
+const path = require('path');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
@@ -6,7 +7,7 @@ const appleCredentials = process.env.APPLE_ID && process.env.APPLE_PASSWORD && p
 module.exports = {
   packagerConfig: {
     name: 'Caribou',
-    appBundleId: 'com.caribou.desktop',
+    appBundleId: 'com.bisoncraft.caribou.desktop',
     extraResource: ['../resources/'+require('./utils.js').getPlatform()],
     icon: '../src/caribou.icns',
     appVersion: require('./package.json').version,
@@ -22,7 +23,18 @@ module.exports = {
       InternalName: 'Caribou'
     },
     ...(appleCredentials ? {
-      osxSign: {},
+      // Developer ID (outside the App Store) signing. The identity is
+      // auto-discovered from the "Developer ID Application" cert in the login
+      // keychain. optionsForFile applies Hardened Runtime + entitlements to the
+      // app and every nested Mach-O it re-signs (Electron helpers, the bundled
+      // Go `caribou` binary, and the XMR libwallet2_api_c.dylib) — all three are
+      // required for the notary service to accept the build.
+      osxSign: {
+        optionsForFile: () => ({
+          hardenedRuntime: true,
+          entitlements: path.join(__dirname, 'entitlements.plist'),
+        }),
+      },
       osxNotarize: {
         appleId: process.env.APPLE_ID,
         appleIdPassword: process.env.APPLE_PASSWORD,
