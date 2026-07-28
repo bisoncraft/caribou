@@ -165,12 +165,31 @@ func New(cfg *Config) (*Core, error) {
 		return nil, fmt.Errorf("database initialization error: %w", err)
 	}
 
+	// Both stores hold an exclusive engine lock from the moment they open, so
+	// every error return below must close whatever has opened by that point.
+	var masterTxDB *txdb.TxDB
+	constructed := false
+	defer func() {
+		if constructed {
+			return
+		}
+		if cerr := coreDB.Close(); cerr != nil {
+			cfg.Logger.Errorf("Error closing database after failed construction: %v", cerr)
+		}
+		if masterTxDB == nil {
+			return
+		}
+		if cerr := masterTxDB.Close(); cerr != nil {
+			cfg.Logger.Errorf("Error closing transaction database after failed construction: %v", cerr)
+		}
+	}()
+
 	// The master transaction database lives beside the main database. It is
 	// shared by all wallets, each of which manages its own transactions through
 	// a network-scoped NetworkTxDB handle.
 	txDBPath := filepath.Join(filepath.Dir(cfg.DBPath), "tx.db")
 	txDBLog := cfg.Logger.SubLogger("TXDB")
-	masterTxDB, err := txdb.New(txDBPath, txDBLog)
+	masterTxDB, err = txdb.New(txDBPath, txDBLog)
 	if err != nil {
 		return nil, fmt.Errorf("transaction database initialization error: %w", err)
 	}
@@ -316,6 +335,7 @@ func New(cfg *Config) (*Core, error) {
 
 	// Populate the initial user data.
 	c.log.Debugf("new client core created")
+	constructed = true
 	return c, nil
 }
 
@@ -329,6 +349,14 @@ func (c *Core) Run(ctx context.Context) {
 	if err != nil {
 		c.log.Critical(err)
 		close(c.ready) // unblock <-Ready()
+		// Connect was never called on either database, so close the stores
+		// opened by New here; nothing else will.
+		if closeErr := c.db.Close(); closeErr != nil {
+			c.log.Errorf("Error closing database: %v", closeErr)
+		}
+		if closeErr := c.txDB.Close(); closeErr != nil {
+			c.log.Errorf("Error closing transaction database: %v", closeErr)
+		}
 		return
 	}
 	close(c.ready)
