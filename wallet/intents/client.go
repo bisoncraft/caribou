@@ -33,6 +33,12 @@ const DefaultBaseURL = "https://1click.chaindefuser.com"
 // this stays comfortably above that.
 const requestTimeout = 30 * time.Second
 
+// responseSizeLimit caps how much of a response body is read. The largest
+// legitimate response is the /v0/tokens catalog, well under 1 MiB today;
+// the cap keeps a broken or hostile endpoint from ballooning memory while
+// leaving generous headroom for catalog growth.
+const responseSizeLimit = 1 << 22 // 4 MiB
+
 // ErrSwapNotFound is returned by Status for a deposit address the service
 // does not recognize. During post-restore reconstruction this classifies
 // an outgoing transaction's counterparty as not-a-swap.
@@ -121,9 +127,14 @@ func (c *Client) do(ctx context.Context, method, path string, body, thing any) e
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Read one byte past the cap so truncation is distinguishable from a
+	// response that is exactly the cap.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, responseSizeLimit+1))
 	if err != nil {
 		return fmt.Errorf("error reading response: %w", err)
+	}
+	if len(respBody) > responseSizeLimit {
+		return fmt.Errorf("%s response exceeds the %d-byte limit", path, responseSizeLimit)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
