@@ -27,6 +27,10 @@ seed-derived identity, requests quotes from market makers itself, signs
   the treasury inside the same signed batch, executed atomically with the
   swap: 100% of the fee, versus the 50% protocol split under `appFees`,
   and no 10 bps keyless surcharge priced into the user's quote. The
+  surcharge and the split are both 1Click-layer constructs; the verifier
+  contract's own protocol fee (`fee()`, applied to `token_diff`) measures
+  1 pip = 0.01 bp on mainnet as of 2026-07 — economically nil, though it
+  is a governance-settable knob and worth re-checking periodically. The
   treasury accrues the same NEP-245 balances in the same account, so the
   existing sweep tooling (`wallet/cmd/treasurysweep`) applies unchanged.
 - **Direct quotes.** RFQ against the solver bus rather than 1Click's
