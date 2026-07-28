@@ -5,7 +5,9 @@ package dbtest
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +39,30 @@ func RunSuite(t *testing.T, newDB func(t *testing.T) db.DB) {
 	run("SendRequiresPassword", testSendRequiresPassword)
 	run("Tokens", testTokens)
 	run("Multisig", testMultisig)
+	run("ConnectLifecycle", testConnectLifecycle)
+}
+
+func testConnectLifecycle(t *testing.T, d db.DB) {
+	// Connect ties the store's shutdown to the context: cancellation closes
+	// the underlying engine, and the returned WaitGroup completes only once
+	// the close has finished. A write after that must return an error rather
+	// than panic. The teardown Close registered by the suite's factory runs
+	// after this test, so it also verifies that both engines tolerate Close
+	// on an already-closed store.
+	ctx, cancel := context.WithCancel(t.Context())
+	wg, err := d.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect error: %v", err)
+	}
+	w := RandomWallet()
+	if err := d.UpdateWallet(w); err != nil {
+		t.Fatalf("UpdateWallet while connected: %v", err)
+	}
+	cancel()
+	wg.Wait()
+	if err := d.UpdateWallet(w); err == nil {
+		t.Fatalf("no error writing after context-canceled shutdown")
+	}
 }
 
 func testPrimaryCredentials(t *testing.T, d db.DB) {
@@ -172,13 +198,26 @@ func testWallets(t *testing.T, d db.DB) {
 	})
 	t.Logf("%d milliseconds to insert %d Wallet", time.Since(tStart)/time.Millisecond, numToDo)
 
+	// A token-shaped wallet — no encrypted password, and no address until the
+	// first connect — must survive storage and listing. The zero-length field
+	// values once tripped a minimum-length check in the desktop engine's
+	// datum decoding, aborting Wallets() for every wallet in the table.
+	tokenW := RandomWallet()
+	tokenW.EncryptedPW = nil
+	tokenW.Address = ""
+	wallets = append(wallets, tokenW)
+	walletMap[tokenW.AssetID] = tokenW
+	if err := d.UpdateWallet(tokenW); err != nil {
+		t.Fatalf("UpdateWallet error for token-shaped wallet: %v", err)
+	}
+
 	tStart = time.Now()
 	reWallets, err := d.Wallets()
 	if err != nil {
 		t.Fatalf("wallets retrieval error: %v", err)
 	}
-	if len(reWallets) != numToDo {
-		t.Fatalf("expected %d wallets, got %d", numToDo, len(reWallets))
+	if len(reWallets) != len(walletMap) {
+		t.Fatalf("expected %d wallets, got %d", len(walletMap), len(reWallets))
 	}
 	for _, reW := range reWallets {
 		ogWallet, found := walletMap[reW.AssetID]
@@ -353,6 +392,24 @@ func testNotifications(t *testing.T, d db.DB) {
 		if !note.Ack {
 			t.Fatalf("notification acknowledgement not recorded")
 		}
+	}
+
+	// Re-saving an acked notification preserves the acknowledgement.
+	// SaveNotification must read the existing record's ack flag before
+	// writing; a blind Set would silently un-ack every re-fired notification.
+	reSaved := fetches[0] // the newest, so NotificationsN(1) returns it
+	if err := d.SaveNotification(reSaved); err != nil {
+		t.Fatalf("SaveNotification re-save error: %v", err)
+	}
+	fetched, err = d.NotificationsN(1)
+	if err != nil {
+		t.Fatalf("fetch error after re-save: %v", err)
+	}
+	if len(fetched) != 1 || !bytes.Equal(fetched[0].Id, reSaved.ID()) {
+		t.Fatalf("re-saved notification is not the newest")
+	}
+	if !fetched[0].Ack {
+		t.Fatalf("re-save dropped the acknowledgement")
 	}
 
 	// Asking for more than are stored returns all of them.
@@ -568,6 +625,39 @@ func testMultisig(t *testing.T, d db.DB) {
 	}
 	if gotIdx != 0 {
 		t.Fatalf("NextMultisigKeyIndex for second asset = %d, wanted 0", gotIdx)
+	}
+
+	// Concurrent callers must never see a repeated index. NextMultisigKeyIndex
+	// is a read-modify-write with no cross-engine transaction to hide behind,
+	// so the backend must serialize it; a lost update here is address reuse.
+	// Under -race this also polices the data path.
+	const numConcurrent = 32
+	assetC := uint32(2)
+	idxs := make([]uint32, numConcurrent)
+	var wg sync.WaitGroup
+	for i := range numConcurrent {
+		wg.Go(func() {
+			idx, err := d.NextMultisigKeyIndex(assetC)
+			if err != nil {
+				t.Errorf("concurrent NextMultisigKeyIndex error: %v", err)
+				return
+			}
+			idxs[i] = idx
+		})
+	}
+	wg.Wait()
+	if t.Failed() {
+		t.FailNow()
+	}
+	seen := make(map[uint32]bool, numConcurrent)
+	for _, idx := range idxs {
+		if seen[idx] {
+			t.Fatalf("concurrent NextMultisigKeyIndex repeated index %d", idx)
+		}
+		if idx >= numConcurrent {
+			t.Fatalf("concurrent NextMultisigKeyIndex returned out-of-range index %d", idx)
+		}
+		seen[idx] = true
 	}
 
 	// An unstored pubkey is an error.
