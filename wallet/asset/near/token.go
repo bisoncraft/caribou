@@ -301,10 +301,16 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	txID := base58.Encode(hash[:])
 
 	result, err := rpc.sendTx(encoded)
+	var rejected bool
+	var failureMsg string
 	switch {
 	case err == nil:
 		if result.Status.Failure != nil {
-			return nil, fmt.Errorf("token transfer failed on-chain: %s", string(result.Status.Failure))
+			// Executed but the actions failed: terminal, nonce consumed.
+			// Record it as confirmed-and-rejected so the burnt gas is
+			// visible in history, then report the failure.
+			rejected = true
+			failureMsg = string(result.Status.Failure)
 		}
 	case errors.Is(err, errBroadcastAmbiguous):
 		// The broadcast may or may not have been accepted. Record the
@@ -316,14 +322,31 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}
 
+	// The transaction fee is paid in NEAR gas, so it is recorded in the
+	// parent asset's units — which is how token transaction fees are
+	// displayed. Prefer the actual burnt gas; fall back to an estimate only
+	// when the execution outcome is not yet known (ambiguous broadcast).
+	var fees uint64
+	if err == nil {
+		fees = result.feeDrops()
+	}
+	if fees == 0 {
+		fees = w.parent.estimateFee()
+	}
+
 	recipient := address
 	wtx := &txdb.WalletTransaction{
 		Type:      txdb.Send,
 		ID:        txID,
 		Amount:    value,
-		Fees:      0, // fee is paid in NEAR gas, not the token itself
+		Fees:      fees,
 		Recipient: &recipient,
 		TokenID:   &w.assetID,
+		Confirmed: rejected,
+		Rejected:  rejected,
+	}
+	if rejected {
+		wtx.BlockNumber, wtx.Timestamp = w.parent.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
 	}
 	if w.txDB != nil {
 		if err := w.txDB.StoreTx(wtx); err != nil {
@@ -334,6 +357,9 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		w.emit.TransactionNote(wtx, true)
 	}
 
+	if rejected {
+		return nil, fmt.Errorf("token transfer failed on-chain: %s", failureMsg)
+	}
 	return &coin{txHash: hash, value: value}, nil
 }
 

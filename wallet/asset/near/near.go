@@ -416,13 +416,16 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		result, hash, err = w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
 	}
 
+	var rejected bool
+	var failureMsg string
 	switch {
 	case err == nil:
 		if result.Status.Failure != nil {
-			// The transaction executed but its actions failed. The nonce was
-			// consumed, so advance the watermark before reporting.
-			w.nonce = nonce
-			return nil, fmt.Errorf("transfer failed on-chain: %s", string(result.Status.Failure))
+			// The transaction executed but its actions failed: terminal, and
+			// the nonce was consumed. Record it as confirmed-and-rejected so
+			// the burnt gas is visible in history, then report the failure.
+			rejected = true
+			failureMsg = string(result.Status.Failure)
 		}
 	case errors.Is(err, errBroadcastAmbiguous):
 		// The broadcast may or may not have been accepted. Record the
@@ -455,6 +458,11 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		Amount:    value,
 		Fees:      fees,
 		Recipient: &recipient,
+		Confirmed: rejected,
+		Rejected:  rejected,
+	}
+	if rejected {
+		wtx.BlockNumber, wtx.Timestamp = w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
 	}
 
 	if w.txDB != nil {
@@ -467,6 +475,9 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		w.emit.TransactionNote(wtx, true)
 	}
 
+	if rejected {
+		return nil, fmt.Errorf("transfer failed on-chain: %s", failureMsg)
+	}
 	return &coin{txHash: hash, value: value}, nil
 }
 

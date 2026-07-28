@@ -87,6 +87,10 @@ func newRPCClient(endpoints []string, torProxy string, log util.Logger) (*rpcCli
 	}, nil
 }
 
+// rpcRequestID is the JSON-RPC request id sent with every call. NEAR
+// echoes it back unused; it is a fixed client identifier.
+const rpcRequestID = "caribou"
+
 type jsonRPCRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
 	ID      string      `json:"id"`
@@ -158,7 +162,7 @@ func (c *rpcClient) doRequest(url string, body []byte) (_ json.RawMessage, endpo
 func (c *rpcClient) call(method string, params interface{}) (json.RawMessage, error) {
 	reqBody := jsonRPCRequest{
 		JSONRPC: "2.0",
-		ID:      "bosswallet",
+		ID:      rpcRequestID,
 		Method:  method,
 		Params:  params,
 	}
@@ -485,7 +489,7 @@ func (r *txResult) feeDrops() uint64 {
 func (c *rpcClient) sendTx(signedTxBase64 string) (*txResult, error) {
 	body, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
-		ID:      "bosswallet",
+		ID:      rpcRequestID,
 		Method:  "send_tx",
 		Params: map[string]interface{}{
 			"signed_tx_base64": signedTxBase64,
