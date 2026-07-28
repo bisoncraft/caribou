@@ -47,12 +47,12 @@ popd
 # Bundle XMR shared library if building with XMR support.
 if [[ " ${TAGS_CARIBOU} " == *" xmr "* || "${TAGS_CARIBOU}" == "xmr" ]]; then
   XMRARCH=$(go env GOARCH)
-  cp "../../../../wallet/asset/xmr/lib/darwin-${XMRARCH}/libwallet2_api_c.dylib" "../resources/mac/"
+  cp "../../../../wallet/asset/xmr/lib/darwin-${XMRARCH}/libmonero_wallet2_api_c.dylib" "../resources/mac/"
   # macOS requires ad-hoc signing when linking against an unsigned dynamic
   # library, and downloaded files may have quarantine attributes.
   if [[ "$(uname)" == "Darwin" ]]; then
-    xattr -dr com.apple.quarantine "../resources/mac/libwallet2_api_c.dylib" 2>/dev/null || true
-    codesign -f -s - "../resources/mac/libwallet2_api_c.dylib"
+    xattr -dr com.apple.quarantine "../resources/mac/libmonero_wallet2_api_c.dylib" 2>/dev/null || true
+    codesign -f -s - "../resources/mac/libmonero_wallet2_api_c.dylib"
     codesign -f -s - "../resources/mac/${CARIBOU_EXE}"
   fi
 fi

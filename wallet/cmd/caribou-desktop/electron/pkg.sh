@@ -61,9 +61,9 @@ build_targets (){
 
     # Bundle XMR shared library if building with XMR support.
     if [[ " ${TAGS_CARIBOU} " == *" xmr "* || "${TAGS_CARIBOU}" == "xmr" ]]; then
-      cp "../../../../wallet/asset/xmr/lib/${OS}-${ARCH}/libwallet2_api_c.dylib" "../resources/mac/"
+      cp "../../../../wallet/asset/xmr/lib/${OS}-${ARCH}/libmonero_wallet2_api_c.dylib" "../resources/mac/"
       if [[ "$(uname)" == "Darwin" ]]; then
-        xattr -dr com.apple.quarantine "../resources/mac/libwallet2_api_c.dylib" 2>/dev/null || true
+        xattr -dr com.apple.quarantine "../resources/mac/libmonero_wallet2_api_c.dylib" 2>/dev/null || true
         if [[ -n "${APPLE_ID}" && -n "${APPLE_PASSWORD}" && -n "${APPLE_TEAM_ID}" ]]; then
           # Developer ID release: `npm run package` re-signs every nested Mach-O
           # (this dylib + the caribou binary) with the Developer ID identity and
@@ -74,7 +74,7 @@ build_targets (){
         else
           # Unsigned local build: ad-hoc sign so macOS will run the app on this
           # machine (linking an unsigned dylib otherwise fails to load).
-          codesign -f -s - "../resources/mac/libwallet2_api_c.dylib"
+          codesign -f -s - "../resources/mac/libmonero_wallet2_api_c.dylib"
           codesign -f -s - "../resources/mac/${CARIBOU_EXE}"
         fi
       fi

@@ -6,7 +6,8 @@
 	  Hardened Runtime entitlements for the Developer ID (non-App-Store)
 	  distribution of the desktop app. Applied to the app and every nested
 	  Mach-O (the Electron helpers, the bundled Go `caribou` binary, and the
-	  XMR `libwallet2_api_c.dylib`) by @electron/osx-sign; see forge.config.js.
+	  XMR `libmonero_wallet2_api_c.dylib`) by @electron/osx-sign; see
+	  forge.config.js.
 
 	  Electron's Chromium/V8 needs a writable+executable JIT region.
 	-->
@@ -16,7 +17,7 @@
 	<true/>
 	<!--
 	  The app spawns the bundled Go `caribou` binary, which (in XMR builds)
-	  dlopens libwallet2_api_c.dylib from Resources/mac. Library validation
+	  dlopens libmonero_wallet2_api_c.dylib from Resources/mac. Library validation
 	  would otherwise refuse to load a differently-signed/adjacent library, so
 	  it is disabled for this bundle.
 	-->

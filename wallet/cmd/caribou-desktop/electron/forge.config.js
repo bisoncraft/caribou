@@ -27,7 +27,7 @@ module.exports = {
       // auto-discovered from the "Developer ID Application" cert in the login
       // keychain. optionsForFile applies Hardened Runtime + entitlements to the
       // app and every nested Mach-O it re-signs (Electron helpers, the bundled
-      // Go `caribou` binary, and the XMR libwallet2_api_c.dylib) — all three are
+      // Go `caribou` binary, and the XMR libmonero_wallet2_api_c.dylib) — all three are
       // required for the notary service to accept the build.
       osxSign: {
         optionsForFile: () => ({
