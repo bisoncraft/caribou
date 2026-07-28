@@ -33,18 +33,16 @@ func (s *AppServer) apiIntentsAssets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type intentsPreviewForm struct {
-	OriginAssetID *uint32 `json:"originAssetID"`
-	DestAssetID   *uint32 `json:"destAssetID"`
-	Value         uint64  `json:"value"`
-	SlippageBps   int     `json:"slippageBps"`
-}
-
 // apiIntentsPreview is the handler for the '/intents/preview' API request.
 // It returns a dry-quote price preview; no deposit address is created and
 // no compliance screening runs.
 func (s *AppServer) apiIntentsPreview(w http.ResponseWriter, r *http.Request) {
-	form := new(intentsPreviewForm)
+	form := new(struct {
+		OriginAssetID *uint32 `json:"originAssetID"`
+		DestAssetID   *uint32 `json:"destAssetID"`
+		Value         uint64  `json:"value"`
+		SlippageBps   int     `json:"slippageBps"`
+	})
 	if !readPost(w, r, form) {
 		return
 	}
@@ -66,22 +64,20 @@ func (s *AppServer) apiIntentsPreview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type intentsExecuteForm struct {
-	OriginAssetID *uint32          `json:"originAssetID"`
-	DestAssetID   *uint32          `json:"destAssetID"`
-	Value         uint64           `json:"value"`
-	SlippageBps   int              `json:"slippageBps"`
-	MinAtomsOut   uint64           `json:"minAtomsOut"`
-	Pass          encode.PassBytes `json:"pass"`
-}
-
 // apiIntentsExecute is the handler for the '/intents/execute' API request.
 // It obtains a committed quote and funds it from the origin wallet. A
 // committed quote creates a real deposit address and is screened by the
 // service. minAtomsOut echoes the displayed preview's minimum output; a
 // committed quote paying less is rejected before any funds move.
 func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
-	form := new(intentsExecuteForm)
+	form := new(struct {
+		OriginAssetID *uint32          `json:"originAssetID"`
+		DestAssetID   *uint32          `json:"destAssetID"`
+		Value         uint64           `json:"value"`
+		SlippageBps   int              `json:"slippageBps"`
+		MinAtomsOut   uint64           `json:"minAtomsOut"`
+		Pass          encode.PassBytes `json:"pass"`
+	})
 	defer form.Pass.Clear()
 	if !readPost(w, r, form) {
 		return
@@ -132,14 +128,12 @@ func (s *AppServer) apiIntentsSwaps(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type intentsRefreshForm struct {
-	DepositAddress string `json:"depositAddress"`
-}
-
 // apiIntentsRefresh is the handler for the '/intents/refresh' API request.
 // It polls the service for one swap immediately.
 func (s *AppServer) apiIntentsRefresh(w http.ResponseWriter, r *http.Request) {
-	form := new(intentsRefreshForm)
+	form := new(struct {
+		DepositAddress string `json:"depositAddress"`
+	})
 	if !readPost(w, r, form) {
 		return
 	}
