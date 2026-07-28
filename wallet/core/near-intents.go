@@ -154,10 +154,15 @@ func (c *Core) startIntentsEngine(ctx context.Context) {
 			logger.Errorf("Error creating 1Click client: %v", err)
 			return
 		}
-		// Swap records live in the core database (c.db), whose lifecycle
-		// Core.Run already manages to outlive the poller, so writes
-		// triggered by in-flight API methods during wind-down land before
-		// the storage engine closes.
+		// Swap records live in the core database (c.db), whose close
+		// Core.Run sequences after the poller (which runs under c.wg). The
+		// API methods (Execute/Refresh/Reconstruct) run on HTTP-handler
+		// goroutines that Core.Run does not wait on, so a shutdown racing a
+		// store from one of them can drop that write — most consequentially
+		// the DEPOSIT_SENT/txid update right after a deposit send. Such a
+		// dropped record is recovered on the next launch by the resume poll
+		// and, failing that, by reconstruction, so the loss is bounded to a
+		// stale local state, never funds.
 		eng := &intentsEngine{
 			c:       c,
 			log:     logger,
@@ -885,9 +890,18 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		}
 		swap = fresh
 	} else {
+		// The reload failed, so a concurrent writer's state cannot be
+		// honored — but the deposit was broadcast and must be recorded.
+		// The local record still holds every field (including CreatedAt);
+		// persist it as DEPOSIT_SENT with the txid. Without this the record
+		// stays QUOTED with no txid, and a later timeout would report "no
+		// funds moved" for a deposit that did move.
 		eng.log.Errorf("Error reloading swap record %s after deposit: %v", swap.DepositAddress, err)
 		swap.State = IntentsStateDepositSent
 		swap.DepositTxID = coin.TxID()
+		if err := eng.db.StoreIntentsSwap(swap); err != nil {
+			eng.log.Errorf("Error storing swap record %s after deposit: %v", swap.DepositAddress, err)
+		}
 	}
 	eng.swapMtx.Unlock()
 	if err := eng.client.SubmitDeposit(ctx, swap.DepositAddress, swap.DepositTxID); err != nil {
@@ -940,6 +954,29 @@ func (c *Core) IntentsRefresh(ctx context.Context, depositAddress string) (*Inte
 // intentsReconstructProbeLimit caps, per wallet, how many recent outgoing
 // transactions are probed against the service during reconstruction.
 const intentsReconstructProbeLimit = 25
+
+// storeReconstructed persists a rebuilt swap record only when no record for
+// its deposit address already exists, and reports whether it stored one.
+// Reconstruction probes against a snapshot of known addresses taken at the
+// start of the run, so a swap created live in between could otherwise be
+// clobbered here — its signature-verified quote envelope replaced by the
+// non-verifiable status-endpoint copy, its CreatedAt reset, and a
+// concurrent state update regressed. A live record is authoritative over a
+// rebuilt one, so the existence check runs under swapMtx at store time.
+func (e *intentsEngine) storeReconstructed(swap *IntentsSwap) (stored bool, err error) {
+	e.swapMtx.Lock()
+	defer e.swapMtx.Unlock()
+	switch _, err := e.db.IntentsSwap(swap.DepositAddress); {
+	case err == nil:
+		return false, nil // already tracked; leave the live record intact
+	case !errors.Is(err, db.ErrIntentsSwapNotFound):
+		return false, err
+	}
+	if err := e.db.StoreIntentsSwap(swap); err != nil {
+		return false, err
+	}
+	return true, nil
+}
 
 // IntentsReconstruct rebuilds swap records lost with local state (e.g.
 // after a seed restore) by probing the service's status endpoint with the
@@ -1002,8 +1039,12 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 				eng.log.Warnf("Error reconstructing swap %s: %v", *tx.Recipient, err)
 				continue
 			}
-			if err := eng.db.StoreIntentsSwap(swap); err != nil {
+			stored, err := eng.storeReconstructed(swap)
+			if err != nil {
 				return found, err
+			}
+			if !stored {
+				continue // a live record for this address appeared mid-run
 			}
 			found++
 			c.notify(newIntentsSwapNote(swap, "Swap record recovered",
