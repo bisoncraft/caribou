@@ -110,6 +110,62 @@ func TestVerifyRejectsTampering(t *testing.T) {
 	}
 }
 
+// TestVerifyRejectsCaseVariantKey covers the signature-bypass class: an
+// attacker appends a case-variant of a signed key rather than mutating the
+// signed value. Because encoding/json decodes struct fields
+// case-insensitively (last duplicate wins) while the signed payload is built
+// from a case-sensitive map, the genuine signature still verifies but the
+// struct field the wallet acts on resolves to the injected value.
+func TestVerifyRejectsCaseVariantKey(t *testing.T) {
+	const attacker = "bc1qattackeraddressxxxxxxxxxxxxxxxxxxxxxx"
+
+	resp := new(QuoteResponse)
+	loadFixture(t, "quote-committed.json", resp)
+	if resp.Quote.DepositAddress == attacker {
+		t.Fatal("fixture already carries the attacker address")
+	}
+
+	// Append a case-variant sibling of "depositAddress" to the raw quote,
+	// leaving the genuine lowercase key (and thus the signed bytes) intact.
+	// It goes last so encoding/json's last-duplicate-wins hands the struct
+	// the injected value.
+	raw := string(resp.rawQuote)
+	if !strings.HasSuffix(raw, "}") {
+		t.Fatalf("unexpected raw quote shape: %.40s", raw)
+	}
+	tampered := raw[:len(raw)-1] + `,"DepositAddress":"` + attacker + `"}`
+
+	// The struct decode takes the injected value — this is the redirect the
+	// verification must prevent.
+	var q struct {
+		DepositAddress string `json:"depositAddress"`
+	}
+	if err := json.Unmarshal([]byte(tampered), &q); err != nil {
+		t.Fatalf("decoding tampered quote: %v", err)
+	}
+	if q.DepositAddress != attacker {
+		t.Fatalf("expected struct decode to take the injected address, got %q", q.DepositAddress)
+	}
+
+	// Verification must reject the response outright, even though the signed
+	// map (lowercase key only) is unchanged and the real signature is intact.
+	resp.rawQuote = json.RawMessage(tampered)
+	if err := VerifyQuoteSignature(resp, pinnedKey(t)); err == nil {
+		t.Fatal("case-variant deposit-address injection passed verification")
+	}
+}
+
+func TestRejectAmbiguousKeys(t *testing.T) {
+	clean := map[string]json.RawMessage{"depositAddress": nil, "amountOut": nil}
+	if err := rejectAmbiguousKeys(clean, "quote"); err != nil {
+		t.Fatalf("clean map rejected: %v", err)
+	}
+	collide := map[string]json.RawMessage{"depositAddress": nil, "DepositAddress": nil}
+	if err := rejectAmbiguousKeys(collide, "quote"); err == nil {
+		t.Fatal("case-colliding map accepted")
+	}
+}
+
 func TestIsFalsyJSON(t *testing.T) {
 	for raw, falsy := range map[string]bool{
 		`null`: true, `""`: true, `0`: true, `false`: true, ``: true,

@@ -66,6 +66,32 @@ func isFalsyJSON(raw json.RawMessage) bool {
 	return false
 }
 
+// rejectAmbiguousKeys guards against a signature bypass. The signed payload
+// is built below from a case-sensitive map keyed on exact field names, but
+// the QuoteResponse struct fields the wallet acts on — the deposit address
+// above all — are decoded by encoding/json case-insensitively, taking the
+// last of any duplicate. An active-path attacker can therefore append a
+// case-variant of a signed key (e.g. "DepositAddress" beside the genuine
+// "depositAddress"): the signed map is byte-unchanged so the real signature
+// still verifies, while the struct field resolves to the injected value and
+// the wallet sends the deposit to the attacker. (Renaming or exactly
+// duplicating a key instead breaks the signature and is caught by the
+// verify step; a case-variant sibling is the one divergence it cannot see.)
+// Any two keys equal under case folding make the two decodings able to
+// diverge, so such an object is rejected. Legitimate responses carry each
+// field once, so there are no false positives.
+func rejectAmbiguousKeys(m map[string]json.RawMessage, which string) error {
+	seen := make(map[string]string, len(m))
+	for k := range m {
+		lower := strings.ToLower(k)
+		if prev, dup := seen[lower]; dup {
+			return fmt.Errorf("ambiguous %s keys %q and %q differ only by case", which, prev, k)
+		}
+		seen[lower] = k
+	}
+	return nil
+}
+
 // signedPayload builds the canonical signed message for a quote response:
 // the stable-stringified payload's SHA-256 digest, base58-encoded. The
 // returned string's bytes are the Ed25519 message.
@@ -76,6 +102,12 @@ func signedPayload(r *QuoteResponse) (string, error) {
 	}
 	if err := json.Unmarshal(r.rawQuote, &quote); err != nil {
 		return "", fmt.Errorf("error decoding raw quote: %w", err)
+	}
+	if err := rejectAmbiguousKeys(req, "quote request"); err != nil {
+		return "", err
+	}
+	if err := rejectAmbiguousKeys(quote, "quote"); err != nil {
+		return "", err
 	}
 
 	payload := make(map[string]json.RawMessage)
