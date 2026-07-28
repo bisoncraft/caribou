@@ -70,7 +70,7 @@ chmod 755 "${BIN_BUILDPATH}"
 if [[ " ${TAGS} " == *" xmr "* || "${TAGS}" == "xmr" ]]; then
   XMR_LIB_DIR="${DEB_DIR}/usr/lib/caribou"
   mkdir -p "${XMR_LIB_DIR}"
-  cp "../../asset/xmr/lib/linux-${ARCH}/libwallet2_api_c.so" "${XMR_LIB_DIR}/"
+  cp "../../asset/xmr/lib/linux-${ARCH}/libmonero_wallet2_api_c.so" "${XMR_LIB_DIR}/"
 fi
 
 # Full control file specification -

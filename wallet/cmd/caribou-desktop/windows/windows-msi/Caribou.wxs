@@ -16,7 +16,7 @@
       <?endif ?>
       <?if $(var.XmrEnabled) = 1 ?>
       <Component Id="XmrLibrary" Guid="b7a3e1f4-5c82-4d19-9a6b-3e8f2d7c1a05">
-        <File Source="..\..\build\windows\libwallet2_api_c.dll" Checksum="yes" />
+        <File Source="..\..\build\windows\libmonero_wallet2_api_c.dll" Checksum="yes" />
       </Component>
       <?endif ?>
     </DirectoryRef>

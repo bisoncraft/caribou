@@ -47,9 +47,9 @@ RUN mkdir -p /tmp/winsdk && \
 # CGO LDFLAGS include -static, which makes the linker skip .dll.a files.
 RUN if [ "$XMR" = "1" ]; then \
         cd /src/wallet/asset/xmr/lib/windows-amd64 && \
-        gendef libwallet2_api_c.dll && \
-        x86_64-w64-mingw32-dlltool -d libwallet2_api_c.def \
-            -l libwallet2_api_c.a -D libwallet2_api_c.dll; \
+        gendef libmonero_wallet2_api_c.dll && \
+        x86_64-w64-mingw32-dlltool -d libmonero_wallet2_api_c.def \
+            -l libmonero_wallet2_api_c.a -D libmonero_wallet2_api_c.dll; \
     fi
 
 RUN mkdir -p /out
@@ -72,5 +72,5 @@ RUN cp /tmp/webview2/runtimes/win-x64/native/WebView2Loader.dll /out/ && \
     cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll /out/
 
 RUN if [ "$XMR" = "1" ]; then \
-        cp /src/wallet/asset/xmr/lib/windows-amd64/libwallet2_api_c.dll /out/; \
+        cp /src/wallet/asset/xmr/lib/windows-amd64/libmonero_wallet2_api_c.dll /out/; \
     fi
