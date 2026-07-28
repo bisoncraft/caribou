@@ -131,6 +131,17 @@ function formatConventional (atoms: number, decimals: number): string {
   return fmt.format(v)
 }
 
+// formatIntentsAmount displays an Intents-side base-unit amount string — the
+// string amount/fee fields (amountIn/amountOut, refundFee/withdrawFee,
+// refundedAmount) as returned by the service — using the asset's Intents-side
+// `decimals`. The numeric atoms* fields use atomDecimals with
+// formatConventional instead. Returns the raw string if it does not parse.
+function formatIntentsAmount (baseUnits: string, decimals: number): string {
+  const n = Number(baseUnits)
+  if (!Number.isFinite(n)) return baseUnits
+  return formatConventional(n, decimals)
+}
+
 // formatDuration renders a duration in seconds as a human-friendly string.
 function formatDuration (secs: number): string {
   if (secs <= 0) return t('a few minutes')
@@ -308,13 +319,13 @@ function FeeBreakdown ({ preview, originAsset, destAsset }: {
       {preview.refundFee && (
         <div className="d-flex justify-content-between fs12 py-1">
           <span className="grey">{t('Refund fee (if refund needed)')}</span>
-          <span>{preview.refundFee} {originAsset.symbol}</span>
+          <span>{formatIntentsAmount(preview.refundFee, originAsset.decimals)} {originAsset.symbol}</span>
         </div>
       )}
       {preview.withdrawFee && (
         <div className="d-flex justify-content-between fs12 py-1">
           <span className="grey">{t('Withdrawal fee')}</span>
-          <span>{preview.withdrawFee} {destAsset.symbol}</span>
+          <span>{formatIntentsAmount(preview.withdrawFee, destAsset.decimals)} {destAsset.symbol}</span>
         </div>
       )}
     </div>
@@ -353,10 +364,10 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
       >
         <div className="d-flex align-items-center flex-grow-1">
           {originAsset && <CoinLogo ticker={originAsset.symbol} className="mini-icon me-1" style={{ objectFit: 'contain' }} />}
-          <span className="fs13 demi me-1">{swap.amountIn} {originAsset?.symbol ?? String(swap.originAssetID)}</span>
+          <span className="fs13 demi me-1">{originAsset ? formatConventional(swap.atomsIn, originAsset.atomDecimals) : swap.amountIn} {originAsset?.symbol ?? String(swap.originAssetID)}</span>
           <span className="grey fs12 me-1">→</span>
           {destAsset && <CoinLogo ticker={destAsset.symbol} className="mini-icon me-1" style={{ objectFit: 'contain' }} />}
-          <span className="fs13 demi">{swap.amountOut} {destAsset?.symbol ?? String(swap.destAssetID)}</span>
+          <span className="fs13 demi">{destAsset ? formatConventional(swap.atomsOut, destAsset.atomDecimals) : swap.amountOut} {destAsset?.symbol ?? String(swap.destAssetID)}</span>
           {swap.reconstructed && (
             <span className="swap-recovered-badge ms-2 fs11">{t('recovered')}</span>
           )}
@@ -416,10 +427,10 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
               <span>{swap.refundReason}</span>
             </div>
           )}
-          {swap.refundedAmount && (
+          {swap.refundedAmount && originAsset && (
             <div className="d-flex justify-content-between fs12 py-1">
               <span className="grey">{t('Refunded amount')}</span>
-              <span>{swap.refundedAmount} {originAsset?.symbol}</span>
+              <span>{formatIntentsAmount(swap.refundedAmount, originAsset.decimals)} {originAsset.symbol}</span>
             </div>
           )}
           {swap.refundTxs && swap.refundTxs.length > 0 && (
@@ -538,13 +549,13 @@ function ConfirmSwap ({
           {preview.refundFee && (
             <div className="d-flex justify-content-between py-1">
               <span className="grey">{t('Refund fee')}</span>
-              <span>{preview.refundFee} {originAsset.symbol}</span>
+              <span>{formatIntentsAmount(preview.refundFee, originAsset.decimals)} {originAsset.symbol}</span>
             </div>
           )}
           {preview.withdrawFee && (
             <div className="d-flex justify-content-between py-1">
               <span className="grey">{t('Withdrawal fee')}</span>
-              <span>{preview.withdrawFee} {destAsset.symbol}</span>
+              <span>{formatIntentsAmount(preview.withdrawFee, destAsset.decimals)} {destAsset.symbol}</span>
             </div>
           )}
         </div>
@@ -747,8 +758,10 @@ export default function Swap () {
 
   // Confirm → execute. The previewed minimum output is echoed so the
   // server rejects a committed quote that pays less than the terms shown
-  // here; on any failure the preview is refreshed so a retry runs against
-  // current numbers.
+  // here. On failure, return to the form (not the confirm modal) with the
+  // error shown and a fresh preview requested, so a retry is a deliberate
+  // review-and-confirm against current numbers rather than a stray click on
+  // a modal that re-materializes when the refreshed quote arrives.
   const executeSwap = async () => {
     if (!originAsset || !destAsset || atomsIn <= 0 || submitting || !preview) return
     setSubmitting(true)
@@ -764,6 +777,7 @@ export default function Swap () {
     setSubmitting(false)
     if (!r.ok) {
       setExecErr(r.errMsg || r.msg || t('Swap failed. Please try again.'))
+      setStep('form')
       setPreviewNonce(n => n + 1)
       return
     }
@@ -1041,6 +1055,9 @@ export default function Swap () {
           )}
 
           <div className="flex-stretch-column px-3 pb-3">
+            {execErr && (
+              <div className="errcolor fs12 text-center mb-2">{execErr}</div>
+            )}
             <button
               type="button"
               className="feature"
