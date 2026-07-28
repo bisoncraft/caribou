@@ -186,13 +186,16 @@ func (c *Core) intentsEngine() (*intentsEngine, error) {
 func (e *intentsEngine) run(ctx context.Context) {
 	ticker := time.NewTicker(intentsPollInterval)
 	defer ticker.Stop()
-	if e.pollActive(ctx) == 0 {
+	// Park only on a successful load that found nothing active. A load
+	// error leaves the ticker running so the next tick retries — parking on
+	// a transient failure would strand genuinely active swaps.
+	if active, loaded := e.pollActive(ctx); loaded && active == 0 {
 		ticker.Stop()
 	}
 	for {
 		select {
 		case <-ticker.C:
-			if e.pollActive(ctx) == 0 {
+			if active, loaded := e.pollActive(ctx); loaded && active == 0 {
 				ticker.Stop()
 			}
 		case <-e.trigger:
@@ -214,23 +217,25 @@ func (e *intentsEngine) poke() {
 
 // pollActive refreshes all non-terminal swaps from the service and returns
 // the number of active swaps found, so the caller can park the poller when
-// none remain.
-func (e *intentsEngine) pollActive(ctx context.Context) (active int) {
+// none remain. loaded is false when the active set could not be read, so
+// the caller can keep polling rather than mistake the failure for an empty
+// set and park.
+func (e *intentsEngine) pollActive(ctx context.Context) (active int, loaded bool) {
 	swaps, err := e.db.ActiveIntentsSwaps()
 	if err != nil {
 		e.log.Errorf("Error loading active swap records: %v", err)
-		return 0
+		return 0, false
 	}
 	for _, swap := range swaps {
 		if ctx.Err() != nil {
-			return active
+			return active, true
 		}
 		active++
 		if err := e.refreshSwap(ctx, swap); err != nil {
 			e.log.Errorf("Error refreshing swap %s: %v", swap.DepositAddress, err)
 		}
 	}
-	return active
+	return active, true
 }
 
 // refreshSwap polls the service for one swap (the network call is made
@@ -814,6 +819,24 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		deadline = time.Now().Add(intentsDeadline(originAssetID))
 	}
 
+	// Resolve the deposit fee rate before persisting anything, so a
+	// fee-rate failure leaves no orphaned QUOTED record. Only UTXO wallets
+	// price a transaction to a specific rate; account-based wallets compute
+	// their own fees, so the rate is zeroed. A zero live estimate for a
+	// UTXO wallet means the send must not proceed with a made-up rate, and
+	// the rate is bounded like a plain send (ceiling, live-rate band, and
+	// mainnet USD cap) so a poisoned fee source cannot broadcast a runaway
+	// fee the user never sees.
+	var feeRate uint64
+	if originWallet.Info().BlockchainClass == asset.BlockchainClassUTXO {
+		if feeRate = originWallet.usableFeeRate(); feeRate == 0 {
+			return nil, fmt.Errorf("no live fee-rate estimate for %s deposit", unbip(originAssetID))
+		}
+		if err := c.validateSendFeeRate(originWallet, quote.DepositAddress, atoms, feeRate, false); err != nil {
+			return nil, fmt.Errorf("deposit fee rate rejected: %w", err)
+		}
+	}
+
 	swap := &IntentsSwap{
 		DepositAddress: quote.DepositAddress,
 		State:          IntentsStateQuoted,
@@ -837,19 +860,12 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, fmt.Errorf("error persisting swap record: %w", err)
 	}
 
-	// Match Core.Send's fee-rate convention: only UTXO wallets price a
-	// transaction to a specific rate, and a zero live estimate means the
-	// send must not proceed with a made-up rate. Account-based wallets
-	// compute their own fees, so the rate is zeroed.
-	var feeRate uint64
-	if originWallet.Info().BlockchainClass == asset.BlockchainClassUTXO {
-		if feeRate = originWallet.usableFeeRate(); feeRate == 0 {
-			return nil, fmt.Errorf("no live fee-rate estimate for %s deposit", unbip(originAssetID))
-		}
-	}
 	coin, err := originWallet.Wallet.Send(quote.DepositAddress, atoms, feeRate)
 	if err != nil {
-		// The record stays QUOTED and expires unfunded after the deadline.
+		// No funds moved. The QUOTED record expires unfunded; poke the
+		// poller so its deadline timeout runs even when the ticker was
+		// parked with no other active swap.
+		eng.poke()
 		return nil, fmt.Errorf("deposit send failed (no funds moved, quote will expire): %w", err)
 	}
 
@@ -910,6 +926,12 @@ func (c *Core) IntentsRefresh(ctx context.Context, depositAddress string) (*Inte
 	if !swap.Terminal() {
 		if err := eng.refreshSwap(ctx, swap); err != nil {
 			return nil, err
+		}
+		// refreshSwap persists any status change to its own reloaded copy;
+		// re-read so the caller receives the refreshed record rather than
+		// the pre-refresh one.
+		if swap, err = eng.db.IntentsSwap(depositAddress); err != nil {
+			return nil, fmt.Errorf("error reloading swap record for %s: %w", depositAddress, err)
 		}
 	}
 	return swap, nil
