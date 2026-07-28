@@ -284,9 +284,8 @@ No testnet exists; validate with small amounts on mainnet.
 
 - [ ] Verifier-native flows: deposits into `intents.near`, NEP-413-signed
   intent batches (`INTENTS` deposit/recipient types), enabling swaps from
-  verifier balances without an origin-chain transaction. Includes probing
-  whether `/submit-intent` accepts batches extended with a fee-transfer
-  leg.
+  verifier balances without an origin-chain transaction. Planned in full
+  in [near-intents-verifier-native-plan.md](near-intents-verifier-native-plan.md).
 - [ ] `FLEX_INPUT` / `ANY_INPUT` swap types where they fit the UX.
 - [ ] In-wallet automation of the BTC permissionless refund claim.
 - [ ] Treasury sweep tooling/runbook (scheduled conversion and withdrawal,
