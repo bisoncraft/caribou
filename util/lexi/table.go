@@ -167,9 +167,13 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 	for i := range setOpts {
 		setOpts[i](&opts)
 	}
-	d := &datum{v: vB, indexes: make([][]byte, 0, len(t.indexes))}
-
 	updateFunc := func(txn *badger.Txn) error {
+		// Built per attempt: Update retries this closure on badger.ErrConflict,
+		// and a datum hoisted out of it would accumulate one copy of every
+		// index entry per attempt, persisting a datum whose index list grows
+		// with the retry count.
+		d := &datum{v: vB, indexes: make([][]byte, 0, len(t.indexes))}
+
 		dbID, err := t.keyID(txn, kB, false)
 		if err != nil {
 			return convertError(err)
