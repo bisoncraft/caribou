@@ -75,9 +75,10 @@ wallet/android/app/src/main/jniLibs/*/libc++_shared.so
 
 # dnldd's local workflow files (notes, reviews, harness scripts) - not for commit
 CLAUDE.md
-reviews/
-scripts/
-notes/
+/reviews/
+/scripts/
+/notes/
+/design/
 
 # harness test wallet directories
 wallet/asset/btc/regtest/
