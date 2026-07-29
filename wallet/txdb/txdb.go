@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -436,7 +437,7 @@ func (db *TxDB) storeTxs(network uint32, wts []*WalletTransaction) error {
 func (db *TxDB) getTx(network uint32, id string) (*WalletTransaction, error) {
 	raw, err := db.txs.Get(txKey(network, id))
 	if err != nil {
-		if err == ErrKeyNotFound {
+		if errors.Is(err, ErrKeyNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -447,7 +448,7 @@ func (db *TxDB) getTx(network uint32, id string) (*WalletTransaction, error) {
 
 func (db *TxDB) removeTx(network uint32, id string) error {
 	err := db.txs.Delete(txKey(network, id))
-	if err == ErrKeyNotFound {
+	if errors.Is(err, ErrKeyNotFound) {
 		return nil
 	}
 	return err
@@ -462,7 +463,7 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 	if req.RefID != nil {
 		raw, err := db.txs.Get(txKey(network, *req.RefID))
 		if err != nil {
-			if err == ErrKeyNotFound {
+			if errors.Is(err, ErrKeyNotFound) {
 				return nil, ErrUnknownTx
 			}
 			return nil, err
@@ -522,7 +523,7 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 		k := txKey(network, *req.RefID)
 		raw, err := db.txs.Get(k)
 		if err != nil {
-			if err == ErrKeyNotFound {
+			if errors.Is(err, ErrKeyNotFound) {
 				return nil, ErrUnknownTx
 			}
 			return nil, err
@@ -599,7 +600,7 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 		}
 		raw, err := db.txs.Get(txKey(*req.RefNetwork, *req.RefID))
 		if err != nil {
-			if err == ErrKeyNotFound {
+			if errors.Is(err, ErrKeyNotFound) {
 				return nil, ErrUnknownTx
 			}
 			return nil, err

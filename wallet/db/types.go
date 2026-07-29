@@ -374,6 +374,9 @@ func decodeNotification_v0(pushes [][]byte) (*Notification, error) {
 	if len(pushes[3]) != 1 {
 		return nil, fmt.Errorf("decodeNotification_v0: severity push is supposed to be length 1. got %d", len(pushes[3]))
 	}
+	if len(pushes[4]) != 8 {
+		return nil, fmt.Errorf("decodeNotification_v0: timestamp push is supposed to be length 8. got %d", len(pushes[4]))
+	}
 
 	return &Notification{
 		NoteType:    string(pushes[0]),

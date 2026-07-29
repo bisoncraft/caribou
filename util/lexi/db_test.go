@@ -296,6 +296,43 @@ func TestDatum(t *testing.T) {
 	}
 }
 
+// TestDecodeDatumOversizedLengths asserts that a datum whose length prefixes
+// exceed the bytes actually present is rejected as an error.
+//
+// The lengths are read as varints straight off disk and then used to size
+// allocations, so an unbounded one is an out-of-range makeslice panic rather
+// than a decode error. Every caller of decodeDatum - Table.get, Iter.datum,
+// removeTableEntry - handles a decode error and none survives a panic, so the
+// difference is a returned error versus a downed process on a corrupt record.
+func TestDecodeDatumOversizedLengths(t *testing.T) {
+	// maxVarInt is 0xff followed by eight length bytes, i.e. the largest value
+	// wire.ReadVarInt will hand back.
+	maxVarInt := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+
+	for _, tt := range []struct {
+		name string
+		blob []byte
+	}{{
+		// version 0, index count = 2^64-1, nothing following it.
+		name: "index count",
+		blob: append([]byte{0x00}, maxVarInt...),
+	}, {
+		// version 0, one index, whose length is 2^64-1.
+		name: "index length",
+		blob: append([]byte{0x00, 0x01}, maxVarInt...),
+	}, {
+		// version 0, no indexes, value length 2^64-1.
+		name: "value length",
+		blob: append([]byte{0x00, 0x00}, maxVarInt...),
+	}} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := decodeDatum(tt.blob); err == nil {
+				t.Fatalf("no error decoding datum with oversized %s", tt.name)
+			}
+		})
+	}
+}
+
 // TestEmptyValue ensures a zero-length value survives the full table
 // round-trip: Set, Get, and iteration.
 func TestEmptyValue(t *testing.T) {
