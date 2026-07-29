@@ -20,20 +20,7 @@ import (
 	"github.com/decred/base58"
 )
 
-const (
-	tokenLastScannedSigKey = "lastScannedSignature"
-	walletTypeToken        = "token"
-)
-
-// tokenMetaTableName returns a meta table name scoped to this token's asset
-// ID. Token wallets share their parent network wallet's NetworkTxDB, whose
-// Table namespacing is per-network only; without an asset-scoped name here,
-// the native wallet and every token wallet on the same network (e.g. native
-// SOL, usdc.sol, usdt.sol) would collide on the same "meta" table and
-// overwrite each other's lastScannedSignature scan cursor.
-func tokenMetaTableName(assetID uint32) string {
-	return fmt.Sprintf("meta_token%d", assetID)
-}
+const walletTypeToken = "token"
 
 var _ asset.TokenMaster = (*Wallet)(nil)
 
@@ -138,7 +125,7 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, fmt.Errorf("parent wallet not connected")
 	}
 	if w.txDB != nil {
-		mt, err := w.txDB.Table(tokenMetaTableName(w.assetID))
+		mt, err := w.txDB.Table(metaTableName)
 		if err != nil {
 			return nil, fmt.Errorf("error opening meta table: %w", err)
 		}
@@ -575,7 +562,7 @@ func (w *TokenWallet) getLastScannedSignature() (string, error) {
 	if mt == nil {
 		return "", nil
 	}
-	b, err := mt.Get([]byte(tokenLastScannedSigKey))
+	b, err := mt.Get(metaKey(w.assetID, lastScannedSigField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -592,7 +579,7 @@ func (w *TokenWallet) setLastScannedSignature(sig string) error {
 	if mt == nil || sig == "" {
 		return nil
 	}
-	return mt.Set([]byte(tokenLastScannedSigKey), []byte(sig), true)
+	return mt.Set(metaKey(w.assetID, lastScannedSigField), []byte(sig), true)
 }
 
 // walletTransactionFromSPLRPC extracts a WalletTransaction from an SPL

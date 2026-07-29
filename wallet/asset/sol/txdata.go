@@ -13,12 +13,32 @@ import (
 )
 
 const (
-	metaTableName         = "meta"
-	lastScannedSigKey     = "lastScannedSignature"
-	beforeCursorKey       = "beforeCursor"
-	backfillUntilKey      = "backfillUntil"
-	rentExemptReserve0Key = "rentExemptReserve0"
+	// metaTableName is the single meta table for this network, shared by the
+	// native wallet and every token wallet on it. Per-asset state is separated
+	// by key (see metaKey) rather than by table: a table per token costs a write
+	// transaction on each wallet's Connect just to assert the table exists, and
+	// on the mobile engine that is an fsync apiece.
+	metaTableName = "meta"
+
+	// Meta field names. These are field names, not keys - every record is
+	// stored under metaKey, which scopes the field to one asset. Two assets
+	// storing the same field is normal (each token tracks its own scan cursor),
+	// so the asset scope is what keeps them from overwriting each other.
+	lastScannedSigField = "lastScannedSignature"
+	beforeCursorField   = "beforeCursor"
+	backfillUntilField  = "backfillUntil"
+	rentExemptField     = "rentExemptReserve0"
 )
+
+// metaKey is the meta-table key for one field of one asset: assetID(4) followed
+// by the field name. The native wallet scopes its fields under BipID, each token
+// under its own asset ID.
+func metaKey(assetID uint32, field string) []byte {
+	k := make([]byte, 4+len(field))
+	binary.BigEndian.PutUint32(k, assetID)
+	copy(k[4:], field)
+	return k
+}
 
 type solTxData struct {
 	LastValidBlockHeight uint64 `json:"lastValidBlockHeight,omitempty"`
@@ -43,7 +63,7 @@ func (w *Wallet) getLastScannedSignature() (string, error) {
 	if w.metaTable == nil {
 		return "", nil
 	}
-	b, err := w.metaTable.Get([]byte(lastScannedSigKey))
+	b, err := w.metaTable.Get(metaKey(BipID, lastScannedSigField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -57,14 +77,14 @@ func (w *Wallet) setLastScannedSignature(sig string) error {
 	if w.metaTable == nil || sig == "" {
 		return nil
 	}
-	return w.metaTable.Set([]byte(lastScannedSigKey), []byte(sig), true)
+	return w.metaTable.Set(metaKey(BipID, lastScannedSigField), []byte(sig), true)
 }
 
 func (w *Wallet) getBeforeCursor() (string, error) {
 	if w.metaTable == nil {
 		return "", nil
 	}
-	b, err := w.metaTable.Get([]byte(beforeCursorKey))
+	b, err := w.metaTable.Get(metaKey(BipID, beforeCursorField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -79,16 +99,16 @@ func (w *Wallet) setBeforeCursor(sig string) error {
 		return nil
 	}
 	if sig == "" {
-		return w.metaTable.Delete([]byte(beforeCursorKey))
+		return w.metaTable.Delete(metaKey(BipID, beforeCursorField))
 	}
-	return w.metaTable.Set([]byte(beforeCursorKey), []byte(sig), true)
+	return w.metaTable.Set(metaKey(BipID, beforeCursorField), []byte(sig), true)
 }
 
 func (w *Wallet) getBackfillUntil() (string, error) {
 	if w.metaTable == nil {
 		return "", nil
 	}
-	b, err := w.metaTable.Get([]byte(backfillUntilKey))
+	b, err := w.metaTable.Get(metaKey(BipID, backfillUntilField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -103,16 +123,16 @@ func (w *Wallet) setBackfillUntil(sig string) error {
 		return nil
 	}
 	if sig == "" {
-		return w.metaTable.Delete([]byte(backfillUntilKey))
+		return w.metaTable.Delete(metaKey(BipID, backfillUntilField))
 	}
-	return w.metaTable.Set([]byte(backfillUntilKey), []byte(sig), true)
+	return w.metaTable.Set(metaKey(BipID, backfillUntilField), []byte(sig), true)
 }
 
 func (w *Wallet) getCachedRentExemptReserve() (uint64, error) {
 	if w.metaTable == nil {
 		return 0, nil
 	}
-	b, err := w.metaTable.Get([]byte(rentExemptReserve0Key))
+	b, err := w.metaTable.Get(metaKey(BipID, rentExemptField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return 0, nil
 	}
@@ -131,5 +151,5 @@ func (w *Wallet) setCachedRentExemptReserve(v uint64) error {
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
-	return w.metaTable.Set([]byte(rentExemptReserve0Key), b, true)
+	return w.metaTable.Set(metaKey(BipID, rentExemptField), b, true)
 }
