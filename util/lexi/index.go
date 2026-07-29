@@ -197,6 +197,9 @@ type Iter struct {
 	txn     *badger.Txn
 	dbID    DBID
 	d       *datum
+	// k is the caller's key, set during table iteration where the key-map entry
+	// already carries it. Nil during index iteration, where K resolves it.
+	k []byte
 }
 
 // V gives access to the datum bytes. The byte slice passed to f is only valid
@@ -212,27 +215,31 @@ func (i *Iter) V(f func(vB []byte) error) error {
 
 // K is the key for the datum.
 func (i *Iter) K() ([]byte, error) {
+	if i.k != nil {
+		return CloneBytes(i.k), nil
+	}
 	item, err := i.txn.Get(PrefixedKey(IdToKeyPrefix, i.dbID[:]))
 	if err != nil {
 		return nil, err
 	}
-	return item.ValueCopy(nil)
+	kB, err := item.ValueCopy(nil)
+	if err != nil {
+		return nil, err
+	}
+	return UnqualifyKey(kB)
 }
 
 // Entry is the actual index entry when iterating an Index. When iterating a
-// Table, this method doesn't really have a use, so we'll just return the DBID.
+// Table it yields the primary key.
 func (i *Iter) Entry(f func(idxB []byte) error) error {
+	if !i.isIndex {
+		return f(i.k)
+	}
 	k := i.item.Key()
-	if i.isIndex {
-		if len(k) < PrefixSize+DBIDSize {
-			return fmt.Errorf("index entry too small. length = %d", len(k))
-		}
-		return f(k[PrefixSize : len(k)-DBIDSize])
+	if len(k) < PrefixSize+DBIDSize {
+		return fmt.Errorf("index entry too small. length = %d", len(k))
 	}
-	if len(k) < PrefixSize {
-		return fmt.Errorf("table key too small. length = %d", len(k))
-	}
-	return f(k[PrefixSize:])
+	return f(k[PrefixSize : len(k)-DBIDSize])
 }
 
 func (i *Iter) datum() (_ *datum, err error) {
@@ -258,11 +265,15 @@ func (i *Iter) Delete() error {
 // Iterate iterates the index, providing access to the index entry, datum, and
 // datum key via the Iter.
 func (idx *Index) Iterate(prefixI KV, f func(*Iter) error, iterOpts ...IterationOption) error {
-	return idx.iterate(idx.prefix, idx.table, idx.defaultIterationOptions, true, prefixI, f, iterOpts...)
+	return idx.iterate(idx.prefix[:], idx.table, idx.defaultIterationOptions, true, prefixI, f, iterOpts...)
 }
 
-// iterate iterates a table or index.
-func (db *DB) iterate(keyPfix keyPrefix, table *Table, io iteratorOpts, isIndex bool, prefixI KV, f func(*Iter) error, iterOpts ...IterationOption) error {
+// iterate iterates a table or index. base is the byte range the iteration is
+// confined to: an index's own prefix, or a table's key-map prefix. The caller's
+// prefix and seek are appended to it, so both are interpreted in the space that
+// range is ordered by - index-entry order for an index, user-key order for a
+// table.
+func (db *DB) iterate(base []byte, table *Table, io iteratorOpts, isIndex bool, prefixI KV, f func(*Iter) error, iterOpts ...IterationOption) error {
 	prefix, err := parseKV(prefixI)
 	if err != nil {
 		return err
@@ -278,33 +289,46 @@ func (db *DB) iterate(keyPfix keyPrefix, table *Table, io iteratorOpts, isIndex 
 	if io.update {
 		viewUpdate = db.Update
 	}
+	joined := func(b []byte) []byte {
+		k := make([]byte, len(base)+len(b))
+		copy(k, base)
+		copy(k[len(base):], b)
+		return k
+	}
 	var seek []byte
 	if len(io.seek) > 0 {
-		seek = PrefixedKey(keyPfix, io.seek)
+		seek = joined(io.seek)
 	}
 	return viewUpdate(func(txn *badger.Txn) error {
-		return iterFunc(txn, PrefixedKey(keyPfix, prefix), seek, func(iter *badger.Iterator) error {
+		return iterFunc(txn, joined(prefix), seek, func(iter *badger.Iterator) error {
 			item := iter.Item()
 			k := item.Key()
 
-			var dbID DBID
+			it := &Iter{
+				isIndex: isIndex,
+				table:   table,
+				item:    item,
+				txn:     txn,
+			}
 			if isIndex {
 				if len(k) < PrefixSize+DBIDSize {
 					return fmt.Errorf("invalid index entry length %d", len(k))
 				}
-				dbID = newDBIDFromBytes(k[len(k)-DBIDSize:])
-			} else {
-				if len(k) != PrefixSize+DBIDSize {
-					return fmt.Errorf("invalid table key length %d", len(k))
-				}
-				copy(dbID[:], k[PrefixSize:])
+				it.dbID = newDBIDFromBytes(k[len(k)-DBIDSize:])
+				return f(it)
 			}
-			return f(&Iter{
-				isIndex: isIndex,
-				table:   table,
-				item:    iter.Item(),
-				txn:     txn,
-				dbID:    dbID,
+			// Table iteration: the entry is a key-map row, so the key past the
+			// base is the caller's key and the value is its DBID.
+			if len(k) <= len(base) {
+				return fmt.Errorf("invalid table key-map entry length %d", len(k))
+			}
+			it.k = k[len(base):]
+			return item.Value(func(v []byte) error {
+				if len(v) != DBIDSize {
+					return fmt.Errorf("invalid DBID length %d", len(v))
+				}
+				it.dbID = newDBIDFromBytes(v)
+				return f(it)
 			})
 		})
 	})

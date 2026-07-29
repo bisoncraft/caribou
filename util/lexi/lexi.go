@@ -244,19 +244,28 @@ func (db *DB) nextID() (dbID DBID, _ error) {
 	return
 }
 
-// KeyID returns the DBID for the key. This is the same DBID that will be used
-// internally for the key when datum is inserted into a Table with Set. This
-// method is provided as a tool to keep database index entries short.
-func (db *DB) KeyID(kB []byte) (dbID DBID, err error) {
-	err = db.View(func(txn *badger.Txn) error {
-		dbID, err = db.keyID(txn, kB, true)
+// KeyID returns the DBID for the key within this Table. This is the same DBID
+// that will be used internally for the key when a datum is inserted with Set.
+// This method is provided as a tool to keep database index entries short.
+func (t *Table) KeyID(kB []byte) (dbID DBID, err error) {
+	err = t.View(func(txn *badger.Txn) error {
+		dbID, err = t.keyID(txn, t.prefix, kB, true)
 		return err
 	})
 	return
 }
 
-func (db *DB) keyID(txn *badger.Txn, kB []byte, readOnly bool) (dbID DBID, err error) {
-	item, err := txn.Get(PrefixedKey(keyToIDPrefix, kB))
+// keyID resolves a table-scoped key to its DBID, assigning one if the key is
+// new and readOnly is false.
+//
+// Both maps are keyed by the table-qualified key rather than the bare user key.
+// A DBID identifies a row in one table, so the mapping has to be per-table:
+// with a flat key space two tables holding the same user key share a DBID, and
+// deleting the key from one table tears down the mapping the other still
+// depends on, orphaning its row.
+func (db *DB) keyID(txn *badger.Txn, tPrefix keyPrefix, kB []byte, readOnly bool) (dbID DBID, err error) {
+	tableKey := PrefixedKey(tPrefix, kB)
+	item, err := txn.Get(PrefixedKey(keyToIDPrefix, tableKey))
 	if err == nil {
 		err = item.Value(func(v []byte) error {
 			copy(dbID[:], v)
@@ -268,17 +277,29 @@ func (db *DB) keyID(txn *badger.Txn, kB []byte, readOnly bool) (dbID DBID, err e
 		if dbID, err = db.nextID(); err != nil {
 			return
 		}
-		if err = txn.Set(PrefixedKey(keyToIDPrefix, kB), dbID[:]); err != nil {
+		// The reverse map stores the qualified key too, so deleteDBID can
+		// reconstruct the forward key from the DBID alone. Iter.K strips the
+		// table prefix back off.
+		if err = txn.Set(PrefixedKey(keyToIDPrefix, tableKey), dbID[:]); err != nil {
 			err = fmt.Errorf("error mapping key to ID: %w", err)
-		} else if err = txn.Set(PrefixedKey(IdToKeyPrefix, dbID[:]), kB); err != nil {
+		} else if err = txn.Set(PrefixedKey(IdToKeyPrefix, dbID[:]), tableKey); err != nil {
 			err = fmt.Errorf("error mapping ID to key: %w", err)
 		}
 	}
 	return
 }
 
+// tableKeyMapPrefix is the range under which one table's key→DBID entries live.
+// Because the entries below it are ordered by user key, it is what Table.Iterate
+// walks to get key-ordered iteration with working prefix and seek.
+func tableKeyMapPrefix(tPrefix keyPrefix) []byte {
+	return PrefixedKey(keyToIDPrefix, tPrefix[:])
+}
+
 // deleteDBID deletes the id-to-key mapping and the key-to-id mapping for the
-// DBID.
+// DBID. The value under IdToKeyPrefix is the table-qualified key, which is
+// exactly the key the forward map is stored under, so the forward entry can be
+// removed without the caller passing the table prefix back in.
 func (db *DB) deleteDBID(txn *badger.Txn, dbID DBID) error {
 	idK := PrefixedKey(IdToKeyPrefix, dbID[:])
 	item, err := txn.Get(idK)

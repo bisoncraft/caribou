@@ -76,7 +76,7 @@ func TestSetDatumIsPerAttempt(t *testing.T) {
 
 	var d *datum
 	if err := db.View(func(txn *badger.Txn) error {
-		dbID, err := tbl.keyID(txn, k, true)
+		dbID, err := tbl.keyID(txn, tbl.prefix, k, true)
 		if err != nil {
 			return err
 		}
