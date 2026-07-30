@@ -39,6 +39,14 @@ const (
 	KeySize = 32
 	// SaltSize is the size of the argon2id salt.
 	SaltSize = 16
+	// maxTime and maxMem are the largest argon2id parameters we will accept when
+	// deserializing. Key derivation runs before the password can be verified, so
+	// out-of-range parameters from a corrupt record would otherwise hang the app
+	// (time) or attempt an oversized allocation (memory). newArgonPolyCrypter is
+	// the only writer and always uses the defaults above, so these only need
+	// enough slack to tolerate a future increase of those defaults.
+	maxTime = 4 * defaultTime
+	maxMem  = 2 * defaultMem // 128 MiB, in KiB
 )
 
 // Big-endian encoder.
@@ -213,6 +221,14 @@ func decodeArgonPoly_v0(pw []byte, pushes [][]byte) (*argonPolyCrypter, error) {
 	var salt Salt
 	copy(salt[:], saltB)
 
+	if len(timeB) != 4 {
+		return nil, fmt.Errorf("time parameter encoding length is incorrect. expected 4, got %d", len(timeB))
+	}
+
+	if len(memB) != 4 {
+		return nil, fmt.Errorf("memory parameter encoding length is incorrect. expected 4, got %d", len(memB))
+	}
+
 	if len(threadsB) != 1 {
 		return nil, fmt.Errorf("threads parameter encoding length is incorrect. expected 1, got %d", len(threadsB))
 	}
@@ -228,6 +244,19 @@ func decodeArgonPoly_v0(pw []byte, pushes [][]byte) (*argonPolyCrypter, error) {
 		time:    intCoder.Uint32(timeB),
 		memory:  intCoder.Uint32(memB),
 		threads: threadsB[0],
+	}
+	// argon2.IDKey panics on a zero time or threads parameter, runs time passes
+	// over the whole buffer, and allocates memory KiB eagerly, all before the
+	// HMAC below can reject a bad password. The parameters must be rejected here
+	// rather than passed through.
+	if params.time < 1 || params.time > maxTime {
+		return nil, fmt.Errorf("time parameter %d out of range [1, %d]", params.time, maxTime)
+	}
+	if params.threads < 1 {
+		return nil, fmt.Errorf("threads parameter must be at least 1")
+	}
+	if params.memory > maxMem {
+		return nil, fmt.Errorf("memory parameter %d exceeds the maximum of %d", params.memory, maxMem)
 	}
 	c := &argonPolyCrypter{
 		salt:   salt,
