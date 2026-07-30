@@ -42,11 +42,12 @@ const (
 	// TopicIntentsSwapUpdate is emitted whenever a swap record changes.
 	TopicIntentsSwapUpdate Topic = "intentsswapupdate"
 
-	// intentsFeeRecipient is the treasury account identity credited by the
-	// service's appFees mechanism (an 0x-style secp256k1 identity inside
-	// intents.near whose withdrawals are ERC-191-signed). Empty disables
-	// the application fee; set at release. The key itself lives entirely
-	// outside the repo.
+	// intentsFeeRecipient is the identity of Bisoncraft's fee-collection
+	// account inside the intents.near verifier, credited by the service's
+	// appFees mechanism. The identity is an Ethereum-style address derived
+	// from the offline fee-account key, whose ERC-191 signatures authorize
+	// withdrawals; the key itself lives entirely outside the repo. Empty
+	// disables the application fee.
 	intentsFeeRecipient = "0x4bda081527f14e5ecb9a2fd7703759897c2860a6"
 
 	// intentsDefaultSlippageBps is the default quote slippage tolerance.

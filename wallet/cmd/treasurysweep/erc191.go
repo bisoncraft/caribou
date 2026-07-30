@@ -52,7 +52,7 @@ func recoverIdentity(payload []byte, sigStr string) (string, error) {
 	return strings.ToLower(crypto.PubkeyToAddress(*pub).Hex()), nil
 }
 
-// parseIdentity validates an 0x-style treasury identity and returns it
+// parseIdentity validates an 0x-style fee-account identity and returns it
 // lowercased (a NEAR account ID cannot contain uppercase).
 func parseIdentity(s string) (string, error) {
 	s = strings.TrimSpace(s)
@@ -74,7 +74,7 @@ func parseIdentity(s string) (string, error) {
 // terminal it prompts, so an interactive run does not appear to hang.
 func readPrivKey() (*ecdsa.PrivateKey, error) {
 	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-		fmt.Fprint(os.Stderr, "Enter the treasury private key (hex) and press Enter: ")
+		fmt.Fprint(os.Stderr, "Enter the fee-account private key (hex) and press Enter: ")
 	}
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if strings.TrimSpace(line) == "" {

@@ -105,7 +105,7 @@ func TestSignRoundTrip(t *testing.T) {
 		t.Fatalf("signPayload (other): %v", err)
 	}
 	if rec, _ := recoverIdentity(payload, otherSig); rec == identity {
-		t.Fatal("foreign key recovered to the treasury identity")
+		t.Fatal("foreign key recovered to the fee-account identity")
 	}
 }
 

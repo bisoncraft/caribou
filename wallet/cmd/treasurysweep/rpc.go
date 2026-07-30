@@ -126,12 +126,12 @@ func currentSalt(rpcOverride string) (string, error) {
 // balanceBatchSize bounds token IDs per mt_batch_balance_of view call.
 const balanceBatchSize = 64
 
-// cmdBalances lists the treasury's nonzero NEP-245 balances inside the
+// cmdBalances lists the fee account's nonzero NEP-245 balances inside the
 // verifier, resolving token IDs, symbols, and decimals from the live
 // 1Click catalog.
 func cmdBalances(args []string) error {
 	fs := flag.NewFlagSet("balances", flag.ContinueOnError)
-	treasury := fs.String("treasury", "", "treasury identity (0x...)")
+	treasury := fs.String("treasury", "", "fee-account identity (0x...)")
 	rpcURL := fs.String("rpc", "", "NEAR RPC endpoint override")
 	if err := fs.Parse(args); err != nil {
 		return err

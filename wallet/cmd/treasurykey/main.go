@@ -1,8 +1,9 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-// Command treasurykey generates and validates the secp256k1 keypair used
-// as the NEAR Intents fee treasury.
+// Command treasurykey generates and validates the fee-account keypair —
+// the "treasury" of the command name is Bisoncraft's fee-collection
+// account inside the NEAR Intents verifier contract, intents.near.
 //
 // NEAR Intents derives an account identity from a public key with no
 // on-chain registration: a secp256k1 key yields a 0x-style identity — the
@@ -14,7 +15,7 @@
 //
 // The private key must never be committed or stored in the repository.
 // This tool prints it once, for the operator to move to cold storage;
-// run it on an air-gapped machine for a production treasury key.
+// run it on an air-gapped machine for a production fee-account key.
 //
 // Subcommands:
 //
@@ -70,7 +71,12 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `treasurykey — generate and validate the NEAR Intents fee treasury key
+	fmt.Fprint(os.Stderr, `treasurykey — generate and validate the NEAR Intents fee-account key
+
+The "treasury" of the command name is Bisoncraft's fee-collection account
+inside the intents.near verifier. Its identity is an Ethereum-style
+address derived from the keypair; the private key authorizes withdrawals
+from the account and never appears in the repository or configuration.
 
 Usage:
   treasurykey gen                generate a new keypair; print the private key and identity
@@ -89,11 +95,11 @@ production key on an air-gapped machine and store the printed key offline.
 `)
 }
 
-// identities prints the two forms of a treasury identity: the lowercase
+// identities prints the two forms of a fee-account identity: the lowercase
 // form used as the configured recipient (a NEAR account ID cannot contain
 // uppercase), and the EIP-55 checksummed form for visual verification.
 func identities(addr common.Address) {
-	fmt.Printf("Treasury identity (config value, appFees recipient):\n  %s\n", strings.ToLower(addr.Hex()))
+	fmt.Printf("Fee-account identity (config value, appFees recipient):\n  %s\n", strings.ToLower(addr.Hex()))
 	fmt.Printf("Checksummed form (for visual verification only):\n  %s\n", addr.Hex())
 }
 
@@ -104,7 +110,7 @@ func cmdGen() error {
 	}
 	addr := crypto.PubkeyToAddress(priv.PublicKey)
 
-	fmt.Println("=== NEAR Intents fee treasury key ===")
+	fmt.Println("=== NEAR Intents fee-account key ===")
 	fmt.Println()
 	fmt.Println("PRIVATE KEY — store offline, never commit or paste into config:")
 	fmt.Printf("  %s\n", hex.EncodeToString(crypto.FromECDSA(priv)))

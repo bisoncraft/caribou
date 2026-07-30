@@ -125,7 +125,7 @@ func TestQuoteAppFeeInjectionAndVerification(t *testing.T) {
 		}
 	})
 
-	fees := []AppFee{{Recipient: "0xtreasury", Fee: 10}}
+	fees := []AppFee{{Recipient: "0xfeeaccount", Fee: 10}}
 	c := newTestClient(t, srv.URL, pub, fees)
 
 	resp, err := c.Quote(context.Background(), testQuoteRequest())

@@ -294,7 +294,8 @@ function CustodyNotice ({ originAsset, destAsset, showDetails, onToggleDetails }
 // The app fee is split by the service: our configured recipient gets one
 // entry; the protocol surcharge goes to a separate account. We show both.
 function friendlyFeeName (recipient: string, index: number): string {
-  // If the fee recipient is the configured treasury, call it "Caribou fee".
+  // If the fee recipient is the configured fee-collection account, call it
+  // "Caribou fee".
   // Otherwise it's the protocol's collection account (the keyless surcharge).
   // We distinguish by position: index 0 is the app fee, subsequent entries
   // are the service's injected surcharge.

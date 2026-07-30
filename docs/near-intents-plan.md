@@ -2,7 +2,8 @@
 
 Cross-chain swaps through [NEAR Intents](https://docs.near-intents.org/)
 via the 1Click API, plus the NEAR wallet hardening that supports it. The
-build-out (wallet hardening, API client, swap engine, UI, treasury tooling)
+build-out (wallet hardening, API client, swap engine, UI, fee-account
+tooling)
 is complete; live mainnet validation remains. A follow-on design for
 verifier-native swaps is planned separately in
 [near-intents-verifier-native-plan.md](near-intents-verifier-native-plan.md).
@@ -43,15 +44,17 @@ core-level feature rather than a NEAR-wallet feature.
   UI an exact, displayable fee breakdown. Fees accrue in the traded token
   as NEP-245 balances credited to the recipient identity inside
   `intents.near`.
-- **Treasury: 0x-style secp256k1 account.** The verifier derives account
+- **Fee account: 0x-style secp256k1 account.** Bisoncraft's
+  fee-collection account inside the verifier, called the treasury in the
+  tool names. The verifier derives account
   identities from public keys with no registration; an ECDSA key yields an
   0x-style identity whose withdrawals are signed with ERC-191. The key
   lives entirely outside the repo; only the derived identity string
   appears in configuration (`intentsFeeRecipient`, empty until release).
   Accrued fees are swept periodically in bulk, paying bridge costs once
-  per sweep; sweep cadence bounds the treasury's exposure to verifier and
+  per sweep; sweep cadence bounds the accrued fees' exposure to verifier and
   bridge custody risk. Any funded NEAR account can submit a sweep —
-  authorization comes from the treasury key's signature, not the
+  authorization comes from the fee-account key's signature, not the
   submitter.
 - **Chain set: runtime intersection.** Eligible pairs are computed from
   the user's enabled wallets intersected with the live `GET /v0/tokens`
@@ -140,7 +143,7 @@ core-level feature rather than a NEAR-wallet feature.
   persistent notice, data-driven per-chain bridge-trust popover).
   `IntentsAsset.atomDecimals` carries the wallet atomic-unit exponent,
   distinct from the Intents catalog decimals (e.g. NEAR 8 vs 24).
-- **Treasury tooling** (`wallet/cmd/treasurykey`,
+- **Fee-account tooling** (`wallet/cmd/treasurykey`,
   `wallet/cmd/treasurysweep`): key generation/validation, and verifier
   withdrawals (balances → build → sign → simulate) with ERC-191 signing
   validated against the deployed contract. Keys are read only from stdin;
@@ -152,7 +155,7 @@ core-level feature rather than a NEAR-wallet feature.
 - [ ] End-to-end swaps across representative pairs (UTXO→account,
   account→UTXO, token→native, NEAR-origin).
 - [ ] `appFees` net receipt: confirm the 50% split, the fee's token
-  denomination, and its NEP-245 form at the treasury identity.
+  denomination, and its NEP-245 form at the fee-account identity.
 - [ ] Realized fill vs. quoted `amountOut`: if fills cluster at the
   `minAmountOut` floor rather than the quote, slippage tolerance is a
   per-swap price concession and the default (100 bps) should tighten.
@@ -162,7 +165,7 @@ core-level feature rather than a NEAR-wallet feature.
 - [ ] `FAILED` terminal status semantics (undocumented) and whether funds
   are recoverable from it.
 - [ ] Deadline override behavior per chain.
-- [ ] Treasury sweep rehearsal with accrued fees: per-bridge
+- [ ] Fee-sweep rehearsal with accrued fees: per-bridge
   external-withdrawal conventions (`WITHDRAW_TO` is the PoA-factory form;
   Omni may differ) and a funded withdrawal end to end.
 - [ ] Compliance-screening failure modes: behavior for funds already at a
@@ -181,7 +184,7 @@ core-level feature rather than a NEAR-wallet feature.
   input cap.
 - [ ] `FLEX_INPUT` / `ANY_INPUT` swap types where they fit the UX.
 - [ ] In-wallet automation of the BTC permissionless refund claim.
-- [ ] Treasury sweep runbook (scheduled conversion and withdrawal, e.g. to
+- [ ] Fee-sweep runbook (scheduled conversion and withdrawal, e.g. to
   USDC on Polygon).
 - [ ] README/site principles carve-out describing third-party in-transit
   services.

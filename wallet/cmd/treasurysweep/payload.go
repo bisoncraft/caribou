@@ -31,8 +31,8 @@ type ftWithdrawIntent struct {
 	Memo       string `json:"memo,omitempty"`
 }
 
-// sweepPayload is the DefusePayload the treasury signs. The JSON encoding
-// of this struct is the exact byte string covered by the ERC-191
+// sweepPayload is the DefusePayload the fee-account key signs. The JSON
+// encoding of this struct is the exact byte string covered by the ERC-191
 // signature; the verifier recovers the signer from the signature and
 // requires it to match SignerID.
 type sweepPayload struct {
@@ -75,7 +75,7 @@ func buildNonce(saltHex string) (string, error) {
 // cmdBuild constructs the unsigned withdrawal payload string.
 func cmdBuild(args []string) error {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
-	treasury := fs.String("treasury", "", "treasury identity (0x...)")
+	treasury := fs.String("treasury", "", "fee-account identity (0x...)")
 	token := fs.String("token", "", "verifier token ID to withdraw (nep141:<contract>)")
 	amount := fs.String("amount", "", "amount in the token's base units")
 	receiver := fs.String("receiver", "", "receiving NEAR account, or the token contract for a bridged external withdrawal")

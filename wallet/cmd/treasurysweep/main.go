@@ -2,27 +2,28 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 // Command treasurysweep builds, signs, and simulates NEAR Intents verifier
-// withdrawals for the fee treasury.
+// withdrawals — the "treasury" of the command name is Bisoncraft's
+// fee-collection account inside the verifier contract, intents.near.
 //
 // Application fees accrue as NEP-245 multi-token balances credited to the
-// treasury identity (an 0x-style secp256k1 account) inside the verifier
-// contract, intents.near. Withdrawing them requires an intent signed by the
-// treasury key under ERC-191 and submitted to the verifier's
+// fee account's identity, an Ethereum-style address derived from the
+// offline fee-account key. Withdrawing them requires an intent signed by
+// that key under ERC-191 and submitted to the verifier's
 // execute_intents method by any funded NEAR account — the submitter only
 // pays gas; authorization comes entirely from the signature.
 //
 // Subcommands:
 //
-//	balances   list the treasury's nonzero verifier balances
+//	balances   list the fee account's nonzero verifier balances
 //	build      construct an unsigned ft_withdraw payload
-//	sign       sign a payload with the treasury key (offline-capable)
+//	sign       sign a payload with the fee-account key (offline-capable)
 //	simulate   dry-run a signed payload against the verifier
 //
 // A typical sweep is balances → build → sign → simulate → submit. The
 // build step needs the network (it fetches the verifier's current nonce
 // salt) unless --salt is given, and sign is fully offline, so the two can
 // run on different machines: build the payload online, carry it to the
-// air-gapped machine holding the treasury key, sign there, and carry the
+// air-gapped machine holding the fee-account key, sign there, and carry the
 // signed artifact back. The private key is only ever read from standard
 // input, never from an argument or file flag, so it is not recorded in
 // shell history or the process list.
@@ -68,11 +69,15 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `treasurysweep — build, sign, and simulate NEAR Intents treasury withdrawals
+	fmt.Fprint(os.Stderr, `treasurysweep — build, sign, and simulate NEAR Intents fee-account withdrawals
+
+The "treasury" of the command name is Bisoncraft's fee-collection account
+inside the intents.near verifier; --treasury takes that account's
+identity, an Ethereum-style address.
 
 Usage:
   treasurysweep balances --treasury <0x identity> [--rpc URL]
-      List the treasury's nonzero NEP-245 balances inside intents.near,
+      List the fee account's nonzero NEP-245 balances inside intents.near,
       resolved against the live 1Click asset catalog.
 
   treasurysweep build --treasury <0x identity> --token <nep141:...>
@@ -87,7 +92,7 @@ Usage:
       so simulate before submitting an external withdrawal.
 
   treasurysweep sign --payload <file> [--out <file>]
-      Sign the payload with the treasury private key, read from stdin,
+      Sign the payload with the fee-account private key, read from stdin,
       and write the execute_intents argument JSON. Runs fully offline.
       The recovered signer is checked against the payload's signer_id.
 

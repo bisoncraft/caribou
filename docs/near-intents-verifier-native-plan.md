@@ -24,15 +24,17 @@ seed-derived identity, requests quotes from market makers itself, signs
   in both modes. The only fully bridge-free case is NEAR-native ↔
   NEAR-native.
 - **Full fee capture.** The application fee becomes a transfer intent to
-  the treasury inside the same signed batch, executed atomically with the
-  swap: 100% of the fee, versus the 50% protocol split under `appFees`,
+  Bisoncraft's fee account inside the same signed batch, executed
+  atomically with the swap: 100% of the fee, versus the 50% protocol
+  split under `appFees`,
   and no 10 bps keyless surcharge priced into the user's quote. The
   surcharge and the split are both 1Click-layer constructs; the verifier
   contract's own protocol fee (`fee()`, applied to `token_diff`) measures
   1 pip = 0.01 bp on mainnet as of 2026-07 — economically nil, though it
   is a governance-settable knob and worth re-checking periodically. The
-  treasury accrues the same NEP-245 balances in the same account, so the
-  existing sweep tooling (`wallet/cmd/treasurysweep`) applies unchanged.
+  fee account accrues the same NEP-245 balances under the same identity,
+  so the existing sweep tooling (`wallet/cmd/treasurysweep`) applies
+  unchanged.
 - **Direct quotes.** RFQ against the solver bus rather than 1Click's
   re-priced aggregation. Whether direct pricing is better at retail size
   is an empirical question (see risks).
@@ -64,9 +66,9 @@ funds can rest in the verifier and swaps become near-instant.
   unused) or raw ed25519. Implicit accounts need no registration with
   the verifier. This preserves the invariant that every value-bearing
   endpoint is recoverable from the seed.
-- The treasury keeps its 0x-style secp256k1 identity and ERC-191
-  signing; the fee leg is a user-signed transfer *to* the treasury, so
-  no treasury key is involved in swaps.
+- The fee account keeps its 0x-style secp256k1 identity and ERC-191
+  signing; the fee leg is a user-signed transfer *to* the fee account,
+  so the fee-account key is not involved in swaps.
 - Wire formats (DefusePayload, MultiPayload, salted nonces, intent
   serialization) are already implemented and mainnet-validated in
   `wallet/cmd/treasurysweep`. That code moves to a shared package —
@@ -120,7 +122,7 @@ behind small interfaces so bridge conventions stay data, not code paths.
 - [ ] Bridge deposit-address derivation and crediting semantics for the
   top chains (Omni: BTC, SOL, ETH; PoA: LTC, DOGE, XRP), plus
   per-bridge withdrawal conventions (shared research item with the
-  treasury-sweep rehearsal).
+  fee-sweep rehearsal).
 
 ### Phase B — shared verifier package
 
@@ -134,7 +136,7 @@ behind small interfaces so bridge conventions stay data, not code paths.
 
 - [ ] Deposits and withdrawals for NEAR and on-NEAR NEP-141s (no
   bridges); engine states; auto-withdraw on settle.
-- [ ] Fee transfer leg live, treasury accrual verified via sweep
+- [ ] Fee transfer leg live, fee-account accrual verified via sweep
   tooling.
 - [ ] UI behind a development flag; swap review screen shows the exact
   signed amounts (the `token_diff` is the price commitment — nothing is
