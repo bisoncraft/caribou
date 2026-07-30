@@ -485,3 +485,68 @@ func TestWsConn(t *testing.T) {
 		t.Error("read source should have been closed")
 	}
 }
+
+// TestReadOverflowBounded asserts that a MessageSource receiver that stops
+// draining cannot make the read loop retain messages without limit. The
+// overflow buffer exists only so a full readCh cannot stall ping handling; if
+// it grew forever, a stalled consumer would turn every inbound notification
+// into retained memory for as long as the server keeps talking. Dropping the
+// connection is the backpressure signal instead.
+func TestReadOverflowBounded(t *testing.T) {
+	ctx := t.Context()
+
+	// A server that pushes notifications for as long as the client will take
+	// them, and never reads. It stops only when the client hangs up.
+	upgrader := websocket.Upgrader{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer c.Close()
+		note, _ := msgjson.NewNotification("spam", "payload")
+		for {
+			if err := c.WriteJSON(note); err != nil {
+				return // client hung up, which is the expected outcome
+			}
+		}
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	server := &http.Server{Handler: mux}
+	defer server.Shutdown(context.Background())
+	go server.Serve(ln)
+
+	conn, err := NewWsConn(&WsCfg{
+		URL:      "ws://" + ln.Addr().String() + "/ws",
+		PingWait: time.Minute, // long, so only the overflow cap can end this
+		Logger:   tLogger,
+		// Keep the connection down once it drops so the assertion below is
+		// not racing a reconnect.
+		DisableAutoReconnect: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWsConn: %v", err)
+	}
+	cm := util.NewConnectionMaster(conn)
+	if err := cm.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer cm.Disconnect()
+
+	// Deliberately never receive on conn.MessageSource(). The read loop must
+	// give up rather than buffer the server's output indefinitely.
+	deadline := time.Now().Add(15 * time.Second)
+	for !conn.IsDown() {
+		if time.Now().After(deadline) {
+			t.Fatal("connection stayed up while buffering an unbounded backlog for a stalled consumer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

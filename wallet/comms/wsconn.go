@@ -40,6 +40,14 @@ const (
 	// DefaultResponseTimeout is the default timeout for responses after a
 	// request is successfully sent.
 	DefaultResponseTimeout = time.Minute
+
+	// maxReadOverflow bounds the read loop's overflow buffer. The buffer exists
+	// so a full readCh cannot stall ping handling, but it must not grow without
+	// limit: a MessageSource receiver that stops draining would otherwise turn
+	// every inbound message into retained memory. A consumer this far behind is
+	// not catching up, so the connection is dropped instead, which applies
+	// backpressure and lets ReconnectSync resync on reconnect.
+	maxReadOverflow = 1024
 )
 
 // ConnectionStatus represents the current status of the websocket connection.
@@ -491,6 +499,10 @@ func (conn *wsConn) read(ctx context.Context) {
 			overflow = append(overflow, msg)
 			conn.log.Warnf("Read channel full, message buffered (overflow size: %d). "+
 				"Consumer may be too slow.", len(overflow))
+			if len(overflow) >= maxReadOverflow {
+				conn.handleReadError(fmt.Errorf("message source consumer stalled with %d messages buffered", len(overflow)))
+				return
+			}
 		}
 
 		err = ws.SetReadDeadline(time.Now().Add(conn.cfg.PingWait))
