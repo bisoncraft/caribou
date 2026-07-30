@@ -4,6 +4,7 @@
 package appserver
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -266,5 +267,43 @@ func TestResolvePassFailureDoesNotThrottle(t *testing.T) {
 	}
 	if errors.Is(err, errBadCredentials) {
 		t.Fatalf("resolvePass failure tagged as bad credentials: %v", err)
+	}
+}
+
+// TestOnionRequestNotHostDerived asserts that onion classification comes from
+// the listener the connection arrived on, not from anything the remote peer
+// sends. The hidden service relays over loopback, so a Host header (the only
+// other candidate signal) would let a remote Tor peer present itself as a
+// same-machine client and walk past every gate keyed on it: the
+// companion-pairing requirement in isAuthed and actuallyLogin, and the
+// loopback-only restriction on minting and using API tokens.
+func TestOnionRequestNotHostDerived(t *testing.T) {
+	s := &AppServer{onion: "http://caribou.onion"}
+
+	// A request off the tor listener, claiming to be loopback.
+	spoofed := httptest.NewRequest(http.MethodPost, "/api/generateapitoken", nil)
+	spoofed.Host = "127.0.0.1:5758"
+	spoofed.RemoteAddr = "127.0.0.1:44444" // the relay's loopback connection
+	spoofed = spoofed.WithContext(context.WithValue(spoofed.Context(), onionConnKey{}, true))
+
+	if !s.isOnionRequest(spoofed) {
+		t.Fatal("a tor-listener request escaped onion classification via the Host header")
+	}
+	if s.isLocalRequest(spoofed) {
+		t.Fatal("a tor-listener request was treated as same-machine")
+	}
+
+	// A genuine same-machine request, claiming to be the onion host. It must
+	// not be able to shed local status either, since that is what a local
+	// browser reaching the server by its onion name would look like.
+	direct := httptest.NewRequest(http.MethodPost, "/api/generateapitoken", nil)
+	direct.Host = "caribou.onion"
+	direct.RemoteAddr = "127.0.0.1:44445"
+
+	if s.isOnionRequest(direct) {
+		t.Fatal("a direct-listener request was classified as onion via the Host header")
+	}
+	if !s.isLocalRequest(direct) {
+		t.Fatal("a direct loopback request was not treated as same-machine")
 	}
 }

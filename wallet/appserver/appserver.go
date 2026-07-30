@@ -681,6 +681,19 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 			return nil, fmt.Errorf("error generating listener for tor relay: %w", err)
 		}
 		listeners = append(listeners, listener)
+
+		// Tag every connection accepted on the hidden service's listener so
+		// handlers can tell onion traffic apart. The relay forwards over
+		// loopback with a peer address indistinguishable from a same-machine
+		// client, and the Host header is remote-controlled, so the listener is
+		// the only trustworthy signal.
+		torAddr := listener.Addr().String()
+		s.srv.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+			if c.LocalAddr().String() == torAddr {
+				return context.WithValue(ctx, onionConnKey{}, true)
+			}
+			return ctx
+		}
 	}
 
 	// Start serving.
@@ -797,15 +810,18 @@ func prepareAddr(addr net.Addr) (string, bool) {
 	return addr.String(), false
 }
 
+// onionConnKey tags a request context when the connection was accepted on the
+// Tor hidden service's listener. See Connect.
+type onionConnKey struct{}
+
 // isOnionRequest returns true if the request was made through the Tor hidden
-// service.
+// service. The determination is made from the listener the connection was
+// accepted on, not from the request, because everything in the request
+// (including the Host header) is controlled by the remote peer, and the hidden
+// service relays through loopback so the peer address cannot distinguish it
+// either.
 func (s *AppServer) isOnionRequest(r *http.Request) bool {
-	if s.onion == "" {
-		return false
-	}
-	// s.onion is "http://host.onion", strip the scheme to compare.
-	host := strings.TrimPrefix(s.onion, "http://")
-	return r.Host == host
+	return r.Context().Value(onionConnKey{}) != nil
 }
 
 // Lock locks wallets and tears down every session. It performs the same work as
