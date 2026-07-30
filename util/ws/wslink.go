@@ -175,16 +175,6 @@ func (c *WSLink) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if !atomic.CompareAndSwapUint32(&c.on, 0, 1) {
 		return nil, fmt.Errorf("attempted to Start a running WSLink")
 	}
-	// Set the deadline before taking ownership of the link state. On failure no
-	// goroutine is started, so nothing would ever cancel the context, close the
-	// connection, or flip c.on back off; leaving those set would leak the
-	// connection and make the link look permanently up to Send.
-	if err := c.conn.SetReadDeadline(time.Now().Add(c.pingPeriod * 2)); err != nil {
-		atomic.StoreUint32(&c.on, 0)
-		c.conn.Close()
-		return nil, fmt.Errorf("failed to set initial read deadline for %v: %w", c.addr, err)
-	}
-
 	linkCtx, quit := context.WithCancel(ctx)
 
 	// Note that there is a brief window where c.on is true but quit and stopped
