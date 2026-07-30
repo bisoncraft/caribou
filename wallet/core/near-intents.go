@@ -47,7 +47,7 @@ const (
 	// intents.near whose withdrawals are ERC-191-signed). Empty disables
 	// the application fee; set at release. The key itself lives entirely
 	// outside the repo.
-	intentsFeeRecipient = ""
+	intentsFeeRecipient = "0x4bda081527f14e5ecb9a2fd7703759897c2860a6"
 
 	// intentsDefaultSlippageBps is the default quote slippage tolerance.
 	intentsDefaultSlippageBps = 100
