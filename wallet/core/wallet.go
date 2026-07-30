@@ -53,13 +53,16 @@ type xcWallet struct {
 	network           *xcWallet
 	connectMtx        sync.Mutex
 
+	// monitored is nonzero while a startWalletSyncMonitor goroutine is watching
+	// sync status. It is accessed atomically rather than under mtx.
+	monitored uint32
+
 	mtx        sync.RWMutex
 	encPass    []byte // empty means wallet not password protected
 	balance    *WalletBalance
 	pw         encode.PassBytes
 	address    string
-	peerCount  int32  // -1 means no count yet
-	monitored  uint32 // startWalletSyncMonitor goroutines monitoring sync status
+	peerCount  int32 // -1 means no count yet
 	hookedUp   bool
 	syncStatus *asset.SyncStatus
 	disabled   bool

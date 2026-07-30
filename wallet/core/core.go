@@ -52,14 +52,6 @@ var (
 	errTimeout = errors.New("timeout")
 )
 
-// blockWaiter is a message waiting to be sent once a specified coin has the
-// requisite confirmations.
-type blockWaiter struct {
-	assetID uint32
-	trigger func() (bool, error)
-	action  func(error)
-}
-
 // Config is the configuration for the Core.
 type Config struct {
 	// DBPath is a filepath to use for the client database. If the database does
@@ -129,9 +121,6 @@ type Core struct {
 
 	walletMtx sync.RWMutex
 	wallets   map[uint32]*xcWallet
-
-	waiterMtx    sync.RWMutex
-	blockWaiters map[string]*blockWaiter
 
 	tipMtx     sync.Mutex
 	tipPending map[uint32]uint64 // assetID -> latest pending tip height
@@ -305,22 +294,21 @@ func New(cfg *Config) (*Core, error) {
 	}
 
 	c := &Core{
-		cfg:          cfg,
-		credentials:  creds,
-		ready:        make(chan struct{}),
-		log:          cfg.Logger,
-		db:           coreDB,
-		txDB:         masterTxDB,
-		wallets:      make(map[uint32]*xcWallet),
-		net:          cfg.Net,
-		blockWaiters: make(map[string]*blockWaiter),
-		tipPending:   make(map[uint32]uint64),
-		tipActive:    make(map[uint32]bool),
-		balPending:   make(map[uint32]*asset.Balance),
-		balActive:    make(map[uint32]bool),
-		newCrypter:   encrypt.NewCrypter,
-		reCrypter:    encrypt.Deserialize,
-		noteChans:    make(map[uint64]chan Notification),
+		cfg:         cfg,
+		credentials: creds,
+		ready:       make(chan struct{}),
+		log:         cfg.Logger,
+		db:          coreDB,
+		txDB:        masterTxDB,
+		wallets:     make(map[uint32]*xcWallet),
+		net:         cfg.Net,
+		tipPending:  make(map[uint32]uint64),
+		tipActive:   make(map[uint32]bool),
+		balPending:  make(map[uint32]*asset.Balance),
+		balActive:   make(map[uint32]bool),
+		newCrypter:  encrypt.NewCrypter,
+		reCrypter:   encrypt.Deserialize,
+		noteChans:   make(map[uint64]chan Notification),
 
 		extensionModeConfig: xCfg,
 		seedGenerationTime:  seedGenerationTime,
@@ -2690,13 +2678,6 @@ func (c *Core) Logout() error {
 	return nil
 }
 
-// removeWaiter removes a blockWaiter from the map.
-func (c *Core) removeWaiter(id string) {
-	c.waiterMtx.Lock()
-	delete(c.blockWaiters, id)
-	c.waiterMtx.Unlock()
-}
-
 // maxSendFeeUSD caps the estimated network fee of a mainnet send when a fiat
 // exchange rate is available. A caller-approved fee rate that prices the
 // transaction beyond this is more likely a client bug or a units mixup than
@@ -2873,9 +2854,12 @@ func (c *Core) ApproveBridgeContract(assetID uint32, bridgeName string) (string,
 		return "", err
 	}
 
-	// Send notification when approval confirms
+	// Send notification when approval confirms. Runs synchronously on the wallet
+	// goroutine that observed the confirmation so the note is not stranded on a
+	// detached goroutine at shutdown. This note is Data severity, so notify
+	// delivers it to subscribers only and never persists it.
 	onConfirm := func() {
-		go c.notify(newBridgeApprovalNote(wallet.state()))
+		c.notify(newBridgeApprovalNote(wallet.state()))
 	}
 
 	txID, err := wallet.ApproveBridgeContract(c.ctx, bridgeName, onConfirm)
@@ -2905,9 +2889,10 @@ func (c *Core) UnapproveBridgeContract(assetID uint32, bridgeName string) (strin
 		return "", err
 	}
 
-	// Send notification when unapproval confirms
+	// Send notification when unapproval confirms. Synchronous for the same
+	// reason as in ApproveBridgeContract above.
 	onConfirm := func() {
-		go c.notify(newBridgeApprovalNote(wallet.state()))
+		c.notify(newBridgeApprovalNote(wallet.state()))
 	}
 
 	txID, err := wallet.UnapproveBridgeContract(c.ctx, bridgeName, onConfirm)
@@ -3481,26 +3466,6 @@ func (c *Core) runBalanceChange(assetID uint32) {
 // a connection error is encountered such that tip change reporting may be
 // adversely affected.
 func (c *Core) tipChange(assetID uint32, tip uint64) {
-	c.waiterMtx.RLock()
-	for id, waiter := range c.blockWaiters {
-		if waiter.assetID != assetID {
-			continue
-		}
-		go func(id string, waiter *blockWaiter) {
-			ok, err := waiter.trigger()
-			if err != nil {
-				waiter.action(err)
-				c.removeWaiter(id)
-				return
-			}
-			if ok {
-				waiter.action(nil)
-				c.removeWaiter(id)
-			}
-		}(id, waiter)
-	}
-	c.waiterMtx.RUnlock()
-
 	w, found := c.wallet(assetID)
 	if found {
 		w.mtx.Lock()

@@ -58,7 +58,9 @@ func (c *Core) Broadcast(n Notification) {
 // sufficient severity, it is stored in the database.
 func (c *Core) notify(n Notification) {
 	if n.Severity() >= db.Success {
-		c.db.SaveNotification(n.DBNote())
+		if err := c.db.SaveNotification(n.DBNote()); err != nil {
+			c.log.Errorf("Error saving notification: %v", err)
+		}
 	}
 
 	c.logNote(n)

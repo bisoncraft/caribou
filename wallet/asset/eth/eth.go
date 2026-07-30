@@ -3018,28 +3018,41 @@ func (w *baseWallet) localTxStatus(txHash common.Hash) (_ bool, s *walletTxStatu
 }
 
 func (w *assetWallet) checkPendingApprovals() {
-	w.approvalsMtx.Lock()
-	defer w.approvalsMtx.Unlock()
+	var confirmed []func()
 
+	w.approvalsMtx.Lock()
 	for version, pendingApproval := range w.pendingApprovals {
 		if w.ctx.Err() != nil {
-			return
+			break
 		}
-		var confirmed bool
+		var isConfirmed bool
 		if found, txData := w.localTxStatus(pendingApproval.txHash); found {
-			confirmed = txData.blockNum > 0 && txData.blockNum <= w.tipHeight()
+			isConfirmed = txData.blockNum > 0 && txData.blockNum <= w.tipHeight()
 		} else {
 			confs, err := w.node.transactionConfirmations(w.ctx, pendingApproval.txHash)
 			if err != nil && !errors.Is(err, asset.CoinNotFoundError) {
 				w.log.Errorf("error getting confirmations for tx %s: %v", pendingApproval.txHash, err)
 				continue
 			}
-			confirmed = confs > 0
+			isConfirmed = confs > 0
 		}
-		if confirmed {
-			go pendingApproval.onConfirm()
+		if isConfirmed {
+			confirmed = append(confirmed, pendingApproval.onConfirm)
 			delete(w.pendingApprovals, version)
 		}
+	}
+	w.approvalsMtx.Unlock()
+
+	// Run the callbacks after releasing approvalsMtx, and on the caller's
+	// goroutine rather than a detached one, so a callback cannot outlive the
+	// tip-processing pass that observed the confirmation. The approval is already
+	// deleted above, so a callback dropped during shutdown is never retried.
+	// This narrows the window rather than closing it: applyTipChange runs on the
+	// Connect-tracked monitorBlocks goroutine for WS headers and for the
+	// HTTP-only poll, but on an untracked goroutine via the `go checkNewBlocks()`
+	// ticker fallback taken while a WS subscription is active.
+	for _, onConfirm := range confirmed {
+		onConfirm()
 	}
 }
 
