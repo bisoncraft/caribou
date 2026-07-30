@@ -316,6 +316,13 @@ func TestConnectDeadlineErrorReleasesLink(t *testing.T) {
 	if !link.Off() {
 		t.Fatal("link still reports itself as up after a failed Connect")
 	}
+	// The link context must be released too, so waiters do not hang and the
+	// cancel func is not left registered on the caller's context.
+	select {
+	case <-link.Done():
+	default:
+		t.Fatal("link context still live after a failed Connect")
+	}
 	// A retry must be possible: the failed attempt must not have consumed the
 	// link's one-shot on flag.
 	if err := link.Send(&msgjson.Message{}); !errors.Is(err, ErrPeerDisconnected) {
