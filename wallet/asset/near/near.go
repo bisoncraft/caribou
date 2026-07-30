@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,6 +37,27 @@ const (
 
 	// tipPollInterval is how often to check for new blocks.
 	tipPollInterval = 5 * time.Second
+
+	// transactionValidityPeriod is the protocol's
+	// transaction_validity_period genesis parameter: a transaction
+	// referencing block R can only be included while the chain head is
+	// within this many blocks of R. It is 86400 on both mainnet and
+	// testnet (per EXPERIMENTAL_genesis_config). A pending transaction the
+	// network still does not know this far past its reference block can
+	// never be included.
+	transactionValidityPeriod = 86400
+
+	// pendingExpiryMargin pads transactionValidityPeriod before a pending
+	// transaction is declared dead, absorbing any boundary ambiguity in
+	// the inclusion rule. At ~1-second blocks the margin costs about two
+	// minutes.
+	pendingExpiryMargin = 100
+
+	// refHeightKey is the WalletTransaction.AdditionalData key holding the
+	// height of the block a sent transaction referenced — the tip at send
+	// time. The pending-transaction poller uses it to prove a
+	// still-unknown transaction dead once the validity period has lapsed.
+	refHeightKey = "refHeight"
 )
 
 var (
@@ -396,7 +418,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		nonce = w.nonce + 1
 	}
 
-	result, hash, err := w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
+	result, hash, refHeight, err := w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
 	if err != nil && isInvalidNonce(err) {
 		// An authoritative InvalidNonce means this transaction was rejected
 		// and did not execute, so a fresh-nonce retry is a new send rather
@@ -413,7 +435,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		} else {
 			nonce++
 		}
-		result, hash, err = w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
+		result, hash, refHeight, err = w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
 	}
 
 	var rejected bool
@@ -460,6 +482,9 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		Recipient: &recipient,
 		Confirmed: rejected,
 		Rejected:  rejected,
+		// The reference height lets the pending poller prove the
+		// transaction dead if the network never sees it.
+		AdditionalData: map[string]string{refHeightKey: strconv.FormatUint(refHeight, 10)},
 	}
 	if rejected {
 		wtx.BlockNumber, wtx.Timestamp = w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
@@ -482,10 +507,13 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 }
 
 // broadcastTransfer builds, signs, and submits a single transfer transaction
-// with the given nonce, waiting for optimistic execution.
-func (w *NearWallet) broadcastTransfer(rpc *rpcClient, privKey ed25519.PrivateKey, address string, yoctoAmount *big.Int, nonce uint64) (*txResult, [32]byte, error) {
+// with the given nonce, waiting for optimistic execution. refHeight is the
+// height of the block the transaction references, after which the
+// transaction's validity period is measured.
+func (w *NearWallet) broadcastTransfer(rpc *rpcClient, privKey ed25519.PrivateKey, address string, yoctoAmount *big.Int, nonce uint64) (_ *txResult, hash [32]byte, refHeight uint64, _ error) {
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
+	refHeight = w.tip
 	w.tipMtx.RUnlock()
 
 	tx := &nearTransaction{
@@ -498,12 +526,12 @@ func (w *NearWallet) broadcastTransfer(rpc *rpcClient, privKey ed25519.PrivateKe
 	}
 
 	txBytes := serializeTransaction(tx)
-	hash := sha256.Sum256(txBytes)
+	hash = sha256.Sum256(txBytes)
 	sig := ed25519.Sign(privKey, hash[:])
 	signedTx := serializeSignedTransaction(txBytes, sig)
 
 	result, err := rpc.sendTx(encodeSignedTx(signedTx))
-	return result, hash, err
+	return result, hash, refHeight, err
 }
 
 func (w *NearWallet) ValidateAddress(address string) bool {
@@ -800,7 +828,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 				if w.emit != nil {
 					w.emit.TipChange(block.Header.Height)
 				}
-				w.checkPendingTxs(rpc)
+				w.checkPendingTxs(rpc, block.Header.Height)
 				w.scanIncomingTxs(rpc, block.Header.Height)
 			}
 
@@ -818,7 +846,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 // re-derives a tx's type/amount from the wallet's own address — it only
 // updates BlockNumber/Timestamp/Confirmed/Rejected on the existing record
 // looked up by the tx's own ID.
-func (w *NearWallet) checkPendingTxs(rpc *rpcClient) {
+func (w *NearWallet) checkPendingTxs(rpc *rpcClient, tip uint64) {
 	if w.txDB == nil {
 		return
 	}
@@ -830,7 +858,11 @@ func (w *NearWallet) checkPendingTxs(rpc *rpcClient) {
 	for _, tx := range pending {
 		result, err := rpc.txStatus(tx.ID, w.accountID)
 		if err != nil {
-			w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
+			if isUnknownTransaction(err) {
+				w.maybeExpirePendingTx(tx, tip)
+			} else {
+				w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
+			}
 			continue
 		}
 		blockHeight, blockTime := w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
@@ -863,6 +895,35 @@ func (w *NearWallet) checkPendingTxs(rpc *rpcClient) {
 				w.log.Errorf("Error updating failed tx %s: %v", tx.ID, err)
 			}
 		}
+	}
+}
+
+// maybeExpirePendingTx marks a pending transaction rejected once it is
+// provably dead: the network has no record of it (only a definitive
+// UNKNOWN_TRANSACTION reaches here — transport failures prove nothing) and
+// the chain has advanced past the validity period of the block the
+// transaction referenced, so it can never be included. Without this, a
+// broadcast that was recorded pending on an ambiguous outcome but never
+// reached the chain would be reported pending forever, with no signal that
+// it is safe to re-send.
+func (w *NearWallet) maybeExpirePendingTx(tx *txdb.WalletTransaction, tip uint64) {
+	refHeight, err := strconv.ParseUint(tx.AdditionalData[refHeightKey], 10, 64)
+	if err != nil {
+		return // no reference height recorded; death cannot be proven
+	}
+	if tip <= refHeight+transactionValidityPeriod+pendingExpiryMargin {
+		return // still inside the inclusion window
+	}
+	w.log.Warnf("Pending transaction %s was never observed by the network and its validity "+
+		"period (reference height %d) has lapsed at height %d; marking it rejected", tx.ID, refHeight, tip)
+	tx.Confirmed = true
+	tx.Rejected = true
+	if err := w.txDB.StoreTx(tx); err != nil {
+		w.log.Errorf("Error updating dead tx %s: %v", tx.ID, err)
+		return
+	}
+	if w.emit != nil {
+		w.emit.TransactionNote(tx, false)
 	}
 }
 
@@ -1072,4 +1133,15 @@ func isAccountNotFound(err error) bool {
 		return true
 	}
 	return strings.Contains(string(rpcErr.Data), "does not exist")
+}
+
+// isUnknownTransaction reports whether err is the node's definitive
+// statement that it has no record of the transaction. Transport failures
+// and timeouts do not qualify: they prove nothing about the transaction.
+func isUnknownTransaction(err error) bool {
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_TRANSACTION"
 }

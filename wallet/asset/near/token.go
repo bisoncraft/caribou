@@ -281,6 +281,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	w.parent.tipMtx.RLock()
 	blockHash := w.parent.tipHash
+	refHeight := w.parent.tip
 	w.parent.tipMtx.RUnlock()
 
 	tx := &nearTransaction{
@@ -344,6 +345,9 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		TokenID:   &w.assetID,
 		Confirmed: rejected,
 		Rejected:  rejected,
+		// The reference height lets the pending poller prove the
+		// transaction dead if the network never sees it.
+		AdditionalData: map[string]string{refHeightKey: strconv.FormatUint(refHeight, 10)},
 	}
 	if rejected {
 		wtx.BlockNumber, wtx.Timestamp = w.parent.resolveBlock(rpc, result.TransactionOutcome.BlockHash)

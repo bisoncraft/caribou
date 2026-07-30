@@ -529,11 +529,17 @@ func (c *rpcClient) sendTx(signedTxBase64 string) (*txResult, error) {
 	return &res, nil
 }
 
+// txStatus fetches whatever the node currently knows about a transaction.
+// wait_until NONE answers immediately: an unknown hash is a definitive
+// UNKNOWN_TRANSACTION error (see isUnknownTransaction) rather than a
+// request held open for the node's wait window, and a transaction that is
+// known but not yet executed returns with no final status, which callers
+// treat as still pending.
 func (c *rpcClient) txStatus(txHash, senderID string) (*txResult, error) {
 	result, err := c.call("tx", map[string]interface{}{
 		"tx_hash":           txHash,
 		"sender_account_id": senderID,
-		"wait_until":        "EXECUTED_OPTIMISTIC",
+		"wait_until":        "NONE",
 	})
 	if err != nil {
 		return nil, err
