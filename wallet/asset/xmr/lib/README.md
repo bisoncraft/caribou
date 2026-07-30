@@ -18,8 +18,12 @@ Libraries must be built using the Dockerfile in the parent directory (see below)
 | `ios-arm64/` | iOS device | `libmonero_wallet2_api_c.dylib` |
 | `ios-arm64-simulator/` | iOS simulator | `libmonero_wallet2_api_c.dylib` |
 
-The desktop libraries are built with the Dockerfile (below). Mobile libraries
-are built and packaged differently: Android `.so`s come from the Dockerfile's
+The desktop libraries are built with the Dockerfile (below). The two macOS
+desktop `.dylib`s (`darwin-amd64/`, `darwin-arm64/`) can instead be built
+natively on a Mac with `../build-darwin.sh` — faster there and it reuses a
+locally-provided Xcode xip (`XCODE_XIP=/path/to/Xcode_26.1_Universal.xip`)
+instead of re-downloading the ~2.7 GB SDK inside the Debian image. Mobile
+libraries are built and packaged differently: Android `.so`s come from the Dockerfile's
 `aarch64-linux-android` target and ship as `jniLibs` (see `wallet/android/bind.sh`);
 iOS `.dylib`s are built by `../build-ios.sh` on macOS (the Apple SDK cannot live
 in the Debian image) and packaged into `Monero.xcframework` by

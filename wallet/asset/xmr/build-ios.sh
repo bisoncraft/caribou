@@ -145,18 +145,23 @@ if [[ -n "${XCODE_XIP:-}" ]]; then
         echo "error: XCODE_XIP=$XCODE_XIP not found." >&2
         exit 1
     fi
-    if [[ ! -f "$XIP_CACHE" ]]; then
+    got="$(shasum -a 256 "$XCODE_XIP" | awk '{print $1}')"
+    if [[ "$got" != "$XIP_SHA256" ]]; then
+        echo "  warning: XCODE_XIP sha256 $got != pinned $XIP_SHA256" >&2
+        echo "  (proceeding; Apple may have re-released, or this is a different build)" >&2
+    fi
+    # (Re)stage into the cache whenever it is absent OR a different size. simplybs
+    # only checks a source blob's *existence* before reusing it, so a truncated
+    # xip left by an interrupted download would otherwise be reused as-is and fail
+    # to extract — replacing it here is what keeps the build from getting stuck at
+    # the Apple SDK step on a re-run.
+    if [[ ! -f "$XIP_CACHE" ]] || [[ "$(stat -f%z "$XIP_CACHE")" != "$(stat -f%z "$XCODE_XIP")" ]]; then
         echo "==> staging Apple SDK xip into simplybs source cache"
-        got="$(shasum -a 256 "$XCODE_XIP" | awk '{print $1}')"
-        if [[ "$got" != "$XIP_SHA256" ]]; then
-            echo "  warning: sha256 $got != pinned $XIP_SHA256" >&2
-            echo "  (proceeding; Apple may have re-released, or this is a different build)" >&2
-        fi
         mkdir -p "$(dirname "$XIP_CACHE")"
         cp "$XCODE_XIP" "$XIP_CACHE"
         echo "  staged -> ${XIP_CACHE#$MONERO_C_DIR/}"
     else
-        echo "==> Apple SDK xip already cached (skipping stage)"
+        echo "==> Apple SDK xip already staged (matching size), reusing"
     fi
 elif [[ ! -f "$XIP_CACHE" ]]; then
     echo "warning: no XCODE_XIP set and no cached Apple SDK xip at" >&2

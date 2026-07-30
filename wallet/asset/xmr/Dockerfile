@@ -31,8 +31,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # simplybs builds its own cmake/make/autoconf/etc. from source; the host only
 # needs a compiler toolchain (clang is simplybs's default native CC) plus git.
+# git clang llvm gcc g++: the native toolchain simplybs bootstraps from.
+# zlib1g-dev/libbz2-dev/liblzma-dev/libxml2-dev/libssl-dev: headers for the
+# native `xar` tool simplybs builds to unpack the Apple SDK .xip (Darwin
+# targets). Without them the xar build fails ("zlib.h/bzlib.h/lzma.h not
+# found") and the build gets stuck at the Apple SDK extraction step.
 RUN apt-get update && apt-get install -y \
     git clang llvm gcc g++ \
+    zlib1g-dev libbz2-dev liblzma-dev libxml2-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git config --global user.name "caribou" \
