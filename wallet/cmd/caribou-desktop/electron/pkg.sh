@@ -26,9 +26,9 @@ LDFLAGS_BASE="-buildid= -s -w -X main.Version=${VER}${META:++${META}}"
 
 # Build the webpack bundle prior to building the appserver package, which embeds
 # the files.
-pushd ../../../../wallet/appserver/newui
+pushd ../../../../wallet/appserver
 npm ci
-npm run build
+npm run build --workspace=newui
 popd
 
 rm -rf out # This is the default output dir for electron-forge make
