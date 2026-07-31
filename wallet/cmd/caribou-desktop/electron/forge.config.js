@@ -57,13 +57,15 @@ module.exports = {
       },
     },
     {
-      name: '@electron-forge/maker-dmg',
-      config: {
-        format: 'ULFO',
-        name: 'Caribou',
-        icon: '../src/caribou.icns',
-        overwrite: true,
-      }
+      // NOTE: the .dmg is built by hdiutil in pkg.sh, not by @electron-forge/
+      // maker-dmg. maker-dmg pulls in appdmg -> macos-alias, whose native addon
+      // (volume.node) no longer compiles against modern Node — its bundled `nan`
+      // calls V8 APIs (SetPrototype/WriteUtf8/AccessControl/...) that current V8
+      // has removed. maker-zip keeps `npm run make` working on darwin for
+      // dev/test (produces a .zip of the .app); pkg.sh produces the signed,
+      // notarized .dmg for release.
+      name: '@electron-forge/maker-zip',
+      platforms: ['darwin'],
     },
     {
       name: '@electron-forge/maker-deb',

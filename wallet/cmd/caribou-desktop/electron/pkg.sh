@@ -85,9 +85,73 @@ build_targets (){
       fi
     fi
 
-    npm run make --platform=${OS} --arch=${ARCH}
+    # Package (not make): electron-forge package signs + notarizes + staples the
+    # .app via forge.config.js (osxSign/osxNotarize). The .dmg is then assembled
+    # by hdiutil, because maker-dmg's native module no longer builds on modern
+    # Node (see forge.config.js). electron uses x64 where Go uses amd64.
+    case "${ARCH}" in amd64) ELECTRON_ARCH="x64" ;; *) ELECTRON_ARCH="${ARCH}" ;; esac
+    npm run package -- --platform=${OS} --arch=${ELECTRON_ARCH}
 
-    cp -R "./out/make/Caribou.dmg" "../installers/caribou-desktop-${OS}-${ARCH}-v${VER}.dmg"
+    APP="./out/Caribou-${OS}-${ELECTRON_ARCH}/Caribou.app"
+    DMG="../installers/caribou-desktop-${OS}-${ARCH}-v${VER}.dmg"
+
+    # Assemble the .dmg with a styled Finder window: the app icon on the left and
+    # an /Applications drop target on the right, so opening the dmg shows the usual
+    # "drag to install" layout. hdiutil alone makes a bare image with no window
+    # layout (maker-dmg used to do this styling); we reproduce it by laying out a
+    # writable image with Finder/AppleScript, then compressing to the final
+    # read-only ULFO image. Driving Finder needs a GUI login session on the build
+    # Mac (as does the signing/notarization this script already does).
+    STAGING="$(mktemp -d)"
+    cp -R "${APP}" "${STAGING}/Caribou.app"
+    ln -s /Applications "${STAGING}/Applications"
+
+    # Unmount any stale volume of this name so the layout below targets ours.
+    hdiutil detach "/Volumes/Caribou" >/dev/null 2>&1 || true
+
+    # Writable image, sized to the content plus slack so Finder can write .DS_Store.
+    RW_DMG="$(mktemp -u).dmg"
+    SIZE_MB=$(( $(du -sm "${STAGING}" | awk '{print $1}') + 50 ))
+    hdiutil create -volname "Caribou" -srcfolder "${STAGING}" \
+      -fs HFS+ -format UDRW -size "${SIZE_MB}m" -ov "${RW_DMG}"
+    rm -rf "${STAGING}"
+
+    hdiutil attach "${RW_DMG}" -readwrite -noverify -noautoopen
+    osascript <<'OSA'
+tell application "Finder"
+  tell disk "Caribou"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set the bounds of container window to {200, 120, 720, 460}
+    set opts to the icon view options of container window
+    set arrangement of opts to not arranged
+    set icon size of opts to 100
+    set position of item "Caribou.app" of container window to {150, 170}
+    set position of item "Applications" of container window to {390, 170}
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+OSA
+    sync
+    hdiutil detach "/Volumes/Caribou"
+
+    # Compress the laid-out image to the final read-only .dmg.
+    rm -f "${DMG}"
+    hdiutil convert "${RW_DMG}" -format ULFO -ov -o "${DMG}"
+    rm -f "${RW_DMG}"
+
+    # Sign the .dmg, and with credentials also notarize + staple it (the app
+    # inside is already notarized; a notarized dmg passes Gatekeeper on download).
+    if [[ -n "${APPLE_ID}" && -n "${APPLE_PASSWORD}" && -n "${APPLE_TEAM_ID}" ]]; then
+      codesign -s "Developer ID Application" "${DMG}"
+      xcrun notarytool submit "${DMG}" --apple-id "${APPLE_ID}" \
+        --password "${APPLE_PASSWORD}" --team-id "${APPLE_TEAM_ID}" --wait
+      xcrun stapler staple "${DMG}"
+    fi
 
     rm -rf "./out"
 

@@ -77,7 +77,9 @@ npm ci
 npm run make
 ```
 
-The `.dmg` will be in `electron/out/make/`.
+`npm run make` produces a `.zip` of the app in `electron/out/make/` (the
+signed, notarized `.dmg` is produced only by the release `pkg.sh` below, via
+`hdiutil` — Electron's dmg maker no longer builds on current Node).
 
 ### Release build
 
