@@ -25,16 +25,22 @@ Before you begin, ensure you have the following installed on your system:
    ./prepare.sh --xmr
    ```
 
+   > XMR builds link `wallet/asset/xmr/lib/darwin-{amd64,arm64}/libmonero_wallet2_api_c.dylib`,
+   > which is not committed. Build it once with `wallet/asset/xmr/build-darwin.sh`
+   > (see [wallet/asset/xmr/lib/README.md](../../../asset/xmr/lib/README.md)) before
+   > any `--xmr` build, or the copy step fails.
+
    If you just want to run the application without building it, you can use the following command after `npm ci`:
 
    ```bash
    npm start
    ```
 
-3. Run the build script:
+3. Run the build script (add `--xmr` for Monero support; for a signed release,
+   see the Release build section in [../README.md](../README.md)):
 
    ```bash
-   ./pkg.sh
+   ./pkg.sh --xmr
    ```
 
    After the build process completes, you can find the compiled application in the `caribou-desktop/installers` directory.
