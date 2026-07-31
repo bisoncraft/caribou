@@ -31,6 +31,11 @@ npm ci
 npm run build --workspace=newui
 popd
 
+# Install this electron project's own deps (electron-forge + the makers).
+# --ignore-scripts skips the package's "prepare" lifecycle (prepare.sh), since
+# pkg.sh does its own resource setup below with the correct --xmr handling.
+npm ci --ignore-scripts
+
 rm -rf out # This is the default output dir for electron-forge make
 
 # Use folders outside of pwd to prevent electron-forge from adding them to build.
