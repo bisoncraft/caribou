@@ -21,7 +21,8 @@ export default function TopBar () {
   return (
     <div className="topbar d-flex align-items-stretch">
       <div className="topbar-left d-flex align-items-center">
-        <img className="logo-full medium" alt="Caribou" />
+        <img className="logo-full medium pointer" alt="Caribou"
+          onClick={() => app.loadPage('portfolio')} />
       </div>
 
       <div className="topbar-right d-flex align-items-center justify-content-end flex-grow-1">
