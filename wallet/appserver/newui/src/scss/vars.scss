@@ -32,7 +32,9 @@
 // are exempt.
 //
 // The default (warm) palette is emitted on body; the others apply via
-// body[data-theme="cool" | "light"].
+// body[data-theme="cool" | "light"]. Every palette is also emitted on the
+// bare [data-theme] attribute so a non-body element can scope a palette to
+// its own subtree — the theme picker's preview swatches render this way.
 $-themes: (
   "warm": (
     // Surfaces, darkest to lightest.
@@ -157,15 +159,26 @@ body {
   // color-scheme is a property, not a token, but it is intrinsically
   // per-theme: it keys native form controls and scrollbars to the palette.
   color-scheme: dark;
+}
 
+// Palette emission. The body selectors theme the whole app; the bare
+// [data-theme] alternates let any element scope a palette to its own
+// subtree, which is how the theme picker's preview swatches render with
+// the palette they select. Scoped subtrees get raw tokens only — the
+// semantic aliases above compute against body's palette and do not
+// re-resolve inside a scope.
+body,
+[data-theme="warm"] {
   @include -theme("warm");
 }
 
-body[data-theme="cool"] {
+body[data-theme="cool"],
+[data-theme="cool"] {
   @include -theme("cool");
 }
 
-body[data-theme="light"] {
+body[data-theme="light"],
+[data-theme="light"] {
   color-scheme: light;
 
   @include -theme("light");

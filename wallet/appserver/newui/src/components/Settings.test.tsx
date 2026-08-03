@@ -34,6 +34,30 @@ describe('Settings > SeedExport', () => {
   })
 })
 
+describe('Settings > AppearanceSettings', () => {
+  afterEach(() => {
+    delete document.body.dataset.theme
+    window.localStorage.removeItem('theme')
+  })
+
+  it('applies and persists a picked theme', () => {
+    render(<Settings />)
+    const cool = screen.getByRole('button', { name: /cool/i })
+    expect(cool.getAttribute('aria-pressed')).toBe('false')
+
+    fireEvent.click(cool)
+    expect(document.body.dataset.theme).toBe('cool')
+    expect(JSON.parse(window.localStorage.getItem('theme')!)).toBe('cool')
+    expect(cool.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('falls back to warm for an unknown stored theme', () => {
+    window.localStorage.setItem('theme', JSON.stringify('neon'))
+    render(<Settings />)
+    expect(screen.getByRole('button', { name: /warm/i }).getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
 describe('Settings > SendSettings', () => {
   it('reverts the optimistic toggle when the save request fails', async () => {
     app.appSettings.sendRequiresPassword = false

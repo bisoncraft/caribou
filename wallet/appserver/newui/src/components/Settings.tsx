@@ -5,6 +5,48 @@ import PasswordInput from './PasswordInput'
 import Spinner from './Spinner'
 import Checkbox from './Checkbox'
 import { postJSON } from '@caribou/shared/http'
+import { Theme, themes, storedTheme, setTheme } from '../theme'
+
+const themeLabels: Record<Theme, string> = { warm: 'Warm', cool: 'Cool', light: 'Light' }
+
+/*
+ * AppearanceSettings selects among the color themes. Each option button
+ * carries its own data-theme attribute, so it renders as a live preview of
+ * the palette it selects (see the palette emission in scss/vars.scss). The
+ * choice applies immediately and persists to localStorage.
+ */
+function AppearanceSettings () {
+  const [theme, setPicked] = useState<Theme>(storedTheme())
+
+  const pick = (th: Theme) => {
+    setTheme(th)
+    setPicked(th)
+  }
+
+  return (
+    <div className="form-width-300">
+      <div className="fs18 pb-2 text-center">{t('Theme')}</div>
+      <div className="d-flex theme-picker">
+        {themes.map(th => (
+          <button
+            key={th}
+            type="button"
+            aria-pressed={th === theme}
+            data-theme={th}
+            className="theme-swatch flex-grow-1 d-flex flex-column align-items-center"
+            onClick={() => pick(th)}
+          >
+            <span className="d-flex mb-1">
+              <span className="theme-swatch-dot fill-accent me-1" />
+              <span className="theme-swatch-dot fill-gold" />
+            </span>
+            <span className="fs13">{t(themeLabels[th])}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /*
  * SendSettings exposes app-level send preferences. Currently the only toggle
@@ -160,6 +202,8 @@ function SeedExport () {
 export default function Settings () {
   return (
     <div className="fill-abs d-flex flex-column align-items-center pt-5">
+      <AppearanceSettings />
+      <div className="py-4" />
       <SendSettings />
       <div className="py-4" />
       <SeedExport />

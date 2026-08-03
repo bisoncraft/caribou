@@ -617,6 +617,41 @@ body[data-theme="light"] img.logo-full {
   }
 }
 
+// Theme picker (Settings). Each option button carries data-theme, so it
+// renders as a preview of the palette it selects — vars.scss emits every
+// palette on the bare [data-theme] attribute for exactly this. Raw tokens
+// only in here: the --btn-* aliases compute against body's palette and
+// would leak the active theme into the previews.
+.theme-picker {
+  gap: 0.5rem;
+}
+
+.theme-swatch {
+  background-color: var(--body-bg);
+  border-color: var(--border-color);
+  color: var(--text-color);
+
+  &:hover {
+    background-color: var(--body-bg);
+    border-color: var(--accent-border);
+  }
+
+  &[aria-pressed="true"],
+  &[aria-pressed="true"]:hover {
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 1px var(--accent-border);
+  }
+}
+
+.theme-swatch-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+
+  &.fill-accent { background-color: var(--accent-strong); }
+  &.fill-gold   { background-color: var(--gold); }
+}
+
 // Round filled pip used to indicate "already on / enabled" status. Drops
 // in where a checkbox would otherwise sit on a read-only row, signalling
 // that the option is locked-in rather than togglable.

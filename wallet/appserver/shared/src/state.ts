@@ -7,6 +7,7 @@ export default class State {
   // Local storage keys.
   static loggersLK = 'loggers'
   static recordersLK = 'recorders'
+  static themeLK = 'theme'
   static localeSpecsKey = 'localeSpecsLK'
   static localeKey = 'localeLK'
   static recordMissingTranslationsLK = 'recordMissingTranslationsLK'
