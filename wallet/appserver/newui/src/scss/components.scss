@@ -48,17 +48,24 @@ form.modal {
 // -----------------------------------------------------------------------
 // Logo image (rendered via CSS `content`).
 
+// The Caribou antler mark (224x160 source, 1.4:1). Brown for the warm
+// theme; the blue variant for cool and light.
 img.logo-full {
-  content: url("/img/logo-full.png");
+  content: url("/img/logo-antlers-brown.png");
 
   &.small {
     height: 25px;
-    width: 48.5px;
+    width: 35px;
   }
   &.medium {
     height: 40px;
-    width: 77.6px;
+    width: 56px;
   }
+}
+
+body[data-theme="cool"] img.logo-full,
+body[data-theme="light"] img.logo-full {
+  content: url("/img/logo-antlers-blue.png");
 }
 
 // -----------------------------------------------------------------------
