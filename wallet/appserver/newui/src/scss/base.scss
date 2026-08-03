@@ -155,9 +155,9 @@ button {
 .errcolor  { color: var(--text-error); }
 .warncolor { color: var(--text-warning); }
 
-.accent-green     { color: var(--accent-green); }
-.accent-syncing   { color: var(--accent-syncing); }
-.accent-blue-text { color: var(--accent-blue-text); }
+.accent-green { color: var(--accent-green); }
+.gold         { color: var(--gold); }
+.accent-text  { color: var(--accent); }
 
 // Styled tooltip primitive. Opt in by adding the .has-tip class; the
 // label text is read from the element's aria-label so the same attribute
@@ -177,7 +177,7 @@ button {
     bottom: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%) translateY(2px);
-    background: var(--modal-wrapper-bg);
+    background: var(--surface);
     color: var(--text-color);
     border: 1px solid var(--border-color);
     padding: 5px 8px 4px;

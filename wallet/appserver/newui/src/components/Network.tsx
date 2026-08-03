@@ -37,7 +37,7 @@ function StatusSection ({ wallet }: { wallet: WalletState }) {
   const status = wallet.synced
     ? <span className="accent-green">{t('Synced')}</span>
     : (
-      <span className="d-inline-flex align-items-center accent-syncing">
+      <span className="d-inline-flex align-items-center gold">
         <Spinner size={12} className="me-2" />
         {tvar('Syncing {{ pct }}%', { pct: String(Math.round((wallet.syncProgress ?? 0) * 100)) })}
       </span>

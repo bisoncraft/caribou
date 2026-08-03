@@ -77,6 +77,9 @@ wallet/android/app/src/main/jniLibs/*/libc++_shared.so
 CLAUDE.md
 reviews/
 scripts/
+# Exception to the local-scripts pattern above: newui's committed helper
+# scripts (contrast validation).
+!wallet/appserver/newui/scripts/
 notes/
 
 # harness test wallet directories

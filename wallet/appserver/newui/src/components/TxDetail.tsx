@@ -113,7 +113,7 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
             href={explorer}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-center fs13 pb-3 accent-blue-text"
+            className="text-center fs13 pb-3 accent-text"
           >
             {t('View in block explorer')}
           </a>

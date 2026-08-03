@@ -2,7 +2,9 @@
 
 Re-skin the desktop wallet UI (`wallet/appserver/newui`) to the Caribou
 "Warm & Natural" visual language. Color, typography, and elevation change;
-layout and functional density do not.
+layout and functional density do not. The palette ships as three
+user-selectable themes — **warm** (default), **cool**, and **light** — see
+the theme system notes in phase 1.
 
 ## Sources of truth
 
@@ -53,7 +55,38 @@ debt. Mechanical sweep across `components.scss` and the few `.tsx`
 references. One collision to resolve explicitly: the current
 `--accent-blue-strong` (near-white emphasis text) is **not** the guide's
 `--accent-strong` (primary button fill); the rename pass must not conflate
-them.
+them. (Resolution: it became `--accent-contrast` — its single use is text on
+the accent fill, which is the guide's `--accent-contrast` role.)
+
+### Theme system
+
+The palette ships as three user-selectable themes, defined as SCSS maps in
+`vars.scss` and emitted as CSS custom properties:
+
+- **warm** (default) — the mapping above; emitted on `body`.
+- **cool** — deep blue-slate with vivid indigo fills (`#2f4fe0`), sky-blue
+  text accents, and orange in the gold slot, applied via
+  `body[data-theme="cool"]`. Anchor values are pixel-sampled from the
+  cool-variant design mockups; the rest are derived and AA-tuned. Unlike
+  warm, inputs inset below the surface (the mockup treatment — the cool
+  surfaces sit lighter than warm's, so an ascending input step would push
+  the AA text floor into pastels). This is a designed counterpart to warm,
+  not the legacy palette: the pre-reskin mid-slate surfaces (`#464e5c`
+  modal, `#3c424e` inputs) cannot carry AA-compliant red/grey text at any
+  usable saturation.
+- **light** — the guide's bone-paper column, via `body[data-theme="light"]`.
+  `--gold` is darker than the guide's `#8f6410` because the app sets 12px
+  syncing text in gold, which needs 4.5:1 rather than the 3:1 large-text bar.
+
+The emit loop iterates the warm map's keys and fails the build if a palette
+omits or misspells a token, so the three palettes cannot drift structurally.
+`color-scheme` is set per theme (dark / dark / light) so native controls and
+scrollbars follow. Aliases that are identical across themes
+(`--focus`, button chrome derived via `color-mix` from `--text-grey` /
+`--accent-strong`) live outside the maps.
+
+Wiring the theme picker — a settings control plus persistence, setting
+`data-theme` on `body` — is follow-up work outside this phase.
 
 ## Phase 2 — typography
 
@@ -89,9 +122,10 @@ them.
 
 ## Phase 4 — validation
 
-- Contrast is validated by script, not by eye (guide §10): a small committed
-  script checks every text/background token pair for WCAG AA 4.5:1 (3:1 for
-  large/graphical), runnable as an npm script.
+- Contrast is validated by script, not by eye (guide §10):
+  `newui/scripts/contrast.js` (`npm run contrast`, added with phase 1) parses
+  the `$-themes` map and checks every text/surface token pair in every theme
+  for WCAG AA 4.5:1, plus `--accent-contrast` on the `--accent-strong` fill.
 - `npm run build` plus eslint on touched files.
 - Live run-through with screenshots of unlock, init wizard, portfolio, and
   each modal, compared against the Figma originals for layout regressions
@@ -106,18 +140,21 @@ them.
   the four duplicate "BTC" asset pills and the duplicated blank-logo Bitcoin
   row in MainFrame.
 
-## Open decisions
+## Decisions
 
-1. **Token rename** — rename `--accent-blue-*` → `--accent-*`, or value-swap
-   only. Recommendation: rename.
-2. **Radii** — keep `--border-radius: 4px`, or soften to 6px controls plus a
-   new `--radius-card` (12–16px) for modals/cards. Recommendation: 6px + 16px
-   (guide §4 allows either; 6/16 is the warmer choice).
-3. **Scrim blur** — drop the `.modals` `backdrop-filter`, or keep it since it
-   is not the sticky-scroll case. Recommendation: drop.
-4. **Light theme** — dark-only for now per guide §11, with `vars.scss`
-   structured so the bone-paper light column can drop in later.
-   Recommendation: dark-only.
+1. **Token rename** — RESOLVED: renamed. `--accent-blue` →
+   `--accent-strong`, `--accent-blue-text` → `--accent`, `--accent-blue-border`
+   → `--accent-border`, `--accent-blue-hover` → `--accent-hover`,
+   `--accent-blue-strong` → `--accent-contrast`, `--accent-syncing` →
+   `--gold`, `--modal-wrapper-bg` → `--surface`.
+2. **Radii** — OPEN: keep `--border-radius: 4px`, or soften to 6px controls
+   plus a new `--radius-card` (12–16px) for modals/cards. Recommendation:
+   6px + 16px (guide §4 allows either; 6/16 is the warmer choice).
+3. **Scrim blur** — OPEN: drop the `.modals` `backdrop-filter`, or keep it
+   since it is not the sticky-scroll case. Recommendation: drop.
+4. **Themes** — RESOLVED (2026-08-03, supersedes the earlier dark-only
+   recommendation): three user-selectable themes — warm (default), cool,
+   light — per the theme system notes in phase 1.
 
 ## Out of scope
 

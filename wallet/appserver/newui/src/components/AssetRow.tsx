@@ -30,7 +30,7 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-syncing-spinner has-tip accent-syncing"
+        className="asset-status-syncing-spinner has-tip gold"
         aria-label={tvar('syncing_pct', { pct: String(pct) })}
       >
         <Spinner size={10} />

@@ -7,7 +7,8 @@
     "start": "webpack serve --mode development --open",
     "watch": "webpack --watch --mode development",
     "build": "webpack --mode production",
-    "lint": "tsc --noEmit -p tsconfig.lint.json && eslint src --ext .js --ext .ts --ext .tsx"
+    "lint": "tsc --noEmit -p tsconfig.lint.json && eslint src --ext .js --ext .ts --ext .tsx",
+    "contrast": "node scripts/contrast.js"
   },
   "author": "",
   "license": "ISC",

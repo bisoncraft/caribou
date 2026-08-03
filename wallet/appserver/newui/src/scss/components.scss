@@ -10,7 +10,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--modal-wrapper-bg);
+  background-color: var(--surface);
 }
 
 // Dimmed scrim behind in-app modal dialogs (Receive, ActivateAsset, …).
@@ -30,7 +30,7 @@ form.modal {
 // Used by the init wizard's outer container — same shade as .forms so the
 // transition between forms screens and the wizard is seamless.
 .init-bg {
-  background-color: var(--modal-wrapper-bg);
+  background-color: var(--surface);
 }
 
 // Translucent loading overlay; sits above page content.
@@ -259,22 +259,22 @@ img.logo-full {
   letter-spacing: 0.06em;
   padding: 0.2rem 0.65rem;
   border-radius: 20px;
-  background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-blue) 40%, transparent);
-  color: var(--accent-blue-text);
+  background-color: color-mix(in srgb, var(--accent-strong) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-strong) 40%, transparent);
+  color: var(--accent);
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 
   &:hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 33%, transparent);
-    border-color: var(--accent-blue-border);
-    color: var(--accent-blue-hover);
+    background-color: color-mix(in srgb, var(--accent-strong) 33%, transparent);
+    border-color: var(--accent-border);
+    color: var(--accent-hover);
     cursor: pointer;
   }
 
   &.asset-pill-selected {
-    background-color: var(--accent-blue);
-    border-color: var(--accent-blue-border);
-    color: var(--accent-blue-strong);
+    background-color: var(--accent-strong);
+    border-color: var(--accent-border);
+    color: var(--accent-contrast);
   }
 }
 
@@ -344,12 +344,12 @@ img.logo-full {
   transition: color 0.12s, background-color 0.12s;
 
   &:hover {
-    color: var(--accent-blue-hover);
-    background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+    color: var(--accent-hover);
+    background-color: color-mix(in srgb, var(--accent-strong) 20%, transparent);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--accent-blue);
+    outline: 2px solid var(--focus);
     outline-offset: 1px;
   }
 
@@ -401,10 +401,10 @@ img.logo-full {
 // Row highlight flash, triggered by clicking a ticker pill.
 @keyframes rowHighlight {
   0% {
-    background-color: color-mix(in srgb, var(--accent-blue-border) 20%, transparent);
+    background-color: color-mix(in srgb, var(--accent-border) 20%, transparent);
   }
   60% {
-    background-color: color-mix(in srgb, var(--accent-blue-border) 13%, transparent);
+    background-color: color-mix(in srgb, var(--accent-border) 13%, transparent);
   }
   100% {
     background-color: transparent;
@@ -427,18 +427,18 @@ img.logo-full {
   }
 
   td:first-child {
-    border-left: 3px dashed color-mix(in srgb, var(--accent-blue-border) 40%, transparent);
+    border-left: 3px dashed color-mix(in srgb, var(--accent-border) 40%, transparent);
   }
 
   &:hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 13%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 13%, transparent);
 
     td {
       opacity: 1;
     }
 
     .asset-row-add-wallet {
-      color: var(--accent-blue-hover);
+      color: var(--accent-hover);
     }
   }
 }
@@ -450,7 +450,7 @@ img.logo-full {
 .asset-row-add-wallet {
   text-align: right;
   vertical-align: middle;
-  color: var(--accent-blue-text);
+  color: var(--accent);
   font-size: 12px;
   letter-spacing: 0.04em;
 }
@@ -486,17 +486,17 @@ img.logo-full {
 // Inline "Activate" button inside the Receive network picker.
 .receive-activate-btn {
   padding: 2px 10px;
-  border: 1px solid var(--accent-blue-border);
+  border: 1px solid var(--accent-border);
   border-radius: 4px;
-  color: var(--accent-blue-text);
+  color: var(--accent);
   background: transparent;
   cursor: pointer;
   white-space: nowrap;
   transition: background-color 0.15s, color 0.15s;
 
   &:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
-    color: var(--accent-blue-hover);
+    background-color: color-mix(in srgb, var(--accent-strong) 20%, transparent);
+    color: var(--accent-hover);
   }
 
   &:disabled {
@@ -532,7 +532,7 @@ img.logo-full {
   }
 
   &:focus-visible+.checkbox-pip {
-    outline: 2px solid var(--accent-blue-border);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
   }
 }
@@ -541,7 +541,7 @@ img.logo-full {
   position: absolute;
   inset: 0;
   border-radius: 5px;
-  border: 1.5px solid color-mix(in srgb, var(--accent-blue-border) 65%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--accent-border) 65%, transparent);
   background: transparent;
   display: flex;
   align-items: center;
@@ -563,8 +563,8 @@ img.logo-full {
 }
 
 .checkbox-input:checked+.checkbox-pip {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 
   .checkbox-check {
     opacity: 1;
@@ -592,11 +592,11 @@ img.logo-full {
   user-select: none;
 
   &--selected {
-    background-color: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 8%, transparent);
   }
 
   &:not(.checkbox-row--readonly):not(.checkbox-row--disabled):hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 16%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 16%, transparent);
   }
 
   &--readonly {
@@ -617,9 +617,9 @@ img.logo-full {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-syncing) 22%, transparent);
-  border: 1.5px solid color-mix(in srgb, var(--accent-syncing) 55%, transparent);
-  color: var(--accent-syncing);
+  background: color-mix(in srgb, var(--gold) 22%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  color: var(--gold);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -630,7 +630,7 @@ img.logo-full {
     width: 11px;
     height: 11px;
     fill: none;
-    stroke: var(--accent-syncing);
+    stroke: var(--gold);
     stroke-width: 3.5;
     stroke-linecap: round;
     stroke-linejoin: round;
@@ -653,7 +653,7 @@ img.logo-full {
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--accent-blue-text);
+  color: var(--accent);
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
@@ -661,11 +661,11 @@ img.logo-full {
   transition: color 0.12s;
 
   &:hover {
-    color: var(--accent-blue-hover);
+    color: var(--accent-hover);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--accent-blue-border);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
   }
 }
@@ -730,10 +730,10 @@ img.logo-full {
   // A failed address validation gets an orange (warning) outline. A passing
   // one collapses to .send-addr-display, so there is no valid-state border.
   &.send-addr--invalid {
-    border-color: var(--accent-syncing);
+    border-color: var(--gold);
 
     &:focus {
-      border-color: var(--accent-syncing);
+      border-color: var(--gold);
     }
   }
 }
@@ -765,10 +765,10 @@ img.logo-full {
 
 // Clickable "Available:" / Max affordance above the amount field.
 .send-maxlink {
-  color: var(--accent-blue-text);
+  color: var(--accent);
 
   &:hover {
-    color: var(--accent-blue-hover);
+    color: var(--accent-hover);
   }
 }
 
@@ -802,8 +802,8 @@ img.logo-full {
   transition: border-color 0.15s, background-color 0.15s, transform 0.08s;
 
   &:hover {
-    border-color: var(--accent-blue-border);
-    background-color: color-mix(in srgb, var(--accent-blue) 10%, var(--form-input-bg));
+    border-color: var(--accent-border);
+    background-color: color-mix(in srgb, var(--accent-strong) 10%, var(--form-input-bg));
   }
 
   &:active {
@@ -891,7 +891,7 @@ img.logo-full {
   transition: background-color 0.12s;
 
   &:hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 10%, transparent);
   }
 
   &:last-child { border-bottom: none; }
