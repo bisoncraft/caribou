@@ -2,8 +2,17 @@
 # This file defines common variables to be source'd by the various build scripts
 # in this directory.
 
-# pick up the release tag from git
-VER=$(git describe --tags --abbrev=0 --always | sed -e 's/^v//')
+# electron/package.json is the single source of the desktop version (see
+# electron/pkg.sh). Read with sed rather than `node -p`, since the snap scripts
+# that source this file don't otherwise need node. "version" is the only such
+# key in that file — dependency entries are keyed by package name.
+COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "${COMMON_DIR}/../electron/package.json" | head -1)
+if [[ -z "${VER}" ]]; then
+  echo "could not read version from ${COMMON_DIR}/../electron/package.json" >&2
+  exit 1
+fi
 META= # "release"
 REV="0"
 

@@ -6,8 +6,11 @@
 # turn this on for debugging, keep noise low for prod builds
 # set -ex
 
+# Sets VER from electron/package.json, among other things. VER is deliberately
+# not overridden here: DEB_NAME (the .deb filename) is computed in common.sh, so
+# a later override would put a different version in the control file than in the
+# filename.
 source linux/common.sh
-VER="1.1.0-rc2" # pre, beta, rc1, etc.
 
 # Parse flags.
 TAGS=""

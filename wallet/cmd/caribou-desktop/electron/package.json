@@ -1,6 +1,6 @@
 {
   "name": "caribou-desktop",
-  "version": "1.0.3",
+  "version": "1.1.0-rc2",
   "description": "A multi-coin wallet with in-built DEX.",
   "main": "main.js",
   "private": true,

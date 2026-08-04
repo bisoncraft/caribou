@@ -4,8 +4,8 @@ set -e
 
 cd "$(dirname "$0")"
 
-# For release, remove pre-release info, and set metadata to "release".
-VER="1.1.0-rc2" # pre, beta, rc1, etc.
+# package.json is the single source of the desktop version (see pkg.sh).
+VER="$(node -p "require('./package.json').version")" # pre, beta, rc1, etc.
 META="release.local" # "release"
 CARIBOU_EXE="caribou"
 

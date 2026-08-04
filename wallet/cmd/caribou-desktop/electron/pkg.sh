@@ -4,8 +4,12 @@ set -e
 
 cd "$(dirname "$0")"
 
-# For release, remove pre-release info, and set metadata to "release".
-VER="1.1.0-rc2" # pre, beta, rc1, etc.
+# package.json is the single source of the desktop version: forge stamps it into
+# the .app's CFBundleShortVersionString, and it is used here for the Go binary's
+# main.Version and the installer filename. Bump it with
+# `npm version --no-git-tag-version <ver>` (which also updates package-lock.json).
+# For release, remove pre-release info there, and set META to "release".
+VER="$(node -p "require('./package.json').version")" # pre, beta, rc1, etc.
 META="release.local" # "release"
 CARIBOU_EXE="caribou"
 
