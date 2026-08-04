@@ -57,11 +57,13 @@ rm -fr "${BUILD_DIR}"
 mkdir -p -m 0755 "${CONTROL_DIR}"
 mkdir -p "${DOT_DESKTOP_BUILDDIR}"
 
-# Build site bundle
+# Build site bundle. newui is a member of the npm workspace rooted at
+# wallet/appserver and webpack is declared at that root, so install from the
+# root and build the member (newui has no lockfile of its own).
 CWD=$(pwd)
-cd ../../appserver/newui
-npm clean-install
-npm run build
+cd ../../appserver
+npm ci
+npm run build --workspace=newui
 cd $CWD
 
 # Build caribou
