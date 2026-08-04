@@ -22,7 +22,7 @@ export CGO_ENABLED=${CGO_ENABLED:-0}
 export GOWORK=off
 
 # if META set, append "+${META}", otherwise nothing.
-LDFLAGS_BASE="-buildid= -s -w -X main.Version=${VER}${META:++${META}}"
+LDFLAGS_BASE="-buildid= -s -w -X github.com/bisoncraft/caribou/wallet/app.Version=${VER}${META:++${META}}"
 
 #Build the webpack bundle prior to building the appserver package, which embeds
 # the files.

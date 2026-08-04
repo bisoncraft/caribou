@@ -67,7 +67,7 @@ npm run build --workspace=newui
 cd $CWD
 
 # Build caribou
-LDFLAGS="-s -w -X main.Version=${VER}${META:++${META}}"
+LDFLAGS="-s -w -X github.com/bisoncraft/caribou/wallet/app.Version=${VER}${META:++${META}}"
 GOOS=linux GOARCH=${ARCH} go build ${TAGS:+-tags ${TAGS}} -o "${BIN_BUILDPATH}" -ldflags "$LDFLAGS"
 chmod 755 "${BIN_BUILDPATH}"
 

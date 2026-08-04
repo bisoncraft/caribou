@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 # package.json is the single source of the desktop version: forge stamps it into
 # the .app's CFBundleShortVersionString, and it is used here for the Go binary's
-# main.Version and the installer filename. Bump it with
+# wallet/app.Version and the installer filename. Bump it with
 # `npm version --no-git-tag-version <ver>` (which also updates package-lock.json).
 # For release, remove pre-release info there, and set META to "release".
 VER="$(node -p "require('./package.json').version")" # pre, beta, rc1, etc.
@@ -26,7 +26,7 @@ export CGO_ENABLED=${CGO_ENABLED:-0}
 export GOWORK=off
 
 # if META set, append "+${META}", otherwise nothing.
-LDFLAGS_BASE="-buildid= -s -w -X main.Version=${VER}${META:++${META}}"
+LDFLAGS_BASE="-buildid= -s -w -X github.com/bisoncraft/caribou/wallet/app.Version=${VER}${META:++${META}}"
 
 # Build the webpack bundle prior to building the appserver package, which embeds
 # the files.

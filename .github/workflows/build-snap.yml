@@ -14,11 +14,8 @@ jobs:
           with:
             fetch-depth: 0
 
-        - name: Compile frontend
-          working-directory: wallet/appserver
-          run: |
-            npm ci
-            npm run build --workspace=newui
+        # The frontend bundle is built by linux/pkg-debian.sh below, so there is
+        # no separate compile step here.
 
         - name: Install deb deps
           run: |
