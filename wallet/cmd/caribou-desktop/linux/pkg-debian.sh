@@ -82,7 +82,7 @@ fi
 # https://www.debian.org/doc/debian-policy/ch-controlfields.html
 cat > "${CONTROL_DIR}/control" <<EOF
 Package: ${PKG}
-Version: ${VER}
+Version: ${VER_DEB}
 Architecture: ${ARCH}
 Maintainer: The Caribou Developers <briantstafford@gmail.com>
 Depends: libgtk-3-0, libwebkit2gtk-4.1-0

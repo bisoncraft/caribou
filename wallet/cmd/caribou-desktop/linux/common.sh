@@ -13,6 +13,14 @@ if [[ -z "${VER}" ]]; then
   echo "could not read version from ${COMMON_DIR}/../electron/package.json" >&2
   exit 1
 fi
+
+# The Debian form of the version. dpkg compares end-of-string as lower than any
+# character except '~', so a pre-release written as "1.1.0-rc2" sorts *newer*
+# than the final "1.1.0" and `apt upgrade` would never move a user off the rc.
+# "1.1.0~rc2" sorts correctly. Used for the .deb filename and the control file's
+# Version: field; the snap's display version stays the plain semver form, since
+# snapd upgrades by revision rather than by version comparison.
+VER_DEB="${VER/-/\~}"
 META= # "release"
 REV="0"
 
@@ -28,5 +36,5 @@ ARCH="amd64"
 BUILD_DIR="./build"
 
 # DEB_NAME follows the prescribed format for debian packaging.
-DEB_NAME="${PKG}_${VER}-${REV}_${ARCH}"
+DEB_NAME="${PKG}_${VER_DEB}-${REV}_${ARCH}"
 
