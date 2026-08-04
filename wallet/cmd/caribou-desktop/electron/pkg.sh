@@ -33,7 +33,11 @@ popd
 
 # Install this electron project's own deps (electron-forge + the makers).
 # --ignore-scripts skips the package's "prepare" lifecycle (prepare.sh), since
-# pkg.sh does its own resource setup below with the correct --xmr handling.
+# pkg.sh does its own resource setup below with the correct --xmr handling. It
+# also skips electron's own postinstall, so node_modules/electron/dist is left
+# empty — harmless here (@electron/packager downloads Electron per target via
+# @electron/get), but `npm start` in this directory afterwards will fail with
+# "Electron failed to install correctly" until a plain `npm ci` is re-run.
 npm ci --ignore-scripts
 
 rm -rf out # This is the default output dir for electron-forge make
@@ -103,7 +107,8 @@ build_targets (){
     # read-only ULFO image. Driving Finder needs a GUI login session on the build
     # Mac (as does the signing/notarization this script already does).
     STAGING="$(mktemp -d)"
-    cp -R "${APP}" "${STAGING}/Caribou.app"
+    # ditto, not cp -R: Apple's supported way to copy a signed bundle intact.
+    ditto "${APP}" "${STAGING}/Caribou.app"
     ln -s /Applications "${STAGING}/Applications"
 
     # Unmount any stale volume of this name so the layout below targets ours.
@@ -116,28 +121,54 @@ build_targets (){
       -fs HFS+ -format UDRW -size "${SIZE_MB}m" -ov "${RW_DMG}"
     rm -rf "${STAGING}"
 
-    hdiutil attach "${RW_DMG}" -readwrite -noverify -noautoopen
-    osascript <<'OSA'
-tell application "Finder"
-  tell disk "Caribou"
-    open
-    set current view of container window to icon view
-    set toolbar visible of container window to false
-    set statusbar visible of container window to false
-    set the bounds of container window to {200, 120, 720, 460}
-    set opts to the icon view options of container window
-    set arrangement of opts to not arranged
-    set icon size of opts to 100
-    set position of item "Caribou.app" of container window to {150, 170}
-    set position of item "Applications" of container window to {390, 170}
-    update without registering applications
-    delay 1
-    close
+    # Take the device and mount point from attach output rather than assuming
+    # /Volumes/Caribou: if a volume by that name is already mounted and busy, ours
+    # lands on "/Volumes/Caribou 1" and hardcoded paths would style and detach the
+    # wrong volume, leaving an unstyled dmg with no error.
+    ATTACH="$(hdiutil attach "${RW_DMG}" -readwrite -noverify -noautoopen)"
+    DEV="$(printf '%s\n' "${ATTACH}" | grep -Eo '^/dev/disk[0-9]+' | head -1)"
+    MNT="$(printf '%s\n' "${ATTACH}" | sed -n 's|.*[[:space:]]\(/Volumes/.*\)$|\1|p' | head -1)"
+    if [[ -z "${DEV}" || -z "${MNT}" ]]; then
+      echo "could not determine device/mount point from hdiutil attach:" >&2
+      printf '%s\n' "${ATTACH}" >&2
+      exit 1
+    fi
+
+    osascript - "${MNT##*/}" <<'OSA'
+on run argv
+  set volName to item 1 of argv
+  tell application "Finder"
+    tell disk volName
+      open
+      set current view of container window to icon view
+      set toolbar visible of container window to false
+      set statusbar visible of container window to false
+      set the bounds of container window to {200, 120, 720, 460}
+      set opts to the icon view options of container window
+      set arrangement of opts to not arranged
+      set icon size of opts to 100
+      set position of item "Caribou.app" of container window to {150, 170}
+      set position of item "Applications" of container window to {390, 170}
+      update without registering applications
+      delay 1
+      close
+    end tell
   end tell
-end tell
+end run
 OSA
     sync
-    hdiutil detach "/Volumes/Caribou"
+
+    # Finder can hold the volume for a moment after closing the window, so a
+    # detach right here intermittently fails with "Resource busy". Retry before
+    # forcing, rather than aborting a run that has already paid for notarization.
+    DETACHED=""
+    for _ in 1 2 3 4 5; do
+      if hdiutil detach "${DEV}" >/dev/null 2>&1; then DETACHED=1; break; fi
+      sleep 2
+    done
+    if [[ -z "${DETACHED}" ]]; then
+      hdiutil detach "${DEV}" -force
+    fi
 
     # Compress the laid-out image to the final read-only .dmg.
     rm -f "${DMG}"
@@ -146,8 +177,10 @@ OSA
 
     # Sign the .dmg, and with credentials also notarize + staple it (the app
     # inside is already notarized; a notarized dmg passes Gatekeeper on download).
+    # --timestamp is required: notarization rejects signatures without a secure
+    # timestamp, and codesign only adds one by default in some cases.
     if [[ -n "${APPLE_ID}" && -n "${APPLE_PASSWORD}" && -n "${APPLE_TEAM_ID}" ]]; then
-      codesign -s "Developer ID Application" "${DMG}"
+      codesign --timestamp -s "${APPLE_IDENTITY:-Developer ID Application}" "${DMG}"
       xcrun notarytool submit "${DMG}" --apple-id "${APPLE_ID}" \
         --password "${APPLE_PASSWORD}" --team-id "${APPLE_TEAM_ID}" --wait
       xcrun stapler staple "${DMG}"

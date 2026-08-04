@@ -25,11 +25,16 @@ module.exports = {
     ...(appleCredentials ? {
       // Developer ID (outside the App Store) signing. The identity is
       // auto-discovered from the "Developer ID Application" cert in the login
-      // keychain. optionsForFile applies Hardened Runtime + entitlements to the
-      // app and every nested Mach-O it re-signs (Electron helpers, the bundled
-      // Go `caribou` binary, and the XMR libmonero_wallet2_api_c.dylib) — all three are
-      // required for the notary service to accept the build.
+      // keychain, unless APPLE_IDENTITY pins one — set it (to the cert's SHA-1,
+      // say) when the keychain holds more than one such cert, otherwise the
+      // name is a prefix match and codesign fails as ambiguous. pkg.sh signs
+      // the .dmg with the same variable. optionsForFile applies Hardened
+      // Runtime + entitlements to the app and every nested Mach-O it re-signs
+      // (Electron helpers, the bundled Go `caribou` binary, and the XMR
+      // libmonero_wallet2_api_c.dylib) — all three are required for the notary
+      // service to accept the build.
       osxSign: {
+        ...(process.env.APPLE_IDENTITY ? { identity: process.env.APPLE_IDENTITY } : {}),
         optionsForFile: () => ({
           hardenedRuntime: true,
           entitlements: path.join(__dirname, 'entitlements.plist'),

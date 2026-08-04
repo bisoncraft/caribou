@@ -101,6 +101,15 @@ export APPLE_TEAM_ID="your-team-id"
 read -rs -p "App-specific password: " APPLE_PASSWORD && export APPLE_PASSWORD && echo
 ```
 
+If `security find-identity` lists more than one "Developer ID Application"
+certificate (common once one has expired), pin the one to sign with — the name
+is only a prefix match, so codesign would otherwise fail as ambiguous at the end
+of the build:
+
+```bash
+export APPLE_IDENTITY="<SHA-1 hash from security find-identity>"
+```
+
 Then run the packaging script (add `--xmr` to include Monero; the script installs
 its own dependencies and does the signing, notarization, and stapling):
 
@@ -109,6 +118,11 @@ its own dependencies and does the signing, notarization, and stapling):
 ```
 
 The signed, notarized `.dmg` installers will be in `installers/`.
+
+`pkg.sh` installs the electron deps with `--ignore-scripts`, which leaves
+`node_modules/electron/dist` empty. That doesn't affect packaging, but a later
+`npm start` in `electron/` will report "Electron failed to install correctly"
+until you re-run a plain `npm ci` there.
 
 #### Handing signing to a teammate
 
