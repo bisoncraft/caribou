@@ -100,7 +100,8 @@ export class Application {
     await this.fetchBuildInfo()
     console.log('Caribou, Build', this.commitHash.substring(0, 8))
 
-    ws.connect(getSocketURI(), () => window.location.reload())
+    // The socket itself is opened by syncSocket once a session exists; the
+    // route registration survives disconnects, so it is only done here.
     ws.registerRoute('notify', (note: CoreNote) => this.notify(note))
 
     // Handle back navigation from the browser.
@@ -150,7 +151,19 @@ export class Application {
     this.langs = r.langs
     if (r.appSettings) this.appSettings = r.appSettings
     if (needsTickers) this.prepareTickerAssets()
+    this.syncSocket()
     return r
+  }
+
+  /*
+   * syncSocket brings the notification socket in line with the session state.
+   * The server serves /ws only to an authenticated session, so connecting
+   * before login just burns retries — and a retry landing after login would
+   * count as a reconnect and reload the page out from under the user.
+   */
+  syncSocket () {
+    if (this.authed) ws.connect(getSocketURI(), () => window.location.reload())
+    else ws.disconnect()
   }
 
   async changeLocale (lang: string) {

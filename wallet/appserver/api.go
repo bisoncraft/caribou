@@ -1420,6 +1420,11 @@ func setCookie(name, value string, w http.ResponseWriter) {
 		Path:     "/",
 		Value:    value,
 		SameSite: http.SameSiteStrictMode,
+		// HttpOnly keeps the session cookies out of document.cookie; the
+		// sessionkey cookie decrypts the cached app password. Secure is
+		// omitted intentionally, matching the capability cookie: the loopback
+		// server is HTTP-only, and a Secure cookie would never be sent.
+		HttpOnly: true,
 	})
 }
 

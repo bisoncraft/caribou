@@ -738,8 +738,13 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		log.Infof("Web server off")
 	}()
 
-	// Configure the websocket handler before starting the server.
-	s.mux.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+	// Configure the websocket handler before starting the server. The link
+	// carries every balance, wallet-state, deposit-address and send
+	// notification for the life of the process, so it takes the same session
+	// check as the /api routes: capabilityMiddleware is a no-op on desktop
+	// (no capability token), which would otherwise leave this open to any
+	// process on the machine.
+	s.mux.With(s.rejectUnauthed).Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		s.wsServer.HandleConnect(ctx, w, r)
 	})
 
