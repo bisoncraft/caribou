@@ -73,7 +73,9 @@ wallet/android/app/src/main/jniLibs/*/*.so
 wallet/asset/xmr/lib/*/libc++_shared.so
 wallet/android/app/src/main/jniLibs/*/libc++_shared.so
 
-# dnldd's local workflow files (notes, reviews, harness scripts) - not for commit
+# dnldd's local workflow files (notes, reviews, harness scripts) - not for commit.
+# The directories are anchored to the repo root; CLAUDE.md is deliberately not,
+# since per-package guides live at any depth.
 CLAUDE.md
 /reviews/
 /scripts/

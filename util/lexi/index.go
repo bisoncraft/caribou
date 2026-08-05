@@ -220,6 +220,9 @@ func (i *Iter) K() ([]byte, error) {
 	}
 	item, err := i.txn.Get(PrefixedKey(IdToKeyPrefix, i.dbID[:]))
 	if err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, fmt.Errorf("dangling entry for table %q: %w", i.table.name, err)
+		}
 		return nil, err
 	}
 	kB, err := item.ValueCopy(nil)
@@ -248,6 +251,9 @@ func (i *Iter) datum() (_ *datum, err error) {
 	}
 	i.d, err = i.table.get(i.txn, i.dbID)
 	if err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, fmt.Errorf("dangling entry for table %q: %w", i.table.name, err)
+		}
 		return nil, err
 	}
 	return i.d, nil

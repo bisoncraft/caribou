@@ -697,3 +697,84 @@ func TestSetBatchIgnoresCallerTxn(t *testing.T) {
 		}
 	}
 }
+
+// TestTableDanglingKeyMapEntry forces Table.Iterate's dangling-entry path by
+// injecting a key→DBID mapping whose row does not exist. The error has to name
+// the condition: iteration resolves rows in a second lookup, so a bare
+// ErrKeyNotFound out of a full-table scan says nothing about what is missing.
+func TestTableDanglingKeyMapEntry(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("dangling")
+	if err != nil {
+		t.Fatalf("error creating table: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("error setting: %v", err)
+	}
+
+	// Map a second key to a DBID that was never assigned a row.
+	var orphan DBID
+	orphan[0] = 0xff
+	if err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set(PrefixedKey(keyToIDPrefix, PrefixedKey(tbl.prefix, []byte("orphan"))), orphan[:])
+	}); err != nil {
+		t.Fatalf("error injecting key map entry: %v", err)
+	}
+
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		return it.V(func(_ []byte) error { return nil })
+	})
+	if err == nil {
+		t.Fatal("expected dangling-entry error")
+	}
+	if !strings.Contains(err.Error(), "dangling entry") {
+		t.Fatalf("error does not name the condition: %v", err)
+	}
+}
+
+// TestIndexDanglingIDMapEntry forces Iter.K's dangling-entry path by removing
+// the id→key mapping an index entry depends on. Same reasoning as
+// TestTableDanglingKeyMapEntry: K resolves the key in a second lookup, so a bare
+// ErrKeyNotFound out of an index scan says nothing about what is missing.
+func TestIndexDanglingIDMapEntry(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("danglingID")
+	if err != nil {
+		t.Fatalf("error creating table: %v", err)
+	}
+	idx, err := tbl.AddIndex("byte0", func(_, v KV) ([]byte, error) {
+		return v.([]byte)[:1], nil
+	})
+	if err != nil {
+		t.Fatalf("error adding index: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("error setting: %v", err)
+	}
+
+	// Drop the id→key mapping the index entry resolves through.
+	if err := db.Update(func(txn *badger.Txn) error {
+		dbID, err := tbl.keyID(txn, tbl.prefix, []byte("k"), true)
+		if err != nil {
+			return err
+		}
+		return txn.Delete(PrefixedKey(IdToKeyPrefix, dbID[:]))
+	}); err != nil {
+		t.Fatalf("error deleting id map entry: %v", err)
+	}
+
+	err = idx.Iterate(nil, func(it *Iter) error {
+		_, err := it.K()
+		return err
+	})
+	if err == nil {
+		t.Fatal("expected dangling-entry error")
+	}
+	if !strings.Contains(err.Error(), "dangling entry") {
+		t.Fatalf("error does not name the condition: %v", err)
+	}
+}

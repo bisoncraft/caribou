@@ -41,3 +41,54 @@ func TestDecodeNotificationShortTimestamp(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeShortFixedWidthPushes asserts that every persisted record whose
+// fixed-width push is the wrong length is rejected as an error.
+//
+// Same reasoning as the notification timestamp above: these are read with a
+// fixed-width big-endian decoder, so a short push panics the caller rather than
+// failing the decode, and every caller is written to handle an error.
+func TestDecodeShortFixedWidthPushes(t *testing.T) {
+	creds := func(birthday []byte) []byte {
+		return encode.BuildyBytes{0}.
+			AddData([]byte("encseed")).
+			AddData([]byte("encinnerkey")).
+			AddData([]byte("innerparams")).
+			AddData([]byte("outerparams")).
+			AddData(birthday)
+	}
+	assetBal := func(avail, immature, locked []byte) []byte {
+		return encode.BuildyBytes{0}.AddData(avail).AddData(immature).AddData(locked)
+	}
+	bal := func(assetBal, stamp []byte) []byte {
+		return encode.BuildyBytes{0}.AddData(assetBal).AddData(stamp)
+	}
+
+	eight := make([]byte, 8)
+	if _, err := db.DecodeCredentials(creds(eight)); err != nil {
+		t.Fatalf("well-formed credentials failed to decode: %v", err)
+	}
+	if _, err := db.DecodeBalance(bal(assetBal(eight, eight, eight), eight)); err != nil {
+		t.Fatalf("well-formed balance failed to decode: %v", err)
+	}
+
+	for _, n := range []int{0, 1, 7, 9} {
+		short := make([]byte, n)
+		if _, err := db.DecodeCredentials(creds(short)); err == nil {
+			t.Fatalf("no error decoding credentials with %d-byte birthday", n)
+		}
+		if _, err := db.DecodeBalance(bal(assetBal(eight, eight, eight), short)); err == nil {
+			t.Fatalf("no error decoding balance with %d-byte stamp", n)
+		}
+		for i, fields := range [][3][]byte{
+			{short, eight, eight},
+			{eight, short, eight},
+			{eight, eight, short},
+		} {
+			ab := assetBal(fields[0], fields[1], fields[2])
+			if _, err := db.DecodeBalance(bal(ab, eight)); err == nil {
+				t.Fatalf("no error decoding asset balance with %d-byte field %d", n, i)
+			}
+		}
+	}
+}

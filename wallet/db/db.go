@@ -303,9 +303,8 @@ func (row *walletRow) assemble(assetID uint32) (*Wallet, error) {
 }
 
 // Wallets lists all saved wallets. The wallets table is iterated in full and
-// grouped by asset ID: kvstore table iteration is key-ordered only on the
-// bbolt engine (Badger iterates insertion order and does not filter by user
-// key prefix), so grouping cannot assume adjacency.
+// grouped by asset ID through a map, so the grouping does not depend on
+// iteration order.
 func (d *kvDB) Wallets() ([]*Wallet, error) {
 	rows := make(map[uint32]*walletRow)
 	err := d.wallets.Iterate(nil, func(it kvstore.StoreIter) error {
