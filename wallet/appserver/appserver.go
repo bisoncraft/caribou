@@ -952,6 +952,12 @@ func (s *AppServer) deauth() {
 		clearDB = true
 	}
 	s.authMtx.Unlock()
+	// Drop the notification sockets along with the tokens. /ws is authorized
+	// at upgrade and never re-checked, so a link opened under the session
+	// being torn down here would otherwise keep streaming balances, wallet
+	// state, deposit addresses and sends to a peer that can no longer
+	// authenticate. Clients reconnect once a new session exists.
+	s.wsServer.DisconnectAll()
 	if clearDB {
 		if err := s.core.SetCompanionToken(""); err != nil {
 			log.Errorf("Error clearing companion token from DB: %v", err)

@@ -172,7 +172,7 @@ func TestClientMap(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		ipk := util.IPKey{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255 /* ipv4 */, 127, 0, 0, 1}
-		srv.connect(ctx, conn, ipk.String())
+		srv.connect(ctx, conn, ipk.String(), srv.epoch)
 		wg.Done()
 	}()
 

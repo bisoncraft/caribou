@@ -1436,6 +1436,7 @@ func clearCookie(name string, w http.ResponseWriter) {
 		Value:    "",
 		Expires:  time.Unix(0, 0),
 		SameSite: http.SameSiteStrictMode,
+		HttpOnly: true,
 	})
 }
 

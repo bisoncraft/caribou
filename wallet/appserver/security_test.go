@@ -8,9 +8,11 @@ package appserver
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -376,5 +378,47 @@ func TestSetCookieHttpOnly(t *testing.T) {
 		if cookies[0].Secure {
 			t.Errorf("%s is Secure, which breaks the HTTP-only loopback server", name)
 		}
+	}
+}
+
+// TestLogoutDisconnectsWS asserts that ending a session drops the notification
+// sockets opened under it. /ws is authorized at upgrade and never re-checked,
+// so a link that outlived its session would keep streaming balances, wallet
+// state, deposit addresses and sends to a peer that can no longer
+// authenticate — which is exactly what Lock claims to prevent when it
+// invalidates the auth tokens.
+func TestLogoutDisconnectsWS(t *testing.T) {
+	s, _, shutdown := newTServer(t, true)
+	defer shutdown()
+
+	const authToken = "00112233445566778899aabbccddeeff"
+	s.authMtx.Lock()
+	s.authTokens[authToken] = true
+	s.authMtx.Unlock()
+
+	hdr := http.Header{}
+	hdr.Add("Cookie", (&http.Cookie{Name: authCK, Value: authToken}).String())
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+s.addr+"/ws", hdr)
+	if err != nil {
+		t.Fatalf("authenticated /ws upgrade rejected: %v", err)
+	}
+	defer conn.Close()
+
+	if err := s.Lock(); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+
+	// The peer must observe the close, not just an idle socket. A read
+	// deadline expiring means the link is still up, which is the bug.
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("socket still live after logout")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("socket left open after logout; read timed out instead of closing: %v", err)
 	}
 }
