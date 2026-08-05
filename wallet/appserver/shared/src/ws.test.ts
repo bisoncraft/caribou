@@ -95,3 +95,60 @@ describe('MessageSocket lifecycle', () => {
     expect(seen).toEqual([{ id: 1 }])
   })
 })
+
+// AsyncSocket models the browser more closely than FakeSocket: close() does
+// not fire onclose synchronously.
+class AsyncSocket {
+  static instances: AsyncSocket[] = []
+  onclose: ((evt: any) => void) | null = null
+  onopen: (() => void) | null = null
+  onmessage: ((evt: any) => void) | null = null
+  onerror: ((evt: any) => void) | null = null
+  url: string
+
+  constructor (url: string) {
+    this.url = url
+    AsyncSocket.instances.push(this)
+  }
+
+  close () {
+    setTimeout(() => { if (this.onclose) this.onclose({ code: 1006 }) }, 0)
+  }
+
+  send () { /* not exercised here */ }
+}
+
+describe('MessageSocket supersession', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    AsyncSocket.instances = []
+    ;(window as any).log = () => { /* silence ws logging */ }
+    ;(window as any).WebSocket = AsyncSocket
+    ;(window as any).WebSocket.OPEN = 1
+    ws.disconnect()
+    ws.handlers = {}
+  })
+
+  afterEach(() => {
+    ws.disconnect()
+    vi.useRealTimers()
+  })
+
+  // A logout/login round trip disconnects and reconnects faster than the
+  // browser delivers the first link's onclose. Acting on that stale event
+  // would null out the live link and arm a retry loop on top of it, leaving
+  // two sockets delivering notifications.
+  it('ignores the close of a link a later connect superseded', () => {
+    ws.connect('ws://x/ws', noop)
+    ws.disconnect()
+    ws.connect('ws://x/ws', noop)
+    expect(AsyncSocket.instances).toHaveLength(2)
+
+    AsyncSocket.instances[1].onopen?.()
+    vi.advanceTimersByTime(1) // the first link's onclose finally lands
+
+    expect((ws as any).connection).toBe(AsyncSocket.instances[1])
+    vi.advanceTimersByTime(30000)
+    expect(AsyncSocket.instances).toHaveLength(2)
+  })
+})

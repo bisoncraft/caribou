@@ -54,6 +54,11 @@ class MessageSocket {
   // will refuse.
   stopped: boolean
   retryTimer: ReturnType<typeof setTimeout> | null
+  // generation identifies the current connect attempt. close() is async in the
+  // browser, so a link torn down by disconnect can deliver its onclose after a
+  // later connect has already installed a replacement; acting on that stale
+  // event would null out the live link and arm a retry loop on top of it.
+  generation: number
 
   constructor () {
     this.handlers = {}
@@ -61,6 +66,7 @@ class MessageSocket {
     this.maxQlength = 5
     this.stopped = false
     this.retryTimer = null
+    this.generation = 0
   }
 
   registerRoute (route: string, handler: NoteReceiver) {
@@ -102,6 +108,7 @@ class MessageSocket {
   // caller having to re-register.
   disconnect () {
     this.stopped = true
+    this.generation++
     if (this.retryTimer !== null) {
       clearTimeout(this.retryTimer)
       this.retryTimer = null
@@ -121,6 +128,7 @@ class MessageSocket {
     this.uri = uri
     this.reloader = reloader
     this.stopped = false
+    const gen = ++this.generation
     let retrys = 0
     const go = () => {
       this.retryTimer = null
@@ -142,7 +150,13 @@ class MessageSocket {
       conn.onclose = (evt: CloseEvent) => {
         window.log('ws', 'onclose')
         clearTimeout(timeout)
-        conn = this.connection = null
+        conn = null
+        if (gen !== this.generation) {
+          // A later connect already replaced this link; leave it alone.
+          window.log('ws', 'ignoring close of a superseded link')
+          return
+        }
+        this.connection = null
         forward('close', null, this.handlers)
         if (this.stopped) {
           window.log('ws', 'disconnected deliberately, not reconnecting')
