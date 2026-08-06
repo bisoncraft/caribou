@@ -103,6 +103,12 @@ export class Application {
     // The socket itself is opened by syncSocket once a session exists; the
     // route registration survives disconnects, so it is only done here.
     ws.registerRoute('notify', (note: CoreNote) => this.notify(note))
+    // The server ends sessions on its own (Lock, autolock, a failed biometric
+    // Unlock) and drops the socket with it. Nothing else would notice: without
+    // this the retry loop re-attempts the upgrade forever, collecting 401s.
+    // Refetching the session state converges syncSocket to disconnect() when
+    // the session is really gone, and is a no-op on a transient drop.
+    ws.registerRoute('close', () => this.fetchAppState())
 
     // Handle back navigation from the browser.
     Doc.bind(window, 'popstate', (e: PopStateEvent) => {

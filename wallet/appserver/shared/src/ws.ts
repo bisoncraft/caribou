@@ -97,12 +97,6 @@ class MessageSocket {
     this.connection.send(message)
   }
 
-  close (reason: string) {
-    window.log('ws', 'close, reason:', reason, this.handlers)
-    this.handlers = {}
-    if (this.connection) this.connection.close()
-  }
-
   // disconnect closes the link and stops the retry loop, leaving the route
   // handlers registered so a later connect resumes delivery without the
   // caller having to re-register.

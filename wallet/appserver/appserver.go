@@ -649,6 +649,16 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	listeners := make([]net.Listener, 0)
 	var success bool
+	// Any listener already bound must be released if a later bind fails,
+	// otherwise the returned error leaves the ports held for the caller's
+	// lifetime. This has to cover every bind below, not just the tor relay's.
+	defer func() {
+		if !success {
+			for _, ln := range listeners {
+				ln.Close()
+			}
+		}
+	}()
 
 	if s.tor {
 		if s.dataDir == "" {
@@ -682,18 +692,7 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		}
 		listeners = append(listeners, listener)
 
-		// Tag every connection accepted on the hidden service's listener so
-		// handlers can tell onion traffic apart. The relay forwards over
-		// loopback with a peer address indistinguishable from a same-machine
-		// client, and the Host header is remote-controlled, so the listener is
-		// the only trustworthy signal.
-		torAddr := listener.Addr().String()
-		s.srv.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
-			if c.LocalAddr().String() == torAddr {
-				return context.WithValue(ctx, onionConnKey{}, true)
-			}
-			return ctx
-		}
+		s.srv.ConnContext = onionConnContext(listener.Addr().String())
 	}
 
 	// Start serving.
@@ -743,8 +742,9 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// notification for the life of the process, so it takes the same session
 	// check as the /api routes: capabilityMiddleware is a no-op on desktop
 	// (no capability token), which would otherwise leave this open to any
-	// process on the machine.
-	s.mux.With(s.rejectUnauthed).Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+	// process on the machine. StampEpoch runs first so the epoch the upgrade
+	// carries predates that check — see (*websocket.Server).StampEpoch.
+	s.mux.With(s.wsServer.StampEpoch, s.rejectUnauthed).Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		s.wsServer.HandleConnect(ctx, w, r)
 	})
 
@@ -818,6 +818,21 @@ func prepareAddr(addr net.Addr) (string, bool) {
 // onionConnKey tags a request context when the connection was accepted on the
 // Tor hidden service's listener. See Connect.
 type onionConnKey struct{}
+
+// onionConnContext returns an http.Server ConnContext hook that tags every
+// connection accepted on the hidden service's listener so handlers can tell
+// onion traffic apart. The relay forwards over loopback with a peer address
+// indistinguishable from a same-machine client, and the Host header is
+// remote-controlled, so the listener a connection landed on — identified by the
+// local address it shares with that listener — is the only trustworthy signal.
+func onionConnContext(torAddr string) func(context.Context, net.Conn) context.Context {
+	return func(ctx context.Context, c net.Conn) context.Context {
+		if c.LocalAddr().String() == torAddr {
+			return context.WithValue(ctx, onionConnKey{}, true)
+		}
+		return ctx
+	}
+}
 
 // isOnionRequest returns true if the request was made through the Tor hidden
 // service. The determination is made from the listener the connection was

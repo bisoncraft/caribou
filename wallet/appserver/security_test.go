@@ -314,6 +314,48 @@ func TestOnionRequestNotHostDerived(t *testing.T) {
 	}
 }
 
+// TestOnionConnContextIdentifiesTheListener exercises the comparison
+// TestOnionRequestNotHostDerived stops short of: the one that decides whether a
+// connection is tagged at all. Everything downstream reads a context value that
+// is only ever set here, so a silent mismatch between the listener's address
+// and an accepted connection's local address disables the whole protection with
+// no visible symptom — onion traffic would simply be classified as local.
+func TestOnionConnContextIdentifiesTheListener(t *testing.T) {
+	torLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer torLn.Close()
+	directLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer directLn.Close()
+
+	connCtx := onionConnContext(torLn.Addr().String())
+
+	tagged := func(ln net.Listener) bool {
+		client, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer client.Close()
+		server, err := ln.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		defer server.Close()
+		return connCtx(context.Background(), server).Value(onionConnKey{}) != nil
+	}
+
+	if !tagged(torLn) {
+		t.Fatal("a connection accepted on the hidden service's listener was not tagged as onion")
+	}
+	if tagged(directLn) {
+		t.Fatal("a connection accepted on the direct listener was tagged as onion")
+	}
+}
+
 // TestWSRequiresAuth asserts that the notification websocket is gated by the
 // same session check as the /api routes. /ws streams every balance, wallet
 // state, deposit address and send notification for the life of the process, so
