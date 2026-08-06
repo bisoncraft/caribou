@@ -50,7 +50,28 @@ const (
 
 	flagPending   byte = 1 << 0 // !Confirmed (unconfirmed; needs monitoring)
 	flagConfirmed byte = 1 << 1 // finalized
+
+	// maxPrealloc caps the capacity reserved for a history page before the
+	// first record is read. TxHistoryRequest.N is decoded straight from the
+	// HTTP request body, so it cannot be handed to make: a negative N panics
+	// with "makeslice: cap out of range", and a large one asks for gigabytes
+	// up front, which is an unrecoverable OOM rather than an error the caller
+	// sees. N still bounds the page — the scan loops enforce it — this only
+	// bounds the head start.
+	maxPrealloc = 256
 )
+
+// PreallocTxs reserves capacity for a history page of n transactions, bounded
+// by maxPrealloc. n <= 0 means unbounded per Core.TxHistory's documented
+// contract, so it gets the ceiling too and grows by append. It is exported for
+// the per-wallet transaction databases that keep their own history readers
+// (eth), which take the same request-supplied n.
+func PreallocTxs(n int) []*WalletTransaction {
+	if n <= 0 || n > maxPrealloc {
+		n = maxPrealloc
+	}
+	return make([]*WalletTransaction, 0, n)
+}
 
 // TxDB is the master transaction database. It is engine-agnostic; all
 // transaction logic lives here while the byte-level storage is delegated to a
@@ -483,7 +504,7 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 		copy(seek[12:], id)
 	}
 
-	txs := make([]*WalletTransaction, 0, n)
+	txs := PreallocTxs(n)
 	var moreAvailable bool
 	ignore := req.IngoreTypesLookup()
 
@@ -542,7 +563,7 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 		copy(seek[12:], k)
 	}
 
-	txs := make([]*WalletTransaction, 0, n)
+	txs := PreallocTxs(n)
 	var moreAvailable bool
 	ignore := req.IngoreTypesLookup()
 
@@ -626,7 +647,7 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 		copy(seek[len(ticker)+9:], id)
 	}
 
-	txs := make([]*WalletTransaction, 0, n)
+	txs := PreallocTxs(n)
 	var moreAvailable bool
 	ignore := req.IngoreTypesLookup()
 

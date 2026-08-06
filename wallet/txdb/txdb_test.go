@@ -704,3 +704,64 @@ func TestTickerIndex(t *testing.T) {
 		t.Fatalf("wrong refNetwork err = %v, want ErrUnknownTx", err)
 	}
 }
+
+// TestPageSizeIsNotTrusted covers the three history readers against a
+// TxHistoryRequest.N that came off the wire. N is decoded from the HTTP request
+// body and only the ticker is validated above, so it reaches the readers
+// unchecked: a negative N once panicked the process in makeslice, and a huge one
+// preallocated its full width, which OOMs rather than erroring. Both must be
+// served as ordinary requests, and N <= 0 must keep returning everything, which
+// Core.TxHistory documents as legal.
+func TestPageSizeIsNotTrusted(t *testing.T) {
+	db := newTestTxDB(t)
+	db.SetTickerResolver(func(assetID uint32) string {
+		if assetID == netA {
+			return "BTC"
+		}
+		return ""
+	})
+	n := db.NetworkTxDB(netA)
+
+	want := []string{"t300", "t200", "t100"}
+	for _, wt := range []*WalletTransaction{
+		tx("t100", 1, 100),
+		tx("t200", 2, 200),
+		tx("t300", 3, 300),
+	} {
+		if err := n.StoreTx(wt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	readers := map[string]func(*TxHistoryRequest) (*TxHistoryResponse, error){
+		"GetTxs":         n.GetTxs,
+		"GetAssetTxs":    func(req *TxHistoryRequest) (*TxHistoryResponse, error) { return n.GetAssetTxs(nil, req) },
+		"GetTxsByTicker": func(req *TxHistoryRequest) (*TxHistoryResponse, error) { return db.GetTxsByTicker("BTC", req) },
+	}
+
+	for name, read := range readers {
+		// Negative N is unbounded, same as the zero value.
+		resp, err := read(&TxHistoryRequest{N: -1})
+		if err != nil {
+			t.Fatalf("%s N=-1: %v", name, err)
+		}
+		if got := ids(resp.Txs); !eq(got, want) {
+			t.Fatalf("%s N=-1 = %v, want %v", name, got, want)
+		}
+		if resp.MoreAvailable {
+			t.Fatalf("%s N=-1 reported more available", name)
+		}
+
+		// A page larger than the table is served without reserving its width.
+		resp, err = read(&TxHistoryRequest{N: 500_000_000})
+		if err != nil {
+			t.Fatalf("%s N=500000000: %v", name, err)
+		}
+		if got := ids(resp.Txs); !eq(got, want) {
+			t.Fatalf("%s N=500000000 = %v, want %v", name, got, want)
+		}
+		if c := cap(resp.Txs); c > maxPrealloc {
+			t.Fatalf("%s N=500000000 preallocated cap %d, want <= %d", name, c, maxPrealloc)
+		}
+	}
+}

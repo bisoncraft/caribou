@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -263,5 +264,36 @@ func TestChainlinkRates(t *testing.T) {
 				t.Errorf("got tickers %v, want %v", gotTickers, wantTickers)
 			}
 		})
+	}
+}
+
+// TestInitFiatRateSourcesIsSynchronized covers the startup window: Run
+// populates the rate sources after closing c.ready, so the app server is
+// already answering requests — GET /api/user calls FiatRateSources — while the
+// map is being written. Unsynchronized, that pair is a fatal concurrent map
+// read and write, which no Recoverer can catch, so this must stay race-clean.
+func TestInitFiatRateSourcesIsSynchronized(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			tCore.FiatRateSources()
+		}
+	}()
+	tCore.initFiatRateSources([]string{coinpaprika})
+	wg.Wait()
+
+	// Disabled sources stay out; everything else is enabled.
+	for token := range fiatRateFetchers {
+		got := tCore.fiatRateSources[token] != nil
+		want := token != coinpaprika
+		if got != want {
+			t.Fatalf("source %s enabled = %v, want %v", token, got, want)
+		}
 	}
 }

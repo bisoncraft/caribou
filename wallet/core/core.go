@@ -406,16 +406,7 @@ func (c *Core) Run(ctx context.Context) {
 		c.log.Errorf("Unable to retrieve disabled fiat rate source: %v", err)
 	}
 
-	// Construct enabled fiat rate sources.
-fetchers:
-	for token, rateFetcher := range fiatRateFetchers {
-		for _, v := range disabledSources {
-			if token == v {
-				continue fetchers
-			}
-		}
-		c.fiatRateSources[token] = newCommonRateSource(rateFetcher)
-	}
+	c.initFiatRateSources(disabledSources)
 	c.fetchFiatExchangeRates(ctx)
 
 	// Handle wallet notifications.
@@ -3789,6 +3780,27 @@ func (c *Core) disableRateSource(source string) error {
 
 	c.log.Infof("Disabled %s from fetching fiat rates.", source)
 	return nil
+}
+
+// initFiatRateSources populates the fiat rate sources with every fetcher the
+// user has not disabled. It runs during Run, after c.ready is closed — the app
+// server is already up by then and serving requests that read fiatRateSources
+// (GET /api/user reaches FiatRateSources), so the map is populated under
+// ratesMtx like every other write to it. An unsynchronized write here races the
+// first request into a fatal concurrent map access, which no Recoverer catches.
+func (c *Core) initFiatRateSources(disabledSources []string) {
+	c.ratesMtx.Lock()
+	defer c.ratesMtx.Unlock()
+
+fetchers:
+	for token, rateFetcher := range fiatRateFetchers {
+		for _, v := range disabledSources {
+			if token == v {
+				continue fetchers
+			}
+		}
+		c.fiatRateSources[token] = newCommonRateSource(rateFetcher)
+	}
 }
 
 // removeExpiredRateSources disables expired fiat rate source.

@@ -452,7 +452,7 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *txdb.TxHistoryRequest) (*txdb.Tx
 		}
 	}
 
-	txs := make([]*txdb.WalletTransaction, 0, n)
+	txs := txdb.PreallocTxs(n)
 	var moreAvailable bool
 	ignoreTypes := req.IngoreTypesLookup()
 	err := idx.Iterate(prefix, func(wt *txdb.WalletTransaction) error {
@@ -540,7 +540,7 @@ func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool
 		}
 	}
 
-	txs := make([]*txdb.WalletTransaction, 0, n)
+	txs := txdb.PreallocTxs(n)
 	err := idx.Iterate(prefix, func(wt *txdb.WalletTransaction) error {
 		txs = append(txs, wt)
 		if n > 0 && len(txs) >= n {

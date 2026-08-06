@@ -652,3 +652,65 @@ func TestTxDB_GetBridgeCompletions(t *testing.T) {
 		t.Fatalf("expected second result to be %s after duplicate, got %s", mintTx2.ID, result[1].ID)
 	}
 }
+
+// TestTxDB_PageSizeIsNotTrusted covers the two history readers that eth keeps
+// of its own against an n that came off the wire. /api/txhistory and
+// /api/bridgehistory both decode n from the request body and pass it down
+// unvalidated — only the asset ID is checked above — so a negative n panicked
+// the process in makeslice and a huge one preallocated its full width, which
+// OOMs rather than erroring. Both must be served as ordinary requests, and
+// n <= 0 must keep returning everything, which the TxHistory and BridgeHistory
+// contracts document as legal.
+func TestTxDB_PageSizeIsNotTrusted(t *testing.T) {
+	t.Parallel()
+	db := newTestTxDB(t)
+
+	// Bridge initiations, so one fixture serves both readers.
+	const numTxs = 3
+	now := time.Now()
+	for i := 1; i <= numTxs; i++ {
+		tx := &extendedWalletTx{
+			WalletTransaction: &txdb.WalletTransaction{
+				ID:   fmt.Sprintf("0x%064x", i),
+				Type: txdb.InitiateBridge,
+				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
+					IDs:      []string{fmt.Sprintf("0x%064x", i+100)},
+					Complete: true,
+				},
+			},
+			Nonce:          big.NewInt(int64(i)),
+			SubmissionTime: uint64(now.Add(-time.Duration(i) * time.Hour).Unix()),
+		}
+		if err := db.storeTx(tx); err != nil {
+			t.Fatalf("storeTx: %v", err)
+		}
+	}
+
+	// The ceiling itself is txdb's to choose; assert against what the shared
+	// helper reserves rather than restating the number here.
+	maxCap := cap(txdb.PreallocTxs(0))
+
+	for _, n := range []int{-1, 500_000_000} {
+		resp, err := db.getTxs(nil, &txdb.TxHistoryRequest{N: n})
+		if err != nil {
+			t.Fatalf("getTxs n=%d: %v", n, err)
+		}
+		if len(resp.Txs) != numTxs {
+			t.Fatalf("getTxs n=%d returned %d txs, want %d", n, len(resp.Txs), numTxs)
+		}
+		if c := cap(resp.Txs); c > maxCap {
+			t.Fatalf("getTxs n=%d preallocated cap %d, want <= %d", n, c, maxCap)
+		}
+
+		bridges, err := db.getBridges(nil, n, nil, true)
+		if err != nil {
+			t.Fatalf("getBridges n=%d: %v", n, err)
+		}
+		if len(bridges) != numTxs {
+			t.Fatalf("getBridges n=%d returned %d bridges, want %d", n, len(bridges), numTxs)
+		}
+		if c := cap(bridges); c > maxCap {
+			t.Fatalf("getBridges n=%d preallocated cap %d, want <= %d", n, c, maxCap)
+		}
+	}
+}
