@@ -449,8 +449,15 @@ function pageFromURL (): string {
   return window.location.pathname.replace(/^\/|\/$/g, '')
 }
 
+/*
+ * pageRoot maps a page path to the view that renders it. The empty page — a
+ * visit to the bare origin, or a URL reset — is the portfolio. Defining the
+ * default route here, at the one point every navigation flows through, keeps
+ * each entry path (fresh authed visit, unlock, init) from needing its own
+ * redirect.
+ */
 function pageRoot (page: string): string {
-  return page.split('/')[0]
+  return page.split('/')[0] || 'portfolio'
 }
 
 /* nowString creates a string formatted like HH:MM:SS.xxx */

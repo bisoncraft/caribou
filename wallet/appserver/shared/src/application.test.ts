@@ -7,6 +7,23 @@ function baseNote (type: string): CoreNote {
   return { type, topic: '', subject: '', details: '', severity: 0, stamp: 0, acked: false, id: '1', data: {} }
 }
 
+describe('Application.loadPage', () => {
+  beforeEach(() => {
+    resetApp()
+  })
+
+  it('routes the empty page to the portfolio', async () => {
+    let pd = app.pageData
+    app.pageLoaded = d => { pd = d }
+    await app.loadPage('')
+    expect(pd.pageRoot).toBe('portfolio')
+
+    await app.loadPage('networks/btc')
+    expect(pd.pageRoot).toBe('networks')
+    expect(pd.pageParts).toEqual(['networks', 'btc'])
+  })
+})
+
 describe('Application.notify / updateUser', () => {
   beforeEach(() => {
     resetApp()
