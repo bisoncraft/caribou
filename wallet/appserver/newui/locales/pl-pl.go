@@ -6,7 +6,6 @@ import "github.com/bisoncraft/caribou/wallet/intl"
 
 var PlPL = map[string]*intl.Translation{
 	"Unlock":  {T: "Odblokuj"},
-	"Assets":  {T: "Aktywa"},
 	"Receive": {T: "Otrzymaj"},
 	"Send":    {T: "Wyślij"},
 	"Swap":    {T: "Zamiana"},

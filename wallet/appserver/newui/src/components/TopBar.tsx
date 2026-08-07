@@ -19,9 +19,9 @@ export default function TopBar () {
   const totalDisplay = totals.total > 0 ? `$${Doc.formatFourSigFigs(totals.total, 2)} USD` : '—'
 
   return (
-    <div className="topbar d-flex align-items-stretch">
-      <div className="topbar-left d-flex align-items-center">
-        <img className="logo-full medium pointer" alt="Caribou"
+    <div className="topbar d-flex justify-content-between align-items-stretch">
+      <div className="d-flex align-items-center">
+        <img className="logo-full medium pointer p-3" alt="Caribou"
           onClick={() => app.loadPage('portfolio')} />
       </div>
 

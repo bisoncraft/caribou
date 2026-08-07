@@ -8,6 +8,7 @@ export default class State {
   static loggersLK = 'loggers'
   static recordersLK = 'recorders'
   static themeLK = 'theme'
+  static sidebarCollapsedLK = 'sidebarCollapsed'
   static localeSpecsKey = 'localeSpecsLK'
   static localeKey = 'localeLK'
   static recordMissingTranslationsLK = 'recordMissingTranslationsLK'

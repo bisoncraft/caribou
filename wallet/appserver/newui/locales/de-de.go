@@ -6,7 +6,6 @@ import "github.com/bisoncraft/caribou/wallet/intl"
 
 var DeDE = map[string]*intl.Translation{
 	"Unlock":  {T: "Entsperren"},
-	"Assets":  {T: "Assets"},
 	"Receive": {T: "Erhalte "},
 	"Send":    {T: "Senden"},
 	"Swap":    {T: "Swap"},

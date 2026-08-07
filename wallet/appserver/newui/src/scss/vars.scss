@@ -131,8 +131,11 @@ $-themes: (
 }
 
 body {
-  // Sizing tokens
+  // Sizing tokens. --sidebar-width is the default (and minimum) expanded
+  // width; the Sidebar component overrides it inline with a content-measured
+  // value while expanded.
   --sidebar-width: 160px;
+  --sidebar-collapsed-width: 64px;
   --border-radius: 4px;
 
   // Typography
@@ -155,10 +158,18 @@ body {
   --btn-feature-border-color:       transparent;
   --btn-feature-hover-border-color: transparent;
   --btn-danger-hover-color: white;
+  // Neutral translucent tile shared by button.subtle and the sidebar nav.
+  --btn-subtle-bg: #7772;
 
   // color-scheme is a property, not a token, but it is intrinsically
   // per-theme: it keys native form controls and scrollbars to the palette.
   color-scheme: dark;
+}
+
+// Collapsed sidebar rail. The Sidebar component clears its inline
+// --sidebar-width override when collapsing so this rule can take effect.
+body.sidebar-collapsed {
+  --sidebar-width: var(--sidebar-collapsed-width);
 }
 
 // Palette emission. The body selectors theme the whole app; the bare

@@ -110,12 +110,6 @@ body[data-theme="light"] img.logo-full {
   flex-shrink: 0;
 }
 
-.topbar-left {
-  width: var(--sidebar-width);
-  padding: 10px 12px;
-  flex-shrink: 0;
-}
-
 .topbar-right {
   padding: 0 12px;
 }
@@ -160,9 +154,95 @@ body[data-theme="light"] img.logo-full {
 }
 
 .sidebar {
+  // There is no global border-box reset in this stylesheet, and the measured
+  // --sidebar-width is a border-box total (rects always are) — without this,
+  // content-box re-adds the 33px of padding + border on top of the measured
+  // width and every tile stretches past its label.
+  box-sizing: border-box;
   width: var(--sidebar-width);
   flex-shrink: 0;
   border-right: 1px solid var(--border-color);
+  transition: width 0.25s ease;
+}
+
+// Sidebar buttons clip their label at the shrinking edge rather than
+// spilling over it (white-space: nowrap comes from the base button rule).
+// The button owns its tile background (in place of the .subtle utility) so
+// the tile can dissolve in step with the rail's width transition. Inactive
+// ink dims to text-grey; the selected item pairs full text color with an
+// accent-tinted tile (the .checkbox-row--selected idiom) on top of the
+// cursor bar.
+.sidebar-btn {
+  overflow: hidden;
+  border: none;
+  background-color: var(--btn-subtle-bg);
+  color: var(--text-grey);
+  transition: background-color 0.25s ease, padding 0.25s ease, color 0.15s ease;
+
+  &:hover {
+    color: var(--text-color);
+  }
+
+  &.selected {
+    background-color: color-mix(in srgb, var(--accent-strong) 18%, transparent);
+    color: var(--text-color);
+  }
+}
+
+// Collapsed: resting buttons drop their tiles (hover feedback and the
+// active page keep theirs) and the label-side padding shrinks to match the
+// left padding so the glyph centers in the rail.
+body.sidebar-collapsed .sidebar-btn {
+  padding-right: 0.5rem;
+
+  &:not(:hover):not(.selected) {
+    background-color: transparent;
+  }
+}
+
+// The collapse toggle: a quiet icon-only control at the top of the rail.
+.sidebar-toggle {
+  border: none;
+  background-color: transparent;
+  color: var(--text-grey);
+  transition: color 0.15s ease;
+
+  &:hover {
+    background-color: transparent;
+    color: var(--text-color);
+  }
+}
+
+// Labels fade with the collapse; they stay in layout (opacity, not
+// display) so the Sidebar component's max-content width measurement sees
+// them.
+.sidebar-label {
+  transition: opacity 0.2s ease;
+}
+
+body.sidebar-collapsed .sidebar-label {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar-btn,
+  .sidebar-label,
+  .sidebar-cursor {
+    transition: none;
+  }
+}
+
+// Current-page cursor: a thin bar hugging the sidebar's left edge, aligned
+// with the active nav button. top/height are set inline from measurement;
+// the transition slides it between buttons on page change.
+.sidebar-cursor {
+  position: absolute;
+  left: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background-color: var(--accent);
+  transition: top 0.2s ease, height 0.2s ease;
 }
 
 // -----------------------------------------------------------------------
@@ -648,8 +728,12 @@ body[data-theme="light"] img.logo-full {
   height: 10px;
   border-radius: 50%;
 
-  &.fill-accent { background-color: var(--accent-strong); }
-  &.fill-gold   { background-color: var(--gold); }
+  &.fill-accent {
+    background-color: var(--accent-strong);
+  }
+  &.fill-gold {
+    background-color: var(--gold);
+  }
 }
 
 // Round filled pip used to indicate "already on / enabled" status. Drops
@@ -916,14 +1000,18 @@ body[data-theme="light"] img.logo-full {
 .network-stat {
   padding: 0.55rem 0;
 
-  &:last-child { border-bottom: none; }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 .network-asset-row {
   gap: 0.6rem;
   padding: 0.6rem 0;
 
-  &:last-child { border-bottom: none; }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 // Clickable transaction rows in the asset view.
@@ -936,7 +1024,9 @@ body[data-theme="light"] img.logo-full {
     background-color: color-mix(in srgb, var(--accent-strong) 10%, transparent);
   }
 
-  &:last-child { border-bottom: none; }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 // Incoming (balance-increasing) transaction amounts.

@@ -6,7 +6,6 @@ import "github.com/bisoncraft/caribou/wallet/intl"
 
 var ZhCN = map[string]*intl.Translation{
 	"Unlock":  {T: "解锁"},
-	"Assets":  {T: "资产"},
 	"Receive": {T: "接收"},
 	"Send":    {T: "发送"},
 	"Swap":    {T: "交换"},
