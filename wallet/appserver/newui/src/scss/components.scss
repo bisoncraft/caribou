@@ -154,11 +154,6 @@ body[data-theme="light"] img.logo-full {
 }
 
 .sidebar {
-  // There is no global border-box reset in this stylesheet, and the measured
-  // --sidebar-width is a border-box total (rects always are) — without this,
-  // content-box re-adds the 33px of padding + border on top of the measured
-  // width and every tile stretches past its label.
-  box-sizing: border-box;
   width: var(--sidebar-width);
   flex-shrink: 0;
   border-right: 1px solid var(--border-color);
@@ -254,7 +249,9 @@ body.sidebar-collapsed .sidebar-label {
 }
 
 .portfolio-inner {
-  max-width: 900px;
+  // 900px of content plus the side padding; the content column width
+  // predates the border-box reset.
+  max-width: calc(900px + 4rem);
   margin: 0 auto;
   padding: 2rem 2rem 4rem;
   width: 100%;
@@ -911,7 +908,9 @@ body.sidebar-collapsed .sidebar-label {
 }
 
 .networks-inner {
-  max-width: 900px;
+  // 900px of content plus the side padding; the content column width
+  // predates the border-box reset.
+  max-width: calc(900px + 4rem);
   padding: 2rem 2rem 4rem;
 }
 

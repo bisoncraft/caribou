@@ -1,5 +1,13 @@
 @use "mixins" as *;
 
+// Border-box everywhere: a declared width/height includes padding and
+// border. Explicit sizes below are tuned against this model.
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 // Body + root reset.
 body,
 #root {
@@ -19,7 +27,6 @@ form {
 
   border: 1px solid transparent;
   border-radius: var(--border-radius);
-  box-sizing: content-box;
 
   &.form-width-250 { width: 250px; }
   &.form-width-300 { width: 300px; }
