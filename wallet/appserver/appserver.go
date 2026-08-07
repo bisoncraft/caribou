@@ -1239,6 +1239,8 @@ func (s *AppServer) serveSPAIndex(w http.ResponseWriter) {
 	var data []byte
 	var err error
 	if s.siteDir != "" {
+		// Dev-mode on-disk serving; revalidate like fileServer does.
+		w.Header().Set("Cache-Control", "no-cache")
 		data, err = os.ReadFile(filepath.Join(s.siteDir, "dist", "index.html"))
 	} else {
 		data, err = staticSiteRes.ReadFile(path.Join(site, "dist", "index.html"))
@@ -1313,8 +1315,13 @@ func fileServer(r chi.Router, pathPrefix, diskDir string, fsys embed.FS, embedPr
 			w.Header().Set("Content-Type", forceContentType)
 		}
 
-		// If diskDir is set, use system file system only.
+		// If diskDir is set, use system file system only. On-disk serving is
+		// the dev iteration mode, where the bundle's ?v= cache-buster is
+		// stale between commits — instruct browsers to revalidate every use.
+		// ServeFile's Last-Modified handling keeps unchanged files answering
+		// 304, so the cost is a conditional request, not a re-download.
 		if diskDir != "" {
+			w.Header().Set("Cache-Control", "no-cache")
 			fullFilePath := filepath.Join(diskDir, subDir, upath)
 			serveFile(w, r, fullFilePath)
 			return
