@@ -38,9 +38,15 @@ describe('Settings > AppearanceSettings', () => {
   afterEach(() => {
     delete document.body.dataset.theme
     window.localStorage.removeItem('theme')
+    document.querySelector('link[rel="icon"]')?.remove()
   })
 
   it('applies and persists a picked theme', () => {
+    const fav = document.createElement('link')
+    fav.rel = 'icon'
+    fav.href = '/img/favicon-brown.png?v=abc123'
+    document.head.appendChild(fav)
+
     render(<Settings />)
     const cool = screen.getByRole('button', { name: /cool/i })
     expect(cool.getAttribute('aria-pressed')).toBe('false')
@@ -49,6 +55,10 @@ describe('Settings > AppearanceSettings', () => {
     expect(document.body.dataset.theme).toBe('cool')
     expect(JSON.parse(window.localStorage.getItem('theme')!)).toBe('cool')
     expect(cool.getAttribute('aria-pressed')).toBe('true')
+    expect(fav.href).toContain('/img/favicon-blue.png?v=abc123')
+
+    fireEvent.click(screen.getByRole('button', { name: /warm/i }))
+    expect(fav.href).toContain('/img/favicon-brown.png?v=abc123')
   })
 
   it('falls back to warm for an unknown stored theme', () => {
