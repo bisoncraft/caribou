@@ -1,18 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import { CoreNote } from '@caribou/shared/registry'
 import { TickerAsset, networkID } from '@caribou/shared/assets'
 import PortfolioTotals from './PortfolioTotals'
-import AssetPills from './AssetPills'
 import AssetRow from './AssetRow'
 import InactiveAssetRow from './InactiveAssetRow'
 
 export default function Portfolio () {
   const [, setTick] = useState(0)
-  const [selectedTicker, setSelectedTicker] = useState<string | null>(null)
-  const [highlightedTicker, setHighlightedTicker] = useState<string | null>(null)
-  const highlightTimerRef = useRef<number | null>(null)
 
   const redraw = useCallback(() => setTick(n => n + 1), [])
 
@@ -32,26 +28,8 @@ export default function Portfolio () {
       app.unregisterBalanceUpdater(balK)
       app.unregisterFiatRateUpdater(rateK)
       app.unregisterNoteFeed(noteK)
-      if (highlightTimerRef.current !== null) {
-        window.clearTimeout(highlightTimerRef.current)
-      }
     }
   }, [redraw])
-
-  const handlePillSelect = (ticker: string) => {
-    const isCurrentlySelected = selectedTicker === ticker
-    setSelectedTicker(prev => prev === ticker ? null : ticker)
-    // Only flash the highlight when actually selecting, not when toggling off.
-    if (isCurrentlySelected) return
-    if (highlightTimerRef.current !== null) {
-      window.clearTimeout(highlightTimerRef.current)
-    }
-    setHighlightedTicker(ticker)
-    highlightTimerRef.current = window.setTimeout(() => {
-      setHighlightedTicker(null)
-      highlightTimerRef.current = null
-    }, 900)
-  }
 
   const totals = app.portfolioTotals()
   const tickerList: TickerAsset[] = app.tickerList ?? []
@@ -79,15 +57,7 @@ export default function Portfolio () {
   return (
     <div className="portfolio-view fill-abs overflow-y-auto">
       <div className="portfolio-inner">
-        <PortfolioTotals totals={totals} walletAssets={sortedWalletAssets} />
-
-        {sortedWalletAssets.length > 0 && (
-          <AssetPills
-            walletAssets={sortedWalletAssets}
-            selectedTicker={selectedTicker}
-            onSelect={handlePillSelect}
-          />
-        )}
+        <PortfolioTotals totals={totals} />
 
         {sortedWalletAssets.length > 0 && (
           <table className="asset-table w-100">
@@ -112,7 +82,6 @@ export default function Portfolio () {
                     asset={ta}
                     fiatRate={rate}
                     portfolioPct={pct}
-                    isHighlighted={highlightedTicker === ta.ticker}
                   />
                 )
               })}

@@ -9,7 +9,6 @@ interface AssetRowProps {
   asset: TickerAsset
   fiatRate: number
   portfolioPct: number | null
-  isHighlighted: boolean
 }
 
 function StatusDot ({ asset }: { asset: TickerAsset }) {
@@ -41,14 +40,14 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
   return null
 }
 
-export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted }: AssetRowProps) {
+export default function AssetRow ({ asset, fiatRate, portfolioPct }: AssetRowProps) {
   const usdValue = asset.total * fiatRate
   const availFmt = Doc.formatConventionalValue(asset.avail, asset.precision)
   const pctDisplay = portfolioPct !== null ? `${portfolioPct.toFixed(1)}%` : '—'
 
   return (
     <tr
-      className={`asset-row pointer hoverbg ${isHighlighted ? 'asset-row-highlight' : ''}`}
+      className="asset-row pointer hoverbg"
       onClick={() => app.loadPage(`asset/${asset.ticker}`)}
     >
       <td className="asset-row-asset">

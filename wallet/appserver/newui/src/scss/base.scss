@@ -87,7 +87,7 @@ select {
 // -----------------------------------------------------------------------
 // Buttons. The base rule provides only the neutral look — variant classes
 // (.feature, .subtle, .noborder, …) and component-scoped buttons
-// (.asset-pill, .topbar-action-btn) override naturally via specificity.
+// (.sidebar-btn, .topbar-action-btn) override naturally via specificity.
 // Do not add !important here; doing so forces every component to fight
 // back with its own !important.
 
