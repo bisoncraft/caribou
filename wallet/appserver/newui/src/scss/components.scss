@@ -256,13 +256,22 @@ body.sidebar-collapsed .sidebar-label {
   flex-direction: column;
 }
 
+// Centered column for the portfolio hero (totals). The tables below it run
+// full-width in .portfolio-tables instead.
 .portfolio-inner {
   // 900px of content plus the side padding; the content column width
   // predates the border-box reset.
   max-width: calc(900px + 4rem);
   margin: 0 auto;
-  padding: 2rem 2rem 4rem;
+  padding: 2rem 2rem 0;
   width: 100%;
+}
+
+// Full-width region for the asset tables; side padding matches
+// .portfolio-inner, and the bottom padding gives the page its end-of-scroll
+// breathing room.
+.portfolio-tables {
+  padding: 0 2rem 4rem;
 }
 
 // Alignment and bottom padding are utilities on the element (text-center
@@ -355,7 +364,11 @@ body.sidebar-collapsed .sidebar-label {
 .asset-row-actions {
   text-align: right;
   white-space: nowrap;
-  width: 1%; // shrink to fit content
+  // A literal column width: under table-layout: fixed a percentage is taken
+  // at face value (the auto-layout "1% shrink-to-fit" idiom does not apply),
+  // and this column must hold two 28px action buttons + 4px gap + the
+  // 0.75rem cell padding per side.
+  width: 84px;
 }
 
 // Per-row Send/Receive buttons in the portfolio asset table. Native <button>

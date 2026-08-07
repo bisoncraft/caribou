@@ -58,7 +58,9 @@ export default function Portfolio () {
     <div className="portfolio-view fill-abs overflow-y-auto">
       <div className="portfolio-inner">
         <PortfolioTotals totals={totals} />
+      </div>
 
+      <div className="portfolio-tables">
         {sortedWalletAssets.length > 0 && (
           <table className="asset-table w-100">
             <thead>
