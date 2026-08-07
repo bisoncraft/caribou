@@ -11,7 +11,7 @@ export default function PortfolioTotals ({ totals }: PortfolioTotalsProps) {
 
   if (numWallets === 0) {
     return (
-      <div className="portfolio-totals text-center pb-4">
+      <div className="portfolio-totals text-center">
         <div className="fs24 grey">{t('No assets yet')}</div>
         <div className="grey fs13 mt-2">{t('Activate an asset to get started.')}</div>
       </div>
@@ -23,7 +23,7 @@ export default function PortfolioTotals ({ totals }: PortfolioTotalsProps) {
     : 0
 
   return (
-    <div className="portfolio-totals text-center pb-4">
+    <div className="portfolio-totals text-center">
       <div className="portfolio-totals-heading demi">{Doc.formatUSD(total)}</div>
       <div className="portfolio-totals-stats d-flex justify-content-center align-items-center">
         <span className="portfolio-stat fs14 grey">{tvar('{{ n }} Assets', { n: String(numWallets) })}</span>

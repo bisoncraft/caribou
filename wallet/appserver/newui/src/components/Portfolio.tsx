@@ -62,7 +62,7 @@ export default function Portfolio () {
 
       <div className="portfolio-tables">
         {sortedWalletAssets.length > 0 && (
-          <table className="asset-table w-100">
+          <table className="asset-table w-100 border-top">
             <thead>
               <tr className="asset-table-header">
                 <th className="asset-th-asset">{t('ASSETS')}</th>

@@ -108,14 +108,6 @@ body[data-theme="light"] img.logo-full {
   background-color: var(--body-bg);
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-
-  // The top bar runs its own, slightly smaller logo size (keeping the
-  // mark's 1.4:1 ratio); .medium remains full-size on the unlock and init
-  // screens.
-  img.logo-full.medium {
-    width: 49px;
-    height: 35px;
-  }
 }
 
 .topbar-right {
@@ -274,10 +266,11 @@ body.sidebar-collapsed .sidebar-label {
   padding: 0 2rem 4rem;
 }
 
-// Alignment and bottom padding are utilities on the element (text-center
-// pb-4); only the off-scale top padding lives here.
+// Bottom padding mirrors .portfolio-inner's 2rem top padding so the hero
+// floats with equal space above and below; alignment is the text-center
+// utility on the element.
 .portfolio-totals {
-  padding-top: 2rem;
+  padding-bottom: 2rem;
 }
 
 // 42px is not on the fsN scale; weight comes from the .demi utility.
