@@ -9,5 +9,4 @@ var PlPL = map[string]*intl.Translation{
 	"Receive": {T: "Otrzymaj"},
 	"Send":    {T: "Wyślij"},
 	"Swap":    {T: "Zamiana"},
-	"Trade":   {T: "Wymiana"},
 }

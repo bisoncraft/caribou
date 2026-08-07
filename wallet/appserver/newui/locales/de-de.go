@@ -9,5 +9,4 @@ var DeDE = map[string]*intl.Translation{
 	"Receive": {T: "Erhalte "},
 	"Send":    {T: "Senden"},
 	"Swap":    {T: "Swap"},
-	"Trade":   {T: "Handeln"},
 }

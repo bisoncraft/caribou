@@ -5,7 +5,6 @@ import { applySidebarCollapsed, setSidebarCollapsed, storedSidebarCollapsed } fr
 
 const navButtons = [
   { page: 'portfolio', icon: 'ico-portfolio', label: 'Portfolio' },
-  { page: 'trade', icon: 'ico-barchart', label: 'Trade' },
   { page: 'activity', icon: 'ico-bell', label: 'Activity' },
   { page: 'networks', icon: 'ico-network', label: 'Networks' }
 ]

@@ -6,6 +6,5 @@ import "github.com/bisoncraft/caribou/wallet/intl"
 
 var PtBr = map[string]*intl.Translation{
 	"Swap":   {T: "Troca"},
-	"Trade":  {T: "Troca"},
 	"Unlock": {T: "Destrancar"},
 }

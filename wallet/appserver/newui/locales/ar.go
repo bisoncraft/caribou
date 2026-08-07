@@ -9,5 +9,4 @@ var Ar = map[string]*intl.Translation{
 	"Receive": {T: "استلام"},
 	"Send":    {T: "ارسال"},
 	"Swap":    {T: "المقايضة"},
-	"Trade":   {T: "تداول"},
 }

@@ -18,7 +18,6 @@ var EnUS = map[string]*intl.Translation{
 	"Send":                           {T: "Send"},
 	"Swap":                           {T: "Swap"},
 	"Portfolio":                      {T: "Portfolio"},
-	"Trade":                          {T: "Trade"},
 	"Networks":                       {T: "Networks"},
 	"Activated":                      {T: "Activated"},
 	"Not activated":                  {T: "Not activated"},

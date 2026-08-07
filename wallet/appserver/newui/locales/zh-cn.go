@@ -9,5 +9,4 @@ var ZhCN = map[string]*intl.Translation{
 	"Receive": {T: "接收"},
 	"Send":    {T: "发送"},
 	"Swap":    {T: "交换"},
-	"Trade":   {T: "交易"},
 }
