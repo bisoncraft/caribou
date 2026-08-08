@@ -66,7 +66,7 @@ export default function ActivateNetwork ({ assetID }: ActivateNetworkParams) {
         <CoinLogo ticker={n.ticker} className="mini-icon me-2" />
         <span>{tvar('Activate {{ name }}', { name: n.name })}</span>
       </header>
-      <div className="px-3 pb-3 fs14 grey text-center">
+      <div className="px-3 pb-2 fs14 grey text-center">
         {tvar('Activate the {{ name }} network to create its wallet?', { name: n.name })}
       </div>
       <div aria-live="polite">
@@ -76,11 +76,13 @@ export default function ActivateNetwork ({ assetID }: ActivateNetworkParams) {
           </div>
         )}
       </div>
-      <div className="flex-stretch-column p-3">
-        <button type="button" className="feature" onClick={submit} disabled={submitting}>
-          {submitting ? <><Spinner className="me-2" />{t('Activating...')}</> : t('Activate Now')}
+      <div className="d-flex px-3 pb-3">
+        <button type="button" className="flex-grow-1 me-2 fs16 has-tip flex-center" aria-label={t('Cancel')}
+          onClick={close} disabled={submitting}><span className="ico-close" /></button>
+        <button type="button" className="feature flex-grow-1 fs16 has-tip flex-center" aria-label={t('Activate Now')}
+          onClick={submit} disabled={submitting}>
+          {submitting ? <Spinner /> : <span className="ico-check" />}
         </button>
-        <button type="button" className="mt-2" onClick={close} disabled={submitting}>{t('Cancel')}</button>
       </div>
     </form>
   )

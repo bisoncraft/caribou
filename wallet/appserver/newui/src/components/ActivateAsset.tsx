@@ -79,7 +79,7 @@ function SpvInfoPopover ({ onClose }: { onClose: () => void }) {
     <div className="spv-info-popover" role="dialog" aria-label={t('spv_info_title')}>
       <div className="spv-info-popover-header">
         <span className="fs14 spv-info-title">{t('spv_info_title')}</span>
-        <button type="button" className="spv-info-close" onClick={onClose} aria-label={t('Close')}>✕</button>
+        <button type="button" className="spv-info-close" onClick={onClose} aria-label={t('Close')}><span className="ico-close" /></button>
       </div>
       <div className="fs13 grey spv-info-body">
         <p>{t('spv_info_what')}</p>
@@ -161,20 +161,8 @@ function NativeActivate ({ ticker, close }: { ticker: string, close: () => void 
         <CoinLogo ticker={ticker} className="mini-icon me-2" />
         <span>{tvar('Activate {{ name }}', { name: ta.name })}</span>
       </header>
-      {hasElectrumSpvChoice
-        ? (
-          <div className="px-3 pb-2 fs13 grey text-center">
-            {t('activate_electrum_desc')}
-          </div>
-          )
-        : (
-          <div className="px-3 pb-2 fs14 grey">
-            {walletDef.description}
-          </div>
-          )
-      }
       {hasElectrumSpvChoice && (
-        <div className="px-3 pb-3">
+        <div className="px-3 pb-2">
           <label className="checkbox-row spv-mode-row">
             <Checkbox
               checked={spvMode}
@@ -205,11 +193,13 @@ function NativeActivate ({ ticker, close }: { ticker: string, close: () => void 
           </div>
         )}
       </div>
-      <div className="flex-stretch-column p-3">
-        <button type="button" className="feature" onClick={submit} disabled={submitting}>
-          {submitting ? <><Spinner className="me-2" />{t('Activating...')}</> : t('Activate Now')}
+      <div className="d-flex px-3 pb-3">
+        <button type="button" className="flex-grow-1 me-2 fs16 has-tip flex-center" aria-label={t('Cancel')}
+          onClick={close} disabled={submitting}><span className="ico-close" /></button>
+        <button type="button" className="feature flex-grow-1 fs16 has-tip flex-center" aria-label={t('Activate Now')}
+          onClick={submit} disabled={submitting}>
+          {submitting ? <Spinner /> : <span className="ico-check" />}
         </button>
-        <button type="button" className="mt-2" onClick={close} disabled={submitting}>{t('Cancel')}</button>
       </div>
     </form>
   )
@@ -318,7 +308,9 @@ function MultiNetActivate ({ ticker, close }: { ticker: string, close: () => voi
         <span>{tvar('Activate {{ name }}', { name: ta.name })}</span>
       </header>
       <div className="px-3 pb-2 fs14 grey text-center">
-        {tvar('{{ name }} is available on multiple networks. Which networks would you like to activate?', { name: ta.name })}
+        {rows.length === 1
+          ? tvar('{{ name }} is a token on the {{ network }} network.', { name: ta.name, network: rows[0].networkName })
+          : tvar('{{ name }} is available on multiple networks. Which networks would you like to activate?', { name: ta.name })}
       </div>
       <div className="pb-2">
         {rows.map(row => {
@@ -358,6 +350,19 @@ function MultiNetActivate ({ ticker, close }: { ticker: string, close: () => voi
               </div>
             )
           }
+          // A single network is not a choice: no checkbox, the row (already
+          // checked by default) just names the network and carries the
+          // activation status.
+          if (rows.length === 1) {
+            return (
+              <div key={row.networkID} className="checkbox-row checkbox-row--readonly">
+                <span className="fs14">{t('Activating')}</span>
+                <CoinLogo ticker={row.networkTicker} className="mini-icon" />
+                <span className="flex-grow-1 fs14">{tvar('{{ name }} Network', { name: row.networkName })}</span>
+                {trailing}
+              </div>
+            )
+          }
           return (
             <label key={row.networkID} className={rowCls}>
               <Checkbox
@@ -376,20 +381,25 @@ function MultiNetActivate ({ ticker, close }: { ticker: string, close: () => voi
           {t('Some networks failed to activate. See above for details.')}
         </div>
       )}
-      <div className="flex-stretch-column p-3">
+      <div className="d-flex px-3 pb-3">
         {phase !== 'done'
           ? <>
+              <button type="button" className="flex-grow-1 me-2 fs16 has-tip flex-center" aria-label={t('Cancel')}
+                onClick={close} disabled={isRunning}><span className="ico-close" /></button>
               <button
                 type="button"
-                className="feature"
+                className="feature flex-grow-1 fs16 has-tip flex-center"
+                aria-label={t('Activate')}
                 onClick={activate}
                 disabled={!anyChecked || isRunning}
               >
-                {isRunning ? <><Spinner className="me-2" />{t('Activating...')}</> : t('Activate')}
+                {isRunning ? <Spinner /> : <span className="ico-check" />}
               </button>
-              <button type="button" className="mt-2" onClick={close} disabled={isRunning}>{t('Cancel')}</button>
             </>
-          : <button type="button" onClick={close}>{t('Close')}</button>
+          : (
+            <button type="button" className="flex-grow-1 fs16 has-tip flex-center" aria-label={t('Close')}
+              onClick={close}><span className="ico-check" /></button>
+            )
         }
       </div>
     </form>
