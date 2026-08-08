@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import t, { tvar } from '@caribou/shared/intl'
+import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import { CoreNote } from '@caribou/shared/registry'
-import { TickerAsset, networkID } from '@caribou/shared/assets'
+import { TickerAsset } from '@caribou/shared/assets'
 import PortfolioTotals from './PortfolioTotals'
 import AssetRow from './AssetRow'
 import InactiveAssetRow from './InactiveAssetRow'
@@ -46,14 +46,6 @@ export default function Portfolio () {
     return bVal - aVal
   })
 
-  // Distinct settlement networks across inactive variants.
-  const inactiveNetworks = new Set<number>()
-  for (const ta of inactiveAssets) {
-    for (const v of ta.variants) inactiveNetworks.add(networkID(v))
-  }
-  const inactiveCount = inactiveAssets.length
-  const inactiveNetworkCount = inactiveNetworks.size
-
   return (
     <div className="portfolio-view fill-abs overflow-y-auto">
       <div className="portfolio-inner">
@@ -61,7 +53,7 @@ export default function Portfolio () {
       </div>
 
       <div className="portfolio-tables">
-        {sortedWalletAssets.length > 0 && (
+        {tickerList.length > 0 && (
           <table className="asset-table w-100 border-top">
             <thead>
               <tr className="asset-table-header">
@@ -73,43 +65,33 @@ export default function Portfolio () {
                 <th className="asset-row-actions" aria-hidden />
               </tr>
             </thead>
-            <tbody>
-              {sortedWalletAssets.map(ta => {
-                const rate = ta.xcRate ?? 0
-                const usdVal = ta.total * rate
-                const pct = totals.total > 0 ? (usdVal / totals.total) * 100 : null
-                return (
-                  <AssetRow
-                    key={ta.ticker}
-                    asset={ta}
-                    fiatRate={rate}
-                    portfolioPct={pct}
-                  />
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-
-        {inactiveCount > 0 && (
-          <>
-            <div className="portfolio-section-header">{t('ACTIVATE NEW ASSETS')}</div>
-            <p className="portfolio-section-copy grey fs13">
-              {tvar('Caribou supports {{ assets }} other {{ assetWord }} across {{ networks }} {{ networkWord }} with more on the roadmap.', {
-                assets: String(inactiveCount),
-                assetWord: inactiveCount === 1 ? t('asset') : t('assets'),
-                networks: String(inactiveNetworkCount),
-                networkWord: inactiveNetworkCount === 1 ? t('network') : t('networks')
-              })}
-            </p>
-            <table className="asset-table w-100">
+            {sortedWalletAssets.length > 0 && (
+              <tbody>
+                {sortedWalletAssets.map(ta => {
+                  const rate = ta.xcRate ?? 0
+                  const usdVal = ta.total * rate
+                  const pct = totals.total > 0 ? (usdVal / totals.total) * 100 : null
+                  return (
+                    <AssetRow
+                      key={ta.ticker}
+                      asset={ta}
+                      fiatRate={rate}
+                      portfolioPct={pct}
+                    />
+                  )
+                })}
+              </tbody>
+            )}
+            {/* Inactive assets trail the funded ones in their own tbody,
+                so they stay grouped at the bottom of the one table. */}
+            {inactiveAssets.length > 0 && (
               <tbody>
                 {inactiveAssets.map(ta => (
                   <InactiveAssetRow key={ta.ticker} asset={ta} />
                 ))}
               </tbody>
-            </table>
-          </>
+            )}
+          </table>
         )}
       </div>
     </div>
