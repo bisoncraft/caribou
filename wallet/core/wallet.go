@@ -253,12 +253,20 @@ func (w *xcWallet) state() *WalletState {
 		peerCount = uint32(w.peerCount)
 	}
 
+	// Until the first balance fetch, the wallet holds a WalletBalance shell
+	// around a nil db.Balance, which would serialize as an object with every
+	// balance field absent. Report no balance instead; clients handle null.
+	balance := w.balance
+	if balance != nil && balance.Balance == nil {
+		balance = nil
+	}
+
 	state := &WalletState{
 		Symbol:       unbip(w.AssetID),
 		AssetID:      w.AssetID,
 		Open:         len(w.encPass) == 0 || len(w.pw) > 0,
 		Running:      w.connector.On(),
-		Balance:      w.balance,
+		Balance:      balance,
 		Address:      w.address,
 		Encrypted:    len(w.encPass) > 0,
 		PeerCount:    peerCount,

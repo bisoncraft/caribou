@@ -827,8 +827,13 @@ func (c *Core) unlockWallet(crypter encrypt.Crypter, wallet *xcWallet) error {
 			return newError(walletAuthErr, "failed to unlock %s wallet: %w",
 				unbip(wallet.AssetID), err)
 		}
-		// Notify new wallet state.
-		c.notify(newWalletStateNote(wallet.state()))
+		// Notify new wallet state, but only for a registered wallet. During
+		// wallet creation this runs before the wallet is added to the wallet
+		// map, and creation can still fail after this point — broadcasting
+		// here would tell clients about a wallet core may never have.
+		if _, found := c.wallet(wallet.AssetID); found {
+			c.notify(newWalletStateNote(wallet.state()))
+		}
 	}
 
 	return nil

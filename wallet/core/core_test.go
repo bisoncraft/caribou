@@ -697,10 +697,25 @@ func TestCreateWallet(t *testing.T) {
 	ensureErr("Address")
 	tWallet.addrErr = nil
 
-	// Balance error.
+	// Balance error. A failed creation must also not broadcast wallet state:
+	// the unlock step (which notifies on state change) runs before the wallet
+	// is registered, and a leaked note would tell clients about a wallet that
+	// core never keeps.
+	noteFeed := tCore.NotificationFeed()
 	tWallet.balErr = errTest
 	ensureErr("Balance")
 	tWallet.balErr = nil
+drain:
+	for {
+		select {
+		case n := <-noteFeed.C:
+			if n.Type() == NoteTypeWalletState {
+				t.Fatalf("failed wallet creation leaked a walletstate note: %v", n)
+			}
+		default:
+			break drain
+		}
+	}
 
 	// Database error.
 	rig.db.updateWalletErr = errTest
