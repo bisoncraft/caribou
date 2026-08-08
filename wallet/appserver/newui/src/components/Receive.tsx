@@ -3,7 +3,7 @@ import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
-import { TickerAsset, AssetVariant, networkAsset, isVariantActive } from '@caribou/shared/assets'
+import { TickerAsset, AssetVariant, networkAsset, isVariantActive, compareByFiatValue } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import QRCode from '@caribou/shared/components/QRCode'
 import Spinner from './Spinner'
@@ -58,6 +58,8 @@ export default function Receive ({ ticker }: ReceiveProps) {
   const [activating, setActivating] = useState<number | null>(null)
   const [activateErr, setActivateErr] = useState<Record<number, string>>({})
   const [showQR, setShowQR] = useState(false)
+  // Step-1 asset search filter.
+  const [query, setQuery] = useState('')
   // Character budget for the address pill, from measured font metrics: the
   // span is monospace, so capacity is its laid-out width over one glyph
   // advance. null until measured; display falls back to a fixed truncation.
@@ -146,7 +148,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
   }
 
   const backToAssets = () => {
-    setTa(null); setVariant(null); setActivating(null); setActivateErr({}); resetForBack()
+    setTa(null); setVariant(null); setActivating(null); setActivateErr({}); setQuery(''); resetForBack()
   }
 
   // changeNetwork returns to the step-2 network picker. Only offered for
@@ -189,10 +191,18 @@ export default function Receive ({ ticker }: ReceiveProps) {
     await pickVariant(v)
   }
 
-  // Step 1: asset picker
+  // Step 1: asset picker. Default order mirrors the portfolio table (fiat
+  // value, descending); the search field filters by name or ticker.
   if (!ta) {
-    const list = (app.tickerList ?? []).filter(item => activeVariants(item).length > 0)
-    if (list.length === 0) {
+    const active = (app.tickerList ?? [])
+      .filter(item => activeVariants(item).length > 0)
+      .sort(compareByFiatValue)
+    const q = query.trim().toLowerCase()
+    const list = q === ''
+      ? active
+      : active.filter(item =>
+        item.name.toLowerCase().includes(q) || item.ticker.toLowerCase().includes(q))
+    if (active.length === 0) {
       return (
         <form className="modal form-width-300" onSubmit={noSubmit}>
           <header><span>{t('Receive')}</span></header>
@@ -205,8 +215,20 @@ export default function Receive ({ ticker }: ReceiveProps) {
     }
     return (
       <form className="modal form-width-300" onSubmit={noSubmit}>
-        <header><span>{t('Receive')}</span></header>
-        <div className="pb-2">
+        <header><span>{t('Select asset to receive')}</span></header>
+        <div className="px-3 pb-2">
+          <div className="d-flex align-items-center form-input-bg br5">
+            <span className="ico-search fs16 p-2" />
+            <input
+              type="text"
+              value={query}
+              placeholder={t('search')}
+              onChange={e => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="receive-asset-list overflow-y-auto mb-2">
           {list.map(item => (
             <div key={item.ticker} className="d-flex align-items-center px-3 py-2 hoverbg pointer" onClick={() => pickAsset(item)}>
               <CoinLogo ticker={item.ticker} className="mini-icon me-2" />
@@ -214,9 +236,9 @@ export default function Receive ({ ticker }: ReceiveProps) {
               <span className="grey fs12">{item.ticker}</span>
             </div>
           ))}
-        </div>
-        <div className="flex-stretch-column p-3">
-          <button type="button" onClick={close}>{t('Cancel')}</button>
+          {list.length === 0 && (
+            <div className="px-3 py-2 grey fs14 text-center">{t('No matching assets.')}</div>
+          )}
         </div>
       </form>
     )

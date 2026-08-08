@@ -466,6 +466,13 @@ body.sidebar-collapsed .sidebar-label {
 // -----------------------------------------------------------------------
 // Receive dialog.
 
+// Asset-picker viewport: exactly four 36px rows. The height is fixed (not
+// max-height) so the dialog doesn't resize as the search filter changes
+// the result count; overflow scrolls.
+.receive-asset-list {
+  height: 144px;
+}
+
 // Light tile behind the QR code. Always white regardless of theme: QR
 // modules must be dark-on-light to scan reliably, and the tile doubles as
 // the quiet zone. Sized to the 132px canvas plus padding so the box holds

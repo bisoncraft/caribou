@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import { CoreNote } from '@caribou/shared/registry'
-import { TickerAsset } from '@caribou/shared/assets'
+import { TickerAsset, compareByFiatValue } from '@caribou/shared/assets'
 import PortfolioTotals from './PortfolioTotals'
 import AssetRow from './AssetRow'
 import InactiveAssetRow from './InactiveAssetRow'
@@ -40,11 +40,7 @@ export default function Portfolio () {
     if (ta.hasWallets) sortedWalletAssets.push(ta)
     else inactiveAssets.push(ta)
   }
-  sortedWalletAssets.sort((a, b) => {
-    const aVal = a.total * (a.xcRate ?? 0)
-    const bVal = b.total * (b.xcRate ?? 0)
-    return bVal - aVal
-  })
+  sortedWalletAssets.sort(compareByFiatValue)
 
   return (
     <div className="portfolio-view fill-abs overflow-y-auto">
