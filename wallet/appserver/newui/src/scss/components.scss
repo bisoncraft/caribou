@@ -364,10 +364,11 @@ body.sidebar-collapsed .sidebar-label {
   width: 84px;
 }
 
-// Per-row Send/Receive buttons in the portfolio asset table. Native <button>
-// resets keep the icon glyph rendering identically to the previous span
-// implementation; the .ico-* class provides the glyph via ::before.
-.asset-action-icon {
+// Small square icon-glyph button (portfolio row actions, the Receive
+// dialog's copy control, …). Native <button> resets keep the icon glyph
+// rendering identically to a bare span; the .ico-* class provides the
+// glyph via ::before.
+.icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -391,7 +392,7 @@ body.sidebar-collapsed .sidebar-label {
     outline-offset: 1px;
   }
 
-  &+.asset-action-icon {
+  &+.icon-btn {
     margin-left: 4px;
   }
 }
@@ -479,9 +480,19 @@ body.sidebar-collapsed .sidebar-label {
 // -----------------------------------------------------------------------
 // Receive dialog.
 
-.receive-address {
-  word-break: break-all;
-  user-select: all;
+// Light tile behind the QR code. Always white regardless of theme: QR
+// modules must be dark-on-light to scan reliably, and the tile doubles as
+// the quiet zone. Sized to the 132px canvas plus padding so the box holds
+// its shape while the address (and spinner) load.
+.qr-tile {
+  width: 156px;
+  height: 156px;
+  padding: 12px;
+  border-radius: 8px;
+  background-color: #ffffff;
+  // Ink for anything drawn on the tile while the code loads (spinner):
+  // fixed dark, since the tile stays white in every theme.
+  color: #333333;
 }
 
 // Seed/mnemonic display box. Only the line spacing needs a custom rule; the rest

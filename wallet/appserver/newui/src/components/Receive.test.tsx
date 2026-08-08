@@ -43,9 +43,10 @@ afterEach(() => {
 
 describe('Receive stale-response race', () => {
   it('discards an older /api/depositaddress response that resolves after the user picked a different network', async () => {
-    // Pick Ethereum (request A starts, left unresolved), then go Back and
-    // pick Polygon (request B starts and resolves first). Request A must
-    // not clobber Polygon's address when it finally resolves late.
+    // Pick Ethereum (request A starts, left unresolved), then return to the
+    // network picker via the change-network control and pick Polygon
+    // (request B starts and resolves first). Request A must not clobber
+    // Polygon's address when it finally resolves late.
     let resolveEth: (v: any) => void
     let resolvePoly: (v: any) => void
     vi.mocked(postJSON).mockImplementation((_addr, body) => {
@@ -59,7 +60,7 @@ describe('Receive stale-response race', () => {
     fireEvent.click(screen.getByText('Ethereum'))
     await screen.findByText('Loading...') // request A in flight, unresolved
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change network' }))
     fireEvent.click(screen.getByText('Polygon'))
 
     resolvePoly!({ ok: true, address: 'poly-address' })

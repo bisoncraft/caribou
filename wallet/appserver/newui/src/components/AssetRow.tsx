@@ -77,13 +77,13 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct }: AssetRowPro
       <td className="asset-row-actions">
         <button
           type="button"
-          className="asset-action-icon has-tip ico-download fs16"
+          className="icon-btn has-tip ico-download fs16"
           aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
           onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'receive', data: { ticker: asset.ticker } }) }}
         />
         <button
           type="button"
-          className="asset-action-icon has-tip ico-upload fs16"
+          className="icon-btn has-tip ico-upload fs16"
           aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
           onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'send', data: { ticker: asset.ticker } }) }}
         />
