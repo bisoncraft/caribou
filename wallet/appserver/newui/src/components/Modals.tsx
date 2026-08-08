@@ -1,4 +1,4 @@
-import { MouseEvent, useRef } from 'react'
+import { MouseEvent, useEffect, useRef } from 'react'
 import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
@@ -29,6 +29,17 @@ export default function Modals ({ fd }: ModalsParams) {
     downOnBackground.current = false
     if (shouldClose) app.setForm({ form: '', data: {} })
   }
+
+  // Escape dismisses the open dialog, matching the backdrop click. Bound only
+  // while a form is open so the listener isn't a permanent global.
+  useEffect(() => {
+    if (!fd.form) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') app.setForm({ form: '', data: {} })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fd.form])
 
   const renderContent = () => {
     switch (fd.form) {
