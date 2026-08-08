@@ -61,6 +61,14 @@ $icon-sizes: 16, 24, 32, 40, 48;
   content: "\f2dd";
 }
 
+.ico-copy:before {
+  content: "\f2de";
+}
+
+.ico-edit:before {
+  content: "\f2df";
+}
+
 .ico-key:before {
   content: "\f12b";
 }
