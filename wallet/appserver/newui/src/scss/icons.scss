@@ -69,6 +69,14 @@ $icon-sizes: 16, 24, 32, 40, 48;
   content: "\f2df";
 }
 
+.ico-check:before {
+  content: "\f2e0";
+}
+
+.ico-close:before {
+  content: "\f2e1";
+}
+
 .ico-key:before {
   content: "\f12b";
 }
