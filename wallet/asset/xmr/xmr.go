@@ -984,7 +984,11 @@ func (w *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asset.
 			}
 		}
 		if amount == 0 && fee > 0 {
-			amount = spendable - fee
+			// spendable is satSub(unlocked, dust) and can legitimately be
+			// zero when every output is below dustThreshold, in which case
+			// SweepAll still succeeds and reports Amount() == 0. An unguarded
+			// subtraction would report ~1.8e19 as the sent amount.
+			amount = satSub(spendable, fee)
 		}
 
 		w.log.Debugf("Max withdraw committed: amount=%d, fee=%d, txid=%s", amount, fee, txid)

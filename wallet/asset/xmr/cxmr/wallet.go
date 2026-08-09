@@ -67,6 +67,7 @@ package cxmr
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 
 // WalletManagerFactory
 extern void* MONERO_WalletManagerFactory_getWalletManager();
@@ -200,6 +201,33 @@ import (
 	"sync"
 	"unsafe"
 )
+
+// goString converts a monero_c string return to a Go string and releases the C
+// buffer. Every monero_c getter returning const char* hands back a strdup'd
+// buffer that the caller owns; without the MONERO_free the buffer leaks for the
+// process lifetime. OwnsDepositAddress walks every subaddress, so a wallet with
+// a thousand subaddresses leaked a thousand allocations per call.
+func goString(cStr *C.char) string {
+	if cStr == nil {
+		return ""
+	}
+	defer C.MONERO_free(unsafe.Pointer(cStr))
+	return C.GoString(cStr)
+}
+
+// goStringSecret is goString for key material. It zeroes the C buffer before
+// releasing it so the seed or spend key does not linger on the C heap where
+// nothing will overwrite it.
+func goStringSecret(cStr *C.char) string {
+	if cStr == nil {
+		return ""
+	}
+	defer func() {
+		C.memset(unsafe.Pointer(cStr), 0, C.strlen(cStr))
+		C.MONERO_free(unsafe.Pointer(cStr))
+	}()
+	return C.GoString(cStr)
+}
 
 // NetworkType represents a Monero network type.
 type NetworkType int
@@ -426,7 +454,7 @@ func (wm *WalletManager) WalletExists(path string) bool {
 
 // ErrorString returns the last error message from the wallet manager.
 func (wm *WalletManager) ErrorString() string {
-	return C.GoString(C.MONERO_WalletManager_errorString(wm.ptr))
+	return goString(C.MONERO_WalletManager_errorString(wm.ptr))
 }
 
 // Wallet represents a Monero wallet.
@@ -441,7 +469,7 @@ func (w *Wallet) Status() WalletStatus {
 
 // ErrorString returns the last error message.
 func (w *Wallet) ErrorString() string {
-	return C.GoString(C.MONERO_Wallet_errorString(w.ptr))
+	return goString(C.MONERO_Wallet_errorString(w.ptr))
 }
 
 // Init initializes the wallet with daemon connection parameters.
@@ -587,8 +615,7 @@ func (w *Wallet) UnlockedBalance(accountIndex uint32) uint64 {
 
 // Address returns the address for a given account and address index.
 func (w *Wallet) Address(accountIndex, addressIndex uint64) string {
-	cStr := C.MONERO_Wallet_address(w.ptr, C.uint64_t(accountIndex), C.uint64_t(addressIndex))
-	return C.GoString(cStr)
+	return goString(C.MONERO_Wallet_address(w.ptr, C.uint64_t(accountIndex), C.uint64_t(addressIndex)))
 }
 
 // NumSubaddresses returns the number of subaddresses for an account.
@@ -605,8 +632,7 @@ func (w *Wallet) AddSubaddress(accountIndex uint32, label string) {
 
 // GetSubaddressLabel returns the label for a subaddress.
 func (w *Wallet) GetSubaddressLabel(accountIndex, addressIndex uint32) string {
-	cStr := C.MONERO_Wallet_getSubaddressLabel(w.ptr, C.uint32_t(accountIndex), C.uint32_t(addressIndex))
-	return C.GoString(cStr)
+	return goString(C.MONERO_Wallet_getSubaddressLabel(w.ptr, C.uint32_t(accountIndex), C.uint32_t(addressIndex)))
 }
 
 // SetSubaddressLabel sets the label for a subaddress.
@@ -639,13 +665,12 @@ func AddressValid(address string, networkType NetworkType) bool {
 func (w *Wallet) Seed(seedOffset string) string {
 	cOffset := C.CString(seedOffset)
 	defer C.free(unsafe.Pointer(cOffset))
-	cStr := C.MONERO_Wallet_seed(w.ptr, cOffset)
-	return C.GoString(cStr)
+	return goStringSecret(C.MONERO_Wallet_seed(w.ptr, cOffset))
 }
 
 // GetSeedLanguage returns the seed language.
 func (w *Wallet) GetSeedLanguage() string {
-	return C.GoString(C.MONERO_Wallet_getSeedLanguage(w.ptr))
+	return goString(C.MONERO_Wallet_getSeedLanguage(w.ptr))
 }
 
 // SetSeedLanguage sets the seed language.
@@ -657,22 +682,22 @@ func (w *Wallet) SetSeedLanguage(language string) {
 
 // SecretViewKey returns the secret view key.
 func (w *Wallet) SecretViewKey() string {
-	return C.GoString(C.MONERO_Wallet_secretViewKey(w.ptr))
+	return goStringSecret(C.MONERO_Wallet_secretViewKey(w.ptr))
 }
 
 // PublicViewKey returns the public view key.
 func (w *Wallet) PublicViewKey() string {
-	return C.GoString(C.MONERO_Wallet_publicViewKey(w.ptr))
+	return goString(C.MONERO_Wallet_publicViewKey(w.ptr))
 }
 
 // SecretSpendKey returns the secret spend key.
 func (w *Wallet) SecretSpendKey() string {
-	return C.GoString(C.MONERO_Wallet_secretSpendKey(w.ptr))
+	return goStringSecret(C.MONERO_Wallet_secretSpendKey(w.ptr))
 }
 
 // PublicSpendKey returns the public spend key.
 func (w *Wallet) PublicSpendKey() string {
-	return C.GoString(C.MONERO_Wallet_publicSpendKey(w.ptr))
+	return goString(C.MONERO_Wallet_publicSpendKey(w.ptr))
 }
 
 // Store saves the wallet to disk.
@@ -684,17 +709,17 @@ func (w *Wallet) Store(path string) bool {
 
 // Filename returns the wallet filename.
 func (w *Wallet) Filename() string {
-	return C.GoString(C.MONERO_Wallet_filename(w.ptr))
+	return goString(C.MONERO_Wallet_filename(w.ptr))
 }
 
 // KeysFilename returns the keys filename.
 func (w *Wallet) KeysFilename() string {
-	return C.GoString(C.MONERO_Wallet_keysFilename(w.ptr))
+	return goString(C.MONERO_Wallet_keysFilename(w.ptr))
 }
 
 // Path returns the wallet path.
 func (w *Wallet) Path() string {
-	return C.GoString(C.MONERO_Wallet_path(w.ptr))
+	return goString(C.MONERO_Wallet_path(w.ptr))
 }
 
 // SetPassword sets a new password for the wallet.
@@ -826,7 +851,7 @@ func (tx *PendingTransaction) Status() WalletStatus {
 
 // ErrorString returns the error string if status is not OK.
 func (tx *PendingTransaction) ErrorString() string {
-	return C.GoString(C.MONERO_PendingTransaction_errorString(tx.ptr))
+	return goString(C.MONERO_PendingTransaction_errorString(tx.ptr))
 }
 
 // Commit broadcasts the transaction to the network.
@@ -854,8 +879,7 @@ func (tx *PendingTransaction) Fee() uint64 {
 func (tx *PendingTransaction) TxID() string {
 	cSep := C.CString(",")
 	defer C.free(unsafe.Pointer(cSep))
-	cStr := C.MONERO_PendingTransaction_txid(tx.ptr, cSep)
-	return C.GoString(cStr)
+	return goString(C.MONERO_PendingTransaction_txid(tx.ptr, cSep))
 }
 
 // TxCount returns the number of transactions.
@@ -867,8 +891,7 @@ func (tx *PendingTransaction) TxCount() uint64 {
 func (tx *PendingTransaction) Hex() string {
 	cSep := C.CString(",")
 	defer C.free(unsafe.Pointer(cSep))
-	cStr := C.MONERO_PendingTransaction_hex(tx.ptr, cSep)
-	return C.GoString(cStr)
+	return goString(C.MONERO_PendingTransaction_hex(tx.ptr, cSep))
 }
 
 // TransactionHistory provides access to transaction history.
@@ -943,7 +966,7 @@ func (ti *TransactionInfo) Confirmations() uint64 {
 
 // Hash returns the transaction hash.
 func (ti *TransactionInfo) Hash() string {
-	return C.GoString(C.MONERO_TransactionInfo_hash(ti.ptr))
+	return goString(C.MONERO_TransactionInfo_hash(ti.ptr))
 }
 
 // Timestamp returns the transaction timestamp.
