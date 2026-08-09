@@ -1111,3 +1111,133 @@ func TestIsNotFoundRPCError(t *testing.T) {
 		t.Error("expected false for non-32020 error")
 	}
 }
+
+// TestWalletTransactionFromRPCIgnoresTokenTransfers covers the record
+// corruption where the native poll loop claimed an SPL token transfer. The
+// token send carries no system/transfer instruction, so it used to reach the
+// balance-delta fallback and return a native record (TokenID == nil) under the
+// same signature the token wallet stores its own record under. Because
+// txdb.storeTx is a full replace keyed by the signature and both poll loops run
+// every 2s, the two records overwrote each other indefinitely and the token
+// send vanished from GetAssetTxs(&tokenID, ...).
+func TestWalletTransactionFromRPCIgnoresTokenTransfers(t *testing.T) {
+	const (
+		walletAddr = "wallet"
+		srcATA     = "srcATA"
+		dstATA     = "dstATA"
+	)
+
+	makeTx := func(pre, post uint64) *rpcTransaction {
+		tx := &rpcTransaction{
+			Slot: 1,
+			Meta: &rpcTransactionMeta{
+				Fee:          5000,
+				PreBalances:  []uint64{pre},
+				PostBalances: []uint64{post},
+			},
+		}
+		tx.Transaction.Signatures = []string{"sig1"}
+		tx.Transaction.Message.AccountKeys = []rpcAccountKey{{Pubkey: walletAddr}}
+		tx.Transaction.Message.Instructions = []rpcInstruction{
+			parsedSPLInstruction(srcATA, dstATA, 2_500_000),
+		}
+		return tx
+	}
+
+	// Fee-only lamport delta: previously misparsed as a native SelfSend.
+	if wt := walletTransactionFromRPC(makeTx(1_000_000, 995_000), walletAddr); wt != nil {
+		t.Fatalf("token transfer parsed as native %v record of %d lamports", wt.Type, wt.Amount)
+	}
+
+	// Larger lamport delta (rent for a newly created destination ATA):
+	// previously misparsed as a native Send of the rent.
+	if wt := walletTransactionFromRPC(makeTx(1_000_000, 900_000), walletAddr); wt != nil {
+		t.Fatalf("token transfer parsed as native %v record of %d lamports", wt.Type, wt.Amount)
+	}
+}
+
+// TestSyncHistoryPreservesPendingData covers the history scan clobbering a
+// Send's expiry data. walletTransactionFromRPC reports Confirmed
+// unconditionally off a "confirmed"-commitment fetch and carries no RawTx, and
+// StoreTxs replaces wholesale — so the 2s sync loop used to wipe the solTxData
+// checkPendingTxs needs for expiry detection and call a
+// confirmed-but-not-finalized send final.
+func TestSyncHistoryPreservesPendingData(t *testing.T) {
+	const (
+		walletAddr = "wallet"
+		otherAddr  = "other"
+	)
+	ctx := context.Background()
+
+	pendingSend := &txdb.WalletTransaction{
+		Type:      txdb.Send,
+		ID:        "sig",
+		Amount:    500_000,
+		Confirmed: false,
+		Confirms:  &txdb.Confirms{Current: 0, Target: 1},
+	}
+	setTxData(pendingSend, solTxData{
+		LastValidBlockHeight: 400,
+		SubmissionTime:       1_700_000_000,
+		Blockhash:            "hash",
+	})
+	rawTx := pendingSend.RawTx
+
+	db := &mockTxDB{pending: []*txdb.WalletTransaction{pendingSend}}
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+			return []signatureInfo{makeSig("sig")}, nil
+		},
+		txFunc: func(_ string) (*rpcTransaction, error) {
+			return makeWalletTx(walletAddr, otherAddr), nil
+		},
+	}
+	w := newTestWallet(walletAddr, rpc, db, newMockTable())
+
+	if err := w.syncHistory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.stored) != 1 {
+		t.Fatalf("stored %d txs, want 1", len(db.stored))
+	}
+	got := db.stored[0]
+	if got.Confirmed {
+		t.Error("sync marked a still-pending send confirmed; checkPendingTxs owns that transition")
+	}
+	if !bytes.Equal(got.RawTx, rawTx) {
+		t.Errorf("RawTx: want the pending record's expiry data %q, got %q", rawTx, got.RawTx)
+	}
+	if got.Confirms == nil || got.Confirms.Target != 1 {
+		t.Errorf("Confirms: want the pending record's, got %+v", got.Confirms)
+	}
+}
+
+// TestSyncHistoryConfirmsNewRecords is the counterpart: a signature with no
+// existing record is history, not a live send, and must not be dragged into the
+// pending set.
+func TestSyncHistoryConfirmsNewRecords(t *testing.T) {
+	const (
+		walletAddr = "wallet"
+		otherAddr  = "other"
+	)
+	db := &mockTxDB{}
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+			return []signatureInfo{makeSig("sig")}, nil
+		},
+		txFunc: func(_ string) (*rpcTransaction, error) {
+			return makeWalletTx(walletAddr, otherAddr), nil
+		},
+	}
+	w := newTestWallet(walletAddr, rpc, db, newMockTable())
+
+	if err := w.syncHistory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.stored) != 1 {
+		t.Fatalf("stored %d txs, want 1", len(db.stored))
+	}
+	if !db.stored[0].Confirmed {
+		t.Error("a newly scanned historical tx should be stored confirmed")
+	}
+}

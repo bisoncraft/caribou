@@ -545,6 +545,7 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 		cursorSig = sigs[i].Signature
 	}
 	if len(wts) > 0 {
+		preservePendingData(w.txDB, wts, w.parent.log)
 		if err := w.txDB.StoreTxs(wts); err != nil {
 			return err
 		}

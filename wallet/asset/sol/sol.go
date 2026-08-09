@@ -564,6 +564,7 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 		cursorSig = sigs[i].Signature
 	}
 	if len(wts) > 0 {
+		preservePendingData(w.txDB, wts, w.log)
 		if err := w.txDB.StoreTxs(wts); err != nil {
 			return err
 		}
@@ -626,6 +627,7 @@ func (w *Wallet) backfillHistory(ctx context.Context) error {
 		}
 	}
 	if len(wts) > 0 {
+		preservePendingData(w.txDB, wts, w.log)
 		if err := w.txDB.StoreTxs(wts); err != nil {
 			return err
 		}
@@ -769,6 +771,17 @@ func walletTransactionFromRPC(tx *rpcTransaction, walletAddr string) *txdb.Walle
 	if ownIdx == -1 || ownIdx >= len(tx.Meta.PreBalances) || ownIdx >= len(tx.Meta.PostBalances) {
 		return nil
 	}
+	// Leave transactions carrying an spl-token instruction to the token wallet's
+	// parser. A token transfer moves no lamports of its own, so it would reach
+	// the balance-delta fallback below and yield a native record (TokenID nil)
+	// under the same signature the token wallet stores its record under. txdb
+	// keys on the signature and replaces wholesale, so the two would overwrite
+	// each other on every poll. checkPendingTxs guards the same hazard.
+	for _, inst := range tx.Transaction.Message.Instructions {
+		if inst.Program == "spl-token" {
+			return nil
+		}
+	}
 	var (
 		txType    = txdb.Unknown
 		amount    uint64
@@ -836,6 +849,41 @@ func walletTransactionFromRPC(tx *rpcTransaction, walletAddr string) *txdb.Walle
 		Recipient:   recipient,
 		Rejected:    tx.Meta.Err != nil,
 		Confirmed:   confirmed,
+	}
+}
+
+// preservePendingData carries a pending record's expiry data forward when a
+// history scan reparses the same signature. walletTransactionFromRPC and
+// walletTransactionFromSPLRPC both report Confirmed unconditionally from a
+// "confirmed"-commitment getTransaction and carry no RawTx, so storing their
+// output verbatim over a Send's record drops the solTxData that expiry
+// detection needs and calls a confirmed-but-not-finalized transaction final.
+// checkPendingTxs owns the finalized transition and distinguishes the two
+// commitments deliberately; leave the record pending until it says otherwise.
+// It reads the pending set once rather than probing each record: a backfill
+// page can carry a thousand transactions, and all but the handful still in
+// flight would be a miss.
+func preservePendingData(txDB txdb.NetworkTxDB, wts []*txdb.WalletTransaction, log util.Logger) {
+	pending, err := txDB.GetPendingTxs()
+	if err != nil {
+		log.Errorf("GetPendingTxs: %v", err)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+	byID := make(map[string]*txdb.WalletTransaction, len(pending))
+	for _, p := range pending {
+		byID[p.ID] = p
+	}
+	for _, wt := range wts {
+		existing, ok := byID[wt.ID]
+		if !ok {
+			continue
+		}
+		wt.RawTx = existing.RawTx
+		wt.Confirms = existing.Confirms
+		wt.Confirmed = false
 	}
 }
 
