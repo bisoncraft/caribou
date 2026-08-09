@@ -5,11 +5,11 @@ import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
 import { useForceUpdate, useCoreSubscriptions } from '@caribou/shared/hooks'
 import { WalletNote, WalletTransaction } from '@caribou/shared/registry'
-import { AssetVariant, TickerAsset, networkAsset, networkID } from '@caribou/shared/assets'
+import { AssetVariant, networkAsset, networkID } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@caribou/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
-import TxRow, { TxRowItem } from './TxRow'
+import TxRow, { TxRowItem, variantForTx } from './TxRow'
 
 interface AssetParams {
   ticker: string
@@ -25,16 +25,6 @@ const TX_PAGE_ROWS = 5
 function variantTotal (v: AssetVariant): number {
   const { available, locked, immature } = v.bal
   return available + locked + immature
-}
-
-// variantForTx maps a merged-history transaction back to the network variant it
-// belongs to. Ticker-history responses attribute every transaction exactly via
-// assetID. Single-asset responses lack it, so token transactions resolve via
-// their tokenID and native ones to the group's native variant.
-function variantForTx (ta: TickerAsset, tx: WalletTransaction): AssetVariant | undefined {
-  if (tx.assetID != null) return ta.variantLookup[tx.assetID]
-  if (tx.tokenID != null) return ta.variantLookup[tx.tokenID]
-  return ta.variants.find(v => !v.token)
 }
 
 export default function Asset ({ ticker }: AssetParams) {
@@ -100,16 +90,22 @@ export default function Asset ({ ticker }: AssetParams) {
     const last = src.txs[src.txs.length - 1]
     if (!last || !src.more) return
     setLoadingMore(true)
-    const r = await fetchHistory(last)
-    if (gen !== fetchGenRef.current) return
-    if (r.ok) {
-      src.txs = src.txs.concat(r.txs ?? [])
-      src.more = Boolean(r.moreAvailable)
-    } else {
-      src.more = false
+    try {
+      const r = await fetchHistory(last)
+      // The gen check gates only the data application: a superseding refetch
+      // mid-flight discards this batch, but loadingMore must clear regardless
+      // or the pager wedges disabled.
+      if (gen !== fetchGenRef.current) return
+      if (r.ok) {
+        src.txs = src.txs.concat(r.txs ?? [])
+        src.more = Boolean(r.moreAvailable)
+      } else {
+        src.more = false
+      }
+    } finally {
+      setLoadingMore(false)
+      redraw()
     }
-    setLoadingMore(false)
-    redraw()
   }
 
   useEffect(() => {

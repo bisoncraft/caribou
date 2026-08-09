@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import { postJSON } from '@caribou/shared/http'
+import { useForceUpdate } from '@caribou/shared/hooks'
 import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
-import { TickerAsset, AssetVariant, isVariantActive, networkID } from '@caribou/shared/assets'
+import { TickerAsset, isVariantActive, networkID } from '@caribou/shared/assets'
 import { TxType } from '@caribou/shared/tx'
 import Spinner from './Spinner'
-import TxRow, { TxRowItem } from './TxRow'
+import TxRow, { TxRowItem, variantForTx } from './TxRow'
 
 const PAGE_SIZE = 20
 // Rows shown per display page. Distinct from PAGE_SIZE, the per-source fetch
@@ -30,16 +31,6 @@ const filters: { key: Filter, label: string }[] = [
   { key: 'swapped', label: 'Swapped' }
 ]
 
-// variantForTx maps a merged-history transaction to its network variant (the
-// same resolution the Asset view uses): ticker-history rows carry assetID,
-// token rows resolve via tokenID, and native rows fall back to the group's
-// native variant.
-function variantForTx (ta: TickerAsset, tx: WalletTransaction): AssetVariant | undefined {
-  if (tx.assetID != null) return ta.variantLookup[tx.assetID]
-  if (tx.tokenID != null) return ta.variantLookup[tx.tokenID]
-  return ta.variants.find(v => !v.token)
-}
-
 // effectiveTime orders the merged feed; mempool transactions (timestamp 0)
 // sort newest.
 function effectiveTime (tx: WalletTransaction): number {
@@ -55,19 +46,33 @@ const sections: { key: Section, label: string }[] = [
   { key: 'older', label: 'Older' }
 ]
 
-// sectionFor buckets a transaction by local calendar time: today, yesterday,
-// earlier in the current (Monday-based) week, or older. Mempool transactions
-// count as today.
-function sectionFor (tx: WalletTransaction): Section {
-  if (tx.timestamp === 0) return 'today'
-  const ms = tx.timestamp * 1000
+interface SectionBounds {
+  todayStart: number
+  yesterdayStart: number
+  weekStart: number
+}
+
+// sectionBounds computes the local calendar boundaries — today, yesterday,
+// and the current (Monday-based) week — once per bucketing pass.
+function sectionBounds (): SectionBounds {
   const now = new Date()
   const dayMS = 86400 * 1000
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  if (ms >= todayStart) return 'today'
-  if (ms >= todayStart - dayMS) return 'yesterday'
-  const weekStart = todayStart - ((now.getDay() + 6) % 7) * dayMS
-  if (ms >= weekStart) return 'week'
+  return {
+    todayStart,
+    yesterdayStart: todayStart - dayMS,
+    weekStart: todayStart - ((now.getDay() + 6) % 7) * dayMS
+  }
+}
+
+// sectionFor buckets a transaction by local calendar time. Mempool
+// transactions count as today.
+function sectionFor (tx: WalletTransaction, bounds: SectionBounds): Section {
+  if (tx.timestamp === 0) return 'today'
+  const ms = tx.timestamp * 1000
+  if (ms >= bounds.todayStart) return 'today'
+  if (ms >= bounds.yesterdayStart) return 'yesterday'
+  if (ms >= bounds.weekStart) return 'week'
   return 'older'
 }
 
@@ -83,7 +88,7 @@ interface TxSource {
 }
 
 export default function Activity () {
-  const [, setTick] = useState(0)
+  const redraw = useForceUpdate()
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [filter, setFilter] = useState<Filter>('all')
@@ -91,8 +96,6 @@ export default function Activity () {
   const [page, setPage] = useState(0)
   const sourcesRef = useRef<Map<string, TxSource>>(new Map())
   const fetchGenRef = useRef(0)
-
-  const redraw = () => setTick(n => n + 1)
 
   const activeTickers = (): TickerAsset[] =>
     (app.tickerList ?? []).filter(ta => ta.variants.some(isVariantActive))
@@ -114,23 +117,27 @@ export default function Activity () {
   const loadMore = async () => {
     const gen = fetchGenRef.current
     setLoadingMore(true)
-    await Promise.all(Array.from(sourcesRef.current.values()).filter(s => s.more).map(async s => {
-      const last = s.txs[s.txs.length - 1]
-      if (!last) return
-      const v = variantForTx(s.ta, last)
-      if (!v) return
-      const r = await postJSON('/api/txhistoryticker', {
-        ticker: s.ta.ticker,
-        n: PAGE_SIZE,
-        refID: last.id,
-        refNetwork: networkID(v),
-        past: true
-      })
-      if (!r.ok || gen !== fetchGenRef.current) return
-      s.txs = s.txs.concat(r.txs ?? [])
-      s.more = Boolean(r.moreAvailable)
-    }))
-    if (gen === fetchGenRef.current) {
+    try {
+      // The gen checks gate only the data application: a superseding refetch
+      // mid-flight discards these batches, but loadingMore must clear
+      // regardless or the pager wedges disabled.
+      await Promise.all(Array.from(sourcesRef.current.values()).filter(s => s.more).map(async s => {
+        const last = s.txs[s.txs.length - 1]
+        if (!last) return
+        const v = variantForTx(s.ta, last)
+        if (!v) return
+        const r = await postJSON('/api/txhistoryticker', {
+          ticker: s.ta.ticker,
+          n: PAGE_SIZE,
+          refID: last.id,
+          refNetwork: networkID(v),
+          past: true
+        })
+        if (!r.ok || gen !== fetchGenRef.current) return
+        s.txs = s.txs.concat(r.txs ?? [])
+        s.more = Boolean(r.moreAvailable)
+      }))
+    } finally {
       setLoadingMore(false)
       redraw()
     }
@@ -138,17 +145,47 @@ export default function Activity () {
 
   useEffect(() => {
     fetchInitial()
+    // Transaction notes arrive in bursts (syncing wallets, rescans), and
+    // every refetch costs one request per active ticker, so a trailing
+    // debounce coalesces a burst into a single refetch.
+    let debounce = 0
     const noteK = app.registerNoteFeed((n: CoreNote) => {
       if (n.type !== 'walletnote') return
       const payload = (n as WalletNote).payload
-      if (payload?.route === 'transaction') fetchInitial()
+      if (payload?.route !== 'transaction') return
+      window.clearTimeout(debounce)
+      debounce = window.setTimeout(fetchInitial, 300)
     })
-    return () => app.unregisterNoteFeed(noteK)
+    return () => {
+      window.clearTimeout(debounce)
+      app.unregisterNoteFeed(noteK)
+    }
   }, [])
 
+  // watermark is the completeness boundary of the merged feed: the newest
+  // oldest-loaded confirmed timestamp among sources with more history
+  // server-side. Each source's loaded batch reaches back only to its own
+  // boundary, so the merge is known-complete only for items at or above the
+  // newest boundary — below it, a deeper source may still hold unfetched
+  // items that belong earlier in the feed, and showing loaded items there
+  // would misorder the feed and shift rows between pages when the gap is
+  // later fetched. A source whose entire loaded batch is mempool (oldest has
+  // no timestamp) contributes no confirmed coverage and is skipped rather
+  // than blanking the whole feed.
+  const watermark = (): number => {
+    let wm = 0
+    for (const s of Array.from(sourcesRef.current.values())) {
+      if (!s.more || s.txs.length === 0) continue
+      const oldest = s.txs[s.txs.length - 1]
+      if (oldest.timestamp === 0) continue
+      wm = Math.max(wm, oldest.timestamp)
+    }
+    return wm
+  }
+
   // computeFiltered merges the per-ticker streams, sorts newest-first, and
-  // applies the pill and txid filters. Reads sourcesRef so next() can
-  // recompute after fetches without waiting on a render.
+  // applies the watermark, pill, and txid filters. Reads sourcesRef so
+  // nextPage can recompute after fetches without waiting on a render.
   const computeFiltered = (): TxRowItem[] => {
     const items: TxRowItem[] = []
     for (const s of Array.from(sourcesRef.current.values())) {
@@ -159,10 +196,12 @@ export default function Activity () {
     }
     items.sort((a, b) => effectiveTime(b.tx) - effectiveTime(a.tx))
     const q = query.trim().toLowerCase()
+    // A transaction-ID search overrides the type pills and the watermark:
+    // the searcher wants that transaction, whatever its type or position.
+    if (q !== '') return items.filter(item => item.tx.id.toLowerCase().includes(q))
+    const wm = watermark()
     return items.filter(item => {
-      // A transaction-ID search overrides the type pills: the searcher wants
-      // that transaction, whatever its type.
-      if (q !== '') return item.tx.id.toLowerCase().includes(q)
+      if (item.tx.timestamp !== 0 && item.tx.timestamp < wm) return false
       return filter === 'all' || filterTypes[filter].has(item.tx.type)
     })
   }
@@ -190,8 +229,9 @@ export default function Activity () {
   const hasNext = filtered.length > (curPage + 1) * PAGE_ROWS || anyMore()
 
   const buckets = new Map<Section, TxRowItem[]>()
+  const bounds = sectionBounds()
   for (const item of pageItems) {
-    const key = sectionFor(item.tx)
+    const key = sectionFor(item.tx, bounds)
     const list = buckets.get(key)
     if (list) list.push(item)
     else buckets.set(key, [item])
