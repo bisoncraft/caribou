@@ -1,7 +1,8 @@
-import { useState, FormEvent, ReactNode } from 'react'
+import { FormEvent, ReactNode } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
+import { useFlash } from '@caribou/shared/hooks'
 import { WalletTransaction } from '@caribou/shared/registry'
 import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@caribou/shared/tx'
 import { explorerTxURL } from '@caribou/shared/coinexplorers'
@@ -27,7 +28,7 @@ function Row ({ label, children }: { label: string, children: ReactNode }) {
 // network, status, fee, the transaction ID with a copy button, and a link to a
 // block explorer.
 export default function TxDetail ({ assetID, tx }: TxDetailParams) {
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied] = useFlash(2000)
 
   const close = () => app.setForm({ form: '', data: {} })
 
@@ -60,8 +61,7 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(tx.id)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      flashCopied()
     } catch {
       // clipboard API unavailable — silently ignore
     }

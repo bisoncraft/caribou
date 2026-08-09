@@ -6,6 +6,7 @@ import Spinner from './Spinner'
 import Toggle from './Toggle'
 import LocaleSelector from './LocaleSelector'
 import { postJSON } from '@caribou/shared/http'
+import { useFlash } from '@caribou/shared/hooks'
 import { Theme, themes, storedTheme, setTheme } from '../theme'
 
 const themeLabels: Record<Theme, string> = { warm: 'Warm', cool: 'Cool', light: 'Light' }
@@ -134,7 +135,7 @@ function PasswordRow () {
   const [confirmPW, setConfirmPW] = useState('')
   const [err, setErr] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [changed, setChanged] = useState(false)
+  const [changed, flashChanged] = useFlash(2500)
 
   const reset = () => {
     setCurrentPW('')
@@ -167,8 +168,7 @@ function PasswordRow () {
     }
     reset()
     setOpen(false)
-    setChanged(true)
-    setTimeout(() => setChanged(false), 2500)
+    flashChanged()
   }
 
   const expansion = open
@@ -237,13 +237,13 @@ function SeedRow () {
   const [err, setErr] = useState('')
   const [seed, setSeed] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied, clearCopied] = useFlash(2500)
 
   const toggleOpen = () => {
     setPW('')
     setErr('')
     setSeed('')
-    setCopied(false)
+    clearCopied()
     setOpen(!open)
   }
 
@@ -274,8 +274,7 @@ function SeedRow () {
   const copySeed = async () => {
     try {
       await navigator.clipboard.writeText(seed)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2500)
+      flashCopied()
     } catch {
       // clipboard API unavailable — silently ignore
     }

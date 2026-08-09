@@ -3,6 +3,7 @@ import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
+import { useFlash } from '@caribou/shared/hooks'
 import { TickerAsset, AssetVariant, networkAsset, isVariantActive, compareByFiatValue } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import QRCode from '@caribou/shared/components/QRCode'
@@ -53,7 +54,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
   const [address, setAddress] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied, clearCopied] = useFlash(1500)
   // Per-variant activation state for inline Activate in step 2.
   const [activating, setActivating] = useState<number | null>(null)
   const [activateErr, setActivateErr] = useState<Record<number, string>>({})
@@ -144,7 +145,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
 
   const resetForBack = () => {
     reqIDRef.current++ // invalidate any in-flight request
-    setAddress(''); setErr(''); setCopied(false); setLoading(false); setShowQR(false)
+    setAddress(''); setErr(''); clearCopied(); setLoading(false); setShowQR(false)
   }
 
   const backToAssets = () => {
@@ -160,8 +161,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
   const copy = async () => {
     if (!address) return
     await navigator.clipboard.writeText(address)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    flashCopied()
   }
 
   // Inline activate: fires a single-network activation from the network picker.
