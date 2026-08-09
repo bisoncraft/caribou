@@ -477,6 +477,7 @@ func (w *TokenWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResp
 }
 
 func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
+	txID = strings.ToUpper(txID) // normalize hash case before DB lookup, as the native path does
 	if w.txDB != nil {
 		wt, err := w.txDB.GetTx(txID)
 		if err != nil {
@@ -512,10 +513,71 @@ func (w *TokenWallet) PendingTransactions(_ context.Context) []*txdb.WalletTrans
 	return pending
 }
 
+// tokenSpec identifies one issued currency well enough to parse a Payment for
+// it, without needing an open TokenWallet. The native scanner uses it to record
+// incoming token transfers, which arrive at the same account it already walks.
+type tokenSpec struct {
+	assetID    uint32
+	issuerAddr string
+	currency   string
+	decimals   int
+}
+
+// spec returns this wallet's tokenSpec.
+func (w *TokenWallet) spec() tokenSpec {
+	return tokenSpec{
+		assetID:    w.assetID,
+		issuerAddr: w.issuerAddr,
+		currency:   w.token.Currency,
+		decimals:   w.token.Decimals,
+	}
+}
+
+// networkTokenSpecs returns a spec for every registered token that has an
+// issuer on net. Tokens without one are not usable on that network.
+func networkTokenSpecs(net util.Network) []tokenSpec {
+	specs := make([]tokenSpec, 0, len(Tokens))
+	for assetID, token := range Tokens {
+		issuer, ok := token.NetIssuers[net]
+		if !ok {
+			continue
+		}
+		specs = append(specs, tokenSpec{
+			assetID:    assetID,
+			issuerAddr: issuer,
+			currency:   token.Currency,
+			decimals:   token.Decimals,
+		})
+	}
+	return specs
+}
+
 // walletTransactionFromTx extracts a WalletTransaction from a Payment
 // transaction result carrying this token's issued-currency amount.
 func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransaction {
+	if tr == nil {
+		return nil
+	}
+	return tokenTransactionFromTx(tr, w.parent.address, tr.Meta, tr.Validated, tr.LedgerIndex, w.spec())
+}
+
+// tokenTransactionFromTx extracts a WalletTransaction from a Payment carrying
+// spec's issued currency. meta, validated and ledgerIndex are passed separately
+// because the WebSocket feed delivers them alongside the transaction rather
+// than inside it, matching walletTransactionFromTx's signature.
+func tokenTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64, spec tokenSpec) *txdb.WalletTransaction {
 	if tr == nil || tr.TransactionType != "Payment" {
+		return nil
+	}
+	// A failed inbound payment credited nothing, and its Amount is whatever
+	// the sender put there — recording it would let anyone write an
+	// arbitrary entry into this wallet's history by sending a payment that
+	// cannot succeed (tecNO_LINE without a trustline, tecPATH_DRY with one).
+	// The native parser drops these for the same reason. Our own failed
+	// sends are still recorded: Send pre-stores them and checkPendingTxs
+	// reconciles the result.
+	inbound := tr.Destination == walletAddr && tr.Account != walletAddr
+	if inbound && meta.TransactionResult != "tesSUCCESS" {
 		return nil
 	}
 	// For incoming payments, credit what meta.delivered_amount reports was
@@ -527,18 +589,18 @@ func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransact
 	// the sender-stated amount, which is exactly what a spoofed
 	// tfPartialPayment forges.
 	var ia *issuedAmount
-	if tr.Destination == w.parent.address && tr.Meta.TransactionResult == "tesSUCCESS" {
-		ia = tr.Meta.deliveredIssuedAmount()
+	if tr.Destination == walletAddr && meta.TransactionResult == "tesSUCCESS" {
+		ia = meta.deliveredIssuedAmount()
 		if ia == nil {
 			return nil
 		}
 	} else {
 		ia = tr.issuedAmount()
 	}
-	if ia == nil || ia.Issuer != w.issuerAddr || ia.Currency != w.token.Currency {
+	if ia == nil || ia.Issuer != spec.issuerAddr || ia.Currency != spec.currency {
 		return nil
 	}
-	atomic, err := parseDecimalToAtomic(ia.Value, w.token.Decimals)
+	atomic, err := parseDecimalToAtomic(ia.Value, spec.decimals)
 	if err != nil {
 		return nil
 	}
@@ -547,31 +609,37 @@ func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransact
 		recipient *string
 	)
 	switch {
-	case tr.Account == w.parent.address && tr.Destination == w.parent.address:
+	case tr.Account == walletAddr && tr.Destination == walletAddr:
 		txType = txdb.SelfSend
-		r := w.parent.address
+		r := walletAddr
 		recipient = &r
-	case tr.Account == w.parent.address:
+	case tr.Account == walletAddr:
 		txType = txdb.Send
 		r := tr.Destination
 		recipient = &r
-	case tr.Destination == w.parent.address:
+	case tr.Destination == walletAddr:
 		txType = txdb.Receive
-		r := w.parent.address
+		r := walletAddr
 		recipient = &r
 	default:
 		return nil
 	}
+	assetID := spec.assetID
+	// The fee for an issued-currency Payment is still XRP drops. Report it as
+	// the native parser does: processObservedTransaction copies Fees onto the
+	// stored record, so leaving it zero wipes the fee a token Send recorded.
+	feeParsed, _ := strconv.ParseUint(tr.Fee, 10, 64)
 	return &txdb.WalletTransaction{
 		Type:        txType,
 		ID:          strings.ToUpper(tr.Hash),
 		Amount:      atomic,
-		BlockNumber: tr.LedgerIndex,
+		Fees:        feeParsed,
+		BlockNumber: ledgerIndex,
 		Timestamp:   tr.closeTime(),
 		Recipient:   recipient,
-		Rejected:    tr.Meta.TransactionResult != "tesSUCCESS",
-		Confirmed:   tr.Validated,
-		TokenID:     &w.assetID,
+		Rejected:    meta.TransactionResult != "tesSUCCESS",
+		Confirmed:   validated,
+		TokenID:     &assetID,
 	}
 }
 

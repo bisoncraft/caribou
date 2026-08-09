@@ -226,6 +226,11 @@ type xrpWallet struct {
 	baseReserve  uint64 // drops; from server_state, falls back to BaseReserveDrops
 	ownerReserve uint64 // drops per owned object; from server_state
 
+	// tokenSpecs are the issued currencies registered for this network. IOU
+	// payments arrive at the same account the native scanner walks, so the
+	// scanner records them itself; write-once in newWallet.
+	tokenSpecs []tokenSpec
+
 	lastScannedLedger atomic.Uint64
 	scanMtx           sync.Mutex // prevents re-entrant scanAccountTxs
 
@@ -266,6 +271,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		baseReserve:  BaseReserveDrops,
 		ownerReserve: OwnerReserveDrops,
 		txDB:         cfg.NetworkTxDB,
+		tokenSpecs:   networkTokenSpecs(network),
 	}, nil
 }
 
@@ -533,14 +539,21 @@ func (w *xrpWallet) Balance() (*asset.Balance, error) {
 
 	reserve := baseReserve + ownerReservePerItem*uint64(validated.AccountData.OwnerCount)
 
-	var available uint64
+	// Clamp Locked to the balance. An account below its reserve — which
+	// happens as soon as it owns an object it can no longer cover — would
+	// otherwise report Available+Locked above what it actually holds. Mirrors
+	// sol's rent-exempt reserve handling.
+	var available, locked uint64
 	if currentBalance > reserve {
+		locked = reserve
 		available = currentBalance - reserve
+	} else {
+		locked = currentBalance
 	}
 
 	return &asset.Balance{
 		Available: available,
-		Locked:    reserve,
+		Locked:    locked,
 	}, nil
 }
 
@@ -922,6 +935,11 @@ func (w *xrpWallet) PendingTransactions(_ context.Context) []*txdb.WalletTransac
 // tx's type/amount from the wallet's own address — it only updates
 // BlockNumber/Timestamp/Confirmed/Rejected via meta looked up by the tx's
 // own ID.
+//
+// It updates token records but does not announce them, holding to the same
+// rule as the scanner: this wallet never emits a note for an asset that is
+// not its own, because WalletEmitter stamps the note with this wallet's
+// asset ID and both Core and the UI route on that.
 func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 	if w.txDB == nil {
 		return
@@ -967,7 +985,7 @@ func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 				} else {
 					balanceChanged = true
 					w.log.Warnf("Transaction %s expired: LLS %d < tip %d", tx.ID, lls, tip)
-					if w.emit != nil {
+					if w.emit != nil && tx.TokenID == nil {
 						w.emit.TransactionNote(tx, false)
 					}
 				}
@@ -993,7 +1011,7 @@ func (w *xrpWallet) checkPendingTxs(ctx context.Context) (balanceChanged bool) {
 		}
 		balanceChanged = true
 		w.log.Infof("Transaction %s confirmed at ledger %d (result: %s)", tx.ID, tr.LedgerIndex, tr.Meta.TransactionResult)
-		if w.emit != nil {
+		if w.emit != nil && tx.TokenID == nil {
 			w.emit.TransactionNote(tx, false)
 		}
 	}
@@ -1153,6 +1171,9 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 
 			wtx := walletTransactionFromTx(tr, w.address, entry.Meta, entry.Validated, ledgerIdx)
 			if wtx == nil {
+				wtx = w.tokenTransaction(tr, entry.Meta, entry.Validated, ledgerIdx)
+			}
+			if wtx == nil {
 				// Non-payment tx: not stored but still marks progress.
 				if ledgerIdx > pageHigh {
 					pageHigh = ledgerIdx
@@ -1171,16 +1192,26 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 				pageHigh = ledgerIdx
 			}
 
+			unit := "drops"
+			if wtx.TokenID != nil {
+				unit = "atoms"
+			}
 			if wtx.Type == txdb.Receive {
-				w.log.Infof("Detected incoming transfer %s: %d drops from %s", txID, wtx.Amount, tr.Account)
+				w.log.Infof("Detected incoming transfer %s: %d %s from %s", txID, wtx.Amount, unit, tr.Account)
 			} else {
 				recipient := ""
 				if wtx.Recipient != nil {
 					recipient = *wtx.Recipient
 				}
-				w.log.Infof("Detected historical send %s: %d drops to %s", txID, wtx.Amount, recipient)
+				w.log.Infof("Detected historical send %s: %d %s to %s", txID, wtx.Amount, unit, recipient)
 			}
-			if w.emit != nil {
+			// Token records are stored but not announced. WalletEmitter stamps
+			// the note with this wallet's asset ID, and both Core and the UI
+			// route on that rather than on the record's TokenID, so a token
+			// transaction would be filed against the native wallet's pending
+			// set. Announcing it properly needs the token wallet's own
+			// emitter, which needs a registry of open token wallets.
+			if w.emit != nil && wtx.TokenID == nil {
 				w.emit.TransactionNote(wtx, true)
 			}
 		}
@@ -1278,6 +1309,20 @@ func (w *xrpWallet) advanceLastScanned(seq uint64) {
 		return
 	}
 	w.lastScannedLedger.Store(seq)
+}
+
+// tokenTransaction tries to parse tr as a transfer of one of this network's
+// registered issued currencies. IOU payments land on the same account the
+// native scanner already walks, but walletTransactionFromTx returns nil for
+// non-drops amounts — so without this a received token never reaches the tx DB
+// and TxHistory stays empty while Balance() moves.
+func (w *xrpWallet) tokenTransaction(tr *txResult, meta txMeta, validated bool, ledgerIndex uint64) *txdb.WalletTransaction {
+	for _, spec := range w.tokenSpecs {
+		if wtx := tokenTransactionFromTx(tr, w.address, meta, validated, ledgerIndex, spec); wtx != nil {
+			return wtx
+		}
+	}
+	return nil
 }
 
 func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64) *txdb.WalletTransaction {

@@ -273,6 +273,9 @@ func (w *xrpWallet) handleWSMessage(msg []byte) error {
 func (w *xrpWallet) processObservedTransaction(tr *txResult, meta txMeta, ledgerIndex uint64) {
 	wtx := walletTransactionFromTx(tr, w.address, meta, true, ledgerIndex)
 	if wtx == nil {
+		wtx = w.tokenTransaction(tr, meta, true, ledgerIndex)
+	}
+	if wtx == nil {
 		return
 	}
 
@@ -315,7 +318,9 @@ func (w *xrpWallet) processObservedTransaction(tr *txResult, meta txMeta, ledger
 		}
 	}
 
-	if w.emit != nil {
+	// See scanAccountTxs: a token record carries the native wallet's asset ID
+	// on the note, which Core and the UI would file against the native wallet.
+	if w.emit != nil && emitTx.TokenID == nil {
 		w.emit.TransactionNote(emitTx, emitNew)
 	}
 	w.emitBalanceChange()

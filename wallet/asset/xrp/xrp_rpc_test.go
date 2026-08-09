@@ -592,6 +592,33 @@ func TestBalanceBelowReserve(t *testing.T) {
 	}
 }
 
+// TestBalanceBelowReserveClampsLocked covers Locked being reported unclamped.
+// An account funded below its reserve — which happens as soon as it acquires an
+// owned object it can no longer cover — reported more locked than it holds, so
+// Available+Locked exceeded the account balance.
+func TestBalanceBelowReserveClampsLocked(t *testing.T) {
+	// 1.1 XRP with one owned object: reserve is 1_200_000 drops, above the
+	// 1_100_000 balance.
+	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("1100000", 1, 0), nil
+	})
+	w := makeBalanceWallet(t, m)
+	bal, err := w.Balance()
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.Available != 0 {
+		t.Errorf("available = %d, want 0 when balance < reserve", bal.Available)
+	}
+	if bal.Locked != 1_100_000 {
+		t.Errorf("locked = %d, want the whole 1100000 drop balance", bal.Locked)
+	}
+	if bal.Available+bal.Locked > 1_100_000 {
+		t.Errorf("available+locked = %d, more than the account holds", bal.Available+bal.Locked)
+	}
+}
+
 func TestBalanceOwnerReserve(t *testing.T) {
 	// 10 XRP, 2 owned objects. Reserve = 1_000_000 + 2*200_000 = 1_400_000.
 	m := newMockRippled(t)
