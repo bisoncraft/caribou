@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
-import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
 import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
 import { TickerAsset, AssetVariant, isVariantActive, networkID } from '@caribou/shared/assets'
-import { TxType, txTypeLabel, txIsIncoming, txShowsAmount, txAmountSign } from '@caribou/shared/tx'
+import { TxType } from '@caribou/shared/tx'
 import Spinner from './Spinner'
+import TxRow, { TxRowItem } from './TxRow'
 
 const PAGE_SIZE = 20
 // Rows shown per display page. Distinct from PAGE_SIZE, the per-source fetch
@@ -29,12 +29,6 @@ const filters: { key: Filter, label: string }[] = [
   { key: 'received', label: 'Received' },
   { key: 'swapped', label: 'Swapped' }
 ]
-
-interface TxItem {
-  tx: WalletTransaction
-  ta: TickerAsset
-  variant: AssetVariant
-}
 
 // variantForTx maps a merged-history transaction to its network variant (the
 // same resolution the Asset view uses): ticker-history rows carry assetID,
@@ -75,70 +69,6 @@ function sectionFor (tx: WalletTransaction): Section {
   const weekStart = todayStart - ((now.getDay() + 6) % 7) * dayMS
   if (ms >= weekStart) return 'week'
   return 'older'
-}
-
-// txTitle names a row: past tense for the common types, the generic type
-// label otherwise.
-function txTitle (tx: WalletTransaction, ticker: string): string {
-  switch (tx.type) {
-    case TxType.Send: return `${t('Sent')} ${ticker}`
-    case TxType.Receive: return `${t('Received')} ${ticker}`
-    case TxType.Swap: return `${t('Swapped')} ${ticker}`
-    default: return `${txTypeLabel(tx.type)} ${ticker}`
-  }
-}
-
-function txIcon (type: number): string {
-  if (type === TxType.Swap || type === TxType.SwapOrSend) return 'ico-swap'
-  if (txIsIncoming(type)) return 'ico-download'
-  return 'ico-upload'
-}
-
-// txStatus renders confirmation progress while confirming, then age.
-function txStatus (tx: WalletTransaction): string {
-  if (!tx.confirmed && tx.confirms) {
-    return tvar('{{ current }}/{{ target }} confs', {
-      current: String(tx.confirms.current),
-      target: String(tx.confirms.target)
-    })
-  }
-  if (tx.timestamp > 0) return tvar('{{ age }} ago', { age: Doc.timeSince(tx.timestamp * 1000) })
-  return t('pending')
-}
-
-function TxRow ({ item }: { item: TxItem }) {
-  const { tx, ta, variant } = item
-  const open = () => app.setForm({ form: 'txdetail', data: { assetID: variant.assetID, tx } })
-
-  const sign = txAmountSign(tx.type)
-  const amountText = txShowsAmount(tx.type)
-    ? `${sign}${Doc.formatCoinValue(tx.amount, variant.ui)} ${variant.ticker}`
-    : '—'
-  const rate = app.tickerRate(ta.ticker) ?? 0
-  const usdText = txShowsAmount(tx.type) && rate > 0
-    ? Doc.usdString(tx.amount, variant.ui.conventional.conversionFactor, rate)
-    : ''
-  const parts: string[] = []
-  if (tx.recipient) parts.push(`${t('to')} ${Doc.shortenAddress(tx.recipient)}`)
-  parts.push(txStatus(tx))
-  const unconfirmed = !tx.confirmed
-
-  return (
-    <div
-      className={`activity-row d-flex align-items-center pointer ${unconfirmed ? 'activity-row-unconfirmed' : ''}`}
-      onClick={open}
-    >
-      <span className={`tx-type-icon flex-center me-3 ${txIcon(tx.type)}`} />
-      <div className="flex-grow-1">
-        <div className="fs14 demi">{txTitle(tx, variant.ticker)}</div>
-        <div className="grey fs12 mono">{parts.join(' · ')}</div>
-      </div>
-      <div className="text-right">
-        <div className={`fs14 mono ${txIsIncoming(tx.type) ? 'tx-amt-pos' : ''}`}>{amountText}</div>
-        {usdText !== '' && <div className="grey fs12 mono">{usdText}</div>}
-      </div>
-    </div>
-  )
 }
 
 // Per-ticker history source. The ticker endpoint serves a ticker group's
@@ -219,8 +149,8 @@ export default function Activity () {
   // computeFiltered merges the per-ticker streams, sorts newest-first, and
   // applies the pill and txid filters. Reads sourcesRef so next() can
   // recompute after fetches without waiting on a render.
-  const computeFiltered = (): TxItem[] => {
-    const items: TxItem[] = []
+  const computeFiltered = (): TxRowItem[] => {
+    const items: TxRowItem[] = []
     for (const s of Array.from(sourcesRef.current.values())) {
       for (const tx of s.txs) {
         const variant = variantForTx(s.ta, tx)
@@ -259,7 +189,7 @@ export default function Activity () {
   const pageItems = filtered.slice(curPage * PAGE_ROWS, (curPage + 1) * PAGE_ROWS)
   const hasNext = filtered.length > (curPage + 1) * PAGE_ROWS || anyMore()
 
-  const buckets = new Map<Section, TxItem[]>()
+  const buckets = new Map<Section, TxRowItem[]>()
   for (const item of pageItems) {
     const key = sectionFor(item.tx)
     const list = buckets.get(key)

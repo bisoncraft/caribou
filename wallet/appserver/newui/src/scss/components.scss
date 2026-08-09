@@ -1091,6 +1091,35 @@ body.sidebar-collapsed .sidebar-label {
 
 // Single-network detail view.
 
+// Asset view top card.
+.asset-card {
+  background-color: var(--surface);
+  border-radius: 12px;
+}
+
+// Round icon action buttons (asset top card). Size with an .icon-N class.
+.round-btn {
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background-color: var(--btn-select-or-hover-bg);
+  color: var(--text-color);
+  cursor: pointer;
+  transition: background-color 0.12s;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--text-grey) 32%, transparent);
+  }
+
+  // The icon font draws ink only above the baseline, so a normal line box
+  // carries the glyph high of center. Zero line height collapses the box to
+  // the ascent/descent midpoint, which the button's flex centering then
+  // pins to the circle's true center.
+  > span {
+    line-height: 0;
+  }
+}
+
 .network-detail-header {
   gap: 0.9rem;
 }
@@ -1116,21 +1145,6 @@ body.sidebar-collapsed .sidebar-label {
 .network-asset-row {
   gap: 0.6rem;
   padding: 0.6rem 0;
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-// Clickable transaction rows in the asset view.
-.tx-row {
-  gap: 0.6rem;
-  padding: 0.7rem 0;
-  transition: background-color 0.12s;
-
-  &:hover {
-    background-color: color-mix(in srgb, var(--accent-strong) 10%, transparent);
-  }
 
   &:last-child {
     border-bottom: none;

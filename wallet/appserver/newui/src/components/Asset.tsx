@@ -5,25 +5,20 @@ import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
 import { useForceUpdate, useCoreSubscriptions } from '@caribou/shared/hooks'
 import { WalletNote, WalletTransaction } from '@caribou/shared/registry'
-import { AssetVariant, TickerAsset, networkAsset } from '@caribou/shared/assets'
-import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@caribou/shared/tx'
+import { AssetVariant, TickerAsset, networkAsset, networkID } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@caribou/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
+import TxRow, { TxRowItem } from './TxRow'
 
 interface AssetParams {
   ticker: string
 }
 
-// Number of transactions fetched per network wallet.
+// Transactions fetched per request. Distinct from TX_PAGE_ROWS, the display
+// page size: display pages slice the fetched feed.
 const TX_PAGE_SIZE = 25
-
-// TxItem pairs a transaction with the network variant it belongs to, which
-// carries the units and asset ID needed to render and link it.
-interface TxItem {
-  tx: WalletTransaction
-  variant: AssetVariant
-}
+const TX_PAGE_ROWS = 5
 
 // variantTotal returns a variant's total balance across available, locked, and
 // immature, in atomic units.
@@ -42,46 +37,14 @@ function variantForTx (ta: TickerAsset, tx: WalletTransaction): AssetVariant | u
   return ta.variants.find(v => !v.token)
 }
 
-// txStatus renders the age of a confirmed transaction, or its confirmation
-// progress ("confs out of finality confs") while it is still confirming.
-function txStatus (tx: WalletTransaction): string {
-  if (!tx.confirmed && tx.confirms) {
-    return tvar('{{ current }}/{{ target }} confs', {
-      current: String(tx.confirms.current),
-      target: String(tx.confirms.target)
-    })
-  }
-  if (tx.timestamp > 0) return tvar('{{ age }} ago', { age: Doc.timeSince(tx.timestamp * 1000) })
-  return t('pending')
-}
-
-function TxRow ({ item }: { item: TxItem }) {
-  const { tx, variant } = item
-  const open = () => app.setForm({ form: 'txdetail', data: { assetID: variant.assetID, tx } })
-
-  const sign = txAmountSign(tx.type)
-  const amountText = txShowsAmount(tx.type)
-    ? `${sign}${Doc.formatCoinValue(tx.amount, variant.ui)} ${variant.ticker}`
-    : '—'
-
-  return (
-    <div className="tx-row d-flex align-items-center justify-content-between border-bottom pointer" onClick={open}>
-      <div>
-        <div className="fs14">{txTypeLabel(tx.type)}</div>
-        <div className="grey fs12">{variant.ticker}</div>
-      </div>
-      <div className="text-right">
-        <div className={`fs14 mono ${txIsIncoming(tx.type) ? 'tx-amt-pos' : ''}`}>{amountText}</div>
-        <div className="grey fs12">{txStatus(tx)}</div>
-      </div>
-    </div>
-  )
-}
-
 export default function Asset ({ ticker }: AssetParams) {
   const redraw = useForceUpdate()
-  const [txns, setTxns] = useState<TxItem[]>([])
   const [loadingTxns, setLoadingTxns] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [page, setPage] = useState(0)
+  // The fetched history feed. A mutable ref rather than state so nextPage can
+  // recompute after fetches without waiting on a render.
+  const txSrcRef = useRef<{ txs: WalletTransaction[], more: boolean }>({ txs: [], more: false })
 
   const ta = app.tickerMap?.[ticker]
 
@@ -91,39 +54,67 @@ export default function Asset ({ ticker }: AssetParams) {
   const assetIDs = walletVariants.map(v => v.assetID)
   const assetIDsKey = assetIDs.join(',')
 
-  // fetchTxns pulls the most recent transactions in a single request. A
-  // multi-network ticker uses the ticker endpoint, which the master txdb serves
-  // merged and time-ordered from its ticker index. A single-network ticker uses
-  // the per-asset endpoint: it is one call either way, and it also covers
-  // wallets that keep their own history store rather than the master txdb (only
-  // xmr today), which the ticker index does not see.
-  //
-  // Fetches are fired from both the assetIDsKey effect and every transaction
-  // walletnote, and the two endpoints have unrelated latencies, so responses can
-  // land out of order — switching assets mid-flight would otherwise let the
-  // previous asset's slower response overwrite this one's rows. fetchGenRef
-  // stamps each fetch and only the newest is allowed to apply.
+  // fetchHistory pulls one batch of transactions, resuming after last when
+  // given. A multi-network ticker uses the ticker endpoint, which the master
+  // txdb serves merged and time-ordered from its ticker index. A
+  // single-network ticker uses the per-asset endpoint: it is one call either
+  // way, and it also covers wallets that keep their own history store rather
+  // than the master txdb (only xmr today), which the ticker index does not
+  // see.
+  const fetchHistory = (last: WalletTransaction | null) => {
+    if (!ta) return Promise.resolve({ ok: false })
+    if (ta.variants.length > 1) {
+      const req: Record<string, unknown> = { ticker: ta.ticker, n: TX_PAGE_SIZE, past: true }
+      if (last) {
+        req.refID = last.id
+        const v = variantForTx(ta, last)
+        if (v) req.refNetwork = networkID(v)
+      }
+      return postJSON('/api/txhistoryticker', req)
+    }
+    const req: Record<string, unknown> = { assetID: ta.variants[0].assetID, n: TX_PAGE_SIZE, past: true }
+    if (last) req.refID = last.id
+    return postJSON('/api/txhistory', req)
+  }
+
+  // Initial fetches are fired from both the assetIDsKey effect and every
+  // transaction walletnote, and responses can land out of order — switching
+  // assets mid-flight would otherwise let the previous asset's slower
+  // response overwrite this one's rows. fetchGenRef stamps each fetch and
+  // only the newest is allowed to apply.
   const fetchTxnsRef = useRef<() => Promise<void>>()
   const fetchGenRef = useRef(0)
   fetchTxnsRef.current = async () => {
     if (!ta) return
     const gen = ++fetchGenRef.current
-    const r = ta.variants.length > 1
-      ? await postJSON('/api/txhistoryticker', { ticker: ta.ticker, n: TX_PAGE_SIZE, past: true })
-      : await postJSON('/api/txhistory', { assetID: ta.variants[0].assetID, n: TX_PAGE_SIZE, past: true })
+    const r = await fetchHistory(null)
     if (gen !== fetchGenRef.current) return
-    const txs: WalletTransaction[] = r.ok && r.txs ? r.txs : []
-    const items: TxItem[] = []
-    for (const tx of txs) {
-      const variant = variantForTx(ta, tx)
-      if (variant) items.push({ tx, variant })
-    }
-    setTxns(items)
+    txSrcRef.current = { txs: r.ok && r.txs ? r.txs : [], more: Boolean(r.moreAvailable) }
     setLoadingTxns(false)
+    redraw()
+  }
+
+  const loadMore = async () => {
+    const gen = fetchGenRef.current
+    const src = txSrcRef.current
+    const last = src.txs[src.txs.length - 1]
+    if (!last || !src.more) return
+    setLoadingMore(true)
+    const r = await fetchHistory(last)
+    if (gen !== fetchGenRef.current) return
+    if (r.ok) {
+      src.txs = src.txs.concat(r.txs ?? [])
+      src.more = Boolean(r.moreAvailable)
+    } else {
+      src.more = false
+    }
+    setLoadingMore(false)
+    redraw()
   }
 
   useEffect(() => {
     setLoadingTxns(true)
+    setPage(0)
     fetchTxnsRef.current?.()
   }, [assetIDsKey])
 
@@ -168,6 +159,41 @@ export default function Asset ({ ticker }: AssetParams) {
   const hasUnavailable = ta.immature > 0 || ta.locked > 0
   const isMultiNet = ta.variants.length > 1
 
+  const usdValue = ta.total * rate
+  const totals = app.portfolioTotals()
+  const portfolioPct = rate > 0 && totals.total > 0 ? (usdValue / totals.total) * 100 : null
+  const balanceText = `${Doc.formatConventionalValue(ta.total, ta.precision)} ${ta.ticker}`
+
+  // computeTxItems reads txSrcRef so nextPage can recompute after fetches
+  // without waiting on a render. Rows without a resolvable variant drop out.
+  const computeTxItems = (): TxRowItem[] => {
+    const items: TxRowItem[] = []
+    for (const tx of txSrcRef.current.txs) {
+      const variant = variantForTx(ta, tx)
+      if (variant) items.push({ tx, ta, variant })
+    }
+    return items
+  }
+
+  // nextPage advances the pager, fetching more first when the local buffer
+  // cannot fill the next page (dropped rows can thin a fetch batch, hence
+  // the bounded loop rather than a single fetch).
+  const nextPage = async () => {
+    const needed = (curPage + 1) * TX_PAGE_ROWS + 1
+    for (let i = 0; i < 10 && computeTxItems().length < needed && txSrcRef.current.more; i++) {
+      await loadMore()
+    }
+    if (computeTxItems().length > (curPage + 1) * TX_PAGE_ROWS) setPage(curPage + 1)
+  }
+
+  const txItems = computeTxItems()
+  // Clamp against shrinkage (refetches) rather than tracking resets in every
+  // state setter.
+  const maxPage = Math.max(0, Math.ceil(txItems.length / TX_PAGE_ROWS) - 1)
+  const curPage = Math.min(page, maxPage)
+  const pageItems = txItems.slice(curPage * TX_PAGE_ROWS, (curPage + 1) * TX_PAGE_ROWS)
+  const hasNextTxns = txItems.length > (curPage + 1) * TX_PAGE_ROWS || txSrcRef.current.more
+
   return (
     <div className="networks-view fill-abs">
       <div className="networks-inner mx-auto w-100">
@@ -175,34 +201,67 @@ export default function Asset ({ ticker }: AssetParams) {
           <span className="ico-arrowleft me-2 fs10" />{t('Portfolio')}
         </button>
 
-        <div className="network-detail-header d-flex align-items-center">
-          <CoinLogo ticker={ta.ticker} className="icon-48" />
-          <div>
-            <div className="fs28">{ta.name}</div>
-            <div className="grey fs18">{ta.ticker}</div>
+        <div className="asset-card">
+          <div className="d-flex align-items-center px-4 pt-4 pb-3">
+            <CoinLogo ticker={ta.ticker} className="icon-48 me-3" />
+            <div className="flex-grow-1">
+              <div className="fs16 demi">{ta.name}</div>
+              <div className="grey fs13">{ta.ticker}</div>
+            </div>
+            <div className="text-right">
+              {rate > 0
+                ? (
+                  <>
+                    <div className="fs26 mono demi">{Doc.formatUSD(usdValue)}</div>
+                    <div className="grey fs13 mono">{balanceText}</div>
+                  </>
+                  )
+                : <div className="fs26 mono demi">{balanceText}</div>}
+            </div>
+          </div>
+          <div className="border-bottom mx-4" />
+          <div className="d-flex align-items-center px-4 py-3">
+            <div className="flex-grow-1 fs13 mono">
+              {rate > 0 && (
+                <>
+                  <span className="demi">{Doc.formatUSD(rate)}</span> <span className="grey">{t('price')}</span>
+                  {portfolioPct !== null && (
+                    <>
+                      <span className="grey mx-1">·</span>
+                      <span className="demi">{portfolioPct.toFixed(1)}%</span> <span className="grey">{t('of portfolio')}</span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+            <button
+              type="button" className="round-btn icon-40 flex-center has-tip" aria-label={t('Receive')}
+              onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}
+            >
+              <span className="ico-qrcode fs16" />
+            </button>
+            <button
+              type="button" className="round-btn icon-40 flex-center has-tip ms-2" aria-label={t('Send')}
+              onClick={() => app.setForm({ form: 'send', data: { ticker: ta.ticker } })}
+            >
+              <span className="ico-send fs16" />
+            </button>
+            <button
+              type="button" className="round-btn icon-40 flex-center has-tip ms-2" aria-label={t('Swap')}
+              onClick={() => app.setForm({ form: 'swap', data: {} })}
+            >
+              <span className="ico-swap fs16" />
+            </button>
           </div>
         </div>
 
-        <div className="network-section">
-          <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('BALANCE')}</div>
-          <div className="d-flex justify-content-between align-items-start">
-            <div className="fs28 mono demi">{Doc.formatConventionalValue(ta.total, ta.precision)} {ta.ticker}</div>
-            <div className="d-flex">
-              <button type="button" className="d-inline-flex align-items-center me-2" onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}>
-                <span className="ico-qrcode me-2" />{t('Receive')}
-              </button>
-              <button type="button" className="feature d-inline-flex align-items-center" onClick={() => app.setForm({ form: 'send', data: { ticker: ta.ticker } })}>
-                <span className="ico-send me-2" />{t('Send')}
-              </button>
+        {hasUnavailable && (
+          <div className="network-section">
+            <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('BALANCE')}</div>
+            <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+              <span className="grey fs13">{t('Available')}</span>
+              <span className="mono">{Doc.formatConventionalValue(ta.avail, ta.precision)} {ta.ticker}</span>
             </div>
-          </div>
-          {rate > 0 && <div className="grey mb-2">{Doc.formatUSD(ta.total * rate)}</div>}
-          {hasUnavailable && (
-            <>
-              <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
-                <span className="grey fs13">{t('Available')}</span>
-                <span className="mono">{Doc.formatConventionalValue(ta.avail, ta.precision)} {ta.ticker}</span>
-              </div>
               {ta.locked > 0 && (
                 <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
                   <span className="grey fs13">{t('Locked')}</span>
@@ -215,9 +274,8 @@ export default function Asset ({ ticker }: AssetParams) {
                   <span className="mono">{Doc.formatConventionalValue(ta.immature, ta.precision)} {ta.ticker}</span>
                 </div>
               )}
-            </>
-          )}
-        </div>
+          </div>
+        )}
 
         {isMultiNet && (
           <div className="network-section">
@@ -254,9 +312,26 @@ export default function Asset ({ ticker }: AssetParams) {
           <div className="network-section-title fs11 grey demi pb-2 mb-1 border-bottom">{t('TRANSACTIONS')}</div>
           {loadingTxns
             ? <div className="flex-center py-4"><Spinner size={20} /></div>
-            : txns.length === 0
+            : txItems.length === 0
               ? <div className="grey flex-center py-4">{t('No transactions yet.')}</div>
-              : txns.map(item => <TxRow key={`${item.variant.assetID}-${item.tx.id}`} item={item} />)}
+              : pageItems.map(item => <TxRow key={`${item.variant.assetID}-${item.tx.id}`} item={item} />)}
+          {!loadingTxns && (curPage > 0 || hasNextTxns) && (
+            <div className="flex-center pt-3">
+              <button
+                type="button" className="pager-btn flex-center" aria-label={t('Previous page')}
+                onClick={() => setPage(curPage - 1)} disabled={curPage === 0 || loadingMore}
+              >
+                <span className="ico-chevron-left fs12" />
+              </button>
+              <span className="grey fs13 mx-3">{tvar('Page {{ n }}', { n: String(curPage + 1) })}</span>
+              <button
+                type="button" className="pager-btn flex-center" aria-label={t('Next page')}
+                onClick={nextPage} disabled={!hasNextTxns || loadingMore}
+              >
+                {loadingMore ? <Spinner size={12} /> : <span className="ico-chevron-left fs12 mirror-x" />}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

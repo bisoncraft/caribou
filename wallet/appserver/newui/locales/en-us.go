@@ -108,6 +108,10 @@ var EnUS = map[string]*intl.Translation{
 	"export_seed_copy_reminder": {T: "Make sure you have written down or securely stored your seed before leaving this page."},
 	"Failed to export seed.":    {T: "Failed to export seed."},
 
+	// Asset view
+	"price":        {T: "price"},
+	"of portfolio": {T: "of portfolio"},
+
 	// Settings / diagnostics
 	"Application log": {T: "Application log"},
 	"export_log_desc": {T: "Save a log file to attach when reporting a problem. It records wallet activity, not keys or seeds."},
