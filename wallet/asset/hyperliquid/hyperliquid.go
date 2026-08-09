@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -610,6 +611,7 @@ func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
 	if err != nil {
 		return fmt.Errorf("fetching ledger updates: %w", err)
 	}
+	sortLedgerUpdates(updates)
 	for _, u := range updates {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -694,6 +696,7 @@ func (w *HyperWallet) scanLedger(ctx context.Context) error {
 		return err
 	}
 
+	sortLedgerUpdates(updates)
 	for _, u := range updates {
 		w.processLedgerUpdate(u)
 	}
@@ -702,6 +705,14 @@ func (w *HyperWallet) scanLedger(ctx context.Context) error {
 		return fmt.Errorf("persisting scan watermark: %w", err)
 	}
 	return nil
+}
+
+// sortLedgerUpdates orders updates oldest-first. confirmPendingSend pairs
+// identical sends FIFO, which is only correct if echoes arrive in time order,
+// and the REST catch-up returns them in whatever order the API chose —
+// maxLedgerUpdateTime below already declines to assume that order.
+func sortLedgerUpdates(updates []ledgerUpdate) {
+	sort.SliceStable(updates, func(i, j int) bool { return updates[i].Time < updates[j].Time })
 }
 
 func maxLedgerUpdateTime(updates []ledgerUpdate) int64 {
@@ -773,7 +784,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 	isIncoming := strings.EqualFold(u.Delta.Destination, w.address)
 
 	if isOutgoing {
-		// Try to match and confirm a pending send tx by nonce proximity.
+		// Try to match and confirm a pending send tx, pairing FIFO.
 		w.confirmPendingSend(u, amount)
 		return
 	}
@@ -823,10 +834,24 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 
 // confirmPendingSend finds the pending send matching ledger update u and
 // updates it with the confirmed state. Candidates are filtered by amount and
-// recipient; when multiple sends share both, the one whose nonce is numerically
-// closest to u.Time is chosen. Nonce proximity is a tiebreaker only — a single
-// candidate always matches regardless of how much time elapsed between nonce
-// mint and ledger echo.
+// recipient; when multiple sends share both, they are paired FIFO — the oldest
+// nonce not newer than u.Time wins.
+//
+// Hyperliquid processes transfers in nonce order and echoes ledger updates in
+// time order, so the oldest outstanding send is the one this echo belongs to.
+// Matching on the nonce as an identity is not possible: ledgerUpdate carries
+// only Time and Hash, no nonce. The previous heuristic picked the nonce
+// numerically closest to u.Time, which resolved the second of two identical
+// sends against the first send's hash; the loser then aged out at pendingTTL
+// and was removed, losing a transfer that had actually landed.
+//
+// A candidate whose nonce is newer than u.Time cannot be this echo, so those
+// are considered only when nothing else matches — a single candidate still
+// confirms regardless of clock skew between nonce mint and ledger echo.
+//
+// Callers must deliver echoes oldest-first; sortLedgerUpdates enforces that on
+// every path that batches them. Feeding two identical sends' echoes in reverse
+// pairs each with the other's hash.
 // Pending entries older than pendingTTL are expired opportunistically.
 func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	pending, err := w.txDB.GetPendingTxs()
@@ -836,8 +861,8 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	}
 
 	cutoff := uint64(time.Now().Unix()) - pendingTTL
-	var best *txdb.WalletTransaction
-	var bestAbsDiff int64
+	var best, bestNewer *txdb.WalletTransaction
+	var bestNonce, bestNewerNonce uint64
 	for _, p := range pending {
 		subTime := hyperData(p).SubmissionTime
 		if subTime > 0 && subTime < cutoff {
@@ -863,15 +888,20 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 		if p.Recipient == nil || !strings.EqualFold(*p.Recipient, u.Delta.Destination) {
 			continue
 		}
-		absDiff := int64(u.Time) - int64(nonce)
-		if absDiff < 0 {
-			absDiff = -absDiff
+		if nonce > u.Time {
+			if bestNewer == nil || nonce < bestNewerNonce {
+				bestNewer, bestNewerNonce = p, nonce
+			}
+			continue
 		}
-		if best == nil || absDiff < bestAbsDiff {
-			best, bestAbsDiff = p, absDiff
+		if best == nil || nonce < bestNonce {
+			best, bestNonce = p, nonce
 		}
 	}
 
+	if best == nil {
+		best = bestNewer
+	}
 	if best == nil {
 		return
 	}

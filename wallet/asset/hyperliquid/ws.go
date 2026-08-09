@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -52,7 +54,8 @@ type wsLedgerData struct {
 //
 // Goroutine ownership: run owns the write side; an internal goroutine owns
 // the read side. Gorilla WebSocket allows exactly one concurrent reader and
-// one concurrent writer.
+// one concurrent writer. The read goroutine never outlives the runOnce call
+// that started it, so run returning means no handler is still in flight.
 type wsClient struct {
 	url     string
 	user    string
@@ -108,6 +111,14 @@ func (c *wsClient) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
+	// The read goroutine's handleMessage writes to the tx DB, and runOnce
+	// returning is what ultimately lets Connect's WaitGroup complete — so it
+	// must not outlive this call, or it can store a transaction after Core has
+	// closed the master tx DB. Deferred calls run last-in-first-out, so
+	// registering the wait before the close means the close runs first,
+	// unblocking ReadMessage, and the wait then observes the goroutine exit.
+	var readWg sync.WaitGroup
+	defer readWg.Wait()
 	defer conn.Close()
 
 	// Catch up on missed events before entering the live message loop.
@@ -143,7 +154,9 @@ func (c *wsClient) runOnce(ctx context.Context) error {
 	// readErr has capacity 1: the goroutine sends once on exit and never
 	// blocks, even after runOnce has already returned and stopped draining.
 	readErr := make(chan error, 1)
+	readWg.Add(1)
 	go func() {
+		defer readWg.Done()
 		for {
 			_, raw, err := conn.ReadMessage()
 			if err != nil {
@@ -199,6 +212,11 @@ func (c *wsClient) handleMessage(raw []byte) {
 		c.log.Tracef("WS parse ledger data: %v", err)
 		return
 	}
+	// confirmPendingSend pairs identical sends FIFO, so a frame carrying
+	// several updates must be replayed oldest-first.
+	sort.SliceStable(data.Updates, func(i, j int) bool {
+		return data.Updates[i].Time < data.Updates[j].Time
+	})
 	for _, u := range data.Updates {
 		if c.onEvent != nil {
 			c.onEvent(u)

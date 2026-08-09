@@ -5,6 +5,7 @@ package hyperliquid
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,10 @@ const (
 	DefaultFee       = 0
 	MaxBlockInterval = 45 // seconds before considered unsynced; must exceed wsPingInterval+wsWriteDeadline
 	keyFileName      = "hl-keyfile.json"
+
+	// atomsPerHYPE is UnitInfo's ConversionFactor as an integer constant, for
+	// the overflow bounds in parseHYPE.
+	atomsPerHYPE = 100_000_000
 
 	// pendingTTL is how long a pending send may wait for confirmation before
 	// it is considered permanently unconfirmed and removed from the DB.
@@ -84,6 +89,13 @@ func parseHYPE(s string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid HYPE amount %q: %w", s, err)
 	}
+	// The API is untrusted input, so reject values that do not fit rather
+	// than wrapping: scaling by 1e8 overflows uint64 far below ParseUint's
+	// own limit, and a wrapped value reads as a plausible small amount in
+	// Balance().Available and in ledger amounts.
+	if whole > math.MaxUint64/atomsPerHYPE {
+		return 0, fmt.Errorf("HYPE amount %q overflows uint64 atoms", s)
+	}
 	atoms := whole * 1e8
 	if len(parts) == 2 {
 		frac := parts[1]
@@ -96,6 +108,9 @@ func parseHYPE(s string) (uint64, error) {
 		fracVal, err := strconv.ParseUint(frac, 10, 64)
 		if err != nil {
 			return 0, fmt.Errorf("invalid HYPE decimal in %q: %w", s, err)
+		}
+		if fracVal > math.MaxUint64-atoms {
+			return 0, fmt.Errorf("HYPE amount %q overflows uint64 atoms", s)
 		}
 		atoms += fracVal
 	}
