@@ -3,8 +3,7 @@ import QR from 'qrcode'
 
 interface QRCodeProps {
   data: string
-  // Rendered size in CSS pixels. The canvas is drawn at the device pixel
-  // ratio internally by the qrcode library.
+  // Rendered size in CSS pixels.
   size?: number
 }
 
@@ -19,10 +18,17 @@ export default function QRCode ({ data, size = 176 }: QRCodeProps) {
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !data) return
+    // The qrcode canvas renderer draws at exactly the requested width with
+    // no devicePixelRatio handling, so request device pixels and pin the
+    // element back to CSS pixels afterward for a crisp HiDPI render.
+    const dpr = window.devicePixelRatio || 1
     QR.toCanvas(canvas, data, {
-      width: size,
+      width: size * dpr,
       margin: 0, // the tile supplies the quiet zone
       color: { dark: '#000000', light: '#ffffff' }
+    }).then(() => {
+      canvas.style.width = `${size}px`
+      canvas.style.height = `${size}px`
     }).catch(() => {
       // Canvas may be unavailable (e.g. jsdom in tests); the address text
       // and copy action still carry the flow.
