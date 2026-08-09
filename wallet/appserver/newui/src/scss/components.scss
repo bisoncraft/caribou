@@ -464,6 +464,87 @@ body.sidebar-collapsed .sidebar-label {
 }
 
 // -----------------------------------------------------------------------
+// Activity view.
+
+// Centered content column; same geometry as .portfolio-inner.
+.activity-inner {
+  max-width: calc(900px + 4rem);
+  margin: 0 auto;
+  padding: 2rem;
+  width: 100%;
+}
+
+.activity-search {
+  width: 300px;
+}
+
+// Type filter pills. Resting pills are quiet outlines; the active pill
+// takes the accent fill (the selected-state house idiom).
+.filter-pill {
+  font-size: 13px;
+  padding: 0.25rem 0.9rem;
+  border-radius: 20px;
+  color: var(--text-grey);
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+
+  &:hover {
+    color: var(--text-color);
+  }
+
+  &.selected {
+    background-color: var(--accent-strong);
+    border-color: var(--accent-border);
+    color: var(--accent-contrast);
+  }
+}
+
+.activity-section-label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-grey);
+  font-weight: var(--demi-bold);
+  padding: 1rem 0 0.5rem;
+}
+
+// Transaction cards. Unconfirmed rows trade the fill for a dashed outline.
+.activity-row {
+  background-color: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 0.5rem;
+  transition: background-color 0.15s;
+
+  &:hover {
+    background-color: var(--surface-raised);
+  }
+}
+
+.activity-row-unconfirmed {
+  background-color: transparent;
+  border: 1px dashed var(--border-color);
+}
+
+// Circular pager buttons (chevron prev/next).
+.pager-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+// Ringed transaction-type glyph at the head of each row.
+.tx-type-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid var(--text-grey);
+  border-radius: 50%;
+  font-size: 14px;
+}
+
+// -----------------------------------------------------------------------
 // Receive dialog.
 
 // Asset-picker viewport: exactly four 36px rows. The height is fixed (not
