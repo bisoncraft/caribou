@@ -407,26 +407,12 @@ body.sidebar-collapsed .sidebar-label {
   min-width: 0;
 }
 
-// Status indicators (parent .asset-name uses `gap: 6px` for spacing).
-.asset-status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
 // Wrapper for the inline sync spinner so it aligns with the text baseline.
+// The parent .asset-name uses `gap: 6px` for spacing.
 .asset-status-syncing-spinner {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-}
-
-.asset-status-locked {
-  color: var(--text-danger);
-  width: auto;
-  height: auto;
 }
 
 // Inactive rows. The dashed bar is anchored to the leftmost cell so we

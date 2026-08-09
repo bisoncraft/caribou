@@ -1,4 +1,4 @@
-import t, { tvar } from '@caribou/shared/intl'
+import { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { TickerAsset } from '@caribou/shared/assets'
@@ -17,13 +17,6 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
   if (!primary) return null
   const wallet = app.user?.assets[primary.assetID]?.wallet
   if (!wallet) return null
-
-  // Happy path: synced and open — no dot.
-  if (wallet.synced && wallet.open) return null
-
-  if (wallet.encrypted && !wallet.open) {
-    return <span className="ico-lock-closed asset-status-dot asset-status-locked has-tip fs11" aria-label={t('Locked')} />
-  }
 
   if (!wallet.synced) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
