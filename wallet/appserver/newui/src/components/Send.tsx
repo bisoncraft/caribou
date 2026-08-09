@@ -47,6 +47,8 @@ export default function Send ({ ticker }: SendProps) {
     runValidation, amountChanged, pickAsset, pickVariant, setMax, submit
   } = useSendForm({ ticker, onSent: close })
 
+  // Step-1 asset search filter.
+  const [query, setQuery] = useState('')
   // Step 2 (network picker) activation state — desktop only.
   const [activating, setActivating] = useState<number | null>(null)
   // Bumped after an activation so the picker re-reads app.user wallet state.
@@ -88,7 +90,7 @@ export default function Send ({ ticker }: SendProps) {
   }
 
   const backToAssets = () => {
-    setTa(null); setVariant(null); setNetErr({}); setActivating(null)
+    setTa(null); setVariant(null); setNetErr({}); setActivating(null); setQuery('')
   }
 
   // From the send form, Back returns to the network picker (step 2) rather
@@ -97,10 +99,15 @@ export default function Send ({ ticker }: SendProps) {
     setVariant(null); setErr('')
   }
 
-  // ---- Step 1: asset picker ----
+  // ---- Step 1: asset picker. The search field filters by name or ticker. ----
   if (!ta) {
-    const list = (app.tickerList ?? []).filter(item => item.avail > 0)
-    if (list.length === 0) {
+    const funded = (app.tickerList ?? []).filter(item => item.avail > 0)
+    const q = query.trim().toLowerCase()
+    const list = q === ''
+      ? funded
+      : funded.filter(item =>
+        item.name.toLowerCase().includes(q) || item.ticker.toLowerCase().includes(q))
+    if (funded.length === 0) {
       return (
         <form className="modal form-width-300" onSubmit={noSubmit}>
           <header><span>{t('Send')}</span></header>
@@ -113,15 +120,42 @@ export default function Send ({ ticker }: SendProps) {
     }
     return (
       <form className="modal form-width-300" onSubmit={noSubmit}>
-        <header><span>{t('Send')}</span></header>
-        <div className="pb-2">
-          {list.map(item => (
-            <div key={item.ticker} className="d-flex align-items-center px-3 py-2 hoverbg pointer" onClick={() => pickAsset(item)}>
-              <CoinLogo ticker={item.ticker} className="mini-icon me-2" />
-              <span className="flex-grow-1">{item.name}</span>
-              <span className="grey fs12">{item.ticker}</span>
-            </div>
-          ))}
+        <header><span>{t('Select asset to send')}</span></header>
+        <div className="px-3 pb-2">
+          <div className="d-flex align-items-center form-input-bg br5">
+            <span className="ico-search fs16 p-2" />
+            <input
+              type="text"
+              value={query}
+              placeholder={t('search')}
+              onChange={e => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="send-asset-list overflow-y-auto mb-2">
+          {list.map(item => {
+            const fundedVariants = item.variants.filter(v => v.bal.available > 0).length
+            const rate = item.xcRate ?? 0
+            return (
+              <div key={item.ticker} className="d-flex align-items-center px-3 py-2 hoverbg pointer" onClick={() => pickAsset(item)}>
+                <CoinLogo ticker={item.ticker} className="icon-24 me-2" />
+                <div className="flex-grow-1">
+                  <div className="fs14 demi">{item.ticker}</div>
+                  <div className="grey fs12">
+                    {fundedVariants} {fundedVariants === 1 ? t('asset') : t('assets')}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="fs14 demi">{rate > 0 ? Doc.formatUSD(item.avail * rate) : '—'}</div>
+                  <div className="mono fs14 grey">{Doc.formatConventionalValue(item.avail, item.precision)}</div>
+                </div>
+              </div>
+            )
+          })}
+          {list.length === 0 && (
+            <div className="px-3 py-2 grey fs14 text-center">{t('No matching assets.')}</div>
+          )}
         </div>
         <div className="flex-stretch-column p-3">
           <button type="button" onClick={close}>{t('Cancel')}</button>

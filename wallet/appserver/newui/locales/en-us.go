@@ -28,6 +28,7 @@ var EnUS = map[string]*intl.Translation{
 	"Show QR code":                   {T: "Show QR code"},
 	"Hide QR code":                   {T: "Hide QR code"},
 	"Select asset to receive":        {T: "Select asset to receive"},
+	"Select asset to send":           {T: "Select asset to send"},
 	"search":                         {T: "search"},
 	"No matching assets.":            {T: "No matching assets."},
 	"Yes":                            {T: "Yes"},
