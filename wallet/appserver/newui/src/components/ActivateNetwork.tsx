@@ -5,6 +5,7 @@ import { postJSON } from '@caribou/shared/http'
 import { networkSummary } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import Spinner from './Spinner'
+import { useModalBusy } from './modalBusy'
 
 interface ActivateNetworkParams {
   assetID: number
@@ -20,6 +21,7 @@ const noSubmit = (e: FormEvent) => e.preventDefault()
 export default function ActivateNetwork ({ assetID }: ActivateNetworkParams) {
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState('')
+  useModalBusy(submitting)
 
   const close = () => app.setForm({ form: '', data: {} })
 

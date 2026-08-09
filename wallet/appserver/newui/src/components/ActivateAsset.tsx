@@ -5,6 +5,7 @@ import { postJSON } from '@caribou/shared/http'
 import { AssetVariant } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import Spinner from './Spinner'
+import { useModalBusy } from './modalBusy'
 import Checkbox from './Checkbox'
 
 // Wallet type string constants that match the Go-side constants in
@@ -98,6 +99,7 @@ function NativeActivate ({ ticker, close }: { ticker: string, close: () => void 
   const [err, setErr] = useState('')
   const [spvMode, setSpvMode] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
+  useModalBusy(submitting)
 
   const ta = app.tickerMap![ticker]
   // The native variant is the one without a .token.
@@ -237,6 +239,7 @@ function MultiNetActivate ({ ticker, close }: { ticker: string, close: () => voi
 
   const [rows, setRows] = useState<NetworkRow[]>(initialRows)
   const [phase, setPhase] = useState<'pick' | 'running' | 'done'>('pick')
+  useModalBusy(phase === 'running')
 
   const toggleRow = (networkID: number) => {
     if (phase !== 'pick') return

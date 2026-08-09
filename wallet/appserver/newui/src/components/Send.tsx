@@ -7,6 +7,7 @@ import { useSendForm } from '@caribou/shared/useSendForm'
 import Doc from '@caribou/shared/doc'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import Spinner from './Spinner'
+import { useModalBusy } from './modalBusy'
 import Checkbox from './Checkbox'
 import PasswordInput from './PasswordInput'
 
@@ -47,6 +48,7 @@ export default function Send ({ ticker }: SendProps) {
     runValidation, amountChanged, pickAsset, pickVariant, setMax, submit
   } = useSendForm({ ticker, onSent: close })
 
+  useModalBusy(sending)
   // Step-1 asset search filter.
   const [query, setQuery] = useState('')
   // Step 2 (network picker) activation state — desktop only.
