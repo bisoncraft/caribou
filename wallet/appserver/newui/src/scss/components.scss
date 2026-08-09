@@ -193,6 +193,12 @@ body.sidebar-collapsed .sidebar-btn {
   &:not(:hover):not(.selected) {
     background-color: transparent;
   }
+
+  // The icon's label-gap margin (me-3) would sit as dead space to its right
+  // once the label is hidden, skewing the icon left of the tile's center.
+  > span:first-child {
+    margin-right: 0;
+  }
 }
 
 // The collapse toggle: a quiet icon-only control at the top of the rail.

@@ -135,7 +135,9 @@ body {
   // width; the Sidebar component overrides it inline with a content-measured
   // value while expanded.
   --sidebar-width: 160px;
-  --sidebar-collapsed-width: 64px;
+  // Sized to its contents: 2×16px rail padding plus a 34px tile (8px
+  // padding, 18px icon, 8px padding), so the icon centers exactly.
+  --sidebar-collapsed-width: 66px;
   --border-radius: 4px;
 
   // Typography
