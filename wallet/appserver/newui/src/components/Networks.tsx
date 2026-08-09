@@ -28,19 +28,18 @@ function NetworkCard ({ n }: { n: NetworkSummary }) {
 
   return (
     <button type="button" className="network-card d-flex flex-column border pointer text-left" onClick={onClick}>
-      <div className="network-card-header d-flex align-items-center">
-        <CoinLogo
-          ticker={n.ticker}
-          className={`icon-32 ${n.activated ? '' : 'logo-off'}`}
-        />
-        <span className="fs18 demi">{n.name}</span>
-      </div>
+      <div className="fs18 demi">{n.name}</div>
       <div className="fs13 grey">
         {tvar('Supports {{ count }} {{ assetWord }}', { count: String(n.assetCount), assetWord })}
       </div>
       <div className="network-card-assets d-flex align-items-center">
-        {shownAssets.map(a => (
-          <CoinLogo key={a.assetID} ticker={a.ticker} title={a.ticker} className="icon-16" />
+        {shownAssets.map((a, i) => (
+          <CoinLogo
+            key={a.assetID}
+            ticker={a.ticker}
+            title={a.ticker}
+            className={i === 0 ? `icon-24 ${n.activated ? '' : 'logo-off'}` : 'icon-16'}
+          />
         ))}
         {overflow > 0 && <span className="fs11 demi grey">+{overflow}</span>}
       </div>

@@ -1051,10 +1051,6 @@ body.sidebar-collapsed .sidebar-label {
   }
 }
 
-.network-card-header {
-  gap: 0.6rem;
-}
-
 // Dims an unactivated network's logo on its card.
 .logo-off {
   filter: grayscale(70%);
