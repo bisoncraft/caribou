@@ -145,7 +145,7 @@ export default function Send ({ ticker }: SendProps) {
                 <div className="flex-grow-1">
                   <div className="fs14 demi">{item.ticker}</div>
                   <div className="grey fs12">
-                    {fundedVariants} {fundedVariants === 1 ? t('asset') : t('assets')}
+                    {fundedVariants} {fundedVariants === 1 ? t('network') : t('networks')}
                   </div>
                 </div>
                 <div className="text-right">

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useEffect } from 'react'
 import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
+import { useForceUpdate } from '@caribou/shared/hooks'
 import { CoreNote } from '@caribou/shared/registry'
 import { TickerAsset, compareByFiatValue } from '@caribou/shared/assets'
 import PortfolioTotals from './PortfolioTotals'
@@ -8,9 +9,7 @@ import AssetRow from './AssetRow'
 import InactiveAssetRow from './InactiveAssetRow'
 
 export default function Portfolio () {
-  const [, setTick] = useState(0)
-
-  const redraw = useCallback(() => setTick(n => n + 1), [])
+  const redraw = useForceUpdate()
 
   useEffect(() => {
     const balK = app.registerBalanceUpdater(redraw)

@@ -26,14 +26,21 @@ export default function Sidebar () {
 
   // The cursor bar tracks the active nav button. Measured from the DOM so it
   // follows font/locale-driven size differences; when no nav button matches
-  // the page (settings, asset detail), the bar unmounts.
+  // the page (settings, asset detail), the bar unmounts. Re-measured once
+  // webfonts land, since a late font swap shifts the button metrics.
   useLayoutEffect(() => {
-    const btn = btns.current[page]
-    if (!btn) {
-      setCursor(null)
-      return
+    const measure = () => {
+      const btn = btns.current[page]
+      if (!btn) {
+        setCursor(null)
+        return
+      }
+      setCursor({ top: btn.offsetTop, height: btn.offsetHeight })
     }
-    setCursor({ top: btn.offsetTop, height: btn.offsetHeight })
+    measure()
+    let stale = false
+    if (document.fonts) document.fonts.ready.then(() => { if (!stale) measure() })
+    return () => { stale = true }
   }, [page, collapsed])
 
   // The expanded width is content-driven, measured from a hidden max-content
