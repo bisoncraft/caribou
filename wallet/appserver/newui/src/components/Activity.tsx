@@ -308,7 +308,7 @@ export default function Activity () {
           if (!list) return null
           return (
             <div key={key}>
-              <div className="activity-section-label">{t(label)}</div>
+              <div className="section-label">{t(label)}</div>
               {list.map(item => <TxRow key={`${item.variant.assetID}:${item.tx.id}`} item={item} />)}
             </div>
           )
