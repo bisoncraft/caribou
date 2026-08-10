@@ -37,15 +37,20 @@ import (
 // NewApp, calls Start on launch, and Stop on teardown. It is safe for
 // concurrent use; lifecycle calls are serialized.
 type App struct {
-	mtx      sync.Mutex
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	log      util.Logger
-	closeLog func()
-	core     *core.Core
-	srv      *appserver.AppServer
-	srvCM    *util.ConnectionMaster
-	capToken string
+	mtx sync.Mutex
+	// lifecycleWG counts in-flight Pause/Resume calls, which run without a.mtx
+	// held. Stop drains it before cancelling the core. Add happens in
+	// acquireCore under a.mtx, which Stop also holds when it Waits, so the
+	// counter can never rise from zero alongside that Wait.
+	lifecycleWG sync.WaitGroup
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	log         util.Logger
+	closeLog    func()
+	core        *core.Core
+	srv         *appserver.AppServer
+	srvCM       *util.ConnectionMaster
+	capToken    string
 }
 
 // NewApp constructs an App. It does no work until Start is called.
@@ -262,31 +267,62 @@ func (a *App) Unlock(pw string) (string, error) {
 // appserver: the session, cached password, and WebView cookies stay valid, so
 // Resume needs no password. Idempotent; named Pause because "suspend" is a
 // Kotlin soft keyword (the core method is Suspend).
+//
+// a.mtx is held only to take the core reference, not across the call. Suspend
+// and Resume are per-wallet network teardown and reconnect, the one unbounded
+// pair on this type, and Stop takes a.mtx before it reaches the Logout that
+// zeroes secrets and closes storage in order. Holding it here would queue a
+// termination behind a reconnect. iOS makes that concrete: its willTerminate
+// observer calls Stop from the main thread, so the block would land on the UI
+// thread with the OS termination deadline running. Core does its own locking,
+// and Logout bumps a generation that unwinds an in-flight Resume, so a Stop
+// that lands mid-pause-tier is safe rather than merely tolerated.
 func (a *App) Pause() error {
-	a.mtx.Lock()
-	defer a.mtx.Unlock()
+	c, release := a.acquireCore()
+	defer release()
 
 	// Nothing bound means nothing is connected; a pause timer that fires after
 	// teardown (or before startup finishes) has no work to do. Report success,
 	// matching Lock's idempotence.
-	if a.core == nil {
+	if c == nil {
 		return nil
 	}
-	return a.core.Suspend()
+	return c.Suspend()
 }
 
 // Resume reconnects the wallets Pause disconnected when the app returns to the
-// foreground. It returns an error (and reconnects nothing) if the session was
-// locked out while backgrounded, signalling the shell to run a full Unlock
-// instead.
+// foreground. It reconnects nothing once the session was locked out while
+// backgrounded; the shell's Unlock reconnects instead. See Pause for why a.mtx
+// is not held across the call.
 func (a *App) Resume() error {
+	c, release := a.acquireCore()
+	defer release()
+
+	if c == nil {
+		return errors.New("not running")
+	}
+	return c.Resume()
+}
+
+// acquireCore takes the live core under a.mtx and registers the call as
+// in-flight, then releases a.mtx so the caller can make a long core call
+// without holding the lifecycle lock. Returns a nil core (with a no-op release)
+// if nothing is bound. Every result must be released.
+//
+// The registration is what makes releasing a.mtx safe. Without it a Pause or
+// Resume could still be inside connectAndUpdateWallet when Stop cancels the
+// core, and startWalletSyncMonitor's Add would land on the very WaitGroup
+// Core.Run is waiting on. Stop drains this instead, after a Logout that has
+// already unwound the reconnect.
+func (a *App) acquireCore() (*core.Core, func()) {
 	a.mtx.Lock()
 	defer a.mtx.Unlock()
 
 	if a.core == nil {
-		return errors.New("not running")
+		return nil, func() {}
 	}
-	return a.core.Resume()
+	a.lifecycleWG.Add(1)
+	return a.core, a.lifecycleWG.Done
 }
 
 // VerifyPassword reports whether pw is the correct app password, without
@@ -335,6 +371,13 @@ func (a *App) Stop() error {
 	if err := a.core.Logout(); err != nil {
 		a.log.Errorf("Logout error during shutdown: %v", err)
 	}
+
+	// Pause and Resume run without a.mtx, so one can be in flight right now.
+	// The Logout above bumped Core's suspend generation, which unwinds an
+	// in-flight Resume after at most one wallet, so this drains promptly. It has
+	// to happen before the cancel: a reconnect still in flight would start a
+	// sync monitor on the WaitGroup Core.Run is about to wait on.
+	a.lifecycleWG.Wait()
 
 	a.cancel()
 	a.wg.Wait()

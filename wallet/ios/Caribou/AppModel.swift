@@ -797,8 +797,30 @@ final class AppModel: ObservableObject {
     // the call is idempotent Go-side. nonisolated: it only touches the bound App
     // global (itself concurrency-safe), so the willTerminate observer can call it
     // directly without a MainActor hop.
+    //
+    // The observer is registered on the main queue and App.stop blocks - on the
+    // wallet logout, then on an ordered storage close - so run it off the main
+    // thread and wait, rather than parking the UI thread for the whole shutdown.
+    // Android runs the same call on its own thread for the same reason. This is
+    // the only bound-App call the shell makes from the main thread; every other
+    // one already goes through Task.detached or walletLifecycleQueue.
+    //
+    // The wait is bounded because willTerminate is: the OS kills the process a
+    // few seconds in, so a shutdown still running at the deadline is not going to
+    // finish, and holding main until then buys nothing. 3s leaves headroom under
+    // the termination deadline. Overrunning it means the storage close did not
+    // complete, which is what the idempotent Go-side stop and the DB's own
+    // recovery are there for - the same outcome as the OS killing a suspended app
+    // outright, which it may do with no callback at all.
     nonisolated static func stopForTermination() {
-        try? boundApp?.stop()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            try? boundApp?.stop()
+            done.signal()
+        }
+        if done.wait(timeout: .now() + 3.0) == .timedOut {
+            NSLog("caribou: core shutdown did not finish before the termination deadline")
+        }
     }
 
     // dataDir returns the app-private storage path passed to App.start. It uses
