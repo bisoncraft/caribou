@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -356,14 +359,16 @@ func TestRPCContextCancel(t *testing.T) {
 // Sending to a new address is the canonical XRP account-activation flow and
 // must be allowed; a non-existent account cannot have lsfRequireDestTag set.
 func TestSendToUnfundedDestination(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+
 	// mockInfoHandler returns actNotFound for validated-ledger account_info
-	// (destination does not exist) and sender info for current-ledger lookups
-	// (sequence initialization).
+	// when querying the destination, and funded sender info for the balance
+	// pre-flight and sequence initialization.
 	mockInfoHandler := func(m *mockRippled) {
 		m.handlers["account_info"] = func(params json.RawMessage) (any, *rpcError) {
 			var p map[string]any
 			_ = json.Unmarshal(params, &p)
-			if li, _ := p["ledger_index"].(string); li == "current" {
+			if account, _ := p["account"].(string); account != destAddr {
 				return map[string]any{
 					"status": "success",
 					"account_data": map[string]any{
@@ -384,7 +389,6 @@ func TestSendToUnfundedDestination(t *testing.T) {
 	privKeyBytes := make([]byte, 32)
 	privKeyBytes[31] = 1
 	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
-	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
 
 	t.Run("at base reserve succeeds", func(t *testing.T) {
 		m := newMockRippled(t)
@@ -440,6 +444,227 @@ func TestSendToUnfundedDestination(t *testing.T) {
 			t.Errorf("error should mention base reserve, got: %v", err)
 		}
 	})
+}
+
+func TestSendInsufficientBalance(t *testing.T) {
+	tests := []struct {
+		name        string
+		balance     uint64
+		baseReserve uint64
+		value       uint64
+	}{
+		{
+			name:        "fee exceeds available remainder",
+			balance:     BaseReserveDrops + 1,
+			baseReserve: BaseReserveDrops,
+			value:       1,
+		},
+		{
+			name:    "value plus fee overflows",
+			balance: math.MaxUint64,
+			value:   math.MaxUint64,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			m := newMockRippled(t)
+			m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+				return accountInfoResponse(strconv.FormatUint(test.balance, 10), 0, 0), nil
+			})
+			m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+				return map[string]any{
+					"status":               "success",
+					"drops":                map[string]any{"open_ledger_fee": "12"},
+					"ledger_current_index": uint64(100),
+				}, nil
+			})
+			var submits atomic.Int32
+			m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+				submits.Add(1)
+				return map[string]any{
+					"status":                "success",
+					"engine_result":         "tesSUCCESS",
+					"engine_result_message": "The transaction was applied.",
+				}, nil
+			})
+
+			privKeyBytes := make([]byte, 32)
+			privKeyBytes[31] = 1
+			privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+			w := &xrpWallet{
+				address:      pubKeyToAddress(pubKey),
+				pubKey:       pubKey,
+				privKey:      privKey,
+				rpc:          m.rpcClient(),
+				log:          util.NewLogger("test", util.LevelError, nil),
+				baseReserve:  test.baseReserve,
+				ownerReserve: OwnerReserveDrops,
+				nextSeq:      7,
+				ctx:          context.Background(),
+			}
+			w.running.Store(true)
+
+			_, err := w.Send("rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe", test.value, 0)
+			if !errors.Is(err, asset.ErrInsufficientBalance) {
+				t.Fatalf("expected ErrInsufficientBalance, got %v", err)
+			}
+			if submits.Load() != 0 {
+				t.Fatalf("submit called %d times, want 0", submits.Load())
+			}
+			w.seqMtx.Lock()
+			nextSeq := w.nextSeq
+			w.seqMtx.Unlock()
+			if nextSeq != 7 {
+				t.Fatalf("nextSeq = %d, want 7 (insufficient send must not reserve a sequence)", nextSeq)
+			}
+		})
+	}
+}
+
+func TestSendRequiresCurrentBalance(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	m := newMockRippled(t)
+	m.handle("account_info", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["account"] == destAddr {
+			return accountInfoResponse("100000000", 0, 0), nil
+		}
+		if p["ledger_index"] == "current" {
+			return nil, &rpcError{errType: "serverTimeout", msg: "timeout"}
+		}
+		return accountInfoResponse("100000000", 0, 0), nil
+	})
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	var submits atomic.Int32
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		submits.Add(1)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
+	})
+
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	w := &xrpWallet{
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
+		privKey:     privKey,
+		rpc:         m.rpcClient(),
+		log:         util.NewLogger("test", util.LevelError, nil),
+		baseReserve: BaseReserveDrops,
+		nextSeq:     7,
+		ctx:         context.Background(),
+	}
+	w.running.Store(true)
+
+	_, err := w.Send(destAddr, 1_000_000, 0)
+	if err == nil || errors.Is(err, asset.ErrInsufficientBalance) {
+		t.Fatalf("expected current-ledger lookup error, got %v", err)
+	}
+	if submits.Load() != 0 {
+		t.Fatalf("submit called %d times, want 0", submits.Load())
+	}
+	w.seqMtx.Lock()
+	nextSeq := w.nextSeq
+	w.seqMtx.Unlock()
+	if nextSeq != 7 {
+		t.Fatalf("nextSeq = %d, want 7 (failed current lookup must not reserve a sequence)", nextSeq)
+	}
+}
+
+func TestConcurrentSendsSerializeBalanceCheck(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	m := newMockRippled(t)
+	var (
+		currentCalls atomic.Int32
+		submits      atomic.Int32
+		submitted    atomic.Bool
+		twoCurrent   = make(chan struct{})
+		closeCurrent sync.Once
+	)
+	m.handle("account_info", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["account"] == destAddr {
+			return accountInfoResponse("100000000", 0, 0), nil
+		}
+		if p["ledger_index"] == "current" {
+			if currentCalls.Add(1) == 2 {
+				closeCurrent.Do(func() { close(twoCurrent) })
+			}
+			if submitted.Load() {
+				return accountInfoResponse(strconv.FormatUint(BaseReserveDrops, 10), 0, 0), nil
+			}
+		}
+		return accountInfoResponse(strconv.FormatUint(BaseReserveDrops+13, 10), 0, 0), nil
+	})
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		select {
+		case <-twoCurrent:
+		case <-time.After(100 * time.Millisecond):
+		}
+		submits.Add(1)
+		submitted.Store(true)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
+	})
+
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	w := &xrpWallet{
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
+		privKey:     privKey,
+		rpc:         m.rpcClient(),
+		log:         util.NewLogger("test", util.LevelError, nil),
+		baseReserve: BaseReserveDrops,
+		nextSeq:     7,
+		ctx:         context.Background(),
+	}
+	w.running.Store(true)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := w.Send(destAddr, 1, 0)
+			errs <- err
+		}()
+	}
+	close(start)
+	var success, insufficient int
+	for range 2 {
+		err := <-errs
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, asset.ErrInsufficientBalance):
+			insufficient++
+		default:
+			t.Fatalf("unexpected send error: %v", err)
+		}
+	}
+	if success != 1 || insufficient != 1 {
+		t.Fatalf("results: success=%d insufficient=%d, want 1 each", success, insufficient)
+	}
+	if submits.Load() != 1 {
+		t.Fatalf("submit called %d times, want 1", submits.Load())
+	}
 }
 
 // ---- Balance ----

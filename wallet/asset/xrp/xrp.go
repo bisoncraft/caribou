@@ -218,6 +218,7 @@ type xrpWallet struct {
 	tip     uint64
 	tipTime time.Time
 
+	sendMtx  sync.Mutex // serializes balance authorization through broadcast
 	seqMtx   sync.Mutex
 	nextSeq  uint32   // 0 = uninitialized; advance locally after each submit
 	freeSeqs []uint32 // sorted ascending; sequences reserved then rolled back, reused before minting new ones
@@ -530,6 +531,14 @@ func (w *xrpWallet) Info() *asset.WalletInfo {
 }
 
 func (w *xrpWallet) Balance() (*asset.Balance, error) {
+	return w.balance(false)
+}
+
+// balance returns the wallet balance. When strictCurrent is true, a missing or
+// malformed current-ledger response is an error instead of falling back to the
+// validated ledger. Display callers can tolerate that fallback, but Send cannot
+// safely authorize a payment against state that predates queued transactions.
+func (w *xrpWallet) balance(strictCurrent bool) (*asset.Balance, error) {
 	if w.rpc == nil {
 		return nil, fmt.Errorf("wallet not connected")
 	}
@@ -567,18 +576,27 @@ func (w *xrpWallet) Balance() (*asset.Balance, error) {
 	}
 	validated := vr.info
 
-	cr := <-currentCh
-	current := validated // fallback: use validated for both
-	if cr.err == nil {
-		current = cr.info
-	}
-
 	validatedBalance, err := strconv.ParseUint(validated.AccountData.Balance, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing balance %q: %w", validated.AccountData.Balance, err)
 	}
-	currentBalance, _ := strconv.ParseUint(current.AccountData.Balance, 10, 64)
-	if currentBalance == 0 {
+
+	cr := <-currentCh
+	currentBalance := validatedBalance
+	if cr.err != nil {
+		if strictCurrent {
+			return nil, fmt.Errorf("error querying current account: %w", cr.err)
+		}
+	} else {
+		currentBalance, err = strconv.ParseUint(cr.info.AccountData.Balance, 10, 64)
+		if err != nil {
+			if strictCurrent {
+				return nil, fmt.Errorf("error parsing current balance %q: %w", cr.info.AccountData.Balance, err)
+			}
+			currentBalance = validatedBalance
+		}
+	}
+	if !strictCurrent && currentBalance == 0 {
 		currentBalance = validatedBalance
 	}
 
@@ -698,6 +716,15 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		return nil, fmt.Errorf("wallet not connected")
 	}
 
+	// Keep the balance snapshot authoritative for this process through submit.
+	// Sequence reservation alone cannot prevent two concurrent sends from both
+	// authorizing against the same pre-send balance.
+	w.sendMtx.Lock()
+	defer w.sendMtx.Unlock()
+	if !w.running.Load() {
+		return nil, fmt.Errorf("wallet not running")
+	}
+
 	// Check whether the wallet is locked before we do any network I/O or
 	// reserve a sequence number. This avoids burning a sequence when the common
 	// locked-wallet error is hit. A concurrent lock between this check and the
@@ -740,6 +767,16 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		fee = DefaultFeeDrops
 	}
 	lastLedgerSeq := uint32(feeInfo.LedgerCurrentIndex + lastLedgerWindow)
+
+	balance, err := w.balance(true)
+	if err != nil {
+		return nil, fmt.Errorf("checking available balance: %w", err)
+	}
+	// Check without adding value and fee so hostile or otherwise invalid
+	// amounts cannot wrap uint64 and pass the pre-flight check.
+	if fee > balance.Available || value > balance.Available-fee {
+		return nil, asset.ErrInsufficientBalance
+	}
 
 	sequence, rollbackSeq, err := w.reserveSequence()
 	if err != nil {

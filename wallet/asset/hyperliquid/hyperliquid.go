@@ -153,6 +153,7 @@ type HyperWallet struct {
 	pubKey  []byte // compressed secp256k1 public key (33 bytes)
 	address string // "0x..." lowercase hex
 
+	sendOpMtx     sync.Mutex // serializes balance authorization through broadcast
 	sendMtx       sync.Mutex
 	nextSendNonce uint64
 
@@ -370,6 +371,29 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 		return nil, fmt.Errorf("cannot send zero value")
 	}
 
+	// Keep the balance snapshot authoritative for this process through the
+	// exchange request. Nonce allocation alone cannot prevent two concurrent
+	// sends from both authorizing against the same pre-send balance.
+	w.sendOpMtx.Lock()
+	defer w.sendOpMtx.Unlock()
+
+	w.keyMtx.RLock()
+	if w.privKey == nil {
+		w.keyMtx.RUnlock()
+		return nil, fmt.Errorf("wallet is locked")
+	}
+	w.keyMtx.RUnlock()
+
+	balance, err := w.Balance()
+	if err != nil {
+		return nil, fmt.Errorf("checking available balance: %w", err)
+	}
+	if balance.Available < value {
+		return nil, asset.ErrInsufficientBalance
+	}
+
+	// Re-check after the network call so a concurrent Lock cannot clear the
+	// key between the initial validation and this private copy.
 	w.keyMtx.RLock()
 	if w.privKey == nil {
 		w.keyMtx.RUnlock()

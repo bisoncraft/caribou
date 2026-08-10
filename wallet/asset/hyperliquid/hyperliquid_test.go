@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1251,18 +1252,26 @@ func newTestWalletWithDB(t *testing.T) *HyperWallet {
 // newSendTestWallet returns a wallet wired to a mock exchange server.
 // The handler governs whether sendAsset succeeds or fails.
 func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWallet, *httptest.Server) {
-	t.Helper()
+	return newSendTestWalletWithBalance(t, "10", exchangeHandler)
+}
 
+func newSendTestWalletWithBalance(t *testing.T, balance string, exchangeHandler http.HandlerFunc) (*HyperWallet, *httptest.Server) {
+	t.Helper()
 	infoHandler := func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		json.NewDecoder(r.Body).Decode(&payload)
 		switch payload["type"] {
 		case "spotClearinghouseState":
 			json.NewEncoder(w).Encode(spotClearinghouseState{
-				Balances: []spotBalance{{Coin: "HYPE", Total: "10", Hold: "0"}},
+				Balances: []spotBalance{{Coin: "HYPE", Total: balance, Hold: "0"}},
 			})
 		}
 	}
+	return newSendTestWalletWithHandlers(t, infoHandler, exchangeHandler)
+}
+
+func newSendTestWalletWithHandlers(t *testing.T, infoHandler, exchangeHandler http.HandlerFunc) (*HyperWallet, *httptest.Server) {
+	t.Helper()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == exchangePath {
@@ -1319,6 +1328,96 @@ func newSendTestWallet(t *testing.T, exchangeHandler http.HandlerFunc) (*HyperWa
 	w.Unlock(pw)
 	t.Cleanup(func() { srv.Close() })
 	return w, srv
+}
+
+func TestSendInsufficientBalance(t *testing.T) {
+	var exchangeCalls atomic.Int32
+	w, _ := newSendTestWalletWithBalance(t, "0.5", func(rw http.ResponseWriter, r *http.Request) {
+		exchangeCalls.Add(1)
+		json.NewEncoder(rw).Encode(exchangeResponse{Status: "ok"})
+	})
+
+	_, err := w.send("0x1234567890123456789012345678901234567890", 1e8)
+	if !errors.Is(err, asset.ErrInsufficientBalance) {
+		t.Fatalf("expected ErrInsufficientBalance, got %v", err)
+	}
+	if exchangeCalls.Load() != 0 {
+		t.Fatalf("exchange called %d times, want 0", exchangeCalls.Load())
+	}
+	w.sendMtx.Lock()
+	nextNonce := w.nextSendNonce
+	w.sendMtx.Unlock()
+	if nextNonce != 0 {
+		t.Fatalf("nextSendNonce = %d, want 0 (insufficient send must not allocate a nonce)", nextNonce)
+	}
+	pending, err := w.txDB.GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending transactions = %d, want 0", len(pending))
+	}
+}
+
+func TestConcurrentSendsSerializeBalanceCheck(t *testing.T) {
+	var (
+		balanceCalls  atomic.Int32
+		exchangeCalls atomic.Int32
+		sent          atomic.Bool
+		twoBalances   = make(chan struct{})
+		closeBalances sync.Once
+	)
+
+	infoHandler := func(w http.ResponseWriter, r *http.Request) {
+		if balanceCalls.Add(1) == 2 {
+			closeBalances.Do(func() { close(twoBalances) })
+		}
+		balance := "1"
+		if sent.Load() {
+			balance = "0"
+		}
+		json.NewEncoder(w).Encode(spotClearinghouseState{
+			Balances: []spotBalance{{Coin: "HYPE", Total: balance, Hold: "0"}},
+		})
+	}
+	w, _ := newSendTestWalletWithHandlers(t, infoHandler, func(rw http.ResponseWriter, r *http.Request) {
+		select {
+		case <-twoBalances:
+		case <-time.After(100 * time.Millisecond):
+		}
+		exchangeCalls.Add(1)
+		sent.Store(true)
+		json.NewEncoder(rw).Encode(exchangeResponse{Status: "ok"})
+	})
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := w.send("0x1234567890123456789012345678901234567890", 1e8)
+			errs <- err
+		}()
+	}
+	close(start)
+	var success, insufficient int
+	for range 2 {
+		err := <-errs
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, asset.ErrInsufficientBalance):
+			insufficient++
+		default:
+			t.Fatalf("unexpected send error: %v", err)
+		}
+	}
+	if success != 1 || insufficient != 1 {
+		t.Fatalf("results: success=%d insufficient=%d, want 1 each", success, insufficient)
+	}
+	if exchangeCalls.Load() != 1 {
+		t.Fatalf("exchange called %d times, want 1", exchangeCalls.Load())
+	}
 }
 
 func TestSendStoreBeforeBroadcast(t *testing.T) {
