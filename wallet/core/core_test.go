@@ -7,11 +7,13 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -261,6 +263,11 @@ type TXCWallet struct {
 
 	trustlineErr   error
 	trustlineCalls int
+
+	// connectHook, when non-nil, is called at the top of Connect. It lets a
+	// test park a connection mid-flight. Set it before the Connect it should
+	// catch, so the goroutine that runs Connect sees it published.
+	connectHook func()
 }
 
 var _ asset.Accelerator = (*TXCWallet)(nil)
@@ -312,6 +319,9 @@ func (w *TXCWallet) OwnsDepositAddress(address string) (bool, error) {
 }
 
 func (w *TXCWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	if w.connectHook != nil {
+		w.connectHook()
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -1674,30 +1684,33 @@ func TestPokesCachePokes(t *testing.T) {
 	}
 }
 
-// TestSuspendResume verifies the mobile pause/resume round-trip: Suspend
-// disconnects every wallet without logging out, Resume reconnects them with no
-// password, and a real Logout while suspended still evicts key material and
-// leaves Resume with nothing to do.
-func TestSuspendResume(t *testing.T) {
+// newSuspendRig builds a logged-in rig with a connected wallet per assetID,
+// ready for a Suspend/Resume round trip. The caller defers rig.shutdown.
+func newSuspendRig(t *testing.T, assetIDs ...uint32) (*testRig, []*xcWallet, []*TXCWallet) {
+	t.Helper()
 	rig := newTestRig()
-	defer rig.shutdown()
 	tCore := rig.core
 
-	var assetID uint32 = 42 // dcr
-	w, _ := newTWallet(assetID)
-	w.hookedUp = false
-	// Don't share tPW's backing array: Logout clears the cached password in
-	// place, which would zero the package-level tPW for every other test.
-	w.pw = encode.PassBytes("suspendpw")
-	tCore.wallets[assetID] = w
+	xcws := make([]*xcWallet, 0, len(assetIDs))
+	tws := make([]*TXCWallet, 0, len(assetIDs))
+	for i, assetID := range assetIDs {
+		w, tw := newTWallet(assetID)
+		w.hookedUp = false
+		// Don't share tPW's backing array: Logout clears the cached password in
+		// place, which would zero the package-level tPW for every other test.
+		w.pw = encode.PassBytes(fmt.Sprintf("suspendpw%d", i))
+		tCore.wallets[assetID] = w
+		// Connect the wallet the way login would, so the connector is live.
+		if err := w.Connect(); err != nil {
+			t.Fatalf("initial Connect of %s: %v", unbip(assetID), err)
+		}
+		if !w.connected() {
+			t.Fatalf("%s wallet should be connected after Connect", unbip(assetID))
+		}
+		xcws = append(xcws, w)
+		tws = append(tws, tw)
+	}
 
-	// Connect the wallet the way login would, so the connector is live.
-	if err := w.Connect(); err != nil {
-		t.Fatalf("initial Connect: %v", err)
-	}
-	if !w.connected() {
-		t.Fatal("wallet should be connected after Connect")
-	}
 	tCore.loginMtx.Lock()
 	tCore.loggedIn = true
 	tCore.loginMtx.Unlock()
@@ -1708,6 +1721,51 @@ func TestSuspendResume(t *testing.T) {
 	}
 	tCore.multisigXPriv = xPriv
 
+	return rig, xcws, tws
+}
+
+// resumeOrder reorders a newSuspendRig's wallets to match the order the Resume
+// after a Suspend will walk them in. Suspend builds its set from xcWallets, and
+// that is a map iteration, so which wallet a Resume reaches first varies run to
+// run. A test that parks "the first reconnect" has to ask which one that is
+// rather than assume it is the first one it asked the rig for. Call it after
+// Suspend; assetIDs are the ones newSuspendRig was given, in the same order.
+func resumeOrder(t *testing.T, tCore *Core, assetIDs []uint32, xcws []*xcWallet, tws []*TXCWallet) ([]*xcWallet, []*TXCWallet) {
+	t.Helper()
+
+	tCore.suspendMtx.Lock()
+	order := append([]uint32(nil), tCore.suspendedWallets...)
+	tCore.suspendMtx.Unlock()
+	if len(order) != len(assetIDs) {
+		t.Fatalf("expected %d suspended wallets, got %d", len(assetIDs), len(order))
+	}
+
+	idx := make(map[uint32]int, len(assetIDs))
+	for i, assetID := range assetIDs {
+		idx[assetID] = i
+	}
+	oxcws := make([]*xcWallet, 0, len(order))
+	otws := make([]*TXCWallet, 0, len(order))
+	for _, assetID := range order {
+		i, found := idx[assetID]
+		if !found {
+			t.Fatalf("suspended set holds an unexpected asset %d", assetID)
+		}
+		oxcws = append(oxcws, xcws[i])
+		otws = append(otws, tws[i])
+	}
+	return oxcws, otws
+}
+
+// TestSuspendResume verifies the mobile pause/resume round-trip: Suspend
+// disconnects every wallet without logging out, Resume reconnects them with no
+// password, and a real Logout while suspended still evicts key material and
+// leaves Resume with nothing to do.
+func TestSuspendResume(t *testing.T) {
+	rig, wallets, _ := newSuspendRig(t, 42 /* dcr */)
+	defer rig.shutdown()
+	tCore, w := rig.core, wallets[0]
+
 	// Suspend disconnects without logging out and records the connected set.
 	if err := tCore.Suspend(); err != nil {
 		t.Fatalf("Suspend: %v", err)
@@ -1717,7 +1775,7 @@ func TestSuspendResume(t *testing.T) {
 	}
 	tCore.suspendMtx.Lock()
 	suspendedOK := tCore.suspended && len(tCore.suspendedWallets) == 1 &&
-		tCore.suspendedWallets[0] == assetID
+		tCore.suspendedWallets[0] == w.AssetID
 	tCore.suspendMtx.Unlock()
 	if !suspendedOK {
 		t.Fatal("suspend state not recorded correctly")
@@ -1780,6 +1838,165 @@ func TestSuspendResume(t *testing.T) {
 	}
 	if w.connected() {
 		t.Fatal("Resume must not reconnect a wallet after logout")
+	}
+}
+
+// TestResumeInterleavedWithLogout parks a Resume inside its reconnect and runs a
+// Logout underneath it. Two things must hold. Logout must not block: Resume no
+// longer holds suspendMtx across the reconnects, which are network-bound and
+// unbounded. And the wallet must not survive the logout: ConnectionMaster's
+// Disconnect is a no-op while a connect is in flight (it returns early on !On,
+// and the pre-suspend done channel is still closed), so Logout's own disconnect
+// loop cannot stop it and Resume has to undo the connection itself.
+func TestResumeInterleavedWithLogout(t *testing.T) {
+	rig, wallets, twallets := newSuspendRig(t, 42)
+	defer rig.shutdown()
+	tCore, w, tw := rig.core, wallets[0], twallets[0]
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+
+	// Park the reconnect so Resume is stuck inside connectAndUpdateWallet.
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	tw.connectHook = func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+
+	resumed := make(chan error, 1)
+	go func() { resumed <- tCore.Resume() }()
+	<-entered
+
+	logoutDone := make(chan error, 1)
+	go func() { logoutDone <- tCore.Logout() }()
+	select {
+	case err := <-logoutDone:
+		if err != nil {
+			t.Fatalf("Logout: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Logout blocked behind an in-flight Resume")
+	}
+
+	close(release)
+	if err := <-resumed; err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	if w.connected() {
+		t.Fatal("wallet left connected by a Resume that raced a Logout")
+	}
+	if w.locallyUnlocked() {
+		t.Fatal("cached wallet password resident after Logout")
+	}
+}
+
+// TestResumeUnwindsWholeClaimedSet covers a Resume that brings up more than one
+// wallet inside a single reconnect. connectAndUpdateWallet does exactly that for
+// a token: it connects the token's network wallet first. Undoing only the wallet
+// whose reconnect just returned would leave that network wallet connected and
+// polling past the very Logout meant to quiet it, since Logout's own disconnect
+// loop already ran past it while it was still down.
+//
+// Rather than register a token asset for the whole test binary, the hook brings
+// the second wallet up from inside the first's Connect, which is the same
+// side-effecting shape from Resume's point of view. It fires on release so the
+// second wallet comes up after Logout's loop has passed it, which is the
+// ordering that strands it.
+func TestResumeUnwindsWholeClaimedSet(t *testing.T) {
+	rig, wallets, twallets := newSuspendRig(t, 42, 0)
+	defer rig.shutdown()
+	tCore := rig.core
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	wallets, twallets = resumeOrder(t, tCore, []uint32{42, 0}, wallets, twallets)
+	first, second := wallets[0], wallets[1]
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	twallets[0].connectHook = func() {
+		once.Do(func() { close(entered) })
+		<-release
+		if err := second.Connect(); err != nil {
+			t.Errorf("side-effect Connect: %v", err)
+		}
+	}
+
+	resumed := make(chan error, 1)
+	go func() { resumed <- tCore.Resume() }()
+	<-entered
+
+	if err := tCore.Logout(); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	close(release)
+	if err := <-resumed; err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	if first.connected() {
+		t.Fatal("resumed wallet left connected by a Resume that raced a Logout")
+	}
+	if second.connected() {
+		t.Fatal("wallet connected as a side effect of the reconnect survived the Logout")
+	}
+}
+
+// TestResumeStopsAfterFailedReconnect covers the staleness re-check on the error
+// path. The unwind is what lets App.Stop drain in-flight lifecycle calls before
+// it cancels the core, and a reconnect fails by burning a dial timeout, so
+// checking only after a successful one is precisely backwards: Resume would keep
+// going for one more timeout per wallet left in the set, with a termination
+// waiting behind it.
+func TestResumeStopsAfterFailedReconnect(t *testing.T) {
+	rig, wallets, twallets := newSuspendRig(t, 42, 0)
+	defer rig.shutdown()
+	tCore := rig.core
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	wallets, twallets = resumeOrder(t, tCore, []uint32{42, 0}, wallets, twallets)
+
+	// Park the first reconnect, then fail it: xcWallet.Connect calls SyncStatus
+	// after ConnectOnce and unwinds the connection when it errors, so
+	// connectAndUpdateWallet returns an error the way a dead backend would.
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	twallets[0].connectHook = func() {
+		once.Do(func() { close(entered) })
+		<-release
+	}
+	twallets[0].syncStatus = func() (bool, float32, error) {
+		return false, 0, errors.New("backend is gone")
+	}
+
+	var secondAttempts int32
+	twallets[1].connectHook = func() { atomic.AddInt32(&secondAttempts, 1) }
+
+	resumed := make(chan error, 1)
+	go func() { resumed <- tCore.Resume() }()
+	<-entered
+
+	if err := tCore.Logout(); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	close(release)
+	if err := <-resumed; err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	if n := atomic.LoadInt32(&secondAttempts); n != 0 {
+		t.Fatalf("Resume tried %d more reconnects after the session changed", n)
+	}
+	if wallets[1].connected() {
+		t.Fatal("wallet reconnected after the session changed")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -56,6 +57,15 @@ type xcWallet struct {
 	// monitored is nonzero while a startWalletSyncMonitor goroutine is watching
 	// sync status. It is accessed atomically rather than under mtx.
 	monitored uint32
+
+	// suspended is nonzero from a suspend until the next Connect, so the sync
+	// monitor can tell a background pause from an unexpected shutdown when its
+	// connector context is cancelled. Atomic rather than under mtx, and read
+	// from here rather than from Core.suspended: Core.Suspend holds suspendMtx
+	// while connector.Disconnect cancels the context that wakes the monitor, so
+	// having the monitor reach for suspendMtx would add a lock-ordering edge for
+	// the sake of a log line.
+	suspended uint32
 
 	mtx        sync.RWMutex
 	encPass    []byte // empty means wallet not password protected
@@ -386,6 +396,10 @@ func (w *xcWallet) Connect() error {
 		return nil
 	}
 
+	// A fresh connection ends any prior suspend, whether or not this is the
+	// Resume that follows one.
+	atomic.StoreUint32(&w.suspended, 0)
+
 	// No parent context; use Disconnect instead. Also note that there's no
 	// reconnect loop for wallet like with the server Connectors, so we use
 	// ConnectOnce so that the ConnectionMaster's On method will report false.
@@ -470,6 +484,9 @@ func (w *xcWallet) suspend() bool {
 	if w.isDisabled() || !w.connected() {
 		return false
 	}
+	// Set before the Disconnect that wakes the sync monitor, so the monitor
+	// sees it.
+	atomic.StoreUint32(&w.suspended, 1)
 	w.connector.Disconnect()
 	w.mtx.Lock()
 	w.hookedUp = false

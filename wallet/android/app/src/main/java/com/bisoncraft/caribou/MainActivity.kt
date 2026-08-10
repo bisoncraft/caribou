@@ -76,6 +76,64 @@ class MainActivity : AppCompatActivity() {
         private val walletLifecycleExecutor: ExecutorService =
             Executors.newSingleThreadExecutor { r -> Thread(r, "caribou-wallet-lifecycle") }
 
+        // pause state: whether wallets are currently disconnected by the
+        // background pause tier, and the main-looper timer that arms it PAUSE_MS
+        // after onStop. A Handler (not an alarm) is right here: if the device
+        // dozes before the grace elapses it freezes the process, quieting the
+        // radio anyway, and onStart re-checks. removeCallbacks in onStart cancels
+        // a still-pending pause on a quick return.
+        //
+        // Process-scoped for the same reason app and walletLifecycleExecutor are,
+        // and it is load-bearing in both directions. The main looper outlives the
+        // Activity, so a pause posted by an outgoing instance's onStop stays
+        // queued across a recreation; per-instance fields would give the incoming
+        // instance a different Handler and a different Runnable, so its
+        // removeCallbacks would not cancel that pause and it would fire in the
+        // foreground, disconnecting every wallet. A per-instance paused flag would
+        // then read false, so onStart would not reconnect either, and the wallets
+        // would stay dark until the next background round-trip. One Handler and
+        // one Runnable for the process makes cancellation and the flag refer to
+        // the same pause the previous instance armed. Touched only from the main
+        // thread (onStop, onStart, and the Runnable itself), so no extra
+        // synchronization is needed.
+        private var paused = false
+        private val pauseHandler = Handler(Looper.getMainLooper())
+        private val pauseRunnable = Runnable {
+            paused = true
+            pauseCoreAsync()
+        }
+
+        // pauseCoreAsync drops wallet connections off the main thread (app.pause()
+        // blocks on per-wallet shutdown). Unlike lockCoreAsync it keeps the
+        // session: no overlay, no re-auth, nothing user-visible. A failure is
+        // non-fatal and only logged - the wallets simply stay connected until the
+        // next pause. It runs on walletLifecycleExecutor so a resume issued right
+        // behind it can never overtake it.
+        private fun pauseCoreAsync() {
+            walletLifecycleExecutor.execute {
+                try {
+                    app.pause()
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "wallet pause failed: ${e.message}")
+                }
+            }
+        }
+
+        // resumeCoreAsync reconnects the paused wallets off the main thread on
+        // foreground, behind any pause still queued on walletLifecycleExecutor. If
+        // the session was evicted while backgrounded, app.resume() returns an error
+        // and reconnects nothing; the eviction tier's Unlock does the reconnect
+        // instead, so the error is expected and only logged.
+        private fun resumeCoreAsync() {
+            walletLifecycleExecutor.execute {
+                try {
+                    app.resume()
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "wallet resume skipped: ${e.message}")
+                }
+            }
+        }
+
         // Two idle tiers from ~/ocean/bossmobile/biometrics.md, measured as
         // continuous time backgrounded. Normal app switching stays well under the
         // gate and never re-auths. Both thresholds are user-configurable (see
@@ -146,19 +204,6 @@ class MainActivity : AppCompatActivity() {
     // elapsedRealtime keeps counting across device sleep, so onStart can measure
     // true wall-clock idle as a backstop even if the eviction alarm is deferred.
     private var backgroundedAt = 0L
-
-    // pause state: whether wallets are currently disconnected by the background
-    // pause tier, and the main-looper timer that arms it PAUSE_MS after onStop.
-    // A Handler (not an alarm) is right here: if the device dozes before the grace
-    // elapses it freezes the process, quieting the radio anyway, and onStart
-    // re-checks. removeCallbacks in onStart cancels a still-pending pause on a
-    // quick return.
-    private var paused = false
-    private val pauseHandler = Handler(Looper.getMainLooper())
-    private val pauseRunnable = Runnable {
-        paused = true
-        pauseCoreAsync()
-    }
 
     // evictReceiver fires the eviction while the app is still backgrounded, so
     // keys do not sit resident for the whole idle window. It is driven by an
@@ -737,37 +782,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // pauseCoreAsync drops wallet connections off the main thread (app.pause()
-    // blocks on per-wallet shutdown). Unlike lockCoreAsync it keeps the session:
-    // no overlay, no re-auth, nothing user-visible. A failure is non-fatal and
-    // only logged - the wallets simply stay connected until the next pause. It
-    // runs on walletLifecycleExecutor so a resume issued right behind it can never
-    // overtake it.
-    private fun pauseCoreAsync() {
-        walletLifecycleExecutor.execute {
-            try {
-                app.pause()
-            } catch (e: Exception) {
-                Log.w("MainActivity", "wallet pause failed: ${e.message}")
-            }
-        }
-    }
-
-    // resumeCoreAsync reconnects the paused wallets off the main thread on
-    // foreground, behind any pause still queued on walletLifecycleExecutor. If the
-    // session was evicted while backgrounded, app.resume() returns an error and
-    // reconnects nothing; the eviction tier's Unlock does the reconnect instead,
-    // so the error is expected and only logged.
-    private fun resumeCoreAsync() {
-        walletLifecycleExecutor.execute {
-            try {
-                app.resume()
-            } catch (e: Exception) {
-                Log.w("MainActivity", "wallet resume skipped: ${e.message}")
-            }
-        }
-    }
-
     override fun onDestroy() {
         if (::alarmManager.isInitialized) alarmManager.cancel(evictPendingIntent)
         runCatching { unregisterReceiver(evictReceiver) }
@@ -778,6 +792,15 @@ class MainActivity : AppCompatActivity() {
         // the outgoing Activity's stop() could tear down a core the incoming
         // Activity just (re)started.
         if (isFinishing) {
+            // Drop the pause state with the core it tracks. Both are
+            // process-scoped, so a pause armed before this teardown would
+            // otherwise fire against a torn-down core, and a paused flag left
+            // set would tell the next Activity's onStart to resume a core that
+            // stop() already cleared. Neither is harmful Go-side (Pause no-ops
+            // on an unbound core, Resume on an unsuspended one), but neither is
+            // wanted either.
+            pauseHandler.removeCallbacks(pauseRunnable)
+            paused = false
             // Tear down off the main thread (locks wallets, closes the DB in the
             // right order): stop() blocks on wallet logout and ordered core
             // shutdown, which would ANR on the UI thread. The thread is

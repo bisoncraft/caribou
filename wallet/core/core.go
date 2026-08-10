@@ -119,6 +119,12 @@ type Core struct {
 	suspendMtx       sync.Mutex
 	suspended        bool
 	suspendedWallets []uint32
+	// suspendGen counts session-lifecycle transitions that invalidate an
+	// in-flight Resume: a Suspend or a Logout. Resume snapshots it, drops
+	// suspendMtx for the reconnects (which are network-bound and must not
+	// stall a concurrent Logout or Stop), and re-checks it after each one. A
+	// bump means the wallet it just reconnected is no longer wanted.
+	suspendGen uint64
 
 	seedGenerationTime uint64
 
@@ -1548,7 +1554,15 @@ func (c *Core) startWalletSyncMonitor(wallet *xcWallet) {
 					return
 				}
 			case <-wallet.connector.Done():
-				c.log.Warnf("%v wallet shut down before sync completed.", wallet.Info().Name)
+				// A mobile background pause disconnects every wallet, so an
+				// unsynced wallet lands here on every pause. That is routine,
+				// and warning about it once per pause per wallet buries the
+				// genuinely unexpected shutdown this warning is for.
+				if atomic.LoadUint32(&wallet.suspended) != 0 {
+					c.log.Debugf("%v wallet suspended before sync completed.", wallet.Info().Name)
+				} else {
+					c.log.Warnf("%v wallet shut down before sync completed.", wallet.Info().Name)
+				}
 				return
 			case <-c.ctx.Done():
 				return
@@ -2704,6 +2718,7 @@ func (c *Core) Logout() error {
 	}
 	c.suspended = false
 	c.suspendedWallets = nil
+	c.suspendGen++
 
 	c.multisigXPriv.Zero()
 	c.multisigXPriv = nil
@@ -2755,6 +2770,7 @@ func (c *Core) Suspend() error {
 
 	c.suspendedWallets = suspended
 	c.suspended = true
+	c.suspendGen++
 	return nil
 }
 
@@ -2768,11 +2784,17 @@ func (c *Core) Suspend() error {
 // no-op afterwards and the shell's Unlock is what reconnects. The logged-out
 // error below is therefore defensive: it only fires if some future caller
 // clears loggedIn without going through Logout.
+//
+// suspendMtx is held only to claim the suspended set, not across the reconnects
+// themselves: those are network-bound and unbounded, and Logout takes suspendMtx
+// first thing, so holding it here would let a wedged reconnect stall a lock or a
+// shutdown indefinitely. Dropping it means a Suspend or Logout can interleave, so
+// every reconnect attempt is followed by unwindStaleResume, which undoes the
+// wallets the session no longer wants. See suspendGen.
 func (c *Core) Resume() error {
 	c.suspendMtx.Lock()
-	defer c.suspendMtx.Unlock()
-
 	if !c.suspended {
+		c.suspendMtx.Unlock()
 		return nil
 	}
 
@@ -2783,6 +2805,10 @@ func (c *Core) Resume() error {
 	suspended := c.suspendedWallets
 	c.suspended = false
 	c.suspendedWallets = nil
+	// Claim this generation. Resume itself does not bump: it is restoring the
+	// state Suspend recorded, not starting a new one.
+	gen := c.suspendGen
+	c.suspendMtx.Unlock()
 
 	if !loggedIn {
 		return errors.New("cannot resume: logged out while suspended")
@@ -2800,13 +2826,81 @@ func (c *Core) Resume() error {
 				continue
 			}
 		}
-		if err := c.connectAndUpdateWallet(w); err != nil {
+		err := c.connectAndUpdateWallet(w)
+		// Re-check before acting on err, not after: a reconnect that fails does
+		// so by burning a dial timeout, and Stop drains in-flight Resumes before
+		// cancelling the core, so the error path is exactly where continuing
+		// past a bumped generation is most expensive - one full timeout per
+		// wallet left in the set, with a termination waiting behind it.
+		if c.unwindStaleResume(suspended, gen) {
+			return nil
+		}
+		if err != nil {
 			c.log.Errorf("Unable to resume %s wallet: %v", unbip(assetID), err)
 			continue
 		}
 		c.log.Infof("Resumed %s wallet", unbip(assetID))
 	}
 	return nil
+}
+
+// unwindStaleResume reports whether the session moved on since Resume claimed
+// generation gen and, if it did, undoes the whole claimed set so Resume can
+// stop. A Suspend or Logout that interleaved already ran its own teardown loop
+// past these wallets, so anything Resume brought up is stranded: connected under
+// a Suspend that meant to quiet the radio, or alive past a Logout.
+//
+// The whole set rather than the wallet that just finished, because a single
+// connectAndUpdateWallet can bring up two: reconnecting a token connects its
+// network wallet first. Undoing only the token would leave that network wallet
+// connected and polling past the very lock meant to quiet it. The wallets Resume
+// never reached are already down and both teardowns are idempotent, so sweeping
+// the set costs nothing. Key material is not a concern in the Logout case, which
+// cleared the cached passwords before we reconnected and which reconnecting
+// cannot restore.
+//
+// How to undo depends on which transition bumped the generation. A Logout wants
+// Disconnect, which closes an asset.Opener's wallet handle. A Suspend does not:
+// leaving xmr's wallet2 instance open is the whole reason xcWallet.suspend
+// exists, so use it and hand the wallet back to the interleaving Suspend's set,
+// or the next Resume would have nothing to reconnect it from. Teardown is
+// bounded, unlike the reconnects, so it is safe to do under suspendMtx.
+func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	if c.suspendGen == gen {
+		return false
+	}
+
+	transition := "logout"
+	if c.suspended {
+		transition = "suspend"
+	}
+	c.log.Infof("Session changed (%s) while resuming; unwinding %d wallets", transition, len(claimed))
+
+	tracked := make(map[uint32]bool, len(c.suspendedWallets))
+	for _, assetID := range c.suspendedWallets {
+		tracked[assetID] = true
+	}
+	// claimed is ordered tokens before network wallets (see Suspend), which is
+	// the order teardown wants too.
+	for _, assetID := range claimed {
+		w, found := c.wallet(assetID)
+		if !found {
+			continue
+		}
+		if !c.suspended {
+			w.Disconnect()
+			continue
+		}
+		w.suspend()
+		if !tracked[assetID] {
+			c.suspendedWallets = append(c.suspendedWallets, assetID)
+			tracked[assetID] = true
+		}
+	}
+	return true
 }
 
 // maxSendFeeUSD caps the estimated network fee of a mainnet send when a fiat
