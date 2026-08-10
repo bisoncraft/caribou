@@ -497,8 +497,12 @@ func TestTokenSendFeeSurvivesObservation(t *testing.T) {
 // it, and on a non-tesSUCCESS result it falls back to the sender-stated Amount.
 // Anyone can send a payment that cannot succeed — tecNO_LINE without a
 // trustline, tecPATH_DRY with one — so recording it would let a stranger write
-// an arbitrary amount into this wallet's history. The native parser already
-// drops failed inbound payments.
+// an arbitrary amount into this wallet's history.
+//
+// The rule belongs to the scanner, not the parser: a caller that asks about a
+// specific hash must still be able to learn that the payment to it failed,
+// rather than getting CoinNotFoundError, which is indistinguishable from the
+// transaction not existing.
 func TestRejectedInboundTokenPaymentNotRecorded(t *testing.T) {
 	m := newMockRippled(t)
 	tw := makeTokenTestWallet(t, m)
@@ -523,8 +527,19 @@ func TestRejectedInboundTokenPaymentNotRecorded(t *testing.T) {
 	}
 	meta := txMeta{TransactionResult: "tecPATH_DRY"}
 
-	if wtx := tokenTransactionFromTx(tr, w.address, meta, true, 800, tw.spec()); wtx != nil {
-		t.Errorf("parser returned a record for a failed inbound payment: Amount=%d", wtx.Amount)
+	// The parser reports it, marked rejected, so a by-hash lookup can say what
+	// happened.
+	wtx := tokenTransactionFromTx(tr, w.address, meta, true, 800, tw.spec())
+	if wtx == nil {
+		t.Fatal("parser dropped a failed inbound payment; a by-hash lookup can no longer report it")
+	}
+	if !wtx.Rejected {
+		t.Error("failed inbound payment not marked Rejected")
+	}
+
+	// The scanner is where it must not land.
+	if got := w.tokenTransaction(tr, meta, true, 800); got != nil {
+		t.Errorf("scanner accepted a failed inbound payment: Amount=%d", got.Amount)
 	}
 
 	w.processObservedTransaction(tr, meta, 800)
@@ -820,5 +835,106 @@ func TestCheckPendingTxsEmitsNoTokenNote(t *testing.T) {
 		if got == nil || !got.Confirmed {
 			t.Errorf("%s should have been reconciled to confirmed, got %+v", id, got)
 		}
+	}
+}
+
+// TestCheckPendingTxsEmitsTokenNoteToTokenWallet covers a token send never
+// being announced as confirmed. TokenWallet.Send stores the record and emits
+// the initial note, then depends entirely on the parent's checkPendingTxs to
+// resolve it — the parent walks the one account both wallets share. Suppressing
+// the note there left the send confirmed in the DB but never announced, so
+// Core's pending set and the UI showed it unconfirmed indefinitely. The note
+// has to go out on the token's own channel, since Core and the UI route on the
+// emitter's asset ID rather than the record's TokenID.
+func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
+	const txID = "3333000000000000000000000000000000000000000000000000000000000003"
+
+	m := newMockRippled(t)
+	m.handle("tx", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":          "success",
+			"hash":            txID,
+			"validated":       true,
+			"ledger_index":    uint64(300),
+			"TransactionType": "Payment",
+			"meta":            map[string]any{"TransactionResult": "tesSUCCESS"},
+		}, nil
+	})
+
+	tw := makeTokenTestWallet(t, m)
+	w := tw.parent
+	n, mt := newTestTxDB(t)
+	w.txDB, w.metaTable = n, mt
+	tw.txDB = n
+	log := util.NewLogger("test", util.LevelError, nil)
+
+	nativeNotes := make(chan asset.WalletNotification, 16)
+	w.emit = asset.NewWalletEmitter(nativeNotes, BipID, log)
+	tokenNotes := make(chan asset.WalletNotification, 16)
+	tw.emit = asset.NewWalletEmitter(tokenNotes, tw.assetID, log)
+
+	w.tipMtx.Lock()
+	w.tip = 1000
+	w.tipMtx.Unlock()
+
+	// Connect registers the token wallet's emitter with the parent.
+	ctx, cancel := context.WithCancel(context.Background())
+	wg, err := tw.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	assetID := tw.assetID
+	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	wtx := &txdb.WalletTransaction{
+		Type: txdb.Send, ID: txID, Amount: 1_000_000, Fees: 12,
+		Recipient: &recip, TokenID: &assetID,
+	}
+	setLastLedgerSequence(wtx, 100)
+	if err := n.StoreTx(wtx); err != nil {
+		t.Fatalf("StoreTx: %v", err)
+	}
+
+	w.checkPendingTxs(context.Background())
+
+	var got *asset.TransactionNote
+	for done := false; !done; {
+		select {
+		case note := <-tokenNotes:
+			if tn, ok := note.(*asset.TransactionNote); ok {
+				got = tn
+				done = true
+			}
+		default:
+			done = true
+		}
+	}
+	if got == nil {
+		t.Fatal("token send confirmed in the DB but never announced")
+	}
+	if got.AssetID != tw.assetID {
+		t.Errorf("note AssetID = %d, want the token's %d", got.AssetID, tw.assetID)
+	}
+	if !got.Transaction.Confirmed {
+		t.Error("announced note does not report the send as confirmed")
+	}
+
+	// It must not also land on the native channel.
+	select {
+	case note := <-nativeNotes:
+		if tn, ok := note.(*asset.TransactionNote); ok {
+			t.Errorf("token record also announced natively: assetID=%d", tn.AssetID)
+		}
+	default:
+	}
+
+	// Disconnecting deregisters, so a closed token wallet stops receiving.
+	cancel()
+	wg.Wait()
+	w.tokenEmitterMtx.RLock()
+	_, still := w.tokenEmitters[tw.assetID]
+	w.tokenEmitterMtx.RUnlock()
+	if still {
+		t.Error("token emitter still registered after the wallet's context ended")
 	}
 }

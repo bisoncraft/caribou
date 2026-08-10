@@ -203,10 +203,17 @@ import (
 )
 
 // goString converts a monero_c string return to a Go string and releases the C
-// buffer. Every monero_c getter returning const char* hands back a strdup'd
+// buffer. Most monero_c getters returning const char* hand back a strdup'd
 // buffer that the caller owns; without the MONERO_free the buffer leaks for the
 // process lifetime. OwnsDepositAddress walks every subaddress, so a wallet with
 // a thousand subaddresses leaked a thousand allocations per call.
+//
+// Not every getter is strdup'd, so this is not safe to apply blindly. The ones
+// that join a vector — MONERO_PendingTransaction_txid and _hex — go through
+// monero_c's vectorToString, which returns a new char[] buffer, or the .rodata
+// literal "" when the vector is empty. MONERO_free is plain free(), so freeing
+// either would be undefined and the empty case aborts the process. Those two
+// use bare C.GoString and accept the leak; see TxID and Hex below.
 func goString(cStr *C.char) string {
 	if cStr == nil {
 		return ""
@@ -876,10 +883,15 @@ func (tx *PendingTransaction) Fee() uint64 {
 }
 
 // TxID returns the transaction ID(s).
+//
+// Deliberately not goString: txid joins a vector through vectorToString, so the
+// result is either a new char[] buffer or the "" literal, and MONERO_free is
+// free(). A sweep that does not populate txid returns the literal, and freeing
+// it aborts the process right after the transaction has been broadcast.
 func (tx *PendingTransaction) TxID() string {
 	cSep := C.CString(",")
 	defer C.free(unsafe.Pointer(cSep))
-	return goString(C.MONERO_PendingTransaction_txid(tx.ptr, cSep))
+	return C.GoString(C.MONERO_PendingTransaction_txid(tx.ptr, cSep))
 }
 
 // TxCount returns the number of transactions.
@@ -888,10 +900,12 @@ func (tx *PendingTransaction) TxCount() uint64 {
 }
 
 // Hex returns the raw transaction hex.
+//
+// Deliberately not goString, for the same reason as TxID above.
 func (tx *PendingTransaction) Hex() string {
 	cSep := C.CString(",")
 	defer C.free(unsafe.Pointer(cSep))
-	return goString(C.MONERO_PendingTransaction_hex(tx.ptr, cSep))
+	return C.GoString(C.MONERO_PendingTransaction_hex(tx.ptr, cSep))
 }
 
 // TransactionHistory provides access to transaction history.

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sort"
 	"sync"
 	"time"
 
@@ -214,9 +213,7 @@ func (c *wsClient) handleMessage(raw []byte) {
 	}
 	// confirmPendingSend pairs identical sends FIFO, so a frame carrying
 	// several updates must be replayed oldest-first.
-	sort.SliceStable(data.Updates, func(i, j int) bool {
-		return data.Updates[i].Time < data.Updates[j].Time
-	})
+	sortLedgerUpdates(data.Updates)
 	for _, u := range data.Updates {
 		if c.onEvent != nil {
 			c.onEvent(u)

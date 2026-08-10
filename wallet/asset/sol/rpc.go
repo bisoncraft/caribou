@@ -27,6 +27,7 @@ type rpcI interface {
 	getLatestBlockhash(ctx context.Context) (string, uint64, error)
 	sendTransaction(ctx context.Context, txB []byte) (string, error)
 	getTransaction(ctx context.Context, sig string) (*rpcTransaction, error)
+	getTransactionAtCommitment(ctx context.Context, sig, commitment string) (*rpcTransaction, error)
 	getSignaturesForAddress(ctx context.Context, addr string, before, until *string, limit int) ([]signatureInfo, error)
 	getSignatureStatuses(ctx context.Context, sigs []string) ([]*signatureStatus, error)
 	getTokenAccountBalance(ctx context.Context, addr string) (amount uint64, exists bool, err error)
@@ -267,11 +268,19 @@ type rpcInstructionInfo struct {
 }
 
 func (c *rpcClient) getTransaction(ctx context.Context, sig string) (*rpcTransaction, error) {
+	return c.getTransactionAtCommitment(ctx, sig, "confirmed")
+}
+
+// getTransactionAtCommitment fetches sig at an explicit commitment. A hit at
+// "finalized" is proof the transaction is rooted, which is the only evidence
+// checkPendingTxs will accept for the finalized transition when
+// getSignatureStatuses has stopped reporting a status for it.
+func (c *rpcClient) getTransactionAtCommitment(ctx context.Context, sig, commitment string) (*rpcTransaction, error) {
 	var tx *rpcTransaction
 	err := c.call(ctx, "getTransaction", []any{
 		sig,
 		map[string]any{
-			"commitment":                     "confirmed",
+			"commitment":                     commitment,
 			"encoding":                       "jsonParsed",
 			"maxSupportedTransactionVersion": 0,
 		},

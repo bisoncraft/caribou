@@ -6,11 +6,14 @@ package hyperliquid
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -94,6 +97,39 @@ func (c *rpcClient) post(ctx context.Context, path string, payload, result any) 
 
 func (c *rpcClient) infoRequest(ctx context.Context, payload, result any) error {
 	return c.post(ctx, infoPath, payload, result)
+}
+
+// requestUnsent reports whether err proves the request never reached
+// Hyperliquid, so a send that failed with it cannot have landed.
+//
+// send() otherwise has to keep a pending record whose outcome it does not know,
+// and confirmPendingSend leans on the fact that such a record can only be
+// created after httpTimeout has elapsed. These failures surface immediately
+// instead, which would break that ordering — so they are resolved here rather
+// than left to the matcher. The set is deliberately narrow: anything that could
+// have been written to the wire, including a timeout or a mid-response
+// disconnect, is not listed and stays unknown.
+func requestUnsent(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	// The connection was never established.
+	for _, se := range []syscall.Errno{
+		syscall.ECONNREFUSED, syscall.EHOSTUNREACH,
+		syscall.ENETUNREACH, syscall.ENETDOWN,
+	} {
+		if errors.Is(err, se) {
+			return true
+		}
+	}
+	// The TLS handshake failed, which precedes the request body.
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return true
+	}
+	var recErr tls.RecordHeaderError
+	return errors.As(err, &recErr)
 }
 
 // --- balance ---

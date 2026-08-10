@@ -22,6 +22,7 @@ import (
 type mockRPC struct {
 	sigsFunc         func(before, until *string, limit int) ([]signatureInfo, error)
 	txFunc           func(sig string) (*rpcTransaction, error)
+	finalTxFunc      func(sig string) (*rpcTransaction, error)
 	blockHeightFunc  func() (uint64, error)
 	sigStatusesFunc  func(ids []string) ([]*signatureStatus, error)
 	tokenBalanceFunc func(addr string) (uint64, bool, error)
@@ -35,6 +36,16 @@ func (m *mockRPC) getSignaturesForAddress(_ context.Context, _ string, before, u
 	return m.sigsFunc(before, until, limit)
 }
 func (m *mockRPC) getTransaction(_ context.Context, sig string) (*rpcTransaction, error) {
+	return m.txFunc(sig)
+}
+
+// getTransactionAtCommitment defaults to the "confirmed" behaviour so tests
+// that do not exercise the finalized probe need no extra wiring. Setting
+// finalTxFunc distinguishes the two commitments.
+func (m *mockRPC) getTransactionAtCommitment(_ context.Context, sig, _ string) (*rpcTransaction, error) {
+	if m.finalTxFunc != nil {
+		return m.finalTxFunc(sig)
+	}
 	return m.txFunc(sig)
 }
 func (m *mockRPC) getSlot(_ context.Context) (uint64, error) { return 0, nil }
@@ -910,6 +921,69 @@ func TestCheckPendingTxs(t *testing.T) {
 			t.Fatal("tx should be marked Rejected")
 		}
 	})
+
+	// A load-balanced endpoint can keep returning nil status for a transaction
+	// that landed. getSignatureStatuses is the only other path that confirms a
+	// pending record, so if this branch just skips, the send shows as pending
+	// forever: PendingTransactions keeps listing it, Core's pendingTxs map is
+	// only cleared by a Confirmed note, and every poll re-issues the fetch.
+	t.Run("landed tx with persistently nil status is confirmed", func(t *testing.T) {
+		tx := makePendingTx("txC", 100)
+		db := &mockTxDB{pending: []*txdb.WalletTransaction{tx}}
+		table := newMockTable()
+		landed := &rpcTransaction{Slot: 4242, Meta: &rpcTransactionMeta{}}
+		rpc := &mockRPC{
+			sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) { return nil, nil },
+			txFunc:   func(_ string) (*rpcTransaction, error) { return landed, nil },
+			sigStatusesFunc: func(ids []string) ([]*signatureStatus, error) {
+				return []*signatureStatus{nil}, nil
+			},
+			blockHeightFunc: func() (uint64, error) { return 200, nil },
+		}
+		w := newTestWallet("addr", rpc, db, table)
+
+		if err := w.checkPendingTxs(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if len(db.stored) != 1 {
+			t.Fatalf("want 1 stored (confirmed), got %d", len(db.stored))
+		}
+		if !db.stored[0].Confirmed {
+			t.Fatal("landed tx should be marked Confirmed")
+		}
+		if db.stored[0].Rejected {
+			t.Fatal("landed tx should not be marked Rejected")
+		}
+		if db.stored[0].BlockNumber != 4242 {
+			t.Fatalf("BlockNumber = %d, want 4242", db.stored[0].BlockNumber)
+		}
+	})
+
+	// Landed at "confirmed" but not yet rooted: the record must stay pending
+	// rather than be called final, which is the distinction checkPendingTxs
+	// owns and the reason the history scan does not confirm records itself.
+	t.Run("landed but unrooted tx stays pending", func(t *testing.T) {
+		tx := makePendingTx("txD", 100)
+		db := &mockTxDB{pending: []*txdb.WalletTransaction{tx}}
+		table := newMockTable()
+		rpc := &mockRPC{
+			sigsFunc:    func(_, _ *string, _ int) ([]signatureInfo, error) { return nil, nil },
+			txFunc:      func(_ string) (*rpcTransaction, error) { return &rpcTransaction{Slot: 7}, nil },
+			finalTxFunc: func(_ string) (*rpcTransaction, error) { return nil, nil },
+			sigStatusesFunc: func(ids []string) ([]*signatureStatus, error) {
+				return []*signatureStatus{nil}, nil
+			},
+			blockHeightFunc: func() (uint64, error) { return 200, nil },
+		}
+		w := newTestWallet("addr", rpc, db, table)
+
+		if err := w.checkPendingTxs(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if len(db.stored) != 0 {
+			t.Fatalf("unrooted tx should stay pending, got %d stored", len(db.stored))
+		}
+	})
 }
 
 // TestCheckPendingTxsIgnoresTokenPending guards against the native wallet's
@@ -1150,9 +1224,65 @@ func TestWalletTransactionFromRPCIgnoresTokenTransfers(t *testing.T) {
 	}
 
 	// Larger lamport delta (rent for a newly created destination ATA):
-	// previously misparsed as a native Send of the rent.
+	// previously misparsed as a native Send of the rent. A token send only ever
+	// debits SOL, so the token record is the whole story here.
 	if wt := walletTransactionFromRPC(makeTx(1_000_000, 900_000), walletAddr); wt != nil {
 		t.Fatalf("token transfer parsed as native %v record of %d lamports", wt.Type, wt.Amount)
+	}
+}
+
+// TestWalletTransactionFromRPCRecordsSOLCredits covers the native record being
+// suppressed for lamports no token record can represent. Yielding on the
+// spl-token program alone dropped these transactions from history entirely:
+// walletTransactionFromSPLRPC only claims transfer/transferChecked, so nothing
+// else recorded them, while Balance() still moved.
+func TestWalletTransactionFromRPCRecordsSOLCredits(t *testing.T) {
+	const walletAddr = "wallet"
+
+	makeTx := func(inst rpcInstruction, pre, post uint64) *rpcTransaction {
+		tx := &rpcTransaction{
+			Slot: 1,
+			Meta: &rpcTransactionMeta{
+				Fee:          5000,
+				PreBalances:  []uint64{pre},
+				PostBalances: []uint64{post},
+			},
+		}
+		tx.Transaction.Signatures = []string{"sig1"}
+		tx.Transaction.Message.AccountKeys = []rpcAccountKey{{Pubkey: walletAddr}}
+		tx.Transaction.Message.Instructions = []rpcInstruction{inst}
+		return tx
+	}
+
+	closeAccount := rpcInstruction{
+		Program: "spl-token",
+		Parsed: &struct {
+			Type string             `json:"type"`
+			Info rpcInstructionInfo `json:"info"`
+		}{Type: "closeAccount"},
+	}
+
+	// Closing an ATA refunds its rent. The token parser returns nil for a
+	// closeAccount, so the native record is the only place this can land.
+	wt := walletTransactionFromRPC(makeTx(closeAccount, 1_000_000, 3_039_280), walletAddr)
+	if wt == nil {
+		t.Fatal("ATA rent refund produced no record")
+	}
+	if wt.Type != txdb.Receive {
+		t.Fatalf("rent refund recorded as %v, want Receive", wt.Type)
+	}
+	if wt.Amount != 2_039_280 {
+		t.Fatalf("rent refund amount = %d, want 2039280", wt.Amount)
+	}
+
+	// A credit alongside a token transfer is still native movement: our own
+	// token sends only debit SOL, so an increase is something else.
+	wt = walletTransactionFromRPC(makeTx(parsedSPLInstruction("srcATA", "dstATA", 100), 1_000_000, 1_500_000), walletAddr)
+	if wt == nil {
+		t.Fatal("SOL credit alongside a token transfer produced no record")
+	}
+	if wt.Type != txdb.Receive || wt.Amount != 500_000 {
+		t.Fatalf("got %v of %d lamports, want Receive of 500000", wt.Type, wt.Amount)
 	}
 }
 
@@ -1209,6 +1339,49 @@ func TestSyncHistoryPreservesPendingData(t *testing.T) {
 	}
 	if got.Confirms == nil || got.Confirms.Target != 1 {
 		t.Errorf("Confirms: want the pending record's, got %+v", got.Confirms)
+	}
+}
+
+// TestSyncHistoryKeepsScannedRejection guards the other direction of the merge.
+// The scan is what first learns a pending send failed — it parses Meta.Err from
+// the transaction itself, while the pending record still says false because
+// nothing has reconciled it yet. Carrying the record's stale flag over the
+// fresh parse reported a failed send as fine until the next checkPendingTxs
+// poll happened to correct it.
+func TestSyncHistoryKeepsScannedRejection(t *testing.T) {
+	const (
+		walletAddr = "wallet"
+		otherAddr  = "other"
+	)
+	ctx := context.Background()
+
+	pendingSend := &txdb.WalletTransaction{Type: txdb.Send, ID: "sig", Amount: 500_000}
+	setTxData(pendingSend, solTxData{LastValidBlockHeight: 400})
+
+	db := &mockTxDB{pending: []*txdb.WalletTransaction{pendingSend}}
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+			return []signatureInfo{makeSig("sig")}, nil
+		},
+		txFunc: func(_ string) (*rpcTransaction, error) {
+			tx := makeWalletTx(walletAddr, otherAddr)
+			tx.Meta.Err = map[string]any{"InstructionError": []any{0, "Custom"}}
+			return tx, nil
+		},
+	}
+	w := newTestWallet(walletAddr, rpc, db, newMockTable())
+
+	if err := w.syncHistory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.stored) != 1 {
+		t.Fatalf("stored %d txs, want 1", len(db.stored))
+	}
+	if !db.stored[0].Rejected {
+		t.Error("the scan's parsed rejection was overwritten by the pending record's stale flag")
+	}
+	if db.stored[0].Confirmed {
+		t.Error("sync marked a still-pending send confirmed")
 	}
 }
 

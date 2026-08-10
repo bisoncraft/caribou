@@ -227,7 +227,32 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 						continue // transient error — retry next poll, do not reject
 					}
 					if onChain != nil {
-						continue // tx landed, not expired
+						// Landed, but this node reports no status for it, so
+						// nothing else will move it out of pending. Settle it
+						// off a finalized read — see the native path in
+						// sol.go's checkPendingTxs.
+						final, err := w.parent.rpc.getTransactionAtCommitment(ctx, tx.ID, "finalized")
+						if err != nil {
+							w.parent.log.Debugf("token %d expiry confirm finalized getTransaction: %v", w.assetID, err)
+							continue
+						}
+						if final == nil {
+							continue // landed but not yet rooted
+						}
+						tx.Confirmed = true
+						tx.Confirms = nil
+						if final.Meta != nil && final.Meta.Err != nil {
+							tx.Rejected = true
+						}
+						if final.Slot > 0 {
+							tx.BlockNumber = final.Slot
+						}
+						if err := w.txDB.StoreTx(tx); err != nil {
+							w.parent.log.Errorf("token %d StoreTx (nil-status finalized): %v", w.assetID, err)
+						} else if w.emit != nil {
+							w.emit.TransactionNote(tx, false)
+						}
+						continue
 					}
 					tx.Confirmed = true
 					tx.Rejected = true
@@ -260,10 +285,7 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 		}
 		if onChain, err := w.parent.rpc.getTransaction(ctx, tx.ID); err == nil && onChain != nil {
 			if parsed := walletTransactionFromSPLRPC(onChain, w.ataAddr, w.assetID); parsed != nil {
-				parsed.RawTx = tx.RawTx
-				parsed.Confirmed = tx.Confirmed
-				parsed.Confirms = tx.Confirms
-				parsed.Rejected = tx.Rejected
+				mergePendingInto(parsed, tx)
 				tx = parsed
 			}
 		}

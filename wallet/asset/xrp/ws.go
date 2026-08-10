@@ -318,11 +318,7 @@ func (w *xrpWallet) processObservedTransaction(tr *txResult, meta txMeta, ledger
 		}
 	}
 
-	// See scanAccountTxs: a token record carries the native wallet's asset ID
-	// on the note, which Core and the UI would file against the native wallet.
-	if w.emit != nil && emitTx.TokenID == nil {
-		w.emit.TransactionNote(emitTx, emitNew)
-	}
+	w.emitTxNote(emitTx, emitNew)
 	w.emitBalanceChange()
 }
 

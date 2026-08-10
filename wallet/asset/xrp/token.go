@@ -119,7 +119,17 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if w.parent.ctx == nil || w.parent.ctx.Err() != nil {
 		return nil, fmt.Errorf("parent wallet not connected")
 	}
+	// The parent's scanner and checkPendingTxs are what observe this token's
+	// transactions — they walk the one account both wallets share — so they
+	// need this wallet's emitter to announce them under the right asset ID.
+	w.parent.registerTokenEmitter(w.assetID, w.emit)
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		w.parent.unregisterTokenEmitter(w.assetID)
+	}()
 	return &wg, nil
 }
 
@@ -565,19 +575,12 @@ func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransact
 // spec's issued currency. meta, validated and ledgerIndex are passed separately
 // because the WebSocket feed delivers them alongside the transaction rather
 // than inside it, matching walletTransactionFromTx's signature.
+//
+// It parses failed inbound payments too, so a caller asking about a specific
+// hash can be told the payment to it failed. Those must not reach history —
+// see failedInbound — but that is the scanner's rule, not the parser's.
 func tokenTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64, spec tokenSpec) *txdb.WalletTransaction {
 	if tr == nil || tr.TransactionType != "Payment" {
-		return nil
-	}
-	// A failed inbound payment credited nothing, and its Amount is whatever
-	// the sender put there — recording it would let anyone write an
-	// arbitrary entry into this wallet's history by sending a payment that
-	// cannot succeed (tecNO_LINE without a trustline, tecPATH_DRY with one).
-	// The native parser drops these for the same reason. Our own failed
-	// sends are still recorded: Send pre-stores them and checkPendingTxs
-	// reconciles the result.
-	inbound := tr.Destination == walletAddr && tr.Account != walletAddr
-	if inbound && meta.TransactionResult != "tesSUCCESS" {
 		return nil
 	}
 	// For incoming payments, credit what meta.delivered_amount reports was
