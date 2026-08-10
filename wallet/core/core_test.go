@@ -1676,8 +1676,8 @@ func TestPokesCachePokes(t *testing.T) {
 
 // TestSuspendResume verifies the mobile pause/resume round-trip: Suspend
 // disconnects every wallet without logging out, Resume reconnects them with no
-// password, and a logout while suspended makes Resume refuse rather than
-// reconnect.
+// password, and a real Logout while suspended still evicts key material and
+// leaves Resume with nothing to do.
 func TestSuspendResume(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()
@@ -1686,6 +1686,9 @@ func TestSuspendResume(t *testing.T) {
 	var assetID uint32 = 42 // dcr
 	w, _ := newTWallet(assetID)
 	w.hookedUp = false
+	// Don't share tPW's backing array: Logout clears the cached password in
+	// place, which would zero the package-level tPW for every other test.
+	w.pw = encode.PassBytes("suspendpw")
 	tCore.wallets[assetID] = w
 
 	// Connect the wallet the way login would, so the connector is live.
@@ -1698,6 +1701,12 @@ func TestSuspendResume(t *testing.T) {
 	tCore.loginMtx.Lock()
 	tCore.loggedIn = true
 	tCore.loginMtx.Unlock()
+	// Logout zeroes this unconditionally, so a nil would panic.
+	xPriv, err := deriveMultisigXPriv(encode.RandomBytes(32))
+	if err != nil {
+		t.Fatalf("deriveMultisigXPriv: %v", err)
+	}
+	tCore.multisigXPriv = xPriv
 
 	// Suspend disconnects without logging out and records the connected set.
 	if err := tCore.Suspend(); err != nil {
@@ -1738,21 +1747,117 @@ func TestSuspendResume(t *testing.T) {
 		t.Fatalf("no-op Resume: %v", err)
 	}
 
-	// Suspend, then a logout: Resume must refuse and clear state, leaving the
-	// shell to run a full Unlock instead.
+	// Suspend, then a real Logout. This is the mobile eviction path: every
+	// eviction alarm is preceded by a background pause, so Logout always sees
+	// disconnected wallets. It must still shed the cached password even though
+	// the wallet cannot be locked over a dropped connection.
 	if err := tCore.Suspend(); err != nil {
 		t.Fatalf("Suspend before logout: %v", err)
 	}
-	tCore.loginMtx.Lock()
-	tCore.loggedIn = false
-	tCore.loginMtx.Unlock()
-	if err := tCore.Resume(); err == nil {
-		t.Fatal("Resume should error when logged out while suspended")
+	if !w.locallyUnlocked() {
+		t.Fatal("wallet password should still be cached after Suspend")
 	}
+	if err := tCore.Logout(); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if w.locallyUnlocked() {
+		t.Fatal("cached wallet password still resident after Suspend+Logout")
+	}
+	if w.connected() {
+		t.Fatal("wallet should be disconnected after Logout")
+	}
+
+	// Logout cleared the pause state itself, so Resume is a no-op and the
+	// shell's Unlock is what reconnects.
 	tCore.suspendMtx.Lock()
 	stillSuspended := tCore.suspended
 	tCore.suspendMtx.Unlock()
 	if stillSuspended {
-		t.Fatal("suspend state should be cleared after a logged-out Resume")
+		t.Fatal("suspend state should be cleared by Logout")
+	}
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("Resume after logout should be a no-op: %v", err)
+	}
+	if w.connected() {
+		t.Fatal("Resume must not reconnect a wallet after logout")
+	}
+}
+
+// tOpenerWallet is a TXCWallet that also satisfies asset.Opener, standing in for
+// xmr — the only asset whose wallet handle is deliberately left open across a
+// suspend so resume needs no password.
+type tOpenerWallet struct {
+	*TXCWallet
+
+	openMtx sync.Mutex
+	open    bool
+}
+
+func (w *tOpenerWallet) OpenWithPW(context.Context, []byte) error {
+	w.openMtx.Lock()
+	defer w.openMtx.Unlock()
+	w.open = true
+	return nil
+}
+
+func (w *tOpenerWallet) IsOpen() bool {
+	w.openMtx.Lock()
+	defer w.openMtx.Unlock()
+	return w.open
+}
+
+func (w *tOpenerWallet) Close() error {
+	w.openMtx.Lock()
+	defer w.openMtx.Unlock()
+	w.open = false
+	return nil
+}
+
+// TestLogoutAfterSuspendClosesOpener covers the other half of the eviction: a
+// suspended asset.Opener stays open by design, and xcWallet.Disconnect is the
+// only caller of Close, so Logout must disconnect unconditionally rather than
+// skipping the wallets a prior Suspend already dropped.
+func TestLogoutAfterSuspendClosesOpener(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	var assetID uint32 = 42
+	xcw, tw := newTWallet(assetID)
+	opener := &tOpenerWallet{TXCWallet: tw}
+	xcw.Wallet = opener
+	xcw.traits = asset.DetermineWalletTraits(opener)
+	xcw.connector = util.NewConnectionMaster(opener)
+	xcw.hookedUp = false
+	xcw.pw = encode.PassBytes("openerpw")
+	tCore.wallets[assetID] = xcw
+
+	if err := opener.OpenWithPW(tCore.ctx, nil); err != nil {
+		t.Fatalf("OpenWithPW: %v", err)
+	}
+	if err := xcw.Connect(); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	tCore.loginMtx.Lock()
+	tCore.loggedIn = true
+	tCore.loginMtx.Unlock()
+	xPriv, err := deriveMultisigXPriv(encode.RandomBytes(32))
+	if err != nil {
+		t.Fatalf("deriveMultisigXPriv: %v", err)
+	}
+	tCore.multisigXPriv = xPriv
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	if !opener.IsOpen() {
+		t.Fatal("Suspend must leave an Opener wallet open for a password-free resume")
+	}
+
+	if err := tCore.Logout(); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if opener.IsOpen() {
+		t.Fatal("Opener wallet still open after Suspend+Logout")
 	}
 }

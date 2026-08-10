@@ -206,6 +206,19 @@ func (w *xcWallet) Lock(timeout time.Duration) error {
 	return err
 }
 
+// clearCachedPW zeroes and drops the cached decrypted wallet password without
+// touching the wallet backend. Lock is the normal way to shed this, but it
+// requires a live connection (the backend lock is an RPC on most assets), so a
+// wallet that was suspended for a mobile background pause cannot be locked at
+// logout. The cached password is process-local, though, and evicting it is the
+// whole point of the lock tier, so clear it regardless of connection state.
+func (w *xcWallet) clearCachedPW() {
+	w.mtx.Lock()
+	defer w.mtx.Unlock()
+	w.pw.Clear()
+	w.pw = nil
+}
+
 // unlocked will only return true if both the wallet backend is unlocked and we
 // have cached the decrypted wallet password. The wallet backend may be queried
 // directly, likely involving an RPC call. Use locallyUnlocked to determine if
