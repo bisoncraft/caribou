@@ -78,6 +78,7 @@ wallet/android/app/src/main/jniLibs/*/libc++_shared.so
 # The directories are anchored to the repo root; CLAUDE.md is deliberately not,
 # since per-package guides live at any depth.
 CLAUDE.md
+AGENTS.md
 /reviews/
 /scripts/
 /notes/
