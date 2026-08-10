@@ -514,7 +514,7 @@ func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResp
 		return &txdb.TxHistoryResponse{Txs: all}, nil
 	}
 	past := req.Past || req.RefID == nil
-	confirmed := make([]*txdb.WalletTransaction, 0, req.N)
+	confirmed := txdb.PreallocTxs(req.N)
 	cursor := req.RefID
 	skipFirst := false
 	for len(confirmed) < req.N {

@@ -472,10 +472,12 @@ func (d *kvDB) AckNotification(id []byte) error {
 
 // NotificationsN reads out the N most recent notifications, newest first.
 func (d *kvDB) NotificationsN(n int) ([]*Notification, error) {
-	notes := make([]*Notification, 0, n)
+	// The guard precedes the allocation: a negative n reaching make panics in
+	// makeslice rather than returning the empty page the contract promises.
 	if n <= 0 {
-		return notes, nil
+		return []*Notification{}, nil
 	}
+	notes := make([]*Notification, 0, n)
 	err := d.noteStampIdx.Iterate(nil, func(it kvstore.StoreIter) error {
 		err := it.V(func(v []byte) error {
 			noteB, ack, err := decodeNoteRecord(v)

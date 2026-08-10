@@ -2533,3 +2533,42 @@ func TestWSClientOnReconnectCalledOnConnect(t *testing.T) {
 		t.Fatal("timeout waiting for onReconnect")
 	}
 }
+
+// TestTxHistoryPageSizeIsNotTrusted covers the confirmed-tx accumulator against
+// a TxHistoryRequest.N that came off the wire. N is decoded from the HTTP
+// request body by apiTxHistory and neither Core.TxHistory nor xcWallet.TxHistory
+// validates it, so it arrives here unchecked. The inner page requests are
+// bounded by NetworkTxDB.GetTxs, but the outer accumulator sized itself off N
+// directly: {"n":500000000} reserved ~4GB before a single record was read, an
+// OOM no caller ever sees as an error. A huge N must be served as an ordinary
+// request, and N <= 0 must keep returning everything per the TxHistory contract.
+func TestTxHistoryPageSizeIsNotTrusted(t *testing.T) {
+	w := newTestWalletWithDB(t)
+
+	storeTxHistory(t, w.txDB, []*txdb.WalletTransaction{
+		{Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
+		{Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
+		{Type: txdb.Send, ID: "c3", Amount: 3e8, Timestamp: 3000, Confirmed: true},
+	})
+
+	// A page larger than the table is served without reserving its width.
+	resp, err := w.TxHistory(&txdb.TxHistoryRequest{N: 500_000_000})
+	if err != nil {
+		t.Fatalf("TxHistory N=500000000: %v", err)
+	}
+	if len(resp.Txs) != 3 {
+		t.Fatalf("N=500000000 returned %d txs, want 3: %v", len(resp.Txs), confirmedIDs(resp.Txs))
+	}
+	if maxCap := cap(txdb.PreallocTxs(0)); cap(resp.Txs) > maxCap {
+		t.Fatalf("N=500000000 preallocated cap %d, want <= %d", cap(resp.Txs), maxCap)
+	}
+
+	// Negative N is unbounded, same as the zero value.
+	resp, err = w.TxHistory(&txdb.TxHistoryRequest{N: -1})
+	if err != nil {
+		t.Fatalf("TxHistory N=-1: %v", err)
+	}
+	if len(resp.Txs) != 3 {
+		t.Fatalf("N=-1 returned %d txs, want 3: %v", len(resp.Txs), confirmedIDs(resp.Txs))
+	}
+}

@@ -420,6 +420,19 @@ func testNotifications(t *testing.T, d db.DB) {
 	if len(fetched) != numToDo {
 		t.Fatalf("overask fetched %d notifications, wanted all %d", len(fetched), numToDo)
 	}
+
+	// A non-positive count is an empty page, not a panic. The guard has to
+	// precede the allocation: a negative n handed to make panics in makeslice
+	// and takes the process with it.
+	for _, n := range []int{0, -1} {
+		fetched, err = d.NotificationsN(n)
+		if err != nil {
+			t.Fatalf("fetch error for n=%d: %v", n, err)
+		}
+		if len(fetched) != 0 {
+			t.Fatalf("n=%d fetched %d notifications, wanted none", n, len(fetched))
+		}
+	}
 }
 
 func testPokes(t *testing.T, d db.DB) {
