@@ -433,6 +433,22 @@ func testNotifications(t *testing.T, d db.DB) {
 			t.Fatalf("n=%d fetched %d notifications, wanted none", n, len(fetched))
 		}
 	}
+
+	// A huge count is served without reserving its width. n is what the caller
+	// asks for, not what the database holds, so it must not size the
+	// allocation. It must still bound the page, so everything stored is
+	// returned rather than truncated to the prealloc ceiling.
+	const hugeN = 10_000_000
+	fetched, err = d.NotificationsN(hugeN)
+	if err != nil {
+		t.Fatalf("huge-n fetch error: %v", err)
+	}
+	if len(fetched) != numToDo {
+		t.Fatalf("huge-n fetched %d notifications, wanted all %d", len(fetched), numToDo)
+	}
+	if cap(fetched) >= hugeN {
+		t.Fatalf("huge-n preallocated cap %d for %d stored notifications", cap(fetched), numToDo)
+	}
 }
 
 func testPokes(t *testing.T, d db.DB) {
