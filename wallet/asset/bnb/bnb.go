@@ -67,7 +67,7 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "BNB",
+		Name:              "BNB Smart Chain",
 		SupportedVersions: []uint32{1},
 		UnitInfo:          UnitInfo,
 		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},

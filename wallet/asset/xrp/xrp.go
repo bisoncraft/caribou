@@ -114,7 +114,7 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "XRP",
+		Name:              "Ripple",
 		SupportedVersions: []uint32{version},
 		UnitInfo:          UnitInfo,
 		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
