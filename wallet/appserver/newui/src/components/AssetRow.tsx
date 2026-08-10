@@ -22,7 +22,7 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-syncing-spinner has-tip gold"
+        className="asset-status-syncing-spinner d-inline-flex align-items-center has-tip gold"
         aria-label={tvar('syncing_pct', { pct: String(pct) })}
       >
         <Spinner size={10} />
@@ -67,16 +67,16 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct }: AssetRowPro
       <td className="asset-row-num">
         {pctDisplay}
       </td>
-      <td className="asset-row-actions">
+      <td className="asset-row-actions text-right">
         <button
           type="button"
-          className="icon-btn has-tip ico-download fs16"
+          className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-download fs16"
           aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
           onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'receive', data: { ticker: asset.ticker } }) }}
         />
         <button
           type="button"
-          className="icon-btn has-tip ico-upload fs16"
+          className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-upload fs16 ms-1"
           aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
           onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'send', data: { ticker: asset.ticker } }) }}
         />

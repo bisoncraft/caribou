@@ -75,10 +75,10 @@ export default function TxRow ({ item }: { item: TxRowItem }) {
 
   return (
     <div
-      className={`activity-row d-flex align-items-center pointer ${unconfirmed ? 'activity-row-unconfirmed' : ''}`}
+      className={`activity-row d-flex align-items-center pointer mb-2 ${unconfirmed ? 'activity-row-unconfirmed' : ''}`}
       onClick={open}
     >
-      <span className={`tx-type-icon flex-center me-3 ${txIcon(tx.type)}`} />
+      <span className={`tx-type-icon icon-32 fs14 flex-center me-3 ${txIcon(tx.type)}`} />
       <div className="flex-grow-1">
         <div className="fs14 demi">{txTitle(tx, variant.ticker)}</div>
         <div className="grey fs12 mono">{parts.join(' · ')}</div>

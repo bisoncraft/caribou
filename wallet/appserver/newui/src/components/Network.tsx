@@ -148,7 +148,7 @@ export default function Network ({ symbol }: NetworkParams) {
   if (!n) {
     return (
       <div className="networks-view fill-abs">
-        <div className="networks-inner mx-auto w-100">
+        <div className="view-inner mx-auto w-100">
           <BackButton onClick={back} />
           <div className="grey flex-center py-5">{t('Unknown network')}</div>
         </div>
@@ -165,7 +165,7 @@ export default function Network ({ symbol }: NetworkParams) {
 
   return (
     <div className="networks-view fill-abs">
-      <div className="networks-inner mx-auto w-100">
+      <div className="view-inner mx-auto w-100">
         <BackButton onClick={back} />
         <div className="network-detail-header d-flex align-items-center">
           <div className="fs28">{tvar('{{name}} Network', { name: n.name })}</div>

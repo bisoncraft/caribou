@@ -24,12 +24,12 @@ export default function PortfolioTotals ({ totals }: PortfolioTotalsProps) {
 
   return (
     <div className="portfolio-totals text-center">
-      <div className="portfolio-totals-heading demi">{Doc.formatUSD(total)}</div>
+      <div className="portfolio-totals-heading fs42 demi">{Doc.formatUSD(total)}</div>
       <div className="portfolio-totals-stats d-flex justify-content-center align-items-center">
         <span className="portfolio-stat fs14 grey">{tvar('{{ n }} Assets', { n: String(numWallets) })}</span>
-        <span className="portfolio-stat-sep mx-1" />
+        <span className="portfolio-stat-sep mx-2" />
         <span className="portfolio-stat fs14 grey">{tvar('{{ amt }} Available', { amt: Doc.formatUSD(available) })}</span>
-        <span className="portfolio-stat-sep mx-1" />
+        <span className="portfolio-stat-sep mx-2" />
         <span className="portfolio-stat fs14 grey">{tvar('{{ pct }}% Locked', { pct: String(lockedPct) })}</span>
       </div>
     </div>

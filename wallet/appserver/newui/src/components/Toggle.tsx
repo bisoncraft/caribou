@@ -14,7 +14,7 @@ interface ToggleProps {
 export default function Toggle ({ checked, onChange, disabled, ariaLabel }: ToggleProps) {
   const handle = (e: ChangeEvent<HTMLInputElement>) => onChange?.(e.target.checked)
   return (
-    <span className="toggle-wrap">
+    <span className="toggle-wrap d-inline-block">
       <input
         type="checkbox"
         role="switch"

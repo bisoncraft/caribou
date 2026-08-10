@@ -43,7 +43,7 @@ export default function Portfolio () {
 
   return (
     <div className="portfolio-view fill-abs overflow-y-auto">
-      <div className="portfolio-inner">
+      <div className="view-inner view-inner-flush mx-auto w-100">
         <PortfolioTotals totals={totals} />
       </div>
 

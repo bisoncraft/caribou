@@ -141,7 +141,7 @@ export default function Asset ({ ticker }: AssetParams) {
   if (!ta) {
     return (
       <div className="networks-view fill-abs">
-        <div className="networks-inner mx-auto w-100">
+        <div className="view-inner mx-auto w-100">
           <button type="button" className="subtle d-inline-flex align-items-center mb-4 fs14 py-1 px-2 hoverbg" onClick={back}>
             <span className="ico-arrowleft me-2 fs10" />{t('Portfolio')}
           </button>
@@ -192,7 +192,7 @@ export default function Asset ({ ticker }: AssetParams) {
 
   return (
     <div className="networks-view fill-abs">
-      <div className="networks-inner mx-auto w-100">
+      <div className="view-inner mx-auto w-100">
         <button type="button" className="subtle d-inline-flex align-items-center mb-4 fs14 py-1 px-2 hoverbg" onClick={back}>
           <span className="ico-arrowleft me-2 fs10" />{t('Portfolio')}
         </button>
@@ -231,19 +231,19 @@ export default function Asset ({ ticker }: AssetParams) {
               )}
             </div>
             <button
-              type="button" className="round-btn icon-40 flex-center has-tip" aria-label={t('Receive')}
+              type="button" className="round-btn p-0 border-0 icon-40 flex-center has-tip" aria-label={t('Receive')}
               onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker } })}
             >
               <span className="ico-qrcode fs16" />
             </button>
             <button
-              type="button" className="round-btn icon-40 flex-center has-tip ms-2" aria-label={t('Send')}
+              type="button" className="round-btn p-0 border-0 icon-40 flex-center has-tip ms-2" aria-label={t('Send')}
               onClick={() => app.setForm({ form: 'send', data: { ticker: ta.ticker } })}
             >
               <span className="ico-send fs16" />
             </button>
             <button
-              type="button" className="round-btn icon-40 flex-center has-tip ms-2" aria-label={t('Swap')}
+              type="button" className="round-btn p-0 border-0 icon-40 flex-center has-tip ms-2" aria-label={t('Swap')}
               onClick={() => app.setForm({ form: 'swap', data: {} })}
             >
               <span className="ico-swap fs16" />
@@ -314,14 +314,14 @@ export default function Asset ({ ticker }: AssetParams) {
           {!loadingTxns && (curPage > 0 || hasNextTxns) && (
             <div className="flex-center pt-3">
               <button
-                type="button" className="pager-btn flex-center" aria-label={t('Previous page')}
+                type="button" className="pager-btn icon-32 p-0 flex-center" aria-label={t('Previous page')}
                 onClick={() => setPage(curPage - 1)} disabled={curPage === 0 || loadingMore}
               >
                 <span className="ico-chevron-left fs12" />
               </button>
               <span className="grey fs13 mx-3">{tvar('Page {{ n }}', { n: String(curPage + 1) })}</span>
               <button
-                type="button" className="pager-btn flex-center" aria-label={t('Next page')}
+                type="button" className="pager-btn icon-32 p-0 flex-center" aria-label={t('Next page')}
                 onClick={nextPage} disabled={!hasNextTxns || loadingMore}
               >
                 {loadingMore ? <Spinner size={12} /> : <span className="ico-chevron-left fs12 mirror-x" />}

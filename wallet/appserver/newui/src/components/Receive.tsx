@@ -328,7 +328,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
         {ta.variants.length > 1 && (
           <button
             type="button"
-            className="icon-btn has-tip ico-edit fs14 ms-1"
+            className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-edit fs14 ms-1"
             aria-label={t('Change network')}
             onClick={changeNetwork}
           />
@@ -348,7 +348,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
         {address !== '' && (
           <button
             type="button"
-            className="icon-btn has-tip ico-copy fs14 ms-2"
+            className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-copy fs14 ms-2"
             aria-label={copied ? t('Copied!') : t('Copy Address')}
             onClick={copy}
           />

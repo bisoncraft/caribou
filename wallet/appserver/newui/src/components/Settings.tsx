@@ -351,15 +351,15 @@ function LogRow () {
 export default function Settings () {
   return (
     <div className="fill-abs overflow-y-auto">
-      <div className="settings-inner">
-        <div className="section-label">{t('Preferences')}</div>
+      <div className="view-inner view-inner-narrow mx-auto w-100">
+        <div className="section-label fs11 grey demi pt-3 pb-2">{t('Preferences')}</div>
         <div className="settings-card">
           <SettingsRow title={t('Language')} desc={t('language_desc')}>
             <LocaleSelector />
           </SettingsRow>
           <ThemeRow />
         </div>
-        <div className="section-label">{t('Security')}</div>
+        <div className="section-label fs11 grey demi pt-3 pb-2">{t('Security')}</div>
         <div className="settings-card">
           <ToggleRow
             title={t('Require password to send')}
@@ -369,11 +369,11 @@ export default function Settings () {
           />
           <PasswordRow />
         </div>
-        <div className="section-label">{t('Backup')}</div>
+        <div className="section-label fs11 grey demi pt-3 pb-2">{t('Backup')}</div>
         <div className="settings-card">
           <SeedRow />
         </div>
-        <div className="section-label">{t('Diagnostics')}</div>
+        <div className="section-label fs11 grey demi pt-3 pb-2">{t('Diagnostics')}</div>
         <div className="settings-card">
           <LogRow />
         </div>

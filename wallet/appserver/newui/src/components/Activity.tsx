@@ -239,7 +239,7 @@ export default function Activity () {
 
   return (
     <div className="fill-abs overflow-y-auto">
-      <div className="activity-inner">
+      <div className="view-inner mx-auto w-100">
         <div className="d-flex align-items-center justify-content-between pb-2">
           <div className="d-flex align-items-center form-input-bg br5 activity-search">
             <span className="ico-search fs14 p-2" />
@@ -255,7 +255,7 @@ export default function Activity () {
               <button
                 key={f.key}
                 type="button"
-                className={`filter-pill ms-2 ${filter === f.key ? 'selected' : ''}`}
+                className={`filter-pill fs13 grey ms-2 ${filter === f.key ? 'selected' : ''}`}
                 onClick={() => { setFilter(f.key); setPage(0) }}
               >
                 {t(f.label)}
@@ -278,7 +278,7 @@ export default function Activity () {
           if (!list) return null
           return (
             <div key={key}>
-              <div className="section-label">{t(label)}</div>
+              <div className="section-label fs11 grey demi pt-3 pb-2">{t(label)}</div>
               {list.map(item => <TxRow key={`${item.variant.assetID}:${item.tx.id}`} item={item} />)}
             </div>
           )
@@ -286,12 +286,12 @@ export default function Activity () {
 
         {!loading && (curPage > 0 || hasNext) && (
           <div className="flex-center pt-3">
-            <button type="button" className="pager-btn flex-center" aria-label={t('Previous page')}
+            <button type="button" className="pager-btn icon-32 p-0 flex-center" aria-label={t('Previous page')}
               onClick={() => setPage(curPage - 1)} disabled={curPage === 0 || loadingMore}>
               <span className="ico-chevron-left fs12" />
             </button>
             <span className="grey fs13 mx-3">{tvar('Page {{ n }}', { n: String(curPage + 1) })}</span>
-            <button type="button" className="pager-btn flex-center" aria-label={t('Next page')}
+            <button type="button" className="pager-btn icon-32 p-0 flex-center" aria-label={t('Next page')}
               onClick={nextPage} disabled={!hasNext || loadingMore}>
               {loadingMore ? <Spinner size={12} /> : <span className="ico-chevron-left fs12 mirror-x" />}
             </button>

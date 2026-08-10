@@ -83,7 +83,7 @@ export default function Networks () {
 
   return (
     <div className="networks-view fill-abs">
-      <div className="networks-inner mx-auto w-100">
+      <div className="view-inner mx-auto w-100">
         <div className="demi fs28">{t('Networks')}</div>
         <p className="grey fs13 mt-1 mb-4">
           {t('Networks are the blockchains that settle your assets. Activate a network to create its wallet.')}
