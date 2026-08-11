@@ -101,6 +101,12 @@ type TDB struct {
 	// savedDisabledRateSources records the last SaveDisabledRateSources
 	// argument. nil means the method was never called.
 	savedDisabledRateSources []string
+
+	// intentsSwaps is a live in-memory implementation of the IntentsSwap
+	// methods, keyed by deposit address, so the swap engine's
+	// read-modify-write paths can run against the stub.
+	intentsMtx   sync.Mutex
+	intentsSwaps map[string]*db.IntentsSwap
 }
 
 func (tdb *TDB) Connect(context.Context) (*sync.WaitGroup, error) {
@@ -201,19 +207,49 @@ func (tdb *TDB) MultisigIndexForPubkey(assetID uint32, pubkey [33]byte) (uint32,
 }
 
 func (tdb *TDB) StoreIntentsSwap(swap *db.IntentsSwap) error {
+	tdb.intentsMtx.Lock()
+	defer tdb.intentsMtx.Unlock()
+	if tdb.intentsSwaps == nil {
+		tdb.intentsSwaps = make(map[string]*db.IntentsSwap)
+	}
+	cp := *swap
+	tdb.intentsSwaps[swap.DepositAddress] = &cp
 	return nil
 }
 
 func (tdb *TDB) IntentsSwap(depositAddress string) (*db.IntentsSwap, error) {
+	tdb.intentsMtx.Lock()
+	defer tdb.intentsMtx.Unlock()
+	if swap, found := tdb.intentsSwaps[depositAddress]; found {
+		cp := *swap
+		return &cp, nil
+	}
 	return nil, db.ErrIntentsSwapNotFound
 }
 
 func (tdb *TDB) IntentsSwaps() ([]*db.IntentsSwap, error) {
-	return nil, nil
+	tdb.intentsMtx.Lock()
+	defer tdb.intentsMtx.Unlock()
+	swaps := make([]*db.IntentsSwap, 0, len(tdb.intentsSwaps))
+	for _, swap := range tdb.intentsSwaps {
+		cp := *swap
+		swaps = append(swaps, &cp)
+	}
+	return swaps, nil
 }
 
 func (tdb *TDB) ActiveIntentsSwaps() ([]*db.IntentsSwap, error) {
-	return nil, nil
+	tdb.intentsMtx.Lock()
+	defer tdb.intentsMtx.Unlock()
+	var swaps []*db.IntentsSwap
+	for _, swap := range tdb.intentsSwaps {
+		if swap.Terminal() {
+			continue
+		}
+		cp := *swap
+		swaps = append(swaps, &cp)
+	}
+	return swaps, nil
 }
 
 type tCoin struct {

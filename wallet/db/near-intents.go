@@ -58,21 +58,25 @@ const (
 // single-use deposit address. Amount strings are in the Intents-side base
 // units; Atoms fields are wallet atomic units.
 type IntentsSwap struct {
-	DepositAddress string    `json:"depositAddress"`
-	DepositMemo    string    `json:"depositMemo,omitempty"`
-	State          string    `json:"state"`
-	OriginAssetID  uint32    `json:"originAssetID"`
-	DestAssetID    uint32    `json:"destAssetID"`
-	OriginAsset    string    `json:"originAsset"` // Intents asset ID
-	DestAsset      string    `json:"destAsset"`   // Intents asset ID
-	AtomsIn        uint64    `json:"atomsIn"`
-	AmountIn       string    `json:"amountIn"`
-	AmountOut      string    `json:"amountOut"` // quoted, destination units
-	AtomsOut       uint64    `json:"atomsOut"`  // quoted, destination wallet atoms
-	Recipient      string    `json:"recipient"`
-	RefundTo       string    `json:"refundTo"`
-	Deadline       time.Time `json:"deadline"`
-	TimeEstimate   int64     `json:"timeEstimate"` // seconds, from the quote
+	DepositAddress string `json:"depositAddress"`
+	DepositMemo    string `json:"depositMemo,omitempty"`
+	State          string `json:"state"`
+	OriginAssetID  uint32 `json:"originAssetID"`
+	DestAssetID    uint32 `json:"destAssetID"`
+	OriginAsset    string `json:"originAsset"` // Intents asset ID
+	DestAsset      string `json:"destAsset"`   // Intents asset ID
+	AtomsIn        uint64 `json:"atomsIn"`
+	AmountIn       string `json:"amountIn"`
+	// AmountOut/AtomsOut hold the quoted output until the service reports
+	// the realized fill in its swap details, which then replaces them; a
+	// completed swap's record shows what was actually delivered. The
+	// quoted terms remain auditable in QuoteEnvelope.
+	AmountOut    string    `json:"amountOut"` // destination units
+	AtomsOut     uint64    `json:"atomsOut"`  // destination wallet atoms
+	Recipient    string    `json:"recipient"`
+	RefundTo     string    `json:"refundTo"`
+	Deadline     time.Time `json:"deadline"`
+	TimeEstimate int64     `json:"timeEstimate"` // seconds, from the quote
 
 	DepositTxID    string   `json:"depositTxID,omitempty"`
 	NearTxHashes   []string `json:"nearTxHashes,omitempty"`

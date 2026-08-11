@@ -150,6 +150,267 @@ func TestSwapFromStatusUnknownChain(t *testing.T) {
 	}
 }
 
+// TestSwapFromStatusDeadlineFallback covers the unparseable-deadline
+// path: a zero Deadline on a reconstructed record would read as long past
+// and applyTimeout would immediately and terminally fail the swap.
+func TestSwapFromStatusDeadlineFallback(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "intents", "testdata", "status-pending.json"))
+	if err != nil {
+		t.Fatalf("error reading fixture: %v", err)
+	}
+	resolve := func(string) (uint32, bool) { return 0, false }
+	for _, deadline := range []string{"", "not-a-timestamp", "2026-07-18 12:00:00"} {
+		status := new(intents.StatusResponse)
+		if err := json.Unmarshal(b, status); err != nil {
+			t.Fatalf("error decoding fixture: %v", err)
+		}
+		status.QuoteResponse.Quote.Deadline = deadline
+		swap, err := swapFromStatus(resolve, 0, "bc1qdepositaddr", "sometxid", status)
+		if err != nil {
+			t.Fatalf("swapFromStatus(deadline=%q): %v", deadline, err)
+		}
+		if swap.Deadline.IsZero() {
+			t.Fatalf("deadline %q produced a zero Deadline", deadline)
+		}
+		if !swap.Deadline.After(time.Now()) {
+			t.Fatalf("deadline %q fallback %v is not in the future", deadline, swap.Deadline)
+		}
+	}
+}
+
+// newTestIntentsEngine builds a swap engine over the rig's Core and stub
+// db. The client is left nil: the state-machine paths under test
+// (mergeStatus, applyTimeout, storeReconstructed) make no network calls.
+func newTestIntentsEngine(rig *testRig) *intentsEngine {
+	return &intentsEngine{
+		c:       rig.core,
+		log:     tLogger,
+		db:      rig.db,
+		ctx:     rig.core.ctx,
+		trigger: make(chan struct{}, 1),
+	}
+}
+
+// subscribeNotes taps the rig Core's notification fan-out.
+func subscribeNotes(rig *testRig) chan Notification {
+	ch := make(chan Notification, 16)
+	rig.core.noteMtx.Lock()
+	rig.core.noteChans[1] = ch
+	rig.core.noteMtx.Unlock()
+	return ch
+}
+
+func testSwapRecord(depositAddress, state string) *IntentsSwap {
+	return &IntentsSwap{
+		DepositAddress: depositAddress,
+		State:          state,
+		OriginAssetID:  0,
+		DestAssetID:    501,
+		OriginAsset:    "nep141:btc.omft.near",
+		DestAsset:      "nep141:sol.omft.near",
+		AtomsIn:        100_000,
+		AmountIn:       "100000",
+		AmountOut:      "83000000000",
+		AtomsOut:       83_000_000_000,
+		Deadline:       time.Now().Add(time.Hour),
+		CreatedAt:      time.Now(),
+	}
+}
+
+func TestIntentsMergeStatus(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	eng := newTestIntentsEngine(rig)
+
+	if err := eng.db.StoreIntentsSwap(testSwapRecord("addr", IntentsStateDepositSent)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// A genuine state change is applied, persisted, and noted.
+	status := &intents.StatusResponse{
+		Status:      intents.StatusProcessing,
+		SwapDetails: intents.SwapDetails{NearTxHashes: []string{"neartx1"}},
+	}
+	updated, note := eng.mergeStatus("addr", status, 0, false)
+	if updated == nil || note == nil {
+		t.Fatalf("state change not applied: swap %v note %v", updated, note)
+	}
+	if updated.State != intents.StatusProcessing || len(updated.NearTxHashes) != 1 {
+		t.Fatalf("bad merge: %+v", updated)
+	}
+	if stored, _ := eng.db.IntentsSwap("addr"); stored.State != intents.StatusProcessing {
+		t.Fatalf("merge not persisted: %s", stored.State)
+	}
+
+	// The same status again is not a change.
+	if updated, note = eng.mergeStatus("addr", status, 0, false); updated != nil || note != nil {
+		t.Fatalf("no-op status produced an update")
+	}
+
+	// A realized fill replaces the quoted output.
+	status = &intents.StatusResponse{
+		Status: intents.StatusSuccess,
+		SwapDetails: intents.SwapDetails{
+			NearTxHashes:        []string{"neartx1"},
+			AmountOut:           "82500000000",
+			DestinationChainTxs: []intents.TxHashRef{{Hash: "soltx"}},
+		},
+	}
+	updated, note = eng.mergeStatus("addr", status, 82_500_000_000, true)
+	if updated == nil || note == nil {
+		t.Fatalf("success status not applied")
+	}
+	if updated.AmountOut != "82500000000" || updated.AtomsOut != 82_500_000_000 {
+		t.Fatalf("realized fill not recorded: %s / %d", updated.AmountOut, updated.AtomsOut)
+	}
+	if len(updated.DestinationTxs) != 1 || updated.DestinationTxs[0] != "soltx" {
+		t.Fatalf("destination txs not recorded: %v", updated.DestinationTxs)
+	}
+
+	// A terminal record is never regressed, whatever the service says.
+	status = &intents.StatusResponse{Status: intents.StatusProcessing}
+	if updated, note = eng.mergeStatus("addr", status, 0, false); updated != nil || note != nil {
+		t.Fatalf("terminal record was regressed")
+	}
+	if stored, _ := eng.db.IntentsSwap("addr"); stored.State != intents.StatusSuccess {
+		t.Fatalf("terminal record changed in db: %s", stored.State)
+	}
+
+	// A refund records the origin-chain refund transactions.
+	if err := eng.db.StoreIntentsSwap(testSwapRecord("addr2", IntentsStateDepositSent)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	status = &intents.StatusResponse{
+		Status: intents.StatusRefunded,
+		SwapDetails: intents.SwapDetails{
+			RefundedAmount: "100000",
+			RefundReason:   "no solver",
+			OriginChainTxs: []intents.TxHashRef{{Hash: "refundtx"}},
+		},
+	}
+	updated, _ = eng.mergeStatus("addr2", status, 0, false)
+	if updated == nil || updated.State != intents.StatusRefunded {
+		t.Fatalf("refund not applied: %+v", updated)
+	}
+	if len(updated.RefundTxs) != 1 || updated.RefundTxs[0] != "refundtx" ||
+		updated.RefundedAmount != "100000" || updated.RefundReason != "no solver" {
+		t.Fatalf("refund details not recorded: %+v", updated)
+	}
+}
+
+func TestIntentsApplyTimeout(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	eng := newTestIntentsEngine(rig)
+	notes := subscribeNotes(rig)
+
+	expired := time.Now().Add(-(intentsExpiryGrace + time.Minute))
+
+	drainNotes := func() (n int) {
+		for {
+			select {
+			case <-notes:
+				n++
+			default:
+				return n
+			}
+		}
+	}
+
+	// A missing record is a no-op.
+	eng.applyTimeout("nonexistent")
+
+	// A zero deadline can never prove a timeout: the record must survive
+	// untouched (the reconstruction-fallback guarantee).
+	zero := testSwapRecord("zero", IntentsStateDepositSent)
+	zero.Deadline = time.Time{}
+	_ = eng.db.StoreIntentsSwap(zero)
+	eng.applyTimeout("zero")
+	if stored, _ := eng.db.IntentsSwap("zero"); stored.State != IntentsStateDepositSent {
+		t.Fatalf("zero-deadline record timed out to %s", stored.State)
+	}
+
+	// A live deadline is not a timeout.
+	_ = eng.db.StoreIntentsSwap(testSwapRecord("live", IntentsStateQuoted))
+	eng.applyTimeout("live")
+	if stored, _ := eng.db.IntentsSwap("live"); stored.State != IntentsStateQuoted {
+		t.Fatalf("live record timed out to %s", stored.State)
+	}
+	if n := drainNotes(); n != 0 {
+		t.Fatalf("%d notes for non-timeouts", n)
+	}
+
+	// An unfunded quote past its deadline expires.
+	quoted := testSwapRecord("quoted", IntentsStateQuoted)
+	quoted.Deadline = expired
+	_ = eng.db.StoreIntentsSwap(quoted)
+	eng.applyTimeout("quoted")
+	if stored, _ := eng.db.IntentsSwap("quoted"); stored.State != IntentsStateExpired {
+		t.Fatalf("quoted record = %s, want EXPIRED", stored.State)
+	}
+	if n := drainNotes(); n != 1 {
+		t.Fatalf("%d notes for quote expiry, want 1", n)
+	}
+
+	// A sent deposit the service never observed fails, with the reason
+	// recorded.
+	sent := testSwapRecord("sent", IntentsStateDepositSent)
+	sent.Deadline = expired
+	_ = eng.db.StoreIntentsSwap(sent)
+	eng.applyTimeout("sent")
+	stored, _ := eng.db.IntentsSwap("sent")
+	if stored.State != intents.StatusFailed {
+		t.Fatalf("sent record = %s, want FAILED", stored.State)
+	}
+	if stored.RefundReason == "" {
+		t.Fatalf("no refund reason recorded")
+	}
+	if n := drainNotes(); n != 1 {
+		t.Fatalf("%d notes for deposit timeout, want 1", n)
+	}
+
+	// A terminal record past its deadline is left alone.
+	done := testSwapRecord("done", intents.StatusSuccess)
+	done.Deadline = expired
+	_ = eng.db.StoreIntentsSwap(done)
+	eng.applyTimeout("done")
+	if stored, _ := eng.db.IntentsSwap("done"); stored.State != intents.StatusSuccess {
+		t.Fatalf("terminal record timed out to %s", stored.State)
+	}
+}
+
+func TestIntentsStoreReconstructed(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	eng := newTestIntentsEngine(rig)
+
+	rebuilt := testSwapRecord("addr", IntentsStateDepositSent)
+	rebuilt.Reconstructed = true
+
+	stored, err := eng.storeReconstructed(rebuilt)
+	if err != nil || !stored {
+		t.Fatalf("first store: stored=%v err=%v", stored, err)
+	}
+
+	// A live record is authoritative: a second reconstruction for the same
+	// deposit address must not clobber it.
+	live, _ := eng.db.IntentsSwap("addr")
+	live.State = intents.StatusProcessing
+	live.Reconstructed = false
+	_ = eng.db.StoreIntentsSwap(live)
+
+	stored, err = eng.storeReconstructed(rebuilt)
+	if err != nil {
+		t.Fatalf("second store: %v", err)
+	}
+	if stored {
+		t.Fatalf("reconstruction clobbered a live record")
+	}
+	if got, _ := eng.db.IntentsSwap("addr"); got.State != intents.StatusProcessing || got.Reconstructed {
+		t.Fatalf("live record modified: %+v", got)
+	}
+}
+
 func TestIntentsDeadlines(t *testing.T) {
 	if d := intentsDeadline(0); d != 2*time.Hour {
 		t.Errorf("btc deadline %v", d)

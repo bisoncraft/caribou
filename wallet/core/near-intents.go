@@ -265,7 +265,8 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 		return nil
 	}
 
-	updated, note := e.mergeStatus(swap.DepositAddress, status)
+	realizedAtoms, haveRealized := e.realizedAtomsOut(ctx, swap, status)
+	updated, note := e.mergeStatus(swap.DepositAddress, status, realizedAtoms, haveRealized)
 	if note != nil {
 		e.c.notify(note)
 	}
@@ -280,12 +281,45 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 	return nil
 }
 
+// realizedAtomsOut converts the realized fill reported in a status
+// response's swap details to destination-wallet atoms. ok is false when
+// the details carry no fill, the fill matches the recorded amount, or the
+// destination chain or its decimals cannot be resolved — in which case
+// the recorded amounts are left in place. Called outside swapMtx: the
+// catalog fetch can hit the network.
+func (e *intentsEngine) realizedAtomsOut(ctx context.Context, swap *IntentsSwap, status *intents.StatusResponse) (atoms uint64, ok bool) {
+	out := status.SwapDetails.AmountOut
+	if out == "" || out == swap.AmountOut || swap.DestAssetID == intentsAssetUnknown {
+		return 0, false
+	}
+	unitInfo, err := asset.UnitInfo(swap.DestAssetID)
+	if err != nil {
+		return 0, false
+	}
+	cat, err := e.freshCatalog(ctx)
+	if err != nil {
+		return 0, false
+	}
+	tok := cat.ByAssetID(swap.DestAsset)
+	if tok == nil {
+		return 0, false
+	}
+	atoms, err = fromIntentsAmount(out, &unitInfo, tok.Decimals)
+	if err != nil {
+		e.log.Warnf("Unconvertible realized amountOut %q for swap %s: %v", out, swap.DepositAddress, err)
+		return 0, false
+	}
+	return atoms, true
+}
+
 // mergeStatus reloads the record under swapMtx, applies the service status
 // when it is a genuine change and the record is not already terminal,
 // persists it, and returns the updated record and a notification (both nil
 // when nothing changed). Reloading under the lock prevents a stale caller
-// copy from regressing a newer state.
-func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.StatusResponse) (*IntentsSwap, Notification) {
+// copy from regressing a newer state. realizedAtoms (with haveRealized)
+// is the swap details' realized fill in destination atoms, replacing the
+// quote-time output so history shows what was actually delivered.
+func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.StatusResponse, realizedAtoms uint64, haveRealized bool) (*IntentsSwap, Notification) {
 	e.swapMtx.Lock()
 	defer e.swapMtx.Unlock()
 
@@ -300,7 +334,10 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 
 	newState := status.Status
 	details := &status.SwapDetails
-	changed := newState != swap.State ||
+	// Recheck the realized fill against the reloaded record, not the
+	// caller's copy.
+	realized := haveRealized && details.AmountOut != swap.AmountOut
+	changed := newState != swap.State || realized ||
 		len(details.NearTxHashes) != len(swap.NearTxHashes) ||
 		len(details.DestinationChainTxs) != len(swap.DestinationTxs) ||
 		details.RefundedAmount != swap.RefundedAmount ||
@@ -310,6 +347,10 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	}
 
 	swap.State = newState
+	if realized {
+		swap.AmountOut = details.AmountOut
+		swap.AtomsOut = realizedAtoms
+	}
 	swap.NearTxHashes = details.NearTxHashes
 	swap.DestinationTxs = txHashes(details.DestinationChainTxs)
 	swap.RefundedAmount = details.RefundedAmount
@@ -349,7 +390,9 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 		e.swapMtx.Unlock()
 		return
 	}
-	if time.Now().Before(swap.Deadline.Add(intentsExpiryGrace)) {
+	// A zero deadline (a record that predates deadline persistence, or a
+	// reconstruction fallback that failed) can never prove a timeout.
+	if swap.Deadline.IsZero() || time.Now().Before(swap.Deadline.Add(intentsExpiryGrace)) {
 		e.swapMtx.Unlock()
 		return
 	}
@@ -359,7 +402,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 		swap.State = IntentsStateExpired
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			note = newIntentsSwapNote(swap, "Swap expired",
-				"The quote expired before a deposit was sent. No funds moved.", db.WarningLevel)
+				"The quote expired with no deposit recorded.", db.WarningLevel)
 		} else {
 			e.log.Errorf("Error storing expired swap %s: %v", depositAddress, err)
 		}
@@ -743,10 +786,10 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 // remains QUOTED and expires unfunded; no service-side action is needed.
 //
 // minAtomsOut is the MinAtomsOut of the IntentsPreview the caller
-// displayed, echoed back as the accept bound: a committed quote whose
-// output falls below it — the rate moved more than the slippage tolerance
-// since the preview — is rejected before any funds move, and the caller
-// should obtain a fresh preview. It is required; a swap cannot be executed
+// displayed, echoed back as the accept bound: a committed quote whose own
+// guaranteed minimum (its minAmountOut, the least a solver may deliver)
+// falls below it is rejected before any funds move, and the caller should
+// obtain a fresh preview. It is required; a swap cannot be executed
 // against terms the user never saw.
 func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, minAtomsOut uint64) (*IntentsSwap, error) {
 	eng, err := c.intentsEngine()
@@ -811,13 +854,20 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, err
 	}
 	// The committed quote is a fresh quote, not the previewed one. Honor
-	// the terms the user actually accepted: if its output has drifted
-	// below the previewed minimum, reject before anything is persisted or
-	// sent. The unfunded quote expires service-side with no consequence.
-	if atomsOut < minAtomsOut {
+	// the terms the user actually accepted: what a solver may actually
+	// deliver is bounded by the committed quote's own minAmountOut, so
+	// that — not the committed amountOut, which sits a full slippage
+	// tolerance above it — must clear the "Min received" floor the user
+	// was shown. Reject before anything is persisted or sent; the
+	// unfunded quote expires service-side with no consequence.
+	minCommittedOut, err := fromIntentsAmount(quote.MinAmountOut, &destWallet.Info().UnitInfo, dest.Decimals)
+	if err != nil {
+		return nil, fmt.Errorf("bad committed minAmountOut: %w", err)
+	}
+	if minCommittedOut < minAtomsOut {
 		destUnits := &destWallet.Info().UnitInfo
-		return nil, fmt.Errorf("the rate moved: the committed quote pays %s, below the quoted minimum of %s; get a fresh quote",
-			destUnits.FormatAtoms(atomsOut), destUnits.FormatAtoms(minAtomsOut))
+		return nil, fmt.Errorf("the rate moved: the committed quote guarantees only %s, below the quoted minimum of %s; get a fresh quote",
+			destUnits.FormatAtoms(minCommittedOut), destUnits.FormatAtoms(minAtomsOut))
 	}
 	deadline, err := time.Parse(time.RFC3339, quote.Deadline)
 	if err != nil {
@@ -868,11 +918,14 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 
 	coin, err := originWallet.Wallet.Send(quote.DepositAddress, atoms, feeRate)
 	if err != nil {
-		// No funds moved. The QUOTED record expires unfunded; poke the
-		// poller so its deadline timeout runs even when the ticker was
-		// parked with no other active swap.
+		// The wallet recorded no send, so the record stays QUOTED and
+		// expires unfunded; poke the poller so its deadline timeout runs
+		// even when the ticker was parked with no other active swap. The
+		// message claims only that — a Send contract that errored after
+		// broadcasting would still be observed by the service through the
+		// deposit address, and in any case pays the user's own recipient.
 		eng.poke()
-		return nil, fmt.Errorf("deposit send failed (no funds moved, quote will expire): %w", err)
+		return nil, fmt.Errorf("deposit send failed (no deposit was recorded, the quote will expire): %w", err)
 	}
 
 	// Record the deposit under swapMtx, reloading so a concurrent poll that
@@ -1101,7 +1154,15 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		destAssetID = id
 	}
 
-	deadline, _ := time.Parse(time.RFC3339, quote.Deadline)
+	// The status endpoint's re-serialized quote is the copy least likely
+	// to carry a well-formed deadline. A parse failure must not produce a
+	// zero Deadline: applyTimeout would read it as long past and
+	// immediately fail the swap, terminally. Mirror IntentsExecute's
+	// fallback instead.
+	deadline, err := time.Parse(time.RFC3339, quote.Deadline)
+	if err != nil {
+		deadline = time.Now().Add(intentsDeadline(originAssetID))
+	}
 	state := status.Status
 	if state == intents.StatusPendingDeposit {
 		state = IntentsStateDepositSent
