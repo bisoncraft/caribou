@@ -6,8 +6,11 @@ package xrp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
@@ -273,6 +276,44 @@ func TestEstablishTrustlineDeterministicRejection(t *testing.T) {
 	}
 }
 
+// TestEstablishTrustlineInsufficientReserve covers a TrustSet preflight that
+// checks only the fee. A successful TrustSet creates a RippleState object,
+// incrementing OwnerCount and so the owner reserve the account must hold —
+// on top of the fee. A check that stops at the fee lets the preflight pass
+// for an account that can afford the fee but not the reserve, burning both
+// on-chain with tecINSUF_RESERVE_LINE.
+func TestEstablishTrustlineInsufficientReserve(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	tw.parent.ownerReserve = OwnerReserveDrops
+
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	// Enough to pay the fee, not enough to also cover the owner reserve a
+	// successful TrustSet will add.
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100", 0, 0), nil
+	})
+	var submits atomic.Int32
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		submits.Add(1)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
+	})
+
+	err := tw.EstablishTrustline()
+	if !errors.Is(err, asset.ErrInsufficientBalance) {
+		t.Fatalf("EstablishTrustline error = %v, want ErrInsufficientBalance", err)
+	}
+	if submits.Load() != 0 {
+		t.Fatalf("submit called %d times, want 0 — an unaffordable reserve must not reach the network", submits.Load())
+	}
+}
+
 func TestTokenWalletSendHappyPath(t *testing.T) {
 	m := newMockRippled(t)
 	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
@@ -320,6 +361,177 @@ func TestTokenWalletSendHappyPath(t *testing.T) {
 	}
 	if coin.Value() != 1_000_000 {
 		t.Fatalf("coin value = %d, want 1000000", coin.Value())
+	}
+}
+
+// TestTokenWalletSendInsufficientNativeFee covers a token send never
+// checking whether the parent account holds enough native XRP to pay the
+// fee. The trustline balance alone was sufficient, so the send reserved a
+// sequence and reached the network with a payment the account could not
+// fund.
+func TestTokenWalletSendInsufficientNativeFee(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	m := newMockRippled(t)
+	m.handle("account_lines", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["account"] == destAddr {
+			return accountLinesResponse([]accountLine{{
+				Account:  TokenUSDC.NetIssuers[util.Mainnet],
+				Balance:  "0",
+				Currency: TokenUSDC.Currency,
+			}}), nil
+		}
+		return accountLinesResponse([]accountLine{{
+			Account:  TokenUSDC.NetIssuers[util.Mainnet],
+			Balance:  "100",
+			Currency: TokenUSDC.Currency,
+		}}), nil
+	})
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		// The parent account holds far less XRP than the fee.
+		return accountInfoResponse("5", 0, 0), nil
+	})
+	var submits atomic.Int32
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		submits.Add(1)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
+	})
+
+	tw := makeTokenTestWallet(t, m)
+	_, err := tw.Send(destAddr, 1_000_000, 0)
+	if !errors.Is(err, asset.ErrInsufficientBalance) {
+		t.Fatalf("Send error = %v, want ErrInsufficientBalance (parent can't cover the fee)", err)
+	}
+	if submits.Load() != 0 {
+		t.Fatalf("submit called %d times, want 0 — a fee the account can't pay must not reach the network", submits.Load())
+	}
+}
+
+// TestConcurrentNativeAndTokenSendsSerializeFeeCheck covers the token send
+// path sharing the parent's sendMtx with native sends. A token payment is
+// still funded in native XRP, so a concurrent native Send draining the
+// account must not let a token send authorize its fee against a stale,
+// pre-drain balance snapshot. With both paths serialized through sendMtx,
+// exactly one of two concurrent sends — one native, one token — must see the
+// drained balance and be rejected.
+func TestConcurrentNativeAndTokenSendsSerializeFeeCheck(t *testing.T) {
+	const nativeDest = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	tokenDestPriv := make([]byte, 32)
+	tokenDestPriv[31] = 2
+	_, tokenDestPub := btcec.PrivKeyFromBytes(tokenDestPriv)
+	tokenDest := pubKeyToAddress(tokenDestPub)
+
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	w := tw.parent
+	w.baseReserve = 0
+	w.ownerReserve = 0
+	w.nextSeq = 7
+
+	var (
+		selfCurrentCalls  atomic.Int32
+		inCriticalSection atomic.Bool
+	)
+	m.handle("account_info", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["account"] != w.address {
+			// account_info lookup for the native send's destination.
+			return accountInfoResponse("100000000", 0, 0), nil
+		}
+		if p["ledger_index"] != "current" {
+			// Validated-ledger query for the wallet's own account: value is
+			// irrelevant since strictCurrent always authorizes off the
+			// current-ledger figure below.
+			return accountInfoResponse("13", 0, 0), nil
+		}
+		// This is the query Send authorizes against. Detect overlap
+		// directly — with sendMtx serializing both paths, no two sends
+		// should ever be inside this query at once — rather than only
+		// inferring serialization from which balance figure came back.
+		if !inCriticalSection.CompareAndSwap(false, true) {
+			t.Errorf("two sends queried the current ledger for %s concurrently — sendMtx did not serialize them", w.address)
+		}
+		time.Sleep(20 * time.Millisecond) // widen the window so a missing lock is reliably caught
+		n := selfCurrentCalls.Add(1)
+		inCriticalSection.Store(false)
+		// Whichever send acquires sendMtx first sees the pre-send balance;
+		// the second sees it drained — exactly as a real submit would leave
+		// it.
+		if n == 1 {
+			return accountInfoResponse("13", 0, 0), nil
+		}
+		return accountInfoResponse("0", 0, 0), nil
+	})
+	m.handle("account_lines", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["account"] == tokenDest {
+			return accountLinesResponse([]accountLine{{
+				Account:  tw.issuerAddr,
+				Balance:  "0",
+				Currency: TokenUSDC.Currency,
+			}}), nil
+		}
+		return accountLinesResponse([]accountLine{{
+			Account:  tw.issuerAddr,
+			Balance:  "100",
+			Currency: TokenUSDC.Currency,
+		}}), nil
+	})
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	var submits atomic.Int32
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		submits.Add(1)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
+	})
+
+	nativeErr := make(chan error, 1)
+	tokenErr := make(chan error, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		_, err := w.Send(nativeDest, 1, 0)
+		nativeErr <- err
+	}()
+	go func() {
+		<-start
+		_, err := tw.Send(tokenDest, 1_000_000, 0)
+		tokenErr <- err
+	}()
+	close(start)
+
+	nErr, tErr := <-nativeErr, <-tokenErr
+	var success, insufficient int
+	for _, err := range []error{nErr, tErr} {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, asset.ErrInsufficientBalance):
+			insufficient++
+		default:
+			t.Fatalf("unexpected send error: %v", err)
+		}
+	}
+	if success != 1 || insufficient != 1 {
+		t.Fatalf("results: success=%d insufficient=%d (native=%v token=%v), want 1 each", success, insufficient, nErr, tErr)
+	}
+	if submits.Load() != 1 {
+		t.Fatalf("submit called %d times, want 1 — sendMtx must stop the loser from reaching the network", submits.Load())
 	}
 }
 

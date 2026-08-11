@@ -206,12 +206,22 @@ const trustlineLimitAtomic = 999_999_999_999_999
 // tecINSUF_RESERVE_LINE) is tracked as a pending tx and reconciled
 // asynchronously by the parent wallet's checkPendingTxs loop, same as Send.
 func (w *TokenWallet) EstablishTrustline() error {
+	w.parent.opWG.Add(1)
+	defer w.parent.opWG.Done()
+	if !w.parent.running.Load() {
+		return fmt.Errorf("wallet not running")
+	}
 	w.parent.keyMtx.RLock()
 	if w.parent.privKey == nil {
 		w.parent.keyMtx.RUnlock()
 		return fmt.Errorf("wallet is locked")
 	}
 	w.parent.keyMtx.RUnlock()
+
+	// Serialize against native and token sends so a concurrent send cannot
+	// drain the fee balance this TrustSet authorizes against.
+	w.parent.sendMtx.Lock()
+	defer w.parent.sendMtx.Unlock()
 
 	feeInfo, err := w.parent.rpc.fee(w.parent.ctx)
 	if err != nil {
@@ -222,6 +232,21 @@ func (w *TokenWallet) EstablishTrustline() error {
 		fee = DefaultFeeDrops
 	}
 	lastLedgerSeq := uint32(feeInfo.LedgerCurrentIndex + lastLedgerWindow)
+
+	nativeBalance, err := w.parent.balance(true)
+	if err != nil {
+		return fmt.Errorf("checking available balance: %w", err)
+	}
+	// A successful TrustSet adds a RippleState object, incrementing
+	// OwnerCount and so the owner reserve the account must hold — on top of
+	// the fee — or the tx lands as tecINSUF_RESERVE_LINE, burning the fee
+	// and the sequence for nothing.
+	w.parent.reserveMtx.RLock()
+	ownerReserve := w.parent.ownerReserve
+	w.parent.reserveMtx.RUnlock()
+	if fee+ownerReserve > nativeBalance.Available {
+		return asset.ErrInsufficientBalance
+	}
 
 	sequence, rollbackSeq, err := w.parent.reserveSequence()
 	if err != nil {
@@ -326,6 +351,11 @@ func (w *TokenWallet) EstablishTrustline() error {
 }
 
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	w.parent.opWG.Add(1)
+	defer w.parent.opWG.Done()
+	if !w.parent.running.Load() {
+		return nil, fmt.Errorf("wallet not running")
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid XRP address %q", address)
 	}
@@ -359,6 +389,13 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		return nil, fmt.Errorf("destination %q has no %s trustline with issuer %s; recipient must establish one first", address, w.token.Name, w.issuerAddr)
 	}
 
+	// Serialize against the parent wallet's native sends: a concurrent native
+	// Send drains the fee balance this token send authorizes against, and two
+	// concurrent token sends must not both authorize against the same
+	// pre-send trustline snapshot. Held through submit, same as native Send.
+	w.parent.sendMtx.Lock()
+	defer w.parent.sendMtx.Unlock()
+
 	balance, err := w.Balance()
 	if err != nil {
 		return nil, err
@@ -376,6 +413,16 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		fee = DefaultFeeDrops
 	}
 	lastLedgerSeq := uint32(feeInfo.LedgerCurrentIndex + lastLedgerWindow)
+
+	// Token payments are still funded in native XRP, so the parent account
+	// must have enough available balance to cover the fee.
+	nativeBalance, err := w.parent.balance(true)
+	if err != nil {
+		return nil, fmt.Errorf("checking available balance: %w", err)
+	}
+	if fee > nativeBalance.Available {
+		return nil, asset.ErrInsufficientBalance
+	}
 
 	sequence, rollbackSeq, err := w.parent.reserveSequence()
 	if err != nil {

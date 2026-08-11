@@ -667,6 +667,62 @@ func TestConcurrentSendsSerializeBalanceCheck(t *testing.T) {
 	}
 }
 
+// TestSendSucceedsForFreshlyFundedAccount covers Send rejecting a payment
+// from an account that was funded moments ago. The validated ledger has no
+// entry yet, but reserveSequence already authorizes off the current ledger
+// via accountInfoCurrent — Send's own balance check must agree, not fall
+// back to treating the account as empty.
+func TestSendSucceedsForFreshlyFundedAccount(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	m := newMockRippled(t)
+	m.handle("account_info", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["account"] == destAddr {
+			return accountInfoResponse("100000000", 0, 0), nil
+		}
+		if p["ledger_index"] == "current" {
+			return accountInfoResponse("100000000", 0, 0), nil
+		}
+		// The validated ledger hasn't caught up to the funding tx yet.
+		return nil, &rpcError{errType: "actNotFound", msg: "account not found"}
+	})
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "12"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+	var submits atomic.Int32
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		submits.Add(1)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
+	})
+
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	w := &xrpWallet{
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
+		privKey:     privKey,
+		rpc:         m.rpcClient(),
+		log:         util.NewLogger("test", util.LevelError, nil),
+		baseReserve: BaseReserveDrops,
+		nextSeq:     7,
+		ctx:         context.Background(),
+	}
+	w.running.Store(true)
+
+	if _, err := w.Send(destAddr, 1_000_000, 0); err != nil {
+		t.Fatalf("Send error = %v, want success — the current ledger already shows the account funded", err)
+	}
+	if submits.Load() != 1 {
+		t.Fatalf("submit called %d times, want 1", submits.Load())
+	}
+}
+
 // ---- Balance ----
 
 func makeBalanceWallet(t *testing.T, m *mockRippled) *xrpWallet {
@@ -795,6 +851,69 @@ func TestBalanceCurrentLedgerFallback(t *testing.T) {
 	// Fallback: both balances use validated (5_000_000). Available = 5M - 1M = 4M.
 	if bal.Available != 4_000_000 {
 		t.Errorf("available = %d, want 4_000_000 (fallback to validated)", bal.Available)
+	}
+}
+
+func TestBalanceStrictCurrentFreshlyFundedAccount(t *testing.T) {
+	// No validated-ledger entry yet, but the current ledger already reflects
+	// the account. strictCurrent must use the current-ledger result instead
+	// of reporting the account empty.
+	m := newMockRippled(t)
+	m.handle("account_info", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["ledger_index"] == "current" {
+			return accountInfoResponse("10000000", 0, 0), nil
+		}
+		return nil, &rpcError{errType: "actNotFound", msg: "account not found"}
+	})
+	w := makeBalanceWallet(t, m)
+	bal, err := w.balance(true)
+	if err != nil {
+		t.Fatalf("balance(true): %v", err)
+	}
+	// Reserve = BaseReserveDrops (1_000_000). Available = 10_000_000 - 1_000_000 = 9_000_000.
+	if bal.Available != 9_000_000 {
+		t.Errorf("available = %d, want 9_000_000 (current-ledger balance for a freshly funded account)", bal.Available)
+	}
+}
+
+func TestBalanceNonStrictFreshlyFundedAccountStillEmpty(t *testing.T) {
+	// Display callers (strictCurrent=false) keep the prior behavior: no
+	// validated-ledger entry means empty, regardless of the current ledger.
+	m := newMockRippled(t)
+	m.handle("account_info", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		if p["ledger_index"] == "current" {
+			return accountInfoResponse("10000000", 0, 0), nil
+		}
+		return nil, &rpcError{errType: "actNotFound", msg: "account not found"}
+	})
+	w := makeBalanceWallet(t, m)
+	bal, err := w.balance(false)
+	if err != nil {
+		t.Fatalf("balance(false): %v", err)
+	}
+	if bal.Available != 0 || bal.Locked != 0 {
+		t.Errorf("non-strict unfunded: want {0 0}, got {%d %d}", bal.Available, bal.Locked)
+	}
+}
+
+func TestBalanceStrictCurrentAlsoUnfunded(t *testing.T) {
+	// Both ledgers agree the account doesn't exist: report empty, not an
+	// error.
+	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return nil, &rpcError{errType: "actNotFound", msg: "account not found"}
+	})
+	w := makeBalanceWallet(t, m)
+	bal, err := w.balance(true)
+	if err != nil {
+		t.Fatalf("balance(true): %v", err)
+	}
+	if bal.Available != 0 || bal.Locked != 0 {
+		t.Errorf("want {0 0}, got {%d %d}", bal.Available, bal.Locked)
 	}
 }
 

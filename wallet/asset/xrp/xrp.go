@@ -568,8 +568,16 @@ func (w *xrpWallet) balance(strictCurrent bool) (*asset.Balance, error) {
 
 	vr := <-validatedCh
 	if vr.err != nil {
-		<-currentCh // drain before returning
+		cr := <-currentCh
 		if isAccountNotFound(vr.err) {
+			// No validated-ledger entry yet, but Send authorizes against
+			// current-ledger state (strictCurrent): an account funded
+			// moments ago already has a current-ledger entry, even though the
+			// validated ledger hasn't caught up. Only report the account
+			// empty once both ledgers agree it doesn't exist.
+			if strictCurrent && cr.err == nil {
+				return w.balanceFromAccountData(cr.info.AccountData)
+			}
 			return &asset.Balance{}, nil
 		}
 		return nil, fmt.Errorf("error querying account: %w", vr.err)
@@ -600,23 +608,40 @@ func (w *xrpWallet) balance(strictCurrent bool) (*asset.Balance, error) {
 		currentBalance = validatedBalance
 	}
 
+	return w.balanceAt(currentBalance, validated.AccountData.OwnerCount)
+}
+
+// balanceFromAccountData computes the wallet Balance directly from a single
+// ledger's account_data, for callers that only have one ledger's worth of
+// account state to work with.
+func (w *xrpWallet) balanceFromAccountData(data accountData) (*asset.Balance, error) {
+	bal, err := strconv.ParseUint(data.Balance, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing balance %q: %w", data.Balance, err)
+	}
+	return w.balanceAt(bal, data.OwnerCount)
+}
+
+// balanceAt clamps a raw drop balance and owner count into an
+// available/locked Balance, given the wallet's current reserve parameters.
+func (w *xrpWallet) balanceAt(rawBalance uint64, ownerCount uint32) (*asset.Balance, error) {
 	w.reserveMtx.RLock()
 	baseReserve := w.baseReserve
 	ownerReservePerItem := w.ownerReserve
 	w.reserveMtx.RUnlock()
 
-	reserve := baseReserve + ownerReservePerItem*uint64(validated.AccountData.OwnerCount)
+	reserve := baseReserve + ownerReservePerItem*uint64(ownerCount)
 
 	// Clamp Locked to the balance. An account below its reserve — which
 	// happens as soon as it owns an object it can no longer cover — would
 	// otherwise report Available+Locked above what it actually holds. Mirrors
 	// sol's rent-exempt reserve handling.
 	var available, locked uint64
-	if currentBalance > reserve {
+	if rawBalance > reserve {
 		locked = reserve
-		available = currentBalance - reserve
+		available = rawBalance - reserve
 	} else {
-		locked = currentBalance
+		locked = rawBalance
 	}
 
 	return &asset.Balance{
@@ -716,15 +741,6 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		return nil, fmt.Errorf("wallet not connected")
 	}
 
-	// Keep the balance snapshot authoritative for this process through submit.
-	// Sequence reservation alone cannot prevent two concurrent sends from both
-	// authorizing against the same pre-send balance.
-	w.sendMtx.Lock()
-	defer w.sendMtx.Unlock()
-	if !w.running.Load() {
-		return nil, fmt.Errorf("wallet not running")
-	}
-
 	// Check whether the wallet is locked before we do any network I/O or
 	// reserve a sequence number. This avoids burning a sequence when the common
 	// locked-wallet error is hit. A concurrent lock between this check and the
@@ -740,6 +756,8 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	// without one would be rejected on-chain with tecDST_TAG_NEEDED.
 	// An actNotFound error means the destination account has never been funded;
 	// enforce the base-reserve minimum to avoid a fee-burning tecNO_DST_INSUF_XRP.
+	// This and the fee lookup below don't touch balance state, so they run
+	// before sendMtx is taken — only the balance check needs that protection.
 	destInfo, err := w.rpc.accountInfo(w.ctx, address)
 	if err != nil && !isAccountNotFound(err) {
 		return nil, fmt.Errorf("error checking destination account info: %w", err)
@@ -767,6 +785,15 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		fee = DefaultFeeDrops
 	}
 	lastLedgerSeq := uint32(feeInfo.LedgerCurrentIndex + lastLedgerWindow)
+
+	// Keep the balance snapshot authoritative for this process through submit.
+	// Sequence reservation alone cannot prevent two concurrent sends from both
+	// authorizing against the same pre-send balance.
+	w.sendMtx.Lock()
+	defer w.sendMtx.Unlock()
+	if !w.running.Load() {
+		return nil, fmt.Errorf("wallet not running")
+	}
 
 	balance, err := w.balance(true)
 	if err != nil {
