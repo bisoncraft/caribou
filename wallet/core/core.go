@@ -2640,6 +2640,21 @@ func (c *Core) connectWallets(crypter encrypt.Crypter) {
 	if walletCount > 0 {
 		c.log.Infof("Connected to %d of %d wallets.", connectCount, walletCount)
 	}
+
+	// A mobile pause can land in the middle of this. Login sets loggedIn and
+	// releases loginMtx before calling us, so a Suspend can see the session as
+	// logged in and walk a wallet set that is still coming up: it records
+	// nothing, because suspend() reports false for a wallet that is not
+	// connected yet, and latches the pause anyway. Everything we just brought up
+	// would then poll on through a background the app believes is quiet. Sweep
+	// once here rather than per wallet, because the token phase reconnects
+	// network wallets and would undo an earlier sweep.
+	c.suspendMtx.Lock()
+	if c.suspended {
+		c.log.Infof("Pause landed during login; suspending the wallets it connected")
+		c.suspendConnected()
+	}
+	c.suspendMtx.Unlock()
 }
 
 // Notifications loads the latest notifications from the db.
@@ -2733,29 +2748,37 @@ func (c *Core) Logout() error {
 	return nil
 }
 
-// Suspend drops every connected wallet's network connection without logging out
-// or locking, so a backgrounded mobile app stops polling and lets the radio
-// sleep while keys and the session stay resident. Resume reconnects the same
-// set. It is a no-op if not logged in or already suspended. The native shell
-// calls it (via mobile.App.Pause) after a short background grace, not on a quick
-// app switch.
-func (c *Core) Suspend() error {
-	c.suspendMtx.Lock()
-	defer c.suspendMtx.Unlock()
-
-	if c.suspended {
-		return nil
+// trackSuspended records assetID as a wallet the next Resume should reconnect,
+// keeping the set ordered tokens before network wallets. That order is what
+// suspendConnected's teardown loop produces and what every later reader of the
+// set relies on - Resume walks it forward to reconnect, unwindStaleResume walks
+// it forward to tear back down - so a plain append would quietly break it for
+// the paths that hand wallets back into the set. Deduplicates, since more than
+// one of those paths can name the same wallet. Caller holds suspendMtx.
+func (c *Core) trackSuspended(assetID uint32) {
+	for _, id := range c.suspendedWallets {
+		if id == assetID {
+			return
+		}
 	}
-
-	c.loginMtx.Lock()
-	loggedIn := c.loggedIn
-	c.loginMtx.Unlock()
-	if !loggedIn {
-		return nil
+	if asset.TokenInfo(assetID) != nil {
+		// Insert ahead of the first network wallet, if there is one.
+		for i, id := range c.suspendedWallets {
+			if asset.TokenInfo(id) == nil {
+				c.suspendedWallets = append(c.suspendedWallets[:i],
+					append([]uint32{assetID}, c.suspendedWallets[i:]...)...)
+				return
+			}
+		}
 	}
+	c.suspendedWallets = append(c.suspendedWallets, assetID)
+}
 
-	// Suspend token wallets before their network wallets: a token's connection
-	// rides on its network wallet's context, so tear the leaves down first.
+// suspendConnected disconnects every connected wallet and records it for the
+// next Resume. Token wallets go before their network wallets: a token's
+// connection rides on its network wallet's context, so tear the leaves down
+// first. Caller holds suspendMtx.
+func (c *Core) suspendConnected() {
 	var tokens, networks []*xcWallet
 	for _, w := range c.xcWallets() {
 		if asset.TokenInfo(w.AssetID) != nil {
@@ -2765,15 +2788,38 @@ func (c *Core) Suspend() error {
 		}
 	}
 
-	var suspended []uint32
 	for _, w := range append(tokens, networks...) {
 		if w.suspend() {
-			suspended = append(suspended, w.AssetID)
+			c.trackSuspended(w.AssetID)
 			c.log.Infof("Suspended %s wallet", unbip(w.AssetID))
 		}
 	}
+}
 
-	c.suspendedWallets = suspended
+// Suspend drops every connected wallet's network connection without logging out
+// or locking, so a backgrounded mobile app stops polling and lets the radio
+// sleep while keys and the session stay resident. Resume reconnects the same
+// set. It is a no-op if not logged in. The native shell calls it (via
+// mobile.App.Pause) after a short background grace, not on a quick app switch.
+//
+// Already being suspended is not a shortcut: the teardown loop runs every time
+// and merges what it finds into the existing set. A wallet can be connected
+// under a pause that already latched - it was still coming up when Suspend
+// walked past it during login, or a failed Resume re-armed the pause with the
+// wallets that did come back up still live - and an early return would leave it
+// polling with nothing to notice.
+func (c *Core) Suspend() error {
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	c.loginMtx.Lock()
+	loggedIn := c.loggedIn
+	c.loginMtx.Unlock()
+	if !loggedIn {
+		return nil
+	}
+
+	c.suspendConnected()
 	c.suspended = true
 	c.suspendGen++
 	return nil
@@ -2819,6 +2865,7 @@ func (c *Core) Resume() error {
 		return errors.New("cannot resume: logged out while suspended")
 	}
 
+	var failed []uint32
 	for _, assetID := range suspended {
 		w, found := c.wallet(assetID)
 		if !found || w.isDisabled() {
@@ -2842,11 +2889,49 @@ func (c *Core) Resume() error {
 		}
 		if err != nil {
 			c.log.Errorf("Unable to resume %s wallet: %v", unbip(assetID), err)
+			failed = append(failed, assetID)
 			continue
 		}
 		c.log.Infof("Resumed %s wallet", unbip(assetID))
 	}
+
+	c.rearmFailedResumes(failed, gen)
 	return nil
+}
+
+// rearmFailedResumes puts the wallets whose reconnect failed back into the
+// suspended set, so the next Resume retries them. Nothing else would: a
+// disconnected wallet is invisible to the next Suspend's teardown loop,
+// connectWallets runs only on Login, and a wallet's sync monitor exits with the
+// context that reconnect was supposed to replace. Without this, one transient
+// failure - likeliest of all on a foreground, when the radio is still coming
+// back up - leaves the wallet dark for the rest of the session, with an error
+// log as the only signal.
+//
+// The generation check is the one the reconnect loop uses: if the session moved
+// on, unwindStaleResume owns these wallets and re-arming would fight it.
+//
+// Re-arming means the core stays marked suspended while the app is in the
+// foreground, which is what makes the retry reachable at all, since Resume
+// returns early when it is not. The wallets that did come back up are not
+// stranded by that: Suspend runs its teardown loop whether or not the flag is
+// already set.
+func (c *Core) rearmFailedResumes(failed []uint32, gen uint64) {
+	if len(failed) == 0 {
+		return
+	}
+
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	if c.suspendGen != gen {
+		return
+	}
+	for _, assetID := range failed {
+		c.trackSuspended(assetID)
+	}
+	c.suspended = true
+	c.log.Warnf("%d wallet(s) failed to resume; retrying on the next foreground", len(failed))
 }
 
 // unwindStaleResume reports whether the session moved on since Resume claimed
@@ -2884,12 +2969,10 @@ func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 	}
 	c.log.Infof("Session changed (%s) while resuming; unwinding %d wallets", transition, len(claimed))
 
-	tracked := make(map[uint32]bool, len(c.suspendedWallets))
-	for _, assetID := range c.suspendedWallets {
-		tracked[assetID] = true
-	}
-	// claimed is ordered tokens before network wallets (see Suspend), which is
-	// the order teardown wants too.
+	// claimed is ordered tokens before network wallets (see suspendConnected),
+	// which is the order teardown wants too. trackSuspended keeps the set we
+	// hand back in that same order rather than appending our tokens behind the
+	// interleaving Suspend's network wallets.
 	for _, assetID := range claimed {
 		w, found := c.wallet(assetID)
 		if !found {
@@ -2900,10 +2983,7 @@ func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 			continue
 		}
 		w.suspend()
-		if !tracked[assetID] {
-			c.suspendedWallets = append(c.suspendedWallets, assetID)
-			tracked[assetID] = true
-		}
+		c.trackSuspended(assetID)
 	}
 	return true
 }

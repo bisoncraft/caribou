@@ -222,6 +222,10 @@ func (w *xcWallet) Lock(timeout time.Duration) error {
 // wallet that was suspended for a mobile background pause cannot be locked at
 // logout. The cached password is process-local, though, and evicting it is the
 // whole point of the lock tier, so clear it regardless of connection state.
+//
+// Unlike Lock, this does not delegate to w.network for a token wallet. It does
+// not need to: the only caller, Logout, walks every wallet, so the network
+// wallet clears its own cached password on its own pass.
 func (w *xcWallet) clearCachedPW() {
 	w.mtx.Lock()
 	defer w.mtx.Unlock()
