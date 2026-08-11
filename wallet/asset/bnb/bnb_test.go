@@ -22,8 +22,8 @@ import (
 func TestDriverInfo(t *testing.T) {
 	drv := &Driver{}
 	info := drv.Info()
-	if info.Name != "BNB" {
-		t.Fatalf("Info.Name = %q, want %q", info.Name, "BNB")
+	if info.Name != "BNB Smart Chain" {
+		t.Fatalf("Info.Name = %q, want %q", info.Name, "BNB Smart Chain")
 	}
 	if info.BlockchainClass != asset.BlockchainClassEVM {
 		t.Fatalf("Info.BlockchainClass = %q, want %q", info.BlockchainClass, asset.BlockchainClassEVM)

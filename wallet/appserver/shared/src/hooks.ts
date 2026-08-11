@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, DependencyList } from 'react'
+import { useState, useCallback, useEffect, useRef, DependencyList } from 'react'
 import app from './application'
 import { CoreNote } from './registry'
 
@@ -8,6 +8,27 @@ import { CoreNote } from './registry'
 export function useForceUpdate (): () => void {
   const [, setTick] = useState(0)
   return useCallback(() => setTick(x => x + 1), [])
+}
+
+// useFlash drives a transient boolean — "Copied!" confirmations and similar
+// momentary feedback. flash() turns the value on and schedules the reset;
+// re-flashing restarts the window, and clear() turns it off immediately. The
+// pending reset is cancelled on unmount, so a flash right before navigation
+// can't update an unmounted component.
+export function useFlash (durationMS: number): [boolean, () => void, () => void] {
+  const [on, setOn] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timerRef.current), [])
+  const flash = useCallback(() => {
+    setOn(true)
+    clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => setOn(false), durationMS)
+  }, [durationMS])
+  const clear = useCallback(() => {
+    clearTimeout(timerRef.current)
+    setOn(false)
+  }, [])
+  return [on, flash, clear]
 }
 
 // useCoreSubscriptions registers app listeners for the component's lifetime,

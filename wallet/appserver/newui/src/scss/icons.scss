@@ -57,6 +57,30 @@ $icon-sizes: 16, 24, 32, 40, 48;
   content: "\f2dc";
 }
 
+.ico-chevron-left:before {
+  content: "\f2dd";
+}
+
+.ico-copy:before {
+  content: "\f2de";
+}
+
+.ico-edit:before {
+  content: "\f2df";
+}
+
+.ico-check:before {
+  content: "\f2e0";
+}
+
+.ico-close:before {
+  content: "\f2e1";
+}
+
+.ico-search:before {
+  content: "\f2e2";
+}
+
 .ico-key:before {
   content: "\f12b";
 }
@@ -91,10 +115,6 @@ $icon-sizes: 16, 24, 32, 40, 48;
 
 .ico-qrcode:before {
   content: "\f70b";
-}
-
-.ico-barchart:before {
-  content: "\f725";
 }
 
 .ico-eyeopen:before {

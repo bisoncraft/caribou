@@ -208,8 +208,8 @@ func TestDriverInfo(t *testing.T) {
 	d := &Driver{}
 	info := d.Info()
 
-	if info.Name != "XRP" {
-		t.Errorf("Name = %q, want %q", info.Name, "XRP")
+	if info.Name != "Ripple" {
+		t.Errorf("Name = %q, want %q", info.Name, "Ripple")
 	}
 	if info.UnitInfo.AtomicUnit != "drops" {
 		t.Errorf("AtomicUnit = %q, want \"drops\"", info.UnitInfo.AtomicUnit)

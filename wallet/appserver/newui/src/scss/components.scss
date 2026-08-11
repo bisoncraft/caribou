@@ -10,7 +10,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  background-color: var(--modal-wrapper-bg);
+  background-color: var(--surface);
 }
 
 // Dimmed scrim behind in-app modal dialogs (Receive, ActivateAsset, …).
@@ -30,7 +30,7 @@ form.modal {
 // Used by the init wizard's outer container — same shade as .forms so the
 // transition between forms screens and the wizard is seamless.
 .init-bg {
-  background-color: var(--modal-wrapper-bg);
+  background-color: var(--surface);
 }
 
 // Translucent loading overlay; sits above page content.
@@ -48,17 +48,24 @@ form.modal {
 // -----------------------------------------------------------------------
 // Logo image (rendered via CSS `content`).
 
+// The Caribou antler mark (224x160 source, 1.4:1). Brown for the warm
+// theme; the blue variant for cool and light.
 img.logo-full {
-  content: url("/img/logo-full.png");
+  content: url("/img/logo-antlers-brown.png");
 
   &.small {
     height: 25px;
-    width: 48.5px;
+    width: 35px;
   }
   &.medium {
     height: 40px;
-    width: 77.6px;
+    width: 56px;
   }
+}
+
+body[data-theme="cool"] img.logo-full,
+body[data-theme="light"] img.logo-full {
+  content: url("/img/logo-antlers-blue.png");
 }
 
 // -----------------------------------------------------------------------
@@ -96,16 +103,10 @@ img.logo-full {
 // App shell: TopBar + Sidebar.
 
 .topbar {
-  height: 80px;
-  min-height: 80px;
+  height: 64px;
+  min-height: 64px;
   background-color: var(--body-bg);
   border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-}
-
-.topbar-left {
-  width: var(--sidebar-width);
-  padding: 10px 12px;
   flex-shrink: 0;
 }
 
@@ -134,7 +135,7 @@ img.logo-full {
 
 .topbar-action-btn {
   width: 64px;
-  height: 60px;
+  height: 56px;
   gap: 4px;
   color: var(--text-grey);
   border-radius: 5px;
@@ -156,6 +157,93 @@ img.logo-full {
   width: var(--sidebar-width);
   flex-shrink: 0;
   border-right: 1px solid var(--border-color);
+  transition: width 0.25s ease;
+}
+
+// Sidebar buttons clip their label at the shrinking edge rather than
+// spilling over it (white-space: nowrap comes from the base button rule).
+// The button owns its tile background (in place of the .subtle utility) so
+// the tile can dissolve in step with the rail's width transition. Inactive
+// ink dims to text-grey; the selected item pairs full text color with an
+// accent-tinted tile (the .checkbox-row--selected idiom) on top of the
+// cursor bar.
+.sidebar-btn {
+  overflow: hidden;
+  border: none;
+  background-color: var(--btn-subtle-bg);
+  color: var(--text-grey);
+  transition: background-color 0.25s ease, padding 0.25s ease, color 0.15s ease;
+
+  &:hover {
+    color: var(--text-color);
+  }
+
+  &.selected {
+    background-color: color-mix(in srgb, var(--accent-strong) 18%, transparent);
+    color: var(--text-color);
+  }
+}
+
+// Collapsed: resting buttons drop their tiles (hover feedback and the
+// active page keep theirs) and the label-side padding shrinks to match the
+// left padding so the glyph centers in the rail.
+body.sidebar-collapsed .sidebar-btn {
+  padding-right: 0.5rem;
+
+  &:not(:hover):not(.selected) {
+    background-color: transparent;
+  }
+
+  // The icon's label-gap margin (me-3) would sit as dead space to its right
+  // once the label is hidden, skewing the icon left of the tile's center.
+  > span:first-child {
+    margin-right: 0;
+  }
+}
+
+// The collapse toggle: a quiet icon-only control at the top of the rail.
+.sidebar-toggle {
+  border: none;
+  background-color: transparent;
+  color: var(--text-grey);
+  transition: color 0.15s ease;
+
+  &:hover {
+    background-color: transparent;
+    color: var(--text-color);
+  }
+}
+
+// Labels fade with the collapse; they stay in layout (opacity, not
+// display) so the Sidebar component's max-content width measurement sees
+// them.
+.sidebar-label {
+  transition: opacity 0.2s ease;
+}
+
+body.sidebar-collapsed .sidebar-label {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar-btn,
+  .sidebar-label,
+  .sidebar-cursor {
+    transition: none;
+  }
+}
+
+// Current-page cursor: a thin bar hugging the sidebar's left edge, aligned
+// with the active nav button. top/height are set inline from measurement;
+// the transition slides it between buttons on page change.
+.sidebar-cursor {
+  position: absolute;
+  left: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background-color: var(--accent);
+  transition: top 0.2s ease, height 0.2s ease;
 }
 
 // -----------------------------------------------------------------------
@@ -166,54 +254,53 @@ img.logo-full {
   flex-direction: column;
 }
 
-.portfolio-inner {
-  max-width: 900px;
-  margin: 0 auto;
+// Centered content column shared by the main views; centering is the
+// mx-auto and w-100 utilities on the element. 900px of content plus the
+// side padding — the content column width predates the border-box reset.
+// The bottom padding gives scroll pages their end-of-scroll breathing room.
+.view-inner {
+  max-width: calc(900px + 4rem);
   padding: 2rem 2rem 4rem;
-  width: 100%;
+
+  // Settings reads better as a narrower column.
+  &.view-inner-narrow {
+    max-width: calc(640px + 4rem);
+  }
+
+  // The portfolio hero hands the page's bottom padding to
+  // .portfolio-tables. A modifier rather than the pb-0 utility: the
+  // shorthand above would beat the utility on cascade order.
+  &.view-inner-flush {
+    padding-bottom: 0;
+  }
 }
 
+// Full-width region for the asset tables; side padding matches
+// .view-inner, and the bottom padding gives the page its end-of-scroll
+// breathing room.
+.portfolio-tables {
+  padding: 0 2rem 4rem;
+}
+
+// Bottom padding mirrors .view-inner's 2rem top padding so the hero floats
+// with equal space above and below; alignment is the text-center utility
+// on the element.
 .portfolio-totals {
-  text-align: center;
-  padding: 2rem 0 1.5rem;
+  padding-bottom: 2rem;
 }
 
-.portfolio-totals-logos {
-  gap: 6px;
-  margin-bottom: 0.75rem;
-}
-
-.portfolio-totals-logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  object-fit: contain;
-}
-
+// Size and weight are the fs42 and demi utilities on the element.
 .portfolio-totals-heading {
-  font-size: 42px;
-  font-weight: var(--demi-bold);
   line-height: 1.1;
   letter-spacing: -0.01em;
 }
 
-.portfolio-totals-subtitle {
-  margin-top: 0.5rem;
-}
-
-.portfolio-totals-empty .portfolio-totals-heading {
-  font-size: 24px;
-  font-weight: normal;
-}
-
+// Stat spacing lives on the separators' margin utilities.
 .portfolio-totals-stats {
   margin-top: 0.75rem;
-  gap: 0.5rem;
 }
 
 .portfolio-stat {
-  font-size: 14px;
-  color: var(--text-grey);
   letter-spacing: 0.01em;
 }
 
@@ -224,58 +311,6 @@ img.logo-full {
   border-radius: 50%;
   background-color: var(--text-grey);
   opacity: 0.5;
-  margin: 0 0.25rem;
-}
-
-.portfolio-section-header {
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  color: var(--text-grey);
-  font-weight: var(--demi-bold);
-  padding: 2rem 0 0.5rem;
-  border-top: 1px solid var(--border-color);
-  margin-top: 2rem;
-}
-
-.portfolio-section-copy {
-  margin-bottom: 1rem;
-}
-
-// -----------------------------------------------------------------------
-// Asset pills (filter row above the asset table).
-
-.asset-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  padding: 1rem 0;
-  border-bottom: 1px solid var(--border-color);
-  margin-bottom: 0.5rem;
-}
-
-.asset-pill {
-  font-size: 12px;
-  font-weight: var(--demi-bold);
-  letter-spacing: 0.06em;
-  padding: 0.2rem 0.65rem;
-  border-radius: 20px;
-  background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-blue) 40%, transparent);
-  color: var(--accent-blue-text);
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-
-  &:hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 33%, transparent);
-    border-color: var(--accent-blue-border);
-    color: var(--accent-blue-hover);
-    cursor: pointer;
-  }
-
-  &.asset-pill-selected {
-    background-color: var(--accent-blue);
-    border-color: var(--accent-blue-border);
-    color: var(--accent-blue-strong);
-  }
 }
 
 // -----------------------------------------------------------------------
@@ -321,40 +356,34 @@ img.logo-full {
 
 // Trailing action cell with per-row Send/Receive icons.
 .asset-row-actions {
-  text-align: right;
   white-space: nowrap;
-  width: 1%; // shrink to fit content
+  // A literal column width: under table-layout: fixed a percentage is taken
+  // at face value (the auto-layout "1% shrink-to-fit" idiom does not apply),
+  // and this column must hold two 28px action buttons + 4px gap + the
+  // 0.75rem cell padding per side.
+  width: 84px;
 }
 
-// Per-row Send/Receive buttons in the portfolio asset table. Native <button>
-// resets keep the icon glyph rendering identically to the previous span
-// implementation; the .ico-* class provides the glyph via ::before.
-.asset-action-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+// Small square icon-glyph button (portfolio row actions, the Receive
+// dialog's copy control, …). Elements carry the resets and centering as
+// utilities (d-inline-flex align-items-center justify-content-center p-0
+// border-0); the .ico-* class provides the glyph via ::before. 28px sits
+// between icon-N steps: 24 crowds the 16px glyph's hover halo and 32
+// overflows the table rows this was sized for.
+.icon-btn {
   width: 28px;
   height: 28px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  border-radius: 4px;
   color: var(--text-grey);
-  cursor: pointer;
   transition: color 0.12s, background-color 0.12s;
 
   &:hover {
-    color: var(--accent-blue-hover);
-    background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
+    color: var(--accent-hover);
+    background-color: color-mix(in srgb, var(--accent-strong) 20%, transparent);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--accent-blue);
+    outline: 2px solid var(--focus);
     outline-offset: 1px;
-  }
-
-  &+.asset-action-icon {
-    margin-left: 4px;
   }
 }
 
@@ -376,43 +405,11 @@ img.logo-full {
   min-width: 0;
 }
 
-// Status indicators (parent .asset-name uses `gap: 6px` for spacing).
-.asset-status-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-// Wrapper for the inline sync spinner so it aligns with the text baseline.
+// Wrapper for the inline sync spinner so it aligns with the text baseline
+// (d-inline-flex align-items-center on the element). The parent .asset-name
+// uses `gap: 6px` for spacing.
 .asset-status-syncing-spinner {
-  display: inline-flex;
-  align-items: center;
   flex-shrink: 0;
-}
-
-.asset-status-locked {
-  color: var(--text-danger);
-  width: auto;
-  height: auto;
-}
-
-// Row highlight flash, triggered by clicking a ticker pill.
-@keyframes rowHighlight {
-  0% {
-    background-color: color-mix(in srgb, var(--accent-blue-border) 20%, transparent);
-  }
-  60% {
-    background-color: color-mix(in srgb, var(--accent-blue-border) 13%, transparent);
-  }
-  100% {
-    background-color: transparent;
-  }
-}
-
-.asset-row-highlight {
-  animation: rowHighlight 0.8s ease-out forwards;
 }
 
 // Inactive rows. The dashed bar is anchored to the leftmost cell so we
@@ -427,18 +424,18 @@ img.logo-full {
   }
 
   td:first-child {
-    border-left: 3px dashed color-mix(in srgb, var(--accent-blue-border) 40%, transparent);
+    border-left: 3px dashed color-mix(in srgb, var(--accent-border) 40%, transparent);
   }
 
   &:hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 13%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 13%, transparent);
 
     td {
       opacity: 1;
     }
 
     .asset-row-add-wallet {
-      color: var(--accent-blue-hover);
+      color: var(--accent-hover);
     }
   }
 }
@@ -450,17 +447,106 @@ img.logo-full {
 .asset-row-add-wallet {
   text-align: right;
   vertical-align: middle;
-  color: var(--accent-blue-text);
+  color: var(--accent);
   font-size: 12px;
   letter-spacing: 0.04em;
 }
 
 // -----------------------------------------------------------------------
+// Activity view.
+
+.activity-search {
+  width: 300px;
+}
+
+// Type filter pills. Resting pills are quiet outlines (fs13 grey on the
+// element); the active pill takes the accent fill (the selected-state
+// house idiom).
+.filter-pill {
+  padding: 0.25rem 0.9rem;
+  border-radius: 20px;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+
+  &:hover {
+    color: var(--text-color);
+  }
+
+  &.selected {
+    background-color: var(--accent-strong);
+    border-color: var(--accent-border);
+    color: var(--accent-contrast);
+  }
+}
+
+// Small uppercase group heading used above content sections (Activity time
+// groups, Settings cards). Size, color, weight, and padding are utilities
+// on the element (fs11 grey demi pt-3 pb-2).
+.section-label {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+// Transaction cards (row spacing is mb-2 on the element). Unconfirmed rows
+// trade the fill for a dashed outline.
+.activity-row {
+  background-color: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  transition: background-color 0.15s;
+
+  &:hover {
+    background-color: var(--surface-raised);
+  }
+}
+
+.activity-row-unconfirmed {
+  background-color: transparent;
+  border: 1px dashed var(--border-color);
+}
+
+// Circular pager buttons (chevron prev/next); sized with icon-32 p-0 on
+// the element.
+.pager-btn {
+  border-radius: 50%;
+}
+
+// Ringed transaction-type glyph at the head of each row; sized with
+// icon-32 fs14 on the element.
+.tx-type-icon {
+  flex-shrink: 0;
+  border: 1px solid var(--text-grey);
+  border-radius: 50%;
+}
+
+// -----------------------------------------------------------------------
 // Receive dialog.
 
-.receive-address {
-  word-break: break-all;
-  user-select: all;
+// Asset-picker viewport: exactly four 36px rows. The height is fixed (not
+// max-height) so the dialog doesn't resize as the search filter changes
+// the result count; overflow scrolls.
+.receive-asset-list {
+  height: 144px;
+}
+
+// The Send picker's two-line rows are 48px; same fixed-height rationale.
+.send-asset-list {
+  height: 192px;
+}
+
+// Light tile behind the QR code. Always white regardless of theme: QR
+// modules must be dark-on-light to scan reliably, and the tile doubles as
+// the quiet zone. Sized to the 132px canvas plus padding so the box holds
+// its shape while the address (and spinner) load.
+.qr-tile {
+  width: 156px;
+  height: 156px;
+  padding: 12px;
+  border-radius: 8px;
+  background-color: #ffffff;
+  // Ink for anything drawn on the tile while the code loads (spinner):
+  // fixed dark, since the tile stays white in every theme.
+  color: #333333;
 }
 
 // Seed/mnemonic display box. Only the line spacing needs a custom rule; the rest
@@ -486,17 +572,17 @@ img.logo-full {
 // Inline "Activate" button inside the Receive network picker.
 .receive-activate-btn {
   padding: 2px 10px;
-  border: 1px solid var(--accent-blue-border);
+  border: 1px solid var(--accent-border);
   border-radius: 4px;
-  color: var(--accent-blue-text);
+  color: var(--accent);
   background: transparent;
   cursor: pointer;
   white-space: nowrap;
   transition: background-color 0.15s, color 0.15s;
 
   &:hover:not(:disabled) {
-    background-color: color-mix(in srgb, var(--accent-blue) 20%, transparent);
-    color: var(--accent-blue-hover);
+    background-color: color-mix(in srgb, var(--accent-strong) 20%, transparent);
+    color: var(--accent-hover);
   }
 
   &:disabled {
@@ -532,7 +618,7 @@ img.logo-full {
   }
 
   &:focus-visible+.checkbox-pip {
-    outline: 2px solid var(--accent-blue-border);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
   }
 }
@@ -541,7 +627,7 @@ img.logo-full {
   position: absolute;
   inset: 0;
   border-radius: 5px;
-  border: 1.5px solid color-mix(in srgb, var(--accent-blue-border) 65%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--accent-border) 65%, transparent);
   background: transparent;
   display: flex;
   align-items: center;
@@ -563,8 +649,8 @@ img.logo-full {
 }
 
 .checkbox-input:checked+.checkbox-pip {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 
   .checkbox-check {
     opacity: 1;
@@ -592,11 +678,11 @@ img.logo-full {
   user-select: none;
 
   &--selected {
-    background-color: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 8%, transparent);
   }
 
   &:not(.checkbox-row--readonly):not(.checkbox-row--disabled):hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 16%, transparent);
+    background-color: color-mix(in srgb, var(--accent-strong) 16%, transparent);
   }
 
   &--readonly {
@@ -610,6 +696,119 @@ img.logo-full {
   }
 }
 
+// Toggle switch — an on/off variant of the Checkbox idiom: hidden native
+// input on top of a .toggle-track overlay.
+// Display is d-inline-block on the element.
+.toggle-wrap {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.toggle-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+  }
+
+  &:focus-visible+.toggle-track {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+}
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  background-color: var(--btn-select-or-hover-bg);
+  transition: background-color 0.15s;
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: white;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+  transition: transform 0.15s;
+}
+
+.toggle-input:checked+.toggle-track {
+  background-color: var(--accent-strong);
+
+  .toggle-knob {
+    transform: translateX(18px);
+  }
+}
+
+.toggle-input:disabled+.toggle-track {
+  opacity: 0.5;
+}
+
+// Settings page — sectioned cards of rows: title + description on the left,
+// control on the right. Section headings use .section-label; the page
+// column is .view-inner-narrow.
+.settings-card {
+  background-color: var(--surface);
+  border-radius: 8px;
+}
+
+.settings-row+.settings-row {
+  border-top: 1px solid var(--border-color);
+}
+
+// Theme picker (Settings). Each option button carries data-theme, so it
+// renders as a preview of the palette it selects — vars.scss emits every
+// palette on the bare [data-theme] attribute for exactly this. Raw tokens
+// only in here: the --btn-* aliases compute against body's palette and
+// would leak the active theme into the previews.
+.theme-picker {
+  gap: 0.5rem;
+}
+
+.theme-swatch {
+  background-color: var(--body-bg);
+  border-color: var(--border-color);
+  color: var(--text-color);
+
+  &:hover {
+    background-color: var(--body-bg);
+    border-color: var(--accent-border);
+  }
+
+  &[aria-pressed="true"],
+  &[aria-pressed="true"]:hover {
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 1px var(--accent-border);
+  }
+}
+
+.theme-swatch-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+
+  &.fill-accent {
+    background-color: var(--accent-strong);
+  }
+  &.fill-gold {
+    background-color: var(--gold);
+  }
+}
+
 // Round filled pip used to indicate "already on / enabled" status. Drops
 // in where a checkbox would otherwise sit on a read-only row, signalling
 // that the option is locked-in rather than togglable.
@@ -617,9 +816,9 @@ img.logo-full {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-syncing) 22%, transparent);
-  border: 1.5px solid color-mix(in srgb, var(--accent-syncing) 55%, transparent);
-  color: var(--accent-syncing);
+  background: color-mix(in srgb, var(--gold) 22%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  color: var(--gold);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -630,7 +829,7 @@ img.logo-full {
     width: 11px;
     height: 11px;
     fill: none;
-    stroke: var(--accent-syncing);
+    stroke: var(--gold);
     stroke-width: 3.5;
     stroke-linecap: round;
     stroke-linejoin: round;
@@ -653,7 +852,7 @@ img.logo-full {
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--accent-blue-text);
+  color: var(--accent);
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
@@ -661,11 +860,11 @@ img.logo-full {
   transition: color 0.12s;
 
   &:hover {
-    color: var(--accent-blue-hover);
+    color: var(--accent-hover);
   }
 
   &:focus-visible {
-    outline: 2px solid var(--accent-blue-border);
+    outline: 2px solid var(--focus);
     outline-offset: 2px;
   }
 }
@@ -730,10 +929,10 @@ img.logo-full {
   // A failed address validation gets an orange (warning) outline. A passing
   // one collapses to .send-addr-display, so there is no valid-state border.
   &.send-addr--invalid {
-    border-color: var(--accent-syncing);
+    border-color: var(--gold);
 
     &:focus {
-      border-color: var(--accent-syncing);
+      border-color: var(--gold);
     }
   }
 }
@@ -765,10 +964,10 @@ img.logo-full {
 
 // Clickable "Available:" / Max affordance above the amount field.
 .send-maxlink {
-  color: var(--accent-blue-text);
+  color: var(--accent);
 
   &:hover {
-    color: var(--accent-blue-hover);
+    color: var(--accent-hover);
   }
 }
 
@@ -784,11 +983,6 @@ img.logo-full {
   overflow-y: auto;
 }
 
-.networks-inner {
-  max-width: 900px;
-  padding: 2rem 2rem 4rem;
-}
-
 .networks-grid {
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 1rem;
@@ -802,17 +996,13 @@ img.logo-full {
   transition: border-color 0.15s, background-color 0.15s, transform 0.08s;
 
   &:hover {
-    border-color: var(--accent-blue-border);
-    background-color: color-mix(in srgb, var(--accent-blue) 10%, var(--form-input-bg));
+    border-color: var(--accent-border);
+    background-color: color-mix(in srgb, var(--accent-strong) 10%, var(--form-input-bg));
   }
 
   &:active {
     transform: translateY(1px);
   }
-}
-
-.network-card-header {
-  gap: 0.6rem;
 }
 
 // Dims an unactivated network's logo on its card.
@@ -857,6 +1047,32 @@ img.logo-full {
 
 // Single-network detail view.
 
+// Asset view top card.
+.asset-card {
+  background-color: var(--surface);
+  border-radius: 12px;
+}
+
+// Round icon action buttons (asset top card). Size with an .icon-N class;
+// elements carry the p-0 and border-0 resets.
+.round-btn {
+  border-radius: 50%;
+  background-color: var(--btn-select-or-hover-bg);
+  transition: background-color 0.12s;
+
+  &:hover {
+    background-color: color-mix(in srgb, var(--text-grey) 32%, transparent);
+  }
+
+  // The icon font draws ink only above the baseline, so a normal line box
+  // carries the glyph high of center. Zero line height collapses the box to
+  // the ascent/descent midpoint, which the button's flex centering then
+  // pins to the circle's true center.
+  > span {
+    line-height: 0;
+  }
+}
+
 .network-detail-header {
   gap: 0.9rem;
 }
@@ -874,27 +1090,18 @@ img.logo-full {
 .network-stat {
   padding: 0.55rem 0;
 
-  &:last-child { border-bottom: none; }
+  &:last-child {
+    border-bottom: none;
+  }
 }
 
 .network-asset-row {
   gap: 0.6rem;
   padding: 0.6rem 0;
 
-  &:last-child { border-bottom: none; }
-}
-
-// Clickable transaction rows in the asset view.
-.tx-row {
-  gap: 0.6rem;
-  padding: 0.7rem 0;
-  transition: background-color 0.12s;
-
-  &:hover {
-    background-color: color-mix(in srgb, var(--accent-blue) 10%, transparent);
+  &:last-child {
+    border-bottom: none;
   }
-
-  &:last-child { border-bottom: none; }
 }
 
 // Incoming (balance-increasing) transaction amounts.

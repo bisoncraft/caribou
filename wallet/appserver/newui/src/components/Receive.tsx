@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, FormEvent } from 'react'
-import t, { tvar } from '@caribou/shared/intl'
+import { useEffect, useLayoutEffect, useRef, useState, FormEvent } from 'react'
+import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
+import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
-import { TickerAsset, AssetVariant, networkAsset, isVariantActive } from '@caribou/shared/assets'
+import { useFlash } from '@caribou/shared/hooks'
+import { TickerAsset, AssetVariant, networkAsset, isVariantActive, compareByFiatValue } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
+import QRCode from '@caribou/shared/components/QRCode'
 import Spinner from './Spinner'
 
 // activeVariants returns the variants of a ticker whose underlying wallet
@@ -51,15 +54,50 @@ export default function Receive ({ ticker }: ReceiveProps) {
   const [address, setAddress] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, flashCopied, clearCopied] = useFlash(1500)
   // Per-variant activation state for inline Activate in step 2.
   const [activating, setActivating] = useState<number | null>(null)
   const [activateErr, setActivateErr] = useState<Record<number, string>>({})
+  const [showQR, setShowQR] = useState(false)
+  // Step-1 asset search filter.
+  const [query, setQuery] = useState('')
+  // Character budget for the address pill, from measured font metrics: the
+  // span is monospace, so capacity is its laid-out width over one glyph
+  // advance. null until measured; display falls back to a fixed truncation.
+  const [charBudget, setCharBudget] = useState<number | null>(null)
+  const addrSpanRef = useRef<HTMLSpanElement | null>(null)
   // Monotonic request ID so stale /api/depositaddress responses can't
   // overwrite a newer selection.
   const reqIDRef = useRef(0)
 
   const close = () => app.setForm({ form: '', data: {} })
+
+  // Measure the address span's capacity. The span flex-grows into the free
+  // space, so its width is independent of its (possibly truncated) content —
+  // no feedback loop. Re-measured when webfonts land, since the mono font's
+  // advance is the divisor.
+  useLayoutEffect(() => {
+    const span = addrSpanRef.current
+    if (!span) return
+    const measure = () => {
+      const style = getComputedStyle(span)
+      const ctx = document.createElement('canvas').getContext('2d')
+      if (!ctx) return // e.g. jsdom; the fixed fallback truncation applies
+      ctx.font = `${style.fontSize} ${style.fontFamily}`
+      const charW = ctx.measureText('0').width
+      if (charW > 0) setCharBudget(Math.floor(span.getBoundingClientRect().width / charW))
+    }
+    measure()
+    if (document.fonts) document.fonts.ready.then(measure)
+  }, [address])
+
+  // displayAddress fills the measured budget: the whole address when it
+  // fits, otherwise middle-truncated to exactly the capacity.
+  const displayAddress = () => {
+    if (charBudget === null) return Doc.shortenAddress(address, 10)
+    if (address.length <= charBudget) return address
+    return Doc.shortenAddress(address, Math.max(4, Math.floor((charBudget - 1) / 2)))
+  }
 
   const fetchAddress = async (v: AssetVariant) => {
     const network = networkAsset(v)
@@ -107,29 +145,23 @@ export default function Receive ({ ticker }: ReceiveProps) {
 
   const resetForBack = () => {
     reqIDRef.current++ // invalidate any in-flight request
-    setAddress(''); setErr(''); setCopied(false); setLoading(false)
+    setAddress(''); setErr(''); clearCopied(); setLoading(false); setShowQR(false)
   }
 
   const backToAssets = () => {
-    setTa(null); setVariant(null); setActivating(null); setActivateErr({}); resetForBack()
+    setTa(null); setVariant(null); setActivating(null); setActivateErr({}); setQuery(''); resetForBack()
   }
 
-  const backToNetwork = () => {
-    // Step 2 is reachable for any multi-variant ticker (active or not),
-    // since inactive variants render as inline-activate rows. Single-variant
-    // tickers skip step 2 entirely, so Back goes to step 1 there.
-    if (ta && ta.variants.length > 1) {
-      setVariant(null); resetForBack()
-    } else {
-      backToAssets()
-    }
+  // changeNetwork returns to the step-2 network picker. Only offered for
+  // multi-variant tickers; single-variant tickers have nothing to change.
+  const changeNetwork = () => {
+    setVariant(null); resetForBack()
   }
 
   const copy = async () => {
     if (!address) return
     await navigator.clipboard.writeText(address)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    flashCopied()
   }
 
   // Inline activate: fires a single-network activation from the network picker.
@@ -159,10 +191,18 @@ export default function Receive ({ ticker }: ReceiveProps) {
     await pickVariant(v)
   }
 
-  // Step 1: asset picker
+  // Step 1: asset picker. Default order mirrors the portfolio table (fiat
+  // value, descending); the search field filters by name or ticker.
   if (!ta) {
-    const list = (app.tickerList ?? []).filter(item => activeVariants(item).length > 0)
-    if (list.length === 0) {
+    const active = (app.tickerList ?? [])
+      .filter(item => activeVariants(item).length > 0)
+      .sort(compareByFiatValue)
+    const q = query.trim().toLowerCase()
+    const list = q === ''
+      ? active
+      : active.filter(item =>
+        item.name.toLowerCase().includes(q) || item.ticker.toLowerCase().includes(q))
+    if (active.length === 0) {
       return (
         <form className="modal form-width-300" onSubmit={noSubmit}>
           <header><span>{t('Receive')}</span></header>
@@ -175,8 +215,20 @@ export default function Receive ({ ticker }: ReceiveProps) {
     }
     return (
       <form className="modal form-width-300" onSubmit={noSubmit}>
-        <header><span>{t('Receive')}</span></header>
-        <div className="pb-2">
+        <header><span>{t('Select asset to receive')}</span></header>
+        <div className="px-3 pb-2">
+          <div className="d-flex align-items-center form-input-bg br5">
+            <span className="ico-search fs16 p-2" />
+            <input
+              type="text"
+              value={query}
+              placeholder={t('search')}
+              onChange={e => setQuery(e.target.value)}
+              autoFocus
+            />
+          </div>
+        </div>
+        <div className="receive-asset-list overflow-y-auto mb-2">
           {list.map(item => (
             <div key={item.ticker} className="d-flex align-items-center px-3 py-2 hoverbg pointer" onClick={() => pickAsset(item)}>
               <CoinLogo ticker={item.ticker} className="mini-icon me-2" />
@@ -184,9 +236,9 @@ export default function Receive ({ ticker }: ReceiveProps) {
               <span className="grey fs12">{item.ticker}</span>
             </div>
           ))}
-        </div>
-        <div className="flex-stretch-column p-3">
-          <button type="button" onClick={close}>{t('Cancel')}</button>
+          {list.length === 0 && (
+            <div className="px-3 py-2 grey fs14 text-center">{t('No matching assets.')}</div>
+          )}
         </div>
       </form>
     )
@@ -205,8 +257,9 @@ export default function Receive ({ ticker }: ReceiveProps) {
     return (
       <form className="modal form-width-300" onSubmit={noSubmit}>
         <header>
+          <span className="me-2">{t('Receive')}</span>
           <CoinLogo ticker={ta.ticker} className="mini-icon me-2" />
-          <span>{tvar('Receive {{ name }}', { name: ta.name })}</span>
+          <span>{ta.ticker}</span>
         </header>
         <div className="px-3 pb-2 fs14 grey text-center">{t('Choose the network to receive on.')}</div>
         <div className="pb-2">
@@ -262,29 +315,62 @@ export default function Receive ({ ticker }: ReceiveProps) {
 
   // Step 3: address display
   const netName = networkAsset(variant)?.name ?? ''
-  const netTicker = networkTicker(variant)
   return (
     <form className="modal form-width-300" onSubmit={noSubmit}>
       <header>
+        <span className="me-2">{t('Receive')}</span>
         <CoinLogo ticker={ta.ticker} className="mini-icon me-2" />
-        <span>{tvar('Receive {{ name }}', { name: ta.name })}</span>
+        <span>{ta.ticker}</span>
       </header>
       <div className="px-3 pb-2 fs14 d-flex align-items-center justify-content-center grey">
         <span className="me-2">{t('Network:')}</span>
-        <CoinLogo ticker={netTicker} className="mini-icon me-1" />
         <span>{netName}</span>
+        {ta.variants.length > 1 && (
+          <button
+            type="button"
+            className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-edit fs14 ms-1"
+            aria-label={t('Change network')}
+            onClick={changeNetwork}
+          />
+        )}
       </div>
-      <div className="px-3 pb-2 fs14 mono receive-address text-center">
-        {loading ? t('Loading...') : address}
+      <div className="mx-3 mb-2 py-1 px-2 d-flex align-items-center form-input-bg br5" title={address || undefined}>
+        {/* Clicking the address is a copy action (selection is disabled, so
+            select-to-copy is not an alternative here); the labeled copy
+            button remains the accessible control. */}
+        <span
+          ref={addrSpanRef}
+          className={`mono fs16 flex-grow-1 text-center no-select ${address !== '' ? 'pointer' : ''} ${copied ? 'accent-green' : ''}`}
+          onClick={copy}
+        >
+          {loading ? t('Loading...') : displayAddress()}
+        </span>
+        {address !== '' && (
+          <button
+            type="button"
+            className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-copy fs14 ms-2"
+            aria-label={copied ? t('Copied!') : t('Copy Address')}
+            onClick={copy}
+          />
+        )}
       </div>
       <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
-      <div className="flex-stretch-column p-3">
-        <button type="button" className="feature" onClick={copy} disabled={!address}>
-          {copied ? t('Copied!') : t('Copy Address')}
+      <div className="flex-center pb-2">
+        <button type="button" className="noborder grey fs13 d-flex align-items-center p-1"
+          onClick={() => setShowQR(!showQR)}>
+          <span className="ico-qrcode me-1" />
+          {showQR ? t('Hide QR code') : t('Show QR code')}
         </button>
-        <button type="button" className="mt-2" onClick={backToNetwork}>{t('Back')}</button>
-        <button type="button" className="mt-2" onClick={close}>{t('Close')}</button>
       </div>
+      {showQR && (
+        <div className="flex-center px-3 pb-2">
+          <div className="qr-tile flex-center">
+            {address
+              ? <QRCode data={address} size={132} />
+              : loading && <Spinner size={24} />}
+          </div>
+        </div>
+      )}
     </form>
   )
 }

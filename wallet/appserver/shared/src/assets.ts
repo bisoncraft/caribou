@@ -156,6 +156,15 @@ export function normalizedTicker (a: SupportedAsset): string {
   return a.tickerGroup || a.unitInfo.conventional.unit
 }
 
+/*
+ * compareByFiatValue orders TickerAssets by descending fiat value — the
+ * portfolio table's row order. Assets without a known rate count as zero;
+ * ties keep their original relative order (Array.prototype.sort is stable).
+ */
+export function compareByFiatValue (a: TickerAsset, b: TickerAsset): number {
+  return b.total * (b.xcRate ?? 0) - a.total * (a.xcRate ?? 0)
+}
+
 // networkID is the asset whose wallet settles a variant: the parent network for
 // tokens, the asset itself for natives. Token activation, deposit addresses and
 // fee assets all resolve through it.

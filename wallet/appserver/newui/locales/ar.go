@@ -6,9 +6,7 @@ import "github.com/bisoncraft/caribou/wallet/intl"
 
 var Ar = map[string]*intl.Translation{
 	"Unlock":  {T: "الغاء القفل"},
-	"Assets":  {T: "الأصول"},
 	"Receive": {T: "استلام"},
 	"Send":    {T: "ارسال"},
 	"Swap":    {T: "المقايضة"},
-	"Trade":   {T: "تداول"},
 }

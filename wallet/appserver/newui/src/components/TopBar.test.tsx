@@ -1,6 +1,6 @@
 import { act } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import app from '@caribou/shared/application'
 import { makeAsset, makeUser, makeWallet, resetApp } from '@caribou/shared/testUtils'
 import TopBar from './TopBar'
@@ -40,5 +40,13 @@ describe('TopBar', () => {
     unmount()
     expect(Object.keys(app.balanceUpdaters)).toHaveLength(0)
     expect(Object.keys(app.fiatRateUpdaters)).toHaveLength(0)
+  })
+
+  it('navigates to the portfolio when the logo is clicked', () => {
+    const loadPage = vi.spyOn(app, 'loadPage').mockResolvedValue()
+    render(<TopBar />)
+    fireEvent.click(screen.getByAltText('Caribou'))
+    expect(loadPage).toHaveBeenCalledWith('portfolio')
+    loadPage.mockRestore()
   })
 })

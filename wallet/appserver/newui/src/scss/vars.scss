@@ -6,49 +6,193 @@
 //    feature bg) point at them so we have one source of truth.
 //  * Numeric tokens (sizes, radii) are kept here only when reused across
 //    multiple components.
+@use "sass:list";
+@use "sass:map";
+
+// ---------------------------------------------------------------------------
+// Theme palettes.
+//
+//  * warm  — default; the Caribou warm-charcoal identity
+//            (docs/caribou-style-guide.md §2, dark column).
+//  * cool  — deep blue-slate with vivid indigo fills, sky-blue text
+//            accents, and orange in the gold slot. Anchor values are
+//            pixel-sampled from the cool-variant design mockups; the rest
+//            are derived. Unlike warm, inputs inset BELOW the surface
+//            (mockup treatment) — the surfaces sit lighter than warm's, so
+//            an ascending input step would push the AA text floor into
+//            pastels.
+//  * light — the style guide's bone-paper column. --gold is darker than the
+//            guide's #8f6410 because the app sets 12px syncing text in gold,
+//            which needs 4.5:1; the guide value only clears the 3:1
+//            large-text bar.
+//
+// Every text token clears WCAG AA 4.5:1 against every surface token in its
+// theme — enforced by scripts/contrast.js (npm run contrast), which parses
+// this file. Decorative tokens (border-color, gold-soft, scrim-bg, shadow)
+// are exempt.
+//
+// The default (warm) palette is emitted on body; the others apply via
+// body[data-theme="cool" | "light"]. Every palette is also emitted on the
+// bare [data-theme] attribute so a non-body element can scope a palette to
+// its own subtree — the theme picker's preview swatches render this way.
+$-themes: (
+  "warm": (
+    // Surfaces, darkest to lightest.
+    "body-bg": #17130d,
+    "surface": #1f1a13,
+    "surface-raised": #262019,
+    "form-input-bg": #2e2720,
+    "border-color": #3a3227,
+    "scrim-bg": rgba(black, 0.5),
+    "shadow": "0 20px 55px rgb(0 0 0 / 0.5)",
+    // Text.
+    "text-color": #f1e9da,
+    "text-grey": #b3a890,
+    "text-error": #da7b61,
+    "text-danger": #ea8a70,
+    "text-warning": #e2a253,
+    // Accents. --accent is the link/highlight text color; --accent-strong
+    // is the brand fill (pills, highlighted rows, feature buttons);
+    // --accent-contrast is text/icons on that fill.
+    "accent": #7bbf9f,
+    "accent-strong": #2c7d5c,
+    "accent-border": #4a9a75,
+    "accent-hover": #9ed3ba,
+    "accent-contrast": #ffffff,
+    "accent-green": #58b380,
+    "gold": #d9b25e,
+    "gold-soft": #e8ca86,
+  ),
+  "cool": (
+    // Surfaces: body < input < surface < raised (inputs inset, see above).
+    "body-bg": #1d242a,
+    "surface": #2b343d,
+    "surface-raised": #313b45,
+    "form-input-bg": #222a32,
+    "border-color": #3b4856,
+    "scrim-bg": rgba(black, 0.5),
+    "shadow": "0 20px 55px rgb(0 0 0 / 0.5)",
+    "text-color": #e3e8ee,
+    "text-grey": #a0a9b8,
+    "text-error": #ec8c8c,
+    "text-danger": #f19191,
+    // Amber rather than orange, so warnings stay distinct from the gold
+    // slot (which is orange in this theme).
+    "text-warning": #edb241,
+    "accent": #a5cfff,
+    "accent-strong": #2f4fe0,
+    "accent-border": #5069e5,
+    "accent-hover": #c7dfff,
+    "accent-contrast": #e3e8ee,
+    "accent-green": #6fd9a0,
+    "gold": #ff9955,
+    "gold-soft": #ffbe8f,
+  ),
+  "light": (
+    "body-bg": #f7f2e8,
+    "surface": #efe7d6,
+    "surface-raised": #fffdf7,
+    "form-input-bg": #fffdf7,
+    "border-color": #e4dac4,
+    "scrim-bg": rgba(#2c2721, 0.45),
+    "shadow": "0 18px 44px rgb(60 45 20 / 0.12)",
+    "text-color": #2c2721,
+    "text-grey": #6a6153,
+    "text-error": #a8442e,
+    "text-danger": #b53527,
+    "text-warning": #96560a,
+    "accent": #1f5a44,
+    "accent-strong": #1f5a44,
+    "accent-border": #2e6e52,
+    "accent-hover": #163f2e,
+    "accent-contrast": #ffffff,
+    "accent-green": #1e6e3d,
+    "gold": #855c0c,
+    "gold-soft": #ddbb6a,
+  ),
+);
+
+// Emits one theme's tokens. Iterates the warm map's keys, so a palette that
+// omits (or misspells) a token fails the build rather than silently
+// inheriting the default theme's value; the length check catches keys the
+// warm map doesn't have.
+@mixin -theme($name) {
+  $palette: map.get($-themes, $name);
+
+  @each $key in map.keys(map.get($-themes, "warm")) {
+    @if not map.has-key($palette, $key) {
+      @error "theme '#{$name}' is missing token --#{$key}";
+    }
+    --#{$key}: #{map.get($palette, $key)};
+  }
+  @if list.length(map.keys($palette)) != list.length(map.keys(map.get($-themes, "warm"))) {
+    @error "theme '#{$name}' defines tokens not present in the warm palette";
+  }
+}
+
 body {
-  // Sizing tokens
+  // Sizing tokens. --sidebar-width is the default (and minimum) expanded
+  // width; the Sidebar component overrides it inline with a content-measured
+  // value while expanded.
   --sidebar-width: 160px;
+  // Sized to its contents: 2×16px rail padding plus a 34px tile (8px
+  // padding, 18px icon, 8px padding), so the icon centers exactly.
+  --sidebar-collapsed-width: 66px;
   --border-radius: 4px;
-
-  // Surface colors
-  --body-bg:           #30343d;
-  --modal-wrapper-bg:  #464e5c;
-  --border-color:      #383f4b;
-  --form-input-bg:     #3c424e;
-  --scrim-bg:          #{rgba(black, 0.47)};
-
-  // Text colors
-  --text-color:   #dfe2e1;
-  --text-grey:    #999;
-  --text-error:   #ca5a5a;
-  --text-danger:  #ec6a6a;
-  --text-warning: #f82e;
-
-  // Brand accent (used by pills, highlight, inactive rows, focus ring, …)
-  --accent-blue:        #1d50b5;
-  --accent-blue-border: #4271ce;
-  --accent-blue-text:   #6fa3d8;
-  --accent-blue-hover:  #9ec4f0;
-  --accent-blue-strong: #e8f0fb;
-  --accent-syncing:     #e6a817;
-  --accent-green:       #29bb77;
-
-  // Form input focus uses the accent border.
-  --form-input-border-focus: var(--accent-blue-border);
 
   // Typography
   --sans-serif: "inter", sans-serif;
   --mono:       "mono", monospace;
   --demi-bold:  600;
 
-  // Buttons
-  --btn-border-color:               #7777;
-  --btn-hover-border-color:         #777;
-  --btn-select-or-hover-bg:         #77a4;
-  --btn-feature-bg:                 var(--accent-blue);
-  --btn-feature-hover-bg:           #176699;
-  --btn-feature-border-color:       #1e618d;
-  --btn-feature-hover-border-color: #85a5ba;
-  --btn-danger-hover-color:         white;
+  // Semantic aliases — identical in every theme; they point at theme tokens
+  // so each palette retunes them automatically.
+  --focus: var(--accent);
+  --form-input-border-focus: var(--accent-border);
+  --btn-border-color:       color-mix(in srgb, var(--text-grey) 45%, transparent);
+  --btn-hover-border-color: var(--text-grey);
+  --btn-select-or-hover-bg: color-mix(in srgb, var(--text-grey) 20%, transparent);
+  --btn-feature-bg: var(--accent-strong);
+  // Feature-button hover darkens the fill and keeps --accent-contrast text
+  // readable in every theme (style guide §6); lightening toward the accent
+  // text color fails contrast in the dark themes.
+  --btn-feature-hover-bg: color-mix(in srgb, var(--accent-strong) 86%, black);
+  --btn-feature-border-color:       transparent;
+  --btn-feature-hover-border-color: transparent;
+  --btn-danger-hover-color: white;
+  // Neutral translucent tile shared by button.subtle and the sidebar nav.
+  --btn-subtle-bg: #7772;
+
+  // color-scheme is a property, not a token, but it is intrinsically
+  // per-theme: it keys native form controls and scrollbars to the palette.
+  color-scheme: dark;
+}
+
+// Collapsed sidebar rail. The Sidebar component clears its inline
+// --sidebar-width override when collapsing so this rule can take effect.
+body.sidebar-collapsed {
+  --sidebar-width: var(--sidebar-collapsed-width);
+}
+
+// Palette emission. The body selectors theme the whole app; the bare
+// [data-theme] alternates let any element scope a palette to its own
+// subtree, which is how the theme picker's preview swatches render with
+// the palette they select. Scoped subtrees get raw tokens only — the
+// semantic aliases above compute against body's palette and do not
+// re-resolve inside a scope.
+body,
+[data-theme="warm"] {
+  @include -theme("warm");
+}
+
+body[data-theme="cool"],
+[data-theme="cool"] {
+  @include -theme("cool");
+}
+
+body[data-theme="light"],
+[data-theme="light"] {
+  color-scheme: light;
+
+  @include -theme("light");
 }

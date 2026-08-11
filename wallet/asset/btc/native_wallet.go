@@ -243,7 +243,19 @@ type NativeWallet struct {
 	// receiveTxLastQuery is the block height at which we last scanned for
 	// incoming transactions; 0 means never.
 	receiveTxLastQuery atomic.Uint64
-	syncingTxHistory   atomic.Bool
+	// scanFloor is a pending downward override for the next history scan's
+	// floor; 0 means none. Both backends normally deliver relevant
+	// transactions while they are still unmined, but delivery is not
+	// guaranteed to outrun mining: a reconnect, a lagging or restarted
+	// server, or a subscription racing a block (routine on simnet, where the
+	// harness electrumx pushes lazily and blocks mine within seconds) makes
+	// the transaction arrive as an already-mined import, which the
+	// coalescing NotificationServer reports under a block below
+	// receiveTxLastQuery. The register holds the lowest such height until a
+	// scan actually consumes it, so a trigger skipped by the
+	// syncingTxHistory guard cannot lose the regression.
+	scanFloor        atomic.Uint64
+	syncingTxHistory atomic.Bool
 	// updatingPending guards updatePendingTransactions, which is reachable both
 	// from syncTxHistory and from pendingTxLoop; without it the two could
 	// process the same pending tx concurrently and emit duplicate notes.
@@ -1019,6 +1031,15 @@ func (w *NativeWallet) blockLoop(ctx context.Context) {
 			switch {
 			case len(note.AttachedBlocks) > 0:
 				last := note.AttachedBlocks[len(note.AttachedBlocks)-1]
+				// The batch can carry transactions in blocks well below the
+				// scan cursor (see scanFloor); arm the floor with the lowest
+				// tx-bearing height so the next scan reaches them.
+				for i := range note.AttachedBlocks {
+					blk := &note.AttachedBlocks[i]
+					if len(blk.Transactions) > 0 && blk.Height > 0 {
+						w.armScanFloor(uint64(blk.Height))
+					}
+				}
 				// New block(s): advance the tip so core re-polls the balance
 				// and updates the sync height, then refresh tx history.
 				w.emit.TipChange(uint64(last.Height))
@@ -1135,12 +1156,38 @@ func (w *NativeWallet) syncTxHistory(ctx context.Context, tip uint64) {
 	w.updatePendingTransactions(ctx, tip)
 }
 
+// armScanFloor lowers the pending scan-floor override to h if it is below the
+// currently armed value (0 = none armed). See the scanFloor field docs.
+func (w *NativeWallet) armScanFloor(h uint64) {
+	for {
+		cur := w.scanFloor.Load()
+		if cur != 0 && cur <= h {
+			return
+		}
+		if w.scanFloor.CompareAndSwap(cur, h) {
+			return
+		}
+	}
+}
+
+// consumeScanFloor returns the scan floor for a scan that would otherwise
+// start from lastQuery, consuming any armed override that lowers it. An
+// override never raises the floor, and a never-scanned wallet (lastQuery 0)
+// already scans from the beginning.
+func (w *NativeWallet) consumeScanFloor(lastQuery uint64) uint64 {
+	floor := w.scanFloor.Swap(0)
+	if floor != 0 && lastQuery != 0 && floor < lastQuery {
+		return floor
+	}
+	return lastQuery
+}
+
 // scanNewTransactions queries the wallet for transactions since the last scan
 // and records any unknown ones in the txdb.
 func (w *NativeWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 	const blockQueryBuffer = 3
 
-	lastQuery := w.receiveTxLastQuery.Load()
+	lastQuery := w.consumeScanFloor(w.receiveTxLastQuery.Load())
 	var fromHeight int32
 	if lastQuery > blockQueryBuffer {
 		fromHeight = int32(lastQuery - blockQueryBuffer)

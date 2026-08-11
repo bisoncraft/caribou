@@ -114,6 +114,18 @@ type Core struct {
 	loggedIn      bool
 	multisigXPriv *hdkeychain.ExtendedKey // derived from creds.EncSeed on login
 
+	// suspendMtx guards the mobile pause/resume state. Global lock order is
+	// suspendMtx before loginMtx. See Suspend/Resume.
+	suspendMtx       sync.Mutex
+	suspended        bool
+	suspendedWallets []uint32
+	// suspendGen counts session-lifecycle transitions that invalidate an
+	// in-flight Resume: a Suspend or a Logout. Resume snapshots it, drops
+	// suspendMtx for the reconnects (which are network-bound and must not
+	// stall a concurrent Logout or Stop), and re-checks it after each one. A
+	// bump means the wallet it just reconnected is no longer wanted.
+	suspendGen uint64
+
 	seedGenerationTime uint64
 
 	newCrypter func([]byte) encrypt.Crypter
@@ -815,8 +827,13 @@ func (c *Core) unlockWallet(crypter encrypt.Crypter, wallet *xcWallet) error {
 			return newError(walletAuthErr, "failed to unlock %s wallet: %w",
 				unbip(wallet.AssetID), err)
 		}
-		// Notify new wallet state.
-		c.notify(newWalletStateNote(wallet.state()))
+		// Notify new wallet state, but only for a registered wallet. During
+		// wallet creation this runs before the wallet is added to the wallet
+		// map, and creation can still fail after this point — broadcasting
+		// here would tell clients about a wallet core may never have.
+		if _, found := c.wallet(wallet.AssetID); found {
+			c.notify(newWalletStateNote(wallet.state()))
+		}
 	}
 
 	return nil
@@ -1542,7 +1559,15 @@ func (c *Core) startWalletSyncMonitor(wallet *xcWallet) {
 					return
 				}
 			case <-wallet.connector.Done():
-				c.log.Warnf("%v wallet shut down before sync completed.", wallet.Info().Name)
+				// A mobile background pause disconnects every wallet, so an
+				// unsynced wallet lands here on every pause. That is routine,
+				// and warning about it once per pause per wallet buries the
+				// genuinely unexpected shutdown this warning is for.
+				if atomic.LoadUint32(&wallet.suspended) != 0 {
+					c.log.Debugf("%v wallet suspended before sync completed.", wallet.Info().Name)
+				} else {
+					c.log.Warnf("%v wallet shut down before sync completed.", wallet.Info().Name)
+				}
 				return
 			case <-c.ctx.Done():
 				return
@@ -2638,6 +2663,11 @@ func (c *Core) Active() bool {
 
 // Logout logs the user out
 func (c *Core) Logout() error {
+	// Lock order: suspendMtx before loginMtx (see Suspend/Resume), so that
+	// clearing the pause state below cannot deadlock against a concurrent
+	// Suspend/Resume.
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
 	c.loginMtx.Lock()
 	defer c.loginMtx.Unlock()
 
@@ -2651,24 +2681,49 @@ func (c *Core) Logout() error {
 		// before shutdown.
 		c.wg.Add(1)
 		for _, w := range c.xcWallets() {
-			if w.connected() && w.unlocked() {
-				if mw, is := w.Wallet.(asset.FundsMixer); is {
-					if stats, err := mw.FundsMixingStats(); err == nil && stats.Enabled {
-						c.log.Infof("Skipping lock for %s wallet (mixing active)", strings.ToUpper(unbip(w.AssetID)))
-						continue
-					}
+			if !w.connected() {
+				// A wallet suspended by a mobile background pause is
+				// disconnected, so it cannot be locked: xcWallet.Lock needs the
+				// connection to reach the backend. Every eviction is preceded by
+				// a pause, though, so this is the mainline mobile path, not a
+				// corner case. Shed the cached decrypted password directly,
+				// which is the key material the lock tier exists to evict.
+				w.clearCachedPW()
+				continue
+			}
+			if !w.unlocked() {
+				continue
+			}
+			if mw, is := w.Wallet.(asset.FundsMixer); is {
+				if stats, err := mw.FundsMixingStats(); err == nil && stats.Enabled {
+					c.log.Infof("Skipping lock for %s wallet (mixing active)", strings.ToUpper(unbip(w.AssetID)))
+					continue
 				}
-				symb := strings.ToUpper(unbip(w.AssetID))
-				c.log.Infof("Locking %s wallet", symb)
-				if err := w.Lock(walletLockTimeout); err != nil {
-					// A failure to lock the wallet need not block the ability to
-					// lock wallets or shutdown Core gracefully.
-					c.log.Warnf("Unable to lock %v wallet: %v", unbip(w.AssetID), err)
-				}
+			}
+			symb := strings.ToUpper(unbip(w.AssetID))
+			c.log.Infof("Locking %s wallet", symb)
+			if err := w.Lock(walletLockTimeout); err != nil {
+				// A failure to lock the wallet need not block the ability to
+				// lock wallets or shutdown Core gracefully.
+				c.log.Warnf("Unable to lock %v wallet: %v", unbip(w.AssetID), err)
 			}
 		}
 		c.wg.Done()
 	}
+
+	// Disconnect wallets so a locked, backgrounded app stops polling and its
+	// sockets close. Logout previously locked but left every wallet connected,
+	// so the radio never quieted on the escalation-tier lock. Disconnect is
+	// called unconditionally because it is idempotent and because a wallet
+	// suspended by a prior pause still needs it: Disconnect is the only caller
+	// of asset.Opener.Close, and suspend deliberately leaves xmr's wallet2
+	// instance open. Closing it here is correct since the session is ending.
+	for _, w := range c.xcWallets() {
+		w.Disconnect()
+	}
+	c.suspended = false
+	c.suspendedWallets = nil
+	c.suspendGen++
 
 	c.multisigXPriv.Zero()
 	c.multisigXPriv = nil
@@ -2676,6 +2731,181 @@ func (c *Core) Logout() error {
 	c.loggedIn = false
 
 	return nil
+}
+
+// Suspend drops every connected wallet's network connection without logging out
+// or locking, so a backgrounded mobile app stops polling and lets the radio
+// sleep while keys and the session stay resident. Resume reconnects the same
+// set. It is a no-op if not logged in or already suspended. The native shell
+// calls it (via mobile.App.Pause) after a short background grace, not on a quick
+// app switch.
+func (c *Core) Suspend() error {
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	if c.suspended {
+		return nil
+	}
+
+	c.loginMtx.Lock()
+	loggedIn := c.loggedIn
+	c.loginMtx.Unlock()
+	if !loggedIn {
+		return nil
+	}
+
+	// Suspend token wallets before their network wallets: a token's connection
+	// rides on its network wallet's context, so tear the leaves down first.
+	var tokens, networks []*xcWallet
+	for _, w := range c.xcWallets() {
+		if asset.TokenInfo(w.AssetID) != nil {
+			tokens = append(tokens, w)
+		} else {
+			networks = append(networks, w)
+		}
+	}
+
+	var suspended []uint32
+	for _, w := range append(tokens, networks...) {
+		if w.suspend() {
+			suspended = append(suspended, w.AssetID)
+			c.log.Infof("Suspended %s wallet", unbip(w.AssetID))
+		}
+	}
+
+	c.suspendedWallets = suspended
+	c.suspended = true
+	c.suspendGen++
+	return nil
+}
+
+// Resume reconnects the wallets that Suspend disconnected, restoring polling and
+// sync when the mobile app returns to the foreground. connectAndUpdateWallet
+// reconnects a token's network wallet first, refreshes balances, restarts the
+// sync monitor, and emits a WalletState note, so the foregrounded UI repaints.
+// No app password is needed: the wallets were never closed.
+//
+// A Lock/Logout while suspended clears the pause state itself, so Resume is a
+// no-op afterwards and the shell's Unlock is what reconnects. The logged-out
+// error below is therefore defensive: it only fires if some future caller
+// clears loggedIn without going through Logout.
+//
+// suspendMtx is held only to claim the suspended set, not across the reconnects
+// themselves: those are network-bound and unbounded, and Logout takes suspendMtx
+// first thing, so holding it here would let a wedged reconnect stall a lock or a
+// shutdown indefinitely. Dropping it means a Suspend or Logout can interleave, so
+// every reconnect attempt is followed by unwindStaleResume, which undoes the
+// wallets the session no longer wants. See suspendGen.
+func (c *Core) Resume() error {
+	c.suspendMtx.Lock()
+	if !c.suspended {
+		c.suspendMtx.Unlock()
+		return nil
+	}
+
+	c.loginMtx.Lock()
+	loggedIn := c.loggedIn
+	c.loginMtx.Unlock()
+
+	suspended := c.suspendedWallets
+	c.suspended = false
+	c.suspendedWallets = nil
+	// Claim this generation. Resume itself does not bump: it is restoring the
+	// state Suspend recorded, not starting a new one.
+	gen := c.suspendGen
+	c.suspendMtx.Unlock()
+
+	if !loggedIn {
+		return errors.New("cannot resume: logged out while suspended")
+	}
+
+	for _, assetID := range suspended {
+		w, found := c.wallet(assetID)
+		if !found || w.isDisabled() {
+			continue
+		}
+		// Skip a token whose network wallet was disabled while suspended; its
+		// network wallet won't reconnect, so the token can't either.
+		if token := asset.TokenInfo(assetID); token != nil {
+			if nw, ok := c.wallet(token.NetworkID); ok && nw.isDisabled() {
+				continue
+			}
+		}
+		err := c.connectAndUpdateWallet(w)
+		// Re-check before acting on err, not after: a reconnect that fails does
+		// so by burning a dial timeout, and Stop drains in-flight Resumes before
+		// cancelling the core, so the error path is exactly where continuing
+		// past a bumped generation is most expensive - one full timeout per
+		// wallet left in the set, with a termination waiting behind it.
+		if c.unwindStaleResume(suspended, gen) {
+			return nil
+		}
+		if err != nil {
+			c.log.Errorf("Unable to resume %s wallet: %v", unbip(assetID), err)
+			continue
+		}
+		c.log.Infof("Resumed %s wallet", unbip(assetID))
+	}
+	return nil
+}
+
+// unwindStaleResume reports whether the session moved on since Resume claimed
+// generation gen and, if it did, undoes the whole claimed set so Resume can
+// stop. A Suspend or Logout that interleaved already ran its own teardown loop
+// past these wallets, so anything Resume brought up is stranded: connected under
+// a Suspend that meant to quiet the radio, or alive past a Logout.
+//
+// The whole set rather than the wallet that just finished, because a single
+// connectAndUpdateWallet can bring up two: reconnecting a token connects its
+// network wallet first. Undoing only the token would leave that network wallet
+// connected and polling past the very lock meant to quiet it. The wallets Resume
+// never reached are already down and both teardowns are idempotent, so sweeping
+// the set costs nothing. Key material is not a concern in the Logout case, which
+// cleared the cached passwords before we reconnected and which reconnecting
+// cannot restore.
+//
+// How to undo depends on which transition bumped the generation. A Logout wants
+// Disconnect, which closes an asset.Opener's wallet handle. A Suspend does not:
+// leaving xmr's wallet2 instance open is the whole reason xcWallet.suspend
+// exists, so use it and hand the wallet back to the interleaving Suspend's set,
+// or the next Resume would have nothing to reconnect it from. Teardown is
+// bounded, unlike the reconnects, so it is safe to do under suspendMtx.
+func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
+	c.suspendMtx.Lock()
+	defer c.suspendMtx.Unlock()
+
+	if c.suspendGen == gen {
+		return false
+	}
+
+	transition := "logout"
+	if c.suspended {
+		transition = "suspend"
+	}
+	c.log.Infof("Session changed (%s) while resuming; unwinding %d wallets", transition, len(claimed))
+
+	tracked := make(map[uint32]bool, len(c.suspendedWallets))
+	for _, assetID := range c.suspendedWallets {
+		tracked[assetID] = true
+	}
+	// claimed is ordered tokens before network wallets (see Suspend), which is
+	// the order teardown wants too.
+	for _, assetID := range claimed {
+		w, found := c.wallet(assetID)
+		if !found {
+			continue
+		}
+		if !c.suspended {
+			w.Disconnect()
+			continue
+		}
+		w.suspend()
+		if !tracked[assetID] {
+			c.suspendedWallets = append(c.suspendedWallets, assetID)
+			tracked[assetID] = true
+		}
+	}
+	return true
 }
 
 // maxSendFeeUSD caps the estimated network fee of a mainnet send when a fiat

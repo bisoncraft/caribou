@@ -37,7 +37,7 @@ function StatusSection ({ wallet }: { wallet: WalletState }) {
   const status = wallet.synced
     ? <span className="accent-green">{t('Synced')}</span>
     : (
-      <span className="d-inline-flex align-items-center accent-syncing">
+      <span className="d-inline-flex align-items-center gold">
         <Spinner size={12} className="me-2" />
         {tvar('Syncing {{ pct }}%', { pct: String(Math.round((wallet.syncProgress ?? 0) * 100)) })}
       </span>
@@ -148,7 +148,7 @@ export default function Network ({ symbol }: NetworkParams) {
   if (!n) {
     return (
       <div className="networks-view fill-abs">
-        <div className="networks-inner mx-auto w-100">
+        <div className="view-inner mx-auto w-100">
           <BackButton onClick={back} />
           <div className="grey flex-center py-5">{t('Unknown network')}</div>
         </div>
@@ -165,7 +165,7 @@ export default function Network ({ symbol }: NetworkParams) {
 
   return (
     <div className="networks-view fill-abs">
-      <div className="networks-inner mx-auto w-100">
+      <div className="view-inner mx-auto w-100">
         <BackButton onClick={back} />
         <div className="network-detail-header d-flex align-items-center">
           <div className="fs28">{tvar('{{name}} Network', { name: n.name })}</div>

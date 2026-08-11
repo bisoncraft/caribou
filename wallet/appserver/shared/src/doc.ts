@@ -137,6 +137,17 @@ export default class Doc {
   }
 
   /*
+   * shortenAddress middle-truncates an address (or txid) for display,
+   * keeping the leading and trailing chars runs. Strings short enough to
+   * show whole are returned unchanged. Display-only — the full string
+   * should always back copy actions and the title attribute.
+   */
+  static shortenAddress (addr: string, chars = 8): string {
+    if (addr.length <= chars * 2 + 1) return addr
+    return `${addr.slice(0, chars)}…${addr.slice(-chars)}`
+  }
+
+  /*
    * formatInt formats a whole number — block heights, peer counts, fee rates —
    * with locale grouping and no decimals. Callers use this rather than their own
    * Intl.NumberFormat so the locale list stays filtered (see `languages`); an

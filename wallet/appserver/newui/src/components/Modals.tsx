@@ -1,4 +1,4 @@
-import { MouseEvent, useRef } from 'react'
+import { MouseEvent, useEffect, useRef } from 'react'
 import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
@@ -7,6 +7,7 @@ import ActivateNetwork from './ActivateNetwork'
 import TxDetail from './TxDetail'
 import { FormData } from '@caribou/shared/registry'
 import app from '@caribou/shared/application'
+import { modalBusy } from './modalBusy'
 
 interface ModalsParams {
   fd: FormData
@@ -27,8 +28,21 @@ export default function Modals ({ fd }: ModalsParams) {
   const onBackgroundClick = (e: MouseEvent) => {
     const shouldClose = downOnBackground.current && e.target === e.currentTarget
     downOnBackground.current = false
-    if (shouldClose) app.setForm({ form: '', data: {} })
+    if (shouldClose && !modalBusy()) app.setForm({ form: '', data: {} })
   }
+
+  // Escape dismisses the open dialog, matching the backdrop click. Bound only
+  // while a form is open so the listener isn't a permanent global. Both paths
+  // defer to modalBusy so a dialog that disables its Cancel mid-operation
+  // can't be dismissed around the guard.
+  useEffect(() => {
+    if (!fd.form) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !modalBusy()) app.setForm({ form: '', data: {} })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fd.form])
 
   const renderContent = () => {
     switch (fd.form) {

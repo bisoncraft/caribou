@@ -1,4 +1,4 @@
-import t, { tvar } from '@caribou/shared/intl'
+import { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { TickerAsset } from '@caribou/shared/assets'
@@ -9,7 +9,6 @@ interface AssetRowProps {
   asset: TickerAsset
   fiatRate: number
   portfolioPct: number | null
-  isHighlighted: boolean
 }
 
 function StatusDot ({ asset }: { asset: TickerAsset }) {
@@ -19,18 +18,11 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
   const wallet = app.user?.assets[primary.assetID]?.wallet
   if (!wallet) return null
 
-  // Happy path: synced and open — no dot.
-  if (wallet.synced && wallet.open) return null
-
-  if (wallet.encrypted && !wallet.open) {
-    return <span className="ico-lock-closed asset-status-dot asset-status-locked has-tip fs11" aria-label={t('Locked')} />
-  }
-
   if (!wallet.synced) {
     const pct = Math.round((wallet.syncProgress ?? 0) * 100)
     return (
       <span
-        className="asset-status-syncing-spinner has-tip accent-syncing"
+        className="asset-status-syncing-spinner d-inline-flex align-items-center has-tip gold"
         aria-label={tvar('syncing_pct', { pct: String(pct) })}
       >
         <Spinner size={10} />
@@ -41,14 +33,14 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
   return null
 }
 
-export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted }: AssetRowProps) {
+export default function AssetRow ({ asset, fiatRate, portfolioPct }: AssetRowProps) {
   const usdValue = asset.total * fiatRate
   const availFmt = Doc.formatConventionalValue(asset.avail, asset.precision)
   const pctDisplay = portfolioPct !== null ? `${portfolioPct.toFixed(1)}%` : '—'
 
   return (
     <tr
-      className={`asset-row pointer hoverbg ${isHighlighted ? 'asset-row-highlight' : ''}`}
+      className="asset-row pointer hoverbg"
       onClick={() => app.loadPage(`asset/${asset.ticker}`)}
     >
       <td className="asset-row-asset">
@@ -75,16 +67,16 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct, isHighlighted
       <td className="asset-row-num">
         {pctDisplay}
       </td>
-      <td className="asset-row-actions">
+      <td className="asset-row-actions text-right">
         <button
           type="button"
-          className="asset-action-icon has-tip ico-download fs16"
+          className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-download fs16"
           aria-label={tvar('Receive {{ ticker }}', { ticker: asset.ticker })}
           onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'receive', data: { ticker: asset.ticker } }) }}
         />
         <button
           type="button"
-          className="asset-action-icon has-tip ico-upload fs16"
+          className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-upload fs16 ms-1"
           aria-label={tvar('Send {{ ticker }}', { ticker: asset.ticker })}
           onClick={(e) => { e.stopPropagation(); app.setForm({ form: 'send', data: { ticker: asset.ticker } }) }}
         />

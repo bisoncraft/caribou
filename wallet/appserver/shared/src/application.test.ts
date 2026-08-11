@@ -1,11 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import app from './application'
 import { BalanceNote, Balance, CoreNote, TipChangeNote, WalletConfigNote, WalletNote } from './registry'
 import { makeAsset, makeUnitInfo, makeUser, makeWallet, resetApp } from './testUtils'
+import ws from './ws'
 
 function baseNote (type: string): CoreNote {
   return { type, topic: '', subject: '', details: '', severity: 0, stamp: 0, acked: false, id: '1', data: {} }
 }
+
+describe('Application.loadPage', () => {
+  beforeEach(() => {
+    resetApp()
+  })
+
+  it('routes the empty page to the portfolio', async () => {
+    let pd = app.pageData
+    app.pageLoaded = d => { pd = d }
+    await app.loadPage('')
+    expect(pd.pageRoot).toBe('portfolio')
+
+    await app.loadPage('networks/btc')
+    expect(pd.pageRoot).toBe('networks')
+    expect(pd.pageParts).toEqual(['networks', 'btc'])
+  })
+})
 
 describe('Application.notify / updateUser', () => {
   beforeEach(() => {
@@ -97,6 +115,80 @@ describe('Application.notify / updateUser', () => {
     const note: BalanceNote = { ...baseNote('balance'), assetID: 42, balance: { available: 1, immature: 0, locked: 0, stamp: '', other: {} } }
     app.notify(note)
     expect(updater).not.toHaveBeenCalled()
+  })
+})
+
+// FakeSocket stands in for window.WebSocket. close() fires onclose
+// synchronously, which is what the browser does for a refused upgrade.
+class FakeSocket {
+  static instances: FakeSocket[] = []
+  onclose: ((evt: any) => void) | null = null
+  onopen: (() => void) | null = null
+  onmessage: ((evt: any) => void) | null = null
+  onerror: ((evt: any) => void) | null = null
+
+  constructor (public url: string) { FakeSocket.instances.push(this) }
+  close () { if (this.onclose) this.onclose({ code: 1006 }) }
+  send () { /* not exercised here */ }
+}
+
+describe('Application session socket', () => {
+  // authed drives what /api/user reports, standing in for the server's session
+  // state.
+  let authed = true
+
+  beforeEach(async () => {
+    resetApp()
+    vi.useFakeTimers()
+    FakeSocket.instances = []
+    authed = true
+    ;(window as any).log = () => { /* silence ws logging */ }
+    ;(window as any).WebSocket = FakeSocket
+    ;(window as any).WebSocket.OPEN = 1
+    ws.disconnect()
+    ws.handlers = {}
+    ;(window as any).fetch = vi.fn(async (addr: string) => ({
+      status: 200,
+      json: async () => addr === '/api/user'
+        ? { user: authed ? makeUser([]) : null, inited: true, lang: app.lang, langs: [] }
+        : { revision: 'testrevision' }
+    }))
+    await app.start(() => { /* no page render */ }, () => { /* no re-render */ })
+  })
+
+  afterEach(() => {
+    ws.disconnect()
+    vi.useRealTimers()
+  })
+
+  // The server ends sessions on its own (Lock, autolock, a failed biometric
+  // Unlock), dropping the socket with it. Nothing on the client drives
+  // syncSocket in that case, so without a close handler the retry loop
+  // re-attempts an upgrade the server answers with 401 every ~10s forever.
+  it('stops reconnecting once the server has ended the session', async () => {
+    await app.fetchAppState()
+    expect(FakeSocket.instances).toHaveLength(1)
+
+    // The server tears the session down and drops the link.
+    authed = false
+    FakeSocket.instances[0].close()
+    await vi.runAllTimersAsync()
+
+    expect(ws.stopped).toBe(true)
+    expect(FakeSocket.instances).toHaveLength(1)
+  })
+
+  // The same handler must not turn an ordinary network blip into a logout, nor
+  // bypass the reconnect backoff by opening a link from inside onclose.
+  it('keeps reconnecting when the session is still live', async () => {
+    await app.fetchAppState()
+    expect(FakeSocket.instances).toHaveLength(1)
+
+    FakeSocket.instances[0].close()
+    await vi.advanceTimersByTimeAsync(11000)
+
+    expect(ws.stopped).toBe(false)
+    expect(FakeSocket.instances.length).toBeGreaterThan(1)
   })
 })
 

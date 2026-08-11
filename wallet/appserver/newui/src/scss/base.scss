@@ -1,5 +1,13 @@
 @use "mixins" as *;
 
+// Border-box everywhere: a declared width/height includes padding and
+// border. Explicit sizes below are tuned against this model.
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 // Body + root reset.
 body,
 #root {
@@ -19,7 +27,6 @@ form {
 
   border: 1px solid transparent;
   border-radius: var(--border-radius);
-  box-sizing: content-box;
 
   &.form-width-250 { width: 250px; }
   &.form-width-300 { width: 300px; }
@@ -28,7 +35,7 @@ form {
 form > header {
   @include flex-center;
 
-  padding: 1rem;
+  padding: 0.75rem 1rem 0.5rem;
   line-height: 1;
   font-size: 1.3rem;
   font-weight: var(--demi-bold);
@@ -80,7 +87,7 @@ select {
 // -----------------------------------------------------------------------
 // Buttons. The base rule provides only the neutral look — variant classes
 // (.feature, .subtle, .noborder, …) and component-scoped buttons
-// (.asset-pill, .topbar-action-btn) override naturally via specificity.
+// (.sidebar-btn, .topbar-action-btn) override naturally via specificity.
 // Do not add !important here; doing so forces every component to fight
 // back with its own !important.
 
@@ -118,7 +125,7 @@ button {
   &.noborder { border: none; }
 
   &.subtle {
-    background-color: #7772;
+    background-color: var(--btn-subtle-bg);
     border: none;
   }
 
@@ -147,6 +154,8 @@ button {
 .pointer               { cursor: pointer !important; }
 .br5                   { border-radius: 5px; }
 .break-all             { word-break: break-all; }
+.no-select             { user-select: none; }
+.mirror-x              { display: inline-block; transform: scaleX(-1); }
 .overflow-y-auto       { overflow-y: auto; }
 .o-0                   { opacity: 0; }
 .o-70                  { opacity: 0.7; }
@@ -155,9 +164,9 @@ button {
 .errcolor  { color: var(--text-error); }
 .warncolor { color: var(--text-warning); }
 
-.accent-green     { color: var(--accent-green); }
-.accent-syncing   { color: var(--accent-syncing); }
-.accent-blue-text { color: var(--accent-blue-text); }
+.accent-green { color: var(--accent-green); }
+.gold         { color: var(--gold); }
+.accent-text  { color: var(--accent); }
 
 // Styled tooltip primitive. Opt in by adding the .has-tip class; the
 // label text is read from the element's aria-label so the same attribute
@@ -177,7 +186,7 @@ button {
     bottom: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%) translateY(2px);
-    background: var(--modal-wrapper-bg);
+    background: var(--surface);
     color: var(--text-color);
     border: 1px solid var(--border-color);
     padding: 5px 8px 4px;
