@@ -275,3 +275,57 @@ func TestSendRaw(t *testing.T) {
 		}
 	}
 }
+
+// deadlineErrConn fails SetReadDeadline, the one operation Connect performs
+// before starting any goroutine.
+type deadlineErrConn struct {
+	ConnStub
+	closed int32
+}
+
+func (c *deadlineErrConn) SetReadDeadline(time.Time) error {
+	return errors.New("connection is gone")
+}
+
+func (c *deadlineErrConn) Close() error {
+	atomic.StoreInt32(&c.closed, 1)
+	return nil
+}
+
+// TestConnectDeadlineErrorReleasesLink asserts that a Connect that fails before
+// starting its goroutines leaves nothing behind. Nothing would ever run to
+// close the connection or cancel the link context afterwards, and a link left
+// reporting itself as up would silently swallow every subsequent Send into a
+// queue no one drains.
+func TestConnectDeadlineErrorReleasesLink(t *testing.T) {
+	conn := &deadlineErrConn{}
+	link := NewWSLink("127.0.0.1:0", conn, time.Second, func(*msgjson.Message) *msgjson.Error {
+		return nil
+	}, tLogger)
+
+	wg, err := link.Connect(t.Context())
+	if err == nil {
+		t.Fatal("expected a Connect error")
+	}
+	if wg != nil {
+		t.Fatal("expected no WaitGroup on a failed Connect")
+	}
+	if atomic.LoadInt32(&conn.closed) != 1 {
+		t.Fatal("the connection was not closed, leaking the socket")
+	}
+	if !link.Off() {
+		t.Fatal("link still reports itself as up after a failed Connect")
+	}
+	// The link context must be released too, so waiters do not hang and the
+	// cancel func is not left registered on the caller's context.
+	select {
+	case <-link.Done():
+	default:
+		t.Fatal("link context still live after a failed Connect")
+	}
+	// A retry must be possible: the failed attempt must not have consumed the
+	// link's one-shot on flag.
+	if err := link.Send(&msgjson.Message{}); !errors.Is(err, ErrPeerDisconnected) {
+		t.Fatalf("expected ErrPeerDisconnected from a down link, got %v", err)
+	}
+}

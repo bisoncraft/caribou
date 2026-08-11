@@ -2323,3 +2323,69 @@ func TestDomain(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckPendingApprovalsCallback verifies that a confirmed approval's
+// onConfirm callback runs before checkPendingApprovals returns, and runs without
+// approvalsMtx held. Callbacks notify core that the approval landed, and the
+// approval is deleted from pendingApprovals whether or not the callback runs, so
+// a callback detached onto its own goroutine can be dropped at shutdown and is
+// never retried. Keeping it on the caller's goroutine also keeps it inside
+// whatever lifecycle the tip-processing pass has.
+func TestCheckPendingApprovalsCallback(t *testing.T) {
+	_, w, node, shutdown := tassetWallet(BipID)
+	defer shutdown()
+
+	txHash := common.BytesToHash([]byte{0x01})
+	node.txConfirmations = map[common.Hash]uint32{txHash: 1}
+	node.txConfsErr = map[common.Hash]error{}
+
+	// The callback blocks until released, so checkPendingApprovals can only
+	// return early if the callback was detached onto its own goroutine.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var remainingDuringCallback int
+	w.pendingApprovals[common.BytesToAddress([]byte{0x02})] = &pendingApproval{
+		txHash: txHash,
+		onConfirm: func() {
+			// Taking approvalsMtx here deadlocks unless the collection loop has
+			// already released it, and the confirmed approval must already be
+			// removed by the time the callback runs.
+			w.approvalsMtx.Lock()
+			remainingDuringCallback = len(w.pendingApprovals)
+			w.approvalsMtx.Unlock()
+			close(started)
+			<-release
+		},
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		w.checkPendingApprovals()
+		close(returned)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("onConfirm was never called")
+	}
+
+	select {
+	case <-returned:
+		t.Fatal("checkPendingApprovals returned while onConfirm was still running: " +
+			"the callback is detached and can outlive wallet shutdown")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("checkPendingApprovals did not return after onConfirm completed")
+	}
+
+	if remainingDuringCallback != 0 {
+		t.Fatalf("confirmed approval not removed before onConfirm ran: %d remaining",
+			remainingDuringCallback)
+	}
+}

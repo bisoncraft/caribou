@@ -296,6 +296,43 @@ func TestDatum(t *testing.T) {
 	}
 }
 
+// TestDecodeDatumOversizedLengths asserts that a datum whose length prefixes
+// exceed the bytes actually present is rejected as an error.
+//
+// The lengths are read as varints straight off disk and then used to size
+// allocations, so an unbounded one is an out-of-range makeslice panic rather
+// than a decode error. Every caller of decodeDatum - Table.get, Iter.datum,
+// removeTableEntry - handles a decode error and none survives a panic, so the
+// difference is a returned error versus a downed process on a corrupt record.
+func TestDecodeDatumOversizedLengths(t *testing.T) {
+	// maxVarInt is 0xff followed by eight length bytes, i.e. the largest value
+	// wire.ReadVarInt will hand back.
+	maxVarInt := []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+
+	for _, tt := range []struct {
+		name string
+		blob []byte
+	}{{
+		// version 0, index count = 2^64-1, nothing following it.
+		name: "index count",
+		blob: append([]byte{0x00}, maxVarInt...),
+	}, {
+		// version 0, one index, whose length is 2^64-1.
+		name: "index length",
+		blob: append([]byte{0x00, 0x01}, maxVarInt...),
+	}, {
+		// version 0, no indexes, value length 2^64-1.
+		name: "value length",
+		blob: append([]byte{0x00, 0x00}, maxVarInt...),
+	}} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := decodeDatum(tt.blob); err == nil {
+				t.Fatalf("no error decoding datum with oversized %s", tt.name)
+			}
+		})
+	}
+}
+
 // TestEmptyValue ensures a zero-length value survives the full table
 // round-trip: Set, Get, and iteration.
 func TestEmptyValue(t *testing.T) {
@@ -658,5 +695,86 @@ func TestSetBatchIgnoresCallerTxn(t *testing.T) {
 		if err := tbl.Get(p.K, &got); err != nil {
 			t.Fatalf("entry %q missing after SetBatch (caller WithTxn leaked): %v", p.K, err)
 		}
+	}
+}
+
+// TestTableDanglingKeyMapEntry forces Table.Iterate's dangling-entry path by
+// injecting a key→DBID mapping whose row does not exist. The error has to name
+// the condition: iteration resolves rows in a second lookup, so a bare
+// ErrKeyNotFound out of a full-table scan says nothing about what is missing.
+func TestTableDanglingKeyMapEntry(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("dangling")
+	if err != nil {
+		t.Fatalf("error creating table: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("error setting: %v", err)
+	}
+
+	// Map a second key to a DBID that was never assigned a row.
+	var orphan DBID
+	orphan[0] = 0xff
+	if err := db.Update(func(txn *badger.Txn) error {
+		return txn.Set(PrefixedKey(keyToIDPrefix, PrefixedKey(tbl.prefix, []byte("orphan"))), orphan[:])
+	}); err != nil {
+		t.Fatalf("error injecting key map entry: %v", err)
+	}
+
+	err = tbl.Iterate(nil, func(it *Iter) error {
+		return it.V(func(_ []byte) error { return nil })
+	})
+	if err == nil {
+		t.Fatal("expected dangling-entry error")
+	}
+	if !strings.Contains(err.Error(), "dangling entry") {
+		t.Fatalf("error does not name the condition: %v", err)
+	}
+}
+
+// TestIndexDanglingIDMapEntry forces Iter.K's dangling-entry path by removing
+// the id→key mapping an index entry depends on. Same reasoning as
+// TestTableDanglingKeyMapEntry: K resolves the key in a second lookup, so a bare
+// ErrKeyNotFound out of an index scan says nothing about what is missing.
+func TestIndexDanglingIDMapEntry(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("danglingID")
+	if err != nil {
+		t.Fatalf("error creating table: %v", err)
+	}
+	idx, err := tbl.AddIndex("byte0", func(_, v KV) ([]byte, error) {
+		return v.([]byte)[:1], nil
+	})
+	if err != nil {
+		t.Fatalf("error adding index: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("error setting: %v", err)
+	}
+
+	// Drop the id→key mapping the index entry resolves through.
+	if err := db.Update(func(txn *badger.Txn) error {
+		dbID, err := tbl.keyID(txn, tbl.prefix, []byte("k"), true)
+		if err != nil {
+			return err
+		}
+		return txn.Delete(PrefixedKey(IdToKeyPrefix, dbID[:]))
+	}); err != nil {
+		t.Fatalf("error deleting id map entry: %v", err)
+	}
+
+	err = idx.Iterate(nil, func(it *Iter) error {
+		_, err := it.K()
+		return err
+	})
+	if err == nil {
+		t.Fatal("expected dangling-entry error")
+	}
+	if !strings.Contains(err.Error(), "dangling entry") {
+		t.Fatalf("error does not name the condition: %v", err)
 	}
 }

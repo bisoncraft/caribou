@@ -75,6 +75,13 @@ native pieces, mirroring Android's `MainActivity` + `BiometricAuth`:
   torn down), then a biometric-assisted `App.Unlock`. Normal app switching stays
   under the gate and never re-auths. Both thresholds are user-configurable from
   the SPA Settings pane (defaults: 10 min gate, 1 hour eviction).
+- **Background pause, below both tiers.** After a short grace on `.background`
+  (15s; Android uses 30s — see below), `App.Pause` drops every wallet's network
+  connection so a backgrounded phone stops polling and the radio can sleep. Keys
+  and the session stay resident, so `App.Resume` on `.active` reconnects with no
+  re-auth; a quick app switch cancels the still-pending grace and never
+  disconnects. Orthogonal to the two tiers: this restores connections, they
+  restore the session.
 - **Keychain-backed re-auth (`BiometricAuth.swift`).** The app password is stored
   as a `.biometryCurrentSet` Keychain item — released only behind Face ID /
   Touch ID, invalidated on a biometric enrollment change, device-bound and
@@ -91,13 +98,27 @@ native pieces, mirroring Android's `MainActivity` + `BiometricAuth`:
   closest iOS analog of Android's `FLAG_SECURE` for the recents thumbnail; iOS
   has no API to block user-initiated screenshots).
 
-One deliberate platform difference: unlike Android's `AlarmManager`, iOS cannot
-run a timer to evict keys at an arbitrary future time while suspended, so
-eviction is primarily the **resume-time backstop** (plus a best-effort
-background-task timer for short windows) — exactly the "best-effort, resume
-re-checks" policy the design doc calls for; an OS process-kill evicts the keys
-for free. The native lock strings are English constants (`LockStrings`); an
-`.xcstrings` catalog can follow the same i18n slice Android did.
+Two deliberate platform differences, both from the same root: iOS suspends a
+backgrounded process within seconds and only a `beginBackgroundTask` assertion
+holds it off, for ~25-30s.
+
+Unlike Android's `AlarmManager`, iOS cannot run a timer to evict keys at an
+arbitrary future time while suspended, so eviction is primarily the
+**resume-time backstop** (plus a best-effort background-task timer for short
+windows) — exactly the "best-effort, resume re-checks" policy the design doc
+calls for; an OS process-kill evicts the keys for free.
+
+The pause grace runs inside an assertion of its own (separate from eviction's,
+which does not exist at all in the gate-only configuration) and so must fit
+inside that window with room for `App.Pause` to finish under it — hence 15s
+rather than Android's 30s. The window cannot be measured and clamped to instead:
+`backgroundTimeRemaining` still reads `greatestFiniteMagnitude` when the scene
+phase turns `.background`, even with the assertion already begun. If the system
+reclaims the window first anyway, the expiration handler pauses immediately
+rather than losing the work.
+
+The native lock strings are English constants (`LockStrings`); an `.xcstrings`
+catalog can follow the same i18n slice Android did.
 
 ## XMR (Monero)
 

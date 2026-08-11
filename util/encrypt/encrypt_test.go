@@ -170,6 +170,22 @@ func TestSerialize(t *testing.T) {
 	}
 	reCheck("after trimmed salt")
 
+	// Trim the time parameter, which is push 1 and normally 4 bytes.
+	badCrypter = trimPush(copyB(serializedCrypter), 1, 1)
+	_, err = Deserialize(pw, badCrypter)
+	if err == nil {
+		t.Fatalf("no Deserialize error trimmed time parameter")
+	}
+	reCheck("after trimmed time parameter")
+
+	// Trim the memory parameter, which is push 2 and normally 4 bytes.
+	badCrypter = trimPush(copyB(serializedCrypter), 2, 1)
+	_, err = Deserialize(pw, badCrypter)
+	if err == nil {
+		t.Fatalf("no Deserialize error trimmed memory parameter")
+	}
+	reCheck("after trimmed memory parameter")
+
 	// Trim the threads parameter, which is push 3 and normally 1 byte.
 	badCrypter = trimPush(copyB(serializedCrypter), 3, 0)
 	_, err = Deserialize(pw, badCrypter)
@@ -185,6 +201,42 @@ func TestSerialize(t *testing.T) {
 		t.Fatalf("no Deserialize error trimmed tag")
 	}
 	reCheck("after trimmed tag")
+}
+
+// TestDeserializeBadParams ensures out-of-range argon2id parameters from a
+// corrupt record are rejected with an error. Key derivation runs before the
+// HMAC can reject a bad password, so a zero time or threads parameter would
+// otherwise panic inside argon2, a large time parameter would hang for the life
+// of the process, and a large memory parameter would attempt an oversized
+// allocation — taking down the app on a record it should simply refuse.
+func TestDeserializeBadParams(t *testing.T) {
+	pw := []byte("2sJqMdNbVe")
+	serializedCrypter := NewCrypter(pw).Serialize()
+
+	tests := []struct {
+		name string
+		idx  int
+		val  []byte
+	}{
+		{"zero time", 1, encode.Uint32Bytes(0)},
+		{"oversized time", 1, encode.Uint32Bytes(maxTime + 1)},
+		{"max time", 1, encode.Uint32Bytes(^uint32(0))},
+		{"oversized memory", 2, encode.Uint32Bytes(maxMem + 1)},
+		{"max memory", 2, encode.Uint32Bytes(^uint32(0))},
+		{"zero threads", 3, []byte{0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Deserialize(pw, setPush(copyB(serializedCrypter), tt.idx, tt.val)); err == nil {
+				t.Fatalf("no Deserialize error for %s", tt.name)
+			}
+		})
+	}
+
+	// A valid crypter still deserializes.
+	if _, err := Deserialize(pw, serializedCrypter); err != nil {
+		t.Fatalf("Deserialize error for unmodified crypter: %v", err)
+	}
 }
 
 func TestRandomness(t *testing.T) {
@@ -208,6 +260,19 @@ func TestRandomness(t *testing.T) {
 			t.Fatalf("decrypted %x is different that encrypted %x with password %x", reThing, thing, pw)
 		}
 	}
+}
+
+func setPush(b []byte, idx int, val []byte) []byte {
+	ver, pushes, _ := encode.DecodeBlob(b)
+	newB := encode.BuildyBytes{ver}
+	for i := range pushes {
+		if i == idx {
+			newB = newB.AddData(val)
+		} else {
+			newB = newB.AddData(pushes[i])
+		}
+	}
+	return newB
 }
 
 func trimPush(b []byte, idx, newLen int) []byte {

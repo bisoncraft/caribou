@@ -63,7 +63,7 @@ copy /Y %libDir%\build\native\x64\WebView2Loader.dll %outputDir%
 
 if defined XMR_ENABLED (
     echo Bundling XMR shared library...
-    copy /Y ..\..\asset\xmr\lib\windows-amd64\libwallet2_api_c.dll %outputDir%
+    copy /Y ..\..\asset\xmr\lib\windows-amd64\libmonero_wallet2_api_c.dll %outputDir%
 )
 
 echo The WebView2Loader.dll file should be included with caribou-desktop.exe

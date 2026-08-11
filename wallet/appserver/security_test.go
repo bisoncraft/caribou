@@ -1,13 +1,20 @@
+//go:build !live
+
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 package appserver
 
 import (
+	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestCapabilityMiddleware(t *testing.T) {
@@ -266,5 +273,194 @@ func TestResolvePassFailureDoesNotThrottle(t *testing.T) {
 	}
 	if errors.Is(err, errBadCredentials) {
 		t.Fatalf("resolvePass failure tagged as bad credentials: %v", err)
+	}
+}
+
+// TestOnionRequestNotHostDerived asserts that onion classification comes from
+// the listener the connection arrived on, not from anything the remote peer
+// sends. The hidden service relays over loopback, so a Host header (the only
+// other candidate signal) would let a remote Tor peer present itself as a
+// same-machine client and walk past every gate keyed on it: the
+// companion-pairing requirement in isAuthed and actuallyLogin, and the
+// loopback-only restriction on minting and using API tokens.
+func TestOnionRequestNotHostDerived(t *testing.T) {
+	s := &AppServer{onion: "http://caribou.onion"}
+
+	// A request off the tor listener, claiming to be loopback.
+	spoofed := httptest.NewRequest(http.MethodPost, "/api/generateapitoken", nil)
+	spoofed.Host = "127.0.0.1:5758"
+	spoofed.RemoteAddr = "127.0.0.1:44444" // the relay's loopback connection
+	spoofed = spoofed.WithContext(context.WithValue(spoofed.Context(), onionConnKey{}, true))
+
+	if !s.isOnionRequest(spoofed) {
+		t.Fatal("a tor-listener request escaped onion classification via the Host header")
+	}
+	if s.isLocalRequest(spoofed) {
+		t.Fatal("a tor-listener request was treated as same-machine")
+	}
+
+	// A genuine same-machine request, claiming to be the onion host. It must
+	// not be able to shed local status either, since that is what a local
+	// browser reaching the server by its onion name would look like.
+	direct := httptest.NewRequest(http.MethodPost, "/api/generateapitoken", nil)
+	direct.Host = "caribou.onion"
+	direct.RemoteAddr = "127.0.0.1:44445"
+
+	if s.isOnionRequest(direct) {
+		t.Fatal("a direct-listener request was classified as onion via the Host header")
+	}
+	if !s.isLocalRequest(direct) {
+		t.Fatal("a direct loopback request was not treated as same-machine")
+	}
+}
+
+// TestOnionConnContextIdentifiesTheListener exercises the comparison
+// TestOnionRequestNotHostDerived stops short of: the one that decides whether a
+// connection is tagged at all. Everything downstream reads a context value that
+// is only ever set here, so a silent mismatch between the listener's address
+// and an accepted connection's local address disables the whole protection with
+// no visible symptom — onion traffic would simply be classified as local.
+func TestOnionConnContextIdentifiesTheListener(t *testing.T) {
+	torLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer torLn.Close()
+	directLn, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer directLn.Close()
+
+	connCtx := onionConnContext(torLn.Addr().String())
+
+	tagged := func(ln net.Listener) bool {
+		client, err := net.Dial("tcp4", ln.Addr().String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer client.Close()
+		server, err := ln.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		defer server.Close()
+		return connCtx(context.Background(), server).Value(onionConnKey{}) != nil
+	}
+
+	if !tagged(torLn) {
+		t.Fatal("a connection accepted on the hidden service's listener was not tagged as onion")
+	}
+	if tagged(directLn) {
+		t.Fatal("a connection accepted on the direct listener was tagged as onion")
+	}
+}
+
+// TestWSRequiresAuth asserts that the notification websocket is gated by the
+// same session check as the /api routes. /ws streams every balance, wallet
+// state, deposit address and send notification for the life of the process, so
+// an unauthenticated upgrade hands all of it to any local process — on desktop
+// capabilityMiddleware is a no-op, so nothing else stands in the way.
+func TestWSRequiresAuth(t *testing.T) {
+	s, _, shutdown := newTServer(t, true)
+	defer shutdown()
+
+	dial := func(cookies []*http.Cookie) (*http.Response, error) {
+		hdr := http.Header{}
+		for _, c := range cookies {
+			hdr.Add("Cookie", c.String())
+		}
+		conn, resp, err := websocket.DefaultDialer.Dial("ws://"+s.addr+"/ws", hdr)
+		if conn != nil {
+			conn.Close()
+		}
+		return resp, err
+	}
+
+	// No session cookie: the upgrade must be refused outright, not merely
+	// starved of notifications.
+	resp, err := dial(nil)
+	if err == nil {
+		t.Fatal("unauthenticated /ws upgrade succeeded")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("want 401 for unauthenticated /ws, got %v (err %v)", resp, err)
+	}
+
+	// A live session token authorizes the upgrade, so the WebView still
+	// receives notifications after logging in.
+	const authToken = "00112233445566778899aabbccddeeff"
+	s.authMtx.Lock()
+	s.authTokens[authToken] = true
+	s.authMtx.Unlock()
+
+	if _, err := dial([]*http.Cookie{{Name: authCK, Value: authToken}}); err != nil {
+		t.Fatalf("authenticated /ws upgrade rejected: %v", err)
+	}
+}
+
+// TestSetCookieHttpOnly asserts the session cookies are not readable from
+// document.cookie. sessionkey decrypts the cached app password, and the
+// capability cookie in this same package already sets HttpOnly, so leaving it
+// off here is an inconsistency rather than a deliberate trade-off.
+func TestSetCookieHttpOnly(t *testing.T) {
+	for _, name := range []string{authCK, pwKeyCK} {
+		rec := httptest.NewRecorder()
+		setCookie(name, "value", rec)
+
+		cookies := rec.Result().Cookies()
+		if len(cookies) != 1 {
+			t.Fatalf("%s: want 1 cookie, got %d", name, len(cookies))
+		}
+		if !cookies[0].HttpOnly {
+			t.Errorf("%s is not HttpOnly, so script can read it", name)
+		}
+		// Secure stays off deliberately: the loopback server is HTTP-only and
+		// a Secure cookie would never be sent, breaking the WebView bootstrap.
+		if cookies[0].Secure {
+			t.Errorf("%s is Secure, which breaks the HTTP-only loopback server", name)
+		}
+	}
+}
+
+// TestLogoutDisconnectsWS asserts that ending a session drops the notification
+// sockets opened under it. /ws is authorized at upgrade and never re-checked,
+// so a link that outlived its session would keep streaming balances, wallet
+// state, deposit addresses and sends to a peer that can no longer
+// authenticate — which is exactly what Lock claims to prevent when it
+// invalidates the auth tokens.
+func TestLogoutDisconnectsWS(t *testing.T) {
+	s, _, shutdown := newTServer(t, true)
+	defer shutdown()
+
+	const authToken = "00112233445566778899aabbccddeeff"
+	s.authMtx.Lock()
+	s.authTokens[authToken] = true
+	s.authMtx.Unlock()
+
+	hdr := http.Header{}
+	hdr.Add("Cookie", (&http.Cookie{Name: authCK, Value: authToken}).String())
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+s.addr+"/ws", hdr)
+	if err != nil {
+		t.Fatalf("authenticated /ws upgrade rejected: %v", err)
+	}
+	defer conn.Close()
+
+	if err := s.Lock(); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+
+	// The peer must observe the close, not just an idle socket. A read
+	// deadline expiring means the link is still up, which is the bug.
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("socket still live after logout")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("socket left open after logout; read timed out instead of closing: %v", err)
 	}
 }

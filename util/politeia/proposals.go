@@ -703,7 +703,11 @@ func iterateIndex(db *lexi.DB, limit int, voteStatus string, f func(k, val []byt
 			if err != nil {
 				return err
 			}
-			keyB, err := keyItem.ValueCopy(nil)
+			storedKeyB, err := keyItem.ValueCopy(nil)
+			if err != nil {
+				return err
+			}
+			keyB, err := lexi.UnqualifyKey(storedKeyB)
 			if err != nil {
 				return err
 			}

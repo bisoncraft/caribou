@@ -47,6 +47,13 @@ cd "$dir"
 # are documented in wallet/android/README.md and run separately.
 env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/mobile/
 
+# The mobile build also swaps the storage engine underneath util/kvstore, from
+# Badger (util/lexi) to bbolt (util/glossi). The ./... run above only ever
+# exercises the desktop engine, so the databases built on kvstore need their
+# conformance suites run under the tag too - that is the only coverage the
+# glossi adapter and the mobile side of wallet/db and wallet/txdb get.
+env GORACE="halt_on_error=1" go test -race -short -tags mobile ./util/kvstore/ ./wallet/db/ ./wallet/txdb/
+
 # Print missing Core notification translations.
 go run ./wallet/core/localetest/main.go
 

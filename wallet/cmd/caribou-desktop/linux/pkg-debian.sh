@@ -6,8 +6,11 @@
 # turn this on for debugging, keep noise low for prod builds
 # set -ex
 
+# Sets VER from electron/package.json, among other things. VER is deliberately
+# not overridden here: DEB_NAME (the .deb filename) is computed in common.sh, so
+# a later override would put a different version in the control file than in the
+# filename.
 source linux/common.sh
-VER="1.1.0-rc2" # pre, beta, rc1, etc.
 
 # Parse flags.
 TAGS=""
@@ -54,15 +57,17 @@ rm -fr "${BUILD_DIR}"
 mkdir -p -m 0755 "${CONTROL_DIR}"
 mkdir -p "${DOT_DESKTOP_BUILDDIR}"
 
-# Build site bundle
+# Build site bundle. newui is a member of the npm workspace rooted at
+# wallet/appserver and webpack is declared at that root, so install from the
+# root and build the member (newui has no lockfile of its own).
 CWD=$(pwd)
-cd ../../appserver/newui
-npm clean-install
-npm run build
+cd ../../appserver
+npm ci
+npm run build --workspace=newui
 cd $CWD
 
 # Build caribou
-LDFLAGS="-s -w -X main.Version=${VER}${META:++${META}}"
+LDFLAGS="-s -w -X github.com/bisoncraft/caribou/wallet/app.Version=${VER}${META:++${META}}"
 GOOS=linux GOARCH=${ARCH} go build ${TAGS:+-tags ${TAGS}} -o "${BIN_BUILDPATH}" -ldflags "$LDFLAGS"
 chmod 755 "${BIN_BUILDPATH}"
 
@@ -70,14 +75,14 @@ chmod 755 "${BIN_BUILDPATH}"
 if [[ " ${TAGS} " == *" xmr "* || "${TAGS}" == "xmr" ]]; then
   XMR_LIB_DIR="${DEB_DIR}/usr/lib/caribou"
   mkdir -p "${XMR_LIB_DIR}"
-  cp "../../asset/xmr/lib/linux-${ARCH}/libwallet2_api_c.so" "${XMR_LIB_DIR}/"
+  cp "../../asset/xmr/lib/linux-${ARCH}/libmonero_wallet2_api_c.so" "${XMR_LIB_DIR}/"
 fi
 
 # Full control file specification -
 # https://www.debian.org/doc/debian-policy/ch-controlfields.html
 cat > "${CONTROL_DIR}/control" <<EOF
 Package: ${PKG}
-Version: ${VER}
+Version: ${VER_DEB}
 Architecture: ${ARCH}
 Maintainer: The Caribou Developers <briantstafford@gmail.com>
 Depends: libgtk-3-0, libwebkit2gtk-4.1-0

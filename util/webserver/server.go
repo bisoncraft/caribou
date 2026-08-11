@@ -138,6 +138,17 @@ func NewServer(cfg *RPCConfig) (*Server, error) {
 		return nil, err
 	}
 	listeners := make([]net.Listener, 0, len(cfg.ListenAddrs))
+	// Any listener already bound must be released if a later bind fails,
+	// otherwise the returned error leaves the ports held for the caller's
+	// lifetime.
+	var success bool
+	defer func() {
+		if !success {
+			for _, ln := range listeners {
+				ln.Close()
+			}
+		}
+	}()
 	parseListener := func(network, addr string) error {
 		var ln net.Listener
 		if cfg.NoTLS {
@@ -192,6 +203,7 @@ func NewServer(cfg *RPCConfig) (*Server, error) {
 	mux := chi.NewRouter()
 	mux.Use(middleware.Recoverer)
 
+	success = true
 	return &Server{
 		mux:               mux,
 		listeners:         listeners,

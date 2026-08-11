@@ -21,6 +21,11 @@ import (
 // errors.Is the same.
 var ErrKeyNotFound = badger.ErrKeyNotFound
 
+// ErrDBClosed is returned by Update once the context passed to Connect has been
+// canceled. It is an alias for badger.ErrDBClosed, which is what a write that
+// slipped through to a closed Badger would have returned anyway.
+var ErrDBClosed = badger.ErrDBClosed
+
 func convertError(err error) error {
 	switch {
 	case errors.Is(err, badger.ErrKeyNotFound):
@@ -33,10 +38,60 @@ func convertError(err error) error {
 // the ability to add indexed data.
 type DB struct {
 	*badger.DB
-	log      util.Logger
-	idSeq    *badger.Sequence
-	wg       sync.WaitGroup
-	updateWG sync.WaitGroup
+	log   util.Logger
+	idSeq *badger.Sequence
+	wg    sync.WaitGroup
+
+	// closeMtx guards closed and inFlight, and drained wakes a shutdown once
+	// the last write retires.
+	//
+	// Update registers under the mutex rather than holding it for the duration
+	// of the write. Holding a read lock across the write instead would deadlock
+	// a nested Update: Go's RWMutex blocks new readers once a writer is
+	// waiting, so a shutdown arriving mid-write would wedge the inner
+	// acquisition against the outer one that can never release. A waitgroup
+	// does not work either, since an Update that observed "not closing" could
+	// call Add after Wait had already returned zero and commit into a closing
+	// database. Counting under the same mutex that publishes closed keeps the
+	// check and the registration atomic without spanning the write.
+	closeMtx sync.Mutex
+	drained  *sync.Cond
+	closed   bool
+	inFlight int
+}
+
+// beginUpdate registers an in-flight write, or reports that the database is
+// closing and no new write may start.
+func (db *DB) beginUpdate() error {
+	db.closeMtx.Lock()
+	defer db.closeMtx.Unlock()
+	if db.closed {
+		return ErrDBClosed
+	}
+	db.inFlight++
+	return nil
+}
+
+// endUpdate retires an in-flight write, waking a shutdown waiting to drain.
+func (db *DB) endUpdate() {
+	db.closeMtx.Lock()
+	defer db.closeMtx.Unlock()
+	db.inFlight--
+	if db.inFlight == 0 {
+		db.drained.Broadcast()
+	}
+}
+
+// closeGate marks the database closed and waits for in-flight writes to retire.
+// A nested Update that starts after this point fails with ErrDBClosed, which
+// rolls its outer transaction back rather than leaving it stuck.
+func (db *DB) closeGate() {
+	db.closeMtx.Lock()
+	defer db.closeMtx.Unlock()
+	db.closed = true
+	for db.inFlight > 0 {
+		db.drained.Wait()
+	}
 }
 
 // Config is the configuration settings for the Lexi DB.
@@ -55,14 +110,22 @@ func New(cfg *Config) (*DB, error) {
 	}
 	idSeq, err := bdb.GetSequence(PrefixedKey(primarySequencePrefix, []byte{0x00}), 1000)
 	if err != nil {
+		// Close the handle before bailing, or the Badger directory lock is held
+		// for the life of the process and every retry of New on this path fails
+		// with a lock error.
+		if cerr := bdb.Close(); cerr != nil {
+			logger.Errorf("error closing badger after sequence failure: %v", cerr)
+		}
 		return nil, fmt.Errorf("error getting constructing primary sequence: %w", err)
 	}
 
-	return &DB{
+	db := &DB{
 		DB:    bdb,
 		log:   cfg.Log,
 		idSeq: idSeq,
-	}, nil
+	}
+	db.drained = sync.NewCond(&db.closeMtx)
+	return db, nil
 }
 
 // Connect starts the DB, and creates goroutines to perform shutdown when the
@@ -73,11 +136,17 @@ func (db *DB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer func() {
 			ticker.Stop()
-			db.updateWG.Wait()
+			// Refuse new writes and wait for in-flight ones, so nothing can be
+			// mid-commit when Badger closes.
+			db.closeGate()
 			if err := db.idSeq.Release(); err != nil {
 				db.log.Errorf("Error releasing sequence: %v", err)
 			}
-			db.Close()
+			// Badger reports its final memtable flush and value-log sync from
+			// Close, so an error here is unwritten data, not a cleanup nit.
+			if err := db.Close(); err != nil {
+				db.log.Errorf("Error closing database: %v", err)
+			}
 			db.wg.Done()
 		}()
 		for {
@@ -101,10 +170,19 @@ func (db *DB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 // database was ACID-compliant, this was impossible, but I guess not. Either
 // way, the solution is to try again.
 func (db *DB) Update(f func(txn *badger.Txn) error) (err error) {
-	db.updateWG.Add(1)
-	defer db.updateWG.Done()
+	if err := db.beginUpdate(); err != nil {
+		return err
+	}
+	defer db.endUpdate()
 
-	const maxRetries = 10
+	const (
+		maxRetries = 10
+		// The backoff is capped because callers wait on this synchronously,
+		// several of them (SaveNotification, NextMultisigKeyIndex, LoadPokes)
+		// while holding a shared mutex, so an uncapped doubling stalls every
+		// write queued behind the contended one.
+		maxSleep = 200 * time.Millisecond
+	)
 	sleepTime := 5 * time.Millisecond
 
 	for i := 0; i < maxRetries; i++ {
@@ -112,9 +190,14 @@ func (db *DB) Update(f func(txn *badger.Txn) error) (err error) {
 		if err == nil || !errors.Is(err, badger.ErrConflict) {
 			return err
 		}
-
-		sleepTime *= 2
+		if i == maxRetries-1 {
+			// Out of attempts. Sleeping now would only delay the error.
+			break
+		}
 		time.Sleep(sleepTime)
+		if sleepTime *= 2; sleepTime > maxSleep {
+			sleepTime = maxSleep
+		}
 	}
 
 	return err
@@ -161,19 +244,28 @@ func (db *DB) nextID() (dbID DBID, _ error) {
 	return
 }
 
-// KeyID returns the DBID for the key. This is the same DBID that will be used
-// internally for the key when datum is inserted into a Table with Set. This
-// method is provided as a tool to keep database index entries short.
-func (db *DB) KeyID(kB []byte) (dbID DBID, err error) {
-	err = db.View(func(txn *badger.Txn) error {
-		dbID, err = db.keyID(txn, kB, true)
+// KeyID returns the DBID for the key within this Table. This is the same DBID
+// that will be used internally for the key when a datum is inserted with Set.
+// This method is provided as a tool to keep database index entries short.
+func (t *Table) KeyID(kB []byte) (dbID DBID, err error) {
+	err = t.View(func(txn *badger.Txn) error {
+		dbID, err = t.keyID(txn, t.prefix, kB, true)
 		return err
 	})
 	return
 }
 
-func (db *DB) keyID(txn *badger.Txn, kB []byte, readOnly bool) (dbID DBID, err error) {
-	item, err := txn.Get(PrefixedKey(keyToIDPrefix, kB))
+// keyID resolves a table-scoped key to its DBID, assigning one if the key is
+// new and readOnly is false.
+//
+// Both maps are keyed by the table-qualified key rather than the bare user key.
+// A DBID identifies a row in one table, so the mapping has to be per-table:
+// with a flat key space two tables holding the same user key share a DBID, and
+// deleting the key from one table tears down the mapping the other still
+// depends on, orphaning its row.
+func (db *DB) keyID(txn *badger.Txn, tPrefix keyPrefix, kB []byte, readOnly bool) (dbID DBID, err error) {
+	tableKey := PrefixedKey(tPrefix, kB)
+	item, err := txn.Get(PrefixedKey(keyToIDPrefix, tableKey))
 	if err == nil {
 		err = item.Value(func(v []byte) error {
 			copy(dbID[:], v)
@@ -185,17 +277,29 @@ func (db *DB) keyID(txn *badger.Txn, kB []byte, readOnly bool) (dbID DBID, err e
 		if dbID, err = db.nextID(); err != nil {
 			return
 		}
-		if err = txn.Set(PrefixedKey(keyToIDPrefix, kB), dbID[:]); err != nil {
+		// The reverse map stores the qualified key too, so deleteDBID can
+		// reconstruct the forward key from the DBID alone. Iter.K strips the
+		// table prefix back off.
+		if err = txn.Set(PrefixedKey(keyToIDPrefix, tableKey), dbID[:]); err != nil {
 			err = fmt.Errorf("error mapping key to ID: %w", err)
-		} else if err = txn.Set(PrefixedKey(IdToKeyPrefix, dbID[:]), kB); err != nil {
+		} else if err = txn.Set(PrefixedKey(IdToKeyPrefix, dbID[:]), tableKey); err != nil {
 			err = fmt.Errorf("error mapping ID to key: %w", err)
 		}
 	}
 	return
 }
 
+// tableKeyMapPrefix is the range under which one table's key→DBID entries live.
+// Because the entries below it are ordered by user key, it is what Table.Iterate
+// walks to get key-ordered iteration with working prefix and seek.
+func tableKeyMapPrefix(tPrefix keyPrefix) []byte {
+	return PrefixedKey(keyToIDPrefix, tPrefix[:])
+}
+
 // deleteDBID deletes the id-to-key mapping and the key-to-id mapping for the
-// DBID.
+// DBID. The value under IdToKeyPrefix is the table-qualified key, which is
+// exactly the key the forward map is stored under, so the forward entry can be
+// removed without the caller passing the table prefix back in.
 func (db *DB) deleteDBID(txn *badger.Txn, dbID DBID) error {
 	idK := PrefixedKey(IdToKeyPrefix, dbID[:])
 	item, err := txn.Get(idK)

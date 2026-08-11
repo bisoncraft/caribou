@@ -65,6 +65,17 @@ func PrefixedKey(p keyPrefix, k []byte) []byte {
 	return pk
 }
 
+// UnqualifyKey strips the table qualifier from a value read out of the
+// IdToKeyPrefix map, yielding the key originally passed to Set. The map stores
+// keys table-qualified so that a DBID identifies a row in one table rather than
+// a key shared across all of them.
+func UnqualifyKey(b []byte) ([]byte, error) {
+	if len(b) < PrefixSize {
+		return nil, fmt.Errorf("stored key too small. length = %d", len(b))
+	}
+	return b[PrefixSize:], nil
+}
+
 // CloneBytes returns a copy of the given byte slice. If the input is nil or empty, it returns nil.
 func CloneBytes(b []byte) []byte {
 	if len(b) == 0 {

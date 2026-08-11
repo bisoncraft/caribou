@@ -64,7 +64,7 @@ func (t *Table) GetRaw(k KV, options ...GetOption) (b []byte, err error) {
 	}
 
 	getTxnFunc := func(txn *badger.Txn) error {
-		dbID, err := t.keyID(txn, kB, true)
+		dbID, err := t.keyID(txn, t.prefix, kB, true)
 		if err != nil {
 			return convertError(err)
 		}
@@ -167,10 +167,14 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 	for i := range setOpts {
 		setOpts[i](&opts)
 	}
-	d := &datum{v: vB, indexes: make([][]byte, 0, len(t.indexes))}
-
 	updateFunc := func(txn *badger.Txn) error {
-		dbID, err := t.keyID(txn, kB, false)
+		// Built per attempt: Update retries this closure on badger.ErrConflict,
+		// and a datum hoisted out of it would accumulate one copy of every
+		// index entry per attempt, persisting a datum whose index list grows
+		// with the retry count.
+		d := &datum{v: vB, indexes: make([][]byte, 0, len(t.indexes))}
+
+		dbID, err := t.keyID(txn, t.prefix, kB, false)
 		if err != nil {
 			return convertError(err)
 		}
@@ -271,7 +275,7 @@ func (t *Table) SetBatch(pairs []KVPair, setOpts ...SetOption) error {
 // and the id<->key mappings.
 func (t *Table) Delete(kB []byte) error {
 	return t.Update(func(txn *badger.Txn) error {
-		dbID, err := t.keyID(txn, kB, true)
+		dbID, err := t.keyID(txn, t.prefix, kB, true)
 		if err != nil {
 			return convertError(err)
 		}
@@ -312,7 +316,16 @@ func (t *Table) UseDefaultIterationOptions(optss ...IterationOption) {
 	}
 }
 
-// Iterate iterates the table.
+// Iterate iterates the table's primary keys in key order. If prefix is
+// non-empty, only keys beginning with it are visited.
+//
+// Iteration walks the table's key→DBID map rather than the table's own rows.
+// The rows are stored under the DBID, so iterating them directly would order by
+// DBID (i.e. insertion order) and match prefix and seek against DBID bytes
+// instead of the caller's keys. The key map is ordered by user key, so walking
+// it is what makes prefix, seek and reverse mean what the caller expects. The
+// DBID comes out of the entry's value, costing no more than the lookup Iter.K
+// would otherwise do.
 func (t *Table) Iterate(prefixI KV, f func(*Iter) error, iterOpts ...IterationOption) error {
-	return t.iterate(t.prefix, t, t.defaultIterationOptions, false, prefixI, f, iterOpts...)
+	return t.iterate(tableKeyMapPrefix(t.prefix), t, t.defaultIterationOptions, false, prefixI, f, iterOpts...)
 }

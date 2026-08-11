@@ -4,8 +4,8 @@ set -e
 
 cd "$(dirname "$0")"
 
-# For release, remove pre-release info, and set metadata to "release".
-VER="1.1.0-rc2" # pre, beta, rc1, etc.
+# package.json is the single source of the desktop version (see pkg.sh).
+VER="$(node -p "require('./package.json').version")" # pre, beta, rc1, etc.
 META="release.local" # "release"
 CARIBOU_EXE="caribou"
 
@@ -22,13 +22,13 @@ export CGO_ENABLED=${CGO_ENABLED:-0}
 export GOWORK=off
 
 # if META set, append "+${META}", otherwise nothing.
-LDFLAGS_BASE="-buildid= -s -w -X main.Version=${VER}${META:++${META}}"
+LDFLAGS_BASE="-buildid= -s -w -X github.com/bisoncraft/caribou/wallet/app.Version=${VER}${META:++${META}}"
 
 #Build the webpack bundle prior to building the appserver package, which embeds
 # the files.
-pushd ../../../../wallet/appserver/newui
+pushd ../../../../wallet/appserver
 npm ci
-npm run build
+npm run build --workspace=newui
 popd
 
 pushd ..
@@ -47,12 +47,12 @@ popd
 # Bundle XMR shared library if building with XMR support.
 if [[ " ${TAGS_CARIBOU} " == *" xmr "* || "${TAGS_CARIBOU}" == "xmr" ]]; then
   XMRARCH=$(go env GOARCH)
-  cp "../../../../wallet/asset/xmr/lib/darwin-${XMRARCH}/libwallet2_api_c.dylib" "../resources/mac/"
+  cp "../../../../wallet/asset/xmr/lib/darwin-${XMRARCH}/libmonero_wallet2_api_c.dylib" "../resources/mac/"
   # macOS requires ad-hoc signing when linking against an unsigned dynamic
   # library, and downloaded files may have quarantine attributes.
   if [[ "$(uname)" == "Darwin" ]]; then
-    xattr -dr com.apple.quarantine "../resources/mac/libwallet2_api_c.dylib" 2>/dev/null || true
-    codesign -f -s - "../resources/mac/libwallet2_api_c.dylib"
+    xattr -dr com.apple.quarantine "../resources/mac/libmonero_wallet2_api_c.dylib" 2>/dev/null || true
+    codesign -f -s - "../resources/mac/libmonero_wallet2_api_c.dylib"
     codesign -f -s - "../resources/mac/${CARIBOU_EXE}"
   fi
 fi

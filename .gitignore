@@ -43,8 +43,9 @@ wallet/cmd/translationsreport/translationsreport
 wallet/cmd/translationsreport/worksheets
 wallet/cmd/verifymm/verifymm
 wallet/asset/xmr/lib/*/libmonero_wallet2_api_c*
-# monero_c checkout used by build-ios.sh (built out-of-tree, dropped into lib/).
-wallet/asset/xmr/.monero_c-ios/
+# monero_c checkouts used by build-ios.sh / build-darwin.sh (built out-of-tree,
+# dropped into lib/). Tens of GB of toolchain + SDK build intermediates.
+wallet/asset/xmr/.monero_c-*/
 wallet/asset/xmr/cmd/mkjson/mkjson
 wallet/asset/btc/electrum/example/server/server
 wallet/asset/btc/electrum/example/wallet/wallet
@@ -73,7 +74,9 @@ wallet/android/app/src/main/jniLibs/*/*.so
 wallet/asset/xmr/lib/*/libc++_shared.so
 wallet/android/app/src/main/jniLibs/*/libc++_shared.so
 
-# dnldd's local workflow files (notes, reviews, harness scripts) - not for commit
+# dnldd's local workflow files (notes, reviews, harness scripts) - not for commit.
+# The directories are anchored to the repo root; CLAUDE.md is deliberately not,
+# since per-package guides live at any depth.
 CLAUDE.md
 reviews/
 scripts/
@@ -81,6 +84,7 @@ scripts/
 # scripts (contrast validation).
 !wallet/appserver/newui/scripts/
 notes/
+/design/
 
 # harness test wallet directories
 wallet/asset/btc/regtest/

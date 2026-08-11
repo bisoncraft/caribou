@@ -77,7 +77,7 @@ docker build -t caribou-desktop-windows --build-arg XMR=1 -f wallet/cmd/caribou-
 mkdir -p build && docker run --rm caribou-desktop-windows tar -cf - -C /out . | tar -xf - -C ./build
 ```
 
-The `build/` directory will contain `caribou-desktop.exe`, `WebView2Loader.dll`, `libwinpthread-1.dll`, and `libwallet2_api_c.dll` if XMR was enabled.
+The `build/` directory will contain `caribou-desktop.exe`, `WebView2Loader.dll`, `libwinpthread-1.dll`, and `libmonero_wallet2_api_c.dll` if XMR was enabled.
 
 ### Packaging the MSI on Windows
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -53,13 +54,25 @@ type xcWallet struct {
 	network           *xcWallet
 	connectMtx        sync.Mutex
 
+	// monitored is nonzero while a startWalletSyncMonitor goroutine is watching
+	// sync status. It is accessed atomically rather than under mtx.
+	monitored uint32
+
+	// suspended is nonzero from a suspend until the next Connect, so the sync
+	// monitor can tell a background pause from an unexpected shutdown when its
+	// connector context is cancelled. Atomic rather than under mtx, and read
+	// from here rather than from Core.suspended: Core.Suspend holds suspendMtx
+	// while connector.Disconnect cancels the context that wakes the monitor, so
+	// having the monitor reach for suspendMtx would add a lock-ordering edge for
+	// the sake of a log line.
+	suspended uint32
+
 	mtx        sync.RWMutex
 	encPass    []byte // empty means wallet not password protected
 	balance    *WalletBalance
 	pw         encode.PassBytes
 	address    string
-	peerCount  int32  // -1 means no count yet
-	monitored  uint32 // startWalletSyncMonitor goroutines monitoring sync status
+	peerCount  int32 // -1 means no count yet
 	hookedUp   bool
 	syncStatus *asset.SyncStatus
 	disabled   bool
@@ -201,6 +214,19 @@ func (w *xcWallet) Lock(timeout time.Duration) error {
 		w.pw = nil
 	}
 	return err
+}
+
+// clearCachedPW zeroes and drops the cached decrypted wallet password without
+// touching the wallet backend. Lock is the normal way to shed this, but it
+// requires a live connection (the backend lock is an RPC on most assets), so a
+// wallet that was suspended for a mobile background pause cannot be locked at
+// logout. The cached password is process-local, though, and evicting it is the
+// whole point of the lock tier, so clear it regardless of connection state.
+func (w *xcWallet) clearCachedPW() {
+	w.mtx.Lock()
+	defer w.mtx.Unlock()
+	w.pw.Clear()
+	w.pw = nil
 }
 
 // unlocked will only return true if both the wallet backend is unlocked and we
@@ -378,6 +404,10 @@ func (w *xcWallet) Connect() error {
 		return nil
 	}
 
+	// A fresh connection ends any prior suspend, whether or not this is the
+	// Resume that follows one.
+	atomic.StoreUint32(&w.suspended, 0)
+
 	// No parent context; use Disconnect instead. Also note that there's no
 	// reconnect loop for wallet like with the server Connectors, so we use
 	// ConnectOnce so that the ConnectionMaster's On method will report false.
@@ -444,6 +474,32 @@ func (w *xcWallet) Disconnect() {
 	if err := opener.Close(); err != nil {
 		w.log.Errorf("Unable to close wallet: %v", err)
 	}
+}
+
+// suspend drops the wallet's network connection the way Disconnect does, but
+// deliberately leaves an asset.Opener wallet open so it can be reconnected later
+// without the app password. It is the connection half of a mobile background
+// pause: connector.Disconnect cancels the wallet's context, stopping its tickers
+// and closing its sockets, while the wallet handle (and for xmr the open wallet2
+// instance) stays resident. Returns whether the wallet was connected, so the
+// caller knows to reconnect it on resume. xmr is the only asset.Opener, so for
+// every other asset this is exactly Disconnect minus the Close it would skip
+// anyway. Takes connectMtx to serialize against Connect.
+func (w *xcWallet) suspend() bool {
+	w.connectMtx.Lock()
+	defer w.connectMtx.Unlock()
+
+	if w.isDisabled() || !w.connected() {
+		return false
+	}
+	// Set before the Disconnect that wakes the sync monitor, so the monitor
+	// sees it.
+	atomic.StoreUint32(&w.suspended, 1)
+	w.connector.Disconnect()
+	w.mtx.Lock()
+	w.hookedUp = false
+	w.mtx.Unlock()
+	return true
 }
 
 // rescan will initiate a rescan of the wallet if the asset.Wallet

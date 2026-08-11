@@ -71,11 +71,22 @@ func decodeDatum(blob []byte) (*datum, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading number of indexes: %w", err)
 	}
+	// Every index entry costs at least one byte (its own length varint), so a
+	// count larger than what is left in the buffer is corrupt. Bounding it
+	// before allocating keeps a bad length prefix an error rather than an
+	// out-of-range makeslice panic, which the callers are not written to
+	// survive.
+	if nIndexes > uint64(b.Len()) {
+		return nil, fmt.Errorf("index count %d exceeds remaining datum length %d", nIndexes, b.Len())
+	}
 	d.indexes = make([][]byte, nIndexes)
 	for i := 0; i < int(nIndexes); i++ {
 		indexLen, err := wire.ReadVarInt(b, 0)
 		if err != nil {
 			return nil, fmt.Errorf("error reading index length: %w", err)
+		}
+		if indexLen > uint64(b.Len()) {
+			return nil, fmt.Errorf("index length %d exceeds remaining datum length %d", indexLen, b.Len())
 		}
 		d.indexes[i] = make([]byte, indexLen)
 		if _, err := io.ReadFull(b, d.indexes[i]); err != nil {
@@ -85,6 +96,9 @@ func decodeDatum(blob []byte) (*datum, error) {
 	valueLen, err := wire.ReadVarInt(b, 0)
 	if err != nil {
 		return nil, fmt.Errorf("error reading value var int: %w", err)
+	}
+	if valueLen > uint64(b.Len()) {
+		return nil, fmt.Errorf("value length %d exceeds remaining datum length %d", valueLen, b.Len())
 	}
 	d.v = make([]byte, valueLen)
 	if _, err := io.ReadFull(b, d.v); err != nil {

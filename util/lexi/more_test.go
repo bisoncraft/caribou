@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -172,11 +173,11 @@ func TestKeyID(t *testing.T) {
 	if err := tbl.Set(k, &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	id1, err := db.KeyID(k)
+	id1, err := tbl.KeyID(k)
 	if err != nil {
 		t.Fatalf("KeyID: %v", err)
 	}
-	id2, err := db.KeyID(k)
+	id2, err := tbl.KeyID(k)
 	if err != nil {
 		t.Fatalf("KeyID again: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestKeyID(t *testing.T) {
 	if err := tbl.Set(k2, &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set k2: %v", err)
 	}
-	id3, err := db.KeyID(k2)
+	id3, err := tbl.KeyID(k2)
 	if err != nil {
 		t.Fatalf("KeyID k2: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestKeyID(t *testing.T) {
 		t.Fatalf("distinct keys produced the same id %v", id1)
 	}
 	// KeyID is read-only, so an unknown key must surface the badger error.
-	if _, err := db.KeyID([]byte("not-there")); err == nil {
+	if _, err := tbl.KeyID([]byte("not-there")); err == nil {
 		t.Fatal("expected error for unknown key")
 	}
 }
@@ -270,7 +271,9 @@ func TestIterEntry(t *testing.T) {
 		t.Fatalf("index Entry = %x, want 42", indexEntry)
 	}
 
-	// Table iteration's Entry returns the DBID bytes (DBIDSize long).
+	// Table iteration's Entry yields the primary key. It used to expose the
+	// internal DBID, which was an artifact of rows being stored under the DBID
+	// rather than anything a caller could use.
 	var tableEntry []byte
 	if err := tbl.Iterate(nil, func(it *Iter) error {
 		return it.Entry(func(b []byte) error {
@@ -280,8 +283,8 @@ func TestIterEntry(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("table Iterate: %v", err)
 	}
-	if len(tableEntry) != DBIDSize {
-		t.Fatalf("table Entry length = %d, want %d", len(tableEntry), DBIDSize)
+	if !bytes.Equal(tableEntry, []byte("k1")) {
+		t.Fatalf("table Entry = %q, want %q", tableEntry, "k1")
 	}
 }
 
@@ -562,7 +565,7 @@ func TestIterDatumDecodeError(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := db.KeyID([]byte("k"))
+	dbID, err := tbl.KeyID([]byte("k"))
 	if err != nil {
 		t.Fatalf("KeyID: %v", err)
 	}
@@ -592,7 +595,7 @@ func TestSetReplaceCorruptOldDatum(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := db.KeyID([]byte("k"))
+	dbID, err := tbl.KeyID([]byte("k"))
 	if err != nil {
 		t.Fatalf("KeyID: %v", err)
 	}
@@ -619,7 +622,7 @@ func TestDeleteCorruptDatum(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := db.KeyID([]byte("k"))
+	dbID, err := tbl.KeyID([]byte("k"))
 	if err != nil {
 		t.Fatalf("KeyID: %v", err)
 	}
@@ -674,5 +677,58 @@ func TestGetRawWithTxn(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("View: %v", err)
+	}
+}
+
+// TestTableIterateDeleteDuringIteration covers Iter.Delete under WithUpdate on
+// a table.
+//
+// Table iteration walks the key→DBID map, and Iter.Delete removes that very
+// entry along with the row, so the cursor is mutating the range it is walking.
+// Badger iterates a consistent snapshot, which is what makes this safe; the
+// test pins that, since a cursor that skipped or repeated entries here would
+// silently leave rows behind on any bulk delete.
+func TestTableIterateDeleteDuringIteration(t *testing.T) {
+	db, _ := newTestDB(t)
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	for _, k := range []string{"a", "b", "c", "d"} {
+		if err := tbl.Set([]byte(k), &tValue{v: []byte("v")}, WithReplace()); err != nil {
+			t.Fatalf("Set %s: %v", k, err)
+		}
+	}
+
+	collect := func(opts ...IterationOption) []string {
+		t.Helper()
+		var got []string
+		if err := tbl.Iterate(nil, func(it *Iter) error {
+			k, err := it.K()
+			if err != nil {
+				return err
+			}
+			got = append(got, string(k))
+			if s := string(k); s == "b" || s == "c" {
+				if len(opts) > 0 {
+					return it.Delete()
+				}
+			}
+			return nil
+		}, opts...); err != nil {
+			t.Fatalf("Iterate: %v", err)
+		}
+		return got
+	}
+
+	// Every key is visited even though two are deleted mid-walk.
+	if got := collect(WithUpdate()); !slices.Equal(got, []string{"a", "b", "c", "d"}) {
+		t.Fatalf("visited %v, want [a b c d]", got)
+	}
+	if got := collect(); !slices.Equal(got, []string{"a", "d"}) {
+		t.Fatalf("remaining %v, want [a d]", got)
+	}
+	if _, err := tbl.GetRaw([]byte("b")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("GetRaw of deleted key = %v, want ErrKeyNotFound", err)
 	}
 }

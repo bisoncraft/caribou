@@ -1,3 +1,4 @@
+const path = require('path');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
@@ -6,7 +7,7 @@ const appleCredentials = process.env.APPLE_ID && process.env.APPLE_PASSWORD && p
 module.exports = {
   packagerConfig: {
     name: 'Caribou',
-    appBundleId: 'com.caribou.desktop',
+    appBundleId: 'com.bisoncraft.caribou.desktop',
     extraResource: ['../resources/'+require('./utils.js').getPlatform()],
     icon: '../src/caribou.icns',
     appVersion: require('./package.json').version,
@@ -22,7 +23,23 @@ module.exports = {
       InternalName: 'Caribou'
     },
     ...(appleCredentials ? {
-      osxSign: {},
+      // Developer ID (outside the App Store) signing. The identity is
+      // auto-discovered from the "Developer ID Application" cert in the login
+      // keychain, unless APPLE_IDENTITY pins one — set it (to the cert's SHA-1,
+      // say) when the keychain holds more than one such cert, otherwise the
+      // name is a prefix match and codesign fails as ambiguous. pkg.sh signs
+      // the .dmg with the same variable. optionsForFile applies Hardened
+      // Runtime + entitlements to the app and every nested Mach-O it re-signs
+      // (Electron helpers, the bundled Go `caribou` binary, and the XMR
+      // libmonero_wallet2_api_c.dylib) — all three are required for the notary
+      // service to accept the build.
+      osxSign: {
+        ...(process.env.APPLE_IDENTITY ? { identity: process.env.APPLE_IDENTITY } : {}),
+        optionsForFile: () => ({
+          hardenedRuntime: true,
+          entitlements: path.join(__dirname, 'entitlements.plist'),
+        }),
+      },
       osxNotarize: {
         appleId: process.env.APPLE_ID,
         appleIdPassword: process.env.APPLE_PASSWORD,
@@ -45,13 +62,15 @@ module.exports = {
       },
     },
     {
-      name: '@electron-forge/maker-dmg',
-      config: {
-        format: 'ULFO',
-        name: 'Caribou',
-        icon: '../src/caribou.icns',
-        overwrite: true,
-      }
+      // NOTE: the .dmg is built by hdiutil in pkg.sh, not by @electron-forge/
+      // maker-dmg. maker-dmg pulls in appdmg -> macos-alias, whose native addon
+      // (volume.node) no longer compiles against modern Node — its bundled `nan`
+      // calls V8 APIs (SetPrototype/WriteUtf8/AccessControl/...) that current V8
+      // has removed. maker-zip keeps `npm run make` working on darwin for
+      // dev/test (produces a .zip of the .app); pkg.sh produces the signed,
+      // notarized .dmg for release.
+      name: '@electron-forge/maker-zip',
+      platforms: ['darwin'],
     },
     {
       name: '@electron-forge/maker-deb',

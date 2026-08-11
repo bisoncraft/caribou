@@ -106,6 +106,9 @@ func decodeCredentials_v0(pushes [][]byte) (*PrimaryCredentials, error) {
 	if len(pushes) != 5 {
 		return nil, fmt.Errorf("decodeCredentials_v0: expected 5 pushes, got %d", len(pushes))
 	}
+	if len(pushes[4]) != 8 {
+		return nil, fmt.Errorf("decodeCredentials_v0: birthday push is supposed to be length 8. got %d", len(pushes[4]))
+	}
 	return &PrimaryCredentials{
 		EncSeed:        pushes[0],
 		EncInnerKey:    pushes[1],
@@ -138,7 +141,12 @@ func decodeAssetBalance(b []byte) (*asset.Balance, error) {
 
 func decodeAssetBalance_v0(pushes [][]byte) (*asset.Balance, error) {
 	if len(pushes) != 3 {
-		return nil, fmt.Errorf("decodeBalance_v0: expected 3 push, got %d", len(pushes))
+		return nil, fmt.Errorf("decodeAssetBalance_v0: expected 3 push, got %d", len(pushes))
+	}
+	for i, push := range pushes {
+		if len(push) != 8 {
+			return nil, fmt.Errorf("decodeAssetBalance_v0: push %d is supposed to be length 8. got %d", i, len(push))
+		}
 	}
 	return &asset.Balance{
 		Available: intCoder.Uint64(pushes[0]),
@@ -176,6 +184,9 @@ func DecodeBalance(b []byte) (*Balance, error) {
 func decodeBalance_v0(pushes [][]byte) (*Balance, error) {
 	if len(pushes) != 2 {
 		return nil, fmt.Errorf("decodeBalance_v0: expected 2 pushes, got %d", len(pushes))
+	}
+	if len(pushes[1]) != 8 {
+		return nil, fmt.Errorf("decodeBalance_v0: stamp push is supposed to be length 8. got %d", len(pushes[1]))
 	}
 	bal, err := decodeAssetBalance(pushes[0])
 	if err != nil {
@@ -373,6 +384,9 @@ func decodeNotification_v0(pushes [][]byte) (*Notification, error) {
 	}
 	if len(pushes[3]) != 1 {
 		return nil, fmt.Errorf("decodeNotification_v0: severity push is supposed to be length 1. got %d", len(pushes[3]))
+	}
+	if len(pushes[4]) != 8 {
+		return nil, fmt.Errorf("decodeNotification_v0: timestamp push is supposed to be length 8. got %d", len(pushes[4]))
 	}
 
 	return &Notification{

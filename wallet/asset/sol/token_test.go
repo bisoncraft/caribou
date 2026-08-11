@@ -71,20 +71,35 @@ func TestTokenWalletDepositAddress(t *testing.T) {
 	}
 }
 
-// TestTokenMetaTableNameDistinctPerAsset guards against the scan-cursor
-// collision bug: token wallets share their parent network's NetworkTxDB,
-// whose Table namespacing is per-network only, so a fixed "meta" table name
-// for every token (and the native wallet's own "meta" table) would collide
-// and cause native/usdc/usdt to overwrite each other's
-// lastScannedSignature cursor.
-func TestTokenMetaTableNameDistinctPerAsset(t *testing.T) {
-	usdc := tokenMetaTableName(usdcTokenID)
-	usdt := tokenMetaTableName(usdtTokenID)
-	if usdc == usdt {
-		t.Fatalf("usdc and usdt token meta tables must differ, both = %q", usdc)
+// TestMetaKeyDistinctPerAsset guards against the scan-cursor collision bug.
+// The native wallet and every token wallet on this network share one meta
+// table, and they all store the same field names, so the asset scope in the
+// key is the only thing keeping native/usdc/usdt from overwriting each other's
+// lastScannedSignature cursor. A collision here would not error: one wallet
+// would silently resume from another's cursor and report wrong history.
+func TestMetaKeyDistinctPerAsset(t *testing.T) {
+	native := metaKey(BipID, lastScannedSigField)
+	usdc := metaKey(usdcTokenID, lastScannedSigField)
+	usdt := metaKey(usdtTokenID, lastScannedSigField)
+
+	for _, c := range []struct {
+		a, b []byte
+		desc string
+	}{
+		{usdc, usdt, "usdc vs usdt"},
+		{usdc, native, "usdc vs native"},
+		{usdt, native, "usdt vs native"},
+	} {
+		if bytes.Equal(c.a, c.b) {
+			t.Errorf("%s meta keys collide, both = %x", c.desc, c.a)
+		}
 	}
-	if usdc == metaTableName || usdt == metaTableName {
-		t.Fatalf("token meta table must differ from the native wallet's %q", metaTableName)
+
+	// Distinct fields for one asset must also not collide, and the asset scope
+	// must not bleed into the next field: a same-length field name sharing a
+	// prefix is the case a naive concatenation gets wrong.
+	if bytes.Equal(metaKey(usdcTokenID, beforeCursorField), metaKey(usdcTokenID, backfillUntilField)) {
+		t.Error("distinct fields for one asset collide")
 	}
 }
 
@@ -336,4 +351,57 @@ func TestTokenWalletCheckPendingTxs(t *testing.T) {
 			t.Fatalf("tx should not have been stored while still within its valid window, got %d stored", len(db.stored))
 		}
 	})
+}
+
+// TestSharedMetaTableCursorsDoNotCollide exercises the accessors themselves,
+// not just the key builder: the native wallet and two token wallets all share
+// one meta table, so a token accessor that scoped its key to BipID instead of
+// its own asset ID would compile, pass TestMetaKeyDistinctPerAsset, and still
+// clobber the native cursor.
+//
+// The failure it guards against is silent. A wallet that reads back another
+// asset's signature resumes its scan from the wrong point in the chain and
+// reports incomplete or foreign transaction history, with no error anywhere.
+func TestSharedMetaTableCursorsDoNotCollide(t *testing.T) {
+	table := newMockTable()
+
+	native := newTestWallet("nativeAddr", nil, nil, table)
+	usdc := newTestTokenWallet(t, nil, nil)
+	usdc.metaTable = table
+	usdt := newTestTokenWallet(t, nil, nil)
+	usdt.assetID = usdtTokenID
+	usdt.metaTable = table
+
+	if err := native.setLastScannedSignature("native-sig"); err != nil {
+		t.Fatalf("native set: %v", err)
+	}
+	if err := usdc.setLastScannedSignature("usdc-sig"); err != nil {
+		t.Fatalf("usdc set: %v", err)
+	}
+	if err := usdt.setLastScannedSignature("usdt-sig"); err != nil {
+		t.Fatalf("usdt set: %v", err)
+	}
+
+	for _, c := range []struct {
+		name string
+		get  func() (string, error)
+		want string
+	}{
+		{"native", native.getLastScannedSignature, "native-sig"},
+		{"usdc", usdc.getLastScannedSignature, "usdc-sig"},
+		{"usdt", usdt.getLastScannedSignature, "usdt-sig"},
+	} {
+		got, err := c.get()
+		if err != nil {
+			t.Fatalf("%s get: %v", c.name, err)
+		}
+		if got != c.want {
+			t.Errorf("%s cursor = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// Three assets, three rows: no wallet overwrote another's.
+	if len(table.data) != 3 {
+		t.Errorf("meta table holds %d rows, want 3", len(table.data))
+	}
 }

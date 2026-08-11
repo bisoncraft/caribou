@@ -181,8 +181,13 @@ func (c *WSLink) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// are not set.
 	c.quit = quit
 	c.stopped = make(chan struct{}) // control signal to block send
-	err := c.conn.SetReadDeadline(time.Now().Add(c.pingPeriod * 2))
-	if err != nil {
+	if err := c.conn.SetReadDeadline(time.Now().Add(c.pingPeriod * 2)); err != nil {
+		// No goroutine was started, so nothing else will ever cancel the
+		// context, close the connection, or flip c.on back off. Releasing the
+		// link here keeps the failed attempt from leaking the socket and from
+		// leaving Send queueing into a channel no one drains.
+		c.stop()
+		c.conn.Close()
 		return nil, fmt.Errorf("failed to set initial read deadline for %v: %w", c.addr, err)
 	}
 
