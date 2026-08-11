@@ -50,7 +50,8 @@ core-level feature rather than a NEAR-wallet feature.
   identities from public keys with no registration; an ECDSA key yields an
   0x-style identity whose withdrawals are signed with ERC-191. The key
   lives entirely outside the repo; only the derived identity string
-  appears in configuration (`intentsFeeRecipient`, empty until release).
+  appears in configuration (`intentsFeeRecipient`,
+  `0x4bda081527f14e5ecb9a2fd7703759897c2860a6`).
   Accrued fees are swept periodically in bulk, paying bridge costs once
   per sweep; sweep cadence bounds the accrued fees' exposure to verifier and
   bridge custody risk. Any funded NEAR account can submit a sweep —
