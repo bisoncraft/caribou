@@ -159,7 +159,7 @@ func (w *TokenWallet) Balance() (*asset.Balance, error) {
 }
 
 func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
-	raw, err := w.parent.rpc.callFunction(w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
+	raw, err := w.parent.rpc.callFunction(w.parent.ctx, w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return 0, fmt.Errorf("ft_balance_of: %w", err)
 	}
@@ -177,7 +177,7 @@ func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
 // storageRegistered reports whether accountID is registered to hold this
 // token, per storage_balance_of.
 func (w *TokenWallet) storageRegistered(accountID string) (bool, error) {
-	raw, err := w.parent.rpc.callFunction(w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
+	raw, err := w.parent.rpc.callFunction(w.parent.ctx, w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return false, fmt.Errorf("storage_balance_of: %w", err)
 	}
@@ -286,7 +286,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	txID := base58.Encode(hash[:])
 
-	if _, err := w.parent.rpc.broadcastTxAsync(encoded); err != nil {
+	if _, err := w.parent.rpc.broadcastTxAsync(w.parent.ctx, encoded); err != nil {
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}
 

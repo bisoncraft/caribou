@@ -5,6 +5,7 @@ package near
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"io"
@@ -105,6 +106,7 @@ func makeTokenTestWallet(t *testing.T, m *mockNearRPC) *TokenWallet {
 		t.Fatalf("ed25519.GenerateKey: %v", err)
 	}
 	parent := &NearWallet{
+		ctx:       context.Background(),
 		pubKey:    pub,
 		privKey:   priv,
 		accountID: "sender.near",
@@ -209,7 +211,7 @@ func TestReserveNonceAdvancesPastPending(t *testing.T) {
 		// test, simulating a transaction still pending inclusion.
 		return map[string]any{"nonce": uint64(5)}, nil
 	})
-	w := &NearWallet{rpc: m.client()}
+	w := &NearWallet{ctx: context.Background(), rpc: m.client()}
 
 	n1, err := w.reserveNonce()
 	if err != nil {

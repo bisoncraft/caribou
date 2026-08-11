@@ -6,6 +6,7 @@
 package near
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -77,7 +78,7 @@ func manualTestRPC(t *testing.T) *rpcClient {
 
 func manualLatestBlockHash(t *testing.T, rpc *rpcClient) [32]byte {
 	t.Helper()
-	info, err := rpc.getBlock("final")
+	info, err := rpc.getBlock(context.Background(), "final")
 	if err != nil {
 		t.Fatalf("getBlock: %v", err)
 	}
@@ -97,7 +98,7 @@ func manualLatestBlockHash(t *testing.T, rpc *rpcClient) [32]byte {
 // tolerate a lagging view. This harness has no such tracking, so it side
 // steps the lag by reading the freshest (optimistic) value instead.
 func manualViewAccessKeyOptimistic(rpc *rpcClient, accountID, pubKeyBase58 string) (*accessKeyInfo, error) {
-	result, err := rpc.call("query", map[string]interface{}{
+	result, err := rpc.call(context.Background(), "query", map[string]interface{}{
 		"request_type": "view_access_key",
 		"finality":     "optimistic",
 		"account_id":   accountID,
@@ -149,7 +150,7 @@ func manualSubmit(t *testing.T, rpc *rpcClient, signerAccountID string, signerPu
 	// including them in a block. That's sandbox-only test-setup plumbing;
 	// the actual Send() call under test still goes through the real
 	// production async path.
-	result, err := rpc.call("broadcast_tx_commit", []string{encoded})
+	result, err := rpc.call(context.Background(), "broadcast_tx_commit", []string{encoded})
 	if err != nil {
 		t.Fatalf("broadcast_tx_commit: %v", err)
 	}
@@ -169,7 +170,7 @@ func manualSubmit(t *testing.T, rpc *rpcClient, signerAccountID string, signerPu
 // real NEAR mainnet/testnet nodes, so this is a sandbox-only workaround, not
 // a production bug.
 func manualTxStatus(rpc *rpcClient, txHash, senderID string) (*txResult, error) {
-	result, err := rpc.call("tx", []string{txHash, senderID})
+	result, err := rpc.call(context.Background(), "tx", []string{txHash, senderID})
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +193,7 @@ func deployContractAction(code []byte) action {
 
 func manualFtBalance(t *testing.T, rpc *rpcClient, contractID, accountID string) uint64 {
 	t.Helper()
-	raw, err := rpc.callFunction(contractID, "ft_balance_of", map[string]string{"account_id": accountID})
+	raw, err := rpc.callFunction(context.Background(), contractID, "ft_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		t.Fatalf("ft_balance_of(%s): %v", accountID, err)
 	}

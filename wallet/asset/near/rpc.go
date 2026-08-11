@@ -83,7 +83,7 @@ func (e *rpcError) Error() string {
 	return fmt.Sprintf("NEAR RPC error %d: %s: %s", e.Code, e.Message, e.Data)
 }
 
-func (c *rpcClient) call(method string, params interface{}) (json.RawMessage, error) {
+func (c *rpcClient) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	reqBody := jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      "meshwallet",
@@ -96,7 +96,13 @@ func (c *rpcClient) call(method string, params interface{}) (json.RawMessage, er
 		return nil, fmt.Errorf("error marshaling request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(c.endpoint, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("error creating RPC request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error posting RPC request: %w", err)
 	}
@@ -129,8 +135,8 @@ type accountInfo struct {
 	BlockHash   string `json:"block_hash"`
 }
 
-func (c *rpcClient) viewAccount(accountID string) (*accountInfo, error) {
-	result, err := c.call("query", map[string]interface{}{
+func (c *rpcClient) viewAccount(ctx context.Context, accountID string) (*accountInfo, error) {
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "view_account",
 		"finality":     "final",
 		"account_id":   accountID,
@@ -145,8 +151,8 @@ func (c *rpcClient) viewAccount(accountID string) (*accountInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) viewAccountAt(accountID string, blockHeight uint64) (*accountInfo, error) {
-	result, err := c.call("query", map[string]interface{}{
+func (c *rpcClient) viewAccountAt(ctx context.Context, accountID string, blockHeight uint64) (*accountInfo, error) {
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "view_account",
 		"block_id":     blockHeight,
 		"account_id":   accountID,
@@ -168,8 +174,8 @@ type accessKeyInfo struct {
 	BlockHash   string `json:"block_hash"`
 }
 
-func (c *rpcClient) viewAccessKey(accountID string, pubKeyBase58 string) (*accessKeyInfo, error) {
-	result, err := c.call("query", map[string]interface{}{
+func (c *rpcClient) viewAccessKey(ctx context.Context, accountID string, pubKeyBase58 string) (*accessKeyInfo, error) {
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "view_access_key",
 		"finality":     "final",
 		"account_id":   accountID,
@@ -187,12 +193,12 @@ func (c *rpcClient) viewAccessKey(accountID string, pubKeyBase58 string) (*acces
 
 // callFunction invokes a read-only ("view") contract method and returns its
 // raw JSON-encoded return value.
-func (c *rpcClient) callFunction(contractID, methodName string, args interface{}) (json.RawMessage, error) {
+func (c *rpcClient) callFunction(ctx context.Context, contractID, methodName string, args interface{}) (json.RawMessage, error) {
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling args: %w", err)
 	}
-	result, err := c.call("query", map[string]interface{}{
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "call_function",
 		"finality":     "final",
 		"account_id":   contractID,
@@ -242,8 +248,8 @@ type chunkTransaction struct {
 	Actions    []txAction `json:"actions"`
 }
 
-func (c *rpcClient) getBlock(finality string) (*blockInfo, error) {
-	result, err := c.call("block", map[string]interface{}{
+func (c *rpcClient) getBlock(ctx context.Context, finality string) (*blockInfo, error) {
+	result, err := c.call(ctx, "block", map[string]interface{}{
 		"finality": finality,
 	})
 	if err != nil {
@@ -256,8 +262,8 @@ func (c *rpcClient) getBlock(finality string) (*blockInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) getBlockByHash(blockHash string) (*blockInfo, error) {
-	result, err := c.call("block", map[string]interface{}{
+func (c *rpcClient) getBlockByHash(ctx context.Context, blockHash string) (*blockInfo, error) {
+	result, err := c.call(ctx, "block", map[string]interface{}{
 		"block_id": blockHash,
 	})
 	if err != nil {
@@ -270,8 +276,8 @@ func (c *rpcClient) getBlockByHash(blockHash string) (*blockInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) getBlockByHeight(height uint64) (*blockInfo, error) {
-	result, err := c.call("block", map[string]interface{}{
+func (c *rpcClient) getBlockByHeight(ctx context.Context, height uint64) (*blockInfo, error) {
+	result, err := c.call(ctx, "block", map[string]interface{}{
 		"block_id": height,
 	})
 	if err != nil {
@@ -284,8 +290,8 @@ func (c *rpcClient) getBlockByHeight(height uint64) (*blockInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) getChunk(chunkHash string) (*chunkInfo, error) {
-	result, err := c.call("chunk", map[string]interface{}{
+func (c *rpcClient) getChunk(ctx context.Context, chunkHash string) (*chunkInfo, error) {
+	result, err := c.call(ctx, "chunk", map[string]interface{}{
 		"chunk_id": chunkHash,
 	})
 	if err != nil {
@@ -350,8 +356,8 @@ func (r *txResult) transferAmount() uint64 {
 	return total
 }
 
-func (c *rpcClient) broadcastTxAsync(signedTxBase64 string) (string, error) {
-	result, err := c.call("broadcast_tx_async", []string{signedTxBase64})
+func (c *rpcClient) broadcastTxAsync(ctx context.Context, signedTxBase64 string) (string, error) {
+	result, err := c.call(ctx, "broadcast_tx_async", []string{signedTxBase64})
 	if err != nil {
 		return "", err
 	}
@@ -362,8 +368,8 @@ func (c *rpcClient) broadcastTxAsync(signedTxBase64 string) (string, error) {
 	return txHash, nil
 }
 
-func (c *rpcClient) txStatus(txHash, senderID string) (*txResult, error) {
-	result, err := c.call("tx", map[string]interface{}{
+func (c *rpcClient) txStatus(ctx context.Context, txHash, senderID string) (*txResult, error) {
+	result, err := c.call(ctx, "tx", map[string]interface{}{
 		"tx_hash":           txHash,
 		"sender_account_id": senderID,
 		"wait_until":        "EXECUTED_OPTIMISTIC",
