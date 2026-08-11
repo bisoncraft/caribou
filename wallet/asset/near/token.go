@@ -257,9 +257,6 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 	actions = append(actions, functionCallAction("ft_transfer", amountArgs, ftTransferGas, big.NewInt(ftTransferDepositYocto)))
 
-	w.parent.nonceMtx.Lock()
-	defer w.parent.nonceMtx.Unlock()
-
 	nonce, err := w.parent.reserveNonce()
 	if err != nil {
 		return nil, err
@@ -286,10 +283,6 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	txID := base58.Encode(hash[:])
 
-	if _, err := w.parent.rpc.broadcastTxAsync(w.parent.ctx, encoded); err != nil {
-		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
-	}
-
 	recipient := address
 	wtx := &txdb.WalletTransaction{
 		Type:      txdb.Send,
@@ -299,11 +292,24 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		Recipient: &recipient,
 		TokenID:   &w.assetID,
 	}
+
+	// Persist before broadcasting so the tx is tracked even if the broadcast
+	// hits a network error after the node has already accepted it.
 	if w.txDB != nil {
 		if err := w.txDB.StoreTx(wtx); err != nil {
-			w.parent.log.Errorf("Error storing token send tx: %v", err)
+			w.parent.log.Errorf("Error pre-storing token send tx: %v", err)
 		}
 	}
+
+	rpcTxHash, err := w.parent.rpc.broadcastTxAsync(w.parent.ctx, encoded)
+	if err != nil {
+		w.parent.log.Warnf("Broadcast network error (tx %s outcome unknown): %v", txID, err)
+		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
+	}
+	if rpcTxHash != "" && rpcTxHash != txID {
+		w.parent.log.Warnf("server returned tx hash %s != computed hash %s; using computed", rpcTxHash, txID)
+	}
+
 	if w.emit != nil {
 		w.emit.TransactionNote(wtx, true)
 	}

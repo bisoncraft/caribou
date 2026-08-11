@@ -66,6 +66,13 @@ func TestValidateAddress(t *testing.T) {
 			address: "Alice.near",
 			want:    false,
 		},
+		{
+			// hex.DecodeString accepts A-F, but NEAR implicit accounts are
+			// lowercase only.
+			name:    "invalid - uppercase implicit account hex",
+			address: "98793CD91A3F870FB126F66285808C7E094AFCFC4EDA8A970F6648CDF0DBD6DE",
+			want:    false,
+		},
 	}
 
 	for _, tt := range tests {

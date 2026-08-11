@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -278,6 +279,9 @@ func (w *NearWallet) Info() *asset.WalletInfo {
 }
 
 func (w *NearWallet) Balance() (*asset.Balance, error) {
+	if w.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	info, err := w.rpc.viewAccount(w.ctx, w.accountID)
 	if err != nil {
 		// Account may not exist yet (no funds received). Return zero balance.
@@ -308,20 +312,29 @@ func (w *NearWallet) DepositAddress() (string, error) {
 }
 
 func (w *NearWallet) OwnsDepositAddress(address string) (bool, error) {
-	return strings.EqualFold(address, w.accountID), nil
+	// Exact match, not case-insensitive: w.accountID is always the lowercase
+	// hex encoding of the public key, and NEAR account IDs are lowercase
+	// only, so an EqualFold match would also accept an uppercase variant
+	// that ValidateAddress itself would reject.
+	return address == w.accountID, nil
 }
 
-// reserveNonce reserves the next access-key nonce for a transaction. Callers
-// must hold nonceMtx. It advances past both the network's current view of
-// the account's nonce and any nonce already reserved by an earlier call, so
-// two sends issued back-to-back don't compute the same nonce before the
-// first transaction has been included in a block (broadcastTxAsync returns
-// before confirmation, so the network's nonce doesn't reflect it yet).
+// reserveNonce reserves the next access-key nonce for a transaction. It
+// queries the network before taking nonceMtx, so the blocking RPC never
+// serializes unrelated sends behind it; only the read-modify-write of
+// w.nonce itself is protected. It advances past both the network's current
+// view of the account's nonce and any nonce already reserved by an earlier
+// call, so two sends issued back-to-back don't compute the same nonce
+// before the first transaction has been included in a block
+// (broadcastTxAsync returns before confirmation, so the network's nonce
+// doesn't reflect it yet).
 func (w *NearWallet) reserveNonce() (uint64, error) {
 	akInfo, err := w.rpc.viewAccessKey(w.ctx, w.accountID, w.pubKeyBase58())
 	if err != nil {
 		return 0, fmt.Errorf("error querying access key: %w", err)
 	}
+	w.nonceMtx.Lock()
+	defer w.nonceMtx.Unlock()
 	nonce := akInfo.Nonce + 1
 	if w.nonce+1 > nonce {
 		nonce = w.nonce + 1
@@ -331,6 +344,9 @@ func (w *NearWallet) reserveNonce() (uint64, error) {
 }
 
 func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	if w.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid NEAR address %q", address)
 	}
@@ -347,9 +363,6 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	w.keyMtx.RUnlock()
 
 	yoctoAmount := DropsToYocto(value)
-
-	w.nonceMtx.Lock()
-	defer w.nonceMtx.Unlock()
 
 	nonce, err := w.reserveNonce()
 	if err != nil {
@@ -377,10 +390,6 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 
 	txID := base58.Encode(hash[:])
 
-	if _, err := w.rpc.broadcastTxAsync(w.ctx, encoded); err != nil {
-		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
-	}
-
 	recipient := address
 	wtx := &txdb.WalletTransaction{
 		Type:      txdb.Send,
@@ -390,10 +399,26 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		Recipient: &recipient,
 	}
 
+	// Persist before broadcasting so the tx is tracked even if the broadcast
+	// hits a network error after the node has already accepted it.
+	// checkPendingTxs resolves the eventual outcome on the next tip.
 	if w.txDB != nil {
-		if err = w.txDB.StoreTx(wtx); err != nil {
-			w.log.Errorf("Error storing send tx: %v", err)
+		if err := w.txDB.StoreTx(wtx); err != nil {
+			w.log.Errorf("Error pre-storing send tx: %v", err)
 		}
+	}
+
+	rpcTxHash, err := w.rpc.broadcastTxAsync(w.ctx, encoded)
+	if err != nil {
+		// Network error: the node may have received the signed transaction.
+		// The pre-stored entry will be resolved by checkPendingTxs.
+		w.log.Warnf("Broadcast network error (tx %s outcome unknown): %v", txID, err)
+		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
+	}
+	if rpcTxHash != "" && rpcTxHash != txID {
+		// Sanity-check: the node echoes back the tx hash it computed. A
+		// mismatch indicates a bug in our encoding.
+		w.log.Warnf("server returned tx hash %s != computed hash %s; using computed", rpcTxHash, txID)
 	}
 
 	if w.emit != nil {
@@ -404,8 +429,13 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 }
 
 func (w *NearWallet) ValidateAddress(address string) bool {
-	// Implicit account: 64-char hex string (ed25519 pubkey).
+	// Implicit account: 64-char lowercase hex string (ed25519 pubkey). NEAR
+	// account IDs are lowercase only; hex.DecodeString alone would also
+	// accept A-F, which is not a valid NEAR implicit account.
 	if len(address) == 64 {
+		if address != strings.ToLower(address) {
+			return false
+		}
 		_, err := hex.DecodeString(address)
 		return err == nil
 	}
@@ -447,7 +477,7 @@ func (w *NearWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryRespo
 }
 
 func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
-	// Check the local DB first.
+	// Check the local DB first, without touching the RPC client.
 	if w.txDB != nil {
 		wt, err := w.txDB.GetTx(txID)
 		if err != nil {
@@ -458,10 +488,17 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 		}
 	}
 
+	if w.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
+
 	// Try querying the RPC.
 	result, err := w.rpc.txStatus(ctx, txID, w.accountID)
 	if err != nil {
-		return nil, asset.CoinNotFoundError
+		if isTxNotFound(err) {
+			return nil, asset.CoinNotFoundError
+		}
+		return nil, fmt.Errorf("error looking up transaction %s: %w", txID, err)
 	}
 
 	txType := txdb.Send
@@ -624,30 +661,52 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 	}
 
 	// Compare account balance at the two block heights. If the balance
-	// didn't increase we can skip the expensive block/chunk scanning.
+	// didn't change at all we can skip the expensive block/chunk scanning;
+	// any change (increase OR decrease) must be scanned, since a receive
+	// landing in the same window as an outgoing send can net to a decrease
+	// and would otherwise be silently dropped forever (scanChunk only
+	// records transfers addressed to us, so scanning on a decrease can't
+	// misattribute our own send as incoming). When the comparison is
+	// inconclusive (an RPC error, or the account not existing yet at either
+	// height), hold the watermark back rather than guessing, so the range
+	// is retried on the next poll instead of being marked done.
 	prevAcct, err := w.rpc.viewAccountAt(ctx, w.accountID, w.lastScannedHeight)
-	if err != nil {
-		// Account may not exist yet at the earlier height.
-		if !isAccountNotFound(err) {
-			w.log.Warnf("Error querying account at block %d: %v", w.lastScannedHeight, err)
-		}
-		w.lastScannedHeight = newTip
+	var prevBal *big.Int
+	switch {
+	case err == nil:
+		prevBal, _ = parseYoctoNEAR(prevAcct.Amount)
+	case isAccountNotFound(err):
+		// Account didn't exist yet at lastScannedHeight: treat as a zero
+		// starting balance so the very first funding transfer is scanned
+		// instead of being skipped.
+		prevBal = new(big.Int)
+	default:
+		w.log.Warnf("Error querying account at block %d: %v", w.lastScannedHeight, err)
 		return
 	}
+
 	curAcct, err := w.rpc.viewAccountAt(ctx, w.accountID, newTip)
 	if err != nil {
+		if isAccountNotFound(err) {
+			// Still doesn't exist: nothing received yet, nothing to scan.
+			w.lastScannedHeight = newTip
+			return
+		}
 		w.log.Warnf("Error querying account at block %d: %v", newTip, err)
 		return
 	}
-
-	prevBal, _ := parseYoctoNEAR(prevAcct.Amount)
 	curBal, _ := parseYoctoNEAR(curAcct.Amount)
-	if prevBal == nil || curBal == nil || curBal.Cmp(prevBal) <= 0 {
+
+	if prevBal == nil || curBal == nil {
+		w.log.Warnf("Error parsing account balance at block %d or %d", w.lastScannedHeight, newTip)
+		return
+	}
+	if curBal.Cmp(prevBal) == 0 {
 		w.lastScannedHeight = newTip
 		return
 	}
 
-	// Balance increased — scan blocks to find the incoming transfer(s).
+	// Balance changed — scan blocks to find the incoming transfer(s).
 	if newTip-startHeight >= maxScanBlocks {
 		startHeight = newTip - maxScanBlocks + 1
 	}
@@ -783,6 +842,22 @@ func isAccountNotFound(err error) bool {
 		return false
 	}
 	if rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_ACCOUNT" {
+		return true
+	}
+	return strings.Contains(string(rpcErr.Data), "does not exist")
+}
+
+// isTxNotFound checks if an RPC error indicates the transaction is unknown
+// to the queried node (as opposed to a transient RPC failure).
+func isTxNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	rpcErr, ok := err.(*rpcError)
+	if !ok {
+		return false
+	}
+	if rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_TRANSACTION" {
 		return true
 	}
 	return strings.Contains(string(rpcErr.Data), "does not exist")
