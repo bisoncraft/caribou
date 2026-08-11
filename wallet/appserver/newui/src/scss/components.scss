@@ -1148,19 +1148,6 @@ form.modal.swap-modal {
   }
 }
 
-// Preview panel box.
-.swap-preview {
-  border-top: 1px solid var(--border-color);
-  padding-top: 0.5rem;
-}
-
-// Fee section within the preview panel.
-.swap-fee-section {
-  border-top: 1px solid var(--border-color);
-  margin-top: 0.25rem;
-  padding-top: 0.25rem;
-}
-
 // Persistent one-line custody notice.
 .swap-custody-notice {
   border: 1px solid color-mix(in srgb, var(--accent-syncing) 35%, transparent);
@@ -1205,9 +1192,6 @@ form.modal.swap-modal {
   inset: 0;
   background-color: var(--scrim-bg);
   z-index: 200;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .swap-custody-modal {
@@ -1216,11 +1200,6 @@ form.modal.swap-modal {
   border-radius: var(--border-radius);
   max-width: 360px;
   width: 100%;
-}
-
-.swap-custody-modal-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-color);
 }
 
 .swap-custody-modal-body {
@@ -1240,17 +1219,6 @@ form.modal.swap-modal {
 
     &:last-child { margin-bottom: 0; }
   }
-}
-
-// Confirmation step pair display.
-.swap-confirm-pair {
-  gap: 0;
-}
-
-// Summary row box in confirm step.
-.swap-summary {
-  border-top: 1px solid var(--border-color);
-  padding-top: 0.25rem;
 }
 
 // Swap history section below the form.
@@ -1280,12 +1248,6 @@ form.modal.swap-modal {
   }
 }
 
-// Expanded detail area inside a history item.
-.swap-history-details {
-  border-top: 1px solid var(--border-color);
-  padding-top: 0.5rem;
-}
-
 // Status color classes.
 .swap-status-success  { color: var(--accent-syncing); }
 .swap-status-refunded { color: var(--accent-blue-text); }
@@ -1305,9 +1267,7 @@ form.modal.swap-modal {
 // Deposit/tx address display — wraps long hex strings.
 .swap-addr-wrap {
   word-break: break-all;
-  font-size: 11px;
   line-height: 1.4;
-  color: var(--text-grey);
 }
 
 // Explorer / status links.
@@ -1319,7 +1279,6 @@ form.modal.swap-modal {
 }
 
 .swap-escalation-links {
-  display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
 }

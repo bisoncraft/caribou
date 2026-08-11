@@ -202,6 +202,17 @@ function nearExplorerURL (depositAddress: string): string {
   return `https://explorer.near-intents.org/swap/${encodeURIComponent(depositAddress)}`
 }
 
+// intentsAssetLabel returns a display label for a swap-side asset: the
+// wallet symbol when assetID resolves in the current asset catalog, else
+// the raw Intents-side asset ID string (e.g. "nep141:sol.omft.near"). A
+// destAssetID/originAssetID of 4294967295 (0xFFFFFFFF, ^uint32(0)) is the
+// unknown-chain sentinel used for reconstructed records whose destination
+// no longer resolves, but any unresolved assetID falls back the same way.
+// Mirrors intentsAssetLabel in wallet/core/near-intents.go.
+function intentsAssetLabel (assets: IntentsAsset[], assetID: number, intentsAssetID: string): string {
+  return assets.find(a => a.assetID === assetID)?.symbol ?? intentsAssetID
+}
+
 // ---- Local storage key for first-use disclosure ----
 const INTENTS_DISCLOSURE_SEEN_KEY = 'intentsDisclosureSeen'
 
@@ -212,7 +223,7 @@ function CustodyModal ({ onClose }: { onClose: () => void }) {
   return (
     <div className="swap-custody-modal-scrim flex-center">
       <div className="swap-custody-modal">
-        <div className="swap-custody-modal-header">
+        <div className="p-3 border-bottom">
           <span className="demi fs16">{t('How swaps work')}</span>
         </div>
         <div className="swap-custody-modal-body fs13">
@@ -290,16 +301,20 @@ function CustodyNotice ({ originAsset, destAsset, showDetails, onToggleDetails }
 
 // ---- Fee breakdown display ----
 
+// intentsFeeRecipient is the identity of Caribou's fee-collection account,
+// as passed in the appFees list on quote requests. Mirrors
+// intentsFeeRecipient in wallet/core/near-intents.go. Compared
+// case-insensitively since it's an 0x-form identity and the Go side
+// lowercases it.
+const intentsFeeRecipient = '0x4bda081527f14e5ecb9a2fd7703759897c2860a6'
+
 // friendlyFeeName maps a fee recipient address to a human-readable label.
 // The app fee is split by the service: our configured recipient gets one
-// entry; the protocol surcharge goes to a separate account. We show both.
-function friendlyFeeName (recipient: string, index: number): string {
-  // If the fee recipient is the configured fee-collection account, call it
-  // "Caribou fee".
-  // Otherwise it's the protocol's collection account (the keyless surcharge).
-  // We distinguish by position: index 0 is the app fee, subsequent entries
-  // are the service's injected surcharge.
-  if (index === 0) return t('Caribou fee')
+// entry; the protocol surcharge (the keyless-service surcharge) goes to a
+// separate account. We show both, matched by recipient rather than
+// position — the service does not guarantee appFees order is preserved.
+function friendlyFeeName (recipient: string): string {
+  if (recipient.toLowerCase() === intentsFeeRecipient) return t('Caribou fee')
   return t('Network service fee')
 }
 
@@ -309,11 +324,11 @@ function FeeBreakdown ({ preview, originAsset, destAsset }: {
   destAsset: IntentsAsset
 }) {
   return (
-    <div className="swap-fee-section">
+    <div className="border-top mt-1 pt-1">
       <div className="fs12 grey demi mb-1">{t('Fee breakdown')}</div>
       {preview.appFees && preview.appFees.map((af, i) => (
         <div key={af.recipient + i} className="d-flex justify-content-between fs12 py-1">
-          <span className="grey">{friendlyFeeName(af.recipient, i)}</span>
+          <span className="grey">{friendlyFeeName(af.recipient)}</span>
           <span>{af.fee} {t('bps')}</span>
         </div>
       ))}
@@ -364,11 +379,11 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
         onClick={() => setExpanded(e => !e)}
       >
         <div className="d-flex align-items-center flex-grow-1">
-          {originAsset && <CoinLogo ticker={originAsset.symbol} className="mini-icon me-1" style={{ objectFit: 'contain' }} />}
-          <span className="fs13 demi me-1">{originAsset ? formatConventional(swap.atomsIn, originAsset.atomDecimals) : swap.amountIn} {originAsset?.symbol ?? String(swap.originAssetID)}</span>
+          {originAsset && <CoinLogo ticker={originAsset.symbol} className="mini-icon me-1" />}
+          <span className="fs13 demi me-1">{originAsset ? formatConventional(swap.atomsIn, originAsset.atomDecimals) : swap.amountIn} {intentsAssetLabel(assets, swap.originAssetID, swap.originAsset)}</span>
           <span className="grey fs12 me-1">→</span>
-          {destAsset && <CoinLogo ticker={destAsset.symbol} className="mini-icon me-1" style={{ objectFit: 'contain' }} />}
-          <span className="fs13 demi">{destAsset ? formatConventional(swap.atomsOut, destAsset.atomDecimals) : swap.amountOut} {destAsset?.symbol ?? String(swap.destAssetID)}</span>
+          {destAsset && <CoinLogo ticker={destAsset.symbol} className="mini-icon me-1" />}
+          <span className="fs13 demi">{destAsset ? formatConventional(swap.atomsOut, destAsset.atomDecimals) : swap.amountOut} {intentsAssetLabel(assets, swap.destAssetID, swap.destAsset)}</span>
           {swap.reconstructed && (
             <span className="swap-recovered-badge ms-2 fs11">{t('recovered')}</span>
           )}
@@ -381,14 +396,14 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
       </div>
 
       {expanded && (
-        <div className="swap-history-details mt-2">
+        <div className="border-top pt-2 mt-2">
           <div className="d-flex justify-content-between fs12 py-1">
             <span className="grey">{t('Status')}</span>
             <span className={statusCls}>{label}</span>
           </div>
           <div className="d-flex justify-content-between fs12 py-1">
             <span className="grey">{t('Deposit address')}</span>
-            <span className="mono swap-addr-wrap">{swap.depositAddress}</span>
+            <span className="mono fs11 grey swap-addr-wrap">{swap.depositAddress}</span>
           </div>
           {swap.depositMemo && (
             <div className="d-flex justify-content-between fs12 py-1">
@@ -398,19 +413,19 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
           )}
           <div className="d-flex justify-content-between fs12 py-1">
             <span className="grey">{t('Recipient')}</span>
-            <span className="mono swap-addr-wrap">{swap.recipient}</span>
+            <span className="mono fs11 grey swap-addr-wrap">{swap.recipient}</span>
           </div>
           {swap.depositTxID && (
             <div className="d-flex justify-content-between fs12 py-1">
               <span className="grey">{t('Deposit TX')}</span>
-              <span className="mono swap-addr-wrap">{swap.depositTxID}</span>
+              <span className="mono fs11 grey swap-addr-wrap">{swap.depositTxID}</span>
             </div>
           )}
           {swap.nearTxHashes && swap.nearTxHashes.length > 0 && (
             <div className="fs12 py-1">
               <div className="grey mb-1">{t('NEAR transactions')}</div>
               {swap.nearTxHashes.map(h => (
-                <div key={h} className="mono swap-addr-wrap">{h}</div>
+                <div key={h} className="mono fs11 grey swap-addr-wrap">{h}</div>
               ))}
             </div>
           )}
@@ -418,7 +433,7 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
             <div className="fs12 py-1">
               <div className="grey mb-1">{t('Destination transactions')}</div>
               {swap.destinationTxs.map(h => (
-                <div key={h} className="mono swap-addr-wrap">{h}</div>
+                <div key={h} className="mono fs11 grey swap-addr-wrap">{h}</div>
               ))}
             </div>
           )}
@@ -438,12 +453,12 @@ function SwapHistoryItem ({ swap, assets, onRefresh }: {
             <div className="fs12 py-1">
               <div className="grey mb-1">{t('Refund transactions')}</div>
               {swap.refundTxs.map(h => (
-                <div key={h} className="mono swap-addr-wrap">{h}</div>
+                <div key={h} className="mono fs11 grey swap-addr-wrap">{h}</div>
               ))}
             </div>
           )}
           {(needsAttention || !isTerminal(swap.state)) && (
-            <div className="swap-escalation-links mt-2 fs12">
+            <div className="swap-escalation-links d-flex mt-2 fs12">
               <a
                 href={nearExplorerURL(swap.depositAddress)}
                 target="_blank"
@@ -518,21 +533,21 @@ function ConfirmSwap ({
       </header>
 
       <div className="px-3 pb-2">
-        <div className="swap-confirm-pair d-flex align-items-center justify-content-center mb-3">
-          <CoinLogo ticker={originAsset.symbol} className="mini-icon" style={{ objectFit: 'contain' }} />
+        <div className="d-flex align-items-center justify-content-center mb-3">
+          <CoinLogo ticker={originAsset.symbol} className="mini-icon" />
           <div className="ms-2 me-3">
             <div className="fs16 demi">{formatConventional(preview.atomsIn, originAsset.atomDecimals)} {originAsset.symbol}</div>
             <div className="fs12 grey">{preview.amountInUSD ? usdFmt.format(parseFloat(preview.amountInUSD)) : '—'}</div>
           </div>
           <span className="ico-arrowright fs18 grey me-3" />
-          <CoinLogo ticker={destAsset.symbol} className="mini-icon" style={{ objectFit: 'contain' }} />
+          <CoinLogo ticker={destAsset.symbol} className="mini-icon" />
           <div className="ms-2">
             <div className="fs16 demi">{formatConventional(preview.atomsOut, destAsset.atomDecimals)} {destAsset.symbol}</div>
             <div className="fs12 grey">{preview.amountOutUSD ? usdFmt.format(parseFloat(preview.amountOutUSD)) : '—'}</div>
           </div>
         </div>
 
-        <div className="swap-summary fs13">
+        <div className="border-top pt-1 fs13">
           <div className="d-flex justify-content-between py-1">
             <span className="grey">{t('Min received')}</span>
             <span>{formatConventional(preview.minAtomsOut, destAsset.atomDecimals)} {destAsset.symbol}</span>
@@ -543,7 +558,7 @@ function ConfirmSwap ({
           </div>
           {preview.appFees && preview.appFees.map((af, i) => (
             <div key={af.recipient + i} className="d-flex justify-content-between py-1">
-              <span className="grey">{friendlyFeeName(af.recipient, i)}</span>
+              <span className="grey">{friendlyFeeName(af.recipient)}</span>
               <span>{af.fee} {t('bps')}</span>
             </div>
           ))}
@@ -595,6 +610,70 @@ function ConfirmSwap ({
         <button type="button" className="mt-2" onClick={onBack} disabled={submitting}>{t('Back')}</button>
       </div>
     </form>
+  )
+}
+
+// ---- Swap-record recovery ----
+
+// RecoverSwapsModal confirms and runs POST /api/intents/reconstruct, which
+// rebuilds swap records lost with local state (e.g. after a seed restore)
+// by probing the service for hits against recent outgoing-transaction
+// recipients. The privacy tradeoff is disclosed before the request fires.
+function RecoverSwapsModal ({ submitting, err, found, onConfirm, onClose }: {
+  submitting: boolean
+  err: string
+  found: number | null
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="swap-custody-modal-scrim flex-center">
+      <div className="swap-custody-modal">
+        <div className="p-3 border-bottom">
+          <span className="demi fs16">{t('Recover swaps')}</span>
+        </div>
+        {found === null
+          ? (
+            <>
+              <div className="swap-custody-modal-body fs13">
+                <p className="grey mb-2">
+                  {t('If swap history was lost — for example after restoring the wallet from your seed — Caribou can attempt to rebuild it.')}
+                </p>
+                <ul className="swap-custody-list">
+                  <li>{t('Recovery sends the recipient addresses of recent outgoing transactions — up to 25 per wallet, across all connected wallets — to the swap service, 1click.chaindefuser.com, asking whether each was a swap deposit address.')}</li>
+                  <li>{t("Requests honor the wallet's Tor proxy, if one is configured.")}</li>
+                  <li>{t('This can take a while — the service is rate-limited.')}</li>
+                </ul>
+                {err && (
+                  <div key={err} className="form-err errcolor fs12 pt-2 text-center">{err}</div>
+                )}
+              </div>
+              <div className="flex-stretch-column p-3">
+                <button type="button" className="feature" onClick={onConfirm} disabled={submitting}>
+                  {submitting
+                    ? <span className="d-inline-flex align-items-center justify-content-center">
+                        <Spinner className="me-2" />{t('Recovering...')}
+                      </span>
+                    : t('Recover swaps')}
+                </button>
+                <button type="button" className="mt-2" onClick={onClose} disabled={submitting}>{t('Cancel')}</button>
+              </div>
+            </>
+            )
+          : (
+            <>
+              <div className="swap-custody-modal-body fs13 text-center">
+                {found > 0
+                  ? tvar('Recovered {{ n }} swap record(s).', { n: String(found) })
+                  : t('No additional swap records were found.')}
+              </div>
+              <div className="p-3">
+                <button type="button" className="feature w-100" onClick={onClose}>{t('Close')}</button>
+              </div>
+            </>
+            )}
+      </div>
+    </div>
   )
 }
 
@@ -654,6 +733,12 @@ export default function Swap () {
   // History
   const [swaps, setSwaps] = useState<IntentsSwap[]>([])
   const [swapsLoading, setSwapsLoading] = useState(true)
+
+  // Swap-record recovery
+  const [showRecover, setShowRecover] = useState(false)
+  const [recovering, setRecovering] = useState(false)
+  const [recoverErr, setRecoverErr] = useState('')
+  const [recoverFound, setRecoverFound] = useState<number | null>(null)
 
   // Monotonic guard for debounced preview
   const previewRef = useRef(0)
@@ -808,6 +893,23 @@ export default function Swap () {
     }
   }, [])
 
+  // Run swap-record recovery. The result (including zero) is surfaced by
+  // the modal, and the list is refreshed on success so any recovered
+  // records show up immediately.
+  const recoverSwaps = async () => {
+    setRecovering(true)
+    setRecoverErr('')
+    const r = await postJSON('/api/intents/reconstruct')
+    setRecovering(false)
+    if (!r.ok) {
+      setRecoverErr(r.errMsg || r.msg || t('Failed to recover swaps.'))
+      return
+    }
+    setRecoverFound(r.found)
+    const list = await getJSON('/api/intents/swaps')
+    if (list.ok) setSwaps(list.swaps ?? [])
+  }
+
   // ---- Render: first-use disclosure ----
   if (showDisclosure) {
     return (
@@ -844,8 +946,6 @@ export default function Swap () {
 
   // ---- Render: done step ----
   if (step === 'done' && doneSwap) {
-    const orig = assets.find(a => a.assetID === doneSwap.originAssetID)
-    const dest = assets.find(a => a.assetID === doneSwap.destAssetID)
     return (
       <form className="modal form-width-300" onSubmit={e => e.preventDefault()}>
         <header>
@@ -855,8 +955,8 @@ export default function Swap () {
         <div className="px-3 pb-3 text-center">
           <div className="fs14 mb-3">
             {tvar('Your {{ origin }} deposit has been sent. Swapped {{ dest }} will arrive at your wallet address when the swap completes.', {
-              origin: orig?.symbol ?? String(doneSwap.originAssetID),
-              dest: dest?.symbol ?? String(doneSwap.destAssetID)
+              origin: intentsAssetLabel(assets, doneSwap.originAssetID, doneSwap.originAsset),
+              dest: intentsAssetLabel(assets, doneSwap.destAssetID, doneSwap.destAsset)
             })}
           </div>
           <div className="swap-custody-notice mb-3">
@@ -866,7 +966,7 @@ export default function Swap () {
           </div>
           <div className="fs12 grey mb-2">
             <span className="demi">{t('Deposit address:')}</span>
-            <div className="mono swap-addr-wrap mt-1">{doneSwap.depositAddress}</div>
+            <div className="mono fs11 grey swap-addr-wrap mt-1">{doneSwap.depositAddress}</div>
           </div>
           <a
             href={nearExplorerURL(doneSwap.depositAddress)}
@@ -893,7 +993,8 @@ export default function Swap () {
 
   // ---- Render: main swap form ----
   const readyOriginAssets = assets.filter(a => a.walletReady)
-  const availableDestAssets = assets.filter(a => a.assetID !== originID)
+  const readyDestAssets = assets.filter(a => a.walletReady && a.assetID !== originID)
+  const unavailableDestAssets = assets.filter(a => !a.walletReady && a.assetID !== originID)
 
   return (
     <form
@@ -956,7 +1057,7 @@ export default function Swap () {
                 <CoinLogo
                   ticker={originAsset.symbol}
                   className="mini-icon ms-2"
-                  style={{ objectFit: 'contain', flexShrink: 0 }}
+                  style={{ flexShrink: 0 }}
                 />
               )}
             </div>
@@ -1002,15 +1103,20 @@ export default function Swap () {
                 }}
               >
                 <option value="">{t('Select asset')}</option>
-                {availableDestAssets.map(a => (
+                {readyDestAssets.map(a => (
                   <option key={a.assetID} value={a.assetID}>{a.symbol}</option>
+                ))}
+                {unavailableDestAssets.map(a => (
+                  <option key={a.assetID} value={a.assetID} disabled>
+                    {a.symbol} — {t('wallet not available')}
+                  </option>
                 ))}
               </select>
               {destAsset && (
                 <CoinLogo
                   ticker={destAsset.symbol}
                   className="mini-icon ms-2"
-                  style={{ objectFit: 'contain', flexShrink: 0 }}
+                  style={{ flexShrink: 0 }}
                 />
               )}
             </div>
@@ -1018,7 +1124,7 @@ export default function Swap () {
 
           {/* Preview panel */}
           {canPreview && (
-            <div className="px-3 pb-2 swap-preview">
+            <div className="px-3 pb-2 border-top pt-2">
               {previewing && (
                 <div className="d-flex align-items-center grey fs12">
                   <Spinner size={12} className="me-2" />{t('Getting quote...')}
@@ -1075,8 +1181,16 @@ export default function Swap () {
       {/* Swap history */}
       {!assetsLoading && (
         <div className="swap-history">
-          <div className="swap-history-header fs11 grey demi px-3 py-2">
-            {t('SWAP HISTORY')}
+          <div className="swap-history-header d-flex align-items-center justify-content-between fs11 grey demi px-3 py-2">
+            <span>{t('SWAP HISTORY')}</span>
+            <button
+              type="button"
+              className="small"
+              disabled={recovering}
+              onClick={() => { setShowRecover(true); setRecoverErr(''); setRecoverFound(null) }}
+            >
+              {t('Recover swaps')}
+            </button>
           </div>
           {swapsLoading && (
             <div className="flex-center py-3">
@@ -1095,6 +1209,16 @@ export default function Swap () {
             />
           ))}
         </div>
+      )}
+
+      {showRecover && (
+        <RecoverSwapsModal
+          submitting={recovering}
+          err={recoverErr}
+          found={recoverFound}
+          onConfirm={recoverSwaps}
+          onClose={() => setShowRecover(false)}
+        />
       )}
     </form>
   )
