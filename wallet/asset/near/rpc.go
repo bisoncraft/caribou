@@ -126,6 +126,12 @@ func (e *rpcError) Error() string {
 // is treated as an endpoint problem, not an authoritative response.
 const jsonRPCMethodNotFound = -32601
 
+// rpcResponseSizeLimit caps how much of an RPC response body is read. The
+// largest legitimate response is a chunk, well under 1 MiB in practice;
+// the cap keeps a broken or hostile public endpoint from ballooning memory
+// while leaving generous headroom.
+const rpcResponseSizeLimit = 1 << 22 // 4 MiB
+
 // doRequest posts the request body to a single endpoint. endpointBad reports
 // whether a failure should be attributed to the endpoint (failover candidate)
 // rather than being an authoritative server-side response.
@@ -136,9 +142,14 @@ func (c *rpcClient) doRequest(url string, body []byte) (_ json.RawMessage, endpo
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// Read one byte past the cap so truncation is distinguishable from a
+	// response that is exactly the cap.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, rpcResponseSizeLimit+1))
 	if err != nil {
 		return nil, true, fmt.Errorf("error reading response: %w", err)
+	}
+	if len(respBody) > rpcResponseSizeLimit {
+		return nil, true, fmt.Errorf("response exceeds the %d-byte limit", rpcResponseSizeLimit)
 	}
 
 	if resp.StatusCode != http.StatusOK {

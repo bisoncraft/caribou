@@ -1125,8 +1125,10 @@ func isAccountNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	rpcErr, ok := err.(*rpcError)
-	if !ok {
+	// errors.As, not a type assertion, so wrapping between the RPC layer
+	// and callers cannot silently turn a missing account into a hard error.
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) {
 		return false
 	}
 	if rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_ACCOUNT" {

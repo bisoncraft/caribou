@@ -147,6 +147,43 @@ func TestRPCFailover(t *testing.T) {
 	}
 }
 
+// TestRPCOversizedResponse covers the response-body cap: an endpoint
+// returning an over-limit body is an endpoint failure, so failover
+// engages rather than the body ballooning memory.
+func TestRPCOversizedResponse(t *testing.T) {
+	huge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(make([]byte, rpcResponseSizeLimit+1))
+	}))
+	t.Cleanup(huge.Close)
+	good := newFakeRPCServer(t)
+	good.handle("block", func(json.RawMessage) (any, *rpcError) {
+		return blockResult(100), nil
+	})
+
+	c, err := newRPCClient([]string{huge.URL, good.srv.URL}, "", testLogger)
+	if err != nil {
+		t.Fatalf("newRPCClient: %v", err)
+	}
+	block, err := c.getBlock("final")
+	if err != nil {
+		t.Fatalf("getBlock with oversized endpoint first: %v", err)
+	}
+	if block.Header.Height != 100 {
+		t.Fatalf("wrong height %d", block.Header.Height)
+	}
+
+	// With no healthy endpoint the over-limit body is an error, not a
+	// giant allocation handed to the JSON decoder.
+	solo, err := newRPCClient([]string{huge.URL}, "", testLogger)
+	if err != nil {
+		t.Fatalf("newRPCClient: %v", err)
+	}
+	if _, err := solo.getBlock("final"); err == nil {
+		t.Fatalf("oversized response accepted")
+	}
+}
+
 func TestRPCAuthoritativeError(t *testing.T) {
 	first := newFakeRPCServer(t)
 	first.handle("query", func(json.RawMessage) (any, *rpcError) {
