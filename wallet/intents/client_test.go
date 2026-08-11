@@ -155,16 +155,39 @@ func TestQuoteRejectsBadSignature(t *testing.T) {
 func TestQuoteRejectsEchoMismatch(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 
-	// The server tampers with the recipient, then signs the tampered echo:
-	// the signature is valid, so only the echo cross-check catches it.
-	srv := newQuoteServer(t, priv, func(echo map[string]json.RawMessage) {
-		echo["recipient"] = json.RawMessage(`"attacker"`)
-	})
-	c := newTestClient(t, srv.URL, pub, nil)
+	// The server tampers with one signed request field at a time, then
+	// signs the tampered echo: the signature is valid over what the
+	// service received, so only the echo cross-check catches the change.
+	// Every compared field gets a case; the location-type flips
+	// (recipientType/refundType to INTENTS) are the redirection attack the
+	// check exists to stop.
+	tests := []struct {
+		field   string
+		mangled json.RawMessage
+	}{
+		{"recipient", json.RawMessage(`"attacker"`)},
+		{"refundTo", json.RawMessage(`"attacker"`)},
+		{"amount", json.RawMessage(`"20000000"`)},
+		{"swapType", json.RawMessage(`"EXACT_OUTPUT"`)},
+		{"dry", json.RawMessage(`true`)},
+		{"recipientType", json.RawMessage(`"INTENTS"`)},
+		{"refundType", json.RawMessage(`"INTENTS"`)},
+		{"depositType", json.RawMessage(`"INTENTS"`)},
+		{"slippageTolerance", json.RawMessage(`10000`)},
+		{"deadline", json.RawMessage(`"2026-07-15T11:00:00.000Z"`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.field, func(t *testing.T) {
+			srv := newQuoteServer(t, priv, func(echo map[string]json.RawMessage) {
+				echo[tt.field] = tt.mangled
+			})
+			c := newTestClient(t, srv.URL, pub, nil)
 
-	_, err := c.Quote(context.Background(), testQuoteRequest())
-	if err == nil || !strings.Contains(err.Error(), "echoed request differs") {
-		t.Fatalf("expected echo mismatch rejection, got %v", err)
+			_, err := c.Quote(context.Background(), testQuoteRequest())
+			if err == nil || !strings.Contains(err.Error(), "echoed request differs") {
+				t.Fatalf("expected echo mismatch rejection for %s, got %v", tt.field, err)
+			}
+		})
 	}
 }
 

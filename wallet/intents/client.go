@@ -197,13 +197,24 @@ func (c *Client) Quote(ctx context.Context, req *QuoteRequest) (*QuoteResponse, 
 	}
 
 	// The signature proves the service signed what it received; it cannot
-	// prove the service received what was sent. Cross-check the fields a
-	// request-tamperer would target. Asset IDs are excluded: the service
-	// normalizes them across its ID schemes.
+	// prove the service received what was sent. Cross-check every signed
+	// request field a request-tamperer could target. The location-type
+	// fields matter most: recipientType flipped from DESTINATION_CHAIN to
+	// INTENTS reinterprets the recipient string as a verifier-internal
+	// identity, stranding the output inside intents.near (refundType
+	// likewise on the refund branch); slippageTolerance raised in flight
+	// lowers minAmountOut below the terms the user accepted; deadline
+	// shortened can force a refund. Asset IDs are excluded: the service
+	// normalizes them across its ID schemes, and callers verify them
+	// against the catalog separately.
 	echo := &resp.Request
 	if echo.Recipient != req.Recipient || echo.RefundTo != req.RefundTo ||
 		echo.Amount != req.Amount || echo.SwapType != req.SwapType ||
-		echo.Dry != req.Dry {
+		echo.Dry != req.Dry ||
+		echo.RecipientType != req.RecipientType || echo.RefundType != req.RefundType ||
+		echo.DepositType != req.DepositType ||
+		echo.SlippageTolerance != req.SlippageTolerance ||
+		echo.Deadline != req.Deadline {
 		return nil, fmt.Errorf("rejecting quote: echoed request differs from submitted request")
 	}
 
