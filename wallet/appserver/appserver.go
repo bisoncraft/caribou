@@ -1074,7 +1074,18 @@ func (s *AppServer) isAuthed(r *http.Request) bool {
 		return true
 	}
 	// Slow path: write lock to potentially revoke an expired unclaimed
-	// companion token.
+	// companion token. A revocation drops the notification sockets for the same
+	// reason deauth does: /ws is authorized at upgrade and never re-checked, so
+	// a link opened under the token being revoked here would keep streaming past
+	// it. Registered ahead of the unlock so it runs after it (defers are LIFO) -
+	// DisconnectAll takes the websocket server's own lock and closes connections,
+	// which has no business happening under authMtx.
+	var revoked bool
+	defer func() {
+		if revoked {
+			s.wsServer.DisconnectAll()
+		}
+	}()
 	s.authMtx.Lock()
 	defer s.authMtx.Unlock()
 	// Re-check under write lock.
@@ -1085,6 +1096,7 @@ func (s *AppServer) isAuthed(r *http.Request) bool {
 		if time.Now().After(s.companionTokenExpiry) {
 			delete(s.authTokens, authToken)
 			s.companionToken = ""
+			revoked = true
 			return false
 		}
 	}

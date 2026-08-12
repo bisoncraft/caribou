@@ -631,6 +631,12 @@ func (s *AppServer) apiUnpairCompanionApp(w http.ResponseWriter, r *http.Request
 		}
 	}
 	s.authMtx.Unlock()
+	// Drop the notification sockets with the pairing. /ws is authorized at
+	// upgrade and never re-checked, so unpairing would otherwise refuse every
+	// later onion request while an already-open link kept streaming balances,
+	// wallet state, deposit addresses and sends to the remote peer this call is
+	// meant to cut off. See deauth.
+	s.wsServer.DisconnectAll()
 	writeJSON(w, simpleAck())
 }
 
@@ -678,6 +684,11 @@ func (s *AppServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	s.authMtx.Lock()
 	s.apiTokenHash = ""
 	s.authMtx.Unlock()
+	// Drop the notification sockets with the token, or "immediately" above is
+	// false for the one credential-bearing link that is never re-checked: an
+	// automation client can set the API token header on a /ws upgrade, and
+	// isAuthed authorizes that upgrade on the token alone. See deauth.
+	s.wsServer.DisconnectAll()
 	writeJSON(w, simpleAck())
 }
 

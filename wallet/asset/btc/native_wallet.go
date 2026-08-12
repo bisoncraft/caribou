@@ -1170,16 +1170,33 @@ func (w *NativeWallet) armScanFloor(h uint64) {
 	}
 }
 
-// consumeScanFloor returns the scan floor for a scan that would otherwise
-// start from lastQuery, consuming any armed override that lowers it. An
-// override never raises the floor, and a never-scanned wallet (lastQuery 0)
-// already scans from the beginning.
-func (w *NativeWallet) consumeScanFloor(lastQuery uint64) uint64 {
-	floor := w.scanFloor.Swap(0)
+// peekScanFloor returns the height a scan that would otherwise start from
+// lastQuery should start from, along with the armed override it observed (0 for
+// none). An override never raises the floor, and a never-scanned wallet
+// (lastQuery 0) already scans from the beginning.
+//
+// The override is read, not consumed: a scan that does not complete must leave
+// it armed for the next one. See clearScanFloor.
+func (w *NativeWallet) peekScanFloor(lastQuery uint64) (from, floor uint64) {
+	floor = w.scanFloor.Load()
 	if floor != 0 && lastQuery != 0 && floor < lastQuery {
-		return floor
+		return floor, floor
 	}
-	return lastQuery
+	return lastQuery, floor
+}
+
+// clearScanFloor retires the override that peekScanFloor observed, once the scan
+// it was observed for has actually covered those blocks. Only that exact value
+// is retired: armScanFloor only ever lowers the register, so a value that
+// changed under us is a lower floor armed while the scan was running, naming
+// blocks this scan started above and did not reach. Swapping it away would drop
+// the late-notified mined transaction it was armed for from tx history for the
+// life of the process, which is the whole thing the register exists to prevent.
+func (w *NativeWallet) clearScanFloor(floor uint64) {
+	if floor == 0 {
+		return
+	}
+	w.scanFloor.CompareAndSwap(floor, 0)
 }
 
 // scanNewTransactions queries the wallet for transactions since the last scan
@@ -1187,7 +1204,7 @@ func (w *NativeWallet) consumeScanFloor(lastQuery uint64) uint64 {
 func (w *NativeWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 	const blockQueryBuffer = 3
 
-	lastQuery := w.consumeScanFloor(w.receiveTxLastQuery.Load())
+	lastQuery, floor := w.peekScanFloor(w.receiveTxLastQuery.Load())
 	var fromHeight int32
 	if lastQuery > blockQueryBuffer {
 		fromHeight = int32(lastQuery - blockQueryBuffer)
@@ -1209,6 +1226,12 @@ func (w *NativeWallet) scanNewTransactions(ctx context.Context, tip uint64) {
 		w.recordBtcjsonTx(ctx, &txs[i], tip, isInitial)
 	}
 
+	// Retire the floor only here, next to the cursor advance, because the two
+	// say the same thing: the blocks up to tip have been scanned. Every return
+	// above leaves the cursor where it was, and a floor consumed on one of those
+	// paths would be a lowered start height that no scan ever used - the blocks
+	// below the cursor would never be reached again.
+	w.clearScanFloor(floor)
 	w.receiveTxLastQuery.Store(tip)
 
 	if isInitial {

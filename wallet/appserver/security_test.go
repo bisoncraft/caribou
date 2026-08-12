@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -450,17 +451,93 @@ func TestLogoutDisconnectsWS(t *testing.T) {
 		t.Fatalf("Lock: %v", err)
 	}
 
-	// The peer must observe the close, not just an idle socket. A read
-	// deadline expiring means the link is still up, which is the bug.
+	assertWSClosed(t, conn, "logout")
+}
+
+// assertWSClosed fails unless the peer observes the socket close. An idle
+// socket is not enough: a read deadline expiring means the link is still up,
+// which is the bug every caller of this is written to catch.
+func assertWSClosed(t *testing.T, conn *websocket.Conn, after string) {
+	t.Helper()
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
 	}
-	_, _, err = conn.ReadMessage()
+	_, _, err := conn.ReadMessage()
 	if err == nil {
-		t.Fatal("socket still live after logout")
+		t.Fatalf("socket still live after %s", after)
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		t.Fatalf("socket left open after logout; read timed out instead of closing: %v", err)
+		t.Fatalf("socket left open after %s; read timed out instead of closing: %v", after, err)
 	}
+}
+
+// TestRevokeAPITokenDisconnectsWS covers the credential the notification socket
+// can carry that no cookie-bearing session teardown touches. isAuthed
+// short-circuits on the API token before it looks at any session, and a
+// non-browser automation client can set that header on a /ws upgrade, so
+// revoking the token has to drop the sockets opened under it or the handler's
+// promise of immediate invalidation holds for every request except the one that
+// streams balances, wallet state, deposit addresses and sends continuously.
+func TestRevokeAPITokenDisconnectsWS(t *testing.T) {
+	s, _, shutdown := newTServer(t, true)
+	defer shutdown()
+
+	const token = "0123456789abcdef0123456789abcdef"
+	s.authMtx.Lock()
+	s.apiTokenHash = hashToken(token)
+	s.authMtx.Unlock()
+
+	hdr := http.Header{}
+	hdr.Set(apiTokenHeader, token)
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+s.addr+"/ws", hdr)
+	if err != nil {
+		t.Fatalf("/ws upgrade bearing an API token rejected: %v", err)
+	}
+	defer conn.Close()
+
+	// Revoke, which the handler only accepts from the same machine.
+	req := httptest.NewRequest("POST", "/api/revokeapitoken", nil)
+	req.RemoteAddr = "127.0.0.1:5555"
+	rec := httptest.NewRecorder()
+	s.apiRevokeAPIToken(rec, req)
+	if body := rec.Body.String(); !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("revoke failed: %s", body)
+	}
+
+	assertWSClosed(t, conn, "the API token was revoked")
+}
+
+// TestUnpairCompanionDisconnectsWS covers the other credential a socket can
+// outlive. Unpairing refuses every later companion request twice over - the
+// token is gone and an onion request needs a pairing - but an upgrade is
+// authorized once and never re-checked, so the peer this call exists to cut
+// off, which is remote over the hidden service, keeps its stream.
+func TestUnpairCompanionDisconnectsWS(t *testing.T) {
+	s, _, shutdown := newTServer(t, true)
+	defer shutdown()
+
+	const companionToken = "00112233445566778899aabbccddeeff"
+	s.authMtx.Lock()
+	s.authTokens[companionToken] = true
+	s.companionToken = companionToken
+	s.companionTokenHash = hashToken(companionToken)
+	s.companionTokenClaimed = true
+	s.authMtx.Unlock()
+
+	hdr := http.Header{}
+	hdr.Add("Cookie", (&http.Cookie{Name: authCK, Value: companionToken}).String())
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+s.addr+"/ws", hdr)
+	if err != nil {
+		t.Fatalf("/ws upgrade bearing the companion token rejected: %v", err)
+	}
+	defer conn.Close()
+
+	rec := httptest.NewRecorder()
+	s.apiUnpairCompanionApp(rec, httptest.NewRequest("POST", "/api/unpaircompanionapp", nil))
+	if body := rec.Body.String(); !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("unpair failed: %s", body)
+	}
+
+	assertWSClosed(t, conn, "the companion app was unpaired")
 }

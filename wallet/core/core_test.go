@@ -268,6 +268,13 @@ type TXCWallet struct {
 	// test park a connection mid-flight. Set it before the Connect it should
 	// catch, so the goroutine that runs Connect sees it published.
 	connectHook func()
+
+	// balanceHook, when non-nil, is called at the top of Balance. Unlike
+	// connectHook it parks a reconnect after xcWallet.Connect has released
+	// connectMtx, which is where connectAndUpdateWallet's own comments put the
+	// stall a lifecycle call can interleave with: a Suspend serializes against a
+	// wallet inside Connect, but not against one refreshing its balance.
+	balanceHook func()
 }
 
 var _ asset.Accelerator = (*TXCWallet)(nil)
@@ -332,6 +339,9 @@ func (w *TXCWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 }
 
 func (w *TXCWallet) Balance() (*asset.Balance, error) {
+	if w.balanceHook != nil {
+		w.balanceHook()
+	}
 	if w.balErr != nil {
 		return nil, w.balErr
 	}
@@ -1959,6 +1969,226 @@ func TestResumeUnwindsWholeClaimedSet(t *testing.T) {
 	}
 	if second.connected() {
 		t.Fatal("wallet connected as a side effect of the reconnect survived the Logout")
+	}
+}
+
+// TestResumeInterleavedWithNewerResume covers a stale Resume returning after a
+// newer one already finished. A bumped generation says only that something
+// moved, not what: Resume clears the suspended flag without bumping, so
+// "generation moved and not suspended" describes a completed foreground exactly
+// as well as it describes a logout. Reading it as a logout tears down wallets
+// the user just watched come back, and nothing restores them - the teardown
+// records nothing, the next Suspend skips a wallet that is already down, the
+// next Resume returns early on a clear flag, and connectWallets runs only on
+// Login. The wallets stay dark for the rest of the session.
+func TestResumeInterleavedWithNewerResume(t *testing.T) {
+	rig, wallets, twallets := newSuspendRig(t, 42, 0)
+	defer rig.shutdown()
+	tCore := rig.core
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	wallets, twallets = resumeOrder(t, tCore, []uint32{42, 0}, wallets, twallets)
+
+	// Publish the balances before any goroutine runs, so the parked reconnect
+	// and the foreground one are not both lazily filling the same field.
+	for _, tw := range twallets {
+		tw.bal = new(asset.Balance)
+	}
+
+	// Park the stale Resume in the second wallet's balance refresh rather than
+	// in its Connect: Connect holds connectMtx, which xcWallet.suspend takes, so
+	// the Suspend below would simply serialize behind it instead of interleaving.
+	// By then the first wallet is back up, which is what gives that Suspend
+	// something to record and the foreground Resume something to reconnect.
+	entered, release := make(chan struct{}), make(chan struct{})
+	var parked int32
+	twallets[1].balanceHook = func() {
+		if !atomic.CompareAndSwapInt32(&parked, 0, 1) {
+			return
+		}
+		close(entered)
+		<-release
+	}
+
+	stale := make(chan error, 1)
+	go func() { stale <- tCore.Resume() }()
+	<-entered
+
+	// A full background/foreground cycle underneath it, both halves completing.
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("second Suspend: %v", err)
+	}
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("second Resume: %v", err)
+	}
+	for _, w := range wallets {
+		if !w.connected() {
+			t.Fatalf("%s wallet not reconnected by the second Resume", unbip(w.AssetID))
+		}
+	}
+
+	close(release)
+	if err := <-stale; err != nil {
+		t.Fatalf("stale Resume: %v", err)
+	}
+
+	for _, w := range wallets {
+		if !w.connected() {
+			t.Fatalf("%s wallet torn down by a stale Resume after a newer one brought it up", unbip(w.AssetID))
+		}
+	}
+	tCore.suspendMtx.Lock()
+	suspended, tracked := tCore.suspended, len(tCore.suspendedWallets)
+	tCore.suspendMtx.Unlock()
+	if suspended || tracked != 0 {
+		t.Fatalf("pause state latched (suspended %v, %d tracked) after a foreground that succeeded",
+			suspended, tracked)
+	}
+}
+
+// TestResumeInterleavedWithRelogin is the same root cause reached through the
+// lock tier instead of the pause tier. App.Lock and App.Unlock take App.mtx,
+// which Pause and Resume deliberately do not, so an autolock and the biometric
+// unlock behind it can both complete under an in-flight Resume. Logout bumps the
+// generation and Login does not restore it, so the stale Resume finds a moved
+// generation, a clear suspended flag, and a live session that owns the wallet it
+// is about to disconnect - closing an asset.Opener's handle in the process,
+// which no later Resume can reopen without the app password.
+func TestResumeInterleavedWithRelogin(t *testing.T) {
+	rig, wallets, twallets := newSuspendRig(t, 42)
+	defer rig.shutdown()
+	tCore, w, tw := rig.core, wallets[0], twallets[0]
+	tw.bal = new(asset.Balance)
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var parked int32
+	tw.balanceHook = func() {
+		if !atomic.CompareAndSwapInt32(&parked, 0, 1) {
+			return
+		}
+		close(entered)
+		<-release
+	}
+
+	stale := make(chan error, 1)
+	go func() { stale <- tCore.Resume() }()
+	<-entered
+
+	if err := tCore.Logout(); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	// The unlock that follows. Login sets loggedIn under loginMtx and releases
+	// it before connectWallets brings the wallets back up.
+	tCore.loginMtx.Lock()
+	tCore.loggedIn = true
+	tCore.loginMtx.Unlock()
+	tCore.connectWallets(rig.crypter)
+	if !w.connected() {
+		t.Fatal("login did not reconnect the wallet")
+	}
+
+	close(release)
+	if err := <-stale; err != nil {
+		t.Fatalf("stale Resume: %v", err)
+	}
+
+	if !w.connected() {
+		t.Fatal("wallet disconnected by a stale Resume after a fresh login brought it up")
+	}
+}
+
+// TestSuspendBeforeLoginLatches covers the pause window that opens before
+// TestSuspendDuringLoginConnect's. Login runs the app pass KDF and the seed
+// decrypt before it sets loggedIn, and both are slow, so a pause can land on a
+// core that has no session yet but is moments away from connecting every wallet.
+// Returning early on a logged-out core would latch nothing, leaving those
+// wallets polling through a background the app believes is quiet, with the next
+// Resume a no-op on a clear flag.
+func TestSuspendBeforeLoginLatches(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	assetIDs := []uint32{42 /* dcr */, 0 /* btc */}
+	xcws := make([]*xcWallet, 0, len(assetIDs))
+	for i, assetID := range assetIDs {
+		w, _ := newTWallet(assetID)
+		// Not connected yet: connectWallets is what brings these up.
+		w.hookedUp = false
+		w.pw = encode.PassBytes(fmt.Sprintf("suspendpw%d", i))
+		tCore.wallets[assetID] = w
+		xcws = append(xcws, w)
+	}
+
+	// loggedIn is still false: the pause landed while Login was deriving the
+	// encryption key.
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	tCore.suspendMtx.Lock()
+	latched := tCore.suspended
+	tCore.suspendMtx.Unlock()
+	if !latched {
+		t.Fatal("a pause that landed before login set loggedIn did not latch")
+	}
+
+	tCore.loginMtx.Lock()
+	tCore.loggedIn = true
+	tCore.loginMtx.Unlock()
+	tCore.connectWallets(rig.crypter)
+
+	for _, w := range xcws {
+		if w.connected() {
+			t.Fatalf("%s wallet left polling by a pause that landed before login", unbip(w.AssetID))
+		}
+	}
+	// Recorded, not merely disconnected: a wallet torn down but left out of the
+	// set is stranded exactly the way an unrecorded one that stayed up is.
+	tCore.suspendMtx.Lock()
+	tracked := len(tCore.suspendedWallets)
+	tCore.suspendMtx.Unlock()
+	if tracked != len(assetIDs) {
+		t.Fatalf("expected %d wallets recorded for the next Resume, got %d", len(assetIDs), tracked)
+	}
+
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	for _, w := range xcws {
+		if !w.connected() {
+			t.Fatalf("%s wallet not reconnected by Resume", unbip(w.AssetID))
+		}
+	}
+}
+
+// TestResumeWithoutSession covers the foreground that follows a pause latched
+// before there was a session - the app backgrounded on the login screen. There
+// is nothing to reconnect, but the latch must still be cleared, and quietly: an
+// error here is a spurious toast on an ordinary foreground, and a latch left
+// standing would make the next login's sweep suspend every wallet it connects.
+func TestResumeWithoutSession(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("Resume with no session: %v", err)
+	}
+
+	tCore.suspendMtx.Lock()
+	latched := tCore.suspended
+	tCore.suspendMtx.Unlock()
+	if latched {
+		t.Fatal("pause left latched by a foreground with no session")
 	}
 }
 

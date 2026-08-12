@@ -2641,14 +2641,17 @@ func (c *Core) connectWallets(crypter encrypt.Crypter) {
 		c.log.Infof("Connected to %d of %d wallets.", connectCount, walletCount)
 	}
 
-	// A mobile pause can land in the middle of this. Login sets loggedIn and
-	// releases loginMtx before calling us, so a Suspend can see the session as
-	// logged in and walk a wallet set that is still coming up: it records
-	// nothing, because suspend() reports false for a wallet that is not
-	// connected yet, and latches the pause anyway. Everything we just brought up
-	// would then poll on through a background the app believes is quiet. Sweep
-	// once here rather than per wallet, because the token phase reconnects
-	// network wallets and would undo an earlier sweep.
+	// A mobile pause can land in the middle of this, or anywhere earlier in
+	// Login. Login sets loggedIn and releases loginMtx before calling us, so a
+	// Suspend can see the session as logged in and walk a wallet set that is
+	// still coming up: it records nothing, because suspend() reports false for a
+	// wallet that is not connected yet, and latches the pause anyway. A Suspend
+	// landing before that, during the app pass KDF or the seed decrypt, finds no
+	// session and no connected wallets, and latches the pause for the same
+	// reason. Either way everything we just brought up would poll on through a
+	// background the app believes is quiet. Sweep once here rather than per
+	// wallet, because the token phase reconnects network wallets and would undo
+	// an earlier sweep.
 	c.suspendMtx.Lock()
 	if c.suspended {
 		c.log.Infof("Pause landed during login; suspending the wallets it connected")
@@ -2799,11 +2802,20 @@ func (c *Core) suspendConnected() {
 // Suspend drops every connected wallet's network connection without logging out
 // or locking, so a backgrounded mobile app stops polling and lets the radio
 // sleep while keys and the session stay resident. Resume reconnects the same
-// set. It is a no-op if not logged in. The native shell calls it (via
-// mobile.App.Pause) after a short background grace, not on a quick app switch.
+// set. The native shell calls it (via mobile.App.Pause) after a short background
+// grace, not on a quick app switch.
 //
-// Already being suspended is not a shortcut: the teardown loop runs every time
-// and merges what it finds into the existing set. A wallet can be connected
+// The pause latches whether or not a session exists yet. A logged-out core has
+// no connected wallets for the teardown loop to find, but Login is not atomic:
+// it runs the app pass KDF and the seed decrypt before it sets loggedIn, and
+// only then calls connectWallets. Returning early on a logged-out core would let
+// a pause landing in that window record nothing and latch nothing, so the
+// wallets connectWallets is about to bring up would poll through a background
+// the app believes is quiet, with the next Resume a no-op on a clear flag.
+// Latching instead hands that case to connectWallets' own sweep.
+//
+// Already being suspended is not a shortcut either: the teardown loop runs every
+// time and merges what it finds into the existing set. A wallet can be connected
 // under a pause that already latched - it was still coming up when Suspend
 // walked past it during login, or a failed Resume re-armed the pause with the
 // wallets that did come back up still live - and an early return would leave it
@@ -2811,13 +2823,6 @@ func (c *Core) suspendConnected() {
 func (c *Core) Suspend() error {
 	c.suspendMtx.Lock()
 	defer c.suspendMtx.Unlock()
-
-	c.loginMtx.Lock()
-	loggedIn := c.loggedIn
-	c.loginMtx.Unlock()
-	if !loggedIn {
-		return nil
-	}
 
 	c.suspendConnected()
 	c.suspended = true
@@ -2832,9 +2837,10 @@ func (c *Core) Suspend() error {
 // No app password is needed: the wallets were never closed.
 //
 // A Lock/Logout while suspended clears the pause state itself, so Resume is a
-// no-op afterwards and the shell's Unlock is what reconnects. The logged-out
-// error below is therefore defensive: it only fires if some future caller
-// clears loggedIn without going through Logout.
+// no-op afterwards and the shell's Unlock is what reconnects. Resume can still
+// find the pause latched with no session, because Suspend latches one that lands
+// before Login finishes; that is not an error, just a foreground with nothing
+// to reconnect.
 //
 // suspendMtx is held only to claim the suspended set, not across the reconnects
 // themselves: those are network-bound and unbounded, and Logout takes suspendMtx
@@ -2862,7 +2868,17 @@ func (c *Core) Resume() error {
 	c.suspendMtx.Unlock()
 
 	if !loggedIn {
-		return errors.New("cannot resume: logged out while suspended")
+		// Clearing the flag above is the work: a pause that latched before Login
+		// set loggedIn would otherwise make that login's connectWallets sweep
+		// suspend every wallet it just brought up, in the foreground. There is
+		// nothing to reconnect here - a pre-login pause records no wallets, and
+		// Logout clears the set - so a non-empty one means some caller dropped
+		// the session without going through Logout.
+		if len(suspended) > 0 {
+			c.log.Warnf("Resume found %d suspended wallet(s) with no session; "+
+				"leaving them to the next login", len(suspended))
+		}
+		return nil
 	}
 
 	var failed []uint32
@@ -2949,12 +2965,24 @@ func (c *Core) rearmFailedResumes(failed []uint32, gen uint64) {
 // cleared the cached passwords before we reconnected and which reconnecting
 // cannot restore.
 //
-// How to undo depends on which transition bumped the generation. A Logout wants
-// Disconnect, which closes an asset.Opener's wallet handle. A Suspend does not:
-// leaving xmr's wallet2 instance open is the whole reason xcWallet.suspend
-// exists, so use it and hand the wallet back to the interleaving Suspend's set,
-// or the next Resume would have nothing to reconnect it from. Teardown is
-// bounded, unlike the reconnects, so it is safe to do under suspendMtx.
+// What to do depends on what the session wants now, not merely on the fact that
+// something moved. A Logout wants Disconnect, which closes an asset.Opener's
+// wallet handle. A Suspend does not: leaving xmr's wallet2 instance open is the
+// whole reason xcWallet.suspend exists, so use it and hand the wallet back to
+// the interleaving Suspend's set, or the next Resume would have nothing to
+// reconnect it from. Teardown is bounded, unlike the reconnects, so it is safe
+// to do under suspendMtx.
+//
+// A newer Resume or a fresh Login that already finished is the third case, and
+// it wants these wallets up. c.suspended cannot distinguish it from a logout on
+// its own - both leave the flag clear - so ask whether the session is still
+// logged in. Getting that wrong is not a missed cleanup but active damage: the
+// wallets a foreground just brought back get disconnected, and nothing restores
+// them, since the logout branch records nothing, the next Suspend's teardown
+// loop skips a wallet that is already down, the next Resume returns early on a
+// clear flag, and connectWallets runs only on Login. For xmr the Disconnect also
+// closes the wallet handle that suspend() exists to keep open, so recovery would
+// need an app password Resume does not have.
 func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 	c.suspendMtx.Lock()
 	defer c.suspendMtx.Unlock()
@@ -2966,6 +2994,17 @@ func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 	transition := "logout"
 	if c.suspended {
 		transition = "suspend"
+	} else {
+		// Lock order: suspendMtx before loginMtx, which is the order Suspend,
+		// Resume and Logout all take them in.
+		c.loginMtx.Lock()
+		loggedIn := c.loggedIn
+		c.loginMtx.Unlock()
+		if loggedIn {
+			c.log.Infof("Session changed (newer resume) while resuming; "+
+				"leaving %d wallets to it", len(claimed))
+			return true
+		}
 	}
 	c.log.Infof("Session changed (%s) while resuming; unwinding %d wallets", transition, len(claimed))
 

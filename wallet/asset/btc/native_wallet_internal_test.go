@@ -68,32 +68,88 @@ func TestScanFloor(t *testing.T) {
 	w := &NativeWallet{}
 
 	// No floor armed: the cursor passes through.
-	if got := w.consumeScanFloor(100); got != 100 {
-		t.Fatalf("no-floor consume = %d, want 100", got)
+	if got, floor := w.peekScanFloor(100); got != 100 || floor != 0 {
+		t.Fatalf("no-floor peek = (%d, %d), want (100, 0)", got, floor)
 	}
 
 	// Arming keeps the minimum.
 	w.armScanFloor(90)
 	w.armScanFloor(95) // higher: ignored
 	w.armScanFloor(85) // lower: replaces
-	if got := w.consumeScanFloor(100); got != 85 {
-		t.Fatalf("armed consume = %d, want 85", got)
+	got, floor := w.peekScanFloor(100)
+	if got != 85 || floor != 85 {
+		t.Fatalf("armed peek = (%d, %d), want (85, 85)", got, floor)
 	}
-	// Consumed: the next scan is back to the cursor.
-	if got := w.consumeScanFloor(100); got != 100 {
-		t.Fatalf("post-consume = %d, want 100", got)
+	// Peeking does not consume: the scan has not run yet.
+	if got, _ := w.peekScanFloor(100); got != 85 {
+		t.Fatalf("second peek = %d, want 85; peek must not consume", got)
+	}
+	// Retired once the scan that used it completed.
+	w.clearScanFloor(floor)
+	if got, _ := w.peekScanFloor(100); got != 100 {
+		t.Fatalf("post-clear peek = %d, want 100", got)
 	}
 
-	// A floor above the cursor never raises it.
+	// A floor above the cursor never raises it, but a scan from the cursor
+	// covers those blocks, so it is still retired.
 	w.armScanFloor(150)
-	if got := w.consumeScanFloor(100); got != 100 {
-		t.Fatalf("higher-floor consume = %d, want 100", got)
+	got, floor = w.peekScanFloor(100)
+	if got != 100 || floor != 150 {
+		t.Fatalf("higher-floor peek = (%d, %d), want (100, 150)", got, floor)
+	}
+	w.clearScanFloor(floor)
+	if armed := w.scanFloor.Load(); armed != 0 {
+		t.Fatalf("floor still armed at %d after a scan that covered it", armed)
 	}
 
 	// A never-scanned wallet (cursor 0) already scans from the beginning; the
 	// floor must not turn that into a partial scan.
 	w.armScanFloor(85)
-	if got := w.consumeScanFloor(0); got != 0 {
-		t.Fatalf("initial-scan consume = %d, want 0", got)
+	if got, _ := w.peekScanFloor(0); got != 0 {
+		t.Fatalf("initial-scan peek = %d, want 0", got)
+	}
+}
+
+// TestScanFloorSurvivesFailedScan covers the paths where the scan the floor was
+// peeked for never reaches the blocks it names. scanNewTransactions used to
+// consume the register up front, so a ListSinceBlock error - or a context
+// cancellation partway through - returned with the cursor still at its higher
+// value and the override gone. Nothing rescans below the cursor after that, so
+// the late-notified mined transaction the floor was armed for is dropped from tx
+// history for the life of the process.
+//
+// Driven through the register rather than through scanNewTransactions: btcw is a
+// concrete *wallet.Wallet, so ListSinceBlock cannot be made to fail without an
+// interface seam that exists for nothing else.
+func TestScanFloorSurvivesFailedScan(t *testing.T) {
+	w := &NativeWallet{}
+
+	// A late-notified tx in block 85 arms the floor under a cursor at 100.
+	w.armScanFloor(85)
+	from, floor := w.peekScanFloor(100)
+	if from != 85 {
+		t.Fatalf("scan start = %d, want 85", from)
+	}
+
+	// The scan fails, so clearScanFloor is never reached. The next one must
+	// still reach block 85.
+	if from, _ := w.peekScanFloor(100); from != 85 {
+		t.Fatalf("scan start after a failed scan = %d, want 85", from)
+	}
+
+	// The retry succeeds and retires the floor.
+	w.clearScanFloor(floor)
+	if from, _ := w.peekScanFloor(100); from != 100 {
+		t.Fatalf("scan start after a completed scan = %d, want 100", from)
+	}
+
+	// A floor armed while a scan is running names blocks below where that scan
+	// started, so completing it must not retire the newer, lower value.
+	w.armScanFloor(85)
+	_, floor = w.peekScanFloor(100)
+	w.armScanFloor(70) // a second late notification, mid-scan
+	w.clearScanFloor(floor)
+	if from, _ := w.peekScanFloor(100); from != 70 {
+		t.Fatalf("scan start = %d, want 70; a floor armed mid-scan was retired by it", from)
 	}
 }
