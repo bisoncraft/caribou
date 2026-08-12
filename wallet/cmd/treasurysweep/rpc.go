@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"os"
@@ -75,6 +76,12 @@ func viewCall(ctx context.Context, rpcOverride, method string, args []byte) (jso
 // a view call, as opposed to an endpoint or transport failure.
 var errContractExecution = errors.New("contract execution failed")
 
+// rpcResponseSizeLimit caps how much of an RPC response body is read,
+// mirroring the wallet's NEAR client: a broken or hostile public endpoint
+// must not balloon memory. View-call results here are tiny; 4 MiB is
+// generous headroom.
+const rpcResponseSizeLimit = 1 << 22 // 4 MiB
+
 func postRPC(ctx context.Context, client *http.Client, url string, body []byte) (json.RawMessage, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -97,7 +104,16 @@ func postRPC(ctx context.Context, client *http.Client, url string, body []byte) 
 		} `json:"result"`
 		Error json.RawMessage `json:"error"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+	// Read one byte past the cap so truncation is distinguishable from a
+	// response that is exactly the cap.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, rpcResponseSizeLimit+1))
+	if err != nil {
+		return nil, fmt.Errorf("error reading response: %w", err)
+	}
+	if len(respBody) > rpcResponseSizeLimit {
+		return nil, fmt.Errorf("response exceeds the %d-byte limit", rpcResponseSizeLimit)
+	}
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 	if len(envelope.Error) > 0 {
