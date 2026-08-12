@@ -90,6 +90,12 @@ type testNode struct {
 	txConfsErr        map[common.Hash]error
 	txAndReceiptBlock <-chan struct{}
 	txAndReceiptHit   chan<- struct{}
+
+	// nilReceiptNoErr makes transactionAndReceipt report neither a receipt nor
+	// an error, which a real node never does. Only a test exercising the
+	// caller's guard against that pair should set it; a miss in the receipt
+	// maps above reports not-found, the way a node does.
+	nilReceiptNoErr bool
 }
 
 func newBalance(current, in, out uint64) *Balance {
@@ -287,7 +293,15 @@ func (n *testNode) transactionAndReceipt(ctx context.Context, txHash common.Hash
 		return n.receipt, n.receiptTx, nil
 	}
 
-	return n.receipts[txHash], n.receiptTxs[txHash], n.receiptErrs[txHash]
+	receipt, tx, err := n.receipts[txHash], n.receiptTxs[txHash], n.receiptErrs[txHash]
+	if err == nil && receipt == nil && !n.nilReceiptNoErr {
+		// A hash no test set up a receipt for is a hash the node has never
+		// heard of, and a node says so with an error. Returning the bare nils
+		// instead hands the caller a nil receipt under a nil error, which it
+		// reads as a fetched receipt and dereferences.
+		return nil, tx, asset.CoinNotFoundError
+	}
+	return receipt, tx, err
 }
 
 func (n *testNode) nonce(ctx context.Context) (*big.Int, *big.Int, error) {
@@ -958,6 +972,25 @@ func TestApplyTipChangeDoesNotWaitForPendingTxChecks(t *testing.T) {
 	}
 
 	close(blockRPC)
+	awaitPendingTxChecks(t, w.baseWallet)
+}
+
+// awaitPendingTxChecks waits out the background pending-tx check that
+// applyTipChange queues. A test that returns while one is still in flight
+// leaves it racing that test's own cleanup: the deferred context cancellation
+// is the only thing that stops it, and checkPendingTxs only rechecks the
+// context between phases, so it can go on to apply results against a node the
+// test has finished with. That is how a nil receipt from an unstubbed hash used
+// to surface - as a panic in an unrelated test's output.
+func awaitPendingTxChecks(t *testing.T, w *baseWallet) {
+	t.Helper()
+	for range 200 {
+		if !w.pendingTxCheckRunning.Load() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("pending tx check still running after 2s")
 }
 
 func TestApplyTipChangeCoalescesPendingTxChecks(t *testing.T) {
@@ -1021,6 +1054,8 @@ func TestApplyTipChangeCoalescesPendingTxChecks(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("queued pending tx check did not run after the first completed")
 	}
+
+	awaitPendingTxChecks(t, w.baseWallet)
 }
 
 func TestSendLatestHeader(t *testing.T) {
@@ -1054,6 +1089,59 @@ func TestQueuePendingTxCheckNilContext(t *testing.T) {
 	}
 	if w.pendingTxCheckRunning.Load() {
 		t.Fatal("nil-context wallet should not start pending tx checks")
+	}
+}
+
+// TestCheckPendingTxsNilReceipt covers a node that answers with neither a
+// receipt nor an error. updatePendingTx read the nil error as "we have a
+// receipt" and dereferenced it one line later, taking the wallet down from the
+// goroutine applyTipChange queues, where nothing recovers and the panic lands
+// in whatever test happened to be running.
+func TestCheckPendingTxsNilReceipt(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	node := &testNode{
+		bestHdr:         &types.Header{Number: big.NewInt(1)},
+		nilReceiptNoErr: true,
+	}
+	pendingTx := &extendedWalletTx{
+		WalletTransaction: &txdb.WalletTransaction{Type: txdb.Send, Amount: 1, Fees: 1},
+		txHash:            common.HexToHash("0x1"),
+		Nonce:             big.NewInt(1),
+	}
+	w := &ETHWallet{
+		assetWallet: &assetWallet{
+			baseWallet: &baseWallet{
+				node:             node,
+				addr:             node.address(),
+				ctx:              ctx,
+				log:              tLogger,
+				currentTip:       &types.Header{Number: big.NewInt(1)},
+				confirmedNonceAt: new(big.Int),
+				pendingNonceAt:   big.NewInt(2),
+				pendingTxs:       []*extendedWalletTx{pendingTx},
+				txDB:             &tTxDB{},
+				finalizeConfs:    txConfsNeededToConfirm,
+			},
+			log:     tLogger.SubLogger("ETH"),
+			emit:    asset.NewWalletEmitter(make(chan asset.WalletNotification, 4), BipID, tLogger),
+			assetID: BipID,
+		},
+	}
+	w.wallets = map[uint32]*assetWallet{BipID: w.assetWallet}
+	w.assetWallet.connected.Store(true)
+
+	w.checkPendingTxs()
+
+	// Treated as not found, which is what the node actually told us: the tx is
+	// still pending, unconfirmed, and not written off as rejected or lost.
+	if pendingTx.Confirmed || pendingTx.Rejected || pendingTx.AssumedLost {
+		t.Fatalf("nil receipt resolved the tx (confirmed %v, rejected %v, lost %v)",
+			pendingTx.Confirmed, pendingTx.Rejected, pendingTx.AssumedLost)
+	}
+	if pendingTx.Receipt != nil {
+		t.Fatal("a nil receipt was stored on the pending tx")
 	}
 }
 

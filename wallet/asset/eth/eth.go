@@ -3526,6 +3526,16 @@ func (w *baseWallet) updatePendingTx(tip uint64, pendingTx *extendedWalletTx, fe
 	if w.log.Level() == util.LevelTrace {
 		w.log.Tracef("Attempted to fetch tx and receipt for %s. receipt = %+v, tx = %+v, err = %+v", pendingTx.txHash, receipt, tx, err)
 	}
+	// A node that reports neither a receipt nor an error has told us nothing
+	// about this tx, which is what not-found means. Say so rather than trusting
+	// the nil: everything below the error check dereferences the receipt, so a
+	// node that ever returns this pair - a bug, but node is an interface with
+	// implementations we don't control - would take down the wallet from a
+	// background tip-change goroutine, where there is no caller to recover.
+	if err == nil && receipt == nil {
+		w.log.Warnf("Node reported no receipt and no error for tx %s; treating as not found", pendingTx.txHash)
+		err = asset.CoinNotFoundError
+	}
 	if err != nil {
 		if errors.Is(err, asset.CoinNotFoundError) {
 			pendingTx.indexed = tx != nil
@@ -4348,6 +4358,13 @@ func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common
 	receipt, _, err := w.node.transactionAndReceipt(ctx, txHash)
 	if err != nil {
 		return nil, err
+	}
+	// Same guard as updatePendingTx: no receipt and no error is not-found. The
+	// block number is separately optional - transactionReceipt checks it for
+	// nil before using it - and this is the receiving tx of a swap, so the
+	// caller can't be handed a zero height it would read as unmined either.
+	if receipt == nil || receipt.BlockNumber == nil {
+		return nil, asset.CoinNotFoundError
 	}
 
 	blockHeight := receipt.BlockNumber.Int64()
