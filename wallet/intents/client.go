@@ -187,8 +187,13 @@ func (c *Client) Quote(ctx context.Context, req *QuoteRequest) (*QuoteResponse, 
 		req = &reqCopy
 	}
 
+	sentRaw, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling quote request: %w", err)
+	}
+
 	resp := new(QuoteResponse)
-	if err := c.do(ctx, http.MethodPost, "/v0/quote", req, resp); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/v0/quote", json.RawMessage(sentRaw), resp); err != nil {
 		return nil, err
 	}
 
@@ -197,28 +202,72 @@ func (c *Client) Quote(ctx context.Context, req *QuoteRequest) (*QuoteResponse, 
 	}
 
 	// The signature proves the service signed what it received; it cannot
-	// prove the service received what was sent. Cross-check every signed
-	// request field a request-tamperer could target. The location-type
-	// fields matter most: recipientType flipped from DESTINATION_CHAIN to
-	// INTENTS reinterprets the recipient string as a verifier-internal
-	// identity, stranding the output inside intents.near (refundType
-	// likewise on the refund branch); slippageTolerance raised in flight
-	// lowers minAmountOut below the terms the user accepted; deadline
-	// shortened can force a refund. Asset IDs are excluded: the service
-	// normalizes them across its ID schemes, and callers verify them
-	// against the catalog separately.
-	echo := &resp.Request
-	if echo.Recipient != req.Recipient || echo.RefundTo != req.RefundTo ||
-		echo.Amount != req.Amount || echo.SwapType != req.SwapType ||
-		echo.Dry != req.Dry ||
-		echo.RecipientType != req.RecipientType || echo.RefundType != req.RefundType ||
-		echo.DepositType != req.DepositType ||
-		echo.SlippageTolerance != req.SlippageTolerance ||
-		echo.Deadline != req.Deadline {
-		return nil, fmt.Errorf("rejecting quote: echoed request differs from submitted request")
+	// prove the service received what was sent. Cross-check the echoed
+	// request against the raw submitted body over every signed request
+	// field. Raw JSON, not struct fields: QuoteRequest doesn't model every
+	// signed field (e.g. virtualChainRecipient), and encoding/json silently
+	// drops what the struct doesn't have, so an injected field would be
+	// invisible to a struct comparison. The location-type fields matter
+	// most: recipientType flipped from DESTINATION_CHAIN to INTENTS
+	// reinterprets the recipient string as a verifier-internal identity,
+	// stranding the output inside intents.near (refundType likewise on the
+	// refund branch); slippageTolerance raised in flight lowers
+	// minAmountOut below the terms the user accepted; deadline shortened
+	// can force a refund.
+	if err := crossCheckEcho(sentRaw, resp.rawRequest); err != nil {
+		return nil, fmt.Errorf("rejecting quote: %w", err)
 	}
 
 	return resp, nil
+}
+
+// crossCheckEcho compares the echoed quote request against the raw
+// submitted body, field-by-field over the signed request fields. Values
+// compare as compacted JSON. Optional fields treat absent and falsy as
+// equivalent, mirroring the signed payload's falsy-omission rule (the
+// service echoes explicit nulls for omitted fields). Asset IDs are
+// exempt: the service normalizes them between its ID schemes
+// (nep141 ↔ 1cs_v1), and callers verify them against the catalog
+// separately.
+func crossCheckEcho(sentRaw, echoedRaw json.RawMessage) error {
+	var sent, echoed map[string]json.RawMessage
+	if err := json.Unmarshal(sentRaw, &sent); err != nil {
+		return fmt.Errorf("error decoding submitted request: %w", err)
+	}
+	if err := json.Unmarshal(echoedRaw, &echoed); err != nil {
+		return fmt.Errorf("error decoding echoed request: %w", err)
+	}
+	for _, k := range signedRequestFields {
+		if k == "originAsset" || k == "destinationAsset" {
+			continue
+		}
+		if !rawJSONEqual(sent[k], echoed[k]) {
+			return fmt.Errorf("echoed request field %q differs from submitted request", k)
+		}
+	}
+	for _, k := range signedRequestOptFields {
+		sv, ev := sent[k], echoed[k]
+		if isFalsyJSON(sv) && isFalsyJSON(ev) {
+			continue // both omitted or falsy: excluded from the signed payload
+		}
+		if !rawJSONEqual(sv, ev) {
+			return fmt.Errorf("echoed request field %q differs from submitted request", k)
+		}
+	}
+	return nil
+}
+
+// rawJSONEqual compares two raw JSON values by compacted bytes. A missing
+// value (nil) equals only another missing value.
+func rawJSONEqual(a, b json.RawMessage) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	var ab, bb bytes.Buffer
+	if json.Compact(&ab, a) != nil || json.Compact(&bb, b) != nil {
+		return false
+	}
+	return bytes.Equal(ab.Bytes(), bb.Bytes())
 }
 
 // Status fetches the state of the swap identified by depositAddress,

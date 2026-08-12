@@ -160,7 +160,9 @@ func TestQuoteRejectsEchoMismatch(t *testing.T) {
 	// service received, so only the echo cross-check catches the change.
 	// Every compared field gets a case; the location-type flips
 	// (recipientType/refundType to INTENTS) are the redirection attack the
-	// check exists to stop.
+	// check exists to stop. The optional signed fields (not modeled on
+	// QuoteRequest) cover injection: the raw comparison must see fields
+	// encoding/json would silently drop.
 	tests := []struct {
 		field   string
 		mangled json.RawMessage
@@ -175,6 +177,11 @@ func TestQuoteRejectsEchoMismatch(t *testing.T) {
 		{"depositType", json.RawMessage(`"INTENTS"`)},
 		{"slippageTolerance", json.RawMessage(`10000`)},
 		{"deadline", json.RawMessage(`"2026-07-15T11:00:00.000Z"`)},
+		{"virtualChainRecipient", json.RawMessage(`"0xattacker"`)},
+		{"virtualChainRefundRecipient", json.RawMessage(`"0xattacker"`)},
+		{"customRecipientMsg", json.RawMessage(`"attacker-memo"`)},
+		{"referral", json.RawMessage(`"attacker"`)},
+		{"quoteWaitingTimeMs", json.RawMessage(`3000`)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
@@ -184,10 +191,34 @@ func TestQuoteRejectsEchoMismatch(t *testing.T) {
 			c := newTestClient(t, srv.URL, pub, nil)
 
 			_, err := c.Quote(context.Background(), testQuoteRequest())
-			if err == nil || !strings.Contains(err.Error(), "echoed request differs") {
+			if err == nil || !strings.Contains(err.Error(), "differs from submitted request") {
 				t.Fatalf("expected echo mismatch rejection for %s, got %v", tt.field, err)
 			}
 		})
+	}
+}
+
+// TestQuoteAcceptsBenignEchoDrift covers the two ways a legitimate echo
+// differs from the submitted body: explicit nulls (or other falsy values)
+// for optional fields the client omitted — the production service echoes
+// "virtualChainRecipient":null — and asset IDs normalized between the
+// service's ID schemes, which callers verify against the catalog instead.
+func TestQuoteAcceptsBenignEchoDrift(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+
+	srv := newQuoteServer(t, priv, func(echo map[string]json.RawMessage) {
+		echo["virtualChainRecipient"] = json.RawMessage(`null`)
+		echo["virtualChainRefundRecipient"] = json.RawMessage(`null`)
+		echo["customRecipientMsg"] = json.RawMessage(`null`)
+		echo["referral"] = json.RawMessage(`""`)
+		echo["quoteWaitingTimeMs"] = json.RawMessage(`0`)
+		echo["originAsset"] = json.RawMessage(`"1cs_v1:btc:native"`)
+		echo["destinationAsset"] = json.RawMessage(`"1cs_v1:sol:native"`)
+	})
+	c := newTestClient(t, srv.URL, pub, nil)
+
+	if _, err := c.Quote(context.Background(), testQuoteRequest()); err != nil {
+		t.Fatalf("benign echo drift rejected: %v", err)
 	}
 }
 
