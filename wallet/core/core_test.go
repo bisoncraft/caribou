@@ -2048,6 +2048,111 @@ func TestResumeInterleavedWithNewerResume(t *testing.T) {
 	}
 }
 
+// TestStaleResumeRearmsUnreachedWallets covers the tail of the claimed set that
+// bowing out to a newer session would otherwise drop. Leaving the wallets to it
+// is right only for the ones it can see: a wallet the stale Resume never reached
+// was still down when the interleaving Suspend swept, so that Suspend recorded
+// nothing for it and the newer Resume never claimed it. Nobody owns it after
+// that - it sits disconnected with the app in the foreground, no polling and no
+// sync monitor, until the next Login - which is the same stranding the staleness
+// check exists to prevent, just reached from the other side.
+//
+// Three wallets, parked in the second, so the third is the one no one claims.
+func TestStaleResumeRearmsUnreachedWallets(t *testing.T) {
+	assetIDs := []uint32{42, 0, 60}
+	rig, wallets, twallets := newSuspendRig(t, assetIDs...)
+	defer rig.shutdown()
+	tCore := rig.core
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+	wallets, twallets = resumeOrder(t, tCore, assetIDs, wallets, twallets)
+
+	for _, tw := range twallets {
+		tw.bal = new(asset.Balance)
+	}
+
+	// Park in the middle wallet's balance refresh, as in
+	// TestResumeInterleavedWithNewerResume, and for the same reason: Connect
+	// holds connectMtx, so a Suspend would serialize behind it rather than
+	// interleave. The wallet behind the parked one is never touched.
+	entered, release := make(chan struct{}), make(chan struct{})
+	var parked int32
+	twallets[1].balanceHook = func() {
+		if !atomic.CompareAndSwapInt32(&parked, 0, 1) {
+			return
+		}
+		close(entered)
+		<-release
+	}
+
+	stale := make(chan error, 1)
+	go func() { stale <- tCore.Resume() }()
+	<-entered
+
+	unreached := wallets[2]
+	if unreached.connected() {
+		t.Fatalf("%s wallet should still be down; the stale Resume has not reached it",
+			unbip(unreached.AssetID))
+	}
+
+	// A full background/foreground cycle underneath the parked Resume. The
+	// Suspend can only record the two wallets that are up, so the third is
+	// absent from the set this Resume claims.
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("second Suspend: %v", err)
+	}
+	tCore.suspendMtx.Lock()
+	claimedByNewer := append([]uint32(nil), tCore.suspendedWallets...)
+	tCore.suspendMtx.Unlock()
+	for _, assetID := range claimedByNewer {
+		if assetID == unreached.AssetID {
+			t.Fatal("test no longer exercises the gap: the interleaving Suspend saw the unreached wallet")
+		}
+	}
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("second Resume: %v", err)
+	}
+
+	close(release)
+	if err := <-stale; err != nil {
+		t.Fatalf("stale Resume: %v", err)
+	}
+
+	// The wallets the newer session brought up are its business, and untouched.
+	for _, w := range wallets[:2] {
+		if !w.connected() {
+			t.Fatalf("%s wallet torn down by a stale Resume after a newer one brought it up",
+				unbip(w.AssetID))
+		}
+	}
+
+	// The one it could not have claimed is handed back, so a foreground retries
+	// it. Recorded and latched both: a set with the flag clear is unreachable,
+	// since Resume returns early on it.
+	tCore.suspendMtx.Lock()
+	suspended := tCore.suspended
+	rearmed := append([]uint32(nil), tCore.suspendedWallets...)
+	tCore.suspendMtx.Unlock()
+	if len(rearmed) != 1 || rearmed[0] != unreached.AssetID {
+		t.Fatalf("expected the unreached %s wallet re-armed, got %v",
+			unbip(unreached.AssetID), rearmed)
+	}
+	if !suspended {
+		t.Fatal("wallets re-armed with the pause flag clear; the next Resume would return early")
+	}
+
+	if err := tCore.Resume(); err != nil {
+		t.Fatalf("retry Resume: %v", err)
+	}
+	for _, w := range wallets {
+		if !w.connected() {
+			t.Fatalf("%s wallet still down after the retry foreground", unbip(w.AssetID))
+		}
+	}
+}
+
 // TestResumeInterleavedWithRelogin is the same root cause reached through the
 // lock tier instead of the pause tier. App.Lock and App.Unlock take App.mtx,
 // which Pause and Resume deliberately do not, so an autolock and the biometric

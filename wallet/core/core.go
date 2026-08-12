@@ -2883,16 +2883,9 @@ func (c *Core) Resume() error {
 
 	var failed []uint32
 	for _, assetID := range suspended {
-		w, found := c.wallet(assetID)
-		if !found || w.isDisabled() {
+		w, resumable := c.resumableWallet(assetID)
+		if !resumable {
 			continue
-		}
-		// Skip a token whose network wallet was disabled while suspended; its
-		// network wallet won't reconnect, so the token can't either.
-		if token := asset.TokenInfo(assetID); token != nil {
-			if nw, ok := c.wallet(token.NetworkID); ok && nw.isDisabled() {
-				continue
-			}
 		}
 		err := c.connectAndUpdateWallet(w)
 		// Re-check before acting on err, not after: a reconnect that fails does
@@ -2913,6 +2906,23 @@ func (c *Core) Resume() error {
 
 	c.rearmFailedResumes(failed, gen)
 	return nil
+}
+
+// resumableWallet returns the wallet a Resume should reconnect for assetID, or
+// false if there is nothing to reconnect: an unknown or disabled wallet, or a
+// token whose network wallet was disabled while suspended, since that network
+// wallet won't come back and the token rides on its connection.
+func (c *Core) resumableWallet(assetID uint32) (*xcWallet, bool) {
+	w, found := c.wallet(assetID)
+	if !found || w.isDisabled() {
+		return nil, false
+	}
+	if token := asset.TokenInfo(assetID); token != nil {
+		if nw, ok := c.wallet(token.NetworkID); ok && nw.isDisabled() {
+			return nil, false
+		}
+	}
+	return w, true
 }
 
 // rearmFailedResumes puts the wallets whose reconnect failed back into the
@@ -2982,7 +2992,9 @@ func (c *Core) rearmFailedResumes(failed []uint32, gen uint64) {
 // loop skips a wallet that is already down, the next Resume returns early on a
 // clear flag, and connectWallets runs only on Login. For xmr the Disconnect also
 // closes the wallet handle that suspend() exists to keep open, so recovery would
-// need an app password Resume does not have.
+// need an app password Resume does not have. Bowing out of that case is not
+// quite the whole answer, though: see rearmUnreached for the tail of the set the
+// newer session cannot know about.
 func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 	c.suspendMtx.Lock()
 	defer c.suspendMtx.Unlock()
@@ -3001,8 +3013,7 @@ func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 		loggedIn := c.loggedIn
 		c.loginMtx.Unlock()
 		if loggedIn {
-			c.log.Infof("Session changed (newer resume) while resuming; "+
-				"leaving %d wallets to it", len(claimed))
+			c.rearmUnreached(claimed)
 			return true
 		}
 	}
@@ -3025,6 +3036,43 @@ func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 		c.trackSuspended(assetID)
 	}
 	return true
+}
+
+// rearmUnreached hands the wallets a stale Resume never reached back to the
+// suspended set, so the next foreground retries them. The session it lost the
+// race to wants them up, but it has no way to bring them up itself: they were
+// already down when the interleaving Suspend swept, so its teardown loop had
+// nothing to record, so the newer Resume never claimed them. Leaving them is the
+// same stranding the whole staleness check exists to prevent - down with the app
+// in the foreground, no polling and no sync monitor, until the next Login. The
+// wallets that were reached are left alone; those are up and belong to the newer
+// session now.
+//
+// Marking the core suspended in the foreground is what makes the retry reachable
+// at all, since Resume returns early when it is not - the same trade
+// rearmFailedResumes makes, and safe for the same reasons: a Logout clears the
+// flag, and the wallets that are up are swept by the next Suspend whether or not
+// it is already set. The generation is deliberately not bumped: the newer
+// session still owns it, and bumping would strand the very Resume we are handing
+// these wallets to. Caller holds suspendMtx.
+func (c *Core) rearmUnreached(claimed []uint32) {
+	var unreached int
+	for _, assetID := range claimed {
+		w, resumable := c.resumableWallet(assetID)
+		if !resumable || w.connected() {
+			continue
+		}
+		c.trackSuspended(assetID)
+		unreached++
+	}
+	if unreached == 0 {
+		c.log.Infof("Session changed (newer resume) while resuming; "+
+			"leaving %d wallets to it", len(claimed))
+		return
+	}
+	c.suspended = true
+	c.log.Infof("Session changed (newer resume) while resuming; leaving %d wallets to it "+
+		"and re-arming %d it could not have claimed", len(claimed)-unreached, unreached)
 }
 
 // maxSendFeeUSD caps the estimated network fee of a mainnet send when a fiat
