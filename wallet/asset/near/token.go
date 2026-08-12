@@ -151,6 +151,9 @@ func (w *TokenWallet) Info() *asset.WalletInfo {
 // has never been storage-registered on the token contract reports a zero
 // balance, not an error.
 func (w *TokenWallet) Balance() (*asset.Balance, error) {
+	if w.parent.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	atomic, err := w.ftBalanceOf(w.parent.accountID)
 	if err != nil {
 		return nil, err
@@ -211,6 +214,9 @@ func (w *TokenWallet) FeeRate() uint64 {
 }
 
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	if w.parent.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid NEAR address %q", address)
 	}
@@ -257,6 +263,12 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 	actions = append(actions, functionCallAction("ft_transfer", amountArgs, ftTransferGas, big.NewInt(ftTransferDepositYocto)))
 
+	// sendMtx covers reserveNonce through broadcastTxAsync: native and token
+	// sends share the parent wallet's access key, and NEAR requires nonces
+	// to reach the network in increasing order.
+	w.parent.sendMtx.Lock()
+	defer w.parent.sendMtx.Unlock()
+
 	nonce, err := w.parent.reserveNonce()
 	if err != nil {
 		return nil, err
@@ -264,6 +276,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	w.parent.tipMtx.RLock()
 	blockHash := w.parent.tipHash
+	tipHeight := w.parent.tip
 	w.parent.tipMtx.RUnlock()
 
 	tx := &nearTransaction{
@@ -292,6 +305,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		Recipient: &recipient,
 		TokenID:   &w.assetID,
 	}
+	setSentAtHeight(wtx, tipHeight)
 
 	// Persist before broadcasting so the tx is tracked even if the broadcast
 	// hits a network error after the node has already accepted it.
@@ -301,13 +315,8 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		}
 	}
 
-	rpcTxHash, err := w.parent.rpc.broadcastTxAsync(w.parent.ctx, encoded)
-	if err != nil {
-		w.parent.log.Warnf("Broadcast network error (tx %s outcome unknown): %v", txID, err)
-		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
-	}
-	if rpcTxHash != "" && rpcTxHash != txID {
-		w.parent.log.Warnf("server returned tx hash %s != computed hash %s; using computed", rpcTxHash, txID)
+	if _, err := w.parent.broadcastSend(w.txDB, wtx, encoded, txID); err != nil {
+		return nil, err
 	}
 
 	if w.emit != nil {

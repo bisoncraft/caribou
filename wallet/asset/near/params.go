@@ -17,6 +17,14 @@ const (
 	// MaxBlockInterval is the number of seconds since the last header came
 	// in over which we consider the chain to be out of sync.
 	MaxBlockInterval = 30
+	// TxValidityBlocks is the transaction_validity_period genesis parameter:
+	// the number of blocks after a tx's reference block_hash within which
+	// the tx must be included, or the network rejects it as expired. Used
+	// to age out a pre-stored pending tx that never landed. Confirmed via
+	// EXPERIMENTAL_genesis_config at 86400 on both mainnet and testnet
+	// (rpc.{mainnet,testnet}.near.org); simnet uses the testnet RPC
+	// endpoint, so the same value applies there too.
+	TxValidityBlocks = 86400
 )
 
 var (

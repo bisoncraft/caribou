@@ -159,6 +159,16 @@ type NearWallet struct {
 	nonceMtx sync.Mutex
 	nonce    uint64
 
+	// sendMtx serializes reserveNonce through broadcastTxAsync across native
+	// and token sends, which share this wallet's access key. NEAR requires
+	// tx.nonce to be submitted in increasing order -- unlike xrp, which
+	// queues out-of-order sequences (terQUEUED/terPRE_SEQ) and applies them
+	// once the gap fills, NEAR permanently invalidates a lower nonce that
+	// lands after a higher one. reserveNonce alone is not enough to prevent
+	// that: it only serializes the local nonce counter, not the order in
+	// which the signed transactions actually reach the network.
+	sendMtx sync.Mutex
+
 	// lastScannedHeight is the last block height that was scanned for
 	// incoming transactions.
 	lastScannedHeight uint64
@@ -364,6 +374,13 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 
 	yoctoAmount := DropsToYocto(value)
 
+	// sendMtx covers reserveNonce through broadcastTxAsync: NEAR requires
+	// nonces to reach the network in increasing order, so two sends racing
+	// past this point could broadcast out of order and permanently
+	// invalidate the lower nonce.
+	w.sendMtx.Lock()
+	defer w.sendMtx.Unlock()
+
 	nonce, err := w.reserveNonce()
 	if err != nil {
 		return nil, err
@@ -371,6 +388,7 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
+	tipHeight := w.tip
 	w.tipMtx.RUnlock()
 
 	tx := &nearTransaction{
@@ -398,6 +416,7 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		Fees:      DefaultFee,
 		Recipient: &recipient,
 	}
+	setSentAtHeight(wtx, tipHeight)
 
 	// Persist before broadcasting so the tx is tracked even if the broadcast
 	// hits a network error after the node has already accepted it.
@@ -408,17 +427,8 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		}
 	}
 
-	rpcTxHash, err := w.rpc.broadcastTxAsync(w.ctx, encoded)
-	if err != nil {
-		// Network error: the node may have received the signed transaction.
-		// The pre-stored entry will be resolved by checkPendingTxs.
-		w.log.Warnf("Broadcast network error (tx %s outcome unknown): %v", txID, err)
-		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
-	}
-	if rpcTxHash != "" && rpcTxHash != txID {
-		// Sanity-check: the node echoes back the tx hash it computed. A
-		// mismatch indicates a bug in our encoding.
-		w.log.Warnf("server returned tx hash %s != computed hash %s; using computed", rpcTxHash, txID)
+	if _, err := w.broadcastSend(w.txDB, wtx, encoded, txID); err != nil {
+		return nil, err
 	}
 
 	if w.emit != nil {
@@ -426,6 +436,42 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	}
 
 	return &coin{txHash: hash, value: value}, nil
+}
+
+// broadcastSend submits a signed transaction. On a deterministic node-level
+// rejection (INVALID_TRANSACTION: the node parsed and rejected the tx
+// outright, e.g. bad nonce/signature/insufficient balance) it resolves the
+// pre-stored wtx as Confirmed+Rejected immediately, since the tx was never
+// accepted for execution and would otherwise stay Pending forever. Any
+// other error -- a transport error, or a node-level error that doesn't mean
+// outright rejection (TIMEOUT_ERROR, INTERNAL_ERROR, DOES_NOT_TRACK_SHARD)
+// -- leaves the outcome unknown, so wtx stays pending for checkPendingTxs to
+// resolve once it either lands or expires.
+func (w *NearWallet) broadcastSend(txDB txdb.NetworkTxDB, wtx *txdb.WalletTransaction, encoded, txID string) (string, error) {
+	rpcTxHash, err := w.rpc.broadcastTxAsync(w.ctx, encoded)
+	if err != nil {
+		if isDeterministicRejection(err) {
+			rpcErr := err.(*rpcError)
+			w.log.Warnf("Transaction %s rejected by node: %v", txID, rpcErr)
+			wtx.Confirmed = true
+			wtx.Rejected = true
+			if txDB != nil {
+				if serr := txDB.StoreTx(wtx); serr != nil {
+					w.log.Errorf("Error marking rejected tx %s: %v", txID, serr)
+				}
+			}
+			return "", fmt.Errorf("transaction rejected: %w", rpcErr)
+		}
+		// Network error: the node may have received the signed transaction.
+		w.log.Warnf("Broadcast network error (tx %s outcome unknown): %v", txID, err)
+		return "", fmt.Errorf("error broadcasting transaction: %w", err)
+	}
+	if rpcTxHash != "" && rpcTxHash != txID {
+		// Sanity-check: the node echoes back the tx hash it computed. A
+		// mismatch indicates a bug in our encoding.
+		w.log.Warnf("server returned tx hash %s != computed hash %s; using computed", rpcTxHash, txID)
+	}
+	return rpcTxHash, nil
 }
 
 func (w *NearWallet) ValidateAddress(address string) bool {
@@ -592,9 +638,36 @@ func (w *NearWallet) checkPendingTxs(ctx context.Context) {
 		w.log.Errorf("Error getting pending txs: %v", err)
 		return
 	}
+	w.tipMtx.RLock()
+	tip := w.tip
+	w.tipMtx.RUnlock()
+
 	for _, tx := range pending {
 		result, err := w.rpc.txStatus(ctx, tx.ID, w.accountID)
 		if err != nil {
+			// Expiry is gated on the tip height rather than on the specific
+			// error class txStatus returned (e.g. UNKNOWN_TRANSACTION, or
+			// under wait_until a TIMEOUT_ERROR): tip only advances on a
+			// healthy poll, so a dead RPC can't falsely age a tx out, and
+			// this doesn't depend on guessing every "not found" spelling.
+			sentAt := nearData(tx).SentAtHeight
+			if sentAt > 0 && tip > sentAt && tip-sentAt > TxValidityBlocks {
+				// Expired: the tx's reference block_hash is now older than
+				// transaction_validity_period, so it can never be included.
+				// Terminal, so mark Confirmed (to leave the pending set) and
+				// Rejected.
+				tx.Confirmed = true
+				tx.Rejected = true
+				if err := w.txDB.StoreTx(tx); err != nil {
+					w.log.Errorf("Error marking expired tx %s: %v", tx.ID, err)
+					continue
+				}
+				w.log.Warnf("Transaction %s expired: sent at %d, tip %d, validity %d blocks", tx.ID, sentAt, tip, TxValidityBlocks)
+				if w.emit != nil {
+					w.emit.TransactionNote(tx, false)
+				}
+				continue
+			}
 			w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
 			continue
 		}
@@ -672,14 +745,16 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 	// is retried on the next poll instead of being marked done.
 	prevAcct, err := w.rpc.viewAccountAt(ctx, w.accountID, w.lastScannedHeight)
 	var prevBal *big.Int
+	var prevOK bool
 	switch {
 	case err == nil:
-		prevBal, _ = parseYoctoNEAR(prevAcct.Amount)
+		prevBal, prevOK = parseYoctoNEAR(prevAcct.Amount)
 	case isAccountNotFound(err):
 		// Account didn't exist yet at lastScannedHeight: treat as a zero
 		// starting balance so the very first funding transfer is scanned
 		// instead of being skipped.
 		prevBal = new(big.Int)
+		prevOK = true
 	default:
 		w.log.Warnf("Error querying account at block %d: %v", w.lastScannedHeight, err)
 		return
@@ -695,9 +770,9 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 		w.log.Warnf("Error querying account at block %d: %v", newTip, err)
 		return
 	}
-	curBal, _ := parseYoctoNEAR(curAcct.Amount)
+	curBal, curOK := parseYoctoNEAR(curAcct.Amount)
 
-	if prevBal == nil || curBal == nil {
+	if !prevOK || !curOK {
 		w.log.Warnf("Error parsing account balance at block %d or %d", w.lastScannedHeight, newTip)
 		return
 	}
@@ -711,16 +786,33 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, newTip uint64) {
 		startHeight = newTip - maxScanBlocks + 1
 	}
 
+	// scanned tracks the last height we actually fetched a block for, so a
+	// transient error can hold the watermark there rather than at height-1,
+	// which may itself have been a skipped (UNKNOWN_BLOCK) height that was
+	// never scanned -- parking the watermark on a nonexistent height would
+	// make every future poll's balance-comparison query fail the same way,
+	// stalling receive detection forever.
+	scanned := startHeight - 1
 	for height := startHeight; height <= newTip; height++ {
 		block, err := w.rpc.getBlockByHeight(ctx, height)
 		if err != nil {
+			if isUnknownBlock(err) {
+				// NEAR skips block heights when a producer misses its slot;
+				// there's nothing to scan at this height.
+				continue
+			}
+			// Transient error: hold the watermark at the last height we
+			// actually scanned, rather than jumping to newTip and losing
+			// every receive in the unscanned remainder of the window.
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
-			break
+			w.lastScannedHeight = scanned
+			return
 		}
 		blockTime := block.Header.Timestamp / 1_000_000_000
 		for _, chunk := range block.Chunks {
 			w.scanChunk(ctx, chunk.ChunkHash, height, blockTime)
 		}
+		scanned = height
 	}
 
 	w.lastScannedHeight = newTip
@@ -860,5 +952,38 @@ func isTxNotFound(err error) bool {
 	if rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_TRANSACTION" {
 		return true
 	}
-	return strings.Contains(string(rpcErr.Data), "does not exist")
+	// NEAR's tx-status message is "doesn't exist", not "does not exist" (the
+	// latter is view_account's phrasing); the Cause.Name check above does the
+	// real work here.
+	return strings.Contains(string(rpcErr.Data), "doesn't exist")
+}
+
+// isUnknownBlock checks if an RPC error indicates the requested block height
+// was skipped (no block was produced at that height), as opposed to a
+// transient RPC failure.
+func isUnknownBlock(err error) bool {
+	if err == nil {
+		return false
+	}
+	rpcErr, ok := err.(*rpcError)
+	if !ok {
+		return false
+	}
+	return rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_BLOCK"
+}
+
+// isDeterministicRejection checks if a broadcast_tx_async error means the
+// node parsed and rejected the transaction outright (bad nonce, bad
+// signature, insufficient balance, etc.), as opposed to a transient or
+// ambiguous error (TIMEOUT_ERROR, INTERNAL_ERROR, DOES_NOT_TRACK_SHARD)
+// where the tx's outcome is still unknown.
+func isDeterministicRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	rpcErr, ok := err.(*rpcError)
+	if !ok {
+		return false
+	}
+	return rpcErr.Cause != nil && rpcErr.Cause.Name == "INVALID_TRANSACTION"
 }
