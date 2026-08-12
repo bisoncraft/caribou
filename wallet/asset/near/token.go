@@ -5,8 +5,6 @@ package near
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -271,37 +269,12 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		return nil, err
 	}
 
-	w.parent.nonceMtx.Lock()
-	defer w.parent.nonceMtx.Unlock()
-
-	nonce, err := w.parent.reserveNonce(rpc)
-	if err != nil {
-		return nil, err
-	}
-
-	w.parent.tipMtx.RLock()
-	blockHash := w.parent.tipHash
-	refHeight := w.parent.tip
-	w.parent.tipMtx.RUnlock()
-
-	tx := &nearTransaction{
-		signerID:   w.parent.accountID,
-		publicKey:  [32]byte(w.parent.pubKey),
-		nonce:      nonce,
-		receiverID: w.contractID,
-		blockHash:  blockHash,
-		actions:    actions,
-	}
-
-	txBytes := serializeTransaction(tx)
-	hash := sha256.Sum256(txBytes)
-	sig := ed25519.Sign(privKey, hash[:])
-	signedTx := serializeSignedTransaction(txBytes, sig)
-	encoded := encodeSignedTx(signedTx)
+	// Shared with the native send path: nonce reservation plus a single
+	// fresh-nonce retry on an authoritative InvalidNonce rejection.
+	result, hash, refHeight, err := w.parent.sendActions(rpc, privKey, w.contractID, actions)
 
 	txID := base58.Encode(hash[:])
 
-	result, err := rpc.sendTx(encoded)
 	var rejected bool
 	var failureMsg string
 	switch {
@@ -326,13 +299,20 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	// The transaction fee is paid in NEAR gas, so it is recorded in the
 	// parent asset's units — which is how token transaction fees are
 	// displayed. Prefer the actual burnt gas; fall back to an estimate only
-	// when the execution outcome is not yet known (ambiguous broadcast).
+	// when the execution outcome is not yet known (ambiguous broadcast),
+	// priced at this transaction's attached gas budget — not a bare
+	// transfer's, which is orders of magnitude lower — until the pending
+	// poller replaces it with the actual burn.
 	var fees uint64
 	if err == nil {
 		fees = result.feeDrops()
 	}
 	if fees == 0 {
-		fees = w.parent.estimateFee()
+		gasBudget := int64(ftTransferGas)
+		if !registered {
+			gasBudget += storageDepositGas
+		}
+		fees = w.parent.estimateFeeAtGas(gasBudget)
 	}
 
 	recipient := address

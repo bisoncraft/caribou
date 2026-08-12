@@ -403,40 +403,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		return nil, err
 	}
 
-	w.nonceMtx.Lock()
-	defer w.nonceMtx.Unlock()
-
-	akInfo, err := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
-	if err != nil {
-		return nil, err
-	}
-
-	// The final-view nonce lags transactions executed in the last block or
-	// two, so a local watermark protects rapid sequential sends.
-	nonce := akInfo.Nonce + 1
-	if w.nonce >= nonce {
-		nonce = w.nonce + 1
-	}
-
-	result, hash, refHeight, err := w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
-	if err != nil && isInvalidNonce(err) {
-		// An authoritative InvalidNonce means this transaction was rejected
-		// and did not execute, so a fresh-nonce retry is a new send rather
-		// than a duplicate of a possibly-live transaction. (An ambiguous
-		// broadcast is never an InvalidNonce error, so it cannot reach here.)
-		// The nonce may have been consumed by our own lagging watermark or by
-		// the same key in another wallet instance; refresh and retry once.
-		akInfo, akErr := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "optimistic")
-		if akErr != nil {
-			return nil, fmt.Errorf("nonce refresh failed after %v: %w", err, akErr)
-		}
-		if akInfo.Nonce >= nonce {
-			nonce = akInfo.Nonce + 1
-		} else {
-			nonce++
-		}
-		result, hash, refHeight, err = w.broadcastTransfer(rpc, privKey, address, yoctoAmount, nonce)
-	}
+	result, hash, refHeight, err := w.sendActions(rpc, privKey, address, []action{transferAction(yoctoAmount)})
 
 	var rejected bool
 	var failureMsg string
@@ -451,15 +418,13 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		}
 	case errors.Is(err, errBroadcastAmbiguous):
 		// The broadcast may or may not have been accepted. Record the
-		// transaction as pending and advance the nonce so it is not reused;
-		// the tip poller resolves the final status. Returning an error here
-		// would invite a retry that could double-send.
+		// transaction as pending; the reserved nonce is not reused. The tip
+		// poller resolves the final status. Returning an error here would
+		// invite a retry that could double-send.
 		w.log.Warnf("Transfer %s broadcast outcome unknown; recording as pending: %v", base58.Encode(hash[:]), err)
 	default:
 		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
 	}
-
-	w.nonce = nonce
 
 	// Prefer the actual fee burnt; fall back to an estimate only when the
 	// execution outcome is not yet known (ambiguous broadcast).
@@ -506,11 +471,48 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 	return &coin{txHash: hash, value: value}, nil
 }
 
-// broadcastTransfer builds, signs, and submits a single transfer transaction
-// with the given nonce, waiting for optimistic execution. refHeight is the
-// height of the block the transaction references, after which the
-// transaction's validity period is measured.
-func (w *NearWallet) broadcastTransfer(rpc *rpcClient, privKey ed25519.PrivateKey, address string, yoctoAmount *big.Int, nonce uint64) (_ *txResult, hash [32]byte, refHeight uint64, _ error) {
+// sendActions reserves a nonce, then signs and broadcasts a transaction
+// with the given receiver and actions, retrying once with a refreshed nonce
+// if the network rejects the first attempt for a stale nonce. Both the
+// native transfer and token paths route through here so they share the
+// retry behavior.
+func (w *NearWallet) sendActions(rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action) (result *txResult, hash [32]byte, refHeight uint64, err error) {
+	w.nonceMtx.Lock()
+	defer w.nonceMtx.Unlock()
+
+	nonce, err := w.reserveNonce(rpc)
+	if err != nil {
+		return nil, hash, 0, err
+	}
+
+	result, hash, refHeight, err = w.broadcastActions(rpc, privKey, receiverID, actions, nonce)
+	if err != nil && isInvalidNonce(err) {
+		// An authoritative InvalidNonce means this transaction was rejected
+		// and did not execute, so a fresh-nonce retry is a new send rather
+		// than a duplicate of a possibly-live transaction. (An ambiguous
+		// broadcast is never an InvalidNonce error, so it cannot reach here.)
+		// The nonce may have been consumed by our own lagging watermark or by
+		// the same key in another wallet instance; refresh and retry once.
+		akInfo, akErr := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "optimistic")
+		if akErr != nil {
+			return nil, hash, 0, fmt.Errorf("nonce refresh failed after %v: %w", err, akErr)
+		}
+		if akInfo.Nonce >= nonce {
+			nonce = akInfo.Nonce + 1
+		} else {
+			nonce++
+		}
+		w.nonce = nonce
+		result, hash, refHeight, err = w.broadcastActions(rpc, privKey, receiverID, actions, nonce)
+	}
+	return result, hash, refHeight, err
+}
+
+// broadcastActions builds, signs, and submits a single transaction with the
+// given nonce, waiting for optimistic execution. refHeight is the height of
+// the block the transaction references, after which the transaction's
+// validity period is measured.
+func (w *NearWallet) broadcastActions(rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action, nonce uint64) (_ *txResult, hash [32]byte, refHeight uint64, _ error) {
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
 	refHeight = w.tip
@@ -520,9 +522,9 @@ func (w *NearWallet) broadcastTransfer(rpc *rpcClient, privKey ed25519.PrivateKe
 		signerID:   w.accountID,
 		publicKey:  [32]byte(w.pubKey),
 		nonce:      nonce,
-		receiverID: address,
+		receiverID: receiverID,
 		blockHash:  blockHash,
-		actions:    []action{transferAction(yoctoAmount)},
+		actions:    actions,
 	}
 
 	txBytes := serializeTransaction(tx)
@@ -578,6 +580,18 @@ func (w *NearWallet) estimateFeeYocto() *big.Int {
 		return new(big.Int).Mul(gp, big.NewInt(transferGas))
 	}
 	return DropsToYocto(DefaultFee)
+}
+
+// estimateFeeAtGas prices a gas budget at the current (cached) gas price,
+// in drops rounded up, falling back to DefaultFee when no gas price has
+// ever been obtained. An attached budget is an upper bound on the burn —
+// unused gas is refunded — so this overstates; callers use it only as a
+// placeholder until the actual burn is known.
+func (w *NearWallet) estimateFeeAtGas(gas int64) uint64 {
+	if gp := w.cachedGasPrice(); gp != nil {
+		return YoctoToDropsCeil(new(big.Int).Mul(gp, big.NewInt(gas)))
+	}
+	return DefaultFee
 }
 
 // gasPriceTTL is how long a fetched gas price is considered fresh. NEAR's

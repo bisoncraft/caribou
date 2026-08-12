@@ -197,6 +197,60 @@ func TestTokenWalletSendHappyPathRegistersStorage(t *testing.T) {
 	}
 }
 
+// TestTokenWalletSendInvalidNonceRetry covers the fresh-nonce retry on the
+// token path, shared with the native send path through sendActions: an
+// authoritative InvalidNonce rejection means the transaction did not
+// execute, so a single retry with a refreshed nonce is a new send, not a
+// potential duplicate.
+func TestTokenWalletSendInvalidNonceRetry(t *testing.T) {
+	m := newMockNearRPC(t)
+	tw := makeTokenTestWallet(t, m)
+
+	m.handle("query", func(params json.RawMessage) (any, *rpcError) {
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		switch p["request_type"] {
+		case "call_function":
+			switch p["method_name"] {
+			case "ft_balance_of":
+				return callFunctionResult("10000000"), nil
+			case "storage_balance_of":
+				return callFunctionResult(map[string]string{"total": "1"}), nil // registered
+			}
+		case "view_access_key":
+			if p["finality"] == "optimistic" {
+				return map[string]any{"nonce": uint64(15)}, nil
+			}
+			return map[string]any{"nonce": uint64(10)}, nil
+		}
+		return nil, &rpcError{Message: "unexpected query", Code: -1}
+	})
+	var sends int
+	m.handle("send_tx", func(_ json.RawMessage) (any, *rpcError) {
+		sends++
+		if sends == 1 {
+			return nil, &rpcError{
+				Name:    "HANDLER_ERROR",
+				Cause:   &rpcErrorCause{Name: "INVALID_TRANSACTION"},
+				Code:    -32000,
+				Message: "Server error",
+				Data:    json.RawMessage(`{"TxExecutionError":{"InvalidTxError":{"InvalidNonce":{"tx_nonce":11,"ak_nonce":15}}}}`),
+			}
+		}
+		return successOutcome("22770000000000000000"), nil
+	})
+
+	if _, err := tw.Send("receiver.near", 1_000_000, 0); err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if sends != 2 {
+		t.Fatalf("send_tx called %d times, want 2 (one retry)", sends)
+	}
+	if tw.parent.nonce != 16 {
+		t.Fatalf("nonce watermark %d, want 16", tw.parent.nonce)
+	}
+}
+
 // TestReserveNonceAdvancesPastPending guards against a nonce collision: NEAR
 // only advances an account's on-chain nonce once a transaction is included
 // in a block, and the final access-key view lags further still. Two sends
