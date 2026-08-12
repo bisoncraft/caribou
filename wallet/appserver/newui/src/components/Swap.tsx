@@ -216,6 +216,12 @@ function intentsAssetLabel (assets: IntentsAsset[], assetID: number, intentsAsse
 // ---- Local storage key for first-use disclosure ----
 const INTENTS_DISCLOSURE_SEEN_KEY = 'intentsDisclosureSeen'
 
+// confirmPreviewRefreshMs is how often the confirm screen re-quotes the
+// pair to keep the displayed (and floor-enforced) terms current. Each
+// refresh is a dry quote that blocks service-side for solver collection
+// (~3s), so much shorter intervals just queue requests.
+const confirmPreviewRefreshMs = 10_000
+
 // ---- Sub-components ----
 
 // CustodyModal is the first-use disclosure shown before the first swap.
@@ -841,6 +847,31 @@ export default function Swap () {
 
   const canPreview = originID !== null && destID !== null && originID !== destID && atomsIn > 0
   const canConfirm = canPreview && preview !== null && !previewing && !previewErr
+
+  // While the confirm screen is open, the previewed terms keep aging, and
+  // the execute floor rejects a committed quote below the previewed
+  // minimum however small the move — so a stale preview becomes a
+  // rejection loop on a volatile pair. Re-quote periodically and swap the
+  // fresh terms in quietly: the displayed numbers and the enforced floor
+  // stay anchored to what the user is currently looking at, leaving only
+  // the seconds around the confirm click as drift exposure. Failures keep
+  // the last good preview; the execute floor still guards the outcome.
+  useEffect(() => {
+    if (step !== 'confirm' || submitting) return
+    if (originID === null || destID === null || atomsIn <= 0) return
+    let cancelled = false
+    const h = setInterval(async () => {
+      const r = await postJSON('/api/intents/preview', {
+        originAssetID: originID,
+        destAssetID: destID,
+        value: atomsIn,
+        slippageBps
+      })
+      if (cancelled || !r.ok) return
+      setPreview(r.preview)
+    }, confirmPreviewRefreshMs)
+    return () => { cancelled = true; clearInterval(h) }
+  }, [step, submitting, originID, destID, atomsIn, slippageBps])
 
   // Confirm → execute. The previewed minimum output is echoed so the
   // server rejects a committed quote that pays less than the terms shown
