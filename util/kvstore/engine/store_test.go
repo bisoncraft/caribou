@@ -123,7 +123,7 @@ func TestTableIterateContract(t *testing.T) {
 
 	// Combinations of prefix, seek and direction. These are where the two
 	// engines are most likely to drift apart, since each reaches its starting
-	// position differently: lexi seeks past a trailing DBID, glossi steps back
+	// position differently: lexi seeks past a trailing KeyID, glossi steps back
 	// from a computed prefix upper bound.
 	if got := forward("", "bb1", true); !eq(got, "bb1", "aa2", "aa1") {
 		t.Errorf("reverse from seek = %v, want [bb1 aa2 aa1]", got)

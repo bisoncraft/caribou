@@ -86,11 +86,7 @@ func (t *Table) Get(k KV, options ...kvstore.GetOption) (b []byte, err error) {
 	}
 
 	getTxnFunc := func(txn *badger.Txn) error {
-		dbID, err := t.keyID(txn, t.prefix, kB, true)
-		if err != nil {
-			return convertError(err)
-		}
-		d, err := t.get(txn, dbID)
+		d, err := t.get(txn, kB)
 		if err != nil {
 			return err
 		}
@@ -106,8 +102,9 @@ func (t *Table) Get(k KV, options ...kvstore.GetOption) (b []byte, err error) {
 	return
 }
 
-func (t *Table) get(txn *badger.Txn, dbID DBID) (d *datum, err error) {
-	item, err := txn.Get(PrefixedKey(t.prefix, dbID[:]))
+// get fetches and decodes the row stored for the key.
+func (t *Table) get(txn *badger.Txn, kB []byte) (d *datum, err error) {
+	item, err := txn.Get(PrefixedKey(t.prefix, kB))
 	if err != nil {
 		return nil, convertError(err)
 	}
@@ -119,6 +116,15 @@ func (t *Table) get(txn *badger.Txn, dbID DBID) (d *datum, err error) {
 		return nil
 	})
 	return
+}
+
+// keyForID resolves a KeyID to the row's user key through the KeyID→key map.
+func (t *Table) keyForID(txn *badger.Txn, keyID KeyID) ([]byte, error) {
+	item, err := txn.Get(idMapKey(t.prefix, keyID))
+	if err != nil {
+		return nil, convertError(err)
+	}
+	return item.ValueCopy(nil)
 }
 
 // UseDefaultSetOptions sets default options for Set and SetBatch.
@@ -164,20 +170,26 @@ func (t *Table) set(k, v KV, opts kvstore.SetOpts) error {
 		// with the retry count.
 		d := &datum{v: vB, indexes: make([][]byte, 0, len(t.indexes))}
 
-		dbID, err := t.keyID(txn, t.prefix, kB, false)
-		if err != nil {
-			return convertError(err)
-		}
-		// See if an entry already exists
-		oldDatum, err := t.get(txn, dbID)
-		if !errors.Is(err, ErrKeyNotFound) {
-			if err != nil {
-				return fmt.Errorf("error looking for existing entry: %w", err)
+		// See if an entry already exists. A new row is assigned a fresh KeyID
+		// and an entry in the KeyID→key map; a replaced row keeps its KeyID,
+		// so the map entry already exists.
+		oldDatum, err := t.get(txn, kB)
+		switch {
+		case errors.Is(err, ErrKeyNotFound):
+			if d.keyID, err = t.nextID(); err != nil {
+				return err
 			}
+			if err := txn.Set(idMapKey(t.prefix, d.keyID), kB); err != nil {
+				return fmt.Errorf("error mapping ID to key: %w", err)
+			}
+		case err != nil:
+			return fmt.Errorf("error looking for existing entry: %w", err)
+		default:
 			// We found an old entry
 			if !opts.Replace {
 				return errors.New("attempted to replace an entry without specifying WithReplace")
 			}
+			d.keyID = oldDatum.keyID
 			// Delete any old indexes
 			for _, k := range oldDatum.indexes {
 				if err := txn.Delete(k); err != nil {
@@ -189,7 +201,7 @@ func (t *Table) set(k, v KV, opts kvstore.SetOpts) error {
 		// Add to indexes
 		for _, idx := range t.indexes {
 			var indexEntry []byte
-			if indexEntry, err = idx.add(txn, k, v, dbID); err != nil {
+			if indexEntry, err = idx.add(txn, k, v, d.keyID); err != nil {
 				// Handle unique index conflicts
 				var indexConflictError uniqueIndexConflictError
 				switch {
@@ -200,12 +212,12 @@ func (t *Table) set(k, v KV, opts kvstore.SetOpts) error {
 					}
 
 					// If we're replacing, delete the old entry
-					if err := t.removeTableEntry(txn, indexConflictError.conflictDBID); err != nil {
+					if err := t.removeTableEntry(txn, indexConflictError.conflictKeyID); err != nil {
 						return fmt.Errorf("error deleting conflicting entry from index %q: %w", indexConflictError.indexName, err)
 					}
 
 					// Try again
-					indexEntry, err = idx.add(txn, k, v, dbID)
+					indexEntry, err = idx.add(txn, k, v, d.keyID)
 					if err != nil {
 						return fmt.Errorf("error adding entry to index after deleting conflicting entry: %w", err)
 					}
@@ -224,7 +236,7 @@ func (t *Table) set(k, v KV, opts kvstore.SetOpts) error {
 			return fmt.Errorf("error encoding datum: %w", err)
 		}
 
-		return txn.Set(PrefixedKey(t.prefix, dbID[:]), dB)
+		return txn.Set(PrefixedKey(t.prefix, kB), dB)
 	}
 
 	if txn != nil {
@@ -259,45 +271,50 @@ func (t *Table) SetBatch(pairs []kvstore.BatchEntry, setOpts ...kvstore.SetOptio
 }
 
 // Delete deletes the data associated with the key, including any index entries
-// and the id<->key mappings.
+// and the KeyID→key mapping.
 func (t *Table) Delete(k KV) error {
 	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return fmt.Errorf("error marshaling key: %w", err)
 	}
 	return t.Update(func(txn *badger.Txn) error {
-		dbID, err := t.keyID(txn, t.prefix, kB, true)
+		d, err := t.get(txn, kB)
 		if err != nil {
-			return convertError(err)
+			return err
 		}
-		return t.removeTableEntry(txn, dbID)
+		return t.deleteDatum(txn, kB, d)
 	})
 }
 
-func (t *Table) removeTableEntry(txn *badger.Txn, dbID DBID) error {
-	item, err := txn.Get(PrefixedKey(t.prefix, dbID[:]))
+// removeTableEntry deletes the row identified by the KeyID, resolving its user
+// key through the KeyID→key map. This is the path Set's unique-index conflict
+// handling takes, where the conflicting row is known only by the KeyID embedded
+// in its index entry.
+func (t *Table) removeTableEntry(txn *badger.Txn, keyID KeyID) error {
+	kB, err := t.keyForID(txn, keyID)
 	if err != nil {
-		return convertError(err)
+		return err
 	}
-	return item.Value(func(dB []byte) error {
-		d, err := decodeDatum(dB)
-		if err != nil {
-			return fmt.Errorf("error decoding datum: %w", err)
-		}
-		return t.deleteDatum(txn, dbID, d)
-	})
+	d, err := t.get(txn, kB)
+	if err != nil {
+		return err
+	}
+	return t.deleteDatum(txn, kB, d)
 }
 
-func (t *Table) deleteDatum(txn *badger.Txn, dbID DBID, d *datum) error {
+func (t *Table) deleteDatum(txn *badger.Txn, kB []byte, d *datum) error {
 	for _, k := range d.indexes {
 		if err := txn.Delete(k); err != nil {
 			return fmt.Errorf("error deleting index entry; %w", err)
 		}
 	}
-	if err := txn.Delete(PrefixedKey(t.prefix, dbID[:])); err != nil {
+	if err := txn.Delete(PrefixedKey(t.prefix, kB)); err != nil {
 		return fmt.Errorf("error deleting table entry: %w", err)
 	}
-	return t.deleteDBID(txn, dbID)
+	if err := txn.Delete(idMapKey(t.prefix, d.keyID)); err != nil {
+		return fmt.Errorf("error deleting ID to key mapping: %w", err)
+	}
+	return nil
 }
 
 // UseDefaultIterationOptions sets default options for Iterate.
@@ -310,13 +327,9 @@ func (t *Table) UseDefaultIterationOptions(optss ...kvstore.IterationOption) {
 // Iterate iterates the table's primary keys in key order. If prefix is
 // non-empty, only keys beginning with it are visited.
 //
-// Iteration walks the table's key→DBID map rather than the table's own rows.
-// The rows are stored under the DBID, so iterating them directly would order by
-// DBID (i.e. insertion order) and match prefix and seek against DBID bytes
-// instead of the caller's keys. The key map is ordered by user key, so walking
-// it is what makes prefix, seek and reverse mean what the caller expects. The
-// DBID comes out of the entry's value, costing no more than the lookup Iter.K
-// would otherwise do.
+// Rows are stored under the user key, so iteration walks the rows themselves:
+// the entry the cursor sits on carries both the caller's key and the datum,
+// making a table scan a single lookup per row.
 func (t *Table) Iterate(prefixI KV, f func(kvstore.StoreIter) error, iterOpts ...kvstore.IterationOption) error {
-	return t.iterate(tableKeyMapPrefix(t.prefix), t, t.defaultIterationOptions, false, prefixI, f, iterOpts...)
+	return t.iterate(t.prefix[:], t, t.defaultIterationOptions, false, prefixI, f, iterOpts...)
 }

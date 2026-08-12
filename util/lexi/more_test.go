@@ -50,20 +50,20 @@ func TestJSON(t *testing.T) {
 	}
 }
 
-// TestDBIDStringAndMarshal covers DBID.String, DBID.MarshalBinary, and
-// newDBIDFromBytes.
-func TestDBIDStringAndMarshal(t *testing.T) {
+// TestKeyIDStringAndMarshal covers KeyID.String, KeyID.MarshalBinary, and
+// newKeyIDFromBytes.
+func TestKeyIDStringAndMarshal(t *testing.T) {
 	raw := []byte{0, 1, 2, 3, 4, 5, 6, 7}
-	dbID := newDBIDFromBytes(raw)
-	if got := dbID.String(); got != "0001020304050607" {
-		t.Fatalf("DBID.String = %q", got)
+	keyID := newKeyIDFromBytes(raw)
+	if got := keyID.String(); got != "0001020304050607" {
+		t.Fatalf("KeyID.String = %q", got)
 	}
-	b, err := dbID.MarshalBinary()
+	b, err := keyID.MarshalBinary()
 	if err != nil {
-		t.Fatalf("DBID.MarshalBinary: %v", err)
+		t.Fatalf("KeyID.MarshalBinary: %v", err)
 	}
 	if !bytes.Equal(b, raw) {
-		t.Fatalf("DBID.MarshalBinary = %x, want %x", b, raw)
+		t.Fatalf("KeyID.MarshalBinary = %x, want %x", b, raw)
 	}
 }
 
@@ -142,10 +142,10 @@ func TestConnect(t *testing.T) {
 	}
 }
 
-// TestKeyDBID exercises (*Table).keyDBID for an existing key and confirms
-// repeated calls return the same id. keyDBID is read-only, so an unknown key
+// TestKeyID exercises (*Table).KeyID for an existing key and confirms
+// repeated calls return the same id. KeyID is read-only, so an unknown key
 // must fail.
-func TestKeyDBID(t *testing.T) {
+func TestKeyID(t *testing.T) {
 	db, _ := newTestDB(t)
 	tbl, err := db.table("ids")
 	if err != nil {
@@ -155,33 +155,33 @@ func TestKeyDBID(t *testing.T) {
 	if err := tbl.Set(k, &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	id1, err := tbl.keyDBID(k)
+	id1, err := tbl.KeyID(k)
 	if err != nil {
-		t.Fatalf("keyDBID: %v", err)
+		t.Fatalf("KeyID: %v", err)
 	}
-	id2, err := tbl.keyDBID(k)
+	id2, err := tbl.KeyID(k)
 	if err != nil {
-		t.Fatalf("keyDBID again: %v", err)
+		t.Fatalf("KeyID again: %v", err)
 	}
 	if id1 != id2 {
-		t.Fatalf("keyDBID returned different ids for same key: %v vs %v", id1, id2)
+		t.Fatalf("KeyID returned different ids for same key: %v vs %v", id1, id2)
 	}
 	// A second key gets a distinct id.
 	k2 := []byte("the-other-key")
 	if err := tbl.Set(k2, &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set k2: %v", err)
 	}
-	id3, err := tbl.keyDBID(k2)
+	id3, err := tbl.KeyID(k2)
 	if err != nil {
-		t.Fatalf("keyDBID k2: %v", err)
+		t.Fatalf("KeyID k2: %v", err)
 	}
 	if id3 == id1 {
 		t.Fatalf("distinct keys produced the same id %v", id1)
 	}
-	// keyDBID is read-only, so an unknown key must fail, with badger's error
+	// KeyID is read-only, so an unknown key must fail, with badger's error
 	// translated to the package sentinel.
-	if _, err := tbl.keyDBID([]byte("not-there")); !errors.Is(err, ErrKeyNotFound) {
-		t.Fatalf("unknown-key keyDBID error = %v, want ErrKeyNotFound", err)
+	if _, err := tbl.KeyID([]byte("not-there")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("unknown-key KeyID error = %v, want ErrKeyNotFound", err)
 	}
 }
 
@@ -205,14 +205,14 @@ func TestParseKV(t *testing.T) {
 	if len(b) != 8 || binary.BigEndian.Uint64(b) != 0x123456 {
 		t.Fatalf("time: got %x", b)
 	}
-	// BinaryMarshaler (DBID has a value-receiver MarshalBinary).
-	dbID := DBID{0xaa}
-	b, err = kvstore.ParseKV(dbID)
+	// BinaryMarshaler (KeyID has a value-receiver MarshalBinary).
+	keyID := KeyID{0xaa}
+	b, err = kvstore.ParseKV(keyID)
 	if err != nil {
 		t.Fatalf("BinaryMarshaler: %v", err)
 	}
-	if !bytes.Equal(b, dbID[:]) {
-		t.Fatalf("BinaryMarshaler: got %x, want %x", b, dbID[:])
+	if !bytes.Equal(b, keyID[:]) {
+		t.Fatalf("BinaryMarshaler: got %x, want %x", b, keyID[:])
 	}
 	// nil
 	if b, err := kvstore.ParseKV(nil); err != nil || b != nil {
@@ -254,9 +254,8 @@ func TestIterEntry(t *testing.T) {
 		t.Fatalf("index Entry = %x, want 42", indexEntry)
 	}
 
-	// Table iteration's Entry yields the primary key. It used to expose the
-	// internal DBID, which was an artifact of rows being stored under the DBID
-	// rather than anything a caller could use.
+	// Table iteration's Entry yields the primary key, which is what the row
+	// is stored under.
 	var tableEntry []byte
 	if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.Entry(func(b []byte) error {
@@ -303,19 +302,25 @@ func TestSetWithoutReplace(t *testing.T) {
 
 // TestDecodeDatumErrors covers the error paths in decodeDatum.
 func TestDecodeDatumErrors(t *testing.T) {
-	// Too short to contain a version + the minimum framing.
+	// A datum is a version byte, a KeyID, and then the framed payload.
+	frame := func(payload ...byte) []byte {
+		return append(append([]byte{0}, make([]byte, KeyIDSize)...), payload...)
+	}
+	// Too short to contain a version + KeyID + the minimum framing.
 	if _, err := decodeDatum(nil); err == nil {
 		t.Fatal("expected error for empty blob")
 	}
-	if _, err := decodeDatum([]byte{0, 1, 2}); err == nil {
-		t.Fatal("expected length error for 3-byte blob")
+	if _, err := decodeDatum(make([]byte, KeyIDSize+2)); err == nil {
+		t.Fatal("expected length error for truncated blob")
 	}
 	// Unknown version (still long enough to pass the length check).
-	if _, err := decodeDatum([]byte{0xff, 0, 0, 0}); err == nil {
+	badVersion := frame(0, 0)
+	badVersion[0] = 0xff
+	if _, err := decodeDatum(badVersion); err == nil {
 		t.Fatal("expected unknown-version error")
 	}
 	// Claims one 100-byte index but provides almost no payload.
-	if _, err := decodeDatum([]byte{0, 1, 100, 0}); err == nil {
+	if _, err := decodeDatum(frame(1, 100, 0)); err == nil {
 		t.Fatal("expected truncated-index-read error")
 	}
 }
@@ -424,7 +429,7 @@ func TestSetNotIndexedSkipsEntry(t *testing.T) {
 // TestUniqueIndexConflictAsError verifies errors.As works against the
 // internal uniqueIndexConflictError type that Set wraps inside its switch.
 func TestUniqueIndexConflictAsError(t *testing.T) {
-	var src error = uniqueIndexConflictError{indexName: "X", conflictDBID: DBID{0xab}}
+	var src error = uniqueIndexConflictError{indexName: "X", conflictKeyID: KeyID{0xab}}
 	var target uniqueIndexConflictError
 	if !errors.As(src, &target) {
 		t.Fatal("errors.As did not match uniqueIndexConflictError")
@@ -446,13 +451,9 @@ func TestIterDatumDecodeError(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := tbl.keyDBID([]byte("k"))
-	if err != nil {
-		t.Fatalf("keyDBID: %v", err)
-	}
 	// Overwrite the datum row with a value too short to decode.
 	err = db.DB.Update(func(txn *badger.Txn) error {
-		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
+		return txn.Set(PrefixedKey(tbl.prefix, []byte("k")), []byte{0xff})
 	})
 	if err != nil {
 		t.Fatalf("inject: %v", err)
@@ -476,12 +477,8 @@ func TestSetReplaceCorruptOldDatum(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := tbl.keyDBID([]byte("k"))
-	if err != nil {
-		t.Fatalf("keyDBID: %v", err)
-	}
 	err = db.DB.Update(func(txn *badger.Txn) error {
-		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
+		return txn.Set(PrefixedKey(tbl.prefix, []byte("k")), []byte{0xff})
 	})
 	if err != nil {
 		t.Fatalf("inject: %v", err)
@@ -492,8 +489,8 @@ func TestSetReplaceCorruptOldDatum(t *testing.T) {
 	}
 }
 
-// TestDeleteCorruptDatum forces the decode-error path inside removeTableEntry
-// when Delete encounters a malformed datum row.
+// TestDeleteCorruptDatum forces the decode-error path in Delete's row lookup
+// when it encounters a malformed datum row.
 func TestDeleteCorruptDatum(t *testing.T) {
 	db, _ := newTestDB(t)
 	tbl, err := db.table("T")
@@ -503,12 +500,8 @@ func TestDeleteCorruptDatum(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := tbl.keyDBID([]byte("k"))
-	if err != nil {
-		t.Fatalf("keyDBID: %v", err)
-	}
 	err = db.DB.Update(func(txn *badger.Txn) error {
-		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
+		return txn.Set(PrefixedKey(tbl.prefix, []byte("k")), []byte{0xff})
 	})
 	if err != nil {
 		t.Fatalf("inject: %v", err)
@@ -522,18 +515,22 @@ func TestDeleteCorruptDatum(t *testing.T) {
 // branches in decodeDatum — index-count, index-length, and value-length read
 // errors triggered by a truncated multi-byte varint marker.
 func TestDecodeDatumReadErrors(t *testing.T) {
-	// 0xff is a uint64 varint marker that requires 8 trailing bytes.
+	// 0xff is a uint64 varint marker that requires 8 trailing bytes. The
+	// framed payload follows the version byte and the KeyID.
+	frame := func(payload ...byte) []byte {
+		return append(append([]byte{0}, make([]byte, KeyIDSize)...), payload...)
+	}
 
 	// Index-count varint truncated.
-	if _, err := decodeDatum([]byte{0, 0xff, 0, 0}); err == nil {
+	if _, err := decodeDatum(frame(0xff, 0, 0)); err == nil {
 		t.Fatal("expected nIndexes read error")
 	}
 	// Index-length varint truncated (nIndexes=1, then 0xff with too few bytes).
-	if _, err := decodeDatum([]byte{0, 1, 0xff, 0}); err == nil {
+	if _, err := decodeDatum(frame(1, 0xff, 0)); err == nil {
 		t.Fatal("expected indexLen read error")
 	}
 	// Value-length varint truncated (nIndexes=0, then 0xff with too few bytes).
-	if _, err := decodeDatum([]byte{0, 0, 0xff, 0}); err == nil {
+	if _, err := decodeDatum(frame(0, 0xff, 0)); err == nil {
 		t.Fatal("expected valueLen read error")
 	}
 }
@@ -564,8 +561,8 @@ func TestGetWithTxn(t *testing.T) {
 // TestTableIterateDeleteDuringIteration covers Iter.Delete under WithUpdate on
 // a table.
 //
-// Table iteration walks the key→DBID map, and Iter.Delete removes that very
-// entry along with the row, so the cursor is mutating the range it is walking.
+// Table iteration walks the rows themselves, and Iter.Delete removes the very
+// row the cursor sits on, so the cursor is mutating the range it is walking.
 // Badger iterates a consistent snapshot, which is what makes this safe; the
 // test pins that, since a cursor that skipped or repeated entries here would
 // silently leave rows behind on any bulk delete.

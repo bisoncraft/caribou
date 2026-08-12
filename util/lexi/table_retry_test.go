@@ -77,11 +77,8 @@ func TestSetDatumIsPerAttempt(t *testing.T) {
 
 	var d *datum
 	if err := db.View(func(txn *badger.Txn) error {
-		dbID, err := tbl.keyID(txn, tbl.prefix, k, true)
-		if err != nil {
-			return err
-		}
-		d, err = tbl.get(txn, dbID)
+		var err error
+		d, err = tbl.get(txn, k)
 		return err
 	}); err != nil {
 		t.Fatalf("error reading back datum: %v", err)

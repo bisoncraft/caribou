@@ -79,35 +79,35 @@ func (t *Table) AddUniqueIndex(name string, f kvstore.IndexFunc) (kvstore.StoreI
 }
 
 // uniqueIndexConflictError is returned when a unique index conflict is encountered.
-// The caller should delete the table entry identified by conflictDBID before adding
+// The caller should delete the table entry identified by conflictKeyID before adding
 // the new entry.
 type uniqueIndexConflictError struct {
-	indexName    string
-	conflictDBID DBID
+	indexName     string
+	conflictKeyID KeyID
 }
 
 func (e uniqueIndexConflictError) Error() string {
 	return fmt.Sprintf("unique index conflict on %s", e.indexName)
 }
 
-func (idx *Index) checkForIndexConflict(txn *badger.Txn, idxB []byte, updatingDBID DBID) error {
+func (idx *Index) checkForIndexConflict(txn *badger.Txn, idxB []byte, updatingKeyID KeyID) error {
 	conflictPrefix := PrefixedKey(idx.prefix, idxB)
 
-	var conflictDBID DBID
+	var conflictKeyID KeyID
 	var foundConflict bool
 
 	err := iteratePrefix(txn, conflictPrefix, nil, func(iter *badger.Iterator) error {
 		item := iter.Item()
 		key := item.Key()
 
-		if len(key) < PrefixSize+DBIDSize {
+		if len(key) < PrefixSize+KeyIDSize {
 			return fmt.Errorf("index entry too small. length = %d", len(key))
 		}
 
-		existingDBID := newDBIDFromBytes(key[len(key)-DBIDSize:])
+		existingKeyID := newKeyIDFromBytes(key[len(key)-KeyIDSize:])
 
-		if existingDBID != updatingDBID {
-			conflictDBID = existingDBID
+		if existingKeyID != updatingKeyID {
+			conflictKeyID = existingKeyID
 			foundConflict = true
 			return ErrEndIteration
 		}
@@ -120,8 +120,8 @@ func (idx *Index) checkForIndexConflict(txn *badger.Txn, idxB []byte, updatingDB
 
 	if foundConflict {
 		return uniqueIndexConflictError{
-			indexName:    idx.name,
-			conflictDBID: conflictDBID,
+			indexName:     idx.name,
+			conflictKeyID: conflictKeyID,
 		}
 	}
 
@@ -130,7 +130,7 @@ func (idx *Index) checkForIndexConflict(txn *badger.Txn, idxB []byte, updatingDB
 
 // add adds an entry to the index. If this element is not required to be
 // indexed, a nil byte slice is returned and no error is returned.
-func (idx *Index) add(txn *badger.Txn, k, v KV, dbID DBID) ([]byte, error) {
+func (idx *Index) add(txn *badger.Txn, k, v KV, keyID KeyID) ([]byte, error) {
 	idxB, err := idx.f(k, v)
 	if err != nil {
 		if errors.Is(err, ErrNotIndexed) {
@@ -138,10 +138,10 @@ func (idx *Index) add(txn *badger.Txn, k, v KV, dbID DBID) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("error getting index value: %w", err)
 	}
-	b := PrefixedKey(idx.prefix, append(idxB, dbID[:]...))
+	b := PrefixedKey(idx.prefix, append(idxB, keyID[:]...))
 
 	if idx.unique {
-		if err := idx.checkForIndexConflict(txn, idxB, dbID); err != nil {
+		if err := idx.checkForIndexConflict(txn, idxB, keyID); err != nil {
 			return nil, err
 		}
 	}
@@ -167,13 +167,16 @@ type Iter struct {
 	isIndex bool
 	item    *badger.Item
 	txn     *badger.Txn
-	dbID    DBID
-	d       *datum
+	// keyID is set during index iteration, where the entry carries it. Table
+	// iteration reads it from the datum when it is needed.
+	keyID KeyID
+	d     *datum
 	// update records whether the iteration runs in a read-write transaction
 	// (WithUpdate), which Delete requires.
 	update bool
-	// k is the caller's key, set during table iteration where the key-map entry
-	// already carries it. Nil during index iteration, where K resolves it.
+	// k is the caller's key, set during table iteration where the row key
+	// already carries it. Nil during index iteration, where K resolves it
+	// through the KeyID→key map.
 	k []byte
 }
 
@@ -193,18 +196,15 @@ func (i *Iter) K() ([]byte, error) {
 	if i.k != nil {
 		return CloneBytes(i.k), nil
 	}
-	item, err := i.txn.Get(PrefixedKey(IdToKeyPrefix, i.dbID[:]))
+	kB, err := i.table.keyForID(i.txn, i.keyID)
 	if err != nil {
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return nil, fmt.Errorf("dangling entry for table %q: %w", i.table.name, ErrKeyNotFound)
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, fmt.Errorf("dangling entry for table %q: %w", i.table.name, err)
 		}
 		return nil, err
 	}
-	kB, err := item.ValueCopy(nil)
-	if err != nil {
-		return nil, err
-	}
-	return UnqualifyKey(kB)
+	i.k = kB
+	return CloneBytes(kB), nil
 }
 
 // Entry is the actual index entry when iterating an Index. When iterating a
@@ -214,17 +214,37 @@ func (i *Iter) Entry(f func(idxB []byte) error) error {
 		return f(i.k)
 	}
 	k := i.item.Key()
-	if len(k) < PrefixSize+DBIDSize {
+	if len(k) < PrefixSize+KeyIDSize {
 		return fmt.Errorf("index entry too small. length = %d", len(k))
 	}
-	return f(k[PrefixSize : len(k)-DBIDSize])
+	return f(k[PrefixSize : len(k)-KeyIDSize])
 }
 
 func (i *Iter) datum() (_ *datum, err error) {
 	if i.d != nil {
 		return i.d, nil
 	}
-	i.d, err = i.table.get(i.txn, i.dbID)
+	if !i.isIndex {
+		// Table iteration sits on the row itself; decode the value in place.
+		err = i.item.Value(func(dB []byte) error {
+			d, err := decodeDatum(dB)
+			if err != nil {
+				return fmt.Errorf("error decoding datum: %w", err)
+			}
+			i.d = d
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return i.d, nil
+	}
+	// Index iteration: resolve the row through the KeyID→key map.
+	kB, err := i.K()
+	if err != nil {
+		return nil, err
+	}
+	i.d, err = i.table.get(i.txn, kB)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return nil, fmt.Errorf("dangling entry for table %q: %w", i.table.name, err)
@@ -244,7 +264,11 @@ func (i *Iter) Delete() error {
 	if err != nil {
 		return err
 	}
-	return i.table.deleteDatum(i.txn, i.dbID, d)
+	kB, err := i.K()
+	if err != nil {
+		return err
+	}
+	return i.table.deleteDatum(i.txn, kB, d)
 }
 
 // Iterate iterates the index, providing access to the index entry, datum, and
@@ -254,7 +278,7 @@ func (idx *Index) Iterate(prefixI KV, f func(kvstore.StoreIter) error, iterOpts 
 }
 
 // iterate iterates a table or index. base is the byte range the iteration is
-// confined to: an index's own prefix, or a table's key-map prefix. The caller's
+// confined to: an index's own prefix, or a table's row prefix. The caller's
 // prefix and seek are appended to it, so both are interpreted in the space that
 // range is ordered by - index-entry order for an index, user-key order for a
 // table.
@@ -297,25 +321,20 @@ func (db *DB) iterate(base []byte, table *Table, io kvstore.IterationOpts, isInd
 				update:  io.Update,
 			}
 			if isIndex {
-				if len(k) < PrefixSize+DBIDSize {
+				if len(k) < PrefixSize+KeyIDSize {
 					return fmt.Errorf("invalid index entry length %d", len(k))
 				}
-				it.dbID = newDBIDFromBytes(k[len(k)-DBIDSize:])
+				it.keyID = newKeyIDFromBytes(k[len(k)-KeyIDSize:])
 				return f(it)
 			}
-			// Table iteration: the entry is a key-map row, so the key past the
-			// base is the caller's key and the value is its DBID.
+			// Table iteration: the entry is the row itself, so the key past the
+			// base is the caller's key and the value is the datum, which
+			// Iter.datum decodes on demand.
 			if len(k) <= len(base) {
-				return fmt.Errorf("invalid table key-map entry length %d", len(k))
+				return fmt.Errorf("invalid table row key length %d", len(k))
 			}
 			it.k = k[len(base):]
-			return item.Value(func(v []byte) error {
-				if len(v) != DBIDSize {
-					return fmt.Errorf("invalid DBID length %d", len(v))
-				}
-				it.dbID = newDBIDFromBytes(v)
-				return f(it)
-			})
+			return f(it)
 		})
 	})
 }
@@ -387,7 +406,7 @@ func reverseIteratePrefix(txn *badger.Txn, prefix, seek []byte, f func(iter *bad
 	if len(seek) == 0 {
 		seekLast(iter, prefix)
 	} else {
-		iter.Seek(append(seek, lastDBID[:]...))
+		iter.Seek(append(seek, lastKeyID[:]...))
 	}
 
 	for ; iter.ValidForPrefix(prefix); iter.Next() {

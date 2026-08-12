@@ -6,7 +6,6 @@ package lexi
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 
 	"github.com/dgraph-io/badger/v4"
 )
@@ -34,8 +33,11 @@ var (
 	prefixToNamePrefix    = keyPrefix{0x00, 0x00}
 	nameToPrefixPrefix    = keyPrefix{0x00, 0x01}
 	primarySequencePrefix = keyPrefix{0x00, 0x02}
-	keyToIDPrefix         = keyPrefix{0x00, 0x03}
-	IdToKeyPrefix         = keyPrefix{0x00, 0x04}
+	// IDToKeyPrefix is the range of the KeyID→key map. Entries are keyed by
+	// the table prefix followed by the row's KeyID, and store the row's bare
+	// user key. Index entries reference rows by KeyID, and this map is how an
+	// index iteration resolves the entry back to the row.
+	IDToKeyPrefix = keyPrefix{0x00, 0x03}
 
 	firstAvailablePrefix = keyPrefix{0x01, 0x00}
 )
@@ -65,17 +67,6 @@ func PrefixedKey(p keyPrefix, k []byte) []byte {
 	copy(pk, p[:])
 	copy(pk[PrefixSize:], k)
 	return pk
-}
-
-// UnqualifyKey strips the table qualifier from a value read out of the
-// IdToKeyPrefix map, yielding the key originally passed to Set. The map stores
-// keys table-qualified so that a DBID identifies a row in one table rather than
-// a key shared across all of them.
-func UnqualifyKey(b []byte) ([]byte, error) {
-	if len(b) < PrefixSize {
-		return nil, fmt.Errorf("stored key too small. length = %d", len(b))
-	}
-	return b[PrefixSize:], nil
 }
 
 // CloneBytes returns a copy of the given byte slice. If the input is nil or empty, it returns nil.

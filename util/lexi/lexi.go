@@ -245,92 +245,41 @@ func (db *DB) prefixForName(name string) (prefix keyPrefix, _ error) {
 	})
 }
 
-func (db *DB) nextID() (dbID DBID, _ error) {
+func (db *DB) nextID() (keyID KeyID, _ error) {
 	i, err := db.idSeq.Next()
 	if err != nil {
-		return dbID, err
+		return keyID, err
 	}
-	binary.BigEndian.PutUint64(dbID[:], i)
+	binary.BigEndian.PutUint64(keyID[:], i)
 	return
 }
 
-// keyDBID returns the DBID for the key within this Table. This is the same
-// DBID that is used internally for the key when a datum is inserted with Set.
-// (Named apart from the embedded DB's keyID, which would otherwise be
-// shadowed.)
-func (t *Table) keyDBID(kB []byte) (DBID, error) {
-	var dbID DBID
-	err := t.View(func(txn *badger.Txn) error {
-		var err error
-		dbID, err = t.keyID(txn, t.prefix, kB, true)
-		return err
-	})
-	return dbID, convertError(err)
-}
-
-// keyID resolves a table-scoped key to its DBID, assigning one if the key is
-// new and readOnly is false.
-//
-// Both maps are keyed by the table-qualified key rather than the bare user key.
-// A DBID identifies a row in one table, so the mapping has to be per-table:
-// with a flat key space two tables holding the same user key share a DBID, and
-// deleting the key from one table tears down the mapping the other still
-// depends on, orphaning its row.
-func (db *DB) keyID(txn *badger.Txn, tPrefix keyPrefix, kB []byte, readOnly bool) (dbID DBID, err error) {
-	tableKey := PrefixedKey(tPrefix, kB)
-	item, err := txn.Get(PrefixedKey(keyToIDPrefix, tableKey))
-	if err == nil {
-		err = item.Value(func(v []byte) error {
-			copy(dbID[:], v)
-			return nil
-		})
-		return
-	}
-	if !readOnly && errors.Is(err, badger.ErrKeyNotFound) {
-		if dbID, err = db.nextID(); err != nil {
-			return
+// KeyID returns the row-unique KeyID stored in the datum for the key. This is
+// the same ID embedded in the table's index entries, provided as a tool to
+// keep caller-maintained index entries short. KeyID is read-only: IDs are
+// assigned by Set, so a key with no row returns ErrKeyNotFound.
+func (t *Table) KeyID(kB []byte) (keyID KeyID, err error) {
+	err = t.View(func(txn *badger.Txn) error {
+		d, err := t.get(txn, kB)
+		if err != nil {
+			return err
 		}
-		// The reverse map stores the qualified key too, so deleteDBID can
-		// reconstruct the forward key from the DBID alone. Iter.K strips the
-		// table prefix back off.
-		if err = txn.Set(PrefixedKey(keyToIDPrefix, tableKey), dbID[:]); err != nil {
-			err = fmt.Errorf("error mapping key to ID: %w", err)
-		} else if err = txn.Set(PrefixedKey(IdToKeyPrefix, dbID[:]), tableKey); err != nil {
-			err = fmt.Errorf("error mapping ID to key: %w", err)
-		}
-	}
-	return
-}
-
-// tableKeyMapPrefix is the range under which one table's key→DBID entries live.
-// Because the entries below it are ordered by user key, it is what Table.Iterate
-// walks to get key-ordered iteration with working prefix and seek.
-func tableKeyMapPrefix(tPrefix keyPrefix) []byte {
-	return PrefixedKey(keyToIDPrefix, tPrefix[:])
-}
-
-// deleteDBID deletes the id-to-key mapping and the key-to-id mapping for the
-// DBID. The value under IdToKeyPrefix is the table-qualified key, which is
-// exactly the key the forward map is stored under, so the forward entry can be
-// removed without the caller passing the table prefix back in.
-func (db *DB) deleteDBID(txn *badger.Txn, dbID DBID) error {
-	idK := PrefixedKey(IdToKeyPrefix, dbID[:])
-	item, err := txn.Get(idK)
-	if err != nil {
-		return convertError(err)
-	}
-	if err := item.Value(func(kB []byte) error {
-		if err := txn.Delete(PrefixedKey(keyToIDPrefix, kB)); err != nil {
-			return fmt.Errorf("error deleting key to ID mapping: %w", err)
-		}
+		keyID = d.keyID
 		return nil
-	}); err != nil {
-		return err
-	}
-	if err := txn.Delete(idK); err != nil {
-		return fmt.Errorf("error deleting ID to key mapping: %w", err)
-	}
-	return nil
+	})
+	return
+}
+
+// idMapKey is the key of a row's entry in the KeyID→key map. The entry is
+// qualified by the table prefix: a KeyID identifies a row in one table, and
+// scoping the map per table keeps every structure a row touches - the row
+// itself, its index entries, and this mapping - resolvable without consulting
+// any table-spanning state.
+func idMapKey(tPrefix keyPrefix, keyID KeyID) []byte {
+	k := make([]byte, PrefixSize+KeyIDSize)
+	copy(k, tPrefix[:])
+	copy(k[PrefixSize:], keyID[:])
+	return PrefixedKey(IDToKeyPrefix, k)
 }
 
 // KV is any one of a number of common types whose binary encoding is

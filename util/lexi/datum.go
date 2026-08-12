@@ -11,10 +11,11 @@ import (
 	"github.com/decred/dcrd/wire"
 )
 
-// datum is a value in the key-value database, along with information about
-// its index entries.
+// datum is a value in the key-value database, along with its row-unique KeyID
+// and information about its index entries.
 type datum struct {
 	version byte
+	keyID   KeyID
 	indexes [][]byte
 	v       []byte
 }
@@ -24,17 +25,21 @@ func (d *datum) bytes() ([]byte, error) {
 		return nil, fmt.Errorf("unknown datum version %d", d.version)
 	}
 
-	// encoded datum length is 1 byte for version, 1 varint to say how many
-	// indexes there are then for each index, a varint to specify the size of
-	// the index entry followed by the entry itself, then a varint to specify
-	// the size of the value blob followed by the value blob itself.
-	bLen := 1 + len(d.v) + wire.VarIntSerializeSize(uint64(len(d.v))) + wire.VarIntSerializeSize(uint64(len(d.indexes)))
+	// encoded datum length is 1 byte for version, KeyIDSize bytes for the
+	// row's KeyID, 1 varint to say how many indexes there are then for each
+	// index, a varint to specify the size of the index entry followed by the
+	// entry itself, then a varint to specify the size of the value blob
+	// followed by the value blob itself.
+	bLen := 1 + KeyIDSize + len(d.v) + wire.VarIntSerializeSize(uint64(len(d.v))) + wire.VarIntSerializeSize(uint64(len(d.indexes)))
 	for _, ib := range d.indexes {
 		bLen += len(ib) + wire.VarIntSerializeSize(uint64(len(ib)))
 	}
 	b := bytes.NewBuffer(make([]byte, 0, bLen))
 	if err := b.WriteByte(d.version); err != nil {
 		return nil, fmt.Errorf("error writing version: %w", err)
+	}
+	if _, err := b.Write(d.keyID[:]); err != nil {
+		return nil, fmt.Errorf("error writing key ID: %w", err)
 	}
 	if err := wire.WriteVarInt(b, 0, uint64(len(d.indexes))); err != nil {
 		return nil, fmt.Errorf("error writing index count var int: %w", err)
@@ -57,16 +62,16 @@ func (d *datum) bytes() ([]byte, error) {
 }
 
 func decodeDatum(blob []byte) (*datum, error) {
-	// The minimum legal datum is 3 bytes: a version byte and two zero varints,
-	// i.e. an empty value with no index entries.
-	if len(blob) < 3 {
-		return nil, fmt.Errorf("datum blob length cannot be < 3. got %d", len(blob))
+	// The minimum legal datum is 11 bytes: a version byte, a KeyID, and two
+	// zero varints, i.e. an empty value with no index entries.
+	if len(blob) < 3+KeyIDSize {
+		return nil, fmt.Errorf("datum blob length cannot be < %d. got %d", 3+KeyIDSize, len(blob))
 	}
-	d := &datum{version: blob[0]}
+	d := &datum{version: blob[0], keyID: newKeyIDFromBytes(blob[1 : 1+KeyIDSize])}
 	if d.version != 0 {
 		return nil, fmt.Errorf("unknown datum blob version %d", d.version)
 	}
-	b := bytes.NewBuffer(blob[1:])
+	b := bytes.NewBuffer(blob[1+KeyIDSize:])
 	nIndexes, err := wire.ReadVarInt(b, 0)
 	if err != nil {
 		return nil, fmt.Errorf("error reading number of indexes: %w", err)
