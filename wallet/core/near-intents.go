@@ -1048,9 +1048,12 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	resolveChain := func(assetID string) (uint32, bool) {
+	resolveChain := func(assetID string) (uint32, *intents.Token, bool) {
 		chainID, _, ok := cat.AssetChain(assetID)
-		return chainID, ok
+		if !ok {
+			return 0, nil, false
+		}
+		return chainID, cat.ByAssetID(assetID), true
 	}
 
 	known := make(map[string]bool)
@@ -1135,8 +1138,9 @@ func intentsAssetLabel(assetID uint32, intentsAssetID string) string {
 }
 
 // intentsChainResolver maps an Intents asset ID to its wallet chain asset
-// ID. Implemented over the catalog by IntentsReconstruct.
-type intentsChainResolver func(intentsAssetID string) (uint32, bool)
+// ID and the catalog token (for its decimals). Implemented over the
+// catalog by IntentsReconstruct.
+type intentsChainResolver func(intentsAssetID string) (uint32, *intents.Token, bool)
 
 // swapFromStatus builds a Reconstructed swap record from a status
 // response. The destination chain is resolved through the catalog
@@ -1150,8 +1154,39 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 	quote := &status.QuoteResponse.Quote
 
 	destAssetID := intentsAssetUnknown
-	if id, ok := resolveChain(echo.DestinationAsset); ok {
-		destAssetID = id
+	var destTok *intents.Token
+	if id, tok, ok := resolveChain(echo.DestinationAsset); ok {
+		destAssetID, destTok = id, tok
+	}
+	// The origin chain is already known (it's the wallet whose history was
+	// probed); the catalog lookup is only for the token's decimals.
+	_, originTok, _ := resolveChain(echo.OriginAsset)
+
+	// Reconstruction is best-effort: an unresolvable side or a bad amount
+	// string leaves the atoms field zero rather than dropping the record.
+	atoms := func(assetID uint32, tok *intents.Token, amt string) uint64 {
+		if assetID == intentsAssetUnknown || tok == nil || amt == "" {
+			return 0
+		}
+		unitInfo, err := asset.UnitInfo(assetID)
+		if err != nil {
+			return 0
+		}
+		v, err := fromIntentsAmount(amt, &unitInfo, tok.Decimals)
+		if err != nil {
+			return 0
+		}
+		return v
+	}
+
+	// Prefer the realized fill over the quoted output, as mergeStatus does
+	// for live records: history shows what was actually delivered. A
+	// reconstructed record's AmountOut already matching the details means a
+	// later poll's realizedAtomsOut will never revisit it, so it must be
+	// converted here.
+	amountOut := quote.AmountOut
+	if status.SwapDetails.AmountOut != "" {
+		amountOut = status.SwapDetails.AmountOut
 	}
 
 	// The status endpoint's re-serialized quote is the copy least likely
@@ -1180,8 +1215,10 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		DestAssetID:    destAssetID,
 		OriginAsset:    echo.OriginAsset,
 		DestAsset:      echo.DestinationAsset,
+		AtomsIn:        atoms(originAssetID, originTok, echo.Amount),
 		AmountIn:       echo.Amount,
-		AmountOut:      quote.AmountOut,
+		AmountOut:      amountOut,
+		AtomsOut:       atoms(destAssetID, destTok, amountOut),
 		Recipient:      echo.Recipient,
 		RefundTo:       echo.RefundTo,
 		Deadline:       deadline,

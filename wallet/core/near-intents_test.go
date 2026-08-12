@@ -93,14 +93,20 @@ func TestSwapFromStatus(t *testing.T) {
 		t.Fatalf("error decoding fixture: %v", err)
 	}
 
-	// Stub resolver: the fixture's destination is nep141:sol.omft.near.
-	resolve := func(assetID string) (uint32, bool) {
-		if assetID == "nep141:sol.omft.near" {
-			return 501, true
+	// Stub resolver: the fixture's origin is nep141:btc.omft.near (8
+	// decimals) and its destination nep141:sol.omft.near (9 decimals). The
+	// destination maps to a registered test asset so the atoms conversion
+	// (unit-info lookup included) actually runs.
+	resolve := func(assetID string) (uint32, *intents.Token, bool) {
+		switch assetID {
+		case "nep141:btc.omft.near":
+			return tUTXOAssetB.ID, &intents.Token{AssetID: assetID, Decimals: 8}, true
+		case "nep141:sol.omft.near":
+			return tUTXOAssetA.ID, &intents.Token{AssetID: assetID, Decimals: 9}, true
 		}
-		return 0, false
+		return 0, nil, false
 	}
-	swap, err := swapFromStatus(resolve, 0, "bc1qdepositaddr", "sometxid", status)
+	swap, err := swapFromStatus(resolve, tUTXOAssetB.ID, "bc1qdepositaddr", "sometxid", status)
 	if err != nil {
 		t.Fatalf("swapFromStatus: %v", err)
 	}
@@ -115,14 +121,61 @@ func TestSwapFromStatus(t *testing.T) {
 	if swap.OriginAsset != "nep141:btc.omft.near" {
 		t.Fatalf("origin asset = %s", swap.OriginAsset)
 	}
-	if swap.DestAssetID != 501 {
-		t.Fatalf("dest asset ID = %d, want 501 (sol)", swap.DestAssetID)
+	if swap.DestAssetID != tUTXOAssetA.ID {
+		t.Fatalf("dest asset ID = %d, want %d", swap.DestAssetID, tUTXOAssetA.ID)
 	}
 	if swap.DepositTxID != "sometxid" {
 		t.Fatalf("deposit txid not carried")
 	}
 	if len(swap.QuoteEnvelope) == 0 {
 		t.Fatalf("no quote envelope retained")
+	}
+	// Both atoms fields must be populated (both test assets use a 1e8
+	// conversion factor): 10000000 @ 8 decimals in, 83464781817 @ 9
+	// decimals out, truncated to wallet precision.
+	if swap.AtomsIn != 10_000_000 {
+		t.Fatalf("AtomsIn = %d, want 10000000", swap.AtomsIn)
+	}
+	if swap.AtomsOut != 8_346_478_181 {
+		t.Fatalf("AtomsOut = %d, want 8346478181", swap.AtomsOut)
+	}
+}
+
+// TestSwapFromStatusRealizedFill covers the fill-preference: when the swap
+// details report a realized amountOut, the reconstructed record carries it
+// (string and atoms) instead of the quoted output. A later poll never
+// revisits it — realizedAtomsOut skips details matching the record — so it
+// must be right at construction.
+func TestSwapFromStatusRealizedFill(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "intents", "testdata", "status-pending.json"))
+	if err != nil {
+		t.Fatalf("error reading fixture: %v", err)
+	}
+	status := new(intents.StatusResponse)
+	if err := json.Unmarshal(b, status); err != nil {
+		t.Fatalf("error decoding fixture: %v", err)
+	}
+	status.Status = intents.StatusSuccess
+	status.SwapDetails.AmountOut = "83000000000"
+	resolve := func(assetID string) (uint32, *intents.Token, bool) {
+		if assetID == "nep141:sol.omft.near" {
+			return tUTXOAssetA.ID, &intents.Token{AssetID: assetID, Decimals: 9}, true
+		}
+		return 0, nil, false
+	}
+	swap, err := swapFromStatus(resolve, tUTXOAssetB.ID, "bc1qdepositaddr", "sometxid", status)
+	if err != nil {
+		t.Fatalf("swapFromStatus: %v", err)
+	}
+	if swap.AmountOut != "83000000000" {
+		t.Fatalf("AmountOut = %s, want the realized fill 83000000000", swap.AmountOut)
+	}
+	if swap.AtomsOut != 8_300_000_000 {
+		t.Fatalf("AtomsOut = %d, want 8300000000", swap.AtomsOut)
+	}
+	// The origin asset didn't resolve; best-effort leaves zero.
+	if swap.AtomsIn != 0 {
+		t.Fatalf("AtomsIn = %d, want 0 for an unresolved origin token", swap.AtomsIn)
 	}
 }
 
@@ -137,7 +190,7 @@ func TestSwapFromStatusUnknownChain(t *testing.T) {
 	if err := json.Unmarshal(b, status); err != nil {
 		t.Fatalf("error decoding fixture: %v", err)
 	}
-	resolve := func(string) (uint32, bool) { return 0, false } // nothing resolves
+	resolve := func(string) (uint32, *intents.Token, bool) { return 0, nil, false } // nothing resolves
 	swap, err := swapFromStatus(resolve, 0, "bc1qdepositaddr", "sometxid", status)
 	if err != nil {
 		t.Fatalf("swapFromStatus: %v", err)
@@ -158,7 +211,7 @@ func TestSwapFromStatusDeadlineFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error reading fixture: %v", err)
 	}
-	resolve := func(string) (uint32, bool) { return 0, false }
+	resolve := func(string) (uint32, *intents.Token, bool) { return 0, nil, false }
 	for _, deadline := range []string{"", "not-a-timestamp", "2026-07-18 12:00:00"} {
 		status := new(intents.StatusResponse)
 		if err := json.Unmarshal(b, status); err != nil {
