@@ -2208,6 +2208,100 @@ func TestResumeInterleavedWithRelogin(t *testing.T) {
 	}
 }
 
+// TestResumeInterleavedWithLoginConnect covers the interleaving
+// TestResumeInterleavedWithRelogin cannot: that one releases the stale Resume
+// after connectWallets has run to completion, so every wallet is already up by
+// the time the unwind inspects them. The window that matters is earlier. Login
+// publishes loggedIn and releases loginMtx before it starts dialing, so a stale
+// Resume can return while the whole set is still down - down because the login
+// has not reached it yet, not because a session change stranded it. Reading
+// that as unreached re-arms the set and latches the pause under the login, and
+// connectWallets' end-of-connect sweep then tears down everything it just
+// connected, leaving a foregrounded app with no wallets and no Resume coming.
+func TestResumeInterleavedWithLoginConnect(t *testing.T) {
+	rig, wallets, twallets := newSuspendRig(t, 42, 0)
+	defer rig.shutdown()
+	tCore := rig.core
+	for _, tw := range twallets {
+		tw.bal = new(asset.Balance)
+	}
+
+	if err := tCore.Suspend(); err != nil {
+		t.Fatalf("Suspend: %v", err)
+	}
+
+	// Park the stale Resume in its first reconnect. balanceHook runs after
+	// xcWallet.Connect has released connectMtx, so the login's own dial of the
+	// same wallet is not blocked behind it.
+	entered, release := make(chan struct{}), make(chan struct{})
+	var parked int32
+	for _, tw := range twallets {
+		tw.balanceHook = func() {
+			if !atomic.CompareAndSwapInt32(&parked, 0, 1) {
+				return
+			}
+			close(entered)
+			<-release
+		}
+	}
+
+	stale := make(chan error, 1)
+	go func() { stale <- tCore.Resume() }()
+	<-entered
+
+	if err := tCore.Logout(); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	// Park the login inside its connect, and release the stale Resume there:
+	// loggedIn is published, the wallets are still down, and the unwind is
+	// deciding what to do about them. connectHook runs at the top of Connect,
+	// so the first wallet the login dials is still disconnected when the stale
+	// Resume unwinds.
+	loginEntered, loginRelease := make(chan struct{}), make(chan struct{})
+	var loginParked int32
+	for _, tw := range twallets {
+		tw.connectHook = func() {
+			if !atomic.CompareAndSwapInt32(&loginParked, 0, 1) {
+				return
+			}
+			close(loginEntered)
+			<-loginRelease
+		}
+	}
+
+	login := make(chan error, 1)
+	go func() { login <- tCore.Login(tPW) }()
+	<-loginEntered
+
+	close(release)
+	if err := <-stale; err != nil {
+		t.Fatalf("stale Resume: %v", err)
+	}
+
+	close(loginRelease)
+	if err := <-login; err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	for _, w := range wallets {
+		if !w.connected() {
+			t.Fatalf("%s wallet left disconnected after a fresh login", unbip(w.AssetID))
+		}
+	}
+	// The flag is the mechanism: latched here, the next Suspend is a no-op on
+	// an already-suspended core and the wallets that are up never get swept.
+	tCore.suspendMtx.Lock()
+	suspended, tracked := tCore.suspended, len(tCore.suspendedWallets)
+	tCore.suspendMtx.Unlock()
+	if suspended {
+		t.Fatal("stale Resume latched the pause under a fresh login")
+	}
+	if tracked != 0 {
+		t.Fatalf("stale Resume handed back %d wallets the login was bringing up", tracked)
+	}
+}
+
 // TestSuspendBeforeLoginLatches covers the pause window that opens before
 // TestSuspendDuringLoginConnect's. Login runs the app pass KDF and the seed
 // decrypt before it sets loggedIn, and both are slow, so a pause can land on a

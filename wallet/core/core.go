@@ -125,6 +125,12 @@ type Core struct {
 	// stall a concurrent Logout or Stop), and re-checks it after each one. A
 	// bump means the wallet it just reconnected is no longer wanted.
 	suspendGen uint64
+	// loginConnecting spans a fresh Login from the moment it publishes loggedIn
+	// to the end of its connectWallets. Every wallet is legitimately down for
+	// that whole window, so connection state cannot be read as "a newer session
+	// never reached this one" - see rearmUnreached, which bows out while it is
+	// set. Login claims it, connectWallets clears it.
+	loginConnecting bool
 
 	seedGenerationTime uint64
 
@@ -2540,9 +2546,25 @@ func (c *Core) Login(pw []byte) error {
 		return false, nil
 	}
 
-	if needsInit, err := login(); err != nil {
+	// loginConnecting is claimed in the same suspendMtx hold that publishes
+	// loggedIn, because the gap between them is reachable: Login releases
+	// loginMtx and only then calls connectWallets. A stale Resume landing in
+	// that gap would see a logged-in session with every wallet still down and
+	// read it as wallets a newer session stranded. Taking suspendMtx around
+	// login() rather than inside it keeps the global suspendMtx-before-loginMtx
+	// order; the work it covers is a seed decrypt and a key derivation, not the
+	// app pass KDF, which encryptionKey already did above. connectWallets
+	// clears the flag at the end of its connect.
+	c.suspendMtx.Lock()
+	needsInit, err := login()
+	if err == nil && needsInit {
+		c.loginConnecting = true
+	}
+	c.suspendMtx.Unlock()
+	if err != nil {
 		return err
-	} else if needsInit {
+	}
+	if needsInit {
 		c.notify(newLoginNote("Connecting wallets..."))
 		c.connectWallets(crypter) // initialize reserves
 	}
@@ -2653,6 +2675,11 @@ func (c *Core) connectWallets(crypter encrypt.Crypter) {
 	// wallet, because the token phase reconnects network wallets and would undo
 	// an earlier sweep.
 	c.suspendMtx.Lock()
+	// The login window closes here, not before the sweep: a stale Resume that
+	// lands between the last dial and this lock is still one rearmUnreached
+	// must leave alone, and the sweep below records anything a real pause
+	// caught.
+	c.loginConnecting = false
 	if c.suspended {
 		c.log.Infof("Pause landed during login; suspending the wallets it connected")
 		c.suspendConnected()
@@ -3055,7 +3082,23 @@ func (c *Core) unwindStaleResume(claimed []uint32, gen uint64) bool {
 // it is already set. The generation is deliberately not bumped: the newer
 // session still owns it, and bumping would strand the very Resume we are handing
 // these wallets to. Caller holds suspendMtx.
+//
+// A fresh Login reaches the same branch of unwindStaleResume, and there the
+// premise does not hold: Login sets loggedIn and releases loginMtx before
+// calling connectWallets, so for the length of that connect every wallet is
+// down because it has not been brought up yet, not because a session change
+// stranded it. Re-arming there would latch the pause under a login, and
+// connectWallets' end-of-connect sweep would then tear down everything it just
+// connected - the stranding this function exists to prevent, from the login
+// side. So while that window is open we leave the whole set to the login, which
+// is bringing all of it up anyway.
 func (c *Core) rearmUnreached(claimed []uint32) {
+	if c.loginConnecting {
+		c.log.Infof("Session changed (login) while resuming; "+
+			"leaving %d wallets to the login bringing them up", len(claimed))
+		return
+	}
+
 	var unreached int
 	for _, assetID := range claimed {
 		w, resumable := c.resumableWallet(assetID)
