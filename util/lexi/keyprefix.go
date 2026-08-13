@@ -38,6 +38,9 @@ var (
 	// user key. Index entries reference rows by KeyID, and this map is how an
 	// index iteration resolves the entry back to the row.
 	IDToKeyPrefix = keyPrefix{0x00, 0x03}
+	// layoutVersionPrefix holds the single layout-version stamp that New
+	// checks before touching anything else in the database.
+	layoutVersionPrefix = keyPrefix{0x00, 0x04}
 
 	firstAvailablePrefix = keyPrefix{0x01, 0x00}
 )

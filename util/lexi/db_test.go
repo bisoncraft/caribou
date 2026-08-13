@@ -843,3 +843,70 @@ func TestUniqueIndexPrefixShadowing(t *testing.T) {
 		}
 	}
 }
+
+// TestLayoutVersionGuard covers checkLayoutVersion: a fresh database is
+// stamped and reopens cleanly, while a version mismatch or a pre-stamp
+// database with data in it refuses to open rather than being misread.
+func TestLayoutVersionGuard(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "test.db")
+	newDB := func() (*DB, error) {
+		return New(&Config{Path: dir, Log: util.StdOutLogger("T", util.LevelError)})
+	}
+
+	db, err := newDB()
+	if err != nil {
+		t.Fatalf("fresh open: %v", err)
+	}
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if err := tbl.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen with a matching stamp.
+	db, err = newDB()
+	if err != nil {
+		t.Fatalf("reopen with matching stamp: %v", err)
+	}
+
+	// A version from the future refuses to open.
+	if err := db.DB.Update(func(txn *badger.Txn) error {
+		return txn.Set(layoutVersionKey, []byte{layoutVersion + 1})
+	}); err != nil {
+		t.Fatalf("bump version: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := newDB(); err == nil {
+		t.Fatal("expected error opening a newer-layout database")
+	} else if !strings.Contains(err.Error(), "layout version") {
+		t.Fatalf("error does not name the condition: %v", err)
+	}
+
+	// A database with data but no stamp predates the versioning and also
+	// refuses to open. New itself refuses this database, so strip the stamp
+	// through a raw badger handle.
+	bdb, err := badger.Open(badger.DefaultOptions(dir).WithLogger(nil))
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if err := bdb.Update(func(txn *badger.Txn) error {
+		return txn.Delete(layoutVersionKey)
+	}); err != nil {
+		t.Fatalf("strip stamp: %v", err)
+	}
+	if err := bdb.Close(); err != nil {
+		t.Fatalf("raw close: %v", err)
+	}
+	if _, err := newDB(); err == nil {
+		t.Fatal("expected error opening a pre-stamp database with data")
+	} else if !strings.Contains(err.Error(), "predates layout version") {
+		t.Fatalf("error does not name the condition: %v", err)
+	}
+}

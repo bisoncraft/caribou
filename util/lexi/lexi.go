@@ -110,6 +110,54 @@ type Config struct {
 	Log  util.Logger
 }
 
+// layoutVersion identifies the on-disk key layout. Version 1 is the row-keyed
+// layout: rows stored under tablePrefix||userKey, the row's KeyID carried in
+// the datum, and the KeyID→key map under IDToKeyPrefix. Databases written
+// before the stamp existed (the dual key<->DBID map layout) have no version
+// key.
+const layoutVersion = 1
+
+// layoutVersionKey is where the layout version is stamped. The trailing byte
+// keeps the raw key longer than a bare prefix, which reverse iteration
+// requires of every key.
+var layoutVersionKey = PrefixedKey(layoutVersionPrefix, []byte{0x00})
+
+// checkLayoutVersion refuses to open a database whose on-disk layout does not
+// match this package's, stamping a fresh database with the current version.
+// Without the stamp check, a database written under an older layout opens
+// cleanly and misreads - rows surface as phantom empty-value entries and
+// lookups miss - which presents as missing data rather than as the layout
+// mismatch it is. There is no migration; a database from an older layout must
+// be recreated.
+func checkLayoutVersion(bdb *badger.DB, path string) error {
+	return bdb.Update(func(txn *badger.Txn) error {
+		item, err := txn.Get(layoutVersionKey)
+		if err == nil {
+			return item.Value(func(v []byte) error {
+				if len(v) != 1 || v[0] != layoutVersion {
+					return fmt.Errorf("database at %q has layout version %v where this build requires %d: delete the database directory to recreate it", path, v, layoutVersion)
+				}
+				return nil
+			})
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return fmt.Errorf("error reading layout version: %w", err)
+		}
+		// No stamp. Only a fresh (empty) database may be adopted and stamped;
+		// a non-empty one predates the stamp and cannot be read correctly.
+		iterOpts := badger.DefaultIteratorOptions
+		iterOpts.PrefetchValues = false
+		it := txn.NewIterator(iterOpts)
+		it.Rewind()
+		empty := !it.Valid()
+		it.Close()
+		if !empty {
+			return fmt.Errorf("database at %q predates layout version %d and cannot be read: delete the database directory to recreate it", path, layoutVersion)
+		}
+		return txn.Set(layoutVersionKey, []byte{layoutVersion})
+	})
+}
+
 // New constructs a new Lexi DB at the directory named by cfg.Path.
 func New(cfg *Config) (*DB, error) {
 	logger := cfg.Log.SubLogger("BADG")
@@ -118,14 +166,21 @@ func New(cfg *Config) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Close the handle before bailing on any later failure, or the Badger
+	// directory lock is held for the life of the process and every retry of
+	// New on this path fails with a lock error.
+	closeOnErr := func() {
+		if cerr := bdb.Close(); cerr != nil {
+			logger.Errorf("error closing badger after failed open: %v", cerr)
+		}
+	}
+	if err := checkLayoutVersion(bdb, cfg.Path); err != nil {
+		closeOnErr()
+		return nil, err
+	}
 	idSeq, err := bdb.GetSequence(PrefixedKey(primarySequencePrefix, []byte{0x00}), 1000)
 	if err != nil {
-		// Close the handle before bailing, or the Badger directory lock is held
-		// for the life of the process and every retry of New on this path fails
-		// with a lock error.
-		if cerr := bdb.Close(); cerr != nil {
-			logger.Errorf("error closing badger after sequence failure: %v", cerr)
-		}
+		closeOnErr()
 		return nil, fmt.Errorf("error getting constructing primary sequence: %w", err)
 	}
 
