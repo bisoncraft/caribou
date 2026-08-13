@@ -29,9 +29,9 @@ const (
 //
 //	[indexID:1][indexEntry][primaryKey] -> primaryKey
 //
-// indexID is a 1-byte id assigned (and persisted) per index name. Unique
-// indexes must emit fixed-length index entries so that uniqueness can be
-// checked by prefix.
+// indexID is a 1-byte id assigned (and persisted) per index name. Index
+// entries may be variable-length; uniqueness is checked against the exact
+// entry value, not by prefix.
 type Index struct {
 	table  *Table
 	name   string
