@@ -1,6 +1,7 @@
 package near
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 )
@@ -129,7 +131,7 @@ func TestRPCFailover(t *testing.T) {
 		t.Fatalf("newRPCClient: %v", err)
 	}
 
-	block, err := c.getBlock("final")
+	block, err := c.getBlock(context.Background(), "final")
 	if err != nil {
 		t.Fatalf("getBlock with one endpoint down: %v", err)
 	}
@@ -139,7 +141,7 @@ func TestRPCFailover(t *testing.T) {
 
 	// The healthy endpoint is now active and the bad one is cooling: further
 	// calls must not touch the bad endpoint.
-	if _, err := c.getBlock("final"); err != nil {
+	if _, err := c.getBlock(context.Background(), "final"); err != nil {
 		t.Fatalf("second getBlock: %v", err)
 	}
 	if n := good.callCount("block"); n != 2 {
@@ -165,7 +167,7 @@ func TestRPCOversizedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRPCClient: %v", err)
 	}
-	block, err := c.getBlock("final")
+	block, err := c.getBlock(context.Background(), "final")
 	if err != nil {
 		t.Fatalf("getBlock with oversized endpoint first: %v", err)
 	}
@@ -179,7 +181,7 @@ func TestRPCOversizedResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRPCClient: %v", err)
 	}
-	if _, err := solo.getBlock("final"); err == nil {
+	if _, err := solo.getBlock(context.Background(), "final"); err == nil {
 		t.Fatalf("oversized response accepted")
 	}
 }
@@ -202,7 +204,7 @@ func TestRPCAuthoritativeError(t *testing.T) {
 		t.Fatalf("newRPCClient: %v", err)
 	}
 
-	_, err = c.viewAccount("nobody.near")
+	_, err = c.viewAccount(context.Background(), "nobody.near")
 	if !isAccountNotFound(err) {
 		t.Fatalf("expected account-not-found, got %v", err)
 	}
@@ -223,7 +225,7 @@ func TestRPCMethodNotFoundFailover(t *testing.T) {
 		t.Fatalf("newRPCClient: %v", err)
 	}
 
-	price, err := c.gasPrice()
+	price, err := c.gasPrice(context.Background())
 	if err != nil {
 		t.Fatalf("gasPrice should fail over past method-not-found: %v", err)
 	}
@@ -243,14 +245,14 @@ func TestRPCAllEndpointsDown(t *testing.T) {
 		t.Fatalf("newRPCClient: %v", err)
 	}
 
-	if _, err := c.getBlock("final"); err == nil ||
+	if _, err := c.getBlock(context.Background(), "final"); err == nil ||
 		!strings.Contains(err.Error(), "all NEAR RPC endpoints failed") {
 		t.Fatalf("expected all-endpoints error, got %v", err)
 	}
 
 	// Both endpoints are now cooling; the second pass must still attempt
 	// them rather than reporting nothing attempted.
-	if _, err := c.getBlock("final"); err == nil ||
+	if _, err := c.getBlock(context.Background(), "final"); err == nil ||
 		!strings.Contains(err.Error(), "all NEAR RPC endpoints failed") {
 		t.Fatalf("expected all-endpoints error on retry, got %v", err)
 	}
@@ -270,6 +272,7 @@ func newTestWallet(t *testing.T, f *fakeRPCServer) *NearWallet {
 		t.Fatalf("newRPCClient: %v", err)
 	}
 	w := &NearWallet{
+		ctx:       context.Background(),
 		log:       testLogger,
 		net:       util.Simnet,
 		privKey:   priv,
@@ -632,6 +635,24 @@ func TestYoctoToDropsCeil(t *testing.T) {
 		if got := YoctoToDropsCeil(y); got != tt.want {
 			t.Errorf("YoctoToDropsCeil(%s) = %d, want %d", tt.yocto, got, tt.want)
 		}
+	}
+}
+
+// TestRPCContextCancel verifies that a context deadline actually aborts an
+// in-flight RPC call rather than being ignored until the client timeout.
+func TestRPCContextCancel(t *testing.T) {
+	m := newMockNearRPC(t)
+	m.handle("block", func(_ json.RawMessage) (any, *rpcError) {
+		time.Sleep(200 * time.Millisecond) // slow response
+		return map[string]any{"header": map[string]any{
+			"height": uint64(1), "hash": "11111111111111111111111111111111111111111", "timestamp": uint64(0),
+		}}, nil
+	})
+	c := m.client()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := c.getBlock(ctx, "final"); err == nil {
+		t.Fatal("expected error from cancelled context")
 	}
 }
 

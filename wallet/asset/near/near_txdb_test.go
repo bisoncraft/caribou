@@ -26,7 +26,7 @@ func TestTxDBDelegation(t *testing.T) {
 	}
 	t.Cleanup(func() { master.Close() })
 
-	w := &NearWallet{log: log, txDB: master.NetworkTxDB(BipID)}
+	w := &NearWallet{ctx: context.Background(), log: log, txDB: master.NetworkTxDB(BipID)}
 
 	confirmed := &txdb.WalletTransaction{
 		Type: txdb.Send, ID: "conf", Amount: 1,
@@ -150,13 +150,13 @@ func TestPendingTxExpiry(t *testing.T) {
 	}
 
 	// Inside the window (boundary inclusive): nothing expires.
-	w.checkPendingTxs(rpc, refHeight+transactionValidityPeriod+pendingExpiryMargin)
+	w.checkPendingTxs(context.Background(), rpc, refHeight+transactionValidityPeriod+pendingExpiryMargin)
 	if ids := pendingIDs(); len(ids) != 4 {
 		t.Fatalf("pending after boundary check = %v, want all 4", ids)
 	}
 
 	// One block past the boundary: only the provably dead record expires.
-	w.checkPendingTxs(rpc, refHeight+transactionValidityPeriod+pendingExpiryMargin+1)
+	w.checkPendingTxs(context.Background(), rpc, refHeight+transactionValidityPeriod+pendingExpiryMargin+1)
 	ids := pendingIDs()
 	if ids["dead"] || !ids["late"] || !ids["err"] || !ids["noref"] {
 		t.Fatalf("pending after expiry check = %v, want all but dead", ids)
@@ -172,7 +172,7 @@ func TestPendingTxExpiry(t *testing.T) {
 	}
 
 	// Far in the future, the late record's window lapses too.
-	w.checkPendingTxs(rpc, refHeight+5000+transactionValidityPeriod+pendingExpiryMargin+1)
+	w.checkPendingTxs(context.Background(), rpc, refHeight+5000+transactionValidityPeriod+pendingExpiryMargin+1)
 	if ids := pendingIDs(); ids["late"] || !ids["err"] || !ids["noref"] {
 		t.Fatalf("pending after second expiry = %v, want only err and noref", ids)
 	}

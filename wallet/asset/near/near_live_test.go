@@ -258,7 +258,7 @@ func TestLiveSend(t *testing.T) {
 	for {
 		select {
 		case <-time.After(time.Second):
-			recipInfo, err := w.rpc.viewAccount(ctx, recipient)
+			recipInfo, err := w.rpc.Load().viewAccount(ctx, recipient)
 			if err != nil {
 				continue // Account might not exist yet.
 			}

@@ -135,8 +135,13 @@ const rpcResponseSizeLimit = 1 << 22 // 4 MiB
 // doRequest posts the request body to a single endpoint. endpointBad reports
 // whether a failure should be attributed to the endpoint (failover candidate)
 // rather than being an authoritative server-side response.
-func (c *rpcClient) doRequest(url string, body []byte) (_ json.RawMessage, endpointBad bool, _ error) {
-	resp, err := c.httpClient.Post(url, "application/json", bytes.NewReader(body))
+func (c *rpcClient) doRequest(ctx context.Context, url string, body []byte) (_ json.RawMessage, endpointBad bool, _ error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, true, fmt.Errorf("error creating RPC request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, true, fmt.Errorf("error posting RPC request: %w", err)
 	}
@@ -170,7 +175,7 @@ func (c *rpcClient) doRequest(url string, body []byte) (_ json.RawMessage, endpo
 	return rpcResp.Result, false, nil
 }
 
-func (c *rpcClient) call(method string, params interface{}) (json.RawMessage, error) {
+func (c *rpcClient) call(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	reqBody := jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      rpcRequestID,
@@ -211,13 +216,18 @@ func (c *rpcClient) call(method string, params interface{}) (json.RawMessage, er
 		ep := c.endpoints[idx]
 		c.mtx.Unlock()
 
-		result, endpointBad, err := c.doRequest(ep.url, body)
+		result, endpointBad, err := c.doRequest(ctx, ep.url, body)
 		if err == nil {
 			c.mtx.Lock()
 			ep.downTil = time.Time{}
 			c.active = idx
 			c.mtx.Unlock()
 			return result, nil
+		}
+		// A cancelled or expired context is the caller's verdict, not the
+		// endpoint's: bail without failing over or poisoning cooldowns.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		if !endpointBad {
 			return nil, err
@@ -244,8 +254,8 @@ type accountInfo struct {
 	BlockHash   string `json:"block_hash"`
 }
 
-func (c *rpcClient) viewAccount(accountID string) (*accountInfo, error) {
-	result, err := c.call("query", map[string]interface{}{
+func (c *rpcClient) viewAccount(ctx context.Context, accountID string) (*accountInfo, error) {
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "view_account",
 		"finality":     "final",
 		"account_id":   accountID,
@@ -260,8 +270,8 @@ func (c *rpcClient) viewAccount(accountID string) (*accountInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) viewAccountAt(accountID string, blockHeight uint64) (*accountInfo, error) {
-	result, err := c.call("query", map[string]interface{}{
+func (c *rpcClient) viewAccountAt(ctx context.Context, accountID string, blockHeight uint64) (*accountInfo, error) {
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "view_account",
 		"block_id":     blockHeight,
 		"account_id":   accountID,
@@ -286,8 +296,8 @@ type accessKeyInfo struct {
 // viewAccessKey queries the access key's current nonce. finality is "final"
 // or "optimistic"; optimistic sees recently executed transactions sooner and
 // is used when refreshing a stale nonce.
-func (c *rpcClient) viewAccessKey(accountID, pubKeyBase58, finality string) (*accessKeyInfo, error) {
-	result, err := c.call("query", map[string]interface{}{
+func (c *rpcClient) viewAccessKey(ctx context.Context, accountID, pubKeyBase58, finality string) (*accessKeyInfo, error) {
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "view_access_key",
 		"finality":     finality,
 		"account_id":   accountID,
@@ -305,12 +315,12 @@ func (c *rpcClient) viewAccessKey(accountID, pubKeyBase58, finality string) (*ac
 
 // callFunction invokes a read-only ("view") contract method and returns its
 // raw JSON-encoded return value.
-func (c *rpcClient) callFunction(contractID, methodName string, args interface{}) (json.RawMessage, error) {
+func (c *rpcClient) callFunction(ctx context.Context, contractID, methodName string, args interface{}) (json.RawMessage, error) {
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling args: %w", err)
 	}
-	result, err := c.call("query", map[string]interface{}{
+	result, err := c.call(ctx, "query", map[string]interface{}{
 		"request_type": "call_function",
 		"finality":     "final",
 		"account_id":   contractID,
@@ -360,8 +370,8 @@ type chunkTransaction struct {
 	Actions    []txAction `json:"actions"`
 }
 
-func (c *rpcClient) getBlock(finality string) (*blockInfo, error) {
-	result, err := c.call("block", map[string]interface{}{
+func (c *rpcClient) getBlock(ctx context.Context, finality string) (*blockInfo, error) {
+	result, err := c.call(ctx, "block", map[string]interface{}{
 		"finality": finality,
 	})
 	if err != nil {
@@ -374,8 +384,8 @@ func (c *rpcClient) getBlock(finality string) (*blockInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) getBlockByHash(blockHash string) (*blockInfo, error) {
-	result, err := c.call("block", map[string]interface{}{
+func (c *rpcClient) getBlockByHash(ctx context.Context, blockHash string) (*blockInfo, error) {
+	result, err := c.call(ctx, "block", map[string]interface{}{
 		"block_id": blockHash,
 	})
 	if err != nil {
@@ -388,8 +398,8 @@ func (c *rpcClient) getBlockByHash(blockHash string) (*blockInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) getBlockByHeight(height uint64) (*blockInfo, error) {
-	result, err := c.call("block", map[string]interface{}{
+func (c *rpcClient) getBlockByHeight(ctx context.Context, height uint64) (*blockInfo, error) {
+	result, err := c.call(ctx, "block", map[string]interface{}{
 		"block_id": height,
 	})
 	if err != nil {
@@ -402,8 +412,8 @@ func (c *rpcClient) getBlockByHeight(height uint64) (*blockInfo, error) {
 	return &info, nil
 }
 
-func (c *rpcClient) getChunk(chunkHash string) (*chunkInfo, error) {
-	result, err := c.call("chunk", map[string]interface{}{
+func (c *rpcClient) getChunk(ctx context.Context, chunkHash string) (*chunkInfo, error) {
+	result, err := c.call(ctx, "chunk", map[string]interface{}{
 		"chunk_id": chunkHash,
 	})
 	if err != nil {
@@ -497,7 +507,7 @@ func (r *txResult) feeDrops() uint64 {
 // returning the full execution outcome so that on-chain failures surface at
 // send time. If the wait window elapses first, the error satisfies
 // isTimeoutError and the transaction may still complete.
-func (c *rpcClient) sendTx(signedTxBase64 string) (*txResult, error) {
+func (c *rpcClient) sendTx(ctx context.Context, signedTxBase64 string) (*txResult, error) {
 	body, err := json.Marshal(jsonRPCRequest{
 		JSONRPC: "2.0",
 		ID:      rpcRequestID,
@@ -521,7 +531,7 @@ func (c *rpcClient) sendTx(signedTxBase64 string) (*txResult, error) {
 	ep := c.endpoints[c.active]
 	c.mtx.Unlock()
 
-	raw, endpointBad, err := c.doRequest(ep.url, body)
+	raw, endpointBad, err := c.doRequest(ctx, ep.url, body)
 	if err != nil {
 		// Transport-level failure, or the server's own TIMEOUT_ERROR: the node
 		// may or may not have accepted the transaction. Report as ambiguous so
@@ -546,8 +556,8 @@ func (c *rpcClient) sendTx(signedTxBase64 string) (*txResult, error) {
 // request held open for the node's wait window, and a transaction that is
 // known but not yet executed returns with no final status, which callers
 // treat as still pending.
-func (c *rpcClient) txStatus(txHash, senderID string) (*txResult, error) {
-	result, err := c.call("tx", map[string]interface{}{
+func (c *rpcClient) txStatus(ctx context.Context, txHash, senderID string) (*txResult, error) {
+	result, err := c.call(ctx, "tx", map[string]interface{}{
 		"tx_hash":           txHash,
 		"sender_account_id": senderID,
 		"wait_until":        "NONE",
@@ -564,8 +574,8 @@ func (c *rpcClient) txStatus(txHash, senderID string) (*txResult, error) {
 
 // gasPrice returns the current network gas price in yoctoNEAR per unit of
 // gas, from the latest block.
-func (c *rpcClient) gasPrice() (*big.Int, error) {
-	result, err := c.call("gas_price", []interface{}{nil})
+func (c *rpcClient) gasPrice(ctx context.Context) (*big.Int, error) {
+	result, err := c.call(ctx, "gas_price", []interface{}{nil})
 	if err != nil {
 		return nil, err
 	}

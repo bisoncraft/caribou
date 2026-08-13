@@ -171,6 +171,12 @@ type NearWallet struct {
 	pubKey    ed25519.PublicKey
 	accountID string // hex-encoded public key (implicit account)
 
+	// ctx is set in Connect and cancelled on shutdown. Interface methods
+	// that take no context of their own use it so their RPC calls abort
+	// with the wallet instead of running to the client timeout.
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+
 	// rpc is set on Connect. It is accessed atomically because the
 	// trait-exposed fee-estimate methods can be reached (via Core) before
 	// or concurrently with Connect. Read it through client().
@@ -281,7 +287,14 @@ func (w *NearWallet) Locked() bool {
 	return w.privKey == nil
 }
 
-func (w *NearWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+func (w *NearWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) {
+	w.ctx, w.ctxCancel = context.WithCancel(ctx)
+	defer func() {
+		if err != nil {
+			w.ctxCancel()
+		}
+	}()
+
 	rpc, err := newRPCClient(w.rpcEndpoints(), w.torProxy, w.log)
 	if err != nil {
 		return nil, fmt.Errorf("error creating RPC client: %w", err)
@@ -292,7 +305,7 @@ func (w *NearWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// Core via WalletConfig.NetworkTxDB; the wallet does not own its lifecycle.
 
 	// Fetch initial block.
-	block, err := rpc.getBlock("final")
+	block, err := rpc.getBlock(w.ctx, "final")
 	if err != nil {
 		return nil, fmt.Errorf("error fetching initial block: %w", err)
 	}
@@ -324,7 +337,7 @@ func (w *NearWallet) Balance() (*asset.Balance, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := rpc.viewAccount(w.accountID)
+	info, err := rpc.viewAccount(w.ctx, w.accountID)
 	if err != nil {
 		// Account may not exist yet (no funds received). Return zero balance.
 		if isAccountNotFound(err) {
@@ -362,8 +375,8 @@ func (w *NearWallet) OwnsDepositAddress(address string) (bool, error) {
 // the account's nonce and any nonce already reserved by an earlier call, so
 // two sends issued back-to-back don't compute the same nonce while the
 // first transaction has yet to be reflected in the final access-key view.
-func (w *NearWallet) reserveNonce(rpc *rpcClient) (uint64, error) {
-	akInfo, err := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "final")
+func (w *NearWallet) reserveNonce(ctx context.Context, rpc *rpcClient) (uint64, error) {
+	akInfo, err := rpc.viewAccessKey(ctx, w.accountID, w.pubKeyBase58(), "final")
 	if err != nil {
 		return 0, fmt.Errorf("error querying access key: %w", err)
 	}
@@ -403,7 +416,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		return nil, err
 	}
 
-	result, hash, refHeight, err := w.sendActions(rpc, privKey, address, []action{transferAction(yoctoAmount)})
+	result, hash, refHeight, err := w.sendActions(w.ctx, rpc, privKey, address, []action{transferAction(yoctoAmount)})
 
 	var rejected bool
 	var failureMsg string
@@ -452,7 +465,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		AdditionalData: map[string]string{refHeightKey: strconv.FormatUint(refHeight, 10)},
 	}
 	if rejected {
-		wtx.BlockNumber, wtx.Timestamp = w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
+		wtx.BlockNumber, wtx.Timestamp = w.resolveBlock(w.ctx, rpc, result.TransactionOutcome.BlockHash)
 	}
 
 	if w.txDB != nil {
@@ -476,16 +489,16 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 // if the network rejects the first attempt for a stale nonce. Both the
 // native transfer and token paths route through here so they share the
 // retry behavior.
-func (w *NearWallet) sendActions(rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action) (result *txResult, hash [32]byte, refHeight uint64, err error) {
+func (w *NearWallet) sendActions(ctx context.Context, rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action) (result *txResult, hash [32]byte, refHeight uint64, err error) {
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
 
-	nonce, err := w.reserveNonce(rpc)
+	nonce, err := w.reserveNonce(ctx, rpc)
 	if err != nil {
 		return nil, hash, 0, err
 	}
 
-	result, hash, refHeight, err = w.broadcastActions(rpc, privKey, receiverID, actions, nonce)
+	result, hash, refHeight, err = w.broadcastActions(ctx, rpc, privKey, receiverID, actions, nonce)
 	if err != nil && isInvalidNonce(err) {
 		// An authoritative InvalidNonce means this transaction was rejected
 		// and did not execute, so a fresh-nonce retry is a new send rather
@@ -493,7 +506,7 @@ func (w *NearWallet) sendActions(rpc *rpcClient, privKey ed25519.PrivateKey, rec
 		// broadcast is never an InvalidNonce error, so it cannot reach here.)
 		// The nonce may have been consumed by our own lagging watermark or by
 		// the same key in another wallet instance; refresh and retry once.
-		akInfo, akErr := rpc.viewAccessKey(w.accountID, w.pubKeyBase58(), "optimistic")
+		akInfo, akErr := rpc.viewAccessKey(ctx, w.accountID, w.pubKeyBase58(), "optimistic")
 		if akErr != nil {
 			return nil, hash, 0, fmt.Errorf("nonce refresh failed after %v: %w", err, akErr)
 		}
@@ -503,7 +516,7 @@ func (w *NearWallet) sendActions(rpc *rpcClient, privKey ed25519.PrivateKey, rec
 			nonce++
 		}
 		w.nonce = nonce
-		result, hash, refHeight, err = w.broadcastActions(rpc, privKey, receiverID, actions, nonce)
+		result, hash, refHeight, err = w.broadcastActions(ctx, rpc, privKey, receiverID, actions, nonce)
 	}
 	return result, hash, refHeight, err
 }
@@ -512,7 +525,7 @@ func (w *NearWallet) sendActions(rpc *rpcClient, privKey ed25519.PrivateKey, rec
 // given nonce, waiting for optimistic execution. refHeight is the height of
 // the block the transaction references, after which the transaction's
 // validity period is measured.
-func (w *NearWallet) broadcastActions(rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action, nonce uint64) (_ *txResult, hash [32]byte, refHeight uint64, _ error) {
+func (w *NearWallet) broadcastActions(ctx context.Context, rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action, nonce uint64) (_ *txResult, hash [32]byte, refHeight uint64, _ error) {
 	w.tipMtx.RLock()
 	blockHash := w.tipHash
 	refHeight = w.tip
@@ -532,7 +545,7 @@ func (w *NearWallet) broadcastActions(rpc *rpcClient, privKey ed25519.PrivateKey
 	sig := ed25519.Sign(privKey, hash[:])
 	signedTx := serializeSignedTransaction(txBytes, sig)
 
-	result, err := rpc.sendTx(encodeSignedTx(signedTx))
+	result, err := rpc.sendTx(ctx, encodeSignedTx(signedTx))
 	return result, hash, refHeight, err
 }
 
@@ -620,7 +633,7 @@ func (w *NearWallet) cachedGasPrice() *big.Int {
 	if err != nil {
 		return cached
 	}
-	gp, err := rpc.gasPrice()
+	gp, err := rpc.gasPrice(w.ctx)
 
 	w.gasMtx.Lock()
 	defer w.gasMtx.Unlock()
@@ -647,7 +660,7 @@ func (w *NearWallet) spendableYocto() (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	info, err := rpc.viewAccount(w.accountID)
+	info, err := rpc.viewAccount(w.ctx, w.accountID)
 	if err != nil {
 		if isAccountNotFound(err) {
 			return new(big.Int), nil
@@ -762,7 +775,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	if err != nil {
 		return nil, err
 	}
-	result, err := rpc.txStatus(txID, w.accountID)
+	result, err := rpc.txStatus(ctx, txID, w.accountID)
 	if err != nil {
 		return nil, asset.CoinNotFoundError
 	}
@@ -790,7 +803,7 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 
 	if result.Status.isSuccess() {
-		wt.BlockNumber, wt.Timestamp = w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
+		wt.BlockNumber, wt.Timestamp = w.resolveBlock(ctx, rpc, result.TransactionOutcome.BlockHash)
 	}
 
 	return wt, nil
@@ -823,7 +836,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			block, err := rpc.getBlock("final")
+			block, err := rpc.getBlock(ctx, "final")
 			if err != nil {
 				w.log.Errorf("Error fetching block: %v", err)
 				continue
@@ -842,8 +855,8 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 				if w.emit != nil {
 					w.emit.TipChange(block.Header.Height)
 				}
-				w.checkPendingTxs(rpc, block.Header.Height)
-				w.scanIncomingTxs(rpc, block.Header.Height)
+				w.checkPendingTxs(ctx, rpc, block.Header.Height)
+				w.scanIncomingTxs(ctx, rpc, block.Header.Height)
 			}
 
 		case <-ctx.Done():
@@ -860,7 +873,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 // re-derives a tx's type/amount from the wallet's own address — it only
 // updates BlockNumber/Timestamp/Confirmed/Rejected on the existing record
 // looked up by the tx's own ID.
-func (w *NearWallet) checkPendingTxs(rpc *rpcClient, tip uint64) {
+func (w *NearWallet) checkPendingTxs(ctx context.Context, rpc *rpcClient, tip uint64) {
 	if w.txDB == nil {
 		return
 	}
@@ -870,7 +883,7 @@ func (w *NearWallet) checkPendingTxs(rpc *rpcClient, tip uint64) {
 		return
 	}
 	for _, tx := range pending {
-		result, err := rpc.txStatus(tx.ID, w.accountID)
+		result, err := rpc.txStatus(ctx, tx.ID, w.accountID)
 		if err != nil {
 			if isUnknownTransaction(err) {
 				w.maybeExpirePendingTx(tx, tip)
@@ -879,7 +892,7 @@ func (w *NearWallet) checkPendingTxs(rpc *rpcClient, tip uint64) {
 			}
 			continue
 		}
-		blockHeight, blockTime := w.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
+		blockHeight, blockTime := w.resolveBlock(ctx, rpc, result.TransactionOutcome.BlockHash)
 		if result.Status.isSuccess() {
 			tx.BlockNumber = blockHeight
 			tx.Timestamp = blockTime
@@ -943,9 +956,9 @@ func (w *NearWallet) maybeExpirePendingTx(tx *txdb.WalletTransaction, tip uint64
 
 // resolveBlock looks up the height and timestamp (unix seconds) for a block
 // hash. Falls back to the current tip if the lookup fails.
-func (w *NearWallet) resolveBlock(rpc *rpcClient, blockHash string) (height, tsSec uint64) {
+func (w *NearWallet) resolveBlock(ctx context.Context, rpc *rpcClient, blockHash string) (height, tsSec uint64) {
 	if blockHash != "" {
-		block, err := rpc.getBlockByHash(blockHash)
+		block, err := rpc.getBlockByHash(ctx, blockHash)
 		if err == nil {
 			return block.Header.Height, block.Header.Timestamp / 1_000_000_000
 		}
@@ -963,7 +976,7 @@ const maxScanBlocks = 10
 // scanIncomingTxs checks whether our account balance increased since the last
 // scan. Only when an increase is detected does it scan the intervening blocks
 // for the actual incoming transfer transactions.
-func (w *NearWallet) scanIncomingTxs(rpc *rpcClient, newTip uint64) {
+func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip uint64) {
 	if w.txDB == nil {
 		return
 	}
@@ -975,7 +988,7 @@ func (w *NearWallet) scanIncomingTxs(rpc *rpcClient, newTip uint64) {
 
 	// Compare account balance at the two block heights. If the balance
 	// didn't increase we can skip the expensive block/chunk scanning.
-	prevAcct, err := rpc.viewAccountAt(w.accountID, w.lastScannedHeight)
+	prevAcct, err := rpc.viewAccountAt(ctx, w.accountID, w.lastScannedHeight)
 	if err != nil {
 		// Account may not exist yet at the earlier height.
 		if !isAccountNotFound(err) {
@@ -984,7 +997,7 @@ func (w *NearWallet) scanIncomingTxs(rpc *rpcClient, newTip uint64) {
 		w.lastScannedHeight = newTip
 		return
 	}
-	curAcct, err := rpc.viewAccountAt(w.accountID, newTip)
+	curAcct, err := rpc.viewAccountAt(ctx, w.accountID, newTip)
 	if err != nil {
 		w.log.Warnf("Error querying account at block %d: %v", newTip, err)
 		return
@@ -1003,14 +1016,14 @@ func (w *NearWallet) scanIncomingTxs(rpc *rpcClient, newTip uint64) {
 	}
 
 	for height := startHeight; height <= newTip; height++ {
-		block, err := rpc.getBlockByHeight(height)
+		block, err := rpc.getBlockByHeight(ctx, height)
 		if err != nil {
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
 			break
 		}
 		blockTime := block.Header.Timestamp / 1_000_000_000
 		for _, chunk := range block.Chunks {
-			w.scanChunk(rpc, chunk.ChunkHash, height, blockTime)
+			w.scanChunk(ctx, rpc, chunk.ChunkHash, height, blockTime)
 		}
 	}
 
@@ -1018,8 +1031,8 @@ func (w *NearWallet) scanIncomingTxs(rpc *rpcClient, newTip uint64) {
 }
 
 // scanChunk fetches a chunk and stores any incoming transfer transactions.
-func (w *NearWallet) scanChunk(rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) {
-	chunk, err := rpc.getChunk(chunkHash)
+func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) {
+	chunk, err := rpc.getChunk(ctx, chunkHash)
 	if err != nil {
 		w.log.Warnf("Error fetching chunk %s: %v", chunkHash, err)
 		return

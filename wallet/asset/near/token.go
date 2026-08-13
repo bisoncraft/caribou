@@ -162,7 +162,7 @@ func (w *TokenWallet) ftBalanceOf(accountID string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	raw, err := rpc.callFunction(w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
+	raw, err := rpc.callFunction(w.parent.ctx, w.contractID, "ft_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return 0, fmt.Errorf("ft_balance_of: %w", err)
 	}
@@ -184,7 +184,7 @@ func (w *TokenWallet) storageRegistered(accountID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	raw, err := rpc.callFunction(w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
+	raw, err := rpc.callFunction(w.parent.ctx, w.contractID, "storage_balance_of", map[string]string{"account_id": accountID})
 	if err != nil {
 		return false, fmt.Errorf("storage_balance_of: %w", err)
 	}
@@ -271,7 +271,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	// Shared with the native send path: nonce reservation plus a single
 	// fresh-nonce retry on an authoritative InvalidNonce rejection.
-	result, hash, refHeight, err := w.parent.sendActions(rpc, privKey, w.contractID, actions)
+	result, hash, refHeight, err := w.parent.sendActions(w.parent.ctx, rpc, privKey, w.contractID, actions)
 
 	txID := base58.Encode(hash[:])
 
@@ -330,7 +330,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		AdditionalData: map[string]string{refHeightKey: strconv.FormatUint(refHeight, 10)},
 	}
 	if rejected {
-		wtx.BlockNumber, wtx.Timestamp = w.parent.resolveBlock(rpc, result.TransactionOutcome.BlockHash)
+		wtx.BlockNumber, wtx.Timestamp = w.parent.resolveBlock(w.parent.ctx, rpc, result.TransactionOutcome.BlockHash)
 	}
 	if w.txDB != nil {
 		if err := w.txDB.StoreTx(wtx); err != nil {

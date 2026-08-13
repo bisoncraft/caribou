@@ -5,6 +5,7 @@ package near
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"io"
@@ -105,6 +106,7 @@ func makeTokenTestWallet(t *testing.T, m *mockNearRPC) *TokenWallet {
 		t.Fatalf("ed25519.GenerateKey: %v", err)
 	}
 	parent := &NearWallet{
+		ctx:       context.Background(),
 		pubKey:    pub,
 		privKey:   priv,
 		accountID: "sender.near",
@@ -266,7 +268,7 @@ func TestReserveNonceAdvancesPastPending(t *testing.T) {
 	w := &NearWallet{}
 	rpc := m.client()
 
-	n1, err := w.reserveNonce(rpc)
+	n1, err := w.reserveNonce(context.Background(), rpc)
 	if err != nil {
 		t.Fatalf("reserveNonce (1st) error: %v", err)
 	}
@@ -274,7 +276,7 @@ func TestReserveNonceAdvancesPastPending(t *testing.T) {
 		t.Fatalf("n1 = %d, want 6", n1)
 	}
 
-	n2, err := w.reserveNonce(rpc)
+	n2, err := w.reserveNonce(context.Background(), rpc)
 	if err != nil {
 		t.Fatalf("reserveNonce (2nd) error: %v", err)
 	}
