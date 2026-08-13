@@ -1125,6 +1125,12 @@ func (c *Core) assetMap() map[uint32]*SupportedAsset {
 	return assets
 }
 
+// FiatRates is a thread-safe getter for the cached USD exchange rates,
+// keyed by asset ID. Assets whose sources have no fresh data are absent.
+func (c *Core) FiatRates() map[uint32]float64 {
+	return c.fiatConversions()
+}
+
 // User is a thread-safe getter for the User.
 func (c *Core) User() *User {
 	fiatRates := c.fiatConversions()

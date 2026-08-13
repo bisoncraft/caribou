@@ -1098,6 +1098,20 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+// apiFiatRates serves the cached USD exchange rates, keyed by asset ID.
+// It is deliberately unauthenticated: the rates are public market data,
+// and local tooling (the simnet Intents mock among it) prices against a
+// running wallet without holding credentials.
+func (s *AppServer) apiFiatRates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, &struct {
+		OK        bool               `json:"ok"`
+		FiatRates map[uint32]float64 `json:"fiatRates"`
+	}{
+		OK:        true,
+		FiatRates: s.core.FiatRates(),
+	})
+}
+
 // apiToggleRateSource handles the /toggleratesource API request.
 func (s *AppServer) apiToggleRateSource(w http.ResponseWriter, r *http.Request) {
 	form := &struct {

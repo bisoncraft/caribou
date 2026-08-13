@@ -27,10 +27,10 @@ var ratesHTTPClient = &http.Client{
 }
 
 // pollRates periodically fetches USD rates from the caribou app server's
-// unauthenticated GET /api/user endpoint and updates the price table for
-// enabled assets. fiatRates is keyed by BIP-44 asset ID (chain and token
-// IDs alike). Assets missing from the response, and any fetch failure,
-// leave the previous (or fallback) prices in place.
+// unauthenticated GET /api/fiatrates endpoint and updates the price table
+// for enabled assets. fiatRates is keyed by BIP-44 asset ID (chain and
+// token IDs alike). Assets missing from the response, and any fetch
+// failure, leave the previous (or fallback) prices in place.
 func (s *Server) pollRates(ctx context.Context) {
 	bipToIntentsID := make(map[uint32]string, len(s.assets))
 	for id, a := range s.assets {
@@ -73,7 +73,7 @@ func (s *Server) pollRates(ctx context.Context) {
 }
 
 func fetchFiatRates(ctx context.Context, baseURL string) (map[uint32]float64, error) {
-	url := strings.TrimSuffix(baseURL, "/") + "/api/user"
+	url := strings.TrimSuffix(baseURL, "/") + "/api/fiatrates"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -86,11 +86,11 @@ func fetchFiatRates(ctx context.Context, baseURL string) (map[uint32]float64, er
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP status %d from %s", resp.StatusCode, url)
 	}
-	var user struct {
+	var body struct {
 		FiatRates map[uint32]float64 `json:"fiatRates"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
-		return nil, fmt.Errorf("error decoding /api/user response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("error decoding /api/fiatrates response: %w", err)
 	}
-	return user.FiatRates, nil
+	return body.FiatRates, nil
 }

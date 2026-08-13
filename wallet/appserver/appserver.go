@@ -119,6 +119,7 @@ type clientCore interface {
 	WalletRestorationInfo(pw []byte, assetID uint32) ([]*asset.WalletRestoration, error)
 	ToggleRateSourceStatus(src string, disable bool) error
 	FiatRateSources() map[string]bool
+	FiatRates() map[uint32]float64
 	EstimateSendTxFee(address string, assetID uint32, value uint64, subtract, maxWithdraw bool) (*core.SendFeeEstimate, error)
 	ValidateAddress(address string, assetID uint32) (bool, error)
 	WalletPeers(assetID uint32) ([]*asset.WalletPeer, error)
@@ -503,6 +504,7 @@ func New(cfg *Config) (*AppServer, error) {
 		r.Get("/isinitialized", s.apiIsInitialized)
 		r.Post("/resetapppassword", s.apiResetAppPassword)
 		r.Get("/user", s.apiUser)
+		r.Get("/fiatrates", s.apiFiatRates)
 		r.Post("/locale", s.apiLocale)
 		r.Post("/setlocale", s.apiSetLocale)
 		r.Get("/buildinfo", s.apiBuildInfo)

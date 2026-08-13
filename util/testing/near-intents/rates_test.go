@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-// TestFetchFiatRates exercises the /api/user rate fetch against a fake
+// TestFetchFiatRates exercises the /api/fiatrates fetch against a fake
 // caribou app server response.
 func TestFetchFiatRates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/user" {
+		if r.URL.Path != "/api/fiatrates" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Write([]byte(`{"fiatRates":{"0":64123.5,"397":6.25},"assets":{}}`))
+		w.Write([]byte(`{"ok":true,"fiatRates":{"0":64123.5,"397":6.25}}`))
 	}))
 	defer srv.Close()
 

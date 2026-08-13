@@ -65,7 +65,7 @@ type Config struct {
 	// triggers the refund path rather than being ignored. Default 30m.
 	LateWindow time.Duration
 	// RatesURL is the base URL of a running caribou app server whose
-	// unauthenticated GET /api/user supplies live USD rates. Empty
+	// unauthenticated GET /api/fiatrates supplies live USD rates. Empty
 	// disables polling; the static fallback prices are used.
 	RatesURL string
 	// Logger receives operational logging. Defaults to the stdlib

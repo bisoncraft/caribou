@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -61,6 +62,7 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 
 type TCore struct {
 	clientCore           // This is here so we don't have to implement core methods we're not testing
+	fiatRates            map[uint32]float64
 	balanceErr           error
 	loginErr             error
 	logoutErr            error
@@ -96,6 +98,9 @@ func (c *TCore) ToggleRateSourceStatus(src string, disable bool) error {
 }
 func (c *TCore) FiatRateSources() map[string]bool {
 	return nil
+}
+func (c *TCore) FiatRates() map[uint32]float64 {
+	return c.fiatRates
 }
 
 func (c *TCore) InitializeClient(pw []byte, seed *string) (string, error) {
@@ -1123,4 +1128,26 @@ func TestAPIBuildInfo(t *testing.T) {
 	}
 
 	ensureResponse(t, s.apiBuildInfo, string(body), reader, writer, nil, nil)
+}
+
+// TestAPIFiatRates verifies the fiat-rates endpoint's shape. The handler
+// runs with no session state at all, matching its pre-auth routing.
+func TestAPIFiatRates(t *testing.T) {
+	s, c, shutdown := newTServer(t, false)
+	defer shutdown()
+	c.fiatRates = map[uint32]float64{0: 64000.5, 397: 6.25}
+
+	rec := httptest.NewRecorder()
+	s.apiFiatRates(rec, httptest.NewRequest(http.MethodGet, "/api/fiatrates", nil))
+
+	var resp struct {
+		OK        bool               `json:"ok"`
+		FiatRates map[uint32]float64 `json:"fiatRates"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad response %q: %v", rec.Body.String(), err)
+	}
+	if !resp.OK || resp.FiatRates[0] != 64000.5 || resp.FiatRates[397] != 6.25 {
+		t.Fatalf("unexpected response %q", rec.Body.String())
+	}
 }
