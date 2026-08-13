@@ -327,6 +327,14 @@ type TXCWallet struct {
 	// stall a lifecycle call can interleave with: a Suspend serializes against a
 	// wallet inside Connect, but not against one refreshing its balance.
 	balanceHook func()
+
+	// lockHook and unlockHook, when non-nil, are called at the top of Lock and
+	// Unlock respectively. They let a test park a backend auth RPC mid-flight
+	// to assert that no caller-side lock is held across it. Set them before the
+	// call they should catch, so the goroutine making the call sees them
+	// published.
+	lockHook   func()
+	unlockHook func()
 }
 
 var _ asset.Accelerator = (*TXCWallet)(nil)
@@ -416,10 +424,16 @@ func (w *TXCWallet) AddressUsed(addr string) (bool, error) {
 }
 
 func (w *TXCWallet) Unlock(pw []byte) error {
+	if w.unlockHook != nil {
+		w.unlockHook()
+	}
 	return w.unlockErr
 }
 
 func (w *TXCWallet) Lock() error {
+	if w.lockHook != nil {
+		w.lockHook()
+	}
 	return w.lockErr
 }
 
@@ -1245,6 +1259,105 @@ func TestSetWalletPassword(t *testing.T) {
 	decNewPW, _ := rig.crypter.Decrypt(xyzWallet.encPW())
 	if !bytes.Equal(decNewPW, newPW) {
 		t.Fatalf("xcWallet encPW field not updated")
+	}
+}
+
+// SetWalletPassword must hold walletMtx only for the wallet lookup. Everything
+// after it — the connect, the backend Unlock/Lock RPCs, the DB write — is
+// network- and disk-bound, and holding the process-wide write lock across that
+// stalls every other asset's c.wallet lookup on an unreachable node.
+func TestSetWalletPasswordDoesNotBlockWalletLookups(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+	rig.db.wallet = &db.Wallet{EncryptedPW: []byte("abc")}
+
+	var assetID uint32 = 54321
+	xyzWallet, tXyzWallet := newTWallet(assetID)
+	tCore.wallets[assetID] = xyzWallet
+	otherWallet, _ := newTWallet(tUTXOAssetA.ID)
+	tCore.wallets[tUTXOAssetA.ID] = otherWallet
+
+	// Park the backend Unlock that setWalletPassword makes to verify the new
+	// password, simulating an unreachable node.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	tXyzWallet.unlockHook = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	}
+
+	setDone := make(chan error, 1)
+	go func() { setDone <- tCore.SetWalletPassword(tPW, assetID, []byte("def")) }()
+	<-entered
+
+	lookupDone := make(chan struct{})
+	go func() {
+		defer close(lookupDone)
+		tCore.wallet(tUTXOAssetA.ID)
+		tCore.wallet(assetID)
+	}()
+
+	select {
+	case <-lookupDone:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("c.wallet lookup blocked behind SetWalletPassword's backend RPC")
+	}
+
+	close(release)
+	if err := <-setDone; err != nil {
+		t.Fatalf("SetWalletPassword error: %v", err)
+	}
+}
+
+// beginTask must make the shuttingDown check and the wg.Add atomic. An
+// unsynchronized c.ctx check before an Add races Run's Wait: the counter can
+// legitimately reach zero and Wait return between the check and the Add, which
+// panics with "sync: WaitGroup misuse". Run under -race with -count>1.
+func TestBeginTaskRacesShutdown(t *testing.T) {
+	for range 50 {
+		c := &Core{}
+
+		// Mimic Run's persistent notification goroutine: it holds a count for
+		// the life of the run, publishes shuttingDown when its context is
+		// cancelled, and only then drops that count.
+		c.wg.Add(1)
+		shutdown := make(chan struct{})
+		go func() {
+			defer c.wg.Done()
+			<-shutdown
+			c.taskMtx.Lock()
+			c.shuttingDown = true
+			c.taskMtx.Unlock()
+		}()
+
+		var starters sync.WaitGroup
+		for range 32 {
+			starters.Add(1)
+			go func() {
+				defer starters.Done()
+				if !c.beginTask() {
+					return
+				}
+				defer c.endTask()
+			}()
+		}
+
+		go close(shutdown)
+		c.wg.Wait() // races the beginTask calls above
+		starters.Wait()
+
+		// Once shutdown has been published, registration must be refused: Run
+		// has already passed Wait and nothing would observe the new count.
+		if c.beginTask() {
+			c.endTask()
+			t.Fatal("beginTask registered work after shutdown was published")
+		}
 	}
 }
 

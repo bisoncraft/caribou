@@ -137,6 +137,16 @@ type Core struct {
 	newCrypter func([]byte) encrypt.Crypter
 	reCrypter  func([]byte, []byte) (encrypt.Crypter, error)
 
+	// taskMtx guards shuttingDown, which gates registration of ad-hoc work on
+	// c.wg. An unsynchronized check of c.ctx before c.wg.Add races the Wait in
+	// Run: the counter can legitimately reach zero and Wait return between the
+	// check and the Add, which panics with "sync: WaitGroup misuse". Publishing
+	// the flag under taskMtx before Run's notification goroutine drops the last
+	// count makes the check and the Add atomic with respect to that Wait. See
+	// beginTask.
+	taskMtx      sync.Mutex
+	shuttingDown bool
+
 	walletMtx sync.RWMutex
 	wallets   map[uint32]*xcWallet
 
@@ -357,6 +367,27 @@ func New(cfg *Config) (*Core, error) {
 	return c, nil
 }
 
+// beginTask registers a unit of work on c.wg, reporting false if shutdown has
+// already begun and no new work may be registered. The Add happens under
+// taskMtx, the same mutex Run's notification goroutine takes to publish
+// shuttingDown before it drops its own count, so a beginTask that wins the
+// mutex is guaranteed to have incremented the counter before Run's Wait can
+// observe zero. Pair every true return with endTask.
+func (c *Core) beginTask() bool {
+	c.taskMtx.Lock()
+	defer c.taskMtx.Unlock()
+	if c.shuttingDown {
+		return false
+	}
+	c.wg.Add(1)
+	return true
+}
+
+// endTask retires work registered by a beginTask that returned true.
+func (c *Core) endTask() {
+	c.wg.Done()
+}
+
 // Run runs the core. Satisfies the runner.Runner interface.
 func (c *Core) Run(ctx context.Context) {
 	c.log.Infof("Starting Caribou core")
@@ -440,6 +471,12 @@ func (c *Core) Run(ctx context.Context) {
 			case n := <-c.notes:
 				c.handleWalletNotification(n)
 			case <-ctx.Done():
+				// Publish the flag before the deferred Done below drops this
+				// goroutine's count, so no beginTask can Add after Wait has
+				// seen zero.
+				c.taskMtx.Lock()
+				c.shuttingDown = true
+				c.taskMtx.Unlock()
 				return
 			}
 		}
@@ -1411,13 +1448,12 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 	token := asset.TokenInfo(assetID)
 
 	peersChange := func(numPeers uint32, err error) {
-		if c.ctx.Err() != nil {
+		if !c.beginTask() {
 			return
 		}
 
-		c.wg.Add(1)
 		go func() {
-			defer c.wg.Done()
+			defer c.endTask()
 			c.peerChange(wallet, numPeers, err)
 		}()
 	}
@@ -1550,9 +1586,12 @@ func (c *Core) startWalletSyncMonitor(wallet *xcWallet) {
 		return // already monitoring
 	}
 
-	c.wg.Add(1)
+	if !c.beginTask() {
+		atomic.StoreUint32(&wallet.monitored, 0) // don't strand the CAS
+		return
+	}
 	go func() {
-		defer c.wg.Done()
+		defer c.endTask()
 		defer atomic.StoreUint32(&wallet.monitored, 0)
 		ticker := time.NewTicker(syncTickerPeriod)
 		defer ticker.Stop()
@@ -2206,10 +2245,11 @@ func (c *Core) SetWalletPassword(appPW []byte, assetID uint32, newPW []byte) err
 	}
 	defer crypter.Close()
 
-	// Check that the specified wallet exists.
-	c.walletMtx.Lock()
-	defer c.walletMtx.Unlock()
-	wallet, found := c.wallets[assetID]
+	// Check that the specified wallet exists. Only the lookup takes walletMtx:
+	// setWalletPassword connects the wallet, runs backend Unlock/Lock RPCs and
+	// writes to the DB, and holding the process-wide write lock across that
+	// would stall every other asset's c.wallet lookup on an unreachable node.
+	wallet, found := c.wallet(assetID)
 	if !found {
 		return newError(missingWalletErr, "wallet for %s (%d) is not known", unbip(assetID), assetID)
 	}
@@ -2274,6 +2314,14 @@ func (c *Core) setWalletPassword(wallet *xcWallet, newPW []byte, crypter encrypt
 			return newError(authErr, "wallet appears to require a password")
 		}
 		wallet.setEncPW(nil)
+	}
+
+	// Refuse to persist against a wallet ReconfigureWallet swapped out of
+	// c.wallets while the RPCs above ran unlocked from walletMtx: the wallet
+	// this func was given may no longer be the live one for assetID.
+	if current, ok := c.wallet(wallet.AssetID); !ok || current != wallet {
+		return newError(missingWalletErr, "%s wallet was reconfigured during password update",
+			unbip(wallet.AssetID))
 	}
 
 	err = c.db.SetWalletPassword(wallet.AssetID, wallet.encPW())
@@ -2721,8 +2769,11 @@ func (c *Core) Logout() error {
 	// Lock wallets
 	if !c.cfg.NoAutoWalletLock {
 		// Ensure wallet lock in c.Run waits for c.Logout if this is called
-		// before shutdown.
-		c.wg.Add(1)
+		// before shutdown. If shutdown has already begun the registration is
+		// moot: Run locks and disconnects the wallets itself right after Wait
+		// returns, and the loop below is best-effort either way, so run it
+		// unregistered rather than skipping it.
+		registered := c.beginTask()
 		for _, w := range c.xcWallets() {
 			if !w.connected() {
 				// A wallet suspended by a mobile background pause is
@@ -2751,7 +2802,9 @@ func (c *Core) Logout() error {
 				c.log.Warnf("Unable to lock %v wallet: %v", unbip(w.AssetID), err)
 			}
 		}
-		c.wg.Done()
+		if registered {
+			c.endTask()
+		}
 	}
 
 	// Disconnect wallets so a locked, backgrounded app stops polling and its

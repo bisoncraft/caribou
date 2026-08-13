@@ -19,7 +19,10 @@ import (
 	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
-var errWalletNotConnected = errors.New("wallet not connected")
+var (
+	errWalletNotConnected     = errors.New("wallet not connected")
+	errConnectRacedDisconnect = errors.New("connect raced a concurrent disconnect")
+)
 
 // runWithTimeout runs the provided function, returning either the error from
 // the function or errTimeout if the function fails to return within the
@@ -66,6 +69,18 @@ type xcWallet struct {
 	// having the monitor reach for suspendMtx would add a lock-ordering edge for
 	// the sake of a log line.
 	suspended uint32
+
+	// connGen is bumped by every Disconnect call. Connect snapshots it before
+	// starting the connector and self-disconnects if it changed by the time the
+	// connect finishes. Disconnect cannot block on connectMtx — Logout must not
+	// stall behind an in-flight Connect from any caller, not just Resume, which
+	// already has its own suspendGen-scoped version of this same guard (see
+	// Core.unwindStaleResume) — so a Disconnect that lands mid-connect is a
+	// no-op against ConnectionMaster (documented: On() is false until the
+	// connect finishes) and has nothing live to cancel. Without this, that
+	// connect could still succeed afterward and leave the wallet connected past
+	// the Disconnect that meant to end it.
+	connGen atomic.Uint64
 
 	mtx        sync.RWMutex
 	encPass    []byte // empty means wallet not password protected
@@ -173,10 +188,15 @@ func (w *xcWallet) refreshUnlock() (unlockAttempted bool, err error) {
 		return false, nil // unlocked
 	}
 
-	// Locked backend requires both encrypted and decrypted passwords.
+	// Locked backend requires both encrypted and decrypted passwords. Read pw
+	// under the same RLock rather than after releasing it: Lock clears it
+	// (Clear zeroes the shared backing array in place, then nils the field)
+	// under the write lock, so a read outside the lock can race that clear
+	// and hand the backend a partially-zeroed password.
 	w.mtx.RLock()
 	pwUnset := len(w.encPass) == 0
-	locked := len(w.pw) == 0
+	pw := w.pw
+	locked := len(pw) == 0
 	w.mtx.RUnlock()
 	if pwUnset {
 		return false, fmt.Errorf("%s wallet reporting as locked but no password"+
@@ -187,7 +207,7 @@ func (w *xcWallet) refreshUnlock() (unlockAttempted bool, err error) {
 			unbip(w.AssetID))
 	}
 
-	return true, a.Unlock(w.pw)
+	return true, a.Unlock(pw)
 }
 
 // Lock the wallet. For encrypted wallets (encPW set), this clears the cached
@@ -197,23 +217,40 @@ func (w *xcWallet) Lock(timeout time.Duration) error {
 	if w.isDisabled() || !is { // wallet is disabled and is locked or it's not an authenticator.
 		return nil
 	}
-	w.mtx.Lock()
-	defer w.mtx.Unlock()
-	if w.network != nil {
-		return w.network.Lock(timeout)
+	w.mtx.RLock()
+	network, hookedUp, pwUnset := w.network, w.hookedUp, len(w.encPass) == 0
+	w.mtx.RUnlock()
+
+	// The delegation and the backend lock both happen with mtx released. The
+	// backend lock is an RPC that runs for up to timeout (callers pass
+	// multi-second values), and network.Lock recurses into another xcWallet's
+	// Lock, so holding mtx across either would stall every state read and
+	// balance update on this wallet for the duration.
+	if network != nil {
+		return network.Lock(timeout)
 	}
-	if !w.hookedUp {
+	if !hookedUp {
 		return errWalletNotConnected
 	}
-	if len(w.encPass) == 0 {
+	if pwUnset {
 		return nil
 	}
 	err := runWithTimeout(a.Lock, timeout)
-	if err == nil {
-		w.pw.Clear()
-		w.pw = nil
+	if err != nil {
+		return err
 	}
-	return err
+	// Clear only after the RPC returns, and under the write lock, so a
+	// concurrent refreshUnlock's RLock-guarded read of w.pw (see refreshUnlock)
+	// cannot interleave with the field being nilled out here. refreshUnlock
+	// copies the slice header before releasing its RLock, not the backing
+	// array, so Clear zeroing that array concurrently with a still-in-flight
+	// a.Unlock(pw) call remains a narrow, pre-existing exposure this does not
+	// close.
+	w.mtx.Lock()
+	w.pw.Clear()
+	w.pw = nil
+	w.mtx.Unlock()
+	return nil
 }
 
 // clearCachedPW zeroes and drops the cached decrypted wallet password without
@@ -412,6 +449,8 @@ func (w *xcWallet) Connect() error {
 	// Resume that follows one.
 	atomic.StoreUint32(&w.suspended, 0)
 
+	gen := w.connGen.Load()
+
 	// No parent context; use Disconnect instead. Also note that there's no
 	// reconnect loop for wallet like with the server Connectors, so we use
 	// ConnectOnce so that the ConnectionMaster's On method will report false.
@@ -447,6 +486,13 @@ func (w *xcWallet) Connect() error {
 			return fmt.Errorf("DepositAddress error: %w", err)
 		}
 	}
+	// A Disconnect that landed while this connect was underway found nothing
+	// live to cancel and moved on assuming the wallet stayed down (see
+	// connGen). Undo here via the ready-guarded defer above instead of leaving
+	// the wallet connected past whatever wanted it stopped.
+	if w.connGen.Load() != gen {
+		return errConnectRacedDisconnect
+	}
 	w.hookedUp = true
 	w.syncStatus = ss
 	ready = true
@@ -462,6 +508,7 @@ func (w *xcWallet) Disconnect() {
 	if w.isDisabled() {
 		return
 	}
+	w.connGen.Add(1)
 	w.connector.Disconnect()
 	w.mtx.Lock()
 	w.hookedUp = false
