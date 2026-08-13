@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,6 +85,52 @@ func (d *fakeDriver) sentTo(addr string) *big.Int {
 	d.mtx.Lock()
 	defer d.mtx.Unlock()
 	return d.sends[addr]
+}
+
+// fakeTokenDriver extends fakeDriver with TokenDriver behavior.
+type fakeTokenDriver struct {
+	*fakeDriver
+	tokens        []*driverToken
+	tokenDeposits map[string]*big.Int // key: contract|addr
+	tokenSends    map[string]*big.Int // key: addr
+}
+
+func newFakeTokenDriver(slug string, tokens []*driverToken) *fakeTokenDriver {
+	return &fakeTokenDriver{
+		fakeDriver:    newFakeDriver(slug),
+		tokens:        tokens,
+		tokenDeposits: make(map[string]*big.Int),
+		tokenSends:    make(map[string]*big.Int),
+	}
+}
+
+func (d *fakeTokenDriver) Tokens() []*driverToken { return d.tokens }
+
+func (d *fakeTokenDriver) CheckTokenDeposit(contract, addr string) (*big.Int, string, error) {
+	d.mtx.Lock()
+	defer d.mtx.Unlock()
+	amt := d.tokenDeposits[contract+"|"+addr]
+	if amt == nil {
+		return new(big.Int), "", nil
+	}
+	return new(big.Int).Set(amt), "", nil
+}
+
+func (d *fakeTokenDriver) SendToken(script, addr string, amount *big.Int, decimals int) (string, error) {
+	d.mtx.Lock()
+	defer d.mtx.Unlock()
+	if script == "" {
+		return "", fmt.Errorf("no send script")
+	}
+	d.tokenSends[addr] = new(big.Int).Set(amount)
+	d.sendN++
+	return fmt.Sprintf("%s-token-tx-%d", d.slug, d.sendN), nil
+}
+
+func (d *fakeTokenDriver) fundToken(contract, addr string, amount *big.Int) {
+	d.mtx.Lock()
+	defer d.mtx.Unlock()
+	d.tokenDeposits[contract+"|"+addr] = new(big.Int).Set(amount)
 }
 
 // testRig is a running mock server with fake btc and near drivers and a
@@ -373,6 +420,149 @@ func TestIncompleteDeposit(t *testing.T) {
 		t.Fatalf("SubmitDeposit: %v", err)
 	}
 	waitStatus(t, rig, addr, intents.StatusSuccess)
+}
+
+const testUSDCContract = "0xDb7d6ab1f17c6b31909aE466702703dAEf9269cf"
+
+// newTokenRig builds a rig whose eth driver reports a deployed USDC test
+// token, alongside a native btc driver.
+func newTokenRig(t *testing.T) (*testRig, *fakeTokenDriver, string) {
+	t.Helper()
+	usdc := &driverToken{
+		symbol: "USDC", decimals: 6, contract: testUSDCContract,
+		sendScript: "sendUSDC", walletBipID: 1966, fallbackMicroUSD: 1_000_000,
+	}
+	eth := newFakeTokenDriver("eth", []*driverToken{usdc})
+	btc := newFakeDriver("btc")
+	s, err := New(&Config{
+		Drivers:         map[string]Driver{"btc": btc, "eth": eth},
+		ProcessingDelay: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	s.Run(ctx)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	c, err := intents.NewClient(&intents.Config{
+		BaseURL:    srv.URL,
+		SigningKey: s.PubKey(),
+	}, testLogger)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	usdcID := "nep141:eth-" + strings.ToLower(testUSDCContract) + ".omft.near"
+	return &testRig{server: s, btc: btc, client: c}, eth, usdcID
+}
+
+// TestTokenCatalogAndQuote verifies a harness token is published with its
+// contract address, resolves as a non-native through the wallet's catalog
+// logic, and prices deterministically (1 BTC at $60,000 -> 60,000 USDC at
+// $1, minus 30 bps fees with the default 20 bps appFee absent here: 10 bps
+// protocol fee only).
+func TestTokenCatalogAndQuote(t *testing.T) {
+	rig, _, usdcID := newTokenRig(t)
+	ctx := context.Background()
+
+	cat, err := rig.client.Catalog(ctx)
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+	entry := cat.FindContract(60, testUSDCContract)
+	if entry == nil || entry.AssetID != usdcID {
+		t.Fatalf("USDC not found by contract: %+v", entry)
+	}
+	if chainID, native, ok := cat.AssetChain(usdcID); !ok || native || chainID != 60 {
+		t.Fatalf("AssetChain(%s) = %d %v %v", usdcID, chainID, native, ok)
+	}
+
+	req := testQuoteRequest(true)
+	req.DestinationAsset = usdcID
+	resp, err := rig.client.Quote(ctx, req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	// 1 BTC * $60,000 -> USDC(6 dec) = 60000e6, minus 10 bps protocol fee.
+	if want := "59940000000"; resp.Quote.AmountOut != want {
+		t.Fatalf("amountOut = %s, want %s", resp.Quote.AmountOut, want)
+	}
+}
+
+// TestTokenLifecycle swaps token->native: a USDC deposit is detected via
+// the token path and the BTC payout lands.
+func TestTokenLifecycle(t *testing.T) {
+	rig, eth, usdcID := newTokenRig(t)
+	ctx := context.Background()
+
+	req := testQuoteRequest(false)
+	req.OriginAsset = usdcID
+	req.DestinationAsset = "nep141:btc.omft.near"
+	req.Amount = "60000000000" // 60,000 USDC
+	req.RefundTo = "0xrefund"
+	req.Recipient = "bc1qtokenrecipient"
+	resp, err := rig.client.Quote(ctx, req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	addr := resp.Quote.DepositAddress
+	if addr == "" {
+		t.Fatal("no deposit address")
+	}
+
+	amountIn, _ := new(big.Int).SetString(resp.Quote.AmountIn, 10)
+	eth.fundToken(testUSDCContract, addr, amountIn)
+	if err := rig.client.SubmitDeposit(ctx, addr, "tokendeposittx"); err != nil {
+		t.Fatalf("SubmitDeposit: %v", err)
+	}
+
+	st := waitStatus(t, rig, addr, intents.StatusSuccess)
+	wantOut, _ := new(big.Int).SetString(resp.Quote.AmountOut, 10)
+	if got := rig.btc.sentTo("bc1qtokenrecipient"); got == nil || got.Cmp(wantOut) != 0 {
+		t.Fatalf("btc payout = %v, want %s", got, wantOut)
+	}
+	if st.SwapDetails.AmountOut != resp.Quote.AmountOut {
+		t.Fatalf("realized amountOut = %s, want %s", st.SwapDetails.AmountOut, resp.Quote.AmountOut)
+	}
+}
+
+// TestTokenRefund verifies the refund path returns tokens via SendToken.
+func TestTokenRefund(t *testing.T) {
+	rig, eth, usdcID := newTokenRig(t)
+	ctx := context.Background()
+
+	req := testQuoteRequest(false)
+	req.OriginAsset = usdcID
+	req.DestinationAsset = "nep141:btc.omft.near"
+	req.Amount = "60000000000"
+	req.RefundTo = "0xrefund"
+	req.Recipient = "bc1qtokenrecipient"
+	resp, err := rig.client.Quote(ctx, req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	addr := resp.Quote.DepositAddress
+
+	rig.server.swapMtx.RLock()
+	rig.server.swaps[addr].setForced(forceRefund)
+	rig.server.swapMtx.RUnlock()
+
+	amountIn, _ := new(big.Int).SetString(resp.Quote.AmountIn, 10)
+	eth.fundToken(testUSDCContract, addr, amountIn)
+	if err := rig.client.SubmitDeposit(ctx, addr, "tokendeposittx"); err != nil {
+		t.Fatalf("SubmitDeposit: %v", err)
+	}
+
+	waitStatus(t, rig, addr, intents.StatusRefunded)
+	refundFee, _ := new(big.Int).SetString(resp.Quote.RefundFee, 10)
+	wantRefund := new(big.Int).Sub(amountIn, refundFee)
+	eth.mtx.Lock()
+	got := eth.tokenSends["0xrefund"]
+	eth.mtx.Unlock()
+	if got == nil || got.Cmp(wantRefund) != 0 {
+		t.Fatalf("token refund = %v, want %s", got, wantRefund)
+	}
 }
 
 func TestStatusNotFound(t *testing.T) {

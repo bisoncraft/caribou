@@ -42,12 +42,12 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Bad Request", "unsupported swapType %q", req.SwapType)
 		return
 	}
-	origin := s.specByAssetID(req.OriginAsset)
+	origin := s.assets[req.OriginAsset]
 	if origin == nil {
 		writeError(w, http.StatusBadRequest, "Bad Request", "unknown origin asset %q", req.OriginAsset)
 		return
 	}
-	dest := s.specByAssetID(req.DestinationAsset)
+	dest := s.assets[req.DestinationAsset]
 	if dest == nil {
 		writeError(w, http.StatusBadRequest, "Bad Request", "unknown destination asset %q", req.DestinationAsset)
 		return
@@ -83,7 +83,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 
 	// grossOut = amountIn · priceO · 10^destDec / (priceD · 10^originDec),
 	// multiplying before dividing to keep integer precision.
-	priceO, priceD := s.price(origin.slug), s.price(dest.slug)
+	priceO, priceD := s.price(origin.intentsID), s.price(dest.intentsID)
 	grossOut := new(big.Int).Mul(amountIn, big.NewInt(priceO))
 	grossOut.Mul(grossOut, tenPow(dest.decimals))
 	grossOut.Quo(grossOut, new(big.Int).Mul(big.NewInt(priceD), tenPow(origin.decimals)))
@@ -119,10 +119,10 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 
 	var sw *swapState
 	if !req.Dry {
-		originDrv := s.drivers[origin.slug]
+		originDrv := s.drivers[origin.chain.slug]
 		depositAddress, err := originDrv.NewDepositAddress()
 		if err != nil {
-			s.log.Printf("NewDepositAddress on %s failed: %v", origin.slug, err)
+			s.log.Printf("NewDepositAddress on %s failed: %v", origin.chain.slug, err)
 			writeError(w, http.StatusInternalServerError, "Internal Server Error",
 				"error generating deposit address: %v", err)
 			return
@@ -135,7 +135,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 			origin:         origin,
 			dest:           dest,
 			originDrv:      originDrv,
-			destDrv:        s.drivers[dest.slug],
+			destDrv:        s.drivers[dest.chain.slug],
 			amountIn:       amountIn,
 			amountOut:      amountOut,
 			refundFee:      refundFee,
@@ -183,9 +183,9 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		s.swaps[sw.depositAddress] = sw
 		s.swapMtx.Unlock()
 		go sw.run(s.ctx)
-		s.log.Printf("committed quote %s: %s %s -> %s %s, deposit address %s",
-			sw.correlationID, formatUnits(amountIn, origin.decimals, origin.decimals), origin.symbol,
-			formatUnits(amountOut, dest.decimals, dest.decimals), dest.symbol, sw.depositAddress)
+		s.log.Printf("committed quote %s: %s %s (%s) -> %s %s (%s), deposit address %s",
+			sw.correlationID, formatUnits(amountIn, origin.decimals, origin.decimals), origin.symbol, origin.chain.slug,
+			formatUnits(amountOut, dest.decimals, dest.decimals), dest.symbol, dest.chain.slug, sw.depositAddress)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -9,7 +9,8 @@
 #   ./harness.sh stop     # stop the running mock server
 #
 # Environment:
-#   CHAINS   comma-separated chain slugs to enable (default btc,near)
+#   CHAINS   comma-separated chain slugs to enable, or "auto" (default) to
+#            enable every chain whose harness is running
 #   RATES    caribou app server base URL for live USD rates
 #            (default http://127.0.0.3:5758; set empty to disable)
 #
@@ -27,7 +28,7 @@ NODES_ROOT=~/dextest/near-intents
 ADDR="127.0.0.1:17781"
 API_URL="http://${ADDR}"
 PIDFILE="${NODES_ROOT}/intentsmock.pid"
-CHAINS="${CHAINS:-btc,near}"
+CHAINS="${CHAINS:-auto}"
 RATES="${RATES-http://127.0.0.3:5758}"
 
 HARNESS_DIR="$(cd "$(dirname "$0")" && pwd)"

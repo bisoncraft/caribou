@@ -28,13 +28,13 @@ var ratesHTTPClient = &http.Client{
 
 // pollRates periodically fetches USD rates from the caribou app server's
 // unauthenticated GET /api/user endpoint and updates the price table for
-// enabled chains. fiatRates is keyed by BIP-44 asset ID. Chains missing
-// from the response, and any fetch failure, leave the previous (or
-// fallback) prices in place.
+// enabled assets. fiatRates is keyed by BIP-44 asset ID (chain and token
+// IDs alike). Assets missing from the response, and any fetch failure,
+// leave the previous (or fallback) prices in place.
 func (s *Server) pollRates(ctx context.Context) {
-	bipToSlug := make(map[uint32]string, len(s.drivers))
-	for slug := range s.drivers {
-		bipToSlug[chainSpecs[slug].bipID] = slug
+	bipToIntentsID := make(map[uint32]string, len(s.assets))
+	for id, a := range s.assets {
+		bipToIntentsID[a.walletBipID] = id
 	}
 
 	fetch := func() {
@@ -46,11 +46,11 @@ func (s *Server) pollRates(ctx context.Context) {
 		updated := 0
 		s.priceMtx.Lock()
 		for bipID, usd := range rates {
-			slug, ok := bipToSlug[bipID]
+			id, ok := bipToIntentsID[bipID]
 			if !ok || usd <= 0 {
 				continue
 			}
-			s.prices[slug] = int64(usd * 1e6)
+			s.prices[id] = int64(usd * 1e6)
 			updated++
 		}
 		s.priceMtx.Unlock()

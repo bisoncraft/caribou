@@ -40,6 +40,60 @@ type Driver interface {
 	Confirm() error
 }
 
+// driverToken describes a deployed test token a driver discovered on its
+// harness.
+type driverToken struct {
+	symbol           string
+	decimals         int
+	contract         string
+	sendScript       string // harness-ctl payout script
+	walletBipID      uint32 // wallet asset ID (e.g. usdc.eth), for rates
+	fallbackMicroUSD int64
+}
+
+// TokenDriver is a Driver that can also move tokens on its chain.
+type TokenDriver interface {
+	Driver
+	// Tokens reports the test tokens deployed on the harness.
+	Tokens() []*driverToken
+	// CheckTokenDeposit returns the token balance of addr, in the token's
+	// base units.
+	CheckTokenDeposit(contract, addr string) (amount *big.Int, txid string, err error)
+	// SendToken delivers a token amount to addr through the named
+	// harness-ctl script.
+	SendToken(sendScript, addr string, amount *big.Int, decimals int) (txid string, err error)
+}
+
+// driverSlugs is the probe order for -chains auto: every chain the mock
+// knows how to drive.
+var driverSlugs = []string{"btc", "ltc", "bch", "doge", "dash", "zec", "eth", "pol", "sol", "near"}
+
+// Ping verifies the harness is actually answering, not merely that its
+// data directory exists on disk — stale directories from stopped
+// harnesses are common. Auto mode skips chains that fail it; explicitly
+// requested chains fail construction instead.
+func (d *utxoDriver) Ping() error {
+	_, err := runScript(d.ctlDir, "alpha", "getblockcount")
+	return err
+}
+
+func (d *nearDriver) Ping() error {
+	return rpcCall(d.rpc, "status", []any{}, nil)
+}
+
+func (d *solDriver) Ping() error {
+	return rpcCall(d.rpc, "getSlot", []any{}, nil)
+}
+
+func (d *evmDriver) Ping() error {
+	return rpcCall(d.rpc, "eth_blockNumber", []any{}, nil)
+}
+
+// pinger is implemented by harness drivers that can check node liveness.
+type pinger interface {
+	Ping() error
+}
+
 // newHarnessDriver builds the harness-backed driver for a chain slug.
 func newHarnessDriver(slug, dextestDir string) (Driver, error) {
 	switch slug {

@@ -2,12 +2,17 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/intents"
 )
 
@@ -470,5 +475,73 @@ func TestIntentsDeadlines(t *testing.T) {
 	}
 	if d := intentsDeadline(501); d != 45*time.Minute {
 		t.Errorf("sol default deadline %v", d)
+	}
+}
+
+// TestIntentsTokenResolution covers resolveIntentsAsset and
+// verifyQuoteAsset for chain natives and registered tokens, using a
+// catalog fetched from a stub tokens endpoint.
+func TestIntentsTokenResolution(t *testing.T) {
+	const polID = 966
+	usdcPolygonID, _ := util.BipSymbolID("usdc.polygon")
+	// Mixed case on one side, to prove contract matching is case-folded.
+	const contract = "0xDb7d6ab1f17c6b31909aE466702703dAEf9269cf"
+	const nativeIntentsID = "nep245:v2_1.omni.hot.tg:137_111"
+	usdcIntentsID := "nep141:pol-" + strings.ToLower(contract) + ".omft.near"
+
+	asset.Register(polID, &tDriver{decodedCoinID: "pol-coin", winfo: tWalletInfo}, true)
+	asset.RegisterToken(usdcPolygonID, &util.Token{
+		NetworkID: polID,
+		Name:      "USDC",
+		UnitInfo:  util.UnitInfo{Conventional: util.Denomination{Unit: "USDC", ConversionFactor: 1e6}},
+	}, &asset.WalletDefinition{}, map[util.Network]string{util.Simnet: contract}, nil, true)
+	asset.SetNetwork(util.Simnet)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[
+			{"assetId":%q,"decimals":18,"blockchain":"pol","symbol":"POL","contractAddress":""},
+			{"assetId":%q,"decimals":6,"blockchain":"pol","symbol":"USDC","contractAddress":%q}
+		]`, nativeIntentsID, usdcIntentsID, contract)
+	}))
+	defer srv.Close()
+	client, err := intents.NewClient(&intents.Config{BaseURL: srv.URL}, tLogger)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	cat, err := client.Catalog(tCtx)
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
+
+	if tok := resolveIntentsAsset(cat, polID); tok == nil || tok.AssetID != nativeIntentsID {
+		t.Fatalf("native resolution = %+v", tok)
+	}
+	if tok := resolveIntentsAsset(cat, usdcPolygonID); tok == nil || tok.AssetID != usdcIntentsID {
+		t.Fatalf("token resolution = %+v", tok)
+	}
+	if tok := resolveIntentsAsset(cat, 12345); tok != nil {
+		t.Fatalf("unknown asset resolved to %+v", tok)
+	}
+
+	if err := verifyQuoteAsset(cat, nativeIntentsID, polID); err != nil {
+		t.Errorf("native echo rejected: %v", err)
+	}
+	if err := verifyQuoteAsset(cat, usdcIntentsID, usdcPolygonID); err != nil {
+		t.Errorf("token echo rejected: %v", err)
+	}
+	// A native echo for a token request (or vice versa) must fail: that is
+	// exactly the redirect verifyQuoteAssets exists to catch.
+	if err := verifyQuoteAsset(cat, nativeIntentsID, usdcPolygonID); err == nil {
+		t.Error("native echo accepted for token request")
+	}
+	if err := verifyQuoteAsset(cat, usdcIntentsID, polID); err == nil {
+		t.Error("token echo accepted for native request")
+	}
+	if err := verifyQuoteAsset(cat, "nep141:unknown.omft.near", polID); err == nil {
+		t.Error("unknown echo accepted")
+	}
+
+	if chainID := intentsChainID(usdcPolygonID); chainID != polID {
+		t.Errorf("intentsChainID(token) = %d", chainID)
 	}
 }

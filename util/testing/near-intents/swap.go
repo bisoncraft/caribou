@@ -32,7 +32,7 @@ type swapState struct {
 	server         *Server
 	correlationID  string
 	depositAddress string
-	origin, dest   *chainSpec
+	origin, dest   *mockAsset
 	originDrv      Driver
 	destDrv        Driver
 	amountIn       *big.Int // required deposit, origin base units
@@ -103,6 +103,24 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	case <-time.After(d):
 		return true
 	}
+}
+
+// checkDeposit polls the origin chain for the deposit, using the token
+// path when the origin asset is a token.
+func (sw *swapState) checkDeposit() (*big.Int, string, error) {
+	if sw.origin.contract != "" {
+		return sw.originDrv.(TokenDriver).CheckTokenDeposit(sw.origin.contract, sw.depositAddress)
+	}
+	return sw.originDrv.CheckDeposit(sw.depositAddress)
+}
+
+// send delivers an amount of asset a to addr on a's chain, using the token
+// path when a is a token.
+func send(drv Driver, a *mockAsset, addr string, amount *big.Int) (string, error) {
+	if a.contract != "" {
+		return drv.(TokenDriver).SendToken(a.sendScript, addr, amount, a.decimals)
+	}
+	return drv.Send(addr, amount)
 }
 
 // run drives the swap to a terminal state. It is the only writer of status
@@ -176,7 +194,7 @@ func (sw *swapState) awaitDeposit(ctx context.Context) (late, ok bool) {
 		case <-time.After(depositPollInterval):
 		}
 
-		amt, txid, err := sw.originDrv.CheckDeposit(sw.depositAddress)
+		amt, txid, err := sw.checkDeposit()
 		if err != nil {
 			sw.logf("CheckDeposit error: %v", err)
 			continue
@@ -233,7 +251,7 @@ func (sw *swapState) refund(reason string) {
 		sw.setStatus(intents.StatusFailed)
 		return
 	}
-	txid, err := sw.originDrv.Send(sw.refundTo, refundAmt)
+	txid, err := send(sw.originDrv, sw.origin, sw.refundTo, refundAmt)
 	if err != nil {
 		sw.logf("refund send error: %v", err)
 		sw.mtx.Lock()
@@ -256,7 +274,7 @@ func (sw *swapState) refund(reason string) {
 // payout delivers amountOut to the recipient on the destination chain and
 // finalizes as SUCCESS.
 func (sw *swapState) payout() {
-	txid, err := sw.destDrv.Send(sw.recipient, sw.amountOut)
+	txid, err := send(sw.destDrv, sw.dest, sw.recipient, sw.amountOut)
 	if err != nil {
 		sw.logf("payout send error: %v", err)
 		sw.mtx.Lock()
@@ -309,8 +327,8 @@ func (sw *swapState) debugSummary() map[string]any {
 		"correlationId":  sw.correlationID,
 		"depositAddress": sw.depositAddress,
 		"status":         sw.status,
-		"origin":         sw.origin.slug,
-		"destination":    sw.dest.slug,
+		"origin":         sw.origin.symbol + " (" + sw.origin.chain.slug + ")",
+		"destination":    sw.dest.symbol + " (" + sw.dest.chain.slug + ")",
 		"amountIn":       sw.amountIn.String(),
 		"amountOut":      sw.amountOut.String(),
 		"deposited":      sw.deposited.String(),

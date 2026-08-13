@@ -91,10 +91,33 @@ var intentsDeadlines = map[uint32]time.Duration{
 }
 
 func intentsDeadline(originAssetID uint32) time.Duration {
-	if d, ok := intentsDeadlines[originAssetID]; ok {
+	if d, ok := intentsDeadlines[intentsChainID(originAssetID)]; ok {
 		return d
 	}
 	return 45 * time.Minute // account-based chains confirm in seconds
+}
+
+// intentsChainID returns the chain a wallet asset settles on: the parent
+// chain for tokens, the asset itself otherwise.
+func intentsChainID(assetID uint32) uint32 {
+	if tok := asset.TokenInfo(assetID); tok != nil {
+		return tok.NetworkID
+	}
+	return assetID
+}
+
+// resolveIntentsAsset maps a wallet asset to its catalog entry: the chain
+// native for chain assets, the contract-matched entry for tokens (matched
+// on the token's contract address for the current network). nil means the
+// asset is not tradable through the service.
+func resolveIntentsAsset(cat *intents.Catalog, assetID uint32) *intents.Token {
+	if tok := asset.TokenInfo(assetID); tok != nil {
+		if tok.ContractAddress == "" {
+			return nil
+		}
+		return cat.FindContract(tok.NetworkID, tok.ContractAddress)
+	}
+	return cat.Native(assetID)
 }
 
 // IntentsSwapNote reports a new or updated swap record.
@@ -588,14 +611,14 @@ func intentsWalletAddress(w *xcWallet) (string, error) {
 }
 
 // intentsPair resolves both legs of a swap pair against the catalog and
-// the wallet set. Only chain-native assets are supported until the token
-// layer is wired.
+// the wallet set. Chain natives resolve via the catalog's native entry;
+// tokens resolve by contract address.
 func (c *Core) intentsPair(ctx context.Context, eng *intentsEngine, originAssetID, destAssetID uint32) (origin, dest *intents.Token, originWallet, destWallet *xcWallet, err error) {
 	cat, err := eng.freshCatalog(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	origin, dest = cat.Native(originAssetID), cat.Native(destAssetID)
+	origin, dest = resolveIntentsAsset(cat, originAssetID), resolveIntentsAsset(cat, destAssetID)
 	if origin == nil {
 		return nil, nil, nil, nil, fmt.Errorf("%s is not supported for cross-chain swaps", unbip(originAssetID))
 	}
@@ -665,8 +688,9 @@ type IntentsAsset struct {
 }
 
 // IntentsAssets returns the swappable assets: the intersection of the
-// service catalog with this build's chain mapping, flagged by wallet
-// availability. Only chain natives until the token layer is wired.
+// service catalog with this build's chain mapping and registered tokens,
+// flagged by wallet availability. A token is included when its contract
+// address on the current network appears in the service catalog.
 func (c *Core) IntentsAssets(ctx context.Context) ([]*IntentsAsset, error) {
 	eng, err := c.intentsEngine()
 	if err != nil {
@@ -676,25 +700,36 @@ func (c *Core) IntentsAssets(ctx context.Context) ([]*IntentsAsset, error) {
 	if err != nil {
 		return nil, err
 	}
-	var assets []*IntentsAsset
-	for _, chainID := range cat.Chains() {
-		tok := cat.Native(chainID)
-		wallet, found := c.wallet(chainID)
+	entry := func(assetID uint32, tok *intents.Token) *IntentsAsset {
+		wallet, found := c.wallet(assetID)
 		atomDecimals := tok.Decimals
-		if unitInfo, err := asset.UnitInfo(chainID); err == nil {
+		if unitInfo, err := asset.UnitInfo(assetID); err == nil {
 			if exp, ok := pow10Exp(unitInfo.Conventional.ConversionFactor); ok {
 				atomDecimals = exp
 			}
 		}
-		assets = append(assets, &IntentsAsset{
-			AssetID:      chainID,
-			Symbol:       unbip(chainID),
+		return &IntentsAsset{
+			AssetID:      assetID,
+			Symbol:       unbip(assetID),
 			IntentsID:    tok.AssetID,
 			Decimals:     tok.Decimals,
 			AtomDecimals: atomDecimals,
 			PriceUSD:     tok.Price,
 			WalletReady:  found && wallet.connected(),
-		})
+		}
+	}
+	var assets []*IntentsAsset
+	for _, chainID := range cat.Chains() {
+		assets = append(assets, entry(chainID, cat.Native(chainID)))
+		ra := asset.Asset(chainID)
+		if ra == nil {
+			continue
+		}
+		for tokenID, rtok := range ra.Tokens {
+			if catTok := cat.FindContract(chainID, rtok.ContractAddress); catTok != nil {
+				assets = append(assets, entry(tokenID, catTok))
+			}
+		}
 	}
 	sort.Slice(assets, func(i, j int) bool { return assets[i].AssetID < assets[j].AssetID })
 	return assets, nil
@@ -713,13 +748,34 @@ func (e *intentsEngine) verifyQuoteAssets(ctx context.Context, resp *intents.Quo
 	if err != nil {
 		return err
 	}
-	oc, oNative, ok := cat.AssetChain(resp.Request.OriginAsset)
-	if !ok || !oNative || oc != originAssetID {
-		return fmt.Errorf("quote origin asset %q does not match requested %s", resp.Request.OriginAsset, unbip(originAssetID))
+	if err := verifyQuoteAsset(cat, resp.Request.OriginAsset, originAssetID); err != nil {
+		return fmt.Errorf("quote origin asset: %w", err)
 	}
-	dc, dNative, ok := cat.AssetChain(resp.Request.DestinationAsset)
-	if !ok || !dNative || dc != destAssetID {
-		return fmt.Errorf("quote destination asset %q does not match requested %s", resp.Request.DestinationAsset, unbip(destAssetID))
+	if err := verifyQuoteAsset(cat, resp.Request.DestinationAsset, destAssetID); err != nil {
+		return fmt.Errorf("quote destination asset: %w", err)
+	}
+	return nil
+}
+
+// verifyQuoteAsset checks that one echoed Intents asset ID resolves,
+// through the catalog, to the wallet asset that was requested: the chain's
+// native entry for chain assets, or a token entry with the requested
+// token's contract address (matched case-insensitively) for tokens.
+func verifyQuoteAsset(cat *intents.Catalog, echoedID string, walletAssetID uint32) error {
+	chainID, native, ok := cat.AssetChain(echoedID)
+	if !ok || chainID != intentsChainID(walletAssetID) {
+		return fmt.Errorf("%q does not match requested %s", echoedID, unbip(walletAssetID))
+	}
+	tok := asset.TokenInfo(walletAssetID)
+	if tok == nil {
+		if !native {
+			return fmt.Errorf("%q is not %s's native asset", echoedID, unbip(walletAssetID))
+		}
+		return nil
+	}
+	echoed := cat.ByAssetID(echoedID)
+	if native || echoed == nil || !strings.EqualFold(echoed.ContractAddress, tok.ContractAddress) {
+		return fmt.Errorf("%q is not the %s token contract %s", echoedID, unbip(walletAssetID), tok.ContractAddress)
 	}
 	return nil
 }
@@ -1059,11 +1115,24 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 		return 0, err
 	}
 	resolveChain := func(assetID string) (uint32, *intents.Token, bool) {
-		chainID, _, ok := cat.AssetChain(assetID)
+		chainID, native, ok := cat.AssetChain(assetID)
 		if !ok {
 			return 0, nil, false
 		}
-		return chainID, cat.ByAssetID(assetID), true
+		tok := cat.ByAssetID(assetID)
+		if native {
+			return chainID, tok, true
+		}
+		// A token side maps to the registered wallet token with the same
+		// contract on that chain, when one exists.
+		if ra := asset.Asset(chainID); ra != nil {
+			for tokenID, rtok := range ra.Tokens {
+				if strings.EqualFold(rtok.ContractAddress, tok.ContractAddress) {
+					return tokenID, tok, true
+				}
+			}
+		}
+		return 0, nil, false
 	}
 
 	known := make(map[string]bool)

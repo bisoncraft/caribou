@@ -23,7 +23,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:17781", "listen address")
-	chains := flag.String("chains", "btc,near", "comma-separated chain slugs to enable (btc,ltc,bch,doge,dash,zec,eth,pol,sol,near)")
+	chains := flag.String("chains", "auto", "comma-separated chain slugs to enable (btc,ltc,bch,doge,dash,zec,eth,pol,sol,near), or 'auto' to enable every chain whose harness is running")
 	dextest := flag.String("dextest", "", "harness data root (default ~/dextest)")
 	rates := flag.String("rates", "http://127.0.0.3:5758", "caribou app server base URL for live USD rates ('' disables)")
 	processingDelay := flag.Duration("processing-delay", 3*time.Second, "pause per intermediate swap status")
@@ -65,7 +65,7 @@ func main() {
 		httpSrv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("1Click mock listening on http://%s, chains %s, signing key %s", *addr, strings.Join(slugs, ","), srv.PubKey())
+	log.Printf("1Click mock listening on http://%s, signing key %s", *addr, srv.PubKey())
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

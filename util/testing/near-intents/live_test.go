@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -209,6 +210,72 @@ func TestHarnessNEARToBTC(t *testing.T) {
 		t.Fatalf("recipient balance = %s, want %s", got, wantOut)
 	}
 	t.Logf("received %s sats at %s", got, recipient)
+}
+
+// TestHarnessBTCToUSDC swaps sats for harness-deployed test USDC on the
+// live btc and eth harnesses, exercising the token payout path
+// (harness-ctl/sendUSDC) and balanceOf-based verification.
+func TestHarnessBTCToUSDC(t *testing.T) {
+	rig := newHarnessRig(t, "btc", "eth")
+
+	ethDrv, is := rig.server.drivers["eth"].(TokenDriver)
+	if !is || len(ethDrv.Tokens()) == 0 {
+		t.Fatal("eth harness has no deployed test tokens (re-run the eth harness)")
+	}
+	usdc := ethDrv.Tokens()[0]
+	usdcID := "nep141:eth-" + strings.ToLower(usdc.contract) + ".omft.near"
+	ctx := context.Background()
+
+	recipient, err := rig.server.drivers["eth"].NewDepositAddress()
+	if err != nil {
+		t.Fatalf("recipient address: %v", err)
+	}
+
+	req := &intents.QuoteRequest{
+		SwapType:          intents.SwapTypeExactInput,
+		SlippageTolerance: 100,
+		OriginAsset:       "nep141:btc.omft.near",
+		DepositType:       intents.LocationOriginChain,
+		DestinationAsset:  usdcID,
+		Amount:            "1000000", // 0.01 BTC -> ~600 USDC at the $60k fallback
+		RefundTo:          "bcrt1qrefundnotused",
+		RefundType:        intents.LocationOriginChain,
+		Recipient:         recipient,
+		RecipientType:     intents.LocationDestinationChain,
+		Deadline:          testDeadline(time.Hour),
+	}
+	resp, err := rig.client.Quote(ctx, req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	depositAddr := resp.Quote.DepositAddress
+	t.Logf("deposit address %s, quoted %s USDC units out", depositAddr, resp.Quote.AmountOut)
+
+	txid, err := runScript(harnessCtlDir(t, "btc"), "alpha", "sendtoaddress", depositAddr, "0.01")
+	if err != nil {
+		t.Fatalf("deposit send: %v", err)
+	}
+	if err := rig.client.SubmitDeposit(ctx, depositAddr, txid); err != nil {
+		t.Fatalf("SubmitDeposit: %v", err)
+	}
+
+	waitStatusLive(t, rig, depositAddr, intents.StatusSuccess, time.Minute)
+
+	wantOut, _ := new(big.Int).SetString(resp.Quote.AmountOut, 10)
+	var got *big.Int
+	for range 30 {
+		if got, _, err = ethDrv.CheckTokenDeposit(usdc.contract, recipient); err != nil {
+			t.Fatalf("CheckTokenDeposit: %v", err)
+		}
+		if got.Sign() > 0 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if got == nil || got.Cmp(wantOut) != 0 {
+		t.Fatalf("recipient USDC balance = %v, want %s", got, wantOut)
+	}
+	t.Logf("received %s USDC units at %s", got, recipient)
 }
 
 // TestHarnessRates verifies the live-rate fetch against a running caribou

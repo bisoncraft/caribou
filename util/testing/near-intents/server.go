@@ -49,7 +49,9 @@ type Config struct {
 	// DextestDir is the harness data root, typically ~/dextest.
 	DextestDir string
 	// Chains lists the service chain slugs to enable (keys of chainSpecs).
-	// Both sides of every quote must be enabled chains.
+	// Both sides of every quote must be on enabled chains. The single
+	// entry "auto" (or an empty list) probes every known chain and enables
+	// those whose harness is present, logging what was skipped.
 	Chains []string
 	// Drivers overrides the harness-backed drivers, keyed by slug. When
 	// set, Chains is ignored and the driver map defines the enabled set.
@@ -78,11 +80,12 @@ type Server struct {
 	priv    ed25519.PrivateKey
 	pubKey  string
 	drivers map[string]Driver
+	assets  map[string]*mockAsset // key: Intents asset ID
 	log     *log.Logger
 	ctx     context.Context
 
 	priceMtx sync.RWMutex
-	prices   map[string]int64 // slug -> microUSD per conventional unit
+	prices   map[string]int64 // Intents asset ID -> microUSD per conventional unit
 
 	swapMtx sync.RWMutex
 	swaps   map[string]*swapState // key: deposit address
@@ -111,13 +114,29 @@ func New(cfg *Config) (*Server, error) {
 
 	drivers := c.Drivers
 	if drivers == nil {
-		drivers = make(map[string]Driver, len(c.Chains))
-		for _, slug := range c.Chains {
+		auto := len(c.Chains) == 0 || (len(c.Chains) == 1 && c.Chains[0] == "auto")
+		slugs := c.Chains
+		if auto {
+			slugs = driverSlugs
+		}
+		drivers = make(map[string]Driver, len(slugs))
+		for _, slug := range slugs {
 			if _, known := chainSpecs[slug]; !known {
 				return nil, fmt.Errorf("unknown chain slug %q", slug)
 			}
 			drv, err := newHarnessDriver(slug, c.DextestDir)
+			if err == nil {
+				if p, is := drv.(pinger); is {
+					if pingErr := p.Ping(); pingErr != nil {
+						err = fmt.Errorf("harness not responding: %w", pingErr)
+					}
+				}
+			}
 			if err != nil {
+				if auto {
+					c.Logger.Printf("chain %s not enabled: %v", slug, err)
+					continue
+				}
 				return nil, fmt.Errorf("driver for %s: %w", slug, err)
 			}
 			drivers[slug] = drv
@@ -132,10 +151,36 @@ func New(cfg *Config) (*Server, error) {
 		return nil, fmt.Errorf("need at least two chains, got %d", len(drivers))
 	}
 
+	// The tradable asset set: every enabled chain's native, plus any test
+	// tokens the chain's driver found deployed on its harness.
+	assets := make(map[string]*mockAsset, len(drivers))
+	for slug, drv := range drivers {
+		spec := chainSpecs[slug]
+		native := nativeAsset(spec)
+		assets[native.intentsID] = native
+		if td, is := drv.(TokenDriver); is {
+			for _, tok := range td.Tokens() {
+				a := tokenAsset(spec, tok)
+				assets[a.intentsID] = a
+			}
+		}
+	}
+
 	priv, pub := DevSigningKey()
-	prices := make(map[string]int64, len(drivers))
-	for slug := range drivers {
-		prices[slug] = chainSpecs[slug].fallbackMicroUSD
+	prices := make(map[string]int64, len(assets))
+	ids := make([]string, 0, len(assets))
+	for id, a := range assets {
+		prices[id] = a.fallbackMicroUSD
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		a := assets[id]
+		kind := "native"
+		if a.contract != "" {
+			kind = "token " + a.contract
+		}
+		c.Logger.Printf("asset enabled: %s on %s (%s) = %s", a.symbol, a.chain.slug, kind, id)
 	}
 
 	return &Server{
@@ -143,6 +188,7 @@ func New(cfg *Config) (*Server, error) {
 		priv:    priv,
 		pubKey:  pub,
 		drivers: drivers,
+		assets:  assets,
 		log:     c.Logger,
 		prices:  prices,
 		swaps:   make(map[string]*swapState),
@@ -175,21 +221,12 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// price returns the current microUSD price for an enabled chain slug.
-func (s *Server) price(slug string) int64 {
+// price returns the current microUSD price for an enabled asset's Intents
+// ID.
+func (s *Server) price(intentsID string) int64 {
 	s.priceMtx.RLock()
 	defer s.priceMtx.RUnlock()
-	return s.prices[slug]
-}
-
-// spec returns the chainSpec for an enabled chain's Intents asset ID.
-func (s *Server) specByAssetID(assetID string) *chainSpec {
-	for slug := range s.drivers {
-		if spec := chainSpecs[slug]; spec.assetID == assetID {
-			return spec
-		}
-	}
-	return nil
+	return s.prices[intentsID]
 }
 
 // writeError writes the service's non-200 envelope.
@@ -211,22 +248,23 @@ func writeJSON(w http.ResponseWriter, thing any) {
 }
 
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
-	slugs := make([]string, 0, len(s.drivers))
-	for slug := range s.drivers {
-		slugs = append(slugs, slug)
+	ids := make([]string, 0, len(s.assets))
+	for id := range s.assets {
+		ids = append(ids, id)
 	}
-	sort.Strings(slugs)
+	sort.Strings(ids)
 	now := time.Now().UTC().Format(timestampFormat)
-	tokens := make([]*intents.Token, 0, len(slugs))
-	for _, slug := range slugs {
-		spec := chainSpecs[slug]
+	tokens := make([]*intents.Token, 0, len(ids))
+	for _, id := range ids {
+		a := s.assets[id]
 		tokens = append(tokens, &intents.Token{
-			AssetID:        spec.assetID,
-			Decimals:       spec.decimals,
-			Blockchain:     spec.slug,
-			Symbol:         spec.symbol,
-			Price:          float64(s.price(slug)) / 1e6,
-			PriceUpdatedAt: now,
+			AssetID:         a.intentsID,
+			Decimals:        a.decimals,
+			Blockchain:      a.chain.slug,
+			Symbol:          a.symbol,
+			Price:           float64(s.price(id)) / 1e6,
+			PriceUpdatedAt:  now,
+			ContractAddress: a.contract,
 		})
 	}
 	writeJSON(w, tokens)

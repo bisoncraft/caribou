@@ -25,6 +25,46 @@ type chainSpec struct {
 	fallbackMicroUSD int64 // static price used until live rates arrive
 }
 
+// mockAsset is one tradable asset: a chain native or a deployed test
+// token. The server's catalog, quote math, and swap machinery all operate
+// on mockAssets; the chain driver is resolved through the chain slug.
+type mockAsset struct {
+	intentsID        string
+	chain            *chainSpec
+	symbol           string
+	decimals         int
+	contract         string // empty for chain natives
+	sendScript       string // harness-ctl payout script, tokens only
+	walletBipID      uint32 // wallet asset ID, for live-rate lookups
+	fallbackMicroUSD int64
+}
+
+// nativeAsset builds the mockAsset for a chain's native asset.
+func nativeAsset(spec *chainSpec) *mockAsset {
+	return &mockAsset{
+		intentsID:        spec.assetID,
+		chain:            spec,
+		symbol:           spec.symbol,
+		decimals:         spec.decimals,
+		walletBipID:      spec.bipID,
+		fallbackMicroUSD: spec.fallbackMicroUSD,
+	}
+}
+
+// tokenAsset builds the mockAsset for a harness-deployed test token.
+func tokenAsset(spec *chainSpec, tok *driverToken) *mockAsset {
+	return &mockAsset{
+		intentsID:        fmt.Sprintf("nep141:%s-%s.omft.near", spec.slug, strings.ToLower(tok.contract)),
+		chain:            spec,
+		symbol:           tok.symbol,
+		decimals:         tok.decimals,
+		contract:         tok.contract,
+		sendScript:       tok.sendScript,
+		walletBipID:      tok.walletBipID,
+		fallbackMicroUSD: tok.fallbackMicroUSD,
+	}
+}
+
 // chainSpecs holds every chain the mock knows how to drive. Only chains
 // enabled via Config.Chains are published in /v0/tokens and accepted in
 // quotes.
