@@ -122,14 +122,24 @@ func (idx *Index) entryKey(k, v KV, kB []byte) ([]byte, error) {
 	return key, nil
 }
 
-// uniqueConflict returns the primary key of an existing entry that shares this
-// unique index's value (indexID||indexEntry prefix) but maps to a different
-// primary key, or nil if there is no conflict. Index entries are fixed-length,
-// so the prefix match is exact.
+// uniqueConflict returns the primary key of an existing entry that holds this
+// unique index's exact value (indexID||indexEntry) but maps to a different
+// primary key, or nil if there is no conflict.
+//
+// The cursor scan matches indexID||indexEntry as a byte prefix, so with
+// variable-length index values it also visits entries for longer values that
+// begin with this one. An entry holds this exact value only when the bytes
+// past the prefix are exactly its stored primary key; anything else belongs
+// to a longer, non-conflicting value and must be skipped, or inserting "a"
+// would report a conflict with an existing "ab" - and under WithReplace evict
+// its row.
 func (idx *Index) uniqueConflict(index *bbolt.Bucket, fullKey, k []byte) []byte {
 	prefix := fullKey[:len(fullKey)-len(k)] // indexID||indexEntry
 	c := index.Cursor()
 	for ek, ev := c.Seek(prefix); ek != nil && bytes.HasPrefix(ek, prefix); ek, ev = c.Next() {
+		if !bytes.Equal(ek[len(prefix):], ev) {
+			continue
+		}
 		if !bytes.Equal(ev, k) {
 			return append([]byte(nil), ev...)
 		}

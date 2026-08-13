@@ -2,6 +2,7 @@ package lexi
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -787,5 +788,58 @@ func TestIndexDanglingIDMapEntry(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "dangling entry") {
 		t.Fatalf("error does not name the condition: %v", err)
+	}
+}
+
+// TestUniqueIndexPrefixShadowing pins the exact-value match in the unique
+// conflict check. The conflict scan matches the index value as a byte prefix,
+// so with variable-length values an entry for "ab" is visited when checking
+// "a" (and, through the KeyID bytes, potentially the reverse); only an entry
+// of exactly the checked value's length is a real conflict. Without the
+// length guard the shorter value reported a false conflict - and under
+// WithReplace evicted the unrelated row.
+func TestUniqueIndexPrefixShadowing(t *testing.T) {
+	db, shutdown := newTestDB(t)
+	defer shutdown()
+
+	tbl, err := db.Table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if _, err := tbl.AddUniqueIndex("u", func(_, v KV) ([]byte, error) {
+		return v.(*tValue).idx, nil
+	}); err != nil {
+		t.Fatalf("AddUniqueIndex: %v", err)
+	}
+
+	set := func(k, idx string, opts ...kvstore.SetOption) error {
+		return tbl.Set([]byte(k), &tValue{v: []byte("v-" + k), idx: []byte(idx)}, opts...)
+	}
+	if err := set("k1", "ab"); err != nil {
+		t.Fatalf("initial Set: %v", err)
+	}
+	// A value that is a strict prefix of an existing value is not a conflict.
+	if err := set("k2", "a"); err != nil {
+		t.Fatalf("prefix of an existing value reported as conflict: %v", err)
+	}
+	// Nor is a value that extends an existing one.
+	if err := set("k3", "abc"); err != nil {
+		t.Fatalf("extension of an existing value reported as conflict: %v", err)
+	}
+	// An exact duplicate is.
+	if err := set("k4", "ab"); err == nil {
+		t.Fatal("exact duplicate not reported as conflict")
+	}
+	// Under WithReplace, only the row actually holding the value is evicted.
+	if err := set("k4", "ab", kvstore.WithReplace()); err != nil {
+		t.Fatalf("replace of exact duplicate failed: %v", err)
+	}
+	if _, err := tbl.Get([]byte("k1")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("conflicting row not evicted, Get(k1) = %v", err)
+	}
+	for _, k := range []string{"k2", "k3", "k4"} {
+		if _, err := tbl.Get([]byte(k)); err != nil {
+			t.Fatalf("row %q lost to a false conflict: %v", k, err)
+		}
 	}
 }

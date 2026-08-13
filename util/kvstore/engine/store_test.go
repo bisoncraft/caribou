@@ -344,6 +344,55 @@ func TestUniqueIndexContract(t *testing.T) {
 	}
 }
 
+// TestUniqueIndexExactValueContract pins that a unique index treats only an
+// exact value match as a conflict, on both engines. Each engine's conflict
+// check scans the index value as a byte prefix, so variable-length values
+// that prefix one another are where an engine could falsely conflict — or
+// worse, evict an unrelated row under replace.
+func TestUniqueIndexExactValueContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if _, err := tbl.AddUniqueIndex("u", func(_, v kvstore.KV) ([]byte, error) {
+		return v.([]byte), nil
+	}); err != nil {
+		t.Fatalf("AddUniqueIndex: %v", err)
+	}
+
+	set := func(k, v string, opts ...kvstore.SetOption) error {
+		return tbl.Set([]byte(k), []byte(v), opts...)
+	}
+	if err := set("k1", "ab"); err != nil {
+		t.Fatalf("initial Set: %v", err)
+	}
+	// A value that is a strict prefix of an existing value is not a conflict.
+	if err := set("k2", "a"); err != nil {
+		t.Fatalf("prefix of an existing value reported as conflict: %v", err)
+	}
+	// Nor is a value that extends an existing one.
+	if err := set("k3", "abc"); err != nil {
+		t.Fatalf("extension of an existing value reported as conflict: %v", err)
+	}
+	// An exact duplicate is.
+	if err := set("k4", "ab"); err == nil {
+		t.Fatal("exact duplicate not reported as conflict")
+	}
+	// Under replace, only the row actually holding the duplicated value is
+	// evicted; the prefix-sharing rows survive.
+	if err := set("k4", "ab", kvstore.WithReplace()); err != nil {
+		t.Fatalf("replace of exact duplicate failed: %v", err)
+	}
+	if _, err := tbl.Get([]byte("k1")); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("conflicting row not evicted, Get(k1) = %v", err)
+	}
+	for _, k := range []string{"k2", "k3", "k4"} {
+		if _, err := tbl.Get([]byte(k)); err != nil {
+			t.Fatalf("row %q lost to a false conflict: %v", k, err)
+		}
+	}
+}
+
 // TestSetBatchContract pins SetBatch atomicity: without WithReplace a
 // mid-batch key conflict rolls back the whole batch, and with it the batch
 // applies.

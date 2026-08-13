@@ -92,6 +92,14 @@ func (e uniqueIndexConflictError) Error() string {
 
 func (idx *Index) checkForIndexConflict(txn *badger.Txn, idxB []byte, updatingKeyID KeyID) error {
 	conflictPrefix := PrefixedKey(idx.prefix, idxB)
+	// The scan matches conflictPrefix as a byte prefix, so with
+	// variable-length index values it also visits entries for longer values
+	// that begin with idxB. Only an entry of exactly prefix+value+KeyID
+	// length holds this value; anything longer is a different,
+	// non-conflicting value and must be skipped, or inserting "a" would
+	// report a conflict with an existing "ab" - and under WithReplace evict
+	// its row.
+	entryLen := len(conflictPrefix) + KeyIDSize
 
 	var conflictKeyID KeyID
 	var foundConflict bool
@@ -102,6 +110,9 @@ func (idx *Index) checkForIndexConflict(txn *badger.Txn, idxB []byte, updatingKe
 
 		if len(key) < PrefixSize+KeyIDSize {
 			return fmt.Errorf("index entry too small. length = %d", len(key))
+		}
+		if len(key) != entryLen {
+			return nil
 		}
 
 		existingKeyID := newKeyIDFromBytes(key[len(key)-KeyIDSize:])
@@ -208,7 +219,9 @@ func (i *Iter) K() ([]byte, error) {
 }
 
 // Entry is the actual index entry when iterating an Index. When iterating a
-// Table it yields the primary key.
+// Table it yields the primary key. As with V, the byte slice passed to f is
+// only valid for the duration of the function call; the caller must copy it
+// to use it beyond f's scope.
 func (i *Iter) Entry(f func(idxB []byte) error) error {
 	if !i.isIndex {
 		return f(i.k)
