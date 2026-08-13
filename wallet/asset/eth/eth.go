@@ -4303,6 +4303,13 @@ func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.H
 	if err != nil {
 		return nil, err
 	}
+	// Same guard as the TokenWallet twin: no transaction and no error is
+	// not-found. To() is separately nil for a contract creation, which is a
+	// real on-chain shape rather than a node bug, and never this wallet's
+	// receive anyway.
+	if tx == nil || tx.To() == nil {
+		return nil, asset.CoinNotFoundError
+	}
 
 	if *tx.To() != w.addr {
 		return nil, asset.CoinNotFoundError

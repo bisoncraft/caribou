@@ -1145,6 +1145,55 @@ func TestCheckPendingTxsNilReceipt(t *testing.T) {
 	}
 }
 
+// TestETHGetReceivingTransactionNilDerefs covers the two nils
+// ETHWallet.getReceivingTransaction dereferences on one line. The first is the
+// same pair TestCheckPendingTxsNilReceipt covers, from the other fetch: node is
+// an interface, and nothing states that a nil transaction always comes with an
+// error. The second needs no misbehaving node at all - To() is nil for a
+// contract creation, an ordinary on-chain shape, and this wallet is never its
+// recipient.
+func TestETHGetReceivingTransactionNilDerefs(t *testing.T) {
+	t.Parallel()
+
+	nilTxHash := common.HexToHash("0x1")
+	contractCreationHash := common.HexToHash("0x2")
+	node := &testNode{
+		getTxResMap: map[common.Hash]*tGetTxRes{
+			// No error, no transaction.
+			nilTxHash: {},
+			contractCreationHash: {tx: types.NewContractCreation(
+				1, big.NewInt(1), 1, big.NewInt(1), nil), height: 1},
+		},
+	}
+	w := &ETHWallet{
+		assetWallet: &assetWallet{
+			baseWallet: &baseWallet{
+				node: node,
+				addr: node.address(),
+				log:  tLogger,
+			},
+			log:     tLogger.SubLogger("ETH"),
+			assetID: BipID,
+		},
+	}
+
+	for _, tt := range []struct {
+		name string
+		hash common.Hash
+	}{
+		{"nil transaction under a nil error", nilTxHash},
+		{"contract creation has no recipient", contractCreationHash},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := w.getReceivingTransaction(t.Context(), tt.hash)
+			if !errors.Is(err, asset.CoinNotFoundError) {
+				t.Fatalf("expected CoinNotFoundError, got %v", err)
+			}
+		})
+	}
+}
+
 func TestSyncStatus(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
