@@ -13,6 +13,7 @@ import (
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/appserver"
 	"github.com/bisoncraft/caribou/wallet/core"
+	"github.com/bisoncraft/caribou/wallet/intents"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/jessevdk/go-flags"
 )
@@ -42,6 +43,9 @@ type CoreConfig struct {
 
 	NoAutoWalletLock  bool   `long:"no-wallet-lock" description:"Disable locking of wallets on shutdown or logout. Use this if you want your external wallets to stay unlocked after closing the app."`
 	ExtensionModeFile string `long:"extension-mode-file" description:"path to a file that specifies options for running core as an extension."`
+
+	IntentsAPI        string `long:"intentsapi" description:"Override the NEAR Intents 1Click API base URL, e.g. for the simnet mock server. Ignored on mainnet. On simnet, defaults to the util/testing/near-intents harness."`
+	IntentsSigningKey string `long:"intentssigningkey" description:"Override the pinned 1Click quote-signing public key (base58, optional ed25519: prefix). Ignored on mainnet. On simnet, defaults to the simnet mock's dev key."`
 }
 
 // WebConfig encapsulates the configuration needed for the web server.
@@ -136,6 +140,8 @@ func (cfg *Config) Core(log util.Logger) *core.Config {
 		Language:          cfg.Language,
 		NoAutoWalletLock:  cfg.NoAutoWalletLock,
 		ExtensionModeFile: cfg.ExtensionModeFile,
+		IntentsBaseURL:    cfg.IntentsAPI,
+		IntentsSigningKey: cfg.IntentsSigningKey,
 	}
 }
 
@@ -245,6 +251,18 @@ func ResolveConfig(appData string, cfg *Config) error {
 
 	if cfg.LogPath == "" {
 		cfg.LogPath = defaultLogPath
+	}
+
+	// On simnet, default the 1Click API to the local mock harness
+	// (util/testing/near-intents), which signs quotes with a deterministic
+	// dev key.
+	if cfg.Net == util.Simnet {
+		if cfg.IntentsAPI == "" {
+			cfg.IntentsAPI = "http://127.0.0.1:17781"
+		}
+		if cfg.IntentsSigningKey == "" {
+			cfg.IntentsSigningKey = intents.SimnetSigningKey
+		}
 	}
 
 	return nil

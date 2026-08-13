@@ -22,16 +22,11 @@ var testLogger = util.StdOutLogger("INTENTSTEST", util.LevelError)
 // live production fixtures.
 func signQuoteResponse(t *testing.T, priv ed25519.PrivateKey, rawRequest, rawQuote []byte, timestamp string) string {
 	t.Helper()
-	resp := &QuoteResponse{
-		Timestamp:  timestamp,
-		rawRequest: rawRequest,
-		rawQuote:   rawQuote,
-	}
-	msg, err := signedPayload(resp)
+	sig, err := SignQuote(priv, rawRequest, rawQuote, timestamp)
 	if err != nil {
-		t.Fatalf("signedPayload: %v", err)
+		t.Fatalf("SignQuote: %v", err)
 	}
-	return "ed25519:" + base58.Encode(ed25519.Sign(priv, []byte(msg)))
+	return sig
 }
 
 type quoteMangler func(echo map[string]json.RawMessage)

@@ -147,9 +147,19 @@ func (c *Core) startIntentsEngine(ctx context.Context) {
 		defer c.wg.Done()
 
 		logger := c.log.SubLogger("INTENTS")
+		baseURL, signingKey := c.cfg.IntentsBaseURL, c.cfg.IntentsSigningKey
+		if (baseURL != "" || signingKey != "") && c.net == util.Mainnet {
+			// A config-injected endpoint or key on mainnet would bypass
+			// the pinned quote-signing key and let the endpoint's quotes
+			// redirect real deposits.
+			logger.Warnf("Ignoring 1Click API overrides on mainnet")
+			baseURL, signingKey = "", ""
+		}
 		client, err := intents.NewClient(&intents.Config{
-			AppFees: intentsAppFees(),
-			Proxy:   c.cfg.TorProxy,
+			BaseURL:    baseURL,
+			SigningKey: signingKey,
+			AppFees:    intentsAppFees(),
+			Proxy:      c.cfg.TorProxy,
 		}, logger)
 		if err != nil {
 			logger.Errorf("Error creating 1Click client: %v", err)

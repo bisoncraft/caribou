@@ -77,7 +77,9 @@ var (
 			"https://rpc.testnet.near.org",
 		},
 		util.Simnet: {
-			"https://rpc.testnet.near.org",
+			// The NEAR sandbox harness (util/testing/near/harness.sh)
+			// publishes its RPC on this port.
+			"http://localhost:23456",
 		},
 	}
 
