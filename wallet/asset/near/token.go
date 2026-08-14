@@ -151,6 +151,9 @@ func (w *TokenWallet) Info() *asset.WalletInfo {
 // has never been storage-registered on the token contract reports a zero
 // balance, not an error.
 func (w *TokenWallet) Balance() (*asset.Balance, error) {
+	if w.parent.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	atomic, err := w.ftBalanceOf(w.parent.accountID)
 	if err != nil {
 		return nil, err
@@ -211,6 +214,9 @@ func (w *TokenWallet) FeeRate() uint64 {
 }
 
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	if w.parent.rpc == nil {
+		return nil, fmt.Errorf("wallet not connected")
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid NEAR address %q", address)
 	}
@@ -257,8 +263,11 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 	actions = append(actions, functionCallAction("ft_transfer", amountArgs, ftTransferGas, big.NewInt(ftTransferDepositYocto)))
 
-	w.parent.nonceMtx.Lock()
-	defer w.parent.nonceMtx.Unlock()
+	// sendMtx covers reserveNonce through broadcastTxAsync: native and token
+	// sends share the parent wallet's access key, and NEAR requires nonces
+	// to reach the network in increasing order.
+	w.parent.sendMtx.Lock()
+	defer w.parent.sendMtx.Unlock()
 
 	nonce, err := w.parent.reserveNonce()
 	if err != nil {
@@ -267,6 +276,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	w.parent.tipMtx.RLock()
 	blockHash := w.parent.tipHash
+	tipHeight := w.parent.tip
 	w.parent.tipMtx.RUnlock()
 
 	tx := &nearTransaction{
@@ -286,10 +296,6 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 
 	txID := base58.Encode(hash[:])
 
-	if _, err := w.parent.rpc.broadcastTxAsync(w.parent.ctx, encoded); err != nil {
-		return nil, fmt.Errorf("error broadcasting transaction: %w", err)
-	}
-
 	recipient := address
 	wtx := &txdb.WalletTransaction{
 		Type:      txdb.Send,
@@ -299,11 +305,20 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		Recipient: &recipient,
 		TokenID:   &w.assetID,
 	}
+	setSentAtHeight(wtx, tipHeight)
+
+	// Persist before broadcasting so the tx is tracked even if the broadcast
+	// hits a network error after the node has already accepted it.
 	if w.txDB != nil {
 		if err := w.txDB.StoreTx(wtx); err != nil {
-			w.parent.log.Errorf("Error storing token send tx: %v", err)
+			w.parent.log.Errorf("Error pre-storing token send tx: %v", err)
 		}
 	}
+
+	if _, err := w.parent.broadcastSend(w.txDB, wtx, encoded, txID); err != nil {
+		return nil, err
+	}
+
 	if w.emit != nil {
 		w.emit.TransactionNote(wtx, true)
 	}
