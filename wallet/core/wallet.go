@@ -246,6 +246,14 @@ func (w *xcWallet) Lock(timeout time.Duration) error {
 	// array, so Clear zeroing that array concurrently with a still-in-flight
 	// a.Unlock(pw) call remains a narrow, pre-existing exposure this does not
 	// close.
+	//
+	// Because the backend RPC and this clear are no longer one critical
+	// section, a concurrent Unlock that finishes its own backend RPC and
+	// caches w.pw between this Lock's RPC and this point will have its cache
+	// wiped here: backend ends up unlocked with no cached password. Concurrent
+	// Lock/Unlock on one wallet is a caller-level race either way; this is a
+	// real (if narrow) behavior change from when the write lock spanned the
+	// backend RPC.
 	w.mtx.Lock()
 	w.pw.Clear()
 	w.pw = nil

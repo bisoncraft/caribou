@@ -2053,7 +2053,7 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 				}
 			}
 			if !oldDef.Seeded && newWalletPW != nil {
-				if err = c.setWalletPassword(oldWallet, newWalletPW, crypter); err != nil {
+				if err = c.setWalletPassword(oldWallet, newWalletPW, crypter, false); err != nil {
 					return newError(walletAuthErr, "failed to update password: %v", err)
 				}
 				dbWallet.EncryptedPW = oldWallet.encPW()
@@ -2156,7 +2156,7 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 			}
 			// If newWalletPW is non-nil, update the wallet's password.
 			if newWalletPW != nil { // includes empty non-nil slice
-				err = c.setWalletPassword(wallet, newWalletPW, crypter)
+				err = c.setWalletPassword(wallet, newWalletPW, crypter, false)
 				if err != nil {
 					wallet.Disconnect()
 					return fmt.Errorf("setWalletPassword: %v", err)
@@ -2256,11 +2256,16 @@ func (c *Core) SetWalletPassword(appPW []byte, assetID uint32, newPW []byte) err
 
 	// Set new password, connecting to it if necessary to verify. It is left
 	// connected since it is in the wallets map.
-	return c.setWalletPassword(wallet, newPW, crypter)
+	return c.setWalletPassword(wallet, newPW, crypter, true)
 }
 
-// setWalletPassword updates the (encrypted) password for the wallet.
-func (c *Core) setWalletPassword(wallet *xcWallet, newPW []byte, crypter encrypt.Crypter) error {
+// setWalletPassword updates the (encrypted) password for the wallet. mustBeLive
+// requires that wallet still be the live entry in c.wallets for its asset when
+// the update is persisted; only SetWalletPassword holds that invariant.
+// ReconfigureWallet's restart path installs the new wallet into c.wallets only
+// after this call returns, so it passes false and relies instead on its
+// documented no-concurrent-calls-per-asset contract.
+func (c *Core) setWalletPassword(wallet *xcWallet, newPW []byte, crypter encrypt.Crypter, mustBeLive bool) error {
 	authenticator, is := wallet.Wallet.(asset.Authenticator)
 	if !is { // password setting is not supported by wallet.
 		return newError(passwordErr, "wallet does not support password setting")
@@ -2316,12 +2321,17 @@ func (c *Core) setWalletPassword(wallet *xcWallet, newPW []byte, crypter encrypt
 		wallet.setEncPW(nil)
 	}
 
-	// Refuse to persist against a wallet ReconfigureWallet swapped out of
-	// c.wallets while the RPCs above ran unlocked from walletMtx: the wallet
-	// this func was given may no longer be the live one for assetID.
-	if current, ok := c.wallet(wallet.AssetID); !ok || current != wallet {
-		return newError(missingWalletErr, "%s wallet was reconfigured during password update",
-			unbip(wallet.AssetID))
+	// Refuse to persist against a wallet swapped out of c.wallets while the
+	// RPCs above ran unlocked from walletMtx: the wallet this func was given
+	// may no longer be the live one for assetID. Only applies to callers
+	// (SetWalletPassword) whose invariant is that wallet is already the live
+	// entry; ReconfigureWallet's restart path calls this before the new
+	// wallet is installed into c.wallets, so it opts out.
+	if mustBeLive {
+		if current, ok := c.wallet(wallet.AssetID); !ok || current != wallet {
+			return newError(missingWalletErr, "%s wallet was reconfigured during password update",
+				unbip(wallet.AssetID))
+		}
 	}
 
 	err = c.db.SetWalletPassword(wallet.AssetID, wallet.encPW())
@@ -2772,7 +2782,13 @@ func (c *Core) Logout() error {
 		// before shutdown. If shutdown has already begun the registration is
 		// moot: Run locks and disconnects the wallets itself right after Wait
 		// returns, and the loop below is best-effort either way, so run it
-		// unregistered rather than skipping it.
+		// unregistered rather than skipping it. Unregistered here means this
+		// loop can run concurrently with Run's own post-Wait lock loop: this
+		// loop snapshots via xcWallets() under the read lock while Run's loop
+		// holds the write lock, so map access is safe, but the two loops can
+		// still call wallet.Lock on the same wallet at the same time, which is
+		// the same Lock/Unlock inversion documented on xcWallet.Lock. Still
+		// strictly better than the previous panic on this path.
 		registered := c.beginTask()
 		for _, w := range c.xcWallets() {
 			if !w.connected() {

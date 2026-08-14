@@ -1315,6 +1315,60 @@ func TestSetWalletPasswordDoesNotBlockWalletLookups(t *testing.T) {
 	}
 }
 
+// ReconfigureWallet's restart path (a non-live-reconfigurable wallet, or one
+// whose Reconfigure reports restart required) loads a brand new xcWallet and
+// only installs it into c.wallets after the whole reload succeeds. Passing
+// newWalletPW != nil calls setWalletPassword on that not-yet-installed
+// wallet, which must not be rejected by the "still the live wallet" guard
+// that only holds for the SetWalletPassword entry point.
+func TestReconfigureWalletRestartPathSetsNewPassword(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+
+	const assetID = 28 // vtc; unused by other tests in this file
+
+	oldXCWallet, _ := newTWallet(assetID)
+	tCore.wallets[assetID] = oldXCWallet
+
+	newRawWallet := &TXCWallet{
+		info:        tWalletInfo,
+		syncStatus:  func() (bool, float32, error) { return true, 1, nil },
+		ownsAddress: true,
+	}
+	asset.Register(assetID, &tDriver{
+		wallet:        newRawWallet,
+		decodedCoinID: "vtc-coin",
+		winfo:         tWalletInfo,
+	}, true)
+
+	form := &WalletForm{
+		AssetID: assetID,
+		Config:  map[string]string{},
+		Type:    "type",
+	}
+	newPW := []byte("newpw")
+
+	if err := tCore.ReconfigureWallet(tPW, newPW, form); err != nil {
+		t.Fatalf("ReconfigureWallet error: %v", err)
+	}
+
+	liveWallet, found := tCore.wallet(assetID)
+	if !found {
+		t.Fatalf("no wallet installed for asset %d after reconfigure", assetID)
+	}
+	if liveWallet.Wallet != asset.Wallet(newRawWallet) {
+		t.Fatalf("reconfigured wallet was not swapped into c.wallets")
+	}
+	decPW, err := rig.crypter.Decrypt(liveWallet.encPW())
+	if err != nil {
+		t.Fatalf("Decrypt error: %v", err)
+	}
+	if !bytes.Equal(decPW, newPW) {
+		t.Fatalf("new password not persisted: got %q, want %q", decPW, newPW)
+	}
+}
+
 // beginTask must make the shuttingDown check and the wg.Add atomic. An
 // unsynchronized c.ctx check before an Add races Run's Wait: the counter can
 // legitimately reach zero and Wait return between the check and the Add, which
