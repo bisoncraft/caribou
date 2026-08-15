@@ -1,5 +1,6 @@
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
+import { getJSON } from '@caribou/shared/http'
 
 // Types mirroring the Go structs served by the /api/intents endpoints
 // (wallet/core/near-intents.go, wallet/db/near-intents.go).
@@ -123,6 +124,45 @@ export function conventionalToAtoms (conventional: number, atomDecimals: number)
 // atomsToConventional converts wallet atoms to conventional units.
 export function atomsToConventional (atoms: number, atomDecimals: number): number {
   return atoms / Math.pow(10, atomDecimals)
+}
+
+// fetchSwaps loads the persisted cross-chain swap records, newest first.
+// The endpoint errors when the swap engine is unavailable this session, in
+// which case there are simply no swaps to show.
+export async function fetchSwaps (): Promise<IntentsSwap[]> {
+  const r = await getJSON('/api/intents/swaps')
+  return r.ok ? (r.swaps as IntentsSwap[]) ?? [] : []
+}
+
+// SwapRelation identifies the role an on-chain transaction plays in a
+// cross-chain swap.
+export interface SwapRelation {
+  swap: IntentsSwap
+  role: 'deposit' | 'payout' | 'refund'
+}
+
+// swapRelationLabel is the short user-facing name of a leg role.
+export function swapRelationLabel (role: SwapRelation['role']): string {
+  switch (role) {
+    case 'deposit': return t('Deposit')
+    case 'payout': return t('Payout')
+    case 'refund': return t('Refund')
+  }
+}
+
+// relateTxToSwaps matches a wallet transaction to the swap it serves: the
+// deposit leg by its recorded txid or the deposit address it pays, the
+// payout and refund legs by the txids the service reported.
+export function relateTxToSwaps (swaps: IntentsSwap[], tx: { id: string, recipient?: string }): SwapRelation | undefined {
+  const id = tx.id.toLowerCase()
+  const recipient = tx.recipient?.toLowerCase()
+  for (const swap of swaps) {
+    if (swap.depositTxID?.toLowerCase() === id) return { swap, role: 'deposit' }
+    if (recipient && swap.depositAddress.toLowerCase() === recipient) return { swap, role: 'deposit' }
+    if (swap.destinationTxs?.some(txid => txid.toLowerCase() === id)) return { swap, role: 'payout' }
+    if (swap.refundTxs?.some(txid => txid.toLowerCase() === id)) return { swap, role: 'refund' }
+  }
+  return undefined
 }
 
 // assetTicker returns the display ticker for a swappable asset: the wallet's

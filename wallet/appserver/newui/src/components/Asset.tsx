@@ -4,12 +4,13 @@ import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
 import { useForceUpdate, useCoreSubscriptions } from '@caribou/shared/hooks'
-import { WalletNote, WalletTransaction } from '@caribou/shared/registry'
+import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
 import { AssetVariant, networkAsset, networkID } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@caribou/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
 import TxRow, { TxRowItem, variantForTx } from './TxRow'
+import { IntentsSwap, fetchSwaps, relateTxToSwaps } from '../intents'
 
 interface AssetParams {
   ticker: string
@@ -114,6 +115,11 @@ export default function Asset ({ ticker }: AssetParams) {
     fetchTxnsRef.current?.()
   }, [assetIDsKey])
 
+  // Cross-chain swap records, for marking transactions that serve as swap
+  // legs.
+  const [swaps, setSwaps] = useState<IntentsSwap[]>([])
+  useEffect(() => { fetchSwaps().then(setSwaps) }, [])
+
   useCoreSubscriptions({
     onBalance: redraw,
     onRate: redraw,
@@ -130,6 +136,11 @@ export default function Asset ({ ticker }: AssetParams) {
             redraw()
             fetchTxnsRef.current?.()
           }
+          break
+        }
+        case 'intentsswap': {
+          const s = (note as CoreNote & { swap: IntentsSwap }).swap
+          if (s) setSwaps(prev => [s, ...prev.filter(x => x.depositAddress !== s.depositAddress)])
           break
         }
       }
@@ -166,7 +177,7 @@ export default function Asset ({ ticker }: AssetParams) {
     const items: TxRowItem[] = []
     for (const tx of txSrcRef.current.txs) {
       const variant = variantForTx(ta, tx)
-      if (variant) items.push({ tx, ta, variant })
+      if (variant) items.push({ tx, ta, variant, swapRelation: relateTxToSwaps(swaps, tx) })
     }
     return items
   }

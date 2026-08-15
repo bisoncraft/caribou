@@ -24,6 +24,12 @@ export default function SwapRow ({ swap }: { swap: IntentsSwap }) {
   const destTicker = destAsset?.unitInfo.conventional.unit ?? swap.destAsset
   const amountIn = originAsset ? Doc.formatCoinValue(swap.atomsIn, originAsset.unitInfo) : swap.amountIn
   const amountOut = destAsset ? Doc.formatCoinValue(swap.atomsOut, destAsset.unitInfo) : swap.amountOut
+  const usdOut = destAsset
+    ? Doc.usdString(swap.atomsOut, destAsset.unitInfo.conventional.conversionFactor, app.idRate(swap.destAssetID) ?? 0)
+    : ''
+  const usdIn = originAsset
+    ? Doc.usdString(swap.atomsIn, originAsset.unitInfo.conventional.conversionFactor, app.idRate(swap.originAssetID) ?? 0)
+    : ''
   const age = tvar('{{ age }} ago', { age: Doc.timeSince(swapTime(swap) * 1000) })
 
   // The amount column reflects the outcome: the received (or expected)
@@ -35,13 +41,21 @@ export default function SwapRow ({ swap }: { swap: IntentsSwap }) {
       const approx = swap.state === StateSuccess ? '' : '~'
       return (
         <>
-          <div className="fs14 mono tx-amt-pos">+{approx}{amountOut} {destTicker}</div>
+          <div className="fs14 mono tx-amt-pos">
+            +{approx}{amountOut} {destTicker}
+            {usdOut !== '' && <span className="grey"> · {usdOut}</span>}
+          </div>
           <div className="grey fs12 mono">−{amountIn} {originTicker}</div>
         </>
       )
     }
     if (swap.state === StateRefunded) {
-      return <div className="grey fs14 mono">{tvar('{{ amt }} {{ ticker }} returned', { amt: amountIn, ticker: originTicker })}</div>
+      return (
+        <div className="grey fs14 mono">
+          {tvar('{{ amt }} {{ ticker }} returned', { amt: amountIn, ticker: originTicker })}
+          {usdIn !== '' && <span className="fs12"> · {usdIn}</span>}
+        </div>
+      )
     }
     if (swap.state === StateExpired) return <div className="grey fs14 mono">—</div>
     return ( // FAILED: the deposit may be gone and nothing arrived.

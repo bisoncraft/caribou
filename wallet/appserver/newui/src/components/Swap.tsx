@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, ChangeEvent } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
+import { explorerTxURL } from '@caribou/shared/coinexplorers'
 import { useForceUpdate } from '@caribou/shared/hooks'
 import { getJSON, postJSON } from '@caribou/shared/http'
 import { CoreNote, UnitInfo } from '@caribou/shared/registry'
@@ -12,7 +13,7 @@ import PasswordInput from './PasswordInput'
 import { useModalBusy } from './modalBusy'
 import {
   IntentsAsset, IntentsPreview, IntentsSwap,
-  StateQuoted, StateSuccess, StateRefunded, StateFailed, StateExpired,
+  StateProcessing, StateSuccess, StateRefunded, StateFailed, StateExpired,
   swapIsActive, stateLabel, stateColorClass,
   conventionalToAtoms, assetTicker, assetName
 } from '../intents'
@@ -837,6 +838,12 @@ interface SwapProgressProps {
   onClose: () => void
 }
 
+// Progress steps for an active swap. Every pre-PROCESSING state is the
+// deposit phase.
+function activeStep (state: string): number {
+  return state === StateProcessing ? 1 : 0
+}
+
 function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressProps) {
   const active = swapIsActive(swap)
   const originAsset = app.user?.assets[swap.originAssetID]
@@ -845,6 +852,27 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
   const destTicker = destAsset?.unitInfo.conventional.unit ?? swap.destAsset
   const amountIn = originAsset ? Doc.formatCoinValue(swap.atomsIn, originAsset.unitInfo) : swap.amountIn
   const amountOut = destAsset ? Doc.formatCoinValue(swap.atomsOut, destAsset.unitInfo) : swap.amountOut
+
+  const inFactor = originAsset?.unitInfo.conventional.conversionFactor ?? 0
+  const outFactor = destAsset?.unitInfo.conventional.conversionFactor ?? 0
+  const usdIn = inFactor ? Doc.usdString(swap.atomsIn, inFactor, app.idRate(swap.originAssetID) ?? 0) : ''
+  const usdOut = outFactor ? Doc.usdString(swap.atomsOut, outFactor, app.idRate(swap.destAssetID) ?? 0) : ''
+  const inConv = inFactor ? swap.atomsIn / inFactor : 0
+  const outConv = outFactor ? swap.atomsOut / outFactor : 0
+  const rateText = inConv > 0 && outConv > 0
+    ? `1 ${originTicker} = ${Doc.formatFourSigFigs(outConv / inConv)} ${destTicker}`
+    : ''
+  const feeBps = (swap.appFees ?? []).reduce((sum, f) => sum + f.fee, 0)
+
+  // One shared "Copied!" flash keyed by the copied string.
+  const [copiedID, setCopiedID] = useState('')
+  const copy = async (v: string) => {
+    try {
+      await navigator.clipboard.writeText(v)
+      setCopiedID(v)
+      window.setTimeout(() => setCopiedID(c => (c === v ? '' : c)), 1500)
+    } catch { /* clipboard unavailable */ }
+  }
 
   const statusIcon = () => {
     if (active) return <Spinner size={28} />
@@ -855,14 +883,40 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
     }
   }
 
-  const txids: { label: string, ids: string[] }[] = []
-  if (swap.depositTxID) txids.push({ label: t('Deposit'), ids: [swap.depositTxID] })
-  if (swap.destinationTxs?.length) txids.push({ label: t('Received'), ids: swap.destinationTxs })
-  if (swap.refundTxs?.length) txids.push({ label: t('Refund'), ids: swap.refundTxs })
+  // A copyable identifier row: shortened value, a copy control, and a
+  // block-explorer link when one exists for the asset.
+  const idRow = (label: string, id: string, assetID: number) => {
+    const explorer = explorerTxURL(assetID, id)
+    return (
+      <div key={label + id} className="d-flex justify-content-between align-items-center py-1">
+        <span className="grey">{label}</span>
+        <span className="d-flex align-items-center">
+          <span className="mono has-tip" aria-label={id}>{Doc.shortenAddress(id)}</span>
+          <span
+            className={`swap-id-action ms-2 pointer fs11 ${copiedID === id ? 'tx-amt-pos' : 'grey'}`}
+            onClick={() => copy(id)}
+          >
+            {copiedID === id ? t('Copied!') : <span className="ico-copy" />}
+          </span>
+          {explorer && (
+            <a href={explorer} target="_blank" rel="noopener noreferrer" className="swap-id-action ms-2 fs11" aria-label={t('View in block explorer')}>
+              <span className="ico-arrowright rot-neg45" />
+            </a>
+          )}
+        </span>
+      </div>
+    )
+  }
+
+  const steps = [t('Deposit'), t('Swapping'), t('Delivered')]
+  const step = activeStep(swap.state)
+
+  const started = new Date(swap.createdAt)
+  const updated = new Date(swap.updatedAt)
 
   return (
     <form className="modal swap-modal" onSubmit={e => e.preventDefault()}>
-      <header><span>{t('Swap')}</span></header>
+      <header><span>{t('Swap details')}</span></header>
 
       <div className="flex-center flex-column px-3 pt-2 pb-1">
         {statusIcon()}
@@ -872,14 +926,38 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
         )}
       </div>
 
+      {active && (
+        <div className="flex-center px-3 pt-2">
+          {steps.map((label, i) => (
+            <div key={label} className="d-flex align-items-center">
+              {i > 0 && <div className={`swap-step-bar ${i <= step ? 'done' : ''}`} />}
+              <div className="d-flex flex-column align-items-center">
+                <div className={`swap-step-dot ${i < step ? 'done' : i === step ? 'current' : ''}`} />
+                <div className={`fs11 pt-1 ${i === step ? '' : 'grey'}`}>{label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex-center px-3 py-2">
-        <CoinLogo ticker={originTicker} className="icon-24" />
-        <span className="mono fs14 ms-2">{amountIn} {originTicker}</span>
+        <div className="d-flex flex-column align-items-center">
+          <div className="d-flex align-items-center">
+            <CoinLogo ticker={originTicker} className="icon-24" />
+            <span className="mono fs14 ms-2">{amountIn} {originTicker}</span>
+          </div>
+          <div className="grey fs12 pt-1">{usdIn}</div>
+        </div>
         <span className="ico-arrowright fs12 grey mx-3" />
-        <CoinLogo ticker={destTicker} className="icon-24" />
-        <span className="mono fs14 ms-2">
-          {swap.state === StateSuccess ? '' : '~'}{amountOut} {destTicker}
-        </span>
+        <div className="d-flex flex-column align-items-center">
+          <div className="d-flex align-items-center">
+            <CoinLogo ticker={destTicker} className="icon-24" />
+            <span className="mono fs14 ms-2">
+              {swap.state === StateSuccess ? '' : '~'}{amountOut} {destTicker}
+            </span>
+          </div>
+          <div className="grey fs12 pt-1">{usdOut}</div>
+        </div>
       </div>
 
       {swap.state === StateRefunded && (
@@ -899,18 +977,32 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
       )}
 
       <div className="px-3 pb-2 fs12">
-        {txids.map(({ label, ids }) => ids.map(id => (
-          <div key={id} className="d-flex justify-content-between py-1">
-            <span className="grey">{label}</span>
-            <span className="mono has-tip" aria-label={id}>{Doc.shortenAddress(id)}</span>
-          </div>
-        )))}
-        {(swap.state === StateFailed || swap.state === StateQuoted) && (
+        {rateText !== '' && (
           <div className="d-flex justify-content-between py-1">
-            <span className="grey">{t('Deposit address')}</span>
-            <span className="mono has-tip" aria-label={swap.depositAddress}>{Doc.shortenAddress(swap.depositAddress)}</span>
+            <span className="grey">{t('Rate')}</span>
+            <span className="mono">{rateText}</span>
           </div>
         )}
+        {feeBps > 0 && (
+          <div className="d-flex justify-content-between py-1">
+            <span className="grey has-tip" aria-label={t('Fee paid to the swap service, included in the quoted output.')}>{t('Service fee')}</span>
+            <span>{slippagePct(feeBps)}</span>
+          </div>
+        )}
+        <div className="d-flex justify-content-between py-1">
+          <span className="grey">{t('Started')}</span>
+          <span>{isNaN(started.getTime()) ? '—' : started.toLocaleString()}</span>
+        </div>
+        {!active && (
+          <div className="d-flex justify-content-between py-1">
+            <span className="grey">{t('Last update')}</span>
+            <span>{isNaN(updated.getTime()) ? '—' : updated.toLocaleString()}</span>
+          </div>
+        )}
+        {idRow(t('Deposit address'), swap.depositAddress, swap.originAssetID)}
+        {swap.depositTxID && idRow(t('Deposit'), swap.depositTxID, swap.originAssetID)}
+        {(swap.destinationTxs ?? []).map(id => idRow(t('Received'), id, swap.destAssetID))}
+        {(swap.refundTxs ?? []).map(id => idRow(t('Refund'), id, swap.originAssetID))}
       </div>
 
       {active && (
@@ -919,7 +1011,7 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
         </div>
       )}
 
-      <div className="flex-stretch-column p-3">
+      <div className="flex-stretch-column px-3 pb-3 pt-1">
         {active
           ? <button type="button" onClick={onRefresh}>{t('Refresh status')}</button>
           : <button type="button" onClick={onSwapAgain}>{t('New swap')}</button>}

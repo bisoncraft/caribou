@@ -1298,6 +1298,49 @@ button.swap-cta {
   cursor: default;
 }
 
+// Marker on a transaction row that serves as a cross-chain swap leg;
+// clicking it opens the swap's detail dialog.
+.swap-leg-badge {
+  color: var(--text-grey);
+
+  &:hover { color: var(--accent); }
+}
+
+// Progress steps on an active swap's detail view.
+.swap-step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--border-color);
+
+  &.current { background-color: var(--gold); }
+  &.done { background-color: var(--accent-strong); }
+}
+
+// Connector between steps; aligned with the dots, above the labels.
+.swap-step-bar {
+  width: 56px;
+  height: 2px;
+  margin: 0 6px 18px;
+  background-color: var(--border-color);
+
+  &.done { background-color: var(--accent-strong); }
+}
+
+// Copy / explorer controls beside an identifier.
+.swap-id-action {
+  color: var(--text-grey);
+  text-decoration: none;
+
+  &:hover { color: var(--accent); }
+}
+
+// External-link arrow: the right arrow tilted toward the upper-right.
+.rot-neg45 {
+  display: inline-block;
+  transform: rotate(-45deg);
+}
+
 // Paired origin→destination logos on an Activity swap row: the destination
 // logo overlaps the origin's lower-right corner.
 .swap-row-logos {

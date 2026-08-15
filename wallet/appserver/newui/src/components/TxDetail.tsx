@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode } from 'react'
+import { FormEvent, ReactNode, useEffect, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
@@ -7,6 +7,7 @@ import { WalletTransaction } from '@caribou/shared/registry'
 import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@caribou/shared/tx'
 import { explorerTxURL } from '@caribou/shared/coinexplorers'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
+import { SwapRelation, fetchSwaps, relateTxToSwaps, swapRelationLabel } from '../intents'
 
 interface TxDetailParams {
   assetID: number
@@ -30,7 +31,20 @@ function Row ({ label, children }: { label: string, children: ReactNode }) {
 export default function TxDetail ({ assetID, tx }: TxDetailParams) {
   const [copied, flashCopied] = useFlash(2000)
 
+  // Whether this transaction serves as a leg of a cross-chain swap.
+  const [swapRelation, setSwapRelation] = useState<SwapRelation | undefined>()
+  useEffect(() => {
+    let stale = false
+    fetchSwaps().then(swaps => {
+      if (!stale) setSwapRelation(relateTxToSwaps(swaps, tx))
+    })
+    return () => { stale = true }
+  }, [tx])
+
   const close = () => app.setForm({ form: '', data: {} })
+  const openSwap = () => {
+    if (swapRelation) app.setForm({ form: 'swap', data: { depositAddress: swapRelation.swap.depositAddress } })
+  }
 
   const asset = app.asset(assetID)
   const ui = asset.unitInfo
@@ -95,6 +109,19 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
           </Row>
         )}
         <Row label={t('Date')}>{dateStr}</Row>
+        {swapRelation && (
+          <Row label={t('Cross-chain swap')}>
+            <span className="d-inline-flex align-items-center">
+              <span className="ico-swap fs11 me-2 grey" />
+              {tvar('{{ role }} leg of {{ from }} → {{ to }}', {
+                role: swapRelationLabel(swapRelation.role),
+                from: (app.user?.assets[swapRelation.swap.originAssetID]?.unitInfo.conventional.unit ?? swapRelation.swap.originAsset),
+                to: (app.user?.assets[swapRelation.swap.destAssetID]?.unitInfo.conventional.unit ?? swapRelation.swap.destAsset)
+              })}
+            </span>
+            <div className="accent-text pointer fs12" onClick={openSwap}>{t('View swap details')}</div>
+          </Row>
+        )}
       </div>
 
       <div className="px-3 pt-2">

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
-import { getJSON, postJSON } from '@caribou/shared/http'
+import { postJSON } from '@caribou/shared/http'
 import { useForceUpdate } from '@caribou/shared/hooks'
 import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
 import { TickerAsset, isVariantActive, networkID } from '@caribou/shared/assets'
@@ -9,7 +9,7 @@ import { TxType } from '@caribou/shared/tx'
 import Spinner from './Spinner'
 import TxRow, { TxRowItem, variantForTx } from './TxRow'
 import SwapRow, { swapTime } from './SwapRow'
-import { IntentsSwap, swapIsActive } from '../intents'
+import { IntentsSwap, swapIsActive, fetchSwaps, relateTxToSwaps } from '../intents'
 
 const PAGE_SIZE = 20
 // Rows shown per display page. Distinct from PAGE_SIZE, the per-source fetch
@@ -164,16 +164,11 @@ export default function Activity () {
     }
   }
 
-  const fetchSwaps = async () => {
-    const r = await getJSON('/api/intents/swaps')
-    // The endpoint errors when the swap engine is unavailable this session;
-    // the feed simply shows no swaps.
-    if (r.ok) setSwaps((r.swaps as IntentsSwap[]) ?? [])
-  }
+  const loadSwaps = async () => setSwaps(await fetchSwaps())
 
   useEffect(() => {
     fetchInitial()
-    fetchSwaps()
+    loadSwaps()
     // Transaction notes arrive in bursts (syncing wallets, rescans), and
     // every refetch costs one request per active ticker, so a trailing
     // debounce coalesces a burst into a single refetch.
@@ -230,7 +225,8 @@ export default function Activity () {
     for (const s of Array.from(sourcesRef.current.values())) {
       for (const tx of s.txs) {
         const variant = variantForTx(s.ta, tx)
-        if (variant) entries.push({ time: effectiveTime(tx), tx: { tx, ta: s.ta, variant } })
+        if (!variant) continue
+        entries.push({ time: effectiveTime(tx), tx: { tx, ta: s.ta, variant, swapRelation: relateTxToSwaps(swaps, tx) } })
       }
     }
     for (const s of swaps) {
