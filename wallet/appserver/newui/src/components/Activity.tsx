@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
-import { postJSON } from '@caribou/shared/http'
+import { getJSON, postJSON } from '@caribou/shared/http'
 import { useForceUpdate } from '@caribou/shared/hooks'
 import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
 import { TickerAsset, isVariantActive, networkID } from '@caribou/shared/assets'
 import { TxType } from '@caribou/shared/tx'
 import Spinner from './Spinner'
 import TxRow, { TxRowItem, variantForTx } from './TxRow'
+import SwapRow, { swapTime } from './SwapRow'
+import { IntentsSwap, swapIsActive } from '../intents'
 
 const PAGE_SIZE = 20
 // Rows shown per display page. Distinct from PAGE_SIZE, the per-source fetch
@@ -35,6 +37,22 @@ const filters: { key: Filter, label: string }[] = [
 // sort newest.
 function effectiveTime (tx: WalletTransaction): number {
   return tx.timestamp === 0 ? Number.MAX_SAFE_INTEGER : tx.timestamp
+}
+
+// FeedEntry is one row of the merged feed: an on-chain transaction or a
+// completed cross-chain swap record. time carries the entry's ordering and
+// bucketing timestamp in seconds.
+interface FeedEntry {
+  time: number
+  tx?: TxRowItem
+  swap?: IntentsSwap
+}
+
+// swapMatchesQuery reports whether a transaction-ID search hits any of the
+// swap's identifying strings: its deposit address or any leg's txid.
+function swapMatchesQuery (s: IntentsSwap, q: string): boolean {
+  const ids = [s.depositAddress, s.depositTxID ?? '', ...(s.destinationTxs ?? []), ...(s.refundTxs ?? [])]
+  return ids.some(id => id.toLowerCase().includes(q))
 }
 
 type Section = 'today' | 'yesterday' | 'week' | 'older'
@@ -65,11 +83,11 @@ function sectionBounds (): SectionBounds {
   }
 }
 
-// sectionFor buckets a transaction by local calendar time. Mempool
-// transactions count as today.
-function sectionFor (tx: WalletTransaction, bounds: SectionBounds): Section {
-  if (tx.timestamp === 0) return 'today'
-  const ms = tx.timestamp * 1000
+// sectionFor buckets a feed timestamp (seconds) by local calendar time.
+// Mempool transactions carry MAX_SAFE_INTEGER (see effectiveTime) and so
+// land in today.
+function sectionFor (time: number, bounds: SectionBounds): Section {
+  const ms = time * 1000
   if (ms >= bounds.todayStart) return 'today'
   if (ms >= bounds.yesterdayStart) return 'yesterday'
   if (ms >= bounds.weekStart) return 'week'
@@ -96,6 +114,9 @@ export default function Activity () {
   const [page, setPage] = useState(0)
   const sourcesRef = useRef<Map<string, TxSource>>(new Map())
   const fetchGenRef = useRef(0)
+  // Cross-chain swap records. The full list is small and served whole, so
+  // it lives in state rather than the paged per-ticker source map.
+  const [swaps, setSwaps] = useState<IntentsSwap[]>([])
 
   const activeTickers = (): TickerAsset[] =>
     (app.tickerList ?? []).filter(ta => ta.variants.some(isVariantActive))
@@ -143,13 +164,29 @@ export default function Activity () {
     }
   }
 
+  const fetchSwaps = async () => {
+    const r = await getJSON('/api/intents/swaps')
+    // The endpoint errors when the swap engine is unavailable this session;
+    // the feed simply shows no swaps.
+    if (r.ok) setSwaps((r.swaps as IntentsSwap[]) ?? [])
+  }
+
   useEffect(() => {
     fetchInitial()
+    fetchSwaps()
     // Transaction notes arrive in bursts (syncing wallets, rescans), and
     // every refetch costs one request per active ticker, so a trailing
     // debounce coalesces a burst into a single refetch.
     let debounce = 0
     const noteK = app.registerNoteFeed((n: CoreNote) => {
+      if (n.type === 'intentsswap') {
+        // The note carries the full updated record; upsert it in place.
+        const s = (n as CoreNote & { swap: IntentsSwap }).swap
+        if (s) {
+          setSwaps(prev => [s, ...prev.filter(x => x.depositAddress !== s.depositAddress)])
+        }
+        return
+      }
       if (n.type !== 'walletnote') return
       const payload = (n as WalletNote).payload
       if (payload?.route !== 'transaction') return
@@ -183,26 +220,38 @@ export default function Activity () {
     return wm
   }
 
-  // computeFiltered merges the per-ticker streams, sorts newest-first, and
-  // applies the watermark, pill, and txid filters. Reads sourcesRef so
-  // nextPage can recompute after fetches without waiting on a render.
-  const computeFiltered = (): TxRowItem[] => {
-    const items: TxRowItem[] = []
+  // computeFiltered merges the per-ticker streams and the terminal swap
+  // records, sorts newest-first, and applies the watermark, pill, and txid
+  // filters. Reads sourcesRef so nextPage can recompute after fetches
+  // without waiting on a render. Active swaps are excluded — they render in
+  // the pinned section above the feed.
+  const computeFiltered = (): FeedEntry[] => {
+    const entries: FeedEntry[] = []
     for (const s of Array.from(sourcesRef.current.values())) {
       for (const tx of s.txs) {
         const variant = variantForTx(s.ta, tx)
-        if (variant) items.push({ tx, ta: s.ta, variant })
+        if (variant) entries.push({ time: effectiveTime(tx), tx: { tx, ta: s.ta, variant } })
       }
     }
-    items.sort((a, b) => effectiveTime(b.tx) - effectiveTime(a.tx))
+    for (const s of swaps) {
+      if (!swapIsActive(s)) entries.push({ time: swapTime(s), swap: s })
+    }
+    entries.sort((a, b) => b.time - a.time)
     const q = query.trim().toLowerCase()
     // A transaction-ID search overrides the type pills and the watermark:
     // the searcher wants that transaction, whatever its type or position.
-    if (q !== '') return items.filter(item => item.tx.id.toLowerCase().includes(q))
+    if (q !== '') {
+      return entries.filter(e => e.tx ? e.tx.tx.id.toLowerCase().includes(q) : swapMatchesQuery(e.swap as IntentsSwap, q))
+    }
     const wm = watermark()
-    return items.filter(item => {
-      if (item.tx.timestamp !== 0 && item.tx.timestamp < wm) return false
-      return filter === 'all' || filterTypes[filter].has(item.tx.type)
+    return entries.filter(e => {
+      if (e.swap) {
+        if (swapTime(e.swap) < wm) return false
+        return filter === 'all' || filter === 'swapped'
+      }
+      const tx = (e.tx as TxRowItem).tx
+      if (tx.timestamp !== 0 && tx.timestamp < wm) return false
+      return filter === 'all' || filterTypes[filter].has(tx.type)
     })
   }
 
@@ -228,14 +277,19 @@ export default function Activity () {
   const pageItems = filtered.slice(curPage * PAGE_ROWS, (curPage + 1) * PAGE_ROWS)
   const hasNext = filtered.length > (curPage + 1) * PAGE_ROWS || anyMore()
 
-  const buckets = new Map<Section, TxRowItem[]>()
+  const buckets = new Map<Section, FeedEntry[]>()
   const bounds = sectionBounds()
-  for (const item of pageItems) {
-    const key = sectionFor(item.tx, bounds)
+  for (const entry of pageItems) {
+    const key = sectionFor(entry.time, bounds)
     const list = buckets.get(key)
-    if (list) list.push(item)
-    else buckets.set(key, [item])
+    if (list) list.push(entry)
+    else buckets.set(key, [entry])
   }
+
+  // Active swaps pin above the date-bucketed feed whenever their pill is
+  // selected; a txid search hides them like everything else it misses.
+  const showActive = query.trim() === '' && (filter === 'all' || filter === 'swapped')
+  const activeSwaps = showActive ? swaps.filter(swapIsActive) : []
 
   return (
     <div className="fill-abs overflow-y-auto">
@@ -266,10 +320,17 @@ export default function Activity () {
 
         {loading && <div className="flex-center py-5"><Spinner size={24} /></div>}
 
-        {!loading && filtered.length === 0 && (
+        {!loading && filtered.length === 0 && activeSwaps.length === 0 && (
           <div className="text-center grey py-5">
             <span className="ico-bell fs28 d-block mb-3" />
             {totalItems === 0 ? t('No transactions yet.') : t('No transactions found.')}
+          </div>
+        )}
+
+        {!loading && activeSwaps.length > 0 && (
+          <div>
+            <div className="section-label fs11 grey demi pt-3 pb-2">{t('In progress')}</div>
+            {activeSwaps.map(s => <SwapRow key={s.depositAddress} swap={s} />)}
           </div>
         )}
 
@@ -279,7 +340,9 @@ export default function Activity () {
           return (
             <div key={key}>
               <div className="section-label fs11 grey demi pt-3 pb-2">{t(label)}</div>
-              {list.map(item => <TxRow key={`${item.variant.assetID}:${item.tx.id}`} item={item} />)}
+              {list.map(entry => entry.tx
+                ? <TxRow key={`${entry.tx.variant.assetID}:${entry.tx.tx.id}`} item={entry.tx} />
+                : <SwapRow key={(entry.swap as IntentsSwap).depositAddress} swap={entry.swap as IntentsSwap} />)}
             </div>
           )
         })}

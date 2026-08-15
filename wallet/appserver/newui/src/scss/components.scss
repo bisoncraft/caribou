@@ -1125,160 +1125,193 @@ body.sidebar-collapsed .sidebar-label {
   background-color: var(--body-bg);
   box-sizing: border-box;
 }
+// -----------------------------------------------------------------------
 // Swap dialog.
 
-// The swap modal is wider than the standard form-width-300 to accommodate
-// both the swap form and the history list.
+// The dialog is wider than the standard forms (the desktop floor is
+// 1024px), and its outer radius exceeds the cards' 12px so the nesting
+// reads outward-in.
 form.modal.swap-modal {
-  width: 440px;
+  width: 460px;
+  border-radius: 16px;
 }
 
-// Asset picker row: a select element with a coin logo beside it.
-.swap-asset-pick {
-  select {
-    flex: 1 1 auto;
-    padding: 0.375rem 0.75rem;
-    background: transparent;
-    border: none;
-    color: var(--text-color);
-    font-size: 16px;
-    cursor: pointer;
-
-    &:focus-visible { outline: none; }
-  }
-}
-
-// Persistent one-line custody notice.
-.swap-custody-notice {
-  border: 1px solid color-mix(in srgb, var(--accent-syncing) 35%, transparent);
-  border-radius: var(--border-radius);
-  padding: 6px 10px;
-  background-color: color-mix(in srgb, var(--accent-syncing) 8%, transparent);
-}
-
-// Small "ⓘ" button that opens the trust/custody popover.
-.swap-info-btn {
-  padding: 0 2px;
-  color: var(--accent-blue-text);
-  cursor: pointer;
-  flex-shrink: 0;
-
-  &:hover { color: var(--accent-blue-hover); }
-}
-
-.swap-info-close {
-  background: transparent;
+// Slippage-settings gear in the dialog header.
+button.swap-gear {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.25rem;
   border: none;
   color: var(--text-grey);
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
 
-  &:hover { color: var(--text-color); }
+  &:hover {
+    color: var(--text-color);
+    background-color: var(--btn-select-or-hover-bg);
+  }
 }
 
-// Popover card below the custody notice.
-.swap-trust-popover {
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
+// Sell/Buy amount cards. The transparent border reserves the focus ring's
+// space so focusing never resizes the card.
+.swap-card {
   background-color: var(--form-input-bg);
-  padding: 10px 12px;
-}
+  border-radius: 12px;
+  border: 1px solid transparent;
+  transition: border-color 0.15s;
 
-// First-use custody disclosure modal overlay (sits inside the standard
-// .modals scrim so we just need the inner card layout).
-.swap-custody-modal-scrim {
-  position: fixed;
-  inset: 0;
-  background-color: var(--scrim-bg);
-  z-index: 200;
-}
-
-.swap-custody-modal {
-  background-color: var(--body-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
-  max-width: 360px;
-  width: 100%;
-}
-
-.swap-custody-modal-body {
-  padding: 1rem;
-  max-height: 50vh;
-  overflow-y: auto;
-}
-
-.swap-custody-list {
-  margin: 0;
-  padding-left: 1.25rem;
-  color: var(--text-grey);
-
-  li {
-    margin-bottom: 0.6rem;
-    line-height: 1.5;
-
-    &:last-child { margin-bottom: 0; }
+  &:focus-within {
+    border-color: color-mix(in srgb, var(--accent-border) 55%, transparent);
   }
 }
 
-// Swap history section below the form.
-.swap-history {
-  border-top: 1px solid var(--border-color);
-  max-height: 360px;
-  overflow-y: auto;
+// Placeholder zeros render in the sans face: the mono's slashed zero reads
+// as the empty-set symbol at display size. Typed values stay mono.
+input.swap-amt-input::placeholder,
+.swap-amt-placeholder {
+  font-family: var(--sans-serif);
 }
 
-.swap-history-header {
-  letter-spacing: 0.08em;
-  border-bottom: 1px solid var(--border-color);
+// USD entry on a card's value line: a bare inline input continuing the
+// grey "$" prefix beside it.
+input.swap-usd-input {
+  padding: 0;
+  min-width: 0;
+  background-color: transparent;
+  color: inherit;
+  font-size: inherit;
+
+  &:focus { border: none; }
+
+  &::placeholder { color: var(--text-grey); }
 }
 
-// Individual swap history row.
-.swap-history-item {
+// Floating slippage panel anchored under the header's gear.
+.swap-slip-pop {
+  position: absolute;
+  top: 2.6rem;
+  right: 0.75rem;
+  z-index: 2;
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--border-color);
-  transition: background-color 0.12s;
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
 
-  &:last-child { border-bottom: none; }
+// The card's left (value) column. min-width lets the amount field shrink
+// and ellipsize instead of pushing the asset column out of the card.
+.swap-card-values {
+  min-width: 0;
+}
 
-  &:hover { background-color: color-mix(in srgb, var(--accent-blue) 6%, transparent); }
+// Balance line under the asset chip. Without nowrap it would fold at the
+// chip's width, the right column's natural size.
+.swap-balance {
+  white-space: nowrap;
+}
 
-  &.swap-history-attention {
-    border-left: 3px solid var(--accent-syncing);
+// Big borderless amount field (sell) and its computed twin (buy). The
+// element selector matches base.scss's input[type=text] specificity so the
+// transparent background and focus override actually apply.
+input.swap-amt-input,
+.swap-card .swap-amt-input {
+  padding: 0;
+  min-width: 0;
+  background-color: transparent;
+  font-size: 28px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:focus { border: none; }
+}
+
+// Asset selector chip on each card.
+button.swap-chip {
+  padding: 0.375rem 0.625rem;
+  border-radius: 24px;
+  border: 1px solid var(--border-color);
+  background-color: var(--surface-raised);
+  flex-shrink: 0;
+
+  &:hover { background-color: var(--btn-select-or-hover-bg); }
+}
+
+// Direction-flip control, floating on the seam between the two cards.
+// The zero-height anchor centers it on the seam without consuming layout;
+// the thick body-bg border notches it out of both cards (and covers the
+// card borders behind it, so nothing doubles).
+.swap-flip-anchor {
+  height: 0;
+  position: relative;
+  z-index: 2;
+}
+
+button.swap-flip {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 14px;
+  background-color: var(--surface-raised);
+  border: 4px solid var(--body-bg);
+
+  // Opaque hover: the shared hover token is translucent, which would let
+  // the cards underneath show through the floating button.
+  &:hover {
+    background-color: color-mix(in srgb, var(--text-grey) 20%, var(--surface-raised));
   }
 }
 
-// Status color classes.
-.swap-status-success  { color: var(--accent-syncing); }
-.swap-status-refunded { color: var(--accent-blue-text); }
-.swap-status-failed   { color: var(--text-error); }
-.swap-status-expired  { color: var(--text-grey); }
-.swap-status-active   { color: var(--accent-syncing); }
+// Primary action. Disabled renders as a muted surface so the accent fill
+// itself signals "ready" — a green button that cannot be clicked reads as
+// broken rather than waiting.
+button.swap-cta {
+  padding: 0.75rem;
+  font-size: 18px;
+  border-radius: 12px;
 
-// "recovered" badge on reconstructed swaps.
-.swap-recovered-badge {
-  border: 1px solid color-mix(in srgb, var(--accent-blue-border) 50%, transparent);
-  border-radius: 3px;
-  padding: 1px 5px;
-  color: var(--accent-blue-text);
-  letter-spacing: 0.04em;
+  &:disabled {
+    background-color: var(--form-input-bg);
+    border-color: transparent;
+    color: var(--text-grey);
+    opacity: 1;
+  }
 }
 
-// Deposit/tx address display — wraps long hex strings.
-.swap-addr-wrap {
-  word-break: break-all;
-  line-height: 1.4;
+// "Max" affordance in the sell card's balance line.
+.swap-max-link {
+  color: var(--accent);
+
+  &:hover { text-decoration: underline; }
 }
 
-// Explorer / status links.
-.swap-link {
-  color: var(--accent-blue-text);
-  text-decoration: none;
-
-  &:hover { color: var(--accent-blue-hover); text-decoration: underline; }
+// Asset picker list.
+.swap-pick-list {
+  max-height: 320px;
 }
 
-.swap-escalation-links {
-  flex-wrap: wrap;
-  gap: 0.5rem;
+// Assets without a ready wallet: visible but not selectable.
+.swap-pick-inactive {
+  opacity: 0.55;
+  cursor: default;
+}
+
+// Paired origin→destination logos on an Activity swap row: the destination
+// logo overlaps the origin's lower-right corner.
+.swap-row-logos {
+  display: inline-block;
+
+  img:first-child {
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  .swap-row-logo-dest {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+  }
 }
