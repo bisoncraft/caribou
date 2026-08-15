@@ -125,7 +125,9 @@ func runScript(dir, name string, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, string(out))
 	}
-	return strings.TrimSpace(string(out)), nil
+	// Some harness scripts (geth's sendtoaddress among them) print the raw
+	// JSON-RPC result, so a returned txid arrives wrapped in quotes.
+	return strings.Trim(strings.TrimSpace(string(out)), `"`), nil
 }
 
 // rpcCall performs a JSON-RPC 2.0 request and decodes the result member

@@ -11,8 +11,9 @@
 //
 // Quote responses are signed with a deterministic dev keypair whose public
 // half is pinned in the wallet as intents.SimnetSigningKey. Swap prices
-// come from a running caribou instance's own unauthenticated GET /api/user
-// fiat rates when available, with a static fallback table otherwise.
+// come from a running caribou instance's own unauthenticated GET
+// /api/fiatrates endpoint when available, with a static fallback table
+// otherwise.
 //
 // A /test/ control API can force per-swap outcomes (refund, failure,
 // stall) to exercise the corresponding UI states deterministically.

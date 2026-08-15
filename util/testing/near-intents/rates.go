@@ -56,6 +56,10 @@ func (s *Server) pollRates(ctx context.Context) {
 		s.priceMtx.Unlock()
 		if updated > 0 {
 			s.log.Printf("updated %d prices from %s", updated, s.cfg.RatesURL)
+		} else {
+			// A 200 response with no usable rates would otherwise leave the
+			// fallback table serving silently forever.
+			s.log.Printf("fiat rate fetch from %s returned no usable rates (using previous prices)", s.cfg.RatesURL)
 		}
 	}
 
