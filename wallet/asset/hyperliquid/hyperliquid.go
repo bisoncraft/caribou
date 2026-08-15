@@ -1035,7 +1035,7 @@ func (w *HyperWallet) setLastScannedMS(ms int64) error {
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, uint64(ms))
-	return w.metaTable.Set([]byte(lastScannedMSKey), b, true)
+	return w.metaTable.Set([]byte(lastScannedMSKey), b, txdb.WithReplace())
 }
 
 func (w *HyperWallet) highestPendingNonce() (uint64, error) {
@@ -1071,7 +1071,7 @@ func (w *HyperWallet) getTxByPendingID(pendingID string) (*txdb.WalletTransactio
 	if err := w.pendingIDIndex.Iterate([]byte(pendingID), func(wt *txdb.WalletTransaction) error {
 		found = wt
 		return txdb.ErrEndIteration
-	}, false, nil); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	return found, nil

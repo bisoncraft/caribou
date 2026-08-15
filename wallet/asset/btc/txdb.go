@@ -95,7 +95,7 @@ func (db *BadgerTxDB) RemoveTx(txID string) error {
 func (db *BadgerTxDB) SetLastReceiveTxQuery(block uint64) error {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, block)
-	return db.meta.Set([]byte(lastQueryKey), b, true)
+	return db.meta.Set([]byte(lastQueryKey), b, txdb.WithReplace())
 }
 
 // GetLastReceiveTxQuery retrieves the last receive-scan query height, returning

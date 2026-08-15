@@ -182,7 +182,7 @@ func (d *kvDB) StoreIntentsSwap(swap *IntentsSwap) error {
 		return errors.New("no deposit address")
 	}
 	swap.UpdatedAt = time.Now()
-	return d.intentsSwaps.Set([]byte(swap.DepositAddress), swap, true)
+	return d.intentsSwaps.Set([]byte(swap.DepositAddress), swap, kvstore.WithReplace())
 }
 
 // IntentsSwap fetches the swap record stored under the deposit address. It
@@ -200,6 +200,10 @@ func (d *kvDB) IntentsSwap(depositAddress string) (*IntentsSwap, error) {
 
 // readIntentsIndex collects the records yielded by an index iteration.
 func readIntentsIndex(idx kvstore.StoreIndex, reverse bool) ([]*IntentsSwap, error) {
+	var opts []kvstore.IterationOption
+	if reverse {
+		opts = append(opts, kvstore.WithReverse())
+	}
 	var swaps []*IntentsSwap
 	err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.V(func(v []byte) error {
@@ -210,7 +214,7 @@ func readIntentsIndex(idx kvstore.StoreIndex, reverse bool) ([]*IntentsSwap, err
 			swaps = append(swaps, swap)
 			return nil
 		})
-	}, reverse, nil)
+	}, opts...)
 	if err != nil {
 		return nil, err
 	}

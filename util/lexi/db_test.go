@@ -84,7 +84,7 @@ func TestIndex(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("T")
+	tbl, err := db.table("T")
 	if err != nil {
 		t.Fatalf("Error creating table: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestIndex(t *testing.T) {
 
 	// Iterate forwards.
 	var i int
-	idx.Iterate(nil, func(it *Iter) error {
+	idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		v := vs[i]
 		it.V(func(vB []byte) error {
 			if !bytes.Equal(vB, v.v) {
@@ -139,7 +139,7 @@ func TestIndex(t *testing.T) {
 
 	// Iterate backwards
 	i = nVs
-	idx.Iterate(nil, func(it *Iter) error {
+	idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		i--
 		v := vs[i]
 		return it.V(func(vB []byte) error {
@@ -148,13 +148,13 @@ func TestIndex(t *testing.T) {
 			}
 			return nil
 		})
-	}, WithReverse())
+	}, kvstore.WithReverse())
 	if i != 0 {
 		t.Fatalf("Expected to iterate back to zero but only got to %d", i)
 	}
 
 	// Iterate forwards with prefix.
-	keyIdx.Iterate([]byte{0}, func(it *Iter) error {
+	keyIdx.Iterate([]byte{0}, func(it kvstore.StoreIter) error {
 		v := vs[i]
 		it.V(func(vB []byte) error {
 			if !bytes.Equal(vB, v.v) {
@@ -170,7 +170,7 @@ func TestIndex(t *testing.T) {
 	}
 
 	// Iterate backwards with prefix.
-	keyIdx.Iterate([]byte{0}, func(it *Iter) error {
+	keyIdx.Iterate([]byte{0}, func(it kvstore.StoreIter) error {
 		i--
 		v := vs[i]
 		return it.V(func(vB []byte) error {
@@ -179,27 +179,27 @@ func TestIndex(t *testing.T) {
 			}
 			return nil
 		})
-	}, WithReverse())
+	}, kvstore.WithReverse())
 	if i != 0 {
 		t.Fatalf("Expected to iterate back to zero but only got to %d", i)
 	}
 
 	// Iterate forward and delete the first half.
 	i = 0
-	if err := idx.Iterate(nil, func(it *Iter) error {
+	if err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		if i < 50 {
 			i++
 			return it.Delete()
 		}
 		return ErrEndIteration
-	}, WithUpdate()); err != nil {
+	}, kvstore.WithUpdate()); err != nil {
 		t.Fatalf("Error iterating forward to delete entries: %v", err)
 	}
 	if i != 50 {
 		t.Fatalf("Expected to iterate forward to 50, but only got to %d", i)
 	}
 
-	idx.Iterate(nil, func(it *Iter) error {
+	idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.V(func(vB []byte) error {
 			if !bytes.Equal(vB, vs[50].v) {
 				t.Fatal("Wrong first iteration item after deletion")
@@ -210,7 +210,7 @@ func TestIndex(t *testing.T) {
 
 	// Seek a specific item.
 	i = 75
-	idx.Iterate(nil, func(it *Iter) error {
+	idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		if i == 75 {
 			i--
 			return it.V(func(vB []byte) error {
@@ -224,14 +224,14 @@ func TestIndex(t *testing.T) {
 		}
 		t.Fatal("reached an unexpected value")
 		return nil
-	}, WithSeek(vs[75].idx), WithReverse())
+	}, kvstore.WithSeek(vs[75].idx), kvstore.WithReverse())
 	if i != 74 {
 		t.Fatal("never reached 74")
 	}
 
 	// Make sure we can iterate the table directly
 	i = 0
-	if err := tbl.Iterate(nil, func(it *Iter) error {
+	if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		i++
 		return nil
 	}); err != nil {
@@ -340,23 +340,23 @@ func TestEmptyValue(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("empties")
+	tbl, err := db.table("empties")
 	if err != nil {
 		t.Fatalf("Table error: %v", err)
 	}
 	k := []byte("k")
-	if err := tbl.Set(k, []byte{}, WithReplace()); err != nil {
+	if err := tbl.Set(k, []byte{}, kvstore.WithReplace()); err != nil {
 		t.Fatalf("Set error: %v", err)
 	}
-	b, err := tbl.GetRaw(k)
+	b, err := tbl.Get(k)
 	if err != nil {
-		t.Fatalf("GetRaw error: %v", err)
+		t.Fatalf("Get error: %v", err)
 	}
 	if len(b) != 0 {
 		t.Fatalf("expected empty value, got %d bytes", len(b))
 	}
 	var n int
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		n++
 		return it.V(func(v []byte) error {
 			if len(v) != 0 {
@@ -377,7 +377,7 @@ func TestUniqueIndex(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("UniqueTest")
+	tbl, err := db.table("UniqueTest")
 	if err != nil {
 		t.Fatalf("Error creating table: %v", err)
 	}
@@ -411,10 +411,10 @@ func TestUniqueIndex(t *testing.T) {
 		t.Fatalf("Error setting first value: %v", err)
 	}
 
-	// Second insert with same index key should fail without WithReplace()
+	// Second insert with same index key should fail without kvstore.WithReplace()
 	err = tbl.Set(key2, val2)
 	if err == nil {
-		t.Fatal("Expected error when inserting duplicate index value without WithReplace(), but got none")
+		t.Fatal("Expected error when inserting duplicate index value without kvstore.WithReplace(), but got none")
 	}
 	if !strings.Contains(err.Error(), "index uniqueness violation") {
 		t.Fatalf("Expected unique index error, got: %v", err)
@@ -423,7 +423,7 @@ func TestUniqueIndex(t *testing.T) {
 	// Verify the first value is still there
 	var retrievedVal []byte
 	numEntries := 0
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		numEntries++
 		err := it.V(func(v []byte) error {
 			retrievedVal = v
@@ -444,15 +444,15 @@ func TestUniqueIndex(t *testing.T) {
 		t.Fatalf("Expected 1 entry in table, got %d", numEntries)
 	}
 
-	// Second insert with same index key should succeed with WithReplace()
-	if err := tbl.Set(key2, val2, WithReplace()); err != nil {
-		t.Fatalf("Error setting second value with WithReplace(): %v", err)
+	// Second insert with same index key should succeed with kvstore.WithReplace()
+	if err := tbl.Set(key2, val2, kvstore.WithReplace()); err != nil {
+		t.Fatalf("Error setting second value with kvstore.WithReplace(): %v", err)
 	}
 
 	// Verify the replacement worked by checking the table content
 	numEntries = 0
 	var lastVal []byte
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		numEntries++
 		return it.V(func(v []byte) error {
 			lastVal = v
@@ -471,7 +471,7 @@ func TestUniqueIndex(t *testing.T) {
 
 	// Verify we can iterate through the unique index and get the correct result
 	numEntries = 0
-	uniqueIdx.Iterate(nil, func(it *Iter) error {
+	uniqueIdx.Iterate(nil, func(it kvstore.StoreIter) error {
 		numEntries++
 		return it.V(func(v []byte) error {
 			if !bytes.Equal(v, val2.v) {
@@ -491,7 +491,7 @@ func TestNotIndexed(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("NotIndexedTest")
+	tbl, err := db.table("NotIndexedTest")
 	if err != nil {
 		t.Fatalf("Error creating table: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestNotIndexed(t *testing.T) {
 	count := 0
 	expectedValues := []byte{0, 2, 4, 6, 8}
 	foundValues := make([]byte, 0, 5)
-	err = idx.Iterate(nil, func(it *Iter) error {
+	err = idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		count++
 		return it.V(func(vB []byte) error {
 			if len(vB) > 0 {
@@ -550,7 +550,7 @@ func TestNotIndexed(t *testing.T) {
 
 	// Ensure the table has all the values, even those that were not indexed.
 	tableCount := 0
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		tableCount++
 		return nil
 	})
@@ -575,7 +575,7 @@ func TestNotIndexed(t *testing.T) {
 	count = 0
 	expectedValues = []byte{0, 4, 6, 8} // 2 was removed
 	foundValues = make([]byte, 0, 4)
-	err = idx.Iterate(nil, func(it *Iter) error {
+	err = idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		count++
 		return it.V(func(vB []byte) error {
 			if len(vB) > 0 {
@@ -600,7 +600,7 @@ func TestNotIndexed(t *testing.T) {
 
 	// Recheck the table after deletion
 	tableCount = 0
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		tableCount++
 		return nil
 	})
@@ -618,7 +618,7 @@ func TestTransactionOptions(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("TxnTest")
+	tbl, err := db.table("TxnTest")
 	if err != nil {
 		t.Fatalf("Error creating table: %v", err)
 	}
@@ -637,8 +637,7 @@ func TestTransactionOptions(t *testing.T) {
 		}
 
 		// Verify we can read it within the transaction
-		var retrievedVal tValue
-		if err := tbl.Get(key, &retrievedVal, WithGetTxn(txn)); err != nil {
+		if _, err := tbl.Get(key, WithGetTxn(txn)); err != nil {
 			return fmt.Errorf("unexpected error reading within txn: %w", err)
 		}
 
@@ -650,8 +649,7 @@ func TestTransactionOptions(t *testing.T) {
 	}
 
 	// Verify the value was not persisted
-	var retrievedVal tValue
-	err = tbl.Get(key, &retrievedVal)
+	_, err = tbl.Get(key)
 	if err == nil {
 		t.Fatalf("Expected error when getting rolled back value, but got none")
 	}
@@ -669,7 +667,7 @@ func TestSetBatchIgnoresCallerTxn(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("SetBatchTxnTest")
+	tbl, err := db.table("SetBatchTxnTest")
 	if err != nil {
 		t.Fatalf("Error creating table: %v", err)
 	}
@@ -692,8 +690,7 @@ func TestSetBatchIgnoresCallerTxn(t *testing.T) {
 	// Every entry must be readable from committed state, proving it landed in
 	// SetBatch's own committed transaction rather than the stray one.
 	for _, p := range pairs {
-		var got tValue
-		if err := tbl.Get(p.K, &got); err != nil {
+		if _, err := tbl.Get(p.K); err != nil {
 			t.Fatalf("entry %q missing after SetBatch (caller WithTxn leaked): %v", p.K, err)
 		}
 	}
@@ -707,7 +704,7 @@ func TestTableDanglingKeyMapEntry(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("dangling")
+	tbl, err := db.table("dangling")
 	if err != nil {
 		t.Fatalf("error creating table: %v", err)
 	}
@@ -724,7 +721,7 @@ func TestTableDanglingKeyMapEntry(t *testing.T) {
 		t.Fatalf("error injecting key map entry: %v", err)
 	}
 
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.V(func(_ []byte) error { return nil })
 	})
 	if err == nil {
@@ -743,7 +740,7 @@ func TestIndexDanglingIDMapEntry(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("danglingID")
+	tbl, err := db.table("danglingID")
 	if err != nil {
 		t.Fatalf("error creating table: %v", err)
 	}
@@ -768,7 +765,7 @@ func TestIndexDanglingIDMapEntry(t *testing.T) {
 		t.Fatalf("error deleting id map entry: %v", err)
 	}
 
-	err = idx.Iterate(nil, func(it *Iter) error {
+	err = idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		_, err := it.K()
 		return err
 	})

@@ -37,7 +37,7 @@ var (
 
 // Table is a namespaced section of the DB. A Table can have indexes, such that
 // data inserted into the Table generates index entries for use in lookup and
-// ordered iteration. It mirrors lexi.Table.
+// ordered iteration. It mirrors lexi.Table and implements kvstore.StoreTable.
 type Table struct {
 	db      *DB
 	name    []byte
@@ -45,7 +45,16 @@ type Table struct {
 }
 
 // Table constructs (or opens) a Table in the DB.
-func (db *DB) Table(name string) (*Table, error) {
+func (db *DB) Table(name string) (kvstore.StoreTable, error) {
+	t, err := db.table(name)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// table is Table returning the concrete type, for package-internal use.
+func (db *DB) table(name string) (*Table, error) {
 	if name == "" {
 		return nil, errors.New("glossi: empty table name")
 	}
@@ -68,21 +77,33 @@ func (db *DB) Table(name string) (*Table, error) {
 	return t, nil
 }
 
-type setOpts struct {
-	replace bool
+// WithTxn specifies a bbolt read-write transaction to run Set inside. SetBatch
+// always runs in its own transaction and ignores this option.
+func WithTxn(tx *bbolt.Tx) kvstore.SetOption {
+	return func(o *kvstore.SetOpts) { o.Txn = tx }
 }
 
-// SetOption is a knob controlling how items are inserted with Set.
-type SetOption func(*setOpts)
+// WithGetTxn specifies a bbolt transaction to run Get inside.
+func WithGetTxn(tx *bbolt.Tx) kvstore.GetOption {
+	return func(o *kvstore.GetOpts) { o.Txn = tx }
+}
 
-// WithReplace allows replacing a pre-existing value when calling Set.
-func WithReplace() SetOption {
-	return func(o *setOpts) { o.replace = true }
+// resolveTxn asserts an option-supplied transaction handle. A non-nil handle
+// of any other engine's transaction type is a caller error, not a nil.
+func resolveTxn(i any) (*bbolt.Tx, error) {
+	if i == nil {
+		return nil, nil
+	}
+	tx, ok := i.(*bbolt.Tx)
+	if !ok {
+		return nil, fmt.Errorf("glossi: transaction option holds %T, not *bbolt.Tx", i)
+	}
+	return tx, nil
 }
 
 // Set inserts a value for the key and creates index entries. Zero-length keys
 // are not allowed.
-func (t *Table) Set(k, v KV, opts ...SetOption) error {
+func (t *Table) Set(k, v KV, opts ...kvstore.SetOption) error {
 	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling key: %w", err)
@@ -94,12 +115,19 @@ func (t *Table) Set(k, v KV, opts ...SetOption) error {
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling value: %w", err)
 	}
-	var o setOpts
+	var o kvstore.SetOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
+	tx, err := resolveTxn(o.Txn)
+	if err != nil {
+		return err
+	}
+	if tx != nil {
+		return t.setInTx(tx, k, v, kB, vB, o.Replace)
+	}
 	return t.db.Update(func(tx *bbolt.Tx) error {
-		return t.setInTx(tx, k, v, kB, vB, o.replace)
+		return t.setInTx(tx, k, v, kB, vB, o.Replace)
 	})
 }
 
@@ -107,9 +135,10 @@ func (t *Table) Set(k, v KV, opts ...SetOption) error {
 // otherwise be one bbolt.Update (and one fsync) per Set into one. This is the
 // path bulk inserts should use on mobile - an initial history sync or a
 // migration that stores many transactions at once - where per-call fsync is
-// noticeably slow. If replace is false and any key already exists, the whole
-// batch is rolled back.
-func (t *Table) SetBatch(entries []kvstore.BatchEntry, opts ...SetOption) error {
+// noticeably slow. Without WithReplace, any existing key rolls back the whole
+// batch. The batch always runs in its own transaction; a caller-supplied
+// WithTxn is ignored, matching lexi.
+func (t *Table) SetBatch(entries []kvstore.BatchEntry, opts ...kvstore.SetOption) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -129,13 +158,13 @@ func (t *Table) SetBatch(entries []kvstore.BatchEntry, opts ...SetOption) error 
 		}
 		parsed[i] = kvBytes{kB: kB, vB: vB}
 	}
-	var o setOpts
+	var o kvstore.SetOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 	return t.db.Update(func(tx *bbolt.Tx) error {
 		for i, e := range entries {
-			if err := t.setInTx(tx, e.K, e.V, parsed[i].kB, parsed[i].vB, o.replace); err != nil {
+			if err := t.setInTx(tx, e.K, e.V, parsed[i].kB, parsed[i].vB, o.Replace); err != nil {
 				return err
 			}
 		}
@@ -203,12 +232,20 @@ func (t *Table) setInTx(tx *bbolt.Tx, k, v KV, kB, vB []byte, replace bool) erro
 
 // Get retrieves a value from the Table. It returns ErrKeyNotFound if the key is
 // not present.
-func (t *Table) Get(k KV) (v []byte, err error) {
+func (t *Table) Get(k KV, options ...kvstore.GetOption) (v []byte, err error) {
 	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return nil, fmt.Errorf("glossi: error marshaling key: %w", err)
 	}
-	err = t.db.View(func(tx *bbolt.Tx) error {
+	var opts kvstore.GetOpts
+	for _, opt := range options {
+		opt(&opts)
+	}
+	tx, err := resolveTxn(opts.Txn)
+	if err != nil {
+		return nil, err
+	}
+	getTxFunc := func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(t.name).Bucket(dataBucketKey).Get(kB)
 		if raw == nil {
 			return ErrKeyNotFound
@@ -220,7 +257,12 @@ func (t *Table) Get(k KV) (v []byte, err error) {
 		// Copy out of the transaction's memory.
 		v = append([]byte(nil), val...)
 		return nil
-	})
+	}
+	if tx != nil {
+		err = getTxFunc(tx)
+	} else {
+		err = t.db.View(getTxFunc)
+	}
 	return
 }
 
@@ -256,17 +298,17 @@ func (t *Table) deleteInTx(tb *bbolt.Bucket, k []byte) error {
 // Iterate iterates the table's primary keys. If prefix is non-empty, only keys
 // with that prefix are visited. The key and value exposed via the Iter are only
 // valid for the duration of the callback.
-func (t *Table) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOption) error {
+func (t *Table) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...kvstore.IterationOption) error {
 	prefix, err := kvstore.ParseKV(prefixI)
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling prefix: %w", err)
 	}
-	var o iterOpts
+	var o kvstore.IterationOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 	run := t.db.View
-	if o.update {
+	if o.Update {
 		run = t.db.Update
 	}
 	return run(func(tx *bbolt.Tx) error {
@@ -274,7 +316,7 @@ func (t *Table) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOption
 		data := tb.Bucket(dataBucketKey)
 		index := tb.Bucket(indexBucketKey)
 		c := data.Cursor()
-		return walk(c, prefix, o.seek, o.reverse, func(key, val []byte) error {
+		return walk(c, prefix, o.Seek, o.Reverse, func(key, val []byte) error {
 			value, _, err := decodeDatum(val)
 			if err != nil {
 				return err

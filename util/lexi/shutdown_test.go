@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -45,7 +46,7 @@ func newConnectedTestDB(t *testing.T) (*DB, context.CancelFunc, *sync.WaitGroup)
 func TestUpdateAfterShutdown(t *testing.T) {
 	db, cancel, wg := newConnectedTestDB(t)
 
-	tbl, err := db.Table("t")
+	tbl, err := db.table("t")
 	if err != nil {
 		t.Fatalf("error creating table: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestUpdateAfterShutdown(t *testing.T) {
 func TestConcurrentUpdatesDrainOnShutdown(t *testing.T) {
 	db, cancel, wg := newConnectedTestDB(t)
 
-	tbl, err := db.Table("t")
+	tbl, err := db.table("t")
 	if err != nil {
 		t.Fatalf("error creating table: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestConcurrentUpdatesDrainOnShutdown(t *testing.T) {
 			defer writersWG.Done()
 			for j := 0; j < 20; j++ {
 				k := []byte{byte(i), byte(j)}
-				if err := tbl.Set(k, []byte("v"), WithReplace()); err != nil {
+				if err := tbl.Set(k, []byte("v"), kvstore.WithReplace()); err != nil {
 					errs <- err
 					return
 				}
@@ -125,7 +126,7 @@ func TestConcurrentUpdatesDrainOnShutdown(t *testing.T) {
 func TestNestedUpdateDuringShutdown(t *testing.T) {
 	db, cancel, wg := newConnectedTestDB(t)
 
-	tbl, err := db.Table("t")
+	tbl, err := db.table("t")
 	if err != nil {
 		t.Fatalf("error creating table: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestNestedUpdateDuringShutdown(t *testing.T) {
 		done <- db.Update(func(*badger.Txn) error {
 			close(inOuter)
 			<-release
-			return tbl.Set([]byte("k"), []byte("v"), WithReplace())
+			return tbl.Set([]byte("k"), []byte("v"), kvstore.WithReplace())
 		})
 	}()
 

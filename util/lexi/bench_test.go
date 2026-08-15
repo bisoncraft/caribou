@@ -10,6 +10,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -52,13 +53,13 @@ func BenchmarkTableScanValuesOnly(b *testing.B) {
 	for _, n := range []int{100, 1_000, 10_000} {
 		for _, valSize := range []int{128, 4096} {
 			db := newBenchDB(b)
-			tbl, err := db.Table("bench")
+			tbl, err := db.table("bench")
 			if err != nil {
 				b.Fatalf("Table: %v", err)
 			}
 			for i := 0; i < n; i++ {
 				k := []byte(fmt.Sprintf("key-%08d", i))
-				if err := tbl.Set(k, encode.RandomBytes(valSize), WithReplace()); err != nil {
+				if err := tbl.Set(k, encode.RandomBytes(valSize), kvstore.WithReplace()); err != nil {
 					b.Fatalf("Set: %v", err)
 				}
 			}
@@ -69,7 +70,7 @@ func BenchmarkTableScanValuesOnly(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
 					var total int
-					if err := tbl.Iterate(nil, func(it *Iter) error {
+					if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 						return it.V(func(v []byte) error {
 							total += len(v)
 							return nil

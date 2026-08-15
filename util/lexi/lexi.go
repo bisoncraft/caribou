@@ -16,10 +16,11 @@ import (
 	"github.com/dgraph-io/badger/v4"
 )
 
-// ErrKeyNotFound is an alias for badger.ErrKeyNotFound so that the caller
-// doesn't have to import badger to use the semantics. Either error will satisfy
-// errors.Is the same.
-var ErrKeyNotFound = badger.ErrKeyNotFound
+// ErrKeyNotFound is returned when a requested key is not in the database. It
+// is kvstore's sentinel, matching glossi, so consumers don't have to care
+// which engine is in use; badger.ErrKeyNotFound is translated to it at this
+// package's boundary (see convertError).
+const ErrKeyNotFound = kvstore.ErrKeyNotFound
 
 // ErrDBClosed is returned by Update once the context passed to Connect has been
 // canceled. It is an alias for badger.ErrDBClosed, which is what a write that
@@ -33,6 +34,15 @@ func convertError(err error) error {
 	}
 	return err
 }
+
+// The engine chooser (util/kvstore/engine) only compiles this engine's
+// conformance on desktop builds, so it is asserted here for every build.
+var (
+	_ kvstore.Store      = (*DB)(nil)
+	_ kvstore.StoreTable = (*Table)(nil)
+	_ kvstore.StoreIndex = (*Index)(nil)
+	_ kvstore.StoreIter  = (*Iter)(nil)
+)
 
 // DB is the Lexi DB. The Lexi DB wraps a badger key-value database and provides
 // the ability to add indexed data.
@@ -273,7 +283,7 @@ func (db *DB) keyID(txn *badger.Txn, tPrefix keyPrefix, kB []byte, readOnly bool
 		})
 		return
 	}
-	if !readOnly && errors.Is(err, ErrKeyNotFound) {
+	if !readOnly && errors.Is(err, badger.ErrKeyNotFound) {
 		if dbID, err = db.nextID(); err != nil {
 			return
 		}

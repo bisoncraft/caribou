@@ -602,7 +602,7 @@ func (w *TokenWallet) setLastScannedSignature(sig string) error {
 	if mt == nil || sig == "" {
 		return nil
 	}
-	return mt.Set(metaKey(w.assetID, lastScannedSigField), []byte(sig), true)
+	return mt.Set(metaKey(w.assetID, lastScannedSigField), []byte(sig), txdb.WithReplace())
 }
 
 // walletTransactionFromSPLRPC extracts a WalletTransaction from an SPL

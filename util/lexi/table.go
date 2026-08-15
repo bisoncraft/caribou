@@ -4,7 +4,6 @@
 package lexi
 
 import (
-	"encoding"
 	"errors"
 	"fmt"
 
@@ -14,18 +13,27 @@ import (
 
 // Table is a prefixed section of the k-v DB. A Table can have indexes, such
 // that data inserted into the Table will generates index entries for use in
-// lookup and iteration.
+// lookup and iteration. Table implements kvstore.StoreTable.
 type Table struct {
 	*DB
 	name                    string
 	prefix                  keyPrefix
 	indexes                 []*Index
-	defaultSetOptions       setOpts
-	defaultIterationOptions iteratorOpts
+	defaultSetOptions       kvstore.SetOpts
+	defaultIterationOptions kvstore.IterationOpts
 }
 
 // Table constructs a new table in the DB.
-func (db *DB) Table(name string) (*Table, error) {
+func (db *DB) Table(name string) (kvstore.StoreTable, error) {
+	t, err := db.table(name)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// table is Table returning the concrete type, for package-internal use.
+func (db *DB) table(name string) (*Table, error) {
 	p, err := db.prefixForName(name)
 	if err != nil {
 		return nil, err
@@ -37,31 +45,44 @@ func (db *DB) Table(name string) (*Table, error) {
 	}, nil
 }
 
-type getOpts struct {
-	txn *badger.Txn
+// WithGetTxn specifies a Badger transaction to run Get inside.
+func WithGetTxn(txn *badger.Txn) kvstore.GetOption {
+	return func(o *kvstore.GetOpts) { o.Txn = txn }
 }
 
-// GetOption is a knob to control how items are retrieved from the table with
-// Get.
-type GetOption func(opts *getOpts)
+// WithTxn specifies a Badger transaction to run Set inside. SetBatch always
+// runs in its own transaction and ignores this option.
+func WithTxn(txn *badger.Txn) kvstore.SetOption {
+	return func(o *kvstore.SetOpts) { o.Txn = txn }
+}
 
-// WithGetTxn allows specifying a transaction to use for Get operations.
-func WithGetTxn(txn *badger.Txn) GetOption {
-	return func(opts *getOpts) {
-		opts.txn = txn
+// resolveTxn asserts an option-supplied transaction handle. A non-nil handle
+// of any other engine's transaction type is a caller error, not a nil.
+func resolveTxn(i any) (*badger.Txn, error) {
+	if i == nil {
+		return nil, nil
 	}
+	txn, ok := i.(*badger.Txn)
+	if !ok {
+		return nil, fmt.Errorf("lexi: transaction option holds %T, not *badger.Txn", i)
+	}
+	return txn, nil
 }
 
-// GetRaw retrieves a value from the Table as raw bytes.
-func (t *Table) GetRaw(k KV, options ...GetOption) (b []byte, err error) {
+// Get retrieves a value from the Table as raw bytes.
+func (t *Table) Get(k KV, options ...kvstore.GetOption) (b []byte, err error) {
 	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling key: %w", err)
 	}
 
-	var opts getOpts
+	var opts kvstore.GetOpts
 	for i := range options {
 		options[i](&opts)
+	}
+	txn, err := resolveTxn(opts.Txn)
+	if err != nil {
+		return nil, err
 	}
 
 	getTxnFunc := func(txn *badger.Txn) error {
@@ -77,32 +98,13 @@ func (t *Table) GetRaw(k KV, options ...GetOption) (b []byte, err error) {
 		return nil
 	}
 
-	if opts.txn != nil {
-		err = getTxnFunc(opts.txn)
+	if txn != nil {
+		err = getTxnFunc(txn)
 	} else {
 		err = t.View(getTxnFunc)
 	}
 	return
 }
-
-// Get retrieves a value from the Table.
-func (t *Table) Get(k KV, thing encoding.BinaryUnmarshaler, options ...GetOption) error {
-	b, err := t.GetRaw(k, options...)
-	if err != nil {
-		return err
-	}
-	return thing.UnmarshalBinary(b)
-}
-
-// func (t *Table) GetDBID(dbID DBID, v encoding.BinaryUnmarshaler) error {
-// 	return t.View(func(txn *badger.Txn) error {
-// 		d, err := t.get(txn, dbID)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		return v.UnmarshalBinary(d.v)
-// 	})
-// }
 
 func (t *Table) get(txn *badger.Txn, dbID DBID) (d *datum, err error) {
 	item, err := txn.Get(PrefixedKey(t.prefix, dbID[:]))
@@ -119,38 +121,25 @@ func (t *Table) get(txn *badger.Txn, dbID DBID) (d *datum, err error) {
 	return
 }
 
-type setOpts struct {
-	replace bool
-	txn     *badger.Txn
-}
-
-// SetOptions is an knob to control how items are inserted into the table with
-// Set.
-type SetOption func(opts *setOpts)
-
-// WithReplace allows replacing pre-existing values when calling Set.
-func WithReplace() SetOption {
-	return func(opts *setOpts) {
-		opts.replace = true
-	}
-}
-
-// WithTxn allows specifying a transaction to use for Set operations.
-func WithTxn(txn *badger.Txn) SetOption {
-	return func(opts *setOpts) {
-		opts.txn = txn
-	}
-}
-
 // UseDefaultSetOptions sets default options for Set.
-func (t *Table) UseDefaultSetOptions(setOpts ...SetOption) {
+func (t *Table) UseDefaultSetOptions(setOpts ...kvstore.SetOption) {
 	for i := range setOpts {
 		setOpts[i](&t.defaultSetOptions)
 	}
 }
 
 // Set inserts a new value for the key, and creates index entries.
-func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
+func (t *Table) Set(k, v KV, setOpts ...kvstore.SetOption) error {
+	opts := t.defaultSetOptions
+	for i := range setOpts {
+		setOpts[i](&opts)
+	}
+	return t.set(k, v, opts)
+}
+
+// set performs one Set with resolved options. Set and SetBatch both funnel
+// through it.
+func (t *Table) set(k, v KV, opts kvstore.SetOpts) error {
 	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return fmt.Errorf("error marshaling key: %w", err)
@@ -164,9 +153,9 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling value: %w", err)
 	}
-	opts := t.defaultSetOptions
-	for i := range setOpts {
-		setOpts[i](&opts)
+	txn, err := resolveTxn(opts.Txn)
+	if err != nil {
+		return err
 	}
 	updateFunc := func(txn *badger.Txn) error {
 		// Built per attempt: Update retries this closure on badger.ErrConflict,
@@ -186,7 +175,7 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 				return fmt.Errorf("error looking for existing entry: %w", err)
 			}
 			// We found an old entry
-			if !opts.replace {
+			if !opts.Replace {
 				return errors.New("attempted to replace an entry without specifying WithReplace")
 			}
 			// Delete any old indexes
@@ -206,7 +195,7 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 				switch {
 				case errors.As(err, &indexConflictError):
 					// If the index is unique and we're not replacing, return an error
-					if !opts.replace {
+					if !opts.Replace {
 						return fmt.Errorf("index uniqueness violation on %q", indexConflictError.indexName)
 					}
 
@@ -238,8 +227,8 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 		return txn.Set(PrefixedKey(t.prefix, dbID[:]), dB)
 	}
 
-	if opts.txn != nil {
-		return updateFunc(opts.txn)
+	if txn != nil {
+		return updateFunc(txn)
 	}
 	return t.Update(updateFunc)
 }
@@ -248,18 +237,20 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 // already absorbs bulk writes through its LSM tree, so unlike glossi/bbolt this
 // is primarily for write atomicity and API parity. If any Set fails (including
 // a unique-index conflict without WithReplace), the whole batch is rolled back.
-// The setOpts apply to every pair.
-func (t *Table) SetBatch(pairs []kvstore.BatchEntry, setOpts ...SetOption) error {
+// The setOpts apply to every pair; a caller-supplied WithTxn is overridden by
+// the batch's own transaction.
+func (t *Table) SetBatch(pairs []kvstore.BatchEntry, setOpts ...kvstore.SetOption) error {
 	if len(pairs) == 0 {
 		return nil
 	}
+	opts := t.defaultSetOptions
+	for i := range setOpts {
+		setOpts[i](&opts)
+	}
 	return t.Update(func(txn *badger.Txn) error {
+		opts.Txn = txn
 		for _, p := range pairs {
-			// WithTxn(txn) must be applied last so it always wins: options are
-			// applied in order and last-write-wins, so a caller-supplied WithTxn
-			// in setOpts must not be allowed to override the batch transaction.
-			opts := append(append([]SetOption{}, setOpts...), WithTxn(txn))
-			if err := t.Set(p.K, p.V, opts...); err != nil {
+			if err := t.set(p.K, p.V, opts); err != nil {
 				return err
 			}
 		}
@@ -306,7 +297,7 @@ func (t *Table) deleteDatum(txn *badger.Txn, dbID DBID, d *datum) error {
 }
 
 // UseDefaultIterationOptions sets default options for Iterate.
-func (t *Table) UseDefaultIterationOptions(optss ...IterationOption) {
+func (t *Table) UseDefaultIterationOptions(optss ...kvstore.IterationOption) {
 	for i := range optss {
 		optss[i](&t.defaultIterationOptions)
 	}
@@ -322,6 +313,6 @@ func (t *Table) UseDefaultIterationOptions(optss ...IterationOption) {
 // it is what makes prefix, seek and reverse mean what the caller expects. The
 // DBID comes out of the entry's value, costing no more than the lookup Iter.K
 // would otherwise do.
-func (t *Table) Iterate(prefixI KV, f func(*Iter) error, iterOpts ...IterationOption) error {
+func (t *Table) Iterate(prefixI KV, f func(kvstore.StoreIter) error, iterOpts ...kvstore.IterationOption) error {
 	return t.iterate(tableKeyMapPrefix(t.prefix), t, t.defaultIterationOptions, false, prefixI, f, iterOpts...)
 }

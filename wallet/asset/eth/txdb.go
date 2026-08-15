@@ -465,7 +465,7 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *txdb.TxHistoryRequest) (*txdb.Tx
 		}
 		txs = append(txs, wt)
 		return nil
-	}, reverse, seek)
+	}, iterOpts(reverse, seek)...)
 	if err != nil {
 		return nil, err
 	}
@@ -496,7 +496,7 @@ func (db *TxDB) getPendingTxs() (txs []*extendedWalletTx, err error) {
 			}
 		}
 		return nil
-	}, true, nil)
+	}, txdb.WithReverse())
 	return
 }
 
@@ -547,8 +547,21 @@ func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool
 			return txdb.ErrEndIteration
 		}
 		return nil
-	}, reverse, seek)
+	}, iterOpts(reverse, seek)...)
 	return txs, err
+}
+
+// iterOpts converts a computed direction and seek position into
+// IterationOptions.
+func iterOpts(reverse bool, seek []byte) []txdb.IterationOption {
+	opts := make([]txdb.IterationOption, 0, 2)
+	if reverse {
+		opts = append(opts, txdb.WithReverse())
+	}
+	if len(seek) > 0 {
+		opts = append(opts, txdb.WithSeek(seek))
+	}
+	return opts
 }
 
 // getPendingBridges returns all bridge initiation transactions that have not
@@ -576,7 +589,7 @@ func (db *TxDB) getPendingBridges(tokenID *uint32) (txs []*extendedWalletTx, err
 			txs = append(txs, ewt)
 		}
 		return nil
-	}, true, nil)
+	}, txdb.WithReverse())
 	return
 }
 
@@ -591,7 +604,7 @@ func (db *TxDB) getBridgeCompletions(initiationTxID string) ([]*extendedWalletTx
 		}
 		txs = append(txs, ewt)
 		return nil
-	}, false, nil)
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -26,6 +26,21 @@ type (
 	IndexFunc = kvstore.IndexFunc
 	// BatchEntry is a single key/value pair for StoreTable.SetBatch.
 	BatchEntry = kvstore.BatchEntry
+	// SetOption is a knob controlling StoreTable.Set and SetBatch.
+	SetOption = kvstore.SetOption
+	// GetOption is a knob controlling StoreTable.Get.
+	GetOption = kvstore.GetOption
+	// IterationOption is a knob controlling Iterate on a table or index.
+	IterationOption = kvstore.IterationOption
+)
+
+var (
+	// WithReplace allows replacing a pre-existing value when calling Set.
+	WithReplace = kvstore.WithReplace
+	// WithReverse sets the direction of iteration to reverse-lexicographical.
+	WithReverse = kvstore.WithReverse
+	// WithSeek starts iteration at the specified key.
+	WithSeek = kvstore.WithSeek
 )
 
 const (

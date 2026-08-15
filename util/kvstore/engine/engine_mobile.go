@@ -14,5 +14,9 @@ import (
 // New opens the mobile store at path, backed by bbolt via util/glossi. The
 // path names a file.
 func New(path string, log util.Logger) (kvstore.Store, error) {
-	return glossi.NewStore(path, log)
+	db, err := glossi.New(path, log)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
 }

@@ -77,7 +77,7 @@ func (w *Wallet) setLastScannedSignature(sig string) error {
 	if w.metaTable == nil || sig == "" {
 		return nil
 	}
-	return w.metaTable.Set(metaKey(BipID, lastScannedSigField), []byte(sig), true)
+	return w.metaTable.Set(metaKey(BipID, lastScannedSigField), []byte(sig), txdb.WithReplace())
 }
 
 func (w *Wallet) getBeforeCursor() (string, error) {
@@ -101,7 +101,7 @@ func (w *Wallet) setBeforeCursor(sig string) error {
 	if sig == "" {
 		return w.metaTable.Delete(metaKey(BipID, beforeCursorField))
 	}
-	return w.metaTable.Set(metaKey(BipID, beforeCursorField), []byte(sig), true)
+	return w.metaTable.Set(metaKey(BipID, beforeCursorField), []byte(sig), txdb.WithReplace())
 }
 
 func (w *Wallet) getBackfillUntil() (string, error) {
@@ -125,7 +125,7 @@ func (w *Wallet) setBackfillUntil(sig string) error {
 	if sig == "" {
 		return w.metaTable.Delete(metaKey(BipID, backfillUntilField))
 	}
-	return w.metaTable.Set(metaKey(BipID, backfillUntilField), []byte(sig), true)
+	return w.metaTable.Set(metaKey(BipID, backfillUntilField), []byte(sig), txdb.WithReplace())
 }
 
 func (w *Wallet) getCachedRentExemptReserve() (uint64, error) {
@@ -151,5 +151,5 @@ func (w *Wallet) setCachedRentExemptReserve(v uint64) error {
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
-	return w.metaTable.Set(metaKey(BipID, rentExemptField), b, true)
+	return w.metaTable.Set(metaKey(BipID, rentExemptField), b, txdb.WithReplace())
 }

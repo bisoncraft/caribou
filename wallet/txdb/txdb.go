@@ -477,7 +477,7 @@ func (db *TxDB) tickerFor(wt *WalletTransaction, network uint32) string {
 func (db *TxDB) storeTx(network uint32, wt *WalletTransaction) error {
 	effTime := effectiveTime(wt, uint64(time.Now().Unix()))
 	rec := newTxRecord(wt, network, effTime, db.tickerFor(wt, network))
-	return db.txs.Set(txKey(network, wt.ID), rec, true)
+	return db.txs.Set(txKey(network, wt.ID), rec, WithReplace())
 }
 
 // storeTxs writes many transactions in a single batch, collapsing what would
@@ -493,7 +493,7 @@ func (db *TxDB) storeTxs(network uint32, wts []*WalletTransaction) error {
 		rec := newTxRecord(wt, network, effectiveTime(wt, now), db.tickerFor(wt, network))
 		entries[i] = BatchEntry{K: txKey(network, wt.ID), V: rec}
 	}
-	return db.txs.SetBatch(entries, true)
+	return db.txs.SetBatch(entries, WithReplace())
 }
 
 func (db *TxDB) getTx(network uint32, id string) (*WalletTransaction, error) {
@@ -514,6 +514,19 @@ func (db *TxDB) removeTx(network uint32, id string) error {
 		return nil
 	}
 	return err
+}
+
+// iterOpts converts the read paths' computed direction and seek position into
+// IterationOptions.
+func iterOpts(reverse bool, seek []byte) []IterationOption {
+	opts := make([]IterationOption, 0, 2)
+	if reverse {
+		opts = append(opts, WithReverse())
+	}
+	if len(seek) > 0 {
+		opts = append(opts, WithSeek(seek))
+	}
+	return opts
 }
 
 func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryResponse, error) {
@@ -564,7 +577,7 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 		}
 		txs = append(txs, wt)
 		return nil
-	}, reverse, seek)
+	}, iterOpts(reverse, seek)...)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +636,7 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 		}
 		txs = append(txs, wt)
 		return nil
-	}, reverse, seek)
+	}, iterOpts(reverse, seek)...)
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +725,7 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 		wt.AssetID = &assetID
 		txs = append(txs, wt)
 		return nil
-	}, reverse, seek)
+	}, iterOpts(reverse, seek)...)
 	if err != nil {
 		return nil, err
 	}
@@ -736,7 +749,7 @@ func (db *TxDB) getAssetPendingTxs(assetID uint32) ([]*WalletTransaction, error)
 		}
 		txs = append(txs, wt)
 		return nil
-	}, false, nil)
+	})
 	return txs, err
 }
 
@@ -754,7 +767,7 @@ func (db *TxDB) getPendingTxs(network uint32) ([]*WalletTransaction, error) {
 		}
 		txs = append(txs, wt)
 		return nil
-	}, false, nil)
+	})
 	return txs, err
 }
 

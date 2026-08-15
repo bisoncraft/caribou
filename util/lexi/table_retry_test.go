@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -31,7 +32,7 @@ func TestSetDatumIsPerAttempt(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
 
-	tbl, err := db.Table("retry")
+	tbl, err := db.table("retry")
 	if err != nil {
 		t.Fatalf("error creating table: %v", err)
 	}
@@ -45,7 +46,7 @@ func TestSetDatumIsPerAttempt(t *testing.T) {
 	if _, err := tbl.AddIndex("idx", func(_, _ KV) ([]byte, error) {
 		indexCalls.Add(1)
 		if interfered.CompareAndSwap(false, true) {
-			if err := tbl.Set(k, []byte("interference"), WithReplace()); err != nil {
+			if err := tbl.Set(k, []byte("interference"), kvstore.WithReplace()); err != nil {
 				return nil, err
 			}
 		}
@@ -57,13 +58,13 @@ func TestSetDatumIsPerAttempt(t *testing.T) {
 	// Seed the key so the Set under test reads an existing datum, which is the
 	// read the competing write invalidates.
 	interfered.Store(true) // no interference while seeding
-	if err := tbl.Set(k, []byte("seed"), WithReplace()); err != nil {
+	if err := tbl.Set(k, []byte("seed"), kvstore.WithReplace()); err != nil {
 		t.Fatalf("error seeding entry: %v", err)
 	}
 	interfered.Store(false)
 	indexCalls.Store(0)
 
-	if err := tbl.Set(k, []byte("final"), WithReplace()); err != nil {
+	if err := tbl.Set(k, []byte("final"), kvstore.WithReplace()); err != nil {
 		t.Fatalf("error setting entry: %v", err)
 	}
 

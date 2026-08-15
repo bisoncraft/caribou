@@ -69,5 +69,5 @@ func (w *xrpWallet) setLastScannedLedger(seq uint64) error {
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, seq)
-	return w.metaTable.Set([]byte(lastScannedKey), b, true)
+	return w.metaTable.Set([]byte(lastScannedKey), b, txdb.WithReplace())
 }

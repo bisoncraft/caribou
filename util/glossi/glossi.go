@@ -22,6 +22,15 @@ import (
 // consumers don't have to care which engine is in use.
 const ErrKeyNotFound = kvstore.ErrKeyNotFound
 
+// The engine chooser (util/kvstore/engine) only compiles this engine's
+// conformance on mobile builds, so it is asserted here for every build.
+var (
+	_ kvstore.Store      = (*DB)(nil)
+	_ kvstore.StoreTable = (*Table)(nil)
+	_ kvstore.StoreIndex = (*Index)(nil)
+	_ kvstore.StoreIter  = (*Iter)(nil)
+)
+
 // DB is a bbolt database with the ability to add indexed data via Tables. The
 // underlying *bbolt.DB is intentionally unexported so the Connect-managed
 // lifecycle cannot be bypassed by external callers; package-internal use goes

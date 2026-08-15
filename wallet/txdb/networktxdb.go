@@ -63,9 +63,10 @@ type NetworkTxDB interface {
 // TxIndex is a wallet-defined secondary index over a network's transactions,
 // returned by AddTxIndex/AddUniqueTxIndex.
 type TxIndex interface {
-	// Iterate visits the network's transactions in index order. prefix and seek
-	// are in index-entry space (the bytes returned by the index function).
-	Iterate(prefix []byte, f func(*WalletTransaction) error, reverse bool, seek []byte) error
+	// Iterate visits the network's transactions in index order. prefix and
+	// WithSeek are in index-entry space (the bytes returned by the index
+	// function).
+	Iterate(prefix []byte, f func(*WalletTransaction) error, opts ...IterationOption) error
 }
 
 // networkTxDB is the concrete NetworkTxDB, a thin view over TxDB scoped to one
@@ -169,12 +170,12 @@ type txIndex struct {
 	idx StoreIndex
 }
 
-func (i *txIndex) Iterate(prefix []byte, f func(*WalletTransaction) error, reverse bool, seek []byte) error {
+func (i *txIndex) Iterate(prefix []byte, f func(*WalletTransaction) error, opts ...IterationOption) error {
 	return i.idx.Iterate(prefix, func(it StoreIter) error {
 		wt, err := decodeIter(it)
 		if err != nil {
 			return err
 		}
 		return f(wt)
-	}, reverse, seek)
+	}, opts...)
 }

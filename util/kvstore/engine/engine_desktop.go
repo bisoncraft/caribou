@@ -14,5 +14,9 @@ import (
 // New opens the desktop store at path, backed by Badger via util/lexi. The
 // path names a directory.
 func New(path string, log util.Logger) (kvstore.Store, error) {
-	return lexi.NewStore(path, log)
+	db, err := lexi.New(&lexi.Config{Path: path, Log: log})
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/bisoncraft/caribou/util/lexi"
 	cv1 "github.com/decred/politeia/politeiawww/api/comments/v1"
 	rv1 "github.com/decred/politeia/politeiawww/api/records/v1"
@@ -125,23 +126,17 @@ func (p *Politeia) ProposalsAll(offset, rowsCount int, searchPhrase string,
 	}
 
 	var totalCount int
-	err = p.proposalMeta.View(func(txn *badger.Txn) error {
-		countB, err := p.proposalMeta.GetRaw(proposalsCountKey, lexi.WithGetTxn(txn))
-		if err != nil {
-			// Fallback to the count of fetched proposals if the total count is not found on the db.
-			totalCount = len(proposals)
-
-			if !errors.Is(err, lexi.ErrKeyNotFound) {
-				// Log the error if it's different from key not found, but don't return it because we can still return the fetched proposals and their count as a fallback.
-				p.log.Errorf("error fetching proposals count from db: %v", err)
-			}
-		} else {
-			totalCount = int(encode.BytesToUint64(countB))
-		}
-		return nil
-	})
+	countB, err := p.proposalMeta.Get(proposalsCountKey)
 	if err != nil {
-		return nil, 0, err
+		// Fallback to the count of fetched proposals if the total count is not found on the db.
+		totalCount = len(proposals)
+
+		if !errors.Is(err, lexi.ErrKeyNotFound) {
+			// Log the error if it's different from key not found, but don't return it because we can still return the fetched proposals and their count as a fallback.
+			p.log.Errorf("error fetching proposals count from db: %v", err)
+		}
+	} else {
+		totalCount = int(encode.BytesToUint64(countB))
 	}
 
 	return proposals, totalCount, nil
@@ -150,10 +145,10 @@ func (p *Politeia) ProposalsAll(offset, rowsCount int, searchPhrase string,
 // ProposalByToken retrieves the proposal for the given token argument.
 func (p *Politeia) ProposalByToken(token string) (*Proposal, error) {
 	proposal := new(Proposal)
-	err := p.proposals.View(func(txn *badger.Txn) error {
-		key := proposalKey(token)
-		return p.proposals.Get(key, proposal, lexi.WithGetTxn(txn))
-	})
+	b, err := p.proposals.Get(proposalKey(token))
+	if err == nil {
+		err = proposal.UnmarshalBinary(b)
+	}
 	if err != nil {
 		if errors.Is(err, lexi.ErrKeyNotFound) {
 			return nil, fmt.Errorf("proposal with token %v not found", token)
@@ -387,12 +382,12 @@ func paginateTokens(tokens []string, pageSize uint32) [][]string {
 // saveProposals saves the batch proposals data to the db. This is ran when the
 // proposals sync function finds new proposals that don't exist on our db yet.
 func (p *Politeia) saveProposals(proposals []*Proposal) error {
-	return p.proposals.Update(func(txn *badger.Txn) error {
+	return p.db.Update(func(txn *badger.Txn) error {
 		for _, proposal := range proposals {
 			proposal.Synced = false
 
 			key := proposalKey(proposal.Token)
-			err := p.proposals.Set(key, proposal, lexi.WithReplace(), lexi.WithTxn(txn))
+			err := p.proposals.Set(key, proposal, kvstore.WithReplace(), lexi.WithTxn(txn))
 			if err != nil {
 				return fmt.Errorf("error saving proposal with token %v: %w", proposal.Token, err)
 			}
@@ -464,7 +459,7 @@ func (p *Politeia) proposalsNewUpdate() error {
 		count += uint64(len(prs))
 	}
 
-	err = p.proposalMeta.Set(proposalsCountKey, encode.Uint64Bytes(count), lexi.WithReplace())
+	err = p.proposalMeta.Set(proposalsCountKey, encode.Uint64Bytes(count), kvstore.WithReplace())
 	if err != nil {
 		return fmt.Errorf("error updating proposals count: %w", err)
 	}
@@ -544,7 +539,7 @@ func (p *Politeia) proposalsInProgressUpdate() error {
 		proposal.ID = prop.ID
 
 		key := proposalKey(proposal.Token)
-		err = p.proposals.Set(key, proposal, lexi.WithReplace())
+		err = p.proposals.Set(key, proposal, kvstore.WithReplace())
 		if err != nil {
 			return fmt.Errorf("error updating proposal with token %v: %w", proposal.Token, err)
 		}
@@ -615,7 +610,7 @@ func iterateTable(db *lexi.DB, tableName string, limit int, f func(val []byte) e
 	}
 
 	count := 0
-	err = table.Iterate(nil, func(it *lexi.Iter) error {
+	err = table.Iterate(nil, func(it kvstore.StoreIter) error {
 		var v []byte
 		if err := it.V(func(vB []byte) error {
 			v = lexi.CloneBytes(vB)
@@ -713,7 +708,7 @@ func iterateIndex(db *lexi.DB, limit int, voteStatus string, f func(k, val []byt
 			}
 
 			// Resolve the value via the table API (decodes the internal datum).
-			vB, err := table.GetRaw(keyB, lexi.WithGetTxn(txn))
+			vB, err := table.Get(keyB, lexi.WithGetTxn(txn))
 			if err != nil {
 				return err
 			}

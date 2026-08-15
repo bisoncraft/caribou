@@ -34,7 +34,7 @@ func newTestStore(t *testing.T) kvstore.Store {
 
 func mustSet(t *testing.T, tbl kvstore.StoreTable, k, v string) {
 	t.Helper()
-	if err := tbl.Set([]byte(k), []byte(v), true); err != nil {
+	if err := tbl.Set([]byte(k), []byte(v), kvstore.WithReplace()); err != nil {
 		t.Fatalf("Set(%q): %v", k, err)
 	}
 }
@@ -93,7 +93,14 @@ func TestTableIterateContract(t *testing.T) {
 			s = []byte(seek)
 		}
 		return collectKeys(t, func(f func(kvstore.StoreIter) error) error {
-			return tbl.Iterate(p, f, reverse, s)
+			var opts []kvstore.IterationOption
+			if reverse {
+				opts = append(opts, kvstore.WithReverse())
+			}
+			if len(s) > 0 {
+				opts = append(opts, kvstore.WithSeek(s))
+			}
+			return tbl.Iterate(p, f, opts...)
 		})
 	}
 
@@ -177,7 +184,7 @@ func TestTablesDoNotShareKeys(t *testing.T) {
 	// A row whose key mapping was torn down survives physically but iterates
 	// with a failing K().
 	if got := collectKeys(t, func(f func(kvstore.StoreIter) error) error {
-		return native.Iterate(nil, f, false, nil)
+		return native.Iterate(nil, f)
 	}); !eq(got, k) {
 		t.Fatalf("native iteration = %v, want [%s]", got, k)
 	}

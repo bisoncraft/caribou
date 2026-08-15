@@ -36,25 +36,33 @@ type Index struct {
 	table  *Table
 	name   string
 	id     byte
-	f      func(k, v KV) ([]byte, error)
+	f      kvstore.IndexFunc
 	unique bool
 }
 
 // AddIndex adds a non-unique index to the Table. After an index is added, every
 // item added with Set generates a corresponding entry. The index function
 // receives the caller's original (unparsed) key and value KVs, as with lexi.
-func (t *Table) AddIndex(name string, f func(k, v KV) ([]byte, error)) (*Index, error) {
-	return t.addIndex(name, f, false)
+func (t *Table) AddIndex(name string, f kvstore.IndexFunc) (kvstore.StoreIndex, error) {
+	idx, err := t.addIndex(name, f, false)
+	if err != nil {
+		return nil, err
+	}
+	return idx, nil
 }
 
 // AddUniqueIndex adds a unique index to the Table. Set will return
 // ErrUniqueConflict if an insert would create a duplicate index value, unless
 // WithReplace is specified.
-func (t *Table) AddUniqueIndex(name string, f func(k, v KV) ([]byte, error)) (*Index, error) {
-	return t.addIndex(name, f, true)
+func (t *Table) AddUniqueIndex(name string, f kvstore.IndexFunc) (kvstore.StoreIndex, error) {
+	idx, err := t.addIndex(name, f, true)
+	if err != nil {
+		return nil, err
+	}
+	return idx, nil
 }
 
-func (t *Table) addIndex(name string, f func(k, v KV) ([]byte, error), unique bool) (*Index, error) {
+func (t *Table) addIndex(name string, f kvstore.IndexFunc, unique bool) (*Index, error) {
 	if name == "" {
 		return nil, errors.New("glossi: empty index name")
 	}
@@ -120,51 +128,26 @@ func (idx *Index) uniqueConflict(index *bbolt.Bucket, fullKey, k []byte) []byte 
 	return nil
 }
 
-type iterOpts struct {
-	reverse bool
-	update  bool
-	seek    []byte
-}
-
-// IterationOption is a knob controlling how Iterate runs.
-type IterationOption func(*iterOpts)
-
-// WithReverse sets the direction of iteration to reverse-lexicographical.
-func WithReverse() IterationOption {
-	return func(o *iterOpts) { o.reverse = true }
-}
-
-// WithUpdate must be used if the callback intends to modify the database during
-// iteration, e.g. via Iter.Delete.
-func WithUpdate() IterationOption {
-	return func(o *iterOpts) { o.update = true }
-}
-
-// WithSeek starts iteration at the specified index-space prefix.
-func WithSeek(prefix []byte) IterationOption {
-	return func(o *iterOpts) { o.seek = prefix }
-}
-
 // Iterate iterates the index in entry order. prefix, if non-empty, constrains
 // iteration to index entries beginning with it (in index space, i.e. without
 // the internal index id). The key and value exposed via the Iter are only valid
 // for the duration of the callback.
-func (idx *Index) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOption) error {
+func (idx *Index) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...kvstore.IterationOption) error {
 	prefix, err := kvstore.ParseKV(prefixI)
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling prefix: %w", err)
 	}
-	var o iterOpts
+	var o kvstore.IterationOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 	bound := append([]byte{idx.id}, prefix...)
 	var seek []byte
-	if len(o.seek) > 0 {
-		seek = append([]byte{idx.id}, o.seek...)
+	if len(o.Seek) > 0 {
+		seek = append([]byte{idx.id}, o.Seek...)
 	}
 	run := idx.table.db.View
-	if o.update {
+	if o.Update {
 		run = idx.table.db.Update
 	}
 	return run(func(tx *bbolt.Tx) error {
@@ -172,7 +155,7 @@ func (idx *Index) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOpti
 		index := tb.Bucket(indexBucketKey)
 		data := tb.Bucket(dataBucketKey)
 		c := index.Cursor()
-		return walk(c, bound, seek, o.reverse, func(entryKey, k []byte) error {
+		return walk(c, bound, seek, o.Reverse, func(entryKey, k []byte) error {
 			raw := data.Get(k)
 			if raw == nil {
 				return fmt.Errorf("dangling index entry for index %q", idx.name)
@@ -193,7 +176,8 @@ func (idx *Index) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOpti
 	})
 }
 
-// Iter is an entry yielded during iteration of a Table or Index.
+// Iter is an entry yielded during iteration of a Table or Index. Iter
+// implements kvstore.StoreIter.
 type Iter struct {
 	k     []byte
 	v     []byte

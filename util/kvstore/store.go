@@ -4,9 +4,8 @@
 // Package kvstore is a small storage abstraction that lets the backing engine
 // be swapped at build time: Badger (util/lexi) on desktop and bbolt
 // (util/glossi) on mobile. The interfaces here capture the common surface of
-// those two engines, so a database built on them works under either. Each
-// engine package provides a NewStore constructor returning a Store; build-time
-// selection lives in util/kvstore/engine.
+// those two engines, which implement them natively (lexi.DB and glossi.DB are
+// both a Store); build-time selection lives in util/kvstore/engine.
 //
 // The abstraction deliberately omits transactions. lexi can compose an atomic
 // write across tables and glossi cannot, so the honest intersection is the
@@ -21,13 +20,11 @@ import (
 	"github.com/bisoncraft/caribou/util"
 )
 
-// The sentinel errors are shared with the engines: glossi aliases them
-// directly, and lexi's ErrEndIteration and ErrNotIndexed deliberately use the
-// same string values (util.ErrorKind compares by value), so errors returned by
-// caller-supplied callbacks and index functions are recognized by whichever
-// engine is in use without translation. Only lexi's ErrKeyNotFound
-// (badger.ErrKeyNotFound) differs and is translated to this one inside its
-// store adapter.
+// The sentinel errors are shared with the engines: both alias them directly,
+// so errors returned by caller-supplied callbacks and index functions are
+// recognized by whichever engine is in use, and errors tested with errors.Is
+// against these sentinels match regardless of engine. lexi translates badger's
+// ErrKeyNotFound to this package's internally.
 const (
 	// ErrKeyNotFound is returned by Table.Get when a key is absent.
 	ErrKeyNotFound = util.ErrorKind("key not found")
@@ -51,7 +48,7 @@ type BatchEntry struct {
 	K, V KV
 }
 
-// Store is an indexed key-value store. It is implemented by adapters over
+// Store is an indexed key-value store. It is implemented natively by
 // util/lexi (Badger) and util/glossi (bbolt).
 type Store interface {
 	// Connect ties the store's shutdown to ctx: when ctx is canceled, the
@@ -74,32 +71,40 @@ type StoreTable interface {
 	// Set inserts a value for the key, parsing both with ParseKV. Values whose
 	// types implement encoding.BinaryMarshaler can be passed directly, which
 	// lets index functions recover the typed value instead of re-decoding the
-	// stored bytes. If replace is false and the key exists, an error is
-	// returned.
-	Set(k, v KV, replace bool) error
+	// stored bytes. Without WithReplace, an existing key is an error.
+	Set(k, v KV, opts ...SetOption) error
 	// SetBatch inserts every entry in a single underlying transaction. On
 	// engines that fsync per write (bbolt on mobile) this collapses N fsyncs
 	// into one, which matters for bulk inserts such as an initial history sync
-	// or a migration. replace has the same meaning as in Set; if it is false
-	// and any key already exists, the whole batch is rolled back.
-	SetBatch(entries []BatchEntry, replace bool) error
+	// or a migration. The options apply to every entry; without WithReplace,
+	// any existing key rolls back the whole batch.
+	SetBatch(entries []BatchEntry, opts ...SetOption) error
 	// Get returns the value for the key, or ErrKeyNotFound.
-	Get(k []byte) ([]byte, error)
+	Get(k KV, opts ...GetOption) ([]byte, error)
 	Delete(k []byte) error
-	// Iterate visits primary keys, optionally constrained to a prefix, in
-	// forward or reverse order, optionally starting at seek.
-	Iterate(prefix []byte, f func(StoreIter) error, reverse bool, seek []byte) error
+	// Iterate visits primary keys in key order, optionally constrained to a
+	// prefix, subject to the IterationOptions.
+	Iterate(prefix KV, f func(StoreIter) error, opts ...IterationOption) error
 }
 
 // StoreIndex is a secondary index on a StoreTable.
 type StoreIndex interface {
-	// Iterate visits index entries in order. prefix and seek are in index space.
-	Iterate(prefix []byte, f func(StoreIter) error, reverse bool, seek []byte) error
+	// Iterate visits index entries in order. prefix and WithSeek are in index
+	// space.
+	Iterate(prefix KV, f func(StoreIter) error, opts ...IterationOption) error
 }
 
 // StoreIter is an entry yielded during iteration. The exposed bytes are only
 // valid for the duration of the callback.
 type StoreIter interface {
+	// K is the datum's primary key.
 	K() ([]byte, error)
+	// V provides access to the datum's value bytes.
 	V(func([]byte) error) error
+	// Entry provides access to the index entry when iterating an index; when
+	// iterating a table it yields the primary key.
+	Entry(func([]byte) error) error
+	// Delete removes the datum along with all of its index entries. The
+	// iteration must have been started with WithUpdate.
+	Delete() error
 }

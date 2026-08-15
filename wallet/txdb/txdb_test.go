@@ -547,10 +547,10 @@ func TestAuxTableNamespacing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("b.Table: %v", err)
 	}
-	if err := ta.Set([]byte("k"), []byte("va"), true); err != nil {
+	if err := ta.Set([]byte("k"), []byte("va"), WithReplace()); err != nil {
 		t.Fatal(err)
 	}
-	if err := tb.Set([]byte("k"), []byte("vb"), true); err != nil {
+	if err := tb.Set([]byte("k"), []byte("vb"), WithReplace()); err != nil {
 		t.Fatal(err)
 	}
 	va, _ := ta.Get([]byte("k"))
@@ -593,7 +593,7 @@ func TestAddTxIndexUsesRawTx(t *testing.T) {
 	err = idx.Iterate(nil, func(wt *WalletTransaction) error {
 		order = append(order, wt.ID)
 		return nil
-	}, false, nil)
+	})
 	if err != nil {
 		t.Fatalf("custom index iterate: %v", err)
 	}

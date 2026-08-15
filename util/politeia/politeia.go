@@ -14,6 +14,7 @@ import (
 	"decred.org/dcrwallet/v5/errors"
 	"decred.org/dcrwallet/v5/wallet/udb"
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/bisoncraft/caribou/util/lexi"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	tkv1 "github.com/decred/politeia/politeiawww/api/ticketvote/v1"
@@ -31,8 +32,8 @@ type Politeia struct {
 	ctx          context.Context
 	db           *lexi.DB
 	dbConn       *util.ConnectionMaster
-	proposals    *lexi.Table
-	proposalMeta *lexi.Table
+	proposals    kvstore.StoreTable
+	proposalMeta kvstore.StoreTable
 	log          util.Logger
 	client       *piclient.Client
 	lastSync     atomic.Int64

@@ -100,7 +100,7 @@ func TestCloneBytes(t *testing.T) {
 func TestPrefixForName(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()
-	if _, err := db.Table("T"); err != nil {
+	if _, err := db.table("T"); err != nil {
 		t.Fatalf("Table: %v", err)
 	}
 	p, err := PrefixForName(db.DB, "T")
@@ -144,7 +144,7 @@ func TestConnect(t *testing.T) {
 	}
 
 	// Do real work to confirm the DB is alive.
-	tbl, err := db.Table("conn")
+	tbl, err := db.table("conn")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestConnect(t *testing.T) {
 // calls return the same id. KeyID is read-only, so an unknown key must fail.
 func TestKeyID(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("ids")
+	tbl, err := db.table("ids")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestParseKV(t *testing.T) {
 // TestIterEntry covers Iter.Entry on both index and table iteration.
 func TestIterEntry(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("T")
+	tbl, err := db.table("T")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestIterEntry(t *testing.T) {
 	}
 
 	var indexEntry []byte
-	if err := idx.Iterate(nil, func(it *Iter) error {
+	if err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.Entry(func(idxB []byte) error {
 			indexEntry = append([]byte(nil), idxB...)
 			return nil
@@ -276,7 +276,7 @@ func TestIterEntry(t *testing.T) {
 	// internal DBID, which was an artifact of rows being stored under the DBID
 	// rather than anything a caller could use.
 	var tableEntry []byte
-	if err := tbl.Iterate(nil, func(it *Iter) error {
+	if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.Entry(func(b []byte) error {
 			tableEntry = append([]byte(nil), b...)
 			return nil
@@ -300,13 +300,13 @@ func TestUniqueIndexConflictErrorMessage(t *testing.T) {
 
 // TestWithForward verifies WithForward clears a previously-set WithReverse.
 func TestWithForward(t *testing.T) {
-	var opts iteratorOpts
-	WithReverse()(&opts)
-	if !opts.reverse {
+	var opts kvstore.IterationOpts
+	kvstore.WithReverse()(&opts)
+	if !opts.Reverse {
 		t.Fatal("WithReverse did not set reverse")
 	}
-	WithForward()(&opts)
-	if opts.reverse {
+	kvstore.WithForward()(&opts)
+	if opts.Reverse {
 		t.Fatal("WithForward did not clear reverse")
 	}
 }
@@ -314,11 +314,11 @@ func TestWithForward(t *testing.T) {
 // TestUseDefaultSetOptions verifies table-level default Set options take effect.
 func TestUseDefaultSetOptions(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("X")
+	tbl, err := db.table("X")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
-	tbl.UseDefaultSetOptions(WithReplace())
+	tbl.UseDefaultSetOptions(kvstore.WithReplace())
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v1")}); err != nil {
 		t.Fatalf("first Set: %v", err)
 	}
@@ -327,9 +327,13 @@ func TestUseDefaultSetOptions(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v2")}); err != nil {
 		t.Fatalf("default-replace Set: %v", err)
 	}
-	var got tValue
-	if err := tbl.Get([]byte("k"), &got); err != nil {
+	b, err := tbl.Get([]byte("k"))
+	if err != nil {
 		t.Fatalf("Get: %v", err)
+	}
+	var got tValue
+	if err := got.UnmarshalBinary(b); err != nil {
+		t.Fatalf("UnmarshalBinary: %v", err)
 	}
 	if !bytes.Equal(got.v, []byte("v2")) {
 		t.Fatalf("after default-replace got %q", got.v)
@@ -340,13 +344,13 @@ func TestUseDefaultSetOptions(t *testing.T) {
 // and Table.UseDefaultIterationOptions.
 func TestUseDefaultIterationOptions(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("X")
+	tbl, err := db.table("X")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
-	idx, err := tbl.AddIndex("byVal", func(_, v KV) ([]byte, error) {
+	idx, err := tbl.addIndex("byVal", func(_, v KV) ([]byte, error) {
 		return v.(*tValue).idx, nil
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("AddIndex: %v", err)
 	}
@@ -356,9 +360,9 @@ func TestUseDefaultIterationOptions(t *testing.T) {
 			t.Fatalf("Set: %v", err)
 		}
 	}
-	idx.UseDefaultIterationOptions(WithReverse())
+	idx.UseDefaultIterationOptions(kvstore.WithReverse())
 	var first []byte
-	if err := idx.Iterate(nil, func(it *Iter) error {
+	if err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.V(func(v []byte) error {
 			first = append([]byte(nil), v...)
 			return ErrEndIteration
@@ -370,9 +374,9 @@ func TestUseDefaultIterationOptions(t *testing.T) {
 		t.Fatalf("default-reverse first value = %x, want 04", first)
 	}
 
-	tbl.UseDefaultIterationOptions(WithReverse())
+	tbl.UseDefaultIterationOptions(kvstore.WithReverse())
 	var seen int
-	if err := tbl.Iterate(nil, func(it *Iter) error {
+	if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		seen++
 		return nil
 	}); err != nil {
@@ -386,7 +390,7 @@ func TestUseDefaultIterationOptions(t *testing.T) {
 // TestSetEmptyKey and TestSetWithoutReplace round out the table.Set error paths.
 func TestSetEmptyKey(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	if err := tbl.Set([]byte{}, &tValue{v: []byte("v")}); err == nil {
 		t.Fatal("expected error for zero-length key")
 	}
@@ -394,7 +398,7 @@ func TestSetEmptyKey(t *testing.T) {
 
 func TestSetWithoutReplace(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	k := []byte("k")
 	if err := tbl.Set(k, &tValue{v: []byte("v1")}); err != nil {
 		t.Fatalf("first Set: %v", err)
@@ -427,7 +431,7 @@ func TestDecodeDatumErrors(t *testing.T) {
 // doesn't exist.
 func TestDeleteMissingKey(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	if err := tbl.Delete([]byte("nope")); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("expected ErrKeyNotFound, got %v", err)
 	}
@@ -437,9 +441,8 @@ func TestDeleteMissingKey(t *testing.T) {
 // exist.
 func TestGetMissingKey(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
-	var got tValue
-	if err := tbl.Get([]byte("nope"), &got); !errors.Is(err, ErrKeyNotFound) {
+	tbl, _ := db.table("X")
+	if _, err := tbl.Get([]byte("nope")); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("expected ErrKeyNotFound, got %v", err)
 	}
 }
@@ -449,7 +452,7 @@ func TestGetMissingKey(t *testing.T) {
 // switch).
 func TestSetIndexFunctionError(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	sentinel := errors.New("custom-index-error")
 	if _, err := tbl.AddIndex("boom", func(_, _ KV) ([]byte, error) {
 		return nil, sentinel
@@ -485,7 +488,7 @@ func TestPrefixForNameBadSize(t *testing.T) {
 // returned from a forward-iteration callback is propagated.
 func TestIterateCallbackErrorForward(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	idx, _ := tbl.AddIndex("byVal", func(_, v KV) ([]byte, error) {
 		return v.(*tValue).idx, nil
 	})
@@ -493,7 +496,7 @@ func TestIterateCallbackErrorForward(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 	sentinel := errors.New("cb error")
-	if err := idx.Iterate(nil, func(it *Iter) error { return sentinel }); !errors.Is(err, sentinel) {
+	if err := idx.Iterate(nil, func(it kvstore.StoreIter) error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatalf("expected wrapped sentinel, got %v", err)
 	}
 }
@@ -502,7 +505,7 @@ func TestIterateCallbackErrorForward(t *testing.T) {
 // reverse iteration.
 func TestIterateCallbackErrorReverse(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	idx, _ := tbl.AddIndex("byVal", func(_, v KV) ([]byte, error) {
 		return v.(*tValue).idx, nil
 	})
@@ -510,7 +513,7 @@ func TestIterateCallbackErrorReverse(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 	sentinel := errors.New("cb error")
-	err := idx.Iterate(nil, func(it *Iter) error { return sentinel }, WithReverse())
+	err := idx.Iterate(nil, func(it kvstore.StoreIter) error { return sentinel }, kvstore.WithReverse())
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected wrapped sentinel, got %v", err)
 	}
@@ -521,7 +524,7 @@ func TestIterateCallbackErrorReverse(t *testing.T) {
 // but no index entry is created.
 func TestSetNotIndexedSkipsEntry(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	idx, _ := tbl.AddIndex("evens", func(_, v KV) ([]byte, error) {
 		val := v.(*tValue).v
 		if len(val) > 0 && val[0]%2 == 0 {
@@ -535,7 +538,7 @@ func TestSetNotIndexedSkipsEntry(t *testing.T) {
 		}
 	}
 	var n int
-	idx.Iterate(nil, func(_ *Iter) error { n++; return nil })
+	idx.Iterate(nil, func(_ kvstore.StoreIter) error { n++; return nil })
 	if n != 2 {
 		t.Fatalf("indexed count = %d, want 2 (evens only)", n)
 	}
@@ -559,7 +562,7 @@ func TestUniqueIndexConflictAsError(t *testing.T) {
 // surfaces the decode error rather than returning silently.
 func TestIterDatumDecodeError(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("T")
+	tbl, err := db.table("T")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
@@ -577,7 +580,7 @@ func TestIterDatumDecodeError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
-	err = tbl.Iterate(nil, func(it *Iter) error {
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 		return it.V(func(v []byte) error { return nil })
 	})
 	if err == nil {
@@ -589,7 +592,7 @@ func TestIterDatumDecodeError(t *testing.T) {
 // existing datum's bytes don't parse during a WithReplace operation.
 func TestSetReplaceCorruptOldDatum(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("T")
+	tbl, err := db.table("T")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
@@ -606,7 +609,7 @@ func TestSetReplaceCorruptOldDatum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inject: %v", err)
 	}
-	err = tbl.Set([]byte("k"), &tValue{v: []byte("v2")}, WithReplace())
+	err = tbl.Set([]byte("k"), &tValue{v: []byte("v2")}, kvstore.WithReplace())
 	if err == nil {
 		t.Fatal("expected decode error from replace of corrupt entry")
 	}
@@ -616,7 +619,7 @@ func TestSetReplaceCorruptOldDatum(t *testing.T) {
 // when Delete encounters a malformed datum row.
 func TestDeleteCorruptDatum(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("T")
+	tbl, err := db.table("T")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
@@ -658,21 +661,21 @@ func TestDecodeDatumReadErrors(t *testing.T) {
 	}
 }
 
-// TestGetRawWithTxn covers the WithGetTxn branch of GetRaw, distinct from the
-// existing TestTransactionOptions which exclusively uses Get.
-func TestGetRawWithTxn(t *testing.T) {
+// TestGetWithTxn covers the WithGetTxn branch of Get inside a read-only
+// transaction, distinct from TestTransactionOptions' read-write transaction.
+func TestGetWithTxn(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, _ := db.Table("X")
+	tbl, _ := db.table("X")
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	err := db.View(func(txn *badger.Txn) error {
-		raw, err := tbl.GetRaw([]byte("k"), WithGetTxn(txn))
+		raw, err := tbl.Get([]byte("k"), WithGetTxn(txn))
 		if err != nil {
 			return err
 		}
 		if !bytes.Equal(raw, []byte("v")) {
-			t.Fatalf("GetRaw = %q, want v", raw)
+			t.Fatalf("Get = %q, want v", raw)
 		}
 		return nil
 	})
@@ -691,20 +694,20 @@ func TestGetRawWithTxn(t *testing.T) {
 // silently leave rows behind on any bulk delete.
 func TestTableIterateDeleteDuringIteration(t *testing.T) {
 	db, _ := newTestDB(t)
-	tbl, err := db.Table("T")
+	tbl, err := db.table("T")
 	if err != nil {
 		t.Fatalf("Table: %v", err)
 	}
 	for _, k := range []string{"a", "b", "c", "d"} {
-		if err := tbl.Set([]byte(k), &tValue{v: []byte("v")}, WithReplace()); err != nil {
+		if err := tbl.Set([]byte(k), &tValue{v: []byte("v")}, kvstore.WithReplace()); err != nil {
 			t.Fatalf("Set %s: %v", k, err)
 		}
 	}
 
-	collect := func(opts ...IterationOption) []string {
+	collect := func(opts ...kvstore.IterationOption) []string {
 		t.Helper()
 		var got []string
-		if err := tbl.Iterate(nil, func(it *Iter) error {
+		if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
 			k, err := it.K()
 			if err != nil {
 				return err
@@ -723,13 +726,13 @@ func TestTableIterateDeleteDuringIteration(t *testing.T) {
 	}
 
 	// Every key is visited even though two are deleted mid-walk.
-	if got := collect(WithUpdate()); !slices.Equal(got, []string{"a", "b", "c", "d"}) {
+	if got := collect(kvstore.WithUpdate()); !slices.Equal(got, []string{"a", "b", "c", "d"}) {
 		t.Fatalf("visited %v, want [a b c d]", got)
 	}
 	if got := collect(); !slices.Equal(got, []string{"a", "d"}) {
 		t.Fatalf("remaining %v, want [a d]", got)
 	}
-	if _, err := tbl.GetRaw([]byte("b")); !errors.Is(err, ErrKeyNotFound) {
-		t.Fatalf("GetRaw of deleted key = %v, want ErrKeyNotFound", err)
+	if _, err := tbl.Get([]byte("b")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("Get of deleted key = %v, want ErrKeyNotFound", err)
 	}
 }
