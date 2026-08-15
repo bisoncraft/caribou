@@ -310,8 +310,113 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 		if updated.State == intents.StatusRefunded {
 			e.c.updateAssetBalance(updated.OriginAssetID)
 		}
+		e.recordIncomingTxs(ctx, updated)
 	}
 	return nil
+}
+
+// recordIncomingTxs hands the service-reported payout (or refund) txids to
+// the receiving wallet's transaction history when that wallet cannot
+// observe incoming transfers on its own (asset.IncomingTxRecorder — the
+// EVM wallets). Without this the credit updates the balance but never
+// appears in the wallet's history. The service-reported amount rides
+// along as the wallet's attribution fallback for payouts it cannot read
+// from the chain (a contract-internal native transfer from an
+// unrecognized bridge). Recording is idempotent wallet-side, so a
+// repeated terminal update (e.g. a realized-fill refinement) is harmless.
+func (e *intentsEngine) recordIncomingTxs(ctx context.Context, swap *IntentsSwap) {
+	assetID, txids, amtHint := swap.DestAssetID, swap.DestinationTxs, swap.AtomsOut
+	if swap.State == intents.StatusRefunded {
+		assetID, txids = swap.OriginAssetID, swap.RefundTxs
+		amtHint = e.refundAtoms(ctx, swap)
+	} else if swap.State != intents.StatusSuccess {
+		return
+	}
+	if len(txids) == 0 || assetID == intentsAssetUnknown {
+		return
+	}
+	// A single reported txid carries the full amount; across several the
+	// split is unknowable, so chain-side attribution alone decides.
+	if len(txids) != 1 {
+		amtHint = 0
+	}
+	wallet, found := e.c.wallet(assetID)
+	if !found {
+		return
+	}
+	rec, ok := wallet.Wallet.(asset.IncomingTxRecorder)
+	if !ok {
+		return // the wallet observes incoming transfers on its own
+	}
+	// The payout is not always queryable the instant the service reports
+	// it: the mock reports success as it hands the send to the node, and
+	// a mainnet RPC provider can lag the service's view. Since a terminal
+	// swap is never polled again, a one-shot attempt would drop the
+	// record on any transient miss — so recording retries briefly in the
+	// background, on the engine's context (the caller's may be an HTTP
+	// request's).
+	e.c.wg.Add(1)
+	go func() {
+		defer e.c.wg.Done()
+		for _, txid := range txids {
+			e.recordIncomingTxWithRetry(rec, assetID, txid, amtHint, swap.DepositAddress)
+		}
+	}()
+}
+
+// Retry schedule for recording an incoming tx the wallet's node cannot
+// find yet.
+const (
+	incomingTxRetryDelay = 3 * time.Second
+	incomingTxRetries    = 10
+)
+
+// recordIncomingTxWithRetry records one incoming tx, retrying not-found
+// responses on the assumption that the just-reported payout has not yet
+// propagated to the wallet's node. Any other error, or exhaustion, logs a
+// warning and gives up.
+func (e *intentsEngine) recordIncomingTxWithRetry(rec asset.IncomingTxRecorder, assetID uint32, txid string, amtHint uint64, depositAddr string) {
+	for i := 0; ; i++ {
+		err := rec.RecordIncomingTx(e.ctx, txid, amtHint)
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, asset.CoinNotFoundError) || i >= incomingTxRetries {
+			e.log.Warnf("Error recording incoming %s tx %s from swap %s: %v",
+				unbip(assetID), txid, depositAddr, err)
+			return
+		}
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-time.After(incomingTxRetryDelay):
+		}
+	}
+}
+
+// refundAtoms converts the service-reported refunded amount to origin
+// wallet atoms, or 0 if it cannot be resolved.
+func (e *intentsEngine) refundAtoms(ctx context.Context, swap *IntentsSwap) uint64 {
+	if swap.RefundedAmount == "" || swap.OriginAssetID == intentsAssetUnknown {
+		return 0
+	}
+	unitInfo, err := asset.UnitInfo(swap.OriginAssetID)
+	if err != nil {
+		return 0
+	}
+	cat, err := e.freshCatalog(ctx)
+	if err != nil {
+		return 0
+	}
+	tok := cat.ByAssetID(swap.OriginAsset)
+	if tok == nil {
+		return 0
+	}
+	atoms, err := fromIntentsAmount(swap.RefundedAmount, &unitInfo, tok.Decimals)
+	if err != nil {
+		return 0
+	}
+	return atoms
 }
 
 // realizedAtomsOut converts the realized fill reported in a status

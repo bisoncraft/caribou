@@ -594,6 +594,23 @@ type Multisigner interface {
 	ViewPaymentMultisig(pmTx *PaymentMultisigTx) (string, error)
 }
 
+// IncomingTxRecorder is implemented by wallets that cannot observe
+// unsolicited incoming transactions on their own (account-based chains
+// with no per-address transaction index over standard RPC) but can fetch
+// and record one when its hash is learned from an external source, such
+// as a cross-chain swap service reporting its payout.
+type IncomingTxRecorder interface {
+	// RecordIncomingTx fetches the transaction and stores it in the
+	// wallet's transaction history. It is idempotent, and errors if the
+	// transaction is unknown, not yet mined, or cannot be attributed to
+	// the wallet. amtHint is the payment amount as reported by the
+	// external source, in atomic units; it is recorded (and marked as
+	// externally reported) only when the amount cannot be attributed
+	// on-chain, as with a contract-internal native transfer from an
+	// unrecognized contract. Zero disables the fallback.
+	RecordIncomingTx(ctx context.Context, txID string, amtHint uint64) error
+}
+
 // Rescanner is a wallet implementation with rescan functionality.
 type Rescanner interface {
 	// Rescan performs a rescan and block until it is done. If no birthday is

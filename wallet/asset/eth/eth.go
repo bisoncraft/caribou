@@ -457,6 +457,8 @@ var _ asset.LiveReconfigurer = (*ETHWallet)(nil)
 var _ asset.LiveReconfigurer = (*TokenWallet)(nil)
 var _ asset.TxFeeEstimator = (*ETHWallet)(nil)
 var _ asset.TxFeeEstimator = (*TokenWallet)(nil)
+var _ asset.IncomingTxRecorder = (*ETHWallet)(nil)
+var _ asset.IncomingTxRecorder = (*TokenWallet)(nil)
 var _ asset.Authenticator = (*ETHWallet)(nil)
 
 type baseWallet struct {
@@ -4487,14 +4489,19 @@ func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.H
 		return nil, asset.CoinNotFoundError
 	}
 
+	var blockNumber uint64
+	if blockHeight > 0 {
+		blockNumber = uint64(blockHeight)
+	}
 	addr := w.addr.String()
 	return &txdb.WalletTransaction{
-		Type:      txdb.Receive,
-		ID:        tx.Hash().String(),
-		Amount:    w.atomize(tx.Value()),
-		NetworkID: w.baseChainID,
-		AssetID:   w.assetID,
-		Recipient: &addr,
+		Type:        txdb.Receive,
+		ID:          tx.Hash().String(),
+		Amount:      w.atomize(tx.Value()),
+		NetworkID:   w.baseChainID,
+		AssetID:     w.assetID,
+		Recipient:   &addr,
+		BlockNumber: blockNumber,
 		AdditionalData: map[string]string{
 			txHistoryNonceKey: strconv.FormatUint(tx.Nonce(), 10),
 		},
