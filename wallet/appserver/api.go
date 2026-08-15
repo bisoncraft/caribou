@@ -1298,6 +1298,35 @@ func (s *AppServer) apiConfigureMixer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, simpleAck())
 }
 
+// apiWalletTx is the handler for the '/wallettx' API request. It returns a
+// single transaction from the wallet's history, whether the wallet made it
+// or received funds in it.
+func (s *AppServer) apiWalletTx(w http.ResponseWriter, r *http.Request) {
+	var form struct {
+		AssetID uint32 `json:"assetID"`
+		TxID    string `json:"txID"`
+	}
+	if !readPost(w, r, &form) {
+		return
+	}
+	if form.TxID == "" {
+		s.writeAPIError(w, fmt.Errorf("missing txID"))
+		return
+	}
+	tx, err := s.core.WalletTransaction(form.AssetID, form.TxID)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, struct {
+		OK bool                    `json:"ok"`
+		Tx *txdb.WalletTransaction `json:"tx"`
+	}{
+		OK: true,
+		Tx: tx,
+	})
+}
+
 func (s *AppServer) apiTxHistory(w http.ResponseWriter, r *http.Request) {
 	var form struct {
 		txdb.TxHistoryRequest

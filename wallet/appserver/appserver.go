@@ -545,6 +545,7 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/addwalletpeer", s.apiAddWalletPeer)
 			apiAuth.Post("/removewalletpeer", s.apiRemoveWalletPeer)
 			apiAuth.Post("/txhistory", s.apiTxHistory)
+			apiAuth.Post("/wallettx", s.apiWalletTx)
 			apiAuth.Post("/txhistoryticker", s.apiTxHistoryByTicker)
 			apiAuth.Get("/intents/assets", s.apiIntentsAssets)
 			apiAuth.Post("/intents/preview", s.apiIntentsPreview)

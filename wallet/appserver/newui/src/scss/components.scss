@@ -1335,10 +1335,12 @@ button.swap-cta {
   &:hover { color: var(--accent); }
 }
 
-// External-link arrow: the right arrow tilted toward the upper-right.
-.rot-neg45 {
-  display: inline-block;
-  transform: rotate(-45deg);
+// "recovered" pill on reconstructed swap records.
+.swap-recovered {
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 1px 5px;
+  letter-spacing: 0.04em;
 }
 
 // Paired origin→destination logos on an Activity swap row: the destination

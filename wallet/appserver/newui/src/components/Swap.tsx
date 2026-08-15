@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, ChangeEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, ChangeEvent, ReactNode } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import { explorerTxURL } from '@caribou/shared/coinexplorers'
 import { useForceUpdate } from '@caribou/shared/hooks'
 import { getJSON, postJSON } from '@caribou/shared/http'
-import { CoreNote, UnitInfo } from '@caribou/shared/registry'
+import { CoreNote, UnitInfo, WalletTransaction } from '@caribou/shared/registry'
 import State from '@caribou/shared/state'
 import Doc from '@caribou/shared/doc'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
@@ -359,13 +359,6 @@ export default function Swap ({ depositAddress }: SwapProps) {
     if (r.ok && r.swap) setSwap(r.swap)
   }
 
-  const swapAgain = () => {
-    setSwap(null)
-    setAmount('')
-    setExecErr('')
-    setView('form')
-  }
-
   // ---- Unavailable / loading states ----
 
   if (assetsErr && !swap) {
@@ -392,7 +385,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
   // ---- Progress view ----
 
   if (view === 'progress' && swap) {
-    return <SwapProgress swap={swap} onRefresh={refreshSwap} onSwapAgain={swapAgain} onClose={close} />
+    return <SwapProgress swap={swap} onRefresh={refreshSwap} onClose={close} />
   }
   if (view === 'progress') { // opened by depositAddress, record still loading
     return (
@@ -424,7 +417,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
     return (
       <form className="modal swap-modal">
         <header>
-          <span className="ico-arrowleft fs14 pointer me-2" onClick={() => setView('form')} />
+          <span className="ico-arrow-left fs16 pointer me-2" onClick={() => setView('form')} />
           <span>{pickSide === 'sell' ? t('Sell which asset?') : t('Buy which asset?')}</span>
         </header>
         <div className="px-3 pb-2">
@@ -533,7 +526,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
     return (
       <form className="modal swap-modal" onSubmit={e => { e.preventDefault(); execute() }}>
         <header>
-          <span className="ico-arrowleft fs14 pointer me-2" onClick={() => { if (!executing) setView('form') }} />
+          <span className="ico-arrow-left fs16 pointer me-2" onClick={() => { if (!executing) setView('form') }} />
           <span>{t('Review swap')}</span>
         </header>
 
@@ -658,7 +651,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
       {a
         ? <><CoinLogo ticker={assetTicker(a)} className="icon-32 me-2" /><span className="fs18 demi">{assetTicker(a)}</span></>
         : <span className="fs16">{t('Select asset')}</span>}
-      <span className="ico-arrowdown fs11 ms-2 grey" />
+      <span className="ico-arrow-down fs12 ms-2 grey" />
     </button>
   )
 
@@ -831,10 +824,29 @@ export default function Swap ({ depositAddress }: SwapProps) {
 
 // ---- Progress subview ----
 
+// fetchWalletTx loads a single transaction from a wallet's history, or
+// null when the wallet has no record of it.
+async function fetchWalletTx (assetID: number, txID: string): Promise<WalletTransaction | null> {
+  const r = await postJSON('/api/wallettx', { assetID, txID })
+  return r.ok && r.tx ? r.tx as WalletTransaction : null
+}
+
+// Row is the bordered label/value row shared with the transaction detail
+// dialog.
+function Row ({ label, tip, children }: { label: string, tip?: string, children: ReactNode }) {
+  return (
+    <div className="network-stat d-flex justify-content-between align-items-center fs14 border-bottom">
+      {tip
+        ? <span className="grey fs13 has-tip" aria-label={tip}>{label}</span>
+        : <span className="grey fs13">{label}</span>}
+      <span className="text-right">{children}</span>
+    </div>
+  )
+}
+
 interface SwapProgressProps {
   swap: IntentsSwap
   onRefresh: () => void
-  onSwapAgain: () => void
   onClose: () => void
 }
 
@@ -844,7 +856,7 @@ function activeStep (state: string): number {
   return state === StateProcessing ? 1 : 0
 }
 
-function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressProps) {
+function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
   const active = swapIsActive(swap)
   const originAsset = app.user?.assets[swap.originAssetID]
   const destAsset = app.user?.assets[swap.destAssetID]
@@ -864,6 +876,29 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
     : ''
   const feeBps = (swap.appFees ?? []).reduce((sum, f) => sum + f.fee, 0)
 
+  // The deposit leg, for its network fee: undefined while loading, null
+  // when the wallet has no record of it.
+  const [depositTx, setDepositTx] = useState<WalletTransaction | null | undefined>(undefined)
+  useEffect(() => {
+    if (!swap.depositTxID) {
+      setDepositTx(null)
+      return
+    }
+    let stale = false
+    setDepositTx(undefined)
+    fetchWalletTx(swap.originAssetID, swap.depositTxID).then(tx => {
+      if (!stale) setDepositTx(tx)
+    })
+    return () => { stale = true }
+  }, [swap.originAssetID, swap.depositTxID])
+
+  // The deposit's network fee is paid in the origin chain's native asset.
+  const feeAssetID = originAsset?.token ? originAsset.token.networkID : swap.originAssetID
+  const feeAsset = app.user?.assets[feeAssetID]
+  const feeUSD = depositTx && feeAsset
+    ? Doc.usdString(depositTx.fees, feeAsset.unitInfo.conventional.conversionFactor, app.idRate(feeAssetID) ?? 0)
+    : ''
+
   // One shared "Copied!" flash keyed by the copied string.
   const [copiedID, setCopiedID] = useState('')
   const copy = async (v: string) => {
@@ -875,59 +910,77 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
   }
 
   const statusIcon = () => {
-    if (active) return <Spinner size={28} />
+    if (active) return <Spinner size={16} />
     switch (swap.state) {
-      case StateSuccess: return <span className="ico-check fs28 tx-amt-pos" />
-      case StateFailed: return <span className="ico-close fs28 errcolor" />
-      default: return <span className="ico-info fs28 grey" />
+      case StateSuccess: return <span className="ico-check fs16 tx-amt-pos" />
+      case StateFailed: return <span className="ico-close fs16 errcolor" />
+      default: return <span className="ico-info fs16 grey" />
     }
   }
 
-  // A copyable identifier row: shortened value, a copy control, and a
-  // block-explorer link when one exists for the asset.
-  const idRow = (label: string, id: string, assetID: number) => {
+  // openLeg swaps this dialog for the leg transaction's detail dialog.
+  const openLeg = async (assetID: number, txID: string) => {
+    const tx = await fetchWalletTx(assetID, txID)
+    if (tx) app.setForm({ form: 'txdetail', data: { assetID, tx } })
+  }
+
+  // idActions renders the copy control, and a block-explorer link when one
+  // exists for the asset.
+  const idActions = (id: string, assetID: number) => {
     const explorer = explorerTxURL(assetID, id)
     return (
-      <div key={label + id} className="d-flex justify-content-between align-items-center py-1">
-        <span className="grey">{label}</span>
-        <span className="d-flex align-items-center">
-          <span className="mono has-tip" aria-label={id}>{Doc.shortenAddress(id)}</span>
-          <span
-            className={`swap-id-action ms-2 pointer fs11 ${copiedID === id ? 'tx-amt-pos' : 'grey'}`}
-            onClick={() => copy(id)}
-          >
-            {copiedID === id ? t('Copied!') : <span className="ico-copy" />}
-          </span>
-          {explorer && (
-            <a href={explorer} target="_blank" rel="noopener noreferrer" className="swap-id-action ms-2 fs11" aria-label={t('View in block explorer')}>
-              <span className="ico-arrowright rot-neg45" />
-            </a>
-          )}
+      <>
+        <span
+          className={`swap-id-action ms-2 pointer fs12 ${copiedID === id ? 'tx-amt-pos' : 'grey'}`}
+          onClick={e => { e.stopPropagation(); copy(id) }}
+        >
+          {copiedID === id ? t('Copied!') : <span className="ico-copy" />}
         </span>
-      </div>
+        {explorer && (
+          <a
+            href={explorer} target="_blank" rel="noopener noreferrer"
+            className="swap-id-action ms-2 fs12" aria-label={t('View in block explorer')}
+            onClick={e => e.stopPropagation()}
+          >
+            <span className="ico-link" />
+          </a>
+        )}
+      </>
     )
   }
+
+  // A transaction-leg row: click opens the leg's own detail dialog.
+  const txRow = (label: string, id: string, assetID: number) => (
+    <Row key={label + id} label={label} tip={t('Click to view the transaction.')}>
+      <span className="d-flex align-items-center pointer" onClick={() => openLeg(assetID, id)}>
+        <span className="mono fs13 has-tip" aria-label={id}>{Doc.shortenAddress(id)}</span>
+        {idActions(id, assetID)}
+      </span>
+    </Row>
+  )
 
   const steps = [t('Deposit'), t('Swapping'), t('Delivered')]
   const step = activeStep(swap.state)
 
   const started = new Date(swap.createdAt)
   const updated = new Date(swap.updatedAt)
+  const deadline = new Date(swap.deadline)
 
   return (
     <form className="modal swap-modal" onSubmit={e => e.preventDefault()}>
       <header><span>{t('Swap details')}</span></header>
 
-      <div className="flex-center flex-column px-3 pt-2 pb-1">
+      <div className="flex-center px-3 pt-1">
         {statusIcon()}
-        <div className={`fs18 demi pt-2 ${stateColorClass(swap.state)}`}>{stateLabel(swap.state)}</div>
+        <span className={`fs16 demi ms-2 ${stateColorClass(swap.state)}`}>{stateLabel(swap.state)}</span>
         {active && swap.timeEstimate > 0 && (
-          <div className="grey fs12 pt-1">{tvar('usually ~{{ eta }}', { eta: Doc.formatDuration(swap.timeEstimate * 1000) })}</div>
+          <span className="grey fs12 ms-2">{tvar('usually ~{{ eta }}', { eta: Doc.formatDuration(swap.timeEstimate * 1000) })}</span>
         )}
+        {swap.reconstructed && <span className="swap-recovered fs11 grey ms-2">{t('recovered')}</span>}
       </div>
 
       {active && (
-        <div className="flex-center px-3 pt-2">
+        <div className="flex-center px-3 pt-3">
           {steps.map((label, i) => (
             <div key={label} className="d-flex align-items-center">
               {i > 0 && <div className={`swap-step-bar ${i <= step ? 'done' : ''}`} />}
@@ -940,23 +993,23 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
         </div>
       )}
 
-      <div className="flex-center px-3 py-2">
-        <div className="d-flex flex-column align-items-center">
-          <div className="d-flex align-items-center">
-            <CoinLogo ticker={originTicker} className="icon-24" />
-            <span className="mono fs14 ms-2">{amountIn} {originTicker}</span>
+      <div className="flex-center px-3 py-3">
+        <div className="d-flex align-items-center">
+          <CoinLogo ticker={originTicker} className="icon-32 me-2" />
+          <div>
+            <div className="mono demi fs18">{amountIn} {originTicker}</div>
+            <div className="grey fs12">{usdIn}</div>
           </div>
-          <div className="grey fs12 pt-1">{usdIn}</div>
         </div>
-        <span className="ico-arrowright fs12 grey mx-3" />
-        <div className="d-flex flex-column align-items-center">
-          <div className="d-flex align-items-center">
-            <CoinLogo ticker={destTicker} className="icon-24" />
-            <span className="mono fs14 ms-2">
+        <span className="ico-arrow-right fs14 grey mx-3" />
+        <div className="d-flex align-items-center">
+          <CoinLogo ticker={destTicker} className="icon-32 me-2" />
+          <div>
+            <div className="mono demi fs18">
               {swap.state === StateSuccess ? '' : '~'}{amountOut} {destTicker}
-            </span>
+            </div>
+            <div className="grey fs12">{usdOut}</div>
           </div>
-          <div className="grey fs12 pt-1">{usdOut}</div>
         </div>
       </div>
 
@@ -976,46 +1029,74 @@ function SwapProgress ({ swap, onRefresh, onSwapAgain, onClose }: SwapProgressPr
         <div className="px-3 pb-2 fs13 grey text-center">{t('The quote expired before the deposit was sent. No funds moved.')}</div>
       )}
 
-      <div className="px-3 pb-2 fs12">
-        {rateText !== '' && (
-          <div className="d-flex justify-content-between py-1">
-            <span className="grey">{t('Rate')}</span>
-            <span className="mono">{rateText}</span>
-          </div>
+      <div className="px-3">
+        {rateText !== '' && <Row label={t('Rate')}><span className="mono fs13">{rateText}</span></Row>}
+        {swap.depositTxID && (
+          <Row label={t('Network fee')} tip={t("The deposit transaction's fee on the origin chain.")}>
+            {depositTx === undefined
+              ? <Spinner size={12} />
+              : depositTx === null || !feeAsset || depositTx.fees === 0
+                // A zero fee means the wallet did not record one (the UTXO
+                // wallets' history omits fees today), not a free ride.
+                ? '—'
+                : (
+                  <>
+                    <span className="mono">{Doc.formatCoinValue(depositTx.fees, feeAsset.unitInfo)} {feeAsset.unitInfo.conventional.unit}</span>
+                    {feeUSD !== '' && <span className="grey fs12 ms-1">({feeUSD})</span>}
+                  </>
+                  )}
+          </Row>
         )}
         {feeBps > 0 && (
-          <div className="d-flex justify-content-between py-1">
-            <span className="grey has-tip" aria-label={t('Fee paid to the swap service, included in the quoted output.')}>{t('Service fee')}</span>
-            <span>{slippagePct(feeBps)}</span>
-          </div>
+          <Row label={t('Service fee')} tip={t('Fee paid to the swap service, included in the quoted output.')}>
+            {slippagePct(feeBps)}
+          </Row>
         )}
-        <div className="d-flex justify-content-between py-1">
-          <span className="grey">{t('Started')}</span>
-          <span>{isNaN(started.getTime()) ? '—' : started.toLocaleString()}</span>
-        </div>
+        <Row label={t('Started')}>{isNaN(started.getTime()) ? '—' : started.toLocaleString()}</Row>
         {!active && (
-          <div className="d-flex justify-content-between py-1">
-            <span className="grey">{t('Last update')}</span>
-            <span>{isNaN(updated.getTime()) ? '—' : updated.toLocaleString()}</span>
-          </div>
+          <Row label={t('Last update')}>{isNaN(updated.getTime()) ? '—' : updated.toLocaleString()}</Row>
         )}
-        {idRow(t('Deposit address'), swap.depositAddress, swap.originAssetID)}
-        {swap.depositTxID && idRow(t('Deposit'), swap.depositTxID, swap.originAssetID)}
-        {(swap.destinationTxs ?? []).map(id => idRow(t('Received'), id, swap.destAssetID))}
-        {(swap.refundTxs ?? []).map(id => idRow(t('Refund'), id, swap.originAssetID))}
+        {active && !isNaN(deadline.getTime()) && (
+          <Row label={t('Deadline')} tip={t('If the swap has not completed by the deadline, the deposit is refunded automatically.')}>
+            {deadline.toLocaleString()}
+          </Row>
+        )}
+        <Row label={t('Receiving address')} tip={t('The destination-wallet address receiving the funds.')}>
+          <span className="d-flex align-items-center">
+            <span className="mono fs13 has-tip" aria-label={swap.recipient}>{Doc.shortenAddress(swap.recipient)}</span>
+            <span
+              className={`swap-id-action ms-2 pointer fs12 ${copiedID === swap.recipient ? 'tx-amt-pos' : 'grey'}`}
+              onClick={() => copy(swap.recipient)}
+            >
+              {copiedID === swap.recipient ? t('Copied!') : <span className="ico-copy" />}
+            </span>
+          </span>
+        </Row>
+        <Row label={t('Deposit address')}>
+          <span className="d-flex align-items-center">
+            <span className="mono fs13 has-tip" aria-label={swap.depositAddress}>{Doc.shortenAddress(swap.depositAddress)}</span>
+            <span
+              className={`swap-id-action ms-2 pointer fs12 ${copiedID === swap.depositAddress ? 'tx-amt-pos' : 'grey'}`}
+              onClick={() => copy(swap.depositAddress)}
+            >
+              {copiedID === swap.depositAddress ? t('Copied!') : <span className="ico-copy" />}
+            </span>
+          </span>
+        </Row>
+        {swap.depositTxID && txRow(t('Deposit tx'), swap.depositTxID, swap.originAssetID)}
+        {(swap.destinationTxs ?? []).map(id => txRow(t('Received tx'), id, swap.destAssetID))}
+        {(swap.refundTxs ?? []).map(id => txRow(t('Refund tx'), id, swap.originAssetID))}
       </div>
 
       {active && (
-        <div className="grey fs11 px-3 pb-2 text-center">
+        <div className="grey fs11 px-3 pt-2 text-center">
           {t('Safe to close — the swap continues in the background and shows under Activity.')}
         </div>
       )}
 
-      <div className="flex-stretch-column px-3 pb-3 pt-1">
-        {active
-          ? <button type="button" onClick={onRefresh}>{t('Refresh status')}</button>
-          : <button type="button" onClick={onSwapAgain}>{t('New swap')}</button>}
-        <button type="button" className="mt-2" onClick={onClose}>{t('Close')}</button>
+      <div className="flex-stretch-column px-3 pb-3 pt-2">
+        {active && <button type="button" onClick={onRefresh}>{t('Refresh status')}</button>}
+        <button type="button" className={active ? 'mt-2' : ''} onClick={onClose}>{t('Close')}</button>
       </div>
     </form>
   )
