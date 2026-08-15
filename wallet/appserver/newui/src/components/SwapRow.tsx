@@ -14,7 +14,15 @@ export function swapTime (s: IntentsSwap): number {
 // SwapRow is a cross-chain swap's row in the Activity feed: paired coin
 // logos, the pair and status, and both legs' amounts. Clicking opens the
 // swap dialog on the record's progress view.
-export default function SwapRow ({ swap }: { swap: IntentsSwap }) {
+interface SwapRowProps {
+  swap: IntentsSwap
+  // See TxRow: shared-hover reporting and highlight for rows serving the
+  // same swap.
+  onSwapHover?: (depositAddress: string) => void
+  swapHighlight?: boolean
+}
+
+export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowProps) {
   const open = () => app.setForm({ form: 'swap', data: { depositAddress: swap.depositAddress } })
 
   const active = swapIsActive(swap)
@@ -68,8 +76,10 @@ export default function SwapRow ({ swap }: { swap: IntentsSwap }) {
 
   return (
     <div
-      className={`activity-row d-flex align-items-center pointer mb-2 ${active ? 'activity-row-unconfirmed' : ''}`}
+      className={`activity-row d-flex align-items-center pointer mb-2 ${active ? 'activity-row-unconfirmed' : ''} ${swapHighlight ? 'swap-hover' : ''}`}
       onClick={open}
+      onMouseEnter={() => onSwapHover?.(swap.depositAddress)}
+      onMouseLeave={() => onSwapHover?.('')}
     >
       <span className="swap-row-logos position-relative icon-32 me-3">
         <CoinLogo ticker={originTicker} className="icon-24" />

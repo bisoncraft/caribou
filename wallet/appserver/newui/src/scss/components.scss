@@ -495,6 +495,9 @@ body.sidebar-collapsed .sidebar-label {
   padding: 0.6rem 0.9rem;
   transition: background-color 0.15s;
 
+  // Rows serving the same cross-chain swap as the hovered row light up
+  // together (Activity sets the class from shared hover state).
+  &.swap-hover,
   &:hover {
     background-color: var(--surface-raised);
   }
@@ -1299,11 +1302,28 @@ button.swap-cta {
 }
 
 // Marker on a transaction row that serves as a cross-chain swap leg;
-// clicking it opens the swap's detail dialog.
+// clicking it opens the swap's detail dialog. An accent-ringed circular
+// chip so the mark reads at a glance; the fill strengthens on hover to
+// signal the click-through.
 .swap-leg-badge {
-  color: var(--text-grey);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  // The icon font inks above the baseline, so a normal line box rides
+  // high; zeroing it lets flex center the ink itself.
+  line-height: 0;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent-strong) 15%, transparent);
 
-  &:hover { color: var(--accent); }
+  &:hover {
+    color: var(--accent-contrast);
+    background-color: var(--accent-strong);
+  }
 }
 
 // Progress steps on an active swap's detail view.

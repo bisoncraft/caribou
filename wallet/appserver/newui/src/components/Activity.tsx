@@ -117,6 +117,9 @@ export default function Activity () {
   // Cross-chain swap records. The full list is small and served whole, so
   // it lives in state rather than the paged per-ticker source map.
   const [swaps, setSwaps] = useState<IntentsSwap[]>([])
+  // The deposit address of the swap served by the hovered row, so every
+  // row belonging to that swap can light up together.
+  const [hoverSwap, setHoverSwap] = useState('')
 
   const activeTickers = (): TickerAsset[] =>
     (app.tickerList ?? []).filter(ta => ta.variants.some(isVariantActive))
@@ -326,7 +329,12 @@ export default function Activity () {
         {!loading && activeSwaps.length > 0 && (
           <div>
             <div className="section-label fs11 grey demi pt-3 pb-2">{t('In progress')}</div>
-            {activeSwaps.map(s => <SwapRow key={s.depositAddress} swap={s} />)}
+            {activeSwaps.map(s => (
+              <SwapRow
+                key={s.depositAddress} swap={s} onSwapHover={setHoverSwap}
+                swapHighlight={hoverSwap !== '' && s.depositAddress === hoverSwap}
+              />
+            ))}
           </div>
         )}
 
@@ -337,8 +345,18 @@ export default function Activity () {
             <div key={key}>
               <div className="section-label fs11 grey demi pt-3 pb-2">{t(label)}</div>
               {list.map(entry => entry.tx
-                ? <TxRow key={`${entry.tx.variant.assetID}:${entry.tx.tx.id}`} item={entry.tx} />
-                : <SwapRow key={(entry.swap as IntentsSwap).depositAddress} swap={entry.swap as IntentsSwap} />)}
+                ? (
+                  <TxRow
+                    key={`${entry.tx.variant.assetID}:${entry.tx.tx.id}`} item={entry.tx} onSwapHover={setHoverSwap}
+                    swapHighlight={hoverSwap !== '' && entry.tx.swapRelation?.swap.depositAddress === hoverSwap}
+                  />
+                  )
+                : (
+                  <SwapRow
+                    key={(entry.swap as IntentsSwap).depositAddress} swap={entry.swap as IntentsSwap} onSwapHover={setHoverSwap}
+                    swapHighlight={hoverSwap !== '' && (entry.swap as IntentsSwap).depositAddress === hoverSwap}
+                  />
+                  ))}
             </div>
           )
         })}

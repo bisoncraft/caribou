@@ -56,7 +56,16 @@ function txStatus (tx: WalletTransaction): string {
 // TxRow is the transaction row shared by the Activity feed and the Asset
 // view: type icon, title with recipient/status sub-line, and amount with a
 // USD sub-line when a rate is known. Clicking opens the transaction detail.
-export default function TxRow ({ item }: { item: TxRowItem }) {
+interface TxRowProps {
+  item: TxRowItem
+  // onSwapHover reports the deposit address of the hovered row's swap ('' on
+  // leave or for unrelated rows); swapHighlight lights the row up alongside
+  // a hovered sibling serving the same swap.
+  onSwapHover?: (depositAddress: string) => void
+  swapHighlight?: boolean
+}
+
+export default function TxRow ({ item, onSwapHover, swapHighlight }: TxRowProps) {
   const { tx, ta, variant, swapRelation } = item
   const open = () => app.setForm({ form: 'txdetail', data: { assetID: variant.assetID, tx } })
   const openSwap = (e: MouseEvent) => {
@@ -79,8 +88,10 @@ export default function TxRow ({ item }: { item: TxRowItem }) {
 
   return (
     <div
-      className={`activity-row d-flex align-items-center pointer mb-2 ${unconfirmed ? 'activity-row-unconfirmed' : ''}`}
+      className={`activity-row d-flex align-items-center pointer mb-2 ${unconfirmed ? 'activity-row-unconfirmed' : ''} ${swapHighlight ? 'swap-hover' : ''}`}
       onClick={open}
+      onMouseEnter={() => onSwapHover?.(swapRelation?.swap.depositAddress ?? '')}
+      onMouseLeave={() => onSwapHover?.('')}
     >
       <span className={`tx-type-icon icon-32 fs14 flex-center me-3 ${txIcon(tx.type)}`} />
       <div className="flex-grow-1">
