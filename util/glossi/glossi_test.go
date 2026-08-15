@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"go.etcd.io/bbolt"
 )
 
@@ -97,7 +98,7 @@ func TestSetBatch(t *testing.T) {
 		t.Fatalf("SetBatch(nil): %v", err)
 	}
 
-	entries := []KV{
+	entries := []kvstore.BatchEntry{
 		{K: []byte("k1"), V: []byte("v1")},
 		{K: []byte("k2"), V: []byte("v2")},
 		{K: []byte("k3"), V: []byte("v3")},
@@ -107,13 +108,13 @@ func TestSetBatch(t *testing.T) {
 	}
 	for _, e := range entries {
 		got, err := tbl.Get(e.K)
-		if err != nil || !bytes.Equal(got, e.V) {
+		if err != nil || !bytes.Equal(got, e.V.([]byte)) {
 			t.Fatalf("Get(%q) = %q, %v", e.K, got, err)
 		}
 	}
 
 	// A zero-length key anywhere in the batch is rejected before any write.
-	if err := tbl.SetBatch([]KV{{K: []byte("k4"), V: []byte("v4")}, {K: nil, V: []byte("x")}}); err == nil {
+	if err := tbl.SetBatch([]kvstore.BatchEntry{{K: []byte("k4"), V: []byte("v4")}, {K: nil, V: []byte("x")}}); err == nil {
 		t.Fatal("expected error for zero-length key in batch")
 	}
 	if _, err := tbl.Get([]byte("k4")); !errors.Is(err, ErrKeyNotFound) {
@@ -122,7 +123,7 @@ func TestSetBatch(t *testing.T) {
 
 	// Without WithReplace, a conflict mid-batch rolls back the whole batch:
 	// the earlier entry in the same batch must not persist.
-	err = tbl.SetBatch([]KV{
+	err = tbl.SetBatch([]kvstore.BatchEntry{
 		{K: []byte("fresh"), V: []byte("a")},
 		{K: []byte("k1"), V: []byte("dup")}, // k1 already exists -> conflict
 	})
@@ -134,7 +135,7 @@ func TestSetBatch(t *testing.T) {
 	}
 
 	// With WithReplace, existing keys are updated.
-	if err := tbl.SetBatch([]KV{{K: []byte("k1"), V: []byte("v1-new")}}, WithReplace()); err != nil {
+	if err := tbl.SetBatch([]kvstore.BatchEntry{{K: []byte("k1"), V: []byte("v1-new")}}, WithReplace()); err != nil {
 		t.Fatalf("SetBatch replace: %v", err)
 	}
 	if got, _ := tbl.Get([]byte("k1")); !bytes.Equal(got, []byte("v1-new")) {
@@ -143,7 +144,8 @@ func TestSetBatch(t *testing.T) {
 }
 
 // blockIndexFunc indexes a value whose first 8 bytes are a big-endian uint64.
-func blockIndexFunc(_, v []byte) ([]byte, error) {
+func blockIndexFunc(_, vI KV) ([]byte, error) {
+	v := vI.([]byte)
 	return v[:8], nil
 }
 
@@ -277,7 +279,8 @@ func TestNotIndexed(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("txs")
 	// Index only values whose first byte is 1.
-	idx, _ := tbl.AddIndex("selective", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("selective", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		if v[0] != 1 {
 			return nil, ErrNotIndexed
 		}
@@ -621,7 +624,8 @@ func TestForwardSeekBeforeBound(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("txs")
 	// Index by the first byte of the value.
-	idx, _ := tbl.AddIndex("byte0", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("byte0", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[:1], nil
 	})
 	// Two index "groups": prefix A and prefix B.
@@ -651,7 +655,8 @@ func TestForwardSeekBeforeBound(t *testing.T) {
 func TestReverseSeekBeforeBound(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("txs")
-	idx, _ := tbl.AddIndex("byte0", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("byte0", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[:1], nil
 	})
 	tbl.Set([]byte("a1"), []byte{'A', 1})
@@ -744,7 +749,8 @@ func TestIndexIteratePrefix(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("txs")
 	// Two-byte index: group, ordinal.
-	idx, _ := tbl.AddIndex("grp", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("grp", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[:2], nil
 	})
 	tbl.Set([]byte("a"), []byte{0x10, 0x01})
@@ -801,7 +807,7 @@ func TestIndexFnError(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("txs")
 	sentinel := errors.New("index function exploded")
-	_, err := tbl.AddIndex("explode", func(_, _ []byte) ([]byte, error) {
+	_, err := tbl.AddIndex("explode", func(_, _ KV) ([]byte, error) {
 		return nil, sentinel
 	})
 	if err != nil {
@@ -826,7 +832,8 @@ func TestMultipleIndexesReplaceAndDelete(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("txs")
 	byBlock, _ := tbl.AddIndex("block", blockIndexFunc)
-	bySuffix, _ := tbl.AddIndex("suffix", func(_, v []byte) ([]byte, error) {
+	bySuffix, _ := tbl.AddIndex("suffix", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[len(v)-1:], nil
 	})
 
@@ -973,7 +980,7 @@ func TestIndexFuncErrorWrapped(t *testing.T) {
 	tbl, _ := db.Table("kv")
 	tbl.AddIndex("ok", blockIndexFunc)
 	boom := errors.New("kaboom")
-	tbl.AddIndex("breakable", func(_, _ []byte) ([]byte, error) { return nil, boom })
+	tbl.AddIndex("breakable", func(_, _ KV) ([]byte, error) { return nil, boom })
 
 	err := tbl.Set([]byte("k"), u64(1))
 	if err == nil {
@@ -1015,7 +1022,8 @@ func TestIterDeleteOnBareIter(t *testing.T) {
 func TestTableIterateUpdate(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("kv")
-	idx, _ := tbl.AddIndex("byte0", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("byte0", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[:1], nil
 	})
 	tbl.Set([]byte("a"), []byte{1})
@@ -1174,7 +1182,8 @@ func TestTableIterateCorruptDatum(t *testing.T) {
 func TestIndexDanglingEntry(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("kv")
-	idx, _ := tbl.AddIndex("byte0", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("byte0", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[:1], nil
 	})
 	// Inject an index entry whose trailing primary key doesn't exist in the
@@ -1195,7 +1204,8 @@ func TestIndexDanglingEntry(t *testing.T) {
 func TestIndexIterateCorruptDatum(t *testing.T) {
 	db := newTestDB(t)
 	tbl, _ := db.Table("kv")
-	idx, _ := tbl.AddIndex("byte0", func(_, v []byte) ([]byte, error) {
+	idx, _ := tbl.AddIndex("byte0", func(_, vI KV) ([]byte, error) {
+		v := vI.([]byte)
 		return v[:1], nil
 	})
 	// Plant an index entry that points at a primary key, then overwrite the

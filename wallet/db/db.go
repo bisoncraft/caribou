@@ -14,6 +14,7 @@ import (
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
 	"github.com/bisoncraft/caribou/util/kvstore"
+	"github.com/bisoncraft/caribou/util/kvstore/engine"
 )
 
 // Table names. Neither engine supports nested namespaces, so the layout is
@@ -100,7 +101,7 @@ var _ DB = (*kvDB)(nil)
 // New opens the database at path — a directory on desktop, a file on mobile —
 // creating it if it does not exist.
 func New(path string, log util.Logger) (DB, error) {
-	store, err := kvstore.New(path, log)
+	store, err := engine.New(path, log)
 	if err != nil {
 		return nil, err
 	}
@@ -409,15 +410,23 @@ func (d *kvDB) Wallet(assetID uint32) (*Wallet, error) {
 	return row.assemble(assetID)
 }
 
-// encodeNoteRecord encodes a notes-table value: the notification encoding
-// plus its ack flag, in a versioned envelope. noteB must be the encoding from
-// (*Notification).Encode.
-func encodeNoteRecord(noteB []byte, ack bool) []byte {
+// noteRecord is the value inserted into the notes table: the notification and
+// its ack flag. The typed record is what gets passed to Set, so the stamp
+// index recovers it with a type assertion and reads the timestamp directly
+// instead of decoding the stored bytes.
+type noteRecord struct {
+	note *Notification
+	ack  bool
+}
+
+// MarshalBinary satisfies encoding.BinaryMarshaler, encoding the notification
+// encoding plus the ack flag in a versioned envelope.
+func (r *noteRecord) MarshalBinary() ([]byte, error) {
 	ackB := encode.ByteFalse
-	if ack {
+	if r.ack {
 		ackB = encode.ByteTrue
 	}
-	return versionedBytes(0).AddData(noteB).AddData(ackB)
+	return versionedBytes(0).AddData(r.note.Encode()).AddData(ackB), nil
 }
 
 // decodeNoteRecord splits a notes-table value into the raw notification
@@ -438,17 +447,13 @@ func decodeNoteRecord(b []byte) (noteB []byte, ack bool, _ error) {
 }
 
 // noteStampIndexFunc derives the stamp index entry — the notification's
-// 8-byte big-endian timestamp — from a notes-table value.
-func noteStampIndexFunc(_, v []byte) ([]byte, error) {
-	noteB, _, err := decodeNoteRecord(v)
-	if err != nil {
-		return nil, err
+// 8-byte big-endian timestamp — from the *noteRecord under insertion.
+func noteStampIndexFunc(_, vI kvstore.KV) ([]byte, error) {
+	rec, ok := vI.(*noteRecord)
+	if !ok {
+		return nil, fmt.Errorf("expected *noteRecord value, got %T", vI)
 	}
-	note, err := DecodeNotification(noteB)
-	if err != nil {
-		return nil, err
-	}
-	return uint64Bytes(note.TimeStamp), nil
+	return uint64Bytes(rec.note.TimeStamp), nil
 }
 
 // SaveNotification saves the notification. Re-saving a notification preserves
@@ -468,7 +473,7 @@ func (d *kvDB) SaveNotification(note *Notification) error {
 	} else if !errors.Is(err, kvstore.ErrKeyNotFound) {
 		return err
 	}
-	return d.notes.Set(id, encodeNoteRecord(note.Encode(), ack), true)
+	return d.notes.Set(id, &noteRecord{note: note, ack: ack}, true)
 }
 
 // AckNotification sets the acknowledgement flag for the notification.
@@ -486,7 +491,11 @@ func (d *kvDB) AckNotification(id []byte) error {
 	if err != nil {
 		return err
 	}
-	return d.notes.Set(id, encodeNoteRecord(noteB, true), true)
+	note, err := DecodeNotification(noteB)
+	if err != nil {
+		return err
+	}
+	return d.notes.Set(id, &noteRecord{note: note, ack: true}, true)
 }
 
 // NotificationsN reads out the N most recent notifications, newest first.

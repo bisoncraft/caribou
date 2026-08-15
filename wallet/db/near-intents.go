@@ -108,9 +108,12 @@ func (s *IntentsSwap) Terminal() bool {
 // intentsSwapRecordVersion is the stored-record encoding version.
 const intentsSwapRecordVersion = 0
 
-// encodeIntentsSwap encodes a swap record for storage: version(1) || JSON.
-func encodeIntentsSwap(swap *IntentsSwap) ([]byte, error) {
-	b, err := json.Marshal(swap)
+// MarshalBinary satisfies encoding.BinaryMarshaler, encoding the stored swap
+// record: version(1) || JSON. The typed swap is what gets passed to Set, so
+// the index functions recover it with a type assertion instead of re-decoding
+// the stored bytes.
+func (s *IntentsSwap) MarshalBinary() ([]byte, error) {
+	b, err := json.Marshal(s)
 	if err != nil {
 		return nil, fmt.Errorf("error encoding swap record: %w", err)
 	}
@@ -137,10 +140,20 @@ func intentsSwapStamp(swap *IntentsSwap) []byte {
 	return uint64Bytes(uint64(swap.CreatedAt.UnixMilli()))
 }
 
+// intentsSwapV asserts an intentsSwaps-table value to the *IntentsSwap under
+// insertion.
+func intentsSwapV(vI kvstore.KV) (*IntentsSwap, error) {
+	swap, ok := vI.(*IntentsSwap)
+	if !ok {
+		return nil, fmt.Errorf("expected *IntentsSwap value, got %T", vI)
+	}
+	return swap, nil
+}
+
 // intentsStampIndexFunc derives the stamp index entry — the swap's creation
-// time — from an intentsSwaps-table value.
-func intentsStampIndexFunc(_, v []byte) ([]byte, error) {
-	swap, err := decodeIntentsSwap(v)
+// time — from the swap under insertion.
+func intentsStampIndexFunc(_, vI kvstore.KV) ([]byte, error) {
+	swap, err := intentsSwapV(vI)
 	if err != nil {
 		return nil, err
 	}
@@ -149,8 +162,8 @@ func intentsStampIndexFunc(_, v []byte) ([]byte, error) {
 
 // intentsActiveIndexFunc derives the active index entry, declining to index
 // records in a terminal state.
-func intentsActiveIndexFunc(_, v []byte) ([]byte, error) {
-	swap, err := decodeIntentsSwap(v)
+func intentsActiveIndexFunc(_, vI kvstore.KV) ([]byte, error) {
+	swap, err := intentsSwapV(vI)
 	if err != nil {
 		return nil, err
 	}
@@ -169,11 +182,7 @@ func (d *kvDB) StoreIntentsSwap(swap *IntentsSwap) error {
 		return errors.New("no deposit address")
 	}
 	swap.UpdatedAt = time.Now()
-	b, err := encodeIntentsSwap(swap)
-	if err != nil {
-		return err
-	}
-	return d.intentsSwaps.Set([]byte(swap.DepositAddress), b, true)
+	return d.intentsSwaps.Set([]byte(swap.DepositAddress), swap, true)
 }
 
 // IntentsSwap fetches the swap record stored under the deposit address. It

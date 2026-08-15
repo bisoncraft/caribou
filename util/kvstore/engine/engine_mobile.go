@@ -3,12 +3,16 @@
 
 //go:build mobile
 
-package kvstore
+package engine
 
-import "github.com/bisoncraft/caribou/util"
+import (
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/glossi"
+	"github.com/bisoncraft/caribou/util/kvstore"
+)
 
 // New opens the mobile store at path, backed by bbolt via util/glossi. The
 // path names a file.
-func New(path string, log util.Logger) (Store, error) {
-	return newGlossiStore(path, log)
+func New(path string, log util.Logger) (kvstore.Store, error) {
+	return glossi.NewStore(path, log)
 }

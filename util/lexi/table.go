@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -53,7 +54,7 @@ func WithGetTxn(txn *badger.Txn) GetOption {
 
 // GetRaw retrieves a value from the Table as raw bytes.
 func (t *Table) GetRaw(k KV, options ...GetOption) (b []byte, err error) {
-	kB, err := parseKV(k)
+	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling key: %w", err)
 	}
@@ -150,7 +151,7 @@ func (t *Table) UseDefaultSetOptions(setOpts ...SetOption) {
 
 // Set inserts a new value for the key, and creates index entries.
 func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
-	kB, err := parseKV(k)
+	kB, err := kvstore.ParseKV(k)
 	if err != nil {
 		return fmt.Errorf("error marshaling key: %w", err)
 	}
@@ -159,7 +160,7 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 	if len(kB) == 0 {
 		return errors.New("no zero-length keys allowed")
 	}
-	vB, err := parseKV(v)
+	vB, err := kvstore.ParseKV(v)
 	if err != nil {
 		return fmt.Errorf("error marshaling value: %w", err)
 	}
@@ -243,17 +244,12 @@ func (t *Table) Set(k, v KV, setOpts ...SetOption) error {
 	return t.Update(updateFunc)
 }
 
-// KVPair is a key/value pair, used to enqueue writes for SetBatch.
-type KVPair struct {
-	K, V KV
-}
-
 // SetBatch inserts every pair within a single Badger transaction. Badger
 // already absorbs bulk writes through its LSM tree, so unlike glossi/bbolt this
 // is primarily for write atomicity and API parity. If any Set fails (including
 // a unique-index conflict without WithReplace), the whole batch is rolled back.
 // The setOpts apply to every pair.
-func (t *Table) SetBatch(pairs []KVPair, setOpts ...SetOption) error {
+func (t *Table) SetBatch(pairs []kvstore.BatchEntry, setOpts ...SetOption) error {
 	if len(pairs) == 0 {
 		return nil
 	}

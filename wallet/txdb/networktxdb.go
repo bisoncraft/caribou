@@ -107,7 +107,7 @@ func (n *networkTxDB) GetAssetPendingTxs(assetID *uint32) ([]*WalletTransaction,
 
 // resolveAssetID returns assetID if set, otherwise this network's own
 // native-asset ID (the ID that WalletTransaction.TokenID-unset records are
-// stored under; see encodeRecord).
+// stored under; see newTxRecord).
 func (n *networkTxDB) resolveAssetID(assetID *uint32) uint32 {
 	if assetID != nil {
 		return *assetID
@@ -131,17 +131,18 @@ func (n *networkTxDB) Table(name string) (StoreTable, error) {
 
 // txIndexFunc wraps a wallet-supplied index function so the index lives on the
 // shared txs table but is scoped to this network: records belonging to other
-// networks are skipped.
+// networks are skipped. The record under insertion arrives typed, so the
+// wallet's function gets its *WalletTransaction without any decoding.
 func (n *networkTxDB) txIndexFunc(f func(*WalletTransaction) ([]byte, error)) IndexFunc {
-	return func(_, v []byte) ([]byte, error) {
-		wt, recNet, err := decodeRecord(v)
+	return func(_, vI KV) ([]byte, error) {
+		rec, err := txRecordV(vI)
 		if err != nil {
 			return nil, err
 		}
-		if recNet != n.network {
+		if rec.network != n.network {
 			return nil, ErrNotIndexed
 		}
-		return f(wt)
+		return f(rec.wt)
 	}
 }
 

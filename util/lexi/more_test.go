@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -206,16 +207,16 @@ func TestKeyID(t *testing.T) {
 // error.
 func TestParseKV(t *testing.T) {
 	// []byte
-	if b, err := parseKV([]byte{1, 2, 3}); err != nil || !bytes.Equal(b, []byte{1, 2, 3}) {
+	if b, err := kvstore.ParseKV([]byte{1, 2, 3}); err != nil || !bytes.Equal(b, []byte{1, 2, 3}) {
 		t.Fatalf("[]byte: got %x err=%v", b, err)
 	}
 	// uint32 -> 4-byte big-endian
-	if b, err := parseKV(uint32(0x01020304)); err != nil || !bytes.Equal(b, []byte{1, 2, 3, 4}) {
+	if b, err := kvstore.ParseKV(uint32(0x01020304)); err != nil || !bytes.Equal(b, []byte{1, 2, 3, 4}) {
 		t.Fatalf("uint32: got %x err=%v", b, err)
 	}
 	// time.Time -> 8-byte big-endian unix-milli
 	tm := time.UnixMilli(0x123456)
-	b, err := parseKV(tm)
+	b, err := kvstore.ParseKV(tm)
 	if err != nil {
 		t.Fatalf("time: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestParseKV(t *testing.T) {
 	}
 	// BinaryMarshaler (DBID has a value-receiver MarshalBinary).
 	dbID := DBID{0xaa}
-	b, err = parseKV(dbID)
+	b, err = kvstore.ParseKV(dbID)
 	if err != nil {
 		t.Fatalf("BinaryMarshaler: %v", err)
 	}
@@ -232,11 +233,11 @@ func TestParseKV(t *testing.T) {
 		t.Fatalf("BinaryMarshaler: got %x, want %x", b, dbID[:])
 	}
 	// nil
-	if b, err := parseKV(nil); err != nil || b != nil {
+	if b, err := kvstore.ParseKV(nil); err != nil || b != nil {
 		t.Fatalf("nil: got %x err=%v", b, err)
 	}
 	// Unknown type
-	if _, err := parseKV(struct{ X int }{}); err == nil {
+	if _, err := kvstore.ParseKV(struct{ X int }{}); err == nil {
 		t.Fatal("expected error for unknown type")
 	}
 }

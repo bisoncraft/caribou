@@ -3,12 +3,16 @@
 
 //go:build !mobile
 
-package kvstore
+package engine
 
-import "github.com/bisoncraft/caribou/util"
+import (
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
+	"github.com/bisoncraft/caribou/util/lexi"
+)
 
 // New opens the desktop store at path, backed by Badger via util/lexi. The
 // path names a directory.
-func New(path string, log util.Logger) (Store, error) {
-	return newLexiStore(path, log)
+func New(path string, log util.Logger) (kvstore.Store, error) {
+	return lexi.NewStore(path, log)
 }

@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"go.etcd.io/bbolt"
 )
 
 // ErrKeyNotFound is returned when a requested key is not in the database. It
-// mirrors lexi.ErrKeyNotFound so consumers don't have to care which engine is
-// in use.
-const ErrKeyNotFound = util.ErrorKind("key not found")
+// is kvstore's sentinel, and matches lexi.ErrKeyNotFound semantics, so
+// consumers don't have to care which engine is in use.
+const ErrKeyNotFound = kvstore.ErrKeyNotFound
 
 // DB is a bbolt database with the ability to add indexed data via Tables. The
 // underlying *bbolt.DB is intentionally unexported so the Connect-managed

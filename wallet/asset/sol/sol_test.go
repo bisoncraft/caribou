@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/bisoncraft/caribou/wallet/asset/keystore"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/base58"
@@ -152,8 +153,16 @@ func (t *mockTable) Get(k []byte) ([]byte, error) {
 	}
 	return v, nil
 }
-func (t *mockTable) Set(k, v []byte, _ bool) error {
-	t.data[string(k)] = v
+func (t *mockTable) Set(k, v txdb.KV, _ bool) error {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return err
+	}
+	vB, err := kvstore.ParseKV(v)
+	if err != nil {
+		return err
+	}
+	t.data[string(kB)] = vB
 	return nil
 }
 func (t *mockTable) Delete(k []byte) error {

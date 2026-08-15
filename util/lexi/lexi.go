@@ -5,7 +5,6 @@ package lexi
 
 import (
 	"context"
-	"encoding"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -321,24 +321,6 @@ func (db *DB) deleteDBID(txn *badger.Txn, dbID DBID) error {
 }
 
 // KV is any one of a number of common types whose binary encoding is
-// straight-forward.
-type KV any
-
-func parseKV(i KV) (b []byte, err error) {
-	switch it := i.(type) {
-	case []byte:
-		b = it
-	case uint32:
-		b = make([]byte, 4)
-		binary.BigEndian.PutUint32(b[:], it)
-	case time.Time:
-		b = make([]byte, 8)
-		binary.BigEndian.PutUint64(b[:], uint64(it.UnixMilli()))
-	case encoding.BinaryMarshaler:
-		b, err = it.MarshalBinary()
-	case nil:
-	default:
-		err = fmt.Errorf("unknown IndexBucket type %T", it)
-	}
-	return
-}
+// straight-forward. It is an alias of kvstore.KV; see kvstore.ParseKV for the
+// supported types.
+type KV = kvstore.KV

@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -280,7 +281,7 @@ func (idx *Index) Iterate(prefixI KV, f func(*Iter) error, iterOpts ...Iteration
 // range is ordered by - index-entry order for an index, user-key order for a
 // table.
 func (db *DB) iterate(base []byte, table *Table, io iteratorOpts, isIndex bool, prefixI KV, f func(*Iter) error, iterOpts ...IterationOption) error {
-	prefix, err := parseKV(prefixI)
+	prefix, err := kvstore.ParseKV(prefixI)
 	if err != nil {
 		return err
 	}

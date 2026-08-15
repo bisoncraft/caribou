@@ -4,7 +4,9 @@
 // Package kvstore is a small storage abstraction that lets the backing engine
 // be swapped at build time: Badger (util/lexi) on desktop and bbolt
 // (util/glossi) on mobile. The interfaces here capture the common surface of
-// those two engines, so a database built on them works under either.
+// those two engines, so a database built on them works under either. Each
+// engine package provides a NewStore constructor returning a Store; build-time
+// selection lives in util/kvstore/engine.
 //
 // The abstraction deliberately omits transactions. lexi can compose an atomic
 // write across tables and glossi cannot, so the honest intersection is the
@@ -19,12 +21,13 @@ import (
 	"github.com/bisoncraft/caribou/util"
 )
 
-// The sentinel errors deliberately use the same string values as both engines
-// (util.ErrorKind compares by value), so ErrEndIteration and ErrNotIndexed
-// returned by caller-supplied callbacks and index functions are recognized by
-// whichever engine is in use without translation. Only ErrKeyNotFound differs
-// between the engines and is translated to this one inside the Store.Get
-// adapters.
+// The sentinel errors are shared with the engines: glossi aliases them
+// directly, and lexi's ErrEndIteration and ErrNotIndexed deliberately use the
+// same string values (util.ErrorKind compares by value), so errors returned by
+// caller-supplied callbacks and index functions are recognized by whichever
+// engine is in use without translation. Only lexi's ErrKeyNotFound
+// (badger.ErrKeyNotFound) differs and is translated to this one inside its
+// store adapter.
 const (
 	// ErrKeyNotFound is returned by Table.Get when a key is absent.
 	ErrKeyNotFound = util.ErrorKind("key not found")
@@ -35,13 +38,17 @@ const (
 	ErrNotIndexed = util.ErrorKind("not indexed")
 )
 
-// IndexFunc derives an index entry from a datum's key and value. It may return
-// ErrNotIndexed to skip the datum.
-type IndexFunc func(k, v []byte) ([]byte, error)
+// IndexFunc derives an index entry from a datum's key and value. The engines
+// pass the caller's original (unparsed) KVs, so a function indexing a typed
+// value can type-assert it back rather than re-decoding the stored bytes. It
+// may return ErrNotIndexed to skip the datum.
+type IndexFunc func(k, v KV) ([]byte, error)
 
-// BatchEntry is a single key/value pair for StoreTable.SetBatch.
+// BatchEntry is a single key/value pair for batch insertion, used by both
+// StoreTable.SetBatch and the engines' Table.SetBatch. The fields accept any
+// KV; they are parsed with ParseKV at insertion time.
 type BatchEntry struct {
-	K, V []byte
+	K, V KV
 }
 
 // Store is an indexed key-value store. It is implemented by adapters over
@@ -64,9 +71,12 @@ type Store interface {
 type StoreTable interface {
 	AddIndex(name string, f IndexFunc) (StoreIndex, error)
 	AddUniqueIndex(name string, f IndexFunc) (StoreIndex, error)
-	// Set inserts a value for the key. If replace is false and the key exists,
-	// an error is returned.
-	Set(k, v []byte, replace bool) error
+	// Set inserts a value for the key, parsing both with ParseKV. Values whose
+	// types implement encoding.BinaryMarshaler can be passed directly, which
+	// lets index functions recover the typed value instead of re-decoding the
+	// stored bytes. If replace is false and the key exists, an error is
+	// returned.
+	Set(k, v KV, replace bool) error
 	// SetBatch inserts every entry in a single underlying transaction. On
 	// engines that fsync per write (bbolt on mobile) this collapses N fsyncs
 	// into one, which matters for bulk inserts such as an initial history sync

@@ -11,6 +11,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -679,7 +680,7 @@ func TestSetBatchIgnoresCallerTxn(t *testing.T) {
 	strayTxn := db.NewTransaction(true)
 	defer strayTxn.Discard()
 
-	pairs := []KVPair{
+	pairs := []kvstore.BatchEntry{
 		{K: []byte("k1"), V: &tValue{v: []byte("v1")}},
 		{K: []byte("k2"), V: &tValue{v: []byte("v2")}},
 	}

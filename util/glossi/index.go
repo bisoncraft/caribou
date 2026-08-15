@@ -8,17 +8,17 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"go.etcd.io/bbolt"
 )
 
 const (
 	// ErrEndIteration can be returned from an Iterate callback to end iteration
 	// without returning an error.
-	ErrEndIteration = util.ErrorKind("end iteration")
+	ErrEndIteration = kvstore.ErrEndIteration
 	// ErrNotIndexed can be returned from an index function to indicate that a
 	// datum should not be added to the index.
-	ErrNotIndexed = util.ErrorKind("not indexed")
+	ErrNotIndexed = kvstore.ErrNotIndexed
 )
 
 // Index is a lexicographically-ordered secondary index on a Table. Each datum
@@ -36,24 +36,25 @@ type Index struct {
 	table  *Table
 	name   string
 	id     byte
-	f      func(k, v []byte) ([]byte, error)
+	f      func(k, v KV) ([]byte, error)
 	unique bool
 }
 
 // AddIndex adds a non-unique index to the Table. After an index is added, every
-// item added with Set generates a corresponding entry.
-func (t *Table) AddIndex(name string, f func(k, v []byte) ([]byte, error)) (*Index, error) {
+// item added with Set generates a corresponding entry. The index function
+// receives the caller's original (unparsed) key and value KVs, as with lexi.
+func (t *Table) AddIndex(name string, f func(k, v KV) ([]byte, error)) (*Index, error) {
 	return t.addIndex(name, f, false)
 }
 
 // AddUniqueIndex adds a unique index to the Table. Set will return
 // ErrUniqueConflict if an insert would create a duplicate index value, unless
 // WithReplace is specified.
-func (t *Table) AddUniqueIndex(name string, f func(k, v []byte) ([]byte, error)) (*Index, error) {
+func (t *Table) AddUniqueIndex(name string, f func(k, v KV) ([]byte, error)) (*Index, error) {
 	return t.addIndex(name, f, true)
 }
 
-func (t *Table) addIndex(name string, f func(k, v []byte) ([]byte, error), unique bool) (*Index, error) {
+func (t *Table) addIndex(name string, f func(k, v KV) ([]byte, error), unique bool) (*Index, error) {
 	if name == "" {
 		return nil, errors.New("glossi: empty index name")
 	}
@@ -89,17 +90,18 @@ func (t *Table) addIndex(name string, f func(k, v []byte) ([]byte, error), uniqu
 }
 
 // entryKey returns the full index-bucket key (indexID||indexEntry||primaryKey)
-// for the datum (k, v). It returns ErrNotIndexed (from f) if the datum should
-// not be indexed.
-func (idx *Index) entryKey(k, v []byte) ([]byte, error) {
+// for the datum (k, v). kB is k's parsed encoding, which is what the entry key
+// embeds; k and v themselves are handed to the index function unparsed. It
+// returns ErrNotIndexed (from f) if the datum should not be indexed.
+func (idx *Index) entryKey(k, v KV, kB []byte) ([]byte, error) {
 	idxB, err := idx.f(k, v)
 	if err != nil {
 		return nil, err
 	}
-	key := make([]byte, 1+len(idxB)+len(k))
+	key := make([]byte, 1+len(idxB)+len(kB))
 	key[0] = idx.id
 	copy(key[1:], idxB)
-	copy(key[1+len(idxB):], k)
+	copy(key[1+len(idxB):], kB)
 	return key, nil
 }
 
@@ -147,7 +149,11 @@ func WithSeek(prefix []byte) IterationOption {
 // iteration to index entries beginning with it (in index space, i.e. without
 // the internal index id). The key and value exposed via the Iter are only valid
 // for the duration of the callback.
-func (idx *Index) Iterate(prefix []byte, f func(*Iter) error, opts ...IterationOption) error {
+func (idx *Index) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOption) error {
+	prefix, err := kvstore.ParseKV(prefixI)
+	if err != nil {
+		return fmt.Errorf("glossi: error marshaling prefix: %w", err)
+	}
 	var o iterOpts
 	for _, opt := range opts {
 		opt(&o)

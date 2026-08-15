@@ -8,8 +8,14 @@ import (
 	"fmt"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"go.etcd.io/bbolt"
 )
+
+// KV is any one of a number of common types whose binary encoding is
+// straight-forward. It is an alias of kvstore.KV (as is lexi.KV); see
+// kvstore.ParseKV for the supported types.
+type KV = kvstore.KV
 
 // ErrUniqueConflict is returned by Set when an insert would violate a unique
 // index constraint and WithReplace was not specified.
@@ -76,22 +82,25 @@ func WithReplace() SetOption {
 
 // Set inserts a value for the key and creates index entries. Zero-length keys
 // are not allowed.
-func (t *Table) Set(k, v []byte, opts ...SetOption) error {
-	if len(k) == 0 {
+func (t *Table) Set(k, v KV, opts ...SetOption) error {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return fmt.Errorf("glossi: error marshaling key: %w", err)
+	}
+	if len(kB) == 0 {
 		return errors.New("glossi: no zero-length keys allowed")
+	}
+	vB, err := kvstore.ParseKV(v)
+	if err != nil {
+		return fmt.Errorf("glossi: error marshaling value: %w", err)
 	}
 	var o setOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 	return t.db.Update(func(tx *bbolt.Tx) error {
-		return t.setInTx(tx, k, v, o.replace)
+		return t.setInTx(tx, k, v, kB, vB, o.replace)
 	})
-}
-
-// KV is a key/value pair, used to enqueue writes for SetBatch.
-type KV struct {
-	K, V []byte
 }
 
 // SetBatch inserts every entry in a single transaction, collapsing what would
@@ -100,22 +109,33 @@ type KV struct {
 // migration that stores many transactions at once - where per-call fsync is
 // noticeably slow. If replace is false and any key already exists, the whole
 // batch is rolled back.
-func (t *Table) SetBatch(entries []KV, opts ...SetOption) error {
+func (t *Table) SetBatch(entries []kvstore.BatchEntry, opts ...SetOption) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	for _, e := range entries {
-		if len(e.K) == 0 {
+	type kvBytes struct{ kB, vB []byte }
+	parsed := make([]kvBytes, len(entries))
+	for i, e := range entries {
+		kB, err := kvstore.ParseKV(e.K)
+		if err != nil {
+			return fmt.Errorf("glossi: error marshaling key: %w", err)
+		}
+		if len(kB) == 0 {
 			return errors.New("glossi: no zero-length keys allowed")
 		}
+		vB, err := kvstore.ParseKV(e.V)
+		if err != nil {
+			return fmt.Errorf("glossi: error marshaling value: %w", err)
+		}
+		parsed[i] = kvBytes{kB: kB, vB: vB}
 	}
 	var o setOpts
 	for _, opt := range opts {
 		opt(&o)
 	}
 	return t.db.Update(func(tx *bbolt.Tx) error {
-		for _, e := range entries {
-			if err := t.setInTx(tx, e.K, e.V, o.replace); err != nil {
+		for i, e := range entries {
+			if err := t.setInTx(tx, e.K, e.V, parsed[i].kB, parsed[i].vB, o.replace); err != nil {
 				return err
 			}
 		}
@@ -124,14 +144,17 @@ func (t *Table) SetBatch(entries []KV, opts ...SetOption) error {
 }
 
 // setInTx performs one Set within an existing transaction. Set and SetBatch
-// both funnel through it so the index bookkeeping lives in a single place.
-func (t *Table) setInTx(tx *bbolt.Tx, k, v []byte, replace bool) error {
+// both funnel through it so the index bookkeeping lives in a single place. k
+// and v are the caller's original KVs, passed through to index functions
+// (mirroring lexi, whose index functions also see the unparsed values); kB and
+// vB are their parsed encodings, which is what gets stored.
+func (t *Table) setInTx(tx *bbolt.Tx, k, v KV, kB, vB []byte, replace bool) error {
 	tb := tx.Bucket(t.name)
 	data := tb.Bucket(dataBucketKey)
 	index := tb.Bucket(indexBucketKey)
 
 	// If an entry exists, either reject or purge its old index entries.
-	if old := data.Get(k); old != nil {
+	if old := data.Get(kB); old != nil {
 		if !replace {
 			return errors.New("glossi: attempted to replace an entry without WithReplace")
 		}
@@ -148,7 +171,7 @@ func (t *Table) setInTx(tx *bbolt.Tx, k, v []byte, replace bool) error {
 
 	idxKeys := make([][]byte, 0, len(t.indexes))
 	for _, idx := range t.indexes {
-		ik, err := idx.entryKey(k, v)
+		ik, err := idx.entryKey(k, v, kB)
 		if err != nil {
 			if errors.Is(err, ErrNotIndexed) {
 				continue
@@ -161,7 +184,7 @@ func (t *Table) setInTx(tx *bbolt.Tx, k, v []byte, replace bool) error {
 			// sharing this index value), matching lexi: this is how callers
 			// model replacement keyed by an index value rather than the primary
 			// key (e.g. an Ethereum nonce-replacement transaction).
-			if conflict := idx.uniqueConflict(index, ik, k); conflict != nil {
+			if conflict := idx.uniqueConflict(index, ik, kB); conflict != nil {
 				if !replace {
 					return fmt.Errorf("%w on %q", ErrUniqueConflict, idx.name)
 				}
@@ -170,19 +193,23 @@ func (t *Table) setInTx(tx *bbolt.Tx, k, v []byte, replace bool) error {
 				}
 			}
 		}
-		if err := index.Put(ik, k); err != nil {
+		if err := index.Put(ik, kB); err != nil {
 			return fmt.Errorf("error writing index entry: %w", err)
 		}
 		idxKeys = append(idxKeys, ik)
 	}
-	return data.Put(k, encodeDatum(v, idxKeys))
+	return data.Put(kB, encodeDatum(vB, idxKeys))
 }
 
 // Get retrieves a value from the Table. It returns ErrKeyNotFound if the key is
 // not present.
-func (t *Table) Get(k []byte) (v []byte, err error) {
+func (t *Table) Get(k KV) (v []byte, err error) {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return nil, fmt.Errorf("glossi: error marshaling key: %w", err)
+	}
 	err = t.db.View(func(tx *bbolt.Tx) error {
-		raw := tx.Bucket(t.name).Bucket(dataBucketKey).Get(k)
+		raw := tx.Bucket(t.name).Bucket(dataBucketKey).Get(kB)
 		if raw == nil {
 			return ErrKeyNotFound
 		}
@@ -229,7 +256,11 @@ func (t *Table) deleteInTx(tb *bbolt.Bucket, k []byte) error {
 // Iterate iterates the table's primary keys. If prefix is non-empty, only keys
 // with that prefix are visited. The key and value exposed via the Iter are only
 // valid for the duration of the callback.
-func (t *Table) Iterate(prefix []byte, f func(*Iter) error, opts ...IterationOption) error {
+func (t *Table) Iterate(prefixI KV, f func(*Iter) error, opts ...IterationOption) error {
+	prefix, err := kvstore.ParseKV(prefixI)
+	if err != nil {
+		return fmt.Errorf("glossi: error marshaling prefix: %w", err)
+	}
 	var o iterOpts
 	for _, opt := range opts {
 		opt(&o)

@@ -1,7 +1,7 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-package kvstore
+package engine
 
 import (
 	"errors"
@@ -9,15 +9,16 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/kvstore"
 )
 
 // These run against whichever engine the build selects, so `go test` covers
 // Badger (util/lexi) and `go test -tags mobile` covers bbolt (util/glossi).
-// The behavior asserted here is the Store contract itself, which both engines
+// The behavior asserted here is the kvstore.Store contract itself, which both engines
 // have to honor identically or a database built on kvstore behaves differently
 // depending on the platform it shipped to.
 
-func newTestStore(t *testing.T) Store {
+func newTestStore(t *testing.T) kvstore.Store {
 	t.Helper()
 	s, err := New(filepath.Join(t.TempDir(), "db"), util.StdOutLogger("kvstore_TEST", util.LevelError))
 	if err != nil {
@@ -31,7 +32,7 @@ func newTestStore(t *testing.T) Store {
 	return s
 }
 
-func mustSet(t *testing.T, tbl StoreTable, k, v string) {
+func mustSet(t *testing.T, tbl kvstore.StoreTable, k, v string) {
 	t.Helper()
 	if err := tbl.Set([]byte(k), []byte(v), true); err != nil {
 		t.Fatalf("Set(%q): %v", k, err)
@@ -39,10 +40,10 @@ func mustSet(t *testing.T, tbl StoreTable, k, v string) {
 }
 
 // collectKeys iterates and returns the keys visited, in visitation order.
-func collectKeys(t *testing.T, it func(func(StoreIter) error) error) []string {
+func collectKeys(t *testing.T, it func(func(kvstore.StoreIter) error) error) []string {
 	t.Helper()
 	var got []string
-	if err := it(func(i StoreIter) error {
+	if err := it(func(i kvstore.StoreIter) error {
 		k, err := i.K()
 		if err != nil {
 			return err
@@ -67,7 +68,7 @@ func eq(a []string, b ...string) bool {
 	return true
 }
 
-// TestTableIterateContract pins the documented behavior of StoreTable.Iterate:
+// TestTableIterateContract pins the documented behavior of kvstore.StoreTable.Iterate:
 // primary keys, in key order, constrained by prefix, optionally started at seek.
 //
 // A caller that asks for a prefix and silently receives nothing has no way to
@@ -91,7 +92,7 @@ func TestTableIterateContract(t *testing.T) {
 		if seek != "" {
 			s = []byte(seek)
 		}
-		return collectKeys(t, func(f func(StoreIter) error) error {
+		return collectKeys(t, func(f func(kvstore.StoreIter) error) error {
 			return tbl.Iterate(p, f, reverse, s)
 		})
 	}
@@ -168,14 +169,14 @@ func TestTablesDoNotShareKeys(t *testing.T) {
 	if string(b) != "native-sig" {
 		t.Fatalf("native value = %q, want %q", b, "native-sig")
 	}
-	if _, err := token.Get([]byte(k)); !errors.Is(err, ErrKeyNotFound) {
-		t.Fatalf("token Get after Delete = %v, want ErrKeyNotFound", err)
+	if _, err := token.Get([]byte(k)); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("token Get after Delete = %v, want kvstore.ErrKeyNotFound", err)
 	}
 
 	// The native row must still be reachable by iteration, with its key intact.
 	// A row whose key mapping was torn down survives physically but iterates
 	// with a failing K().
-	if got := collectKeys(t, func(f func(StoreIter) error) error {
+	if got := collectKeys(t, func(f func(kvstore.StoreIter) error) error {
 		return native.Iterate(nil, f, false, nil)
 	}); !eq(got, k) {
 		t.Fatalf("native iteration = %v, want [%s]", got, k)
@@ -201,7 +202,7 @@ func TestTableKeysAreIndependentPerTable(t *testing.T) {
 	mustSet(t, a, "k", "in-a-again")
 
 	for _, c := range []struct {
-		tbl  StoreTable
+		tbl  kvstore.StoreTable
 		name string
 		want string
 	}{{a, "a", "in-a-again"}, {b, "b", "in-b"}} {

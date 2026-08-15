@@ -22,7 +22,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
-	"github.com/bisoncraft/caribou/util/kvstore"
+	"github.com/bisoncraft/caribou/util/kvstore/engine"
 )
 
 // ErrUnknownTx is returned when a referenced transaction is not found.
@@ -108,7 +108,7 @@ func (db *TxDB) SetTickerResolver(f func(assetID uint32) string) {
 // New opens the master transaction database at path using the build-selected
 // storage engine.
 func New(path string, log util.Logger) (*TxDB, error) {
-	store, err := kvstore.New(path, log)
+	store, err := engine.New(path, log)
 	if err != nil {
 		return nil, err
 	}
@@ -182,13 +182,21 @@ func effectiveTime(wt *WalletTransaction, fallback uint64) uint64 {
 	return fallback
 }
 
-// encodeRecord encodes a stored transaction record:
-//
-//	push0: JSON(WalletTransaction)   (RawTx excluded via json:"-")
-//	push1: WalletTransaction.RawTx   (opaque network blob)
-//	push2: meta                      (network||assetID||effTime||flags)
-//	push3: ticker                    (ticker group, "" when unresolved)
-func encodeRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker string) ([]byte, error) {
+// txRecord is the value inserted into the txs table: the transaction plus the
+// fixed metadata the index functions key on. The typed record (rather than
+// pre-encoded bytes) is what gets passed to Set, so the index functions
+// recover it with a type assertion and read fields directly instead of
+// re-decoding the stored blob on every evaluation.
+type txRecord struct {
+	wt      *WalletTransaction
+	network uint32
+	assetID uint32
+	effTime uint64
+	flags   byte
+	ticker  string // ticker group, "" when unresolved
+}
+
+func newTxRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker string) *txRecord {
 	assetID := network
 	if wt.TokenID != nil {
 		assetID = *wt.TokenID
@@ -204,31 +212,34 @@ func encodeRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker 
 	if wt.Confirmed {
 		flags |= flagConfirmed
 	}
-	meta := make([]byte, metaLen)
-	binary.BigEndian.PutUint32(meta[0:], network)
-	binary.BigEndian.PutUint32(meta[4:], assetID)
-	binary.BigEndian.PutUint64(meta[8:], effTime)
-	meta[16] = flags
+	return &txRecord{
+		wt:      wt,
+		network: network,
+		assetID: assetID,
+		effTime: effTime,
+		flags:   flags,
+		ticker:  ticker,
+	}
+}
 
-	js, err := json.Marshal(wt)
+// MarshalBinary satisfies encoding.BinaryMarshaler, encoding the stored form:
+//
+//	push0: JSON(WalletTransaction)   (RawTx excluded via json:"-")
+//	push1: WalletTransaction.RawTx   (opaque network blob)
+//	push2: meta                      (network||assetID||effTime||flags)
+//	push3: ticker                    (ticker group, "" when unresolved)
+func (r *txRecord) MarshalBinary() ([]byte, error) {
+	meta := make([]byte, metaLen)
+	binary.BigEndian.PutUint32(meta[0:], r.network)
+	binary.BigEndian.PutUint32(meta[4:], r.assetID)
+	binary.BigEndian.PutUint64(meta[8:], r.effTime)
+	meta[16] = r.flags
+
+	js, err := json.Marshal(r.wt)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling transaction: %w", err)
 	}
-	return encode.BuildyBytes{recordVersion}.AddData(js).AddData(wt.RawTx).AddData(meta).AddData([]byte(ticker)), nil
-}
-
-// recordTicker extracts the ticker push from a stored record. The push is
-// always present (encodeRecord emits it unconditionally, empty when no resolver
-// is set), so a record without it is malformed.
-func recordTicker(b []byte) (string, error) {
-	_, pushes, err := encode.DecodeBlob(b)
-	if err != nil {
-		return "", err
-	}
-	if len(pushes) < 4 {
-		return "", fmt.Errorf("record has %d pushes, need 4", len(pushes))
-	}
-	return string(pushes[3]), nil
+	return encode.BuildyBytes{recordVersion}.AddData(js).AddData(r.wt.RawTx).AddData(meta).AddData([]byte(r.ticker)), nil
 }
 
 // decodeRecord decodes a stored record into a WalletTransaction (with RawTx
@@ -258,8 +269,25 @@ func decodeRecord(b []byte) (*WalletTransaction, uint32, error) {
 	return wt, binary.BigEndian.Uint32(meta[0:4]), nil
 }
 
-// recordMeta extracts the fixed-width index metadata from a record without
-// unmarshaling the (heavier) JSON body, so index functions stay cheap.
+// recordTicker extracts the ticker push from a stored record without
+// unmarshaling the (heavier) JSON body. The push is always present
+// (MarshalBinary emits it unconditionally, empty when no resolver is set), so
+// a record without it is malformed. Used on read paths that resolve a RefID's
+// stored record to an index-seek position.
+func recordTicker(b []byte) (string, error) {
+	_, pushes, err := encode.DecodeBlob(b)
+	if err != nil {
+		return "", err
+	}
+	if len(pushes) < 4 {
+		return "", fmt.Errorf("record has %d pushes, need 4", len(pushes))
+	}
+	return string(pushes[3]), nil
+}
+
+// recordMeta extracts the fixed-width metadata from a stored record without
+// unmarshaling the (heavier) JSON body. Used on read paths that resolve a
+// RefID's stored record to an index-seek position.
 func recordMeta(b []byte) (network, assetID uint32, effTime uint64, flags byte, err error) {
 	_, pushes, err := encode.DecodeBlob(b)
 	if err != nil {
@@ -281,46 +309,68 @@ func recordMeta(b []byte) (network, assetID uint32, effTime uint64, flags byte, 
 
 // --- agnostic index functions -------------------------------------------------
 
+// txRecordV asserts a txs-table value to the *txRecord under insertion. Only
+// txdb writes to the txs table, and it always Sets a *txRecord, so a mismatch
+// is a programming error rather than a data condition.
+func txRecordV(vI KV) (*txRecord, error) {
+	rec, ok := vI.(*txRecord)
+	if !ok {
+		return nil, fmt.Errorf("expected *txRecord value, got %T", vI)
+	}
+	return rec, nil
+}
+
+// txRecordKV asserts both txs-table KVs: the primary key bytes (txKey) and the
+// *txRecord under insertion.
+func txRecordKV(kI, vI KV) ([]byte, *txRecord, error) {
+	k, ok := kI.([]byte)
+	if !ok {
+		return nil, nil, fmt.Errorf("expected []byte key, got %T", kI)
+	}
+	rec, err := txRecordV(vI)
+	return k, rec, err
+}
+
 // indexNetworkTime orders transactions within a network by effective time.
 // Entry: network(4) || effTime(8) || id. The trailing id (the primary key with
 // its network prefix stripped) makes every entry unique, so a RefID seek lands
 // exactly even when transactions share an effective time.
-func indexNetworkTime(k, v []byte) ([]byte, error) {
-	network, _, effTime, _, err := recordMeta(v)
+func indexNetworkTime(kI, vI KV) ([]byte, error) {
+	k, rec, err := txRecordKV(kI, vI)
 	if err != nil {
 		return nil, err
 	}
 	// k is the primary key, txKey(network, id) = network(4) || id.
 	id := k[4:]
 	e := make([]byte, 12+len(id))
-	binary.BigEndian.PutUint32(e[0:], network)
-	binary.BigEndian.PutUint64(e[4:], effTime)
+	binary.BigEndian.PutUint32(e[0:], rec.network)
+	binary.BigEndian.PutUint64(e[4:], rec.effTime)
 	copy(e[12:], id)
 	return e, nil
 }
 
 // indexTime orders all transactions, across networks, by effective time.
 // Entry: effTime(8).
-func indexTime(_, v []byte) ([]byte, error) {
-	_, _, effTime, _, err := recordMeta(v)
+func indexTime(_, vI KV) ([]byte, error) {
+	rec, err := txRecordV(vI)
 	if err != nil {
 		return nil, err
 	}
-	return encode.Uint64Bytes(effTime), nil
+	return encode.Uint64Bytes(rec.effTime), nil
 }
 
 // indexAssetTime orders transactions within an asset (token or base chain) by
 // effective time. Entry: assetID(4) || effTime(8) || k. The trailing primary
 // key makes every entry unique, so a RefID seek lands exactly even when
 // transactions share an effective time (mirrors indexNetworkTime).
-func indexAssetTime(k, v []byte) ([]byte, error) {
-	_, assetID, effTime, _, err := recordMeta(v)
+func indexAssetTime(kI, vI KV) ([]byte, error) {
+	k, rec, err := txRecordKV(kI, vI)
 	if err != nil {
 		return nil, err
 	}
 	e := make([]byte, 12+len(k))
-	binary.BigEndian.PutUint32(e[0:], assetID)
-	binary.BigEndian.PutUint64(e[4:], effTime)
+	binary.BigEndian.PutUint32(e[0:], rec.assetID)
+	binary.BigEndian.PutUint64(e[4:], rec.effTime)
 	copy(e[12:], k)
 	return e, nil
 }
@@ -331,24 +381,21 @@ func indexAssetTime(k, v []byte) ([]byte, error) {
 // "ETH" scan will not catch "ETHW"), and the trailing id makes every entry
 // unique so pagination lands unambiguously. Records with an unresolved ("")
 // ticker are skipped.
-func indexTickerTime(k, v []byte) ([]byte, error) {
-	_, _, effTime, _, err := recordMeta(v)
+func indexTickerTime(kI, vI KV) ([]byte, error) {
+	k, rec, err := txRecordKV(kI, vI)
 	if err != nil {
 		return nil, err
 	}
-	ticker, err := recordTicker(v)
-	if err != nil {
-		return nil, err
-	}
-	if ticker == "" {
+	if rec.ticker == "" {
 		return nil, ErrNotIndexed
 	}
 	// k is the primary key, txKey(network, id) = network(4) || id.
 	id := k[4:]
+	ticker := rec.ticker
 	e := make([]byte, len(ticker)+1+8+len(id))
 	copy(e, ticker)
 	e[len(ticker)] = 0x00
-	binary.BigEndian.PutUint64(e[len(ticker)+1:], effTime)
+	binary.BigEndian.PutUint64(e[len(ticker)+1:], rec.effTime)
 	copy(e[len(ticker)+9:], id)
 	return e, nil
 }
@@ -358,17 +405,17 @@ func indexTickerTime(k, v []byte) ([]byte, error) {
 // Entry: pendingByte(1) || network(4) || effTime(8). The network component lets
 // getPendingTxs scope its scan with a prefix instead of walking every network's
 // pending transactions and discarding the non-matching ones.
-func indexPending(_, v []byte) ([]byte, error) {
-	network, _, effTime, flags, err := recordMeta(v)
+func indexPending(_, vI KV) ([]byte, error) {
+	rec, err := txRecordV(vI)
 	if err != nil {
 		return nil, err
 	}
 	e := make([]byte, 13)
-	if flags&flagPending != 0 {
+	if rec.flags&flagPending != 0 {
 		e[0] = 1
 	}
-	binary.BigEndian.PutUint32(e[1:], network)
-	binary.BigEndian.PutUint64(e[5:], effTime)
+	binary.BigEndian.PutUint32(e[1:], rec.network)
+	binary.BigEndian.PutUint64(e[5:], rec.effTime)
 	return e, nil
 }
 
@@ -378,32 +425,32 @@ func indexPending(_, v []byte) ([]byte, error) {
 // scoped to an asset instead of a whole network, so a token wallet sharing
 // its parent network's NetworkTxDB can query its own pending set without
 // picking up sibling assets' records.
-func indexAssetPending(_, v []byte) ([]byte, error) {
-	_, assetID, effTime, flags, err := recordMeta(v)
+func indexAssetPending(_, vI KV) ([]byte, error) {
+	rec, err := txRecordV(vI)
 	if err != nil {
 		return nil, err
 	}
 	e := make([]byte, 13)
-	if flags&flagPending != 0 {
+	if rec.flags&flagPending != 0 {
 		e[0] = 1
 	}
-	binary.BigEndian.PutUint32(e[1:], assetID)
-	binary.BigEndian.PutUint64(e[5:], effTime)
+	binary.BigEndian.PutUint32(e[1:], rec.assetID)
+	binary.BigEndian.PutUint64(e[5:], rec.effTime)
 	return e, nil
 }
 
 // indexFinality partitions transactions by finality (confirmed) state,
 // time-ordered within each partition. Entry: confirmedByte(1) || effTime(8).
-func indexFinality(_, v []byte) ([]byte, error) {
-	_, _, effTime, flags, err := recordMeta(v)
+func indexFinality(_, vI KV) ([]byte, error) {
+	rec, err := txRecordV(vI)
 	if err != nil {
 		return nil, err
 	}
 	e := make([]byte, 9)
-	if flags&flagConfirmed != 0 {
+	if rec.flags&flagConfirmed != 0 {
 		e[0] = 1
 	}
-	binary.BigEndian.PutUint64(e[1:], effTime)
+	binary.BigEndian.PutUint64(e[1:], rec.effTime)
 	return e, nil
 }
 
@@ -429,10 +476,7 @@ func (db *TxDB) tickerFor(wt *WalletTransaction, network uint32) string {
 
 func (db *TxDB) storeTx(network uint32, wt *WalletTransaction) error {
 	effTime := effectiveTime(wt, uint64(time.Now().Unix()))
-	rec, err := encodeRecord(wt, network, effTime, db.tickerFor(wt, network))
-	if err != nil {
-		return err
-	}
+	rec := newTxRecord(wt, network, effTime, db.tickerFor(wt, network))
 	return db.txs.Set(txKey(network, wt.ID), rec, true)
 }
 
@@ -446,10 +490,7 @@ func (db *TxDB) storeTxs(network uint32, wts []*WalletTransaction) error {
 	now := uint64(time.Now().Unix())
 	entries := make([]BatchEntry, len(wts))
 	for i, wt := range wts {
-		rec, err := encodeRecord(wt, network, effectiveTime(wt, now), db.tickerFor(wt, network))
-		if err != nil {
-			return err
-		}
+		rec := newTxRecord(wt, network, effectiveTime(wt, now), db.tickerFor(wt, network))
 		entries[i] = BatchEntry{K: txKey(network, wt.ID), V: rec}
 	}
 	return db.txs.SetBatch(entries, true)

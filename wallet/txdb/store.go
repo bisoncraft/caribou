@@ -10,6 +10,9 @@ import "github.com/bisoncraft/caribou/util/kvstore"
 // use them to manage their own auxiliary tables through NetworkTxDB.
 
 type (
+	// KV is a key or value argument accepted by the store: raw bytes, one of
+	// a few common scalar types, or an encoding.BinaryMarshaler.
+	KV = kvstore.KV
 	// Store is an indexed key-value store.
 	Store = kvstore.Store
 	// StoreTable is a namespaced section of a Store that supports secondary
