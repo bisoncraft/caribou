@@ -194,6 +194,10 @@ button {
     border-radius: 4px;
     font-size: 12px;
     line-height: 1;
+    // Shrink-to-fit sizes an absolutely-positioned box against its
+    // containing block — a small icon anchor would wrap the tip one word
+    // per line without the max-content floor.
+    width: max-content;
     max-width: 260px;
     text-align: center;
     // Short single-word labels (Receive, Send, ...) sit on one line
