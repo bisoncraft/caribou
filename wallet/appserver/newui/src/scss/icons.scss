@@ -148,3 +148,34 @@ $icon-sizes: 16, 24, 32, 40, 48;
 .ico-network:before {
   content: "\f26a";
 }
+// ---------------------------------------------------------------------------
+// Mask-image icons (IBM Carbon set). These are not in the icomoon font yet;
+// their sources live in shared/font/icons-svg/ for folding into the font
+// project later — usage will not change when that happens. The 1em box and
+// currentColor fill make them size with the .fsN utilities and color with
+// the text-color utilities, exactly like the font glyphs. The thin arrows
+// complement (not replace) the filled-triangle ico-arrowup/down/left/right
+// glyphs.
+
+[class^="ico-arrow-"],
+[class*=" ico-arrow-"],
+.ico-link {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.08em;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+.ico-arrow-down { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2224.59 16.59 17 24.17 17 4 15 4 15 24.17 7.41 16.59 6 18 16 28 26 18 24.59 16.59%22></polygon></svg>"); }
+.ico-arrow-down-left { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2222 26 22 24 9.41 24 26 7.41 24.59 6 8 22.59 8 10 6 10 6 26 22 26%22></polygon></svg>"); }
+.ico-arrow-down-right { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2210 26 10 24 22.59 24 6 7.41 7.41 6 24 22.59 24 10 26 10 26 26 10 26%22></polygon></svg>"); }
+.ico-arrow-left { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2214 26 15.41 24.59 7.83 17 28 17 28 15 7.83 15 15.41 7.41 14 6 4 16 14 26%22></polygon></svg>"); }
+.ico-arrow-right { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2218 6 16.57 7.393 24.15 15 4 15 4 17 24.15 17 16.57 24.573 18 26 28 16 18 6%22></polygon></svg>"); }
+.ico-arrow-up { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2216 4 6 14 7.41 15.41 15 7.83 15 28 17 28 17 7.83 24.59 15.41 26 14 16 4%22></polygon></svg>"); }
+.ico-arrow-up-left { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2222 6 22 8 9.41 8 26 24.59 24.59 26 8 9.41 8 22 6 22 6 6 22 6%22></polygon></svg>"); }
+.ico-arrow-up-right { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><polygon points=%2210 6 10 8 22.59 8 6 24.59 7.41 26 24 9.41 24 22 26 22 26 6 10 6%22></polygon></svg>"); }
+.ico-link { mask-image: url("data:image/svg+xml,<svg fill=%22currentColor%22 viewBox=%220 0 32 32%22 xmlns=%22http://www.w3.org/2000/svg%22><path d=%22M29.25 6.76A6 6 0 0 0 20.75 6.76L22.17 8.18A4 4 0 1 1 27.84 13.85L19.84 21.85A4 4 0 1 1 14.17 16.19L15.58 14.77L14.17 13.35L12.75 14.77A6 6 0 0 0 12.75 23.27A6 6 0 0 0 17 25A6 6 0 0 0 21.27 23.24L29.27 15.24A6 6 0 0 0 29.25 6.76Z%22></path><path d=%22M4.19 24.82A4 4 0 0 1 4.19 19.15L12.19 11.15A4 4 0 0 1 17.86 11.15A3.94 3.94 0 0 1 19 14A4 4 0 0 1 17.83 16.85L15.71 19L17.13 20.42L19.25 18.3A6 6 0 0 0 10.74 9.79L2.74 17.79A6 6 0 0 0 2.74 26.3A6 6 0 0 0 7 28A6.07 6.07 0 0 0 11.28 26.24L9.86 24.82A4 4 0 0 1 4.19 24.82Z%22></path></svg>"); }
