@@ -35,13 +35,16 @@ func (s *AppServer) apiIntentsAssets(w http.ResponseWriter, r *http.Request) {
 
 // apiIntentsPreview is the handler for the '/intents/preview' API request.
 // It returns a dry-quote price preview; no deposit address is created and
-// no compliance screening runs.
+// no compliance screening runs. value is denominated in the origin asset's
+// atoms for an exact-input preview, the destination asset's for
+// exact-output.
 func (s *AppServer) apiIntentsPreview(w http.ResponseWriter, r *http.Request) {
 	form := new(struct {
 		OriginAssetID *uint32 `json:"originAssetID"`
 		DestAssetID   *uint32 `json:"destAssetID"`
 		Value         uint64  `json:"value"`
 		SlippageBps   int     `json:"slippageBps"`
+		ExactOutput   bool    `json:"exactOutput"`
 	})
 	if !readPost(w, r, form) {
 		return
@@ -50,7 +53,7 @@ func (s *AppServer) apiIntentsPreview(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, errors.New("missing origin or destination asset ID"))
 		return
 	}
-	preview, err := s.core.IntentsPreview(r.Context(), *form.OriginAssetID, *form.DestAssetID, form.Value, form.SlippageBps)
+	preview, err := s.core.IntentsPreview(r.Context(), *form.OriginAssetID, *form.DestAssetID, form.Value, form.SlippageBps, form.ExactOutput)
 	if err != nil {
 		s.writeAPIError(w, err)
 		return
@@ -67,15 +70,19 @@ func (s *AppServer) apiIntentsPreview(w http.ResponseWriter, r *http.Request) {
 // apiIntentsExecute is the handler for the '/intents/execute' API request.
 // It obtains a committed quote and funds it from the origin wallet. A
 // committed quote creates a real deposit address and is screened by the
-// service. minAtomsOut echoes the displayed preview's minimum output; a
-// committed quote paying less is rejected before any funds move.
+// service. Each direction echoes its displayed preview bound, and a
+// committed quote falling outside it is rejected before any funds move:
+// minAtomsOut (the preview's minimum output) for exact-input, maxAtomsIn
+// (the preview's computed input) for exact-output.
 func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 	form := new(struct {
 		OriginAssetID *uint32          `json:"originAssetID"`
 		DestAssetID   *uint32          `json:"destAssetID"`
 		Value         uint64           `json:"value"`
 		SlippageBps   int              `json:"slippageBps"`
+		ExactOutput   bool             `json:"exactOutput"`
 		MinAtomsOut   uint64           `json:"minAtomsOut"`
+		MaxAtomsIn    uint64           `json:"maxAtomsIn"`
 		Pass          encode.PassBytes `json:"pass"`
 	})
 	defer form.Pass.Clear()
@@ -86,7 +93,12 @@ func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, errors.New("missing origin or destination asset ID"))
 		return
 	}
-	if form.MinAtomsOut == 0 {
+	if form.ExactOutput {
+		if form.MaxAtomsIn == 0 {
+			s.writeAPIError(w, errors.New("missing previewed maximum input"))
+			return
+		}
+	} else if form.MinAtomsOut == 0 {
 		s.writeAPIError(w, errors.New("missing previewed minimum output"))
 		return
 	}
@@ -97,7 +109,7 @@ func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer zero(pass)
 
-	swap, err := s.core.IntentsExecute(pass, *form.OriginAssetID, *form.DestAssetID, form.Value, form.SlippageBps, form.MinAtomsOut)
+	swap, err := s.core.IntentsExecute(pass, *form.OriginAssetID, *form.DestAssetID, form.Value, form.SlippageBps, form.ExactOutput, form.MinAtomsOut, form.MaxAtomsIn)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("swap error: %w", err))
 		return

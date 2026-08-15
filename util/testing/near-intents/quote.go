@@ -38,7 +38,12 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.SwapType != intents.SwapTypeExactInput {
+	var exactOutput bool
+	switch req.SwapType {
+	case intents.SwapTypeExactInput:
+	case intents.SwapTypeExactOutput:
+		exactOutput = true
+	default:
 		writeError(w, http.StatusBadRequest, "Bad Request", "unsupported swapType %q", req.SwapType)
 		return
 	}
@@ -56,8 +61,8 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Bad Request", "origin and destination are the same asset")
 		return
 	}
-	amountIn, ok := new(big.Int).SetString(req.Amount, 10)
-	if !ok || amountIn.Sign() <= 0 {
+	amount, ok := new(big.Int).SetString(req.Amount, 10)
+	if !ok || amount.Sign() <= 0 {
 		writeError(w, http.StatusBadRequest, "Bad Request", "bad amount %q", req.Amount)
 		return
 	}
@@ -81,22 +86,42 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		feeBps += int64(f.Fee)
 	}
 
-	// grossOut = amountIn · priceO · 10^destDec / (priceD · 10^originDec),
-	// multiplying before dividing to keep integer precision.
 	priceO, priceD := s.price(origin.intentsID), s.price(dest.intentsID)
-	grossOut := new(big.Int).Mul(amountIn, big.NewInt(priceO))
-	grossOut.Mul(grossOut, tenPow(dest.decimals))
-	grossOut.Quo(grossOut, new(big.Int).Mul(big.NewInt(priceD), tenPow(origin.decimals)))
-
 	bps := big.NewInt(10_000)
-	amountOut := new(big.Int).Mul(grossOut, big.NewInt(10_000-feeBps))
-	amountOut.Quo(amountOut, bps)
-	minAmountOut := new(big.Int).Mul(amountOut, big.NewInt(10_000-int64(slippageBps)))
-	minAmountOut.Quo(minAmountOut, bps)
+	var amountIn, amountOut, minAmountOut *big.Int
+	if exactOutput {
+		// The requested amount is the exact destination output; the input
+		// required to fund it inverts the exact-input math, rounded up so
+		// the priced deposit always covers the promised output:
+		// amountIn = ⌈amountOut · priceD · 10^originDec · 10^4 /
+		//            (priceO · 10^destDec · (10^4 − feeBps))⌉.
+		amountOut = amount
+		num := new(big.Int).Mul(amountOut, big.NewInt(priceD))
+		num.Mul(num, tenPow(origin.decimals))
+		num.Mul(num, bps)
+		den := new(big.Int).Mul(big.NewInt(priceO), tenPow(dest.decimals))
+		den.Mul(den, big.NewInt(10_000-feeBps))
+		amountIn = new(big.Int).Add(num, new(big.Int).Sub(den, big.NewInt(1)))
+		amountIn.Quo(amountIn, den)
+		// The output is fixed; slippage has nothing to erode.
+		minAmountOut = amountOut
+	} else {
+		// grossOut = amountIn · priceO · 10^destDec / (priceD · 10^originDec),
+		// multiplying before dividing to keep integer precision.
+		amountIn = amount
+		grossOut := new(big.Int).Mul(amountIn, big.NewInt(priceO))
+		grossOut.Mul(grossOut, tenPow(dest.decimals))
+		grossOut.Quo(grossOut, new(big.Int).Mul(big.NewInt(priceD), tenPow(origin.decimals)))
+
+		amountOut = new(big.Int).Mul(grossOut, big.NewInt(10_000-feeBps))
+		amountOut.Quo(amountOut, bps)
+		minAmountOut = new(big.Int).Mul(amountOut, big.NewInt(10_000-int64(slippageBps)))
+		minAmountOut.Quo(minAmountOut, bps)
+	}
 	refundFee := new(big.Int).Quo(amountIn, big.NewInt(1000))
 	withdrawFee := new(big.Int).Quo(amountOut, big.NewInt(1000))
 
-	if amountOut.Sign() <= 0 {
+	if amountOut.Sign() <= 0 || amountIn.Sign() <= 0 {
 		writeError(w, http.StatusBadRequest, "Bad Request", "amount too small to quote")
 		return
 	}

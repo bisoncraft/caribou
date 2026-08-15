@@ -638,9 +638,18 @@ func (c *Core) intentsPair(ctx context.Context, eng *intentsEngine, originAssetI
 
 // intentsQuoteRequest assembles a quote request for a pair. The refund and
 // recipient addresses are always the wallets' own (seed-derived), so every
-// value path terminates at recoverable addresses.
-func (c *Core) intentsQuoteRequest(dry bool, origin, dest *intents.Token, originWallet, destWallet *xcWallet, atoms uint64, slippageBps int) (*intents.QuoteRequest, error) {
-	amount, err := toIntentsAmount(atoms, &originWallet.Info().UnitInfo, origin.Decimals)
+// value path terminates at recoverable addresses. atoms is denominated in
+// the origin wallet's atomic unit for an EXACT_INPUT quote and the
+// destination wallet's for EXACT_OUTPUT, matching the service's amount
+// semantics for each swap type.
+func (c *Core) intentsQuoteRequest(dry, exactOutput bool, origin, dest *intents.Token, originWallet, destWallet *xcWallet, atoms uint64, slippageBps int) (*intents.QuoteRequest, error) {
+	swapType := intents.SwapTypeExactInput
+	amountWallet, amountToken := originWallet, origin
+	if exactOutput {
+		swapType = intents.SwapTypeExactOutput
+		amountWallet, amountToken = destWallet, dest
+	}
+	amount, err := toIntentsAmount(atoms, &amountWallet.Info().UnitInfo, amountToken.Decimals)
 	if err != nil {
 		return nil, err
 	}
@@ -657,7 +666,7 @@ func (c *Core) intentsQuoteRequest(dry bool, origin, dest *intents.Token, origin
 	}
 	return &intents.QuoteRequest{
 		Dry:               dry,
-		SwapType:          intents.SwapTypeExactInput,
+		SwapType:          swapType,
 		SlippageTolerance: slippageBps,
 		OriginAsset:       origin.AssetID,
 		DepositType:       intents.LocationOriginChain,
@@ -795,8 +804,10 @@ type IntentsPreview struct {
 	WithdrawFee  string           `json:"withdrawFee"`
 }
 
-// IntentsPreview obtains a dry quote for a prospective swap.
-func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID uint32, atoms uint64, slippageBps int) (*IntentsPreview, error) {
+// IntentsPreview obtains a dry quote for a prospective swap. atoms is the
+// origin amount for an exact-input preview, the desired destination amount
+// for exact-output.
+func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, exactOutput bool) (*IntentsPreview, error) {
 	eng, err := c.intentsEngine()
 	if err != nil {
 		return nil, err
@@ -805,7 +816,7 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 	if err != nil {
 		return nil, err
 	}
-	req, err := c.intentsQuoteRequest(true, origin, dest, originWallet, destWallet, atoms, slippageBps)
+	req, err := c.intentsQuoteRequest(true, exactOutput, origin, dest, originWallet, destWallet, atoms, slippageBps)
 	if err != nil {
 		return nil, err
 	}
@@ -830,9 +841,15 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 	if err != nil {
 		return nil, err
 	}
+	// The quoted input, not the request echo: for an exact-output quote the
+	// service computes it, and for exact-input it echoes the request.
+	atomsIn, err := fromIntentsAmount(resp.Quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
+	if err != nil {
+		return nil, err
+	}
 
 	return &IntentsPreview{
-		AtomsIn:      atoms,
+		AtomsIn:      atomsIn,
 		AtomsOut:     atomsOut,
 		MinAtomsOut:  minAtomsOut,
 		AmountInUSD:  resp.Quote.AmountInUsd,
@@ -851,21 +868,38 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 // in state DEPOSIT_SENT on success. If the deposit send fails the record
 // remains QUOTED and expires unfunded; no service-side action is needed.
 //
-// minAtomsOut is the MinAtomsOut of the IntentsPreview the caller
-// displayed, echoed back as the accept bound: a committed quote whose own
-// guaranteed minimum (its minAmountOut, the least a solver may deliver)
-// falls below it is rejected before any funds move, and the caller should
-// obtain a fresh preview. It is required; a swap cannot be executed
-// against terms the user never saw.
-func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, minAtomsOut uint64) (*IntentsSwap, error) {
+// atoms is the origin amount for an exact-input swap, the desired
+// destination amount for exact-output. Each direction echoes the accept
+// bound from the IntentsPreview the caller displayed, and a committed
+// quote that falls outside it is rejected before any funds move (the
+// caller should obtain a fresh preview) — a swap cannot be executed
+// against terms the user never saw:
+//
+//   - Exact-input: minAtomsOut, the preview's MinAtomsOut. The committed
+//     quote's own guaranteed minimum (its minAmountOut, the least a solver
+//     may deliver) must clear it.
+//   - Exact-output: maxAtomsIn, the preview's AtomsIn. The committed
+//     quote's required deposit (its amountIn, which the wallet will fund)
+//     must not exceed it.
+func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, exactOutput bool, minAtomsOut, maxAtomsIn uint64) (*IntentsSwap, error) {
 	eng, err := c.intentsEngine()
 	if err != nil {
 		return nil, err
 	}
 	if atoms == 0 {
+		if exactOutput {
+			return nil, fmt.Errorf("cannot swap for zero %s", unbip(destAssetID))
+		}
 		return nil, fmt.Errorf("cannot swap zero %s", unbip(originAssetID))
 	}
-	if minAtomsOut == 0 {
+	if exactOutput {
+		if maxAtomsIn == 0 {
+			return nil, fmt.Errorf("no previewed maximum input supplied")
+		}
+		// The service fixes the output at the requested amount; the floor
+		// check below still applies against it.
+		minAtomsOut = atoms
+	} else if minAtomsOut == 0 {
 		return nil, fmt.Errorf("no previewed minimum output supplied")
 	}
 	var crypter encrypt.Crypter
@@ -890,7 +924,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, err
 	}
 
-	req, err := c.intentsQuoteRequest(false, origin, dest, originWallet, destWallet, atoms, slippageBps)
+	req, err := c.intentsQuoteRequest(false, exactOutput, origin, dest, originWallet, destWallet, atoms, slippageBps)
 	if err != nil {
 		return nil, err
 	}
@@ -935,6 +969,27 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, fmt.Errorf("the rate moved: the committed quote guarantees only %s, below the quoted minimum of %s; get a fresh quote",
 			destUnits.FormatAtoms(minCommittedOut), destUnits.FormatAtoms(minAtomsOut))
 	}
+	// The deposit funds exactly what the committed quote prices. For
+	// exact-input that is the requested amount (the quote echoes it; the
+	// service's amount may sit a truncation below when the wallet's atomic
+	// unit is finer than the Intents scale, and over-depositing the dust
+	// is harmless). For exact-output the service computes it, and the
+	// ceiling the user accepted caps it.
+	sendAtoms := atoms
+	if exactOutput {
+		sendAtoms, err = fromIntentsAmount(quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
+		if err != nil {
+			return nil, fmt.Errorf("bad committed amountIn: %w", err)
+		}
+		if sendAtoms == 0 {
+			return nil, fmt.Errorf("committed quote prices a zero deposit")
+		}
+		if sendAtoms > maxAtomsIn {
+			originUnits := &originWallet.Info().UnitInfo
+			return nil, fmt.Errorf("the rate moved: the committed quote requires %s, above the quoted maximum of %s; get a fresh quote",
+				originUnits.FormatAtoms(sendAtoms), originUnits.FormatAtoms(maxAtomsIn))
+		}
+	}
 	deadline, err := time.Parse(time.RFC3339, quote.Deadline)
 	if err != nil {
 		eng.log.Warnf("Unparseable quote deadline %q: %v", quote.Deadline, err)
@@ -954,7 +1009,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		if feeRate = originWallet.usableFeeRate(); feeRate == 0 {
 			return nil, fmt.Errorf("no live fee-rate estimate for %s deposit", unbip(originAssetID))
 		}
-		if err := c.validateSendFeeRate(originWallet, quote.DepositAddress, atoms, feeRate, false); err != nil {
+		if err := c.validateSendFeeRate(originWallet, quote.DepositAddress, sendAtoms, feeRate, false); err != nil {
 			return nil, fmt.Errorf("deposit fee rate rejected: %w", err)
 		}
 	}
@@ -966,8 +1021,8 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		DestAssetID:    destAssetID,
 		OriginAsset:    origin.AssetID,
 		DestAsset:      dest.AssetID,
-		AtomsIn:        atoms,
-		AmountIn:       resp.Request.Amount,
+		AtomsIn:        sendAtoms,
+		AmountIn:       quote.AmountIn,
 		AmountOut:      quote.AmountOut,
 		AtomsOut:       atomsOut,
 		Recipient:      req.Recipient,
@@ -982,7 +1037,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, fmt.Errorf("error persisting swap record: %w", err)
 	}
 
-	coin, err := originWallet.Wallet.Send(quote.DepositAddress, atoms, feeRate)
+	coin, err := originWallet.Wallet.Send(quote.DepositAddress, sendAtoms, feeRate)
 	if err != nil {
 		// The wallet recorded no send, so the record stays QUOTED and
 		// expires unfunded; poke the poller so its deadline timeout runs

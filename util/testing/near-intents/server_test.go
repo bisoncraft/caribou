@@ -267,6 +267,41 @@ func TestQuoteMath(t *testing.T) {
 	}
 }
 
+func TestQuoteMathExactOutput(t *testing.T) {
+	rig := newTestRig(t)
+	req := testQuoteRequest(true)
+	req.SwapType = intents.SwapTypeExactOutput
+	// The exact-input case quotes 1 BTC -> 11964 NEAR (TestQuoteMath);
+	// requesting that output must invert to exactly the 1 BTC input.
+	req.Amount = "11964000000000000000000000000"
+	resp, err := rig.client.Quote(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	q := &resp.Quote
+	if want := "100000000"; q.AmountIn != want {
+		t.Fatalf("amountIn = %s, want %s", q.AmountIn, want)
+	}
+	if q.AmountOut != req.Amount {
+		t.Fatalf("amountOut = %s, want the requested %s", q.AmountOut, req.Amount)
+	}
+	// The output is exact; slippage erodes nothing.
+	if q.MinAmountOut != req.Amount {
+		t.Fatalf("minAmountOut = %s, want the requested %s", q.MinAmountOut, req.Amount)
+	}
+
+	// A requested output needing a fractional-atom input rounds the input
+	// up, never down: one yoctoNEAR more must price one more satoshi.
+	req.Amount = "11964000000000000000000000001"
+	resp, err = rig.client.Quote(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	if want := "100000001"; resp.Quote.AmountIn != want {
+		t.Fatalf("amountIn = %s, want %s (rounded up)", resp.Quote.AmountIn, want)
+	}
+}
+
 // waitStatus polls until the swap reaches the wanted status.
 func waitStatus(t *testing.T, rig *testRig, addr, want string) *intents.StatusResponse {
 	t.Helper()
@@ -577,7 +612,7 @@ func TestQuoteRejections(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	for name, mut := range map[string]func(*intents.QuoteRequest){
-		"bad swap type":    func(r *intents.QuoteRequest) { r.SwapType = intents.SwapTypeExactOutput },
+		"bad swap type":    func(r *intents.QuoteRequest) { r.SwapType = intents.SwapTypeFlexInput },
 		"unknown origin":   func(r *intents.QuoteRequest) { r.OriginAsset = "nep141:xtz.omft.near" },
 		"same asset":       func(r *intents.QuoteRequest) { r.DestinationAsset = r.OriginAsset },
 		"bad amount":       func(r *intents.QuoteRequest) { r.Amount = "zero" },
