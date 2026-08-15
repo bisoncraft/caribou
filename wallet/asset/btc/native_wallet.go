@@ -1270,8 +1270,30 @@ func (w *NativeWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransa
 		return
 	}
 
-	// Skip if already recorded.
+	// Skip if already recorded — except to backfill the fee onto a send
+	// stored at broadcast time: Send records with zero fee on the promise
+	// that this pass supplies it, and skipping unconditionally would keep
+	// that promise unmet forever.
 	if existing, err := w.txdb.GetTx(txHash.String()); err == nil && existing != nil {
+		if existing.Type == txdb.Send && existing.Fees == 0 && tx.Fee != nil && *tx.Fee < 0 {
+			existing.Fees = btcToSats(-*tx.Fee)
+			if err := w.txdb.StoreTx(existing); err != nil {
+				w.log.Errorf("native: StoreTx fee backfill %s: %v", txHash, err)
+				return
+			}
+			// The pending-confirmation tracker re-stores its own copy;
+			// keep it fee-consistent so a later confirmation update
+			// cannot clobber the backfill.
+			w.pendingMtx.Lock()
+			if p, ok := w.pendingTxs[*txHash]; ok {
+				p.Fees = existing.Fees
+				w.pendingTxs[*txHash] = p
+			}
+			w.pendingMtx.Unlock()
+			if !isInitial {
+				w.emit.TransactionNote(existing, false)
+			}
+		}
 		return
 	} else if err != nil && !errors.Is(err, asset.CoinNotFoundError) {
 		w.log.Errorf("native: GetTx %s: %v", txHash, err)
