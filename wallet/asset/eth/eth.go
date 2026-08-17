@@ -127,6 +127,16 @@ const (
 	// chainOpTick is used by explicit chain wait/recheck loops that are not
 	// part of the steady-state tip monitoring path.
 	chainOpTick = time.Second
+	// wsHeadStaleness is how long the shared header feed may go quiet before
+	// monitorBlocks resumes polling the tip itself. Every provider pushes to that
+	// one channel, so this expires only when all of their subscriptions have gone
+	// silent. It has to exceed the block time of every chain the EVM wallet
+	// drives, ethereum's ~12s being the slowest, by enough margin that ordinary
+	// variance never reads as a dead feed. At 30s a genuinely dead feed costs at
+	// most half a minute of blindness, against a bestHeader call and a no-op
+	// applyTipChange behind it every single second for the whole session
+	// otherwise.
+	wsHeadStaleness = 30 * time.Second
 	// maxUnindexedTxs is the number of pending txs we will allow to be
 	// unverified on-chain before we halt broadcasting of new txs.
 	maxUnindexedTxs = 10
@@ -2835,8 +2845,11 @@ func (eth *ETHWallet) monitorPeers(ctx context.Context) {
 
 // monitorBlocks pings for new blocks and runs the tipChange callback function
 // when the block changes. New blocks are also scanned for potential contract
-// redeems. The ticker is the primary driver; when a WebSocket subscription is
-// active, newHeadCh delivers headers immediately without waiting for the tick.
+// redeems. The providers' WebSocket subscriptions are the primary driver,
+// delivering headers over the shared newHeadCh as they are mined; the ticker
+// polls only while no subscription exists at all, the feed has fallen quiet for
+// wsHeadStaleness, or a live feed is due its periodic cross-check for a provider
+// that has dropped off it.
 func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 	ticker := time.NewTicker(chainOpTick)
 	defer ticker.Stop()
@@ -2848,6 +2861,35 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 	if m, ok := eth.node.(*multiRPCClient); ok {
 		newHeadCh = m.newHeadCh
 	}
+
+	// lastWSHead is when a header last arrived over the feed. Every provider
+	// pushes to the one shared newHeadCh, so while any of them is delivering the
+	// tick below has nothing to add: the header it would read is one
+	// applyTipChange has already seen, and a provider that is ahead has already
+	// won on the channel rather than needing the poll to notice. Tracking
+	// freshness rather than merely whether newHeadCh is non-nil keeps the 1s
+	// fallback for the case that needs it, every subscription silent at once.
+	// Zero to begin with, so the first tick polls until one has proved itself.
+	//
+	// What the suppressed tick was costing is a local read, not a round trip:
+	// bestHeader returns the highest header any provider has cached, and
+	// cachedTip holds one for a minute once that provider has seen a websocket
+	// head, so a warm cache never reaches the wire. Cheap, but it and the no-op
+	// applyTipChange behind it ran once a second for the life of the session
+	// with nothing to report.
+	//
+	// lastPoll is when the tip was last read across every provider. The poll is
+	// still not purely a fallback for a dead feed, because an endpoint set can be
+	// mixed: a provider that could not be websocket-subscribed falls back to HTTP
+	// and gets a refreshHeader goroutine instead (multirpc.go), and the cache that
+	// writes is reachable only through bestHeader. Nothing pushes those providers
+	// onto newHeadCh, so a feed kept live by the subscribed providers alone would
+	// never look at them. Hence a live feed still polls, just at
+	// headerCheckInterval: that is the cadence refreshHeader writes on, and
+	// reading those caches faster than they are written gains nothing. With every
+	// provider subscribed there is no such cache and the poll is a no-op, which is
+	// the cost of keeping one rule for both cases.
+	var lastWSHead, lastPoll time.Time
 
 	checkNewBlocks := func() {
 		defer eth.pollingTip.Store(false)
@@ -2865,20 +2907,37 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 		select {
 		case hdr := <-newHeadCh:
 			if hdr != nil {
+				// Only a real header counts as proof of life; a run of nils
+				// must not suppress the fallback poll below.
+				lastWSHead = time.Now()
 				eth.applyTipChange(hdr)
 			}
 		case <-ticker.C:
-			// When the WS subscription is active, run the fallback poll in a
-			// goroutine so a slow or blocked RPC call cannot hold up delivery
-			// of incoming WS headers. applyTipChange is safe to call
-			// concurrently (same-hash calls are no-ops).
-			if newHeadCh != nil {
+			switch {
+			case newHeadCh == nil:
+				// HTTP-only, so the tick is the only source of tip changes.
+				checkNewBlocks()
+			case time.Since(lastWSHead) >= wsHeadStaleness,
+				time.Since(lastPoll) >= headerCheckInterval:
+				// Either the feed has been quiet for longer than any of these
+				// chains' block times, so every subscription on it may be dead,
+				// or it is delivering and merely due its cross-check for a
+				// provider that has dropped off it. Poll in a goroutine so a slow
+				// or blocked RPC call cannot hold up delivery of the header that
+				// would prove the feed alive. applyTipChange is safe to call
+				// concurrently (same-hash calls are no-ops).
+				//
+				// Stamped inside the swap, so a tick that finds an earlier poll
+				// still running has not consumed the cross-check: the next tick
+				// retries a second later rather than waiting out another whole
+				// headerCheckInterval against a stale lastPoll.
 				if eth.pollingTip.CompareAndSwap(false, true) {
+					lastPoll = time.Now()
 					go checkNewBlocks()
 				}
-			} else {
-				checkNewBlocks()
 			}
+			// Otherwise the feed is delivering and covers tip detection on
+			// its own until the next cross-check falls due.
 		case <-ctx.Done():
 			return
 		}
