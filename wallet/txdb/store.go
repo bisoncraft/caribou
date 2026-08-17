@@ -34,14 +34,25 @@ type (
 	IterationOption = kvstore.IterationOption
 )
 
-var (
-	// WithReplace allows replacing a pre-existing value when calling Set.
-	WithReplace = kvstore.WithReplace
-	// WithReverse sets the direction of iteration to reverse-lexicographical.
-	WithReverse = kvstore.WithReverse
-	// WithSeek starts iteration at the specified key.
-	WithSeek = kvstore.WithSeek
-)
+// The option constructors are re-exported as functions rather than assigned
+// package variables so an importer cannot reassign them.
+
+// WithReplace allows replacing a pre-existing value when calling Set.
+func WithReplace() SetOption { return kvstore.WithReplace() }
+
+// WithReverse sets the direction of iteration to reverse-lexicographical.
+func WithReverse() IterationOption { return kvstore.WithReverse() }
+
+// WithSeek starts iteration at the specified key.
+func WithSeek(seek []byte) IterationOption { return kvstore.WithSeek(seek) }
+
+// WithUpdate must be used if an Iterate callback intends to modify the
+// database, e.g. via StoreIter.Delete.
+func WithUpdate() IterationOption { return kvstore.WithUpdate() }
+
+// WithForward sets the direction of iteration to lexicographical, clearing a
+// WithReverse default established with UseDefaultIterationOptions.
+func WithForward() IterationOption { return kvstore.WithForward() }
 
 const (
 	// ErrKeyNotFound is returned by StoreTable.Get when a key is absent.

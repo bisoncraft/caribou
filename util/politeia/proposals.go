@@ -6,7 +6,6 @@
 package pi
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -92,7 +91,7 @@ func (p *Politeia) ProposalsAll(offset, rowsCount int, searchPhrase string,
 
 	var count int
 	var collected int
-	err := iterateIndex(p.db, -1, voteStatus, func(_, val []byte) error {
+	err := p.iterateIndex(voteStatus, func(val []byte) error {
 		proposal := new(Proposal)
 		err := proposal.UnmarshalBinary(val)
 		if err != nil {
@@ -473,7 +472,7 @@ func (p *Politeia) proposalsNewUpdate() error {
 func (p *Politeia) ProposalsInProgress() ([]*MiniProposal, error) {
 	var propsInProgress []*MiniProposal
 	for _, status := range inProgressStatuses {
-		err := iterateIndex(p.db, -1, status, func(_, val []byte) error {
+		err := p.iterateIndex(status, func(val []byte) error {
 			proposal := new(Proposal)
 			err := proposal.UnmarshalBinary(val)
 			if err != nil {
@@ -497,7 +496,7 @@ func (p *Politeia) ProposalsInProgress() ([]*MiniProposal, error) {
 func (p *Politeia) proposalsInProgressUpdate() error {
 	var propsInProgress []*Proposal
 	for _, status := range inProgressStatuses {
-		err := iterateIndex(p.db, -1, status, func(_, val []byte) error {
+		err := p.iterateIndex(status, func(val []byte) error {
 			proposal := new(Proposal)
 			err := proposal.UnmarshalBinary(val)
 			if err != nil {
@@ -635,95 +634,19 @@ func iterateTable(db *lexi.DB, tableName string, limit int, f func(val []byte) e
 	return err
 }
 
-// iterateIndex iterates all entries in an index and returns the entries
-// in index order.
-func iterateIndex(db *lexi.DB, limit int, voteStatus string, f func(k, val []byte) error) error {
-	table, err := db.Table(proposalsTable)
-	if err != nil {
-		return err
-	}
-
-	indexName := proposalTimestampIndex
+// iterateIndex iterates the stored proposals in index order: the timestamp
+// index when voteStatus is empty, otherwise the status index constrained to
+// entries for that vote status.
+func (p *Politeia) iterateIndex(voteStatus string, f func(val []byte) error) error {
+	idx := p.timestampIdx
+	var prefix []byte
 	if voteStatus != "" {
-		indexName = proposalStatusIndex
+		idx = p.statusIdx
+		prefix = []byte(fmt.Sprintf("%s:%s", proposalStatusIndexPrefix, voteStatus))
 	}
-
-	indexPrefix, err := lexi.PrefixForName(db.DB, proposalsTable+lexi.IndexNameSeparator+indexName)
-	if errors.Is(err, badger.ErrKeyNotFound) {
-		return fmt.Errorf("index %q not found on table %q", indexName, proposalsTable)
-	}
-	if err != nil {
-		return err
-	}
-
-	var count int
-	return db.DB.View(func(txn *badger.Txn) error {
-		opts := badger.DefaultIteratorOptions
-		opts.Prefix = indexPrefix[:]
-		it := txn.NewIterator(opts)
-		defer it.Close()
-
-		var voteSearchKey []byte
-		if voteStatus != "" {
-			voteSearchKey = lexi.PrefixedKey(indexPrefix, []byte(fmt.Sprintf("%s:%s", proposalStatusIndexPrefix, voteStatus)))
-			it.Seek(voteSearchKey)
-		} else {
-			it.Rewind()
-		}
-
-		for ; it.Valid(); it.Next() {
-			item := it.Item()
-			idxEntryKey := item.KeyCopy(nil)
-			if len(idxEntryKey) < lexi.PrefixSize+8 {
-				// indexPrefix + (idxKey + dbid) must be at least 8 bytes beyond prefix
-				continue
-			}
-
-			rest := idxEntryKey[lexi.PrefixSize:]
-			if len(rest) < 8 {
-				continue
-			}
-
-			dbIDB := rest[len(rest)-8:]
-			idxKey := lexi.CloneBytes(rest[:len(rest)-8])
-			if len(voteSearchKey) > 0 && !bytes.HasPrefix(idxEntryKey, voteSearchKey) {
-				// We need to return early if we've exhausted all entries for the
-				// given vote status. We can check this by verifying that the key
-				// prefix is still the same as the one for the given vote status.
-				break
-			}
-
-			// Resolve the original table key from DBID.
-			keyItem, err := txn.Get(lexi.PrefixedKey(lexi.IdToKeyPrefix, dbIDB))
-			if err != nil {
-				return err
-			}
-			storedKeyB, err := keyItem.ValueCopy(nil)
-			if err != nil {
-				return err
-			}
-			keyB, err := lexi.UnqualifyKey(storedKeyB)
-			if err != nil {
-				return err
-			}
-
-			// Resolve the value via the table API (decodes the internal datum).
-			vB, err := table.Get(keyB, lexi.WithGetTxn(txn))
-			if err != nil {
-				return err
-			}
-
-			err = f(idxKey, lexi.CloneBytes(vB))
-			if err != nil {
-				return err
-			}
-
-			count++
-
-			if limit > 0 && count >= limit {
-				break
-			}
-		}
-		return nil
+	return idx.Iterate(prefix, func(it kvstore.StoreIter) error {
+		return it.V(func(vB []byte) error {
+			return f(lexi.CloneBytes(vB))
+		})
 	})
 }

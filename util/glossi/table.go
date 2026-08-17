@@ -42,6 +42,9 @@ type Table struct {
 	db      *DB
 	name    []byte
 	indexes []*Index
+
+	defaultSetOptions       kvstore.SetOpts
+	defaultIterationOptions kvstore.IterationOpts
 }
 
 // Table constructs (or opens) a Table in the DB.
@@ -101,6 +104,20 @@ func resolveTxn(i any) (*bbolt.Tx, error) {
 	return tx, nil
 }
 
+// UseDefaultSetOptions sets default options for Set and SetBatch.
+func (t *Table) UseDefaultSetOptions(opts ...kvstore.SetOption) {
+	for _, opt := range opts {
+		opt(&t.defaultSetOptions)
+	}
+}
+
+// UseDefaultIterationOptions sets default options for Iterate.
+func (t *Table) UseDefaultIterationOptions(opts ...kvstore.IterationOption) {
+	for _, opt := range opts {
+		opt(&t.defaultIterationOptions)
+	}
+}
+
 // Set inserts a value for the key and creates index entries. Zero-length keys
 // are not allowed.
 func (t *Table) Set(k, v KV, opts ...kvstore.SetOption) error {
@@ -115,7 +132,7 @@ func (t *Table) Set(k, v KV, opts ...kvstore.SetOption) error {
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling value: %w", err)
 	}
-	var o kvstore.SetOpts
+	o := t.defaultSetOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -158,7 +175,7 @@ func (t *Table) SetBatch(entries []kvstore.BatchEntry, opts ...kvstore.SetOption
 		}
 		parsed[i] = kvBytes{kB: kB, vB: vB}
 	}
-	var o kvstore.SetOpts
+	o := t.defaultSetOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -268,9 +285,13 @@ func (t *Table) Get(k KV, options ...kvstore.GetOption) (v []byte, err error) {
 
 // Delete removes the value for the key along with all of its index entries.
 // It returns ErrKeyNotFound if the key is not present.
-func (t *Table) Delete(k []byte) error {
+func (t *Table) Delete(k KV) error {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return fmt.Errorf("glossi: error marshaling key: %w", err)
+	}
 	return t.db.Update(func(tx *bbolt.Tx) error {
-		return t.deleteInTx(tx.Bucket(t.name), k)
+		return t.deleteInTx(tx.Bucket(t.name), kB)
 	})
 }
 
@@ -303,7 +324,7 @@ func (t *Table) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...kvs
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling prefix: %w", err)
 	}
-	var o kvstore.IterationOpts
+	o := t.defaultIterationOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -321,7 +342,7 @@ func (t *Table) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...kvs
 			if err != nil {
 				return err
 			}
-			return f(&Iter{k: key, v: value, index: index, dataBkt: data})
+			return f(&Iter{k: key, v: value, update: o.Update, index: index, dataBkt: data})
 		})
 	})
 }

@@ -34,6 +34,8 @@ type Politeia struct {
 	dbConn       *util.ConnectionMaster
 	proposals    kvstore.StoreTable
 	proposalMeta kvstore.StoreTable
+	statusIdx    kvstore.StoreIndex
+	timestampIdx kvstore.StoreIndex
 	log          util.Logger
 	client       *piclient.Client
 	lastSync     atomic.Int64
@@ -60,21 +62,27 @@ func New(ctx context.Context, politeiaURL string, dbPath string, log util.Logger
 	}
 
 	// Add indexes
-	proposalsTable.AddUniqueIndex(proposalStatusIndex, func(k, v lexi.KV) ([]byte, error) {
+	statusIdx, err := proposalsTable.AddUniqueIndex(proposalStatusIndex, func(k, v lexi.KV) ([]byte, error) {
 		p, ok := v.(*Proposal)
 		if !ok {
 			return nil, fmt.Errorf("unexpected type for proposalStatus: %T", v)
 		}
 		return proposalsStatusIndex(p), nil
 	})
+	if err != nil {
+		return nil, fmt.Errorf("error adding status index: %w", err)
+	}
 
-	proposalsTable.AddUniqueIndex(proposalTimestampIndex, func(k, v lexi.KV) ([]byte, error) {
+	timestampIdx, err := proposalsTable.AddUniqueIndex(proposalTimestampIndex, func(k, v lexi.KV) ([]byte, error) {
 		p, ok := v.(*Proposal)
 		if !ok {
 			return nil, fmt.Errorf("unexpected type for proposalTimestamp: %T", v)
 		}
 		return proposalsTimestampIndex(p), nil
 	})
+	if err != nil {
+		return nil, fmt.Errorf("error adding timestamp index: %w", err)
+	}
 
 	proposalsMetaTable, err := db.Table(proposalsMetaTable)
 	if err != nil {
@@ -98,6 +106,8 @@ func New(ctx context.Context, politeiaURL string, dbPath string, log util.Logger
 		dbConn:       dbConn,
 		proposals:    proposalsTable,
 		proposalMeta: proposalsMetaTable,
+		statusIdx:    statusIdx,
+		timestampIdx: timestampIdx,
 		client:       pc,
 	}, nil
 }

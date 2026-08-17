@@ -254,15 +254,18 @@ func (db *DB) nextID() (dbID DBID, _ error) {
 	return
 }
 
-// KeyID returns the DBID for the key within this Table. This is the same DBID
-// that will be used internally for the key when a datum is inserted with Set.
-// This method is provided as a tool to keep database index entries short.
-func (t *Table) KeyID(kB []byte) (dbID DBID, err error) {
-	err = t.View(func(txn *badger.Txn) error {
+// keyDBID returns the DBID for the key within this Table. This is the same
+// DBID that is used internally for the key when a datum is inserted with Set.
+// (Named apart from the embedded DB's keyID, which would otherwise be
+// shadowed.)
+func (t *Table) keyDBID(kB []byte) (DBID, error) {
+	var dbID DBID
+	err := t.View(func(txn *badger.Txn) error {
+		var err error
 		dbID, err = t.keyID(txn, t.prefix, kB, true)
 		return err
 	})
-	return
+	return dbID, convertError(err)
 }
 
 // keyID resolves a table-scoped key to its DBID, assigning one if the key is

@@ -66,7 +66,8 @@ func WithReverse() IterationOption {
 }
 
 // WithForward sets the direction of iteration to lexicographical, clearing a
-// previously-applied WithReverse (e.g. a table default).
+// previously-applied WithReverse (e.g. a default established with
+// UseDefaultIterationOptions).
 func WithForward() IterationOption {
 	return func(o *IterationOpts) { o.Reverse = false }
 }

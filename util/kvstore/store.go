@@ -38,7 +38,11 @@ const (
 // IndexFunc derives an index entry from a datum's key and value. The engines
 // pass the caller's original (unparsed) KVs, so a function indexing a typed
 // value can type-assert it back rather than re-decoding the stored bytes. It
-// may return ErrNotIndexed to skip the datum.
+// may return ErrNotIndexed to skip the datum. The function must derive the
+// entry from the KVs alone and must not modify them: the stored bytes are
+// parsed before the engine transaction opens, while index functions run
+// inside it (possibly more than once if the engine retries), so a mutation
+// would desync the index entry from the stored record.
 type IndexFunc func(k, v KV) ([]byte, error)
 
 // BatchEntry is a single key/value pair for batch insertion, used by both
@@ -68,10 +72,24 @@ type Store interface {
 type StoreTable interface {
 	AddIndex(name string, f IndexFunc) (StoreIndex, error)
 	AddUniqueIndex(name string, f IndexFunc) (StoreIndex, error)
+	// UseDefaultSetOptions establishes defaults applied to every Set and
+	// SetBatch before the call's own options, so per-call options win where
+	// they overlap. Intended for table setup; not synchronized with
+	// concurrent use of the table.
+	UseDefaultSetOptions(opts ...SetOption)
+	// UseDefaultIterationOptions establishes defaults applied to every
+	// Iterate before the call's own options (WithForward overrides a
+	// WithReverse default). Intended for table setup; not synchronized with
+	// concurrent use of the table.
+	UseDefaultIterationOptions(opts ...IterationOption)
 	// Set inserts a value for the key, parsing both with ParseKV. Values whose
 	// types implement encoding.BinaryMarshaler can be passed directly, which
 	// lets index functions recover the typed value instead of re-decoding the
-	// stored bytes. Without WithReplace, an existing key is an error.
+	// stored bytes. The caller must not mutate k or v until Set returns: the
+	// stored bytes are parsed up front while index entries are derived from
+	// the live values inside the write transaction, so a concurrent mutation
+	// would desync the indexes from the stored record. Without WithReplace,
+	// an existing key is an error.
 	Set(k, v KV, opts ...SetOption) error
 	// SetBatch inserts every entry in a single underlying transaction. On
 	// engines that fsync per write (bbolt on mobile) this collapses N fsyncs
@@ -81,7 +99,8 @@ type StoreTable interface {
 	SetBatch(entries []BatchEntry, opts ...SetOption) error
 	// Get returns the value for the key, or ErrKeyNotFound.
 	Get(k KV, opts ...GetOption) ([]byte, error)
-	Delete(k []byte) error
+	// Delete removes the value for the key along with its index entries.
+	Delete(k KV) error
 	// Iterate visits primary keys in key order, optionally constrained to a
 	// prefix, subject to the IterationOptions.
 	Iterate(prefix KV, f func(StoreIter) error, opts ...IterationOption) error
@@ -89,6 +108,10 @@ type StoreTable interface {
 
 // StoreIndex is a secondary index on a StoreTable.
 type StoreIndex interface {
+	// UseDefaultIterationOptions establishes defaults applied to every
+	// Iterate before the call's own options; see the StoreTable method of
+	// the same name.
+	UseDefaultIterationOptions(opts ...IterationOption)
 	// Iterate visits index entries in order. prefix and WithSeek are in index
 	// space.
 	Iterate(prefix KV, f func(StoreIter) error, opts ...IterationOption) error

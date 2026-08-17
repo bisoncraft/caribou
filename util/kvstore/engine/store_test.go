@@ -6,6 +6,7 @@ package engine
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
@@ -220,5 +221,281 @@ func TestTableKeysAreIndependentPerTable(t *testing.T) {
 		if string(got) != c.want {
 			t.Errorf("table %s value = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// contractRecord is a typed value with its own binary encoding, standing in
+// for the typed records (txdb's txRecord, wallet/db's noteRecord) whose index
+// functions depend on receiving the caller's original KV.
+type contractRecord struct {
+	stamp byte
+	body  string
+}
+
+func (r *contractRecord) MarshalBinary() ([]byte, error) {
+	return append([]byte{r.stamp}, r.body...), nil
+}
+
+// TestIndexTypedKVContract pins the central typed-insertion contract: an
+// IndexFunc receives the caller's original (unparsed) key and value, so it
+// can type-assert the value rather than decode stored bytes, and the stored
+// value is the MarshalBinary encoding. Every wallet/txdb and wallet/db write
+// depends on this holding identically on both engines.
+func TestIndexTypedKVContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	idx, err := tbl.AddIndex("byStamp", func(k, v kvstore.KV) ([]byte, error) {
+		if _, ok := k.([]byte); !ok {
+			return nil, errors.New("key did not arrive as the original []byte")
+		}
+		rec, ok := v.(*contractRecord)
+		if !ok {
+			return nil, errors.New("value did not arrive as the original *contractRecord")
+		}
+		if rec.stamp == 0xff {
+			return nil, kvstore.ErrNotIndexed
+		}
+		return []byte{rec.stamp}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddIndex: %v", err)
+	}
+
+	for _, r := range []*contractRecord{
+		{stamp: 2, body: "two"},
+		{stamp: 1, body: "one"},
+		{stamp: 0xff, body: "unindexed"},
+	} {
+		if err := tbl.Set([]byte(r.body), r, kvstore.WithReplace()); err != nil {
+			t.Fatalf("Set(%q): %v", r.body, err)
+		}
+	}
+
+	// Index iteration must visit the indexed records in stamp order, exposing
+	// the primary key, the index entry, and the MarshalBinary-encoded value.
+	var keys, entries, values []string
+	err = idx.Iterate(nil, func(it kvstore.StoreIter) error {
+		k, err := it.K()
+		if err != nil {
+			return err
+		}
+		keys = append(keys, string(k))
+		if err := it.Entry(func(e []byte) error {
+			entries = append(entries, string(e))
+			return nil
+		}); err != nil {
+			return err
+		}
+		return it.V(func(v []byte) error {
+			values = append(values, string(v))
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("index Iterate: %v", err)
+	}
+	if !eq(keys, "one", "two") {
+		t.Fatalf("index keys = %v, want [one two] (ErrNotIndexed row excluded, stamp order)", keys)
+	}
+	if !eq(entries, "\x01", "\x02") {
+		t.Fatalf("index entries = %q, want the stamp bytes", entries)
+	}
+	if !eq(values, "\x01one", "\x02two") {
+		t.Fatalf("index values = %q, want the MarshalBinary encodings", values)
+	}
+}
+
+// TestUniqueIndexContract pins unique-index semantics: a second key mapping
+// to the same index entry is rejected without WithReplace, and with it the
+// conflicting datum (a different primary key) is replaced.
+func TestUniqueIndexContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	idx, err := tbl.AddUniqueIndex("byStamp", func(_, v kvstore.KV) ([]byte, error) {
+		return []byte{v.(*contractRecord).stamp}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddUniqueIndex: %v", err)
+	}
+
+	if err := tbl.Set([]byte("a"), &contractRecord{stamp: 7, body: "a"}); err != nil {
+		t.Fatalf("first Set: %v", err)
+	}
+	if err := tbl.Set([]byte("b"), &contractRecord{stamp: 7, body: "b"}); err == nil {
+		t.Fatal("conflicting Set without WithReplace succeeded")
+	}
+	if err := tbl.Set([]byte("b"), &contractRecord{stamp: 7, body: "b"}, kvstore.WithReplace()); err != nil {
+		t.Fatalf("conflicting Set with WithReplace: %v", err)
+	}
+	// The conflicting datum "a" must be gone, leaving only "b".
+	if _, err := tbl.Get([]byte("a")); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("replaced datum Get = %v, want ErrKeyNotFound", err)
+	}
+	var n int
+	if err := idx.Iterate(nil, func(kvstore.StoreIter) error { n++; return nil }); err != nil {
+		t.Fatalf("index Iterate: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("index count after replace = %d, want 1", n)
+	}
+}
+
+// TestSetBatchContract pins SetBatch atomicity: without WithReplace a
+// mid-batch key conflict rolls back the whole batch, and with it the batch
+// applies.
+func TestSetBatchContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	if err := tbl.Set([]byte("existing"), []byte("v0")); err != nil {
+		t.Fatalf("seed Set: %v", err)
+	}
+
+	batch := []kvstore.BatchEntry{
+		{K: []byte("fresh"), V: []byte("v1")},
+		{K: []byte("existing"), V: []byte("v2")},
+	}
+	if err := tbl.SetBatch(batch); err == nil {
+		t.Fatal("conflicting SetBatch without WithReplace succeeded")
+	}
+	if _, err := tbl.Get([]byte("fresh")); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("pre-conflict batch entry survived rollback: %v", err)
+	}
+
+	if err := tbl.SetBatch(batch, kvstore.WithReplace()); err != nil {
+		t.Fatalf("SetBatch with WithReplace: %v", err)
+	}
+	for k, want := range map[string]string{"fresh": "v1", "existing": "v2"} {
+		got, err := tbl.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", k, err)
+		}
+		if string(got) != want {
+			t.Fatalf("Get(%q) = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestIterDeleteContract pins StoreIter.Delete: it requires WithUpdate on
+// both engines, and with it the datum and its index entries are removed
+// mid-iteration.
+func TestIterDeleteContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	idx, err := tbl.AddIndex("byStamp", func(_, v kvstore.KV) ([]byte, error) {
+		return []byte{v.(*contractRecord).stamp}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddIndex: %v", err)
+	}
+	for _, r := range []*contractRecord{{stamp: 1, body: "a"}, {stamp: 2, body: "b"}} {
+		if err := tbl.Set([]byte(r.body), r); err != nil {
+			t.Fatalf("Set(%q): %v", r.body, err)
+		}
+	}
+
+	// Delete without WithUpdate must fail on both engines.
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error { return it.Delete() })
+	if err == nil || !strings.Contains(err.Error(), "requires WithUpdate") {
+		t.Fatalf("Delete without WithUpdate = %v, want a requires-WithUpdate error", err)
+	}
+
+	// With WithUpdate, delete "a" mid-iteration.
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
+		k, err := it.K()
+		if err != nil {
+			return err
+		}
+		if string(k) == "a" {
+			return it.Delete()
+		}
+		return nil
+	}, kvstore.WithUpdate())
+	if err != nil {
+		t.Fatalf("Iterate with WithUpdate: %v", err)
+	}
+	if _, err := tbl.Get([]byte("a")); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("deleted datum Get = %v, want ErrKeyNotFound", err)
+	}
+	var stamps []string
+	if err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
+		return it.Entry(func(e []byte) error {
+			stamps = append(stamps, string(e))
+			return nil
+		})
+	}); err != nil {
+		t.Fatalf("index Iterate: %v", err)
+	}
+	if !eq(stamps, "\x02") {
+		t.Fatalf("index entries after delete = %q, want only stamp 2", stamps)
+	}
+}
+
+// TestDefaultOptionsContract pins UseDefaultSetOptions and
+// UseDefaultIterationOptions: defaults apply to every call, per-call options
+// override them where they overlap (WithForward clearing a WithReverse
+// default), and SetBatch honors the table's Set defaults.
+func TestDefaultOptionsContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	idx, err := tbl.AddIndex("byVal", func(_, v kvstore.KV) ([]byte, error) {
+		return v.([]byte), nil
+	})
+	if err != nil {
+		t.Fatalf("AddIndex: %v", err)
+	}
+
+	// A WithReplace default must let re-Sets and re-batching succeed without
+	// per-call options.
+	tbl.UseDefaultSetOptions(kvstore.WithReplace())
+	for _, k := range []string{"a", "b", "c"} {
+		if err := tbl.Set([]byte(k), []byte(k)); err != nil {
+			t.Fatalf("Set(%q): %v", k, err)
+		}
+		if err := tbl.Set([]byte(k), []byte(k)); err != nil {
+			t.Fatalf("default-replace re-Set(%q): %v", k, err)
+		}
+	}
+	if err := tbl.SetBatch([]kvstore.BatchEntry{{K: []byte("a"), V: []byte("a")}}); err != nil {
+		t.Fatalf("default-replace SetBatch: %v", err)
+	}
+
+	keysOf := func(it func(func(kvstore.StoreIter) error, ...kvstore.IterationOption) error, opts ...kvstore.IterationOption) []string {
+		t.Helper()
+		return collectKeys(t, func(f func(kvstore.StoreIter) error) error {
+			return it(f, opts...)
+		})
+	}
+	tblIter := func(f func(kvstore.StoreIter) error, opts ...kvstore.IterationOption) error {
+		return tbl.Iterate(nil, f, opts...)
+	}
+	idxIter := func(f func(kvstore.StoreIter) error, opts ...kvstore.IterationOption) error {
+		return idx.Iterate(nil, f, opts...)
+	}
+
+	// A WithReverse default flips iteration on both the table and the index;
+	// a per-call WithForward overrides it back.
+	tbl.UseDefaultIterationOptions(kvstore.WithReverse())
+	idx.UseDefaultIterationOptions(kvstore.WithReverse())
+	if got := keysOf(tblIter); !eq(got, "c", "b", "a") {
+		t.Errorf("table default-reverse = %v, want [c b a]", got)
+	}
+	if got := keysOf(tblIter, kvstore.WithForward()); !eq(got, "a", "b", "c") {
+		t.Errorf("table WithForward override = %v, want [a b c]", got)
+	}
+	if got := keysOf(idxIter); !eq(got, "c", "b", "a") {
+		t.Errorf("index default-reverse = %v, want [c b a]", got)
+	}
+	if got := keysOf(idxIter, kvstore.WithForward()); !eq(got, "a", "b", "c") {
+		t.Errorf("index WithForward override = %v, want [a b c]", got)
 	}
 }

@@ -169,11 +169,17 @@ func (t *mockTable) Set(k, v txdb.KV, _ ...txdb.SetOption) error {
 	t.data[string(kB)] = vB
 	return nil
 }
-func (t *mockTable) Delete(k []byte) error {
-	delete(t.data, string(k))
+func (t *mockTable) Delete(k txdb.KV) error {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return err
+	}
+	delete(t.data, string(kB))
 	return nil
 }
 func (t *mockTable) SetBatch(_ []txdb.BatchEntry, _ ...txdb.SetOption) error { return nil }
+func (t *mockTable) UseDefaultSetOptions(_ ...txdb.SetOption)                {}
+func (t *mockTable) UseDefaultIterationOptions(_ ...txdb.IterationOption)    {}
 func (t *mockTable) AddIndex(_ string, _ txdb.IndexFunc) (txdb.StoreIndex, error) {
 	return nil, nil
 }

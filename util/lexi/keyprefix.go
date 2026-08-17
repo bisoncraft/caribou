@@ -12,8 +12,10 @@ import (
 )
 
 const (
-	PrefixSize         = 2
-	IndexNameSeparator = "__idx__"
+	PrefixSize = 2
+	// indexNameSeparator joins a table name and an index name into the
+	// registered name an index's key prefix is stored under.
+	indexNameSeparator = "__idx__"
 )
 
 // keyPrefix is a prefix for a key in the badger DB. Every table and index has
@@ -84,23 +86,4 @@ func CloneBytes(b []byte) []byte {
 	c := make([]byte, len(b))
 	copy(c, b)
 	return c
-}
-
-// PrefixForName looks up the key prefix for a given table or index name.
-func PrefixForName(bdb *badger.DB, name string) ([PrefixSize]byte, error) {
-	var prefix [PrefixSize]byte
-	err := bdb.View(func(txn *badger.Txn) error {
-		it, err := txn.Get(PrefixedKey(nameToPrefixPrefix, []byte(name)))
-		if err != nil {
-			return err
-		}
-		return it.Value(func(b []byte) error {
-			if len(b) != PrefixSize {
-				return fmt.Errorf("unexpected prefix size %d for name %q", len(b), name)
-			}
-			copy(prefix[:], b)
-			return nil
-		})
-	})
-	return prefix, err
 }

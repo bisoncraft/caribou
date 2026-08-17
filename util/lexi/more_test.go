@@ -95,26 +95,6 @@ func TestCloneBytes(t *testing.T) {
 	}
 }
 
-// TestPrefixForName covers the package-level PrefixForName lookup for an
-// existing name (the first registered Table) and the unknown-name error path.
-func TestPrefixForName(t *testing.T) {
-	db, shutdown := newTestDB(t)
-	defer shutdown()
-	if _, err := db.table("T"); err != nil {
-		t.Fatalf("Table: %v", err)
-	}
-	p, err := PrefixForName(db.DB, "T")
-	if err != nil {
-		t.Fatalf("PrefixForName: %v", err)
-	}
-	if p != [PrefixSize]byte(firstAvailablePrefix) {
-		t.Fatalf("PrefixForName = %v, want %v", p, firstAvailablePrefix)
-	}
-	if _, err := PrefixForName(db.DB, "no-such-table"); err == nil {
-		t.Fatal("expected error for unknown name")
-	}
-}
-
 // TestBadgerLoggerWrapper exercises the delegate methods of badgerLoggerWrapper
 // (Debug, Debugf, Info, Infof, Warning, Warningf). They route to the embedded
 // util.Logger, so capturing the writer is enough to confirm they're wired up.
@@ -162,9 +142,10 @@ func TestConnect(t *testing.T) {
 	}
 }
 
-// TestKeyID exercises (*DB).KeyID for an existing key and confirms repeated
-// calls return the same id. KeyID is read-only, so an unknown key must fail.
-func TestKeyID(t *testing.T) {
+// TestKeyDBID exercises (*Table).keyDBID for an existing key and confirms
+// repeated calls return the same id. keyDBID is read-only, so an unknown key
+// must fail.
+func TestKeyDBID(t *testing.T) {
 	db, _ := newTestDB(t)
 	tbl, err := db.table("ids")
 	if err != nil {
@@ -174,32 +155,33 @@ func TestKeyID(t *testing.T) {
 	if err := tbl.Set(k, &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	id1, err := tbl.KeyID(k)
+	id1, err := tbl.keyDBID(k)
 	if err != nil {
-		t.Fatalf("KeyID: %v", err)
+		t.Fatalf("keyDBID: %v", err)
 	}
-	id2, err := tbl.KeyID(k)
+	id2, err := tbl.keyDBID(k)
 	if err != nil {
-		t.Fatalf("KeyID again: %v", err)
+		t.Fatalf("keyDBID again: %v", err)
 	}
 	if id1 != id2 {
-		t.Fatalf("KeyID returned different ids for same key: %v vs %v", id1, id2)
+		t.Fatalf("keyDBID returned different ids for same key: %v vs %v", id1, id2)
 	}
 	// A second key gets a distinct id.
 	k2 := []byte("the-other-key")
 	if err := tbl.Set(k2, &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set k2: %v", err)
 	}
-	id3, err := tbl.KeyID(k2)
+	id3, err := tbl.keyDBID(k2)
 	if err != nil {
-		t.Fatalf("KeyID k2: %v", err)
+		t.Fatalf("keyDBID k2: %v", err)
 	}
 	if id3 == id1 {
 		t.Fatalf("distinct keys produced the same id %v", id1)
 	}
-	// KeyID is read-only, so an unknown key must surface the badger error.
-	if _, err := tbl.KeyID([]byte("not-there")); err == nil {
-		t.Fatal("expected error for unknown key")
+	// keyDBID is read-only, so an unknown key must fail, with badger's error
+	// translated to the package sentinel.
+	if _, err := tbl.keyDBID([]byte("not-there")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("unknown-key keyDBID error = %v, want ErrKeyNotFound", err)
 	}
 }
 
@@ -298,95 +280,6 @@ func TestUniqueIndexConflictErrorMessage(t *testing.T) {
 	}
 }
 
-// TestWithForward verifies WithForward clears a previously-set WithReverse.
-func TestWithForward(t *testing.T) {
-	var opts kvstore.IterationOpts
-	kvstore.WithReverse()(&opts)
-	if !opts.Reverse {
-		t.Fatal("WithReverse did not set reverse")
-	}
-	kvstore.WithForward()(&opts)
-	if opts.Reverse {
-		t.Fatal("WithForward did not clear reverse")
-	}
-}
-
-// TestUseDefaultSetOptions verifies table-level default Set options take effect.
-func TestUseDefaultSetOptions(t *testing.T) {
-	db, _ := newTestDB(t)
-	tbl, err := db.table("X")
-	if err != nil {
-		t.Fatalf("Table: %v", err)
-	}
-	tbl.UseDefaultSetOptions(kvstore.WithReplace())
-	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v1")}); err != nil {
-		t.Fatalf("first Set: %v", err)
-	}
-	// Without UseDefaultSetOptions, the second Set would fail. With the
-	// WithReplace default, it must succeed.
-	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v2")}); err != nil {
-		t.Fatalf("default-replace Set: %v", err)
-	}
-	b, err := tbl.Get([]byte("k"))
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	var got tValue
-	if err := got.UnmarshalBinary(b); err != nil {
-		t.Fatalf("UnmarshalBinary: %v", err)
-	}
-	if !bytes.Equal(got.v, []byte("v2")) {
-		t.Fatalf("after default-replace got %q", got.v)
-	}
-}
-
-// TestUseDefaultIterationOptions exercises Index.UseDefaultIterationOptions
-// and Table.UseDefaultIterationOptions.
-func TestUseDefaultIterationOptions(t *testing.T) {
-	db, _ := newTestDB(t)
-	tbl, err := db.table("X")
-	if err != nil {
-		t.Fatalf("Table: %v", err)
-	}
-	idx, err := tbl.addIndex("byVal", func(_, v KV) ([]byte, error) {
-		return v.(*tValue).idx, nil
-	}, false)
-	if err != nil {
-		t.Fatalf("AddIndex: %v", err)
-	}
-	for i := range 5 {
-		b := byte(i)
-		if err := tbl.Set([]byte{b}, &tValue{v: []byte{b}, idx: []byte{b}}); err != nil {
-			t.Fatalf("Set: %v", err)
-		}
-	}
-	idx.UseDefaultIterationOptions(kvstore.WithReverse())
-	var first []byte
-	if err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
-		return it.V(func(v []byte) error {
-			first = append([]byte(nil), v...)
-			return ErrEndIteration
-		})
-	}); err != nil {
-		t.Fatalf("idx Iterate: %v", err)
-	}
-	if !bytes.Equal(first, []byte{4}) {
-		t.Fatalf("default-reverse first value = %x, want 04", first)
-	}
-
-	tbl.UseDefaultIterationOptions(kvstore.WithReverse())
-	var seen int
-	if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
-		seen++
-		return nil
-	}); err != nil {
-		t.Fatalf("tbl Iterate: %v", err)
-	}
-	if seen != 5 {
-		t.Fatalf("default-reverse table iteration saw %d, want 5", seen)
-	}
-}
-
 // TestSetEmptyKey and TestSetWithoutReplace round out the table.Set error paths.
 func TestSetEmptyKey(t *testing.T) {
 	db, _ := newTestDB(t)
@@ -465,22 +358,6 @@ func TestSetIndexFunctionError(t *testing.T) {
 	}
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected wrapped sentinel, got %v", err)
-	}
-}
-
-// TestPrefixForNameBadSize covers the "unexpected prefix size" path in the
-// package-level PrefixForName by injecting a mapping of the wrong length.
-func TestPrefixForNameBadSize(t *testing.T) {
-	db, _ := newTestDB(t)
-	err := db.DB.Update(func(txn *badger.Txn) error {
-		// Write a 1-byte value where PrefixForName expects PrefixSize bytes.
-		return txn.Set(PrefixedKey(nameToPrefixPrefix, []byte("bad")), []byte{0x01})
-	})
-	if err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if _, err := PrefixForName(db.DB, "bad"); err == nil {
-		t.Fatal("expected error for malformed prefix value")
 	}
 }
 
@@ -569,9 +446,9 @@ func TestIterDatumDecodeError(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := tbl.KeyID([]byte("k"))
+	dbID, err := tbl.keyDBID([]byte("k"))
 	if err != nil {
-		t.Fatalf("KeyID: %v", err)
+		t.Fatalf("keyDBID: %v", err)
 	}
 	// Overwrite the datum row with a value too short to decode.
 	err = db.DB.Update(func(txn *badger.Txn) error {
@@ -599,9 +476,9 @@ func TestSetReplaceCorruptOldDatum(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := tbl.KeyID([]byte("k"))
+	dbID, err := tbl.keyDBID([]byte("k"))
 	if err != nil {
-		t.Fatalf("KeyID: %v", err)
+		t.Fatalf("keyDBID: %v", err)
 	}
 	err = db.DB.Update(func(txn *badger.Txn) error {
 		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
@@ -626,9 +503,9 @@ func TestDeleteCorruptDatum(t *testing.T) {
 	if err := tbl.Set([]byte("k"), &tValue{v: []byte("v")}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	dbID, err := tbl.KeyID([]byte("k"))
+	dbID, err := tbl.keyDBID([]byte("k"))
 	if err != nil {
-		t.Fatalf("KeyID: %v", err)
+		t.Fatalf("keyDBID: %v", err)
 	}
 	err = db.DB.Update(func(txn *badger.Txn) error {
 		return txn.Set(PrefixedKey(tbl.prefix, dbID[:]), []byte{0xff})
@@ -734,5 +611,23 @@ func TestTableIterateDeleteDuringIteration(t *testing.T) {
 	}
 	if _, err := tbl.Get([]byte("b")); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("Get of deleted key = %v, want ErrKeyNotFound", err)
+	}
+}
+
+// TestWrongTypeTxnOption covers resolveTxn's rejection of a transaction
+// handle that is not a *badger.Txn.
+func TestWrongTypeTxnOption(t *testing.T) {
+	db, _ := newTestDB(t)
+	tbl, err := db.table("X")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	badSet := func(o *kvstore.SetOpts) { o.Txn = 42 }
+	if err := tbl.Set([]byte("k"), []byte("v"), badSet); err == nil {
+		t.Fatal("Set with wrong-typed txn handle succeeded")
+	}
+	badGet := func(o *kvstore.GetOpts) { o.Txn = 42 }
+	if _, err := tbl.Get([]byte("k"), badGet); err == nil {
+		t.Fatal("Get with wrong-typed txn handle succeeded")
 	}
 }

@@ -1264,3 +1264,46 @@ func TestBoundedReverseHitsBreak(t *testing.T) {
 		t.Fatalf("B reverse = %v", bRev)
 	}
 }
+
+// TestTransactionOptions covers WithTxn and WithGetTxn: operations inside a
+// caller-managed transaction see each other's effects and roll back with it,
+// and a wrong-typed transaction handle is rejected.
+func TestTransactionOptions(t *testing.T) {
+	db := newTestDB(t)
+	tbl, err := db.table("txn")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+
+	// A transaction that rolls back must take its Set with it.
+	rollback := errors.New("intentional rollback")
+	err = db.Update(func(tx *bbolt.Tx) error {
+		if err := tbl.Set([]byte("k"), []byte("v"), WithTxn(tx)); err != nil {
+			return err
+		}
+		b, err := tbl.Get([]byte("k"), WithGetTxn(tx))
+		if err != nil {
+			return fmt.Errorf("Get within txn: %w", err)
+		}
+		if !bytes.Equal(b, []byte("v")) {
+			return fmt.Errorf("Get within txn = %q, want v", b)
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("Update = %v, want the rollback error", err)
+	}
+	if _, err := tbl.Get([]byte("k")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("Get after rollback = %v, want ErrKeyNotFound", err)
+	}
+
+	// A wrong-typed transaction handle is a caller error.
+	badSet := func(o *kvstore.SetOpts) { o.Txn = 42 }
+	if err := tbl.Set([]byte("k"), []byte("v"), badSet); err == nil {
+		t.Fatal("Set with wrong-typed txn handle succeeded")
+	}
+	badGet := func(o *kvstore.GetOpts) { o.Txn = 42 }
+	if _, err := tbl.Get([]byte("k"), badGet); err == nil {
+		t.Fatal("Get with wrong-typed txn handle succeeded")
+	}
+}

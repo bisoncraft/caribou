@@ -659,10 +659,10 @@ func TestTransactionOptions(t *testing.T) {
 }
 
 // TestSetBatchIgnoresCallerTxn verifies that a caller-supplied WithTxn cannot
-// override SetBatch's internal batch transaction. Options are applied
-// last-wins, so SetBatch must append WithTxn(batchTxn) after the caller's
-// options. Otherwise the writes would land in the caller's transaction and
-// break batch atomicity.
+// override SetBatch's internal batch transaction: SetBatch overwrites the
+// resolved options' Txn with its own after applying the caller's options.
+// Otherwise the writes would land in the caller's transaction and break batch
+// atomicity.
 func TestSetBatchIgnoresCallerTxn(t *testing.T) {
 	db, shutdown := newTestDB(t)
 	defer shutdown()

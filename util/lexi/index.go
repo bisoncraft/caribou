@@ -36,7 +36,7 @@ type Index struct {
 }
 
 func (t *Table) addIndex(name string, f kvstore.IndexFunc, unique bool) (*Index, error) {
-	p, err := t.prefixForName(t.name + "__idx__" + name)
+	p, err := t.prefixForName(t.name + indexNameSeparator + name)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +169,9 @@ type Iter struct {
 	txn     *badger.Txn
 	dbID    DBID
 	d       *datum
+	// update records whether the iteration runs in a read-write transaction
+	// (WithUpdate), which Delete requires.
+	update bool
 	// k is the caller's key, set during table iteration where the key-map entry
 	// already carries it. Nil during index iteration, where K resolves it.
 	k []byte
@@ -231,8 +234,12 @@ func (i *Iter) datum() (_ *datum, err error) {
 	return i.d, nil
 }
 
-// Delete deletes the indexed datum and any associated index entries.
+// Delete deletes the indexed datum and any associated index entries. The
+// iteration must have been started with WithUpdate.
 func (i *Iter) Delete() error {
+	if !i.update {
+		return errors.New("lexi: Delete requires WithUpdate")
+	}
 	d, err := i.datum()
 	if err != nil {
 		return err
@@ -287,6 +294,7 @@ func (db *DB) iterate(base []byte, table *Table, io kvstore.IterationOpts, isInd
 				table:   table,
 				item:    item,
 				txn:     txn,
+				update:  io.Update,
 			}
 			if isIndex {
 				if len(k) < PrefixSize+DBIDSize {

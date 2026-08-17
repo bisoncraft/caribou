@@ -121,7 +121,7 @@ func (t *Table) get(txn *badger.Txn, dbID DBID) (d *datum, err error) {
 	return
 }
 
-// UseDefaultSetOptions sets default options for Set.
+// UseDefaultSetOptions sets default options for Set and SetBatch.
 func (t *Table) UseDefaultSetOptions(setOpts ...kvstore.SetOption) {
 	for i := range setOpts {
 		setOpts[i](&t.defaultSetOptions)
@@ -260,7 +260,11 @@ func (t *Table) SetBatch(pairs []kvstore.BatchEntry, setOpts ...kvstore.SetOptio
 
 // Delete deletes the data associated with the key, including any index entries
 // and the id<->key mappings.
-func (t *Table) Delete(kB []byte) error {
+func (t *Table) Delete(k KV) error {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return fmt.Errorf("error marshaling key: %w", err)
+	}
 	return t.Update(func(txn *badger.Txn) error {
 		dbID, err := t.keyID(txn, t.prefix, kB, true)
 		if err != nil {

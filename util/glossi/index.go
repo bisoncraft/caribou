@@ -38,6 +38,15 @@ type Index struct {
 	id     byte
 	f      kvstore.IndexFunc
 	unique bool
+
+	defaultIterationOptions kvstore.IterationOpts
+}
+
+// UseDefaultIterationOptions sets default options for Iterate.
+func (idx *Index) UseDefaultIterationOptions(opts ...kvstore.IterationOption) {
+	for _, opt := range opts {
+		opt(&idx.defaultIterationOptions)
+	}
 }
 
 // AddIndex adds a non-unique index to the Table. After an index is added, every
@@ -137,7 +146,7 @@ func (idx *Index) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...k
 	if err != nil {
 		return fmt.Errorf("glossi: error marshaling prefix: %w", err)
 	}
-	var o kvstore.IterationOpts
+	o := idx.defaultIterationOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -169,6 +178,7 @@ func (idx *Index) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...k
 				v:       value,
 				entry:   entryKey,
 				kLen:    len(k),
+				update:  o.Update,
 				index:   index,
 				dataBkt: data,
 			})
@@ -184,7 +194,9 @@ type Iter struct {
 	entry []byte // index entry key (index iteration only); nil for table iteration
 	kLen  int
 
-	// For Delete during iteration (requires WithUpdate).
+	// update records whether the iteration runs in a read-write transaction
+	// (WithUpdate), which Delete requires.
+	update  bool
 	index   *bbolt.Bucket
 	dataBkt *bbolt.Bucket
 }
@@ -210,7 +222,7 @@ func (i *Iter) Entry(f func(idxB []byte) error) error {
 // Delete removes the datum at the current entry along with all of its index
 // entries. The iteration must have been started with WithUpdate.
 func (i *Iter) Delete() error {
-	if i.index == nil || i.dataBkt == nil {
+	if !i.update {
 		return errors.New("glossi: Delete requires WithUpdate")
 	}
 	raw := i.dataBkt.Get(i.k)
