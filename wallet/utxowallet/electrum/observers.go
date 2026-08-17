@@ -26,10 +26,11 @@ import (
 // independent — an observer death demotes it and elects a replacement
 // without touching the wallet stream.
 
-const (
-	// maxObservers bounds the observer connections per network.
-	maxObservers = 3
+// maxObservers, which bounds the observer connections per network, lives in
+// observers_desktop.go and observers_mobile.go: a phone cannot afford the
+// desktop count.
 
+const (
 	// lagWindow converts to the lag threshold in blocks: the wallet server
 	// is a lag candidate when the best observer is at least this much work
 	// time ahead at the chain's target spacing. Two blocks mined seconds

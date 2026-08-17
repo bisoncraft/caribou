@@ -54,6 +54,12 @@ env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/mobile/
 # glossi adapter and the mobile side of wallet/db and wallet/txdb get.
 env GORACE="halt_on_error=1" go test -race -short -tags mobile ./util/kvstore/ ./wallet/db/ ./wallet/txdb/
 
+# Connection fan-out is build-tagged down on mobile: electrum keeps one header
+# observer per network instead of three, and the EVM wallet dials two default
+# RPC providers per chain instead of four or five. The ./... run above only
+# compiles the desktop half of both, so run these under the tag as well.
+env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/utxowallet/electrum/ ./wallet/asset/eth/
+
 # btc, ltc and dash build-tag their AvailableWallets list: SPV-first on desktop,
 # electrum-only on mobile. The ./... run above only ever compiles the desktop
 # half, so the mobile menu would otherwise never be built, let alone asserted.

@@ -799,8 +799,11 @@ func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
 	}
 
 	return &ETHWallet{
-		assetWallet:      aw,
-		defaultProviders: cfg.DefaultProviders,
+		assetWallet: aw,
+		// Capped here rather than at each use, so both the Connect and the
+		// reconfigure path get the same list. Only the built-in defaults are
+		// capped; an explicit providers setting bypasses this field entirely.
+		defaultProviders: limitDefaultProviders(cfg.DefaultProviders),
 	}, nil
 }
 

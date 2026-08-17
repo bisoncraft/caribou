@@ -256,3 +256,37 @@ func TestAuditDissent(t *testing.T) {
 		t.Fatal("empty batch accepted")
 	}
 }
+
+// TestFillObserversRespectsCap: given more reachable candidates than there are
+// slots, one pass fills exactly maxObservers and stops. maxObservers is
+// build-tagged (see observers_desktop.go and observers_mobile.go), so the
+// assertion is against the constant and holds for either build.
+func TestFillObserversRespectsCap(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	const chainLen = 5
+	f, params := newFakeServer(t, chainLen)
+	n := newUnstartedNetwork(t, f, params)
+
+	// Two more reachable candidates than the cap, so stopping is observable
+	// rather than incidental. mineTestHeader is deterministic, so every fake
+	// built to the same length serves the same chain under the same genesis
+	// hash, which is what lets these pass a new node's genesis check.
+	extra := make([]*ServerAddr, 0, maxObservers+2)
+	for i := 0; i < cap(extra); i++ {
+		peer, _ := newFakeServer(t, chainLen)
+		extra = append(extra, peer.addr())
+	}
+	n.pool.addDiscovered("recA:1", extra)
+
+	// The snapshot names the wallet server, the shipped fake, so every candidate
+	// added above is eligible for a slot.
+	n.fillObservers(f.addr().Addr)
+
+	if count := n.ObserverCount(); count != maxObservers {
+		t.Fatalf("filled %d observers, want the %d cap", count, maxObservers)
+	}
+}
