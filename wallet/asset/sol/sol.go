@@ -25,6 +25,9 @@ import (
 )
 
 const (
+	// pollInterval is the state-refresh cadence with no account subscription to
+	// lean on, either because none is configured or because the connection is
+	// down. It is the only tip source in that case, so it stays brisk.
 	pollInterval = 2 * time.Second
 
 	// fetchWorkers bounds how many getTransaction RPC calls run
@@ -32,6 +35,35 @@ const (
 	// than unbounded so a large batch (up to 1000 signatures) cannot open
 	// a thousand simultaneous connections to the RPC endpoint.
 	fetchWorkers = 8
+
+	// subscribedPollInterval is the cadence once the websocket is live.
+	// Notifications cover balance and history changes, so the poll is reduced
+	// to what they cannot carry: advancing the tip, which SyncStatus reads as
+	// liveness, and re-reading state in case a frame was missed.
+	//
+	// A pass costs more than the getSlot it makes. updateTip emits TipChange
+	// whenever the slot moved, and Core answers a TipChange by re-reading the
+	// balance, so every pass is two round trips. Solana mints a slot roughly
+	// every 400ms, so the slot had always moved: the old 2s cadence paid both
+	// trips thirty times a minute whether or not anything about this wallet had
+	// changed. That, rather than the getSlot alone, is what this interval cuts.
+	//
+	// Nothing a user watches gets staler for it. A deposit or a confirmation
+	// changes the watched account, so the notification wakes the loop at once
+	// rather than waiting out the interval, which beats the 2s poll it replaced.
+	// What does age is the block height SyncStatus reports, from a few slots
+	// behind to a few dozen, and at 400ms slots that was never live at any
+	// cadence.
+	//
+	// The interval must stay comfortably under MaxBlockInterval seconds, past
+	// which SyncStatus reports unsynced from the tip timestamp alone, so 15s
+	// leaves a 2x margin. The margin is only real because the loop times the
+	// interval from the start of a refresh rather than its end; timed from the
+	// end, a refresh slow enough to page signature batches would spend the
+	// difference. It is also why a refresh that errors drops the loop back to
+	// pollInterval: a retry one whole interval later would land on the
+	// threshold, not under it.
+	subscribedPollInterval = 15 * time.Second
 )
 
 var (
@@ -145,6 +177,15 @@ type Wallet struct {
 	// sees a mix of pre- and post-reconnect values.
 	conn atomic.Pointer[conn]
 	txDB txdb.NetworkTxDB
+
+	// ws is the account-subscription client for the current connection, nil
+	// when no subscription endpoint applies. Unlike the fields above it really
+	// is reassigned: an xcWallet reuses one asset.Wallet across connects, so a
+	// mobile pause/resume, a wallet re-enable, or a failed reconfigure rollback
+	// all re-run Connect and install a new client. A token wallet reads it off
+	// its parent from a goroutine with its own independent lifetime, so the
+	// reads and that write genuinely race.
+	ws atomic.Pointer[wsClient]
 
 	tipMtx  sync.RWMutex
 	tip     uint64
@@ -280,30 +321,144 @@ func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, err
 	}
 	var wg sync.WaitGroup
+
+	// refresh carries account-change wakes from the websocket to the loop
+	// below. Buffered at one so a burst collapses into a single refresh.
+	refresh := make(chan struct{}, 1)
+	w.ws.Store(nil)
+	if wsURL := w.subscriptionEndpoint(); wsURL != "" {
+		ws := newWSClient(wsURL, w.log)
+		w.ws.Store(ws)
+		ws.watch(w.address, func() { signalRefresh(refresh) })
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ws.run(ctx)
+		}()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		// Run immediately so history is populated before the first ticker fires.
+		// Run immediately so history is populated before the first wake. fresh
+		// is stamped before it, not after: updateTip ran synchronously in
+		// Connect just above, so the tip is already this current, and a
+		// first-run history sync can take minutes that the first tip read must
+		// not be pushed out by.
+		fresh := time.Now()
 		if err := w.syncHistory(ctx); err != nil {
 			w.log.Debugf("syncHistory error: %v", err)
 		}
 		if err := w.checkPendingTxs(ctx); err != nil {
 			w.log.Debugf("checkPendingTxs error: %v", err)
 		}
-		ticker := time.NewTicker(pollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := w.refreshState(ctx); err != nil {
+		refreshLoop(ctx, fresh, refresh, pollInterval,
+			func(lastFailed bool) time.Duration {
+				// Loaded per pass rather than captured once: the subscription
+				// can come up, drop, and come back within one session, and the
+				// poll has to tighten and relax with it.
+				return refreshInterval(w.ws.Load(), lastFailed)
+			},
+			func(ctx context.Context) error {
+				err := w.refreshState(ctx)
+				if err != nil {
 					w.log.Debugf("refreshState error: %v", err)
 				}
-			}
-		}
+				return err
+			})
 	}()
 	return &wg, nil
+}
+
+// refreshLoop runs pass until ctx is done, waking on a send to wake or once the
+// interval has elapsed, whichever comes first. interval is re-consulted every
+// pass and told whether the previous one returned an error.
+//
+// The interval is measured from the start of the previous pass rather than its
+// end, because it is meant to bound how stale the tip can get, and a pass that
+// pages signature batches can itself take seconds on a phone. Charging that to
+// every cycle would eat the MaxBlockInterval margin SyncStatus depends on. A
+// pass that overruns its own interval leaves the deadline already past, so the
+// next one starts immediately.
+//
+// minGap is the floor the wake path is held to, also measured from the start of
+// the previous pass. Waking is what makes the slow subscribed cadence safe, but
+// the wake channel coalesces only while the loop is idle: a notification landing
+// mid-pass stays buffered and is ready the instant that pass ends. Without a
+// floor, an account taking a steady stream of notifications — a dust-airdropped
+// mainnet address, a busy token account — would drive passes back to back with
+// no idle time at all, at several times the request rate of the plain poll this
+// replaces, on exactly the phone the subscription exists to spare. The wake is
+// not dropped, only deferred, so nothing is missed.
+//
+// fresh is when the state was last known current, which the first deadline is
+// measured from. That is the caller's to establish, and it is why Connect can
+// spend minutes on an initial history sync without delaying the first tip read.
+func refreshLoop(ctx context.Context, fresh time.Time, wake <-chan struct{},
+	minGap time.Duration, interval func(lastFailed bool) time.Duration,
+	pass func(context.Context) error) {
+
+	lastPass := fresh
+	var failed, woke bool
+	for {
+		// Once a wake is in hand there is nothing left to wait for but the
+		// floor, and no reason to keep listening: another notification arriving
+		// in the meantime is asking for the same pass.
+		wait := interval(failed)
+		wakeCh := wake
+		if woke {
+			wait = min(wait, minGap)
+			wakeCh = nil
+		}
+		deadline := lastPass.Add(wait)
+		timer := time.NewTimer(time.Until(deadline))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-wakeCh:
+			timer.Stop()
+			woke = true
+			continue
+		case <-timer.C:
+		}
+		woke = false
+		lastPass = time.Now()
+		failed = pass(ctx) != nil
+	}
+}
+
+// refreshInterval is the gap to leave before the next state refresh. A live
+// subscription is what earns the slow cadence, but only while refreshes are
+// landing: refreshState gives up at its first error, so a failed pass leaves
+// tipTime where it was, and SyncStatus turns unsynced once that reads
+// MaxBlockInterval old. Retrying a whole subscribedPollInterval later would put
+// the second attempt right at that threshold, so one dropped getSlot would
+// report the wallet out of sync. Dropping back to pollInterval means it takes a
+// sustained outage instead, which is what the report is supposed to mean. The
+// subscription is unaffected either way; this only picks how soon to try the
+// HTTP RPC again.
+func refreshInterval(ws *wsClient, lastFailed bool) time.Duration {
+	if lastFailed || ws == nil || !ws.live.Load() {
+		return pollInterval
+	}
+	return subscribedPollInterval
+}
+
+// subscriptionEndpoint is the websocket URL to subscribe on, or "" to stay on
+// unsubscribed polling. An explicitly configured wsprovider is always honored.
+// The built-in default is used only when rpcprovider is also left at its
+// default: someone who pointed the wallet at their own node did not ask it to
+// open a second connection to a public endpoint, and the two need not even be
+// on the same cluster.
+func (w *Wallet) subscriptionEndpoint() string {
+	if ep := w.settings["wsprovider"]; ep != "" {
+		return ep
+	}
+	if w.settings["rpcprovider"] != "" {
+		return ""
+	}
+	return w.wsEndpoint()
 }
 
 func (w *Wallet) updateTip(ctx context.Context) error {

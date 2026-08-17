@@ -154,26 +154,97 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+
+		// Watch this token's associated token account on the parent's
+		// connection. The ATA need not exist yet: Solana accepts a subscription
+		// to an account that has never been funded and fires when it is
+		// created, which for a token wallet is its first ever deposit.
+		//
+		// The parent installs a new client on every one of its connects, and a
+		// token wallet's lifetime is independent of the parent's, so the client
+		// is re-read each pass rather than captured once. Registering on a
+		// client the parent has since dropped would leave this wallet waiting on
+		// notifications nothing sends, while reading liveness off the current
+		// one — the bug the resync below exists to prevent — would report the
+		// dead registration as covered and hold the slow cadence anyway.
+		refresh := make(chan struct{}, 1)
+		onChange := func() { signalRefresh(refresh) }
+		var ws *wsClient
+		resyncWatch := func() {
+			cur := w.parent.ws.Load()
+			if cur == ws {
+				return
+			}
+			if ws != nil {
+				ws.unwatch(w.ataAddr)
+			}
+			ws = cur
+			if ws != nil {
+				ws.watch(w.ataAddr, onChange)
+			}
+		}
+		resyncWatch()
+		defer func() {
+			if ws != nil {
+				ws.unwatch(w.ataAddr)
+			}
+		}()
+
 		if err := w.syncHistory(ctx); err != nil {
 			w.parent.log.Debugf("token %d syncHistory error: %v", w.assetID, err)
 		}
 		if err := w.checkPendingTxs(ctx); err != nil {
 			w.parent.log.Debugf("token %d checkPendingTxs error: %v", w.assetID, err)
 		}
-		ticker := time.NewTicker(pollInterval)
-		defer ticker.Stop()
+		// Not refreshLoop, deliberately. That one times its interval from the
+		// start of a pass so the tip cannot age past MaxBlockInterval, and
+		// accepts back-to-back passes as the price. A token wallet keeps no tip,
+		// so it has nothing to protect and no reason to pay that price: paging a
+		// long signature history twice with no gap is exactly what a phone
+		// should not do. Timing from the end instead guarantees a full
+		// interval of rest between passes.
+		//
+		// The wake path is held to the same guarantee by pollInterval, for the
+		// same reason and by the same means as refreshLoop's minGap: the refresh
+		// channel coalesces only while this loop is idle, so a notification
+		// landing mid-pass is ready the moment that pass ends, and an ATA taking
+		// a burst of transfers would otherwise page its history back to back.
+		lastEnd := time.Now()
+		var woke bool
 		for {
+			resyncWatch()
+			// A live subscription leaves the poll as pure backstop against a
+			// dropped frame. Hence the unconditional false: a failed pass here
+			// has no SyncStatus margin to protect either, and so nothing to gain
+			// from retrying sooner.
+			interval := refreshInterval(ws, false)
+			wakeCh := refresh
+			if woke {
+				interval = min(interval, pollInterval)
+				wakeCh = nil
+			}
+			// From lastEnd rather than from now, so that holding a wake costs
+			// only what the floor is short by. A notification arriving long after
+			// the previous pass ended still runs immediately.
+			timer := time.NewTimer(time.Until(lastEnd.Add(interval)))
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return
-			case <-ticker.C:
-				if err := w.syncHistory(ctx); err != nil {
-					w.parent.log.Debugf("token %d syncHistory error: %v", w.assetID, err)
-				}
-				if err := w.checkPendingTxs(ctx); err != nil {
-					w.parent.log.Debugf("token %d checkPendingTxs error: %v", w.assetID, err)
-				}
+			case <-wakeCh:
+				timer.Stop()
+				woke = true
+				continue
+			case <-timer.C:
 			}
+			woke = false
+			if err := w.syncHistory(ctx); err != nil {
+				w.parent.log.Debugf("token %d syncHistory error: %v", w.assetID, err)
+			}
+			if err := w.checkPendingTxs(ctx); err != nil {
+				w.parent.log.Debugf("token %d checkPendingTxs error: %v", w.assetID, err)
+			}
+			lastEnd = time.Now()
 		}
 	}()
 	return &wg, nil
