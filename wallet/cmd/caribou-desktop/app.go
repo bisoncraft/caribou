@@ -111,7 +111,7 @@ func mainCore() error {
 			time.Now().Local().Format("15:04:05 MST"))
 	}
 
-	syncDir := filepath.Join(cfg.AppData, cfg.Net.String())
+	syncDir := cfg.NetDir()
 
 	// The --kill flag is a backup measure to end a background process (that
 	// presumably is still busy).

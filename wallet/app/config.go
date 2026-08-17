@@ -77,6 +77,7 @@ type Config struct {
 	// util.Network field.
 	Testnet    bool   `long:"testnet" description:"use testnet"`
 	Simnet     bool   `long:"simnet" description:"use simnet"`
+	Name       string `long:"name" description:"Name for this wallet instance. When set, the network data directory is <appdata>/<network>/<name> instead of <appdata>/<network>."`
 	NoWeb      bool   `long:"noweb" description:"disable the web server."`
 	CPUProfile string `long:"cpuprofile" description:"File for CPU profiling."`
 	ShowVer    bool   `short:"V" long:"version" description:"Display version information and exit"`
@@ -218,18 +219,19 @@ func ResolveConfig(appData string, cfg *Config) error {
 
 	cfg.AppData = appData
 
-	var defaultDBPath, defaultLogPath string
+	if cfg.Name != "" && (strings.ContainsAny(cfg.Name, `/\`) || cfg.Name == "." || cfg.Name == "..") {
+		return fmt.Errorf("invalid name %q: must be a simple directory name", cfg.Name)
+	}
+
 	switch {
 	case cfg.Testnet:
 		cfg.Net = util.Testnet
-		defaultDBPath, defaultLogPath = setNet(appData, "testnet")
 	case cfg.Simnet:
 		cfg.Net = util.Simnet
-		defaultDBPath, defaultLogPath = setNet(appData, "simnet")
 	default:
 		cfg.Net = util.Mainnet
-		defaultDBPath, defaultLogPath = setNet(appData, "mainnet")
 	}
+	defaultDBPath, defaultLogPath := setNet(cfg.NetDir())
 	defaultHost := DefaultHostByNetwork(cfg.Net)
 
 	// If web server address not set, use network specific default.
@@ -248,12 +250,22 @@ func ResolveConfig(appData string, cfg *Config) error {
 	return nil
 }
 
-// setNet sets the filepath for the network directory and some network specific
-// files. It returns a suggested path for the database file and a log file. If
-// using a file rotator, the directory of the log filepath as parsed  by
-// filepath.Dir is suitable for use.
-func setNet(applicationDirectory, net string) (dbPath, logPath string) {
-	netDirectory := filepath.Join(applicationDirectory, net)
+// NetDir returns the network-specific data directory. When Name is set, an
+// instance-specific subdirectory of the network directory is used instead.
+// AppData and Net must be resolved before calling.
+func (cfg *Config) NetDir() string {
+	netDirectory := filepath.Join(cfg.AppData, cfg.Net.String())
+	if cfg.Name != "" {
+		netDirectory = filepath.Join(netDirectory, cfg.Name)
+	}
+	return netDirectory
+}
+
+// setNet creates the network directory and some network specific files. It
+// returns a suggested path for the database file and a log file. If using a
+// file rotator, the directory of the log filepath as parsed by filepath.Dir is
+// suitable for use.
+func setNet(netDirectory string) (dbPath, logPath string) {
 	logDirectory := filepath.Join(netDirectory, "logs")
 	logFilename := filepath.Join(logDirectory, "caribou.log")
 	err := os.MkdirAll(netDirectory, 0700)
