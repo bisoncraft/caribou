@@ -54,6 +54,11 @@ env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/mobile/
 # glossi adapter and the mobile side of wallet/db and wallet/txdb get.
 env GORACE="halt_on_error=1" go test -race -short -tags mobile ./util/kvstore/ ./wallet/db/ ./wallet/txdb/
 
+# btc, ltc and dash build-tag their AvailableWallets list: SPV-first on desktop,
+# electrum-only on mobile. The ./... run above only ever compiles the desktop
+# half, so the mobile menu would otherwise never be built, let alone asserted.
+env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/asset/btc/ ./wallet/asset/ltc/ ./wallet/asset/dash/
+
 # Print missing Core notification translations.
 go run ./wallet/core/localetest/main.go
 

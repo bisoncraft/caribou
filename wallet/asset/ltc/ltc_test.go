@@ -5,6 +5,7 @@ package ltc
 
 import (
 	"encoding/binary"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,18 +27,17 @@ func TestDriverInfo(t *testing.T) {
 	if info.Network == nil || info.Network.ID != BipID {
 		t.Fatalf("Info.Network.ID = %v, want %d", info.Network, BipID)
 	}
-	// SPV and Electrum must both be advertised as available wallet types so
-	// that users can use either the neutrino- or electrum-backed light wallet.
-	wantTypes := map[string]bool{walletTypeSPV: false, walletTypeElectrum: false}
+	// AvailableWallets is ordered and its first entry is the default, so this
+	// checks the exact list rather than mere membership: it pins both which
+	// backends are offered and which one onboarding will pick. The expectation
+	// is build-tagged alongside the list itself, since mobile drops SPV. See
+	// wallets_desktop.go and wallets_mobile.go.
+	gotTypes := make([]string, 0, len(info.AvailableWallets))
 	for _, wd := range info.AvailableWallets {
-		if _, ok := wantTypes[wd.Type]; ok {
-			wantTypes[wd.Type] = true
-		}
+		gotTypes = append(gotTypes, wd.Type)
 	}
-	for typ, found := range wantTypes {
-		if !found {
-			t.Fatalf("AvailableWallets missing entry for %q", typ)
-		}
+	if !slices.Equal(gotTypes, wantWalletTypes) {
+		t.Fatalf("AvailableWallets types = %v, want %v", gotTypes, wantWalletTypes)
 	}
 }
 
