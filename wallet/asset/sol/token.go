@@ -121,6 +121,20 @@ type TokenWallet struct {
 var _ asset.Wallet = (*TokenWallet)(nil)
 
 func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
+	// This checks w.parent.context(), not the ctx parameter above: Core
+	// gives every wallet — this token wallet included — its own
+	// ConnectionMaster, each deriving its own cancellable context, so
+	// ctx here is cancelled only when *this* wallet disconnects and
+	// carries no signal about the parent. w.parent.context() is
+	// cancelled specifically when the parent disconnects, which is the
+	// failure this check exists to catch: the parent (and the RPC
+	// client this wallet shares with it) torn down while this wallet is
+	// still trying to (re)connect.
+	//
+	// client() must be checked first: context() falls back to
+	// context.Background() (whose Err() is always nil) when the parent
+	// has never connected, so checking context().Err() alone would let
+	// an unconnected parent pass silently.
 	if _, err := w.parent.client(); err != nil {
 		return nil, fmt.Errorf("parent wallet not connected: %w", err)
 	}
