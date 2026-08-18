@@ -461,6 +461,15 @@ func (s *txStatus) isSuccess() bool {
 	return s.SuccessValue != nil && s.Failure == nil
 }
 
+// isPending reports whether the transaction is known to the node but has
+// not yet reached a final outcome — neither a success value nor a failure
+// is present. This is distinct from failure: the receipt(s) may still
+// execute in a later block, so the caller should retry rather than treat
+// it as terminal.
+func (s *txStatus) isPending() bool {
+	return s.SuccessValue == nil && s.Failure == nil
+}
+
 // transferAmount returns the total transfer amount in the transaction
 // actions, in drops.
 func (r *txResult) transferAmount() uint64 {

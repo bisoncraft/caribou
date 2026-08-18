@@ -7,10 +7,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"path/filepath"
 	"strconv"
 	"testing"
 
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
@@ -33,8 +35,17 @@ func newScanTestWallet(t *testing.T, f *fakeRPCServer) *NearWallet {
 
 // blockWithChunks registers a "block" and "chunk" fixture for the given
 // height: getBlockByHeight(height) returns a block naming one chunk, whose
-// getChunk response carries txs.
+// getChunk response carries txs. A height with no entry in blocks is a
+// generic (transient-looking) RPC error, not NEAR's authoritative
+// UNKNOWN_BLOCK — see blockWithChunksAndSkips for that case.
 func blockWithChunks(f *fakeRPCServer, blocks map[uint64][]chunkTransaction) {
+	blockWithChunksAndSkips(f, blocks, nil)
+}
+
+// blockWithChunksAndSkips is blockWithChunks, plus a set of heights that
+// return NEAR's authoritative UNKNOWN_BLOCK error (a routine gap from a
+// missed block-producer slot) instead of a generic error.
+func blockWithChunksAndSkips(f *fakeRPCServer, blocks map[uint64][]chunkTransaction, skipped map[uint64]bool) {
 	f.handle("block", func(params json.RawMessage) (any, *rpcError) {
 		var req struct {
 			BlockID uint64 `json:"block_id"`
@@ -43,6 +54,12 @@ func blockWithChunks(f *fakeRPCServer, blocks map[uint64][]chunkTransaction) {
 			return nil, &rpcError{Message: "bad block_id"}
 		}
 		if _, ok := blocks[req.BlockID]; !ok {
+			if skipped[req.BlockID] {
+				return nil, &rpcError{
+					Name:  "HANDLER_ERROR",
+					Cause: &rpcErrorCause{Name: "UNKNOWN_BLOCK"},
+				}
+			}
 			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "unknown block"}
 		}
 		return map[string]any{
@@ -230,10 +247,12 @@ func TestScanIncomingNoBalanceGate(t *testing.T) {
 	}
 }
 
-// TestScanIncomingWatermarkStopsOnError verifies a mid-scan RPC error does
-// not advance lastScannedHeight past the last block actually scanned (F2,
-// path 3): the failed block and everything after it must be retried on a
-// later call, not silently skipped forever.
+// TestScanIncomingWatermarkStopsOnError verifies a mid-scan *generic* RPC
+// error (a transient failure, distinct from NEAR's authoritative
+// UNKNOWN_BLOCK — see TestScanIncomingSkipsUnknownBlockHeight for that
+// case) does not advance lastScannedHeight past the last block actually
+// scanned (F2, path 3): the failed block and everything after it must be
+// retried on a later call, not silently skipped forever.
 func TestScanIncomingWatermarkStopsOnError(t *testing.T) {
 	f := newFakeRPCServer(t)
 	w := newScanTestWallet(t, f)
@@ -323,4 +342,325 @@ func mustClient(t *testing.T, w *NearWallet) *rpcClient {
 		t.Fatalf("client: %v", err)
 	}
 	return rpc
+}
+
+// TestScanIncomingSkipsUnknownBlockHeight verifies that a NEAR
+// UNKNOWN_BLOCK response — a routine gap from a missed block-producer
+// slot, not a transient failure — advances past the missing height
+// immediately, on the first call, rather than stalling the scan there
+// forever (F1).
+func TestScanIncomingSkipsUnknownBlockHeight(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blockWithChunksAndSkips(f, map[uint64][]chunkTransaction{
+		1: {},
+		2: {},
+		// height 3 is a genuine gap: no block was ever produced there.
+		4: {},
+		5: {{
+			Hash:       "recv-after-gap",
+			SignerID:   "erin.near",
+			ReceiverID: w.accountID,
+			Actions:    []txAction{transferAction2(DropsToYocto(1).String())},
+		}},
+	}, map[uint64]bool{3: true})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 5)
+
+	if w.lastScannedHeight != 5 {
+		t.Fatalf("lastScannedHeight = %d, want 5 (gap skipped on the first pass)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("recv-after-gap"); err != nil || tx == nil {
+		t.Fatalf("receive past the gap was not recorded on the first call: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingChunkFailureNotCheckpointed verifies that a chunk which
+// fails to fetch stops the watermark from advancing past its block, and
+// that the block (and the receive in it) is retried, not lost, on a later
+// call (F2).
+func TestScanIncomingChunkFailureNotCheckpointed(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blocks := map[uint64][]chunkTransaction{
+		1: {},
+		2: {{
+			Hash:       "chunk-fail-recv",
+			SignerID:   "gina.near",
+			ReceiverID: w.accountID,
+			Actions:    []txAction{transferAction2(DropsToYocto(3).String())},
+		}},
+		3: {},
+	}
+	blockWithChunks(f, blocks)
+
+	var chunkFail bool
+	f.handle("chunk", func(params json.RawMessage) (any, *rpcError) {
+		var req struct {
+			ChunkID string `json:"chunk_id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			t.Fatalf("bad chunk_id: %v", err)
+		}
+		if chunkFail && req.ChunkID == chunkHashFor(2) {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "boom"}
+		}
+		height, ok := heightForChunkHash(blocks, req.ChunkID)
+		if !ok {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "unknown chunk"}
+		}
+		return map[string]any{"transactions": blocks[height]}, nil
+	})
+
+	chunkFail = true
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 3)
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight = %d, want 1 (stopped before the failed chunk's block)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("chunk-fail-recv"); err != nil || tx != nil {
+		t.Fatalf("receive recorded despite the chunk fetch failing: %v, %v", tx, err)
+	}
+
+	chunkFail = false
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 3)
+	if w.lastScannedHeight != 3 {
+		t.Fatalf("lastScannedHeight after retry = %d, want 3", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("chunk-fail-recv"); err != nil || tx == nil {
+		t.Fatalf("receive not recorded after the chunk fetch recovered: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingTokenReceivePending verifies a token transfer whose
+// receipt has not yet reached a final outcome is retried on a later scan
+// rather than being treated as failed (F3).
+func TestScanIncomingTokenReceivePending(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blockWithChunks(f, map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "ftok-pending",
+			SignerID:   "hank.near",
+			ReceiverID: "usdc.token.near",
+			Actions:    []txAction{ftTransferAction(t, "ft_transfer", w.accountID, "1000000")},
+		}},
+	})
+
+	var final bool
+	f.handle("tx", func(params json.RawMessage) (any, *rpcError) {
+		if !final {
+			return map[string]any{"status": map[string]any{}}, nil // neither SuccessValue nor Failure
+		}
+		return map[string]any{"status": map[string]any{"SuccessValue": ""}}, nil
+	})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+	if w.lastScannedHeight != 0 {
+		t.Fatalf("lastScannedHeight = %d, want 0 (pending receipt must not be checkpointed)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("ftok-pending"); err != nil || tx != nil {
+		t.Fatalf("pending token tx recorded early: %v, %v", tx, err)
+	}
+
+	final = true
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight after resolution = %d, want 1", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("ftok-pending"); err != nil || tx == nil {
+		t.Fatalf("token receive not recorded once its receipt finalized: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingIgnoresFtTransferCall verifies an ft_transfer_call
+// naming this account is never credited, since this wallet's account is
+// never a contract and so the call is always refunded on-chain even
+// though the transaction itself reports success (F6).
+func TestScanIncomingIgnoresFtTransferCall(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blockWithChunks(f, map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "ftok-call",
+			SignerID:   "ivan.near",
+			ReceiverID: "usdc.token.near",
+			Actions:    []txAction{ftTransferAction(t, "ft_transfer_call", w.accountID, "5000000")},
+		}},
+	})
+	f.handle("tx", func(json.RawMessage) (any, *rpcError) {
+		t.Fatal("txStatus should not be queried for an ignored ft_transfer_call")
+		return nil, nil
+	})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight = %d, want 1", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("ftok-call"); err != nil || tx != nil {
+		t.Fatalf("ft_transfer_call was credited: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingMultiActionNativeVerified verifies a multi-action
+// transaction's native Transfer deposit is only credited once its
+// receipt's outcome is confirmed, since a failing sibling action would
+// have refunded the whole receipt (F7).
+func TestScanIncomingMultiActionNativeVerified(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blockWithChunks(f, map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "multi-action-fail",
+			SignerID:   "judy.near",
+			ReceiverID: w.accountID,
+			Actions: []txAction{
+				transferAction2(DropsToYocto(2).String()),
+				{FunctionCall: &txFunctionCall{MethodName: "does_not_exist"}},
+			},
+		}},
+	})
+	f.handle("tx", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{"status": map[string]any{"Failure": map[string]any{}}}, nil
+	})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight = %d, want 1 (definitively failed, not retried)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("multi-action-fail"); err != nil || tx != nil {
+		t.Fatalf("multi-action transfer credited despite the receipt failing: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingTokenAmountOverflow verifies a NEP-141 amount exceeding
+// uint64 is logged and not recorded, but does not stall the scan (F8).
+func TestScanIncomingTokenAmountOverflow(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	huge := new(big.Int).Lsh(big.NewInt(1), 65).String() // exceeds uint64
+	blockWithChunks(f, map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "ftok-overflow",
+			SignerID:   "karl.near",
+			ReceiverID: "usdc.token.near",
+			Actions:    []txAction{ftTransferAction(t, "ft_transfer", w.accountID, huge)},
+		}},
+	})
+	f.handle("tx", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{"status": map[string]any{"SuccessValue": ""}}, nil
+	})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight = %d, want 1 (an unrepresentable amount must not stall the scan)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("ftok-overflow"); err != nil || tx != nil {
+		t.Fatalf("overflowing amount was recorded: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingTokenReceiveEmitsToTokenWallet verifies a detected
+// token receive is announced through the open token wallet's own
+// emitter, not the parent native wallet's, matching the emitter the
+// token send path already uses (F5).
+func TestScanIncomingTokenReceiveEmitsToTokenWallet(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	parentCh := make(chan asset.WalletNotification, 4)
+	tokenCh := make(chan asset.WalletNotification, 4)
+	w.emit = asset.NewWalletEmitter(parentCh, BipID, testLogger)
+	tw := &TokenWallet{parent: w, assetID: usdcTokenID, emit: asset.NewWalletEmitter(tokenCh, usdcTokenID, testLogger)}
+	w.tokenWallets = map[uint32]*TokenWallet{usdcTokenID: tw}
+
+	blockWithChunks(f, map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "ftok-emit",
+			SignerID:   "liam.near",
+			ReceiverID: "usdc.token.near",
+			Actions:    []txAction{ftTransferAction(t, "ft_transfer", w.accountID, "4200000")},
+		}},
+	})
+	f.handle("tx", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{"status": map[string]any{"SuccessValue": ""}}, nil
+	})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+
+	select {
+	case n := <-tokenCh:
+		note, ok := n.(*asset.TransactionNote)
+		if !ok || note.Transaction.ID != "ftok-emit" {
+			t.Fatalf("unexpected token wallet notification: %+v", n)
+		}
+	default:
+		t.Fatal("token wallet emitter received no notification")
+	}
+
+	select {
+	case n := <-parentCh:
+		t.Fatalf("parent wallet emitter unexpectedly received a token notification: %+v", n)
+	default:
+	}
+}
+
+// TestScanIncomingSkipsRepeatedChunkHash verifies a shard that reuses its
+// previous chunk hash (no new chunk produced for it) is not re-fetched,
+// since its contents cannot have changed.
+func TestScanIncomingSkipsRepeatedChunkHash(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	f.handle("block", func(params json.RawMessage) (any, *rpcError) {
+		var req struct {
+			BlockID uint64 `json:"block_id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			return nil, &rpcError{Message: "bad block_id"}
+		}
+		if req.BlockID > 2 {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "unknown block"}
+		}
+		return map[string]any{
+			"header": map[string]any{
+				"height":    req.BlockID,
+				"hash":      "11111111111111111111111111111111",
+				"timestamp": 1_700_000_000_000_000_000,
+			},
+			// Same chunk hash both blocks: shard 0 produced no new chunk
+			// for block 2.
+			"chunks": []any{
+				map[string]any{"chunk_hash": "same-chunk", "shard_id": 0},
+			},
+		}, nil
+	})
+	f.handle("chunk", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{"transactions": []chunkTransaction{}}, nil
+	})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 2)
+
+	if n := f.callCount("chunk"); n != 1 {
+		t.Fatalf("chunk fetched %d times for a repeated hash, want 1", n)
+	}
+	if w.lastScannedHeight != 2 {
+		t.Fatalf("lastScannedHeight = %d, want 2", w.lastScannedHeight)
+	}
 }

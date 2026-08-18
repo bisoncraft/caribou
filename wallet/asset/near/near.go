@@ -206,6 +206,21 @@ type NearWallet struct {
 	// this wallet's network to its asset ID, so the receive scan can
 	// recognize an incoming token transfer's target contract.
 	tokenContracts map[string]uint32
+
+	// tokenWalletsMtx guards tokenWallets.
+	tokenWalletsMtx sync.RWMutex
+	// tokenWallets holds the currently open TokenWallets, keyed by asset
+	// ID, so the receive scan can notify a token wallet's own emitter
+	// when it detects an incoming transfer for it.
+	tokenWallets map[uint32]*TokenWallet
+
+	// lastChunkHash tracks the most recently processed chunk hash for
+	// each shard, keyed by shard ID. NEAR reuses a shard's previous
+	// chunk hash for any block in which that shard produced no new
+	// chunk, so skipping an already-seen hash avoids a wasted getChunk
+	// call without missing any transactions (the chunk's contents cannot
+	// have changed since last time).
+	lastChunkHash map[int]string
 }
 
 var _ asset.Wallet = (*NearWallet)(nil)
@@ -242,6 +257,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		accountID:      accountID,
 		txDB:           cfg.NetworkTxDB,
 		tokenContracts: tokenContracts,
+		lastChunkHash:  make(map[int]string),
 	}, nil
 }
 
@@ -990,13 +1006,19 @@ const maxScanBlocks = 10
 
 // scanIncomingTxs scans blocks since the last checkpoint (bounded to
 // maxScanBlocks per call, oldest first) for incoming native and NEP-141
-// token transfers. lastScannedHeight only ever advances to a height that
-// was actually scanned: on an RPC error mid-scan, or when the backlog
-// exceeds maxScanBlocks, the checkpoint stops short so the remaining
-// blocks are picked up on a later call instead of being silently skipped.
+// token transfers. lastScannedHeight only ever advances past a height once
+// it, and every height before it, was fully processed: a skipped NEAR
+// block height (a missed producer slot — routine, not an error) is
+// treated as scanned, but any other block-fetch error stops the loop, and
+// a chunk that failed to fetch or a receive that failed to record stops
+// the checkpoint from advancing past it, so nothing is silently skipped —
+// the remainder is retried on a later call instead.
 func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip uint64) {
 	if w.txDB == nil {
 		return
+	}
+	if w.lastChunkHash == nil {
+		w.lastChunkHash = make(map[int]string)
 	}
 
 	startHeight := w.lastScannedHeight + 1
@@ -1010,49 +1032,85 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 	}
 
 	scanned := w.lastScannedHeight
+	stalled := false
 	for height := startHeight; height <= endHeight; height++ {
 		block, err := rpc.getBlockByHeight(ctx, height)
 		if err != nil {
+			if isUnknownBlock(err) {
+				// NEAR block heights are not contiguous: a missed
+				// block-producer slot leaves a permanent gap, not a
+				// transient failure. Treat it as scanned so the scan
+				// does not stall here forever.
+				if !stalled {
+					scanned = height
+				}
+				continue
+			}
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
 			break
 		}
 		blockTime := block.Header.Timestamp / 1_000_000_000
+		blockOK := true
 		for _, chunk := range block.Chunks {
-			w.scanChunk(ctx, rpc, chunk.ChunkHash, height, blockTime)
+			if w.lastChunkHash[chunk.ShardID] == chunk.ChunkHash {
+				// NEAR reuses a shard's previous chunk hash for any
+				// block in which that shard produced no new chunk;
+				// its contents were already scanned last time.
+				continue
+			}
+			if !w.scanChunk(ctx, rpc, chunk.ChunkHash, height, blockTime) {
+				blockOK = false
+				continue
+			}
+			w.lastChunkHash[chunk.ShardID] = chunk.ChunkHash
 		}
-		scanned = height
+		if blockOK && !stalled {
+			scanned = height
+		} else {
+			stalled = true
+		}
 	}
 
 	w.lastScannedHeight = scanned
 }
 
 // scanChunk fetches a chunk and stores any incoming native or NEP-141
-// token transfer transactions.
-func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) {
+// token transfer transactions. It reports whether every transaction in
+// the chunk was fully processed (recorded or definitively ruled out) —
+// false means at least one needs to be retried on a later scan.
+func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) bool {
 	chunk, err := rpc.getChunk(ctx, chunkHash)
 	if err != nil {
 		w.log.Warnf("Error fetching chunk %s: %v", chunkHash, err)
-		return
+		return false
 	}
 
+	ok := true
 	for i := range chunk.Transactions {
 		ct := &chunk.Transactions[i]
 		if ct.SignerID == w.accountID {
 			continue // our own outgoing transaction
 		}
 		if ct.ReceiverID == w.accountID {
-			w.scanNativeReceive(ct, blockHeight, blockTime)
+			if !w.scanNativeReceive(ctx, rpc, ct, blockHeight, blockTime) {
+				ok = false
+			}
 			continue
 		}
-		if tokenID, ok := w.tokenContracts[ct.ReceiverID]; ok {
-			w.scanTokenReceive(ctx, rpc, ct, tokenID, blockHeight, blockTime)
+		if tokenID, found := w.tokenContracts[ct.ReceiverID]; found {
+			if !w.scanTokenReceive(ctx, rpc, ct, tokenID, blockHeight, blockTime) {
+				ok = false
+			}
 		}
 	}
+	return ok
 }
 
 // scanNativeReceive stores an incoming native NEAR transfer transaction, if
-// not already recorded.
-func (w *NearWallet) scanNativeReceive(ct *chunkTransaction, blockHeight, blockTime uint64) {
+// not already recorded. It reports false if the transaction needs to be
+// retried on a later scan (a DB error, or a not-yet-final outcome for a
+// multi-action transaction).
+func (w *NearWallet) scanNativeReceive(ctx context.Context, rpc *rpcClient, ct *chunkTransaction, blockHeight, blockTime uint64) bool {
 	var amount uint64
 	for _, a := range ct.Actions {
 		if a.Transfer != nil {
@@ -1063,16 +1121,35 @@ func (w *NearWallet) scanNativeReceive(ct *chunkTransaction, blockHeight, blockT
 		}
 	}
 	if amount == 0 {
-		return
+		return true
 	}
 
 	existing, err := w.txDB.GetTx(ct.Hash)
 	if err != nil {
 		w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
-		return
+		return false
 	}
 	if existing != nil {
-		return
+		return true
+	}
+
+	// A NEAR transaction executes as a single receipt: if any action in
+	// it fails, the whole receipt fails and any Transfer deposit is
+	// refunded. A lone Transfer action cannot partially fail, but a
+	// multi-action transaction's outcome must be confirmed before
+	// crediting it, the same as a token FunctionCall.
+	if len(ct.Actions) > 1 {
+		result, err := rpc.txStatus(ctx, ct.Hash, ct.SignerID)
+		if err != nil {
+			w.log.Warnf("Error checking status of tx %s: %v", ct.Hash, err)
+			return false
+		}
+		if result.Status.isPending() {
+			return false
+		}
+		if !result.Status.isSuccess() {
+			return true // definitively failed; nothing to credit
+		}
 	}
 
 	sender := ct.SignerID
@@ -1090,36 +1167,44 @@ func (w *NearWallet) scanNativeReceive(ct *chunkTransaction, blockHeight, blockT
 
 	if err := w.txDB.StoreTx(wtx); err != nil {
 		w.log.Errorf("Error storing receive tx %s: %v", ct.Hash, err)
-		return
+		return false
 	}
 
 	w.log.Infof("Detected incoming transfer %s: %d drops from %s", ct.Hash, amount, sender)
 	if w.emit != nil {
 		w.emit.TransactionNote(wtx, true)
 	}
+	return true
 }
 
-// ftTransferArgs is the subset of ft_transfer/ft_transfer_call args needed
-// to recognize an incoming NEP-141 transfer.
+// ftTransferArgs is the subset of ft_transfer args needed to recognize an
+// incoming NEP-141 transfer.
 type ftTransferArgs struct {
 	ReceiverID string `json:"receiver_id"`
 	Amount     string `json:"amount"`
 }
 
 // scanTokenReceive checks a transaction addressed to a known NEP-141 token
-// contract for an ft_transfer/ft_transfer_call naming this account as the
-// receiver, storing a Receive record with TokenID set if found. Unlike a
-// native Transfer action, a FunctionCall's receipt can fail independently
+// contract for an ft_transfer naming this account as the receiver, storing
+// a Receive record with TokenID set if found. It reports false if the
+// transaction needs to be retried on a later scan.
+//
+// Only ft_transfer is recognized, not ft_transfer_call: this wallet's
+// account is always a plain (non-contract) account, so a ft_transfer_call
+// naming it as receiver_id can never succeed — NEP-141 requires the
+// receiver to implement ft_on_transfer, which a plain account cannot, so
+// the transfer is always refunded in full even though the transaction
+// itself reports success.
+//
+// A FunctionCall's receipt can fail, or not yet be finalized, independently
 // of the transaction's inclusion in the chunk (e.g. the sender was never
-// storage-registered, or its token balance was insufficient), so the
+// storage-registered, or its token balance was insufficient) — the receipt
+// executes at least one block after the transaction is included — so the
 // outcome is confirmed with the RPC before crediting it.
-func (w *NearWallet) scanTokenReceive(ctx context.Context, rpc *rpcClient, ct *chunkTransaction, tokenID uint32, blockHeight, blockTime uint64) {
-	var amount uint64
+func (w *NearWallet) scanTokenReceive(ctx context.Context, rpc *rpcClient, ct *chunkTransaction, tokenID uint32, blockHeight, blockTime uint64) bool {
+	amountTotal := new(big.Int)
 	for _, a := range ct.Actions {
-		if a.FunctionCall == nil {
-			continue
-		}
-		if a.FunctionCall.MethodName != "ft_transfer" && a.FunctionCall.MethodName != "ft_transfer_call" {
+		if a.FunctionCall == nil || a.FunctionCall.MethodName != "ft_transfer" {
 			continue
 		}
 		argsJSON, err := base64.StdEncoding.DecodeString(a.FunctionCall.Args)
@@ -1133,33 +1218,46 @@ func (w *NearWallet) scanTokenReceive(ctx context.Context, rpc *rpcClient, ct *c
 		if args.ReceiverID != w.accountID {
 			continue
 		}
-		amt, err := strconv.ParseUint(args.Amount, 10, 64)
-		if err != nil {
+		amt, ok := new(big.Int).SetString(args.Amount, 10)
+		if !ok {
+			w.log.Warnf("Error parsing ft_transfer amount %q in tx %s", args.Amount, ct.Hash)
 			continue
 		}
-		amount += amt
+		amountTotal.Add(amountTotal, amt)
 	}
-	if amount == 0 {
-		return
+	if amountTotal.Sign() == 0 {
+		return true
 	}
 
 	existing, err := w.txDB.GetTx(ct.Hash)
 	if err != nil {
 		w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
-		return
+		return false
 	}
 	if existing != nil {
-		return
+		return true
 	}
 
 	result, err := rpc.txStatus(ctx, ct.Hash, ct.SignerID)
 	if err != nil {
 		w.log.Warnf("Error checking status of token tx %s: %v", ct.Hash, err)
-		return
+		return false
+	}
+	if result.Status.isPending() {
+		return false
 	}
 	if !result.Status.isSuccess() {
-		return
+		return true // definitively failed; nothing to credit
 	}
+
+	if !amountTotal.IsUint64() {
+		// NEP-141 amounts are u128; this wallet's history schema is not.
+		// Retrying cannot fix this, so the block is still treated as
+		// scanned, but it is logged loudly rather than silently dropped.
+		w.log.Errorf("ft_transfer amount %s in tx %s exceeds the wallet's uint64 amount field; not recorded", amountTotal, ct.Hash)
+		return true
+	}
+	amount := amountTotal.Uint64()
 
 	sender := ct.SignerID
 	recipient := w.accountID
@@ -1177,12 +1275,25 @@ func (w *NearWallet) scanTokenReceive(ctx context.Context, rpc *rpcClient, ct *c
 
 	if err := w.txDB.StoreTx(wtx); err != nil {
 		w.log.Errorf("Error storing token receive tx %s: %v", ct.Hash, err)
-		return
+		return false
 	}
 
 	w.log.Infof("Detected incoming token transfer %s: %d atoms (token %d) from %s", ct.Hash, amount, tokenID, sender)
-	if w.emit != nil {
-		w.emit.TransactionNote(wtx, true)
+	w.emitTokenReceive(wtx, tokenID)
+	return true
+}
+
+// emitTokenReceive notifies the tokenID token wallet's own emitter of a
+// newly detected receive, if that token wallet is currently open —
+// mirroring the emitter TokenWallet.Send already uses, rather than the
+// parent NearWallet's, so the receive is attributed to the token asset in
+// the UI, not the native one.
+func (w *NearWallet) emitTokenReceive(wtx *txdb.WalletTransaction, tokenID uint32) {
+	w.tokenWalletsMtx.RLock()
+	tw := w.tokenWallets[tokenID]
+	w.tokenWalletsMtx.RUnlock()
+	if tw != nil && tw.emit != nil {
+		tw.emit.TransactionNote(wtx, true)
 	}
 }
 
@@ -1270,4 +1381,16 @@ func isUnknownTransaction(err error) bool {
 		return false
 	}
 	return rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_TRANSACTION"
+}
+
+// isUnknownBlock reports whether err is the node's definitive statement
+// that no block exists at the requested height or hash. On NEAR this is
+// routine, not exceptional: a block-producer slot that is missed leaves a
+// permanent gap in the height sequence, not a transient failure.
+func isUnknownBlock(err error) bool {
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_BLOCK"
 }

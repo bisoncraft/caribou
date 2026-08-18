@@ -99,7 +99,7 @@ func (w *NearWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, erro
 	if !ok {
 		return nil, fmt.Errorf("no %s network contract for token %s (%d)", w.net, token.Name, cfg.AssetID)
 	}
-	return &TokenWallet{
+	tw := &TokenWallet{
 		parent:     w,
 		assetID:    cfg.AssetID,
 		token:      token,
@@ -113,7 +113,19 @@ func (w *NearWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, erro
 			BlockchainClass:   asset.BlockchainClassAccount,
 			Network:           w.Info().Network,
 		},
-	}, nil
+	}
+
+	// Registered so the parent's receive scan (the only poller either
+	// wallet has) can notify this token wallet's own emitter when it
+	// detects an incoming transfer, the same emitter Send already uses.
+	w.tokenWalletsMtx.Lock()
+	if w.tokenWallets == nil {
+		w.tokenWallets = make(map[uint32]*TokenWallet)
+	}
+	w.tokenWallets[cfg.AssetID] = tw
+	w.tokenWalletsMtx.Unlock()
+
+	return tw, nil
 }
 
 // TokenWallet is a NEP-141 fungible token wallet sharing its parent
