@@ -7,7 +7,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -199,6 +201,11 @@ type NearWallet struct {
 	// lastScannedHeight is the last block height that was scanned for
 	// incoming transactions.
 	lastScannedHeight uint64
+
+	// tokenContracts maps a registered NEP-141 token contract address on
+	// this wallet's network to its asset ID, so the receive scan can
+	// recognize an incoming token transfer's target contract.
+	tokenContracts map[string]uint32
 }
 
 var _ asset.Wallet = (*NearWallet)(nil)
@@ -216,17 +223,25 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	pubKey := ed25519.PublicKey(pubKeyB)
 	accountID := hex.EncodeToString(pubKey)
 
+	tokenContracts := make(map[string]uint32, len(Tokens))
+	for id, tok := range Tokens {
+		if addr, ok := tok.NetContracts[network]; ok {
+			tokenContracts[addr] = id
+		}
+	}
+
 	return &NearWallet{
-		log:         logger,
-		net:         network,
-		emit:        cfg.Emit,
-		peersChange: cfg.PeersChange,
-		dataDir:     cfg.DataDir,
-		settings:    cfg.Settings,
-		torProxy:    cfg.TorProxy,
-		pubKey:      pubKey,
-		accountID:   accountID,
-		txDB:        cfg.NetworkTxDB,
+		log:            logger,
+		net:            network,
+		emit:           cfg.Emit,
+		peersChange:    cfg.PeersChange,
+		dataDir:        cfg.DataDir,
+		settings:       cfg.Settings,
+		torProxy:       cfg.TorProxy,
+		pubKey:         pubKey,
+		accountID:      accountID,
+		txDB:           cfg.NetworkTxDB,
+		tokenContracts: tokenContracts,
 	}, nil
 }
 
@@ -973,9 +988,12 @@ func (w *NearWallet) resolveBlock(ctx context.Context, rpc *rpcClient, blockHash
 // avoid excessive RPC calls after a long offline period.
 const maxScanBlocks = 10
 
-// scanIncomingTxs checks whether our account balance increased since the last
-// scan. Only when an increase is detected does it scan the intervening blocks
-// for the actual incoming transfer transactions.
+// scanIncomingTxs scans blocks since the last checkpoint (bounded to
+// maxScanBlocks per call, oldest first) for incoming native and NEP-141
+// token transfers. lastScannedHeight only ever advances to a height that
+// was actually scanned: on an RPC error mid-scan, or when the backlog
+// exceeds maxScanBlocks, the checkpoint stops short so the remaining
+// blocks are picked up on a later call instead of being silently skipped.
 func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip uint64) {
 	if w.txDB == nil {
 		return
@@ -986,36 +1004,13 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 		return
 	}
 
-	// Compare account balance at the two block heights. If the balance
-	// didn't increase we can skip the expensive block/chunk scanning.
-	prevAcct, err := rpc.viewAccountAt(ctx, w.accountID, w.lastScannedHeight)
-	if err != nil {
-		// Account may not exist yet at the earlier height.
-		if !isAccountNotFound(err) {
-			w.log.Warnf("Error querying account at block %d: %v", w.lastScannedHeight, err)
-		}
-		w.lastScannedHeight = newTip
-		return
-	}
-	curAcct, err := rpc.viewAccountAt(ctx, w.accountID, newTip)
-	if err != nil {
-		w.log.Warnf("Error querying account at block %d: %v", newTip, err)
-		return
+	endHeight := newTip
+	if endHeight-startHeight >= maxScanBlocks {
+		endHeight = startHeight + maxScanBlocks - 1
 	}
 
-	prevBal, _ := parseYoctoNEAR(prevAcct.Amount)
-	curBal, _ := parseYoctoNEAR(curAcct.Amount)
-	if prevBal == nil || curBal == nil || curBal.Cmp(prevBal) <= 0 {
-		w.lastScannedHeight = newTip
-		return
-	}
-
-	// Balance increased — scan blocks to find the incoming transfer(s).
-	if newTip-startHeight >= maxScanBlocks {
-		startHeight = newTip - maxScanBlocks + 1
-	}
-
-	for height := startHeight; height <= newTip; height++ {
+	scanned := w.lastScannedHeight
+	for height := startHeight; height <= endHeight; height++ {
 		block, err := rpc.getBlockByHeight(ctx, height)
 		if err != nil {
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
@@ -1025,12 +1020,14 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 		for _, chunk := range block.Chunks {
 			w.scanChunk(ctx, rpc, chunk.ChunkHash, height, blockTime)
 		}
+		scanned = height
 	}
 
-	w.lastScannedHeight = newTip
+	w.lastScannedHeight = scanned
 }
 
-// scanChunk fetches a chunk and stores any incoming transfer transactions.
+// scanChunk fetches a chunk and stores any incoming native or NEP-141
+// token transfer transactions.
 func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) {
 	chunk, err := rpc.getChunk(ctx, chunkHash)
 	if err != nil {
@@ -1040,52 +1037,152 @@ func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash st
 
 	for i := range chunk.Transactions {
 		ct := &chunk.Transactions[i]
-		if ct.ReceiverID != w.accountID || ct.SignerID == w.accountID {
+		if ct.SignerID == w.accountID {
+			continue // our own outgoing transaction
+		}
+		if ct.ReceiverID == w.accountID {
+			w.scanNativeReceive(ct, blockHeight, blockTime)
 			continue
 		}
-		var amount uint64
-		for _, a := range ct.Actions {
-			if a.Transfer != nil {
-				yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
-				if ok {
-					amount += YoctoToDrops(yocto)
-				}
+		if tokenID, ok := w.tokenContracts[ct.ReceiverID]; ok {
+			w.scanTokenReceive(ctx, rpc, ct, tokenID, blockHeight, blockTime)
+		}
+	}
+}
+
+// scanNativeReceive stores an incoming native NEAR transfer transaction, if
+// not already recorded.
+func (w *NearWallet) scanNativeReceive(ct *chunkTransaction, blockHeight, blockTime uint64) {
+	var amount uint64
+	for _, a := range ct.Actions {
+		if a.Transfer != nil {
+			yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
+			if ok {
+				amount += YoctoToDrops(yocto)
 			}
 		}
-		if amount == 0 {
+	}
+	if amount == 0 {
+		return
+	}
+
+	existing, err := w.txDB.GetTx(ct.Hash)
+	if err != nil {
+		w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
+		return
+	}
+	if existing != nil {
+		return
+	}
+
+	sender := ct.SignerID
+	recipient := w.accountID
+	wtx := &txdb.WalletTransaction{
+		Type:           txdb.Receive,
+		ID:             ct.Hash,
+		Amount:         amount,
+		BlockNumber:    blockHeight,
+		Timestamp:      blockTime,
+		Confirmed:      true,
+		Recipient:      &recipient,
+		AdditionalData: map[string]string{"sender": sender},
+	}
+
+	if err := w.txDB.StoreTx(wtx); err != nil {
+		w.log.Errorf("Error storing receive tx %s: %v", ct.Hash, err)
+		return
+	}
+
+	w.log.Infof("Detected incoming transfer %s: %d drops from %s", ct.Hash, amount, sender)
+	if w.emit != nil {
+		w.emit.TransactionNote(wtx, true)
+	}
+}
+
+// ftTransferArgs is the subset of ft_transfer/ft_transfer_call args needed
+// to recognize an incoming NEP-141 transfer.
+type ftTransferArgs struct {
+	ReceiverID string `json:"receiver_id"`
+	Amount     string `json:"amount"`
+}
+
+// scanTokenReceive checks a transaction addressed to a known NEP-141 token
+// contract for an ft_transfer/ft_transfer_call naming this account as the
+// receiver, storing a Receive record with TokenID set if found. Unlike a
+// native Transfer action, a FunctionCall's receipt can fail independently
+// of the transaction's inclusion in the chunk (e.g. the sender was never
+// storage-registered, or its token balance was insufficient), so the
+// outcome is confirmed with the RPC before crediting it.
+func (w *NearWallet) scanTokenReceive(ctx context.Context, rpc *rpcClient, ct *chunkTransaction, tokenID uint32, blockHeight, blockTime uint64) {
+	var amount uint64
+	for _, a := range ct.Actions {
+		if a.FunctionCall == nil {
 			continue
 		}
-
-		// Check if we already have this tx.
-		existing, err := w.txDB.GetTx(ct.Hash)
+		if a.FunctionCall.MethodName != "ft_transfer" && a.FunctionCall.MethodName != "ft_transfer_call" {
+			continue
+		}
+		argsJSON, err := base64.StdEncoding.DecodeString(a.FunctionCall.Args)
 		if err != nil {
-			w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
 			continue
 		}
-		if existing != nil {
+		var args ftTransferArgs
+		if err := json.Unmarshal(argsJSON, &args); err != nil {
 			continue
 		}
-
-		sender := ct.SignerID
-		wtx := &txdb.WalletTransaction{
-			Type:        txdb.Receive,
-			ID:          ct.Hash,
-			Amount:      amount,
-			BlockNumber: blockHeight,
-			Timestamp:   blockTime,
-			Confirmed:   true,
-			Recipient:   &sender,
-		}
-
-		if err := w.txDB.StoreTx(wtx); err != nil {
-			w.log.Errorf("Error storing receive tx %s: %v", ct.Hash, err)
+		if args.ReceiverID != w.accountID {
 			continue
 		}
-
-		w.log.Infof("Detected incoming transfer %s: %d drops from %s", ct.Hash, amount, ct.SignerID)
-		if w.emit != nil {
-			w.emit.TransactionNote(wtx, true)
+		amt, err := strconv.ParseUint(args.Amount, 10, 64)
+		if err != nil {
+			continue
 		}
+		amount += amt
+	}
+	if amount == 0 {
+		return
+	}
+
+	existing, err := w.txDB.GetTx(ct.Hash)
+	if err != nil {
+		w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
+		return
+	}
+	if existing != nil {
+		return
+	}
+
+	result, err := rpc.txStatus(ctx, ct.Hash, ct.SignerID)
+	if err != nil {
+		w.log.Warnf("Error checking status of token tx %s: %v", ct.Hash, err)
+		return
+	}
+	if !result.Status.isSuccess() {
+		return
+	}
+
+	sender := ct.SignerID
+	recipient := w.accountID
+	wtx := &txdb.WalletTransaction{
+		Type:           txdb.Receive,
+		ID:             ct.Hash,
+		Amount:         amount,
+		TokenID:        &tokenID,
+		BlockNumber:    blockHeight,
+		Timestamp:      blockTime,
+		Confirmed:      true,
+		Recipient:      &recipient,
+		AdditionalData: map[string]string{"sender": sender},
+	}
+
+	if err := w.txDB.StoreTx(wtx); err != nil {
+		w.log.Errorf("Error storing token receive tx %s: %v", ct.Hash, err)
+		return
+	}
+
+	w.log.Infof("Detected incoming token transfer %s: %d atoms (token %d) from %s", ct.Hash, amount, tokenID, sender)
+	if w.emit != nil {
+		w.emit.TransactionNote(wtx, true)
 	}
 }
 

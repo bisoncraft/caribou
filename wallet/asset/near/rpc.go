@@ -270,22 +270,6 @@ func (c *rpcClient) viewAccount(ctx context.Context, accountID string) (*account
 	return &info, nil
 }
 
-func (c *rpcClient) viewAccountAt(ctx context.Context, accountID string, blockHeight uint64) (*accountInfo, error) {
-	result, err := c.call(ctx, "query", map[string]interface{}{
-		"request_type": "view_account",
-		"block_id":     blockHeight,
-		"account_id":   accountID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var info accountInfo
-	if err := json.Unmarshal(result, &info); err != nil {
-		return nil, fmt.Errorf("error decoding account info: %w", err)
-	}
-	return &info, nil
-}
-
 // accessKeyInfo holds the response from a view_access_key query.
 type accessKeyInfo struct {
 	Nonce       uint64 `json:"nonce"`
@@ -441,14 +425,22 @@ type txTransaction struct {
 	Actions    []txAction `json:"actions"`
 }
 
-// txAction represents a NEAR transaction action. Transfer actions are
-// deserialized into the Deposit field; other action types are ignored.
+// txAction represents a NEAR transaction action. Transfer and FunctionCall
+// actions are deserialized; other action types are ignored.
 type txAction struct {
-	Transfer *txTransfer `json:"Transfer,omitempty"`
+	Transfer     *txTransfer     `json:"Transfer,omitempty"`
+	FunctionCall *txFunctionCall `json:"FunctionCall,omitempty"`
 }
 
 type txTransfer struct {
 	Deposit string `json:"deposit"` // yoctoNEAR as decimal string
+}
+
+// txFunctionCall is a contract call action, used here to recognize
+// NEP-141 ft_transfer/ft_transfer_call receipts.
+type txFunctionCall struct {
+	MethodName string `json:"method_name"`
+	Args       string `json:"args"` // base64-encoded JSON args
 }
 
 type txOutcomeBlock struct {
