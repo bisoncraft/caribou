@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
@@ -192,13 +193,15 @@ func (t *mockTable) Iterate(_ txdb.KV, _ func(txdb.StoreIter) error, _ ...txdb.I
 
 // newTestWallet returns a Wallet wired with mock rpc, txdb, and meta table.
 func newTestWallet(addr string, rpc rpcI, db txdb.NetworkTxDB, table txdb.StoreTable) *Wallet {
-	return &Wallet{
-		address:   addr,
-		rpc:       rpc,
-		txDB:      db,
-		metaTable: table,
-		log:       util.Disabled,
+	w := &Wallet{
+		address: addr,
+		txDB:    db,
+		log:     util.Disabled,
 	}
+	w.rpc.Store(&rpc)
+	var mt txdb.StoreTable = table
+	w.metaTable.Store(&mt)
+	return w
 }
 
 // makeSig returns a minimal signatureInfo.
@@ -1072,6 +1075,48 @@ func TestTokenAccountRentCached(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("getMinimumBalanceForRentExemption called %d times, want 1", calls)
 	}
+}
+
+// TestReconnectRace verifies that Balance (an exported, error-free method
+// reachable from a UI-poll goroutine) can run concurrently with a
+// reconnect rewriting rpc and ctx without racing, panicking, or ever
+// observing a nil rpc — the exact hazard Core.Resume's re-run of Connect
+// on the same wallet creates (e.g. mobile background resume). Run under
+// -race, this must fail before rpc/ctx/metaTable were made atomic.
+func TestReconnectRace(t *testing.T) {
+	w := newTestWallet("addr", &mockRPC{}, nil, nil)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// Simulates repeated Connect calls rewriting the connection state,
+	// the same writes Connect itself performs.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			var rpc rpcI = &mockRPC{}
+			w.rpc.Store(&rpc)
+			ctx, cancel := context.WithCancel(context.Background())
+			w.ctx.Store(&ctx)
+			cancel()
+		}
+	}()
+
+	// Simulates a UI poll hitting Balance concurrently with the above.
+	for i := 0; i < 500; i++ {
+		if _, err := w.Balance(); err != nil && err != errNotConnected {
+			t.Fatalf("unexpected Balance error: %v", err)
+		}
+	}
+
+	close(stop)
+	wg.Wait()
 }
 
 func TestKeyFileRoundTrip(t *testing.T) {

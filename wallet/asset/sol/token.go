@@ -121,8 +121,11 @@ type TokenWallet struct {
 var _ asset.Wallet = (*TokenWallet)(nil)
 
 func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	if w.parent.ctx == nil || w.parent.ctx.Err() != nil {
-		return nil, fmt.Errorf("parent wallet not connected")
+	if _, err := w.parent.client(); err != nil {
+		return nil, fmt.Errorf("parent wallet not connected: %w", err)
+	}
+	if err := w.parent.context().Err(); err != nil {
+		return nil, fmt.Errorf("parent wallet not connected: %w", err)
 	}
 	if w.txDB != nil {
 		mt, err := w.txDB.Table(metaTableName)
@@ -172,6 +175,10 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 	if w.txDB == nil {
 		return nil
 	}
+	rpc, err := w.parent.client()
+	if err != nil {
+		return err
+	}
 	pending, err := w.txDB.GetAssetPendingTxs(&w.assetID)
 	if err != nil || len(pending) == 0 {
 		return err
@@ -187,7 +194,7 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 		if end > len(ids) {
 			end = len(ids)
 		}
-		batch, err := w.parent.rpc.getSignatureStatuses(ctx, ids[i:end])
+		batch, err := rpc.getSignatureStatuses(ctx, ids[i:end])
 		if err != nil {
 			return err
 		}
@@ -206,7 +213,7 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 	}
 	if needHeight {
 		var heightErr error
-		height, heightErr = w.parent.rpc.getBlockHeight(ctx)
+		height, heightErr = rpc.getBlockHeight(ctx)
 		if heightErr != nil {
 			w.parent.log.Debugf("token %d getBlockHeight: %v", w.assetID, heightErr)
 		}
@@ -221,7 +228,7 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 					// A lagging or load-balanced RPC node can return nil status
 					// for a tx that actually landed. Confirm absence on-chain
 					// before marking it rejected.
-					onChain, err := w.parent.rpc.getTransaction(ctx, tx.ID)
+					onChain, err := rpc.getTransaction(ctx, tx.ID)
 					if err != nil {
 						w.parent.log.Debugf("token %d expiry confirm getTransaction: %v", w.assetID, err)
 						continue // transient error — retry next poll, do not reject
@@ -231,7 +238,7 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 						// nothing else will move it out of pending. Settle it
 						// off a finalized read — see the native path in
 						// sol.go's checkPendingTxs.
-						final, err := w.parent.rpc.getTransactionAtCommitment(ctx, tx.ID, "finalized")
+						final, err := rpc.getTransactionAtCommitment(ctx, tx.ID, "finalized")
 						if err != nil {
 							w.parent.log.Debugf("token %d expiry confirm finalized getTransaction: %v", w.assetID, err)
 							continue
@@ -283,7 +290,7 @@ func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 			}
 			tx.Confirms = &txdb.Confirms{Current: current, Target: 1}
 		}
-		if onChain, err := w.parent.rpc.getTransaction(ctx, tx.ID); err == nil && onChain != nil {
+		if onChain, err := rpc.getTransaction(ctx, tx.ID); err == nil && onChain != nil {
 			if parsed := walletTransactionFromSPLRPC(onChain, w.ataAddr, w.assetID); parsed != nil {
 				mergePendingInto(parsed, tx)
 				tx = parsed
@@ -304,7 +311,11 @@ func (w *TokenWallet) Info() *asset.WalletInfo {
 }
 
 func (w *TokenWallet) Balance() (*asset.Balance, error) {
-	amount, _, err := w.parent.rpc.getTokenAccountBalance(w.parent.ctx, w.ataAddr)
+	rpc, err := w.parent.client()
+	if err != nil {
+		return nil, err
+	}
+	amount, _, err := rpc.getTokenAccountBalance(w.parent.context(), w.ataAddr)
 	if err != nil {
 		return nil, fmt.Errorf("getTokenAccountBalance: %w", err)
 	}
@@ -346,6 +357,10 @@ func (w *TokenWallet) FeeRate() uint64 {
 }
 
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	rpc, err := w.parent.client()
+	if err != nil {
+		return nil, err
+	}
 	if !w.ValidateAddress(address) {
 		return nil, fmt.Errorf("invalid address %q", address)
 	}
@@ -379,6 +394,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		solBalance           uint64
 		solBalanceErr        error
 	)
+	ctx := w.parent.context()
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
@@ -386,15 +402,15 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}()
 	go func() {
 		defer wg.Done()
-		_, destATAExists, destATAErr = w.parent.rpc.getTokenAccountBalance(w.parent.ctx, base58.Encode(destATA[:]))
+		_, destATAExists, destATAErr = rpc.getTokenAccountBalance(ctx, base58.Encode(destATA[:]))
 	}()
 	go func() {
 		defer wg.Done()
-		blockhash, lastValidBlockHeight, blockhashErr = w.parent.rpc.getLatestBlockhash(w.parent.ctx)
+		blockhash, lastValidBlockHeight, blockhashErr = rpc.getLatestBlockhash(ctx)
 	}()
 	go func() {
 		defer wg.Done()
-		solBalance, solBalanceErr = w.parent.rpc.getBalance(w.parent.ctx, w.parent.address)
+		solBalance, solBalanceErr = rpc.getBalance(ctx, w.parent.address)
 	}()
 	wg.Wait()
 
@@ -430,12 +446,12 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	// Native SOL must cover the tx fee, and possibly rent for a new
 	// destination ATA.
 	fee := w.StandardSendFee(0)
-	if liveFee, err := w.parent.rpc.getFeeForMessage(w.parent.ctx, msg); err == nil && liveFee > 0 {
+	if liveFee, err := rpc.getFeeForMessage(ctx, msg); err == nil && liveFee > 0 {
 		fee = liveFee
 	}
 	required := fee
 	if !destATAExists {
-		rent, err := w.parent.tokenAccountRent(w.parent.ctx)
+		rent, err := w.parent.tokenAccountRent(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("getMinimumBalanceForRentExemption: %w", err)
 		}
@@ -446,7 +462,7 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 
 	txB, sig := signSPLTx(msg, privKey)
-	if _, err := w.parent.rpc.sendTransaction(w.parent.ctx, txB); err != nil {
+	if _, err := rpc.sendTransaction(ctx, txB); err != nil {
 		return nil, fmt.Errorf("sendTransaction: %w", err)
 	}
 
@@ -504,7 +520,11 @@ func (w *TokenWallet) WalletTransaction(ctx context.Context, txID string) (*txdb
 			return wt, nil
 		}
 	}
-	tx, err := w.parent.rpc.getTransaction(ctx, txID)
+	rpc, err := w.parent.client()
+	if err != nil {
+		return nil, err
+	}
+	tx, err := rpc.getTransaction(ctx, txID)
 	if err != nil {
 		return nil, fmt.Errorf("getTransaction: %w", err)
 	}
@@ -536,6 +556,10 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 	if w.txDB == nil {
 		return nil
 	}
+	rpc, err := w.parent.client()
+	if err != nil {
+		return err
+	}
 	lastSig, err := w.getLastScannedSignature()
 	if err != nil {
 		return err
@@ -544,7 +568,7 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 	if lastSig != "" {
 		until = &lastSig
 	}
-	sigs, err := w.parent.rpc.getSignaturesForAddress(ctx, w.ataAddr, nil, until, 100)
+	sigs, err := rpc.getSignaturesForAddress(ctx, w.ataAddr, nil, until, 100)
 	if err != nil {
 		if isNotFoundRPCError(err) {
 			return nil
@@ -554,20 +578,28 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 	if len(sigs) == 0 {
 		return nil
 	}
+	// Resolve oldest-first, concurrently (fetchTransactions), applying
+	// results in that order and stopping at the first failure so the
+	// cursor only advances through a contiguous successful run — see
+	// Wallet.syncHistory.
+	oldestFirst := make([]string, len(sigs))
+	for i, s := range sigs {
+		oldestFirst[len(sigs)-1-i] = s.Signature
+	}
+	results := fetchTransactions(ctx, rpc, oldestFirst)
 	var wts []*txdb.WalletTransaction
 	cursorSig := ""
-	for i := len(sigs) - 1; i >= 0; i-- {
-		tx, err := w.parent.rpc.getTransaction(ctx, sigs[i].Signature)
-		if err != nil || tx == nil {
+	for i, res := range results {
+		if res.err != nil || res.tx == nil {
 			break
 		}
-		if wt := walletTransactionFromSPLRPC(tx, w.ataAddr, w.assetID); wt != nil {
+		if wt := walletTransactionFromSPLRPC(res.tx, w.ataAddr, w.assetID); wt != nil {
 			wts = append(wts, wt)
 		}
-		cursorSig = sigs[i].Signature
+		cursorSig = oldestFirst[i]
 	}
 	if len(wts) > 0 {
-		preservePendingData(w.txDB, wts, w.parent.log)
+		preservePendingData(w.txDB, &w.assetID, wts, w.parent.log)
 		if err := w.txDB.StoreTxs(wts); err != nil {
 			return err
 		}

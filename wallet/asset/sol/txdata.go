@@ -60,10 +60,11 @@ func setTxData(wt *txdb.WalletTransaction, d solTxData) {
 }
 
 func (w *Wallet) getLastScannedSignature() (string, error) {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return "", nil
 	}
-	b, err := w.metaTable.Get(metaKey(BipID, lastScannedSigField))
+	b, err := mt.Get(metaKey(BipID, lastScannedSigField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -74,17 +75,19 @@ func (w *Wallet) getLastScannedSignature() (string, error) {
 }
 
 func (w *Wallet) setLastScannedSignature(sig string) error {
-	if w.metaTable == nil || sig == "" {
+	mt := w.table()
+	if mt == nil || sig == "" {
 		return nil
 	}
-	return w.metaTable.Set(metaKey(BipID, lastScannedSigField), []byte(sig), txdb.WithReplace())
+	return mt.Set(metaKey(BipID, lastScannedSigField), []byte(sig), txdb.WithReplace())
 }
 
 func (w *Wallet) getBeforeCursor() (string, error) {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return "", nil
 	}
-	b, err := w.metaTable.Get(metaKey(BipID, beforeCursorField))
+	b, err := mt.Get(metaKey(BipID, beforeCursorField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -95,20 +98,22 @@ func (w *Wallet) getBeforeCursor() (string, error) {
 }
 
 func (w *Wallet) setBeforeCursor(sig string) error {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return nil
 	}
 	if sig == "" {
-		return w.metaTable.Delete(metaKey(BipID, beforeCursorField))
+		return mt.Delete(metaKey(BipID, beforeCursorField))
 	}
-	return w.metaTable.Set(metaKey(BipID, beforeCursorField), []byte(sig), txdb.WithReplace())
+	return mt.Set(metaKey(BipID, beforeCursorField), []byte(sig), txdb.WithReplace())
 }
 
 func (w *Wallet) getBackfillUntil() (string, error) {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return "", nil
 	}
-	b, err := w.metaTable.Get(metaKey(BipID, backfillUntilField))
+	b, err := mt.Get(metaKey(BipID, backfillUntilField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return "", nil
 	}
@@ -119,20 +124,22 @@ func (w *Wallet) getBackfillUntil() (string, error) {
 }
 
 func (w *Wallet) setBackfillUntil(sig string) error {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return nil
 	}
 	if sig == "" {
-		return w.metaTable.Delete(metaKey(BipID, backfillUntilField))
+		return mt.Delete(metaKey(BipID, backfillUntilField))
 	}
-	return w.metaTable.Set(metaKey(BipID, backfillUntilField), []byte(sig), txdb.WithReplace())
+	return mt.Set(metaKey(BipID, backfillUntilField), []byte(sig), txdb.WithReplace())
 }
 
 func (w *Wallet) getCachedRentExemptReserve() (uint64, error) {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return 0, nil
 	}
-	b, err := w.metaTable.Get(metaKey(BipID, rentExemptField))
+	b, err := mt.Get(metaKey(BipID, rentExemptField))
 	if errors.Is(err, txdb.ErrKeyNotFound) {
 		return 0, nil
 	}
@@ -146,10 +153,11 @@ func (w *Wallet) getCachedRentExemptReserve() (uint64, error) {
 }
 
 func (w *Wallet) setCachedRentExemptReserve(v uint64) error {
-	if w.metaTable == nil {
+	mt := w.table()
+	if mt == nil {
 		return nil
 	}
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
-	return w.metaTable.Set(metaKey(BipID, rentExemptField), b, txdb.WithReplace())
+	return mt.Set(metaKey(BipID, rentExemptField), b, txdb.WithReplace())
 }

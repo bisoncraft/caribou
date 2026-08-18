@@ -195,11 +195,12 @@ func TestManualSPLTokenRoundTrip(t *testing.T) {
 				address: senderAddr,
 				pubKey:  senderPub,
 				privKey: senderPriv,
-				rpc:     rpc,
 				log:     util.Disabled,
-				ctx:     ctx,
 				net:     util.Simnet,
 			}
+			var parentRPC rpcI = rpc
+			parent.rpc.Store(&parentRPC)
+			parent.ctx.Store(&ctx)
 			tw := &TokenWallet{
 				parent:  parent,
 				assetID: 0,

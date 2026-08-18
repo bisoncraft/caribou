@@ -25,11 +25,12 @@ func newTestTokenWallet(t *testing.T, rpc rpcI, db txdb.NetworkTxDB) *TokenWalle
 		address: addr,
 		pubKey:  pub,
 		privKey: priv,
-		rpc:     rpc,
 		txDB:    db,
 		log:     util.Disabled,
-		ctx:     context.Background(),
 	}
+	parent.rpc.Store(&rpc)
+	ctx := context.Background()
+	parent.ctx.Store(&ctx)
 	var owner [32]byte
 	copy(owner[:], pub)
 	mint := mustDecodePubKey(TokenUSDC.NetMints[util.Mainnet])
