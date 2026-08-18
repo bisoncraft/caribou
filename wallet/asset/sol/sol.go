@@ -172,7 +172,7 @@ var errNotConnected = errors.New("wallet not connected")
 // concurrently with Connect.
 func (w *Wallet) client() (rpcI, error) {
 	p := w.rpc.Load()
-	if p == nil {
+	if p == nil || *p == nil {
 		return nil, errNotConnected
 	}
 	return *p, nil
@@ -562,24 +562,43 @@ type fetchResult struct {
 // batch of up to 1000 signatures sequentially, one RPC round-trip at a
 // time) keeps a sync cycle from running many multiples of pollInterval,
 // while still bounded well short of one request per signature at once.
-// Callers apply their own sequential semantics (e.g. cursor contiguity) by
-// walking the returned slice in order — the concurrency here is purely in
-// how the network calls are issued, not in how results are interpreted.
-func fetchTransactions(ctx context.Context, rpc rpcI, sigs []string) []fetchResult {
+//
+// Signatures are dispatched in windows of fetchWorkers rather than all at
+// once. When stopOnFailure is true and a window contains a failed or nil
+// result, no further windows are dispatched: a caller that only applies a
+// contiguous successful prefix (cursor contiguity) would otherwise pay for
+// up to the full batch (as large as 1000) of requests whose results are
+// then discarded — precisely the wrong behavior against an endpoint that
+// is failing because it is rate-limiting these requests. The window
+// already in flight when the failure is found may still waste up to
+// fetchWorkers-1 requests, but no more. A cancelled ctx also stops
+// dispatch of further windows. Indices past a stopped point are left at
+// their zero value, which callers already treat as "stop" (a nil tx).
+func fetchTransactions(ctx context.Context, rpc rpcI, sigs []string, stopOnFailure bool) []fetchResult {
 	results := make([]fetchResult, len(sigs))
-	sem := make(chan struct{}, fetchWorkers)
-	var wg sync.WaitGroup
-	for i, sig := range sigs {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int, sig string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			tx, err := rpc.getTransaction(ctx, sig)
-			results[i] = fetchResult{tx: tx, err: err}
-		}(i, sig)
+	for start := 0; start < len(sigs); start += fetchWorkers {
+		if ctx.Err() != nil {
+			return results
+		}
+		end := min(start+fetchWorkers, len(sigs))
+		var wg sync.WaitGroup
+		for i := start; i < end; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				results[i].tx, results[i].err = rpc.getTransaction(ctx, sigs[i])
+			}(i)
+		}
+		wg.Wait()
+		if !stopOnFailure {
+			continue
+		}
+		for i := start; i < end; i++ {
+			if results[i].err != nil || results[i].tx == nil {
+				return results
+			}
+		}
 	}
-	wg.Wait()
 	return results
 }
 
@@ -659,7 +678,7 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 	for i, s := range sigs {
 		oldestFirst[len(sigs)-1-i] = s.Signature
 	}
-	results := fetchTransactions(ctx, rpc, oldestFirst)
+	results := fetchTransactions(ctx, rpc, oldestFirst, true)
 	var wts []*txdb.WalletTransaction
 	cursorSig := ""
 	for i, res := range results {
@@ -732,7 +751,7 @@ func (w *Wallet) backfillHistory(ctx context.Context) error {
 	for i, s := range sigs {
 		oldestFirst[len(sigs)-1-i] = s.Signature
 	}
-	results := fetchTransactions(ctx, rpc, oldestFirst)
+	results := fetchTransactions(ctx, rpc, oldestFirst, false)
 	var wts []*txdb.WalletTransaction
 	for _, res := range results {
 		if res.err != nil || res.tx == nil {

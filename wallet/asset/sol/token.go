@@ -586,7 +586,7 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 	for i, s := range sigs {
 		oldestFirst[len(sigs)-1-i] = s.Signature
 	}
-	results := fetchTransactions(ctx, rpc, oldestFirst)
+	results := fetchTransactions(ctx, rpc, oldestFirst, true)
 	var wts []*txdb.WalletTransaction
 	cursorSig := ""
 	for i, res := range results {
