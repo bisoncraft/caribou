@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -221,7 +222,8 @@ func TestCatalog(t *testing.T) {
 // TestQuoteMath verifies quote arithmetic through the real client (which
 // verifies the signature and the request echo) with the static fallback
 // prices: 1 BTC at $60,000 -> 12,000 NEAR at $5, minus 30 bps fees (20
-// requested appFee + 10 protocol), minus 100 bps slippage for the minimum.
+// configured appFee + 10 keyless surcharge), minus 100 bps slippage for
+// the minimum.
 func TestQuoteMath(t *testing.T) {
 	rig := newTestRig(t)
 	resp, err := rig.client.Quote(context.Background(), testQuoteRequest(true))
@@ -264,6 +266,30 @@ func TestQuoteMath(t *testing.T) {
 	}
 	if resp2.Quote.DepositMemo != "" {
 		t.Fatalf("committed quote has deposit memo %q", resp2.Quote.DepositMemo)
+	}
+}
+
+// TestAppFeeRewrite asserts the echoed appFees array models the service's
+// keyless mechanics: the rig's configured 20 bps is split 10 to its
+// recipient and 10 to the operator, the 10 bps surcharge lands on the
+// operator's entry, and the array sums to the priced 30 bps haircut.
+func TestAppFeeRewrite(t *testing.T) {
+	rig := newTestRig(t)
+	resp, err := rig.client.Quote(context.Background(), testQuoteRequest(true))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	want := []intents.AppFee{
+		{Recipient: "0xfeeaccount", Fee: 10},
+		{Recipient: operatorFeeAccount, Fee: 20},
+	}
+	if !reflect.DeepEqual(resp.Request.AppFees, want) {
+		t.Fatalf("echoed appFees = %+v, want %+v", resp.Request.AppFees, want)
+	}
+
+	// With no configured fees, only the surcharge entry is injected.
+	if fees := rewriteAppFees(nil); !reflect.DeepEqual(fees, []intents.AppFee{{Recipient: operatorFeeAccount, Fee: 10}}) {
+		t.Fatalf("rewriteAppFees(nil) = %+v", fees)
 	}
 }
 

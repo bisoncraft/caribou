@@ -13,19 +13,58 @@ import (
 	"github.com/bisoncraft/caribou/wallet/intents"
 )
 
-// protocolFeeBps is a fake protocol fee applied on top of any requested
-// appFees, so quoted output is visibly below the raw price conversion.
-const protocolFeeBps = 10
+// keylessSurchargeBps mirrors the service's observed keyless surcharge:
+// an appFees entry paying the operator's own fee account, injected on
+// every keyless quote whether or not the request configures fees.
+const keylessSurchargeBps = 10
+
+// operatorFeeAccount is the production 1Click operator's fee-collection
+// account inside intents.near, mirrored verbatim so the rewritten appFees
+// echo is display-identical to mainnet.
+const operatorFeeAccount = "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd"
+
+// rewriteAppFees models the service's observed keyless fee mechanics: each
+// configured fee of N bps is split — N/2 stays with its recipient, the
+// remainder goes to the operator — and the keyless surcharge lands on the
+// operator's entry, appended last. The sum of the returned entries is the
+// user's total appFees haircut, so pricing charges configured + surcharge.
+func rewriteAppFees(configured []intents.AppFee) []intents.AppFee {
+	operatorBps := keylessSurchargeBps
+	rewritten := make([]intents.AppFee, 0, len(configured)+1)
+	for _, f := range configured {
+		half := f.Fee / 2
+		rewritten = append(rewritten, intents.AppFee{Recipient: f.Recipient, Fee: half})
+		operatorBps += f.Fee - half
+	}
+	return append(rewritten, intents.AppFee{Recipient: operatorFeeAccount, Fee: operatorBps})
+}
+
+// replaceAppFees swaps the appFees member of a raw quote-request body,
+// leaving every other member's value byte-intact (compacted).
+func replaceAppFees(body []byte, fees []intents.AppFee) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(fees)
+	if err != nil {
+		return nil, err
+	}
+	m["appFees"] = raw
+	return json.Marshal(m)
+}
 
 // maxQuoteBodySize bounds quote request bodies.
 const maxQuoteBodySize = 1 << 20
 
-// handleQuote serves POST /v0/quote. The received body is echoed verbatim
-// as the envelope's quoteRequest member — the client's echo cross-check
-// compares it byte-wise against what it sent — and the envelope is signed
-// with the dev key. A committed (non-dry) quote allocates a real deposit
-// address on the origin chain's harness and starts the swap's state
-// machine.
+// handleQuote serves POST /v0/quote. The received body is echoed as the
+// envelope's quoteRequest member with its appFees array rewritten per the
+// service's keyless mechanics (see rewriteAppFees) — every field the
+// client's echo cross-check covers is echoed verbatim; appFees sits
+// outside both the cross-check and the signed payload. The envelope is
+// signed with the dev key. A committed (non-dry) quote allocates a real
+// deposit address on the origin chain's harness and starts the swap's
+// state machine.
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxQuoteBodySize))
 	if err != nil {
@@ -81,9 +120,15 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	feeBps := int64(protocolFeeBps)
-	for _, f := range req.AppFees {
+	appFees := rewriteAppFees(req.AppFees)
+	var feeBps int64
+	for _, f := range appFees {
 		feeBps += int64(f.Fee)
+	}
+	body, err = replaceAppFees(body, appFees)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Internal Server Error", "error rewriting appFees: %v", err)
+		return
 	}
 
 	priceO, priceD := s.price(origin.intentsID), s.price(dest.intentsID)
