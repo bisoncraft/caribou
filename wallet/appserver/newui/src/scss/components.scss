@@ -1175,14 +1175,31 @@ input.swap-amt-input::placeholder,
   font-family: var(--sans-serif);
 }
 
-// USD entry on a card's value line: a bare inline input continuing the
-// grey "$" prefix beside it.
+// USD entry on a card's value line: the grey "$" prefix and a bare inline
+// input sharing a pill. A focused bare input is otherwise nearly invisible
+// at this size, so while editing the pill takes a subtle background tint
+// and the whole line (the "$" prefix included) brightens. The negative
+// margin cancels the pill's padding so the "$" stays flush with the
+// amount input above.
+.swap-usd-line {
+  padding: 1px 4px;
+  margin-left: -4px;
+  border-radius: 4px;
+
+  &:focus-within {
+    color: var(--text-color);
+    background-color: color-mix(in srgb, var(--text-grey) 12%, transparent);
+  }
+}
+
 input.swap-usd-input {
   padding: 0;
   min-width: 0;
   background-color: transparent;
   color: inherit;
   font-size: inherit;
+  font-family: inherit;
+  caret-color: var(--accent);
 
   &:focus { border: none; }
 
@@ -1227,6 +1244,7 @@ input.swap-amt-input,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  caret-color: var(--accent);
 
   &:focus { border: none; }
 }
@@ -1365,10 +1383,12 @@ button.swap-cta {
 
 // Paired origin→destination logos on an Activity swap row: the destination
 // logo overlaps the origin's lower-right corner.
+// Class selectors, not img tags: each logo may be a plain img or a
+// networked-token composite's wrapper span (see AssetLogo).
 .swap-row-logos {
   display: inline-block;
 
-  img:first-child {
+  .swap-row-logo-origin {
     position: absolute;
     top: 0;
     left: 0;

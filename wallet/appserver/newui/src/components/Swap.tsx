@@ -7,13 +7,13 @@ import { getJSON, postJSON } from '@caribou/shared/http'
 import { CoreNote, UnitInfo, WalletTransaction } from '@caribou/shared/registry'
 import State from '@caribou/shared/state'
 import Doc from '@caribou/shared/doc'
-import CoinLogo from '@caribou/shared/components/CoinLogo'
+import AssetLogo from './AssetLogo'
 import Spinner from './Spinner'
 import PasswordInput from './PasswordInput'
 import { useModalBusy } from './modalBusy'
 import {
   IntentsAsset, IntentsPreview, IntentsSwap,
-  StateProcessing, StateSuccess, StateRefunded, StateFailed, StateExpired,
+  StateProcessing, StateSuccess, StateRefunded, StateFailed, StateExpired, StateDepositFailed,
   swapIsActive, stateLabel, stateColorClass,
   conventionalToAtoms, assetTicker, assetName
 } from '../intents'
@@ -164,6 +164,32 @@ export default function Swap ({ depositAddress }: SwapProps) {
 
   const sellAvail = sellID === null ? 0 : app.wallet(sellID)?.balance?.available ?? 0
   const buyAvail = buyID === null ? 0 : app.wallet(buyID)?.balance?.available ?? 0
+
+  // Projected origin-chain network fee for the deposit transaction, in the
+  // fee asset's atoms (the parent chain's for tokens). Refreshed on the
+  // preview cadence while the form or review view is showing.
+  const [depositFee, setDepositFee] = useState(0)
+  const sellWalletAsset = sellID === null ? undefined : app.user?.assets[sellID]
+  const depositFeeAssetID = sellWalletAsset?.token ? sellWalletAsset.token.networkID : sellID
+  useEffect(() => {
+    setDepositFee(0)
+    if (sellID === null || (view !== 'form' && view !== 'review') || !app.wallet(sellID)) return
+    let stale = false
+    const fetchFee = async () => {
+      const r = await postJSON('/api/feestate', { assetID: sellID })
+      if (!stale && r.ok) setDepositFee(r.feeState?.send ?? 0)
+    }
+    fetchFee()
+    const ticker = window.setInterval(fetchFee, previewRefreshMS)
+    return () => { stale = true; window.clearInterval(ticker) }
+  }, [sellID, view])
+  const depositFeeAsset = depositFeeAssetID == null ? undefined : app.user?.assets[depositFeeAssetID]
+  const depositFeeUSD = depositFeeAsset && depositFeeAssetID != null
+    ? Doc.usdString(depositFee, depositFeeAsset.unitInfo.conventional.conversionFactor, app.idRate(depositFeeAssetID) ?? 0)
+    : ''
+  const depositFeeText = depositFee > 0 && depositFeeAsset
+    ? `${Doc.formatCoinValue(depositFee, depositFeeAsset.unitInfo)} ${depositFeeAsset.unitInfo.conventional.unit}${depositFeeUSD !== '' ? ` (${depositFeeUSD})` : ''}`
+    : ''
 
   // ---- Data loading ----
 
@@ -444,7 +470,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
                 className={`d-flex align-items-center px-3 py-2 ${a.walletReady ? 'hoverbg pointer' : 'swap-pick-inactive'}`}
                 onClick={() => { if (a.walletReady) pick(a) }}
               >
-                <CoinLogo ticker={ticker} className="icon-24 me-2" />
+                <AssetLogo assetID={a.assetID} ticker={ticker} className="icon-24 me-2" />
                 <div className="flex-grow-1">
                   <div className="fs14 demi">
                     {ticker}
@@ -532,7 +558,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
 
         <div className="px-3 pb-2">
           <div className="d-flex align-items-center py-2">
-            <CoinLogo ticker={assetTicker(sellAsset)} className="icon-32 me-3" />
+            <AssetLogo assetID={sellAsset.assetID} ticker={assetTicker(sellAsset)} className="icon-32 me-3" />
             <div className="flex-grow-1">
               <div className="grey fs12">{exactOutput ? t('Sell (estimated)') : t('Sell')}</div>
               <div className="fs18 demi mono">
@@ -542,7 +568,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
             <div className="grey fs13">{sellUSD}</div>
           </div>
           <div className="d-flex align-items-center py-2">
-            <CoinLogo ticker={assetTicker(buyAsset)} className="icon-32 me-3" />
+            <AssetLogo assetID={buyAsset.assetID} ticker={assetTicker(buyAsset)} className="icon-32 me-3" />
             <div className="flex-grow-1">
               <div className="grey fs12">{exactOutput ? t('Buy') : t('Buy (estimated)')}</div>
               <div className="fs18 demi mono">
@@ -582,6 +608,10 @@ export default function Swap ({ depositAddress }: SwapProps) {
           <div className="d-flex justify-content-between py-1">
             <span className="grey has-tip" aria-label={t('Estimated time from deposit to delivery.')}>{t('Settlement time')}</span>
             <span>{etaText || '—'}</span>
+          </div>
+          <div className="d-flex justify-content-between py-1">
+            <span className="grey has-tip" aria-label={t('Projected fee for the deposit transaction, paid from the wallet in addition to the amount sold.')}>{t('Network fee')}</span>
+            <span className="mono">{depositFeeText || '—'}</span>
           </div>
           {feeBps > 0 && (
             <div className="d-flex justify-content-between py-1">
@@ -649,7 +679,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
   const assetChip = (a: IntentsAsset | null, side: 'sell' | 'buy') => (
     <button type="button" className="swap-chip d-flex align-items-center pointer" onClick={() => openPicker(side)}>
       {a
-        ? <><CoinLogo ticker={assetTicker(a)} className="icon-32 me-2" /><span className="fs18 demi">{assetTicker(a)}</span></>
+        ? <><AssetLogo assetID={a.assetID} ticker={assetTicker(a)} className="icon-32 me-2" /><span className="fs18 demi">{assetTicker(a)}</span></>
         : <span className="fs16">{t('Select asset')}</span>}
       <span className="ico-arrow-down fs12 ms-2 grey" />
     </button>
@@ -704,7 +734,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
                 onChange={amountChanged('sell', 'asset')}
                 autoFocus
               />
-              <div className="d-flex align-items-center grey fs12 pt-1">
+              <div className="swap-usd-line d-flex align-items-center grey fs12 pt-1">
                 <span>$</span>
                 <input
                   type="text"
@@ -749,7 +779,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
                 placeholder="0.0"
                 onChange={amountChanged('buy', 'asset')}
               />
-              <div className="d-flex align-items-center grey fs12 pt-1">
+              <div className="swap-usd-line d-flex align-items-center grey fs12 pt-1">
                 <span>$</span>
                 <input
                   type="text"
@@ -808,6 +838,10 @@ export default function Swap ({ depositAddress }: SwapProps) {
               </div>
               )}
           <div className="d-flex justify-content-between py-1">
+            <span className="grey has-tip" aria-label={t('Projected fee for the deposit transaction, paid from the wallet in addition to the amount sold.')}>{t('Network fee')}</span>
+            <span className="mono">{depositFeeText || '—'}</span>
+          </div>
+          <div className="d-flex justify-content-between py-1">
             <span className="grey has-tip" aria-label={t('Fee paid to the swap service, included in the quoted output.')}>{t('Service fee')}</span>
             <span>{feeBps > 0 ? slippagePct(feeBps) : '—'}</span>
           </div>
@@ -858,6 +892,11 @@ function activeStep (state: string): number {
 
 function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
   const active = swapIsActive(swap)
+  // depositRejected: the record is still active (the engine has not yet
+  // polled), but the fetched deposit tx already proves an on-chain
+  // rejection. The header and step indicator show the failure rather than
+  // a healthy in-flight swap. Declared here, assigned after depositTx.
+  let depositRejected = false
   const originAsset = app.user?.assets[swap.originAssetID]
   const destAsset = app.user?.assets[swap.destAssetID]
   const originTicker = originAsset?.unitInfo.conventional.unit ?? swap.originAsset
@@ -892,6 +931,8 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
     return () => { stale = true }
   }, [swap.originAssetID, swap.depositTxID])
 
+  depositRejected = active && depositTx?.rejected === true
+
   // The deposit's network fee is paid in the origin chain's native asset.
   const feeAssetID = originAsset?.token ? originAsset.token.networkID : swap.originAssetID
   const feeAsset = app.user?.assets[feeAssetID]
@@ -910,10 +951,12 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
   }
 
   const statusIcon = () => {
+    if (depositRejected) return <span className="ico-close fs16 errcolor" />
     if (active) return <Spinner size={16} />
     switch (swap.state) {
       case StateSuccess: return <span className="ico-check fs16 tx-amt-pos" />
-      case StateFailed: return <span className="ico-close fs16 errcolor" />
+      case StateFailed:
+      case StateDepositFailed: return <span className="ico-close fs16 errcolor" />
       default: return <span className="ico-info fs16 grey" />
     }
   }
@@ -950,9 +993,10 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
   }
 
   // A transaction-leg row: click opens the leg's own detail dialog.
-  const txRow = (label: string, id: string, assetID: number) => (
+  const txRow = (label: string, id: string, assetID: number, failed?: boolean) => (
     <Row key={label + id} label={label} tip={t('Click to view the transaction.')}>
       <span className="d-flex align-items-center pointer" onClick={() => openLeg(assetID, id)}>
+        {failed && <span className="errcolor fs11 me-2">{t('failed')}</span>}
         <span className="mono fs13 has-tip" aria-label={id}>{Doc.shortenAddress(id)}</span>
         {idActions(id, assetID)}
       </span>
@@ -972,14 +1016,16 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
 
       <div className="flex-center px-3 pt-1">
         {statusIcon()}
-        <span className={`fs16 demi ms-2 ${stateColorClass(swap.state)}`}>{stateLabel(swap.state)}</span>
-        {active && swap.timeEstimate > 0 && (
+        <span className={`fs16 demi ms-2 ${depositRejected ? 'errcolor' : stateColorClass(swap.state)}`}>
+          {depositRejected ? t('Deposit failed') : stateLabel(swap.state)}
+        </span>
+        {active && !depositRejected && swap.timeEstimate > 0 && (
           <span className="grey fs12 ms-2">{tvar('usually ~{{ eta }}', { eta: Doc.formatDuration(swap.timeEstimate * 1000) })}</span>
         )}
         {swap.reconstructed && <span className="swap-recovered fs11 grey ms-2">{t('recovered')}</span>}
       </div>
 
-      {active && (
+      {active && !depositRejected && (
         <div className="flex-center px-3 pt-3">
           {steps.map((label, i) => (
             <div key={label} className="d-flex align-items-center">
@@ -995,7 +1041,7 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
 
       <div className="flex-center px-3 py-3">
         <div className="d-flex align-items-center">
-          <CoinLogo ticker={originTicker} className="icon-32 me-2" />
+          <AssetLogo assetID={swap.originAssetID} ticker={originTicker} className="icon-32 me-2" />
           <div>
             <div className="mono demi fs18">{amountIn} {originTicker}</div>
             <div className="grey fs12">{usdIn}</div>
@@ -1003,7 +1049,7 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
         </div>
         <span className="ico-arrow-right fs14 grey mx-3" />
         <div className="d-flex align-items-center">
-          <CoinLogo ticker={destTicker} className="icon-32 me-2" />
+          <AssetLogo assetID={swap.destAssetID} ticker={destTicker} className="icon-32 me-2" />
           <div>
             <div className="mono demi fs18">
               {swap.state === StateSuccess ? '' : '~'}{amountOut} {destTicker}
@@ -1027,6 +1073,14 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
       )}
       {swap.state === StateExpired && (
         <div className="px-3 pb-2 fs13 grey text-center">{t('The quote expired before the deposit was sent. No funds moved.')}</div>
+      )}
+      {/* The engine marks the record DEPOSIT_FAILED on its next poll, but the
+          deposit tx fetched for the fee row can prove the rejection first —
+          say so immediately rather than showing a healthy in-flight swap. */}
+      {(swap.state === StateDepositFailed || depositRejected) && (
+        <div className="px-3 pb-2 fs13 errcolor text-center">
+          {t('The deposit transaction was rejected on-chain. The deposited funds never left the wallet, though the network fee was spent.')}
+        </div>
       )}
 
       <div className="px-3">
@@ -1057,7 +1111,7 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
           <Row label={t('Last update')}>{isNaN(updated.getTime()) ? '—' : updated.toLocaleString()}</Row>
         )}
         {active && !isNaN(deadline.getTime()) && (
-          <Row label={t('Deadline')} tip={t('If the swap has not completed by the deadline, the deposit is refunded automatically.')}>
+          <Row label={t('Refund deadline')} tip={t('If the swap has not completed by the deadline, the deposit is refunded automatically.')}>
             {deadline.toLocaleString()}
           </Row>
         )}
@@ -1083,7 +1137,8 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
             </span>
           </span>
         </Row>
-        {swap.depositTxID && txRow(t('Deposit tx'), swap.depositTxID, swap.originAssetID)}
+        {swap.depositTxID && txRow(t('Deposit tx'), swap.depositTxID, swap.originAssetID,
+          swap.state === StateDepositFailed || depositTx?.rejected)}
         {(swap.destinationTxs ?? []).map(id => txRow(t('Received tx'), id, swap.destAssetID))}
         {(swap.refundTxs ?? []).map(id => txRow(t('Refund tx'), id, swap.originAssetID))}
       </div>

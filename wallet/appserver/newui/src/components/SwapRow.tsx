@@ -1,9 +1,9 @@
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
-import CoinLogo from '@caribou/shared/components/CoinLogo'
+import AssetLogo from './AssetLogo'
 import Spinner from './Spinner'
-import { IntentsSwap, StateSuccess, StateRefunded, StateExpired, swapIsActive, stateLabel, stateColorClass } from '../intents'
+import { IntentsSwap, StateSuccess, StateRefunded, StateExpired, StateDepositFailed, swapIsActive, stateLabel, stateColorClass } from '../intents'
 
 // swapTime is the ordering timestamp for a swap in the Activity feed, in
 // seconds (matching WalletTransaction.timestamp).
@@ -42,8 +42,8 @@ export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowPr
 
   // The amount column reflects the outcome: the received (or expected)
   // destination amount for successful and in-flight swaps, the returned
-  // deposit for refunds, nothing for an expired quote (no funds moved), and
-  // an em dash for failures.
+  // deposit for refunds, nothing for an expired quote or a rejected deposit
+  // (no funds moved either way), and an em dash for failures.
   const amounts = () => {
     if (swap.state === StateSuccess || active) {
       const approx = swap.state === StateSuccess ? '' : '~'
@@ -65,7 +65,7 @@ export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowPr
         </div>
       )
     }
-    if (swap.state === StateExpired) return <div className="grey fs14 mono">—</div>
+    if (swap.state === StateExpired || swap.state === StateDepositFailed) return <div className="grey fs14 mono">—</div>
     return ( // FAILED: the deposit may be gone and nothing arrived.
       <>
         <div className="grey fs14 mono">—</div>
@@ -82,8 +82,8 @@ export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowPr
       onMouseLeave={() => onSwapHover?.('')}
     >
       <span className="swap-row-logos position-relative icon-32 me-3">
-        <CoinLogo ticker={originTicker} className="icon-24" />
-        <CoinLogo ticker={destTicker} className="icon-24 swap-row-logo-dest" />
+        <AssetLogo assetID={swap.originAssetID} ticker={originTicker} className="icon-24 swap-row-logo-origin" />
+        <AssetLogo assetID={swap.destAssetID} ticker={destTicker} className="icon-24 swap-row-logo-dest" />
       </span>
       <div className="flex-grow-1">
         <div className="fs14 demi">{tvar('Swap {{ from }} → {{ to }}', { from: originTicker, to: destTicker })}</div>
