@@ -199,7 +199,7 @@ func newTestWallet(addr string, rpc rpcI, db txdb.NetworkTxDB, table txdb.StoreT
 		txDB:    db,
 		log:     util.Disabled,
 	}
-	w.conn.Store(&conn{rpc: rpc, table: table})
+	w.conn.Store(&conn{rpc: rpc, ctx: context.Background(), table: table})
 	return w
 }
 
@@ -662,11 +662,11 @@ func TestSyncHistory(t *testing.T) {
 }
 
 // TestSyncHistoryBoundsFetchesOnFailure verifies that when the oldest
-// signature in a batch fails to resolve, fetchTransactions' windowed
-// dispatch does not still issue a getTransaction call for every signature
-// in the batch (up to 1000) before syncHistory discards all but the
-// (empty) successful prefix — it must stop after the window containing
-// the failure, wasting at most fetchWorkers-1 calls, not the whole batch.
+// signature in a batch fails to resolve, fetchTransactions' bounded-
+// concurrency dispatch does not still issue a getTransaction call for
+// every signature in the batch (up to 1000) before syncHistory discards
+// all but the (empty) successful prefix — it must stop once the failure
+// is observed, wasting at most fetchWorkers-1 calls, not the whole batch.
 func TestSyncHistoryBoundsFetchesOnFailure(t *testing.T) {
 	ctx := context.Background()
 	const walletAddr = "walletAddr"
@@ -707,8 +707,37 @@ func TestSyncHistoryBoundsFetchesOnFailure(t *testing.T) {
 	}
 }
 
+// TestFetchTransactionsBoundsFetchesOnMidBatchFailure verifies the
+// fetchWorkers-1 waste bound holds for a failure well past the start of
+// the batch, not just at index 0.
+func TestFetchTransactionsBoundsFetchesOnMidBatchFailure(t *testing.T) {
+	const n = 400
+	const failAt = 300
+
+	sigs := make([]string, n)
+	for i := range sigs {
+		sigs[i] = fmt.Sprintf("sig%d", i)
+	}
+
+	var calls atomic.Int32
+	rpc := &mockRPC{
+		txFunc: func(sig string) (*rpcTransaction, error) {
+			calls.Add(1)
+			if sig == sigs[failAt] {
+				return nil, fmt.Errorf("boom")
+			}
+			return makeWalletTx("addr", "other"), nil
+		},
+	}
+
+	fetchTransactions(context.Background(), rpc, sigs, true)
+	if got := int(calls.Load()); got > failAt+fetchWorkers {
+		t.Fatalf("getTransaction called %d times after a mid-batch failure at index %d, want at most %d (failAt+fetchWorkers)", got, failAt, failAt+fetchWorkers)
+	}
+}
+
 // TestFetchTransactionsStopsOnCancelledContext verifies fetchTransactions
-// dispatches no further windows once ctx is already cancelled, rather than
+// dispatches no further requests once ctx is already cancelled, rather than
 // still issuing every request in the batch (each of which fails fast, but
 // still costs a goroutine, an HTTP request object, and a slot in the
 // WaitGroup Connect's caller waits on during shutdown).

@@ -141,10 +141,8 @@ type Wallet struct {
 	// and Send are reachable from a UI poll goroutine concurrently with
 	// a reconnect's Connect call, so these are accessed atomically
 	// through client(), table(), and context() rather than as plain
-	// fields. They're kept in one struct behind one pointer, rather than
-	// three independent atomic fields, so a reader's Load() always sees
-	// a consistent rpc/ctx/table snapshot instead of a mix of pre- and
-	// post-reconnect values.
+	// fields — kept in one struct behind one pointer so a Load() never
+	// sees a mix of pre- and post-reconnect values.
 	conn atomic.Pointer[conn]
 	txDB txdb.NetworkTxDB
 
@@ -193,7 +191,7 @@ func (w *Wallet) client() (rpcI, error) {
 // context if Connect has not run yet. It reads the pointer atomically, so
 // it is safe to call concurrently with Connect.
 func (w *Wallet) context() context.Context {
-	if c := w.conn.Load(); c != nil {
+	if c := w.conn.Load(); c != nil && c.ctx != nil {
 		return c.ctx
 	}
 	return context.Background()
@@ -264,14 +262,18 @@ func (w *Wallet) Locked() bool {
 
 func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	rpc := newRPCClient(w.rpcEndpoint(), w.wsEndpoint())
-	w.conn.Store(&conn{rpc: rpc, ctx: ctx})
+	var mt txdb.StoreTable
 	if w.txDB != nil {
-		mt, err := w.txDB.Table(metaTableName)
+		var err error
+		mt, err = w.txDB.Table(metaTableName)
 		if err != nil {
 			return nil, fmt.Errorf("error opening meta table: %w", err)
 		}
-		w.conn.Store(&conn{rpc: rpc, ctx: ctx, table: mt})
 	}
+	// Store rpc, ctx, and table together in a single Store: a reader must
+	// never observe the new rpc/ctx paired with the previous connection's
+	// (or no) table.
+	w.conn.Store(&conn{rpc: rpc, ctx: ctx, table: mt})
 	// Only do the fast synchronous part (tip probe + peer signal) at connect
 	// time. History sync can take minutes on a first run and must not block.
 	if err := w.updateTip(ctx); err != nil {
@@ -568,27 +570,25 @@ type fetchResult struct {
 
 // fetchTransactions resolves sigs to their transactions, up to fetchWorkers
 // requests in flight at once, and returns results at the same index as the
-// input signature. Bounding concurrency keeps a sync cycle from running
-// many multiples of pollInterval, while still bounded well short of one
-// request per signature at once.
+// input signature.
 //
-// When stopOnFailure is true and a result is a failure or nil, no further
-// requests are dispatched: a caller that only applies a contiguous
-// successful prefix (cursor contiguity) would otherwise pay for up to the
-// full batch (as large as 1000) of requests whose results are then
-// discarded — precisely the wrong behavior against an endpoint that is
-// failing because it is rate-limiting these requests. Requests already in
-// flight when the failure is found may still waste up to fetchWorkers-1
-// requests, but no more. A cancelled ctx also stops dispatch of further
-// requests. Indices past a stopped point are left at their zero value,
-// which callers already treat as "stop" (a nil tx).
+// When stopOnFailure is true, a failed or nil result stops further dispatch:
+// a caller applying only a contiguous successful prefix (cursor contiguity)
+// would otherwise pay for the full batch (up to 1000) and discard most of
+// it — the wrong behavior against a rate-limiting endpoint. A cancelled ctx
+// stops dispatch the same way. Indices past a stopped point keep their zero
+// value, which callers already treat as "stop" (a nil tx).
+//
+// Dispatch of index i waits on index i-fetchWorkers specifically (a ring of
+// fetchWorkers slots) rather than any free slot from a plain semaphore: a
+// goroutine already given a semaphore slot has no safe way to re-check and
+// bail once started, so it can skip a request that had nothing to do with a
+// concurrently-dispatched sibling's failure. Gating on the specific
+// predecessor avoids that while still bounding the waste to fetchWorkers-1,
+// deterministically, for a failure at any index.
 func fetchTransactions(ctx context.Context, rpc rpcI, sigs []string, stopOnFailure bool) []fetchResult {
 	results := make([]fetchResult, len(sigs))
 	var stop atomic.Bool
-	// slots is a ring of fetchWorkers tokens: dispatching index i takes the
-	// token freed by index i-fetchWorkers finishing, so at most fetchWorkers
-	// requests are ever in flight and dispatch of index i cannot race ahead
-	// of index i-fetchWorkers's result (and thus a stop it may have set).
 	slots := make([]chan struct{}, fetchWorkers)
 	for i := range slots {
 		slots[i] = make(chan struct{}, 1)
