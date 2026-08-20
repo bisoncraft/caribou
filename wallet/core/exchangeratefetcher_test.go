@@ -205,8 +205,12 @@ func TestChainlinkRatesLive(t *testing.T) {
 			t.Errorf("no rate for asset %d", assetID)
 		}
 	}
-	// dcr, base, and usdc have no Chainlink feed.
-	for _, assetID := range []uint32{dcrID, baseID, usdcEthID, usdcPolygonID} {
+	// USDC has a feed shared by all its deployments' asset IDs.
+	if rates[usdcEthID] != rates[usdcPolygonID] {
+		t.Errorf("usdc.eth rate %f != usdc.polygon rate %f", rates[usdcEthID], rates[usdcPolygonID])
+	}
+	// dcr and base have no Chainlink feed.
+	for _, assetID := range []uint32{dcrID, baseID} {
 		if _, has := rates[assetID]; has {
 			t.Errorf("got a rate for asset %d, which has no feed", assetID)
 		}

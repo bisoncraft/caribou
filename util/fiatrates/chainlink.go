@@ -231,7 +231,21 @@ var chainlinkPolygonFeeds = map[string]common.Address{
 	// ZEC. Tighten or relax only by revisiting chainlinkMaxAge for all feeds.
 	"ZEC":  common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"),
 	"LINK": common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"),
-	// Missing feeds: ADA, SOL, AVAX, XRP, BNB
+	"XRP":  common.HexToAddress("0x785ba89291f676b5386652eB12b30cF361020694"),
+	"SOL":  common.HexToAddress("0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"),
+	"BNB":  common.HexToAddress("0x82a6c4AF830caa6c97bb504425f6A66165C2c26e"),
+	// MATIC serves POL: ParseTicker normalizes the polygon asset to the
+	// MATIC ticker the rate APIs still key on, and the feed tracks POL
+	// post-migration (1:1).
+	"MATIC": common.HexToAddress("0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"),
+	"USDC":  common.HexToAddress("0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7"),
+	"USDT":  common.HexToAddress("0x0A6513e40db6EB1b165753AD52E80663aeA50545"),
+	"PAXG":  common.HexToAddress("0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608"),
+	"WBTC":  common.HexToAddress("0xDE31F8bFBD8c84b5360CFACCa3539B938dd78ae6"),
+	// Deliberately absent: DASH/USD exists on Polygon but its heartbeat is
+	// daily, far beyond chainlinkMaxAge, so it would be rejected as stale
+	// nearly every cycle; XAUT has no feed (XAU spot is a different
+	// instrument). Other fiat-rate sources cover both.
 	// To add: 1. Get addresses from https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
 	//         2. Test with live RPC calls
 }

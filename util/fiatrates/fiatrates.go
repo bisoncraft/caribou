@@ -52,6 +52,8 @@ func parseCoinpapNameSymbol(name, symbol string) (string, string) {
 		name = "weth"
 	case "link":
 		name = "chainlink"
+	case "usdt":
+		name = "tether"
 	}
 	return name, symbol
 }

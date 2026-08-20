@@ -222,7 +222,7 @@ func TestChainlinkLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tickers := []string{"BTC", "ETH", "LTC", "BCH", "DOGE", "ZEC", "LINK"}
+	tickers := []string{"BTC", "ETH", "LTC", "BCH", "DOGE", "ZEC", "LINK", "XRP", "SOL", "BNB", "MATIC", "USDC", "USDT", "PAXG", "WBTC"}
 	rates, err := getRates(ctx, tickers, log)
 	if err != nil {
 		t.Fatalf("failed to fetch rates: %v", err)

@@ -83,7 +83,7 @@ var (
 	// Solana Explorer, Solscan, Phantom, and OpenSea (2026-07-13). No
 	// devnet mint is known, so USDT is mainnet-only for now.
 	TokenUSDT = &Token{
-		Name:     "USDT",
+		Name:     "Tether",
 		Decimals: 6,
 		UnitInfo: util.UnitInfo{
 			AtomicUnit: "microUSD",
