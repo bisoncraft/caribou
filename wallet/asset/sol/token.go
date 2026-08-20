@@ -159,36 +159,14 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		// connection. The ATA need not exist yet: Solana accepts a subscription
 		// to an account that has never been funded and fires when it is
 		// created, which for a token wallet is its first ever deposit.
-		//
-		// The parent installs a new client on every one of its connects, and a
-		// token wallet's lifetime is independent of the parent's, so the client
-		// is re-read each pass rather than captured once. Registering on a
-		// client the parent has since dropped would leave this wallet waiting on
-		// notifications nothing sends, while reading liveness off the current
-		// one — the bug the resync below exists to prevent — would report the
-		// dead registration as covered and hold the slow cadence anyway.
 		refresh := make(chan struct{}, 1)
-		onChange := func() { signalRefresh(refresh) }
-		var ws *wsClient
-		resyncWatch := func() {
-			cur := w.parent.ws.Load()
-			if cur == ws {
-				return
-			}
-			if ws != nil {
-				ws.unwatch(w.ataAddr)
-			}
-			ws = cur
-			if ws != nil {
-				ws.watch(w.ataAddr, onChange)
-			}
+		watcher := &ataWatcher{
+			account:  w.ataAddr,
+			onChange: func() { signalRefresh(refresh) },
+			current:  w.parent.ws.Load,
 		}
-		resyncWatch()
-		defer func() {
-			if ws != nil {
-				ws.unwatch(w.ataAddr)
-			}
-		}()
+		watcher.resync()
+		defer watcher.stop()
 
 		if err := w.syncHistory(ctx); err != nil {
 			w.parent.log.Debugf("token %d syncHistory error: %v", w.assetID, err)
@@ -196,58 +174,125 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		if err := w.checkPendingTxs(ctx); err != nil {
 			w.parent.log.Debugf("token %d checkPendingTxs error: %v", w.assetID, err)
 		}
-		// Not refreshLoop, deliberately. That one times its interval from the
-		// start of a pass so the tip cannot age past MaxBlockInterval, and
-		// accepts back-to-back passes as the price. A token wallet keeps no tip,
-		// so it has nothing to protect and no reason to pay that price: paging a
-		// long signature history twice with no gap is exactly what a phone
-		// should not do. Timing from the end instead guarantees a full
-		// interval of rest between passes.
-		//
-		// The wake path is held to the same guarantee by pollInterval, for the
-		// same reason and by the same means as refreshLoop's minGap: the refresh
-		// channel coalesces only while this loop is idle, so a notification
-		// landing mid-pass is ready the moment that pass ends, and an ATA taking
-		// a burst of transfers would otherwise page its history back to back.
-		lastEnd := time.Now()
-		var woke bool
-		for {
-			resyncWatch()
-			// A live subscription leaves the poll as pure backstop against a
-			// dropped frame. Hence the unconditional false: a failed pass here
-			// has no SyncStatus margin to protect either, and so nothing to gain
-			// from retrying sooner.
-			interval := refreshInterval(ws, false)
-			wakeCh := refresh
-			if woke {
-				interval = min(interval, pollInterval)
-				wakeCh = nil
-			}
-			// From lastEnd rather than from now, so that holding a wake costs
-			// only what the floor is short by. A notification arriving long after
-			// the previous pass ended still runs immediately.
-			timer := time.NewTimer(time.Until(lastEnd.Add(interval)))
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-wakeCh:
-				timer.Stop()
-				woke = true
-				continue
-			case <-timer.C:
-			}
-			woke = false
-			if err := w.syncHistory(ctx); err != nil {
-				w.parent.log.Debugf("token %d syncHistory error: %v", w.assetID, err)
-			}
-			if err := w.checkPendingTxs(ctx); err != nil {
-				w.parent.log.Debugf("token %d checkPendingTxs error: %v", w.assetID, err)
-			}
-			lastEnd = time.Now()
-		}
+		tokenRefreshLoop(ctx, refresh, pollInterval,
+			func() time.Duration {
+				// Resynced every pass, and the cadence read off whatever that
+				// returns. A live subscription leaves the poll as pure backstop
+				// against a dropped frame. Hence the unconditional false: a
+				// failed pass here has no SyncStatus margin to protect either,
+				// and so nothing to gain from retrying sooner.
+				return refreshInterval(watcher.resync(), false)
+			},
+			func(ctx context.Context) {
+				if err := w.syncHistory(ctx); err != nil {
+					w.parent.log.Debugf("token %d syncHistory error: %v", w.assetID, err)
+				}
+				if err := w.checkPendingTxs(ctx); err != nil {
+					w.parent.log.Debugf("token %d checkPendingTxs error: %v", w.assetID, err)
+				}
+			})
 	}()
 	return &wg, nil
+}
+
+// ataWatcher keeps one account registered on whichever wsClient the parent
+// wallet currently has installed. current is the parent's loader, called fresh
+// every resync rather than captured once: the parent installs a new client on
+// every one of its connects and a token wallet's lifetime is independent of the
+// parent's, so a client captured at Connect can be one the parent has since
+// dropped. Staying on that client would leave the wallet waiting on
+// notifications nothing sends, while reading liveness off the current one --
+// the bug resync exists to prevent — would report the dead registration as
+// covered and hold the slow cadence anyway.
+//
+// Not safe for concurrent use: ws is owned by the single goroutine that drives
+// the refresh loop.
+type ataWatcher struct {
+	account  string
+	onChange func()
+	current  func() *wsClient
+
+	ws *wsClient
+}
+
+// resync moves the registration onto the parent's current client if it has
+// changed, and returns the client now carrying it, which is nil when the parent
+// has none.
+func (a *ataWatcher) resync() *wsClient {
+	cur := a.current()
+	if cur == a.ws {
+		return a.ws
+	}
+	if a.ws != nil {
+		a.ws.unwatch(a.account)
+	}
+	a.ws = cur
+	if a.ws != nil {
+		a.ws.watch(a.account, a.onChange)
+	}
+	return a.ws
+}
+
+// stop drops the registration, so the parent's connection stops carrying
+// notifications nobody handles.
+func (a *ataWatcher) stop() {
+	if a.ws == nil {
+		return
+	}
+	a.ws.unwatch(a.account)
+	a.ws = nil
+}
+
+// tokenRefreshLoop runs pass until ctx is done, waking on a send to wake or
+// once interval has elapsed, whichever comes first. interval is re-consulted
+// every pass, which is also what gives the caller its per-pass hook.
+//
+// Not refreshLoop, deliberately. That one times its interval from the start of
+// a pass so the tip cannot age past MaxBlockInterval, and accepts back-to-back
+// passes as the price. A token wallet keeps no tip, so it has nothing to
+// protect and no reason to pay that price: paging a long signature history
+// twice with no gap is exactly what a phone should not do. Timing from the end
+// of the previous pass instead guarantees a full interval of rest between
+// passes.
+//
+// The wake path is held to the same guarantee by minGap, for the same reason
+// and by the same means as refreshLoop's: the wake channel coalesces only while
+// this loop is idle, so a notification landing mid-pass is ready the moment that
+// pass ends, and an ATA taking a burst of transfers would otherwise page its
+// history back to back. The wake is not dropped, only deferred.
+func tokenRefreshLoop(ctx context.Context, wake <-chan struct{}, minGap time.Duration,
+	interval func() time.Duration, pass func(context.Context)) {
+
+	lastEnd := time.Now()
+	var woke bool
+	for {
+		wait := interval()
+		wakeCh := wake
+		if woke {
+			// Once a wake is in hand there is nothing left to wait for but the
+			// floor, and no reason to keep listening: another notification
+			// arriving in the meantime is asking for the same pass.
+			wait = min(wait, minGap)
+			wakeCh = nil
+		}
+		// From lastEnd rather than from now, so that holding a wake costs only
+		// what the floor is short by. A notification arriving long after the
+		// previous pass ended still runs immediately.
+		timer := time.NewTimer(time.Until(lastEnd.Add(wait)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-wakeCh:
+			timer.Stop()
+			woke = true
+			continue
+		case <-timer.C:
+		}
+		woke = false
+		pass(ctx)
+		lastEnd = time.Now()
+	}
 }
 
 // checkPendingTxs resolves this token's pending sends: it confirms landed

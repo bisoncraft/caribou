@@ -35,6 +35,22 @@ const (
 	wsDialTimeout = 15 * time.Second
 	wsWriteWait   = 10 * time.Second
 
+	// wsSubscribeTimeout is how long an accountSubscribe may go unanswered
+	// before the connection carrying it is retired. A subscribe is a single
+	// round trip on a link that is already up, so anything near this is not
+	// slow, it is lost — which is the shape RPC rate limiting usually takes:
+	// the frame is accepted and quietly never answered. Without this, that one
+	// subscribe holds live false for the life of the connection (see
+	// refreshLive), ping/pong keeps the link healthy forever, and the wallet
+	// polls at the unsubscribed cadence with the socket still open, which is
+	// the exact cost this client exists to avoid.
+	//
+	// The check runs on pingLoop's tick rather than a timer of its own, so no
+	// new wakeup is added and detection lands within wsPingInterval of the
+	// deadline. That looseness is fine: this is a fallback for a link that has
+	// already failed silently, not a latency budget.
+	wsSubscribeTimeout = 30 * time.Second
+
 	// wsPingInterval is the control-ping cadence and wsPongWait how long a read
 	// may block before the link is declared dead. This pair is the only traffic
 	// an idle subscription generates, so it sets the idle cost of the whole
@@ -83,10 +99,19 @@ type wsClient struct {
 	mtx     sync.Mutex
 	conn    *websocket.Conn
 	nextID  uint64
-	watched map[string]func() // account -> change callback
-	reqAcct map[uint64]string // in-flight request id -> account
-	subAcct map[uint64]string // server subscription id -> account
-	acctSub map[string]uint64 // account -> server subscription id
+	watched map[string]func()     // account -> change callback
+	reqAcct map[uint64]pendingSub // in-flight request id -> subscribe
+	subAcct map[uint64]string     // server subscription id -> account
+	acctSub map[string]uint64     // account -> server subscription id
+}
+
+// pendingSub is an accountSubscribe that has been written but not yet answered.
+// sent is what subscribeStale ages: the reply is the only thing that ever
+// removes the entry, so without a send time a reply that never comes leaves it
+// there for the life of the connection.
+type pendingSub struct {
+	account string
+	sent    time.Time
 }
 
 func newWSClient(url string, log util.Logger) *wsClient {
@@ -94,7 +119,7 @@ func newWSClient(url string, log util.Logger) *wsClient {
 		url:     url,
 		log:     log,
 		watched: make(map[string]func()),
-		reqAcct: make(map[uint64]string),
+		reqAcct: make(map[uint64]pendingSub),
 		subAcct: make(map[uint64]string),
 		acctSub: make(map[string]uint64),
 	}
@@ -224,7 +249,7 @@ func (c *wsClient) session(ctx context.Context) error {
 		// session came up.
 		c.mtx.Lock()
 		c.conn = nil
-		c.reqAcct = make(map[uint64]string)
+		c.reqAcct = make(map[uint64]pendingSub)
 		c.subAcct = make(map[uint64]string)
 		c.acctSub = make(map[string]uint64)
 		c.live.Store(false)
@@ -307,10 +332,11 @@ func (c *wsClient) handle(frame []byte) {
 
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
-	account, ours := c.reqAcct[msg.ID]
+	pending, ours := c.reqAcct[msg.ID]
 	if !ours {
 		return
 	}
+	account := pending.account
 	delete(c.reqAcct, msg.ID)
 
 	// subscribeFailed retires the connection so run redials and re-subscribes
@@ -379,6 +405,11 @@ func (c *wsClient) handle(frame []byte) {
 // pingLoop keeps the connection warm and, more to the point, detects a link
 // that has gone away without a close frame: the peer stops answering, the read
 // deadline expires, and the session ends so polling speeds back up.
+//
+// It also reaps subscribes the server accepted and never answered. That is a
+// live link by every measure ping/pong takes, so nothing else on the connection
+// would ever notice; the tick is simply the one timer already running, and
+// reusing it keeps the idle radio cost at one exchange a minute.
 func (c *wsClient) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
 	ticker := time.NewTicker(wsPingInterval)
 	defer ticker.Stop()
@@ -387,18 +418,10 @@ func (c *wsClient) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
 		case <-done:
 			return
 		case <-ticker.C:
-			c.mtx.Lock()
-			var err error
-			// Only ping while this is still the live connection, so a ping for
-			// a retired session cannot land on its replacement.
-			if c.conn == conn {
-				if err = conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err == nil {
-					err = conn.WriteMessage(websocket.PingMessage, nil)
-				}
-			}
-			c.mtx.Unlock()
-			if err != nil {
+			if c.pingTick(conn) {
 				// End the session now rather than waiting out wsPongWait.
+				// Closing is what run watches for: it redials and
+				// re-subscribes from scratch.
 				conn.Close()
 				return
 			}
@@ -406,12 +429,43 @@ func (c *wsClient) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
 	}
 }
 
+// pingTick is one pass of pingLoop: retire a connection whose subscribes have
+// gone unanswered, otherwise ping it. It reports whether conn should be closed.
+func (c *wsClient) pingTick(conn *websocket.Conn) bool {
+	c.mtx.Lock()
+	var err error
+	var stale bool
+	// Only ping while this is still the live connection, so a ping for a
+	// retired session cannot land on its replacement.
+	if c.conn == conn {
+		// No ping when retiring anyway; the connection is about to be closed
+		// and a write on it can only fail.
+		if stale = c.subscribeStale(time.Now()); !stale {
+			if err = conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err == nil {
+				err = conn.WriteMessage(websocket.PingMessage, nil)
+			}
+		}
+	}
+	c.mtx.Unlock()
+	if stale {
+		// Same recovery subscribeFailed uses for a subscribe the server
+		// rejected outright. An endpoint that swallows every subscribe costs
+		// redials on run's growing backoff and nothing else; the wallet polls
+		// at its unsubscribed cadence throughout either way, exactly as it
+		// would have done had this never been noticed at all.
+		c.log.Warnf("solana websocket: %s unanswered for %s, retiring the connection",
+			accountSubscribe, wsSubscribeTimeout)
+		return true
+	}
+	return err != nil
+}
+
 // sendSubscribe writes one accountSubscribe and records the request so the
 // reply can be matched back to the account. Caller must hold mtx and have
 // checked that conn is non-nil.
 func (c *wsClient) sendSubscribe(account string) error {
 	c.nextID++
-	c.reqAcct[c.nextID] = account
+	c.reqAcct[c.nextID] = pendingSub{account: account, sent: time.Now()}
 	return c.write(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      c.nextID,
@@ -441,8 +495,29 @@ func (c *wsClient) sendUnsubscribe(subID uint64) error {
 // subscribePending reports whether a subscribe for account is still awaiting
 // its reply. Caller must hold mtx.
 func (c *wsClient) subscribePending(account string) bool {
-	for _, acct := range c.reqAcct {
-		if acct == account {
+	for _, pending := range c.reqAcct {
+		if pending.account == account {
+			return true
+		}
+	}
+	return false
+}
+
+// subscribeStale reports whether any subscribe this client is still waiting on
+// has gone unanswered for wsSubscribeTimeout. Caller must hold mtx.
+//
+// Entries for accounts that have since been unwatched are skipped, for the same
+// reason subscribeFailed skips them: nobody is waiting on the reply, refreshLive
+// already counts the account out, and retiring the connection would only
+// interrupt the accounts that did subscribe. unwatch deliberately leaves those
+// entries in reqAcct so handle can still recognize a late reply and release the
+// subscription server side, so they would otherwise age here forever.
+func (c *wsClient) subscribeStale(now time.Time) bool {
+	for _, pending := range c.reqAcct {
+		if _, stillWatched := c.watched[pending.account]; !stillWatched {
+			continue
+		}
+		if now.Sub(pending.sent) >= wsSubscribeTimeout {
 			return true
 		}
 	}

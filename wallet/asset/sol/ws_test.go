@@ -878,3 +878,149 @@ func TestSubscriptionEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// TestSubscribeStale covers the aging rule on its own. The unwatched case is
+// the one worth pinning: unwatch deliberately leaves an in-flight subscribe in
+// reqAcct so a late reply can still be recognized and released, so those
+// entries never get a reply removing them on the wallet's behalf and would
+// otherwise age forever and retire a connection nobody needed retired.
+func TestSubscribeStale(t *testing.T) {
+	const account = "watched-account"
+	now := time.Now()
+	fresh := now.Add(-wsSubscribeTimeout / 2)
+	old := now.Add(-wsSubscribeTimeout - time.Second)
+
+	for _, tt := range []struct {
+		name    string
+		watched bool
+		sent    time.Time
+		pending bool
+		want    bool
+	}{{
+		name:    "nothing in flight",
+		watched: true,
+	}, {
+		name:    "in flight but young",
+		watched: true,
+		sent:    fresh,
+		pending: true,
+	}, {
+		name:    "in flight and overdue",
+		watched: true,
+		sent:    old,
+		pending: true,
+		want:    true,
+	}, {
+		name:    "overdue but unwatched",
+		sent:    old,
+		pending: true,
+	}, {
+		name:    "exactly at the deadline",
+		watched: true,
+		sent:    now.Add(-wsSubscribeTimeout),
+		pending: true,
+		want:    true,
+	}} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newWSClient("", util.Disabled)
+			if tt.watched {
+				c.watched[account] = func() {}
+			}
+			if tt.pending {
+				c.reqAcct[1] = pendingSub{account: account, sent: tt.sent}
+			}
+			if got := c.subscribeStale(now); got != tt.want {
+				t.Fatalf("subscribeStale = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWSClientRetiresOnUnansweredSubscribe covers the failure the rejection
+// path above cannot see: a server that accepts a subscribe and simply never
+// answers it, which is the usual shape of RPC rate limiting. Nothing on the
+// connection notices. Ping/pong keeps reporting a healthy link, no reply
+// arrives to run the subscribeFailed teardown, and refreshLive holds live false
+// for as long as the connection lasts — so the wallet stays on the 2s
+// unsubscribed poll, with the socket open, indefinitely. The ping tick has to
+// age the request out and retire the connection itself.
+func TestWSClientRetiresOnUnansweredSubscribe(t *testing.T) {
+	srv := newTestWSServer(t)
+	hold := srv.holdSubscribes()
+	c := newWSClient(srv.url, util.Disabled)
+
+	const account = "watched-account"
+	changed := make(chan struct{}, 8)
+	c.watch(account, func() { signalRefresh(changed) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.run(ctx)
+
+	// The server has the subscribe and is sitting on it, so the client is
+	// waiting on a reply that this test never sends.
+	if got := recvString(t, srv.reqd, "subscribe request"); got != account {
+		t.Fatalf("subscribe request for %q, want %q", got, account)
+	}
+	waitFor(t, "the subscribe to be recorded in flight", func() bool {
+		c.mtx.Lock()
+		defer c.mtx.Unlock()
+		return c.conn != nil && len(c.reqAcct) == 1
+	})
+
+	c.mtx.Lock()
+	conn := c.conn
+	c.mtx.Unlock()
+
+	// Slow is not lost. A subscribe still inside its window must ping as
+	// normal, or every connect would retire itself before the first reply.
+	if c.pingTick(conn) {
+		t.Fatal("retired a connection whose subscribe is still within wsSubscribeTimeout")
+	}
+	if c.live.Load() {
+		t.Fatal("live with a subscribe still in flight")
+	}
+
+	// Age it past the deadline. Reaching into reqAcct rather than waiting out
+	// wsSubscribeTimeout keeps the test to the aging rule and off the clock.
+	c.mtx.Lock()
+	for id, pending := range c.reqAcct {
+		pending.sent = pending.sent.Add(-wsSubscribeTimeout - time.Second)
+		c.reqAcct[id] = pending
+	}
+	c.mtx.Unlock()
+
+	if !c.pingTick(conn) {
+		t.Fatal("an unanswered subscribe past wsSubscribeTimeout did not retire the connection")
+	}
+	// What pingLoop does with that verdict.
+	conn.Close()
+
+	// Release the abandoned subscribe now, while the retired handler is the
+	// only reader: its reply lands on a closed connection and goes nowhere.
+	// Doing it after the redial would race the two handlers over the server's
+	// subscription-id map.
+	hold <- struct{}{}
+
+	// The redial is the point of retiring: a fresh connection, a fresh
+	// subscribe, and this time an answer.
+	if got := recvString(t, srv.reqd, "subscribe request after redial"); got != account {
+		t.Fatalf("re-subscribed to %q, want %q", got, account)
+	}
+	hold <- struct{}{}
+	if got := recvString(t, srv.subbed, "subscribe after redial"); got != account {
+		t.Fatalf("subscribed to %q after redial, want %q", got, account)
+	}
+	waitFor(t, "live after redial", func() bool { return c.live.Load() })
+
+	// Routable, not merely sent: the second session's id has to be mapped to
+	// the account or notifications land nowhere.
+	if !srv.notify(account) {
+		t.Fatal("server had no subscription to notify after redial")
+	}
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for change callback after redial")
+	}
+}

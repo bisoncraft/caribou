@@ -8,7 +8,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
@@ -402,5 +405,311 @@ func TestSharedMetaTableCursorsDoNotCollide(t *testing.T) {
 	// Three assets, three rows: no wallet overwrote another's.
 	if len(table.data) != 3 {
 		t.Errorf("meta table holds %d rows, want 3", len(table.data))
+	}
+}
+
+// watchedAccounts is the set of accounts registered on c, for asserting where a
+// watcher's registration currently sits.
+func watchedAccounts(c *wsClient) []string {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	accounts := make([]string, 0, len(c.watched))
+	for account := range c.watched {
+		accounts = append(accounts, account)
+	}
+	return accounts
+}
+
+func wantWatched(t *testing.T, c *wsClient, what string, want ...string) {
+	t.Helper()
+	got := watchedAccounts(c)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s watches %v, want %v", what, got, want)
+	}
+}
+
+// TestATAWatcherResync covers the registration following the parent from one
+// client to the next. The parent installs a fresh client on every connect, and
+// a token wallet outlives any one of them, so a registration left on a retired
+// client is a wallet waiting on notifications nothing will ever send.
+func TestATAWatcherResync(t *testing.T) {
+	const ata = "token-account"
+	var parent atomic.Pointer[wsClient]
+	watcher := &ataWatcher{
+		account:  ata,
+		onChange: func() {},
+		current:  parent.Load,
+	}
+
+	// No client yet, which is the ordinary state for a wallet whose parent has
+	// no subscription endpoint configured. Nothing to register on, and nothing
+	// may panic for the want of one.
+	if got := watcher.resync(); got != nil {
+		t.Fatalf("resync returned %p with no parent client, want nil", got)
+	}
+
+	first := newWSClient("", util.Disabled)
+	parent.Store(first)
+	if got := watcher.resync(); got != first {
+		t.Fatalf("resync returned %p, want the parent's client %p", got, first)
+	}
+	wantWatched(t, first, "the first client", ata)
+
+	// Idempotent: the loop calls this every pass, and re-registering each time
+	// would churn subscribes on an unchanged connection.
+	if got := watcher.resync(); got != first {
+		t.Fatalf("second resync returned %p, want %p", got, first)
+	}
+	wantWatched(t, first, "the first client after a no-op resync", ata)
+
+	// The parent reconnects. The registration has to move, and the old client
+	// must be released — it may still be draining, and a registration it keeps
+	// is a notification callback nobody is reading.
+	second := newWSClient("", util.Disabled)
+	parent.Store(second)
+	if got := watcher.resync(); got != second {
+		t.Fatalf("resync returned %p after the parent reconnected, want %p", got, second)
+	}
+	wantWatched(t, first, "the retired client")
+	wantWatched(t, second, "the new client", ata)
+
+	// The parent disconnects entirely, which is what Connect's leading
+	// Store(nil) looks like from here.
+	parent.Store(nil)
+	if got := watcher.resync(); got != nil {
+		t.Fatalf("resync returned %p after the parent dropped its client, want nil", got)
+	}
+	wantWatched(t, second, "the client the parent dropped")
+
+	// stop is the deferred cleanup on the token wallet's own disconnect.
+	third := newWSClient("", util.Disabled)
+	parent.Store(third)
+	watcher.resync()
+	wantWatched(t, third, "the client at stop time", ata)
+	watcher.stop()
+	wantWatched(t, third, "the client after stop")
+	// Idempotent too: a second stop must not unwatch on a client the watcher
+	// has already released.
+	watcher.stop()
+}
+
+// TestATAWatcherLivenessFollowsTheParent is the reason resync returns the
+// client rather than the loop reading the parent's pointer itself. Liveness has
+// to be read off the client actually carrying this wallet's registration. A
+// loop that resynced but then measured the parent's current client would see a
+// live connection this ATA is not subscribed on and hold the slow cadence,
+// which is the failure the resync exists to prevent, arrived at by a different
+// route.
+func TestATAWatcherLivenessFollowsTheParent(t *testing.T) {
+	const ata = "token-account"
+	var parent atomic.Pointer[wsClient]
+	watcher := &ataWatcher{
+		account:  ata,
+		onChange: func() {},
+		current:  parent.Load,
+	}
+
+	live := newWSClient("", util.Disabled)
+	parent.Store(live)
+	cur := watcher.resync()
+	// Set after registering, since watch recomputes live from the subscription
+	// state. What is under test is which client the interval is read off, not
+	// how a client earns live in the first place.
+	live.live.Store(true)
+	if got := refreshInterval(cur, false); got != subscribedPollInterval {
+		t.Fatalf("interval on a live client is %v, want %v", got, subscribedPollInterval)
+	}
+
+	// A fresh client from a reconnect is not live until its subscribes land, so
+	// the poll has to tighten back up. Reading the old client instead would
+	// hold the slow cadence on a connection this ATA is no longer on.
+	reconnected := newWSClient("", util.Disabled)
+	parent.Store(reconnected)
+	cur = watcher.resync()
+	if cur != reconnected {
+		t.Fatalf("resync returned %p, want the reconnected client %p", cur, reconnected)
+	}
+	if got := refreshInterval(cur, false); got != pollInterval {
+		t.Fatalf("interval after a reconnect is %v, want %v", got, pollInterval)
+	}
+
+	// And with no client at all.
+	parent.Store(nil)
+	if got := refreshInterval(watcher.resync(), false); got != pollInterval {
+		t.Fatalf("interval with no client is %v, want %v", got, pollInterval)
+	}
+}
+
+func runTokenRefreshLoop(t *testing.T, wake <-chan struct{}, minGap time.Duration,
+	interval func() time.Duration, pass func(context.Context)) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tokenRefreshLoop(ctx, wake, minGap, interval, pass)
+	}()
+	return func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("tokenRefreshLoop did not return on context cancellation")
+		}
+	}
+}
+
+// TestTokenRefreshLoopResyncsEveryPass pins the per-pass hook. The interval
+// callback is where the watcher is resynced, so a loop that consulted it once
+// and cached the result would leave the registration on whichever client the
+// parent happened to have at Connect.
+func TestTokenRefreshLoopResyncsEveryPass(t *testing.T) {
+	var intervals atomic.Int64
+	passes := make(chan struct{}, 8)
+	stop := runTokenRefreshLoop(t, nil, 0,
+		func() time.Duration {
+			intervals.Add(1)
+			return 10 * time.Millisecond
+		},
+		func(context.Context) { passes <- struct{}{} })
+	defer stop()
+
+	for i := range 3 {
+		select {
+		case <-passes:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for pass %d", i+1)
+		}
+	}
+	if got := intervals.Load(); got < 3 {
+		t.Fatalf("interval consulted %d times across 3 passes, want at least 3", got)
+	}
+}
+
+// TestTokenRefreshLoopWakes covers the notification path: a wake runs a pass
+// without waiting out the interval. The interval is an hour, so only a wake can
+// drive this at all.
+func TestTokenRefreshLoopWakes(t *testing.T) {
+	wake := make(chan struct{}, 1)
+	passes := make(chan struct{}, 4)
+	stop := runTokenRefreshLoop(t, wake, 0,
+		func() time.Duration { return time.Hour },
+		func(context.Context) { passes <- struct{}{} })
+	defer stop()
+
+	for i := range 2 {
+		signalRefresh(wake)
+		select {
+		case <-passes:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for pass %d", i+1)
+		}
+	}
+	select {
+	case <-passes:
+		t.Fatal("loop ran a pass with no wake and no elapsed interval")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestTokenRefreshLoopTimesFromPassEnd is the property that separates this loop
+// from refreshLoop. Each pass runs longer than the interval, so timing from the
+// start would put the deadline in the past on every cycle and page a signature
+// history back to back with no rest — which is what a token wallet must not do
+// on a phone, having no tip age to protect in exchange.
+func TestTokenRefreshLoopTimesFromPassEnd(t *testing.T) {
+	const (
+		interval = 150 * time.Millisecond
+		passTime = 250 * time.Millisecond
+		passes   = 3
+	)
+	gaps := make(chan time.Duration, passes)
+	var lastEnd time.Time
+	stop := runTokenRefreshLoop(t, nil, 0,
+		func() time.Duration { return interval },
+		func(context.Context) {
+			if !lastEnd.IsZero() {
+				gaps <- time.Since(lastEnd)
+			}
+			time.Sleep(passTime)
+			lastEnd = time.Now()
+		})
+	defer stop()
+
+	for i := range passes - 1 {
+		select {
+		case gap := <-gaps:
+			if gap < interval {
+				t.Fatalf("pass %d started %v after the previous one ended, want at "+
+					"least %v of rest", i+2, gap, interval)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for gap %d", i+1)
+		}
+	}
+}
+
+// TestTokenRefreshLoopWakeSpacing covers the floor. A notification landing while
+// a pass is running cannot be coalesced away — the loop has already drained the
+// channel — so without a floor an ATA taking a burst of transfers would page
+// its history back to back. The floor must cost nothing in the ordinary case: a
+// wake arriving with the loop idle still runs at once.
+func TestTokenRefreshLoopWakeSpacing(t *testing.T) {
+	const minGap = 300 * time.Millisecond
+	wake := make(chan struct{}, 1)
+	ends := make(chan time.Time, 4)
+	starts := make(chan time.Time, 4)
+	var passNum int
+	stop := runTokenRefreshLoop(t, wake, minGap,
+		// An hour, so only a wake can drive this.
+		func() time.Duration { return time.Hour },
+		func(context.Context) {
+			starts <- time.Now()
+			passNum++
+			if passNum == 1 {
+				signalRefresh(wake)
+				time.Sleep(20 * time.Millisecond)
+			}
+			ends <- time.Now()
+		})
+	defer stop()
+
+	recv := func(ch <-chan time.Time, what string) time.Time {
+		t.Helper()
+		select {
+		case v := <-ch:
+			return v
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+			return time.Time{}
+		}
+	}
+
+	signalRefresh(wake)
+	recv(starts, "the first pass")
+	firstEnd := recv(ends, "the first pass to finish")
+	second := recv(starts, "the pass the mid-pass wake asked for")
+	// From the end of the previous pass, which is this loop's anchor.
+	if gap := second.Sub(firstEnd); gap < minGap {
+		t.Fatalf("the next pass started %v after the previous one ended, want at "+
+			"least %v; a wake taken during a pass is running the next one back "+
+			"to back", gap, minGap)
+	}
+	recv(ends, "the second pass to finish")
+	select {
+	case <-starts:
+		t.Fatal("loop ran a pass with no wake and no elapsed interval")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// Idle for longer than the floor, so the next wake owes it nothing.
+	time.Sleep(minGap)
+	signaled := time.Now()
+	signalRefresh(wake)
+	if delay := recv(starts, "the idle wake").Sub(signaled); delay >= minGap {
+		t.Fatalf("wake took %v to run with the loop idle, want immediate; the "+
+			"floor is being charged from the wake rather than from the last pass", delay)
 	}
 }

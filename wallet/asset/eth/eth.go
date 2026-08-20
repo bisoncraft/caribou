@@ -2846,6 +2846,53 @@ func (eth *ETHWallet) monitorPeers(ctx context.Context) {
 	}
 }
 
+// tipPollDecision is what monitorBlocks does with one ticker tick.
+type tipPollDecision int
+
+const (
+	// tipPollNone leaves the tick to the header feed, which is delivering and
+	// not yet due its cross-check. The poll would only re-read a header
+	// applyTipChange has already seen.
+	tipPollNone tipPollDecision = iota
+	// tipPollBlocking reads the tip on the loop goroutine. There is no feed to
+	// hold up, so there is nothing to gain from a goroutine.
+	tipPollBlocking
+	// tipPollBackground reads the tip off the loop, so a slow RPC call cannot
+	// delay a header the feed is about to deliver.
+	tipPollBackground
+)
+
+// tipPollOnTick decides whether a ticker tick should read the tip, and on which
+// goroutine. feed reports whether a shared header channel exists at all,
+// lastWSHead is when a header last arrived on it, and lastPoll when the tip was
+// last read across every provider.
+//
+// Split out of monitorBlocks because it is the subtlest state in that loop and
+// the only part of it that is decidable from four values. The three cases:
+//
+//   - No feed, so the tick is the only source of tip changes. HTTP-only and
+//     simnet configurations live here permanently.
+//   - A feed that has gone quiet for longer than any of these chains' block
+//     times, so every subscription on it may be dead, or a feed that is
+//     delivering and merely due its cross-check for a provider that has dropped
+//     off it. A provider that could not be websocket-subscribed pushes nothing
+//     onto the shared channel, so a feed kept live by the subscribed providers
+//     alone would never look at its cache.
+//   - Otherwise the feed covers tip detection on its own.
+//
+// lastWSHead zero on the first tick is deliberate rather than incidental: it
+// makes the staleness test true until a real header has arrived, so a
+// configuration that never delivers one keeps the full 1s cadence.
+func tipPollOnTick(feed bool, lastWSHead, lastPoll, now time.Time) tipPollDecision {
+	if !feed {
+		return tipPollBlocking
+	}
+	if now.Sub(lastWSHead) >= wsHeadStaleness || now.Sub(lastPoll) >= headerCheckInterval {
+		return tipPollBackground
+	}
+	return tipPollNone
+}
+
 // monitorBlocks pings for new blocks and runs the tipChange callback function
 // when the block changes. New blocks are also scanned for potential contract
 // redeems. The providers' WebSocket subscriptions are the primary driver,
@@ -2916,19 +2963,14 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 				eth.applyTipChange(hdr)
 			}
 		case <-ticker.C:
-			switch {
-			case newHeadCh == nil:
-				// HTTP-only, so the tick is the only source of tip changes.
+			switch tipPollOnTick(newHeadCh != nil, lastWSHead, lastPoll, time.Now()) {
+			case tipPollBlocking:
 				checkNewBlocks()
-			case time.Since(lastWSHead) >= wsHeadStaleness,
-				time.Since(lastPoll) >= headerCheckInterval:
-				// Either the feed has been quiet for longer than any of these
-				// chains' block times, so every subscription on it may be dead,
-				// or it is delivering and merely due its cross-check for a
-				// provider that has dropped off it. Poll in a goroutine so a slow
-				// or blocked RPC call cannot hold up delivery of the header that
-				// would prove the feed alive. applyTipChange is safe to call
-				// concurrently (same-hash calls are no-ops).
+			case tipPollBackground:
+				// Poll in a goroutine so a slow or blocked RPC call cannot hold
+				// up delivery of the header that would prove the feed alive.
+				// applyTipChange is safe to call concurrently (same-hash calls
+				// are no-ops).
 				//
 				// Stamped inside the swap, so a tick that finds an earlier poll
 				// still running has not consumed the cross-check: the next tick
@@ -2939,8 +2981,6 @@ func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
 					go checkNewBlocks()
 				}
 			}
-			// Otherwise the feed is delivering and covers tip detection on
-			// its own until the next cross-check falls due.
 		case <-ctx.Done():
 			return
 		}

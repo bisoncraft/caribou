@@ -33,12 +33,10 @@ var (
 		Testnet: "19332",
 		Simnet:  "19443",
 	}
-	spvWalletDefinition = &asset.WalletDefinition{
-		Type:        walletTypeSPV,
-		Tab:         "Native",
-		Description: "Use the built-in SPV wallet",
-		Seeded:      true,
-	}
+	// spvWalletDefinition lives in wallets_desktop.go: it is referenced only by
+	// that file's availableWallets, so defining it here would leave it unused
+	// under the mobile tag.
+
 	// WalletInfo defines some general information about a Litecoin wallet.
 	// AvailableWallets is build-tagged: SPV-first on desktop, electrum-only on
 	// mobile. See wallets_desktop.go and wallets_mobile.go.

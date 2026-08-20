@@ -3,10 +3,12 @@
 package eth
 
 // maxMobileProviders caps the built-in provider count per EVM chain on mobile.
-// The default lists run four or five deep and every entry is dialed, upgraded to
-// a websocket, and given a header subscription plus its own headerCheckInterval
-// poll. Across the four EVM chains a phone links that is sixteen sockets, more
-// than every other asset combined.
+// The default lists run three or four deep and every entry is dialed, upgraded
+// to a websocket, and given a header subscription plus its own
+// headerCheckInterval poll. Across the three EVM chains a phone registers --
+// eth, bnb and polygon, base and near being commented out of importall — that
+// is eleven sockets on mainnet, more than every other asset combined. The cap
+// takes it to six.
 //
 // Deliberately two and not one. The point of the multi-provider client is that a
 // dead or rate-limited endpoint costs nothing, since another is already
