@@ -198,9 +198,7 @@ func TestManualSPLTokenRoundTrip(t *testing.T) {
 				log:     util.Disabled,
 				net:     util.Simnet,
 			}
-			var parentRPC rpcI = rpc
-			parent.rpc.Store(&parentRPC)
-			parent.ctx.Store(&ctx)
+			parent.conn.Store(&conn{rpc: rpc, ctx: ctx})
 			tw := &TokenWallet{
 				parent:  parent,
 				assetID: 0,

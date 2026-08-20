@@ -199,9 +199,7 @@ func newTestWallet(addr string, rpc rpcI, db txdb.NetworkTxDB, table txdb.StoreT
 		txDB:    db,
 		log:     util.Disabled,
 	}
-	w.rpc.Store(&rpc)
-	var mt txdb.StoreTable = table
-	w.metaTable.Store(&mt)
+	w.conn.Store(&conn{rpc: rpc, table: table})
 	return w
 }
 
@@ -1183,11 +1181,8 @@ func TestReconnectRace(t *testing.T) {
 			default:
 			}
 			var rpc rpcI = &mockRPC{}
-			w.rpc.Store(&rpc)
 			ctx, cancel := context.WithCancel(context.Background())
-			w.ctx.Store(&ctx)
-			var mt txdb.StoreTable = newMockTable()
-			w.metaTable.Store(&mt)
+			w.conn.Store(&conn{rpc: rpc, ctx: ctx, table: newMockTable()})
 			cancel()
 		}
 	}()
