@@ -671,3 +671,24 @@ func TestFeeDrops(t *testing.T) {
 		t.Fatalf("empty outcome should burn nothing")
 	}
 }
+
+// TestTxStatusBareStringPending verifies that nearcore's bare-string
+// mid-execution status (e.g. "Started") unmarshals as pending rather than
+// as a decode error, the same as the absent-outcome shape.
+func TestTxStatusBareStringPending(t *testing.T) {
+	var s txStatus
+	if err := json.Unmarshal([]byte(`"Started"`), &s); err != nil {
+		t.Fatalf("unmarshal bare-string status: %v", err)
+	}
+	if !s.isPending() {
+		t.Fatalf("bare-string status should be pending")
+	}
+
+	s = txStatus{}
+	if err := json.Unmarshal([]byte(`{"SuccessValue":""}`), &s); err != nil {
+		t.Fatalf("unmarshal success status: %v", err)
+	}
+	if !s.isSuccess() {
+		t.Fatalf("object status should still unmarshal correctly")
+	}
+}

@@ -457,6 +457,24 @@ type txStatus struct {
 	Failure      json.RawMessage `json:"Failure,omitempty"`
 }
 
+// UnmarshalJSON handles the bare-string execution status (e.g. "Started",
+// "NotStarted") nearcore serializes while a transaction's outcome is
+// mid-execution, in addition to the usual {"SuccessValue": ...} /
+// {"Failure": ...} object shape. Neither field is set for a bare string, so
+// it is treated the same as the absent-outcome case: pending.
+func (s *txStatus) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		return nil
+	}
+	type alias txStatus
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*s = txStatus(a)
+	return nil
+}
+
 func (s *txStatus) isSuccess() bool {
 	return s.SuccessValue != nil && s.Failure == nil
 }

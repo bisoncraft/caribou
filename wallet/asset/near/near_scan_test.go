@@ -435,6 +435,226 @@ func TestScanIncomingChunkFailureNotCheckpointed(t *testing.T) {
 	}
 }
 
+// TestScanIncomingTrailingUnknownBlockNotConfirmed verifies an UNKNOWN_BLOCK
+// gap at the end of a scan window is not folded into the watermark until a
+// later height proves the node is past it: a lagging or load-balanced
+// endpoint answering UNKNOWN_BLOCK for a height it simply has not received
+// yet must not have that height silently marked scanned (review finding 1).
+func TestScanIncomingTrailingUnknownBlockNotConfirmed(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blockWithChunksAndSkips(f, map[uint64][]chunkTransaction{
+		1: {},
+		2: {},
+		// height 3 is the trailing (last requested) height and is
+		// unresolved: could be a genuine gap or a lagging endpoint.
+	}, map[uint64]bool{3: true})
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 3)
+	if w.lastScannedHeight != 2 {
+		t.Fatalf("lastScannedHeight = %d, want 2 (trailing gap must not be confirmed yet)", w.lastScannedHeight)
+	}
+
+	// The node catches up and now has height 3; the gap resolves as an
+	// ordinary successfully-scanned height on the next poll.
+	blockWithChunksAndSkips(f, map[uint64][]chunkTransaction{
+		1: {}, 2: {}, 3: {},
+	}, nil)
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 3)
+	if w.lastScannedHeight != 3 {
+		t.Fatalf("lastScannedHeight after catch-up = %d, want 3", w.lastScannedHeight)
+	}
+}
+
+// TestScanIncomingAllGapWindowStallBound verifies a scan window that is
+// entirely unresolved UNKNOWN_BLOCK gaps — none of them ever confirmed by a
+// later successful height in the same window — still counts toward the
+// stall backstop and eventually force-advances, rather than repeating the
+// same unadvancing window forever. Before this fix, the gap branch's
+// `continue` bypassed the stalled/blockOK bookkeeping entirely, so
+// stallCount never incremented and the backstop never engaged for an
+// all-gap window (goaudit finding F1).
+func TestScanIncomingAllGapWindowStallBound(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	skipped := make(map[uint64]bool, maxScanBlocks+5)
+	for h := uint64(1); h <= maxScanBlocks+5; h++ {
+		skipped[h] = true
+	}
+	blockWithChunksAndSkips(f, nil, skipped)
+
+	const tip = maxScanBlocks + 5
+	for i := 0; i < maxStallRetries-1; i++ {
+		w.scanIncomingTxs(context.Background(), mustClient(t, w), tip)
+		if w.lastScannedHeight != 0 {
+			t.Fatalf("call %d: lastScannedHeight = %d, want 0 (still an unresolved all-gap window)", i, w.lastScannedHeight)
+		}
+	}
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), tip)
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight after %d all-gap polls = %d, want 1 (forced past the first gap)", maxStallRetries, w.lastScannedHeight)
+	}
+}
+
+// TestScanIncomingStallBoundForcesAdvance verifies a height that keeps
+// failing the same way (not classified as a definitive, ruled-out error)
+// does not wedge the watermark forever: after maxStallRetries consecutive
+// stalled polls it is forced past (review finding 2).
+func TestScanIncomingStallBoundForcesAdvance(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blocks := map[uint64][]chunkTransaction{
+		1: {},
+		2: {},
+	}
+	blockWithChunks(f, blocks)
+
+	f.handle("chunk", func(params json.RawMessage) (any, *rpcError) {
+		var req struct {
+			ChunkID string `json:"chunk_id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			t.Fatalf("bad chunk_id: %v", err)
+		}
+		if req.ChunkID == chunkHashFor(2) {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "boom"}
+		}
+		height, ok := heightForChunkHash(blocks, req.ChunkID)
+		if !ok {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "unknown chunk"}
+		}
+		return map[string]any{"transactions": blocks[height]}, nil
+	})
+
+	for i := 0; i < maxStallRetries-1; i++ {
+		w.scanIncomingTxs(context.Background(), mustClient(t, w), 2)
+		if w.lastScannedHeight != 1 {
+			t.Fatalf("call %d: lastScannedHeight = %d, want 1 (still stalled)", i, w.lastScannedHeight)
+		}
+	}
+
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 2)
+	if w.lastScannedHeight != 2 {
+		t.Fatalf("lastScannedHeight after %d stalled polls = %d, want 2 (forced past)", maxStallRetries, w.lastScannedHeight)
+	}
+}
+
+// TestScanIncomingUnknownChunkNotRuledOutImmediately verifies a chunk fetch
+// that comes back UNKNOWN_CHUNK is retried, not immediately treated as
+// definitive: rpcClient fails over per-call, so the block that named this
+// chunk may have come from a different, better-synced endpoint than the one
+// that just answered UNKNOWN_CHUNK for it. Ruling it out on the first
+// answer would reintroduce the same silent-loss bug class the UNKNOWN_BLOCK
+// fix closed. It must still resolve (and credit the receive) once a later
+// poll gets a real answer (goaudit finding F3).
+func TestScanIncomingUnknownChunkNotRuledOutImmediately(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blocks := map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "would-be-lost",
+			SignerID:   "iris.near",
+			ReceiverID: w.accountID,
+			Actions:    []txAction{transferAction2(DropsToYocto(2).String())},
+		}},
+		2: {},
+	}
+	blockWithChunks(f, blocks)
+
+	var chunkFail bool
+	f.handle("chunk", func(params json.RawMessage) (any, *rpcError) {
+		var req struct {
+			ChunkID string `json:"chunk_id"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			t.Fatalf("bad chunk_id: %v", err)
+		}
+		if chunkFail && req.ChunkID == chunkHashFor(1) {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Cause: &rpcErrorCause{Name: "UNKNOWN_CHUNK"}}
+		}
+		height, ok := heightForChunkHash(blocks, req.ChunkID)
+		if !ok {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Message: "unknown chunk"}
+		}
+		return map[string]any{"transactions": blocks[height]}, nil
+	})
+
+	chunkFail = true
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 2)
+	if w.lastScannedHeight != 0 {
+		t.Fatalf("lastScannedHeight = %d, want 0 (UNKNOWN_CHUNK must not be ruled out on the first answer)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("would-be-lost"); err != nil || tx != nil {
+		t.Fatalf("receive recorded despite the chunk fetch failing: %v, %v", tx, err)
+	}
+
+	chunkFail = false
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 2)
+	if w.lastScannedHeight != 2 {
+		t.Fatalf("lastScannedHeight after retry = %d, want 2", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("would-be-lost"); err != nil || tx == nil {
+		t.Fatalf("receive not recorded once the chunk resolved: %v, %v", tx, err)
+	}
+}
+
+// TestScanIncomingUnknownTransactionNotRuledOutImmediately verifies a token
+// transfer whose status query comes back UNKNOWN_TRANSACTION is retried,
+// not immediately treated as definitive: unlike checkPendingTxs (which has
+// a broadcast reference height to judge a tx truly dead against), a
+// transaction just read out of a scanned chunk answering UNKNOWN_TRANSACTION
+// more likely reflects that endpoint's own shard-tracking lag. It must
+// still resolve once a later poll gets a real answer (goaudit finding F3).
+func TestScanIncomingUnknownTransactionNotRuledOutImmediately(t *testing.T) {
+	f := newFakeRPCServer(t)
+	w := newScanTestWallet(t, f)
+	w.lastScannedHeight = 0
+
+	blockWithChunks(f, map[uint64][]chunkTransaction{
+		1: {{
+			Hash:       "ftok-unknown",
+			SignerID:   "hank.near",
+			ReceiverID: "usdc.token.near",
+			Actions:    []txAction{ftTransferAction(t, "ft_transfer", w.accountID, "1000000")},
+		}},
+	})
+
+	var txFail bool
+	f.handle("tx", func(params json.RawMessage) (any, *rpcError) {
+		if txFail {
+			return nil, &rpcError{Name: "HANDLER_ERROR", Cause: &rpcErrorCause{Name: "UNKNOWN_TRANSACTION"}}
+		}
+		return map[string]any{"status": map[string]any{"SuccessValue": ""}}, nil
+	})
+
+	txFail = true
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+	if w.lastScannedHeight != 0 {
+		t.Fatalf("lastScannedHeight = %d, want 0 (UNKNOWN_TRANSACTION must not be ruled out on the first answer)", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("ftok-unknown"); err != nil || tx != nil {
+		t.Fatalf("receive recorded despite the status query failing: %v, %v", tx, err)
+	}
+
+	txFail = false
+	w.scanIncomingTxs(context.Background(), mustClient(t, w), 1)
+	if w.lastScannedHeight != 1 {
+		t.Fatalf("lastScannedHeight after retry = %d, want 1", w.lastScannedHeight)
+	}
+	if tx, err := w.txDB.GetTx("ftok-unknown"); err != nil || tx == nil {
+		t.Fatalf("receive not recorded once the status query resolved: %v, %v", tx, err)
+	}
+}
+
 // TestScanIncomingTokenReceivePending verifies a token transfer whose
 // receipt has not yet reached a final outcome is retried on a later scan
 // rather than being treated as failed (F3).
@@ -455,7 +675,9 @@ func TestScanIncomingTokenReceivePending(t *testing.T) {
 	var final bool
 	f.handle("tx", func(params json.RawMessage) (any, *rpcError) {
 		if !final {
-			return map[string]any{"status": map[string]any{}}, nil // neither SuccessValue nor Failure
+			// The real wait_until:NONE response for a not-yet-finalized
+			// outcome carries no "status" key at all.
+			return map[string]any{"final_execution_status": "NONE"}, nil
 		}
 		return map[string]any{"status": map[string]any{"SuccessValue": ""}}, nil
 	})

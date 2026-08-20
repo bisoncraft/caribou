@@ -114,17 +114,6 @@ func (w *NearWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, erro
 			Network:           w.Info().Network,
 		},
 	}
-
-	// Registered so the parent's receive scan (the only poller either
-	// wallet has) can notify this token wallet's own emitter when it
-	// detects an incoming transfer, the same emitter Send already uses.
-	w.tokenWalletsMtx.Lock()
-	if w.tokenWallets == nil {
-		w.tokenWallets = make(map[uint32]*TokenWallet)
-	}
-	w.tokenWallets[cfg.AssetID] = tw
-	w.tokenWalletsMtx.Unlock()
-
 	return tw, nil
 }
 
@@ -149,7 +138,37 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if _, err := w.parent.client(); err != nil {
 		return nil, fmt.Errorf("parent wallet not connected: %w", err)
 	}
+
+	// Registered so the parent's receive scan (the only poller either
+	// wallet has) can notify this token wallet's own emitter when it
+	// detects an incoming transfer, the same emitter Send already uses.
+	// Done here rather than in OpenTokenWallet so a reconnect on the same
+	// TokenWallet (Core reconnects the existing instance, it does not
+	// call OpenTokenWallet again) re-registers it too — registration and
+	// the deregistration below are then symmetric with Connect/ctx
+	// lifetime instead of Open/ctx lifetime.
+	w.parent.tokenWalletsMtx.Lock()
+	if w.parent.tokenWallets == nil {
+		w.parent.tokenWallets = make(map[uint32]*TokenWallet)
+	}
+	w.parent.tokenWallets[w.assetID] = w
+	w.parent.tokenWalletsMtx.Unlock()
+
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		// Drop this wallet's entry from the parent's receive-scan
+		// registry so a closed token wallet is not kept alive
+		// indefinitely and does not keep receiving TransactionNotes
+		// after it is gone.
+		w.parent.tokenWalletsMtx.Lock()
+		if w.parent.tokenWallets[w.assetID] == w {
+			delete(w.parent.tokenWallets, w.assetID)
+		}
+		w.parent.tokenWalletsMtx.Unlock()
+	}()
 	return &wg, nil
 }
 

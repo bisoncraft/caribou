@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math/big"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
 )
 
 func TestFunctionCallActionEncoding(t *testing.T) {
@@ -118,6 +120,77 @@ func makeTokenTestWallet(t *testing.T, m *mockNearRPC) *TokenWallet {
 		assetID:    usdcTokenID,
 		token:      TokenUSDC,
 		contractID: TokenUSDC.NetContracts[util.Mainnet],
+	}
+}
+
+// TestTokenWalletRegistersOnConnectAndUnregistersOnDisconnect verifies a
+// token wallet's entry in the parent's tokenWallets registry (used by the
+// receive scan to route TransactionNotes to the right emitter) is added on
+// Connect and dropped once that Connect context ends — and, critically,
+// that a reconnect on the same TokenWallet instance (what Core actually
+// does; it does not call OpenTokenWallet again) re-registers it. Before
+// this fix, registration only happened in OpenTokenWallet while
+// deregistration happened on every Connect's ctx.Done, so any
+// disconnect/reconnect cycle left the token wallet permanently
+// deregistered and its receive notifications silently stopped (goaudit
+// finding F2).
+func TestTokenWalletRegistersOnConnectAndUnregistersOnDisconnect(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	w := &NearWallet{
+		net:       util.Mainnet,
+		log:       util.Disabled,
+		pubKey:    pub,
+		privKey:   priv,
+		accountID: hex.EncodeToString(pub),
+	}
+	w.rpc.Store(&rpcClient{})
+
+	tw, err := w.OpenTokenWallet(&asset.TokenConfig{AssetID: usdcTokenID})
+	if err != nil {
+		t.Fatalf("OpenTokenWallet: %v", err)
+	}
+
+	isRegistered := func() bool {
+		w.tokenWalletsMtx.RLock()
+		defer w.tokenWalletsMtx.RUnlock()
+		_, ok := w.tokenWallets[usdcTokenID]
+		return ok
+	}
+
+	if isRegistered() {
+		t.Fatalf("token wallet registered before Connect")
+	}
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	wg1, err := tw.Connect(ctx1)
+	if err != nil {
+		t.Fatalf("first Connect: %v", err)
+	}
+	if !isRegistered() {
+		t.Fatalf("token wallet not registered after Connect")
+	}
+	cancel1()
+	wg1.Wait()
+	if isRegistered() {
+		t.Fatalf("token wallet still registered after its Connect context ended")
+	}
+
+	// Reconnect the same instance, the way Core actually does it.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	wg2, err := tw.Connect(ctx2)
+	if err != nil {
+		t.Fatalf("second Connect: %v", err)
+	}
+	if !isRegistered() {
+		t.Fatalf("token wallet not re-registered after reconnect")
+	}
+	cancel2()
+	wg2.Wait()
+	if isRegistered() {
+		t.Fatalf("token wallet still registered after the second Connect context ended")
 	}
 }
 
