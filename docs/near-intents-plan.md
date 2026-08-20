@@ -41,9 +41,12 @@ core-level feature rather than a NEAR-wallet feature.
   N/2 to the configured recipient plus N/2 (on top of the surcharge) to
   the protocol account, so the user's marginal cost of the application fee
   is exactly N. The rewritten array is echoed on every quote, giving the
-  UI an exact, displayable fee breakdown. Fees accrue in the traded token
-  as NEP-245 balances credited to the recipient identity inside
-  `intents.near`.
+  UI an exact, displayable fee breakdown. Fees accrue in the origin
+  asset's in-verifier token as NEP-245 balances credited to the recipient
+  identity inside `intents.near` — the cost surfaces as an amountOut
+  haircut, but the credit is origin-side (verified on a live mainnet
+  swap: ETH origin credited `nep141:eth.omft.near`, and the N/2 net —
+  10 bps of amountIn for the configured 20 — matched exactly).
 - **Fee account: 0x-style secp256k1 account.** Bisoncraft's
   fee-collection account inside the verifier, called the treasury in the
   tool names. The verifier derives account

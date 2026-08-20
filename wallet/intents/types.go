@@ -60,7 +60,9 @@ const DefaultAppFeeBps = 20
 // and N/2 plus the keyless surcharge to the protocol's account, with the
 // rewritten array echoed in the response. Recipient is an account identity
 // inside the intents.near verifier (NEAR named/implicit or 0x-style),
-// credited in the traded token.
+// credited in the origin asset's in-verifier token — the user's cost
+// surfaces as an amountOut haircut, but the accrual is origin-side
+// (observed live: an ETH-origin swap credits nep141:eth.omft.near).
 type AppFee struct {
 	Recipient string `json:"recipient"`
 	Fee       int    `json:"fee"`
