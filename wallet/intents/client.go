@@ -102,6 +102,11 @@ func NewClient(cfg *Config, log util.Logger) (*Client, error) {
 	}, nil
 }
 
+// BaseURL is the service endpoint the client targets.
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
 // do performs one API request. A non-2xx response decodes into the
 // service's error envelope.
 func (c *Client) do(ctx context.Context, method, path string, body, thing any) error {
@@ -121,6 +126,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, thing any) e
 		req.Header.Set("Content-Type", "application/json")
 	}
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error requesting %s: %w", path, err)
@@ -133,6 +139,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, thing any) e
 	if err != nil {
 		return fmt.Errorf("error reading response: %w", err)
 	}
+	// The status poller re-hits the same GET endpoints every poll cycle
+	// (per-swap status, catalog refreshes), so GET round-trips are metered
+	// per path — the status path carries the deposit address in its query,
+	// making the meter per swap. Mutating calls always log.
+	log := c.log
+	if method == http.MethodGet {
+		log = log.Meter("api:"+path, 2*time.Minute)
+	}
+	log.Debugf("%s %s: HTTP %d, %d bytes in %s", method, path, resp.StatusCode, len(respBody), time.Since(start))
 	if len(respBody) > responseSizeLimit {
 		return fmt.Errorf("%s response exceeds the %d-byte limit", path, responseSizeLimit)
 	}
@@ -170,7 +185,9 @@ func (c *Client) Catalog(ctx context.Context) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newCatalog(tokens), nil
+	cat := newCatalog(tokens)
+	c.log.Debugf("Fetched asset catalog: %d tokens, %d wallet-supported chains", len(tokens), len(cat.Chains()))
+	return cat, nil
 }
 
 // Quote requests a quote. The client's application fees are attached when
@@ -186,6 +203,8 @@ func (c *Client) Quote(ctx context.Context, req *QuoteRequest) (*QuoteResponse, 
 		reqCopy.AppFees = c.appFees
 		req = &reqCopy
 	}
+	c.log.Debugf("Requesting %s quote: %s %s → %s, slippage %d bps, dry = %t",
+		req.SwapType, req.Amount, req.OriginAsset, req.DestinationAsset, req.SlippageTolerance, req.Dry)
 
 	sentRaw, err := json.Marshal(req)
 	if err != nil {
@@ -217,6 +236,8 @@ func (c *Client) Quote(ctx context.Context, req *QuoteRequest) (*QuoteResponse, 
 	if err := crossCheckEcho(sentRaw, resp.rawRequest); err != nil {
 		return nil, fmt.Errorf("rejecting quote: %w", err)
 	}
+	c.log.Debugf("Quote verified: amountIn = %s, amountOut = %s, minAmountOut = %s, time estimate %d s",
+		resp.Quote.AmountIn, resp.Quote.AmountOut, resp.Quote.MinAmountOut, resp.Quote.TimeEstimate)
 
 	return resp, nil
 }

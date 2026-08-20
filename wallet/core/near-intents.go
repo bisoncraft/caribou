@@ -206,6 +206,14 @@ func (c *Core) startIntentsEngine(ctx context.Context) {
 			trigger: make(chan struct{}, 1),
 		}
 		c.intentsEng.Store(eng)
+		proxied := ""
+		if c.cfg.TorProxy != "" {
+			proxied = " (proxied)"
+		}
+		logger.Infof("Cross-chain swap engine started: 1Click service at %s%s", client.BaseURL(), proxied)
+		if fees := intentsAppFees(); len(fees) > 0 {
+			logger.Debugf("Quotes carry a %d bps application fee to %s", fees[0].Fee, fees[0].Recipient)
+		}
 		eng.run(ctx)
 	}()
 }
@@ -228,14 +236,20 @@ func (e *intentsEngine) run(ctx context.Context) {
 	// Park only on a successful load that found nothing active. A load
 	// error leaves the ticker running so the next tick retries — parking on
 	// a transient failure would strand genuinely active swaps.
-	if active, loaded := e.pollActive(ctx); loaded && active == 0 {
-		ticker.Stop()
+	if active, loaded := e.pollActive(ctx); loaded {
+		if active == 0 {
+			ticker.Stop()
+			e.log.Debugf("No active swaps; poller parked")
+		} else {
+			e.log.Infof("Resumed polling for %d active swap(s)", active)
+		}
 	}
 	for {
 		select {
 		case <-ticker.C:
 			if active, loaded := e.pollActive(ctx); loaded && active == 0 {
 				ticker.Stop()
+				e.log.Debugf("No active swaps remain; poller parked")
 			}
 		case <-e.trigger:
 			ticker.Reset(intentsPollInterval)
@@ -271,7 +285,8 @@ func (e *intentsEngine) pollActive(ctx context.Context) (active int, loaded bool
 		}
 		active++
 		if err := e.refreshSwap(ctx, swap); err != nil {
-			e.log.Errorf("Error refreshing swap %s: %v", swap.DepositAddress, err)
+			e.log.Meter("refresh-err:"+swap.DepositAddress, 2*time.Minute).
+				Errorf("Error refreshing swap %s: %v", swap.DepositAddress, err)
 		}
 	}
 	return active, true
@@ -285,6 +300,8 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 		if errors.Is(err, intents.ErrSwapNotFound) {
 			// Not necessarily fatal: the service can lag a fresh quote. Only
 			// a swap past its deadline is timed out.
+			e.log.Meter("swap-unknown:"+swap.DepositAddress, 2*time.Minute).
+				Debugf("Service does not recognize swap %s yet", swap.DepositAddress)
 			e.applyTimeout(swap.DepositAddress)
 			return nil
 		}
@@ -348,6 +365,8 @@ func (e *intentsEngine) recordIncomingTxs(ctx context.Context, swap *IntentsSwap
 	if !ok {
 		return // the wallet observes incoming transfers on its own
 	}
+	e.log.Debugf("Recording %d incoming %s tx(s) from swap %s (amount hint %d atoms)",
+		len(txids), unbip(assetID), swap.DepositAddress, amtHint)
 	// The payout is not always queryable the instant the service reports
 	// it: the mock reports success as it hands the send to the node, and
 	// a mainnet RPC provider can lag the service's view. Since a terminal
@@ -379,6 +398,8 @@ func (e *intentsEngine) recordIncomingTxWithRetry(rec asset.IncomingTxRecorder, 
 	for i := 0; ; i++ {
 		err := rec.RecordIncomingTx(e.ctx, txid, amtHint)
 		if err == nil {
+			e.log.Debugf("Recorded incoming %s tx %s from swap %s (attempt %d)",
+				unbip(assetID), txid, depositAddr, i+1)
 			return
 		}
 		if !errors.Is(err, asset.CoinNotFoundError) || i >= incomingTxRetries {
@@ -484,6 +505,7 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 		return nil, nil
 	}
 
+	prevState := swap.State
 	swap.State = newState
 	if realized {
 		swap.AmountOut = details.AmountOut
@@ -500,6 +522,22 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	if err := e.db.StoreIntentsSwap(swap); err != nil {
 		e.log.Errorf("Error storing swap %s: %v", depositAddress, err)
 		return nil, nil
+	}
+	if newState != prevState {
+		e.log.Infof("Swap %s (%s → %s): %s → %s", depositAddress,
+			intentsAssetLabel(swap.OriginAssetID, swap.OriginAsset),
+			intentsAssetLabel(swap.DestAssetID, swap.DestAsset),
+			prevState, newState)
+	} else {
+		e.log.Debugf("Swap %s details updated in state %s (%d NEAR txs, %d destination txs)",
+			depositAddress, newState, len(swap.NearTxHashes), len(swap.DestinationTxs))
+	}
+	if realized {
+		e.log.Infof("Swap %s realized output: %d atoms (service-reported %s)",
+			depositAddress, realizedAtoms, details.AmountOut)
+	}
+	if newState == intents.StatusRefunded && swap.RefundReason != "" {
+		e.log.Infof("Swap %s refund reason: %s", depositAddress, swap.RefundReason)
 	}
 
 	subject, severity := intentsNoteContent(newState)
@@ -539,6 +577,8 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 	case IntentsStateQuoted:
 		swap.State = IntentsStateExpired
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
+			e.log.Infof("Swap %s expired: quote deadline %s passed with no deposit sent",
+				depositAddress, swap.Deadline.Format(time.RFC3339))
 			note = newIntentsSwapNote(swap, "Swap expired",
 				"The quote expired with no deposit recorded.", db.WarningLevel)
 		} else {
@@ -548,6 +588,8 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 		swap.State = intents.StatusFailed
 		swap.RefundReason = "the service did not observe a deposit before the quote deadline"
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
+			e.log.Warnf("Swap %s marked FAILED: deposit %s not observed by the service before deadline %s",
+				depositAddress, swap.DepositTxID, swap.Deadline.Format(time.RFC3339))
 			note = newIntentsSwapNote(swap, "Swap needs attention",
 				"The service did not observe the deposit before the deadline. If a deposit left your wallet, check its transaction and the service status page.", db.ErrorLevel)
 		} else {
@@ -602,6 +644,7 @@ func (e *intentsEngine) freshCatalog(ctx context.Context) (*intents.Catalog, err
 		// Serve stale, refresh in the background (at most one in flight).
 		if !e.catalogFetch {
 			e.catalogFetch = true
+			e.log.Debugf("Asset catalog stale; serving cached copy and refreshing in the background")
 			go e.refreshCatalog()
 		}
 		e.catMtx.Unlock()
@@ -610,6 +653,7 @@ func (e *intentsEngine) freshCatalog(ctx context.Context) (*intents.Catalog, err
 	e.catMtx.Unlock()
 
 	// Cold cache: block on the first fetch.
+	e.log.Debugf("Fetching asset catalog (no cached copy)")
 	cat, err := e.client.Catalog(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error fetching asset catalog: %w", err)
@@ -953,6 +997,10 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 		return nil, err
 	}
 
+	eng.log.Debugf("Preview %s → %s: in %d atoms, out %d atoms (min %d), %s USD → %s USD",
+		unbip(originAssetID), unbip(destAssetID), atomsIn, atomsOut, minAtomsOut,
+		resp.Quote.AmountInUsd, resp.Quote.AmountOutUsd)
+
 	return &IntentsPreview{
 		AtomsIn:      atomsIn,
 		AtomsOut:     atomsOut,
@@ -1095,6 +1143,8 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 				originUnits.FormatAtoms(sendAtoms), originUnits.FormatAtoms(maxAtomsIn))
 		}
 	}
+	eng.log.Debugf("Committed quote %s: guaranteed min out %d atoms (accepted floor %d), deposit %d atoms",
+		quote.DepositAddress, minCommittedOut, minAtomsOut, sendAtoms)
 	deadline, err := time.Parse(time.RFC3339, quote.Deadline)
 	if err != nil {
 		eng.log.Warnf("Unparseable quote deadline %q: %v", quote.Deadline, err)
@@ -1117,6 +1167,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		if err := c.validateSendFeeRate(originWallet, quote.DepositAddress, sendAtoms, feeRate, false); err != nil {
 			return nil, fmt.Errorf("deposit fee rate rejected: %w", err)
 		}
+		eng.log.Debugf("Using fee rate %d for the %s deposit", feeRate, unbip(originAssetID))
 	}
 
 	swap := &IntentsSwap{
@@ -1141,6 +1192,12 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	if err := eng.db.StoreIntentsSwap(swap); err != nil {
 		return nil, fmt.Errorf("error persisting swap record: %w", err)
 	}
+	eng.log.Infof("Committed swap quote %s: %s → %s (guaranteed min %s), deadline %s",
+		quote.DepositAddress,
+		originWallet.Info().UnitInfo.FormatAtoms(sendAtoms),
+		destWallet.Info().UnitInfo.FormatAtoms(atomsOut),
+		destWallet.Info().UnitInfo.FormatAtoms(minCommittedOut),
+		deadline.Format(time.RFC3339))
 
 	coin, err := originWallet.Wallet.Send(quote.DepositAddress, sendAtoms, feeRate)
 	if err != nil {
@@ -1184,8 +1241,11 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		}
 	}
 	eng.swapMtx.Unlock()
+	eng.log.Infof("Swap %s deposit broadcast: %s tx %s", swap.DepositAddress, unbip(originAssetID), swap.DepositTxID)
 	if err := eng.client.SubmitDeposit(ctx, swap.DepositAddress, swap.DepositTxID); err != nil {
 		eng.log.Warnf("Deposit hint submission failed (service will detect on-chain): %v", err)
+	} else {
+		eng.log.Debugf("Deposit txid hint submitted for swap %s", swap.DepositAddress)
 	}
 
 	c.notify(newIntentsSwapNote(swap, "Swap deposit sent",
@@ -1303,6 +1363,7 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 	for _, s := range swaps {
 		known[s.DepositAddress] = true
 	}
+	eng.log.Debugf("Probing recent outgoing transactions for lost swap records (%d already known)", len(known))
 
 	for _, w := range c.xcWallets() {
 		if !w.connected() {
@@ -1343,6 +1404,9 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 				continue // a live record for this address appeared mid-run
 			}
 			found++
+			eng.log.Infof("Recovered swap record %s (%s → %s, state %s)", swap.DepositAddress,
+				intentsAssetLabel(swap.OriginAssetID, swap.OriginAsset),
+				intentsAssetLabel(swap.DestAssetID, swap.DestAsset), swap.State)
 			c.notify(newIntentsSwapNote(swap, "Swap record recovered",
 				fmt.Sprintf("Recovered a swap to deposit address %s.", swap.DepositAddress), db.Poke))
 
@@ -1355,7 +1419,10 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 		}
 	}
 	if found > 0 {
+		eng.log.Infof("Reconstruction recovered %d swap record(s)", found)
 		eng.poke()
+	} else {
+		eng.log.Debugf("Reconstruction found no unknown swap records")
 	}
 	return found, nil
 }
