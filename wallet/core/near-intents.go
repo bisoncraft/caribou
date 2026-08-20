@@ -73,9 +73,10 @@ type IntentsSwap = db.IntentsSwap
 // Engine-local swap states. All other states mirror the service statuses
 // in the intents package (StatusProcessing, StatusSuccess, ...).
 const (
-	IntentsStateQuoted      = db.IntentsStateQuoted
-	IntentsStateDepositSent = db.IntentsStateDepositSent
-	IntentsStateExpired     = db.IntentsStateExpired
+	IntentsStateQuoted        = db.IntentsStateQuoted
+	IntentsStateDepositSent   = db.IntentsStateDepositSent
+	IntentsStateExpired       = db.IntentsStateExpired
+	IntentsStateDepositFailed = db.IntentsStateDepositFailed
 )
 
 // intentsDeadlines is the quote deadline (refund-activation time)
@@ -302,7 +303,9 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 			// a swap past its deadline is timed out.
 			e.log.Meter("swap-unknown:"+swap.DepositAddress, 2*time.Minute).
 				Debugf("Service does not recognize swap %s yet", swap.DepositAddress)
-			e.applyTimeout(swap.DepositAddress)
+			if !e.applyDepositRejection(ctx, swap) {
+				e.applyTimeout(swap.DepositAddress)
+			}
 			return nil
 		}
 		return err
@@ -310,8 +313,11 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 
 	if status.Status == intents.StatusPendingDeposit {
 		// The service is still waiting; keep the local view (QUOTED or
-		// DEPOSIT_SENT) unless the deadline has passed.
-		e.applyTimeout(swap.DepositAddress)
+		// DEPOSIT_SENT) unless the deadline has passed. A deposit the origin
+		// chain rejected will never be observed — fail fast instead.
+		if !e.applyDepositRejection(ctx, swap) {
+			e.applyTimeout(swap.DepositAddress)
+		}
 		return nil
 	}
 
@@ -548,6 +554,54 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 			strings.ToLower(strings.ReplaceAll(newState, "_", " "))),
 		severity)
 	return swap, note
+}
+
+// applyDepositRejection fails a DEPOSIT_SENT swap whose deposit transaction
+// was mined but rejected by the origin chain. The service will never observe
+// a deposit, so waiting out the quote deadline only hides the failure; the
+// deposited funds never left the wallet, though the network fee was spent.
+// The on-chain check is made without holding swapMtx; the record is reloaded
+// under the lock before the transition. Returns true when the swap was
+// transitioned, making the deadline timeout check moot.
+func (e *intentsEngine) applyDepositRejection(ctx context.Context, swap *IntentsSwap) bool {
+	if swap.State != IntentsStateDepositSent || swap.DepositTxID == "" {
+		return false
+	}
+	w, found := e.c.wallet(swap.OriginAssetID)
+	if !found {
+		return false
+	}
+	wt, err := w.WalletTransaction(ctx, swap.DepositTxID)
+	if err != nil || wt == nil || !wt.Rejected {
+		return false
+	}
+
+	e.swapMtx.Lock()
+	fresh, err := e.db.IntentsSwap(swap.DepositAddress)
+	if err != nil || fresh.State != IntentsStateDepositSent {
+		e.swapMtx.Unlock()
+		return false
+	}
+	fresh.State = IntentsStateDepositFailed
+	fresh.RefundReason = "the deposit transaction was rejected by the origin chain; the deposited funds never left the wallet"
+	var note Notification
+	if err := e.db.StoreIntentsSwap(fresh); err == nil {
+		e.log.Warnf("Swap %s marked DEPOSIT_FAILED: deposit tx %s was rejected on-chain",
+			fresh.DepositAddress, fresh.DepositTxID)
+		note = newIntentsSwapNote(fresh, "Swap deposit failed",
+			"The deposit transaction was rejected on-chain. The deposited funds never left the wallet, though the network fee was spent.", db.ErrorLevel)
+	} else {
+		e.log.Errorf("Error storing deposit-failed swap %s: %v", fresh.DepositAddress, err)
+	}
+	e.swapMtx.Unlock()
+
+	if note != nil {
+		e.c.notify(note)
+	}
+	// The wallet showed the deposit as a pending deduction; refresh so the
+	// balance reflects that the funds never left.
+	e.c.updateAssetBalance(swap.OriginAssetID)
+	return true
 }
 
 // applyTimeout moves a swap that never progressed to a terminal state once

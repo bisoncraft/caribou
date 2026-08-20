@@ -73,12 +73,15 @@ export default function TxRow ({ item, onSwapHover, swapHighlight }: TxRowProps)
     if (swapRelation) app.setForm({ form: 'swap', data: { depositAddress: swapRelation.swap.depositAddress } })
   }
 
+  // A rejected transaction was mined but had no effect (only fees were
+  // spent), so no amount moved in either direction.
+  const rejected = tx.rejected === true
   const sign = txAmountSign(tx.type)
-  const amountText = txShowsAmount(tx.type)
+  const amountText = !rejected && txShowsAmount(tx.type)
     ? `${sign}${Doc.formatCoinValue(tx.amount, variant.ui)} ${variant.ticker}`
     : '—'
   const rate = app.tickerRate(ta.ticker) ?? 0
-  const usdText = txShowsAmount(tx.type) && rate > 0
+  const usdText = !rejected && txShowsAmount(tx.type) && rate > 0
     ? Doc.usdString(tx.amount, variant.ui.conventional.conversionFactor, rate)
     : ''
   const parts: string[] = []
@@ -105,7 +108,10 @@ export default function TxRow ({ item, onSwapHover, swapHighlight }: TxRowProps)
             />
           )}
         </div>
-        <div className="grey fs12 mono">{parts.join(' · ')}</div>
+        <div className="grey fs12 mono">
+          {rejected && <span className="errcolor">{t('failed')} · </span>}
+          {parts.join(' · ')}
+        </div>
       </div>
       <div className="text-right">
         <div className={`fs14 mono ${txIsIncoming(tx.type) ? 'tx-amt-pos' : ''}`}>{amountText}</div>

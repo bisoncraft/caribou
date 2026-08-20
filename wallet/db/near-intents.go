@@ -52,6 +52,11 @@ const (
 	// IntentsStateExpired: never funded and the deadline (plus grace) has
 	// passed. Terminal, local-only.
 	IntentsStateExpired = "EXPIRED"
+	// IntentsStateDepositFailed: the deposit transaction was mined but
+	// rejected on-chain, so the service will never observe a deposit. The
+	// deposited funds never left the wallet, though the network fee was
+	// spent. Terminal, local-only.
+	IntentsStateDepositFailed = "DEPOSIT_FAILED"
 )
 
 // IntentsSwap is a persisted cross-chain swap record, keyed by its
@@ -102,7 +107,8 @@ type IntentsSwap struct {
 
 // Terminal reports whether the swap needs no further status polling.
 func (s *IntentsSwap) Terminal() bool {
-	return s.State == IntentsStateExpired || intents.TerminalStatus(s.State)
+	return s.State == IntentsStateExpired || s.State == IntentsStateDepositFailed ||
+		intents.TerminalStatus(s.State)
 }
 
 // intentsSwapRecordVersion is the stored-record encoding version.

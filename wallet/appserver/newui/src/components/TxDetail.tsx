@@ -64,9 +64,13 @@ export default function TxDetail ({ assetID, tx }: TxDetailParams) {
   const amountUsd = Doc.usdString(tx.amount, ui.conventional.conversionFactor, rate)
   const feeUsd = Doc.usdString(tx.fees, feeUI.conventional.conversionFactor, feeRate)
 
-  const status = (!tx.confirmed && tx.confirms)
-    ? tvar('{{ current }}/{{ target }} confs', { current: String(tx.confirms.current), target: String(tx.confirms.target) })
-    : tx.confirmed ? t('Confirmed') : t('Pending')
+  // A rejected transaction was mined but had no effect — only fees were
+  // spent — which outranks confirmation progress as the status.
+  const status = tx.rejected
+    ? <span className="errcolor">{t('Failed — no funds moved, network fee spent')}</span>
+    : (!tx.confirmed && tx.confirms)
+        ? tvar('{{ current }}/{{ target }} confs', { current: String(tx.confirms.current), target: String(tx.confirms.target) })
+        : tx.confirmed ? t('Confirmed') : t('Pending')
 
   const dateStr = tx.timestamp > 0 ? new Date(tx.timestamp * 1000).toLocaleString() : t('Pending')
 

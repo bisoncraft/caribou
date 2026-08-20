@@ -78,8 +78,9 @@ export const StateSuccess = 'SUCCESS'
 export const StateRefunded = 'REFUNDED'
 export const StateFailed = 'FAILED'
 export const StateExpired = 'EXPIRED'
+export const StateDepositFailed = 'DEPOSIT_FAILED'
 
-const terminalStates = new Set([StateSuccess, StateRefunded, StateFailed, StateExpired])
+const terminalStates = new Set([StateSuccess, StateRefunded, StateFailed, StateExpired, StateDepositFailed])
 
 // swapIsActive reports whether a swap still needs watching: any state the
 // engine's poller has not retired.
@@ -100,6 +101,7 @@ export function stateLabel (state: string): string {
     case StateRefunded: return t('Refunded')
     case StateFailed: return t('Failed')
     case StateExpired: return t('Expired')
+    case StateDepositFailed: return t('Deposit failed')
     default: return state
   }
 }
@@ -108,7 +110,8 @@ export function stateLabel (state: string): string {
 export function stateColorClass (state: string): string {
   switch (state) {
     case StateSuccess: return 'tx-amt-pos'
-    case StateFailed: return 'errcolor'
+    case StateFailed:
+    case StateDepositFailed: return 'errcolor'
     case StateRefunded:
     case StateExpired: return 'grey'
     default: return 'warncolor'
