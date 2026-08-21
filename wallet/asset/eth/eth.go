@@ -2622,11 +2622,14 @@ func (w *TokenWallet) checkTokenBalance(value uint64) error {
 	return nil
 }
 
-// canSend ensures that the wallet has enough to cover send value and returns
-// the fee rate and max fee required for the send tx. gasLimit is the gas limit
-// the transfer will be sent with: the token's GasEstimate for a pre-estimate,
-// or the buffered live estimate for an actual send.
-func (w *TokenWallet) canSend(value, gasLimit uint64, verifyBalance, isPreEstimate bool) (maxFee uint64, maxFeeRate, tipRate *big.Int, err error) {
+// canSend returns the fee rate and max fee required for a token send with the
+// specified gas limit, and if verifyBalance is true, ensures the parent wallet
+// can cover that fee. The token balance itself is the caller's check (see
+// checkTokenBalance), made before any live gas estimate so that an
+// over-balance amount is reported as such rather than as a simulated revert.
+// gasLimit is the token's GasEstimate for a pre-estimate or the buffered live
+// estimate for an actual send.
+func (w *TokenWallet) canSend(gasLimit uint64, verifyBalance, isPreEstimate bool) (maxFee uint64, maxFeeRate, tipRate *big.Int, err error) {
 	maxFeeRate, tipRate, err = w.recommendedMaxFeeRate(w.ctx)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("error getting max fee rate: %w", err)
@@ -2640,10 +2643,6 @@ func (w *TokenWallet) canSend(value, gasLimit uint64, verifyBalance, isPreEstima
 	}
 
 	if verifyBalance {
-		if err := w.checkTokenBalance(value); err != nil {
-			return 0, nil, nil, err
-		}
-
 		ethBal, err := w.parent.Balance()
 		if err != nil {
 			return 0, nil, nil, fmt.Errorf("error getting base chain balance: %w", err)
@@ -2685,7 +2684,12 @@ func (w *TokenWallet) EstimateSendTxFee(addr string, value, _ uint64, _, maxWith
 	if err := isValidSend(addr, value, maxWithdraw); err != nil && addr != "" { // fee rate estimate for a send tx.
 		return 0, false, err
 	}
-	maxFee, _, _, err := w.canSend(value, w.estimateSendGasLimit(addr, value), addr != "", true)
+	if addr != "" {
+		if err := w.checkTokenBalance(value); err != nil {
+			return 0, false, err
+		}
+	}
+	maxFee, _, _, err := w.canSend(w.estimateSendGasLimit(addr, value), addr != "", true)
 	if err != nil {
 		return 0, false, err
 	}
@@ -2792,7 +2796,7 @@ func (w *TokenWallet) Send(addr string, value, _ uint64) (asset.Coin, error) {
 		return nil, err
 	}
 
-	_ /* maxFee */, maxFeeRate, tipRate, err := w.canSend(value, gasLimit, true, false)
+	_ /* maxFee */, maxFeeRate, tipRate, err := w.canSend(gasLimit, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -4784,26 +4788,21 @@ func (getGas) returnFunds(
 	ethBal := WeiToGwei(bigEthBal)
 
 	if token != nil {
-		nt, found := token.NetTokens[net]
-		if !found {
-			return fmt.Errorf("no %s token for %s", token.Name, net)
-		}
-		tokenContract, err := erc20.NewIERC20(nt.Address, cl.contractBackend())
+		tc, err := newERC20TokenContractor(net, token, cl.address(), cl.contractBackend())
 		if err != nil {
-			return fmt.Errorf("NewIERC20 error: %v", err)
+			return fmt.Errorf("error constructing token contractor: %w", err)
 		}
 
-		callOpts := &bind.CallOpts{
-			From:    cl.address(),
-			Context: ctx,
-		}
-
-		bigTokenBal, err := tokenContract.BalanceOf(callOpts, cl.address())
+		bigTokenBal, err := tc.balance(ctx)
 		if err != nil {
 			return fmt.Errorf("error getting token balance: %w", err)
 		}
+		if bigTokenBal.Sign() == 0 {
+			log.Infof("No %s balance to return", token.Name)
+			return nil
+		}
 
-		est, err := estimateGas(ctx, cl.address(), nt.Address, erc20.ERC20ABI, cl.contractBackend(), new(big.Int), "transfer", returnAddr, bigTokenBal)
+		est, err := tc.estimateTransferGas(ctx, returnAddr, bigTokenBal)
 		if err != nil {
 			return fmt.Errorf("error estimating transfer gas: %w", err)
 		}
@@ -4819,7 +4818,7 @@ func (getGas) returnFunds(
 			return fmt.Errorf("error generating tx opts: %w", err)
 		}
 
-		tx, err := tokenContract.Transfer(txOpts, returnAddr, bigTokenBal)
+		tx, err := tc.transfer(txOpts, returnAddr, bigTokenBal)
 		if err != nil {
 			return fmt.Errorf("error transferring tokens : %w", err)
 		}

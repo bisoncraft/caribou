@@ -2254,20 +2254,21 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 		estimateErr     error
 		withdraw        bool
 		wantErr         bool
-		wantTokenFees   uint64
+		// staticFees marks cases whose token fee must come from the static
+		// GasEstimate rather than the live estimate.
+		staticFees bool
 	}{{
-		name:          "ok",
-		addr:          testAddr,
-		wantTokenFees: tokenFeesLive,
+		name: "ok",
+		addr: testAddr,
 	}, {
-		name:          "ok: empty address",
-		addr:          "",
-		wantTokenFees: tokenFeesStatic,
+		name:       "ok: empty address",
+		addr:       "",
+		staticFees: true,
 	}, {
-		name:          "ok: live estimate failed",
-		addr:          testAddr,
-		estimateErr:   errors.New("execution reverted"),
-		wantTokenFees: tokenFeesStatic,
+		name:        "ok: live estimate failed",
+		addr:        testAddr,
+		estimateErr: errors.New("execution reverted"),
+		staticFees:  true,
 	}, {
 		name:    "not enough",
 		sendAdj: 1,
@@ -2294,9 +2295,9 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 	for _, test := range tests {
 		node.setBalanceError(eth, test.balErr)
 		node.tokenContractor.transferEstimateErr = test.estimateErr
-		tokenFees := test.wantTokenFees
-		if tokenFees == 0 {
-			tokenFees = tokenFeesLive
+		tokenFees := tokenFeesLive
+		if test.staticFees {
+			tokenFees = tokenFeesStatic
 		}
 		if assetID == BipID {
 			node.bal = GweiToWei(val + ethFees - test.sendAdj - test.feeAdj)

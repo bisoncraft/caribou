@@ -150,6 +150,10 @@ var Tokens = map[uint32]*Token{
 				// Mainnet evidence:
 				//   approve:   0x4e0b729387bb694a490df2445d5105bd519a36df8acbbbe84da82f4f2b2a0467
 				//   transfer:  0xbee8582a7a1d78103fa71222dd6e6df43e82bfc21b8c4c7d9fac1dd1950d05d8
+				// Approvals: [48885 48885]
+				// Transfers: [63173]
+				// The "usdt.eth measurements x1.3" figure (63,550 / 82,124) used by
+				// unmeasured tokens below derives from this 48,885 / 63,173 pair.
 				// USDT's contract is upgradable, using a proxy call, so gas cost could
 				// change without notice.
 				GasEstimate: &Gases{
