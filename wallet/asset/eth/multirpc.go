@@ -29,6 +29,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/erc20"
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -1566,13 +1567,46 @@ func (m *multiRPCClient) SuggestGasTipCap(ctx context.Context) (tipCap *big.Int,
 }
 
 func (m *multiRPCClient) EstimateGas(ctx context.Context, call ethereum.CallMsg) (gas uint64, err error) {
-	return gas, m.withAny(ctx, func(ctx context.Context, p *provider) error {
+	return gas, decodeRevert(m.withAny(ctx, func(ctx context.Context, p *provider) error {
 		gas, err = p.ec.EstimateGas(ctx, call)
 		return err
 	}, func(err error) (discard, propagate, fail bool) {
 		// Assume this one will be the same all around.
 		return false, errorFilter(err, "gas required exceeds allowance"), false
-	})
+	}))
+}
+
+// decodeRevert appends the decoded revert reason to a simulation error that
+// carries revert data. geth-backed providers usually include an Error(string)
+// reason in the message already; other clients return a bare "execution
+// reverted" with the payload only in the JSON-RPC error's data field. Solidity
+// Error(string) and Panic(uint256) payloads are decoded; a custom error, which
+// cannot be decoded without the contract ABI, is reported by its 4-byte
+// selector. Errors without usable revert data are returned unchanged.
+func decodeRevert(err error) error {
+	if err == nil {
+		return nil
+	}
+	var dataErr rpc.DataError
+	if !errors.As(err, &dataErr) {
+		return err
+	}
+	hexData, ok := dataErr.ErrorData().(string)
+	if !ok {
+		return err
+	}
+	data, decErr := hexutil.Decode(hexData)
+	if decErr != nil || len(data) < 4 {
+		return err
+	}
+	reason, decErr := abi.UnpackRevert(data)
+	if decErr != nil {
+		return fmt.Errorf("%w: custom error selector 0x%x", err, data[:4])
+	}
+	if strings.Contains(err.Error(), reason) {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, reason)
 }
 
 func (m *multiRPCClient) SendTransaction(ctx context.Context, tx *types.Transaction) error {
