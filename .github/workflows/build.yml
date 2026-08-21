@@ -24,31 +24,48 @@ jobs:
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c #v6.1.0
         with:
           go-version: ${{ matrix.go }}
-          # Caching is handled by the explicit restore/save steps below.
+          # Caching is handled by the explicit cache steps below.
           cache: false
 
-      # The Go build/module caches are managed explicitly instead of with
-      # setup-go's `cache: true`: setup-go keys its cache on a hash of go.sum
-      # and saves only on a key miss, so its snapshot is frozen at the first
-      # run after each go.sum change and the Go test cache goes stale as
-      # master advances. Restoring per-commit with a prefix fallback keeps
-      # every run on the freshest snapshot, so tests of unchanged packages
-      # hit the test cache ("ok <pkg> (cached)") instead of re-running.
-      # Saves are limited to master pushes (see the post-Test step) so PR
-      # pushes don't churn the repo's 10 GB Actions cache pool.
+      # The Go caches are managed explicitly instead of with setup-go's
+      # `cache: true`: setup-go keys one snapshot of both caches on a hash
+      # of go.sum and saves only on a key miss, so its snapshot is frozen
+      # at the first run after each go.sum change and the Go test cache
+      # inside it goes stale as master advances.
+      #
+      # The module cache only changes when go.sum does, so a go.sum-keyed
+      # snapshot is the right shape for it and it stays out of the
+      # per-commit snapshots below. The key is shared across matrix legs
+      # (module downloads are Go-version-independent); on the first run
+      # after a go.sum change the legs race to save it and the loser logs
+      # a benign "unable to reserve cache" warning.
+      - name: Cache Go modules
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-mod-${{ runner.os }}-
+
+      # The build cache is where staleness hurts: restoring per-commit with
+      # a prefix fallback keeps every run on the freshest snapshot, so
+      # tests of unchanged packages hit the test cache ("ok <pkg> (cached)")
+      # instead of re-running. Saves are limited to master pushes (see the
+      # post-Test step) and cover only the build cache, so master pushes
+      # don't churn the repo's 10 GB Actions cache pool with redundant
+      # copies of the module cache.
       #
       # (`git restore-mtime` used to run post-checkout for "test cache"
       # reasons; the Go test cache hashes file contents, not mtimes, so it
       # was never needed.)
-      - name: Restore Go caches
+      - name: Restore Go build cache
+        id: go-build-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-ci-${{ runner.os }}-go${{ matrix.go }}-${{ github.sha }}
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-go${{ matrix.go }}-${{ github.sha }}
           restore-keys: |
-            go-ci-${{ runner.os }}-go${{ matrix.go }}-
+            go-build-${{ runner.os }}-go${{ matrix.go }}-
 
       - name: Install Linters
         # Skip on 1.26: the pinned linter is skipped there via SKIP_GO_LINT, so
@@ -72,15 +89,17 @@ jobs:
 
       # Master-only so the cache pool holds a small number of fresh
       # master snapshots; PR runs restore them via the prefix fallback
-      # above but never save their own.
-      - name: Save Go caches
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      # above but never save their own. Runs even when Test fails —
+      # compiled packages and passing-package test results from a red run
+      # are still valid and keep later runs warm. The cache-hit guard
+      # skips the save on workflow re-runs, where the per-commit key
+      # already exists and saving would only log a warning.
+      - name: Save Go build cache
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.go-build-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-ci-${{ runner.os }}-go${{ matrix.go }}-${{ github.sha }}
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-go${{ matrix.go }}-${{ github.sha }}
   build-js:
     name: Build JS
     runs-on: ubuntu-latest
