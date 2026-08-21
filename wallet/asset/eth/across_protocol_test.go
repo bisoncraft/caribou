@@ -21,10 +21,7 @@ func regToken(tokens map[uint32]*eth.Token, tokenID uint32, desc string) {
 	netVersions := make(map[util.Network][]uint32, 3)
 	for net, netToken := range token.NetTokens {
 		netAddrs[net] = netToken.Address.String()
-		netVersions[net] = make([]uint32, 0, 1)
-		for ver := range netToken.Gas {
-			netVersions[net] = append(netVersions[net], ver)
-		}
+		netVersions[net] = eth.WalletInfo.SupportedVersions
 	}
 	asset.RegisterToken(tokenID, token.Token, &asset.WalletDefinition{
 		Type:        eth.WalletTypeToken,

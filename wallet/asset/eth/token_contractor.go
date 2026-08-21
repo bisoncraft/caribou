@@ -36,9 +36,10 @@ type tokenContractor interface {
 	// not an error if the transaction is not a transfer; the returned values
 	// will be zero in that case.
 	value(context.Context, *types.Transaction) (incoming, outgoing uint64, err error)
-	// estimateTransferGas estimates the gas needed for a transfer tx. The
-	// account needs to have > amount tokens to use this method.
-	estimateTransferGas(context.Context, *big.Int) (uint64, error)
+	// estimateTransferGas estimates the gas needed to transfer amount tokens
+	// to the recipient. The account needs to have >= amount tokens to use this
+	// method.
+	estimateTransferGas(ctx context.Context, to common.Address, amount *big.Int) (uint64, error)
 }
 
 // erc20TokenContractor is a standalone tokenContractor backed solely by the
@@ -96,9 +97,10 @@ func (c *erc20TokenContractor) transfer(txOpts *bind.TransactOpts, addr common.A
 	return c.tokenContract.Transfer(txOpts, addr, amount)
 }
 
-// estimateTransferGas estimates the gas needed for a transfer tx.
-func (c *erc20TokenContractor) estimateTransferGas(ctx context.Context, amount *big.Int) (uint64, error) {
-	return estimateGas(ctx, c.acctAddr, c.tokenContractAddr, erc20.ERC20ABI, c.cb, new(big.Int), "transfer", c.acctAddr, amount)
+// estimateTransferGas estimates the gas needed to transfer amount tokens to
+// the recipient.
+func (c *erc20TokenContractor) estimateTransferGas(ctx context.Context, to common.Address, amount *big.Int) (uint64, error) {
+	return estimateGas(ctx, c.acctAddr, c.tokenContractAddr, erc20.ERC20ABI, c.cb, new(big.Int), "transfer", to, amount)
 }
 
 // parseTransfer sums incoming transfer value to this account from the

@@ -77,7 +77,6 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		ChainCfg:         chainCfg,
 		AssetCfg:         cfg,
 		CompatData:       &compat,
-		VersionedGases:   VersionedGases,
 		FinalizeConfs:    3,
 		Logger:           logger,
 		WalletInfo:       WalletInfo,

@@ -33,23 +33,6 @@ var (
 		FeeRateDenom: "gas",
 	}
 
-	// v1Gases is the base-chain WETH gas table. The native asset does not use
-	// token Transfer/Approve, so this is an empty placeholder that preserves the
-	// supported version key.
-	v1Gases = &dexeth.Gases{}
-
-	// tokenV1Gases are the v1 token gas estimates, measured from usdt.base
-	// mainnet. These values are used for all tokens on all networks since the
-	// v1 contract handles all ERC20 tokens identically.
-	tokenV1Gases = dexeth.Gases{
-		Approve:  60_732,
-		Transfer: 67_358,
-	}
-
-	VersionedGases = map[uint32]*dexeth.Gases{
-		1: v1Gases,
-	}
-
 	MultiBalanceAddresses = map[util.Network]common.Address{}
 
 	usdcTokenID, _ = util.BipSymbolID("usdc.base")
@@ -85,21 +68,26 @@ var (
 		NetTokens: map[util.Network]*dexeth.NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.base measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x036CbD53842c5426634e7929541eC2318f3dCF7e"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.base measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*dexeth.Gases{
-					0: {},
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.base measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 		},
@@ -121,26 +109,30 @@ var (
 		NetTokens: map[util.Network]*dexeth.NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"),
-				Gas: map[uint32]*dexeth.Gases{
-					// Mainnet v1 token evidence:
-					//   approve:   0xb891f4089c124c1ebe230553f99627b28040c9db3457d38f29dac71a563c77cf
-					//   transfer:  0xecdad782d8e91b2e3cbcef3996a577cb67d4b12cd45767335bb1b0abf7e26213
-					// Approvals: [46717 46717]
-					// Transfers: [51814]
-					1: &tokenV1Gases,
+				// Mainnet v1 token evidence:
+				//   approve:   0xb891f4089c124c1ebe230553f99627b28040c9db3457d38f29dac71a563c77cf
+				//   transfer:  0xecdad782d8e91b2e3cbcef3996a577cb67d4b12cd45767335bb1b0abf7e26213
+				// Approvals: [46717 46717]
+				// Transfers: [51814]
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x8d9cb8f3191fd685e2c14d2ac3fb2b16d44eafc3"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// usdt.base mainnet measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*dexeth.Gases{
-					0: {},
-					1: &tokenV1Gases,
+				// usdt.base mainnet measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 		},
@@ -173,19 +165,27 @@ var (
 		NetTokens: map[util.Network]*dexeth.NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x0555E30da8f98308EdB960aa94C0Db47230d2B9c"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.base measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x78c8587b0b4d50b3a2110bc8188eef195cfa7f11"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.base measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas:     map[uint32]*dexeth.Gases{0: {}, 1: &tokenV1Gases},
+				// Not measured for this token; usdt.base measurements x1.3.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
+				},
 			},
 		},
 	}

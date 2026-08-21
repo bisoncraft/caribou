@@ -53,21 +53,14 @@ func (t *Token) EVMToAtomic(v *big.Int) uint64 {
 	return 0
 }
 
-// NetToken are the addresses associated with the token and its per-version gas
-// tables.
+// NetToken is a token's contract address and gas estimates on one network.
 type NetToken struct {
 	// Address is the token contract address.
 	Address common.Address `json:"address"`
-	// Gas is the per-asset-version gas table for token wallet operations.
-	Gas map[uint32]*Gases `json:"gas"`
-}
-
-// tokenV1Gases are the v1 token gas estimates, measured from usdt.eth mainnet.
-// These values are used for all tokens on all networks since the v1 contract
-// handles all ERC20 tokens identically.
-var tokenV1Gases = Gases{
-	Approve:  63_550,
-	Transfer: 82_124,
+	// GasEstimate is the token's typical gas usage for wallet operations on
+	// this network. It is used for fee estimation only; broadcast transactions
+	// use a live eth_estimateGas result instead. See Gases.
+	GasEstimate *Gases `json:"gasEstimate"`
 }
 
 // EVMTokens is the aggregate token registry across all EVM chains. Each
@@ -112,35 +105,27 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), // https://etherscan.io/address/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
-				Gas: map[uint32]*Gases{
-					0: {
-						// USDC's contract is upgradable, using a proxy call, so
-						// gas cost could change without notice, so we do not
-						// want to set limits too low, even with live estimates.
-						Approve:  78_400,
-						Transfer: 85_100,
-					},
-					1: &tokenV1Gases,
+				// USDC's contract is upgradable, using a proxy call, so gas cost could
+				// change without notice, so estimates are kept well above measured usage.
+				GasEstimate: &Gases{
+					Approve:  78_400,
+					Transfer: 85_100,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"),
-				Gas: map[uint32]*Gases{
-					0: {
-						Approve:  78_400, // actual ~60,190 (initial) -- https://goerli.etherscan.io/tx/0xd695fd174dede7bb798488ead7fed5ef33bcd79932b0fa35db0d17c84c97a8a1, verified on mainnet at 60,311
-						Transfer: 85_100, // actual ~65,524 (initial receive, subsequent 48,424)
-					},
-					1: &tokenV1Gases,
+				// Approve actual ~60,190 (initial) -- https://goerli.etherscan.io/tx/0xd695fd174dede7bb798488ead7fed5ef33bcd79932b0fa35db0d17c84c97a8a1, verified on mainnet at 60,311.
+				// Transfer actual ~65,524 (initial receive, subsequent 48,424).
+				GasEstimate: &Gases{
+					Approve:  78_400,
+					Transfer: 85_100,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*Gases{
-					0: {
-						Approve:  32_303,
-						Transfer: 66_953,
-					},
-					1: &tokenV1Gases,
+				GasEstimate: &Gases{
+					Approve:  32_303,
+					Transfer: 66_953,
 				},
 			},
 		},
@@ -161,35 +146,30 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0xdac17f958d2ee523a2206206994597c13d831ec7"), // https://etherscan.io/address/0xdac17f958d2ee523a2206206994597c13d831ec7
-				Gas: map[uint32]*Gases{
-					0: {
-						// USDT's contract is upgradable, using a proxy call, so
-						// gas cost could change without notice, so we do not
-						// want to set limits too low, even with live estimates.
-						Approve:  63_566,
-						Transfer: 82_124,
-					},
-					1: &tokenV1Gases,
+				// Average of 2 approvals: 48,897. Average of 1 transfer: 63,173.
+				// Mainnet evidence:
+				//   approve:   0x4e0b729387bb694a490df2445d5105bd519a36df8acbbbe84da82f4f2b2a0467
+				//   transfer:  0xbee8582a7a1d78103fa71222dd6e6df43e82bfc21b8c4c7d9fac1dd1950d05d8
+				// USDT's contract is upgradable, using a proxy call, so gas cost could
+				// change without notice.
+				GasEstimate: &Gases{
+					Approve:  63_566,
+					Transfer: 82_124,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x7169D38820dfd117C3FA1f22a697dBA58d90BA06"),
-				Gas: map[uint32]*Gases{
-					0: {
-						Approve:  63_609,
-						Transfer: 82_196,
-					},
-					1: &tokenV1Gases,
+				// Average of 2 approvals: 48,930. Average of 1 transfer: 63,228.
+				GasEstimate: &Gases{
+					Approve:  63_609,
+					Transfer: 82_196,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*Gases{
-					0: {
-						Approve:  32_303,
-						Transfer: 66_953,
-					},
-					1: &tokenV1Gases,
+				GasEstimate: &Gases{
+					Approve:  32_303,
+					Transfer: 66_953,
 				},
 			},
 		},
@@ -220,12 +200,10 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0"), // https://etherscan.io/address/0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0
-				Gas: map[uint32]*Gases{
-					0: {
-						Approve:  63_393,
-						Transfer: 70_127,
-					},
-					1: &tokenV1Gases,
+				// Average of 2 approvals: 48,764. Average of 1 transfer: 53,944.
+				GasEstimate: &Gases{
+					Approve:  63_393,
+					Transfer: 70_127,
 				},
 			},
 		},
@@ -257,14 +235,18 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x455e53cbb86018ac2b8092fdcd39d8444affc3f6"),
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x44499312f493f62f2dfd3c6435ca3603ebfceeba"),
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 		},
@@ -287,20 +269,26 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x514910771AF9Ca656af840dff83E8264EcF986CA"),
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0x779877A7B0D9E8603169DdbD7836e478b4624789"), // Sepolia, per https://docs.chain.link/resources/acquire-link
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 		},
@@ -327,20 +315,26 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x45804880De22913dAFE09f4980848ECE6EcbAf78"),
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 			util.Testnet: {
 				Address: common.HexToAddress("0xe0d215bc63580325794d858c9c49f61e77704501"), // Sepolia, per https://docs.paxos.com/guides/stablecoin/paxg/testnet
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 		},
@@ -363,14 +357,18 @@ var Tokens = map[uint32]*Token{
 		NetTokens: map[util.Network]*NetToken{
 			util.Mainnet: {
 				Address: common.HexToAddress("0x68749665FF8D2d112Fa859AA293F07A622782F38"), // https://etherscan.io/token/0x68749665ff8d2d112fa859aa293f07a622782f38
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*Gases{
-					1: &tokenV1Gases,
+				// Not measured for this token; usdt.eth measurements x1.3.
+				GasEstimate: &Gases{
+					Approve:  63_550,
+					Transfer: 82_124,
 				},
 			},
 		},

@@ -58,23 +58,11 @@ var (
 		FeeRateDenom: "gas",
 	}
 
-	VersionedGases = map[uint32]*Gases{
-		0: v0Gases,
-		1: v1Gases,
-	}
-
 	MultiBalanceAddresses = map[util.Network]common.Address{
 		util.Mainnet: common.HexToAddress("0x73bc803A2604b2c58B8680c3CE1b14489842EF16"), // tx 0xaf6cb861578c0ded0750397d7e044a7dd86c94aa47211d02188e146a2424dda4
 		util.Testnet: common.HexToAddress("0x8Bd6F6dBe69588D94953EE289Fd3E1db3e8dB43D"), // tx 0x46a416344927a8d1f33865374e9b9e824249980da8d34f6c3214a1ee036ca5fe
 	}
 )
-
-// v0Gases and v1Gases are the base-chain ETH gas tables. The native ETH asset
-// does not use token Transfer/Approve, so these are empty placeholders that
-// preserve the supported version keys.
-var v0Gases = &Gases{}
-
-var v1Gases = &Gases{}
 
 // LoadGenesisFile loads a Genesis config from a json file.
 func LoadGenesisFile(genesisFile string) (*core.Genesis, error) {
@@ -154,42 +142,17 @@ var (
 	xautTokenID, _    = util.BipSymbolID("xaut.eth")
 )
 
-// Gases lists the expected gas required for token wallet operations.
+// Gases lists typical gas usage for token wallet operations. These values are
+// for fee estimation only (pre-send fee display, balance sufficiency checks).
+// Transactions that are actually broadcast derive their gas limit from a live
+// eth_estimateGas call via bufferedGasLimit, never from this table.
 type Gases struct {
-	// Approve is the amount of gas needed to approve a contract for
+	// Approve is the amount of gas typically needed to approve a contract for
 	// transferring tokens. The first approval for an address uses more gas than
 	// subsequent approvals for the same address.
 	Approve uint64 `json:"approve"`
-	// Transfer is the amount of gas needed to transfer tokens. The first
-	// transfer to an address uses more gas than subsequent transfers to the
-	// same address.
+	// Transfer is the amount of gas typically needed to transfer tokens. The
+	// first transfer to an address uses more gas than subsequent transfers to
+	// the same address.
 	Transfer uint64 `json:"transfer"`
 }
-
-// ProtocolVersion assists in mapping the util.Asset.Version to a contract
-// version.
-type ProtocolVersion uint32
-
-const (
-	ProtocolVersionZero ProtocolVersion = iota
-	ProtocolVersionV1Contracts
-)
-
-func (v ProtocolVersion) ContractVersion() uint32 {
-	switch v {
-	case ProtocolVersionZero:
-		return 0
-	case ProtocolVersionV1Contracts:
-		return 1
-	default:
-		return ContractVersionUnknown
-	}
-}
-
-var (
-	// ContractVersionERC20 is passed as the contract version when calling
-	// ERC20 contract methods.
-	ContractVersionERC20   = ^uint32(0)
-	ContractVersionNewest  = ContractVersionERC20 // same thing
-	ContractVersionUnknown = ContractVersionERC20 - 1
-)

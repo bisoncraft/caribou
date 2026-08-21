@@ -51,6 +51,27 @@ func TestConversions(t *testing.T) {
 	}
 }
 
+func TestBufferedGasLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		estimate, want uint64
+	}{
+		// Below the crossover (100,000), the additive floor dominates.
+		{0, liveGasLimitBufferMin},
+		{21_000, 41_000},
+		{50_000, 70_000},
+		{100_000, 120_000},
+		// Above the crossover, the percentage dominates.
+		{200_000, 240_000},
+		{1_000_000, 1_200_000},
+	}
+	for _, test := range tests {
+		if got := bufferedGasLimit(test.estimate); got != test.want {
+			t.Errorf("bufferedGasLimit(%d) = %d, want %d", test.estimate, got, test.want)
+		}
+	}
+}
+
 func TestPAXGTokenDefinition(t *testing.T) {
 	t.Parallel()
 	tokenID, ok := util.BipSymbolID("paxg.eth")
@@ -72,17 +93,14 @@ func TestPAXGTokenDefinition(t *testing.T) {
 		t.Fatalf("EVMFactor should be nil (default 9), got %d", *token.EVMFactor)
 	}
 
-	// v1-only gas tables on mainnet, testnet, and simnet.
+	// Gas estimates on mainnet, testnet, and simnet.
 	for _, net := range []util.Network{util.Mainnet, util.Testnet, util.Simnet} {
 		netToken, ok := token.NetTokens[net]
 		if !ok {
 			t.Fatalf("missing NetToken for network %v", net)
 		}
-		if _, hasV0 := netToken.Gas[0]; hasV0 {
-			t.Fatalf("network %v: unexpected v0 gas table", net)
-		}
-		if _, hasV1 := netToken.Gas[1]; !hasV1 {
-			t.Fatalf("network %v: missing v1 gas table", net)
+		if g := netToken.GasEstimate; g == nil || g.Approve == 0 || g.Transfer == 0 {
+			t.Fatalf("network %v: missing gas estimate", net)
 		}
 	}
 
@@ -127,17 +145,14 @@ func TestXAUTTokenDefinition(t *testing.T) {
 		t.Fatalf("EVMFactor should be 0, got %v", token.EVMFactor)
 	}
 
-	// v1-only gas tables on mainnet and simnet.
+	// Gas estimates on mainnet and simnet.
 	for _, net := range []util.Network{util.Mainnet, util.Simnet} {
 		netToken, ok := token.NetTokens[net]
 		if !ok {
 			t.Fatalf("missing NetToken for network %v", net)
 		}
-		if _, hasV0 := netToken.Gas[0]; hasV0 {
-			t.Fatalf("network %v: unexpected v0 gas table", net)
-		}
-		if _, hasV1 := netToken.Gas[1]; !hasV1 {
-			t.Fatalf("network %v: missing v1 gas table", net)
+		if g := netToken.GasEstimate; g == nil || g.Approve == 0 || g.Transfer == 0 {
+			t.Fatalf("network %v: missing gas estimate", net)
 		}
 	}
 
@@ -185,17 +200,14 @@ func TestLinkTokenDefinition(t *testing.T) {
 		t.Fatalf("EVMFactor should be nil (default 9), got %d", *token.EVMFactor)
 	}
 
-	// v1 gas table must exist; v0 must not (LINK is v1-only).
+	// Gas estimates on mainnet, testnet, and simnet.
 	for _, net := range []util.Network{util.Mainnet, util.Testnet, util.Simnet} {
 		netToken, ok := token.NetTokens[net]
 		if !ok {
 			t.Fatalf("missing NetToken for network %v", net)
 		}
-		if _, hasV0 := netToken.Gas[0]; hasV0 {
-			t.Fatalf("network %v: unexpected v0 gas table", net)
-		}
-		if _, hasV1 := netToken.Gas[1]; !hasV1 {
-			t.Fatalf("network %v: missing v1 gas table", net)
+		if g := netToken.GasEstimate; g == nil || g.Approve == 0 || g.Transfer == 0 {
+			t.Fatalf("network %v: missing gas estimate", net)
 		}
 	}
 

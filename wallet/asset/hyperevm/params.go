@@ -5,7 +5,6 @@ package hyperevm
 
 import (
 	"github.com/bisoncraft/caribou/util"
-	dexeth "github.com/bisoncraft/caribou/wallet/asset/eth"
 )
 
 const (
@@ -34,11 +33,5 @@ var (
 			ConversionFactor: 1e9,
 		},
 		FeeRateDenom: "gas",
-	}
-
-	// VersionedGases has zero gas estimates because no swap contracts are
-	// deployed on HyperEVM.
-	VersionedGases = map[uint32]*dexeth.Gases{
-		1: {},
 	}
 )

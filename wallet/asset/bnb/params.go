@@ -31,24 +31,6 @@ var (
 		FeeRateDenom: "gas",
 	}
 
-	// v1Gases has zero gas estimates because no swap contracts are deployed for
-	// BNB. Populate these when BNB tokens with swap support are added.
-	v1Gases = &dexeth.Gases{}
-
-	// tokenV1Gases are placeholder v1 token gas estimates borrowed from
-	// Base's measured usdt.base values, since BEP-20 token contracts use the
-	// same EVM opcodes as other chains' ERC-20 contracts. These have not been
-	// measured on BNB itself yet (see stablecoin-support-plan.md Step 1) and
-	// should be replaced with real BNB mainnet/testnet measurements.
-	tokenV1Gases = dexeth.Gases{
-		Approve:  60_732,
-		Transfer: 67_358,
-	}
-
-	VersionedGases = map[uint32]*dexeth.Gases{
-		1: v1Gases,
-	}
-
 	MultiBalanceAddresses = map[util.Network]common.Address{}
 
 	usdcTokenID, _ = util.BipSymbolID("usdc.bnb")
@@ -93,14 +75,22 @@ var (
 			util.Mainnet: {
 				// https://bscscan.com/token/0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d
 				Address: common.HexToAddress("0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured on BNB; borrowed from usdt.base mainnet measurements x1.3.
+				// BEP-20 contracts use the same EVM opcodes, but these should be replaced
+				// with BNB mainnet measurements.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured on BNB; borrowed from usdt.base mainnet measurements x1.3.
+				// BEP-20 contracts use the same EVM opcodes, but these should be replaced
+				// with BNB mainnet measurements.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 		},
@@ -125,14 +115,22 @@ var (
 			util.Mainnet: {
 				// https://bscscan.com/token/0x55d398326f99059fF775485246999027B3197955
 				Address: common.HexToAddress("0x55d398326f99059fF775485246999027B3197955"),
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured on BNB; borrowed from usdt.base mainnet measurements x1.3.
+				// BEP-20 contracts use the same EVM opcodes, but these should be replaced
+				// with BNB mainnet measurements.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 			util.Simnet: {
 				Address: common.Address{},
-				Gas: map[uint32]*dexeth.Gases{
-					1: &tokenV1Gases,
+				// Not measured on BNB; borrowed from usdt.base mainnet measurements x1.3.
+				// BEP-20 contracts use the same EVM opcodes, but these should be replaced
+				// with BNB mainnet measurements.
+				GasEstimate: &dexeth.Gases{
+					Approve:  60_732,
+					Transfer: 67_358,
 				},
 			},
 		},

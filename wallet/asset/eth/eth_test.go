@@ -11,7 +11,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"maps"
 	"math/big"
 	"strings"
 	"sync"
@@ -399,7 +398,7 @@ func (c *tTokenContractor) parseTransfer(*types.Receipt) (uint64, error) {
 	return c.parseTransferAmt, c.parseTransferErr
 }
 
-func (c *tTokenContractor) estimateTransferGas(context.Context, *big.Int) (uint64, error) {
+func (c *tTokenContractor) estimateTransferGas(context.Context, common.Address, *big.Int) (uint64, error) {
 	return c.transferEstimate, c.transferEstimateErr
 }
 
@@ -1312,8 +1311,9 @@ func newTestNode(assetID uint32) *tMempoolNode {
 	}
 
 	ttc := &tTokenContractor{
-		valueIn:  make(map[common.Hash]uint64),
-		valueOut: make(map[common.Hash]uint64),
+		transferEstimate: tTransferEstimate,
+		valueIn:          make(map[common.Hash]uint64),
+		valueOut:         make(map[common.Hash]uint64),
 	}
 
 	return &tMempoolNode{
@@ -1339,12 +1339,9 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 	node := newTestNode(assetID)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	versionedGases := make(map[uint32]*Gases)
-	if assetID == BipID { // just make a copy
-		maps.Copy(versionedGases, VersionedGases)
-	} else {
-		netToken := Tokens[assetID].NetTokens[util.Simnet]
-		maps.Copy(versionedGases, netToken.Gas)
+	var gasEstimate *Gases
+	if assetID != BipID {
+		gasEstimate = Tokens[assetID].NetTokens[util.Simnet].GasEstimate
 	}
 
 	emitChan := make(chan asset.WalletNotification, 128)
@@ -1377,7 +1374,7 @@ func tassetWallet(assetID uint32) (asset.Wallet, *assetWallet, *tMempoolNode, co
 			finalizeConfs:    txConfsNeededToConfirm,
 			maxTxFeeGwei:     GweiFactor, // 1 ETH
 		},
-		versionedGases:    versionedGases,
+		gasEstimate:       gasEstimate,
 		log:               tLogger.SubLogger(strings.ToUpper(util.BipIDSymbol(assetID))),
 		assetID:           assetID,
 		evmify:            GweiToWei,
@@ -2059,7 +2056,7 @@ func TestTokenSendEmitsParentBalanceChange(t *testing.T) {
 	node.tokenContractor.transferTx = tx
 
 	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
-	tokenFees := WeiToGwei(maxFeeRate) * tokenGasesV1.Transfer
+	tokenFees := WeiToGwei(maxFeeRate) * bufferedGasLimit(tTransferEstimate)
 
 	const val = 10e9
 	node.tokenContractor.bal = GweiToWei(val)
@@ -2101,7 +2098,9 @@ func testSend(t *testing.T, assetID uint32) {
 
 	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
 	ethFees := WeiToGwei(maxFeeRate) * defaultSendGasLimit
-	tokenFees := WeiToGwei(maxFeeRate) * tokenGasesV1.Transfer
+	// Token sends reserve fees for the buffered live estimate, not the static
+	// GasEstimate table.
+	tokenFees := WeiToGwei(maxFeeRate) * bufferedGasLimit(tTransferEstimate)
 
 	const val = 10e9
 	const testAddr = "dd93b447f7eBCA361805eBe056259853F3912E04"
@@ -2109,6 +2108,7 @@ func testSend(t *testing.T, assetID uint32) {
 		name              string
 		sendAdj, feeAdj   uint64
 		balErr, sendTxErr error
+		estimateErr       error
 		addr              string
 		wantErr           bool
 	}{{
@@ -2130,6 +2130,11 @@ func testSend(t *testing.T, assetID uint32) {
 		wantErr: true,
 		addr:    testAddr,
 	}, {
+		name:        "live estimate error",
+		estimateErr: errors.New("test error"),
+		wantErr:     assetID != BipID, // base-chain sends use a fixed gas limit
+		addr:        testAddr,
+	}, {
 		name:      "sendToAddr error",
 		sendTxErr: errors.New("test error"),
 		wantErr:   true,
@@ -2145,6 +2150,7 @@ func testSend(t *testing.T, assetID uint32) {
 		node.setBalanceError(eth, test.balErr)
 		node.sendTxErr = test.sendTxErr
 		node.tokenContractor.transferErr = test.sendTxErr
+		node.tokenContractor.transferEstimateErr = test.estimateErr
 		if assetID == BipID {
 			node.bal = GweiToWei(val + ethFees - test.sendAdj - test.feeAdj)
 		} else {
@@ -2229,10 +2235,14 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 
 	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
 	ethFees := WeiToGwei(maxFeeRate) * defaultSendGasLimit
-	tokenFees := WeiToGwei(maxFeeRate) * tokenGasesV1.Transfer
+	// With a recipient, token estimates use the buffered live estimate. Without
+	// one, or when the live estimate fails, the static GasEstimate stands in.
+	tokenFeesLive := WeiToGwei(maxFeeRate) * bufferedGasLimit(tTransferEstimate)
+	tokenFeesStatic := WeiToGwei(maxFeeRate) * tUSDCGasEstimate.Transfer
 
 	ethFees = ethFees * 12 / 10
-	tokenFees = tokenFees * 12 / 10
+	tokenFeesLive = tokenFeesLive * 12 / 10
+	tokenFeesStatic = tokenFeesStatic * 12 / 10
 
 	const testAddr = "dd93b447f7eBCA361805eBe056259853F3912E04"
 
@@ -2241,14 +2251,23 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 		name, addr      string
 		sendAdj, feeAdj uint64
 		balErr          error
+		estimateErr     error
 		withdraw        bool
 		wantErr         bool
+		wantTokenFees   uint64
 	}{{
-		name: "ok",
-		addr: testAddr,
+		name:          "ok",
+		addr:          testAddr,
+		wantTokenFees: tokenFeesLive,
 	}, {
-		name: "ok: empty address",
-		addr: "",
+		name:          "ok: empty address",
+		addr:          "",
+		wantTokenFees: tokenFeesStatic,
+	}, {
+		name:          "ok: live estimate failed",
+		addr:          testAddr,
+		estimateErr:   errors.New("execution reverted"),
+		wantTokenFees: tokenFeesStatic,
 	}, {
 		name:    "not enough",
 		sendAdj: 1,
@@ -2274,6 +2293,11 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 
 	for _, test := range tests {
 		node.setBalanceError(eth, test.balErr)
+		node.tokenContractor.transferEstimateErr = test.estimateErr
+		tokenFees := test.wantTokenFees
+		if tokenFees == 0 {
+			tokenFees = tokenFeesLive
+		}
 		if assetID == BipID {
 			node.bal = GweiToWei(val + ethFees - test.sendAdj - test.feeAdj)
 		} else {

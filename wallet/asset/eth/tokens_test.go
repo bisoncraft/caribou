@@ -155,17 +155,13 @@ func TestTokensRegistryConsistency(t *testing.T) {
 			t.Errorf("assetID %d (%s): no NetTokens", assetID, tok.Name)
 		}
 		for net, nt := range tok.NetTokens {
-			if len(nt.Gas) == 0 {
-				t.Errorf("%s/%s: no gas tables", tok.Name, net)
+			if g := nt.GasEstimate; g == nil || g.Approve == 0 || g.Transfer == 0 {
+				t.Errorf("%s/%s: missing gas estimate", tok.Name, net)
 			}
 			// Simnet token/contract addresses are filled in at runtime from the
 			// harness; mainnet and testnet must be present in the static map.
 			if net != util.Simnet && (nt.Address == common.Address{}) {
 				t.Errorf("%s/%s: zero token address", tok.Name, net)
-			}
-			// All v1 gas tables share the single tokenV1Gases schedule.
-			if g, ok := nt.Gas[1]; ok && *g != tokenV1Gases {
-				t.Errorf("%s/%s: v1 gas schedule diverges from tokenV1Gases", tok.Name, net)
 			}
 		}
 	}

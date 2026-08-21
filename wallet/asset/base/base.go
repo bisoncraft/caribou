@@ -25,10 +25,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 			continue
 		}
 		netAddrs[net] = netToken.Address.String()
-		netVersions[net] = make([]uint32, 0, 1)
-		for ver := range netToken.Gas {
-			netVersions[net] = append(netVersions[net], ver)
-		}
+		netVersions[net] = WalletInfo.SupportedVersions
 	}
 	asset.RegisterToken(tokenID, token.Token, &asset.WalletDefinition{
 		Type:        walletTypeToken,
@@ -130,7 +127,6 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		ChainCfg:         chainCfg,
 		AssetCfg:         cfg,
 		CompatData:       &compat,
-		VersionedGases:   VersionedGases,
 		Tokens:           Tokens,
 		FinalizeConfs:    3,
 		Logger:           logger,
