@@ -313,6 +313,9 @@ type TXCWallet struct {
 	estFeeErr error
 	validAddr bool
 
+	walletTx    *txdb.WalletTransaction
+	walletTxErr error
+
 	trustlineErr   error
 	trustlineCalls int
 
@@ -556,7 +559,7 @@ func (w *TXCWallet) TxHistory(*txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, 
 	return nil, nil
 }
 func (w *TXCWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.WalletTransaction, error) {
-	return nil, nil
+	return w.walletTx, w.walletTxErr
 }
 
 func (w *TXCWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTransaction {

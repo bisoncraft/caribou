@@ -293,9 +293,52 @@ func (e *intentsEngine) pollActive(ctx context.Context) (active int, loaded bool
 	return active, true
 }
 
+// captureDepositFee copies the origin wallet's recorded network fee for
+// the deposit transaction onto the swap record. Wallets that estimate fees
+// at send time (EVM) refine the recorded fee with the receipt, so the fee
+// is re-read on every poll while the swap is active; the record is written
+// (and a note emitted, so a live UI refreshes) only when the value
+// changes. See db.IntentsSwap.DepositTxFee for the denomination.
+func (e *intentsEngine) captureDepositFee(ctx context.Context, swap *IntentsSwap) {
+	if swap.DepositTxID == "" || swap.OriginAssetID == intentsAssetUnknown {
+		return
+	}
+	w, found := e.c.wallet(swap.OriginAssetID)
+	if !found {
+		return
+	}
+	tx, err := w.WalletTransaction(ctx, swap.DepositTxID)
+	if err != nil {
+		e.log.Meter("fee-lookup:"+swap.DepositAddress, 2*time.Minute).
+			Debugf("Fee lookup for deposit tx %s of swap %s failed: %v",
+				swap.DepositTxID, swap.DepositAddress, err)
+		return
+	}
+	if tx == nil || tx.Fees == 0 || tx.Fees == swap.DepositTxFee {
+		return
+	}
+
+	e.swapMtx.Lock()
+	fresh, err := e.db.IntentsSwap(swap.DepositAddress)
+	if err != nil || fresh.DepositTxFee == tx.Fees {
+		e.swapMtx.Unlock()
+		return
+	}
+	fresh.DepositTxFee = tx.Fees
+	err = e.db.StoreIntentsSwap(fresh)
+	e.swapMtx.Unlock()
+	if err != nil {
+		e.log.Errorf("Error storing deposit fee for swap %s: %v", swap.DepositAddress, err)
+		return
+	}
+	e.log.Debugf("Deposit tx fee for swap %s: %d atoms", swap.DepositAddress, tx.Fees)
+	e.c.notify(newIntentsSwapNote(fresh, "Swap update", "Deposit fee recorded.", db.Data))
+}
+
 // refreshSwap polls the service for one swap (the network call is made
 // without holding swapMtx) and applies the result under the lock.
 func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) error {
+	e.captureDepositFee(ctx, swap)
 	status, err := e.client.Status(ctx, swap.DepositAddress)
 	if err != nil {
 		if errors.Is(err, intents.ErrSwapNotFound) {
@@ -1265,6 +1308,15 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, fmt.Errorf("deposit send failed (no deposit was recorded, the quote will expire): %w", err)
 	}
 
+	// The wallet's history has the send's network fee — exact for UTXO
+	// wallets, an estimate for wallets that price fees at send time (EVM),
+	// which the poller re-captures until the transaction settles. A lookup
+	// miss leaves the fee zero for the poller to fill.
+	var depositFee uint64
+	if tx, err := originWallet.WalletTransaction(ctx, coin.TxID()); err == nil && tx != nil {
+		depositFee = tx.Fees
+	}
+
 	// Record the deposit under swapMtx, reloading so a concurrent poll that
 	// already advanced the state is not regressed to DEPOSIT_SENT.
 	eng.swapMtx.Lock()
@@ -1275,6 +1327,9 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		}
 		if fresh.DepositTxID == "" {
 			fresh.DepositTxID = coin.TxID()
+		}
+		if fresh.DepositTxFee == 0 {
+			fresh.DepositTxFee = depositFee
 		}
 		if err := eng.db.StoreIntentsSwap(fresh); err != nil {
 			eng.log.Errorf("Error updating swap record %s after deposit: %v", swap.DepositAddress, err)
@@ -1290,12 +1345,14 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		eng.log.Errorf("Error reloading swap record %s after deposit: %v", swap.DepositAddress, err)
 		swap.State = IntentsStateDepositSent
 		swap.DepositTxID = coin.TxID()
+		swap.DepositTxFee = depositFee
 		if err := eng.db.StoreIntentsSwap(swap); err != nil {
 			eng.log.Errorf("Error storing swap record %s after deposit: %v", swap.DepositAddress, err)
 		}
 	}
 	eng.swapMtx.Unlock()
-	eng.log.Infof("Swap %s deposit broadcast: %s tx %s", swap.DepositAddress, unbip(originAssetID), swap.DepositTxID)
+	eng.log.Infof("Swap %s deposit broadcast: %s tx %s (fee %d atoms)",
+		swap.DepositAddress, unbip(originAssetID), swap.DepositTxID, swap.DepositTxFee)
 	if err := eng.client.SubmitDeposit(ctx, swap.DepositAddress, swap.DepositTxID); err != nil {
 		eng.log.Warnf("Deposit hint submission failed (service will detect on-chain): %v", err)
 	} else {
@@ -1450,6 +1507,10 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 				eng.log.Warnf("Error reconstructing swap %s: %v", *tx.Recipient, err)
 				continue
 			}
+			// The probed history transaction is the deposit send; its
+			// recorded fee is the only shot at the fee for a swap that is
+			// already terminal (the poller will never revisit it).
+			swap.DepositTxFee = tx.Fees
 			stored, err := eng.storeReconstructed(swap)
 			if err != nil {
 				return found, err

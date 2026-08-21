@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/intents"
+	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
 func unitInfo(convFactor uint64) *util.UnitInfo {
@@ -434,6 +436,93 @@ func TestIntentsApplyTimeout(t *testing.T) {
 	eng.applyTimeout("done")
 	if stored, _ := eng.db.IntentsSwap("done"); stored.State != intents.StatusSuccess {
 		t.Fatalf("terminal record timed out to %s", stored.State)
+	}
+}
+
+func TestIntentsCaptureDepositFee(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	eng := newTestIntentsEngine(rig)
+	notes := subscribeNotes(rig)
+
+	xcw, tWallet := newTWallet(0)
+	rig.core.wallets[0] = xcw
+
+	drainNotes := func() (n int) {
+		for {
+			select {
+			case <-notes:
+				n++
+			default:
+				return n
+			}
+		}
+	}
+
+	swap := testSwapRecord("addr", IntentsStateDepositSent)
+	swap.DepositTxID = "deposittx"
+	if err := eng.db.StoreIntentsSwap(swap); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	reload := func() *IntentsSwap {
+		s, err := eng.db.IntentsSwap("addr")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		return s
+	}
+
+	// No wallet record for the tx yet: nothing captured, nothing noted.
+	eng.captureDepositFee(tCtx, reload())
+	if fee := reload().DepositTxFee; fee != 0 {
+		t.Fatalf("fee %d captured with no wallet tx record", fee)
+	}
+	if n := drainNotes(); n != 0 {
+		t.Fatalf("%d notes for a no-op capture", n)
+	}
+
+	// The wallet reports a fee (an estimate, for an EVM-style wallet).
+	tWallet.walletTx = &txdb.WalletTransaction{ID: "deposittx", Fees: 300}
+	eng.captureDepositFee(tCtx, reload())
+	if fee := reload().DepositTxFee; fee != 300 {
+		t.Fatalf("fee not captured: %d", fee)
+	}
+	if n := drainNotes(); n != 1 {
+		t.Fatalf("%d notes for a fee capture, wanted 1", n)
+	}
+
+	// The wallet refines the fee with the receipt: re-captured.
+	tWallet.walletTx.Fees = 250
+	eng.captureDepositFee(tCtx, reload())
+	if fee := reload().DepositTxFee; fee != 250 {
+		t.Fatalf("refined fee not captured: %d", fee)
+	}
+	if n := drainNotes(); n != 1 {
+		t.Fatalf("%d notes for a fee refinement, wanted 1", n)
+	}
+
+	// An unchanged fee is a no-op.
+	eng.captureDepositFee(tCtx, reload())
+	if n := drainNotes(); n != 0 {
+		t.Fatalf("%d notes for an unchanged fee", n)
+	}
+
+	// A lookup error leaves the recorded fee alone.
+	tWallet.walletTxErr = errors.New("test error")
+	eng.captureDepositFee(tCtx, reload())
+	if fee := reload().DepositTxFee; fee != 250 {
+		t.Fatalf("fee changed on lookup error: %d", fee)
+	}
+	tWallet.walletTxErr = nil
+
+	// A record with no deposit txid never queries the wallet.
+	noTx := testSwapRecord("addr2", IntentsStateQuoted)
+	if err := eng.db.StoreIntentsSwap(noTx); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	eng.captureDepositFee(tCtx, noTx)
+	if s, _ := eng.db.IntentsSwap("addr2"); s.DepositTxFee != 0 {
+		t.Fatalf("fee %d captured with no deposit txid", s.DepositTxFee)
 	}
 }
 

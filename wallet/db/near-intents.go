@@ -83,7 +83,15 @@ type IntentsSwap struct {
 	Deadline     time.Time `json:"deadline"`
 	TimeEstimate int64     `json:"timeEstimate"` // seconds, from the quote
 
-	DepositTxID    string   `json:"depositTxID,omitempty"`
+	DepositTxID string `json:"depositTxID,omitempty"`
+	// DepositTxFee is the network fee the origin wallet paid for the
+	// deposit transaction, denominated in the origin network's parent-asset
+	// atoms (gas for a token deposit is paid in the chain native, not the
+	// token). Wallets that estimate fees at send time (EVM) refine the
+	// recorded fee once the transaction settles, so the value is
+	// re-captured on every status poll while the swap is active. Zero means
+	// not yet known.
+	DepositTxFee   uint64   `json:"depositTxFee,omitempty"`
 	NearTxHashes   []string `json:"nearTxHashes,omitempty"`
 	DestinationTxs []string `json:"destinationTxs,omitempty"`
 	RefundTxs      []string `json:"refundTxs,omitempty"`
