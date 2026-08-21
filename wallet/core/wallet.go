@@ -47,15 +47,14 @@ func runWithTimeout(f func() error, timeout time.Duration) error {
 // xcWallet is a wallet. Use (*Core).loadWallet to construct a xcWallet.
 type xcWallet struct {
 	asset.Wallet
-	log               util.Logger
-	connector         *util.ConnectionMaster
-	AssetID           uint32
-	Symbol            string
-	supportedVersions []uint32
-	walletType        string
-	traits            asset.WalletTrait
-	network           *xcWallet
-	connectMtx        sync.Mutex
+	log        util.Logger
+	connector  *util.ConnectionMaster
+	AssetID    uint32
+	Symbol     string
+	walletType string
+	traits     asset.WalletTrait
+	network    *xcWallet
+	connectMtx sync.Mutex
 
 	// monitored is nonzero while a startWalletSyncMonitor goroutine is watching
 	// sync status. It is accessed atomically rather than under mtx.

@@ -108,10 +108,9 @@ var (
 
 	// WalletInfo defines general information about a Monero wallet.
 	WalletInfo = &asset.WalletInfo{
-		Name:              "Monero",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  []*asset.WalletDefinition{nativeWalletDefinition},
+		Name:             "Monero",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: []*asset.WalletDefinition{nativeWalletDefinition},
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

@@ -47,16 +47,14 @@ func registerToken(tokenID uint32, desc string) {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
 	netAddrs := make(map[util.Network]string)
-	netAssetVersions := make(map[util.Network][]uint32, 3)
 	for net, netToken := range token.NetTokens {
 		netAddrs[net] = netToken.Address.String()
-		netAssetVersions[net] = WalletInfo.SupportedVersions
 	}
 	asset.RegisterToken(tokenID, token.Token, &asset.WalletDefinition{
 		Type:        walletTypeToken,
 		Tab:         "Ethereum token",
 		Description: desc,
-	}, netAddrs, netAssetVersions)
+	}, netAddrs)
 }
 
 var (
@@ -120,8 +118,6 @@ const (
 	// coinIDTakerFoundMakerRedemption is a prefix to identify one of CoinID formats,
 	// see DecodeCoinID func for details.
 	coinIDTakerFoundMakerRedemption = "TakerFoundMakerRedemption:"
-
-	LiveEstimateFailedError = util.ErrorKind("live gas estimate failed")
 
 	// txAgeOut is the amount of time after which we forego any tx
 	// synchronization efforts for unconfirmed pending txs.
@@ -209,16 +205,8 @@ var (
 
 	// WalletInfo defines some general information about a Ethereum wallet.
 	WalletInfo = asset.WalletInfo{
-		Name: "Ethereum",
-		// SupportedVersions: For Ethereum, the server backend maintains a
-		// single protocol version, so tokens and ETH have the same set of
-		// supported versions. Even though the SupportedVersions are made
-		// accessible for tokens via (*TokenWallet).Info, the versions are not
-		// exposed though any Driver methods or assets/driver functions. Use the
-		// network wallet's WalletInfo via (*Driver).Info if you need a token's
-		// supported versions before a wallet is available.
-		SupportedVersions: []uint32{0, 1},
-		UnitInfo:          UnitInfo,
+		Name:     "Ethereum",
+		UnitInfo: UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			// {
 			// 	Type:        walletTypeGeth,
@@ -1632,11 +1620,10 @@ func (w *ETHWallet) OpenTokenWallet(tokenCfg *asset.TokenConfig) (asset.Wallet, 
 		atomize:          token.EVMToAtomic,
 		ui:               token.UnitInfo,
 		wi: asset.WalletInfo{
-			Name:              token.Name,
-			SupportedVersions: w.wi.SupportedVersions,
-			UnitInfo:          token.UnitInfo,
-			BlockchainClass:   asset.BlockchainClassEVM,
-			Network:           w.wi.Network,
+			Name:            token.Name,
+			UnitInfo:        token.UnitInfo,
+			BlockchainClass: asset.BlockchainClassEVM,
+			Network:         w.wi.Network,
 		},
 		tokenAddr:         netToken.Address,
 		pendingTxCheckBal: new(big.Int),

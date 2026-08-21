@@ -114,10 +114,9 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "Ripple",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		Name:             "Ripple",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: []*asset.WalletDefinition{rpcWalletDefinition},
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

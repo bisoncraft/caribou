@@ -18,16 +18,14 @@ func regToken(tokens map[uint32]*eth.Token, tokenID uint32, desc string) {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
 	netAddrs := make(map[util.Network]string)
-	netVersions := make(map[util.Network][]uint32, 3)
 	for net, netToken := range token.NetTokens {
 		netAddrs[net] = netToken.Address.String()
-		netVersions[net] = eth.WalletInfo.SupportedVersions
 	}
 	asset.RegisterToken(tokenID, token.Token, &asset.WalletDefinition{
 		Type:        eth.WalletTypeToken,
 		Tab:         "Polygon token",
 		Description: desc,
-	}, netAddrs, netVersions, true)
+	}, netAddrs, true)
 }
 
 func registerTokens() {

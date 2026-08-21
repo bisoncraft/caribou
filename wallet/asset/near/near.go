@@ -33,7 +33,6 @@ import (
 )
 
 const (
-	version       = 0
 	walletTypeRPC = "rpc"
 	keyFileName   = "near-keyfile.json"
 
@@ -76,10 +75,9 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "NEAR Protocol",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
+		Name:             "NEAR Protocol",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: []*asset.WalletDefinition{rpcWalletDefinition},
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

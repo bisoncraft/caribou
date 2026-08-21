@@ -19,8 +19,6 @@ import (
 )
 
 const (
-	version = 0
-
 	// BipID is the BIP-0044 asset ID.
 	BipID = 0
 
@@ -46,11 +44,10 @@ var (
 	// AvailableWallets is build-tagged: SPV-first on desktop, electrum-only on
 	// mobile. See wallets_desktop.go and wallets_mobile.go.
 	WalletInfo = &asset.WalletInfo{
-		Name:              "Bitcoin",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  availableWallets,
-		BlockchainClass:   asset.BlockchainClassUTXO,
+		Name:             "Bitcoin",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: availableWallets,
+		BlockchainClass:  asset.BlockchainClassUTXO,
 		// Historical extremes are in the several-hundred sat/vB range, so
 		// 5,000 never binds on a real market but catches units mixups.
 		MaxFeeRate: 5_000,

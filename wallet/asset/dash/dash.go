@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	version = 0
 	// BipID is the BIP-0044 asset ID.
 	BipID              = 5
 	walletTypeElectrum = "electrumRPC"
@@ -37,11 +36,10 @@ var (
 	// build-tagged to drop SPV entirely on mobile. See wallets_desktop.go and
 	// wallets_mobile.go.
 	WalletInfo = &asset.WalletInfo{
-		Name:              "Dash",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  availableWallets,
-		BlockchainClass:   asset.BlockchainClassUTXO,
+		Name:             "Dash",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: availableWallets,
+		BlockchainClass:  asset.BlockchainClassUTXO,
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

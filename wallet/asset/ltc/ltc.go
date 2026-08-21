@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	version = 1
 	// BipID is the BIP-0044 asset ID.
 	BipID              = 2
 	walletTypeSPV      = "SPV"
@@ -41,11 +40,10 @@ var (
 	// AvailableWallets is build-tagged: SPV-first on desktop, electrum-only on
 	// mobile. See wallets_desktop.go and wallets_mobile.go.
 	WalletInfo = &asset.WalletInfo{
-		Name:              "Litecoin",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  availableWallets,
-		BlockchainClass:   asset.BlockchainClassUTXO,
+		Name:             "Litecoin",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: availableWallets,
+		BlockchainClass:  asset.BlockchainClassUTXO,
 		// LTC fee markets run orders of magnitude below this; the ceiling
 		// exists to catch units mixups, not to track the market.
 		MaxFeeRate: 5_000,

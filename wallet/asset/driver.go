@@ -16,8 +16,7 @@ import (
 // networks enables filtering out tokens via the package's SetNetwork.
 type nettedToken struct {
 	*Token
-	erc20NetAddrs             map[util.Network]string
-	netSupportedAssetVersions map[util.Network][]uint32
+	erc20NetAddrs map[util.Network]string
 }
 
 var (
@@ -92,7 +91,6 @@ func RegisterToken(
 	token *util.Token,
 	walletDef *WalletDefinition,
 	erc20NetAddrs map[util.Network]string,
-	netSupportedAssetVersions map[util.Network][]uint32,
 	overwrite ...bool,
 ) {
 	driversMtx.Lock()
@@ -110,8 +108,7 @@ func RegisterToken(
 			Definition: walletDef,
 			// ContractAddress specified in SetNetwork.
 		},
-		erc20NetAddrs:             erc20NetAddrs,
-		netSupportedAssetVersions: netSupportedAssetVersions,
+		erc20NetAddrs: erc20NetAddrs,
 	}
 }
 
@@ -278,7 +275,6 @@ func SetNetwork(net util.Network) {
 			continue
 		}
 		nt.Token.ContractAddress = addr
-		nt.Token.SupportedAssetVersions = nt.netSupportedAssetVersions[net]
 	}
 }
 

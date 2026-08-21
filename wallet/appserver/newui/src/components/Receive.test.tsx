@@ -21,11 +21,11 @@ function setUpUsdcTicker () {
     makeAsset(polyID, 'POLYGON', { name: 'Polygon', wallet: makeWallet(polyID) }),
     makeAsset(usdcEthID, 'USDC', {
       wallet: makeWallet(usdcEthID),
-      token: { networkID: ethID, name: 'Ethereum', unitInfo: makeAsset(ethID, 'ETH').unitInfo, contractAddress: '0x1', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
+      token: { networkID: ethID, name: 'Ethereum', unitInfo: makeAsset(ethID, 'ETH').unitInfo, contractAddress: '0x1', definition: makeWalletDefinition() }
     }),
     makeAsset(usdcPolyID, 'USDC', {
       wallet: makeWallet(usdcPolyID),
-      token: { networkID: polyID, name: 'Polygon', unitInfo: makeAsset(polyID, 'POLYGON').unitInfo, contractAddress: '0x2', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
+      token: { networkID: polyID, name: 'Polygon', unitInfo: makeAsset(polyID, 'POLYGON').unitInfo, contractAddress: '0x2', definition: makeWalletDefinition() }
     })
   ])
   app.prepareTickerAssets()

@@ -82,7 +82,6 @@ func init() {
 	// that don't use a real registered asset.
 	for _, id := range []uint32{54321} {
 		asset.Register(id, &tDriver{winfo: &asset.WalletInfo{
-			SupportedVersions: []uint32{0},
 			UnitInfo: util.UnitInfo{
 				Conventional: util.Denomination{ConversionFactor: 1e8},
 			},

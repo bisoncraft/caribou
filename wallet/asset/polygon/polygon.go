@@ -23,19 +23,17 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
 	netAddrs := make(map[util.Network]string)
-	netVersions := make(map[util.Network][]uint32, 3)
 	for net, netToken := range token.NetTokens {
 		if !slices.Contains(allowedNets, net) {
 			continue
 		}
 		netAddrs[net] = netToken.Address.String()
-		netVersions[net] = WalletInfo.SupportedVersions
 	}
 	asset.RegisterToken(tokenID, token.Token, &asset.WalletDefinition{
 		Type:        walletTypeToken,
 		Tab:         "Polygon token",
 		Description: desc,
-	}, netAddrs, netVersions)
+	}, netAddrs)
 }
 
 func init() {
@@ -72,11 +70,10 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "Polygon",
-		SupportedVersions: []uint32{0, 1},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
-		BlockchainClass:   asset.BlockchainClassEVM,
+		Name:             "Polygon",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:  asset.BlockchainClassEVM,
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

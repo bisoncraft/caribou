@@ -51,7 +51,6 @@ var (
 	tDCR             = &util.Asset{
 		ID:         42,
 		Symbol:     "dcr",
-		Version:    version,
 		MaxFeeRate: 10,
 		SwapConf:   1,
 	}

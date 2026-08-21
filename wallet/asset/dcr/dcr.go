@@ -266,9 +266,8 @@ var (
 
 	// WalletInfo defines some general information about a Decred wallet.
 	WalletInfo = &asset.WalletInfo{
-		Name:              "Decred",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
+		Name:     "Decred",
+		UnitInfo: UnitInfo,
 		AvailableWallets: []*asset.WalletDefinition{
 			spvWalletDefinition,
 			{

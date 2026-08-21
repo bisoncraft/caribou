@@ -30,13 +30,11 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 		panic("token " + strconv.Itoa(int(tokenID)) + " not known")
 	}
 	netAddrs := make(map[util.Network]string)
-	netVersions := make(map[util.Network][]uint32, len(allowedNets))
 	for net, issuer := range token.NetIssuers {
 		if !slices.Contains(allowedNets, net) {
 			continue
 		}
 		netAddrs[net] = issuer
-		netVersions[net] = []uint32{version}
 	}
 	asset.RegisterToken(tokenID, &util.Token{
 		NetworkID: BipID,
@@ -46,7 +44,7 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 		Type:        walletTypeToken,
 		Tab:         "XRP token",
 		Description: desc,
-	}, netAddrs, netVersions)
+	}, netAddrs)
 }
 
 // CreateTokenWallet just checks that the token exists; XRPL issued
@@ -89,11 +87,10 @@ func (w *xrpWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error
 		peersChange: cfg.PeersChange,
 		txDB:        cfg.NetworkTxDB,
 		wi: asset.WalletInfo{
-			Name:              token.Name,
-			SupportedVersions: []uint32{version},
-			UnitInfo:          token.UnitInfo,
-			BlockchainClass:   asset.BlockchainClassAccount,
-			Network:           w.Info().Network,
+			Name:            token.Name,
+			UnitInfo:        token.UnitInfo,
+			BlockchainClass: asset.BlockchainClassAccount,
+			Network:         w.Info().Network,
 		},
 	}, nil
 }

@@ -78,8 +78,7 @@ var (
 	errTest     = fmt.Errorf("test error")
 	tLogger     = util.StdOutLogger("TCORE", util.LevelInfo)
 	tWalletInfo = &asset.WalletInfo{
-		SupportedVersions: []uint32{0},
-		BlockchainClass:   asset.BlockchainClassUTXO,
+		BlockchainClass: asset.BlockchainClassUTXO,
 		UnitInfo: util.UnitInfo{
 			Conventional: util.Denomination{
 				ConversionFactor: 1e8,
@@ -352,26 +351,24 @@ func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
 		syncStatus:  func() (synced bool, progress float32, err error) { return true, 1, nil },
 		ownsAddress: true,
 		info: &asset.WalletInfo{
-			SupportedVersions: []uint32{0},
-			BlockchainClass:   asset.BlockchainClassUTXO,
+			BlockchainClass: asset.BlockchainClassUTXO,
 		},
 	}
 	var broadcasting uint32 = 1
 	xcWallet := &xcWallet{
-		log:               tLogger,
-		supportedVersions: w.info.SupportedVersions,
-		Wallet:            w,
-		Symbol:            util.BipIDSymbol(assetID),
-		connector:         util.NewConnectionMaster(w),
-		AssetID:           assetID,
-		walletType:        "type",
-		hookedUp:          true,
-		encPass:           []byte{0x01},
-		peerCount:         1,
-		syncStatus:        &asset.SyncStatus{Synced: true},
-		pw:                tPW,
-		traits:            asset.DetermineWalletTraits(w),
-		broadcasting:      &broadcasting,
+		log:          tLogger,
+		Wallet:       w,
+		Symbol:       util.BipIDSymbol(assetID),
+		connector:    util.NewConnectionMaster(w),
+		AssetID:      assetID,
+		walletType:   "type",
+		hookedUp:     true,
+		encPass:      []byte{0x01},
+		peerCount:    1,
+		syncStatus:   &asset.SyncStatus{Synced: true},
+		pw:           tPW,
+		traits:       asset.DetermineWalletTraits(w),
+		broadcasting: &broadcasting,
 	}
 
 	return xcWallet, w
@@ -826,7 +823,7 @@ func TestSplitDBWalletsByTokenStatusOrderIndependent(t *testing.T) {
 	asset.RegisterToken(tokenAssetID, &util.Token{
 		NetworkID: tACCTAsset.ID,
 		Name:      "Test Token",
-	}, &asset.WalletDefinition{Type: "type"}, nil, nil, true)
+	}, &asset.WalletDefinition{Type: "type"}, nil, true)
 
 	// Token wallet listed first, reproducing the case that broke initialize().
 	dbWallets := []*db.Wallet{
@@ -1006,7 +1003,7 @@ func newTaggedTestWallet(assetID uint32) (*xcWallet, *tTaggedWallet) {
 	xcw, tw := newTWallet(assetID)
 	// Account-based classification, matching real XRP: skips Core.Send's
 	// UTXO fee-rate sanity check, which this test isn't exercising.
-	tw.info = &asset.WalletInfo{SupportedVersions: []uint32{0}, BlockchainClass: asset.BlockchainClassAccount}
+	tw.info = &asset.WalletInfo{BlockchainClass: asset.BlockchainClassAccount}
 	tagged := &tTaggedWallet{TXCWallet: tw}
 	xcw.Wallet = tagged
 	return xcw, tagged

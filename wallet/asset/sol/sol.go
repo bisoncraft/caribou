@@ -87,11 +87,10 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "Solana",
-		SupportedVersions: []uint32{version},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  []*asset.WalletDefinition{rpcWalletDefinition},
-		BlockchainClass:   asset.BlockchainClassAccount,
+		Name:             "Solana",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: []*asset.WalletDefinition{rpcWalletDefinition},
+		BlockchainClass:  asset.BlockchainClassAccount,
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

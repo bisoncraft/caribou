@@ -67,11 +67,10 @@ var (
 	}
 
 	WalletInfo = asset.WalletInfo{
-		Name:              "Hyperliquid",
-		SupportedVersions: []uint32{0},
-		UnitInfo:          UnitInfo,
-		AvailableWallets:  []*asset.WalletDefinition{walletDefinition},
-		BlockchainClass:   asset.BlockchainClassAccount,
+		Name:             "Hyperliquid",
+		UnitInfo:         UnitInfo,
+		AvailableWallets: []*asset.WalletDefinition{walletDefinition},
+		BlockchainClass:  asset.BlockchainClassAccount,
 		Network: &asset.Network{
 			ID:            BipID,
 			NativeAssetID: BipID,

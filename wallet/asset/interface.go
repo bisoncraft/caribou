@@ -308,9 +308,8 @@ type Network struct {
 // Token combines the generic util.Token with a WalletDefinition.
 type Token struct {
 	*util.Token
-	Definition             *WalletDefinition `json:"definition"`
-	ContractAddress        string            `json:"contractAddress"` // Set in SetNetwork
-	SupportedAssetVersions []uint32          `json:"supportedAssetVersions"`
+	Definition      *WalletDefinition `json:"definition"`
+	ContractAddress string            `json:"contractAddress"` // Set in SetNetwork
 }
 
 type BlockchainClass string
@@ -329,11 +328,6 @@ func (c BlockchainClass) IsEVM() bool {
 type WalletInfo struct {
 	// Name is the display name for the currency, e.g. "Decred"
 	Name string `json:"name"`
-	// SupportedVersions lists all supported asset versions. Several wallet
-	// methods accept a version argument to indicate which contract to use,
-	// however, the consumer (e.g. Core) is responsible for ensuring the
-	// server's asset version is supported before using the Wallet.
-	SupportedVersions []uint32 `json:"versions"`
 	// AvailableWallets is an ordered list of available WalletDefinition. The
 	// first WalletDefinition is considered the default, and might, for instance
 	// be the initial form offered to the user for configuration, with others

@@ -1527,7 +1527,6 @@ func (c *Core) loadXCWallet(dbWallet *db.Wallet) (*xcWallet, error) {
 
 	wallet.Wallet = w
 	wallet.network = network
-	wallet.supportedVersions = w.Info().SupportedVersions
 	wallet.connector = util.NewConnectionMaster(w)
 	wallet.traits = asset.DetermineWalletTraits(w)
 	atomic.StoreUint32(wallet.broadcasting, 1)
