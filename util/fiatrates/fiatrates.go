@@ -37,6 +37,10 @@ func parseCoinpapNameSymbol(name, symbol string) (string, string) {
 	switch symbol {
 	case "usdc":
 		name = "usd-coin"
+	case "xrp":
+		// Coinpaprika's ID is "xrp-xrp", not "xrp-ripple" — it dropped the
+		// issuing company's name from the slug some time ago.
+		name = "xrp"
 	case "bnb":
 		name = "binance-coin"
 	case "polygon":

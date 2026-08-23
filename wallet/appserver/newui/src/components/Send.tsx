@@ -41,11 +41,11 @@ export default function Send ({ ticker }: SendProps) {
 
   const {
     ta, setTa, variant, setVariant,
-    address, setAddress, amount, subtract, setSubtract,
+    address, setAddress, amount, subtract, setSubtract, destTag,
     addrValid, txFee, feeKnown, feeErr, estimating, pw, setPW, sending, err, setErr, netErr, setNetErr,
     requirePW, cFactor, isWithdrawer, available, feeUI, value,
-    nativeFee, totalDebit, overBalance, canSubmit,
-    runValidation, amountChanged, pickAsset, pickVariant, setMax, submit
+    nativeFee, totalDebit, overBalance, canSubmit, supportsDestTag,
+    runValidation, amountChanged, destTagChanged, pickAsset, pickVariant, setMax, submit
   } = useSendForm({ ticker, onSent: close })
 
   useModalBusy(sending)
@@ -289,6 +289,23 @@ export default function Send ({ ticker }: SendProps) {
             />
             )}
       </div>
+
+      {supportsDestTag && (
+        <div className="px-3 pb-2">
+          <div className="d-flex justify-content-between fs12 grey">
+            <span>{t('Destination tag')}</span>
+            <span>{t('optional')}</span>
+          </div>
+          <input
+            type="text"
+            inputMode="numeric"
+            className="send-addr"
+            value={destTag}
+            placeholder={t('tag')}
+            onChange={destTagChanged}
+          />
+        </div>
+      )}
 
       <div className="px-3 pb-2">
         <div className="d-flex justify-content-between fs12 grey">

@@ -179,6 +179,7 @@ type HyperWallet struct {
 }
 
 var _ asset.Wallet = (*HyperWallet)(nil)
+var _ asset.TxFeeEstimator = (*HyperWallet)(nil)
 var _ asset.Authenticator = (*HyperWallet)(nil)
 var _ asset.Withdrawer = (*HyperWallet)(nil)
 var _ asset.Rescanner = (*HyperWallet)(nil)
@@ -514,6 +515,28 @@ func (w *HyperWallet) SyncStatus() (*asset.SyncStatus, error) {
 
 func (w *HyperWallet) StandardSendFee(_ uint64) uint64 { return 0 }
 func (w *HyperWallet) FeeRate() uint64                 { return 0 }
+
+// EstimateSendTxFee estimates the fee for sending value to address.
+// Hyperliquid spot transfers are signed L1 actions with no gas — StandardSendFee
+// and FeeRate are already 0 (see also DefaultFee in params.go) — so this
+// always reports a zero fee; it exists to satisfy the front end's Send form,
+// which otherwise refuses to enable Send until a fee estimate succeeds. An
+// invalid address is reported via isValidAddress rather than an error.
+func (w *HyperWallet) EstimateSendTxFee(address string, value, _ uint64, _, maxWithdraw bool) (uint64, bool, error) {
+	if w.rpc == nil {
+		return 0, false, asset.ErrConnectionDown
+	}
+	if !maxWithdraw {
+		bal, err := w.Balance()
+		if err != nil {
+			return 0, false, err
+		}
+		if bal.Available < value {
+			return 0, false, asset.ErrInsufficientBalance
+		}
+	}
+	return 0, w.ValidateAddress(address), nil
+}
 
 func (w *HyperWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
 	if w.txDB == nil || req == nil {
@@ -871,6 +894,24 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 	if w.emit != nil {
 		w.emit.TransactionNote(wtx, true)
 	}
+	w.emitBalanceChange()
+}
+
+// emitBalanceChange fetches the current balance and pushes it to the UI.
+// Called after an incoming transfer is stored, since the front end doesn't
+// re-poll balances on its own — without this, a detected incoming transfer
+// shows up in the transaction list but the displayed balance never updates
+// until the next full page load.
+func (w *HyperWallet) emitBalanceChange() {
+	if w.emit == nil {
+		return
+	}
+	bal, err := w.Balance()
+	if err != nil {
+		w.log.Warnf("Error emitting balance change: %v", err)
+		return
+	}
+	w.emit.BalanceChange(bal)
 }
 
 // confirmPendingSend finds the pending send matching ledger update u and

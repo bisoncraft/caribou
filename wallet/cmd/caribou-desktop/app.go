@@ -355,6 +355,7 @@ func bindJSFunctions(w webview.WebView) {
 func runWebview(url string) {
 	w := webview.New(true)
 	defer w.Destroy()
+	installEditMenu()
 	w.SetTitle(appTitle)
 	w.SetSize(600, 600, webview.HintMin)
 	if runtime.GOOS == "windows" { // windows can use icons in its resources section, or ico files

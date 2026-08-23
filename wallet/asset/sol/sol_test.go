@@ -8,13 +8,17 @@ import (
 	"context"
 	"crypto/ed25519"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/kvstore"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/keystore"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/base58"
@@ -33,6 +37,7 @@ type mockRPC struct {
 	blockhashFunc    func() (string, uint64, error)
 	sendTxFunc       func(txB []byte) (string, error)
 	balanceFunc      func() (uint64, error)
+	feeForMsgFunc    func(msg []byte) (uint64, error)
 }
 
 func (m *mockRPC) getSignaturesForAddress(_ context.Context, _ string, before, until *string, limit int) ([]signatureInfo, error) {
@@ -70,7 +75,12 @@ func (m *mockRPC) getMinimumBalanceForRentExemption(_ context.Context, size uint
 	}
 	return 0, nil
 }
-func (m *mockRPC) getFeeForMessage(_ context.Context, _ []byte) (uint64, error) { return 0, nil }
+func (m *mockRPC) getFeeForMessage(_ context.Context, msg []byte) (uint64, error) {
+	if m.feeForMsgFunc != nil {
+		return m.feeForMsgFunc(msg)
+	}
+	return 0, nil
+}
 func (m *mockRPC) getLatestBlockhash(_ context.Context) (string, uint64, error) {
 	if m.blockhashFunc != nil {
 		return m.blockhashFunc()
@@ -788,6 +798,25 @@ func TestBackfillHistory(t *testing.T) {
 		}
 		if called {
 			t.Fatal("getSignaturesForAddress called unexpectedly")
+		}
+	})
+
+	t.Run("429 arms the shared scan backoff", func(t *testing.T) {
+		db := &mockTxDB{}
+		table := newMockTable()
+		_ = table.Set(metaKey(BipID, beforeCursorField), []byte("sig501"), txdb.WithReplace())
+		rpc := &mockRPC{
+			sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+				return nil, fmt.Errorf("getSignaturesForAddress: Too many requests for a specific RPC call (429)")
+			},
+		}
+		w := newTestWallet(walletAddr, rpc, db, table)
+
+		if err := w.backfillHistory(ctx); err == nil {
+			t.Fatal("expected a 429 error")
+		}
+		if !w.scanBackoff.blocked(time.Now()) {
+			t.Fatal("a backfill 429 should arm the shared scan backoff")
 		}
 	})
 
@@ -1588,5 +1617,289 @@ func TestSyncHistoryConfirmsNewRecords(t *testing.T) {
 	}
 	if !db.stored[0].Confirmed {
 		t.Error("a newly scanned historical tx should be stored confirmed")
+	}
+}
+
+// TestSyncHistoryEmitsBalanceChange guards against a detected incoming
+// transfer showing up in the transaction list while the displayed balance
+// never updates: the front end doesn't re-poll balances on its own, so
+// storing a new tx must also push a fresh BalanceChangeNote.
+func TestSyncHistoryEmitsBalanceChange(t *testing.T) {
+	const (
+		walletAddr = "wallet"
+		otherAddr  = "other"
+	)
+	notes := make(chan asset.WalletNotification, 4)
+	db := &mockTxDB{}
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+			return []signatureInfo{makeSig("sig")}, nil
+		},
+		txFunc: func(_ string) (*rpcTransaction, error) {
+			return makeWalletTx(walletAddr, otherAddr), nil
+		},
+		balanceFunc: func() (uint64, error) { return 1_000_000, nil },
+	}
+	w := newTestWallet(walletAddr, rpc, db, newMockTable())
+	w.emit = asset.NewWalletEmitter(notes, BipID, util.Disabled)
+
+	if err := w.syncHistory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-notes:
+		bcn, ok := n.(*asset.BalanceChangeNote)
+		if !ok {
+			t.Fatalf("note type = %T, want *asset.BalanceChangeNote", n)
+		}
+		if bcn.Balance.Available != 1_000_000 {
+			t.Errorf("emitted balance = %d, want 1000000", bcn.Balance.Available)
+		}
+	default:
+		t.Fatal("expected a BalanceChangeNote after storing a new tx")
+	}
+}
+
+// TestSyncHistoryNoNewTxsDoesNotEmitBalanceChange is the counterpart: a scan
+// with nothing new to store should not push a balance note.
+func TestSyncHistoryNoNewTxsDoesNotEmitBalanceChange(t *testing.T) {
+	const walletAddr = "wallet"
+	notes := make(chan asset.WalletNotification, 4)
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) { return nil, nil },
+	}
+	w := newTestWallet(walletAddr, rpc, &mockTxDB{}, newMockTable())
+	w.emit = asset.NewWalletEmitter(notes, BipID, util.Disabled)
+
+	if err := w.syncHistory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-notes:
+		t.Fatalf("unexpected note %T when nothing new was stored", n)
+	default:
+	}
+}
+
+// TestScanBackoff exercises the cooldown in isolation: escalation on repeated
+// rate limits, capping, and reset on success.
+func TestScanBackoff(t *testing.T) {
+	now := time.Now()
+	var b scanBackoff
+
+	if b.blocked(now) {
+		t.Fatal("fresh backoff should not be blocked")
+	}
+
+	b.rateLimited(now)
+	if !b.blocked(now) {
+		t.Fatal("should be blocked immediately after a rate limit")
+	}
+	if !b.blocked(now.Add(scanBackoffMin - time.Second)) {
+		t.Fatal("should still be blocked just before the min delay elapses")
+	}
+	if b.blocked(now.Add(scanBackoffMin + time.Second)) {
+		t.Fatal("should no longer be blocked once the min delay elapses")
+	}
+
+	// A second consecutive rate limit doubles the delay.
+	b.rateLimited(now)
+	if b.blocked(now.Add(2*scanBackoffMin + time.Second)) {
+		t.Fatal("second rate limit should double the delay to 2x min")
+	}
+	if !b.blocked(now.Add(2*scanBackoffMin - time.Second)) {
+		t.Fatal("should still be blocked just before the doubled delay elapses")
+	}
+
+	// Escalation caps at scanBackoffMax regardless of further rate limits.
+	for i := 0; i < 10; i++ {
+		b.rateLimited(now)
+	}
+	if b.delay != scanBackoffMax {
+		t.Fatalf("delay should cap at %v, got %v", scanBackoffMax, b.delay)
+	}
+
+	// Success clears the cooldown entirely, so the next rate limit restarts
+	// at scanBackoffMin rather than continuing to escalate.
+	b.succeeded()
+	if b.blocked(now) {
+		t.Fatal("succeeded should clear an active cooldown")
+	}
+	b.rateLimited(now)
+	if b.blocked(now.Add(scanBackoffMin + time.Second)) {
+		t.Fatal("rate limit after succeeded should restart at scanBackoffMin, not the prior escalated delay")
+	}
+}
+
+// TestSyncHistoryRateLimitBackoff proves the 429 cooldown suppresses request
+// cadence (not just returns an error) while leaving on-demand balance/tip
+// calls ungated, then recovers once the scan-class call succeeds again.
+func TestSyncHistoryRateLimitBackoff(t *testing.T) {
+	const walletAddr = "walletAddr"
+	callCount := 0
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+			callCount++
+			return nil, fmt.Errorf("getSignaturesForAddress: Too many requests for a specific RPC call (429)")
+		},
+		balanceFunc: func() (uint64, error) { return 1_000_000, nil },
+	}
+	w := newTestWallet(walletAddr, rpc, &mockTxDB{}, newMockTable())
+	ctx := context.Background()
+
+	if err := w.syncHistory(ctx); err == nil {
+		t.Fatal("expected a 429 error on the first scan")
+	}
+	if callCount != 1 {
+		t.Fatalf("callCount = %d, want 1", callCount)
+	}
+
+	// Blocked: the second call must not reach the RPC at all.
+	if err := w.syncHistory(ctx); err != nil {
+		t.Fatalf("blocked syncHistory should return nil, got %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("callCount after blocked scan = %d, want still 1", callCount)
+	}
+
+	// Balance and tip stay ungated by the scan backoff.
+	if _, err := rpc.getBalance(ctx, w.address); err != nil {
+		t.Fatalf("getBalance should be ungated by scan backoff: %v", err)
+	}
+	if err := w.updateTip(ctx); err != nil {
+		t.Fatalf("updateTip should be ungated by scan backoff: %v", err)
+	}
+
+	// Recovery: once the backoff clears, the scan reaches the RPC again.
+	w.scanBackoff.succeeded()
+	rpc.sigsFunc = func(_, _ *string, _ int) ([]signatureInfo, error) {
+		callCount++
+		return nil, nil
+	}
+	if err := w.syncHistory(ctx); err != nil {
+		t.Fatalf("syncHistory after recovery: %v", err)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount after recovery = %d, want 2", callCount)
+	}
+}
+
+func TestEstimateSendTxFee(t *testing.T) {
+	walletAddr := base58.Encode(bytes.Repeat([]byte{0x11}, 32))
+	destAddr := base58.Encode(bytes.Repeat([]byte{0x22}, 32))
+
+	t.Run("uses live fee when available", func(t *testing.T) {
+		rpc := &mockRPC{
+			balanceFunc:   func() (uint64, error) { return 1_000_000, nil },
+			feeForMsgFunc: func(_ []byte) (uint64, error) { return 7_000, nil },
+		}
+		w := newTestWallet(walletAddr, rpc, nil, nil)
+		fee, valid, err := w.EstimateSendTxFee(destAddr, 1_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !valid {
+			t.Error("expected isValidAddress=true")
+		}
+		if fee != 7_000 {
+			t.Errorf("fee = %d, want 7000 (live fee)", fee)
+		}
+	})
+
+	t.Run("falls back to default fee when live fee unavailable", func(t *testing.T) {
+		rpc := &mockRPC{
+			balanceFunc:   func() (uint64, error) { return 1_000_000, nil },
+			feeForMsgFunc: func(_ []byte) (uint64, error) { return 0, fmt.Errorf("rpc down") },
+		}
+		w := newTestWallet(walletAddr, rpc, nil, nil)
+		fee, _, err := w.EstimateSendTxFee(destAddr, 1_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if fee != DefaultFee {
+			t.Errorf("fee = %d, want DefaultFee (%d)", fee, DefaultFee)
+		}
+	})
+
+	t.Run("invalid address reported via isValidAddress, not an error", func(t *testing.T) {
+		rpc := &mockRPC{balanceFunc: func() (uint64, error) { return 1_000_000, nil }}
+		w := newTestWallet(walletAddr, rpc, nil, nil)
+		fee, valid, err := w.EstimateSendTxFee("not-a-sol-address", 1_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false")
+		}
+		if fee == 0 {
+			t.Error("expected a non-zero fee even for an invalid address")
+		}
+	})
+
+	t.Run("insufficient balance for value+fee", func(t *testing.T) {
+		rpc := &mockRPC{balanceFunc: func() (uint64, error) { return 1_000, nil }}
+		w := newTestWallet(walletAddr, rpc, nil, nil)
+		_, _, err := w.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("insufficient balance to keep rent-exempt reserve", func(t *testing.T) {
+		rpc := &mockRPC{
+			balanceFunc: func() (uint64, error) { return 10_000, nil },
+			rentFunc:    func(_ uint64) (uint64, error) { return 5_000, nil },
+		}
+		w := newTestWallet(walletAddr, rpc, nil, nil)
+		// value+fee leaves less than the 5000 reserve behind.
+		_, _, err := w.EstimateSendTxFee(destAddr, 4_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("maxWithdraw with empty address estimates the Max-button fee", func(t *testing.T) {
+		rpc := &mockRPC{balanceFunc: func() (uint64, error) { return 1_000_000, nil }}
+		w := newTestWallet(walletAddr, rpc, nil, nil)
+		fee, valid, err := w.EstimateSendTxFee("", 1_000_000, 0, false, true)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false for an empty address")
+		}
+		if fee == 0 {
+			t.Error("expected a non-zero fee")
+		}
+	})
+
+	t.Run("errors when not connected", func(t *testing.T) {
+		w := newTestWallet(walletAddr, nil, nil, nil)
+		if _, _, err := w.EstimateSendTxFee(destAddr, 1_000, 0, false, false); err == nil {
+			t.Fatal("expected an error when rpc is nil")
+		}
+	})
+}
+
+// TestCallDetectsHTTPStatus429 guards against a provider (or a proxy/CDN in
+// front of one) that returns HTTP 429 with a plain-text or HTML body rather
+// than a well-formed JSON-RPC error object. Before checking resp.StatusCode,
+// that body would fail to unmarshal and surface only as an opaque decode
+// error — never recognized as rate-limited, so the backoff this is meant to
+// arm would never trigger.
+func TestCallDetectsHTTPStatus429(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte("<html><body>Too Many Requests</body></html>"))
+	}))
+	defer srv.Close()
+
+	rpc := newRPCClient(srv.URL)
+	err := rpc.call(context.Background(), "getSlot", nil, nil)
+	if err == nil {
+		t.Fatal("expected an error from the 429 response")
+	}
+	if !isRateLimitedRPCError(err) {
+		t.Errorf("isRateLimitedRPCError(%v) = false, want true", err)
 	}
 }

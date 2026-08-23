@@ -859,6 +859,199 @@ func TestScanAccountTxsAlreadyScanned(t *testing.T) {
 	}
 }
 
+// TestScanAccountTxsClampsUnretainedHistory verifies that a fresh wallet's
+// scan against a server that does not retain full history stops reissuing the
+// identical failing range forever: the first lgrIdxsInvalid response clamps
+// the floor to the server's oldest retained ledger, and the very next scan
+// makes progress instead of repeating.
+func TestScanAccountTxsClampsUnretainedHistory(t *testing.T) {
+	log := util.NewLogger("test", util.LevelError, nil)
+	n, mt := newTestTxDB(t)
+
+	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const oldestRetained = uint64(90000000)
+	const tip = uint64(100000000)
+
+	m := newMockRippled(t)
+	var lastMin uint64
+	m.handle("account_tx", func(params json.RawMessage) (any, *rpcError) {
+		var p struct {
+			LedgerIndexMin uint64 `json:"ledger_index_min"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			t.Fatalf("decode account_tx params: %v", err)
+		}
+		lastMin = p.LedgerIndexMin
+		if p.LedgerIndexMin < oldestRetained {
+			return nil, &rpcError{code: 57, errType: "lgrIdxsInvalid", msg: "Ledger indexes invalid."}
+		}
+		return map[string]any{"status": "success", "transactions": []any{}}, nil
+	})
+	m.handle("server_info", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status": "success",
+			"info": map[string]any{
+				"complete_ledgers": fmt.Sprintf("%d-%d", oldestRetained, tip),
+			},
+		}, nil
+	})
+
+	w := &xrpWallet{
+		address:   walletAddr,
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
+	}
+	w.lastScannedLedger.Store(0)
+
+	changed := w.scanAccountTxs(context.Background(), tip)
+	if changed {
+		t.Error("expected balanceChanged=false on the clamping scan")
+	}
+	if lastMin != 1 {
+		t.Fatalf("first scan ledger_index_min = %d, want 1", lastMin)
+	}
+	if got := w.lastScannedLedger.Load(); got != oldestRetained-1 {
+		t.Fatalf("after clamp, lastScannedLedger = %d, want %d", got, oldestRetained-1)
+	}
+
+	// The scan must make progress on the next tip, not repeat the identical
+	// failing [1, tip] request forever.
+	w.scanAccountTxs(context.Background(), tip)
+	if lastMin != oldestRetained {
+		t.Fatalf("second scan ledger_index_min = %d, want %d", lastMin, oldestRetained)
+	}
+	if got := w.lastScannedLedger.Load(); got != tip {
+		t.Fatalf("after second scan, lastScannedLedger = %d, want %d (tip)", got, tip)
+	}
+}
+
+// TestScanAccountTxsClampTooNewLeavesFloorUntouched covers the case where the
+// requested max ledger is above the server's highest indexed ledger — the
+// websocket ledgerClosed push fires the instant a ledger validates, but
+// account_tx can lag slightly indexing it, producing the same lgrIdxsInvalid
+// error as a too-old range. The response here must not touch the scan floor:
+// advancing it would skip the ledger once it lands, and re-treating the
+// still-unindexed tip as newly retained would repeat this rejection forever.
+func TestScanAccountTxsClampTooNewLeavesFloorUntouched(t *testing.T) {
+	log := util.NewLogger("test", util.LevelError, nil)
+	n, mt := newTestTxDB(t)
+
+	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const serverHi = uint64(106451011) // server has indexed through here
+	const tip = uint64(106451012)      // just validated, not yet indexed
+
+	m := newMockRippled(t)
+	m.handle("account_tx", func(_ json.RawMessage) (any, *rpcError) {
+		return nil, &rpcError{code: 57, errType: "lgrIdxsInvalid", msg: "Ledger indexes invalid."}
+	})
+	m.handle("server_info", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status": "success",
+			"info": map[string]any{
+				"complete_ledgers": fmt.Sprintf("32570-%d", serverHi),
+			},
+		}, nil
+	})
+
+	w := &xrpWallet{
+		address:   walletAddr,
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
+	}
+	w.lastScannedLedger.Store(serverHi)
+
+	changed := w.scanAccountTxs(context.Background(), tip)
+	if changed {
+		t.Error("expected balanceChanged=false")
+	}
+	if got := w.lastScannedLedger.Load(); got != serverHi {
+		t.Fatalf("lastScannedLedger = %d, want unchanged %d", got, serverHi)
+	}
+}
+
+// TestScanAccountTxsClampAtExactBoundary reproduces the case observed live:
+// complete_ledgers catches up to exactly maxLedger in the gap between the
+// account_tx rejection and the server_info fetch that follows it, so hi ends
+// up equal to (not less than) maxLedger. That equality is still evidence of
+// the same not-yet-indexed lag, not a genuine anomaly, and must not fall
+// through to the noisy "rejected range it claims to retain" warning or touch
+// the scan floor.
+func TestScanAccountTxsClampAtExactBoundary(t *testing.T) {
+	log := util.NewLogger("test", util.LevelError, nil)
+	n, mt := newTestTxDB(t)
+
+	const walletAddr = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const prevScanned = uint64(106451179)
+	const tip = uint64(106451180) // account_tx rejects it, then server_info reports it complete
+
+	m := newMockRippled(t)
+	m.handle("account_tx", func(_ json.RawMessage) (any, *rpcError) {
+		return nil, &rpcError{code: 57, errType: "lgrIdxsInvalid", msg: "Ledger indexes invalid."}
+	})
+	m.handle("server_info", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status": "success",
+			"info": map[string]any{
+				"complete_ledgers": fmt.Sprintf("32570-%d", tip),
+			},
+		}, nil
+	})
+
+	w := &xrpWallet{
+		address:   walletAddr,
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
+	}
+	w.lastScannedLedger.Store(prevScanned)
+
+	changed := w.scanAccountTxs(context.Background(), tip)
+	if changed {
+		t.Error("expected balanceChanged=false")
+	}
+	if got := w.lastScannedLedger.Load(); got != prevScanned {
+		t.Fatalf("lastScannedLedger = %d, want unchanged %d", got, prevScanned)
+	}
+}
+
+// TestScanAccountTxsClampServerInfoFailure verifies that a server_info error
+// while clamping leaves the scan floor untouched rather than advancing it
+// blindly and silently skipping real history.
+func TestScanAccountTxsClampServerInfoFailure(t *testing.T) {
+	log := util.NewLogger("test", util.LevelError, nil)
+	n, mt := newTestTxDB(t)
+
+	m := newMockRippled(t)
+	m.handle("account_tx", func(_ json.RawMessage) (any, *rpcError) {
+		return nil, &rpcError{code: 57, errType: "lgrIdxsInvalid", msg: "Ledger indexes invalid."}
+	})
+	m.handle("server_info", func(_ json.RawMessage) (any, *rpcError) {
+		return nil, &rpcError{code: 500, errType: "internal", msg: "boom"}
+	})
+
+	w := &xrpWallet{
+		address:   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		rpc:       m.rpcClient(),
+		txDB:      n,
+		metaTable: mt,
+		log:       log,
+	}
+	w.lastScannedLedger.Store(0)
+
+	changed := w.scanAccountTxs(context.Background(), 100000000)
+	if changed {
+		t.Error("expected balanceChanged=false")
+	}
+	if got := w.lastScannedLedger.Load(); got != 0 {
+		t.Fatalf("lastScannedLedger = %d, want unchanged 0", got)
+	}
+}
+
 // TestTipWorkerCoalescing verifies that the tipWorker drain loop processes only
 // the highest queued tip when multiple tips arrive during a scan.
 func TestTipWorkerCoalescing(t *testing.T) {

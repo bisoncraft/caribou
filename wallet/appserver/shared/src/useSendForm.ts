@@ -3,7 +3,7 @@ import t, { tvar } from './intl'
 import app from './application'
 import { postJSON } from './http'
 import { TickerAsset, AssetVariant, networkID, networkAsset, isVariantActive } from './assets'
-import { traitWithdrawer } from './registry'
+import { traitWithdrawer, traitDestinationTagger } from './registry'
 import Doc from './doc'
 
 // singleNetworkVariant returns the sole variant when an asset settles on exactly
@@ -48,6 +48,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   const [address, setAddress] = useState('')
   const [amount, setAmount] = useState('')
   const [subtract, setSubtract] = useState(false)
+  const [destTag, setDestTag] = useState('')
   const [addrValid, setAddrValid] = useState<boolean | null>(null)
   const [txFee, setTxFee] = useState(0)
   const [feeKnown, setFeeKnown] = useState(false)
@@ -80,6 +81,10 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   const isToken = Boolean(variant?.token)
   const traits = variant ? (app.wallet(variant.assetID)?.traits ?? 0) : 0
   const isWithdrawer = (traits & traitWithdrawer) !== 0
+  const supportsDestTag = (traits & traitDestinationTagger) !== 0
+  // Bound client-side so an oversized value never reaches Go's *uint32 decode,
+  // which would surface as an opaque form-parse error instead of a clear one.
+  const destTagValid = destTag === '' || Number(destTag) <= 4294967295
   const available = variant?.bal.available ?? 0
   const feeUI = variant ? (isToken ? app.unitInfo(networkID(variant)) : variant.ui) : undefined
   const value = variant ? Math.round(parseSendAmount(amount) * cFactor) : 0
@@ -137,7 +142,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   // click (pickVariant); the single-network skip path proceeds regardless.
   const selectVariant = useCallback((v: AssetVariant) => {
     setVariant(v)
-    setAddress(''); setAmount(''); setSubtract(false)
+    setAddress(''); setAmount(''); setSubtract(false); setDestTag('')
     setAddrValid(null); setTxFee(0); setFeeKnown(false); setPW(''); setErr('')
   }, [])
 
@@ -205,6 +210,7 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
       value,
       subtract,
       feeRate: feeRateRef.current,
+      destTag: supportsDestTag && destTag !== '' ? Number(destTag) : undefined,
       pw: requirePW ? pw : undefined
     })
     setSending(false)
@@ -222,6 +228,11 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
     if (v === '' || /^\d*\.?\d*$/.test(v)) setAmount(v)
   }
 
+  const destTagChanged = (e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value
+    if (v === '' || /^\d+$/.test(v)) setDestTag(v)
+  }
+
   // Tokens pay their fee in the parent asset, so the sent-asset fee is zero.
   const nativeFee = isToken ? 0 : txFee
   const totalDebit = subtract ? value : value + nativeFee
@@ -231,18 +242,18 @@ export function useSendForm ({ ticker, onSent }: UseSendFormOptions) {
   // cover the fee — so this disables Send when there's insufficient gas, during
   // estimation, and on any estimate failure.
   const canSubmit = Boolean(addrValid) && value > 0 && !overBalance && feeKnown && !sending &&
-    (!requirePW || pw !== '')
+    (!requirePW || pw !== '') && destTagValid
 
   return {
     // state
     ta, setTa, variant, setVariant,
-    address, setAddress, amount, subtract, setSubtract,
+    address, setAddress, amount, subtract, setSubtract, destTag,
     addrValid, txFee, feeKnown, feeErr, estimating,
     pw, setPW, sending, err, setErr, netErr, setNetErr,
     // derived
     requirePW, cFactor, isToken, isWithdrawer, available, feeUI, value,
-    nativeFee, totalDebit, overBalance, canSubmit,
+    nativeFee, totalDebit, overBalance, canSubmit, supportsDestTag, destTagValid,
     // handlers
-    runValidation, amountChanged, pickAsset, pickVariant, selectVariant, setMax, submit
+    runValidation, amountChanged, destTagChanged, pickAsset, pickVariant, selectVariant, setMax, submit
   }
 }

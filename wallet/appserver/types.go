@@ -72,7 +72,12 @@ type sendForm struct {
 	// used as-is for UTXO assets (so the approved rate is the rate charged), and
 	// ignored for account/EVM assets, which cannot price a send to a specific
 	// rate. Obtain it from the /api/txfee estimate response.
-	FeeRate uint64           `json:"feeRate"`
+	FeeRate uint64 `json:"feeRate"`
+	// DestTag is an optional XRPL-style destination tag some assets' Send
+	// accepts (see asset.DestinationTagger). A pointer because 0 is a valid
+	// tag, distinct from "no tag." Only assets whose WalletState.Traits has
+	// WalletTraitDestinationTagger set will accept a non-nil value.
+	DestTag *uint32          `json:"destTag"`
 	Pass    encode.PassBytes `json:"pw"`
 }
 

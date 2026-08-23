@@ -2236,6 +2236,64 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 	}
 }
 
+// TestHandleTransferUpdateEmitsBalanceChange guards against a detected
+// incoming transfer showing up in the transaction list while the displayed
+// balance never updates: the front end doesn't re-poll balances on its own,
+// so storing a new receive tx must also push a fresh BalanceChangeNote.
+func TestHandleTransferUpdateEmitsBalanceChange(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(spotClearinghouseState{
+			Balances: []spotBalance{{Coin: "HYPE", Total: "5", Hold: "0"}},
+		})
+	}))
+	defer srv.Close()
+
+	netDB := newTestTxDB(t)
+	log := util.StdOutLogger("HLWTEST", util.LevelTrace)
+	rpc, err := newRPCClient(srv.URL, "", log)
+	if err != nil {
+		t.Fatalf("newRPCClient: %v", err)
+	}
+	notes := make(chan asset.WalletNotification, 16)
+	w := &HyperWallet{
+		log:     log,
+		net:     util.Testnet,
+		address: "0xabcdef1234567890abcdef1234567890abcdef12",
+		rpc:     rpc,
+		ctx:     context.Background(),
+		emit:    asset.NewWalletEmitter(notes, BipID, log),
+		txDB:    netDB,
+	}
+	mustSetupWalletTxDB(t, w)
+
+	update := ledgerUpdate{
+		Time: 1700000005000,
+		Hash: "0x" + fmt.Sprintf("%064x", 99),
+		Delta: ledgerDelta{
+			Type: "spotTransfer", Token: "HYPE", Amount: "3.5",
+			User: "0xsender1234567890abcdef1234567890abcdef12", Destination: w.address,
+		},
+	}
+	w.handleTransferUpdate(update)
+
+	wantAvail, _ := parseHYPE("5")
+	for {
+		select {
+		case n := <-notes:
+			bcn, ok := n.(*asset.BalanceChangeNote)
+			if !ok {
+				continue // drain the preceding TransactionNote
+			}
+			if bcn.Balance.Available != wantAvail {
+				t.Errorf("emitted balance = %d, want %d", bcn.Balance.Available, wantAvail)
+			}
+			return
+		default:
+			t.Fatal("expected a BalanceChangeNote after storing a new receive tx")
+		}
+	}
+}
+
 func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 	w := newTestWalletWithDB(t)
 	sender := "0xsender1234567890abcdef1234567890abcdef12"
@@ -2754,6 +2812,58 @@ func TestWSClientOnLiveCalled(t *testing.T) {
 	}
 }
 
+// TestWSClientSendsAppLevelPing guards against a regression to a WebSocket
+// protocol-level Ping control frame: Hyperliquid's server only resets its
+// 60s idle timer on a JSON message, so the heartbeat must be a text message
+// of exactly {"method":"ping"}, not a control frame (which gorilla's server
+// would consume automatically and never surface via ReadMessage).
+func TestWSClientSendsAppLevelPing(t *testing.T) {
+	pingCh := make(chan struct{}, 4)
+	srv := newWSTestServer(t, func(conn *websocket.Conn) {
+		if _, _, err := conn.ReadMessage(); err != nil { // subscribe message
+			return
+		}
+		for {
+			msgType, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msgType != websocket.TextMessage {
+				t.Errorf("ping arrived as message type %d, want TextMessage", msgType)
+				continue
+			}
+			var msg wsPingMsg
+			if err := json.Unmarshal(raw, &msg); err != nil || msg.Method != "ping" {
+				t.Errorf("unexpected message on the wire: %s", raw)
+				continue
+			}
+			select {
+			case pingCh <- struct{}{}:
+			default:
+			}
+		}
+	})
+	defer srv.Close()
+
+	log := util.StdOutLogger("WSTEST", util.LevelTrace)
+	wsc := &wsClient{
+		url:          wsURL(srv),
+		user:         "0xb",
+		log:          log,
+		pingInterval: 50 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go wsc.run(ctx)
+
+	select {
+	case <-pingCh:
+	case <-ctx.Done():
+		t.Fatal("timeout waiting for an application-level ping message")
+	}
+}
+
 func TestWSClientIgnoresOtherChannels(t *testing.T) {
 	received := make(chan ledgerUpdate, 4)
 
@@ -3072,4 +3182,77 @@ func TestScanLedgerPairsIdenticalSendsFromUnorderedAPI(t *testing.T) {
 			t.Errorf("%s confirmed pending %q, want %q", c.hash, id, c.wantPendingID)
 		}
 	}
+}
+
+// TestEstimateSendTxFee guards the fee estimate the front end's Send form
+// requires before it will enable Send at all. Hyperliquid spot transfers have
+// no network fee (see StandardSendFee/FeeRate, both 0), so this always
+// reports fee=0; what it must get right is address validity and the balance
+// check.
+func TestEstimateSendTxFee(t *testing.T) {
+	const destAddr = "0x1234567890123456789012345678901234567890"
+	noExchange := func(rw http.ResponseWriter, r *http.Request) {
+		t.Fatal("EstimateSendTxFee should never reach the exchange endpoint")
+	}
+
+	t.Run("valid address, sufficient balance", func(t *testing.T) {
+		w, srv := newSendTestWalletWithBalance(t, "0.5", noExchange)
+		defer srv.Close()
+		fee, valid, err := w.EstimateSendTxFee(destAddr, 1e7, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !valid {
+			t.Error("expected isValidAddress=true")
+		}
+		if fee != 0 {
+			t.Errorf("fee = %d, want 0 (no network fee)", fee)
+		}
+	})
+
+	t.Run("invalid address reported via isValidAddress, not an error", func(t *testing.T) {
+		w, srv := newSendTestWalletWithBalance(t, "0.5", noExchange)
+		defer srv.Close()
+		fee, valid, err := w.EstimateSendTxFee("not-an-address", 1e7, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false")
+		}
+		if fee != 0 {
+			t.Errorf("fee = %d, want 0", fee)
+		}
+	})
+
+	t.Run("insufficient balance", func(t *testing.T) {
+		w, srv := newSendTestWalletWithBalance(t, "0.5", noExchange)
+		defer srv.Close()
+		_, _, err := w.EstimateSendTxFee(destAddr, 1e8, 0, false, false)
+		if !errors.Is(err, asset.ErrInsufficientBalance) {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("maxWithdraw with empty address skips the balance check", func(t *testing.T) {
+		w, srv := newSendTestWalletWithBalance(t, "0.5", noExchange)
+		defer srv.Close()
+		fee, valid, err := w.EstimateSendTxFee("", 1e8, 0, false, true)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false for an empty address")
+		}
+		if fee != 0 {
+			t.Errorf("fee = %d, want 0", fee)
+		}
+	})
+
+	t.Run("errors when not connected", func(t *testing.T) {
+		w := &HyperWallet{}
+		if _, _, err := w.EstimateSendTxFee(destAddr, 1e7, 0, false, false); !errors.Is(err, asset.ErrConnectionDown) {
+			t.Fatalf("err = %v, want ErrConnectionDown", err)
+		}
+	})
 }

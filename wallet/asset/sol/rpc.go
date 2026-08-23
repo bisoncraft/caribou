@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,11 @@ import (
 )
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// errRateLimited marks an RPC call rejected with HTTP 429, independent of
+// whether the response body was a well-formed JSON-RPC error. See
+// isRateLimitedRPCError.
+var errRateLimited = errors.New("rate limited")
 
 type rpcI interface {
 	getSlot(ctx context.Context) (uint64, error)
@@ -64,6 +70,13 @@ func (c *rpcClient) call(ctx context.Context, method string, params any, result 
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// Some endpoints (or a proxy/CDN in front of one) return a 429 with a
+		// plain-text or HTML body rather than a JSON-RPC error object, which
+		// would otherwise surface only as an opaque decode failure below and
+		// never be recognized as rate-limited by isRateLimitedRPCError.
+		return fmt.Errorf("%w: %s", errRateLimited, method)
 	}
 	var rr struct {
 		Result json.RawMessage `json:"result"`

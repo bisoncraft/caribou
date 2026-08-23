@@ -64,6 +64,9 @@ const (
 	// pollInterval: a retry one whole interval later would land on the
 	// threshold, not under it.
 	subscribedPollInterval = 15 * time.Second
+
+	scanBackoffMin = 15 * time.Second
+	scanBackoffMax = 5 * time.Minute
 )
 
 var (
@@ -199,10 +202,51 @@ type Wallet struct {
 	// round-trip; 0 means not yet fetched.
 	tokenAccountRentMtx      sync.Mutex
 	tokenAccountRentLamports uint64
+
+	// scanBackoff throttles signature-history scans across this wallet and
+	// every token wallet sharing this network's RPC endpoint. Zero value is
+	// ready to use.
+	scanBackoff scanBackoff
+}
+
+// scanBackoff is the shared cooldown applied after the RPC endpoint
+// rate-limits a signature-history scan. The native wallet and every token
+// wallet on the network scan the same endpoint, so they share one instance
+// (token wallets via their parent). Only scan-class calls consult it: the
+// 2s getSlot tip poll, balance reads, and sends stay ungated.
+type scanBackoff struct {
+	mtx   sync.Mutex
+	until time.Time
+	delay time.Duration
+}
+
+func (b *scanBackoff) blocked(now time.Time) bool {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	return now.Before(b.until)
+}
+
+func (b *scanBackoff) rateLimited(now time.Time) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if b.delay == 0 {
+		b.delay = scanBackoffMin
+	} else if b.delay *= 2; b.delay > scanBackoffMax {
+		b.delay = scanBackoffMax
+	}
+	b.until = now.Add(b.delay)
+}
+
+func (b *scanBackoff) succeeded() {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	b.delay = 0
+	b.until = time.Time{}
 }
 
 var _ asset.Wallet = (*Wallet)(nil)
 var _ asset.Authenticator = (*Wallet)(nil)
+var _ asset.TxFeeEstimator = (*Wallet)(nil)
 
 // conn is the rpc client, context, and metadata table Connect (re)establishes,
 // held behind a single atomic.Pointer on Wallet so readers get a consistent
@@ -491,9 +535,6 @@ func (w *Wallet) refreshState(ctx context.Context) error {
 	if err := w.updateTip(ctx); err != nil {
 		return err
 	}
-	if err := w.syncHistory(ctx); err != nil {
-		return err
-	}
 	if err := w.checkPendingTxs(ctx); err != nil {
 		return err
 	}
@@ -563,10 +604,7 @@ func (w *Wallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if err != nil {
 		return nil, err
 	}
-	fee := w.StandardSendFee(0)
-	if liveFee, err := rpc.getFeeForMessage(ctx, encodeTransferMessage(w.address, address, base58.Encode(make([]byte, 32)), value)); err == nil && liveFee > 0 {
-		fee = liveFee
-	}
+	fee := w.sendFee(ctx, rpc, address, value)
 	if fee > math.MaxUint64-value || balance < value+fee || balance-value-fee < reserve {
 		return nil, asset.ErrInsufficientBalance
 	}
@@ -635,6 +673,54 @@ func (w *Wallet) SyncStatus() (*asset.SyncStatus, error) {
 
 func (w *Wallet) StandardSendFee(_ uint64) uint64 {
 	return DefaultFee
+}
+
+// sendFee returns the live fee for a simple transfer to dest, falling back to
+// the standard fee when the node cannot price the message.
+func (w *Wallet) sendFee(ctx context.Context, rpc rpcI, dest string, value uint64) uint64 {
+	fee := w.StandardSendFee(0)
+	if liveFee, err := rpc.getFeeForMessage(ctx, encodeTransferMessage(w.address, dest, base58.Encode(make([]byte, 32)), value)); err == nil && liveFee > 0 {
+		fee = liveFee
+	}
+	return fee
+}
+
+// EstimateSendTxFee estimates the network fee for sending value to address.
+// feeRate is ignored; Solana prices its own fee per message. An invalid
+// address is reported via isValidAddress rather than an error, so the
+// front end's live estimate doesn't need a separate validity round-trip.
+func (w *Wallet) EstimateSendTxFee(address string, value, _ uint64, _, maxWithdraw bool) (uint64, bool, error) {
+	rpc, err := w.client()
+	if err != nil {
+		return 0, false, err
+	}
+	ctx := w.context()
+	valid := w.ValidateAddress(address)
+	dest := address
+	if !valid {
+		// Keep the message well-formed (e.g. for the empty address the Max
+		// button's maxWithdraw estimate sends) without affecting the fee,
+		// which is priced by signature count, not the destination value.
+		dest = w.address
+	}
+	fee := w.sendFee(ctx, rpc, dest, value)
+
+	balance, err := rpc.getBalance(ctx, w.address)
+	if err != nil {
+		return 0, false, fmt.Errorf("getBalance: %w", err)
+	}
+	reserve, err := w.rentExemptReserve(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	if maxWithdraw {
+		if balance < fee || balance-fee < reserve {
+			return 0, false, asset.ErrInsufficientBalance
+		}
+	} else if fee > math.MaxUint64-value || balance < value+fee || balance-value-fee < reserve {
+		return 0, false, asset.ErrInsufficientBalance
+	}
+	return fee, valid, nil
 }
 
 // tokenAccountRent returns the rent-exempt minimum balance for a new SPL
@@ -775,6 +861,9 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 	if w.txDB == nil {
 		return nil
 	}
+	if w.scanBackoff.blocked(time.Now()) {
+		return nil
+	}
 	rpc, err := w.client()
 	if err != nil {
 		return err
@@ -805,6 +894,9 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 			batch, err = rpc.getSignaturesForAddress(ctx, w.address, before, nil, 100)
 		}
 		if err != nil {
+			if isRateLimitedRPCError(err) {
+				w.scanBackoff.rateLimited(time.Now())
+			}
 			return fmt.Errorf("getSignaturesForAddress: %w", err)
 		}
 		if len(batch) == 0 {
@@ -819,6 +911,7 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 		next := batch[len(batch)-1].Signature
 		before = &next
 	}
+	w.scanBackoff.succeeded()
 	if len(sigs) == 0 {
 		return nil
 	}
@@ -856,6 +949,11 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 		}
 		if wt := walletTransactionFromRPC(res.tx, w.address); wt != nil {
 			wts = append(wts, wt)
+			if wt.Type == txdb.Receive {
+				w.log.Infof("Detected incoming SOL transfer %s: %d lamports", wt.ID, wt.Amount)
+			} else {
+				w.log.Infof("Detected historical SOL send %s: %d lamports", wt.ID, wt.Amount)
+			}
 		}
 		cursorSig = oldestFirst[i]
 	}
@@ -864,11 +962,29 @@ func (w *Wallet) syncHistory(ctx context.Context) error {
 		if err := w.txDB.StoreTxs(wts); err != nil {
 			return err
 		}
+		w.emitBalanceChange()
 	}
 	if cursorSig == "" {
 		return nil
 	}
 	return w.setLastScannedSignature(cursorSig)
+}
+
+// emitBalanceChange fetches the current balance and pushes it to the UI.
+// Called after syncHistory stores new transactions, since neither wallet nor
+// token balances are re-polled by the front end on its own — without this,
+// a detected incoming transfer shows up in the transaction list but the
+// displayed balance never updates until the next full page load.
+func (w *Wallet) emitBalanceChange() {
+	if w.emit == nil {
+		return
+	}
+	bal, err := w.Balance()
+	if err != nil {
+		w.log.Warnf("Error emitting balance change: %v", err)
+		return
+	}
+	w.emit.BalanceChange(bal)
 }
 
 // backfillHistory fetches sigs older than the batch from a previous page-capped
@@ -898,6 +1014,9 @@ func (w *Wallet) backfillHistory(ctx context.Context) error {
 	for pages := 0; pages < 10; pages++ {
 		batch, err := rpc.getSignaturesForAddress(ctx, w.address, before, until, 100)
 		if err != nil {
+			if isRateLimitedRPCError(err) {
+				w.scanBackoff.rateLimited(time.Now())
+			}
 			return fmt.Errorf("getSignaturesForAddress backfill: %w", err)
 		}
 		if len(batch) == 0 {
@@ -1284,6 +1403,17 @@ func (w *Wallet) rentExemptReserve(ctx context.Context) (uint64, error) {
 // pruned from the ledger.
 func isNotFoundRPCError(err error) bool {
 	return strings.Contains(err.Error(), "(-32020)")
+}
+
+// isRateLimitedRPCError returns true when the endpoint rejected the call for
+// exceeding its per-method rate limit (HTTP 429). errors.Is catches an HTTP
+// 429 detected directly off the response status (rpc.go's call), which
+// covers a plain-text/HTML 429 body a proxy or CDN might return; the
+// substring match catches a well-formed JSON-RPC error object that reports
+// code 429 despite an HTTP 200, which is what the public Solana endpoint
+// actually does.
+func isRateLimitedRPCError(err error) bool {
+	return errors.Is(err, errRateLimited) || strings.Contains(err.Error(), "(429)")
 }
 
 func (w *Wallet) rpcEndpoint() string {

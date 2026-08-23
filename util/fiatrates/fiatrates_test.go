@@ -110,6 +110,10 @@ func TestCoinpapSlug(t *testing.T) {
 		{"polygon", "polygon", "matic-polygon"},
 		{"usd coin", "usdc", "usdc-usd-coin"},
 		{"bitcoin cash", "bch", "bch-bitcoin-cash"},
+		// Coinpaprika's real ID is "xrp-xrp", not "xrp-ripple" — this asset's
+		// registered display name ("Ripple", wallet/asset/xrp/xrp.go) must not
+		// leak into the slug, or the rate lookup silently never matches.
+		{"Ripple", "xrp", "xrp-xrp"},
 	}
 	for _, tc := range tests {
 		got := CoinpapSlug(tc.name, tc.symbol)

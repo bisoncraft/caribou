@@ -4,9 +4,12 @@
 package xrp
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -352,6 +355,37 @@ func TestRPCContextCancel(t *testing.T) {
 	}
 }
 
+// ---- complete_ledgers parsing ----
+
+func TestRetainedLedgerRange(t *testing.T) {
+	cases := []struct {
+		name   string
+		input  string
+		wantLo uint64
+		wantHi uint64
+		wantOK bool
+	}{
+		{"single range", "32570-98060917", 32570, 98060917, true},
+		{"disjoint ranges use the newest", "32570-40000,90000000-98060917", 90000000, 98060917, true},
+		{"whitespace tolerated", " 32570-40000 , 90000000-98060917 ", 90000000, 98060917, true},
+		{"dashless single ledger", "98060917", 98060917, 98060917, true},
+		{"empty keyword", "empty", 0, 0, false},
+		{"empty string", "", 0, 0, false},
+		{"unparseable", "abc-def", 0, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			lo, hi, ok := retainedLedgerRange(c.input)
+			if ok != c.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, c.wantOK)
+			}
+			if ok && (lo != c.wantLo || hi != c.wantHi) {
+				t.Errorf("retainedLedgerRange(%q) = (%d, %d), want (%d, %d)", c.input, lo, hi, c.wantLo, c.wantHi)
+			}
+		})
+	}
+}
+
 // ---- Send to unfunded destination ----
 
 // TestSendToUnfundedDestination verifies that Send does not fail when the
@@ -444,6 +478,222 @@ func TestSendToUnfundedDestination(t *testing.T) {
 			t.Errorf("error should mention base reserve, got: %v", err)
 		}
 	})
+
+	// A supplied destination tag must not bypass the unfunded-destination
+	// base-reserve guard — the two checks are independent.
+	t.Run("tagged send below base reserve still rejected", func(t *testing.T) {
+		m := newMockRippled(t)
+		mockInfoHandler(m)
+		w := &xrpWallet{
+			address:     pubKeyToAddress(pubKey),
+			pubKey:      pubKey,
+			privKey:     privKey,
+			rpc:         m.rpcClient(),
+			log:         log,
+			baseReserve: BaseReserveDrops,
+			ctx:         context.Background(),
+		}
+		w.running.Store(true)
+		_, err := w.SendTagged(destAddr, BaseReserveDrops-1, 0, 42)
+		if err == nil {
+			t.Fatal("expected error sending below base reserve to unfunded address, even with a tag")
+		}
+		if !strings.Contains(err.Error(), "base reserve") {
+			t.Errorf("error should mention base reserve, got: %v", err)
+		}
+	})
+}
+
+// ---- SendTagged / destination tag ----
+
+// destTagBytes returns the wire encoding of a DestinationTag field
+// (header 0x2E followed by the big-endian uint32), for locating it in a
+// submitted tx_blob without depending on a fixed byte offset.
+func destTagBytes(tag uint32) []byte {
+	b := []byte{0x2E, 0, 0, 0, 0}
+	b[1] = byte(tag >> 24)
+	b[2] = byte(tag >> 16)
+	b[3] = byte(tag >> 8)
+	b[4] = byte(tag)
+	return b
+}
+
+func TestSendTaggedIncludesDestinationTag(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+
+	for _, tag := range []uint32{0, 1, math.MaxUint32} {
+		t.Run(fmt.Sprintf("tag=%d", tag), func(t *testing.T) {
+			m := newMockRippled(t)
+			// Destination requires a tag; SendTagged must succeed anyway.
+			m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+				return accountInfoResponse("100000000", 0, lsfRequireDestTag), nil
+			})
+			m.handle("fee", feeHandler("12"))
+			var submittedBlob string
+			m.handle("submit", func(params json.RawMessage) (any, *rpcError) {
+				var p struct {
+					TxBlob string `json:"tx_blob"`
+				}
+				if err := json.Unmarshal(params, &p); err != nil {
+					t.Fatalf("decode submit params: %v", err)
+				}
+				submittedBlob = p.TxBlob
+				return map[string]any{
+					"status":                "success",
+					"engine_result":         "tesSUCCESS",
+					"engine_result_message": "The transaction was applied.",
+					"tx_json":               map[string]any{},
+				}, nil
+			})
+
+			w := &xrpWallet{
+				address:     pubKeyToAddress(pubKey),
+				pubKey:      pubKey,
+				privKey:     privKey,
+				rpc:         m.rpcClient(),
+				log:         util.NewLogger("test", util.LevelError, nil),
+				baseReserve: BaseReserveDrops,
+				ctx:         context.Background(),
+			}
+			w.running.Store(true)
+
+			if _, err := w.SendTagged(destAddr, 1_000_000, 0, tag); err != nil {
+				t.Fatalf("SendTagged: %v", err)
+			}
+			blob, err := hex.DecodeString(submittedBlob)
+			if err != nil {
+				t.Fatalf("decode submitted tx_blob: %v", err)
+			}
+			if !bytes.Contains(blob, destTagBytes(tag)) {
+				t.Errorf("submitted tx_blob does not contain DestinationTag field for tag %d", tag)
+			}
+		})
+	}
+}
+
+func TestSendRequiresDestinationTagWhenFlagged(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, lsfRequireDestTag), nil
+	})
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	w := &xrpWallet{
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
+		privKey:     privKey,
+		rpc:         m.rpcClient(),
+		log:         util.NewLogger("test", util.LevelError, nil),
+		baseReserve: BaseReserveDrops,
+		ctx:         context.Background(),
+	}
+	w.running.Store(true)
+
+	_, err := w.Send(destAddr, 1_000_000, 0)
+	if err == nil {
+		t.Fatal("expected an error sending without a tag to a tag-required destination")
+	}
+	if !strings.Contains(err.Error(), "destination tag") {
+		t.Errorf("error should mention a destination tag, got: %v", err)
+	}
+}
+
+func TestSendTaggedToUnflaggedDestinationStillIncludesTag(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	const tag = uint32(777)
+	m := newMockRippled(t)
+	// lsfRequireDestTag is NOT set here; an optional tag must still be legal.
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, 0), nil
+	})
+	m.handle("fee", feeHandler("12"))
+	var submittedBlob string
+	m.handle("submit", func(params json.RawMessage) (any, *rpcError) {
+		var p struct {
+			TxBlob string `json:"tx_blob"`
+		}
+		_ = json.Unmarshal(params, &p)
+		submittedBlob = p.TxBlob
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS", "tx_json": map[string]any{}}, nil
+	})
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	w := &xrpWallet{
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
+		privKey:     privKey,
+		rpc:         m.rpcClient(),
+		log:         util.NewLogger("test", util.LevelError, nil),
+		baseReserve: BaseReserveDrops,
+		ctx:         context.Background(),
+	}
+	w.running.Store(true)
+
+	if _, err := w.SendTagged(destAddr, 1_000_000, 0, tag); err != nil {
+		t.Fatalf("SendTagged: %v", err)
+	}
+	blob, err := hex.DecodeString(submittedBlob)
+	if err != nil {
+		t.Fatalf("decode submitted tx_blob: %v", err)
+	}
+	if !bytes.Contains(blob, destTagBytes(tag)) {
+		t.Error("submitted tx_blob does not contain the optional DestinationTag")
+	}
+}
+
+// TestSendOmitsDestinationTag proves the plain Send path (nil tag) still
+// takes effect on a wallet whose type also implements DestinationTagger:
+// the Send/SendTagged/send refactor must not leak a tag into a plain Send's
+// wire bytes just because the type has a SendTagged method. Mirrors the
+// offset convention TestEncodePaymentDestinationTag already validated at the
+// encoder level (DestinationTag header 0x2E immediately follows Sequence),
+// but exercises it through the actual Send call, not the encoder directly.
+func TestSendOmitsDestinationTag(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, 0), nil
+	})
+	m.handle("fee", feeHandler("12"))
+	var submittedBlob string
+	m.handle("submit", func(params json.RawMessage) (any, *rpcError) {
+		var p struct {
+			TxBlob string `json:"tx_blob"`
+		}
+		_ = json.Unmarshal(params, &p)
+		submittedBlob = p.TxBlob
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS", "tx_json": map[string]any{}}, nil
+	})
+	privKeyBytes := make([]byte, 32)
+	privKeyBytes[31] = 1
+	privKey, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	w := &xrpWallet{
+		address:     pubKeyToAddress(pubKey),
+		pubKey:      pubKey,
+		privKey:     privKey,
+		rpc:         m.rpcClient(),
+		log:         util.NewLogger("test", util.LevelError, nil),
+		baseReserve: BaseReserveDrops,
+		ctx:         context.Background(),
+	}
+	w.running.Store(true)
+
+	if _, err := w.Send(destAddr, 1_000_000, 0); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	blob, err := hex.DecodeString(submittedBlob)
+	if err != nil {
+		t.Fatalf("decode submitted tx_blob: %v", err)
+	}
+	if blob[13] != 0x20 {
+		t.Errorf("expected 0x20 (LastLedgerSequence header) at offset 13 with no tag, got 0x%02X — DestinationTag leaked into a plain Send", blob[13])
+	}
 }
 
 func TestSendInsufficientBalance(t *testing.T) {
@@ -768,6 +1018,122 @@ func TestBalanceNotRunning(t *testing.T) {
 	if _, err := w.Balance(); err == nil {
 		t.Fatal("expected error when wallet not running")
 	}
+}
+
+// ---- EstimateSendTxFee ----
+
+func feeHandler(openLedgerFee string) func(json.RawMessage) (any, *rpcError) {
+	return func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": openLedgerFee},
+			"ledger_current_index": uint64(100),
+		}, nil
+	}
+}
+
+func TestEstimateSendTxFee(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+
+	t.Run("uses the live open-ledger fee", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("15"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		w := makeBalanceWallet(t, m)
+
+		fee, valid, err := w.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !valid {
+			t.Error("expected isValidAddress=true")
+		}
+		if fee != 15 {
+			t.Errorf("fee = %d, want 15 (live open-ledger fee)", fee)
+		}
+	})
+
+	t.Run("falls back to DefaultFeeDrops when the fee is unparseable", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("not-a-number"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		w := makeBalanceWallet(t, m)
+
+		fee, _, err := w.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if fee != DefaultFeeDrops {
+			t.Errorf("fee = %d, want DefaultFeeDrops (%d)", fee, DefaultFeeDrops)
+		}
+	})
+
+	t.Run("invalid address reported via isValidAddress, not an error", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("12"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		w := makeBalanceWallet(t, m)
+
+		fee, valid, err := w.EstimateSendTxFee("not-an-address", 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false")
+		}
+		if fee != 12 {
+			t.Errorf("fee = %d, want 12", fee)
+		}
+	})
+
+	t.Run("insufficient balance for value+fee", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("12"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("1000", 0, 0), nil
+		})
+		w := makeBalanceWallet(t, m)
+
+		_, _, err := w.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("maxWithdraw with empty address estimates the Max-button fee", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("12"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		w := makeBalanceWallet(t, m)
+
+		fee, valid, err := w.EstimateSendTxFee("", 100_000_000, 0, false, true)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false for an empty address")
+		}
+		if fee != 12 {
+			t.Errorf("fee = %d, want 12", fee)
+		}
+	})
+
+	t.Run("errors when wallet not running", func(t *testing.T) {
+		m := newMockRippled(t)
+		w := makeBalanceWallet(t, m)
+		w.running.Store(false)
+		if _, _, err := w.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false); err == nil {
+			t.Fatal("expected an error when wallet not running")
+		}
+	})
 }
 
 func TestBalanceUnfundedAccount(t *testing.T) {

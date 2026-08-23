@@ -72,6 +72,7 @@ type TCore struct {
 	closeWalletErr       error
 	rescanWalletErr      error
 	sendErr              error
+	sentDestTag          *uint32
 	sendRequiresPW       bool
 	sendRequiresPWErr    error
 	setSendRequiresPWErr error
@@ -149,7 +150,8 @@ func (c *TCore) User() *core.User { return nil }
 func (c *TCore) SupportedAssets() map[uint32]*core.SupportedAsset {
 	return make(map[uint32]*core.SupportedAsset)
 }
-func (c *TCore) Send(pw []byte, assetID uint32, value uint64, address string, subtract bool, feeRate uint64) (asset.Coin, error) {
+func (c *TCore) Send(pw []byte, assetID uint32, value uint64, address string, subtract bool, feeRate uint64, destTag *uint32) (asset.Coin, error) {
+	c.sentDestTag = destTag
 	return &tCoin{id: []byte{0xde, 0xc7, 0xed}}, c.sendErr
 }
 func (c *TCore) ValidateAddress(address string, assetID uint32) (bool, error) {
@@ -637,6 +639,37 @@ func TestSend(t *testing.T) {
 	if !isOK() {
 		t.Fatalf("not ok: %s", string(writer.b))
 	}
+	if tCore.sentDestTag != nil {
+		t.Fatalf("sentDestTag = %v, want nil for a form with no destTag", tCore.sentDestTag)
+	}
+
+	// destTag round-trips through the JSON form to Core.Send. Pointer, not a
+	// bare uint32, because 0 is a valid tag distinct from "no tag" — this
+	// also exercises that a supplied 0 is not mistaken for absent.
+	tag := uint32(0)
+	body = &sendForm{
+		Pass:    encode.PassBytes("dummyAppPass"),
+		DestTag: &tag,
+	}
+	if !isOK() {
+		t.Fatalf("not ok: %s", string(writer.b))
+	}
+	if tCore.sentDestTag == nil || *tCore.sentDestTag != 0 {
+		t.Fatalf("sentDestTag = %v, want a pointer to 0", tCore.sentDestTag)
+	}
+
+	tag = 987654321
+	body = &sendForm{
+		Pass:    encode.PassBytes("dummyAppPass"),
+		DestTag: &tag,
+	}
+	if !isOK() {
+		t.Fatalf("not ok: %s", string(writer.b))
+	}
+	if tCore.sentDestTag == nil || *tCore.sentDestTag != tag {
+		t.Fatalf("sentDestTag = %v, want %d", tCore.sentDestTag, tag)
+	}
+	body = &sendForm{Pass: encode.PassBytes("dummyAppPass")}
 
 	// no wallet
 	tCore.notHas = true

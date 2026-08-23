@@ -15,10 +15,10 @@ interface SendProps {
 // the single-column mobile layout over it.
 export default function Send ({ ticker, onClose }: SendProps) {
   const {
-    ta, variant, address, setAddress, amount, subtract, setSubtract,
+    ta, variant, address, setAddress, amount, subtract, setSubtract, destTag,
     addrValid, txFee, feeKnown, feeErr, estimating, pw, setPW, sending, err, netErr,
-    requirePW, isWithdrawer, available, feeUI, overBalance, canSubmit,
-    amountChanged, pickAsset, pickVariant, setMax, submit
+    requirePW, isWithdrawer, available, feeUI, overBalance, canSubmit, supportsDestTag,
+    amountChanged, destTagChanged, pickAsset, pickVariant, setMax, submit
   } = useSendForm({ ticker, onSent: onClose })
 
   let body
@@ -80,6 +80,23 @@ export default function Send ({ ticker, onClose }: SendProps) {
           value={address}
           onChange={(e) => setAddress(e.target.value)}
         />
+
+        {supportsDestTag && (
+          <>
+            <div className='mb-field-row'>
+              <label className='mb-field-label'>{t('Destination tag')}</label>
+              <span className='mb-muted'>{t('optional')}</span>
+            </div>
+            <input
+              className='mb-input'
+              type='text'
+              inputMode='numeric'
+              placeholder={t('tag')}
+              value={destTag}
+              onChange={destTagChanged}
+            />
+          </>
+        )}
 
         <div className='mb-field-row'>
           <label className='mb-field-label'>{t('Amount')}</label>

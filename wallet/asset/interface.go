@@ -41,6 +41,7 @@ const (
 	WalletTraitDeprContractDeployer                          // DEPRECATED. Left for ordering
 	WalletTraitDeprContractGasTester                         // DEPRECATED. Left for ordering
 	WalletTraitPoliteiaVoter                                 // The wallet can vote on Politeia proposals.
+	WalletTraitDestinationTagger                             // The wallet's Send accepts a destination tag.
 )
 
 // IsRescanner tests if the WalletTrait has the WalletTraitRescanner bit set.
@@ -134,6 +135,13 @@ func (wt WalletTrait) IsPoliteiaVoter() bool {
 	return wt&WalletTraitPoliteiaVoter != 0
 }
 
+// IsDestinationTagger tests if the WalletTrait has the
+// WalletTraitDestinationTagger bit set, which indicates the wallet implements
+// the DestinationTagger interface.
+func (wt WalletTrait) IsDestinationTagger() bool {
+	return wt&WalletTraitDestinationTagger != 0
+}
+
 // DetermineWalletTraits returns the WalletTrait bitset for the provided Wallet.
 func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	if _, is := w.(Rescanner); is {
@@ -180,6 +188,9 @@ func DetermineWalletTraits(w Wallet) (t WalletTrait) {
 	}
 	if _, is := w.(PoliteiaVoter); is {
 		t |= WalletTraitPoliteiaVoter
+	}
+	if _, is := w.(DestinationTagger); is {
+		t |= WalletTraitDestinationTagger
 	}
 	return t
 }
@@ -501,6 +512,15 @@ type TxFeeEstimator interface {
 	// calculate the tx fee where possible and ensures the wallet has enough to
 	// cover send value and minimum fees.
 	EstimateSendTxFee(address string, value, feeRate uint64, subtract, maxWithdraw bool) (fee uint64, isValidAddress bool, err error)
+}
+
+// DestinationTagger is a wallet whose network routes a payment to a
+// sub-account of the destination address using a numeric tag (XRPL's
+// DestinationTag). Exchange deposit addresses commonly require one.
+type DestinationTagger interface {
+	// SendTagged sends value to address with destTag included in the
+	// transaction. Semantics otherwise match Wallet.Send.
+	SendTagged(address string, value, feeRate uint64, destTag uint32) (Coin, error)
 }
 
 // Broadcaster is a wallet that can send a raw transaction on the asset network.

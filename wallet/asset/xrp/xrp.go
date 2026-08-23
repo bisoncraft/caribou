@@ -253,6 +253,8 @@ type xrpWallet struct {
 
 var _ asset.Wallet = (*xrpWallet)(nil)
 var _ asset.Authenticator = (*xrpWallet)(nil)
+var _ asset.TxFeeEstimator = (*xrpWallet)(nil)
+var _ asset.DestinationTagger = (*xrpWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*xrpWallet, error) {
 	keyFile := filepath.Join(cfg.DataDir, keyFileName)
@@ -719,6 +721,18 @@ func (w *xrpWallet) reserveSequence() (sequence uint32, rollback func(), err err
 }
 
 func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
+	return w.send(address, value, nil)
+}
+
+// SendTagged sends value to address with destTag included as the
+// transaction's DestinationTag. destTag is a pointer at the call site because
+// 0 is a valid XRPL DestinationTag, so a caller must be able to distinguish
+// "tag 0" from "no tag."
+func (w *xrpWallet) SendTagged(address string, value, _ uint64, destTag uint32) (asset.Coin, error) {
+	return w.send(address, value, &destTag)
+}
+
+func (w *xrpWallet) send(address string, value uint64, destTag *uint32) (asset.Coin, error) {
 	w.opWG.Add(1)
 	defer w.opWG.Done()
 	if !w.running.Load() {
@@ -753,7 +767,10 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	w.keyMtx.RUnlock()
 
 	// Check whether the destination requires a DestinationTag. A payment
-	// without one would be rejected on-chain with tecDST_TAG_NEEDED.
+	// without one would be rejected on-chain with tecDST_TAG_NEEDED. This only
+	// applies when the caller didn't supply a tag — XRPL accepts an optional
+	// DestinationTag on any account regardless of lsfRequireDestTag, so a
+	// tagged send skips this check entirely.
 	// An actNotFound error means the destination account has never been funded;
 	// enforce the base-reserve minimum to avoid a fee-burning tecNO_DST_INSUF_XRP.
 	// This and the fee lookup below don't touch balance state, so they run
@@ -762,8 +779,8 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if err != nil && !isAccountNotFound(err) {
 		return nil, fmt.Errorf("error checking destination account info: %w", err)
 	}
-	if err == nil && destInfo.AccountData.Flags&lsfRequireDestTag != 0 {
-		return nil, fmt.Errorf("destination %q requires a destination tag, which this wallet does not yet support", address)
+	if destTag == nil && err == nil && destInfo.AccountData.Flags&lsfRequireDestTag != 0 {
+		return nil, fmt.Errorf("destination %q requires a destination tag; supply the tag from the recipient (exchanges provide one with the deposit address)", address)
 	}
 	if isAccountNotFound(err) {
 		w.reserveMtx.RLock()
@@ -825,13 +842,14 @@ func (w *xrpWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	}
 
 	p := &xrpPayment{
-		account:       [20]byte(srcAccountID),
-		destination:   [20]byte(destAccountID),
-		amount:        value,
-		fee:           fee,
-		sequence:      sequence,
-		lastLedgerSeq: lastLedgerSeq,
-		signingPubKey: w.pubKey.SerializeCompressed(),
+		account:        [20]byte(srcAccountID),
+		destination:    [20]byte(destAccountID),
+		amount:         value,
+		fee:            fee,
+		sequence:       sequence,
+		lastLedgerSeq:  lastLedgerSeq,
+		signingPubKey:  w.pubKey.SerializeCompressed(),
+		destinationTag: destTag,
 	}
 
 	w.keyMtx.RLock()
@@ -968,6 +986,35 @@ func (w *xrpWallet) StandardSendFee(_ uint64) uint64 {
 // drops (falling back to the default when the live fee is unavailable).
 func (w *xrpWallet) FeeRate() uint64 {
 	return w.StandardSendFee(0)
+}
+
+// EstimateSendTxFee estimates the network fee for sending value drops to
+// address. feeRate is ignored; XRP prices its own fee. An invalid address is
+// reported via isValidAddress rather than an error. Unlike Send, this does
+// not check the destination's account_info (X-address/DestinationTag/unfunded
+// reserve) — those are send-time policy checks, not fee computation, and
+// would add an RPC round-trip to every debounced keystroke; a rejection there
+// still surfaces at submit.
+func (w *xrpWallet) EstimateSendTxFee(address string, value, _ uint64, _, maxWithdraw bool) (uint64, bool, error) {
+	w.opWG.Add(1)
+	defer w.opWG.Done()
+	if !w.running.Load() {
+		return 0, false, fmt.Errorf("wallet not running")
+	}
+
+	fee := w.StandardSendFee(0)
+	balance, err := w.balance(true)
+	if err != nil {
+		return 0, false, fmt.Errorf("checking available balance: %w", err)
+	}
+	if maxWithdraw {
+		if fee >= balance.Available {
+			return 0, false, asset.ErrInsufficientBalance
+		}
+	} else if fee > balance.Available || value > balance.Available-fee {
+		return 0, false, asset.ErrInsufficientBalance
+	}
+	return fee, w.ValidateAddress(address), nil
 }
 
 func (w *xrpWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {
@@ -1235,10 +1282,13 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 
 		atr, err := w.rpc.accountTx(ctx, w.address, minLedger, maxLedger, marker)
 		if err != nil {
-			if isAccountNotFound(err) {
+			switch {
+			case isAccountNotFound(err):
 				// No account yet; treat entire range as scanned.
 				w.advanceLastScanned(newTip)
-			} else {
+			case isLedgerRangeInvalid(err):
+				w.clampScanFloor(ctx, minLedger, maxLedger)
+			default:
 				w.log.Warnf("Error scanning account txs: %v", err)
 			}
 			return balanceChanged
@@ -1409,6 +1459,50 @@ func (w *xrpWallet) advanceLastScanned(seq uint64) {
 		return
 	}
 	w.lastScannedLedger.Store(seq)
+}
+
+// clampScanFloor handles a lgrIdxsInvalid rejection of [minLedger, maxLedger]
+// against this server's actual retained range. Two distinct causes produce
+// the same error and need different responses:
+//
+//   - minLedger is below the server's oldest retained ledger: the default
+//     mainnet server is not a full-history node, so a fresh wallet's [1, tip]
+//     request is rejected on every tip forever unless the floor moves. Raise
+//     it to the oldest ledger the server retains; ledgers below it are
+//     unreachable from this server, and the gap is implied by the jump and
+//     logged.
+//   - maxLedger is at or above the server's highest indexed ledger: the
+//     websocket ledgerClosed push fires the instant a ledger validates, but
+//     account_tx can lag slightly indexing it — and complete_ledgers can
+//     catch up between the rejection and this check, so even an exact match
+//     is evidence of the same lag. This is transient and self-resolving on
+//     the next tip, so it is logged at debug and the scan floor is left
+//     untouched — advancing it here would skip the ledger once it does land.
+func (w *xrpWallet) clampScanFloor(ctx context.Context, minLedger, maxLedger uint64) {
+	si, err := w.rpc.serverInfo(ctx)
+	if err != nil {
+		w.log.Warnf("Error fetching server_info to clamp scan range: %v", err)
+		return
+	}
+	lo, hi, ok := retainedLedgerRange(si.Info.CompleteLedgers)
+	if !ok {
+		w.log.Warnf("Server reports unusable complete_ledgers %q; cannot clamp scan range", si.Info.CompleteLedgers)
+		return
+	}
+	prev := w.lastScannedLedger.Load()
+	switch {
+	case lo > 0 && minLedger < lo && lo-1 > prev:
+		w.advanceLastScanned(lo - 1)
+		w.log.Warnf("XRP history before ledger %d is not retained by this server; scan floor advanced from %d, skipping %d ledgers", lo, prev, lo-1-prev)
+	case maxLedger >= hi:
+		// >= rather than >: complete_ledgers can catch up to maxLedger in the
+		// gap between the account_tx rejection and this server_info fetch, so
+		// an exact match here is still evidence of the same indexing lag, not
+		// a genuine anomaly.
+		w.log.Debugf("account_tx not yet indexed through ledger %d (server has %d); will retry", maxLedger, hi)
+	default:
+		w.log.Warnf("Server rejected ledger range [%d, %d] it claims to retain [%d, %d]", minLedger, maxLedger, lo, hi)
+	}
 }
 
 // tokenTransaction tries to parse tr as a transfer of one of this network's

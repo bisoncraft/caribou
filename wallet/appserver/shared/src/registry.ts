@@ -68,6 +68,11 @@ export interface SyncStatus {
 // test against WalletState.traits.
 export const traitWithdrawer = 1 << 6
 
+// traitDestinationTagger marks wallets whose Send accepts an XRPL-style
+// destination tag. Mirrors the asset.WalletTrait bit in Go; test against
+// WalletState.traits.
+export const traitDestinationTagger = 1 << 22
+
 export interface WalletState {
   symbol: string
   assetID: number

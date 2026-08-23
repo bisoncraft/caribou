@@ -3254,7 +3254,9 @@ func (c *Core) validateSendFeeRate(w *xcWallet, address string, value, feeRate u
 // Send initiates either send or withdraw from an exchange wallet. if subtract
 // is true, fees are subtracted from the value else fees are taken from the
 // exchange wallet.
-func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, subtract bool, feeRate uint64) (asset.Coin, error) {
+// destTag, when non-nil, is an XRPL-style destination tag to include with the
+// send. It is a pointer because 0 is a valid tag, distinct from "no tag."
+func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, subtract bool, feeRate uint64, destTag *uint32) (asset.Coin, error) {
 	var crypter encrypt.Crypter
 	// Empty password can be provided if wallet is already unlocked. Webserver
 	// and RPCServer should not allow empty password, but this is used for
@@ -3298,9 +3300,21 @@ func (c *Core) Send(pw []byte, assetID uint32, value uint64, address string, sub
 	}
 
 	var coin asset.Coin
-	if !subtract {
+	switch {
+	case destTag != nil && subtract:
+		// Silently dropping the tag here would be a funds-attribution loss on
+		// whatever asset first combines a destination tag with a Withdrawer:
+		// a tagged exchange deposit that arrives untagged is unattributable.
+		return nil, fmt.Errorf("cannot combine a destination tag with subtracting the network fee")
+	case destTag != nil:
+		tagger, isTagger := wallet.Wallet.(asset.DestinationTagger)
+		if !isTagger {
+			return nil, fmt.Errorf("%s wallet does not support a destination tag", unbip(assetID))
+		}
+		coin, err = tagger.SendTagged(address, value, feeRate, *destTag)
+	case !subtract:
 		coin, err = wallet.Wallet.Send(address, value, feeRate)
-	} else {
+	default:
 		if withdrawer, isWithdrawer := wallet.Wallet.(asset.Withdrawer); isWithdrawer {
 			coin, err = withdrawer.Withdraw(address, value, feeRate)
 		} else {
@@ -3714,6 +3728,21 @@ func (c *Core) AssetBalance(assetID uint32) (*WalletBalance, error) {
 	return c.walletBalance(wallet)
 }
 
+// splitDBWalletsByTokenStatus separates dbWallets into network wallets and
+// their token wallets, preserving relative order within each group. Callers
+// that need a token's network wallet already registered should load the
+// network group first.
+func splitDBWalletsByTokenStatus(dbWallets []*db.Wallet) (networkWallets, tokenWallets []*db.Wallet) {
+	for _, dbWallet := range dbWallets {
+		if asset.TokenInfo(dbWallet.AssetID) != nil {
+			tokenWallets = append(tokenWallets, dbWallet)
+		} else {
+			networkWallets = append(networkWallets, dbWallet)
+		}
+	}
+	return networkWallets, tokenWallets
+}
+
 // initialize loads wallet configurations from the database.
 func (c *Core) initialize() error {
 	// Load wallet configurations. Actual connections are established on Login.
@@ -3722,27 +3751,38 @@ func (c *Core) initialize() error {
 		c.log.Errorf("error loading wallets from database: %v", err)
 	}
 
-	existingTokenWallets := make(map[uint32]bool)
-	for _, dbWallet := range dbWallets {
-		tkn := asset.TokenInfo(dbWallet.AssetID)
-		if asset.Asset(dbWallet.AssetID) == nil && tkn == nil {
-			c.log.Infof("Wallet for asset %s no longer supported", util.BipIDSymbol(dbWallet.AssetID))
-			continue
-		}
-		assetID := dbWallet.AssetID
-		wallet, err := c.loadXCWallet(dbWallet)
-		if err != nil {
-			c.log.Errorf("error loading %d -> %s wallet: %v", assetID, unbip(assetID), err)
-			continue
-		}
-		// Wallet is loaded from the DB, but not yet connected.
-		c.log.Tracef("Loaded %s wallet configuration.", unbip(assetID))
-		c.updateWallet(assetID, wallet)
+	// Network wallets must load before their token wallets: loadXCWallet
+	// looks up the network wallet via c.wallet(token.NetworkID) and fails if
+	// it isn't registered yet. db.Wallets() has no ordering guarantee to rely
+	// on for that (its underlying map iteration is randomized), so split and
+	// load network wallets first regardless of the order returned.
+	networkDBWallets, tokenDBWallets := splitDBWalletsByTokenStatus(dbWallets)
 
-		if tkn != nil {
-			existingTokenWallets[dbWallet.AssetID] = true
+	existingTokenWallets := make(map[uint32]bool)
+	loadDBWallets := func(ws []*db.Wallet) {
+		for _, dbWallet := range ws {
+			tkn := asset.TokenInfo(dbWallet.AssetID)
+			if asset.Asset(dbWallet.AssetID) == nil && tkn == nil {
+				c.log.Infof("Wallet for asset %s no longer supported", util.BipIDSymbol(dbWallet.AssetID))
+				continue
+			}
+			assetID := dbWallet.AssetID
+			wallet, err := c.loadXCWallet(dbWallet)
+			if err != nil {
+				c.log.Errorf("error loading %d -> %s wallet: %v", assetID, unbip(assetID), err)
+				continue
+			}
+			// Wallet is loaded from the DB, but not yet connected.
+			c.log.Tracef("Loaded %s wallet configuration.", unbip(assetID))
+			c.updateWallet(assetID, wallet)
+
+			if tkn != nil {
+				existingTokenWallets[dbWallet.AssetID] = true
+			}
 		}
 	}
+	loadDBWallets(networkDBWallets)
+	loadDBWallets(tokenDBWallets)
 
 	// Check for missing token wallets
 	for _, dbWallet := range dbWallets {

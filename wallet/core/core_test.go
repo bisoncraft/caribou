@@ -815,6 +815,33 @@ drain:
 	}
 }
 
+// TestSplitDBWalletsByTokenStatusOrderIndependent guards against the
+// initialize() panic-turned-error "cannot load X wallet before Y wallet":
+// db.Wallets() reads a Go map internally, so its returned order is
+// randomized and can put a token wallet ahead of its network wallet.
+// splitDBWalletsByTokenStatus is what lets initialize() load all network
+// wallets before any token wallet regardless of that input order.
+func TestSplitDBWalletsByTokenStatusOrderIndependent(t *testing.T) {
+	const tokenAssetID = 60001 // arbitrary; registered only for this test
+	asset.RegisterToken(tokenAssetID, &util.Token{
+		NetworkID: tACCTAsset.ID,
+		Name:      "Test Token",
+	}, &asset.WalletDefinition{Type: "type"}, nil, nil, true)
+
+	// Token wallet listed first, reproducing the case that broke initialize().
+	dbWallets := []*db.Wallet{
+		{AssetID: tokenAssetID, Type: "type"},
+		{AssetID: tACCTAsset.ID, Type: "type"},
+	}
+	networkWallets, tokenWallets := splitDBWalletsByTokenStatus(dbWallets)
+	if len(networkWallets) != 1 || networkWallets[0].AssetID != tACCTAsset.ID {
+		t.Fatalf("networkWallets = %+v, want just the %d network wallet", networkWallets, tACCTAsset.ID)
+	}
+	if len(tokenWallets) != 1 || tokenWallets[0].AssetID != tokenAssetID {
+		t.Fatalf("tokenWallets = %+v, want just the %d token wallet", tokenWallets, tokenAssetID)
+	}
+}
+
 func TestInitializeClient(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()
@@ -869,7 +896,7 @@ func TestSend(t *testing.T) {
 	const feeRate = 54321
 
 	// Successful
-	coin, err := tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate)
+	coin, err := tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil)
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
@@ -883,11 +910,11 @@ func TestSend(t *testing.T) {
 	// A rate more than a factor of 2 from the wallet's live estimate is
 	// rejected, in both directions.
 	tWallet.feeRate = feeRate / 3
-	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil); err == nil {
 		t.Fatalf("no error for a fee rate more than 2x the live estimate")
 	}
 	tWallet.feeRate = feeRate * 3
-	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil); err == nil {
 		t.Fatalf("no error for a fee rate less than half the live estimate")
 	}
 	tWallet.feeRate = 0
@@ -895,26 +922,26 @@ func TestSend(t *testing.T) {
 	// A rate beyond the asset's absolute ceiling is rejected even when no
 	// live estimate is available to band-check against.
 	tWallet.info.MaxFeeRate = feeRate - 1
-	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil); err == nil {
 		t.Fatalf("no error for a fee rate beyond the asset's sanity ceiling")
 	}
 	tWallet.info.MaxFeeRate = 0
 
 	// A failed fee pre-check estimate fails the send.
 	tWallet.estFeeErr = errTest
-	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate); err == nil {
+	if _, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil); err == nil {
 		t.Fatalf("no error when the fee pre-check estimator errors")
 	}
 	tWallet.estFeeErr = nil
 
 	// 0 value
-	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 0, address, false, feeRate)
+	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 0, address, false, feeRate, nil)
 	if err == nil {
 		t.Fatalf("no error for zero value send")
 	}
 
 	// no wallet
-	_, err = tCore.Send(tPW, 12345, 1e8, address, false, feeRate)
+	_, err = tCore.Send(tPW, 12345, 1e8, address, false, feeRate, nil)
 	if err == nil {
 		t.Fatalf("no error for unknown wallet")
 	}
@@ -922,7 +949,7 @@ func TestSend(t *testing.T) {
 	// connect error
 	wallet.hookedUp = false
 	tWallet.connectErr = errTest
-	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate)
+	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil)
 	if err == nil {
 		t.Fatalf("no error for wallet connect error")
 	}
@@ -930,7 +957,7 @@ func TestSend(t *testing.T) {
 
 	// Send error
 	tWallet.sendErr = errTest
-	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate)
+	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil)
 	if err == nil {
 		t.Fatalf("no error for wallet send error")
 	}
@@ -938,7 +965,7 @@ func TestSend(t *testing.T) {
 
 	// Check the coin.
 	tWallet.sendCoin = &tCoin{id: []byte{'a'}}
-	coin, err = tCore.Send(tPW, tUTXOAssetA.ID, 3e8, address, false, feeRate)
+	coin, err = tCore.Send(tPW, tUTXOAssetA.ID, 3e8, address, false, feeRate, nil)
 	if err != nil {
 		t.Fatalf("coin check error: %v", err)
 	}
@@ -952,10 +979,86 @@ func TestSend(t *testing.T) {
 
 	// wallet is not synced
 	wallet.syncStatus.Synced = false
-	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate)
+	_, err = tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, feeRate, nil)
 	if err == nil {
 		t.Fatalf("Expected error for a non-synchronized wallet")
 	}
+}
+
+// tTaggedWallet wraps TXCWallet to also implement asset.DestinationTagger,
+// for testing Core.Send's destination-tag dispatch without teaching the
+// shared TXCWallet mock about a feature only one real asset (XRP) has.
+type tTaggedWallet struct {
+	*TXCWallet
+	sentTag *uint32
+}
+
+func (w *tTaggedWallet) SendTagged(_ string, value, _ uint64, destTag uint32) (asset.Coin, error) {
+	w.sentTag = &destTag
+	w.sendCoin.val = value
+	if w.sendErr != nil {
+		return nil, w.sendErr
+	}
+	return w.sendCoin, nil
+}
+
+func newTaggedTestWallet(assetID uint32) (*xcWallet, *tTaggedWallet) {
+	xcw, tw := newTWallet(assetID)
+	// Account-based classification, matching real XRP: skips Core.Send's
+	// UTXO fee-rate sanity check, which this test isn't exercising.
+	tw.info = &asset.WalletInfo{SupportedVersions: []uint32{0}, BlockchainClass: asset.BlockchainClassAccount}
+	tagged := &tTaggedWallet{TXCWallet: tw}
+	xcw.Wallet = tagged
+	return xcw, tagged
+}
+
+func TestSendDestinationTag(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+	address := "addr"
+	tag := uint32(12345)
+
+	t.Run("tagger wallet dispatches to SendTagged", func(t *testing.T) {
+		wallet, tagged := newTaggedTestWallet(tACCTAsset.ID)
+		tCore.wallets[tACCTAsset.ID] = wallet
+		tagged.sendCoin = &tCoin{id: encode.RandomBytes(36)}
+
+		coin, err := tCore.Send(tPW, tACCTAsset.ID, 1e8, address, false, 0, &tag)
+		if err != nil {
+			t.Fatalf("Send error: %v", err)
+		}
+		if coin.Value() != 1e8 {
+			t.Fatalf("Value = %d, want 1e8", coin.Value())
+		}
+		if tagged.sentTag == nil || *tagged.sentTag != tag {
+			t.Fatalf("sentTag = %v, want %d", tagged.sentTag, tag)
+		}
+	})
+
+	t.Run("non-tagger wallet rejects a destination tag", func(t *testing.T) {
+		wallet, tWallet := newTWallet(tUTXOAssetA.ID)
+		tCore.wallets[tUTXOAssetA.ID] = wallet
+		tWallet.sendCoin = &tCoin{id: encode.RandomBytes(36)}
+
+		if _, err := tCore.Send(tPW, tUTXOAssetA.ID, 1e8, address, false, 54321, &tag); err == nil {
+			t.Fatal("expected an error for a destination tag on a non-DestinationTagger wallet")
+		}
+	})
+
+	t.Run("destination tag combined with subtract is rejected", func(t *testing.T) {
+		wallet, tagged := newTaggedTestWallet(tACCTAsset.ID)
+		tCore.wallets[tACCTAsset.ID] = wallet
+		tagged.sendCoin = &tCoin{id: encode.RandomBytes(36)}
+
+		if _, err := tCore.Send(tPW, tACCTAsset.ID, 1e8, address, true, 0, &tag); err == nil {
+			t.Fatal("expected an error combining a destination tag with subtract")
+		}
+		// Must not have silently dropped the tag and gone through Withdraw.
+		if tagged.sentTag != nil {
+			t.Fatal("SendTagged should not have been called")
+		}
+	})
 }
 
 func TestAddrHost(t *testing.T) {

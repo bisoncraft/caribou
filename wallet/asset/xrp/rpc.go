@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -312,6 +313,9 @@ type serverInfoResult struct {
 			Seq uint64  `json:"seq"`
 			Age float64 `json:"age"` // seconds since this ledger closed
 		} `json:"validated_ledger"`
+		// CompleteLedgers is the range(s) of ledgers this server retains, e.g.
+		// "32570-98060917" or, with gaps, "32570-40000,90000000-98060917".
+		CompleteLedgers string `json:"complete_ledgers"`
 	} `json:"info"`
 }
 
@@ -463,4 +467,38 @@ func isAccountNotFound(err error) bool {
 func isTxNotFound(err error) bool {
 	re, ok := err.(*rpcError)
 	return ok && re.errType == "txnNotFound"
+}
+
+// isLedgerRangeInvalid returns true when the server rejected the requested
+// ledger range because it does not retain that much history (rippled
+// lgrIdxsInvalid, error 57).
+func isLedgerRangeInvalid(err error) bool {
+	re, ok := err.(*rpcError)
+	return ok && re.errType == "lgrIdxsInvalid"
+}
+
+// retainedLedgerRange returns the bounds of the most recent contiguous range
+// in a rippled complete_ledgers string, e.g. "32570-98060917" or the disjoint
+// "32570-40000,90000000-98060917". Only the newest range is usable as a scan
+// bound: a floor inside an earlier gap would be rejected again. Reports false
+// for "empty" or an unparseable value.
+func retainedLedgerRange(completeLedgers string) (lo, hi uint64, ok bool) {
+	ranges := strings.Split(completeLedgers, ",")
+	last := strings.TrimSpace(ranges[len(ranges)-1])
+	if last == "" {
+		return 0, 0, false
+	}
+	loS, hiS, hasDash := strings.Cut(last, "-")
+	lo, err := strconv.ParseUint(strings.TrimSpace(loS), 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	if !hasDash {
+		return lo, lo, true
+	}
+	hi, err = strconv.ParseUint(strings.TrimSpace(hiS), 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return lo, hi, true
 }

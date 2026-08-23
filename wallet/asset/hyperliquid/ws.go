@@ -34,6 +34,17 @@ type wsSubscribeMsg struct {
 	} `json:"subscription"`
 }
 
+// wsPingMsg is the application-level heartbeat Hyperliquid's WS API expects.
+// The server closes a connection after 60s without a message; a WebSocket
+// protocol-level ping control frame does not count as one, so this must be a
+// JSON text message. The server responds with {"channel":"pong"}, which
+// arrives through the normal read loop and is dropped by handleMessage like
+// any other unrecognized channel — its receipt alone (via onLive) is what
+// matters here.
+type wsPingMsg struct {
+	Method string `json:"method"`
+}
+
 // wsIncomingMsg is the envelope for all incoming WebSocket messages.
 type wsIncomingMsg struct {
 	Channel string          `json:"channel"`
@@ -68,6 +79,10 @@ type wsClient struct {
 	// onReconnect is called after each successful dial, before the message loop.
 	// Typically used to fetch missed events via REST before resuming real-time.
 	onReconnect func(ctx context.Context) error
+
+	// pingInterval overrides wsPingInterval; zero means use the default. Tests
+	// set this instead of waiting out the real interval.
+	pingInterval time.Duration
 }
 
 // run connects, subscribes, and reads messages until ctx is done. It
@@ -130,13 +145,6 @@ func (c *wsClient) runOnce(ctx context.Context) error {
 		}
 	}
 
-	conn.SetPongHandler(func(_ string) error {
-		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
-		if c.onLive != nil {
-			c.onLive()
-		}
-		return nil
-	})
 	conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
 
 	// Subscribe to ledger events for this address.
@@ -173,14 +181,18 @@ func (c *wsClient) runOnce(ctx context.Context) error {
 		}
 	}()
 
-	pingTicker := time.NewTicker(wsPingInterval)
+	interval := c.pingInterval
+	if interval == 0 {
+		interval = wsPingInterval
+	}
+	pingTicker := time.NewTicker(interval)
 	defer pingTicker.Stop()
 
 	for {
 		select {
 		case <-pingTicker.C:
 			conn.SetWriteDeadline(time.Now().Add(wsWriteDeadline))
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := conn.WriteJSON(wsPingMsg{Method: "ping"}); err != nil {
 				return fmt.Errorf("ping: %w", err)
 			}
 
