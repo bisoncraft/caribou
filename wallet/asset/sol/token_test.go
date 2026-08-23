@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -70,6 +71,41 @@ func TestTokenWalletDepositAddress(t *testing.T) {
 	}
 	if owns2, _ := tw.OwnsDepositAddress(tw.ataAddr); owns2 {
 		t.Fatal("token wallet should not own its own ATA as a deposit address")
+	}
+}
+
+// TestTokenWalletConnectReportsPeers guards against a token wallet's Send
+// being permanently rejected by Core's no-connected-peers safety check. The
+// token wallet has no independent connectivity probe of its own, so it must
+// report peers once on Connect using the parent's already-verified RPC
+// connection, or Core's per-asset peer counter for the token never leaves
+// its initial "unknown" state.
+func TestTokenWalletConnectReportsPeers(t *testing.T) {
+	tw := newTestTokenWallet(t, &mockRPC{}, nil)
+	var gotNumPeers uint32
+	var calls int
+	tw.peersChange = func(numPeers uint32, err error) {
+		calls++
+		gotNumPeers = numPeers
+		if err != nil {
+			t.Fatalf("peersChange error: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wg, err := tw.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	cancel()
+	wg.Wait()
+
+	if calls != 1 {
+		t.Fatalf("expected peersChange to be called once, got %d calls", calls)
+	}
+	if gotNumPeers != 1 {
+		t.Fatalf("expected peersChange(1, nil), got peersChange(%d, ...)", gotNumPeers)
 	}
 }
 
@@ -711,5 +747,262 @@ func TestTokenRefreshLoopWakeSpacing(t *testing.T) {
 	if delay := recv(starts, "the idle wake").Sub(signaled); delay >= minGap {
 		t.Fatalf("wake took %v to run with the loop idle, want immediate; the "+
 			"floor is being charged from the wake rather than from the last pass", delay)
+	}
+}
+
+// TestTokenSyncHistorySharesParentBackoff proves the SOL rate-limit cooldown
+// is shared across the native wallet and its token wallets: they all scan
+// the same endpoint, so a 429 on any one of them must suppress the others,
+// not just the wallet that hit it.
+func TestTokenSyncHistorySharesParentBackoff(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("parent backoff blocks the token scan", func(t *testing.T) {
+		rpc := &mockRPC{
+			sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+				t.Fatal("token scan should not reach the RPC while the parent is backed off")
+				return nil, nil
+			},
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+		tw.parent.scanBackoff.rateLimited(time.Now())
+
+		if err := tw.syncHistory(ctx); err != nil {
+			t.Fatalf("blocked syncHistory should return nil, got %v", err)
+		}
+	})
+
+	t.Run("token 429 arms the parent backoff", func(t *testing.T) {
+		rpc := &mockRPC{
+			sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+				return nil, fmt.Errorf("getSignaturesForAddress: Too many requests for a specific RPC call (429)")
+			},
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+		// Give the parent its own txDB so its syncHistory does not
+		// short-circuit on the nil-txDB check before reaching the backoff gate.
+		tw.parent.txDB = &mockTxDB{}
+
+		if err := tw.syncHistory(ctx); err == nil {
+			t.Fatal("expected a 429 error")
+		}
+		if !tw.parent.scanBackoff.blocked(time.Now()) {
+			t.Fatal("a token-wallet 429 should arm the shared parent backoff")
+		}
+		// If the gate did not hold, the parent scan would reach the same mock
+		// RPC and surface its 429 error instead of returning nil.
+		if err := tw.parent.syncHistory(ctx); err != nil {
+			t.Fatalf("blocked native syncHistory should return nil, got %v", err)
+		}
+	})
+}
+
+func TestTokenWalletEstimateSendTxFee(t *testing.T) {
+	recipientPub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x06}, 32)).Public().(ed25519.PublicKey)
+	recipientAddr := base58.Encode(recipientPub)
+
+	blockhash := base58.Encode(bytes.Repeat([]byte{0x08}, 32))
+
+	// Guards against pricing the fee-estimate message with a placeholder
+	// all-zero blockhash: getFeeForMessage resolves the fee against a real,
+	// recent blockhash, so a fake one silently degrades every estimate to
+	// StandardSendFee — and Send (which does use the real blockhash) can then
+	// reject with insufficient balance after the estimate said it was fine.
+	t.Run("fee message carries the real blockhash", func(t *testing.T) {
+		var gotMsg []byte
+		rpc := &mockRPC{
+			tokenBalanceFunc: func(_ string) (uint64, bool, error) { return 10_000_000, true, nil },
+			balanceFunc:      func() (uint64, error) { return 1_000_000_000, nil },
+			blockhashFunc:    func() (string, uint64, error) { return blockhash, 1000, nil },
+			feeForMsgFunc: func(msg []byte) (uint64, error) {
+				gotMsg = msg
+				return 6_000, nil
+			},
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+
+		if _, _, err := tw.EstimateSendTxFee(recipientAddr, 1_000_000, 0, false, false); err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !bytes.Contains(gotMsg, base58.Decode(blockhash)) {
+			t.Error("fee-pricing message does not contain the live blockhash")
+		}
+	})
+
+	t.Run("existing destination ATA: fee only", func(t *testing.T) {
+		rpc := &mockRPC{
+			tokenBalanceFunc: func(_ string) (uint64, bool, error) { return 10_000_000, true, nil },
+			balanceFunc:      func() (uint64, error) { return 1_000_000_000, nil },
+			feeForMsgFunc:    func(_ []byte) (uint64, error) { return 6_000, nil },
+			blockhashFunc:    func() (string, uint64, error) { return blockhash, 1000, nil },
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+
+		fee, valid, err := tw.EstimateSendTxFee(recipientAddr, 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !valid {
+			t.Error("expected isValidAddress=true")
+		}
+		if fee != 6_000 {
+			t.Errorf("fee = %d, want 6000 (no rent, ATA already exists)", fee)
+		}
+	})
+
+	t.Run("missing destination ATA: fee plus rent", func(t *testing.T) {
+		// newTestTokenWallet derives the owner from a fixed 0x05 seed; mirror
+		// that here so this mock can tell the wallet's own ATA (has a
+		// balance) from the recipient's (does not exist yet) by address.
+		ownerPub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x05}, 32)).Public().(ed25519.PublicKey)
+		var owner [32]byte
+		copy(owner[:], ownerPub)
+		mint := mustDecodePubKey(TokenUSDC.NetMints[util.Mainnet])
+		srcATA, err := deriveATA(owner, mint)
+		if err != nil {
+			t.Fatalf("deriveATA: %v", err)
+		}
+		srcATAAddr := base58.Encode(srcATA[:])
+
+		rpc := &mockRPC{
+			tokenBalanceFunc: func(addr string) (uint64, bool, error) {
+				if addr == srcATAAddr {
+					return 10_000_000, true, nil
+				}
+				return 0, false, nil // recipient's ATA does not exist yet
+			},
+			balanceFunc:   func() (uint64, error) { return 1_000_000_000, nil },
+			feeForMsgFunc: func(_ []byte) (uint64, error) { return 6_000, nil },
+			rentFunc:      func(_ uint64) (uint64, error) { return 2_039_280, nil },
+			blockhashFunc: func() (string, uint64, error) { return blockhash, 1000, nil },
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+
+		fee, valid, err := tw.EstimateSendTxFee(recipientAddr, 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !valid {
+			t.Error("expected isValidAddress=true")
+		}
+		const want = 6_000 + 2_039_280
+		if fee != want {
+			t.Errorf("fee = %d, want %d (fee + new-ATA rent)", fee, want)
+		}
+	})
+
+	t.Run("insufficient SOL for fee and rent", func(t *testing.T) {
+		// Token balance is ample and the destination ATA is missing (needs
+		// rent), so this isolates the SOL-side shortfall specifically —
+		// distinct from "insufficient token balance" below.
+		ownerPub := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x05}, 32)).Public().(ed25519.PublicKey)
+		var owner [32]byte
+		copy(owner[:], ownerPub)
+		mint := mustDecodePubKey(TokenUSDC.NetMints[util.Mainnet])
+		srcATA, err := deriveATA(owner, mint)
+		if err != nil {
+			t.Fatalf("deriveATA: %v", err)
+		}
+		srcATAAddr := base58.Encode(srcATA[:])
+
+		rpc := &mockRPC{
+			tokenBalanceFunc: func(addr string) (uint64, bool, error) {
+				if addr == srcATAAddr {
+					return 10_000_000, true, nil
+				}
+				return 0, false, nil // recipient's ATA does not exist yet
+			},
+			balanceFunc:   func() (uint64, error) { return 6_000, nil }, // covers fee alone, not rent
+			feeForMsgFunc: func(_ []byte) (uint64, error) { return 6_000, nil },
+			rentFunc:      func(_ uint64) (uint64, error) { return 2_039_280, nil },
+			blockhashFunc: func() (string, uint64, error) { return blockhash, 1000, nil },
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+
+		_, valid, err := tw.EstimateSendTxFee(recipientAddr, 1_000_000, 0, false, false)
+		if err == nil {
+			t.Fatal("expected an insufficient-SOL error")
+		}
+		if valid {
+			t.Error("expected isValidAddress=false alongside the SOL-shortfall error")
+		}
+	})
+
+	t.Run("insufficient token balance", func(t *testing.T) {
+		rpc := &mockRPC{
+			tokenBalanceFunc: func(_ string) (uint64, bool, error) { return 100, true, nil },
+			balanceFunc:      func() (uint64, error) { return 1_000_000_000, nil },
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+
+		_, _, err := tw.EstimateSendTxFee(recipientAddr, 1_000_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("invalid address reported via isValidAddress, not an error", func(t *testing.T) {
+		rpc := &mockRPC{
+			balanceFunc:   func() (uint64, error) { return 1_000_000_000, nil },
+			feeForMsgFunc: func(_ []byte) (uint64, error) { return 6_000, nil },
+			blockhashFunc: func() (string, uint64, error) { return blockhash, 1000, nil },
+		}
+		tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+		// Own token balance is 0 by default (no tokenBalanceFunc), so send 0
+		// to avoid tripping the balance check ahead of the address check.
+		fee, valid, err := tw.EstimateSendTxFee("not-a-sol-address", 0, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false")
+		}
+		if fee != 6_000 {
+			t.Errorf("fee = %d, want 6000", fee)
+		}
+	})
+}
+
+// TestTokenWalletSyncHistoryEmitsBalanceChange guards against a detected
+// incoming token transfer showing up in the transaction list while the
+// displayed balance never updates: the front end doesn't re-poll balances
+// on its own, so storing a new tx must also push a fresh BalanceChangeNote.
+func TestTokenWalletSyncHistoryEmitsBalanceChange(t *testing.T) {
+	notes := make(chan asset.WalletNotification, 4)
+	otherAddr := base58.Encode(bytes.Repeat([]byte{0x22}, 32))
+
+	rpc := &mockRPC{
+		sigsFunc: func(_, _ *string, _ int) ([]signatureInfo, error) {
+			return []signatureInfo{makeSig("sig")}, nil
+		},
+		tokenBalanceFunc: func(_ string) (uint64, bool, error) { return 2_500_000, true, nil },
+	}
+	tw := newTestTokenWallet(t, rpc, &mockTxDB{})
+	// txFunc is set after construction since it needs tw.ataAddr as the
+	// transfer's destination.
+	rpc.txFunc = func(_ string) (*rpcTransaction, error) {
+		tx := &rpcTransaction{Slot: 1, Meta: &rpcTransactionMeta{Fee: 5000}}
+		tx.Transaction.Signatures = []string{"sig"}
+		tx.Transaction.Message.Instructions = []rpcInstruction{
+			parsedSPLInstruction(otherAddr, tw.ataAddr, 2_500_000),
+		}
+		return tx, nil
+	}
+	tw.emit = asset.NewWalletEmitter(notes, usdcTokenID, util.Disabled)
+
+	if err := tw.syncHistory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-notes:
+		bcn, ok := n.(*asset.BalanceChangeNote)
+		if !ok {
+			t.Fatalf("note type = %T, want *asset.BalanceChangeNote", n)
+		}
+		if bcn.Balance.Available != 2_500_000 {
+			t.Errorf("emitted balance = %d, want 2500000", bcn.Balance.Available)
+		}
+	default:
+		t.Fatal("expected a BalanceChangeNote after storing a new tx")
 	}
 }

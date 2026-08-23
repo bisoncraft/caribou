@@ -101,10 +101,16 @@ func (c *erc20TokenContractor) estimateTransferGas(ctx context.Context, amount *
 	return estimateGas(ctx, c.acctAddr, c.tokenContractAddr, erc20.ERC20ABI, c.cb, new(big.Int), "transfer", c.acctAddr, amount)
 }
 
-// parseTransfer sums incoming transfer value to this account from the receipt's
-// logs.
+// parseTransfer sums incoming transfer value to this account from the
+// receipt's logs. The sum is accumulated in raw on-chain (EVM) units and
+// atomized once at the end, not atomized per-log then summed: transfer.Value
+// is the token's raw on-chain amount, not already in atomic units, and for
+// any token whose EVMFactor isn't 0 (i.e. its on-chain decimals don't happen
+// to equal the atomic unit's decimals - LINK is one such token, at 18 on-chain
+// decimals against 9-decimal atomic nLINK) treating it as already-atomic
+// silently inflates the parsed amount by 10^EVMFactor.
 func (c *erc20TokenContractor) parseTransfer(receipt *types.Receipt) (uint64, error) {
-	var transferredAmt uint64
+	transferred := new(big.Int)
 	for _, log := range receipt.Logs {
 		if log.Address != c.tokenContractAddr {
 			continue
@@ -114,12 +120,12 @@ func (c *erc20TokenContractor) parseTransfer(receipt *types.Receipt) (uint64, er
 			continue
 		}
 		if transfer.To == c.acctAddr {
-			transferredAmt += transfer.Value.Uint64()
+			transferred.Add(transferred, transfer.Value)
 		}
 	}
 
-	if transferredAmt > 0 {
-		return transferredAmt, nil
+	if transferred.Sign() > 0 {
+		return c.atomize(transferred), nil
 	}
 
 	return 0, fmt.Errorf("transfer log to %s not found", c.tokenContractAddr)

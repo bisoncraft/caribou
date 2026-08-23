@@ -80,15 +80,16 @@ func (w *Wallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error) {
 		return nil, fmt.Errorf("deriveATA: %w", err)
 	}
 	return &TokenWallet{
-		parent:  w,
-		assetID: cfg.AssetID,
-		token:   token,
-		mint:    mint,
-		owner:   owner,
-		ata:     ata,
-		ataAddr: base58.Encode(ata[:]),
-		emit:    cfg.Emit,
-		txDB:    cfg.NetworkTxDB,
+		parent:      w,
+		assetID:     cfg.AssetID,
+		token:       token,
+		mint:        mint,
+		owner:       owner,
+		ata:         ata,
+		ataAddr:     base58.Encode(ata[:]),
+		emit:        cfg.Emit,
+		peersChange: cfg.PeersChange,
+		txDB:        cfg.NetworkTxDB,
 		wi: asset.WalletInfo{
 			Name:              token.Name,
 			SupportedVersions: []uint32{version},
@@ -103,22 +104,24 @@ func (w *Wallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error) {
 // connection. The deposit address is the associated token account (ATA) for
 // the parent wallet's address and the token's mint, which differs per mint.
 type TokenWallet struct {
-	parent  *Wallet
-	assetID uint32
-	token   *Token
-	mint    [32]byte
-	owner   [32]byte
-	ata     [32]byte
-	ataAddr string
-	emit    *asset.WalletEmitter
-	txDB    txdb.NetworkTxDB
-	wi      asset.WalletInfo
+	parent      *Wallet
+	assetID     uint32
+	token       *Token
+	mint        [32]byte
+	owner       [32]byte
+	ata         [32]byte
+	ataAddr     string
+	emit        *asset.WalletEmitter
+	peersChange func(uint32, error)
+	txDB        txdb.NetworkTxDB
+	wi          asset.WalletInfo
 
 	metaMtx   sync.Mutex
 	metaTable txdb.StoreTable
 }
 
 var _ asset.Wallet = (*TokenWallet)(nil)
+var _ asset.TxFeeEstimator = (*TokenWallet)(nil)
 
 func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// This checks w.parent.context(), not the ctx parameter above: Core
@@ -140,6 +143,15 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}
 	if err := w.parent.context().Err(); err != nil {
 		return nil, fmt.Errorf("parent wallet not connected: %w", err)
+	}
+	// The token wallet shares the parent's already-verified RPC connection
+	// and has no independent connectivity probe of its own, so report peers
+	// once here. Without this, Core's per-asset peer counter for this token
+	// never leaves its initial "unknown" state and Send is permanently
+	// rejected by the no-connected-peers safety check, even though the
+	// wallet is fully able to send and receive over the parent's RPC client.
+	if w.peersChange != nil {
+		w.peersChange(1, nil)
 	}
 	if w.txDB != nil {
 		mt, err := w.txDB.Table(metaTableName)
@@ -486,6 +498,115 @@ func (w *TokenWallet) FeeRate() uint64 {
 	return w.parent.FeeRate()
 }
 
+// EstimateSendTxFee estimates the SOL cost of sending value token atoms to
+// address: the network fee, plus rent for a new destination associated token
+// account when one doesn't exist yet. feeRate is ignored; Solana prices its
+// own fee per message. An invalid address is reported via isValidAddress
+// rather than an error.
+func (w *TokenWallet) EstimateSendTxFee(address string, value, _ uint64, _, maxWithdraw bool) (uint64, bool, error) {
+	rpc, err := w.parent.client()
+	if err != nil {
+		return 0, false, err
+	}
+	ctx := w.parent.context()
+	valid := w.ValidateAddress(address)
+
+	destOwner := w.owner
+	if valid {
+		destOwner = mustDecodePubKey(address)
+	}
+	destATA, err := deriveATA(destOwner, w.mint)
+	if err != nil {
+		return 0, false, fmt.Errorf("deriveATA: %w", err)
+	}
+
+	// These four RPC queries are mutually independent (none consumes another's
+	// result), so fetch them concurrently instead of paying four sequential
+	// round-trips on every debounced keystroke — mirrors Send's fetch below.
+	var (
+		wg            sync.WaitGroup
+		balance       *asset.Balance
+		balanceErr    error
+		destATAExists = true
+		destATAErr    error
+		blockhash     string
+		blockhashErr  error
+		solBalance    uint64
+		solBalanceErr error
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		balance, balanceErr = w.Balance()
+	}()
+	go func() {
+		defer wg.Done()
+		blockhash, _, blockhashErr = rpc.getLatestBlockhash(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		solBalance, solBalanceErr = rpc.getBalance(ctx, w.parent.address)
+	}()
+	if valid {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, destATAExists, destATAErr = rpc.getTokenAccountBalance(ctx, base58.Encode(destATA[:]))
+		}()
+	}
+	wg.Wait()
+
+	if balanceErr != nil {
+		return 0, false, balanceErr
+	}
+	if !maxWithdraw && balance.Available < value {
+		return 0, false, asset.ErrInsufficientBalance
+	}
+	if destATAErr != nil {
+		return 0, false, fmt.Errorf("getTokenAccountBalance: %w", destATAErr)
+	}
+	if blockhashErr != nil {
+		return 0, false, fmt.Errorf("getLatestBlockhash: %w", blockhashErr)
+	}
+	if solBalanceErr != nil {
+		return 0, false, fmt.Errorf("getBalance: %w", solBalanceErr)
+	}
+
+	bhBytes := base58.Decode(blockhash)
+	if len(bhBytes) != 32 {
+		return 0, false, fmt.Errorf("getLatestBlockhash: invalid blockhash length %d", len(bhBytes))
+	}
+	var bh [32]byte
+	copy(bh[:], bhBytes)
+
+	instrs := []splInstruction{
+		createAssociatedTokenAccountIdempotentInstruction(w.owner, destATA, destOwner, w.mint),
+		transferCheckedInstruction(w.ata, w.mint, destATA, w.owner, value, w.token.Decimals),
+	}
+	msg := compileSPLMessage(w.owner, instrs, bh)
+
+	fee := w.StandardSendFee(0)
+	if liveFee, err := rpc.getFeeForMessage(ctx, msg); err == nil && liveFee > 0 {
+		fee = liveFee
+	}
+	required := fee
+	if !destATAExists {
+		rent, err := w.parent.tokenAccountRent(ctx)
+		if err != nil {
+			return 0, false, fmt.Errorf("getMinimumBalanceForRentExemption: %w", err)
+		}
+		required += rent
+	}
+
+	if solBalance < required {
+		return 0, false, fmt.Errorf("insufficient SOL balance to cover network fee and new token account rent")
+	}
+
+	// required, not fee, is returned: the caller's real SOL cost includes any
+	// new-ATA rent, unlike Send's stored Fees field, which records only fee.
+	return required, valid, nil
+}
+
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	rpc, err := w.parent.client()
 	if err != nil {
@@ -686,6 +807,9 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 	if w.txDB == nil {
 		return nil
 	}
+	if w.parent.scanBackoff.blocked(time.Now()) {
+		return nil
+	}
 	rpc, err := w.parent.client()
 	if err != nil {
 		return err
@@ -703,8 +827,12 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 		if isNotFoundRPCError(err) {
 			return nil
 		}
+		if isRateLimitedRPCError(err) {
+			w.parent.scanBackoff.rateLimited(time.Now())
+		}
 		return fmt.Errorf("getSignaturesForAddress: %w", err)
 	}
+	w.parent.scanBackoff.succeeded()
 	if len(sigs) == 0 {
 		return nil
 	}
@@ -725,6 +853,11 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 		}
 		if wt := walletTransactionFromSPLRPC(res.tx, w.ataAddr, w.assetID); wt != nil {
 			wts = append(wts, wt)
+			if wt.Type == txdb.Receive {
+				w.parent.log.Infof("Detected incoming token %d transfer %s: %d atoms", w.assetID, wt.ID, wt.Amount)
+			} else {
+				w.parent.log.Infof("Detected historical token %d send %s: %d atoms", w.assetID, wt.ID, wt.Amount)
+			}
 		}
 		cursorSig = oldestFirst[i]
 	}
@@ -733,11 +866,29 @@ func (w *TokenWallet) syncHistory(ctx context.Context) error {
 		if err := w.txDB.StoreTxs(wts); err != nil {
 			return err
 		}
+		w.emitBalanceChange()
 	}
 	if cursorSig == "" {
 		return nil
 	}
 	return w.setLastScannedSignature(cursorSig)
+}
+
+// emitBalanceChange fetches the current token balance and pushes it to the
+// UI. Called after syncHistory stores new transactions, since the front end
+// doesn't re-poll balances on its own — without this, a detected incoming
+// transfer shows up in the transaction list but the displayed balance never
+// updates until the next full page load.
+func (w *TokenWallet) emitBalanceChange() {
+	if w.emit == nil {
+		return
+	}
+	bal, err := w.Balance()
+	if err != nil {
+		w.parent.log.Warnf("Error emitting token balance change: %v", err)
+		return
+	}
+	w.emit.BalanceChange(bal)
 }
 
 func (w *TokenWallet) getLastScannedSignature() (string, error) {

@@ -103,9 +103,18 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		}
 	case util.Mainnet:
 		defaultProviders = []string{
+			// Verified working (2026-08-22). Neither of these serves
+			// eth_getLogs at all (confirmed live: -32005 "limit exceeded" on
+			// every query shape, down to a single block/address/no topics),
+			// so they're kept for every other RPC method but can't carry the
+			// incoming-transfer scan's ERC20 log-filter calls on their own.
 			"https://bsc-dataseed.bnbchain.org",
 			"https://bsc-dataseed-public.bnbchain.org",
-			"https://bnb.rpc.subquery.network/public",
+			// Verified working (2026-08-22), including eth_getLogs over a
+			// full maxScanBlocks (128-block) range. multiRPCClient fans a
+			// call out across every configured provider until one succeeds,
+			// so this is what actually carries ERC20 detection on BNB.
+			"https://bsc-rpc.publicnode.com",
 		}
 	}
 

@@ -4,6 +4,7 @@
 package eth
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -209,7 +210,11 @@ var _ txDB = (*TxDB)(nil)
 //     transactions at the end of the index.
 //   - isRelay: 1 if the transaction is a relay tx, 0 otherwise.
 //   - nonce: the nonce of the transaction, so that pending transactions and
-//     transactions within the same block are ordered by nonce.
+//     transactions within the same block are ordered by nonce. Incoming
+//     transfers have no nonce from our perspective, so the low 8 bytes of a
+//     hash of the tx ID are used instead. Without this, two incoming
+//     transfers landing in the same block would produce identical entries
+//     and collide in the unique index.
 func allAssetIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
 	d, err := decodeETHData(wt.RawTx)
 	if err != nil {
@@ -228,6 +233,9 @@ func allAssetIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
 	entry[8] = isRelay
 	if d.Nonce != nil {
 		binary.BigEndian.PutUint64(entry[9:], d.Nonce.Uint64())
+	} else {
+		idHash := sha256.Sum256([]byte(wt.ID))
+		copy(entry[9:], idHash[:8])
 	}
 	return entry, nil
 }

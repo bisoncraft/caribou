@@ -357,6 +357,12 @@ type Balance struct {
 type ethFetcher interface {
 	address() common.Address
 	addressBalance(ctx context.Context, addr common.Address) (*big.Int, error)
+	// addressBalanceAt is addressBalance pinned to a specific block, used by
+	// the incoming-transfer scan's balance-diff gate (scan.go) so the balance
+	// compared against always corresponds exactly to the block range being
+	// scanned, rather than whatever the node considers "latest" at query
+	// time.
+	addressBalanceAt(ctx context.Context, addr common.Address, blockNumber *big.Int) (*big.Int, error)
 	bestHeader(ctx context.Context) (*types.Header, error)
 	chainConfig() *params.ChainConfig
 	connect(ctx context.Context) error
@@ -381,6 +387,11 @@ type ethFetcher interface {
 	transactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 	transactionAndReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, *types.Transaction, error)
 	nonce(ctx context.Context) (confirmed, next *big.Int, err error)
+	// FilterLogs and blockByNumber are used by the incoming-transfer scan
+	// (scan.go) to discover ERC20 Transfer events and native-value transfers
+	// respectively.
+	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error)
+	blockByNumber(ctx context.Context, n *big.Int) (*types.Block, error)
 	// l1FeeForCalldata estimates the L1 fee for the given calldata using
 	// the OP Stack GasPriceOracle precompile.
 	l1FeeForCalldata(ctx context.Context, calldata []byte) (*big.Int, error)
@@ -498,6 +509,9 @@ type baseWallet struct {
 	// netTxDB is the master transaction database handle supplied by Core,
 	// scoped to this wallet's base-chain network. It backs txDB.
 	netTxDB txdb.NetworkTxDB
+	// metaTable holds auxiliary per-chain state, such as the incoming-transfer
+	// scan cursor (see scan.go), that isn't itself a transaction.
+	metaTable txdb.StoreTable
 
 	bridges       map[string]bridge
 	bridgeManager *bridgeManager
@@ -556,6 +570,16 @@ type ETHWallet struct {
 	pollingTip       atomic.Bool
 
 	*assetWallet
+
+	// lastScanBalance is the confirmed native balance as of the last
+	// incoming-transfer scan tick (see scan.go). It is only read and written
+	// by the single scanIncomingTransfers goroutine, so it needs no lock.
+	lastScanBalance *big.Int
+
+	// nativeScanBackoff and erc20ScanBackoff cool down each half of the
+	// incoming-transfer scan independently after a failure (see scan.go).
+	nativeScanBackoff scanBackoff
+	erc20ScanBackoff  scanBackoff
 }
 
 // TokenWallet implements some token-specific methods.
@@ -867,6 +891,11 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 		return nil, err
 	}
 
+	w.metaTable, err = w.netTxDB.Table(scanMetaTableName)
+	if err != nil {
+		return nil, fmt.Errorf("error opening meta table: %w", err)
+	}
+
 	pendingTxs, err := w.txDB.getPendingTxs()
 	if err != nil {
 		return nil, err
@@ -981,6 +1010,12 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	go func() {
 		defer wg.Done()
 		w.monitorPeers(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		w.scanIncomingTransfers(ctx)
 	}()
 
 	w.connected.Store(true)

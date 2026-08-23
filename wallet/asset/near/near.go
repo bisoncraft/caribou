@@ -352,7 +352,13 @@ func (w *NearWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error)
 	// Fetch initial block.
 	block, err := rpc.getBlock(w.ctx, "final")
 	if err != nil {
+		if w.peersChange != nil {
+			w.peersChange(0, err)
+		}
 		return nil, fmt.Errorf("error fetching initial block: %w", err)
+	}
+	if w.peersChange != nil {
+		w.peersChange(1, nil)
 	}
 	w.tipMtx.Lock()
 	w.tip = block.Header.Height
@@ -884,7 +890,13 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 			block, err := rpc.getBlock(ctx, "final")
 			if err != nil {
 				w.log.Errorf("Error fetching block: %v", err)
+				if w.peersChange != nil {
+					w.peersChange(0, err)
+				}
 				continue
+			}
+			if w.peersChange != nil {
+				w.peersChange(1, nil)
 			}
 
 			w.tipMtx.Lock()

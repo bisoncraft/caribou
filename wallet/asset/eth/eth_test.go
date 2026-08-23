@@ -56,6 +56,8 @@ type testNode struct {
 	syncProgErr       error
 	bal               *big.Int
 	balErr            error
+	balAt             map[uint64]*big.Int // block number -> balance, for addressBalanceAt; falls back to bal/balErr when absent
+	balAtErr          error
 	signDataErr       error
 	privKey           *ecdsa.PrivateKey
 	baseFee           *big.Int
@@ -90,6 +92,13 @@ type testNode struct {
 	txConfsErr        map[common.Hash]error
 	txAndReceiptBlock <-chan struct{}
 	txAndReceiptHit   chan<- struct{}
+
+	filterLogsResult []types.Log
+	filterLogsErr    error
+	filterLogsCalls  int
+	blocks           map[uint64]*types.Block
+	blockErr         error
+	blockByNumCalls  int
 
 	// nilReceiptNoErr makes transactionAndReceipt report neither a receipt nor
 	// an error, which a real node never does. Only a test exercising the
@@ -177,6 +186,32 @@ func (n *testNode) bestHeader(ctx context.Context) (*types.Header, error) {
 }
 func (n *testNode) addressBalance(ctx context.Context, addr common.Address) (*big.Int, error) {
 	return n.bal, n.balErr
+}
+func (n *testNode) addressBalanceAt(ctx context.Context, addr common.Address, blockNumber *big.Int) (*big.Int, error) {
+	if n.balAtErr != nil {
+		return nil, n.balAtErr
+	}
+	if n.balAt != nil {
+		if b, ok := n.balAt[blockNumber.Uint64()]; ok {
+			return b, nil
+		}
+	}
+	return n.bal, n.balErr
+}
+func (n *testNode) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
+	n.filterLogsCalls++
+	return n.filterLogsResult, n.filterLogsErr
+}
+func (n *testNode) blockByNumber(ctx context.Context, num *big.Int) (*types.Block, error) {
+	n.blockByNumCalls++
+	if n.blockErr != nil {
+		return nil, n.blockErr
+	}
+	b, ok := n.blocks[num.Uint64()]
+	if !ok {
+		return nil, fmt.Errorf("no test block at height %d", num.Uint64())
+	}
+	return b, nil
 }
 func (n *testNode) unlock(pw string) error {
 	return nil
@@ -342,6 +377,8 @@ type tTokenContractor struct {
 	valueIn             map[common.Hash]uint64
 	valueOut            map[common.Hash]uint64
 	valueErr            error
+	parseTransferAmt    uint64
+	parseTransferErr    error
 }
 
 var _ tokenContractor = (*tTokenContractor)(nil)
@@ -359,7 +396,7 @@ func (c *tTokenContractor) transfer(*bind.TransactOpts, common.Address, *big.Int
 }
 
 func (c *tTokenContractor) parseTransfer(*types.Receipt) (uint64, error) {
-	return 0, nil
+	return c.parseTransferAmt, c.parseTransferErr
 }
 
 func (c *tTokenContractor) estimateTransferGas(context.Context, *big.Int) (uint64, error) {
@@ -380,6 +417,7 @@ func (c *tTokenContractor) value(_ context.Context, tx *types.Transaction) (inco
 type tTxDB struct {
 	storeTxCalled  bool
 	storedTx       *extendedWalletTx
+	storedTxs      []*extendedWalletTx // accumulates every storeTx call, unlike storedTx which keeps only the last
 	storeTxErr     error
 	txToGet        *extendedWalletTx
 	txs            map[common.Hash]*extendedWalletTx // for looking up multiple txs by hash
@@ -395,6 +433,7 @@ func (db *tTxDB) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 func (db *tTxDB) storeTx(wt *extendedWalletTx) error {
 	db.storeTxCalled = true
 	db.storedTx = wt
+	db.storedTxs = append(db.storedTxs, wt)
 	return db.storeTxErr
 }
 func (db *tTxDB) getTxs(tokenID *uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {

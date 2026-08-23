@@ -79,14 +79,15 @@ func (w *xrpWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error
 		return nil, fmt.Errorf("error decoding issuer address: %w", err)
 	}
 	return &TokenWallet{
-		parent:     w,
-		assetID:    cfg.AssetID,
-		token:      token,
-		issuerAddr: issuerAddr,
-		currency:   currency,
-		issuer:     [20]byte(issuerAccountID),
-		emit:       cfg.Emit,
-		txDB:       cfg.NetworkTxDB,
+		parent:      w,
+		assetID:     cfg.AssetID,
+		token:       token,
+		issuerAddr:  issuerAddr,
+		currency:    currency,
+		issuer:      [20]byte(issuerAccountID),
+		emit:        cfg.Emit,
+		peersChange: cfg.PeersChange,
+		txDB:        cfg.NetworkTxDB,
 		wi: asset.WalletInfo{
 			Name:              token.Name,
 			SupportedVersions: []uint32{version},
@@ -102,22 +103,32 @@ func (w *xrpWallet) OpenTokenWallet(cfg *asset.TokenConfig) (asset.Wallet, error
 // native XRP address; the recipient must have an established trustline with
 // the issuer before receiving funds.
 type TokenWallet struct {
-	parent     *xrpWallet
-	assetID    uint32
-	token      *Token
-	issuerAddr string
-	currency   [20]byte
-	issuer     [20]byte
-	emit       *asset.WalletEmitter
-	txDB       txdb.NetworkTxDB
-	wi         asset.WalletInfo
+	parent      *xrpWallet
+	assetID     uint32
+	token       *Token
+	issuerAddr  string
+	currency    [20]byte
+	issuer      [20]byte
+	emit        *asset.WalletEmitter
+	peersChange func(uint32, error)
+	txDB        txdb.NetworkTxDB
+	wi          asset.WalletInfo
 }
 
 var _ asset.Wallet = (*TokenWallet)(nil)
+var _ asset.TxFeeEstimator = (*TokenWallet)(nil)
 
 func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if w.parent.ctx == nil || w.parent.ctx.Err() != nil {
 		return nil, fmt.Errorf("parent wallet not connected")
+	}
+	// The token wallet shares the parent's already-verified RPC/WS connection
+	// and has no independent connectivity probe of its own, so report peers
+	// once here. Without this, Core's per-asset peer counter for this token
+	// never leaves its initial "unknown" state and Send is permanently
+	// rejected by the no-connected-peers safety check.
+	if w.peersChange != nil {
+		w.peersChange(1, nil)
 	}
 	// The parent's scanner and checkPendingTxs are what observe this token's
 	// transactions — they walk the one account both wallets share — so they
@@ -189,6 +200,38 @@ func (w *TokenWallet) StandardSendFee(feeRate uint64) uint64 {
 // parent asset, so the rate is the parent chain's.
 func (w *TokenWallet) FeeRate() uint64 {
 	return w.parent.FeeRate()
+}
+
+// EstimateSendTxFee estimates the native XRP fee for sending value token
+// atoms to address; the fee is paid in XRP regardless of the token, same as
+// Send. feeRate is ignored; XRP prices its own fee. An invalid address is
+// reported via isValidAddress rather than an error. Unlike Send, this does
+// not check the destination's trustline — that's a send-time policy check,
+// not fee computation, and a missing trustline still surfaces at submit.
+func (w *TokenWallet) EstimateSendTxFee(address string, value, _ uint64, _, maxWithdraw bool) (uint64, bool, error) {
+	w.parent.opWG.Add(1)
+	defer w.parent.opWG.Done()
+	if !w.parent.running.Load() {
+		return 0, false, fmt.Errorf("wallet not running")
+	}
+
+	bal, err := w.Balance()
+	if err != nil {
+		return 0, false, err
+	}
+	if !maxWithdraw && bal.Available < value {
+		return 0, false, asset.ErrInsufficientBalance
+	}
+
+	fee := w.StandardSendFee(0)
+	nativeBalance, err := w.parent.balance(true)
+	if err != nil {
+		return 0, false, fmt.Errorf("checking available balance: %w", err)
+	}
+	if fee > nativeBalance.Available {
+		return 0, false, asset.ErrInsufficientBalance
+	}
+	return fee, w.ValidateAddress(address), nil
 }
 
 // trustlineLimitAtomic is the TrustSet limit used when establishing a
@@ -368,6 +411,18 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		return nil, fmt.Errorf("wallet is locked")
 	}
 	w.parent.keyMtx.RUnlock()
+
+	// Reject up front when the destination requires a DestinationTag: this
+	// wallet has no SendTagged (unlike the native wallet), so a payment here
+	// would always be rejected on-chain with tecDST_TAG_NEEDED after already
+	// paying the network fee.
+	destInfo, err := w.parent.rpc.accountInfo(w.parent.ctx, address)
+	if err != nil && !isAccountNotFound(err) {
+		return nil, fmt.Errorf("error checking destination account info: %w", err)
+	}
+	if err == nil && destInfo.AccountData.Flags&lsfRequireDestTag != 0 {
+		return nil, fmt.Errorf("destination %q requires a destination tag, which token sends do not support", address)
+	}
 
 	// The destination must already have a trustline for this currency and
 	// issuer; XRPL rejects an issued-currency Payment to an account without

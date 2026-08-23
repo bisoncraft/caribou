@@ -314,6 +314,48 @@ func TestTxDBReplaceNonce(t *testing.T) {
 	}
 }
 
+// TestTxDBReceivesSameBlockDoNotCollide ensures that two incoming transfers
+// landing in the same block, which have no nonce from our perspective (no
+// RawTx extension), are indexed separately instead of one evicting the other
+// via the unique index.
+func TestTxDBReceivesSameBlockDoNotCollide(t *testing.T) {
+	t.Parallel()
+
+	txHistoryStore := newTestTxDB(t)
+
+	newReceiveTx := func(id string, blockNumber uint64) *extendedWalletTx {
+		addr := "0xabc"
+		return &extendedWalletTx{
+			WalletTransaction: &txdb.WalletTransaction{
+				Type:        txdb.Receive,
+				ID:          id,
+				BlockNumber: blockNumber,
+				Amount:      1,
+				Recipient:   &addr,
+				Confirmed:   true,
+			},
+		}
+	}
+
+	wt1 := newReceiveTx(common.BigToHash(big.NewInt(1)).String(), 100)
+	wt2 := newReceiveTx(common.BigToHash(big.NewInt(2)).String(), 100)
+
+	if err := txHistoryStore.storeTx(wt1); err != nil {
+		t.Fatalf("error storing tx: %v", err)
+	}
+	if err := txHistoryStore.storeTx(wt2); err != nil {
+		t.Fatalf("error storing tx: %v", err)
+	}
+
+	r, err := txHistoryStore.getTxs(nil, &txdb.TxHistoryRequest{})
+	if err != nil {
+		t.Fatalf("error retrieving txs: %v", err)
+	}
+	if len(r.Txs) != 2 {
+		t.Fatalf("expected 2 txs but got %d: %+v", len(r.Txs), r.Txs)
+	}
+}
+
 // TestTxDBCorruptRawTxDoesNotEvict ensures that a transaction whose eth RawTx
 // extension is undecodable fails to store rather than silently producing a
 // nonce-0 unique-index key that evicts an unrelated transaction.

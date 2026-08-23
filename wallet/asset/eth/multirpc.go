@@ -1276,6 +1276,13 @@ func (m *multiRPCClient) addressBalance(ctx context.Context, addr common.Address
 	})
 }
 
+func (m *multiRPCClient) addressBalanceAt(ctx context.Context, addr common.Address, blockNumber *big.Int) (bal *big.Int, err error) {
+	return bal, m.withAny(ctx, func(ctx context.Context, p *provider) error {
+		bal, err = p.ec.BalanceAt(ctx, addr, blockNumber)
+		return err
+	})
+}
+
 func (m *multiRPCClient) bestHeader(ctx context.Context) (hdr *types.Header, err error) {
 	// Check for an unexpired cached header first.
 	var bestHeader *types.Header
@@ -1582,6 +1589,16 @@ func (m *multiRPCClient) FilterLogs(ctx context.Context, query ethereum.FilterQu
 func (m *multiRPCClient) SubscribeFilterLogs(ctx context.Context, query ethereum.FilterQuery, ch chan<- types.Log) (sub ethereum.Subscription, err error) {
 	return sub, m.withAny(ctx, func(ctx context.Context, p *provider) error {
 		sub, err = p.ec.SubscribeFilterLogs(ctx, query, ch)
+		return err
+	})
+}
+
+// blockByNumber fetches a full block, including its transaction bodies. Used
+// by the incoming-transfer scan to check native-value transfers, since no
+// address-indexed RPC exists for that.
+func (m *multiRPCClient) blockByNumber(ctx context.Context, n *big.Int) (block *types.Block, err error) {
+	return block, m.withAny(ctx, func(ctx context.Context, p *provider) error {
+		block, err = p.ec.BlockByNumber(ctx, n)
 		return err
 	})
 }

@@ -73,6 +73,42 @@ func TestTokenWalletDepositAddress(t *testing.T) {
 	}
 }
 
+// TestTokenWalletConnectReportsPeers guards against a token wallet's Send
+// being permanently rejected by Core's no-connected-peers safety check. The
+// token wallet has no independent connectivity probe of its own, so it must
+// report peers once on Connect using the parent's already-verified RPC/WS
+// connection, or Core's per-asset peer counter for the token never leaves
+// its initial "unknown" state.
+func TestTokenWalletConnectReportsPeers(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	var gotNumPeers uint32
+	var calls int
+	tw.peersChange = func(numPeers uint32, err error) {
+		calls++
+		gotNumPeers = numPeers
+		if err != nil {
+			t.Fatalf("peersChange error: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wg, err := tw.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	cancel()
+	wg.Wait()
+
+	if calls != 1 {
+		t.Fatalf("expected peersChange to be called once, got %d calls", calls)
+	}
+	if gotNumPeers != 1 {
+		t.Fatalf("expected peersChange(1, nil), got peersChange(%d, ...)", gotNumPeers)
+	}
+}
+
 func TestTokenWalletBalanceNoTrustline(t *testing.T) {
 	m := newMockRippled(t)
 	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
@@ -187,6 +223,9 @@ func TestWalletTransactionFromTxIndeterminateDeliveredAmount(t *testing.T) {
 
 func TestTokenWalletSendNoDestinationTrustline(t *testing.T) {
 	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, 0), nil
+	})
 	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
 		return accountLinesResponse(nil), nil
 	})
@@ -194,6 +233,25 @@ func TestTokenWalletSendNoDestinationTrustline(t *testing.T) {
 	_, err := tw.Send("rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe", 1_000_000, 0)
 	if err == nil {
 		t.Fatal("expected error when destination has no trustline")
+	}
+}
+
+// TestTokenWalletSendRequiresDestinationTag guards against burning the
+// network fee on a token payment that is guaranteed to fail on-chain:
+// TokenWallet has no SendTagged, so a destination with lsfRequireDestTag set
+// must be rejected before submit, same as the native wallet.
+func TestTokenWalletSendRequiresDestinationTag(t *testing.T) {
+	m := newMockRippled(t)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, lsfRequireDestTag), nil
+	})
+	tw := makeTokenTestWallet(t, m)
+	_, err := tw.Send("rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe", 1_000_000, 0)
+	if err == nil {
+		t.Fatal("expected an error sending to a tag-required destination")
+	}
+	if !strings.Contains(err.Error(), "destination tag") {
+		t.Errorf("error should mention a destination tag, got: %v", err)
 	}
 }
 
@@ -1149,4 +1207,121 @@ func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
 	if still {
 		t.Error("token emitter still registered after the wallet's context ended")
 	}
+}
+
+func TestTokenWalletEstimateSendTxFee(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+
+	t.Run("sufficient trustline balance and native XRP", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("15"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+			return accountLinesResponse([]accountLine{{
+				Account:  TokenUSDC.NetIssuers[util.Mainnet],
+				Currency: TokenUSDC.Currency,
+				Balance:  "1000",
+			}}), nil
+		})
+		tw := makeTokenTestWallet(t, m)
+
+		fee, valid, err := tw.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if !valid {
+			t.Error("expected isValidAddress=true")
+		}
+		if fee != 15 {
+			t.Errorf("fee = %d, want 15", fee)
+		}
+	})
+
+	t.Run("no native XRP to cover the fee", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("15"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("0", 0, 0), nil
+		})
+		m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+			return accountLinesResponse([]accountLine{{
+				Account:  TokenUSDC.NetIssuers[util.Mainnet],
+				Currency: TokenUSDC.Currency,
+				Balance:  "1000",
+			}}), nil
+		})
+		tw := makeTokenTestWallet(t, m)
+
+		_, _, err := tw.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("insufficient trustline balance", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("15"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+			return accountLinesResponse([]accountLine{{
+				Account:  TokenUSDC.NetIssuers[util.Mainnet],
+				Currency: TokenUSDC.Currency,
+				Balance:  "0.5", // 500000 atomic (USDC has 6 decimals) < value
+			}}), nil
+		})
+		tw := makeTokenTestWallet(t, m)
+
+		_, _, err := tw.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("missing trustline", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("15"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+			return accountLinesResponse(nil), nil
+		})
+		tw := makeTokenTestWallet(t, m)
+
+		_, _, err := tw.EstimateSendTxFee(destAddr, 1_000_000, 0, false, false)
+		if err != asset.ErrInsufficientBalance {
+			t.Fatalf("err = %v, want ErrInsufficientBalance", err)
+		}
+	})
+
+	t.Run("invalid address reported via isValidAddress, not an error", func(t *testing.T) {
+		m := newMockRippled(t)
+		m.handle("fee", feeHandler("15"))
+		m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+			return accountInfoResponse("100000000", 0, 0), nil
+		})
+		m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+			return accountLinesResponse([]accountLine{{
+				Account:  TokenUSDC.NetIssuers[util.Mainnet],
+				Currency: TokenUSDC.Currency,
+				Balance:  "1000",
+			}}), nil
+		})
+		tw := makeTokenTestWallet(t, m)
+
+		fee, valid, err := tw.EstimateSendTxFee("not-an-address", 1_000_000, 0, false, false)
+		if err != nil {
+			t.Fatalf("EstimateSendTxFee: %v", err)
+		}
+		if valid {
+			t.Error("expected isValidAddress=false")
+		}
+		if fee != 15 {
+			t.Errorf("fee = %d, want 15", fee)
+		}
+	})
 }
