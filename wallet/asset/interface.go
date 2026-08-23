@@ -355,6 +355,11 @@ type WalletInfo struct {
 	// Network describes the chain this wallet operates on. For chains that
 	// host tokens, this is the network referenced by token Token.NetworkID.
 	Network *Network `json:"network"`
+	// SeedAssetID, when non-zero, overrides the asset ID used to derive this
+	// wallet's seed from the application seed. It is set when a chain must
+	// derive the same keys as another registered asset, e.g. HyperEVM shares
+	// HyperCore's address so funds sent over either network stay reachable.
+	SeedAssetID uint32 `json:"-"`
 }
 
 // ConfigOption is a wallet configuration option.

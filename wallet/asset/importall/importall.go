@@ -3,6 +3,7 @@ package importall
 import (
 	// _ "github.com/bisoncraft/caribou/wallet/asset/bch"          // register bch asset
 	_ "github.com/bisoncraft/caribou/wallet/asset/btc"         // register btc asset
+	_ "github.com/bisoncraft/caribou/wallet/asset/hyperevm"    // register hyperevm asset
 	_ "github.com/bisoncraft/caribou/wallet/asset/hyperliquid" // register hyperliquid asset
 	_ "github.com/bisoncraft/caribou/wallet/asset/sol"         // register sol asset
 

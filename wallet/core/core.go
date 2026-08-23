@@ -1399,6 +1399,11 @@ func AssetSeedAndPass(assetID uint32, appSeed []byte) ([]byte, []byte) {
 			}
 		}
 	}
+	// A wallet that must share another asset's address (e.g. HyperEVM sharing
+	// HyperCore's) overrides both rules above.
+	if ai, _ := asset.Info(assetID); ai != nil && ai.SeedAssetID != 0 {
+		seedAssetID = ai.SeedAssetID
+	}
 
 	b := make([]byte, len(appSeed)+4)
 	copy(b, appSeed)

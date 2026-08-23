@@ -452,6 +452,11 @@ type baseWallet struct {
 	walletType string
 	torProxy   string
 
+	// privKeyFn derives the raw private key from the wallet seed. Defaults to
+	// the package's own BIP-39-based derivation; overridden by chains (e.g.
+	// hyperevm) that must derive the same key as another registered asset.
+	privKeyFn func([]byte) ([]byte, func(), error)
+
 	finalizeConfs uint64
 
 	multiBalanceAddress  common.Address
@@ -632,7 +637,17 @@ func privKeyFromSeed(seed []byte) (pk []byte, zero func(), err error) {
 	return pk, extKey.Zero, nil
 }
 
+// CreateEVMWallet creates a wallet using the package's standard BIP-39-based
+// key derivation. See CreateEVMWalletKeyed for chains that must derive a
+// different key.
 func CreateEVMWallet(chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool) error {
+	return CreateEVMWalletKeyed(chainID, createWalletParams, compat, skipConnect, privKeyFromSeed)
+}
+
+// CreateEVMWalletKeyed is CreateEVMWallet for chains whose keys are not
+// derived by the standard eth path. keyFn derives the raw private key from
+// the wallet seed.
+func CreateEVMWalletKeyed(chainID int64, createWalletParams *asset.CreateWalletParams, compat *CompatibilityData, skipConnect bool, keyFn func([]byte) ([]byte, func(), error)) error {
 	switch createWalletParams.Type {
 	case walletTypeGeth:
 		return asset.ErrWalletTypeDisabled
@@ -643,7 +658,7 @@ func CreateEVMWallet(chainID int64, createWalletParams *asset.CreateWalletParams
 
 	walletDir := getWalletDir(createWalletParams.DataDir, createWalletParams.Net)
 
-	privateKey, zero, err := privKeyFromSeed(createWalletParams.Seed)
+	privateKey, zero, err := keyFn(createWalletParams.Seed)
 	if err != nil {
 		return err
 	}
@@ -754,6 +769,11 @@ type EVMWalletConfig struct {
 	// IsOpStack is true for OP Stack L2s (Base, etc.) that have an additional
 	// L1 security fee for posting calldata to Ethereum.
 	IsOpStack bool
+	// PrivKeyFromSeed overrides how the wallet's private key is derived from
+	// the wallet seed. Defaults to the package's own BIP-39-based derivation
+	// when nil. Set this when the chain must derive the same key as another
+	// registered asset (e.g. hyperevm sharing hyperliquid's address).
+	PrivKeyFromSeed func([]byte) ([]byte, func(), error)
 }
 
 func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
@@ -781,7 +801,12 @@ func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
 	if gasFeeLimit == 0 {
 		gasFeeLimit = defaultGasFeeLimit
 	}
+	privKeyFn := cfg.PrivKeyFromSeed
+	if privKeyFn == nil {
+		privKeyFn = privKeyFromSeed
+	}
 	eth := &baseWallet{
+		privKeyFn:           privKeyFn,
 		net:                 cfg.Net,
 		baseChainID:         cfg.BaseChainID,
 		chainCfg:            cfg.ChainCfg,
@@ -2679,7 +2704,7 @@ func (w *TokenWallet) StandardSendFee(feeRate uint64) uint64 {
 // RestorationInfo returns information about how to restore the wallet in
 // various external wallets.
 func (w *ETHWallet) RestorationInfo(seed []byte) ([]*asset.WalletRestoration, error) {
-	privateKey, zero, err := privKeyFromSeed(seed)
+	privateKey, zero, err := w.privKeyFn(seed)
 	if err != nil {
 		return nil, err
 	}

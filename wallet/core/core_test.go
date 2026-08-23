@@ -1636,6 +1636,52 @@ func TestCoreAssetSeedAndPass(t *testing.T) {
 	}
 }
 
+// TestAssetSeedAndPassSeedAssetIDOverride guards the mechanism that lets two
+// wallets control one address: a chain that shares another asset's keys (e.g.
+// HyperEVM sharing HyperCore's) declares WalletInfo.SeedAssetID, and
+// AssetSeedAndPass must derive the identical seed/pass for both asset IDs. It
+// must also win over the existing EVM-class asset ID 60 remap, since a
+// SeedAssetID chain can itself be EVM-class (as HyperEVM is) but must not
+// fall back to the generic EVM seed once it declares a specific one.
+func TestAssetSeedAndPassSeedAssetIDOverride(t *testing.T) {
+	// Unused elsewhere in this file.
+	const (
+		sourceAssetID = 99001
+		aliasAssetID  = 99002
+	)
+	asset.Register(sourceAssetID, &tDriver{
+		winfo: &asset.WalletInfo{
+			BlockchainClass: asset.BlockchainClassAccount,
+			UnitInfo:        util.UnitInfo{Conventional: util.Denomination{ConversionFactor: 1e8}},
+		},
+	}, true)
+	asset.Register(aliasAssetID, &tDriver{
+		winfo: &asset.WalletInfo{
+			BlockchainClass: asset.BlockchainClassEVM,
+			SeedAssetID:     sourceAssetID,
+			UnitInfo:        util.UnitInfo{Conventional: util.Denomination{ConversionFactor: 1e9}},
+		},
+	}, true)
+
+	appSeed := []byte{4, 5, 6}
+	sourceSeed, sourcePass := AssetSeedAndPass(sourceAssetID, appSeed)
+	aliasSeed, aliasPass := AssetSeedAndPass(aliasAssetID, appSeed)
+
+	if !bytes.Equal(sourceSeed, aliasSeed) {
+		t.Fatalf("aliased asset derived a different seed than its source: %#v != %#v", aliasSeed, sourceSeed)
+	}
+	if !bytes.Equal(sourcePass, aliasPass) {
+		t.Fatalf("aliased asset derived a different pass than its source: %#v != %#v", aliasPass, sourcePass)
+	}
+
+	// Confirm the override actually took effect rather than both asset IDs
+	// coincidentally landing on the generic EVM-class seed (60).
+	genericEVMSeed, _ := AssetSeedAndPass(60, appSeed)
+	if bytes.Equal(genericEVMSeed, aliasSeed) {
+		t.Fatal("SeedAssetID did not override the generic EVM-class seed derivation")
+	}
+}
+
 func TestToggleRateSourceStatus(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()
