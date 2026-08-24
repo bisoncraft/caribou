@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1305,5 +1306,207 @@ func TestTransactionOptions(t *testing.T) {
 	badGet := func(o *kvstore.GetOpts) { o.Txn = 42 }
 	if _, err := tbl.Get([]byte("k"), badGet); err == nil {
 		t.Fatal("Get with wrong-typed txn handle succeeded")
+	}
+}
+
+// seekerTestIndex builds a table with an index on the value's first byte,
+// skipping values whose first byte is 0xff.
+func seekerTestIndex(t *testing.T, db *DB) (*Table, *Index) {
+	t.Helper()
+	tbl, err := db.table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	idx, err := tbl.addIndex("byVal", func(_, v KV) ([]byte, error) {
+		b := v.([]byte)
+		if b[0] == 0xff {
+			return nil, ErrNotIndexed
+		}
+		return b[:1], nil
+	}, false)
+	if err != nil {
+		t.Fatalf("addIndex: %v", err)
+	}
+	return tbl, idx
+}
+
+// TestSeeker covers Index.Seeker: the returned seek is the row's index entry
+// followed by its primary key (the internal index id stripped), copied out of
+// the transaction, it tracks the row through replacement, and a missing or
+// unindexed row reports ErrKeyNotFound.
+func TestSeeker(t *testing.T) {
+	db := newTestDB(t)
+	tbl, idx := seekerTestIndex(t, db)
+
+	set := func(k string, val byte) {
+		t.Helper()
+		if err := tbl.Set([]byte(k), []byte{val}, kvstore.WithReplace()); err != nil {
+			t.Fatalf("Set(%q): %v", k, err)
+		}
+	}
+	set("a", 1)
+	set("b", 2)
+	set("c", 2) // "b" and "c" share the index value
+	set("x", 0xff)
+
+	seek, err := idx.Seeker([]byte("c"))
+	if err != nil {
+		t.Fatalf("Seeker: %v", err)
+	}
+	// entry byte || primary key, valid outside any transaction.
+	if want := append([]byte{2}, 'c'); !bytes.Equal(seek, want) {
+		t.Fatalf("seek = %x, want %x (entry || primary key)", seek, want)
+	}
+
+	collect := func(opts ...kvstore.IterationOption) (keys []string) {
+		t.Helper()
+		if err := idx.Iterate(nil, func(it kvstore.StoreIter) error {
+			k, err := it.K()
+			if err != nil {
+				return err
+			}
+			keys = append(keys, string(k))
+			return nil
+		}, opts...); err != nil {
+			t.Fatalf("Iterate: %v", err)
+		}
+		return
+	}
+	equal := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	if got := collect(kvstore.WithSeek(seek)); !equal(got, []string{"c"}) {
+		t.Fatalf("forward from c = %v, want [c]", got)
+	}
+	if got := collect(kvstore.WithReverse(), kvstore.WithSeek(seek)); !equal(got, []string{"c", "b", "a"}) {
+		t.Fatalf("reverse from c = %v, want [c b a]", got)
+	}
+
+	// Replacing the row moves its index entry; Seeker returns the new
+	// position.
+	set("c", 1) // order is now a(1), c(1), b(2)
+	seek, err = idx.Seeker([]byte("c"))
+	if err != nil {
+		t.Fatalf("Seeker after replace: %v", err)
+	}
+	if got := collect(kvstore.WithSeek(seek)); !equal(got, []string{"c", "b"}) {
+		t.Fatalf("forward from replaced c = %v, want [c b]", got)
+	}
+
+	if _, err := idx.Seeker([]byte("nope")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("Seeker(missing key) err = %v, want ErrKeyNotFound", err)
+	}
+	if _, err := idx.Seeker([]byte("x")); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("Seeker(unindexed row) err = %v, want ErrKeyNotFound", err)
+	}
+}
+
+// TestCrossIndex covers Iter.CrossIndex from both an index scan and a table
+// scan: another index's entry for the current datum is readable (the internal
+// index id and primary-key suffix excluded), a datum absent from the named
+// index reports ErrKeyNotFound, and an unknown index name is a distinct error.
+func TestCrossIndex(t *testing.T) {
+	db := newTestDB(t)
+	tbl, err := db.table("T")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	byFirst, err := tbl.addIndex("byFirst", func(_, v KV) ([]byte, error) {
+		return v.([]byte)[:1], nil
+	}, false)
+	if err != nil {
+		t.Fatalf("addIndex(byFirst): %v", err)
+	}
+	if _, err := tbl.addIndex("bySecond", func(_, v KV) ([]byte, error) {
+		b := v.([]byte)
+		if b[1] == 0xff {
+			return nil, ErrNotIndexed
+		}
+		return b[1:2], nil
+	}, false); err != nil {
+		t.Fatalf("addIndex(bySecond): %v", err)
+	}
+
+	if err := tbl.Set([]byte("a"), []byte{1, 9}); err != nil {
+		t.Fatalf("Set(a): %v", err)
+	}
+	if err := tbl.Set([]byte("b"), []byte{2, 0xff}); err != nil { // absent from bySecond
+		t.Fatalf("Set(b): %v", err)
+	}
+
+	checkIter := func(scan string, it kvstore.StoreIter) error {
+		k, err := it.K()
+		if err != nil {
+			return err
+		}
+		switch string(k) {
+		case "a":
+			if e, err := it.CrossIndex("bySecond"); err != nil || !bytes.Equal(e, []byte{9}) {
+				t.Fatalf("%s: CrossIndex(bySecond) = %x, %v; want 0x09", scan, e, err)
+			}
+			// The iterated index's own entry is readable too.
+			if e, err := it.CrossIndex("byFirst"); err != nil || !bytes.Equal(e, []byte{1}) {
+				t.Fatalf("%s: CrossIndex(byFirst) = %x, %v; want 0x01", scan, e, err)
+			}
+			if _, err := it.CrossIndex("nope"); err == nil || errors.Is(err, ErrKeyNotFound) {
+				t.Fatalf("%s: CrossIndex(unknown name) err = %v, want a non-not-found error", scan, err)
+			}
+		case "b":
+			if _, err := it.CrossIndex("bySecond"); !errors.Is(err, ErrKeyNotFound) {
+				t.Fatalf("%s: CrossIndex of unindexed datum err = %v, want ErrKeyNotFound", scan, err)
+			}
+		}
+		return nil
+	}
+	if err := byFirst.Iterate(nil, func(it kvstore.StoreIter) error {
+		return checkIter("index scan", it)
+	}); err != nil {
+		t.Fatalf("index Iterate: %v", err)
+	}
+	if err := tbl.Iterate(nil, func(it kvstore.StoreIter) error {
+		return checkIter("table scan", it)
+	}); err != nil {
+		t.Fatalf("table Iterate: %v", err)
+	}
+}
+
+// TestSeekerCrossIndexMalformedEntry pins the malformed-entry guard shared by
+// Seeker and CrossIndex: a stored index-entry key too short to carry the index
+// id and the primary key is refused with an error rather than sliced out of
+// range.
+func TestSeekerCrossIndexMalformedEntry(t *testing.T) {
+	db := newTestDB(t)
+	tbl, idx := seekerTestIndex(t, db)
+
+	kB := []byte("kk")
+	if err := tbl.Set(kB, []byte{1}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	// Rewrite the row's datum with an index-entry key shorter than
+	// 1 (index id) + len(primary key).
+	err := db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(tbl.name).Bucket(dataBucketKey).Put(kB, encodeDatum([]byte{1}, [][]byte{{0x00}}))
+	})
+	if err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+
+	if _, err := idx.Seeker(kB); err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("Seeker on corrupt datum err = %v, want malformed-entry error", err)
+	}
+	err = tbl.Iterate(nil, func(it kvstore.StoreIter) error {
+		_, err := it.CrossIndex("byVal")
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("CrossIndex on corrupt datum err = %v, want malformed-entry error", err)
 	}
 }

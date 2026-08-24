@@ -147,6 +147,43 @@ func (idx *Index) uniqueConflict(index *bbolt.Bucket, fullKey, k []byte) []byte 
 	return nil
 }
 
+// Seeker is the bytes to use for setting the start entry (the "seek") for an
+// index entry. k is the key associated with the table value. The seek is the
+// row's own entry in this index (in index space, ready for WithSeek), so an
+// iteration started from it visits that row first in either direction. A key
+// with no row, or a row that generated no entry in this index, returns
+// ErrKeyNotFound. The seek is copied out of the transaction, so it remains
+// valid indefinitely.
+func (idx *Index) Seeker(k KV) (seek []byte, err error) {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return nil, fmt.Errorf("glossi: error marshaling key: %w", err)
+	}
+	return seek, idx.table.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(idx.table.name).Bucket(dataBucketKey).Get(kB)
+		if raw == nil {
+			return ErrKeyNotFound
+		}
+		_, idxKeys, err := decodeDatum(raw)
+		if err != nil {
+			return err
+		}
+		for _, ik := range idxKeys {
+			if len(ik) < 1+len(kB) {
+				return fmt.Errorf("glossi: malformed index entry of size %d", len(ik))
+			}
+			if ik[0] == idx.id {
+				// The stored entry key is indexID||indexEntry||primaryKey;
+				// strip the id so the seek is in index space, then copy out of
+				// the transaction's memory.
+				seek = append([]byte(nil), ik[1:]...)
+				return nil
+			}
+		}
+		return fmt.Errorf("glossi: no entry for key %v in index %s: %w", k, idx.name, ErrKeyNotFound)
+	})
+}
+
 // Iterate iterates the index in entry order. prefix, if non-empty, constrains
 // iteration to index entries beginning with it (in index space, i.e. without
 // the internal index id). The key and value exposed via the Iter are only valid
@@ -179,7 +216,7 @@ func (idx *Index) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...k
 			if raw == nil {
 				return fmt.Errorf("dangling index entry for index %q", idx.name)
 			}
-			value, _, err := decodeDatum(raw)
+			value, idxKeys, err := decodeDatum(raw)
 			if err != nil {
 				return err
 			}
@@ -188,6 +225,8 @@ func (idx *Index) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...k
 				v:       value,
 				entry:   entryKey,
 				kLen:    len(k),
+				table:   idx.table,
+				idxKeys: idxKeys,
 				update:  o.Update,
 				index:   index,
 				dataBkt: data,
@@ -203,6 +242,12 @@ type Iter struct {
 	v     []byte
 	entry []byte // index entry key (index iteration only); nil for table iteration
 	kLen  int
+	// table is the Table the entry belongs to, for resolving index names in
+	// CrossIndex.
+	table *Table
+	// idxKeys is the datum's stored index-entry keys
+	// (indexID||indexEntry||primaryKey), decoded alongside the value.
+	idxKeys [][]byte
 
 	// update records whether the iteration runs in a read-write transaction
 	// (WithUpdate), which Delete requires.
@@ -227,6 +272,35 @@ func (i *Iter) Entry(f func(idxB []byte) error) error {
 		return f(i.k)
 	}
 	return f(i.entry[1 : len(i.entry)-i.kLen])
+}
+
+// CrossIndex returns the entry another of the table's indexes generated for
+// this iteration entry's datum, letting a scan of one index consult a second
+// index's value without decoding the datum. The bytes are in that index's
+// entry space, the internal index id and primary-key suffix excluded, matching
+// Entry, and are only valid for the duration of the iteration callback. A
+// datum with no entry in the named index returns ErrKeyNotFound; a name
+// matching no index on the table is an error.
+func (i *Iter) CrossIndex(name string) ([]byte, error) {
+	var target *Index
+	for _, idx := range i.table.indexes {
+		if idx.name == name {
+			target = idx
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("glossi: table %q has no index named %q", i.table.name, name)
+	}
+	for _, ik := range i.idxKeys {
+		if len(ik) < 1+len(i.k) {
+			return nil, fmt.Errorf("glossi: malformed index entry of size %d", len(ik))
+		}
+		if ik[0] == target.id {
+			return ik[1 : len(ik)-len(i.k)], nil
+		}
+	}
+	return nil, fmt.Errorf("glossi: no entry for this datum in index %s: %w", name, ErrKeyNotFound)
 }
 
 // Delete removes the datum at the current entry along with all of its index

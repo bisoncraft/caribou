@@ -170,6 +170,35 @@ func (idx *Index) UseDefaultIterationOptions(optss ...kvstore.IterationOption) {
 	}
 }
 
+// Seeker is the bytes to use for setting the start entry (the "seek") for an
+// index entry. k is the key associated with the table value. The seek is the
+// row's own entry in this index (in index space, ready for WithSeek), so an
+// iteration started from it visits that row first in either direction. A key
+// with no row, or a row that generated no entry in this index, returns
+// ErrKeyNotFound.
+func (idx *Index) Seeker(k KV) (seek []byte, err error) {
+	kB, err := kvstore.ParseKV(k)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling key: %w", err)
+	}
+	return seek, idx.View(func(txn *badger.Txn) error {
+		d, err := idx.table.get(txn, kB)
+		if err != nil {
+			return err
+		}
+		for _, idxB := range d.indexes {
+			if len(idxB) < PrefixSize+KeyIDSize {
+				return fmt.Errorf("malformed index entry of size %d", len(idxB))
+			}
+			if idx.prefix == keyPrefix(idxB[:PrefixSize]) {
+				seek = idxB[PrefixSize:]
+				return nil
+			}
+		}
+		return fmt.Errorf("no entry for key %v in index %s: %w", k, idx.name, ErrKeyNotFound)
+	})
+}
+
 // Iter is an entry in the Index or Table. The caller can use Iter to access and
 // delete data associated with the entry and it's datum. Iter implements
 // kvstore.StoreIter.
@@ -231,6 +260,38 @@ func (i *Iter) Entry(f func(idxB []byte) error) error {
 		return fmt.Errorf("index entry too small. length = %d", len(k))
 	}
 	return f(k[PrefixSize : len(k)-KeyIDSize])
+}
+
+// CrossIndex returns the entry another of the table's indexes generated for
+// this iteration entry's datum, letting a scan of one index consult a second
+// index's value without decoding the datum. The bytes are in that index's
+// entry space, the KeyID suffix excluded, matching Entry. A datum with no
+// entry in the named index returns ErrKeyNotFound; a name matching no index
+// on the table is an error.
+func (i *Iter) CrossIndex(name string) ([]byte, error) {
+	var target *Index
+	for _, idx := range i.table.indexes {
+		if idx.name == name {
+			target = idx
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("table %q has no index named %q", i.table.name, name)
+	}
+	d, err := i.datum()
+	if err != nil {
+		return nil, fmt.Errorf("could not get datum for cross-index: %w", err)
+	}
+	for _, idxB := range d.indexes {
+		if len(idxB) < PrefixSize+KeyIDSize {
+			return nil, fmt.Errorf("malformed index entry of size %d", len(idxB))
+		}
+		if target.prefix == keyPrefix(idxB[:PrefixSize]) {
+			return idxB[PrefixSize : len(idxB)-KeyIDSize], nil
+		}
+	}
+	return nil, fmt.Errorf("no entry for this datum in index %s: %w", name, ErrKeyNotFound)
 }
 
 func (i *Iter) datum() (_ *datum, err error) {

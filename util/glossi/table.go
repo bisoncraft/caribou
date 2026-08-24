@@ -338,11 +338,11 @@ func (t *Table) Iterate(prefixI KV, f func(kvstore.StoreIter) error, opts ...kvs
 		index := tb.Bucket(indexBucketKey)
 		c := data.Cursor()
 		return walk(c, prefix, o.Seek, o.Reverse, func(key, val []byte) error {
-			value, _, err := decodeDatum(val)
+			value, idxKeys, err := decodeDatum(val)
 			if err != nil {
 				return err
 			}
-			return f(&Iter{k: key, v: value, update: o.Update, index: index, dataBkt: data})
+			return f(&Iter{k: key, v: value, table: t, idxKeys: idxKeys, update: o.Update, index: index, dataBkt: data})
 		})
 	})
 }

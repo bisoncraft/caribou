@@ -548,3 +548,170 @@ func TestDefaultOptionsContract(t *testing.T) {
 		t.Errorf("index WithForward override = %v, want [a b c]", got)
 	}
 }
+
+// TestSeekerContract pins the cursor contract of kvstore.StoreIndex.Seeker:
+// the seek it returns for a primary key is that row's own entry in the index,
+// in index space, so an Iterate handed the seek visits the row first in either
+// direction — including when other rows share the same index value, the
+// disambiguation a pagination cursor (wallet/txdb RefID) depends on — and the
+// seek composes with a prefix-scoped iteration. A key with no row, or a row
+// the index function skipped (ErrNotIndexed), reports ErrKeyNotFound.
+func TestSeekerContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	// The entry is the value's first two bytes: group || ord. A value whose
+	// first byte is 0xff is not indexed.
+	idx, err := tbl.AddIndex("byGroupOrd", func(_, v kvstore.KV) ([]byte, error) {
+		b := v.([]byte)
+		if b[0] == 0xff {
+			return nil, kvstore.ErrNotIndexed
+		}
+		return b[:2], nil
+	})
+	if err != nil {
+		t.Fatalf("AddIndex: %v", err)
+	}
+
+	for _, row := range []struct {
+		k string
+		v []byte
+	}{
+		{"a", []byte{1, 1}},
+		{"b", []byte{1, 2}}, // "b" and "c" share an index value.
+		{"c", []byte{1, 2}},
+		{"d", []byte{1, 3}},
+		{"e", []byte{2, 1}},
+		{"x", []byte{0xff, 0}}, // not indexed
+	} {
+		mustSet(t, tbl, row.k, string(row.v))
+	}
+
+	seekFor := func(k string) []byte {
+		t.Helper()
+		seek, err := idx.Seeker([]byte(k))
+		if err != nil {
+			t.Fatalf("Seeker(%q): %v", k, err)
+		}
+		return seek
+	}
+	iterKeys := func(prefix []byte, opts ...kvstore.IterationOption) []string {
+		return collectKeys(t, func(f func(kvstore.StoreIter) error) error {
+			return idx.Iterate(prefix, f, opts...)
+		})
+	}
+
+	// Iteration begun at a row's seek visits that row first in both
+	// directions, landing exactly even where rows share an index value.
+	if got := iterKeys(nil, kvstore.WithSeek(seekFor("c"))); !eq(got, "c", "d", "e") {
+		t.Fatalf("forward from c = %v, want [c d e]", got)
+	}
+	if got := iterKeys(nil, kvstore.WithReverse(), kvstore.WithSeek(seekFor("c"))); !eq(got, "c", "b", "a") {
+		t.Fatalf("reverse from c = %v, want [c b a]", got)
+	}
+	if got := iterKeys(nil, kvstore.WithSeek(seekFor("b"))); !eq(got, "b", "c", "d", "e") {
+		t.Fatalf("forward from b = %v, want [b c d e]", got)
+	}
+	if got := iterKeys(nil, kvstore.WithReverse(), kvstore.WithSeek(seekFor("b"))); !eq(got, "b", "a") {
+		t.Fatalf("reverse from b = %v, want [b a]", got)
+	}
+
+	// The seek composes with a prefix scope — the wallet/txdb shape, where the
+	// prefix is a network/asset scope and the seek a cursor row within it.
+	if got := iterKeys([]byte{1}, kvstore.WithSeek(seekFor("c"))); !eq(got, "c", "d") {
+		t.Fatalf("forward from c within group 1 = %v, want [c d]", got)
+	}
+	if got := iterKeys([]byte{1}, kvstore.WithReverse(), kvstore.WithSeek(seekFor("c"))); !eq(got, "c", "b", "a") {
+		t.Fatalf("reverse from c within group 1 = %v, want [c b a]", got)
+	}
+
+	if _, err := idx.Seeker([]byte("nope")); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("Seeker(missing key) err = %v, want ErrKeyNotFound", err)
+	}
+	if _, err := idx.Seeker([]byte("x")); !errors.Is(err, kvstore.ErrKeyNotFound) {
+		t.Fatalf("Seeker(unindexed row) err = %v, want ErrKeyNotFound", err)
+	}
+}
+
+// TestCrossIndexContract pins kvstore.StoreIter.CrossIndex: while iterating
+// one index (or the table itself), the entry any other index generated for the
+// current datum is readable without decoding the datum's value — the mechanism
+// wallet/txdb's type filtering uses to skip records of ignored types before
+// paying for a full decode. A datum with no entry in the named index reports
+// ErrKeyNotFound; naming an index the table does not have is a distinct error.
+func TestCrossIndexContract(t *testing.T) {
+	tbl, err := newTestStore(t).Table("t")
+	if err != nil {
+		t.Fatalf("Table: %v", err)
+	}
+	// Two independent indexes over the value bytes: byFirst on v[0], bySecond
+	// on v[1]. bySecond skips values whose second byte is 0xff.
+	byFirst, err := tbl.AddIndex("byFirst", func(_, v kvstore.KV) ([]byte, error) {
+		return v.([]byte)[:1], nil
+	})
+	if err != nil {
+		t.Fatalf("AddIndex(byFirst): %v", err)
+	}
+	if _, err := tbl.AddIndex("bySecond", func(_, v kvstore.KV) ([]byte, error) {
+		b := v.([]byte)
+		if b[1] == 0xff {
+			return nil, kvstore.ErrNotIndexed
+		}
+		return b[1:2], nil
+	}); err != nil {
+		t.Fatalf("AddIndex(bySecond): %v", err)
+	}
+
+	mustSet(t, tbl, "a", string([]byte{1, 9}))
+	mustSet(t, tbl, "b", string([]byte{2, 8}))
+	mustSet(t, tbl, "c", string([]byte{3, 0xff})) // absent from bySecond
+
+	crossOf := func(iterate func(f func(kvstore.StoreIter) error) error) (map[string]string, map[string]error) {
+		entries := make(map[string]string)
+		errs := make(map[string]error)
+		if err := iterate(func(it kvstore.StoreIter) error {
+			k, err := it.K()
+			if err != nil {
+				return err
+			}
+			e, err := it.CrossIndex("bySecond")
+			if err != nil {
+				errs[string(k)] = err
+				return nil
+			}
+			entries[string(k)] = string(e)
+			return nil
+		}); err != nil {
+			t.Fatalf("Iterate: %v", err)
+		}
+		return entries, errs
+	}
+	check := func(scan string, entries map[string]string, errs map[string]error) {
+		t.Helper()
+		if entries["a"] != "\x09" || entries["b"] != "\x08" || len(entries) != 2 {
+			t.Fatalf("%s cross entries = %q, want a:0x09 b:0x08 only", scan, entries)
+		}
+		if err := errs["c"]; !errors.Is(err, kvstore.ErrKeyNotFound) {
+			t.Fatalf("%s cross of unindexed datum err = %v, want ErrKeyNotFound", scan, err)
+		}
+	}
+
+	entries, errs := crossOf(func(f func(kvstore.StoreIter) error) error { return byFirst.Iterate(nil, f) })
+	check("index scan", entries, errs)
+	entries, errs = crossOf(func(f func(kvstore.StoreIter) error) error { return tbl.Iterate(nil, f) })
+	check("table scan", entries, errs)
+
+	// An index the table does not have is an error distinct from not-found.
+	err = byFirst.Iterate(nil, func(it kvstore.StoreIter) error {
+		if _, err := it.CrossIndex("nope"); err == nil {
+			return errors.New("CrossIndex(unknown name) returned a nil error")
+		} else if errors.Is(err, kvstore.ErrKeyNotFound) {
+			return errors.New("CrossIndex(unknown name) reported not-found; want a distinct error")
+		}
+		return kvstore.ErrEndIteration
+	})
+	if err != nil {
+		t.Fatalf("unknown-name check: %v", err)
+	}
+}

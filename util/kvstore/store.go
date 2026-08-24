@@ -115,6 +115,13 @@ type StoreIndex interface {
 	// Iterate visits index entries in order. prefix and WithSeek are in index
 	// space.
 	Iterate(prefix KV, f func(StoreIter) error, opts ...IterationOption) error
+	// Seeker is the bytes to use for setting the start entry (the "seek") for
+	// an index entry. k is the key associated with the table value. The seek
+	// is the row's own entry in this index (in index space, ready for
+	// WithSeek), so an iteration started from it visits that row first in
+	// either direction. A key with no row, or a row that generated no entry
+	// in this index, returns ErrKeyNotFound.
+	Seeker(k KV) (seek []byte, err error)
 }
 
 // StoreIter is an entry yielded during iteration. The exposed bytes are only
@@ -130,4 +137,10 @@ type StoreIter interface {
 	// Delete removes the datum along with all of its index entries. The
 	// iteration must have been started with WithUpdate.
 	Delete() error
+	// CrossIndex returns the entry another of the table's indexes generated
+	// for this entry's datum, letting a scan of one index consult a second
+	// index's value without decoding the datum. A datum with no entry in the
+	// named index returns ErrKeyNotFound; a name matching no index on the
+	// table is an error.
+	CrossIndex(name string) ([]byte, error)
 }
