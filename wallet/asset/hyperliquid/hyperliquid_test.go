@@ -857,6 +857,8 @@ func TestTxDBStoreGetDelete(t *testing.T) {
 	netDB := newTestTxDB(t)
 
 	wtx := &txdb.WalletTransaction{
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		Type:        txdb.Send,
 		ID:          "0xaabbcc",
 		Amount:      1e8,
@@ -908,6 +910,8 @@ func TestTxDBGetTxsPagination(t *testing.T) {
 
 	for i := 1; i <= 5; i++ {
 		wtx := &txdb.WalletTransaction{
+			NetworkID:   BipID,
+			AssetID:     BipID,
 			Type:        txdb.Send,
 			ID:          fmt.Sprintf("0x%016x", i),
 			Amount:      uint64(i) * 1e8,
@@ -941,10 +945,14 @@ func TestTxDBGetPendingTxs(t *testing.T) {
 	netDB := newTestTxDB(t)
 
 	pendingTx := &txdb.WalletTransaction{
-		ID: "pending-1", Type: txdb.Send, Amount: 1e8, BlockNumber: 0,
+		NetworkID: BipID,
+		AssetID:   BipID,
+		ID:        "pending-1", Type: txdb.Send, Amount: 1e8, BlockNumber: 0,
 	}
 	confirmedTx := &txdb.WalletTransaction{
-		ID: "confirmed-1", Type: txdb.Send, Amount: 2e8, BlockNumber: 42, Confirmed: true,
+		NetworkID: BipID,
+		AssetID:   BipID,
+		ID:        "confirmed-1", Type: txdb.Send, Amount: 2e8, BlockNumber: 42, Confirmed: true,
 	}
 
 	if err := netDB.StoreTx(pendingTx); err != nil {
@@ -971,7 +979,9 @@ func TestTxDBGetTxsRefIDOnPendingReturnsDistinctError(t *testing.T) {
 
 	pendingID := "pending-ref-test"
 	if err := w.txDB.StoreTx(&txdb.WalletTransaction{
-		ID: pendingID, Type: txdb.Send, Amount: 1e8, BlockNumber: 0,
+		NetworkID: BipID,
+		AssetID:   BipID,
+		ID:        pendingID, Type: txdb.Send, Amount: 1e8, BlockNumber: 0,
 	}); err != nil {
 		t.Fatalf("StoreTx: %v", err)
 	}
@@ -1019,16 +1029,16 @@ func TestTxHistoryPendingAcrossPages(t *testing.T) {
 	w := newTestWalletWithDB(t)
 
 	confirmed := []*txdb.WalletTransaction{
-		{Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
-		{Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
-		{Type: txdb.Send, ID: "c3", Amount: 3e8, Timestamp: 3000, Confirmed: true},
-		{Type: txdb.Send, ID: "c4", Amount: 4e8, Timestamp: 4000, Confirmed: true},
-		{Type: txdb.Send, ID: "c5", Amount: 5e8, Timestamp: 5000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c3", Amount: 3e8, Timestamp: 3000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c4", Amount: 4e8, Timestamp: 4000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c5", Amount: 5e8, Timestamp: 5000, Confirmed: true},
 	}
 	pending := []*txdb.WalletTransaction{
-		{Type: txdb.Send, ID: "p1", Amount: 1e8},
-		{Type: txdb.Send, ID: "p2", Amount: 2e8},
-		{Type: txdb.Send, ID: "p3", Amount: 3e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p1", Amount: 1e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p2", Amount: 2e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p3", Amount: 3e8},
 	}
 	storeTxHistory(t, w.txDB, confirmed)
 	storeTxHistory(t, w.txDB, pending)
@@ -1061,6 +1071,8 @@ func TestTxHistoryMoreAvailableWithPending(t *testing.T) {
 	var allConfirmed []*txdb.WalletTransaction
 	for i := 1; i <= 7; i++ {
 		allConfirmed = append(allConfirmed, &txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			Type:      txdb.Send,
 			ID:        fmt.Sprintf("c%d", i),
 			Amount:    uint64(i) * 1e8,
@@ -1069,8 +1081,8 @@ func TestTxHistoryMoreAvailableWithPending(t *testing.T) {
 		})
 	}
 	pending := []*txdb.WalletTransaction{
-		{Type: txdb.Send, ID: "p1", Amount: 1e8},
-		{Type: txdb.Send, ID: "p2", Amount: 2e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p1", Amount: 1e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p2", Amount: 2e8},
 	}
 	storeTxHistory(t, w.txDB, allConfirmed)
 	storeTxHistory(t, w.txDB, pending)
@@ -1100,13 +1112,13 @@ func TestTxHistoryPendingOnlyPage(t *testing.T) {
 	w := newTestWalletWithDB(t)
 
 	storeTxHistory(t, w.txDB, []*txdb.WalletTransaction{
-		{Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
-		{Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
 	})
 	storeTxHistory(t, w.txDB, []*txdb.WalletTransaction{
-		{Type: txdb.Send, ID: "p1", Amount: 1e8},
-		{Type: txdb.Send, ID: "p2", Amount: 2e8},
-		{Type: txdb.Send, ID: "p3", Amount: 3e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p1", Amount: 1e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p2", Amount: 2e8},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "p3", Amount: 3e8},
 	})
 
 	resp, err := w.TxHistory(&txdb.TxHistoryRequest{N: 3})
@@ -1135,6 +1147,8 @@ func TestTxDBPendingIDIndex(t *testing.T) {
 
 	// Store a confirmed tx that carries the pendingID alias.
 	if err := w.txDB.StoreTx(&txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        realHash,
 		Type:      txdb.Send,
 		Amount:    1e8,
@@ -1516,6 +1530,8 @@ func TestExpireOldPending(t *testing.T) {
 	// Store a pending tx with a submission time well past the TTL.
 	staleTime := uint64(time.Now().Unix()) - pendingTTL - 60
 	pendingWtx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    1e8,
@@ -1562,6 +1578,8 @@ func TestFreshPendingNotExpired(t *testing.T) {
 
 	// Store a fresh pending tx (just submitted).
 	freshWtx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    1e8,
@@ -1603,6 +1621,8 @@ func TestConfirmPendingSend(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x1111111111111111111111111111111111111111"
 	pendingTx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txdb.Send,
 		ID:        pendingID,
 		Amount:    5e8,
@@ -1667,6 +1687,8 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x2222222222222222222222222222222222222222"
 	if err := w.txDB.StoreTx(&txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    5e8,
@@ -1708,6 +1730,8 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 		nonce := baseNonce + uint64(i)
 		pendingID := fmt.Sprintf("0x%016x", nonce)
 		if err := w.txDB.StoreTx(&txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			ID:        pendingID,
 			Type:      txdb.Send,
 			Amount:    5e8,
@@ -1780,6 +1804,8 @@ func TestConfirmPendingSendPairsFIFO(t *testing.T) {
 		{pendingIDB, nonceB},
 	} {
 		wtx := &txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			ID:        entry.id,
 			Type:      txdb.Send,
 			Amount:    5e8,
@@ -1860,6 +1886,8 @@ func TestConfirmPendingSendNonceAfterEcho(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 
 	wtx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    5e8,
@@ -1907,6 +1935,8 @@ func TestConfirmPendingSendSlowServer(t *testing.T) {
 	pendingID := fmt.Sprintf("0x%016x", nonce)
 	recipient := "0x4444444444444444444444444444444444444444"
 	slowWtx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    2e8,
@@ -1953,6 +1983,8 @@ func storePendingSend(t *testing.T, w *HyperWallet, nonce, amount uint64, recipi
 	t.Helper()
 	id := fmt.Sprintf("0x%016x", nonce)
 	wtx := &txdb.WalletTransaction{
+		NetworkID:      BipID,
+		AssetID:        BipID,
 		ID:             id,
 		Type:           txdb.Send,
 		Amount:         amount,
@@ -1993,7 +2025,7 @@ func spotTransferEcho(w *HyperWallet, at uint64, hash, recipient, amount string)
 // confirmPendingSend only expires a pending send whose SubmissionTime is
 // non-zero, so an orphan would sit in the pending set forever.
 func TestSetOutcomeUnknownPreservesSubmissionTime(t *testing.T) {
-	wtx := &txdb.WalletTransaction{ID: "0x01"}
+	wtx := &txdb.WalletTransaction{NetworkID: BipID, AssetID: BipID, ID: "0x01"}
 	if err := setSubmissionTime(wtx, 1_700_000_000); err != nil {
 		t.Fatalf("setSubmissionTime: %v", err)
 	}
@@ -2116,6 +2148,8 @@ func TestWalletTransactionLookupByPendingCoinID(t *testing.T) {
 	recipient := "0x1111111111111111111111111111111111111111"
 
 	if err := w.txDB.StoreTx(&txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    1e8,
@@ -2148,6 +2182,8 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 	recipient := "0x1111111111111111111111111111111111111111"
 
 	confirmAliasTx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		ID:        pendingID,
 		Type:      txdb.Send,
 		Amount:    5e8,
@@ -3013,9 +3049,9 @@ func TestTxHistoryPageSizeIsNotTrusted(t *testing.T) {
 	w := newTestWalletWithDB(t)
 
 	storeTxHistory(t, w.txDB, []*txdb.WalletTransaction{
-		{Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
-		{Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
-		{Type: txdb.Send, ID: "c3", Amount: 3e8, Timestamp: 3000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c1", Amount: 1e8, Timestamp: 1000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c2", Amount: 2e8, Timestamp: 2000, Confirmed: true},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "c3", Amount: 3e8, Timestamp: 3000, Confirmed: true},
 	})
 
 	// A page larger than the table is served without reserving its width.
@@ -3154,7 +3190,9 @@ func TestScanLedgerPairsIdenticalSendsFromUnorderedAPI(t *testing.T) {
 		nonce uint64
 	}{{idA, nonceA}, {idB, nonceB}} {
 		wtx := &txdb.WalletTransaction{
-			ID: e.id, Type: txdb.Send, Amount: 5e8, Recipient: &recipient,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			ID:        e.id, Type: txdb.Send, Amount: 5e8, Recipient: &recipient,
 			AdditionalData: map[string]string{"nonce": strconv.FormatUint(e.nonce, 10)},
 		}
 		setSubmissionTime(wtx, uint64(time.Now().Unix()))

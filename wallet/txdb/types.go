@@ -65,15 +65,18 @@ type WalletTransaction struct {
 	BlockNumber uint64 `json:"blockNumber"`
 	// Timestamp is the time the transaction was mined.
 	Timestamp uint64 `json:"timestamp"`
-	// TokenID will be non-nil if the BalanceDelta applies to the balance
-	// of a token.
-	TokenID *uint32 `json:"tokenID,omitempty"`
+	// NetworkID is the asset ID of the network the transaction settles on:
+	// the base chain's asset ID for both native and token transactions. The
+	// wallet storing the transaction must set it, and it must match the
+	// network scope of the NetworkTxDB handle the transaction is stored
+	// through.
+	NetworkID uint32 `json:"networkID"`
 	// AssetID identifies the transaction's asset exactly: the token ID for
-	// token transactions, otherwise the native asset of the network the
-	// transaction was made on. It is populated on reads from cross-network
-	// queries (GetTxsByTicker), where the caller cannot otherwise attribute a
-	// native transaction to its network. Wallets do not set it.
-	AssetID *uint32 `json:"assetID,omitempty"`
+	// token transactions, otherwise the same as NetworkID. The wallet storing
+	// the transaction must set it; a zero AssetID is rejected on every
+	// network but the one whose own asset ID is zero (BTC), where zero is a
+	// legitimate value.
+	AssetID uint32 `json:"assetID"`
 	// Recipient will be non-nil for Send/Receive transactions, and specifies the
 	// recipient address of the transaction.
 	Recipient *string `json:"recipient,omitempty"`

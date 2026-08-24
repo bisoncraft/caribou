@@ -219,12 +219,12 @@ func TestTokenWalletSend(t *testing.T) {
 	if db.stored[0].Amount != 1_000_000 {
 		t.Fatalf("stored amount = %d, want 1000000", db.stored[0].Amount)
 	}
-	// TokenID must be set: token wallets share their parent network's
-	// NetworkTxDB, and GetAssetTxs/GetAssetPendingTxs rely on it to
+	// The token's own AssetID must be set: token wallets share their parent
+	// network's NetworkTxDB, and GetAssetTxs/GetAssetPendingTxs rely on it to
 	// distinguish this record from the native wallet's (and sibling
 	// tokens') transactions.
-	if db.stored[0].TokenID == nil || *db.stored[0].TokenID != usdcTokenID {
-		t.Fatalf("stored TokenID = %v, want %d", db.stored[0].TokenID, usdcTokenID)
+	if db.stored[0].AssetID != usdcTokenID {
+		t.Fatalf("stored AssetID = %v, want %d", db.stored[0].AssetID, usdcTokenID)
 	}
 }
 
@@ -337,7 +337,7 @@ func TestTokenWalletCheckPendingTxs(t *testing.T) {
 	tokenID := usdcTokenID
 
 	makePendingTx := func(id string, lastValidHeight uint64) *txdb.WalletTransaction {
-		wt := &txdb.WalletTransaction{ID: id, TokenID: &tokenID}
+		wt := &txdb.WalletTransaction{ID: id, NetworkID: BipID, AssetID: tokenID}
 		setTxData(wt, solTxData{LastValidBlockHeight: lastValidHeight})
 		return wt
 	}

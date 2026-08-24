@@ -1488,6 +1488,8 @@ func (w *ExchangeWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryR
 		}
 
 		txs = append(txs, &txdb.WalletTransaction{
+			NetworkID:   BipID,
+			AssetID:     BipID,
 			Type:        txType,
 			ID:          ti.Hash(),
 			Amount:      ti.Amount(),
@@ -1523,6 +1525,8 @@ func (w *ExchangeWallet) WalletTransaction(ctx context.Context, txID string) (*t
 				txType = txdb.Receive
 			}
 			return &txdb.WalletTransaction{
+				NetworkID:   BipID,
+				AssetID:     BipID,
 				Type:        txType,
 				ID:          ti.Hash(),
 				Amount:      ti.Amount(),
@@ -1566,6 +1570,8 @@ func (w *ExchangeWallet) PendingTransactions(ctx context.Context) []*txdb.Wallet
 			txType = txdb.Receive
 		}
 		pending = append(pending, &txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			Type:      txType,
 			ID:        ti.Hash(),
 			Amount:    ti.Amount(),

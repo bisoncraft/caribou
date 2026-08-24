@@ -197,8 +197,7 @@ type TxDB struct {
 	bridgeInitiationAssetIndex txdb.TxIndex
 	bridgeCompletionIndex      txdb.TxIndex
 
-	baseChainID uint32
-	log         util.Logger
+	log util.Logger
 }
 
 var _ txDB = (*TxDB)(nil)
@@ -243,17 +242,13 @@ func allAssetIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
 // assetSpecificIndexEntry is used to iterate over all transactions for a
 // specific asset ID. It is the same as allAssetIndexEntry, prepended with
 // the asset ID.
-func assetSpecificIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) ([]byte, error) {
-	var assetID uint32 = baseChainID
-	if wt.TokenID != nil {
-		assetID = *wt.TokenID
-	}
+func assetSpecificIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
 	allAssetIndexKey, err := allAssetIndexEntry(wt)
 	if err != nil {
 		return nil, err
 	}
 	assetKey := make([]byte, 4+len(allAssetIndexKey))
-	binary.BigEndian.PutUint32(assetKey[:4], assetID)
+	binary.BigEndian.PutUint32(assetKey[:4], wt.AssetID)
 	copy(assetKey[4:], allAssetIndexKey)
 	return assetKey, nil
 }
@@ -282,24 +277,20 @@ func bridgeIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
 // bridgeAssetIndexEntry is used to iterate over bridge initiation transactions
 // for a specific asset ID (base chain or token). It is the bridgeIndexEntry
 // prepended with the asset ID.
-func bridgeAssetIndexEntry(wt *txdb.WalletTransaction, baseChainID uint32) ([]byte, error) {
-	var assetID uint32 = baseChainID
-	if wt.TokenID != nil {
-		assetID = *wt.TokenID
-	}
+func bridgeAssetIndexEntry(wt *txdb.WalletTransaction) ([]byte, error) {
 	bridgeKey, err := bridgeIndexEntry(wt)
 	if err != nil {
 		return nil, err
 	}
 	assetKey := make([]byte, 4+len(bridgeKey))
-	binary.BigEndian.PutUint32(assetKey[:4], assetID)
+	binary.BigEndian.PutUint32(assetKey[:4], wt.AssetID)
 	copy(assetKey[4:], bridgeKey)
 	return assetKey, nil
 }
 
 // NewTxDB creates an eth transaction store backed by the master transaction
 // database handle supplied by Core.
-func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, error) {
+func NewTxDB(db txdb.NetworkTxDB, log util.Logger) (*TxDB, error) {
 	if db == nil {
 		return nil, errors.New("nil network tx DB")
 	}
@@ -311,7 +302,7 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 	}
 
 	assetIndex, err := db.AddUniqueTxIndex(assetIndexName, func(wt *txdb.WalletTransaction) ([]byte, error) {
-		return assetSpecificIndexEntry(wt, baseChainID)
+		return assetSpecificIndexEntry(wt)
 	})
 	if err != nil {
 		return nil, err
@@ -331,7 +322,7 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 		if wt.Type != txdb.InitiateBridge {
 			return nil, txdb.ErrNotIndexed
 		}
-		return bridgeAssetIndexEntry(wt, baseChainID)
+		return bridgeAssetIndexEntry(wt)
 	})
 	if err != nil {
 		return nil, err
@@ -353,7 +344,6 @@ func NewTxDB(db txdb.NetworkTxDB, log util.Logger, baseChainID uint32) (*TxDB, e
 		bridgeInitiationIndex:      bridgeInitiationIndex,
 		bridgeInitiationAssetIndex: bridgeInitiationAssetIndex,
 		bridgeCompletionIndex:      bridgeCompletionIndex,
-		baseChainID:                baseChainID,
 		log:                        log,
 	}, nil
 }
@@ -446,14 +436,10 @@ func (db *TxDB) getTxs(assetIDPtr *uint32, req *txdb.TxHistoryRequest) (*txdb.Tx
 				return nil, err
 			}
 		} else {
-			refTxAssetID := db.baseChainID
-			if wt.TokenID != nil {
-				refTxAssetID = *wt.TokenID
+			if wt.AssetID != assetID {
+				return nil, fmt.Errorf("asset ID mismatch: %d != %d", wt.AssetID, assetID)
 			}
-			if refTxAssetID != assetID {
-				return nil, fmt.Errorf("token ID mismatch: %d != %d", refTxAssetID, assetID)
-			}
-			seek, err = assetSpecificIndexEntry(wt.WalletTransaction, db.baseChainID)
+			seek, err = assetSpecificIndexEntry(wt.WalletTransaction)
 			if err != nil {
 				return nil, err
 			}
@@ -529,14 +515,10 @@ func (db *TxDB) getBridges(assetID *uint32, n int, refID *common.Hash, past bool
 			return nil, fmt.Errorf("referenced transaction is not a bridge initiation")
 		}
 		if assetID != nil {
-			refTxAssetID := db.baseChainID
-			if wt.TokenID != nil {
-				refTxAssetID = *wt.TokenID
+			if wt.AssetID != *assetID {
+				return nil, fmt.Errorf("asset ID mismatch: %d != %d", wt.AssetID, *assetID)
 			}
-			if refTxAssetID != *assetID {
-				return nil, fmt.Errorf("token ID mismatch: %d != %d", refTxAssetID, *assetID)
-			}
-			seek, err = bridgeAssetIndexEntry(wt.WalletTransaction, *assetID)
+			seek, err = bridgeAssetIndexEntry(wt.WalletTransaction)
 			if err != nil {
 				return nil, err
 			}

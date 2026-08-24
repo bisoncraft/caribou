@@ -721,6 +721,8 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 
 	// Record in tx history. Fee will be updated by the next syncTxHistory pass.
 	wt := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txdb.Send,
 		ID:        txHash.String(),
 		Amount:    value,
@@ -937,6 +939,8 @@ func (w *NativeWallet) WalletTransaction(ctx context.Context, txID string) (*txd
 	}
 
 	wt := &txdb.WalletTransaction{
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		Type:        txdb.Unknown,
 		ID:          txID,
 		BlockNumber: blockNumberFromHeight(details.Block.Height),
@@ -1293,6 +1297,8 @@ func (w *NativeWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransa
 
 	addrCopy := tx.Address
 	wt := &txdb.WalletTransaction{
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		Type:        txType,
 		ID:          txHash.String(),
 		Amount:      amtSats,

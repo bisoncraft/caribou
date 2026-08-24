@@ -626,6 +626,8 @@ func (w *Wallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 		ID:        sig,
 		Amount:    value,
 		Fees:      fee,
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Recipient: &recipient,
 		Confirms:  &txdb.Confirms{Current: 0, Target: 1},
 	}
@@ -1224,7 +1226,7 @@ func walletTransactionFromRPC(tx *rpcTransaction, walletAddr string) *txdb.Walle
 	}
 	// Leave a pure spl-token transfer to the token wallet's parser. It moves no
 	// lamports of its own, so it would reach the balance-delta fallback below
-	// and yield a native record (TokenID nil) under the same signature the
+	// and yield a native record (AssetID = BipID) under the same signature the
 	// token wallet stores its record under. txdb keys on the signature and
 	// replaces wholesale, so the two would overwrite each other on every poll.
 	// checkPendingTxs guards the same hazard.
@@ -1315,6 +1317,8 @@ func walletTransactionFromRPC(tx *rpcTransaction, walletAddr string) *txdb.Walle
 		ID:          tx.Transaction.Signatures[0],
 		Amount:      amount,
 		Fees:        tx.Meta.Fee,
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		BlockNumber: tx.Slot,
 		Timestamp:   ts,
 		Recipient:   recipient,

@@ -499,7 +499,7 @@ func TestCheckPendingTxsMultiExpire(t *testing.T) {
 	})
 
 	makePending := func(id string, lls uint32) *txdb.WalletTransaction {
-		wt := &txdb.WalletTransaction{Type: txdb.Send, ID: id}
+		wt := &txdb.WalletTransaction{Type: txdb.Send, ID: id, NetworkID: BipID, AssetID: BipID}
 		setLastLedgerSequence(wt, lls)
 		return wt
 	}

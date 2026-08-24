@@ -345,11 +345,12 @@ func (w *TokenWallet) EstablishTrustline() error {
 	// reconciles the real outcome once the tx is validated — surfacing a
 	// tec/ter rejection instead of silently reporting success.
 	wtx := &txdb.WalletTransaction{
-		Type:    txdb.ApproveToken,
-		ID:      txID,
-		Amount:  trustlineLimitAtomic,
-		Fees:    fee,
-		TokenID: &w.assetID,
+		Type:      txdb.ApproveToken,
+		ID:        txID,
+		Amount:    trustlineLimitAtomic,
+		Fees:      fee,
+		NetworkID: BipID,
+		AssetID:   w.assetID,
 	}
 	setLastLedgerSequence(wtx, lastLedgerSeq)
 	if w.txDB != nil {
@@ -537,8 +538,9 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		ID:        txID,
 		Amount:    value,
 		Fees:      fee,
+		NetworkID: BipID,
+		AssetID:   w.assetID,
 		Recipient: &recipient,
-		TokenID:   &w.assetID,
 	}
 	setLastLedgerSequence(wtx, lastLedgerSeq)
 	if w.txDB != nil {
@@ -739,12 +741,13 @@ func tokenTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valida
 		ID:          strings.ToUpper(tr.Hash),
 		Amount:      atomic,
 		Fees:        feeParsed,
+		NetworkID:   BipID,
+		AssetID:     assetID,
 		BlockNumber: ledgerIndex,
 		Timestamp:   tr.closeTime(),
 		Recipient:   recipient,
 		Rejected:    meta.TransactionResult != "tesSUCCESS",
 		Confirmed:   validated,
-		TokenID:     &assetID,
 	}
 }
 

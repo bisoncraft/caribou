@@ -317,12 +317,12 @@ export interface WalletTransaction {
   fees: number
   timestamp: number
   blockNumber: number
-  tokenID?: number
-  // assetID identifies the transaction's exact asset (token ID for tokens,
-  // the network's native asset otherwise). Only populated on cross-network
-  // ticker-history responses, where it attributes each transaction to its
-  // network.
-  assetID?: number
+  // networkID is the asset ID of the network the transaction settles on: the
+  // base chain's asset ID for both native and token transactions.
+  networkID: number
+  // assetID identifies the transaction's exact asset: the token ID for token
+  // transactions, otherwise the same as networkID.
+  assetID: number
   recipient?: string
   additionalData: Record<string, string>
   isUserOp: boolean

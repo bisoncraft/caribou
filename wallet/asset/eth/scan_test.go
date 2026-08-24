@@ -84,8 +84,8 @@ func TestScanERC20Receive(t *testing.T) {
 	if wt.ID != txHash.String() {
 		t.Fatalf("wrong ID: %s", wt.ID)
 	}
-	if wt.TokenID == nil || *wt.TokenID != usdcEthID {
-		t.Fatalf("wrong TokenID: %+v", wt.TokenID)
+	if wt.AssetID != usdcEthID {
+		t.Fatalf("wrong AssetID: %+v", wt.AssetID)
 	}
 	if wt.Amount != 500 {
 		t.Fatalf("wrong amount: %d", wt.Amount)
@@ -305,8 +305,8 @@ func TestScanNativeReceive(t *testing.T) {
 	if db.storedTx.ID != tx.Hash().String() {
 		t.Fatalf("wrong ID: %s", db.storedTx.ID)
 	}
-	if db.storedTx.TokenID != nil {
-		t.Fatalf("expected nil TokenID for native receive, got %+v", db.storedTx.TokenID)
+	if db.storedTx.AssetID != BipID {
+		t.Fatalf("expected the base chain's AssetID for a native receive, got %d", db.storedTx.AssetID)
 	}
 }
 

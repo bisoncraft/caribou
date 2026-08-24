@@ -155,7 +155,7 @@ func TestScanIncomingNativeReceive(t *testing.T) {
 }
 
 // TestScanIncomingTokenReceive verifies an incoming ft_transfer to a
-// registered NEP-141 contract is recorded with TokenID set, and that a
+// registered NEP-141 contract is recorded under the token's AssetID, and that a
 // failed on-chain receipt is not credited (F1).
 func TestScanIncomingTokenReceive(t *testing.T) {
 	f := newFakeRPCServer(t)
@@ -197,8 +197,8 @@ func TestScanIncomingTokenReceive(t *testing.T) {
 	if err != nil || ok == nil {
 		t.Fatalf("GetTx(ftok-ok): %v, %v", ok, err)
 	}
-	if ok.TokenID == nil || *ok.TokenID != usdcTokenID {
-		t.Fatalf("TokenID = %v, want %d", ok.TokenID, usdcTokenID)
+	if ok.AssetID != usdcTokenID {
+		t.Fatalf("AssetID = %v, want %d", ok.AssetID, usdcTokenID)
 	}
 	if ok.Amount != 2_500_000 {
 		t.Fatalf("Amount = %d, want 2500000", ok.Amount)

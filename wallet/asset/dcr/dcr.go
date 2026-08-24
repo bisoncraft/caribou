@@ -1896,6 +1896,8 @@ func (dcr *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asse
 	}
 
 	dcr.addTxToHistory(&txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txType,
 		ID:        msgTx.CachedTxHash().String(),
 		Amount:    sentVal,
@@ -1929,6 +1931,8 @@ func (dcr *ExchangeWallet) Send(address string, value, feeRate uint64) (asset.Co
 	}
 
 	dcr.addTxToHistory(&txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txType,
 		ID:        msgTx.CachedTxHash().String(),
 		Amount:    sentVal,
@@ -2894,6 +2898,8 @@ func (dcr *ExchangeWallet) runTicketBuyer() {
 		}
 		tb.unconfirmedTickets[*txHash] = struct{}{}
 		dcr.addTxToHistory(&txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			Type:      txdb.TicketPurchase,
 			ID:        txHash.String(),
 			Amount:    ticket.Tx.TicketPrice,
@@ -3438,24 +3444,30 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	switch *ltxr.TxType {
 	case walletjson.LTTTVote:
 		return &txdb.WalletTransaction{
-			Type:   txdb.TicketVote,
-			ID:     ltxr.TxID,
-			Amount: totalOut,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.TicketVote,
+			ID:        ltxr.TxID,
+			Amount:    totalOut,
+			Fees:      fee,
 		}, nil
 	case walletjson.LTTTRevocation:
 		return &txdb.WalletTransaction{
-			Type:   txdb.TicketRevocation,
-			ID:     ltxr.TxID,
-			Amount: totalOut,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.TicketRevocation,
+			ID:        ltxr.TxID,
+			Amount:    totalOut,
+			Fees:      fee,
 		}, nil
 	case walletjson.LTTTTicket:
 		return &txdb.WalletTransaction{
-			Type:   txdb.TicketPurchase,
-			ID:     ltxr.TxID,
-			Amount: totalOut,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.TicketPurchase,
+			ID:        ltxr.TxID,
+			Amount:    totalOut,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -3471,10 +3483,12 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	}
 	if v := txPaysToScriptHash(tx.MsgTx); v > 0 {
 		return &txdb.WalletTransaction{
-			Type:   txdb.SwapOrSend,
-			ID:     ltxr.TxID,
-			Amount: v,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.SwapOrSend,
+			ID:        ltxr.TxID,
+			Amount:    v,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -3507,10 +3521,12 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	}
 	if redeemsSwap(tx.MsgTx) {
 		return &txdb.WalletTransaction{
-			Type:   txdb.Redeem,
-			ID:     ltxr.TxID,
-			Amount: totalOut + fee,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Redeem,
+			ID:        ltxr.TxID,
+			Amount:    totalOut + fee,
+			Fees:      fee,
 		}, nil
 	}
 	refundsSwap := func(msgTx *wire.MsgTx) bool {
@@ -3518,10 +3534,12 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	}
 	if refundsSwap(tx.MsgTx) {
 		return &txdb.WalletTransaction{
-			Type:   txdb.Refund,
-			ID:     ltxr.TxID,
-			Amount: totalOut + fee,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Refund,
+			ID:        ltxr.TxID,
+			Amount:    totalOut + fee,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -3550,9 +3568,11 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 
 	if ltxr.Send && allOutputsPayUs(tx.MsgTx) && len(tx.MsgTx.TxIn) == 1 {
 		return &txdb.WalletTransaction{
-			Type: txdb.Split,
-			ID:   ltxr.TxID,
-			Fees: fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Split,
+			ID:        ltxr.TxID,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -3583,10 +3603,12 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		}
 
 		return &txdb.WalletTransaction{
-			Type:   txdb.Mix,
-			ID:     ltxr.TxID,
-			Amount: mixedAmount,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Mix,
+			ID:        ltxr.TxID,
+			Amount:    mixedAmount,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -3652,6 +3674,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			amt = in
 		}
 		return &txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			Type:      txType,
 			ID:        ltxr.TxID,
 			Amount:    amt,
@@ -3661,6 +3685,8 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 	}
 
 	return &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txdb.Receive,
 		ID:        ltxr.TxID,
 		Amount:    in,

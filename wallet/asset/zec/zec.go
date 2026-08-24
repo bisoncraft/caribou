@@ -945,10 +945,12 @@ func (w *zecWallet) Send(addr string, value, feeRate uint64) (asset.Coin, error)
 	}
 
 	w.addTxToHistory(&txdb.WalletTransaction{
-		Type:   txType,
-		ID:     txHash.String(),
-		Amount: value,
-		Fees:   tx.RequiredTxFeesZIP317(),
+		NetworkID: BipID,
+		AssetID:   BipID,
+		Type:      txType,
+		ID:        txHash.String(),
+		Amount:    value,
+		Fees:      tx.RequiredTxFeesZIP317(),
 	}, txHash)
 
 	return &txCoin{
@@ -1464,10 +1466,12 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 	}
 	if v := txPaysToScriptHash(msgTx); v > 0 {
 		return &txdb.WalletTransaction{
-			Type:   txdb.SwapOrSend,
-			ID:     tx.TxID,
-			Amount: v,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.SwapOrSend,
+			ID:        tx.TxID,
+			Amount:    v,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -1500,10 +1504,12 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 	}
 	if redeemsSwap(msgTx) {
 		return &txdb.WalletTransaction{
-			Type:   txdb.Redeem,
-			ID:     tx.TxID,
-			Amount: totalOut + fee,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Redeem,
+			ID:        tx.TxID,
+			Amount:    totalOut + fee,
+			Fees:      fee,
 		}, nil
 	}
 	refundsSwap := func(msgTx *zTx) bool {
@@ -1511,10 +1517,12 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 	}
 	if refundsSwap(msgTx) {
 		return &txdb.WalletTransaction{
-			Type:   txdb.Refund,
-			ID:     tx.TxID,
-			Amount: totalOut + fee,
-			Fees:   fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Refund,
+			ID:        tx.TxID,
+			Amount:    totalOut + fee,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -1549,9 +1557,11 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 
 	if tx.Category == sendCategory && allOutputsPayUs(msgTx) && len(msgTx.TxIn) == 1 {
 		return &txdb.WalletTransaction{
-			Type: txdb.Split,
-			ID:   tx.TxID,
-			Fees: fee,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			Type:      txdb.Split,
+			ID:        tx.TxID,
+			Fees:      fee,
 		}, nil
 	}
 
@@ -1622,6 +1632,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 			txType = txdb.SelfSend
 		}
 		return &txdb.WalletTransaction{
+			NetworkID: BipID,
+			AssetID:   BipID,
 			Type:      txType,
 			ID:        tx.TxID,
 			Amount:    out,
@@ -1631,6 +1643,8 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 	}
 
 	return &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txdb.Receive,
 		ID:        tx.TxID,
 		Amount:    in,

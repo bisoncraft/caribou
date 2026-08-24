@@ -12,7 +12,10 @@ import "fmt"
 // table/index facility for the wallet's auxiliary, network-private data.
 type NetworkTxDB interface {
 	// StoreTx inserts or updates a transaction, keyed by wt.ID. The wallet's
-	// network-specific representation should be encoded into wt.RawTx.
+	// network-specific representation should be encoded into wt.RawTx. The
+	// wallet must set wt.NetworkID (this handle's network) and wt.AssetID; a
+	// mismatched NetworkID is rejected, as is a zero AssetID on any network
+	// whose own asset ID is not zero.
 	StoreTx(wt *WalletTransaction) error
 	// StoreTxs inserts or updates many transactions in a single underlying
 	// write. It is intended for bulk paths - an initial history sync or a
@@ -32,8 +35,8 @@ type NetworkTxDB interface {
 	GetPendingTxs() ([]*WalletTransaction, error)
 	// GetAssetTxs is like GetTxs, but scoped to a single asset within this
 	// network: assetID nil selects the network's own native-asset
-	// transactions (those with WalletTransaction.TokenID unset); non-nil
-	// selects that TokenID's transactions only. A network hosting token
+	// transactions (those with AssetID equal to the network's asset ID);
+	// non-nil selects that asset's transactions only. A network hosting token
 	// wallets that share this NetworkTxDB should use this instead of GetTxs
 	// so history isn't a cross-asset mix.
 	GetAssetTxs(assetID *uint32, req *TxHistoryRequest) (*TxHistoryResponse, error)
@@ -78,11 +81,34 @@ type networkTxDB struct {
 
 var _ NetworkTxDB = (*networkTxDB)(nil)
 
+// validateTx enforces the storage contract on a wallet-supplied transaction:
+// NetworkID must match this handle's network, and AssetID must be set. A zero
+// AssetID is only allowable when the network's own asset ID is zero (BTC),
+// where zero is a legitimate value; anywhere else it means the storing wallet
+// failed to set the field.
+func (n *networkTxDB) validateTx(wt *WalletTransaction) error {
+	if wt.NetworkID != n.network {
+		return fmt.Errorf("transaction %s carries network ID %d in a network-%d database", wt.ID, wt.NetworkID, n.network)
+	}
+	if wt.AssetID == 0 && n.network != 0 {
+		return fmt.Errorf("transaction %s has a zero asset ID on network %d", wt.ID, n.network)
+	}
+	return nil
+}
+
 func (n *networkTxDB) StoreTx(wt *WalletTransaction) error {
+	if err := n.validateTx(wt); err != nil {
+		return err
+	}
 	return n.db.storeTx(n.network, wt)
 }
 
 func (n *networkTxDB) StoreTxs(wts []*WalletTransaction) error {
+	for _, wt := range wts {
+		if err := n.validateTx(wt); err != nil {
+			return err
+		}
+	}
 	return n.db.storeTxs(n.network, wts)
 }
 
@@ -91,7 +117,7 @@ func (n *networkTxDB) GetTx(txID string) (*WalletTransaction, error) {
 }
 
 func (n *networkTxDB) GetTxs(req *TxHistoryRequest) (*TxHistoryResponse, error) {
-	return n.db.getTxs(n.network, req)
+	return n.db.getNetworkTxs(n.network, req)
 }
 
 func (n *networkTxDB) GetPendingTxs() ([]*WalletTransaction, error) {
@@ -107,8 +133,7 @@ func (n *networkTxDB) GetAssetPendingTxs(assetID *uint32) ([]*WalletTransaction,
 }
 
 // resolveAssetID returns assetID if set, otherwise this network's own
-// native-asset ID (the ID that WalletTransaction.TokenID-unset records are
-// stored under; see newTxRecord).
+// native-asset ID (the AssetID a native transaction is stored under).
 func (n *networkTxDB) resolveAssetID(assetID *uint32) uint32 {
 	if assetID != nil {
 		return *assetID

@@ -376,9 +376,10 @@ func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.
 		WalletTransaction: &txdb.WalletTransaction{
 			Type:        txdb.Receive,
 			ID:          id.String(),
+			NetworkID:   w.baseChainID,
+			AssetID:     aw.assetID,
 			BlockNumber: lg.BlockNumber,
 			Timestamp:   blockTime,
-			TokenID:     &aw.assetID,
 			Amount:      value,
 			Recipient:   &addr,
 			Confirmed:   true,
@@ -479,6 +480,8 @@ func (w *ETHWallet) storeNativeReceive(tx *types.Transaction, blockNumber, block
 		WalletTransaction: &txdb.WalletTransaction{
 			Type:        txdb.Receive,
 			ID:          tx.Hash().String(),
+			NetworkID:   w.baseChainID,
+			AssetID:     w.assetID,
 			BlockNumber: blockNumber,
 			Timestamp:   blockTime,
 			Amount:      w.atomize(tx.Value()),

@@ -508,6 +508,8 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		ID:        txID,
 		Amount:    value,
 		Fees:      fees,
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Recipient: &recipient,
 		Confirmed: rejected,
 		Rejected:  rejected,
@@ -845,6 +847,8 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 		ID:        txID,
 		Amount:    result.transferAmount(),
 		Fees:      fees,
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Confirmed: result.Status.isSuccess(),
 	}
 
@@ -1283,6 +1287,8 @@ func (w *NearWallet) scanNativeReceive(ctx context.Context, rpc *rpcClient, ct *
 		Type:           txdb.Receive,
 		ID:             ct.Hash,
 		Amount:         amount,
+		NetworkID:      BipID,
+		AssetID:        BipID,
 		BlockNumber:    blockHeight,
 		Timestamp:      blockTime,
 		Confirmed:      true,
@@ -1311,7 +1317,7 @@ type ftTransferArgs struct {
 
 // scanTokenReceive checks a transaction addressed to a known NEP-141 token
 // contract for an ft_transfer naming this account as the receiver, storing
-// a Receive record with TokenID set if found. It reports false if the
+// a Receive record carrying the token's AssetID if found. It reports false if the
 // transaction needs to be retried on a later scan.
 //
 // Only ft_transfer is recognized, not ft_transfer_call: this wallet's
@@ -1398,7 +1404,8 @@ func (w *NearWallet) scanTokenReceive(ctx context.Context, rpc *rpcClient, ct *c
 		Type:           txdb.Receive,
 		ID:             ct.Hash,
 		Amount:         amount,
-		TokenID:        &tokenID,
+		NetworkID:      BipID,
+		AssetID:        tokenID,
 		BlockNumber:    blockHeight,
 		Timestamp:      blockTime,
 		Confirmed:      true,

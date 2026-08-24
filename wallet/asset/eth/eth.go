@@ -911,7 +911,7 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 
 	// The transaction database is the master tx DB handle supplied by Core,
 	// scoped to this wallet's base-chain network. Core owns its lifecycle.
-	w.txDB, err = NewTxDB(w.netTxDB, w.log.SubLogger("TXDB"), w.baseChainID)
+	w.txDB, err = NewTxDB(w.netTxDB, w.log.SubLogger("TXDB"))
 	if err != nil {
 		return nil, err
 	}
@@ -1420,14 +1420,9 @@ func newBridgeManager(cfg *bridgeManagerConfig) (*bridgeManager, error) {
 			continue
 		}
 
-		sourceAssetID := cfg.baseChainID
-		if tx.TokenID != nil {
-			sourceAssetID = *tx.TokenID
-		}
-
 		manager.pendingBridges[tx.ID] = &pendingBridge{
 			bridgeName:    tx.BridgeName,
-			sourceAssetID: sourceAssetID,
+			sourceAssetID: tx.AssetID,
 			destAssetID:   tx.BridgeCounterpartTx.AssetID,
 			amount:        tx.Amount,
 		}
@@ -3234,13 +3229,8 @@ func (w *assetWallet) sumPendingTxs() (out, in uint64) {
 			return
 		}
 
-		txAssetID := w.baseChainID
-		if pendingTx.TokenID != nil {
-			txAssetID = *pendingTx.TokenID
-		}
-
 		var txOut, txIn uint64
-		if txAssetID == w.assetID {
+		if pendingTx.AssetID == w.assetID {
 			if txdb.IncomingTxType(pendingTx.Type) {
 				txIn = pendingTx.Amount
 			} else {
@@ -3591,8 +3581,8 @@ func (w *baseWallet) emitTransactionNote(tx *txdb.WalletTransaction, new bool) {
 	w.walletsMtx.RLock()
 	baseWallet, found := w.wallets[w.baseChainID]
 	var tokenWallet *assetWallet
-	if tx.TokenID != nil {
-		tokenWallet = w.wallets[*tx.TokenID]
+	if tx.AssetID != w.baseChainID {
+		tokenWallet = w.wallets[tx.AssetID]
 	}
 	w.walletsMtx.RUnlock()
 
@@ -3908,7 +3898,7 @@ func (w *baseWallet) checkPendingTxs() {
 			// on it, cancel that request.
 			if pendingTx.actionRequested {
 				pendingTx.actionRequested = false
-				w.resolveAction(pendingTx.ID, pendingTx.TokenID)
+				w.resolveAction(pendingTx.ID, pendingTx.AssetID)
 			}
 		}
 	}
@@ -3916,7 +3906,7 @@ func (w *baseWallet) checkPendingTxs() {
 	// If we have missing nonces, send an alert.
 	if !w.recoveryRequestSent && len(findMissingNonces(w.confirmedNonceAt, w.pendingNonceAt, w.pendingTxs)) != 0 {
 		w.recoveryRequestSent = true
-		w.requestAction(actionTypeMissingNonces, w.missingNoncesActionID(), nil, nil)
+		w.requestAction(actionTypeMissingNonces, w.missingNoncesActionID(), nil, w.baseChainID)
 	}
 
 	// Loop again, classifying problems and sending action requests.
@@ -3937,7 +3927,7 @@ func (w *baseWallet) checkPendingTxs() {
 			// The tx in our records wasn't accepted. Where's the right one?
 			req := newLostNonceNote(*pendingTx.WalletTransaction, pendingTx.Nonce.Uint64())
 			pendingTx.actionRequested = true
-			w.requestAction(actionTypeLostNonce, pendingTx.ID, req, pendingTx.TokenID)
+			w.requestAction(actionTypeLostNonce, pendingTx.ID, req, pendingTx.AssetID)
 			continue
 		}
 		// Recheck fees periodically.
@@ -3962,7 +3952,7 @@ func (w *baseWallet) checkPendingTxs() {
 			maxFees.Mul(maxFees, new(big.Int).SetUint64(tx.Gas()))
 			req := newLowFeeNote(*pendingTx.WalletTransaction, WeiToGweiCeil(maxFees))
 			pendingTx.actionRequested = true
-			w.requestAction(actionTypeTooCheap, pendingTx.ID, req, pendingTx.TokenID)
+			w.requestAction(actionTypeTooCheap, pendingTx.ID, req, pendingTx.AssetID)
 			continue
 		}
 		// Fees look good and there's no reason to believe this tx will
@@ -4289,7 +4279,7 @@ func (w *assetWallet) userActionRecoverNonces(actionB []byte) error {
 				txType:    txdb.SelfSend,
 				amt:       0,
 				recipient: &recipient,
-			}, nil)
+			}, w.baseChainID)
 			w.emitTransactionNote(pendingTx.WalletTransaction, true)
 			w.pendingTxs = append(w.pendingTxs, pendingTx)
 			sort.Slice(w.pendingTxs, func(i, j int) bool {
@@ -4310,11 +4300,7 @@ func (w *assetWallet) userActionRecoverNonces(actionB []byte) error {
 
 // requestAction sends a ActionRequired notification up the chain of command.
 // nonceMtx must be locked.
-func (w *baseWallet) requestAction(actionID, uniqueID string, req *TransactionActionNote, tokenID *uint32) {
-	assetID := w.baseChainID
-	if tokenID != nil {
-		assetID = *tokenID
-	}
+func (w *baseWallet) requestAction(actionID, uniqueID string, req *TransactionActionNote, assetID uint32) {
 	aw := w.wallet(assetID)
 	if aw == nil { // sanity
 		return
@@ -4324,11 +4310,7 @@ func (w *baseWallet) requestAction(actionID, uniqueID string, req *TransactionAc
 
 // resolveAction sends a ActionResolved notification up the chain of command.
 // nonceMtx must be locked.
-func (w *baseWallet) resolveAction(uniqueID string, tokenID *uint32) {
-	assetID := w.baseChainID
-	if tokenID != nil {
-		assetID = *tokenID
-	}
+func (w *baseWallet) resolveAction(uniqueID string, assetID uint32) {
 	aw := w.wallet(assetID)
 	if aw == nil { // sanity
 		return
@@ -4369,14 +4351,10 @@ func transactionFeeLimit(tx *types.Transaction) *big.Int {
 // extendedTx generates an *extendedWalletTx for a newly-broadcasted tx and
 // stores it in the DB.
 func (w *assetWallet) extendedTx(genTxResult *genTxResult) *extendedWalletTx {
-	var tokenAssetID *uint32
-	if w.assetID != w.baseChainID {
-		tokenAssetID = &w.assetID
-	}
-	return w.baseWallet.extendAndStoreTx(genTxResult, tokenAssetID)
+	return w.baseWallet.extendAndStoreTx(genTxResult, w.assetID)
 }
 
-func (w *baseWallet) extendAndStoreTx(genTxResult *genTxResult, tokenAssetID *uint32) *extendedWalletTx {
+func (w *baseWallet) extendAndStoreTx(genTxResult *genTxResult, assetID uint32) *extendedWalletTx {
 	nonce := genTxResult.tx.Nonce()
 	rawTx, err := genTxResult.tx.MarshalBinary()
 	if err != nil {
@@ -4407,7 +4385,8 @@ func (w *baseWallet) extendAndStoreTx(genTxResult *genTxResult, tokenAssetID *ui
 			ID:        genTxResult.tx.Hash().String(),
 			Amount:    genTxResult.amt,
 			Fees:      fees, // updated later with actual receipt fees
-			TokenID:   tokenAssetID,
+			NetworkID: w.baseChainID,
+			AssetID:   assetID,
 			Recipient: genTxResult.recipient,
 			AdditionalData: map[string]string{
 				txHistoryNonceKey: strconv.FormatUint(nonce, 10),
@@ -4482,6 +4461,8 @@ func (w *ETHWallet) getReceivingTransaction(ctx context.Context, txHash common.H
 		Type:      txdb.Receive,
 		ID:        tx.Hash().String(),
 		Amount:    w.atomize(tx.Value()),
+		NetworkID: w.baseChainID,
+		AssetID:   w.assetID,
 		Recipient: &addr,
 		AdditionalData: map[string]string{
 			txHistoryNonceKey: strconv.FormatUint(tx.Nonce(), 10),
@@ -4543,6 +4524,8 @@ func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common
 		return &txdb.WalletTransaction{
 			Type:        txdb.Unknown,
 			ID:          txHash.String(),
+			NetworkID:   w.baseChainID,
+			AssetID:     w.assetID,
 			BlockNumber: uint64(blockHeight),
 			Confirmed:   blockHeight > 0,
 		}, nil
@@ -4552,8 +4535,9 @@ func (w *TokenWallet) getReceivingTransaction(ctx context.Context, txHash common
 	return &txdb.WalletTransaction{
 		Type:        txdb.Receive,
 		ID:          txHash.String(),
+		NetworkID:   w.baseChainID,
+		AssetID:     w.assetID,
 		BlockNumber: uint64(blockHeight),
-		TokenID:     &w.assetID,
 		Amount:      value,
 		Recipient:   &addr,
 		// For receiving transactions, if the transaction is mined, it is
@@ -4586,11 +4570,7 @@ func (w *assetWallet) PendingTransactions(ctx context.Context) []*txdb.WalletTra
 	defer w.nonceMtx.RUnlock()
 	txs := make([]*txdb.WalletTransaction, 0)
 	for _, tx := range w.pendingTxs {
-		txAssetID := w.baseChainID
-		if tx.TokenID != nil {
-			txAssetID = *tx.TokenID
-		}
-		if w.assetID != txAssetID {
+		if w.assetID != tx.AssetID {
 			continue
 		}
 		txCopy := *tx.WalletTransaction

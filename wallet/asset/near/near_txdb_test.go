@@ -29,10 +29,12 @@ func TestTxDBDelegation(t *testing.T) {
 	w := &NearWallet{ctx: context.Background(), log: log, txDB: master.NetworkTxDB(BipID)}
 
 	confirmed := &txdb.WalletTransaction{
-		Type: txdb.Send, ID: "conf", Amount: 1,
+		NetworkID: BipID,
+		AssetID:   BipID,
+		Type:      txdb.Send, ID: "conf", Amount: 1,
 		BlockNumber: 100, Timestamp: 1000, Confirmed: true,
 	}
-	pending := &txdb.WalletTransaction{Type: txdb.Send, ID: "pend", Amount: 2}
+	pending := &txdb.WalletTransaction{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "pend", Amount: 2}
 	if err := w.txDB.StoreTx(confirmed); err != nil {
 		t.Fatalf("StoreTx confirmed: %v", err)
 	}
@@ -97,13 +99,13 @@ func TestPendingTxExpiry(t *testing.T) {
 	}
 	txs := []*txdb.WalletTransaction{
 		// Dead: unknown to the node, reference block long lapsed.
-		{Type: txdb.Send, ID: "dead", Amount: 1, AdditionalData: withRef(refHeight)},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "dead", Amount: 1, AdditionalData: withRef(refHeight)},
 		// Late but alive: unknown to the node, still inside its window.
-		{Type: txdb.Send, ID: "late", Amount: 1, AdditionalData: withRef(refHeight + 5000)},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "late", Amount: 1, AdditionalData: withRef(refHeight + 5000)},
 		// Unreadable: the node errors, but not with UNKNOWN_TRANSACTION.
-		{Type: txdb.Send, ID: "err", Amount: 1, AdditionalData: withRef(refHeight)},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "err", Amount: 1, AdditionalData: withRef(refHeight)},
 		// Legacy: no reference height recorded; death cannot be proven.
-		{Type: txdb.Send, ID: "noref", Amount: 1},
+		{NetworkID: BipID, AssetID: BipID, Type: txdb.Send, ID: "noref", Amount: 1},
 	}
 	for _, tx := range txs {
 		if err := w.txDB.StoreTx(tx); err != nil {

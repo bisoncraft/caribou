@@ -596,7 +596,7 @@ func TestConcurrentNativeAndTokenSendsSerializeFeeCheck(t *testing.T) {
 // TestTokenWalletTransactionLookupCaseInsensitive covers the token path
 // skipping the hash normalization the native path applies. A lowercase hash —
 // what an explorer or a user paste supplies — missed the DB entirely and fell
-// through to the RPC, losing TokenID and any pending state the stored record
+// through to the RPC, losing the token AssetID and any pending state the stored record
 // carried.
 func TestTokenWalletTransactionLookupCaseInsensitive(t *testing.T) {
 	m := newMockRippled(t)
@@ -609,7 +609,7 @@ func TestTokenWalletTransactionLookupCaseInsensitive(t *testing.T) {
 	recip := tw.parent.address
 	if err := txDB.StoreTx(&txdb.WalletTransaction{
 		Type: txdb.Receive, ID: txID, Amount: 1_000_000, BlockNumber: 12,
-		Confirmed: true, Recipient: &recip, TokenID: &assetID,
+		Confirmed: true, Recipient: &recip, NetworkID: BipID, AssetID: assetID,
 	}); err != nil {
 		t.Fatalf("StoreTx: %v", err)
 	}
@@ -621,8 +621,8 @@ func TestTokenWalletTransactionLookupCaseInsensitive(t *testing.T) {
 	if wt.ID != txID {
 		t.Errorf("ID = %q, want %q", wt.ID, txID)
 	}
-	if wt.TokenID == nil || *wt.TokenID != assetID {
-		t.Errorf("TokenID = %v, want %d — the DB record was not found", wt.TokenID, assetID)
+	if wt.AssetID != assetID {
+		t.Errorf("AssetID = %v, want %d — the DB record was not found", wt.AssetID, assetID)
 	}
 }
 
@@ -679,8 +679,8 @@ func TestNativeScanRecordsTokenReceive(t *testing.T) {
 	if stored.Type != txdb.Receive {
 		t.Errorf("Type = %v, want Receive", stored.Type)
 	}
-	if stored.TokenID == nil || *stored.TokenID != tw.assetID {
-		t.Errorf("TokenID = %v, want %d", stored.TokenID, tw.assetID)
+	if stored.AssetID != tw.assetID {
+		t.Errorf("AssetID = %v, want %d", stored.AssetID, tw.assetID)
 	}
 	if stored.Amount != 100_000_000 {
 		t.Errorf("Amount = %d, want 100000000 (100 USDC at 6 decimals)", stored.Amount)
@@ -724,7 +724,7 @@ func TestTokenSendFeeSurvivesObservation(t *testing.T) {
 
 	if err := txDB.StoreTx(&txdb.WalletTransaction{
 		Type: txdb.Send, ID: txID, Amount: 1_000_000, Fees: feeDrops,
-		Recipient: &recip, TokenID: &assetID,
+		Recipient: &recip, NetworkID: BipID, AssetID: assetID,
 	}); err != nil {
 		t.Fatalf("StoreTx: %v", err)
 	}
@@ -753,8 +753,8 @@ func TestTokenSendFeeSurvivesObservation(t *testing.T) {
 	if stored.Fees != feeDrops {
 		t.Errorf("Fees = %d, want %d — the send's fee was wiped", stored.Fees, feeDrops)
 	}
-	if stored.TokenID == nil || *stored.TokenID != assetID {
-		t.Errorf("TokenID = %v, want %d", stored.TokenID, assetID)
+	if stored.AssetID != assetID {
+		t.Errorf("AssetID = %v, want %d", stored.AssetID, assetID)
 	}
 	if !stored.Confirmed {
 		t.Error("record should be confirmed after a validated observation")
@@ -859,7 +859,7 @@ func TestRejectedOutgoingTokenSendStillParsed(t *testing.T) {
 // TestTokenRecordEmitsNoNativeNote covers the native scanner announcing token
 // records on its own notification channel. WalletEmitter stamps the note with
 // the emitting wallet's asset ID, and both Core and the UI route on that rather
-// than on the record's TokenID — so a token transaction would be filed against
+// than on the record's AssetID — so a token transaction would be filed against
 // the native wallet's pending set, where the UI renders token atoms as drops.
 // The record must still be stored; only the note is withheld.
 func TestTokenRecordEmitsNoNativeNote(t *testing.T) {
@@ -905,15 +905,15 @@ func TestTokenRecordEmitsNoNativeNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTx: %v", err)
 	}
-	if stored == nil || stored.TokenID == nil {
+	if stored == nil || stored.AssetID == BipID {
 		t.Fatal("token receive should still be recorded")
 	}
 	for {
 		select {
 		case n := <-noteChan:
 			if tn, ok := n.(*asset.TransactionNote); ok {
-				t.Errorf("token record announced on the native channel: assetID=%d tokenID=%v",
-					tn.AssetID, tn.Transaction.TokenID)
+				t.Errorf("token record announced on the native channel: noteAssetID=%d txAssetID=%d",
+					tn.AssetID, tn.Transaction.AssetID)
 			}
 			continue // balance notes are fine
 		default:
@@ -1008,15 +1008,15 @@ func TestScanTokenRecordEmitsNoNativeNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTx: %v", err)
 	}
-	if stored == nil || stored.TokenID == nil {
+	if stored == nil || stored.AssetID == BipID {
 		t.Fatal("scan should have stored the token receive")
 	}
 	for {
 		select {
 		case note := <-noteChan:
 			if tn, ok := note.(*asset.TransactionNote); ok {
-				t.Errorf("scan announced a token record on the native channel: assetID=%d tokenID=%v",
-					tn.AssetID, tn.Transaction.TokenID)
+				t.Errorf("scan announced a token record on the native channel: noteAssetID=%d txAssetID=%d",
+					tn.AssetID, tn.Transaction.AssetID)
 			}
 			continue
 		default:
@@ -1072,7 +1072,7 @@ func TestCheckPendingTxsEmitsNoTokenNote(t *testing.T) {
 	for _, id := range []string{confirmedID, expiredID} {
 		wtx := &txdb.WalletTransaction{
 			Type: txdb.Send, ID: id, Amount: 1_000_000, Fees: 12,
-			Recipient: &recip, TokenID: &assetID,
+			Recipient: &recip, NetworkID: BipID, AssetID: assetID,
 		}
 		// A LastLedgerSequence below the tip makes the not-found case terminal.
 		setLastLedgerSequence(wtx, 100)
@@ -1087,8 +1087,8 @@ func TestCheckPendingTxsEmitsNoTokenNote(t *testing.T) {
 		select {
 		case note := <-noteChan:
 			if tn, ok := note.(*asset.TransactionNote); ok {
-				t.Errorf("checkPendingTxs announced a token record on the native channel: id=%s assetID=%d tokenID=%v",
-					tn.Transaction.ID, tn.AssetID, tn.Transaction.TokenID)
+				t.Errorf("checkPendingTxs announced a token record on the native channel: id=%s noteAssetID=%d txAssetID=%d",
+					tn.Transaction.ID, tn.AssetID, tn.Transaction.AssetID)
 			}
 			continue
 		default:
@@ -1115,7 +1115,7 @@ func TestCheckPendingTxsEmitsNoTokenNote(t *testing.T) {
 // the note there left the send confirmed in the DB but never announced, so
 // Core's pending set and the UI showed it unconfirmed indefinitely. The note
 // has to go out on the token's own channel, since Core and the UI route on the
-// emitter's asset ID rather than the record's TokenID.
+// emitter's asset ID rather than the record's AssetID.
 func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
 	const txID = "3333000000000000000000000000000000000000000000000000000000000003"
 
@@ -1158,7 +1158,7 @@ func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
 	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
 	wtx := &txdb.WalletTransaction{
 		Type: txdb.Send, ID: txID, Amount: 1_000_000, Fees: 12,
-		Recipient: &recip, TokenID: &assetID,
+		Recipient: &recip, NetworkID: BipID, AssetID: assetID,
 	}
 	setLastLedgerSequence(wtx, 100)
 	if err := n.StoreTx(wtx); err != nil {

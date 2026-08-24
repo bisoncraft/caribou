@@ -1926,10 +1926,12 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: swapTx,
 			exp: &txdb.WalletTransaction{
-				Type:   txdb.SwapOrSend,
-				ID:     swapTx.TxHash().String(),
-				Amount: toAtoms(1),
-				Fees:   toAtoms(0.0000321),
+				NetworkID: BipID,
+				AssetID:   BipID,
+				Type:      txdb.SwapOrSend,
+				ID:        swapTx.TxHash().String(),
+				Amount:    toAtoms(1),
+				Fees:      toAtoms(0.0000321),
 			},
 		},
 		{
@@ -1940,10 +1942,12 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: redemptionTx,
 			exp: &txdb.WalletTransaction{
-				Type:   txdb.Redeem,
-				ID:     redemptionTx.TxHash().String(),
-				Amount: toAtoms(5 - redeemFee),
-				Fees:   0,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				Type:      txdb.Redeem,
+				ID:        redemptionTx.TxHash().String(),
+				Amount:    toAtoms(5 - redeemFee),
+				Fees:      0,
 			},
 		},
 		{
@@ -1956,9 +1960,11 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: splitTx,
 			exp: &txdb.WalletTransaction{
-				Type: txdb.Split,
-				ID:   splitTx.TxHash().String(),
-				Fees: toAtoms(0.0000251),
+				NetworkID: BipID,
+				AssetID:   BipID,
+				Type:      txdb.Split,
+				ID:        splitTx.TxHash().String(),
+				Fees:      toAtoms(0.0000251),
 			},
 		},
 		{
@@ -1971,6 +1977,8 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: sendTx,
 			exp: &txdb.WalletTransaction{
+				NetworkID: BipID,
+				AssetID:   BipID,
 				Type:      txdb.Send,
 				ID:        sendTx.TxHash().String(),
 				Amount:    toAtoms(4),
@@ -1992,6 +2000,8 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: receiveTx,
 			exp: &txdb.WalletTransaction{
+				NetworkID: BipID,
+				AssetID:   BipID,
 				Type:      txdb.Receive,
 				ID:        receiveTx.TxHash().String(),
 				Amount:    toAtoms(4),
@@ -2012,9 +2022,11 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: ticketTx,
 			exp: &txdb.WalletTransaction{
-				Type:   txdb.TicketPurchase,
-				ID:     ticketTx.TxHash().String(),
-				Amount: toAtoms(1),
+				NetworkID: BipID,
+				AssetID:   BipID,
+				Type:      txdb.TicketPurchase,
+				ID:        ticketTx.TxHash().String(),
+				Amount:    toAtoms(1),
 			},
 		},
 		{
@@ -2025,9 +2037,11 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: ticketTx,
 			exp: &txdb.WalletTransaction{
-				Type:   txdb.TicketVote,
-				ID:     ticketTx.TxHash().String(),
-				Amount: toAtoms(1),
+				NetworkID: BipID,
+				AssetID:   BipID,
+				Type:      txdb.TicketVote,
+				ID:        ticketTx.TxHash().String(),
+				Amount:    toAtoms(1),
 			},
 		},
 		{
@@ -2038,9 +2052,11 @@ func TestIDUnknownTx(t *testing.T) {
 			},
 			tx: ticketTx,
 			exp: &txdb.WalletTransaction{
-				Type:   txdb.TicketRevocation,
-				ID:     ticketTx.TxHash().String(),
-				Amount: toAtoms(1),
+				NetworkID: BipID,
+				AssetID:   BipID,
+				Type:      txdb.TicketRevocation,
+				ID:        ticketTx.TxHash().String(),
+				Amount:    toAtoms(1),
 			},
 		},
 	}

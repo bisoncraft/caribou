@@ -15,13 +15,9 @@ export interface TxRowItem {
 }
 
 // variantForTx maps a history transaction back to the network variant it
-// belongs to. Ticker-history responses attribute every transaction exactly
-// via assetID. Single-asset responses lack it, so token transactions resolve
-// via their tokenID and native ones to the group's native variant.
+// belongs to. Every transaction carries its exact asset ID.
 export function variantForTx (ta: TickerAsset, tx: WalletTransaction): AssetVariant | undefined {
-  if (tx.assetID != null) return ta.variantLookup[tx.assetID]
-  if (tx.tokenID != null) return ta.variantLookup[tx.tokenID]
-  return ta.variants.find(v => !v.token)
+  return ta.variantLookup[tx.assetID]
 }
 
 // txTitle names a row: past tense for the common types, the generic type

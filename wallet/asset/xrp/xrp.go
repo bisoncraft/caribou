@@ -236,7 +236,7 @@ type xrpWallet struct {
 	// asset ID. This wallet parses and stores token records but cannot announce
 	// them itself: WalletEmitter stamps each note with the asset ID it was
 	// built for, and both Core and the UI route on that rather than on the
-	// record's TokenID, so a note sent through w.emit is filed against XRP.
+	// record's AssetID, so a note sent through w.emit is filed against XRP.
 	tokenEmitterMtx sync.RWMutex
 	tokenEmitters   map[uint32]*asset.WalletEmitter
 
@@ -314,14 +314,14 @@ func (w *xrpWallet) unregisterTokenEmitter(assetID uint32) {
 // token record. A token whose wallet is not open has no emitter and is stored
 // without a note, which is correct — nothing is listening for it.
 func (w *xrpWallet) emitTxNote(wtx *txdb.WalletTransaction, isNew bool) {
-	if wtx.TokenID == nil {
+	if wtx.AssetID == BipID {
 		if w.emit != nil {
 			w.emit.TransactionNote(wtx, isNew)
 		}
 		return
 	}
 	w.tokenEmitterMtx.RLock()
-	emit := w.tokenEmitters[*wtx.TokenID]
+	emit := w.tokenEmitters[wtx.AssetID]
 	w.tokenEmitterMtx.RUnlock()
 	if emit != nil {
 		emit.TransactionNote(wtx, isNew)
@@ -878,6 +878,8 @@ func (w *xrpWallet) send(address string, value uint64, destTag *uint32) (asset.C
 		ID:        txID,
 		Amount:    value,
 		Fees:      fee,
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Recipient: &recipient,
 	}
 	// Carry the XRP-specific LastLedgerSequence in RawTx so checkPendingTxs can
@@ -1351,7 +1353,7 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 			}
 
 			unit := "drops"
-			if wtx.TokenID != nil {
+			if wtx.AssetID != BipID {
 				unit = "atoms"
 			}
 			if wtx.Type == txdb.Receive {
@@ -1571,6 +1573,8 @@ func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valid
 			ID:          strings.ToUpper(tr.Hash),
 			Amount:      amount,
 			Fees:        feeParsed,
+			NetworkID:   BipID,
+			AssetID:     BipID,
 			BlockNumber: ledgerIndex,
 			Confirmed:   validated,
 			Recipient:   &recipient,
@@ -1587,6 +1591,8 @@ func walletTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valid
 		ID:          strings.ToUpper(tr.Hash),
 		Amount:      amount,
 		Fees:        feeParsed,
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		BlockNumber: ledgerIndex,
 		Confirmed:   validated,
 		Rejected:    rejected,

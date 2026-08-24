@@ -1597,10 +1597,6 @@ func TestBalanceNoMempool(t *testing.T) {
 	var nonceCounter int64
 
 	newExtendedWalletTx := func(assetID uint32, amt, maxFees, blockNum uint64, txType txdb.TransactionType) *extendedWalletTx {
-		var tokenID *uint32
-		if assetID != BipID {
-			tokenID = &assetID
-		}
 		txHash := common.BytesToHash(encode.RandomBytes(32))
 
 		et := &extendedWalletTx{
@@ -1608,8 +1604,9 @@ func TestBalanceNoMempool(t *testing.T) {
 				ID:          txHash.String(),
 				Type:        txType,
 				Amount:      amt,
+				NetworkID:   BipID,
+				AssetID:     assetID,
 				BlockNumber: blockNum,
-				TokenID:     tokenID,
 				Fees:        maxFees,
 			},
 			Nonce:  big.NewInt(nonceCounter),

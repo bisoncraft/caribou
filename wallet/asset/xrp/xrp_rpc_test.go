@@ -1394,6 +1394,8 @@ func TestWalletTransactionFromDB(t *testing.T) {
 		ID:          txID,
 		Amount:      1_000_000,
 		Fees:        12,
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		BlockNumber: 500,
 		Confirmed:   true,
 		Recipient:   &recip,
@@ -1425,7 +1427,7 @@ func TestWalletTransactionDBLookupCaseInsensitive(t *testing.T) {
 	const txID = "BBBB000000000000000000000000000000000000000000000000000000000002"
 	recip := "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
 	if err := w.txDB.StoreTx(&txdb.WalletTransaction{
-		Type: txdb.Send, ID: txID, Amount: 500, BlockNumber: 10, Confirmed: true, Recipient: &recip,
+		Type: txdb.Send, ID: txID, Amount: 500, NetworkID: BipID, AssetID: BipID, BlockNumber: 10, Confirmed: true, Recipient: &recip,
 	}); err != nil {
 		t.Fatalf("storeTx: %v", err)
 	}

@@ -439,6 +439,8 @@ func (w *HyperWallet) send(address string, value uint64) (asset.Coin, error) {
 	txID := fmt.Sprintf("0x%016x", nonce)
 	recipient := address
 	wtx := &txdb.WalletTransaction{
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Type:      txdb.Send,
 		ID:        txID,
 		Amount:    value,
@@ -868,6 +870,8 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 
 	addr := w.address
 	wtx := &txdb.WalletTransaction{
+		NetworkID:   BipID,
+		AssetID:     BipID,
 		Type:        txdb.Receive,
 		ID:          u.Hash,
 		Amount:      amount,
@@ -1038,6 +1042,8 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	addlData[pendingIDKey] = oldID
 	addlData["txHash"] = u.Hash
 	confirmed := &txdb.WalletTransaction{
+		NetworkID:      BipID,
+		AssetID:        BipID,
 		Type:           best.Type,
 		ID:             u.Hash,
 		Amount:         best.Amount,

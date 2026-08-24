@@ -132,12 +132,13 @@ func (m *mockTxDB) GetAssetTxs(_ *uint32, _ *txdb.TxHistoryRequest) (*txdb.TxHis
 	return nil, nil
 }
 func (m *mockTxDB) GetAssetPendingTxs(assetID *uint32) ([]*txdb.WalletTransaction, error) {
+	want := uint32(BipID)
+	if assetID != nil {
+		want = *assetID
+	}
 	var out []*txdb.WalletTransaction
 	for _, tx := range m.pending {
-		switch {
-		case assetID == nil && tx.TokenID == nil:
-			out = append(out, tx)
-		case assetID != nil && tx.TokenID != nil && *tx.TokenID == *assetID:
+		if tx.AssetID == want {
 			out = append(out, tx)
 		}
 	}
@@ -1015,7 +1016,7 @@ func TestCheckPendingTxs(t *testing.T) {
 	ctx := context.Background()
 
 	makePendingTx := func(id string, lastValidHeight uint64) *txdb.WalletTransaction {
-		wt := &txdb.WalletTransaction{ID: id}
+		wt := &txdb.WalletTransaction{ID: id, NetworkID: BipID, AssetID: BipID}
 		setTxData(wt, solTxData{LastValidBlockHeight: lastValidHeight})
 		return wt
 	}
@@ -1151,9 +1152,9 @@ func TestCheckPendingTxsIgnoresTokenPending(t *testing.T) {
 	ctx := context.Background()
 	tokenID := usdcTokenID
 
-	nativePend := &txdb.WalletTransaction{ID: "native-pend"}
+	nativePend := &txdb.WalletTransaction{ID: "native-pend", NetworkID: BipID, AssetID: BipID}
 	setTxData(nativePend, solTxData{LastValidBlockHeight: 100})
-	tokenPend := &txdb.WalletTransaction{ID: "token-pend", TokenID: &tokenID}
+	tokenPend := &txdb.WalletTransaction{ID: "token-pend", NetworkID: BipID, AssetID: tokenID}
 	setTxData(tokenPend, solTxData{LastValidBlockHeight: 100})
 
 	db := &mockTxDB{pending: []*txdb.WalletTransaction{nativePend, tokenPend}}
@@ -1394,7 +1395,7 @@ func TestIsNotFoundRPCError(t *testing.T) {
 // TestWalletTransactionFromRPCIgnoresTokenTransfers covers the record
 // corruption where the native poll loop claimed an SPL token transfer. The
 // token send carries no system/transfer instruction, so it used to reach the
-// balance-delta fallback and return a native record (TokenID == nil) under the
+// balance-delta fallback and return a native record (AssetID = BipID) under the
 // same signature the token wallet stores its own record under. Because
 // txdb.storeTx is a full replace keyed by the signature and both poll loops run
 // every 2s, the two records overwrote each other indefinitely and the token
@@ -1508,6 +1509,8 @@ func TestSyncHistoryPreservesPendingData(t *testing.T) {
 		Type:      txdb.Send,
 		ID:        "sig",
 		Amount:    500_000,
+		NetworkID: BipID,
+		AssetID:   BipID,
 		Confirmed: false,
 		Confirms:  &txdb.Confirms{Current: 0, Target: 1},
 	}
@@ -1560,7 +1563,7 @@ func TestSyncHistoryKeepsScannedRejection(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	pendingSend := &txdb.WalletTransaction{Type: txdb.Send, ID: "sig", Amount: 500_000}
+	pendingSend := &txdb.WalletTransaction{Type: txdb.Send, ID: "sig", Amount: 500_000, NetworkID: BipID, AssetID: BipID}
 	setTxData(pendingSend, solTxData{LastValidBlockHeight: 400})
 
 	db := &mockTxDB{pending: []*txdb.WalletTransaction{pendingSend}}

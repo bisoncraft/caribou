@@ -352,8 +352,9 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		ID:        txID,
 		Amount:    value,
 		Fees:      fees,
+		NetworkID: BipID,
+		AssetID:   w.assetID,
 		Recipient: &recipient,
-		TokenID:   &w.assetID,
 		Confirmed: rejected,
 		Rejected:  rejected,
 		// The reference height lets the pending poller prove the

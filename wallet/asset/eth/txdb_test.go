@@ -28,7 +28,7 @@ func newTestTxDBAtPath(t *testing.T, path string) (*TxDB, *txdb.TxDB) {
 	if err != nil {
 		t.Fatalf("txdb.New: %v", err)
 	}
-	db, err := NewTxDB(master.NetworkTxDB(BipID), log, BipID)
+	db, err := NewTxDB(master.NetworkTxDB(BipID), log)
 	if err != nil {
 		t.Fatalf("NewTxDB: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestTxDB(t *testing.T) {
 
 	wt1 := newTx(1)
 	wt1.Confirmed = true
-	wt1.TokenID = &usdcEthID
+	wt1.AssetID = usdcEthID
 	wt2 := newTx(2)
 	wt3 := newTx(3)
 	wt4 := newTx(4)
@@ -329,6 +329,8 @@ func TestTxDBReceivesSameBlockDoNotCollide(t *testing.T) {
 			WalletTransaction: &txdb.WalletTransaction{
 				Type:        txdb.Receive,
 				ID:          id,
+				NetworkID:   BipID,
+				AssetID:     BipID,
 				BlockNumber: blockNumber,
 				Amount:      1,
 				Recipient:   &addr,
@@ -381,9 +383,11 @@ func TestTxDBCorruptRawTxDoesNotEvict(t *testing.T) {
 	// instead of yielding a nonce-0 key that evicts `good` (which is also
 	// nonce 0) via the unique-index replace path.
 	bad := &txdb.WalletTransaction{
-		Type:  txdb.Send,
-		ID:    common.HexToHash("0xdead").String(),
-		RawTx: []byte("{ not valid json"),
+		NetworkID: BipID,
+		AssetID:   BipID,
+		Type:      txdb.Send,
+		ID:        common.HexToHash("0xdead").String(),
+		RawTx:     []byte("{ not valid json"),
 	}
 	if err := txHistoryStore.db.StoreTx(bad); err == nil {
 		t.Fatal("expected error storing tx with corrupt eth RawTx, got nil")
@@ -421,8 +425,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		// Completed bridge, older submission time
 		{
 			WalletTransaction: &txdb.WalletTransaction{
-				ID:   "0x1111111111111111111111111111111111111111111111111111111111111111",
-				Type: txdb.InitiateBridge,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				ID:        "0x1111111111111111111111111111111111111111111111111111111111111111",
+				Type:      txdb.InitiateBridge,
 				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					IDs:      []string{"0x1111111111111111111111111111111111111111111111111111111111111112"},
 					Complete: true,
@@ -434,8 +440,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		// Completed bridge, newer submission time
 		{
 			WalletTransaction: &txdb.WalletTransaction{
-				ID:   "0x2222222222222222222222222222222222222222222222222222222222222222",
-				Type: txdb.InitiateBridge,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				ID:        "0x2222222222222222222222222222222222222222222222222222222222222222",
+				Type:      txdb.InitiateBridge,
 				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					IDs:      []string{"0x2222222222222222222222222222222222222222222222222222222222222223"},
 					Complete: true,
@@ -447,8 +455,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		// Pending bridge, older
 		{
 			WalletTransaction: &txdb.WalletTransaction{
-				ID:   "0x3333333333333333333333333333333333333333333333333333333333333333",
-				Type: txdb.InitiateBridge,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				ID:        "0x3333333333333333333333333333333333333333333333333333333333333333",
+				Type:      txdb.InitiateBridge,
 				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					Complete: false,
 				},
@@ -459,8 +469,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		// Pending bridge, newer
 		{
 			WalletTransaction: &txdb.WalletTransaction{
-				ID:   "0x4444444444444444444444444444444444444444444444444444444444444444",
-				Type: txdb.InitiateBridge,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				ID:        "0x4444444444444444444444444444444444444444444444444444444444444444",
+				Type:      txdb.InitiateBridge,
 				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					Complete: false,
 				},
@@ -471,8 +483,10 @@ func TestTxDB_GetBridges(t *testing.T) {
 		// Non-bridge transaction
 		{
 			WalletTransaction: &txdb.WalletTransaction{
-				ID:   "0x5555555555555555555555555555555555555555555555555555555555555555",
-				Type: txdb.Send,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				ID:        "0x5555555555555555555555555555555555555555555555555555555555555555",
+				Type:      txdb.Send,
 			},
 			Nonce:          big.NewInt(5),
 			SubmissionTime: uint64(now.Add(-5 * time.Hour).Unix()),
@@ -615,8 +629,10 @@ func TestTxDB_GetBridgeCompletions(t *testing.T) {
 	// Create first mint transaction that references the burn transaction
 	mintTx1 := &extendedWalletTx{
 		WalletTransaction: &txdb.WalletTransaction{
-			ID:   "0x2222222222222222222222222222222222222222222222222222222222222222",
-			Type: txdb.CompleteBridge,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			ID:        "0x2222222222222222222222222222222222222222222222222222222222222222",
+			Type:      txdb.CompleteBridge,
 			BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 				IDs: []string{burnTxID},
 			},
@@ -628,8 +644,10 @@ func TestTxDB_GetBridgeCompletions(t *testing.T) {
 	// Create second mint transaction that references the same burn ID
 	mintTx2 := &extendedWalletTx{
 		WalletTransaction: &txdb.WalletTransaction{
-			ID:   "0x3333333333333333333333333333333333333333333333333333333333333333",
-			Type: txdb.CompleteBridge,
+			NetworkID: BipID,
+			AssetID:   BipID,
+			ID:        "0x3333333333333333333333333333333333333333333333333333333333333333",
+			Type:      txdb.CompleteBridge,
 			BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 				IDs: []string{burnTxID},
 			},
@@ -713,8 +731,10 @@ func TestTxDB_PageSizeIsNotTrusted(t *testing.T) {
 	for i := 1; i <= numTxs; i++ {
 		tx := &extendedWalletTx{
 			WalletTransaction: &txdb.WalletTransaction{
-				ID:   fmt.Sprintf("0x%064x", i),
-				Type: txdb.InitiateBridge,
+				NetworkID: BipID,
+				AssetID:   BipID,
+				ID:        fmt.Sprintf("0x%064x", i),
+				Type:      txdb.InitiateBridge,
 				BridgeCounterpartTx: &txdb.BridgeCounterpartTx{
 					IDs:      []string{fmt.Sprintf("0x%064x", i+100)},
 					Complete: true,

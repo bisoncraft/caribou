@@ -311,7 +311,7 @@ func tokenRefreshLoop(ctx context.Context, wake <-chan struct{}, minGap time.Dur
 // transactions and marks expired ones (past their LastValidBlockHeight and
 // absent on-chain) rejected. Mirrors Wallet.checkPendingTxs, scoped to this
 // token's own asset ID instead of the native asset, since a Send's pending
-// record is tagged with TokenID and syncHistory alone only learns about a tx
+// record is tagged with the token's AssetID and syncHistory alone only learns about a tx
 // once it has already landed.
 func (w *TokenWallet) checkPendingTxs(ctx context.Context) error {
 	if w.txDB == nil {
@@ -723,9 +723,10 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		ID:        sig,
 		Amount:    value,
 		Fees:      fee,
+		NetworkID: BipID,
+		AssetID:   w.assetID,
 		Recipient: &recipient,
 		Confirms:  &txdb.Confirms{Current: 0, Target: 1},
-		TokenID:   &w.assetID,
 	}
 	setTxData(wtx, solTxData{
 		LastValidBlockHeight: lastValidBlockHeight,
@@ -974,12 +975,13 @@ func walletTransactionFromSPLRPC(tx *rpcTransaction, ataAddr string, tokenID uin
 		ID:          tx.Transaction.Signatures[0],
 		Amount:      amount,
 		Fees:        tx.Meta.Fee,
+		NetworkID:   BipID,
+		AssetID:     tokenID,
 		BlockNumber: tx.Slot,
 		Timestamp:   ts,
 		Recipient:   recipient,
 		Rejected:    tx.Meta.Err != nil,
 		Confirmed:   true,
-		TokenID:     &tokenID,
 	}
 }
 

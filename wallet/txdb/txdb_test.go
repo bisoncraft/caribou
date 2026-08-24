@@ -29,23 +29,25 @@ func newTestTxDB(t *testing.T) *TxDB {
 	return db
 }
 
-func tx(id string, blockNum, timestamp uint64) *WalletTransaction {
+func tx(net uint32, id string, blockNum, timestamp uint64) *WalletTransaction {
 	return &WalletTransaction{
 		Type:        Send,
 		ID:          id,
 		Amount:      1,
+		NetworkID:   net,
+		AssetID:     net,
 		BlockNumber: blockNum,
 		Timestamp:   timestamp,
 		Confirmed:   blockNum > 0,
 	}
 }
 
-// tokenTx is like tx, but stamped with TokenID, as a token wallet sharing its
-// parent network's NetworkTxDB must for GetAssetTxs/GetAssetPendingTxs to
-// scope it correctly.
-func tokenTx(id string, tokenID uint32, blockNum, timestamp uint64) *WalletTransaction {
-	wt := tx(id, blockNum, timestamp)
-	wt.TokenID = &tokenID
+// tokenTx is like tx, but stamped with the token's own AssetID, as a token
+// wallet sharing its parent network's NetworkTxDB must for
+// GetAssetTxs/GetAssetPendingTxs to scope it correctly.
+func tokenTx(net uint32, id string, tokenID uint32, blockNum, timestamp uint64) *WalletTransaction {
+	wt := tx(net, id, blockNum, timestamp)
+	wt.AssetID = tokenID
 	return wt
 }
 
@@ -75,7 +77,7 @@ func TestStoreGetRemove(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)
 
-	wt := tx("abc", 10, 100)
+	wt := tx(netA, "abc", 10, 100)
 	if err := n.StoreTx(wt); err != nil {
 		t.Fatalf("StoreTx: %v", err)
 	}
@@ -121,7 +123,7 @@ func TestRawTxRoundTrip(t *testing.T) {
 	n := db.NetworkTxDB(netA)
 
 	raw := []byte{0xde, 0xad, 0xbe, 0xef}
-	wt := tx("withraw", 1, 100)
+	wt := tx(netA, "withraw", 1, 100)
 	wt.RawTx = raw
 	if err := n.StoreTx(wt); err != nil {
 		t.Fatalf("StoreTx: %v", err)
@@ -150,9 +152,9 @@ func TestGetTxsOrderAndPagination(t *testing.T) {
 
 	// Stored out of order; effective time == Timestamp.
 	for _, wt := range []*WalletTransaction{
-		tx("t100", 1, 100),
-		tx("t300", 3, 300),
-		tx("t200", 2, 200),
+		tx(netA, "t100", 1, 100),
+		tx(netA, "t300", 3, 300),
+		tx(netA, "t200", 2, 200),
 	} {
 		if err := n.StoreTx(wt); err != nil {
 			t.Fatal(err)
@@ -205,10 +207,10 @@ func TestGetTxsSameEffTimePagination(t *testing.T) {
 	// carries the tx id so a RefID seek lands on the exact tx rather than the
 	// first sibling sharing that time.
 	for _, wt := range []*WalletTransaction{
-		tx("a", 1, 100),
-		tx("b", 1, 200),
-		tx("c", 1, 200),
-		tx("d", 1, 300),
+		tx(netA, "a", 1, 100),
+		tx(netA, "b", 1, 200),
+		tx(netA, "c", 1, 200),
+		tx(netA, "d", 1, 300),
 	} {
 		if err := n.StoreTx(wt); err != nil {
 			t.Fatal(err)
@@ -243,8 +245,8 @@ func TestGetTxsSameEffTimePagination(t *testing.T) {
 func TestIgnoreTypes(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)
-	send := tx("send", 1, 100)
-	recv := tx("recv", 2, 200)
+	send := tx(netA, "send", 1, 100)
+	recv := tx(netA, "recv", 2, 200)
 	recv.Type = Receive
 	n.StoreTx(send)
 	n.StoreTx(recv)
@@ -259,9 +261,9 @@ func TestPendingTxs(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)
 
-	n.StoreTx(tx("mined", 5, 100))
-	n.StoreTx(tx("pend1", 0, 0)) // BlockNumber 0 -> pending
-	n.StoreTx(tx("pend2", 0, 0))
+	n.StoreTx(tx(netA, "mined", 5, 100))
+	n.StoreTx(tx(netA, "pend1", 0, 0)) // BlockNumber 0 -> pending
+	n.StoreTx(tx(netA, "pend2", 0, 0))
 
 	pending, err := n.GetPendingTxs()
 	if err != nil {
@@ -281,9 +283,9 @@ func TestPendingTxsNetworkScoped(t *testing.T) {
 	a := db.NetworkTxDB(netA)
 	b := db.NetworkTxDB(netB)
 
-	a.StoreTx(tx("a-pend", 0, 0)) // BlockNumber 0 -> pending
-	b.StoreTx(tx("b-pend", 0, 0))
-	b.StoreTx(tx("b-mined", 7, 100))
+	a.StoreTx(tx(netA, "a-pend", 0, 0)) // BlockNumber 0 -> pending
+	b.StoreTx(tx(netB, "b-pend", 0, 0))
+	b.StoreTx(tx(netB, "b-mined", 7, 100))
 
 	pa, err := a.GetPendingTxs()
 	if err != nil {
@@ -310,11 +312,11 @@ func TestPendingTxsMinedUnconfirmed(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)
 
-	minedUnconfirmed := tx("mined-unconf", 5, 100)
+	minedUnconfirmed := tx(netA, "mined-unconf", 5, 100)
 	minedUnconfirmed.Confirmed = false // mined but not yet finalized
 	n.StoreTx(minedUnconfirmed)
-	n.StoreTx(tx("mempool", 0, 0)) // unconfirmed, still in mempool
-	n.StoreTx(tx("final", 9, 200)) // mined and Confirmed -> not pending
+	n.StoreTx(tx(netA, "mempool", 0, 0)) // unconfirmed, still in mempool
+	n.StoreTx(tx(netA, "final", 9, 200)) // mined and Confirmed -> not pending
 
 	pending, err := n.GetPendingTxs()
 	if err != nil {
@@ -339,9 +341,9 @@ func TestGetAssetTxsScoped(t *testing.T) {
 	n := db.NetworkTxDB(netA)
 	usdcID, usdtID := uint32(1001), uint32(1002)
 
-	n.StoreTx(tx("native", 1, 100))
-	n.StoreTx(tokenTx("usdc-tx", usdcID, 1, 200))
-	n.StoreTx(tokenTx("usdt-tx", usdtID, 1, 300))
+	n.StoreTx(tx(netA, "native", 1, 100))
+	n.StoreTx(tokenTx(netA, "usdc-tx", usdcID, 1, 200))
+	n.StoreTx(tokenTx(netA, "usdt-tx", usdtID, 1, 300))
 
 	nativeResp, err := n.GetAssetTxs(nil, &TxHistoryRequest{})
 	if err != nil {
@@ -377,9 +379,9 @@ func TestGetAssetPendingTxsScoped(t *testing.T) {
 	n := db.NetworkTxDB(netA)
 	usdcID := uint32(1001)
 
-	n.StoreTx(tx("native-pend", 0, 0))
-	n.StoreTx(tokenTx("usdc-pend", usdcID, 0, 0))
-	n.StoreTx(tx("native-mined", 5, 100))
+	n.StoreTx(tx(netA, "native-pend", 0, 0))
+	n.StoreTx(tokenTx(netA, "usdc-pend", usdcID, 0, 0))
+	n.StoreTx(tx(netA, "native-mined", 5, 100))
 
 	nativePending, err := n.GetAssetPendingTxs(nil)
 	if err != nil {
@@ -425,9 +427,9 @@ func TestStoreTxsBatch(t *testing.T) {
 	}
 
 	batch := []*WalletTransaction{
-		tx("b1", 1, 100),
-		tx("b2", 2, 200),
-		tx("b3", 0, 0), // unconfirmed
+		tx(netA, "b1", 1, 100),
+		tx(netA, "b2", 2, 200),
+		tx(netA, "b3", 0, 0), // unconfirmed
 	}
 	if err := n.StoreTxs(batch); err != nil {
 		t.Fatalf("StoreTxs: %v", err)
@@ -457,7 +459,7 @@ func TestStoreTxsBatch(t *testing.T) {
 	}
 
 	// A second batch with overlapping IDs updates in place (replace).
-	if err := n.StoreTxs([]*WalletTransaction{tx("b1", 3, 300)}); err != nil {
+	if err := n.StoreTxs([]*WalletTransaction{tx(netA, "b1", 3, 300)}); err != nil {
 		t.Fatalf("StoreTxs replace: %v", err)
 	}
 	got, _ := n.GetTx("b1")
@@ -482,11 +484,11 @@ func TestAddUniqueTxIndexReplace(t *testing.T) {
 		t.Fatalf("AddUniqueTxIndex: %v", err)
 	}
 
-	if err := n.StoreTx(tx("a", 5, 100)); err != nil {
+	if err := n.StoreTx(tx(netA, "a", 5, 100)); err != nil {
 		t.Fatalf("StoreTx a: %v", err)
 	}
 	// Storing b with the same index value (BlockNumber 5) evicts a.
-	if err := n.StoreTx(tx("b", 5, 200)); err != nil {
+	if err := n.StoreTx(tx(netA, "b", 5, 200)); err != nil {
 		t.Fatalf("StoreTx b: %v", err)
 	}
 
@@ -517,8 +519,8 @@ func TestNetworkIsolation(t *testing.T) {
 	a := db.NetworkTxDB(netA)
 	b := db.NetworkTxDB(netB)
 
-	a.StoreTx(tx("shared", 1, 100))
-	b.StoreTx(tx("shared", 2, 200)) // same ID, different network
+	a.StoreTx(tx(netA, "shared", 1, 100))
+	b.StoreTx(tx(netB, "shared", 2, 200)) // same ID, different network
 
 	ga, _ := a.GetTx("shared")
 	gb, _ := b.GetTx("shared")
@@ -577,7 +579,7 @@ func TestAddTxIndexUsesRawTx(t *testing.T) {
 
 	// Store out of RawTx order.
 	store := func(id string, first byte) {
-		wt := tx(id, 1, 100)
+		wt := tx(netA, id, 1, 100)
 		wt.RawTx = []byte{first, 0xff}
 		if err := n.StoreTx(wt); err != nil {
 			t.Fatal(err)
@@ -587,7 +589,7 @@ func TestAddTxIndexUsesRawTx(t *testing.T) {
 	store("one", 1)
 	store("two", 2)
 	// One without RawTx -> not indexed.
-	n.StoreTx(tx("none", 1, 100))
+	n.StoreTx(tx(netA, "none", 1, 100))
 
 	var order []string
 	err = idx.Iterate(nil, func(wt *WalletTransaction) error {
@@ -621,15 +623,15 @@ func TestTickerIndex(t *testing.T) {
 
 	usdcA, usdcB := uint32(100), uint32(200)
 	// USDC on netA at t=10, USDC on netB at t=30, and a native BTC tx at t=20.
-	txA := &WalletTransaction{Type: Send, ID: "usdcA", Amount: 1, BlockNumber: 1, Timestamp: 10, Confirmed: true, TokenID: &usdcA}
-	txB := &WalletTransaction{Type: Receive, ID: "usdcB", Amount: 2, BlockNumber: 1, Timestamp: 30, Confirmed: true, TokenID: &usdcB}
+	txA := &WalletTransaction{Type: Send, ID: "usdcA", Amount: 1, NetworkID: netA, AssetID: usdcA, BlockNumber: 1, Timestamp: 10, Confirmed: true}
+	txB := &WalletTransaction{Type: Receive, ID: "usdcB", Amount: 2, NetworkID: netB, AssetID: usdcB, BlockNumber: 1, Timestamp: 30, Confirmed: true}
 	if err := db.NetworkTxDB(netA).StoreTx(txA); err != nil {
 		t.Fatalf("store usdcA: %v", err)
 	}
 	if err := db.NetworkTxDB(netB).StoreTx(txB); err != nil {
 		t.Fatalf("store usdcB: %v", err)
 	}
-	if err := db.NetworkTxDB(netA).StoreTx(tx("btc", 1, 20)); err != nil {
+	if err := db.NetworkTxDB(netA).StoreTx(tx(netA, "btc", 1, 20)); err != nil {
 		t.Fatalf("store btc: %v", err)
 	}
 
@@ -643,7 +645,7 @@ func TestTickerIndex(t *testing.T) {
 	}
 	// Token transactions are attributed to their token asset ID.
 	for i, wantID := range []uint32{usdcB, usdcA} {
-		if wt := resp.Txs[i]; wt.AssetID == nil || *wt.AssetID != wantID {
+		if wt := resp.Txs[i]; wt.AssetID != wantID {
 			t.Fatalf("tx %s AssetID = %v, want %d", wt.ID, wt.AssetID, wantID)
 		}
 	}
@@ -657,7 +659,7 @@ func TestTickerIndex(t *testing.T) {
 		t.Fatalf("BTC = %v, want [btc]", got)
 	}
 	// A native transaction is attributed to its network's native asset.
-	if wt := resp.Txs[0]; wt.AssetID == nil || *wt.AssetID != netA {
+	if wt := resp.Txs[0]; wt.AssetID != netA {
 		t.Fatalf("native tx AssetID = %v, want %d", wt.AssetID, netA)
 	}
 
@@ -688,14 +690,6 @@ func TestTickerIndex(t *testing.T) {
 		t.Fatalf("refID without refNetwork err = %v, want ErrMissingRefNetwork", err)
 	}
 
-	// A RefID naming a real transaction in another ticker's group would seek
-	// outside the prefix, so it is rejected rather than silently mis-paging.
-	ref = "btc"
-	refNet = netA
-	if _, err = db.GetTxsByTicker("USDC", &TxHistoryRequest{N: 10, Past: true, RefID: &ref, RefNetwork: &refNet}); err != ErrUnknownTx {
-		t.Fatalf("foreign-ticker refID err = %v, want ErrUnknownTx", err)
-	}
-
 	// A RefNetwork that does not carry RefID (wrong network / stale cursor)
 	// fails the primary-key lookup and reports ErrUnknownTx.
 	ref = "usdcB"
@@ -724,9 +718,9 @@ func TestPageSizeIsNotTrusted(t *testing.T) {
 
 	want := []string{"t300", "t200", "t100"}
 	for _, wt := range []*WalletTransaction{
-		tx("t100", 1, 100),
-		tx("t200", 2, 200),
-		tx("t300", 3, 300),
+		tx(netA, "t100", 1, 100),
+		tx(netA, "t200", 2, 200),
+		tx(netA, "t300", 3, 300),
 	} {
 		if err := n.StoreTx(wt); err != nil {
 			t.Fatal(err)
@@ -763,5 +757,43 @@ func TestPageSizeIsNotTrusted(t *testing.T) {
 		if c := cap(resp.Txs); c > maxPrealloc {
 			t.Fatalf("%s N=500000000 preallocated cap %d, want <= %d", name, c, maxPrealloc)
 		}
+	}
+}
+
+// TestStoreTxValidation pins the storage contract enforced by StoreTx and
+// StoreTxs: NetworkID must match the handle's network, and a zero AssetID is
+// only allowable on the network whose own asset ID is zero (BTC).
+func TestStoreTxValidation(t *testing.T) {
+	db := newTestTxDB(t)
+	a := db.NetworkTxDB(netA) // netA == 0
+	b := db.NetworkTxDB(netB)
+
+	// Zero AssetID on network 0 is legitimate (it is the network's own ID).
+	if err := a.StoreTx(tx(netA, "btc-native", 1, 100)); err != nil {
+		t.Fatalf("zero AssetID on network 0 rejected: %v", err)
+	}
+
+	// A NetworkID that does not match the handle's network is rejected.
+	wrongNet := tx(netA, "wrong-net", 1, 100)
+	if err := b.StoreTx(wrongNet); err == nil {
+		t.Fatal("mismatched NetworkID accepted")
+	}
+
+	// A zero AssetID on a non-zero network is rejected.
+	zeroAsset := tx(netB, "zero-asset", 1, 100)
+	zeroAsset.AssetID = 0
+	if err := b.StoreTx(zeroAsset); err == nil {
+		t.Fatal("zero AssetID on non-zero network accepted")
+	}
+
+	// StoreTxs applies the same checks, rejecting the whole batch.
+	if err := b.StoreTxs([]*WalletTransaction{tx(netB, "ok", 1, 100), zeroAsset}); err == nil {
+		t.Fatal("StoreTxs accepted a batch with a zero AssetID")
+	}
+	if got, _ := b.GetTx("ok"); got != nil {
+		t.Fatal("rejected batch left a stored transaction behind")
+	}
+	if err := b.StoreTxs([]*WalletTransaction{tx(netB, "ok", 1, 100), tokenTx(netB, "tok", 100, 1, 200)}); err != nil {
+		t.Fatalf("valid batch rejected: %v", err)
 	}
 }

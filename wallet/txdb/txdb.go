@@ -22,6 +22,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
+	"github.com/bisoncraft/caribou/util/kvstore"
 	"github.com/bisoncraft/caribou/util/kvstore/engine"
 )
 
@@ -44,10 +45,7 @@ const (
 	pendingIndexName      = "pending"
 	assetPendingIndexName = "assetPending"
 	finalityIndexName     = "finality"
-
-	// metaLen is the fixed-width index metadata stored as the third push of a
-	// record: network(4) || assetID(4) || effTime(8) || flags(1).
-	metaLen = 4 + 4 + 8 + 1
+	txTypeIndexName       = "txType"
 
 	flagPending   byte = 1 << 0 // !Confirmed (unconfirmed; needs monitoring)
 	flagConfirmed byte = 1 << 1 // finalized
@@ -96,6 +94,7 @@ type TxDB struct {
 	pendingIndex      StoreIndex
 	assetPendingIndex StoreIndex
 	finalityIndex     StoreIndex
+	txTypeIndex       StoreIndex
 }
 
 // SetTickerResolver installs the asset-ID-to-ticker-group resolver used to
@@ -143,6 +142,7 @@ func newTxDB(store Store, log util.Logger) (*TxDB, error) {
 		{pendingIndexName, indexPending, &db.pendingIndex},
 		{assetPendingIndexName, indexAssetPending, &db.assetPendingIndex},
 		{finalityIndexName, indexFinality, &db.finalityIndex},
+		{txTypeIndexName, indexTxType, &db.txTypeIndex},
 	} {
 		idx, err := txs.AddIndex(spec.name, spec.f)
 		if err != nil {
@@ -197,10 +197,6 @@ type txRecord struct {
 }
 
 func newTxRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker string) *txRecord {
-	assetID := network
-	if wt.TokenID != nil {
-		assetID = *wt.TokenID
-	}
 	var flags byte
 	if !wt.Confirmed {
 		// Pending means "not yet finalized, still needs monitoring", matching
@@ -215,7 +211,7 @@ func newTxRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker s
 	return &txRecord{
 		wt:      wt,
 		network: network,
-		assetID: assetID,
+		assetID: wt.AssetID,
 		effTime: effTime,
 		flags:   flags,
 		ticker:  ticker,
@@ -226,85 +222,40 @@ func newTxRecord(wt *WalletTransaction, network uint32, effTime uint64, ticker s
 //
 //	push0: JSON(WalletTransaction)   (RawTx excluded via json:"-")
 //	push1: WalletTransaction.RawTx   (opaque network blob)
-//	push2: meta                      (network||assetID||effTime||flags)
-//	push3: ticker                    (ticker group, "" when unresolved)
+//
+// No index metadata is stored: index entries are derived from the typed
+// record at write time, seek cursors are resolved through StoreIndex.Seeker,
+// and read paths recover network and asset attribution from the
+// transaction's own NetworkID and AssetID fields.
 func (r *txRecord) MarshalBinary() ([]byte, error) {
-	meta := make([]byte, metaLen)
-	binary.BigEndian.PutUint32(meta[0:], r.network)
-	binary.BigEndian.PutUint32(meta[4:], r.assetID)
-	binary.BigEndian.PutUint64(meta[8:], r.effTime)
-	meta[16] = r.flags
-
 	js, err := json.Marshal(r.wt)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling transaction: %w", err)
 	}
-	return encode.BuildyBytes{recordVersion}.AddData(js).AddData(r.wt.RawTx).AddData(meta).AddData([]byte(r.ticker)), nil
+	return encode.BuildyBytes{recordVersion}.AddData(js).AddData(r.wt.RawTx), nil
 }
 
-// decodeRecord decodes a stored record into a WalletTransaction (with RawTx
-// restored) and returns the network the transaction belongs to.
-func decodeRecord(b []byte) (*WalletTransaction, uint32, error) {
+// decodeRecord decodes a stored record into a WalletTransaction with RawTx
+// restored.
+func decodeRecord(b []byte) (*WalletTransaction, error) {
 	ver, pushes, err := encode.DecodeBlob(b)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error decoding record: %w", err)
+		return nil, fmt.Errorf("error decoding record: %w", err)
 	}
 	if ver != recordVersion {
-		return nil, 0, fmt.Errorf("unknown record version %d", ver)
+		return nil, fmt.Errorf("unknown record version %d", ver)
 	}
-	if len(pushes) < 3 {
-		return nil, 0, fmt.Errorf("record has %d pushes, need 3", len(pushes))
+	if len(pushes) < 2 {
+		return nil, fmt.Errorf("record has %d pushes, need 2", len(pushes))
 	}
 	wt := new(WalletTransaction)
 	if err := json.Unmarshal(pushes[0], wt); err != nil {
-		return nil, 0, fmt.Errorf("error unmarshaling transaction: %w", err)
+		return nil, fmt.Errorf("error unmarshaling transaction: %w", err)
 	}
 	if len(pushes[1]) > 0 {
 		wt.RawTx = append([]byte(nil), pushes[1]...)
 	}
-	meta := pushes[2]
-	if len(meta) < metaLen {
-		return nil, 0, fmt.Errorf("record meta too short: %d", len(meta))
-	}
-	return wt, binary.BigEndian.Uint32(meta[0:4]), nil
-}
-
-// recordTicker extracts the ticker push from a stored record without
-// unmarshaling the (heavier) JSON body. The push is always present
-// (MarshalBinary emits it unconditionally, empty when no resolver is set), so
-// a record without it is malformed. Used on read paths that resolve a RefID's
-// stored record to an index-seek position.
-func recordTicker(b []byte) (string, error) {
-	_, pushes, err := encode.DecodeBlob(b)
-	if err != nil {
-		return "", err
-	}
-	if len(pushes) < 4 {
-		return "", fmt.Errorf("record has %d pushes, need 4", len(pushes))
-	}
-	return string(pushes[3]), nil
-}
-
-// recordMeta extracts the fixed-width metadata from a stored record without
-// unmarshaling the (heavier) JSON body. Used on read paths that resolve a
-// RefID's stored record to an index-seek position.
-func recordMeta(b []byte) (network, assetID uint32, effTime uint64, flags byte, err error) {
-	_, pushes, err := encode.DecodeBlob(b)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	if len(pushes) < 3 {
-		return 0, 0, 0, 0, fmt.Errorf("record has %d pushes, need 3", len(pushes))
-	}
-	meta := pushes[2]
-	if len(meta) < metaLen {
-		return 0, 0, 0, 0, fmt.Errorf("record meta too short: %d", len(meta))
-	}
-	network = binary.BigEndian.Uint32(meta[0:4])
-	assetID = binary.BigEndian.Uint32(meta[4:8])
-	effTime = binary.BigEndian.Uint64(meta[8:16])
-	flags = meta[16]
-	return
+	return wt, nil
 }
 
 // --- agnostic index functions -------------------------------------------------
@@ -454,6 +405,16 @@ func indexFinality(_, vI KV) ([]byte, error) {
 	return e, nil
 }
 
+func indexTxType(_, vI KV) ([]byte, error) {
+	rec, err := txRecordV(vI)
+	if err != nil {
+		return nil, err
+	}
+	e := make([]byte, 2)
+	binary.BigEndian.PutUint16(e, uint16(rec.wt.Type))
+	return e, nil
+}
+
 // --- network-scoped operations (used by networkTxDB) -------------------------
 
 func txKey(network uint32, id string) []byte {
@@ -462,21 +423,17 @@ func txKey(network uint32, id string) []byte {
 
 // tickerFor resolves the ticker group for a transaction via the injected
 // resolver, or "" when none is set. The resolver keys on the transaction's
-// asset: its token ID for token transfers, else the network's native asset.
-func (db *TxDB) tickerFor(wt *WalletTransaction, network uint32) string {
+// AssetID.
+func (db *TxDB) tickerFor(wt *WalletTransaction) string {
 	if db.assetTicker == nil {
 		return ""
 	}
-	assetID := network
-	if wt.TokenID != nil {
-		assetID = *wt.TokenID
-	}
-	return db.assetTicker(assetID)
+	return db.assetTicker(wt.AssetID)
 }
 
 func (db *TxDB) storeTx(network uint32, wt *WalletTransaction) error {
 	effTime := effectiveTime(wt, uint64(time.Now().Unix()))
-	rec := newTxRecord(wt, network, effTime, db.tickerFor(wt, network))
+	rec := newTxRecord(wt, network, effTime, db.tickerFor(wt))
 	return db.txs.Set(txKey(network, wt.ID), rec, WithReplace())
 }
 
@@ -490,7 +447,7 @@ func (db *TxDB) storeTxs(network uint32, wts []*WalletTransaction) error {
 	now := uint64(time.Now().Unix())
 	entries := make([]BatchEntry, len(wts))
 	for i, wt := range wts {
-		rec := newTxRecord(wt, network, effectiveTime(wt, now), db.tickerFor(wt, network))
+		rec := newTxRecord(wt, network, effectiveTime(wt, now), db.tickerFor(wt))
 		entries[i] = BatchEntry{K: txKey(network, wt.ID), V: rec}
 	}
 	return db.txs.SetBatch(entries, WithReplace())
@@ -504,8 +461,7 @@ func (db *TxDB) getTx(network uint32, id string) (*WalletTransaction, error) {
 		}
 		return nil, err
 	}
-	wt, _, err := decodeRecord(raw)
-	return wt, err
+	return decodeRecord(raw)
 }
 
 func (db *TxDB) removeTx(network uint32, id string) error {
@@ -529,52 +485,47 @@ func iterOpts(reverse bool, seek []byte) []IterationOption {
 	return opts
 }
 
-func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryResponse, error) {
+func (db *TxDB) getTxs(idx StoreIndex, prefix kvstore.KV, seekKey []byte, req *TxHistoryRequest) (*TxHistoryResponse, error) {
 	n := req.N
-	prefix := encode.Uint32Bytes(network)
 	reverse := req.Past || req.RefID == nil
-
-	var seek []byte
-	if req.RefID != nil {
-		raw, err := db.txs.Get(txKey(network, *req.RefID))
-		if err != nil {
-			if errors.Is(err, ErrKeyNotFound) {
-				return nil, ErrUnknownTx
-			}
-			return nil, err
-		}
-		_, _, effTime, _, err := recordMeta(raw)
-		if err != nil {
-			return nil, err
-		}
-		// Seek to the exact networkTime index entry for this tx:
-		// network(4) || effTime(8) || id. Including the id makes the cursor
-		// unambiguous when several txs share an effective time (e.g. an
-		// approve + initiate in the same block); a network||effTime-only seek
-		// would land on the first sibling at that time and mis-page.
-		id := []byte(*req.RefID)
-		seek = make([]byte, 12+len(id))
-		binary.BigEndian.PutUint32(seek[0:], network)
-		binary.BigEndian.PutUint64(seek[4:], effTime)
-		copy(seek[12:], id)
-	}
 
 	txs := PreallocTxs(n)
 	var moreAvailable bool
 	ignore := req.IngoreTypesLookup()
 
-	err := db.networkTimeIndex.Iterate(prefix, func(it StoreIter) error {
-		wt, err := decodeIter(it)
+	var seek []byte
+	if len(seekKey) > 0 {
+		var err error
+		seek, err = idx.Seeker(seekKey)
 		if err != nil {
-			return err
+			if errors.Is(err, ErrKeyNotFound) {
+				return nil, ErrUnknownTx
+			}
+			return nil, fmt.Errorf("error getting seeker for key %v: %w", seekKey, err)
 		}
-		if ignore[wt.Type] {
-			return nil
-		}
+	}
+
+	err := idx.Iterate(prefix, func(it StoreIter) error {
 		if n > 0 && len(txs) == n {
 			moreAvailable = true
 			return ErrEndIteration
 		}
+
+		if len(ignore) > 0 {
+			txTypeB, err := it.CrossIndex(txTypeIndexName)
+			if err != nil {
+				return err
+			}
+			if ignore[TransactionType(binary.BigEndian.Uint16(txTypeB))] {
+				return nil
+			}
+		}
+
+		wt, err := decodeIter(it)
+		if err != nil {
+			return fmt.Errorf("failed to decode wallet transaction: %w", err)
+		}
+
 		txs = append(txs, wt)
 		return nil
 	}, iterOpts(reverse, seek)...)
@@ -584,63 +535,26 @@ func (db *TxDB) getTxs(network uint32, req *TxHistoryRequest) (*TxHistoryRespons
 	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
 }
 
+func (db *TxDB) getNetworkTxs(network uint32, req *TxHistoryRequest) (*TxHistoryResponse, error) {
+	prefix := encode.Uint32Bytes(network)
+	var seekKey []byte
+	if req.RefID != nil {
+		seekKey = txKey(network, *req.RefID)
+	}
+	return db.getTxs(db.networkTimeIndex, prefix, seekKey, req)
+}
+
 // getAssetTxs is like getTxs, but scoped to a single asset (assetID) within
 // network rather than every transaction in the network. network is only
 // needed to resolve a RefID to its primary-key record; the actual scan uses
 // assetTimeIndex, scoped by assetID.
 func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*TxHistoryResponse, error) {
-	n := req.N
 	prefix := encode.Uint32Bytes(assetID)
-	reverse := req.Past || req.RefID == nil
-
-	var seek []byte
+	var seekKey []byte
 	if req.RefID != nil {
-		k := txKey(network, *req.RefID)
-		raw, err := db.txs.Get(k)
-		if err != nil {
-			if errors.Is(err, ErrKeyNotFound) {
-				return nil, ErrUnknownTx
-			}
-			return nil, err
-		}
-		_, refAssetID, effTime, _, err := recordMeta(raw)
-		if err != nil {
-			return nil, err
-		}
-		if refAssetID != assetID {
-			return nil, fmt.Errorf("reference transaction belongs to asset %d, not %d", refAssetID, assetID)
-		}
-		// Seek to the exact assetTime index entry for this tx:
-		// assetID(4) || effTime(8) || k.
-		seek = make([]byte, 12+len(k))
-		binary.BigEndian.PutUint32(seek[0:], assetID)
-		binary.BigEndian.PutUint64(seek[4:], effTime)
-		copy(seek[12:], k)
+		seekKey = txKey(network, *req.RefID)
 	}
-
-	txs := PreallocTxs(n)
-	var moreAvailable bool
-	ignore := req.IngoreTypesLookup()
-
-	err := db.assetTimeIndex.Iterate(prefix, func(it StoreIter) error {
-		wt, err := decodeIter(it)
-		if err != nil {
-			return err
-		}
-		if ignore[wt.Type] {
-			return nil
-		}
-		if n > 0 && len(txs) == n {
-			moreAvailable = true
-			return ErrEndIteration
-		}
-		txs = append(txs, wt)
-		return nil
-	}, iterOpts(reverse, seek)...)
-	if err != nil {
-		return nil, err
-	}
-	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
+	return db.getTxs(db.assetTimeIndex, prefix, seekKey, req)
 }
 
 // GetTxsByTicker returns transaction history for a ticker group across all of
@@ -657,79 +571,18 @@ func (db *TxDB) getAssetTxs(network, assetID uint32, req *TxHistoryRequest) (*Tx
 // a direct bounded scan. A RefID that names no transaction, or one outside this
 // ticker's group, returns ErrUnknownTx, matching getTxs.
 //
-// Each returned transaction has its AssetID populated, since a merged
-// cross-network result would otherwise leave native transactions (no TokenID)
-// unattributable to a network.
+// Every stored transaction carries its own NetworkID and AssetID, so a merged
+// cross-network result needs no per-read attribution.
 func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistoryResponse, error) {
-	if ticker == "" {
-		return &TxHistoryResponse{}, nil
-	}
-	n := req.N
 	prefix := append([]byte(ticker), 0x00)
-	reverse := req.Past || req.RefID == nil
-
-	var seek []byte
+	var seekKey []byte
 	if req.RefID != nil {
 		if req.RefNetwork == nil {
 			return nil, ErrMissingRefNetwork
 		}
-		raw, err := db.txs.Get(txKey(*req.RefNetwork, *req.RefID))
-		if err != nil {
-			if errors.Is(err, ErrKeyNotFound) {
-				return nil, ErrUnknownTx
-			}
-			return nil, err
-		}
-		// The record exists on RefNetwork, but a seek built from a tx in another
-		// ticker's group would land outside the prefix and silently yield a
-		// wrong page, so bind the cursor to the group being queried.
-		refTicker, err := recordTicker(raw)
-		if err != nil {
-			return nil, err
-		}
-		if refTicker != ticker {
-			return nil, ErrUnknownTx
-		}
-		_, _, effTime, _, err := recordMeta(raw)
-		if err != nil {
-			return nil, err
-		}
-		id := []byte(*req.RefID)
-		seek = make([]byte, len(ticker)+1+8+len(id))
-		copy(seek, ticker)
-		seek[len(ticker)] = 0x00
-		binary.BigEndian.PutUint64(seek[len(ticker)+1:], effTime)
-		copy(seek[len(ticker)+9:], id)
+		seekKey = txKey(*req.RefNetwork, *req.RefID)
 	}
-
-	txs := PreallocTxs(n)
-	var moreAvailable bool
-	ignore := req.IngoreTypesLookup()
-
-	err := db.tickerTimeIndex.Iterate(prefix, func(it StoreIter) error {
-		wt, network, err := decodeIterWithNetwork(it)
-		if err != nil {
-			return err
-		}
-		if ignore[wt.Type] {
-			return nil
-		}
-		if n > 0 && len(txs) == n {
-			moreAvailable = true
-			return ErrEndIteration
-		}
-		assetID := network
-		if wt.TokenID != nil {
-			assetID = *wt.TokenID
-		}
-		wt.AssetID = &assetID
-		txs = append(txs, wt)
-		return nil
-	}, iterOpts(reverse, seek)...)
-	if err != nil {
-		return nil, err
-	}
-	return &TxHistoryResponse{Txs: txs, MoreAvailable: moreAvailable}, nil
+	return db.getTxs(db.tickerTimeIndex, prefix, seekKey, req)
 }
 
 // getAssetPendingTxs is like getPendingTxs, but scoped to a single asset
@@ -772,18 +625,13 @@ func (db *TxDB) getPendingTxs(network uint32) ([]*WalletTransaction, error) {
 }
 
 // decodeIter decodes the record at the iterator's current entry.
-func decodeIter(it StoreIter) (*WalletTransaction, error) {
-	wt, _, err := decodeIterWithNetwork(it)
-	return wt, err
-}
-
-func decodeIterWithNetwork(it StoreIter) (wt *WalletTransaction, network uint32, err error) {
+func decodeIter(it StoreIter) (wt *WalletTransaction, err error) {
 	verr := it.V(func(b []byte) error {
-		wt, network, err = decodeRecord(b)
+		wt, err = decodeRecord(b)
 		return err
 	})
 	if verr != nil {
-		return nil, 0, verr
+		return nil, verr
 	}
-	return wt, network, err
+	return wt, err
 }
