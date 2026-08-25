@@ -41,6 +41,10 @@ func parseCoinpapNameSymbol(name, symbol string) (string, string) {
 		// Coinpaprika's ID is "xrp-xrp", not "xrp-ripple" — it dropped the
 		// issuing company's name from the slug some time ago.
 		name = "xrp"
+	case "hyperevm":
+		// HyperEVM's native asset is HYPE, the same token hyperliquid
+		// resolves to.
+		symbol, name = "hype", "hyperliquid"
 	case "bnb":
 		name = "binance-coin"
 	case "polygon":

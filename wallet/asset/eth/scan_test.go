@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -174,12 +175,15 @@ func TestScanERC20FailureDoesNotAdvanceCursorOrBlockNative(t *testing.T) {
 		t.Fatalf("expected erc20 cursor to stay at 50 after a scan error, got %d", erc20Last)
 	}
 
+	// Cursors seed at tip - finalizeConfs, not the raw tip: scanning any
+	// closer to the tip would let a reorg leave a phantom Receive behind.
+	safeTip := uint64(60) - eth.finalizeConfs
 	nativeLast, err := eth.getLastScannedBlock()
 	if err != nil {
 		t.Fatalf("getLastScannedBlock: %v", err)
 	}
-	if nativeLast != 60 {
-		t.Fatalf("expected native cursor to seed at tip 60 despite the erc20 failure, got %d", nativeLast)
+	if nativeLast != safeTip {
+		t.Fatalf("expected native cursor to seed at tip-finalizeConfs %d despite the erc20 failure, got %d", safeTip, nativeLast)
 	}
 }
 
@@ -220,12 +224,14 @@ func TestScanERC20BackoffPreventsHammering(t *testing.T) {
 	if node.filterLogsCalls != 2 {
 		t.Fatalf("expected scanning to resume after the backoff expired, got %d total filterLogs calls", node.filterLogsCalls)
 	}
+	// The scan only ever advances to tip - finalizeConfs, not the raw tip.
+	safeTip := uint64(60) - eth.finalizeConfs
 	erc20Last, err := eth.getLastScannedERC20Block()
 	if err != nil {
 		t.Fatalf("getLastScannedERC20Block: %v", err)
 	}
-	if erc20Last != 60 {
-		t.Fatalf("expected erc20 cursor to advance to 60 after recovering, got %d", erc20Last)
+	if erc20Last != safeTip {
+		t.Fatalf("expected erc20 cursor to advance to tip-finalizeConfs %d after recovering, got %d", safeTip, erc20Last)
 	}
 }
 
@@ -239,19 +245,21 @@ func TestScanFirstRunSeedsCursorAtTip(t *testing.T) {
 
 	eth.scanIncomingTransfersTick(context.Background())
 
+	// Cursors seed at tip - finalizeConfs, not the raw tip.
+	safeTip := uint64(1000) - eth.finalizeConfs
 	last, err := eth.getLastScannedBlock()
 	if err != nil {
 		t.Fatalf("getLastScannedBlock: %v", err)
 	}
-	if last != 1000 {
-		t.Fatalf("expected native cursor to seed at tip 1000, got %d", last)
+	if last != safeTip {
+		t.Fatalf("expected native cursor to seed at tip-finalizeConfs %d, got %d", safeTip, last)
 	}
 	erc20Last, err := eth.getLastScannedERC20Block()
 	if err != nil {
 		t.Fatalf("getLastScannedERC20Block: %v", err)
 	}
-	if erc20Last != 1000 {
-		t.Fatalf("expected erc20 cursor to seed at tip 1000, got %d", erc20Last)
+	if erc20Last != safeTip {
+		t.Fatalf("expected erc20 cursor to seed at tip-finalizeConfs %d, got %d", safeTip, erc20Last)
 	}
 	node := eth.node.(*tMempoolNode)
 	if node.filterLogsCalls != 0 || node.blockByNumCalls != 0 {
@@ -539,5 +547,257 @@ func TestScanERC20MultiTokenSameTxNotDropped(t *testing.T) {
 	}
 	if !amounts[500] || !amounts[700] {
 		t.Fatalf("expected both amounts 500 and 700 stored, got %+v", db.storedTxs)
+	}
+}
+
+// TestScanNativeBaselinePinnedToScanTo is the regression test for a real bug:
+// the balance-diff baseline used to be read at the requested range end (to),
+// but when the range is capped by maxScanBodies only blocks up to scanTo are
+// actually looked at. Pinning the baseline to to let it silently absorb a
+// balance change from a block this call never scanned.
+func TestScanNativeBaselinePinnedToScanTo(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	node := eth.node.(*tMempoolNode)
+	node.blocks = make(map[uint64]*types.Block)
+	for n := uint64(1); n <= maxScanBodies; n++ {
+		node.blocks[n] = types.NewBlockWithHeader(&types.Header{Number: new(big.Int).SetUint64(n)})
+	}
+	node.balAt = map[uint64]*big.Int{
+		maxScanBodies: big.NewInt(1000), // scanTo: the block actually covered
+		1000:          big.NewInt(1500), // to: the requested (uncovered) range end
+	}
+
+	covered, err := eth.scanNativeReceives(context.Background(), 1, 1000)
+	if err != nil {
+		t.Fatalf("scanNativeReceives: %v", err)
+	}
+	if covered != maxScanBodies {
+		t.Fatalf("expected covered = %d, got %d", maxScanBodies, covered)
+	}
+	if eth.lastScanBalance == nil || eth.lastScanBalance.Cmp(big.NewInt(1000)) != 0 {
+		t.Fatalf("expected baseline pinned to the balance at scanTo (1000), got %v", eth.lastScanBalance)
+	}
+}
+
+// TestScanNativeUnchangedCoversFullRequestedRange is the regression test for
+// a real bug introduced while fixing the baseline-pinning issue above: the
+// unchanged-balance fast path was accidentally capped to scanTo (at most
+// maxScanBodies blocks) instead of covering the full requested range - an
+// unchanged balance at to proves nothing arrived anywhere in from..to, so
+// the whole range should be retired in one tick without fetching any
+// bodies, even when it's wider than maxScanBodies.
+func TestScanNativeUnchangedCoversFullRequestedRange(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	node := eth.node.(*tMempoolNode)
+	node.bal = big.NewInt(1000) // constant, so addressBalanceAt returns 1000 for any block
+	eth.lastScanBalance = big.NewInt(1000)
+
+	const to = 1000 // far wider than maxScanBodies
+	covered, err := eth.scanNativeReceives(context.Background(), 1, to)
+	if err != nil {
+		t.Fatalf("scanNativeReceives: %v", err)
+	}
+	if covered != to {
+		t.Fatalf("expected the unchanged range to be fully retired at %d, got %d", to, covered)
+	}
+	if node.blockByNumCalls != 0 {
+		t.Fatalf("expected no block fetches on the unchanged path, got %d", node.blockByNumCalls)
+	}
+}
+
+// TestScanNativeConvergesAcrossTicks is the regression test for the
+// permanent-loss bug: with the baseline pinned to the uncovered range end, a
+// receive in the truncated tail would look "unchanged" on the following tick
+// (since the tip balance had already been absorbed into the first tick's
+// baseline) and be skipped forever instead of being picked up once the
+// cursor reaches it.
+func TestScanNativeConvergesAcrossTicks(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	toAddr := eth.addr
+	tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
+		Nonce: 1, Value: big.NewInt(500), Gas: 50_000, To: &toAddr,
+		ChainID: eth.node.chainConfig().ChainID,
+	}), signer, eth.node.(*tMempoolNode).privKey)
+	if err != nil {
+		t.Fatalf("SignTx: %v", err)
+	}
+
+	node := eth.node.(*tMempoolNode)
+	node.blocks = make(map[uint64]*types.Block)
+	for n := uint64(1); n <= 2*maxScanBodies; n++ {
+		node.blocks[n] = types.NewBlockWithHeader(&types.Header{Number: new(big.Int).SetUint64(n)})
+	}
+	// The receive lands in the second tick's range (17-32), not the first
+	// (1-16).
+	const receiveBlock = 20
+	node.blocks[receiveBlock] = types.NewBlockWithHeader(&types.Header{Number: big.NewInt(receiveBlock)}).
+		WithBody(types.Body{Transactions: []*types.Transaction{tx}})
+	node.balAt = map[uint64]*big.Int{
+		maxScanBodies:     big.NewInt(1000), // scanTo of tick 1: balance before the receive
+		2 * maxScanBodies: big.NewInt(1500), // scanTo of tick 2: balance after the receive
+	}
+	node.bal = big.NewInt(1500) // fallback used by w.balance() after storing a receive
+
+	// Tick 1: covers 1-16, no receive there.
+	covered, err := eth.scanNativeReceives(context.Background(), 1, 1000)
+	if err != nil {
+		t.Fatalf("scanNativeReceives (tick 1): %v", err)
+	}
+	if covered != maxScanBodies {
+		t.Fatalf("expected tick 1 to cover %d, got %d", maxScanBodies, covered)
+	}
+
+	// Tick 2: covers 17-32, where the receive is.
+	covered, err = eth.scanNativeReceives(context.Background(), covered+1, 1000)
+	if err != nil {
+		t.Fatalf("scanNativeReceives (tick 2): %v", err)
+	}
+	if covered != 2*maxScanBodies {
+		t.Fatalf("expected tick 2 to cover %d, got %d", 2*maxScanBodies, covered)
+	}
+
+	db := eth.txDB.(*tTxDB)
+	if !db.storeTxCalled {
+		t.Fatal("expected the receive in the truncated tail to be found on the following tick")
+	}
+	if db.storedTx.ID != tx.Hash().String() {
+		t.Fatalf("wrong ID: %s", db.storedTx.ID)
+	}
+}
+
+// TestScanNativeBodyFetchFailureClearsBaseline is the regression test for a
+// real bug: on a body-fetch failure partway through a range, the baseline had
+// already been advanced to the balance at scanTo even though the cursor
+// rewinds to before it - so a later tick could compare against a baseline
+// that already accounts for blocks it hasn't actually scanned yet.
+func TestScanNativeBodyFetchFailureClearsBaseline(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	node := eth.node.(*tMempoolNode)
+	node.bal = big.NewInt(1000)
+	eth.lastScanBalance = big.NewInt(0) // force the "changed" path
+	// Blocks 11..13 exist; 14 does not, so the fetch loop fails there.
+	node.blocks = map[uint64]*types.Block{
+		11: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(11)}),
+		12: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(12)}),
+		13: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(13)}),
+	}
+
+	covered, err := eth.scanNativeReceives(context.Background(), 11, 20)
+	if err == nil {
+		t.Fatal("expected an error from the missing block")
+	}
+	if covered != 13 {
+		t.Fatalf("expected covered = 13, got %d", covered)
+	}
+	if eth.lastScanBalance != nil {
+		t.Fatalf("expected the baseline to be cleared on a body-fetch failure, got %v", eth.lastScanBalance)
+	}
+}
+
+// TestScanNativeReceiveSetsTimestampAndNote covers two real bugs together:
+// a detected receive was stored with Timestamp 0 (a sentinel the frontend
+// treats as "pending, sort to top"), and no transaction note was emitted, so
+// the receive didn't show in the activity list until reload.
+func TestScanNativeReceiveSetsTimestampAndNote(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	notes := make(chan asset.WalletNotification, 4)
+	eth.emit = asset.NewWalletEmitter(notes, BipID, tLogger)
+	eth.wallets[BipID] = eth.assetWallet
+
+	toAddr := eth.addr
+	const blockTime = 1_700_000_000
+	tx, err := types.SignTx(types.NewTx(&types.DynamicFeeTx{
+		Nonce: 1, Value: big.NewInt(1000), Gas: 50_000, To: &toAddr,
+		ChainID: eth.node.chainConfig().ChainID,
+	}), signer, eth.node.(*tMempoolNode).privKey)
+	if err != nil {
+		t.Fatalf("SignTx: %v", err)
+	}
+	header := &types.Header{Number: big.NewInt(5), Time: blockTime}
+	block := types.NewBlockWithHeader(header).WithBody(types.Body{Transactions: []*types.Transaction{tx}})
+	node := eth.node.(*tMempoolNode)
+	node.blocks = map[uint64]*types.Block{5: block}
+	node.bal = big.NewInt(9999)
+
+	if _, err := eth.scanNativeReceives(context.Background(), 5, 5); err != nil {
+		t.Fatalf("scanNativeReceives: %v", err)
+	}
+
+	db := eth.txDB.(*tTxDB)
+	if !db.storeTxCalled {
+		t.Fatal("expected a tx to be stored")
+	}
+	if db.storedTx.Timestamp != blockTime {
+		t.Fatalf("expected Timestamp %d, got %d", uint64(blockTime), db.storedTx.Timestamp)
+	}
+
+	select {
+	case n := <-notes:
+		if _, ok := n.(*asset.TransactionNote); !ok {
+			t.Fatalf("expected a TransactionNote, got %T", n)
+		}
+	default:
+		t.Fatal("expected a transaction note to be emitted")
+	}
+}
+
+// TestScanERC20ReceiveSetsTimestampAndNote is the token-path counterpart of
+// TestScanNativeReceiveSetsTimestampAndNote.
+func TestScanERC20ReceiveSetsTimestampAndNote(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	notes := make(chan asset.WalletNotification, 4)
+	eth.emit = asset.NewWalletEmitter(notes, BipID, tLogger)
+	eth.wallets[BipID] = eth.assetWallet
+	tokenAw.emit = asset.NewWalletEmitter(notes, tokenAw.assetID, tLogger)
+
+	blockHash := common.HexToHash("0xaa")
+	const blockTime = 1_700_000_000
+	node := eth.node.(*tMempoolNode)
+	node.filterLogsResult = []types.Log{{
+		Address:     tokenAw.tokenAddr,
+		TxHash:      common.HexToHash("0x01"),
+		BlockNumber: 100,
+		BlockHash:   blockHash,
+	}}
+	node.hdrByHash[blockHash] = &types.Header{Time: blockTime}
+	tokenAw.tokenContractor.(*tTokenContractor).parseTransferAmt = 500
+
+	if err := eth.scanERC20Receives(context.Background(), 90, 100, []*assetWallet{tokenAw}); err != nil {
+		t.Fatalf("scanERC20Receives: %v", err)
+	}
+
+	db := eth.txDB.(*tTxDB)
+	if !db.storeTxCalled {
+		t.Fatal("expected a tx to be stored")
+	}
+	if db.storedTx.Timestamp != blockTime {
+		t.Fatalf("expected Timestamp %d, got %d", uint64(blockTime), db.storedTx.Timestamp)
+	}
+
+	select {
+	case n := <-notes:
+		if _, ok := n.(*asset.TransactionNote); !ok {
+			t.Fatalf("expected a TransactionNote, got %T", n)
+		}
+	default:
+		t.Fatal("expected a transaction note to be emitted")
 	}
 }

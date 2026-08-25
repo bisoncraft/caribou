@@ -153,12 +153,21 @@ func (w *ETHWallet) scanIncomingTransfers(ctx context.Context) {
 // failure backoff (see scanNativeTick/scanERC20Tick), so a failure or
 // permanently-unsupported RPC method in one (e.g. a free public provider
 // that doesn't serve eth_getLogs at all) can never block or slow the other.
+//
+// The scan never looks past tip - finalizeConfs: both store paths mark a
+// detected receive Confirmed immediately, and nothing later reconciles a
+// confirmed record, so scanning any closer to the tip would leave a phantom
+// Receive behind if a reorg drops the block it came from.
 func (w *ETHWallet) scanIncomingTransfersTick(ctx context.Context) {
 	tip := w.tip()
 	if tip == nil {
 		return
 	}
 	tipNum := tip.Number.Uint64()
+	if tipNum <= w.finalizeConfs {
+		return
+	}
+	tipNum -= w.finalizeConfs
 
 	w.scanNativeTick(ctx, tipNum)
 
@@ -302,15 +311,31 @@ func (w *ETHWallet) scanERC20Receives(ctx context.Context, from, to uint64, toke
 	// the second one looking like a duplicate of the first and being
 	// dropped. The first log for a tx keeps today's plain-tx-hash ID.
 	seen := make(map[common.Hash]int, len(logs))
+	// blockTimes caches one header lookup per distinct block that actually
+	// contained a matching log, rather than one per log.
+	blockTimes := make(map[common.Hash]uint64, len(logs))
 	for i := range logs {
 		lg := logs[i]
 		aw, found := byAddr[lg.Address]
 		if !found {
 			continue
 		}
+		blockTime, cached := blockTimes[lg.BlockHash]
+		if !cached {
+			hdr, err := w.node.headerByHash(ctx, lg.BlockHash)
+			if err != nil || hdr == nil {
+				// A missing timestamp is cosmetic - it must not stall
+				// detection of the transfer itself.
+				w.log.Warnf("incoming transfer scan: error fetching header %s for erc20 receive timestamp: %v", lg.BlockHash, err)
+				blockTime = uint64(time.Now().Unix())
+			} else {
+				blockTime = hdr.Time
+			}
+			blockTimes[lg.BlockHash] = blockTime
+		}
 		occurrence := seen[lg.TxHash]
 		seen[lg.TxHash] = occurrence + 1
-		if err := w.storeTokenReceive(aw, &lg, receiveLogID(&lg, occurrence)); err != nil {
+		if err := w.storeTokenReceive(aw, &lg, receiveLogID(&lg, occurrence), blockTime); err != nil {
 			w.log.Errorf("incoming transfer scan: error storing erc20 receive %s: %v", lg.TxHash, err)
 			return err
 		}
@@ -334,7 +359,7 @@ func receiveLogID(lg *types.Log, occurrence int) common.Hash {
 // discovered Transfer log, reusing the same decode path as an on-demand
 // lookup (TokenWallet.extractValueFromTransferLog) by wrapping the log in a
 // synthetic receipt.
-func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.Hash) error {
+func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.Hash, blockTime uint64) error {
 	if existing, err := w.txDB.getTx(id); err != nil {
 		return err
 	} else if existing != nil {
@@ -352,6 +377,7 @@ func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.
 			Type:        txdb.Receive,
 			ID:          id.String(),
 			BlockNumber: lg.BlockNumber,
+			Timestamp:   blockTime,
 			TokenID:     &aw.assetID,
 			Amount:      value,
 			Recipient:   &addr,
@@ -363,6 +389,7 @@ func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.
 	}
 	w.log.Infof("Detected incoming token %d transfer %s: %d atoms", aw.assetID, lg.TxHash, value)
 
+	w.emitTransactionNote(wt.WalletTransaction, true)
 	if bal, err := aw.balance(); err == nil {
 		aw.emit.BalanceChange(bal)
 	}
@@ -379,35 +406,47 @@ func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.
 //
 // Block bodies are only fetched when the confirmed balance has changed since
 // the last tick, since a native transfer is the only thing that can change
-// it. That balance is read pinned to block to - the end of the range about
-// to be scanned - rather than the node's "latest", so the delta being
-// compared always corresponds exactly to the range this call is about to
-// cover; reading "latest" (which can already reflect blocks past to on a
-// fast chain) can make an in-range receive look like it happened before the
-// comparison baseline and get skipped as "unchanged". When the range exceeds
-// maxScanBodies, only the oldest blocks in the range are checked in this
-// call - the newest ones are left for a following tick - so a wallet that
-// falls far behind converges over several ticks instead of permanently
-// losing whatever didn't fit in one.
+// it. The unchanged check reads the balance pinned to to - the requested
+// range end - since an unchanged balance there proves nothing arrived
+// anywhere in from..to, letting the whole range (even one wider than
+// maxScanBodies) be retired without fetching a single body. Once a change is
+// found, though, only from..scanTo (the range actually covered when capped
+// by maxScanBodies) is scanned, so the baseline persisted for the next tick
+// must be read again pinned to scanTo rather than to - pinning it to to
+// would let it silently absorb a balance change from a block this call
+// never looked at, so a later tick sees "unchanged" and skips the block
+// containing the receive forever instead of converging onto it on a
+// following tick.
 func (w *ETHWallet) scanNativeReceives(ctx context.Context, from, to uint64) (uint64, error) {
-	bal, err := w.node.addressBalanceAt(ctx, w.addr, new(big.Int).SetUint64(to))
-	if err != nil {
-		return from - 1, err
-	}
-	unchanged := w.lastScanBalance != nil && bal.Cmp(w.lastScanBalance) == 0
-	w.lastScanBalance = bal
-	if unchanged {
-		return to, nil
-	}
-
 	scanTo := to
 	if to-from+1 > maxScanBodies {
 		scanTo = from + maxScanBodies - 1
 	}
 
+	bal, err := w.node.addressBalanceAt(ctx, w.addr, new(big.Int).SetUint64(to))
+	if err != nil {
+		return from - 1, err
+	}
+	if w.lastScanBalance != nil && bal.Cmp(w.lastScanBalance) == 0 {
+		return to, nil
+	}
+
+	if scanTo != to {
+		bal, err = w.node.addressBalanceAt(ctx, w.addr, new(big.Int).SetUint64(scanTo))
+		if err != nil {
+			return from - 1, err
+		}
+	}
+
 	for n := from; n <= scanTo; n++ {
 		block, err := w.node.blockByNumber(ctx, new(big.Int).SetUint64(n))
 		if err != nil {
+			// lastScanBalance is left unset rather than advanced to bal:
+			// the cursor is about to rewind to n-1, but bal describes
+			// scanTo, so pinning it here would let a later tick compare
+			// blocks n..scanTo against a baseline that already accounts
+			// for them and skip a receive among them as "unchanged".
+			w.lastScanBalance = nil
 			return n - 1, err
 		}
 		for _, tx := range block.Transactions() {
@@ -415,18 +454,20 @@ func (w *ETHWallet) scanNativeReceives(ctx context.Context, from, to uint64) (ui
 			if recipient == nil || *recipient != w.addr || tx.Value().Sign() <= 0 {
 				continue
 			}
-			if err := w.storeNativeReceive(tx, block.NumberU64()); err != nil {
+			if err := w.storeNativeReceive(tx, block.NumberU64(), block.Time()); err != nil {
 				w.log.Errorf("incoming transfer scan: error storing native receive %s: %v", tx.Hash(), err)
+				w.lastScanBalance = nil
 				return n - 1, err
 			}
 		}
 	}
+	w.lastScanBalance = bal
 	return scanTo, nil
 }
 
 // storeNativeReceive builds and stores a Receive transaction for a discovered
 // native-value transfer, mirroring ETHWallet.getReceivingTransaction's shape.
-func (w *ETHWallet) storeNativeReceive(tx *types.Transaction, blockNumber uint64) error {
+func (w *ETHWallet) storeNativeReceive(tx *types.Transaction, blockNumber, blockTime uint64) error {
 	if existing, err := w.txDB.getTx(tx.Hash()); err != nil {
 		return err
 	} else if existing != nil {
@@ -439,6 +480,7 @@ func (w *ETHWallet) storeNativeReceive(tx *types.Transaction, blockNumber uint64
 			Type:        txdb.Receive,
 			ID:          tx.Hash().String(),
 			BlockNumber: blockNumber,
+			Timestamp:   blockTime,
 			Amount:      w.atomize(tx.Value()),
 			Recipient:   &addr,
 			Confirmed:   true,
@@ -449,6 +491,7 @@ func (w *ETHWallet) storeNativeReceive(tx *types.Transaction, blockNumber uint64
 	}
 	w.log.Infof("Detected incoming %s transfer %s: %d %s", w.ui.Conventional.Unit, tx.Hash(), wt.Amount, w.ui.AtomicUnit)
 
+	w.emitTransactionNote(wt.WalletTransaction, true)
 	if bal, err := w.balance(); err == nil {
 		w.emit.BalanceChange(bal)
 	}
