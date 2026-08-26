@@ -4,8 +4,13 @@
 package eth
 
 import (
+	"math/big"
 	"slices"
 	"testing"
+
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // TestLimitDefaultProviders pins the provider cap per build. The expectation is
@@ -52,5 +57,52 @@ func TestLimitDefaultProviders(t *testing.T) {
 	}
 	if kept := limitDefaultProviders([]string{}); len(kept) != 0 {
 		t.Fatalf("limited an empty list to %v, want empty", kept)
+	}
+}
+
+// TestNewEVMWalletLimitsDefaultProviders pins the cap's wiring, not its
+// arithmetic. TestLimitDefaultProviders above proves the function trims; this
+// proves NewEVMWallet is still the thing that calls it. Without this, dropping
+// the call at the ETHWallet literal leaves every test in the package green
+// while a phone silently goes back to dialing the full list, which is the whole
+// cost this build tag exists to avoid.
+//
+// The assertion compares against limitDefaultProviders rather than a literal so
+// it holds under both tags. That means a desktop build cannot fail it: there the
+// function is the identity, so a missing call is by definition unobservable. The
+// mobile build is where this bites, and it is the build that matters.
+func TestNewEVMWalletLimitsDefaultProviders(t *testing.T) {
+	full := []string{"one", "two", "three", "four", "five"}
+
+	// The chain packages hand the same package-level slice to every wallet they
+	// construct, so pass a clone and check the original is untouched.
+	input := slices.Clone(full)
+
+	w, err := NewEVMWallet(&EVMWalletConfig{
+		BaseChainID: 60,
+		ChainCfg:    &params.ChainConfig{ChainID: big.NewInt(1)},
+		AssetCfg: &asset.WalletConfig{
+			Type:     walletTypeRPC,
+			Settings: map[string]string{},
+			DataDir:  t.TempDir(),
+		},
+		// A local logger, not the shared tLogger: this file is untagged and so
+		// must build under every tag set, while tLogger lives in a file excluded
+		// by the harness and rpclive builds.
+		Logger:           util.StdOutLogger("PROVIDERSTEST", util.LevelOff),
+		Net:              util.Simnet,
+		DefaultProviders: input,
+	})
+	if err != nil {
+		t.Fatalf("NewEVMWallet: %v", err)
+	}
+
+	want := limitDefaultProviders(full)
+	if !slices.Equal(w.defaultProviders, want) {
+		t.Fatalf("wallet carries %v, want %v — is limitDefaultProviders still called in NewEVMWallet?",
+			w.defaultProviders, want)
+	}
+	if !slices.Equal(input, full) {
+		t.Fatalf("construction mutated the caller's list to %v, want %v", input, full)
 	}
 }

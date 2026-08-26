@@ -302,7 +302,7 @@ func (w *Wallet) Locked() bool {
 }
 
 func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	rpc := newRPCClient(w.rpcEndpoint(), w.wsEndpoint())
+	rpc := newRPCClient(w.rpcEndpoint())
 	var mt txdb.StoreTable
 	if w.txDB != nil {
 		var err error

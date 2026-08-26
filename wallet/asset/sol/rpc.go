@@ -35,11 +35,10 @@ type rpcI interface {
 
 type rpcClient struct {
 	httpURL string
-	wsURL   string
 }
 
-func newRPCClient(httpURL, wsURL string) *rpcClient {
-	return &rpcClient{httpURL: httpURL, wsURL: wsURL}
+func newRPCClient(httpURL string) *rpcClient {
+	return &rpcClient{httpURL: httpURL}
 }
 
 func (c *rpcClient) call(ctx context.Context, method string, params any, result any) error {
