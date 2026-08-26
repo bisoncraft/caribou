@@ -337,6 +337,9 @@ func TestSendNonceWatermarkAndRetry(t *testing.T) {
 		if err := json.Unmarshal(params, &req); err != nil {
 			t.Fatalf("bad query params: %v", err)
 		}
+		if req.RequestType == "view_account" {
+			return map[string]any{"amount": "1000000000000000000000000", "locked": "0", "storage_usage": 182}, nil
+		}
 		if req.RequestType != "view_access_key" {
 			t.Fatalf("unexpected query type %s", req.RequestType)
 		}
@@ -409,7 +412,16 @@ func TestSendExecutionFailure(t *testing.T) {
 	f.handle("gas_price", func(json.RawMessage) (any, *rpcError) {
 		return map[string]any{"gas_price": "100000000"}, nil
 	})
-	f.handle("query", func(json.RawMessage) (any, *rpcError) {
+	f.handle("query", func(params json.RawMessage) (any, *rpcError) {
+		var req struct {
+			RequestType string `json:"request_type"`
+		}
+		if err := json.Unmarshal(params, &req); err != nil {
+			t.Fatalf("bad query params: %v", err)
+		}
+		if req.RequestType == "view_account" {
+			return map[string]any{"amount": "1000000000000000000000000", "locked": "0", "storage_usage": 182}, nil
+		}
 		return map[string]any{"nonce": 41}, nil
 	})
 	f.handle("send_tx", func(json.RawMessage) (any, *rpcError) {
@@ -465,7 +477,16 @@ func TestSendAmbiguousBroadcast(t *testing.T) {
 			f.handle("gas_price", func(json.RawMessage) (any, *rpcError) {
 				return map[string]any{"gas_price": "100000000"}, nil
 			})
-			f.handle("query", func(json.RawMessage) (any, *rpcError) {
+			f.handle("query", func(params json.RawMessage) (any, *rpcError) {
+				var req struct {
+					RequestType string `json:"request_type"`
+				}
+				if err := json.Unmarshal(params, &req); err != nil {
+					t.Fatalf("bad query params: %v", err)
+				}
+				if req.RequestType == "view_account" {
+					return map[string]any{"amount": "1000000000000000000000000", "locked": "0", "storage_usage": 182}, nil
+				}
 				return map[string]any{"nonce": 7}, nil
 			})
 			if tc.register {

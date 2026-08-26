@@ -259,8 +259,13 @@ func TestTokenWalletSendHappyPathRegistersStorage(t *testing.T) {
 			}
 		case "view_access_key":
 			return map[string]any{"nonce": uint64(5), "block_height": uint64(100), "block_hash": "11111111111111111111111111111111111111111"}, nil
+		case "view_account":
+			return map[string]any{"amount": "1000000000000000000000000", "locked": "0", "storage_usage": 182}, nil
 		}
 		return nil, &rpcError{Message: "unexpected query", Code: -1}
+	})
+	m.handle("gas_price", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{"gas_price": "100000000"}, nil
 	})
 	m.handle("send_tx", func(_ json.RawMessage) (any, *rpcError) {
 		return successOutcome("22770000000000000000"), nil
@@ -297,8 +302,13 @@ func TestTokenWalletSendInvalidNonceRetry(t *testing.T) {
 				return map[string]any{"nonce": uint64(15)}, nil
 			}
 			return map[string]any{"nonce": uint64(10)}, nil
+		case "view_account":
+			return map[string]any{"amount": "1000000000000000000000000", "locked": "0", "storage_usage": 182}, nil
 		}
 		return nil, &rpcError{Message: "unexpected query", Code: -1}
+	})
+	m.handle("gas_price", func(json.RawMessage) (any, *rpcError) {
+		return map[string]any{"gas_price": "100000000"}, nil
 	})
 	var sends int
 	m.handle("send_tx", func(_ json.RawMessage) (any, *rpcError) {

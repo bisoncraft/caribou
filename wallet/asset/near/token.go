@@ -283,12 +283,28 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 
 	actions := make([]action, 0, 2)
+	// attachedYocto is the parent-NEAR deposit the transaction spends
+	// (separate from the token amount, which comes out of the token
+	// balance): 1 yoctoNEAR for ft_transfer, plus the storage registration
+	// deposit if the recipient isn't registered yet. sendActions checks it
+	// against the parent account's spendable NEAR, the same guard native
+	// sends get -- without it, an account sitting at its storage floor
+	// would sign, burn a nonce, and fail on-chain with a raw RPC error
+	// instead of asset.ErrInsufficientBalance. gasBudget is this
+	// transaction's actual attached gas, priced into that same check --
+	// a bare transfer's gas would under-reserve a function-call
+	// transaction's fee by orders of magnitude -- and reused below for the
+	// fee estimate if the broadcast outcome is ambiguous.
+	attachedYocto := big.NewInt(ftTransferDepositYocto)
+	gasBudget := int64(ftTransferGas)
 	if !registered {
 		depositArgs, err := json.Marshal(map[string]string{"account_id": address})
 		if err != nil {
 			return nil, fmt.Errorf("error encoding storage_deposit args: %w", err)
 		}
 		actions = append(actions, functionCallAction("storage_deposit", depositArgs, storageDepositGas, standardStorageDepositAmount))
+		attachedYocto = new(big.Int).Add(attachedYocto, standardStorageDepositAmount)
+		gasBudget += storageDepositGas
 	}
 	actions = append(actions, functionCallAction("ft_transfer", amountArgs, ftTransferGas, big.NewInt(ftTransferDepositYocto)))
 
@@ -297,9 +313,10 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		return nil, err
 	}
 
-	// Shared with the native send path: nonce reservation plus a single
-	// fresh-nonce retry on an authoritative InvalidNonce rejection.
-	result, hash, refHeight, err := w.parent.sendActions(w.parent.ctx, rpc, privKey, w.contractID, actions)
+	// Shared with the native send path: nonce reservation, the balance
+	// pre-flight, and a single fresh-nonce retry on an authoritative
+	// InvalidNonce rejection.
+	result, hash, refHeight, err := w.parent.sendActions(w.parent.ctx, rpc, privKey, w.contractID, actions, attachedYocto, gasBudget)
 
 	txID := base58.Encode(hash[:])
 
@@ -336,10 +353,6 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 		fees = result.feeDrops()
 	}
 	if fees == 0 {
-		gasBudget := int64(ftTransferGas)
-		if !registered {
-			gasBudget += storageDepositGas
-		}
 		fees = w.parent.estimateFeeAtGas(gasBudget)
 	}
 

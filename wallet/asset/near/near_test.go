@@ -42,9 +42,14 @@ func TestValidateAddress(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "invalid - too short hex",
+			// Not 64 characters, so this isn't an implicit account -- but
+			// it's still a syntactically valid named top-level account
+			// under NEP-0006 (any lowercase-alphanumeric string 2-64 chars
+			// long qualifies), regardless of it happening to look like a
+			// truncated pubkey hex string.
+			name:    "valid - short string as named account",
 			address: "98793cd91a3f870fb126f66285808c7e",
-			want:    false,
+			want:    true,
 		},
 		{
 			name:    "invalid - bad hex chars",
@@ -57,13 +62,45 @@ func TestValidateAddress(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "invalid - wrong TLD",
+			// NEAR's account ID grammar (NEP-0006) has no required
+			// top-level suffix; any lowercase-alphanumeric dot-separated
+			// name is valid regardless of what follows the last dot.
+			name:    "valid - non-near/testnet suffix",
 			address: "alice.ethereum",
-			want:    false,
+			want:    true,
+		},
+		{
+			// Legacy top-level account registered before NEAR restricted
+			// top-level account creation to .near/.testnet.
+			name:    "valid - legacy top-level account",
+			address: "aurora",
+			want:    true,
 		},
 		{
 			name:    "invalid - uppercase",
 			address: "Alice.near",
+			want:    false,
+		},
+		{
+			name:    "invalid - too short",
+			address: "a",
+			want:    false,
+		},
+		{
+			name:    "invalid - empty account part",
+			address: "alice..near",
+			want:    false,
+		},
+		{
+			name:    "invalid - leading separator",
+			address: "-alice.near",
+			want:    false,
+		},
+		{
+			// hex.DecodeString accepts A-F, but NEAR implicit accounts are
+			// lowercase only.
+			name:    "invalid - uppercase implicit account hex",
+			address: "98793CD91A3F870FB126F66285808C7E094AFCFC4EDA8A970F6648CDF0DBD6DE",
 			want:    false,
 		},
 	}
