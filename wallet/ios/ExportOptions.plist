@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for an App Store / TestFlight build. Consumed by release.sh,
+  which passes it to `xcodebuild -exportArchive`.
+
+  teamID is intentionally NOT set here. release.sh injects it from the
+  DEVELOPMENT_TEAM already resolved out of the build settings, so the team id
+  stays in the git-ignored Caribou/Config/Local.xcconfig and out of the repo,
+  the same rule project.yml follows.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+
+    <!-- Let Xcode create/refresh the App Store provisioning profile rather than
+         committing a profile name that expires in a year. release.sh passes
+         -allowProvisioningUpdates so this can actually reach the portal. -->
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!-- Upload the dSYMs so TestFlight/Organizer can symbolicate crash reports.
+         Worth it here: a crash inside the Go core or monero is otherwise a wall
+         of hex addresses. -->
+    <key>uploadSymbols</key>
+    <true/>
+
+    <!-- Bitcode has been dead since Xcode 14; App Store Connect rejects it. -->
+    <key>uploadBitcode</key>
+    <false/>
+
+    <!-- Do NOT let Xcode thin the Go core's symbols away. -->
+    <key>stripSwiftSymbols</key>
+    <false/>
+
+    <!-- Single-arch (arm64) app, so app thinning has nothing to do. -->
+    <key>thinning</key>
+    <string>&lt;none&gt;</string>
+
+    <!-- Legacy bitcode recompilation; off for the same reason as uploadBitcode.
+         (Export compliance is not set here — it rides along in the archived
+         Info.plist as ITSAppUsesNonExemptEncryption. See the note there.) -->
+    <key>compileBitcode</key>
+    <false/>
+</dict>
+</plist>

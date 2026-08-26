@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Privacy manifest. Apple's upload scanner reads this plus the one in every
+  embedded framework; an undeclared required-reason API comes back as an
+  ITMS-91053 rejection mail after the upload appears to succeed.
+
+  The four categories below are not guesses. They are what `nm -u` actually
+  reports as undefined symbols in the two embedded binaries:
+
+    Mobile.framework  (gomobile-bound Go core)
+        stat, fstat, lstat, mach_absolute_time, clock_gettime, sysctl
+    Monero.framework  (libmonero_wallet2_api_c)
+        stat, fstat, lstat, mach_absolute_time, statfs, sysctl
+
+  Re-run that scan after any bind.sh change that pulls in new native code:
+      nm -u Frameworks/Mobile.xcframework/ios-arm64/Mobile.framework/Mobile
+-->
+<plist version="1.0">
+<dict>
+    <!-- Caribou has no analytics, no ad SDKs, and no backend of its own: it
+         talks only to chain backends the user selects. Nothing is collected
+         about the user, so this array is empty and tracking is false. Keep it
+         that way — adding any telemetry means amending this file AND the
+         App Store Connect privacy questionnaire, which must agree. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!-- BiometricAuth.swift and AppModel.swift persist the biometric
+             enrollment hash and the two idle thresholds. Both are app-private. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+
+        <!-- stat/fstat/lstat, from the Go core's file I/O and monero's wallet
+             cache. Everything touched is inside the app container. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+
+        <!-- mach_absolute_time, from the Go runtime's monotonic clock (and
+             monero's). Used for elapsed time between in-app events, never as
+             a device identifier. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>35F9.1</string>
+            </array>
+        </dict>
+
+        <!-- statfs, from monero checking room before writing wallet cache and
+             blockchain data. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>E174.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

@@ -154,6 +154,77 @@ The native library build (step 1) is the one piece that cannot run from the
 Debian Dockerfile that produces the desktop/Android libs: it needs the Apple SDK.
 It realistically runs in a macOS CI job with Apple credentials.
 
+## Release (TestFlight / App Store)
+
+```sh
+CARIBOU_XMR=1 ./bind.sh
+xcodegen generate --spec project.xmr.yml
+./release.sh --upload
+```
+
+`release.sh` archives the **mainnet** scheme only (testnet/simnet bundle ids are
+not registered for distribution), exports a signed `.ipa`, validates it, and
+uploads. It derives `CFBundleVersion` from the commit count, because App Store
+Connect permanently rejects a build number it has already seen for a given
+`MARKETING_VERSION` — override with `--build N` if you need to.
+
+Credentials come in two flavours, because only the team's **Account Holder** can
+create an App Store Connect API key:
+
+| | Provisioning | Upload |
+|---|---|---|
+| API key (`ASC_KEY_ID` + `ASC_ISSUER_ID`) | ✅ | ✅ |
+| Apple ID signed into Xcode + app-specific password (`APPLE_ID` + `APPLE_PASSWORD`) | ✅ | ✅ |
+
+An Admin who cannot mint an API key uses the second row: sign in once at Xcode →
+Settings → Accounts for provisioning, and generate an app-specific password at
+appleid.apple.com for the upload. Those are the same two variables the desktop
+build already exports for notarytool, and **the same password works** — an
+app-specific password belongs to the Apple ID, not to an app or a team — so a
+shell set up to package the desktop app needs nothing new. (`ASC_APPLE_ID` /
+`ASC_APP_PASSWORD` override them if the two must differ.)
+
+Better still, keep the password out of the environment entirely by storing it in
+the login keychain once — `release.sh` looks there when no password variable is
+set, so only the non-secret `APPLE_ID` need ever be exported:
+
+```sh
+export APPLE_ID=you@example.com
+security add-generic-password -s caribou-appstore -a "$APPLE_ID" -w
+```
+
+`-w` with no value prompts without echoing, so the password stays out of shell
+history and out of `ps` for the whole process tree.
+
+If the Apple ID belongs to more than one team, also set `ASC_PROVIDER` to the
+org's provider *shortname* — altool refuses to guess, and this is not the same
+thing as the desktop's `APPLE_TEAM_ID`. List them with:
+
+```sh
+xcrun altool --list-providers -u "$APPLE_ID" -p "@env:APPLE_PASSWORD"
+```
+
+Full details in the header of `release.sh`.
+
+Store-submission specifics that live in the repo:
+
+- **App icon.** `Caribou/Assets.xcassets` holds a single 1024×1024 master, with
+  Xcode deriving the rest. Regenerate it from the brand mark with
+  `icon/make-appicon.sh` — that script also strips the alpha channel, which App
+  Store Connect rejects an icon for carrying.
+- **Privacy manifest.** `Caribou/PrivacyInfo.xcprivacy` declares no data
+  collection and four required-reason API categories. Those are derived from the
+  symbols actually present in the embedded binaries, not guessed; re-check with
+  `nm -u` after any `bind.sh` change that pulls in new native code, or Apple
+  mails an ITMS-91053 rejection after the upload appears to succeed.
+- **Export compliance.** `ITSAppUsesNonExemptEncryption` is `false` in
+  `Info.plist` so the questionnaire does not reappear on every upload. That
+  answer rests on Caribou's source being published and on the BIS/NSA
+  notification for License Exception TSU having been filed — see the note in
+  `Info.plist`.
+- **iPhone only.** `TARGETED_DEVICE_FAMILY` is `1`. Restore `1,2` once the SPA
+  has an iPad layout worth shipping.
+
 ## Layout
 
 | Path | Role |
@@ -168,5 +239,10 @@ It realistically runs in a macOS CI job with Apple credentials.
 | `Caribou/LockOverlay.swift` | UI-gate overlay + app-switcher privacy cover + native lock strings |
 | `Caribou/ContentView.swift` | Boot / error / WebView states, with the lock + privacy overlays on top |
 | `Caribou/WebView.swift` | `WKWebView` wrapper + loopback navigation confinement + bridge wiring |
-| `Caribou/Info.plist` | ATS local-networking exception, `WalletNet`, launch screen |
+| `Caribou/Info.plist` | ATS local-networking exception, `WalletNet`, launch screen, export compliance |
 | `Caribou/Config/*.xcconfig` | Per-network bundle id, display name, `WALLET_NET` |
+| `Caribou/Assets.xcassets` | App icon (single 1024 master; other sizes derived) |
+| `Caribou/PrivacyInfo.xcprivacy` | Privacy manifest: no data collected, required-reason API declarations |
+| `icon/` | App icon source SVG + `make-appicon.sh` regenerator |
+| `release.sh` | Archive → export `.ipa` → validate → upload to App Store Connect |
+| `ExportOptions.plist` | Export settings for the App Store archive (team id injected at run time) |

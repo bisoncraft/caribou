@@ -53,6 +53,22 @@
     <key>UILaunchScreen</key>
     <dict/>
 
+    <!-- Export compliance. Answering here stops App Store Connect from asking
+         the encryption questionnaire on every single upload.
+
+         Caribou plainly *uses* encryption (wallet key derivation and storage,
+         TLS to chain backends, Tor). "NonExempt" is the narrower question: does
+         it use encryption that is NOT covered by an EAR exemption. Caribou's
+         source is published (Blue Oak, public repo), which is the basis for
+         License Exception TSU, so the answer is no.
+
+         That exception is conditional on the TSU notification being filed with
+         BIS and the NSA (EAR 740.13(e)(3)) — the one-time email naming the
+         public source URL. Do not leave this key at false without that filing
+         on record. -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>

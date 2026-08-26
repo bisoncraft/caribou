@@ -92,8 +92,16 @@ if [[ "${CARIBOU_XMR:-}" == "1" ]]; then
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Monero</string>
   <key>CFBundlePackageType</key><string>FMWK</string>
-  <key>CFBundleShortVersionString</key><string>0.18.4.6</string>
+  <!-- Three components maximum. Upstream monero is 0.18.4.6, but App Store
+       validation rejects the fourth: "The value for key
+       CFBundleShortVersionString '0.18.4.6' ... must be a period-separated list
+       of at most three non-negative integers" (409, VALIDATION_ERROR). The
+       exact upstream version is preserved in MoneroUpstreamVersion below. -->
+  <key>CFBundleShortVersionString</key><string>0.18.4</string>
   <key>CFBundleVersion</key><string>1</string>
+  <!-- Informational; not read by iOS, but keeps the real pin discoverable in
+       the shipped bundle. Matches the PIN in ../asset/xmr/build-ios.sh. -->
+  <key>MoneroUpstreamVersion</key><string>0.18.4.6</string>
   <key>MinimumOSVersion</key><string>15.0</string>
   <key>CFBundleSupportedPlatforms</key><array><string>$platform</string></array>
 </dict></plist>
