@@ -1536,6 +1536,21 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 			return nil, fmt.Errorf("deposit fee rate rejected: %w", err)
 		}
 		eng.log.Debugf("Using fee rate %d for the %s deposit", feeRate, unbip(originAssetID))
+	} else {
+		// Account-based wallets don't price a rate to check here, but the
+		// deposit is a plain Send of atoms, so Available (which already
+		// accounts for whatever that wallet reserves for its own fee) is
+		// the same gate Send itself will apply. Checking it now, before the
+		// quote is persisted, avoids committing a doomed quote and leaving
+		// a QUOTED record to sit until the deadline timeout for a failure
+		// that was already knowable.
+		bal, err := originWallet.Wallet.Balance()
+		if err != nil {
+			return nil, fmt.Errorf("error checking %s balance: %w", unbip(originAssetID), err)
+		}
+		if bal.Available < sendAtoms {
+			return nil, asset.ErrInsufficientBalance
+		}
 	}
 
 	swap := &IntentsSwap{
