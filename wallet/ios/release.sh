@@ -83,7 +83,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --upload)  upload=1; shift ;;
         --build)   build_number="${2:?--build needs a number}"; shift 2 ;;
-        -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+        # Print the whole header comment block, not a fixed line range: the
+        # range drifts every time CREDENTIALS grows, and --help is exactly what
+        # the failure path at the bottom tells you to read.
+        -h|--help) awk 'NR==1{next} /^#/{print; next} {exit}' "$0"; exit 0 ;;
         *) echo "error: unknown argument '$1'" >&2; exit 1 ;;
     esac
 done
@@ -92,6 +95,14 @@ done
     echo "error: Caribou.xcodeproj missing. Run: xcodegen generate --spec project.xmr.yml" >&2; exit 1; }
 [[ -d "$here/Frameworks/Mobile.xcframework" ]] || {
     echo "error: Frameworks/Mobile.xcframework missing. Run: ./bind.sh" >&2; exit 1; }
+# A project generated from project.xmr.yml embeds Monero.xcframework too. Check
+# it here rather than letting xcodebuild discover it several minutes into the
+# archive: it is the same pure configuration error, knowable up front.
+if grep -q 'Monero\.xcframework' "$here/Caribou.xcodeproj/project.pbxproj" 2>/dev/null; then
+    [[ -d "$here/Frameworks/Monero.xcframework" ]] || {
+        echo "error: the project embeds Frameworks/Monero.xcframework but it is missing." >&2
+        echo "       Run: CARIBOU_XMR=1 ./bind.sh" >&2; exit 1; }
+fi
 
 # -allowProvisioningUpdates has to authenticate to the developer portal to
 # register the App ID and mint the provisioning profile. It can do that from an
@@ -134,7 +145,13 @@ echo "Signing with team $team"
 # CFBundleVersion must strictly increase for every upload to a given
 # CFBundleShortVersionString; App Store Connect rejects a duplicate outright and
 # the build is burned (you cannot reuse the number even after deleting it). The
-# commit count is monotonic and needs no state committed to the repo.
+# commit count needs no state committed to the repo, and it rises monotonically
+# along a single history — which holds as long as releases are cut from master.
+# It does NOT hold across branches: a release from a feature branch followed by
+# one from a master that squash-merged it yields a *lower* number the second
+# time, as does a rebase that drops or squashes commits. --validate-app runs
+# before --upload-app below and catches that, so the cost is a wasted archive
+# rather than a burned build number; --build N is the override.
 if [[ -z "$build_number" ]]; then
     build_number="$(git -C "$here" rev-list --count HEAD 2>/dev/null || echo 1)"
 fi
@@ -254,7 +271,7 @@ xcodebuild -exportArchive \
     -exportPath "$export_dir" \
     -allowProvisioningUpdates ${auth[@]+"${auth[@]}"}
 
-ipa="$(find "$export_dir" -name '*.ipa' -maxdepth 1 | head -1)"
+ipa="$(find "$export_dir" -maxdepth 1 -name '*.ipa' -print -quit)"
 [[ -n "$ipa" ]] || { echo "error: no .ipa produced in $export_dir" >&2; exit 1; }
 echo "Exported $ipa"
 
