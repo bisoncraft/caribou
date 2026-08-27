@@ -154,6 +154,7 @@ type TaperingTickerQueue struct {
 	fastestInterval time.Duration
 	slowestInterval time.Duration
 	queueWaiter     chan *taperingWaiter
+	done            chan struct{}
 }
 
 // NewTaperingTickerQueue is a constructor for a TaperingTicketQueue. The
@@ -166,6 +167,7 @@ func NewTaperingTickerQueue(fastestInterval, slowestInterval time.Duration) *Tap
 		fastestInterval: fastestInterval,
 		slowestInterval: slowestInterval,
 		queueWaiter:     make(chan *taperingWaiter, 16),
+		done:            make(chan struct{}),
 	}
 }
 
@@ -180,13 +182,34 @@ func (q *TaperingTickerQueue) Wait(waiter *Waiter) {
 	// We don't want the caller to hang here, so we won't call TryFunc. Instead
 	// set the nextTick as now and the run loop will call it in a goroutine
 	// immediately.
-	q.queueWaiter <- &taperingWaiter{Waiter: waiter, nextTick: time.Now()}
+	select {
+	case q.queueWaiter <- &taperingWaiter{Waiter: waiter, nextTick: time.Now()}:
+	case <-q.done:
+		waiter.ExpireFunc()
+	}
 }
 
-// Run runs the primary wait loop until the context is canceled.
+// Run runs the primary wait loop until the context is canceled. Run must not
+// be called more than once for the same queue.
 func (q *TaperingTickerQueue) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	defer wg.Wait()
+	defer func() {
+		// Stop new Wait() callers from enqueueing before draining below.
+		close(q.done)
+		// Let every in-flight runWaiter either send back to queueWaiter or
+		// observe ctx.Done() and expire on its own.
+		wg.Wait()
+		// Anything that won the race to land in queueWaiter after the loop
+		// below stopped draining it never gets picked back up: expire it.
+		for {
+			select {
+			case w := <-q.queueWaiter:
+				w.ExpireFunc()
+			default:
+				return
+			}
+		}
+	}()
 
 	runWaiter := func(w *taperingWaiter) {
 		defer wg.Done()
@@ -205,7 +228,11 @@ func (q *TaperingTickerQueue) Run(ctx context.Context) {
 		w.nextTick = nextTick(w.tick, q.slowestInterval, q.fastestInterval,
 			time.Now(), w.Expiration)
 
-		q.queueWaiter <- w // send it back to the queue
+		select {
+		case q.queueWaiter <- w: // send it back to the queue
+		case <-ctx.Done():
+			w.ExpireFunc() // early, but still ending prior to DontTryAgain
+		}
 	}
 
 	waiters := make([]*taperingWaiter, 0, 100) // only used in the loop

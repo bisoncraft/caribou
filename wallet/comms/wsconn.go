@@ -342,11 +342,14 @@ func (conn *wsConn) SetReadLimit(limit int64) {
 	}
 }
 
-func (conn *wsConn) handleReadError(err error) {
+func (conn *wsConn) handleReadError(ctx context.Context, err error) {
 	reconnect := func() {
 		conn.setConnectionStatus(Disconnected)
 		if !conn.cfg.DisableAutoReconnect {
-			conn.reconnectCh <- struct{}{}
+			select {
+			case conn.reconnectCh <- struct{}{}:
+			case <-ctx.Done():
+			}
 		}
 	}
 
@@ -407,7 +410,7 @@ func (conn *wsConn) readRaw(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			conn.handleReadError(err)
+			conn.handleReadError(ctx, err)
 			return
 		}
 
@@ -466,7 +469,7 @@ func (conn *wsConn) read(ctx context.Context) {
 				conn.log.Errorf("json decode error: %v", mErr)
 				continue
 			}
-			conn.handleReadError(err)
+			conn.handleReadError(ctx, err)
 			return
 		}
 
@@ -500,7 +503,7 @@ func (conn *wsConn) read(ctx context.Context) {
 			conn.log.Warnf("Read channel full, message buffered (overflow size: %d). "+
 				"Consumer may be too slow.", len(overflow))
 			if len(overflow) >= maxReadOverflow {
-				conn.handleReadError(fmt.Errorf("message source consumer stalled with %d messages buffered", len(overflow)))
+				conn.handleReadError(ctx, fmt.Errorf("message source consumer stalled with %d messages buffered", len(overflow)))
 				return
 			}
 		}
@@ -531,7 +534,10 @@ func (conn *wsConn) keepAlive(ctx context.Context) {
 				conn.log.Errorf("Reconnect failed. Scheduling reconnect to %s in %.1f seconds.",
 					conn.url(), rcInt.Seconds())
 				time.AfterFunc(rcInt, func() {
-					conn.reconnectCh <- struct{}{}
+					select {
+					case conn.reconnectCh <- struct{}{}:
+					case <-ctx.Done():
+					}
 				})
 				// Increment the wait up to PingWait.
 				if rcInt < maxReconnectInterval {
@@ -581,7 +587,10 @@ func (conn *wsConn) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		// on account of a connect error.
 		conn.log.Errorf("Initial connection failed, starting reconnect loop: %v", err)
 		time.AfterFunc(5*time.Second, func() {
-			conn.reconnectCh <- struct{}{}
+			select {
+			case conn.reconnectCh <- struct{}{}:
+			case <-ctxInternal.Done():
+			}
 		})
 	}
 

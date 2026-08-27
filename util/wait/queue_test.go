@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -138,6 +139,53 @@ func TestTaperingQueue(t *testing.T) {
 			prevWantTryTime = wantTryTime
 			prevGotTryTimed = gotTryTimed
 		}
+	}
+}
+
+// TestTaperingQueueShutdownExpiresAllWaiters cancels the queue's context
+// while more waiters are in flight than the queueWaiter buffer (16) can
+// hold, some re-queuing and some blocked in Wait(). Every one of them must
+// still receive exactly one ExpireFunc call, and Run must return promptly
+// instead of hanging in wg.Wait().
+func TestTaperingQueueShutdownExpiresAllWaiters(t *testing.T) {
+	const waiterCount = 32 // > the queueWaiter buffer size of 16
+
+	q := NewTaperingTickerQueue(time.Millisecond, time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		q.Run(ctx)
+	}()
+
+	var expiredCount atomic.Int32
+	for i := 0; i < waiterCount; i++ {
+		q.Wait(&Waiter{
+			Expiration: time.Now().Add(time.Hour),
+			TryFunc: func() TryDirective {
+				return TryAgain
+			},
+			ExpireFunc: func() {
+				expiredCount.Add(1)
+			},
+		})
+	}
+
+	// Let the queue churn through a few ticks so waiters are spread across
+	// the waiters slice, in-flight runWaiter goroutines, and the buffered
+	// channel before shutdown begins.
+	time.Sleep(5 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after context cancellation; likely deadlocked in wg.Wait()")
+	}
+
+	if got := expiredCount.Load(); got != waiterCount {
+		t.Fatalf("expected all %d waiters to be expired on shutdown, got %d", waiterCount, got)
 	}
 }
 
