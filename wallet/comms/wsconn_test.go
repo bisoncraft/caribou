@@ -550,3 +550,99 @@ func TestReadOverflowBounded(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// TestConnectDiscardsDialAfterShutdown covers connect()'s guard against
+// installing a websocket connection once Connect's cleanup goroutine has
+// already committed to shutdown: keepAlive's ctx.Err() check before calling
+// connect is a check-then-act gap spanning a full dial, so a reconnect that
+// started dialing just before Stop() could otherwise still land its
+// connection and reader goroutine after the cleanup goroutine has stopped
+// waiting for one, leaking the connection.
+//
+// shuttingDown is set directly here, before calling connect(), rather than
+// timing a live cancellation against a real dial in flight: gorilla/
+// websocket's own ctx-deadline enforcement inside DialContext ties the
+// whole handshake to ctx, so reliably landing a real dial's completion
+// exactly after a live cancellation is flaky to reproduce deterministically
+// over a real network round trip. Setting the flag ahead of the call
+// exercises the same guard connect() takes in that race without depending
+// on winning it.
+func TestConnectDiscardsDialAfterShutdown(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	closed := make(chan struct{}, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		go func() {
+			defer func() {
+				select {
+				case closed <- struct{}{}:
+				default:
+				}
+			}()
+			for {
+				if _, _, err := c.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}()
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	server := &http.Server{Handler: mux}
+	defer server.Shutdown(context.Background())
+	go server.Serve(ln)
+
+	connI, err := NewWsConn(&WsCfg{
+		URL:      "ws://" + ln.Addr().String() + "/ws",
+		PingWait: time.Second,
+		Logger:   tLogger,
+	})
+	if err != nil {
+		t.Fatalf("NewWsConn: %v", err)
+	}
+	wsc := connI.(*wsConn)
+
+	wsc.wsMtx.Lock()
+	wsc.shuttingDown = true
+	wsc.wsMtx.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	connectErr := make(chan error, 1)
+	go func() { connectErr <- wsc.connect(ctx) }()
+
+	select {
+	case err := <-connectErr:
+		if err == nil {
+			t.Fatal("connect succeeded despite shuttingDown, want it to discard the dial")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect did not return promptly once shuttingDown was set")
+	}
+
+	wsc.wsMtx.Lock()
+	installed := wsc.ws != nil
+	wsc.wsMtx.Unlock()
+	if installed {
+		t.Fatal("connect installed a websocket connection despite shuttingDown")
+	}
+
+	// The dialed connection must have been closed, not leaked: the server's
+	// read loop observes the close promptly only if connect() actually
+	// closed it rather than dropping the reference.
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dialed connection was not closed; it leaked")
+	}
+}

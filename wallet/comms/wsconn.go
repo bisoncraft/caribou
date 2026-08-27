@@ -95,6 +95,10 @@ var ErrInvalidCert = fmt.Errorf("invalid certificate")
 // cert was provided.
 var ErrCertRequired = fmt.Errorf("certificate required")
 
+// errShuttingDown is returned by connect when it discards a completed dial
+// because Connect's cleanup goroutine has already committed to shutdown.
+var errShuttingDown = fmt.Errorf("wsConn: shutting down")
+
 // WsConn is an interface for a websocket client.
 type WsConn interface {
 	NextID() uint64
@@ -181,9 +185,19 @@ type wsConn struct {
 	// also counts the cleanup goroutine doing the waiting.
 	readerWg sync.WaitGroup
 
-	wsMtx    sync.Mutex
-	writeMtx sync.Mutex
-	ws       *websocket.Conn
+	wsMtx sync.Mutex
+	// shuttingDown is set under wsMtx by Connect's cleanup goroutine before
+	// it closes readCh, and checked under wsMtx by connect() before it
+	// installs a freshly dialed connection. keepAlive's own ctx.Err() check
+	// before calling connect is a check-then-act gap spanning a full dial:
+	// without this second, mutex-serialized check, a connect that started
+	// dialing just before shutdown could still land its websocket and reader
+	// goroutine after the cleanup goroutine has already stopped waiting on
+	// readerWg, leaking the connection and re-adding to a WaitGroup whose
+	// Wait has already returned.
+	shuttingDown bool
+	writeMtx     sync.Mutex
+	ws           *websocket.Conn
 
 	connectionStatus uint32 // atomic
 
@@ -320,6 +334,14 @@ func (conn *wsConn) connect(ctx context.Context) error {
 	})
 
 	conn.wsMtx.Lock()
+	if conn.shuttingDown {
+		// Connect's cleanup goroutine has already committed to closing
+		// readCh without waiting for a reader this call would otherwise
+		// register. Discard the dial rather than installing it.
+		conn.wsMtx.Unlock()
+		ws.Close()
+		return errShuttingDown
+	}
 	// If keepAlive called connect, the wsConn's current websocket.Conn may need
 	// to be closed depending on the error that triggered the reconnect.
 	if conn.ws != nil {
@@ -619,6 +641,12 @@ func (conn *wsConn) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		<-ctxInternal.Done()
 		conn.setConnectionStatus(Disconnected)
 		conn.wsMtx.Lock()
+		// Set under the same lock connect() checks before installing a
+		// dial: a connect already past this point completes normally (its
+		// reader is counted in readerWg before readerWg.Wait() below can
+		// return), and a connect that hasn't reached its own wsMtx.Lock()
+		// yet will see this and discard its dial instead of leaking it.
+		conn.shuttingDown = true
 		if conn.ws != nil {
 			conn.log.Debug("Sending close 1000 (normal) message.")
 			conn.close()
