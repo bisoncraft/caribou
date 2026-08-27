@@ -172,6 +172,15 @@ type wsConn struct {
 	readCh chan *msgjson.Message
 	urlV   atomic.Value // string
 
+	// readerWg tracks only the read/readRaw goroutine, separately from wg:
+	// the shutdown cleanup goroutine (added to wg itself) must wait for the
+	// reader to fully exit before closing readCh, since the reader can be
+	// past its ctx.Err() check — decoding a message it already read — at
+	// the moment cancellation lands, and a send on a channel closed out
+	// from under it would panic. Waiting on wg here would deadlock, as wg
+	// also counts the cleanup goroutine doing the waiting.
+	readerWg sync.WaitGroup
+
 	wsMtx    sync.Mutex
 	writeMtx sync.Mutex
 	ws       *websocket.Conn
@@ -321,8 +330,10 @@ func (conn *wsConn) connect(ctx context.Context) error {
 
 	conn.setConnectionStatus(Connected)
 	conn.wg.Add(1)
+	conn.readerWg.Add(1)
 	go func() {
 		defer conn.wg.Done()
+		defer conn.readerWg.Done()
 		if conn.cfg.RawHandler != nil {
 			conn.readRaw(ctx)
 		} else {
@@ -625,6 +636,11 @@ func (conn *wsConn) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 			h.abort()
 		}
 
+		// Wait for the reader to fully exit before closing readCh: it may
+		// still be past its ctx.Err() check, decoding a message it already
+		// read off the wire, and a send into a channel closed out from
+		// under it would panic.
+		conn.readerWg.Wait()
 		close(conn.readCh) // signal to MessageSource receivers that the wsConn is dead
 	}()
 
