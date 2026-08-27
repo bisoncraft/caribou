@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -154,7 +155,12 @@ type TaperingTickerQueue struct {
 	fastestInterval time.Duration
 	slowestInterval time.Duration
 	queueWaiter     chan *taperingWaiter
-	done            chan struct{}
+	// done is swapped in by each Run call and read concurrently by Wait, so
+	// it is held behind an atomic pointer rather than a plain field: Run may
+	// restart (e.g. across a reconnect) while a Wait call is in flight, and
+	// a plain field would race between Run's new-channel assignment and
+	// Wait's read.
+	done atomic.Pointer[chan struct{}]
 }
 
 // NewTaperingTickerQueue is a constructor for a TaperingTicketQueue. The
@@ -163,12 +169,14 @@ type TaperingTickerQueue struct {
 // After fullSpeedTicks, the delays will be increased until it reaches
 // slowestInterval (at fullyTapered).
 func NewTaperingTickerQueue(fastestInterval, slowestInterval time.Duration) *TaperingTickerQueue {
-	return &TaperingTickerQueue{
+	q := &TaperingTickerQueue{
 		fastestInterval: fastestInterval,
 		slowestInterval: slowestInterval,
 		queueWaiter:     make(chan *taperingWaiter, 16),
-		done:            make(chan struct{}),
 	}
+	done := make(chan struct{})
+	q.done.Store(&done)
+	return q
 }
 
 // Wait attempts to run the (*Waiter).TryFunc until either 1) the function
@@ -182,20 +190,40 @@ func (q *TaperingTickerQueue) Wait(waiter *Waiter) {
 	// We don't want the caller to hang here, so we won't call TryFunc. Instead
 	// set the nextTick as now and the run loop will call it in a goroutine
 	// immediately.
+	//
+	// done is captured once so both selects below check the same channel
+	// even if Run restarts mid-call, and it is checked first, on its own:
+	// once Run has returned, done is closed and queueWaiter has been
+	// drained, so both cases of a single select would be ready and select
+	// would pick between them at random, silently dropping the waiter about
+	// half the time it lands in the send case. A narrow window remains
+	// between this check and the send — a Wait() that passes it just as
+	// Run's defer closes done and finishes draining can still slip a waiter
+	// into the now-dead buffer — but that requires losing a race measured
+	// in nanoseconds rather than a coin flip.
+	done := *q.done.Load()
+	select {
+	case <-done:
+		waiter.ExpireFunc()
+		return
+	default:
+	}
 	select {
 	case q.queueWaiter <- &taperingWaiter{Waiter: waiter, nextTick: time.Now()}:
-	case <-q.done:
+	case <-done:
 		waiter.ExpireFunc()
 	}
 }
 
-// Run runs the primary wait loop until the context is canceled. Run must not
-// be called more than once for the same queue.
+// Run runs the primary wait loop until the context is canceled. Run may be
+// called again after a previous call has returned, e.g. across a reconnect.
 func (q *TaperingTickerQueue) Run(ctx context.Context) {
+	done := make(chan struct{})
+	q.done.Store(&done)
 	var wg sync.WaitGroup
 	defer func() {
 		// Stop new Wait() callers from enqueueing before draining below.
-		close(q.done)
+		close(done)
 		// Let every in-flight runWaiter either send back to queueWaiter or
 		// observe ctx.Done() and expire on its own.
 		wg.Wait()

@@ -189,6 +189,83 @@ func TestTaperingQueueShutdownExpiresAllWaiters(t *testing.T) {
 	}
 }
 
+// TestTaperingQueueWaitAfterRunReturnedExpiresImmediately covers Wait()
+// called once Run has already returned, as opposed to
+// TestTaperingQueueShutdownExpiresAllWaiters above, which only exercises
+// waiters already in flight when the context is canceled. done is checked
+// first and on its own in Wait(), so this must be deterministic rather than
+// a coin flip between the done and queueWaiter cases of a single select.
+func TestTaperingQueueWaitAfterRunReturnedExpiresImmediately(t *testing.T) {
+	q := NewTaperingTickerQueue(time.Millisecond, time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		q.Run(ctx)
+	}()
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after context cancellation")
+	}
+
+	const waiterCount = 400
+	var expiredCount atomic.Int32
+	for i := 0; i < waiterCount; i++ {
+		q.Wait(&Waiter{
+			Expiration: time.Now().Add(time.Hour),
+			TryFunc: func() TryDirective {
+				return TryAgain
+			},
+			ExpireFunc: func() {
+				expiredCount.Add(1)
+			},
+		})
+	}
+
+	if got := expiredCount.Load(); got != waiterCount {
+		t.Fatalf("expected all %d post-shutdown waiters to be expired, got %d", waiterCount, got)
+	}
+}
+
+// TestTaperingQueueRunIsRestartable covers running the same queue again after
+// a previous Run has returned, the shape a reconnect or re-login needs.
+func TestTaperingQueueRunIsRestartable(t *testing.T) {
+	q := NewTaperingTickerQueue(time.Millisecond, time.Millisecond)
+
+	for i := 0; i < 2; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		runDone := make(chan struct{})
+		go func() {
+			defer close(runDone)
+			q.Run(ctx)
+		}()
+
+		var expired atomic.Bool
+		q.Wait(&Waiter{
+			Expiration: time.Now().Add(time.Hour),
+			TryFunc: func() TryDirective {
+				return TryAgain
+			},
+			ExpireFunc: func() {
+				expired.Store(true)
+			},
+		})
+
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("Run did not return on iteration %d", i)
+		}
+		if !expired.Load() {
+			t.Fatalf("waiter from iteration %d was never expired", i)
+		}
+	}
+}
+
 func Test_nextTick(t *testing.T) {
 	const fastestInterval, slowestInterval = 100 * time.Millisecond, 500 * time.Millisecond
 	var gotTicks []time.Time
