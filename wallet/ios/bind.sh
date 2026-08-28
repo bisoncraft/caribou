@@ -82,6 +82,28 @@ if [[ "${CARIBOU_XMR:-}" == "1" ]]; then
         rm -rf "$fw"; mkdir -p "$fw"
         cp "$dylib" "$fw/Monero"
         install_name_tool -id "@rpath/Monero.framework/Monero" "$fw/Monero"
+        # Keep XML comments OUT of the <dict> below. App Store Connect's
+        # server-side ingest parser pairs a dict's children positionally (key,
+        # value, key, value, ...) and counts a comment node as a child, so each
+        # comment shifts the pairing by one and the key after an odd number of
+        # them becomes invisible. Nothing local catches it: xcodebuild, plutil
+        # and `altool --validate-app` all read the file correctly and the upload
+        # reports success. The build then FAILS processing, never reaches
+        # TestFlight, and the only place the reason surfaces is
+        # `altool --build-status`:
+        #   90057 The bundle 'Monero.framework' is missing plist key ...
+        #         missing the required key: CFBundleShortVersionString
+        #   90056 This bundle Monero.framework is invalid ... missing the
+        #         required key: CFBundleVersion
+        # The annotations that used to sit inline live here instead:
+        #
+        # CFBundleShortVersionString is three components maximum. Upstream
+        # monero is 0.18.4.6, but validation rejects the fourth: "The value for
+        # key CFBundleShortVersionString '0.18.4.6' ... must be a
+        # period-separated list of at most three non-negative integers" (409,
+        # VALIDATION_ERROR). MoneroUpstreamVersion preserves the exact pin; iOS
+        # does not read it, but it keeps the real version discoverable in the
+        # shipped bundle. It matches the PIN in ../asset/xmr/build-ios.sh.
         cat > "$fw/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -92,20 +114,23 @@ if [[ "${CARIBOU_XMR:-}" == "1" ]]; then
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Monero</string>
   <key>CFBundlePackageType</key><string>FMWK</string>
-  <!-- Three components maximum. Upstream monero is 0.18.4.6, but App Store
-       validation rejects the fourth: "The value for key
-       CFBundleShortVersionString '0.18.4.6' ... must be a period-separated list
-       of at most three non-negative integers" (409, VALIDATION_ERROR). The
-       exact upstream version is preserved in MoneroUpstreamVersion below. -->
   <key>CFBundleShortVersionString</key><string>0.18.4</string>
   <key>CFBundleVersion</key><string>1</string>
-  <!-- Informational; not read by iOS, but keeps the real pin discoverable in
-       the shipped bundle. Matches the PIN in ../asset/xmr/build-ios.sh. -->
   <key>MoneroUpstreamVersion</key><string>0.18.4.6</string>
   <key>MinimumOSVersion</key><string>15.0</string>
   <key>CFBundleSupportedPlatforms</key><array><string>$platform</string></array>
 </dict></plist>
 PLIST
+        # Enforce the rule above rather than trusting it: rediscovering this
+        # costs a full archive, upload and processing cycle. (The DOCTYPE is a
+        # declaration, not a comment, so it does not match.)
+        if grep -q -- '<!--' "$fw/Info.plist"; then
+            echo "error: $fw/Info.plist contains an XML comment. App Store" >&2
+            echo "processing mis-pairs every key after it; keep comments in" >&2
+            echo "bind.sh instead of the plist." >&2
+            exit 1
+        fi
+        plutil -lint "$fw/Info.plist" >/dev/null
     }
 
     stage="$here/Frameworks/.monero-staging"

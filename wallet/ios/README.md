@@ -168,6 +168,29 @@ uploads. It derives `CFBundleVersion` from the commit count, because App Store
 Connect permanently rejects a build number it has already seen for a given
 `MARKETING_VERSION` — override with `--build N` if you need to.
 
+The commit count is only *locally* monotonic: it counts the current branch, so
+uploading from a long topic branch and then from `master` can go backwards and
+the upload is rejected with "the bundle version must be higher than the
+previously uploaded version". That fails loudly at upload, costing a minute, not
+a review cycle — pass `--build N` above the last number the app has seen.
+
+## Checking whether a build actually made it
+
+A successful upload is not a successful build. Apple validates the package
+synchronously (`VERIFY SUCCEEDED`) but only *processes* it minutes later, and a
+build that fails processing silently never appears in TestFlight — the tab keeps
+saying "submit a build to start testing". `release.sh` prints the delivery UUID;
+ask what became of it:
+
+```sh
+xcrun altool --build-status --delivery-id <uuid> \
+    --provider-public-id <uuid from --list-providers> --wait \
+    -u "$APPLE_ID" -p @env:APPLE_PASSWORD
+```
+
+`BUILD-STATUS: VALID_BINARY` means it is in TestFlight; `FAILED` prints the
+processing errors, which are the only place the real reason is stated.
+
 Credentials come in two flavours, because only the team's **Account Holder** can
 create an App Store Connect API key:
 
