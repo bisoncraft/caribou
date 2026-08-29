@@ -52,6 +52,12 @@ module.exports = {
     path: path.resolve(__dirname, 'dist'),
     publicPath: '/js/'
   },
+  // This bundle is only ever served over loopback (127.0.0.1) to the iOS
+  // app's embedded webview, never delivered over a real network, so
+  // webpack's web-delivery size budget (244 KiB) doesn't apply here.
+  performance: {
+    hints: false
+  },
   plugins: [
     new MiniCssExtractPlugin({
       filename: 'bundle.css'
