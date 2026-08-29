@@ -725,10 +725,9 @@ func newWallet(assetCFG *asset.WalletConfig, logger util.Logger, net util.Networ
 	case util.Mainnet:
 		defaultProviders = []string{
 			// Verified working (2025-12-26)
-			"https://eth-mainnet.nodereal.io/v1/1659dfb40aa24bbb8153a677b98064d7", // NodeReal - verified working
-			"https://eth.api.onfinality.io/public",                                // OnFinality - verified working
-			"https://eth-mainnet.public.blastapi.io",                              // Blast API - verified working
-			"https://ethereum-rpc.publicnode.com",                                 // PublicNode - verified working
+			"https://eth.api.onfinality.io/public",   // OnFinality - verified working
+			"https://eth-mainnet.public.blastapi.io", // Blast API - verified working
+			"https://ethereum-rpc.publicnode.com",    // PublicNode - verified working
 		}
 	}
 
@@ -952,10 +951,12 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	w.nonceMtx.Unlock()
 
 	w.bridges = make(map[string]bridge)
-	if acrossBridge, err := newAcrossBridge(ctx, w.node.contractBackend(), w.node, w.assetID, w.net, w.addr, w.log); err != nil {
-		w.log.Warnf("Failed to initialize Across bridge: %v", err)
-	} else {
-		w.bridges[acrossBridgeName] = acrossBridge
+	if _, chainSupported := chainAssetIDToAcrossChainID[w.net][w.assetID]; chainSupported {
+		if acrossBridge, err := newAcrossBridge(ctx, w.node.contractBackend(), w.node, w.assetID, w.net, w.addr, w.log); err != nil {
+			w.log.Warnf("Failed to initialize Across bridge: %v", err)
+		} else {
+			w.bridges[acrossBridgeName] = acrossBridge
+		}
 	}
 
 	/* if usdcBridge, err := newUsdcBridge(w.assetID, w.net, w.node.contractBackend(), w.addr, w.node); err != nil {
