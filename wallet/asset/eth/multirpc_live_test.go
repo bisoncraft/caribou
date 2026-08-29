@@ -57,10 +57,9 @@ func TestRPC(t *testing.T) {
 
 var freeServers = []string{
 	// Verified working (26-12-2025)
-	"https://eth-mainnet.nodereal.io/v1/1659dfb40aa24bbb8153a677b98064d7", // NodeReal
-	"https://eth.api.onfinality.io/public",                                // OnFinality
-	"https://eth-mainnet.public.blastapi.io",                              // Blast API
-	"https://ethereum-rpc.publicnode.com",                                 // PublicNode
+	"https://eth.api.onfinality.io/public",   // OnFinality
+	"https://eth-mainnet.public.blastapi.io", // Blast API
+	"https://ethereum-rpc.publicnode.com",    // PublicNode
 
 	// Failing 26-12-2025
 	// "https://eth-mainnet.gateway.pokt.network/v1/5f3453978e354ab992c4da79", // connect error: failed to connect to even a single provider among: pokt.network
