@@ -293,13 +293,16 @@ func (sw *swapState) payout() {
 	sw.setStatus(intents.StatusSuccess)
 }
 
-// statusResponse renders the GET /v0/status body for this swap.
+// statusResponse renders the GET /v0/status body for this swap. USD values
+// mirror the live service's swap details: amountInUsd always, amountOutUsd
+// once a realized fill exists, both at the current mock price.
 func (sw *swapState) statusResponse() map[string]any {
 	sw.mtx.Lock()
 	defer sw.mtx.Unlock()
 	details := map[string]any{
 		"depositedAmount":          sw.deposited.String(),
 		"amountIn":                 sw.amountIn.String(),
+		"amountInUsd":              usdString(sw.amountIn, sw.origin.decimals, sw.server.price(sw.origin.intentsID)),
 		"amountOut":                sw.realizedOut,
 		"slippage":                 0,
 		"refundedAmount":           sw.refunded,
@@ -309,6 +312,12 @@ func (sw *swapState) statusResponse() map[string]any {
 		"nearTxHashes":             sw.nearTxHashes,
 		"originChainTxHashes":      sw.originTxs,
 		"destinationChainTxHashes": sw.destTxs,
+	}
+	if out, ok := new(big.Int).SetString(sw.realizedOut, 10); ok {
+		details["amountOutUsd"] = usdString(out, sw.dest.decimals, sw.server.price(sw.dest.intentsID))
+	}
+	if ref, ok := new(big.Int).SetString(sw.refunded, 10); ok && ref.Sign() > 0 {
+		details["refundedAmountUsd"] = usdString(ref, sw.origin.decimals, sw.server.price(sw.origin.intentsID))
 	}
 	return map[string]any{
 		"status":        sw.status,

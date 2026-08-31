@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,6 +146,11 @@ func TestSwapFromStatus(t *testing.T) {
 	}
 	if swap.AtomsOut != 8_346_478_181 {
 		t.Fatalf("AtomsOut = %d, want 8346478181", swap.AtomsOut)
+	}
+	// The re-serialized quote's own USD pricing is retained (the fixture's
+	// swap details carry only nulls).
+	if swap.USDIn != 6493.900000000001 || swap.USDOut != 6480.205660271880 {
+		t.Fatalf("quote USD pricing not captured: %f / %f", swap.USDIn, swap.USDOut)
 	}
 }
 
@@ -286,24 +292,31 @@ func TestIntentsMergeStatus(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// A genuine state change is applied, persisted, and noted.
+	// A genuine state change is applied, persisted, and noted. The service's
+	// execution-time USD pricing supersedes any quote-time values.
 	status := &intents.StatusResponse{
-		Status:      intents.StatusProcessing,
-		SwapDetails: intents.SwapDetails{NearTxHashes: []string{"neartx1"}},
+		Status: intents.StatusProcessing,
+		SwapDetails: intents.SwapDetails{
+			NearTxHashes: []string{"neartx1"},
+			AmountInUsd:  "115.25",
+		},
 	}
-	updated, note := eng.mergeStatus("addr", status, 0, false)
+	updated, note := eng.mergeStatus("addr", status, 0, false, 0)
 	if updated == nil || note == nil {
 		t.Fatalf("state change not applied: swap %v note %v", updated, note)
 	}
 	if updated.State != intents.StatusProcessing || len(updated.NearTxHashes) != 1 {
 		t.Fatalf("bad merge: %+v", updated)
 	}
+	if updated.USDIn != 115.25 {
+		t.Fatalf("details USD pricing not applied: %f", updated.USDIn)
+	}
 	if stored, _ := eng.db.IntentsSwap("addr"); stored.State != intents.StatusProcessing {
 		t.Fatalf("merge not persisted: %s", stored.State)
 	}
 
 	// The same status again is not a change.
-	if updated, note = eng.mergeStatus("addr", status, 0, false); updated != nil || note != nil {
+	if updated, note = eng.mergeStatus("addr", status, 0, false, 0); updated != nil || note != nil {
 		t.Fatalf("no-op status produced an update")
 	}
 
@@ -313,15 +326,19 @@ func TestIntentsMergeStatus(t *testing.T) {
 		SwapDetails: intents.SwapDetails{
 			NearTxHashes:        []string{"neartx1"},
 			AmountOut:           "82500000000",
+			AmountOutUsd:        "114.80",
 			DestinationChainTxs: []intents.TxHashRef{{Hash: "soltx"}},
 		},
 	}
-	updated, note = eng.mergeStatus("addr", status, 82_500_000_000, true)
+	updated, note = eng.mergeStatus("addr", status, 82_500_000_000, true, 0)
 	if updated == nil || note == nil {
 		t.Fatalf("success status not applied")
 	}
 	if updated.AmountOut != "82500000000" || updated.AtomsOut != 82_500_000_000 {
 		t.Fatalf("realized fill not recorded: %s / %d", updated.AmountOut, updated.AtomsOut)
+	}
+	if updated.USDOut != 114.80 {
+		t.Fatalf("realized USD pricing not recorded: %f", updated.USDOut)
 	}
 	if len(updated.DestinationTxs) != 1 || updated.DestinationTxs[0] != "soltx" {
 		t.Fatalf("destination txs not recorded: %v", updated.DestinationTxs)
@@ -329,7 +346,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 
 	// A terminal record is never regressed, whatever the service says.
 	status = &intents.StatusResponse{Status: intents.StatusProcessing}
-	if updated, note = eng.mergeStatus("addr", status, 0, false); updated != nil || note != nil {
+	if updated, note = eng.mergeStatus("addr", status, 0, false, 0); updated != nil || note != nil {
 		t.Fatalf("terminal record was regressed")
 	}
 	if stored, _ := eng.db.IntentsSwap("addr"); stored.State != intents.StatusSuccess {
@@ -348,13 +365,26 @@ func TestIntentsMergeStatus(t *testing.T) {
 			OriginChainTxs: []intents.TxHashRef{{Hash: "refundtx"}},
 		},
 	}
-	updated, _ = eng.mergeStatus("addr2", status, 0, false)
+	updated, _ = eng.mergeStatus("addr2", status, 0, false, 61.05)
 	if updated == nil || updated.State != intents.StatusRefunded {
 		t.Fatalf("refund not applied: %+v", updated)
 	}
 	if len(updated.RefundTxs) != 1 || updated.RefundTxs[0] != "refundtx" ||
 		updated.RefundedAmount != "100000" || updated.RefundReason != "no solver" {
 		t.Fatalf("refund details not recorded: %+v", updated)
+	}
+	if updated.USDRefunded != 61.05 {
+		t.Fatalf("refund USD value not recorded: %f", updated.USDRefunded)
+	}
+
+	// The service's own refund pricing wins over the derived fallback.
+	if err := eng.db.StoreIntentsSwap(testSwapRecord("addr3", IntentsStateDepositSent)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	status.SwapDetails.RefundedAmountUsd = "60.90"
+	updated, _ = eng.mergeStatus("addr3", status, 0, false, 61.05)
+	if updated == nil || updated.USDRefunded != 60.90 {
+		t.Fatalf("service refund pricing not preferred: %+v", updated)
 	}
 }
 
@@ -445,6 +475,37 @@ func TestIntentsCaptureDepositFee(t *testing.T) {
 	eng := newTestIntentsEngine(rig)
 	notes := subscribeNotes(rig)
 
+	// A stub catalog endpoint prices BTC. The price is mutable so the
+	// USD-backfill and no-repricing rules can be exercised; setPrice drops
+	// the engine's cached catalog to force a refetch, which the TTL would
+	// otherwise prevent.
+	var priceMtx sync.Mutex
+	price := 0.0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		priceMtx.Lock()
+		defer priceMtx.Unlock()
+		fmt.Fprintf(w, `[{"assetId":"nep141:btc.omft.near","decimals":8,"blockchain":"btc","symbol":"BTC","price":%f,"contractAddress":""}]`, price)
+	}))
+	defer srv.Close()
+	client, err := intents.NewClient(&intents.Config{BaseURL: srv.URL}, tLogger)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	eng.client = client
+	setPrice := func(p float64) {
+		priceMtx.Lock()
+		price = p
+		priceMtx.Unlock()
+		eng.catMtx.Lock()
+		eng.catalog = nil
+		eng.catMtx.Unlock()
+	}
+	// feeUSDAt mirrors usdValue's runtime float operations, so equality
+	// checks are exact.
+	feeUSDAt := func(fee uint64, price float64) float64 {
+		return float64(fee) / float64(uint64(1e8)) * price
+	}
+
 	xcw, tWallet := newTWallet(0)
 	rig.core.wallets[0] = xcw
 
@@ -481,30 +542,47 @@ func TestIntentsCaptureDepositFee(t *testing.T) {
 		t.Fatalf("%d notes for a no-op capture", n)
 	}
 
-	// The wallet reports a fee (an estimate, for an EVM-style wallet).
+	// The wallet reports a fee (an estimate, for an EVM-style wallet) while
+	// no USD price is published: the fee is captured without a USD value.
 	tWallet.walletTx = &txdb.WalletTransaction{ID: "deposittx", Fees: 300}
 	eng.captureDepositFee(tCtx, reload())
-	if fee := reload().DepositTxFee; fee != 300 {
-		t.Fatalf("fee not captured: %d", fee)
+	if s := reload(); s.DepositTxFee != 300 || s.USDDepositFee != 0 {
+		t.Fatalf("priceless capture: fee %d, USD %f", s.DepositTxFee, s.USDDepositFee)
 	}
 	if n := drainNotes(); n != 1 {
 		t.Fatalf("%d notes for a fee capture, wanted 1", n)
 	}
 
-	// The wallet refines the fee with the receipt: re-captured.
+	// A price appearing later backfills the missing USD value once.
+	setPrice(60_000)
+	eng.captureDepositFee(tCtx, reload())
+	if s := reload(); s.USDDepositFee != feeUSDAt(300, 60_000) {
+		t.Fatalf("USD not backfilled: %f", s.USDDepositFee)
+	}
+	if n := drainNotes(); n != 1 {
+		t.Fatalf("%d notes for a USD backfill, wanted 1", n)
+	}
+
+	// An unchanged fee with a captured USD value is a no-op — the record
+	// keeps the rate near the fee event, never repricing on price moves.
+	setPrice(65_000)
+	eng.captureDepositFee(tCtx, reload())
+	if s := reload(); s.USDDepositFee != feeUSDAt(300, 60_000) {
+		t.Fatalf("captured USD value repriced: %f", s.USDDepositFee)
+	}
+	if n := drainNotes(); n != 0 {
+		t.Fatalf("%d notes for an unchanged fee", n)
+	}
+
+	// The wallet refines the fee with the receipt: re-captured and repriced
+	// at the current rate.
 	tWallet.walletTx.Fees = 250
 	eng.captureDepositFee(tCtx, reload())
-	if fee := reload().DepositTxFee; fee != 250 {
-		t.Fatalf("refined fee not captured: %d", fee)
+	if s := reload(); s.DepositTxFee != 250 || s.USDDepositFee != feeUSDAt(250, 65_000) {
+		t.Fatalf("refined fee not captured: fee %d, USD %f", s.DepositTxFee, s.USDDepositFee)
 	}
 	if n := drainNotes(); n != 1 {
 		t.Fatalf("%d notes for a fee refinement, wanted 1", n)
-	}
-
-	// An unchanged fee is a no-op.
-	eng.captureDepositFee(tCtx, reload())
-	if n := drainNotes(); n != 0 {
-		t.Fatalf("%d notes for an unchanged fee", n)
 	}
 
 	// A lookup error leaves the recorded fee alone.

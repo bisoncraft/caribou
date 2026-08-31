@@ -98,6 +98,18 @@ type IntentsSwap struct {
 	RefundedAmount string   `json:"refundedAmount,omitempty"`
 	RefundReason   string   `json:"refundReason,omitempty"`
 
+	// USD values are captured when the corresponding amounts are recorded,
+	// since exchange rates drift and a later conversion would misprice the
+	// history. USDIn and USDOut carry the service's own pricing from the
+	// committed quote, replaced by the status endpoint's swap-details
+	// pricing when reported (the realized fill). USDDepositFee and
+	// USDRefunded are derived from the catalog spot price at capture time.
+	// Zero means not captured.
+	USDIn         float64 `json:"usdIn,omitempty"`
+	USDOut        float64 `json:"usdOut,omitempty"`
+	USDDepositFee float64 `json:"usdDepositFee,omitempty"`
+	USDRefunded   float64 `json:"usdRefunded,omitempty"`
+
 	// AppFees is the service-rewritten fee breakdown echoed with the
 	// quote: the application fee split plus the keyless surcharge entry.
 	AppFees []intents.AppFee `json:"appFees,omitempty"`

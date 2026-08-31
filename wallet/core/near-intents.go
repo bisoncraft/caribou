@@ -21,8 +21,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -314,24 +316,41 @@ func (e *intentsEngine) captureDepositFee(ctx context.Context, swap *IntentsSwap
 				swap.DepositTxID, swap.DepositAddress, err)
 		return
 	}
-	if tx == nil || tx.Fees == 0 || tx.Fees == swap.DepositTxFee {
+	if tx == nil || tx.Fees == 0 {
+		return
+	}
+	// Fees are paid in the origin chain's native asset, so the USD value
+	// prices the parent chain. A fee change reprices; an unchanged fee only
+	// backfills a USD value that a price outage left uncaptured — it is
+	// never repriced, so the record keeps the rate near the fee event.
+	feeUSD := e.usdValue(ctx, intentsChainID(swap.OriginAssetID), tx.Fees)
+	if tx.Fees == swap.DepositTxFee && (swap.USDDepositFee != 0 || feeUSD == 0) {
 		return
 	}
 
 	e.swapMtx.Lock()
 	fresh, err := e.db.IntentsSwap(swap.DepositAddress)
-	if err != nil || fresh.DepositTxFee == tx.Fees {
+	if err != nil {
 		e.swapMtx.Unlock()
 		return
 	}
-	fresh.DepositTxFee = tx.Fees
+	switch {
+	case fresh.DepositTxFee != tx.Fees:
+		fresh.DepositTxFee = tx.Fees
+		fresh.USDDepositFee = feeUSD
+	case fresh.USDDepositFee == 0 && feeUSD != 0:
+		fresh.USDDepositFee = feeUSD
+	default:
+		e.swapMtx.Unlock()
+		return
+	}
 	err = e.db.StoreIntentsSwap(fresh)
 	e.swapMtx.Unlock()
 	if err != nil {
 		e.log.Errorf("Error storing deposit fee for swap %s: %v", swap.DepositAddress, err)
 		return
 	}
-	e.log.Debugf("Deposit tx fee for swap %s: %d atoms", swap.DepositAddress, tx.Fees)
+	e.log.Debugf("Deposit tx fee for swap %s: %d atoms ($%.2f)", swap.DepositAddress, tx.Fees, feeUSD)
 	e.c.notify(newIntentsSwapNote(fresh, "Swap update", "Deposit fee recorded.", db.Data))
 }
 
@@ -365,7 +384,14 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 	}
 
 	realizedAtoms, haveRealized := e.realizedAtomsOut(ctx, swap, status)
-	updated, note := e.mergeStatus(swap.DepositAddress, status, realizedAtoms, haveRealized)
+	// Price a refund at capture time (the catalog can hit the network, so
+	// this happens outside swapMtx, like the realized-fill conversion).
+	var refundedUSD float64
+	if status.Status == intents.StatusRefunded {
+		refundedUSD = e.usdValue(ctx, swap.OriginAssetID,
+			e.intentsAtoms(ctx, swap.OriginAssetID, swap.OriginAsset, status.SwapDetails.RefundedAmount))
+	}
+	updated, note := e.mergeStatus(swap.DepositAddress, status, realizedAtoms, haveRealized, refundedUSD)
 	if note != nil {
 		e.c.notify(note)
 	}
@@ -464,13 +490,24 @@ func (e *intentsEngine) recordIncomingTxWithRetry(rec asset.IncomingTxRecorder, 
 	}
 }
 
-// refundAtoms converts the service-reported refunded amount to origin
-// wallet atoms, or 0 if it cannot be resolved.
-func (e *intentsEngine) refundAtoms(ctx context.Context, swap *IntentsSwap) uint64 {
-	if swap.RefundedAmount == "" || swap.OriginAssetID == intentsAssetUnknown {
+// parseUSD parses a service-reported USD amount string, returning 0 for
+// absent, malformed, or non-finite values.
+func parseUSD(s string) float64 {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v < 0 || math.IsInf(v, 0) || math.IsNaN(v) {
 		return 0
 	}
-	unitInfo, err := asset.UnitInfo(swap.OriginAssetID)
+	return v
+}
+
+// intentsAtoms converts a base-unit amount of an Intents asset to wallet
+// atoms of the given wallet asset, or 0 if it cannot be resolved. Called
+// outside swapMtx: the catalog fetch can hit the network.
+func (e *intentsEngine) intentsAtoms(ctx context.Context, walletAssetID uint32, intentsAssetID, amount string) uint64 {
+	if amount == "" || walletAssetID == intentsAssetUnknown {
+		return 0
+	}
+	unitInfo, err := asset.UnitInfo(walletAssetID)
 	if err != nil {
 		return 0
 	}
@@ -478,15 +515,43 @@ func (e *intentsEngine) refundAtoms(ctx context.Context, swap *IntentsSwap) uint
 	if err != nil {
 		return 0
 	}
-	tok := cat.ByAssetID(swap.OriginAsset)
+	tok := cat.ByAssetID(intentsAssetID)
 	if tok == nil {
 		return 0
 	}
-	atoms, err := fromIntentsAmount(swap.RefundedAmount, &unitInfo, tok.Decimals)
+	atoms, err := fromIntentsAmount(amount, &unitInfo, tok.Decimals)
 	if err != nil {
 		return 0
 	}
 	return atoms
+}
+
+// refundAtoms converts the service-reported refunded amount to origin
+// wallet atoms, or 0 if it cannot be resolved.
+func (e *intentsEngine) refundAtoms(ctx context.Context, swap *IntentsSwap) uint64 {
+	return e.intentsAtoms(ctx, swap.OriginAssetID, swap.OriginAsset, swap.RefundedAmount)
+}
+
+// usdValue prices wallet atoms of an asset in USD from the catalog's spot
+// price, returning 0 when the asset, its unit info, or a price cannot be
+// resolved. Called outside swapMtx: the catalog fetch can hit the network.
+func (e *intentsEngine) usdValue(ctx context.Context, assetID uint32, atoms uint64) float64 {
+	if atoms == 0 || assetID == intentsAssetUnknown {
+		return 0
+	}
+	unitInfo, err := asset.UnitInfo(assetID)
+	if err != nil {
+		return 0
+	}
+	cat, err := e.freshCatalog(ctx)
+	if err != nil {
+		return 0
+	}
+	tok := resolveIntentsAsset(cat, assetID)
+	if tok == nil || tok.Price <= 0 {
+		return 0
+	}
+	return float64(atoms) / float64(unitInfo.Conventional.ConversionFactor) * tok.Price
 }
 
 // realizedAtomsOut converts the realized fill reported in a status
@@ -527,7 +592,9 @@ func (e *intentsEngine) realizedAtomsOut(ctx context.Context, swap *IntentsSwap,
 // copy from regressing a newer state. realizedAtoms (with haveRealized)
 // is the swap details' realized fill in destination atoms, replacing the
 // quote-time output so history shows what was actually delivered.
-func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.StatusResponse, realizedAtoms uint64, haveRealized bool) (*IntentsSwap, Notification) {
+// refundedUSD is the refunded amount priced at capture time, applied on a
+// transition to REFUNDED (both computed by the caller, outside the lock).
+func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.StatusResponse, realizedAtoms uint64, haveRealized bool, refundedUSD float64) (*IntentsSwap, Notification) {
 	e.swapMtx.Lock()
 	defer e.swapMtx.Unlock()
 
@@ -564,9 +631,24 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	swap.DestinationTxs = txHashes(details.DestinationChainTxs)
 	swap.RefundedAmount = details.RefundedAmount
 	swap.RefundReason = details.RefundReason
+	// The service's own execution-time pricing supersedes the quote-time
+	// values captured at execute.
+	if usd := parseUSD(details.AmountInUsd); usd != 0 {
+		swap.USDIn = usd
+	}
+	if usd := parseUSD(details.AmountOutUsd); usd != 0 {
+		swap.USDOut = usd
+	}
 	// Origin-chain hashes include the refund transaction when one occurs.
+	// The service's own refund pricing is preferred; the catalog-derived
+	// value computed by the caller covers its absence.
 	if newState == intents.StatusRefunded {
 		swap.RefundTxs = txHashes(details.OriginChainTxs)
+		if usd := parseUSD(details.RefundedAmountUsd); usd != 0 {
+			swap.USDRefunded = usd
+		} else if refundedUSD != 0 {
+			swap.USDRefunded = refundedUSD
+		}
 	}
 	if err := e.db.StoreIntentsSwap(swap); err != nil {
 		e.log.Errorf("Error storing swap %s: %v", depositAddress, err)
@@ -1278,6 +1360,8 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		AmountIn:       quote.AmountIn,
 		AmountOut:      quote.AmountOut,
 		AtomsOut:       atomsOut,
+		USDIn:          parseUSD(quote.AmountInUsd),
+		USDOut:         parseUSD(quote.AmountOutUsd),
 		Recipient:      req.Recipient,
 		RefundTo:       req.RefundTo,
 		Deadline:       deadline,
@@ -1311,10 +1395,13 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	// The wallet's history has the send's network fee — exact for UTXO
 	// wallets, an estimate for wallets that price fees at send time (EVM),
 	// which the poller re-captures until the transaction settles. A lookup
-	// miss leaves the fee zero for the poller to fill.
+	// miss leaves the fee zero for the poller to fill. The fee is priced in
+	// USD immediately, while the catalog rate is closest to the fee event.
 	var depositFee uint64
-	if tx, err := originWallet.WalletTransaction(ctx, coin.TxID()); err == nil && tx != nil {
+	var depositFeeUSD float64
+	if tx, err := originWallet.WalletTransaction(ctx, coin.TxID()); err == nil && tx != nil && tx.Fees > 0 {
 		depositFee = tx.Fees
+		depositFeeUSD = eng.usdValue(ctx, intentsChainID(originAssetID), depositFee)
 	}
 
 	// Record the deposit under swapMtx, reloading so a concurrent poll that
@@ -1330,6 +1417,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		}
 		if fresh.DepositTxFee == 0 {
 			fresh.DepositTxFee = depositFee
+			fresh.USDDepositFee = depositFeeUSD
 		}
 		if err := eng.db.StoreIntentsSwap(fresh); err != nil {
 			eng.log.Errorf("Error updating swap record %s after deposit: %v", swap.DepositAddress, err)
@@ -1346,6 +1434,7 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		swap.State = IntentsStateDepositSent
 		swap.DepositTxID = coin.TxID()
 		swap.DepositTxFee = depositFee
+		swap.USDDepositFee = depositFeeUSD
 		if err := eng.db.StoreIntentsSwap(swap); err != nil {
 			eng.log.Errorf("Error storing swap record %s after deposit: %v", swap.DepositAddress, err)
 		}
@@ -1628,6 +1717,18 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		envelope = nil
 	}
 
+	// The re-serialized quote preserves the service's original USD pricing,
+	// superseded by the swap details' execution-time pricing when reported.
+	// USDDepositFee and USDRefunded stay zero: their event-time rates are
+	// unknowable after the fact.
+	usdIn, usdOut := parseUSD(quote.AmountInUsd), parseUSD(quote.AmountOutUsd)
+	if usd := parseUSD(status.SwapDetails.AmountInUsd); usd != 0 {
+		usdIn = usd
+	}
+	if usd := parseUSD(status.SwapDetails.AmountOutUsd); usd != 0 {
+		usdOut = usd
+	}
+
 	return &IntentsSwap{
 		DepositAddress: depositAddress,
 		DepositMemo:    quote.DepositMemo,
@@ -1640,6 +1741,8 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		AmountIn:       echo.Amount,
 		AmountOut:      amountOut,
 		AtomsOut:       atoms(destAssetID, destTok, amountOut),
+		USDIn:          usdIn,
+		USDOut:         usdOut,
 		Recipient:      echo.Recipient,
 		RefundTo:       echo.RefundTo,
 		Deadline:       deadline,

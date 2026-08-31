@@ -190,9 +190,12 @@ func (t *TxHashRef) UnmarshalJSON(b []byte) error {
 type SwapDetails struct {
 	DepositedAmount     string      `json:"depositedAmount"`
 	AmountIn            string      `json:"amountIn"`
+	AmountInUsd         string      `json:"amountInUsd"`
 	AmountOut           string      `json:"amountOut"`
+	AmountOutUsd        string      `json:"amountOutUsd"`
 	Slippage            int         `json:"slippage"`
 	RefundedAmount      string      `json:"refundedAmount"`
+	RefundedAmountUsd   string      `json:"refundedAmountUsd"`
 	RefundReason        string      `json:"refundReason"`
 	RefundFee           string      `json:"refundFee"`
 	WithdrawFee         string      `json:"withdrawFee"`
