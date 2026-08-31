@@ -797,3 +797,51 @@ func TestStoreTxValidation(t *testing.T) {
 		t.Fatalf("valid batch rejected: %v", err)
 	}
 }
+
+// TestIgnoreTypesMoreAvailable pins MoreAvailable semantics under type
+// filtering: a page reports more available only when at least one more kept
+// transaction exists, not when the remainder is entirely filtered. Since
+// RefID paging is inclusive, an all-filtered tail reported as more-available
+// would have a paging client refetch the same page forever.
+func TestIgnoreTypesMoreAvailable(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	keep := tx(netA, "keep", 3, 300)
+	ignoredOld := tx(netA, "ignored-old", 1, 100)
+	ignoredOld.Type = Receive
+	if err := n.StoreTx(keep); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.StoreTx(ignoredOld); err != nil {
+		t.Fatal(err)
+	}
+
+	req := func() *TxHistoryRequest {
+		return &TxHistoryRequest{N: 1, Past: true, IgnoreTypes: []TransactionType{Receive}}
+	}
+
+	// Everything past the page is filtered: not more available.
+	resp, err := n.GetTxs(req())
+	if err != nil {
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if !eq(ids(resp.Txs), []string{"keep"}) {
+		t.Fatalf("page = %v, want [keep]", ids(resp.Txs))
+	}
+	if resp.MoreAvailable {
+		t.Fatal("MoreAvailable = true with only filtered entries remaining")
+	}
+
+	// A kept transaction past the page still reports more available.
+	if err := n.StoreTx(tx(netA, "kept-old", 2, 200)); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = n.GetTxs(req())
+	if err != nil {
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if !eq(ids(resp.Txs), []string{"keep"}) || !resp.MoreAvailable {
+		t.Fatalf("page = %v, MoreAvailable = %v; want [keep], true", ids(resp.Txs), resp.MoreAvailable)
+	}
+}

@@ -506,11 +506,10 @@ func (db *TxDB) getTxs(idx StoreIndex, prefix kvstore.KV, seekKey []byte, req *T
 	}
 
 	err := idx.Iterate(prefix, func(it StoreIter) error {
-		if n > 0 && len(txs) == n {
-			moreAvailable = true
-			return ErrEndIteration
-		}
-
+		// Filter before the limit check: MoreAvailable must mean another kept
+		// transaction exists, not merely another entry. An all-filtered tail
+		// reported as more-available would have an inclusive-cursor client
+		// refetching the same page forever.
 		if len(ignore) > 0 {
 			txTypeB, err := it.CrossIndex(txTypeIndexName)
 			if err != nil {
@@ -519,6 +518,11 @@ func (db *TxDB) getTxs(idx StoreIndex, prefix kvstore.KV, seekKey []byte, req *T
 			if ignore[TransactionType(binary.BigEndian.Uint16(txTypeB))] {
 				return nil
 			}
+		}
+
+		if n > 0 && len(txs) == n {
+			moreAvailable = true
+			return ErrEndIteration
 		}
 
 		wt, err := decodeIter(it)
