@@ -14,8 +14,6 @@ const (
 
 	keyFileName   = "sol-keyfile.json"
 	walletTypeRPC = "rpc"
-
-	version = 0
 )
 
 var (

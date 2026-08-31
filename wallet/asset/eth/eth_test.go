@@ -2056,7 +2056,7 @@ func TestTokenSendEmitsParentBalanceChange(t *testing.T) {
 	node.tokenContractor.transferTx = tx
 
 	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
-	tokenFees := WeiToGwei(maxFeeRate) * bufferedGasLimit(tTransferEstimate)
+	tokenFees := WeiToGwei(maxFeeRate) * flooredGasLimit(tTransferEstimate, tUSDCGasEstimate.Transfer)
 
 	const val = 10e9
 	node.tokenContractor.bal = GweiToWei(val)
@@ -2098,9 +2098,12 @@ func testSend(t *testing.T, assetID uint32) {
 
 	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
 	ethFees := WeiToGwei(maxFeeRate) * defaultSendGasLimit
-	// Token sends reserve fees for the buffered live estimate, not the static
-	// GasEstimate table.
-	tokenFees := WeiToGwei(maxFeeRate) * bufferedGasLimit(tTransferEstimate)
+	// Token sends reserve fees for the buffered live estimate, floored at the
+	// token's static GasEstimate.
+	var tokenFees uint64
+	if assetID != BipID {
+		tokenFees = WeiToGwei(maxFeeRate) * flooredGasLimit(tTransferEstimate, eth.gasEstimate.Transfer)
+	}
 
 	const val = 10e9
 	const testAddr = "dd93b447f7eBCA361805eBe056259853F3912E04"
@@ -2235,9 +2238,10 @@ func testEstimateSendTxFee(t *testing.T, assetID uint32) {
 
 	maxFeeRate, _, _ := eth.recommendedMaxFeeRate(eth.ctx)
 	ethFees := WeiToGwei(maxFeeRate) * defaultSendGasLimit
-	// With a recipient, token estimates use the buffered live estimate. Without
-	// one, or when the live estimate fails, the static GasEstimate stands in.
-	tokenFeesLive := WeiToGwei(maxFeeRate) * bufferedGasLimit(tTransferEstimate)
+	// With a recipient, token estimates use the floored, buffered live
+	// estimate. Without one, or when the live estimate fails, the static
+	// GasEstimate stands in.
+	tokenFeesLive := WeiToGwei(maxFeeRate) * flooredGasLimit(tTransferEstimate, tUSDCGasEstimate.Transfer)
 	tokenFeesStatic := WeiToGwei(maxFeeRate) * tUSDCGasEstimate.Transfer
 
 	ethFees = ethFees * 12 / 10
@@ -2588,5 +2592,139 @@ func TestCheckPendingApprovalsCallback(t *testing.T) {
 	if remainingDuringCallback != 0 {
 		t.Fatalf("confirmed approval not removed before onConfirm ran: %d remaining",
 			remainingDuringCallback)
+	}
+}
+
+// estimatingContractBackend is a bind.ContractBackend whose only live method
+// is EstimateGas. The embedded interface is nil; any other method call panics.
+type estimatingContractBackend struct {
+	bind.ContractBackend
+	estimate uint64
+	err      error
+	gotCall  ethereum.CallMsg
+}
+
+func (b *estimatingContractBackend) EstimateGas(_ context.Context, call ethereum.CallMsg) (uint64, error) {
+	b.gotCall = call
+	return b.estimate, b.err
+}
+
+func TestTransferGasLimit(t *testing.T) {
+	t.Parallel()
+	static := tUSDCGasEstimate.Transfer
+	if bufferedGasLimit(tTransferEstimate) <= static {
+		t.Fatalf("test constants: buffered estimate %d must exceed the static floor %d", bufferedGasLimit(tTransferEstimate), static)
+	}
+	tests := []struct {
+		name     string
+		estimate uint64
+		estErr   error
+		want     uint64
+		wantErr  bool
+	}{{
+		name:     "buffered estimate above floor",
+		estimate: tTransferEstimate,
+		want:     bufferedGasLimit(tTransferEstimate),
+	}, {
+		name:     "floored at static transfer gas",
+		estimate: 1_000,
+		want:     static,
+	}, {
+		name:    "estimate error",
+		estErr:  errors.New("execution reverted"),
+		wantErr: true,
+	}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			w, _, node, shutdown := tassetWallet(usdcEthID)
+			defer shutdown()
+			node.tokenContractor.transferEstimate = test.estimate
+			node.tokenContractor.transferEstimateErr = test.estErr
+			got, err := w.(*TokenWallet).transferGasLimit(testAddressA, 1)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("gas limit = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestApprovalGasLimit(t *testing.T) {
+	t.Parallel()
+	spender := common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	t.Run("base chain has no token contractor", func(t *testing.T) {
+		t.Parallel()
+		_, eth, _, shutdown := tassetWallet(BipID)
+		defer shutdown()
+		if _, err := eth.approvalGasLimit(eth.ctx, spender, unlimitedAllowance); err == nil {
+			t.Fatal("expected error for base-chain wallet")
+		}
+	})
+
+	static := tUSDCGasEstimate.Approve
+	if bufferedGasLimit(static) <= static {
+		t.Fatalf("test constants: buffered estimate %d must exceed the static floor %d", bufferedGasLimit(static), static)
+	}
+	tests := []struct {
+		name     string
+		estimate uint64
+		estErr   error
+		want     uint64
+		wantErr  bool
+	}{{
+		name:     "buffered estimate above floor",
+		estimate: static,
+		want:     bufferedGasLimit(static),
+	}, {
+		name:     "floored at static approve gas",
+		estimate: 1_000,
+		want:     static,
+	}, {
+		name:    "estimate error",
+		estErr:  errors.New("execution reverted"),
+		wantErr: true,
+	}}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, eth, node, shutdown := tassetWallet(usdcEthID)
+			defer shutdown()
+			backend := &estimatingContractBackend{estimate: test.estimate, err: test.estErr}
+			node.simBackend = backend
+			got, err := eth.approvalGasLimit(eth.ctx, spender, unlimitedAllowance)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("gas limit = %d, want %d", got, test.want)
+			}
+			// The simulated call must come from the wallet account, target the
+			// token contract, and name the real spender.
+			if backend.gotCall.From != eth.addr {
+				t.Errorf("estimate from %s, want %s", backend.gotCall.From, eth.addr)
+			}
+			if backend.gotCall.To == nil || *backend.gotCall.To != node.tokenContractor.tokenAddr {
+				t.Errorf("estimate to %v, want %s", backend.gotCall.To, node.tokenContractor.tokenAddr)
+			}
+			if !bytes.Contains(backend.gotCall.Data, spender.Bytes()) {
+				t.Errorf("spender %s not in approve calldata %x", spender, backend.gotCall.Data)
+			}
+		})
 	}
 }

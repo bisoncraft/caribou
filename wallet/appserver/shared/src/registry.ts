@@ -103,7 +103,6 @@ export interface WalletInfo {
   name: string
   version: number
   availablewallets: WalletDefinition[]
-  versions: number[]
   unitinfo: UnitInfo
   network?: NetworkInfo
 }

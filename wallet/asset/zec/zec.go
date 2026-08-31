@@ -36,8 +36,7 @@ import (
 )
 
 const (
-	version = 0
-	BipID   = 133
+	BipID = 133
 	// The default fee is passed to the user as part of the asset.WalletInfo
 	// structure.
 	defaultFee          = 10

@@ -57,9 +57,6 @@ import (
 )
 
 const (
-	// The implementation version. This considers the dex/networks package too.
-	version = 0
-
 	// BipID is the BIP-0044 asset ID.
 	BipID = 42
 

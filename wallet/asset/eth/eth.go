@@ -164,6 +164,17 @@ func bufferedGasLimit(estimate uint64) uint64 {
 	return max(estimate*(100+liveGasLimitBufferPct)/100, estimate+liveGasLimitBufferMin)
 }
 
+// flooredGasLimit is bufferedGasLimit with a lower bound: the greater of the
+// buffered live estimate and floor, the token's static Gases figure for the
+// same operation. The live estimate is what tracks contract and state changes;
+// the floor guards against a provider returning an implausibly low estimate,
+// which would otherwise broadcast a transaction that runs out of gas and burns
+// its whole limit without moving any tokens. Unused gas is refunded, so when
+// the floor wins it only raises the balance reserved up front.
+func flooredGasLimit(estimate, floor uint64) uint64 {
+	return max(bufferedGasLimit(estimate), floor)
+}
+
 // GasFeeConfigOption returns the gasfeelimit ConfigOption with the supplied
 // default (gwei / gas).
 func GasFeeConfigOption(defaultGwei uint64) *asset.ConfigOption {
@@ -1727,9 +1738,10 @@ var _ asset.Coin = (*coin)(nil)
 
 // approvalGasLimit returns the gas limit for an ERC20 approve transaction that
 // sets spender's allowance to amount: a live eth_estimateGas result plus the
-// standard buffer (see bufferedGasLimit). The estimate is made against the
-// actual spender because the allowance slot's current state (zero vs. non-zero)
-// changes the SSTORE cost, so a stand-in spender would mis-estimate.
+// standard buffer, floored at the token's static Gases.Approve (see
+// flooredGasLimit). The estimate is made against the actual spender because
+// the allowance slot's current state (zero vs. non-zero) changes the SSTORE
+// cost, so a stand-in spender would mis-estimate.
 func (w *assetWallet) approvalGasLimit(ctx context.Context, spender common.Address, amount *big.Int) (uint64, error) {
 	tc, err := w.tokenContractorOrErr()
 	if err != nil {
@@ -1739,7 +1751,11 @@ func (w *assetWallet) approvalGasLimit(ctx context.Context, spender common.Addre
 	if err != nil {
 		return 0, fmt.Errorf("error estimating approve gas: %w", err)
 	}
-	return bufferedGasLimit(est), nil
+	var floor uint64
+	if w.gasEstimate != nil {
+		floor = w.gasEstimate.Approve
+	}
+	return flooredGasLimit(est, floor), nil
 }
 
 // tokenContractorOrErr returns the wallet's token contractor or an error if it
@@ -2685,8 +2701,8 @@ func (w *TokenWallet) EstimateSendTxFee(addr string, value, _ uint64, _, maxWith
 
 // estimateSendGasLimit returns the gas limit a transfer of value to addr would
 // be sent with, for fee estimation. With a recipient known, that is the same
-// buffered live estimate Send uses. Without one, or when the node cannot
-// produce an estimate, the token's static GasEstimate stands in. Estimation
+// floored, buffered live estimate Send uses. Without one, or when the node
+// cannot produce an estimate, the token's static GasEstimate stands in. Estimation
 // fails when the simulated transfer reverts, typically because the account's
 // token balance cannot cover value; falling back keeps a fee figure available
 // alongside the balance error canSend reports.
@@ -3545,10 +3561,10 @@ func (w *ETHWallet) sendToAddr(addr common.Address, amt uint64, maxFeeRate, tipR
 }
 
 // transferGasLimit returns the gas limit for an ERC20 transfer of amt atomic
-// units to addr: a live eth_estimateGas result plus the standard buffer (see
-// bufferedGasLimit). The estimate targets the actual recipient and amount
-// because a transfer into an empty balance slot costs more than one into a
-// funded slot.
+// units to addr: a live eth_estimateGas result plus the standard buffer,
+// floored at the token's static Gases.Transfer (see flooredGasLimit). The
+// estimate targets the actual recipient and amount because a transfer into an
+// empty balance slot costs more than one into a funded slot.
 func (w *TokenWallet) transferGasLimit(addr common.Address, amt uint64) (uint64, error) {
 	tc, err := w.tokenContractorOrErr()
 	if err != nil {
@@ -3558,7 +3574,7 @@ func (w *TokenWallet) transferGasLimit(addr common.Address, amt uint64) (uint64,
 	if err != nil {
 		return 0, fmt.Errorf("error estimating transfer gas: %w", err)
 	}
-	return bufferedGasLimit(est), nil
+	return flooredGasLimit(est, w.gasEstimate.Transfer), nil
 }
 
 // sendToAddr sends tokens to the address with the specified gas limit.
@@ -4793,7 +4809,11 @@ func (getGas) returnFunds(
 		if err != nil {
 			return fmt.Errorf("error estimating transfer gas: %w", err)
 		}
-		gasLimit := bufferedGasLimit(est)
+		var floor uint64
+		if nt := token.NetTokens[net]; nt != nil && nt.GasEstimate != nil {
+			floor = nt.GasEstimate.Transfer
+		}
+		gasLimit := flooredGasLimit(est, floor)
 		fees := gasLimit * WeiToGweiCeil(maxFeeRate)
 		if fees > ethBal {
 			return fmt.Errorf("not enough base chain balance (%s) to cover fees (%s)",

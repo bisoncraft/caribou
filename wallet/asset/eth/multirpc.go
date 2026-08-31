@@ -1103,7 +1103,9 @@ func (m *multiRPCClient) withOne(ctx context.Context, providers []*provider, f f
 		if superError == nil {
 			superError = err
 		} else if err.Error() != superError.Error() {
-			superError = fmt.Errorf("%v: %w", superError, err)
+			// Wrap both sides so errors.Is/As can reach every provider's
+			// error, not only the last one.
+			superError = fmt.Errorf("%w: %w", superError, err)
 		}
 		for _, f := range acceptabilityFilters { // use case for more than one? is it just variadic to allow 0?
 			discard, propagate, fail := f(err)
@@ -1567,13 +1569,16 @@ func (m *multiRPCClient) SuggestGasTipCap(ctx context.Context) (tipCap *big.Int,
 }
 
 func (m *multiRPCClient) EstimateGas(ctx context.Context, call ethereum.CallMsg) (gas uint64, err error) {
-	return gas, decodeRevert(m.withAny(ctx, func(ctx context.Context, p *provider) error {
+	return gas, m.withAny(ctx, func(ctx context.Context, p *provider) error {
 		gas, err = p.ec.EstimateGas(ctx, call)
-		return err
+		// Decode per provider, before withOne aggregates errors across
+		// providers, so a revert reported by one provider is decoded
+		// regardless of what the others return.
+		return decodeRevert(err)
 	}, func(err error) (discard, propagate, fail bool) {
 		// Assume this one will be the same all around.
 		return false, errorFilter(err, "gas required exceeds allowance"), false
-	}))
+	})
 }
 
 // decodeRevert appends the decoded revert reason to a simulation error that

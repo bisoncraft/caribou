@@ -142,10 +142,12 @@ var (
 	xautTokenID, _    = util.BipSymbolID("xaut.eth")
 )
 
-// Gases lists typical gas usage for token wallet operations. These values are
-// for fee estimation only (pre-send fee display, balance sufficiency checks).
-// Transactions that are actually broadcast derive their gas limit from a live
-// eth_estimateGas call via bufferedGasLimit, never from this table.
+// Gases lists typical gas usage for token wallet operations. A transaction's
+// gas limit comes from a live eth_estimateGas call, with these values serving
+// two secondary roles: the floor under the buffered live estimate of a
+// broadcast transaction (see flooredGasLimit), and the stand-in for fee
+// display when no live estimate is available (no recipient known yet, or the
+// estimate call failed).
 type Gases struct {
 	// Approve is the amount of gas typically needed to approve a contract for
 	// transferring tokens. The first approval for an address uses more gas than

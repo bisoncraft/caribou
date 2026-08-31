@@ -19,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 func TestMultiRPCClientReconfigureNoopWhenEndpointsUnchanged(t *testing.T) {
@@ -337,6 +338,10 @@ func TestDecodeRevert(t *testing.T) {
 		err:  fmt.Errorf("provider a: %w", &tRPCError{msg: "execution reverted", data: errorString}),
 		want: "provider a: execution reverted: ERC20: transfer amount exceeds balance",
 	}, {
+		name: "aggregated with a differently-shaped provider error",
+		err:  fmt.Errorf("%w: %w", &tRPCError{msg: "execution reverted", data: errorString}, errors.New("i/o timeout")),
+		want: "execution reverted: i/o timeout: ERC20: transfer amount exceeds balance",
+	}, {
 		name: "panic code",
 		err:  &tRPCError{msg: "execution reverted", data: panic11},
 		want: "execution reverted: arithmetic underflow or overflow",
@@ -372,5 +377,40 @@ func TestDecodeRevert(t *testing.T) {
 		if !errors.Is(got, test.err) {
 			t.Errorf("%s: decoded error does not wrap the original", test.name)
 		}
+	}
+}
+
+// TestWithOneErrorAggregation asserts that the error withOne returns after
+// every provider fails keeps each provider's error reachable through
+// errors.Is/As, not only the last one. decodeRevert and the acceptability
+// filters depend on that for mixed-provider setups, where providers report
+// the same failure with differently-shaped errors.
+func TestWithOneErrorAggregation(t *testing.T) {
+	t.Parallel()
+	revert := &tRPCError{msg: "execution reverted", data: "0x"}
+	timeout := errors.New("i/o timeout")
+	m := &multiRPCClient{log: tLogger}
+	providers := []*provider{{host: "a"}, {host: "b"}}
+	err := m.withOne(context.Background(), providers, func(_ context.Context, p *provider) error {
+		if p.host == "a" {
+			return revert
+		}
+		return timeout
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, revert) {
+		t.Errorf("first provider's error not in chain: %v", err)
+	}
+	if !errors.Is(err, timeout) {
+		t.Errorf("second provider's error not in chain: %v", err)
+	}
+	var dataErr rpc.DataError
+	if !errors.As(err, &dataErr) {
+		t.Errorf("rpc.DataError not reachable through aggregated error: %v", err)
+	}
+	if want := "execution reverted: i/o timeout"; err.Error() != want {
+		t.Errorf("aggregated error = %q, want %q", err.Error(), want)
 	}
 }

@@ -26,7 +26,6 @@ import (
 )
 
 const (
-	version          = 0
 	BipID            = 128
 	walletTypeNative = "native"
 
