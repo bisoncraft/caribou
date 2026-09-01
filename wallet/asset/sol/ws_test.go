@@ -347,11 +347,16 @@ func TestWSClientLiveRequiresAllAccounts(t *testing.T) {
 	waitFor(t, "live", func() bool { return c.live.Load() })
 
 	// Registering a second account immediately un-lives the client, since one
-	// of two watched accounts is now unconfirmed.
+	// of two watched accounts is now unconfirmed. Hold the reply so the
+	// assertion below can't race the server's round trip: without this, a
+	// slow scheduler tick can let the subscribe reply land and re-live the
+	// client before c.live.Load() is checked.
+	hold := srv.holdSubscribes()
 	c.watch(ata, func() {})
 	if c.live.Load() {
 		t.Fatal("live with an unconfirmed subscription")
 	}
+	hold <- struct{}{}
 	recvString(t, srv.subbed, "token subscribe")
 	waitFor(t, "live with both", func() bool { return c.live.Load() })
 
