@@ -83,6 +83,13 @@ func AcrossBridgeSupportedAsset(assetID uint32, net util.Network) (supported boo
 	return assetIDToAcrossAsset(net, assetID) != nil
 }
 
+// acrossSupportsChain reports whether Across is configured for the chain on
+// the network.
+func acrossSupportsChain(net util.Network, chainAssetID uint32) bool {
+	_, found := chainAssetIDToAcrossChainID[net][chainAssetID]
+	return found
+}
+
 func acrossBaseURL(net util.Network) string {
 	if net == util.Mainnet {
 		return "https://app.across.to"
@@ -265,10 +272,10 @@ type acrossBridge struct {
 var _ bridge = (*acrossBridge)(nil)
 
 func newAcrossBridge(ctx context.Context, cb bind.ContractBackend, node ethFetcher, chainAssetID uint32, net util.Network, walletAddr common.Address, log util.Logger) (*acrossBridge, error) {
-	chainID, found := chainAssetIDToAcrossChainID[net][chainAssetID]
-	if !found {
+	if !acrossSupportsChain(net, chainAssetID) {
 		return nil, fmt.Errorf("unknown chain asset ID %d", chainAssetID)
 	}
+	chainID := chainAssetIDToAcrossChainID[net][chainAssetID]
 	spokePoolAddr, err := getSpokePoolAddr(net, chainID)
 	if err != nil {
 		return nil, err

@@ -58,11 +58,12 @@ module.exports = {
     path: path.resolve(__dirname, 'dist'),
     publicPath: '/js/'
   },
-  // This bundle is only ever served over loopback (127.0.0.1) to a desktop
-  // webview or local browser tab, never delivered over a real network, so
-  // webpack's web-delivery size budget (244 KiB) doesn't apply here.
+  // This bundle is large by design and mostly served over loopback, but it
+  // can also cross a real network via --tor or a non-loopback --webaddr, so
+  // keep a budget instead of disabling the warning outright.
   performance: {
-    hints: false
+    maxAssetSize: 2 * 1024 * 1024,
+    maxEntrypointSize: 2 * 1024 * 1024
   },
   plugins: [
     new MiniCssExtractPlugin({

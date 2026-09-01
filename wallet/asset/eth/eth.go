@@ -728,6 +728,8 @@ func newWallet(assetCFG *asset.WalletConfig, logger util.Logger, net util.Networ
 			"https://eth.api.onfinality.io/public",   // OnFinality - verified working
 			"https://eth-mainnet.public.blastapi.io", // Blast API - verified working
 			"https://ethereum-rpc.publicnode.com",    // PublicNode - verified working
+			// Verified working (2026-09-01)
+			"https://eth.drpc.org", // dRPC - verified working
 		}
 	}
 
@@ -951,7 +953,7 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	w.nonceMtx.Unlock()
 
 	w.bridges = make(map[string]bridge)
-	if _, chainSupported := chainAssetIDToAcrossChainID[w.net][w.assetID]; chainSupported {
+	if acrossSupportsChain(w.net, w.assetID) {
 		if acrossBridge, err := newAcrossBridge(ctx, w.node.contractBackend(), w.node, w.assetID, w.net, w.addr, w.log); err != nil {
 			w.log.Warnf("Failed to initialize Across bridge: %v", err)
 		} else {
