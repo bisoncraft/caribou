@@ -6,11 +6,13 @@
 #
 #   cd wallet/ios/icon && ./make-appicon.sh
 #
-# The mark is wallet/appserver/site/src/img/logo_icon_v1.svg, inset to ~66% of
-# the canvas so the iOS superellipse mask does not clip it, over the brand
-# indigo gradient. Two alternate grounds (white, and the #0f1115 app dark) are
-# kept in git history if the ground ever needs to change; only the SVG's
-# background rect and mark fills differ.
+# The mark is the Caribou antlers -- the same artwork the web UI ships as
+# shared/img/logo-antlers-brown.png, and appicon.svg is the only vector copy of
+# it in the tree. Its ink is 1.4:1, so it is placed by measured bounding box
+# rather than by the SVG canvas: inset to 82% of the width and centered, which
+# keeps the outer tines clear of the iOS superellipse mask. The ground is the
+# warm theme's --body-bg (#17130d), lifted to a #241c11 -> #141009 diagonal so
+# the tile does not read as flat black behind the brown.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
