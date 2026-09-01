@@ -73,12 +73,16 @@ func TestDriverOpen(t *testing.T) {
 	if info.Name != WalletInfo.Name {
 		t.Fatalf("wallet.Info().Name = %q, want %q", info.Name, WalletInfo.Name)
 	}
-	if _, err := drv.Open(&asset.WalletConfig{
+	testnetWallet, err := drv.Open(&asset.WalletConfig{
 		Type:     walletTypeRPC,
 		Settings: map[string]string{},
 		DataDir:  t.TempDir(),
-	}, util.Disabled, util.Testnet); err == nil {
-		t.Fatal("expected error opening on testnet: no verified chain config exists yet")
+	}, util.Disabled, util.Testnet)
+	if err != nil {
+		t.Fatalf("Open(testnet) error: %v", err)
+	}
+	if testnetWallet == nil {
+		t.Fatal("Open(testnet) returned nil wallet")
 	}
 }
 
@@ -93,7 +97,17 @@ func TestChainConfig(t *testing.T) {
 	if cfg.LondonBlock == nil || cfg.LondonBlock.Sign() != 0 {
 		t.Fatalf("ChainConfig(mainnet).LondonBlock = %v, want 0", cfg.LondonBlock)
 	}
-	for _, net := range []util.Network{util.Testnet, util.Simnet, util.Network(99)} {
+	tcfg, err := ChainConfig(util.Testnet)
+	if err != nil {
+		t.Fatalf("ChainConfig(testnet) error: %v", err)
+	}
+	if tcfg.ChainID == nil || tcfg.ChainID.Int64() != TestnetChainID {
+		t.Fatalf("ChainConfig(testnet).ChainID = %v, want %d", tcfg.ChainID, TestnetChainID)
+	}
+	if tcfg.LondonBlock == nil || tcfg.LondonBlock.Sign() != 0 {
+		t.Fatalf("ChainConfig(testnet).LondonBlock = %v, want 0", tcfg.LondonBlock)
+	}
+	for _, net := range []util.Network{util.Simnet, util.Network(99)} {
 		if _, err := ChainConfig(net); err == nil {
 			t.Fatalf("expected error for unsupported network %s", net)
 		}
@@ -112,7 +126,15 @@ func TestNetworkCompatibilityData(t *testing.T) {
 	if c.TokenAddr != (common.Address{}) {
 		t.Fatalf("NetworkCompatibilityData(mainnet).TokenAddr = %s, want empty (no token compat checks)", c.TokenAddr.Hex())
 	}
-	for _, net := range []util.Network{util.Testnet, util.Simnet, util.Network(99)} {
+	tc, err := NetworkCompatibilityData(util.Testnet)
+	if err != nil {
+		t.Fatalf("NetworkCompatibilityData(testnet) error: %v", err)
+	}
+	wantTestnetAddr := common.HexToAddress("0x0fb36075635c17bf1a9d401bf2cf81c5026ac521")
+	if tc.Addr != wantTestnetAddr {
+		t.Fatalf("NetworkCompatibilityData(testnet).Addr = %s, want %s", tc.Addr.Hex(), wantTestnetAddr.Hex())
+	}
+	for _, net := range []util.Network{util.Simnet, util.Network(99)} {
 		if _, err := NetworkCompatibilityData(net); err == nil {
 			t.Fatalf("expected error for unsupported network %s", net)
 		}
@@ -127,8 +149,12 @@ func TestChainIDs(t *testing.T) {
 	if got != MainnetChainID {
 		t.Fatalf("ChainIDs[mainnet] = %d, want %d", got, MainnetChainID)
 	}
-	if _, ok := ChainIDs[util.Testnet]; ok {
-		t.Fatal("ChainIDs should not have a testnet entry yet — its chain ID is unverified")
+	gotTestnet, ok := ChainIDs[util.Testnet]
+	if !ok {
+		t.Fatal("ChainIDs missing entry for testnet")
+	}
+	if gotTestnet != TestnetChainID {
+		t.Fatalf("ChainIDs[testnet] = %d, want %d", gotTestnet, TestnetChainID)
 	}
 	cfg, err := ChainConfig(util.Mainnet)
 	if err != nil {

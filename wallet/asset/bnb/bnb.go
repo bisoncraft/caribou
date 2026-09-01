@@ -100,6 +100,10 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 			"https://bsc-testnet-dataseed.bnbchain.org",
 			"https://bsc-testnet.bnbchain.org",
 			"https://bsc-prebsc-dataseed.bnbchain.org",
+			// Verified working (2026-09-01), including eth_getLogs over a
+			// full maxScanBlocks (128-block) range (address-scoped, same as
+			// the mainnet PublicNode entry below).
+			"https://bsc-testnet.publicnode.com",
 		}
 	case util.Mainnet:
 		defaultProviders = []string{
@@ -110,6 +114,11 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 			// incoming-transfer scan's ERC20 log-filter calls on their own.
 			"https://bsc-dataseed.bnbchain.org",
 			"https://bsc-dataseed-public.bnbchain.org",
+			// Verified working (2026-09-01). Caps eth_getLogs at a 50-block
+			// range (below maxScanBlocks), so like the two dataseed entries
+			// above it's kept for general RPC coverage rather than the
+			// transfer scan.
+			"https://1rpc.io/bnb",
 			// Verified working (2026-08-22), including eth_getLogs over a
 			// full maxScanBlocks (128-block) range. multiRPCClient fans a
 			// call out across every configured provider until one succeeds,

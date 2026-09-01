@@ -30,15 +30,19 @@ var (
 		FeeRateDenom: "tx",
 	}
 
+	// PublicNode is used over Solana's own api.*.solana.com clusters, which
+	// Solana's docs describe as a lightweight-testing endpoint only (rate
+	// capped at 100 req/10s per IP, no SLA) rather than a general-purpose
+	// public default.
 	DefaultRPCEndpoints = map[util.Network]string{
-		util.Mainnet: "https://api.mainnet-beta.solana.com",
-		util.Testnet: "https://api.testnet.solana.com",
+		util.Mainnet: "https://solana-rpc.publicnode.com",
+		util.Testnet: "https://solana-testnet-rpc.publicnode.com",
 		util.Simnet:  "http://127.0.0.1:18999",
 	}
 
 	DefaultWSEndpoints = map[util.Network]string{
-		util.Mainnet: "wss://api.mainnet-beta.solana.com",
-		util.Testnet: "wss://api.testnet.solana.com",
+		util.Mainnet: "wss://solana-rpc.publicnode.com",
+		util.Testnet: "wss://solana-testnet-rpc.publicnode.com",
 		util.Simnet:  "ws://127.0.0.1:19000",
 	}
 

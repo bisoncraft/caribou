@@ -59,11 +59,16 @@ var (
 	// first. rpc.mainnet.near.org is deprecated and aggressively
 	// rate-limited but still answers, so it remains as a last resort.
 	// All listed endpoints were verified to serve the block, query,
-	// gas_price, and tx method families.
+	// gas_price, and tx method families. near.lava.build was removed
+	// (2026-09-01) after Lava discontinued the keyless public endpoint;
+	// rpc.intea.rs was evaluated as a replacement but 429s on tx/send_tx
+	// for unauthenticated callers while still answering cheap reads —
+	// since broadcastTx has no endpoint failover (it sends to whichever
+	// endpoint last answered any call), that combination can silently
+	// fail a real broadcast, so it was left out rather than added.
 	DefaultRPCEndpoints = map[util.Network][]string{
 		util.Mainnet: {
 			"https://free.rpc.fastnear.com",
-			"https://near.lava.build",
 			"https://near.drpc.org",
 			"https://rpc.mainnet.near.org",
 		},

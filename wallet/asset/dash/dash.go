@@ -11,6 +11,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/config"
+	"github.com/bisoncraft/caribou/util/feeratefetcher"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/btc"
 	inWallet "github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
@@ -81,6 +82,22 @@ func (d *Driver) Info() *asset.WalletInfo {
 // change.
 func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 	return btc.MinLotSize(maxFeeRate, false)
+}
+
+// feeRateSources returns the ranked external fee-rate sources for Dash. The
+// mainnet sources are used on every network; on test networks a mainnet fee
+// rate is a reasonable proxy. bitcore.io does not support Dash, and there is
+// no mempool.space-style Dash explorer, so only two independent sources are
+// available; both are rank 1 (averaged) rather than one primary and one
+// fallback, since blockcypher's Dash estimate has been observed running
+// roughly an order of magnitude above blockchair's — with only two sources
+// and no counterweight, ranking one below the other would make it the sole
+// authority whenever the higher-ranked source is healthy.
+func feeRateSources() []*feeratefetcher.SourceConfig {
+	return []*feeratefetcher.SourceConfig{
+		btc.BlockcypherSource("dash", 1),
+		btc.BlockchairSource("dash", 1),
+	}
 }
 
 // Exists checks the existence of the wallet. Part of the Creator interface, so

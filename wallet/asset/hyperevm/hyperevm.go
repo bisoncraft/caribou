@@ -68,8 +68,20 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		return nil, fmt.Errorf("failed to locate HyperEVM compatibility data for network %s: %w", net, err)
 	}
 	var defaultProviders []string
-	if net == util.Mainnet {
-		defaultProviders = []string{"https://rpc.hyperliquid.xyz/evm"}
+	switch net {
+	case util.Mainnet:
+		defaultProviders = []string{
+			// Verified working (2026-09-01)
+			"https://rpc.hyperliquid.xyz/evm",     // Hyperliquid Labs official
+			"https://rpc.nodeflare.app/hl/public", // NodeFlare
+			"https://hyperliquid.drpc.org",        // dRPC
+		}
+	case util.Testnet:
+		defaultProviders = []string{
+			// Verified working (2026-09-01). The official
+			// rpc.hyperliquid-testnet.xyz/evm is unreachable.
+			"https://rpcs.chain.link/hyperevm/testnet", // Chainlink
+		}
 	}
 
 	return eth.NewEVMWallet(&eth.EVMWalletConfig{

@@ -40,10 +40,11 @@ var dashElectrumWalletDefinition = &asset.WalletDefinition{
 // wallet.
 func dashElectrumChainConfig(chainParams *chaincfg.Params) btc.ChainConfig {
 	return btc.ChainConfig{
-		Chain:       bisonwire.ChainDASH,
-		ChainParams: chainParams,
-		NetParams:   dashTableNetParams(chainParams),
-		Info:        WalletInfo,
+		Chain:          bisonwire.ChainDASH,
+		ChainParams:    chainParams,
+		NetParams:      dashTableNetParams(chainParams),
+		Info:           WalletInfo,
+		FeeRateSources: feeRateSources(),
 		// Enable the gap-limit address-discovery scan on every connect, matching
 		// BTC and LTC. Without it, a wallet restored from seed (or one that
 		// received funds while offline) never rediscovers its addresses, so its

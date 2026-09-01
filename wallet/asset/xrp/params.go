@@ -40,14 +40,20 @@ var (
 		FeeRateDenom: "tx",
 	}
 
+	// xrplcluster.com is used over Ripple's own s1.ripple.com on mainnet:
+	// xrpl.org's docs describe s1.ripple.com as "not for sustained or
+	// business use," while xrplcluster.com is the community-run,
+	// load-balanced full-history cluster recommended for public/production
+	// use. The testnet endpoint is unaffected — s.altnet.rippletest.net is
+	// the official XRPL Foundation testnet server and has no such caveat.
 	DefaultRPCEndpoints = map[util.Network]string{
-		util.Mainnet: "https://s1.ripple.com:51234",
+		util.Mainnet: "https://xrplcluster.com",
 		util.Testnet: "https://s.altnet.rippletest.net:51234",
 		util.Simnet:  "http://localhost:15005",
 	}
 
 	DefaultWSEndpoints = map[util.Network]string{
-		util.Mainnet: "wss://s1.ripple.com/",
+		util.Mainnet: "wss://xrplcluster.com",
 		util.Testnet: "wss://s.altnet.rippletest.net:51233/",
 		util.Simnet:  "ws://localhost:16006",
 	}

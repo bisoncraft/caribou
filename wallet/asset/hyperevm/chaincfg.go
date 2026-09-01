@@ -24,25 +24,36 @@ var mainnetCompatibilityData = eth.CompatibilityData{
 	BlockHash: common.HexToHash("0x9da92844e5f407106223a5370c901ceabe8e65cb434e23d97c2652e46db3e12d"),
 }
 
+// testnetCompatibilityData is verified live against
+// https://rpcs.chain.link/hyperevm/testnet (2026-09-01): Addr's balance,
+// TxHash's receipt (block 63052893 / 0x3c2ee5d), and BlockHash all resolve,
+// and eth_getBlockByNumber confirms EIP-1559 support (baseFeePerGas present).
+var testnetCompatibilityData = eth.CompatibilityData{
+	Addr:      common.HexToAddress("0x0fb36075635c17bf1a9d401bf2cf81c5026ac521"),
+	TokenAddr: common.Address{},
+	TxHash:    common.HexToHash("0x9bcfc3ee645c55950b4b7e833e72f60d897d6890a793ca80eea5be4027fb09f9"),
+	BlockHash: common.HexToHash("0x2bcb42df850cdb0280db6ef78c995e78c0280f6cdc975805c1ed77868961a5e5"),
+}
+
 // NetworkCompatibilityData returns the CompatibilityData for the specified
-// network. Only Mainnet is currently supported — see ChainIDs.
+// network. Simnet is not supported — see ChainIDs.
 func NetworkCompatibilityData(net util.Network) (c eth.CompatibilityData, err error) {
 	switch net {
 	case util.Mainnet:
 		return mainnetCompatibilityData, nil
+	case util.Testnet:
+		return testnetCompatibilityData, nil
 	default:
 		return c, fmt.Errorf("no compatibility data for network # %d", net)
 	}
 }
 
-// ChainConfig returns the core configuration for the blockchain. Only
-// Mainnet is currently supported: HyperEVM testnet's RPC endpoint
-// (rpc.hyperliquid-testnet.xyz) could not be reached to verify its chain ID,
-// and there is no local HyperEVM node for simnet testing.
+// ChainConfig returns the core configuration for the blockchain. Simnet is
+// not supported: there is no local HyperEVM node to test against.
 func ChainConfig(net util.Network) (c *params.ChainConfig, err error) {
 	c = new(params.ChainConfig)
 	switch net {
-	case util.Mainnet:
+	case util.Mainnet, util.Testnet:
 		c.ChainID = big.NewInt(ChainIDs[net])
 		// HyperEVM supports EIP-1559 typed transactions from genesis.
 		c.LondonBlock = big.NewInt(0)

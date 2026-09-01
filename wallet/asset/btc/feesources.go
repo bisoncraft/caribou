@@ -47,6 +47,31 @@ func MempoolSpaceSource(name, baseURI string, rank uint) *feeratefetcher.SourceC
 	}
 }
 
+// BlockstreamSource builds a fee source backed by the blockstream.info Esplora
+// fee-estimates endpoint. baseURI is the mainnet API root without a trailing
+// slash, e.g. "https://blockstream.info/api". The endpoint reports a feerate
+// per confirmation target (in blocks); target 2 is used as a next-few-block
+// estimate comparable to the other rank-1 sources.
+func BlockstreamSource(name, baseURI string, rank uint) *feeratefetcher.SourceConfig {
+	uri := baseURI + "/fee-estimates"
+	return &feeratefetcher.SourceConfig{
+		Name:   name,
+		Rank:   rank,
+		Period: time.Minute * 2,
+		F: func(ctx context.Context) (uint64, time.Duration, error) {
+			var res map[string]float64
+			if err := dexnet.Get(ctx, uri, &res); err != nil {
+				return 0, time.Minute * 10, err
+			}
+			rate, found := res["2"]
+			if !found {
+				return 0, time.Minute * 10, errors.New("no target-2 estimate returned")
+			}
+			return uint64(math.Round(rate)), 0, nil
+		},
+	}
+}
+
 // BlockcypherSource builds a fee source backed by the api.blockcypher.com chain
 // endpoint. coin is the lower-case symbol in the API path (btc, ltc, doge,
 // dash). The endpoint reports mainnet only.
@@ -165,6 +190,7 @@ func BitcoinFeeSources() []*feeratefetcher.SourceConfig {
 	return []*feeratefetcher.SourceConfig{
 		MempoolSpaceSource("mempool.space", "https://mempool.space", 1),
 		BlockcypherSource("btc", 1),
+		BlockstreamSource("blockstream.info", "https://blockstream.info/api", 1),
 		BitcoinerLiveSource(2),
 		BlockchairSource("bitcoin", 3),
 	}
