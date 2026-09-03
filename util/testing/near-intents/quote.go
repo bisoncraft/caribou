@@ -250,8 +250,16 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	if sw != nil {
 		sw.envelope = envelope
 		s.swapMtx.Lock()
+		// Consume any outcome armed for the next swap. sw is not yet
+		// published, so the direct field write needs no swap-level lock.
+		forced := s.pendingForce
+		sw.forced = forced
+		s.pendingForce = ""
 		s.swaps[sw.depositAddress] = sw
 		s.swapMtx.Unlock()
+		if forced != "" {
+			s.log.Printf("swap %s created with armed outcome %q", sw.depositAddress, forced)
+		}
 		go sw.run(s.ctx)
 		s.log.Printf("committed quote %s: %s %s (%s) -> %s %s (%s), deposit address %s",
 			sw.correlationID, formatUnits(amountIn, origin.decimals, origin.decimals), origin.symbol, origin.chain.slug,

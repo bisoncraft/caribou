@@ -397,6 +397,84 @@ func TestLifecycleSuccess(t *testing.T) {
 	}
 }
 
+// TestArmedOutcome covers /test/force with no deposit address: the outcome
+// is armed for the next swap created, consumed one-shot, and cleared by an
+// address-less RESUME.
+func TestArmedOutcome(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	force := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/test/force", strings.NewReader(body))
+		rig.server.handleForce(w, r)
+		return w
+	}
+	pending := func() string {
+		rig.server.swapMtx.RLock()
+		defer rig.server.swapMtx.RUnlock()
+		return rig.server.pendingForce
+	}
+
+	// An armed outcome can be cleared before any swap consumes it.
+	if w := force(`{"outcome":"FAIL"}`); w.Code != 200 {
+		t.Fatalf("arm FAIL: status %d", w.Code)
+	}
+	if got := pending(); got != forceFail {
+		t.Fatalf("pendingForce = %q, want %q", got, forceFail)
+	}
+	if w := force(`{"outcome":"RESUME"}`); w.Code != 200 {
+		t.Fatalf("clear arm: status %d", w.Code)
+	}
+	if got := pending(); got != "" {
+		t.Fatalf("pendingForce = %q after clearing", got)
+	}
+
+	// A dry quote must not consume the arm; the next committed quote does.
+	if w := force(`{"outcome":"REFUND"}`); w.Code != 200 {
+		t.Fatalf("arm REFUND: status %d", w.Code)
+	}
+	if _, err := rig.client.Quote(ctx, testQuoteRequest(true)); err != nil {
+		t.Fatalf("dry Quote: %v", err)
+	}
+	if got := pending(); got != forceRefund {
+		t.Fatalf("dry quote consumed the arm: pendingForce = %q", got)
+	}
+	resp, err := rig.client.Quote(ctx, testQuoteRequest(false))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	addr := resp.Quote.DepositAddress
+	if got := pending(); got != "" {
+		t.Fatalf("arm not consumed: pendingForce = %q", got)
+	}
+
+	amountIn, _ := new(big.Int).SetString(resp.Quote.AmountIn, 10)
+	rig.btc.fund(addr, amountIn)
+	if err := rig.client.SubmitDeposit(ctx, addr, "userdeposittx"); err != nil {
+		t.Fatalf("SubmitDeposit: %v", err)
+	}
+	waitStatus(t, rig, addr, intents.StatusRefunded)
+
+	// One-shot: a second swap runs unforced.
+	rig.server.swapMtx.RLock()
+	if forced := rig.server.swaps[addr].forcedOutcome(); forced != forceRefund {
+		rig.server.swapMtx.RUnlock()
+		t.Fatalf("swap forced = %q, want %q", forced, forceRefund)
+	}
+	rig.server.swapMtx.RUnlock()
+	resp2, err := rig.client.Quote(ctx, testQuoteRequest(false))
+	if err != nil {
+		t.Fatalf("second Quote: %v", err)
+	}
+	rig.server.swapMtx.RLock()
+	forced := rig.server.swaps[resp2.Quote.DepositAddress].forcedOutcome()
+	rig.server.swapMtx.RUnlock()
+	if forced != "" {
+		t.Fatalf("second swap born forced: %q", forced)
+	}
+}
+
 func TestForcedRefund(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()

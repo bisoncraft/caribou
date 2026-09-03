@@ -90,6 +90,12 @@ type Server struct {
 
 	swapMtx sync.RWMutex
 	swaps   map[string]*swapState // key: deposit address
+	// pendingForce is a forced outcome armed for the next swap created,
+	// set by POST /test/force with no depositAddress. Arming before the
+	// quote exists lets a UI-driven test declare the outcome without ever
+	// learning the deposit address or racing the swap's ~10s happy path.
+	// Consumed (one-shot) when the next committed quote registers its swap.
+	pendingForce string
 }
 
 // New constructs a Server. Chains (or the Drivers override) must name at
@@ -319,6 +325,20 @@ func (s *Server) handleForce(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadRequest, "Bad Request",
 			"outcome must be one of REFUND, FAIL, STALL, RESUME")
+		return
+	}
+	// No deposit address arms the outcome for the next swap created (RESUME,
+	// already mapped to "", clears a standing arm).
+	if req.DepositAddress == "" {
+		s.swapMtx.Lock()
+		s.pendingForce = req.Outcome
+		s.swapMtx.Unlock()
+		if req.Outcome == "" {
+			s.log.Printf("cleared the armed outcome for the next swap")
+		} else {
+			s.log.Printf("armed outcome %q for the next swap", req.Outcome)
+		}
+		writeJSON(w, map[string]bool{"ok": true})
 		return
 	}
 	s.swapMtx.RLock()
