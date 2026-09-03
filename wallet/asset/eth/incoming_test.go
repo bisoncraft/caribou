@@ -4,9 +4,11 @@
 package eth
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -62,5 +64,20 @@ func TestParseNativeBridgePayout(t *testing.T) {
 	unrelated.Topics[0] = common.HexToHash("0xdeadbeef")
 	if _, ok := parseNativeBridgePayout(receipt(unrelated), us); ok {
 		t.Fatal("attributed an unrelated event")
+	}
+}
+
+// TestIncomingTxBaseUnsettled guards the provider states that arrive with a
+// nil error: a nil receipt, and a receipt not yet bound to a block. Both must
+// read as not-found — the recording retry loop keys on CoinNotFoundError —
+// rather than dereferencing nil in a background goroutine.
+func TestIncomingTxBaseUnsettled(t *testing.T) {
+	w := &assetWallet{}
+	if _, err := w.incomingTxBase(common.Hash{}, nil, 0); !errors.Is(err, asset.CoinNotFoundError) {
+		t.Fatalf("nil receipt: err = %v, want CoinNotFoundError", err)
+	}
+	unbound := &types.Receipt{Status: types.ReceiptStatusSuccessful}
+	if _, err := w.incomingTxBase(common.Hash{}, unbound, 0); !errors.Is(err, asset.CoinNotFoundError) {
+		t.Fatalf("nil block number: err = %v, want CoinNotFoundError", err)
 	}
 }

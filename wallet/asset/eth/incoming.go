@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -110,6 +111,13 @@ func parseNativeBridgePayout(receipt *types.Receipt, addr common.Address) (wei *
 // incomingTxBase builds the common fields of an incoming-tx record from
 // its mined receipt, erroring on a failed transaction, which paid nothing.
 func (w *assetWallet) incomingTxBase(txHash common.Hash, receipt *types.Receipt, nonce uint64) (*txdb.WalletTransaction, error) {
+	// A nil receipt with a nil error, and a receipt not yet bound to a
+	// block, are known provider states: the transaction is not settled in
+	// this provider's view. Report not-found so the recording retry loop
+	// comes back to it.
+	if receipt == nil || receipt.BlockNumber == nil {
+		return nil, asset.CoinNotFoundError
+	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
 		return nil, fmt.Errorf("transaction %s failed on-chain", txHash)
 	}
@@ -134,6 +142,11 @@ func (w *ETHWallet) fetchIncomingTx(ctx context.Context, txHash common.Hash, amt
 	receipt, tx, err := w.node.transactionAndReceipt(ctx, txHash)
 	if err != nil {
 		return nil, err
+	}
+	// No transaction and no error is not-found, matching the receipt
+	// guard in incomingTxBase.
+	if tx == nil {
+		return nil, asset.CoinNotFoundError
 	}
 	wt, err := w.incomingTxBase(txHash, receipt, tx.Nonce())
 	if err != nil {
@@ -160,6 +173,11 @@ func (w *TokenWallet) fetchIncomingTx(ctx context.Context, txHash common.Hash, a
 	receipt, tx, err := w.node.transactionAndReceipt(ctx, txHash)
 	if err != nil {
 		return nil, err
+	}
+	// No transaction and no error is not-found, matching the receipt
+	// guard in incomingTxBase.
+	if tx == nil {
+		return nil, asset.CoinNotFoundError
 	}
 	wt, err := w.incomingTxBase(txHash, receipt, tx.Nonce())
 	if err != nil {
