@@ -450,9 +450,14 @@ func (e *intentsEngine) recordIncomingTxs(swap *IntentsSwap) {
 	// record on any transient miss — so recording retries briefly in the
 	// background, on the engine's context (the caller's may be an HTTP
 	// request's).
-	e.c.wg.Add(1)
+	// beginTask, not a bare wg.Add: this is reachable from an HTTP-handler
+	// goroutine (IntentsRefresh) that Run does not wait on, so an unguarded
+	// Add can race the shutdown Wait.
+	if !e.c.beginTask() {
+		return
+	}
 	go func() {
-		defer e.c.wg.Done()
+		defer e.c.endTask()
 		for _, txid := range txids {
 			e.recordIncomingTxWithRetry(rec, assetID, txid, amtHint, swap.DepositAddress)
 		}
@@ -635,11 +640,10 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	if usd := parseUSD(details.AmountOutUsd); usd != 0 {
 		swap.USDOut = usd
 	}
-	// Origin-chain hashes include the refund transaction when one occurs.
 	// The service's own refund pricing is preferred; the catalog-derived
 	// value computed by the caller covers its absence.
 	if newState == intents.StatusRefunded {
-		swap.RefundTxs = txHashes(details.OriginChainTxs)
+		swap.RefundTxs = refundTxHashes(details.OriginChainTxs, swap.DepositTxID)
 		swap.RefundedAtoms = refundedAtoms
 		if usd := parseUSD(details.RefundedAmountUsd); usd != 0 {
 			swap.USDRefunded = usd
@@ -790,6 +794,26 @@ func txHashes(refs []intents.TxHashRef) []string {
 	return hashes
 }
 
+// refundTxHashes extracts the refund transactions from a refunded swap's
+// origin-chain hashes, which include the user's own deposit transaction
+// alongside the refund. The deposit does not belong on the refund list: it
+// is already tracked on the record, it would zero the single-txid amount
+// hint for incoming-tx recording, and it would render a second time in the
+// UI labeled as a refund.
+func refundTxHashes(refs []intents.TxHashRef, depositTxID string) []string {
+	hashes := make([]string, 0, len(refs))
+	for _, r := range refs {
+		if depositTxID != "" && strings.EqualFold(r.Hash, depositTxID) {
+			continue
+		}
+		hashes = append(hashes, r.Hash)
+	}
+	if len(hashes) == 0 {
+		return nil
+	}
+	return hashes
+}
+
 func intentsNoteContent(state string) (subject string, severity db.Severity) {
 	switch state {
 	case intents.StatusSuccess:
@@ -906,6 +930,19 @@ func toIntentsAmount(atoms uint64, unitInfo *util.UnitInfo, decimals int) (strin
 }
 
 func fromIntentsAmount(amount string, unitInfo *util.UnitInfo, decimals int) (uint64, error) {
+	return fromIntentsAmountRound(amount, unitInfo, decimals, false)
+}
+
+// fromIntentsAmountCeil converts like fromIntentsAmount but rounds up when
+// the Intents scale is finer than the wallet's atomic unit. Deposit sizing
+// uses it: the service's amountIn is not quantized to wallet atoms, so a
+// truncated conversion can come up a wallet atom short of the quote and the
+// deposit is never recognized as complete.
+func fromIntentsAmountCeil(amount string, unitInfo *util.UnitInfo, decimals int) (uint64, error) {
+	return fromIntentsAmountRound(amount, unitInfo, decimals, true)
+}
+
+func fromIntentsAmountRound(amount string, unitInfo *util.UnitInfo, decimals int, roundUp bool) (uint64, error) {
 	walletExp, err := walletDecimalExp(unitInfo)
 	if err != nil {
 		return 0, err
@@ -917,7 +954,11 @@ func fromIntentsAmount(amount string, unitInfo *util.UnitInfo, decimals int) (ui
 	diff := decimals - walletExp
 	switch {
 	case diff > 0:
-		v.Quo(v, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(diff)), nil))
+		den := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(diff)), nil)
+		if roundUp {
+			v.Add(v, new(big.Int).Sub(den, big.NewInt(1)))
+		}
+		v.Quo(v, den)
 	case diff < 0:
 		v.Mul(v, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-diff)), nil))
 	}
@@ -1167,8 +1208,15 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 		return nil, err
 	}
 	// The quoted input, not the request echo: for an exact-output quote the
-	// service computes it, and for exact-input it echoes the request.
-	atomsIn, err := fromIntentsAmount(resp.Quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
+	// service computes it, and for exact-input it echoes the request. The
+	// exact-output conversion rounds up to match the execute-time deposit
+	// sizing — this value is the ceiling the user accepts, and a truncated
+	// ceiling would reject a committed quote at an unmoved rate.
+	convertIn := fromIntentsAmount
+	if exactOutput {
+		convertIn = fromIntentsAmountCeil
+	}
+	atomsIn, err := convertIn(resp.Quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
 	if err != nil {
 		return nil, err
 	}
@@ -1289,6 +1337,13 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	// tolerance above it — must clear the "Min received" floor the user
 	// was shown. Reject before anything is persisted or sent; the
 	// unfunded quote expires service-side with no consequence.
+	//
+	// For EXACT_OUTPUT this check requires that the service not apply the
+	// slippage tolerance to minAmountOut. Verified against the production
+	// service (dry quote, 2026-09-03): an exact-output quote with a
+	// nonzero slippageTolerance returns minAmountOut equal to the
+	// requested output, with slippage expressed on the input side
+	// (minAmountIn below amountIn) — matching the simnet mock.
 	minCommittedOut, err := fromIntentsAmount(quote.MinAmountOut, &destWallet.Info().UnitInfo, dest.Decimals)
 	if err != nil {
 		return nil, fmt.Errorf("bad committed minAmountOut: %w", err)
@@ -1303,10 +1358,13 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	// service's amount may sit a truncation below when the wallet's atomic
 	// unit is finer than the Intents scale, and over-depositing the dust
 	// is harmless). For exact-output the service computes it, and the
-	// ceiling the user accepted caps it.
+	// ceiling the user accepted caps it. The conversion rounds up: the
+	// service's amountIn is not quantized to wallet atoms, and a deposit
+	// truncated below it is never recognized as complete — the swap would
+	// sit INCOMPLETE_DEPOSIT until the deadline refund.
 	sendAtoms := atoms
 	if exactOutput {
-		sendAtoms, err = fromIntentsAmount(quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
+		sendAtoms, err = fromIntentsAmountCeil(quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
 		if err != nil {
 			return nil, fmt.Errorf("bad committed amountIn: %w", err)
 		}
@@ -1734,8 +1792,12 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		DestAssetID:    destAssetID,
 		OriginAsset:    echo.OriginAsset,
 		DestAsset:      echo.DestinationAsset,
-		AtomsIn:        atoms(originAssetID, originTok, echo.Amount),
-		AmountIn:       echo.Amount,
+		// The quote's own AmountIn, never echo.Amount: for an EXACT_OUTPUT
+		// request the echoed amount is the destination amount, and recording
+		// it as the input would misprice the origin side. For exact-input the
+		// two agree. This mirrors what IntentsExecute records.
+		AtomsIn:        atoms(originAssetID, originTok, quote.AmountIn),
+		AmountIn:       quote.AmountIn,
 		AmountOut:      amountOut,
 		AtomsOut:       atoms(destAssetID, destTok, amountOut),
 		USDIn:          usdIn,
@@ -1748,6 +1810,7 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		DepositTxID:    depositTxID,
 		NearTxHashes:   status.SwapDetails.NearTxHashes,
 		DestinationTxs: txHashes(status.SwapDetails.DestinationChainTxs),
+		RefundTxs:      refundTxHashes(status.SwapDetails.OriginChainTxs, depositTxID),
 		RefundedAmount: status.SwapDetails.RefundedAmount,
 		RefundedAtoms:  atoms(originAssetID, originTok, status.SwapDetails.RefundedAmount),
 		RefundReason:   status.SwapDetails.RefundReason,

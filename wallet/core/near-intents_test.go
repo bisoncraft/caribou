@@ -62,6 +62,23 @@ func TestIntentsAmountScaling(t *testing.T) {
 		t.Errorf("truncation: got %d, want 5000000", atoms)
 	}
 
+	// Ceiling conversion for deposit sizing: any remainder rounds up, an
+	// exact multiple does not.
+	atoms, err = fromIntentsAmountCeil("50000000000000000000001", unitInfo(1e8), 24)
+	if err != nil {
+		t.Fatalf("fromIntentsAmountCeil: %v", err)
+	}
+	if atoms != 5_000_001 {
+		t.Errorf("ceiling: got %d, want 5000001", atoms)
+	}
+	atoms, err = fromIntentsAmountCeil("50000000000000000000000", unitInfo(1e8), 24)
+	if err != nil {
+		t.Fatalf("fromIntentsAmountCeil: %v", err)
+	}
+	if atoms != 5_000_000 {
+		t.Errorf("exact multiple rounded up: got %d, want 5000000", atoms)
+	}
+
 	// Overflow detection.
 	if _, err := fromIntentsAmount("99999999999999999999999999999999", unitInfo(1e8), 8); err == nil {
 		t.Errorf("expected overflow error")
@@ -151,6 +168,37 @@ func TestSwapFromStatus(t *testing.T) {
 	// swap details carry only nulls).
 	if swap.USDIn != 6493.900000000001 || swap.USDOut != 6480.205660271880 {
 		t.Fatalf("quote USD pricing not captured: %f / %f", swap.USDIn, swap.USDOut)
+	}
+}
+
+// TestSwapFromStatusExactOutput covers the input-amount source: an
+// EXACT_OUTPUT request echoes the DESTINATION amount, so the record's
+// input side must come from the quote's own amountIn, mirroring what
+// IntentsExecute records for live swaps.
+func TestSwapFromStatusExactOutput(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "intents", "testdata", "status-pending.json"))
+	if err != nil {
+		t.Fatalf("error reading fixture: %v", err)
+	}
+	status := new(intents.StatusResponse)
+	if err := json.Unmarshal(b, status); err != nil {
+		t.Fatalf("error decoding fixture: %v", err)
+	}
+	status.QuoteResponse.Request.SwapType = intents.SwapTypeExactOutput
+	status.QuoteResponse.Request.Amount = "83464781817" // the destination amount
+	resolve := func(assetID string) (uint32, *intents.Token, bool) {
+		if assetID == "nep141:btc.omft.near" {
+			return tUTXOAssetB.ID, &intents.Token{AssetID: assetID, Decimals: 8}, true
+		}
+		return 0, nil, false
+	}
+	swap, err := swapFromStatus(resolve, tUTXOAssetB.ID, "bc1qdepositaddr", "sometxid", status)
+	if err != nil {
+		t.Fatalf("swapFromStatus: %v", err)
+	}
+	if swap.AmountIn != "10000000" || swap.AtomsIn != 10_000_000 {
+		t.Fatalf("input recorded from the echoed destination amount: %s / %d",
+			swap.AmountIn, swap.AtomsIn)
 	}
 }
 
@@ -353,8 +401,12 @@ func TestIntentsMergeStatus(t *testing.T) {
 		t.Fatalf("terminal record changed in db: %s", stored.State)
 	}
 
-	// A refund records the origin-chain refund transactions.
-	if err := eng.db.StoreIntentsSwap(testSwapRecord("addr2", IntentsStateDepositSent)); err != nil {
+	// A refund records the origin-chain refund transactions, excluding the
+	// user's own deposit transaction, which the service reports alongside
+	// the refund.
+	seed := testSwapRecord("addr2", IntentsStateDepositSent)
+	seed.DepositTxID = "deposittx"
+	if err := eng.db.StoreIntentsSwap(seed); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	status = &intents.StatusResponse{
@@ -362,7 +414,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 		SwapDetails: intents.SwapDetails{
 			RefundedAmount: "100000",
 			RefundReason:   "no solver",
-			OriginChainTxs: []intents.TxHashRef{{Hash: "refundtx"}},
+			OriginChainTxs: []intents.TxHashRef{{Hash: "deposittx"}, {Hash: "refundtx"}},
 		},
 	}
 	updated, _ = eng.mergeStatus("addr2", status, 0, false, 95_000, 61.05)
