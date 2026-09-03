@@ -2,6 +2,7 @@ import { MouseEvent, useEffect, useRef } from 'react'
 import Receive from './Receive'
 import Send from './Send'
 import Swap from './Swap'
+import RecoverSwaps from './RecoverSwaps'
 import ActivateAsset from './ActivateAsset'
 import ActivateNetwork from './ActivateNetwork'
 import TxDetail from './TxDetail'
@@ -49,6 +50,7 @@ export default function Modals ({ fd }: ModalsParams) {
       case 'receive': return <Receive ticker={fd.data?.ticker} />
       case 'send': return <Send ticker={fd.data?.ticker} />
       case 'swap': return <Swap depositAddress={fd.data?.depositAddress} />
+      case 'recoverswaps': return <RecoverSwaps />
       case 'activateasset': return <ActivateAsset ticker={fd.data.ticker} />
       case 'activatenetwork': return <ActivateNetwork assetID={fd.data.assetID} />
       case 'txdetail': return <TxDetail assetID={fd.data.assetID} tx={fd.data.tx} />

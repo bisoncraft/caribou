@@ -361,6 +361,17 @@ export default function Activity () {
           )
         })}
 
+        {/* Swap-record recovery entry point. Lives under the Swapped filter,
+            which is where a post-seed-restore user looks for missing swaps. */}
+        {!loading && filter === 'swapped' && (
+          <div className="flex-center pt-3">
+            <button type="button" className="small grey"
+              onClick={() => app.setForm({ form: 'recoverswaps', data: {} })}>
+              {t('Recover swaps')}
+            </button>
+          </div>
+        )}
+
         {!loading && (curPage > 0 || hasNext) && (
           <div className="flex-center pt-3">
             <button type="button" className="pager-btn icon-32 p-0 flex-center" aria-label={t('Previous page')}
