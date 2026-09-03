@@ -301,7 +301,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 			AmountInUsd:  "115.25",
 		},
 	}
-	updated, note := eng.mergeStatus("addr", status, 0, false, 0)
+	updated, note := eng.mergeStatus("addr", status, 0, false, 0, 0)
 	if updated == nil || note == nil {
 		t.Fatalf("state change not applied: swap %v note %v", updated, note)
 	}
@@ -316,7 +316,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 	}
 
 	// The same status again is not a change.
-	if updated, note = eng.mergeStatus("addr", status, 0, false, 0); updated != nil || note != nil {
+	if updated, note = eng.mergeStatus("addr", status, 0, false, 0, 0); updated != nil || note != nil {
 		t.Fatalf("no-op status produced an update")
 	}
 
@@ -330,7 +330,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 			DestinationChainTxs: []intents.TxHashRef{{Hash: "soltx"}},
 		},
 	}
-	updated, note = eng.mergeStatus("addr", status, 82_500_000_000, true, 0)
+	updated, note = eng.mergeStatus("addr", status, 82_500_000_000, true, 0, 0)
 	if updated == nil || note == nil {
 		t.Fatalf("success status not applied")
 	}
@@ -346,7 +346,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 
 	// A terminal record is never regressed, whatever the service says.
 	status = &intents.StatusResponse{Status: intents.StatusProcessing}
-	if updated, note = eng.mergeStatus("addr", status, 0, false, 0); updated != nil || note != nil {
+	if updated, note = eng.mergeStatus("addr", status, 0, false, 0, 0); updated != nil || note != nil {
 		t.Fatalf("terminal record was regressed")
 	}
 	if stored, _ := eng.db.IntentsSwap("addr"); stored.State != intents.StatusSuccess {
@@ -365,7 +365,7 @@ func TestIntentsMergeStatus(t *testing.T) {
 			OriginChainTxs: []intents.TxHashRef{{Hash: "refundtx"}},
 		},
 	}
-	updated, _ = eng.mergeStatus("addr2", status, 0, false, 61.05)
+	updated, _ = eng.mergeStatus("addr2", status, 0, false, 95_000, 61.05)
 	if updated == nil || updated.State != intents.StatusRefunded {
 		t.Fatalf("refund not applied: %+v", updated)
 	}
@@ -376,13 +376,16 @@ func TestIntentsMergeStatus(t *testing.T) {
 	if updated.USDRefunded != 61.05 {
 		t.Fatalf("refund USD value not recorded: %f", updated.USDRefunded)
 	}
+	if updated.RefundedAtoms != 95_000 {
+		t.Fatalf("refund atoms not recorded: %d", updated.RefundedAtoms)
+	}
 
 	// The service's own refund pricing wins over the derived fallback.
 	if err := eng.db.StoreIntentsSwap(testSwapRecord("addr3", IntentsStateDepositSent)); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	status.SwapDetails.RefundedAmountUsd = "60.90"
-	updated, _ = eng.mergeStatus("addr3", status, 0, false, 61.05)
+	updated, _ = eng.mergeStatus("addr3", status, 0, false, 95_000, 61.05)
 	if updated == nil || updated.USDRefunded != 60.90 {
 		t.Fatalf("service refund pricing not preferred: %+v", updated)
 	}

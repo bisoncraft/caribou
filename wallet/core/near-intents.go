@@ -384,14 +384,16 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 	}
 
 	realizedAtoms, haveRealized := e.realizedAtomsOut(ctx, swap, status)
-	// Price a refund at capture time (the catalog can hit the network, so
-	// this happens outside swapMtx, like the realized-fill conversion).
+	// Convert and price a refund at capture time (the catalog can hit the
+	// network, so this happens outside swapMtx, like the realized-fill
+	// conversion).
+	var refundedAtoms uint64
 	var refundedUSD float64
 	if status.Status == intents.StatusRefunded {
-		refundedUSD = e.usdValue(ctx, swap.OriginAssetID,
-			e.intentsAtoms(ctx, swap.OriginAssetID, swap.OriginAsset, status.SwapDetails.RefundedAmount))
+		refundedAtoms = e.intentsAtoms(ctx, swap.OriginAssetID, swap.OriginAsset, status.SwapDetails.RefundedAmount)
+		refundedUSD = e.usdValue(ctx, swap.OriginAssetID, refundedAtoms)
 	}
-	updated, note := e.mergeStatus(swap.DepositAddress, status, realizedAtoms, haveRealized, refundedUSD)
+	updated, note := e.mergeStatus(swap.DepositAddress, status, realizedAtoms, haveRealized, refundedAtoms, refundedUSD)
 	if note != nil {
 		e.c.notify(note)
 	}
@@ -402,7 +404,7 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 		if updated.State == intents.StatusRefunded {
 			e.c.updateAssetBalance(updated.OriginAssetID)
 		}
-		e.recordIncomingTxs(ctx, updated)
+		e.recordIncomingTxs(updated)
 	}
 	return nil
 }
@@ -416,11 +418,10 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 // from the chain (a contract-internal native transfer from an
 // unrecognized bridge). Recording is idempotent wallet-side, so a
 // repeated terminal update (e.g. a realized-fill refinement) is harmless.
-func (e *intentsEngine) recordIncomingTxs(ctx context.Context, swap *IntentsSwap) {
+func (e *intentsEngine) recordIncomingTxs(swap *IntentsSwap) {
 	assetID, txids, amtHint := swap.DestAssetID, swap.DestinationTxs, swap.AtomsOut
 	if swap.State == intents.StatusRefunded {
-		assetID, txids = swap.OriginAssetID, swap.RefundTxs
-		amtHint = e.refundAtoms(ctx, swap)
+		assetID, txids, amtHint = swap.OriginAssetID, swap.RefundTxs, swap.RefundedAtoms
 	} else if swap.State != intents.StatusSuccess {
 		return
 	}
@@ -526,12 +527,6 @@ func (e *intentsEngine) intentsAtoms(ctx context.Context, walletAssetID uint32, 
 	return atoms
 }
 
-// refundAtoms converts the service-reported refunded amount to origin
-// wallet atoms, or 0 if it cannot be resolved.
-func (e *intentsEngine) refundAtoms(ctx context.Context, swap *IntentsSwap) uint64 {
-	return e.intentsAtoms(ctx, swap.OriginAssetID, swap.OriginAsset, swap.RefundedAmount)
-}
-
 // usdValue prices wallet atoms of an asset in USD from the catalog's spot
 // price, returning 0 when the asset, its unit info, or a price cannot be
 // resolved. Called outside swapMtx: the catalog fetch can hit the network.
@@ -592,9 +587,10 @@ func (e *intentsEngine) realizedAtomsOut(ctx context.Context, swap *IntentsSwap,
 // copy from regressing a newer state. realizedAtoms (with haveRealized)
 // is the swap details' realized fill in destination atoms, replacing the
 // quote-time output so history shows what was actually delivered.
-// refundedUSD is the refunded amount priced at capture time, applied on a
-// transition to REFUNDED (both computed by the caller, outside the lock).
-func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.StatusResponse, realizedAtoms uint64, haveRealized bool, refundedUSD float64) (*IntentsSwap, Notification) {
+// refundedAtoms and refundedUSD are the refunded amount converted to origin
+// wallet atoms and priced at capture time, applied on a transition to
+// REFUNDED (all computed by the caller, outside the lock).
+func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.StatusResponse, realizedAtoms uint64, haveRealized bool, refundedAtoms uint64, refundedUSD float64) (*IntentsSwap, Notification) {
 	e.swapMtx.Lock()
 	defer e.swapMtx.Unlock()
 
@@ -644,6 +640,7 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 	// value computed by the caller covers its absence.
 	if newState == intents.StatusRefunded {
 		swap.RefundTxs = txHashes(details.OriginChainTxs)
+		swap.RefundedAtoms = refundedAtoms
 		if usd := parseUSD(details.RefundedAmountUsd); usd != 0 {
 			swap.USDRefunded = usd
 		} else if refundedUSD != 0 {
@@ -1752,6 +1749,7 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 		NearTxHashes:   status.SwapDetails.NearTxHashes,
 		DestinationTxs: txHashes(status.SwapDetails.DestinationChainTxs),
 		RefundedAmount: status.SwapDetails.RefundedAmount,
+		RefundedAtoms:  atoms(originAssetID, originTok, status.SwapDetails.RefundedAmount),
 		RefundReason:   status.SwapDetails.RefundReason,
 		QuoteEnvelope:  envelope,
 		Reconstructed:  true,

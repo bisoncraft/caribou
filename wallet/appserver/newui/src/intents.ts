@@ -59,6 +59,8 @@ export interface IntentsSwap {
   destinationTxs?: string[]
   refundTxs?: string[]
   refundedAmount?: string
+  refundedAtoms?: number
+  usdRefunded?: number
   refundReason?: string
   appFees?: AppFee[]
   reconstructed?: boolean

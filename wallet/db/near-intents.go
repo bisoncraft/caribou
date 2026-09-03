@@ -96,7 +96,10 @@ type IntentsSwap struct {
 	DestinationTxs []string `json:"destinationTxs,omitempty"`
 	RefundTxs      []string `json:"refundTxs,omitempty"`
 	RefundedAmount string   `json:"refundedAmount,omitempty"`
-	RefundReason   string   `json:"refundReason,omitempty"`
+	// RefundedAtoms is RefundedAmount converted to origin wallet atoms at
+	// capture time; 0 when the conversion could not be resolved.
+	RefundedAtoms uint64 `json:"refundedAtoms,omitempty"`
+	RefundReason  string `json:"refundReason,omitempty"`
 
 	// USD values are captured when the corresponding amounts are recorded,
 	// since exchange rates drift and a later conversion would misprice the

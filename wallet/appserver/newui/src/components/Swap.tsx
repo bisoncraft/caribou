@@ -914,6 +914,14 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
     ? `1 ${originTicker} = ${Doc.formatFourSigFigs(outConv / inConv)} ${destTicker}`
     : ''
   const feeBps = (swap.appFees ?? []).reduce((sum, f) => sum + f.fee, 0)
+  // The refund's origin-atoms conversion and USD pricing are captured on the
+  // record at refund time; an older or unresolvable record leaves them zero
+  // and the row is omitted.
+  const refundedAtoms = swap.refundedAtoms ?? 0
+  const refundedText = originAsset && refundedAtoms > 0
+    ? `${Doc.formatCoinValue(refundedAtoms, originAsset.unitInfo)} ${originTicker}`
+    : ''
+  const refundedUSD = Doc.formatUsd(swap.usdRefunded ?? 0)
 
   // The deposit leg, for its network fee: undefined while loading, null
   // when the wallet has no record of it.
@@ -1068,7 +1076,10 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
       )}
       {swap.state === StateFailed && (
         <div className="px-3 pb-2 fs13 grey text-center">
-          {t('The swap did not complete. If funds left the origin wallet and no refund arrives, contact support with the deposit address below.')}
+          {swap.refundReason
+            ? tvar('The swap did not complete: {{ reason }}.', { reason: swap.refundReason })
+            : t('The swap did not complete.')}{' '}
+          {t('If funds left the origin wallet and no refund arrives, contact support with the deposit address below.')}
         </div>
       )}
       {swap.state === StateExpired && (
@@ -1104,6 +1115,12 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
         {feeBps > 0 && (
           <Row label={t('Service fee')} tip={t('Fee paid to the swap service, included in the quoted output.')}>
             {slippagePct(feeBps)}
+          </Row>
+        )}
+        {swap.state === StateRefunded && refundedText !== '' && (
+          <Row label={t('Refunded')} tip={t("The amount returned to the origin wallet, net of the service's refund fee.")}>
+            <span className="mono">{refundedText}</span>
+            {refundedUSD !== '' && <span className="grey fs12 ms-1">({refundedUSD})</span>}
           </Row>
         )}
         <Row label={t('Started')}>{isNaN(started.getTime()) ? '—' : started.toLocaleString()}</Row>

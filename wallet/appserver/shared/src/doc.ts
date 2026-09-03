@@ -168,6 +168,15 @@ export default class Doc {
   }
 
   /*
+   * formatUsd formats an already-USD-denominated value as a currency string,
+   * or '' for an absent (zero) value.
+   */
+  static formatUsd (v: number): string {
+    if (!v) return ''
+    return usdFormatter.format(v)
+  }
+
+  /*
    * timeSince returns a coarse, human-readable duration since the given
    * timestamp in milliseconds, e.g. "3 h 20 m" or "5 d 2 h".
    */
