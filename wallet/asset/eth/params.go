@@ -133,13 +133,11 @@ func WeiToGweiSafe(wei *big.Int) (uint64, error) {
 }
 
 var (
-	usdcTokenID, _    = util.BipSymbolID("usdc.eth")
-	usdtTokenID, _    = util.BipSymbolID("usdt.eth")
-	polygonTokenID, _ = util.BipSymbolID("polygon.eth")
-	maticTokenID, _   = util.BipSymbolID("matic.eth") // old matic 0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0
-	linkTokenID, _    = util.BipSymbolID("link.eth")
-	paxgTokenID, _    = util.BipSymbolID("paxg.eth")
-	xautTokenID, _    = util.BipSymbolID("xaut.eth")
+	usdcTokenID, _ = util.BipSymbolID("usdc.eth")
+	usdtTokenID, _ = util.BipSymbolID("usdt.eth")
+	linkTokenID, _ = util.BipSymbolID("link.eth")
+	paxgTokenID, _ = util.BipSymbolID("paxg.eth")
+	xautTokenID, _ = util.BipSymbolID("xaut.eth")
 )
 
 // Gases lists typical gas usage for token wallet operations. A transaction's

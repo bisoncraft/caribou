@@ -37,7 +37,6 @@ func init() {
 	asset.Register(BipID, &Driver{})
 	registerToken(usdcTokenID, "The USDC Base ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
 	registerToken(usdtTokenID, "The USDT Base ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
-	registerToken(wbtcTokenID, "Wrapped BTC.", util.Mainnet, util.Testnet)
 }
 
 const (

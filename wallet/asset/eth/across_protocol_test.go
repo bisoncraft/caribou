@@ -32,8 +32,6 @@ func registerTokens() {
 	asset.Register(966, &eth.Driver{}, true)
 	regToken(dexpolygon.Tokens, 966001, "The USDC Ethereum ERC20 token.")
 	regToken(dexpolygon.Tokens, 966004, "The USDT Ethereum ERC20 token.")
-	regToken(dexpolygon.Tokens, 966003, "Wrapped BTC.")
-	regToken(dexpolygon.Tokens, 966002, "Wrapped ETH.")
 	asset.Register(8453, &eth.Driver{}, true)
 	regToken(dexbase.Tokens, 61000, "The USDC Base ERC20 token.")
 }
@@ -64,16 +62,6 @@ func TestAcrossAssetToID(t *testing.T) {
 			ChainID: 137,
 			Symbol:  "USDC",
 			Address: common.HexToAddress("0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"),
-		},
-		966002: {
-			ChainID: 137,
-			Symbol:  "WETH",
-			Address: common.HexToAddress("0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"),
-		},
-		966003: {
-			ChainID: 137,
-			Symbol:  "WBTC",
-			Address: common.HexToAddress("0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"),
 		},
 		966004: {
 			ChainID: 137,

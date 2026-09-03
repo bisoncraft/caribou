@@ -59,17 +59,14 @@ func registerToken(tokenID uint32, desc string) {
 
 var (
 	// Ethereum
-	ethID, _        = util.BipSymbolID("eth")
-	usdcEthID, _    = util.BipSymbolID("usdc.eth")
-	usdtEthID, _    = util.BipSymbolID("usdt.eth")
-	maticEthID, _   = util.BipSymbolID("matic.eth")
-	polygonEthID, _ = util.BipSymbolID("polygon.eth")
-	linkEthID, _    = util.BipSymbolID("link.eth")
-	paxgEthID, _    = util.BipSymbolID("paxg.eth")
-	xautEthID, _    = util.BipSymbolID("xaut.eth")
+	ethID, _     = util.BipSymbolID("eth")
+	usdcEthID, _ = util.BipSymbolID("usdc.eth")
+	usdtEthID, _ = util.BipSymbolID("usdt.eth")
+	linkEthID, _ = util.BipSymbolID("link.eth")
+	paxgEthID, _ = util.BipSymbolID("paxg.eth")
+	xautEthID, _ = util.BipSymbolID("xaut.eth")
 	// Polygon
 	polygonID, _     = util.BipSymbolID("polygon")
-	wethPolygonID, _ = util.BipSymbolID("weth.polygon")
 	usdcPolygonID, _ = util.BipSymbolID("usdc.polygon")
 	usdtPolygonID, _ = util.BipSymbolID("usdt.polygon")
 	// Base
@@ -83,8 +80,6 @@ func init() {
 	asset.Register(BipID, &Driver{})
 	registerToken(usdcEthID, "The USDC Ethereum ERC20 token.")
 	registerToken(usdtEthID, "The USDT Ethereum ERC20 token.")
-	registerToken(maticEthID, "The MATIC Ethereum ERC20 token.")
-	registerToken(polygonEthID, "The POL Ethereum ERC20 token.")
 	registerToken(linkEthID, "The LINK Chainlink Ethereum ERC20 token.")
 	registerToken(paxgEthID, "The PAXG PAX Gold Ethereum ERC20 token.")
 	registerToken(xautEthID, "The XAUT Tether Gold Ethereum ERC20 token.")
@@ -887,9 +882,8 @@ func getWalletDir(dataDir string, network util.Network) string {
 }
 
 const (
-	acrossBridgeName  string = "across"
-	usdcBridgeName    string = "usdc"
-	polygonBridgeName string = "polygon"
+	acrossBridgeName string = "across"
+	usdcBridgeName   string = "usdc"
 )
 
 // Connect connects to the node RPC server. Satisfies util.Connector.
@@ -991,21 +985,6 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	} else {
 		w.bridges[usdcBridgeName] = usdcBridge
 	} */
-
-	switch w.assetID {
-	case ethID:
-		if polygonBridge, err := newPolygonBridgeEth(ctx, w.node.contractBackend(), w.net, w.addr, w.node, w.log); err != nil {
-			w.log.Warnf("Failed to initialize Polygon bridge for ETH: %v", err)
-		} else {
-			w.bridges[polygonBridgeName] = polygonBridge
-		}
-	case polygonID:
-		if polygonBridge, err := newPolygonBridgePolygon(w.node.contractBackend(), w.net, w.log); err != nil {
-			w.log.Warnf("Failed to initialize Polygon bridge for Polygon: %v", err)
-		} else {
-			w.bridges[polygonBridgeName] = polygonBridge
-		}
-	}
 
 	// Register simnet bridge for testing
 	if w.net == util.Simnet {

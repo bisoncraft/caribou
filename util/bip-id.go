@@ -609,8 +609,8 @@ var bipIDs = map[uint32]string{
 	// Ethereum reserved token range 60000-60999
 	60001: "usdc.eth",
 	60002: "usdt.eth",
-	60003: "matic.eth", // Old MATIC token on Ethereum, not POL token
-	60004: "polygon.eth",
+	// 60003 (matic.eth) and 60004 (polygon.eth) are retired. Persisted wallet
+	// and tx records may still carry these IDs, so they must not be reused.
 	60005: "link.eth",
 	60006: "paxg.eth",
 	60007: "xaut.eth",
@@ -618,7 +618,7 @@ var bipIDs = map[uint32]string{
 	// Base reserved token range 61000-61999
 	61000: "usdc.base",
 	61001: "usdt.base",
-	61002: "wbtc.base",
+	// 61002 (wbtc.base) is retired; do not reuse.
 	// END Base reserved token range
 	65536:  "keth",
 	88888:  "ryo[c0ban]",
@@ -630,8 +630,7 @@ var bipIDs = map[uint32]string{
 	666666: "vite",
 	// Polygon reserved token range 966000-966999
 	966001: "usdc.polygon",
-	966002: "weth.polygon",
-	966003: "wbtc.polygon",
+	// 966002 (weth.polygon) and 966003 (wbtc.polygon) are retired; do not reuse.
 	966004: "usdt.polygon",
 	// END Polygon reserved token range
 	// BNB reserved token range 714000-714999

@@ -124,11 +124,10 @@ func TestNetworkCompatibilityData(t *testing.T) {
 	}
 }
 
-// TestTokenRegistration verifies the package init() registered USDC, USDT,
-// WETH, and WBTC under the polygon parent asset with the expected wallet
-// definition. Per-network address filtering is enforced by asset.SetNetwork
-// at runtime, which is destructive of global registry state and so is not
-// exercised here.
+// TestTokenRegistration verifies the package init() registered USDC and USDT
+// under the polygon parent asset with the expected wallet definition.
+// Per-network address filtering is enforced by asset.SetNetwork at runtime,
+// which is destructive of global registry state and so is not exercised here.
 func TestTokenRegistration(t *testing.T) {
 	cases := []struct {
 		id   uint32
@@ -136,8 +135,6 @@ func TestTokenRegistration(t *testing.T) {
 	}{
 		{usdcTokenID, "USDC"},
 		{usdtTokenID, "Tether"},
-		{wethTokenID, "Wrapped Ether"},
-		{wbtcTokenID, "Wrapped Bitcoin"},
 	}
 	for _, tc := range cases {
 		tok := asset.TokenInfo(tc.id)

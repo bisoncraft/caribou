@@ -41,8 +41,6 @@ func init() {
 	eth.RegisterEVMTokens(Tokens)
 	registerToken(usdcTokenID, "The USDC Ethereum ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
 	registerToken(usdtTokenID, "The USDT Ethereum ERC20 token.", util.Mainnet, util.Testnet, util.Simnet)
-	registerToken(wbtcTokenID, "Wrapped BTC.", util.Mainnet)
-	registerToken(wethTokenID, "Wrapped ETH.", util.Mainnet, util.Testnet)
 }
 
 const (

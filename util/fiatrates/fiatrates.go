@@ -29,10 +29,8 @@ type CoinpaprikaAsset struct {
 }
 
 func parseCoinpapNameSymbol(name, symbol string) (string, string) {
-	parts := strings.Split(symbol, ".")
-	network := symbol
-	if len(parts) == 2 {
-		symbol, network = parts[0], parts[1]
+	if parts := strings.Split(symbol, "."); len(parts) == 2 {
+		symbol = parts[0]
 	}
 	switch symbol {
 	case "usdc":
@@ -54,11 +52,6 @@ func parseCoinpapNameSymbol(name, symbol string) (string, string) {
 		name = "weth"
 	case "link":
 		name = "chainlink"
-	case "matic":
-		switch network {
-		case "eth":
-			symbol, name = "matic", "polygon"
-		}
 	}
 	return name, symbol
 }

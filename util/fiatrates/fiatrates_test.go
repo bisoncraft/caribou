@@ -58,7 +58,6 @@ func TestParseCoinpapNameSymbol(t *testing.T) {
 		{"polygon", "polygon", "polygon", "matic"},
 		{"weth", "weth", "weth", "weth"},
 		{"matic", "matic", "matic", "matic"},
-		{"matic", "matic.eth", "polygon", "matic"},
 		{"bitcoin", "btc", "bitcoin", "btc"},
 		{"chainlink", "link", "chainlink", "link"},
 	}

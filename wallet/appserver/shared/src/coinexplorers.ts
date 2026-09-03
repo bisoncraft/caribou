@@ -59,7 +59,6 @@ const explorers: Record<number, Record<number, txURL>> = {
   8453: baseExplorers, // base (weth.base)
   61000: baseExplorers,
   61001: baseExplorers,
-  61002: baseExplorers,
   3: { // doge
     [Mainnet]: (cid) => `https://dogeblocks.com/tx/${hash(cid)}`,
     [Testnet]: (cid) => `https://blockexplorer.one/dogecoin/testnet/tx/${hash(cid)}`,
@@ -90,8 +89,6 @@ const explorers: Record<number, Record<number, txURL>> = {
   },
   966: polygonExplorers, // polygon
   966001: polygonExplorers,
-  966002: polygonExplorers,
-  966003: polygonExplorers,
   966004: polygonExplorers
 }
 

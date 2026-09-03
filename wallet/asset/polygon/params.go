@@ -40,14 +40,10 @@ var (
 
 	usdcTokenID, _ = util.BipSymbolID("usdc.polygon")
 	usdtTokenID, _ = util.BipSymbolID("usdt.polygon")
-	wethTokenID, _ = util.BipSymbolID("weth.polygon")
-	wbtcTokenID, _ = util.BipSymbolID("wbtc.polygon")
 
 	Tokens = map[uint32]*dexeth.Token{
 		usdcTokenID: TokenUSDC,
 		usdtTokenID: TokenUSDT,
-		wethTokenID: TokenWETH,
-		wbtcTokenID: TokenWBTC,
 	}
 
 	TokenUSDC = &dexeth.Token{
@@ -126,85 +122,6 @@ var (
 				GasEstimate: &dexeth.Gases{
 					Approve:  58_180,
 					Transfer: 64_539,
-				},
-			},
-		},
-	}
-
-	// TokenWETH is for Wrapped ETH.
-	TokenWETH = &dexeth.Token{
-		Token: &util.Token{
-			NetworkID: PolygonBipID,
-			Name:      "Wrapped Ether",
-			UnitInfo: util.UnitInfo{
-				AtomicUnit: "gwei",
-				Conventional: util.Denomination{
-					Unit:             "WETH",
-					ConversionFactor: 1e9,
-				},
-				Alternatives: []util.Denomination{
-					{
-						Unit:             "Szabos",
-						ConversionFactor: 1e6,
-					},
-					{
-						Unit:             "Finneys",
-						ConversionFactor: 1e3,
-					},
-				},
-				FeeRateDenom: "gas",
-			},
-		},
-		NetTokens: map[util.Network]*dexeth.NetToken{
-			util.Mainnet: {
-				Address: common.HexToAddress("0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"), // https://polygonscan.com/token/0x7ceb23fd6bc0add59e62ac25578270cff1b9f619
-				GasEstimate: &dexeth.Gases{
-					Approve:  56_054,
-					Transfer: 67_483,
-				},
-			},
-			util.Testnet: {
-				Address: common.HexToAddress("0x52ef3d68bab452a294342dc3e5f464d7f610f72e"),
-				// Not measured for this token; usdt.polygon measurements x1.3.
-				GasEstimate: &dexeth.Gases{
-					Approve:  67_597,
-					Transfer: 77_183,
-				},
-			},
-		},
-	}
-
-	// TokenWBTC is for Wrapped BTC.
-	TokenWBTC = &dexeth.Token{
-		EVMFactor: new(int64),
-		Token: &util.Token{
-			NetworkID: PolygonBipID,
-			Name:      "Wrapped Bitcoin",
-			UnitInfo: util.UnitInfo{
-				AtomicUnit: "Sats",
-				Conventional: util.Denomination{
-					Unit:             "WBTC",
-					ConversionFactor: 1e8,
-				},
-				Alternatives: []util.Denomination{
-					{
-						Unit:             "mWBTC",
-						ConversionFactor: 1e5,
-					},
-					{
-						Unit:             "µWBTC",
-						ConversionFactor: 1e2,
-					},
-				},
-				FeeRateDenom: "gas",
-			},
-		},
-		NetTokens: map[util.Network]*dexeth.NetToken{
-			util.Mainnet: {
-				Address: common.HexToAddress("0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6"), // https://polygonscan.com/token/0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6
-				GasEstimate: &dexeth.Gases{
-					Approve:  67_693,
-					Transfer: 74_451,
 				},
 			},
 		},

@@ -37,12 +37,10 @@ var (
 
 	usdcTokenID, _ = util.BipSymbolID("usdc.base")
 	usdtTokenID, _ = util.BipSymbolID("usdt.base")
-	wbtcTokenID, _ = util.BipSymbolID("wbtc.base")
 
 	Tokens = map[uint32]*dexeth.Token{
 		usdcTokenID: TokenUSDC,
 		usdtTokenID: TokenUSDT,
-		wbtcTokenID: TokenWBTC,
 	}
 
 	TokenUSDC = &dexeth.Token{
@@ -130,58 +128,6 @@ var (
 			util.Simnet: {
 				Address: common.Address{},
 				// usdt.base mainnet measurements x1.3.
-				GasEstimate: &dexeth.Gases{
-					Approve:  60_732,
-					Transfer: 67_358,
-				},
-			},
-		},
-	}
-
-	TokenWBTC = &dexeth.Token{
-		EVMFactor: new(int64),
-		Token: &util.Token{
-			NetworkID: BaseBipID,
-			Name:      "Wrapped Bitcoin",
-			UnitInfo: util.UnitInfo{
-				AtomicUnit: "Sats",
-				Conventional: util.Denomination{
-					Unit:             "WBTC",
-					ConversionFactor: 1e8,
-				},
-				Alternatives: []util.Denomination{
-					{
-						Unit:             "mWBTC",
-						ConversionFactor: 1e5,
-					},
-					{
-						Unit:             "µWBTC",
-						ConversionFactor: 1e2,
-					},
-				},
-				FeeRateDenom: "gas",
-			},
-		},
-		NetTokens: map[util.Network]*dexeth.NetToken{
-			util.Mainnet: {
-				Address: common.HexToAddress("0x0555E30da8f98308EdB960aa94C0Db47230d2B9c"),
-				// Not measured for this token; usdt.base measurements x1.3.
-				GasEstimate: &dexeth.Gases{
-					Approve:  60_732,
-					Transfer: 67_358,
-				},
-			},
-			util.Testnet: {
-				Address: common.HexToAddress("0x78c8587b0b4d50b3a2110bc8188eef195cfa7f11"),
-				// Not measured for this token; usdt.base measurements x1.3.
-				GasEstimate: &dexeth.Gases{
-					Approve:  60_732,
-					Transfer: 67_358,
-				},
-			},
-			util.Simnet: {
-				Address: common.Address{},
-				// Not measured for this token; usdt.base measurements x1.3.
 				GasEstimate: &dexeth.Gases{
 					Approve:  60_732,
 					Transfer: 67_358,
