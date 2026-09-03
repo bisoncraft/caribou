@@ -59,7 +59,7 @@ export default function Modals ({ fd }: ModalsParams) {
   }
 
   return (
-    <div className={`fill-abs flex-center modals ${fd.form ? '' : 'd-none'}`}
+    <div className={`fill-abs d-flex py-3 modals ${fd.form ? '' : 'd-none'}`}
       onMouseDown={onBackgroundMouseDown}
       onClick={onBackgroundClick}>
       {fd.form && renderContent()}

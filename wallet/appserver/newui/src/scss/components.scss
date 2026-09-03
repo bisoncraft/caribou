@@ -14,10 +14,15 @@
 }
 
 // Dimmed scrim behind in-app modal dialogs (Receive, ActivateAsset, …).
+// The container is a plain flexbox that scrolls, with the dialog centered by
+// form.modal's own auto margins: centering via align-items would clip the top
+// of a dialog taller than the viewport, since flex centering overflows both
+// ends and only the bottom is scrollable.
 .modals {
   z-index: 101;
   background-color: var(--scrim-bg);
   backdrop-filter: blur(5px);
+  overflow-y: auto;
 }
 
 form.modal {
