@@ -204,6 +204,13 @@ type NativeWallet struct {
 	emit        *asset.WalletEmitter
 	peersChange func(uint32, error)
 
+	// networkID and assetID identify this wallet's chain in the master
+	// transaction database records. This wallet type serves the clone assets
+	// (ltc, dash) too, so records must carry the configured chain's identity
+	// from ChainConfig.Info, never the btc package's own BipID.
+	networkID uint32
+	assetID   uint32
+
 	// ctx is the wallet's lifetime context, set in Connect. It is used for
 	// on-demand fee-rate fetches so they cancel with the wallet. It is
 	// atomic because FeeRate is reachable from request goroutines that have
@@ -417,6 +424,8 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 		netParams:      cc.NetParams,
 		emit:           cfg.Emit,
 		peersChange:    cfg.PeersChange,
+		networkID:      cc.Info.Network.ID,
+		assetID:        cc.Info.Network.NativeAssetID,
 		feeFetcher:     feeFetcher,
 		recoveryWindow: recoveryWindow,
 		watchDepths:    watchDepths,
@@ -721,8 +730,8 @@ func (w *NativeWallet) Send(address string, value, feeRate uint64) (asset.Coin, 
 
 	// Record in tx history. Fee will be updated by the next syncTxHistory pass.
 	wt := &txdb.WalletTransaction{
-		NetworkID: BipID,
-		AssetID:   BipID,
+		NetworkID: w.networkID,
+		AssetID:   w.assetID,
 		Type:      txdb.Send,
 		ID:        txHash.String(),
 		Amount:    value,
@@ -939,8 +948,8 @@ func (w *NativeWallet) WalletTransaction(ctx context.Context, txID string) (*txd
 	}
 
 	wt := &txdb.WalletTransaction{
-		NetworkID:   BipID,
-		AssetID:     BipID,
+		NetworkID:   w.networkID,
+		AssetID:     w.assetID,
 		Type:        txdb.Unknown,
 		ID:          txID,
 		BlockNumber: blockNumberFromHeight(details.Block.Height),
@@ -1297,8 +1306,8 @@ func (w *NativeWallet) recordBtcjsonTx(_ context.Context, tx *btcjson.ListTransa
 
 	addrCopy := tx.Address
 	wt := &txdb.WalletTransaction{
-		NetworkID:   BipID,
-		AssetID:     BipID,
+		NetworkID:   w.networkID,
+		AssetID:     w.assetID,
 		Type:        txType,
 		ID:          txHash.String(),
 		Amount:      amtSats,

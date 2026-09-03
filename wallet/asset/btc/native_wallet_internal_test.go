@@ -8,6 +8,10 @@ package btc
 import (
 	"math"
 	"testing"
+
+	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/btcsuite/btcd/chaincfg"
 )
 
 // TestBlockNumberFromHeight guards the unmined-sentinel overflow: wtxmgr returns
@@ -151,5 +155,27 @@ func TestScanFloorSurvivesFailedScan(t *testing.T) {
 	w.clearScanFloor(floor)
 	if from, _ := w.peekScanFloor(100); from != 70 {
 		t.Fatalf("scan start = %d, want 70; a floor armed mid-scan was retired by it", from)
+	}
+}
+
+// TestNativeWalletChainIdentity guards the chain identity stamped on master
+// transaction database records. This wallet type serves the clone assets
+// (ltc, dash) too, so the IDs must come from ChainConfig.Info — records
+// stamped with the btc package's own BipID (0) are rejected by every
+// clone's network-scoped database.
+func TestNativeWalletChainIdentity(t *testing.T) {
+	const cloneID = 2 // ltc
+	cc := ChainConfig{
+		ChainParams: &chaincfg.MainNetParams,
+		Info: &asset.WalletInfo{Network: &asset.Network{
+			ID:            cloneID,
+			NativeAssetID: cloneID,
+		}},
+	}
+	log := util.StdOutLogger("TEST", util.LevelInfo)
+	w := NewNativeWallet(cc, &asset.WalletConfig{}, log)
+	if w.networkID != cloneID || w.assetID != cloneID {
+		t.Fatalf("wallet identity = network %d, asset %d; want %d, %d",
+			w.networkID, w.assetID, cloneID, cloneID)
 	}
 }
