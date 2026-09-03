@@ -33,6 +33,43 @@ function slippagePct (bps: number): string {
   return `${(bps / 100).toLocaleString()}%`
 }
 
+// ---- Custody and bridge trust ----
+
+// bridgeTrustMap classifies settlement chains by the custody model of their
+// Intents bridge leg. Data-driven rather than baked copy because the
+// PoA→Omni migration is ongoing; an unlisted chain falls back to a generic
+// third-party label.
+const bridgeTrustOmni = t('bridge custody by a distributed MPC signing network (Omni)')
+const bridgeTrustHot = t('bridge custody by a distributed MPC signing network (HOT)')
+const bridgeTrustPoA = t('bridge custody by a validator federation operated for the service')
+const bridgeTrustMap: Record<string, string> = {
+  BTC: bridgeTrustOmni,
+  ETH: bridgeTrustOmni,
+  SOL: bridgeTrustOmni,
+  BNB: bridgeTrustOmni,
+  POL: bridgeTrustHot,
+  LTC: bridgeTrustPoA,
+  DOGE: bridgeTrustPoA,
+  XRP: bridgeTrustPoA,
+  ZEC: bridgeTrustPoA,
+  BCH: bridgeTrustPoA,
+  DASH: bridgeTrustPoA,
+  NEAR: t('settles natively on the NEAR network — no bridge leg')
+}
+
+function bridgeTrust (chain: string): string {
+  return bridgeTrustMap[chain.toUpperCase()] ?? t('bridge custody by a third-party bridge operator')
+}
+
+// chainTicker resolves the settlement network's native ticker for an Intents
+// asset. Trust classification is per chain, not per token: a token's bridge
+// leg is custodied by its network's bridge.
+function chainTicker (a: IntentsAsset): string {
+  const wa = app.user?.assets[a.assetID]
+  const chainID = wa?.token ? wa.token.networkID : a.assetID
+  return app.user?.assets[chainID]?.unitInfo.conventional.unit ?? a.symbol
+}
+
 // unitInfoFor returns the wallet UnitInfo for a swappable asset, or a
 // minimal stand-in built from the catalog scale when the asset is unknown
 // to this build's wallet map (walletReady is false for those, so the
@@ -110,6 +147,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
   const [editUnit, setEditUnit] = useState<'asset' | 'usd'>('asset')
   const [slippageBps, setSlippageBps] = useState<number>(State.fetchLocal(slippageLK) || 100)
   const [showSlippage, setShowSlippage] = useState(false)
+  const [showCustody, setShowCustody] = useState(false)
 
   // Asset picker.
   const [pickSide, setPickSide] = useState<'sell' | 'buy'>('sell')
@@ -617,6 +655,29 @@ export default function Swap ({ depositAddress }: SwapProps) {
             <div className="d-flex justify-content-between py-1">
               <span className="grey has-tip" aria-label={t('Fee paid to the swap service, included in the quoted output.')}>{t('Service fee')}</span>
               <span>{slippagePct(feeBps)}</span>
+            </div>
+          )}
+          <div className="d-flex justify-content-between py-1">
+            <span className="grey">{t('Custody')}</span>
+            <span
+              className="d-flex align-items-center pointer"
+              onClick={() => setShowCustody(!showCustody)}
+              aria-label={t('Custody and trust details')}
+            >
+              {t('Service-held in transit')}
+              <span className="ico-info fs13 ms-1 grey" />
+            </span>
+          </div>
+          {showCustody && (
+            <div className="form-input-bg br5 p-2 my-1 fs12">
+              <div className="grey mb-2">
+                {t('Swaps are executed by NEAR Intents, operated by Defuse Labs Ltd (Gibraltar). This is not an atomic swap: while it completes — typically a few minutes — funds are held by the service and its bridge operators.')}
+              </div>
+              <div className="mb-1"><span className="demi">{chainTicker(sellAsset)}:</span> {bridgeTrust(chainTicker(sellAsset))}.</div>
+              <div className="mb-2"><span className="demi">{chainTicker(buyAsset)}:</span> {bridgeTrust(chainTicker(buyAsset))}.</div>
+              <div className="grey">
+                {t('Deposits are screened for sanctions compliance and may rarely be delayed or refused. If a swap cannot complete, funds are returned automatically. All refund and destination addresses are derived from the wallet seed, so funds at rest are never in third-party custody.')}
+              </div>
             </div>
           )}
           <div className="grey fs11 py-1 d-flex align-items-center">
