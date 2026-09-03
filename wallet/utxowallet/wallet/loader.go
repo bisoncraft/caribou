@@ -297,7 +297,7 @@ func (l *Loader) CreateNewWatchingOnlyWallet(pubPassphrase []byte,
 
 func (l *Loader) createNewWallet(pubPassphrase, privPassphrase []byte,
 	rootKey *hdkeychain.ExtendedKey, bday time.Time,
-	isWatchingOnly bool) (*Wallet, error) {
+	isWatchingOnly bool) (w *Wallet, err error) {
 
 	defer l.mu.Unlock()
 	l.mu.Lock()
@@ -328,6 +328,22 @@ func (l *Loader) createNewWallet(pubPassphrase, privPassphrase []byte,
 		if err != nil {
 			return nil, err
 		}
+		// WalletExists keys on the file alone, so a database whose
+		// initialization fails below must not be left behind: it would report
+		// as an existing wallet, turning every later creation into ErrExists
+		// while OpenExistingWallet fails on the uninitialized database.
+		defer func() {
+			if err == nil {
+				return
+			}
+			if cerr := l.db.Close(); cerr != nil {
+				log.Errorf("Error closing wallet database after failed creation: %v", cerr)
+			}
+			l.db = nil
+			if rerr := os.Remove(dbPath); rerr != nil {
+				log.Errorf("Error removing wallet database %q after failed creation: %v", dbPath, rerr)
+			}
+		}()
 	}
 
 	// Initialize the newly created database for the wallet before opening.
@@ -340,7 +356,7 @@ func (l *Loader) createNewWallet(pubPassphrase, privPassphrase []byte,
 	}
 
 	// Open the newly-created wallet.
-	w, err := OpenWithRetry(
+	w, err = OpenWithRetry(
 		l.db, pubPassphrase, l.chainParams, l.recoveryWindow,
 		l.cfg.walletSyncRetryInterval,
 	)

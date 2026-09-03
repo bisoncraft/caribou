@@ -1158,7 +1158,26 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 	token := asset.TokenInfo(assetID)
 	var dbWallet *db.Wallet
 	if token == nil {
-		dbWallet, err = c.createDBWallet(crypter, form, walletPW)
+		walletDef, defErr := asset.WalletDef(assetID, form.Type)
+		if defErr != nil {
+			return newError(assetSupportErr, "asset.WalletDef error: %w", defErr)
+		}
+		if walletDef.Seeded {
+			// Core holds no wallet for this asset, so nothing in its data
+			// directory is live, and a seeded wallet is rebuilt in full from
+			// the app seed. A creation that fails at any step below (on-disk
+			// creation, open, connect, unlock, balance, db store) must leave
+			// nothing behind: the next attempt has to start from an empty
+			// directory instead of tripping over this attempt's remains. Every
+			// failure path releases the wallet before returning, so the
+			// directory is not in use by the time this runs.
+			defer func() {
+				if err != nil {
+					c.discardAssetData(assetID)
+				}
+			}()
+		}
+		dbWallet, err = c.createDBWallet(crypter, walletDef, form, walletPW)
 	} else {
 		dbWallet, err = c.createTokenDBWallet(assetID, token, form)
 	}
@@ -1242,11 +1261,8 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 	return nil
 }
 
-func (c *Core) createDBWallet(crypter encrypt.Crypter, form *WalletForm, walletPW []byte) (*db.Wallet, error) {
-	walletDef, err := asset.WalletDef(form.AssetID, form.Type)
-	if err != nil {
-		return nil, newError(assetSupportErr, "asset.WalletDef error: %w", err)
-	}
+func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDefinition, form *WalletForm, walletPW []byte) (*db.Wallet, error) {
+	var err error
 
 	// Sometimes core will insert data into the Settings map to communicate
 	// information back to the wallet, so it cannot be nil.
@@ -1327,15 +1343,29 @@ func (c *Core) createTokenDBWallet(tokenID uint32, token *asset.Token, form *Wal
 	}, nil
 }
 
-// createSeededWallet initializes a seeded wallet with an asset-specific seed
-// and password derived deterministically from the app seed. The password is
-// returned for encrypting and storing.
+// createSeededWallet makes sure the seeded wallet for an asset exists on disk
+// and returns the password that opens it, for encrypting and storing. Both the
+// wallet seed and the password are derived deterministically from the app
+// seed, so wallet data already in the asset's data directory is used as-is
+// rather than recreated. A creation interrupted after the on-disk wallet was
+// made but before core stored the wallet leaves exactly that, and it would
+// otherwise block every later creation with an already-exists error.
 func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form *WalletForm) ([]byte, error) {
 	seed, pw, err := c.assetSeedAndPass(assetID, crypter)
 	if err != nil {
 		return nil, err
 	}
 	defer encode.ClearBytes(seed)
+
+	dataDir := c.assetDataDirectory(assetID)
+	exists, err := asset.WalletExists(assetID, form.Type, dataDir, form.Config, c.net)
+	if err != nil {
+		return nil, fmt.Errorf("error checking for existing wallet data: %w", err)
+	}
+	if exists {
+		c.log.Infof("Using the existing %s wallet data in %q", unbip(assetID), dataDir)
+		return pw, nil
+	}
 
 	var bday uint64
 	if creds := c.creds(); !creds.Birthday.IsZero() {
@@ -1349,7 +1379,7 @@ func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form 
 		Pass:     pw,
 		Birthday: bday,
 		Settings: form.Config,
-		DataDir:  c.assetDataDirectory(assetID),
+		DataDir:  dataDir,
 		Net:      c.net,
 		Logger:   c.log.SubLogger(unbip(assetID)),
 		TorProxy: c.cfg.TorProxy,
@@ -1423,6 +1453,23 @@ func (c *Core) assetDataDirectory(assetID uint32) string {
 // wallet.
 func (c *Core) assetDataBackupDirectory(assetID uint32) string {
 	return filepath.Join(filepath.Dir(c.cfg.DBPath), "assetdb-backup", unbip(assetID))
+}
+
+// discardAssetData removes an asset's data directory. Only for a seeded asset
+// that core holds no wallet for: with no configured wallet nothing in the
+// directory is live, and the next creation rebuilds the wallet in full from
+// the app seed.
+func (c *Core) discardAssetData(assetID uint32) {
+	dir := c.assetDataDirectory(assetID)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		c.log.Errorf("Error removing %s wallet data directory %q after failed wallet creation: %v",
+			unbip(assetID), dir, err)
+		return
+	}
+	c.log.Infof("Removed %s wallet data directory %q after failed wallet creation", unbip(assetID), dir)
 }
 
 // loadWallet uses the data from the database to construct a new exchange

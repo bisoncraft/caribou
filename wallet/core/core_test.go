@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3062,4 +3063,147 @@ func TestLogoutAfterSuspendClosesOpener(t *testing.T) {
 	if opener.IsOpen() {
 		t.Fatal("Opener wallet still open after Suspend+Logout")
 	}
+}
+
+// tSeededDriver is a tDriver that also implements asset.Creator, writing a
+// wallet marker into the asset data directory the way the on-disk creation of
+// a real seeded wallet does. Exists reports on that marker.
+type tSeededDriver struct {
+	*tDriver
+	createErr error
+	creates   int
+}
+
+func (d *tSeededDriver) marker(dataDir string) string {
+	return filepath.Join(dataDir, "wallet.db")
+}
+
+func (d *tSeededDriver) Exists(_, dataDir string, _ map[string]string, _ util.Network) (bool, error) {
+	_, err := os.Stat(d.marker(dataDir))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (d *tSeededDriver) Create(params *asset.CreateWalletParams) error {
+	d.creates++
+	// A creation that fails partway still leaves the directory behind, like a
+	// real driver would.
+	if err := os.MkdirAll(params.DataDir, 0o700); err != nil {
+		return err
+	}
+	if d.createErr != nil {
+		return d.createErr
+	}
+	return os.WriteFile(d.marker(params.DataDir), []byte("wallet"), 0o600)
+}
+
+// TestCreateSeededWalletDataCleanup checks that a failed seeded-wallet creation
+// leaves no asset data directory behind, whichever step fails, so that a retry
+// does not fail with an already-exists error. It also checks that wallet data
+// left on disk by an interrupted creation is used rather than recreated.
+func TestCreateSeededWalletDataCleanup(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+	tCore.cfg.DBPath = filepath.Join(t.TempDir(), "core.db")
+
+	a := *tUTXOAssetA
+	tSeeded := &a
+	tSeeded.Symbol = "ilt"
+	tSeeded.ID, _ = util.BipSymbolID(tSeeded.Symbol)
+
+	winfo := *tWalletInfo
+	winfo.AvailableWallets = []*asset.WalletDefinition{{
+		Type:   "type",
+		Seeded: true,
+	}}
+
+	wallet, tWallet := newTWallet(tSeeded.ID)
+	drv := &tSeededDriver{tDriver: &tDriver{
+		wallet:        wallet.Wallet,
+		decodedCoinID: "ilt-coin",
+		winfo:         &winfo,
+	}}
+	asset.Register(tSeeded.ID, drv, true)
+
+	form := &WalletForm{
+		AssetID: tSeeded.ID,
+		Config:  map[string]string{},
+		Type:    "type",
+	}
+	dataDir := tCore.assetDataDirectory(tSeeded.ID)
+
+	ensureErr := func(tag string) {
+		t.Helper()
+		if err := tCore.CreateWallet(tPW, nil, form); err == nil {
+			t.Fatalf("no %s error", tag)
+		}
+	}
+	ensureNoData := func(tag string) {
+		t.Helper()
+		if _, err := os.Stat(dataDir); !os.IsNotExist(err) {
+			t.Fatalf("%s: asset data directory survived a failed creation (stat err = %v)", tag, err)
+		}
+	}
+	ensureCreates := func(tag string, n int) {
+		t.Helper()
+		if drv.creates != n {
+			t.Fatalf("%s: %d on-disk creations, want %d", tag, drv.creates, n)
+		}
+	}
+
+	// On-disk creation fails partway.
+	drv.createErr = errTest
+	ensureErr("Create")
+	drv.createErr = nil
+	ensureNoData("Create")
+	ensureCreates("Create", 1)
+
+	// Connection failure after the wallet is created on disk.
+	tWallet.connectErr = errTest
+	ensureErr("Connect")
+	tWallet.connectErr = nil
+	ensureNoData("Connect")
+	ensureCreates("Connect", 2)
+
+	// Balance failure, past the connect step.
+	tWallet.balErr = errTest
+	ensureErr("Balance")
+	tWallet.balErr = nil
+	ensureNoData("Balance")
+	ensureCreates("Balance", 3)
+
+	// Storing the wallet fails.
+	rig.db.updateWalletErr = errTest
+	ensureErr("db.UpdateWallet")
+	rig.db.updateWalletErr = nil
+	ensureNoData("db.UpdateWallet")
+	ensureCreates("db.UpdateWallet", 4)
+
+	// Success keeps the data.
+	if err := tCore.CreateWallet(tPW, nil, form); err != nil {
+		t.Fatalf("error creating wallet: %v", err)
+	}
+	ensureCreates("success", 5)
+	if _, err := os.Stat(drv.marker(dataDir)); err != nil {
+		t.Fatalf("wallet data missing after successful creation: %v", err)
+	}
+
+	// Wallet data left on disk with no configured wallet, as an interrupted
+	// creation leaves it, is used rather than recreated.
+	delete(tCore.wallets, tSeeded.ID)
+	if err := tCore.CreateWallet(tPW, nil, form); err != nil {
+		t.Fatalf("error creating wallet from existing data: %v", err)
+	}
+	ensureCreates("existing data", 5)
+
+	// A failed creation from existing data discards that data like any other.
+	delete(tCore.wallets, tSeeded.ID)
+	tWallet.connectErr = errTest
+	ensureErr("Connect with existing data")
+	tWallet.connectErr = nil
+	ensureNoData("Connect with existing data")
+	ensureCreates("Connect with existing data", 5)
 }
