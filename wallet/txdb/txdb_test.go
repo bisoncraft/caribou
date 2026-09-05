@@ -257,6 +257,39 @@ func TestIgnoreTypes(t *testing.T) {
 	}
 }
 
+// TestGetTxsStopsAtPageFull asserts that once a page fills, the scan does not
+// keep decoding subsequent ignored-type rows: a long run of ignored types
+// after the page limit must not affect MoreAvailable or panic on a malformed
+// trailing record, since it should never be reached.
+func TestGetTxsStopsAtPageFull(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	// The default scan is reverse (most-recent-first), so send needs the
+	// newest timestamp to be visited first, with the ignored-type records
+	// behind it — otherwise the page-full early exit this test is named for
+	// is never reached.
+	send := tx(netA, "send", 1, 1000)
+	n.StoreTx(send)
+
+	for i := range 50 {
+		recv := tx(netA, "recv"+string(rune('a'+i)), uint64(i+2), uint64(100+i))
+		recv.Type = Receive
+		n.StoreTx(recv)
+	}
+
+	resp, err := n.GetTxs(&TxHistoryRequest{N: 1, IgnoreTypes: []TransactionType{Receive}})
+	if err != nil {
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if !eq(ids(resp.Txs), []string{"send"}) {
+		t.Fatalf("got = %v", ids(resp.Txs))
+	}
+	if resp.MoreAvailable {
+		t.Fatalf("MoreAvailable = true, want false: every other record is Receive, which the request ignores")
+	}
+}
+
 func TestPendingTxs(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)

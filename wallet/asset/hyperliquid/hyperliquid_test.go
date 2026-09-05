@@ -1558,7 +1558,7 @@ func TestExpireOldPending(t *testing.T) {
 			User:        w.address,
 			Destination: differentDest,
 		},
-	}, 1e8)
+	}, 1e8, nil)
 
 	tx, err := w.txDB.GetTx(pendingID)
 	if err != nil {
@@ -1602,7 +1602,7 @@ func TestFreshPendingNotExpired(t *testing.T) {
 			Type: "spotTransfer", Token: "HYPE", Amount: "1",
 			User: w.address, Destination: differentDest,
 		},
-	}, 1e8)
+	}, 1e8, nil)
 
 	tx, err := w.txDB.GetTx(pendingID)
 	if err != nil {
@@ -1650,7 +1650,7 @@ func TestConfirmPendingSend(t *testing.T) {
 		},
 	}
 
-	w.confirmPendingSend(update, 5e8)
+	w.confirmPendingSend(update, 5e8, nil)
 
 	// Pending entry should be gone.
 	old, err := w.txDB.GetTx(pendingID)
@@ -1708,7 +1708,7 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 			Type: "spotTransfer", Token: "HYPE",
 			Amount: "99", User: w.address, Destination: recipient,
 		},
-	}, 99e8)
+	}, 99e8, nil)
 
 	// Pending entry should still be there.
 	still, err := w.txDB.GetTx(pendingID)
@@ -1755,7 +1755,7 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 			User:        w.address,
 			Destination: recipientB,
 		},
-	}, 5e8)
+	}, 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -1831,7 +1831,7 @@ func TestConfirmPendingSendPairsFIFO(t *testing.T) {
 				User:        w.address,
 				Destination: recipient,
 			},
-		}, 5e8)
+		}, 5e8, nil)
 	}
 
 	hashA := "0x" + fmt.Sprintf("%064x", 55)
@@ -1912,7 +1912,7 @@ func TestConfirmPendingSendNonceAfterEcho(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 5e8)
+	}, 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -1962,7 +1962,7 @@ func TestConfirmPendingSendSlowServer(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 2e8)
+	}, 2e8, nil)
 
 	confirmed, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -2062,7 +2062,7 @@ func TestConfirmPendingSendOrphanDoesNotStealRetry(t *testing.T) {
 
 	// Only the retry lands.
 	hash := "0x" + fmt.Sprintf("%064x", 301)
-	w.confirmPendingSend(spotTransferEcho(w, retryNonce+1_000, hash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, retryNonce+1_000, hash, recipient, "5"), 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(hash)
 	if err != nil {
@@ -2096,7 +2096,7 @@ func TestConfirmPendingSendUnknownOutcomeThatLanded(t *testing.T) {
 
 	// Processed 1s after mint — well before the client gave up.
 	hash := "0x" + fmt.Sprintf("%064x", 302)
-	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(hash)
 	if err != nil {
@@ -2124,7 +2124,7 @@ func TestConfirmPendingSendIgnoresAncientEcho(t *testing.T) {
 
 	// An echo from ~3 months earlier, for an identical past transfer.
 	ancientHash := "0x" + fmt.Sprintf("%064x", 303)
-	w.confirmPendingSend(spotTransferEcho(w, nonce-90*24*3600*1000, ancientHash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, nonce-90*24*3600*1000, ancientHash, recipient, "5"), 5e8, nil)
 
 	if confirmed, err := w.txDB.GetTx(ancientHash); err != nil {
 		t.Fatalf("GetTx: %v", err)
@@ -2134,7 +2134,7 @@ func TestConfirmPendingSendIgnoresAncientEcho(t *testing.T) {
 
 	// The real echo still finds its candidate.
 	hash := "0x" + fmt.Sprintf("%064x", 304)
-	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8, nil)
 	if confirmed, err := w.txDB.GetTx(hash); err != nil {
 		t.Fatalf("GetTx: %v", err)
 	} else if confirmed == nil {
@@ -2208,7 +2208,7 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 5e8)
+	}, 5e8, nil)
 
 	coinIDStr, err := decodeCoinID(coinIDBytes(pendingID))
 	if err != nil {
@@ -2245,7 +2245,7 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 		},
 	}
 
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, nil)
 
 	got, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -2310,7 +2310,7 @@ func TestHandleTransferUpdateEmitsBalanceChange(t *testing.T) {
 			User: "0xsender1234567890abcdef1234567890abcdef12", Destination: w.address,
 		},
 	}
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, nil)
 
 	wantAvail, _ := parseHYPE("5")
 	for {
@@ -2345,8 +2345,8 @@ func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 	}
 
 	// Call twice — second call should be a no-op.
-	w.handleTransferUpdate(update)
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, nil)
+	w.handleTransferUpdate(update, nil)
 
 	resp, err := w.txDB.GetTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
@@ -2368,7 +2368,7 @@ func TestProcessLedgerUpdateNonHYPE(t *testing.T) {
 		},
 	}
 	// Should be silently ignored (non-HYPE coin).
-	w.processLedgerUpdate(update)
+	w.processLedgerUpdate(update, nil)
 
 	resp, err := w.txDB.GetTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
