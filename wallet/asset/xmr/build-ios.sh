@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Builds libmonero_wallet2_api_c for the two iOS triples and stages the dylibs
-# into wallet/asset/xmr/lib/ios-arm64{,-simulator}/. This is the iOS analogue of
-# the Dockerfile (which builds the Linux/Windows/macOS/Android libs); iOS cannot
-# build in the Debian image because it needs the Apple SDK, so it runs here, on
-# macOS. Pinned to monero_c v0.18.4.6-RC2 (Monero 0.18.4.6), same as the
-# Dockerfile.
+# into wallet/asset/xmr/lib/ios-arm64{,-simulator}/. Pinned to monero_c
+# v0.18.4.6-RC2 (Monero 0.18.4.6), same as the Dockerfile.
+#
+# This is a convenience path, not the only one. The Dockerfile builds these two
+# triples too: simplybs' Apple SDK package is osxcross, a Linux-hosted Apple
+# cross toolchain, and it is scoped to any build machine. What this script buys
+# you is the xip — on macOS the system xar/pbzx unpack one you already have
+# (XCODE_XIP=...), where the Debian image builds its own xar and downloads it.
+# CI uses the Dockerfile; use this when you have the xip on hand locally.
 #
 #   cd wallet/asset/xmr && ./build-ios.sh
 #

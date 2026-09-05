@@ -1,5 +1,5 @@
 # Dockerfile for building libmonero_wallet2_api_c (Monero's wallet2 C wrapper)
-# for Linux, Windows, and macOS.
+# for Linux, Windows, macOS, Android and iOS.
 #
 # Pinned to monero_c v0.18.4.6-RC2 (Monero 0.18.4.6 "Fluorine Fermi"). monero_c
 # builds via its "simplybs" system, which compiles the full cross toolchain and
@@ -21,6 +21,10 @@
 #   # macOS x86_64 / ARM64
 #   docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-apple-darwin/libmonero_wallet2_api_c.dylib > libmonero_wallet2_api_c.dylib
 #   docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-apple-darwin/libmonero_wallet2_api_c.dylib > libmonero_wallet2_api_c.dylib
+#
+#   # iOS device / simulator
+#   docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-apple-ios/libmonero_wallet2_api_c.dylib > libmonero_wallet2_api_c.dylib
+#   docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-apple-ios-simulator/libmonero_wallet2_api_c.dylib > libmonero_wallet2_api_c.dylib
 #
 # Or extract everything at once:
 #   docker run --rm monero_c_builder tar -cf - -C /monero_c/release . | tar -xf -
@@ -100,10 +104,28 @@ RUN ./build_single.sh monero aarch64-apple-darwin -j$(nproc) && (cd contrib/depe
 # Mobile: Android arm64-v8a. simplybs supplies its own NDK toolchain (targets
 # API 21, links libc++), so this builds in the Debian image with no host NDK.
 # The .so is 16 KB-aligned by patch 0006 (Play API 35+). It ships as a jniLib in
-# the APK (see wallet/android/bind.sh, CARIBOU_XMR=1). iOS targets exist in
-# simplybs (aarch64-apple-ios[-simulator]) but need the Apple SDK, so they run
-# in a separate macOS job, not this image.
+# the APK (see wallet/android/bind.sh, CARIBOU_XMR=1).
 RUN ./build_single.sh monero aarch64-linux-android -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
+
+# Mobile: iOS device + simulator. These build here, not on a Mac. simplybs'
+# native/apple-sdk package is MrCyjaneK's osxcross — a Linux-hosted Apple cross
+# toolchain — and every rule in it is scoped `*:<target>:`, where the first
+# field is the BUILD machine (contrib/depends/simplybs/utils/ifstring). So the
+# builder is unconstrained, and the package maps each Apple target to the SDK it
+# unpacks from the same Xcode xip:
+#
+#     *:*-apple-darwin:SDKNAME=MacOSX
+#     *:*-apple-ios:SDKNAME=iPhoneOS
+#     *:*-apple-ios-simulator:SDKNAME=iPhoneSimulator
+#
+# The darwin targets above already exercise that path in this image, xar and
+# pbzx included, so iOS differs only in which SDK comes out of the xip.
+#
+# No install_name fixup here, unlike the darwin dylibs below: the iOS libs are
+# wrapped into Monero.framework by wallet/ios/bind.sh, which retargets the id to
+# @rpath/Monero.framework/Monero itself.
+RUN ./build_single.sh monero aarch64-apple-ios           -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
+RUN ./build_single.sh monero aarch64-apple-ios-simulator -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 
 # macOS: simplybs links the dylib with install_name @rpath/libmonero_wallet2_api_c.dylib.
 # cgo rejects -Wl,-rpath, so the caribou binary carries no LC_RPATH for @rpath to

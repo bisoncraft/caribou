@@ -1,0 +1,29 @@
+# sha256 of each prebuilt libmonero_wallet2_api_c, by platform directory.
+#
+# This file is the trust anchor for ./fetch-libs.sh. The libraries themselves
+# are gitignored and distributed as release assets, which are mutable — anyone
+# with write access can replace an asset at the same URL and nothing in git
+# changes. These hashes are in git, so a swap shows up as a diff on a commit
+# instead of as a silently different binary linked into a wallet.
+#
+# The hash is of the UNCOMPRESSED library, the artifact that actually gets
+# linked. That keeps it stable if the assets are ever recompressed, and the
+# .tar.xz carries its own integrity check for transport.
+#
+# Written by ./publish-libs.sh. Verify a rebuild against it with:
+#     cd lib && sha256sum -c SHA256SUMS      # shasum -a 256 -c on macOS
+#
+# PROVISIONAL. The entries below are the libraries currently staged in this
+# working tree, built locally on one machine and never published or reproduced
+# by anyone else. They are here so the format is real and a local tree can be
+# checked. publish-libs.sh rewrites this file when the libraries actually go up;
+# treat that commit, not this one, as the point where the anchor means anything.
+#
+# Platforms not listed are not published yet. The Dockerfile also builds
+# linux-amd64, linux-arm64, windows-amd64, android-arm64 and both ios-* targets;
+# android-arm and android-amd64 have no build target at all.
+
+74b46dcdd1b1c949cee58cd0bbb5b6b2e4fb887104871b2184e963435a8edf24  darwin-amd64/libmonero_wallet2_api_c.dylib
+5959a4ba8cb05aecaa8cc4044ac02f4b31d46eeec6f8f8144baa48b6898c91d8  darwin-arm64/libmonero_wallet2_api_c.dylib
+c51c0d127a2857515fc652201da2508339f1d870aa3d7c850141e50e3185905e  ios-arm64/libmonero_wallet2_api_c.dylib
+9d93c9358d548815eb34590b28414ba012fd38ee04e6bc1d048def02d59fe697  ios-arm64-simulator/libmonero_wallet2_api_c.dylib
