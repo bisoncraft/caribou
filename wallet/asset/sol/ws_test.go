@@ -189,7 +189,9 @@ func (s *testWSServer) notify(account string) bool {
 }
 
 // holdSubscribes makes every accountSubscribe reply wait for a send on the
-// returned channel, so a test can hold one in flight.
+// returned channel, so a test can hold one in flight. It is one-shot: nothing
+// clears s.holdSubs after the single reply is released, so a second
+// subscribe in the same test would block the server's read loop forever.
 func (s *testWSServer) holdSubscribes() chan<- struct{} {
 	hold := make(chan struct{})
 	s.mtx.Lock()

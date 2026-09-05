@@ -64,8 +64,8 @@ func TestFreeServers(t *testing.T) {
 	// https://www.alchemy.com/chain-connect/chain/polygon-pos
 	// https://chainlist.org/?search=Polygon+Mainnet
 	freeServers := []string{
-		// Verified working (2025-12-26)
-		"https://polygon-rpc.com",                    // Polygon Labs official
+		// Verified working (2026-09-03)
+		"https://1rpc.io/matic",                      // 1RPC
 		"https://rpc-mainnet.matic.quiknode.pro",     // QuikNode
 		"https://gateway.tenderly.co/public/polygon", // Tenderly
 		"https://polygon-bor-rpc.publicnode.com",     // PublicNode
@@ -76,11 +76,11 @@ func TestFreeServers(t *testing.T) {
 func TestFreeTestnetServers(t *testing.T) {
 	// https://chainlist.org/chain/80002
 	freeServers := []string{
-		// Verified working (2025-12-26)
-		"https://polygon-amoy.drpc.org",               // dRPC - verified working
-		"https://rpc-amoy.polygon.technology",         // Polygon Labs official
-		"https://polygon-amoy-bor-rpc.publicnode.com", // PublicNode
-		"wss://polygon-amoy-bor-rpc.publicnode.com",   // PublicNode WSS
+		// Verified working (2026-09-03)
+		"https://polygon-amoy.drpc.org",                   // dRPC - verified working
+		"https://gateway.tenderly.co/public/polygon-amoy", // Tenderly
+		"https://polygon-amoy-bor-rpc.publicnode.com",     // PublicNode
+		"wss://polygon-amoy-bor-rpc.publicnode.com",       // PublicNode WSS
 	}
 	mt.TestFreeServers(t, freeServers, util.Testnet)
 }

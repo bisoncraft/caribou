@@ -77,11 +77,10 @@ func TestFreeServers(t *testing.T) {
 }
 
 var freeTestnetServers = []string{
-	// Verified working (26-12-2025)
-	"https://ethereum-sepolia-rpc.publicnode.com",          // PublicNode
-	"https://sepolia.drpc.org",                             // dRPC
-	"https://endpoints.omniatech.io/v1/eth/sepolia/public", // Omniatech
-	"https://rpc-sepolia.rockx.com",                        // RockX
+	// Verified working (2026-09-03)
+	"https://ethereum-sepolia-rpc.publicnode.com", // PublicNode
+	"https://1rpc.io/sepolia",                     // 1RPC
+	"https://gateway.tenderly.co/public/sepolia",  // Tenderly
 
 	// Failing 03-27-2024
 	// "https://relay-sepolia.flashbots.net", // connect error: failed to connect to even a single provider among: flashbots.net

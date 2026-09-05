@@ -88,15 +88,15 @@ func (d *Driver) MinLotSize(maxFeeRate uint64) uint64 {
 // mainnet sources are used on every network; on test networks a mainnet fee
 // rate is a reasonable proxy. bitcore.io does not support Dash, and there is
 // no mempool.space-style Dash explorer, so only two independent sources are
-// available; both are rank 1 (averaged) rather than one primary and one
-// fallback, since blockcypher's Dash estimate has been observed running
-// roughly an order of magnitude above blockchair's — with only two sources
-// and no counterweight, ranking one below the other would make it the sole
-// authority whenever the higher-ranked source is healthy.
+// available. blockcypher's Dash estimate has been observed running roughly an
+// order of magnitude above blockchair's and the real network rate, so it is
+// ranked below blockchair rather than averaged with it at the same rank. If
+// both sources fail, NativeWallet.FeeRate still falls back to the electrum
+// server's estimatesmartfee, which is accurate.
 func feeRateSources() []*feeratefetcher.SourceConfig {
 	return []*feeratefetcher.SourceConfig{
-		btc.BlockcypherSource("dash", 1),
 		btc.BlockchairSource("dash", 1),
+		btc.BlockcypherSource("dash", 2),
 	}
 }
 

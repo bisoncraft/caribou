@@ -14,9 +14,8 @@ const (
 	MainnetChainID = 999
 
 	// TestnetChainID is HyperEVM testnet's chain ID (verified live via
-	// eth_chainId against https://rpcs.chain.link/hyperevm/testnet,
-	// 2026-09-01, since the official rpc.hyperliquid-testnet.xyz/evm is
-	// unreachable).
+	// eth_chainId against the official
+	// https://rpc.hyperliquid-testnet.xyz/evm, 2026-09-03).
 	TestnetChainID = 998
 )
 

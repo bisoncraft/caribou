@@ -40,21 +40,26 @@ func TestRPCTestnet(t *testing.T) {
 }
 
 func TestFreeServers(t *testing.T) {
+	// Verified working (2026-09-03)
 	freeServers := []string{
 		"https://base-rpc.publicnode.com",
 		"https://mainnet.base.org",
 		"https://base.drpc.org",
-		"https://base.llamarpc.com",
+		"https://1rpc.io/base",
 		"https://base.api.onfinality.io/public",
 	}
 	mt.TestFreeServers(t, freeServers, util.Mainnet)
 }
 
 func TestFreeTestnetServers(t *testing.T) {
+	// Verified working (2026-09-03)
 	freeServers := []string{
 		"https://base-sepolia-rpc.publicnode.com",
 		"https://sepolia.base.org",
 		"https://base-sepolia.drpc.org",
+		"https://84532.rpc.thirdweb.com",
+		// Still answers, but dropped from the production defaults for
+		// rate limiting rather than being dead.
 		"https://base-sepolia.api.onfinality.io/public",
 		"https://base-sepolia.gateway.tenderly.co",
 	}

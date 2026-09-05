@@ -122,6 +122,9 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 			"https://base-rpc.publicnode.com", // not for production use
 			"https://mainnet.base.org",
 			"https://base.drpc.org",
+			// 1rpc.io caps eth_getLogs at a 50-block range (below
+			// maxScanBlocks), so it's kept for general RPC coverage
+			// rather than the transfer scan.
 			"https://1rpc.io/base",
 			"https://base.api.onfinality.io/public",
 		}

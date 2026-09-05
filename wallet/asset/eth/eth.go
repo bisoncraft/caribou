@@ -718,8 +718,11 @@ func newWallet(assetCFG *asset.WalletConfig, logger util.Logger, net util.Networ
 		defaultProviders = []string{
 			// Verified working (2026-09-01)
 			"https://ethereum-sepolia-rpc.publicnode.com", // PublicNode - no rate limits
-			"https://1rpc.io/sepolia",                     // 1RPC - verified working
-			"https://gateway.tenderly.co/public/sepolia",  // Tenderly - verified working
+			// 1rpc.io caps eth_getLogs at a 50-block range (below
+			// maxScanBlocks), so it's kept for general RPC coverage
+			// rather than the transfer scan.
+			"https://1rpc.io/sepolia",                    // 1RPC - verified working
+			"https://gateway.tenderly.co/public/sepolia", // Tenderly - verified working
 		}
 	case util.Mainnet:
 		defaultProviders = []string{

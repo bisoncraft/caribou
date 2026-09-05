@@ -78,8 +78,8 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 		}
 	case util.Testnet:
 		defaultProviders = []string{
-			// Verified working (2026-09-01). The official
-			// rpc.hyperliquid-testnet.xyz/evm is unreachable.
+			// Verified working (2026-09-03)
+			"https://rpc.hyperliquid-testnet.xyz/evm",  // Hyperliquid Labs official
 			"https://rpcs.chain.link/hyperevm/testnet", // Chainlink
 		}
 	}

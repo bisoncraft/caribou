@@ -63,7 +63,7 @@ var (
 	// (2026-09-01) after Lava discontinued the keyless public endpoint;
 	// rpc.intea.rs was evaluated as a replacement but 429s on tx/send_tx
 	// for unauthenticated callers while still answering cheap reads —
-	// since broadcastTx has no endpoint failover (it sends to whichever
+	// since sendTx has no endpoint failover (it sends to whichever
 	// endpoint last answered any call), that combination can silently
 	// fail a real broadcast, so it was left out rather than added.
 	DefaultRPCEndpoints = map[util.Network][]string{

@@ -67,7 +67,10 @@ func BlockstreamSource(name, baseURI string, rank uint) *feeratefetcher.SourceCo
 			if !found {
 				return 0, time.Minute * 10, errors.New("no target-2 estimate returned")
 			}
-			return uint64(math.Round(rate)), 0, nil
+			// A quiet mempool can put the target-2 estimate below 0.5
+			// sat/vB, which would round to 0 and be read as a source
+			// failure rather than the true 1 sat/vB floor.
+			return max(1, uint64(math.Round(rate))), 0, nil
 		},
 	}
 }
