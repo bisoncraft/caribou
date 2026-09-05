@@ -677,33 +677,44 @@ func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
 		return fmt.Errorf("fetching ledger updates: %w", err)
 	}
 	sortLedgerUpdates(updates)
-	// ledgerMtx is held for the whole batch, not just each update: the cached
-	// pending snapshot below is only correct as long as no concurrent caller
-	// (the WS goroutine's scanLedger) can confirm/remove a pending send out
-	// from under it between updates.
+	if err := w.lockedProcessLedgerUpdates(ctx, updates); err != nil {
+		return err
+	}
+	if err := w.advanceLastScannedMS(lastLedgerUpdateTime(updates) + 1); err != nil {
+		return fmt.Errorf("persisting rescan watermark: %w", err)
+	}
+	return nil
+}
+
+// lockedProcessLedgerUpdates processes a batch of already oldest-first-sorted
+// ledger updates under a single ledgerMtx critical section and a single
+// pending-set load — the batching Rescan, scanLedger, and the live WS path
+// (whose per-frame batch, which includes the initial subscription snapshot,
+// is often the largest batch the wallet ever processes) all share, instead of
+// each update paying its own lock and its own full GetPendingTxs() reread.
+//
+// ledgerMtx is held for the whole batch, not just each update: the cached
+// pending snapshot is only correct as long as no concurrent caller can
+// confirm/remove a pending send out from under it between updates.
+//
+// ctx is checked between updates so a large REST catch-up batch (Rescan) can
+// be interrupted.
+func (w *HyperWallet) lockedProcessLedgerUpdates(ctx context.Context, updates []ledgerUpdate) error {
+	if w.txDB == nil {
+		return nil
+	}
 	w.ledgerMtx.Lock()
-	// Load the pending set once and thread it through the batch: confirmPendingSend
-	// mutates and returns it as matches are made, instead of every update
-	// rereading the whole pending index (O(updates × pending) on Rescan).
-	var pending []*txdb.WalletTransaction
-	if w.txDB != nil {
-		var err error
-		pending, err = w.txDB.GetPendingTxs()
-		if err != nil {
-			w.log.Errorf("Getting pending txs: %v", err)
-			pending = nil
-		}
+	defer w.ledgerMtx.Unlock()
+	pending, err := w.txDB.GetPendingTxs()
+	if err != nil {
+		w.log.Errorf("Getting pending txs: %v", err)
+		pending = nil
 	}
 	for _, u := range updates {
 		if err := ctx.Err(); err != nil {
-			w.ledgerMtx.Unlock()
 			return err
 		}
 		pending = w.processLedgerUpdateLocked(u, pending)
-	}
-	w.ledgerMtx.Unlock()
-	if err := w.advanceLastScannedMS(lastLedgerUpdateTime(updates) + 1); err != nil {
-		return fmt.Errorf("persisting rescan watermark: %w", err)
 	}
 	return nil
 }
@@ -735,7 +746,7 @@ func (w *HyperWallet) tipPoller(ctx context.Context) {
 		user:    w.address,
 		log:     w.log,
 		netDial: netDial,
-		onEvent: func(u ledgerUpdate) { w.processLedgerUpdate(u, nil) },
+		onEvent: func(updates []ledgerUpdate) { w.lockedProcessLedgerUpdates(ctx, updates) },
 		onLive: func() {
 			t := time.Now()
 			w.tipMtx.Lock()
@@ -781,22 +792,9 @@ func (w *HyperWallet) scanLedger(ctx context.Context) error {
 	}
 
 	sortLedgerUpdates(updates)
-	// ledgerMtx held for the whole batch and pending loaded under it; see the
-	// same comment in Rescan.
-	w.ledgerMtx.Lock()
-	var pending []*txdb.WalletTransaction
-	if w.txDB != nil {
-		var err error
-		pending, err = w.txDB.GetPendingTxs()
-		if err != nil {
-			w.log.Errorf("Getting pending txs: %v", err)
-			pending = nil
-		}
+	if err := w.lockedProcessLedgerUpdates(ctx, updates); err != nil {
+		return err
 	}
-	for _, u := range updates {
-		pending = w.processLedgerUpdateLocked(u, pending)
-	}
-	w.ledgerMtx.Unlock()
 
 	if err := w.advanceLastScannedMS(lastLedgerUpdateTime(updates) + 1); err != nil {
 		return fmt.Errorf("persisting scan watermark: %w", err)
@@ -850,11 +848,11 @@ func (w *HyperWallet) advanceLastScannedMS(next int64) error {
 }
 
 // processLedgerUpdate handles a single ledger entry: confirms pending sent txs
-// and stores newly detected incoming transfers. It takes ledgerMtx itself, so
-// it is only for the live WS single-update path; a batch caller iterating
-// several updates under one cached pending snapshot must hold ledgerMtx for
-// the whole batch (see processLedgerUpdateLocked) so the snapshot's lifetime
-// never outlives the lock that is supposed to make it authoritative.
+// and stores newly detected incoming transfers. It takes ledgerMtx itself, for
+// callers processing one update in isolation, outside a batch. Every
+// production caller (Rescan, scanLedger, and the live WS path) instead goes
+// through lockedProcessLedgerUpdates, which holds ledgerMtx across a whole
+// batch.
 func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate, pending []*txdb.WalletTransaction) []*txdb.WalletTransaction {
 	w.ledgerMtx.Lock()
 	defer w.ledgerMtx.Unlock()
@@ -862,8 +860,8 @@ func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate, pending []*txdb.Wallet
 }
 
 // processLedgerUpdateLocked is processLedgerUpdate's body, factored out so a
-// batch caller (Rescan, scanLedger) can hold ledgerMtx across every update in
-// the batch instead of per update. Callers must hold ledgerMtx.
+// batch caller (lockedProcessLedgerUpdates) can hold ledgerMtx across every
+// update in the batch instead of per update. Callers must hold ledgerMtx.
 //
 // pending is the caller's cached pending-send set, threaded through a batch of
 // updates so confirmPendingSend does not reread the whole pending index for

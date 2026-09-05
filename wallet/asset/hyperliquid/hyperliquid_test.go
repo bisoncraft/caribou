@@ -2542,6 +2542,75 @@ func TestScanLedgerContextCancel(t *testing.T) {
 	}
 }
 
+// countingPendingTxDB wraps a txdb.NetworkTxDB, counting GetPendingTxs calls
+// so a test can assert a batch of ledger updates loads the pending set once,
+// not once per update.
+type countingPendingTxDB struct {
+	txdb.NetworkTxDB
+	pendingCalls atomic.Int64
+}
+
+func (c *countingPendingTxDB) GetPendingTxs() ([]*txdb.WalletTransaction, error) {
+	c.pendingCalls.Add(1)
+	return c.NetworkTxDB.GetPendingTxs()
+}
+
+// TestLockedProcessLedgerUpdatesBatchesPendingLoad verifies
+// lockedProcessLedgerUpdates — which Rescan, scanLedger, and the live WS
+// path (via tipPoller's onEvent) all now share — loads the pending set once
+// per batch under one ledgerMtx critical section, not once per update, and
+// still correctly confirms every pending send in a multi-update batch
+// (goaudit finding F3: the WS batching fix had no direct test of its own).
+func TestLockedProcessLedgerUpdatesBatchesPendingLoad(t *testing.T) {
+	w := newTestWalletWithDB(t)
+	counting := &countingPendingTxDB{NetworkTxDB: w.txDB}
+	w.txDB = counting
+
+	recipient := "0xrecipient1234567890abcdef1234567890abcd"
+	nonce1 := uint64(1700000001000)
+	nonce2 := uint64(1700000002000)
+	pendingID1 := storePendingSend(t, w, nonce1, 5e8, recipient, 0)
+	pendingID2 := storePendingSend(t, w, nonce2, 3e8, recipient, 0)
+
+	hash1 := "0x" + strings.Repeat("a", 64)
+	hash2 := "0x" + strings.Repeat("b", 64)
+	updates := []ledgerUpdate{
+		spotTransferEcho(w, nonce2+1_000, hash2, recipient, "3"),
+		spotTransferEcho(w, nonce1+1_000, hash1, recipient, "5"),
+	}
+	sortLedgerUpdates(updates)
+
+	if err := w.lockedProcessLedgerUpdates(context.Background(), updates); err != nil {
+		t.Fatalf("lockedProcessLedgerUpdates: %v", err)
+	}
+
+	if got := counting.pendingCalls.Load(); got != 1 {
+		t.Fatalf("GetPendingTxs called %d times, want 1 (one load for the whole batch)", got)
+	}
+
+	// confirmPendingSend replaces the pending record (keyed by nonce-derived
+	// ID) with a confirmed one keyed by the echo's tx hash, so both the
+	// pending IDs must be gone and both hashes must now be confirmed.
+	for _, pendingID := range []string{pendingID1, pendingID2} {
+		tx, err := w.txDB.GetTx(pendingID)
+		if err != nil {
+			t.Fatalf("GetTx %s: %v", pendingID, err)
+		}
+		if tx != nil {
+			t.Fatalf("pending record %s still present after confirmation", pendingID)
+		}
+	}
+	for _, hash := range []string{hash1, hash2} {
+		tx, err := w.txDB.GetTx(hash)
+		if err != nil {
+			t.Fatalf("GetTx %s: %v", hash, err)
+		}
+		if tx == nil || !tx.Confirmed {
+			t.Fatalf("send confirmed at %s was not stored by the batch: %+v", hash, tx)
+		}
+	}
+}
+
 func TestNextSpotSendNonceMonotonic(t *testing.T) {
 	w := &HyperWallet{nextSendNonce: uint64(time.Now().UnixMilli()) + 10}
 
@@ -2748,10 +2817,14 @@ func TestWSClientReceivesEvent(t *testing.T) {
 
 	log := util.StdOutLogger("WSTEST", util.LevelTrace)
 	wsc := &wsClient{
-		url:     wsURL(srv),
-		user:    "0xrecipient",
-		log:     log,
-		onEvent: func(u ledgerUpdate) { received <- u },
+		url:  wsURL(srv),
+		user: "0xrecipient",
+		log:  log,
+		onEvent: func(updates []ledgerUpdate) {
+			for _, u := range updates {
+				received <- u
+			}
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2790,10 +2863,14 @@ func TestWSClientSnapshotProcessed(t *testing.T) {
 
 	log := util.StdOutLogger("WSTEST", util.LevelTrace)
 	wsc := &wsClient{
-		url:     wsURL(srv),
-		user:    "0xb",
-		log:     log,
-		onEvent: func(u ledgerUpdate) { received <- u },
+		url:  wsURL(srv),
+		user: "0xb",
+		log:  log,
+		onEvent: func(updates []ledgerUpdate) {
+			for _, u := range updates {
+				received <- u
+			}
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2924,10 +3001,14 @@ func TestWSClientIgnoresOtherChannels(t *testing.T) {
 
 	log := util.StdOutLogger("WSTEST", util.LevelTrace)
 	wsc := &wsClient{
-		url:     wsURL(srv),
-		user:    "0xb",
-		log:     log,
-		onEvent: func(u ledgerUpdate) { received <- u },
+		url:  wsURL(srv),
+		user: "0xb",
+		log:  log,
+		onEvent: func(updates []ledgerUpdate) {
+			for _, u := range updates {
+				received <- u
+			}
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3109,7 +3190,7 @@ func TestWSClientWaitsForInFlightHandler(t *testing.T) {
 		url:  wsURL(srv),
 		user: "0xtest",
 		log:  util.StdOutLogger("WSTEST", util.LevelTrace),
-		onEvent: func(_ ledgerUpdate) {
+		onEvent: func(_ []ledgerUpdate) {
 			once.Do(func() { close(inHandler) })
 			<-release
 		},
