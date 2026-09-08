@@ -8,6 +8,9 @@
 #   ./fetch-libs.sh --all               # every platform in SHA256SUMS
 #   ./fetch-libs.sh --force             # re-download even if present and valid
 #
+# The release tag is read from the "# Release:" line of lib/SHA256SUMS, not
+# configured here. Override with XMR_LIBS_TAG= if you need to.
+#
 # These libraries are NOT stock monero_c. Patches 0001/0002 add
 # MONERO_Wallet_setAllowMismatchedDaemonVersion, which cxmr declares extern and
 # links against, so an upstream MrCyjaneK release will not satisfy the link.
@@ -36,12 +39,24 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"    # wallet/asset/xmr
 sums="$here/lib/SHA256SUMS"
 
-# The release these assets come from. Bump the caribou suffix when the patches
-# in this directory change, not only when the monero_c pin moves: the patches
-# change the ABI, so a lib built before them is the wrong artifact even though
-# Monero's version is identical.
-TAG="${XMR_LIBS_TAG:-xmr-libs-v0.18.4.6-RC2-caribou.1}"
 REPO="${XMR_LIBS_REPO:-bisoncraft/caribou}"
+
+# The release these assets come from. Read out of lib/SHA256SUMS rather than
+# written here, because a second copy is a second thing to forget: publish-libs.sh
+# --tag would move the release while this file kept fetching the previous one,
+# and the failure is a checksum mismatch that looks like a tampered asset rather
+# than a stale tag.
+#
+# Taking it from the checksums file makes that impossible. publish-libs.sh
+# writes the tag it uploaded to into that header alongside the hashes of what it
+# uploaded, both land in one commit, so the tag and the hashes are always the
+# same release. Bump the caribou suffix when the patches in this directory
+# change, not only when the monero_c pin moves: the patches change the ABI, so a
+# lib built before them is the wrong artifact even though Monero's version is
+# identical.
+release_tag() {
+    awk '/^# Release:/ { print $3; exit }' "$sums"
+}
 
 # The wallet library's filename per platform. monero_c emits a shared library
 # everywhere; only the extension differs. This names one file, so it is used to
@@ -116,7 +131,11 @@ for arg in "$@"; do
         --all)   while read -r p; do want+=("$p"); done < <(platforms_in_sums) ;;
         --force) force=1 ;;
         -h|--help)
-            sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+            # Print the header comment and stop at the first line that is not
+            # one. A line range here goes stale the moment the header changes,
+            # which is how the sibling script ended up printing `set -euo
+            # pipefail` as documentation.
+            awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
             exit 0
             ;;
         -*) echo "error: unknown flag $arg" >&2; exit 1 ;;
@@ -126,6 +145,15 @@ done
 [[ ${#want[@]} -gt 0 ]] || want=("$(host_platform)")
 
 [[ -f "$sums" ]] || { echo "error: $sums not found." >&2; exit 1; }
+
+TAG="${XMR_LIBS_TAG:-$(release_tag)}"
+if [[ -z "$TAG" ]]; then
+    echo "error: no '# Release:' line in lib/SHA256SUMS, so there is no release" >&2
+    echo "  to fetch from. That header is written by ./publish-libs.sh; if the" >&2
+    echo "  libraries have not been published yet, build them (see README.md)." >&2
+    echo "  Override with XMR_LIBS_TAG=<tag> to fetch from a specific release." >&2
+    exit 1
+fi
 
 # Prefer gh: it carries the viewer's credentials, which a private repo needs and
 # a public one does not mind. curl covers machines without gh, and works only
@@ -192,20 +220,37 @@ for platform in "${want[@]}"; do
         fi
     fi
 
+    # Every failure from here down is per-platform: record it, report it at the
+    # end, and carry on to the next one. `set -e` would abort the whole run on
+    # the first one instead, so that `--all` against a release missing a single
+    # platform installs nothing and names only that platform, when nine of the
+    # ten were fine. The `|| ok=0` and `if !` forms below are what keep `set
+    # -e` out of it; a bare command here would be fatal.
     asset="libmonero_wallet2_api_c-$platform.tar.xz"
     echo "==> $platform: downloading $asset"
+    ok=1
     if [[ "$downloader" == gh ]]; then
-        gh release download "$TAG" --repo "$REPO" --pattern "$asset" --dir "$work" --clobber
+        gh release download "$TAG" --repo "$REPO" --pattern "$asset" --dir "$work" --clobber || ok=0
     else
         curl -fsSL -o "$work/$asset" \
-            "https://github.com/$REPO/releases/download/$TAG/$asset"
+            "https://github.com/$REPO/releases/download/$TAG/$asset" || ok=0
+    fi
+    if [[ $ok -eq 0 ]]; then
+        echo "error: $platform: could not download $asset from release $TAG." >&2
+        echo "  The asset may not exist for this platform, or the download failed." >&2
+        failed=1
+        continue
     fi
 
     # Extract into a scratch dir so a bad archive cannot leave a half-written
     # library where the linker would find it. The preflight above has already
     # established that this tar can read xz.
     mkdir -p "$work/$platform"
-    tar -xJf "$work/$asset" -C "$work/$platform"
+    if ! tar -xJf "$work/$asset" -C "$work/$platform"; then
+        echo "error: $platform: $asset could not be extracted." >&2
+        failed=1
+        continue
+    fi
 
     # Verify every file before installing any of them. Installing as we go
     # would leave a platform whose second library failed the check holding one

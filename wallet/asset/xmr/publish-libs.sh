@@ -7,7 +7,13 @@
 #   ./publish-libs.sh ios-arm64             # or name platforms explicitly
 #   ./publish-libs.sh --tag xmr-libs-v0.18.4.6-RC2-caribou.2
 #   ./publish-libs.sh --dry-run             # package and hash, upload nothing
+#   ./publish-libs.sh --publish             # publish outright instead of a draft
 #   ./publish-libs.sh --drop-unpublished    # drop carried platforms this tag lacks
+#
+# The tag written here is the one fetch-libs.sh will use: it goes into the
+# "# Release:" header of lib/SHA256SUMS, which fetch-libs.sh reads. It also
+# defaults to whatever that header already says, so the tag lives in exactly one
+# place and --tag moves it for both scripts at once.
 #
 # A release created as a draft serves nothing: draft assets are not reachable at
 # releases/download/<tag>/, so fetch-libs.sh's curl path 404s for everyone and
@@ -41,7 +47,18 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"    # wallet/asset/xmr
 sums="$here/lib/SHA256SUMS"
 
-TAG="${XMR_LIBS_TAG:-xmr-libs-v0.18.4.6-RC2-caribou.1}"
+# Default to the tag lib/SHA256SUMS already names, for the same reason
+# fetch-libs.sh reads it from there rather than carrying its own copy: a second
+# copy is a second thing to forget. Publishing --tag ...caribou.2 from one
+# machine and then running this script bare from another would otherwise create
+# ...caribou.1 again and rewrite the header back to it, silently reverting the
+# release pointer for everyone. The literal is only a bootstrap, for the first
+# publish, when no header exists yet.
+TAG="${XMR_LIBS_TAG:-}"
+if [[ -z "$TAG" && -f "$sums" ]]; then
+    TAG="$(awk '/^# Release:/ { print $3; exit }' "$sums")"
+fi
+TAG="${TAG:-xmr-libs-v0.18.4.6-RC2-caribou.1}"
 REPO="${XMR_LIBS_REPO:-bisoncraft/caribou}"
 PIN="3bfb3856a838f2bf6b729501837bb0295dedf25d"   # monero_c, == tag v0.18.4.6-RC2
 
@@ -55,7 +72,9 @@ while [[ $# -gt 0 ]]; do
         --dry-run)  dry_run=1; shift ;;
         --publish)  draft=0; shift ;;   # opt out of --draft
         --drop-unpublished) drop_unpublished=1; shift ;;
-        -h|--help)  sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # Print the header comment and stop at the first line that is not one.
+        # The range this replaces had already drifted onto `set -euo pipefail`.
+        -h|--help)  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
         -*)         echo "error: unknown flag $1" >&2; exit 1 ;;
         *)          want+=("$1"); shift ;;
     esac
@@ -309,8 +328,6 @@ if [[ $dry_run -eq 1 ]]; then
     exit 0
 fi
 
-cp "$work/assets/SHA256SUMS" "$sums"
-
 echo "==> uploading to $REPO $TAG"
 notes="$(cat <<EOF
 Prebuilt \`libmonero_wallet2_api_c\` for the Caribou wallet.
@@ -344,6 +361,12 @@ else
     [[ $draft -eq 1 ]] && { args+=(--draft); created_draft=1; }
     gh release create "$TAG" "$work"/assets/* --repo "$REPO" "${args[@]}"
 fi
+
+# Only now. lib/SHA256SUMS is what fetch-libs.sh trusts, and it names the
+# release the hashes belong to, so writing it before the upload means a failed
+# upload leaves the working tree pointing at assets that do not exist. `set -e`
+# takes the exit above, and the tree is left untouched for a retry.
+cp "$work/assets/SHA256SUMS" "$sums"
 
 echo
 echo "Uploaded."
