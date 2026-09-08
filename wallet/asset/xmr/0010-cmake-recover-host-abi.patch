@@ -1,0 +1,66 @@
+monero_c: recover HOST_ABI when CMake throws the cache away.
+
+build_single.sh passes the target triplet as `-DHOST_ABI=<triplet>`, which
+lives only in CMakeCache.txt. CMake deletes that cache and silently re-runs
+configure whenever a variable it considers structural changes underneath it:
+
+    You have changed variables that require your cache to be deleted.
+    Configure will be re-run and you may have to reset some variables.
+    The following variables have changed:
+    CMAKE_CXX_COMPILER= /monero_c/contrib/depends/_native/bin/aarch64-linux-gnu-gcc
+
+The re-run has no command line to take -D from, so HOST_ABI comes back empty
+and the first comparison below degenerates from
+
+    if(${HOST_ABI} STREQUAL "x86_64-w64-mingw32")
+
+to `if(STREQUAL "x86_64-w64-mingw32")`, which is a CMake syntax error:
+
+    CMake Error at CMakeLists.txt:10 (if):
+      if given arguments:
+        "STREQUAL" "x86_64-w64-mingw32"
+      Unknown arguments specified
+
+Observed on aarch64-linux-gnu, mid-`make`, after the first two configures of
+the same build directory had already succeeded with the correct value. It is
+intermittent, it costs the entire target, and a plain `docker build` has no
+retry to absorb it -- the RUN layer is discarded and roughly an hour and a half
+of toolchain work goes with it.
+
+Recover the value from the environment. contrib/depends/<triplet>/_source_me
+exports HOST with exactly the triplet build_single.sh passes, build_single.sh
+sources it before invoking cmake, and the environment is not the cache, so it
+survives the deletion that caused the problem.
+
+Deliberately not fixed by quoting the comparisons. `if("" STREQUAL "...")` is
+legal and simply false, so quoting would turn a loud syntax error into a silent
+misbuild: CMAKE_SYSTEM_NAME never set for the Windows and Darwin targets, the
+android and linux-gnu link flags dropped. The unquoted forms are left as they
+are precisely because they cannot fail quietly, and the else branch below is a
+hard error for the same reason.
+
+--- a/monero_libwallet2_api_c/CMakeLists.txt
++++ b/monero_libwallet2_api_c/CMakeLists.txt
+@@ -1,6 +1,22 @@
+ cmake_minimum_required(VERSION 3.5)
+ project(${MONERO_FLAVOR}_wallet2_api_c)
+ message(STATUS HOST_ABI = ${HOST_ABI})
++
++# -DHOST_ABI lives only in CMakeCache.txt, and CMake deletes the cache and
++# re-runs configure by itself when a structural variable changes. That re-run
++# has no command line, so the value is lost and every comparison below becomes
++# a syntax error. _source_me exports the same triplet as HOST and is
++# environment rather than cache, so it survives.
++if(NOT HOST_ABI)
++    if(DEFINED ENV{HOST})
++        set(HOST_ABI "$ENV{HOST}")
++        message(STATUS "HOST_ABI was empty, recovered from environment: ${HOST_ABI}")
++    else()
++        message(FATAL_ERROR
++            "HOST_ABI is empty and HOST is not in the environment. "
++            "Run this through build_single.sh, which sets both.")
++    endif()
++endif()
+ 
+ set(MD_LIBRARY "")
+ 

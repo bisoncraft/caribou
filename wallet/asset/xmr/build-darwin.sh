@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Builds libmonero_wallet2_api_c for the two macOS desktop triples and stages the
 # dylibs into wallet/asset/xmr/lib/darwin-amd64 and lib/darwin-arm64. This is the
-# native-macOS analogue of the Dockerfile's darwin targets: the Dockerfile builds
-# them in Debian, which forces simplybs to download Xcode (2.7 GB) and build a
-# native `xar` from source to unpack the .xip. On macOS the system `xar`/`pbzx`
-# unpack the xip directly, and a locally-downloaded xip is reused, so this path is
-# faster and avoids the Linux-only xar/zlib snag. Pinned to monero_c v0.18.4.6-RC2
-# (Monero 0.18.4.6), same as the Dockerfile and build-ios.sh.
+# native-macOS analogue of the Dockerfile's darwin targets, and it is a
+# convenience, not a requirement: the Dockerfile builds these two on Linux and
+# that is the reference path. Pinned to monero_c v0.18.4.6-RC2 (Monero
+# 0.18.4.6), same as the Dockerfile and build-ios.sh.
+#
+# What running here actually saves is compiling `xar` and `pbzx` from source to
+# unpack the xip, since macOS ships both. It does NOT save you the xip itself.
+# Neither path can download that (see the SDK box below), so both need you to
+# supply it; this one takes it from XCODE_XIP=, the Dockerfile from xcode/.
 #
 #   cd wallet/asset/xmr && XCODE_XIP=~/Downloads/Xcode_26.1_Universal.xip ./build-darwin.sh
 #
@@ -65,9 +68,11 @@ apply_once() { # $1=dir-to-run-in  $2=patch-file
       fi )
 }
 
-# Prepare (clone + submodule + patch), gated on a success sentinel so an
-# interrupted prepare re-runs cleanly. The heavy build below is outside the gate;
-# simplybs caches its own work, so re-running resumes it.
+# Prepare (clone + submodule + monero_c's own patches), gated on a success
+# sentinel so an interrupted prepare re-runs cleanly. Only the steps that are
+# expensive or not idempotent live inside the gate; our own patches are applied
+# below it on every run. The heavy build further down is outside it too, since
+# simplybs caches its own work and re-running resumes it.
 if [[ ! -f "$MONERO_C_DIR/.caribou-prepared" ]]; then
     if [[ ! -d "$MONERO_C_DIR/.git" ]]; then
         echo "==> cloning monero_c into $MONERO_C_DIR"
@@ -84,37 +89,62 @@ if [[ ! -f "$MONERO_C_DIR/.caribou-prepared" ]]; then
     echo "==> fetching monero submodule (recursive)"
     ( cd "$MONERO_C_DIR" && git submodule update --init --recursive --force monero )
 
-    echo "==> applying source patches"
+    echo "==> applying monero_c's own patches"
     ( cd "$MONERO_C_DIR" && ./apply_patches.sh monero )
-    apply_once "$MONERO_C_DIR/monero" "$here/0001-add-allow_mismatched_daemon_version.patch"
-    apply_once "$MONERO_C_DIR"        "$here/0002-add-wallet2_api_c-wrapper.patch"
-
-    # Apple builds are SHARED and gate exported symbols on the .exp list. Add our
-    # wrapper symbol so MONERO_Wallet_setAllowMismatchedDaemonVersion is visible
-    # in the dylib, else the Go binding's call is undefined at the app link.
-    exp="$MONERO_C_DIR/monero_libwallet2_api_c/monero_libwallet2_api_c.exp"
-    if ! grep -q '_MONERO_Wallet_setAllowMismatchedDaemonVersion' "$exp"; then
-        sed -i.bak -e '/_MONERO_Wallet_setTrustedDaemon/a\
-_MONERO_Wallet_setAllowMismatchedDaemonVersion' "$exp"
-        rm -f "$exp.bak"
-        echo "  added export symbol to $(basename "$exp")"
-    fi
-
-    echo "==> fetching simplybs + robustness patches"
-    ( cd "$MONERO_C_DIR/contrib/depends" && make simplybs )
-    apply_once "$MONERO_C_DIR/contrib/depends" "$here/0004-simplybs-retry-mirrors-only.patch"
-    apply_once "$MONERO_C_DIR/contrib/depends" "$here/0005-depends-keep-simplybs-checkout.patch"
-    apply_once "$MONERO_C_DIR/contrib/depends" "$here/0006-simplybs-android-16k-pages.patch"
-
     touch "$MONERO_C_DIR/.caribou-prepared"
 else
     echo "==> reusing prepared checkout at $MONERO_C_DIR (skipping clone/patch)"
 fi
 
+# Our patches are applied on every run, not only on a fresh prepare. apply_once
+# is a no-op once a patch is in, and gating them on the sentinel meant a
+# checkout prepared by an earlier revision of this script silently never picked
+# up a patch added to the list afterwards.
+#   0001 adds Wallet::setAllowMismatchedDaemonVersion in the monero submodule;
+#   0002 exposes it through the wallet2_api_c C wrapper.
+#   0010 recovers HOST_ABI when CMake throws its own cache away mid-build. Not
+#        Docker-specific: this script drives the same build_single.sh over the
+#        same CMakeLists.txt, so it hits the same intermittent syntax error.
+echo "==> applying caribou patches"
+apply_once "$MONERO_C_DIR/monero" "$here/0001-add-allow_mismatched_daemon_version.patch"
+apply_once "$MONERO_C_DIR"        "$here/0002-add-wallet2_api_c-wrapper.patch"
+apply_once "$MONERO_C_DIR"        "$here/0010-cmake-recover-host-abi.patch"
+
+# Apple builds are SHARED and gate exported symbols on the .exp list. Add our
+# wrapper symbol so MONERO_Wallet_setAllowMismatchedDaemonVersion is visible
+# in the dylib, else the Go binding's call is undefined at the app link.
+exp="$MONERO_C_DIR/monero_libwallet2_api_c/monero_libwallet2_api_c.exp"
+if ! grep -q '_MONERO_Wallet_setAllowMismatchedDaemonVersion' "$exp"; then
+    sed -i.bak -e '/_MONERO_Wallet_setTrustedDaemon/a\
+_MONERO_Wallet_setAllowMismatchedDaemonVersion' "$exp"
+    rm -f "$exp.bak"
+    echo "  added export symbol to $(basename "$exp")"
+fi
+
+#   0004/0007 keep GNU source downloads working through mirror flakes and
+#        ftpmirror.gnu.org's host-wide outages;
+#   0005 stops the depends Makefile reverting those on the next build;
+#   0009 stops `make sbs-cleanup` deleting simplybs' source cache. That one is
+#        load-bearing here, not just a speed-up: the loop below runs sbs-cleanup
+#        between triples, and the cache is where the xip staged just below
+#        lives, so without 0009 the second triple finds no xip and fails in
+#        native/apple-sdk.
+#   0011 re-checks a cached archive against its pinned sha256 before reusing it.
+#        With 0009 keeping the cache, a Ctrl-C mid-download would otherwise
+#        leave a truncated tarball that every later run reuses and fails to
+#        extract, with no way out but deleting it by hand.
+echo "==> fetching simplybs + robustness patches"
+( cd "$MONERO_C_DIR/contrib/depends" && make simplybs )
+apply_once "$MONERO_C_DIR/contrib/depends" "$here/0004-simplybs-retry-mirrors-only.patch"
+apply_once "$MONERO_C_DIR/contrib/depends" "$here/0005-depends-keep-simplybs-checkout.patch"
+apply_once "$MONERO_C_DIR/contrib/depends" "$here/0007-simplybs-gnu-origin-fallback.patch"
+apply_once "$MONERO_C_DIR/contrib/depends" "$here/0009-depends-keep-simplybs-source-cache.patch"
+apply_once "$MONERO_C_DIR/contrib/depends" "$here/0011-simplybs-recheck-cached-sources.patch"
+
 # Stage the Apple SDK xip into simplybs' source cache. simplybs reuses any blob
-# already at its cache path and only sha256-verifies on its own download, so a
-# pre-placed file is trusted as-is; we warn (not fail) on a hash mismatch in case
-# Apple re-released.
+# already at its cache path and only sha256-verifies on its own download -- its
+# "blob" extract path is a plain copy with no hash check -- so a pre-placed file
+# is trusted as-is unless we check it here, which is what the block below does.
 XIP_URLPATH="download.developer.apple.com/Developer_Tools/Xcode_26.1/XcodeXIP_26.1_Universal.xip"
 XIP_SHA256="434287e1e4c6ecbd6d5ea07e9f408fffcad2b82916b0a3fdfefa7fe60db4de93"
 XIP_CACHE="$MONERO_C_DIR/contrib/depends/simplybs/.buildlib/source/$XIP_URLPATH"
@@ -123,10 +153,20 @@ if [[ -n "${XCODE_XIP:-}" ]]; then
         echo "error: XCODE_XIP=$XCODE_XIP not found." >&2
         exit 1
     fi
+    # Refuse a mismatch rather than warn past it. Nothing downstream will catch
+    # it: simplybs verifies only what it downloaded itself, so this hash is the
+    # single check standing between an arbitrary 2.8 GB file and the Apple
+    # toolchain that compiles a wallet library. Override deliberately if Apple
+    # really has re-released and the pin is being moved.
     got="$(shasum -a 256 "$XCODE_XIP" | awk '{print $1}')"
     if [[ "$got" != "$XIP_SHA256" ]]; then
-        echo "  warning: XCODE_XIP sha256 $got != pinned $XIP_SHA256" >&2
-        echo "  (proceeding; Apple may have re-released, or this is a different build)" >&2
+        echo "error: XCODE_XIP sha256 does not match the pin." >&2
+        echo "  got    $got" >&2
+        echo "  wanted $XIP_SHA256  (Xcode 26.1)" >&2
+        echo "  Xcode 26.1.1 hashes ed55d55f... and is NOT interchangeable." >&2
+        echo "  Set XCODE_XIP_ALLOW_MISMATCH=1 to build from it anyway." >&2
+        [[ "${XCODE_XIP_ALLOW_MISMATCH:-}" == "1" ]] || exit 1
+        echo "  XCODE_XIP_ALLOW_MISMATCH=1 set, proceeding." >&2
     fi
     # (Re)stage into the cache whenever it is absent OR a different size. simplybs
     # only checks a source blob's *existence* before reusing it, so a truncated
@@ -148,7 +188,9 @@ elif [[ ! -f "$XIP_CACHE" ]]; then
 fi
 
 # Build each desktop triple. Each builds its full cross toolchain + deps from
-# source via simplybs (long, tens of GB); sbs-cleanup frees intermediates.
+# source via simplybs (long, tens of GB); sbs-cleanup frees the intermediates
+# between them and, with 0009 applied above, leaves the source cache and the
+# staged xip alone.
 for triple in "${TRIPLES[@]}"; do
     echo "==> build_single.sh monero $triple"
     ( cd "$MONERO_C_DIR" && ./build_single.sh monero "$triple" "$JOBS" )

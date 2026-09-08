@@ -1,0 +1,96 @@
+depends: re-verify a cached source archive before reusing it.
+
+Patch 0009 keeps simplybs' download cache across targets, which is what
+makes this build finish in one day rather than several and what keeps the
+hand-staged Xcode xip alive. It also makes one failure mode permanent.
+DownloadSource only downloads when the file is absent:
+
+	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+
+and downloadWithResume deletes a file only after a *completed* transfer
+fails its sha256. A run killed mid-transfer -- Ctrl-C out of
+build-darwin.sh, an OOM kill, an interrupted docker build -- therefore
+leaves a truncated archive that is never re-fetched and never re-checked.
+Before 0009 the next sbs-cleanup cleared it; now nothing does. Every later
+run then dies in the extract step on a corrupt archive, and the recovery is
+a manual rm of a cache path the user has to work out.
+
+Hash a cached archive against the sha256 its package already pins and
+re-download it if it does not match. DownloadFile resumes from what is on
+disk, so the common case is a range request for the missing tail rather
+than the whole file, and a completed transfer that still mismatches is
+deleted by the check already in downloadWithResume.
+
+Only the tar kinds are checked. "git" is a clone bundle whose Sha256 means
+something else to ExtractGitCloneBundle, and "blob" is the Apple xip: that
+one is staged into the cache by hand rather than downloaded, its mismatch
+is deliberately overridable (XCODE_XIP_ALLOW_MISMATCH), and build-darwin.sh
+and build-ios.sh already re-stage it when the cached size differs.
+
+The cost is a sha256 pass over the cached archives at the start of each
+target. Against targets that each spend hours compiling a cross toolchain
+from source, reading a few GB off local disk does not show up.
+
+diff --git a/simplybs/pack/build.go b/simplybs/pack/build.go
+index 20628ec..dc71ee1 100644
+--- a/simplybs/pack/build.go
++++ b/simplybs/pack/build.go
+@@ -1,7 +1,10 @@
+ package pack
+ 
+ import (
++	"crypto/sha256"
++	"encoding/hex"
+ 	"fmt"
++	"io"
+ 	"log"
+ 	"os"
+ 	"os/exec"
+@@ -53,12 +56,47 @@ func (p *Package) ExtractEnv(host *host.Host, envPath string, envNativePath stri
+ 	writeDotEnv(envPath+"/_source_me", newEnv)
+ }
+ 
++// cachedArchiveIsIntact reports whether a source archive already in the cache
++// hashes to the sha256 its package pins. A run killed mid-transfer leaves a
++// partial file behind, and DownloadSource below reuses whatever is present, so
++// without this check a truncated archive is permanent: nothing re-fetches it
++// and nothing re-checks it.
++func cachedArchiveIsIntact(sourcePath, expectedSha256 string) bool {
++	f, err := os.Open(sourcePath)
++	if err != nil {
++		return false
++	}
++	defer f.Close()
++	hasher := sha256.New()
++	if _, err := io.Copy(hasher, f); err != nil {
++		return false
++	}
++	return hex.EncodeToString(hasher.Sum(nil)) == expectedSha256
++}
++
+ func (p *Package) DownloadSource(download *Download) {
+ 	sourcePath := p.GenerateSourceBuildPath(download)
+ 	os.MkdirAll(filepath.Dir(sourcePath), 0755)
+ 	if download.Kind == "none" {
+ 		return
+ 	}
++	// Only the archive kinds. "git" is a clone bundle whose Sha256 means
++	// something else to ExtractGitCloneBundle, and "blob" is the Apple xip,
++	// which is staged into the cache by hand and deliberately overridable.
++	switch download.Kind {
++	case "tar.gz", "tar.bz2", "tar.xz":
++		if _, err := os.Stat(sourcePath); err == nil && download.Sha256 != "" {
++			if !cachedArchiveIsIntact(sourcePath, download.Sha256) {
++				log.Printf("Cached source %s does not match its pinned sha256, re-downloading", sourcePath)
++				// DownloadFile resumes from what is on disk, so this usually
++				// costs a range request rather than the whole archive, and a
++				// completed transfer that still mismatches deletes the file.
++				if err := downloadpkg.DownloadFile(p.Package, sourcePath, download.URL, download.Sha256, false); err != nil {
++					log.Fatalf("Failed to re-download source: %v", err)
++				}
++			}
++		}
++	}
+ 	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
+ 		var err error
+ 		if download.Kind == "git" {

@@ -1,0 +1,36 @@
+depends: stop sbs-cleanup from deleting the source cache.
+
+sbs-cleanup runs between targets to free the intermediate build trees,
+and its last line is `rm -rf simplybs/.buildlib/source`. That directory is
+not an intermediate: it is the download cache, keyed by URL path, and every
+entry in it has already been checked against the sha256 pinned in the
+package JSON. Removing it makes each of the ten targets re-download the
+whole source set from scratch, which is where most of the wall-clock time
+and every network flake in this build comes from -- the llvm-project bundle
+alone is 2.2 GiB.
+
+It is also load we have no right to put on GNU and the other origins ten
+times over, and it is what makes the Apple targets impossible to build at
+all. native/apple-sdk cannot fetch its Xcode xip (Apple 302s to a developer
+login), so the xip has to be staged into that cache by hand; deleting the
+cache after the first target throws the staged xip away with it.
+
+The other six lines are left alone. Those do remove real intermediates:
+work/ and staging/ trees, the extracted per-triplet prefixes, and _native.
+
+Keeping the cache does hand one failure mode a longer life: DownloadSource
+reuses whatever file is already at a cache path without re-checking it, so
+a run killed mid-transfer leaves a truncated archive that sbs-cleanup used
+to sweep away and now nothing does. Patch 0011 closes that, and the two
+belong together.
+
+--- a/Makefile
++++ b/Makefile
+@@ -21,7 +21,6 @@
+ 	@rm -rf *-*-*
+ 	@rm -rf simplybs/.buildlib/*_*/work
+ 	@rm -rf simplybs/.buildlib/*_*/staging
+-	@rm -rf simplybs/.buildlib/source
+ 
+ simplybs:
+ 	git clone https://github.com/mrcyjanek/simplybs || true

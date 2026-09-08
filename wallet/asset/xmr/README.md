@@ -278,7 +278,22 @@ when recovering a wallet to skip scanning old blocks.
 ## Rebuilding the Libraries
 
 If you need to rebuild the libraries (e.g., after updating monero_c), use the
-provided Dockerfile:
+provided Dockerfile.
+
+**Before you start: the four Apple targets need an Xcode xip you supply.**
+simplybs pins `Xcode_26.1_Universal.xip` by sha256 and the image cannot fetch
+it, because Apple answers the pinned URL with a 302 to a developer login and
+the simplybs mirror returns 451 for that one path. Download it while signed in
+at <https://developer.apple.com/download/all/> and drop it in `xcode/`:
+
+```bash
+cp ~/Downloads/Xcode_26.1_Universal.xip wallet/asset/xmr/xcode/
+```
+
+The name does not matter, the build identifies it by hash. See
+[xcode/README.md](xcode/README.md), which also covers what to do when you have
+26.1.1 rather than 26.1. Leaving `xcode/` empty is supported and builds
+everything except the Apple targets.
 
 ```bash
 # From the wallet/asset/xmr directory
@@ -301,19 +316,40 @@ docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-app
 - Linux x86_64 (`x86_64-linux-gnu`)
 - Linux ARM64 (`aarch64-linux-gnu`)
 - Windows x86_64 (`x86_64-w64-mingw32`)
-- macOS x86_64 (`x86_64-apple-darwin`)
-- macOS ARM64 (`aarch64-apple-darwin`)
+- macOS x86_64 (`x86_64-apple-darwin`) — needs the xip
+- macOS ARM64 (`aarch64-apple-darwin`) — needs the xip
+- iOS device (`aarch64-apple-ios`) — needs the xip
+- iOS simulator (`aarch64-apple-ios-simulator`) — needs the xip
+- Android arm64-v8a (`aarch64-linux-android`)
+- Android x86_64 (`x86_64-linux-android`), the emulator
+- Android armeabi-v7a (`armv7a-linux-androideabi`)
 
 **Build notes:**
 
-- **Build time**: Building dependencies for all 4 targets from scratch takes
-  1-2+ hours depending on your machine.
+- **Build time**: Hours, not minutes. Each target compiles its own cross
+  toolchain and full dependency set from source. A measured run of eight of the
+  ten targets on 16 cores took 10h41m, with the first Apple target alone taking
+  1h50m because it builds osxcross and unpacks the SDK. Later targets are faster
+  where they share cached packages, so budget above that figure for the full
+  matrix rather than pro-rating it.
 
-- **macOS SDK**: The darwin builds automatically download the macOS SDK (~1GB)
-  as part of the depends system.
+- **Apple SDK**: Not downloaded automatically, and it cannot be. See the xip
+  note above. What you stage is checked against the pinned sha256 by the
+  Dockerfile itself, before it is wired into the source cache — simplybs does
+  not check a blob it did not download, so that step is the verification rather
+  than a duplicate of one. `build-darwin.sh` and `build-ios.sh` do the same for
+  `XCODE_XIP=` and refuse a mismatch.
 
-- **Disk space**: The full build can use 20-30GB+ with all toolchains and
-  intermediate files.
+- **Build order**: the four Apple targets run last, after Linux, Windows and
+  Android. A failing `RUN` ends the build, so with `xcode/` empty everything
+  that does not need the xip is already built when they fail.
+
+- **Disk space**: 20-30GB+ with all toolchains and intermediate files, plus
+  another ~8GB of source cache and ~2.8GB for the xip.
+
+- **Run it in a container, not `docker build`, if you expect flakes**: a failed
+  `RUN` discards its whole layer, so one network hiccup can cost an hour of
+  toolchain work. `docker build` is fine for a clean run.
 
 - **Debugging**: If something fails, run interactively to investigate:
   ```bash

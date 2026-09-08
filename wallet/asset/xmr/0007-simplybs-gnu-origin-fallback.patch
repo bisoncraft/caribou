@@ -1,0 +1,83 @@
+simplybs: fall back to the GNU origin, not just the redirector.
+
+Every GNU package in simplybs points at ftpmirror.gnu.org, which is a
+redirector that load-balances to a random GNU mirror. It has host-wide
+outages -- every path returns 502, not just one file -- and when that
+happens the whole dependency graph is unbuildable, since binutils, m4,
+make, tar, gdb, gettext and two dozen others all resolve through it.
+Patch 0004 keeps the origin retrying instead of giving up on the first
+empty response, but fifteen retries against a host that is down is
+still a failed build.
+
+Rewrite the host to ftp.gnu.org, the origin the redirector points at,
+for the origin attempt only. Doing it here rather than in the package
+JSONs is deliberate: the mirror key is URLToPath() of the URL as
+written in the JSON, so leaving that spelling alone keeps
+static.mrcyjanek.net usable for the packages it actually carries, and
+changes only what happens once the mirrors have missed.
+
+The path has to be adjusted as well as the host. ftpmirror.gnu.org/<pkg>/
+resolves to <mirror>/gnu/<pkg>/, so the "gnu/" component belongs in the
+rewritten URL. 39 of the 41 ftpmirror entries under packages/ are already
+written .../gnu/... and need nothing; native/bash and native/cpio are not,
+and a bare host swap sends them to ftp.gnu.org/bash/ and ftp.gnu.org/cpio/,
+which are 404 (the /gnu/ spellings are 200). Those two are not obscure:
+native/bash is a dependency of unbound, which monero_c builds for every
+target, and native/cpio is one of native/apple-sdk, so of all four Apple
+targets. Getting it wrong turns the outage this patch exists for into
+sixteen guaranteed-404 retries for exactly those packages.
+
+Both URL schemes have to be matched. Of the 41 ftpmirror.gnu.org
+entries under packages/, 36 are written http:// and only 5 https://,
+so matching https:// alone leaves native/ct-tools (gdb) and most of
+the rest still pointed at the redirector.
+
+This cannot affect what gets built. Each download entry pins a sha256
+that downloadWithResume() checks, so a file from the wrong host fails
+the same way a corrupted one does. Verified for the case that hit us:
+binutils-2.45.tar.bz2 from ftp.gnu.org is byte-identical to the pinned
+1393f90db70c2ebd785fb434d6127f8888c559d5eeb9c006c354b203bab3473e.
+
+diff --git a/simplybs/utils/download/download.go b/simplybs/utils/download/download.go
+index 16ef92d..b700275 100644
+--- a/simplybs/utils/download/download.go
++++ b/simplybs/utils/download/download.go
+@@ -117,6 +117,38 @@ func DownloadFile(packageName, path, url, expectedSha256 string, isMirror bool)
+ 		}
+ 	}
+ 
++	// ftpmirror.gnu.org is GNU's redirector, which load-balances to a random
++	// mirror and has host-wide outages -- every GNU path 502s, not just one
++	// file -- stranding every GNU package in the graph. ftp.gnu.org is the
++	// origin it redirects to, and stays up when the redirector does not.
++	//
++	// Both schemes have to be handled: 36 of the 41 GNU entries in packages/
++	// are spelled http://, only 5 https://.
++	//
++	// This rewrites only the origin attempt, deliberately after the mirror loop
++	// above: the mirror key comes from URLToPath() on the URL as written in the
++	// package JSON, so leaving that spelling alone keeps the LFS mirror usable
++	// for the packages it carries. Integrity is unaffected either way -- every
++	// download entry pins a sha256 that downloadWithResume() verifies, so the
++	// host a file arrives from cannot change what gets built.
++	if !isMirror {
++		for _, redirector := range []string{"http://ftpmirror.gnu.org/", "https://ftpmirror.gnu.org/"} {
++			if strings.HasPrefix(url, redirector) {
++				rest := strings.TrimPrefix(url, redirector)
++				// The redirector maps <pkg>/... onto <mirror>/gnu/<pkg>/..., so
++				// the path component has to be put back for the origin. 39 of
++				// the 41 entries in packages/ already spell it; native/bash and
++				// native/cpio do not, and ftp.gnu.org/bash/ is a 404.
++				if !strings.HasPrefix(rest, "gnu/") {
++					rest = "gnu/" + rest
++				}
++				url = "https://ftp.gnu.org/" + rest
++				log.Printf("Using GNU origin instead of the redirector: %s", url)
++				break
++			}
++		}
++	}
++
+ 	os.MkdirAll(filepath.Dir(path), 0755)
+ 
+ 	maxRetries := 15

@@ -15,7 +15,10 @@ cd wallet/asset/xmr
 ```
 
 `fetch-libs.sh` downloads from this repo's `xmr-libs-*` releases and verifies
-every file against `SHA256SUMS` in this directory before installing it.
+every file against `SHA256SUMS` in this directory before installing it. Which
+files a platform ships is read out of `SHA256SUMS`, so a platform can carry more
+than one: the Android ABIs install `libc++_shared.so` alongside the wallet
+library, and neither is installed unless both verify.
 
 Those checksums, not the release, are what you are trusting. Release assets are
 mutable — anyone with write access can replace one at the same URL and nothing
@@ -73,24 +76,46 @@ reproduction is worth more here than any amount of tooling.
 | `ios-arm64/` | iOS device | `libmonero_wallet2_api_c.dylib` |
 | `ios-arm64-simulator/` | iOS simulator | `libmonero_wallet2_api_c.dylib` |
 
+The Android directories hold a second file, `libc++_shared.so`. monero_c links
+libc++ dynamically, so the wallet library does not load without it, and it has
+to be the copy from the NDK that built the library: a local NDK's prebuilt may
+be a different libc++ ABI, and before r27 it is 4 KB-aligned, which Android 15+
+and Play API 35+ reject. `wallet/android/bind.sh` stages the co-located copy
+into `jniLibs` when it is there and falls back to the local NDK with a warning
+when it is not, so a fetched or extracted Android platform is only complete with
+both files.
+
 The desktop libraries are built with the Dockerfile (below). The two macOS
 desktop `.dylib`s (`darwin-amd64/`, `darwin-arm64/`) can instead be built
-natively on a Mac with `../build-darwin.sh` — faster there and it reuses a
-locally-provided Xcode xip (`XCODE_XIP=/path/to/Xcode_26.1_Universal.xip`)
-instead of re-downloading the ~2.7 GB SDK inside the Debian image. Mobile
+natively on a Mac with `../build-darwin.sh`, which is faster there. Mobile
 libraries are built by the same Dockerfile but packaged differently: Android
-`.so`s come from its `aarch64-linux-android` target and ship as `jniLibs` (see
-`wallet/android/bind.sh`); iOS `.dylib`s come from its `aarch64-apple-ios` and
-`aarch64-apple-ios-simulator` targets and are packaged into
+`.so`s come from its three `*-linux-android*` targets and ship as `jniLibs`
+(see `wallet/android/bind.sh`); iOS `.dylib`s come from its `aarch64-apple-ios`
+and `aarch64-apple-ios-simulator` targets and are packaged into
 `Monero.xcframework` by `wallet/ios/bind.sh` with `CARIBOU_XMR=1`.
 
 The Apple targets, iOS included, cross-compile from Linux: simplybs' Apple SDK
 package is osxcross, and it unpacks whichever SDK the target names out of the
-one Xcode xip. `../build-ios.sh` builds the same two libraries natively on a
-Mac, which is convenient if you already have the xip locally, but it is not
-required. Mobile libs are embedded in the app
-package rather than copied next to an executable, so the runtime notes below
-apply to the desktop builds only.
+one Xcode xip.
+
+**That xip has to be supplied, and no build path avoids it.** simplybs pins
+`Xcode_26.1_Universal.xip` by sha256 — a pin it enforces only on its own
+download, so whichever path you take is the one that checks the file you staged;
+both do. Nothing can fetch it unattended:
+Apple answers the pinned URL with a 302 to a developer login, and the simplybs
+mirror returns 451 for that one path. Put it in `../xcode/` for the Dockerfile,
+or pass `XCODE_XIP=` to `../build-darwin.sh` / `../build-ios.sh`. See
+[../xcode/README.md](../xcode/README.md).
+
+Building on a Mac does not get you out of it. simplybs does not use the Mac's
+installed Xcode — every rule in `native/apple-sdk` is scoped `*:*-apple-*:`,
+where the leading `*` is the build machine, so the package builds osxcross from
+the xip whatever you are running on. A Mac only saves compiling `xar` and
+`pbzx` from source, since the system ones work. `../build-darwin.sh` says the
+same thing in its header.
+
+Mobile libs are embedded in the app package rather than copied next to an
+executable, so the runtime notes below apply to the desktop builds only.
 
 ## Building the Libraries
 
@@ -112,6 +137,13 @@ docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-appl
 docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-apple-darwin/libmonero_wallet2_api_c.dylib > lib/darwin-arm64/libmonero_wallet2_api_c.dylib
 
 docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-linux-android/libmonero_wallet2_api_c.so > lib/android-arm64/libmonero_wallet2_api_c.so
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-linux-android/libc++_shared.so > lib/android-arm64/libc++_shared.so
+
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-linux-android/libmonero_wallet2_api_c.so > lib/android-amd64/libmonero_wallet2_api_c.so
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/x86_64-linux-android/libc++_shared.so > lib/android-amd64/libc++_shared.so
+
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/armv7a-linux-androideabi/libmonero_wallet2_api_c.so > lib/android-arm/libmonero_wallet2_api_c.so
+docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/armv7a-linux-androideabi/libc++_shared.so > lib/android-arm/libc++_shared.so
 
 docker run --rm monero_c_builder cat /monero_c/release/v0.18.4.6-RC2/aarch64-apple-ios/libmonero_wallet2_api_c.dylib > lib/ios-arm64/libmonero_wallet2_api_c.dylib
 
