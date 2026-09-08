@@ -14,6 +14,12 @@ cd wallet/asset/xmr
 ./fetch-libs.sh --all
 ```
 
+**Nothing is published yet, so this errors today.** `fetch-libs.sh` takes the
+release tag from the `# Release:` line of `SHA256SUMS`, and that line is written
+by the first `../publish-libs.sh` run rather than by hand, so until then the
+script stops and says so instead of downloading from a release with no assets.
+Build from source (below) in the meantime.
+
 `fetch-libs.sh` downloads from this repo's `xmr-libs-*` releases and verifies
 every file against `SHA256SUMS` in this directory before installing it. Which
 files a platform ships is read out of `SHA256SUMS`, so a platform can carry more
