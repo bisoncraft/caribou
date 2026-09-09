@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
@@ -153,6 +154,11 @@ type intentsEngine struct {
 	// in-flight copy (a poll started before another writer) cannot clobber
 	// a newer state. Network calls are made outside it.
 	swapMtx sync.Mutex
+
+	// reconstructing single-flights IntentsReconstruct: its probe loop
+	// fires a request per recent recipient at the open status endpoint,
+	// and concurrent runs would multiply the burst.
+	reconstructing atomic.Bool
 
 	trigger chan struct{}
 }
@@ -868,10 +874,16 @@ func (e *intentsEngine) freshCatalog(ctx context.Context) (*intents.Catalog, err
 	}
 	if cached != nil {
 		// Serve stale, refresh in the background (at most one in flight).
-		if !e.catalogFetch {
+		// beginTask, like recordIncomingTxs: shutdown must be able to wait
+		// on the fetch, and during shutdown no refresh starts — the stale
+		// copy serves.
+		if !e.catalogFetch && e.c.beginTask() {
 			e.catalogFetch = true
 			e.log.Debugf("Asset catalog stale; serving cached copy and refreshing in the background")
-			go e.refreshCatalog()
+			go func() {
+				defer e.c.endTask()
+				e.refreshCatalog()
+			}()
 		}
 		e.catMtx.Unlock()
 		return cached, nil
@@ -1265,6 +1277,25 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 	}, nil
 }
 
+// checkQuoteBounds rejects a committed quote whose terms fall outside the
+// preview-derived bounds the user accepted: the quote's guaranteed
+// minimum output must clear the previewed floor, and for an exact-output
+// swap the required deposit must not exceed the previewed ceiling. These
+// comparisons are the only check between a moved rate and a swap
+// executed against terms the user never saw, so they live in their own
+// function for direct unit testing.
+func checkQuoteBounds(exactOutput bool, minCommittedOut, minAtomsOut, sendAtoms, maxAtomsIn uint64, originUnits, destUnits *util.UnitInfo) error {
+	if minCommittedOut < minAtomsOut {
+		return fmt.Errorf("the rate moved: the committed quote guarantees only %s, below the quoted minimum of %s; get a fresh quote",
+			destUnits.FormatAtoms(minCommittedOut), destUnits.FormatAtoms(minAtomsOut))
+	}
+	if exactOutput && sendAtoms > maxAtomsIn {
+		return fmt.Errorf("the rate moved: the committed quote requires %s, above the quoted maximum of %s; get a fresh quote",
+			originUnits.FormatAtoms(sendAtoms), originUnits.FormatAtoms(maxAtomsIn))
+	}
+	return nil
+}
+
 // IntentsExecute obtains a committed quote and funds it: verifies and
 // persists the quote, sends the origin-chain deposit from the origin
 // wallet, and hands tracking to the status poller. The returned record is
@@ -1374,11 +1405,6 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 	if err != nil {
 		return nil, fmt.Errorf("bad committed minAmountOut: %w", err)
 	}
-	if minCommittedOut < minAtomsOut {
-		destUnits := &destWallet.Info().UnitInfo
-		return nil, fmt.Errorf("the rate moved: the committed quote guarantees only %s, below the quoted minimum of %s; get a fresh quote",
-			destUnits.FormatAtoms(minCommittedOut), destUnits.FormatAtoms(minAtomsOut))
-	}
 	// The deposit funds exactly what the committed quote prices. For
 	// exact-input that is the requested amount (the quote echoes it; the
 	// service's amount may sit a truncation below when the wallet's atomic
@@ -1397,11 +1423,10 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		if sendAtoms == 0 {
 			return nil, fmt.Errorf("committed quote prices a zero deposit")
 		}
-		if sendAtoms > maxAtomsIn {
-			originUnits := &originWallet.Info().UnitInfo
-			return nil, fmt.Errorf("the rate moved: the committed quote requires %s, above the quoted maximum of %s; get a fresh quote",
-				originUnits.FormatAtoms(sendAtoms), originUnits.FormatAtoms(maxAtomsIn))
-		}
+	}
+	if err := checkQuoteBounds(exactOutput, minCommittedOut, minAtomsOut, sendAtoms, maxAtomsIn,
+		&originWallet.Info().UnitInfo, &destWallet.Info().UnitInfo); err != nil {
+		return nil, err
 	}
 	eng.log.Debugf("Committed quote %s: guaranteed min out %d atoms (accepted floor %d), deposit %d atoms",
 		quote.DepositAddress, minCommittedOut, minAtomsOut, sendAtoms)
@@ -1610,6 +1635,10 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 	if err != nil {
 		return 0, err
 	}
+	if !eng.reconstructing.CompareAndSwap(false, true) {
+		return 0, errors.New("a reconstruction run is already in progress")
+	}
+	defer eng.reconstructing.Store(false)
 
 	cat, err := eng.freshCatalog(ctx)
 	if err != nil {
@@ -1665,6 +1694,15 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 			known[*tx.Recipient] = true // probe each address once
 
 			status, err := eng.client.Status(ctx, *tx.Recipient)
+			// Be polite to the open endpoint: space every probe, hit or
+			// miss. Nearly all probed recipients are not deposit
+			// addresses, so a throttle only on stored hits would leave
+			// the common path an unthrottled burst.
+			select {
+			case <-time.After(250 * time.Millisecond):
+			case <-ctx.Done():
+				return found, ctx.Err()
+			}
 			if errors.Is(err, intents.ErrSwapNotFound) {
 				continue
 			}
@@ -1712,13 +1750,6 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 			// is a no-op for non-terminal states, and recording is
 			// idempotent wallet-side.
 			eng.recordIncomingTxs(swap)
-
-			// Be polite to the open endpoint.
-			select {
-			case <-time.After(250 * time.Millisecond):
-			case <-ctx.Done():
-				return found, ctx.Err()
-			}
 		}
 	}
 	if found > 0 {

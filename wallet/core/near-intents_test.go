@@ -589,6 +589,128 @@ func TestIntentsApplyTimeout(t *testing.T) {
 	}
 }
 
+// TestIntentsApplyDepositRejection covers the transition asserting to the
+// user that the deposited funds never left the wallet — a false positive
+// here is a wrong safety claim, and a false negative hides a dead swap
+// until the deadline timeout.
+func TestIntentsApplyDepositRejection(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	eng := newTestIntentsEngine(rig)
+	notes := subscribeNotes(rig)
+
+	xcw, tWallet := newTWallet(0)
+	rig.core.wallets[0] = xcw
+
+	// The rejection path also refreshes the origin balance, emitting a
+	// balance note; only swap notes are counted.
+	drainSwapNotes := func() (n int) {
+		for {
+			select {
+			case note := <-notes:
+				if note.Type() == NoteTypeIntentsSwap {
+					n++
+				}
+			default:
+				return n
+			}
+		}
+	}
+	seed := func(addr, state, depositTxID string) *IntentsSwap {
+		s := testSwapRecord(addr, state)
+		s.DepositTxID = depositTxID
+		if err := eng.db.StoreIntentsSwap(s); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		return s
+	}
+
+	tWallet.walletTx = &txdb.WalletTransaction{ID: "deposittx", Rejected: true}
+
+	// Guards: only a DEPOSIT_SENT record with a known deposit tx is
+	// checked, even when the wallet would report a rejection.
+	if eng.applyDepositRejection(tCtx, seed("quoted", IntentsStateQuoted, "deposittx")) {
+		t.Fatalf("QUOTED record transitioned")
+	}
+	if eng.applyDepositRejection(tCtx, seed("notx", IntentsStateDepositSent, "")) {
+		t.Fatalf("record with no deposit tx transitioned")
+	}
+
+	// A wallet lookup error proves nothing.
+	sent := seed("sent", IntentsStateDepositSent, "deposittx")
+	tWallet.walletTxErr = errTest
+	if eng.applyDepositRejection(tCtx, sent) {
+		t.Fatalf("transitioned on a wallet lookup error")
+	}
+	tWallet.walletTxErr = nil
+
+	// A deposit the wallet does not report rejected is left alone.
+	tWallet.walletTx.Rejected = false
+	if eng.applyDepositRejection(tCtx, sent) {
+		t.Fatalf("transitioned on an unrejected deposit")
+	}
+	if stored, _ := eng.db.IntentsSwap("sent"); stored.State != IntentsStateDepositSent {
+		t.Fatalf("unrejected deposit changed state to %s", stored.State)
+	}
+	if n := drainSwapNotes(); n != 0 {
+		t.Fatalf("%d swap notes for non-transitions", n)
+	}
+
+	// A rejected deposit fails the swap terminally, with the safety claim
+	// in the recorded reason and a note emitted.
+	tWallet.walletTx.Rejected = true
+	if !eng.applyDepositRejection(tCtx, sent) {
+		t.Fatalf("rejected deposit not transitioned")
+	}
+	stored, _ := eng.db.IntentsSwap("sent")
+	if stored.State != IntentsStateDepositFailed {
+		t.Fatalf("state = %s, want %s", stored.State, IntentsStateDepositFailed)
+	}
+	if stored.RefundReason == "" {
+		t.Fatalf("no reason recorded")
+	}
+	if !stored.Terminal() {
+		t.Fatalf("DEPOSIT_FAILED record not terminal")
+	}
+	if n := drainSwapNotes(); n != 1 {
+		t.Fatalf("%d swap notes for the rejection, want 1", n)
+	}
+
+	// The transition is not repeated for the already-failed record.
+	if eng.applyDepositRejection(tCtx, stored) {
+		t.Fatalf("terminal record transitioned again")
+	}
+}
+
+// TestCheckQuoteBounds covers the accept-bound comparisons standing
+// between a moved rate and a swap executed against terms the user never
+// saw at preview.
+func TestCheckQuoteBounds(t *testing.T) {
+	ui := unitInfo(1e8)
+	for _, tt := range []struct {
+		name                         string
+		exactOutput                  bool
+		minCommittedOut, minAtomsOut uint64
+		sendAtoms, maxAtomsIn        uint64
+		wantErr                      bool
+	}{
+		{name: "exact-input floor met", minCommittedOut: 100, minAtomsOut: 100},
+		{name: "exact-input floor cleared", minCommittedOut: 101, minAtomsOut: 100},
+		{name: "exact-input floor violated", minCommittedOut: 99, minAtomsOut: 100, wantErr: true},
+		// The input ceiling applies only to exact-output swaps; for
+		// exact-input the deposit is the user's own requested amount.
+		{name: "exact-input ignores ceiling", minCommittedOut: 100, minAtomsOut: 100, sendAtoms: 500, maxAtomsIn: 400},
+		{name: "exact-output ceiling met", exactOutput: true, minCommittedOut: 100, minAtomsOut: 100, sendAtoms: 400, maxAtomsIn: 400},
+		{name: "exact-output ceiling violated", exactOutput: true, minCommittedOut: 100, minAtomsOut: 100, sendAtoms: 401, maxAtomsIn: 400, wantErr: true},
+		{name: "exact-output floor violated", exactOutput: true, minCommittedOut: 99, minAtomsOut: 100, sendAtoms: 400, maxAtomsIn: 400, wantErr: true},
+	} {
+		err := checkQuoteBounds(tt.exactOutput, tt.minCommittedOut, tt.minAtomsOut, tt.sendAtoms, tt.maxAtomsIn, ui, ui)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("%s: err = %v, wantErr = %v", tt.name, err, tt.wantErr)
+		}
+	}
+}
+
 func TestIntentsCaptureDepositFee(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()
