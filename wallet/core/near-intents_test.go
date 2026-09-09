@@ -202,6 +202,43 @@ func TestSwapFromStatusExactOutput(t *testing.T) {
 	}
 }
 
+// TestSwapFromStatusTokenOrigin covers the origin-resolution rule: the
+// record's origin is the catalog-resolved asset, not the probed wallet.
+// An EVM parent wallet's history includes its tokens' sends, so a
+// token-origin swap surfaces under the parent's probe; taking the probed
+// wallet's asset ID would convert amounts at the parent's unit scale (a
+// 100 USDC deposit recorded as 100 ETH).
+func TestSwapFromStatusTokenOrigin(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "intents", "testdata", "status-pending.json"))
+	if err != nil {
+		t.Fatalf("error reading fixture: %v", err)
+	}
+	status := new(intents.StatusResponse)
+	if err := json.Unmarshal(b, status); err != nil {
+		t.Fatalf("error decoding fixture: %v", err)
+	}
+	// The origin resolves to a different registered asset than the probed
+	// wallet, with a decimals count that exposes any unit-scale mixup:
+	// 10000000 @ 9 decimals is 0.01 units = 1e6 atoms at the resolved
+	// asset's 1e8 conversion factor, vs 1e7 if converted at 8 decimals.
+	resolve := func(assetID string) (uint32, *intents.Token, bool) {
+		if assetID == "nep141:btc.omft.near" {
+			return tUTXOAssetB.ID, &intents.Token{AssetID: assetID, Decimals: 9}, true
+		}
+		return 0, nil, false
+	}
+	swap, err := swapFromStatus(resolve, tUTXOAssetA.ID, "bc1qdepositaddr", "sometxid", status)
+	if err != nil {
+		t.Fatalf("swapFromStatus: %v", err)
+	}
+	if swap.OriginAssetID != tUTXOAssetB.ID {
+		t.Fatalf("OriginAssetID = %d (the probed wallet), want the resolved %d", swap.OriginAssetID, tUTXOAssetB.ID)
+	}
+	if swap.AtomsIn != 1_000_000 {
+		t.Fatalf("AtomsIn = %d, want 1000000 (converted at the resolved token's scale)", swap.AtomsIn)
+	}
+}
+
 // TestSwapFromStatusRealizedFill covers the fill-preference: when the swap
 // details report a realized amountOut, the reconstructed record carries it
 // (string and atoms) instead of the quoted output. A later poll never
@@ -512,6 +549,34 @@ func TestIntentsApplyTimeout(t *testing.T) {
 	}
 	if n := drainNotes(); n != 1 {
 		t.Fatalf("%d notes for deposit timeout, want 1", n)
+	}
+
+	// An incomplete deposit the service never refunded fails past the
+	// deadline. Without this the record would be non-terminal forever:
+	// refreshSwap's PENDING_DEPOSIT branch no longer fires once the state
+	// advances past DEPOSIT_SENT.
+	incomplete := testSwapRecord("incomplete", intents.StatusIncompleteDeposit)
+	incomplete.Deadline = expired
+	_ = eng.db.StoreIntentsSwap(incomplete)
+	eng.applyTimeout("incomplete")
+	stored, _ = eng.db.IntentsSwap("incomplete")
+	if stored.State != intents.StatusFailed {
+		t.Fatalf("incomplete-deposit record = %s, want FAILED", stored.State)
+	}
+	if stored.RefundReason == "" {
+		t.Fatalf("no refund reason recorded for incomplete-deposit timeout")
+	}
+	if n := drainNotes(); n != 1 {
+		t.Fatalf("%d notes for incomplete-deposit timeout, want 1", n)
+	}
+
+	// Before the deadline the same state is left alone (the service may
+	// still complete or refund it).
+	waiting := testSwapRecord("waiting", intents.StatusIncompleteDeposit)
+	_ = eng.db.StoreIntentsSwap(waiting)
+	eng.applyTimeout("waiting")
+	if stored, _ := eng.db.IntentsSwap("waiting"); stored.State != intents.StatusIncompleteDeposit {
+		t.Fatalf("live incomplete-deposit record timed out to %s", stored.State)
 	}
 
 	// A terminal record past its deadline is left alone.

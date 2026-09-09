@@ -405,6 +405,15 @@ func (e *intentsEngine) refreshSwap(ctx context.Context, swap *IntentsSwap) erro
 			e.c.updateAssetBalance(updated.OriginAssetID)
 		}
 		e.recordIncomingTxs(updated)
+	} else {
+		// Still non-terminal: run the deadline check every cycle, not only
+		// on the PENDING_DEPOSIT branch above. The service can park a swap
+		// in INCOMPLETE_DEPOSIT (underfunded deposit) with no service-side
+		// timeout commitment, and without this the record would be polled
+		// forever. States the service is actively driving (KNOWN_DEPOSIT_TX,
+		// PROCESSING) are deliberately not in applyTimeout's switch, so the
+		// call is a no-op for them.
+		e.applyTimeout(swap.DepositAddress)
 	}
 	return nil
 }
@@ -737,8 +746,14 @@ func (e *intentsEngine) applyDepositRejection(ctx context.Context, swap *Intents
 // deadline becomes FAILED — the deadline is also the deposit window, so a
 // late deposit will not be accepted for this quote; because a deposit
 // transaction may have left the wallet, the message points to escalation
-// rather than claiming no funds moved. The record is reloaded under
-// swapMtx so a concurrent writer's newer state is not overwritten.
+// rather than claiming no funds moved. An INCOMPLETE_DEPOSIT the service
+// has not refunded by the deadline (its documented behavior for
+// underfunded deposits) also becomes FAILED with an escalation message.
+// KNOWN_DEPOSIT_TX and PROCESSING are deliberately absent from the
+// switch: the service holds the deposit and is actively driving those to
+// SUCCESS or REFUNDED, and a local FAILED would misreport funds in
+// flight. The record is reloaded under swapMtx so a concurrent writer's
+// newer state is not overwritten.
 func (e *intentsEngine) applyTimeout(depositAddress string) {
 	e.swapMtx.Lock()
 	swap, err := e.db.IntentsSwap(depositAddress)
@@ -772,6 +787,17 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 				depositAddress, swap.DepositTxID, swap.Deadline.Format(time.RFC3339))
 			note = newIntentsSwapNote(swap, "Swap needs attention",
 				"The service did not observe the deposit before the deadline. If a deposit left your wallet, check its transaction and the service status page.", db.ErrorLevel)
+		} else {
+			e.log.Errorf("Error storing timed-out swap %s: %v", depositAddress, err)
+		}
+	case intents.StatusIncompleteDeposit:
+		swap.State = intents.StatusFailed
+		swap.RefundReason = "the service reported the deposit incomplete and did not refund it before the quote deadline"
+		if err := e.db.StoreIntentsSwap(swap); err == nil {
+			e.log.Warnf("Swap %s marked FAILED: incomplete deposit not refunded by the service before deadline %s",
+				depositAddress, swap.Deadline.Format(time.RFC3339))
+			note = newIntentsSwapNote(swap, "Swap needs attention",
+				"The service reported the deposit as incomplete and did not refund it before the deadline. Check the swap on the service status page.", db.ErrorLevel)
 		} else {
 			e.log.Errorf("Error storing timed-out swap %s: %v", depositAddress, err)
 		}
@@ -1651,6 +1677,17 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 				eng.log.Warnf("Error reconstructing swap %s: %v", *tx.Recipient, err)
 				continue
 			}
+			// An origin that resolves to a different chain than the probed
+			// wallet means the address matched a swap that did not originate
+			// here (EVM address formats collide across chains), so the probed
+			// transaction is not this swap's deposit. Un-mark the address so
+			// the right chain's wallet can probe it later in the walk.
+			if intentsChainID(swap.OriginAssetID) != intentsChainID(w.AssetID) {
+				eng.log.Debugf("Skipping probed address %s: origin asset %s is not on the %s chain",
+					*tx.Recipient, swap.OriginAsset, unbip(w.AssetID))
+				delete(known, *tx.Recipient)
+				continue
+			}
 			// The probed history transaction is the deposit send; its
 			// recorded fee is the only shot at the fee for a swap that is
 			// already terminal (the poller will never revisit it).
@@ -1668,6 +1705,13 @@ func (c *Core) IntentsReconstruct(ctx context.Context) (found int, err error) {
 				intentsAssetLabel(swap.DestAssetID, swap.DestAsset), swap.State)
 			c.notify(newIntentsSwapNote(swap, "Swap record recovered",
 				fmt.Sprintf("Recovered a swap to deposit address %s.", swap.DepositAddress), db.Poke))
+			// A record rebuilt already terminal is never polled again, so
+			// refreshSwap's payout recording will not run for it. Hand the
+			// service-reported txids to the receiving wallet here — this is
+			// the seed-restore case IncomingTxRecorder exists for. The call
+			// is a no-op for non-terminal states, and recording is
+			// idempotent wallet-side.
+			eng.recordIncomingTxs(swap)
 
 			// Be polite to the open endpoint.
 			select {
@@ -1708,10 +1752,16 @@ func intentsAssetLabel(assetID uint32, intentsAssetID string) string {
 type intentsChainResolver func(intentsAssetID string) (uint32, *intents.Token, bool)
 
 // swapFromStatus builds a Reconstructed swap record from a status
-// response. The destination chain is resolved through the catalog
-// (resolveChain); an unresolved destination is recorded as
-// intentsAssetUnknown rather than 0, which would be misread as BTC.
-func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, depositAddress, depositTxID string, status *intents.StatusResponse) (*IntentsSwap, error) {
+// response. Both sides are resolved through the catalog (resolveChain);
+// an unresolved destination is recorded as intentsAssetUnknown rather
+// than 0, which would be misread as BTC. The origin must be resolved
+// too, not taken from the probed wallet: an EVM parent wallet's history
+// includes its tokens' sends, so a token-origin swap surfaces under the
+// parent's probe, and recording it as the parent's native asset would
+// convert amounts at the wrong unit scale. An unresolvable origin (e.g.
+// a since-delisted asset) falls back to probedAssetID with zero atoms
+// fields.
+func swapFromStatus(resolveChain intentsChainResolver, probedAssetID uint32, depositAddress, depositTxID string, status *intents.StatusResponse) (*IntentsSwap, error) {
 	if status.QuoteResponse == nil {
 		return nil, fmt.Errorf("status carries no quote")
 	}
@@ -1723,9 +1773,11 @@ func swapFromStatus(resolveChain intentsChainResolver, originAssetID uint32, dep
 	if id, tok, ok := resolveChain(echo.DestinationAsset); ok {
 		destAssetID, destTok = id, tok
 	}
-	// The origin chain is already known (it's the wallet whose history was
-	// probed); the catalog lookup is only for the token's decimals.
-	_, originTok, _ := resolveChain(echo.OriginAsset)
+	originAssetID := probedAssetID
+	var originTok *intents.Token
+	if id, tok, ok := resolveChain(echo.OriginAsset); ok {
+		originAssetID, originTok = id, tok
+	}
 
 	// Reconstruction is best-effort: an unresolvable side or a bad amount
 	// string leaves the atoms field zero rather than dropping the record.
