@@ -35,15 +35,13 @@ export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowPr
   const usdOut = destAsset
     ? Doc.usdString(swap.atomsOut, destAsset.unitInfo.conventional.conversionFactor, app.idRate(swap.destAssetID) ?? 0)
     : ''
-  const usdIn = originAsset
-    ? Doc.usdString(swap.atomsIn, originAsset.unitInfo.conventional.conversionFactor, app.idRate(swap.originAssetID) ?? 0)
-    : ''
   const age = tvar('{{ age }} ago', { age: Doc.timeSince(swapTime(swap) * 1000) })
 
   // The amount column reflects the outcome: the received (or expected)
-  // destination amount for successful and in-flight swaps, the returned
-  // deposit for refunds, nothing for an expired quote or a rejected deposit
-  // (no funds moved either way), and an em dash for failures.
+  // destination amount for successful and in-flight swaps, the amount
+  // actually returned for refunds, nothing for an expired quote or a
+  // rejected deposit (no funds moved either way), and an em dash for
+  // failures.
   const amounts = () => {
     if (swap.state === StateSuccess || active) {
       const approx = swap.state === StateSuccess ? '' : '~'
@@ -58,10 +56,18 @@ export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowPr
       )
     }
     if (swap.state === StateRefunded) {
+      // The service refunds net of its fees; refundedAtoms is the recorded
+      // net amount, matching the swap dialog's figure. Absent/zero (an older
+      // or unresolvable record) falls back to the deposit amount.
+      const returnedAtoms = swap.refundedAtoms || swap.atomsIn
+      const returned = originAsset ? Doc.formatCoinValue(returnedAtoms, originAsset.unitInfo) : (swap.refundedAmount || swap.amountIn)
+      const usdReturned = originAsset
+        ? Doc.usdString(returnedAtoms, originAsset.unitInfo.conventional.conversionFactor, app.idRate(swap.originAssetID) ?? 0)
+        : ''
       return (
         <div className="grey fs14 mono">
-          {tvar('{{ amt }} {{ ticker }} returned', { amt: amountIn, ticker: originTicker })}
-          {usdIn !== '' && <span className="fs12"> · {usdIn}</span>}
+          {tvar('{{ amt }} {{ ticker }} returned', { amt: returned, ticker: originTicker })}
+          {usdReturned !== '' && <span className="fs12"> · {usdReturned}</span>}
         </div>
       )
     }

@@ -101,8 +101,9 @@ export default function TxRow ({ item, onSwapHover, swapHighlight }: TxRowProps)
         <div className="fs14 demi d-flex align-items-center">
           {txTitle(tx, variant.ticker)}
           {swapRelation && (
-            <span
-              className="swap-leg-badge ico-swap fs10 ms-2 pointer has-tip"
+            <button
+              type="button"
+              className="swap-leg-badge ico-swap fs10 ms-2 p-0 has-tip"
               aria-label={t('Part of a cross-chain swap — click for details')}
               onClick={openSwap}
             />

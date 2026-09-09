@@ -1327,7 +1327,9 @@ button.swap-cta {
 // Marker on a transaction row that serves as a cross-chain swap leg;
 // clicking it opens the swap's detail dialog. An accent-ringed circular
 // chip so the mark reads at a glance; the fill strengthens on hover to
-// signal the click-through.
+// signal the click-through. Applied to a button (keyboard-reachable),
+// so the accent ring is re-asserted on hover against the base
+// button:hover border.
 .swap-leg-badge {
   display: inline-flex;
   align-items: center;
@@ -1346,6 +1348,7 @@ button.swap-cta {
   &:hover {
     color: var(--accent-contrast);
     background-color: var(--accent-strong);
+    border-color: var(--accent-border);
   }
 }
 
