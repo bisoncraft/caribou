@@ -1279,11 +1279,23 @@ func (s *AppServer) readNotifications(ctx context.Context) {
 	}
 }
 
+// maxRequestBody caps the size of a JSON request body readPost will accept.
+// Every API request is a small form; this is sized well above the largest
+// legitimate payload (mnemonic/restore forms) with headroom.
+const maxRequestBody = 1 << 20 // 1 MiB
+
 // readPost unmarshals the request body into the provided interface.
 func readPost(w http.ResponseWriter, r *http.Request, thing any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	body, err := io.ReadAll(r.Body)
 	_ = r.Body.Close()
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			log.Debugf("request body too large: %v", err)
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return false
+		}
 		log.Debugf("Error reading request body: %v", err)
 		http.Error(w, "error reading JSON message", http.StatusBadRequest)
 		return false

@@ -168,10 +168,18 @@ func (s *syncServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Info("Ignored a window reopen request from another instance")
 		}
 	case "/kill":
+		// killKey is a 32-char hex string; this cap only needs to keep an
+		// oversized body from forcing an arbitrary-size read before the key
+		// comparison, the same shape as readPost's cap in wallet/appserver.
+		r.Body = http.MaxBytesReader(w, r.Body, 1024)
 		b, err := io.ReadAll(r.Body)
 		_ = r.Body.Close()
 		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "error reading request body", http.StatusBadRequest)
 			return
 		}

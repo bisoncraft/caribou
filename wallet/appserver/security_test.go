@@ -424,6 +424,52 @@ func TestSetCookieHttpOnly(t *testing.T) {
 	}
 }
 
+// TestReadPostRejectsOversizedBody asserts readPost caps the request body it
+// will read, so a single request cannot force an arbitrary-size allocation
+// before any handler validation runs.
+func TestReadPostRejectsOversizedBody(t *testing.T) {
+	// readPost logs via the package-level log var, which is otherwise unset
+	// outside a constructed AppServer. Restored on cleanup so the mutation
+	// does not persist for the rest of the test binary; this does not by
+	// itself make the assignment safe under -race with t.Parallel(), since
+	// readPost is a free function reading the same unsynchronized package
+	// var — no test in this package uses t.Parallel() today, which is what
+	// keeps this dormant.
+	prevLog := log
+	log = tLogger
+	t.Cleanup(func() { log = prevLog })
+
+	t.Run("within cap", func(t *testing.T) {
+		body := `{"pass":"a"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		var form struct {
+			Pass string `json:"pass"`
+		}
+		if !readPost(rec, req, &form) {
+			t.Fatalf("readPost rejected a body within the cap: %d", rec.Code)
+		}
+		if form.Pass != "a" {
+			t.Fatalf("unexpected decoded form: %+v", form)
+		}
+	})
+
+	t.Run("over cap", func(t *testing.T) {
+		oversized := strings.Repeat("a", maxRequestBody+1)
+		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(oversized))
+		rec := httptest.NewRecorder()
+		var form struct {
+			Pass string `json:"pass"`
+		}
+		if readPost(rec, req, &form) {
+			t.Fatal("readPost accepted a body over the cap")
+		}
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("want %d, got %d", http.StatusRequestEntityTooLarge, rec.Code)
+		}
+	})
+}
+
 // TestLogoutDisconnectsWS asserts that ending a session drops the notification
 // sockets opened under it. /ws is authorized at upgrade and never re-checked,
 // so a link that outlived its session would keep streaming balances, wallet
