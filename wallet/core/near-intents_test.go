@@ -494,7 +494,7 @@ func TestIntentsTokenResolution(t *testing.T) {
 		NetworkID: polID,
 		Name:      "USDC",
 		UnitInfo:  util.UnitInfo{Conventional: util.Denomination{Unit: "USDC", ConversionFactor: 1e6}},
-	}, &asset.WalletDefinition{}, map[util.Network]string{util.Simnet: contract}, nil, true)
+	}, &asset.WalletDefinition{}, map[util.Network]string{util.Simnet: contract}, true)
 	asset.SetNetwork(util.Simnet)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

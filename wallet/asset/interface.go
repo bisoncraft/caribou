@@ -255,10 +255,6 @@ const (
 	// InternalNodeLoggerName is the name for a logger that is used to fine
 	// tune log levels for only loggers using this name.
 	InternalNodeLoggerName = "INTL"
-
-	// VersionNewest can be passed to some estimation methods to instruct the
-	// wallet to use whatever is the newest version available.
-	VersionNewest = ^uint32(0)
 )
 
 type WalletDefinition struct {
