@@ -786,27 +786,27 @@ func TestIntentsApplyDepositRejection(t *testing.T) {
 
 // TestCheckQuoteBounds covers the accept-bound comparisons standing
 // between a moved rate and a swap executed against terms the user never
-// saw at preview.
+// saw at preview: the guaranteed-output floor, and the committed input
+// against the authorized input — the previewed ceiling for exact-output,
+// the requested deposit amount for exact-input (a quote pricing more
+// than the deposit will fund would park the swap underfunded).
 func TestCheckQuoteBounds(t *testing.T) {
 	ui := unitInfo(1e8)
 	for _, tt := range []struct {
 		name                         string
-		exactOutput                  bool
 		minCommittedOut, minAtomsOut uint64
-		sendAtoms, maxAtomsIn        uint64
+		committedIn, maxIn           uint64
 		wantErr                      bool
 	}{
-		{name: "exact-input floor met", minCommittedOut: 100, minAtomsOut: 100},
-		{name: "exact-input floor cleared", minCommittedOut: 101, minAtomsOut: 100},
-		{name: "exact-input floor violated", minCommittedOut: 99, minAtomsOut: 100, wantErr: true},
-		// The input ceiling applies only to exact-output swaps; for
-		// exact-input the deposit is the user's own requested amount.
-		{name: "exact-input ignores ceiling", minCommittedOut: 100, minAtomsOut: 100, sendAtoms: 500, maxAtomsIn: 400},
-		{name: "exact-output ceiling met", exactOutput: true, minCommittedOut: 100, minAtomsOut: 100, sendAtoms: 400, maxAtomsIn: 400},
-		{name: "exact-output ceiling violated", exactOutput: true, minCommittedOut: 100, minAtomsOut: 100, sendAtoms: 401, maxAtomsIn: 400, wantErr: true},
-		{name: "exact-output floor violated", exactOutput: true, minCommittedOut: 99, minAtomsOut: 100, sendAtoms: 400, maxAtomsIn: 400, wantErr: true},
+		{name: "floor met", minCommittedOut: 100, minAtomsOut: 100},
+		{name: "floor cleared", minCommittedOut: 101, minAtomsOut: 100},
+		{name: "floor violated", minCommittedOut: 99, minAtomsOut: 100, wantErr: true},
+		{name: "input at the bound", minCommittedOut: 100, minAtomsOut: 100, committedIn: 400, maxIn: 400},
+		{name: "input under the bound", minCommittedOut: 100, minAtomsOut: 100, committedIn: 399, maxIn: 400},
+		{name: "input exceeded", minCommittedOut: 100, minAtomsOut: 100, committedIn: 401, maxIn: 400, wantErr: true},
+		{name: "both violated", minCommittedOut: 99, minAtomsOut: 100, committedIn: 401, maxIn: 400, wantErr: true},
 	} {
-		err := checkQuoteBounds(tt.exactOutput, tt.minCommittedOut, tt.minAtomsOut, tt.sendAtoms, tt.maxAtomsIn, ui, ui)
+		err := checkQuoteBounds(tt.minCommittedOut, tt.minAtomsOut, tt.committedIn, tt.maxIn, ui, ui)
 		if (err != nil) != tt.wantErr {
 			t.Errorf("%s: err = %v, wantErr = %v", tt.name, err, tt.wantErr)
 		}

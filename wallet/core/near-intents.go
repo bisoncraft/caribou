@@ -1343,20 +1343,24 @@ func (c *Core) IntentsPreview(ctx context.Context, originAssetID, destAssetID ui
 }
 
 // checkQuoteBounds rejects a committed quote whose terms fall outside the
-// preview-derived bounds the user accepted: the quote's guaranteed
-// minimum output must clear the previewed floor, and for an exact-output
-// swap the required deposit must not exceed the previewed ceiling. These
-// comparisons are the only check between a moved rate and a swap
-// executed against terms the user never saw, so they live in their own
-// function for direct unit testing.
-func checkQuoteBounds(exactOutput bool, minCommittedOut, minAtomsOut, sendAtoms, maxAtomsIn uint64, originUnits, destUnits *util.UnitInfo) error {
+// bounds the user authorized: the quote's guaranteed minimum output must
+// clear the accepted floor, and the input the quote prices (committedIn)
+// must not exceed the authorized input (maxIn) — the previewed ceiling
+// for an exact-output swap, the requested deposit amount for exact-input
+// (the service is expected to price the echoed amount; a quote requiring
+// more would leave the deposit underfunded, parking the swap at
+// INCOMPLETE_DEPOSIT until the deadline refund). These comparisons are
+// the only check between a moved rate and a swap executed against terms
+// the user never saw, so they live in their own function for direct unit
+// testing.
+func checkQuoteBounds(minCommittedOut, minAtomsOut, committedIn, maxIn uint64, originUnits, destUnits *util.UnitInfo) error {
 	if minCommittedOut < minAtomsOut {
 		return fmt.Errorf("the rate moved: the committed quote guarantees only %s, below the quoted minimum of %s; get a fresh quote",
 			destUnits.FormatAtoms(minCommittedOut), destUnits.FormatAtoms(minAtomsOut))
 	}
-	if exactOutput && sendAtoms > maxAtomsIn {
-		return fmt.Errorf("the rate moved: the committed quote requires %s, above the quoted maximum of %s; get a fresh quote",
-			originUnits.FormatAtoms(sendAtoms), originUnits.FormatAtoms(maxAtomsIn))
+	if committedIn > maxIn {
+		return fmt.Errorf("the rate moved: the committed quote requires %s, above the authorized input of %s; get a fresh quote",
+			originUnits.FormatAtoms(committedIn), originUnits.FormatAtoms(maxIn))
 	}
 	return nil
 }
@@ -1471,25 +1475,29 @@ func (c *Core) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atom
 		return nil, fmt.Errorf("bad committed minAmountOut: %w", err)
 	}
 	// The deposit funds exactly what the committed quote prices. For
-	// exact-input that is the requested amount (the quote echoes it; the
-	// service's amount may sit a truncation below when the wallet's atomic
-	// unit is finer than the Intents scale, and over-depositing the dust
-	// is harmless). For exact-output the service computes it, and the
-	// ceiling the user accepted caps it. The conversion rounds up: the
-	// service's amountIn is not quantized to wallet atoms, and a deposit
-	// truncated below it is never recognized as complete — the swap would
-	// sit INCOMPLETE_DEPOSIT until the deadline refund.
-	sendAtoms := atoms
+	// exact-input that is the requested amount (the quote is expected to
+	// echo it; the service's amount may sit a truncation below when the
+	// wallet's atomic unit is finer than the Intents scale, and
+	// over-depositing the dust is harmless — but the bounds check below
+	// verifies the quote does not price MORE than the deposit will fund,
+	// rather than assuming the echo). For exact-output the service
+	// computes it, and the ceiling the user accepted caps it. The
+	// conversion rounds up: the service's amountIn is not quantized to
+	// wallet atoms, and a deposit truncated below it is never recognized
+	// as complete — the swap would sit INCOMPLETE_DEPOSIT until the
+	// deadline refund.
+	committedIn, err := fromIntentsAmountCeil(quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
+	if err != nil {
+		return nil, fmt.Errorf("bad committed amountIn: %w", err)
+	}
+	sendAtoms, maxIn := atoms, atoms
 	if exactOutput {
-		sendAtoms, err = fromIntentsAmountCeil(quote.AmountIn, &originWallet.Info().UnitInfo, origin.Decimals)
-		if err != nil {
-			return nil, fmt.Errorf("bad committed amountIn: %w", err)
-		}
-		if sendAtoms == 0 {
+		if committedIn == 0 {
 			return nil, fmt.Errorf("committed quote prices a zero deposit")
 		}
+		sendAtoms, maxIn = committedIn, maxAtomsIn
 	}
-	if err := checkQuoteBounds(exactOutput, minCommittedOut, minAtomsOut, sendAtoms, maxAtomsIn,
+	if err := checkQuoteBounds(minCommittedOut, minAtomsOut, committedIn, maxIn,
 		&originWallet.Info().UnitInfo, &destWallet.Info().UnitInfo); err != nil {
 		return nil, err
 	}
