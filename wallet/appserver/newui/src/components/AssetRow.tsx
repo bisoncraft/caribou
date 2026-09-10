@@ -34,8 +34,13 @@ function StatusDot ({ asset }: { asset: TickerAsset }) {
 }
 
 export default function AssetRow ({ asset, fiatRate, portfolioPct }: AssetRowProps) {
+  // BALANCE shows the total the VALUE column prices, so the two agree; the
+  // part that is not spendable (a network reserve, an immature coinbase) is
+  // broken out beneath it rather than silently subtracted.
   const usdValue = asset.total * fiatRate
-  const availFmt = Doc.formatConventionalValue(asset.avail, asset.precision)
+  const totalFmt = Doc.formatConventionalValue(asset.total, asset.precision)
+  const lockedFmt = asset.locked > 0 ? Doc.formatConventionalValue(asset.locked, asset.precision) : ''
+  const immatureFmt = asset.immature > 0 ? Doc.formatConventionalValue(asset.immature, asset.precision) : ''
   const pctDisplay = portfolioPct !== null ? `${portfolioPct.toFixed(1)}%` : '—'
 
   return (
@@ -59,7 +64,13 @@ export default function AssetRow ({ asset, fiatRate, portfolioPct }: AssetRowPro
         {fiatRate > 0 ? Doc.formatUSD(usdValue) : '—'}
       </td>
       <td className="asset-row-num">
-        <span className="mono">{availFmt}</span>
+        <span className="mono">{totalFmt}</span>
+        {lockedFmt && (
+          <div className="grey fs11 mono">{tvar('{{ amount }} locked', { amount: lockedFmt })}</div>
+        )}
+        {immatureFmt && (
+          <div className="grey fs11 mono">{tvar('{{ amount }} immature', { amount: immatureFmt })}</div>
+        )}
       </td>
       <td className="asset-row-num">
         {fiatRate > 0 ? Doc.formatUSD(fiatRate) : '—'}

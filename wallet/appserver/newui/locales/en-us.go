@@ -115,6 +115,10 @@ var EnUS = map[string]*intl.Translation{
 	"{{ token }} on {{ network }} cannot receive deposits until a trust line is established.": {T: "{{ token }} on {{ network }} cannot receive deposits until a trust line is established."},
 	"The {{ token }} trust line on {{ network }} is being established.":                       {T: "The {{ token }} trust line on {{ network }} is being established."},
 
+	// Portfolio — BALANCE column breakdown.
+	"{{ amount }} locked":   {T: "{{ amount }} locked"},
+	"{{ amount }} immature": {T: "{{ amount }} immature"},
+
 	// Receive — trust-line gate (XRPL issued currencies) and minimum first deposit.
 	"Establish trust line":            {T: "Establish trust line"},
 	"Establishing trust line...":      {T: "Establishing trust line..."},
