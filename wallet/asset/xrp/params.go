@@ -98,6 +98,11 @@ var (
 		NetIssuers: map[util.Network]string{
 			// https://developers.circle.com/stablecoins/usdc-contract-addresses
 			util.Mainnet: "rGm7WCVp9gb4jZHWTEtGUr4dd74z2XuWhE",
+			// The standalone harness's genesis account
+			// (util/testing/xrp/harness.sh). Any funded account can issue an
+			// IOU, and this one always exists, so a TrustSet to it validates
+			// and it can pay the currency out for end-to-end testing.
+			util.Simnet: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
 	}
 )

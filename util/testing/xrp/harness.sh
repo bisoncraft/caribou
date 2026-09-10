@@ -337,6 +337,68 @@ cat > "${HARNESS_DIR}/tx" <<EOF
 ${RPC_CLI} -d "{\"method\":\"tx\",\"params\":[{\"transaction\":\"\$1\"}]}"
 EOF
 
+# Issued-currency (IOU) helpers. The genesis account doubles as the issuer:
+# any funded account can issue an IOU, and the wallet's simnet usdc.xrp token
+# names genesis as its issuer (wallet/asset/xrp/params.go). Signing is done
+# server-side by rippled from the seed, which the admin RPC permits.
+USDC_HEX="5553444300000000000000000000000000000000"
+GENESIS_ADDR="rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+GENESIS_SEED="snoPBrXtMeMyMHUVTgbuqAfg1SUTb"
+
+cat > "${HARNESS_DIR}/issue" <<EOF
+#!/usr/bin/env bash
+# Pay an issued currency out of the genesis account.
+# Usage: ./issue <address> <amount> [currency]
+# currency defaults to USDC's 160-bit hex code, the code the wallet's usdc.xrp
+# token uses; a 3-letter code or another 40-hex code may be given instead. The
+# destination must already hold a trust line to genesis for the currency (the
+# wallet establishes its own; use ./trustset for a harness account).
+if [ \$# -lt 2 ]; then echo "usage: issue <address> <amount> [currency]"; exit 1; fi
+CURRENCY="\${3:-${USDC_HEX}}"
+RAW=\$(${RPC_CLI} -d "{\"method\":\"submit\",\"params\":[{\"secret\":\"${GENESIS_SEED}\",\"tx_json\":{\"TransactionType\":\"Payment\",\"Account\":\"${GENESIS_ADDR}\",\"Destination\":\"\$1\",\"Amount\":{\"currency\":\"\${CURRENCY}\",\"issuer\":\"${GENESIS_ADDR}\",\"value\":\"\$2\"}}}]}")
+RESULT=\$(printf '%s' "\$RAW" | grep -o '"engine_result":"[^"]*"' | head -1 | cut -d'"' -f4)
+HASH=\$(printf '%s' "\$RAW" | grep -o '"hash":"[A-F0-9]*"' | head -1 | cut -d'"' -f4)
+if [ -z "\$RESULT" ]; then printf '%s\n' "\$RAW"; exit 1; fi
+echo "issued \$2 \${CURRENCY} to \$1: \${RESULT} \${HASH}"
+EOF
+
+cat > "${HARNESS_DIR}/newaccount" <<EOF
+#!/usr/bin/env bash
+# Create a funded account with a known seed, for use as a counterparty.
+# Usage: ./newaccount [xrp]   (default 20 XRP)
+# Prints the address and seed; the seed is what ./trustset takes.
+XRP="\${1:-20}"
+RAW=\$(${RPC_CLI} -d '{"method":"wallet_propose","params":[{"key_type":"secp256k1"}]}')
+ADDR=\$(printf '%s' "\$RAW" | grep -o '"account_id":"[^"]*"' | head -1 | cut -d'"' -f4)
+SEED=\$(printf '%s' "\$RAW" | grep -o '"master_seed":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -z "\$ADDR" ]; then printf '%s\n' "\$RAW"; exit 1; fi
+"${HARNESS_DIR}/fund" "\$ADDR" "\$XRP" > /dev/null
+"${HARNESS_DIR}/mine" > /dev/null
+echo "address: \$ADDR"
+echo "seed:    \$SEED"
+EOF
+
+cat > "${HARNESS_DIR}/trustset" <<EOF
+#!/usr/bin/env bash
+# Open a trust line from a harness account to the genesis issuer, so ./issue
+# can pay it and the wallet can send to it.
+# Usage: ./trustset <seed> [currency] [limit]
+# currency defaults to USDC's hex code; limit defaults to 1000000000.
+if [ \$# -lt 1 ]; then echo "usage: trustset <seed> [currency] [limit]"; exit 1; fi
+SEED="\$1"
+CURRENCY="\${2:-${USDC_HEX}}"
+LIMIT="\${3:-1000000000}"
+RAW=\$(${RPC_CLI} -d "{\"method\":\"wallet_propose\",\"params\":[{\"seed\":\"\${SEED}\",\"key_type\":\"secp256k1\"}]}")
+ADDR=\$(printf '%s' "\$RAW" | grep -o '"account_id":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -z "\$ADDR" ]; then printf '%s\n' "\$RAW"; exit 1; fi
+# Flags 131072 = tfSetNoRipple, matching the wallet's own TrustSet.
+RAW=\$(${RPC_CLI} -d "{\"method\":\"submit\",\"params\":[{\"secret\":\"\${SEED}\",\"tx_json\":{\"TransactionType\":\"TrustSet\",\"Account\":\"\${ADDR}\",\"Flags\":131072,\"LimitAmount\":{\"currency\":\"\${CURRENCY}\",\"issuer\":\"${GENESIS_ADDR}\",\"value\":\"\${LIMIT}\"}}}]}")
+RESULT=\$(printf '%s' "\$RAW" | grep -o '"engine_result":"[^"]*"' | head -1 | cut -d'"' -f4)
+HASH=\$(printf '%s' "\$RAW" | grep -o '"hash":"[A-F0-9]*"' | head -1 | cut -d'"' -f4)
+if [ -z "\$RESULT" ]; then printf '%s\n' "\$RAW"; exit 1; fi
+echo "trust line \${ADDR} -> genesis \${CURRENCY} limit \${LIMIT}: \${RESULT} \${HASH}"
+EOF
+
 cat > "${HARNESS_DIR}/quit" <<EOF
 #!/usr/bin/env bash
 tmux send-keys -t ${SESSION}:0 C-c
@@ -370,7 +432,15 @@ Commands (run from ${HARNESS_DIR}):
   ./server            show server_state
   ./tx <hash>         look up transaction
   ./submit <blob>     submit raw tx blob
+  ./issue <addr> <amount> [currency]   pay an IOU out of genesis (default USDC)
+  ./newaccount [xrp]  create a funded account, printing its address and seed
+  ./trustset <seed> [currency] [limit] open a trust line to genesis
   ./quit              stop everything
+
+Issued currencies: genesis is the issuer. The wallet's simnet usdc.xrp token
+names it as such, so once the wallet has established its trust line,
+./issue <wallet-address> 25 delivers 25 USDC. For a counterparty:
+./newaccount, then ./trustset <seed>, then ./issue <address> <amount>.
 EOF
 
 ################################################################################

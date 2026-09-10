@@ -133,7 +133,7 @@ var (
 
 func init() {
 	asset.Register(BipID, &Driver{})
-	registerToken(usdcTokenID, "Circle's USDC issued currency on the XRP Ledger.", util.Mainnet)
+	registerToken(usdcTokenID, "Circle's USDC issued currency on the XRP Ledger.", util.Mainnet, util.Simnet)
 }
 
 // Driver implements asset.Driver and asset.Creator.
