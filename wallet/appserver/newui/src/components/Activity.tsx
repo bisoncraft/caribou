@@ -167,7 +167,18 @@ export default function Activity () {
     }
   }
 
-  const loadSwaps = async () => setSwaps(await fetchSwaps())
+  // The initial fetch races the note feed: a live intentsswap upsert can
+  // land while the GET is in flight, and a blind replace would revert the
+  // record to the fetch's stale snapshot. Existing (note-delivered)
+  // entries win the merge; the fetch only fills in what notes haven't
+  // already delivered.
+  const loadSwaps = async () => {
+    const fetched = await fetchSwaps()
+    setSwaps(prev => {
+      const have = new Set(prev.map(s => s.depositAddress))
+      return [...prev, ...fetched.filter(s => !have.has(s.depositAddress))]
+    })
+  }
 
   useEffect(() => {
     fetchInitial()

@@ -83,7 +83,10 @@ export default function SwapRow ({ swap, onSwapHover, swapHighlight }: SwapRowPr
   return (
     <div
       className={`activity-row d-flex align-items-center pointer mb-2 ${active ? 'activity-row-unconfirmed' : ''} ${swapHighlight ? 'swap-hover' : ''}`}
+      role="button"
+      tabIndex={0}
       onClick={open}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } }}
       onMouseEnter={() => onSwapHover?.(swap.depositAddress)}
       onMouseLeave={() => onSwapHover?.('')}
     >

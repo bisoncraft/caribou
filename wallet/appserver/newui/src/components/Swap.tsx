@@ -391,8 +391,15 @@ export default function Swap ({ depositAddress }: SwapProps) {
     setAmount(v)
   }
 
+  // A synchronous re-entry latch alongside the `executing` render state:
+  // the state only takes effect on the next render, so a second click or
+  // Enter landing before the re-render would fire a second real
+  // execution — a second committed quote and a second deposit — for the
+  // same funds.
+  const executingRef = useRef(false)
   const execute = async () => {
-    if (!preview || executing) return
+    if (!preview || executingRef.current) return
+    executingRef.current = true
     setExecuting(true)
     setExecErr('')
     const r = await postJSON('/api/intents/execute', {
@@ -407,6 +414,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
       maxAtomsIn: exactOutput ? preview.atomsIn : 0,
       pass: pw
     })
+    executingRef.current = false
     setExecuting(false)
     if (!r.ok) {
       setExecErr(r.msg || r.errMsg || t('swap failed'))
@@ -659,14 +667,16 @@ export default function Swap ({ depositAddress }: SwapProps) {
           )}
           <div className="d-flex justify-content-between py-1">
             <span className="grey">{t('Custody')}</span>
-            <span
-              className="d-flex align-items-center pointer"
+            <button
+              type="button"
+              className="d-flex align-items-center pointer p-0 border-0 fs13"
               onClick={() => setShowCustody(!showCustody)}
               aria-label={t('Custody and trust details')}
+              aria-expanded={showCustody}
             >
               {t('Service-held in transit')}
               <span className="ico-info fs13 ms-1 grey" />
-            </span>
+            </button>
           </div>
           {showCustody && (
             <div className="form-input-bg br5 p-2 my-1 fs12">
@@ -693,8 +703,8 @@ export default function Swap ({ depositAddress }: SwapProps) {
           </div>
         )}
 
-        {previewErr && <div className="warncolor fs12 px-3 pb-1 text-center">{previewErr}</div>}
-        {execErr && <div className="errcolor fs12 px-3 pb-1 text-center">{execErr}</div>}
+        {previewErr && <div role="alert" className="warncolor fs12 px-3 pb-1 text-center">{previewErr}</div>}
+        {execErr && <div role="alert" className="errcolor fs12 px-3 pb-1 text-center">{execErr}</div>}
 
         <div className="flex-stretch-column p-3">
           <button type="submit" className="feature swap-cta" disabled={!canSwap}>
@@ -907,7 +917,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
             <span>{feeBps > 0 ? slippagePct(feeBps) : '—'}</span>
           </div>
         </div>
-        {previewErr && <div className="warncolor fs12 pt-2 text-center">{previewErr}</div>}
+        {previewErr && <div role="alert" className="warncolor fs12 pt-2 text-center">{previewErr}</div>}
       </div>
 
       <div className="flex-stretch-column px-3 pb-3 pt-2">

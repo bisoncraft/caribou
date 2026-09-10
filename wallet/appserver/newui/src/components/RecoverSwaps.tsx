@@ -47,7 +47,8 @@ export default function RecoverSwaps () {
               </p>
               <ul className="grey ps-3 mb-0">
                 <li>{t('Recovery sends the recipient addresses of recent outgoing transactions — up to 25 per wallet, across all connected wallets — to the swap service, 1click.chaindefuser.com, asking whether each was a swap deposit address.')}</li>
-                <li>{t("Requests honor the wallet's Tor proxy, if one is configured.")}</li>
+                <li>{t('Most of these addresses are ordinary payment recipients, not swap deposits, and the service can associate them with one another and with the request origin.')}</li>
+                <li>{t("Requests honor the wallet's Tor proxy, if one is configured, which limits network-level association.")}</li>
                 <li>{t('This can take a while — the service is rate-limited.')}</li>
               </ul>
               {errMsg && (

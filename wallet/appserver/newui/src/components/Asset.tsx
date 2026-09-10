@@ -118,7 +118,15 @@ export default function Asset ({ ticker }: AssetParams) {
   // Cross-chain swap records, for marking transactions that serve as swap
   // legs.
   const [swaps, setSwaps] = useState<IntentsSwap[]>([])
-  useEffect(() => { fetchSwaps().then(setSwaps) }, [])
+  useEffect(() => {
+    // Merge rather than replace: a live intentsswap upsert (the note
+    // handler below) can land before this initial fetch resolves, and
+    // the note's record is newer than the fetch's snapshot.
+    fetchSwaps().then(fetched => setSwaps(prev => {
+      const have = new Set(prev.map(s => s.depositAddress))
+      return [...prev, ...fetched.filter(s => !have.has(s.depositAddress))]
+    }))
+  }, [])
 
   // Asset IDs with a cross-chain swap route, for gating the hero's swap
   // button. null (loading or engine unavailable) stays optimistic.

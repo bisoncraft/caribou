@@ -92,7 +92,10 @@ export default function TxRow ({ item, onSwapHover, swapHighlight }: TxRowProps)
   return (
     <div
       className={`activity-row d-flex align-items-center pointer mb-2 ${unconfirmed ? 'activity-row-unconfirmed' : ''} ${swapHighlight ? 'swap-hover' : ''}`}
+      role="button"
+      tabIndex={0}
       onClick={open}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } }}
       onMouseEnter={() => onSwapHover?.(swapRelation?.swap.depositAddress ?? '')}
       onMouseLeave={() => onSwapHover?.('')}
     >
