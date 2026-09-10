@@ -318,6 +318,8 @@ type TXCWallet struct {
 
 	trustlineErr   error
 	trustlineCalls int
+	trustlineState *asset.TrustlineState
+	minDeposit     uint64
 
 	// connectHook, when non-nil, is called at the top of Connect. It lets a
 	// test park a connection mid-flight. Set it before the Connect it should
@@ -343,10 +345,22 @@ type TXCWallet struct {
 var _ asset.Accelerator = (*TXCWallet)(nil)
 var _ asset.Withdrawer = (*TXCWallet)(nil)
 var _ asset.TrustlineEstablisher = (*TXCWallet)(nil)
+var _ asset.MinimumDepositer = (*TXCWallet)(nil)
 
-func (w *TXCWallet) EstablishTrustline() error {
+func (w *TXCWallet) TrustlineStatus() *asset.TrustlineState {
+	if w.trustlineState == nil {
+		return &asset.TrustlineState{Status: asset.NotApproved}
+	}
+	return w.trustlineState
+}
+
+func (w *TXCWallet) EstablishTrustline() (string, error) {
 	w.trustlineCalls++
-	return w.trustlineErr
+	return "", w.trustlineErr
+}
+
+func (w *TXCWallet) MinimumDeposit() uint64 {
+	return w.minDeposit
 }
 
 func newTWallet(assetID uint32) (*xcWallet, *TXCWallet) {
@@ -814,6 +828,11 @@ drain:
 	err := tCore.CreateWallet(tPW, wPW, form)
 	if err != nil {
 		t.Fatalf("error when should be no error: %v", err)
+	}
+	// Creation never touches the chain on the token's behalf: the opt-in a
+	// TrustlineEstablisher offers is a separate, user-initiated action.
+	if tWallet.trustlineCalls != 0 {
+		t.Fatalf("EstablishTrustline called %d times during wallet creation, want 0", tWallet.trustlineCalls)
 	}
 }
 

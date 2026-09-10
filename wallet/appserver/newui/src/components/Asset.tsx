@@ -4,7 +4,7 @@ import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
 import { useForceUpdate, useCoreSubscriptions } from '@caribou/shared/hooks'
-import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
+import { ApprovalStatus, CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
 import { AssetVariant, networkAsset, networkID } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@caribou/shared/components/NetworkedTokenLogo'
@@ -149,9 +149,12 @@ export default function Asset ({ ticker }: AssetParams) {
           break
         case 'walletnote': {
           const n = note as WalletNote
-          if (n.payload.route === 'transaction' && assetIDs.includes(n.payload.assetID)) {
+          if (!assetIDs.includes(n.payload.assetID)) break
+          if (n.payload.route === 'transaction') {
             redraw()
             fetchTxnsRef.current?.()
+          } else if (n.payload.route === 'trustline') {
+            redraw()
           }
           break
         }
@@ -282,6 +285,29 @@ export default function Asset ({ ticker }: AssetParams) {
             </button>
           </div>
         </div>
+
+        {ta.variants.map(v => {
+          const tl = v.token ? app.user?.assets[v.assetID]?.wallet?.trustline : undefined
+          if (!tl || tl.status === ApprovalStatus.Approved) return null
+          const net = app.user?.assets[v.token!.networkID]
+          return (
+            <div key={v.assetID} className="asset-notice d-flex align-items-center fs13 px-3 py-2 mb-3">
+              <span className="flex-grow-1">
+                {tl.status === ApprovalStatus.Pending
+                  ? tvar('The {{ token }} trust line on {{ network }} is being established.', { token: ta.ticker, network: net?.name ?? '' })
+                  : tvar('{{ token }} on {{ network }} cannot receive deposits until a trust line is established.', { token: ta.ticker, network: net?.name ?? '' })}
+              </span>
+              {tl.status !== ApprovalStatus.Pending && (
+                <button
+                  type="button" className="receive-activate-btn fs12 ms-3"
+                  onClick={() => app.setForm({ form: 'receive', data: { ticker: ta.ticker, assetID: v.assetID } })}
+                >
+                  {t('Set up')}
+                </button>
+              )}
+            </div>
+          )
+        })}
 
         {hasUnavailable && (
           <div className="network-section">

@@ -986,6 +986,53 @@ func (s *AppServer) apiSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// apiEstablishTrustline handles the '/establishtrustline' API request,
+// submitting the opt-in transaction that lets a token wallet's account
+// receive its token. It commits native funds, so it honors the
+// send-requires-password setting exactly as '/send' does. The response
+// carries the transaction ID, empty when the line already existed.
+func (s *AppServer) apiEstablishTrustline(w http.ResponseWriter, r *http.Request) {
+	form := &struct {
+		AssetID uint32           `json:"assetID"`
+		Pass    encode.PassBytes `json:"pass"`
+	}{}
+	defer form.Pass.Clear()
+	if !readPost(w, r, form) {
+		return
+	}
+	if s.core.WalletState(form.AssetID) == nil {
+		s.writeAPIError(w, fmt.Errorf("no wallet found for %s", unbip(form.AssetID)))
+		return
+	}
+	requirePW, err := s.core.SendRequiresPassword()
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("error reading send-requires-password setting: %w", err))
+		return
+	}
+	if requirePW && len(form.Pass) == 0 {
+		s.writeAPIError(w, fmt.Errorf("password required to establish a trust line"))
+		return
+	}
+	pass, err := s.resolvePass(form.Pass, r)
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
+		return
+	}
+	defer zero(pass)
+	txID, err := s.core.EstablishTrustline(pass, form.AssetID)
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("error establishing %s trust line: %w", unbip(form.AssetID), err))
+		return
+	}
+	writeJSON(w, &struct {
+		OK   bool   `json:"ok"`
+		TxID string `json:"txID"`
+	}{
+		OK:   true,
+		TxID: txID,
+	})
+}
+
 // apiSetSendRequirePassword handles the 'setsendrequirespassword' API request,
 // toggling whether sending funds requires the app password.
 func (s *AppServer) apiSetSendRequirePassword(w http.ResponseWriter, r *http.Request) {

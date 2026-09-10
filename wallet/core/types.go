@@ -60,6 +60,14 @@ type WalletState struct {
 	Disabled       bool                               `json:"disabled"`
 	BridgeApproved map[string]asset.ApprovalStatus    `json:"bridgeApproved"`
 	PendingTxs     map[string]*txdb.WalletTransaction `json:"pendingTxs"`
+	// Trustline is set only for token wallets whose token needs an explicit
+	// opt-in before the account can receive it (asset.TrustlineEstablisher).
+	// Changes arrive as a "trustline" wallet note carrying the new state.
+	Trustline *asset.TrustlineState `json:"trustline,omitempty"`
+	// MinDeposit is the smallest first deposit that creates the account on
+	// the ledger, for wallets that implement asset.MinimumDepositer. Zero
+	// for every other wallet.
+	MinDeposit uint64 `json:"minDeposit,omitempty"`
 }
 
 // FeeState is an on-demand estimate of the current network fee rate and the

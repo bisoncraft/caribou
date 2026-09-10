@@ -82,6 +82,7 @@ func TestTokenWalletDepositAddress(t *testing.T) {
 func TestTokenWalletConnectReportsPeers(t *testing.T) {
 	m := newMockRippled(t)
 	tw := makeTokenTestWallet(t, m)
+	connectTestHandlers(m)
 	var gotNumPeers uint32
 	var calls int
 	tw.peersChange = func(numPeers uint32, err error) {
@@ -264,6 +265,9 @@ func TestTokenWalletSendInvalidAddress(t *testing.T) {
 }
 
 func trustlineTestHandlers(m *mockRippled, engineResult, engineResultMsg string) {
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse(nil), nil
+	})
 	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
 		return map[string]any{
 			"status":               "success",
@@ -295,7 +299,7 @@ func TestEstablishTrustlineTecTrackedAsPending(t *testing.T) {
 	tw.txDB = txDB
 	trustlineTestHandlers(m, "tecINSUF_RESERVE_LINE", "Insufficient reserve to add trust line.")
 
-	if err := tw.EstablishTrustline(); err != nil {
+	if _, err := tw.EstablishTrustline(); err != nil {
 		t.Fatalf("EstablishTrustline error: %v", err)
 	}
 
@@ -321,7 +325,7 @@ func TestEstablishTrustlineDeterministicRejection(t *testing.T) {
 	tw.txDB = txDB
 	trustlineTestHandlers(m, "temBAD_AMOUNT", "bad amount")
 
-	if err := tw.EstablishTrustline(); err == nil {
+	if _, err := tw.EstablishTrustline(); err == nil {
 		t.Fatal("expected error for deterministically rejected trustline tx")
 	}
 
@@ -345,6 +349,9 @@ func TestEstablishTrustlineInsufficientReserve(t *testing.T) {
 	tw := makeTokenTestWallet(t, m)
 	tw.parent.ownerReserve = OwnerReserveDrops
 
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse(nil), nil
+	})
 	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
 		return map[string]any{
 			"status":               "success",
@@ -363,7 +370,7 @@ func TestEstablishTrustlineInsufficientReserve(t *testing.T) {
 		return map[string]any{"status": "success", "engine_result": "tesSUCCESS"}, nil
 	})
 
-	err := tw.EstablishTrustline()
+	_, err := tw.EstablishTrustline()
 	if !errors.Is(err, asset.ErrInsufficientBalance) {
 		t.Fatalf("EstablishTrustline error = %v, want ErrInsufficientBalance", err)
 	}
@@ -1132,6 +1139,7 @@ func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
 	})
 
 	tw := makeTokenTestWallet(t, m)
+	connectTestHandlers(m)
 	w := tw.parent
 	n, mt := newTestTxDB(t)
 	w.txDB, w.metaTable = n, mt
@@ -1147,7 +1155,7 @@ func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
 	w.tip = 1000
 	w.tipMtx.Unlock()
 
-	// Connect registers the token wallet's emitter with the parent.
+	// Connect registers the token wallet with the parent.
 	ctx, cancel := context.WithCancel(context.Background())
 	wg, err := tw.Connect(ctx)
 	if err != nil {
@@ -1201,12 +1209,24 @@ func TestCheckPendingTxsEmitsTokenNoteToTokenWallet(t *testing.T) {
 	// Disconnecting deregisters, so a closed token wallet stops receiving.
 	cancel()
 	wg.Wait()
-	w.tokenEmitterMtx.RLock()
-	_, still := w.tokenEmitters[tw.assetID]
-	w.tokenEmitterMtx.RUnlock()
+	w.tokenMtx.RLock()
+	_, still := w.tokenWallets[tw.assetID]
+	w.tokenMtx.RUnlock()
 	if still {
-		t.Error("token emitter still registered after the wallet's context ended")
+		t.Error("token wallet still registered after its context ended")
 	}
+}
+
+// connectTestHandlers serves the queries TokenWallet.Connect makes to prime
+// the parent's account state and the trust-line cache: an existing account
+// with no trust line.
+func connectTestHandlers(m *mockRippled) {
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("100000000", 0, 0), nil
+	})
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse(nil), nil
+	})
 }
 
 func TestTokenWalletEstimateSendTxFee(t *testing.T) {

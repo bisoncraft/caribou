@@ -14,42 +14,37 @@ import (
 
 // walletOnly embeds asset.Wallet by interface, not by concrete type, so it
 // promotes only the asset.Wallet method set — even if the wrapped value's
-// concrete type also implements asset.TrustlineEstablisher, walletOnly does
-// not, letting the test exercise xcWallet.establishTrustline's not-a-
-// TrustlineEstablisher branch with the same TXCWallet test double.
+// concrete type also implements asset.TrustlineEstablisher or
+// asset.MinimumDepositer, walletOnly does not, letting a test exercise the
+// not-implemented branches with the same TXCWallet test double.
 type walletOnly struct {
 	asset.Wallet
 }
 
-// establishTrustline must delegate to the wallet's TrustlineEstablisher
-// implementation when it has one, and be a harmless no-op otherwise — most
-// asset wallets (anything that isn't an XRPL issued-currency token) don't
-// require this opt-in step at all.
-func TestEstablishTrustlineDelegatesWhenSupported(t *testing.T) {
+// state must surface a TrustlineEstablisher's cached trust-line state and a
+// MinimumDepositer's minimum first deposit, and leave both unset for wallets
+// that implement neither, so clients can gate the deposit flow on their
+// presence.
+func TestStateReportsTrustlineAndMinDeposit(t *testing.T) {
 	xcw, tw := newTWallet(0)
-	tw.trustlineErr = errors.New("boom")
-	if err := xcw.establishTrustline(); err == nil || err.Error() != "boom" {
-		t.Fatalf("establishTrustline() = %v, want the underlying TrustlineEstablisher error", err)
+	tw.trustlineState = &asset.TrustlineState{Status: asset.Pending, Reserve: 200_000, Shortfall: 0}
+	tw.minDeposit = 1_000_000
+
+	st := xcw.state()
+	if st.Trustline == nil || *st.Trustline != *tw.trustlineState {
+		t.Fatalf("state().Trustline = %+v, want %+v", st.Trustline, tw.trustlineState)
 	}
-	if tw.trustlineCalls != 1 {
-		t.Fatalf("EstablishTrustline called %d times, want 1", tw.trustlineCalls)
+	if st.MinDeposit != tw.minDeposit {
+		t.Fatalf("state().MinDeposit = %d, want %d", st.MinDeposit, tw.minDeposit)
 	}
 
-	tw.trustlineErr = nil
-	if err := xcw.establishTrustline(); err != nil {
-		t.Fatalf("establishTrustline() = %v, want nil", err)
-	}
-}
-
-func TestEstablishTrustlineNoOpForNonEstablisher(t *testing.T) {
-	xcw, tw := newTWallet(0)
-	tw.trustlineErr = errors.New("must not be reached")
 	xcw.Wallet = walletOnly{tw}
-	if err := xcw.establishTrustline(); err != nil {
-		t.Fatalf("establishTrustline() = %v, want nil no-op for a non-TrustlineEstablisher wallet", err)
+	st = xcw.state()
+	if st.Trustline != nil {
+		t.Fatalf("state().Trustline = %+v for a non-TrustlineEstablisher wallet, want nil", st.Trustline)
 	}
-	if tw.trustlineCalls != 0 {
-		t.Fatalf("EstablishTrustline called %d times, want 0", tw.trustlineCalls)
+	if st.MinDeposit != 0 {
+		t.Fatalf("state().MinDeposit = %d for a non-MinimumDepositer wallet, want 0", st.MinDeposit)
 	}
 }
 

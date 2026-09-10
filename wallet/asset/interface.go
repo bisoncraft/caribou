@@ -845,15 +845,53 @@ type TokenMaster interface {
 	OpenTokenWallet(cfg *TokenConfig) (Wallet, error)
 }
 
+// TrustlineState describes whether a token wallet's account has opted in to
+// hold its token, and what the opt-in costs in the network's native asset.
+type TrustlineState struct {
+	// Status is Approved when the trust line exists, Pending while an
+	// establishing transaction awaits validation, and NotApproved otherwise.
+	Status ApprovalStatus `json:"status"`
+	// Reserve is the native-asset amount, in atomic units, the account must
+	// hold above its base reserve for as long as the trust line exists. It is
+	// held rather than spent, and released when the line is removed.
+	Reserve uint64 `json:"reserve"`
+	// Shortfall is the additional native-asset balance, in atomic units, the
+	// account needs before EstablishTrustline can succeed, including the base
+	// reserve when the account does not yet exist on the ledger. Zero when
+	// the line can be established now, or already exists.
+	Shortfall uint64 `json:"shortfall"`
+}
+
 // TrustlineEstablisher is implemented by token wallets whose token requires
-// an explicit opt-in transaction (e.g. an XRPL TrustSet) before the account
-// can receive it. Core calls this automatically when the token wallet is
-// created; it is not exposed as something the caller needs to manage.
+// an explicit, reserve-bearing opt-in transaction (an XRPL TrustSet) before
+// the account can receive it. Establishing the line is a user-initiated
+// action rather than part of wallet creation: it commits native funds on the
+// ledger and needs a funded account. A token wallet without a trust line is a
+// valid state; it reports a zero balance and cannot receive the token until
+// the line exists.
 type TrustlineEstablisher interface {
-	// EstablishTrustline authorizes this account to hold the wallet's
-	// token. Must succeed before the wallet can receive the token via Send
-	// from another wallet.
-	EstablishTrustline() error
+	// TrustlineStatus reports the wallet's cached trust-line state. It does
+	// not query the network. The wallet refreshes the cache alongside its
+	// balance and announces changes through a "trustline" custom wallet note
+	// whose payload is the new TrustlineState.
+	TrustlineStatus() *TrustlineState
+	// EstablishTrustline submits the opt-in transaction and returns its ID.
+	// It is idempotent: an existing line returns an empty ID and no error,
+	// and a still-pending establishing transaction returns that
+	// transaction's ID without resubmitting. An unaffordable line returns an
+	// error wrapping ErrInsufficientBalance.
+	EstablishTrustline() (txID string, err error)
+}
+
+// MinimumDepositer is implemented by wallets on networks where an account
+// must hold a minimum balance to exist on the ledger, such as the XRPL base
+// reserve. A first deposit below the minimum is rejected by the network at
+// the sender, so the deposit flow should state it before an account is
+// funded.
+type MinimumDepositer interface {
+	// MinimumDeposit is the smallest first deposit, in atomic units, that
+	// creates the account on the ledger.
+	MinimumDeposit() uint64
 }
 
 // LiveReconfigurer is a wallet that can possibly handle a reconfiguration

@@ -1245,12 +1245,11 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 		return fmt.Errorf("%s wallet authentication error: %w", symbol, err)
 	}
 
-	if token != nil {
-		if err := wallet.establishTrustline(); err != nil {
-			return initErr("error establishing trustline for %s: %w", symbol, err)
-		}
-	}
-
+	// Token wallet creation is purely local. A token that needs an on-chain
+	// opt-in before it can be received (asset.TrustlineEstablisher) gets it
+	// later, through EstablishTrustline, when the user asks to receive it:
+	// the opt-in commits funds and needs a funded account, and a freshly
+	// created wallet usually has neither.
 	balances, err := c.walletBalance(wallet)
 	if err != nil {
 		return initErr("error getting wallet balance for %s: %w", symbol, err)
@@ -4139,6 +4138,47 @@ func (c *Core) tipChange(assetID uint32, tip uint64) {
 		w.mtx.Unlock()
 		c.updateBalances(assetMap{assetID: {}})
 	}
+}
+
+// EstablishTrustline submits the opt-in transaction that lets a token
+// wallet's account receive its token, for tokens that need one
+// (asset.TrustlineEstablisher). It commits native funds, so it is gated like
+// Send: pw may be empty when the wallet is already unlocked. The returned ID
+// is empty when the line already exists.
+func (c *Core) EstablishTrustline(pw []byte, assetID uint32) (string, error) {
+	var crypter encrypt.Crypter
+	if len(pw) > 0 {
+		var err error
+		crypter, err = c.encryptionKey(pw)
+		if err != nil {
+			return "", fmt.Errorf("password error: %w", err)
+		}
+		defer crypter.Close()
+	}
+	wallet, found := c.wallet(assetID)
+	if !found {
+		return "", newError(missingWalletErr, "no wallet found for %s", unbip(assetID))
+	}
+	establisher, ok := wallet.Wallet.(asset.TrustlineEstablisher)
+	if !ok {
+		return "", fmt.Errorf("%s does not require a trust line", unbip(assetID))
+	}
+	if err := c.connectAndUnlock(crypter, wallet); err != nil {
+		return "", err
+	}
+	if err := wallet.checkPeersAndSyncStatus(); err != nil {
+		return "", err
+	}
+	txID, err := establisher.EstablishTrustline()
+	if err != nil {
+		return "", err
+	}
+	// The wallet announces the new trust-line state itself; refresh the
+	// native balance so the reserve change shows up alongside it.
+	if token := asset.TokenInfo(assetID); token != nil {
+		c.updateAssetBalance(token.NetworkID)
+	}
+	return txID, nil
 }
 
 // WalletLogFilePath returns the path to the wallet's log file.

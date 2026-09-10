@@ -361,6 +361,14 @@ func (w *xcWallet) state() *WalletState {
 		w.network.mtx.RUnlock()
 	}
 
+	// Both reads are cached in the wallet; neither touches the network.
+	if establisher, ok := w.Wallet.(asset.TrustlineEstablisher); ok {
+		state.Trustline = establisher.TrustlineStatus()
+	}
+	if depositer, ok := w.Wallet.(asset.MinimumDepositer); ok {
+		state.MinDeposit = depositer.MinimumDeposit()
+	}
+
 	return state
 }
 
@@ -672,17 +680,6 @@ func (w *xcWallet) UnapproveBridgeContract(ctx context.Context, bridgeName strin
 		return "", fmt.Errorf("%s wallet is not a Bridger", unbip(w.AssetID))
 	}
 	return approver.UnapproveBridgeContract(ctx, bridgeName, onConfirm)
-}
-
-// establishTrustline authorizes the wallet to hold its token if the wallet
-// is a TrustlineEstablisher. It's a no-op for wallets that aren't, since
-// most tokens don't require this opt-in step.
-func (w *xcWallet) establishTrustline() error {
-	establisher, ok := w.Wallet.(asset.TrustlineEstablisher)
-	if !ok {
-		return nil
-	}
-	return establisher.EstablishTrustline()
 }
 
 // InitiateBridge initiates the bridge on the source chain if the wallet is a

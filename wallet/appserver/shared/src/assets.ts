@@ -178,9 +178,14 @@ export function networkAsset (v: AssetVariant) {
   return app.user?.assets[networkID(v)]
 }
 
-// isVariantActive reports whether the variant's settlement-network wallet exists.
+// isVariantActive reports whether the variant's own wallet exists, which is
+// what receiving to it or sending from it requires. Token wallets are created
+// alongside their network wallet, so for a token this normally coincides with
+// the network wallet existing; a token whose own wallet is missing (a creation
+// that failed and is self-healed at the next start) must not pass as active,
+// since nothing can serve its deposit address or trust-line state.
 export function isVariantActive (v: AssetVariant): boolean {
-  return Boolean(networkAsset(v)?.wallet)
+  return Boolean(app.user?.assets[v.assetID]?.wallet)
 }
 
 // NetworkAssetRef identifies one asset that settles on a network, carrying just

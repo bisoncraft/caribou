@@ -50,7 +50,6 @@ export function makeWallet (assetID: number, overrides: Partial<WalletState> = {
     synced: true,
     syncProgress: 1,
     syncStatus: makeSyncStatus(),
-    approved: {},
     pendingTxs: {},
     ...overrides
   }

@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import app from '@caribou/shared/application'
-import { resetApp } from '@caribou/shared/testUtils'
+import { postJSON } from '@caribou/shared/http'
+import { ApprovalStatus } from '@caribou/shared/registry'
+import { makeAsset, makeUnitInfo, makeUser, makeWallet, makeWalletDefinition, resetApp } from '@caribou/shared/testUtils'
 import Modals from './Modals'
 import { useModalBusy } from './modalBusy'
+
+vi.mock('@caribou/shared/http', () => ({ postJSON: vi.fn() }))
 
 beforeEach(() => {
   resetApp()
@@ -11,7 +15,30 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.mocked(postJSON).mockReset()
 })
+
+// XRP (asset 144) with an unfunded account, and USDC on XRP (asset 144001)
+// whose wallet reports a missing, unaffordable trust line.
+const xrpID = 144
+const usdcXrpID = 144001
+
+function setUpXrpAssets () {
+  const xrpUI = makeUnitInfo('XRP', 1e6)
+  app.user = makeUser([
+    makeAsset(xrpID, 'XRP', {
+      name: 'XRP',
+      unitInfo: xrpUI,
+      wallet: makeWallet(xrpID, { minDeposit: 1e6 })
+    }),
+    makeAsset(usdcXrpID, 'USDC', {
+      unitInfo: makeUnitInfo('USDC', 1e6),
+      wallet: makeWallet(usdcXrpID, { trustline: { status: ApprovalStatus.NotApproved, reserve: 2e5, shortfall: 1200012 } }),
+      token: { networkID: xrpID, name: 'XRP', unitInfo: xrpUI, contractAddress: '', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
+    })
+  ])
+  app.prepareTickerAssets()
+}
 
 describe('Modals', () => {
   it('closes the open dialog on Escape', () => {
@@ -46,6 +73,26 @@ describe('Modals', () => {
     render(<Modals fd={{ form: 'receive', data: {} }} />)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(setForm).toHaveBeenCalledWith({ form: '', data: {} })
+    setForm.mockRestore()
+  })
+
+  it('re-targets an open Receive when the trust-line gate asks for the network asset', async () => {
+    // Receive derives its selection from its props on mount only, so a
+    // setForm to the same form with a new ticker must remount it rather than
+    // update it in place; otherwise the "Receive XRP" button does nothing.
+    setUpXrpAssets()
+    vi.mocked(postJSON).mockResolvedValue({ ok: true, address: 'rXRPADDRESS' })
+    const setForm = vi.spyOn(app, 'setForm')
+    const { rerender } = render(<Modals fd={{ form: 'receive', data: { ticker: 'USDC', assetID: usdcXrpID } }} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Receive XRP' }))
+    expect(setForm).toHaveBeenCalledWith({ form: 'receive', data: { ticker: 'XRP' } })
+
+    // The app applies the form change by re-rendering Modals with the new fd.
+    rerender(<Modals fd={{ form: 'receive', data: { ticker: 'XRP' } }} />)
+    await screen.findByText('rXRPADDRESS')
+    expect(postJSON).toHaveBeenCalledWith('/api/depositaddress', { assetID: xrpID })
+    expect(screen.queryByRole('button', { name: 'Receive XRP' })).toBeNull()
     setForm.mockRestore()
   })
 

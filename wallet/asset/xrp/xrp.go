@@ -229,13 +229,23 @@ type xrpWallet struct {
 	// scanner records them itself; write-once in newWallet.
 	tokenSpecs []tokenSpec
 
-	// tokenEmitters holds the emitter of every connected TokenWallet, keyed by
-	// asset ID. This wallet parses and stores token records but cannot announce
-	// them itself: WalletEmitter stamps each note with the asset ID it was
-	// built for, and both Core and the UI route on that rather than on the
-	// record's AssetID, so a note sent through w.emit is filed against XRP.
-	tokenEmitterMtx sync.RWMutex
-	tokenEmitters   map[uint32]*asset.WalletEmitter
+	// tokenWallets holds every connected TokenWallet, keyed by asset ID. This
+	// wallet parses and stores token records but cannot announce them itself:
+	// WalletEmitter stamps each note with the asset ID it was built for, and
+	// both Core and the UI route on that rather than on the record's AssetID,
+	// so a note sent through w.emit is filed against XRP. Token balances live
+	// on the same account this wallet watches, so it also drives their
+	// balance refreshes.
+	tokenMtx     sync.RWMutex
+	tokenWallets map[uint32]*TokenWallet
+
+	// Cached account state from the last balance query: whether the account
+	// exists on the ledger and its available drops. Feeds trust-line
+	// shortfall estimates without an extra RPC; see trustlineShortfall.
+	acctMtx       sync.RWMutex
+	acctKnown     bool
+	acctExists    bool
+	acctAvailable uint64
 
 	lastScannedLedger atomic.Uint64
 	scanMtx           sync.Mutex // prevents re-entrant scanAccountTxs
@@ -252,6 +262,7 @@ var _ asset.Wallet = (*xrpWallet)(nil)
 var _ asset.Authenticator = (*xrpWallet)(nil)
 var _ asset.TxFeeEstimator = (*xrpWallet)(nil)
 var _ asset.DestinationTagger = (*xrpWallet)(nil)
+var _ asset.MinimumDepositer = (*xrpWallet)(nil)
 
 func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network) (*xrpWallet, error) {
 	keyFile := filepath.Join(cfg.DataDir, keyFileName)
@@ -283,27 +294,92 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	}, nil
 }
 
-// registerTokenEmitter records a connected TokenWallet's emitter so this
-// wallet can announce the token records it stores. Called from
-// TokenWallet.Connect; unregisterTokenEmitter undoes it when that wallet's
-// context is done. The map is built on first use, since a wallet with no token
-// wallet open never needs one.
-func (w *xrpWallet) registerTokenEmitter(assetID uint32, emit *asset.WalletEmitter) {
-	if emit == nil {
-		return
+// registerTokenWallet records a connected TokenWallet so this wallet can
+// announce the token records it stores and refresh the token's balance when
+// the account's changes. Called from TokenWallet.Connect;
+// unregisterTokenWallet undoes it when that wallet's context is done. The map
+// is built on first use, since a wallet with no token wallet open never needs
+// one.
+func (w *xrpWallet) registerTokenWallet(tw *TokenWallet) {
+	w.tokenMtx.Lock()
+	defer w.tokenMtx.Unlock()
+	if w.tokenWallets == nil {
+		w.tokenWallets = make(map[uint32]*TokenWallet)
 	}
-	w.tokenEmitterMtx.Lock()
-	defer w.tokenEmitterMtx.Unlock()
-	if w.tokenEmitters == nil {
-		w.tokenEmitters = make(map[uint32]*asset.WalletEmitter)
-	}
-	w.tokenEmitters[assetID] = emit
+	w.tokenWallets[tw.assetID] = tw
 }
 
-func (w *xrpWallet) unregisterTokenEmitter(assetID uint32) {
-	w.tokenEmitterMtx.Lock()
-	defer w.tokenEmitterMtx.Unlock()
-	delete(w.tokenEmitters, assetID)
+func (w *xrpWallet) unregisterTokenWallet(assetID uint32) {
+	w.tokenMtx.Lock()
+	defer w.tokenMtx.Unlock()
+	delete(w.tokenWallets, assetID)
+}
+
+// connectedTokenWallets snapshots the registered token wallets.
+func (w *xrpWallet) connectedTokenWallets() []*TokenWallet {
+	w.tokenMtx.RLock()
+	defer w.tokenMtx.RUnlock()
+	tws := make([]*TokenWallet, 0, len(w.tokenWallets))
+	for _, tw := range w.tokenWallets {
+		tws = append(tws, tw)
+	}
+	return tws
+}
+
+// cacheAccountState records the outcome of an account_info query for
+// trust-line shortfall estimates.
+func (w *xrpWallet) cacheAccountState(exists bool, available uint64) {
+	w.acctMtx.Lock()
+	w.acctKnown, w.acctExists, w.acctAvailable = true, exists, available
+	w.acctMtx.Unlock()
+}
+
+// accountStateKnown reports whether a balance query has populated the
+// account-state cache yet.
+func (w *xrpWallet) accountStateKnown() bool {
+	w.acctMtx.RLock()
+	defer w.acctMtx.RUnlock()
+	return w.acctKnown
+}
+
+// ownerReserveDrops is the per-object owner reserve, the amount a trust
+// line keeps locked for as long as it exists.
+func (w *xrpWallet) ownerReserveDrops() uint64 {
+	w.reserveMtx.RLock()
+	defer w.reserveMtx.RUnlock()
+	return w.ownerReserve
+}
+
+// trustlineShortfall is how many more drops the account needs before a
+// TrustSet paying fee can succeed, from the cached account state: the owner
+// reserve the new line adds plus the fee, and the base reserve too when the
+// account does not exist yet, since an unfunded account cannot submit at
+// all. Zero when the account can afford the line now.
+func (w *xrpWallet) trustlineShortfall(fee uint64) uint64 {
+	w.reserveMtx.RLock()
+	base, inc := w.baseReserve, w.ownerReserve
+	w.reserveMtx.RUnlock()
+	w.acctMtx.RLock()
+	exists, available := w.acctExists, w.acctAvailable
+	w.acctMtx.RUnlock()
+	need := inc + fee
+	if !exists {
+		need += base
+		available = 0
+	}
+	if available >= need {
+		return 0
+	}
+	return need - available
+}
+
+// MinimumDeposit satisfies asset.MinimumDepositer: an XRPL account comes
+// into existence only when a payment of at least the base reserve reaches
+// it; the network rejects a smaller first deposit at the sender.
+func (w *xrpWallet) MinimumDeposit() uint64 {
+	w.reserveMtx.RLock()
+	defer w.reserveMtx.RUnlock()
+	return w.baseReserve
 }
 
 // emitTxNote announces wtx through the emitter that owns its asset: this
@@ -317,11 +393,11 @@ func (w *xrpWallet) emitTxNote(wtx *txdb.WalletTransaction, isNew bool) {
 		}
 		return
 	}
-	w.tokenEmitterMtx.RLock()
-	emit := w.tokenEmitters[wtx.AssetID]
-	w.tokenEmitterMtx.RUnlock()
-	if emit != nil {
-		emit.TransactionNote(wtx, isNew)
+	w.tokenMtx.RLock()
+	tw := w.tokenWallets[wtx.AssetID]
+	w.tokenMtx.RUnlock()
+	if tw != nil && tw.emit != nil {
+		tw.emit.TransactionNote(wtx, isNew)
 	}
 }
 
@@ -575,8 +651,13 @@ func (w *xrpWallet) balance(strictCurrent bool) (*asset.Balance, error) {
 			// validated ledger hasn't caught up. Only report the account
 			// empty once both ledgers agree it doesn't exist.
 			if strictCurrent && cr.err == nil {
-				return w.balanceFromAccountData(cr.info.AccountData)
+				bal, err := w.balanceFromAccountData(cr.info.AccountData)
+				if err == nil {
+					w.cacheAccountState(true, bal.Available)
+				}
+				return bal, err
 			}
+			w.cacheAccountState(false, 0)
 			return &asset.Balance{}, nil
 		}
 		return nil, fmt.Errorf("error querying account: %w", vr.err)
@@ -607,7 +688,11 @@ func (w *xrpWallet) balance(strictCurrent bool) (*asset.Balance, error) {
 		currentBalance = validatedBalance
 	}
 
-	return w.balanceAt(currentBalance, validated.AccountData.OwnerCount)
+	bal, err := w.balanceAt(currentBalance, validated.AccountData.OwnerCount)
+	if err == nil {
+		w.cacheAccountState(true, bal.Available)
+	}
+	return bal, err
 }
 
 // balanceFromAccountData computes the wallet Balance directly from a single
@@ -1424,16 +1509,26 @@ func (w *xrpWallet) handleValidatedTip(ctx context.Context, newSeq uint64) {
 	}
 }
 
+// emitBalanceChange announces the native balance and then each connected
+// token's. Token balances are trust-line balances on this same account, and
+// the token wallets have no observer of their own, so every account-level
+// change is their cue too. The native query runs first: it refreshes the
+// cached account state that the tokens' trust-line shortfall reads.
 func (w *xrpWallet) emitBalanceChange() {
-	if w.emit == nil || !w.running.Load() {
+	if !w.running.Load() {
 		return
 	}
-	bal, err := w.Balance()
-	if err != nil {
-		w.log.Warnf("Error emitting balance change: %v", err)
-		return
+	if w.emit != nil {
+		bal, err := w.Balance()
+		if err != nil {
+			w.log.Warnf("Error emitting balance change: %v", err)
+		} else {
+			w.emit.BalanceChange(bal)
+		}
 	}
-	w.emit.BalanceChange(bal)
+	for _, tw := range w.connectedTokenWallets() {
+		tw.emitBalanceChange()
+	}
 }
 
 // storeNewTx persists wtx, setting its Timestamp from tr's close time and

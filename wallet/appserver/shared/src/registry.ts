@@ -46,6 +46,17 @@ export enum ApprovalStatus {
   NotApproved = 2
 }
 
+// TrustlineState mirrors asset.TrustlineState: whether a token wallet's
+// account has opted in to hold its token (an XRPL trust line), the native
+// reserve the opt-in holds for as long as the line exists, and how much more
+// native balance the account needs before it can opt in (zero when it can).
+// Present on WalletState only for tokens that need the opt-in.
+export interface TrustlineState {
+  status: ApprovalStatus
+  reserve: number
+  shortfall: number
+}
+
 // FeeState mirrors core.FeeState, the response shape of /api/feestate. It is
 // fetched on demand; it is not part of WalletState.
 export interface FeeState {
@@ -89,8 +100,11 @@ export interface WalletState {
   synced: boolean
   syncProgress: number
   syncStatus: SyncStatus
-  approved: Record<number, ApprovalStatus>
   pendingTxs: Record<string, WalletTransaction>
+  trustline?: TrustlineState
+  // minDeposit is the smallest first deposit that creates the account on the
+  // ledger (the XRPL base reserve); absent for networks without one.
+  minDeposit?: number
 }
 
 export interface NetworkInfo {
@@ -226,6 +240,12 @@ export interface CustomWalletNote extends BaseWalletNote {
 export interface TransactionNote extends BaseWalletNote {
   transaction: WalletTransaction
   new: boolean
+}
+
+// TrustlineNote is the "trustline" custom wallet note a TrustlineEstablisher
+// token wallet emits when its trust-line state changes.
+export interface TrustlineNote extends BaseWalletNote {
+  payload: TrustlineState
 }
 
 export interface ActionRequiredNote extends BaseWalletNote {

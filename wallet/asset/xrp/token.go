@@ -47,9 +47,9 @@ func registerToken(tokenID uint32, desc string, allowedNets ...util.Network) {
 	}, netAddrs)
 }
 
-// CreateTokenWallet just checks that the token exists; XRPL issued
-// currencies additionally require the account to establish a trustline with
-// the issuer before it can receive funds (see EstablishTrustline).
+// CreateTokenWallet just checks that the token exists. Creation is purely
+// local: the trustline that lets the account receive the token is a
+// separate, user-initiated step (see TokenWallet.EstablishTrustline).
 func (w *xrpWallet) CreateTokenWallet(tokenID uint32, _ map[string]string) error {
 	if Tokens[tokenID] == nil {
 		return fmt.Errorf("token not found for asset ID %d", tokenID)
@@ -110,10 +110,19 @@ type TokenWallet struct {
 	peersChange func(uint32, error)
 	txDB        txdb.NetworkTxDB
 	wi          asset.WalletInfo
+
+	// trustline caches the last derived trust-line state so TrustlineStatus
+	// never touches the network. Every account_lines query this wallet makes
+	// (Balance, Connect, EstablishTrustline) feeds it through
+	// updateTrustlineState, which announces changes; see TrustlineStatus.
+	trustlineMtx   sync.Mutex
+	trustline      asset.TrustlineState
+	trustlineKnown bool
 }
 
 var _ asset.Wallet = (*TokenWallet)(nil)
 var _ asset.TxFeeEstimator = (*TokenWallet)(nil)
+var _ asset.TrustlineEstablisher = (*TokenWallet)(nil)
 
 func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	if w.parent.ctx == nil || w.parent.ctx.Err() != nil {
@@ -129,14 +138,29 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}
 	// The parent's scanner and checkPendingTxs are what observe this token's
 	// transactions — they walk the one account both wallets share — so they
-	// need this wallet's emitter to announce them under the right asset ID.
-	w.parent.registerTokenEmitter(w.assetID, w.emit)
+	// need this wallet to announce them under the right asset ID, and to
+	// refresh this token's balance whenever the account's changes.
+	w.parent.registerTokenWallet(w)
+	// Seed the trust-line cache so TrustlineStatus is meaningful from the
+	// first wallet-state read. A failed query leaves the cache unknown, which
+	// reports NotApproved until the next balance refresh; establishing then
+	// is still safe because EstablishTrustline re-checks the ledger.
+	if !w.parent.accountStateKnown() {
+		if _, err := w.parent.balance(false); err != nil {
+			w.parent.log.Warnf("Error priming account state for %s trust-line status: %v", w.token.Name, err)
+		}
+	}
+	if exists, err := w.hasTrustline(w.parent.ctx, w.parent.address); err != nil {
+		w.parent.log.Warnf("Error querying %s trust line at connect: %v", w.token.Name, err)
+	} else {
+		w.updateTrustlineState(exists)
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		<-ctx.Done()
-		w.parent.unregisterTokenEmitter(w.assetID)
+		w.parent.unregisterTokenWallet(w.assetID)
 	}()
 	return &wg, nil
 }
@@ -148,31 +172,127 @@ func (w *TokenWallet) Info() *asset.WalletInfo {
 
 // Balance queries the trustline balance for this token's (currency, issuer)
 // pair. A missing trustline (the account has never opted in to hold this
-// currency) is reported as a zero balance, not an error.
+// currency) is reported as a zero balance, not an error. The query doubles as
+// the trust-line status refresh.
 func (w *TokenWallet) Balance() (*asset.Balance, error) {
-	res, err := w.parent.rpc.accountLines(w.parent.ctx, w.parent.address, w.issuerAddr)
+	line, err := w.lookupTrustline(w.parent.ctx, w.parent.address)
+	if err != nil {
+		return nil, err
+	}
+	w.updateTrustlineState(line != nil)
+	if line == nil {
+		return &asset.Balance{}, nil
+	}
+	atomic, err := parseDecimalToAtomic(line.Balance, w.token.Decimals)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing trustline balance %q: %w", line.Balance, err)
+	}
+	return &asset.Balance{Available: atomic}, nil
+}
+
+// emitBalanceChange announces this token's current balance. The parent calls
+// it whenever the shared account's balance changes, since the token wallet
+// has no chain observer of its own. Balance also refreshes the trust-line
+// cache, so this is what keeps TrustlineStatus current as well.
+func (w *TokenWallet) emitBalanceChange() {
+	if w.emit == nil {
+		return
+	}
+	bal, err := w.Balance()
+	if err != nil {
+		w.parent.log.Warnf("Error emitting %s balance change: %v", w.token.Name, err)
+		return
+	}
+	w.emit.BalanceChange(bal)
+}
+
+// lookupTrustline returns addr's trust line for this token's (currency,
+// issuer) pair, or nil when the account has none or does not exist.
+func (w *TokenWallet) lookupTrustline(ctx context.Context, addr string) (*accountLine, error) {
+	res, err := w.parent.rpc.accountLines(ctx, addr, w.issuerAddr)
 	if err != nil {
 		if isAccountNotFound(err) {
-			return &asset.Balance{}, nil
+			return nil, nil
 		}
 		return nil, fmt.Errorf("accountLines: %w", err)
 	}
-	for _, line := range res.Lines {
-		if line.Account != w.issuerAddr || line.Currency != w.token.Currency {
-			continue
+	for i := range res.Lines {
+		line := &res.Lines[i]
+		if line.Account == w.issuerAddr && line.Currency == w.token.Currency {
+			return line, nil
 		}
-		atomic, err := parseDecimalToAtomic(line.Balance, w.token.Decimals)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing trustline balance %q: %w", line.Balance, err)
-		}
-		return &asset.Balance{Available: atomic}, nil
 	}
-	return &asset.Balance{}, nil
+	return nil, nil
 }
 
-// DepositAddress returns the wallet's classic XRP address. Callers must
-// ensure a trustline to the issuer exists (see EstablishTrustline) before
-// this address can receive the token.
+// hasTrustline reports whether addr holds a trust line for this token.
+func (w *TokenWallet) hasTrustline(ctx context.Context, addr string) (bool, error) {
+	line, err := w.lookupTrustline(ctx, addr)
+	return line != nil, err
+}
+
+// pendingTrustSet returns the ID of this token's unresolved TrustSet, if the
+// tx database holds one. Pre-stored at submission (see EstablishTrustline) and
+// resolved by the parent's checkPendingTxs, it is what makes the Pending
+// status survive a restart.
+func (w *TokenWallet) pendingTrustSet() string {
+	if w.txDB == nil {
+		return ""
+	}
+	pending, err := w.txDB.GetAssetPendingTxs(&w.assetID)
+	if err != nil {
+		w.parent.log.Errorf("Error getting pending %s txs: %v", w.token.Name, err)
+		return ""
+	}
+	for _, tx := range pending {
+		if tx.Type == txdb.ApproveToken && !tx.Confirmed {
+			return tx.ID
+		}
+	}
+	return ""
+}
+
+// updateTrustlineState derives the trust-line state from an account_lines
+// observation plus local pending-tx and account-state knowledge, caches it,
+// and announces it when it differs from the previous state. It is the single
+// writer of the cache.
+func (w *TokenWallet) updateTrustlineState(lineExists bool) {
+	state := asset.TrustlineState{Reserve: w.parent.ownerReserveDrops()}
+	switch {
+	case lineExists:
+		state.Status = asset.Approved
+	case w.pendingTrustSet() != "":
+		state.Status = asset.Pending
+	default:
+		state.Status = asset.NotApproved
+		state.Shortfall = w.parent.trustlineShortfall(DefaultFeeDrops)
+	}
+	w.trustlineMtx.Lock()
+	changed := !w.trustlineKnown || w.trustline != state
+	w.trustline, w.trustlineKnown = state, true
+	w.trustlineMtx.Unlock()
+	if changed && w.emit != nil {
+		w.emit.Data("trustline", &state)
+	}
+}
+
+// TrustlineStatus satisfies asset.TrustlineEstablisher. Until the first
+// account_lines query lands it reports NotApproved, which is the safe side:
+// the UI withholds the deposit address, and EstablishTrustline re-checks the
+// ledger before submitting anything.
+func (w *TokenWallet) TrustlineStatus() *asset.TrustlineState {
+	w.trustlineMtx.Lock()
+	defer w.trustlineMtx.Unlock()
+	if !w.trustlineKnown {
+		return &asset.TrustlineState{Status: asset.NotApproved, Reserve: w.parent.ownerReserveDrops()}
+	}
+	state := w.trustline
+	return &state
+}
+
+// DepositAddress returns the wallet's classic XRP address. The address can
+// only receive the token once a trustline to the issuer exists; callers gate
+// on TrustlineStatus and offer EstablishTrustline when it is missing.
 func (w *TokenWallet) DepositAddress() (string, error) {
 	return w.parent.address, nil
 }
@@ -239,33 +359,52 @@ func (w *TokenWallet) EstimateSendTxFee(address string, value, _ uint64, _, maxW
 const trustlineLimitAtomic = 999_999_999_999_999
 
 // EstablishTrustline submits a TrustSet transaction authorizing this
-// account to hold the token, up to trustlineLimitAtomic units. This must
-// succeed before the account can receive the token via Send from another
-// wallet. A nil return means the transaction was accepted for inclusion, not
-// that the trustline is guaranteed to exist: a tec/ter result (e.g.
+// account to hold the token, up to trustlineLimitAtomic units, and returns
+// the transaction ID. The line must exist before the account can receive the
+// token via Send from another wallet.
+//
+// The call is idempotent. An existing line returns an empty ID and no error,
+// and an unresolved earlier TrustSet returns that transaction's ID, so a
+// repeated request (a restore, a double click) never burns a second fee.
+// A nil error means the transaction was accepted for inclusion, not that the
+// trustline is guaranteed to exist: a tec/ter result (e.g.
 // tecINSUF_RESERVE_LINE) is tracked as a pending tx and reconciled
 // asynchronously by the parent wallet's checkPendingTxs loop, same as Send.
-func (w *TokenWallet) EstablishTrustline() error {
+func (w *TokenWallet) EstablishTrustline() (string, error) {
 	w.parent.opWG.Add(1)
 	defer w.parent.opWG.Done()
 	if !w.parent.running.Load() {
-		return fmt.Errorf("wallet not running")
+		return "", fmt.Errorf("wallet not running")
 	}
 	w.parent.keyMtx.RLock()
 	if w.parent.privKey == nil {
 		w.parent.keyMtx.RUnlock()
-		return fmt.Errorf("wallet is locked")
+		return "", fmt.Errorf("wallet is locked")
 	}
 	w.parent.keyMtx.RUnlock()
 
 	// Serialize against native and token sends so a concurrent send cannot
-	// drain the fee balance this TrustSet authorizes against.
+	// drain the fee balance this TrustSet authorizes against, and against a
+	// concurrent EstablishTrustline so the idempotency check below holds.
 	w.parent.sendMtx.Lock()
 	defer w.parent.sendMtx.Unlock()
 
+	exists, err := w.hasTrustline(w.parent.ctx, w.parent.address)
+	if err != nil {
+		return "", fmt.Errorf("error checking for an existing trust line: %w", err)
+	}
+	if exists {
+		w.updateTrustlineState(true)
+		return "", nil
+	}
+	if pendingID := w.pendingTrustSet(); pendingID != "" {
+		w.updateTrustlineState(false)
+		return pendingID, nil
+	}
+
 	feeInfo, err := w.parent.rpc.fee(w.parent.ctx)
 	if err != nil {
-		return fmt.Errorf("error querying fee: %w", err)
+		return "", fmt.Errorf("error querying fee: %w", err)
 	}
 	fee := feeInfo.feeDrops()
 	if fee == 0 {
@@ -273,30 +412,32 @@ func (w *TokenWallet) EstablishTrustline() error {
 	}
 	lastLedgerSeq := uint32(feeInfo.LedgerCurrentIndex + lastLedgerWindow)
 
+	// balance(true) also refreshes the parent's cached account state, which
+	// trustlineShortfall reads below.
 	nativeBalance, err := w.parent.balance(true)
 	if err != nil {
-		return fmt.Errorf("checking available balance: %w", err)
+		return "", fmt.Errorf("checking available balance: %w", err)
 	}
 	// A successful TrustSet adds a RippleState object, incrementing
 	// OwnerCount and so the owner reserve the account must hold — on top of
 	// the fee — or the tx lands as tecINSUF_RESERVE_LINE, burning the fee
-	// and the sequence for nothing.
-	w.parent.reserveMtx.RLock()
-	ownerReserve := w.parent.ownerReserve
-	w.parent.reserveMtx.RUnlock()
-	if fee+ownerReserve > nativeBalance.Available {
-		return asset.ErrInsufficientBalance
+	// and the sequence for nothing. An account that does not exist yet
+	// cannot submit at all, so its shortfall includes the base reserve.
+	if shortfall := w.parent.trustlineShortfall(fee); shortfall > 0 {
+		w.setTrustlineShortfall(shortfall)
+		return "", fmt.Errorf("%w: establishing the %s trust line needs %s more XRP (available %s XRP)",
+			asset.ErrInsufficientBalance, w.token.Name, formatDrops(shortfall), formatDrops(nativeBalance.Available))
 	}
 
 	sequence, rollbackSeq, err := w.parent.reserveSequence()
 	if err != nil {
-		return fmt.Errorf("error reserving sequence: %w", err)
+		return "", fmt.Errorf("error reserving sequence: %w", err)
 	}
 
 	srcAccountID, err := addressToAccountID(w.parent.address)
 	if err != nil {
 		rollbackSeq()
-		return fmt.Errorf("error decoding source address: %w", err)
+		return "", fmt.Errorf("error decoding source address: %w", err)
 	}
 
 	t := &xrpTrustSet{
@@ -316,20 +457,20 @@ func (w *TokenWallet) EstablishTrustline() error {
 	if w.parent.privKey == nil {
 		w.parent.keyMtx.RUnlock()
 		rollbackSeq()
-		return fmt.Errorf("wallet is locked")
+		return "", fmt.Errorf("wallet is locked")
 	}
 	sig, err := signTrustSet(t, w.parent.privKey)
 	w.parent.keyMtx.RUnlock()
 	if err != nil {
 		rollbackSeq()
-		return fmt.Errorf("error signing transaction: %w", err)
+		return "", fmt.Errorf("error signing transaction: %w", err)
 	}
 	t.txnSig = sig
 
 	rawTxBytes, err := encodeTrustSet(t, false)
 	if err != nil {
 		rollbackSeq()
-		return fmt.Errorf("error encoding transaction: %w", err)
+		return "", fmt.Errorf("error encoding transaction: %w", err)
 	}
 	txBlob := strings.ToUpper(hex.EncodeToString(rawTxBytes))
 	txHash := computeTxHash(rawTxBytes)
@@ -361,9 +502,10 @@ func (w *TokenWallet) EstablishTrustline() error {
 		// Network error: the node may have received the signed blob. Do NOT
 		// roll back the sequence — reusing it would cause tefPAST_SEQ if the
 		// node did process the tx. The pre-stored entry will be resolved by
-		// checkPendingTxs.
+		// checkPendingTxs, and reports Pending until then.
 		w.parent.log.Warnf("TrustSet submit network error (outcome unknown): %v", err)
-		return fmt.Errorf("error submitting transaction: %w", err)
+		w.updateTrustlineState(false)
+		return "", fmt.Errorf("error submitting transaction: %w", err)
 	}
 	class := ""
 	if len(sr.EngineResult) >= 3 {
@@ -374,7 +516,11 @@ func (w *TokenWallet) EstablishTrustline() error {
 		if class != "tes" {
 			w.parent.log.Warnf("TrustSet submit result %s (%s): tracking as pending", sr.EngineResult, sr.EngineResultMessage)
 		}
-		return nil
+		if w.emit != nil {
+			w.emit.TransactionNote(wtx, true)
+		}
+		w.updateTrustlineState(false) // Pending, via the pre-stored tx
+		return txID, nil
 	default:
 		// Deterministic rejection: sequence was not consumed. This is
 		// terminal, so mark Confirmed (to leave the pending set) and
@@ -387,8 +533,32 @@ func (w *TokenWallet) EstablishTrustline() error {
 				w.parent.log.Errorf("Error updating rejected trustline tx %s: %v", txID, err)
 			}
 		}
-		return fmt.Errorf("trustline transaction rejected: %s — %s", sr.EngineResult, sr.EngineResultMessage)
+		w.updateTrustlineState(false)
+		return "", fmt.Errorf("trustline transaction rejected: %s — %s", sr.EngineResult, sr.EngineResultMessage)
 	}
+}
+
+// setTrustlineShortfall records the exact shortfall a failed
+// EstablishTrustline computed from the live fee, replacing the estimate the
+// balance refresh derived from DefaultFeeDrops.
+func (w *TokenWallet) setTrustlineShortfall(shortfall uint64) {
+	state := asset.TrustlineState{
+		Status:    asset.NotApproved,
+		Reserve:   w.parent.ownerReserveDrops(),
+		Shortfall: shortfall,
+	}
+	w.trustlineMtx.Lock()
+	changed := !w.trustlineKnown || w.trustline != state
+	w.trustline, w.trustlineKnown = state, true
+	w.trustlineMtx.Unlock()
+	if changed && w.emit != nil {
+		w.emit.Data("trustline", &state)
+	}
+}
+
+// formatDrops renders drops as a decimal XRP string for error messages.
+func formatDrops(drops uint64) string {
+	return strconv.FormatFloat(float64(drops)/1e6, 'f', -1, 64)
 }
 
 func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
@@ -425,18 +595,9 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	// The destination must already have a trustline for this currency and
 	// issuer; XRPL rejects an issued-currency Payment to an account without
 	// one (tecNO_LINE / tecPATH_DRY).
-	destLines, err := w.parent.rpc.accountLines(w.parent.ctx, address, w.issuerAddr)
-	if err != nil && !isAccountNotFound(err) {
+	hasTrustline, err := w.hasTrustline(w.parent.ctx, address)
+	if err != nil {
 		return nil, fmt.Errorf("error checking destination trustlines: %w", err)
-	}
-	hasTrustline := false
-	if destLines != nil {
-		for _, line := range destLines.Lines {
-			if line.Account == w.issuerAddr && line.Currency == w.token.Currency {
-				hasTrustline = true
-				break
-			}
-		}
 	}
 	if !hasTrustline {
 		return nil, fmt.Errorf("destination %q has no %s trustline with issuer %s; recipient must establish one first", address, w.token.Name, w.issuerAddr)

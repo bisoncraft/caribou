@@ -111,6 +111,19 @@ var EnUS = map[string]*intl.Translation{
 	// Asset view
 	"price":        {T: "price"},
 	"of portfolio": {T: "of portfolio"},
+	"Set up":       {T: "Set up"},
+	"{{ token }} on {{ network }} cannot receive deposits until a trust line is established.": {T: "{{ token }} on {{ network }} cannot receive deposits until a trust line is established."},
+	"The {{ token }} trust line on {{ network }} is being established.":                       {T: "The {{ token }} trust line on {{ network }} is being established."},
+
+	// Receive — trust-line gate (XRPL issued currencies) and minimum first deposit.
+	"Establish trust line":            {T: "Establish trust line"},
+	"Establishing trust line...":      {T: "Establishing trust line..."},
+	"Failed to establish trust line.": {T: "Failed to establish trust line."},
+	"App password":                    {T: "App password"},
+	"Receiving {{ token }} on {{ network }} requires a trust line. Establishing one keeps {{ reserve }} {{ ticker }} of your balance reserved for as long as you can hold {{ token }}, plus a small network fee. The reserve is released if you later remove the trust line.": {T: "Receiving {{ token }} on {{ network }} requires a trust line. Establishing one keeps {{ reserve }} {{ ticker }} of your balance reserved for as long as you can hold {{ token }}, plus a small network fee. The reserve is released if you later remove the trust line."},
+	"Your {{ network }} wallet needs at least {{ amount }} more {{ ticker }} before it can hold {{ token }}.":                                   {T: "Your {{ network }} wallet needs at least {{ amount }} more {{ ticker }} before it can hold {{ token }}."},
+	"Your {{ token }} address will appear once the network confirms the trust line.":                                                            {T: "Your {{ token }} address will appear once the network confirms the trust line."},
+	"This account is not on the ledger yet. The first deposit must be at least {{ amount }} {{ ticker }}; the network rejects smaller amounts.": {T: "This account is not on the ledger yet. The first deposit must be at least {{ amount }} {{ ticker }}; the network rejects smaller amounts."},
 
 	// Settings / diagnostics
 	"Application log": {T: "Application log"},

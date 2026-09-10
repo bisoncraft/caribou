@@ -15,7 +15,8 @@ import {
   WalletConfigNote,
   WalletSyncNote,
   RateNote,
-  TipChangeNote
+  TipChangeNote,
+  TrustlineNote
 } from './registry'
 import { TickerAsset, normalizedTicker } from './assets'
 import Doc from './doc'
@@ -440,6 +441,13 @@ export class Application {
             const note = n.payload as TipChangeNote
             const w = user.assets[note.assetID]?.wallet
             if (w) w.syncStatus.blocks = note.tip
+            break
+          }
+          case 'trustline': {
+            const note = n.payload as TrustlineNote
+            const w = user.assets[note.assetID]?.wallet
+            if (w) w.trustline = note.payload
+            break
           }
         }
         break

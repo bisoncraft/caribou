@@ -577,6 +577,12 @@ body.sidebar-collapsed .sidebar-label {
   filter: grayscale(40%);
 }
 
+// Notice strip on the asset view, e.g. a token whose trust line is missing.
+.asset-notice {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
 // Inline "Activate" button inside the Receive network picker.
 .receive-activate-btn {
   padding: 2px 10px;

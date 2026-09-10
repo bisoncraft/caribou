@@ -159,6 +159,9 @@ func (c *TCore) Send(pw []byte, assetID uint32, value uint64, address string, su
 	c.sentDestTag = destTag
 	return &tCoin{id: []byte{0xde, 0xc7, 0xed}}, c.sendErr
 }
+func (c *TCore) EstablishTrustline(pw []byte, assetID uint32) (string, error) {
+	return "", nil
+}
 func (c *TCore) ValidateAddress(address string, assetID uint32) (bool, error) {
 	return c.validAddr, nil
 }

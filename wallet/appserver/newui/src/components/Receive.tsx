@@ -1,18 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, useState, FormEvent } from 'react'
-import t from '@caribou/shared/intl'
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, FormEvent } from 'react'
+import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
-import { useFlash } from '@caribou/shared/hooks'
+import { useFlash, useCoreSubscriptions } from '@caribou/shared/hooks'
 import { TickerAsset, AssetVariant, networkAsset, isVariantActive, compareByFiatValue } from '@caribou/shared/assets'
+import { ApprovalStatus, WalletNote, WalletState } from '@caribou/shared/registry'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import QRCode from '@caribou/shared/components/QRCode'
 import Spinner from './Spinner'
+import TrustlineGate from './TrustlineGate'
 
-// activeVariants returns the variants of a ticker whose underlying wallet
-// is created and can therefore receive funds. For a native variant that
-// means its own wallet exists; for a token it means the parent (network)
-// wallet exists, because tokens share the network's deposit address.
+// activeVariants returns the variants of a ticker whose own wallet exists and
+// can therefore be received to. Token wallets are created alongside their
+// network wallet, so for a token this normally coincides with the network
+// being activated.
 function activeVariants (ta: TickerAsset): AssetVariant[] {
   return ta.variants.filter(isVariantActive)
 }
@@ -27,28 +29,54 @@ function networkTicker (v: AssetVariant): string {
   return n ? n.unitInfo.conventional.unit : ''
 }
 
+// trustlineGate returns the variant's trust-line state when its wallet needs
+// an on-chain opt-in that has not confirmed yet, else null. Only tokens whose
+// wallet reports a trust-line state (an XRPL issued currency) are gated; every
+// other variant's address is usable as soon as its wallet exists.
+function trustlineGate (v: AssetVariant) {
+  const tl = v.token ? app.user?.assets[v.assetID]?.wallet?.trustline : undefined
+  return tl && tl.status !== ApprovalStatus.Approved ? tl : null
+}
+
+// minDepositNote returns the minimum first deposit for a native variant whose
+// account does not exist on its ledger yet (zero balance on a network with a
+// base reserve), else 0. A first deposit below it is rejected by the network at
+// the sender, so the address is shown with that requirement.
+function minDepositNote (v: AssetVariant, w: WalletState | undefined): number {
+  if (v.token || !w || !w.minDeposit) return 0
+  const b = w.balance
+  const total = b ? b.available + b.locked + b.immature : 0
+  return total === 0 ? w.minDeposit : 0
+}
+
 const noSubmit = (e: FormEvent) => e.preventDefault()
 
 interface ReceiveProps {
   // Optional preselected ticker (e.g. when launched from a portfolio row's
   // Receive icon). When set, the asset picker is skipped on mount.
   ticker?: string
+  // Optional preselected variant of that ticker, by asset ID. When set and
+  // active, the network picker is skipped too.
+  assetID?: number
 }
 
 // preselected resolves an optional ticker prop to a TickerAsset and, when
-// the ticker has exactly one variant, that variant — so we can skip the
-// asset (and where unambiguous, the network) picker on mount. Returns
-// nulls if the ticker is missing or has no active variant.
-function preselected (ticker?: string): { ta: TickerAsset | null, v: AssetVariant | null } {
+// the ticker has exactly one variant or a specific active variant was named,
+// that variant — so we can skip the asset (and where unambiguous, the network)
+// picker on mount. Returns nulls if the ticker is missing or has no active
+// variant.
+function preselected (ticker?: string, assetID?: number): { ta: TickerAsset | null, v: AssetVariant | null } {
   if (!ticker) return { ta: null, v: null }
   const ta = app.tickerMap?.[ticker]
   if (!ta || activeVariants(ta).length === 0) return { ta: null, v: null }
+  const named = assetID === undefined ? undefined : ta.variantLookup[assetID]
+  if (named && isVariantActive(named)) return { ta, v: named }
   // Skip step 2 only for single-variant tickers (same rule as pickAsset).
   return { ta, v: ta.variants.length === 1 ? ta.variants[0] : null }
 }
 
-export default function Receive ({ ticker }: ReceiveProps) {
-  const initial = preselected(ticker)
+export default function Receive ({ ticker, assetID }: ReceiveProps) {
+  const initial = preselected(ticker, assetID)
   const [ta, setTa] = useState<TickerAsset | null>(initial.ta)
   const [variant, setVariant] = useState<AssetVariant | null>(initial.v)
   const [address, setAddress] = useState('')
@@ -69,6 +97,9 @@ export default function Receive ({ ticker }: ReceiveProps) {
   // Monotonic request ID so stale /api/depositaddress responses can't
   // overwrite a newer selection.
   const reqIDRef = useRef(0)
+  // Wallet state lives on app.user and changes under us (trust-line notes,
+  // balances); tick forces a re-render when the selected variant's does.
+  const [, tick] = useReducer((n: number) => n + 1, 0)
 
   const close = () => app.setForm({ form: '', data: {} })
 
@@ -99,15 +130,14 @@ export default function Receive ({ ticker }: ReceiveProps) {
     return Doc.shortenAddress(address, Math.max(4, Math.floor((charBudget - 1) / 2)))
   }
 
+  // fetchAddress asks the variant's own wallet for its deposit address. For a
+  // token that is the token wallet, which shares the network's address but
+  // only exists (and, for a trust-line token, only accepts deposits) when the
+  // token itself is set up.
   const fetchAddress = async (v: AssetVariant) => {
-    const network = networkAsset(v)
-    if (!network) {
-      setErr(t('Network wallet not available.'))
-      return
-    }
     const id = ++reqIDRef.current
     setLoading(true); setErr(''); setAddress('')
-    const r = await postJSON('/api/depositaddress', { assetID: network.id })
+    const r = await postJSON('/api/depositaddress', { assetID: v.assetID })
     if (id !== reqIDRef.current) return // a newer request superseded us
     setLoading(false)
     if (!r.ok) {
@@ -117,30 +147,49 @@ export default function Receive ({ ticker }: ReceiveProps) {
     setAddress(r.address)
   }
 
-  const pickAsset = async (chosen: TickerAsset) => {
+  const gate = variant ? trustlineGate(variant) : null
+
+  // Fetch the address whenever a variant is selected and nothing gates it.
+  // A gated token fetches once its trust line confirms, which flips gate to
+  // null through the wallet's trust-line note.
+  useEffect(() => {
+    if (variant && !gate && !address && !loading) fetchAddress(variant)
+  }, [variant, gate === null])
+
+  // Re-render on wallet changes for the selected variant or its network:
+  // trust-line notes, wallet-state notes, and balance updates (the native
+  // minimum-deposit note keys on balance).
+  useCoreSubscriptions({
+    onBalance: tick,
+    onNote: (note) => {
+      if (!variant) return
+      const ids = [variant.assetID, variant.token?.networkID]
+      switch (note.type) {
+        case 'walletstate':
+        case 'walletconfig':
+          tick()
+          break
+        case 'walletnote': {
+          const n = note as WalletNote
+          if (n.payload.route === 'trustline' && ids.includes(n.payload.assetID)) tick()
+          break
+        }
+      }
+    }
+  }, [variant])
+
+  const pickAsset = (chosen: TickerAsset) => {
     setTa(chosen)
     setActivating(null)
     setActivateErr({})
     // Only skip the network picker for single-variant tickers (e.g. BTC,
     // native ETH). Multi-network tokens always show step 2 so the user
     // can see other networks and activate them inline if they want.
-    if (chosen.variants.length === 1) {
-      const v = chosen.variants[0]
-      setVariant(v)
-      await fetchAddress(v)
-    }
+    if (chosen.variants.length === 1) setVariant(chosen.variants[0])
   }
 
-  // When the component mounts with a single-variant preselected ticker,
-  // initial state already puts us at step 3 — but the address still
-  // needs to be fetched. Empty deps: this is a one-shot mount effect.
-  useEffect(() => {
-    if (initial.v) fetchAddress(initial.v)
-  }, [])
-
-  const pickVariant = async (v: AssetVariant) => {
+  const pickVariant = (v: AssetVariant) => {
     setVariant(v)
-    await fetchAddress(v)
   }
 
   const resetForBack = () => {
@@ -164,19 +213,24 @@ export default function Receive ({ ticker }: ReceiveProps) {
     flashCopied()
   }
 
-  // Inline activate: fires a single-network activation from the network picker.
+  // Inline activate: fires a single-network activation from the network
+  // picker. Creating the network wallet creates its token wallets too. When
+  // the network wallet already exists and only this token's is missing, the
+  // token wallet is created on its own.
   const inlineActivate = async (v: AssetVariant) => {
     const netAsset = networkAsset(v)
-    const walletDef = netAsset?.info?.availablewallets?.[0]
-    if (!walletDef) {
+    const tokenOnly = Boolean(v.token && netAsset?.wallet)
+    const target = tokenOnly ? app.user?.assets[v.assetID] : netAsset
+    const walletType = tokenOnly ? target?.token?.definition?.type : target?.info?.availablewallets?.[0]?.type
+    if (!target || walletType === undefined) {
       setActivateErr(prev => ({ ...prev, [v.assetID]: t('No wallet definition available') }))
       return
     }
     setActivating(v.assetID)
     setActivateErr(prev => { const next = { ...prev }; delete next[v.assetID]; return next })
     const r = await postJSON('/api/newwallet', {
-      assetID: netAsset.id,
-      walletType: walletDef.type,
+      assetID: target.id,
+      walletType,
       config: {}
     })
     setActivating(null)
@@ -188,7 +242,7 @@ export default function Receive ({ ticker }: ReceiveProps) {
       return
     }
     // Activation succeeded: proceed to fetch address for this variant.
-    await pickVariant(v)
+    pickVariant(v)
   }
 
   // Step 1: asset picker. Default order mirrors the portfolio table (fiat
@@ -313,8 +367,11 @@ export default function Receive ({ ticker }: ReceiveProps) {
     )
   }
 
-  // Step 3: address display
+  // Step 3: address display, or the trust-line gate for a token whose account
+  // cannot accept deposits yet.
   const netName = networkAsset(variant)?.name ?? ''
+  const vWallet = app.user?.assets[variant.assetID]?.wallet
+  const minDeposit = minDepositNote(variant, vWallet)
   return (
     <form className="modal form-width-300" onSubmit={noSubmit}>
       <header>
@@ -334,43 +391,55 @@ export default function Receive ({ ticker }: ReceiveProps) {
           />
         )}
       </div>
-      <div className="mx-3 mb-2 py-1 px-2 d-flex align-items-center form-input-bg br5" title={address || undefined}>
-        {/* Clicking the address is a copy action (selection is disabled, so
-            select-to-copy is not an alternative here); the labeled copy
-            button remains the accessible control. */}
-        <span
-          ref={addrSpanRef}
-          className={`mono fs16 flex-grow-1 text-center no-select ${address !== '' ? 'pointer' : ''} ${copied ? 'accent-green' : ''}`}
-          onClick={copy}
-        >
-          {loading ? t('Loading...') : displayAddress()}
-        </span>
-        {address !== '' && (
-          <button
-            type="button"
-            className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-copy fs14 ms-2"
-            aria-label={copied ? t('Copied!') : t('Copy Address')}
-            onClick={copy}
-          />
-        )}
-      </div>
-      <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
-      <div className="flex-center pb-2">
-        <button type="button" className="noborder grey fs13 d-flex align-items-center p-1"
-          onClick={() => setShowQR(!showQR)}>
-          <span className="ico-qrcode me-1" />
-          {showQR ? t('Hide QR code') : t('Show QR code')}
-        </button>
-      </div>
-      {showQR && (
-        <div className="flex-center px-3 pb-2">
-          <div className="qr-tile flex-center">
-            {address
-              ? <QRCode data={address} size={132} />
-              : loading && <Spinner size={24} />}
-          </div>
-        </div>
-      )}
+      {gate
+        ? <TrustlineGate variant={variant} state={gate} />
+        : (
+          <>
+            <div className="mx-3 mb-2 py-1 px-2 d-flex align-items-center form-input-bg br5" title={address || undefined}>
+              {/* Clicking the address is a copy action (selection is disabled, so
+                  select-to-copy is not an alternative here); the labeled copy
+                  button remains the accessible control. */}
+              <span
+                ref={addrSpanRef}
+                className={`mono fs16 flex-grow-1 text-center no-select ${address !== '' ? 'pointer' : ''} ${copied ? 'accent-green' : ''}`}
+                onClick={copy}
+              >
+                {loading ? t('Loading...') : displayAddress()}
+              </span>
+              {address !== '' && (
+                <button
+                  type="button"
+                  className="icon-btn d-inline-flex align-items-center justify-content-center p-0 border-0 has-tip ico-copy fs14 ms-2"
+                  aria-label={copied ? t('Copied!') : t('Copy Address')}
+                  onClick={copy}
+                />
+              )}
+            </div>
+            <div className={`flex-center errcolor px-3 pb-2 ${err ? '' : 'd-none'}`}>{err}</div>
+            {minDeposit > 0 && (
+              <div className="px-3 pb-2 fs13 gold text-center">
+                {tvar('This account is not on the ledger yet. The first deposit must be at least {{ amount }} {{ ticker }}; the network rejects smaller amounts.',
+                  { amount: Doc.formatCoinValue(minDeposit, variant.ui), ticker: variant.ticker })}
+              </div>
+            )}
+            <div className="flex-center pb-2">
+              <button type="button" className="noborder grey fs13 d-flex align-items-center p-1"
+                onClick={() => setShowQR(!showQR)}>
+                <span className="ico-qrcode me-1" />
+                {showQR ? t('Hide QR code') : t('Show QR code')}
+              </button>
+            </div>
+            {showQR && (
+              <div className="flex-center px-3 pb-2">
+                <div className="qr-tile flex-center">
+                  {address
+                    ? <QRCode data={address} size={132} />
+                    : loading && <Spinner size={24} />}
+                </div>
+              </div>
+            )}
+          </>
+          )}
     </form>
   )
 }

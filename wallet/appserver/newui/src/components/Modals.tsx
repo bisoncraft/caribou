@@ -47,7 +47,10 @@ export default function Modals ({ fd }: ModalsParams) {
 
   const renderContent = () => {
     switch (fd.form) {
-      case 'receive': return <Receive ticker={fd.data?.ticker} />
+      // Keyed on the target so re-targeting an open Receive (e.g. the
+      // trust-line gate's "Receive XRP") remounts it: Receive derives its
+      // initial selection from these props on mount only.
+      case 'receive': return <Receive key={`${fd.data?.ticker ?? ''}:${fd.data?.assetID ?? ''}`} ticker={fd.data?.ticker} assetID={fd.data?.assetID} />
       case 'send': return <Send ticker={fd.data?.ticker} />
       case 'swap': return <Swap depositAddress={fd.data?.depositAddress} />
       case 'recoverswaps': return <RecoverSwaps />

@@ -111,6 +111,7 @@ type clientCore interface {
 	User() *core.User
 	SupportedAssets() map[uint32]*core.SupportedAsset
 	Send(pw []byte, assetID uint32, value uint64, address string, subtract bool, feeRate uint64, destTag *uint32) (asset.Coin, error)
+	EstablishTrustline(pw []byte, assetID uint32) (string, error)
 	NotificationFeed() *core.NoteFeed
 	Logout() error
 	IsInitialized() bool
@@ -536,6 +537,7 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/togglewalletstatus", s.apiToggleWalletStatus)
 			apiAuth.Post("/send", s.apiSend)
 			apiAuth.Post("/setsendrequirespassword", s.apiSetSendRequirePassword)
+			apiAuth.Post("/establishtrustline", s.apiEstablishTrustline)
 			apiAuth.Post("/exportseed", s.apiExportSeed)
 			apiAuth.Post("/restorewalletinfo", s.apiRestoreWalletInfo)
 			apiAuth.Post("/toggleratesource", s.apiToggleRateSource)
