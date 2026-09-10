@@ -116,4 +116,24 @@ func testIntentsSwaps(t *testing.T, d db.DB) {
 	if swaps[2].State != intents.StatusRefunded {
 		t.Fatalf("re-stored record state = %s, want %s", swaps[2].State, intents.StatusRefunded)
 	}
+
+	// A terminal record flagged Inferred (a locally inferred timeout)
+	// stays in the active set so the poller can revisit it; clearing the
+	// flag retires it.
+	inferred := swap(2)
+	inferred.State = intents.StatusFailed
+	inferred.Inferred = true
+	if err := d.StoreIntentsSwap(inferred); err != nil {
+		t.Fatalf("inferred re-store: %v", err)
+	}
+	if active, err = d.ActiveIntentsSwaps(); err != nil || len(active) != 1 || !active[0].Inferred {
+		t.Fatalf("ActiveIntentsSwaps after inferred re-store: %d records, err = %v", len(active), err)
+	}
+	inferred.Inferred = false
+	if err := d.StoreIntentsSwap(inferred); err != nil {
+		t.Fatalf("retire re-store: %v", err)
+	}
+	if active, err = d.ActiveIntentsSwaps(); err != nil || len(active) != 0 {
+		t.Fatalf("ActiveIntentsSwaps after retire: %d records, err = %v", len(active), err)
+	}
 }

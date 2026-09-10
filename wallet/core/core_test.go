@@ -243,7 +243,7 @@ func (tdb *TDB) ActiveIntentsSwaps() ([]*db.IntentsSwap, error) {
 	defer tdb.intentsMtx.Unlock()
 	var swaps []*db.IntentsSwap
 	for _, swap := range tdb.intentsSwaps {
-		if swap.Terminal() {
+		if swap.Terminal() && !swap.Inferred {
 			continue
 		}
 		cp := *swap

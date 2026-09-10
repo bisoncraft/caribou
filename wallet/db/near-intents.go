@@ -4,11 +4,11 @@
 // NEAR Intents swap-record storage. Swap records live in their own table of
 // the core database, keyed by the swap's single-use deposit address, with
 // two secondary indexes derived from the record itself: the creation stamp,
-// for newest-first listing, and an active index holding only records whose
-// state is not terminal, so the status poller reads just the swaps that
-// still need polling. A record re-stored in a terminal state leaves the
-// active index (both storage engines purge a datum's old index entries on
-// replace).
+// for newest-first listing, and an active index holding the records that
+// still need status polling — every non-terminal record, plus terminal
+// records whose state was locally inferred (IntentsSwap.Inferred). A record
+// re-stored in a final terminal state leaves the active index (both storage
+// engines purge a datum's old index entries on replace).
 
 package db
 
@@ -66,12 +66,19 @@ type IntentsSwap struct {
 	DepositAddress string `json:"depositAddress"`
 	DepositMemo    string `json:"depositMemo,omitempty"`
 	State          string `json:"state"`
-	OriginAssetID  uint32 `json:"originAssetID"`
-	DestAssetID    uint32 `json:"destAssetID"`
-	OriginAsset    string `json:"originAsset"` // Intents asset ID
-	DestAsset      string `json:"destAsset"`   // Intents asset ID
-	AtomsIn        uint64 `json:"atomsIn"`
-	AmountIn       string `json:"amountIn"`
+	// Inferred marks a terminal State the engine inferred locally (a
+	// deadline timeout) rather than one the service reported. The service
+	// can still settle or refund a deposit past the local grace, so an
+	// inferred record stays in the active set — polled, and superseded by
+	// any later service-reported status — until the engine retires it by
+	// clearing the flag.
+	Inferred      bool   `json:"inferred,omitempty"`
+	OriginAssetID uint32 `json:"originAssetID"`
+	DestAssetID   uint32 `json:"destAssetID"`
+	OriginAsset   string `json:"originAsset"` // Intents asset ID
+	DestAsset     string `json:"destAsset"`   // Intents asset ID
+	AtomsIn       uint64 `json:"atomsIn"`
+	AmountIn      string `json:"amountIn"`
 	// AmountOut/AtomsOut hold the quoted output until the service reports
 	// the realized fill in its swap details, which then replaces them; a
 	// completed swap's record shows what was actually delivered. The
@@ -190,13 +197,15 @@ func intentsStampIndexFunc(_, vI kvstore.KV) ([]byte, error) {
 }
 
 // intentsActiveIndexFunc derives the active index entry, declining to index
-// records in a terminal state.
+// records in a terminal state — unless the state is locally inferred
+// (Inferred), which keeps the record polled so a later service-reported
+// status can supersede the inference.
 func intentsActiveIndexFunc(_, vI kvstore.KV) ([]byte, error) {
 	swap, err := intentsSwapV(vI)
 	if err != nil {
 		return nil, err
 	}
-	if swap.Terminal() {
+	if swap.Terminal() && !swap.Inferred {
 		return nil, kvstore.ErrNotIndexed
 	}
 	return intentsSwapStamp(swap), nil
@@ -205,7 +214,8 @@ func intentsActiveIndexFunc(_, vI kvstore.KV) ([]byte, error) {
 // StoreIntentsSwap stores the swap record under its deposit address,
 // stamping UpdatedAt and replacing any existing record. CreatedAt orders
 // the listing and must not change across re-stores of the same swap. A
-// record stored in a terminal state leaves the active set.
+// record stored in a terminal state leaves the active set unless the
+// state is locally inferred (Inferred).
 func (d *kvDB) StoreIntentsSwap(swap *IntentsSwap) error {
 	if swap.DepositAddress == "" {
 		return errors.New("no deposit address")

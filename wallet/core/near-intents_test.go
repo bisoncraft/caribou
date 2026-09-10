@@ -478,6 +478,100 @@ func TestIntentsMergeStatus(t *testing.T) {
 	if updated == nil || updated.USDRefunded != 60.90 {
 		t.Fatalf("service refund pricing not preferred: %+v", updated)
 	}
+
+	// A locally inferred FAILED yields to the service's view. Seed one
+	// with the timeout reason applyTimeout records.
+	seedInferred := func(addr string) {
+		s := testSwapRecord(addr, intents.StatusFailed)
+		s.Inferred = true
+		s.RefundReason = "local timeout reason"
+		if err := eng.db.StoreIntentsSwap(s); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	// PENDING_DEPOSIT only restates that the service observed nothing;
+	// the inference stands.
+	seedInferred("inf1")
+	pending := &intents.StatusResponse{Status: intents.StatusPendingDeposit}
+	if updated, note := eng.mergeStatus("inf1", pending, 0, false, 0, 0); updated != nil || note != nil {
+		t.Fatalf("PENDING_DEPOSIT superseded an inferred FAILED")
+	}
+	if stored, _ := eng.db.IntentsSwap("inf1"); stored.State != intents.StatusFailed || !stored.Inferred {
+		t.Fatalf("inferred record changed on PENDING_DEPOSIT: %s inferred %v", stored.State, stored.Inferred)
+	}
+
+	// A service REFUNDED is adopted over the inferred FAILED, with the
+	// refund details applied and a note emitted.
+	refunded := &intents.StatusResponse{
+		Status: intents.StatusRefunded,
+		SwapDetails: intents.SwapDetails{
+			RefundedAmount: "100000",
+			RefundReason:   "late deposit refunded",
+			OriginChainTxs: []intents.TxHashRef{{Hash: "refundtx"}},
+		},
+	}
+	updated, note = eng.mergeStatus("inf1", refunded, 0, false, 95_000, 61.05)
+	if updated == nil || note == nil || updated.State != intents.StatusRefunded {
+		t.Fatalf("service REFUNDED not adopted over inferred FAILED: %+v", updated)
+	}
+	if updated.Inferred || updated.RefundedAtoms != 95_000 || updated.RefundReason != "late deposit refunded" {
+		t.Fatalf("adoption details wrong: %+v", updated)
+	}
+
+	// A service FAILED with nothing new confirms the inference: the flag
+	// clears (retiring the record from the active set) with no note, and
+	// the empty service reason does not blank the recorded one.
+	seedInferred("inf2")
+	confirm := &intents.StatusResponse{Status: intents.StatusFailed}
+	updated, note = eng.mergeStatus("inf2", confirm, 0, false, 0, 0)
+	if updated == nil || note != nil {
+		t.Fatalf("confirmation: updated %v note %v, want silent update", updated, note)
+	}
+	if stored, _ := eng.db.IntentsSwap("inf2"); stored.Inferred || stored.RefundReason != "local timeout reason" {
+		t.Fatalf("confirmation not persisted correctly: inferred %v reason %q", stored.Inferred, stored.RefundReason)
+	}
+
+	// A service-confirmed FAILED (no longer Inferred) is terminal for
+	// good, even against a later REFUNDED.
+	if updated, note := eng.mergeStatus("inf2", refunded, 0, false, 95_000, 0); updated != nil || note != nil {
+		t.Fatalf("confirmed terminal record was regressed")
+	}
+}
+
+// TestIntentsRetireInferred covers the horizon retirement of a locally
+// inferred terminal state: the flag clears, dropping the record from the
+// active set, and only Inferred records are eligible.
+func TestIntentsRetireInferred(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	eng := newTestIntentsEngine(rig)
+
+	final := testSwapRecord("final", intents.StatusFailed)
+	if err := eng.db.StoreIntentsSwap(final); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	inf := testSwapRecord("inf", intents.StatusFailed)
+	inf.Inferred = true
+	if err := eng.db.StoreIntentsSwap(inf); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Only the Inferred record is in the active set.
+	if active, err := eng.db.ActiveIntentsSwaps(); err != nil || len(active) != 1 || active[0].DepositAddress != "inf" {
+		t.Fatalf("active set = %v (err %v), want [inf]", active, err)
+	}
+
+	eng.retireInferred("nonexistent") // no-op
+	eng.retireInferred("final")       // no-op: not Inferred
+
+	eng.retireInferred("inf")
+	if stored, _ := eng.db.IntentsSwap("inf"); stored.Inferred || stored.State != intents.StatusFailed {
+		t.Fatalf("retire: inferred %v state %s, want final FAILED", stored.Inferred, stored.State)
+	}
+	if active, err := eng.db.ActiveIntentsSwaps(); err != nil || len(active) != 0 {
+		t.Fatalf("active set after retire = %v (err %v), want empty", active, err)
+	}
 }
 
 func TestIntentsApplyTimeout(t *testing.T) {
@@ -527,8 +621,10 @@ func TestIntentsApplyTimeout(t *testing.T) {
 	quoted.Deadline = expired
 	_ = eng.db.StoreIntentsSwap(quoted)
 	eng.applyTimeout("quoted")
-	if stored, _ := eng.db.IntentsSwap("quoted"); stored.State != IntentsStateExpired {
-		t.Fatalf("quoted record = %s, want EXPIRED", stored.State)
+	if stored, _ := eng.db.IntentsSwap("quoted"); stored.State != IntentsStateExpired || stored.Inferred {
+		// EXPIRED is final, not Inferred: with no deposit sent there is
+		// nothing the service could ever report.
+		t.Fatalf("quoted record = %s (inferred %v), want final EXPIRED", stored.State, stored.Inferred)
 	}
 	if n := drainNotes(); n != 1 {
 		t.Fatalf("%d notes for quote expiry, want 1", n)
@@ -543,6 +639,9 @@ func TestIntentsApplyTimeout(t *testing.T) {
 	stored, _ := eng.db.IntentsSwap("sent")
 	if stored.State != intents.StatusFailed {
 		t.Fatalf("sent record = %s, want FAILED", stored.State)
+	}
+	if !stored.Inferred {
+		t.Fatalf("timeout FAILED not marked Inferred")
 	}
 	if stored.RefundReason == "" {
 		t.Fatalf("no refund reason recorded")
@@ -562,6 +661,9 @@ func TestIntentsApplyTimeout(t *testing.T) {
 	stored, _ = eng.db.IntentsSwap("incomplete")
 	if stored.State != intents.StatusFailed {
 		t.Fatalf("incomplete-deposit record = %s, want FAILED", stored.State)
+	}
+	if !stored.Inferred {
+		t.Fatalf("incomplete-deposit timeout FAILED not marked Inferred")
 	}
 	if stored.RefundReason == "" {
 		t.Fatalf("no refund reason recorded for incomplete-deposit timeout")
