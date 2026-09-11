@@ -175,8 +175,13 @@ RUN cd contrib/depends && make simplybs \
 # rather than failing three hours into the first Apple target. No xip at all is
 # a notice, not an error: that is the supported way to build only the Linux,
 # Windows and Android targets.
+#
+# --chown because the Apple targets read the xip as user, through the symlink,
+# and COPY otherwise leaves it root-owned with whatever mode it had on the host.
+# The chown -R at the end of the RUN cannot fix that: it does not follow
+# symlinks, so it changes the link and never touches the file.
 USER root
-COPY xcode/ /opt/xcode/
+COPY --chown=user:user xcode/ /opt/xcode/
 RUN set -eu; \
     want=434287e1e4c6ecbd6d5ea07e9f408fffcad2b82916b0a3fdfefa7fe60db4de93; \
     dest=/monero_c/contrib/depends/simplybs/.buildlib/source/download.developer.apple.com/Developer_Tools/Xcode_26.1; \
@@ -249,6 +254,27 @@ RUN ./build_single.sh monero x86_64-linux-android     -j$(nproc) \
 RUN ./build_single.sh monero armv7a-linux-androideabi -j$(nproc) \
     && cp contrib/depends/_native/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so release/*/armv7a-linux-androideabi/ \
     && (cd contrib/depends && make sbs-cleanup)
+
+# Check the 16 KB alignment claimed above rather than trust it. Nothing else
+# does before Play ingestion, and a monero_c pin bump could quietly drop the
+# CMakeLists.txt flag. The wallet lib is checked on all three ABIs, since that
+# flag covers all of them; libc++_shared.so only on the 64-bit two, which are
+# all Play requires and all the NDK default covers. Its own RUN so a failure
+# here keeps the three builds above cached.
+RUN set -eu; \
+    for f in release/*/aarch64-linux-android/libmonero_wallet2_api_c.so \
+             release/*/aarch64-linux-android/libc++_shared.so \
+             release/*/x86_64-linux-android/libmonero_wallet2_api_c.so \
+             release/*/x86_64-linux-android/libc++_shared.so \
+             release/*/armv7a-linux-androideabi/libmonero_wallet2_api_c.so; do \
+        [ -f "$f" ] || { echo "16 KB check: $f not found"; exit 1; }; \
+        aligns=$(readelf -lW "$f" | awk '$1 == "LOAD" { print $NF }'); \
+        [ -n "$aligns" ] || { echo "16 KB check: no LOAD segments read from $f"; exit 1; }; \
+        for a in $aligns; do \
+            [ $((a)) -ge 16384 ] || { echo "16 KB check: $f has a LOAD segment aligned to $a, need >= 0x4000"; exit 1; }; \
+        done; \
+        echo "16 KB check: ok  $f"; \
+    done
 
 # Desktop: macOS. Here rather than with the other desktop targets above because
 # it needs the xip -- see the ordering note there.

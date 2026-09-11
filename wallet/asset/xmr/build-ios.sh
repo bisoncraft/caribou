@@ -223,7 +223,7 @@ for triple in "${TRIPLES[@]}"; do
     ( cd "$MONERO_C_DIR" && ./build_single.sh monero "$triple" "$JOBS" )
     ( cd "$MONERO_C_DIR/contrib/depends" && make sbs-cleanup )
 
-    dylib="$(find "$MONERO_C_DIR/release" -path "*/$triple/libmonero_wallet2_api_c.dylib" | head -1)"
+    dylib="$(find "$MONERO_C_DIR/release" -path "*/$triple/libmonero_wallet2_api_c.dylib" -print -quit)"
     if [[ -z "$dylib" ]]; then
         echo "error: no libmonero_wallet2_api_c.dylib produced for $triple" >&2
         echo "(looked under $MONERO_C_DIR/release/*/$triple/)" >&2

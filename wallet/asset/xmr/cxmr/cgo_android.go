@@ -21,5 +21,7 @@ package cxmr
 //
 // Release note: every native .so (the gomobile Go .so, this wallet lib, and
 // libc++_shared.so) must be linked 16 KB-page aligned
-// (-Wl,-z,max-page-size=16384) for Google Play API 35+ submission. simplybs
-// does not set this by default; it must be injected in the Slice 1 build.
+// (-Wl,-z,max-page-size=16384) for Google Play API 35+ submission. monero_c
+// passes that flag itself for every -linux- HOST_ABI
+// (monero_libwallet2_api_c/CMakeLists.txt), and the Dockerfile asserts the
+// result with readelf after the Android builds.
