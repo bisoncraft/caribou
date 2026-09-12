@@ -90,11 +90,14 @@ type zAccountBalance struct {
 
 func zGetBalanceForAccount(c rpcCaller, acct uint32, confs int) (*poolBalances, error) {
 	var res zAccountBalance
+	if err := c.CallRPC(methodZGetBalanceForAccount, []any{acct, confs}, &res); err != nil {
+		return nil, err
+	}
 	return &poolBalances{
 		Orchard:     res.Pools.Orchard.ValueZat,
 		Transparent: res.Pools.Transparent.ValueZat,
 		Sapling:     res.Pools.Sapling.ValueZat,
-	}, c.CallRPC(methodZGetBalanceForAccount, []any{acct, confs}, &res)
+	}, nil
 }
 
 type zNotesCount struct {

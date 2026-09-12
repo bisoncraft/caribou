@@ -228,3 +228,46 @@ func BenchmarkLeastOverFund(b *testing.B) {
 		leastOverFund(enough, utxos)
 	}
 }
+
+func Test_reserveEnough(t *testing.T) {
+	enough := reserveEnough(100)
+	if ok, over := enough(0, 0, 99); ok || over != 0 {
+		t.Fatalf("expected not enough for sum=99, got ok=%v over=%d", ok, over)
+	}
+	if ok, over := enough(0, 0, 100); !ok || over != 0 {
+		t.Fatalf("expected enough for sum=100, got ok=%v over=%d", ok, over)
+	}
+	if ok, _ := enough(0, 0, 101); !ok {
+		t.Fatalf("expected enough for sum=101")
+	}
+}
+
+func Test_uTxOSetDiff(t *testing.T) {
+	newU := func(amt uint64) *compositeUTXO {
+		return &compositeUTXO{
+			UTxO:  &btc.UTxO{Amount: amt},
+			Input: &btc.SpendInfo{},
+		}
+	}
+	a, b, c := newU(1), newU(2), newU(3)
+	set := []*compositeUTXO{a, b, c}
+	sub := []*compositeUTXO{b}
+
+	diff := uTxOSetDiff(set, sub)
+	if len(diff) != 2 || diff[0] != a || diff[1] != c {
+		t.Fatalf("unexpected diff: %+v", diff)
+	}
+
+	// No overlap: full set returned.
+	diff = uTxOSetDiff(set, nil)
+	if len(diff) != 3 {
+		t.Fatalf("expected full set with no sub, got %d", len(diff))
+	}
+
+	// Equal-value but distinct pointer UTXOs are not considered equal.
+	dup := newU(2)
+	diff = uTxOSetDiff(set, []*compositeUTXO{dup})
+	if len(diff) != 3 {
+		t.Fatalf("expected pointer-distinct UTXO with same value to remain, got %d", len(diff))
+	}
+}

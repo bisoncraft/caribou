@@ -1351,8 +1351,11 @@ func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*txdb.Wal
 	}
 
 	txHistoryDB := w.txDB()
+	if txHistoryDB == nil {
+		return nil, fmt.Errorf("tx database not initialized")
+	}
 	tx, err := txHistoryDB.GetTx(txID)
-	if err != nil {
+	if err != nil && !errors.Is(err, asset.CoinNotFoundError) {
 		return nil, err
 	}
 
@@ -1371,7 +1374,7 @@ func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*txdb.Wal
 			blockHeight int32
 			blockTime   int64
 		)
-		if gtr.blockHash != nil {
+		if gtr.blockHash != nil && *gtr.blockHash != (chainhash.Hash{}) {
 			block, _, err := getVerboseBlockHeader(w, gtr.blockHash)
 			if err != nil {
 				return nil, fmt.Errorf("error getting block height for %s: %v", gtr.blockHash, err)
