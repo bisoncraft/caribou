@@ -376,6 +376,7 @@ func New(cfg *Config) (*AppServer, error) {
 		Handler:      mux,
 		ReadTimeout:  httpConnTimeoutSeconds * time.Second, // slow requests should not hold connections opened
 		WriteTimeout: 2 * time.Minute,                      // request to response time, must be long enough for slow handlers
+		IdleTimeout:  httpConnTimeoutSeconds * time.Second,
 	}
 
 	if cfg.CertFile != "" || cfg.KeyFile != "" {

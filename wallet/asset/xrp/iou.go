@@ -45,17 +45,26 @@ func encodeCurrencyCode(code string) ([20]byte, error) {
 	switch len(code) {
 	case 3:
 		copy(out[12:15], []byte(code))
-		return out, nil
 	case 40:
 		b, err := hex.DecodeString(code)
 		if err != nil || len(b) != 20 {
 			return out, fmt.Errorf("invalid 40-character hex currency code %q", code)
 		}
 		copy(out[:], b)
-		return out, nil
 	default:
 		return out, fmt.Errorf("currency code must be exactly 3 characters (ISO) or 40 hex characters (non-standard), got %q (%d chars)", code, len(code))
 	}
+	var native [20]byte
+	if out == native || out == xrpCurrencyCode() {
+		return native, fmt.Errorf("XRP is the native currency, not an issued currency code")
+	}
+	return out, nil
+}
+
+func xrpCurrencyCode() [20]byte {
+	var code [20]byte
+	copy(code[12:15], "XRP")
+	return code
 }
 
 // normalizeIOUValue converts an atomic amount (value * 10^-decimals) into

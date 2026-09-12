@@ -128,8 +128,9 @@ func runServer(ctx context.Context, syncDir string, openC chan<- struct{}, killC
 	}
 
 	srv := &http.Server{
-		Addr:    l.Addr().String(),
-		Handler: &syncServer{openC, killC, killKey},
+		Addr:        l.Addr().String(),
+		Handler:     &syncServer{openC, killC, killKey},
+		IdleTimeout: 10 * time.Second,
 	}
 
 	var wg sync.WaitGroup

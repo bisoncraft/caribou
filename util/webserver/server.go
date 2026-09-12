@@ -229,6 +229,7 @@ func (s *Server) Run(ctx context.Context) {
 		Handler:      s.mux,
 		ReadTimeout:  serverTimeoutSeconds * time.Second,
 		WriteTimeout: serverTimeoutSeconds * time.Second,
+		IdleTimeout:  serverTimeoutSeconds * time.Second,
 	}
 
 	var wg sync.WaitGroup

@@ -24,6 +24,9 @@ func TestEncodeCurrencyCode(t *testing.T) {
 	if _, err := encodeCurrencyCode(""); err == nil {
 		t.Fatal("expected error for an empty currency code")
 	}
+	if _, err := encodeCurrencyCode("XRP"); err == nil {
+		t.Fatal("expected error for native XRP currency code")
+	}
 }
 
 func TestEncodeCurrencyCodeNonStandardHex(t *testing.T) {
@@ -48,6 +51,12 @@ func TestEncodeCurrencyCodeNonStandardHex(t *testing.T) {
 	}
 	if _, err := encodeCurrencyCode(invalidHex); err == nil {
 		t.Fatal("expected error for a 40-character string that isn't valid hex")
+	}
+	if _, err := encodeCurrencyCode("0000000000000000000000005852500000000000"); err == nil {
+		t.Fatal("expected error for XRP's 40-character representation")
+	}
+	if _, err := encodeCurrencyCode("0000000000000000000000000000000000000000"); err == nil {
+		t.Fatal("expected error for XRP's native all-zero representation")
 	}
 }
 

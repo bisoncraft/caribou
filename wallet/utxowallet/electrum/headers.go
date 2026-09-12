@@ -613,16 +613,21 @@ func (h *Headers) prevHashAt(height int32) (chainhash.Hash, error) {
 
 // appendToFile appends raw header bytes to the persistent header file. The
 // Close error is captured via a named return so a failed flush on a sketchy
-// filesystem (NFS, full disk) surfaces as an error rather than a silent
-// disagreement between memory and disk on the next restart.
+// filesystem (NFS, full disk) surfaces alongside a write error rather than
+// a silent disagreement between memory and disk on the next restart.
 func (h *Headers) appendToFile(raw []byte) (err error) {
 	f, err := os.OpenFile(h.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("electrum: open header file: %w", err)
 	}
 	defer func() {
-		if cerr := f.Close(); cerr != nil && err == nil {
-			err = fmt.Errorf("electrum: close header file: %w", cerr)
+		if cerr := f.Close(); cerr != nil {
+			closeErr := fmt.Errorf("electrum: close header file: %w", cerr)
+			if err != nil {
+				err = errors.Join(err, closeErr)
+			} else {
+				err = closeErr
+			}
 		}
 	}()
 	if _, err := f.Write(raw); err != nil {
