@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1904,5 +1905,41 @@ func TestCallDetectsHTTPStatus429(t *testing.T) {
 	}
 	if !isRateLimitedRPCError(err) {
 		t.Errorf("isRateLimitedRPCError(%v) = false, want true", err)
+	}
+}
+
+func TestCallResponseSizeLimit(t *testing.T) {
+	const prefix = `{"jsonrpc":"2.0","result":"`
+	const suffix = `"}`
+	for _, test := range []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{name: "at limit", size: rpcResponseSizeLimit},
+		{name: "over limit", size: rpcResponseSizeLimit + 1, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := prefix + strings.Repeat("x", test.size-len(prefix)-len(suffix)) + suffix
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			var result string
+			err := newRPCClient(srv.URL).call(context.Background(), "getSlot", nil, &result)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "exceeds") {
+					t.Fatalf("call error = %v, want response-size error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if len(result) != test.size-len(prefix)-len(suffix) {
+				t.Fatalf("result length = %d, want %d", len(result), test.size-len(prefix)-len(suffix))
+			}
+		})
 	}
 }

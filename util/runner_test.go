@@ -5,6 +5,7 @@ package util
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 // right up until it exits.
 type drainConnector struct {
 	drained atomic.Bool
+	err     error
 }
 
 func (c *drainConnector) Connect(ctx context.Context) (*sync.WaitGroup, error) {
@@ -32,7 +34,7 @@ func (c *drainConnector) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		time.Sleep(20 * time.Millisecond)
 		c.drained.Store(true)
 	}()
-	return &wg, nil
+	return &wg, c.err
 }
 
 // TestConnectionMasterDisconnectDrains proves the invariant the mobile Start()
@@ -91,5 +93,35 @@ func TestConnectionMasterWaitDrains(t *testing.T) {
 
 	if !c.drained.Load() {
 		t.Fatal("Wait returned before the connector goroutine finished draining")
+	}
+}
+
+func TestConnectionMasterConnectRetainsConnectorAfterError(t *testing.T) {
+	c := &drainConnector{err: errors.New("initial connection failed")}
+	cm := NewConnectionMaster(c)
+	if err := cm.Connect(context.Background()); err == nil {
+		t.Fatal("expected Connect error")
+	}
+	if !cm.On() {
+		t.Fatal("ConnectionMaster is not On while the connector is still running")
+	}
+
+	cm.Disconnect()
+	if !c.drained.Load() {
+		t.Fatal("Disconnect did not drain connector returned alongside an error")
+	}
+}
+
+func TestConnectionMasterConnectOnceDrainsConnectorAfterError(t *testing.T) {
+	c := &drainConnector{err: errors.New("initial connection failed")}
+	cm := NewConnectionMaster(c)
+	if err := cm.ConnectOnce(context.Background()); err == nil {
+		t.Fatal("expected ConnectOnce error")
+	}
+	if cm.On() {
+		t.Fatal("ConnectionMaster is still On after ConnectOnce error")
+	}
+	if !c.drained.Load() {
+		t.Fatal("ConnectOnce did not drain connector returned alongside an error")
 	}
 }

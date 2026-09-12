@@ -73,16 +73,6 @@ All five are the bison. The components that render them live in
 `UnlockForm.tsx`) and in `site/src/html/bodybuilder.tmpl`, `forms.tmpl`, and
 `mm.tmpl`.
 
-### Marketing site: `wallet/website/site/img/`
-
-| File | Size | Used by |
-| --- | --- | --- |
-| `logo-full-dark.png` | 580x100 | `index.html:319`, bison plus a wordmark in white |
-| `favicon.png` | 64 | `index.html:7` |
-
-`maclogo.png`, `winlogo.png`, and `linuxlogo.png` are OS logos on the download
-buttons, not our branding, and are fine as they are.
-
 ## Deliberately not changing
 
 - `wallet/appserver/site/src/img/softened-icon.png`, `softened-icon-dark.png`,

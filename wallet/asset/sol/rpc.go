@@ -19,6 +19,11 @@ import (
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
+// rpcResponseSizeLimit bounds data accepted from an untrusted RPC endpoint.
+// Solana transaction responses can carry metadata, so retain the same 4 MiB
+// headroom used by the Near client rather than imposing a request-specific cap.
+const rpcResponseSizeLimit = 4 << 20
+
 // errRateLimited marks an RPC call rejected with HTTP 429, independent of
 // whether the response body was a well-formed JSON-RPC error. See
 // isRateLimitedRPCError.
@@ -67,16 +72,19 @@ func (c *rpcClient) call(ctx context.Context, method string, params any, result 
 		return err
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		// Some endpoints (or a proxy/CDN in front of one) return a 429 with a
 		// plain-text or HTML body rather than a JSON-RPC error object, which
 		// would otherwise surface only as an opaque decode failure below and
 		// never be recognized as rate-limited by isRateLimitedRPCError.
 		return fmt.Errorf("%w: %s", errRateLimited, method)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, rpcResponseSizeLimit+1))
+	if err != nil {
+		return err
+	}
+	if len(b) > rpcResponseSizeLimit {
+		return fmt.Errorf("%s response exceeds the %d-byte limit", method, rpcResponseSizeLimit)
 	}
 	var rr struct {
 		Result json.RawMessage `json:"result"`

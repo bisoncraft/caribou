@@ -120,11 +120,17 @@ func (c *ConnectionMaster) Connect(ctx context.Context) (err error) {
 	// Attempt to start the Connector.
 	ctx, cancel := context.WithCancel(ctx)
 	wg, err := c.connector.Connect(ctx)
-	if err != nil {
+	if wg == nil {
 		cancel() // no context leak
-		return fmt.Errorf("connect failure: %w", err)
+		if err != nil {
+			return fmt.Errorf("connect failure: %w", err)
+		}
+		return errors.New("connector returned nil wait group")
 	}
-	// NOTE: A non-nil error currently does not indicate that the Connector is
+	if err != nil {
+		err = fmt.Errorf("connect failure: %w", err)
+	}
+	// NOTE: A non-nil error does not necessarily indicate that the Connector is
 	// not running, only that the initial connection attempt has failed. As long
 	// as the WaitGroup is non-nil we need to wait on it. We return the error so
 	// that the caller may decide to stop it or wait (see ConnectOnce).
