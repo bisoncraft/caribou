@@ -155,10 +155,13 @@ var electrumWalletDefinition = &asset.WalletDefinition{
 // CreateElectrumWallet creates the on-disk btcwallet database for a NativeWallet
 // of the chain described by cc — the same database serves the electrum and SPV
 // wallet types. No chain backend is started here. Shared by the btc and ltc
-// asset packages.
-func CreateElectrumWallet(cc ChainConfig, privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32) error {
+// asset packages. opts are forwarded to the underlying loader; production
+// callers should leave them empty (default scrypt params), tests may pass
+// wallet.WithScryptOptions(&waddrmgr.FastScryptOptions) to avoid paying the
+// full KDF cost per wallet.
+func CreateElectrumWallet(cc ChainConfig, privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, opts ...wallet.LoaderOption) error {
 
-	loader := wallet.NewLoader(cc.NetParams, walletDir, true, dbTimeout, 0) // recovery_window=0; see Connect
+	loader := wallet.NewLoader(cc.NetParams, walletDir, true, dbTimeout, 0, opts...) // recovery_window=0; see Connect
 	pubPass := []byte(wallet.InsecurePubPassphrase)
 
 	btcw, err := loader.CreateNewWallet(pubPass, privPass, seed, bday)
@@ -933,6 +936,9 @@ func (w *NativeWallet) WalletTransaction(ctx context.Context, txID string) (*txd
 			return tx, nil
 		}
 	}
+	if w.btcw == nil {
+		return nil, errors.New("native: wallet not connected")
+	}
 
 	// Fall through to wallet database lookup.
 	txHash, err := chainhash.NewHashFromStr(txID)
@@ -1097,9 +1103,12 @@ func (w *NativeWallet) handleUnminedTxChange(ctx context.Context) {
 // balance does not depend on this — 0-conf outputs already count as available
 // (see Balance) — so this is purely about timely confirmation status. The loop
 // is idle when there are no pending txs.
+// pendingTxLoopInterval is a var, not a const, so tests can shorten it and
+// observe a tick without a multi-second real-time wait.
+var pendingTxLoopInterval = 5 * time.Second
+
 func (w *NativeWallet) pendingTxLoop(ctx context.Context) {
-	const interval = 5 * time.Second
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(pendingTxLoopInterval)
 	defer ticker.Stop()
 	for {
 		select {

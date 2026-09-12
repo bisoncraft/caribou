@@ -11,8 +11,44 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg"
 )
+
+func TestNativeWalletSettingsAndPeerConversion(t *testing.T) {
+	cc := btcElectrumChainConfig(&chaincfg.MainNetParams)
+	w := NewNativeWallet(cc, &asset.WalletConfig{Settings: map[string]string{
+		"recoverywindow":     "12",
+		"externalquietdepth": "3",
+		"sweepinterval":      "4",
+	}}, tLogger)
+	if w.recoveryWindow != 12 || w.watchDepths != [2]int32{3, 4} {
+		t.Fatalf("wallet settings = %d, %v", w.recoveryWindow, w.watchDepths)
+	}
+	peers := walletPeersToAsset([]wallet.Peer{
+		{Addr: "default", Connected: true, Source: wallet.PeerDefault},
+		{Addr: "user", Source: wallet.PeerUserAdded},
+		{Addr: "found", Source: wallet.PeerSource(99)},
+	})
+	if len(peers) != 3 || peers[0].Source != asset.WalletDefault || peers[1].Source != asset.UserAdded || peers[2].Source != asset.Discovered {
+		t.Fatalf("converted peers = %+v", peers)
+	}
+	if walletPeersToAsset(nil) != nil {
+		t.Fatal("nil peers did not remain nil")
+	}
+}
+
+func TestNativeWalletInvalidSettings(t *testing.T) {
+	cc := btcElectrumChainConfig(&chaincfg.MainNetParams)
+	w := NewNativeWallet(cc, &asset.WalletConfig{Settings: map[string]string{
+		"recoverywindow":     "invalid",
+		"externalquietdepth": "invalid",
+		"sweepinterval":      "invalid",
+	}}, tLogger)
+	if w.recoveryWindow != cc.RecoveryWindow || w.watchDepths != [2]int32{} {
+		t.Fatalf("wallet settings = %d, %v", w.recoveryWindow, w.watchDepths)
+	}
+}
 
 // TestBlockNumberFromHeight guards the unmined-sentinel overflow: wtxmgr returns
 // Block.Height == -1 for an unmined tx, and a raw uint64(-1) is ~1.8e19. That

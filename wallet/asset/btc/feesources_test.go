@@ -1,3 +1,5 @@
+//go:build !harness
+
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
@@ -55,6 +57,60 @@ func TestFeeSources(t *testing.T) {
 		// wantPathContains, if set, asserts the request path.
 		wantPathContains string
 	}{{
+		name:   "blockstream target-2 estimate rounds and floors",
+		src:    BlockstreamSource("blockstream", "https://blockstream.info/api", 1),
+		status: http.StatusOK,
+		body:   `{"2":0.2}`,
+		want:   1,
+	}, {
+		name:    "blockstream missing target-2 estimate is error",
+		src:     BlockstreamSource("blockstream", "https://blockstream.info/api", 1),
+		status:  http.StatusOK,
+		body:    `{"1":2}`,
+		wantErr: true,
+	}, {
+		name:    "mempool rate limit backs off",
+		src:     MempoolSpaceSource("mempool", "https://mempool.space", 1),
+		status:  http.StatusTooManyRequests,
+		body:    `busy`,
+		wantErr: true,
+	}, {
+		name:    "blockcypher rate limit backs off",
+		src:     BlockcypherSource("btc", 1),
+		status:  http.StatusTooManyRequests,
+		body:    `busy`,
+		wantErr: true,
+	}, {
+		name:    "blockchair payment required backs off",
+		src:     BlockchairSource("bitcoin", 1),
+		status:  http.StatusPaymentRequired,
+		body:    `busy`,
+		wantErr: true,
+	}, {
+		name:    "blockchair service unavailable backs off",
+		src:     BlockchairSource("bitcoin", 1),
+		status:  http.StatusServiceUnavailable,
+		body:    `busy`,
+		wantErr: true,
+	}, {
+		name:    "mempool server error propagates",
+		src:     MempoolSpaceSource("mempool", "https://mempool.space", 1),
+		status:  http.StatusInternalServerError,
+		body:    `busy`,
+		wantErr: true,
+	}, {
+		name:    "blockcypher server error propagates",
+		src:     BlockcypherSource("btc", 1),
+		status:  http.StatusInternalServerError,
+		body:    `busy`,
+		wantErr: true,
+	}, {
+		name:    "blockchair gateway overload backs off",
+		src:     BlockchairSource("bitcoin", 1),
+		status:  430,
+		body:    `busy`,
+		wantErr: true,
+	}, {
 		name:   "mempool.space fastestFee",
 		src:    MempoolSpaceSource("mempool.space", "https://mempool.space", 1),
 		status: http.StatusOK,
