@@ -273,12 +273,13 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 		return err
 	}
 
-	// A successor whose tip CONFLICTS at our height (a verified-divergence
-	// tie) needs forced reconciliation: the passive path keeps first-seen
-	// on equal work, but this node's histories reference ITS chain — the
-	// store must follow or replayed confirmed entries would bind to the
-	// wrong block hashes. Rewind and refill from the successor via the
-	// standard reorg-recovery catch-up, publishing the disconnects.
+	// A successor whose tip CONFLICTS at our height (the winning side of a
+	// verified divergence) needs forced reconciliation: the passive path
+	// keeps first-seen on equal work, but this node's histories reference
+	// ITS chain — the store must follow or replayed confirmed entries
+	// would bind to the wrong block hashes. Rewind to the fork point and
+	// refill from the successor via the standard reorg-recovery catch-up,
+	// publishing the disconnects.
 	//
 	// The exit test compares the store against the header the server
 	// serves NOW — the snapshot in `tip` only short-circuits the common
@@ -301,20 +302,7 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 		return fmt.Errorf("electrum: successor tip header: %w", err)
 	}
 	claimed := n.headers.headerHash(&tipHdr)
-	fetch := func(startHeight, count int32) ([]byte, int, error) {
-		batch, err := node.BlockHeaders(n.ctx, startHeight, int(count))
-		if err != nil {
-			return nil, 0, err
-		}
-		if batch.Count == 0 {
-			return nil, 0, nil
-		}
-		raw, err := hex.DecodeString(batch.HexConcat)
-		if err != nil {
-			return nil, 0, err
-		}
-		return raw, batch.Count, nil
-	}
+	fetch := nodeFetcher(n.ctx, node)
 	for round := 0; n.ctx.Err() == nil && tip.Height == n.headers.Tip() &&
 		n.headers.TipHash() != claimed; round++ {
 		raw, count, err := fetch(tip.Height, 1)
@@ -340,7 +328,7 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 				"height %d after %d reconcile rounds",
 				node.Addr(), tip.Height, round)
 		}
-		disc, err := n.headers.Rewind(reorgRewindDepth)
+		disc, _, err := n.rewindToFork(fetch)
 		if err != nil {
 			return fmt.Errorf("electrum: reconcile rewind: %w", err)
 		}

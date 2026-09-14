@@ -6,6 +6,7 @@ package electrum
 
 import (
 	"bytes"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -486,29 +487,33 @@ func TestHeadersAppendOne(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 	mineHeader(next)
-	ok, _, err := h.AppendOne(next)
-	if err != nil {
+	if err := h.AppendOne(next); err != nil {
 		t.Fatalf("AppendOne (good): %v", err)
-	}
-	if !ok {
-		t.Fatal("AppendOne returned false for a connected header")
 	}
 	if h.Tip() != 5 {
 		t.Fatalf("tip should be 5 after AppendOne, got %d", h.Tip())
 	}
 
-	// Feeding an unconnectable header on a chain too short to rewind
-	// must surface an error (the alternative would be silently dropping
-	// data, which would be a bug).
+	// A header that does not link is refused with errHeaderDoesNotConnect
+	// and the store is untouched: the fork is resolved by the catch-up
+	// path against the server's chain, never by a blind rewind here.
 	bad := &wire.BlockHeader{
 		PrevBlock: chainhash.Hash{31: 1}, // garbage
 		Bits:      0x207fffff,
 	}
-	if _, _, err := h.AppendOne(bad); err == nil {
-		t.Fatal("expected error when rewind would underflow")
+	if err := h.AppendOne(bad); !errors.Is(err, errHeaderDoesNotConnect) {
+		t.Fatalf("AppendOne(bad) = %v, want errHeaderDoesNotConnect", err)
+	}
+	if h.Tip() != 5 {
+		t.Fatalf("tip moved to %d on a refused header", h.Tip())
 	}
 }
 
+// TestHeadersReorgRewind: Rewind drops exactly the requested depth, reports
+// the disconnected blocks newest-first, and keeps the rewound headers
+// resolvable by hash at their former heights — the wallet's disconnect
+// handler looks up each orphan's parent, which for all but the deepest
+// orphan is itself an orphan.
 func TestHeadersReorgRewind(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(20, 1)
@@ -516,30 +521,40 @@ func TestHeadersReorgRewind(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	tipBefore := h.Tip()
-	hashAtRewind := chain[tipBefore-int32(reorgRewindDepth)].BlockHash()
+	const depth = 3
+	hashAtRewind := chain[tipBefore-depth].BlockHash()
 
-	bad := &wire.BlockHeader{PrevBlock: chainhash.Hash{31: 1}, Bits: 0x207fffff}
-	ok, disc, err := h.AppendOne(bad)
+	disc, err := h.Rewind(depth)
 	if err != nil {
-		t.Fatalf("AppendOne: %v", err)
-	}
-	if ok {
-		t.Fatal("expected rewind on unconnectable header")
+		t.Fatalf("Rewind: %v", err)
 	}
 	// rewind should surface the disconnected blocks (review2 #1).
-	if len(disc) != reorgRewindDepth {
-		t.Fatalf("expected %d disconnected blocks, got %d", reorgRewindDepth, len(disc))
+	if len(disc) != depth {
+		t.Fatalf("expected %d disconnected blocks, got %d", depth, len(disc))
 	}
 	// Disconnected blocks are newest-first.
 	if disc[0].Height != tipBefore {
 		t.Fatalf("first disconnected height = %d, want %d", disc[0].Height, tipBefore)
 	}
 	// Tip() now reflects the truth: pre-rewind tip minus depth (review2 #2).
-	if got := h.Tip(); got != tipBefore-int32(reorgRewindDepth) {
-		t.Fatalf("post-rewind Tip()=%d, want %d", got, tipBefore-int32(reorgRewindDepth))
+	if got := h.Tip(); got != tipBefore-depth {
+		t.Fatalf("post-rewind Tip()=%d, want %d", got, tipBefore-depth)
 	}
 	if got := h.TipHash(); got != hashAtRewind {
 		t.Fatalf("post-rewind hash mismatch: got %s, want %s", got, hashAtRewind)
+	}
+	for i := range int32(depth) {
+		height := tipBefore - i
+		orphan := chain[height]
+		hash := orphan.BlockHash()
+		gotHeight, got, ok := h.ByHash(&hash)
+		if !ok || gotHeight != height || got.BlockHash() != hash {
+			t.Fatalf("rewound header at %d not resolvable by hash (ok=%v, height=%d)",
+				height, ok, gotHeight)
+		}
+		if h.ByHeight(height) != nil {
+			t.Fatalf("rewound height %d still served by height", height)
+		}
 	}
 
 	// Reconnect with the correct next header for the new tip.
@@ -549,15 +564,42 @@ func TestHeadersReorgRewind(t *testing.T) {
 		Nonce:     12345,
 	}
 	mineHeader(good)
-	ok, _, err = h.AppendOne(good)
-	if err != nil {
+	if err := h.AppendOne(good); err != nil {
 		t.Fatalf("reconnect: %v", err)
 	}
-	if !ok {
-		t.Fatal("expected reconnect to succeed")
-	}
-	if got := h.Tip(); got != tipBefore-int32(reorgRewindDepth)+1 {
+	if got := h.Tip(); got != tipBefore-depth+1 {
 		t.Fatalf("post-reconnect tip wrong: got %d", got)
+	}
+}
+
+// TestHeadersOrphanRetentionBounded: rewound headers are retained for hash
+// lookups only up to maxOrphans, oldest evicted first.
+func TestHeadersOrphanRetentionBounded(t *testing.T) {
+	h, _ := newTestHeaders(t)
+	chain := synthChain(maxOrphans+10, 3)
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	first, err := h.Rewind(5)
+	if err != nil {
+		t.Fatalf("first Rewind: %v", err)
+	}
+	second, err := h.Rewind(maxOrphans)
+	if err != nil {
+		t.Fatalf("second Rewind: %v", err)
+	}
+	for _, d := range first {
+		hash := chainhash.Hash(d.Hash)
+		if _, _, ok := h.ByHash(&hash); ok {
+			t.Fatalf("orphan at %d survived eviction", d.Height)
+		}
+	}
+	for _, d := range second {
+		hash := chainhash.Hash(d.Hash)
+		if height, _, ok := h.ByHash(&hash); !ok || height != d.Height {
+			t.Fatalf("recent orphan at %d not resolvable (ok=%v, height=%d)",
+				d.Height, ok, height)
+		}
 	}
 }
 
@@ -691,5 +733,31 @@ func TestHeadersFilePathLayout(t *testing.T) {
 	want := filepath.Join(dir, "electrum", "btc", "blockchain_headers")
 	if _, err := os.Stat(filepath.Dir(want)); err != nil {
 		t.Fatalf("expected directory %s: %v", filepath.Dir(want), err)
+	}
+}
+
+// TestHeadersAppendBatchInteriorBreak: a batch whose first header links to
+// the tip but which breaks internally is a server fault, not a reorg. It
+// must be refused with an error that reorg recovery does not treat as a fork
+// signal, and the store must be untouched.
+func TestHeadersAppendBatchInteriorBreak(t *testing.T) {
+	h, _ := newTestHeaders(t)
+	chain := synthChain(12, 5)
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:8]), 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	broken := append([]*wire.BlockHeader(nil), chain[8:]...)
+	bad := *broken[2]
+	bad.PrevBlock = chainhash.Hash{31: 7}
+	broken[2] = &bad
+	_, err := h.AppendBatch(8, serializeBatch(t, broken), 0)
+	if err == nil {
+		t.Fatal("interior break accepted")
+	}
+	if errors.Is(err, errHeaderDoesNotConnect) {
+		t.Fatalf("interior break reported as a reorg signal: %v", err)
+	}
+	if h.Tip() != 7 {
+		t.Fatalf("tip = %d after a refused batch, want 7", h.Tip())
 	}
 }

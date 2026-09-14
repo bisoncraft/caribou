@@ -1004,3 +1004,56 @@ func TestLagRotation(t *testing.T) {
 	default:
 	}
 }
+
+// TestSameHeightReorg: the wallet server switching sides of a same-height
+// tie notifies a header at the store's own height with a different hash. The
+// store must follow at once, rewinding exactly the losing block, rather than
+// wait for the next block to fail to link.
+func TestSameHeightReorg(t *testing.T) {
+	f, params := newFakeServer(t, 15)
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:         chainCfg,
+		TrustedServer: f.addr(),
+		DataDir:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer stopAndWait(net_)
+	waitFor(t, "sync", func() bool { return net_.Synced() && net_.Tip() == 14 })
+
+	var discMtx sync.Mutex
+	var disc []DisconnectedBlock
+	go func() {
+		for tc := range net_.TipChangeChan() {
+			discMtx.Lock()
+			disc = append(disc, tc.Disconnected...)
+			discMtx.Unlock()
+		}
+	}()
+
+	oldTip := net_.TipHash()
+	f.Fork(13, 1) // same height, new hash
+	f.mtx.Lock()
+	wantTip := f.chain[14].BlockHash()
+	f.mtx.Unlock()
+	if wantTip == oldTip {
+		t.Fatal("fork setup: tip unchanged")
+	}
+	waitFor(t, "same-height reorg", func() bool {
+		return net_.Tip() == 14 && net_.TipHash() == wantTip
+	})
+	discMtx.Lock()
+	got := append([]DisconnectedBlock(nil), disc...)
+	discMtx.Unlock()
+	if len(got) != 1 || got[0].Height != 14 || got[0].Hash != oldTip {
+		t.Fatalf("disconnected = %+v, want exactly the old block 14", got)
+	}
+}

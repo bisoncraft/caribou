@@ -142,7 +142,15 @@ func TestHeadersDashRejectsSha256dLinkage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := h.AppendBatch(0, raw.Bytes(), 0); !errors.Is(err, errHeaderDoesNotConnect) {
-		t.Fatalf("AppendBatch err = %v, want errHeaderDoesNotConnect", err)
+	// The break is inside the batch (h0 itself is genesis), which is a
+	// server fault rather than a reorg signal: refused outright, nothing
+	// appended.
+	if _, err := h.AppendBatch(0, raw.Bytes(), 0); err == nil {
+		t.Fatal("sha256d-linked batch accepted")
+	} else if errors.Is(err, errHeaderDoesNotConnect) {
+		t.Fatalf("interior link break reported as a reorg signal: %v", err)
+	}
+	if h.Tip() != -1 {
+		t.Fatalf("tip = %d after a refused batch, want -1", h.Tip())
 	}
 }

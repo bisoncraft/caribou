@@ -24,11 +24,22 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// reorgRewindDepth controls how many headers we drop from our tip on each
-// step when an incoming header fails to connect. The value matches the
-// upstream electrum client and is large enough to absorb every reorg observed
-// in practice on BTC and LTC in a single step.
+// reorgRewindDepth is the search window, in headers below the tip, that
+// reorg recovery compares against the server's chain when an incoming header
+// fails to connect. The store rewinds exactly to the highest header the two
+// chains share within the window; a window with no shared header rewinds
+// whole and the search repeats from the lowered tip. The value matches the
+// upstream electrum client and covers every reorg observed in practice on BTC
+// and LTC in a single step.
 const reorgRewindDepth = 8
+
+// maxOrphans bounds the headers retained after a rewind. A consumer rolling
+// back a reorg resolves each disconnected block's parent by hash, and for
+// every orphan but the deepest that parent is itself an orphan the store no
+// longer serves; retaining them keeps the rollback resolvable. Reorgs on BTC
+// and LTC are a few blocks deep, so the bound is generous, and the memory is
+// a few KiB.
+const maxOrphans = 64
 
 // maxReorgDepth bounds how far catchUp will rewind, in total, chasing a fork
 // point during reorg recovery. It's far deeper than any reorg seen on BTC/LTC
@@ -37,10 +48,11 @@ const reorgRewindDepth = 8
 // unboundedly.
 const maxReorgDepth = 200
 
-// errHeaderDoesNotConnect is returned (wrapped) by AppendBatch when the first
-// header of a batch fails to link to the current tip. catchUp treats it as a
-// reorg signal: the server's chain diverges below our tip, so it rewinds and
-// retries rather than aborting the sync.
+// errHeaderDoesNotConnect is returned (wrapped) by AppendBatch and AppendOne
+// when the first header fails to link to the current tip. catchUp treats it
+// as a reorg signal: the server's chain diverges at or below our tip, so it
+// rewinds to the fork and retries rather than aborting the sync. A break
+// INSIDE a batch is a different error: the server contradicts itself.
 var errHeaderDoesNotConnect = errors.New("electrum: header does not connect")
 
 // recentPoWWindow is the number of recent headers (counting back from the
@@ -79,6 +91,18 @@ type Headers struct {
 	mu       sync.RWMutex
 	byHeight map[int32]*wire.BlockHeader
 	byHash   map[chainhash.Hash]int32
+
+	// orphans retains recently rewound headers, keyed by hash, so ByHash can
+	// still resolve them for consumers rolling back a reorg (see maxOrphans).
+	// orphanOrder is the insertion order used for eviction.
+	orphans     map[chainhash.Hash]orphanedHeader
+	orphanOrder []chainhash.Hash
+}
+
+// orphanedHeader is a rewound header and the height it occupied.
+type orphanedHeader struct {
+	height int32
+	hdr    *wire.BlockHeader
 }
 
 // NewHeaders constructs a Headers backed by dir/electrum/<chain>/. The
@@ -102,6 +126,7 @@ func NewHeaders(cfg *ChainConfig, dataDir string) (*Headers, error) {
 		filePath: filepath.Join(dir, headerFileName),
 		byHeight: make(map[int32]*wire.BlockHeader, 4096),
 		byHash:   make(map[chainhash.Hash]int32, 4096),
+		orphans:  make(map[chainhash.Hash]orphanedHeader),
 	}
 	// A non-zero StartHeight skips the linkage check for its first header
 	// (there is no parent in the store), so its identity MUST be pinned by
@@ -151,15 +176,18 @@ func (h *Headers) ByHeight(height int32) *wire.BlockHeader {
 }
 
 // ByHash returns the height and header for a given block hash, and ok=false
-// if the hash is unknown.
+// if the hash is unknown. Headers rewound by a recent reorg still resolve
+// (with the height they occupied) while retained; see maxOrphans.
 func (h *Headers) ByHash(hash *chainhash.Hash) (int32, *wire.BlockHeader, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	height, ok := h.byHash[*hash]
-	if !ok {
-		return 0, nil, false
+	if height, ok := h.byHash[*hash]; ok {
+		return height, h.byHeight[height], true
 	}
-	return height, h.byHeight[height], true
+	if o, ok := h.orphans[*hash]; ok {
+		return o.height, o.hdr, true
+	}
+	return 0, nil, false
 }
 
 // headerHash returns the chain's canonical block-header hash (block identity).
@@ -225,12 +253,21 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 	}
 	for i, hdr := range headers {
 		height := startHeight + int32(i)
-		if h.anchoredStart(height) {
+		switch {
+		case h.anchoredStart(height):
 			// First header of a checkpoint-anchored store: no parent
 			// to link against; validateCheckpoint below pins it.
-		} else if hdr.PrevBlock != prevHash {
+		case hdr.PrevBlock != prevHash && i == 0:
 			return 0, fmt.Errorf("%w at %d: prev %s, want %s",
 				errHeaderDoesNotConnect, height, hdr.PrevBlock, prevHash)
+		case hdr.PrevBlock != prevHash:
+			// A break inside the batch is not a reorg signal — the
+			// batch links to our tip and then contradicts itself — so
+			// it must not wrap errHeaderDoesNotConnect, or reorg
+			// recovery would rewind canonical blocks chasing a fork
+			// that does not exist.
+			return 0, fmt.Errorf("electrum: header batch does not link at %d: "+
+				"prev %s, want %s", height, hdr.PrevBlock, prevHash)
 		}
 		if err := h.validateCheckpoint(height, hdr); err != nil {
 			return 0, err
@@ -273,57 +310,49 @@ func (h *Headers) shouldCheckPoW(height, tipHint int32) bool {
 
 // AppendOne appends a single header that must connect to the current tip.
 //
-// Return values:
-//   - connected=true, disconnected=nil, err=nil — header appended cleanly.
-//   - connected=false, disconnected!=nil, err=nil — header did NOT connect;
-//     a reorg rewind was performed and the caller should expect a fresh
-//     headers subscription notification to bring us to the new chain. The
-//     disconnected slice (newest-first) is what was rolled back, so the
-//     caller can surface BlockDisconnected events.
-//   - connected=false, disconnected=nil, err!=nil — fatal: write/persist
-//     failure or PoW violation. The chain is left untouched.
-func (h *Headers) AppendOne(hdr *wire.BlockHeader) (connected bool, disconnected []DisconnectedBlock, err error) {
+// A header that does not link to the tip returns an error wrapping
+// errHeaderDoesNotConnect and leaves the store untouched: the server's chain
+// diverges at or below the tip, and the caller resolves the fork through the
+// catch-up path, which locates the fork point against the server's chain
+// instead of rewinding blindly. Any other error is fatal — a write/persist
+// failure or a PoW violation — and also leaves the chain untouched.
+func (h *Headers) AppendOne(hdr *wire.BlockHeader) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	tip := h.tip.Load()
 	prevHash, err := h.prevHashAt(tip + 1)
 	if err != nil {
-		return false, nil, err
+		return err
 	}
 	if hdr.PrevBlock != prevHash && !h.anchoredStart(tip+1) {
-		log.Debugf("electrum: incoming header at %d does not connect (prev %s, want %s); rewinding %d",
-			tip+1, hdr.PrevBlock, prevHash, reorgRewindDepth)
-		disc, err := h.rewindLocked(reorgRewindDepth)
-		if err != nil {
-			return false, nil, err
-		}
-		return false, disc, nil
+		return fmt.Errorf("%w at %d: prev %s, want %s",
+			errHeaderDoesNotConnect, tip+1, hdr.PrevBlock, prevHash)
 	}
 	newHeight := tip + 1
 	if err := h.validateCheckpoint(newHeight, hdr); err != nil {
-		return false, nil, err
+		return err
 	}
 	// AppendOne is the tip-update path: the incoming header is the new
 	// chain tip. Always run per-header PoW here regardless of any
 	// caller-side tipHint logic — this is the strongest cheap signal we
 	// have that the new tip is honest.
 	if err := h.validateRetargetLocked(newHeight, hdr, nil, 0); err != nil {
-		return false, nil, err
+		return err
 	}
 	if err := h.checkPoW(hdr); err != nil {
-		return false, nil, fmt.Errorf("electrum: header at %d: %w", newHeight, err)
+		return fmt.Errorf("electrum: header at %d: %w", newHeight, err)
 	}
 	var buf bytes.Buffer
 	if err := hdr.Serialize(&buf); err != nil {
-		return false, nil, err
+		return err
 	}
 	if err := h.appendToFile(buf.Bytes()); err != nil {
-		return false, nil, err
+		return err
 	}
 	h.byHeight[newHeight] = hdr
 	h.byHash[h.headerHash(hdr)] = newHeight
 	h.tip.Store(newHeight)
-	return true, nil, nil
+	return nil
 }
 
 // VerifyAll walks the in-memory chain backwards from tip to StartHeight,
@@ -348,7 +377,8 @@ func (h *Headers) VerifyAll() error {
 
 // Rewind drops the top `depth` headers and returns the disconnected blocks
 // (newest-first). It's the locked wrapper around rewindLocked used by reorg
-// recovery in catchUp.
+// recovery (Network.rewindToFork). The dropped headers stay resolvable by
+// hash for a while; see maxOrphans.
 func (h *Headers) Rewind(depth int32) ([]DisconnectedBlock, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -394,12 +424,27 @@ func (h *Headers) rewindLocked(depth int32) ([]DisconnectedBlock, error) {
 		height := tip - int32(i)
 		hdr := h.byHeight[height]
 		if hdr != nil {
-			delete(h.byHash, h.headerHash(hdr))
+			hash := h.headerHash(hdr)
+			delete(h.byHash, hash)
+			h.retainOrphanLocked(hash, height, hdr)
 		}
 		delete(h.byHeight, height)
 	}
 	h.tip.Store(tip - depth)
 	return disc, nil
+}
+
+// retainOrphanLocked records a rewound header for ByHash lookups, evicting
+// the oldest retained header past maxOrphans. The caller must hold h.mu.
+func (h *Headers) retainOrphanLocked(hash chainhash.Hash, height int32, hdr *wire.BlockHeader) {
+	if _, ok := h.orphans[hash]; !ok {
+		h.orphanOrder = append(h.orphanOrder, hash)
+	}
+	h.orphans[hash] = orphanedHeader{height: height, hdr: hdr}
+	for len(h.orphanOrder) > maxOrphans {
+		delete(h.orphans, h.orphanOrder[0])
+		h.orphanOrder = h.orphanOrder[1:]
+	}
 }
 
 // parseBatch deserializes a concatenated raw header batch.

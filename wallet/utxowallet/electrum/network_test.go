@@ -7,9 +7,11 @@ package electrum
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -37,11 +39,72 @@ func forkedChain(forkAt, lenA, lenB int) (a, b []*wire.BlockHeader) {
 	return a, b
 }
 
+// TestCatchUpFromExactFork: a reorg rewinds exactly to the fork point — only
+// the orphaned blocks are disconnected, never a blind window's worth — and
+// the orphans stay resolvable by hash so a consumer's rollback can look up
+// each one's parent.
+func TestCatchUpFromExactFork(t *testing.T) {
+	const forkAt, lenA, lenB = 27, 30, 35
+	a, b := forkedChain(forkAt, lenA, lenB)
+
+	h, _ := newTestHeaders(t)
+	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+		t.Fatalf("load chain A: %v", err)
+	}
+	n := &Network{
+		cfg:     &Config{Chain: testChainConfig(), HeaderBatchSize: 5},
+		headers: h,
+	}
+	fetch := func(start, count int32) ([]byte, int, error) {
+		end := min(int(start)+int(count), len(b))
+		if int(start) >= end {
+			return nil, 0, nil
+		}
+		return serializeBatch(t, b[start:end]), end - int(start), nil
+	}
+
+	target := int32(lenB - 1)
+	disc, err := n.catchUpFrom(target, fetch)
+	if err != nil {
+		t.Fatalf("catchUpFrom: %v", err)
+	}
+	if h.Tip() != target {
+		t.Fatalf("tip after reorg = %d, want %d", h.Tip(), target)
+	}
+	// Heights 27..29 were orphaned; nothing below the fork moves.
+	wantDisc := []int32{29, 28, 27}
+	if len(disc) != len(wantDisc) {
+		t.Fatalf("disconnected %d blocks, want exactly the %d orphans", len(disc), len(wantDisc))
+	}
+	for i, want := range wantDisc {
+		if disc[i].Height != want || disc[i].Hash != a[want].BlockHash() {
+			t.Fatalf("disc[%d] = height %d hash %x, want A's block %d", i,
+				disc[i].Height, disc[i].Hash, want)
+		}
+	}
+	if got := h.byHeight[forkAt-1].BlockHash(); got != a[forkAt-1].BlockHash() {
+		t.Fatalf("header below the fork replaced")
+	}
+	if got := h.byHeight[forkAt].BlockHash(); got != b[forkAt].BlockHash() {
+		t.Fatalf("header at fork height %d = %s, want B's %s", forkAt, got, b[forkAt].BlockHash())
+	}
+	// A rollback consumer resolves each orphan's parent by hash; for all but
+	// the deepest orphan that parent is itself an orphan.
+	for _, d := range disc[:len(disc)-1] {
+		parent := a[d.Height-1].BlockHash()
+		if height, _, ok := h.ByHash(&parent); !ok || height != d.Height-1 {
+			t.Fatalf("orphan parent at %d not resolvable (ok=%v, height=%d)",
+				d.Height-1, ok, height)
+		}
+	}
+}
+
 // TestCatchUpFromDeepReorg is the regression for review #6: a reorg deeper than
-// a single reorgRewindDepth step must self-heal rather than stall. We load
+// a single reorgRewindDepth window must self-heal rather than stall. We load
 // chain A, then drive catchUpFrom against a fork that diverges 9 blocks below
-// our tip (deeper than one 8-block rewind) and verify the loop rewinds in
-// steps, adopts the new chain, and reports the disconnected blocks newest-first.
+// our tip (deeper than one 8-block search window) and verify the loop searches
+// window by window, adopts the new chain, and reports exactly the orphaned
+// blocks newest-first.
 func TestCatchUpFromDeepReorg(t *testing.T) {
 	const forkAt, lenA, lenB = 20, 30, 35
 	a, b := forkedChain(forkAt, lenA, lenB)
@@ -79,16 +142,18 @@ func TestCatchUpFromDeepReorg(t *testing.T) {
 	if got := h.byHeight[forkAt].BlockHash(); got != b[forkAt].BlockHash() {
 		t.Fatalf("header at fork height %d = %s, want B's %s", forkAt, got, b[forkAt].BlockHash())
 	}
-	// Reorg was 9 blocks deep (tip 29 down to fork 20), so two 8-block
-	// rewind steps (16 blocks) were taken: heights 29..14 disconnected.
-	if len(disc) != 16 {
-		t.Fatalf("disconnected count = %d, want 16", len(disc))
+	// The reorg was 10 blocks deep (tip 29 down to the first divergent
+	// block at 20). The first 8-block window (22..29) shares nothing with
+	// B and rewinds whole; the second (14..21) matches at 19, so the loop
+	// rewinds exactly two more. Only the orphans are disconnected.
+	if len(disc) != lenA-forkAt {
+		t.Fatalf("disconnected count = %d, want %d", len(disc), lenA-forkAt)
 	}
 	if disc[0].Height != lenA-1 {
 		t.Fatalf("first disconnected height = %d, want %d (newest-first)", disc[0].Height, lenA-1)
 	}
-	if disc[len(disc)-1].Height != lenA-1-15 {
-		t.Fatalf("last disconnected height = %d, want %d", disc[len(disc)-1].Height, lenA-1-15)
+	if disc[len(disc)-1].Height != forkAt {
+		t.Fatalf("last disconnected height = %d, want the fork height %d", disc[len(disc)-1].Height, forkAt)
 	}
 	// The disconnected blocks must be the original chain A's blocks.
 	if disc[0].Hash != a[lenA-1].BlockHash() {
@@ -389,5 +454,45 @@ func TestNetworkStopWithoutStart(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("WaitForShutdown deadlocked after Stop-without-Start")
+	}
+}
+
+// TestCatchUpFromNoFork: a server that serves the store's own tip header and
+// then a next header that does not link to it is faulty, not reorged. The
+// catch-up must fail without rewinding a single canonical block; a blind
+// one-block step here disconnected canonical blocks until the reorg budget
+// was spent, on every retry.
+func TestCatchUpFromNoFork(t *testing.T) {
+	a := synthChain(20, 1)
+	h, _ := newTestHeaders(t)
+	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+		t.Fatalf("load chain A: %v", err)
+	}
+	n := &Network{
+		cfg:     &Config{Chain: testChainConfig(), HeaderBatchSize: 5},
+		headers: h,
+	}
+	// Serves A faithfully below and at the tip, then a header at 20 whose
+	// parent is nothing we have.
+	orphan := &wire.BlockHeader{PrevBlock: chainhash.Hash{31: 9}, Bits: 0x207fffff}
+	mineHeader(orphan)
+	served := append(append([]*wire.BlockHeader(nil), a...), orphan)
+	fetch := func(start, count int32) ([]byte, int, error) {
+		end := min(int(start)+int(count), len(served))
+		if int(start) >= end {
+			return nil, 0, nil
+		}
+		return serializeBatch(t, served[start:end]), end - int(start), nil
+	}
+
+	disc, err := n.catchUpFrom(20, fetch)
+	if !errors.Is(err, errForkNotFound) {
+		t.Fatalf("catchUpFrom = %v, want errForkNotFound", err)
+	}
+	if len(disc) != 0 {
+		t.Fatalf("disconnected %d canonical blocks chasing a fork that does not exist", len(disc))
+	}
+	if h.Tip() != 19 || h.byHeight[19].BlockHash() != a[19].BlockHash() {
+		t.Fatalf("store moved: tip %d", h.Tip())
 	}
 }
