@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -179,5 +181,49 @@ func TestOversizedFrameDropsConnection(t *testing.T) {
 	case <-node.Done():
 	case <-time.After(10 * time.Second):
 		t.Fatal("connection not dropped after an oversized frame")
+	}
+}
+
+// TestNewNodeHandshakeTimeout: a server that accepts the connection but never
+// answers the version handshake must not hold NewNode open on the network
+// context — elections hold the rotation mutex across it.
+func TestNewNodeHandshakeTimeout(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer lis.Close()
+	var parkedMtx sync.Mutex
+	var parked []net.Conn
+	defer func() {
+		parkedMtx.Lock()
+		defer parkedMtx.Unlock()
+		for _, c := range parked {
+			c.Close()
+		}
+	}()
+	go func() {
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			parkedMtx.Lock()
+			parked = append(parked, conn) // never answered
+			parkedMtx.Unlock()
+		}
+	}()
+
+	old := handshakeTimeout
+	handshakeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { handshakeTimeout = old })
+
+	start := time.Now()
+	_, err = NewNode(t.Context(), &ServerAddr{Proto: "tcp", Addr: lis.Addr().String()}, "", "")
+	if err == nil {
+		t.Fatal("NewNode succeeded against a silent server")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("NewNode took %v against a silent server; handshake unbounded", elapsed)
 	}
 }

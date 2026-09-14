@@ -127,8 +127,12 @@ func dial(ctx context.Context, addr string, opts *dialOptions) (*Server, error) 
 		return nil, fmt.Errorf("electrum: dial %s: %w", addr, err)
 	}
 	if opts.TLSConfig != nil {
+		// The handshake runs under the dial deadline, not the caller's
+		// context: elections hold the rotation mutex across NewNode, and
+		// a server that accepts the socket but stalls the handshake must
+		// not hold every later rotation hostage on the network's lifetime.
 		tlsConn := tls.Client(conn, opts.TLSConfig)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if err := tlsConn.HandshakeContext(dCtx); err != nil {
 			if cerr := conn.Close(); cerr != nil {
 				log.Warnf("electrum %s: error closing connection after failed TLS handshake: %v", addr, cerr)
 			}
