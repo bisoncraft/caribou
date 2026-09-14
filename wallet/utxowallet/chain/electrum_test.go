@@ -50,6 +50,11 @@ type stubNetwork struct {
 	subscribeHook func(count int, sh string) error
 	subscribeN    int
 
+	// historyHook, if non-nil, is invoked at the top of each GetHistory
+	// call (outside s.mu). Tests use it to land events between the status
+	// processor's baseline read and its history fetch.
+	historyHook func(sh string)
+
 	tipCh        chan *electrum.TipChange
 	scripthashCh chan *electrum.ScripthashStatus
 	done         chan struct{}
@@ -244,6 +249,12 @@ func (s *stubNetwork) SubscribeScripthash(_ context.Context, sh string) (*electr
 func (s *stubNetwork) UnsubscribeScripthash(context.Context, string) {}
 
 func (s *stubNetwork) GetHistory(_ context.Context, sh string) ([]electrum.HistoryEntry, error) {
+	s.mu.Lock()
+	hook := s.historyHook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(sh)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]electrum.HistoryEntry(nil), s.history[sh]...), nil
@@ -1648,5 +1659,260 @@ func TestBuildRelevantTxBindsTxid(t *testing.T) {
 		TxHash: realTx.TxHash().String(), Height: 1,
 	}); err != nil {
 		t.Fatalf("rejected the correct bytes: %v", err)
+	}
+}
+
+// TestElectrumReorgReconfirmsTxs: a transaction confirmed in a block that is
+// reorged out and re-mined in the replacement block at the same height must
+// be re-emitted with the new block. The wallet unconfirms everything from the
+// fork height on BlockDisconnected, and nothing else would re-confirm it: the
+// server's scripthash status hashes txid:height pairs, which are unchanged,
+// so no notification arrives — and the seen baseline would suppress the entry
+// if one did.
+func TestElectrumReorgReconfirmsTxs(t *testing.T) {
+	c, stub := makeClient(t, 6) // heights 0..5
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 4, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+	first, ok := drain(t, c, 1, 2*time.Second)[0].(RelevantTx)
+	if !ok || first.Block == nil || first.Block.Height != 4 {
+		t.Fatalf("initial ntfn = %#v, want RelevantTx at height 4", first)
+	}
+	oldHash4 := first.Block.Hash
+	oldHash5 := stub.HeaderByHeight(5).BlockHash()
+
+	// Reorg: blocks 4 and 5 are replaced, and the tx is re-mined in the
+	// new block 4 (the history is unchanged).
+	stub.rewindTo(t, 3)
+	stub.addBlock(t, time.Unix(1_700_002_000, 0)) // new 4
+	stub.addBlock(t, time.Unix(1_700_002_060, 0)) // new 5
+	stub.tipCh <- &electrum.TipChange{
+		Disconnected: []electrum.DisconnectedBlock{
+			{Hash: oldHash5, Height: 5, Time: 1_700_000_300},
+			{Hash: oldHash4, Height: 4, Time: 1_700_000_240},
+		},
+	}
+
+	got := drain(t, c, 5, 2*time.Second)
+	for i, want := range []int32{5, 4} {
+		if bd, ok := got[i].(BlockDisconnected); !ok || bd.Height != want {
+			t.Fatalf("got[%d] = %#v, want BlockDisconnected %d", i, got[i], want)
+		}
+	}
+	for i, want := range []int32{4, 5} {
+		if bc, ok := got[2+i].(BlockConnected); !ok || bc.Height != want {
+			t.Fatalf("got[%d] = %#v, want BlockConnected %d", 2+i, got[2+i], want)
+		}
+	}
+	rt, ok := got[4].(RelevantTx)
+	if !ok {
+		t.Fatalf("got[4] = %T, want the re-confirmed RelevantTx", got[4])
+	}
+	newHdr := stub.HeaderByHeight(4)
+	if rt.Block == nil || rt.Block.Height != 4 || rt.Block.Hash != newHdr.BlockHash() {
+		t.Fatalf("re-emitted RelevantTx.Block = %+v, want the new block at 4 (%s)",
+			rt.Block, newHdr.BlockHash())
+	}
+	if rt.Block.Hash == oldHash4 {
+		t.Fatal("re-emitted RelevantTx bound to the orphaned block")
+	}
+
+	// The refreshed baseline suppresses a duplicate on the next status diff.
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed again"}
+	assertNoNtfn(t, c, 300*time.Millisecond)
+}
+
+// TestElectrumReorgUnconfirmsDroppedTx: a transaction whose block is reorged
+// out and which returns to the mempool is re-emitted unconfirmed.
+func TestElectrumReorgUnconfirmsDroppedTx(t *testing.T) {
+	c, stub := makeClient(t, 6)
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 5, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+	first, ok := drain(t, c, 1, 2*time.Second)[0].(RelevantTx)
+	if !ok || first.Block == nil || first.Block.Height != 5 {
+		t.Fatalf("initial ntfn = %#v, want RelevantTx at height 5", first)
+	}
+	oldHash5 := first.Block.Hash
+
+	// The replacement block 5 does not carry the tx; it is back in the
+	// mempool.
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 0, TxHash: txid}}
+	stub.mu.Unlock()
+	stub.rewindTo(t, 4)
+	stub.addBlock(t, time.Unix(1_700_002_000, 0)) // new 5
+	stub.tipCh <- &electrum.TipChange{
+		Disconnected: []electrum.DisconnectedBlock{{Hash: oldHash5, Height: 5, Time: 1_700_000_300}},
+	}
+
+	got := drain(t, c, 3, 2*time.Second)
+	if bd, ok := got[0].(BlockDisconnected); !ok || bd.Height != 5 {
+		t.Fatalf("got[0] = %#v, want BlockDisconnected 5", got[0])
+	}
+	if bc, ok := got[1].(BlockConnected); !ok || bc.Height != 5 {
+		t.Fatalf("got[1] = %#v, want BlockConnected 5", got[1])
+	}
+	rt, ok := got[2].(RelevantTx)
+	if !ok || rt.Block != nil || rt.TxRecord == nil || rt.TxRecord.Hash.String() != txid {
+		t.Fatalf("got[2] = %#v, want the tx re-emitted unconfirmed", got[2])
+	}
+}
+
+// TestElectrumReorgOvertakesStatusFetch: a reorg that lands while the status
+// processor is between its baseline read and its history fetch must not let
+// the processor commit a baseline built against the replaced headers. The
+// processor was holding the entry's lock across the fetch, so the reorg
+// invalidation could not touch the entry, and its post-fork commit then
+// suppressed the re-mined transaction forever.
+func TestElectrumReorgOvertakesStatusFetch(t *testing.T) {
+	c, stub := makeClient(t, 6) // heights 0..5
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 4, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	oldHash4 := stub.HeaderByHeight(4).BlockHash()
+	oldHash5 := stub.HeaderByHeight(5).BlockHash()
+
+	// On the processor's first fetch, reorg blocks 4 and 5 (the tx is
+	// re-mined in the new 4) and wait until the client has registered the
+	// reorg before letting the fetch proceed.
+	var once sync.Once
+	stub.mu.Lock()
+	stub.historyHook = func(string) {
+		once.Do(func() {
+			stub.rewindTo(t, 3)
+			stub.addBlock(t, time.Unix(1_700_002_000, 0)) // new 4
+			stub.addBlock(t, time.Unix(1_700_002_060, 0)) // new 5
+			stub.tipCh <- &electrum.TipChange{
+				Disconnected: []electrum.DisconnectedBlock{
+					{Hash: oldHash5, Height: 5, Time: 1_700_000_300},
+					{Hash: oldHash4, Height: 4, Time: 1_700_000_240},
+				},
+			}
+			deadline := time.After(2 * time.Second)
+			for c.reorgGen.Load() == 0 {
+				select {
+				case <-deadline:
+					t.Error("reorg not registered")
+					return
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+		})
+	}
+	stub.mu.Unlock()
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+
+	// Two disconnects, two connects, then the tx — bound to the NEW block
+	// 4. The overtaken pass may emit it a second time; both must be bound
+	// to the new block.
+	got := drain(t, c, 5, 3*time.Second)
+	newHash4 := stub.HeaderByHeight(4).BlockHash()
+	var relevant int
+	for i, n := range got {
+		switch v := n.(type) {
+		case BlockDisconnected, BlockConnected:
+			if i >= 4 {
+				t.Fatalf("got[%d] = %T, want RelevantTx", i, n)
+			}
+		case RelevantTx:
+			relevant++
+			if v.Block == nil || v.Block.Height != 4 || v.Block.Hash != newHash4 {
+				t.Fatalf("got[%d] RelevantTx.Block = %+v, want the new block 4 (%s)",
+					i, v.Block, newHash4)
+			}
+		default:
+			t.Fatalf("got[%d] = %T", i, n)
+		}
+	}
+	if relevant != 1 {
+		t.Fatalf("%d RelevantTx among the first 5 notifications, want 1", relevant)
+	}
+
+	// The committed baseline must carry the tx at height 4 so the next
+	// status diff does not re-emit it, and must not have lost it.
+	waitFor := time.After(2 * time.Second)
+	for {
+		c.addrCacheMtx.Lock()
+		entry := c.addrCache[sh]
+		seen := entry != nil && alreadySeen(entry.lastHistory, txid, 4) && entry.lastStatus != ""
+		c.addrCacheMtx.Unlock()
+		if seen {
+			break
+		}
+		select {
+		case <-waitFor:
+			t.Fatal("baseline never settled with the tx at height 4")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	// Drain any duplicate emission from the re-fetch, then confirm a new
+	// status with unchanged history emits nothing.
+	for {
+		select {
+		case n := <-c.Notifications():
+			if _, ok := n.(RelevantTx); !ok {
+				t.Fatalf("unexpected %T after settle", n)
+			}
+			continue
+		case <-time.After(200 * time.Millisecond):
+		}
+		break
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed again"}
+	assertNoNtfn(t, c, 300*time.Millisecond)
+}
+
+// TestElectrumFailedEmitRetried: a history entry whose emission fails (the
+// raw-tx fetch errors) is parked for retry on the next tip change instead of
+// being dropped until the server's status next changes — which, for a
+// transient failure during a rotation, could be never.
+func TestElectrumFailedEmitRetried(t *testing.T) {
+	c, stub := makeClient(t, 4) // heights 0..3
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 2, TxHash: txid}}
+	// No raw tx registered: the fetch fails.
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+	assertNoNtfn(t, c, 300*time.Millisecond)
+
+	// The server recovers; the next tip change flushes the parked entry.
+	stub.mu.Lock()
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	stub.addBlock(t, time.Unix(1_700_001_000, 0)) // 4
+	stub.pushConnected(t, 4)
+	got := drain(t, c, 2, 2*time.Second)
+	if bc, ok := got[0].(BlockConnected); !ok || bc.Height != 4 {
+		t.Fatalf("got[0] = %#v, want BlockConnected 4", got[0])
+	}
+	rt, ok := got[1].(RelevantTx)
+	if !ok || rt.Block == nil || rt.Block.Height != 2 {
+		t.Fatalf("got[1] = %#v, want the retried RelevantTx at height 2", got[1])
 	}
 }

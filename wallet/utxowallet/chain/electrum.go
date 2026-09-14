@@ -93,6 +93,16 @@ type ElectrumClient struct {
 	dirty     map[string]*electrum.ScripthashStatus
 	dirtyWake chan struct{}
 
+	// reorgMtx guards reorged — scripthashes whose history at or above a
+	// rewound height was invalidated by a reorg and awaits a refresh
+	// against the new chain (see invalidateReorged) — and reorgs, the
+	// recent reorg log the status processor consults to detect a reorg
+	// that landed during its history fetch (see reorgSince).
+	reorgMtx sync.Mutex
+	reorged  map[string]struct{}
+	reorgs   []reorgEvent
+	reorgGen atomic.Uint64
+
 	enqueueNotification chan any
 	dequeueNotification chan any
 	currentBlock        chan *waddrmgr.BlockStamp
@@ -127,6 +137,22 @@ type ElectrumClient struct {
 	// header-store tip, so a suppressed or skipped tip can't leave a gap.
 	lastConnected int32
 }
+
+// reorgEvent records one reorg: the generation it advanced the counter to
+// and its fork height.
+type reorgEvent struct {
+	gen  uint64
+	fork int32
+}
+
+// maxReorgLog bounds the retained reorg events. A status processor's fetch
+// spans one round trip; far fewer reorgs than this can land inside it.
+const maxReorgLog = 32
+
+// maxReorgRefetches bounds how many times the status processor re-fetches a
+// history whose fetch was overtaken by a reorg before handing the scripthash
+// to the tip-change refresh instead.
+const maxReorgRefetches = 2
 
 // scripthashEntry captures per-scripthash state.
 //
@@ -192,6 +218,7 @@ func NewElectrumClient(chainParams *netparams.ChainParams, network ElectrumNetwo
 		chain:       chain,
 		addrCache:   make(map[string]*scripthashEntry),
 		probeCache:  make(map[string]*probeHistory),
+		reorged:     make(map[string]struct{}),
 	}, nil
 }
 
@@ -456,6 +483,12 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 		return
 	}
 	connected := c.applyTip(ev)
+	if len(ev.Disconnected) > 0 {
+		// Disconnected is newest-first; the last entry is the fork
+		// height. Everything confirmed at or above it was in an orphaned
+		// block.
+		c.invalidateReorged(ev.Disconnected[len(ev.Disconnected)-1].Height)
+	}
 	// Review2 #6: a scripthash status may have arrived while these headers
 	// were still in flight. Now that the headers are local and connected,
 	// flush any deferred entries so confirmed txs aren't stuck unmined.
@@ -463,6 +496,7 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 	if connected > 0 {
 		c.flushPending()
 	}
+	c.refreshReorged()
 }
 
 // applyTip processes a single network tip change under connMtx, returning the
@@ -643,28 +677,125 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 		c.addrCacheMtx.Unlock()
 		return nil
 	}
-	prev := append([]electrum.HistoryEntry(nil), entry.lastHistory...)
 	c.addrCacheMtx.Unlock()
 
-	// A discovery probe may have parked this scripthash's history; reuse it
-	// iff its derived status matches the server-reported one (i.e. nothing
-	// changed since the probe), else fetch fresh.
-	hist, ok := c.probedHistory(st.Scripthash, st.Status)
-	if ok {
-		log.Debugf("electrum: status handler using probed history for %s", st.Scripthash)
-	} else {
-		var err error
-		hist, err = c.net.GetHistory(c.ctx, st.Scripthash)
-		if err != nil {
-			return fmt.Errorf("get history: %w", err)
+	for attempt := 0; ; attempt++ {
+		c.addrCacheMtx.Lock()
+		prev := append([]electrum.HistoryEntry(nil), entry.lastHistory...)
+		c.addrCacheMtx.Unlock()
+
+		// The reorg generation is read before the fetch so a reorg that
+		// lands during it is detected at commit: the history was then
+		// judged against headers the reorg may have replaced, and the
+		// wallet's rollback unconfirmed what was emitted.
+		gen := c.reorgGen.Load()
+
+		// A discovery probe may have parked this scripthash's history;
+		// reuse it iff its derived status matches the server-reported one
+		// (i.e. nothing changed since the probe), else fetch fresh.
+		hist, ok := c.probedHistory(st.Scripthash, st.Status)
+		if ok {
+			log.Debugf("electrum: status handler using probed history for %s", st.Scripthash)
+		} else {
+			var err error
+			hist, err = c.net.GetHistory(c.ctx, st.Scripthash)
+			if err != nil {
+				return fmt.Errorf("get history: %w", err)
+			}
+		}
+		emitted, deferred := c.applyHistory(prev, hist)
+
+		// Re-fetch under the lock and confirm it's still the same entry
+		// before committing. A subscribed entry is never deleted today
+		// (the only addrCache delete is the subscribe-failure rollback,
+		// which can't apply to an entry we're already processing), so
+		// this is defense-in-depth: if a future Unsubscribe ever
+		// removes-and-replaces an entry across the GetHistory window, we
+		// skip rather than write our stale-derived result onto a fresh
+		// entry.
+		fork, moved := c.reorgSince(gen)
+		c.addrCacheMtx.Lock()
+		if e, ok := c.addrCache[st.Scripthash]; ok && e == entry {
+			if moved {
+				// Keep only what the reorg could not have touched;
+				// everything from the fork up is re-judged against
+				// the new chain by the next pass.
+				entry.lastHistory = historyBelow(emitted, fork)
+				entry.pending = historyBelow(mergePendingEntries(entry.pending, deferred), fork)
+				entry.lastStatus = ""
+			} else {
+				entry.lastStatus = st.Status
+				entry.lastHistory = emitted
+				entry.pending = mergePendingEntries(entry.pending, deferred)
+			}
+		}
+		c.addrCacheMtx.Unlock()
+		if !moved {
+			return nil
+		}
+		if attempt >= maxReorgRefetches {
+			// Reorgs keep overtaking the fetch; leave the scripthash to
+			// the tip-change refresh, which runs once the chain settles.
+			c.reorgMtx.Lock()
+			c.reorged[st.Scripthash] = struct{}{}
+			c.reorgMtx.Unlock()
+			return nil
+		}
+		log.Debugf("electrum: reorg at %d overtook the history fetch for %s; "+
+			"re-fetching", fork, st.Scripthash)
+	}
+}
+
+// reorgSince reports whether a reorg has landed since generation gen and,
+// if so, the lowest fork height among those that did. A generation older
+// than the retained log is conservatively reported as reorged from the
+// start height.
+func (c *ElectrumClient) reorgSince(gen uint64) (fork int32, moved bool) {
+	if c.reorgGen.Load() == gen {
+		return 0, false
+	}
+	c.reorgMtx.Lock()
+	defer c.reorgMtx.Unlock()
+	if len(c.reorgs) == 0 || c.reorgs[0].gen > gen+1 {
+		return c.net.StartHeight(), true
+	}
+	fork = -1
+	for _, ev := range c.reorgs {
+		if ev.gen > gen && (fork < 0 || ev.fork < fork) {
+			fork = ev.fork
 		}
 	}
+	return fork, fork >= 0
+}
+
+// historyBelow returns the entries confirmed below height, dropping mempool
+// entries too when height is at or below zero (there is nothing below them).
+func historyBelow(entries []electrum.HistoryEntry, height int32) []electrum.HistoryEntry {
+	kept := entries[:0:0]
+	for _, e := range entries {
+		if e.Height < height {
+			kept = append(kept, e)
+		}
+	}
+	return kept
+}
+
+// applyHistory diffs a fresh history against the entries already processed
+// (prev), emits a RelevantTx for each new entry whose block is local, and
+// returns the new carry-forward list (prev's survivors plus what was
+// emitted or skipped) and the entries deferred to pending: those whose
+// header has not arrived, and those whose emission failed (a raw-tx or
+// merkle fetch error), which the next tip change retries. A failed entry
+// left out of both lists would be lost until the server's status next
+// changed — which, for a transient failure during a rotation, could be
+// never. The caller commits both under the entry's locks.
+func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitted, deferred []electrum.HistoryEntry) {
 	// Partition the new entries into "ready to emit" and "deferred until
 	// the header arrives". Already-seen entries are not re-emitted but
 	// stay in the carry-forward list.
 	floor := c.rescanFloor.Load()
-	emitted := make([]electrum.HistoryEntry, 0, len(hist))
-	var deferred, toEmit []electrum.HistoryEntry
+	emitted = make([]electrum.HistoryEntry, 0, len(hist))
+	var toEmit []electrum.HistoryEntry
 	for _, h := range hist {
 		if alreadySeen(prev, h.TxHash, h.Height) {
 			emitted = append(emitted, h)
@@ -690,23 +821,142 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 		toEmit = append(toEmit, h)
 	}
 	// Fetch the new txs' raw bytes concurrently and enqueue them; only the
-	// successfully-emitted ones join lastHistory so failures are retried.
-	emitted = append(emitted, c.emitRelevantTxs(toEmit)...)
-	// Re-fetch under the lock and confirm it's still the same entry before
-	// committing. A subscribed entry is never deleted today (the only
-	// addrCache delete is the subscribe-failure rollback, which can't apply
-	// to an entry we're already processing), so this is defense-in-depth: if
-	// a future Unsubscribe ever removes-and-replaces an entry across the
-	// GetHistory window, we skip rather than write our stale-derived result
-	// onto a fresh entry.
+	// successfully-emitted ones join lastHistory, and the rest are parked
+	// for retry.
+	done := c.emitRelevantTxs(toEmit)
+	emitted = append(emitted, done...)
+	if len(done) < len(toEmit) {
+		ok := make(map[string]struct{}, len(done))
+		for _, e := range done {
+			ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)] = struct{}{}
+		}
+		for _, e := range toEmit {
+			if _, did := ok[fmt.Sprintf("%s|%d", e.TxHash, e.Height)]; !did {
+				deferred = append(deferred, e)
+			}
+		}
+	}
+	return emitted, deferred
+}
+
+// invalidateReorged handles a reorg whose fork height is fork: every
+// scripthash with history confirmed at or above it loses those entries from
+// its seen baseline (and its pending set) and is queued for a refresh
+// against the new chain. The wallet's disconnect handler unconfirms every
+// transaction from the fork height onward; without this, nothing would ever
+// re-confirm them — a block re-mined with the same transactions leaves the
+// scripthash status unchanged (it hashes txid:height pairs), so no
+// notification arrives, and the seen baseline would suppress the entries
+// even if one did.
+func (c *ElectrumClient) invalidateReorged(fork int32) {
+	// Advance the generation first so a status processor mid-fetch sees
+	// the reorg at commit even if it was not subscribed-and-affected at
+	// the time of the scan below.
+	c.reorgMtx.Lock()
+	gen := c.reorgGen.Add(1)
+	c.reorgs = append(c.reorgs, reorgEvent{gen: gen, fork: fork})
+	if len(c.reorgs) > maxReorgLog {
+		c.reorgs = c.reorgs[len(c.reorgs)-maxReorgLog:]
+	}
+	c.reorgMtx.Unlock()
+
+	atOrAbove := func(entries []electrum.HistoryEntry) bool {
+		for _, e := range entries {
+			if e.Height >= fork {
+				return true
+			}
+		}
+		return false
+	}
+
 	c.addrCacheMtx.Lock()
-	if e, ok := c.addrCache[st.Scripthash]; ok && e == entry {
-		entry.lastStatus = st.Status
-		entry.lastHistory = emitted
-		entry.pending = mergePendingEntries(entry.pending, deferred)
+	affected := make(map[string]*scripthashEntry)
+	for sh, entry := range c.addrCache {
+		if atOrAbove(entry.lastHistory) || atOrAbove(entry.pending) {
+			affected[sh] = entry
+		}
 	}
 	c.addrCacheMtx.Unlock()
-	return nil
+	if len(affected) == 0 {
+		return
+	}
+
+	for sh, entry := range affected {
+		entry.proc.Lock()
+		c.addrCacheMtx.Lock()
+		entry.lastHistory = historyBelow(entry.lastHistory, fork)
+		entry.pending = historyBelow(entry.pending, fork)
+		// Clearing the status lets a status notification for the new
+		// chain through the equal-status short circuit, and marks the
+		// entry as awaiting refresh (see refreshReorged).
+		entry.lastStatus = ""
+		c.addrCacheMtx.Unlock()
+		entry.proc.Unlock()
+		c.reorgMtx.Lock()
+		c.reorged[sh] = struct{}{}
+		c.reorgMtx.Unlock()
+	}
+	log.Infof("electrum: reorg at height %d invalidated confirmed history on "+
+		"%d subscribed scripthashes; refreshing", fork, len(affected))
+}
+
+// refreshReorged re-fetches the history of every scripthash queued by
+// invalidateReorged and runs the standard diff against its trimmed baseline,
+// re-emitting transactions on the new chain (with their new block, or as
+// unconfirmed if they fell back to the mempool). Entries whose header is not
+// local yet defer to pending and flush with the next connect. A scripthash
+// already refreshed by a live status notification is skipped; one whose
+// fetch fails stays queued for the next tip change.
+func (c *ElectrumClient) refreshReorged() {
+	c.reorgMtx.Lock()
+	shs := make([]string, 0, len(c.reorged))
+	for sh := range c.reorged {
+		shs = append(shs, sh)
+	}
+	c.reorgMtx.Unlock()
+
+	for _, sh := range shs {
+		c.addrCacheMtx.Lock()
+		entry := c.addrCache[sh]
+		c.addrCacheMtx.Unlock()
+		if entry == nil {
+			c.clearReorged(sh)
+			continue
+		}
+		entry.proc.Lock()
+		c.addrCacheMtx.Lock()
+		if entry.lastStatus != "" {
+			c.addrCacheMtx.Unlock()
+			entry.proc.Unlock()
+			c.clearReorged(sh)
+			continue
+		}
+		prev := append([]electrum.HistoryEntry(nil), entry.lastHistory...)
+		c.addrCacheMtx.Unlock()
+
+		hist, err := c.net.GetHistory(c.ctx, sh)
+		if err != nil {
+			entry.proc.Unlock()
+			log.Debugf("electrum: reorg refresh of %s: get history: %v", sh, err)
+			continue
+		}
+		emitted, deferred := c.applyHistory(prev, hist)
+		c.addrCacheMtx.Lock()
+		if e, ok := c.addrCache[sh]; ok && e == entry {
+			entry.lastStatus = statusFromHistory(hist)
+			entry.lastHistory = emitted
+			entry.pending = mergePendingEntries(entry.pending, deferred)
+		}
+		c.addrCacheMtx.Unlock()
+		entry.proc.Unlock()
+		c.clearReorged(sh)
+	}
+}
+
+func (c *ElectrumClient) clearReorged(sh string) {
+	c.reorgMtx.Lock()
+	delete(c.reorged, sh)
+	c.reorgMtx.Unlock()
 }
 
 // mergePendingEntries adds entries from src into dst, skipping any (txid,
