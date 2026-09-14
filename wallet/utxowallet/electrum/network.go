@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
@@ -94,13 +93,6 @@ type Network struct {
 	// report meaningful sync progress before the local store catches up.
 	serverTipMu sync.RWMutex
 	serverTip   int32
-
-	// spendSuspect is set when an observer presented a conflicting chain
-	// that demonstrated valid work (multi-server phase 2): the wallet
-	// server may be lying, so spend-affecting operations error until a
-	// rotation re-establishes a trusted view. Nothing is surfaced
-	// proactively — the error reaches the user only if they act.
-	spendSuspect atomic.Bool
 
 	// obsMtx guards observers, the live observer connections maintained by
 	// runObservers (observers.go), and obsWalletAddr, the wallet server's
@@ -636,12 +628,6 @@ func (n *Network) GetTransactionVerbose(ctx context.Context, txid string) (*Verb
 
 // Broadcast issues `blockchain.transaction.broadcast`.
 func (n *Network) Broadcast(ctx context.Context, rawTxHex string) (string, error) {
-	if n.spendSuspect.Load() {
-		log.Errorf("electrum: refusing broadcast: chain integrity suspect " +
-			"(conflicting chain with valid work observed); pending rotation")
-		return "", errors.New("electrum: chain integrity suspect (conflicting " +
-			"chain with valid work observed); broadcasts suspended pending rotation")
-	}
 	node, err := n.getNode()
 	if err != nil {
 		return "", err
@@ -1278,7 +1264,7 @@ func (n *Network) watchNode(node *Node) {
 			n.wg.Add(1)
 			go func() {
 				defer n.wg.Done()
-				n.rotate(node, "", "connection lost")
+				n.rotate(node, nil, "connection lost")
 			}()
 			return
 		}

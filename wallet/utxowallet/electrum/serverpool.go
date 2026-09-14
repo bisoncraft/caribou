@@ -448,12 +448,22 @@ func (p *serverPool) recordFailure(addr string) {
 }
 
 // fallbackEligible reports whether the discovered tier may serve as wallet
-// server: every shipped server has been failing continuously for
-// shippedDownWindow. Must be called with mtx held.
+// server: every shipped server is quarantined, or every shipped server has
+// been quarantined or failing continuously for shippedDownWindow. A
+// quarantined server counts as down — it is never re-dialed, so its failure
+// record cannot stay fresh — and an all-quarantined shipped list opens the
+// fallback at once: quarantine is a durable misbehavior verdict, not the
+// transient outage the window exists to wait out. Must be called with mtx
+// held.
 func (p *serverPool) fallbackEligibleLocked(now time.Time) bool {
 	serverHealth.mtx.Lock()
-	allDown := true
+	allDown, allQuarantined := true, true
 	for _, sv := range p.shipped {
+		if e := p.entries[sv.Addr]; e != nil &&
+			(serverHealth.quarantined[sv.Addr] || now.Before(e.QuarantinedUntil)) {
+			continue
+		}
+		allQuarantined = false
 		r := serverHealth.m[sv.Addr]
 		if r == nil || now.Sub(r.lastFailure) >= serverFailureBackoff {
 			allDown = false
@@ -468,7 +478,7 @@ func (p *serverPool) fallbackEligibleLocked(now time.Time) bool {
 	if p.shippedDownSince.IsZero() {
 		p.shippedDownSince = now
 	}
-	return now.Sub(p.shippedDownSince) >= shippedDownWindow
+	return allQuarantined || now.Sub(p.shippedDownSince) >= shippedDownWindow
 }
 
 // agedDiscoveredLocked returns discovered servers eligible for wallet-server
@@ -499,9 +509,9 @@ func (p *serverPool) walletCandidates() []*ServerAddr {
 	if p.fallbackEligibleLocked(now) {
 		aged := orderCandidates(p.notQuarantinedLocked(p.agedDiscoveredLocked(now), now))
 		if len(aged) > 0 {
-			log.Errorf("electrum: every shipped server failing for %v; opening "+
-				"wallet-server election to %d aged discovered servers",
-				time.Since(p.shippedDownSince).Round(time.Second), len(aged))
+			log.Errorf("electrum: every shipped server quarantined or failing "+
+				"for %v; opening wallet-server election to %d aged discovered "+
+				"servers", time.Since(p.shippedDownSince).Round(time.Second), len(aged))
 			out = append(out, aged...)
 		}
 	}

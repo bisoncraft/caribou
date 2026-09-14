@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -28,6 +29,23 @@ type rotationGuard struct {
 	mtx sync.Mutex
 }
 
+// electionHint steers a rotation triggered by a verified divergence toward
+// the chain that won the audit. Rotations triggered by connection loss or lag
+// pass nil.
+type electionHint struct {
+	// preferred lists successors to try first, in order: the dissenting
+	// observer whose chain won, then the live observers agreeing with it.
+	// An entry outside the wallet-eligible tiers is ignored.
+	preferred []string
+	// wantHeight and wantHash identify the winning header at the conflict
+	// height. A candidate serving a different header there is skipped, so
+	// the election does not land on another server stuck on the losing
+	// chain — which would drag the header store back onto it and repeat
+	// the divergence on the next observer tick.
+	wantHeight int32
+	wantHash   chainhash.Hash
+}
+
 // rotate replaces the dead (or misbehaving) wallet node. It runs OUTSIDE the
 // node's loop group — it joins that group, and a member joining itself would
 // deadlock — as an n.wg-tracked goroutine spawned by the trigger sites.
@@ -36,7 +54,7 @@ type rotationGuard struct {
 // installed (its watchNode owns the eventual close), or the closer is
 // spawned here (Stop/failure paths). The old group's watchNode deliberately
 // does not spawn the closer when handing off to rotation.
-func (n *Network) rotate(dead *Node, preferred, reason string) {
+func (n *Network) rotate(dead *Node, hint *electionHint, reason string) {
 	n.rot.mtx.Lock()
 	defer n.rot.mtx.Unlock()
 
@@ -63,17 +81,6 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	current, group := n.node, n.loops
 	n.mu.Unlock()
 	if current != dead {
-		// A divergence verdict may have suspended broadcasts just before
-		// spawning this rotation, expecting it to lift the suspension via
-		// a successful re-attach. When the replacement rotation's own lift
-		// ran BEFORE the verdict's Store, nothing else clears the flag and
-		// broadcasts stay suspended with no rotation pending. The node in
-		// the slot got there through a full attach — anchored headers,
-		// replayed subscriptions — which is exactly the re-validation the
-		// suspension waits for, so lifting here is sound.
-		if n.spendSuspect.CompareAndSwap(true, false) {
-			log.Infof("electrum: broadcast suspension lifted by superseded rotation")
-		}
 		return
 	}
 
@@ -110,12 +117,10 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	// reachability, genesis, and chain agreement — restricted to the
 	// wallet-eligible tier (shipped first; discovered only under the
 	// gated fallback) — else a fresh dial down the same election order.
-	// A caller-preferred successor (the winning side of a verified
-	// divergence) moves to the front IF the tiers admit it; a preferred
-	// server outside the eligible set is ignored, and convergence comes
-	// from wrong-chain servers repeatedly losing divergence audits until
-	// a heavier-chain server holds the slot.
-	if n.tryElect(dead.Addr().Addr, preferred) {
+	// A divergence hint moves the winning side to the front IF the tiers
+	// admit it and skips candidates serving the losing chain; a preferred
+	// server outside the eligible set is ignored.
+	if n.tryElect(dead.Addr().Addr, hint) {
 		return
 	}
 
@@ -135,21 +140,15 @@ func (n *Network) rotate(dead *Node, preferred, reason string) {
 	go n.degradedLoop()
 }
 
-// tryElect walks the wallet-eligible election order — preferred first when
-// the tiers admit it, exclude skipped — and attaches the first candidate
-// that answers, preferring adoption of a live observer over a fresh dial.
-// Caller holds the rotation mutex. Returns true when a successor is
-// installed.
-func (n *Network) tryElect(exclude, preferred string) bool {
+// tryElect walks the wallet-eligible election order — the hint's preferred
+// servers first when the tiers admit them, exclude skipped — and attaches
+// the first candidate that answers (and, under a hint, serves the winning
+// chain), preferring adoption of a live observer over a fresh dial. Caller
+// holds the rotation mutex. Returns true when a successor is installed.
+func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 	candidates := n.pool.walletCandidates()
-	if preferred != "" {
-		for i, sv := range candidates {
-			if sv.Addr == preferred && i > 0 {
-				candidates = append([]*ServerAddr{sv},
-					append(append([]*ServerAddr{}, candidates[:i]...), candidates[i+1:]...)...)
-				break
-			}
-		}
+	if hint != nil {
+		candidates = promoteCandidates(candidates, hint.preferred)
 	}
 	for _, sv := range candidates {
 		if sv.Addr == exclude {
@@ -161,16 +160,36 @@ func (n *Network) tryElect(exclude, preferred string) bool {
 			node, err = NewNode(n.ctx, sv, n.cfg.TorProxy,
 				n.cfg.Chain.Params.GenesisHash.String())
 			if err != nil {
+				log.Debugf("electrum: election: %s: %v", sv.Addr, err)
 				n.pool.recordFailure(sv.Addr)
 				continue
 			}
 			t, err := node.SubscribeHeaders(n.ctx)
 			if err != nil {
+				log.Debugf("electrum: election: %s: subscribe headers: %v", sv.Addr, err)
 				node.Close()
 				n.pool.recordFailure(sv.Addr)
 				continue
 			}
 			tip = t
+		}
+		if hint != nil {
+			agrees, err := n.servesWinningChain(node, tip, hint)
+			if err != nil {
+				log.Debugf("electrum: election: %s: %v", sv.Addr, err)
+				node.Close()
+				n.pool.recordFailure(sv.Addr)
+				continue
+			}
+			if !agrees {
+				// Chain disagreement is not a dial failure: no health
+				// demerit. A server on the losing side of a fork is
+				// behind, not misbehaving, and reorgs on its own.
+				log.Debugf("electrum: election: skipping %s: serves a "+
+					"conflicting header at height %d", sv.Addr, hint.wantHeight)
+				node.Close()
+				continue
+			}
 		}
 		if err := n.attachNode(node, tip); err != nil {
 			log.Warnf("electrum: rotation to %s failed: %v", sv.Addr, err)
@@ -179,17 +198,84 @@ func (n *Network) tryElect(exclude, preferred string) bool {
 			continue
 		}
 		n.pool.recordSuccess(sv.Addr)
-		// Any successful attachment re-validated a chain end to end
-		// (anchored headers, subscriptions replayed); a divergence
-		// suspension no longer reflects the wallet's view.
-		if n.spendSuspect.CompareAndSwap(true, false) {
-			log.Infof("electrum: broadcast suspension lifted after rotation")
-		}
 		log.Infof("electrum: rotated wallet server to %s (tip %d)",
 			sv.Addr, tip.Height)
 		return true
 	}
 	return false
+}
+
+// promoteCandidates moves the preferred addresses that appear in candidates
+// to the front, in preferred order, keeping the rest in election order.
+func promoteCandidates(candidates []*ServerAddr, preferred []string) []*ServerAddr {
+	if len(preferred) == 0 {
+		return candidates
+	}
+	byAddr := make(map[string]*ServerAddr, len(candidates))
+	for _, sv := range candidates {
+		byAddr[sv.Addr] = sv
+	}
+	out := make([]*ServerAddr, 0, len(candidates))
+	moved := make(map[string]bool, len(preferred))
+	for _, addr := range preferred {
+		if sv := byAddr[addr]; sv != nil && !moved[addr] {
+			out = append(out, sv)
+			moved[addr] = true
+		}
+	}
+	for _, sv := range candidates {
+		if !moved[sv.Addr] {
+			out = append(out, sv)
+		}
+	}
+	return out
+}
+
+// servesWinningChain reports whether a candidate serves the hint's winning
+// header at the conflict height. A candidate whose tip is below that height
+// cannot be judged and is admitted: attaching to it keeps the store's chain
+// (its catch-up has nothing to add), and the observers keep policing it.
+func (n *Network) servesWinningChain(node *Node, tip *HeadersTip, hint *electionHint) (bool, error) {
+	switch {
+	case tip.Height < hint.wantHeight:
+		return true, nil
+	case tip.Height == hint.wantHeight:
+		raw, err := hex.DecodeString(tip.Hex)
+		if err != nil {
+			return false, fmt.Errorf("tip header: %w", err)
+		}
+		var hdr wire.BlockHeader
+		if err := hdr.Deserialize(bytes.NewReader(raw)); err != nil {
+			return false, fmt.Errorf("tip header: %w", err)
+		}
+		return n.headers.headerHash(&hdr) == hint.wantHash, nil
+	}
+	hdr, err := n.fetchHeaderAt(node, hint.wantHeight)
+	if err != nil {
+		return false, err
+	}
+	return hdr != nil && n.headers.headerHash(hdr) == hint.wantHash, nil
+}
+
+// fetchHeaderAt fetches the single header node serves at height, or nil when
+// the server has none there.
+func (n *Network) fetchHeaderAt(node *Node, height int32) (*wire.BlockHeader, error) {
+	res, err := node.BlockHeaders(n.ctx, height, 1)
+	if err != nil {
+		return nil, fmt.Errorf("header at %d: %w", height, err)
+	}
+	if res.Count == 0 {
+		return nil, nil
+	}
+	raw, err := hex.DecodeString(res.HexConcat)
+	if err != nil {
+		return nil, fmt.Errorf("header at %d: %w", height, err)
+	}
+	hdrs, err := n.headers.parseBatch(raw)
+	if err != nil || len(hdrs) == 0 {
+		return nil, fmt.Errorf("header at %d: undecodable reply", height)
+	}
+	return hdrs[0], nil
 }
 
 // degradedRetryInterval paces re-elections while no wallet server exists. A
@@ -221,7 +307,7 @@ func (n *Network) degradedLoop() {
 			n.spawnCloser()
 			return
 		}
-		ok := n.tryElect("", "")
+		ok := n.tryElect("", nil)
 		n.rot.mtx.Unlock()
 		if ok {
 			log.Infof("electrum: recovered from degraded state")
@@ -427,7 +513,7 @@ func (n *Network) lagRotate(lagBlocks int32, lagFor time.Duration) {
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
-		n.rotate(node, "", "lagging observers by "+lagFor.Round(time.Second).String())
+		n.rotate(node, nil, "lagging observers by "+lagFor.Round(time.Second).String())
 	}()
 	_ = lagBlocks
 }

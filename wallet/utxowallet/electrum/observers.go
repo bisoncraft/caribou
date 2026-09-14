@@ -43,6 +43,25 @@ const (
 // rotation tests can tighten it.
 var lagPatience = 10 * time.Minute
 
+// divergenceLoss identifies a verified divergence the wallet server lost: an
+// observer demonstrated strictly more work than the store holds. The loss
+// must be observed on two consecutive ticks before the loop acts on it. The
+// block that breaks a same-height tie reaches the observers and the wallet
+// server seconds apart; a tick landing in that gap would otherwise rotate
+// away from a server that is about to catch up on its own, and the lag
+// path already waits out exactly this kind of propagation skew.
+type divergenceLoss struct {
+	walletAddr string
+	height     int32          // conflict height
+	loser      chainhash.Hash // the store's header at height
+	hint       *electionHint
+}
+
+func (l *divergenceLoss) same(o *divergenceLoss) bool {
+	return o != nil && l.walletAddr == o.walletAddr && l.height == o.height &&
+		l.loser == o.loser
+}
+
 // ObserverCount reports the number of live observer connections; primarily
 // a test and diagnostics hook.
 func (n *Network) ObserverCount() int {
@@ -120,7 +139,6 @@ func (n *Network) runObservers() {
 		n.obsMtx.Unlock()
 	}()
 
-	var lagSince time.Time
 	ticker := time.NewTicker(observerCompareInterval)
 	defer ticker.Stop()
 
@@ -133,9 +151,15 @@ func (n *Network) runObservers() {
 	}
 	tick := 0
 
+	st := &observerLoopState{
+		lagBlocks: int32(lagWindow / n.cfg.Chain.Params.TargetTimePerBlock),
+	}
+	if st.lagBlocks < 1 {
+		st.lagBlocks = 1
+	}
+
 	for {
-		walletAddr := n.currentWalletAddr()
-		n.fillObservers(walletAddr)
+		n.fillObservers(n.currentWalletAddr())
 		if tick%discoverEvery == 0 {
 			n.discoverPeers()
 		}
@@ -146,65 +170,117 @@ func (n *Network) runObservers() {
 			return
 		case <-ticker.C:
 		}
+		n.observerTick(st)
+	}
+}
 
-		// Drop dead observers (demoted at death by their drain
-		// goroutines); fillObservers replaces them next pass.
-		n.obsMtx.Lock()
-		for addr, o := range n.observers {
-			select {
-			case <-o.node.Done():
-				delete(n.observers, addr)
-			default:
-			}
-		}
-		obs := make([]*observer, 0, len(n.observers))
-		for _, o := range n.observers {
-			obs = append(obs, o)
-		}
-		n.obsMtx.Unlock()
+// observerLoopState carries the comparison loop's memory between ticks.
+type observerLoopState struct {
+	lagBlocks   int32
+	lagSince    time.Time
+	pendingLoss *divergenceLoss
+}
 
-		localTip := n.headers.Tip()
-		bestObs := int32(-1)
-		for _, o := range obs {
-			h, hdr := o.tip()
-			if hdr == nil {
-				continue
-			}
-			if h > bestObs {
-				bestObs = h
-			}
-			// Divergence probe: an observer tip at a height we have,
-			// with a different hash, means one of us is on another
-			// chain. The dissenter must demonstrate work before any
-			// action is taken (see handleDivergence).
-			if h <= localTip {
-				ours := n.headers.ByHeight(h)
-				if ours != nil && n.headers.headerHash(ours) != n.headers.headerHash(hdr) {
-					n.handleDivergence(o, walletAddr)
-				}
-			}
-		}
-
-		// Lag: the best observer is lagWindow's worth of blocks ahead at
-		// target spacing, sustained for lagPatience.
-		lagBlocks := int32(lagWindow / n.cfg.Chain.Params.TargetTimePerBlock)
-		if lagBlocks < 1 {
-			lagBlocks = 1
-		}
-		if bestObs >= 0 && bestObs-localTip >= lagBlocks {
-			if lagSince.IsZero() {
-				lagSince = time.Now()
-			} else if time.Since(lagSince) >= lagPatience {
-				log.Warnf("electrum: wallet server %s lagging %d blocks behind "+
-					"observers for %v; rotating", walletAddr, bestObs-localTip,
-					time.Since(lagSince).Round(time.Second))
-				n.lagRotate(bestObs-localTip, time.Since(lagSince))
-				lagSince = time.Time{}
-			}
-		} else {
-			lagSince = time.Time{}
+// observerTick is one pass of the comparison loop: prune dead observers,
+// audit divergences, and check for lag. Split from runObservers so tests can
+// drive ticks deterministically.
+func (n *Network) observerTick(st *observerLoopState) {
+	// Drop dead observers (demoted at death by their drain goroutines);
+	// fillObservers replaces them next pass.
+	n.obsMtx.Lock()
+	for addr, o := range n.observers {
+		select {
+		case <-o.node.Done():
+			delete(n.observers, addr)
+		default:
 		}
 	}
+	obs := make([]*observer, 0, len(n.observers))
+	for _, o := range n.observers {
+		obs = append(obs, o)
+	}
+	n.obsMtx.Unlock()
+
+	localTip := n.headers.Tip()
+	bestObs := int32(-1)
+	for _, o := range obs {
+		if h, hdr := o.tip(); hdr != nil && h > bestObs {
+			bestObs = h
+		}
+	}
+
+	// Divergence probe: an observer serving a different header at a height
+	// we have means one of us is on another chain. The dissenter must
+	// demonstrate work before any action is taken (see handleDivergence).
+	// An observer ahead of us is probed at our tip height — its extension
+	// is what breaks an equal-work tie — up to the reorg budget; beyond
+	// that the store is stale enough that the lag path's rotation is the
+	// right answer.
+	var loss *divergenceLoss
+	for _, o := range obs {
+		h, hdr := o.tip()
+		if hdr == nil {
+			continue
+		}
+		switch {
+		case h <= localTip:
+			ours := n.headers.ByHeight(h)
+			if ours != nil && n.headers.headerHash(ours) != n.headers.headerHash(hdr) {
+				loss = n.handleDivergence(o, h)
+			}
+		case h-localTip <= maxReorgDepth:
+			if n.observerConflictsAt(o, localTip) {
+				loss = n.handleDivergence(o, localTip)
+			}
+		}
+		if loss != nil {
+			break
+		}
+	}
+	switch {
+	case loss == nil:
+		st.pendingLoss = nil
+	case loss.same(st.pendingLoss):
+		st.pendingLoss = nil
+		n.divergenceRotate(loss)
+	default:
+		log.Infof("electrum: wallet server %s serves a losing block at height "+
+			"%d (%s); rotating if it persists next tick", loss.walletAddr,
+			loss.height, loss.loser)
+		st.pendingLoss = loss
+	}
+
+	// Lag: the best observer is lagWindow's worth of blocks ahead at
+	// target spacing, sustained for lagPatience.
+	if bestObs >= 0 && bestObs-localTip >= st.lagBlocks {
+		if st.lagSince.IsZero() {
+			st.lagSince = time.Now()
+		} else if time.Since(st.lagSince) >= lagPatience {
+			log.Warnf("electrum: wallet server %s lagging %d blocks behind "+
+				"observers for %v; rotating", n.currentWalletAddr(),
+				bestObs-localTip, time.Since(st.lagSince).Round(time.Second))
+			n.lagRotate(bestObs-localTip, time.Since(st.lagSince))
+			st.lagSince = time.Time{}
+		}
+	} else {
+		st.lagSince = time.Time{}
+	}
+}
+
+// observerConflictsAt reports whether the observer serves a different header
+// than the store at height. Used for observers ahead of the local tip, whose
+// own tip cannot be compared directly.
+func (n *Network) observerConflictsAt(o *observer, height int32) bool {
+	ours := n.headers.ByHeight(height)
+	if ours == nil {
+		return false
+	}
+	theirs, err := n.fetchHeaderAt(o.node, height)
+	if err != nil {
+		log.Debugf("electrum: observer %s: %v", o.node.Addr().Addr, err)
+		return false
+	}
+	return theirs != nil && n.headers.headerHash(theirs) != n.headers.headerHash(ours)
 }
 
 // maxObserverDialsPerPass caps connection attempts per fillObservers pass.
@@ -306,51 +382,56 @@ func (n *Network) fillObservers(walletAddr string) {
 	}
 }
 
-// handleDivergence reacts to an observer whose chain conflicts with ours.
-// The dissenter must demonstrate work: its recent headers are fetched and
-// PoW-checked. Unverified dissent demotes the observer — a lone malicious
-// server must not be able to freeze the wallet. Verified dissent suspends
-// spend-affecting operations (Broadcast errors; nothing proactive in the UI)
-// and rotates away from the wallet server so the reconnect can resolve which
-// chain is canonical.
-func (n *Network) handleDivergence(o *observer, walletAddr string) {
+// handleDivergence audits an observer whose chain conflicts with ours at
+// conflictHeight. The dissenter must demonstrate work: its recent headers
+// are fetched and PoW-checked, and their cumulative work over the contested
+// span must strictly exceed the store's. Unverified dissent demotes the
+// observer — a lone malicious server must not be able to freeze the wallet.
+// Equal work is a tie, not a verdict: same-height competing blocks carry
+// identical difficulty, so acting on a tie chose a side at random, and the
+// other side's observers reversed it on the next rotation (on LTC mainnet
+// that walked through every shipped server and left the wallet degraded for
+// hours). Returns the verified loss for the tick loop to act on once it has
+// persisted, or nil.
+func (n *Network) handleDivergence(o *observer, conflictHeight int32) *divergenceLoss {
 	// One snapshot: the drain goroutine advances the observer tip
 	// concurrently, and reading height and header separately could fetch a
 	// batch for the old height while auditing against the new tip hash,
 	// spuriously demoting an honest observer.
 	h, tipHdr := o.tip()
-	if tipHdr == nil {
-		return
+	if tipHdr == nil || h < conflictHeight {
+		return nil
 	}
-	start := h - reorgRewindDepth
+	addr := o.node.Addr().Addr
+	start := conflictHeight - reorgRewindDepth
 	if start < n.headers.StartHeight() {
 		start = n.headers.StartHeight()
 	}
 	res, err := o.node.BlockHeaders(n.ctx, start, int(h-start)+1)
 	if err != nil {
 		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
-			"work audit (header fetch: %v); demoting", o.node.Addr().Addr, h, err)
-		n.pool.recordFailure(o.node.Addr().Addr)
+			"work audit (header fetch: %v); demoting", addr, conflictHeight, err)
+		n.pool.recordFailure(addr)
 		o.node.Close()
-		return
+		return nil
 	}
 	raw, err := hex.DecodeString(res.HexConcat)
 	if err != nil || len(raw) < n.cfg.Chain.HeaderSize {
 		log.Warnf("electrum: observer %s diverged at height %d but returned an "+
-			"unusable header batch; demoting", o.node.Addr().Addr, h)
-		n.pool.recordFailure(o.node.Addr().Addr)
+			"unusable header batch; demoting", addr, conflictHeight)
+		n.pool.recordFailure(addr)
 		o.node.Close()
-		return
+		return nil
 	}
 	batch := make([]*wire.BlockHeader, 0, len(raw)/n.cfg.Chain.HeaderSize)
 	for off := 0; off+n.cfg.Chain.HeaderSize <= len(raw); off += n.cfg.Chain.HeaderSize {
 		var hdr wire.BlockHeader
 		if err := hdr.Deserialize(bytes.NewReader(raw[off : off+n.cfg.Chain.HeaderSize])); err != nil {
 			log.Warnf("electrum: observer %s diverged at height %d but served an "+
-				"undecodable header; demoting: %v", o.node.Addr().Addr, h, err)
-			n.pool.recordFailure(o.node.Addr().Addr)
+				"undecodable header; demoting: %v", addr, conflictHeight, err)
+			n.pool.recordFailure(addr)
 			o.node.Close()
-			return
+			return nil
 		}
 		batch = append(batch, &hdr)
 	}
@@ -360,63 +441,141 @@ func (n *Network) handleDivergence(o *observer, walletAddr string) {
 		// Fabricated or incoherent chain: demote and drop the observer,
 		// keep the wallet stream untouched.
 		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
-			"work audit; demoting: %v", o.node.Addr().Addr, h, err)
-		n.pool.recordFailure(o.node.Addr().Addr)
+			"work audit; demoting: %v", addr, conflictHeight, err)
+		n.pool.recordFailure(addr)
 		o.node.Close()
-		return
+		return nil
 	}
+	if int(conflictHeight-start) >= len(batch) {
+		log.Warnf("electrum: observer %s diverged at height %d but its batch "+
+			"stops short of it; demoting", addr, conflictHeight)
+		n.pool.recordFailure(addr)
+		o.node.Close()
+		return nil
+	}
+	theirs := n.headers.headerHash(batch[conflictHeight-start])
+
+	// The audit above involved network round trips; re-read the store
+	// before judging. A rotation completing meanwhile reconciles the store
+	// onto its successor's chain, and a live reorg can move it too — in
+	// either case the conflict may be gone, and the judgment must be
+	// against whatever the store holds NOW, not the snapshot the tick
+	// started from.
+	ours := n.headers.ByHeight(conflictHeight)
+	if ours == nil || n.headers.headerHash(ours) == theirs {
+		log.Debugf("electrum: divergence with %s at height %d resolved during "+
+			"the audit", addr, conflictHeight)
+		return nil
+	}
+	oursHash := n.headers.headerHash(ours)
+
 	// Self-attested Bits are only meaningful in comparison: a header's PoW
 	// check proves the hash beats its OWN claimed target, so a liar can
 	// claim trivial difficulty and "pass". The dissent is credible only if
-	// its cumulative work over the contested span meets or exceeds our own
-	// chain's — claiming low difficulty then loses the comparison, and
-	// claiming high difficulty fails the hash check.
+	// its cumulative work over the contested span exceeds our own chain's —
+	// claiming low difficulty then loses the comparison, and claiming high
+	// difficulty fails the hash check.
 	localWork := n.headers.workRange(start, n.headers.Tip())
-	if dissentWork.Cmp(localWork) < 0 {
+	switch dissentWork.Cmp(localWork) {
+	case -1:
 		log.Warnf("electrum: observer %s presents a linked, PoW-valid chain at "+
 			"height %d with less cumulative work than ours (%s < %s); stale or "+
-			"losing fork, demoting", o.node.Addr().Addr, h, dissentWork, localWork)
-		n.pool.recordFailure(o.node.Addr().Addr)
+			"losing fork, demoting", addr, conflictHeight, dissentWork, localWork)
+		n.pool.recordFailure(addr)
 		o.node.Close()
-		return
+		return nil
+	case 0:
+		// Competing blocks at one height. Neither side has demonstrated
+		// more work; the next block decides, and the next tick sees it
+		// either as our tip advancing (the observer then loses) or as
+		// the observer pulling ahead (probed at our tip height).
+		log.Debugf("electrum: observer %s serves a competing block at height "+
+			"%d with equal work (%s vs ours %s); tie, waiting for the next block",
+			addr, conflictHeight, theirs, oursHash)
+		return nil
 	}
-	// The dissenting chain carries at least as much real work as ours: the
-	// wallet server lost a verified divergence. Before acting, capture the
-	// current wallet node once and require it to still be the server the
-	// verdict was judged against. The walletAddr snapshot was taken at the
-	// top of the tick, and the audit above involves network round trips —
-	// a rotation completing in between replaces the wallet server, making
-	// both actions below wrong: the quarantine would hit a server no
-	// longer in the wallet slot, and the rotate would evict an innocent,
-	// freshly attached successor. On a mismatch, abort entirely — the
-	// intervening rotation re-validated a chain end to end, and the next
-	// tick re-evaluates this observer against the reconciled store.
+
+	// The dissenting chain carries more real work than ours: the wallet
+	// server, whatever holds the slot now, is serving the losing chain
+	// the store holds. Hand the loss to the tick loop; it acts once the
+	// loss has persisted across a tick.
 	n.mu.Lock()
 	walletNode := n.node
 	n.mu.Unlock()
-	if walletNode == nil || walletNode.Addr().Addr != walletAddr {
-		log.Infof("electrum: discarding divergence verdict against %s: wallet "+
-			"server rotated during the audit", walletAddr)
+	if walletNode == nil {
+		// Degraded: no wallet server to rotate away from. The degraded
+		// loop's next election lands on whatever answers, and the
+		// observers police it from there.
+		return nil
+	}
+	log.Warnf("electrum: observer %s presents a chain with more work at height "+
+		"%d (%s vs ours %s); wallet server %s is on the losing side", addr,
+		conflictHeight, theirs, oursHash, walletNode.Addr().Addr)
+	return &divergenceLoss{
+		walletAddr: walletNode.Addr().Addr,
+		height:     conflictHeight,
+		loser:      oursHash,
+		hint: &electionHint{
+			preferred:  append([]string{addr}, n.agreeingObservers(o, conflictHeight, theirs)...),
+			wantHeight: conflictHeight,
+			wantHash:   theirs,
+		},
+	}
+}
+
+// divergenceRotate acts on a persisted verified loss: demote the wallet
+// server (a failure record — it deprioritizes the server for the backoff
+// window, as the lag path does; being behind on a fork is slowness, not the
+// misbehavior quarantine is for) and rotate surgically, preferring the
+// dissenter and the observers that agree with it, whose chain won the
+// comparison and whose fork segment passed the audit, and skipping
+// candidates on the losing chain. The header reorg rides the successor's
+// attach through the fork-point rewind. No-op if the slot has changed hands
+// since the loss was recorded.
+func (n *Network) divergenceRotate(loss *divergenceLoss) {
+	n.mu.Lock()
+	walletNode := n.node
+	n.mu.Unlock()
+	if walletNode == nil || walletNode.Addr().Addr != loss.walletAddr {
 		return
 	}
-	// Suspend broadcasts, quarantine the loser (misbehavior, not
-	// slowness), and rotate surgically — preferring the dissenter, whose
-	// chain won the comparison and whose fork segment just passed the
-	// audit. The header reorg rides the successor's initial tip
-	// application through the existing rewind machinery; the suspension
-	// lifts when a rotation succeeds.
-	log.Errorf("electrum: observer %s presents a conflicting chain with valid "+
-		"work at height %d — possible eclipse or fork; suspending broadcasts "+
-		"and rotating away from %s", o.node.Addr().Addr, h, walletAddr)
-	n.spendSuspect.Store(true)
-	n.pool.quarantine(walletAddr, fmt.Sprintf(
-		"lost a verified divergence at height %d to %s", h, o.node.Addr().Addr))
-	dissenter := o.node.Addr().Addr
+	log.Warnf("electrum: wallet server %s still serves the losing chain at "+
+		"height %d; rotating toward %s", loss.walletAddr, loss.height,
+		loss.hint.wantHash)
+	n.pool.recordFailure(loss.walletAddr)
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
-		n.rotate(walletNode, dissenter, "lost verified divergence")
+		n.rotate(walletNode, loss.hint, "lost verified divergence")
 	}()
+}
+
+// agreeingObservers returns the live observers, other than the dissenter,
+// whose advertised tip is on the dissenter's chain: the same tip, or the
+// winning header itself at the conflict height.
+func (n *Network) agreeingObservers(dissenter *observer, conflictHeight int32, winner chainhash.Hash) []string {
+	dh, dhdr := dissenter.tip()
+	var dtip chainhash.Hash
+	if dhdr != nil {
+		dtip = n.headers.headerHash(dhdr)
+	}
+	n.obsMtx.Lock()
+	defer n.obsMtx.Unlock()
+	var out []string
+	for addr, o := range n.observers {
+		if o == dissenter {
+			continue
+		}
+		h, hdr := o.tip()
+		if hdr == nil {
+			continue
+		}
+		hash := n.headers.headerHash(hdr)
+		if (h == conflictHeight && hash == winner) || (dhdr != nil && h == dh && hash == dtip) {
+			out = append(out, addr)
+		}
+	}
+	return out
 }
 
 // discoverPeers polls server.peers.subscribe on every connected server and

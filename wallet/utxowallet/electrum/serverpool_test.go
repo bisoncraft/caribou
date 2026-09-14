@@ -422,3 +422,68 @@ func TestServerPoolQuarantine(t *testing.T) {
 		t.Fatalf("expired quarantine still excluding: %v", wc)
 	}
 }
+
+// TestFallbackOpensOnQuarantine: quarantined shipped servers count as down
+// for the discovered-fallback gate, and an all-quarantined shipped list
+// opens it without waiting out shippedDownWindow. A quarantined server is
+// never re-dialed, so its failure record aged out of the backoff window and
+// the gate never opened — the wallet sat degraded with usable discovered
+// servers on file.
+func TestFallbackOpensOnQuarantine(t *testing.T) {
+	serverHealth.mtx.Lock()
+	serverHealth.m = make(map[string]*serverRecord)
+	serverHealth.quarantined = make(map[string]bool)
+	serverHealth.mtx.Unlock()
+
+	s1 := &ServerAddr{Proto: "ssl", Addr: "s1:1"}
+	s2 := &ServerAddr{Proto: "ssl", Addr: "s2:1"}
+	p := newServerPool(t.TempDir(), []*ServerAddr{s1, s2})
+	t.Cleanup(p.flush)
+
+	// An aged, previously successful discovered server: fallback-eligible
+	// on its own merits.
+	aged := &ServerAddr{Proto: "ssl", Addr: "aged:1"}
+	p.addDiscovered("rec:1", []*ServerAddr{aged})
+	p.mtx.Lock()
+	p.entries[aged.Addr].FirstSeen = time.Now().Add(-discoveredAgeMin - time.Hour)
+	p.entries[aged.Addr].Successes = 1
+	p.mtx.Unlock()
+
+	names := func(out []*ServerAddr) string {
+		var b strings.Builder
+		for _, sv := range out {
+			b.WriteString(sv.Addr)
+			b.WriteByte(' ')
+		}
+		return b.String()
+	}
+
+	if got := names(p.walletCandidates()); got != "s1:1 s2:1 " {
+		t.Fatalf("healthy shipped list = %q", got)
+	}
+
+	// One quarantined, one freshly failing: every shipped server is down,
+	// but the window has not elapsed.
+	p.quarantine(s1.Addr, "test")
+	p.recordFailure(s2.Addr)
+	if got := names(p.walletCandidates()); got != "s2:1 " {
+		t.Fatalf("inside the window = %q", got)
+	}
+
+	// Window elapsed: the aged discovered server joins the election.
+	p.mtx.Lock()
+	p.shippedDownSince = time.Now().Add(-shippedDownWindow - time.Minute)
+	p.mtx.Unlock()
+	if got := names(p.walletCandidates()); got != "s2:1 aged:1 " {
+		t.Fatalf("after the window = %q", got)
+	}
+
+	// Every shipped server quarantined: the fallback opens at once.
+	p.mtx.Lock()
+	p.shippedDownSince = time.Time{}
+	p.mtx.Unlock()
+	p.quarantine(s2.Addr, "test")
+	if got := names(p.walletCandidates()); got != "aged:1 " {
+		t.Fatalf("all quarantined = %q", got)
+	}
+}
