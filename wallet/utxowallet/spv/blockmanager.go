@@ -225,7 +225,7 @@ func newBlockManager(cfg *blockManagerCfg) (*blockManager, error) {
 		peerChan:      make(chan interface{}, MaxPeers*3),
 		blockNtfnChan: make(chan blockntfns.BlockNtfn),
 		blkHeaderProgressLogger: newBlockProgressLogger(
-			"Processed", "block headers", log,
+			"Processed", "block header", log,
 		),
 		fltrHeaderProgessLogger: newBlockProgressLogger(
 			"Verified", "filter header", log,
@@ -487,6 +487,13 @@ func (b *blockManager) cfHandler() {
 		lastCp = blockCheckpoints[len(blockCheckpoints)-1]
 	}
 
+	// The initial sync loops back to waitForHeaders once per checkpoint
+	// interval the block headers pull ahead, so the progress lines below
+	// repeat many times on a long sync. The first pass is informational;
+	// repeats are routine and logged at debug.
+	passf := log.Infof
+	passes := 0
+
 waitForHeaders:
 	// We'll wait until the main header sync is either finished or the
 	// filter headers are lagging at least a checkpoint interval behind the
@@ -494,7 +501,11 @@ waitForHeaders:
 	// cfheaders. We do this to speed up the sync, as the check pointed
 	// sync is faster, than fetching each header from each peer during the
 	// normal "at tip" syncing.
-	log.Infof("Waiting for more block headers, then will start "+
+	if passes > 0 {
+		passf = log.Debugf
+	}
+	passes++
+	passf("Waiting for more block headers, then will start "+
 		"cfheaders sync from height %v...", b.filterHeaderTip)
 
 	b.newHeadersSignal.L.Lock()
@@ -531,7 +542,7 @@ waitForHeaders:
 	lastHash := b.cfg.ChainParams.HeaderHash(lastHeader)
 
 	b.newFilterHeadersMtx.RLock()
-	log.Infof("Starting cfheaders sync from (block_height=%v, "+
+	passf("Starting cfheaders sync from (block_height=%v, "+
 		"block_hash=%v) to (block_height=%v, block_hash=%v)",
 		b.filterHeaderTip, b.filterHeaderTipHash, lastHeight,
 		b.cfg.ChainParams.HeaderHash(lastHeader))
@@ -540,7 +551,7 @@ waitForHeaders:
 	fType := wire.GCSFilterRegular
 	store := b.cfg.RegFilterHeaders
 
-	log.Infof("Starting cfheaders sync for filter_type=%v", fType)
+	passf("Starting cfheaders sync for filter_type=%v", fType)
 
 	// If we have less than a full checkpoint's worth of blocks, such as on
 	// simnet, we don't really need to request checkpoints as we'll get 0

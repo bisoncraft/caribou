@@ -30,7 +30,10 @@ import (
 // each carried (the old "logNeutrino"), which collided on the shared globals in
 // a multi-asset process and missed several subsystems.
 func UseLogger(newLogger func(name string, defaultLevel btclog.Level) btclog.Logger) {
-	spv.UseLogger(newLogger("NTRNO", btclog.LevelDebug))
+	// Neutrino's debug output dominates a wallet log (well over half of a
+	// multi-day mainnet log) and its info level already covers sync
+	// progress, peer churn, and every failure path.
+	spv.UseLogger(newLogger("NTRNO", btclog.LevelInfo))
 	chain.UseLogger(newLogger("CHAIN", btclog.LevelDebug))
 	electrum.UseLogger(newLogger("ELEC", btclog.LevelDebug))
 	peer.UseLogger(newLogger("PEER", btclog.LevelInfo))

@@ -1144,6 +1144,13 @@ func (s *ChainService) UnbanPeers() error {
 func (s *ChainService) IsBanned(addr string) bool {
 	ipNet, err := banman.ParseIPNet(addr, nil)
 	if err != nil {
+		if errors.Is(err, banman.ErrUnsupportedIP) {
+			// Onion and other non-IP addresses cannot be banned by
+			// network; the address manager hands them out routinely,
+			// so this is not an error condition.
+			log.Debugf("Skipping ban check for non-IP peer %v", addr)
+			return false
+		}
 		log.Errorf("Unable to parse IP network for peer %v: %v", addr,
 			err)
 		return false
