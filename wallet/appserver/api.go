@@ -873,7 +873,7 @@ func (s *AppServer) apiChangeAppPass(w http.ResponseWriter, r *http.Request) {
 	if passwordIsCached {
 		key, err := s.cacheAppPassword(form.NewAppPW, authToken)
 		if err != nil {
-			log.Errorf("unable to cache password: %w", err)
+			log.Errorf("unable to cache password: %v", err)
 			clearCookie(pwKeyCK, w)
 		} else {
 			setCookie(pwKeyCK, hex.EncodeToString(key), w)

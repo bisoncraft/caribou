@@ -1004,7 +1004,7 @@ func (w *zecWallet) SyncStatus() (*asset.SyncStatus, error) {
 func (w *zecWallet) ValidateAddress(addr string) bool {
 	res, err := zValidateAddress(w, addr)
 	if err != nil {
-		w.log.Errorf("z_validateaddress error for address %q: %w", addr, err)
+		w.log.Errorf("z_validateaddress error for address %q: %v", addr, err)
 		return false
 	}
 	return res.IsValid
@@ -1528,7 +1528,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 		for _, txOut := range msgTx.TxOut {
 			_, addrs, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, w.btcParams)
 			if err != nil {
-				w.log.Errorf("ExtractAddrs error: %w", err)
+				w.log.Errorf("ExtractAddrs error: %v", err)
 				return false
 			}
 			if len(addrs) != 1 { // sanity check
@@ -1537,12 +1537,12 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 
 			addr, err := EncodeAddress(addrs[0], w.addrParams)
 			if err != nil {
-				w.log.Errorf("unable to encode address: %w", err)
+				w.log.Errorf("unable to encode address: %v", err)
 				return false
 			}
 			owns, err := w.OwnsDepositAddress(addr)
 			if err != nil {
-				w.log.Errorf("w.OwnsDepositAddress error: %w", err)
+				w.log.Errorf("w.OwnsDepositAddress error: %v", err)
 				return false
 			}
 			if !owns {
@@ -1567,7 +1567,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 		for _, txOut := range msgTx.TxOut {
 			_, addrs, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, w.btcParams)
 			if err != nil {
-				w.log.Errorf("ExtractAddrs error: %w", err)
+				w.log.Errorf("ExtractAddrs error: %v", err)
 				continue
 			}
 			if len(addrs) != 1 { // sanity check
@@ -1576,12 +1576,12 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 
 			addr, err := EncodeAddress(addrs[0], w.addrParams)
 			if err != nil {
-				w.log.Errorf("unable to encode address: %w", err)
+				w.log.Errorf("unable to encode address: %v", err)
 				continue
 			}
 			owns, err := w.OwnsDepositAddress(addr)
 			if err != nil {
-				w.log.Errorf("w.OwnsDepositAddress error: %w", err)
+				w.log.Errorf("w.OwnsDepositAddress error: %v", err)
 				continue
 			}
 			if owns {
@@ -1599,7 +1599,7 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 		for _, txOut := range msgTx.TxOut {
 			_, addrs, _, err := txscript.ExtractPkScriptAddrs(txOut.PkScript, w.btcParams)
 			if err != nil {
-				w.log.Errorf("ExtractAddrs error: %w", err)
+				w.log.Errorf("ExtractAddrs error: %v", err)
 				continue
 			}
 			if len(addrs) != 1 { // sanity check
@@ -1608,12 +1608,12 @@ func (w *zecWallet) idUnknownTx(tx *btcjson.ListTransactionsResult) (*txdb.Walle
 
 			addr, err := EncodeAddress(addrs[0], w.addrParams)
 			if err != nil {
-				w.log.Errorf("unable to encode address: %w", err)
+				w.log.Errorf("unable to encode address: %v", err)
 				continue
 			}
 			owns, err := w.OwnsDepositAddress(addr)
 			if err != nil {
-				w.log.Errorf("w.OwnsDepositAddress error: %w", err)
+				w.log.Errorf("w.OwnsDepositAddress error: %v", err)
 				continue
 			}
 

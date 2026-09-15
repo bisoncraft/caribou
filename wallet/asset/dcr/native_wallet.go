@@ -232,7 +232,7 @@ func (w *NativeWallet) mixFunds() {
 // account, after a short delay.
 func (w *NativeWallet) runSimnetMixer(ctx context.Context) {
 	if err := w.transferAccount(ctx, mixedAccountName, defaultAccountName); err != nil {
-		w.log.Errorf("error transferring funds while disabling mixing: %w", err)
+		w.log.Errorf("error transferring funds while disabling mixing: %v", err)
 	}
 }
 

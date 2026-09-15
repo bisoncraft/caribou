@@ -338,7 +338,7 @@ func (r *redemptionFinder) tryRedemptionRequests(ctx context.Context, startBlock
 				// This might be due to a reorg. Don't abandon yet, since
 				// tryRedemptionRequests will be tried again by the block
 				// monitor loop.
-				r.log.Warn("error getting block hash for height %d: %v", iHeight, err)
+				r.log.Warnf("error getting block hash for height %d: %v", iHeight, err)
 				return
 			}
 		}

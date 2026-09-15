@@ -274,7 +274,7 @@ func New(cfg *Config) (*Core, error) {
 		cfg.Logger.Errorf("Error loading language from database: %v", err)
 	} else if len(langStr) > 0 {
 		if lang, err = parseLanguage(langStr); err != nil {
-			cfg.Logger.Errorf("Error parsing language retrieved from database %q: %w", langStr, err)
+			cfg.Logger.Errorf("Error parsing language retrieved from database %q: %v", langStr, err)
 		}
 	}
 
@@ -2204,17 +2204,17 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 		if found {
 			tokenDBWallet, err := c.db.Wallet(tokenID)
 			if err != nil {
-				c.log.Errorf("Error getting db wallet for token %s: %w", unbip(tokenID), err)
+				c.log.Errorf("Error getting db wallet for token %s: %v", unbip(tokenID), err)
 				continue
 			}
 			tokenWallet.Disconnect()
 			tokenWallet, err = c.loadXCWallet(tokenDBWallet)
 			if err != nil {
-				c.log.Errorf("Error loading wallet for token %s: %w", unbip(tokenID), err)
+				c.log.Errorf("Error loading wallet for token %s: %v", unbip(tokenID), err)
 				continue
 			}
 			if err := reloadWallet(tokenWallet, tokenDBWallet, false); err != nil {
-				c.log.Errorf("Error reloading token wallet %s: %w", unbip(tokenID), err)
+				c.log.Errorf("Error reloading token wallet %s: %v", unbip(tokenID), err)
 			}
 		}
 	}

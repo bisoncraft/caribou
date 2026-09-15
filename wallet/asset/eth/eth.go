@@ -3996,7 +3996,7 @@ func (w *baseWallet) checkPendingTxs() {
 		txCap := tx.GasFeeCap()
 		baseRate, tipRate, err := w.currentNetworkFees(w.ctx)
 		if err != nil {
-			w.log.Errorf("Error getting base fee: %w", err)
+			w.log.Errorf("Error getting base fee: %v", err)
 			continue
 		}
 		if txCap.Cmp(baseRate) < 0 {

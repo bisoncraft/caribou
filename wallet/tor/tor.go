@@ -94,7 +94,7 @@ func (s *HiddenService) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		const logFileMaxSizeKB = 16 * 1024 // 16 MB
 		logRotator, err := rotator.New(s.logPath, logFileMaxSizeKB, false, maxLogRolls)
 		if err != nil {
-			s.log.Errorf("error intializing log files: %w", err)
+			s.log.Errorf("error intializing log files: %v", err)
 			return
 		}
 		defer logRotator.Close()

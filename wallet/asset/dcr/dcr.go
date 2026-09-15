@@ -3551,7 +3551,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			addr := addrs[0]
 			owns, err := dcr.wallet.WalletOwnsAddress(ctx, addr)
 			if err != nil {
-				dcr.log.Errorf("walletOwnsAddress error: %w", err)
+				dcr.log.Errorf("walletOwnsAddress error: %v", err)
 				return false
 			}
 			if !owns {
@@ -3578,7 +3578,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			if txOut.Value == mixDenom {
 				_, addrs := stdscript.ExtractAddrs(scriptVersion, txOut.PkScript, dcr.chainParams)
 				if err != nil {
-					dcr.log.Errorf("ExtractAddrs error: %w", err)
+					dcr.log.Errorf("ExtractAddrs error: %v", err)
 					continue
 				}
 				if len(addrs) != 1 { // sanity check
@@ -3588,7 +3588,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 				addr := addrs[0]
 				owns, err := dcr.wallet.WalletOwnsAddress(ctx, addr)
 				if err != nil {
-					dcr.log.Errorf("walletOwnsAddress error: %w", err)
+					dcr.log.Errorf("walletOwnsAddress error: %v", err)
 					continue
 				}
 
@@ -3612,7 +3612,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		for _, txOut := range msgTx.TxOut {
 			_, addrs := stdscript.ExtractAddrs(scriptVersion, txOut.PkScript, dcr.chainParams)
 			if err != nil {
-				dcr.log.Errorf("ExtractAddrs error: %w", err)
+				dcr.log.Errorf("ExtractAddrs error: %v", err)
 				continue
 			}
 			if len(addrs) != 1 { // sanity check
@@ -3622,7 +3622,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			addr := addrs[0]
 			owns, err := dcr.wallet.WalletOwnsAddress(ctx, addr)
 			if err != nil {
-				dcr.log.Errorf("walletOwnsAddress error: %w", err)
+				dcr.log.Errorf("walletOwnsAddress error: %v", err)
 				continue
 			}
 
@@ -3638,7 +3638,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 		for _, txOut := range msgTx.TxOut {
 			_, addrs := stdscript.ExtractAddrs(scriptVersion, txOut.PkScript, dcr.chainParams)
 			if err != nil {
-				dcr.log.Errorf("ExtractAddrs error: %w", err)
+				dcr.log.Errorf("ExtractAddrs error: %v", err)
 				continue
 			}
 			if len(addrs) != 1 { // sanity check
@@ -3648,7 +3648,7 @@ func (dcr *ExchangeWallet) idUnknownTx(ctx context.Context, ltxr *ListTransactio
 			addr := addrs[0]
 			owns, err := dcr.wallet.WalletOwnsAddress(ctx, addr)
 			if err != nil {
-				dcr.log.Errorf("walletOwnsAddress error: %w", err)
+				dcr.log.Errorf("walletOwnsAddress error: %v", err)
 				continue
 			}
 			if owns {

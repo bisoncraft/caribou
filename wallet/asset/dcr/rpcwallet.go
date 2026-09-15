@@ -1104,7 +1104,7 @@ func (w *rpcWallet) tickets(ctx context.Context, includeImmature bool) ([]*asset
 		if tx.BlockHash != "" {
 			blkHash, err := chainhash.NewHashFromStr(tx.BlockHash)
 			if err != nil {
-				w.log.Errorf("Invalid block hash %v for ticket %v: %w", tx.BlockHash, h, err)
+				w.log.Errorf("Invalid block hash %v for ticket %v: %v", tx.BlockHash, h, err)
 				continue
 			}
 			// dcrwallet returns do not include the block height.

@@ -417,7 +417,7 @@ func (w *spvWallet) startWallet(ctx context.Context) error {
 func (w *spvWallet) stop() {
 	w.log.Info("Unloading wallet")
 	if err := w.db.Close(); err != nil {
-		w.log.Info("Error closing database: %v", err)
+		w.log.Errorf("Error closing database: %v", err)
 	}
 
 	w.log.Info("SPV wallet closed")
