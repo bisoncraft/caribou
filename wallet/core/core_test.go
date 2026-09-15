@@ -2989,6 +2989,9 @@ type tOpenerWallet struct {
 	// walks straight past rather than serializing against.
 	openHook func()
 
+	// closeHook, when non-nil, is called at the top of Close.
+	closeHook func()
+
 	openMtx sync.Mutex
 	open    bool
 }
@@ -3010,6 +3013,9 @@ func (w *tOpenerWallet) IsOpen() bool {
 }
 
 func (w *tOpenerWallet) Close() error {
+	if w.closeHook != nil {
+		w.closeHook()
+	}
 	w.openMtx.Lock()
 	defer w.openMtx.Unlock()
 	w.open = false
@@ -3100,9 +3106,10 @@ func (d *tSeededDriver) Create(params *asset.CreateWalletParams) error {
 }
 
 // TestCreateSeededWalletDataCleanup checks that a failed seeded-wallet creation
-// leaves no asset data directory behind, whichever step fails, so that a retry
-// does not fail with an already-exists error. It also checks that wallet data
-// left on disk by an interrupted creation is used rather than recreated.
+// leaves the asset data directory as it found it, whichever step fails. Data
+// written by the failed call is removed, so that a retry does not fail with an
+// already-exists error. Data that was already on disk, as an interrupted
+// creation leaves it, is used rather than recreated and survives a failure.
 func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()
@@ -3111,7 +3118,7 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 
 	a := *tUTXOAssetA
 	tSeeded := &a
-	tSeeded.Symbol = "ilt"
+	tSeeded.Symbol = "vtc"
 	tSeeded.ID, _ = util.BipSymbolID(tSeeded.Symbol)
 
 	winfo := *tWalletInfo
@@ -3120,10 +3127,13 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 		Seeded: true,
 	}}
 
-	wallet, tWallet := newTWallet(tSeeded.ID)
+	// An asset.Opener stands in for the wallet, so the test can check that a
+	// wallet the creation opened is closed again before its data is discarded.
+	_, tWallet := newTWallet(tSeeded.ID)
+	opener := &tOpenerWallet{TXCWallet: tWallet}
 	drv := &tSeededDriver{tDriver: &tDriver{
-		wallet:        wallet.Wallet,
-		decodedCoinID: "ilt-coin",
+		wallet:        opener,
+		decodedCoinID: "vtc-coin",
 		winfo:         &winfo,
 	}}
 	asset.Register(tSeeded.ID, drv, true)
@@ -3134,6 +3144,13 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 		Type:    "type",
 	}
 	dataDir := tCore.assetDataDirectory(tSeeded.ID)
+	marker := drv.marker(dataDir)
+
+	opener.closeHook = func() {
+		if _, err := os.Stat(marker); err != nil {
+			t.Errorf("wallet closed after its data was discarded (stat err = %v)", err)
+		}
+	}
 
 	ensureErr := func(tag string) {
 		t.Helper()
@@ -3147,10 +3164,22 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 			t.Fatalf("%s: asset data directory survived a failed creation (stat err = %v)", tag, err)
 		}
 	}
+	ensureData := func(tag string) {
+		t.Helper()
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("%s: wallet data missing: %v", tag, err)
+		}
+	}
 	ensureCreates := func(tag string, n int) {
 		t.Helper()
 		if drv.creates != n {
 			t.Fatalf("%s: %d on-disk creations, want %d", tag, drv.creates, n)
+		}
+	}
+	ensureClosed := func(tag string) {
+		t.Helper()
+		if opener.IsOpen() {
+			t.Fatalf("%s: wallet left open by a failed creation", tag)
 		}
 	}
 
@@ -3161,10 +3190,11 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	ensureNoData("Create")
 	ensureCreates("Create", 1)
 
-	// Connection failure after the wallet is created on disk.
+	// Connection failure after the wallet is created on disk and opened.
 	tWallet.connectErr = errTest
 	ensureErr("Connect")
 	tWallet.connectErr = nil
+	ensureClosed("Connect")
 	ensureNoData("Connect")
 	ensureCreates("Connect", 2)
 
@@ -3172,6 +3202,7 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	tWallet.balErr = errTest
 	ensureErr("Balance")
 	tWallet.balErr = nil
+	ensureClosed("Balance")
 	ensureNoData("Balance")
 	ensureCreates("Balance", 3)
 
@@ -3179,6 +3210,7 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	rig.db.updateWalletErr = errTest
 	ensureErr("db.UpdateWallet")
 	rig.db.updateWalletErr = nil
+	ensureClosed("db.UpdateWallet")
 	ensureNoData("db.UpdateWallet")
 	ensureCreates("db.UpdateWallet", 4)
 
@@ -3187,9 +3219,7 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 		t.Fatalf("error creating wallet: %v", err)
 	}
 	ensureCreates("success", 5)
-	if _, err := os.Stat(drv.marker(dataDir)); err != nil {
-		t.Fatalf("wallet data missing after successful creation: %v", err)
-	}
+	ensureData("success")
 
 	// Wallet data left on disk with no configured wallet, as an interrupted
 	// creation leaves it, is used rather than recreated.
@@ -3199,11 +3229,24 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	}
 	ensureCreates("existing data", 5)
 
-	// A failed creation from existing data discards that data like any other.
+	// Existing data is not the failed creation's to discard.
 	delete(tCore.wallets, tSeeded.ID)
 	tWallet.connectErr = errTest
 	ensureErr("Connect with existing data")
 	tWallet.connectErr = nil
-	ensureNoData("Connect with existing data")
+	ensureClosed("Connect with existing data")
+	ensureData("Connect with existing data")
 	ensureCreates("Connect with existing data", 5)
+
+	// A wallet that failed to load at startup is absent from the wallets map
+	// but keeps both its db record and its data. A creation attempted for it
+	// fails to load the wallet again and must leave the data alone.
+	delete(tCore.wallets, tSeeded.ID)
+	rig.db.wallet = &db.Wallet{AssetID: tSeeded.ID, Type: "type", Settings: map[string]string{}}
+	drv.openErr = errTest
+	ensureErr("load")
+	drv.openErr = nil
+	rig.db.wallet = nil
+	ensureData("load")
+	ensureCreates("load", 5)
 }

@@ -1162,22 +1162,26 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 		if defErr != nil {
 			return newError(assetSupportErr, "asset.WalletDef error: %w", defErr)
 		}
-		if walletDef.Seeded {
-			// Core holds no wallet for this asset, so nothing in its data
-			// directory is live, and a seeded wallet is rebuilt in full from
-			// the app seed. A creation that fails at any step below (on-disk
-			// creation, open, connect, unlock, balance, db store) must leave
-			// nothing behind: the next attempt has to start from an empty
-			// directory instead of tripping over this attempt's remains. Every
-			// failure path releases the wallet before returning, so the
-			// directory is not in use by the time this runs.
+		var fresh bool
+		dbWallet, fresh, err = c.createDBWallet(crypter, walletDef, form, walletPW)
+		if fresh {
+			// This call wrote seeded wallet data into a data directory that
+			// held none, and a seeded wallet is rebuilt in full from the app
+			// seed. A failure at any step (on-disk creation, open, connect,
+			// unlock, balance, db store) must leave the directory as it was
+			// found, so the next attempt starts from nothing instead of
+			// tripping over this attempt's remains. Wallet data that was
+			// already on disk and only adopted is never discarded: it may
+			// belong to a wallet that failed to load at startup, and it is not
+			// this call's to remove. Every failure path after loadXCWallet
+			// disconnects the wallet before returning, which also closes an
+			// asset.Opener, so nothing holds the directory open when this runs.
 			defer func() {
 				if err != nil {
 					c.discardAssetData(assetID)
 				}
 			}()
 		}
-		dbWallet, err = c.createDBWallet(crypter, walletDef, form, walletPW)
 	} else {
 		dbWallet, err = c.createTokenDBWallet(assetID, token, form)
 	}
@@ -1198,6 +1202,8 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 
 	dbWallet.Address, err = c.connectWallet(wallet)
 	if err != nil {
+		// Disconnect is what closes a wallet that OpenWithPW opened.
+		wallet.Disconnect()
 		return err
 	}
 
@@ -1261,8 +1267,13 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 	return nil
 }
 
-func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDefinition, form *WalletForm, walletPW []byte) (*db.Wallet, error) {
+// createDBWallet builds the db.Wallet record for a new non-token wallet,
+// creating the seeded wallet on disk first when the definition calls for one.
+// The returned bool reports whether this call wrote seeded wallet data into a
+// data directory that held none; see createSeededWallet.
+func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDefinition, form *WalletForm, walletPW []byte) (*db.Wallet, bool, error) {
 	var err error
+	var fresh bool
 
 	// Sometimes core will insert data into the Settings map to communicate
 	// information back to the wallet, so it cannot be nil.
@@ -1287,11 +1298,11 @@ func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDe
 
 	if walletDef.Seeded {
 		if len(walletPW) > 0 {
-			return nil, errors.New("external password incompatible with seeded wallet")
+			return nil, false, errors.New("external password incompatible with seeded wallet")
 		}
-		walletPW, err = c.createSeededWallet(form.AssetID, crypter, form)
+		walletPW, fresh, err = c.createSeededWallet(form.AssetID, crypter, form)
 		if err != nil {
-			return nil, err
+			return nil, fresh, err
 		}
 	}
 
@@ -1299,7 +1310,7 @@ func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDe
 	if len(walletPW) > 0 {
 		encPW, err = crypter.Encrypt(walletPW)
 		if err != nil {
-			return nil, fmt.Errorf("wallet password encryption error: %w", err)
+			return nil, fresh, fmt.Errorf("wallet password encryption error: %w", err)
 		}
 	}
 
@@ -1309,7 +1320,7 @@ func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDe
 		Settings:    form.Config,
 		EncryptedPW: encPW,
 		// Balance and Address are set after connect.
-	}, nil
+	}, fresh, nil
 }
 
 func (c *Core) createTokenDBWallet(tokenID uint32, token *asset.Token, form *WalletForm) (*db.Wallet, error) {
@@ -1349,22 +1360,25 @@ func (c *Core) createTokenDBWallet(tokenID uint32, token *asset.Token, form *Wal
 // seed, so wallet data already in the asset's data directory is used as-is
 // rather than recreated. A creation interrupted after the on-disk wallet was
 // made but before core stored the wallet leaves exactly that, and it would
-// otherwise block every later creation with an already-exists error.
-func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form *WalletForm) ([]byte, error) {
+// otherwise block every later creation with an already-exists error. The
+// returned bool reports whether the data directory held no wallet before this
+// call, so that whatever it holds afterwards, complete or not, was written by
+// this call.
+func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form *WalletForm) ([]byte, bool, error) {
 	seed, pw, err := c.assetSeedAndPass(assetID, crypter)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer encode.ClearBytes(seed)
 
 	dataDir := c.assetDataDirectory(assetID)
 	exists, err := asset.WalletExists(assetID, form.Type, dataDir, form.Config, c.net)
 	if err != nil {
-		return nil, fmt.Errorf("error checking for existing wallet data: %w", err)
+		return nil, false, fmt.Errorf("error checking for existing wallet data: %w", err)
 	}
 	if exists {
 		c.log.Infof("Using the existing %s wallet data in %q", unbip(assetID), dataDir)
-		return pw, nil
+		return pw, false, nil
 	}
 
 	var bday uint64
@@ -1384,10 +1398,10 @@ func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form 
 		Logger:   c.log.SubLogger(unbip(assetID)),
 		TorProxy: c.cfg.TorProxy,
 	}); err != nil {
-		return nil, fmt.Errorf("Error creating wallet: %w", err)
+		return nil, true, fmt.Errorf("Error creating wallet: %w", err)
 	}
 
-	return pw, nil
+	return pw, true, nil
 }
 
 func (c *Core) assetSeedAndPass(assetID uint32, crypter encrypt.Crypter) (seed, pass []byte, err error) {
@@ -1455,10 +1469,10 @@ func (c *Core) assetDataBackupDirectory(assetID uint32) string {
 	return filepath.Join(filepath.Dir(c.cfg.DBPath), "assetdb-backup", unbip(assetID))
 }
 
-// discardAssetData removes an asset's data directory. Only for a seeded asset
-// that core holds no wallet for: with no configured wallet nothing in the
-// directory is live, and the next creation rebuilds the wallet in full from
-// the app seed.
+// discardAssetData removes an asset's data directory. Only for seeded wallet
+// data written by a creation that then failed and released the wallet: nothing
+// in the directory is live or predates the attempt, and the next creation
+// rebuilds the wallet in full from the app seed.
 func (c *Core) discardAssetData(assetID uint32) {
 	dir := c.assetDataDirectory(assetID)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -2146,7 +2160,7 @@ func (c *Core) ReconfigureWallet(appPW, newWalletPW []byte, form *WalletForm) er
 				return newError(authErr, "error retrieving wallet password: %w", err)
 			}
 		} else {
-			pw, err = c.createSeededWallet(assetID, crypter, form)
+			pw, _, err = c.createSeededWallet(assetID, crypter, form)
 			if err != nil {
 				return newError(createWalletErr, "error creating new %q-type %s wallet: %w", form.Type, unbip(assetID), err)
 			}
