@@ -12,11 +12,6 @@ import "embed"
 // split (util/kvstore/engine_desktop.go).
 const site = "newui"
 
-// checkAppVersion enables the periodic GitHub release poll. The desktop build
-// keeps it on; the mobile build turns it off (store-installed, so the poll is
-// just wasted battery/radio).
-const checkAppVersion = true
-
 // printBrowserBanner prints the "open in your browser" banner to stdout on
 // startup. Useful for the desktop CLI; pointless on mobile, where there is no
 // console and the WebView loads the URL directly.

@@ -21,7 +21,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,7 +29,6 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
-	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/util/encode"
 	"github.com/bisoncraft/caribou/util/encrypt"
 	pi "github.com/bisoncraft/caribou/util/politeia/pitypes"
@@ -84,8 +82,6 @@ var (
 var (
 	log   util.Logger
 	unbip = util.BipIDSymbol
-
-	latestVersionRegex = regexp.MustCompile(`\d+(\.\d+)+`)
 )
 
 // clientCore is satisfied by core.Core.
@@ -308,8 +304,7 @@ type AppServer struct {
 	// peer (see apiTokenAuthorized). The raw token is never stored.
 	apiTokenHash string
 
-	appVersion             string
-	newAppVersionAvailable bool
+	appVersion string
 
 	mainLogFilePath string
 }
@@ -617,39 +612,6 @@ func New(cfg *Config) (*AppServer, error) {
 	return s, nil
 }
 
-// fetchLatestVersion is a helper function to retrieve the latest version of the app
-// from github.
-func (w *AppServer) fetchLatestVersion(ctx context.Context) {
-	var response struct {
-		TagName string `json:"tag_name"`
-	}
-
-	err := dexnet.Get(ctx, "https://api.github.com/repos/bisoncraft/caribou/releases/latest", &response, dexnet.WithSizeLimit(1<<22))
-	if err != nil {
-		log.Debugf("Error getting latest version: %v", err)
-		return
-	}
-
-	latestVersion := latestVersionRegex.FindString(response.TagName)
-	latestMajor, latestMinor, latestPatch, _, _, err := version.ParseSemVer(latestVersion)
-	if err != nil {
-		log.Debugf("Error parsing latest version: %v", err)
-		return
-	}
-
-	currentMajor, currentMinor, currentPatch, _, _, err := version.ParseSemVer(w.appVersion)
-	if err != nil {
-		log.Debugf("Error parsing app version: %v", err)
-		return
-	}
-
-	if latestMajor > currentMajor ||
-		(latestMajor == currentMajor && latestMinor > currentMinor) ||
-		(latestMajor == currentMajor && latestMinor == currentMinor && latestPatch > currentPatch) {
-		w.newAppVersionAvailable = true
-	}
-}
-
 // Addr gives the address on which AppServer is listening. Use only after
 // Connect.
 func (s *AppServer) Addr() string {
@@ -778,25 +740,6 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		defer wg.Done()
 		s.readNotifications(ctx)
 	}()
-
-	if checkAppVersion {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			// Perform initial fetch of the latest version.
-			s.fetchLatestVersion(ctx)
-
-			for {
-				select {
-				case <-time.After(24 * time.Hour):
-					s.fetchLatestVersion(ctx)
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
 
 	log.Infof("Web server listening on %s (https = %v)", s.addr, https)
 	scheme := "http"
