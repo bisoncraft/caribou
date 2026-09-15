@@ -958,6 +958,11 @@ func TestSameHeightReorg(t *testing.T) {
 // precedes it in election order. Landing on the loser would drag the store
 // back onto the losing chain and repeat the divergence next tick.
 func TestElectionPrefersWinningChain(t *testing.T) {
+	if maxObservers < 2 {
+		// The mobile build keeps one observer; the preference between
+		// two live observers cannot arise there.
+		t.Skipf("needs two observer slots, build has %d", maxObservers)
+	}
 	tightenObserverLoop(t)
 	resetServerHealth()
 
