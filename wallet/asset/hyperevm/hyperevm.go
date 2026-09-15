@@ -71,9 +71,8 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 	case util.Mainnet:
 		defaultProviders = []string{
 			// Verified working (2026-09-01)
-			"https://rpc.hyperliquid.xyz/evm",     // Hyperliquid Labs official
-			"https://rpc.nodeflare.app/hl/public", // NodeFlare
-			"https://hyperliquid.drpc.org",        // dRPC
+			"https://rpc.hyperliquid.xyz/evm", // Hyperliquid Labs official
+			"https://hyperliquid.drpc.org",    // dRPC
 		}
 	case util.Testnet:
 		defaultProviders = []string{

@@ -4,6 +4,8 @@ package eth
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -753,6 +755,431 @@ func TestScanNativeReceiveSetsTimestampAndNote(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected a transaction note to be emitted")
+	}
+}
+
+func TestIsUnscannableRangeErr(t *testing.T) {
+	t.Parallel()
+	pruned := errors.New("missing trie node: header not found: state at block #117666854 is pruned")
+	transient := errors.New("429 Too Many Requests")
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"pruned, clause order 1", errors.New("missing trie node: header not found: state at block #117666854 is pruned"), true},
+		{"pruned, clause order 2", errors.New("not supported: header not found: state at block #117666854 is pruned: missing trie node"), true},
+		{"pruned, clause order 3", errors.New("state at block #117666854 is pruned: not supported: missing trie node"), true},
+		{"bnb erc20 pruned-history phrasing", errors.New("History has been pruned for this block. To remove restrictions, order a dedicated full node here: https://www.allnodes.com/bnb/host: limit exceeded: limit exceeded"), true},
+		{
+			"joined multi-provider error mixing pruned and transient",
+			fmt.Errorf("%w: %w", pruned, transient),
+			true, // classified pruned; the scanSkipFailures guard is what keeps this safe (see scan.go)
+		},
+		{"bare header not found (lagging provider, not pruned)", errors.New("header not found"), false},
+		{"bare rate limit", errors.New("429 Too Many Requests"), false},
+		{"bare limit exceeded", errors.New("limit exceeded"), false},
+		{"connection reset", errors.New("read tcp: connection reset by peer"), false},
+		{"context deadline", context.DeadlineExceeded, false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isUnscannableRangeErr(tt.err); got != tt.want {
+				t.Errorf("isUnscannableRangeErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsRangeTooWideErr(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"bnb provider message", errors.New("eth_getLogs is limited to 0 - 50 blocks range: limit exceeded"), true},
+		{"eth provider message, different phrasing", errors.New(`400 Bad Request: {"jsonrpc":"2.0","id":31,"error":{"code":-32600,"message":"You can make eth_getLogs requests with up to a 10 block range. Based on your parameters, this block range should work: [0x18c746a, 0x18c7473]"}}`), true},
+		{"bare limit exceeded (rate limit, not a range cap)", errors.New("limit exceeded"), false},
+		{"bare rate limit", errors.New("429 Too Many Requests"), false},
+		{"too many requests, no range mentioned", errors.New("too many requests, please slow down"), false},
+		{"connection reset", errors.New("read tcp: connection reset by peer"), false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isRangeTooWideErr(tt.err); got != tt.want {
+				t.Errorf("isRangeTooWideErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestScanNativeTickSkipsPrunedRange is the regression test for the
+// permanent-stall bug: a range that fails forever with a pruned-state error
+// must eventually be skipped so the cursor advances and future ticks make
+// progress, instead of retrying the identical unscannable range forever.
+func TestScanNativeTickSkipsPrunedRange(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedBlock(10); err != nil {
+		t.Fatalf("setLastScannedBlock: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(20)}
+
+	node := eth.node.(*tMempoolNode)
+	node.balAtErr = errors.New("missing trie node: state at block #20 is pruned")
+
+	for i := range scanSkipFailures - 1 {
+		eth.nativeScanBackoff.until = time.Time{} // force each tick past the backoff
+		eth.scanNativeTick(context.Background(), 20)
+		last, err := eth.getLastScannedBlock()
+		if err != nil {
+			t.Fatalf("getLastScannedBlock: %v", err)
+		}
+		if last != 10 {
+			t.Fatalf("tick %d: expected cursor to stay at 10 before the skip threshold, got %d", i, last)
+		}
+	}
+
+	// The next tick crosses scanSkipFailures and must skip the range.
+	eth.nativeScanBackoff.until = time.Time{}
+	eth.scanNativeTick(context.Background(), 20)
+	last, err := eth.getLastScannedBlock()
+	if err != nil {
+		t.Fatalf("getLastScannedBlock: %v", err)
+	}
+	if last != 20 {
+		t.Fatalf("expected cursor to skip past the unscannable range to 20, got %d", last)
+	}
+	if eth.lastScanBalance != nil {
+		t.Fatalf("expected lastScanBalance to be cleared after a skip, got %v", eth.lastScanBalance)
+	}
+
+	// Forward progress resumes on the next range.
+	eth.currentTip = &types.Header{Number: big.NewInt(21)}
+	node.balAtErr = nil
+	node.bal = big.NewInt(1000)
+	node.blocks = map[uint64]*types.Block{21: types.NewBlockWithHeader(&types.Header{Number: big.NewInt(21)})}
+	eth.scanNativeTick(context.Background(), 21)
+	last, err = eth.getLastScannedBlock()
+	if err != nil {
+		t.Fatalf("getLastScannedBlock: %v", err)
+	}
+	if last != 21 {
+		t.Fatalf("expected the scanner to make progress past the skipped range, got %d", last)
+	}
+}
+
+// TestScanNativeTickSkipJumpsToTip is the regression test for the
+// impractically-slow-recovery bug: once a range is confirmed unscannable
+// because the provider has pruned that state, every block behind the
+// provider's retention window is equally unreachable, not just the one
+// maxScanBlocks-wide window requested. Skipping only to the end of that
+// window (rather than to the current tip) would force a wallet that fell far
+// behind to crawl forward maxScanBlocks at a time - months to catch up on a
+// large backlog - while remaining blind to new incoming transfers the whole
+// time. The skip must jump straight to the tip.
+func TestScanNativeTickSkipJumpsToTip(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedBlock(10); err != nil {
+		t.Fatalf("setLastScannedBlock: %v", err)
+	}
+	// The tip is far beyond a single maxScanBlocks window past the cursor.
+	const farTip = 10 + 100*maxScanBlocks
+	eth.currentTip = &types.Header{Number: big.NewInt(farTip)}
+
+	node := eth.node.(*tMempoolNode)
+	node.balAtErr = errors.New("missing trie node: state at block #21 is pruned")
+
+	for range scanSkipFailures {
+		eth.nativeScanBackoff.until = time.Time{}
+		eth.scanNativeTick(context.Background(), farTip)
+	}
+
+	last, err := eth.getLastScannedBlock()
+	if err != nil {
+		t.Fatalf("getLastScannedBlock: %v", err)
+	}
+	if last != farTip {
+		t.Fatalf("expected the skip to jump straight to tip %d, got %d", farTip, last)
+	}
+}
+
+// TestScanNativeTickDoesNotSkipTransientError guards the existing
+// retry-forever contract for ordinary transient errors: they must never be
+// treated as unscannable, no matter how many times they repeat.
+func TestScanNativeTickDoesNotSkipTransientError(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedBlock(10); err != nil {
+		t.Fatalf("setLastScannedBlock: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(20)}
+
+	node := eth.node.(*tMempoolNode)
+	node.balAtErr = errors.New("read tcp: connection reset by peer")
+
+	for range scanSkipFailures + 5 {
+		eth.nativeScanBackoff.until = time.Time{} // force each tick past the backoff
+		eth.scanNativeTick(context.Background(), 20)
+	}
+
+	last, err := eth.getLastScannedBlock()
+	if err != nil {
+		t.Fatalf("getLastScannedBlock: %v", err)
+	}
+	if last != 10 {
+		t.Fatalf("expected a transient error to never be skipped, cursor should stay at 10, got %d", last)
+	}
+}
+
+// TestScanNativeTickRequiresConsecutiveUnscannableFailures is the regression
+// test for a real bug: scanBackoff's failure counter used to increment on
+// every failure regardless of classification, so scanSkipFailures-1 ordinary
+// transient failures followed by a single unscannable-classified one was
+// enough to trigger a skip - the "several consecutive [unscannable failures]"
+// safety margin described in scanSkipFailures's doc comment didn't actually
+// exist. A transient failure must reset the unscannable streak to 0, so a
+// skip requires scanSkipFailures unscannable failures in a row, not
+// scanSkipFailures failures of any kind with only the last one unscannable.
+func TestScanNativeTickRequiresConsecutiveUnscannableFailures(t *testing.T) {
+	t.Parallel()
+	eth, _, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedBlock(10); err != nil {
+		t.Fatalf("setLastScannedBlock: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(20)}
+
+	node := eth.node.(*tMempoolNode)
+
+	// scanSkipFailures-1 transient failures...
+	node.balAtErr = errors.New("read tcp: connection reset by peer")
+	for range scanSkipFailures - 1 {
+		eth.nativeScanBackoff.until = time.Time{}
+		eth.scanNativeTick(context.Background(), 20)
+	}
+	// ...then a single unscannable one. If the counter didn't reset on the
+	// transient failures above, this alone would cross scanSkipFailures and
+	// skip.
+	node.balAtErr = errors.New("missing trie node: state at block #20 is pruned")
+	eth.nativeScanBackoff.until = time.Time{}
+	eth.scanNativeTick(context.Background(), 20)
+
+	last, err := eth.getLastScannedBlock()
+	if err != nil {
+		t.Fatalf("getLastScannedBlock: %v", err)
+	}
+	if last != 10 {
+		t.Fatalf("expected the cursor to stay at 10 - a single unscannable failure after transient ones must not "+
+			"trigger a skip, got %d", last)
+	}
+}
+
+// TestScanERC20TickSkipsPrunedRange is the ERC20-path counterpart of
+// TestScanNativeTickSkipsPrunedRange.
+func TestScanERC20TickSkipsPrunedRange(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(10); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(20)}
+
+	node := eth.node.(*tMempoolNode)
+	node.filterLogsErr = errors.New("missing trie node: state at block #20 is pruned")
+
+	for range scanSkipFailures - 1 {
+		eth.erc20ScanBackoff.until = time.Time{} // force each tick past the backoff
+		eth.scanERC20Tick(context.Background(), 20, []*assetWallet{tokenAw})
+	}
+	last, err := eth.getLastScannedERC20Block()
+	if err != nil {
+		t.Fatalf("getLastScannedERC20Block: %v", err)
+	}
+	if last != 10 {
+		t.Fatalf("expected cursor to stay at 10 before the skip threshold, got %d", last)
+	}
+
+	eth.erc20ScanBackoff.until = time.Time{}
+	eth.scanERC20Tick(context.Background(), 20, []*assetWallet{tokenAw})
+	last, err = eth.getLastScannedERC20Block()
+	if err != nil {
+		t.Fatalf("getLastScannedERC20Block: %v", err)
+	}
+	if last != 20 {
+		t.Fatalf("expected cursor to skip past the unscannable range to 20, got %d", last)
+	}
+}
+
+// TestScanERC20TickSkipJumpsToTip is the ERC20-path counterpart of
+// TestScanNativeTickSkipJumpsToTip.
+func TestScanERC20TickSkipJumpsToTip(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(10); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	const farTip = 10 + 100*maxScanBlocks
+	eth.currentTip = &types.Header{Number: big.NewInt(farTip)}
+
+	node := eth.node.(*tMempoolNode)
+	node.filterLogsErr = errors.New("missing trie node: state at block #21 is pruned")
+
+	for range scanSkipFailures {
+		eth.erc20ScanBackoff.until = time.Time{}
+		eth.scanERC20Tick(context.Background(), farTip, []*assetWallet{tokenAw})
+	}
+
+	last, err := eth.getLastScannedERC20Block()
+	if err != nil {
+		t.Fatalf("getLastScannedERC20Block: %v", err)
+	}
+	if last != farTip {
+		t.Fatalf("expected the skip to jump straight to tip %d, got %d", farTip, last)
+	}
+}
+
+// TestScanERC20TickShrinksOnRangeLimit is the regression test for the
+// eth_getLogs range-mismatch bug: a provider that rejects the requested
+// block range as too wide must cause the scanner to narrow its window and
+// keep making progress, rather than failing the same oversized request
+// forever.
+func TestScanERC20TickShrinksOnRangeLimit(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(0); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	// Seed past the first-run path directly via the field, since 0 is the
+	// sentinel for "unseeded".
+	if err := eth.setLastScannedERC20Block(1); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(1000)}
+
+	node := eth.node.(*tMempoolNode)
+	node.filterLogsErr = errors.New("eth_getLogs is limited to 0 - 50 blocks range: limit exceeded")
+
+	eth.scanERC20Tick(context.Background(), 1000, []*assetWallet{tokenAw})
+	if eth.erc20ScanBlocks != maxScanBlocks/2 {
+		t.Fatalf("expected erc20ScanBlocks to halve to %d, got %d", maxScanBlocks/2, eth.erc20ScanBlocks)
+	}
+	last, err := eth.getLastScannedERC20Block()
+	if err != nil {
+		t.Fatalf("getLastScannedERC20Block: %v", err)
+	}
+	if last != 1 {
+		t.Fatalf("expected cursor to stay put on a range-too-wide error, got %d", last)
+	}
+
+	// Once narrowed within what the provider accepts, scanning resumes.
+	node.filterLogsErr = nil
+	eth.scanERC20Tick(context.Background(), 1000, []*assetWallet{tokenAw})
+	last, err = eth.getLastScannedERC20Block()
+	if err != nil {
+		t.Fatalf("getLastScannedERC20Block: %v", err)
+	}
+	if last != 1+maxScanBlocks/2 {
+		t.Fatalf("expected cursor to advance by the narrowed window, got %d", last)
+	}
+}
+
+// TestScanERC20RangeTooWideStopsNarrowingAtFloor is the regression test for
+// the no-terminal-condition bug: once erc20ScanBlocks has bottomed out at
+// minScanBlocks, a persistent range-too-wide error must stop retrying every
+// tick unconditionally (which would re-create the exact permanent-hammering
+// bug this feature exists to fix) and instead fall through to the ordinary
+// exponential backoff.
+func TestScanERC20RangeTooWideStopsNarrowingAtFloor(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(1); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(1_000_000)}
+	eth.erc20ScanBlocks = minScanBlocks // already at the floor
+
+	node := eth.node.(*tMempoolNode)
+	node.filterLogsErr = errors.New("eth_getLogs is limited to 0 - 8 blocks range: limit exceeded")
+
+	eth.scanERC20Tick(context.Background(), 1_000_000, []*assetWallet{tokenAw})
+	if eth.erc20ScanBlocks != minScanBlocks {
+		t.Fatalf("expected erc20ScanBlocks to stay at the floor %d, got %d", minScanBlocks, eth.erc20ScanBlocks)
+	}
+	if !eth.erc20ScanBackoff.blocked(time.Now()) {
+		t.Fatal("expected the backoff to engage once narrowing can no longer help, instead of retrying every tick forever")
+	}
+}
+
+// TestScanERC20JoinedPrunedAndRangeTooWideSkipsNotNarrows is the regression
+// test for the classifier-precedence bug: multiRPCClient joins every
+// provider's error into one message once all providers fail, so a pruned
+// provider and a range-capped provider failing in the same call produces one
+// error matching both isUnscannableRangeErr and isRangeTooWideErr. That must
+// be treated as unscannable (and eventually skipped to tip), not endlessly
+// narrowed - narrowing the window can never make already-pruned history
+// scannable, so treating it as a range problem would silently re-wedge the
+// scanner this fix exists to unwedge.
+func TestScanERC20JoinedPrunedAndRangeTooWideSkipsNotNarrows(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(10); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(20)}
+
+	node := eth.node.(*tMempoolNode)
+	// Shaped like multiRPCClient.withOne's joined output: one provider's
+	// pruned-history message concatenated with another's range-cap message.
+	node.filterLogsErr = errors.New("History has been pruned for this block: eth_getLogs is limited to 0 - 50 blocks range")
+
+	for range scanSkipFailures {
+		eth.erc20ScanBackoff.until = time.Time{}
+		eth.scanERC20Tick(context.Background(), 20, []*assetWallet{tokenAw})
+	}
+
+	if eth.erc20ScanBlocks != 0 {
+		t.Fatalf("expected the joined error to skip rather than narrow, but erc20ScanBlocks changed to %d", eth.erc20ScanBlocks)
+	}
+	last, err := eth.getLastScannedERC20Block()
+	if err != nil {
+		t.Fatalf("getLastScannedERC20Block: %v", err)
+	}
+	if last != 20 {
+		t.Fatalf("expected the joined pruned+range-too-wide error to skip to tip 20, got %d", last)
 	}
 }
 

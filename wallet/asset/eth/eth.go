@@ -608,6 +608,12 @@ type ETHWallet struct {
 	// incoming-transfer scan independently after a failure (see scan.go).
 	nativeScanBackoff scanBackoff
 	erc20ScanBackoff  scanBackoff
+
+	// erc20ScanBlocks is the current ERC20 log-filter range width, narrowed
+	// from maxScanBlocks the first time a provider reports its eth_getLogs
+	// range as too wide (see scan.go). Zero means maxScanBlocks. Only read
+	// and written by the single scanIncomingTransfers goroutine.
+	erc20ScanBlocks uint64
 }
 
 // TokenWallet implements some token-specific methods.

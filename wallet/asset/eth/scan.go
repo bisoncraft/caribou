@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,23 @@ const (
 	scanBackoffMin = 30 * time.Second
 	scanBackoffMax = 30 * time.Minute
 
+	// scanSkipFailures is how many consecutive failures classified as
+	// "unscannable range" (see isUnscannableRangeErr and
+	// scanBackoff.unscannableFails) are required before the scanner gives up
+	// on the current range and skips past it. A joined multi-provider error
+	// can carry an unscannable-range marker from one provider while another
+	// provider merely failed transiently, so a single such error is not proof
+	// the range can never succeed; several consecutive ones are.
+	scanSkipFailures = 3
+
+	// minScanBlocks is the floor for erc20ScanBlocks when a provider reports
+	// its eth_getLogs range as too wide (see isRangeTooWideErr). Kept above
+	// the fastest supported chain's block rate at incomingScanTick cadence
+	// (HyperEVM has been observed averaging ~1.1 blocks/s, i.e. ~17 per
+	// 15s tick) so a wallet pinned at the floor can still keep pace with the
+	// chain tip instead of falling further behind every tick.
+	minScanBlocks = 32
+
 	scanMetaTableName           = "meta"
 	lastScannedNativeBlockField = "lastScannedBlock"
 	lastScannedERC20BlockField  = "lastScannedERC20Block"
@@ -52,6 +70,14 @@ type scanBackoff struct {
 	mtx   sync.Mutex
 	until time.Time
 	delay time.Duration
+	// unscannableFails counts *consecutive* failures classified as
+	// isUnscannableRangeErr specifically - not failures generally. A run of
+	// ordinary transient failures (connection reset, timeout) does not count
+	// toward it, and any such failure resets it to 0, so an unscannable-range
+	// skip requires scanSkipFailures unscannable-classified failures in a
+	// row, not scanSkipFailures failures of any kind with only the last one
+	// classified unscannable.
+	unscannableFails int
 }
 
 func (b *scanBackoff) blocked(now time.Time) bool {
@@ -60,7 +86,10 @@ func (b *scanBackoff) blocked(now time.Time) bool {
 	return now.Before(b.until)
 }
 
-func (b *scanBackoff) failed(now time.Time) {
+// failed records a scan failure and applies the exponential backoff.
+// unscannable reports whether this specific failure was classified as
+// isUnscannableRangeErr; see the unscannableFails field doc.
+func (b *scanBackoff) failed(now time.Time, unscannable bool) {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	if b.delay == 0 {
@@ -69,6 +98,11 @@ func (b *scanBackoff) failed(now time.Time) {
 		b.delay = scanBackoffMax
 	}
 	b.until = now.Add(b.delay)
+	if unscannable {
+		b.unscannableFails++
+	} else {
+		b.unscannableFails = 0
+	}
 }
 
 func (b *scanBackoff) succeeded() {
@@ -76,6 +110,96 @@ func (b *scanBackoff) succeeded() {
 	defer b.mtx.Unlock()
 	b.delay = 0
 	b.until = time.Time{}
+	b.unscannableFails = 0
+}
+
+// unscannableFailures returns the number of consecutive isUnscannableRangeErr
+// failures recorded since the last success or non-unscannable failure.
+func (b *scanBackoff) unscannableFailures() int {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	return b.unscannableFails
+}
+
+// unscannableRangeMarkers are substrings (matched case-insensitively) of RPC
+// error messages that mean a block range can never be scanned by the
+// provider that returned them, no matter how many times it is retried - the
+// requested chain state has been pruned. This is necessarily a string match:
+// go-ethereum's client does not expose a typed error for it, since it comes
+// from third-party JSON-RPC providers with no structured error codes.
+//
+// "pruned" is matched bare (not "is pruned") since providers phrase this
+// differently - go-ethereum/Geth-family nodes say "state ... is pruned",
+// while BNB's eth_getLogs pruned-history response says "History has been
+// pruned for this block" - and "pruned" alone doesn't appear in the
+// transient errors this list must not match (rate limits, timeouts,
+// connection resets).
+//
+// The list is otherwise deliberately narrow. "header not found" and bare
+// "not found" are excluded even though they appear in some pruned-state
+// error chains, because a provider also returns them when it is merely
+// lagging the chain tip - treating those as unscannable would skip a range a
+// fresher provider, or the same provider moments later, would have served.
+var unscannableRangeMarkers = []string{
+	"missing trie node",
+	"pruned",
+	"state is not available",
+	"missing state for block",
+	"no historical state",
+}
+
+// rangeTooWideCueMarkers are substrings (matched case-insensitively) of RPC
+// error messages that, together with the word "range" appearing anywhere in
+// the same message, mean the provider refuses the requested eth_getLogs
+// block range because it is wider than the provider allows - a hard
+// client/provider mismatch that will fail identically on every retry until
+// the requested range is narrowed. Providers phrase this wildly differently
+// ("eth_getLogs is limited to 0 - 50 blocks range", "requests with up to a
+// 10 block range"), so rather than matching one exact phrase, this requires
+// "range" plus a magnitude cue - looser than an exact-phrase list, but still
+// narrow enough that a bare rate-limit message ("429 Too Many Requests",
+// "limit exceeded") never contains "range" and so never matches.
+//
+// A joined multi-provider error (every provider failed, concatenated into
+// one message - see multiRPCClient.withOne) can still pair a cue word from
+// one provider's message with "range" from an unrelated one's, so the cue
+// list deliberately excludes generic words like "too many" and "exceeds"
+// that show up in ordinary rate-limit/quota messages having nothing to do
+// with a range cap; every marker here is specific enough that it's only
+// plausible in a message actually describing a size/range limit.
+var rangeTooWideCueMarkers = []string{
+	"limited to",
+	"up to",
+	"too large",
+	"maximum of",
+	"at most",
+}
+
+func containsAnyFold(msg string, markers []string) bool {
+	msg = strings.ToLower(msg)
+	for _, m := range markers {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isUnscannableRangeErr reports whether err means the requested block range
+// can never be scanned by the failing provider(s) because the chain state it
+// needs has been pruned.
+func isUnscannableRangeErr(err error) bool {
+	return err != nil && containsAnyFold(err.Error(), unscannableRangeMarkers)
+}
+
+// isRangeTooWideErr reports whether err means the failing provider rejected
+// the requested eth_getLogs block range as too wide.
+func isRangeTooWideErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "range") && containsAnyFold(msg, rangeTooWideCueMarkers)
 }
 
 // scanMetaKey is the meta-table key for one field scoped to a base chain.
@@ -217,7 +341,25 @@ func (w *ETHWallet) scanNativeTick(ctx context.Context, tipNum uint64) {
 	covered, err := w.scanNativeReceives(ctx, from, to)
 	if err != nil {
 		w.log.Errorf("incoming transfer scan: error scanning native transfers %d-%d: %v", from, to, err)
-		w.nativeScanBackoff.failed(time.Now())
+		unscannable := isUnscannableRangeErr(err)
+		w.nativeScanBackoff.failed(time.Now(), unscannable)
+		if unscannable && w.nativeScanBackoff.unscannableFailures() >= scanSkipFailures {
+			// Jump straight to the current tip rather than just past this one
+			// maxScanBlocks window: the provider has pruned the state this
+			// wallet needs, and that's true of every block behind its
+			// retention window, not just this range - inching forward one
+			// window at a time would take a wallet that fell far behind
+			// (as this one has) months to catch up, all while remaining
+			// blind to new incoming transfers the whole time.
+			w.log.Warnf("incoming transfer scan: chain state is pruned at this provider from block %d onward; "+
+				"jumping to tip %d - transfers in %d-%d will not be detected: %v", from, tipNum, from, tipNum, err)
+			covered = tipNum
+			// The balance baseline for the skipped range is unknown, so the
+			// next tick must fetch bodies rather than trust an "unchanged"
+			// comparison against a stale baseline.
+			w.lastScanBalance = nil
+			w.nativeScanBackoff.succeeded()
+		}
 	} else {
 		w.nativeScanBackoff.succeeded()
 	}
@@ -259,18 +401,52 @@ func (w *ETHWallet) scanERC20Tick(ctx context.Context, tipNum uint64, tokenWalle
 		return
 	}
 
-	from := last + 1
-	to := tipNum
-	if to-from+1 > maxScanBlocks {
-		to = from + maxScanBlocks - 1
+	scanBlocks := w.erc20ScanBlocks
+	if scanBlocks == 0 {
+		scanBlocks = maxScanBlocks
 	}
 
-	if err := w.scanERC20Receives(ctx, from, to, tokenWallets); err != nil {
-		w.log.Errorf("incoming transfer scan: error scanning erc20 transfers %d-%d: %v", from, to, err)
-		w.erc20ScanBackoff.failed(time.Now())
-		return
+	from := last + 1
+	to := tipNum
+	if to-from+1 > scanBlocks {
+		to = from + scanBlocks - 1
 	}
-	w.erc20ScanBackoff.succeeded()
+
+	err = w.scanERC20Receives(ctx, from, to, tokenWallets)
+	if err != nil {
+		w.log.Errorf("incoming transfer scan: error scanning erc20 transfers %d-%d: %v", from, to, err)
+
+		// isUnscannableRangeErr is checked first and, if it matches, the
+		// range-too-wide branch below is skipped even when the joined
+		// multi-provider error also carries a range-too-wide marker (BNB's
+		// pruned-history and range-limit messages are frequently joined
+		// together - see isRangeTooWideErr's doc comment). A pruned range can
+		// never be narrowed into scannability, so it must reach the
+		// unscannable-range skip below rather than get stuck narrowing
+		// forever.
+		unscannable := isUnscannableRangeErr(err)
+		if !unscannable && isRangeTooWideErr(err) && scanBlocks > minScanBlocks {
+			narrowed := max(scanBlocks/2, minScanBlocks)
+			w.erc20ScanBlocks = narrowed
+			w.log.Warnf("incoming transfer scan: provider caps eth_getLogs range; reducing erc20 scan window to %d blocks", narrowed)
+			return
+		}
+
+		w.erc20ScanBackoff.failed(time.Now(), unscannable)
+		if !unscannable || w.erc20ScanBackoff.unscannableFailures() < scanSkipFailures {
+			return
+		}
+		// Jump straight to the current tip rather than just past this one
+		// window - see the equivalent native-scan comment in scanNativeTick
+		// for why inching forward window by window is impractical once a
+		// wallet has fallen behind a provider's pruning horizon.
+		w.log.Warnf("incoming transfer scan: chain state is pruned at this provider from block %d onward; "+
+			"jumping to tip %d - transfers in %d-%d will not be detected: %v", from, tipNum, from, tipNum, err)
+		to = tipNum
+		w.erc20ScanBackoff.succeeded()
+	} else {
+		w.erc20ScanBackoff.succeeded()
+	}
 
 	if err := w.setLastScannedERC20Block(to); err != nil {
 		w.log.Errorf("incoming transfer scan: error persisting erc20 scan cursor: %v", err)
