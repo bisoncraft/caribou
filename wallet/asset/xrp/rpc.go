@@ -251,8 +251,9 @@ type txResult struct {
 	Account         string      `json:"Account"`
 	Destination     string      `json:"Destination"`
 	TransactionType string      `json:"TransactionType"`
-	Amount          interface{} `json:"Amount"`     // string (XRP drops) or object (IOU); API v1
-	DeliverMax      interface{} `json:"DeliverMax"` // API v2 rename of Amount; same semantics
+	Amount          interface{} `json:"Amount"`      // string (XRP drops) or object (IOU); API v1
+	DeliverMax      interface{} `json:"DeliverMax"`  // API v2 rename of Amount; same semantics
+	LimitAmount     interface{} `json:"LimitAmount"` // TrustSet only: IOU object naming the line's currency, issuer, and limit
 	Fee             string      `json:"Fee"`
 	Hash            string      `json:"hash"`
 	LedgerIndex     uint64      `json:"ledger_index"`

@@ -1420,7 +1420,14 @@ func (w *xrpWallet) scanAccountTxs(ctx context.Context, newTip uint64) (balanceC
 				wtx = w.tokenTransaction(tr, entry.Meta, entry.Validated, ledgerIdx)
 			}
 			if wtx == nil {
-				// Non-payment tx: not stored but still marks progress.
+				// Not a transaction this wallet records, but a TrustSet in
+				// this account's history touched one of its trust lines
+				// (the issuer's side of a line, or a currency with no
+				// registered token), so the cached trust-line state the
+				// balance refresh derives is stale. It still marks progress.
+				if tr.TransactionType == "TrustSet" {
+					balanceChanged = true
+				}
 				if ledgerIdx > pageHigh {
 					pageHigh = ledgerIdx
 				}

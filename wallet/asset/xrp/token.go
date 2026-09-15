@@ -917,7 +917,13 @@ func (w *TokenWallet) walletTransactionFromTx(tr *txResult) *txdb.WalletTransact
 // hash can be told the payment to it failed. Those must not reach history —
 // see failedInbound — but that is the scanner's rule, not the parser's.
 func tokenTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64, spec tokenSpec) *txdb.WalletTransaction {
-	if tr == nil || tr.TransactionType != "Payment" {
+	if tr == nil {
+		return nil
+	}
+	if tr.TransactionType == "TrustSet" {
+		return tokenTrustSetFromTx(tr, walletAddr, meta, validated, ledgerIndex, spec)
+	}
+	if tr.TransactionType != "Payment" {
 		return nil
 	}
 	// For incoming payments, credit what meta.delivered_amount reports was
@@ -979,6 +985,49 @@ func tokenTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valida
 		BlockNumber: ledgerIndex,
 		Timestamp:   tr.closeTime(),
 		Recipient:   recipient,
+		Rejected:    meta.TransactionResult != "tesSUCCESS",
+		Confirmed:   validated,
+	}
+}
+
+// tokenTrustSetFromTx extracts a WalletTransaction from a TrustSet the
+// wallet account submitted for spec's currency and issuer: ApproveToken for
+// a positive limit, RevokeTokenApproval for zero. Amount is the limit in
+// atomic units, capped at trustlineLimitAtomic. The wallet's own TrustSets
+// are pre-stored by EstablishTrustline; this parser records one submitted
+// from another client of the same account, so the fee it burned and the
+// reserve it changed have a history row, and its arrival is what cues the
+// scanner and the websocket feed to refresh trust-line state.
+func tokenTrustSetFromTx(tr *txResult, walletAddr string, meta txMeta, validated bool, ledgerIndex uint64, spec tokenSpec) *txdb.WalletTransaction {
+	if tr == nil || tr.TransactionType != "TrustSet" || tr.Account != walletAddr {
+		return nil
+	}
+	la := issuedAmountFrom(tr.LimitAmount)
+	if la == nil || la.Issuer != spec.issuerAddr || la.Currency != spec.currency {
+		return nil
+	}
+	limitRat, ok := new(big.Rat).SetString(la.Value)
+	if !ok || limitRat.Sign() < 0 {
+		return nil
+	}
+	limit, err := parseDecimalToAtomic(la.Value, spec.decimals)
+	if err != nil {
+		limit = trustlineLimitAtomic // beyond uint64 at these decimals
+	}
+	txType := txdb.ApproveToken
+	if limit == 0 {
+		txType = txdb.RevokeTokenApproval
+	}
+	feeParsed, _ := strconv.ParseUint(tr.Fee, 10, 64)
+	return &txdb.WalletTransaction{
+		Type:        txType,
+		ID:          strings.ToUpper(tr.Hash),
+		Amount:      limit,
+		Fees:        feeParsed,
+		NetworkID:   BipID,
+		AssetID:     spec.assetID,
+		BlockNumber: ledgerIndex,
+		Timestamp:   tr.closeTime(),
 		Rejected:    meta.TransactionResult != "tesSUCCESS",
 		Confirmed:   validated,
 	}

@@ -276,6 +276,12 @@ func (w *xrpWallet) processObservedTransaction(tr *txResult, meta txMeta, ledger
 		wtx = w.tokenTransaction(tr, meta, true, ledgerIndex)
 	}
 	if wtx == nil {
+		// A TrustSet this wallet does not record (the issuer's side of a
+		// line, or an unregistered currency) still changed a trust line on
+		// this account; the balance refresh re-derives the tokens' state.
+		if tr.TransactionType == "TrustSet" {
+			w.emitBalanceChange()
+		}
 		return
 	}
 

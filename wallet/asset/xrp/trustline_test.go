@@ -4,6 +4,7 @@
 package xrp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -514,5 +515,159 @@ func TestSendRejectsDestinationOverTrustLimit(t *testing.T) {
 				t.Fatalf("Send error: %v", err)
 			}
 		})
+	}
+}
+
+// trustSetTx is an observed TrustSet by account for USDC at limit.
+func trustSetTx(account, issuer, hash, limit string, ledger uint64) *txResult {
+	return &txResult{
+		Account:         account,
+		TransactionType: "TrustSet",
+		Hash:            hash,
+		Fee:             "12",
+		LedgerIndex:     ledger,
+		LimitAmount: map[string]interface{}{
+			"currency": TokenUSDC.Currency,
+			"issuer":   issuer,
+			"value":    limit,
+		},
+	}
+}
+
+// externalTrustSetRig wires a parent wallet with a registered token wallet
+// whose cache is seeded Approved, an account with no line any more, and a
+// note channel for the token. Processing a tip or an observed TrustSet must
+// then flip the cache to NotApproved.
+func externalTrustSetRig(t *testing.T) (*xrpWallet, *TokenWallet, *mockRippled, func() []*asset.TrustlineState) {
+	t.Helper()
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	w := tw.parent
+	txDB, mt := newTestTxDB(t)
+	w.txDB, w.metaTable = txDB, mt
+	tw.txDB = txDB
+	w.tokenSpecs = networkTokenSpecs(util.Mainnet)
+	w.baseReserve, w.ownerReserve = BaseReserveDrops, OwnerReserveDrops
+	w.registerTokenWallet(tw)
+	drain := trustlineNotes(tw)
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("5000000", 0, 0), nil
+	})
+
+	// Seed Approved from a full-limit line, then take the line away.
+	tw.updateTrustlineState(&accountLine{Account: tw.issuerAddr, Currency: TokenUSDC.Currency, Balance: "0", Limit: fullLimit})
+	if st := tw.TrustlineStatus(); st.Status != asset.Approved {
+		t.Fatalf("seed status = %v, want Approved", st.Status)
+	}
+	drain()
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse(nil), nil
+	})
+	return w, tw, m, drain
+}
+
+// A TrustSet submitted from another client of the same account arrives
+// through the account scan with no Payment alongside it. The tip must still
+// refresh the token's trust-line state and record the TrustSet under the
+// token, since it burned a fee and changed the reserve.
+func TestScanExternalTrustSetRefreshesTrustline(t *testing.T) {
+	const txID = "5555000000000000000000000000000000000000000000000000000000000005"
+	w, tw, m, drain := externalTrustSetRig(t)
+	m.handle("account_tx", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status": "success",
+			"transactions": []any{
+				map[string]any{
+					"tx": map[string]any{
+						"hash":            txID,
+						"TransactionType": "TrustSet",
+						"Account":         w.address,
+						"Fee":             "12",
+						"ledger_index":    uint64(51),
+						"LimitAmount": map[string]any{
+							"currency": TokenUSDC.Currency,
+							"issuer":   tw.issuerAddr,
+							"value":    "0",
+						},
+					},
+					"meta":         map[string]any{"TransactionResult": "tesSUCCESS"},
+					"validated":    true,
+					"ledger_index": uint64(51),
+				},
+			},
+		}, nil
+	})
+	w.lastScannedLedger.Store(50)
+	w.tipMtx.Lock()
+	w.tip = 50
+	w.tipMtx.Unlock()
+
+	w.handleValidatedTip(context.Background(), 51)
+
+	if st := tw.TrustlineStatus(); st.Status != asset.NotApproved {
+		t.Fatalf("TrustlineStatus = %v after an external TrustSet removed the line, want NotApproved", st.Status)
+	}
+	notes := drain()
+	if len(notes) == 0 || notes[len(notes)-1].Status != asset.NotApproved {
+		t.Fatalf("trustline notes = %+v, want a NotApproved note", notes)
+	}
+	stored, err := w.txDB.GetTx(txID)
+	if err != nil {
+		t.Fatalf("GetTx: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("external TrustSet was not recorded")
+	}
+	if stored.Type != txdb.RevokeTokenApproval || stored.AssetID != tw.assetID || stored.Fees != 12 {
+		t.Fatalf("stored = type %v asset %d fees %d, want RevokeTokenApproval under %d with fee 12", stored.Type, stored.AssetID, stored.Fees, tw.assetID)
+	}
+}
+
+// The websocket feed delivers the same TrustSet without a scan.
+func TestObservedExternalTrustSetRefreshesTrustline(t *testing.T) {
+	const txID = "6666000000000000000000000000000000000000000000000000000000000006"
+	w, tw, _, drain := externalTrustSetRig(t)
+
+	w.processObservedTransaction(trustSetTx(w.address, tw.issuerAddr, txID, "0", 500), txMeta{TransactionResult: "tesSUCCESS"}, 500)
+
+	if st := tw.TrustlineStatus(); st.Status != asset.NotApproved {
+		t.Fatalf("TrustlineStatus = %v after an observed external TrustSet, want NotApproved", st.Status)
+	}
+	if notes := drain(); len(notes) == 0 {
+		t.Fatal("no trustline note after an observed external TrustSet")
+	}
+	stored, err := w.txDB.GetTx(txID)
+	if err != nil || stored == nil {
+		t.Fatalf("observed TrustSet not recorded (err %v)", err)
+	}
+	if stored.Type != txdb.RevokeTokenApproval {
+		t.Fatalf("stored type = %v, want RevokeTokenApproval", stored.Type)
+	}
+}
+
+// A TrustSet from the issuer's side is not this wallet's transaction and is
+// not recorded, but it changed the line, so the state still refreshes: here
+// the line reappears at the full limit and the state flips to Approved.
+func TestObservedIssuerTrustSetRefreshesTrustline(t *testing.T) {
+	const txID = "7777000000000000000000000000000000000000000000000000000000000007"
+	w, tw, m, drain := externalTrustSetRig(t)
+	// Start from NotApproved (no line), then have the line come back.
+	tw.updateTrustlineState(nil)
+	drain()
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse([]accountLine{usdcLine("0")}), nil
+	})
+
+	w.processObservedTransaction(trustSetTx(tw.issuerAddr, w.address, txID, "0", 600), txMeta{TransactionResult: "tesSUCCESS"}, 600)
+
+	if st := tw.TrustlineStatus(); st.Status != asset.Approved {
+		t.Fatalf("TrustlineStatus = %v after an issuer-side TrustSet, want Approved from the fresh account_lines", st.Status)
+	}
+	stored, err := w.txDB.GetTx(txID)
+	if err != nil {
+		t.Fatalf("GetTx: %v", err)
+	}
+	if stored != nil {
+		t.Fatalf("issuer-side TrustSet was recorded as %v; only the wallet's own TrustSets belong in history", stored.Type)
 	}
 }
