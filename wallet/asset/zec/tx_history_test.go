@@ -15,7 +15,32 @@ import (
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/btc"
 	"github.com/bisoncraft/caribou/wallet/txdb"
+	"github.com/btcsuite/btcd/btcjson"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
 )
+
+// tMinedBlockHash is a non-empty block hash, as gettransaction reports for a
+// mined transaction. An empty BlockHash, as reported for a mempool
+// transaction, is handled separately (see
+// TestWalletTransactionNotCachedUnminedStaysPending).
+var tMinedBlockHash = (&chainhash.Hash{0x01}).String()
+
+// addrFromScript derives the encoded address for a P2PKH pkScript, the same
+// way idUnknownTx does, so tests don't need to hardcode addresses.
+func addrFromScript(t *testing.T, w *zecWallet, pkScript []byte) string {
+	t.Helper()
+	_, addrs, _, err := txscript.ExtractPkScriptAddrs(pkScript, w.btcParams)
+	if err != nil || len(addrs) != 1 {
+		t.Fatalf("ExtractPkScriptAddrs error: %v, addrs: %v", err, addrs)
+	}
+	addr, err := EncodeAddress(addrs[0], w.addrParams)
+	if err != nil {
+		t.Fatalf("EncodeAddress error: %v", err)
+	}
+	return addr
+}
 
 // tNewWalletWithTxDB is like tNewWallet, but wires up a real, temp-dir-backed
 // NetworkTxDB so the transaction history paths can be exercised.
@@ -147,26 +172,36 @@ func TestWalletTransactionByCoinIDHex(t *testing.T) {
 	}
 }
 
+// foreignP2PKH is a P2PKH script for an address the wallet does not own
+// (tP2PKH with the last hash160 byte flipped).
+var foreignP2PKH, _ = hex.DecodeString("76a9148fc02268f208a61767504fe0b48d228641ba81e488ac")
+
 func TestWalletTransactionNotCachedFetchesFromRPC(t *testing.T) {
 	w, cl, shutdown := tNewWalletWithTxDB(t)
 	defer shutdown()
 	defer cl.checkEmptiness(t)
 
-	dTx := dummyTx()
+	dTx := makeRawTx([]util.Bytes{tP2PKH}, []*wire.TxIn{dummyInput()})
 	txB, _ := dTx.Bytes()
+	// A mined transaction carries a non-empty BlockHash, so WalletTransaction
+	// looks up its block header.
 	cl.queueResponse("gettransaction", &GetTransactionResult{
 		Bytes:     txB,
 		TxID:      tTxHash.String(),
-		BlockHash: tTxHash.String(),
+		BlockHash: tMinedBlockHash,
+		Details:   []btcjson.GetTransactionDetailsResult{{Category: "receive"}},
 	})
-	cl.queueResponse("getblockheader", &btc.BlockHeader{Height: 5, Time: 10, Confirmations: 1})
+	cl.queueResponse("getblockheader", &btc.BlockHeader{Height: 5, Confirmations: 1})
 	// idUnknownTx re-fetches the transaction, then identifies it. Category is
-	// empty (not "send"), so it identifies as a Receive, calling
-	// OwnsDepositAddress for each output address.
+	// "receive", so it identifies as a Receive, calling OwnsDepositAddress
+	// for each output address.
 	cl.queueResponse("gettransaction", &GetTransactionResult{
 		Bytes: txB,
 		TxID:  tTxHash.String(),
 	})
+	// One OwnsDepositAddress lookup in txOutDirection, one in getRecipient.
+	cl.queueResponse(methodZValidateAddress, &zValidateAddressResult{IsMine: true})
+	cl.queueResponse(methodZValidateAddress, &zValidateAddressResult{IsMine: true})
 
 	got, err := w.WalletTransaction(tCtx, tTxHash.String())
 	if err != nil {
@@ -178,8 +213,62 @@ func TestWalletTransactionNotCachedFetchesFromRPC(t *testing.T) {
 	if !got.Confirmed {
 		t.Fatalf("expected Confirmed = true")
 	}
-	if got.BlockNumber != 5 || got.Timestamp != 10 {
-		t.Fatalf("unexpected block details: %+v", got)
+	if got.Type != txdb.Receive {
+		t.Fatalf("expected Type = Receive, got %v", got.Type)
+	}
+	if got.Amount != 1 {
+		t.Fatalf("expected Amount = 1, got %d", got.Amount)
+	}
+	wantAddr := addrFromScript(t, w, tP2PKH)
+	if got.Recipient == nil {
+		t.Fatalf("expected Recipient = %s, got nil", wantAddr)
+	}
+	if *got.Recipient != wantAddr {
+		t.Fatalf("expected Recipient = %s, got %s", wantAddr, *got.Recipient)
+	}
+}
+
+func TestWalletTransactionNotCachedSendFetchesFromRPC(t *testing.T) {
+	w, cl, shutdown := tNewWalletWithTxDB(t)
+	defer shutdown()
+	defer cl.checkEmptiness(t)
+
+	dTx := makeRawTx([]util.Bytes{foreignP2PKH}, []*wire.TxIn{dummyInput()})
+	txB, _ := dTx.Bytes()
+	cl.queueResponse("gettransaction", &GetTransactionResult{
+		Bytes:     txB,
+		TxID:      tTxHash.String(),
+		BlockHash: tMinedBlockHash,
+		Details:   []btcjson.GetTransactionDetailsResult{{Category: "send"}},
+	})
+	cl.queueResponse("getblockheader", &btc.BlockHeader{Height: 5, Confirmations: 1})
+	cl.queueResponse("gettransaction", &GetTransactionResult{
+		Bytes: txB,
+		TxID:  tTxHash.String(),
+	})
+	// allOutputsPayUs (Split check), txOutDirection, getRecipient, and
+	// allOutputsPayUs (SelfSend check) each look up the single output's
+	// address ownership; none of them own it.
+	for i := 0; i < 4; i++ {
+		cl.queueResponse(methodZValidateAddress, &zValidateAddressResult{IsMine: false})
+	}
+
+	got, err := w.WalletTransaction(tCtx, tTxHash.String())
+	if err != nil {
+		t.Fatalf("WalletTransaction error: %v", err)
+	}
+	if got.Type != txdb.Send {
+		t.Fatalf("expected Type = Send, got %v", got.Type)
+	}
+	if got.Amount != 1 {
+		t.Fatalf("expected Amount = 1, got %d", got.Amount)
+	}
+	wantAddr := addrFromScript(t, w, foreignP2PKH)
+	if got.Recipient == nil {
+		t.Fatalf("expected Recipient = %s, got nil", wantAddr)
+	}
+	if *got.Recipient != wantAddr {
+		t.Fatalf("expected Recipient = %s, got %s", wantAddr, *got.Recipient)
 	}
 }
 
@@ -210,6 +299,25 @@ func TestWalletTransactionNotCachedWithoutBlock(t *testing.T) {
 	}
 	if got.BlockNumber != 0 || got.Timestamp != 0 {
 		t.Fatalf("unexpected block details: %+v", got)
+	}
+
+	// The caller is always told Confirmed = true, but the stored record must
+	// not be, or it will be lost from pending tracking on restart.
+	pending, err := w.txDB().GetPendingTxs()
+	if err != nil {
+		t.Fatalf("GetPendingTxs error: %v", err)
+	}
+	var found bool
+	for _, p := range pending {
+		if p.ID == tTxHash.String() {
+			found = true
+			if p.Confirmed {
+				t.Fatalf("expected stored tx to be unconfirmed")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected tx %s in pending txs, got %+v", tTxHash.String(), pending)
 	}
 }
 

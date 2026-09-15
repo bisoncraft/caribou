@@ -36,17 +36,19 @@ func lockUnspent(c rpcCaller, unlock bool, ops []*btc.Output) error {
 type zTx struct {
 	*Tx
 	blockHash *chainhash.Hash
+	category  string
 }
 
 type GetTransactionResult struct {
 	Confirmations int64  `json:"confirmations"`
 	BlockHash     string `json:"blockhash"`
 	// BlockIndex    int64  `json:"blockindex"` // unused, consider commenting
-	BlockTime    uint64     `json:"blocktime"`
-	TxID         string     `json:"txid"`
-	Time         uint64     `json:"time"`
-	TimeReceived uint64     `json:"timereceived"`
-	Bytes        util.Bytes `json:"hex"`
+	BlockTime    uint64                                `json:"blocktime"`
+	TxID         string                                `json:"txid"`
+	Time         uint64                                `json:"time"`
+	TimeReceived uint64                                `json:"timereceived"`
+	Bytes        util.Bytes                            `json:"hex"`
+	Details      []btcjson.GetTransactionDetailsResult `json:"details"`
 }
 
 func getTransaction(c rpcCaller, txHash *chainhash.Hash) (*zTx, error) {
@@ -62,9 +64,17 @@ func getTransaction(c rpcCaller, txHash *chainhash.Hash) (*zTx, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid block hash for transaction: %v", err)
 	}
+	category := receiveCategory
+	for _, d := range tx.Details {
+		if d.Category == sendCategory {
+			category = sendCategory
+			break
+		}
+	}
 	zt := &zTx{
 		Tx:        dexzecTx,
 		blockHash: blockHash,
+		category:  category,
 	}
 	return zt, nil
 }

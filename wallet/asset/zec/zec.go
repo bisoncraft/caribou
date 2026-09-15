@@ -1387,6 +1387,7 @@ func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*txdb.Wal
 			BlockHeight: &blockHeight,
 			BlockTime:   blockTime,
 			TxID:        txID,
+			Category:    gtr.category,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("error identifying transaction: %v", err)
@@ -1394,15 +1395,17 @@ func (w *zecWallet) WalletTransaction(_ context.Context, txID string) (*txdb.Wal
 
 		tx.BlockNumber = uint64(blockHeight)
 		tx.Timestamp = uint64(blockTime)
-		tx.Confirmed = true
 		w.addTxToHistory(tx, txHash, false)
 	}
 
 	// If the wallet knows about the transaction, it will be part of the
-	// available balance, so we always return Confirmed = true.
-	tx.Confirmed = true
+	// available balance, so we always return Confirmed = true. tx may be the
+	// same *txdb.WalletTransaction stored in w.pendingTxs, so return a copy
+	// rather than mutating it in place.
+	txCopy := *tx
+	txCopy.Confirmed = true
 
-	return tx, nil
+	return &txCopy, nil
 }
 
 // PendingTransactions loads wallet transactions that are not yet confirmed.
@@ -1434,7 +1437,10 @@ func (w *zecWallet) TxHistory(req *txdb.TxHistoryRequest) (*txdb.TxHistoryRespon
 	return txHistoryDB.GetTxs(req)
 }
 
-const sendCategory = "send"
+const (
+	sendCategory    = "send"
+	receiveCategory = "receive"
+)
 
 // idUnknownTx identifies the type and details of a transaction either made
 // or received by the wallet.
