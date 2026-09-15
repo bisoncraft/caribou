@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"slices"
 	"strconv"
@@ -150,10 +151,10 @@ func (w *TokenWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 			w.parent.log.Warnf("Error priming account state for %s trust-line status: %v", w.token.Name, err)
 		}
 	}
-	if exists, err := w.hasTrustline(w.parent.ctx, w.parent.address); err != nil {
+	if line, err := w.lookupTrustline(w.parent.ctx, w.parent.address); err != nil {
 		w.parent.log.Warnf("Error querying %s trust line at connect: %v", w.token.Name, err)
 	} else {
-		w.updateTrustlineState(exists)
+		w.updateTrustlineState(line)
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -179,7 +180,7 @@ func (w *TokenWallet) Balance() (*asset.Balance, error) {
 	if err != nil {
 		return nil, err
 	}
-	w.updateTrustlineState(line != nil)
+	w.updateTrustlineState(line)
 	if line == nil {
 		return &asset.Balance{}, nil
 	}
@@ -225,10 +226,70 @@ func (w *TokenWallet) lookupTrustline(ctx context.Context, addr string) (*accoun
 	return nil, nil
 }
 
-// hasTrustline reports whether addr holds a trust line for this token.
-func (w *TokenWallet) hasTrustline(ctx context.Context, addr string) (bool, error) {
-	line, err := w.lookupTrustline(ctx, addr)
-	return line != nil, err
+// fullLimit is trustlineLimitAtomic in the token's conventional units, the
+// limit the wallet sets and the bar a line must meet to count as ready.
+func (w *TokenWallet) fullLimit() *big.Rat {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(w.token.Decimals)), nil)
+	return new(big.Rat).SetFrac(new(big.Int).SetUint64(trustlineLimitAtomic), scale)
+}
+
+// trustlineReady reports whether line accepts deposits up to the wallet's
+// full limit. A line at a lower limit is not ready: XRPL refuses a payment
+// that would raise the holder's balance above the holder's limit, and a
+// RippleState with a zero limit on this side persists for as long as a
+// balance or the issuer's side keeps it alive. EstablishTrustline re-sets
+// such a line to the full limit rather than treating it as done.
+func (w *TokenWallet) trustlineReady(line *accountLine) bool {
+	if line == nil {
+		return false
+	}
+	limit, ok := new(big.Rat).SetString(line.Limit)
+	return ok && limit.Cmp(w.fullLimit()) >= 0
+}
+
+// trustSetAddsReserve reports whether setting the wallet's limit on line
+// adds to the account's owner count. A side of a trust line carries the
+// owner reserve once it is non-default: a nonzero limit, a positive
+// balance, a quality, or a freeze. With no line, or a line on which this
+// side has neither a limit nor a balance, the TrustSet makes the side
+// reserved and the owner reserve must be covered on top of the fee.
+// Otherwise the reserve is already held and only the fee is due. A line
+// whose fields cannot be parsed is assumed to need the reserve.
+func trustSetAddsReserve(line *accountLine) bool {
+	if line == nil {
+		return true
+	}
+	limit, ok := new(big.Rat).SetString(line.Limit)
+	balance, okBal := new(big.Rat).SetString(line.Balance)
+	if !ok || !okBal {
+		return true
+	}
+	return limit.Sign() == 0 && balance.Sign() <= 0
+}
+
+// lineCapacity is how much more of the token line can receive before its
+// holder's limit is reached, in atomic units. A limit beyond what the token's
+// atomic units can represent is treated as unbounded.
+func (w *TokenWallet) lineCapacity(line *accountLine) (uint64, error) {
+	limitRat, ok := new(big.Rat).SetString(line.Limit)
+	if !ok {
+		return 0, fmt.Errorf("invalid trust line limit %q", line.Limit)
+	}
+	balance, err := parseDecimalToAtomic(line.Balance, w.token.Decimals)
+	if err != nil {
+		return 0, fmt.Errorf("invalid trust line balance %q: %w", line.Balance, err)
+	}
+	limit, err := parseDecimalToAtomic(line.Limit, w.token.Decimals)
+	if err != nil {
+		if limitRat.Sign() < 0 {
+			return 0, fmt.Errorf("invalid trust line limit %q", line.Limit)
+		}
+		limit = math.MaxUint64 // beyond uint64 at these decimals: unbounded
+	}
+	if balance >= limit {
+		return 0, nil
+	}
+	return limit - balance, nil
 }
 
 // pendingTrustSet returns the ID of this token's unresolved TrustSet, if the
@@ -253,19 +314,20 @@ func (w *TokenWallet) pendingTrustSet() string {
 }
 
 // updateTrustlineState derives the trust-line state from an account_lines
-// observation plus local pending-tx and account-state knowledge, caches it,
-// and announces it when it differs from the previous state. It is the single
+// observation (line is nil when the account holds no line for the token)
+// plus local pending-tx and account-state knowledge, caches it, and
+// announces it when it differs from the previous state. It is the single
 // writer of the cache.
-func (w *TokenWallet) updateTrustlineState(lineExists bool) {
+func (w *TokenWallet) updateTrustlineState(line *accountLine) {
 	state := asset.TrustlineState{Reserve: w.parent.ownerReserveDrops()}
 	switch {
-	case lineExists:
+	case w.trustlineReady(line):
 		state.Status = asset.Approved
 	case w.pendingTrustSet() != "":
 		state.Status = asset.Pending
 	default:
 		state.Status = asset.NotApproved
-		state.Shortfall = w.parent.trustlineShortfall(DefaultFeeDrops)
+		state.Shortfall = w.parent.trustlineShortfall(DefaultFeeDrops, trustSetAddsReserve(line))
 	}
 	w.trustlineMtx.Lock()
 	changed := !w.trustlineKnown || w.trustline != state
@@ -363,9 +425,11 @@ const trustlineLimitAtomic = 999_999_999_999_999
 // the transaction ID. The line must exist before the account can receive the
 // token via Send from another wallet.
 //
-// The call is idempotent. An existing line returns an empty ID and no error,
-// and an unresolved earlier TrustSet returns that transaction's ID, so a
-// repeated request (a restore, a double click) never burns a second fee.
+// The call is idempotent. A line already at the full limit returns an empty
+// ID and no error, and an unresolved earlier TrustSet returns that
+// transaction's ID, so a repeated request (a restore, a double click) never
+// burns a second fee. A line at a lower limit, including zero, is re-set to
+// the full limit.
 // A nil error means the transaction was accepted for inclusion, not that the
 // trustline is guaranteed to exist: a tec/ter result (e.g.
 // tecINSUF_RESERVE_LINE) is tracked as a pending tx and reconciled
@@ -389,16 +453,16 @@ func (w *TokenWallet) EstablishTrustline() (string, error) {
 	w.parent.sendMtx.Lock()
 	defer w.parent.sendMtx.Unlock()
 
-	exists, err := w.hasTrustline(w.parent.ctx, w.parent.address)
+	line, err := w.lookupTrustline(w.parent.ctx, w.parent.address)
 	if err != nil {
 		return "", fmt.Errorf("error checking for an existing trust line: %w", err)
 	}
-	if exists {
-		w.updateTrustlineState(true)
+	if w.trustlineReady(line) {
+		w.updateTrustlineState(line)
 		return "", nil
 	}
 	if pendingID := w.pendingTrustSet(); pendingID != "" {
-		w.updateTrustlineState(false)
+		w.updateTrustlineState(line)
 		return pendingID, nil
 	}
 
@@ -418,12 +482,13 @@ func (w *TokenWallet) EstablishTrustline() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("checking available balance: %w", err)
 	}
-	// A successful TrustSet adds a RippleState object, incrementing
-	// OwnerCount and so the owner reserve the account must hold — on top of
-	// the fee — or the tx lands as tecINSUF_RESERVE_LINE, burning the fee
-	// and the sequence for nothing. An account that does not exist yet
-	// cannot submit at all, so its shortfall includes the base reserve.
-	if shortfall := w.parent.trustlineShortfall(fee); shortfall > 0 {
+	// A TrustSet that makes this side of the line reserved (see
+	// trustSetAddsReserve) increments OwnerCount and so the owner reserve
+	// the account must hold — on top of the fee — or the tx lands as
+	// tecINSUF_RESERVE_LINE, burning the fee and the sequence for nothing.
+	// An account that does not exist yet cannot submit at all, so its
+	// shortfall includes the base reserve.
+	if shortfall := w.parent.trustlineShortfall(fee, trustSetAddsReserve(line)); shortfall > 0 {
 		w.setTrustlineShortfall(shortfall)
 		return "", fmt.Errorf("%w: establishing the %s trust line needs %s more XRP (available %s XRP)",
 			asset.ErrInsufficientBalance, w.token.Name, formatDrops(shortfall), formatDrops(nativeBalance.Available))
@@ -504,7 +569,7 @@ func (w *TokenWallet) EstablishTrustline() (string, error) {
 		// node did process the tx. The pre-stored entry will be resolved by
 		// checkPendingTxs, and reports Pending until then.
 		w.parent.log.Warnf("TrustSet submit network error (outcome unknown): %v", err)
-		w.updateTrustlineState(false)
+		w.updateTrustlineState(line)
 		return "", fmt.Errorf("error submitting transaction: %w", err)
 	}
 	class := ""
@@ -519,7 +584,7 @@ func (w *TokenWallet) EstablishTrustline() (string, error) {
 		if w.emit != nil {
 			w.emit.TransactionNote(wtx, true)
 		}
-		w.updateTrustlineState(false) // Pending, via the pre-stored tx
+		w.updateTrustlineState(line) // Pending, via the pre-stored tx
 		return txID, nil
 	default:
 		// Deterministic rejection: sequence was not consumed. This is
@@ -533,7 +598,7 @@ func (w *TokenWallet) EstablishTrustline() (string, error) {
 				w.parent.log.Errorf("Error updating rejected trustline tx %s: %v", txID, err)
 			}
 		}
-		w.updateTrustlineState(false)
+		w.updateTrustlineState(line)
 		return "", fmt.Errorf("trustline transaction rejected: %s — %s", sr.EngineResult, sr.EngineResultMessage)
 	}
 }
@@ -593,14 +658,24 @@ func (w *TokenWallet) Send(address string, value, _ uint64) (asset.Coin, error) 
 	}
 
 	// The destination must already have a trustline for this currency and
-	// issuer; XRPL rejects an issued-currency Payment to an account without
-	// one (tecNO_LINE / tecPATH_DRY).
-	hasTrustline, err := w.hasTrustline(w.parent.ctx, address)
+	// issuer with room for the payment under its limit; XRPL rejects an
+	// issued-currency Payment to an account without one (tecNO_LINE /
+	// tecPATH_DRY) and one that would raise the holder's balance above its
+	// limit.
+	destLine, err := w.lookupTrustline(w.parent.ctx, address)
 	if err != nil {
 		return nil, fmt.Errorf("error checking destination trustlines: %w", err)
 	}
-	if !hasTrustline {
+	if destLine == nil {
 		return nil, fmt.Errorf("destination %q has no %s trustline with issuer %s; recipient must establish one first", address, w.token.Name, w.issuerAddr)
+	}
+	capacity, err := w.lineCapacity(destLine)
+	if err != nil {
+		return nil, fmt.Errorf("error reading destination %s trustline: %w", w.token.Name, err)
+	}
+	if capacity < value {
+		return nil, fmt.Errorf("destination %q can accept at most %s more %s under its trustline limit; recipient must raise the limit first",
+			address, formatAtomic(capacity, w.token.Decimals), w.token.Name)
 	}
 
 	// Serialize against the parent wallet's native sends: a concurrent native
@@ -907,6 +982,13 @@ func tokenTransactionFromTx(tr *txResult, walletAddr string, meta txMeta, valida
 		Rejected:    meta.TransactionResult != "tesSUCCESS",
 		Confirmed:   validated,
 	}
+}
+
+// formatAtomic renders an atomic token amount as a decimal string at the
+// token's decimals, for messages.
+func formatAtomic(v uint64, decimals int) string {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	return new(big.Rat).SetFrac(new(big.Int).SetUint64(v), scale).FloatString(decimals)
 }
 
 // parseDecimalToAtomic converts an XRPL decimal string value (as returned by

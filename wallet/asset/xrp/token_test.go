@@ -393,12 +393,14 @@ func TestTokenWalletSendHappyPath(t *testing.T) {
 				Account:  TokenUSDC.NetIssuers[util.Mainnet],
 				Balance:  "0",
 				Currency: TokenUSDC.Currency,
+				Limit:    "999999999.999999",
 			}}), nil
 		}
 		return accountLinesResponse([]accountLine{{
 			Account:  TokenUSDC.NetIssuers[util.Mainnet],
 			Balance:  "100",
 			Currency: TokenUSDC.Currency,
+			Limit:    "999999999.999999",
 		}}), nil
 	})
 	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
@@ -445,12 +447,14 @@ func TestTokenWalletSendInsufficientNativeFee(t *testing.T) {
 				Account:  TokenUSDC.NetIssuers[util.Mainnet],
 				Balance:  "0",
 				Currency: TokenUSDC.Currency,
+				Limit:    "999999999.999999",
 			}}), nil
 		}
 		return accountLinesResponse([]accountLine{{
 			Account:  TokenUSDC.NetIssuers[util.Mainnet],
 			Balance:  "100",
 			Currency: TokenUSDC.Currency,
+			Limit:    "999999999.999999",
 		}}), nil
 	})
 	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
@@ -544,12 +548,14 @@ func TestConcurrentNativeAndTokenSendsSerializeFeeCheck(t *testing.T) {
 				Account:  tw.issuerAddr,
 				Balance:  "0",
 				Currency: TokenUSDC.Currency,
+				Limit:    "999999999.999999",
 			}}), nil
 		}
 		return accountLinesResponse([]accountLine{{
 			Account:  tw.issuerAddr,
 			Balance:  "100",
 			Currency: TokenUSDC.Currency,
+			Limit:    "999999999.999999",
 		}}), nil
 	})
 	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
@@ -1243,6 +1249,7 @@ func TestTokenWalletEstimateSendTxFee(t *testing.T) {
 				Account:  TokenUSDC.NetIssuers[util.Mainnet],
 				Currency: TokenUSDC.Currency,
 				Balance:  "1000",
+				Limit:    "999999999.999999",
 			}}), nil
 		})
 		tw := makeTokenTestWallet(t, m)
@@ -1270,6 +1277,7 @@ func TestTokenWalletEstimateSendTxFee(t *testing.T) {
 				Account:  TokenUSDC.NetIssuers[util.Mainnet],
 				Currency: TokenUSDC.Currency,
 				Balance:  "1000",
+				Limit:    "999999999.999999",
 			}}), nil
 		})
 		tw := makeTokenTestWallet(t, m)
@@ -1291,6 +1299,7 @@ func TestTokenWalletEstimateSendTxFee(t *testing.T) {
 				Account:  TokenUSDC.NetIssuers[util.Mainnet],
 				Currency: TokenUSDC.Currency,
 				Balance:  "0.5", // 500000 atomic (USDC has 6 decimals) < value
+				Limit:    "999999999.999999",
 			}}), nil
 		})
 		tw := makeTokenTestWallet(t, m)
@@ -1329,6 +1338,7 @@ func TestTokenWalletEstimateSendTxFee(t *testing.T) {
 				Account:  TokenUSDC.NetIssuers[util.Mainnet],
 				Currency: TokenUSDC.Currency,
 				Balance:  "1000",
+				Limit:    "999999999.999999",
 			}}), nil
 		})
 		tw := makeTokenTestWallet(t, m)

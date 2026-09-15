@@ -6,6 +6,7 @@ package xrp
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -14,13 +15,23 @@ import (
 	"github.com/bisoncraft/caribou/wallet/txdb"
 )
 
-// usdcLine is an account_lines entry for the test wallet's USDC issuer.
+// fullLimit is trustlineLimitAtomic as account_lines reports it at USDC's
+// six decimals: the limit the wallet sets, and the bar for Approved.
+const fullLimit = "999999999.999999"
+
+// usdcLine is an account_lines entry for the test wallet's USDC issuer at
+// the full limit.
 func usdcLine(balance string) accountLine {
+	return usdcLineWithLimit(balance, fullLimit)
+}
+
+// usdcLineWithLimit is usdcLine at an arbitrary limit.
+func usdcLineWithLimit(balance, limit string) accountLine {
 	return accountLine{
 		Account:  TokenUSDC.NetIssuers[util.Mainnet],
 		Currency: TokenUSDC.Currency,
 		Balance:  balance,
-		Limit:    "999999999",
+		Limit:    limit,
 	}
 }
 
@@ -307,5 +318,201 @@ func TestMinimumDepositIsBaseReserve(t *testing.T) {
 	w := &xrpWallet{baseReserve: BaseReserveDrops}
 	if got := w.MinimumDeposit(); got != BaseReserveDrops {
 		t.Fatalf("MinimumDeposit = %d, want %d", got, BaseReserveDrops)
+	}
+}
+
+// fundedAccountHandlers serves account_info for an account that already
+// holds one RippleState (owner count 1) with a few drops spare above its
+// reserve, and a fee of 10 drops. Tests that expect the TrustSet to need
+// only the fee have room; tests that expect it to add the owner reserve
+// do not.
+func fundedAccountHandlers(m *mockRippled) {
+	// 1 XRP base + 0.2 XRP owner reserve locked, 50 drops available.
+	m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+		return accountInfoResponse("1200050", 1, 0), nil
+	})
+	m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+		return map[string]any{
+			"status":               "success",
+			"drops":                map[string]any{"open_ledger_fee": "10"},
+			"ledger_current_index": uint64(100),
+		}, nil
+	})
+}
+
+func countingSubmit(m *mockRippled) *atomic.Int32 {
+	var submits atomic.Int32
+	m.handle("submit", func(_ json.RawMessage) (any, *rpcError) {
+		submits.Add(1)
+		return map[string]any{"status": "success", "engine_result": "tesSUCCESS", "tx_json": map[string]any{}}, nil
+	})
+	return &submits
+}
+
+// A line below the full limit, zero included, is not ready: XRPL refuses a
+// payment that would raise the balance above the holder's limit, so the
+// address must stay withheld and EstablishTrustline must re-set the limit.
+func TestTrustlineBelowFullLimitIsNotApproved(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit string
+		want  asset.ApprovalStatus
+	}{
+		{"zero limit", "0", asset.NotApproved},
+		{"partial limit", "100", asset.NotApproved},
+		{"just under full", "999999999.999998", asset.NotApproved},
+		{"full limit", fullLimit, asset.Approved},
+		{"above full", "1000000000", asset.Approved},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMockRippled(t)
+			tw := makeTokenTestWallet(t, m)
+			tw.parent.cacheAccountState(true, 5_000_000)
+			m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+				return accountLinesResponse([]accountLine{usdcLineWithLimit("5", tc.limit)}), nil
+			})
+			bal, err := tw.Balance()
+			if err != nil {
+				t.Fatalf("Balance: %v", err)
+			}
+			if bal.Available != 5_000_000 {
+				t.Fatalf("Balance.Available = %d, want the line balance regardless of limit", bal.Available)
+			}
+			if st := tw.TrustlineStatus(); st.Status != tc.want {
+				t.Fatalf("TrustlineStatus = %v for limit %q, want %v", st.Status, tc.limit, tc.want)
+			}
+		})
+	}
+}
+
+// A zero-limit line kept alive by a balance already carries this side's
+// reserve, so restoring the limit costs only the fee, and must submit rather
+// than report the line as done.
+func TestEstablishTrustlineRestoresZeroLimitLine(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	tw.parent.baseReserve = BaseReserveDrops
+	tw.parent.ownerReserve = OwnerReserveDrops
+	txDB, _ := newTestTxDB(t)
+	tw.txDB = txDB
+	fundedAccountHandlers(m)
+	submits := countingSubmit(m)
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse([]accountLine{usdcLineWithLimit("5", "0")}), nil
+	})
+
+	txID, err := tw.EstablishTrustline()
+	if err != nil {
+		t.Fatalf("EstablishTrustline error: %v", err)
+	}
+	if txID == "" {
+		t.Fatal("EstablishTrustline returned an empty ID for a zero-limit line; it must submit a TrustSet")
+	}
+	if submits.Load() != 1 {
+		t.Fatalf("submit called %d times, want 1", submits.Load())
+	}
+	if st := tw.TrustlineStatus(); st.Status != asset.Pending {
+		t.Fatalf("TrustlineStatus = %+v after submit, want Pending", st)
+	}
+}
+
+// A zero-limit, zero-balance line on this side is default, so setting the
+// limit makes the side reserved: the owner reserve is due on top of the fee.
+func TestEstablishTrustlineEmptyZeroLimitLineNeedsReserve(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	tw.parent.baseReserve = BaseReserveDrops
+	tw.parent.ownerReserve = OwnerReserveDrops
+	fundedAccountHandlers(m)
+	submits := countingSubmit(m)
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse([]accountLine{usdcLineWithLimit("0", "0")}), nil
+	})
+
+	_, err := tw.EstablishTrustline()
+	if !errors.Is(err, asset.ErrInsufficientBalance) {
+		t.Fatalf("EstablishTrustline error = %v, want ErrInsufficientBalance", err)
+	}
+	if submits.Load() != 0 {
+		t.Fatalf("submit called %d times, want 0", submits.Load())
+	}
+	want := uint64(OwnerReserveDrops + 10 - 50)
+	if st := tw.TrustlineStatus(); st.Shortfall != want {
+		t.Fatalf("TrustlineStatus.Shortfall = %d, want %d (owner reserve plus fee less the 50 drops available)", st.Shortfall, want)
+	}
+}
+
+// A positive limit below the full one already holds the reserve; raising it
+// costs the fee alone and must submit.
+func TestEstablishTrustlineRaisesPartialLimit(t *testing.T) {
+	m := newMockRippled(t)
+	tw := makeTokenTestWallet(t, m)
+	tw.parent.baseReserve = BaseReserveDrops
+	tw.parent.ownerReserve = OwnerReserveDrops
+	fundedAccountHandlers(m)
+	submits := countingSubmit(m)
+	m.handle("account_lines", func(_ json.RawMessage) (any, *rpcError) {
+		return accountLinesResponse([]accountLine{usdcLineWithLimit("0", "100")}), nil
+	})
+
+	if _, err := tw.EstablishTrustline(); err != nil {
+		t.Fatalf("EstablishTrustline error: %v", err)
+	}
+	if submits.Load() != 1 {
+		t.Fatalf("submit called %d times, want 1", submits.Load())
+	}
+}
+
+// Send must refuse a payment the destination's limit cannot absorb, since
+// the network would reject it after the fee is paid.
+func TestSendRejectsDestinationOverTrustLimit(t *testing.T) {
+	const destAddr = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe"
+	for _, tc := range []struct {
+		name          string
+		limit, bal    string
+		value         uint64
+		wantRejection bool
+	}{
+		{"zero limit", "0", "0", 1_000_000, true},
+		{"over remaining room", "100", "90", 20_000_000, true},
+		{"exactly remaining room", "100", "90", 10_000_000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMockRippled(t)
+			tw := makeTokenTestWallet(t, m)
+			m.handle("account_lines", func(params json.RawMessage) (any, *rpcError) {
+				var p map[string]any
+				_ = json.Unmarshal(params, &p)
+				if acct, _ := p["account"].(string); acct == destAddr {
+					return accountLinesResponse([]accountLine{usdcLineWithLimit(tc.bal, tc.limit)}), nil
+				}
+				return accountLinesResponse([]accountLine{usdcLine("100")}), nil
+			})
+			m.handle("account_info", func(_ json.RawMessage) (any, *rpcError) {
+				return accountInfoResponse("100000000", 0, 0), nil
+			})
+			m.handle("fee", func(_ json.RawMessage) (any, *rpcError) {
+				return map[string]any{
+					"status":               "success",
+					"drops":                map[string]any{"open_ledger_fee": "12"},
+					"ledger_current_index": uint64(100),
+				}, nil
+			})
+			submits := countingSubmit(m)
+
+			_, err := tw.Send(destAddr, tc.value, 0)
+			if tc.wantRejection {
+				if err == nil || !strings.Contains(err.Error(), "trustline limit") {
+					t.Fatalf("Send error = %v, want a trustline-limit rejection", err)
+				}
+				if submits.Load() != 0 {
+					t.Fatalf("submit called %d times for an over-limit send, want 0", submits.Load())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Send error: %v", err)
+			}
+		})
 	}
 }

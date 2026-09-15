@@ -351,18 +351,22 @@ func (w *xrpWallet) ownerReserveDrops() uint64 {
 }
 
 // trustlineShortfall is how many more drops the account needs before a
-// TrustSet paying fee can succeed, from the cached account state: the owner
-// reserve the new line adds plus the fee, and the base reserve too when the
-// account does not exist yet, since an unfunded account cannot submit at
-// all. Zero when the account can afford the line now.
-func (w *xrpWallet) trustlineShortfall(fee uint64) uint64 {
+// TrustSet paying fee can succeed, from the cached account state: the fee,
+// the owner reserve when the TrustSet adds to the owner count (addsReserve;
+// see trustSetAddsReserve), and the base reserve too when the account does
+// not exist yet, since an unfunded account cannot submit at all. Zero when
+// the account can afford the TrustSet now.
+func (w *xrpWallet) trustlineShortfall(fee uint64, addsReserve bool) uint64 {
 	w.reserveMtx.RLock()
 	base, inc := w.baseReserve, w.ownerReserve
 	w.reserveMtx.RUnlock()
 	w.acctMtx.RLock()
 	exists, available := w.acctExists, w.acctAvailable
 	w.acctMtx.RUnlock()
-	need := inc + fee
+	need := fee
+	if addsReserve {
+		need += inc
+	}
 	if !exists {
 		need += base
 		available = 0
