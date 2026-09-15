@@ -54,11 +54,16 @@ const (
 	// wsPingInterval is the control-ping cadence and wsPongWait how long a read
 	// may block before the link is declared dead. This pair is the only traffic
 	// an idle subscription generates, so it sets the idle cost of the whole
-	// mechanism: one exchange per minute, against the 30 HTTP requests a minute
-	// of 2s polling. wsPongWait must exceed wsPingInterval, or a healthy link
-	// times out in the gap between pings.
-	wsPingInterval = time.Minute
-	wsPongWait     = wsPingInterval + 30*time.Second
+	// mechanism. It is also what holds the connection open: the public endpoint
+	// closes a socket idle for about a minute, and a 60s ping raced that
+	// timeout, ending sessions at multiples of 60s (median 121s). The interval
+	// therefore sits well inside the timeout. Three exchanges a minute is still
+	// far below the 30 HTTP requests a minute of 2s polling, and below the TLS
+	// dial, re-subscribes, and faster polling each dropped session costs.
+	// wsPongWait must exceed wsPingInterval, or a healthy link times out in the
+	// gap between pings.
+	wsPingInterval = 20 * time.Second
+	wsPongWait     = 45 * time.Second
 
 	// wsReconnectMin and wsReconnectMax bound the reconnect backoff. Polling
 	// continues at its unsubscribed cadence throughout, so a long backoff
@@ -94,7 +99,7 @@ type wsClient struct {
 
 	// mtx guards every map below and conn, and serializes frame writes.
 	// gorilla's Conn permits only one concurrent writer, and the volume here
-	// (a few subscribes per session, one ping a minute) is far too low for
+	// (a few subscribes per session, a ping every wsPingInterval) is far too low for
 	// holding the lock across a write to matter.
 	mtx     sync.Mutex
 	conn    *websocket.Conn
@@ -182,17 +187,18 @@ func (c *wsClient) unwatch(account string) {
 // returns.
 func (c *wsClient) run(ctx context.Context) {
 	backoff := wsReconnectMin
+	outage := outageLog{log: c.log}
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		started := time.Now()
-		err := c.session(ctx)
+		err := c.session(ctx, outage.connected)
 		if ctx.Err() != nil {
 			return
 		}
 		if err != nil {
-			c.log.Debugf("solana websocket session ended: %v", err)
+			outage.ended(err)
 		}
 		if time.Since(started) >= wsSessionSettled {
 			backoff = wsReconnectMin
@@ -209,9 +215,39 @@ func (c *wsClient) run(ctx context.Context) {
 	}
 }
 
+// outageLog logs websocket availability by state change rather than by event.
+// The first failure of an outage and the reconnect that ends it log at Info;
+// the failed redials in between log at Debug, so an endpoint that stays down
+// costs two Info lines however many backoff steps it takes. It belongs to run's
+// goroutine: session calls connected synchronously from within run.
+type outageLog struct {
+	log  util.Logger
+	down bool
+}
+
+// ended records a session or dial that failed with err.
+func (o *outageLog) ended(err error) {
+	if o.down {
+		o.log.Debugf("solana websocket still down: %v", err)
+		return
+	}
+	o.down = true
+	o.log.Infof("solana websocket down, polling faster until it reconnects: %v", err)
+}
+
+// connected records a session that came up.
+func (o *outageLog) connected() {
+	if !o.down {
+		return
+	}
+	o.down = false
+	o.log.Infof("solana websocket reconnected")
+}
+
 // session runs one connection from dial to death, returning the error that
-// ended it.
-func (c *wsClient) session(ctx context.Context) error {
+// ended it. connected is called once the connection is up and every watched
+// account's subscribe has been written.
+func (c *wsClient) session(ctx context.Context, connected func()) error {
 	dialer := websocket.Dialer{HandshakeTimeout: wsDialTimeout}
 	conn, resp, err := dialer.DialContext(ctx, c.url, nil)
 	if err != nil {
@@ -275,6 +311,7 @@ func (c *wsClient) session(ctx context.Context) error {
 		}
 	}
 	c.mtx.Unlock()
+	connected()
 
 	go c.pingLoop(conn, done)
 
@@ -409,7 +446,7 @@ func (c *wsClient) handle(frame []byte) {
 // It also reaps subscribes the server accepted and never answered. That is a
 // live link by every measure ping/pong takes, so nothing else on the connection
 // would ever notice; the tick is simply the one timer already running, and
-// reusing it keeps the idle radio cost at one exchange a minute.
+// reusing it adds no wakeup of its own to the idle radio cost.
 func (c *wsClient) pingLoop(conn *websocket.Conn, done <-chan struct{}) {
 	ticker := time.NewTicker(wsPingInterval)
 	defer ticker.Stop()

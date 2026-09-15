@@ -4,6 +4,7 @@
 package sol
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1029,5 +1030,49 @@ func TestWSClientRetiresOnUnansweredSubscribe(t *testing.T) {
 	case <-changed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for change callback after redial")
+	}
+}
+
+// TestWSKeepaliveTimings pins the keepalive constants against each other and
+// against the public endpoint's idle timeout of about a minute. A ping interval
+// near that timeout races it and the endpoint drops the session; a pong wait no
+// longer than the interval times out a healthy link between pings.
+func TestWSKeepaliveTimings(t *testing.T) {
+	const endpointIdleTimeout = time.Minute
+	if wsPongWait <= wsPingInterval {
+		t.Fatalf("wsPongWait %s must exceed wsPingInterval %s", wsPongWait, wsPingInterval)
+	}
+	if wsPingInterval > endpointIdleTimeout/2 {
+		t.Fatalf("wsPingInterval %s is too close to the endpoint's ~%s idle timeout",
+			wsPingInterval, endpointIdleTimeout)
+	}
+}
+
+// TestOutageLog checks that an outage costs one Info line going down and one
+// coming back, with every failed redial in between at Debug.
+func TestOutageLog(t *testing.T) {
+	var buf bytes.Buffer
+	o := outageLog{log: util.NewLogger("SOL", util.LevelDebug, &buf)}
+	errDial := errors.New("dial refused")
+
+	o.connected() // initial connect: not a recovery
+	o.ended(errDial)
+	o.ended(errDial)
+	o.ended(errDial)
+	o.connected()
+	o.connected()
+	o.ended(errDial)
+
+	var levels []string
+	for line := range strings.Lines(buf.String()) {
+		open, end := strings.Index(line, "["), strings.Index(line, "]")
+		if open < 0 || end < open {
+			t.Fatalf("unparseable log line %q", line)
+		}
+		levels = append(levels, line[open+1:end])
+	}
+	want := []string{"INF", "DBG", "DBG", "INF", "INF"}
+	if !slices.Equal(levels, want) {
+		t.Fatalf("levels %v, want %v\n%s", levels, want, buf.String())
 	}
 }
