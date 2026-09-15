@@ -150,7 +150,12 @@ func TestMain(m *testing.M) {
 	tLogger = util.StdOutLogger("TEST", util.LevelTrace)
 	// Connect no longer sets up the utxowallet (btclog) subsystem logging, so
 	// route it to stdout here to keep NTRNO/TXMGR/CHAIN/… visible in tests.
-	utxowallet.UseLogger(btclog.NewBackend(os.Stdout))
+	backend := btclog.NewBackend(os.Stdout)
+	utxowallet.UseLogger(func(name string, lvl btclog.Level) btclog.Logger {
+		l := backend.Logger(name)
+		l.SetLevel(lvl)
+		return l
+	})
 	var shutdown func()
 	tCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {

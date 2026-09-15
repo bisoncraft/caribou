@@ -62,7 +62,12 @@ var (
 // tests.
 func TestMain(m *testing.M) {
 	dashLogger = util.StdOutLogger("DASHTEST", util.LevelTrace)
-	utxowallet.UseLogger(btclog.NewBackend(os.Stdout))
+	backend := btclog.NewBackend(os.Stdout)
+	utxowallet.UseLogger(func(name string, lvl btclog.Level) btclog.Logger {
+		l := backend.Logger(name)
+		l.SetLevel(lvl)
+		return l
+	})
 	var shutdown func()
 	dashCtx, shutdown = context.WithCancel(context.Background())
 	doIt := func() int {

@@ -68,12 +68,41 @@ func InitLogging(logFilename, lvl string, stdout bool, utc bool) (lm *util.Logge
 	}
 	lm.SetLevelsFromMap(defaultLogLevelMap)
 
-	// Route the shared utxowallet subsystems (which use btclog, not slog) to the
-	// same destination as the app loggers, so their output lands in the single
-	// app log file (and stdout) rather than a parallel per-wallet file.
-	utxowallet.UseLogger(btclog.NewBackend(&logWriter{logRotator, stdout}))
+	// Route the shared utxowallet subsystems (which use btclog, not slog)
+	// through the app's own backend, so their output lands in the single app
+	// log file (and stdout) with the same timestamp zone and format as every
+	// other subsystem. A subsystem named in the configured levels (e.g.
+	// NTRNO=trace) takes that level; the rest keep the default utxowallet
+	// assigns them.
+	utxowallet.UseLogger(func(name string, lvl btclog.Level) btclog.Logger {
+		if configured, ok := lm.Levels[name]; ok {
+			lvl = btclog.Level(configured)
+		}
+		return btclogAdapter{lm.NewLogger(name, slog.Level(lvl))}
+	})
 
 	return lm, func() {
 		_ = logRotator.Close()
 	}
+}
+
+// btclogAdapter lets a util.Logger stand in for a btclog.Logger. The two share
+// every logging method and number their levels identically, trace (0) through
+// off (6), so only the Level type needs converting. Writing through the slog
+// backend is what makes the utxowallet subsystems honor the UTC flag: a btclog
+// backend stamps local time unconditionally.
+type btclogAdapter struct {
+	util.Logger
+}
+
+var _ btclog.Logger = btclogAdapter{}
+
+// Level returns the current logging level.
+func (a btclogAdapter) Level() btclog.Level {
+	return btclog.Level(a.Logger.Level())
+}
+
+// SetLevel changes the logging level.
+func (a btclogAdapter) SetLevel(lvl btclog.Level) {
+	a.Logger.SetLevel(slog.Level(lvl))
 }

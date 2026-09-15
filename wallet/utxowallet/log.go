@@ -22,29 +22,24 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 )
 
-// UseLogger points every utxowallet subsystem at backend. Each subpackage holds
-// a single package-global logger, so this configures logging process-wide and
-// is meant to be called once at startup. It replaces the per-asset,
-// per-wallet-dir setup that btc and ltc each carried (the old "logNeutrino"),
-// which collided on the shared globals in a multi-asset process and missed
-// several subsystems.
-func UseLogger(backend *btclog.Backend) {
-	sub := func(name string, lvl btclog.Level) btclog.Logger {
-		l := backend.Logger(name)
-		l.SetLevel(lvl)
-		return l
-	}
-
-	spv.UseLogger(sub("NTRNO", btclog.LevelDebug))
-	chain.UseLogger(sub("CHAIN", btclog.LevelDebug))
-	electrum.UseLogger(sub("ELEC", btclog.LevelDebug))
-	peer.UseLogger(sub("PEER", btclog.LevelInfo))
-	wallet.UseLogger(sub("WLLT", btclog.LevelDebug))
-	wtxmgr.UseLogger(sub("TXMGR", btclog.LevelInfo))
-	waddrmgr.UseLogger(sub("ADDR", btclog.LevelInfo))
-	blockntfns.UseLogger(sub("BLKN", btclog.LevelInfo))
-	chanutils.UseLogger(sub("CHUT", btclog.LevelInfo))
-	filterdb.UseLogger(sub("FLTR", btclog.LevelInfo))
-	pushtx.UseLogger(sub("PSTX", btclog.LevelInfo))
-	query.UseLogger(sub("QURY", btclog.LevelInfo))
+// UseLogger points every utxowallet subsystem at a logger from newLogger, which
+// receives the subsystem name and the level this package defaults it to, and
+// may substitute its own. Each subpackage holds a single package-global logger,
+// so this configures logging process-wide and is meant to be called once at
+// startup. It replaces the per-asset, per-wallet-dir setup that btc and ltc
+// each carried (the old "logNeutrino"), which collided on the shared globals in
+// a multi-asset process and missed several subsystems.
+func UseLogger(newLogger func(name string, defaultLevel btclog.Level) btclog.Logger) {
+	spv.UseLogger(newLogger("NTRNO", btclog.LevelDebug))
+	chain.UseLogger(newLogger("CHAIN", btclog.LevelDebug))
+	electrum.UseLogger(newLogger("ELEC", btclog.LevelDebug))
+	peer.UseLogger(newLogger("PEER", btclog.LevelInfo))
+	wallet.UseLogger(newLogger("WLLT", btclog.LevelDebug))
+	wtxmgr.UseLogger(newLogger("TXMGR", btclog.LevelInfo))
+	waddrmgr.UseLogger(newLogger("ADDR", btclog.LevelInfo))
+	blockntfns.UseLogger(newLogger("BLKN", btclog.LevelInfo))
+	chanutils.UseLogger(newLogger("CHUT", btclog.LevelInfo))
+	filterdb.UseLogger(newLogger("FLTR", btclog.LevelInfo))
+	pushtx.UseLogger(newLogger("PSTX", btclog.LevelInfo))
+	query.UseLogger(newLogger("QURY", btclog.LevelInfo))
 }
