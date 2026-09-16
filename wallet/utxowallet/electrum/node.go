@@ -41,6 +41,16 @@ const (
 // on the network context. A variable so tests can tighten it.
 var handshakeTimeout = 10 * time.Second
 
+// rpcTimeout bounds a single control-path round trip after the handshake:
+// the header subscription and winning-chain probe of an election candidate,
+// an observer's divergence probe and audit fetch, and peer discovery. These
+// run on the rotation and observer control loops, and a request only returns
+// on context cancellation or socket death — a server that keeps answering
+// pings but swallows one method would otherwise park the loop for the life
+// of the network. Every reply is small (a tip, one header, a short batch, a
+// peer list), so the bound is generous. A variable so tests can tighten it.
+var rpcTimeout = 15 * time.Second
+
 // Node is a single connected electrumx peer. It wraps a Server and exposes
 // the JSON-RPC methods we use.
 //

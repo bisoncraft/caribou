@@ -6,6 +6,7 @@ package electrum
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -229,7 +230,10 @@ func (n *Network) observerTick(st *observerLoopState) {
 				loss = n.handleDivergence(o, h)
 			}
 		case h-localTip <= maxReorgDepth:
-			if n.observerConflictsAt(o, localTip) {
+			ctx, cancel := n.rpcCtx()
+			conflicts := n.observerConflictsAt(ctx, o, localTip)
+			cancel()
+			if conflicts {
 				loss = n.handleDivergence(o, localTip)
 			}
 		}
@@ -269,13 +273,14 @@ func (n *Network) observerTick(st *observerLoopState) {
 
 // observerConflictsAt reports whether the observer serves a different header
 // than the store at height. Used for observers ahead of the local tip, whose
-// own tip cannot be compared directly.
-func (n *Network) observerConflictsAt(o *observer, height int32) bool {
+// own tip cannot be compared directly. A probe that fails, including on the
+// caller's deadline, is no conflict: the observer is re-probed next tick.
+func (n *Network) observerConflictsAt(ctx context.Context, o *observer, height int32) bool {
 	ours := n.headers.ByHeight(height)
 	if ours == nil {
 		return false
 	}
-	theirs, err := n.fetchHeaderAt(o.node, height)
+	theirs, err := n.fetchHeaderAt(ctx, o.node, height)
 	if err != nil {
 		log.Debugf("electrum: observer %s: %v", o.node.Addr().Addr, err)
 		return false
@@ -325,7 +330,9 @@ func (n *Network) fillObservers(walletAddr string) {
 			n.pool.recordFailure(sv.Addr)
 			continue
 		}
-		tip, err := node.SubscribeHeaders(n.ctx)
+		ctx, cancel := n.rpcCtx()
+		tip, err := node.SubscribeHeaders(ctx)
+		cancel()
 		if err != nil {
 			node.Close()
 			n.pool.recordFailure(sv.Addr)
@@ -407,7 +414,9 @@ func (n *Network) handleDivergence(o *observer, conflictHeight int32) *divergenc
 	if start < n.headers.StartHeight() {
 		start = n.headers.StartHeight()
 	}
-	res, err := o.node.BlockHeaders(n.ctx, start, int(h-start)+1)
+	ctx, cancel := n.rpcCtx()
+	res, err := o.node.BlockHeaders(ctx, start, int(h-start)+1)
+	cancel()
 	if err != nil {
 		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
 			"work audit (header fetch: %v); demoting", addr, conflictHeight, err)
@@ -588,7 +597,9 @@ func (n *Network) discoverPeers() {
 		nodes = append(nodes, wn)
 	}
 	for _, node := range nodes {
-		peers, err := node.ServerPeers(n.ctx)
+		ctx, cancel := n.rpcCtx()
+		peers, err := node.ServerPeers(ctx)
+		cancel()
 		if err != nil {
 			log.Debugf("electrum: peer discovery via %s: %v", node.Addr().Addr, err)
 			continue

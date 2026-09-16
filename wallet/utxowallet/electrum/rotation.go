@@ -6,6 +6,7 @@ package electrum
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -164,7 +165,12 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 				n.pool.recordFailure(sv.Addr)
 				continue
 			}
-			t, err := node.SubscribeHeaders(n.ctx)
+			// The connection itself lives on the network context (dial
+			// derives the socket's lifetime from the context handed to
+			// NewNode); only the probe round trips are bounded.
+			ctx, cancel := n.rpcCtx()
+			t, err := node.SubscribeHeaders(ctx)
+			cancel()
 			if err != nil {
 				log.Debugf("electrum: election: %s: subscribe headers: %v", sv.Addr, err)
 				node.Close()
@@ -174,7 +180,9 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 			tip = t
 		}
 		if hint != nil {
-			agrees, err := n.servesWinningChain(node, tip, hint)
+			ctx, cancel := n.rpcCtx()
+			agrees, err := n.servesWinningChain(ctx, node, tip, hint)
+			cancel()
 			if err != nil {
 				log.Debugf("electrum: election: %s: %v", sv.Addr, err)
 				node.Close()
@@ -235,7 +243,7 @@ func promoteCandidates(candidates []*ServerAddr, preferred []string) []*ServerAd
 // header at the conflict height. A candidate whose tip is below that height
 // cannot be judged and is admitted: attaching to it keeps the store's chain
 // (its catch-up has nothing to add), and the observers keep policing it.
-func (n *Network) servesWinningChain(node *Node, tip *HeadersTip, hint *electionHint) (bool, error) {
+func (n *Network) servesWinningChain(ctx context.Context, node *Node, tip *HeadersTip, hint *electionHint) (bool, error) {
 	switch {
 	case tip.Height < hint.wantHeight:
 		return true, nil
@@ -250,17 +258,23 @@ func (n *Network) servesWinningChain(node *Node, tip *HeadersTip, hint *election
 		}
 		return n.headers.headerHash(&hdr) == hint.wantHash, nil
 	}
-	hdr, err := n.fetchHeaderAt(node, hint.wantHeight)
+	hdr, err := n.fetchHeaderAt(ctx, node, hint.wantHeight)
 	if err != nil {
 		return false, err
 	}
 	return hdr != nil && n.headers.headerHash(hdr) == hint.wantHash, nil
 }
 
+// rpcCtx returns the network context bounded by rpcTimeout, for a single
+// control-path round trip.
+func (n *Network) rpcCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(n.ctx, rpcTimeout)
+}
+
 // fetchHeaderAt fetches the single header node serves at height, or nil when
 // the server has none there.
-func (n *Network) fetchHeaderAt(node *Node, height int32) (*wire.BlockHeader, error) {
-	res, err := node.BlockHeaders(n.ctx, height, 1)
+func (n *Network) fetchHeaderAt(ctx context.Context, node *Node, height int32) (*wire.BlockHeader, error) {
+	res, err := node.BlockHeaders(ctx, height, 1)
 	if err != nil {
 		return nil, fmt.Errorf("header at %d: %w", height, err)
 	}
