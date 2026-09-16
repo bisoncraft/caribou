@@ -706,17 +706,23 @@ func (c *ElectrumClient) handleScripthashStatus(st *electrum.ScripthashStatus) e
 	}
 	c.addrCacheMtx.Unlock()
 
-	fetch := func() ([]electrum.HistoryEntry, error) {
-		// A discovery probe may have parked this scripthash's history;
-		// reuse it iff its derived status matches the server-reported one
-		// (i.e. nothing changed since the probe), else fetch fresh.
-		if hist, ok := c.probedHistory(st.Scripthash, st.Status); ok {
-			log.Debugf("electrum: status handler using probed history for %s", st.Scripthash)
-			return hist, nil
-		}
-		return c.net.GetHistory(c.ctx, st.Scripthash)
-	}
 	for attempt := 0; ; attempt++ {
+		first := attempt == 0
+		fetch := func() ([]electrum.HistoryEntry, error) {
+			// A discovery probe may have parked this scripthash's
+			// history; reuse it iff its derived status matches the
+			// server-reported one (i.e. nothing changed since the
+			// probe), else fetch fresh. Only on the first attempt: a
+			// re-fetch after a reorg must reach the server, or the
+			// parked reply is committed again as if it were fresh.
+			if first {
+				if hist, ok := c.probedHistory(st.Scripthash, st.Status); ok {
+					log.Debugf("electrum: status handler using probed history for %s", st.Scripthash)
+					return hist, nil
+				}
+			}
+			return c.net.GetHistory(c.ctx, st.Scripthash)
+		}
 		fork, moved, err := c.refetchEntry(st.Scripthash, entry, fetch, st.Status)
 		if err != nil {
 			return fmt.Errorf("get history: %w", err)
@@ -815,8 +821,14 @@ func (c *ElectrumClient) reorgSince(gen uint64) (fork int32, moved bool) {
 
 // historyBelow returns the entries confirmed below height, dropping mempool
 // entries too when height is at or below zero (there is nothing below them).
+// Electrum reports a mempool entry at height 0, or -1 when its parents are
+// unconfirmed too, so the mempool is handled as a whole rather than by the
+// height comparison.
 func historyBelow(entries []electrum.HistoryEntry, height int32) []electrum.HistoryEntry {
 	kept := entries[:0:0]
+	if height <= 0 {
+		return kept
+	}
 	for _, e := range entries {
 		if e.Height < height {
 			kept = append(kept, e)

@@ -52,8 +52,15 @@ type stubNetwork struct {
 
 	// historyHook, if non-nil, is invoked at the top of each GetHistory
 	// call (outside s.mu). Tests use it to land events between the status
-	// processor's baseline read and its history fetch.
+	// processor's baseline read and its history fetch. historyN counts
+	// GetHistory calls (under s.mu).
 	historyHook func(sh string)
+	historyN    int
+
+	// rawTxHook, if non-nil, is invoked at the top of each
+	// GetRawTransaction call (outside s.mu): a point inside the emission of
+	// a history that was not fetched (a parked probe).
+	rawTxHook func(txid string)
 
 	tipCh        chan *electrum.TipChange
 	scripthashCh chan *electrum.ScripthashStatus
@@ -251,6 +258,7 @@ func (s *stubNetwork) UnsubscribeScripthash(context.Context, string) {}
 func (s *stubNetwork) GetHistory(_ context.Context, sh string) ([]electrum.HistoryEntry, error) {
 	s.mu.Lock()
 	hook := s.historyHook
+	s.historyN++
 	s.mu.Unlock()
 	if hook != nil {
 		hook(sh)
@@ -337,6 +345,12 @@ func stubMerkle(leaves []chainhash.Hash, target string) (chainhash.Hash, []chain
 }
 
 func (s *stubNetwork) GetRawTransaction(_ context.Context, txid string) (string, error) {
+	s.mu.Lock()
+	hook := s.rawTxHook
+	s.mu.Unlock()
+	if hook != nil {
+		hook(txid)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	hex, ok := s.rawTxs[txid]
@@ -2135,4 +2149,129 @@ func TestElectrumReorgOvertakesRefresh(t *testing.T) {
 	}
 	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed again"}
 	assertNoNtfn(t, c, 300*time.Millisecond)
+}
+
+// TestHistoryBelow pins the trim used by reorg invalidation: confirmed
+// entries below the fork survive, mempool entries (0 and -1) survive any
+// positive fork, and a fork at or below zero, the conservative "everything"
+// invalidation, keeps nothing.
+func TestHistoryBelow(t *testing.T) {
+	entries := []electrum.HistoryEntry{
+		{TxHash: "a", Height: -1},
+		{TxHash: "b", Height: 0},
+		{TxHash: "c", Height: 1},
+		{TxHash: "d", Height: 5},
+	}
+	tests := []struct {
+		height int32
+		want   []string
+	}{
+		{height: 5, want: []string{"a", "b", "c"}},
+		{height: 1, want: []string{"a", "b"}},
+		{height: 0, want: nil},
+		{height: -1, want: nil},
+	}
+	for _, tt := range tests {
+		var got []string
+		for _, e := range historyBelow(entries, tt.height) {
+			got = append(got, e.TxHash)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(tt.want) {
+			t.Errorf("historyBelow(_, %d) = %v, want %v", tt.height, got, tt.want)
+		}
+	}
+	if kept := historyBelow(entries, 5); len(kept) > 0 && &kept[0] == &entries[0] {
+		t.Error("historyBelow aliases its input")
+	}
+}
+
+// TestElectrumReorgRetrySkipsProbe: a status handler that served its first
+// attempt from a parked discovery probe, and was then overtaken by a reorg,
+// must fetch from the server on the retry. The probe is not consumed by
+// reuse, and its status still matches the server-reported one, so without
+// the guard the retry would commit the same parked reply again.
+func TestElectrumReorgRetrySkipsProbe(t *testing.T) {
+	c, stub := makeClient(t, 6) // heights 0..5
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	hist := []electrum.HistoryEntry{{Height: 4, TxHash: txid}}
+	stub.mu.Lock()
+	stub.history[sh] = hist
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	status := statusFromHistory(hist)
+	c.probeMtx.Lock()
+	c.probeCache[sh] = &probeHistory{status: status, hist: hist}
+	c.probeMtx.Unlock()
+	oldHash4 := stub.HeaderByHeight(4).BlockHash()
+	oldHash5 := stub.HeaderByHeight(5).BlockHash()
+
+	// The probe-served attempt reaches the server only for the raw tx;
+	// the reorg lands there, and the tx is re-mined in the new block 4.
+	var once sync.Once
+	stub.mu.Lock()
+	stub.rawTxHook = func(string) {
+		once.Do(func() {
+			stub.rewindTo(t, 3)
+			stub.addBlock(t, time.Unix(1_700_002_000, 0)) // new 4
+			stub.addBlock(t, time.Unix(1_700_002_060, 0)) // new 5
+			stub.tipCh <- &electrum.TipChange{
+				Disconnected: []electrum.DisconnectedBlock{
+					{Hash: oldHash5, Height: 5, Time: 1_700_000_300},
+					{Hash: oldHash4, Height: 4, Time: 1_700_000_240},
+				},
+			}
+			deadline := time.After(2 * time.Second)
+			for c.reorgGen.Load() == 0 {
+				select {
+				case <-deadline:
+					t.Error("reorg not registered")
+					return
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+		})
+	}
+	stub.mu.Unlock()
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: status}
+
+	waitFor := time.After(3 * time.Second)
+	for {
+		c.addrCacheMtx.Lock()
+		entry := c.addrCache[sh]
+		seen := entry != nil && alreadySeen(entry.lastHistory, txid, 4) && entry.lastStatus != ""
+		c.addrCacheMtx.Unlock()
+		if seen {
+			break
+		}
+		select {
+		case <-waitFor:
+			t.Fatal("baseline never settled with the tx at height 4")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	stub.mu.Lock()
+	fetched := stub.historyN
+	stub.mu.Unlock()
+	if fetched == 0 {
+		t.Fatal("retry after the reorg reused the parked probe instead of fetching")
+	}
+	newHash4 := stub.HeaderByHeight(4).BlockHash()
+	// The overtaken attempt resolved its header before the reorg, so its
+	// emission may carry the orphaned block (the disconnects that follow
+	// unconfirm it); the retry's emission must carry the new one.
+	timeout := time.After(2 * time.Second)
+	for {
+		select {
+		case ntfn := <-c.Notifications():
+			if rt, ok := ntfn.(RelevantTx); ok && rt.Block != nil && rt.Block.Hash == newHash4 {
+				return
+			}
+		case <-timeout:
+			t.Fatal("no RelevantTx bound to the new block 4")
+		}
+	}
 }
