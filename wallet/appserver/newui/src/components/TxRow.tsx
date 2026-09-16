@@ -95,7 +95,13 @@ export default function TxRow ({ item, onSwapHover, swapHighlight }: TxRowProps)
       role="button"
       tabIndex={0}
       onClick={open}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } }}
+      onKeyDown={(e) => {
+        // A key pressed on the nested swap-leg badge belongs to the badge:
+        // its keydown bubbles here, and preventing default would cancel the
+        // badge's own activation and open the transaction instead.
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() }
+      }}
       onMouseEnter={() => onSwapHover?.(swapRelation?.swap.depositAddress ?? '')}
       onMouseLeave={() => onSwapHover?.('')}
     >
