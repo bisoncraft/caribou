@@ -1288,10 +1288,17 @@ func typeName(v any) string {
 // plus its electrum scripthash.
 func newSimnetAddr(t *testing.T) (btcutil.Address, string) {
 	t.Helper()
+	return newSimnetAddrN(t, 0)
+}
+
+// newSimnetAddrN is newSimnetAddr with the pubkey hash varied by n, for tests
+// that need several distinct addresses.
+func newSimnetAddrN(t *testing.T, n byte) (btcutil.Address, string) {
+	t.Helper()
 	// 20-byte pubkey hash; the bytes don't matter for these tests.
 	pkh := []byte{
 		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
-		0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+		0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14 + n,
 	}
 	addr, err := btcutil.NewAddressPubKeyHash(pkh, &chaincfg.SimNetParams)
 	if err != nil {
@@ -1915,4 +1922,217 @@ func TestElectrumFailedEmitRetried(t *testing.T) {
 	if !ok || rt.Block == nil || rt.Block.Height != 2 {
 		t.Fatalf("got[1] = %#v, want the retried RelevantTx at height 2", got[1])
 	}
+}
+
+// TestElectrumReorgRefreshDoesNotBlockTips: the reorg refresh fetches history
+// for every affected scripthash. It runs on the scripthash processor, so a
+// slow fan-out must not delay the tip-change loop's delivery of the next
+// connected block.
+func TestElectrumReorgRefreshDoesNotBlockTips(t *testing.T) {
+	c, stub := makeClient(t, 6) // heights 0..5
+	const n = 3
+	var addrs []btcutil.Address
+	var shs []string
+	stub.mu.Lock()
+	for i := range n {
+		addr, sh := newSimnetAddrN(t, byte(i))
+		txid, rawHex := synthTxToAddr(t, addr) // distinct per address
+		stub.history[sh] = []electrum.HistoryEntry{{Height: 4, TxHash: txid}}
+		stub.rawTxs[txid] = rawHex
+		addrs = append(addrs, addr)
+		shs = append(shs, sh)
+	}
+	stub.mu.Unlock()
+	if err := c.NotifyReceived(addrs); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	for _, sh := range shs {
+		stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+	}
+	for _, ntfn := range drain(t, c, n, 2*time.Second) {
+		if rt, ok := ntfn.(RelevantTx); !ok || rt.Block == nil || rt.Block.Height != 4 {
+			t.Fatalf("initial ntfn = %#v, want RelevantTx at height 4", ntfn)
+		}
+	}
+	oldHash4 := stub.HeaderByHeight(4).BlockHash()
+	oldHash5 := stub.HeaderByHeight(5).BlockHash()
+
+	// Every refresh fetch parks on the gate.
+	gate := make(chan struct{})
+	stub.mu.Lock()
+	stub.historyHook = func(string) {
+		select {
+		case <-gate:
+		case <-time.After(5 * time.Second):
+			t.Error("refresh fetch never released")
+		}
+	}
+	stub.mu.Unlock()
+
+	// Reorg: blocks 4 and 5 are replaced; the txs are re-mined in the new 4.
+	stub.rewindTo(t, 3)
+	stub.addBlock(t, time.Unix(1_700_002_000, 0)) // new 4
+	stub.addBlock(t, time.Unix(1_700_002_060, 0)) // new 5
+	stub.tipCh <- &electrum.TipChange{
+		Disconnected: []electrum.DisconnectedBlock{
+			{Hash: oldHash5, Height: 5, Time: 1_700_000_300},
+			{Hash: oldHash4, Height: 4, Time: 1_700_000_240},
+		},
+	}
+	got := drain(t, c, 4, 2*time.Second)
+	for i, want := range []int32{5, 4} {
+		if bd, ok := got[i].(BlockDisconnected); !ok || bd.Height != want {
+			t.Fatalf("got[%d] = %#v, want BlockDisconnected %d", i, got[i], want)
+		}
+	}
+	for i, want := range []int32{4, 5} {
+		if bc, ok := got[2+i].(BlockConnected); !ok || bc.Height != want {
+			t.Fatalf("got[%d] = %#v, want BlockConnected %d", 2+i, got[2+i], want)
+		}
+	}
+
+	// With the refresh parked, the next block must still arrive.
+	stub.addBlock(t, time.Unix(1_700_002_120, 0)) // 6
+	stub.pushConnected(t, 6)
+	if bc, ok := drain(t, c, 1, time.Second)[0].(BlockConnected); !ok || bc.Height != 6 {
+		t.Fatal("BlockConnected 6 not delivered while the reorg refresh was parked")
+	}
+
+	close(gate)
+	newHash4 := stub.HeaderByHeight(4).BlockHash()
+	for _, ntfn := range drain(t, c, n, 2*time.Second) {
+		rt, ok := ntfn.(RelevantTx)
+		if !ok || rt.Block == nil || rt.Block.Hash != newHash4 {
+			t.Fatalf("post-reorg ntfn = %#v, want RelevantTx in the new block 4", ntfn)
+		}
+	}
+	waitFor := time.After(2 * time.Second)
+	for {
+		c.reorgMtx.Lock()
+		queued := len(c.reorged)
+		c.reorgMtx.Unlock()
+		if queued == 0 {
+			break
+		}
+		select {
+		case <-waitFor:
+			t.Fatalf("%d scripthashes still queued for refresh", queued)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestElectrumReorgOvertakesRefresh: a reorg that lands while the reorg
+// refresh is fetching a scripthash's history must not let the refresh commit
+// a baseline built against the replaced headers, and must leave the
+// scripthash queued so the settled chain is what gets refreshed.
+func TestElectrumReorgOvertakesRefresh(t *testing.T) {
+	c, stub := makeClient(t, 6) // heights 0..5
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 4, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+	if rt, ok := drain(t, c, 1, 2*time.Second)[0].(RelevantTx); !ok || rt.Block == nil || rt.Block.Height != 4 {
+		t.Fatal("initial RelevantTx at height 4 not delivered")
+	}
+
+	reorg := func(seed int64) []electrum.DisconnectedBlock {
+		t.Helper()
+		old4, old5 := stub.HeaderByHeight(4), stub.HeaderByHeight(5)
+		stub.rewindTo(t, 3)
+		stub.addBlock(t, time.Unix(seed, 0))
+		stub.addBlock(t, time.Unix(seed+60, 0))
+		return []electrum.DisconnectedBlock{
+			{Hash: old5.BlockHash(), Height: 5, Time: old5.Timestamp.Unix()},
+			{Hash: old4.BlockHash(), Height: 4, Time: old4.Timestamp.Unix()},
+		}
+	}
+
+	// The refresh's fetch is where the second reorg lands; the hook holds
+	// the fetch until the client has registered it.
+	var once sync.Once
+	stub.mu.Lock()
+	stub.historyHook = func(string) {
+		once.Do(func() {
+			disconnected := reorg(1_700_003_000)
+			stub.tipCh <- &electrum.TipChange{Disconnected: disconnected}
+			deadline := time.After(2 * time.Second)
+			for c.reorgGen.Load() < 2 {
+				select {
+				case <-deadline:
+					t.Error("second reorg not registered")
+					return
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+		})
+	}
+	stub.mu.Unlock()
+	stub.tipCh <- &electrum.TipChange{Disconnected: reorg(1_700_002_000)}
+
+	// Two reorgs' worth of disconnects and connects, then the tx bound to
+	// the FINAL block 4. The overtaken refresh may emit it once more; every
+	// emission must be bound to that block.
+	got := drain(t, c, 9, 3*time.Second)
+	finalHash4 := stub.HeaderByHeight(4).BlockHash()
+	var relevant int
+	for i, ntfn := range got {
+		switch v := ntfn.(type) {
+		case BlockDisconnected, BlockConnected:
+			if i >= 8 {
+				t.Fatalf("got[%d] = %T, want RelevantTx", i, ntfn)
+			}
+		case RelevantTx:
+			relevant++
+			if v.Block == nil || v.Block.Height != 4 || v.Block.Hash != finalHash4 {
+				t.Fatalf("got[%d] RelevantTx.Block = %+v, want the final block 4 (%s)",
+					i, v.Block, finalHash4)
+			}
+		default:
+			t.Fatalf("got[%d] = %T", i, ntfn)
+		}
+	}
+	if relevant != 1 {
+		t.Fatalf("%d RelevantTx among the first 9 notifications, want 1", relevant)
+	}
+
+	// The queue drains once the settled chain has been refreshed, with the
+	// tx at height 4 in the baseline.
+	waitFor := time.After(2 * time.Second)
+	for {
+		c.reorgMtx.Lock()
+		queued := len(c.reorged)
+		c.reorgMtx.Unlock()
+		c.addrCacheMtx.Lock()
+		entry := c.addrCache[sh]
+		seen := entry != nil && alreadySeen(entry.lastHistory, txid, 4) && entry.lastStatus != ""
+		c.addrCacheMtx.Unlock()
+		if queued == 0 && seen {
+			break
+		}
+		select {
+		case <-waitFor:
+			t.Fatalf("refresh never settled: queued=%d seen=%v", queued, seen)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	for {
+		select {
+		case n := <-c.Notifications():
+			if rt, ok := n.(RelevantTx); !ok || rt.Block == nil || rt.Block.Hash != finalHash4 {
+				t.Fatalf("unexpected %#v after settle", n)
+			}
+			continue
+		case <-time.After(200 * time.Millisecond):
+		}
+		break
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed again"}
+	assertNoNtfn(t, c, 300*time.Millisecond)
 }
