@@ -197,9 +197,9 @@ func TestChainlinkRatesLive(t *testing.T) {
 		}
 		t.Logf("asset %d (%s): %f", assetID, assets[assetID].Symbol, rate)
 	}
-	// The btc and eth feeds update well inside chainlinkMaxAge, so they are the
-	// only two that can be required unconditionally. Others are intermittently
-	// rejected as stale, which is expected.
+	// The btc and eth feeds carry a 27s heartbeat and so are always well
+	// inside their staleness bound. Others are best-effort: a feed whose
+	// provider is briefly unreachable simply drops out of a cycle.
 	for _, assetID := range []uint32{btcID, ethID} {
 		if _, has := rates[assetID]; !has {
 			t.Errorf("no rate for asset %d", assetID)

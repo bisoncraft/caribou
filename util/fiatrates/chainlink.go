@@ -47,10 +47,6 @@ const (
 	chainlinkDialTimeout = 5 * time.Second
 	// chainlinkReadTimeout bounds the single batch read that a refresh makes.
 	chainlinkReadTimeout = 5 * time.Second
-	// chainlinkMaxAge is the maximum age of a Chainlink price before it is
-	// rejected. Polygon BTC/USD updates every ~27s with a 1h heartbeat, so
-	// 10 minutes is a tight but reasonable bound.
-	chainlinkMaxAge = 10 * time.Minute
 	// chainlinkFutureSkew tolerates small forward drift between the Chainlink
 	// block timestamp and the local wall clock before treating a price as
 	// invalid. Validator clock skew on Polygon is small but not zero.
@@ -215,38 +211,76 @@ func (c *batchBoundContract) read(ctx context.Context, addrs []common.Address) (
 	return *readingsPtr, nil
 }
 
-// chainlinkPolygonFeeds maps ticker symbols to their USD Data Feed addresses on Polygon mainnet.
-// Verify addresses against https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
-// Polygon offers fresher data due to lower fees and more frequent updates.
-var chainlinkPolygonFeeds = map[string]common.Address{
-	"BTC":  common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f"),
-	"ETH":  common.HexToAddress("0xF9680D99D6C9589e2a93a78A04A279e509205945"),
-	"LTC":  common.HexToAddress("0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa"),
-	"BCH":  common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"),
-	"DOGE": common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"),
-	// ZEC/USD on Polygon updates less often than chainlinkMaxAge, so it is
-	// intermittently rejected as stale and omitted from a cycle's results.
-	// This is expected best-effort behavior, not an error: the feed is healthy,
-	// the staleness guard is doing its job, and other fiat-rate sources cover
-	// ZEC. Tighten or relax only by revisiting chainlinkMaxAge for all feeds.
-	"ZEC":  common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"),
-	"LINK": common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"),
-	"XRP":  common.HexToAddress("0x785ba89291f676b5386652eB12b30cF361020694"),
-	"SOL":  common.HexToAddress("0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"),
-	"BNB":  common.HexToAddress("0x82a6c4AF830caa6c97bb504425f6A66165C2c26e"),
+// chainlinkFeed is one Polygon Data Feed: its proxy address and the published
+// heartbeat, the interval within which the oracle network updates the answer
+// even if the price has not moved past the feed's deviation threshold.
+type chainlinkFeed struct {
+	addr      common.Address
+	heartbeat time.Duration
+}
+
+// chainlinkGrace and chainlinkDailyGrace are the slack allowed on top of a
+// feed's heartbeat before a reading is treated as stale. Between rounds a
+// deviation-triggered feed's answer is still accurate to within its threshold,
+// so the heartbeat is the real correctness bound and the grace only has to
+// absorb block time, propagation, and the gap between fetch cycles. A fixed
+// five minutes is the right order of magnitude for a feed that updates every
+// few seconds; for a feed that updates once a day it is inside the noise, so
+// those get an hour.
+const (
+	chainlinkGrace      = 5 * time.Minute
+	chainlinkDailyGrace = time.Hour
+	// chainlinkGraceCutoff is the heartbeat above which the daily grace
+	// applies.
+	chainlinkGraceCutoff = time.Hour
+)
+
+// maxAge is the oldest reading this feed may return before it is rejected.
+func (f chainlinkFeed) maxAge() time.Duration {
+	if f.heartbeat <= chainlinkGraceCutoff {
+		return f.heartbeat + chainlinkGrace
+	}
+	return f.heartbeat + chainlinkDailyGrace
+}
+
+// chainlinkPolygonFeeds maps ticker symbols to their USD Data Feed on Polygon
+// mainnet. Polygon offers fresher data due to lower fees and more frequent
+// updates.
+//
+// Addresses and heartbeats are both published at
+// https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon and
+// must be verified together: a feed's heartbeat is what bounds how old its
+// answer may be (see chainlinkFeed.maxAge), so an address added without its
+// published heartbeat cannot be checked for staleness.
+//
+// The feeds fall into two groups. Most carry a heartbeat of minutes or less
+// (27s, or 300s for WBTC) and update continuously. LTC, BCH and ZEC carry a
+// 86400s heartbeat and are driven almost entirely by their deviation threshold
+// (0.5% for LTC and BCH, 1% for ZEC), so hours can pass between rounds; between
+// them the answer is still within the threshold, which is why the age bound
+// follows the heartbeat rather than a single global constant.
+var chainlinkPolygonFeeds = map[string]chainlinkFeed{
+	"BTC":  {common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f"), 27 * time.Second},
+	"ETH":  {common.HexToAddress("0xF9680D99D6C9589e2a93a78A04A279e509205945"), 27 * time.Second},
+	"DOGE": {common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"), 27 * time.Second},
+	"LINK": {common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"), 27 * time.Second},
+	"LTC":  {common.HexToAddress("0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa"), 24 * time.Hour},
+	"BCH":  {common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"), 24 * time.Hour},
+	"ZEC":  {common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"), 24 * time.Hour},
+	"XRP":  {common.HexToAddress("0x785ba89291f676b5386652eB12b30cF361020694"), 27 * time.Second},
+	"SOL":  {common.HexToAddress("0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"), 27 * time.Second},
+	"BNB":  {common.HexToAddress("0x82a6c4AF830caa6c97bb504425f6A66165C2c26e"), 27 * time.Second},
 	// MATIC serves POL: ParseTicker normalizes the polygon asset to the
 	// MATIC ticker the rate APIs still key on, and the feed tracks POL
 	// post-migration (1:1).
-	"MATIC": common.HexToAddress("0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"),
-	"USDC":  common.HexToAddress("0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7"),
-	"USDT":  common.HexToAddress("0x0A6513e40db6EB1b165753AD52E80663aeA50545"),
-	"PAXG":  common.HexToAddress("0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608"),
-	"WBTC":  common.HexToAddress("0xDE31F8bFBD8c84b5360CFACCa3539B938dd78ae6"),
-	// Deliberately absent: DASH/USD exists on Polygon but its heartbeat is
-	// daily, far beyond chainlinkMaxAge, so it would be rejected as stale
-	// nearly every cycle; XAUT has no feed (XAU spot is a different
-	// instrument). Other fiat-rate sources cover both.
-	// To add: 1. Get addresses from https://docs.chain.link/data-feeds/price-feeds/addresses?network=polygon
+	"MATIC": {common.HexToAddress("0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"), 27 * time.Second},
+	"USDC":  {common.HexToAddress("0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7"), 27 * time.Second},
+	"USDT":  {common.HexToAddress("0x0A6513e40db6EB1b165753AD52E80663aeA50545"), 27 * time.Second},
+	"PAXG":  {common.HexToAddress("0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608"), 27 * time.Second},
+	"WBTC":  {common.HexToAddress("0xDE31F8bFBD8c84b5360CFACCa3539B938dd78ae6"), 5 * time.Minute},
+	// XAUT has no feed (XAU spot is a different instrument); other fiat-rate
+	// sources cover it.
+	// To add: 1. Get the address and heartbeat from the addresses page above
 	//         2. Test with live RPC calls
 }
 
@@ -383,8 +417,6 @@ func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		return nil, fmt.Errorf("dial all providers failed: %w", lastErr)
 	}
 
-	maxAge := chainlinkMaxAge
-
 	batchABI, err := parseABI(multiAggregatorABI)
 	if err != nil {
 		return nil, fmt.Errorf("chainlink: %w", err)
@@ -395,7 +427,6 @@ func ChainlinkRateFetcher(cfg Config) (func(context.Context, []string, util.Logg
 		func(client chainRPCClient) chainlinkBatchContract {
 			return &batchBoundContract{bound: bind.NewBoundContract(batchAddr, *batchABI, client, nil, nil)}
 		},
-		maxAge,
 	), nil
 }
 
@@ -427,10 +458,9 @@ func probeProvider(ctx context.Context, provider string) (chainRPCClient, error)
 // chainlinkBatchFetcherCore is the testable batched implementation used once
 // the deployed batch contract address is configured.
 func chainlinkBatchFetcherCore(
-	feeds map[string]common.Address,
+	feeds map[string]chainlinkFeed,
 	dialFn func(context.Context) (chainRPCClient, error),
 	newBatchContract func(client chainRPCClient) chainlinkBatchContract,
-	maxAge time.Duration,
 ) func(context.Context, []string, util.Logger) (map[string]float64, error) {
 	// Chainlink is one of several fiat rate sources; the oracle averages across
 	// all active sources, so a single compromised RPC cannot unilaterally skew
@@ -461,12 +491,12 @@ func chainlinkBatchFetcherCore(
 		// the request. The order is preserved so readings[i] maps to entries[i].
 		type feedEntry struct {
 			ticker string
-			addr   common.Address
+			feed   chainlinkFeed
 		}
 		var entries []feedEntry
 		for _, t := range tickers {
-			if addr, ok := feeds[t]; ok {
-				entries = append(entries, feedEntry{t, addr})
+			if feed, ok := feeds[t]; ok {
+				entries = append(entries, feedEntry{t, feed})
 			}
 		}
 		if len(entries) == 0 {
@@ -475,7 +505,7 @@ func chainlinkBatchFetcherCore(
 
 		addrs := make([]common.Address, len(entries))
 		for i, e := range entries {
-			addrs[i] = e.addr
+			addrs[i] = e.feed.addr
 		}
 
 		current, err := conn.acquire(ctx, dialFn)
@@ -527,8 +557,9 @@ func chainlinkBatchFetcherCore(
 				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
 				continue
 			}
-			if time.Since(updatedAt) > maxAge {
-				log.Warnf("chainlink: %s/USD: stale price (updated %v ago)", ticker, time.Since(updatedAt).Round(time.Minute))
+			if age, maxAge := time.Since(updatedAt), entries[i].feed.maxAge(); age > maxAge {
+				log.Warnf("chainlink: %s/USD: stale price (updated %v ago, limit %v)",
+					ticker, age.Round(time.Minute), maxAge)
 				continue
 			}
 
