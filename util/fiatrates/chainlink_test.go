@@ -1,6 +1,7 @@
 package fiatrates
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -617,6 +618,56 @@ func TestChainlinkClosureHeartbeatBounds(t *testing.T) {
 				t.Fatal("expected an error for a stale reading, got nil")
 			}
 		})
+	}
+}
+
+// TestChainlinkStalenessLoggedOnTransition tests that a feed that stays stale
+// warns once rather than on every cycle, and that recovery is reported.
+func TestChainlinkStalenessLoggedOnTransition(t *testing.T) {
+	reading := func(age time.Duration) map[common.Address]MultiAggregatorReading {
+		return map[common.Address]MultiAggregatorReading{
+			mockFeedAddr: {
+				Answer:    big.NewInt(5000000000000),
+				Decimals:  8,
+				UpdatedAt: big.NewInt(time.Now().Add(-age).Unix()),
+				Ok:        true,
+			},
+		}
+	}
+	mock := &mockBatchContract{readings: reading(time.Hour)}
+	fetch := newMockCoreFetch("BTC", mock)
+
+	var buf bytes.Buffer
+	log := util.NewLogger("test", util.LevelDebug, &buf)
+	countStale := func() int {
+		return strings.Count(buf.String(), "stale price")
+	}
+
+	// Two cycles at the same stale age: one warning, not two.
+	for i := 0; i < 2; i++ {
+		if _, err := fetch(context.Background(), []string{"BTC"}, log); err == nil {
+			t.Fatalf("cycle %d: expected an error for a stale reading, got nil", i)
+		}
+	}
+	if n := countStale(); n != 1 {
+		t.Fatalf("expected 1 staleness warning across two stale cycles, got %d:\n%s", n, buf.String())
+	}
+
+	// A fresh reading reports recovery, and going stale again warns anew.
+	mock.readings = reading(time.Minute)
+	if _, err := fetch(context.Background(), []string{"BTC"}, log); err != nil {
+		t.Fatalf("unexpected error on fresh reading: %v", err)
+	}
+	if !strings.Contains(buf.String(), "fresh again") {
+		t.Fatalf("expected recovery to be logged:\n%s", buf.String())
+	}
+
+	mock.readings = reading(time.Hour)
+	if _, err := fetch(context.Background(), []string{"BTC"}, log); err == nil {
+		t.Fatal("expected an error for a stale reading, got nil")
+	}
+	if n := countStale(); n != 2 {
+		t.Fatalf("expected a second staleness warning after recovery, got %d:\n%s", n, buf.String())
 	}
 }
 

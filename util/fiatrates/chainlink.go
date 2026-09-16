@@ -103,6 +103,44 @@ func (c *divisorCache) getOrCreate(ticker string, decimals uint8) *big.Float {
 	return div
 }
 
+// stalenessTracker remembers, per ticker, whether the feed's last reading was
+// rejected as stale. A deviation-driven feed can go hours between rounds by
+// design, so an unconditional warning every cycle buries the log without
+// conveying anything new; only a change of state is worth a warning.
+type stalenessTracker struct {
+	mtx   sync.Mutex
+	stale map[string]bool
+}
+
+func newStalenessTracker() *stalenessTracker {
+	return &stalenessTracker{stale: make(map[string]bool)}
+}
+
+// check reports whether a reading of the given age is too old to use, logging
+// the transitions into and out of staleness at warning and info level and the
+// steady state at debug level.
+func (t *stalenessTracker) check(log util.Logger, ticker string, age, maxAge time.Duration) (stale bool) {
+	stale = age > maxAge
+
+	t.mtx.Lock()
+	was := t.stale[ticker]
+	t.stale[ticker] = stale
+	t.mtx.Unlock()
+
+	switch {
+	case stale && !was:
+		log.Warnf("chainlink: %s/USD: stale price (updated %v ago, limit %v)",
+			ticker, age.Round(time.Minute), maxAge)
+	case !stale && was:
+		log.Infof("chainlink: %s/USD: price is fresh again (updated %v ago)",
+			ticker, age.Round(time.Minute))
+	case stale:
+		log.Debugf("chainlink: %s/USD: still stale (updated %v ago, limit %v)",
+			ticker, age.Round(time.Minute), maxAge)
+	}
+	return stale
+}
+
 // connRef wraps a chainRPCClient with a reference count so concurrent fetch
 // cycles can share a connection without one cycle closing it while another is
 // mid-call. Callers must acquire before using client and call release when
@@ -481,9 +519,16 @@ func chainlinkBatchFetcherCore(
 	// divisors caches the 10^decimals factor keyed by "ticker:decimals". Keying
 	// on both fields means a bad first read (malicious RPC returning wrong
 	// decimals) cannot permanently corrupt subsequent honest reads.
+	//
+	// staleness remembers which feeds were stale on the previous cycle so that
+	// a feed whose rounds are simply spaced further apart than a cycle does not
+	// warn on every cycle. Both caches are shared by all callers of the
+	// returned closure, which may run concurrently, so both carry their own
+	// lock.
 	var (
-		conn     sharedConn
-		divisors = newDivisorCache()
+		conn      sharedConn
+		divisors  = newDivisorCache()
+		staleness = newStalenessTracker()
 	)
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
@@ -557,9 +602,7 @@ func chainlinkBatchFetcherCore(
 				log.Warnf("chainlink: %s/USD: future timestamp %v", ticker, updatedAt)
 				continue
 			}
-			if age, maxAge := time.Since(updatedAt), entries[i].feed.maxAge(); age > maxAge {
-				log.Warnf("chainlink: %s/USD: stale price (updated %v ago, limit %v)",
-					ticker, age.Round(time.Minute), maxAge)
+			if staleness.check(log, ticker, time.Since(updatedAt), entries[i].feed.maxAge()) {
 				continue
 			}
 
