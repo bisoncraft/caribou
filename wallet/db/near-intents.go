@@ -72,7 +72,14 @@ type IntentsSwap struct {
 	// inferred record stays in the active set — polled, and superseded by
 	// any later service-reported status — until the engine retires it by
 	// clearing the flag.
-	Inferred      bool   `json:"inferred,omitempty"`
+	Inferred bool `json:"inferred,omitempty"`
+	// InferredFrom is the service status the inference was made against:
+	// PENDING_DEPOSIT for a deposit the service never observed,
+	// INCOMPLETE_DEPOSIT for an underfunded deposit it never refunded. A
+	// later report of that same status restates what the inference already
+	// accounted for and does not supersede it; any other status does. Set
+	// and cleared together with Inferred.
+	InferredFrom  string `json:"inferredFrom,omitempty"`
 	OriginAssetID uint32 `json:"originAssetID"`
 	DestAssetID   uint32 `json:"destAssetID"`
 	OriginAsset   string `json:"originAsset"` // Intents asset ID

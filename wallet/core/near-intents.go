@@ -639,9 +639,13 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 		// A service-confirmed terminal state is never regressed. A locally
 		// inferred one (a deadline timeout) yields to the service's view —
 		// the service can accept and settle or refund a deposit past the
-		// local grace — except PENDING_DEPOSIT, which only restates that
-		// the service has observed nothing.
-		if !swap.Inferred || status.Status == intents.StatusPendingDeposit {
+		// local grace — except a restatement of the status the inference
+		// was made against (PENDING_DEPOSIT, or the INCOMPLETE_DEPOSIT the
+		// timeout stopped waiting on), which reports nothing the inference
+		// did not already account for. Adopting it would hand the record
+		// back to applyTimeout, which would infer FAILED again next cycle,
+		// and the two would alternate every poll until the horizon.
+		if !swap.Inferred || status.Status == intents.StatusPendingDeposit || status.Status == swap.InferredFrom {
 			return nil, nil
 		}
 	}
@@ -666,8 +670,9 @@ func (e *intentsEngine) mergeStatus(depositAddress string, status *intents.Statu
 
 	prevState := swap.State
 	swap.State = newState
-	// Any service-reported status supersedes the local inference.
+	// Any other service-reported status supersedes the local inference.
 	swap.Inferred = false
+	swap.InferredFrom = ""
 	if realized {
 		swap.AmountOut = details.AmountOut
 		swap.AtomsOut = realizedAtoms
@@ -747,6 +752,7 @@ func (e *intentsEngine) retireInferred(depositAddress string) {
 		return
 	}
 	swap.Inferred = false
+	swap.InferredFrom = ""
 	if err := e.db.StoreIntentsSwap(swap); err != nil {
 		e.log.Errorf("Error retiring inferred swap %s: %v", depositAddress, err)
 		return
@@ -816,10 +822,12 @@ func (e *intentsEngine) applyDepositRejection(ctx context.Context, swap *Intents
 // KNOWN_DEPOSIT_TX and PROCESSING are deliberately absent from the
 // switch: the service holds the deposit and is actively driving those to
 // SUCCESS or REFUNDED, and a local FAILED would misreport funds in
-// flight. Both FAILED transitions are marked Inferred: the service can
-// still accept and settle or refund the deposit past the local grace, so
-// the record keeps polling until intentsInferredHorizon and yields to
-// any later service-reported status (mergeStatus). EXPIRED is not
+// flight. Both FAILED transitions are marked Inferred, with InferredFrom
+// recording the service status they gave up on: the service can still
+// accept and settle or refund the deposit past the local grace, so the
+// record keeps polling until intentsInferredHorizon and yields to any
+// later service-reported status other than a restatement of that one
+// (mergeStatus). EXPIRED is not
 // marked — with no deposit sent there is nothing the service could ever
 // report. The record is reloaded under swapMtx so a concurrent writer's
 // newer state is not overwritten.
@@ -851,6 +859,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 	case IntentsStateDepositSent:
 		swap.State = intents.StatusFailed
 		swap.Inferred = true
+		swap.InferredFrom = intents.StatusPendingDeposit
 		swap.RefundReason = "the service did not observe a deposit before the quote deadline"
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			e.log.Warnf("Swap %s marked FAILED: deposit %s not observed by the service before deadline %s",
@@ -863,6 +872,7 @@ func (e *intentsEngine) applyTimeout(depositAddress string) {
 	case intents.StatusIncompleteDeposit:
 		swap.State = intents.StatusFailed
 		swap.Inferred = true
+		swap.InferredFrom = intents.StatusIncompleteDeposit
 		swap.RefundReason = "the service reported the deposit incomplete and did not refund it before the quote deadline"
 		if err := e.db.StoreIntentsSwap(swap); err == nil {
 			e.log.Warnf("Swap %s marked FAILED: incomplete deposit not refunded by the service before deadline %s",
