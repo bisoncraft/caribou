@@ -149,6 +149,9 @@ type Core struct {
 
 	walletMtx sync.RWMutex
 	wallets   map[uint32]*xcWallet
+	// creating holds the assets with a wallet creation in flight. See
+	// claimWalletCreation.
+	creating map[uint32]bool
 
 	tipMtx     sync.Mutex
 	tipPending map[uint32]uint64 // assetID -> latest pending tip height
@@ -333,6 +336,7 @@ func New(cfg *Config) (*Core, error) {
 		db:          coreDB,
 		txDB:        masterTxDB,
 		wallets:     make(map[uint32]*xcWallet),
+		creating:    make(map[uint32]bool),
 		net:         cfg.Net,
 		tipPending:  make(map[uint32]uint64),
 		tipActive:   make(map[uint32]bool),
@@ -1150,10 +1154,13 @@ func (c *Core) CreateWallet(appPW, walletPW []byte, form *WalletForm) error {
 func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *WalletForm) (err error) {
 	assetID := form.AssetID
 	symbol := unbip(assetID)
-	_, exists := c.wallet(assetID)
-	if exists {
-		return fmt.Errorf("%s wallet already exists", symbol)
+	release, err := c.claimWalletCreation(assetID)
+	if err != nil {
+		return err
 	}
+	// Released after the deferred discard below has run, so no other creation
+	// can touch the asset's data directory until this one is fully unwound.
+	defer release()
 
 	token := asset.TokenInfo(assetID)
 	var dbWallet *db.Wallet
@@ -1165,17 +1172,19 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 		var fresh bool
 		dbWallet, fresh, err = c.createDBWallet(crypter, walletDef, form, walletPW)
 		if fresh {
-			// This call wrote seeded wallet data into a data directory that
-			// held none, and a seeded wallet is rebuilt in full from the app
-			// seed. A failure at any step (on-disk creation, open, connect,
-			// unlock, balance, db store) must leave the directory as it was
-			// found, so the next attempt starts from nothing instead of
-			// tripping over this attempt's remains. Wallet data that was
-			// already on disk and only adopted is never discarded: it may
+			// This call created the asset's data directory, so everything in
+			// it was written by this call, and a seeded wallet is rebuilt in
+			// full from the app seed. A failure at any step (on-disk creation,
+			// open, connect, unlock, balance, db store) must remove the
+			// directory again, so the next attempt starts from nothing instead
+			// of tripping over this attempt's remains. A directory that
+			// predates the call is never discarded, whatever it holds: it may
 			// belong to a wallet that failed to load at startup, and it is not
 			// this call's to remove. Every failure path after loadXCWallet
 			// disconnects the wallet before returning, which also closes an
-			// asset.Opener, so nothing holds the directory open when this runs.
+			// asset.Opener, so nothing holds the directory open when this
+			// runs, and the creation claim is still held, so no other creation
+			// can be using it.
 			defer func() {
 				if err != nil {
 					c.discardAssetData(assetID)
@@ -1196,13 +1205,16 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 	// Block PeersChange until we know this wallet is ready.
 	atomic.StoreUint32(wallet.broadcasting, 0)
 
+	// Every failure path from here on disconnects the wallet before
+	// returning. Disconnect is what closes a wallet that OpenWithPW opened,
+	// and the deferred discard must not run under an open wallet.
 	if err = wallet.OpenWithPW(c.ctx, crypter); err != nil {
+		wallet.Disconnect()
 		return err
 	}
 
 	dbWallet.Address, err = c.connectWallet(wallet)
 	if err != nil {
-		// Disconnect is what closes a wallet that OpenWithPW opened.
 		wallet.Disconnect()
 		return err
 	}
@@ -1269,8 +1281,8 @@ func (c *Core) createWallet(crypter encrypt.Crypter, walletPW []byte, form *Wall
 
 // createDBWallet builds the db.Wallet record for a new non-token wallet,
 // creating the seeded wallet on disk first when the definition calls for one.
-// The returned bool reports whether this call wrote seeded wallet data into a
-// data directory that held none; see createSeededWallet.
+// The returned bool reports whether this call created the asset's data
+// directory; see createSeededWallet.
 func (c *Core) createDBWallet(crypter encrypt.Crypter, walletDef *asset.WalletDefinition, form *WalletForm, walletPW []byte) (*db.Wallet, bool, error) {
 	var err error
 	var fresh bool
@@ -1361,9 +1373,10 @@ func (c *Core) createTokenDBWallet(tokenID uint32, token *asset.Token, form *Wal
 // rather than recreated. A creation interrupted after the on-disk wallet was
 // made but before core stored the wallet leaves exactly that, and it would
 // otherwise block every later creation with an already-exists error. The
-// returned bool reports whether the data directory held no wallet before this
-// call, so that whatever it holds afterwards, complete or not, was written by
-// this call.
+// returned bool reports whether the asset's data directory did not exist
+// before this call, so that everything in it afterwards, complete or not, was
+// written by this call. The driver's existence check is narrower, scoped to
+// one wallet type, and cannot say whether the directory holds anything else.
 func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form *WalletForm) ([]byte, bool, error) {
 	seed, pw, err := c.assetSeedAndPass(assetID, crypter)
 	if err != nil {
@@ -1372,6 +1385,8 @@ func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form 
 	defer encode.ClearBytes(seed)
 
 	dataDir := c.assetDataDirectory(assetID)
+	_, statErr := os.Stat(dataDir)
+	fresh := os.IsNotExist(statErr)
 	exists, err := asset.WalletExists(assetID, form.Type, dataDir, form.Config, c.net)
 	if err != nil {
 		return nil, false, fmt.Errorf("error checking for existing wallet data: %w", err)
@@ -1398,10 +1413,10 @@ func (c *Core) createSeededWallet(assetID uint32, crypter encrypt.Crypter, form 
 		Logger:   c.log.SubLogger(unbip(assetID)),
 		TorProxy: c.cfg.TorProxy,
 	}); err != nil {
-		return nil, true, fmt.Errorf("Error creating wallet: %w", err)
+		return nil, fresh, fmt.Errorf("Error creating wallet: %w", err)
 	}
 
-	return pw, true, nil
+	return pw, fresh, nil
 }
 
 func (c *Core) assetSeedAndPass(assetID uint32, crypter encrypt.Crypter) (seed, pass []byte, err error) {
@@ -1469,10 +1484,11 @@ func (c *Core) assetDataBackupDirectory(assetID uint32) string {
 	return filepath.Join(filepath.Dir(c.cfg.DBPath), "assetdb-backup", unbip(assetID))
 }
 
-// discardAssetData removes an asset's data directory. Only for seeded wallet
-// data written by a creation that then failed and released the wallet: nothing
-// in the directory is live or predates the attempt, and the next creation
-// rebuilds the wallet in full from the app seed.
+// discardAssetData removes an asset's data directory. Only for a directory
+// created by a wallet creation that then failed and released the wallet, with
+// the creation claim still held: nothing in the directory predates the attempt
+// or is in use, and the next creation rebuilds the wallet in full from the app
+// seed.
 func (c *Core) discardAssetData(assetID uint32) {
 	dir := c.assetDataDirectory(assetID)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -1758,6 +1774,28 @@ func (c *Core) updateWallet(assetID uint32, wallet *xcWallet) {
 	c.walletMtx.Lock()
 	defer c.walletMtx.Unlock()
 	c.wallets[assetID] = wallet
+}
+
+// claimWalletCreation reserves an asset for one in-flight wallet creation and
+// returns the func that releases the claim. The wallet lookup and the claim
+// share one critical section, so two creations for the same asset cannot both
+// find no wallet and go on to fight over the asset's data directory, where the
+// loser would discard what the winner is using.
+func (c *Core) claimWalletCreation(assetID uint32) (release func(), err error) {
+	c.walletMtx.Lock()
+	defer c.walletMtx.Unlock()
+	if _, exists := c.wallets[assetID]; exists {
+		return nil, fmt.Errorf("%s wallet already exists", unbip(assetID))
+	}
+	if c.creating[assetID] {
+		return nil, fmt.Errorf("%s wallet creation already in progress", unbip(assetID))
+	}
+	c.creating[assetID] = true
+	return func() {
+		c.walletMtx.Lock()
+		delete(c.creating, assetID)
+		c.walletMtx.Unlock()
+	}, nil
 }
 
 // RecoverWallet will retrieve some recovery information from the wallet,

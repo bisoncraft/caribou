@@ -670,6 +670,7 @@ func newTestRig() *testRig {
 			db:         tdb,
 			log:        tLogger,
 			wallets:    make(map[uint32]*xcWallet),
+			creating:   make(map[uint32]bool),
 			newCrypter: func([]byte) encrypt.Crypter { return crypter },
 			reCrypter:  func([]byte, []byte) (encrypt.Crypter, error) { return crypter, crypter.recryptErr },
 			noteChans:  make(map[uint64]chan Notification),
@@ -2992,6 +2993,9 @@ type tOpenerWallet struct {
 	// closeHook, when non-nil, is called at the top of Close.
 	closeHook func()
 
+	// openErr, when non-nil, fails OpenWithPW without opening the wallet.
+	openErr error
+
 	openMtx sync.Mutex
 	open    bool
 }
@@ -2999,6 +3003,9 @@ type tOpenerWallet struct {
 func (w *tOpenerWallet) OpenWithPW(context.Context, []byte) error {
 	if w.openHook != nil {
 		w.openHook()
+	}
+	if w.openErr != nil {
+		return w.openErr
 	}
 	w.openMtx.Lock()
 	defer w.openMtx.Unlock()
@@ -3078,6 +3085,9 @@ type tSeededDriver struct {
 	*tDriver
 	createErr error
 	creates   int
+	// createHook, when non-nil, is called from Create once the call has been
+	// counted, so a test can hold a creation inside its on-disk step.
+	createHook func()
 }
 
 func (d *tSeededDriver) marker(dataDir string) string {
@@ -3094,6 +3104,9 @@ func (d *tSeededDriver) Exists(_, dataDir string, _ map[string]string, _ util.Ne
 
 func (d *tSeededDriver) Create(params *asset.CreateWalletParams) error {
 	d.creates++
+	if d.createHook != nil {
+		d.createHook()
+	}
 	// A creation that fails partway still leaves the directory behind, like a
 	// real driver would.
 	if err := os.MkdirAll(params.DataDir, 0o700); err != nil {
@@ -3190,21 +3203,37 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	ensureNoData("Create")
 	ensureCreates("Create", 1)
 
-	// Connection failure after the wallet is created on disk and opened.
+	// Open failure after the wallet is created on disk, with nothing open.
+	opener.openErr = errTest
+	ensureErr("Open")
+	opener.openErr = nil
+	ensureClosed("Open")
+	ensureNoData("Open")
+	ensureCreates("Open", 2)
+
+	// Connection failure after the wallet is opened.
 	tWallet.connectErr = errTest
 	ensureErr("Connect")
 	tWallet.connectErr = nil
 	ensureClosed("Connect")
 	ensureNoData("Connect")
-	ensureCreates("Connect", 2)
+	ensureCreates("Connect", 3)
 
-	// Balance failure, past the connect step.
+	// Unlock failure, past the connect step.
+	tWallet.unlockErr = errTest
+	ensureErr("Unlock")
+	tWallet.unlockErr = nil
+	ensureClosed("Unlock")
+	ensureNoData("Unlock")
+	ensureCreates("Unlock", 4)
+
+	// Balance failure.
 	tWallet.balErr = errTest
 	ensureErr("Balance")
 	tWallet.balErr = nil
 	ensureClosed("Balance")
 	ensureNoData("Balance")
-	ensureCreates("Balance", 3)
+	ensureCreates("Balance", 5)
 
 	// Storing the wallet fails.
 	rig.db.updateWalletErr = errTest
@@ -3212,13 +3241,13 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	rig.db.updateWalletErr = nil
 	ensureClosed("db.UpdateWallet")
 	ensureNoData("db.UpdateWallet")
-	ensureCreates("db.UpdateWallet", 4)
+	ensureCreates("db.UpdateWallet", 6)
 
 	// Success keeps the data.
 	if err := tCore.CreateWallet(tPW, nil, form); err != nil {
 		t.Fatalf("error creating wallet: %v", err)
 	}
-	ensureCreates("success", 5)
+	ensureCreates("success", 7)
 	ensureData("success")
 
 	// Wallet data left on disk with no configured wallet, as an interrupted
@@ -3227,7 +3256,7 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	if err := tCore.CreateWallet(tPW, nil, form); err != nil {
 		t.Fatalf("error creating wallet from existing data: %v", err)
 	}
-	ensureCreates("existing data", 5)
+	ensureCreates("existing data", 7)
 
 	// Existing data is not the failed creation's to discard.
 	delete(tCore.wallets, tSeeded.ID)
@@ -3236,7 +3265,7 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	tWallet.connectErr = nil
 	ensureClosed("Connect with existing data")
 	ensureData("Connect with existing data")
-	ensureCreates("Connect with existing data", 5)
+	ensureCreates("Connect with existing data", 7)
 
 	// A wallet that failed to load at startup is absent from the wallets map
 	// but keeps both its db record and its data. A creation attempted for it
@@ -3248,5 +3277,54 @@ func TestCreateSeededWalletDataCleanup(t *testing.T) {
 	drv.openErr = nil
 	rig.db.wallet = nil
 	ensureData("load")
-	ensureCreates("load", 5)
+	ensureCreates("load", 7)
+
+	// Two creations for one asset cannot overlap. The second is refused while
+	// the first holds the creation claim, so it never reaches the on-disk
+	// create and never discards the first's data as its own.
+	delete(tCore.wallets, tSeeded.ID)
+	if err := os.RemoveAll(dataDir); err != nil {
+		t.Fatalf("error clearing wallet data: %v", err)
+	}
+	inCreate := make(chan struct{})
+	finish := make(chan struct{})
+	drv.createHook = func() {
+		close(inCreate)
+		<-finish
+	}
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- tCore.CreateWallet(tPW, nil, form) }()
+	<-inCreate
+	ensureErr("concurrent")
+	ensureCreates("concurrent", 8)
+	close(finish)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("error creating wallet with a concurrent attempt refused: %v", err)
+	}
+	drv.createHook = nil
+	ensureData("concurrent")
+	ensureCreates("concurrent", 8)
+
+	// A data directory that predates the creation is left alone even when it
+	// holds no wallet of the requested type. The driver's check is scoped to
+	// that type and cannot say what else the directory holds.
+	delete(tCore.wallets, tSeeded.ID)
+	if err := os.RemoveAll(dataDir); err != nil {
+		t.Fatalf("error clearing wallet data: %v", err)
+	}
+	foreign := filepath.Join(dataDir, "other-wallet-type")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("error creating data directory: %v", err)
+	}
+	if err := os.WriteFile(foreign, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("error writing foreign data: %v", err)
+	}
+	tWallet.connectErr = errTest
+	ensureErr("Connect with foreign data")
+	tWallet.connectErr = nil
+	ensureClosed("Connect with foreign data")
+	ensureCreates("Connect with foreign data", 9)
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("foreign data in a predating directory removed by a failed creation: %v", err)
+	}
 }
