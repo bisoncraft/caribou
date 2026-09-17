@@ -134,7 +134,16 @@ if [[ "$prepared_pin" != "$PIN" ]]; then
     ( cd "$MONERO_C_DIR" && git submodule update --init --recursive --force monero )
 
     echo "==> applying monero_c's own patches"
-    ( cd "$MONERO_C_DIR" && ./apply_patches.sh monero )
+    # Pin the patch commits' dates: apply_patches.sh commits monero_c's patches
+    # into the monero submodule, a commit hash covers its committer date, and
+    # monero embeds `git rev-parse --short HEAD` in the version string that ends
+    # up in the binary. Without this the same source produced a different
+    # library on every run -- nine bytes, but enough to break sha256sum -c for
+    # anyone rebuilding. The date is the monero_c pin's own commit date.
+    ( cd "$MONERO_C_DIR" \
+      && GIT_COMMITTER_DATE="2026-05-28T12:56:53+02:00" \
+         GIT_AUTHOR_DATE="2026-05-28T12:56:53+02:00" \
+         ./apply_patches.sh monero )
     printf '%s\n' "$PIN" > "$MONERO_C_DIR/.caribou-prepared"
 else
     echo "==> reusing prepared checkout at $MONERO_C_DIR, pin $PIN (skipping clone/patch)"
@@ -184,6 +193,7 @@ apply_once "$MONERO_C_DIR" contrib/depends "$here/0005-depends-keep-simplybs-che
 apply_once "$MONERO_C_DIR" contrib/depends "$here/0007-simplybs-gnu-origin-fallback.patch"
 apply_once "$MONERO_C_DIR" contrib/depends "$here/0009-depends-keep-simplybs-source-cache.patch"
 apply_once "$MONERO_C_DIR" contrib/depends "$here/0011-simplybs-recheck-cached-sources.patch"
+apply_once "$MONERO_C_DIR" contrib/depends "$here/0012-simplybs-retry-git-clone.patch"
 
 # Stage the Apple SDK xip into simplybs' source cache. simplybs reuses any blob
 # already at its cache path and only sha256-verifies on its own download -- its

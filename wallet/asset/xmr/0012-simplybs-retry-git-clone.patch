@@ -1,0 +1,86 @@
+depends: retry the git clone that builds a source bundle.
+
+simplybs fetches a git-kind source by trying its bundle mirrors first and,
+when those fail, cloning the upstream repository and making the bundle
+itself (utils/git.go createBundleFromRepo). The mirror path is expected to
+fail -- static.mrcyjanek.net resets the connection routinely -- so the
+clone is the path that actually runs, and it had no retry of any kind.
+
+DownloadFile's fifteen attempts cover only the HTTP archive kinds. One
+dropped connection on the clone therefore failed the whole target:
+
+    Cloning into '.../llvm-project.bundle.clone.tmp'...
+    error: 7656 bytes of body are still expected
+    fetch-pack: unexpected disconnect while reading sideband packet
+    fatal: early EOF
+    fatal: fetch-pack: invalid index-pack output
+    build.go:115: Failed to download source: failed to clone repository
+
+llvm-project is ~2.2 GiB over 850k objects and is cloned for every target
+that needs a cross toolchain, so a transfer long enough to be interrupted
+is the normal case rather than bad luck. Under `docker build` the failed
+RUN layer is discarded, so that one flake threw away the target's entire
+toolchain build and left the next run to start over.
+
+Retry five times. git cannot resume a packfile transfer, so each attempt
+starts from zero and the partial clone has to be removed first: git clone
+refuses a destination that is not empty, and the failed attempt leaves one
+behind because the existing RemoveAll is deferred to function exit.
+
+This does not paper over a dead network. The build sets
+http.lowSpeedLimit/http.lowSpeedTime, so a stalled transfer aborts in
+seconds and is retried, and five consecutive failures still stop the build
+with the underlying git error attached.
+
+--- a/simplybs/utils/git.go
++++ b/simplybs/utils/git.go
+@@ -9,6 +9,7 @@
+ 	"os/exec"
+ 	"path/filepath"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/mrcyjanek/simplybs/utils/download"
+ )
+@@ -105,12 +106,35 @@
+ 	tempDir := bundlePath + ".clone.tmp"
+ 	defer RemoveAll(tempDir)
+ 
+-	log.Printf("Cloning repository from %s", url)
+-	cloneCmd := exec.Command("git", "clone", url, tempDir)
+-	cloneCmd.Stdout = os.Stdout
+-	cloneCmd.Stderr = os.Stderr
+-	if err := cloneCmd.Run(); err != nil {
+-		return fmt.Errorf("failed to clone repository: %w", err)
++	// A large repository loses its connection near the end often enough that
++	// one attempt is not a build strategy: llvm-project is ~2.2 GiB over 850k
++	// objects, and nothing else on this path retries -- DownloadFile's
++	// attempts cover the HTTP archive kinds only.
++	//
++	// Each attempt starts from zero because git cannot resume a packfile
++	// transfer, and the partial clone has to be removed first: git clone
++	// refuses a non-empty destination, and the RemoveAll above is deferred to
++	// function exit so it has not run yet.
++	const cloneAttempts = 5
++	var cloneErr error
++	for attempt := 1; attempt <= cloneAttempts; attempt++ {
++		if attempt > 1 {
++			log.Printf("Clone attempt %d/%d for %s", attempt, cloneAttempts, url)
++			time.Sleep(10 * time.Second)
++		}
++		RemoveAll(tempDir)
++
++		log.Printf("Cloning repository from %s", url)
++		cloneCmd := exec.Command("git", "clone", url, tempDir)
++		cloneCmd.Stdout = os.Stdout
++		cloneCmd.Stderr = os.Stderr
++		if cloneErr = cloneCmd.Run(); cloneErr == nil {
++			break
++		}
++		log.Printf("Clone of %s failed: %v", url, cloneErr)
++	}
++	if cloneErr != nil {
++		return fmt.Errorf("failed to clone repository after %d attempts: %w", cloneAttempts, cloneErr)
+ 	}
+ 
+ 	log.Printf("Creating branches for refs: %v", refs)

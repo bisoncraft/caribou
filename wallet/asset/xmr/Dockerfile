@@ -99,6 +99,22 @@ RUN git checkout 3bfb3856a838f2bf6b729501837bb0295dedf25d \
 #        cache mid-build and re-runs configure without the -D that carried it.
 #        Intermittent, and fatal to a target: a RUN below has no retry, so the
 #        layer and its toolchain work are discarded.
+# Pin the patch commits' dates. apply_patches.sh applies monero_c's patches to
+# the monero submodule with `git am` and `git commit`, so the submodule's HEAD is
+# a commit this build creates -- and a commit hash covers its committer date, so
+# HEAD changed on every build. monero embeds `git rev-parse --short HEAD` in its
+# version string, which lands in the binary: the September libraries say
+# 0.18.4.6-5fb1e9c7c and a rebuild said 0.18.4.6-fcc0f0614.
+#
+# That was the ONLY difference between the two. 34,971,831 of 34,971,840 bytes
+# matched; the nine that did not were those hex digits. Pinning both dates to the
+# monero_c pin's own commit date makes HEAD deterministic (42c66d9c7) and, with
+# it, the libraries -- which is what lets `cd lib && sha256sum -c SHA256SUMS`
+# actually mean something for a rebuilder. `git am` takes each patch's author
+# date from the patch itself, so only the committer date really floats, but both
+# are set because the .note.GNU-stack step uses a plain `git commit`.
+ENV GIT_COMMITTER_DATE="2026-05-28T12:56:53+02:00" \
+    GIT_AUTHOR_DATE="2026-05-28T12:56:53+02:00"
 COPY 0001-add-allow_mismatched_daemon_version.patch /tmp/
 COPY 0002-add-wallet2_api_c-wrapper.patch /tmp/
 COPY 0010-cmake-recover-host-abi.patch /tmp/
@@ -134,11 +150,16 @@ RUN sed -i '/_MONERO_Wallet_setTrustedDaemon/a _MONERO_Wallet_setAllowMismatched
 #   0011 re-checks a cached archive against its pinned sha256 before reusing
 #        it, so the cache 0009 keeps cannot preserve a truncated download
 #        from an interrupted run for good.
+#   0012 retries the git clone that builds a source bundle. Nothing on that
+#        path retried, and a dropped connection on the 2.2 GiB llvm-project
+#        clone failed the whole target -- which under `docker build` discards
+#        the layer and throws away that target's toolchain build.
 COPY 0004-simplybs-retry-mirrors-only.patch /tmp/
 COPY 0005-depends-keep-simplybs-checkout.patch /tmp/
 COPY 0007-simplybs-gnu-origin-fallback.patch /tmp/
 COPY 0009-depends-keep-simplybs-source-cache.patch /tmp/
 COPY 0011-simplybs-recheck-cached-sources.patch /tmp/
+COPY 0012-simplybs-retry-git-clone.patch /tmp/
 RUN cd contrib/depends && make simplybs
 
 # Apply them from the repository root with --directory, not from contrib/depends,
@@ -162,7 +183,8 @@ RUN set -eu; \
              0005-depends-keep-simplybs-checkout \
              0007-simplybs-gnu-origin-fallback \
              0009-depends-keep-simplybs-source-cache \
-             0011-simplybs-recheck-cached-sources; do \
+             0011-simplybs-recheck-cached-sources \
+             0012-simplybs-retry-git-clone; do \
         out=$(git apply -v --directory=contrib/depends "/tmp/$p.patch" 2>&1) \
             || { echo "$out" >&2; echo "error: $p failed to apply" >&2; exit 1; }; \
         case "$out" in \
