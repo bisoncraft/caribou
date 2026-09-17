@@ -9,8 +9,10 @@
 #   docker build -t monero_c_builder .
 #
 # The four Apple targets additionally need an Xcode xip staged in xcode/, which
-# the image cannot download for itself. See xcode/README.md. Without it the
-# Linux, Windows and Android targets still build.
+# the image cannot download for itself. See xcode/README.md. Without it those
+# four are skipped and the image still builds and tags, carrying the Linux,
+# Windows and Android libraries; only the Apple extraction commands below then
+# have nothing to read.
 #
 # Extract libraries (output lives at release/<tag>/<triple>/):
 #   # Linux x86_64
@@ -137,12 +139,40 @@ COPY 0005-depends-keep-simplybs-checkout.patch /tmp/
 COPY 0007-simplybs-gnu-origin-fallback.patch /tmp/
 COPY 0009-depends-keep-simplybs-source-cache.patch /tmp/
 COPY 0011-simplybs-recheck-cached-sources.patch /tmp/
-RUN cd contrib/depends && make simplybs \
-    && git apply /tmp/0004-simplybs-retry-mirrors-only.patch \
-    && git apply /tmp/0005-depends-keep-simplybs-checkout.patch \
-    && git apply /tmp/0007-simplybs-gnu-origin-fallback.patch \
-    && git apply /tmp/0009-depends-keep-simplybs-source-cache.patch \
-    && git apply /tmp/0011-simplybs-recheck-cached-sources.patch
+RUN cd contrib/depends && make simplybs
+
+# Apply them from the repository root with --directory, not from contrib/depends,
+# and fail on a skip.
+#
+# `cd contrib/depends && git apply 0011-...patch` looks like it works and does
+# not. git apply treats a patch carrying a `diff --git a/x b/x` header as
+# toplevel-relative, so it does not prepend the "contrib/depends/" prefix; the
+# path then sits outside the current directory, git drops the patch, prints
+# nothing without -v, and EXITS 0. The `&&` chain this replaces therefore ran
+# green while 0007 and 0011 -- the only two of the five carrying that header --
+# were never applied. 0004, 0005 and 0009 have no `diff --git` line, get the
+# prefix prepended, and did apply, which is what made the failure look like
+# nothing was wrong.
+#
+# --directory gives every patch the same prefix regardless of its header, and
+# the "Skipped patch" check below is what makes a recurrence loud: git apply has
+# no flag that turns a skip into a nonzero exit.
+RUN set -eu; \
+    for p in 0004-simplybs-retry-mirrors-only \
+             0005-depends-keep-simplybs-checkout \
+             0007-simplybs-gnu-origin-fallback \
+             0009-depends-keep-simplybs-source-cache \
+             0011-simplybs-recheck-cached-sources; do \
+        out=$(git apply -v --directory=contrib/depends "/tmp/$p.patch" 2>&1) \
+            || { echo "$out" >&2; echo "error: $p failed to apply" >&2; exit 1; }; \
+        case "$out" in \
+            *"Skipped patch"*) \
+                echo "$out" >&2; \
+                echo "error: git apply SKIPPED $p rather than applying it." >&2; \
+                exit 1 ;; \
+        esac; \
+        echo "applied: $p"; \
+    done
 
 # Apple SDK. native/apple-sdk pins the Xcode xip as a "blob" download, but its
 # URL is not reachable unattended: Apple 302s to developer.apple.com/unauthorized/
@@ -183,8 +213,10 @@ RUN cd contrib/depends && make simplybs \
 USER root
 COPY --chown=user:user xcode/ /opt/xcode/
 RUN set -eu; \
-    want=434287e1e4c6ecbd6d5ea07e9f408fffcad2b82916b0a3fdfefa7fe60db4de93; \
-    dest=/monero_c/contrib/depends/simplybs/.buildlib/source/download.developer.apple.com/Developer_Tools/Xcode_26.1; \
+    want=$(awk -F= '/^XCODE_XIP_SHA256=/ { print $2; exit }' /opt/xcode/PIN); \
+    ver=$(awk -F= '/^XCODE_VERSION=/ { print $2; exit }' /opt/xcode/PIN); \
+    [ -n "$want" ] && [ -n "$ver" ] || { echo "xcode/PIN does not define XCODE_VERSION and XCODE_XIP_SHA256"; exit 1; }; \
+    dest="/monero_c/contrib/depends/simplybs/.buildlib/source/download.developer.apple.com/Developer_Tools/Xcode_$ver"; \
     mkdir -p "$dest"; \
     find /opt/xcode -type f -iname '*.xip' | sort > /tmp/xips; \
     found=; rejected=; \
@@ -195,16 +227,18 @@ RUN set -eu; \
     done < /tmp/xips; \
     rm -f /tmp/xips; \
     if [ -n "$found" ]; then \
-        ln -s "$found" "$dest/XcodeXIP_26.1_Universal.xip"; \
+        ln -s "$found" "$dest/XcodeXIP_${ver}_Universal.xip"; \
+        touch /monero_c/.apple-sdk-staged; \
         echo "Apple SDK: using $found"; \
     elif [ -n "$rejected" ]; then \
         echo "Apple SDK: none of the xips in xcode/ match the pinned sha256."; \
-        echo "  wanted $want  (Xcode 26.1)"; \
+        echo "  wanted $want  (Xcode $ver)"; \
         printf "%b" "$rejected"; \
         echo "  Xcode 26.1.1 hashes ed55d55f... and is NOT interchangeable."; \
         exit 1; \
     else \
-        echo "Apple SDK: no xip in xcode/, so the four Apple targets will fail."; \
+        rm -f /monero_c/.apple-sdk-staged; \
+        echo "Apple SDK: no xip in xcode/, so the four Apple targets are skipped."; \
         echo "           Linux, Windows and Android are unaffected. See xcode/README.md."; \
     fi; \
     chown -R user:user /monero_c/contrib/depends/simplybs/.buildlib
@@ -214,11 +248,16 @@ USER user
 # cross toolchain + deps from source (long); sbs-cleanup frees the intermediate
 # build trees between targets, keeping the source cache (0009).
 #
-# THE APPLE TARGETS COME LAST, AND THAT ORDER IS LOAD-BEARING. They are the only
-# four that need the staged xip, so with xcode/ empty they fail -- and a failing
-# RUN ends the build, taking every target after it with it. Keeping them at the
-# end is what makes the "Linux, Windows and Android are unaffected" notice above
-# true rather than aspirational. Do not reorder these for tidiness.
+# THE APPLE TARGETS COME LAST, AND THEY SKIP THEMSELVES WITHOUT THE XIP. They are
+# the only four that need it, and each is guarded on the .apple-sdk-staged marker
+# written above. Ordering alone is not enough: this is one stage, so a failing
+# Apple RUN ends the build and `docker build -t monero_c_builder .` then tags no
+# image at all -- which would leave the Linux, Windows and Android libraries
+# built but unreachable, since every extraction command is a `docker run` against
+# that tag. Skipping instead of failing is what makes the "Linux, Windows and
+# Android are unaffected" notice above true rather than aspirational. Keep the
+# Apple targets last anyway, so a genuine failure in one of them still leaves the
+# other six cached.
 RUN ./build_single.sh monero x86_64-linux-gnu   -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 RUN ./build_single.sh monero aarch64-linux-gnu  -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
 RUN ./build_single.sh monero x86_64-w64-mingw32 -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
@@ -278,8 +317,12 @@ RUN set -eu; \
 
 # Desktop: macOS. Here rather than with the other desktop targets above because
 # it needs the xip -- see the ordering note there.
-RUN ./build_single.sh monero x86_64-apple-darwin  -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
-RUN ./build_single.sh monero aarch64-apple-darwin -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
+RUN if [ -e /monero_c/.apple-sdk-staged ]; then \
+        ./build_single.sh monero x86_64-apple-darwin -j$(nproc) && (cd contrib/depends && make sbs-cleanup); \
+    else echo "SKIP x86_64-apple-darwin: no Apple SDK xip staged, see xcode/README.md"; fi
+RUN if [ -e /monero_c/.apple-sdk-staged ]; then \
+        ./build_single.sh monero aarch64-apple-darwin -j$(nproc) && (cd contrib/depends && make sbs-cleanup); \
+    else echo "SKIP aarch64-apple-darwin: no Apple SDK xip staged, see xcode/README.md"; fi
 
 # Mobile: iOS device + simulator. These build here, not on a Mac. simplybs'
 # native/apple-sdk package is MrCyjaneK's osxcross — a Linux-hosted Apple cross
@@ -300,18 +343,24 @@ RUN ./build_single.sh monero aarch64-apple-darwin -j$(nproc) && (cd contrib/depe
 # No install_name fixup here, unlike the darwin dylibs below: the iOS libs are
 # wrapped into Monero.framework by wallet/ios/bind.sh, which retargets the id to
 # @rpath/Monero.framework/Monero itself.
-RUN ./build_single.sh monero aarch64-apple-ios           -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
-RUN ./build_single.sh monero aarch64-apple-ios-simulator -j$(nproc) && (cd contrib/depends && make sbs-cleanup)
+RUN if [ -e /monero_c/.apple-sdk-staged ]; then \
+        ./build_single.sh monero aarch64-apple-ios -j$(nproc) && (cd contrib/depends && make sbs-cleanup); \
+    else echo "SKIP aarch64-apple-ios: no Apple SDK xip staged, see xcode/README.md"; fi
+RUN if [ -e /monero_c/.apple-sdk-staged ]; then \
+        ./build_single.sh monero aarch64-apple-ios-simulator -j$(nproc) && (cd contrib/depends && make sbs-cleanup); \
+    else echo "SKIP aarch64-apple-ios-simulator: no Apple SDK xip staged, see xcode/README.md"; fi
 
 # macOS: simplybs links the dylib with install_name @rpath/libmonero_wallet2_api_c.dylib.
 # cgo rejects -Wl,-rpath, so the caribou binary carries no LC_RPATH for @rpath to
 # resolve against. Rewrite the id to @executable_path/... so the loader finds
 # the dylib next to the executable (matches the runtime layout in lib/README.md).
-RUN INT=$(command -v llvm-install-name-tool || ls /usr/bin/llvm-install-name-tool-* | head -1) \
-    && for dy in release/*/x86_64-apple-darwin/libmonero_wallet2_api_c.dylib \
-                 release/*/aarch64-apple-darwin/libmonero_wallet2_api_c.dylib; do \
-        "$INT" --id "@executable_path/libmonero_wallet2_api_c.dylib" "$dy"; \
-    done
+RUN if [ -e /monero_c/.apple-sdk-staged ]; then \
+        INT=$(command -v llvm-install-name-tool || ls /usr/bin/llvm-install-name-tool-* | head -1); \
+        for dy in release/*/x86_64-apple-darwin/libmonero_wallet2_api_c.dylib \
+                  release/*/aarch64-apple-darwin/libmonero_wallet2_api_c.dylib; do \
+            "$INT" --id "@executable_path/libmonero_wallet2_api_c.dylib" "$dy"; \
+        done; \
+    else echo "SKIP install_name fixup: no macOS dylibs were built"; fi
 
 RUN echo "=== Built libraries ===" \
     && find release \( -name 'libmonero_wallet2_api_c.*' -o -name 'libc++_shared.so' \) -print

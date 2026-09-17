@@ -16,10 +16,15 @@ run then dies in the extract step on a corrupt archive, and the recovery is
 a manual rm of a cache path the user has to work out.
 
 Hash a cached archive against the sha256 its package already pins and
-re-download it if it does not match. DownloadFile resumes from what is on
-disk, so the common case is a range request for the missing tail rather
-than the whole file, and a completed transfer that still mismatches is
-deleted by the check already in downloadWithResume.
+re-download it if it does not match. Remove the bad file first rather than
+resuming onto it: downloadWithResume sends `Range: bytes=<size>-`, and for a
+file that is already at the pinned object's full length a conforming origin
+answers 416. That status is rejected above the hash check, so the os.Remove
+there never runs and the corrupt file survives every one of DownloadFile's
+sixteen attempts -- which is exactly the permanent state this patch exists to
+end, still reachable whenever the bad bytes happen to be the right length.
+Deleting first restarts the transfer from zero, and the hash check in
+downloadWithResume still deletes a completed transfer that mismatches.
 
 Only the tar kinds are checked. "git" is a clone bundle whose Sha256 means
 something else to ExtractGitCloneBundle, and "blob" is the Apple xip: that
@@ -46,7 +51,7 @@ index 20628ec..dc71ee1 100644
  	"log"
  	"os"
  	"os/exec"
-@@ -53,12 +56,47 @@ func (p *Package) ExtractEnv(host *host.Host, envPath string, envNativePath stri
+@@ -53,12 +56,54 @@ func (p *Package) ExtractEnv(host *host.Host, envPath string, envNativePath stri
  	writeDotEnv(envPath+"/_source_me", newEnv)
  }
  
@@ -82,9 +87,16 @@ index 20628ec..dc71ee1 100644
 +		if _, err := os.Stat(sourcePath); err == nil && download.Sha256 != "" {
 +			if !cachedArchiveIsIntact(sourcePath, download.Sha256) {
 +				log.Printf("Cached source %s does not match its pinned sha256, re-downloading", sourcePath)
-+				// DownloadFile resumes from what is on disk, so this usually
-+				// costs a range request rather than the whole archive, and a
-+				// completed transfer that still mismatches deletes the file.
++				// Delete before re-downloading. DownloadFile resumes from
++				// whatever is on disk, and a corrupt file already at the
++				// pinned object's full length makes that a Range request an
++				// origin answers 416 -- rejected above downloadWithResume's
++				// hash check, so its os.Remove never runs and the bad bytes
++				// are permanent. Starting from zero costs a full re-download
++				// in the rarer case and is the only thing that recovers it.
++				if err := os.Remove(sourcePath); err != nil {
++					log.Fatalf("Failed to remove corrupt cached source %s: %v", sourcePath, err)
++				}
 +				if err := downloadpkg.DownloadFile(p.Package, sourcePath, download.URL, download.Sha256, false); err != nil {
 +					log.Fatalf("Failed to re-download source: %v", err)
 +				}

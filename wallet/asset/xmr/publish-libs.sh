@@ -7,7 +7,7 @@
 #   ./publish-libs.sh ios-arm64             # or name platforms explicitly
 #   ./publish-libs.sh --tag xmr-libs-v0.18.4.6-RC2-caribou.2
 #   ./publish-libs.sh --dry-run             # package and hash, upload nothing
-#   ./publish-libs.sh --publish             # publish outright instead of a draft
+#   ./publish-libs.sh --publish             # publish the release rather than leave a draft
 #   ./publish-libs.sh --drop-unpublished    # drop carried platforms this tag lacks
 #
 # The tag written here is the one fetch-libs.sh will use: it goes into the
@@ -15,11 +15,18 @@
 # defaults to whatever that header already says, so the tag lives in exactly one
 # place and --tag moves it for both scripts at once.
 #
-# A release created as a draft serves nothing: draft assets are not reachable at
+# A release left as a draft serves nothing: draft assets are not reachable at
 # releases/download/<tag>/, so fetch-libs.sh's curl path 404s for everyone and
 # only its gh path works, and only for users with repo access. The draft has to
-# be published before the checksums are committed. This script says so when it
-# creates one.
+# be published before the checksums are committed. This script checks the
+# release's own draft state on every run and says so, and --publish will publish
+# an existing draft rather than only affecting how a new one is created.
+#
+# A PUBLISHED RELEASE IS TREATED AS IMMUTABLE. Adding a platform it does not
+# carry yet is fine. Replacing the bytes of one it already carries is refused:
+# the assets live at a fixed URL, so an in-place swap permanently breaks
+# verification for every commit that carries the old hashes. Bump the tag's
+# caribou.<n> serial instead. --clobber is used only against a draft.
 #
 # The counterpart to fetch-libs.sh. Building these in CI is not practical — each
 # target compiles its own cross toolchain from source and ten of them do not
@@ -232,17 +239,28 @@ if [[ -f "$sums" ]]; then
     done < <(awk '!/^#/ && NF == 2 { sub("/.*", "", $2); if (!seen[$2]++) print $2 }' "$sums")
 fi
 
-declare -a unpublished=()
-if [[ ${#carry[@]} -gt 0 ]]; then
-    have_assets=1
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-        gh release view "$TAG" --repo "$REPO" --json assets \
-            --jq '.assets[].name' > "$work/release-assets" 2>/dev/null || : > "$work/release-assets"
-    else
-        # Only reachable under --dry-run, which does not require gh.
-        have_assets=0
-        : > "$work/release-assets"
+# What $TAG already is, asked once. Both the carry check below and the upload
+# further down need it, and the draft state has to come from the RELEASE rather
+# than from whether this invocation happened to create it.
+have_assets=1
+release_exists=0
+is_draft=0
+: > "$work/release-assets"
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+        release_exists=1
+        gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' \
+            > "$work/release-assets" 2>/dev/null || : > "$work/release-assets"
+        [[ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')" == "true" ]] && is_draft=1
     fi
+else
+    # Only reachable under --dry-run, which does not require gh.
+    have_assets=0
+fi
+
+declare -a unpublished=()
+declare -a incomplete=()
+if [[ ${#carry[@]} -gt 0 ]]; then
     for p in "${carry[@]}"; do
         grep -qx "libmonero_wallet2_api_c-$p.tar.xz" "$work/release-assets" || unpublished+=("$p")
     done
@@ -250,6 +268,57 @@ if [[ ${#carry[@]} -gt 0 ]]; then
         echo "note: gh unavailable, so carried platforms were not checked against $TAG:" >&2
         printf '  %s\n' "${unpublished[@]}" >&2
         unpublished=()
+    fi
+
+    # An asset existing is not the same as its checksums being complete. The
+    # packaging path above refuses a platform missing any file libfiles() names
+    # for it; the carry path checked only that $TAG holds the asset, so an entry
+    # written before that rule existed could be carried forward forever. The
+    # committed SHA256SUMS is exactly that shape: libfiles() gives android-* two
+    # files and all three android platforms list only the wallet library, so
+    # fetch-libs.sh installs the tarball's libc++_shared.so nowhere and
+    # wallet/android/bind.sh falls back to a local-NDK copy that may be 4 KB
+    # aligned -- reintroducing downstream the failure the readelf check exists to
+    # prevent.
+    #
+    # After the reconciliation above, not before it: with gh unavailable every
+    # carried platform is provisionally "unpublished", and skipping those would
+    # skip the entire check on exactly the runs that do not touch a release.
+    for p in "${carry[@]}"; do
+        if [[ ${#unpublished[@]} -gt 0 ]] && printf '%s\n' "${unpublished[@]}" | grep -qx "$p"; then
+            continue    # already fatal below for a better reason
+        fi
+        for wf in $(libfiles "$p"); do
+            if ! awk -v want="$p/$wf" '!/^#/ && $2 == want { found = 1 } END { exit !found }' "$sums"; then
+                incomplete+=("$p")
+                # Under --drop-unpublished this is about to be dropped on
+                # purpose, so the remediation advice would be noise.
+                [[ $drop_unpublished -eq 1 ]] && continue
+                echo "error: lib/SHA256SUMS carries $p but has no hash for $p/$wf." >&2
+                if [[ "$wf" == "libc++_shared.so" ]]; then libcxx_note; fi
+                echo "  A carried platform has to list every file its asset ships, or" >&2
+                echo "  fetch-libs.sh installs only the subset that is listed. Repackage" >&2
+                echo "  $p in this run (name it as an argument), or pass" >&2
+                echo "  --drop-unpublished to remove it from the file." >&2
+            fi
+        done
+    done
+fi
+
+if [[ ${#incomplete[@]} -gt 0 ]]; then
+    if [[ $drop_unpublished -eq 1 ]]; then
+        echo "==> dropping platforms with incomplete checksums: ${incomplete[*]}"
+        for p in "${incomplete[@]}"; do
+            for i in "${!carry[@]}"; do
+                [[ "${carry[$i]}" == "$p" ]] && unset 'carry[i]'
+            done
+        done
+    else
+        # Fatal even under --dry-run, unlike an unpublished platform: that one is
+        # a claim about a release that a dry run does not make yet, while this is
+        # a defect already sitting in the committed file.
+        echo "error: refusing to carry the platforms listed above with partial checksums." >&2
+        exit 1
     fi
 fi
 
@@ -353,12 +422,73 @@ established.
 EOF
 )"
 
-created_draft=0
-if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    gh release upload "$TAG" "$work"/assets/* --repo "$REPO" --clobber
+# A PUBLISHED RELEASE IS IMMUTABLE. `gh release upload --clobber` replaces an
+# asset at the same URL, and nothing required the tag's caribou.<n> serial to be
+# bumped when the bytes changed, so a bare re-run silently retargeted the
+# existing release: every commit carrying the previous hashes then failed
+# verification against that tag permanently, and an older checkout could no
+# longer fetch the libraries it was reviewed with. --clobber also deletes an
+# asset before uploading its replacement, so a transfer that died partway left
+# the release short a file the committed checksums still named.
+#
+# Adding a platform the release does not have yet breaks nobody's anchor, so
+# that stays allowed. Changing one it already has needs a new tag.
+if [[ $release_exists -eq 1 && $is_draft -eq 0 ]]; then
+    echo "==> $TAG is published; checking this run against what it already holds"
+    mkdir -p "$work/published"
+    gh release download "$TAG" --repo "$REPO" --pattern SHA256SUMS \
+        --dir "$work/published" --clobber >/dev/null 2>&1 || {
+        echo "error: $TAG has no SHA256SUMS asset, so there is no way to tell what it" >&2
+        echo "  already holds. Refusing to overwrite a published release blind." >&2
+        exit 1
+    }
+    declare -a changed=()
+    for p in "${packaged[@]}"; do
+        grep -qx "libmonero_wallet2_api_c-$p.tar.xz" "$work/release-assets" || continue
+        for wf in $(libfiles "$p"); do
+            was="$(awk -v want="$p/$wf" '!/^#/ && $2 == want { print $1 }' "$work/published/SHA256SUMS")"
+            now="$(awk -v want="$p/$wf" '!/^#/ && $2 == want { print $1 }' "$work/assets/SHA256SUMS")"
+            [[ -n "$was" && "$was" != "$now" ]] && changed+=("$p/$wf")
+        done
+    done
+    if [[ ${#changed[@]} -gt 0 ]]; then
+        echo "error: these files differ from what $TAG already publishes:" >&2
+        printf '    %s\n' "${changed[@]}" >&2
+        echo "  Replacing them would break verification for every commit carrying the" >&2
+        echo "  current hashes, permanently. Publish the new bytes under a new tag:" >&2
+        if [[ "$TAG" =~ ^(.*\.)([0-9]+)$ ]]; then
+            echo "      ./publish-libs.sh --tag ${BASH_REMATCH[1]}$(( BASH_REMATCH[2] + 1 )) ${packaged[*]}" >&2
+        else
+            echo "      ./publish-libs.sh --tag <next-tag> ${packaged[*]}" >&2
+        fi
+        exit 1
+    fi
+    echo "    nothing published changes; uploading only what $TAG does not have"
+fi
+
+if [[ $release_exists -eq 1 ]]; then
+    if [[ $is_draft -eq 1 ]]; then
+        # Nothing is served from a draft, so replacing an asset in place breaks
+        # no existing anchor. This is the ordinary retry path after a failed
+        # upload, and the one place --clobber is safe.
+        gh release upload "$TAG" "$work"/assets/* --repo "$REPO" --clobber
+    else
+        # Only what is genuinely new, plus SHA256SUMS. That one is a manifest,
+        # not the anchor -- git's copy is what fetch-libs.sh trusts -- so
+        # refreshing it cannot invalidate an older commit, and it is small enough
+        # that a half-finished replacement is not the risk a library is.
+        declare -a to_upload=()
+        for a in "$work"/assets/*; do
+            n="$(basename "$a")"
+            if [[ "$n" == "SHA256SUMS" ]] || ! grep -qx "$n" "$work/release-assets"; then
+                to_upload+=("$a")
+            fi
+        done
+        gh release upload "$TAG" "${to_upload[@]}" --repo "$REPO" --clobber
+    fi
 else
     args=(--title "monero_c libraries $TAG" --notes "$notes")
-    [[ $draft -eq 1 ]] && { args+=(--draft); created_draft=1; }
+    [[ $draft -eq 1 ]] && { args+=(--draft); is_draft=1; }
     gh release create "$TAG" "$work"/assets/* --repo "$REPO" "${args[@]}"
 fi
 
@@ -370,12 +500,25 @@ cp "$work/assets/SHA256SUMS" "$sums"
 
 echo
 echo "Uploaded."
-if [[ $created_draft -eq 1 ]]; then
+
+# Keyed on the release, not on whether this run created it. Gating this on the
+# create branch meant a second run against a still-draft release took the upload
+# branch and said nothing at all, so a SHA256SUMS naming a draft tag got
+# committed with no warning -- and --publish did not help, because it only chose
+# how a NEW release was created and never published an existing draft.
+if [[ $is_draft -eq 1 && $draft -eq 0 ]]; then
+    echo "==> publishing $TAG (--publish)"
+    gh release edit "$TAG" --repo "$REPO" --draft=false
+    is_draft=0
+fi
+if [[ $is_draft -eq 1 ]]; then
     echo
     echo "$TAG is a DRAFT. Its assets are not served from"
     echo "releases/download/$TAG/, so fetch-libs.sh's curl path cannot reach them and"
-    echo "its gh path works only for accounts with access to $REPO. Publish it first:"
+    echo "its gh path works only for accounts with access to $REPO. Publish it before"
+    echo "committing the checksums below:"
     echo "    gh release edit '$TAG' --repo '$REPO' --draft=false"
+    echo "or re-run this script with --publish."
     echo
 fi
 echo "Then commit the checksums:"

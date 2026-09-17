@@ -45,10 +45,17 @@ command -v install_name_tool >/dev/null || { echo "error: install_name_tool not 
 PIN="3bfb3856a838f2bf6b729501837bb0295dedf25d"   # == tag v0.18.4.6-RC2
 TRIPLES=(x86_64-apple-darwin aarch64-apple-darwin)
 # Where the .dylib for each triple is staged in-repo (matches the lib/ layout).
-declare -A LIBDIR=(
-    [x86_64-apple-darwin]="$here/lib/darwin-amd64"
-    [aarch64-apple-darwin]="$here/lib/darwin-arm64"
-)
+# A case, not `declare -A`: associative arrays are bash 4, stock macOS ships
+# bash 3.2, and this script runs nowhere but a Mac -- so the map aborted it on
+# line one unless a Homebrew bash happened to precede /bin/bash in PATH.
+# fetch-libs.sh avoids mapfile for the same reason, and says so.
+libdir() {
+    case "$1" in
+        x86_64-apple-darwin)  echo "$here/lib/darwin-amd64" ;;
+        aarch64-apple-darwin) echo "$here/lib/darwin-arm64" ;;
+        *) echo "error: no lib/ directory mapped for triple '$1'." >&2; return 1 ;;
+    esac
+}
 
 # monero_c checkout. Override with MONERO_C_DIR; defaults to a gitignored build
 # dir under this folder. To skip a fresh (large) clone you can reuse the iOS
@@ -56,16 +63,42 @@ declare -A LIBDIR=(
 MONERO_C_DIR="${MONERO_C_DIR:-$here/.monero_c-darwin}"
 JOBS="${JOBS:--j$(sysctl -n hw.physicalcpu)}"
 
-# apply a patch only if it is not already applied (so re-runs are safe).
-apply_once() { # $1=dir-to-run-in  $2=patch-file
-    local dir="$1" patch="$2"
-    ( cd "$dir"
-      if git apply --reverse --check "$patch" >/dev/null 2>&1; then
-          echo "  (already applied: $(basename "$patch"))"
-      else
-          git apply "$patch"
-          echo "  applied: $(basename "$patch")"
-      fi )
+# Apply a patch once, from the repository ROOT with --directory, and fail loudly
+# if it does not land.
+#
+# Running `cd contrib/depends && git apply 0011-...patch` looks like it works and
+# does not. git apply treats a patch carrying a `diff --git a/x b/x` header as
+# toplevel-relative, so it does not prepend the "contrib/depends/" prefix; the
+# path then sits outside the current directory, git drops the patch, prints
+# nothing without -v, and EXITS 0. That is what this function used to do, and
+# 0007 and 0011 -- the only two of our patches carrying that header -- were
+# silently never applied on any run. The other three have no `diff --git` line,
+# get the prefix prepended, and did apply, which is what hid it.
+#
+# --directory gives every patch the same prefix regardless of its header, and the
+# "Skipped patch" check is what makes a recurrence loud: git apply has no flag
+# that turns a skip into a nonzero exit, so the message has to be read.
+apply_once() { # $1=repo-root  $2=subdir the patch paths are relative to (or .)  $3=patch
+    local root="$1" sub="$2" patch="$3" out
+    local dirflag=""
+    [[ "$sub" != "." ]] && dirflag="--directory=$sub"
+    if git -C "$root" apply --reverse --check ${dirflag:+"$dirflag"} "$patch" >/dev/null 2>&1; then
+        echo "  (already applied: $(basename "$patch"))"
+        return 0
+    fi
+    if ! out="$(git -C "$root" apply -v ${dirflag:+"$dirflag"} "$patch" 2>&1)"; then
+        echo "$out" >&2
+        echo "error: failed to apply $(basename "$patch")" >&2
+        exit 1
+    fi
+    case "$out" in
+        *"Skipped patch"*)
+            echo "$out" >&2
+            echo "error: git apply SKIPPED $(basename "$patch") rather than applying it." >&2
+            exit 1
+            ;;
+    esac
+    echo "  applied: $(basename "$patch")"
 }
 
 # Prepare (clone + submodule + monero_c's own patches), gated on a success
@@ -73,7 +106,18 @@ apply_once() { # $1=dir-to-run-in  $2=patch-file
 # expensive or not idempotent live inside the gate; our own patches are applied
 # below it on every run. The heavy build further down is outside it too, since
 # simplybs caches its own work and re-running resumes it.
-if [[ ! -f "$MONERO_C_DIR/.caribou-prepared" ]]; then
+# The sentinel records the pin it was prepared at, not merely that a prepare
+# happened. `git checkout "$PIN"` runs only inside this gate, so with a bare
+# touch an existing checkout silently stayed on the old commit after a PIN
+# bump -- while publish-libs.sh carries its own PIN and would have labelled
+# the resulting binaries with the new one in SHA256SUMS and the release notes.
+prepared_pin=""
+[[ -f "$MONERO_C_DIR/.caribou-prepared" ]] && prepared_pin="$(cat "$MONERO_C_DIR/.caribou-prepared")"
+if [[ "$prepared_pin" != "$PIN" ]]; then
+    if [[ -n "$prepared_pin" ]]; then
+        echo "==> checkout was prepared at $prepared_pin, pin is now $PIN; re-preparing"
+        rm -f "$MONERO_C_DIR/.caribou-prepared"
+    fi
     if [[ ! -d "$MONERO_C_DIR/.git" ]]; then
         echo "==> cloning monero_c into $MONERO_C_DIR"
         git clone https://github.com/MrCyjaneK/monero_c.git "$MONERO_C_DIR"
@@ -91,9 +135,9 @@ if [[ ! -f "$MONERO_C_DIR/.caribou-prepared" ]]; then
 
     echo "==> applying monero_c's own patches"
     ( cd "$MONERO_C_DIR" && ./apply_patches.sh monero )
-    touch "$MONERO_C_DIR/.caribou-prepared"
+    printf '%s\n' "$PIN" > "$MONERO_C_DIR/.caribou-prepared"
 else
-    echo "==> reusing prepared checkout at $MONERO_C_DIR (skipping clone/patch)"
+    echo "==> reusing prepared checkout at $MONERO_C_DIR, pin $PIN (skipping clone/patch)"
 fi
 
 # Our patches are applied on every run, not only on a fresh prepare. apply_once
@@ -106,9 +150,9 @@ fi
 #        Docker-specific: this script drives the same build_single.sh over the
 #        same CMakeLists.txt, so it hits the same intermittent syntax error.
 echo "==> applying caribou patches"
-apply_once "$MONERO_C_DIR/monero" "$here/0001-add-allow_mismatched_daemon_version.patch"
-apply_once "$MONERO_C_DIR"        "$here/0002-add-wallet2_api_c-wrapper.patch"
-apply_once "$MONERO_C_DIR"        "$here/0010-cmake-recover-host-abi.patch"
+apply_once "$MONERO_C_DIR/monero" . "$here/0001-add-allow_mismatched_daemon_version.patch"
+apply_once "$MONERO_C_DIR" . "$here/0002-add-wallet2_api_c-wrapper.patch"
+apply_once "$MONERO_C_DIR" . "$here/0010-cmake-recover-host-abi.patch"
 
 # Apple builds are SHARED and gate exported symbols on the .exp list. Add our
 # wrapper symbol so MONERO_Wallet_setAllowMismatchedDaemonVersion is visible
@@ -135,18 +179,28 @@ fi
 #        extract, with no way out but deleting it by hand.
 echo "==> fetching simplybs + robustness patches"
 ( cd "$MONERO_C_DIR/contrib/depends" && make simplybs )
-apply_once "$MONERO_C_DIR/contrib/depends" "$here/0004-simplybs-retry-mirrors-only.patch"
-apply_once "$MONERO_C_DIR/contrib/depends" "$here/0005-depends-keep-simplybs-checkout.patch"
-apply_once "$MONERO_C_DIR/contrib/depends" "$here/0007-simplybs-gnu-origin-fallback.patch"
-apply_once "$MONERO_C_DIR/contrib/depends" "$here/0009-depends-keep-simplybs-source-cache.patch"
-apply_once "$MONERO_C_DIR/contrib/depends" "$here/0011-simplybs-recheck-cached-sources.patch"
+apply_once "$MONERO_C_DIR" contrib/depends "$here/0004-simplybs-retry-mirrors-only.patch"
+apply_once "$MONERO_C_DIR" contrib/depends "$here/0005-depends-keep-simplybs-checkout.patch"
+apply_once "$MONERO_C_DIR" contrib/depends "$here/0007-simplybs-gnu-origin-fallback.patch"
+apply_once "$MONERO_C_DIR" contrib/depends "$here/0009-depends-keep-simplybs-source-cache.patch"
+apply_once "$MONERO_C_DIR" contrib/depends "$here/0011-simplybs-recheck-cached-sources.patch"
 
 # Stage the Apple SDK xip into simplybs' source cache. simplybs reuses any blob
 # already at its cache path and only sha256-verifies on its own download -- its
 # "blob" extract path is a plain copy with no hash check -- so a pre-placed file
 # is trusted as-is unless we check it here, which is what the block below does.
-XIP_URLPATH="download.developer.apple.com/Developer_Tools/Xcode_26.1/XcodeXIP_26.1_Universal.xip"
-XIP_SHA256="434287e1e4c6ecbd6d5ea07e9f408fffcad2b82916b0a3fdfefa7fe60db4de93"
+# Read the pin rather than carry a fourth copy of it: the Dockerfile,
+# xcode/README.md and the sibling build script all read the same file, so an
+# Xcode bump is one edit instead of four that have to agree.
+XIP_PIN_FILE="$here/xcode/PIN"
+[[ -f "$XIP_PIN_FILE" ]] || { echo "error: $XIP_PIN_FILE not found." >&2; exit 1; }
+XIP_SHA256="$(awk -F= '/^XCODE_XIP_SHA256=/ { print $2; exit }' "$XIP_PIN_FILE")"
+XCODE_VERSION="$(awk -F= '/^XCODE_VERSION=/ { print $2; exit }' "$XIP_PIN_FILE")"
+[[ -n "$XIP_SHA256" && -n "$XCODE_VERSION" ]] || {
+    echo "error: $XIP_PIN_FILE does not define XCODE_VERSION and XCODE_XIP_SHA256." >&2
+    exit 1
+}
+XIP_URLPATH="download.developer.apple.com/Developer_Tools/Xcode_$XCODE_VERSION/XcodeXIP_${XCODE_VERSION}_Universal.xip"
 XIP_CACHE="$MONERO_C_DIR/contrib/depends/simplybs/.buildlib/source/$XIP_URLPATH"
 if [[ -n "${XCODE_XIP:-}" ]]; then
     if [[ ! -f "$XCODE_XIP" ]]; then
@@ -162,29 +216,58 @@ if [[ -n "${XCODE_XIP:-}" ]]; then
     if [[ "$got" != "$XIP_SHA256" ]]; then
         echo "error: XCODE_XIP sha256 does not match the pin." >&2
         echo "  got    $got" >&2
-        echo "  wanted $XIP_SHA256  (Xcode 26.1)" >&2
+        echo "  wanted $XIP_SHA256  (Xcode $XCODE_VERSION)" >&2
         echo "  Xcode 26.1.1 hashes ed55d55f... and is NOT interchangeable." >&2
         echo "  Set XCODE_XIP_ALLOW_MISMATCH=1 to build from it anyway." >&2
         [[ "${XCODE_XIP_ALLOW_MISMATCH:-}" == "1" ]] || exit 1
         echo "  XCODE_XIP_ALLOW_MISMATCH=1 set, proceeding." >&2
     fi
-    # (Re)stage into the cache whenever it is absent OR a different size. simplybs
-    # only checks a source blob's *existence* before reusing it, so a truncated
-    # xip left by an interrupted download would otherwise be reused as-is and fail
-    # to extract — replacing it here is what keeps the build from getting stuck at
-    # the Apple SDK step on a re-run.
-    if [[ ! -f "$XIP_CACHE" ]] || [[ "$(stat -f%z "$XIP_CACHE")" != "$(stat -f%z "$XCODE_XIP")" ]]; then
+    # (Re)stage into the cache whenever it is absent OR is not the file that was
+    # just verified.
+    # simplybs only checks a source blob's *existence* before reusing it, so a
+    # truncated xip left by an interrupted download would otherwise be reused
+    # as-is and fail to extract, and the build would stick at the Apple SDK step
+    # on every re-run.
+    #
+    # Hash it rather than compare sizes. The check above applies to $XCODE_XIP,
+    # which is not necessarily the file that gets consumed: a cached blob of the
+    # same size was reused on the strength of a hash computed over a different
+    # file. 2.8 GB is a few seconds of sha256 against a build that runs for hours,
+    # and this is the only thing standing between an arbitrary file and the Apple
+    # toolchain that compiles the wallet library.
+    #
+    # Compared against $got, not $XIP_SHA256: with XCODE_XIP_ALLOW_MISMATCH the
+    # supplied file is deliberately not the pinned one, and comparing against the
+    # pin would re-copy 2.8 GB on every run forever.
+    if [[ ! -f "$XIP_CACHE" ]] || [[ "$(shasum -a 256 "$XIP_CACHE" | awk '{print $1}')" != "$got" ]]; then
         echo "==> staging Apple SDK xip into simplybs source cache"
         mkdir -p "$(dirname "$XIP_CACHE")"
         cp "$XCODE_XIP" "$XIP_CACHE"
         echo "  staged -> ${XIP_CACHE#$MONERO_C_DIR/}"
     else
-        echo "==> Apple SDK xip already staged (matching size), reusing"
+        echo "==> Apple SDK xip already staged (hash matches the pin), reusing"
     fi
 elif [[ ! -f "$XIP_CACHE" ]]; then
     echo "warning: no XCODE_XIP set and no cached Apple SDK xip at" >&2
     echo "  $XIP_CACHE" >&2
-    echo "Pass XCODE_XIP=/path/to/Xcode_26.1_Universal.xip (see the header)." >&2
+    echo "Pass XCODE_XIP=/path/to/Xcode_${XCODE_VERSION}_Universal.xip (see the header)." >&2
+else
+    # A cached xip with no XCODE_XIP to check it against. simplybs verifies only
+    # what it downloaded itself and this blob was placed by hand, so without the
+    # check here nothing between an arbitrary 2.8 GB file and the Apple toolchain
+    # ever looks at it. Do not hard-error: this is the ordinary re-run path, and
+    # the mismatch may be a deliberate XCODE_XIP_ALLOW_MISMATCH staged earlier.
+    cached="$(shasum -a 256 "$XIP_CACHE" | awk '{print $1}')"
+    if [[ "$cached" == "$XIP_SHA256" ]]; then
+        echo "==> using cached Apple SDK xip (hash matches the pin)"
+    else
+        echo "warning: the cached Apple SDK xip does not match the pin." >&2
+        echo "  got    $cached" >&2
+        echo "  wanted $XIP_SHA256  (Xcode $XCODE_VERSION)" >&2
+        echo "  $XIP_CACHE" >&2
+        echo "  Pass XCODE_XIP=/path/to/Xcode_${XCODE_VERSION}_Universal.xip to re-stage it," >&2
+        echo "  or delete that file to start over. Building on it anyway." >&2
+    fi
 fi
 
 # Build each desktop triple. Each builds its full cross toolchain + deps from
@@ -210,7 +293,7 @@ for triple in "${TRIPLES[@]}"; do
     # and what the Dockerfile does for these targets).
     install_name_tool -id "@executable_path/libmonero_wallet2_api_c.dylib" "$dylib"
 
-    dest="${LIBDIR[$triple]}"
+    dest="$(libdir "$triple")"
     mkdir -p "$dest"
     cp "$dylib" "$dest/"
     echo "  staged $(basename "$dylib") -> ${dest#$repo_root/}/"
@@ -219,5 +302,5 @@ done
 echo
 echo "Done. Staged desktop monero dylibs:"
 for triple in "${TRIPLES[@]}"; do
-    echo "  ${LIBDIR[$triple]#$repo_root/}/libmonero_wallet2_api_c.dylib"
+    echo "  $(libdir "$triple" | sed "s|^$repo_root/||")/libmonero_wallet2_api_c.dylib"
 done

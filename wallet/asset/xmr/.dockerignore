@@ -1,0 +1,14 @@
+# The build context is this directory, and two things in it are enormous and
+# never referenced by a COPY: the staged libraries and the local monero_c
+# checkouts that build-darwin.sh / build-ios.sh create (.gitignore calls those
+# "tens of GB of toolchain + SDK build intermediates").
+#
+# BuildKit transfers only files a COPY names, so for it the cost is the context
+# scan rather than the bytes. The legacy builder (DOCKER_BUILDKIT=0) sends the
+# whole context, and there it is the difference between a build and a wedged
+# one. Excluded for both reasons.
+.monero_c-*/
+lib/*/
+
+# The xip is COPYed in deliberately -- see the `COPY --chown=user:user xcode/`
+# step -- so xcode/ as a whole must NOT be excluded here.

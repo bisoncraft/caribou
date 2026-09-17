@@ -15,8 +15,10 @@ must never be committed.
 
 Leave this directory as it is to build only the Linux, Windows and Android
 targets. That is supported and prints a notice, not an error: the Dockerfile
-orders the four Apple targets after every other one, so their failure ends the
-build with the rest already produced.
+records whether a xip was staged and skips the four Apple targets when none was,
+so the build succeeds and the image tags with the other six libraries in it. The
+Apple extraction commands in `lib/README.md` then find nothing to read, and
+everything else works as usual.
 
 ## Which file
 
@@ -24,7 +26,13 @@ Xcode **26.1**, the Universal xip, sha256
 
     434287e1e4c6ecbd6d5ea07e9f408fffcad2b82916b0a3fdfefa7fe60db4de93
 
-from <https://developer.apple.com/download/all/> while signed in with an Apple
+Both values live in `xcode/PIN`, which the Dockerfile, `build-darwin.sh` and
+`build-ios.sh` all read. That file is the one to edit for an Xcode bump; the copy
+above is prose and the `PIN` file is what the builds enforce. (Before `PIN`
+existed the hash sat in four places with three separate mismatch handlers, so a
+bump that missed one left a build path silently trusting a stale xip.)
+
+Get it from <https://developer.apple.com/download/all/> while signed in with an Apple
 developer account. Sign-in is unavoidable: the pinned URL answers a plain
 request with a 302 to `developer.apple.com/unauthorized/`, and the simplybs LFS
 mirror answers 451 for that one path.

@@ -1,0 +1,8 @@
+# The pinned Apple SDK. Single source of truth for the Dockerfile, build-darwin.sh,
+# build-ios.sh and xcode/README.md, which each used to carry their own copy of the
+# hash -- three of them with their own mismatch handling, so an Xcode bump had to
+# hit all four or a build path would silently trust a stale xip.
+#
+# Shell-sourceable and grep-able; keep it to plain KEY=value with no expansion.
+XCODE_VERSION=26.1
+XCODE_XIP_SHA256=434287e1e4c6ecbd6d5ea07e9f408fffcad2b82916b0a3fdfefa7fe60db4de93
