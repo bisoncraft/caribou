@@ -32,8 +32,10 @@
 #
 # The assets are built on a developer machine, not in CI, so nothing here
 # attests to where they came from. Rebuilding is what replaces that: build from
-# the pinned source and run `cd lib && sha256sum -c SHA256SUMS`. Whether that
-# reproduces bit for bit is not yet established — see lib/README.md.
+# the pinned source and run `cd lib && sha256sum -c SHA256SUMS`. That does
+# reproduce bit for bit, but only through the Dockerfile, which fixes the build
+# path the libraries embed — a macOS build via build-darwin.sh or build-ios.sh
+# lands at a different path and will differ. See lib/README.md.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"    # wallet/asset/xmr

@@ -40,15 +40,23 @@
 #     # build, then, from wallet/asset/xmr:
 #     cd lib && sha256sum -c SHA256SUMS        # shasum -a 256 -c on macOS
 #
-# A match means the published bytes are the bytes that source produces. That is
-# a stronger statement than provenance if it holds, and worth nothing if it does
-# not, so establish it before leaning on it: monero_c makes no reproducibility
-# claim, and nobody has checked this pin. See lib/README.md.
+# A match means the published bytes are the bytes that source produces, which is
+# a stronger statement than provenance. Checked 2026-09-17: rebuilding a target
+# from an unchanged tree recompiles and relinks to a byte-identical library.
+# That only became true once the Dockerfile pinned GIT_COMMITTER_DATE -- before
+# it, the monero submodule's patch commit, and so the version string compiled
+# into the library, changed on every build.
 #
-# Until then the honest position is that lib/SHA256SUMS pins exactly which
-# binary this repo expects, and fetch-libs.sh will install no other. That is
-# integrity, not provenance: it stops an asset being swapped after review, and
-# does not prove what the build machine did.
+# It holds only for a Dockerfile build. Build paths are embedded in the output
+# and the Dockerfile fixes them at /monero_c, while build-darwin.sh and
+# build-ios.sh build under .monero_c-darwin / .monero_c-ios; a Mac-built Apple
+# library cannot byte-match a Docker-built one. Publish all platforms from one
+# Docker run, or the file will pin bytes nobody can reproduce. See lib/README.md.
+#
+# Alongside that, lib/SHA256SUMS pins exactly which binary this repo expects and
+# fetch-libs.sh will install no other. That part is integrity rather than
+# provenance: it stops an asset being swapped after review, and on its own says
+# nothing about what the build machine did.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"    # wallet/asset/xmr
@@ -416,9 +424,16 @@ that does not match.
 
 These were built on a developer machine, not in CI, so there is no build
 provenance attached. What can be checked instead is the source: rebuild from
-the pin above and compare against \`lib/SHA256SUMS\`. If you do this, please
-report the result either way — whether the build reproduces is not yet
-established.
+the pin above and compare against \`lib/SHA256SUMS\`.
+
+The build is reproducible when run through \`wallet/asset/xmr/Dockerfile\`,
+which fixes the build path at \`/monero_c\` and pins the patch commit dates.
+Build paths are compiled into these libraries, so a macOS build via
+\`build-darwin.sh\` or \`build-ios.sh\` will differ and that is expected, not
+tampering.
+
+An independent reproduction, especially on another machine, is still welcome —
+please report the result either way.
 EOF
 )"
 

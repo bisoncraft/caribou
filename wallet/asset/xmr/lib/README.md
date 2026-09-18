@@ -57,15 +57,42 @@ A match means the published bytes are exactly what that source produces, which
 is a stronger claim than provenance — anyone can make it, independently, without
 trusting the publisher at all.
 
-**Whether that holds here is unverified.** monero_c makes no reproducibility
-claim; its `generate_checksum.sh` hashes the wrapper *source* files, not build
-outputs, and nobody has rebuilt this pin twice and compared. Monero's own
-`contrib/depends` lineage is built for deterministic output, so it is plausible,
-but plausible is not established. Until someone checks, treat the download as
-convenience backed by an integrity pin, not as a verified build.
+**It holds, if you build the way the Dockerfile does.** Checked 2026-09-17 by
+rebuilding `aarch64-linux-android` from an unchanged tree: 215 objects
+recompiled, the library relinked, and the result was byte-identical to the
+first build. Two things that normally defeat this are already handled — monero
+zeroes its own build timestamp, so every library here says
+`built on: Jan  1 1970 00:00:01` rather than a wall-clock date, and the
+Dockerfile always builds at `/monero_c`, so the 780-2400 build paths each
+library embeds are the same for everyone.
 
-If you do rebuild, please report the result either way — a confirmed
-reproduction is worth more here than any amount of tooling.
+**Reproducibility is therefore path-dependent, and that has one sharp edge.**
+`../build-darwin.sh` and `../build-ios.sh` build in `.monero_c-darwin` /
+`.monero_c-ios` next to the scripts, not at `/monero_c`. Those paths are
+compiled into the output, so a macOS-built darwin or iOS library **cannot**
+byte-match a Docker-built one even from identical source. The libraries
+published now were all built in a single Docker run, so they are mutually
+consistent; if you rebuild the Apple targets on a Mac, expect a mismatch and do
+not read it as tampering. Rebuild via the Dockerfile to compare against
+`SHA256SUMS`.
+
+Getting here needed a fix. `apply_patches.sh` commits monero_c's patches into
+the monero submodule, a git commit hash covers its committer date, and monero
+compiles `git rev-parse --short HEAD` into its version string — so every build
+produced a different library. Three builds of the same source gave
+`0.18.4.6-5fb1e9c7c`, `0.18.4.6-fcc0f0614` and `0.18.4.6-42c66d9c7`. The
+Dockerfile now pins `GIT_COMMITTER_DATE`/`GIT_AUTHOR_DATE` to the monero_c pin's
+own commit date, which fixes the submodule HEAD and with it the output. Builds
+from before that fix will not match, and cannot be made to.
+
+**What is still unchecked:** only one of the ten targets has been built twice,
+and that rebuild reused the cached toolchain and dependencies, so it establishes
+that monero's own compile and link are deterministic rather than that the whole
+toolchain is. Nobody has reproduced these bytes on a second machine.
+
+If you do rebuild, please report the result either way — an independent
+reproduction, especially on another machine, is worth more here than any amount
+of tooling.
 
 ## Platforms
 
