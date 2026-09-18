@@ -21,24 +21,19 @@ import (
 )
 
 const (
-	// incomingScanTick is how often the wallet checks for incoming native and
-	// ERC20 transfers.
+	// incomingScanTick is how often the wallet checks for incoming ERC20
+	// transfers.
 	incomingScanTick = 15 * time.Second
 	// maxScanBlocks caps the block range covered by a single ERC20 log-filter
-	// call, or considered by the native scan, per tick, so a wallet that
-	// falls behind (e.g. after being offline) catches up gradually instead
-	// of issuing one enormous RPC request.
+	// call per tick, so a wallet that falls behind (e.g. after being offline)
+	// catches up gradually instead of issuing one enormous RPC request.
 	maxScanBlocks = 128
-	// maxScanBodies caps how many block bodies are fetched per tick when
-	// checking for native-value transfers. Only the most recent blocks in the
-	// scan range are checked when the range exceeds this cap.
-	maxScanBodies = 16
 
-	// scanBackoffMin and scanBackoffMax bound the cooldown applied after a
-	// scan sub-loop (native or ERC20) fails, so a provider that will never
-	// succeed at a given call (e.g. eth_getLogs disabled entirely on a free
-	// public endpoint) doesn't get hammered - and doesn't spam the log -
-	// every incomingScanTick forever.
+	// scanBackoffMin and scanBackoffMax bound the cooldown applied after the
+	// ERC20 scan fails, so a provider that will never succeed at a given call
+	// (e.g. eth_getLogs disabled entirely on a free public endpoint) doesn't
+	// get hammered - and doesn't spam the log - every incomingScanTick
+	// forever.
 	scanBackoffMin = 30 * time.Second
 	scanBackoffMax = 30 * time.Minute
 
@@ -51,17 +46,29 @@ const (
 	// the range can never succeed; several consecutive ones are.
 	scanSkipFailures = 3
 
-	// minScanBlocks is the floor for erc20ScanBlocks when a provider reports
-	// its eth_getLogs range as too wide (see isRangeTooWideErr). Kept above
-	// the fastest supported chain's block rate at incomingScanTick cadence
-	// (HyperEVM has been observed averaging ~1.1 blocks/s, i.e. ~17 per
-	// 15s tick) so a wallet pinned at the floor can still keep pace with the
-	// chain tip instead of falling further behind every tick.
-	minScanBlocks = 32
+	// minScanBlocks is the absolute floor for erc20ScanBlocks: a block range
+	// request can never be narrower than one block. When a provider reports
+	// its eth_getLogs range as too wide (see isRangeTooWideErr), the window
+	// keeps narrowing toward this floor every tick rather than giving up,
+	// because narrowing can only help a range-capped provider and never
+	// hurts - unlike a pruned range (see isUnscannableRangeErr), which can
+	// never be narrowed into scannability at any width and is the only
+	// failure mode that reaches the skip-to-tip path in scanERC20Tick. A
+	// provider that still rejects even a 1-block range as too wide isn't
+	// expected in practice; if it happened, the scan would retry it forever
+	// under the ordinary exponential backoff rather than silently discarding
+	// a range a narrower request might still have served.
+	minScanBlocks = 1
 
-	scanMetaTableName           = "meta"
-	lastScannedNativeBlockField = "lastScannedBlock"
-	lastScannedERC20BlockField  = "lastScannedERC20Block"
+	// erc20WidenAfterSuccesses is how many consecutive successful ERC20 scans
+	// are required before erc20ScanBlocks is reset toward maxScanBlocks, so a
+	// window narrowed by one stale or spurious isRangeTooWideErr match
+	// doesn't stay pinned below maxScanBlocks for the rest of the process
+	// lifetime.
+	erc20WidenAfterSuccesses = 10
+
+	scanMetaTableName          = "meta"
+	lastScannedERC20BlockField = "lastScannedERC20Block"
 )
 
 // scanBackoff is the cooldown applied after a scan sub-loop fails. Zero value
@@ -185,27 +192,117 @@ func containsAnyFold(msg string, markers []string) bool {
 	return false
 }
 
+// allErrors flattens err into its leaf errors, unwrapping both single-error
+// (Unwrap() error) and multi-error (Unwrap() []error) chains - the shape
+// multiRPCClient.withOne produces via fmt.Errorf("%w: %w", ...) when every
+// provider in a call fails, one leaf per distinct provider error message.
+func allErrors(err error) []error {
+	if err == nil {
+		return nil
+	}
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		var out []error
+		for _, e := range u.Unwrap() {
+			out = append(out, allErrors(e)...)
+		}
+		return out
+	}
+	if u, ok := err.(interface{ Unwrap() error }); ok {
+		if next := u.Unwrap(); next != nil {
+			return allErrors(next)
+		}
+	}
+	return []error{err}
+}
+
+// rangeErrClass classifies the outcome of a failed scan attempt for the
+// purposes of deciding whether to narrow the window, back off and retry
+// unchanged, or give up on the range and skip to tip.
+type rangeErrClass int
+
+const (
+	// rangeErrTransient means at least one provider in a joined multi-
+	// provider failure (see allErrors) reported neither a pruned nor a
+	// range-too-wide condition - that provider may serve the range on a
+	// later retry, so nothing can be concluded about the range itself and
+	// the caller should apply the ordinary backoff and retry unchanged.
+	rangeErrTransient rangeErrClass = iota
+	// rangeErrPruned means every provider that failed reported pruned state
+	// specifically - the range can never be served by any of them, at any
+	// window width.
+	rangeErrPruned
+	// rangeErrTooWide means every provider that failed reported either a
+	// range-too-wide condition, or pruned state alongside at least one
+	// range-too-wide leaf. Narrowing the window can only help (a too-wide
+	// provider may then succeed) and never hurts a pruned one, so it should
+	// always be attempted before concluding a range is unscannable.
+	rangeErrTooWide
+)
+
+// classifyLeaf classifies a single (non-joined) provider error message.
+// Pruned is checked before too-wide so that a single provider message
+// carrying both phrasings (e.g. BNB's pruned-history and range-limit
+// phrasing) still classifies pruned, not too-wide.
+func classifyLeaf(msg string) rangeErrClass {
+	switch {
+	case containsAnyFold(msg, unscannableRangeMarkers):
+		return rangeErrPruned
+	case strings.Contains(strings.ToLower(msg), "range") && containsAnyFold(msg, rangeTooWideCueMarkers):
+		return rangeErrTooWide
+	default:
+		return rangeErrTransient
+	}
+}
+
+// classifyRangeErr classifies err, which may be a joined multi-provider
+// error (see allErrors / multiRPCClient.withOne), into how the scanner
+// should react. A joined error is only actionable (pruned or tooWide) when
+// every leaf is at least pruned-or-tooWide - one leaf that is merely
+// transient (a rate limit, a timeout) means a different provider may well
+// serve the range moments later, so the whole failure must not be treated
+// as permanently unscannable just because another provider in the same call
+// happened to be pruned or capped. Among actionable leaves, any tooWide leaf
+// wins over pruned ones, since narrowing can only help the capped provider
+// and cannot hurt the pruned one.
+func classifyRangeErr(err error) rangeErrClass {
+	leaves := allErrors(err)
+	if len(leaves) == 0 {
+		return rangeErrTransient
+	}
+	sawTooWide := false
+	for _, e := range leaves {
+		switch classifyLeaf(e.Error()) {
+		case rangeErrTransient:
+			return rangeErrTransient
+		case rangeErrTooWide:
+			sawTooWide = true
+		}
+	}
+	if sawTooWide {
+		return rangeErrTooWide
+	}
+	return rangeErrPruned
+}
+
 // isUnscannableRangeErr reports whether err means the requested block range
 // can never be scanned by the failing provider(s) because the chain state it
 // needs has been pruned.
 func isUnscannableRangeErr(err error) bool {
-	return err != nil && containsAnyFold(err.Error(), unscannableRangeMarkers)
+	return classifyRangeErr(err) == rangeErrPruned
 }
 
-// isRangeTooWideErr reports whether err means the failing provider rejected
-// the requested eth_getLogs block range as too wide.
+// isRangeTooWideErr reports whether err means the failing provider(s)
+// rejected the requested eth_getLogs block range as too wide (narrowing the
+// window can help), possibly alongside another provider reporting pruned
+// state (narrowing can't help that one, but trying costs nothing).
 func isRangeTooWideErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "range") && containsAnyFold(msg, rangeTooWideCueMarkers)
+	return classifyRangeErr(err) == rangeErrTooWide
 }
 
 // scanMetaKey is the meta-table key for one field scoped to a base chain.
-// Every asset on the chain (native + tokens) is scanned by one loop that
-// shares this cursor pair, so the key is scoped by baseChainID rather than by
-// individual asset ID.
+// Every token wallet on the chain is scanned by one loop that shares this
+// cursor, so the key is scoped by baseChainID rather than by individual
+// asset ID.
 func scanMetaKey(baseChainID uint32, field string) []byte {
 	k := make([]byte, 4+len(field))
 	binary.BigEndian.PutUint32(k, baseChainID)
@@ -239,14 +336,6 @@ func (w *baseWallet) setScanCursor(field string, n uint64) error {
 	return w.metaTable.Set(scanMetaKey(w.baseChainID, field), b, txdb.WithReplace())
 }
 
-func (w *baseWallet) getLastScannedBlock() (uint64, error) {
-	return w.getScanCursor(lastScannedNativeBlockField)
-}
-
-func (w *baseWallet) setLastScannedBlock(n uint64) error {
-	return w.setScanCursor(lastScannedNativeBlockField, n)
-}
-
 func (w *baseWallet) getLastScannedERC20Block() (uint64, error) {
 	return w.getScanCursor(lastScannedERC20BlockField)
 }
@@ -255,10 +344,10 @@ func (w *baseWallet) setLastScannedERC20Block(n uint64) error {
 	return w.setScanCursor(lastScannedERC20BlockField, n)
 }
 
-// scanIncomingTransfers runs the incoming-transfer scan loop for native and
-// ERC20 transfers on this chain until ctx is canceled. There is one loop per
-// chain (started from ETHWallet.Connect), covering the native asset and every
-// currently-connected token wallet.
+// scanIncomingTransfers runs the incoming-transfer scan loop for ERC20
+// transfers on this chain until ctx is canceled. There is one loop per chain
+// (started from ETHWallet.Connect), covering every currently-connected token
+// wallet.
 func (w *ETHWallet) scanIncomingTransfers(ctx context.Context) {
 	ticker := time.NewTicker(incomingScanTick)
 	defer ticker.Stop()
@@ -272,13 +361,10 @@ func (w *ETHWallet) scanIncomingTransfers(ctx context.Context) {
 	}
 }
 
-// scanIncomingTransfersTick runs a single pass of the incoming-transfer scan.
-// Native and ERC20 detection each keep their own persisted cursor and
-// failure backoff (see scanNativeTick/scanERC20Tick), so a failure or
-// permanently-unsupported RPC method in one (e.g. a free public provider
-// that doesn't serve eth_getLogs at all) can never block or slow the other.
+// scanIncomingTransfersTick runs a single pass of the incoming ERC20 transfer
+// scan.
 //
-// The scan never looks past tip - finalizeConfs: both store paths mark a
+// The scan never looks past tip - finalizeConfs: storeTokenReceive marks a
 // detected receive Confirmed immediately, and nothing later reconciles a
 // confirmed record, so scanning any closer to the tip would leave a phantom
 // Receive behind if a reorg drops the block it came from.
@@ -293,8 +379,6 @@ func (w *ETHWallet) scanIncomingTransfersTick(ctx context.Context) {
 	}
 	tipNum -= w.finalizeConfs
 
-	w.scanNativeTick(ctx, tipNum)
-
 	tokenWallets := make([]*assetWallet, 0, len(w.connectedWallets()))
 	for _, aw := range w.connectedWallets() {
 		if aw.tokenAddr != (common.Address{}) {
@@ -306,77 +390,8 @@ func (w *ETHWallet) scanIncomingTransfersTick(ctx context.Context) {
 	}
 }
 
-// scanNativeTick runs one pass of native-transfer detection against its own
-// cursor and backoff.
-func (w *ETHWallet) scanNativeTick(ctx context.Context, tipNum uint64) {
-	if w.nativeScanBackoff.blocked(time.Now()) {
-		return
-	}
-
-	last, err := w.getLastScannedBlock()
-	if err != nil {
-		w.log.Errorf("incoming transfer scan: error reading native scan cursor: %v", err)
-		return
-	}
-
-	// First run: seed the cursor at the current tip. Pre-existing history is
-	// not backfilled.
-	if last == 0 {
-		if err := w.setLastScannedBlock(tipNum); err != nil {
-			w.log.Errorf("incoming transfer scan: error seeding native scan cursor: %v", err)
-		}
-		return
-	}
-
-	if tipNum <= last {
-		return
-	}
-
-	from := last + 1
-	to := tipNum
-	if to-from+1 > maxScanBlocks {
-		to = from + maxScanBlocks - 1
-	}
-
-	covered, err := w.scanNativeReceives(ctx, from, to)
-	if err != nil {
-		w.log.Errorf("incoming transfer scan: error scanning native transfers %d-%d: %v", from, to, err)
-		unscannable := isUnscannableRangeErr(err)
-		w.nativeScanBackoff.failed(time.Now(), unscannable)
-		if unscannable && w.nativeScanBackoff.unscannableFailures() >= scanSkipFailures {
-			// Jump straight to the current tip rather than just past this one
-			// maxScanBlocks window: the provider has pruned the state this
-			// wallet needs, and that's true of every block behind its
-			// retention window, not just this range - inching forward one
-			// window at a time would take a wallet that fell far behind
-			// (as this one has) months to catch up, all while remaining
-			// blind to new incoming transfers the whole time.
-			w.log.Warnf("incoming transfer scan: chain state is pruned at this provider from block %d onward; "+
-				"jumping to tip %d - transfers in %d-%d will not be detected: %v", from, tipNum, from, tipNum, err)
-			covered = tipNum
-			// The balance baseline for the skipped range is unknown, so the
-			// next tick must fetch bodies rather than trust an "unchanged"
-			// comparison against a stale baseline.
-			w.lastScanBalance = nil
-			w.nativeScanBackoff.succeeded()
-		}
-	} else {
-		w.nativeScanBackoff.succeeded()
-	}
-
-	// Persist whatever was genuinely covered even on a partial failure -
-	// covered is only ever last (no progress) or higher, never a range that
-	// was skipped. Persisting the full requested "to" regardless of what was
-	// actually scanned is what silently drops blocks.
-	if covered > last {
-		if serr := w.setLastScannedBlock(covered); serr != nil {
-			w.log.Errorf("incoming transfer scan: error persisting native scan cursor: %v", serr)
-		}
-	}
-}
-
 // scanERC20Tick runs one pass of ERC20-transfer detection against its own
-// cursor and backoff, independent of the native scan.
+// cursor and backoff.
 func (w *ETHWallet) scanERC20Tick(ctx context.Context, tipNum uint64, tokenWallets []*assetWallet) {
 	if w.erc20ScanBackoff.blocked(time.Now()) {
 		return
@@ -411,41 +426,80 @@ func (w *ETHWallet) scanERC20Tick(ctx context.Context, tipNum uint64, tokenWalle
 	if to-from+1 > scanBlocks {
 		to = from + scanBlocks - 1
 	}
+	// reqBlocks is the width actually requested this tick, which is only
+	// equal to scanBlocks when the wallet is at least a full window behind
+	// tip - it's always <= scanBlocks.
+	reqBlocks := to - from + 1
 
 	err = w.scanERC20Receives(ctx, from, to, tokenWallets)
 	if err != nil {
 		w.log.Errorf("incoming transfer scan: error scanning erc20 transfers %d-%d: %v", from, to, err)
+		w.erc20ScanSuccesses = 0
 
-		// isUnscannableRangeErr is checked first and, if it matches, the
-		// range-too-wide branch below is skipped even when the joined
-		// multi-provider error also carries a range-too-wide marker (BNB's
-		// pruned-history and range-limit messages are frequently joined
-		// together - see isRangeTooWideErr's doc comment). A pruned range can
-		// never be narrowed into scannability, so it must reach the
-		// unscannable-range skip below rather than get stuck narrowing
-		// forever.
-		unscannable := isUnscannableRangeErr(err)
-		if !unscannable && isRangeTooWideErr(err) && scanBlocks > minScanBlocks {
+		// classifyRangeErr resolves the whole (possibly joined
+		// multi-provider) failure to one class: pruned only when every leaf
+		// is pruned, too-wide as soon as any leaf is a range cap (narrowing
+		// might unblock that provider and cannot hurt a pruned one), and
+		// transient if any leaf is neither - since that provider may well
+		// serve the range moments later. A single message carrying both
+		// phrasings (BNB's pruned-history and range-limit phrasing) still
+		// classifies pruned, so an already-pruned range reaches the skip
+		// path below instead of narrowing forever.
+		class := classifyRangeErr(err)
+		pruned := class == rangeErrPruned
+		tooWide := class == rangeErrTooWide
+		if tooWide && reqBlocks > minScanBlocks {
 			narrowed := max(scanBlocks/2, minScanBlocks)
 			w.erc20ScanBlocks = narrowed
+			// A range-too-wide narrowing isn't a scan failure from the
+			// backoff's perspective - it's meant to retry promptly at the
+			// new window width, not wait out the exponential backoff or
+			// leave a stale delay/unscannableFails behind for a later,
+			// unrelated failure to inherit. succeeded() gives it the same
+			// clean-slate reset a successful scan would.
+			w.erc20ScanBackoff.succeeded()
 			w.log.Warnf("incoming transfer scan: provider caps eth_getLogs range; reducing erc20 scan window to %d blocks", narrowed)
 			return
 		}
 
-		w.erc20ScanBackoff.failed(time.Now(), unscannable)
-		if !unscannable || w.erc20ScanBackoff.unscannableFailures() < scanSkipFailures {
+		// Only a pruned failure ever reaches the skip-to-tip path below - a
+		// range-too-wide failure never does, even once narrowing has
+		// bottomed out at minScanBlocks (the narrowing branch above already
+		// returned before reaching here in that case; falling through this
+		// far while tooWide means the window is already at the absolute
+		// floor). Narrowing can only help a range-capped provider and never
+		// hurts, so it keeps retrying under the ordinary exponential backoff
+		// instead of silently discarding a range a narrower request might
+		// still have served.
+		w.erc20ScanBackoff.failed(time.Now(), pruned)
+		if !pruned || w.erc20ScanBackoff.unscannableFailures() < scanSkipFailures {
 			return
 		}
 		// Jump straight to the current tip rather than just past this one
-		// window - see the equivalent native-scan comment in scanNativeTick
-		// for why inching forward window by window is impractical once a
-		// wallet has fallen behind a provider's pruning horizon.
-		w.log.Warnf("incoming transfer scan: chain state is pruned at this provider from block %d onward; "+
-			"jumping to tip %d - transfers in %d-%d will not be detected: %v", from, tipNum, from, tipNum, err)
+		// window: every block behind the provider's retention window is
+		// equally unreachable, not just this one - inching forward window by
+		// window would take a wallet that fell far behind months to catch
+		// up, all while remaining blind to new incoming transfers the whole
+		// time.
+		w.log.Warnf("incoming transfer scan: block range unscannable at this provider (chain state has been "+
+			"pruned); jumping to tip %d - transfers in %d-%d will not be detected: %v", tipNum, from, tipNum, err)
 		to = tipNum
 		w.erc20ScanBackoff.succeeded()
 	} else {
 		w.erc20ScanBackoff.succeeded()
+		// A tick that requested fewer than the full configured window (a
+		// near-tip catch-up scan) proves nothing about whether the provider
+		// would accept a full-width request, so it must not count toward the
+		// widen-back streak - it's neutral: neither incremented nor reset.
+		if w.erc20ScanBlocks > 0 && reqBlocks == scanBlocks {
+			w.erc20ScanSuccesses++
+			if w.erc20ScanSuccesses >= erc20WidenAfterSuccesses {
+				w.log.Debugf("incoming transfer scan: erc20 scan window recovered after %d consecutive successes; "+
+					"resetting to %d blocks", erc20WidenAfterSuccesses, maxScanBlocks)
+				w.erc20ScanBlocks = 0
+				w.erc20ScanSuccesses = 0
+			}
+		}
 	}
 
 	if err := w.setLastScannedERC20Block(to); err != nil {
@@ -569,110 +623,6 @@ func (w *ETHWallet) storeTokenReceive(aw *assetWallet, lg *types.Log, id common.
 	w.emitTransactionNote(wt.WalletTransaction, true)
 	if bal, err := aw.balance(); err == nil {
 		aw.emit.BalanceChange(bal)
-	}
-	return nil
-}
-
-// scanNativeReceives checks for incoming native-value transfers to this
-// wallet's address over the given block range, returning the highest block
-// number actually covered - which can be less than to (down to from-1,
-// meaning no progress at all) if the balance check or a body fetch failed
-// partway through, or if the range was capped by maxScanBodies. Callers must
-// persist the cursor at the returned value, not at the requested to, or
-// blocks between the two are silently skipped forever.
-//
-// Block bodies are only fetched when the confirmed balance has changed since
-// the last tick, since a native transfer is the only thing that can change
-// it. The unchanged check reads the balance pinned to to - the requested
-// range end - since an unchanged balance there proves nothing arrived
-// anywhere in from..to, letting the whole range (even one wider than
-// maxScanBodies) be retired without fetching a single body. Once a change is
-// found, though, only from..scanTo (the range actually covered when capped
-// by maxScanBodies) is scanned, so the baseline persisted for the next tick
-// must be read again pinned to scanTo rather than to - pinning it to to
-// would let it silently absorb a balance change from a block this call
-// never looked at, so a later tick sees "unchanged" and skips the block
-// containing the receive forever instead of converging onto it on a
-// following tick.
-func (w *ETHWallet) scanNativeReceives(ctx context.Context, from, to uint64) (uint64, error) {
-	scanTo := to
-	if to-from+1 > maxScanBodies {
-		scanTo = from + maxScanBodies - 1
-	}
-
-	bal, err := w.node.addressBalanceAt(ctx, w.addr, new(big.Int).SetUint64(to))
-	if err != nil {
-		return from - 1, err
-	}
-	if w.lastScanBalance != nil && bal.Cmp(w.lastScanBalance) == 0 {
-		return to, nil
-	}
-
-	if scanTo != to {
-		bal, err = w.node.addressBalanceAt(ctx, w.addr, new(big.Int).SetUint64(scanTo))
-		if err != nil {
-			return from - 1, err
-		}
-	}
-
-	for n := from; n <= scanTo; n++ {
-		block, err := w.node.blockByNumber(ctx, new(big.Int).SetUint64(n))
-		if err != nil {
-			// lastScanBalance is left unset rather than advanced to bal:
-			// the cursor is about to rewind to n-1, but bal describes
-			// scanTo, so pinning it here would let a later tick compare
-			// blocks n..scanTo against a baseline that already accounts
-			// for them and skip a receive among them as "unchanged".
-			w.lastScanBalance = nil
-			return n - 1, err
-		}
-		for _, tx := range block.Transactions() {
-			recipient := tx.To()
-			if recipient == nil || *recipient != w.addr || tx.Value().Sign() <= 0 {
-				continue
-			}
-			if err := w.storeNativeReceive(tx, block.NumberU64(), block.Time()); err != nil {
-				w.log.Errorf("incoming transfer scan: error storing native receive %s: %v", tx.Hash(), err)
-				w.lastScanBalance = nil
-				return n - 1, err
-			}
-		}
-	}
-	w.lastScanBalance = bal
-	return scanTo, nil
-}
-
-// storeNativeReceive builds and stores a Receive transaction for a discovered
-// native-value transfer, mirroring ETHWallet.getReceivingTransaction's shape.
-func (w *ETHWallet) storeNativeReceive(tx *types.Transaction, blockNumber, blockTime uint64) error {
-	if existing, err := w.txDB.getTx(tx.Hash()); err != nil {
-		return err
-	} else if existing != nil {
-		return nil
-	}
-
-	addr := w.addr.String()
-	wt := &extendedWalletTx{
-		WalletTransaction: &txdb.WalletTransaction{
-			Type:        txdb.Receive,
-			ID:          tx.Hash().String(),
-			NetworkID:   w.baseChainID,
-			AssetID:     w.assetID,
-			BlockNumber: blockNumber,
-			Timestamp:   blockTime,
-			Amount:      w.atomize(tx.Value()),
-			Recipient:   &addr,
-			Confirmed:   true,
-		},
-	}
-	if err := w.txDB.storeTx(wt); err != nil {
-		return err
-	}
-	w.log.Infof("Detected incoming %s transfer %s: %d %s", w.ui.Conventional.Unit, tx.Hash(), wt.Amount, w.ui.AtomicUnit)
-
-	w.emitTransactionNote(wt.WalletTransaction, true)
-	if bal, err := w.balance(); err == nil {
-		w.emit.BalanceChange(bal)
 	}
 	return nil
 }

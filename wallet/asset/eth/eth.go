@@ -376,12 +376,6 @@ type Balance struct {
 type ethFetcher interface {
 	address() common.Address
 	addressBalance(ctx context.Context, addr common.Address) (*big.Int, error)
-	// addressBalanceAt is addressBalance pinned to a specific block, used by
-	// the incoming-transfer scan's balance-diff gate (scan.go) so the balance
-	// compared against always corresponds exactly to the block range being
-	// scanned, rather than whatever the node considers "latest" at query
-	// time.
-	addressBalanceAt(ctx context.Context, addr common.Address, blockNumber *big.Int) (*big.Int, error)
 	bestHeader(ctx context.Context) (*types.Header, error)
 	chainConfig() *params.ChainConfig
 	connect(ctx context.Context) error
@@ -406,11 +400,9 @@ type ethFetcher interface {
 	transactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 	transactionAndReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, *types.Transaction, error)
 	nonce(ctx context.Context) (confirmed, next *big.Int, err error)
-	// FilterLogs and blockByNumber are used by the incoming-transfer scan
-	// (scan.go) to discover ERC20 Transfer events and native-value transfers
-	// respectively.
+	// FilterLogs is used by the incoming-transfer scan (scan.go) to discover
+	// ERC20 Transfer events.
 	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error)
-	blockByNumber(ctx context.Context, n *big.Int) (*types.Block, error)
 	// l1FeeForCalldata estimates the L1 fee for the given calldata using
 	// the OP Stack GasPriceOracle precompile.
 	l1FeeForCalldata(ctx context.Context, calldata []byte) (*big.Int, error)
@@ -599,21 +591,24 @@ type ETHWallet struct {
 
 	*assetWallet
 
-	// lastScanBalance is the confirmed native balance as of the last
-	// incoming-transfer scan tick (see scan.go). It is only read and written
-	// by the single scanIncomingTransfers goroutine, so it needs no lock.
-	lastScanBalance *big.Int
-
-	// nativeScanBackoff and erc20ScanBackoff cool down each half of the
-	// incoming-transfer scan independently after a failure (see scan.go).
-	nativeScanBackoff scanBackoff
-	erc20ScanBackoff  scanBackoff
+	// erc20ScanBackoff cools down the incoming-transfer ERC20 scan after a
+	// failure (see scan.go).
+	erc20ScanBackoff scanBackoff
 
 	// erc20ScanBlocks is the current ERC20 log-filter range width, narrowed
 	// from maxScanBlocks the first time a provider reports its eth_getLogs
 	// range as too wide (see scan.go). Zero means maxScanBlocks. Only read
 	// and written by the single scanIncomingTransfers goroutine.
 	erc20ScanBlocks uint64
+
+	// erc20ScanSuccesses counts consecutive successful ERC20 scans that
+	// requested the full configured erc20ScanBlocks window while it is
+	// narrowed, so the window can be reset back toward maxScanBlocks once a
+	// provider has reliably served the narrowed range for a while (see
+	// scan.go). A tick that requested fewer blocks (a near-tip catch-up
+	// scan) proves nothing about a full-width request and does not count.
+	// Only read and written by the single scanIncomingTransfers goroutine.
+	erc20ScanSuccesses int
 }
 
 // TokenWallet implements some token-specific methods.
