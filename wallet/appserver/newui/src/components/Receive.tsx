@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, FormEvent } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import { postJSON } from '@caribou/shared/http'
-import { useFlash, useCoreSubscriptions } from '@caribou/shared/hooks'
+import { useFlash } from '@caribou/shared/hooks'
 import { TickerAsset, AssetVariant, networkAsset, isVariantActive, compareByFiatValue } from '@caribou/shared/assets'
-import { ApprovalStatus, WalletNote, WalletState } from '@caribou/shared/registry'
+import { trustlineGate, minDepositNote, useReceiveUpdates } from '@caribou/shared/trustline'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import QRCode from '@caribou/shared/components/QRCode'
 import Spinner from './Spinner'
@@ -27,26 +27,6 @@ function allVariants (ta: TickerAsset): AssetVariant[] {
 function networkTicker (v: AssetVariant): string {
   const n = networkAsset(v)
   return n ? n.unitInfo.conventional.unit : ''
-}
-
-// trustlineGate returns the variant's trust-line state when its wallet needs
-// an on-chain opt-in that has not confirmed yet, else null. Only tokens whose
-// wallet reports a trust-line state (an XRPL issued currency) are gated; every
-// other variant's address is usable as soon as its wallet exists.
-function trustlineGate (v: AssetVariant) {
-  const tl = v.token ? app.user?.assets[v.assetID]?.wallet?.trustline : undefined
-  return tl && tl.status !== ApprovalStatus.Approved ? tl : null
-}
-
-// minDepositNote returns the minimum first deposit for a native variant whose
-// account does not exist on its ledger yet (zero balance on a network with a
-// base reserve), else 0. A first deposit below it is rejected by the network at
-// the sender, so the address is shown with that requirement.
-function minDepositNote (v: AssetVariant, w: WalletState | undefined): number {
-  if (v.token || !w || !w.minDeposit) return 0
-  const b = w.balance
-  const total = b ? b.available + b.locked + b.immature : 0
-  return total === 0 ? w.minDeposit : 0
 }
 
 const noSubmit = (e: FormEvent) => e.preventDefault()
@@ -98,8 +78,8 @@ export default function Receive ({ ticker, assetID }: ReceiveProps) {
   // overwrite a newer selection.
   const reqIDRef = useRef(0)
   // Wallet state lives on app.user and changes under us (trust-line notes,
-  // balances); tick forces a re-render when the selected variant's does.
-  const [, tick] = useReducer((n: number) => n + 1, 0)
+  // balances); re-render when the selected variant's does.
+  useReceiveUpdates(variant)
 
   const close = () => app.setForm({ form: '', data: {} })
 
@@ -155,28 +135,6 @@ export default function Receive ({ ticker, assetID }: ReceiveProps) {
   useEffect(() => {
     if (variant && !gate && !address && !loading) fetchAddress(variant)
   }, [variant, gate === null])
-
-  // Re-render on wallet changes for the selected variant or its network:
-  // trust-line notes, wallet-state notes, and balance updates (the native
-  // minimum-deposit note keys on balance).
-  useCoreSubscriptions({
-    onBalance: tick,
-    onNote: (note) => {
-      if (!variant) return
-      const ids = [variant.assetID, variant.token?.networkID]
-      switch (note.type) {
-        case 'walletstate':
-        case 'walletconfig':
-          tick()
-          break
-        case 'walletnote': {
-          const n = note as WalletNote
-          if (n.payload.route === 'trustline' && ids.includes(n.payload.assetID)) tick()
-          break
-        }
-      }
-    }
-  }, [variant])
 
   const pickAsset = (chosen: TickerAsset) => {
     setTa(chosen)
