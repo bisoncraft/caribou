@@ -10,7 +10,11 @@ module.exports = {
     rules: [
       {
         test: /\.tsx?$/,
-        use: 'ts-loader',
+        // onlyCompileBundledFiles: by default ts-loader type-checks every file
+        // matched by tsconfig.json's project scope, not just files actually
+        // reached from the entry point — which pulled *.test.tsx (never
+        // imported by production code) into the production build.
+        use: { loader: 'ts-loader', options: { onlyCompileBundledFiles: true } },
         exclude: /node_modules/
       },
       {

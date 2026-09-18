@@ -28,7 +28,7 @@ function setUpXrp (trustline: TrustlineState, xrpBalance = 5e6) {
       name: 'USD Coin',
       unitInfo: makeUnitInfo('USDC', 1e6),
       wallet: makeWallet(usdcXrpID, { trustline }),
-      token: { networkID: xrpID, name: 'XRP', unitInfo: xrpUI, contractAddress: '', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
+      token: { networkID: xrpID, name: 'XRP', unitInfo: xrpUI, contractAddress: '', definition: makeWalletDefinition() }
     })
   ])
   app.prepareTickerAssets()

@@ -34,7 +34,7 @@ function setUpXrpAssets () {
     makeAsset(usdcXrpID, 'USDC', {
       unitInfo: makeUnitInfo('USDC', 1e6),
       wallet: makeWallet(usdcXrpID, { trustline: { status: ApprovalStatus.NotApproved, reserve: 2e5, shortfall: 1200012 } }),
-      token: { networkID: xrpID, name: 'XRP', unitInfo: xrpUI, contractAddress: '', definition: makeWalletDefinition(), supportedAssetVersions: [0] }
+      token: { networkID: xrpID, name: 'XRP', unitInfo: xrpUI, contractAddress: '', definition: makeWalletDefinition() }
     })
   ])
   app.prepareTickerAssets()
