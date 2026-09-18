@@ -293,5 +293,77 @@ func TestChangeAppPassClearsPendingGrants(t *testing.T) {
 	}
 }
 
+// postResetAppPass drives apiResetAppPassword with a new password and seed.
+func postResetAppPass(t *testing.T, s *AppServer) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"newPass": encode.PassBytes("newpass"),
+		"seed":    "seed words",
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", newTestBody(body))
+	s.apiResetAppPassword(rec, req)
+	return rec
+}
+
+// sessionState reports how many auth tokens, cached passwords and pending
+// grants the server holds.
+func sessionState(s *AppServer) (tokens, cached, grants int) {
+	s.authMtx.RLock()
+	defer s.authMtx.RUnlock()
+	return len(s.authTokens), len(s.cachedPasswords), len(s.pendingGrants)
+}
+
+// TestResetAppPassDeauths checks that a successful seed reset tears down every
+// session minted under the old password, rather than leaving one authenticated
+// with a cached password that no longer decrypts anything.
+func TestResetAppPassDeauths(t *testing.T) {
+	s, _, shutdown := newTServer(t, false)
+	defer shutdown()
+	if _, err := s.Unlock([]byte("oldpass")); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	if tokens, cached, grants := sessionState(s); tokens == 0 || cached == 0 || grants == 0 {
+		t.Fatalf("Unlock left no session to tear down: %d tokens, %d cached, %d grants", tokens, cached, grants)
+	}
+
+	if rec := postResetAppPass(t, s); rec.Code != http.StatusOK {
+		t.Fatalf("reset app pass failed: %d %s", rec.Code, rec.Body.String())
+	}
+	if tokens, cached, grants := sessionState(s); tokens != 0 || cached != 0 || grants != 0 {
+		t.Fatalf("reset left %d tokens, %d cached passwords, %d pending grants", tokens, cached, grants)
+	}
+}
+
+// TestResetAppPassFailureKeepsSession checks that a rejected reset (a wrong
+// seed) leaves the live session alone: the password did not change, so the
+// session is still valid.
+func TestResetAppPassFailureKeepsSession(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+	if _, err := s.Unlock([]byte("oldpass")); err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	wantTokens, wantCached, wantGrants := sessionState(s)
+
+	tCore.resetAppPassErr = errors.New("incorrect seed")
+	// writeAPIError answers 200 with ok=false.
+	rec := postResetAppPass(t, s)
+	var resp struct{ OK bool }
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (%s)", err, rec.Body.String())
+	}
+	if resp.OK {
+		t.Fatalf("reset with a failing core reported success")
+	}
+	if tokens, cached, grants := sessionState(s); tokens != wantTokens || cached != wantCached || grants != wantGrants {
+		t.Fatalf("failed reset changed the session: %d/%d/%d tokens/cached/grants, want %d/%d/%d",
+			tokens, cached, grants, wantTokens, wantCached, wantGrants)
+	}
+}
+
 // newTestBody wraps a byte slice as an http request body.
 func newTestBody(b []byte) *TReader { return &TReader{msg: b} }

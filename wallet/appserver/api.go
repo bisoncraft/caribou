@@ -895,11 +895,24 @@ func (s *AppServer) apiResetAppPassword(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Serialize against Lock/Unlock, as apiChangeAppPass does. deauth drops
+	// pending grants, and a concurrent biometric Unlock must not mint one
+	// against a token this is about to remove.
+	s.sessionMtx.Lock()
+	defer s.sessionMtx.Unlock()
+
 	err := s.core.ResetAppPass(form.NewPass, form.Seed)
 	if err != nil {
 		s.writeAPIError(w, err)
 		return
 	}
+
+	// Every auth token and cached password was minted under the old password,
+	// so a session left live here would stay authenticated but fail every
+	// password-bearing operation. Unlike apiChangeAppPass no fresh token is
+	// issued: the reset flow ends at the login screen, so leaving the caller
+	// logged out is the intended outcome. With no live session this is a no-op.
+	s.deauth()
 
 	writeJSON(w, simpleAck())
 }

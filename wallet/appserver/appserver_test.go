@@ -90,6 +90,7 @@ type TCore struct {
 	walletStatusErr      error
 	notes                []*db.Notification
 	notesErr             error
+	resetAppPassErr      error
 }
 
 func (c *TCore) Network() util.Network { return util.Mainnet }
@@ -145,7 +146,7 @@ func (c *TCore) ToggleWalletStatus(assetID uint32, disable bool) error {
 	return c.walletStatusErr
 }
 func (c *TCore) ChangeAppPass(appPW, newAppPW []byte) error                         { return nil }
-func (c *TCore) ResetAppPass(newAppPW []byte, seed string) error                    { return nil }
+func (c *TCore) ResetAppPass(newAppPW []byte, seed string) error                    { return c.resetAppPassErr }
 func (c *TCore) SetWalletPassword(appPW []byte, assetID uint32, newPW []byte) error { return nil }
 func (c *TCore) NewDepositAddress(assetID uint32) (string, error)                   { return "", nil }
 func (c *TCore) AutoWalletConfig(assetID uint32, walletType string) (map[string]string, error) {
