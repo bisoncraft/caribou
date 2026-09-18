@@ -197,10 +197,14 @@ func TestChainlinkRatesLive(t *testing.T) {
 		}
 		t.Logf("asset %d (%s): %f", assetID, assets[assetID].Symbol, rate)
 	}
-	// The btc and eth feeds carry a 27s heartbeat and so are always well
-	// inside their staleness bound. Others are best-effort: a feed whose
-	// provider is briefly unreachable simply drops out of a cycle.
-	for _, assetID := range []uint32{btcID, ethID} {
+	// These feeds carry a 27s heartbeat and so are always well inside their
+	// staleness bound. A feed whose provider is briefly unreachable simply
+	// drops out of a cycle, but that would have to hit the whole batch, which
+	// the len check above already covers.
+	//
+	// usdc.eth and usdc.polygon both resolve to the USDC ticker, so one feed
+	// prices both, which is what makes them worth asserting here.
+	for _, assetID := range []uint32{btcID, ethID, usdcEthID, usdcPolygonID} {
 		if _, has := rates[assetID]; !has {
 			t.Errorf("no rate for asset %d", assetID)
 		}

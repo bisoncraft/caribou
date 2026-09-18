@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -223,18 +224,41 @@ func TestChainlinkLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tickers := []string{"BTC", "ETH", "SOL", "XRP", "BNB", "MATIC", "USDC", "USDT", "PAXG", "LTC", "DASH", "XMR"}
+	// Request every configured feed, so an address added to the table without
+	// being exercised here is not possible.
+	tickers := make([]string, 0, len(chainlinkPolygonFeeds))
+	for ticker := range chainlinkPolygonFeeds {
+		tickers = append(tickers, ticker)
+	}
+	sort.Strings(tickers)
+
 	rates, err := getRates(ctx, tickers, log)
 	if err != nil {
 		t.Fatalf("failed to fetch rates: %v", err)
 	}
 
-	if len(rates) == 0 {
-		t.Fatal("failed to fetch any prices")
+	for _, ticker := range tickers {
+		if price, ok := rates[ticker]; ok {
+			t.Logf("  %s: $%.2f", ticker, price)
+		} else {
+			t.Logf("  %s: no rate", ticker)
+		}
 	}
 
-	for ticker, price := range rates {
-		t.Logf("  %s: $%.2f", ticker, price)
+	// A continuously updated feed is always inside its bound, so a missing
+	// rate means a wrong or transposed address rather than expected staleness.
+	// Feeds on a daily heartbeat are genuinely allowed to be absent, which is
+	// why only the fast ones are required. Asserting merely that some rate came
+	// back would pass on BTC alone and hide a bad address in every other entry.
+	for _, ticker := range tickers {
+		feed := chainlinkPolygonFeeds[ticker]
+		if feed.heartbeat > chainlinkGraceCutoff {
+			continue
+		}
+		if _, ok := rates[ticker]; !ok {
+			t.Errorf("no rate for %s, whose feed has a %v heartbeat and should always be fresh; check %s",
+				ticker, feed.heartbeat, feed.addr)
+		}
 	}
 
 	t.Logf("Successfully fetched %d/%d prices", len(rates), len(tickers))
@@ -618,6 +642,65 @@ func TestChainlinkClosureHeartbeatBounds(t *testing.T) {
 				t.Fatal("expected an error for a stale reading, got nil")
 			}
 		})
+	}
+}
+
+// TestChainlinkStalenessRepeatInterval tests that the steady-state warning is
+// spaced by the tracker's interval rather than suppressed outright, so a feed
+// that has stopped reporting keeps saying so.
+func TestChainlinkStalenessRepeatInterval(t *testing.T) {
+	const (
+		ticker = "TEST"
+		maxAge = time.Hour
+		age    = 2 * time.Hour
+	)
+	tests := []struct {
+		name     string
+		interval time.Duration
+		cycles   int
+		wantWarn int
+	}{
+		{"long interval warns once", time.Hour, 4, 1},
+		{"zero interval warns every cycle", 0, 4, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := util.NewLogger("test", util.LevelDebug, &buf)
+			tracker := newStalenessTracker(tt.interval)
+			for i := 0; i < tt.cycles; i++ {
+				if !tracker.check(log, ticker, age, maxAge) {
+					t.Fatalf("cycle %d: expected stale", i)
+				}
+			}
+			if got := strings.Count(buf.String(), "stale price"); got != tt.wantWarn {
+				t.Errorf("got %d warnings over %d cycles, want %d:\n%s",
+					got, tt.cycles, tt.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+// TestChainlinkStalenessRoundsAgainstLimit tests that the age and the limit are
+// reported at the same precision, so a reading just past a sub-minute limit
+// does not print as though it were inside it.
+func TestChainlinkStalenessRoundsAgainstLimit(t *testing.T) {
+	var buf bytes.Buffer
+	log := util.NewLogger("test", util.LevelDebug, &buf)
+
+	// A 27s feed: maxAge is 5m27s, and 5m28s is one second past it.
+	feed := chainlinkFeed{mockFeedAddr, 27 * time.Second}
+	newStalenessTracker(time.Hour).check(log, "TEST", feed.maxAge()+time.Second, feed.maxAge())
+	if out := buf.String(); !strings.Contains(out, "updated 5m28s ago, limit 5m27s") {
+		t.Errorf("sub-hour limit should keep seconds on both values, got:\n%s", out)
+	}
+
+	// A daily feed: minutes are precision enough against a 25h limit.
+	buf.Reset()
+	daily := chainlinkFeed{mockFeedAddr, 24 * time.Hour}
+	newStalenessTracker(time.Hour).check(log, "TEST2", 26*time.Hour, daily.maxAge())
+	if out := buf.String(); !strings.Contains(out, "updated 26h0m0s ago, limit 25h0m0s") {
+		t.Errorf("hour-scale limit should round to the minute, got:\n%s", out)
 	}
 }
 

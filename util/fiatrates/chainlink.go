@@ -103,22 +103,31 @@ func (c *divisorCache) getOrCreate(ticker string, decimals uint8) *big.Float {
 	return div
 }
 
+// chainlinkStaleLogInterval is how often a feed that stays stale repeats its
+// warning. A deviation-driven feed can go hours between rounds by design, so
+// warning every cycle buries the log; but a feed that has stopped reporting
+// altogether is dropped from every later cycle, and a single warning at the
+// moment it went quiet scrolls out of view while its absence persists.
+const chainlinkStaleLogInterval = time.Hour
+
 // stalenessTracker remembers, per ticker, whether the feed's last reading was
-// rejected as stale. A deviation-driven feed can go hours between rounds by
-// design, so an unconditional warning every cycle buries the log without
-// conveying anything new; only a change of state is worth a warning.
+// rejected as stale, so that entering and leaving staleness can be reported
+// separately from remaining in it. interval is how often the steady state
+// repeats; zero repeats on every cycle.
 type stalenessTracker struct {
+	interval time.Duration
+
 	mtx   sync.Mutex
 	stale map[string]bool
 }
 
-func newStalenessTracker() *stalenessTracker {
-	return &stalenessTracker{stale: make(map[string]bool)}
+func newStalenessTracker(interval time.Duration) *stalenessTracker {
+	return &stalenessTracker{interval: interval, stale: make(map[string]bool)}
 }
 
-// check reports whether a reading of the given age is too old to use, logging
-// the transitions into and out of staleness at warning and info level and the
-// steady state at debug level.
+// check reports whether a reading of the given age is too old to use. Going
+// stale warns, recovering logs at info, and staying stale repeats the warning
+// at most once per interval.
 func (t *stalenessTracker) check(log util.Logger, ticker string, age, maxAge time.Duration) (stale bool) {
 	stale = age > maxAge
 
@@ -127,18 +136,36 @@ func (t *stalenessTracker) check(log util.Logger, ticker string, age, maxAge tim
 	t.stale[ticker] = stale
 	t.mtx.Unlock()
 
+	meterID := "chainlink-stale-" + ticker
+	msg := "chainlink: %s/USD: stale price (updated %v ago, limit %v)"
+
 	switch {
 	case stale && !was:
-		log.Warnf("chainlink: %s/USD: stale price (updated %v ago, limit %v)",
-			ticker, age.Round(time.Minute), maxAge)
-	case !stale && was:
-		log.Infof("chainlink: %s/USD: price is fresh again (updated %v ago)",
-			ticker, age.Round(time.Minute))
+		// Entering staleness always warns. Metering here as well starts the
+		// interval, so the arm below stays quiet for a full one afterwards
+		// rather than repeating on the very next cycle.
+		log.Meter(meterID, t.interval)
+		log.Warnf(msg, ticker, roundAge(age, maxAge), roundAge(maxAge, maxAge))
 	case stale:
-		log.Debugf("chainlink: %s/USD: still stale (updated %v ago, limit %v)",
-			ticker, age.Round(time.Minute), maxAge)
+		// Still stale. A feed that has stopped reporting is dropped from every
+		// later cycle, so a single warning at the moment it went quiet would
+		// scroll out of view while its absence persists.
+		log.Meter(meterID, t.interval).Warnf(msg, ticker, roundAge(age, maxAge), roundAge(maxAge, maxAge))
+	case was:
+		log.Infof("chainlink: %s/USD: price is fresh again (updated %v ago)",
+			ticker, roundAge(age, maxAge))
 	}
 	return stale
+}
+
+// roundAge rounds a duration for display at a precision the limit it is being
+// compared against can express. Rounding a 5m28s age to the minute next to a
+// 5m27s limit reads as a false positive, so sub-hour limits keep seconds.
+func roundAge(d, maxAge time.Duration) time.Duration {
+	if maxAge < time.Hour {
+		return d.Round(time.Second)
+	}
+	return d.Round(time.Minute)
 }
 
 // connRef wraps a chainRPCClient with a reference count so concurrent fetch
@@ -291,17 +318,18 @@ func (f chainlinkFeed) maxAge() time.Duration {
 // answer may be (see chainlinkFeed.maxAge), so an address added without its
 // published heartbeat cannot be checked for staleness.
 //
-// The feeds fall into two groups. BTC, ETH, SOL, XRP, BNB, MATIC, USDC, USDT
-// and PAXG carry a 27s heartbeat and update continuously. LTC, DASH and XMR
-// carry a 86400s heartbeat and are driven almost entirely by their deviation
-// threshold (0.5% for LTC, 1% for DASH and XMR), so hours can pass between
-// rounds; between them the answer is still within the threshold, which is why
-// the age bound follows the heartbeat rather than a single global constant.
+// The feeds fall into two groups. Most carry a 27s heartbeat and update
+// continuously. LTC, DASH and XMR carry a 86400s heartbeat and are driven
+// almost entirely by their deviation threshold (0.5% for LTC, 1% for DASH and
+// XMR), so hours can pass between rounds; between them the answer is still
+// within the threshold, which is why the age bound follows the heartbeat
+// rather than a single global constant.
 //
-// The commented entries are verified feeds for assets that wallet/asset/importall
-// does not currently register. Uncomment alongside the matching asset. Polygon
-// carries no feed at all for HYPE or DCR, which are covered by the HTTP rate
-// sources only, as is XAUT (XAU spot is a different instrument).
+// Every ticker a registered asset resolves to through ParseTicker either
+// appears here or is named below. Commented entries are verified feeds the
+// wallet has no asset for; uncomment one alongside its asset. HYPE, HYPEREVM
+// and XAUT are registered and have no Polygon feed at all, so they are covered
+// by the HTTP rate sources only.
 var chainlinkPolygonFeeds = map[string]chainlinkFeed{
 	"BTC": {common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f"), 27 * time.Second},
 	"ETH": {common.HexToAddress("0xF9680D99D6C9589e2a93a78A04A279e509205945"), 27 * time.Second},
@@ -312,9 +340,11 @@ var chainlinkPolygonFeeds = map[string]chainlinkFeed{
 	// MATIC ticker the rate APIs still key on. The feed kept its pre-migration
 	// name but tracks POL: its published metadata gives POL as the base asset.
 	"MATIC": {common.HexToAddress("0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"), 27 * time.Second},
-	"USDC":  {common.HexToAddress("0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7"), 27 * time.Second},
-	"USDT":  {common.HexToAddress("0x0A6513e40db6EB1b165753AD52E80663aeA50545"), 27 * time.Second},
-	"PAXG":  {common.HexToAddress("0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608"), 27 * time.Second},
+	// The token tickers. Every network's usdc.* and usdt.* collapse to one
+	// ticker, so a single feed prices them all.
+	"USDC": {common.HexToAddress("0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7"), 27 * time.Second},
+	"USDT": {common.HexToAddress("0x0A6513e40db6EB1b165753AD52E80663aeA50545"), 27 * time.Second},
+	"PAXG": {common.HexToAddress("0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608"), 27 * time.Second},
 	// "WBTC": {common.HexToAddress("0xDE31F8bFBD8c84b5360CFACCa3539B938dd78ae6"), 5 * time.Minute},
 	// "DOGE": {common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"), 27 * time.Second},
 	// "LINK": {common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"), 27 * time.Second},
@@ -322,8 +352,9 @@ var chainlinkPolygonFeeds = map[string]chainlinkFeed{
 	// "BCH": {common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"), 24 * time.Hour},
 	// "ZEC": {common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"), 24 * time.Hour},
 	"DASH": {common.HexToAddress("0xD94427eDee70E4991b4b8DdCc848f2B58ED01C0b"), 24 * time.Hour},
-	// XMR is registered only under the "xmr" build tag. The entry is harmless
-	// in a build without it: a ticker no wallet asks for is never read.
+	// XMR and DCR are registered only under their own build tags. The XMR
+	// entry is harmless in a build without it, since a ticker no wallet asks
+	// for is never read; DCR has no Polygon feed.
 	"XMR": {common.HexToAddress("0xBE6FB0AB6302B693368D0E9001fAF77ecc6571db"), 24 * time.Hour},
 	// To add: 1. Get the address and heartbeat from the addresses page above
 	//         2. Test with live RPC calls
@@ -535,7 +566,7 @@ func chainlinkBatchFetcherCore(
 	var (
 		conn      sharedConn
 		divisors  = newDivisorCache()
-		staleness = newStalenessTracker()
+		staleness = newStalenessTracker(chainlinkStaleLogInterval)
 	)
 
 	return func(ctx context.Context, tickers []string, log util.Logger) (map[string]float64, error) {
