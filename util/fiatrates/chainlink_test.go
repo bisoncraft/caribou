@@ -223,7 +223,7 @@ func TestChainlinkLive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tickers := []string{"BTC", "ETH", "LTC", "BCH", "DOGE", "ZEC", "LINK", "XRP", "SOL", "BNB", "MATIC", "USDC", "USDT", "PAXG", "WBTC"}
+	tickers := []string{"BTC", "ETH", "SOL", "XRP", "BNB", "MATIC", "USDC", "USDT", "PAXG", "LTC", "DASH", "XMR"}
 	rates, err := getRates(ctx, tickers, log)
 	if err != nil {
 		t.Fatalf("failed to fetch rates: %v", err)
@@ -380,8 +380,8 @@ func TestChainlinkRateFetcherEmptyProviders(t *testing.T) {
 var mockFeedAddr = common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
 
 // mockFastHeartbeat is the heartbeat of the continuously updated Polygon feeds
-// (BTC, ETH, DOGE, LINK), used wherever a test feed's own heartbeat is not the
-// subject of the test.
+// (BTC, ETH, SOL, XRP, BNB, MATIC), used wherever a test feed's own heartbeat
+// is not the subject of the test.
 const mockFastHeartbeat = 27 * time.Second
 
 // mockBatchContract is a test mock of chainlinkBatchContract.

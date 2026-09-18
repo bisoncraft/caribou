@@ -291,33 +291,40 @@ func (f chainlinkFeed) maxAge() time.Duration {
 // answer may be (see chainlinkFeed.maxAge), so an address added without its
 // published heartbeat cannot be checked for staleness.
 //
-// The feeds fall into two groups. Most carry a heartbeat of minutes or less
-// (27s, or 300s for WBTC) and update continuously. LTC, BCH and ZEC carry a
-// 86400s heartbeat and are driven almost entirely by their deviation threshold
-// (0.5% for LTC and BCH, 1% for ZEC), so hours can pass between rounds; between
-// them the answer is still within the threshold, which is why the age bound
-// follows the heartbeat rather than a single global constant.
+// The feeds fall into two groups. BTC, ETH, SOL, XRP, BNB, MATIC, USDC, USDT
+// and PAXG carry a 27s heartbeat and update continuously. LTC, DASH and XMR
+// carry a 86400s heartbeat and are driven almost entirely by their deviation
+// threshold (0.5% for LTC, 1% for DASH and XMR), so hours can pass between
+// rounds; between them the answer is still within the threshold, which is why
+// the age bound follows the heartbeat rather than a single global constant.
+//
+// The commented entries are verified feeds for assets that wallet/asset/importall
+// does not currently register. Uncomment alongside the matching asset. Polygon
+// carries no feed at all for HYPE or DCR, which are covered by the HTTP rate
+// sources only, as is XAUT (XAU spot is a different instrument).
 var chainlinkPolygonFeeds = map[string]chainlinkFeed{
-	"BTC":  {common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f"), 27 * time.Second},
-	"ETH":  {common.HexToAddress("0xF9680D99D6C9589e2a93a78A04A279e509205945"), 27 * time.Second},
-	"DOGE": {common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"), 27 * time.Second},
-	"LINK": {common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"), 27 * time.Second},
-	"LTC":  {common.HexToAddress("0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa"), 24 * time.Hour},
-	"BCH":  {common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"), 24 * time.Hour},
-	"ZEC":  {common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"), 24 * time.Hour},
-	"XRP":  {common.HexToAddress("0x785ba89291f676b5386652eB12b30cF361020694"), 27 * time.Second},
-	"SOL":  {common.HexToAddress("0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"), 27 * time.Second},
-	"BNB":  {common.HexToAddress("0x82a6c4AF830caa6c97bb504425f6A66165C2c26e"), 27 * time.Second},
-	// MATIC serves POL: ParseTicker normalizes the polygon asset to the
-	// MATIC ticker the rate APIs still key on, and the feed tracks POL
-	// post-migration (1:1).
+	"BTC": {common.HexToAddress("0xc907E116054Ad103354f2D350FD2514433D57F6f"), 27 * time.Second},
+	"ETH": {common.HexToAddress("0xF9680D99D6C9589e2a93a78A04A279e509205945"), 27 * time.Second},
+	"SOL": {common.HexToAddress("0x10C8264C0935b3B9870013e057f330Ff3e9C56dC"), 27 * time.Second},
+	"XRP": {common.HexToAddress("0x785ba89291f676b5386652eB12b30cF361020694"), 27 * time.Second},
+	"BNB": {common.HexToAddress("0x82a6c4AF830caa6c97bb504425f6A66165C2c26e"), 27 * time.Second},
+	// MATIC serves the polygon asset, which ParseTicker normalizes to the
+	// MATIC ticker the rate APIs still key on. The feed kept its pre-migration
+	// name but tracks POL: its published metadata gives POL as the base asset.
 	"MATIC": {common.HexToAddress("0xAB594600376Ec9fD91F8e885dADF0CE036862dE0"), 27 * time.Second},
 	"USDC":  {common.HexToAddress("0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7"), 27 * time.Second},
 	"USDT":  {common.HexToAddress("0x0A6513e40db6EB1b165753AD52E80663aeA50545"), 27 * time.Second},
 	"PAXG":  {common.HexToAddress("0x0f6914d8e7e1214CDb3A4C6fbf729b75C69DF608"), 27 * time.Second},
-	"WBTC":  {common.HexToAddress("0xDE31F8bFBD8c84b5360CFACCa3539B938dd78ae6"), 5 * time.Minute},
-	// XAUT has no feed (XAU spot is a different instrument); other fiat-rate
-	// sources cover it.
+	// "WBTC": {common.HexToAddress("0xDE31F8bFBD8c84b5360CFACCa3539B938dd78ae6"), 5 * time.Minute},
+	// "DOGE": {common.HexToAddress("0xbaf9327b6564454F4a3364C33eFeEf032b4b4444"), 27 * time.Second},
+	// "LINK": {common.HexToAddress("0xd9FFdb71EbE7496cC440152d43986Aae0AB76665"), 27 * time.Second},
+	"LTC": {common.HexToAddress("0xEB99F173cf7d9a6dC4D889C2Ad7103e8383b6Efa"), 24 * time.Hour},
+	// "BCH": {common.HexToAddress("0x327d9822e9932996f55b39F557AEC838313da8b7"), 24 * time.Hour},
+	// "ZEC": {common.HexToAddress("0xBC08c639e579a391C4228F20d0C29d0690092DF0"), 24 * time.Hour},
+	"DASH": {common.HexToAddress("0xD94427eDee70E4991b4b8DdCc848f2B58ED01C0b"), 24 * time.Hour},
+	// XMR is registered only under the "xmr" build tag. The entry is harmless
+	// in a build without it: a ticker no wallet asks for is never read.
+	"XMR": {common.HexToAddress("0xBE6FB0AB6302B693368D0E9001fAF77ecc6571db"), 24 * time.Hour},
 	// To add: 1. Get the address and heartbeat from the addresses page above
 	//         2. Test with live RPC calls
 }
