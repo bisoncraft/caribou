@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/bisoncraft/caribou/util"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 func TestDecodeCoinID(t *testing.T) {
@@ -30,6 +32,36 @@ func TestDecodeCoinID(t *testing.T) {
 			if _, err := DecodeCoinID(make([]byte, n)); err == nil {
 				t.Errorf("expected error for coin ID of length %d", n)
 			}
+		}
+	})
+}
+
+func TestCheckAPIModules(t *testing.T) {
+	t.Parallel()
+
+	// A fresh rpc.Server auto-registers the "rpc" module (server.go's
+	// MetadataApi), which is enough to serve rpc_modules without any
+	// blockchain-specific namespace.
+	newClient := func(t *testing.T) *rpc.Client {
+		t.Helper()
+		server := rpc.NewServer()
+		t.Cleanup(server.Stop)
+		return rpc.DialInProc(server)
+	}
+
+	t.Run("required module present", func(t *testing.T) {
+		t.Parallel()
+		c := newClient(t)
+		if err := CheckAPIModules(c, "test-endpoint", util.Disabled, []string{"rpc"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("required module missing", func(t *testing.T) {
+		t.Parallel()
+		c := newClient(t)
+		if err := CheckAPIModules(c, "test-endpoint", util.Disabled, []string{"eth"}); err == nil {
+			t.Fatal("expected error for missing eth module")
 		}
 	})
 }

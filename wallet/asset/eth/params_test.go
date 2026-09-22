@@ -16,6 +16,44 @@ import (
 	"github.com/bisoncraft/caribou/util"
 )
 
+func TestLoadGenesisFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid genesis file", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "genesis.json")
+		const genesisJSON = `{"config":{"chainId":1337},"gasLimit":"0x1c9c380","difficulty":"0x1","alloc":{}}`
+		if err := os.WriteFile(path, []byte(genesisJSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+		genesis, err := LoadGenesisFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if genesis.Config == nil || genesis.Config.ChainID == nil || genesis.Config.ChainID.Int64() != 1337 {
+			t.Fatalf("genesis.Config.ChainID = %v, want 1337", genesis.Config)
+		}
+	})
+
+	t.Run("missing file errors", func(t *testing.T) {
+		t.Parallel()
+		if _, err := LoadGenesisFile(filepath.Join(t.TempDir(), "does-not-exist.json")); err == nil {
+			t.Error("expected error for a missing genesis file")
+		}
+	})
+
+	t.Run("malformed json errors", func(t *testing.T) {
+		t.Parallel()
+		path := filepath.Join(t.TempDir(), "bad-genesis.json")
+		if err := os.WriteFile(path, []byte("not json"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadGenesisFile(path); err == nil {
+			t.Error("expected error for malformed genesis JSON")
+		}
+	})
+}
+
 func TestConversions(t *testing.T) {
 	t.Parallel()
 	newBigIntFromStr := func(str string) *big.Int {

@@ -171,6 +171,28 @@ func TestCalldataDecoding(t *testing.T) {
 	}
 }
 
+// TestDecodedCallDataString covers DecodedCallData.String and
+// decodedArgument.String, exercised through a real decoded call rather than
+// constructed directly, since decodedArgument's fields are unexported.
+func TestDecodedCallDataString(t *testing.T) {
+	t.Parallel()
+	jsondata := `[{"type":"function","name":"send","inputs":[{"name":"a","type":"uint256"}]}]`
+	abi, err := abi.JSON(strings.NewReader(jsondata))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// send(uint256) with argument 0x12
+	hexdata := "a52c101e0000000000000000000000000000000000000000000000000000000000000012"
+	cd, err := ParseCallData(common.Hex2Bytes(hexdata), &abi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "send(uint256: 18)"
+	if got := cd.String(); got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
 func TestMaliciousABIStrings(t *testing.T) {
 	t.Parallel()
 	tests := []string{
