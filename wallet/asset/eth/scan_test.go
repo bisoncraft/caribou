@@ -360,12 +360,12 @@ func TestIsUnscannableRangeErr(t *testing.T) {
 		{
 			"joined multi-provider error mixing pruned and transient",
 			fmt.Errorf("%w: %w", pruned, transient),
-			// One provider being pruned proves nothing about a different
-			// provider that merely failed transiently - that provider may
-			// well serve the range moments later, so classifying the whole
-			// failure as unscannable here would feed a healthy provider's
-			// range into the skip-to-tip path and silently drop it.
-			false,
+			// The transient leaf is ignored, not treated as proof the whole
+			// failure is recoverable - a provider that fails the same way on
+			// every call (e.g. a free endpoint that 429s forever) would
+			// otherwise always contribute a transient-looking leaf and wedge
+			// the scan permanently. The pruned leaf is actionable on its own.
+			true,
 		},
 		{
 			"joined multi-provider error mixing pruned and range-too-wide",
@@ -381,6 +381,15 @@ func TestIsUnscannableRangeErr(t *testing.T) {
 		{"connection reset", errors.New("read tcp: connection reset by peer"), false},
 		{"context deadline", context.DeadlineExceeded, false},
 		{"nil", nil, false},
+		{
+			"joined multi-provider error where no leaf is actionable",
+			fmt.Errorf("%w: %w", transient, errors.New("read tcp: connection reset by peer")),
+			// No leaf is pruned or too-wide, so the joined failure stays
+			// transient - pins the default arm of classifyRangeErr, which no
+			// other case here reaches (every other transient case is a
+			// single, non-joined leaf).
+			false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -418,9 +427,10 @@ func TestIsRangeTooWideErr(t *testing.T) {
 		{
 			"joined range-too-wide mixed with transient",
 			fmt.Errorf("%w: %w", errors.New("eth_getLogs is limited to 0 - 50 blocks range"), errors.New("429 Too Many Requests")),
-			// One transient leaf means nothing can be concluded about the
-			// range itself.
-			false,
+			// The transient leaf is ignored; the too-wide leaf is actionable
+			// on its own, for the same reason as the pruned+transient case in
+			// TestIsUnscannableRangeErr.
+			true,
 		},
 		{
 			"single message carrying both pruned and range-cap phrasing",
@@ -428,6 +438,14 @@ func TestIsRangeTooWideErr(t *testing.T) {
 			// A single (non-joined) provider message is one leaf: pruned is
 			// checked before too-wide, so this stays classified pruned, not
 			// too-wide - see TestScanERC20JoinedPrunedAndRangeTooWideSkipsNotNarrows.
+			false,
+		},
+		{
+			"joined multi-provider error where no leaf is actionable",
+			fmt.Errorf("%w: %w", errors.New("429 Too Many Requests"), errors.New("read tcp: connection reset by peer")),
+			// No leaf is pruned or too-wide, so the joined failure is not a
+			// range-too-wide failure either - pins the default arm of
+			// classifyRangeErr from the too-wide side.
 			false,
 		},
 	}
@@ -482,14 +500,16 @@ func TestScanERC20TickSkipsPrunedRange(t *testing.T) {
 	}
 }
 
-// TestScanERC20MixedProviderErrorDoesNotSkip is the regression test for the
-// joined-error classification bug: multiRPCClient joins every failing
-// provider's error into one value, so a single pruned provider mixed with
-// otherwise-transient ones (a rate limit, a timeout) must not be classified
-// unscannable - that provider may well serve the range moments later, and
-// treating the whole failure as unscannable would skip to tip and silently,
-// permanently drop a range a healthy provider would have covered.
-func TestScanERC20MixedProviderErrorDoesNotSkip(t *testing.T) {
+// TestScanERC20MixedPrunedAndTransientEventuallySkips is the regression test
+// for the automated PR review's finding: a joined error requiring every leaf
+// to agree before it's actionable lets a single steadily-failing provider (a
+// free endpoint that 429s on every call, not just once) wedge the scan
+// forever, because that leaf is present in every retry and forces the whole
+// failure transient. A pruned leaf must count toward the skip even alongside
+// a transient one, since narrowing can't help the pruned leaf either way and
+// nothing about the transient leaf's presence makes the pruned leaf less
+// permanent.
+func TestScanERC20MixedPrunedAndTransientEventuallySkips(t *testing.T) {
 	t.Parallel()
 	eth, tokenAw, cancel := newScanTestWallets(t)
 	defer cancel()
@@ -505,7 +525,7 @@ func TestScanERC20MixedProviderErrorDoesNotSkip(t *testing.T) {
 	transient := errors.New("429 Too Many Requests")
 	node.filterLogsErr = fmt.Errorf("%w: %w", pruned, transient)
 
-	for range scanSkipFailures + 5 {
+	for range scanSkipFailures {
 		eth.erc20ScanBackoff.until = time.Time{}
 		eth.scanERC20Tick(context.Background(), 20, []*assetWallet{tokenAw})
 	}
@@ -514,8 +534,37 @@ func TestScanERC20MixedProviderErrorDoesNotSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getLastScannedERC20Block: %v", err)
 	}
-	if last != 10 {
-		t.Fatalf("expected the mixed pruned+transient error to never skip to tip, cursor should stay at 10, got %d", last)
+	if last != 20 {
+		t.Fatalf("expected the pruned leaf to count toward the skip despite the steadily-failing transient leaf, cursor should reach tip 20, got %d", last)
+	}
+}
+
+// TestScanERC20MixedTooWideAndTransientNarrows is the counterpart of
+// TestScanERC20MixedPrunedAndTransientEventuallySkips for the range-too-wide
+// side of the same finding: a range-capped provider joined with a leaf from a
+// provider that fails every call with a rate limit must still narrow the
+// window - the too-wide leaf is actionable regardless of what the other leaf
+// says, and previously a persistently-failing transient leaf would have
+// masked it forever.
+func TestScanERC20MixedTooWideAndTransientNarrows(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(1); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(1_000_000)}
+
+	node := eth.node.(*tMempoolNode)
+	tooWide := errors.New("eth_getLogs is limited to 0 - 50 blocks range: limit exceeded")
+	transient := errors.New("429 Too Many Requests")
+	node.filterLogsErr = fmt.Errorf("%w: %w", tooWide, transient)
+
+	eth.scanERC20Tick(context.Background(), 1_000_000, []*assetWallet{tokenAw})
+	if eth.erc20ScanBlocks != maxScanBlocks/2 {
+		t.Fatalf("expected erc20ScanBlocks to halve to %d despite the steadily-failing transient leaf, got %d", maxScanBlocks/2, eth.erc20ScanBlocks)
 	}
 }
 
@@ -653,7 +702,10 @@ func TestScanERC20NarrowingClearsStaleBackoff(t *testing.T) {
 // isRangeTooWideErr match used to stay pinned below maxScanBlocks for the
 // rest of the process lifetime, issuing roughly 4x more eth_getLogs calls
 // than needed forever after. erc20WidenAfterSuccesses consecutive successful
-// scans at the narrowed width must reset it back to maxScanBlocks.
+// scans at the narrowed width must widen it - doubling toward maxScanBlocks,
+// not jumping straight back to it (see
+// TestScanERC20WidenDoublesRatherThanResetting for why an instant jump back
+// to maxScanBlocks re-wedges a provider genuinely capped below it).
 func TestScanERC20WidensAfterConsecutiveSuccesses(t *testing.T) {
 	t.Parallel()
 	eth, tokenAw, cancel := newScanTestWallets(t)
@@ -675,12 +727,55 @@ func TestScanERC20WidensAfterConsecutiveSuccesses(t *testing.T) {
 
 	// One more consecutive success crosses erc20WidenAfterSuccesses.
 	eth.scanERC20Tick(context.Background(), 1_000_000, []*assetWallet{tokenAw})
-	if eth.erc20ScanBlocks != 0 {
-		t.Fatalf("expected erc20ScanBlocks to reset to maxScanBlocks (0) after %d consecutive successes, got %d",
-			erc20WidenAfterSuccesses, eth.erc20ScanBlocks)
+	if eth.erc20ScanBlocks != minScanBlocks*2 {
+		t.Fatalf("expected erc20ScanBlocks to double to %d after %d consecutive successes, got %d",
+			minScanBlocks*2, erc20WidenAfterSuccesses, eth.erc20ScanBlocks)
 	}
 	if eth.erc20ScanSuccesses != 0 {
 		t.Fatalf("expected the success counter to reset after widening, got %d", eth.erc20ScanSuccesses)
+	}
+}
+
+// TestScanERC20WidenDoublesRatherThanResetting is the regression test for the
+// automated PR review's finding: jumping erc20ScanBlocks straight from a
+// narrowed width back to maxScanBlocks after erc20WidenAfterSuccesses
+// successes, instead of doubling it, leaves a provider genuinely capped
+// below maxScanBlocks unable to ever settle - it fails at maxScanBlocks and
+// every halving step back down to its cap, every widen cycle, spending a
+// large fraction of ticks making no progress. Doubling toward maxScanBlocks
+// instead lets the window approach (and, once it overshoots, narrow back
+// toward) the provider's real cap without repeating the full halving
+// sequence each time.
+func TestScanERC20WidenDoublesRatherThanResetting(t *testing.T) {
+	t.Parallel()
+	eth, tokenAw, cancel := newScanTestWallets(t)
+	defer cancel()
+
+	eth.metaTable = newTestMetaTable(t)
+	if err := eth.setLastScannedERC20Block(1); err != nil {
+		t.Fatalf("setLastScannedERC20Block: %v", err)
+	}
+	eth.currentTip = &types.Header{Number: big.NewInt(1_000_000)}
+	const narrowedWindow = 32
+	eth.erc20ScanBlocks = narrowedWindow // already narrowed, well below maxScanBlocks
+
+	for range erc20WidenAfterSuccesses {
+		eth.scanERC20Tick(context.Background(), 1_000_000, []*assetWallet{tokenAw})
+	}
+	if eth.erc20ScanBlocks != narrowedWindow*2 {
+		t.Fatalf("expected erc20ScanBlocks to double to %d rather than reset to maxScanBlocks, got %d",
+			narrowedWindow*2, eth.erc20ScanBlocks)
+	}
+
+	// A later widen that would overshoot maxScanBlocks clamps to it (stored
+	// as the 0 sentinel) instead of exceeding it.
+	eth.erc20ScanBlocks = maxScanBlocks - maxScanBlocks/4 // 96: doubling would overshoot 128
+	for range erc20WidenAfterSuccesses {
+		eth.scanERC20Tick(context.Background(), 1_000_000, []*assetWallet{tokenAw})
+	}
+	if eth.erc20ScanBlocks != 0 {
+		t.Fatalf("expected erc20ScanBlocks to clamp to the maxScanBlocks sentinel (0) instead of overshooting, got %d",
+			eth.erc20ScanBlocks)
 	}
 }
 

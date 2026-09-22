@@ -61,10 +61,14 @@ const (
 	minScanBlocks = 1
 
 	// erc20WidenAfterSuccesses is how many consecutive successful ERC20 scans
-	// are required before erc20ScanBlocks is reset toward maxScanBlocks, so a
-	// window narrowed by one stale or spurious isRangeTooWideErr match
-	// doesn't stay pinned below maxScanBlocks for the rest of the process
-	// lifetime.
+	// are required before erc20ScanBlocks is doubled back toward
+	// maxScanBlocks, so a window narrowed by one stale or spurious
+	// isRangeTooWideErr match doesn't stay pinned below maxScanBlocks for the
+	// rest of the process lifetime. Doubling rather than jumping straight
+	// back to maxScanBlocks matters for a provider genuinely capped below
+	// maxScanBlocks: jumping back would fail at the full window and every
+	// halving step down to the capped width again each cycle, spending a
+	// large fraction of ticks making no progress.
 	erc20WidenAfterSuccesses = 10
 
 	scanMetaTableName          = "meta"
@@ -221,21 +225,26 @@ func allErrors(err error) []error {
 type rangeErrClass int
 
 const (
-	// rangeErrTransient means at least one provider in a joined multi-
-	// provider failure (see allErrors) reported neither a pruned nor a
-	// range-too-wide condition - that provider may serve the range on a
-	// later retry, so nothing can be concluded about the range itself and
-	// the caller should apply the ordinary backoff and retry unchanged.
+	// rangeErrTransient means no provider in a joined multi-provider failure
+	// (see allErrors) reported a pruned or range-too-wide condition - nothing
+	// can be concluded about the range itself, so the caller should apply the
+	// ordinary backoff and retry unchanged. A provider that fails the same
+	// way on every call (e.g. eth_getLogs disabled, or a free endpoint that
+	// 429s every time) always contributes a leaf to a joined error, so a
+	// class decided by "every leaf must agree" would let that one steadily
+	// failing leaf force transient forever; the classification below is
+	// decided from the actionable leaves alone instead.
 	rangeErrTransient rangeErrClass = iota
-	// rangeErrPruned means every provider that failed reported pruned state
-	// specifically - the range can never be served by any of them, at any
-	// window width.
+	// rangeErrPruned means at least one provider reported pruned state and
+	// none reported range-too-wide - the range can never be served by that
+	// provider, at any window width, and no other leaf suggests narrowing
+	// would help.
 	rangeErrPruned
-	// rangeErrTooWide means every provider that failed reported either a
-	// range-too-wide condition, or pruned state alongside at least one
-	// range-too-wide leaf. Narrowing the window can only help (a too-wide
-	// provider may then succeed) and never hurts a pruned one, so it should
-	// always be attempted before concluding a range is unscannable.
+	// rangeErrTooWide means at least one provider reported a range-too-wide
+	// condition. Narrowing the window can only help (a too-wide provider may
+	// then succeed) and never hurts a pruned one, so it takes precedence over
+	// rangeErrPruned and should always be attempted before concluding a range
+	// is unscannable.
 	rangeErrTooWide
 )
 
@@ -256,32 +265,37 @@ func classifyLeaf(msg string) rangeErrClass {
 
 // classifyRangeErr classifies err, which may be a joined multi-provider
 // error (see allErrors / multiRPCClient.withOne), into how the scanner
-// should react. A joined error is only actionable (pruned or tooWide) when
-// every leaf is at least pruned-or-tooWide - one leaf that is merely
-// transient (a rate limit, a timeout) means a different provider may well
-// serve the range moments later, so the whole failure must not be treated
-// as permanently unscannable just because another provider in the same call
-// happened to be pruned or capped. Among actionable leaves, any tooWide leaf
-// wins over pruned ones, since narrowing can only help the capped provider
-// and cannot hurt the pruned one.
+// should react. The decision is made from the actionable leaves alone: a
+// leaf that is merely transient (a rate limit, a timeout) is ignored rather
+// than forcing the whole failure transient, since a provider that fails the
+// same way on every call would otherwise wedge the scan forever (it always
+// contributes a transient-looking leaf to the joined error). Among the
+// remaining leaves, any tooWide leaf wins over pruned ones, since narrowing
+// can only help the capped provider and cannot hurt the pruned one. Only
+// when no leaf is actionable at all is the failure treated as transient.
 func classifyRangeErr(err error) rangeErrClass {
 	leaves := allErrors(err)
 	if len(leaves) == 0 {
 		return rangeErrTransient
 	}
 	sawTooWide := false
+	sawPruned := false
 	for _, e := range leaves {
 		switch classifyLeaf(e.Error()) {
-		case rangeErrTransient:
-			return rangeErrTransient
 		case rangeErrTooWide:
 			sawTooWide = true
+		case rangeErrPruned:
+			sawPruned = true
 		}
 	}
-	if sawTooWide {
+	switch {
+	case sawTooWide:
 		return rangeErrTooWide
+	case sawPruned:
+		return rangeErrPruned
+	default:
+		return rangeErrTransient
 	}
-	return rangeErrPruned
 }
 
 // isUnscannableRangeErr reports whether err means the requested block range
@@ -437,14 +451,17 @@ func (w *ETHWallet) scanERC20Tick(ctx context.Context, tipNum uint64, tokenWalle
 		w.erc20ScanSuccesses = 0
 
 		// classifyRangeErr resolves the whole (possibly joined
-		// multi-provider) failure to one class: pruned only when every leaf
-		// is pruned, too-wide as soon as any leaf is a range cap (narrowing
-		// might unblock that provider and cannot hurt a pruned one), and
-		// transient if any leaf is neither - since that provider may well
-		// serve the range moments later. A single message carrying both
-		// phrasings (BNB's pruned-history and range-limit phrasing) still
-		// classifies pruned, so an already-pruned range reaches the skip
-		// path below instead of narrowing forever.
+		// multi-provider) failure to one class from the actionable leaves
+		// alone: too-wide as soon as any leaf is a range cap (narrowing might
+		// unblock that provider and cannot hurt a pruned one), else pruned if
+		// any leaf is pruned, else transient only when no leaf is actionable.
+		// A merely-transient leaf never forces the whole failure transient -
+		// a provider that fails the same way on every call (e.g. eth_getLogs
+		// disabled) would otherwise always contribute one and wedge the scan
+		// forever. A single message carrying both phrasings (BNB's
+		// pruned-history and range-limit phrasing) still classifies pruned,
+		// so an already-pruned range reaches the skip path below instead of
+		// narrowing forever.
 		class := classifyRangeErr(err)
 		pruned := class == rangeErrPruned
 		tooWide := class == rangeErrTooWide
@@ -494,9 +511,14 @@ func (w *ETHWallet) scanERC20Tick(ctx context.Context, tipNum uint64, tokenWalle
 		if w.erc20ScanBlocks > 0 && reqBlocks == scanBlocks {
 			w.erc20ScanSuccesses++
 			if w.erc20ScanSuccesses >= erc20WidenAfterSuccesses {
+				widened := min(scanBlocks*2, maxScanBlocks)
 				w.log.Debugf("incoming transfer scan: erc20 scan window recovered after %d consecutive successes; "+
-					"resetting to %d blocks", erc20WidenAfterSuccesses, maxScanBlocks)
-				w.erc20ScanBlocks = 0
+					"widening to %d blocks", erc20WidenAfterSuccesses, widened)
+				if widened >= maxScanBlocks {
+					w.erc20ScanBlocks = 0
+				} else {
+					w.erc20ScanBlocks = widened
+				}
 				w.erc20ScanSuccesses = 0
 			}
 		}
