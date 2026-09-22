@@ -74,6 +74,51 @@ func TestPolygonFinalizeConfs(t *testing.T) {
 	}
 }
 
+func TestDriverOpen(t *testing.T) {
+	drv := &Driver{}
+	logger := util.StdOutLogger("POLYGONTEST", util.LevelOff)
+	tmpDir := t.TempDir()
+
+	// Testnet has hardcoded default providers, so no providers setting is
+	// needed to reach a successful open.
+	cfg := &asset.WalletConfig{
+		Type:    walletTypeRPC,
+		DataDir: tmpDir,
+	}
+	w, err := drv.Open(cfg, logger, util.Testnet)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+	if w == nil {
+		t.Fatal("Open returned a nil wallet")
+	}
+
+	if _, err := drv.Open(cfg, logger, util.Network(99)); err == nil {
+		t.Fatal("Open accepted unknown network")
+	}
+}
+
+func TestDriverCreate(t *testing.T) {
+	drv := &Driver{}
+	params := &asset.CreateWalletParams{
+		Type:    walletTypeRPC,
+		Seed:    encode.RandomBytes(32),
+		Pass:    encode.RandomBytes(32),
+		DataDir: t.TempDir(),
+		Net:     util.Testnet,
+		Logger:  util.Disabled,
+	}
+	if err := drv.Create(params); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	bad := *params
+	bad.Net = util.Network(99)
+	if err := drv.Create(&bad); err == nil {
+		t.Fatal("Create accepted unknown network")
+	}
+}
+
 func TestChainConfig(t *testing.T) {
 	cases := []struct {
 		net    util.Network

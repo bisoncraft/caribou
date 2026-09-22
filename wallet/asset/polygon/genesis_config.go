@@ -75,21 +75,6 @@ var (
 	}
 )
 
-// DefaultAmoyGenesisBlock returns the Mumbai network genesis block. See:
-// https://github.com/maticnetwork/bor/blob/46f93b1f9415c8778d6e5ea2f3fad440f4572ba5/core/genesis.go#L616
-func DefaultAmoyGenesisBlock() *core.Genesis {
-	return &core.Genesis{
-		Config:     AmoyChainConfig,
-		Nonce:      0,
-		Timestamp:  1700225065,
-		GasLimit:   10000000,
-		Difficulty: big.NewInt(1),
-		Mixhash:    common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000000"),
-		Coinbase:   common.HexToAddress("0x0000000000000000000000000000000000000000"),
-		Alloc:      readPrealloc("allocs/amoy.json"),
-	}
-}
-
 // DefaultBorMainnetGenesisBlock returns the Bor Mainnet network gensis block. See:
 // https://github.com/maticnetwork/bor/blob/891ec7fef619cac0a796e3e29d5b2d4c095bdd9b/core/genesis.go#L509
 func DefaultBorMainnetGenesisBlock() *core.Genesis {
