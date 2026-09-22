@@ -1,12 +1,18 @@
 //go:build !harness && !rpclive
 
+// This code is available on the terms of the project LICENSE.md file,
+// also available online at https://blueoakcouncil.org/license/1.0.0.
+
 package eth
 
 import (
+	"context"
 	"math/big"
 	"testing"
 
+	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset/erc20"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
@@ -132,5 +138,193 @@ func TestParseTransferIgnoresOtherRecipients(t *testing.T) {
 	log := newTransferLog(t, tokenAddr, acctAddr, otherAddr, big.NewInt(1_000_000_000_000_000_000))
 	if _, err := c.parseTransfer(&types.Receipt{Logs: []*types.Log{&log}}); err == nil {
 		t.Fatal("expected an error when no log transfers to our account")
+	}
+}
+
+// testTokenContractor builds an erc20TokenContractor directly (bypassing
+// newERC20TokenContractor's network lookup), with a default EVMFactor of 9,
+// matching most tokens (see Token.factor).
+func testTokenContractor(t *testing.T, cb bind.ContractBackend, tokenAddr, acctAddr common.Address) *erc20TokenContractor {
+	t.Helper()
+	tokenContract, err := erc20.NewIERC20(tokenAddr, cb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := &Token{Token: &util.Token{Name: "Test Token"}}
+	return &erc20TokenContractor{
+		cb:                cb,
+		tokenContract:     tokenContract,
+		tokenContractAddr: tokenAddr,
+		acctAddr:          acctAddr,
+		atomize:           tok.EVMToAtomic,
+	}
+}
+
+func TestNewERC20TokenContractor(t *testing.T) {
+	t.Parallel()
+	tokenAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	acctAddr := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	tok := &Token{
+		Token:     &util.Token{Name: "Test Token"},
+		NetTokens: map[util.Network]*NetToken{util.Simnet: {Address: tokenAddr}},
+	}
+
+	c, err := newERC20TokenContractor(util.Simnet, tok, acctAddr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.tokenAddress(); got != tokenAddr {
+		t.Errorf("tokenAddress() = %s, want %s", got, tokenAddr)
+	}
+
+	if _, err := newERC20TokenContractor(util.Testnet, tok, acctAddr, nil); err == nil {
+		t.Fatal("expected an error for a network the token has no NetTokens entry for")
+	}
+}
+
+func TestTokenContractorValue(t *testing.T) {
+	t.Parallel()
+	tokenAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	acctAddr := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	otherAddr := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	c := testTokenContractor(t, nil, tokenAddr, acctAddr)
+
+	// 5e9 raw units / 1e9 (default EVMFactor) = 5 atomic units.
+	amount := big.NewInt(5_000_000_000)
+
+	newTx := func(to *common.Address, data []byte) *types.Transaction {
+		return types.NewTx(&types.LegacyTx{To: to, Data: data})
+	}
+
+	t.Run("nil recipient is not a token call", func(t *testing.T) {
+		t.Parallel()
+		in, out, err := c.value(context.Background(), newTx(nil, nil))
+		if err != nil || in != 0 || out != 0 {
+			t.Fatalf("value = (%d, %d, %v), want (0, 0, nil)", in, out, err)
+		}
+	})
+
+	t.Run("call to a different contract is not a token call", func(t *testing.T) {
+		t.Parallel()
+		data, err := erc20.ERC20ABI.Pack("transfer", otherAddr, amount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, out, err := c.value(context.Background(), newTx(&otherAddr, data))
+		if err != nil || in != 0 || out != 0 {
+			t.Fatalf("value = (%d, %d, %v), want (0, 0, nil)", in, out, err)
+		}
+	})
+
+	t.Run("transfer call is outgoing", func(t *testing.T) {
+		t.Parallel()
+		data, err := erc20.ERC20ABI.Pack("transfer", otherAddr, amount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, out, err := c.value(context.Background(), newTx(&tokenAddr, data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in != 0 || out != 5 {
+			t.Fatalf("value = (%d, %d), want (0, 5)", in, out)
+		}
+	})
+
+	t.Run("transferFrom with us as sender is outgoing", func(t *testing.T) {
+		t.Parallel()
+		data, err := erc20.ERC20ABI.Pack("transferFrom", acctAddr, otherAddr, amount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, out, err := c.value(context.Background(), newTx(&tokenAddr, data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if in != 0 || out != 5 {
+			t.Fatalf("value = (%d, %d), want (0, 5)", in, out)
+		}
+	})
+
+	t.Run("transferFrom with someone else as sender parses as nothing", func(t *testing.T) {
+		t.Parallel()
+		data, err := erc20.ERC20ABI.Pack("transferFrom", otherAddr, acctAddr, amount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, out, err := c.value(context.Background(), newTx(&tokenAddr, data))
+		if err != nil || in != 0 || out != 0 {
+			t.Fatalf("value = (%d, %d, %v), want (0, 0, nil)", in, out, err)
+		}
+	})
+
+	t.Run("call to an unrelated method parses as nothing", func(t *testing.T) {
+		t.Parallel()
+		data, err := erc20.ERC20ABI.Pack("approve", otherAddr, amount)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, out, err := c.value(context.Background(), newTx(&tokenAddr, data))
+		if err != nil || in != 0 || out != 0 {
+			t.Fatalf("value = (%d, %d, %v), want (0, 0, nil)", in, out, err)
+		}
+	})
+}
+
+func TestTokenContractorBalance(t *testing.T) {
+	t.Parallel()
+	s := newTestMultiRPC(t)
+	tokenAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	c := testTokenContractor(t, s.m, tokenAddr, s.creds.addr)
+
+	s.node.setTokenBalance(tokenAddr, s.creds.addr, big.NewInt(12_345))
+	bal, err := c.balance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal.Cmp(big.NewInt(12_345)) != 0 {
+		t.Errorf("balance() = %s, want 12345", bal)
+	}
+}
+
+func TestTokenContractorEstimateTransferGas(t *testing.T) {
+	t.Parallel()
+	s := newTestMultiRPC(t)
+	tokenAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	c := testTokenContractor(t, s.m, tokenAddr, s.creds.addr)
+
+	to := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	gas, err := c.estimateTransferGas(context.Background(), to, big.NewInt(1_000_000_000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gas == 0 {
+		t.Error("estimateTransferGas = 0, want a positive gas estimate")
+	}
+}
+
+func TestTokenContractorTransfer(t *testing.T) {
+	t.Parallel()
+	s := newTestMultiRPC(t)
+	tokenAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	c := testTokenContractor(t, s.m, tokenAddr, s.creds.addr)
+
+	txOpts, err := s.m.txOpts(context.Background(), 0, 100_000, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	tx, err := c.transfer(txOpts, to, big.NewInt(1_000_000_000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tx == nil {
+		t.Fatal("transfer returned a nil transaction")
+	}
+	if got := *tx.To(); got != tokenAddr {
+		t.Errorf("tx.To() = %s, want the token contract %s", got, tokenAddr)
+	}
+	if !s.node.hasTx(tx.Hash()) {
+		t.Error("the fake node did not record the sent transaction")
 	}
 }
