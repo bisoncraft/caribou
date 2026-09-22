@@ -380,6 +380,195 @@ func TestDecodeRevert(t *testing.T) {
 	}
 }
 
+func TestWithAny(t *testing.T) {
+	t.Parallel()
+	m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, {host: "b"}}}
+	var called []string
+	err := m.withAny(context.Background(), func(_ context.Context, p *provider) error {
+		called = append(called, p.host)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(called) != 1 {
+		t.Fatalf("withAny should stop after the first success, called %v", called)
+	}
+
+	// All providers failing surfaces an error.
+	err = m.withAny(context.Background(), func(_ context.Context, p *provider) error {
+		return errors.New("boom")
+	})
+	if err == nil {
+		t.Fatal("expected error when every provider fails")
+	}
+}
+
+func TestWithAll(t *testing.T) {
+	t.Parallel()
+	t.Run("runs against every provider, not just the first success", func(t *testing.T) {
+		t.Parallel()
+		m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, {host: "b"}}}
+		var called []string
+		err := m.withAll(context.Background(), func(_ context.Context, p *provider) error {
+			called = append(called, p.host)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(called) != 2 {
+			t.Fatalf("withAll should call every provider, called %v", called)
+		}
+	})
+
+	t.Run("succeeds if at least one provider succeeds", func(t *testing.T) {
+		t.Parallel()
+		m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, {host: "b"}}}
+		err := m.withAll(context.Background(), func(_ context.Context, p *provider) error {
+			if p.host == "a" {
+				return errors.New("boom")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("errors when every provider fails", func(t *testing.T) {
+		t.Parallel()
+		m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, {host: "b"}}}
+		err := m.withAll(context.Background(), func(_ context.Context, p *provider) error {
+			return errors.New("boom")
+		})
+		if err == nil {
+			t.Fatal("expected error when every provider fails")
+		}
+	})
+
+	t.Run("propagate short-circuits before trying the rest", func(t *testing.T) {
+		t.Parallel()
+		m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, {host: "b"}}}
+		var called []string
+		propagateErr := errors.New("fatal")
+		err := m.withAll(context.Background(), func(_ context.Context, p *provider) error {
+			called = append(called, p.host)
+			return propagateErr
+		}, func(error) (discard, propagate, fail bool) { return false, true, false })
+		if !errors.Is(err, propagateErr) {
+			t.Fatalf("expected the propagated error, got %v", err)
+		}
+		if len(called) != 1 {
+			t.Fatalf("withAll should stop after a propagated error, called %v", called)
+		}
+	})
+}
+
+func TestWithFreshest(t *testing.T) {
+	t.Parallel()
+	m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, {host: "b"}}}
+	var called []string
+	err := m.withFreshest(context.Background(), func(_ context.Context, p *provider) error {
+		called = append(called, p.host)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(called) != 1 {
+		t.Fatalf("withFreshest should stop after the first success, called %v", called)
+	}
+}
+
+func TestWithPreferred(t *testing.T) {
+	t.Parallel()
+	t.Run("uses the sticky last provider first", func(t *testing.T) {
+		t.Parallel()
+		last := &provider{host: "sticky"}
+		m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, last}}
+		m.lastProvider.provider = last
+		m.lastProvider.stamp = time.Now()
+
+		var called []string
+		err := m.withPreferred(context.Background(), func(_ context.Context, p *provider) error {
+			called = append(called, p.host)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(called) != 1 || called[0] != "sticky" {
+			t.Fatalf("expected the sticky provider to be tried first, got %v", called)
+		}
+	})
+
+	t.Run("stale sticky provider is not preferred", func(t *testing.T) {
+		t.Parallel()
+		stale := &provider{host: "stale"}
+		m := &multiRPCClient{log: tLogger, providers: []*provider{{host: "a"}, stale}}
+		m.lastProvider.provider = stale
+		m.lastProvider.stamp = time.Now().Add(-2 * nonceProviderStickiness)
+
+		var called []string
+		err := m.withPreferred(context.Background(), func(_ context.Context, p *provider) error {
+			called = append(called, p.host)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(called) != 1 || called[0] == "stale" {
+			t.Fatalf("stale sticky provider should not be preferred, got %v", called)
+		}
+	})
+}
+
+func TestNonceProviderList(t *testing.T) {
+	t.Parallel()
+	a, b := &provider{host: "a"}, &provider{host: "b"}
+	m := &multiRPCClient{providers: []*provider{a, b}}
+
+	// With no sticky provider, the list is just the freshness-sorted list.
+	list := m.nonceProviderList()
+	if len(list) != 2 {
+		t.Fatalf("nonceProviderList returned %d providers, want 2", len(list))
+	}
+
+	// A fresh sticky provider is moved to the front, without being duplicated.
+	m.lastProvider.provider = b
+	m.lastProvider.stamp = time.Now()
+	list = m.nonceProviderList()
+	if len(list) != 2 || list[0].host != "b" {
+		t.Fatalf("nonceProviderList = %v, want sticky provider b first", list)
+	}
+}
+
+func TestShuffleProviders(t *testing.T) {
+	t.Parallel()
+	providers := []*provider{{host: "a"}, {host: "b"}, {host: "c"}}
+	before := slices.Clone(providers)
+	shuffleProviders(providers)
+	if len(providers) != len(before) {
+		t.Fatalf("shuffleProviders changed the slice length: %d != %d", len(providers), len(before))
+	}
+	for _, p := range before {
+		if !slices.Contains(providers, p) {
+			t.Fatalf("shuffleProviders lost provider %v", p)
+		}
+	}
+}
+
+func TestIsNotFoundError(t *testing.T) {
+	t.Parallel()
+	if !isNotFoundError(errors.New("transaction not found")) {
+		t.Error("expected a \"not found\" error to be detected")
+	}
+	if isNotFoundError(errors.New("connection refused")) {
+		t.Error("did not expect an unrelated error to be detected as not-found")
+	}
+}
+
 // TestWithOneErrorAggregation asserts that the error withOne returns after
 // every provider fails keeps each provider's error reachable through
 // errors.Is/As, not only the last one. decodeRevert and the acceptability
