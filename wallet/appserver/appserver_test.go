@@ -793,6 +793,28 @@ func TestSend(t *testing.T) {
 	tCore.sendRequiresPW = false
 }
 
+// TestDeferredPassClearClosure guards the fix in apiBridge,
+// apiApproveBridgeContract and apiUnapproveBridgeContract: a bare
+// "defer form.Pass.Clear()" captures encode.PassBytes.Clear's value receiver
+// at the defer statement, which runs before readPost populates form.Pass, so
+// it clears a copy of the pre-populate (nil) slice and leaves the real
+// password unzeroed. Deferring a closure instead reads form.Pass at return
+// time and clears the right backing array.
+func TestDeferredPassClearClosure(t *testing.T) {
+	form := &struct {
+		Pass encode.PassBytes
+	}{}
+	func() {
+		defer func() { form.Pass.Clear() }()
+		form.Pass = encode.PassBytes("hunter2") // stands in for readPost
+	}()
+	for i, b := range form.Pass {
+		if b != 0 {
+			t.Fatalf("password byte %d not cleared: %q", i, form.Pass)
+		}
+	}
+}
+
 // TestAPIBridgeRequiresPassword confirms that '/bridge', '/approvebridgecontract',
 // '/unapprovebridgecontract' and '/intents/execute' honor the
 // send-requires-password setting the same way '/send' does: with the setting

@@ -1646,7 +1646,12 @@ func (s *AppServer) apiBridge(w http.ResponseWriter, r *http.Request) {
 		BridgeName  string           `json:"bridgeName"`
 		Pass        encode.PassBytes `json:"pass"`
 	}{}
-	defer form.Pass.Clear()
+	// A deferred value-receiver method call captures its receiver at the
+	// defer statement, before readPost populates form.Pass, so a bare
+	// "defer form.Pass.Clear()" here would clear a nil slice and leave the
+	// password unzeroed. Defer a closure instead so it reads form.Pass at
+	// return time.
+	defer func() { form.Pass.Clear() }()
 	if !readPost(w, r, form) {
 		return
 	}
@@ -1704,7 +1709,8 @@ func (s *AppServer) apiApproveBridgeContract(w http.ResponseWriter, r *http.Requ
 		BridgeName string           `json:"bridgeName"`
 		Pass       encode.PassBytes `json:"pass"`
 	}{}
-	defer form.Pass.Clear()
+	// See apiBridge for why this must be a closure, not a bare method value.
+	defer func() { form.Pass.Clear() }()
 	if !readPost(w, r, form) {
 		return
 	}
@@ -1738,7 +1744,8 @@ func (s *AppServer) apiUnapproveBridgeContract(w http.ResponseWriter, r *http.Re
 		BridgeName string           `json:"bridgeName"`
 		Pass       encode.PassBytes `json:"pass"`
 	}{}
-	defer form.Pass.Clear()
+	// See apiBridge for why this must be a closure, not a bare method value.
+	defer func() { form.Pass.Clear() }()
 	if !readPost(w, r, form) {
 		return
 	}
