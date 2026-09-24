@@ -4,6 +4,7 @@
 package ws
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -226,6 +228,50 @@ func TestWSLink_send(t *testing.T) {
 
 	if lastID != int64(msg.ID-1) {
 		t.Errorf("final message %d not sent, last ID is %d", msg.ID-1, lastID)
+	}
+}
+
+// TestWSLink_benignDisconnectErrorsNotLogged confirms that a ReadMessage
+// error naming a normal disconnect ("use of closed network connection" or
+// "connection reset by peer") is recognized by its text even when it is not
+// a *net.OpError, and is not logged as an unexpected error. gorilla/websocket
+// does not always preserve that type through this path.
+func TestWSLink_benignDisconnectErrorsNotLogged(t *testing.T) {
+	defer os.Stdout.Sync()
+
+	var logBuf bytes.Buffer
+	logger := util.NewLogger("ws_TEST", util.LevelTrace, &logBuf)
+
+	conn := &ConnStub{
+		inMsg: make(chan []byte, 1),
+		inErr: make(chan error, 1),
+	}
+	wsLink := NewWSLink("127.0.0.1:0", conn, time.Second, func(*msgjson.Message) *msgjson.Error {
+		return nil
+	}, logger)
+
+	wg, err := wsLink.Connect(t.Context())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// Deliberately not a *net.OpError, just matching text, as observed from
+	// gorilla/websocket in practice.
+	conn.inErr <- errors.New("read tcp 127.0.0.1:1234->127.0.0.1:5678: use of closed network connection")
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("inHandler did not exit on a benign disconnect error")
+	}
+
+	if strings.Contains(logBuf.String(), "Websocket receive error") {
+		t.Fatalf("benign disconnect error was logged as unexpected: %s", logBuf.String())
 	}
 }
 

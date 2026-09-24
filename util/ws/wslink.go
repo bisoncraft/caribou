@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -269,12 +268,13 @@ out:
 				break out // clean Close from client
 			}
 
-			// TODO: this error check is not working. The error is not an OpError,
-			// but the text is still the same.
-			var opErr *net.OpError
-			if errors.As(err, &opErr) && opErr.Op == "read" &&
-				(strings.Contains(opErr.Err.Error(), "use of closed network connection") || // we hung up
-					strings.Contains(opErr.Err.Error(), "connection reset by peer")) { // they hung up
+			// gorilla/websocket does not always preserve the *net.OpError
+			// type through this path, so match on the message text instead
+			// of asserting the type: these are both normal disconnects, not
+			// errors worth logging.
+			errStr := err.Error()
+			if strings.Contains(errStr, "use of closed network connection") || // we hung up
+				strings.Contains(errStr, "connection reset by peer") { // they hung up
 				break out
 			}
 
