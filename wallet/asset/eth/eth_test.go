@@ -93,6 +93,7 @@ type testNode struct {
 	filterLogsResult []types.Log
 	filterLogsErr    error
 	filterLogsCalls  int
+	filterLogsQuery  ethereum.FilterQuery
 
 	// nilReceiptNoErr makes transactionAndReceipt report neither a receipt nor
 	// an error, which a real node never does. Only a test exercising the
@@ -183,6 +184,7 @@ func (n *testNode) addressBalance(ctx context.Context, addr common.Address) (*bi
 }
 func (n *testNode) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
 	n.filterLogsCalls++
+	n.filterLogsQuery = query
 	return n.filterLogsResult, n.filterLogsErr
 }
 func (n *testNode) unlock(pw string) error {
