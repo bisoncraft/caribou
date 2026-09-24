@@ -1570,6 +1570,29 @@ func (s *AppServer) resolvePass(appPW []byte, r *http.Request) ([]byte, error) {
 	return cachedPass, nil
 }
 
+// checkSendRequiresPassword enforces the send-requires-password setting for
+// endpoints that move or authorize value but, unlike '/send', do not
+// otherwise take a password to unlock a wallet (they rely on the wallet
+// already being unlocked). When the setting is enabled, the caller must
+// supply the correct app password explicitly; emptyPassMsg is returned when
+// none was supplied.
+func (s *AppServer) checkSendRequiresPassword(pass encode.PassBytes, emptyPassMsg string) error {
+	requirePW, err := s.core.SendRequiresPassword()
+	if err != nil {
+		return fmt.Errorf("error reading send-requires-password setting: %w", err)
+	}
+	if !requirePW {
+		return nil
+	}
+	if len(pass) == 0 {
+		return errors.New(emptyPassMsg)
+	}
+	if err := s.core.VerifyPassword(pass); err != nil {
+		return fmt.Errorf("password error: %w", err)
+	}
+	return nil
+}
+
 func (s *AppServer) apiAllBridgePaths(w http.ResponseWriter, r *http.Request) {
 	paths, err := s.core.AllBridgePaths()
 	if err != nil {
@@ -1612,15 +1635,23 @@ func (s *AppServer) apiBridgeFeesAndLimits(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// apiBridge is the handler for the '/bridge' API request.
+// apiBridge is the handler for the '/bridge' API request. It moves funds off
+// the source chain, so it honors the send-requires-password setting exactly
+// as '/send' does.
 func (s *AppServer) apiBridge(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
-		FromAssetID uint32 `json:"fromAssetID"`
-		ToAssetID   uint32 `json:"toAssetID"`
-		Amount      uint64 `json:"amount"`
-		BridgeName  string `json:"bridgeName"`
+		FromAssetID uint32           `json:"fromAssetID"`
+		ToAssetID   uint32           `json:"toAssetID"`
+		Amount      uint64           `json:"amount"`
+		BridgeName  string           `json:"bridgeName"`
+		Pass        encode.PassBytes `json:"pass"`
 	}{}
+	defer form.Pass.Clear()
 	if !readPost(w, r, form) {
+		return
+	}
+	if err := s.checkSendRequiresPassword(form.Pass, "password required to bridge"); err != nil {
+		s.writeAPIError(w, err)
 		return
 	}
 
@@ -1664,13 +1695,21 @@ func (s *AppServer) apiBridgeApprovalStatus(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// apiApproveBridgeContract is the handler for the '/approvebridgecontract' API request.
+// apiApproveBridgeContract is the handler for the '/approvebridgecontract'
+// API request. It grants the bridge contract a token spending allowance, so
+// it honors the send-requires-password setting exactly as '/send' does.
 func (s *AppServer) apiApproveBridgeContract(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
-		AssetID    uint32 `json:"assetID"`
-		BridgeName string `json:"bridgeName"`
+		AssetID    uint32           `json:"assetID"`
+		BridgeName string           `json:"bridgeName"`
+		Pass       encode.PassBytes `json:"pass"`
 	}{}
+	defer form.Pass.Clear()
 	if !readPost(w, r, form) {
+		return
+	}
+	if err := s.checkSendRequiresPassword(form.Pass, "password required to approve the bridge contract"); err != nil {
+		s.writeAPIError(w, err)
 		return
 	}
 
@@ -1689,13 +1728,22 @@ func (s *AppServer) apiApproveBridgeContract(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// apiUnapproveBridgeContract is the handler for the '/unapprovebridgecontract' API request.
+// apiUnapproveBridgeContract is the handler for the
+// '/unapprovebridgecontract' API request. It revokes the bridge contract's
+// token spending allowance, so it honors the send-requires-password setting
+// exactly as '/send' does.
 func (s *AppServer) apiUnapproveBridgeContract(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
-		AssetID    uint32 `json:"assetID"`
-		BridgeName string `json:"bridgeName"`
+		AssetID    uint32           `json:"assetID"`
+		BridgeName string           `json:"bridgeName"`
+		Pass       encode.PassBytes `json:"pass"`
 	}{}
+	defer form.Pass.Clear()
 	if !readPost(w, r, form) {
+		return
+	}
+	if err := s.checkSendRequiresPassword(form.Pass, "password required to unapprove the bridge contract"); err != nil {
+		s.writeAPIError(w, err)
 		return
 	}
 

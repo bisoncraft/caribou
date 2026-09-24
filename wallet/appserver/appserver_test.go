@@ -78,6 +78,7 @@ type TCore struct {
 	sendRequiresPW       bool
 	sendRequiresPWErr    error
 	setSendRequiresPWErr error
+	verifyPasswordErr    error
 	notHas               bool
 	notRunning           bool
 	notOpen              bool
@@ -91,6 +92,14 @@ type TCore struct {
 	notes                []*db.Notification
 	notesErr             error
 	resetAppPassErr      error
+	bridgeErr            error
+	bridgeCalls          int
+	approveBridgeErr     error
+	approveBridgeCalls   int
+	unapproveBridgeErr   error
+	unapproveBridgeCalls int
+	intentsExecuteErr    error
+	intentsExecuteCalls  int
 }
 
 func (c *TCore) Network() util.Network { return util.Mainnet }
@@ -254,6 +263,24 @@ func (*TCore) SetAPIToken(token string) error        { return nil }
 func (*TCore) APIToken() (string, error)             { return "", nil }
 func (c *TCore) SetSendRequiresPassword(bool) error  { return c.setSendRequiresPWErr }
 func (c *TCore) SendRequiresPassword() (bool, error) { return c.sendRequiresPW, c.sendRequiresPWErr }
+func (c *TCore) VerifyPassword(pw []byte) error      { return c.verifyPasswordErr }
+
+func (c *TCore) Bridge(fromAssetID, toAssetID uint32, amt uint64, bridgeName string) (string, error) {
+	c.bridgeCalls++
+	return "txid", c.bridgeErr
+}
+func (c *TCore) ApproveBridgeContract(assetID uint32, bridgeName string) (string, error) {
+	c.approveBridgeCalls++
+	return "txid", c.approveBridgeErr
+}
+func (c *TCore) UnapproveBridgeContract(assetID uint32, bridgeName string) (string, error) {
+	c.unapproveBridgeCalls++
+	return "txid", c.unapproveBridgeErr
+}
+func (c *TCore) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, exactOutput bool, minAtomsOut, maxAtomsIn uint64) (*core.IntentsSwap, error) {
+	c.intentsExecuteCalls++
+	return &core.IntentsSwap{}, c.intentsExecuteErr
+}
 
 func (*TCore) TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error { return nil }
 
@@ -718,6 +745,139 @@ func TestSend(t *testing.T) {
 		t.Fatalf("no error for SendRequiresPassword error")
 	}
 	tCore.sendRequiresPWErr = nil
+	tCore.sendRequiresPW = false
+}
+
+// TestAPIBridgeRequiresPassword confirms that '/bridge', '/approvebridgecontract',
+// '/unapprovebridgecontract' and '/intents/execute' honor the
+// send-requires-password setting the same way '/send' does: with the setting
+// enabled and no password supplied, the request is rejected before the
+// underlying Core method is ever called.
+func TestAPIBridgeRequiresPassword(t *testing.T) {
+	writer := new(TWriter)
+	reader := new(TReader)
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	isOK := func(f func(w http.ResponseWriter, r *http.Request), body any) bool {
+		t.Helper()
+		reader.msg, _ = json.Marshal(body)
+		req, err := http.NewRequest("GET", "/", reader)
+		if err != nil {
+			t.Fatalf("error creating request: %v", err)
+		}
+		f(writer, req)
+		if len(writer.b) == 0 {
+			t.Fatalf("no response")
+		}
+		resp := &standardResponse{}
+		if err := json.Unmarshal(writer.b, resp); err != nil {
+			t.Fatalf("json unmarshal error: %v", err)
+		}
+		return resp.OK
+	}
+
+	tCore.sendRequiresPW = true
+
+	// /bridge
+	bridgeBody := &struct {
+		FromAssetID uint32           `json:"fromAssetID"`
+		ToAssetID   uint32           `json:"toAssetID"`
+		Amount      uint64           `json:"amount"`
+		BridgeName  string           `json:"bridgeName"`
+		Pass        encode.PassBytes `json:"pass"`
+	}{Amount: 1}
+	if isOK(s.apiBridge, bridgeBody) {
+		t.Fatalf("no error for /bridge when password required but none supplied")
+	}
+	if tCore.bridgeCalls != 0 {
+		t.Fatalf("Core.Bridge called despite missing required password")
+	}
+	bridgeBody.Pass = encode.PassBytes("dummyAppPass")
+	if !isOK(s.apiBridge, bridgeBody) {
+		t.Fatalf("not ok for /bridge with explicit pass: %s", string(writer.b))
+	}
+	if tCore.bridgeCalls != 1 {
+		t.Fatalf("Core.Bridge call count = %d, want 1", tCore.bridgeCalls)
+	}
+
+	// /approvebridgecontract
+	approveBody := &struct {
+		AssetID    uint32           `json:"assetID"`
+		BridgeName string           `json:"bridgeName"`
+		Pass       encode.PassBytes `json:"pass"`
+	}{}
+	if isOK(s.apiApproveBridgeContract, approveBody) {
+		t.Fatalf("no error for /approvebridgecontract when password required but none supplied")
+	}
+	if tCore.approveBridgeCalls != 0 {
+		t.Fatalf("Core.ApproveBridgeContract called despite missing required password")
+	}
+	approveBody.Pass = encode.PassBytes("dummyAppPass")
+	if !isOK(s.apiApproveBridgeContract, approveBody) {
+		t.Fatalf("not ok for /approvebridgecontract with explicit pass: %s", string(writer.b))
+	}
+	if tCore.approveBridgeCalls != 1 {
+		t.Fatalf("Core.ApproveBridgeContract call count = %d, want 1", tCore.approveBridgeCalls)
+	}
+
+	// /unapprovebridgecontract
+	unapproveBody := &struct {
+		AssetID    uint32           `json:"assetID"`
+		BridgeName string           `json:"bridgeName"`
+		Pass       encode.PassBytes `json:"pass"`
+	}{}
+	if isOK(s.apiUnapproveBridgeContract, unapproveBody) {
+		t.Fatalf("no error for /unapprovebridgecontract when password required but none supplied")
+	}
+	if tCore.unapproveBridgeCalls != 0 {
+		t.Fatalf("Core.UnapproveBridgeContract called despite missing required password")
+	}
+	unapproveBody.Pass = encode.PassBytes("dummyAppPass")
+	if !isOK(s.apiUnapproveBridgeContract, unapproveBody) {
+		t.Fatalf("not ok for /unapprovebridgecontract with explicit pass: %s", string(writer.b))
+	}
+	if tCore.unapproveBridgeCalls != 1 {
+		t.Fatalf("Core.UnapproveBridgeContract call count = %d, want 1", tCore.unapproveBridgeCalls)
+	}
+
+	// A wrong password is rejected too, not just an empty one.
+	tCore.verifyPasswordErr = errTest
+	bridgeBody.Pass = encode.PassBytes("wrongPass")
+	if isOK(s.apiBridge, bridgeBody) {
+		t.Fatalf("no error for /bridge with an incorrect password")
+	}
+	if tCore.bridgeCalls != 1 {
+		t.Fatalf("Core.Bridge called with an incorrect password")
+	}
+	tCore.verifyPasswordErr = nil
+
+	// /intents/execute
+	origin, dest := uint32(0), uint32(2)
+	intentsBody := &struct {
+		OriginAssetID *uint32          `json:"originAssetID"`
+		DestAssetID   *uint32          `json:"destAssetID"`
+		Value         uint64           `json:"value"`
+		SlippageBps   int              `json:"slippageBps"`
+		ExactOutput   bool             `json:"exactOutput"`
+		MinAtomsOut   uint64           `json:"minAtomsOut"`
+		MaxAtomsIn    uint64           `json:"maxAtomsIn"`
+		Pass          encode.PassBytes `json:"pass"`
+	}{OriginAssetID: &origin, DestAssetID: &dest, MinAtomsOut: 1}
+	if isOK(s.apiIntentsExecute, intentsBody) {
+		t.Fatalf("no error for /intents/execute when password required but none supplied")
+	}
+	if tCore.intentsExecuteCalls != 0 {
+		t.Fatalf("Core.IntentsExecute called despite missing required password")
+	}
+	intentsBody.Pass = encode.PassBytes("dummyAppPass")
+	if !isOK(s.apiIntentsExecute, intentsBody) {
+		t.Fatalf("not ok for /intents/execute with explicit pass: %s", string(writer.b))
+	}
+	if tCore.intentsExecuteCalls != 1 {
+		t.Fatalf("Core.IntentsExecute call count = %d, want 1", tCore.intentsExecuteCalls)
+	}
+
 	tCore.sendRequiresPW = false
 }
 

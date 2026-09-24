@@ -151,6 +151,7 @@ type clientCore interface {
 	APIToken() (string, error)
 	SetSendRequiresPassword(require bool) error
 	SendRequiresPassword() (bool, error)
+	VerifyPassword(pw []byte) error
 	TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error
 	BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName string) (*core.BridgeFeesAndLimits, error)
 	AllBridgePaths() (map[uint32]map[uint32][]string, error)

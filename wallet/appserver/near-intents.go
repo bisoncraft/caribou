@@ -102,6 +102,15 @@ func (s *AppServer) apiIntentsExecute(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, errors.New("missing previewed minimum output"))
 		return
 	}
+	requirePW, err := s.core.SendRequiresPassword()
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("error reading send-requires-password setting: %w", err))
+		return
+	}
+	if requirePW && len(form.Pass) == 0 {
+		s.writeAPIError(w, fmt.Errorf("password required to execute a swap"))
+		return
+	}
 	pass, err := s.resolvePass(form.Pass, r)
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("password error: %w", err))
