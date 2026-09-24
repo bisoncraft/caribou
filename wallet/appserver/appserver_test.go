@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/encode"
@@ -585,6 +586,50 @@ func TestNew_siteError(t *testing.T) {
 func TestConnectStart(t *testing.T) {
 	_, _, shutdown := newTServer(t, true)
 	defer shutdown()
+}
+
+// TestShutdownBounded confirms that a handler wedged indefinitely (e.g. on a
+// stuck chain RPC) cannot hang graceful shutdown forever: Shutdown is bounded
+// by shutdownTimeout, after which the server is forced closed.
+func TestShutdownBounded(t *testing.T) {
+	origTimeout := shutdownTimeout
+	shutdownTimeout = 200 * time.Millisecond
+	defer func() { shutdownTimeout = origTimeout }()
+
+	s, _, _ := newTServer(t, false)
+
+	handlerStarted := make(chan struct{})
+	s.mux.Get("/hang", func(w http.ResponseWriter, r *http.Request) {
+		close(handlerStarted)
+		<-r.Context().Done() // never returns on its own
+	})
+
+	cm := util.NewConnectionMaster(s)
+	if err := cm.Connect(tCtx); err != nil {
+		t.Fatalf("error starting AppServer: %v", err)
+	}
+
+	// Fire the wedged request and wait for the handler to actually be
+	// in-flight before triggering shutdown.
+	go func() {
+		resp, err := http.Get(fmt.Sprintf("http://%s/hang", s.addr))
+		if resp != nil {
+			resp.Body.Close()
+		}
+		_ = err // the client just sees the connection close on forced shutdown
+	}()
+	select {
+	case <-handlerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hanging handler never started")
+	}
+
+	start := time.Now()
+	cm.Disconnect()
+	elapsed := time.Since(start)
+	if elapsed > 5*shutdownTimeout {
+		t.Fatalf("shutdown took %v, want bounded by shutdownTimeout (%v)", elapsed, shutdownTimeout)
+	}
 }
 
 func TestConnectBindError(t *testing.T) {

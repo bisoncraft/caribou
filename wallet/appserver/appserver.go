@@ -77,6 +77,12 @@ var (
 	// errNoCachedPW is returned when attempting to retrieve a cached password, but the
 	// cookie that should contain the cached password is not populated.
 	errNoCachedPW = errors.New("no cached password")
+	// shutdownTimeout bounds how long graceful shutdown waits for in-flight
+	// requests before forcibly closing listeners and connections. Without a
+	// bound, one wedged handler (a slow chain RPC, for example) can hang
+	// shutdown indefinitely and keep core.Run from ever reaching its DB
+	// teardown. A var, not a const, so tests can shrink it.
+	shutdownTimeout = 10 * time.Second
 )
 
 var (
@@ -710,9 +716,14 @@ func (s *AppServer) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	go func() {
 		defer wg.Done()
 		<-ctx.Done()
-		err := s.srv.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		err := s.srv.Shutdown(shutdownCtx)
 		if err != nil {
-			log.Errorf("Problem shutting down rpc: %v", err)
+			log.Errorf("Problem shutting down rpc gracefully, forcing closed: %v", err)
+			if err := s.srv.Close(); err != nil {
+				log.Errorf("Problem forcing rpc closed: %v", err)
+			}
 		}
 		s.wsServer.Shutdown()
 		log.Infof("Web server off")
