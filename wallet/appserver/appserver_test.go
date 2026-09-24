@@ -1265,14 +1265,6 @@ func TestAPIToggleWalletStatus(t *testing.T) {
 	}
 }
 
-func TestAPITrade(t *testing.T) {
-	t.Skip("removed: DEX trading functionality")
-}
-
-func TestAPITradeAsync(t *testing.T) {
-	t.Skip("removed: DEX trading functionality")
-}
-
 func Test_prepareAddr(t *testing.T) {
 	tests := []struct {
 		name       string
