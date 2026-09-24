@@ -23,8 +23,16 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	inWallet "github.com/bisoncraft/caribou/wallet/utxowallet/wallet"
 	"github.com/btcsuite/btcd/chaincfg"
 )
+
+// createWalletOpts lets tests substitute cheap KDF parameters (see
+// wallet.WithScryptOptions(&waddrmgr.FastScryptOptions) in dash_test.go) to
+// avoid paying the real scrypt cost on every Create call. Production code
+// leaves this nil, which selects btc.CreateElectrumWallet's default, secure
+// scrypt parameters.
+var createWalletOpts []inWallet.LoaderOption
 
 // dashElectrumWalletDefinition is the WalletDefinition for the electrum-backed
 // seeded Dash wallet. No user-configurable server/proxy knobs.
@@ -71,7 +79,7 @@ func dashTableNetParams(chainParams *chaincfg.Params) *netparams.ChainParams {
 // createDashElectrumWallet creates a Dash electrum wallet's on-disk database via
 // the shared implementation. The electrum network is not started here.
 func createDashElectrumWallet(privPass, seed []byte, bday time.Time, walletDir string, log util.Logger, extIdx, intIdx uint32, net *chaincfg.Params) error {
-	return btc.CreateElectrumWallet(dashElectrumChainConfig(net), privPass, seed, bday, walletDir, log, extIdx, intIdx)
+	return btc.CreateElectrumWallet(dashElectrumChainConfig(net), privPass, seed, bday, walletDir, log, extIdx, intIdx, createWalletOpts...)
 }
 
 // openDashElectrumWallet constructs the shared electrum wallet with Dash's

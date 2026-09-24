@@ -4,12 +4,18 @@
 package dash
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/btc"
 )
+
+// testSeed is a valid-length (256-bit) seed for tests that actually create a
+// wallet; CreateWalletParams.Seed must be 128-512 bits.
+var testSeed = []byte("01234567890123456789012345678901")
 
 func TestParseChainParams(t *testing.T) {
 	tests := []struct {
@@ -27,6 +33,9 @@ func TestParseChainParams(t *testing.T) {
 		if tt.wantErr {
 			if err == nil {
 				t.Errorf("parseChainParams(%v) expected error, got none", tt.net)
+			}
+			if params != nil {
+				t.Errorf("parseChainParams(%v) = %v, want nil params on error", tt.net, params)
 			}
 			continue
 		}
@@ -74,20 +83,56 @@ func TestDriverExists(t *testing.T) {
 	if _, err := d.Exists(walletTypeElectrum, t.TempDir(), nil, util.Network(99)); err == nil {
 		t.Fatal("Exists accepted unknown network")
 	}
-	exists, err := d.Exists(walletTypeElectrum, t.TempDir(), nil, util.Regtest)
+	dataDir := t.TempDir()
+	exists, err := d.Exists(walletTypeElectrum, dataDir, nil, util.Regtest)
 	if err != nil {
 		t.Fatalf("Exists on empty data dir errored: %v", err)
 	}
 	if exists {
 		t.Fatal("Exists reported true for an empty data dir")
 	}
-	// walletTypeSPV shares the same on-disk database.
-	exists, err = d.Exists(walletTypeSPV, t.TempDir(), nil, util.Regtest)
+	// walletTypeSPV shares the same on-disk database, so it must agree with
+	// walletTypeElectrum on the same, still-empty data dir.
+	exists, err = d.Exists(walletTypeSPV, dataDir, nil, util.Regtest)
 	if err != nil {
 		t.Fatalf("Exists on empty data dir errored: %v", err)
 	}
 	if exists {
 		t.Fatal("Exists reported true for an empty data dir")
+	}
+
+	baseParams := &asset.CreateWalletParams{
+		Type:    walletTypeElectrum,
+		Seed:    testSeed,
+		Pass:    []byte("pass"),
+		DataDir: dataDir,
+		Net:     util.Regtest,
+		Logger:  util.Disabled,
+	}
+	if err := d.Create(baseParams); err != nil {
+		t.Fatalf("Create errored: %v", err)
+	}
+	// Pin the directory layout itself, not just that Create and Exists agree
+	// with each other on it.
+	walletDir := filepath.Join(dataDir, RegressionNetParams.Name)
+	if _, err := os.Stat(walletDir); err != nil {
+		t.Fatalf("wallet directory %s not created: %v", walletDir, err)
+	}
+	exists, err = d.Exists(walletTypeElectrum, dataDir, nil, util.Regtest)
+	if err != nil {
+		t.Fatalf("Exists after create errored: %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists reported false after Create")
+	}
+	// walletTypeSPV shares the same on-disk database, so it must now also
+	// report the wallet created as walletTypeElectrum as existing.
+	exists, err = d.Exists(walletTypeSPV, dataDir, nil, util.Regtest)
+	if err != nil {
+		t.Fatalf("Exists(SPV) after electrum create errored: %v", err)
+	}
+	if !exists {
+		t.Fatal("Exists(SPV) reported false after electrum Create, want the shared database to be found")
 	}
 }
 
@@ -146,7 +191,7 @@ func TestNewWallet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWallet(electrum) errored: %v", err)
 	}
-	if w == nil {
+	if nw, ok := w.(*btc.NativeWallet); !ok || nw == nil {
 		t.Fatal("newWallet(electrum) returned a nil wallet")
 	}
 
@@ -156,7 +201,7 @@ func TestNewWallet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newWallet(SPV) errored: %v", err)
 	}
-	if w == nil {
+	if nw, ok := w.(*btc.NativeWallet); !ok || nw == nil {
 		t.Fatal("newWallet(SPV) returned a nil wallet")
 	}
 }
@@ -171,7 +216,7 @@ func TestDriverOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open errored: %v", err)
 	}
-	if w == nil {
+	if nw, ok := w.(*btc.NativeWallet); !ok || nw == nil {
 		t.Fatal("Open returned a nil wallet")
 	}
 

@@ -8,9 +8,11 @@ package eth
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math/big"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/wallet/asset/erc20"
@@ -40,10 +42,15 @@ type fakeEthNode struct {
 	number  uint64 // current head block number; advanced by mine()
 
 	balances map[common.Address]*big.Int
-	nonces   map[common.Address]uint64
-	code     map[common.Address][]byte
-	receipts map[common.Hash]*types.Receipt
-	txs      map[common.Hash]*types.Transaction
+	// nonces is the pending nonce, bumped immediately by SendRawTransaction.
+	// confirmedNonces only catches up to it on mine(), so a caller asking for
+	// the "pending" block tag and one asking for "latest" can actually get
+	// different answers (see GetTransactionCount).
+	nonces          map[common.Address]uint64
+	confirmedNonces map[common.Address]uint64
+	code            map[common.Address][]byte
+	receipts        map[common.Hash]*types.Receipt
+	txs             map[common.Hash]*types.Transaction
 
 	gasPrice *big.Int
 	tipCap   *big.Int
@@ -56,14 +63,15 @@ type fakeEthNode struct {
 
 func newFakeEthNode(chainID *big.Int) *fakeEthNode {
 	return &fakeEthNode{
-		chainID:  chainID,
-		number:   1,
-		balances: make(map[common.Address]*big.Int),
-		nonces:   make(map[common.Address]uint64),
-		code:     make(map[common.Address][]byte),
-		receipts: make(map[common.Hash]*types.Receipt),
-		txs:      make(map[common.Hash]*types.Transaction),
-		gasPrice: big.NewInt(4_000_000_000), // 4 gwei
+		chainID:         chainID,
+		number:          1,
+		balances:        make(map[common.Address]*big.Int),
+		nonces:          make(map[common.Address]uint64),
+		confirmedNonces: make(map[common.Address]uint64),
+		code:            make(map[common.Address][]byte),
+		receipts:        make(map[common.Hash]*types.Receipt),
+		txs:             make(map[common.Hash]*types.Transaction),
+		gasPrice:        big.NewInt(4_000_000_000), // 4 gwei
 		// Above MinGasTipCap (params.go), so suggestTipCap's floor doesn't
 		// mask this value in assertions.
 		tipCap:        big.NewInt(3_000_000_000), // 3 gwei
@@ -112,6 +120,7 @@ func (n *fakeEthNode) mine() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.number++
+	maps.Copy(n.confirmedNonces, n.nonces)
 }
 
 // headNumber, nonceOf and hasTx give tests a locked read of state SendRawTransaction
@@ -135,15 +144,22 @@ func (n *fakeEthNode) hasTx(hash common.Hash) bool {
 }
 
 func (n *fakeEthNode) header() *types.Header {
+	return n.headerForNumber(n.number)
+}
+
+// headerForNumber deterministically derives a header for any block number up
+// to the current head, so headers for past blocks can be recomputed and
+// looked up by hash. Caller holds n.mu.
+func (n *fakeEthNode) headerForNumber(number uint64) *types.Header {
 	// A zero LondonBlock-less config (see newTestMultiRPC) means
 	// eip1559.CalcBaseFee never dereferences BaseFee, so it can stay nil.
 	return &types.Header{
 		ParentHash: common.Hash{},
-		Number:     new(big.Int).SetUint64(n.number),
+		Number:     new(big.Int).SetUint64(number),
 		Difficulty: new(big.Int),
 		GasLimit:   30_000_000,
 		GasUsed:    21_000,
-		Time:       n.number, // monotonic; exact value is unchecked in Simnet mode
+		Time:       number, // monotonic; exact value is unchecked in Simnet mode
 		Extra:      []byte{},
 	}
 }
@@ -164,10 +180,19 @@ func (n *fakeEthNode) GetBlockByNumber(_ context.Context, _ string, _ bool) (*ty
 	return n.header(), nil
 }
 
-func (n *fakeEthNode) GetBlockByHash(_ context.Context, _ common.Hash, _ bool) (*types.Header, error) {
+// GetBlockByHash walks the deterministic headers for every block up to the
+// current head looking for one whose hash matches, returning not-found (nil,
+// nil) for a hash the fake has not produced, e.g. the zero hash.
+func (n *fakeEthNode) GetBlockByHash(_ context.Context, hash common.Hash, _ bool) (*types.Header, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.header(), nil
+	for num := uint64(1); num <= n.number; num++ {
+		hdr := n.headerForNumber(num)
+		if hdr.Hash() == hash {
+			return hdr, nil
+		}
+	}
+	return nil, nil
 }
 
 func (n *fakeEthNode) GetCode(_ context.Context, addr common.Address, _ string) (hexutil.Bytes, error) {
@@ -176,10 +201,19 @@ func (n *fakeEthNode) GetCode(_ context.Context, addr common.Address, _ string) 
 	return n.code[addr], nil
 }
 
-func (n *fakeEthNode) GetTransactionCount(_ context.Context, addr common.Address, _ string) (*hexutil.Uint64, error) {
+// GetTransactionCount answers eth_getTransactionCount. The block tag matters:
+// "pending" reflects every SendRawTransaction so far, while any other tag
+// (e.g. "latest") reflects only what mine() has confirmed.
+func (n *fakeEthNode) GetTransactionCount(_ context.Context, addr common.Address, blockTag string) (*hexutil.Uint64, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	v := hexutil.Uint64(n.nonces[addr])
+	var count uint64
+	if blockTag == "pending" {
+		count = n.nonces[addr]
+	} else {
+		count = n.confirmedNonces[addr]
+	}
+	v := hexutil.Uint64(count)
 	return &v, nil
 }
 
@@ -195,8 +229,14 @@ func (n *fakeEthNode) MaxPriorityFeePerGas(context.Context) (*hexutil.Big, error
 	return (*hexutil.Big)(n.tipCap), nil
 }
 
-func (n *fakeEthNode) EstimateGas(context.Context, map[string]any) (hexutil.Uint64, error) {
-	return hexutil.Uint64(21_000), nil
+// EstimateGas derives its answer from the call's data length instead of
+// returning a flat constant, so a contractor call that packs the wrong
+// method or arguments produces a different, checkable gas figure rather than
+// always passing.
+func (n *fakeEthNode) EstimateGas(_ context.Context, callMsg map[string]any) (hexutil.Uint64, error) {
+	inputHex, _ := callMsg["input"].(string)
+	data, _ := hexutil.Decode(inputHex)
+	return hexutil.Uint64(21_000 + 16*len(data)), nil
 }
 
 // Call answers eth_call. It only understands the ERC20 balanceOf(address)
@@ -348,6 +388,8 @@ func newTestMultiRPC(t *testing.T) *testMultiRPC {
 		creds:     creds,
 		providers: []*provider{p},
 	}
+	m.receipts.cache = make(map[common.Hash]*receiptRecord)
+	m.receipts.lastClean = time.Now()
 
 	return &testMultiRPC{node: node, creds: creds, m: m}
 }
@@ -499,6 +541,37 @@ func TestMultiRPCClientAgainstFakeNode(t *testing.T) {
 		}
 		if confirmed.Sign() != 0 || pending.Sign() != 0 {
 			t.Errorf("nonce = (%s, %s), want (0, 0) before any transaction", confirmed, pending)
+		}
+
+		// A sent-but-unmined transaction must bump the pending nonce without
+		// bumping the confirmed one, or this test can't tell "latest" and
+		// "pending" apart.
+		to := common.HexToAddress("0x3333333333333333333333333333333333333333")
+		txOpts, err := s.m.txOpts(context.Background(), 0, 21000, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.m.sendTransaction(context.Background(), txOpts, &to, nil); err != nil {
+			t.Fatal(err)
+		}
+		confirmed, pending, err = s.m.nonce(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if confirmed.Sign() != 0 {
+			t.Errorf("nonce confirmed = %s, want 0 before the tx is mined", confirmed)
+		}
+		if pending.Uint64() != 1 {
+			t.Errorf("nonce pending = %s, want 1 after one sent transaction", pending)
+		}
+
+		s.node.mine()
+		confirmed, _, err = s.m.nonce(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if confirmed.Uint64() != 1 {
+			t.Errorf("nonce confirmed = %s, want 1 after mine()", confirmed)
 		}
 	})
 

@@ -298,8 +298,14 @@ func TestTokenContractorEstimateTransferGas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gas == 0 {
-		t.Error("estimateTransferGas = 0, want a positive gas estimate")
+	// The fake node's EstimateGas derives its answer from the call data
+	// length (see fakeEthNode.EstimateGas), so this pins the exact packed
+	// size of an ERC20 transfer(address,uint256) call: a 4-byte selector
+	// plus two 32-byte arguments. A wrong method or argument count would
+	// change this value instead of silently passing.
+	const wantGas = 21_000 + 16*(4+32+32)
+	if gas != wantGas {
+		t.Errorf("estimateTransferGas = %d, want %d", gas, wantGas)
 	}
 }
 
