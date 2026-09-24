@@ -860,19 +860,34 @@ func (w *ExchangeWallet) NewAddress() (string, error) {
 
 // AddressUsed checks if an address has been used (received funds).
 func (w *ExchangeWallet) AddressUsed(addr string) (bool, error) {
-	// TODO: Always reporting false is a stub, not a real answer — callers
-	// cannot distinguish a fresh subaddress from one that has received funds.
-	//
-	// wallet2 does not expose per-subaddress usage directly, so implementing
-	// this means resolving addr to its subaddress index (a linear scan, as in
-	// OwnsDepositAddress) and then finding an incoming transfer to that index.
-	//
-	// Nothing external blocks this: the shipped libmonero_wallet2_api_c.so
-	// exports MONERO_TransactionInfo_subaddrIndex and
-	// MONERO_CoinsInfo_subaddrIndex, neither of which cxmr binds yet (it binds
-	// only the subaddrAccount half of each). Bind one in cxmr, then match it
-	// against the resolved index. Both halves are O(n) cgo calls, so cache the
-	// result per index.
+	w.walletMtx.RLock()
+	defer w.walletMtx.RUnlock()
+
+	if w.wallet == nil {
+		return false, errors.New("wallet not connected")
+	}
+
+	// Resolve addr to its subaddress index, as in OwnsDepositAddress.
+	index := -1
+	numAddrs := w.wallet.NumSubaddresses(0)
+	for i := uint64(0); i < numAddrs; i++ {
+		if w.wallet.Address(0, i) == addr {
+			index = int(i)
+			break
+		}
+	}
+	if index < 0 {
+		return false, fmt.Errorf("address %q does not belong to this wallet", addr)
+	}
+
+	// A coin only exists once something has been received to its
+	// subaddress, so a match here (spent or not) means the address has
+	// been used.
+	for _, c := range w.wallet.AllCoins() {
+		if c.SubaddrAcct == 0 && c.SubaddrIndex == uint32(index) {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 

@@ -275,6 +275,40 @@ func TestSimnetSend(t *testing.T) {
 	assertInHistory(t, w, coin.String())
 }
 
+// TestAddressUsed confirms AddressUsed distinguishes a subaddress that has
+// received funds from one that has not, and rejects an address the wallet
+// does not own.
+func TestAddressUsed(t *testing.T) {
+	w, _ := tWallet(t)
+
+	fresh, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+	used, err := w.AddressUsed(fresh)
+	if err != nil {
+		t.Fatalf("AddressUsed on a fresh address: %v", err)
+	}
+	if used {
+		t.Fatalf("fresh address %s reported used before receiving anything", fresh)
+	}
+
+	fundAddress(t, fresh, atomsPerXMR)
+	waitBalance(t, w, atomsPerXMR/2)
+
+	used, err = w.AddressUsed(fresh)
+	if err != nil {
+		t.Fatalf("AddressUsed after funding: %v", err)
+	}
+	if !used {
+		t.Fatalf("funded address %s reported unused", fresh)
+	}
+
+	if _, err := w.AddressUsed(billAddress); err == nil {
+		t.Fatal("no error for an address the wallet does not own")
+	}
+}
+
 // assertPersistedFee checks the meta file recorded a fee at the wallet's
 // current priority, in the neighborhood of wantApprox.
 func assertPersistedFee(t *testing.T, w *ExchangeWallet, wantApprox uint64) {

@@ -189,6 +189,7 @@ extern bool MONERO_CoinsInfo_spent(void* coinsInfo_ptr);
 extern bool MONERO_CoinsInfo_unlocked(void* coinsInfo_ptr);
 extern bool MONERO_CoinsInfo_frozen(void* coinsInfo_ptr);
 extern uint32_t MONERO_CoinsInfo_subaddrAccount(void* coinsInfo_ptr);
+extern uint32_t MONERO_CoinsInfo_subaddrIndex(void* coinsInfo_ptr);
 
 // Utility
 extern void MONERO_free(void* ptr);
@@ -821,11 +822,12 @@ func (w *Wallet) SweepAll(destAddr string, priority Priority, accountIndex uint3
 
 // CoinInfo contains details about a wallet output.
 type CoinInfo struct {
-	Amount      uint64
-	Spent       bool
-	Unlocked    bool
-	Frozen      bool
-	SubaddrAcct uint32
+	Amount       uint64
+	Spent        bool
+	Unlocked     bool
+	Frozen       bool
+	SubaddrAcct  uint32
+	SubaddrIndex uint32
 }
 
 // AllCoins returns info about every output in the wallet.
@@ -841,11 +843,12 @@ func (w *Wallet) AllCoins() []CoinInfo {
 			continue
 		}
 		coins = append(coins, CoinInfo{
-			Amount:      uint64(C.MONERO_CoinsInfo_amount(ci)),
-			Spent:       bool(C.MONERO_CoinsInfo_spent(ci)),
-			Unlocked:    bool(C.MONERO_CoinsInfo_unlocked(ci)),
-			Frozen:      bool(C.MONERO_CoinsInfo_frozen(ci)),
-			SubaddrAcct: uint32(C.MONERO_CoinsInfo_subaddrAccount(ci)),
+			Amount:       uint64(C.MONERO_CoinsInfo_amount(ci)),
+			Spent:        bool(C.MONERO_CoinsInfo_spent(ci)),
+			Unlocked:     bool(C.MONERO_CoinsInfo_unlocked(ci)),
+			Frozen:       bool(C.MONERO_CoinsInfo_frozen(ci)),
+			SubaddrAcct:  uint32(C.MONERO_CoinsInfo_subaddrAccount(ci)),
+			SubaddrIndex: uint32(C.MONERO_CoinsInfo_subaddrIndex(ci)),
 		})
 	}
 	return coins
