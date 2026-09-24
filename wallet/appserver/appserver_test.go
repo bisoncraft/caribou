@@ -1033,6 +1033,18 @@ func TestPasswordCache(t *testing.T) {
 		t.Fatalf("retrieved PW not same: %v - %v", password, retrievedPW)
 	}
 
+	// An unknown auth token must not be echoed into the error: it is a live
+	// session credential and this error can reach the HTTP response and the
+	// exportable app log.
+	const unknownToken = "unknown-auth-token"
+	_, err = s.getCachedPassword(key1, unknownToken)
+	if !errors.Is(err, errNoCachedPW) {
+		t.Fatalf("wrong error for unknown auth token: %v, want errNoCachedPW", err)
+	}
+	if strings.Contains(err.Error(), unknownToken) {
+		t.Fatalf("auth token leaked into error: %v", err)
+	}
+
 	// test new wallet request first without the cookies populated, then with
 	writer := new(TWriter)
 	reader := new(TReader)

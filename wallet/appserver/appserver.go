@@ -1152,8 +1152,10 @@ func (s *AppServer) getCachedPassword(key []byte, authToken string) ([]byte, err
 	cachedPassword, ok := s.cachedPasswords[authToken]
 	s.authMtx.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("cached encrypted password not found for"+
-			" auth token: %v", authToken)
+		// Do not include authToken here: it is a live session credential and
+		// this error can reach the HTTP response body and the exportable
+		// app log (see writeAPIError).
+		return nil, errNoCachedPW
 	}
 
 	crypter, err := encrypt.Deserialize(key, cachedPassword.SerializedCrypter)
@@ -1252,8 +1254,10 @@ func readPost(w http.ResponseWriter, r *http.Request, thing any) bool {
 	}
 	err = json.Unmarshal(body, thing)
 	if err != nil {
-		log.Debugf("failed to unmarshal JSON request: %v", err)
-		log.Debugf("raw request: %s", string(body))
+		// Do not log the raw body: request payloads can carry the app
+		// password or a mnemonic seed, and this log is user-exportable via
+		// /api/exportapplog. err already names the offending field/type.
+		log.Debugf("failed to unmarshal JSON request (%d bytes): %v", len(body), err)
 		http.Error(w, "failed to unmarshal JSON request", http.StatusBadRequest)
 		return false
 	}
