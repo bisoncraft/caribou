@@ -850,6 +850,17 @@ func (w *ExchangeWallet) DepositAddress() (string, error) {
 	addr := w.wallet.Address(0, numAddrs)
 	w.log.Debugf("Created new deposit subaddress %d: %s", numAddrs, addr)
 
+	// Persist the new subaddress count now. Otherwise it only reaches disk on
+	// the next save (sync completion, disconnect or Close), and a process
+	// killed before then reopens without it: OwnsDepositAddress rejects the
+	// stored address and this index gets handed out again. Store pauses the
+	// background refresh while it writes, so it cannot race a refresh. A
+	// failure is not fatal: the subaddress exists in memory, and wallet2's
+	// subaddress lookahead still detects funds sent to it.
+	if !w.wallet.Store("") {
+		w.log.Warnf("Failed to save wallet after creating subaddress %d: %s", numAddrs, w.wallet.ErrorString())
+	}
+
 	return addr, nil
 }
 
