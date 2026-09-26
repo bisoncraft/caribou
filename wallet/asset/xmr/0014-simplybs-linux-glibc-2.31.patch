@@ -1,0 +1,166 @@
+simplybs: build the linux-gnu cross toolchains against glibc 2.31.
+
+A shared library requires the newest glibc symbol version it binds to, and
+that is decided by the headers and libc.so it was linked against -- the
+toolchain's sysroot, not the user's machine. native/ct-tools had crosstool-NG
+build GCC 15.2.0 against glibc 2.42, and the Sep 17 libraries came out needing
+GLIBC_2.38:
+
+    strlcpy strlcat                         2.38  (glibc's own copies now exist,
+                                                   so nothing falls back)
+    __isoc23_strtol ... __isoc23_sscanf     2.38  (g++ defines _GNU_SOURCE, and
+                                                   2.38's headers redirect
+                                                   strtol & co under it)
+    arc4random arc4random_uniform           2.36
+    pthread_*, dlopen & co                  2.34  (libpthread/libdl merge)
+
+which is Ubuntu 24.04, Debian 13, Fedora 38 or newer. Ubuntu 22.04 cannot even
+link against it. glibc 2.31 moves that to Ubuntu 20.04, Debian 11 and RHEL 9.
+libc stays dynamically linked, so what runs is still the user's own patched
+glibc; only the symbol versions the library asks for change.
+
+The crosstool-NG configuration is not in this repository. It is
+platforms/<tuple>/.config in MrCyjaneK/ct-ng-configs, pinned by commit, and
+run.sh copies it into place and runs `ct-ng build` directly. So:
+
+  - swap the glibc-2.42 blob for glibc-2.31. CT_FORBID_DOWNLOAD=y, so the
+    tarball has to be listed here. sha256 9246fe44... is the one crosstool-NG
+    1.28's own packages/glibc/2.31/chksum carries, and the file verified
+    against its GNU signature (Siddhesh Poyarekar, BC7C7372637EC10C).
+
+  - edit the platform .config before run.sh copies it: drop the glibc version
+    choice and every symbol derived from it, select CT_GLIBC_V_2_31, and let
+    `ct-ng olddefconfig` regenerate the rest. The derived symbols
+    (CT_GLIBC_2_34_or_later and so on) are read by crosstool-NG's build
+    scripts, and `ct-ng build` sources .config as-is without re-syncing it, so
+    changing CT_GLIBC_VERSION alone would build 2.31 with 2.42's feature
+    switches. The trailing grep fails the step if olddefconfig ever falls
+    back to its default rather than accepting 2.31.
+
+    Kernel headers stay at 4.20.17; glibc 2.31 needs 3.2 or newer.
+    GCC stays at 15.2.0; crosstool-NG 1.28's kconfig offers 2.31 with it.
+
+  - add make 4.3. glibc 2.31's Makefiles predate GNU make 4.4 and break
+    under it, so for that version crosstool-NG's kconfig selects
+    CT_GLIBC_DEP_MAKE_4_3 and builds make 4.3 as a companion tool. That
+    only shows up once olddefconfig runs, and with CT_FORBID_DOWNLOAD the
+    first attempt died at "make: download failed". sha256 e05fdde4... again
+    matches crosstool-NG's packages/make/4.3/chksum and verified against
+    its GNU signature (Paul D. Smith, B2508A90102F8AE3).
+
+  - patch glibc 2.31 for simplybs' bison. It regenerates intl/plural.c from
+    plural.y at build time with native/bison, which ct-tools depends on and
+    simplybs pins to exactly 3.8, and that bison writes static prototypes for
+    __gettextlex and __gettexterror that clash with plural.y's own:
+
+        intl/plural.c:69:25: error: static declaration of '__gettextlex'
+                             follows non-static declaration
+
+    patches/ct-tools/glibc/2.31/ carries the upstream fix (glibc 2.34+),
+    and the config step selects CT_PATCH_BUNDLED_LOCAL with
+    CT_LOCAL_PATCH_DIR pointing there, after crosstool-NG's own patches.
+    simplybs does not hash files under patches/, so a change to that patch
+    alone will not rebuild the toolchain; bump the native/_ marker too.
+
+    olddefconfig changes nothing else of substance: CT_VERSION reads
+    UNKNOWN, CT_TARGET_VENDOR is dropped (run.sh sets
+    CT_OMIT_TARGET_VENDOR anyway), and older version choices are listed.
+
+  - add a linux-gnu env line to native/_. simplybs hashes a package from its
+    own recipe plus its DIRECT dependencies' recipes, not their hashes. Every
+    target library depends on native/_, not on native/ct-tools, so without
+    this their hashes would not move, and the cached boost, openssl, unbound,
+    zeromq and so on, compiled against 2.42's headers, would be reused and
+    carry their 2.36/2.38 references straight into the new library. Scoped
+    to *-linux-gnu so the Android, Apple and mingw caches are untouched.
+
+The mingw toolchain rebuilds too, since the download list is not filtered by
+host, but its configuration and inputs are unchanged.
+
+Verified on x86_64-linux-gnu (toolchain, every dependency and the library
+rebuilt from these recipes, with 0013): the newest glibc symbol is GLIBC_2.30,
+NEEDED is libdl, libm, libpthread, libc and ld-linux, `ldd -r` resolves every
+symbol on Ubuntu 20.04, Debian 11 and Ubuntu 22.04 where the Sep 17 library
+failed on 64, 64 and 14, and the cxmr Go tests pass on Ubuntu 20.04's glibc
+2.31 itself. aarch64-linux-gnu built the same way comes out identical in
+all the static respects (GLIBC_2.30, same NEEDED, NOW, MONERO_* only), and
+under qemu-user on Ubuntu 20.04 arm64 `ldd -r` resolves every symbol and the
+cxmr Go tests pass. It has not been run on physical arm64 hardware.
+
+--- a/simplybs/packages/native/ct-tools.json
++++ b/simplybs/packages/native/ct-tools.json
+@@ -46,9 +46,9 @@
+         },
+         {
+             "kind": "blob",
+-            "path": "work/.build/tarballs/glibc-2.42.tar.xz",
+-            "sha256": "d1775e32e4628e64ef930f435b67bb63af7599acb6be2b335b9f19f16509f17f",
+-            "url": "http://ftpmirror.gnu.org/gnu/glibc/glibc-2.42.tar.xz"
++            "path": "work/.build/tarballs/glibc-2.31.tar.xz",
++            "sha256": "9246fe44f68feeec8c666bb87973d590ce0137cca145df014c72ec95be9ffd17",
++            "url": "http://ftpmirror.gnu.org/gnu/glibc/glibc-2.31.tar.xz"
+         },
+         {
+             "kind": "blob",
+@@ -76,6 +76,12 @@
+         },
+         {
+             "kind": "blob",
++            "path": "work/.build/tarballs/make-4.3.tar.gz",
++            "sha256": "e05fdde47c5f7ca45cb697e973894ff4f5d79e13b750ed57d7b66d8defc78e19",
++            "url": "http://ftpmirror.gnu.org/gnu/make/make-4.3.tar.gz"
++        },
++        {
++            "kind": "blob",
+             "path": "work/.build/tarballs/mingw-w64-v13.0.0.tar.bz2",
+             "sha256": "5afe822af5c4edbf67daaf45eec61d538f49eef6b19524de64897c6b95828caf",
+             "url": "https://downloads.sourceforge.net/project/mingw-w64/mingw-w64/mingw-w64-release/mingw-w64-v13.0.0.tar.bz2"
+@@ -153,6 +159,7 @@
+             "*:x86_64-w64-mingw32:TOOL_TARGET=x86_64-w64-mingw32"
+         ],
+         "steps": [
++            "*:*-linux-gnu:cd platforms/$TOOL_TARGET && sed -i -E '/^(# )?CT_GLIBC_(V_[0-9_]+|VERSION|[0-9_]+_or_(later|older)|later_than_[0-9_]+)[= ]/d; /^(# )?CT_(PATCH_[A-Z_]+|LOCAL_PATCH_DIR)[= ]/d' .config && echo CT_GLIBC_V_2_31=y >> .config && echo CT_PATCH_BUNDLED_LOCAL=y >> .config && echo \"CT_LOCAL_PATCH_DIR=\\\"$PATCH_DIR/ct-tools\\\"\" >> .config && env -i PATH=$PATH ct-ng olddefconfig && grep -qx 'CT_GLIBC_VERSION=\"2.31\"' .config && grep -qx 'CT_PATCH_ORDER=\"bundled,local\"' .config",
+             "*:{*-linux-gnu,*-w64-mingw32}:env -i PATH=$PATH PREFIX=$(realpath $STAGING_DIR$PREFIX) ./run.sh $TOOL_TARGET",
+             "*:{*-linux-gnu,*-w64-mingw32}:mv $STAGING_DIR/$PREFIX/$TOOL_TARGET/$TOOL_TARGET/* $STAGING_DIR/$PREFIX",
+             "*:{*-linux-gnu,*-w64-mingw32}:rm -rf $STAGING_DIR/$PREFIX/$TOOL_TARGET/$TOOL_TARGET",
+--- a/simplybs/packages/native/_.json
++++ b/simplybs/packages/native/_.json
+@@ -17,7 +17,8 @@
+     "build": {
+         "env": [
+             "*:none:A_=This is a meta-package library that includes c and c++ compiler",
+-            "*:none:B_=All packages included as dependencies (other than bootstrap packages) are copied over to staging dir"
++            "*:none:B_=All packages included as dependencies (other than bootstrap packages) are copied over to staging dir",
++            "*:*-linux-gnu:C_=glibc-2.31"
+         ],
+         "steps": [
+             "*:*:mkdir -p $STAGING_DIR$NATIVEPREFIX",
+--- a/simplybs/patches/ct-tools/glibc/2.31/0100-intl-plural-yylex-declared.patch
++++ b/simplybs/patches/ct-tools/glibc/2.31/0100-intl-plural-yylex-declared.patch
+@@ -0,0 +1,26 @@
++intl: stop bison from declaring yylex and yyerror itself.
++
++glibc 2.31 regenerates intl/plural.c from plural.y at build time, and bison
++3.8 then emits its own static prototypes for __gettextlex and __gettexterror,
++which clash with the ones plural.y provides:
++
++    intl/plural.c:69:25: error: static declaration of '__gettextlex'
++                         follows non-static declaration
++
++Backport of the upstream glibc fix (in 2.34 and later), which defines the two
++macros bison checks before writing those prototypes.
++
++--- a/intl/plural.y
+++++ b/intl/plural.y
++@@ -40,6 +40,11 @@
++ # define __gettextparse PLURAL_PARSE
++ #endif
++ 
+++/* Later we provide those prototypes.  Without these macros, bison may
+++   generate its own prototypes with possible conflicts.  */
+++#define YYLEX_IS_DECLARED
+++#define YYERROR_IS_DECLARED
+++
++ %}
++ %parse-param {struct parse_args *arg}
++ %lex-param {struct parse_args *arg}

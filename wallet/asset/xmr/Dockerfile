@@ -90,7 +90,7 @@ WORKDIR /monero_c
 RUN git checkout 3bfb3856a838f2bf6b729501837bb0295dedf25d \
     && git submodule update --init --recursive --force
 
-# Apply monero_c's own patches, then our two local patches:
+# Apply monero_c's own patches, then our local ones:
 #   0001 adds the C++ Wallet::setAllowMismatchedDaemonVersion API (needed for
 #        regtest/fakechain, where the daemon starts at the latest fork).
 #   0002 exposes it through the wallet2_api_c C wrapper as
@@ -99,6 +99,10 @@ RUN git checkout 3bfb3856a838f2bf6b729501837bb0295dedf25d \
 #        cache mid-build and re-runs configure without the -D that carried it.
 #        Intermittent, and fatal to a target: a RUN below has no retry, so the
 #        layer and its toolchain work are discarded.
+#   0013 links the desktop Linux library with a static libstdc++/libgcc, a
+#        version script that exports only MONERO_*, and -z relro -z now. With
+#        0014 below it is what lets the library load on distributions older
+#        than the toolchain; publish-libs.sh refuses a Linux library without it.
 # Pin the patch commits' dates. apply_patches.sh applies monero_c's patches to
 # the monero submodule with `git am` and `git commit`, so the submodule's HEAD is
 # a commit this build creates -- and a commit hash covers its committer date, so
@@ -118,10 +122,12 @@ ENV GIT_COMMITTER_DATE="2026-05-28T12:56:53+02:00" \
 COPY 0001-add-allow_mismatched_daemon_version.patch /tmp/
 COPY 0002-add-wallet2_api_c-wrapper.patch /tmp/
 COPY 0010-cmake-recover-host-abi.patch /tmp/
+COPY 0013-cmake-linux-static-runtime.patch /tmp/
 RUN ./apply_patches.sh monero \
     && (cd monero && git apply /tmp/0001-add-allow_mismatched_daemon_version.patch) \
     && git apply /tmp/0002-add-wallet2_api_c-wrapper.patch \
-    && git apply /tmp/0010-cmake-recover-host-abi.patch
+    && git apply /tmp/0010-cmake-recover-host-abi.patch \
+    && git apply /tmp/0013-cmake-linux-static-runtime.patch
 
 # macOS only: the .exp symbol-export list gates exported symbols on Darwin.
 # Add our new wrapper symbol so it is visible in the dylib (Linux/Windows export
@@ -154,12 +160,19 @@ RUN sed -i '/_MONERO_Wallet_setTrustedDaemon/a _MONERO_Wallet_setAllowMismatched
 #        path retried, and a dropped connection on the 2.2 GiB llvm-project
 #        clone failed the whole target -- which under `docker build` discards
 #        the layer and throws away that target's toolchain build.
+# And one that changes what gets built rather than how reliably:
+#   0014 builds the two linux-gnu cross toolchains against glibc 2.31 instead
+#        of 2.42, so the library needs GLIBC_2.31 at most (Ubuntu 20.04,
+#        Debian 11, RHEL 9) rather than 2.38. It also rehashes every linux-gnu
+#        target package, which would otherwise be reused from a cache built
+#        against the old headers. publish-libs.sh checks the result.
 COPY 0004-simplybs-retry-mirrors-only.patch /tmp/
 COPY 0005-depends-keep-simplybs-checkout.patch /tmp/
 COPY 0007-simplybs-gnu-origin-fallback.patch /tmp/
 COPY 0009-depends-keep-simplybs-source-cache.patch /tmp/
 COPY 0011-simplybs-recheck-cached-sources.patch /tmp/
 COPY 0012-simplybs-retry-git-clone.patch /tmp/
+COPY 0014-simplybs-linux-glibc-2.31.patch /tmp/
 RUN cd contrib/depends && make simplybs
 
 # Apply them from the repository root with --directory, not from contrib/depends,
@@ -184,7 +197,8 @@ RUN set -eu; \
              0007-simplybs-gnu-origin-fallback \
              0009-depends-keep-simplybs-source-cache \
              0011-simplybs-recheck-cached-sources \
-             0012-simplybs-retry-git-clone; do \
+             0012-simplybs-retry-git-clone \
+             0014-simplybs-linux-glibc-2.31; do \
         out=$(git apply -v --directory=contrib/depends "/tmp/$p.patch" 2>&1) \
             || { echo "$out" >&2; echo "error: $p failed to apply" >&2; exit 1; }; \
         case "$out" in \

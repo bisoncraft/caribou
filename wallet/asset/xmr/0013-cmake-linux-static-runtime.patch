@@ -1,0 +1,89 @@
+monero_c: link desktop Linux with a static C++ runtime and export only the C API.
+
+The linux-gnu library linked libstdc++ and libgcc_s dynamically, so it needed
+the runtime of the GCC that built it. With simplybs' GCC 15 toolchain that is
+GLIBCXX_3.4.32 and CXXABI_1.3.15, which no distribution older than about 2023
+ships, whatever its glibc:
+
+    NEEDED  libstdc++.so.6 libm.so.6 libgcc_s.so.1 libc.so.6 ld-linux-x86-64.so.2
+
+Link it statically, exactly as the mingw targets a few lines up already do.
+Only libc, libm and the loader remain, and the GCC version stops mattering to
+anyone loading the library. (The glibc half of the same problem is the
+toolchain's, not this file's; see 0014.)
+
+A static runtime makes the export list matter. libstdc++'s headers force
+default visibility on namespace std, so template instantiations compiled into
+this library are exported despite -fvisibility=hidden. The Sep 17 build
+exported three:
+
+    std::vector<std::string>::_M_realloc_append<std::string>
+    std::vector<std::string>::_M_realloc_append<std::string const&>
+    std::vector<unsigned long>::_M_realloc_append<unsigned long>
+
+Harmless while the runtime was shared. With a private copy inside, a process
+that also loads the system libstdc++ -- the desktop wallet does, through
+WebKitGTK -- could have the two runtimes binding each other's symbols. The
+existing --exclude-libs,ALL hides archive members but not these, which come
+from our own objects. A version script keeping <FLAVOR>_* global and
+everything else local does. It is generated rather than committed so the same
+file serves monero, wownero and zano, and it deliberately keeps data symbols:
+the enum constants (MONERO_NetworkType_MAINNET and friends) are OBJECTs and
+part of the API.
+
+-z relro -z now: monero's CMakeLists puts its hardening linker flags in
+CMAKE_EXE_LINKER_FLAGS only, so the shared library got partial RELRO with a
+GOT left writable after startup. -z noexecstack is restated because the
+LINK_FLAGS set_target_properties further down replaces the one set for
+linux-gnu above it; target_link_options is used here so these cannot be
+lost the same way.
+
+Not added: -fcf-protection / -mbranch-protection. monero already compiles its
+own code with -fcf-protection=full, but the linker only marks the output IBT/
+SHSTK when every input object is, and the static libstdc++ and the simplybs
+dependencies are not built that way, so the flag here would change nothing.
+
+Verified on x86_64-linux-gnu against the cached Sep 17 toolchain: links
+cleanly (the static libstdc++ in the crosstool-NG toolchain is PIC enough for
+a shared object), NEEDED is libm, libc and ld-linux only, FLAGS_1 has NOW, 358
+exports all MONERO_*, and the xmr and cxmr Go tests pass against it.
+
+--- a/monero_libwallet2_api_c/CMakeLists.txt
++++ b/monero_libwallet2_api_c/CMakeLists.txt
+@@ -71,6 +71,36 @@ if(${HOST_ABI} STREQUAL "x86_64-w64-mingw32" OR ${HOST_ABI} STREQUAL "i686-w64-m
+     target_link_options(${MONERO_FLAVOR}_wallet2_api_c PRIVATE -static-libgcc -static-libstdc++)
+ endif()
+ 
++# Desktop Linux: depend on nothing newer than the toolchain's glibc.
++#
++# With the C++ runtime linked dynamically the library needs the libstdc++ of
++# the GCC that built it (GLIBCXX_3.4.32 for GCC 13+), which no distribution
++# older than about 2023 ships. Link it statically, as mingw already does above,
++# so only libc, libm and the loader remain.
++#
++# The version script then keeps the C API and nothing else. libstdc++ headers
++# force default visibility on the std namespace, so template instantiations
++# compiled into this library are exported despite -fvisibility=hidden, and with
++# a static runtime inside, a host process that also loads the system libstdc++
++# (the desktop wallet does, through WebKitGTK) could bind across the two.
++# --exclude-libs,ALL below hides the archive members but not those.
++#
++# -z relro -z now: monero's own hardening flags go to CMAKE_EXE_LINKER_FLAGS
++# only, so this shared library got partial RELRO with a writable GOT.
++#
++# target_link_options, not LINK_FLAGS: the set_target_properties below replaces
++# LINK_FLAGS wholesale, which is how the -z noexecstack above is already lost.
++if(${HOST_ABI} MATCHES "-linux-gnu")
++    string(TOUPPER "${MONERO_FLAVOR}" FLAVOR_PREFIX)
++    set(VERSION_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/${MONERO_FLAVOR}_wallet2_api_c.map")
++    file(WRITE "${VERSION_SCRIPT}" "{ global: ${FLAVOR_PREFIX}_*; local: *; };\n")
++    target_link_options(${MONERO_FLAVOR}_wallet2_api_c PRIVATE
++        -static-libgcc -static-libstdc++
++        "-Wl,--version-script,${VERSION_SCRIPT}"
++        -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
++    set_property(TARGET ${MONERO_FLAVOR}_wallet2_api_c APPEND PROPERTY LINK_DEPENDS "${VERSION_SCRIPT}")
++endif()
++
+ if (${MONERO_FLAVOR} STREQUAL "monero")
+     target_compile_definitions(${MONERO_FLAVOR}_wallet2_api_c PRIVATE FLAVOR_MONERO)
+     set(BCUR_ENABLED bc-ur)

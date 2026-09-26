@@ -76,6 +76,14 @@ fi
 TAG="${TAG:-xmr-libs-v0.18.4.6-RC2-caribou.1}"
 REPO="${XMR_LIBS_REPO:-bisoncraft/caribou}"
 PIN="3bfb3856a838f2bf6b729501837bb0295dedf25d"   # monero_c, == tag v0.18.4.6-RC2
+# The newest glibc symbol version a Linux library may reference. A library
+# requires the newest version it binds to, and that is set by the glibc the
+# cross toolchain was built against, not by anything in monero: the Sep 17
+# build's toolchain carried glibc 2.42 and the library came out needing 2.38,
+# which nothing older than Ubuntu 24.04 or Debian 13 provides. It lives here,
+# next to the pin, so a toolchain bump that silently raises it fails at publish
+# time rather than at a user's first launch. See check_linux_lib below.
+LINUX_GLIBC_FLOOR="2.31"
 
 dry_run=0
 draft=1
@@ -160,6 +168,81 @@ fi
 if [[ $dry_run -eq 0 ]]; then
     command -v gh >/dev/null 2>&1 || { echo "error: gh not found (needed to upload)." >&2; exit 1; }
     gh auth status >/dev/null 2>&1 || { echo "error: gh is not authenticated." >&2; exit 1; }
+fi
+
+# Refuse a desktop Linux library that will not load where it is meant to, or
+# that exports more than the C API. Every check reads the file with readelf,
+# which handles any ELF machine, so an aarch64 library checks fine on an x86_64
+# host with no cross binutils. Prints each problem and returns nonzero.
+#
+#   - glibc floor: the newest GLIBC_x.y any undefined symbol binds to must not
+#     exceed LINUX_GLIBC_FLOOR.
+#   - no C++ runtime: libstdc++.so.6 or libgcc_s.so.1 in NEEDED means the
+#     library needs the runtime of the GCC that built it, which is newer than
+#     what older distributions ship whatever their glibc.
+#   - exports: every defined, non-local dynamic symbol must start with MONERO_.
+#     Not only FUNC: the enum constants (MONERO_NetworkType_MAINNET and so on)
+#     are OBJECTs and belong to the API too. Anything else is a C++ symbol that
+#     a host process loading the system libstdc++ could bind to by mistake.
+#   - BIND_NOW: without it RELRO is partial and the GOT stays writable.
+check_linux_lib() {
+    local lib="$1" bad=0 newest above needed extra
+    newest="$(readelf -W --dyn-syms "$lib" | grep -oE '@GLIBC_[0-9.]+' | sed 's/@GLIBC_//' | sort -Vu | tail -1)"
+    if [[ -z "$newest" ]]; then
+        echo "  no GLIBC symbol versions found; is this a glibc library?" >&2
+        bad=1
+    elif [[ "$(printf '%s\n%s\n' "$newest" "$LINUX_GLIBC_FLOOR" | sort -V | tail -1)" != "$LINUX_GLIBC_FLOOR" ]]; then
+        above="$(readelf -W --dyn-syms "$lib" | grep -oE '[^ ]+@GLIBC_[0-9.]+' | sort -u \
+            | awk -F'@GLIBC_' '{ print $2, $1 }' | sort -rV \
+            | while read -r v s; do
+                [[ "$(printf '%s\n%s\n' "$v" "$LINUX_GLIBC_FLOOR" | sort -V | tail -1)" == "$LINUX_GLIBC_FLOOR" ]] \
+                    || echo "$s@GLIBC_$v"
+            done)"
+        echo "  needs GLIBC_$newest, above the floor of $LINUX_GLIBC_FLOOR, through" \
+            "$(echo "$above" | wc -l) symbols. Newest first:" >&2
+        echo "$above" | head -8 | sed 's/^/      /' >&2
+        bad=1
+    fi
+    needed="$(readelf -d "$lib" | awk '/\(NEEDED\)/ { gsub(/[][]/, "", $NF); print $NF }' \
+        | grep -E '^lib(stdc\+\+|gcc_s)\.so' || true)"
+    if [[ -n "$needed" ]]; then
+        echo "  links the C++ runtime dynamically: $(echo $needed)" >&2
+        bad=1
+    fi
+    extra="$(readelf -W --dyn-syms "$lib" \
+        | awk '$1 ~ /^[0-9]+:$/ && $5 != "LOCAL" && $7 != "UND" && $8 != "" { sub(/@.*/, "", $8); print $8 }' \
+        | grep -v '^MONERO_' || true)"
+    if [[ -n "$extra" ]]; then
+        echo "  exports $(echo "$extra" | wc -l) symbols outside MONERO_*, e.g.:" >&2
+        echo "$extra" | head -5 | sed 's/^/      /' >&2
+        bad=1
+    fi
+    if ! readelf -d "$lib" | grep -qE '\(FLAGS\).*BIND_NOW|\(FLAGS_1\).*NOW'; then
+        echo "  not linked with -z now, so RELRO is only partial" >&2
+        bad=1
+    fi
+    return $bad
+}
+
+declare -a linux_bad=()
+for platform in "${want[@]}"; do
+    [[ "$platform" == linux-* ]] || continue
+    lib="$here/lib/$platform/libmonero_wallet2_api_c.so"
+    [[ -f "$lib" ]] || continue    # packaging below reports a missing file
+    command -v readelf >/dev/null || {
+        echo "error: readelf not found, and it is needed to check the Linux libraries." >&2
+        echo "  Install binutils, or name only non-Linux platforms." >&2
+        exit 1
+    }
+    echo "==> checking $platform"
+    check_linux_lib "$lib" || linux_bad+=("$platform")
+done
+if [[ ${#linux_bad[@]} -gt 0 ]]; then
+    # Fatal even under --dry-run: the library is wrong whether or not this run
+    # uploads it, and a dry run is how a rebuild gets checked before publishing.
+    echo "error: refusing to package ${linux_bad[*]}. Rebuild with the Linux toolchain" >&2
+    echo "  and link settings the Dockerfile applies (0013, 0014) rather than relax this." >&2
+    exit 1
 fi
 
 work="$(mktemp -d)"
