@@ -13,52 +13,7 @@
 # Written by ./publish-libs.sh. Verify a rebuild against it with:
 #     cd lib && sha256sum -c SHA256SUMS      # shasum -a 256 -c on macOS
 #
-# PLACEHOLDER — NOTHING IS PUBLISHED YET.
-#
-# The hashes below are real: all thirteen files came from one run of the
-# Dockerfile in this directory, at the monero_c pin below, on 2026-09-17. The
-# Android 16 KB LOAD-alignment check passed on all five files it covers and the
-# macOS dylibs carry @executable_path, so each library was checked for the shape
-# the wallet actually needs, not merely produced.
-#
-# The Android platforms now carry both of their files. libc++_shared.so ships
-# beside the wallet library because monero_c links libc++ dynamically and
-# wallet/android/bind.sh wants the NDK copy the library was built with. It is an
-# NDK r28c prebuilt rather than something this build compiles, which is why the
-# same bytes turn up in any tree using that NDK pin.
-#
-# THESE ARE REPRODUCIBLE, WHICH THE PREVIOUS PLACEHOLDER'S WERE NOT. Rebuilding
-# a target from an unchanged tree recompiles and relinks to byte-identical
-# output. That required pinning GIT_COMMITTER_DATE in the Dockerfile: before it,
-# apply_patches.sh committed monero_c's patches into the monero submodule with
-# the current time, the commit hash moved, and monero compiled that hash into
-# its version string — so every build differed. The hashes this file used to
-# carry came from such a build and can never be reproduced.
-#
-# It reproduces only through the Dockerfile. Build paths are compiled into these
-# libraries and the Dockerfile fixes them at /monero_c, while build-darwin.sh and
-# build-ios.sh build under .monero_c-darwin / .monero_c-ios; a Mac-built Apple
-# library will not match these. The thirteen files here all came from one Docker
-# run, so they are mutually consistent. See README.md.
-#
-# Still unchecked: one target of the ten has been built twice, that rebuild
-# reused the cached toolchain and dependencies, and nobody has reproduced these
-# bytes on a second machine. (An earlier note here claimed a double build proved
-# determinism. It did not: that pair reused one prepared checkout, so the patch
-# commit — the thing that actually varied — was never re-made between them.)
-#
-# What is missing is the release. No assets have been uploaded, so this file
-# is not yet an anchor for anything a third party can fetch. Note the absence
-# of a "# Release:" line: fetch-libs.sh reads the tag from that line, so
-# without it the script stops with an explicit message rather than downloading
-# from a release that has no assets. Do not add one by hand — ./publish-libs.sh
-# writes it, together with the hashes of exactly what it uploaded, so the tag
-# and the hashes always describe the same release.
-#
-# So this commit says "these are the bytes this tree produces", not "these are
-# the bytes you will be served". Treat the commit where publish-libs.sh rewrites
-# this file as the point where the anchor starts meaning something.
-#
+# Release: xmr-libs-v0.18.4.6-RC2-caribou.2
 # monero_c pin: 3bfb3856a838f2bf6b729501837bb0295dedf25d
 
 e4cd73c8a3607269f3be58d15c21f78bff112e27f9398d6261e5f965668f8746  android-amd64/libc++_shared.so
@@ -71,6 +26,6 @@ ab4e6c71b96b851de45a8a9bd86369e7dbc2130a44b3b4520564be94847910f2  android-arm64/
 e86d8785186b0569894847c73290d0845ba7899e980aaa88809b69eefc353897  darwin-arm64/libmonero_wallet2_api_c.dylib
 f2642364a8e536ce046fd2abb1f4104ab73008716a7f3e1e071a33cec5eb4827  ios-arm64-simulator/libmonero_wallet2_api_c.dylib
 81a4071b5e8af879ce15603c8ed54ba45b9131ec71869deb9965a329b23230d8  ios-arm64/libmonero_wallet2_api_c.dylib
-3460790dcfe9159c2896cd920c3978d71dcbacb44395f6bd9c24af343a1b7be4  linux-amd64/libmonero_wallet2_api_c.so
-4d88777a60fd18f13e6d1149f29ee2ea7dfd2048e037e95185bdf1f27d488e64  linux-arm64/libmonero_wallet2_api_c.so
+ee8265de0360755722992fb655f0970c79fc618faa5418d9f6ae893143daf796  linux-amd64/libmonero_wallet2_api_c.so
+cde4c06643ff4cf1fb36dfb15a354e75db9975395fe07fd67f72bfa21162b217  linux-arm64/libmonero_wallet2_api_c.so
 8f9961993ef7357012388c99da7f4db707f3ec022669ecadf55afd595862759e  windows-amd64/libmonero_wallet2_api_c.dll
