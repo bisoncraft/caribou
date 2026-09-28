@@ -2,7 +2,7 @@ module github.com/bisoncraft/caribou/wallet/cmd/caribou-desktop
 
 go 1.25.0
 
-replace github.com/bisoncraft/caribou => ../../..
+replace github.com/bisoncraft/caribou => ../../../..
 
 require (
 	fyne.io/systray v1.10.1-0.20230403195833-7dc3c09283d6
