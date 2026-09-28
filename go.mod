@@ -5,12 +5,13 @@ go 1.25.0
 require (
 	decred.org/dcrwallet/v5 v5.0.3
 	filippo.io/edwards25519 v1.2.0
-	fyne.io/systray v1.10.1-0.20220621085403-9a2652634e93
+	fyne.io/systray v1.10.1-0.20230403195833-7dc3c09283d6
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412
 	github.com/athanorlabs/go-dleq v0.1.0
 	github.com/bisoncraft/go-bip39 v1.0.1
 	github.com/bisoncraft/go-monero v0.1.1
 	github.com/bisoncraft/op-geth v0.0.0-20250729074358-3cfe4f15e91c
+	github.com/bisoncraft/webview_go v0.1.0
 	github.com/bitbandi/go-x11 v0.0.0-20171024232457-5fddbc9b2b09
 	github.com/btcsuite/btcd v0.24.2-beta.rc1.0.20240625142744-cc26860b4026
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4
@@ -48,6 +49,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/gcash/bchd v0.19.0
 	github.com/gcash/bchutil v0.0.0-20210113190856-6ea28dff4000
+	github.com/gen2brain/beeep v0.0.0-20240112042604-c7bb2cd88fea
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/gorilla/websocket v1.5.3
 	github.com/haven-protocol-org/monero-go-utils v0.0.0-20211126154105-058b2666f217
@@ -80,11 +82,14 @@ require (
 	github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/google/trillian v1.4.1 // indirect
 	github.com/gorilla/schema v1.1.0 // indirect
 	github.com/h2non/go-is-svg v0.0.0-20160927212452-35e8c4b0612c // indirect
 	github.com/marcopeereboom/sbox v1.1.0 // indirect
+	github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d // indirect
+	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect

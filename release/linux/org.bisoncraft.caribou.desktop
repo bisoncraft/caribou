@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Caribou
+Comment=Non-custodial, multi-chain wallet
+Categories=Office;Finance;
+Icon=caribou
+Exec=caribou-desktop
+Terminal=false
+StartupWMClass=Caribou

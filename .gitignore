@@ -92,3 +92,7 @@ notes/
 # harness test wallet directories
 wallet/asset/btc/regtest/
 wallet/asset/ltc/regtest/
+
+# Release packaging: credentials and build output (release/README.md).
+release/.env/
+release/out/

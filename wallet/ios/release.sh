@@ -40,11 +40,10 @@
 #         export APPLE_ID=you@example.com
 #         read -rs -p "App-specific password: " APPLE_PASSWORD && export APPLE_PASSWORD && echo
 #
-#     Those are the same two variables the desktop build exports for notarytool
-#     (cmd/caribou-desktop/README.md), and the same password works: an
-#     app-specific password is bound to the Apple ID, not to an app or a team.
-#     So a shell already set up to package the desktop app can run this as is.
-#     ASC_APPLE_ID / ASC_APP_PASSWORD override them if the two need to differ.
+#     An app-specific password is bound to the Apple ID, not to an app or a
+#     team. ASC_APPLE_ID / ASC_APP_PASSWORD override them if the two need to
+#     differ. (The desktop release notarizes with the API key of option (A)
+#     instead, via rcodesign; see release/README.md.)
 #
 # (C) Apple ID + the password in the login keychain. Same as (B), but store it
 #     once instead of exporting it, so no shell, history, or transcript ever
@@ -163,13 +162,10 @@ echo "Build number (CFBundleVersion): $build_number"
 if [[ "$upload" == "1" ]]; then
     # Either credential works for the upload; see CREDENTIALS at the top.
     #
-    # The Apple ID pair falls back to APPLE_ID / APPLE_PASSWORD, which is what the
-    # desktop build already exports for notarytool (see
-    # cmd/caribou-desktop/README.md). An app-specific password belongs to the Apple
-    # ID, not to an app or a team, so the desktop notarization password works here
-    # unchanged and a shell already set up to package the desktop app needs nothing
-    # new. ASC_* wins when both are set, so the two can still be pointed at
-    # different accounts.
+    # The Apple ID pair falls back to APPLE_ID / APPLE_PASSWORD. An app-specific
+    # password belongs to the Apple ID, not to an app or a team, so one password
+    # serves every upload. ASC_* wins when both are set, so the two can still be
+    # pointed at different accounts.
     altool_auth=()
     apple_id="${ASC_APPLE_ID:-${APPLE_ID:-}}"
     # Pass the *name* of the variable holding the password, never its value: altool's

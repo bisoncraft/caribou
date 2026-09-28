@@ -1,0 +1,13 @@
+Package: caribou-wallet
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: The Caribou Developers <briantstafford@gmail.com>
+Installed-Size: @SIZE@
+Depends: @DEPENDS@
+Section: misc
+Priority: optional
+Homepage: @HOMEPAGE@
+Description: Non-custodial, multi-chain wallet
+ Caribou is a self-custodial cryptocurrency wallet for Bitcoin, Ethereum,
+ Monero and other chains, with built-in swaps. This package installs the
+ desktop application, caribou-desktop.

@@ -12,7 +12,7 @@ go generate -x ./wallet/appserver/site # no -write
 cd "$dir"
 
 # list of all modules to test
-modules=". /wallet/cmd/caribou-desktop"
+modules="."
 
 # For each module, run go mod tidy, build and run test.
 for m in $modules
@@ -67,6 +67,11 @@ env GORACE="halt_on_error=1" go test -race -short -tags mobile ./wallet/asset/bt
 
 # Print missing Core notification translations.
 go run ./wallet/core/localetest/main.go
+
+# The desktop app is cgo-only (webview, gtk, systray) and every file carries a
+# `cgo` build constraint, so the CGO_ENABLED=0 `go build ./...` below skips it.
+# Build it here, with cgo, so it is still compile-checked.
+go build -o /dev/null ./wallet/cmd/caribou-desktop
 
 # -race in go tests above requires cgo, but disable it for the compile tests below
 export CGO_ENABLED=0

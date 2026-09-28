@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MSI installer for the Windows desktop release, built on Linux by
+  release/package-windows.sh with msitools' wixl:
+
+    cd <stage dir> && wixl -a x64 -D Version=<x.y.z> -D VersionNext=<x.y.z+1> \
+      -D XmrEnabled=1 -o caribou-desktop.msi /release/windows/Caribou.wxs
+
+  wixl implements a subset of the WiX v3 language, which is why this file
+  uses the 2006 schema, fixed component GUIDs and bare file names (sources
+  resolve against the working directory and this file's own directory).
+
+  Version is the numeric ProductVersion. A pre-release and its final release
+  share it, and MajorUpgrade's own upgrade row stops short of the current
+  version, so the extra UpgradeVersion row below covers "exactly Version":
+  wixl ignores IncludeMaximum, and Windows Installer compares three fields,
+  so the half-open range [Version, VersionNext) is that single version.
+  ProductCode is regenerated on every build, which is what lets the
+  same-version upgrade run at all.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Caribou" Manufacturer="The Caribou Developers" Version="$(var.Version)"
+    UpgradeCode="2c62692a-c72e-4182-a8eb-7d1d7e55adc0" Language="1033">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+      Description="Non-custodial, multi-chain wallet" Manufacturer="The Caribou Developers" />
+    <Media Id="1" Cabinet="caribou.cab" EmbedCab="yes" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <Upgrade Id="2c62692a-c72e-4182-a8eb-7d1d7e55adc0">
+      <UpgradeVersion Minimum="$(var.Version)" IncludeMinimum="yes" Maximum="$(var.VersionNext)"
+        Property="WIX_UPGRADE_DETECTED" />
+    </Upgrade>
+
+    <Icon Id="CaribouIcon" SourceFile="caribou.ico" />
+    <Property Id="ARPPRODUCTICON" Value="CaribouIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/bisoncraft/caribou" />
+
+    <!--
+      The app renders in the Edge WebView2 control, whose runtime ships with
+      Windows 11 and with Microsoft Edge on Windows 10. Both registry keys the
+      Evergreen runtime writes are checked; installation stops with a pointer
+      to the download when neither exists.
+    -->
+    <Property Id="WEBVIEW2RUNTIME">
+      <RegistrySearch Id="WebView2Machine" Root="HKLM" Win64="yes"
+        Key="SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        Name="pv" Type="raw" />
+      <RegistrySearch Id="WebView2User" Root="HKCU" Win64="yes"
+        Key="Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        Name="pv" Type="raw" />
+    </Property>
+    <Condition Message="[ProductName] needs the Microsoft Edge WebView2 Runtime, which comes with Windows 11 and Microsoft Edge. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and run this installer again.">Installed OR WEBVIEW2RUNTIME</Condition>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Caribou" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Caribou" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="INSTALLFOLDER">
+      <Component Id="MainExe" Guid="fcdc8c43-a305-42a5-b043-5f91bad2a21a" Win64="yes">
+        <File Id="CaribouDesktopExe" Source="caribou-desktop.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="WebView2Loader" Guid="7e0f0c2a-6d33-4b1e-9d3a-2f5a1c8b9e10" Win64="yes">
+        <File Id="WebView2LoaderDll" Source="WebView2Loader.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="MinGWRuntime" Guid="a1d4f8e2-7b39-4c56-8e1a-5f9d3c6b2e08" Win64="yes">
+        <File Id="WinpthreadDll" Source="libwinpthread-1.dll" KeyPath="yes" />
+      </Component>
+      <?if $(var.XmrEnabled) = 1 ?>
+      <Component Id="XmrLibrary" Guid="b7a3e1f4-5c82-4d19-9a6b-3e8f2d7c1a05" Win64="yes">
+        <File Id="XmrDll" Source="libmonero_wallet2_api_c.dll" KeyPath="yes" />
+      </Component>
+      <?endif?>
+    </DirectoryRef>
+
+    <!--
+      A Start Menu shortcut in a per-machine install needs a per-user key
+      path, which is what the HKCU registry value is for.
+    -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="StartMenuShortcut" Guid="0491370b-681c-490c-9a39-21d6fd6a0a31" Win64="yes">
+        <Shortcut Id="StartMenuEntry" Name="Caribou" Description="Non-custodial, multi-chain wallet"
+          Target="[#CaribouDesktopExe]" WorkingDirectory="INSTALLFOLDER" Icon="CaribouIcon" />
+        <RemoveFolder Id="RemoveProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Bisoncraft\Caribou" Name="installed"
+          Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="Main" Title="Caribou" Level="1">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="WebView2Loader" />
+      <ComponentRef Id="MinGWRuntime" />
+      <?if $(var.XmrEnabled) = 1 ?>
+      <ComponentRef Id="XmrLibrary" />
+      <?endif?>
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Product>
+</Wix>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Hardened Runtime entitlements for the Developer ID (outside the App
+	  Store) distribution. release/package-darwin.sh applies them with
+	  rcodesign to the app and every nested Mach-O (the Electron helpers, the
+	  bundled Go `caribou` binary, and libmonero_wallet2_api_c.dylib).
+
+	  Electron's Chromium/V8 needs a writable+executable JIT region.
+	-->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<!--
+	  The app spawns the bundled Go `caribou` binary, which loads
+	  libmonero_wallet2_api_c.dylib from beside itself in Resources/mac.
+	  Library validation would refuse a library signed by a different
+	  identity, so it is disabled for this bundle.
+	-->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

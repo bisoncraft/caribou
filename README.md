@@ -29,15 +29,22 @@ cd wallet/cmd/caribou && go build -o caribou
 
 ### Desktop wallet
 
+The desktop app needs cgo plus the GTK and WebKitGTK development packages on
+Linux (`libgtk-3-dev libwebkit2gtk-4.1-dev`). Release builds always carry the
+`xmr` tag, which links `libmonero_wallet2_api_c` from
+`wallet/asset/xmr/lib/<platform>/` (see `wallet/asset/xmr/lib/README.md`).
+
 ```bash
-cd wallet/cmd/caribou-desktop && go build -o caribou-desktop
+go build -tags xmr -o caribou-desktop ./wallet/cmd/caribou-desktop
+./caribou-desktop
 ```
 
 ### Cross-platform release packaging
 
-```bash
-./pkg.sh
-```
+Desktop installers for Linux, Windows and macOS are built, signed and
+packaged from a Linux host by the scripts in `release/`; see
+[release/README.md](release/README.md). `./pkg.sh` builds the CLI/server
+tarballs.
 
 ### Tests
 
