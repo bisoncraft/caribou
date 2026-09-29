@@ -67,9 +67,10 @@ RUN if [ "$XMR" = "1" ]; then \
         go build -v -ldflags="-H windowsgui" -o /out/caribou-desktop.exe; \
     fi
 
-# Bundle runtime DLLs that are not present on a stock Windows install.
-RUN cp /tmp/webview2/runtimes/win-x64/native/WebView2Loader.dll /out/ && \
-    cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll /out/
+# Bundle runtime DLLs that are not present on a stock Windows install. The exe
+# needs no MinGW runtime DLL: webview_go links with -static, and the XMR library
+# links its winpthread statically too (wallet/asset/xmr, patch 0015).
+RUN cp /tmp/webview2/runtimes/win-x64/native/WebView2Loader.dll /out/
 
 RUN if [ "$XMR" = "1" ]; then \
         cp /src/wallet/asset/xmr/lib/windows-amd64/libmonero_wallet2_api_c.dll /out/; \

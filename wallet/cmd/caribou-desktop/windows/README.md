@@ -77,7 +77,7 @@ docker build -t caribou-desktop-windows --build-arg XMR=1 -f wallet/cmd/caribou-
 mkdir -p build && docker run --rm caribou-desktop-windows tar -cf - -C /out . | tar -xf - -C ./build
 ```
 
-The `build/` directory will contain `caribou-desktop.exe`, `WebView2Loader.dll`, `libwinpthread-1.dll`, and `libmonero_wallet2_api_c.dll` if XMR was enabled.
+The `build/` directory will contain `caribou-desktop.exe`, `WebView2Loader.dll`, and `libmonero_wallet2_api_c.dll` if XMR was enabled.
 
 ### Packaging the MSI on Windows
 
@@ -95,4 +95,4 @@ windows\pkg-windows.cmd --skip-build --xmr
 
 The resulting installer will be in `build\msi`.
 
-**Note:** The Docker cross-compilation uses MinGW, which produces a binary that depends on `libwinpthread-1.dll`. This DLL is bundled automatically by the Dockerfile. Native Windows builds use MSVC and do not require this DLL.
+**Note:** Neither build needs a MinGW runtime DLL such as `libwinpthread-1.dll`. The exe links it statically, and so does `libmonero_wallet2_api_c.dll` from release `xmr-libs-v0.18.4.6-RC2-caribou.3` on. Older XMR libraries import it and fail to load on a machine without a recent MinGW runtime on `PATH`.

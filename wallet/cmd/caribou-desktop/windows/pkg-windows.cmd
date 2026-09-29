@@ -36,7 +36,7 @@ echo Build completed successfully.
 
 :MSI
 echo Building MSI
-dotnet build --property:Platform=x64 --configuration Release --output build\msi -noWarn:WIX1076 -p:XmrEnabled=%XMR_ENABLED% -p:CrossCompiled=%SKIP_BUILD% windows\windows-msi\Caribou_Installer.wixproj
+dotnet build --property:Platform=x64 --configuration Release --output build\msi -noWarn:WIX1076 -p:XmrEnabled=%XMR_ENABLED% windows\windows-msi\Caribou_Installer.wixproj
 echo MSI built in build\msi
 
 echo Signing %exeFile%
