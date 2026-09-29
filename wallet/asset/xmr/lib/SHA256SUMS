@@ -13,7 +13,7 @@
 # Written by ./publish-libs.sh. Verify a rebuild against it with:
 #     cd lib && sha256sum -c SHA256SUMS      # shasum -a 256 -c on macOS
 #
-# Release: xmr-libs-v0.18.4.6-RC2-caribou.2
+# Release: xmr-libs-v0.18.4.6-RC2-caribou.3
 # monero_c pin: 3bfb3856a838f2bf6b729501837bb0295dedf25d
 
 e4cd73c8a3607269f3be58d15c21f78bff112e27f9398d6261e5f965668f8746  android-amd64/libc++_shared.so
@@ -28,4 +28,4 @@ f2642364a8e536ce046fd2abb1f4104ab73008716a7f3e1e071a33cec5eb4827  ios-arm64-simu
 81a4071b5e8af879ce15603c8ed54ba45b9131ec71869deb9965a329b23230d8  ios-arm64/libmonero_wallet2_api_c.dylib
 ee8265de0360755722992fb655f0970c79fc618faa5418d9f6ae893143daf796  linux-amd64/libmonero_wallet2_api_c.so
 cde4c06643ff4cf1fb36dfb15a354e75db9975395fe07fd67f72bfa21162b217  linux-arm64/libmonero_wallet2_api_c.so
-8f9961993ef7357012388c99da7f4db707f3ec022669ecadf55afd595862759e  windows-amd64/libmonero_wallet2_api_c.dll
+3efc2dc01d5d771fef80ad3a54e21e1f4ad7652d4ad10de45615a66eb3db48f2  windows-amd64/libmonero_wallet2_api_c.dll
