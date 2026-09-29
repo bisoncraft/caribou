@@ -103,6 +103,12 @@ RUN git checkout 3bfb3856a838f2bf6b729501837bb0295dedf25d \
 #        version script that exports only MONERO_*, and -z relro -z now. With
 #        0014 below it is what lets the library load on distributions older
 #        than the toolchain; publish-libs.sh refuses a Linux library without it.
+#   0015 adds -static to the Windows link, so winpthread is linked in rather
+#        than imported from a libwinpthread-1.dll the release does not ship.
+#        publish-libs.sh refuses a Windows library that imports one.
+#   0016 makes monero's util.cpp declare strsafe.h's functions rather than
+#        define them inline, which 0015 needs: the static winpthread brings
+#        libmingwex's own definitions in, and ld rejects the pair.
 # Pin the patch commits' dates. apply_patches.sh applies monero_c's patches to
 # the monero submodule with `git am` and `git commit`, so the submodule's HEAD is
 # a commit this build creates -- and a commit hash covers its committer date, so
@@ -123,11 +129,15 @@ COPY 0001-add-allow_mismatched_daemon_version.patch /tmp/
 COPY 0002-add-wallet2_api_c-wrapper.patch /tmp/
 COPY 0010-cmake-recover-host-abi.patch /tmp/
 COPY 0013-cmake-linux-static-runtime.patch /tmp/
+COPY 0015-cmake-mingw-static-winpthread.patch /tmp/
+COPY 0016-monero-strsafe-declarations-only.patch /tmp/
 RUN ./apply_patches.sh monero \
     && (cd monero && git apply /tmp/0001-add-allow_mismatched_daemon_version.patch) \
+    && (cd monero && git apply /tmp/0016-monero-strsafe-declarations-only.patch) \
     && git apply /tmp/0002-add-wallet2_api_c-wrapper.patch \
     && git apply /tmp/0010-cmake-recover-host-abi.patch \
-    && git apply /tmp/0013-cmake-linux-static-runtime.patch
+    && git apply /tmp/0013-cmake-linux-static-runtime.patch \
+    && git apply /tmp/0015-cmake-mingw-static-winpthread.patch
 
 # macOS only: the .exp symbol-export list gates exported symbols on Darwin.
 # Add our new wrapper symbol so it is visible in the dylib (Linux/Windows export

@@ -1,0 +1,43 @@
+monero_c: link the Windows library's winpthread statically too.
+
+The mingw link options are -static-libgcc -static-libstdc++, which cover libgcc
+and libstdc++ and nothing else. GCC adds -lpthread on its own, and without
+-static it resolves to the winpthread import library, so the Sep 17 DLL
+imports 17 functions from libwinpthread-1.dll:
+
+    DLL Name: libwinpthread-1.dll    pthread_cond_timedwait64, pthread_create, ...
+
+The release does not ship that DLL, and a copy from elsewhere does not do:
+pthread_cond_timedwait64 exists only in recent mingw-w64 (the toolchain that
+built the library has it; Ubuntu's 8.0.0 and 11.0.1 do not). Loaded with
+LoadLibraryEx under a PATH of only C:\Windows\system32 and C:\Windows, the DLL
+fails with 126 (module not found) as released, 127 (procedure not found) with
+Ubuntu 24.04's libwinpthread-1.dll beside it, and loads only with an MSYS2
+UCRT64 copy, which is why it worked on a machine with MSYS2 on PATH.
+
+-static makes every -l that follows prefer the archive, so -lpthread picks up
+libwinpthread.a. The Windows system libraries are unaffected: mingw-w64 ships
+them only as import libraries, so kernel32, ws2_32 and the api-ms-win-crt
+set still come in as imports, and they are all the DLL is left needing.
+publish-libs.sh refuses a Windows library that imports a mingw runtime DLL.
+
+It does not link without 0016: the static winpthread brings libmingwex's
+strsafe.o with it, which collides with the inline copies monero's util.cpp
+emits.
+
+Verified on x86_64-w64-mingw32 in the Sep 17 tree with 0016: the DLL imports
+only Windows system DLLs, still exports the same 358 MONERO_* symbols, and
+under a PATH of only the two Windows directories it loads, creates a wallet
+and runs startRefresh for 5 s.
+
+--- a/monero_libwallet2_api_c/CMakeLists.txt
++++ b/monero_libwallet2_api_c/CMakeLists.txt
+@@ -68,7 +68,7 @@
+ set(EXTERNAL_LIBS_DIR ${CMAKE_SOURCE_DIR}/../contrib/depends/${HOST_ABI})
+ 
+ if(${HOST_ABI} STREQUAL "x86_64-w64-mingw32" OR ${HOST_ABI} STREQUAL "i686-w64-mingw32")
+-    target_link_options(${MONERO_FLAVOR}_wallet2_api_c PRIVATE -static-libgcc -static-libstdc++)
++    target_link_options(${MONERO_FLAVOR}_wallet2_api_c PRIVATE -static-libgcc -static-libstdc++ -static)
+ endif()
+ 
+ # Desktop Linux: depend on nothing newer than the toolchain's glibc.

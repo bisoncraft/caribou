@@ -1,0 +1,42 @@
+monero: declare strsafe.h's functions in util.cpp instead of defining them.
+
+0015 links the Windows library's winpthread statically, and with that the link
+failed:
+
+    libmingwex.a(lib64_libmingwex_a-strsafe.o): in function `StringCchPrintfA':
+    multiple definition of `StringCchPrintfA';
+    libcommon.a(util.cpp.obj): first defined here
+
+mingw-w64 13's libwinpthread.a calls StringCchCopyNA, so its thread.o pulls
+strsafe.o out of libmingwex.a. That object is built with __CRT_STRSAFE_IMPL
+and carries an ordinary definition of every strsafe function. util.cpp includes
+strsafe.h the normal way, which defines the same functions as extern "C"
+__inline, and g++ emits the ones it uses as COMDAT copies. ld accepts any number
+of COMDAT copies but not one alongside a plain definition. Linked against the
+import library, as before, nothing pulled strsafe.o in.
+
+__CRT__NO_INLINE is the header's own switch for this: it turns every function
+into a plain declaration, so util.cpp calls the libmingwex definitions and
+there is only one of each. It is defined around the one include only.
+windows.h, stdio.h and string.h are already in by then and their include guards
+keep them as they were, so nothing else in the file changes.
+
+Only util.cpp includes strsafe.h in monero.
+
+diff --git a/src/common/util.cpp b/src/common/util.cpp
+index f3b39fe43..7fb3282fc 100644
+--- a/src/common/util.cpp
++++ b/src/common/util.cpp
+@@ -75,7 +75,12 @@ using namespace epee;
+ #endif
+   #include <windows.h>
+   #include <shlobj.h>
++  // Declarations only: the definitions come from libmingwex, whose strsafe.o a
++  // static winpthread also pulls in. Inline copies here would be a second
++  // definition of each, which ld rejects.
++  #define __CRT__NO_INLINE
+   #include <strsafe.h>
++  #undef __CRT__NO_INLINE
+ #else 
+   #include <sys/file.h>
+   #include <sys/utsname.h>

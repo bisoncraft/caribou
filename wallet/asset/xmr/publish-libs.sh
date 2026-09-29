@@ -245,6 +245,47 @@ if [[ ${#linux_bad[@]} -gt 0 ]]; then
     exit 1
 fi
 
+# Refuse a Windows library that imports a mingw runtime DLL. No asset ships
+# one, so the DLL would load only where a compatible copy happens to be on PATH
+# (an MSYS2 install, say), and fail with 126 everywhere else. A copy from an
+# older mingw-w64 is no better: the Sep 17 DLL imported pthread_cond_timedwait64,
+# which Ubuntu's libwinpthread-1.dll lacks, and Windows then refuses with 127.
+# Only the imported DLL names are read, so any objdump built with PE support
+# will do; GNU binutils on Linux is.
+check_windows_lib() {
+    local lib="$1" dlls runtime
+    dlls="$(objdump -p "$lib" | awk '/DLL Name:/ { print $3 }')"
+    if [[ -z "$dlls" ]]; then
+        echo "  no imported DLLs read; is this a PE library, and can this objdump read PE?" >&2
+        return 1
+    fi
+    runtime="$(echo "$dlls" | grep -iE '^lib(winpthread|gcc_s|stdc\+\+|ssp|atomic|gomp)[-_]' || true)"
+    if [[ -n "$runtime" ]]; then
+        echo "  imports the mingw runtime: $(echo $runtime)" >&2
+        return 1
+    fi
+    return 0
+}
+
+declare -a windows_bad=()
+for platform in "${want[@]}"; do
+    [[ "$platform" == windows-* ]] || continue
+    lib="$here/lib/$platform/libmonero_wallet2_api_c.dll"
+    [[ -f "$lib" ]] || continue    # packaging below reports a missing file
+    command -v objdump >/dev/null || {
+        echo "error: objdump not found, and it is needed to check the Windows library." >&2
+        echo "  Install binutils, or name only non-Windows platforms." >&2
+        exit 1
+    }
+    echo "==> checking $platform"
+    check_windows_lib "$lib" || windows_bad+=("$platform")
+done
+if [[ ${#windows_bad[@]} -gt 0 ]]; then
+    echo "error: refusing to package ${windows_bad[*]}. Rebuild with the link settings" >&2
+    echo "  the Dockerfile applies (0015) rather than relax this." >&2
+    exit 1
+fi
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/assets"
