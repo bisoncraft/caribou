@@ -836,9 +836,8 @@ func (w *ExchangeWallet) dustTotal() uint64 {
 // This matches the behavior of the previous RPC-based implementation.
 func (w *ExchangeWallet) DepositAddress() (string, error) {
 	w.walletMtx.Lock()
-	defer w.walletMtx.Unlock()
-
 	if w.wallet == nil {
+		w.walletMtx.Unlock()
 		return "", errors.New("wallet not connected")
 	}
 
@@ -849,17 +848,18 @@ func (w *ExchangeWallet) DepositAddress() (string, error) {
 
 	addr := w.wallet.Address(0, numAddrs)
 	w.log.Debugf("Created new deposit subaddress %d: %s", numAddrs, addr)
+	w.walletMtx.Unlock()
 
 	// Persist the new subaddress count now. Otherwise it only reaches disk on
 	// the next save (sync completion, disconnect or Close), and a process
 	// killed before then reopens without it: OwnsDepositAddress rejects the
-	// stored address and this index gets handed out again. Store pauses the
-	// background refresh while it writes, so it cannot race a refresh. A
-	// failure is not fatal: the subaddress exists in memory, and wallet2's
-	// subaddress lookahead still detects funds sent to it.
-	if !w.wallet.Store("") {
-		w.log.Warnf("Failed to save wallet after creating subaddress %d: %s", numAddrs, w.wallet.ErrorString())
-	}
+	// stored address and this index gets handed out again. Store stops and
+	// waits out the background refresh while it writes, so it cannot race a
+	// refresh, but that wait is why it runs after the write lock is released
+	// rather than stalling every other wallet call behind it. A failure is
+	// not fatal: the subaddress exists in memory, and wallet2's subaddress
+	// lookahead still detects funds sent to it.
+	w.saveWallet()
 
 	return addr, nil
 }
