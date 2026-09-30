@@ -677,14 +677,44 @@ func (w *HyperWallet) Rescan(ctx context.Context, _ uint64) error {
 		return fmt.Errorf("fetching ledger updates: %w", err)
 	}
 	sortLedgerUpdates(updates)
+	if err := w.lockedProcessLedgerUpdates(ctx, updates); err != nil {
+		return err
+	}
+	if err := w.advanceLastScannedMS(lastLedgerUpdateTime(updates) + 1); err != nil {
+		return fmt.Errorf("persisting rescan watermark: %w", err)
+	}
+	return nil
+}
+
+// lockedProcessLedgerUpdates processes a batch of already oldest-first-sorted
+// ledger updates under a single ledgerMtx critical section and a single
+// pending-set load — the batching Rescan, scanLedger, and the live WS path
+// (whose per-frame batch, which includes the initial subscription snapshot,
+// is often the largest batch the wallet ever processes) all share, instead of
+// each update paying its own lock and its own full GetPendingTxs() reread.
+//
+// ledgerMtx is held for the whole batch, not just each update: the cached
+// pending snapshot is only correct as long as no concurrent caller can
+// confirm/remove a pending send out from under it between updates.
+//
+// ctx is checked between updates so a large REST catch-up batch (Rescan) can
+// be interrupted.
+func (w *HyperWallet) lockedProcessLedgerUpdates(ctx context.Context, updates []ledgerUpdate) error {
+	if w.txDB == nil {
+		return nil
+	}
+	w.ledgerMtx.Lock()
+	defer w.ledgerMtx.Unlock()
+	pending, err := w.txDB.GetPendingTxs()
+	if err != nil {
+		w.log.Errorf("Getting pending txs: %v", err)
+		pending = nil
+	}
 	for _, u := range updates {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		w.processLedgerUpdate(u)
-	}
-	if err := w.advanceLastScannedMS(lastLedgerUpdateTime(updates) + 1); err != nil {
-		return fmt.Errorf("persisting rescan watermark: %w", err)
+		pending = w.processLedgerUpdateLocked(u, pending)
 	}
 	return nil
 }
@@ -716,7 +746,7 @@ func (w *HyperWallet) tipPoller(ctx context.Context) {
 		user:    w.address,
 		log:     w.log,
 		netDial: netDial,
-		onEvent: w.processLedgerUpdate,
+		onEvent: func(updates []ledgerUpdate) { w.lockedProcessLedgerUpdates(ctx, updates) },
 		onLive: func() {
 			t := time.Now()
 			w.tipMtx.Lock()
@@ -762,8 +792,8 @@ func (w *HyperWallet) scanLedger(ctx context.Context) error {
 	}
 
 	sortLedgerUpdates(updates)
-	for _, u := range updates {
-		w.processLedgerUpdate(u)
+	if err := w.lockedProcessLedgerUpdates(ctx, updates); err != nil {
+		return err
 	}
 
 	if err := w.advanceLastScannedMS(lastLedgerUpdateTime(updates) + 1); err != nil {
@@ -818,31 +848,47 @@ func (w *HyperWallet) advanceLastScannedMS(next int64) error {
 }
 
 // processLedgerUpdate handles a single ledger entry: confirms pending sent txs
-// and stores newly detected incoming transfers. ledgerMtx serializes concurrent
-// callers (Rescan and the WS goroutine) to prevent duplicate confirms/stores.
-func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate) {
+// and stores newly detected incoming transfers. It takes ledgerMtx itself, for
+// callers processing one update in isolation, outside a batch. Every
+// production caller (Rescan, scanLedger, and the live WS path) instead goes
+// through lockedProcessLedgerUpdates, which holds ledgerMtx across a whole
+// batch.
+func (w *HyperWallet) processLedgerUpdate(u ledgerUpdate, pending []*txdb.WalletTransaction) []*txdb.WalletTransaction {
 	w.ledgerMtx.Lock()
 	defer w.ledgerMtx.Unlock()
+	return w.processLedgerUpdateLocked(u, pending)
+}
 
+// processLedgerUpdateLocked is processLedgerUpdate's body, factored out so a
+// batch caller (lockedProcessLedgerUpdates) can hold ledgerMtx across every
+// update in the batch instead of per update. Callers must hold ledgerMtx.
+//
+// pending is the caller's cached pending-send set, threaded through a batch of
+// updates so confirmPendingSend does not reread the whole pending index for
+// every entry; pass nil to have it load fresh (the live WS single-update
+// path, via processLedgerUpdate). The (possibly mutated) set is returned for
+// the next call.
+func (w *HyperWallet) processLedgerUpdateLocked(u ledgerUpdate, pending []*txdb.WalletTransaction) []*txdb.WalletTransaction {
 	if w.txDB == nil {
-		return
+		return pending
 	}
 
 	if u.Delta.Token != "HYPE" {
-		return
+		return pending
 	}
 
 	switch u.Delta.Type {
 	case "send", "spotTransfer", "transfer", "deposit", "internalTransfer":
-		w.handleTransferUpdate(u)
+		return w.handleTransferUpdate(u, pending)
 	}
+	return pending
 }
 
-func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
+func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate, pending []*txdb.WalletTransaction) []*txdb.WalletTransaction {
 	amount, err := parseHYPE(u.Delta.Amount)
 	if err != nil {
 		w.log.Warnf("Parsing ledger amount %q: %v", u.Delta.Amount, err)
-		return
+		return pending
 	}
 
 	isOutgoing := strings.EqualFold(u.Delta.User, w.address)
@@ -850,17 +896,16 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 
 	if isOutgoing {
 		// Try to match and confirm a pending send tx, pairing FIFO.
-		w.confirmPendingSend(u, amount)
-		return
+		return w.confirmPendingSend(u, amount, pending)
 	}
 
 	if !isIncoming {
-		return
+		return pending
 	}
 
 	// Incoming transfer not already in the DB.
 	if existing, _ := w.txDB.GetTx(u.Hash); existing != nil {
-		return
+		return pending
 	}
 
 	w.tipMtx.RLock()
@@ -886,11 +931,11 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 
 	if err := setSubmissionTime(wtx, uint64(time.Now().Unix())); err != nil {
 		w.log.Errorf("Encoding submission time for receive tx %s: %v", u.Hash, err)
-		return
+		return pending
 	}
 	if err := w.txDB.StoreTx(wtx); err != nil {
 		w.log.Errorf("Storing receive tx %s: %v", u.Hash, err)
-		return
+		return pending
 	}
 
 	w.log.Infof("Incoming HYPE transfer %s: %s HYPE from %s", u.Hash, u.Delta.Amount, u.Delta.User)
@@ -898,6 +943,7 @@ func (w *HyperWallet) handleTransferUpdate(u ledgerUpdate) {
 		w.emit.TransactionNote(wtx, true)
 	}
 	w.emitBalanceChange()
+	return pending
 }
 
 // emitBalanceChange fetches the current balance and pushes it to the UI.
@@ -959,16 +1005,25 @@ func (w *HyperWallet) emitBalanceChange() {
 // every path that batches them. Feeding two identical sends' echoes in reverse
 // pairs each with the other's hash.
 // Pending entries older than pendingTTL are expired opportunistically.
-func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
-	pending, err := w.txDB.GetPendingTxs()
-	if err != nil {
-		w.log.Errorf("Getting pending txs: %v", err)
-		return
+//
+// pending is the candidate set; pass nil to have it loaded fresh from the DB.
+// Batch callers thread the same slice through successive calls instead of
+// rereading the whole pending index per update — confirmPendingSend drops
+// expired and matched entries from it and returns the result.
+func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64, pending []*txdb.WalletTransaction) []*txdb.WalletTransaction {
+	if pending == nil {
+		var err error
+		pending, err = w.txDB.GetPendingTxs()
+		if err != nil {
+			w.log.Errorf("Getting pending txs: %v", err)
+			return nil
+		}
 	}
 
 	cutoff := uint64(time.Now().Unix()) - pendingTTL
 	var best, bestNewer *txdb.WalletTransaction
 	var bestNonce, bestNewerNonce uint64
+	kept := pending[:0]
 	for _, p := range pending {
 		d := hyperData(p)
 		subTime := d.SubmissionTime
@@ -980,6 +1035,7 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 			}
 			continue
 		}
+		kept = append(kept, p)
 
 		nonceStr, ok := p.AdditionalData["nonce"]
 		if !ok {
@@ -1023,7 +1079,7 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 		best = bestNewer
 	}
 	if best == nil {
-		return
+		return kept
 	}
 
 	w.tipMtx.RLock()
@@ -1059,7 +1115,7 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	// is never lost if the store fails.
 	if err := w.txDB.StoreTx(confirmed); err != nil {
 		w.log.Errorf("Storing confirmed send tx %s: %v", u.Hash, err)
-		return
+		return kept
 	}
 	if err := w.txDB.RemoveTx(oldID); err != nil {
 		w.log.Warnf("Removing stale pending tx %s: %v", oldID, err)
@@ -1069,6 +1125,16 @@ func (w *HyperWallet) confirmPendingSend(u ledgerUpdate, amount uint64) {
 	if w.emit != nil {
 		w.emit.TransactionNote(confirmed, false)
 	}
+
+	// best is now confirmed; drop it so a later update in the same batch
+	// cannot match it again.
+	for i, p := range kept {
+		if p == best {
+			kept = append(kept[:i], kept[i+1:]...)
+			break
+		}
+	}
+	return kept
 }
 
 func walletTransactionLookupIDs(txID string) []string {

@@ -257,6 +257,46 @@ func TestIgnoreTypes(t *testing.T) {
 	}
 }
 
+// TestGetTxsStopsAtPageFull asserts the scan's page-full early exit actually
+// fires: once the page is full, a *non-ignored* record still waiting behind
+// it must not be decoded and must be reported via MoreAvailable, rather than
+// the scan silently running to the end of the index. A run of ignored-type
+// records alone does not exercise this path — the ignore check returns
+// before the page-full check is ever reached for those rows, so without a
+// returnable record behind the boundary, MoreAvailable would come out false
+// whether or not the early exit works.
+func TestGetTxsStopsAtPageFull(t *testing.T) {
+	db := newTestTxDB(t)
+	n := db.NetworkTxDB(netA)
+
+	// The default scan is reverse (most-recent-first): newSend is visited
+	// first and fills the N:1 page, then 50 ignored Receives, then oldSend —
+	// a second non-ignored record sitting behind the page boundary that the
+	// early exit must leave undecoded.
+	newSend := tx(netA, "newsend", 1, 1000)
+	n.StoreTx(newSend)
+
+	for i := range 50 {
+		recv := tx(netA, "recv"+string(rune('a'+i)), uint64(i+2), uint64(200+i))
+		recv.Type = Receive
+		n.StoreTx(recv)
+	}
+
+	oldSend := tx(netA, "oldsend", 100, 50)
+	n.StoreTx(oldSend)
+
+	resp, err := n.GetTxs(&TxHistoryRequest{N: 1, IgnoreTypes: []TransactionType{Receive}})
+	if err != nil {
+		t.Fatalf("GetTxs: %v", err)
+	}
+	if !eq(ids(resp.Txs), []string{"newsend"}) {
+		t.Fatalf("got = %v", ids(resp.Txs))
+	}
+	if !resp.MoreAvailable {
+		t.Fatalf("MoreAvailable = false, want true: oldsend is a returnable record left behind the page boundary")
+	}
+}
+
 func TestPendingTxs(t *testing.T) {
 	db := newTestTxDB(t)
 	n := db.NetworkTxDB(netA)
