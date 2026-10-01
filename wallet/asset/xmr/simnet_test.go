@@ -89,6 +89,15 @@ func fundAddress(t *testing.T, addr string, atoms uint64) {
 // returning it with a cleanup that closes it.
 func tWallet(t *testing.T) (*ExchangeWallet, context.Context) {
 	t.Helper()
+	w, ctx := tConnectedWallet(t)
+	waitSynced(t, w)
+	return w, ctx
+}
+
+// tConnectedWallet creates a wallet with a birthday of 0 and connects it to
+// the harness daemon, returning while the initial sync may still be running.
+func tConnectedWallet(t *testing.T) (*ExchangeWallet, context.Context) {
+	t.Helper()
 
 	dataDir := t.TempDir()
 	seed := make([]byte, 32)
@@ -140,7 +149,6 @@ func tWallet(t *testing.T) (*ExchangeWallet, context.Context) {
 		xw.Close()
 	})
 
-	waitSynced(t, xw)
 	return xw, ctx
 }
 
@@ -307,6 +315,60 @@ func TestAddressUsed(t *testing.T) {
 	if _, err := w.AddressUsed(billAddress); err == nil {
 		t.Fatal("no error for an address the wallet does not own")
 	}
+}
+
+// TestDepositAddressDuringSync checks that the wallet keeps syncing after a
+// DepositAddress call made while the initial sync is running, which is how
+// core's connect path calls it. DepositAddress stores the wallet, and Store
+// stops the background refresh while it writes and is meant to restart it.
+// If it did not, the wallet would stall short of the tip.
+func TestDepositAddressDuringSync(t *testing.T) {
+	w, _ := tConnectedWallet(t)
+
+	// The harness chain is short, so the sync may already be done. Log which
+	// case ran rather than failing, since both must leave refresh running.
+	if ss, err := w.SyncStatus(); err == nil {
+		t.Logf("calling DepositAddress at block %d of %d (synced: %v)",
+			ss.Blocks, ss.TargetHeight, ss.Synced)
+	}
+	addr, err := w.DepositAddress()
+	if err != nil {
+		t.Fatalf("DepositAddress: %v", err)
+	}
+	waitSynced(t, w)
+
+	// New blocks must still be picked up after the store.
+	ss, err := w.SyncStatus()
+	if err != nil {
+		t.Fatalf("SyncStatus: %v", err)
+	}
+	mineBlocks(t, 2)
+	waitHeight(t, w, ss.Blocks+2)
+
+	owns, err := w.OwnsDepositAddress(addr)
+	if err != nil {
+		t.Fatalf("OwnsDepositAddress: %v", err)
+	}
+	if !owns {
+		t.Fatalf("wallet does not own deposit address %s", addr)
+	}
+}
+
+// waitHeight blocks until the wallet has scanned up to at least height.
+func waitHeight(t *testing.T, w *ExchangeWallet, height uint64) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for time.Now().Before(deadline) {
+		ss, err := w.SyncStatus()
+		if err != nil {
+			t.Fatalf("SyncStatus: %v", err)
+		}
+		if ss.Blocks >= height {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("timed out waiting for wallet height %d", height)
 }
 
 // assertPersistedFee checks the meta file recorded a fee at the wallet's
