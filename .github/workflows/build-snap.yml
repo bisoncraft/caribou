@@ -18,9 +18,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # The tag being built, not the ref the workflow was dispatched from:
+      # fetch-libs.sh reads the XMR library pin from the checkout, and
+      # package-linux.sh verifies the library against the SHA256SUMS at the
+      # tag, so the two must come from the same revision.
       - name: Checkout code
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 #v6.0.0
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
 
       - name: Fetch the pinned XMR library

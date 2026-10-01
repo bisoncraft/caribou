@@ -3,7 +3,7 @@
 # beside the .deb it wraps, so `snapcraft` can be run from that directory
 # (locally with LXD, or in CI with snapcore/action-build).
 name: caribou
-adopt-info: metainfo
+adopt-info: caribou-desktop
 version: '@VERSION@'
 license: BlueOak-1.0.0
 
@@ -52,16 +52,14 @@ apps:
       - dbus-statusnotifier
 
 parts:
-  metainfo:
-    plugin: nil
-    source: .
-    parse-info: [usr/share/metainfo/org.bisoncraft.caribou.metainfo.xml]
-    after: [caribou-desktop]
-
   caribou-desktop:
     plugin: dump
     source: ./@DEB@
     source-type: deb
+    # Summary and description come from the AppStream file in the deb.
+    # parse-info looks only in this part's own source, build and install
+    # directories, so it has to sit on the part that unpacks the deb.
+    parse-info: [usr/share/metainfo/org.bisoncraft.caribou.metainfo.xml]
     override-build: |
       craftctl default
       # The desktop entry's Icon= is a theme name on a normal install; the snap

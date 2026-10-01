@@ -52,8 +52,8 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function main() {
-  app.whenReady().then(() => {
-    if (offerMoveToApplications()) return; // relaunching from the new location
+  app.whenReady().then(async () => {
+    if (await offerMoveToApplications()) return; // relaunching from the new location
     startCaribou();
     Menu.setApplicationMenu(buildMenu());
     setTray();
@@ -98,13 +98,15 @@ function resourcesDir() {
 // offerMoveToApplications handles a launch from outside the Applications
 // folder, typically a double-click on the app inside the mounted dmg: it
 // offers to move the bundle to /Applications, which relaunches the app from
-// there. Returns true when that relaunch is under way.
-function offerMoveToApplications() {
+// there. Resolves to true when that relaunch is under way.
+async function offerMoveToApplications() {
   if (process.env.CARIBOU_RESOURCES || app.isInApplicationsFolder()) return false;
   const state = readState();
   if (state.keepOutsideApplications) return false;
   const bundle = path.resolve(app.getPath("exe"), "..", "..", "..");
-  const { response, checkboxChecked } = dialog.showMessageBoxSync({
+  // The sync variant returns only the button index; the checkbox state
+  // comes with the async one.
+  const { response, checkboxChecked } = await dialog.showMessageBox({
     type: "question",
     message: "Move Caribou to the Applications folder?",
     detail: `Caribou is running from ${path.dirname(bundle)}. Installed apps belong in the Applications folder.`,

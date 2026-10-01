@@ -100,7 +100,7 @@ rerun with --build-image."
 		cp -a "$app" "${staging}/"
 		ln -s /Applications "${staging}/Applications"
 		cp /release/darwin/dmg/background.png "${staging}/.background/"
-		python3 /release/darwin/dmg/dsstore.py --out "${staging}/.DS_Store" --volume "$DMG_VOLUME" \
+		/opt/dmgtools/bin/python /release/darwin/dmg/dsstore.py --out "${staging}/.DS_Store" --volume "$DMG_VOLUME" \
 			--app "$(basename "$app")" --background .background/background.png
 		genisoimage -quiet -no-cache-inodes -D -l -probe -V "$DMG_VOLUME" -no-pad -r -dir-mode 0755 -apple \
 			-o "${adir}/uncompressed.dmg" "$staging"

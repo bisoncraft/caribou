@@ -162,17 +162,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends p7zip-full \
 
 # ds_store writes the Finder layout (.DS_Store) of the macOS dmg and mac_alias
 # the alias record that points Finder at its background image; both are pure
-# Python. Pinned by hash: pip installs the wheel, the sdist hash is listed in
-# case a wheel is ever unavailable.
-RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+# Python. They go in a venv at /opt/dmgtools, since Ubuntu 24.04 refuses pip
+# installs into the system Python (PEP 668). Pinned by hash: pip installs the
+# wheel, the sdist hash is listed in case a wheel is ever unavailable.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
     && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/dmgtools \
     && printf '%s\n' \
         'mac_alias==2.2.3 --hash=sha256:7362b521d2132ef92f606a37abfed5fcd849ceb2f28b6f9743e014b02af92f0d --hash=sha256:1c7fa367687d66979f2ce4d1a8b2716cf1c9fb811741cab3cf3ca356555c2beb' \
         'ds_store==1.3.3 --hash=sha256:b92a371efbf1b4ccce2a04d1ed13fceacc4736c81ba09cf5aefb74c088160a35 --hash=sha256:a7380896ea1e880f7ba07c5cdc24bd1530fb86836cad0be531f3e80e2d721ac5' \
         >/tmp/dmg-requirements.txt \
-    && pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/dmg-requirements.txt \
+    && /opt/dmgtools/bin/pip install --no-cache-dir --no-deps --require-hashes -r /tmp/dmg-requirements.txt \
     && rm /tmp/dmg-requirements.txt \
-    && python3 -c 'import ds_store, mac_alias'
+    && /opt/dmgtools/bin/python -c 'import ds_store, mac_alias'
 
 ########## final ##########
 FROM tools
