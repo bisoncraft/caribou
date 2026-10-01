@@ -129,8 +129,13 @@ export_source() {
 	mkdir -p "$SRC_DIR"
 	if [[ "$DIRTY" == 1 ]]; then
 		# Tracked plus untracked-but-not-ignored files, as they are on disk.
+		# A tracked file deleted from the working tree is still in the index,
+		# so the list is filtered to paths that exist.
 		log "exporting the working tree (dirty) to ${SRC_DIR}"
 		git -C "$REPO_ROOT" ls-files -z --cached --others --exclude-standard |
+			(cd "$REPO_ROOT" && while IFS= read -r -d '' f; do
+				if [[ -e "$f" || -L "$f" ]]; then printf '%s\0' "$f"; fi
+			done) |
 			tar -C "$REPO_ROOT" --null -T - -cf - | tar -x -C "$SRC_DIR"
 		printf '%s (dirty)\n' "$COMMIT" >"${OUT_DIR}/COMMIT"
 		return 0
