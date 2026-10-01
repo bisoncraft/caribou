@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Build, sign and package the Windows desktop release: a signed MSI installer
-# and a signed portable zip, both amd64, both carrying the XMR library.
+# Build, sign and package the Windows desktop release: a signed setup.exe
+# installer and a signed portable zip, both amd64, both carrying the XMR
+# library.
 #
 #   release/package-windows.sh v1.2.0
 #
 # The .exe is cross-compiled with MinGW inside the caribou-builder image, the
-# MSI is built there with msitools' wixl from release/windows/Caribou.wxs, and
-# both are Authenticode-signed with jsign (Azure Artifact Signing, or a local
-# PKCS#12 for testing). Order matters: the .exe and DLLs are signed before the
-# MSI is built so the installer carries signed files, then the MSI itself is
-# signed.
+# installer is built there with NSIS from release/windows/caribou.nsi, and
+# everything is Authenticode-signed with jsign (Azure Artifact Signing, or a
+# local PKCS#12 for testing). Order matters: the .exe and DLLs are signed
+# before the installer is built so it carries signed files; makensis then
+# signs the uninstaller it generates and finally the installer itself,
+# through `--stage sign`.
 #
-# Nothing on Linux runs the Windows Installer ICE validators, so an install
-# test on a Windows machine is part of every release.
+# Nothing here runs the installer, so an install test on a Windows machine is
+# part of every release.
 
 source "$(dirname "$0")/common.sh"
 
@@ -74,24 +76,64 @@ stage_build() {
 	log "building ${base}.zip"
 	(cd "$stage" && zip -q -X -r "${out}/${base}.zip" .)
 
-	log "building ${base}.msi"
-	# wixl resolves File sources against the working directory and the .wxs
-	# file's own directory (where caribou.ico lives); it rejects absolute paths.
-	# It also leaves an Icon/ scratch directory in the working directory, which
-	# is why the zip above is made first. VersionNext bounds the same-version
-	# upgrade range, see Caribou.wxs.
-	local next
-	next="${VERSION_NUM%.*}.$((${VERSION_NUM##*.} + 1))"
-	(cd "$stage" && wixl -a x64 \
-		-D "Version=${VERSION_NUM}" -D "VersionNext=${next}" \
-		-D "XmrEnabled=$(with_xmr && echo 1 || echo 0)" \
-		-o "${out}/${base}.msi" /release/windows/Caribou.wxs)
-	sign_windows_file "${out}/${base}.msi"
-	verify_windows_file "${out}/${base}.msi"
-	rm -rf "$stage"
+	log "building ${base}-setup.exe"
+	local nsis=(-V2 -NOCD -DVERSION="$VERSION" -DVERSION_NUM="$VERSION_NUM"
+		-DOUTFILE="${out}/${base}-setup.exe" -DICON="${PWD}/wallet/cmd/${APP}/src/caribou.ico")
+	with_xmr && nsis+=(-DXMR)
+	[[ "$NO_SIGN" == 1 ]] || nsis+=(-DSIGN_CMD="bash /release/package-windows.sh --stage sign")
+
+	# makensis packs its own plug-in DLLs into the installer, which unpacks
+	# them to a temporary directory and loads them while it runs. Sign copies
+	# of the ones caribou.nsi pulls in (the Modern UI pages use both) and put
+	# them first on the plug-in path, where they win over the stock ones.
+	# audit_installer fails the build if an unsigned one is ever packed.
+	local plugins="${out}/nsis-plugins" p
+	mkdir -p "$plugins"
+	for p in nsDialogs System; do
+		cp "/usr/share/nsis/Plugins/x86-unicode/${p}.dll" "$plugins/"
+		sign_windows_file "${plugins}/${p}.dll"
+		verify_windows_file "${plugins}/${p}.dll"
+	done
+	nsis+=(-X"!addplugindir /x86-unicode ${plugins}")
+
+	(cd "$stage" && makensis "${nsis[@]}" /release/windows/caribou.nsi)
+	audit_installer "${out}/${base}-setup.exe"
+	rm -rf "$stage" "$plugins"
 
 	log "artifacts:"
 	ls -1 "$out" >&2
+}
+
+# audit_installer <setup.exe>: check that every PE file the installer carries
+# is signed. 7-Zip unpacks the payload and the plug-ins; the uninstaller is
+# written at build time and was signed and verified by SIGN_CMD already.
+# WebView2Loader.dll carries Microsoft's signature, not ours, so it must be
+# byte-identical to the checksum-pinned copy in the image instead.
+audit_installer() {
+	[[ "$NO_SIGN" == 1 || -z "${ACS_ACCOUNT:-}" ]] && return 0
+	local setup="$1" dir f n=0
+	dir="$(mktemp -d)"
+	7z x -y -o"$dir" "$setup" >/dev/null
+	while IFS= read -r -d '' f; do
+		[[ "$(head -c2 "$f")" == MZ ]] || continue
+		if [[ "$(basename "$f")" == WebView2Loader.dll ]]; then
+			cmp -s "$f" /opt/webview2/runtimes/win-x64/native/WebView2Loader.dll ||
+				die "installer audit: WebView2Loader.dll is not the pinned copy"
+		else
+			verify_windows_file "$f"
+		fi
+		n=$((n + 1))
+	done < <(find "$dir" -type f -print0)
+	rm -rf "$dir"
+	log "installer audit: all ${n} PE files in $(basename "$setup") are signed"
+}
+
+# stage_sign <file>: sign and verify one file. makensis runs this on the
+# uninstaller it generates and on the finished installer (SIGN_CMD in
+# caribou.nsi); the signing credentials reach it through the environment.
+stage_sign() {
+	sign_windows_file "$1"
+	verify_windows_file "$1"
 }
 
 # ---------------------------------------------------------------------------
@@ -107,7 +149,7 @@ host_main() {
 }
 
 if [[ "${1:-}" == "--stage" ]]; then
-	"stage_$2"
+	"stage_$2" "${@:3}"
 else
 	host_main "$@"
 fi

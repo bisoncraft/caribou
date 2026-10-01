@@ -82,7 +82,7 @@ parse_common_args() {
 
 # resolve_version derives every version form from the tag or ref:
 #   VERSION      1.2.0-rc1            full semver, stamped into the binaries
-#   VERSION_NUM  1.2.0                numeric core (MSI ProductVersion, file version)
+#   VERSION_NUM  1.2.0                numeric core (Windows file and product version)
 #   PRERELEASE   rc1                  empty for a final release
 #   VERSION_DEB  1.2.0~rc1            dpkg orders ~rc1 before the final 1.2.0
 #   COMMIT       full sha of what is exported
@@ -222,15 +222,19 @@ build_image() {
 	# CARIBOU_XCODE_DIR points it at another checkout's staging directory, so
 	# a worktree can build against a xip staged once in the main clone.
 	local ctx="${CARIBOU_XCODE_DIR:-${REPO_ROOT}/wallet/asset/xmr/xcode}"
+	# A rebuild under the same tag leaves the previous image untagged, where
+	# the label listing below no longer finds it, so note it first.
+	local previous
+	previous="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
 	log "building docker image ${IMAGE} on ubuntu:${BASE} (Xcode staging dir: ${ctx})"
 	docker build -f "${RELEASE_DIR}/Dockerfile" -t "$IMAGE" \
 		--build-arg "UBUNTU=${BASE}" --label caribou.builder=1 --label "caribou.base=${BASE}" "$ctx"
 	# One builder image at a time: remove the ones these scripts built on
-	# other bases, only after the new one exists. The label keeps every
-	# other image on the machine out of reach.
+	# other bases, and the one this build replaced, only after the new one
+	# exists. The label keeps every other image on the machine out of reach.
 	local id other
 	id="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
-	for other in $(docker image ls -q --no-trunc --filter label=caribou.builder=1 | sort -u); do
+	for other in $(printf '%s\n' "$previous" $(docker image ls -q --no-trunc --filter label=caribou.builder=1) | grep . | sort -u); do
 		[[ "$other" == "$id" ]] && continue
 		log "removing superseded builder image ${other#sha256:}"
 		docker rmi -f "$other" >/dev/null || warn "could not remove ${other}"
@@ -292,7 +296,7 @@ build_ui() {
 	(cd wallet/appserver && npm ci --no-audit --no-fund && npm run build --workspace=newui)
 }
 
-# sign_windows_file <file>: Authenticode-sign a PE or MSI with jsign. Azure
+# sign_windows_file <file>: Authenticode-sign a PE file with jsign. Azure
 # Artifact Signing (formerly Trusted Signing, which is still jsign's name for
 # the backend) when the ACS_* variables are set, otherwise a local PKCS#12
 # keystore (self-signed certificates for pipeline testing). Every signature is

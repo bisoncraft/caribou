@@ -56,7 +56,7 @@ dist="${OUT_DIR}/dist"
 rm -rf "$dist"
 mkdir -p "$dist"
 shopt -s nullglob
-cp "${OUT_DIR}"/linux/*.{deb,tar.gz} "${OUT_DIR}"/windows/*.{msi,zip} "${OUT_DIR}"/darwin/*.{dmg,zip} "$dist/" 2>/dev/null || true
+cp "${OUT_DIR}"/linux/*.{deb,tar.gz} "${OUT_DIR}"/windows/*.{exe,zip} "${OUT_DIR}"/darwin/*.{dmg,zip} "$dist/" 2>/dev/null || true
 shopt -u nullglob
 [[ -n "$(ls -A "$dist")" ]] || die "no artifacts found under ${OUT_DIR}"
 

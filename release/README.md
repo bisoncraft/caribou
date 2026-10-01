@@ -6,7 +6,7 @@ takes a release tag and produces installers with no further input:
 
 ```bash
 release/package-linux.sh   v1.2.0   # .deb + .tar.gz (amd64)
-release/package-windows.sh v1.2.0   # signed .msi + .zip (amd64)
+release/package-windows.sh v1.2.0   # signed setup.exe + .zip (amd64)
 release/package-darwin.sh  v1.2.0   # notarized .dmg (x86_64 and arm64)
 release/release.sh         v1.2.0   # all three, SHA256SUMS + GPG signature, draft GitHub release
 ```
@@ -19,7 +19,8 @@ the tag being built before they are linked.
 ## How a build runs
 
 1. The tag is resolved to a commit and every version form is derived from it
-   (semver for the binaries, `~` form for dpkg, numeric for MSI). `--ref
+   (semver for the binaries, `~` form for dpkg, numeric for Windows version
+   resources). `--ref
    <commit>` builds something other than the tag: with a tag, the commit is
    recorded as build metadata; without one, the version is
    `<nearest tag>-dev.<sha>`.
@@ -39,7 +40,7 @@ across runs. `release/out` and `release/.env` are gitignored.
 
 `release/Dockerfile` builds `caribou-builder` on Ubuntu 22.04, which fixes
 the Linux binary's glibc and WebKitGTK floor at Ubuntu 22.04 / Debian 12. It
-holds Go, Node, MinGW, msitools, rcodesign, jsign, osslsigncode, genisoimage
+holds Go, Node, MinGW, NSIS, rcodesign, jsign, osslsigncode, genisoimage
 and libdmg-hfsplus, and an osxcross toolchain when a macOS SDK is available.
 Every download is pinned by checksum in the Dockerfile.
 
@@ -98,15 +99,22 @@ as a smoke test. The tarball holds the binary and library side by side for
 other distributions.
 
 **Windows.** The `.exe` is cross-compiled with MinGW and stamped with icon
-and version resources by go-winres. msitools' `wixl` builds the MSI from
-`release/windows/Caribou.wxs` (WiX v3 dialect, the subset wixl implements);
-nothing on Linux runs the Windows Installer ICE validators, so install the
-MSI on a Windows machine before publishing. The MSI refuses to install where
-the Edge WebView2 Runtime is absent (it ships with Windows 11 and Microsoft
-Edge) and points at the download. The `.exe`, the DLLs and then the MSI are
-each Authenticode-signed with an RFC 3161 timestamp, and each signature is
-verified with osslsigncode against the pinned Microsoft Identity
-Verification root in `release/windows/` before the build is accepted.
+and version resources by go-winres. NSIS builds the installer,
+`<name>-setup.exe`, from `release/windows/caribou.nsi`: a per-machine install
+into Program Files with a Start Menu shortcut, an Add/Remove Programs entry
+and an uninstaller. Its last page offers to open Caribou, as the signed-in
+user rather than with the installer's administrator token, and to create a
+desktop shortcut. Nothing on Linux runs the installer, so install it on a
+Windows machine before publishing. It refuses to install where the Edge
+WebView2 Runtime is absent (it ships with Windows 11 and Microsoft Edge) and
+points at the download. The `.exe` and the DLLs, the NSIS plug-in DLLs the
+installer loads while it runs, then the generated uninstaller, then the
+installer are each Authenticode-signed with an RFC 3161 timestamp, and each
+signature is verified with osslsigncode against the pinned Microsoft
+Identity Verification root in `release/windows/`. A last check unpacks the
+finished installer and fails the build if any PE file in it is unsigned
+(`WebView2Loader.dll`, signed by Microsoft, must instead match the pinned
+copy).
 
 **macOS.** Electron wraps the CLI `caribou` binary; `release/darwin/electron`
 holds the shell. The Go binary and XMR dylib are signed first, then the
@@ -131,5 +139,5 @@ Rosetta.
 3. `release/release.sh vX.Y.Z --publish` creates a draft GitHub release with
    every artifact, `SHA256SUMS` and `SHA256SUMS.asc`.
 4. Install-test each artifact: the `.deb` in a clean container or VM, the
-   MSI on Windows, both dmgs on a Mac.
+   installer on Windows, both dmgs on a Mac.
 5. Publish the draft.

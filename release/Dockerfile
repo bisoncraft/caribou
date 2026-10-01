@@ -11,9 +11,10 @@
 # targets. Every download below is pinned by version and checksum; Go modules
 # and npm packages are verified by their own lockfiles and sumdb.
 #
-# The MSI is built with msitools' wixl (a distro package) rather than the WiX
-# Toolset: WiX's own CLI declares its behavior undefined off Windows and then
-# rejects ordinary directory names there.
+# The Windows installer is built with NSIS (a distro package): makensis runs
+# natively on Linux, and its Modern UI pages carry the installer options. The
+# WiX Toolset declares its behavior undefined off Windows, and msitools' wixl,
+# which does run here, has no support for installer dialogs.
 
 ARG UBUNTU=22.04
 
@@ -44,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev uuid-dev libssl-dev zlib1g-dev liblzma-dev libbz2-dev \
     libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev \
     gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-tools \
-    genisoimage osslsigncode default-jre-headless dpkg-dev msitools wixl \
+    genisoimage osslsigncode default-jre-headless dpkg-dev nsis \
     && rm -rf /var/lib/apt/lists/* \
     && for t in clang clang++ llvm-config lld ld.lld llvm-ar llvm-nm llvm-objdump; do \
         update-alternatives --install /usr/bin/$t $t /usr/bin/$t-${LLVM_VERSION} 100; done \
@@ -121,8 +122,8 @@ RUN curl -fsSL "https://github.com/indygreg/apple-platform-rs/releases/download/
     && install -m755 /tmp/apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl/rcodesign /usr/local/bin/rcodesign \
     && rm -rf /tmp/rc.tgz /tmp/apple-codesign-*
 
-# jsign: Authenticode signing of .exe and .msi, with Azure Trusted Signing
-# and PKCS#12 keystores among its backends.
+# jsign: Authenticode signing of the .exe, the DLLs and the installer, with
+# Azure Trusted Signing and PKCS#12 keystores among its backends.
 ARG JSIGN_VERSION=7.5
 ARG JSIGN_SHA256=602a51c3545a6dc4fb99bd2ea7152b26d1345916d0c93ddfbd5936cb735af91c
 RUN curl -fsSL "https://github.com/ebourg/jsign/releases/download/${JSIGN_VERSION}/jsign-${JSIGN_VERSION}.jar" -o /usr/local/lib/jsign.jar \
@@ -151,6 +152,12 @@ RUN git clone https://github.com/fanquake/libdmg-hfsplus.git /tmp/libdmg \
     && make -C /tmp/libdmg/build/dmg -j"$(nproc)" >/dev/null \
     && install -m755 /tmp/libdmg/build/dmg/dmg /usr/local/bin/dmg \
     && rm -rf /tmp/libdmg
+
+# 7-Zip unpacks the finished Windows installer so the build can check that
+# every executable file it carries is signed. Installed in its own late layer
+# so adding it does not rebuild the osxcross stage.
+RUN apt-get update && apt-get install -y --no-install-recommends p7zip-full \
+    && rm -rf /var/lib/apt/lists/*
 
 ########## final ##########
 FROM tools

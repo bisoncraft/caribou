@@ -25,7 +25,7 @@ tooling, credentials and per-platform notes.
 
 - [ ] Linux: `release/package-linux.sh vX.Y.Z --test-install` installs the
       `.deb` in a clean container; launch the installed app on a desktop.
-- [ ] Windows: install the `.msi` on a Windows machine, confirm the
+- [ ] Windows: run the `-setup.exe` on a Windows machine, confirm the
       signature in the file's Properties, launch, then uninstall.
 - [ ] macOS: on an Apple Silicon Mac, open both `.dmg` files (the x86_64
       build under Rosetta), confirm Gatekeeper accepts them, launch; find an
