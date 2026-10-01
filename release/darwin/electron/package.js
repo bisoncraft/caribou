@@ -48,6 +48,9 @@ async function lockDown(buildPath) {
     [FuseV1Options.EnableNodeCliInspectArguments]: false,
     [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
     [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    // The window loads the appserver over http; nothing needs file:// to
+    // behave like a privileged origin.
+    [FuseV1Options.GrantFileProtocolExtraPrivileges]: false,
   });
 }
 

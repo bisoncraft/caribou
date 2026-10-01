@@ -16,8 +16,10 @@ const {
   shell,
   nativeImage,
   dialog,
+  screen,
 } = require("electron");
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 const readline = require("node:readline");
 
@@ -31,6 +33,15 @@ let webURL = ""; // set once the appserver reports it is listening
 let network = ""; // mainnet/testnet/simnet, from the startup log line
 let shuttingDown = false;
 
+// The desktop UI's layout floor is 1024 px wide.
+const minWidth = 1024;
+const minHeight = 600;
+
+// Chromium's profile (cookies, local storage, caches) gets a directory of its
+// own. The default, ~/Library/Application Support/Caribou, is the Go wallet's
+// data directory. Set before the single-instance lock, which lives there.
+app.setPath("userData", path.join(app.getPath("appData"), "Caribou", "electron"));
+
 // A second launch focuses the running instance instead of starting another
 // wallet process.
 if (!app.requestSingleInstanceLock()) {
@@ -41,9 +52,9 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function main() {
-  startCaribou();
-
   app.whenReady().then(() => {
+    if (offerMoveToApplications()) return; // relaunching from the new location
+    startCaribou();
     Menu.setApplicationMenu(buildMenu());
     setTray();
     app.dock.setMenu(
@@ -58,6 +69,9 @@ function main() {
   app.on("window-all-closed", () => {});
 
   app.on("before-quit", (e) => {
+    // The app ends with app.exit once caribou is down, which destroys the
+    // window without a close event.
+    if (mainWindow && !mainWindow.isDestroyed()) saveBounds(mainWindow.getNormalBounds());
     if (caribou && caribou.exitCode === null && !shuttingDown) {
       e.preventDefault();
       shuttingDown = true;
@@ -79,6 +93,48 @@ function main() {
 // CARIBOU_RESOURCES names when running unpackaged from a checkout.
 function resourcesDir() {
   return process.env.CARIBOU_RESOURCES || path.join(process.resourcesPath, "mac");
+}
+
+// offerMoveToApplications handles a launch from outside the Applications
+// folder, typically a double-click on the app inside the mounted dmg: it
+// offers to move the bundle to /Applications, which relaunches the app from
+// there. Returns true when that relaunch is under way.
+function offerMoveToApplications() {
+  if (process.env.CARIBOU_RESOURCES || app.isInApplicationsFolder()) return false;
+  const state = readState();
+  if (state.keepOutsideApplications) return false;
+  const bundle = path.resolve(app.getPath("exe"), "..", "..", "..");
+  const { response, checkboxChecked } = dialog.showMessageBoxSync({
+    type: "question",
+    message: "Move Caribou to the Applications folder?",
+    detail: `Caribou is running from ${path.dirname(bundle)}. Installed apps belong in the Applications folder.`,
+    buttons: ["Move to Applications", "Not Now"],
+    defaultId: 0,
+    cancelId: 1,
+    checkboxLabel: "Don't ask again",
+  });
+  if (checkboxChecked) writeState({ ...state, keepOutsideApplications: true });
+  if (response !== 0) return false;
+  return app.moveToApplicationsFolder({
+    conflictHandler: (type) => {
+      if (type === "existsAndRunning") {
+        dialog.showErrorBox(
+          "Caribou is already running",
+          "Quit the Caribou in the Applications folder, then try again.",
+        );
+        return false;
+      }
+      const replace = dialog.showMessageBoxSync({
+        type: "question",
+        message: "Replace the Caribou already in the Applications folder?",
+        detail: "The existing copy goes to the Trash. Wallet data is kept separately and is not affected.",
+        buttons: ["Replace", "Cancel"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      return replace === 0;
+    },
+  });
 }
 
 function startCaribou() {
@@ -124,12 +180,11 @@ function showWindow() {
     return;
   }
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 1024,
-    minHeight: 600,
+    ...initialBounds(),
+    minWidth,
+    minHeight,
     show: false,
-    backgroundColor: "#0b1218",
+    backgroundColor: "#17130d", // the UI's default (warm) theme background
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -138,6 +193,7 @@ function showWindow() {
     },
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.on("close", () => saveBounds(mainWindow.getNormalBounds()));
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -146,7 +202,68 @@ function showWindow() {
     openExternal(url);
     return { action: "deny" };
   });
+  // Navigation stays on the appserver. Anything else goes to the default
+  // browser rather than replacing the wallet UI in a window with no back
+  // button.
+  mainWindow.webContents.on("will-navigate", (e) => {
+    if (new URL(e.url).origin !== new URL(webURL).origin) {
+      e.preventDefault();
+      openExternal(e.url);
+    }
+  });
   mainWindow.loadURL(webURL);
+}
+
+// The shell's own state (window bounds, dismissed prompts) lives in one JSON
+// file under userData.
+function stateFile() {
+  return path.join(app.getPath("userData"), "state.json");
+}
+
+function readState() {
+  try {
+    return JSON.parse(fs.readFileSync(stateFile(), "utf8"));
+  } catch {
+    return {}; // first run, or an unreadable file: start over
+  }
+}
+
+function writeState(state) {
+  try {
+    fs.mkdirSync(path.dirname(stateFile()), { recursive: true });
+    fs.writeFileSync(stateFile(), JSON.stringify(state));
+  } catch (err) {
+    console.error(`saving ${stateFile()}: ${err.message}`);
+  }
+}
+
+// initialBounds returns the window bounds saved at the last close if they are
+// still mostly on a connected display, and otherwise 1280x820 centered on the
+// display under the pointer, shrunk to fit its work area. A 13-inch MacBook's
+// work area is about 1440x800 points with the Dock showing.
+function initialBounds() {
+  const b = readState().windowBounds;
+  if (b && [b.x, b.y, b.width, b.height].every(Number.isFinite)) {
+    const wa = screen.getDisplayMatching(b).workArea;
+    const visibleW = Math.min(b.x + b.width, wa.x + wa.width) - Math.max(b.x, wa.x);
+    const visibleH = Math.min(b.y + b.height, wa.y + wa.height) - Math.max(b.y, wa.y);
+    if (b.width >= minWidth && b.height >= minHeight && visibleW >= 200 && visibleH >= 200) {
+      return b;
+    }
+  }
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const width = Math.max(minWidth, Math.min(1280, wa.width));
+  const height = Math.max(minHeight, Math.min(820, wa.height));
+  return {
+    x: wa.x + Math.round((wa.width - width) / 2),
+    y: wa.y + Math.round((wa.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+function saveBounds(windowBounds) {
+  writeState({ ...readState(), windowBounds });
 }
 
 function openExternal(url) {
@@ -162,7 +279,10 @@ function openLogs() {
 }
 
 function setTray() {
-  const icon = nativeImage.createFromPath(path.join(resourcesDir(), "caribou-16.png"));
+  // A template image (black plus alpha, loaded with its @2x variant), which
+  // macOS tints to suit a light or dark menu bar.
+  const icon = nativeImage.createFromPath(path.join(resourcesDir(), "caribouTemplate.png"));
+  icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip("Caribou");
   tray.setContextMenu(

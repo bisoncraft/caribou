@@ -11,8 +11,11 @@
 #   - @electron/packager assembles Caribou.app from a prebuilt Electron;
 #   - rcodesign signs with the Developer ID identity, submits to Apple's
 #     notary service and staples the ticket;
-#   - the .dmg is a genisoimage HFS-hybrid image compressed by libdmg-hfsplus'
-#     `dmg`, the same construction Bitcoin Core used for its Linux-built dmgs.
+#   - the .dmg is a genisoimage ISO 9660 image (Rock Ridge plus Apple
+#     extensions, which macOS mounts with Finder metadata intact) compressed
+#     by libdmg-hfsplus' `dmg`, the construction Bitcoin Core used for its
+#     Linux-built dmgs. release/darwin/dmg/ holds the Finder layout: the
+#     background image and the .DS_Store generator.
 #
 # The Electron floor is macOS 13; the Go binary is built with the same
 # deployment target.
@@ -22,6 +25,9 @@ source "$(dirname "$0")/common.sh"
 ARCHS="amd64 arm64"
 DEPLOYMENT_TARGET="13.0"
 BUNDLE_ID="com.bisoncraft.caribou.desktop"
+# Mounted-volume name. The .DS_Store's background alias embeds it, so the two
+# must agree (see release/darwin/dmg/dsstore.py).
+DMG_VOLUME="Caribou"
 
 usage() {
 	cat <<USAGE
@@ -66,12 +72,14 @@ rerun with --build-image."
 			CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" CC="$cc" CXX="${cc}++" \
 			go build -trimpath "${GO_TAGS[@]}" -ldflags "$(go_ldflags)" -o "${res}/caribou" ./wallet/cmd/caribou
 		with_xmr && cp "wallet/asset/xmr/lib/darwin-${arch}/libmonero_wallet2_api_c.dylib" "$res/"
-		cp /release/darwin/caribou-16.png "$res/"
+		cp /release/darwin/caribouTemplate.png /release/darwin/caribouTemplate@2x.png "$res/"
 
 		# Sign the Go binary and the dylib before they are copied into the
 		# bundle's Resources. Bundle signing seals Resources rather than signing
-		# code inside it, and the notary service rejects unsigned Mach-Os.
-		sign_macos "${res}/caribou" /release/darwin/entitlements.plist
+		# code inside it, and the notary service rejects unsigned Mach-Os. The
+		# wallet process needs no entitlements: Go does not JIT, and the dylib
+		# carries the same team signature, so library validation passes.
+		sign_macos "${res}/caribou"
 		with_xmr && sign_macos "${res}/libmonero_wallet2_api_c.dylib"
 
 		local earch; earch="$(electron_arch "$arch")"
@@ -88,10 +96,13 @@ rerun with --build-image."
 		local base="${APP}-${VERSION}-darwin-${arch}"
 		log "building ${base}.dmg"
 		local staging="${adir}/dmg"
-		mkdir -p "$staging"
+		mkdir -p "${staging}/.background"
 		cp -a "$app" "${staging}/"
 		ln -s /Applications "${staging}/Applications"
-		genisoimage -quiet -no-cache-inodes -D -l -probe -V "Caribou" -no-pad -r -dir-mode 0755 -apple \
+		cp /release/darwin/dmg/background.png "${staging}/.background/"
+		python3 /release/darwin/dmg/dsstore.py --out "${staging}/.DS_Store" --volume "$DMG_VOLUME" \
+			--app "$(basename "$app")" --background .background/background.png
+		genisoimage -quiet -no-cache-inodes -D -l -probe -V "$DMG_VOLUME" -no-pad -r -dir-mode 0755 -apple \
 			-o "${adir}/uncompressed.dmg" "$staging"
 		# libdmg-hfsplus' stripped-down dmg tool: `dmg <input image> <output dmg>`.
 		dmg "${adir}/uncompressed.dmg" "${out}/${base}.dmg" >/dev/null

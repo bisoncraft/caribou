@@ -123,8 +123,17 @@ around it is signed, notarized and stapled in turn. Notarization normally
 returns in minutes, but a team's first submissions have taken over an hour
 in Apple's queue; the script waits up to six hours (`NOTARY_WAIT_SECONDS`
 overrides) and `rcodesign notary-list` with the API key shows the queue.
-The dmg is a genisoimage HFS-hybrid image compressed by `dmg`, the
-construction Bitcoin Core used for its Linux-built images. `--zip` also emits a `.zip` of the
+The dmg is a genisoimage ISO 9660 image (Rock Ridge plus Apple extensions)
+compressed by `dmg`, the construction Bitcoin Core used for its Linux-built
+images. `release/darwin/dmg/` holds its Finder presentation: `background.png`
+(the drag-to-Applications arrow, 2x with a 144 dpi tag) and `dsstore.py`,
+which writes the `.DS_Store` with the window geometry, icon positions and
+the alias record Finder follows to the background. The volume name is fixed
+to `Caribou` because that alias embeds it. A volume icon is not possible
+with this image format: genisoimage's Apple extensions carry Finder flags
+for files only, not for the root folder. The app itself offers to move to
+`/Applications` when launched from anywhere else, such as the mounted dmg.
+`--zip` also emits a `.zip` of the
 notarized app. Verify on a Mac with `spctl --assess --type open
 --context context:primary-signature -v Caribou.dmg` and by launching the
 installed app; an Apple Silicon Mac can also run the x86_64 build under

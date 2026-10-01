@@ -394,8 +394,10 @@ macos_nested_scopes() {
 
 # sign_macos <path> [entitlements.plist]: Developer ID signature with the
 # hardened runtime on the target and, for a bundle, on every nested bundle
-# and executable (see macos_nested_scopes). The entitlements, when given, are
-# applied at the same scopes. A .dmg gets a plain signature.
+# and executable (see macos_nested_scopes). The entitlements, when given, go
+# on the target and on nested .app bundles, the helpers that run as their own
+# processes; frameworks and loose executables get the hardened runtime alone.
+# A .dmg gets a plain signature.
 #
 # With --no-sign the target is ad-hoc signed instead of left alone: fuse
 # flipping and the integrity digest patch the Electron Framework binary, and
@@ -412,7 +414,7 @@ sign_macos() {
 			local p
 			while IFS= read -r p; do
 				args+=(--code-signature-flags "${p}:runtime")
-				[[ -n "$entitlements" ]] && args+=(--entitlements-xml-file "${p}:${entitlements}")
+				[[ -n "$entitlements" && "$p" == *.app ]] && args+=(--entitlements-xml-file "${p}:${entitlements}")
 			done < <(macos_nested_scopes "$target")
 		fi
 	fi

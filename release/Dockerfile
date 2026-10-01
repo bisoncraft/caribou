@@ -143,8 +143,9 @@ RUN curl -fsSL "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${WE
 RUN mkdir -p /opt/winsdk \
     && printf '#pragma once\ntypedef struct EventRegistrationToken { __int64 value; } EventRegistrationToken;\n' >/opt/winsdk/EventToken.h
 
-# libdmg-hfsplus `dmg`: compresses a genisoimage HFS-hybrid image into a UDIF
-# .dmg. The fork is the one Bitcoin Core used for its Linux-built dmgs.
+# libdmg-hfsplus `dmg`: compresses a genisoimage ISO 9660 image (Rock Ridge
+# plus Apple extensions) into a UDIF .dmg. The fork is the one Bitcoin Core
+# used for its Linux-built dmgs.
 ARG LIBDMG_COMMIT=1cc791e4173da9cb0b0cc16c5a1aaa25d5eb5efa
 RUN git clone https://github.com/fanquake/libdmg-hfsplus.git /tmp/libdmg \
     && git -C /tmp/libdmg checkout ${LIBDMG_COMMIT} \
@@ -158,6 +159,20 @@ RUN git clone https://github.com/fanquake/libdmg-hfsplus.git /tmp/libdmg \
 # so adding it does not rebuild the osxcross stage.
 RUN apt-get update && apt-get install -y --no-install-recommends p7zip-full \
     && rm -rf /var/lib/apt/lists/*
+
+# ds_store writes the Finder layout (.DS_Store) of the macOS dmg and mac_alias
+# the alias record that points Finder at its background image; both are pure
+# Python. Pinned by hash: pip installs the wheel, the sdist hash is listed in
+# case a wheel is ever unavailable.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '%s\n' \
+        'mac_alias==2.2.3 --hash=sha256:7362b521d2132ef92f606a37abfed5fcd849ceb2f28b6f9743e014b02af92f0d --hash=sha256:1c7fa367687d66979f2ce4d1a8b2716cf1c9fb811741cab3cf3ca356555c2beb' \
+        'ds_store==1.3.3 --hash=sha256:b92a371efbf1b4ccce2a04d1ed13fceacc4736c81ba09cf5aefb74c088160a35 --hash=sha256:a7380896ea1e880f7ba07c5cdc24bd1530fb86836cad0be531f3e80e2d721ac5' \
+        >/tmp/dmg-requirements.txt \
+    && pip3 install --no-cache-dir --no-deps --require-hashes -r /tmp/dmg-requirements.txt \
+    && rm /tmp/dmg-requirements.txt \
+    && python3 -c 'import ds_store, mac_alias'
 
 ########## final ##########
 FROM tools
