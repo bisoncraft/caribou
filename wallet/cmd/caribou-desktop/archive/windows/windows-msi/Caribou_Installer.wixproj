@@ -1,6 +1,0 @@
-﻿<Project Sdk="WixToolset.Sdk/5.0.0">
-  <PropertyGroup>
-    <XmrEnabled Condition="'$(XmrEnabled)' == ''">0</XmrEnabled>
-    <DefineConstants>XmrEnabled=$(XmrEnabled)</DefineConstants>
-  </PropertyGroup>
-</Project>

@@ -1,9 +1,0 @@
-build/
-certs/
-windows/windows-msi/bin
-windows/windows-msi/obj
-electron/node_modules/
-electron/resources/
-electron/out
-installers/
-resources/

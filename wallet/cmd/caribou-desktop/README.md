@@ -45,5 +45,3 @@ go generate ./wallet/cmd/caribou-desktop
 Installer packaging (Debian, snap, Windows installer, macOS dmg) lives in
 the top-level `release/` directory; see
 [release/README.md](../../../release/README.md).
-`archive/` holds the previous packaging tree, kept for reference while the
-new one is finished and removed before merge.
