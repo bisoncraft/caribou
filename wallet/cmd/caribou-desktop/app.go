@@ -57,6 +57,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"runtime/pprof"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -93,7 +94,7 @@ func mainCore() error {
 	// with caribou and taskbar icons won't be stacked. Instead, we'll create a
 	// short path here and execute ourself with the --webview flag.
 	if cfg.Webview != "" {
-		runWebview(cfg.Webview)
+		runWebview(cfg.Webview, uintptr(cfg.WebviewMonitor))
 		return nil
 	}
 
@@ -122,7 +123,11 @@ func mainCore() error {
 		return nil
 	}
 
-	startServer, err := synchronize(syncDir)
+	// The first window opens on the monitor this instance was launched from.
+	// A second instance passes its own to the running one instead.
+	launchMon := launchMonitor()
+
+	startServer, err := synchronize(syncDir, launchMon)
 	if err != nil || !startServer {
 		// If we didn't start the server but there is no error, and it means
 		// that we've successfully sent an open window request to an already
@@ -205,22 +210,24 @@ func mainCore() error {
 
 	// No errors running webserver, so we can be certain we won any race between
 	// starting instances. Start the sync server now.
-	openC := make(chan struct{}) // no buffer. Is ignored if window is currently open
+	// Window-open requests carry the monitor to open on (0 for the default).
+	// No buffer: senders drop a request the window loop is not ready for.
+	openC := make(chan uintptr)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		runServer(appCtx, syncDir, openC, killChan, cfg.Net)
 	}()
 
-	openWindow := func() {
+	openWindow := func(monitor uintptr) {
 		wg.Add(1)
 		go func() {
-			runWebviewSubprocess(appCtx, "http://"+webSrv.Addr())
+			runWebviewSubprocess(appCtx, "http://"+webSrv.Addr(), monitor)
 			wg.Done()
 		}()
 	}
 
-	openWindow()
+	openWindow(launchMon)
 
 	wg.Add(1)
 	go func() {
@@ -243,8 +250,8 @@ func mainCore() error {
 				break windowloop
 			case <-appCtx.Done():
 				break windowloop
-			case <-openC:
-				openWindow()
+			case monitor := <-openC:
+				openWindow(monitor)
 			}
 		}
 	}()
@@ -354,7 +361,7 @@ func bindJSFunctions(w webview.WebView) {
 	})
 }
 
-func runWebview(url string) {
+func runWebview(url string, monitor uintptr) {
 	w := webview.New(true)
 	defer w.Destroy()
 	installEditMenu()
@@ -366,16 +373,21 @@ func runWebview(url string) {
 		useIconBytes(w, Icon) // useIcon(w, "src/dexc.png")
 	}
 
-	width, height := limitedWindowWidthAndHeight(float64(C.display_width()), float64(C.display_height()))
-
-	w.SetSize(int(width), int(height), webview.HintNone)
+	if !placeWindow(w, monitor) {
+		width, height := limitedWindowWidthAndHeight(float64(C.display_width()), float64(C.display_height()))
+		w.SetSize(int(width), int(height), webview.HintNone)
+	}
 	w.Navigate(url)
 	bindJSFunctions(w)
 	w.Run()
 }
 
-func runWebviewSubprocess(ctx context.Context, url string) {
-	cmd := exec.CommandContext(ctx, exePath, "--webview", url)
+func runWebviewSubprocess(ctx context.Context, url string, monitor uintptr) {
+	args := []string{"--webview", url}
+	if monitor != 0 {
+		args = append(args, "--webview-monitor", strconv.FormatUint(uint64(monitor), 10))
+	}
+	cmd := exec.CommandContext(ctx, exePath, args...)
 	if err := cmd.Start(); err != nil {
 		log.Errorf("webview start error: %v", err)
 		return
@@ -394,7 +406,7 @@ func runWebviewSubprocess(ctx context.Context, url string) {
 	}
 }
 
-func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struct{},
+func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- uintptr,
 	killC chan<- os.Signal, activeState <-chan bool) {
 	systray.SetIcon(FavIcon)
 	systray.SetTitle("Caribou")
@@ -422,7 +434,7 @@ func systrayOnReady(ctx context.Context, logDirectory string, openC chan<- struc
 	go func() {
 		for range mOpen.ClickedCh {
 			select {
-			case openC <- struct{}{}:
+			case openC <- cursorMonitor(): // the monitor whose tray was clicked
 				log.Debug("Received window reopen request from system tray")
 			default:
 				log.Infof("Ignored a window open request from the system tray")

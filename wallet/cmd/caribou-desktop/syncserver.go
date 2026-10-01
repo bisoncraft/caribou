@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -89,7 +90,7 @@ func sendKillSignal(syncDir string) {
 // instances that are running. If none are found, startServer will be true.
 // If another instance is found, close will be true, and this instance of
 // caribou-desktop should exit immediately.
-func synchronize(syncDir string) (startServer bool, err error) {
+func synchronize(syncDir string, monitor uintptr) (startServer bool, err error) {
 	addr, _, err := getSyncAddress(syncDir)
 	if err != nil {
 		return false, err
@@ -98,7 +99,8 @@ func synchronize(syncDir string) (startServer bool, err error) {
 		// Just start the server then.
 		return true, nil
 	}
-	resp, err := dexnet.Client.Get("http://" + addr)
+	// The running instance opens its window on this instance's monitor.
+	resp, err := dexnet.Client.Get(fmt.Sprintf("http://%s/?monitor=%d", addr, monitor))
 	if err == nil {
 		if resp.StatusCode == http.StatusOK {
 			// Other instance will open the window.
@@ -114,7 +116,7 @@ func synchronize(syncDir string) (startServer bool, err error) {
 
 // runServer runs an instance of the sync server. Received commands are
 // communicated via unbuffered channels. Blocking channels are ignored.
-func runServer(ctx context.Context, syncDir string, openC chan<- struct{}, killC chan<- os.Signal, netw util.Network) {
+func runServer(ctx context.Context, syncDir string, openC chan<- uintptr, killC chan<- os.Signal, netw util.Network) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Errorf("ListenTCP error: %v", err)
@@ -155,7 +157,7 @@ func runServer(ctx context.Context, syncDir string, openC chan<- struct{}, killC
 }
 
 type syncServer struct {
-	openC   chan<- struct{}
+	openC   chan<- uintptr
 	killC   chan<- os.Signal
 	killKey string
 }
@@ -164,8 +166,11 @@ func (s *syncServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/":
 		w.WriteHeader(http.StatusOK)
+		// A monitor the window process cannot use is ignored there, so an
+		// absent or malformed value just means the default placement.
+		monitor, _ := strconv.ParseUint(r.URL.Query().Get("monitor"), 10, 64)
 		select {
-		case s.openC <- struct{}{}:
+		case s.openC <- uintptr(monitor):
 			log.Debug("Received window open request")
 		default:
 			log.Info("Ignored a window reopen request from another instance")
