@@ -1,16 +1,10 @@
 {
   "RT_GROUP_ICON": {
     "#32512": {
-      "0000": "./src/caribou-256.png"
+      "0000": "./src/caribou.ico"
     },
     "#1": {
-      "0000": "./src/caribou-256.png"
-    },
-    "#2": {
-      "0000": "./src/caribou-dark-256.png"
-    },
-    "#3": {
-      "0000": "./src/caribou-light-256.png"
+      "0000": "./src/caribou.ico"
     }
   },
   "RT_VERSION": {

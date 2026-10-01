@@ -69,8 +69,10 @@ stage_build() {
 	with_xmr && install -Dm644 "${stage}/libmonero_wallet2_api_c.so" "${deb}/usr/lib/caribou/libmonero_wallet2_api_c.so"
 	install -Dm644 /release/linux/org.bisoncraft.caribou.desktop "${deb}/usr/share/applications/org.bisoncraft.caribou.desktop"
 	install -Dm644 /release/linux/org.bisoncraft.caribou.metainfo.xml "${deb}/usr/share/metainfo/org.bisoncraft.caribou.metainfo.xml"
-	install -Dm644 /release/linux/caribou.svg "${deb}/usr/share/icons/hicolor/scalable/apps/caribou.svg"
-	install -Dm644 "wallet/cmd/${APP}/src/caribou-256.png" "${deb}/usr/share/icons/hicolor/256x256/apps/caribou.png"
+	local n
+	for n in 16 24 32 48 64 128 256 512; do
+		install -Dm644 "/release/linux/icons/caribou-${n}.png" "${deb}/usr/share/icons/hicolor/${n}x${n}/apps/caribou.png"
+	done
 	install -dm755 "${deb}/DEBIAN"
 	# Runtime dependencies come from the binaries themselves, the way Debian's
 	# own tooling derives them: the glibc, libstdc++, GTK and WebKitGTK floors

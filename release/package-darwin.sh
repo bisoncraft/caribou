@@ -77,7 +77,7 @@ rerun with --build-image."
 		local earch; earch="$(electron_arch "$arch")"
 		log "packaging Caribou.app for darwin/${earch}"
 		(cd "$eldir" && node package.js --arch "$earch" --version "$VERSION" --build-version "$VERSION_NUM" \
-			--bundle-id "$BUNDLE_ID" --extra "$res" --out "${adir}/out")
+			--bundle-id "$BUNDLE_ID" --icon /release/darwin/caribou.icns --extra "$res" --out "${adir}/out")
 		local app="${adir}/out/Caribou-darwin-${earch}/Caribou.app"
 		[[ -d "$app" ]] || die "packager produced no bundle at $app"
 

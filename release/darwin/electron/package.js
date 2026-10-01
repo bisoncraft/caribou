@@ -3,10 +3,11 @@
 // rcodesign (see package-darwin.sh), so no signing is configured here.
 //
 //   node package.js --arch x64|arm64 --version 1.2.0-rc1 --build-version 1.2.0 \
-//     --bundle-id com.bisoncraft.caribou.desktop --extra <dir> --out <dir>
+//     --bundle-id com.bisoncraft.caribou.desktop --icon <caribou.icns> \
+//     --extra <dir> --out <dir>
 //
 // --extra is copied to Contents/Resources/mac and holds the Go `caribou`
-// binary, the XMR dylib and the tray icon, all already signed.
+// binary, the XMR dylib and the menu-bar icon, the code already signed.
 
 const path = require("node:path");
 const fs = require("node:fs");
@@ -25,8 +26,13 @@ const arch = arg("--arch");
 const version = arg("--version");
 const buildVersion = arg("--build-version");
 const bundleId = arg("--bundle-id");
+const icon = path.resolve(arg("--icon"));
 const extra = path.resolve(arg("--extra"));
 const out = path.resolve(arg("--out"));
+
+// The packager treats a missing icon as "no icon for this platform" and
+// quietly ships Electron's own, so check for it here.
+if (!fs.existsSync(icon)) throw new Error(`icon not found: ${icon}`);
 
 // Fuses are flipped after packaging, before signing: they lock down Node
 // integration paths an attacker could use to run their own code inside the
@@ -105,7 +111,7 @@ packager({
   appCategoryType: "public.app-category.finance",
   darwinDarkModeSupport: true,
   asarIntegrityDigest: false, // written by embedIntegrityDigest below instead
-  icon: path.join(__dirname, "..", "caribou.icns"),
+  icon,
   extraResource: [extra],
   // Only the runtime files belong in app.asar.
   ignore: [/^\/package\.js$/, /^\/package-lock\.json$/, /^\/node_modules($|\/)/],
