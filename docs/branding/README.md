@@ -15,45 +15,21 @@ is mechanical.
 
 The old source SVGs that used to sit in this directory (`bison-square.svg`,
 `bisonwallet-full-*.svg`) were unreferenced by any code and have been deleted.
-There is currently no vector master for the bison mark in the repository.
+`caribou-mark.svg` here is the vector master for the antler mark. Its paths
+are the ones in `wallet/ios/icon/appicon.svg`, without the iOS background tile.
 
 ## Needs replacement
 
-### Desktop app: `wallet/cmd/caribou-desktop/src/`
+### Desktop app and tray icons: done
 
-Embedded via `//go:embed` in `icon.go`, `icon_linux.go`, and `icon_windows.go`,
-and consumed by `electron/forge.config.js` for packaging.
+The desktop app (`wallet/cmd/caribou-desktop/src/`) and the browser-UI build's
+tray icons (`wallet/cmd/caribou/icons/`) now carry the antler mark. They are
+all generated from `caribou-mark.svg` by `make-desktop-icons.sh`, which also
+assembles `caribou.icns` and regenerates the Windows `rsrc_windows_*.syso`
+resources. Rerun it rather than editing those files by hand.
 
-| File | Size | Currently shows | Used by |
-| --- | --- | --- | --- |
-| `caribou.iconset/icon_16x16.png` … `icon_512x512@2x.png` | 16 to 1024 | Bison, **with "Bison Wallet" text** at 128px and above | macOS app icon source |
-| `caribou.icns` | — | as above | `forge.config.js:11,52` (macOS bundle) |
-| `caribou.png` | 128 | Bison | `forge.config.js:62,74` (deb/rpm), `//go:embed` |
-| `caribou-16.png`, `caribou-256.png`, `caribou-dark-256.png`, `caribou-light-256.png` | 16, 256 | Bison, dark and light circular variants | tray and window icons |
-| `favicon-32.png` / `.ico` | 32 | Bison | `//go:embed`, `forge.config.js:42` (Windows installer icon) |
-| `favicon-bw-32.png` / `.ico` | 32 | Greyed bison | `//go:embed` as `FavIconBW`, systray menu item |
-| `caribou-installer-bg.tiff` | — | unverified, check before shipping | macOS DMG background |
-
-`caribou.icns` is generated from `caribou.iconset` with `iconutil`, so regenerate
-it rather than editing it directly.
-
-Note that `caribou.svg` is **not** a bison. It is the DCRDEX gradient mark. It
-is off-brand for Caribou in a different way and also wants replacing.
-
-`pkg-debian.sh:92-93` installs it as `hicolor/scalable/apps/caribou.svg`
-alongside `caribou.png`, so `org.bisoncraft.caribou.desktop` names it as
-`Icon=caribou`. The name in the desktop entry has to keep matching the
-installed basename, or the entry gets no icon at all. The snap sets an absolute
-path over the top of it (`snapcraft.yaml.in:65`) and is unaffected either way.
-
-### Server tray icons: `wallet/cmd/caribou/icons/`
-
-Embedded via `//go:embed` in `icons.go` and `icons_windows.go`.
-
-| File | Size | Currently shows |
-| --- | --- | --- |
-| `caribou-256.png`, `caribou-dark-256.png`, `caribou-light-256.png` | 256 | Bison |
-| `favicon-32.png` / `.ico`, `favicon-bw-32.png` / `.ico` | 32 | Bison |
+One file there is still unchecked: `caribou-installer-bg.tiff`, the macOS DMG
+background. Look at it before shipping a macOS build.
 
 ### Web UI: `wallet/appserver/`
 
@@ -86,13 +62,13 @@ All five are the bison. The components that render them live in
 
 ## When new artwork lands
 
-1. Drop a vector master in this directory so future exports do not have to be
-   traced back out of the PNGs.
-2. Replace each file above in place, keeping the same names and dimensions.
-3. Regenerate `caribou.icns` from `caribou.iconset` with `iconutil`.
-4. Keep the `-bw` suffix. It means black and white, not "Bison Wallet" (the
+1. Update `caribou-mark.svg` and rerun `make-desktop-icons.sh` for the desktop
+   and tray icons.
+2. Replace each web UI file above in place, keeping the same names and
+   dimensions.
+3. Keep the `-bw` suffix. It means black and white, not "Bison Wallet" (the
    Bison Wallet files used a `bw-` prefix). Those files are the monochrome
    variant used for the systray menu item, so the replacement set needs a
-   greyscale version too.
-5. Verify: `go build ./...`, then build the desktop app and confirm the tray
+   greyscale version too. The script derives it from the mark.
+4. Verify: `go build ./...`, then build the desktop app and confirm the tray
    icon, window icon, and installer icon all render.
