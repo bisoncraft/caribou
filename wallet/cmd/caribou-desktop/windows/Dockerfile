@@ -13,7 +13,7 @@
 # Extract the exe and DLLs:
 #   mkdir -p build && docker run --rm caribou-desktop-windows tar -cf - -C /out . | tar -xf - -C ./build
 
-FROM golang:1.24-bookworm
+FROM golang:1.25-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 
