@@ -83,10 +83,17 @@ cp "$mark" "$src/caribou.svg"
 
 # The -bw (black and white) icon is the systray menu item's. Greyscale alone
 # leaves the brown too dark to read on a dark menu, so lift it.
-"${im[@]}" "$src/favicon-32.png" -colorspace Gray -level 0,70% -colorspace sRGB \
+"${im[@]}" "$src/favicon-32.png" -colorspace Gray -level 0,70% -colorspace sRGB -strip \
     "PNG32:$src/favicon-bw-32.png"
 "${im[@]}" "$src/favicon-32.png"    "$src/favicon-32.ico"
 "${im[@]}" "$src/favicon-bw-32.png" "$src/favicon-bw-32.ico"
+
+# The MSI's Add/Remove Programs icon (ARPPRODUCTICON in Caribou.wxs). A
+# separate .ico rather than the exe, because the MSI stores the whole file.
+for n in 16 24 32 48 64 256; do
+    render plain "$n" "$work/ico-$n.png"
+done
+"${im[@]}" "$work"/ico-{16,24,32,48,64,256}.png "$src/caribou.ico"
 
 # macOS: the iconset, then the icns built from it. iconutil is macOS only, so
 # the icns is assembled here: a header, then one PNG per OSType.

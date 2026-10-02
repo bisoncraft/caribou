@@ -3,6 +3,8 @@
     Name="Caribou" Manufacturer="The Caribou Developers" InstallerVersion="300">
     <Media Id="1" Cabinet="cariboudesktop.cab" EmbedCab="yes" />
     <Property Id="PIDTEMPLATE" Value="The Caribou Developers" />
+    <Icon Id="caribou.ico" SourceFile="..\..\src\caribou.ico" />
+    <Property Id="ARPPRODUCTICON" Value="caribou.ico" />
 
     <DirectoryRef Id="APPLICATIONROOTDIRECTORY">
       <Component Id="CaribouDesktopExe" Guid="fcdc8c43-a305-42a5-b043-5f91bad2a21a">
