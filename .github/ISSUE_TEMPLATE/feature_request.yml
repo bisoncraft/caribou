@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest a new feature or an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Caribou is non-custodial and non-KYC. Features that require custody of funds, identity verification, or gated access will not ship, regardless of convenience.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and this has not been requested.
+          required: true
+        - label: This does not require custody of user funds, identity verification, or gated access.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do that you can't do today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like it to work?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches or workarounds you tried.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - CLI (caribou)
+        - Desktop (caribou-desktop)
+        - Android
+        - iOS
+        - Companion app
+        - All
+    validations:
+      required: true
+  - type: input
+    id: assets
+    attributes:
+      label: Related asset(s) or chain(s)
+      placeholder: "e.g. BTC, XMR, a new chain"
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, links, or prior art in other wallets.

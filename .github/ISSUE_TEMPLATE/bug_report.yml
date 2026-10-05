@@ -1,0 +1,191 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The more detail you give, the faster it can be reproduced and fixed.
+
+        **Never paste seed phrases, private keys, passwords, or the app password anywhere in this issue, including logs and screenshots.** Anyone who sees them can take your funds. Redact them first.
+
+        **Security vulnerabilities do not belong here.** Report them privately as described in [SECURITY.md](https://github.com/bisoncraft/caribou/security/policy).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and this has not been reported.
+          required: true
+        - label: I tried the latest release (or latest master if built from source).
+          required: true
+        - label: I removed all secrets (seeds, keys, passwords) from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which Caribou build did you use?
+      options:
+        - CLI (caribou)
+        - Desktop (caribou-desktop)
+        - Android
+        - iOS
+        - Companion app
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release tag, or the commit hash if built from source. Desktop and CLI builds print it with `caribou-desktop --version` or `caribou --version`, and both log it at startup. On mobile, use the release or build you installed.
+      placeholder: "0.5.0 or a1b2c3d"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Release binary
+        - Snap
+        - Built from source
+        - Android APK / store build
+        - iOS TestFlight / store build
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and device
+      description: OS and version, plus the device model for mobile.
+      placeholder: "macOS 15.2 (arm64), or Pixel 8 / Android 15"
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      options:
+        - Mainnet
+        - Testnet
+        - Simnet / regtest
+        - Not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: assets
+    attributes:
+      label: Affected asset(s)
+      description: Select every asset involved.
+      multiple: true
+      options:
+        - BTC
+        - LTC
+        - BCH
+        - DCR
+        - DASH
+        - DGB
+        - DOGE
+        - FIRO
+        - ZEC
+        - ETH
+        - Polygon
+        - BNB
+        - HyperEVM
+        - Hyperliquid
+        - ERC-20 token
+        - SOL
+        - XMR
+        - XRP
+        - NEAR
+        - Not asset-specific
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Send
+        - Receive / addresses
+        - Swap / intents
+        - Balances / sync
+        - Transaction history
+        - Backup / restore / import
+        - Login / password / sessions
+        - Tor / networking
+        - Fiat rates
+        - UI / display
+        - Install / startup
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug, including any error message shown.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the wallet and unlock it
+        2. Go to Send and choose ...
+        3. Enter ... and confirm
+        4. See the error
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Always
+        - Often
+        - Sometimes
+        - Happened once
+    validations:
+      required: true
+  - type: textarea
+    id: regression
+    attributes:
+      label: Did this work before?
+      description: If it used to work, say which version last worked.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: For the CLI, run with `--log=debug` and paste the relevant lines. Redact secrets first.
+      render: shell
+  - type: input
+    id: txids
+    attributes:
+      label: Transaction IDs or hashes
+      description: Public chain data only. Helps trace what happened on-chain.
+  - type: input
+    id: backend
+    attributes:
+      label: Backend and connectivity
+      description: Custom RPC or Electrum server in use, and whether Tor is enabled.
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or recordings
+      description: Drag and drop files here. Hide balances, addresses, and secrets you don't want public.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Workarounds, related issues, or anything else useful.

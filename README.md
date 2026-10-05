@@ -120,6 +120,18 @@ Caribou is in heavy flux right now; large surfaces are being removed,
 rewritten, or first introduced. Check with @buck54321 or @JoeGruffins if you're
 interested in helping out.
 
+## Reporting issues
+
+Found a bug or want a feature? Open an issue and fill in the form for your
+case: [bug report](https://github.com/bisoncraft/caribou/issues/new?template=bug_report.yml)
+or [feature request](https://github.com/bisoncraft/caribou/issues/new?template=feature_request.yml).
+Include your version, platform, and steps to reproduce. For the CLI, run with
+`--log=debug` and attach the relevant log lines.
+
+Never post seed phrases, private keys, or passwords in an issue. Report
+security vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
+not in a public issue.
+
 ## Heritage
 
 Caribou descends from Bison Wallet, which itself was developed alongside
