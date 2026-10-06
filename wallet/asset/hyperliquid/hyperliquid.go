@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,13 +23,13 @@ import (
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/util/encode"
 	"github.com/bisoncraft/caribou/util/keygen"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/keystore"
 	"github.com/bisoncraft/caribou/wallet/txdb"
 	"github.com/decred/dcrd/hdkeychain/v3"
-	"golang.org/x/net/proxy"
 )
 
 // ErrSendOutcomeUnknown is returned when a send encounters a transport error
@@ -146,6 +145,7 @@ type HyperWallet struct {
 	lastPeerCount uint32 // accessed via sync/atomic; 0 = disconnected, 1 = connected
 	dataDir       string
 	settings      map[string]string
+	torProxy      string
 
 	keyMtx  sync.RWMutex
 	privKey []byte // nil when locked; 32-byte secp256k1 private key
@@ -199,6 +199,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		peersChange: cfg.PeersChange,
 		dataDir:     cfg.DataDir,
 		settings:    cfg.Settings,
+		torProxy:    cfg.TorProxy,
 		pubKey:      pubKey,
 		address:     pubKeyToAddress(pubKey),
 		txDB:        cfg.NetworkTxDB,
@@ -260,7 +261,7 @@ func (w *HyperWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error
 			w.ctxCancel()
 		}
 	}()
-	rpc, err := newRPCClient(w.apiEndpoint(), w.settings["torproxy"], w.log)
+	rpc, err := newRPCClient(w.apiEndpoint(), w.torProxy, w.log)
 	if err != nil {
 		return nil, fmt.Errorf("creating RPC client: %w", err)
 	}
@@ -772,17 +773,10 @@ func (w *HyperWallet) tipPoller(ctx context.Context) {
 		}
 	}()
 
-	var netDial func(context.Context, string, string) (net.Conn, error)
-	if torProxy := w.settings["torproxy"]; torProxy != "" {
-		d, err := proxy.SOCKS5("tcp", torProxy, nil, proxy.Direct)
-		if err != nil {
-			w.log.Errorf("WS proxy dialer: %v", err)
-		} else {
-			netDial = func(_ context.Context, network, addr string) (net.Conn, error) {
-				return d.Dial(network, addr)
-			}
-		}
-	}
+	// Nil without a proxy, so the websocket dials directly. The dialer
+	// honors the context, so a proxy that stalls the handshake cannot hold
+	// up shutdown.
+	netDial := dexnet.ProxyDialContext(w.torProxy)
 
 	wsc := &wsClient{
 		url:     w.wsEndpoint(),

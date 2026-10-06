@@ -1044,7 +1044,7 @@ func (w *spvWallet) newVSPClient(vspHost, vspPubKey string, log util.Logger) (*w
 			FeeAcct:    0,
 			ChangeAcct: 0,
 		},
-	}, log, new(net.Dialer).DialContext)
+	}, log, new(net.Dialer).DialContext) // torproxy: the SPV wallet refuses to open when --torproxy is set
 }
 
 // rescan performs a blocking rescan, sending updates on the channel.

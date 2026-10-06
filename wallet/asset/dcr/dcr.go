@@ -499,6 +499,7 @@ type ExchangeWallet struct {
 	log            util.Logger
 	network        util.Network
 	emit           *asset.WalletEmitter
+	torProxy       string
 	lastPeerCount  uint32
 	peersChange    func(uint32, error)
 	vspFilepath    string
@@ -630,6 +631,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 			return nil, err
 		}
 	case walletTypeSPV:
+		// The syncer dials peers directly and the upstream library offers
+		// no way to supply a dialer, so connecting would bypass the proxy.
+		if cfg.TorProxy != "" {
+			return nil, errors.New("the DCR SPV wallet does not support --torproxy")
+		}
 		dcr.wallet, err = openSPVWallet(cfg.DataDir, walletCfg.GapLimit, chainParams, logger)
 		if err != nil {
 			return nil, err
@@ -711,6 +717,7 @@ func unconnectedWallet(cfg *asset.WalletConfig, dcrCfg *walletConfig, chainParam
 		chainParams:         chainParams,
 		network:             network,
 		emit:                cfg.Emit,
+		torProxy:            cfg.TorProxy,
 		peersChange:         cfg.PeersChange,
 		fundingCoins:        make(map[outPoint]*fundingCoin),
 		findRedemptionQueue: make(map[outPoint]*findRedemptionReq),
@@ -3032,14 +3039,18 @@ func (dcr *ExchangeWallet) startPoliteia(ctx context.Context) {
 	if dcr.network != util.Mainnet {
 		return
 	}
+	// The upstream Politeia client does not accept a custom http.Client, so
+	// its requests cannot be proxied.
+	if dcr.torProxy != "" {
+		dcr.log.Infof("Politeia disabled: it does not support --torproxy")
+		return
+	}
 
 	// Ensure any previous instance is fully stopped before starting a new one.
 	dcr.stopPoliteia()
 
 	// Create the Politeia instance outside the lock to avoid blocking readers
 	// (PoliteiaDetails, ProposalsAll, etc.) during filesystem I/O.
-	// TODO: Route Politeia requests through Tor when TorProxy is configured.
-	// The upstream piclient.Opts does not accept a custom http.Client.
 	p, err := pi.New(ctx, pi.PoliteiaMainnetHost, filepath.Join(dcr.walletDir, "politeia"), dcr.log.SubLogger("Politeia"))
 	if err != nil {
 		dcr.log.Errorf("failed to set up politeia: %v", err)

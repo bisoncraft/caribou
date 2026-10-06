@@ -72,6 +72,7 @@ func sendKillSignal(syncDir string) {
 		log.Errorf("No sync address found for kill signal: %v", err)
 		return
 	}
+	// torproxy: loopback kill signal to our own sync server
 	resp, err := http.Post("http://"+addr+"/kill", "application/octet-stream", bytes.NewBufferString(killKey))
 	if err != nil {
 		log.Errorf("Error sending kill signal to sync server: %v", err)

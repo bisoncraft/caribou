@@ -83,7 +83,7 @@ func (b *electrumWalletBackend) CanRescan() bool { return false }
 var _ walletBackend = (*electrumWalletBackend)(nil)
 
 // newElectrumBackend constructs an electrum backend for the given chain params.
-func newElectrumBackend(np *netparams.ChainParams, dataDir string) (walletBackend, error) {
+func newElectrumBackend(np *netparams.ChainParams, dataDir, torProxy string) (walletBackend, error) {
 	if len(np.ElectrumServers) == 0 {
 		return nil, fmt.Errorf("electrum: no built-in server for network %q", np.BTCDParams().Name)
 	}
@@ -104,9 +104,10 @@ func newElectrumBackend(np *netparams.ChainParams, dataDir string) (walletBacken
 	// connection, rotating past recently-failed candidates (electrum
 	// serverpool).
 	network, err := electrum.NewNetwork(&electrum.Config{
-		Chain:   chainCfg,
-		Servers: np.ElectrumServers,
-		DataDir: dataDir,
+		Chain:    chainCfg,
+		Servers:  np.ElectrumServers,
+		TorProxy: torProxy,
+		DataDir:  dataDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("electrum: new network: %w", err)
@@ -170,7 +171,13 @@ var _ peerBackend = (*neutrinoWalletBackend)(nil)
 var _ chain.TxRelayChecker = (*neutrinoWalletBackend)(nil)
 
 // newNeutrinoBackend constructs a neutrino chain-service + client backend.
-func newNeutrinoBackend(np *netparams.ChainParams, dataDir string, logger backendLogger) (walletBackend, error) {
+func newNeutrinoBackend(np *netparams.ChainParams, dataDir, torProxy string, logger backendLogger) (walletBackend, error) {
+	// Peer discovery resolves DNS seeds through the system resolver, which a
+	// SOCKS5 CONNECT proxy cannot carry, so connecting here would leak the
+	// user's lookups and IP.
+	if torProxy != "" {
+		return nil, errors.New("neutrino: the SPV backend does not support --torproxy")
+	}
 	bwChain, err := bisonwire.ChainFromString(np.Chain)
 	if err != nil {
 		return nil, fmt.Errorf("neutrino: chain id %q: %w", np.Chain, err)
@@ -339,6 +346,7 @@ func (s *walletSPVPeerManager) resolveAddress(addr string) (string, error) {
 	if strings.HasSuffix(host, ".onion") {
 		return addr, nil
 	}
+	// torproxy: neutrino peer manager; the wallet refuses neutrino when --torproxy is set
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return "", err
@@ -472,12 +480,12 @@ func (s *walletSPVPeerManager) connectToInitialPeers() {
 // ─── newBackend dispatches on BackendKind ─────────────────────────────────────
 
 // newBackend constructs and returns an unstarted walletBackend of the given kind.
-func newBackend(kind BackendKind, np *netparams.ChainParams, dataDir string, logger backendLogger) (walletBackend, error) {
+func newBackend(kind BackendKind, np *netparams.ChainParams, dataDir, torProxy string, logger backendLogger) (walletBackend, error) {
 	switch kind {
 	case BackendElectrum:
-		return newElectrumBackend(np, dataDir)
+		return newElectrumBackend(np, dataDir, torProxy)
 	case BackendNeutrino:
-		return newNeutrinoBackend(np, dataDir, logger)
+		return newNeutrinoBackend(np, dataDir, torProxy, logger)
 	default:
 		return nil, fmt.Errorf("unknown backend kind %d", kind)
 	}

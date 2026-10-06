@@ -199,6 +199,7 @@ type xrpWallet struct {
 	peersChange func(uint32, error)
 	dataDir     string
 	settings    map[string]string
+	torProxy    string
 
 	keyMtx  sync.RWMutex
 	privKey *btcec.PrivateKey // nil when locked; guarded by keyMtx
@@ -285,6 +286,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		peersChange:  cfg.PeersChange,
 		dataDir:      cfg.DataDir,
 		settings:     cfg.Settings,
+		torProxy:     cfg.TorProxy,
 		pubKey:       pubKey,
 		address:      address,
 		baseReserve:  BaseReserveDrops,

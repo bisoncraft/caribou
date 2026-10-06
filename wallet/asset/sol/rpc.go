@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+	"github.com/bisoncraft/caribou/util/dexnet"
+)
 
 // rpcResponseSizeLimit bounds data accepted from an untrusted RPC endpoint.
 // Solana transaction responses can carry metadata, so retain the same 4 MiB
@@ -45,11 +45,19 @@ type rpcI interface {
 }
 
 type rpcClient struct {
-	httpURL string
+	httpURL    string
+	httpClient *http.Client
 }
 
-func newRPCClient(httpURL string) *rpcClient {
-	return &rpcClient{httpURL: httpURL}
+// newRPCClient returns a client for httpURL. A non-empty torProxy (host:port)
+// routes every request through that SOCKS5 proxy.
+func newRPCClient(httpURL, torProxy string) *rpcClient {
+	// torproxy: the proxy transport is installed below when configured
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	if torProxy != "" {
+		httpClient.Transport = dexnet.ProxyTransport(torProxy)
+	}
+	return &rpcClient{httpURL: httpURL, httpClient: httpClient}
 }
 
 func (c *rpcClient) call(ctx context.Context, method string, params any, result any) error {
@@ -67,7 +75,7 @@ func (c *rpcClient) call(ctx context.Context, method string, params any, result 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
 	}

@@ -163,6 +163,7 @@ type Wallet struct {
 	peersChange func(uint32, error)
 	dataDir     string
 	settings    map[string]string
+	torProxy    string
 
 	keyMtx  sync.RWMutex
 	privKey ed25519.PrivateKey
@@ -304,6 +305,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		peersChange: cfg.PeersChange,
 		dataDir:     cfg.DataDir,
 		settings:    cfg.Settings,
+		torProxy:    cfg.TorProxy,
 		pubKey:      pubKey,
 		address:     base58.Encode(pubKey),
 		txDB:        cfg.NetworkTxDB,
@@ -345,7 +347,7 @@ func (w *Wallet) Locked() bool {
 }
 
 func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
-	rpc := newRPCClient(w.rpcEndpoint())
+	rpc := newRPCClient(w.rpcEndpoint(), w.torProxy)
 	var mt txdb.StoreTable
 	if w.txDB != nil {
 		var err error
@@ -370,7 +372,7 @@ func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	refresh := make(chan struct{}, 1)
 	w.ws.Store(nil)
 	if wsURL := w.subscriptionEndpoint(); wsURL != "" {
-		ws := newWSClient(wsURL, w.log)
+		ws := newWSClient(wsURL, w.torProxy, w.log)
 		w.ws.Store(ws)
 		ws.watch(w.address, func() { signalRefresh(refresh) })
 		wg.Add(1)
