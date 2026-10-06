@@ -1,6 +1,7 @@
 package dexnet
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bisoncraft/caribou/util/testing/proxycanary"
 )
 
 func TestErrorParsing(t *testing.T) {
@@ -39,6 +42,64 @@ func TestProxyDialContext(t *testing.T) {
 	}
 	if fn := ProxyDialContext("127.0.0.1:1080"); fn == nil {
 		t.Fatal("expected non-nil for valid address")
+	}
+}
+
+// TestProxyDialContextStopsOnCancel: a proxy that accepts the connection but
+// never answers the handshake must not hold a caller past its cancellation,
+// or shutdown would wait on every proxied wallet connection.
+func TestProxyDialContextStopsOnCancel(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() {
+		_, err := ProxyDialContext(l.Addr().String())(ctx, "tcp", "example.com:80")
+		errc <- err
+	}()
+	select {
+	case c := <-accepted: // the handshake is under way and unanswered
+		defer c.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial never reached the proxy")
+	}
+	cancel()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("dial succeeded against a proxy that never answers")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("dial kept waiting on the proxy after cancel")
+	}
+}
+
+// TestProxyDialContextGivesUpOnStalledProxy: a dial whose context carries no
+// deadline, as net/http's transport hands out, must still end when the proxy
+// never answers, or the abandoned dial would keep its goroutine and socket.
+func TestProxyDialContextGivesUpOnStalledProxy(t *testing.T) {
+	old := proxyDialTimeout
+	proxyDialTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { proxyDialTimeout = old })
+
+	proxy := proxycanary.NewStalling(t)
+	// Cancelled at the end so a regression fails the test rather than
+	// leaving the dial, and the test, waiting on the proxy forever.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ProxyDialContext(proxy.Addr)(ctx, "tcp", "example.com:80")
+	if !proxy.WaitClosed(2 * time.Second) {
+		t.Fatal("the dial to the stalled proxy was left open")
 	}
 }
 

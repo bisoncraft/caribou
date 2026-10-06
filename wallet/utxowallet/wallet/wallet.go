@@ -143,6 +143,7 @@ type Wallet struct {
 	backendKind BackendKind
 	backend     walletBackend
 	dataDir     string
+	torProxy    string
 
 	newAddrMtx sync.Mutex
 
@@ -243,7 +244,7 @@ func (w *Wallet) Synchronize() error {
 
 	// Build the owned backend on first call (or after a full Shutdown).
 	if w.dataDir != "" && w.backend == nil {
-		b, err := newBackend(w.backendKind, w.chainParams, w.dataDir, log)
+		b, err := newBackend(w.backendKind, w.chainParams, w.dataDir, w.torProxy, log)
 		if err != nil {
 			return fmt.Errorf("wallet: build backend: %w", err)
 		}

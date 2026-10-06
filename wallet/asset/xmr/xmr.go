@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/xmr/cxmr"
 	"github.com/bisoncraft/caribou/wallet/txdb"
@@ -295,6 +296,7 @@ type ExchangeWallet struct {
 	daemonAddr  string
 	daemonUser  string
 	daemonPass  string
+	torProxy    string
 	feePriority cxmr.Priority
 
 	tipAtConnect  uint64
@@ -412,6 +414,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		daemonAddr:  daemonAddr,
 		daemonUser:  cfg.Settings["daemonusername"],
 		daemonPass:  cfg.Settings["daemonpassword"],
+		torProxy:    cfg.TorProxy,
 		feePriority: feePriority,
 		peersChange: cfg.PeersChange,
 	}
@@ -420,12 +423,14 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	// retry has to reuse the connection that was challenged. Keeping a single
 	// idle connection to the daemon makes that reliable for these serialized
 	// requests. See drainAndClose.
-	w.feeRPC = newDaemonRPC(daemonAddr, w.daemonUser, w.daemonPass, &http.Client{
+	w.feeRPC = newDaemonRPC(daemonAddr, w.daemonUser, w.daemonPass, &http.Client{ // torproxy: DialContext below is the proxy dialer when configured
 		Timeout: feeRequestTimeout,
+		// torproxy: DialContext below is the proxy dialer when configured
 		Transport: &http.Transport{
 			MaxIdleConns:        1,
 			MaxIdleConnsPerHost: 1,
 			IdleConnTimeout:     90 * time.Second,
+			DialContext:         dexnet.ProxyDialContext(cfg.TorProxy),
 		},
 	})
 
@@ -498,7 +503,7 @@ func (w *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	}
 
 	// Initialize connection to daemon
-	if !wallet.Init(w.daemonAddr, w.daemonUser, w.daemonPass, false, false, "") {
+	if !wallet.Init(w.daemonAddr, w.daemonUser, w.daemonPass, false, false, w.torProxy) {
 		return nil, fmt.Errorf("failed to initialize daemon connection: %s", wallet.ErrorString())
 	}
 

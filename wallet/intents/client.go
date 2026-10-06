@@ -89,6 +89,7 @@ func NewClient(cfg *Config, log util.Logger) (*Client, error) {
 	if len(key) != ed25519.PublicKeySize {
 		return nil, fmt.Errorf("bad signing key %q", keyStr)
 	}
+	// torproxy: the proxy transport is installed below when configured
 	httpClient := &http.Client{Timeout: requestTimeout}
 	if cfg.Proxy != "" {
 		httpClient.Transport = dexnet.ProxyTransport(cfg.Proxy)

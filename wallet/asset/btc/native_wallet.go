@@ -206,6 +206,7 @@ type NativeWallet struct {
 	netParams   *netparams.ChainParams
 	emit        *asset.WalletEmitter
 	peersChange func(uint32, error)
+	torProxy    string
 
 	// networkID and assetID identify this wallet's chain in the master
 	// transaction database records. This wallet type serves the clone assets
@@ -427,6 +428,7 @@ func NewNativeWallet(cc ChainConfig, cfg *asset.WalletConfig, log util.Logger) *
 		netParams:      cc.NetParams,
 		emit:           cfg.Emit,
 		peersChange:    cfg.PeersChange,
+		torProxy:       cfg.TorProxy,
 		networkID:      cc.Info.Network.ID,
 		assetID:        cc.Info.Network.NativeAssetID,
 		feeFetcher:     feeFetcher,
@@ -493,7 +495,10 @@ func (w *NativeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// restore's empty pool gets a branch-wide discovery scan, while an ordinary
 	// reconnect probes only the window beyond each branch's pool top. The
 	// "recoverywindow" setting overrides either default ("0" disables).
-	loaderOpts := []wallet.LoaderOption{wallet.WithBackendKind(w.cfg.BackendKind)}
+	loaderOpts := []wallet.LoaderOption{
+		wallet.WithBackendKind(w.cfg.BackendKind),
+		wallet.WithTorProxy(w.torProxy),
+	}
 	// Undocumented test knobs: shrink the watch policy's depths so harness
 	// tests can exercise the cold-address lifecycle in a few blocks.
 	if w.watchDepths[0] > 0 || w.watchDepths[1] > 0 {

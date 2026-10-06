@@ -117,6 +117,7 @@ func dial(ctx context.Context, addr string, opts *dialOptions) (*Server, error) 
 		dialer = proxy.DialContext
 		dCtx, dCancel = context.WithTimeout(ctx, torDialTimeout)
 	} else {
+		// torproxy: direct branch, taken only when no SOCKS5 proxy is set
 		dialer = (&net.Dialer{}).DialContext
 		dCtx, dCancel = context.WithTimeout(ctx, dialTimeout)
 	}

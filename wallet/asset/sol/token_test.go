@@ -486,7 +486,7 @@ func TestATAWatcherResync(t *testing.T) {
 		t.Fatalf("resync returned %p with no parent client, want nil", got)
 	}
 
-	first := newWSClient("", util.Disabled)
+	first := newWSClient("", "", util.Disabled)
 	parent.Store(first)
 	if got := watcher.resync(); got != first {
 		t.Fatalf("resync returned %p, want the parent's client %p", got, first)
@@ -503,7 +503,7 @@ func TestATAWatcherResync(t *testing.T) {
 	// The parent reconnects. The registration has to move, and the old client
 	// must be released — it may still be draining, and a registration it keeps
 	// is a notification callback nobody is reading.
-	second := newWSClient("", util.Disabled)
+	second := newWSClient("", "", util.Disabled)
 	parent.Store(second)
 	if got := watcher.resync(); got != second {
 		t.Fatalf("resync returned %p after the parent reconnected, want %p", got, second)
@@ -520,7 +520,7 @@ func TestATAWatcherResync(t *testing.T) {
 	wantWatched(t, second, "the client the parent dropped")
 
 	// stop is the deferred cleanup on the token wallet's own disconnect.
-	third := newWSClient("", util.Disabled)
+	third := newWSClient("", "", util.Disabled)
 	parent.Store(third)
 	watcher.resync()
 	wantWatched(t, third, "the client at stop time", ata)
@@ -547,7 +547,7 @@ func TestATAWatcherLivenessFollowsTheParent(t *testing.T) {
 		current:  parent.Load,
 	}
 
-	live := newWSClient("", util.Disabled)
+	live := newWSClient("", "", util.Disabled)
 	parent.Store(live)
 	cur := watcher.resync()
 	// Set after registering, since watch recomputes live from the subscription
@@ -561,7 +561,7 @@ func TestATAWatcherLivenessFollowsTheParent(t *testing.T) {
 	// A fresh client from a reconnect is not live until its subscribes land, so
 	// the poll has to tighten back up. Reading the old client instead would
 	// hold the slow cadence on a connection this ATA is no longer on.
-	reconnected := newWSClient("", util.Disabled)
+	reconnected := newWSClient("", "", util.Disabled)
 	parent.Store(reconnected)
 	cur = watcher.resync()
 	if cur != reconnected {

@@ -19,25 +19,65 @@ import (
 
 const defaultResponseSizeLimit = 1 << 20 // 1 MiB = 1,048,576 bytes
 
+// proxyDialTimeout bounds a dial through the proxy whose context carries no
+// deadline. The socks library stops waiting on a stalled proxy only at the
+// context's deadline, so without it an abandoned dial would hold its goroutine
+// and socket for as long as the proxy stays silent. A variable so tests can
+// shorten it.
+var proxyDialTimeout = 30 * time.Second
+
 // Client is the default HTTP client used for requests.
+// torproxy: the shared client; SetProxy installs the proxy transport on it
 var Client = &http.Client{
 	Timeout: 20 * time.Second, // 20 seconds
 }
 
 // ProxyDialContext returns a DialContext function that routes connections
 // through a SOCKS5 proxy at addr (host:port). If addr is empty, nil is
-// returned.
+// returned. The dial returns as soon as ctx is done, and gives up on a proxy
+// that never answers after proxyDialTimeout. The socks library only honors a
+// context's deadline, so neither would hold otherwise.
 func ProxyDialContext(addr string) func(ctx context.Context, network, address string) (net.Conn, error) {
 	if addr == "" {
 		return nil
 	}
 	proxy := &socks.Proxy{Addr: addr}
-	return proxy.DialContext
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		type result struct {
+			conn net.Conn
+			err  error
+		}
+		res := make(chan result, 1)
+		go func() {
+			dctx, cancel := context.WithTimeout(ctx, proxyDialTimeout)
+			defer cancel()
+			conn, err := proxy.DialContext(dctx, network, address)
+			res <- result{conn, err}
+		}()
+		select {
+		case r := <-res:
+			// socks returns a nil *proxiedConn inside a non-nil net.Conn on
+			// error, so trust err rather than a nil check on conn.
+			if r.err != nil {
+				return nil, r.err
+			}
+			return r.conn, nil
+		case <-ctx.Done():
+			// Close a connection the abandoned dial may still complete.
+			go func() {
+				if r := <-res; r.err == nil {
+					r.conn.Close()
+				}
+			}()
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // ProxyTransport returns an *http.Transport that routes all connections through
 // a SOCKS5 proxy at addr (host:port).
 func ProxyTransport(addr string) *http.Transport {
+	// torproxy: this is the proxy transport
 	return &http.Transport{
 		DialContext:           ProxyDialContext(addr),
 		ForceAttemptHTTP2:     false,
@@ -51,6 +91,7 @@ func ProxyTransport(addr string) *http.Transport {
 // ProxyHTTPClient returns an *http.Client that routes all requests through a
 // SOCKS5 proxy at addr (host:port).
 func ProxyHTTPClient(addr string) *http.Client {
+	// torproxy: this is the proxy client
 	return &http.Client{
 		Transport: ProxyTransport(addr),
 		Timeout:   20 * time.Second,

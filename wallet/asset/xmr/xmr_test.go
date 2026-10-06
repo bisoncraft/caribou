@@ -20,6 +20,12 @@ import (
 // to a daemon.
 func tOfflineWallet(t *testing.T, dataDir string, create bool) *ExchangeWallet {
 	t.Helper()
+	return tOpenWallet(t, dataDir, create, nil)
+}
+
+// tOpenWallet is tOfflineWallet with a hook to adjust the wallet config.
+func tOpenWallet(t *testing.T, dataDir string, create bool, adjust func(*asset.WalletConfig)) *ExchangeWallet {
+	t.Helper()
 
 	pass := []byte("abc")
 	logger := util.NewLogger("XMRTEST", util.LevelError, os.Stdout)
@@ -43,10 +49,14 @@ func tOfflineWallet(t *testing.T, dataDir string, create bool) *ExchangeWallet {
 		}
 	}
 
-	w, err := drv.Open(&asset.WalletConfig{
+	cfg := &asset.WalletConfig{
 		Type:    walletTypeNative,
 		DataDir: dataDir,
-	}, logger, util.Simnet)
+	}
+	if adjust != nil {
+		adjust(cfg)
+	}
+	w, err := drv.Open(cfg, logger, util.Simnet)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
