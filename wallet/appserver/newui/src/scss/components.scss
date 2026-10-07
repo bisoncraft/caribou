@@ -38,6 +38,20 @@ form.modal {
   background-color: var(--surface);
 }
 
+// Elements of the rendered legal markdown (shared LegalText component).
+.legal-text {
+  h3 { margin: 0 0 0.5rem; font-size: 18px; font-weight: var(--demi-bold); }
+  h4 { margin: 0.75rem 0 0.25rem; font-size: 14px; font-weight: var(--demi-bold); }
+  p, ul { margin: 0 0 0.5rem; }
+  ul { padding-left: 1.25rem; }
+}
+
+// Scrollable legal text on the first-run Terms screen.
+.terms-body {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
 // Translucent loading overlay; sits above page content.
 .loading-bg {
   background-color: color-mix(in srgb, var(--body-bg) 47%, transparent);
