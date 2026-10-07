@@ -194,6 +194,14 @@ func (tdb *TDB) SendRequiresPassword() (bool, error) {
 	return false, nil
 }
 
+func (tdb *TDB) SetAcceptedTermsVersion(version string) error {
+	return nil
+}
+
+func (tdb *TDB) AcceptedTermsVersion() (string, error) {
+	return "", nil
+}
+
 func (tdb *TDB) NextMultisigKeyIndex(assetID uint32) (uint32, error) {
 	return 0, nil
 }
