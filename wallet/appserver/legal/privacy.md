@@ -25,10 +25,6 @@ You can start Caribou with the `--torproxy` option to route outbound connections
 
 Blockchain transactions are public and permanent. Anyone can see an address's balance and history. Caribou cannot remove or hide what is recorded on a public blockchain.
 
-## Children
-
-Caribou is not intended for anyone under 18.
-
 ## Changes
 
 If this policy changes, the version changes and Caribou asks you to accept the new version before you continue. Questions can be raised as an issue at https://github.com/bisoncraft/caribou.
