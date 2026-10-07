@@ -24,7 +24,3 @@ You can start Caribou with the `--torproxy` option to route outbound connections
 ## Public blockchains
 
 Blockchain transactions are public and permanent. Anyone can see an address's balance and history. Caribou cannot remove or hide what is recorded on a public blockchain.
-
-## Changes
-
-If this policy changes, the version changes and Caribou asks you to accept the new version before you continue. Questions can be raised as an issue at https://github.com/bisoncraft/caribou.
