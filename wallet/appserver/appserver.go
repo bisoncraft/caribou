@@ -157,6 +157,8 @@ type clientCore interface {
 	APIToken() (string, error)
 	SetSendRequiresPassword(require bool) error
 	SendRequiresPassword() (bool, error)
+	SetAcceptedTermsVersion(version string) error
+	AcceptedTermsVersion() (string, error)
 	VerifyPassword(pw []byte) error
 	TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error
 	BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName string) (*core.BridgeFeesAndLimits, error)
@@ -508,6 +510,8 @@ func New(cfg *Config) (*AppServer, error) {
 	mux.Route("/api", func(r chi.Router) {
 		r.Use(middleware.AllowContentType("application/json"))
 		r.Post("/init", s.apiInit)
+		r.Get("/terms", s.apiTerms)
+		r.Post("/acceptterms", s.apiAcceptTerms)
 		r.Post("/validateseed", s.apiValidateSeed)
 		r.Get("/isinitialized", s.apiIsInitialized)
 		r.Post("/resetapppassword", s.apiResetAppPassword)

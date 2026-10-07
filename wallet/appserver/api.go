@@ -411,6 +411,15 @@ func (s *AppServer) apiInit(w http.ResponseWriter, r *http.Request) {
 	if !readPost(w, r, &init) {
 		return
 	}
+	accepted, err := s.core.AcceptedTermsVersion()
+	if err != nil {
+		s.writeAPIError(w, fmt.Errorf("error reading terms acceptance: %w", err))
+		return
+	}
+	if accepted != termsVersion {
+		s.writeAPIError(w, errTermsNotAccepted)
+		return
+	}
 	var seed *string
 	if len(init.Seed) > 0 {
 		seed = &init.Seed
@@ -1136,6 +1145,12 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	acceptedTerms, err := s.core.AcceptedTermsVersion()
+	if err != nil {
+		log.Errorf("error reading accepted terms version: %v", err)
+		acceptedTerms = ""
+	}
+
 	response := struct {
 		User               *core.User  `json:"user"`
 		Lang               string      `json:"lang"`
@@ -1145,6 +1160,8 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		OnionUrl           string      `json:"onionUrl"`
 		CompanionAppPaired bool        `json:"companionAppPaired"`
 		AppSettings        appSettings `json:"appSettings"`
+		TermsVersion       string      `json:"termsVersion"`
+		TermsAccepted      bool        `json:"termsAccepted"`
 	}{
 		User:               u,
 		Lang:               *s.lang.Load(),
@@ -1154,6 +1171,8 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		OnionUrl:           s.onion,
 		CompanionAppPaired: paired,
 		AppSettings:        settings,
+		TermsVersion:       termsVersion,
+		TermsAccepted:      acceptedTerms == termsVersion,
 	}
 	writeJSON(w, response)
 }
