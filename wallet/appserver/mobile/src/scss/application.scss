@@ -232,6 +232,25 @@ body {
   }
 }
 
+// Elements of the rendered legal markdown (shared LegalText component).
+.legal-text {
+  h3 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+  h4 { margin: 0.75rem 0 0.25rem; font-size: 0.95rem; }
+  p, ul { margin: 0 0 0.5rem; }
+  ul { padding-left: 1.25rem; }
+}
+
+// Scrollable legal text on the first-run Terms screen.
+.mb-terms-body {
+  max-height: 45dvh;
+  overflow-y: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--mb-border);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
 .mb-init-hint {
   font-size: 0.8rem;
   min-height: 1.1em;
@@ -455,6 +474,7 @@ body {
 }
 
 .mb-check-row {
+  text-align: left;
   display: flex;
   align-items: center;
   gap: 0.6rem;
