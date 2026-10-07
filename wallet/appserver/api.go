@@ -1145,6 +1145,9 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A failed read counts as "not accepted": the user is asked again rather
+	// than the app being blocked or the gate skipped. The error is logged on
+	// every call, so a persistent database failure shows up in the log.
 	acceptedTerms, err := s.core.AcceptedTermsVersion()
 	if err != nil {
 		log.Errorf("error reading accepted terms version: %v", err)
