@@ -7,4 +7,4 @@ Categories=Office;Finance;
 Icon=caribou
 Exec=caribou-desktop
 Terminal=false
-StartupWMClass=Caribou
+StartupWMClass=caribou-desktop

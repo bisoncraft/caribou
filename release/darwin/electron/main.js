@@ -62,6 +62,11 @@ function main() {
     );
     app.on("activate", showWindow);
     showWindow(); // no-op until the appserver is up
+  }).catch((err) => {
+    // Without this a startup failure is an unhandled rejection on a stdout
+    // nobody sees, and the app sits in the dock with no window.
+    dialog.showErrorBox("Caribou failed to start", err.message);
+    app.exit(1);
   });
 
   // Keep running with only the tray and dock icon when the window closes;
@@ -72,15 +77,17 @@ function main() {
     // The app ends with app.exit once caribou is down, which destroys the
     // window without a close event.
     if (mainWindow && !mainWindow.isDestroyed()) saveBounds(mainWindow.getNormalBounds());
-    if (caribou && caribou.exitCode === null && !shuttingDown) {
-      e.preventDefault();
-      shuttingDown = true;
-      // caribou logs out and exits on SIGINT; its exit handler ends the app.
-      caribou.kill("SIGINT");
-      setTimeout(() => {
-        if (caribou.exitCode === null) caribou.kill("SIGKILL");
-      }, 15000);
-    }
+    if (!caribouRunning()) return;
+    e.preventDefault();
+    if (shuttingDown) return; // a repeat Cmd+Q; the exit handler ends the app
+    shuttingDown = true;
+    // The window goes away at once so the quit is seen to take, while caribou
+    // logs out (up to 15 s) and exits on SIGINT; its exit handler ends the app.
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+    caribou.kill("SIGINT");
+    setTimeout(() => {
+      if (caribouRunning()) caribou.kill("SIGKILL");
+    }, 15000);
   });
 
   ipcMain.on("notify", (_, { title, body }) => {
@@ -117,26 +124,43 @@ async function offerMoveToApplications() {
   });
   if (checkboxChecked) writeState({ ...state, keepOutsideApplications: true });
   if (response !== 0) return false;
-  return app.moveToApplicationsFolder({
-    conflictHandler: (type) => {
-      if (type === "existsAndRunning") {
-        dialog.showErrorBox(
-          "Caribou is already running",
-          "Quit the Caribou in the Applications folder, then try again.",
-        );
-        return false;
-      }
-      const replace = dialog.showMessageBoxSync({
-        type: "question",
-        message: "Replace the Caribou already in the Applications folder?",
-        detail: "The existing copy goes to the Trash. Wallet data is kept separately and is not affected.",
-        buttons: ["Replace", "Cancel"],
-        defaultId: 0,
-        cancelId: 1,
-      });
-      return replace === 0;
-    },
-  });
+  // A move the user declines resolves to false; one that fails (a full disk,
+  // an existing copy that cannot be trashed) throws. Report it and carry on
+  // from the current location rather than leave a dock icon with no window.
+  try {
+    return await app.moveToApplicationsFolder({
+      conflictHandler: (type) => {
+        if (type === "existsAndRunning") {
+          dialog.showErrorBox(
+            "Caribou is already running",
+            "Quit the Caribou in the Applications folder, then try again.",
+          );
+          return false;
+        }
+        const replace = dialog.showMessageBoxSync({
+          type: "question",
+          message: "Replace the Caribou already in the Applications folder?",
+          detail: "The existing copy goes to the Trash. Wallet data is kept separately and is not affected.",
+          buttons: ["Replace", "Cancel"],
+          defaultId: 0,
+          cancelId: 1,
+        });
+        return replace === 0;
+      },
+    });
+  } catch (err) {
+    dialog.showErrorBox(
+      "Couldn't move Caribou to the Applications folder",
+      `${err.message}\n\nCaribou will run from its current location.`,
+    );
+    return false;
+  }
+}
+
+// caribouRunning reports whether the wallet process was started and has not
+// yet exited, by code or by signal.
+function caribouRunning() {
+  return caribou !== null && caribou.exitCode === null && caribou.signalCode === null;
 }
 
 function startCaribou() {
@@ -156,21 +180,33 @@ function startCaribou() {
     const net = line.match(/starting for network: (\w+)/);
     if (net && !network) network = net[1];
   });
-  caribou.stderr.on("data", (data) => console.error(data.toString()));
+  // A startup failure (an unreadable database, a bad caribou.conf) is
+  // reported on stderr alone, before or outside the log file, so the tail of
+  // stderr is kept for the dialog below.
+  let stderrTail = "";
+  caribou.stderr.on("data", (data) => {
+    const text = data.toString();
+    console.error(text);
+    stderrTail = (stderrTail + text).slice(-2000);
+  });
 
   caribou.on("error", (err) => {
     dialog.showErrorBox("Caribou failed to start", err.message);
     app.exit(1);
   });
-  caribou.on("exit", (code, signal) => {
+  // "close" rather than "exit": it fires once stdout and stderr have drained,
+  // so the last stderr output is in hand.
+  caribou.on("close", (code, signal) => {
     console.log(`caribou exited (code ${code}, signal ${signal})`);
-    if (!shuttingDown && code) {
+    if (!shuttingDown && (code || signal)) {
+      const how = signal ? `signal ${signal}` : `code ${code}`;
+      const detail = stderrTail.trim() || "The logs folder has details.";
       dialog.showErrorBox(
         "Caribou stopped",
-        `The wallet process exited unexpectedly (code ${code}). The logs folder has details.`,
+        `The wallet process exited unexpectedly (${how}).\n\n${detail}`,
       );
     }
-    app.exit(code || 0);
+    app.exit(code || (signal ? 1 : 0));
   });
 }
 

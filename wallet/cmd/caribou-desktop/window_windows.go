@@ -50,6 +50,23 @@ static UINT window_dpi(HWND h) {
 	return dpi ? dpi : 96;
 }
 
+typedef BOOL (WINAPI *adjust_window_rect_ex_for_dpi_t)(LPRECT, DWORD, BOOL, DWORD, UINT);
+
+// adjust_window_rect grows a client rectangle to the outer window rectangle
+// for the window's style, at the given DPI where the system supports it
+// (Windows 10 1607 and later) and at the system DPI otherwise.
+static void adjust_window_rect(HWND h, RECT *r, UINT dpi) {
+	DWORD style = (DWORD)GetWindowLongPtrW(h, GWL_STYLE);
+	DWORD exStyle = (DWORD)GetWindowLongPtrW(h, GWL_EXSTYLE);
+	adjust_window_rect_ex_for_dpi_t adjust = (adjust_window_rect_ex_for_dpi_t)(void *)GetProcAddress(
+		GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi");
+	if (adjust) {
+		adjust(r, style, FALSE, exStyle, dpi);
+	} else {
+		AdjustWindowRectEx(r, style, FALSE, exStyle);
+	}
+}
+
 // place_window puts the window on the given monitor (or, if that is not a
 // valid monitor, the one it is on), sized to 80% of the monitor's work area,
 // capped at 1920x1080 at the monitor's scale, and centered. webview makes the
@@ -84,6 +101,19 @@ static int place_window(void *hwnd, uintptr_t monitor) {
 	}
 	if (height > maxH) {
 		height = maxH;
+	}
+	// The UI's layout floor is 1024x600 CSS px of client area. 80% of a
+	// 1920x1080 work area at 150% comes out just under that once the frame
+	// is taken off, so the outer size is floored at the frame-inclusive
+	// minimum, within the work area.
+	RECT min = {0, 0, MulDiv(1024, dpi, 96), MulDiv(600, dpi, 96)};
+	adjust_window_rect(h, &min, dpi);
+	int minW = min.right - min.left, minH = min.bottom - min.top;
+	if (width < minW) {
+		width = minW < areaW ? minW : areaW;
+	}
+	if (height < minH) {
+		height = minH < areaH ? minH : areaH;
 	}
 	return SetWindowPos(h, NULL, wa.left + (areaW - width) / 2, wa.top + (areaH - height) / 2,
 		width, height, SWP_NOZORDER | SWP_NOACTIVATE) != 0;

@@ -71,6 +71,9 @@ func runCore(cfg *app.Config) error {
 	// Prepare the Core.
 	clientCore, err := core.New(cfg.Core(logMaker.Logger("CORE")))
 	if err != nil {
+		// Logged as well as returned: the caller prints the error to stderr
+		// only, which a desktop shell's user never sees.
+		log.Errorf("Error creating client core: %v", err)
 		return fmt.Errorf("error creating client core: %w", err)
 	}
 
@@ -106,6 +109,7 @@ func runCore(cfg *app.Config) error {
 	if !cfg.NoWeb {
 		webSrv, err := appserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
 		if err != nil {
+			log.Errorf("Error creating web server: %v", err)
 			return fmt.Errorf("failed creating web server: %w", err)
 		}
 
