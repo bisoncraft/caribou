@@ -10,7 +10,7 @@ import CoinLogo from '@caribou/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@caribou/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
 import TxRow, { TxRowItem, variantForTx } from './TxRow'
-import { IntentsSwap, fetchIntentsAssets, fetchSwaps, relateTxToSwaps } from '../intents'
+import { IntentsSwap, fetchSwaps, relateTxToSwaps } from '../intents'
 
 interface AssetParams {
   ticker: string
@@ -128,15 +128,6 @@ export default function Asset ({ ticker }: AssetParams) {
     }))
   }, [])
 
-  // Asset IDs with a cross-chain swap route, for gating the hero's swap
-  // button. null (loading or engine unavailable) stays optimistic.
-  const [swappableIDs, setSwappableIDs] = useState<Set<number> | null>(null)
-  useEffect(() => {
-    fetchIntentsAssets().then(list => {
-      if (list) setSwappableIDs(new Set(list.map(a => a.assetID)))
-    })
-  }, [])
-
   useCoreSubscriptions({
     onBalance: redraw,
     onRate: redraw,
@@ -183,8 +174,6 @@ export default function Asset ({ ticker }: AssetParams) {
   }
 
   const rate = ta.xcRate ?? 0
-  // Whether any of the group's deployments has a cross-chain swap route.
-  const swapAvailable = swappableIDs === null || ta.variants.some(v => swappableIDs.has(v.assetID))
   const hasUnavailable = ta.immature > 0 || ta.locked > 0
   const isMultiNet = ta.variants.length > 1
 
@@ -276,9 +265,7 @@ export default function Asset ({ ticker }: AssetParams) {
               <span className="ico-send fs16" />
             </button>
             <button
-              type="button" className="round-btn p-0 border-0 icon-40 flex-center has-tip ms-2"
-              aria-label={swapAvailable ? t('Swap') : tvar('No swap route is available for {{ ticker }}.', { ticker: ta.ticker })}
-              disabled={!swapAvailable}
+              type="button" className="round-btn p-0 border-0 icon-40 flex-center has-tip ms-2" aria-label={t('Swap')}
               onClick={() => app.setForm({ form: 'swap', data: {} })}
             >
               <span className="ico-swap fs16" />

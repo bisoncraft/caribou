@@ -131,15 +131,6 @@ export function atomsToConventional (atoms: number, atomDecimals: number): numbe
   return atoms / Math.pow(10, atomDecimals)
 }
 
-// fetchIntentsAssets loads the assets available for cross-chain swaps.
-// The endpoint errors when the swap engine is unavailable this session, in
-// which case null lets callers keep their optimistic default rather than
-// treating every asset as unswappable.
-export async function fetchIntentsAssets (): Promise<IntentsAsset[] | null> {
-  const r = await getJSON('/api/intents/assets')
-  return r.ok ? (r.assets as IntentsAsset[]) ?? [] : null
-}
-
 // fetchSwaps loads the persisted cross-chain swap records, newest first.
 // The endpoint errors when the swap engine is unavailable this session, in
 // which case there are simply no swaps to show.
