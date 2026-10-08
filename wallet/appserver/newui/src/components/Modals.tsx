@@ -52,7 +52,7 @@ export default function Modals ({ fd }: ModalsParams) {
       // initial selection from these props on mount only.
       case 'receive': return <Receive key={`${fd.data?.ticker ?? ''}:${fd.data?.assetID ?? ''}`} ticker={fd.data?.ticker} assetID={fd.data?.assetID} />
       case 'send': return <Send ticker={fd.data?.ticker} />
-      case 'swap': return <Swap depositAddress={fd.data?.depositAddress} />
+      case 'swap': return <Swap depositAddress={fd.data?.depositAddress} ticker={fd.data?.ticker} assetIDs={fd.data?.assetIDs} />
       case 'recoverswaps': return <RecoverSwaps />
       case 'activateasset': return <ActivateAsset ticker={fd.data.ticker} />
       case 'activatenetwork': return <ActivateNetwork assetID={fd.data.assetID} />

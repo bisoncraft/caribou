@@ -125,11 +125,16 @@ interface SwapProps {
   // depositAddress opens the dialog directly on an existing swap's progress
   // view (e.g. from an Activity row).
   depositAddress?: string
+  // ticker and assetIDs name the asset the dialog was opened from (the
+  // Asset view), so the dialog can say so when the catalog has no route
+  // for it.
+  ticker?: string
+  assetIDs?: number[]
 }
 
 type View = 'form' | 'pick' | 'review' | 'progress'
 
-export default function Swap ({ depositAddress }: SwapProps) {
+export default function Swap ({ depositAddress, ticker, assetIDs }: SwapProps) {
   const close = () => app.setForm({ form: '', data: {} })
   const redraw = useForceUpdate()
 
@@ -181,6 +186,10 @@ export default function Swap ({ depositAddress }: SwapProps) {
 
   const sellAsset = sellID === null ? null : assetMap.get(sellID) ?? null
   const buyAsset = buyID === null ? null : assetMap.get(buyID) ?? null
+
+  // Whether the asset the dialog was opened from has no swap route. Known
+  // only once the catalog has loaded.
+  const noRoute = Boolean(ticker && assetIDs?.length && assets && !assets.some(a => assetIDs.includes(a.assetID)))
 
   const exactOutput = editSide === 'buy'
   const editAsset = exactOutput ? buyAsset : sellAsset
@@ -769,6 +778,12 @@ export default function Swap ({ depositAddress }: SwapProps) {
           <span className="ico-gear fs16" />
         </button>
       </header>
+
+      {noRoute && (
+        <div role="status" className="grey fs12 px-3 pb-2 text-center">
+          {tvar('No swap route is available for {{ ticker }}.', { ticker: ticker! })}
+        </div>
+      )}
 
       {showSlippage && (
         <div className="swap-slip-pop d-flex align-items-center fs13">

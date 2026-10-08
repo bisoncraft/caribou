@@ -417,8 +417,7 @@ body.sidebar-collapsed .sidebar-label {
   flex-shrink: 0;
 }
 
-// Inactive rows. The dashed bar is anchored to the leftmost cell so we
-// don't get one stripe per <td>.
+// Inactive rows are dimmed until hovered.
 .inactive-asset-row {
   cursor: pointer;
   transition: background-color 0.15s;
@@ -426,10 +425,6 @@ body.sidebar-collapsed .sidebar-label {
   td {
     opacity: 0.55;
     transition: opacity 0.15s, color 0.15s;
-  }
-
-  td:first-child {
-    border-left: 3px dashed color-mix(in srgb, var(--accent-border) 40%, transparent);
   }
 
   &:hover {

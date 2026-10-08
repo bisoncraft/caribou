@@ -266,7 +266,7 @@ export default function Asset ({ ticker }: AssetParams) {
             </button>
             <button
               type="button" className="round-btn p-0 border-0 icon-40 flex-center has-tip ms-2" aria-label={t('Swap')}
-              onClick={() => app.setForm({ form: 'swap', data: {} })}
+              onClick={() => app.setForm({ form: 'swap', data: { ticker: ta.ticker, assetIDs: ta.variants.map(v => v.assetID) } })}
             >
               <span className="ico-swap fs16" />
             </button>
