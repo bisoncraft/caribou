@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -93,7 +94,21 @@ var (
 		hdkeychain.HardenedKeyStart,       // 0' (hardened for ed25519)
 	}
 
-	namedAccountRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)*\.(near|testnet)$`)
+	// namedAccountRE matches NEAR's protocol-level account ID grammar
+	// (NEP-0006): lowercase-alphanumeric parts separated by '.', each part
+	// internally separated by '-'/'_'. There is no required top-level
+	// suffix -- this accepts every valid named account, including the small
+	// set of legacy top-level accounts registered before NEAR restricted
+	// top-level account creation to .near/.testnet (e.g. "aurora"), which a
+	// stricter .near/.testnet-only check used to reject outright. NEAR has
+	// no address checksum at the protocol level (unlike ETH's EIP-55 or
+	// BTC's base58check), so no syntax check here can catch a truncation or
+	// transposition that still happens to form a valid-looking name (e.g.
+	// "bo.near" for "bob.near") -- a stricter suffix requirement only ever
+	// caught one narrow truncation shape (dropping the whole suffix) at the
+	// cost of rejecting every legitimate account outside it. Overall length
+	// (2-64) is checked separately in ValidateAddress.
+	namedAccountRE = regexp.MustCompile(`^(([a-z0-9]+[-_])*[a-z0-9]+\.)*([a-z0-9]+[-_])*[a-z0-9]+$`)
 )
 
 func init() {
@@ -233,6 +248,15 @@ type NearWallet struct {
 	// call without missing any transactions (the chunk's contents cannot
 	// have changed since last time).
 	lastChunkHash map[int]string
+
+	// metaTable holds the persisted scan cursor. Set in Connect; nil (and
+	// the cursor helpers below are no-ops) if a wallet is never connected,
+	// which unit tests that call scanIncomingTxs directly rely on.
+	metaTable txdb.StoreTable
+	// scanBackoff cools down the incoming-transfer scan after a failure, so
+	// a persistently broken RPC path doesn't get hammered every tipPoller
+	// tick. Zero value is ready to use.
+	scanBackoff scanBackoff
 }
 
 var _ asset.Wallet = (*NearWallet)(nil)
@@ -364,7 +388,33 @@ func (w *NearWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error)
 	copy(w.tipHash[:], decodeBlockHash(block.Header.Hash))
 	w.tipMtx.Unlock()
 
-	w.lastScannedHeight = block.Header.Height
+	// lastScannedHeight resumes from a persisted cursor across restarts, so
+	// a wallet that was closed and reopened doesn't silently skip scanning
+	// whatever arrived in between. Only a genuine first run (no cursor ever
+	// written) seeds at the current tip; pre-existing history is not
+	// backfilled.
+	if w.txDB != nil {
+		metaTable, err := w.txDB.Table(scanMetaTableName)
+		if err != nil {
+			return nil, fmt.Errorf("error opening scan meta table: %w", err)
+		}
+		w.metaTable = metaTable
+
+		cursor, err := w.getScanCursor()
+		if err != nil {
+			return nil, fmt.Errorf("error reading scan cursor: %w", err)
+		}
+		if cursor != 0 {
+			w.lastScannedHeight = cursor
+		} else {
+			w.lastScannedHeight = block.Header.Height
+			if err := w.setScanCursor(w.lastScannedHeight); err != nil {
+				w.log.Errorf("Error seeding scan cursor: %v", err)
+			}
+		}
+	} else {
+		w.lastScannedHeight = block.Header.Height
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -405,8 +455,30 @@ func (w *NearWallet) Balance() (*asset.Balance, error) {
 		return nil, fmt.Errorf("error parsing locked balance %q", info.Locked)
 	}
 
+	// info.Amount includes the yoctoNEAR staked for the account's own storage
+	// (roughly 182 bytes for a bare implicit account, more with access keys
+	// and contract state), which is not spendable: a transfer that leaves the
+	// account under this amount is rejected on-chain with
+	// LackBalanceForState. It also includes the fee a transfer that spends
+	// this balance would burn, reserved here at the same 1x transferGas the
+	// pre-flight in sendActions charges (spendableYoctoMarginAtGas with
+	// margin=1) -- without it Available reports an amount that this
+	// wallet's own pre-flight then rejects, so a caller that sends exactly
+	// Available (the max-fill every UI offers) gets ErrInsufficientBalance
+	// on a balance the wallet just called spendable. Move both into Locked,
+	// mirroring how xrp reports its reserve, so Available reflects what can
+	// actually be sent while Available+Locked still equals the on-chain
+	// total.
+	reserve := new(big.Int).Add(storageReserve(info), w.estimateFeeYocto())
+	availableAfterStorage := new(big.Int).Sub(available, reserve)
+	if availableAfterStorage.Sign() < 0 {
+		availableAfterStorage.SetUint64(0)
+	}
+	movedToLocked := new(big.Int).Sub(available, availableAfterStorage)
+	locked = new(big.Int).Add(locked, movedToLocked)
+
 	return &asset.Balance{
-		Available: YoctoToDrops(available),
+		Available: YoctoToDrops(availableAfterStorage),
 		Locked:    YoctoToDrops(locked),
 	}, nil
 }
@@ -416,7 +488,11 @@ func (w *NearWallet) DepositAddress() (string, error) {
 }
 
 func (w *NearWallet) OwnsDepositAddress(address string) (bool, error) {
-	return strings.EqualFold(address, w.accountID), nil
+	// Exact match, not case-insensitive: w.accountID is always the lowercase
+	// hex encoding of the public key, and NEAR account IDs are lowercase
+	// only, so an EqualFold match would also accept an uppercase variant
+	// that ValidateAddress itself would reject.
+	return address == w.accountID, nil
 }
 
 // reserveNonce reserves the next access-key nonce for a transaction. Callers
@@ -444,6 +520,9 @@ func (w *NearWallet) Send(address string, value, _ uint64) (asset.Coin, error) {
 	if value == 0 {
 		return nil, fmt.Errorf("cannot send zero value")
 	}
+	// The balance pre-flight lives in sendActions, inside nonceMtx, so it
+	// covers every send path (native, token, storage deposit) against a
+	// balance read that a concurrent send can't invalidate out from under it.
 	return w.sendYocto(address, DropsToYocto(value))
 }
 
@@ -465,7 +544,7 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 		return nil, err
 	}
 
-	result, hash, refHeight, err := w.sendActions(w.ctx, rpc, privKey, address, []action{transferAction(yoctoAmount)})
+	result, hash, refHeight, err := w.sendActions(w.ctx, rpc, privKey, address, []action{transferAction(yoctoAmount)}, yoctoAmount, transferGas)
 
 	var rejected bool
 	var failureMsg string
@@ -539,10 +618,34 @@ func (w *NearWallet) sendYocto(address string, yoctoAmount *big.Int) (asset.Coin
 // with the given receiver and actions, retrying once with a refreshed nonce
 // if the network rejects the first attempt for a stale nonce. Both the
 // native transfer and token paths route through here so they share the
-// retry behavior.
-func (w *NearWallet) sendActions(ctx context.Context, rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action) (result *txResult, hash [32]byte, refHeight uint64, err error) {
+// retry behavior and the balance pre-flight below. attachedYocto is the
+// total yoctoNEAR the actions will spend from this account (a transfer
+// deposit, or a token send's storage_deposit plus its 1-yoctoNEAR
+// ft_transfer deposit) -- not the gas fee, which the pre-flight reserves
+// separately, priced at gasBudget (the actual gas attached to actions, e.g.
+// ftTransferGas+storageDepositGas for a token send -- transferGas alone
+// would under-reserve a function-call transaction's gas by orders of
+// magnitude).
+func (w *NearWallet) sendActions(ctx context.Context, rpc *rpcClient, privKey ed25519.PrivateKey, receiverID string, actions []action, attachedYocto *big.Int, gasBudget int64) (result *txResult, hash [32]byte, refHeight uint64, err error) {
 	w.nonceMtx.Lock()
 	defer w.nonceMtx.Unlock()
+
+	// Checked here, inside nonceMtx, so every send path (native Send,
+	// Withdraw, TokenWallet.Send) shares one gate instead of each caller
+	// duplicating it. This does not by itself close the race between two
+	// rapid concurrent sends: viewAccount queries "final" finality, which
+	// lags a few seconds regardless of when or how many times it's queried,
+	// so back-to-back sends can still both read the same pre-send balance.
+	// margin=1 (not the 2x spendableYocto reserves for Withdraw's max-sweep
+	// headroom) matches the 1x fee StandardSendFee/FeeRate report to
+	// callers; EstimateSendTxFee's own admission check is stricter, at 2x.
+	spendable, err := w.spendableYoctoMarginAtGas(ctx, rpc, 1, gasBudget)
+	if err != nil {
+		return nil, hash, 0, fmt.Errorf("error checking balance: %w", err)
+	}
+	if attachedYocto.Cmp(spendable) > 0 {
+		return nil, hash, 0, asset.ErrInsufficientBalance
+	}
 
 	nonce, err := w.reserveNonce(ctx, rpc)
 	if err != nil {
@@ -601,12 +704,22 @@ func (w *NearWallet) broadcastActions(ctx context.Context, rpc *rpcClient, privK
 }
 
 func (w *NearWallet) ValidateAddress(address string) bool {
-	// Implicit account: 64-char hex string (ed25519 pubkey).
+	// Implicit account: 64-char lowercase hex string (ed25519 pubkey). NEAR
+	// account IDs are lowercase only; hex.DecodeString alone would also
+	// accept A-F, which is not a valid NEAR implicit account.
 	if len(address) == 64 {
+		if address != strings.ToLower(address) {
+			return false
+		}
 		_, err := hex.DecodeString(address)
 		return err == nil
 	}
-	// Named account.
+	// Named account: length 2-64 per NEP-0006, checked separately from
+	// namedAccountRE since a regex quantifier bounding the whole
+	// dot-separated string is harder to read than this.
+	if len(address) < 2 || len(address) > 64 {
+		return false
+	}
 	return namedAccountRE.MatchString(address)
 }
 
@@ -640,10 +753,21 @@ func (w *NearWallet) estimateFee() uint64 {
 // current (cached) gas price, falling back to DefaultFee when no gas price
 // has ever been obtained.
 func (w *NearWallet) estimateFeeYocto() *big.Int {
+	return w.estimateFeeYoctoAtGas(transferGas)
+}
+
+// estimateFeeYoctoAtGas prices a gas budget at the current (cached) gas
+// price, falling back to DefaultFee (calibrated for a bare transfer's
+// transferGas) scaled to this budget when no gas price has ever been
+// obtained.
+func (w *NearWallet) estimateFeeYoctoAtGas(gasBudget int64) *big.Int {
 	if gp := w.cachedGasPrice(); gp != nil {
-		return new(big.Int).Mul(gp, big.NewInt(transferGas))
+		return new(big.Int).Mul(gp, big.NewInt(gasBudget))
 	}
-	return DropsToYocto(DefaultFee)
+	return new(big.Int).Div(
+		new(big.Int).Mul(DropsToYocto(DefaultFee), big.NewInt(gasBudget)),
+		big.NewInt(transferGas),
+	)
 }
 
 // estimateFeeAtGas prices a gas budget at the current (cached) gas price,
@@ -703,15 +827,24 @@ func (w *NearWallet) cachedGasPrice() *big.Int {
 // in the account.
 const withdrawFeeMargin = 2
 
-// spendableYocto returns the balance available to a transfer's deposit after
-// reserving the protocol storage stake for the account's current size and a
-// fee allowance with margin.
-func (w *NearWallet) spendableYocto() (*big.Int, error) {
-	rpc, err := w.client()
-	if err != nil {
-		return nil, err
-	}
-	info, err := rpc.viewAccount(w.ctx, w.accountID)
+// storageReserve returns the yoctoNEAR reserved for an account's storage
+// (StorageUsed × storageAmountPerByte), which is not spendable: a transfer
+// that leaves the account under this amount is rejected on-chain with
+// LackBalanceForState. Shared by Balance and spendableYoctoMargin so the two
+// can't drift apart.
+func storageReserve(info *accountInfo) *big.Int {
+	return new(big.Int).Mul(new(big.Int).SetUint64(info.StorageUsed), storageAmountPerByte)
+}
+
+// spendableYoctoMarginAtGas returns the balance available to a transaction's
+// attached deposit after reserving the protocol storage stake for the
+// account's current size and a fee allowance for gasBudget scaled by margin.
+// ctx and rpc are threaded through explicitly (rather than using w.ctx and
+// w.client()) so a caller holding its own request-scoped context and RPC
+// handle -- sendActions, in particular -- gets a check that actually honors
+// them.
+func (w *NearWallet) spendableYoctoMarginAtGas(ctx context.Context, rpc *rpcClient, margin, gasBudget int64) (*big.Int, error) {
+	info, err := rpc.viewAccount(ctx, w.accountID)
 	if err != nil {
 		if isAccountNotFound(err) {
 			return new(big.Int), nil
@@ -722,14 +855,33 @@ func (w *NearWallet) spendableYocto() (*big.Int, error) {
 	if !ok {
 		return nil, fmt.Errorf("error parsing account balance %q", info.Amount)
 	}
-	reserve := new(big.Int).Mul(new(big.Int).SetUint64(info.StorageUsed), storageAmountPerByte)
-	fee := new(big.Int).Mul(w.estimateFeeYocto(), big.NewInt(withdrawFeeMargin))
+	reserve := storageReserve(info)
+	fee := new(big.Int).Mul(w.estimateFeeYoctoAtGas(gasBudget), big.NewInt(margin))
 	spendable := bal.Sub(bal, reserve)
 	spendable.Sub(spendable, fee)
 	if spendable.Sign() < 0 {
 		spendable.SetUint64(0)
 	}
 	return spendable, nil
+}
+
+// spendableYoctoMargin is spendableYoctoMarginAtGas priced at a bare
+// transfer's gas (transferGas), using the wallet's own context and RPC
+// client.
+func (w *NearWallet) spendableYoctoMargin(margin int64) (*big.Int, error) {
+	rpc, err := w.client()
+	if err != nil {
+		return nil, err
+	}
+	return w.spendableYoctoMarginAtGas(w.ctx, rpc, margin, transferGas)
+}
+
+// spendableYocto is spendableYoctoMargin at withdrawFeeMargin (2x), used to
+// cap a maximum-sweep amount (Withdraw): the extra margin absorbs a gas-price
+// rise between estimation and the blocks where the transfer's receipts
+// execute.
+func (w *NearWallet) spendableYocto() (*big.Int, error) {
+	return w.spendableYoctoMargin(withdrawFeeMargin)
 }
 
 // Withdraw sends funds to address with the fee subtracted from value. The
@@ -828,7 +980,10 @@ func (w *NearWallet) WalletTransaction(ctx context.Context, txID string) (*txdb.
 	}
 	result, err := rpc.txStatus(ctx, txID, w.accountID)
 	if err != nil {
-		return nil, asset.CoinNotFoundError
+		if isUnknownTransaction(err) {
+			return nil, asset.CoinNotFoundError
+		}
+		return nil, fmt.Errorf("error looking up transaction %s: %w", txID, err)
 	}
 
 	txType := txdb.Send
@@ -915,7 +1070,7 @@ func (w *NearWallet) tipPoller(ctx context.Context) {
 					w.emit.TipChange(block.Header.Height)
 				}
 				w.checkPendingTxs(ctx, rpc, block.Header.Height)
-				w.scanIncomingTxs(ctx, rpc, block.Header.Height)
+				w.scanIncomingTick(ctx, rpc, block.Header.Height)
 			}
 
 		case <-ctx.Done():
@@ -944,7 +1099,16 @@ func (w *NearWallet) checkPendingTxs(ctx context.Context, rpc *rpcClient, tip ui
 	for _, tx := range pending {
 		result, err := rpc.txStatus(ctx, tx.ID, w.accountID)
 		if err != nil {
-			if isUnknownTransaction(err) {
+			// txStatus queries with wait_until:NONE, so a genuine
+			// UNKNOWN_TRANSACTION is a definitive answer -- only then is it
+			// safe to age the tx out via maybeExpirePendingTx's refHeight
+			// comparison. Any other error (transient RPC failure, etc.)
+			// proves nothing about the transaction's existence. A single
+			// endpoint's UNKNOWN_TRANSACTION isn't enough either: expiry is
+			// irreversible (a fresh nonce can be issued for a retry once a
+			// tx is marked dead), so corroborate against every endpoint
+			// before trusting a lagging or non-canonical node's negative.
+			if isUnknownTransaction(err) && rpc.txUnknownEverywhere(ctx, tx.ID, w.accountID) {
 				w.maybeExpirePendingTx(tx, tip)
 			} else {
 				w.log.Tracef("Pending tx %s not yet available: %v", tx.ID, err)
@@ -1032,6 +1196,101 @@ func (w *NearWallet) resolveBlock(ctx context.Context, rpc *rpcClient, blockHash
 // avoid excessive RPC calls after a long offline period.
 const maxScanBlocks = 10
 
+// scanBackoffMin and scanBackoffMax bound the cooldown applied after a
+// scanIncomingTxs tick fails, so a persistently broken RPC path (e.g. a
+// provider missing a method this scan depends on) doesn't get hammered
+// every tipPoller tick forever.
+const (
+	scanBackoffMin = 30 * time.Second
+	scanBackoffMax = 30 * time.Minute
+)
+
+// scanBackoff is the cooldown applied after a scanIncomingTxs tick fails.
+// Zero value is ready to use.
+type scanBackoff struct {
+	mtx   sync.Mutex
+	until time.Time
+	delay time.Duration
+}
+
+func (b *scanBackoff) blocked(now time.Time) bool {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	return now.Before(b.until)
+}
+
+func (b *scanBackoff) failed(now time.Time) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if b.delay == 0 {
+		b.delay = scanBackoffMin
+	} else if b.delay *= 2; b.delay > scanBackoffMax {
+		b.delay = scanBackoffMax
+	}
+	b.until = now.Add(b.delay)
+}
+
+func (b *scanBackoff) succeeded() {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	b.delay = 0
+	b.until = time.Time{}
+}
+
+// scanMetaTableName is the metaTable name holding the persisted scan cursor.
+const scanMetaTableName = "meta"
+
+// lastScannedHeightKey is the metaTable key for the persisted scan cursor.
+var lastScannedHeightKey = []byte("lastScannedHeight")
+
+// getScanCursor returns the persisted scan cursor, or 0 if metaTable is
+// unset (a wallet that was never connected) or the cursor was never written.
+func (w *NearWallet) getScanCursor() (uint64, error) {
+	if w.metaTable == nil {
+		return 0, nil
+	}
+	b, err := w.metaTable.Get(lastScannedHeightKey)
+	if errors.Is(err, txdb.ErrKeyNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if len(b) < 8 {
+		return 0, nil
+	}
+	return binary.BigEndian.Uint64(b), nil
+}
+
+// setScanCursor persists the scan cursor. A no-op if metaTable is unset.
+func (w *NearWallet) setScanCursor(n uint64) error {
+	if w.metaTable == nil {
+		return nil
+	}
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, n)
+	return w.metaTable.Set(lastScannedHeightKey, b, txdb.WithReplace())
+}
+
+// scanIncomingTick runs one poll's worth of incoming-transfer scanning,
+// gated by scanBackoff, and persists whatever lastScannedHeight ends up at
+// -- scanIncomingTxs never advances it past a height it didn't actually (or
+// provisionally) observe, so persisting is always safe, not just on
+// success.
+func (w *NearWallet) scanIncomingTick(ctx context.Context, rpc *rpcClient, newTip uint64) {
+	if w.scanBackoff.blocked(time.Now()) {
+		return
+	}
+	if w.scanIncomingTxs(ctx, rpc, newTip) {
+		w.scanBackoff.succeeded()
+	} else {
+		w.scanBackoff.failed(time.Now())
+	}
+	if err := w.setScanCursor(w.lastScannedHeight); err != nil {
+		w.log.Errorf("Error persisting scan cursor: %v", err)
+	}
+}
+
 // maxStallRetries bounds how many consecutive polls scanIncomingTxs may
 // fail to make any progress past the same height before that height is
 // force-advanced past. This is a backstop so that a single permanently
@@ -1060,10 +1319,14 @@ const maxStallRetries = 120 // ~10 minutes at tipPollInterval
 // them, and is retried (against what may by then be a caught-up node) on
 // the next poll. A window that is entirely unresolved gaps — nothing
 // in it to confirm any of them — makes zero progress the same as a real
-// failure, and is bounded by the same maxStallRetries backstop.
-func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip uint64) {
+// failure, and is bounded by the same maxStallRetries backstop. ok is false
+// when this tick made no progress (a real fetch/store failure, or a window
+// of entirely unresolved gaps), so scanIncomingTick's backoff can cool down
+// a persistently broken RPC path; a benign no-op (nothing new to scan) is
+// not a failure.
+func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip uint64) (ok bool) {
 	if w.txDB == nil {
-		return
+		return true
 	}
 	if w.lastChunkHash == nil {
 		w.lastChunkHash = make(map[int]string)
@@ -1071,7 +1334,7 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 
 	startHeight := w.lastScannedHeight + 1
 	if newTip < startHeight {
-		return
+		return true
 	}
 
 	// Below maxScanBlocks, the backlog is expected to oscillate with
@@ -1097,7 +1360,27 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 	for height := startHeight; height <= endHeight; height++ {
 		block, err := rpc.getBlockByHeight(ctx, height)
 		if err != nil {
-			if isUnknownBlock(err) {
+			// isGarbageCollectedBlock is grouped with isUnknownBlock here:
+			// both mean "this endpoint has nothing at this height", and
+			// both are handled identically -- left as a provisional gap
+			// that either folds in once a later height confirms, or is
+			// eventually force-advanced past by the maxStallRetries
+			// backstop below. A non-archival RPC node that has GC'd a
+			// height this far behind newTip is not expected in practice
+			// (maxScanBlocks keeps the window small), but the classifier
+			// exists so it degrades the same way rather than falling into
+			// the unclassified-error break below.
+			if isUnknownBlock(err) || isGarbageCollectedBlock(err) {
+				// A single endpoint's negative is not proof the height was
+				// skipped network-wide -- a lagging or non-canonical node
+				// can answer UNKNOWN_BLOCK for a height another endpoint
+				// would happily serve. Corroborate before trusting it,
+				// same concern as checkPendingTxs' UNKNOWN_TRANSACTION.
+				if !rpc.blockUnservedEverywhere(ctx, height) {
+					w.log.Warnf("Error fetching block %d for receive scan: an endpoint reported "+
+						"it unavailable but another endpoint serves it", height)
+					break
+				}
 				// Provisional gap: do not advance scanned here. If a
 				// later height in this window is fetched successfully,
 				// scanned will jump past this height then, which is
@@ -1108,7 +1391,7 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 				if stallHeight == 0 {
 					stallHeight = height
 				}
-				w.log.Tracef("Height %d unavailable (UNKNOWN_BLOCK); provisional gap pending confirmation", height)
+				w.log.Tracef("Height %d unavailable; provisional gap pending confirmation", height)
 				continue
 			}
 			w.log.Warnf("Error fetching block %d for receive scan: %v", height, err)
@@ -1170,6 +1453,7 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 	}
 
 	w.lastScannedHeight = scanned
+	return !noProgress
 }
 
 // scanChunk fetches a chunk and stores any incoming native or NEP-141
@@ -1177,12 +1461,14 @@ func (w *NearWallet) scanIncomingTxs(ctx context.Context, rpc *rpcClient, newTip
 // the chunk was fully processed (recorded or definitively ruled out) —
 // false means at least one needs to be retried on a later scan.
 //
-// Scope: only chunk.Transactions is examined. A deposit that only ever
-// exists as a receipt (a DEX payout, staking withdrawal, or relayer
-// contract call whose receiver_id is never our own transaction) is not
-// seen, nor is a NEP-366 meta-transaction's nested Delegate action.
-// Tracked as a known gap, not fixed here — it is a materially larger
-// change than this scan's watermark-correctness fixes.
+// chunk.Transactions catches a plain transfer or a direct ft_transfer call.
+// chunk.Receipts additionally catches a native transfer that is
+// contract-mediated or crosses a shard (a wrap.near unwrap, a solver
+// payout, an intents withdrawal), which a transactions-only scan would
+// never see: the originating transaction in those cases names the
+// contract as its receiver, never this account. A NEP-366 meta-transaction's
+// nested Delegate action is still not seen; tracked as a known gap, not
+// fixed here.
 func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash string, blockHeight, blockTime uint64) bool {
 	chunk, err := rpc.getChunk(ctx, chunkHash)
 	if err != nil {
@@ -1219,6 +1505,40 @@ func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash st
 			}
 		}
 	}
+
+	for i := range chunk.Receipts {
+		r := &chunk.Receipts[i]
+		// "system" is the predecessor on gas-refund receipts, which return
+		// this account's own unused gas from an outgoing send -- not an
+		// incoming transfer, and recording it would double-count the send
+		// in history.
+		if r.ReceiverID != w.accountID || r.PredecessorID == w.accountID || r.PredecessorID == "system" {
+			continue
+		}
+		if r.Receipt.Action == nil {
+			// A data receipt carries no transfer.
+			continue
+		}
+		// SignerID equals PredecessorID exactly when this receipt is the
+		// direct, first-hop receipt produced by a transaction the signer
+		// submitted -- i.e. an ordinary plain transfer, which the
+		// transactions loop above already recorded (it matches on the same
+		// ReceiverID == w.accountID). Without this, a plain transfer would
+		// be recorded twice: once as the transaction, once as its own
+		// action receipt one block later. A genuinely contract-mediated
+		// credit (wrap.near unwrap, an intents payout) has SignerID fixed
+		// at the chain's original caller while PredecessorID is the
+		// contract that issued this specific receipt, so the two differ
+		// and it is still recorded here -- that's the case the
+		// transactions loop can never see.
+		if r.Receipt.Action.SignerID == r.PredecessorID {
+			continue
+		}
+		if !w.storeNativeReceive(r.ReceiptID, r.PredecessorID, r.Receipt.Action.Actions, blockHeight, blockTime) {
+			ok = false
+		}
+	}
+
 	return ok
 }
 
@@ -1227,25 +1547,14 @@ func (w *NearWallet) scanChunk(ctx context.Context, rpc *rpcClient, chunkHash st
 // retried on a later scan (a DB error, or a not-yet-final outcome for a
 // multi-action transaction).
 func (w *NearWallet) scanNativeReceive(ctx context.Context, rpc *rpcClient, ct *chunkTransaction, blockHeight, blockTime uint64) bool {
-	var amount uint64
+	hasTransfer := false
 	for _, a := range ct.Actions {
 		if a.Transfer != nil {
-			yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
-			if ok {
-				amount += YoctoToDrops(yocto)
-			}
+			hasTransfer = true
+			break
 		}
 	}
-	if amount == 0 {
-		return true
-	}
-
-	existing, err := w.txDB.GetTx(ct.Hash)
-	if err != nil {
-		w.log.Warnf("Error checking for existing tx %s: %v", ct.Hash, err)
-		return false
-	}
-	if existing != nil {
+	if !hasTransfer {
 		return true
 	}
 
@@ -1279,11 +1588,41 @@ func (w *NearWallet) scanNativeReceive(ctx context.Context, rpc *rpcClient, ct *
 		}
 	}
 
-	sender := ct.SignerID
+	return w.storeNativeReceive(ct.Hash, ct.SignerID, ct.Actions, blockHeight, blockTime)
+}
+
+// storeNativeReceive records a native NEAR credit from actions' Transfer
+// deposits under id (a transaction hash or a receipt id -- both
+// CryptoHashes, both unique, so txdb's existing-tx dedup covers either
+// kind), if not already recorded. It reports false only on a DB error, so
+// the caller retries on a later scan.
+func (w *NearWallet) storeNativeReceive(id, sender string, actions []txAction, blockHeight, blockTime uint64) bool {
+	var amount uint64
+	for _, a := range actions {
+		if a.Transfer != nil {
+			yocto, ok := parseYoctoNEAR(a.Transfer.Deposit)
+			if ok {
+				amount += YoctoToDrops(yocto)
+			}
+		}
+	}
+	if amount == 0 {
+		return true
+	}
+
+	existing, err := w.txDB.GetTx(id)
+	if err != nil {
+		w.log.Warnf("Error checking for existing tx %s: %v", id, err)
+		return false
+	}
+	if existing != nil {
+		return true
+	}
+
 	recipient := w.accountID
 	wtx := &txdb.WalletTransaction{
 		Type:           txdb.Receive,
-		ID:             ct.Hash,
+		ID:             id,
 		Amount:         amount,
 		NetworkID:      BipID,
 		AssetID:        BipID,
@@ -1295,11 +1634,11 @@ func (w *NearWallet) scanNativeReceive(ctx context.Context, rpc *rpcClient, ct *
 	}
 
 	if err := w.txDB.StoreTx(wtx); err != nil {
-		w.log.Errorf("Error storing receive tx %s: %v", ct.Hash, err)
+		w.log.Errorf("Error storing receive tx %s: %v", id, err)
 		return false
 	}
 
-	w.log.Infof("Detected incoming transfer %s: %d drops from %s", ct.Hash, amount, sender)
+	w.log.Infof("Detected incoming transfer %s: %d drops from %s", id, amount, sender)
 	if w.emit != nil {
 		w.emit.TransactionNote(wtx, true)
 	}
@@ -1498,14 +1837,20 @@ func isAccountNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
+	if isRPCCause(err, "UNKNOWN_ACCOUNT") {
+		return true
+	}
 	// errors.As, not a type assertion, so wrapping between the RPC layer
 	// and callers cannot silently turn a missing account into a hard error.
 	var rpcErr *rpcError
 	if !errors.As(err, &rpcErr) {
 		return false
 	}
-	if rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_ACCOUNT" {
-		return true
+	if rpcErr.Cause != nil {
+		// A categorized cause other than UNKNOWN_ACCOUNT (e.g. UNKNOWN_BLOCK,
+		// GARBAGE_COLLECTED_BLOCK) is authoritative; don't let a substring
+		// in its Data field masquerade as a missing account.
+		return false
 	}
 	return strings.Contains(string(rpcErr.Data), "does not exist")
 }
@@ -1514,11 +1859,7 @@ func isAccountNotFound(err error) bool {
 // statement that it has no record of the transaction. Transport failures
 // and timeouts do not qualify: they prove nothing about the transaction.
 func isUnknownTransaction(err error) bool {
-	var rpcErr *rpcError
-	if !errors.As(err, &rpcErr) {
-		return false
-	}
-	return rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_TRANSACTION"
+	return isRPCCause(err, "UNKNOWN_TRANSACTION")
 }
 
 // isUnknownBlock reports whether err is the node's definitive statement
@@ -1527,11 +1868,7 @@ func isUnknownTransaction(err error) bool {
 // the queried node does not have it, which is also what a load-balanced or
 // lagging endpoint, or one that has garbage-collected the block, returns.
 func isUnknownBlock(err error) bool {
-	var rpcErr *rpcError
-	if !errors.As(err, &rpcErr) {
-		return false
-	}
-	return rpcErr.Cause != nil && rpcErr.Cause.Name == "UNKNOWN_BLOCK"
+	return isRPCCause(err, "UNKNOWN_BLOCK")
 }
 
 // isUnknownChunk reports whether err is the node's definitive statement

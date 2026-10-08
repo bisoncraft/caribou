@@ -27,6 +27,14 @@ const (
 	// short so a dead provider delays failover by seconds, not the full
 	// former 30-second client timeout.
 	rpcRequestTimeout = 10 * time.Second
+	// corroborationSweepTimeout bounds a whole noEndpointServes sweep across
+	// every configured endpoint, not each endpoint individually -- without
+	// it, a sweep over several endpoints that each take close to
+	// rpcRequestTimeout to answer (a slow but live node, not a dead one)
+	// could run for the better part of a minute. This runs on the
+	// tipPoller goroutine, so an unbounded sweep also delays tip updates
+	// and pending-tx reconciliation.
+	corroborationSweepTimeout = 5 * time.Second
 	// endpointCooldown is how long an endpoint sits out after a transport
 	// or server failure before it is retried.
 	endpointCooldown = time.Minute
@@ -244,6 +252,79 @@ func (c *rpcClient) call(ctx context.Context, method string, params interface{})
 	return nil, fmt.Errorf("all NEAR RPC endpoints failed: %w", lastErr)
 }
 
+// noEndpointServes reports whether every configured endpoint was actually
+// reached and every one of them agrees the request produces no result. It
+// is used to corroborate a negative (UNKNOWN_BLOCK, UNKNOWN_TRANSACTION)
+// that is about to be acted on irreversibly: a height treated as skipped is
+// never scanned again, and a transaction treated as unknown is eventually
+// written off as dead. Any endpoint that returns a result contradicts the
+// negative, so the sweep stops there. An endpoint that fails transport-wise
+// (timeout, connection refused, rate-limited), or that the sweep doesn't
+// reach before corroborationSweepTimeout elapses, is evidence for nothing
+// -- it might just as easily have contradicted the negative had it answered
+// in time -- so it makes the whole sweep inconclusive rather than silently
+// counting as agreement; a single-endpoint configuration where that one
+// endpoint answers promptly behaves exactly as before. Cooldowns are
+// ignored and every endpoint is asked, including the one that already
+// answered: re-asking it costs one request and cannot manufacture a
+// contradiction.
+func (c *rpcClient) noEndpointServes(ctx context.Context, method string, params interface{}) bool {
+	reqBody := jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      rpcRequestID,
+		Method:  method,
+		Params:  params,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return true
+	}
+
+	c.mtx.Lock()
+	eps := make([]*rpcEndpoint, len(c.endpoints))
+	copy(eps, c.endpoints)
+	c.mtx.Unlock()
+
+	sweepCtx, cancel := context.WithTimeout(ctx, corroborationSweepTimeout)
+	defer cancel()
+
+	for _, ep := range eps {
+		_, endpointBad, err := c.doRequest(sweepCtx, ep.url, body)
+		if err == nil {
+			return false
+		}
+		if endpointBad || sweepCtx.Err() != nil {
+			// This endpoint's opinion is unknown, not negative -- either it
+			// could have contradicted the original negative had it been
+			// reachable, or the sweep ran out of time before reaching it --
+			// so the sweep cannot conclude anything.
+			return false
+		}
+	}
+	return true
+}
+
+// blockUnservedEverywhere reports whether every configured endpoint fails to
+// serve a block query at height, corroborating a single endpoint's
+// UNKNOWN_BLOCK on that same query before it is trusted as proof the height
+// was skipped.
+func (c *rpcClient) blockUnservedEverywhere(ctx context.Context, height uint64) bool {
+	return c.noEndpointServes(ctx, "block", map[string]interface{}{
+		"block_id": height,
+	})
+}
+
+// txUnknownEverywhere reports whether every configured endpoint fails to
+// find txHash, corroborating a single endpoint's UNKNOWN_TRANSACTION before
+// it is trusted as proof the transaction never executed.
+func (c *rpcClient) txUnknownEverywhere(ctx context.Context, txHash, senderID string) bool {
+	return c.noEndpointServes(ctx, "tx", map[string]interface{}{
+		"tx_hash":           txHash,
+		"sender_account_id": senderID,
+		"wait_until":        "NONE",
+	})
+}
+
 // accountInfo holds the response from a view_account query.
 type accountInfo struct {
 	Amount      string `json:"amount"` // yoctoNEAR as decimal string
@@ -345,6 +426,7 @@ type chunkRef struct {
 // chunkInfo holds selected fields from a chunk response.
 type chunkInfo struct {
 	Transactions []chunkTransaction `json:"transactions"`
+	Receipts     []chunkReceipt     `json:"receipts"`
 }
 
 type chunkTransaction struct {
@@ -352,6 +434,32 @@ type chunkTransaction struct {
 	SignerID   string     `json:"signer_id"`
 	ReceiverID string     `json:"receiver_id"`
 	Actions    []txAction `json:"actions"`
+}
+
+// chunkReceipt is one receipt listed in a chunk. Receipts, not top-level
+// transactions, are what actually credit an account whenever the transfer is
+// contract-mediated or crosses a shard: an unwrap from wrap.near, a solver
+// payout, an intents withdrawal. The originating transaction in those cases
+// names the contract as its receiver, never this account, so a
+// transactions-only scan never sees the credit at all.
+type chunkReceipt struct {
+	ReceiptID     string `json:"receipt_id"`
+	PredecessorID string `json:"predecessor_id"`
+	ReceiverID    string `json:"receiver_id"`
+	Receipt       struct {
+		// Action is nil for a data receipt, which carries no transfer.
+		Action *struct {
+			Actions []txAction `json:"actions"`
+			// SignerID is carried through unchanged from the transaction
+			// that originated this receipt's call chain (nearcore uses it
+			// to refund unused gas to the right account). It equals
+			// PredecessorID exactly when this receipt is the direct,
+			// first-hop receipt produced by that transaction -- see
+			// scanChunk's use of it to avoid double-recording a plain
+			// transfer that chunk.Transactions already caught.
+			SignerID string `json:"signer_id"`
+		} `json:"Action"`
+	} `json:"receipt"`
 }
 
 func (c *rpcClient) getBlock(ctx context.Context, finality string) (*blockInfo, error) {
@@ -616,6 +724,26 @@ func (c *rpcClient) gasPrice(ctx context.Context) (*big.Int, error) {
 // must treat the transaction as possibly live — record it as pending and
 // never construct a replacement transaction — because it may still execute.
 var errBroadcastAmbiguous = errors.New("broadcast outcome unknown")
+
+// isRPCCause reports whether err is an rpcError whose cause name matches
+// name -- NEAR's way of distinguishing a specific, well-known failure from
+// an opaque server error. errors.As is used so the classification survives
+// error wrapping.
+func isRPCCause(err error, name string) bool {
+	var rpcErr *rpcError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return rpcErr.Cause != nil && rpcErr.Cause.Name == name
+}
+
+// isGarbageCollectedBlock checks if an RPC error indicates the requested
+// block height once existed but is older than a non-archival RPC node's
+// garbage-collection horizon (~5 epochs), distinct from isUnknownBlock's
+// "no block was ever produced here".
+func isGarbageCollectedBlock(err error) bool {
+	return isRPCCause(err, "GARBAGE_COLLECTED_BLOCK")
+}
 
 // isTimeoutError reports whether an error is the RPC server's indication
 // that a transaction did not reach the requested execution level within the

@@ -53,6 +53,10 @@ var (
 	// yoctoNEAR per byte of account storage (1e19 = 0.00001 NEAR/byte). An
 	// account whose balance would drop below storage_usage bytes at this
 	// price cannot transact, so sends must leave this amount untouched.
+	// Confirmed via EXPERIMENTAL_protocol_config's
+	// runtime_config.storage_amount_per_byte on both mainnet and testnet
+	// (rpc.{mainnet,testnet}.near.org); simnet uses the testnet RPC
+	// endpoint, so the same value applies there too.
 	storageAmountPerByte = new(big.Int).SetUint64(1e19)
 
 	// DefaultRPCEndpoints ranks public RPC providers per network, best
