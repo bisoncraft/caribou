@@ -16,8 +16,39 @@ Caribou is a non-custodial, multi-chain wallet, from the developers of Bison Wal
   trade-off plainly when a non-KYC option is unavailable.
 
 These principles are load-bearing — features that conflict with them do not
-ship. Anything that requires custody of user funds, identity verification, or
-gated access is out of scope on its own merits, regardless of convenience.
+ship. Anything that requires custody of user funds is out of scope on its own
+merits, regardless of convenience. Identity verification and gated access are
+out of scope wherever an alternative exists. Fiat ramps and tokenized
+securities have none, and opt-in third-party modules are the single bounded
+exception described below.
+
+### Opt-in third-party modules
+
+Some routes have no non-KYC form. There is no non-KYC path from a bank
+account to a blockchain: every fiat ramp performs identity verification as a
+regulatory matter. Tokenized securities can be bought only where their
+issuers permit, and some issuers verify identity themselves. The choice is
+not between a KYC'd route and a non-KYC one — it is between offering the
+route on strict terms and offering none. Caribou offers these routes as
+third-party modules, bounded as follows:
+
+- **Opt-in, off by default.** A module is inert unless the user turns it on.
+  No default path through the wallet reaches one.
+- **Nothing depends on one.** Every wallet capability works with all modules
+  disabled. They add a route to fiat or to securities; they are never a
+  prerequisite.
+- **Disclosed at the point of use.** A module that imposes identity
+  verification, geographic restriction, or its own terms says so before the
+  user commits to it — including that an address is disclosed to the provider
+  and thereby linked to a verified identity in its records.
+- **Self-custody is not on the table.** Funds and tokenized securities are
+  delivered to, and spent from, wallet-controlled addresses. A provider
+  requiring custody is rejected outright, whatever else it offers.
+
+The exception is scoped to fiat ramps and tokenized securities alone. The
+non-KYC principle governs the wallet's own operation and its chain and swap
+backends without exception, because there the alternatives exist and are
+chosen.
 
 ## Building and testing
 
@@ -80,25 +111,68 @@ if the bundle has not been built.
 
 ## Roadmap
 
-Caribou is under active development. Our near-term goals are:
+Caribou is under active development. These are target milestones; timing may
+shift based on testing, funding, and partner onboarding.
 
-- **May 2026**: Complete a comprehensive code refactor and achieve high test coverage for all core wallet components.
-- **June - July 2026**:
-    - Implement basic sync, send, and receive functionality end-to-end for Bitcoin (BTC), Litecoin (LTC), Ethereum (ETH), Polygon (POL), and stablecoin tokens (USDT, USDC).
-    - Integrate Chainlink oracle feeds.
-    - Go-based Electrum wallet for BTC and LTC
-    - Mobile wallet infrastructure
-        - Database configuration and tuning
-        - Build scripts
-        - Emulator documentation
-        - Basic UI implementation
-- **End of July 2026**:
-    - Secure grant funding for light wallet implementations, with a focus on Zcash (ZEC) and Monero (XMR)
-    - Implement basic wallets for Zcash and Monero
-    - Add tokens for xAUT, PAXG, and other commodity tokens
-- **August 2026**:
-    - Implement NEAR Intents for efficient cross-chain interactions, and demonstrate basic swap functionality between supported assets
-    - Add fiat onramp, e.g. Alchemy Pay
+### October 2026 — Desktop alpha
+
+- Make the repository public.
+- Release the desktop alpha for Linux, macOS, and Windows, with a signed
+  release manifest.
+- Recruit alpha testers.
+- Begin onboarding with Ramp Network.
+- **Zcash phase 0 — Funding and FFI validation**
+  - Submit a funding proposal to Zcash Community Grants.
+  - Demonstrate the foreign function interface (FFI) with passing tests.
+- **Dash staking phase 0 — Funding and backend**
+  - Submit a funding proposal to the Dash DAO.
+  - Implement the staking backend, including key handling and custom
+    transaction handling.
+  - Implement a simulated server for testing on simnet.
+
+### November 2026 — Mobile alpha and integration development
+
+- Open the alpha to Android and iOS testers through TestFlight and a Google
+  Play closed test.
+- Secure funding from Zcash Community Grants and the Dash DAO.
+- **Zcash phase 1 — Go integration:** Implement the Go wrapper and its tests.
+- **Dash staking phase 1 — Mainnet and user experience:** Test on mainnet and
+  implement the staking UI/UX.
+
+### December 2026 — Swap foundations
+
+- Move swaps behind a provider interface that ranks quotes across venues,
+  with NEAR Intents as the first provider.
+- Add memo-bearing sends for UTXO chains, EVM chains, and XRP, as required by
+  protocol-vault swap venues.
+
+### Q1 2027 — Beta
+
+- Release the beta on all five platforms.
+- Publish to the App Store and Google Play.
+- Ship the Zcash shielded light wallet.
+- Ship Dash staking.
+- Offer card purchases through Ramp Network as an opt-in module.
+- Add THORChain as a second cross-chain swap venue for BTC, LTC, ETH, and XRP,
+  with quote ranking and failover between venues. Monero follows when
+  THORChain activates its Monero vault.
+- Add same-chain swaps on Ethereum and BNB Smart Chain through the Uniswap
+  Trading API, including PAXG.
+
+### Q2 2027 — Equities outside the United States
+
+- Offer tokenized stocks as an opt-in module outside the United States,
+  where issuers permit, with eligibility checks by jurisdiction.
+- Add same-chain swaps on Solana through Jupiter and on BNB Smart Chain
+  through PancakeSwapX.
+- Add Chainflip as a third cross-chain swap venue.
+
+### Q3 2027 — Equities in the United States
+
+- Offer tokenized stocks in the United States as an opt-in module, through an
+  issuer that performs its own identity verification and settles to the
+  user's wallet.
+- Add swap venues where coverage data shows gaps.
 
 ## Design notes
 
