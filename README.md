@@ -1,9 +1,82 @@
-# Caribou
+<p align="center">
+  <img src="docs/branding/caribou-mark.svg" width="120" alt="">
+</p>
 
-[![ISC License](https://img.shields.io/badge/license-Blue_Oak-007788.svg)](https://blueoakcouncil.org/license/1.0.0)
-[![GoDoc](https://img.shields.io/badge/go.dev-reference-blue.svg?logo=go&logoColor=lightblue)](https://pkg.go.dev/github.com/bisoncraft/caribou)
+<h1 align="center">Caribou</h1>
 
-Caribou is a non-custodial, multi-chain wallet, from the developers of Bison Wallet.
+<p align="center">
+  <strong>Your personal treasury.</strong><br>
+  Gold, cash and coins in one wallet, under keys that never leave your device.
+</p>
+
+<p align="center">
+  <a href="https://caribou.you">Website</a> ·
+  <a href="#roadmap">Roadmap</a> ·
+  <a href="#building-from-source">Build from source</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
+
+<p align="center">
+  <a href="https://blueoakcouncil.org/license/1.0.0"><img src="https://img.shields.io/badge/license-Blue_Oak-007788.svg" alt="Blue Oak license"></a>
+  <a href="https://pkg.go.dev/github.com/bisoncraft/caribou"><img src="https://img.shields.io/badge/go.dev-reference-blue.svg?logo=go&logoColor=lightblue" alt="Go reference"></a>
+</p>
+
+Caribou is a free, open-source wallet for desktop and mobile that keeps
+tokenized gold, digital dollars and coins side by side in one portfolio. One
+recovery phrase covers every asset; it is generated on your device and never
+sent anywhere. There is no account to create and no ID to show. Caribou is
+built by Bisoncraft LLC, the developers of Bison Wallet and DCRDEX.
+
+> [!IMPORTANT]
+> Caribou is pre-release software and has no tagged release yet. The first
+> desktop alpha is planned for October 2026. Until then, build from source,
+> and use small amounts.
+
+## What Caribou holds
+
+| | Assets | Details |
+| --- | --- | --- |
+| **Gold** | PAX Gold (PAXG), Tether Gold (XAUT) | On Ethereum. Each token is one troy ounce of an allocated bar, per its issuer. Send any fraction of an ounce. |
+| **Cash** | USDC, USDT | On Ethereum, BNB Smart Chain, Polygon and Solana; USDC also on the XRP Ledger. Each shows as one balance, however many networks it sits on. |
+| **Coins** | Bitcoin, Ethereum, Solana, XRP, BNB, Litecoin, Hyperliquid (HYPE), Polygon (POL), Dash, Monero | The native money of each network. Monero is part of desktop release builds. |
+| **Investments** | Tokenized stocks and ETFs | Planned; see the [roadmap](#roadmap). |
+
+Chainlink (LINK) is also supported on Ethereum.
+
+## Why Caribou
+
+- **Only you hold the keys.** Keys are generated and stored on your device.
+  Lose the device, and the recovery phrase restores everything on a new one.
+  Lose the phrase, and no one can restore it for you, Bisoncraft included.
+- **No account, no ID check.** There is nothing to sign up for. The wallet's
+  password unlocks it locally and is not an account.
+- **Native wallets.** Bitcoin, Litecoin and Dash run as native wallets on
+  your device, syncing through Electrum servers or compact block filters
+  (BIP 157/158).
+- **Swaps built in.** Swap between supported assets across chains through
+  NEAR Intents. The fee and the amount received are itemized before you
+  confirm. While a swap settles, the funds are held
+  by NEAR Intents solvers and verifiers until delivery or refund.
+- **One core, every platform.** Desktop and mobile run the same Go wallet
+  core.
+- **Scriptable.** A token-authenticated API, bound to localhost, lets scripts,
+  a CLI or an MCP server drive a running wallet
+  ([docs/automation.md](docs/automation.md)).
+
+### What the software contacts
+
+Caribou runs locally and does not require a publisher account. It connects to
+blockchain networks and third-party services for balances, transactions,
+prices and swap availability. Those services can receive connection and
+request information. Swaps also depend on external settlement infrastructure.
+
+Bisoncraft operates no server that the wallet reports to, and the wallet sends
+Bisoncraft no telemetry or crash reports.
+
+### What it costs
+
+Caribou is free. Sending pays only the network's transaction fee. Swaps carry
+an application fee, shown in the quote breakdown before you confirm.
 
 ## Guiding principles
 
@@ -50,64 +123,19 @@ non-KYC principle governs the wallet's own operation and its chain and swap
 backends without exception, because there the alternatives exist and are
 chosen.
 
-## Building and testing
+## Platforms
 
-### Wallet binary
+| Platform | Status |
+| --- | --- |
+| Linux | Desktop alpha planned for October 2026: `.deb` and `.tar.gz`, amd64 |
+| macOS | Desktop alpha planned for October 2026: notarized `.dmg`, Apple silicon and Intel |
+| Windows | Desktop alpha planned for October 2026: signed installer and `.zip`, amd64 |
+| Android | In development; alpha planned for November 2026 |
+| iOS | In development; alpha planned for November 2026 |
 
-```bash
-cd wallet/cmd/caribou && go build -o caribou
-```
-
-### Desktop wallet
-
-The desktop app needs cgo plus the GTK and WebKitGTK development packages on
-Linux (`libgtk-3-dev libwebkit2gtk-4.1-dev`). Release builds always carry the
-`xmr` tag, which links `libmonero_wallet2_api_c` from
-`wallet/asset/xmr/lib/<platform>/` (see `wallet/asset/xmr/lib/README.md`).
-
-```bash
-go build -tags xmr -o caribou-desktop ./wallet/cmd/caribou-desktop
-./caribou-desktop
-```
-
-### Cross-platform release packaging
-
-Desktop installers for Linux, Windows and macOS are built, signed and
-packaged from a Linux host by the scripts in `release/`; see
-[release/README.md](release/README.md). `./pkg.sh` builds the CLI/server
-tarballs.
-
-### Tests
-
-```bash
-# Full suite
-./run_tests.sh
-
-# Fast unit tests with race detection
-go test -race -short ./...
-
-# Single asset package
-go test -race -short ./wallet/asset/btc/...
-```
-
-Some test files require build tags for tests that need real networks or
-running nodes: `live`, `harness`, `electrumlive`, `rpclive`, `systray`.
-
-### Lint
-
-```bash
-golangci-lint -c ./.golangci.yml run
-```
-
-### Web UI build (required before appserver tests)
-
-```bash
-cd wallet/appserver/newui && npm ci && npm run build
-```
-
-The `wallet/appserver/newui/dist/` directory is embedded via `go:embed`;
-`go test ./wallet/appserver/...` will fail with `no matching files found`
-if the bundle has not been built.
+Each release will publish a `SHA256SUMS` manifest with a GPG signature, and
+the signing key's fingerprint, so a download can be verified before it is
+run.
 
 ## Roadmap
 
@@ -174,17 +202,109 @@ shift based on testing, funding, and partner onboarding.
   user's wallet.
 - Add swap venues where coverage data shows gaps.
 
-## Design notes
+---
+
+## Building from source
+
+Requirements:
+
+- Go 1.25 or later.
+- Node.js 20 or 22 with npm, for the web UI.
+- For the desktop app: cgo, plus the GTK and WebKitGTK development packages
+  on Linux (`libgtk-3-dev libwebkit2gtk-4.1-dev`).
+
+### Web UI
+
+The desktop and mobile UIs are React and TypeScript bundles in one npm
+workspace under `wallet/appserver` (`shared`, `newui` and `mobile`). The Go
+binaries embed the built bundle with `go:embed`, so build it before building
+a binary:
+
+```bash
+cd wallet/appserver && npm ci && npm run build
+```
+
+A binary built without this step compiles against a placeholder and serves no
+UI.
+
+### Desktop app
+
+```bash
+go build -o caribou-desktop ./wallet/cmd/caribou-desktop
+./caribou-desktop
+```
+
+Release builds add the `xmr` tag, which links the Monero library
+`libmonero_wallet2_api_c` from `wallet/asset/xmr/lib/<platform>/`. The
+libraries are not committed; [wallet/asset/xmr/lib/README.md](wallet/asset/xmr/lib/README.md)
+covers obtaining or building them. With the libraries in place:
+
+```bash
+go build -tags xmr -o caribou-desktop ./wallet/cmd/caribou-desktop
+```
+
+### Command-line wallet
+
+`caribou` runs the wallet as a local server and serves the UI to a browser.
+The `systray` tag adds a tray icon.
+
+```bash
+go build -o caribou ./wallet/cmd/caribou
+```
+
+### Mobile apps
+
+The Android and iOS apps are thin native shells that host the mobile UI over
+a loopback server, around the Go core bound with gomobile from
+`wallet/mobile`. See [wallet/android/README.md](wallet/android/README.md) and
+[wallet/ios/README.md](wallet/ios/README.md).
+
+### Release packaging
+
+Desktop installers for Linux, Windows and macOS are built, signed and
+packaged from a Linux host by the scripts in `release/`; see
+[release/README.md](release/README.md). `./pkg.sh` builds the CLI/server
+tarballs.
+
+## Testing
+
+```bash
+# Full suite
+./run_tests.sh
+
+# Fast unit tests with race detection
+go test -race -short ./...
+
+# Single asset package
+go test -race -short ./wallet/asset/btc/...
+
+# Web UI lint and tests
+cd wallet/appserver && npm run lint && npm run test
+```
+
+Some tests need real networks or running nodes and are gated by build tags:
+`live`, `rpclive` and `harness`. The
+[Simnet Development Guide](docs/simnet-dev.md) covers the local harnesses.
+
+### Lint
+
+```bash
+golangci-lint -c ./.golangci.yml run
+markdownlint-cli2 "*.md" "docs/**/*.md"
+```
+
+## Architecture
 
 - **Asset interface.** Every chain implements `asset.Wallet` from
   `wallet/asset/interface.go`. Adding a new chain means implementing the
-  interface and registering a driver under `wallet/asset/`.
-- **Embedded web UI.** The current frontend bundle is included via
-  `go:embed` from `wallet/appserver/newui/dist/`. The planned React desktop UI
-  will follow the same embed pattern from `wallet/appserver/desktop/dist/`.
-- **Build tags.** `live`, `harness`, `electrumlive`, `rpclive`, and `systray`
-  gate tests requiring real network access, running nodes, or platform
-  features. `mobile` / `!mobile` will gate the mobile vs. desktop binary.
+  interface and registering a driver under `wallet/asset/`;
+  `wallet/asset/importall` sets which assets a build includes.
+- **Embedded UI.** The appserver serves the desktop bundle
+  (`wallet/appserver/newui`) by default and the mobile bundle
+  (`wallet/appserver/mobile`) under the `mobile` tag. Both build on
+  `wallet/appserver/shared`.
+- **Build tags.** `xmr` adds Monero, `dcr` adds Decred, `mobile` builds the
+  mobile core and UI, and `systray` adds the command-line wallet's tray icon.
 
 ## Documentation
 
@@ -194,6 +314,8 @@ shift based on testing, funding, and partner onboarding.
   running the wallet against them.
 - [Desktop UI Development Guide](docs/desktop-ui-dev.md) — developing the
   desktop wallet UI.
+- [Desktop Release Packaging](release/README.md) — building, signing and
+  packaging the desktop installers.
 
 ## Contributing
 
@@ -213,9 +335,13 @@ Never post seed phrases, private keys, or passwords in an issue. Report
 security vulnerabilities privately as described in [SECURITY.md](SECURITY.md),
 not in a public issue.
 
+## License
+
+Caribou is released under the [Blue Oak Model License 1.0.0](LICENSE.md).
+
 ## Heritage
 
 Caribou descends from Bison Wallet, which itself was developed alongside
-DCRDEX. The non-trading wallet, atomic-swap settlement, EVM relay, and Monero
-adaptor-signature code are retained from that lineage; the credit for that
-work belongs to the DCRDEX / Bison Wallet contributors.
+DCRDEX. The multi-chain wallet code, including the Monero adaptor-signature
+implementation, is carried over from that lineage; the credit for that work
+belongs to the DCRDEX / Bison Wallet contributors.
