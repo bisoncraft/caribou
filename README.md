@@ -1,6 +1,6 @@
 # Caribou
 
-[![ISC License](https://img.shields.io/badge/license-Blue_Oak-007788.svg)](https://blueoakcouncil.org/license/1.0.0)
+[![Blue Oak License](https://img.shields.io/badge/license-Blue_Oak-007788.svg)](https://blueoakcouncil.org/license/1.0.0)
 [![GoDoc](https://img.shields.io/badge/go.dev-reference-blue.svg?logo=go&logoColor=lightblue)](https://pkg.go.dev/github.com/bisoncraft/caribou)
 
 Caribou is a non-custodial, multi-chain wallet, from the developers of Bison Wallet.
@@ -20,6 +20,22 @@ ship. Anything that requires custody of user funds, identity verification, or
 gated access is out of scope on its own merits, regardless of convenience.
 
 ## Building and testing
+
+Prerequisites: Go 1.25 or newer, and Node.js 20 or 22 with npm for the web UI.
+
+### Web UI bundle
+
+Build the web UI before the wallet binary or the desktop app:
+
+```bash
+(cd wallet/appserver && npm ci && npm run build --workspace=newui)
+```
+
+The UI is an npm workspace, so install from `wallet/appserver`; installing from
+`wallet/appserver/newui` alone leaves out the build toolchain and the build
+fails. The binaries embed `wallet/appserver/newui/dist/` via `go:embed`. A fresh
+clone holds only a placeholder there, so the Go build succeeds but the
+resulting binary serves no UI until the bundle is built.
 
 ### Wallet binary
 
@@ -68,16 +84,6 @@ running nodes: `live`, `harness`, `electrumlive`, `rpclive`, `systray`.
 golangci-lint -c ./.golangci.yml run
 ```
 
-### Web UI build (required before appserver tests)
-
-```bash
-cd wallet/appserver/newui && npm ci && npm run build
-```
-
-The `wallet/appserver/newui/dist/` directory is embedded via `go:embed`;
-`go test ./wallet/appserver/...` will fail with `no matching files found`
-if the bundle has not been built.
-
 ## Roadmap
 
 Caribou is under active development. Our near-term goals are:
@@ -105,12 +111,12 @@ Caribou is under active development. Our near-term goals are:
 - **Asset interface.** Every chain implements `asset.Wallet` from
   `wallet/asset/interface.go`. Adding a new chain means implementing the
   interface and registering a driver under `wallet/asset/`.
-- **Embedded web UI.** The current frontend bundle is included via
-  `go:embed` from `wallet/appserver/newui/dist/`. The planned React desktop UI
-  will follow the same embed pattern from `wallet/appserver/desktop/dist/`.
+- **Embedded web UI.** The desktop UI is the React app in
+  `wallet/appserver/newui/`, included via `go:embed` from its `dist/`. The
+  `mobile` build tag embeds `wallet/appserver/mobile/dist/` instead.
 - **Build tags.** `live`, `harness`, `electrumlive`, `rpclive`, and `systray`
   gate tests requiring real network access, running nodes, or platform
-  features. `mobile` / `!mobile` will gate the mobile vs. desktop binary.
+  features. `mobile` / `!mobile` gate the mobile vs. desktop binary.
 
 ## Documentation
 
