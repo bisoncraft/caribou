@@ -173,7 +173,6 @@ Section "Install"
 	SetOutPath "$INSTDIR"
 	File "${EXE}"
 	File "WebView2Loader.dll"
-	File "libwinpthread-1.dll"
 	!ifdef XMR
 	File "libmonero_wallet2_api_c.dll"
 	!endif
@@ -200,7 +199,6 @@ Section "Uninstall"
 	Call un.CloseApp
 	Delete "$INSTDIR\${EXE}"
 	Delete "$INSTDIR\WebView2Loader.dll"
-	Delete "$INSTDIR\libwinpthread-1.dll"
 	Delete "$INSTDIR\libmonero_wallet2_api_c.dll"
 	Delete "$INSTDIR\uninstall.exe"
 	RMDir "$INSTDIR"

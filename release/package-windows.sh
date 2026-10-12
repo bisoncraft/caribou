@@ -59,18 +59,15 @@ stage_build() {
 		go build -trimpath "${GO_TAGS[@]}" -ldflags "$(go_ldflags '-H windowsgui')" -o "${stage}/${APP}.exe" "./wallet/cmd/${APP}"
 
 	cp /opt/webview2/runtimes/win-x64/native/WebView2Loader.dll "$stage/"
-	cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll "$stage/"
 	with_xmr && cp "wallet/asset/xmr/lib/windows-${ARCH}/libmonero_wallet2_api_c.dll" "$stage/"
 
-	# WebView2Loader.dll is Microsoft-signed already; the other three are ours.
+	# WebView2Loader.dll is Microsoft-signed already; the others are ours.
 	sign_windows_file "${stage}/${APP}.exe"
 	verify_windows_file "${stage}/${APP}.exe"
 	if with_xmr; then
 		sign_windows_file "${stage}/libmonero_wallet2_api_c.dll"
 		verify_windows_file "${stage}/libmonero_wallet2_api_c.dll"
 	fi
-	sign_windows_file "${stage}/libwinpthread-1.dll"
-	verify_windows_file "${stage}/libwinpthread-1.dll"
 
 	local base="${APP}-${VERSION}-windows-${ARCH}"
 	log "building ${base}.zip"
