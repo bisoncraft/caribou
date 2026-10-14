@@ -417,6 +417,9 @@ func (d *Driver) Create(params *asset.CreateWalletParams) error {
 	if params.Type != walletTypeSPV {
 		return fmt.Errorf("SPV is the only seeded wallet type. required = %q, requested = %q", walletTypeSPV, params.Type)
 	}
+	if params.TorProxy != "" {
+		return errors.New("the DCR SPV wallet does not support --torproxy")
+	}
 	if len(params.Seed) == 0 {
 		return errors.New("wallet seed cannot be empty")
 	}
@@ -626,16 +629,11 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 
 	switch cfg.Type {
 	case walletTypeDcrwRPC, walletTypeLegacy:
-		dcr.wallet, err = newRPCWallet(cfg.Settings, logger, network)
+		dcr.wallet, err = newRPCWallet(cfg.Settings, logger, network, cfg.TorProxy)
 		if err != nil {
 			return nil, err
 		}
 	case walletTypeSPV:
-		// The syncer dials peers directly and the upstream library offers
-		// no way to supply a dialer, so connecting would bypass the proxy.
-		if cfg.TorProxy != "" {
-			return nil, errors.New("the DCR SPV wallet does not support --torproxy")
-		}
 		dcr.wallet, err = openSPVWallet(cfg.DataDir, walletCfg.GapLimit, chainParams, logger)
 		if err != nil {
 			return nil, err
@@ -826,6 +824,13 @@ func (dcr *ExchangeWallet) startTxHistoryDB(ctx context.Context) error {
 // interface.
 func (dcr *ExchangeWallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// rpclog(dcr.log)
+	// The SPV syncer dials peers directly and the upstream library offers no
+	// way to supply a dialer, so connecting would bypass the proxy. Refuse
+	// here rather than in NewWallet so the wallet stays loaded and its
+	// settings reachable.
+	if dcr.torProxy != "" && dcr.walletType == walletTypeSPV {
+		return nil, errors.New("the DCR SPV wallet does not support --torproxy")
+	}
 	dcr.ctx = ctx
 
 	err := dcr.wallet.Connect(ctx)

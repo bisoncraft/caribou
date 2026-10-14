@@ -1,11 +1,14 @@
 package dexnet
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -106,11 +109,23 @@ func TestOutboundConnectionsHonorProxy(t *testing.T) {
 	}
 }
 
+// standalone reports whether only whitespace precedes the comment at pos on
+// its line.
+func standalone(src []byte, pos token.Position) bool {
+	return len(bytes.TrimSpace(src[pos.Offset-(pos.Column-1):pos.Offset])) == 0
+}
+
+var majorVersion = regexp.MustCompile(`^v[0-9]+$`)
+
 // scanFile returns the unannotated bypass API uses in one file.
 func scanFile(t *testing.T, path, rel string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	f, err := parser.ParseFile(fset, path, src, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatalf("parse %s: %v", rel, err)
 	}
@@ -125,6 +140,10 @@ func scanFile(t *testing.T, path, rel string) []string {
 			t.Fatalf("%s: bad import path %s", rel, imp.Path.Value)
 		}
 		local := filepath.Base(p)
+		// A major version suffix is not the package name.
+		if majorVersion.MatchString(local) {
+			local = filepath.Base(filepath.Dir(p))
+		}
 		if imp.Name != nil {
 			local = imp.Name.Name
 		}
@@ -158,8 +177,14 @@ func scanFile(t *testing.T, path, rel string) []string {
 			}
 			start := fset.Position(c.Pos()).Line
 			end := fset.Position(c.End()).Line
-			// A comment covers its own lines and the line after it.
-			for l := start; l <= end+1; l++ {
+			// A comment covers its own lines, and the line after it only
+			// when it stands alone on its line: a trailing comment must not
+			// exempt the next statement.
+			last := end
+			if standalone(src, fset.Position(c.Pos())) {
+				last = end + 1
+			}
+			for l := start; l <= last; l++ {
 				annotated[l] = true
 			}
 		}

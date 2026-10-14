@@ -414,7 +414,7 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 		daemonAddr:  daemonAddr,
 		daemonUser:  cfg.Settings["daemonusername"],
 		daemonPass:  cfg.Settings["daemonpassword"],
-		torProxy:    cfg.TorProxy,
+		torProxy:    dexnet.ProxyFor(daemonAddr, cfg.TorProxy),
 		feePriority: feePriority,
 		peersChange: cfg.PeersChange,
 	}
@@ -423,14 +423,15 @@ func newWallet(cfg *asset.WalletConfig, logger util.Logger, network util.Network
 	// retry has to reuse the connection that was challenged. Keeping a single
 	// idle connection to the daemon makes that reliable for these serialized
 	// requests. See drainAndClose.
-	w.feeRPC = newDaemonRPC(daemonAddr, w.daemonUser, w.daemonPass, &http.Client{ // torproxy: DialContext below is the proxy dialer when configured
+	// torproxy: the client's transport below dials through the proxy
+	w.feeRPC = newDaemonRPC(daemonAddr, w.daemonUser, w.daemonPass, &http.Client{
 		Timeout: feeRequestTimeout,
 		// torproxy: DialContext below is the proxy dialer when configured
 		Transport: &http.Transport{
 			MaxIdleConns:        1,
 			MaxIdleConnsPerHost: 1,
 			IdleConnTimeout:     90 * time.Second,
-			DialContext:         dexnet.ProxyDialContext(cfg.TorProxy),
+			DialContext:         dexnet.ProxyDialContext(w.torProxy),
 		},
 	})
 

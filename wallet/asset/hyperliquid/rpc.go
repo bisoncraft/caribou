@@ -33,16 +33,14 @@ type rpcClient struct {
 	log        util.Logger
 }
 
-func newRPCClient(baseURL, torProxy string, log util.Logger) (*rpcClient, error) {
-	// torproxy: dialer is replaced with the SOCKS5 dialer when a proxy is set
+func newRPCClient(baseURL, torProxy string, log util.Logger) *rpcClient {
+	// torproxy: DialContext is the proxy dialer when a proxy is configured
 	transport := &http.Transport{
 		MaxIdleConns:       2,
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
+		DialContext:        dexnet.ProxyDialContext(torProxy),
 	}
-
-	// Nil without a proxy, so the transport dials directly.
-	transport.DialContext = dexnet.ProxyDialContext(torProxy)
 
 	return &rpcClient{
 		baseURL: baseURL,
@@ -52,7 +50,7 @@ func newRPCClient(baseURL, torProxy string, log util.Logger) (*rpcClient, error)
 			Timeout:   httpTimeout,
 		},
 		log: log,
-	}, nil
+	}
 }
 
 func (c *rpcClient) post(ctx context.Context, path string, payload, result any) error {
