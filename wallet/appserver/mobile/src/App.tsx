@@ -61,12 +61,10 @@ export const App = () => {
         <div className='mb-spinner' />
       </div>
     )
-  } else if (!appState.user && !appState.inited && !appState.termsAccepted) {
-    // A fresh install accepts the terms before creating a wallet.
-    screen = <TermsScreen onAccepted={resetAppState} />
-  } else if (appState.user && !appState.termsAccepted) {
-    // An existing wallet is asked after it unlocks, and again whenever the
-    // terms version changes.
+  } else if (!appState.termsAccepted && (appState.user || !appState.inited)) {
+    // A fresh install accepts the terms before creating a wallet. An existing
+    // wallet is asked after it unlocks, and again whenever the terms version
+    // changes.
     screen = <TermsScreen onAccepted={resetAppState} />
   } else if (!appState.user) {
     screen = appState.inited

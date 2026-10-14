@@ -25,6 +25,25 @@ var privacyText string
 // the user accepted the current terms.
 var errTermsNotAccepted = errors.New("the terms of use must be accepted before the wallet can be created")
 
+// termsAccepted reports whether the current terms version has been accepted.
+// Only a positive answer is cached: the version is a compile-time constant, so
+// once accepted it stays accepted for the life of the process, while a negative
+// answer is re-read until the user accepts.
+func (s *AppServer) termsAccepted() (bool, error) {
+	if s.termsAcceptedCache.Load() {
+		return true, nil
+	}
+	accepted, err := s.core.AcceptedTermsVersion()
+	if err != nil {
+		return false, err
+	}
+	if accepted != termsVersion {
+		return false, nil
+	}
+	s.termsAcceptedCache.Store(true)
+	return true, nil
+}
+
 // apiTerms serves the current Terms of Use and Privacy Policy. It is
 // unauthenticated because the init wizard shows it before an account exists.
 func (s *AppServer) apiTerms(w http.ResponseWriter, r *http.Request) {
@@ -42,8 +61,9 @@ func (s *AppServer) apiTerms(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiAcceptTerms records that the user accepted the current terms. Before the
-// wallet is initialized there is no login to check; afterwards the caller must
-// be logged in.
+// wallet is initialized there is no login to check and the caller is trusted:
+// the same local caller could drive the UI, and apiInit is what requires the
+// acceptance. Afterwards the caller must be logged in.
 func (s *AppServer) apiAcceptTerms(w http.ResponseWriter, r *http.Request) {
 	if s.core.IsInitialized() && !s.isAuthed(r) {
 		http.Error(w, "not authorized - login first", http.StatusUnauthorized)
@@ -65,5 +85,6 @@ func (s *AppServer) apiAcceptTerms(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, fmt.Errorf("error saving terms acceptance: %w", err))
 		return
 	}
+	s.termsAcceptedCache.Store(true)
 	writeJSON(w, simpleAck())
 }

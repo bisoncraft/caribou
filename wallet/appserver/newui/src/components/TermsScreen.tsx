@@ -1,16 +1,9 @@
-import { useEffect, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
-import { getJSON, postJSON } from '@caribou/shared/http'
+import { useTermsAcceptance } from '@caribou/shared/useTermsAcceptance'
 import LegalText from '@caribou/shared/components/LegalText'
 import Checkbox from './Checkbox'
 import LocaleSelector from './LocaleSelector'
 import Spinner from './Spinner'
-
-interface LegalDoc {
-  version: string
-  terms: string
-  privacy: string
-}
 
 export interface TermsScreenParams {
   onAccepted: () => void
@@ -22,33 +15,8 @@ export interface TermsScreenParams {
  * unlock whenever the accepted version differs from the current one.
  */
 export default function TermsScreen ({ onAccepted }: TermsScreenParams) {
-  const [doc, setDoc] = useState<LegalDoc | null>(null)
-  const [agreed, setAgreed] = useState(false)
-  const [declined, setDeclined] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [err, setErr] = useState('')
-
-  const load = () => {
-    setErr('')
-    getJSON('/api/terms').then(r => {
-      if (r.ok) setDoc(r)
-      else setErr(r.errMsg || r.msg || t('Could not load the terms.'))
-    })
-  }
-
-  useEffect(load, [])
-
-  const accept = async () => {
-    if (!doc || !agreed || submitting) return
-    setErr('')
-    setSubmitting(true)
-    const r = await postJSON('/api/acceptterms', { version: doc.version })
-    setSubmitting(false)
-    if (r.ok) onAccepted()
-    else setErr(r.errMsg || r.msg || t('Could not save your acceptance.'))
-  }
-
-  const canAccept = doc !== null && agreed && !submitting
+  const { doc, agreed, setAgreed, declined, setDeclined, submitting, err, load, accept, canAccept } =
+    useTermsAcceptance(onAccepted)
 
   return (
     <div className="fill-abs flex-center init-bg">

@@ -98,6 +98,7 @@ type TDB struct {
 	setWalletPwErr  error
 	creds           *db.PrimaryCredentials
 	setCredsErr     error
+	acceptedTerms   string
 	// savedDisabledRateSources records the last SaveDisabledRateSources
 	// argument. nil means the method was never called.
 	savedDisabledRateSources []string
@@ -195,11 +196,12 @@ func (tdb *TDB) SendRequiresPassword() (bool, error) {
 }
 
 func (tdb *TDB) SetAcceptedTermsVersion(version string) error {
+	tdb.acceptedTerms = version
 	return nil
 }
 
 func (tdb *TDB) AcceptedTermsVersion() (string, error) {
-	return "", nil
+	return tdb.acceptedTerms, nil
 }
 
 func (tdb *TDB) NextMultisigKeyIndex(assetID uint32) (uint32, error) {

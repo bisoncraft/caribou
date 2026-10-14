@@ -615,6 +615,12 @@ func testAcceptedTermsVersion(t *testing.T, d db.DB) {
 		t.Fatalf("SetAcceptedTermsVersion replace error: %v", err)
 	}
 	ensure("after replace", "2026-11-01")
+
+	// An empty version clears the acceptance.
+	if err := d.SetAcceptedTermsVersion(""); err != nil {
+		t.Fatalf("SetAcceptedTermsVersion clear error: %v", err)
+	}
+	ensure("after clear", "")
 }
 
 func testTokens(t *testing.T, d db.DB) {

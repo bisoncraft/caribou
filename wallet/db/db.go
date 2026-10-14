@@ -681,8 +681,12 @@ func (d *kvDB) SendRequiresPassword() (bool, error) {
 }
 
 // SetAcceptedTermsVersion records the version of the Terms of Use and Privacy
-// Policy the user has accepted.
+// Policy the user has accepted. An empty value deletes the key from the
+// database.
 func (d *kvDB) SetAcceptedTermsVersion(version string) error {
+	if version == "" {
+		return deleteIfExists(d.app, termsVersionKey)
+	}
 	return d.app.Set(termsVersionKey, []byte(version), kvstore.WithReplace())
 }
 
@@ -690,14 +694,7 @@ func (d *kvDB) SetAcceptedTermsVersion(version string) error {
 // SetAcceptedTermsVersion. If nothing has been recorded, an empty string is
 // returned without an error.
 func (d *kvDB) AcceptedTermsVersion() (string, error) {
-	b, err := d.app.Get(termsVersionKey)
-	if err != nil {
-		if errors.Is(err, kvstore.ErrKeyNotFound) {
-			return "", nil
-		}
-		return "", err
-	}
-	return string(b), nil
+	return d.getString(termsVersionKey)
 }
 
 // NextMultisigKeyIndex returns the next multisig key index and increments the

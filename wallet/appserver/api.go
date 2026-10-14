@@ -411,12 +411,12 @@ func (s *AppServer) apiInit(w http.ResponseWriter, r *http.Request) {
 	if !readPost(w, r, &init) {
 		return
 	}
-	accepted, err := s.core.AcceptedTermsVersion()
+	accepted, err := s.termsAccepted()
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("error reading terms acceptance: %w", err))
 		return
 	}
-	if accepted != termsVersion {
+	if !accepted {
 		s.writeAPIError(w, errTermsNotAccepted)
 		return
 	}
@@ -1148,10 +1148,9 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 	// A failed read counts as "not accepted": the user is asked again rather
 	// than the app being blocked or the gate skipped. The error is logged on
 	// every call, so a persistent database failure shows up in the log.
-	acceptedTerms, err := s.core.AcceptedTermsVersion()
+	acceptedTerms, err := s.termsAccepted()
 	if err != nil {
 		log.Errorf("error reading accepted terms version: %v", err)
-		acceptedTerms = ""
 	}
 
 	response := struct {
@@ -1175,7 +1174,7 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		CompanionAppPaired: paired,
 		AppSettings:        settings,
 		TermsVersion:       termsVersion,
-		TermsAccepted:      acceptedTerms == termsVersion,
+		TermsAccepted:      acceptedTerms,
 	}
 	writeJSON(w, response)
 }

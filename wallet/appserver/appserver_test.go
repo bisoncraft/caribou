@@ -1054,9 +1054,6 @@ func TestAPIAcceptTerms(t *testing.T) {
 }
 
 func TestAPIUserTermsAccepted(t *testing.T) {
-	s, tCore, shutdown := newTServer(t, false)
-	defer shutdown()
-
 	tests := []struct {
 		name     string
 		accepted string
@@ -1071,6 +1068,10 @@ func TestAPIUserTermsAccepted(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// A fresh server per case: a positive answer is cached for the
+			// life of a server.
+			s, tCore, shutdown := newTServer(t, false)
+			defer shutdown()
 			tCore.acceptedTerms = tt.accepted
 			tCore.acceptedTermsErr = tt.readErr
 			w := new(TWriter)
@@ -1094,6 +1095,87 @@ func TestAPIUserTermsAccepted(t *testing.T) {
 				t.Fatalf("termsAccepted = %t, wanted %t", resp.TermsAccepted, tt.want)
 			}
 		})
+	}
+}
+
+// TestTermsGateRouting sends requests through the real mux to confirm the
+// gate is wired onto the authenticated routes while logout stays reachable.
+func TestTermsGateRouting(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	const authToken = "00112233445566778899aabbccddeeff"
+	s.authMtx.Lock()
+	s.authTokens[authToken] = true
+	s.authMtx.Unlock()
+
+	post := func(path string, authed bool) int {
+		t.Helper()
+		req := httptest.NewRequest("POST", path, nil)
+		if authed {
+			req.AddCookie(&http.Cookie{Name: authCK, Value: authToken})
+		}
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Not accepted: authenticated APIs are locked, logout is not.
+	if code := post("/api/send", true); code != http.StatusForbidden {
+		t.Fatalf("/api/send before acceptance: code = %d, wanted 403", code)
+	}
+	// The terms check never replaces the login check.
+	if code := post("/api/send", false); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /api/send: code = %d, wanted 401", code)
+	}
+
+	tCore.acceptedTerms = termsVersion
+	if code := post("/api/send", true); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Fatalf("/api/send after acceptance: code = %d, wanted the handler to run", code)
+	}
+
+	// Logout last, as it ends the session. It is reachable without acceptance.
+	tCore.acceptedTerms = ""
+	if code := post("/api/logout", true); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Fatalf("/api/logout before acceptance: code = %d, wanted the handler to run", code)
+	}
+}
+
+func TestRejectUnaccepted(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	called := false
+	h := s.rejectUnaccepted(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	serve := func() int {
+		t.Helper()
+		called = false
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/send", nil)
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// A version bump locks out authenticated handlers until accepted.
+	for _, accepted := range []string{"", "an-older-version"} {
+		tCore.acceptedTerms = accepted
+		if code := serve(); code != http.StatusForbidden || called {
+			t.Fatalf("accepted %q: code = %d, called = %t, wanted 403 and not called", accepted, code, called)
+		}
+	}
+
+	// A read failure does not open the gate.
+	tCore.acceptedTerms = termsVersion
+	tCore.acceptedTermsErr = errTest
+	if code := serve(); code != http.StatusInternalServerError || called {
+		t.Fatalf("read error: code = %d, called = %t, wanted 500 and not called", code, called)
+	}
+	tCore.acceptedTermsErr = nil
+
+	if code := serve(); code != http.StatusOK || !called {
+		t.Fatalf("accepted: code = %d, called = %t, wanted 200 and called", code, called)
 	}
 }
 

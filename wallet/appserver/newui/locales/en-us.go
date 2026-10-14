@@ -13,7 +13,7 @@ var EnUS = map[string]*intl.Translation{
 	"Before you start":                {T: "Before you start"},
 	"terms_intro":                     {T: "Caribou is self-custodial. Read the Terms of Use and Privacy Policy below before you continue."},
 	"terms_agree":                     {T: "I have read and agree to the Terms of Use and Privacy Policy."},
-	"terms_version":                   {T: "Privacy Policy v{{ version }}"},
+	"terms_version":                   {T: "Terms version {{ version }}"},
 	"terms_declined":                  {T: "You can't use Caribou unless you accept the Terms of Use and Privacy Policy. Close the app to exit."},
 	"Accept and continue":             {T: "Accept and continue"},
 	"Decline":                         {T: "Decline"},
