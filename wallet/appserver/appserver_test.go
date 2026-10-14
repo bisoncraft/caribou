@@ -563,7 +563,7 @@ func TestNew_siteError(t *testing.T) {
 		t.Fatalf("cannot get current directory: %v", err)
 	}
 
-	// Change to a directory with no "site" or "../../appserver/site" folder.
+	// Change to a directory with no UI bundle folder (e.g. "newui") nearby.
 	dir := t.TempDir()
 	defer os.Chdir(cwd) // leave the temp dir before trying to delete it
 
