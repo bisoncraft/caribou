@@ -60,6 +60,16 @@ func newRPCClient(httpURL, torProxy string) *rpcClient {
 	return &rpcClient{httpURL: httpURL, httpClient: httpClient}
 }
 
+// closeIdle drops idle connections held by the client's transport, so a
+// replaced client does not leave proxied connections open. A client without a
+// proxy has no transport of its own, and closing the shared default
+// transport's connections would affect unrelated users.
+func (c *rpcClient) closeIdle() {
+	if c.httpClient.Transport != nil {
+		c.httpClient.CloseIdleConnections()
+	}
+}
+
 func (c *rpcClient) call(ctx context.Context, method string, params any, result any) error {
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",

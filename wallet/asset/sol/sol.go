@@ -359,7 +359,11 @@ func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 	// Store rpc, ctx, and table together in a single Store: a reader must
 	// never observe the new rpc/ctx paired with the previous connection's
 	// (or no) table.
-	w.conn.Store(&conn{rpc: rpc, ctx: ctx, table: mt})
+	if old := w.conn.Swap(&conn{rpc: rpc, ctx: ctx, table: mt}); old != nil {
+		if c, ok := old.rpc.(*rpcClient); ok {
+			c.closeIdle()
+		}
+	}
 	// Only do the fast synchronous part (tip probe + peer signal) at connect
 	// time. History sync can take minutes on a first run and must not block.
 	if err := w.updateTip(ctx); err != nil {

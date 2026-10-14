@@ -22,6 +22,7 @@ import (
 	walletjson "decred.org/dcrwallet/v5/rpc/jsonrpc/types"
 	"decred.org/dcrwallet/v5/wallet"
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/chaincfg/v3"
@@ -168,7 +169,7 @@ type rpcClient interface {
 // of the rpcWallet. The rpcClient isn't connected to the server yet, use the
 // Connect method of the returned *rpcWallet to connect the rpcClient to the
 // server.
-func newRPCWallet(settings map[string]string, logger util.Logger, net util.Network) (*rpcWallet, error) {
+func newRPCWallet(settings map[string]string, logger util.Logger, net util.Network, torProxy string) (*rpcWallet, error) {
 	cfg, chainParams, err := loadRPCConfig(settings, net)
 	if err != nil {
 		return nil, fmt.Errorf("error parsing config: %w", err)
@@ -206,6 +207,11 @@ func newRPCWallet(settings map[string]string, logger util.Logger, net util.Netwo
 		Pass:                cfg.RPCPass,
 		Certificates:        certs,
 		DisableConnectOnNew: true, // don't start until Connect
+	}
+	if torProxy = dexnet.ProxyFor(cfg.RPCListen, torProxy); torProxy != "" {
+		rpcw.rpcCfg.Proxy = torProxy
+		// Distinct credentials put this connection on its own Tor circuit.
+		rpcw.rpcCfg.ProxyUser, rpcw.rpcCfg.ProxyPass = dexnet.IsolationCreds()
 	}
 	// Validate the RPC client config, and create a placeholder (non-nil) RPC
 	// connector and client that will be replaced on Connect. Any method calls
@@ -282,7 +288,7 @@ func (w *rpcWallet) Reconfigure(ctx context.Context, cfg *asset.WalletConfig, ne
 		return false, nil
 	}
 
-	newWallet, err := newRPCWallet(cfg.Settings, w.log, net)
+	newWallet, err := newRPCWallet(cfg.Settings, w.log, net, cfg.TorProxy)
 	if err != nil {
 		return false, err
 	}

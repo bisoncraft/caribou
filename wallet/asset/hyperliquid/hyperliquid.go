@@ -261,10 +261,7 @@ func (w *HyperWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error
 			w.ctxCancel()
 		}
 	}()
-	rpc, err := newRPCClient(w.apiEndpoint(), w.torProxy, w.log)
-	if err != nil {
-		return nil, fmt.Errorf("creating RPC client: %w", err)
-	}
+	rpc := newRPCClient(w.apiEndpoint(), w.torProxy, w.log)
 	w.rpc = rpc
 
 	// Resolve HYPE token identifier from spot meta.
