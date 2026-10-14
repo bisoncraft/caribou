@@ -56,13 +56,12 @@ renders `shared/img/logo-antlers-brown.png` or `logo-antlers-blue.png`
 
 ## Leftover bison images
 
-None of these show in the desktop UI.
+Only the old UI in `site/`, which no build embeds, still has them. The mobile
+build uses `favicon-brown.png` from the shared set.
 
 | File | Status |
 | --- | --- |
-| `wallet/appserver/shared/img/favicon.png` | mobile build favicon (`mobile/src/index.html`), invisible in a WebView |
-| `wallet/appserver/shared/img/logo-full.png` | unreferenced |
-| `wallet/appserver/site/src/img/logo-full.png`, `logo-square.png`, `favicon.png` | the old UI in `site/`, which no build embeds |
+| `wallet/appserver/site/src/img/logo-full.png`, `logo-square.png`, `favicon.png` | shown only by the old UI |
 
 ## Deliberately not changing
 
