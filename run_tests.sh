@@ -6,9 +6,6 @@ dir=$(pwd)
 GV=$(go version | sed "s/^.*go\([0-9.]*\).*/\1/")
 echo "Go version: $GV"
 
-# Ensure html templates pass localization.
-go generate -x ./wallet/appserver/site # no -write
-
 cd "$dir"
 
 # list of all modules to test

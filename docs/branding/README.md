@@ -3,11 +3,12 @@
 The rename to Caribou (see [`../caribou-rename.md`](../caribou-rename.md)) moved
 file paths and identifiers but did not replace any artwork. Most icon files were
 renamed from `bisonwallet-*` / `bw-*` to `caribou-*`, so a filename search looks
-clean while some of the images themselves are still the blue Bison Wallet bison.
+clean while the images themselves were still the blue Bison Wallet bison.
 
 The Caribou mark is a pair of gold antlers. It has replaced the bison in the
-desktop app, the `caribou` server binary and the desktop web UI. A few
-leftover files still show the bison, listed below.
+desktop app, the `caribou` server binary and the web UI. The old web UI in
+`wallet/appserver/site/`, the last place the bison and the legacy DCRDEX
+artwork appeared, has been removed.
 
 There is no vector master for the antlers in the repository. Every icon is a
 raster export, so new sizes are best cut from the largest existing PNG
@@ -53,26 +54,6 @@ The desktop UI already uses the antlers. `shared/img/favicon-brown.png` and
 `favicon-blue.png` follow the theme (`newui/src/theme.ts`), and `img.logo-full`
 renders `shared/img/logo-antlers-brown.png` or `logo-antlers-blue.png`
 (`newui/src/scss/components.scss`).
-
-## Leftover bison images
-
-Only the old UI in `site/`, which no build embeds, still has them. The mobile
-build uses `favicon-brown.png` from the shared set.
-
-| File | Status |
-| --- | --- |
-| `wallet/appserver/site/src/img/logo-full.png`, `logo-square.png`, `favicon.png` | shown only by the old UI |
-
-## Deliberately not changing
-
-- `wallet/appserver/site/src/img/softened-icon.png`, `softened-icon-dark.png`,
-  `logo_icon_v1.svg`, `logo_wide_v1.svg` and `logo_wide_dark_v1.svg` are
-  **DCRDEX** artwork, not Bison Wallet artwork. They are driven by the
-  `UseDEXBranding` flag in `wallet/core/types.go`, which exists to show legacy
-  DCRDEX branding on purpose. Leave them alone.
-- `notifications.ts` points desktop notifications at `softened-icon.png`, which
-  is DCRDEX branding showing unconditionally rather than behind the flag. Worth
-  deciding whether that should become the Caribou mark.
 
 ## Notes
 
