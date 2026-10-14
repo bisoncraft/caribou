@@ -1,0 +1,20 @@
+{
+  "name": "@caribou/desktop",
+  "version": "1.0.0",
+  "description": "React UI for Caribou",
+  "main": "index.js",
+  "scripts": {
+    "start": "webpack serve --mode development --open",
+    "watch": "webpack --watch --mode development",
+    "build": "webpack --mode production",
+    "lint": "tsc --noEmit -p tsconfig.lint.json && eslint src",
+    "contrast": "node scripts/contrast.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@caribou/shared": "*",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

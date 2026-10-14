@@ -4,7 +4,7 @@
 package appserver
 
 import (
-	"github.com/bisoncraft/caribou/wallet/appserver/newui/locales"
+	"github.com/bisoncraft/caribou/wallet/appserver/desktop/locales"
 	"github.com/bisoncraft/caribou/wallet/intl"
 )
 

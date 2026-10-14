@@ -248,7 +248,7 @@ export class Application {
       locked += ta.locked * fiatRate
       immature += ta.immature * fiatRate
       // TODO: immature is counted in `total` but not surfaced on its own
-      // anywhere in newui. Immature is funds the wallet owns but that are not
+      // anywhere in desktop. Immature is funds the wallet owns but that are not
       // yet spendable pending confirmations, e.g. coinbase outputs or
       // transaction change, so a user watching the "Available" stat sees the
       // funds vanish until they mature even though the total still holds them.

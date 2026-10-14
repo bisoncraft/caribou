@@ -6,8 +6,8 @@ This guide is for contributors who want to develop the desktop wallet UI.
 
 The wallet binary (`caribou`) interacts with the browser via an HTTP server (`wallet/appserver`)
 that serves a single-page React app. The web assets are built using a node script
-that runs Webpack and TypeScript, compiling the .tsx and .scss files into the `/newui/dist/` folder.
-The web assets from `/newui/dist/`, as well as fonts and images from `/newui/src/`, are embedded
+that runs Webpack and TypeScript, compiling the .tsx and .scss files into the `/desktop/dist/` folder.
+The web assets from `/desktop/dist/`, as well as fonts and images from `/desktop/src/`, are embedded
 (`go:embed`) into the `caribou` binary (see `wallet/appserver/embed.go`).
 
 The React app communicates with the wallet core through the HTTP server via two mechanisms:
@@ -22,10 +22,10 @@ The React app communicates with the wallet core through the HTTP server via two 
 wallet/appserver/
 ├── appserver.go        # chi router, TLS, CSRF, cookies, session keys
 ├── api.go              # REST handlers — /api/* surface
-├── embed.go            # //go:embed newui/dist newui/src/img newui/src/font
+├── embed.go            # //go:embed desktop/dist desktop/src/img desktop/src/font
 ├── jsintl.go           # registers Go-side locale strings with intl package
 ├── locales/            # Go-side translation maps (en-us, de-de, …)
-└── newui/              # the React app
+└── desktop/              # the React app
     ├── package.json
     ├── webpack.config.js
     ├── tsconfig.json
@@ -57,14 +57,14 @@ via `sass-loader` using the modern API. Lint runs via `eslint-webpack-plugin`
 during the build, so a lint error fails the build.
 
 ```bash
-cd wallet/appserver/newui
+cd wallet/appserver/desktop
 npm ci                  # one-time / after lockfile changes
 npm run build           # writes dist/bundle.js + dist/index.html
 ```
 
 This means **any Go test or build that touches `wallet/appserver/...` requires
 the bundle to be present on disk** — `go test ./wallet/appserver/...` fails
-with `pattern newui/dist: no matching files found` if you skipped
+with `pattern desktop/dist: no matching files found` if you skipped
 `npm run build`. CI builds it before tests run; do the same locally on a fresh
 checkout.
 
@@ -83,7 +83,7 @@ You'll run two separate terminals (in addition to any simnet harnesses).
 ### Terminal 1 - Web Assets
 
 ```bash
-cd wallet/appserver/newui
+cd wallet/appserver/desktop
 npm run watch
 ```
 
@@ -165,7 +165,7 @@ if (!res.ok) {
 Strings live in **two** places:
 
 1. **Go-side locale maps** under `wallet/appserver/locales/<lang>.go`.
-   Aggregated by `wallet/appserver/newui/locales/locales.go` and served via
+   Aggregated by `wallet/appserver/desktop/locales/locales.go` and served via
    `POST /api/locale`. The SPA fetches its language at startup
    (`intl.loadLocale`) and caches it in `localStorage` keyed on
    `(lang, commitHash)`.
@@ -227,7 +227,7 @@ classes under it.
 ## Lint and pre-push hygiene
 
 ```bash
-cd wallet/appserver/newui
+cd wallet/appserver/desktop
 npm run lint    # tsc + eslint
 ```
 

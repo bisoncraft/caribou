@@ -1275,7 +1275,7 @@ func readPost(w http.ResponseWriter, r *http.Request, thing any) bool {
 	return true
 }
 
-// serveSPAIndex serves the bundled newui index.html. Under the new UI, the
+// serveSPAIndex serves the bundled UI index.html. Under the SPA UI, the
 // page routes do not render server-side templates; they deliver the SPA
 // bootstrap document and the client performs its own routing.
 func (s *AppServer) serveSPAIndex(w http.ResponseWriter) {

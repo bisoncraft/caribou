@@ -83,8 +83,8 @@ jobs:
           RUN_TIDY_CHECK: ${{ matrix.go == '1.26' && '1' || '' }}
           SKIP_GO_LINT: ${{ matrix.go == '1.26' && '1' || '' }}
         run: |
-          mkdir -p wallet/appserver/newui/dist
-          touch -t 2306151245 wallet/appserver/newui/dist/placeholder
+          mkdir -p wallet/appserver/desktop/dist
+          touch -t 2306151245 wallet/appserver/desktop/dist/placeholder
           ./run_tests.sh
 
       # Master-only so the cache pool holds a small number of fresh
@@ -112,10 +112,10 @@ jobs:
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 #v5.0.0
       with:
         node-version: ${{ matrix.node-version }}
-    # The UI is an npm workspace (shared + newui + mobile) with a single
+    # The UI is an npm workspace (shared + desktop + mobile) with a single
     # lockfile at wallet/appserver. Install/lint/build from the workspace root
     # so the pinned toolchain (incl. TypeScript) is used and every workspace is
-    # covered, not just newui.
+    # covered, not just desktop.
     - name: npm clean-install
       working-directory: ./wallet/appserver
       run: npm ci

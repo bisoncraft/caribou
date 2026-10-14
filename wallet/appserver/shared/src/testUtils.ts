@@ -1,5 +1,5 @@
 // testUtils provides fixture builders and app-singleton reset helpers shared
-// by application.test.ts and the newui/mobile component test suites. It is
+// by application.test.ts and the desktop/mobile component test suites. It is
 // deliberately not re-exported from index.ts so it never ends up in a
 // production bundle.
 import type { SupportedAsset, User, UnitInfo, WalletState, SyncStatus, WalletDefinition } from './registry'

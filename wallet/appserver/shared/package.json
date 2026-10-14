@@ -1,7 +1,7 @@
 {
   "name": "@caribou/shared",
   "version": "1.0.0",
-  "description": "Framework-agnostic core shared by the desktop (newui) and mobile bundles: loopback WS/HTTP transport, API request/response types, and app state.",
+  "description": "Framework-agnostic core shared by the desktop and mobile bundles: loopback WS/HTTP transport, API request/response types, and app state.",
   "private": true,
   "license": "ISC",
   "main": "src/index.ts",
