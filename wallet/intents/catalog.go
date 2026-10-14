@@ -15,20 +15,20 @@ import (
 // and the eligible pair set is the runtime intersection of enabled wallets
 // with mapped catalog entries.
 var chainBipIDs = map[string]uint32{
-	"btc":       0,
-	"ltc":       2,
-	"doge":      3,
-	"dash":      5,
-	"eth":       60,
-	"zec":       133,
-	"xrp":       144,
-	"bch":       145,
-	"near":      397,
-	"sol":       501,
-	"bsc":       714,   // BNB Smart Chain
-	"pol":       966,   // Polygon
-	"base":      8453,  // matches base.BaseBipID
-	"hypercore": 10001, // matches hyperliquid.BipID
+	"btc":  0,
+	"ltc":  2,
+	"doge": 3,
+	"dash": 5,
+	"eth":  60,
+	"zec":  133,
+	"xrp":  144,
+	"bch":  145,
+	"near": 397,
+	"sol":  501,
+	"bsc":  714,  // BNB Smart Chain
+	"pol":  966,  // Polygon
+	"base": 8453, // matches base.BaseBipID
+	// "hypercore": 10001, // matches hyperliquid.BipID; disabled with the hyperliquid asset
 }
 
 // ChainBipID resolves the service's chain slug to the wallet's chain asset

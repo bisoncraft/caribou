@@ -94,7 +94,7 @@ func TestChainBipID(t *testing.T) {
 	for slug, want := range map[string]uint32{
 		"btc": 0, "ltc": 2, "doge": 3, "dash": 5, "eth": 60, "zec": 133,
 		"xrp": 144, "bch": 145, "near": 397, "sol": 501, "bsc": 714,
-		"pol": 966, "base": 8453, "hypercore": 10001,
+		"pol": 966, "base": 8453,
 	} {
 		got, ok := ChainBipID(slug)
 		if !ok || got != want {

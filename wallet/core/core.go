@@ -3879,7 +3879,7 @@ func (c *Core) initialize() error {
 		for _, dbWallet := range ws {
 			tkn := asset.TokenInfo(dbWallet.AssetID)
 			if asset.Asset(dbWallet.AssetID) == nil && tkn == nil {
-				c.log.Infof("Wallet for asset %d -> %s no longer supported", dbWallet.AssetID, unbip(dbWallet.AssetID))
+				c.log.Warnf("Wallet for asset %d -> %s no longer supported", dbWallet.AssetID, unbip(dbWallet.AssetID))
 				continue
 			}
 			assetID := dbWallet.AssetID
