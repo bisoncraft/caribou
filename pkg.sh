@@ -20,7 +20,7 @@ LDFLAGS_BASE="-buildid= -s -w -X github.com/bisoncraft/caribou/wallet/app.Versio
 # the files.
 pushd wallet/appserver
 npm ci
-npm run build --workspace=newui
+npm run build --workspace=desktop
 popd
 
 rm -rf bin

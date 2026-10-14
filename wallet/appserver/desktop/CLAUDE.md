@@ -1,6 +1,6 @@
-# newui — CSS & styling conventions
+# desktop UI — CSS & styling conventions
 
-The desktop UI (`wallet/appserver/newui/`) is styled **utility-first**. These
+The desktop UI (`wallet/appserver/desktop/`) is styled **utility-first**. These
 rules govern SCSS under `src/scss/` and the `className`s written in TSX. Apply
 them while writing new styles, not only as a later cleanup pass.
 

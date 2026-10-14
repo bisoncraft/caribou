@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	newloc "github.com/bisoncraft/caribou/wallet/appserver/desktop/locales"
 	oldloc "github.com/bisoncraft/caribou/wallet/appserver/locales"
-	newloc "github.com/bisoncraft/caribou/wallet/appserver/newui/locales"
 	"github.com/bisoncraft/caribou/wallet/intl"
 )
 
@@ -36,7 +36,7 @@ var mapMatches = []mapMatch{
 }
 
 func main() {
-	newuiLocalesDir, _ := filepath.Abs("../../")
+	desktopLocalesDir, _ := filepath.Abs("../../")
 
 	// Extract & sort keys
 	orderedKeys := slices.Collect(maps.Keys(newloc.EnUS))
@@ -53,7 +53,7 @@ func main() {
 	}
 
 	for _, match := range mapMatches {
-		fpath := filepath.Join(newuiLocalesDir, match.filename)
+		fpath := filepath.Join(desktopLocalesDir, match.filename)
 		content, err := os.ReadFile(fpath)
 		if err != nil {
 			fmt.Println("Error reading file:", fpath)

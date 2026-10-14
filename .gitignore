@@ -20,9 +20,9 @@ markets.json
 dist/
 # go:embed needs the directory to exist in fresh checkouts, so track the
 # directory + a placeholder but keep webpack output ignored.
-!wallet/appserver/newui/dist/
-wallet/appserver/newui/dist/*
-!wallet/appserver/newui/dist/placeholder
+!wallet/appserver/desktop/dist/
+wallet/appserver/desktop/dist/*
+!wallet/appserver/desktop/dist/placeholder
 !wallet/appserver/mobile/dist/
 wallet/appserver/mobile/dist/*
 !wallet/appserver/mobile/dist/placeholder
@@ -82,9 +82,9 @@ CLAUDE.md
 AGENTS.md
 reviews/
 scripts/
-# Exception to the local-scripts pattern above: newui's committed helper
+# Exception to the local-scripts pattern above: desktop's committed helper
 # scripts (contrast validation).
-!wallet/appserver/newui/scripts/
+!wallet/appserver/desktop/scripts/
 notes/
 /design/
 

@@ -1,5 +1,5 @@
 {
-  "name": "@caribou/newui",
+  "name": "@caribou/desktop",
   "version": "1.0.0",
   "description": "React UI for Caribou",
   "main": "index.js",

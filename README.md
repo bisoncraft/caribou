@@ -71,10 +71,10 @@ golangci-lint -c ./.golangci.yml run
 ### Web UI build (required before appserver tests)
 
 ```bash
-cd wallet/appserver/newui && npm ci && npm run build
+cd wallet/appserver/desktop && npm ci && npm run build
 ```
 
-The `wallet/appserver/newui/dist/` directory is embedded via `go:embed`;
+The `wallet/appserver/desktop/dist/` directory is embedded via `go:embed`;
 `go test ./wallet/appserver/...` will fail with `no matching files found`
 if the bundle has not been built.
 
@@ -106,7 +106,7 @@ Caribou is under active development. Our near-term goals are:
   `wallet/asset/interface.go`. Adding a new chain means implementing the
   interface and registering a driver under `wallet/asset/`.
 - **Embedded web UI.** The current frontend bundle is included via
-  `go:embed` from `wallet/appserver/newui/dist/`. The planned React desktop UI
+  `go:embed` from `wallet/appserver/desktop/dist/`. The planned React desktop UI
   will follow the same embed pattern from `wallet/appserver/desktop/dist/`.
 - **Build tags.** `live`, `harness`, `electrumlive`, `rpclive`, and `systray`
   gate tests requiring real network access, running nodes, or platform

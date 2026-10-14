@@ -1,6 +1,6 @@
 // Barrel for the shared core. Consumers may import named members from here, or
 // import a specific module directly via the @caribou/shared/<module> subpath
-// (which is what newui does to keep the original import shape).
+// (which is what desktop does to keep the original import shape).
 
 export * from './application'
 export * from './assets'

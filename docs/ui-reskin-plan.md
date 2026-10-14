@@ -1,6 +1,6 @@
 # UI re-skin plan — "Warm & Natural"
 
-Re-skin the desktop wallet UI (`wallet/appserver/newui`) to the Caribou
+Re-skin the desktop wallet UI (`wallet/appserver/desktop`) to the Caribou
 "Warm & Natural" visual language. Color, typography, and elevation change;
 layout and functional density do not. The palette ships as three
 user-selectable themes — **warm** (default), **cool**, and **light** — see
@@ -20,12 +20,12 @@ the theme system notes in phase 1.
 
 ## Current state
 
-- Design tokens: `wallet/appserver/newui/src/scss/vars.scss` — CSS custom
+- Design tokens: `wallet/appserver/desktop/src/scss/vars.scss` — CSS custom
   properties on `body`, single dark theme, ~30 tokens, 82 `var(--…)`
   references in `components.scss`.
 - Fonts: Inter and Inconsolata (variable, Latin-subset woff2) in
   `wallet/appserver/shared/font/`, declared in
-  `newui/src/scss/typography.scss`. Both are reused as-is; Fraunces is the
+  `desktop/src/scss/typography.scss`. Both are reused as-is; Fraunces is the
   only addition.
 - Font sizing uses fixed px utility classes (`.fs8`–`.fs50`); the scale is
   deliberately untouched by this re-skin.
@@ -123,7 +123,7 @@ Wiring the theme picker — a settings control plus persistence, setting
 ## Phase 4 — validation
 
 - Contrast is validated by script, not by eye (guide §10):
-  `newui/scripts/contrast.js` (`npm run contrast`, added with phase 1) parses
+  `desktop/scripts/contrast.js` (`npm run contrast`, added with phase 1) parses
   the `$-themes` map and checks every text/surface token pair in every theme
   for WCAG AA 4.5:1, plus `--accent-contrast` on the `--accent-strong` fill.
 - `npm run build` plus eslint on touched files.

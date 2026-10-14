@@ -298,7 +298,7 @@ with_xmr() { [[ "$NO_XMR" != 1 ]]; }
 
 build_ui() {
 	log "building web UI"
-	(cd wallet/appserver && npm ci --no-audit --no-fund && npm run build --workspace=newui)
+	(cd wallet/appserver && npm ci --no-audit --no-fund && npm run build --workspace=desktop)
 }
 
 # sign_windows_file <file>: Authenticode-sign a PE file with jsign. Azure

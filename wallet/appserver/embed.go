@@ -11,7 +11,7 @@ const sharedAssetsDir = "shared"
 
 // sharedAssets holds static assets (images, fonts) referenced by the SPAs as
 // runtime URLs (/img/..., /font/...) and served as-is. They are common to both
-// the desktop (newui) and mobile bundles, so they live in one place rather than
+// the desktop and mobile bundles, so they live in one place rather than
 // being duplicated per bundle. The per-bundle built output (dist) is embedded
 // separately by the build-tagged embed_desktop.go / embed_mobile.go.
 //

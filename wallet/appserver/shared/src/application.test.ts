@@ -209,7 +209,7 @@ describe('Application.portfolioTotals', () => {
     })
   }
 
-  // rowValue is how the Portfolio prices a row (see newui Portfolio.tsx and the
+  // rowValue is how the Portfolio prices a row (see desktop Portfolio.tsx and the
   // mobile Portfolio): the group's conventional total times the group's rate.
   function rowValue (): number {
     return (app.tickerList ?? []).reduce((sum, ta) => sum + ta.total * (ta.xcRate ?? 0), 0)

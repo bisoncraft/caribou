@@ -8,6 +8,6 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
-    include: ['shared/src/**/*.test.ts', 'newui/src/**/*.test.{ts,tsx}', 'mobile/src/**/*.test.{ts,tsx}']
+    include: ['shared/src/**/*.test.ts', 'desktop/src/**/*.test.{ts,tsx}', 'mobile/src/**/*.test.{ts,tsx}']
   }
 })
