@@ -39,6 +39,7 @@ var (
 	companionTokenKey      = []byte("companionToken")
 	apiTokenKey            = []byte("apiToken")
 	sendRequiresPwKey      = []byte("sendRequiresPassword")
+	termsVersionKey        = []byte("termsVersion")
 	pokesKey               = []byte("pokes")
 )
 
@@ -677,6 +678,23 @@ func (d *kvDB) SendRequiresPassword() (bool, error) {
 		return false, err
 	}
 	return bytes.Equal(b, encode.ByteTrue), nil
+}
+
+// SetAcceptedTermsVersion records the version of the Terms of Use and Privacy
+// Policy the user has accepted. An empty value deletes the key from the
+// database.
+func (d *kvDB) SetAcceptedTermsVersion(version string) error {
+	if version == "" {
+		return deleteIfExists(d.app, termsVersionKey)
+	}
+	return d.app.Set(termsVersionKey, []byte(version), kvstore.WithReplace())
+}
+
+// AcceptedTermsVersion returns the version recorded with
+// SetAcceptedTermsVersion. If nothing has been recorded, an empty string is
+// returned without an error.
+func (d *kvDB) AcceptedTermsVersion() (string, error) {
+	return d.getString(termsVersionKey)
 }
 
 // NextMultisigKeyIndex returns the next multisig key index and increments the

@@ -3,6 +3,7 @@ import app from '@caribou/shared/application'
 import UnlockForm from './components/UnlockForm'
 import MainFrame from './components/MainFrame'
 import InitWizard from './components/InitWizard'
+import TermsScreen from './components/TermsScreen'
 import Loading from './components/Loading'
 import {
   AppState,
@@ -31,9 +32,14 @@ export const App = () => {
 
   if (appState === null) return <Loading />
 
+  // A fresh install accepts before the wizard. An existing wallet is asked
+  // after it unlocks, and again whenever the terms version changes.
   if (appState.user) {
+    if (!appState.termsAccepted) return <TermsScreen onAccepted={resetAppState} />
     return <MainFrame pd={pageData} />
   } else if (appState.inited) {
     return <UnlockForm setUnlocked={() => { resetAppState(); app.loadPage('portfolio') }} />
+  } else if (!appState.termsAccepted) {
+    return <TermsScreen onAccepted={resetAppState} />
   } else return <InitWizard setInited={() => { resetAppState(); app.loadPage('portfolio') }} />
 }

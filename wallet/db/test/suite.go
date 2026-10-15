@@ -37,6 +37,7 @@ func RunSuite(t *testing.T, newDB func(t *testing.T) db.DB) {
 	run("DisabledRateSources", testDisabledRateSources)
 	run("Language", testLanguage)
 	run("SendRequiresPassword", testSendRequiresPassword)
+	run("AcceptedTermsVersion", testAcceptedTermsVersion)
 	run("Tokens", testTokens)
 	run("Multisig", testMultisig)
 	run("ConnectLifecycle", testConnectLifecycle)
@@ -587,6 +588,39 @@ func testSendRequiresPassword(t *testing.T, d db.DB) {
 		t.Fatalf("SetSendRequiresPassword(false) error: %v", err)
 	}
 	ensure("after unset", false)
+}
+
+func testAcceptedTermsVersion(t *testing.T, d db.DB) {
+	ensure := func(tag, want string) {
+		t.Helper()
+		got, err := d.AcceptedTermsVersion()
+		if err != nil {
+			t.Fatalf("%s: AcceptedTermsVersion error: %v", tag, err)
+		}
+		if got != want {
+			t.Fatalf("%s: AcceptedTermsVersion = %q, wanted %q", tag, got, want)
+		}
+	}
+
+	// Nothing stored reads back as empty without an error.
+	ensure("fresh DB", "")
+
+	if err := d.SetAcceptedTermsVersion("2026-09-21"); err != nil {
+		t.Fatalf("SetAcceptedTermsVersion error: %v", err)
+	}
+	ensure("after set", "2026-09-21")
+
+	// A newer acceptance replaces the older one.
+	if err := d.SetAcceptedTermsVersion("2026-11-01"); err != nil {
+		t.Fatalf("SetAcceptedTermsVersion replace error: %v", err)
+	}
+	ensure("after replace", "2026-11-01")
+
+	// An empty version clears the acceptance.
+	if err := d.SetAcceptedTermsVersion(""); err != nil {
+		t.Fatalf("SetAcceptedTermsVersion clear error: %v", err)
+	}
+	ensure("after clear", "")
 }
 
 func testTokens(t *testing.T, d db.DB) {

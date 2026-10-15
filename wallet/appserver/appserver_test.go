@@ -70,6 +70,9 @@ type TCore struct {
 	logoutCalls          int
 	initErr              error
 	isInited             bool
+	acceptedTerms        string
+	acceptedTermsErr     error
+	setAcceptedTermsErr  error
 	createWalletErr      error
 	openWalletErr        error
 	closeWalletErr       error
@@ -264,7 +267,15 @@ func (*TCore) SetAPIToken(token string) error        { return nil }
 func (*TCore) APIToken() (string, error)             { return "", nil }
 func (c *TCore) SetSendRequiresPassword(bool) error  { return c.setSendRequiresPWErr }
 func (c *TCore) SendRequiresPassword() (bool, error) { return c.sendRequiresPW, c.sendRequiresPWErr }
-func (c *TCore) VerifyPassword(pw []byte) error      { return c.verifyPasswordErr }
+func (c *TCore) SetAcceptedTermsVersion(v string) error {
+	if c.setAcceptedTermsErr != nil {
+		return c.setAcceptedTermsErr
+	}
+	c.acceptedTerms = v
+	return nil
+}
+func (c *TCore) AcceptedTermsVersion() (string, error) { return c.acceptedTerms, c.acceptedTermsErr }
+func (c *TCore) VerifyPassword(pw []byte) error        { return c.verifyPasswordErr }
 
 func (c *TCore) Bridge(fromAssetID, toAssetID uint32, amt uint64, bridgeName string) (string, error) {
 	c.bridgeCalls++
@@ -989,10 +1000,211 @@ func TestAPIInit(t *testing.T) {
 	tCore.isInited = true
 	ensure(s.apiIsInitialized, `{"ok":true,"initialized":true}`)
 
-	// Initialization error
+	// Initialization is refused until the current terms are accepted, and the
+	// core is never asked to initialize in that case.
 	tCore.initErr = errTest
+	ensure(s.apiInit, fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTermsNotAccepted))
+	tCore.acceptedTerms = "an-older-version"
+	ensure(s.apiInit, fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTermsNotAccepted))
+
+	// Initialization error
+	tCore.acceptedTerms = termsVersion
 	ensure(s.apiInit, fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.initErr = nil
+}
+
+func TestAPIAcceptTerms(t *testing.T) {
+	writer := new(TWriter)
+	var body any
+	reader := new(TReader)
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	ensure := func(want string) {
+		t.Helper()
+		ensureResponse(t, s.apiAcceptTerms, want, reader, writer, body, nil)
+	}
+
+	// A stale client cannot record acceptance of text it was not shown.
+	body = map[string]string{"version": "an-older-version"}
+	ensure(`{"ok":false,"msg":"terms version \"an-older-version\" is not the current version"}`)
+	if tCore.acceptedTerms != "" {
+		t.Fatalf("accepted a stale terms version: %q", tCore.acceptedTerms)
+	}
+
+	// A storage failure is surfaced and nothing is recorded.
+	body = map[string]string{"version": termsVersion}
+	tCore.setAcceptedTermsErr = errTest
+	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
+	tCore.setAcceptedTermsErr = nil
+
+	// Before the wallet exists there is no login to check.
+	ensure(`{"ok":true}`)
+	if tCore.acceptedTerms != termsVersion {
+		t.Fatalf("acceptance not recorded, got %q", tCore.acceptedTerms)
+	}
+
+	// Once initialized, an unauthenticated caller cannot record acceptance.
+	tCore.acceptedTerms = ""
+	tCore.isInited = true
+	ensure("not authorized - login first")
+	if tCore.acceptedTerms != "" {
+		t.Fatalf("unauthenticated caller recorded acceptance: %q", tCore.acceptedTerms)
+	}
+}
+
+func TestAPIUserTermsAccepted(t *testing.T) {
+	tests := []struct {
+		name     string
+		accepted string
+		readErr  error
+		want     bool
+	}{
+		{name: "nothing accepted", accepted: "", want: false},
+		{name: "older version", accepted: "an-older-version", want: false},
+		{name: "current version", accepted: termsVersion, want: true},
+		// A read failure must not be reported as acceptance.
+		{name: "read error", accepted: termsVersion, readErr: errTest, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A fresh server per case: a positive answer is cached for the
+			// life of a server.
+			s, tCore, shutdown := newTServer(t, false)
+			defer shutdown()
+			tCore.acceptedTerms = tt.accepted
+			tCore.acceptedTermsErr = tt.readErr
+			w := new(TWriter)
+			req, err := http.NewRequest("GET", "/", nil)
+			if err != nil {
+				t.Fatalf("error creating request: %v", err)
+			}
+			s.apiUser(w, req)
+
+			var resp struct {
+				TermsVersion  string `json:"termsVersion"`
+				TermsAccepted bool   `json:"termsAccepted"`
+			}
+			if err := json.Unmarshal(w.b, &resp); err != nil {
+				t.Fatalf("error decoding response: %v", err)
+			}
+			if resp.TermsVersion != termsVersion {
+				t.Fatalf("termsVersion = %q, wanted %q", resp.TermsVersion, termsVersion)
+			}
+			if resp.TermsAccepted != tt.want {
+				t.Fatalf("termsAccepted = %t, wanted %t", resp.TermsAccepted, tt.want)
+			}
+		})
+	}
+}
+
+// TestTermsGateRouting sends requests through the real mux to confirm the
+// gate is wired onto the authenticated routes while logout stays reachable.
+func TestTermsGateRouting(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	const authToken = "00112233445566778899aabbccddeeff"
+	s.authMtx.Lock()
+	s.authTokens[authToken] = true
+	s.authMtx.Unlock()
+
+	post := func(path string, authed bool) int {
+		t.Helper()
+		req := httptest.NewRequest("POST", path, nil)
+		if authed {
+			req.AddCookie(&http.Cookie{Name: authCK, Value: authToken})
+		}
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Not accepted: authenticated APIs are locked, logout is not.
+	if code := post("/api/send", true); code != http.StatusForbidden {
+		t.Fatalf("/api/send before acceptance: code = %d, wanted 403", code)
+	}
+	// The terms check never replaces the login check.
+	if code := post("/api/send", false); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /api/send: code = %d, wanted 401", code)
+	}
+
+	tCore.acceptedTerms = termsVersion
+	if code := post("/api/send", true); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Fatalf("/api/send after acceptance: code = %d, wanted the handler to run", code)
+	}
+
+	// Logout last, as it ends the session. It is reachable without acceptance.
+	tCore.acceptedTerms = ""
+	if code := post("/api/logout", true); code == http.StatusForbidden || code == http.StatusUnauthorized {
+		t.Fatalf("/api/logout before acceptance: code = %d, wanted the handler to run", code)
+	}
+}
+
+func TestRejectUnaccepted(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	called := false
+	h := s.rejectUnaccepted(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	serve := func() int {
+		t.Helper()
+		called = false
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/send", nil)
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// A version bump locks out authenticated handlers until accepted.
+	for _, accepted := range []string{"", "an-older-version"} {
+		tCore.acceptedTerms = accepted
+		if code := serve(); code != http.StatusForbidden || called {
+			t.Fatalf("accepted %q: code = %d, called = %t, wanted 403 and not called", accepted, code, called)
+		}
+	}
+
+	// A read failure does not open the gate.
+	tCore.acceptedTerms = termsVersion
+	tCore.acceptedTermsErr = errTest
+	if code := serve(); code != http.StatusInternalServerError || called {
+		t.Fatalf("read error: code = %d, called = %t, wanted 500 and not called", code, called)
+	}
+	tCore.acceptedTermsErr = nil
+
+	if code := serve(); code != http.StatusOK || !called {
+		t.Fatalf("accepted: code = %d, called = %t, wanted 200 and called", code, called)
+	}
+}
+
+func TestAPITerms(t *testing.T) {
+	s, _, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	w := new(TWriter)
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatalf("error creating request: %v", err)
+	}
+	s.apiTerms(w, req)
+
+	var resp struct {
+		OK      bool   `json:"ok"`
+		Version string `json:"version"`
+		Terms   string `json:"terms"`
+		Privacy string `json:"privacy"`
+	}
+	if err := json.Unmarshal(w.b, &resp); err != nil {
+		t.Fatalf("error decoding response: %v", err)
+	}
+	if !resp.OK || resp.Version != termsVersion {
+		t.Fatalf("unexpected response: ok=%t version=%q", resp.OK, resp.Version)
+	}
+	if !strings.Contains(resp.Terms, "Terms of Use") || !strings.Contains(resp.Privacy, "Privacy Policy") {
+		t.Fatal("response is missing the embedded terms or privacy text")
+	}
 }
 
 // TODO: TestAPIGetDEXInfo

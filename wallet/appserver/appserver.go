@@ -157,6 +157,8 @@ type clientCore interface {
 	APIToken() (string, error)
 	SetSendRequiresPassword(require bool) error
 	SendRequiresPassword() (bool, error)
+	SetAcceptedTermsVersion(version string) error
+	AcceptedTermsVersion() (string, error)
 	VerifyPassword(pw []byte) error
 	TakeAction(assetID uint32, actionID string, actionB json.RawMessage) error
 	BridgeFeesAndLimits(fromAssetID, toAssetID uint32, bridgeName string) (*core.BridgeFeesAndLimits, error)
@@ -312,6 +314,11 @@ type AppServer struct {
 	// to the DB. It survives logout and is only accepted from a loopback
 	// peer (see apiTokenAuthorized). The raw token is never stored.
 	apiTokenHash string
+
+	// termsAcceptedCache is set once the current terms version is known to be
+	// accepted, so authenticated requests skip the database read. See
+	// termsAccepted.
+	termsAcceptedCache atomic.Bool
 
 	appVersion string
 
@@ -508,6 +515,8 @@ func New(cfg *Config) (*AppServer, error) {
 	mux.Route("/api", func(r chi.Router) {
 		r.Use(middleware.AllowContentType("application/json"))
 		r.Post("/init", s.apiInit)
+		r.Get("/terms", s.apiTerms)
+		r.Post("/acceptterms", s.apiAcceptTerms)
 		r.Post("/validateseed", s.apiValidateSeed)
 		r.Get("/isinitialized", s.apiIsInitialized)
 		r.Post("/resetapppassword", s.apiResetAppPassword)
@@ -522,8 +531,14 @@ func New(cfg *Config) (*AppServer, error) {
 			apiInit.Post("/login", s.apiLogin)
 		})
 
+		// Logout is outside the terms gate so a session can always be ended.
+		r.Group(func(apiLogout chi.Router) {
+			apiLogout.Use(s.rejectUnauthed)
+			apiLogout.Post("/logout", s.apiLogout)
+		})
+
 		r.Group(func(apiAuth chi.Router) {
-			apiAuth.Use(s.rejectUnauthed)
+			apiAuth.Use(s.rejectUnauthed, s.rejectUnaccepted)
 			apiAuth.Get("/notes", s.apiNotes)
 			apiAuth.Post("/defaultwalletcfg", s.apiDefaultWalletCfg)
 			apiAuth.Post("/newwallet", s.apiNewWallet)
@@ -534,7 +549,6 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/connectwallet", s.apiConnectWallet)
 			apiAuth.Post("/rescanwallet", s.apiRescanWallet)
 			apiAuth.Post("/recoverwallet", s.apiRecoverWallet)
-			apiAuth.Post("/logout", s.apiLogout)
 			apiAuth.Post("/balance", s.apiGetBalance)
 			apiAuth.Post("/feestate", s.apiWalletFeeState)
 			apiAuth.Post("/parseconfig", s.apiParseConfig)

@@ -72,6 +72,13 @@ type DB interface {
 	// SendRequiresPassword gets whether sending requires the app password.
 	// If no value has been stored, false is returned without an error.
 	SendRequiresPassword() (bool, error)
+	// SetAcceptedTermsVersion records the version of the Terms of Use and
+	// Privacy Policy the user has accepted.
+	SetAcceptedTermsVersion(version string) error
+	// AcceptedTermsVersion gets the version stored with
+	// SetAcceptedTermsVersion. If nothing has been stored, an empty string is
+	// returned without an error.
+	AcceptedTermsVersion() (string, error)
 	// SetCompanionToken stores the companion app auth token hash.
 	SetCompanionToken(token string) error
 	// CompanionToken retrieves the companion app auth token hash stored

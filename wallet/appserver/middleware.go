@@ -149,3 +149,24 @@ func (s *AppServer) rejectUnauthed(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// rejectUnaccepted responds with HTTP 403 Forbidden until the current Terms of
+// Use and Privacy Policy version has been accepted. It runs after
+// rejectUnauthed, so a version bump locks out every authenticated /api route,
+// not just the bundled UI. The /ws notification socket is deliberately not
+// gated: it carries notifications only and performs no wallet action.
+func (s *AppServer) rejectUnaccepted(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		accepted, err := s.termsAccepted()
+		if err != nil {
+			log.Errorf("error reading accepted terms version: %v", err)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		if !accepted {
+			http.Error(w, "terms of use not accepted", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

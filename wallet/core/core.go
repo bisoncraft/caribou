@@ -625,6 +625,18 @@ func (c *Core) SendRequiresPassword() (bool, error) {
 	return c.db.SendRequiresPassword()
 }
 
+// SetAcceptedTermsVersion records the version of the Terms of Use and Privacy
+// Policy the user has accepted.
+func (c *Core) SetAcceptedTermsVersion(version string) error {
+	return c.db.SetAcceptedTermsVersion(version)
+}
+
+// AcceptedTermsVersion returns the accepted terms version. If nothing has
+// been accepted, an empty string is returned without an error.
+func (c *Core) AcceptedTermsVersion() (string, error) {
+	return c.db.AcceptedTermsVersion()
+}
+
 const defaultPort = "7232"
 
 // addrHost returns the host or url:port pair for an address.

@@ -3,6 +3,7 @@ import app from '@caribou/shared/application'
 import { AppState } from '@caribou/shared/registry'
 import UnlockForm from './components/UnlockForm'
 import InitWizard from './components/InitWizard'
+import TermsScreen from './components/TermsScreen'
 import Portfolio from './components/Portfolio'
 import Settings from './components/Settings'
 import Send from './components/Send'
@@ -60,6 +61,11 @@ export const App = () => {
         <div className='mb-spinner' />
       </div>
     )
+  } else if (!appState.termsAccepted && (appState.user || !appState.inited)) {
+    // A fresh install accepts the terms before creating a wallet. An existing
+    // wallet is asked after it unlocks, and again whenever the terms version
+    // changes.
+    screen = <TermsScreen onAccepted={resetAppState} />
   } else if (!appState.user) {
     screen = appState.inited
       ? <UnlockForm onUnlocked={() => { resetAppState(); app.loadPage('portfolio') }} />

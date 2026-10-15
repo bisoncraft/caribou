@@ -379,6 +379,8 @@ export interface AppState {
   ok: boolean
   onionUrl: string
   appSettings: AppSettings
+  termsVersion: string
+  termsAccepted: boolean
 }
 
 export interface PageData {
