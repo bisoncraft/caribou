@@ -249,7 +249,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // confirms, and a pushed notification reaches the callback.
 func TestWSClientNotifies(t *testing.T) {
 	srv := newTestWSServer(t)
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const account = "watched-account"
 	changed := make(chan struct{}, 8)
@@ -296,7 +296,7 @@ func TestWSClientNotifies(t *testing.T) {
 // subscription ids do not survive a connection.
 func TestWSClientResubscribes(t *testing.T) {
 	srv := newTestWSServer(t)
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const account = "watched-account"
 	changed := make(chan struct{}, 8)
@@ -337,7 +337,7 @@ func TestWSClientResubscribes(t *testing.T) {
 // token wallet whose subscription has not landed keeps polling briskly.
 func TestWSClientLiveRequiresAllAccounts(t *testing.T) {
 	srv := newTestWSServer(t)
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const native, ata = "native-account", "token-account"
 	c.watch(native, func() {})
@@ -383,7 +383,7 @@ func TestWSClientLiveRequiresAllAccounts(t *testing.T) {
 func TestWSClientUnwatchDuringSubscribe(t *testing.T) {
 	srv := newTestWSServer(t)
 	hold := srv.holdSubscribes()
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const native, ata = "native-account", "token-account"
 	c.watch(native, func() {})
@@ -429,7 +429,7 @@ func TestWSClientUnwatchDuringSubscribe(t *testing.T) {
 func TestWSClientRewatchDuringSubscribe(t *testing.T) {
 	srv := newTestWSServer(t)
 	hold := srv.holdSubscribes()
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const account = "token-account"
 	c.watch(account, func() {})
@@ -480,7 +480,7 @@ func TestWSClientRedialsAfterBadSubscribeReply(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newTestWSServer(t)
 			srv.failSubscribes(1, tt.null)
-			c := newWSClient(srv.url, util.Disabled)
+			c := newWSClient(srv.url, "", util.Disabled)
 
 			const account = "watched-account"
 			changed := make(chan struct{}, 8)
@@ -526,7 +526,7 @@ func TestWSClientRedialsAfterBadSubscribeReply(t *testing.T) {
 func TestWSClientKeepsConnectionOnUnwatchedRejection(t *testing.T) {
 	srv := newTestWSServer(t)
 	hold := srv.holdSubscribes()
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const native, ata = "native-account", "token-account"
 	changed := make(chan struct{}, 8)
@@ -584,7 +584,7 @@ func TestWSClientUnreachable(t *testing.T) {
 	url := srv.url
 	srv.srv.Close()
 
-	c := newWSClient(url, util.Disabled)
+	c := newWSClient(url, "", util.Disabled)
 	c.watch("account", func() {})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -930,7 +930,7 @@ func TestSubscribeStale(t *testing.T) {
 		want:    true,
 	}} {
 		t.Run(tt.name, func(t *testing.T) {
-			c := newWSClient("", util.Disabled)
+			c := newWSClient("", "", util.Disabled)
 			if tt.watched {
 				c.watched[account] = func() {}
 			}
@@ -955,7 +955,7 @@ func TestSubscribeStale(t *testing.T) {
 func TestWSClientRetiresOnUnansweredSubscribe(t *testing.T) {
 	srv := newTestWSServer(t)
 	hold := srv.holdSubscribes()
-	c := newWSClient(srv.url, util.Disabled)
+	c := newWSClient(srv.url, "", util.Disabled)
 
 	const account = "watched-account"
 	changed := make(chan struct{}, 8)

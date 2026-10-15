@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
-	"golang.org/x/net/proxy"
+	"github.com/bisoncraft/caribou/util/dexnet"
 )
 
 const (
@@ -33,31 +33,24 @@ type rpcClient struct {
 	log        util.Logger
 }
 
-func newRPCClient(baseURL, torProxy string, log util.Logger) (*rpcClient, error) {
+func newRPCClient(baseURL, torProxy string, log util.Logger) *rpcClient {
+	// torproxy: DialContext is the proxy dialer when a proxy is configured
 	transport := &http.Transport{
 		MaxIdleConns:       2,
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
-	}
-
-	if torProxy != "" {
-		dialer, err := proxy.SOCKS5("tcp", torProxy, nil, proxy.Direct)
-		if err != nil {
-			return nil, fmt.Errorf("error creating SOCKS5 dialer: %w", err)
-		}
-		transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
-			return dialer.Dial(network, addr)
-		}
+		DialContext:        dexnet.ProxyDialContext(torProxy),
 	}
 
 	return &rpcClient{
 		baseURL: baseURL,
+		// torproxy: uses the transport above, proxied when configured
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   httpTimeout,
 		},
 		log: log,
-	}, nil
+	}
 }
 
 func (c *rpcClient) post(ctx context.Context, path string, payload, result any) error {

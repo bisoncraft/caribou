@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/gorilla/websocket"
 )
 
@@ -89,8 +90,9 @@ const (
 // reconnect, or miss a frame without any of it becoming a correctness problem,
 // since the fallback poll re-reads the same state anyway.
 type wsClient struct {
-	url string
-	log util.Logger
+	url      string
+	torProxy string // SOCKS5 proxy for the connection, or "" for direct
+	log      util.Logger
 
 	// live reports a connection that is up with every watched account
 	// confirmed subscribed. It is the wallet's cue to slow its poll, so it is
@@ -119,14 +121,15 @@ type pendingSub struct {
 	sent    time.Time
 }
 
-func newWSClient(url string, log util.Logger) *wsClient {
+func newWSClient(url, torProxy string, log util.Logger) *wsClient {
 	return &wsClient{
-		url:     url,
-		log:     log,
-		watched: make(map[string]func()),
-		reqAcct: make(map[uint64]pendingSub),
-		subAcct: make(map[uint64]string),
-		acctSub: make(map[string]uint64),
+		url:      url,
+		torProxy: torProxy,
+		log:      log,
+		watched:  make(map[string]func()),
+		reqAcct:  make(map[uint64]pendingSub),
+		subAcct:  make(map[uint64]string),
+		acctSub:  make(map[string]uint64),
 	}
 }
 
@@ -248,7 +251,11 @@ func (o *outageLog) connected() {
 // ended it. connected is called once the connection is up and every watched
 // account's subscribe has been written.
 func (c *wsClient) session(ctx context.Context, connected func()) error {
-	dialer := websocket.Dialer{HandshakeTimeout: wsDialTimeout}
+	// torproxy: NetDialContext is the proxy dialer when configured
+	dialer := websocket.Dialer{
+		HandshakeTimeout: wsDialTimeout,
+		NetDialContext:   dexnet.ProxyDialContext(c.torProxy),
+	}
 	conn, resp, err := dialer.DialContext(ctx, c.url, nil)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", c.url, err)

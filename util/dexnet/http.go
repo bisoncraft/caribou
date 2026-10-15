@@ -6,11 +6,15 @@ package dexnet
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,25 +23,111 @@ import (
 
 const defaultResponseSizeLimit = 1 << 20 // 1 MiB = 1,048,576 bytes
 
+// proxyDialTimeout bounds a dial through the proxy whose context carries no
+// deadline. The socks library stops waiting on a stalled proxy only at the
+// context's deadline, so without it an abandoned dial would hold its goroutine
+// and socket for as long as the proxy stays silent. A context that already
+// carries a deadline is left alone. A variable so tests can shorten it.
+var proxyDialTimeout = 30 * time.Second
+
 // Client is the default HTTP client used for requests.
+// torproxy: the shared client; SetProxy installs the proxy transport on it
 var Client = &http.Client{
 	Timeout: 20 * time.Second, // 20 seconds
 }
 
 // ProxyDialContext returns a DialContext function that routes connections
 // through a SOCKS5 proxy at addr (host:port). If addr is empty, nil is
-// returned.
+// returned. The dial returns as soon as ctx is done, and gives up on a proxy
+// that never answers after proxyDialTimeout. The socks library only honors a
+// context's deadline, so neither would hold otherwise.
 func ProxyDialContext(addr string) func(ctx context.Context, network, address string) (net.Conn, error) {
 	if addr == "" {
 		return nil
 	}
-	proxy := &socks.Proxy{Addr: addr}
-	return proxy.DialContext
+	// TorIsolation gives each connection fresh credentials, so Tor puts every
+	// connection, and therefore unrelated wallets, on separate circuits.
+	proxy := &socks.Proxy{Addr: addr, TorIsolation: true}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		type result struct {
+			conn net.Conn
+			err  error
+		}
+		res := make(chan result, 1)
+		go func() {
+			dctx := ctx
+			if _, ok := ctx.Deadline(); !ok {
+				var cancel context.CancelFunc
+				dctx, cancel = context.WithTimeout(ctx, proxyDialTimeout)
+				defer cancel()
+			}
+			conn, err := proxy.DialContext(dctx, network, address)
+			res <- result{conn, err}
+		}()
+		select {
+		case r := <-res:
+			// socks returns a nil *proxiedConn inside a non-nil net.Conn on
+			// error, so trust err rather than a nil check on conn.
+			if r.err != nil {
+				return nil, r.err
+			}
+			return r.conn, nil
+		case <-ctx.Done():
+			// Close a connection the abandoned dial may still complete.
+			go func() {
+				if r := <-res; r.err == nil {
+					r.conn.Close()
+				}
+			}()
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// cgnat is the carrier-grade NAT range (100.64.0.0/10), used by Tailscale.
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// ProxyFor returns torProxy unless hostAddr (a host, host:port or URL) is a
+// loopback, private, link-local or unspecified IP, or localhost, which Tor
+// refuses to reach, in which case it returns "" so the connection goes direct.
+// Other hostnames are always proxied, even if they resolve to a private
+// address, because resolving them locally would leak the lookup.
+func ProxyFor(hostAddr, torProxy string) string {
+	if torProxy == "" {
+		return ""
+	}
+	host := hostAddr
+	if u, err := url.Parse(hostAddr); err == nil && u.Host != "" {
+		host = u.Hostname()
+	} else if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsUnspecified() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip)) {
+		return ""
+	}
+	return torProxy
+}
+
+// IsolationCreds returns random SOCKS credentials. Tor keeps connections with
+// distinct credentials on separate circuits, for clients that dial through a
+// library which takes proxy credentials rather than using ProxyDialContext.
+func IsolationCreds() (user, pass string) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:8]), hex.EncodeToString(b[8:])
 }
 
 // ProxyTransport returns an *http.Transport that routes all connections through
 // a SOCKS5 proxy at addr (host:port).
 func ProxyTransport(addr string) *http.Transport {
+	// torproxy: this is the proxy transport
 	return &http.Transport{
 		DialContext:           ProxyDialContext(addr),
 		ForceAttemptHTTP2:     false,
@@ -51,6 +141,7 @@ func ProxyTransport(addr string) *http.Transport {
 // ProxyHTTPClient returns an *http.Client that routes all requests through a
 // SOCKS5 proxy at addr (host:port).
 func ProxyHTTPClient(addr string) *http.Client {
+	// torproxy: this is the proxy client
 	return &http.Client{
 		Transport: ProxyTransport(addr),
 		Timeout:   20 * time.Second,

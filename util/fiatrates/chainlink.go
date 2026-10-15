@@ -513,6 +513,7 @@ func probeProvider(ctx context.Context, provider string) (chainRPCClient, error)
 	probeCtx, cancel := context.WithTimeout(ctx, chainlinkDialTimeout)
 	defer cancel()
 
+	// torproxy: uses dexnet.Client, which core routes through the proxy
 	rpcClient, err := rpc.DialOptions(probeCtx, provider, rpc.WithHTTPClient(dexnet.Client))
 	if err != nil {
 		return nil, err

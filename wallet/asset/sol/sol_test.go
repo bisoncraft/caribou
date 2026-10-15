@@ -1898,7 +1898,7 @@ func TestCallDetectsHTTPStatus429(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rpc := newRPCClient(srv.URL)
+	rpc := newRPCClient(srv.URL, "")
 	err := rpc.call(context.Background(), "getSlot", nil, nil)
 	if err == nil {
 		t.Fatal("expected an error from the 429 response")
@@ -1927,7 +1927,7 @@ func TestCallResponseSizeLimit(t *testing.T) {
 			defer srv.Close()
 
 			var result string
-			err := newRPCClient(srv.URL).call(context.Background(), "getSlot", nil, &result)
+			err := newRPCClient(srv.URL, "").call(context.Background(), "getSlot", nil, &result)
 			if test.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "exceeds") {
 					t.Fatalf("call error = %v, want response-size error", err)

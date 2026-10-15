@@ -114,7 +114,7 @@ func manualConfirm(t *testing.T, rpc *rpcClient, sig string) {
 }
 
 func TestManualSPLTokenRoundTrip(t *testing.T) {
-	rpc := newRPCClient("http://127.0.0.1:18999")
+	rpc := newRPCClient("http://127.0.0.1:18999", "")
 	ctx := context.Background()
 
 	for _, tokenName := range []string{"USDC", "USDT"} {

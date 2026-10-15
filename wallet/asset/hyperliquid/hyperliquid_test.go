@@ -441,12 +441,7 @@ func newTestRPCClient(t *testing.T, handler http.HandlerFunc) (*rpcClient, *http
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	log := util.StdOutLogger("HLTEST", util.LevelTrace)
-	c, err := newRPCClient(srv.URL, "", log)
-	if err != nil {
-		srv.Close()
-		t.Fatalf("newRPCClient error: %v", err)
-	}
-	return c, srv
+	return newRPCClient(srv.URL, "", log), srv
 }
 
 func TestRPCSpotBalance(t *testing.T) {
@@ -1295,11 +1290,7 @@ func newSendTestWalletWithHandlers(t *testing.T, infoHandler, exchangeHandler ht
 		infoHandler(w, r)
 	}))
 
-	rpc, err := newRPCClient(srv.URL, "", util.StdOutLogger("HLTEST", util.LevelTrace))
-	if err != nil {
-		srv.Close()
-		t.Fatalf("newRPCClient: %v", err)
-	}
+	rpc := newRPCClient(srv.URL, "", util.StdOutLogger("HLTEST", util.LevelTrace))
 
 	seed := make([]byte, 32)
 	rand.Read(seed)
@@ -2286,10 +2277,7 @@ func TestHandleTransferUpdateEmitsBalanceChange(t *testing.T) {
 
 	netDB := newTestTxDB(t)
 	log := util.StdOutLogger("HLWTEST", util.LevelTrace)
-	rpc, err := newRPCClient(srv.URL, "", log)
-	if err != nil {
-		t.Fatalf("newRPCClient: %v", err)
-	}
+	rpc := newRPCClient(srv.URL, "", log)
 	notes := make(chan asset.WalletNotification, 16)
 	w := &HyperWallet{
 		log:     log,
@@ -2387,10 +2375,7 @@ func newTestWalletWithRPC(t *testing.T, srv *httptest.Server) *HyperWallet {
 	t.Helper()
 	netDB := newTestTxDB(t)
 	log := util.StdOutLogger("HLWTEST", util.LevelTrace)
-	rpc, err := newRPCClient(srv.URL, "", log)
-	if err != nil {
-		t.Fatalf("newRPCClient: %v", err)
-	}
+	rpc := newRPCClient(srv.URL, "", log)
 	noteChan := make(chan asset.WalletNotification, 16)
 	w := &HyperWallet{
 		log:     log,
