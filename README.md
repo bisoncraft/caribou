@@ -22,10 +22,9 @@
 </p>
 
 Caribou is a free, open-source wallet for desktop and mobile that keeps
-tokenized gold, digital dollars and coins side by side in one portfolio. One
-recovery phrase covers every asset; it is generated on your device and never
-sent anywhere. There is no account to create and no ID to show. Caribou is
-built by Bisoncraft LLC, the developers of Bison Wallet and DCRDEX.
+tokenized gold, digital dollars and coins side by side in one portfolio.
+There is no account to create and no ID to show. Caribou is built by
+Bisoncraft LLC, the developers of Bison Wallet and DCRDEX.
 
 > [!IMPORTANT]
 > Caribou is pre-release software and has no tagged release yet. The first
@@ -41,8 +40,6 @@ built by Bisoncraft LLC, the developers of Bison Wallet and DCRDEX.
 | **Coins** | Bitcoin, Ethereum, Solana, XRP, BNB, Litecoin, Hyperliquid (HYPE), Polygon (POL), Dash, Monero | The native money of each network. Monero is part of desktop release builds. |
 | **Investments** | Tokenized stocks and ETFs | Planned; see the [roadmap](#roadmap). |
 
-Chainlink (LINK) is also supported on Ethereum.
-
 ## Why Caribou
 
 - **Only you hold the keys.** Keys are generated and stored on your device.
@@ -55,10 +52,8 @@ Chainlink (LINK) is also supported on Ethereum.
   (BIP 157/158).
 - **Swaps built in.** Swap between supported assets across chains through
   NEAR Intents. The fee and the amount received are itemized before you
-  confirm. While a swap settles, the funds are held
-  by NEAR Intents solvers and verifiers until delivery or refund.
-- **One core, every platform.** Desktop and mobile run the same Go wallet
-  core.
+  confirm. While a swap settles, the funds are held by NEAR Intents solvers
+  and verifiers until delivery or refund.
 - **Scriptable.** A token-authenticated API, bound to localhost, lets scripts,
   a CLI or an MCP server drive a running wallet
   ([docs/automation.md](docs/automation.md)).
@@ -80,48 +75,40 @@ an application fee, shown in the quote breakdown before you confirm.
 
 ## Guiding principles
 
-- **Self-custody.** Your keys, your coins. You, and only you, control your funds.
-- **Non-KYC.** No accounts, no identity verification, no address whitelisting,
-  no third-party KYC/AML gates. Caribou does not require, collect, or
-  forward identifying information to use any of its features, including
-  swaps. Where a chain or swap counterparty is operated by a third party,
-  Caribou prefers backends that do not impose KYC and surfaces the
-  trade-off plainly when a non-KYC option is unavailable.
-
-These principles are load-bearing — features that conflict with them do not
-ship. Anything that requires custody of user funds is out of scope on its own
-merits, regardless of convenience. Identity verification and gated access are
-out of scope wherever an alternative exists. Fiat ramps and tokenized
-securities have none, and opt-in third-party modules are the single bounded
-exception described below.
+- **Self-custody.** Your keys, your coins. Keys are generated and kept on
+  your device, and funds are held at addresses the wallet controls. Caribou
+  has no custodial accounts, and no funds are kept with Bisoncraft or any
+  third party. Funds leave the wallet's control only when you send them or
+  swap them across chains; during a cross-chain swap, the settlement network
+  holds them until delivery or refund, secured by their own blockchain
+  protocol.
+- **Privacy by default, disclosure by choice.** Caribou requires no account
+  or identity verification to hold, send, receive, or swap supported assets,
+  and it collects no identifying information. Planned opt-in fiat and
+  securities integrations may require verification directly with their
+  providers.
 
 ### Opt-in third-party modules
 
-Some routes have no non-KYC form. There is no non-KYC path from a bank
-account to a blockchain: every fiat ramp performs identity verification as a
-regulatory matter. Tokenized securities can be bought only where their
-issuers permit, and some issuers verify identity themselves. The choice is
-not between a KYC'd route and a non-KYC one — it is between offering the
-route on strict terms and offering none. Caribou offers these routes as
-third-party modules, bounded as follows:
+Buying crypto with a card or bank transfer, and buying tokenized securities,
+depend on providers with their own verification rules. The planned Ramp
+Network integration requires identity verification with Ramp, and some
+issuers of tokenized securities verify buyers themselves. Caribou plans to
+offer these routes as opt-in modules, and each integration must meet four
+requirements:
 
-- **Opt-in, off by default.** A module is inert unless the user turns it on.
-  No default path through the wallet reaches one.
-- **Nothing depends on one.** Every wallet capability works with all modules
-  disabled. They add a route to fiat or to securities; they are never a
-  prerequisite.
+- **Opt-in, off by default.** A module does nothing until the user turns it
+  on. No default path through the wallet reaches one.
+- **Nothing depends on one.** Holding, sending, receiving, and swapping remain
+  available with all modules disabled.
 - **Disclosed at the point of use.** A module that imposes identity
-  verification, geographic restriction, or its own terms says so before the
-  user commits to it — including that an address is disclosed to the provider
-  and thereby linked to a verified identity in its records.
-- **Self-custody is not on the table.** Funds and tokenized securities are
-  delivered to, and spent from, wallet-controlled addresses. A provider
-  requiring custody is rejected outright, whatever else it offers.
-
-The exception is scoped to fiat ramps and tokenized securities alone. The
-non-KYC principle governs the wallet's own operation and its chain and swap
-backends without exception, because there the alternatives exist and are
-chosen.
+  verification, geographic restrictions, transfer restrictions, or its own
+  terms says so before the user commits to it. The disclosure includes that
+  the provider receives a wallet address and can link it to the identity it
+  verified.
+- **Delivered to the wallet.** Purchases and tokenized securities are
+  delivered to addresses the wallet controls and spent from them. Providers
+  that hold funds or securities on the user's behalf are not integrated.
 
 ## Platforms
 
@@ -162,7 +149,7 @@ shift based on testing, funding, and partner onboarding.
 
 - Open the alpha to Android and iOS testers through TestFlight and a Google
   Play closed test.
-- Secure funding from Zcash Community Grants and the Dash DAO.
+- Target funding decisions from Zcash Community Grants and the Dash DAO.
 - **Zcash phase 1 — Go integration:** Implement the Go wrapper and its tests.
 - **Dash staking phase 1 — Mainnet and user experience:** Test on mainnet and
   implement the staking UI/UX.
@@ -197,9 +184,9 @@ shift based on testing, funding, and partner onboarding.
 
 ### Q3 2027 — Equities in the United States
 
-- Offer tokenized stocks in the United States as an opt-in module, through an
-  issuer that performs its own identity verification and settles to the
-  user's wallet.
+- Subject to a suitable issuer partnership, offer tokenized stocks in the
+  United States as an opt-in module, through an issuer that performs its own
+  identity verification and delivers to the user's wallet.
 - Add swap venues where coverage data shows gaps.
 
 ---
@@ -209,7 +196,7 @@ shift based on testing, funding, and partner onboarding.
 Requirements:
 
 - Go 1.25 or later.
-- Node.js 20 or 22 with npm, for the web UI.
+- Node.js 20.19+ or 22.13+ with npm, for the web UI.
 - For the desktop app: cgo, plus the GTK and WebKitGTK development packages
   on Linux (`libgtk-3-dev libwebkit2gtk-4.1-dev`).
 
@@ -279,7 +266,7 @@ go test -race -short ./...
 go test -race -short ./wallet/asset/btc/...
 
 # Web UI lint and tests
-cd wallet/appserver && npm run lint && npm run test
+(cd wallet/appserver && npm run lint && npm run test)
 ```
 
 Some tests need real networks or running nodes and are gated by build tags:
@@ -303,8 +290,6 @@ markdownlint-cli2 "*.md" "docs/**/*.md"
   (`wallet/appserver/newui`) by default and the mobile bundle
   (`wallet/appserver/mobile`) under the `mobile` tag. Both build on
   `wallet/appserver/shared`.
-- **Build tags.** `xmr` adds Monero, `dcr` adds Decred, `mobile` builds the
-  mobile core and UI, and `systray` adds the command-line wallet's tray icon.
 
 ## Documentation
 
@@ -319,8 +304,8 @@ markdownlint-cli2 "*.md" "docs/**/*.md"
 
 ## Contributing
 
-Caribou is in heavy flux right now; large surfaces are being removed,
-rewritten, or first introduced. Check with @buck54321 or @JoeGruffins if you're
+Caribou is changing quickly, and large parts of the code are being removed,
+rewritten, or added. Check with @buck54321 or @JoeGruffins if you're
 interested in helping out.
 
 ## Reporting issues
