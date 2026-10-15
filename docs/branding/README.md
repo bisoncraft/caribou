@@ -16,9 +16,10 @@ is mechanical.
 The old source SVGs that used to sit in this directory (`bison-square.svg`,
 `bisonwallet-full-*.svg`) were unreferenced by any code and have been deleted.
 There is currently no vector master for the bison mark in the repository.
-`caribou-mark.svg` is the vector master of the Caribou antler mark, copied
-from the website's `static/img/caribou-mark.svg`; the repository README uses
-it as its header image.
+The Caribou antler mark is in `antlers_100x100.png` and `antlers_250x250.png`;
+the repository README uses the 250px version as its header image. Both are
+raster exports, and there is no vector master for the antler mark in the
+repository.
 
 ## Needs replacement
 

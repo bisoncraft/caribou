@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/branding/caribou-mark.svg" width="120" alt="">
+  <img src="docs/branding/antlers_250x250.png" width="125" alt="">
 </p>
 
 <h1 align="center">Caribou</h1>
