@@ -112,9 +112,22 @@ var BTCParams = map[string]*netparams.ChainParams{
 		// once mined; the header store validates each one as it syncs
 		// through. Hashes cross-checked via mempool.space and
 		// blockstream.info.
-		Checkpoints: []chaincfg.Checkpoint{
-			{Height: 955584, Hash: newHashFromStr("00000000000000000001e265c627e0a27ad347deb4d6b921f249eddfbf78e011")},
-			{Height: 969696, Hash: newHashFromStr("000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b")}, // 2026-10-02
+		// The livenet TestCheckpointRecords in the spv package fetches each
+		// header and filter header from P2P peers, checks the header against
+		// the hash, and requires the peers to agree on the filter header.
+		Checkpoints: []netparams.Checkpoint{
+			{
+				Height:       955584, // 2026-06-27
+				Hash:         newHashFromStr("00000000000000000001e265c627e0a27ad347deb4d6b921f249eddfbf78e011"),
+				Header:       newHeaderFromStr("0020a734ef046b60fe5e17086e51e194ae193f6200f5655d041e000000000000000000007460c5f7eaa219119e04ae728c430e86fc2aaa5e9609069d25f99caf34f3ae53a72e3f6a421a02171a8e62f0"),
+				FilterHeader: newHashFromStr("d5343f0a410806c81549c169c31fb8e6b57ca348082aee18c5965a8045d4f102"),
+			},
+			{
+				Height:       969696, // 2026-10-03
+				Hash:         newHashFromStr("000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b"),
+				Header:       newHeaderFromStr("00e00020ea7409145abed3693b6aa5e269dea055406e0962804301000000000000000000a8f40cc468f3aa4518fdc368e37fc7aff01eb12b293885f847517602a96e3a93d4abc06af01e021779d3a409"),
+				FilterHeader: newHashFromStr("97e95488a492738d8dd5f99c7ab0cf032823eb5876be6fcf9d73c34517c569ff"),
+			},
 		},
 		Bech32HRPSegwit:         "bc",
 		PubKeyHashAddrID:        0x00, // starts with 1
@@ -214,8 +227,13 @@ var BTCParams = map[string]*netparams.ChainParams{
 		// See the mainnet Checkpoints comment: the last retarget boundary
 		// mined before DefaultWalletBirthday. Cross-checked via
 		// mempool.space and blockstream.info.
-		Checkpoints: []chaincfg.Checkpoint{
-			{Height: 5013792, Hash: newHashFromStr("00000000000001eb9a9e968ba73b5d2f2e559e8ec7053f5106b222554c035977")},
+		Checkpoints: []netparams.Checkpoint{
+			{
+				Height:       5013792, // 2026-06-26
+				Hash:         newHashFromStr("00000000000001eb9a9e968ba73b5d2f2e559e8ec7053f5106b222554c035977"),
+				Header:       newHeaderFromStr("00000020a7e352120c16ae494d54d576e975a3eae2a41edc84f33ad10b0300000000000048bfd45ad53e9c5bdcadd91557eea32ea29dd5a1a6f8cd29c22aa06608984bde95c93e6a49fc021a267df014"),
+				FilterHeader: newHashFromStr("693712ac49089e3c2e0df42f42bac0647ce290a2974a0ef43813af5821973182"),
+			},
 		},
 		Bech32HRPSegwit: "tb", // always tb for test net
 

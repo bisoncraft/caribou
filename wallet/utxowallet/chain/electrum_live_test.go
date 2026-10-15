@@ -68,7 +68,7 @@ func liveChains(t *testing.T) []liveChain {
 		// least once during the live sync, and flag regtest's
 		// no-retarget rule so the retarget validator skips the
 		// 2016-block boundary checks.
-		Checkpoints: []chaincfg.Checkpoint{
+		Checkpoints: []netparams.Checkpoint{
 			{Height: 0, Hash: chaincfg.RegressionNetParams.GenesisHash},
 		},
 		PoWNoRetargeting: true,
@@ -91,7 +91,7 @@ func liveChains(t *testing.T) []liveChain {
 		CheckPoW: checkLTCScrypt,
 		// Genesis-pinned checkpoint + regtest no-retarget flag for
 		// the same reasons as btcParams above.
-		Checkpoints:      []chaincfg.Checkpoint{{Height: 0, Hash: ltcGenesis}},
+		Checkpoints:      []netparams.Checkpoint{{Height: 0, Hash: ltcGenesis}},
 		PoWNoRetargeting: true,
 	}
 

@@ -80,7 +80,7 @@ func regtestParams(t *testing.T, p *chaincfg.Params) *netparams.ChainParams {
 		// Pin genesis as a checkpoint so the validator path runs at
 		// least once during the live sync. BTC regtest's full chain
 		// is too volatile for higher checkpoints.
-		Checkpoints: []chaincfg.Checkpoint{{Height: 0, Hash: p.GenesisHash}},
+		Checkpoints: []netparams.Checkpoint{{Height: 0, Hash: p.GenesisHash}},
 		// Regtest doesn't retarget; record that so the retarget
 		// validator skips. Without this, every 2016-block boundary
 		// would expect a retarget that never happens on regtest.
@@ -115,7 +115,7 @@ func ltcRegtestParams(t *testing.T) *netparams.ChainParams {
 		CheckPoW: checkPoWScryptForTest,
 		// Genesis-pinned checkpoint and regtest no-retarget flag for
 		// the same reasons as the BTC params above.
-		Checkpoints:      []chaincfg.Checkpoint{{Height: 0, Hash: h}},
+		Checkpoints:      []netparams.Checkpoint{{Height: 0, Hash: h}},
 		PoWNoRetargeting: true,
 	}
 }

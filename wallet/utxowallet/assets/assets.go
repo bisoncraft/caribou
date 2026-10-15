@@ -1,6 +1,8 @@
 package assets
 
 import (
+	"bytes"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
@@ -8,6 +10,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 )
 
 func NetParams(chain, net string) (p *netparams.ChainParams, err error) {
@@ -57,4 +60,22 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 		panic(err)
 	}
 	return hash
+}
+
+// newHeaderFromStr decodes the passed hex string of a serialized block header.
+// Like newHashFromStr, it panics on an error and must only be called with
+// hard-coded headers.
+func newHeaderFromStr(hexStr string) *wire.BlockHeader {
+	b, err := hex.DecodeString(hexStr)
+	if err != nil {
+		panic(err)
+	}
+	if len(b) != wire.MaxBlockHeaderPayload {
+		panic(fmt.Sprintf("header is %d bytes, want %d", len(b), wire.MaxBlockHeaderPayload))
+	}
+	var hdr wire.BlockHeader
+	if err := hdr.Deserialize(bytes.NewReader(b)); err != nil {
+		panic(err)
+	}
+	return &hdr
 }

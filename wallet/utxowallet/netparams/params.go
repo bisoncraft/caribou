@@ -27,7 +27,7 @@ type ChainParams struct {
 	RetargetAdjustmentFactor int64
 	ReduceMinDifficulty      bool
 	MinDiffReductionTime     time.Duration
-	Checkpoints              []chaincfg.Checkpoint
+	Checkpoints              []Checkpoint
 	PowLimit                 *big.Int
 	PowLimitBits             uint32
 	PoWNoRetargeting         bool
@@ -99,6 +99,23 @@ type ChainParams struct {
 	btcdParams     *chaincfg.Params
 }
 
+// Checkpoint is a block whose identity is fixed in the chain parameters.
+// Header sync rejects any chain that does not pass through it. The full header
+// and the filter header let a header store start at the checkpoint instead of
+// at genesis, trusting both as it would the genesis block.
+type Checkpoint struct {
+	Height int32
+	// Hash is the block hash under the chain's HeaderHash. It duplicates
+	// HeaderHash(Header) so the value can be compared against block
+	// explorers directly.
+	Hash *chainhash.Hash
+	// Header is the block header.
+	Header *wire.BlockHeader
+	// FilterHeader is the BIP-158 basic filter header of the block, which
+	// commits to the filters of the block and all of its ancestors.
+	FilterHeader *chainhash.Hash
+}
+
 // HeaderHash returns the canonical block-header hash (block identity) for hdr on
 // this chain. It uses HeaderHashFunc when set and otherwise falls back to the
 // standard double-SHA256 (wire.BlockHeader.BlockHash). It is nil-safe so callers
@@ -127,7 +144,7 @@ func (c *ChainParams) initBTCDParams() {
 		RetargetAdjustmentFactor: c.RetargetAdjustmentFactor,
 		ReduceMinDifficulty:      c.ReduceMinDifficulty,
 		MinDiffReductionTime:     c.MinDiffReductionTime,
-		Checkpoints:              c.Checkpoints,
+		Checkpoints:              c.btcdCheckpoints(),
 		PowLimit:                 c.PowLimit,
 		PowLimitBits:             c.PowLimitBits,
 		PoWNoRetargeting:         c.PoWNoRetargeting,
@@ -147,4 +164,15 @@ func (c *ChainParams) initBTCDParams() {
 		BIP0066Height:            c.BIP0066Height,
 		CoinbaseMaturity:         c.CoinbaseMaturity,
 	}
+}
+
+func (c *ChainParams) btcdCheckpoints() []chaincfg.Checkpoint {
+	if len(c.Checkpoints) == 0 {
+		return nil
+	}
+	cps := make([]chaincfg.Checkpoint, len(c.Checkpoints))
+	for i, cp := range c.Checkpoints {
+		cps[i] = chaincfg.Checkpoint{Height: cp.Height, Hash: cp.Hash}
+	}
+	return cps
 }

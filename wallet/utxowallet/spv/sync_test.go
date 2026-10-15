@@ -22,6 +22,7 @@ import (
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/spv"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/banman"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/headerfs"
@@ -1136,7 +1137,7 @@ func TestNeutrinoSync(t *testing.T) {
 				height, err)
 		}
 		modParams.Checkpoints = append(modParams.Checkpoints,
-			chaincfg.Checkpoint{
+			netparams.Checkpoint{
 				Hash:   hash,
 				Height: int32(height),
 			})

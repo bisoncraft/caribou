@@ -204,7 +204,7 @@ type blockManager struct { // nolint:maligned
 	headerList     headerlist.Chain
 	reorgList      headerlist.Chain
 	startHeader    *headerlist.Node
-	nextCheckpoint *chaincfg.Checkpoint
+	nextCheckpoint *netparams.Checkpoint
 	lastRequested  chainhash.Hash
 
 	minRetargetTimespan int64 // target timespan / adjustment factor
@@ -472,7 +472,7 @@ func (b *blockManager) cfHandler() {
 
 		// lastCp will point to the latest block checkpoint we have for
 		// the active chain, if any.
-		lastCp chaincfg.Checkpoint
+		lastCp netparams.Checkpoint
 
 		// blockCheckpoints is the list of block checkpoints for the
 		// active chain.
@@ -2047,7 +2047,7 @@ func (b *blockManager) isSyncCandidate(sp *ServerPeer) bool {
 // findNextHeaderCheckpoint returns the next checkpoint after the passed height.
 // It returns nil when there is not one either because the height is already
 // later than the final checkpoint or there are none for the current network.
-func (b *blockManager) findNextHeaderCheckpoint(height int32) *chaincfg.Checkpoint {
+func (b *blockManager) findNextHeaderCheckpoint(height int32) *netparams.Checkpoint {
 	// There is no next checkpoint if there are none for this current
 	// network.
 	checkpoints := b.cfg.ChainParams.Checkpoints
@@ -2078,10 +2078,10 @@ func (b *blockManager) findNextHeaderCheckpoint(height int32) *chaincfg.Checkpoi
 // is earlier than the first checkpoint or there are no checkpoints for the
 // current network. This is used for resetting state when a malicious peer
 // sends us headers that don't lead up to a known checkpoint.
-func (b *blockManager) findPreviousHeaderCheckpoint(height int32) *chaincfg.Checkpoint {
+func (b *blockManager) findPreviousHeaderCheckpoint(height int32) *netparams.Checkpoint {
 	// Start with the genesis block - earliest checkpoint to which our code
 	// will want to reset
-	prevCheckpoint := &chaincfg.Checkpoint{
+	prevCheckpoint := &netparams.Checkpoint{
 		Height: 0,
 		Hash:   b.cfg.ChainParams.GenesisHash,
 	}

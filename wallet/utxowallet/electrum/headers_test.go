@@ -17,7 +17,6 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/btcsuite/btcd/blockchain"
-	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -309,7 +308,7 @@ func TestHeadersRejectsTrivialDifficultyForgery(t *testing.T) {
 // validation tests, carrying the supplied checkpoints. We can't shallow-copy
 // netparams.NSimnetParams (it has a sync.Once); construct the minimal set
 // of fields the validators actually read.
-func paramsWithCheckpoints(cps []chaincfg.Checkpoint) *netparams.ChainParams {
+func paramsWithCheckpoints(cps []netparams.Checkpoint) *netparams.ChainParams {
 	src := netparams.NSimnetParams
 	return &netparams.ChainParams{
 		Chain:            src.Chain,
@@ -332,7 +331,7 @@ func TestHeadersCheckpointMismatchRejected(t *testing.T) {
 	bogus := chainhash.Hash{31: 0xab}
 	cfg := &ChainConfig{
 		Chain:       bisonwire.ChainBTC,
-		Params:      paramsWithCheckpoints([]chaincfg.Checkpoint{{Height: 2, Hash: &bogus}}),
+		Params:      paramsWithCheckpoints([]netparams.Checkpoint{{Height: 2, Hash: &bogus}}),
 		HeaderSize:  80,
 		StartHeight: 0,
 	}
@@ -354,7 +353,7 @@ func TestHeadersCheckpointMatchAccepted(t *testing.T) {
 	good := chain[2].BlockHash()
 	cfg := &ChainConfig{
 		Chain:       bisonwire.ChainBTC,
-		Params:      paramsWithCheckpoints([]chaincfg.Checkpoint{{Height: 2, Hash: &good}}),
+		Params:      paramsWithCheckpoints([]netparams.Checkpoint{{Height: 2, Hash: &good}}),
 		HeaderSize:  80,
 		StartHeight: 0,
 	}
@@ -656,7 +655,7 @@ func TestHeadersAnchorMove(t *testing.T) {
 		cpHash := chain[anchor].BlockHash()
 		return &ChainConfig{
 			Chain:       bisonwire.ChainBTC,
-			Params:      paramsWithCheckpoints([]chaincfg.Checkpoint{{Height: anchor, Hash: &cpHash}}),
+			Params:      paramsWithCheckpoints([]netparams.Checkpoint{{Height: anchor, Hash: &cpHash}}),
 			HeaderSize:  80,
 			StartHeight: anchor,
 		}

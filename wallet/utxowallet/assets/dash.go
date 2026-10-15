@@ -124,16 +124,34 @@ var dashSimnetNeutrinoSeeds = []string{"127.0.0.1:20775"}
 // there is no retarget period to align to; a checkpoint follows every 52500
 // blocks (about three months) and is added once mined. Hashes cross-checked
 // via insight.dash.org and blockchair.com.
-var dashMainnetCheckpoints = []chaincfg.Checkpoint{
-	{Height: 2487500, Hash: newHashFromStr("00000000000000119fe42827219e0686d3f7b494ae65f823194c740c5dbab492")},
-	{Height: 2540000, Hash: newHashFromStr("00000000000000070aad634297c7ab0dcf7242b86288f80110c9ca7ab60e38c5")}, // 2026-09-16
+// The livenet TestCheckpointRecords in the spv package fetches each header and
+// filter header from P2P peers, checks the header against the hash, and
+// requires the peers to agree on the filter header.
+var dashMainnetCheckpoints = []netparams.Checkpoint{
+	{
+		Height:       2487500, // 2026-06-13
+		Hash:         newHashFromStr("00000000000000119fe42827219e0686d3f7b494ae65f823194c740c5dbab492"),
+		Header:       newHeaderFromStr("000000208553a10fa4d05609e14c46e32f4f978bc375f8f6012413b02300000000000000911418a4dc044cbd5b7b1b1041a8b9e43c31e052e3d3b59ba2246be120817ed45ac22c6a3583291951845a96"),
+		FilterHeader: newHashFromStr("b9842cad245a156d0f8a759f6e7c79e286855e8ed8ea2c9333b3ce7756e49d68"),
+	},
+	{
+		Height:       2540000, // 2026-09-16
+		Hash:         newHashFromStr("00000000000000070aad634297c7ab0dcf7242b86288f80110c9ca7ab60e38c5"),
+		Header:       newHeaderFromStr("00000020fb2ad6b6f861bdd345b82777cbec911bc8cf7524d151f4911f00000000000000343e1eac77001e2b6b42053bd923eceb8c8228394aac3463a30196425faab8364f07ab6a74ba1d194a49da11"),
+		FilterHeader: newHashFromStr("c0d5a3ccf9e8e427a0883c39ca3a7f986325b1ea0eeecaaa795bbafc12936492"),
+	},
 }
 
 // dashTestnetCheckpoints holds the testnet anchor, taken from dashpay/dash
 // src/chainparams.cpp (block 1380000 is ~2025-12-10 per its chainTxData
 // entry). See dashMainnetCheckpoints.
-var dashTestnetCheckpoints = []chaincfg.Checkpoint{
-	{Height: 1380000, Hash: newHashFromStr("000000a98084beaf77ed26a905a7d59979009e23367a55b5d634962d7d65a1f9")},
+var dashTestnetCheckpoints = []netparams.Checkpoint{
+	{
+		Height:       1380000, // 2025-12-10
+		Hash:         newHashFromStr("000000a98084beaf77ed26a905a7d59979009e23367a55b5d634962d7d65a1f9"),
+		Header:       newHeaderFromStr("00000020bab7a42749cd042fcb7e8ee826a80ba3eaf608a184b4188c8b5d975864000000f73d143c64c09dae7168352d60fecad4907cb70452744384b0fc23c47d931785b4dd38695ace001e349d0e00"),
+		FilterHeader: newHashFromStr("bdad9b9ffa75d2d1d432ea3ccc11765f7ccca08da7dfb03cf1ab2eb7f0897d18"),
+	},
 }
 
 var DashParams = map[string]*netparams.ChainParams{
