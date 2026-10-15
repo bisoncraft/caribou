@@ -98,15 +98,18 @@ var LTCParams = map[string]*netparams.ChainParams{
 		RetargetAdjustmentFactor: 4,                                       // 25% less, 400% more
 		ReduceMinDifficulty:      false,
 		MinDiffReductionTime:     0,
-		// A single post-launch anchor: the last retarget boundary mined before
-		// DefaultWalletBirthday (2026-07-01). The electrum header store starts
-		// here (see electrum.NewChainConfig) and the checkpoint authenticates
-		// that anchor header; no wallet birthday can predate it, so nothing
-		// below is ever needed. Refresh together with DefaultWalletBirthday
-		// on release. Hash cross-checked via litecoinspace.org and
-		// blockchair.com.
+		// Checkpoints ordered from oldest to newest. The first is the launch
+		// anchor: the last retarget boundary mined before
+		// DefaultWalletBirthday (2026-07-01). The electrum header store
+		// starts there (see electrum.NewChainConfig) and no wallet birthday
+		// predates it, so it never moves. A checkpoint follows every 26
+		// retarget periods (52416 blocks, about three months) and is added
+		// once mined; the header store validates each one as it syncs
+		// through. Hashes cross-checked via two of litecoinspace.org,
+		// blockchair.com and blockcypher.com.
 		Checkpoints: []chaincfg.Checkpoint{
 			{Height: 3132864, Hash: newHashFromStr("22076f9f6295e025e4b53c021b936e9f482888734536e86b6ffb7442038c14f4")},
+			{Height: 3185280, Hash: newHashFromStr("be08d745b1dcf064fb8d725662070a3c3461a9b02f0889a106dbe709bda8547e")}, // 2026-09-27
 		},
 		Bech32HRPSegwit:         "ltc",                           // always ltc for main net
 		PubKeyHashAddrID:        0x30,                            // starts with L

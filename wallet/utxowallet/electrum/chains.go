@@ -55,9 +55,10 @@ func NewChainConfig(chain bisonwire.Chain, params *netparams.ChainParams) (*Chai
 	// the header at StartHeight without linkage, and validateCheckpoint
 	// then authenticates it against the checkpoint hash — an unanchored
 	// non-zero StartHeight would let a hostile server pick the chain. The
-	// checkpoint lists carry a single post-launch anchor (the last
-	// retarget boundary before DefaultWalletBirthday), so mainnet and
-	// testnet sync a few thousand headers instead of the whole chain.
+	// first checkpoint is the launch anchor (just below
+	// DefaultWalletBirthday), so mainnet and testnet sync headers from
+	// launch rather than the whole chain. Later checkpoints are verified by
+	// validateCheckpoint as the sync passes them.
 	// Networks without checkpoints (regtest) sync from genesis, where the
 	// genesis hash itself anchors height 0.
 	startHeight := int32(0)

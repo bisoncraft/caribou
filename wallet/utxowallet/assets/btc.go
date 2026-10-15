@@ -103,16 +103,18 @@ var BTCParams = map[string]*netparams.ChainParams{
 		ReduceMinDifficulty:      false,
 		MinDiffReductionTime:     0,
 
-		// Checkpoints ordered from oldest to newest.
-		// A single post-launch anchor: the last retarget boundary mined before
-		// DefaultWalletBirthday (2026-07-01). The electrum header store starts
-		// here (see electrum.NewChainConfig) and the checkpoint authenticates
-		// that anchor header; no wallet birthday can predate it, so nothing
-		// below is ever needed. Refresh together with DefaultWalletBirthday
-		// on release. Hash cross-checked via mempool.space and
+		// Checkpoints ordered from oldest to newest. The first is the launch
+		// anchor: the last retarget boundary mined before
+		// DefaultWalletBirthday (2026-07-01). The electrum header store
+		// starts there (see electrum.NewChainConfig) and no wallet birthday
+		// predates it, so it never moves. A checkpoint follows every seven
+		// retarget periods (14112 blocks, about three months) and is added
+		// once mined; the header store validates each one as it syncs
+		// through. Hashes cross-checked via mempool.space and
 		// blockstream.info.
 		Checkpoints: []chaincfg.Checkpoint{
 			{Height: 955584, Hash: newHashFromStr("00000000000000000001e265c627e0a27ad347deb4d6b921f249eddfbf78e011")},
+			{Height: 969696, Hash: newHashFromStr("000000000000000000001e39df127cbab82a824ac43cfcdbf62e59f6a08b9f0b")}, // 2026-10-02
 		},
 		Bech32HRPSegwit:         "bc",
 		PubKeyHashAddrID:        0x00, // starts with 1

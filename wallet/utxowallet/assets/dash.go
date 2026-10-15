@@ -114,22 +114,24 @@ var dashSimnetElectrumServers = []*netparams.ServerAddr{
 // dashSimnetNeutrinoSeeds is the dextest harness dashd P2P address (alpha node).
 var dashSimnetNeutrinoSeeds = []string{"127.0.0.1:20775"}
 
-// dashMainnetCheckpoints holds the newest mainnet checkpoint from dashpay/dash
-// src/chainparams.cpp. The hash is the X11 block-header hash, so it compares
-// directly against HeaderHash results. With interval retarget validation
-// disabled (PoWNoRetargeting), this pins the historical chain during
-// headers-sync on both the electrum and neutrino paths. Older checkpoints are
-// pruned: wallet sync ranges start at the default wallet birthday, so a single
-// pin just below it (block 2487500 is ~2026-06-13 per its chainTxData entry)
-// covers everything a wallet validates on the way to its birthday. Refresh
-// from chainparams.cpp at release time.
+// dashMainnetCheckpoints are ordered from oldest to newest. Hashes are X11
+// block-header hashes, so they compare directly against HeaderHash results.
+// With interval retarget validation disabled (PoWNoRetargeting), they pin the
+// chain during headers-sync on both the electrum and neutrino paths. The first
+// is the launch anchor (block 2487500, ~2026-06-13, taken from dashpay/dash
+// src/chainparams.cpp): the electrum header store starts there and no wallet
+// birthday predates it, so it never moves. Dash retargets every block, so
+// there is no retarget period to align to; a checkpoint follows every 52500
+// blocks (about three months) and is added once mined. Hashes cross-checked
+// via insight.dash.org and blockchair.com.
 var dashMainnetCheckpoints = []chaincfg.Checkpoint{
 	{Height: 2487500, Hash: newHashFromStr("00000000000000119fe42827219e0686d3f7b494ae65f823194c740c5dbab492")},
+	{Height: 2540000, Hash: newHashFromStr("00000000000000070aad634297c7ab0dcf7242b86288f80110c9ca7ab60e38c5")}, // 2026-09-16
 }
 
-// dashTestnetCheckpoints holds the newest testnet checkpoint from dashpay/dash
+// dashTestnetCheckpoints holds the testnet anchor, taken from dashpay/dash
 // src/chainparams.cpp (block 1380000 is ~2025-12-10 per its chainTxData
-// entry). See dashMainnetCheckpoints for the pruning rationale.
+// entry). See dashMainnetCheckpoints.
 var dashTestnetCheckpoints = []chaincfg.Checkpoint{
 	{Height: 1380000, Hash: newHashFromStr("000000a98084beaf77ed26a905a7d59979009e23367a55b5d634962d7d65a1f9")},
 }

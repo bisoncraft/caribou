@@ -13,7 +13,8 @@
 // Each case syncs headers from the network's checkpoint anchor (the header
 // store's StartHeight) to the live tip, which exercises the anchor base case
 // (first header accepted by checkpoint hash, not linkage), the retarget
-// validation across real boundaries, and VerifyAll over the synced range.
+// validation across real boundaries, every later checkpoint, and VerifyAll
+// over the synced range.
 
 package electrum
 
@@ -62,6 +63,8 @@ func TestAnchorHeaderSync(t *testing.T) {
 			assets.LTCParams["mainnet"].ElectrumServers[0]},
 		{"ltc-testnet", bisonwire.ChainLTC, assets.LTCParams["testnet"],
 			assets.LTCParams["testnet"].ElectrumServers[0]},
+		{"dash-mainnet", bisonwire.ChainDASH, assets.DashParams["mainnet"],
+			assets.DashParams["mainnet"].ElectrumServers[0]},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,12 +98,14 @@ func TestAnchorHeaderSync(t *testing.T) {
 				case <-time.After(500 * time.Millisecond):
 				}
 			}
-			anchor := net.HeaderByHeight(chainCfg.StartHeight)
-			if anchor == nil {
-				t.Fatalf("missing anchor header at %d", chainCfg.StartHeight)
-			}
-			if h := anchor.BlockHash(); h != *cps[0].Hash {
-				t.Fatalf("anchor hash %s, checkpoint %s", h, cps[0].Hash)
+			for _, cp := range cps {
+				hdr := net.HeaderByHeight(cp.Height)
+				if hdr == nil {
+					t.Fatalf("missing header at checkpoint %d", cp.Height)
+				}
+				if h := net.Headers().headerHash(hdr); h != *cp.Hash {
+					t.Fatalf("header hash %s at %d, checkpoint %s", h, cp.Height, cp.Hash)
+				}
 			}
 			if err := net.Headers().VerifyAll(); err != nil {
 				t.Fatalf("VerifyAll: %v", err)
