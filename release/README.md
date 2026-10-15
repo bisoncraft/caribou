@@ -141,12 +141,5 @@ Rosetta.
 
 ## Release checklist
 
-1. Bump `wallet/app/version.go` on master and tag the release commit.
-2. Publish the XMR libraries for the tag if their `SHA256SUMS` changed
-   (`wallet/asset/xmr/publish-libs.sh`), or make sure the pinned ones are in
-   `wallet/asset/xmr/lib/`.
-3. `release/release.sh vX.Y.Z --publish` creates a draft GitHub release with
-   every artifact, `SHA256SUMS` and `SHA256SUMS.asc`.
-4. Install-test each artifact: the `.deb` in a clean container or VM, the
-   installer on Windows, both dmgs on a Mac.
-5. Publish the draft.
+The full release process, from forking the release branch to publishing,
+is in [docs/release-checklist.md](../docs/release-checklist.md).
