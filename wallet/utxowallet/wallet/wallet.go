@@ -4016,7 +4016,28 @@ func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 		return nil, err
 	}
 
-	return w.publishTransaction(tx)
+	txHash, err := w.publishTransaction(tx)
+	if errors.Is(err, chain.ErrUnsupportedTx) {
+		// This call stored the transaction and the backend cannot relay it,
+		// so it was never broadcast. Don't leave it to be retried forever.
+		if dbErr := w.removeUnminedTx(tx); dbErr != nil {
+			log.Warnf("Unable to remove unrelayed transaction %v: %v",
+				tx.TxHash(), dbErr)
+		}
+	}
+	return txHash, err
+}
+
+// removeUnminedTx removes tx from the wallet's unconfirmed transaction store.
+func (w *Wallet) removeUnminedTx(tx *bisonwire.Tx) error {
+	return walletdb.Update(w.db, func(dbTx walletdb.ReadWriteTx) error {
+		txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
+		txRec, err := wtxmgr.NewTxRecordBisonTx(w.chainParams.Chain, tx, time.Now())
+		if err != nil {
+			return err
+		}
+		return w.TxStore.RemoveUnminedTx(txmgrNs, txRec)
+	})
 }
 
 // publishTransaction attempts to send an unconfirmed transaction to the
@@ -4043,14 +4064,7 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 	case errors.Is(rpcErr, chain.ErrTxAlreadyKnown),
 		errors.Is(rpcErr, chain.ErrTxAlreadyConfirmed):
 
-		dbErr := walletdb.Update(w.db, func(dbTx walletdb.ReadWriteTx) error {
-			txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
-			txRec, err := wtxmgr.NewTxRecordBisonTx(w.chainParams.Chain, tx, time.Now())
-			if err != nil {
-				return err
-			}
-			return w.TxStore.RemoveUnminedTx(txmgrNs, txRec)
-		})
+		dbErr := w.removeUnminedTx(tx)
 		if dbErr != nil {
 			log.Warnf("Unable to remove confirmed transaction %v "+
 				"from unconfirmed store: %v", tx.TxHash(), dbErr)
@@ -4060,6 +4074,12 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 
 		return &txid, nil
 
+	// The backend could not carry the transaction, which says nothing about
+	// its validity. It may already be in the mempool, so keep it stored and
+	// let the caller decide whether it was ever relayed.
+	case errors.Is(rpcErr, chain.ErrUnsupportedTx):
+		log.Infof("%v: backend cannot relay this transaction", txid)
+		return nil, rpcErr
 	}
 
 	// Log the causing error, even if we know how to handle it.
@@ -4069,14 +4089,7 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 	// we'll remove it from the transaction store, as otherwise, we'll
 	// attempt to continually re-broadcast it, and the UTXO state of the
 	// wallet won't be accurate.
-	dbErr := walletdb.Update(w.db, func(dbTx walletdb.ReadWriteTx) error {
-		txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
-		txRec, err := wtxmgr.NewTxRecordBisonTx(w.chainParams.Chain, tx, time.Now())
-		if err != nil {
-			return err
-		}
-		return w.TxStore.RemoveUnminedTx(txmgrNs, txRec)
-	})
+	dbErr := w.removeUnminedTx(tx)
 	if dbErr != nil {
 		log.Warnf("Unable to remove invalid transaction %v: %v",
 			tx.TxHash(), dbErr)

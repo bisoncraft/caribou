@@ -248,7 +248,7 @@ func (s *NeutrinoClient) SendRawTransaction(tx *bisonwire.Tx, allowHighFees bool
 	// The peer layer relays a wire.MsgTx, which cannot carry a Dash special
 	// transaction's type or extra payload.
 	if tx.Type != 0 {
-		return nil, errors.New("neutrino: cannot relay a dash special transaction")
+		return nil, ErrUnsupportedTx
 	}
 	err := s.CS.SendTransaction(&tx.MsgTx)
 	if err != nil {

@@ -181,3 +181,43 @@ func TestResendUnminedTxsKeepsDashSpecialFields(t *testing.T) {
 		t.Error("special tx was dropped from the store by the resend")
 	}
 }
+
+// TestPublishBisonTxDropsTxWhenBackendCannotRelay guards a new publish: the tx
+// was never broadcast, so a backend that cannot carry it must not leave it in
+// the store to be retried forever.
+func TestPublishBisonTxDropsTxWhenBackendCannotRelay(t *testing.T) {
+	rec := &publishRecorder{
+		mockChainClient: &mockChainClient{},
+		err:             chain.ErrUnsupportedTx,
+	}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+
+	err := w.PublishBisonTx(tx, "")
+	if !errors.Is(err, chain.ErrUnsupportedTx) {
+		t.Fatalf("err = %v, want chain.ErrUnsupportedTx", err)
+	}
+	if storedTx(t, w, tx.TxHash()) != nil {
+		t.Fatal("a tx that was never relayed is still in the store")
+	}
+}
+
+// TestResendUnminedTxsKeepsTxWhenBackendCannotRelay guards a rebroadcast: the
+// tx may already be in the mempool, so a backend that merely cannot relay it
+// is not evidence it is invalid, and the wallet must not delete it.
+func TestResendUnminedTxsKeepsTxWhenBackendCannotRelay(t *testing.T) {
+	rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+
+	if err := w.PublishBisonTx(tx, ""); err != nil {
+		t.Fatalf("PublishBisonTx: %v", err)
+	}
+	rec.err = chain.ErrUnsupportedTx
+
+	w.resendUnminedTxs()
+
+	if storedTx(t, w, tx.TxHash()) == nil {
+		t.Fatal("resend deleted a tx the backend only could not relay")
+	}
+}
