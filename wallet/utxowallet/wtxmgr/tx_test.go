@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
 	_ "github.com/bisoncraft/caribou/wallet/utxowallet/walletdb/bdb"
 	"github.com/btcsuite/btcd/btcutil"
@@ -66,6 +67,12 @@ func testDB() (walletdb.DB, func(), error) {
 var namespaceKey = []byte("txstore")
 
 func testStore() (*Store, walletdb.DB, func(), error) {
+	return testStoreFor(assets.BTCParams["testnet"])
+}
+
+// testStoreFor creates a store for the given chain, which decides how stored
+// transactions are decoded.
+func testStoreFor(chainParams *netparams.ChainParams) (*Store, walletdb.DB, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "wtxmgr_test")
 	if err != nil {
 		return nil, nil, func() {}, err
@@ -94,7 +101,7 @@ func testStore() (*Store, walletdb.DB, func(), error) {
 		if err != nil {
 			return err
 		}
-		s, err = Open(ns, assets.BTCParams["testnet"])
+		s, err = Open(ns, chainParams)
 		return err
 	})
 

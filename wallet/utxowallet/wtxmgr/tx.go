@@ -171,21 +171,24 @@ func NewTxRecordFromMsgTx(chain string, msgTx *wire.MsgTx, received time.Time) (
 	return rec, nil
 }
 
+// NewTxRecordBisonTx creates a new transaction record from a chain-aware
+// transaction. Unlike NewTxRecordFromMsgTx it keeps a Dash special
+// transaction's type and extra payload, so the record's bytes and hash are the
+// ones the network sees.
 func NewTxRecordBisonTx(chain string, tx *bisonwire.Tx, received time.Time) (*TxRecord, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, tx.SerializeSize()))
-	err := tx.BtcEncode(buf, 0, wire.LatestEncoding)
+	recTx := *tx
+	recTx.Chain = chain
+	buf := bytes.NewBuffer(make([]byte, 0, recTx.SerializeSize()))
+	err := recTx.Serialize(buf)
 	if err != nil {
 		str := "failed to serialize transaction"
 		return nil, storeError(ErrInput, str, err)
 	}
 	rec := &TxRecord{
-		Tx: bisonwire.Tx{
-			MsgTx: tx.MsgTx,
-			Chain: chain,
-		},
+		Tx:           recTx,
 		Received:     received,
 		SerializedTx: buf.Bytes(),
-		Hash:         tx.TxHash(),
+		Hash:         recTx.TxHash(),
 	}
 
 	return rec, nil

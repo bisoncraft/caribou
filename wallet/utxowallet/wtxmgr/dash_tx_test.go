@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 )
 
@@ -74,7 +75,7 @@ func TestNewTxRecordBisonTxKeepsDashSpecialFields(t *testing.T) {
 func TestStoreRoundTripsDashSpecialTx(t *testing.T) {
 	t.Parallel()
 
-	s, db, teardown, err := testStore()
+	s, db, teardown, err := testStoreFor(assets.DashParams["simnet"])
 	if err != nil {
 		t.Fatal(err)
 	}

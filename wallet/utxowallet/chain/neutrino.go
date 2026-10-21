@@ -744,7 +744,7 @@ func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 		},
 	}
 	for _, tx := range relevant {
-		rec, err := wtxmgr.NewTxRecordFromMsgTx(s.chainParams.Chain, &tx.MsgTx,
+		rec, err := wtxmgr.NewTxRecordBisonTx(s.chainParams.Chain, tx,
 			header.Timestamp)
 		if err != nil {
 			log.Errorf("neutrino: sweep tx record: %v", err)
@@ -792,7 +792,7 @@ func (s *NeutrinoClient) onFilteredBlockConnected(height int32,
 		},
 	}
 	for _, tx := range relevantTxs {
-		rec, err := wtxmgr.NewTxRecordFromMsgTx(s.chainParams.Chain, &tx.MsgTx,
+		rec, err := wtxmgr.NewTxRecordBisonTx(s.chainParams.Chain, tx,
 			header.Timestamp)
 		if err != nil {
 			log.Errorf("Cannot create transaction record for "+

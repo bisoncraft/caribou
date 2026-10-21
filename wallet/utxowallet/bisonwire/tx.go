@@ -1,6 +1,7 @@
 package bisonwire
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -33,6 +34,27 @@ func (tx *Tx) Deserialize(r io.Reader) error {
 	default:
 		return fmt.Errorf("unknown chain %q specified for bisonwire tx deserialization", tx.Chain)
 	}
+}
+
+// Serialize writes tx in its chain's wire format. Dash special transactions
+// keep their type and extra payload; every other chain serializes as MsgTx.
+func (tx *Tx) Serialize(w io.Writer) error {
+	if tx.Chain == "dash" {
+		return serializeDashTx(w, tx)
+	}
+	return tx.MsgTx.Serialize(w)
+}
+
+// SerializeSize returns the number of bytes Serialize writes.
+func (tx *Tx) SerializeSize() int {
+	if tx.Chain == "dash" && tx.Type != dashTxTypeNormal {
+		var buf bytes.Buffer
+		if err := serializeDashTx(&buf, tx); err != nil {
+			return tx.MsgTx.SerializeSize()
+		}
+		return buf.Len()
+	}
+	return tx.MsgTx.SerializeSize()
 }
 
 func (tx *Tx) TxHash() chainhash.Hash {
