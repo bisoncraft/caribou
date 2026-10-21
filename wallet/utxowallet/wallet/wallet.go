@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/chain"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
@@ -3303,11 +3304,11 @@ func (w *Wallet) ReleaseOutput(id wtxmgr.LockID, op wire.OutPoint) error {
 // credits that are not known to have been mined into a block, and attempts
 // to send each to the chain server for relay.
 func (w *Wallet) resendUnminedTxs() {
-	var txs []*wire.MsgTx
+	var txs []*bisonwire.Tx
 	err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
 		txmgrNs := tx.ReadBucket(wtxmgrNamespaceKey)
 		var err error
-		txs, err = w.TxStore.UnminedTxs(txmgrNs)
+		txs, err = w.TxStore.UnminedBisonTxs(txmgrNs)
 		return err
 	})
 	if err != nil {
@@ -3687,7 +3688,7 @@ func (w *Wallet) sendOutputs(outputs []*wire.TxOut, keyScope *waddrmgr.KeyScope,
 		return createdTx.Tx, ErrTxUnsigned
 	}
 
-	txHash, err := w.reliablyPublishTransaction(createdTx.Tx, label)
+	txHash, err := w.reliablyPublishTransaction(w.bisonTx(createdTx.Tx), label)
 	if err != nil {
 		return nil, err
 	}
@@ -3924,8 +3925,23 @@ func (e *ErrInMempool) Unwrap() error {
 // This function is unstable and will be removed once syncing code is moved out
 // of the wallet.
 func (w *Wallet) PublishTransaction(tx *wire.MsgTx, label string) error {
-	_, err := w.reliablyPublishTransaction(tx, label)
+	_, err := w.reliablyPublishTransaction(w.bisonTx(tx), label)
 	return err
+}
+
+// PublishBisonTx is PublishTransaction for a chain-aware transaction. Use it
+// for a Dash special transaction, whose type and extra payload a wire.MsgTx
+// cannot carry.
+func (w *Wallet) PublishBisonTx(tx *bisonwire.Tx, label string) error {
+	pubTx := *tx
+	pubTx.Chain = w.chainParams.Chain
+	_, err := w.reliablyPublishTransaction(&pubTx, label)
+	return err
+}
+
+// bisonTx wraps a plain transaction as the wallet's chain's transaction type.
+func (w *Wallet) bisonTx(tx *wire.MsgTx) *bisonwire.Tx {
+	return &bisonwire.Tx{MsgTx: *tx, Chain: w.chainParams.Chain}
 }
 
 // reliablyPublishTransaction is a superset of publishTransaction which contains
@@ -3933,7 +3949,7 @@ func (w *Wallet) PublishTransaction(tx *wire.MsgTx, label string) error {
 // relevant database state, and finally possible removing the transaction from
 // the database (along with cleaning up all inputs used, and outputs created) if
 // the transaction is rejected by the backend.
-func (w *Wallet) reliablyPublishTransaction(tx *wire.MsgTx,
+func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 	label string) (*chainhash.Hash, error) {
 
 	chainClient, err := w.requireChainClient()
@@ -3945,7 +3961,7 @@ func (w *Wallet) reliablyPublishTransaction(tx *wire.MsgTx,
 	// we'll write this tx to disk as an unconfirmed transaction. This way,
 	// upon restarts, we'll always rebroadcast it, and also add it to our
 	// set of records.
-	txRec, err := wtxmgr.NewTxRecordFromMsgTx(w.chainParams.Chain, tx, time.Now())
+	txRec, err := wtxmgr.NewTxRecordBisonTx(w.chainParams.Chain, tx, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -4007,7 +4023,7 @@ func (w *Wallet) reliablyPublishTransaction(tx *wire.MsgTx,
 // wallet's current backend. In the event that sending the transaction fails for
 // whatever reason, it will be removed from the wallet's unconfirmed transaction
 // store.
-func (w *Wallet) publishTransaction(tx *wire.MsgTx) (*chainhash.Hash, error) {
+func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 	chainClient, err := w.requireChainClient()
 	if err != nil {
 		return nil, err
@@ -4029,7 +4045,7 @@ func (w *Wallet) publishTransaction(tx *wire.MsgTx) (*chainhash.Hash, error) {
 
 		dbErr := walletdb.Update(w.db, func(dbTx walletdb.ReadWriteTx) error {
 			txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
-			txRec, err := wtxmgr.NewTxRecordFromMsgTx(w.chainParams.Chain, tx, time.Now())
+			txRec, err := wtxmgr.NewTxRecordBisonTx(w.chainParams.Chain, tx, time.Now())
 			if err != nil {
 				return err
 			}
@@ -4055,7 +4071,7 @@ func (w *Wallet) publishTransaction(tx *wire.MsgTx) (*chainhash.Hash, error) {
 	// wallet won't be accurate.
 	dbErr := walletdb.Update(w.db, func(dbTx walletdb.ReadWriteTx) error {
 		txmgrNs := dbTx.ReadWriteBucket(wtxmgrNamespaceKey)
-		txRec, err := wtxmgr.NewTxRecordFromMsgTx(w.chainParams.Chain, tx, time.Now())
+		txRec, err := wtxmgr.NewTxRecordBisonTx(w.chainParams.Chain, tx, time.Now())
 		if err != nil {
 			return err
 		}

@@ -403,8 +403,8 @@ func (c *ElectrumClient) BlockStamp() (*waddrmgr.BlockStamp, error) {
 
 // SendRawTransaction serializes and broadcasts a transaction. allowHighFees
 // is ignored — electrumx servers don't accept a high-fee bypass flag.
-func (c *ElectrumClient) SendRawTransaction(tx *wire.MsgTx, _ bool) (*chainhash.Hash, error) {
-	hex, err := serializeMsgTxHex(tx)
+func (c *ElectrumClient) SendRawTransaction(tx *bisonwire.Tx, _ bool) (*chainhash.Hash, error) {
+	hex, err := serializeTxHex(tx)
 	if err != nil {
 		return nil, err
 	}
@@ -1413,8 +1413,9 @@ func addrScripthash(addr btcutil.Address) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// serializeMsgTxHex returns the hex-encoded wire format of tx.
-func serializeMsgTxHex(tx *wire.MsgTx) (string, error) {
+// serializeTxHex returns the hex-encoded wire format of tx, including a Dash
+// special transaction's type and extra payload.
+func serializeTxHex(tx *bisonwire.Tx) (string, error) {
 	var buf bytes.Buffer
 	buf.Grow(tx.SerializeSize())
 	if err := tx.Serialize(&buf); err != nil {

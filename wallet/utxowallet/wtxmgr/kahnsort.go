@@ -17,14 +17,16 @@ type graphNode struct {
 
 type hashGraph map[chainhash.Hash]graphNode
 
+// makeGraph builds the dependency graph. Each transaction's hash is its key in
+// set rather than the hash of its MsgTx, since the two differ for a Dash
+// special transaction.
 func makeGraph(set map[chainhash.Hash]*wire.MsgTx) hashGraph {
 	graph := make(hashGraph)
 
-	for _, tx := range set {
+	for txHash, tx := range set {
 		// Add a node for every transaction. The output edges and input
 		// degree are set by iterating over each transaction's inputs
 		// below.
-		txHash := tx.TxHash()
 		if _, ok := graph[txHash]; !ok {
 			graph[txHash] = graphNode{value: tx}
 		}
@@ -87,6 +89,10 @@ func graphRoots(graph hashGraph) []*wire.MsgTx {
 // order. It is implemented using Kahn's algorithm.
 func DependencySort(txs map[chainhash.Hash]*wire.MsgTx) []*wire.MsgTx {
 	graph := makeGraph(txs)
+	hashes := make(map[*wire.MsgTx]chainhash.Hash, len(txs))
+	for txHash, tx := range txs {
+		hashes[tx] = txHash
+	}
 	s := graphRoots(graph)
 
 	// If there are no edges (no transactions from the map reference each
@@ -101,7 +107,7 @@ func DependencySort(txs map[chainhash.Hash]*wire.MsgTx) []*wire.MsgTx {
 		s = s[1:]
 		sorted = append(sorted, tx)
 
-		n := graph[tx.TxHash()]
+		n := graph[hashes[tx]]
 		for _, mHash := range n.outEdges {
 			m := graph[*mHash]
 			if m.inDegree != 0 {

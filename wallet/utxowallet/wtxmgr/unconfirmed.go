@@ -174,17 +174,39 @@ func (s *Store) removeConflict(ns walletdb.ReadWriteBucket, rec *TxRecord) error
 // which are not known to have been mined in a block.  Transactions are
 // guaranteed to be sorted by their dependency order.
 func (s *Store) UnminedTxs(ns walletdb.ReadBucket) ([]*wire.MsgTx, error) {
+	txs, err := s.UnminedBisonTxs(ns)
+	if err != nil {
+		return nil, err
+	}
+
+	msgTxs := make([]*wire.MsgTx, len(txs))
+	for i, tx := range txs {
+		msgTxs[i] = &tx.MsgTx
+	}
+	return msgTxs, nil
+}
+
+// UnminedBisonTxs is UnminedTxs for chain-aware transactions, which keep a Dash
+// special transaction's type and extra payload.
+func (s *Store) UnminedBisonTxs(ns walletdb.ReadBucket) ([]*bisonwire.Tx, error) {
 	recSet, err := s.unminedTxRecords(ns)
 	if err != nil {
 		return nil, err
 	}
 
 	txSet := make(map[chainhash.Hash]*wire.MsgTx, len(recSet))
+	bisonTxs := make(map[*wire.MsgTx]*bisonwire.Tx, len(recSet))
 	for txHash, txRec := range recSet {
 		txSet[txHash] = &txRec.Tx.MsgTx
+		bisonTxs[&txRec.Tx.MsgTx] = &txRec.Tx
 	}
 
-	return DependencySort(txSet), nil
+	sorted := DependencySort(txSet)
+	txs := make([]*bisonwire.Tx, len(sorted))
+	for i, tx := range sorted {
+		txs[i] = bisonTxs[tx]
+	}
+	return txs, nil
 }
 
 func (s *Store) unminedTxRecords(ns walletdb.ReadBucket) (map[chainhash.Hash]*TxRecord, error) {

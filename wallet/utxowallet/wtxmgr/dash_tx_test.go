@@ -11,6 +11,8 @@ import (
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 )
 
 // A DIP-2 special transaction: version 3, type 5, a 10-byte extra payload. The
@@ -113,5 +115,77 @@ func TestStoreRoundTripsDashSpecialTx(t *testing.T) {
 	}
 	if got := details.Tx.TxHash().String(); got != dashSpecialTxID {
 		t.Errorf("stored tx hash = %s, want %s", got, dashSpecialTxID)
+	}
+}
+
+// TestDependencySortUsesMapKeysAsHashes guards ordering for transactions whose
+// real txid is not the hash of their embedded MsgTx, as for a Dash special
+// transaction. A child spends its parent by the real txid, so the sort must
+// treat the map key as the hash or it never links the two and may return the
+// child first.
+func TestDependencySortUsesMapKeysAsHashes(t *testing.T) {
+	t.Parallel()
+
+	parent := wire.NewMsgTx(1)
+	parent.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
+	parent.AddTxOut(&wire.TxOut{Value: 1, PkScript: []byte{0x51}})
+	parentID := chainhash.Hash{0xaa} // not parent.TxHash()
+
+	child := wire.NewMsgTx(1)
+	child.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: parentID}})
+	child.AddTxOut(&wire.TxOut{Value: 1, PkScript: []byte{0x51}})
+	childID := chainhash.Hash{0xbb}
+
+	// Map iteration order is random, so repeat to make an unlinked pair fail
+	// reliably.
+	for i := 0; i < 64; i++ {
+		sorted := DependencySort(map[chainhash.Hash]*wire.MsgTx{
+			childID:  child,
+			parentID: parent,
+		})
+		if len(sorted) != 2 || sorted[0] != parent || sorted[1] != child {
+			t.Fatalf("iteration %d: child sorted before its parent", i)
+		}
+	}
+}
+
+// TestUnminedBisonTxsKeepsDashSpecialFields guards the rebroadcast source: the
+// unmined transactions the wallet resends after a restart must still carry
+// their type and payload.
+func TestUnminedBisonTxsKeepsDashSpecialFields(t *testing.T) {
+	t.Parallel()
+
+	s, db, teardown, err := testStoreFor(assets.DashParams["simnet"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer teardown()
+
+	dbtx, err := db.BeginReadWriteTx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbtx.Commit()
+	ns := dbtx.ReadWriteBucket(namespaceKey)
+
+	_, raw := decodeDashSpecialTx(t)
+	rec, err := NewTxRecord("dash", raw, timeNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertTx(ns, rec, nil); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	txs, err := s.UnminedBisonTxs(ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txs) != 1 {
+		t.Fatalf("got %d unmined txs, want 1", len(txs))
+	}
+	if txs[0].Type != 5 || hex.EncodeToString(txs[0].ExtraPayload) != dashSpecialExtraData {
+		t.Errorf("unmined tx type=%d payload=%x, want type 5 and the payload",
+			txs[0].Type, txs[0].ExtraPayload)
 	}
 }

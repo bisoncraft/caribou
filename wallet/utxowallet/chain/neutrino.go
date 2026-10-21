@@ -243,9 +243,14 @@ func (s *NeutrinoClient) Connected() bool {
 }
 
 // SendRawTransaction replicates the RPC client's SendRawTransaction command.
-func (s *NeutrinoClient) SendRawTransaction(tx *wire.MsgTx, allowHighFees bool) (
+func (s *NeutrinoClient) SendRawTransaction(tx *bisonwire.Tx, allowHighFees bool) (
 	*chainhash.Hash, error) {
-	err := s.CS.SendTransaction(tx)
+	// The peer layer relays a wire.MsgTx, which cannot carry a Dash special
+	// transaction's type or extra payload.
+	if tx.Type != 0 {
+		return nil, errors.New("neutrino: cannot relay a dash special transaction")
+	}
+	err := s.CS.SendTransaction(&tx.MsgTx)
 	if err != nil {
 		return nil, s.MapRPCErr(err)
 	}
