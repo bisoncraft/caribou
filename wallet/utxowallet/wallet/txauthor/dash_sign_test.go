@@ -48,17 +48,57 @@ func dashSpecialTx(t *testing.T, txType uint16, payload []byte) (*bisonwire.Tx, 
 }
 
 // signDashInputs signs tx's inputs the way the wallet does for a Dash
-// transaction. It is the single point to move to the Dash signing entrypoint
-// once one exists; today the only entrypoint takes a wire.MsgTx, which has no
-// room for the type or the payload.
+// transaction.
 func signDashInputs(t *testing.T, tx *bisonwire.Tx, pkScript []byte) {
 	t.Helper()
 
 	secrets := &stubSecrets{priv: fixedKey(t), compressed: true, params: &chaincfg.MainNetParams}
-	err := AddAllInputScripts(&tx.MsgTx, [][]byte{pkScript},
-		[]btcutil.Amount{dashTestInputValue}, secrets)
-	if err != nil {
+	if err := AddAllDashInputScripts(tx, [][]byte{pkScript}, secrets); err != nil {
 		t.Fatalf("sign: %v", err)
+	}
+}
+
+// TestDashSignatureHashMatchesBitcoinForNormalTx pins the part of the Dash
+// digest that is checkable without a Dash node: for a normal transaction it
+// must equal btcd's legacy digest, and the resulting signature must satisfy
+// btcd's script engine. This guards the field order and hashing of the
+// shared preimage; the payload placement is covered by the commitment test.
+func TestDashSignatureHashMatchesBitcoinForNormalTx(t *testing.T) {
+	t.Parallel()
+
+	tx, pkScript := dashSpecialTx(t, 0, nil)
+
+	got, err := dashSignatureHash(tx, 0, pkScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := txscript.CalcSignatureHash(pkScript, txscript.SigHashAll, &tx.MsgTx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("digest = %x, want %x", got, want)
+	}
+
+	signDashInputs(t, tx, pkScript)
+	verifyInput(t, &tx.MsgTx, pkScript, dashTestInputValue)
+}
+
+func TestAddAllDashInputScriptsRejectsBadInputs(t *testing.T) {
+	t.Parallel()
+
+	secrets := &stubSecrets{priv: fixedKey(t), compressed: true, params: &chaincfg.MainNetParams}
+	tx, pkScript := dashSpecialTx(t, 1, []byte{0x01})
+
+	if err := AddAllDashInputScripts(tx, nil, secrets); err == nil {
+		t.Error("expected an error for a missing previous script")
+	}
+	p2wpkh := append([]byte{0x00, 0x14}, make([]byte, 20)...)
+	if err := AddAllDashInputScripts(tx, [][]byte{p2wpkh}, secrets); err == nil {
+		t.Error("expected an error for a non-p2pkh input")
+	}
+	if err := AddAllDashInputScripts(tx, [][]byte{pkScript}, secrets); err != nil {
+		t.Errorf("p2pkh input: %v", err)
 	}
 }
 
