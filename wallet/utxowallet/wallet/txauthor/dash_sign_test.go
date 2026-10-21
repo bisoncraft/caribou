@@ -114,13 +114,13 @@ func TestAddAllDashInputScriptsRejectsBadInputs(t *testing.T) {
 func TestDashInputSignatureCommitsToTypeAndPayload(t *testing.T) {
 	t.Parallel()
 
-	signed := func(txType uint16, payload []byte) []byte {
+	signed := func(t *testing.T, txType uint16, payload []byte) []byte {
 		tx, pkScript := dashSpecialTx(t, txType, payload)
 		signDashInputs(t, tx, pkScript)
 		return tx.TxIn[0].SignatureScript
 	}
 
-	base := signed(1, []byte{0x01, 0x02, 0x03})
+	base := signed(t, 1, []byte{0x01, 0x02, 0x03})
 
 	tests := []struct {
 		name    string
@@ -133,7 +133,8 @@ func TestDashInputSignatureCommitsToTypeAndPayload(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if bytes.Equal(base, signed(tc.txType, tc.payload)) {
+			t.Parallel()
+			if bytes.Equal(base, signed(t, tc.txType, tc.payload)) {
 				t.Fatal("input signature is identical, so it does not commit to the type and payload")
 			}
 		})

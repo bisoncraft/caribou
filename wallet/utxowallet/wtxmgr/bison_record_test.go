@@ -18,6 +18,7 @@ func TestNewTxRecordBisonTxMatchesMsgTxRecordForNormalTx(t *testing.T) {
 
 	for _, chain := range []string{"btc", "ltc"} {
 		t.Run(chain, func(t *testing.T) {
+			t.Parallel()
 			parsed, err := NewTxRecord(chain, TstRecvSerializedTx, timeNow())
 			if err != nil {
 				t.Fatal(err)
