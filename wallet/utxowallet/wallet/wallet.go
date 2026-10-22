@@ -3957,6 +3957,14 @@ func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 		return nil, err
 	}
 
+	// Refuse a transaction the backend cannot carry before storing it, so
+	// nothing is recorded or marked spent for a transaction never broadcast.
+	if checker, ok := chainClient.(chain.TxRelayChecker); ok {
+		if err := checker.CheckRelay(tx); err != nil {
+			return nil, err
+		}
+	}
+
 	// As we aim for this to be general reliable transaction broadcast API,
 	// we'll write this tx to disk as an unconfirmed transaction. This way,
 	// upon restarts, we'll always rebroadcast it, and also add it to our
@@ -4016,16 +4024,7 @@ func (w *Wallet) reliablyPublishTransaction(tx *bisonwire.Tx,
 		return nil, err
 	}
 
-	txHash, err := w.publishTransaction(tx)
-	if errors.Is(err, chain.ErrUnsupportedTx) {
-		// This call stored the transaction and the backend cannot relay it,
-		// so it was never broadcast. Don't leave it to be retried forever.
-		if dbErr := w.removeUnminedTx(tx); dbErr != nil {
-			log.Warnf("Unable to remove unrelayed transaction %v: %v",
-				tx.TxHash(), dbErr)
-		}
-	}
-	return txHash, err
+	return w.publishTransaction(tx)
 }
 
 // removeUnminedTx removes tx from the wallet's unconfirmed transaction store.

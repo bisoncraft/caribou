@@ -242,13 +242,21 @@ func (s *NeutrinoClient) Connected() bool {
 	return len(s.CS.Peers()) > 0
 }
 
+// CheckRelay returns ErrUnsupportedTx for a transaction the peer layer cannot
+// carry. It relays a wire.MsgTx, which cannot hold a Dash special
+// transaction's type or extra payload.
+func (s *NeutrinoClient) CheckRelay(tx *bisonwire.Tx) error {
+	if tx.Type != 0 {
+		return ErrUnsupportedTx
+	}
+	return nil
+}
+
 // SendRawTransaction replicates the RPC client's SendRawTransaction command.
 func (s *NeutrinoClient) SendRawTransaction(tx *bisonwire.Tx, allowHighFees bool) (
 	*chainhash.Hash, error) {
-	// The peer layer relays a wire.MsgTx, which cannot carry a Dash special
-	// transaction's type or extra payload.
-	if tx.Type != 0 {
-		return nil, ErrUnsupportedTx
+	if err := s.CheckRelay(tx); err != nil {
+		return nil, err
 	}
 	err := s.CS.SendTransaction(&tx.MsgTx)
 	if err != nil {

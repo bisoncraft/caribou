@@ -23,4 +23,7 @@ func TestNeutrinoRefusesDashSpecialTx(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedTx) {
 		t.Fatalf("err = %v, want ErrUnsupportedTx", err)
 	}
+	if err := (&NeutrinoClient{}).CheckRelay(tx); !errors.Is(err, ErrUnsupportedTx) {
+		t.Fatalf("CheckRelay err = %v, want ErrUnsupportedTx", err)
+	}
 }

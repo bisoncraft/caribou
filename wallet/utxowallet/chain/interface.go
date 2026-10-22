@@ -47,6 +47,13 @@ type Backend interface {
 	MapRPCErr(err error) error
 }
 
+// TxRelayChecker is an optional capability for a Backend that cannot relay
+// every transaction. CheckRelay returns ErrUnsupportedTx for a transaction the
+// backend cannot carry, so a caller can refuse it before storing anything.
+type TxRelayChecker interface {
+	CheckRelay(*bisonwire.Tx) error
+}
+
 // AddressProber is an optional capability for a Backend that can answer, per
 // address and cheaply, whether the address has any history (e.g. electrum's
 // blockchain.scripthash.get_history). It lets the wallet do gap-limit recovery

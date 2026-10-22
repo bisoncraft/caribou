@@ -45,7 +45,18 @@ func (p *publishRecorder) SendRawTransaction(tx *bisonwire.Tx, _ bool) (*chainha
 	return &h, nil
 }
 
-var _ chain.Backend = (*publishRecorder)(nil)
+// relayRefuser is a chain client that cannot relay a special tx and says so up
+// front, as neutrino does.
+type relayRefuser struct {
+	*publishRecorder
+}
+
+func (relayRefuser) CheckRelay(*bisonwire.Tx) error { return chain.ErrUnsupportedTx }
+
+var (
+	_ chain.Backend        = (*publishRecorder)(nil)
+	_ chain.TxRelayChecker = relayRefuser{}
+)
 
 func testDashWallet(t *testing.T, client chain.Backend) *Wallet {
 	t.Helper()
@@ -182,14 +193,11 @@ func TestResendUnminedTxsKeepsDashSpecialFields(t *testing.T) {
 	}
 }
 
-// TestPublishBisonTxDropsTxWhenBackendCannotRelay guards a new publish: the tx
-// was never broadcast, so a backend that cannot carry it must not leave it in
-// the store to be retried forever.
-func TestPublishBisonTxDropsTxWhenBackendCannotRelay(t *testing.T) {
-	rec := &publishRecorder{
-		mockChainClient: &mockChainClient{},
-		err:             chain.ErrUnsupportedTx,
-	}
+// TestPublishBisonTxRefusesTxWhenBackendCannotRelay guards a new publish: a
+// backend that cannot carry the tx must refuse it before anything is stored,
+// so nothing is recorded or marked spent for a tx that was never broadcast.
+func TestPublishBisonTxRefusesTxWhenBackendCannotRelay(t *testing.T) {
+	rec := relayRefuser{&publishRecorder{mockChainClient: &mockChainClient{}}}
 	w := testDashWallet(t, rec)
 	tx := decodeDashSpecialTx(t)
 
@@ -197,8 +205,30 @@ func TestPublishBisonTxDropsTxWhenBackendCannotRelay(t *testing.T) {
 	if !errors.Is(err, chain.ErrUnsupportedTx) {
 		t.Fatalf("err = %v, want chain.ErrUnsupportedTx", err)
 	}
+	if len(rec.sent) != 0 {
+		t.Fatalf("backend got %d txs, want none", len(rec.sent))
+	}
 	if storedTx(t, w, tx.TxHash()) != nil {
-		t.Fatal("a tx that was never relayed is still in the store")
+		t.Fatal("a refused tx was stored")
+	}
+}
+
+// TestPublishBisonTxRefusalKeepsStoredTx guards the other half: refusing up
+// front must not touch a record already in the store.
+func TestPublishBisonTxRefusalKeepsStoredTx(t *testing.T) {
+	rec := &publishRecorder{mockChainClient: &mockChainClient{}}
+	w := testDashWallet(t, rec)
+	tx := decodeDashSpecialTx(t)
+	if err := w.PublishBisonTx(tx, ""); err != nil {
+		t.Fatalf("PublishBisonTx: %v", err)
+	}
+
+	w.chainClient = relayRefuser{rec}
+	if err := w.PublishBisonTx(tx, ""); !errors.Is(err, chain.ErrUnsupportedTx) {
+		t.Fatalf("err = %v, want chain.ErrUnsupportedTx", err)
+	}
+	if storedTx(t, w, tx.TxHash()) == nil {
+		t.Fatal("republishing a refused tx deleted its record")
 	}
 }
 
