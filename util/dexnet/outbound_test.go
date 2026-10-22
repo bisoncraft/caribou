@@ -83,8 +83,17 @@ func TestOutboundConnectionsHonorProxy(t *testing.T) {
 		}
 		rel = filepath.ToSlash(rel)
 		if d.IsDir() {
-			if skipDirNames[d.Name()] {
+			// Skip folders the go tool ignores: hidden and underscore folders
+			// (build trees such as .monero_c-ios) and nested modules.
+			name := d.Name()
+			if skipDirNames[name] || (rel != "." &&
+				(strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_"))) {
 				return filepath.SkipDir
+			}
+			if rel != "." {
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				}
 			}
 			if slices.Contains(exemptDirs, rel) {
 				return filepath.SkipDir
@@ -139,6 +148,13 @@ func scanFile(t *testing.T, path, rel string) []string {
 		if err != nil {
 			t.Fatalf("%s: bad import path %s", rel, imp.Path.Value)
 		}
+		_, isFunc := bypassFuncs[p]
+		_, isType := bypassTypes[p]
+		if !isFunc && !isType {
+			// Only the paths above are matched, so the package name is never
+			// guessed for any other import.
+			continue
+		}
 		local := filepath.Base(p)
 		// A major version suffix is not the package name.
 		if majorVersion.MatchString(local) {
@@ -147,8 +163,6 @@ func scanFile(t *testing.T, path, rel string) []string {
 		if imp.Name != nil {
 			local = imp.Name.Name
 		}
-		_, isFunc := bypassFuncs[p]
-		_, isType := bypassTypes[p]
 		if local == "." && (isFunc || isType) {
 			// Uses would be unqualified, so none could be matched below.
 			out = append(out, rel+": dot-import of "+p+" hides its uses from this check")
