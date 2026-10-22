@@ -592,7 +592,7 @@ func (db *TxDB) GetTxsByTicker(ticker string, req *TxHistoryRequest) (*TxHistory
 // getAssetPendingTxs is like getPendingTxs, but scoped to a single asset
 // within a network instead of the whole network.
 func (db *TxDB) getAssetPendingTxs(assetID uint32) ([]*WalletTransaction, error) {
-	var txs []*WalletTransaction
+	txs := make([]*WalletTransaction, 0)
 	// The asset-pending index entry is pendingByte(1) || assetID(4) ||
 	// effTime(8), so this 5-byte prefix scopes the scan to one asset's
 	// pending partition.
@@ -611,7 +611,7 @@ func (db *TxDB) getAssetPendingTxs(assetID uint32) ([]*WalletTransaction, error)
 }
 
 func (db *TxDB) getPendingTxs(network uint32) ([]*WalletTransaction, error) {
-	var txs []*WalletTransaction
+	txs := make([]*WalletTransaction, 0)
 	// The pending index entry is pendingByte(1) || network(4) || effTime(8), so
 	// this 5-byte prefix scopes the scan to one network's pending partition.
 	prefix := make([]byte, 5)

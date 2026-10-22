@@ -1558,7 +1558,7 @@ func TestExpireOldPending(t *testing.T) {
 			User:        w.address,
 			Destination: differentDest,
 		},
-	}, 1e8)
+	}, 1e8, nil)
 
 	tx, err := w.txDB.GetTx(pendingID)
 	if err != nil {
@@ -1602,7 +1602,7 @@ func TestFreshPendingNotExpired(t *testing.T) {
 			Type: "spotTransfer", Token: "HYPE", Amount: "1",
 			User: w.address, Destination: differentDest,
 		},
-	}, 1e8)
+	}, 1e8, nil)
 
 	tx, err := w.txDB.GetTx(pendingID)
 	if err != nil {
@@ -1650,7 +1650,7 @@ func TestConfirmPendingSend(t *testing.T) {
 		},
 	}
 
-	w.confirmPendingSend(update, 5e8)
+	w.confirmPendingSend(update, 5e8, nil)
 
 	// Pending entry should be gone.
 	old, err := w.txDB.GetTx(pendingID)
@@ -1708,7 +1708,7 @@ func TestConfirmPendingSendNoMatch(t *testing.T) {
 			Type: "spotTransfer", Token: "HYPE",
 			Amount: "99", User: w.address, Destination: recipient,
 		},
-	}, 99e8)
+	}, 99e8, nil)
 
 	// Pending entry should still be there.
 	still, err := w.txDB.GetTx(pendingID)
@@ -1755,7 +1755,7 @@ func TestConfirmPendingSendMatchesRecipient(t *testing.T) {
 			User:        w.address,
 			Destination: recipientB,
 		},
-	}, 5e8)
+	}, 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -1831,7 +1831,7 @@ func TestConfirmPendingSendPairsFIFO(t *testing.T) {
 				User:        w.address,
 				Destination: recipient,
 			},
-		}, 5e8)
+		}, 5e8, nil)
 	}
 
 	hashA := "0x" + fmt.Sprintf("%064x", 55)
@@ -1912,7 +1912,7 @@ func TestConfirmPendingSendNonceAfterEcho(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 5e8)
+	}, 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -1962,7 +1962,7 @@ func TestConfirmPendingSendSlowServer(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 2e8)
+	}, 2e8, nil)
 
 	confirmed, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -2062,7 +2062,7 @@ func TestConfirmPendingSendOrphanDoesNotStealRetry(t *testing.T) {
 
 	// Only the retry lands.
 	hash := "0x" + fmt.Sprintf("%064x", 301)
-	w.confirmPendingSend(spotTransferEcho(w, retryNonce+1_000, hash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, retryNonce+1_000, hash, recipient, "5"), 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(hash)
 	if err != nil {
@@ -2096,7 +2096,7 @@ func TestConfirmPendingSendUnknownOutcomeThatLanded(t *testing.T) {
 
 	// Processed 1s after mint — well before the client gave up.
 	hash := "0x" + fmt.Sprintf("%064x", 302)
-	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8, nil)
 
 	confirmed, err := w.txDB.GetTx(hash)
 	if err != nil {
@@ -2124,7 +2124,7 @@ func TestConfirmPendingSendIgnoresAncientEcho(t *testing.T) {
 
 	// An echo from ~3 months earlier, for an identical past transfer.
 	ancientHash := "0x" + fmt.Sprintf("%064x", 303)
-	w.confirmPendingSend(spotTransferEcho(w, nonce-90*24*3600*1000, ancientHash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, nonce-90*24*3600*1000, ancientHash, recipient, "5"), 5e8, nil)
 
 	if confirmed, err := w.txDB.GetTx(ancientHash); err != nil {
 		t.Fatalf("GetTx: %v", err)
@@ -2134,7 +2134,7 @@ func TestConfirmPendingSendIgnoresAncientEcho(t *testing.T) {
 
 	// The real echo still finds its candidate.
 	hash := "0x" + fmt.Sprintf("%064x", 304)
-	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8)
+	w.confirmPendingSend(spotTransferEcho(w, nonce+1_000, hash, recipient, "5"), 5e8, nil)
 	if confirmed, err := w.txDB.GetTx(hash); err != nil {
 		t.Fatalf("GetTx: %v", err)
 	} else if confirmed == nil {
@@ -2208,7 +2208,7 @@ func TestWalletTransactionLookupByConfirmedPendingAlias(t *testing.T) {
 			User:        w.address,
 			Destination: recipient,
 		},
-	}, 5e8)
+	}, 5e8, nil)
 
 	coinIDStr, err := decodeCoinID(coinIDBytes(pendingID))
 	if err != nil {
@@ -2245,7 +2245,7 @@ func TestHandleTransferUpdateReceive(t *testing.T) {
 		},
 	}
 
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, nil)
 
 	got, err := w.txDB.GetTx(realHash)
 	if err != nil {
@@ -2310,7 +2310,7 @@ func TestHandleTransferUpdateEmitsBalanceChange(t *testing.T) {
 			User: "0xsender1234567890abcdef1234567890abcdef12", Destination: w.address,
 		},
 	}
-	w.handleTransferUpdate(update)
+	w.lockedProcessLedgerUpdates(context.Background(), []ledgerUpdate{update})
 
 	wantAvail, _ := parseHYPE("5")
 	for {
@@ -2330,6 +2330,78 @@ func TestHandleTransferUpdateEmitsBalanceChange(t *testing.T) {
 	}
 }
 
+// TestLedgerBatchEmitsAfterUnlockOnce guards the WS read goroutine: a batch of
+// incoming transfers must fetch the balance once, and only after ledgerMtx is
+// released, or the HTTP round-trips stall the reader past its read deadline.
+func TestLedgerBatchEmitsAfterUnlockOnce(t *testing.T) {
+	var w *HyperWallet
+	var balanceReqs int
+	var heldDuringReq bool
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		balanceReqs++
+		if w.ledgerMtx.TryLock() {
+			w.ledgerMtx.Unlock()
+		} else {
+			heldDuringReq = true
+		}
+		json.NewEncoder(rw).Encode(spotClearinghouseState{
+			Balances: []spotBalance{{Coin: "HYPE", Total: "5", Hold: "0"}},
+		})
+	}))
+	defer srv.Close()
+
+	log := util.StdOutLogger("HLWTEST", util.LevelTrace)
+	rpc, err := newRPCClient(srv.URL, "", log)
+	if err != nil {
+		t.Fatalf("newRPCClient: %v", err)
+	}
+	notes := make(chan asset.WalletNotification, 16)
+	w = &HyperWallet{
+		log:     log,
+		net:     util.Testnet,
+		address: "0xabcdef1234567890abcdef1234567890abcdef12",
+		rpc:     rpc,
+		ctx:     context.Background(),
+		emit:    asset.NewWalletEmitter(notes, BipID, log),
+		txDB:    newTestTxDB(t),
+	}
+	mustSetupWalletTxDB(t, w)
+
+	var updates []ledgerUpdate
+	for i := 0; i < 3; i++ {
+		updates = append(updates, ledgerUpdate{
+			Time: uint64(1700000005000 + i),
+			Hash: "0x" + fmt.Sprintf("%064x", 200+i),
+			Delta: ledgerDelta{
+				Type: "spotTransfer", Token: "HYPE", Amount: "1",
+				User: "0xsender1234567890abcdef1234567890abcdef12", Destination: w.address,
+			},
+		})
+	}
+	if err := w.lockedProcessLedgerUpdates(context.Background(), updates); err != nil {
+		t.Fatalf("lockedProcessLedgerUpdates: %v", err)
+	}
+
+	if balanceReqs != 1 {
+		t.Errorf("balance requests = %d, want 1 per batch", balanceReqs)
+	}
+	if heldDuringReq {
+		t.Error("ledgerMtx was held during the balance request")
+	}
+	var txNotes, balNotes int
+	for len(notes) > 0 {
+		switch (<-notes).(type) {
+		case *asset.TransactionNote:
+			txNotes++
+		case *asset.BalanceChangeNote:
+			balNotes++
+		}
+	}
+	if txNotes != 3 || balNotes != 1 {
+		t.Errorf("notes: %d tx, %d balance; want 3 tx, 1 balance", txNotes, balNotes)
+	}
+}
+
 func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 	w := newTestWalletWithDB(t)
 	sender := "0xsender1234567890abcdef1234567890abcdef12"
@@ -2345,8 +2417,8 @@ func TestHandleTransferUpdateReceiveIdempotent(t *testing.T) {
 	}
 
 	// Call twice — second call should be a no-op.
-	w.handleTransferUpdate(update)
-	w.handleTransferUpdate(update)
+	w.handleTransferUpdate(update, nil)
+	w.handleTransferUpdate(update, nil)
 
 	resp, err := w.txDB.GetTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
@@ -2368,7 +2440,7 @@ func TestProcessLedgerUpdateNonHYPE(t *testing.T) {
 		},
 	}
 	// Should be silently ignored (non-HYPE coin).
-	w.processLedgerUpdate(update)
+	w.lockedProcessLedgerUpdates(context.Background(), []ledgerUpdate{update})
 
 	resp, err := w.txDB.GetTxs(&txdb.TxHistoryRequest{N: 10})
 	if err != nil {
@@ -2539,6 +2611,75 @@ func TestScanLedgerContextCancel(t *testing.T) {
 	err := wallet.scanLedger(ctx)
 	if err == nil {
 		t.Fatal("expected error when context is cancelled")
+	}
+}
+
+// countingPendingTxDB wraps a txdb.NetworkTxDB, counting GetPendingTxs calls
+// so a test can assert a batch of ledger updates loads the pending set once,
+// not once per update.
+type countingPendingTxDB struct {
+	txdb.NetworkTxDB
+	pendingCalls atomic.Int64
+}
+
+func (c *countingPendingTxDB) GetPendingTxs() ([]*txdb.WalletTransaction, error) {
+	c.pendingCalls.Add(1)
+	return c.NetworkTxDB.GetPendingTxs()
+}
+
+// TestLockedProcessLedgerUpdatesBatchesPendingLoad verifies
+// lockedProcessLedgerUpdates — which Rescan, scanLedger, and the live WS
+// path (via tipPoller's onEvent) all now share — loads the pending set once
+// per batch under one ledgerMtx critical section, not once per update, and
+// still correctly confirms every pending send in a multi-update batch
+// (goaudit finding F3: the WS batching fix had no direct test of its own).
+func TestLockedProcessLedgerUpdatesBatchesPendingLoad(t *testing.T) {
+	w := newTestWalletWithDB(t)
+	counting := &countingPendingTxDB{NetworkTxDB: w.txDB}
+	w.txDB = counting
+
+	recipient := "0xrecipient1234567890abcdef1234567890abcd"
+	nonce1 := uint64(1700000001000)
+	nonce2 := uint64(1700000002000)
+	pendingID1 := storePendingSend(t, w, nonce1, 5e8, recipient, 0)
+	pendingID2 := storePendingSend(t, w, nonce2, 3e8, recipient, 0)
+
+	hash1 := "0x" + strings.Repeat("a", 64)
+	hash2 := "0x" + strings.Repeat("b", 64)
+	updates := []ledgerUpdate{
+		spotTransferEcho(w, nonce2+1_000, hash2, recipient, "3"),
+		spotTransferEcho(w, nonce1+1_000, hash1, recipient, "5"),
+	}
+	sortLedgerUpdates(updates)
+
+	if err := w.lockedProcessLedgerUpdates(context.Background(), updates); err != nil {
+		t.Fatalf("lockedProcessLedgerUpdates: %v", err)
+	}
+
+	if got := counting.pendingCalls.Load(); got != 1 {
+		t.Fatalf("GetPendingTxs called %d times, want 1 (one load for the whole batch)", got)
+	}
+
+	// confirmPendingSend replaces the pending record (keyed by nonce-derived
+	// ID) with a confirmed one keyed by the echo's tx hash, so both the
+	// pending IDs must be gone and both hashes must now be confirmed.
+	for _, pendingID := range []string{pendingID1, pendingID2} {
+		tx, err := w.txDB.GetTx(pendingID)
+		if err != nil {
+			t.Fatalf("GetTx %s: %v", pendingID, err)
+		}
+		if tx != nil {
+			t.Fatalf("pending record %s still present after confirmation", pendingID)
+		}
+	}
+	for _, hash := range []string{hash1, hash2} {
+		tx, err := w.txDB.GetTx(hash)
+		if err != nil {
+			t.Fatalf("GetTx %s: %v", hash, err)
+		}
+		if tx == nil || !tx.Confirmed {
+			t.Fatalf("send confirmed at %s was not stored by the batch: %+v", hash, tx)
+		}
 	}
 }
 
@@ -2748,10 +2889,14 @@ func TestWSClientReceivesEvent(t *testing.T) {
 
 	log := util.StdOutLogger("WSTEST", util.LevelTrace)
 	wsc := &wsClient{
-		url:     wsURL(srv),
-		user:    "0xrecipient",
-		log:     log,
-		onEvent: func(u ledgerUpdate) { received <- u },
+		url:  wsURL(srv),
+		user: "0xrecipient",
+		log:  log,
+		onEvent: func(updates []ledgerUpdate) {
+			for _, u := range updates {
+				received <- u
+			}
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2790,10 +2935,14 @@ func TestWSClientSnapshotProcessed(t *testing.T) {
 
 	log := util.StdOutLogger("WSTEST", util.LevelTrace)
 	wsc := &wsClient{
-		url:     wsURL(srv),
-		user:    "0xb",
-		log:     log,
-		onEvent: func(u ledgerUpdate) { received <- u },
+		url:  wsURL(srv),
+		user: "0xb",
+		log:  log,
+		onEvent: func(updates []ledgerUpdate) {
+			for _, u := range updates {
+				received <- u
+			}
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2924,10 +3073,14 @@ func TestWSClientIgnoresOtherChannels(t *testing.T) {
 
 	log := util.StdOutLogger("WSTEST", util.LevelTrace)
 	wsc := &wsClient{
-		url:     wsURL(srv),
-		user:    "0xb",
-		log:     log,
-		onEvent: func(u ledgerUpdate) { received <- u },
+		url:  wsURL(srv),
+		user: "0xb",
+		log:  log,
+		onEvent: func(updates []ledgerUpdate) {
+			for _, u := range updates {
+				received <- u
+			}
+		},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3109,7 +3262,7 @@ func TestWSClientWaitsForInFlightHandler(t *testing.T) {
 		url:  wsURL(srv),
 		user: "0xtest",
 		log:  util.StdOutLogger("WSTEST", util.LevelTrace),
-		onEvent: func(_ ledgerUpdate) {
+		onEvent: func(_ []ledgerUpdate) {
 			once.Do(func() { close(inHandler) })
 			<-release
 		},

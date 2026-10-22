@@ -531,7 +531,7 @@ func TestLiveReceiveDetection(t *testing.T) {
 	}
 
 	// Hyperliquid rejects self-transfers, so test outgoing send detection instead.
-	// The notification path is the same — ledger scan → processLedgerUpdate → emit.
+	// The notification path is the same — ledger scan → lockedProcessLedgerUpdates → emit.
 	coin, err := w.Send(testSinkAddress, sendAtoms, 0)
 	if err != nil {
 		t.Fatalf("Send: %v", err)
