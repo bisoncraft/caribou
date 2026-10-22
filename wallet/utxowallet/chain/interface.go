@@ -38,13 +38,22 @@ type Backend interface {
 	IsCurrent() bool
 	FilterBlocks(*FilterBlocksRequest) (*FilterBlocksResponse, error)
 	BlockStamp() (*waddrmgr.BlockStamp, error)
-	SendRawTransaction(*wire.MsgTx, bool) (*chainhash.Hash, error)
+	SendRawTransaction(*bisonwire.Tx, bool) (*chainhash.Hash, error)
 	Rescan(*chainhash.Hash, []btcutil.Address, map[wire.OutPoint]btcutil.Address) error
 	NotifyReceived([]btcutil.Address) error
 	NotifyBlocks() error
 	Notifications() <-chan interface{}
 	BackEnd() string
 	MapRPCErr(err error) error
+}
+
+// TxRelayChecker is an optional capability for a Backend that cannot relay
+// every transaction. CheckRelay returns ErrUnsupportedTx for a transaction the
+// backend cannot carry, so a caller can refuse it before storing anything. A
+// Backend whose SendRawTransaction can return ErrUnsupportedTx must implement
+// it, or a transaction that was never broadcast is left in the store.
+type TxRelayChecker interface {
+	CheckRelay(*bisonwire.Tx) error
 }
 
 // AddressProber is an optional capability for a Backend that can answer, per

@@ -19,6 +19,12 @@ var (
 	// should gradually increase our error types to avoid returning this
 	// error.
 	ErrUndefined = errors.New("undefined")
+
+	// ErrUnsupportedTx is returned when a backend cannot carry a transaction
+	// it was given, for example a Dash special transaction on a backend whose
+	// peer layer relays only a plain wire.MsgTx. It says nothing about whether
+	// the transaction is valid.
+	ErrUnsupportedTx = errors.New("transaction not supported by this backend")
 )
 
 // RPCErr represents an error returned by bitcoind's RPC server.
