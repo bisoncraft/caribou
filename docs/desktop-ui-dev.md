@@ -53,16 +53,21 @@ via `sass-loader` using the modern API. Lint runs via `eslint-webpack-plugin`
 during the build, so a lint error fails the build.
 
 ```bash
-cd wallet/appserver/desktop
-npm ci                  # one-time / after lockfile changes
-npm run build           # writes dist/bundle.js + dist/index.html
+cd wallet/appserver
+npm ci                           # one-time / after lockfile changes
+npm run build --workspace=desktop  # writes desktop/dist/bundle.js + dist/index.html
 ```
 
-This means **any Go test or build that touches `wallet/appserver/...` requires
-the bundle to be present on disk** — `go test ./wallet/appserver/...` fails
-with `pattern desktop/dist: no matching files found` if you skipped
-`npm run build`. CI builds it before tests run; do the same locally on a fresh
-checkout.
+You need Go 1.25 or later and Node.js 20.19+ or 22.13+ (the versions CI tests).
+
+The UI is an npm workspace with a single lockfile at `wallet/appserver`, so
+install from there; `npm ci` run inside `desktop/` alone skips the shared
+toolchain and the build fails with `webpack: command not found`.
+
+A fresh checkout holds only a placeholder in `desktop/dist`, so Go builds and
+tests of `wallet/appserver/...` compile without the bundle, but the resulting
+binary serves no UI until you run `npm run build`. CI builds the bundle before
+tests run; do the same locally to see the UI.
 
 **If you are doing significant work on the UI**, you will want to run
 `npm run watch` instead of `npm run build`, and pass the `--no-embed-site` flag to `caribou`.
