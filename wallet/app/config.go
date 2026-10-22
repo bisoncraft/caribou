@@ -34,10 +34,9 @@ var (
 
 // CoreConfig encapsulates the settings specific to core.Core.
 type CoreConfig struct {
-	DBPath       string `long:"db" description:"Database path. The database will be created if it does not exist."`
-	Onion        string `long:"onion" description:"Proxy for .onion addresses, if torproxy not set (eg. 127.0.0.1:9050)."`
-	TorProxy     string `long:"torproxy" description:"Connect via TOR (eg. 127.0.0.1:9050)."`
-	TorIsolation bool   `long:"torisolation" description:"Enable TOR circuit isolation."`
+	DBPath   string `long:"db" description:"Database path. The database will be created if it does not exist."`
+	Onion    string `long:"onion" description:"Proxy for .onion addresses, if torproxy not set (eg. 127.0.0.1:9050)."`
+	TorProxy string `long:"torproxy" description:"Connect via TOR (eg. 127.0.0.1:9050)."`
 	// Net is a derivative field set by ResolveConfig.
 	Net util.Network
 
@@ -135,7 +134,6 @@ func (cfg *Config) Core(log util.Logger) *core.Config {
 		Logger:            log,
 		Onion:             cfg.Onion,
 		TorProxy:          cfg.TorProxy,
-		TorIsolation:      cfg.TorIsolation,
 		Language:          cfg.Language,
 		NoAutoWalletLock:  cfg.NoAutoWalletLock,
 		IntentsBaseURL:    cfg.IntentsAPI,

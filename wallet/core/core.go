@@ -67,8 +67,6 @@ type Config struct {
 	Onion string
 	// TorProxy specifies the address of a Tor proxy server.
 	TorProxy string
-	// TorIsolation specifies whether to enable Tor circuit isolation.
-	TorIsolation bool
 	// Language. A BCP 47 language tag. Default is en-US.
 	Language string
 
