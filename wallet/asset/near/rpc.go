@@ -12,14 +12,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
-	"golang.org/x/net/proxy"
+	"github.com/bisoncraft/caribou/util/dexnet"
 )
 
 const (
@@ -64,21 +63,15 @@ func newRPCClient(endpoints []string, torProxy string, log util.Logger) (*rpcCli
 		return nil, fmt.Errorf("no RPC endpoints provided")
 	}
 
+	// torproxy: dialer is replaced with the SOCKS5 dialer when a proxy is set
 	transport := &http.Transport{
 		MaxIdleConns:       2,
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: true,
 	}
 
-	if torProxy != "" {
-		dialer, err := proxy.SOCKS5("tcp", torProxy, nil, proxy.Direct)
-		if err != nil {
-			return nil, fmt.Errorf("error creating SOCKS5 dialer: %w", err)
-		}
-		transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
-			return dialer.Dial(network, addr)
-		}
-	}
+	// Nil without a proxy, so the transport dials directly.
+	transport.DialContext = dexnet.ProxyDialContext(torProxy)
 
 	eps := make([]*rpcEndpoint, len(endpoints))
 	for i, u := range endpoints {
@@ -87,6 +80,7 @@ func newRPCClient(endpoints []string, torProxy string, log util.Logger) (*rpcCli
 
 	return &rpcClient{
 		endpoints: eps,
+		// torproxy: uses the transport above, proxied when configured
 		httpClient: &http.Client{
 			Transport: transport,
 			Timeout:   rpcRequestTimeout,

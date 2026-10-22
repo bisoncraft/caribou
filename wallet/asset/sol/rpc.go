@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+	"github.com/bisoncraft/caribou/util/dexnet"
+)
 
 // rpcResponseSizeLimit bounds data accepted from an untrusted RPC endpoint.
 // Solana transaction responses can carry metadata, so retain the same 4 MiB
@@ -45,11 +45,29 @@ type rpcI interface {
 }
 
 type rpcClient struct {
-	httpURL string
+	httpURL    string
+	httpClient *http.Client
 }
 
-func newRPCClient(httpURL string) *rpcClient {
-	return &rpcClient{httpURL: httpURL}
+// newRPCClient returns a client for httpURL. A non-empty torProxy (host:port)
+// routes every request through that SOCKS5 proxy.
+func newRPCClient(httpURL, torProxy string) *rpcClient {
+	// torproxy: the proxy transport is installed below when configured
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	if torProxy != "" {
+		httpClient.Transport = dexnet.ProxyTransport(torProxy)
+	}
+	return &rpcClient{httpURL: httpURL, httpClient: httpClient}
+}
+
+// closeIdle drops idle connections held by the client's transport, so a
+// replaced client does not leave proxied connections open. A client without a
+// proxy has no transport of its own, and closing the shared default
+// transport's connections would affect unrelated users.
+func (c *rpcClient) closeIdle() {
+	if c.httpClient.Transport != nil {
+		c.httpClient.CloseIdleConnections()
+	}
 }
 
 func (c *rpcClient) call(ctx context.Context, method string, params any, result any) error {
@@ -67,7 +85,7 @@ func (c *rpcClient) call(ctx context.Context, method string, params any, result 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
 	}

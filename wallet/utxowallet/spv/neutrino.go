@@ -728,6 +728,7 @@ func NewChainService(cfg Config) (*ChainService, error) {
 		dialer = cfg.Dialer
 	} else {
 		dialer = func(addr net.Addr) (net.Conn, error) {
+			// torproxy: library default; the wallet refuses neutrino when --torproxy is set
 			return net.Dial(addr.Network(), addr.String())
 		}
 	}
@@ -737,6 +738,7 @@ func NewChainService(cfg Config) (*ChainService, error) {
 	if cfg.NameResolver != nil {
 		nameResolver = cfg.NameResolver
 	} else {
+		// torproxy: library default; the wallet refuses neutrino when --torproxy is set
 		nameResolver = net.LookupIP
 	}
 

@@ -548,11 +548,13 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 			var err error
 			startTime := time.Now()
 			if torProxy != "" {
+				// torproxy: proxied dialer; the direct branch below runs only without a proxy
 				rpcClient, err = rpc.DialOptions(timedCtx, wsURL.String(), rpc.WithWebsocketDialer(websocket.Dialer{
 					NetDialContext:   dexnet.ProxyDialContext(torProxy),
 					HandshakeTimeout: 30 * time.Second,
 				}))
 			} else {
+				// torproxy: direct only when no proxy is configured
 				rpcClient, err = rpc.DialWebsocket(timedCtx, wsURL.String(), "")
 			}
 			log.Tracef("%s to connect to %s", time.Since(startTime), wsURL)
@@ -585,8 +587,16 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 			var err error
 			startTime := time.Now()
 			if torProxy != "" {
-				rpcClient, err = rpc.DialOptions(timedCtx, endpoint, rpc.WithHTTPClient(dexnet.ProxyHTTPClient(torProxy)))
+				// torproxy: proxied client
+				rpcClient, err = rpc.DialOptions(timedCtx, endpoint,
+					rpc.WithHTTPClient(dexnet.ProxyHTTPClient(torProxy)),
+					// torproxy: a ws/wss endpoint ignores the http client above
+					rpc.WithWebsocketDialer(websocket.Dialer{
+						NetDialContext:   dexnet.ProxyDialContext(torProxy),
+						HandshakeTimeout: 30 * time.Second,
+					}))
 			} else {
+				// torproxy: direct only when no proxy is configured
 				rpcClient, err = rpc.DialContext(timedCtx, endpoint)
 			}
 			log.Tracef("%s to connect to %s", time.Since(startTime), endpoint)

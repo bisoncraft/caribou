@@ -114,6 +114,7 @@ func (c *wsClient) run(ctx context.Context) {
 
 // runOnce manages one WebSocket connection from dial to close.
 func (c *wsClient) runOnce(ctx context.Context) error {
+	// torproxy: NetDialContext is set to the proxy dialer when configured
 	d := &websocket.Dialer{
 		HandshakeTimeout: 15 * time.Second,
 	}

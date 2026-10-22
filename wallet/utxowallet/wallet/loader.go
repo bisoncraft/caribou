@@ -59,6 +59,7 @@ type loaderConfig struct {
 	scryptOpts              *waddrmgr.ScryptOptions
 	backendKind             BackendKind
 	hasBackendKind          bool // true when WithBackendKind was called
+	torProxy                string
 
 	// externalQuietDepth/sweepInterval override the watch policy's depths
 	// when positive. Test knobs; see WithWatchDepths.
@@ -113,6 +114,15 @@ func WithBackendKind(kind BackendKind) LoaderOption {
 	return func(c *loaderConfig) {
 		c.backendKind = kind
 		c.hasBackendKind = true
+	}
+}
+
+// WithTorProxy routes the owned backend's outbound connections through the
+// SOCKS5 proxy at addr (host:port). Backends that cannot honor a proxy refuse
+// to start rather than connect directly.
+func WithTorProxy(addr string) LoaderOption {
+	return func(c *loaderConfig) {
+		c.torProxy = addr
 	}
 }
 
@@ -204,6 +214,7 @@ func (l *Loader) onLoaded(w *Wallet) {
 		w.backendKind = l.cfg.backendKind
 		w.dataDir = l.netDir
 	}
+	w.torProxy = l.cfg.torProxy
 	w.watchPol.extQuiet = l.cfg.externalQuietDepth
 	w.watchPol.sweepEvery = l.cfg.sweepInterval
 

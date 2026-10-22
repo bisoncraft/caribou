@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/bisoncraft/caribou/util"
 	"github.com/bisoncraft/caribou/util/config"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/bisoncraft/caribou/wallet/asset/btc"
 	"github.com/btcsuite/btcd/btcjson"
@@ -188,14 +190,31 @@ type WalletConfig struct {
 	ActivelyUsed     bool   `ini:"special_activelyUsed"` // injected by core
 }
 
-func newRPCConnection(cfg *btc.RPCConfig) (*rpcclient.Client, error) {
-	return rpcclient.New(&rpcclient.ConnConfig{
+// rpcConnConfig builds the zcashd connection config, routing it through
+// torProxy unless the node is on a loopback or private address.
+func rpcConnConfig(cfg *btc.RPCConfig, torProxy string) *rpcclient.ConnConfig {
+	connCfg := &rpcclient.ConnConfig{
 		HTTPPostMode: true,
 		DisableTLS:   true,
 		Host:         cfg.RPCBind,
 		User:         cfg.RPCUser,
 		Pass:         cfg.RPCPass,
-	}, nil)
+	}
+	if torProxy = dexnet.ProxyFor(cfg.RPCBind, torProxy); torProxy != "" {
+		// In HTTP POST mode the proxy is a URL, and its userinfo is sent as
+		// SOCKS credentials, which isolates this connection's Tor circuit.
+		user, pass := dexnet.IsolationCreds()
+		connCfg.Proxy = (&url.URL{
+			Scheme: "socks5",
+			User:   url.UserPassword(user, pass),
+			Host:   torProxy,
+		}).String()
+	}
+	return connCfg
+}
+
+func newRPCConnection(cfg *btc.RPCConfig, torProxy string) (*rpcclient.Client, error) {
+	return rpcclient.New(rpcConnConfig(cfg, torProxy), nil)
 }
 
 // NewWallet is the exported constructor by which the DEX will import the
@@ -251,7 +270,7 @@ func NewWallet(cfg *asset.WalletConfig, logger util.Logger, net util.Network) (a
 		return nil, fmt.Errorf("rpc config error: %v", err)
 	}
 
-	cl, err := newRPCConnection(&rpcCfg)
+	cl, err := newRPCConnection(&rpcCfg, cfg.TorProxy)
 	if err != nil {
 		return nil, fmt.Errorf("error constructing rpc client: %w", err)
 	}

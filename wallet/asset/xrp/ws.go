@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/gorilla/websocket"
 )
 
@@ -98,7 +99,11 @@ func (w *xrpWallet) subscriptionLoop(ctx context.Context) {
 }
 
 func (w *xrpWallet) runSubscription(ctx context.Context, endpoint string) (subscribed bool, _ error) {
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	// torproxy: NetDialContext is the proxy dialer when configured
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		NetDialContext:   dexnet.ProxyDialContext(w.torProxy),
+	}
 	conn, _, err := dialer.DialContext(ctx, endpoint, nil)
 	if err != nil {
 		return false, fmt.Errorf("error connecting websocket %q: %w", endpoint, err)
