@@ -31,7 +31,9 @@ type NetworkTxDB interface {
 	// mempool. This matches the per-wallet tx DBs that wallets migrate from.
 	// Note that on a network hosting token wallets that share this
 	// NetworkTxDB, this returns every asset's pending transactions mixed
-	// together; use GetAssetPendingTxs for a single asset's view.
+	// together; use GetAssetPendingTxs for a single asset's view. Always
+	// non-nil, even when empty, so callers can use nil as a distinct
+	// "not loaded" sentinel.
 	GetPendingTxs() ([]*WalletTransaction, error)
 	// GetAssetTxs is like GetTxs, but scoped to a single asset within this
 	// network: assetID nil selects the network's own native-asset

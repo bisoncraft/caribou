@@ -72,8 +72,12 @@ type wsClient struct {
 	log     util.Logger
 	netDial func(ctx context.Context, network, addr string) (net.Conn, error) // nil = default
 
-	// onEvent is called for every ledger update, including the initial snapshot.
-	onEvent func(u ledgerUpdate)
+	// onEvent is called once per WS frame with that frame's full batch of
+	// ledger updates (oldest-first), including the initial subscription
+	// snapshot — often the largest batch the wallet ever processes — so the
+	// receiver can process the batch under a single lock and a single
+	// pending-set load instead of one per update.
+	onEvent func(updates []ledgerUpdate)
 	// onLive is called whenever the connection proves liveness (data or pong).
 	onLive func()
 	// onReconnect is called after each successful dial, before the message loop.
@@ -226,9 +230,7 @@ func (c *wsClient) handleMessage(raw []byte) {
 	// confirmPendingSend pairs identical sends FIFO, so a frame carrying
 	// several updates must be replayed oldest-first.
 	sortLedgerUpdates(data.Updates)
-	for _, u := range data.Updates {
-		if c.onEvent != nil {
-			c.onEvent(u)
-		}
+	if c.onEvent != nil {
+		c.onEvent(data.Updates)
 	}
 }
