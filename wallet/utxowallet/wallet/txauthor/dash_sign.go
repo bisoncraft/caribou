@@ -27,8 +27,9 @@ const dashSpecialTxVersion = 3
 // payload follows the lock time. For a normal transaction the two digests are
 // identical.
 //
-// The payload placement follows Dash Core's CTransactionSignatureSerializer as
-// recalled; it has not been checked against a transaction signed by dashd.
+// The payload placement follows Dash Core's CTransactionSignatureSerializer,
+// and TestDashSignatureHashMatchesDashd verifies it against signatures on real
+// mainnet special transactions.
 func dashSignatureHash(tx *bisonwire.Tx, idx int, subScript []byte) ([]byte, error) {
 	if idx < 0 || idx >= len(tx.TxIn) {
 		return nil, fmt.Errorf("input index %d out of range", idx)
