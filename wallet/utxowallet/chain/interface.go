@@ -49,7 +49,9 @@ type Backend interface {
 
 // TxRelayChecker is an optional capability for a Backend that cannot relay
 // every transaction. CheckRelay returns ErrUnsupportedTx for a transaction the
-// backend cannot carry, so a caller can refuse it before storing anything.
+// backend cannot carry, so a caller can refuse it before storing anything. A
+// Backend whose SendRawTransaction can return ErrUnsupportedTx must implement
+// it, or a transaction that was never broadcast is left in the store.
 type TxRelayChecker interface {
 	CheckRelay(*bisonwire.Tx) error
 }

@@ -4074,8 +4074,9 @@ func (w *Wallet) publishTransaction(tx *bisonwire.Tx) (*chainhash.Hash, error) {
 		return &txid, nil
 
 	// The backend could not carry the transaction, which says nothing about
-	// its validity. It may already be in the mempool, so keep it stored and
-	// let the caller decide whether it was ever relayed.
+	// its validity. New publishes are refused earlier through TxRelayChecker,
+	// so only a transaction already stored gets here, and it may already be in
+	// the mempool. Keep it stored.
 	case errors.Is(rpcErr, chain.ErrUnsupportedTx):
 		log.Infof("%v: backend cannot relay this transaction", txid)
 		return nil, rpcErr
