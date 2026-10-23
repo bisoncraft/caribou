@@ -195,6 +195,24 @@ func EstimateSerializeSize(inputCount int, txOuts []*wire.TxOut, addChangeOutput
 		changeSize
 }
 
+// EstimateSerializeSizeSpecial returns a worst case serialize size estimate for
+// a signed Dash special transaction (DIP-2) that spends inputCount compressed
+// P2PKH outputs, contains each transaction output from txOuts, and carries an
+// extra payload of payloadLen bytes. It is the P2PKH estimate plus the
+// length-prefixed payload. The packed version and type fit in the same 4 bytes
+// as a normal version.
+//
+// The payload is only serialized for transaction version 3 and above, so the
+// transaction must be version 3 or the result is an overestimate. Like
+// EstimateSerializeSize, it assumes every input spends a compressed P2PKH
+// output and underestimates other script types.
+func EstimateSerializeSizeSpecial(inputCount int, txOuts []*wire.TxOut,
+	addChangeOutput bool, payloadLen int) int {
+
+	return EstimateSerializeSize(inputCount, txOuts, addChangeOutput) +
+		wire.VarIntSerializeSize(uint64(payloadLen)) + payloadLen
+}
+
 // EstimateVirtualSize returns a worst case virtual size estimate for a
 // signed transaction that spends the given number of P2PKH, P2TR, P2WPKH and
 // (nested) P2SH-P2WPKH outputs, and contains each transaction output
