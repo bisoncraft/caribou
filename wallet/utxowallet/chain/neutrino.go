@@ -242,10 +242,23 @@ func (s *NeutrinoClient) Connected() bool {
 	return len(s.CS.Peers()) > 0
 }
 
+// CheckRelay returns ErrUnsupportedTx for a transaction the peer layer cannot
+// carry. It relays a wire.MsgTx, which cannot hold a Dash special
+// transaction's type or extra payload.
+func (s *NeutrinoClient) CheckRelay(tx *bisonwire.Tx) error {
+	if tx.Type != 0 {
+		return ErrUnsupportedTx
+	}
+	return nil
+}
+
 // SendRawTransaction replicates the RPC client's SendRawTransaction command.
-func (s *NeutrinoClient) SendRawTransaction(tx *wire.MsgTx, allowHighFees bool) (
+func (s *NeutrinoClient) SendRawTransaction(tx *bisonwire.Tx, allowHighFees bool) (
 	*chainhash.Hash, error) {
-	err := s.CS.SendTransaction(tx)
+	if err := s.CheckRelay(tx); err != nil {
+		return nil, err
+	}
+	err := s.CS.SendTransaction(&tx.MsgTx)
 	if err != nil {
 		return nil, s.MapRPCErr(err)
 	}
@@ -744,7 +757,7 @@ func (s *NeutrinoClient) sweepMatchedBlock(height int32, hash *chainhash.Hash,
 		},
 	}
 	for _, tx := range relevant {
-		rec, err := wtxmgr.NewTxRecordFromMsgTx(s.chainParams.Chain, &tx.MsgTx,
+		rec, err := wtxmgr.NewTxRecordBisonTx(s.chainParams.Chain, tx,
 			header.Timestamp)
 		if err != nil {
 			log.Errorf("neutrino: sweep tx record: %v", err)
@@ -792,7 +805,7 @@ func (s *NeutrinoClient) onFilteredBlockConnected(height int32,
 		},
 	}
 	for _, tx := range relevantTxs {
-		rec, err := wtxmgr.NewTxRecordFromMsgTx(s.chainParams.Chain, &tx.MsgTx,
+		rec, err := wtxmgr.NewTxRecordBisonTx(s.chainParams.Chain, tx,
 			header.Timestamp)
 		if err != nil {
 			log.Errorf("Cannot create transaction record for "+

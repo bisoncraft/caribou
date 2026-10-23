@@ -93,10 +93,50 @@ type ChangeSource struct {
 func NewUnsignedTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
 	fetchInputs InputSource, changeSource *ChangeSource) (*AuthoredTx, error) {
 
+	estimate := func(p2pkh, p2tr, p2wpkh, nested int) int {
+		return txsizes.EstimateVirtualSize(
+			p2pkh, p2tr, p2wpkh, nested, outputs, changeSource.ScriptSize,
+		)
+	}
+	return newUnsignedTransaction(outputs, feeRatePerKb, fetchInputs,
+		changeSource, wire.TxVersion, estimate)
+}
+
+// NewUnsignedSpecialTransaction is NewUnsignedTransaction for a Dash special
+// transaction (DIP-2) that will carry an extra payload of payloadLen bytes. The
+// fee is sized for the version 3 serialization with the length-prefixed
+// payload, so the signed transaction pays at least feeRatePerKb. Dash wallets
+// only hold P2PKH outputs, so every input is sized as compressed P2PKH and the
+// change script must be P2PKH. An input signed with an uncompressed key is
+// 32 bytes larger than sized, so the fee would fall short of feeRatePerKb.
+func NewUnsignedSpecialTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
+	payloadLen int, fetchInputs InputSource, changeSource *ChangeSource) (*AuthoredTx, error) {
+
+	if payloadLen <= 0 {
+		return nil, errors.New("special transaction needs a payload")
+	}
+	if changeSource.ScriptSize != txsizes.P2PKHPkScriptSize {
+		return nil, errors.New("special transaction change must be p2pkh")
+	}
+
+	estimate := func(p2pkh, p2tr, p2wpkh, nested int) int {
+		return txsizes.EstimateSerializeSizeSpecial(
+			p2pkh+p2tr+p2wpkh+nested, outputs, true, payloadLen,
+		)
+	}
+	return newUnsignedTransaction(outputs, feeRatePerKb, fetchInputs,
+		changeSource, dashSpecialTxVersion, estimate)
+}
+
+// newUnsignedTransaction implements the input selection and fee loop shared by
+// the normal and special transaction constructors. estimate returns the worst
+// case signed size for the given input counts.
+func newUnsignedTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
+	fetchInputs InputSource, changeSource *ChangeSource, version int32,
+	estimate func(p2pkh, p2tr, p2wpkh, nested int) int) (*AuthoredTx, error) {
+
 	targetAmount := SumOutputValues(outputs)
-	estimatedSize := txsizes.EstimateVirtualSize(
-		0, 0, 1, 0, outputs, changeSource.ScriptSize,
-	)
+	estimatedSize := estimate(0, 0, 1, 0)
 	targetFee := txrules.FeeForSerializeSize(feeRatePerKb, estimatedSize)
 
 	for {
@@ -126,9 +166,7 @@ func NewUnsignedTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
 			}
 		}
 
-		maxSignedSize := txsizes.EstimateVirtualSize(
-			p2pkh, p2tr, p2wpkh, nested, outputs, changeSource.ScriptSize,
-		)
+		maxSignedSize := estimate(p2pkh, p2tr, p2wpkh, nested)
 		maxRequiredFee := txrules.FeeForSerializeSize(feeRatePerKb, maxSignedSize)
 		remainingAmount := inputAmount - targetAmount
 		if remainingAmount < maxRequiredFee {
@@ -137,7 +175,7 @@ func NewUnsignedTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
 		}
 
 		unsignedTransaction := &wire.MsgTx{
-			Version:  wire.TxVersion,
+			Version:  version,
 			TxIn:     inputs,
 			TxOut:    outputs,
 			LockTime: 0,

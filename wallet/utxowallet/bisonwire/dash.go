@@ -110,6 +110,41 @@ func deserializeDashTx(r io.Reader, tx *Tx) error {
 	return nil
 }
 
+// serializeDashTx writes tx in Dash wire format: the packed version|type
+// field, inputs, outputs and lock time, then for special transactions the
+// compactSize-prefixed extra payload. It is the inverse of deserializeDashTx.
+func serializeDashTx(w io.Writer, tx *Tx) error {
+	// Normal transactions serialize identically to a legacy Bitcoin tx.
+	if tx.Type == dashTxTypeNormal {
+		return tx.MsgTx.Serialize(w)
+	}
+
+	// Packed version|type.
+	verType := uint32(uint16(tx.MsgTx.Version)) | (uint32(tx.Type) << 16)
+	var vt [4]byte
+	binary.LittleEndian.PutUint32(vt[:], verType)
+	if _, err := w.Write(vt[:]); err != nil {
+		return err
+	}
+
+	// Inputs, outputs and lock time are exactly the standard (non-witness)
+	// serialization. Reuse btcd's encoder and drop its leading 4-byte version,
+	// which we have already written in the packed form above.
+	var inner bytes.Buffer
+	if err := tx.MsgTx.SerializeNoWitness(&inner); err != nil {
+		return err
+	}
+	if _, err := w.Write(inner.Bytes()[4:]); err != nil {
+		return err
+	}
+
+	// Trailing extra payload (compactSize length + bytes).
+	if tx.MsgTx.Version >= dashSpecialTxVersion {
+		return wire.WriteVarBytes(w, pver, tx.ExtraPayload)
+	}
+	return nil
+}
+
 // dashTxHash returns the Dash transaction id: sha256d over the full
 // serialization, including the packed version|type field and (for special
 // transactions) the trailing extra payload.
@@ -121,29 +156,10 @@ func dashTxHash(tx *Tx) chainhash.Hash {
 	}
 
 	var buf bytes.Buffer
-
-	// Packed version|type.
-	verType := uint32(uint16(tx.MsgTx.Version)) | (uint32(tx.Type) << 16)
-	var vt [4]byte
-	binary.LittleEndian.PutUint32(vt[:], verType)
-	buf.Write(vt[:])
-
-	// Inputs, outputs and lock time are exactly the standard (non-witness)
-	// serialization. Reuse btcd's encoder and drop its leading 4-byte version,
-	// which we have already written in the packed form above.
-	var inner bytes.Buffer
-	if err := tx.MsgTx.SerializeNoWitness(&inner); err != nil {
-		// SerializeNoWitness only fails on a writer error; a bytes.Buffer does
-		// not error, so this is unreachable in practice.
+	if err := serializeDashTx(&buf, tx); err != nil {
+		// A bytes.Buffer does not error, so this is unreachable in practice.
 		return tx.MsgTx.TxHash()
 	}
-	buf.Write(inner.Bytes()[4:])
-
-	// Trailing extra payload (compactSize length + bytes).
-	if err := wire.WriteVarBytes(&buf, pver, tx.ExtraPayload); err != nil {
-		return tx.MsgTx.TxHash()
-	}
-
 	return chainhash.DoubleHashH(buf.Bytes())
 }
 

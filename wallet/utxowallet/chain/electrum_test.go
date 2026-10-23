@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
@@ -697,7 +698,7 @@ func TestElectrumSendRawTransaction(t *testing.T) {
 	tx := wire.NewMsgTx(wire.TxVersion)
 	tx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Index: 0}})
 	tx.AddTxOut(&wire.TxOut{Value: 100, PkScript: []byte{0x51}})
-	hash, err := c.SendRawTransaction(tx, false)
+	hash, err := c.SendRawTransaction(&bisonwire.Tx{MsgTx: *tx, Chain: "btc"}, false)
 	if err != nil {
 		t.Fatalf("SendRawTransaction: %v", err)
 	}
@@ -707,6 +708,36 @@ func TestElectrumSendRawTransaction(t *testing.T) {
 	}
 	if len(stub.bcasted) != 1 {
 		t.Fatalf("expected 1 broadcast, got %d", len(stub.bcasted))
+	}
+}
+
+// TestElectrumSendRawTransactionDashSpecial guards that a Dash special
+// transaction is broadcast with its type and extra payload. Without them the
+// server sees a different transaction and rejects it.
+func TestElectrumSendRawTransactionDashSpecial(t *testing.T) {
+	const (
+		rawHex = "03000500010000000000000000000000000000000000000000000000000000000000000000ffffffff0403abcdefffffffff010065cd1d000000001976a914111111111111111111111111111111111111111188ac000000000a0102030405060708090a"
+		txid   = "fbf8d764239596655ac584f166bd889ef532dbd850778345a30e814d0f11980c"
+	)
+	raw, err := hex.DecodeString(rawHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := &bisonwire.Tx{Chain: "dash"}
+	if err := tx.Deserialize(bytes.NewReader(raw)); err != nil {
+		t.Fatal(err)
+	}
+
+	c, stub := makeClient(t, 1)
+	hash, err := c.SendRawTransaction(tx, false)
+	if err != nil {
+		t.Fatalf("SendRawTransaction: %v", err)
+	}
+	if hash.String() != txid {
+		t.Errorf("hash = %s, want %s", hash, txid)
+	}
+	if len(stub.bcasted) != 1 || stub.bcasted[0] != rawHex {
+		t.Fatalf("broadcast = %v, want [%s]", stub.bcasted, rawHex)
 	}
 }
 

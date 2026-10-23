@@ -167,6 +167,7 @@ func (b *neutrinoWalletBackend) walletRemovePeer(addr string) error {
 
 var _ walletBackend = (*neutrinoWalletBackend)(nil)
 var _ peerBackend = (*neutrinoWalletBackend)(nil)
+var _ chain.TxRelayChecker = (*neutrinoWalletBackend)(nil)
 
 // newNeutrinoBackend constructs a neutrino chain-service + client backend.
 func newNeutrinoBackend(np *netparams.ChainParams, dataDir string, logger backendLogger) (walletBackend, error) {

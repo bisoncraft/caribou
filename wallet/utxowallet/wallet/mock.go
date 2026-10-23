@@ -65,7 +65,7 @@ func (m *mockChainClient) BlockStamp() (*waddrmgr.BlockStamp, error) {
 	}, nil
 }
 
-func (m *mockChainClient) SendRawTransaction(*wire.MsgTx, bool) (
+func (m *mockChainClient) SendRawTransaction(*bisonwire.Tx, bool) (
 	*chainhash.Hash, error) {
 	return nil, nil
 }
