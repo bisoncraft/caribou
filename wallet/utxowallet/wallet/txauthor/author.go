@@ -107,7 +107,8 @@ func NewUnsignedTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
 // fee is sized for the version 3 serialization with the length-prefixed
 // payload, so the signed transaction pays at least feeRatePerKb. Dash wallets
 // only hold P2PKH outputs, so every input is sized as compressed P2PKH and the
-// change script must be P2PKH.
+// change script must be P2PKH. An input signed with an uncompressed key is
+// 32 bytes larger than sized, so the fee would fall short of feeRatePerKb.
 func NewUnsignedSpecialTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.Amount,
 	payloadLen int, fetchInputs InputSource, changeSource *ChangeSource) (*AuthoredTx, error) {
 
