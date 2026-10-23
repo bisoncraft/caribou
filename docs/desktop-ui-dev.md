@@ -26,7 +26,6 @@ wallet/appserver/
 ├── embed.go            # //go:embed shared/img shared/font
 ├── embed_desktop.go    # //go:embed desktop/dist (the mobile tag uses embed_mobile.go)
 ├── jsintl.go           # registers the UI locale strings with the intl package
-├── locales/            # old site UI translations, a source for importlocales only
 ├── package.json        # npm workspace root: shared, desktop, mobile
 ├── shared/             # code and assets common to the desktop and mobile UIs
 │   ├── src/            # application.ts, registry.ts, http.ts, ws.ts, intl.ts, …
@@ -165,7 +164,7 @@ if (!res.ok) {
 
 Strings live in **two** places:
 
-1. **Go-side locale maps** under `wallet/appserver/locales/<lang>.go`.
+1. **Go-side locale maps** under `wallet/appserver/desktop/locales/<lang>.go`.
    Aggregated by `wallet/appserver/desktop/locales/locales.go` and served via
    `POST /api/locale`. The SPA fetches its language at startup
    (`intl.loadLocale`) and caches it in `localStorage` keyed on
@@ -175,7 +174,7 @@ Strings live in **two** places:
 
 To add a new string:
 
-1. Add the entry to `locales/en-us.go` (and ideally to the other locales).
+1. Add the entry to `desktop/locales/en-us.go` (and ideally to the other locales).
 2. Use `t('your-slug')` from `js/intl.ts` in the component.
 3. Rebuild the SPA; the new key flows out through `/api/locale`.
 
@@ -187,7 +186,7 @@ Missing translations are logged to console; enable
 `window.dumpMissingTranslations()` to extract a list for a translator
 worksheet.
 
-`caribou` must be restarted after adding a new entry under `appserver/locales` before
+`caribou` must be restarted after adding a new entry under `desktop/locales` before
 the entry is returned via `/api/locale`.
 
 ## Styling
@@ -221,7 +220,7 @@ classes under it.
    and register the route in the `mux.Route("/api", ...)` block in
    `appserver.go`.
 5. Add CSS in `scss/components.scss`.
-6. Add user-facing strings to `wallet/appserver/locales/en-us.go` and call
+6. Add user-facing strings to `wallet/appserver/desktop/locales/en-us.go` and call
    them via `t(...)` or `tvar(...)`.
 7. Remember to rebuild web assets (`npm run watch` or `npm run build`).
 

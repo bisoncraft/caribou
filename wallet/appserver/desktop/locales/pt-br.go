@@ -5,6 +5,11 @@ package locales
 import "github.com/bisoncraft/caribou/wallet/intl"
 
 var PtBr = map[string]*intl.Translation{
-	"Swap":   {T: "Troca"},
-	"Unlock": {T: "Destrancar"},
+	"Swap":     {T: "Troca"},
+	"Unlock":   {T: "Destrancar"},
+	"Password": {T: "Senha"},
+	"Security": {T: "Segurança"},
+	"Submit":   {T: "Enviar"},
+	"price":    {T: "preço"},
+	"to":       {T: "para"},
 }

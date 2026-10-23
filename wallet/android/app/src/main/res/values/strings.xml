@@ -2,7 +2,7 @@
 <resources>
     <!-- Native shell strings for the session-lock / biometric flows. Externalized
          so they can be translated under res/values-<lang>/. The SPA has its own
-         locale system (wallet/appserver/locales). -->
+         locale system (wallet/appserver/desktop/locales). -->
 
     <!-- Lifecycle / error toasts. %1$s is the underlying error message. -->
     <string name="start_failed">Failed to start: %1$s</string>
