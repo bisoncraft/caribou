@@ -21,7 +21,8 @@ every later release inherit it.
 
 Built-in endpoint lists decay between releases. Drop dead or degraded
 entries, re-rank, add replacements, and update the verification dates in the
-list comments.
+list comments. Assets commented out of `wallet/asset/importall/` do not ship,
+so their lists can wait until they are registered again.
 
 RPC providers for account-based assets:
 
@@ -94,17 +95,17 @@ UTXO assets:
 
 Every supported language is complete when the branch is forked. The
 supported languages are the entries of `Locales` in
-`wallet/appserver/newui/locales/locales.go`. Translation takes lead time, so
+`wallet/appserver/desktop/locales/locales.go`. Translation takes lead time, so
 it starts once the release's UI strings stop changing on `master`.
 
 The desktop and mobile bundles translate through `t()`, `tvar()`, `tdom()`
 and `prep()` (`wallet/appserver/shared/src/intl.ts`). Those look keys up in
 the map that `POST /api/locale` returns, and that map holds only the keys
-defined in `EnUS` (`wallet/appserver/newui/locales/en-us.go`). A key used in
+defined in `EnUS` (`wallet/appserver/desktop/locales/en-us.go`). A key used in
 code but missing from `EnUS` displays its own text in every language, and
 `translationsreport` does not see it.
 
-- [ ] Every key passed to those functions in `newui/src`, `mobile/src` and
+- [ ] Every key passed to those functions in `desktop/src`, `mobile/src` and
       `shared/src` has an `EnUS` entry. That includes keys reached through
       label maps: theme, sidebar, activity filter and transaction type
       labels.
@@ -116,10 +117,8 @@ code but missing from `EnUS` displays its own text in every language, and
       missing. Once the `translation` fields are filled in,
       `go run ./wallet/cmd/translationsreport -format worksheets/<lang>.json`
       prints Go map entries:
-  - `js` entries go in `wallet/appserver/newui/locales/<lang>.go`.
+  - `js` entries go in `wallet/appserver/desktop/locales/<lang>.go`.
   - `notifications` entries go in `wallet/core/locale_ntfn.go`.
-  - `html` entries come from `wallet/appserver/locales/`, which only the
-    archived `site` UI uses. Skip them.
 
 ## 2. Fork the release branch
 
@@ -150,9 +149,11 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       changed, rebuild the libraries, then run
       `wallet/asset/xmr/publish-libs.sh --publish`, which creates the
       release, uploads the assets and rewrites `SHA256SUMS`; commit the
-      result. Either way, the named release must be published, not a
-      draft, on `bisoncraft/caribou`, because the snap workflow and source
-      builds download from there without credentials. A request for
+      result. The release scripts never download the libraries (see
+      [Build](#4-build)), so the installers do not depend on this release.
+      The snap workflow and source builds do: they download from the named
+      release on `bisoncraft/caribou` without credentials, so it has to be
+      published, not a draft, before the snap is built. A request for
       `https://github.com/bisoncraft/caribou/releases/download/<release>/libmonero_wallet2_api_c-linux-amd64.tar.xz`
       returns the asset once it is.
 - [ ] Translations: any string added or changed by a cherry-pick is
@@ -169,7 +170,7 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
   ```bash
   cd wallet/appserver
   npm ci && npm run build
-  git add -f newui/dist mobile/dist
+  git add -f desktop/dist mobile/dist
   git commit -m "release: build web assets for vX.Y.Z"
   ```
 
@@ -193,6 +194,18 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       SHA256SUMS` confirms it matches; otherwise
       `cd wallet/asset/xmr && ./fetch-libs.sh --all` downloads and verifies
       them.
+- [ ] Builder image: the scripts build the Docker image only when it is
+      missing or `--build-image` is passed. They do not notice a change to
+      `release/Dockerfile`, so pass `--build-image` on the first build after
+      one.
+- [ ] Release signing key: `release.sh` signs `SHA256SUMS` with
+      `GPG_KEY_ID` from `release/.env/env.sh`, or with the default secret
+      key when that is blank. With neither, it warns and writes no
+      `SHA256SUMS.asc`. The public key and its fingerprint are published
+      in the repository and on the caribou-site download page
+      (`templates/pages/download.tmpl`). `--no-sign` cannot skip only the
+      manifest signature: it is forwarded to every package script and also
+      disables Windows and macOS code signing.
 - [ ] `release/release.sh vX.Y.Z --publish` builds every platform, writes
       `SHA256SUMS` and `SHA256SUMS.asc`, and opens a draft GitHub release
       with the artifacts attached.
@@ -270,8 +283,9 @@ Not tied to the app version:
 The site lives in the `caribou-site` repository and is deployed by hand
 (`docs/deploying.md` there).
 
-- [ ] Download page: `internal/content/download_cards.go` lists the
-      artifacts this release actually publishes (names, formats, sizes).
+- [ ] Download page: `internal/content/download_cards.go` links each
+      installer the release publishes (`.deb`, `-setup.exe`, `.dmg`) under
+      its exact asset name. The page links installers only.
 - [ ] Supported assets: `internal/content/holdings.go` matches the assets
       the release ships.
 - [ ] Legal: if the release adds a third-party service (a swap venue, an
