@@ -135,6 +135,10 @@ func (c *ElectrumClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 	}
 	wg.Wait()
 
+	// Confirmed entries below the header store's start have no local
+	// header to emit against and are pre-birthday by construction; they
+	// neither count as hits nor join the emission set.
+	start := c.net.StartHeight()
 	matches := make(map[int32][]electrum.HistoryEntry)
 	for _, r := range results {
 		if r.err != nil {
@@ -148,7 +152,7 @@ func (c *ElectrumClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 		}
 		hit := false
 		for _, h := range r.hist {
-			if h.Height <= 0 || h.Height > r.entry.FromHeight {
+			if h.Height <= 0 || (h.Height > r.entry.FromHeight && h.Height >= start) {
 				hit = true
 				break
 			}
@@ -177,7 +181,7 @@ func (c *ElectrumClient) Sweep(entries []SweepEntry) (hits, failed []btcutil.Add
 			return nil, nil, err
 		}
 		for _, h := range c.committedHistory(sh) {
-			if h.Height > r.entry.FromHeight {
+			if h.Height > r.entry.FromHeight && h.Height >= start {
 				matches[h.Height] = append(matches[h.Height], h)
 			}
 		}
@@ -503,10 +507,11 @@ func (c *ElectrumClient) Rescan(startHash *chainhash.Hash,
 	}
 
 	// Resolve startHash to a height. If it's the zero hash, start from
-	// the very beginning (genesis). The height doubles as the confirmed-
-	// ingestion floor: entries below it are contractually pre-birthday and
-	// are neither walked by the rescan nor emitted by the notification path.
-	startHeight := int32(0)
+	// the first header the store holds (genesis, or the checkpoint anchor).
+	// The height doubles as the confirmed-ingestion floor: entries below it
+	// are contractually pre-birthday and are neither walked by the rescan
+	// nor emitted by the notification path.
+	startHeight := c.net.StartHeight()
 	if startHash != nil && (*startHash != chainhash.Hash{}) {
 		h, _, ok := c.net.HeaderByHash(startHash)
 		if !ok {

@@ -850,7 +850,10 @@ func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitt
 	// Partition the new entries into "ready to emit" and "deferred until
 	// the header arrives". Already-seen entries are not re-emitted but
 	// stay in the carry-forward list.
-	floor := c.rescanFloor.Load()
+	// Nothing below the header store's start exists locally, so entries
+	// confirmed there are pre-birthday by construction (the anchor sits
+	// below the birthday block) whether or not a rescan has set the floor.
+	floor := max(c.rescanFloor.Load(), c.net.StartHeight())
 	emitted = make([]electrum.HistoryEntry, 0, len(hist))
 	var toEmit []electrum.HistoryEntry
 	for _, h := range hist {
@@ -859,9 +862,9 @@ func (c *ElectrumClient) applyHistory(prev, hist []electrum.HistoryEntry) (emitt
 			continue
 		}
 		if h.Height > 0 && h.Height < floor {
-			// Confirmed below the rescan floor: contractually
-			// pre-birthday, not ours. Mark seen without emitting so
-			// the entry doesn't reappear on every future diff.
+			// Confirmed below the floor: contractually pre-birthday,
+			// not ours. Mark seen without emitting so the entry
+			// doesn't reappear on every future diff.
 			emitted = append(emitted, h)
 			continue
 		}

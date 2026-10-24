@@ -33,6 +33,10 @@ import (
 // no actual electrumx server is contacted.
 type stubNetwork struct {
 	lyingMerkle bool
+	// startHeight is the first height the stub serves headers for; lower
+	// heights exist in the stub's chain but are unknown to HeaderByHeight,
+	// modelling a checkpoint-anchored store.
+	startHeight int32
 	mu          sync.Mutex
 	headers     []*wire.BlockHeader
 	hashIdx     map[chainhash.Hash]int32
@@ -135,7 +139,7 @@ func (s *stubNetwork) Stop()                         { close(s.done) }
 func (s *stubNetwork) Done() <-chan struct{}         { return s.done }
 func (s *stubNetwork) WaitForShutdown()              { <-s.done }
 
-func (s *stubNetwork) StartHeight() int32 { return 0 }
+func (s *stubNetwork) StartHeight() int32 { return s.startHeight }
 
 func (s *stubNetwork) Tip() int32 {
 	s.mu.Lock()
@@ -153,7 +157,7 @@ func (s *stubNetwork) TargetTip() int32 { return s.Tip() }
 func (s *stubNetwork) HeaderByHeight(height int32) *wire.BlockHeader {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if height < 0 || int(height) >= len(s.headers) {
+	if height < s.startHeight || int(height) >= len(s.headers) {
 		return nil
 	}
 	// Fix the header's merkle root before handing it out, then return a
@@ -406,7 +410,15 @@ func testParams() *netparams.ChainParams {
 // channel, and the caller is responsible only for Stop()/WaitForShutdown.
 func makeClient(t *testing.T, blocks int) (*ElectrumClient, *stubNetwork) {
 	t.Helper()
+	return makeClientAt(t, blocks, 0)
+}
+
+// makeClientAt is makeClient with the stub serving headers only from
+// startHeight, as a checkpoint-anchored store does.
+func makeClientAt(t *testing.T, blocks int, startHeight int32) (*ElectrumClient, *stubNetwork) {
+	t.Helper()
 	stub := newStubNetwork()
+	stub.startHeight = startHeight
 	for i := range blocks {
 		stub.addBlock(t, time.Unix(int64(1_700_000_000+i*60), 0))
 	}
@@ -1303,6 +1315,108 @@ func TestElectrumRescanEmitsBlocksAndFilteredAndFinished(t *testing.T) {
 	if rf.Height != 4 {
 		t.Fatalf("RescanFinished.Height = %d, want 4", rf.Height)
 	}
+}
+
+// TestElectrumHistoryBelowAnchor covers history confirmed below the header
+// store's start, which a checkpoint-anchored store cannot serve a header
+// for. Such entries are pre-birthday by construction: the live path marks
+// them seen without parking them, a sweep neither fails nor emits them, and
+// a zero-hash rescan walks from the store's start rather than genesis.
+func TestElectrumHistoryBelowAnchor(t *testing.T) {
+	const start = 3
+	seed := func(t *testing.T, stub *stubNetwork, n byte) (btcutil.Address, string) {
+		t.Helper()
+		addr, sh := newSimnetAddrN(t, n)
+		below, belowHex := synthTxWithScript(t, []byte{0x51, n})
+		above, aboveHex := synthTxWithScript(t, []byte{0x52, n})
+		stub.history[sh] = []electrum.HistoryEntry{
+			{Height: start - 2, TxHash: below},
+			{Height: start + 1, TxHash: above},
+		}
+		stub.rawTxs[below] = belowHex
+		stub.rawTxs[above] = aboveHex
+		return addr, sh
+	}
+
+	t.Run("live path marks seen", func(t *testing.T) {
+		c, stub := makeClientAt(t, 6, start)
+		addr, sh := seed(t, stub, 0)
+		if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+			t.Fatalf("NotifyReceived: %v", err)
+		}
+		stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+		ntfns := drain(t, c, 1, 2*time.Second)
+		rt, ok := ntfns[0].(RelevantTx)
+		if !ok || rt.Block == nil || rt.Block.Height != start+1 {
+			t.Fatalf("ntfn = %T %+v, want RelevantTx at %d", ntfns[0], ntfns[0], start+1)
+		}
+		assertNoNtfn(t, c, 200*time.Millisecond)
+		// The below-start entry joined the baseline rather than pending,
+		// where it would otherwise wait for a header that never arrives.
+		c.addrCacheMtx.Lock()
+		pending := len(c.addrCache[sh].pending)
+		c.addrCacheMtx.Unlock()
+		if pending != 0 {
+			t.Fatalf("%d entries pending, want none", pending)
+		}
+	})
+
+	t.Run("sweep skips", func(t *testing.T) {
+		c, stub := makeClientAt(t, 6, start)
+		addr, sh := seed(t, stub, 1)
+		// A server with history reports a non-empty status; the sweep's
+		// re-subscribe commits the parked reply against it.
+		stub.subs[sh] = statusFromHistory(stub.history[sh])
+		type sweepResult struct {
+			hits, failed []btcutil.Address
+			err          error
+		}
+		done := make(chan sweepResult, 1)
+		go func() {
+			hits, failed, err := c.Sweep([]SweepEntry{{Addr: addr, FromHeight: 0}})
+			done <- sweepResult{hits, failed, err}
+		}()
+		var res sweepResult
+		select {
+		case res = <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Sweep did not return")
+		}
+		if res.err != nil {
+			t.Fatalf("Sweep: %v", res.err)
+		}
+		if len(res.hits) != 1 || len(res.failed) != 0 {
+			t.Fatalf("hits %v, failed %v; want one hit, none failed", res.hits, res.failed)
+		}
+		ntfns := drain(t, c, 1, 2*time.Second)
+		fbc, ok := ntfns[0].(FilteredBlockConnected)
+		if !ok || fbc.Block.Height != start+1 || len(fbc.RelevantTxs) != 1 {
+			t.Fatalf("ntfn = %T %+v, want FilteredBlockConnected at %d with 1 tx",
+				ntfns[0], ntfns[0], start+1)
+		}
+		assertNoNtfn(t, c, 200*time.Millisecond)
+	})
+
+	t.Run("zero-hash rescan starts at the store", func(t *testing.T) {
+		c, stub := makeClientAt(t, 6, start)
+		addr, _ := seed(t, stub, 2)
+		if err := c.Rescan(&chainhash.Hash{}, []btcutil.Address{addr}, nil); err != nil {
+			t.Fatalf("Rescan: %v", err)
+		}
+		ntfns := drain(t, c, 2, 5*time.Second)
+		fbc, ok := ntfns[0].(FilteredBlockConnected)
+		if !ok || fbc.Block.Height != start+1 || len(fbc.RelevantTxs) != 1 {
+			t.Fatalf("ntfn[0] = %T %+v, want FilteredBlockConnected at %d with 1 tx",
+				ntfns[0], ntfns[0], start+1)
+		}
+		rf, ok := ntfns[1].(*RescanFinished)
+		if !ok || rf.Height != 5 {
+			t.Fatalf("ntfn[1] = %T %+v, want RescanFinished at 5", ntfns[1], ntfns[1])
+		}
+		if got := c.rescanFloor.Load(); got != start {
+			t.Fatalf("rescanFloor = %d, want %d", got, start)
+		}
+	})
 }
 
 // ----------------------------------------------------------------------------
