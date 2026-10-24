@@ -28,6 +28,81 @@ func (s *stubProber) ProbeAddress(addr btcutil.Address) (bool, int32, error) {
 	return ok, earliest, nil
 }
 
+// anchoredProber is a stubProber on a backend whose header store starts
+// above genesis.
+type anchoredProber struct {
+	*stubProber
+	start int32
+}
+
+func (p *anchoredProber) EarliestBlockHeight() int32 { return p.start }
+
+// TestRecoverViaScanAnchoredFloor checks that a discovered address's sweep
+// floor never sits below one block under the backend's first header, even
+// when the probe reports earlier activity.
+func TestRecoverViaScanAnchoredFloor(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+
+	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		return putLastActive(tx, []byte{0x51}, 1000)
+	})
+	if err != nil {
+		t.Fatalf("putLastActive: %v", err)
+	}
+	scoped, err := w.Manager.FetchScopedKeyManager(w.ScopeForPurpose(84))
+	if err != nil {
+		t.Fatalf("FetchScopedKeyManager: %v", err)
+	}
+	below, err := w.deriveScanAddr(scoped, waddrmgr.ExternalBranch, 1)
+	if err != nil {
+		t.Fatalf("deriveScanAddr: %v", err)
+	}
+	above, err := w.deriveScanAddr(scoped, waddrmgr.ExternalBranch, 2)
+	if err != nil {
+		t.Fatalf("deriveScanAddr: %v", err)
+	}
+	const start = 800
+	prober := &anchoredProber{
+		stubProber: &stubProber{used: map[string]int32{
+			below.String(): 700,
+			above.String(): 850,
+		}},
+		start: start,
+	}
+	if err := w.recoverViaScan(prober, 5); err != nil {
+		t.Fatalf("recoverViaScan: %v", err)
+	}
+
+	p := &w.watchPol
+	p.mtx.Lock()
+	belowEntry := p.cold[below.String()]
+	aboveEntry := p.cold[above.String()]
+	p.mtx.Unlock()
+	if belowEntry == nil || aboveEntry == nil {
+		t.Fatalf("discoveries not seeded: below=%v above=%v", belowEntry, aboveEntry)
+	}
+	if belowEntry.upTo != start-1 || aboveEntry.upTo != 849 {
+		t.Fatalf("floors = %d/%d, want %d (clamped) / 849", belowEntry.upTo, aboveEntry.upTo, start-1)
+	}
+	belowPk, err := txscript.PayToAddrScript(below)
+	if err != nil {
+		t.Fatalf("PayToAddrScript: %v", err)
+	}
+	err = walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		if f, ok := seedFloor(tx, belowPk); !ok || f != start-1 {
+			t.Fatalf("persisted seed floor = %d,%v; want %d,true", f, ok, start-1)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	p.mtx.Lock()
+	p.cold = nil
+	p.mtx.Unlock()
+}
+
 // TestRecoverViaScanSeedsSweep verifies that gap-limit discovery on an aged
 // wallet seeds each discovered address into the fast sweep tier with a floor
 // below its earliest known activity. Discovered addresses have history the

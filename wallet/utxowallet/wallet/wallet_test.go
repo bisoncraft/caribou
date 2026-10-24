@@ -114,6 +114,70 @@ func TestLocateBirthdayBlock(t *testing.T) {
 	}
 }
 
+// anchoredChainConn is a mockChainConn whose header store starts above
+// genesis, as an electrum backend anchored at a checkpoint does. Heights below
+// the start are an error, as GetBlockHash returns for them.
+type anchoredChainConn struct {
+	*mockChainConn
+	start int32
+}
+
+func (c *anchoredChainConn) EarliestBlockHeight() int32 { return c.start }
+
+func (c *anchoredChainConn) GetBlockHash(height int64) (*chainhash.Hash, error) {
+	if int32(height) < c.start {
+		return nil, fmt.Errorf("height %d is below the store's start %d", height, c.start)
+	}
+	return c.mockChainConn.GetBlockHash(height)
+}
+
+// TestLocateBirthdayBlockAnchored checks the birthday search against a
+// backend that holds no headers below its anchor: the search never asks for
+// one, and a birthday older than the anchor resolves to the anchor itself.
+func TestLocateBirthdayBlockAnchored(t *testing.T) {
+	t.Parallel()
+
+	const (
+		numBlocks     = 30
+		start         = 20
+		blockInterval = birthdayBlockDelta + 1
+	)
+	genesisTimestamp := chainParams.GenesisBlock.Header.Timestamp
+	at := func(height int32) time.Time {
+		return genesisTimestamp.Add(time.Duration(height) * blockInterval)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		birthday time.Time
+		want     int32
+	}{
+		{"before the anchor", at(5), start},
+		{"just before the anchor", at(start).Add(-birthdayBlockDelta - time.Second), start},
+		{"at the anchor", at(start), start},
+		{"just above the anchor", at(start + 1), start + 1},
+		{"mid range", at(25), 25},
+		// The bisection stops one below the tip, as TestLocateBirthdayBlock
+		// expects for the unanchored search.
+		{"after the tip", at(2 * numBlocks), numBlocks - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			conn := &anchoredChainConn{
+				mockChainConn: createMockChainConn(chainParams.GenesisBlock, numBlocks, blockInterval),
+				start:         start,
+			}
+			bs, err := locateBirthdayBlock(conn, tc.birthday)
+			if err != nil {
+				t.Fatalf("locateBirthdayBlock: %v", err)
+			}
+			if bs.Height != tc.want {
+				t.Fatalf("birthday block height = %d, want %d", bs.Height, tc.want)
+			}
+		})
+	}
+}
+
 // TestLabelTransaction tests labelling of transactions with invalid labels,
 // and failure to label a transaction when it already has a label.
 func TestLabelTransaction(t *testing.T) {
