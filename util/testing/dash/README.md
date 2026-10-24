@@ -48,7 +48,23 @@ wallet.
 - `./reorg` steps through a script that causes the alpha node to undergo a
   1-deep reorganization.
 - `./new-wallet node name` creates and loads a new wallet on the given node.
+- `./mn-register [port]` registers a regular masternode funded from gamma, with
+  internal collateral (the ProRegTx creates the 1000 DASH collateral output). It
+  prints the proTxHash and the generated operator BLS key. No masternode
+  process is run, so the node is only registered on chain.
 - `./quit` shuts down the nodes and closes the tmux session.
+
+## Masternodes
+
+The harness mines past the regtest DIP-3 enforcement height (500) during setup,
+so it finishes at about height 520. DIP-3 activates at 432, but until it is
+enforced a ProRegTx must use the same key for owner and voting
+(`bad-protx-key-not-same`). With ElectrumX running, the registered masternode
+is visible through `protx.info <proTxHash>` and `protx.diff <base> <tip>`.
+
+`sendtoaddress` and other coin selection can spend an unlocked collateral
+output. If you register with external collateral (`protx register`), lock the
+output with `lockunspent false` first.
 
 ## Electrum backend
 
