@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
@@ -36,7 +37,6 @@ func TestCheckTransactionSanityCoinbaseScriptLen(t *testing.T) {
 
 	// wantCode is the rule an invalid coinbase must be rejected by, 0 for a
 	// valid one.
-	const ok = blockchain.ErrorCode(-1)
 	tests := []struct {
 		name      string
 		txType    uint16
@@ -62,10 +62,13 @@ func TestCheckTransactionSanityCoinbaseScriptLen(t *testing.T) {
 	}
 }
 
-// requireRule checks err is the rule violation code, or nil for ok (-1).
+// ok marks a case that must pass its sanity check.
+const ok = blockchain.ErrorCode(-1)
+
+// requireRule checks err is the rule violation code, or nil for ok.
 func requireRule(t *testing.T, err error, code blockchain.ErrorCode) {
 	t.Helper()
-	if code == blockchain.ErrorCode(-1) {
+	if code == ok {
 		require.NoError(t, err)
 		return
 	}
@@ -83,7 +86,6 @@ func TestCheckTransactionSanityEmptyInputsOutputs(t *testing.T) {
 
 	params := &netparams.ChainParams{MaxSatoshi: 21_000_000 * 1e8}
 
-	const ok = blockchain.ErrorCode(-1)
 	tests := []struct {
 		name               string
 		txType             uint16
@@ -149,5 +151,82 @@ func TestCheckTransactionSanityDashRegtestBlock(t *testing.T) {
 	params := &netparams.ChainParams{MaxSatoshi: 21_000_000 * 1e8}
 	for i, tx := range blk.Transactions {
 		require.NoError(t, checkTransactionSanity(tx, params), "tx %d (type %d)", i, tx.Type)
+	}
+}
+
+// TestCheckBlockSanityMaxSize checks the serialized block size limit. Dash has
+// allowed blocks of up to 2 MB since DIP-1, so a valid Dash block over
+// Bitcoin's 1 MB limit must not be treated as invalid, which would ban the peer
+// that served it.
+func TestCheckBlockSanityMaxSize(t *testing.T) {
+	t.Parallel()
+
+	params := &netparams.ChainParams{
+		PowLimit:   maxPowLimit,
+		MaxSatoshi: 21_000_000 * 1e8,
+	}
+
+	// newBlock builds a block of numPadding transactions that each hold a
+	// 100000 byte output script, after a coinbase, with a valid header.
+	newBlock := func(chain string, numPadding int) *bisonwire.Block {
+		cb := wire.NewMsgTx(3)
+		cb.AddTxIn(&wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{Index: wire.MaxPrevOutIndex},
+			SignatureScript:  []byte{0x01, 0x01},
+		})
+		cb.AddTxOut(&wire.TxOut{Value: 1, PkScript: []byte{0x51}})
+		txs := []*bisonwire.Tx{{MsgTx: *cb, Chain: chain}}
+		if chain == "dash" {
+			txs[0].Type = dashCoinbaseTxType
+		}
+
+		for i := range numPadding {
+			tx := wire.NewMsgTx(2)
+			tx.AddTxIn(&wire.TxIn{
+				PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{byte(i + 1)}, Index: 0},
+			})
+			script := bytes.Repeat([]byte{0x51}, 100_000)
+			tx.AddTxOut(&wire.TxOut{Value: 1, PkScript: script})
+			txs = append(txs, &bisonwire.Tx{MsgTx: *tx, Chain: chain})
+		}
+
+		hashes := make([]chainhash.Hash, len(txs))
+		for i, tx := range txs {
+			hashes[i] = tx.TxHash()
+		}
+		header := wire.BlockHeader{
+			Version:    1,
+			MerkleRoot: calcMerkleRootFromHashes(hashes),
+			Timestamp:  time.Unix(time.Now().Unix(), 0),
+			Bits:       blockchain.BigToCompact(maxPowLimit),
+		}
+		// The target is half of the hash space, so a nonce is found quickly.
+		for ; ; header.Nonce++ {
+			h := header.BlockHash()
+			if blockchain.HashToBig(&h).Cmp(maxPowLimit) <= 0 {
+				break
+			}
+		}
+		return &bisonwire.Block{Chain: chain, Header: header, Transactions: txs}
+	}
+
+	tests := []struct {
+		name       string
+		chain      string
+		numPadding int
+		wantCode   blockchain.ErrorCode
+	}{
+		{"dash block over 1 MB", "dash", 12, ok},
+		{"dash block over 2 MB", "dash", 21, blockchain.ErrBlockTooBig},
+		{"btc block over 1 MB", "btc", 12, blockchain.ErrBlockTooBig},
+		{"btc block under 1 MB", "btc", 5, ok},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkBlockSanity(newBlock(tc.chain, tc.numPadding), params, blockchain.NewMedianTime())
+			requireRule(t, err, tc.wantCode)
+		})
 	}
 }

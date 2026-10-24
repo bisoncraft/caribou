@@ -3076,6 +3076,20 @@ func ruleError(c blockchain.ErrorCode, desc string) blockchain.RuleError {
 	return blockchain.RuleError{ErrorCode: c, Description: desc}
 }
 
+// dashMaxBlockSize is the largest block Dash allows since DIP-1, twice
+// Bitcoin's base size limit (MAX_DIP0001_BLOCK_SIZE in Dash Core).
+const dashMaxBlockSize = 2_000_000
+
+// maxBlockSize returns the largest serialized block the chain allows. The size
+// checked excludes a Dash block's special transaction payloads, which only
+// makes the check more lenient than the network rule.
+func maxBlockSize(chain string) int {
+	if chain == "dash" {
+		return dashMaxBlockSize
+	}
+	return blockchain.MaxBlockBaseSize
+}
+
 // checkBlockSanity performs some preliminary checks on a block to ensure it is
 // sane before continuing with block processing.  These checks are context free.
 //
@@ -3111,18 +3125,19 @@ func checkBlockSanity(block *bisonwire.Block, chainParams *netparams.ChainParams
 
 	// A block must not have more transactions than the max block payload or
 	// else it is certainly over the weight limit.
-	if numTx > blockchain.MaxBlockBaseSize {
+	maxSize := maxBlockSize(block.Chain)
+	if numTx > maxSize {
 		str := fmt.Sprintf("block contains too many transactions - "+
-			"got %d, max %d", numTx, blockchain.MaxBlockBaseSize)
+			"got %d, max %d", numTx, maxSize)
 		return ruleError(blockchain.ErrBlockTooBig, str)
 	}
 
 	// A block must not exceed the maximum allowed block payload when
 	// serialized.
 	serializedSize := msgBlock.SerializeSizeStripped()
-	if serializedSize > blockchain.MaxBlockBaseSize {
+	if serializedSize > maxSize {
 		str := fmt.Sprintf("serialized block is too big - got %d, "+
-			"max %d", serializedSize, blockchain.MaxBlockBaseSize)
+			"max %d", serializedSize, maxSize)
 		return ruleError(blockchain.ErrBlockTooBig, str)
 	}
 
