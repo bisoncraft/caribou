@@ -25,6 +25,12 @@ var (
 	// peer layer relays only a plain wire.MsgTx. It says nothing about whether
 	// the transaction is valid.
 	ErrUnsupportedTx = errors.New("transaction not supported by this backend")
+
+	// ErrBeforeAnchor is returned by a backend's local header accessors for
+	// a height below the first header it holds: the checkpoint anchor on
+	// networks with checkpoints. Such a height is not an error of the
+	// chain; the backend simply does not keep it.
+	ErrBeforeAnchor = errors.New("height is below the header store's start")
 )
 
 // RPCErr represents an error returned by bitcoind's RPC server.

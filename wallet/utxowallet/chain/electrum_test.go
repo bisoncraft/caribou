@@ -1397,6 +1397,16 @@ func TestElectrumHistoryBelowAnchor(t *testing.T) {
 		assertNoNtfn(t, c, 200*time.Millisecond)
 	})
 
+	t.Run("GetBlockHash below the store", func(t *testing.T) {
+		c, _ := makeClientAt(t, 6, start)
+		if _, err := c.GetBlockHash(start - 1); !errors.Is(err, ErrBeforeAnchor) {
+			t.Fatalf("GetBlockHash(%d) err = %v, want ErrBeforeAnchor", start-1, err)
+		}
+		if _, err := c.GetBlockHash(start); err != nil {
+			t.Fatalf("GetBlockHash(%d): %v", start, err)
+		}
+	})
+
 	t.Run("zero-hash rescan starts at the store", func(t *testing.T) {
 		c, stub := makeClientAt(t, 6, start)
 		addr, _ := seed(t, stub, 2)

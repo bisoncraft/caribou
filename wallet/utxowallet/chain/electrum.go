@@ -350,6 +350,9 @@ func (c *ElectrumClient) GetBlockHash(height int64) (*chainhash.Hash, error) {
 	if height < 0 {
 		return nil, fmt.Errorf("electrum: negative height %d", height)
 	}
+	if start := c.net.StartHeight(); int32(height) < start {
+		return nil, fmt.Errorf("electrum: %w: height %d, start %d", ErrBeforeAnchor, height, start)
+	}
 	hdr := c.net.HeaderByHeight(int32(height))
 	if hdr == nil {
 		return nil, fmt.Errorf("electrum: no header at height %d", height)

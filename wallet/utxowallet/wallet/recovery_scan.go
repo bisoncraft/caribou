@@ -94,6 +94,13 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		return fmt.Errorf("recover: scope %v account properties: %w", scope, err)
 	}
 
+	// Sweep floors are exclusive and cannot usefully sit below the first
+	// header the backend holds.
+	var start int32
+	if e, ok := prober.(interface{ EarliestBlockHeight() int32 }); ok {
+		start = e.EarliestBlockHeight()
+	}
+
 	log.Infof("Recovery: gap-limit scan starting on scope %v "+
 		"(gap limit %d, external start %d, internal start %d)",
 		scope, gapLimit, branchStart[waddrmgr.ExternalBranch],
@@ -172,7 +179,7 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 				if err != nil {
 					continue
 				}
-				if err := putSeedFloor(tx, script, discoveryFloor(d.earliest)); err != nil {
+				if err := putSeedFloor(tx, script, discoveryFloor(d.earliest, start)); err != nil {
 					return err
 				}
 				seeded = append(seeded, d)
@@ -192,7 +199,7 @@ func (w *Wallet) recoverViaScan(prober chain.AddressProber, gapLimit uint32) err
 		// merges harmlessly, keeping the lower floor. Done after the commit so
 		// in-memory state never runs ahead of what a restart would reload.
 		for _, d := range seeded {
-			w.watchPol.demote(d.addr, discoveryFloor(d.earliest), false, internal)
+			w.watchPol.demote(d.addr, discoveryFloor(d.earliest, start), false, internal)
 		}
 
 		log.Infof("Recovery: scope %v branch %d used through index %d",
@@ -300,10 +307,8 @@ func (w *Wallet) deriveScanAddr(scoped *waddrmgr.ScopedKeyManager,
 }
 
 // discoveryFloor returns the sweep floor for a discovered address: one block
-// below its earliest known activity, clamped at 0.
-func discoveryFloor(earliest int32) int32 {
-	if earliest < 1 {
-		return 0
-	}
-	return earliest - 1
+// below its earliest known activity, but no lower than one block below the
+// backend's first header (start) and never negative.
+func discoveryFloor(earliest, start int32) int32 {
+	return max(earliest-1, start-1, 0)
 }

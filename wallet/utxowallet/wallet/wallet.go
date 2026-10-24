@@ -276,19 +276,21 @@ func (w *Wallet) Synchronize() error {
 }
 
 // headerAnchor returns the checkpoint the backend's header store starts at,
-// chosen from the wallet birthday and, once located, the birthday block (see
-// anchorCheckpoint).
+// chosen from the wallet birthday and, once located and verified, the
+// birthday block (see anchorCheckpoint).
 func (w *Wallet) headerAnchor() (*netparams.Checkpoint, error) {
 	var birthdayBlock *waddrmgr.BlockStamp
 	err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
-		bs, _, err := w.Manager.BirthdayBlock(tx.ReadBucket(waddrmgrNamespaceKey))
+		bs, verified, err := w.Manager.BirthdayBlock(tx.ReadBucket(waddrmgrNamespaceKey))
 		if waddrmgr.IsError(err, waddrmgr.ErrBirthdayBlockNotSet) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		birthdayBlock = &bs
+		if verified {
+			birthdayBlock = &bs
+		}
 		return nil
 	})
 	if err != nil {

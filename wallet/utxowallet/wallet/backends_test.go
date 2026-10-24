@@ -4,6 +4,7 @@
 package wallet
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/waddrmgr"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -35,6 +38,10 @@ func TestAnchorCheckpoint(t *testing.T) {
 	block := func(height int32) *waddrmgr.BlockStamp {
 		return &waddrmgr.BlockStamp{Height: height}
 	}
+	// A record added with only its height and hash, before the generator
+	// filled in the header literal.
+	headerless := quarterlyCheckpoints(first)
+	headerless.Checkpoints[2].Header = nil
 
 	tests := []struct {
 		name          string
@@ -52,6 +59,7 @@ func TestAnchorCheckpoint(t *testing.T) {
 		{"birthday block caps the anchor", params, afterNewest, block(2999), 2000},
 		{"time test applies under the birthday block", params, second.Add(time.Hour), block(5000), 1000},
 		{"birthday block below the first checkpoint", params, afterNewest, block(500), 1000},
+		{"header-less record does not qualify", headerless, afterNewest, nil, 2000},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,7 +76,7 @@ func TestAnchorCheckpoint(t *testing.T) {
 }
 
 // TestHeaderAnchor checks that the wallet caps the anchor at its stored
-// birthday block once one is set.
+// birthday block once one is set and verified.
 func TestHeaderAnchor(t *testing.T) {
 	w, cleanup := testWallet(t)
 	defer cleanup()
@@ -84,19 +92,92 @@ func TestHeaderAnchor(t *testing.T) {
 		t.Fatalf("anchor without a birthday block = %v, want height 3000", anchor)
 	}
 
-	err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
-		ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
-		return w.Manager.SetBirthdayBlock(ns, waddrmgr.BlockStamp{Height: 2500}, true)
-	})
-	if err != nil {
-		t.Fatalf("SetBirthdayBlock: %v", err)
+	setBlock := func(verified bool) {
+		t.Helper()
+		err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+			ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
+			return w.Manager.SetBirthdayBlock(ns, waddrmgr.BlockStamp{Height: 2500}, verified)
+		})
+		if err != nil {
+			t.Fatalf("SetBirthdayBlock: %v", err)
+		}
 	}
+	// An unverified block is a guess awaiting relocation; it does not cap.
+	setBlock(false)
+	anchor, err = w.headerAnchor()
+	if err != nil {
+		t.Fatalf("headerAnchor: %v", err)
+	}
+	if anchor == nil || anchor.Height != 3000 {
+		t.Fatalf("anchor under unverified birthday block 2500 = %v, want height 3000", anchor)
+	}
+	setBlock(true)
 	anchor, err = w.headerAnchor()
 	if err != nil {
 		t.Fatalf("headerAnchor: %v", err)
 	}
 	if anchor == nil || anchor.Height != 2000 {
 		t.Fatalf("anchor under birthday block 2500 = %v, want height 2000", anchor)
+	}
+}
+
+func TestDiscoveryFloor(t *testing.T) {
+	for _, tc := range []struct{ earliest, start, want int32 }{
+		{0, 0, 0},
+		{1, 0, 0},
+		{10, 0, 9},
+		{10, 5, 9},
+		{10, 10, 9},
+		{10, 50, 49},
+		{0, 50, 49},
+	} {
+		if got := discoveryFloor(tc.earliest, tc.start); got != tc.want {
+			t.Errorf("discoveryFloor(%d, %d) = %d, want %d", tc.earliest, tc.start, got, tc.want)
+		}
+	}
+}
+
+// anchoredMockClient is the mock chain client with a header store that
+// starts above genesis.
+type anchoredMockClient struct {
+	mockChainClient
+	start int32
+}
+
+func (c *anchoredMockClient) EarliestBlockHeight() int32 { return c.start }
+
+// TestImportPrivateKeyBeforeAnchor checks that a key whose starting block is
+// below the backend's first header is refused.
+func TestImportPrivateKeyBeforeAnchor(t *testing.T) {
+	w, cleanup := testWallet(t)
+	defer cleanup()
+	w.chainClient = &anchoredMockClient{start: 100}
+	// ImportPrivateKey compares the key's block against the birthday block,
+	// which a synced wallet always has.
+	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		ns := tx.ReadWriteBucket(waddrmgrNamespaceKey)
+		return w.Manager.SetBirthdayBlock(ns, waddrmgr.BlockStamp{Height: 200}, true)
+	})
+	if err != nil {
+		t.Fatalf("SetBirthdayBlock: %v", err)
+	}
+
+	priv, err := btcec.NewPrivateKey()
+	if err != nil {
+		t.Fatalf("NewPrivateKey: %v", err)
+	}
+	wif, err := btcutil.NewWIF(priv, w.chainParams.BTCDParams(), true)
+	if err != nil {
+		t.Fatalf("NewWIF: %v", err)
+	}
+	below := &waddrmgr.BlockStamp{Height: 99, Timestamp: time.Unix(1_700_000_000, 0)}
+	_, err = w.ImportPrivateKey(w.PrimaryScope(), wif, below, false)
+	if !errors.Is(err, errImportBeforeAnchor) {
+		t.Fatalf("import below the start: err = %v, want errImportBeforeAnchor", err)
+	}
+	at := &waddrmgr.BlockStamp{Height: 100, Timestamp: time.Unix(1_700_000_000, 0)}
+	if _, err := w.ImportPrivateKey(w.PrimaryScope(), wif, at, false); err != nil {
+		t.Fatalf("import at the start: %v", err)
 	}
 }
 

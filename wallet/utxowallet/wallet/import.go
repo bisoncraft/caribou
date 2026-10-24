@@ -517,6 +517,11 @@ func (w *Wallet) ImportTaprootScript(scope waddrmgr.KeyScope,
 	return addr, nil
 }
 
+// errImportBeforeAnchor is returned when an imported key's starting block is
+// below the first header the backend holds. Importing such a key is not
+// supported yet.
+var errImportBeforeAnchor = errors.New("importing a key with history before the header store's start is not supported yet")
+
 // ImportPrivateKey imports a private key to the wallet and writes the new
 // wallet to disk.
 //
@@ -544,6 +549,16 @@ func (w *Wallet) ImportPrivateKey(scope waddrmgr.KeyScope, wif *btcutil.WIF,
 		header, err := w.chainClient.GetBlockHeader(&bs.Hash)
 		if err == nil {
 			bs.Timestamp = header.Timestamp
+		}
+	}
+
+	// A key with history below the backend's first header would need a
+	// rescan the backend cannot serve. Refuse rather than import a key
+	// whose earlier history would go unseen.
+	if e, ok := w.chainClient.(interface{ EarliestBlockHeight() int32 }); ok {
+		if start := e.EarliestBlockHeight(); bs.Height < start {
+			return "", fmt.Errorf("%w: block %d is below the header store's start %d",
+				errImportBeforeAnchor, bs.Height, start)
 		}
 	}
 
