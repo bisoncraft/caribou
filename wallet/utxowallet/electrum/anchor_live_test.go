@@ -10,16 +10,17 @@
 //
 //	go test -tags livenet -run TestAnchorHeaderSync -v ./wallet/utxowallet/electrum/
 //
-// Each case syncs headers from the network's checkpoint anchor (the header
-// store's StartHeight) to the live tip, which exercises the anchor base case
-// (first header accepted by checkpoint hash, not linkage), the retarget
-// validation across real boundaries, every later checkpoint, and VerifyAll
-// over the synced range.
+// Each case syncs headers from every checkpoint of the network in turn, used
+// as the header store's StartHeight, to the live tip. That exercises the
+// anchor base case (first header accepted by checkpoint hash, not linkage) at
+// each start a wallet can be given, the retarget validation across real
+// boundaries, every later checkpoint, and VerifyAll over the synced range.
 
 package electrum
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -68,52 +69,71 @@ func TestAnchorHeaderSync(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chainCfg, err := NewChainConfig(tc.chain, tc.params)
+			defaultCfg, err := NewChainConfig(tc.chain, tc.params)
 			if err != nil {
 				t.Fatalf("NewChainConfig: %v", err)
 			}
 			cps := tc.params.Checkpoints
-			if len(cps) == 0 || chainCfg.StartHeight != cps[0].Height {
+			if len(cps) == 0 || defaultCfg.StartHeight != cps[0].Height {
 				t.Fatalf("StartHeight %d not anchored to first checkpoint (%v)",
-					chainCfg.StartHeight, cps)
+					defaultCfg.StartHeight, cps)
 			}
-			net, err := NewNetwork(&Config{
-				Chain:         chainCfg,
-				TrustedServer: tc.server,
-				DataDir:       t.TempDir(),
-			})
-			if err != nil {
-				t.Fatalf("NewNetwork: %v", err)
+			for _, anchor := range cps {
+				t.Run(strconv.Itoa(int(anchor.Height)), func(t *testing.T) {
+					chainCfg := *defaultCfg
+					chainCfg.StartHeight = anchor.Height
+					syncFromAnchor(t, &chainCfg, tc.server)
+				})
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-			defer cancel()
-			if err := net.Start(ctx); err != nil {
-				t.Fatalf("Start: %v", err)
-			}
-			defer net.Stop()
-			for !net.Synced() {
-				select {
-				case <-ctx.Done():
-					t.Fatalf("timed out syncing from anchor (tip=%d)", net.Tip())
-				case <-time.After(500 * time.Millisecond):
-				}
-			}
-			for _, cp := range cps {
-				hdr := net.HeaderByHeight(cp.Height)
-				if hdr == nil {
-					t.Fatalf("missing header at checkpoint %d", cp.Height)
-				}
-				if h := net.Headers().headerHash(hdr); h != *cp.Hash {
-					t.Fatalf("header hash %s at %d, checkpoint %s", h, cp.Height, cp.Hash)
-				}
-			}
-			if err := net.Headers().VerifyAll(); err != nil {
-				t.Fatalf("VerifyAll: %v", err)
-			}
-			t.Logf("%s: synced %d headers from anchor %d to tip %d",
-				tc.name, net.Tip()-chainCfg.StartHeight+1, chainCfg.StartHeight, net.Tip())
 		})
 	}
+}
+
+// syncFromAnchor syncs a fresh header store from chainCfg.StartHeight to the
+// live tip and verifies every checkpoint at or above the start.
+func syncFromAnchor(t *testing.T, chainCfg *ChainConfig, server *netparams.ServerAddr) {
+	t.Helper()
+	net, err := NewNetwork(&Config{
+		Chain:         chainCfg,
+		TrustedServer: server,
+		DataDir:       t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	if err := net.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer net.Stop()
+	for !net.Synced() {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out syncing from anchor (tip=%d)", net.Tip())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if got := net.StartHeight(); got != chainCfg.StartHeight {
+		t.Fatalf("store starts at %d, want %d", got, chainCfg.StartHeight)
+	}
+	for _, cp := range chainCfg.Params.Checkpoints {
+		if cp.Height < chainCfg.StartHeight {
+			continue
+		}
+		hdr := net.HeaderByHeight(cp.Height)
+		if hdr == nil {
+			t.Fatalf("missing header at checkpoint %d", cp.Height)
+		}
+		if h := net.Headers().headerHash(hdr); h != *cp.Hash {
+			t.Fatalf("header hash %s at %d, checkpoint %s", h, cp.Height, cp.Hash)
+		}
+	}
+	if err := net.Headers().VerifyAll(); err != nil {
+		t.Fatalf("VerifyAll: %v", err)
+	}
+	t.Logf("synced %d headers from anchor %d to tip %d",
+		net.Tip()-chainCfg.StartHeight+1, chainCfg.StartHeight, net.Tip())
 }
 
 // TestLiveObservers verifies phase-2 observer connections against public

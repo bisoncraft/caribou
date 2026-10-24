@@ -21,7 +21,7 @@ func TestElectrumBackendDialsThroughProxy(t *testing.T) {
 	np.ElectrumServers = []*netparams.ServerAddr{{Proto: "tcp", Addr: server.Addr}}
 	t.Cleanup(func() { np.ElectrumServers = orig })
 
-	b, err := newBackend(BackendElectrum, np, t.TempDir(), proxy.Addr, nil)
+	b, err := newBackend(BackendElectrum, np, nil, t.TempDir(), proxy.Addr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestElectrumBackendDialsThroughProxy(t *testing.T) {
 // DNS resolver, so with a proxy configured it must refuse to start instead of
 // leaking lookups.
 func TestNeutrinoBackendRefusesProxy(t *testing.T) {
-	if _, err := newBackend(BackendNeutrino, assets.BTCParams["simnet"], t.TempDir(), "127.0.0.1:9050", nil); err == nil {
+	if _, err := newBackend(BackendNeutrino, assets.BTCParams["simnet"], nil, t.TempDir(), "127.0.0.1:9050", nil); err == nil {
 		t.Fatal("neutrino backend started with --torproxy set")
 	}
 }

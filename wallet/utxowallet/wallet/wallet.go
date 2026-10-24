@@ -245,7 +245,11 @@ func (w *Wallet) Synchronize() error {
 
 	// Build the owned backend on first call (or after a full Shutdown).
 	if w.dataDir != "" && w.backend == nil {
-		b, err := newBackend(w.backendKind, w.chainParams, w.dataDir, w.torProxy, log)
+		anchor, err := w.headerAnchor()
+		if err != nil {
+			return fmt.Errorf("wallet: choose header anchor: %w", err)
+		}
+		b, err := newBackend(w.backendKind, w.chainParams, anchor, w.dataDir, w.torProxy, log)
 		if err != nil {
 			return fmt.Errorf("wallet: build backend: %w", err)
 		}
@@ -269,6 +273,28 @@ func (w *Wallet) Synchronize() error {
 	}
 
 	return w.synchronize(chainClient)
+}
+
+// headerAnchor returns the checkpoint the backend's header store starts at,
+// chosen from the wallet birthday and, once located, the birthday block (see
+// anchorCheckpoint).
+func (w *Wallet) headerAnchor() (*netparams.Checkpoint, error) {
+	var birthdayBlock *waddrmgr.BlockStamp
+	err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		bs, _, err := w.Manager.BirthdayBlock(tx.ReadBucket(waddrmgrNamespaceKey))
+		if waddrmgr.IsError(err, waddrmgr.ErrBirthdayBlockNotSet) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		birthdayBlock = &bs
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return anchorCheckpoint(w.chainParams, w.Manager.Birthday(), birthdayBlock), nil
 }
 
 // startTimeSetter is implemented by the neutrino backend via its embedded

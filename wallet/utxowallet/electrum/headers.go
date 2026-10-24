@@ -710,8 +710,8 @@ func (h *Headers) loadFromDisk() error {
 	}
 	// The file carries no record of which height its first entry belongs
 	// to — entries are indexed as StartHeight+i on every load. If the
-	// configured anchor moved since the file was written (the checkpoint
-	// lists are refreshed at each release), that re-indexing silently
+	// configured anchor moved since the file was written (the wallet
+	// birthday selected a different checkpoint), that re-indexing silently
 	// mislabels every stored header; with a newer anchor the relabeled tip
 	// typically overshoots the real chain, so the first sync request comes
 	// back empty and stale headers are served as current. Pin the file's
