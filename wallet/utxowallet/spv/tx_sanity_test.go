@@ -1,6 +1,10 @@
 package spv
 
 import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"os"
 	"testing"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
@@ -30,33 +34,44 @@ func TestCheckTransactionSanityCoinbaseScriptLen(t *testing.T) {
 		return &bisonwire.Tx{MsgTx: *msgTx, Type: txType}
 	}
 
+	// wantCode is the rule an invalid coinbase must be rejected by, 0 for a
+	// valid one.
+	const ok = blockchain.ErrorCode(-1)
 	tests := []struct {
 		name      string
 		txType    uint16
 		scriptLen int
-		wantErr   bool
+		wantCode  blockchain.ErrorCode
 	}{
-		{"normal coinbase, one byte", 0, 1, true},
-		{"normal coinbase, min length", 0, blockchain.MinCoinbaseScriptLen, false},
-		{"normal coinbase, max length", 0, blockchain.MaxCoinbaseScriptLen, false},
-		{"normal coinbase, over max", 0, blockchain.MaxCoinbaseScriptLen + 1, true},
-		{"dash coinbase, empty script", 5, 0, true},
-		{"dash coinbase, one byte", 5, 1, false},
-		{"dash coinbase, over max", 5, blockchain.MaxCoinbaseScriptLen + 1, true},
-		{"other special type, one byte", 1, 1, true},
+		{"normal coinbase, one byte", 0, 1, blockchain.ErrBadCoinbaseScriptLen},
+		{"normal coinbase, min length", 0, blockchain.MinCoinbaseScriptLen, ok},
+		{"normal coinbase, max length", 0, blockchain.MaxCoinbaseScriptLen, ok},
+		{"normal coinbase, over max", 0, blockchain.MaxCoinbaseScriptLen + 1, blockchain.ErrBadCoinbaseScriptLen},
+		{"dash coinbase, empty script", 5, 0, blockchain.ErrBadCoinbaseScriptLen},
+		{"dash coinbase, one byte", 5, 1, ok},
+		{"dash coinbase, over max", 5, blockchain.MaxCoinbaseScriptLen + 1, blockchain.ErrBadCoinbaseScriptLen},
+		{"other special type, one byte", 1, 1, blockchain.ErrBadCoinbaseScriptLen},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			err := checkTransactionSanity(newCoinbase(tc.txType, tc.scriptLen), params)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
+			requireRule(t, err, tc.wantCode)
 		})
 	}
+}
+
+// requireRule checks err is the rule violation code, or nil for ok (-1).
+func requireRule(t *testing.T, err error, code blockchain.ErrorCode) {
+	t.Helper()
+	if code == blockchain.ErrorCode(-1) {
+		require.NoError(t, err)
+		return
+	}
+	var re blockchain.RuleError
+	require.True(t, errors.As(err, &re), "error %v is not a rule error", err)
+	require.Equal(t, code, re.ErrorCode, "rule error: %v", err)
 }
 
 // TestCheckTransactionSanityEmptyInputsOutputs checks which Dash special
@@ -68,19 +83,20 @@ func TestCheckTransactionSanityEmptyInputsOutputs(t *testing.T) {
 
 	params := &netparams.ChainParams{MaxSatoshi: 21_000_000 * 1e8}
 
+	const ok = blockchain.ErrorCode(-1)
 	tests := []struct {
 		name               string
 		txType             uint16
 		noInputs, noOutput bool
-		wantErr            bool
+		wantCode           blockchain.ErrorCode
 	}{
-		{"normal, no inputs", 0, true, false, true},
-		{"normal, no outputs", 0, false, true, true},
-		{"quorum commitment, no inputs or outputs", 6, true, true, false},
-		{"mnhf signal, no inputs or outputs", 7, true, true, false},
-		{"asset unlock, no inputs", 9, true, false, false},
-		{"asset unlock, no outputs", 9, false, true, true},
-		{"provider register, no inputs", 1, true, false, true},
+		{"normal, no inputs", 0, true, false, blockchain.ErrNoTxInputs},
+		{"normal, no outputs", 0, false, true, blockchain.ErrNoTxOutputs},
+		{"quorum commitment, no inputs or outputs", 6, true, true, ok},
+		{"mnhf signal, no inputs or outputs", 7, true, true, ok},
+		{"asset unlock, no inputs", 9, true, false, ok},
+		{"asset unlock, no outputs", 9, false, true, blockchain.ErrNoTxOutputs},
+		{"provider register, no inputs", 1, true, false, blockchain.ErrNoTxInputs},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,12 +113,41 @@ func TestCheckTransactionSanityEmptyInputsOutputs(t *testing.T) {
 			}
 			tx := &bisonwire.Tx{MsgTx: *msgTx, Type: tc.txType}
 
-			err := checkTransactionSanity(tx, params)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
+			requireRule(t, checkTransactionSanity(tx, params), tc.wantCode)
 		})
+	}
+}
+
+// TestCheckTransactionSanityDashRegtestBlock runs the transactions of a block
+// mined by Dash Core v23.1.4 on regtest after DIP-3 activated through the
+// sanity check. It is the block the SPV wallet used to reject: the coinbase is
+// a type 5 transaction with a one byte script, and five quorum commitments have
+// no inputs or outputs.
+func TestCheckTransactionSanityDashRegtestBlock(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("testdata/dash_regtest_post_dip3_block.hex")
+	require.NoError(t, err)
+	b, err := hex.DecodeString(string(bytes.TrimSpace(raw)))
+	require.NoError(t, err)
+
+	blk := &bisonwire.Block{Chain: "dash"}
+	require.NoError(t, blk.BtcDecode(bytes.NewReader(b), wire.ProtocolVersion, wire.BaseEncoding))
+
+	var sawShortCoinbase, sawQuorumCommitments int
+	for _, tx := range blk.Transactions {
+		switch {
+		case tx.Type == dashCoinbaseTxType && len(tx.TxIn[0].SignatureScript) == 1:
+			sawShortCoinbase++
+		case tx.Type == dashQuorumCommitmentTxType && len(tx.TxIn) == 0 && len(tx.TxOut) == 0:
+			sawQuorumCommitments++
+		}
+	}
+	require.Equal(t, 1, sawShortCoinbase, "vector should hold a one byte type 5 coinbase")
+	require.Equal(t, 5, sawQuorumCommitments, "vector should hold five empty quorum commitments")
+
+	params := &netparams.ChainParams{MaxSatoshi: 21_000_000 * 1e8}
+	for i, tx := range blk.Transactions {
+		require.NoError(t, checkTransactionSanity(tx, params), "tx %d (type %d)", i, tx.Type)
 	}
 }
