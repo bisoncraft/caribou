@@ -262,7 +262,7 @@ func (s *NotificationServer) notifyDetachedBlock(hash *chainhash.Hash) {
 	s.currentTxNtfn.DetachedBlocks = append(s.currentTxNtfn.DetachedBlocks, hash)
 }
 
-func (s *NotificationServer) notifyMinedTransaction(dbtx walletdb.ReadTx, details *wtxmgr.TxDetails, block *wtxmgr.BlockMeta) {
+func (s *NotificationServer) notifyMinedTransaction(dbtx walletdb.ReadWriteTx, details *wtxmgr.TxDetails, block *wtxmgr.BlockMeta) {
 	if s.currentTxNtfn == nil {
 		s.currentTxNtfn = &TransactionNotifications{}
 	}
@@ -278,6 +278,65 @@ func (s *NotificationServer) notifyMinedTransaction(dbtx walletdb.ReadTx, detail
 	txs := s.currentTxNtfn.AttachedBlocks[n-1].Transactions
 	s.currentTxNtfn.AttachedBlocks[n-1].Transactions =
 		append(txs, makeTxSummary(dbtx, s.wallet, details)) // nolint:gocritic
+
+	// A block's relevant transactions normally arrive before the block is
+	// connected, and the notification waits for notifyAttachedBlock to flush
+	// it. A backend that reports a transaction after its block (electrum
+	// subscriptions race the header) has no later notifyAttachedBlock until
+	// the next block, so the transaction would stay unreported for that long.
+	// Deliver it now once its block is already connected. A pending detach
+	// means a reorg is being processed, which notifyAttachedBlock handles.
+	if block.Height <= s.wallet.Manager.SyncedTo().Height &&
+		len(s.currentTxNtfn.DetachedBlocks) == 0 {
+
+		s.flushMinedTransactions(dbtx)
+	}
+}
+
+// flushMinedTransactions delivers the coalesced notification for transactions
+// mined in already connected blocks. Like notifyUnminedTransaction it builds the
+// notification from the open write transaction but delivers it OnCommit, so a
+// subscriber that re-queries the wallet sees the committed transaction.
+func (s *NotificationServer) flushMinedTransactions(dbtx walletdb.ReadWriteTx) {
+	n := s.currentTxNtfn
+	s.currentTxNtfn = nil
+
+	s.mu.Lock()
+	noClients := len(s.transactions) == 0
+	s.mu.Unlock()
+	if noClients {
+		return
+	}
+
+	unminedHashes, err := s.wallet.TxStore.UnminedTxHashes(dbtx.ReadBucket(wtxmgrNamespaceKey))
+	if err != nil {
+		log.Errorf("Cannot fetch unmined transaction hashes: %v", err)
+		return
+	}
+	n.UnminedTransactionHashes = unminedHashes
+
+	bals := make(map[uint32]btcutil.Amount)
+	for _, b := range n.AttachedBlocks {
+		relevantAccounts(s.wallet, bals, b.Transactions)
+	}
+	if err := totalBalances(dbtx, s.wallet, bals); err != nil {
+		log.Errorf("Cannot determine balances for relevant accounts: %v", err)
+		return
+	}
+	n.NewBalances = flattenBalanceMap(bals)
+
+	dbtx.OnCommit(func() {
+		s.mu.Lock()
+		clients := s.transactions
+		s.mu.Unlock()
+		for _, c := range clients {
+			// See notifyUnminedTransaction on tolerating a closed channel.
+			func(c chan *TransactionNotifications) {
+				defer func() { _ = recover() }()
+				c <- n
+			}(c)
+		}
+	})
 }
 
 func (s *NotificationServer) notifyAttachedBlock(dbtx walletdb.ReadTx, block *wtxmgr.BlockMeta) {

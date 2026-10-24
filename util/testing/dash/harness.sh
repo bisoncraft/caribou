@@ -247,6 +247,34 @@ tmux kill-session
 EOF
 chmod +x "${HARNESS_DIR}/quit"
 
+# Registers a regular masternode funded from gamma. The ProRegTx creates the
+# 1000 DASH collateral output (internal collateral). The operator BLS key is
+# generated here and no masternode process is run, so the node is only
+# registered on chain. Usage: ./mn-register [core-p2p-port]
+cat > "${HARNESS_DIR}/mn-register" <<EOF
+#!/usr/bin/env bash
+set -e
+PORT=\${1:-19999}
+./gamma walletpassphrase "${WALLET_PASSWORD}" 600
+BLS=\$(./gamma bls generate)
+OPERATOR_SECRET=\$(echo "\$BLS" | sed -n 's/.*"secret": "\(.*\)".*/\1/p')
+OPERATOR_PUBLIC=\$(echo "\$BLS" | sed -n 's/.*"public": "\(.*\)".*/\1/p')
+COLLATERAL=\$(./gamma getnewaddress)
+OWNER=\$(./gamma getnewaddress)
+VOTING=\$(./gamma getnewaddress)
+PAYOUT=\$(./gamma getnewaddress)
+FUND=\$(./gamma getnewaddress)
+./gamma sendtoaddress "\$FUND" 1010 > /dev/null
+./mine-alpha 1 > /dev/null
+PROTX=\$(./gamma protx register_fund "\$COLLATERAL" "[\\"127.0.0.1:\$PORT\\"]" "\$OWNER" "\$OPERATOR_PUBLIC" "\$VOTING" 0 "\$PAYOUT" "\$FUND")
+./mine-alpha 1 > /dev/null
+echo "proTxHash=\$PROTX"
+echo "operatorSecret=\$OPERATOR_SECRET"
+echo "operatorPublic=\$OPERATOR_PUBLIC"
+echo "collateral=\$COLLATERAL owner=\$OWNER voting=\$VOTING payout=\$PAYOUT"
+EOF
+chmod +x "${HARNESS_DIR}/mn-register"
+
 ################################################################################
 # Connect alpha node to beta
 ################################################################################
@@ -344,6 +372,16 @@ do
   #
   tmux send-keys -t $SESSION:2 "./mine-beta 1${DONE}" C-m\; ${WAIT}
 done
+
+################################################################################
+# Mine past the regtest DIP-3 enforcement height (500) so masternodes can be
+# registered. DIP-3 activates at 432, but until it is enforced a ProRegTx must
+# use the same key for owner and voting ("bad-protx-key-not-same").
+################################################################################
+echo "Generating 290 blocks for alpha to pass DIP-3 enforcement"
+
+tmux send-keys -t $SESSION:2 "./alpha generatetoaddress 290 ${ALPHA_MINING_ADDR}${DONE}" C-m\; ${WAIT}
+sleep 1
 
 ################################################################################
 # Setup watch background miner -- if required
