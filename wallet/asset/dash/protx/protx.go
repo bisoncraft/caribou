@@ -68,16 +68,58 @@ var (
 	// ErrTrailingData is returned when a payload has bytes after the last
 	// field.
 	ErrTrailingData = errors.New("trailing data after provider tx payload")
+	// ErrNonCanonicalAddress is returned for a service address Dash would
+	// store differently from how it was written, see Service.
+	ErrNonCanonicalAddress = errors.New("non canonical service address")
+)
+
+var (
+	ipv4MappedPrefix = [12]byte{10: 0xff, 11: 0xff}
+	torV2Prefix      = [6]byte{0xfd, 0x87, 0xd8, 0x7e, 0xeb, 0x43}
+	internalPrefix   = [6]byte{0xfd, 0x6b, 0x88, 0xc0, 0x87, 0x24}
 )
 
 // Service is a masternode's core P2P address in Dash's CService encoding: a
 // 16 byte IPv6 (IPv4 addresses are v4-mapped) and a big endian port.
+//
+// Dash does not hash the address it received but a copy it parsed and wrote
+// back, and it stores an address that is not valid as the zero address with
+// port 0. A payload hash computed from the bytes of such an address would not
+// match Dash's, so only addresses that survive that round trip are accepted:
+// valid ones, and the zero address with port 0, which is how an empty address
+// is written.
 type Service struct {
 	IP   [16]byte
 	Port uint16
 }
 
+// usable mirrors CNetAddr::IsValid in Dash Core for the 16 byte encoding.
+func (s *Service) usable() bool {
+	ip := s.IP[:]
+	switch {
+	case bytes.Equal(ip, make([]byte, len(ip))):
+		return false
+	case bytes.HasPrefix(ip, ipv4MappedPrefix[:]):
+		v4 := ip[len(ipv4MappedPrefix):]
+		return !bytes.Equal(v4, []byte{0, 0, 0, 0}) &&
+			!bytes.Equal(v4, []byte{0xff, 0xff, 0xff, 0xff})
+	case bytes.HasPrefix(ip, torV2Prefix[:]), bytes.HasPrefix(ip, internalPrefix[:]):
+		return false
+	case bytes.HasPrefix(ip, []byte{0x20, 0x01, 0x0d, 0xb8}):
+		// Documentation prefix, 2001:db8::/32.
+		return false
+	}
+	return true
+}
+
+func (s *Service) canonical() bool {
+	return s.usable() || *s == Service{}
+}
+
 func (s *Service) serialize(w io.Writer) error {
+	if !s.canonical() {
+		return ErrNonCanonicalAddress
+	}
 	if _, err := w.Write(s.IP[:]); err != nil {
 		return err
 	}
@@ -96,6 +138,9 @@ func (s *Service) deserialize(r io.Reader) error {
 		return err
 	}
 	s.Port = binary.BigEndian.Uint16(port[:])
+	if !s.canonical() {
+		return ErrNonCanonicalAddress
+	}
 	return nil
 }
 
@@ -503,6 +548,10 @@ type payloadDecoder interface {
 func Parse(payload []byte, p payloadDecoder) error {
 	r := bytes.NewReader(payload)
 	if err := p.Deserialize(r); err != nil {
+		// A payload that ends early is malformed, not finished.
+		if errors.Is(err, io.EOF) {
+			return io.ErrUnexpectedEOF
+		}
 		return err
 	}
 	if r.Len() != 0 {

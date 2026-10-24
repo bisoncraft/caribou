@@ -471,7 +471,7 @@ func TestParseRejects(t *testing.T) {
 			{"extended address version", withVersion(3), ErrUnsupportedVersion},
 			{"trailing byte", append(bytes.Clone(good), 0), ErrTrailingData},
 			{"truncated", good[:len(good)-10], io.ErrUnexpectedEOF},
-			{"empty", nil, io.EOF},
+			{"empty", nil, io.ErrUnexpectedEOF},
 		}
 		if k.hasType {
 			evo := bytes.Clone(good)
@@ -523,12 +523,184 @@ func FuzzParse(f *testing.F) {
 func TestSerializeRejectsUnsupported(t *testing.T) {
 	t.Parallel()
 
-	var buf bytes.Buffer
-	if err := (&ProRegTx{Version: 3}).Serialize(&buf); !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("version 3: %v", err)
+	tests := []struct {
+		name    string
+		p       payload
+		wantErr error
+	}{
+		{"ProRegTx version", &ProRegTx{Version: 3}, ErrUnsupportedVersion},
+		{"ProRegTx evonode", &ProRegTx{Version: Version, MNType: 1}, ErrUnsupportedType},
+		{"ProUpServTx version", &ProUpServTx{Version: 3}, ErrUnsupportedVersion},
+		{"ProUpServTx evonode", &ProUpServTx{Version: Version, MNType: 1}, ErrUnsupportedType},
+		{"ProUpRegTx version", &ProUpRegTx{Version: 3}, ErrUnsupportedVersion},
+		{"ProUpRevTx version", &ProUpRevTx{Version: 3}, ErrUnsupportedVersion},
 	}
-	if err := (&ProRegTx{Version: Version, MNType: 1}).Serialize(&buf); !errors.Is(err, ErrUnsupportedType) {
-		t.Fatalf("evonode: %v", err)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tc.p.Serialize(io.Discard); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("error %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestParseRejectsEveryTruncation checks that no proper prefix of a payload is
+// accepted, and that none fails with a bare io.EOF, which a caller could take
+// for a clean end of input.
+func TestParseRejectsEveryTruncation(t *testing.T) {
+	t.Parallel()
+
+	for _, k := range payloadKinds {
+		_, tx := loadVector(t, k.vector)
+		for n := range len(tx.ExtraPayload) {
+			err := Parse(tx.ExtraPayload[:n], k.new())
+			if err == nil {
+				t.Fatalf("%s: accepted a payload cut to %d of %d bytes", k.name, n, len(tx.ExtraPayload))
+			}
+			if errors.Is(err, io.EOF) {
+				t.Fatalf("%s: %d of %d bytes failed with %v, want io.ErrUnexpectedEOF",
+					k.name, n, len(tx.ExtraPayload), err)
+			}
+		}
+	}
+}
+
+// TestServiceMustSurviveDashRoundTrip checks the addresses Dash stores
+// differently from how they are written. Dash hashes its parsed copy, so a
+// payload with such an address would hash differently here than it does in
+// Dash Core, and a signature over our hash would be rejected.
+func TestServiceMustSurviveDashRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	v4 := func(a, b, c, d byte) [16]byte {
+		return [16]byte{10: 0xff, 11: 0xff, 12: a, 13: b, 14: c, 15: d}
+	}
+	prefixed := func(prefix ...byte) [16]byte {
+		var ip [16]byte
+		copy(ip[:], prefix)
+		ip[15] = 1
+		return ip
+	}
+
+	tests := []struct {
+		name    string
+		ip      [16]byte
+		port    uint16
+		wantErr bool
+	}{
+		{"public ipv4", v4(8, 8, 8, 8), 9999, false},
+		{"loopback", v4(127, 0, 0, 1), 19999, false},
+		{"public ipv6", prefixed(0x20, 0x01, 0x48, 0x60), 9999, false},
+		{"empty address", [16]byte{}, 0, false},
+		{"zero port is kept", v4(8, 8, 8, 8), 0, false},
+		{"unspecified with a port", [16]byte{}, 9999, true},
+		{"ipv4 any", v4(0, 0, 0, 0), 19998, true},
+		{"ipv4 any without a port", v4(0, 0, 0, 0), 0, true},
+		{"ipv4 broadcast", v4(255, 255, 255, 255), 9999, true},
+		{"documentation prefix", prefixed(0x20, 0x01, 0x0d, 0xb8), 9999, true},
+		{"tor v2 prefix", prefixed(0xfd, 0x87, 0xd8, 0x7e, 0xeb, 0x43), 9999, true},
+		{"internal prefix", prefixed(0xfd, 0x6b, 0x88, 0xc0, 0x87, 0x24), 9999, true},
+	}
+
+	// The address sits after the version, type and mode of a ProRegTx and its
+	// 36 byte collateral, and after the version, type and hash of a ProUpServTx.
+	places := []struct {
+		name   string
+		vector string
+		offset int
+		new    func() payload
+	}{
+		{"ProRegTx", "regfund", 6 + 36, func() payload { return new(ProRegTx) }},
+		{"ProUpServTx", "updserv", 4 + 32, func() payload { return new(ProUpServTx) }},
+	}
+	for _, pl := range places {
+		_, tx := loadVector(t, pl.vector)
+		for _, tc := range tests {
+			t.Run(pl.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				b := bytes.Clone(tx.ExtraPayload)
+				copy(b[pl.offset:], tc.ip[:])
+				binary.BigEndian.PutUint16(b[pl.offset+16:], tc.port)
+
+				p := pl.new()
+				err := Parse(b, p)
+				if tc.wantErr {
+					if !errors.Is(err, ErrNonCanonicalAddress) {
+						t.Fatalf("error %v, want %v", err, ErrNonCanonicalAddress)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var buf bytes.Buffer
+				if err := p.Serialize(&buf); err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(buf.Bytes(), b) {
+					t.Fatal("accepted address does not round trip")
+				}
+			})
+		}
+	}
+
+	// Serialize refuses to write one too.
+	p := &ProRegTx{Version: Version, Service: Service{Port: 9999}}
+	if err := p.Serialize(io.Discard); !errors.Is(err, ErrNonCanonicalAddress) {
+		t.Fatalf("serialize: %v, want %v", err, ErrNonCanonicalAddress)
+	}
+	if _, err := p.PayloadHash(); !errors.Is(err, ErrNonCanonicalAddress) {
+		t.Fatalf("payload hash: %v, want %v", err, ErrNonCanonicalAddress)
+	}
+}
+
+// TestParseLimits pins the bounds on the variable length fields, which stop a
+// malformed length prefix from forcing a large allocation.
+func TestParseLimits(t *testing.T) {
+	t.Parallel()
+
+	_, tx := loadVector(t, "regfund")
+	var base ProRegTx
+	if err := Parse(tx.ExtraPayload, &base); err != nil {
+		t.Fatal(err)
+	}
+
+	parse := func(mutate func(p *ProRegTx)) error {
+		p := base
+		mutate(&p)
+		var buf bytes.Buffer
+		if err := p.Serialize(&buf); err != nil {
+			t.Fatal(err)
+		}
+		return Parse(buf.Bytes(), new(ProRegTx))
+	}
+	var msgErr *wire.MessageError
+
+	if err := parse(func(p *ProRegTx) { p.ScriptPayout = make([]byte, maxScriptSize) }); err != nil {
+		t.Errorf("script at the limit: %v", err)
+	}
+	if err := parse(func(p *ProRegTx) { p.ScriptPayout = make([]byte, maxScriptSize+1) }); !errors.As(err, &msgErr) {
+		t.Errorf("script over the limit: %v, want a wire message error", err)
+	}
+	if err := parse(func(p *ProRegTx) { p.PayloadSig = make([]byte, BLSSigSize) }); err != nil {
+		t.Errorf("signature at the limit: %v", err)
+	}
+	if err := parse(func(p *ProRegTx) { p.PayloadSig = make([]byte, BLSSigSize+1) }); !errors.As(err, &msgErr) {
+		t.Errorf("signature over the limit: %v, want a wire message error", err)
+	}
+
+	// A length prefix of 16 MB must fail before anything that size is read.
+	var head bytes.Buffer
+	if err := base.serialize(&head, false); err != nil {
+		t.Fatal(err)
+	}
+	scriptLenAt := head.Len() - chainhash.HashSize - 1 - len(base.ScriptPayout)
+	huge := append(bytes.Clone(head.Bytes()[:scriptLenAt]), 0xfe, 0xff, 0xff, 0xff, 0x00)
+	if err := Parse(huge, new(ProRegTx)); !errors.As(err, &msgErr) {
+		t.Errorf("huge script length: %v, want a wire message error", err)
 	}
 }
 
