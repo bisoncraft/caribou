@@ -286,20 +286,35 @@ func (s *NotificationServer) notifyMinedTransaction(dbtx walletdb.ReadWriteTx, d
 	// the next block, so the transaction would stay unreported for that long.
 	// Deliver it now once its block is already connected. A pending detach
 	// means a reorg is being processed, which notifyAttachedBlock handles.
-	if block.Height <= s.wallet.Manager.SyncedTo().Height &&
-		len(s.currentTxNtfn.DetachedBlocks) == 0 {
-
-		s.flushMinedTransactions(dbtx)
+	tip := s.wallet.Manager.SyncedTo()
+	if block.Height <= tip.Height && len(s.currentTxNtfn.DetachedBlocks) == 0 {
+		s.flushMinedTransactions(dbtx, tip)
 	}
 }
 
 // flushMinedTransactions delivers the coalesced notification for transactions
-// mined in already connected blocks. Like notifyUnminedTransaction it builds the
-// notification from the open write transaction but delivers it OnCommit, so a
-// subscriber that re-queries the wallet sees the committed transaction.
-func (s *NotificationServer) flushMinedTransactions(dbtx walletdb.ReadWriteTx) {
-	n := s.currentTxNtfn
+// mined in blocks the wallet has already connected, tip being the latest of
+// them. Like notifyUnminedTransaction it builds the notification from the open
+// write transaction but delivers it OnCommit, so a subscriber that re-queries
+// the wallet sees the committed transaction.
+//
+// Subscribers take the last attached block as the chain tip, so the
+// notification carries only connected blocks, with an empty entry for tip last
+// when the late block is below it. Entries above tip belong to a block that is
+// not connected yet and stay coalesced for notifyAttachedBlock to flush.
+func (s *NotificationServer) flushMinedTransactions(dbtx walletdb.ReadWriteTx, tip waddrmgr.BlockStamp) {
+	var connected, pending []Block
+	for _, b := range s.currentTxNtfn.AttachedBlocks {
+		if b.Height <= tip.Height {
+			connected = append(connected, b)
+		} else {
+			pending = append(pending, b)
+		}
+	}
 	s.currentTxNtfn = nil
+	if len(pending) > 0 {
+		s.currentTxNtfn = &TransactionNotifications{AttachedBlocks: pending}
+	}
 
 	s.mu.Lock()
 	noClients := len(s.transactions) == 0
@@ -307,6 +322,16 @@ func (s *NotificationServer) flushMinedTransactions(dbtx walletdb.ReadWriteTx) {
 	if noClients {
 		return
 	}
+
+	if connected[len(connected)-1].Height != tip.Height {
+		tipHash := tip.Hash
+		connected = append(connected, Block{
+			Hash:      &tipHash,
+			Height:    tip.Height,
+			Timestamp: tip.Timestamp.Unix(),
+		})
+	}
+	n := &TransactionNotifications{AttachedBlocks: connected}
 
 	unminedHashes, err := s.wallet.TxStore.UnminedTxHashes(dbtx.ReadBucket(wtxmgrNamespaceKey))
 	if err != nil {
