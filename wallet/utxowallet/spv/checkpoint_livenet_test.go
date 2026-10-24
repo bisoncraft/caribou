@@ -106,21 +106,40 @@ func checkpointData(ctx context.Context, t *testing.T, params *netparams.ChainPa
 	peers []*filterPeer, cp netparams.Checkpoint) (*wire.BlockHeader, chainhash.Hash) {
 
 	t.Helper()
+	// Peers are asked concurrently so a silent peer costs one timeout per
+	// checkpoint rather than one per peer in series.
+	type peerResult struct {
+		hdr    *wire.BlockHeader
+		hdrErr error
+		fh     chainhash.Hash
+		fhErr  error
+	}
+	results := make([]peerResult, len(peers))
+	var wg sync.WaitGroup
+	for i, fp := range peers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := &results[i]
+			r.hdr, r.hdrErr = fp.header(ctx, params, cp.Hash)
+			r.fh, r.fhErr = fp.filterHeader(ctx, cp)
+		}()
+	}
+	wg.Wait()
 	var hdr *wire.BlockHeader
 	votes := make(map[chainhash.Hash][]string)
-	for _, fp := range peers {
-		h, err := fp.header(ctx, params, cp.Hash)
-		if err != nil {
-			t.Logf("checkpoint %d: header from %s: %v", cp.Height, fp.Addr(), err)
+	for i, fp := range peers {
+		r := results[i]
+		if r.hdrErr != nil {
+			t.Logf("checkpoint %d: header from %s: %v", cp.Height, fp.Addr(), r.hdrErr)
 		} else if hdr == nil {
-			hdr = h
+			hdr = r.hdr
 		}
-		fh, err := fp.filterHeader(ctx, cp)
-		if err != nil {
-			t.Logf("checkpoint %d: filter header from %s: %v", cp.Height, fp.Addr(), err)
+		if r.fhErr != nil {
+			t.Logf("checkpoint %d: filter header from %s: %v", cp.Height, fp.Addr(), r.fhErr)
 			continue
 		}
-		votes[fh] = append(votes[fh], fp.Addr())
+		votes[r.fh] = append(votes[r.fh], fp.Addr())
 	}
 	if hdr == nil {
 		t.Fatalf("checkpoint %d: no peer returned a header with hash %s", cp.Height, cp.Hash)
@@ -163,11 +182,26 @@ type filterPeer struct {
 // requestTimeout bounds each request to a single peer.
 const requestTimeout = 20 * time.Second
 
+// drain discards replies left over from a request that timed out, so they
+// are not taken for the reply to the next request. Requests to one peer are
+// sequential, so anything queued is stale.
+func (fp *filterPeer) drain() {
+	for {
+		select {
+		case <-fp.headers:
+		case <-fp.cfheaders:
+		default:
+			return
+		}
+	}
+}
+
 // header fetches the header for hash. An empty block locator makes the peer
 // return the header of the stop hash alone.
 func (fp *filterPeer) header(ctx context.Context, params *netparams.ChainParams,
 	hash *chainhash.Hash) (*wire.BlockHeader, error) {
 
+	fp.drain()
 	msg := wire.NewMsgGetHeaders()
 	msg.HashStop = *hash
 	fp.QueueMessage(msg, nil)
@@ -191,6 +225,7 @@ func (fp *filterPeer) header(ctx context.Context, params *netparams.ChainParams,
 // one-block getcfheaders: the response carries the previous filter header and
 // the block's filter hash, and the filter header is their double SHA-256.
 func (fp *filterPeer) filterHeader(ctx context.Context, cp netparams.Checkpoint) (chainhash.Hash, error) {
+	fp.drain()
 	fp.QueueMessage(wire.NewMsgGetCFHeaders(wire.GCSFilterRegular, uint32(cp.Height), cp.Hash), nil)
 	select {
 	case resp := <-fp.cfheaders:
