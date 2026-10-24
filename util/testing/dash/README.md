@@ -51,7 +51,9 @@ wallet.
 - `./mn-register [port]` registers a regular masternode funded from gamma, with
   internal collateral (the ProRegTx creates the 1000 DASH collateral output). It
   prints the proTxHash and the generated operator BLS key. No masternode
-  process is run, so the node is only registered on chain.
+  process is run, so the node is only registered on chain. Dash rejects a second
+  registration on the same address, so give each one its own port (the default
+  is 19999).
 - `./quit` shuts down the nodes and closes the tmux session.
 
 ## Masternodes
