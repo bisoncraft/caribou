@@ -27,9 +27,7 @@ import (
 // newFakeEthHTTPServer starts fakeEthNode behind a real HTTP listener (a
 // loopback httptest.Server), so multirpc.go's dial machinery (connectProviders,
 // connect, reconfigure, ...) can dial it by URL exactly as it would a live
-// provider. connectProviders always tries a websocket upgrade first
-// (forceTryWS); that attempt fails against a plain HTTP server and falls back
-// to HTTP, which is what this exercises.
+// provider.
 func newFakeEthHTTPServer(t *testing.T, node *fakeEthNode) string {
 	t.Helper()
 	srv := rpc.NewServer()
@@ -52,7 +50,7 @@ func TestConnectProvidersOverHTTP(t *testing.T) {
 		chainID := big.NewInt(1337)
 		url := newFakeEthHTTPServer(t, newFakeEthNode(chainID))
 
-		providers, err := connectProviders(t.Context(), []string{url}, tLogger, chainID, util.Simnet, "", nil)
+		providers, err := connectProviders(t.Context(), []string{url}, tLogger, chainID, util.Simnet, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +70,7 @@ func TestConnectProvidersOverHTTP(t *testing.T) {
 		t.Parallel()
 		url := newFakeEthHTTPServer(t, newFakeEthNode(big.NewInt(999)))
 		// connectProviders expects chainID 1337; the node reports 999.
-		_, err := connectProviders(t.Context(), []string{url}, tLogger, big.NewInt(1337), util.Simnet, "", nil)
+		_, err := connectProviders(t.Context(), []string{url}, tLogger, big.NewInt(1337), util.Simnet, "")
 		if err == nil {
 			t.Fatal("expected an error when the only endpoint reports the wrong chain ID")
 		}
@@ -80,7 +78,7 @@ func TestConnectProvidersOverHTTP(t *testing.T) {
 
 	t.Run("unreachable endpoint alone errors", func(t *testing.T) {
 		t.Parallel()
-		_, err := connectProviders(t.Context(), []string{"http://127.0.0.1:1"}, tLogger, big.NewInt(1337), util.Simnet, "", nil)
+		_, err := connectProviders(t.Context(), []string{"http://127.0.0.1:1"}, tLogger, big.NewInt(1337), util.Simnet, "")
 		if err == nil {
 			t.Fatal("expected an error when no endpoint is reachable")
 		}
@@ -92,7 +90,7 @@ func TestConnectProvidersOverHTTP(t *testing.T) {
 		goodURL := newFakeEthHTTPServer(t, newFakeEthNode(chainID))
 
 		providers, err := connectProviders(t.Context(),
-			[]string{goodURL, "http://127.0.0.1:1"}, tLogger, chainID, util.Simnet, "", nil)
+			[]string{goodURL, "http://127.0.0.1:1"}, tLogger, chainID, util.Simnet, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +114,6 @@ func TestMultiRPCClientConnect(t *testing.T) {
 			endpoints: []string{url},
 			chainID:   chainID,
 			net:       util.Simnet,
-			newHeadCh: make(chan *types.Header, 1),
 		}
 		if err := m.connect(t.Context()); err != nil {
 			t.Fatal(err)
@@ -135,7 +132,6 @@ func TestMultiRPCClientConnect(t *testing.T) {
 			endpoints: []string{"http://127.0.0.1:1"},
 			chainID:   big.NewInt(1337),
 			net:       util.Simnet,
-			newHeadCh: make(chan *types.Header, 1),
 		}
 		if err := m.connect(t.Context()); err == nil {
 			t.Fatal("expected an error when no endpoint connects")
@@ -209,10 +205,9 @@ func TestMultiRPCClientReconfigureFull(t *testing.T) {
 		}
 
 		m := &multiRPCClient{
-			log:       tLogger,
-			chainID:   chainID,
-			net:       util.Simnet,
-			newHeadCh: make(chan *types.Header, 1),
+			log:     tLogger,
+			chainID: chainID,
+			net:     util.Simnet,
 		}
 		if err := m.reconfigure(t.Context(), []string{url}, &CompatibilityData{}, walletDir, true); err != nil {
 			t.Fatal(err)
@@ -270,10 +265,9 @@ func TestMultiRPCClientReconfigureFull(t *testing.T) {
 
 		walletDir := t.TempDir()
 		m := &multiRPCClient{
-			log:       tLogger,
-			chainID:   chainID,
-			net:       util.Simnet,
-			newHeadCh: make(chan *types.Header, 1),
+			log:     tLogger,
+			chainID: chainID,
+			net:     util.Simnet,
 		}
 		if err := m.reconfigure(t.Context(), []string{url}, compat, walletDir, true); err != nil {
 			t.Fatal(err)
@@ -313,10 +307,9 @@ func TestMultiRPCClientReconfigureFull(t *testing.T) {
 		compat := &CompatibilityData{TxHash: common.HexToHash("0xdead")}
 
 		m := &multiRPCClient{
-			log:       tLogger,
-			chainID:   chainID,
-			net:       util.Simnet,
-			newHeadCh: make(chan *types.Header, 1),
+			log:     tLogger,
+			chainID: chainID,
+			net:     util.Simnet,
 		}
 		// reconfigure's defaultProviders arg is negated before it reaches
 		// checkProvidersCompliance as allProvidersMustConnect, so false is
@@ -334,7 +327,7 @@ func TestFakeEthHTTPServerRespondsPromptly(t *testing.T) {
 	url := newFakeEthHTTPServer(t, newFakeEthNode(big.NewInt(1337)))
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	providers, err := connectProviders(ctx, []string{url}, tLogger, big.NewInt(1337), util.Simnet, "", nil)
+	providers, err := connectProviders(ctx, []string{url}, tLogger, big.NewInt(1337), util.Simnet, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -725,6 +725,27 @@ func (s *AppServer) apiGetBalance(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// apiAlertWallet signals that the user is looking at an asset, so its
+// wallet refreshes now and, if it slows its network polling while idle, polls
+// at its active rate for a while.
+func (s *AppServer) apiAlertWallet(w http.ResponseWriter, r *http.Request) {
+	form := &struct {
+		AssetID *uint32 `json:"assetID"`
+	}{}
+	if !readPost(w, r, form) {
+		return
+	}
+	if form.AssetID == nil {
+		s.writeAPIError(w, errors.New("missing asset ID"))
+		return
+	}
+	if err := s.core.AlertWallet(*form.AssetID); err != nil {
+		s.writeAPIError(w, fmt.Errorf("alert wallet error: %w", err))
+		return
+	}
+	writeJSON(w, simpleAck())
+}
+
 // apiWalletFeeState returns an on-demand fee-rate estimate for a wallet. The
 // estimate is computed when requested; it is not cached or pushed to the front
 // end, so callers should request it only when a fee figure is needed.

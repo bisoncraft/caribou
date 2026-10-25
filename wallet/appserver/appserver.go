@@ -106,6 +106,7 @@ type clientCore interface {
 	Wallets() []*core.WalletState
 	WalletState(assetID uint32) *core.WalletState
 	WalletFeeState(assetID uint32) (*core.FeeState, error)
+	AlertWallet(assetID uint32) error
 	WalletSettings(uint32) (map[string]string, error)
 	ReconfigureWallet([]byte, []byte, *core.WalletForm) error
 	ToggleWalletStatus(assetID uint32, disable bool) error
@@ -549,6 +550,7 @@ func New(cfg *Config) (*AppServer, error) {
 			apiAuth.Post("/recoverwallet", s.apiRecoverWallet)
 			apiAuth.Post("/balance", s.apiGetBalance)
 			apiAuth.Post("/feestate", s.apiWalletFeeState)
+			apiAuth.Post("/alertwallet", s.apiAlertWallet)
 			apiAuth.Post("/parseconfig", s.apiParseConfig)
 			apiAuth.Post("/reconfigurewallet", s.apiReconfig)
 			apiAuth.Post("/changeapppass", s.apiChangeAppPass)

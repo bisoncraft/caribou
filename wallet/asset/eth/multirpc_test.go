@@ -92,16 +92,29 @@ func TestProviderTipCache(t *testing.T) {
 		t.Parallel()
 		p := &provider{host: "h"}
 		p.tip.header = hdr
-		p.tip.headerStamp = time.Now().Add(-11 * time.Second) // > 10s default staleness
+		p.tip.headerStamp = time.Now().Add(-tipCacheExpiration - time.Second)
 		if got := p.cachedTip(); got != nil {
 			t.Errorf("cachedTip = %v, want nil for a stale header", got)
 		}
+	})
 
-		// With a websocket feed seen, the staleness window stretches to a
-		// minute, so an 11s-old header is still fresh.
-		p.tip.wsHeaderSeen.Store(true)
-		if got := p.cachedTip(); got != hdr {
-			t.Errorf("cachedTip = %v, want header (ws staleness window)", got)
+	t.Run("cache is no older than the active poll interval", func(t *testing.T) {
+		t.Parallel()
+		// Simnet polls every second, so a 2 s old header is too old for it,
+		// but not for mainnet.
+		for _, tt := range []struct {
+			net  util.Network
+			want *types.Header
+		}{
+			{util.Simnet, nil},
+			{util.Mainnet, hdr},
+		} {
+			p := &provider{host: "h", net: tt.net}
+			p.tip.header = hdr
+			p.tip.headerStamp = time.Now().Add(-2 * time.Second)
+			if got := p.cachedTip(); got != tt.want {
+				t.Errorf("%s cachedTip = %v, want %v", tt.net, got, tt.want)
+			}
 		}
 	})
 
@@ -153,6 +166,31 @@ func TestProviderFailed(t *testing.T) {
 			t.Error("setTip should clear the failed state")
 		}
 	})
+}
+
+func TestEndpointHost(t *testing.T) {
+	for _, tt := range []struct {
+		endpoint, want string
+		wantErr        bool
+	}{
+		{"/home/user/.ethereum/geth.ipc", providerIPC, false},
+		{"https://ethereum-rpc.publicnode.com", "ethereum-rpc.publicnode.com", false},
+		{"wss://mainnet.infura.io/ws/v3/apikey", "mainnet.infura.io", false},
+		{"http://127.0.0.1:8545", "127.0.0.1:8545", false},
+		// The subdomain is the API key.
+		{"https://apikey.rpc.rivet.cloud", providerRivetCloud, false},
+		{"ftp://example.com", "", true},
+		{"://", "", true},
+	} {
+		host, err := endpointHost(tt.endpoint)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("%s: error = %v, want error %t", tt.endpoint, err, tt.wantErr)
+			continue
+		}
+		if host != tt.want {
+			t.Errorf("%s: host = %q, want %q", tt.endpoint, host, tt.want)
+		}
+	}
 }
 
 func TestFailedProviders(t *testing.T) {

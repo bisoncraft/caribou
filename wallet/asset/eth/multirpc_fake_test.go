@@ -371,10 +371,6 @@ func newTestMultiRPC(t *testing.T) *testMultiRPC {
 		// Simnet skips bestHeader's wall-clock staleness check, which would
 		// otherwise reject this fake node's arbitrary header timestamps.
 		net: util.Simnet,
-		// No background goroutine to cancel here (unlike a provider from
-		// connectProviders), but provider.shutdown calls stop unconditionally;
-		// a nil func would panic if a test ever calls it on this fixture.
-		stop: func() {},
 	}
 
 	m := &multiRPCClient{
@@ -697,4 +693,30 @@ func TestMultiRPCClientAgainstFakeNode(t *testing.T) {
 			t.Fatalf("signData returned sig=%d bytes pub=%d bytes", len(sig2), len(pub2))
 		}
 	})
+}
+
+func TestProbeFailedProviders(t *testing.T) {
+	tm := newTestMultiRPC(t)
+	p := tm.m.providers[0]
+
+	// A provider still in quarantine is left alone.
+	p.setFailed()
+	tm.m.probeFailedProviders(t.Context())
+	if !p.failed() {
+		t.Fatal("probe returned a quarantined provider to service")
+	}
+
+	// A provider past brickedFailCount is skipped by every request, so only
+	// the probe can return it to service.
+	p.tip.Lock()
+	p.tip.failCount = brickedFailCount + 1
+	p.tip.failStamp = time.Now().Add(-failQuarantine)
+	p.tip.Unlock()
+	if !p.failed() {
+		t.Fatal("bricked provider not failed")
+	}
+	tm.m.probeFailedProviders(t.Context())
+	if p.failed() {
+		t.Fatal("probe did not return a responsive provider to service")
+	}
 }

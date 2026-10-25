@@ -55,6 +55,7 @@ type testNode struct {
 	syncProgErr       error
 	bal               *big.Int
 	balErr            error
+	l1Fee             *big.Int
 	signDataErr       error
 	privKey           *ecdsa.PrivateKey
 	baseFee           *big.Int
@@ -89,11 +90,6 @@ type testNode struct {
 	txConfsErr        map[common.Hash]error
 	txAndReceiptBlock <-chan struct{}
 	txAndReceiptHit   chan<- struct{}
-
-	filterLogsResult []types.Log
-	filterLogsErr    error
-	filterLogsCalls  int
-	filterLogsQuery  ethereum.FilterQuery
 
 	// nilReceiptNoErr makes transactionAndReceipt report neither a receipt nor
 	// an error, which a real node never does. Only a test exercising the
@@ -179,13 +175,9 @@ func (n *testNode) shutdown() {}
 func (n *testNode) bestHeader(ctx context.Context) (*types.Header, error) {
 	return n.bestHdr, n.bestHdrErr
 }
+func (n *testNode) probeFailedProviders(context.Context) {}
 func (n *testNode) addressBalance(ctx context.Context, addr common.Address) (*big.Int, error) {
 	return n.bal, n.balErr
-}
-func (n *testNode) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
-	n.filterLogsCalls++
-	n.filterLogsQuery = query
-	return n.filterLogsResult, n.filterLogsErr
 }
 func (n *testNode) unlock(pw string) error {
 	return nil
@@ -318,6 +310,9 @@ func (n *testNode) nonce(ctx context.Context) (*big.Int, *big.Int, error) {
 }
 
 func (n *testNode) l1FeeForCalldata(ctx context.Context, calldata []byte) (*big.Int, error) {
+	if n.l1Fee != nil {
+		return n.l1Fee, nil
+	}
 	return new(big.Int), nil
 }
 
@@ -1069,26 +1064,6 @@ func TestApplyTipChangeCoalescesPendingTxChecks(t *testing.T) {
 	}
 
 	awaitPendingTxChecks(t, w.baseWallet)
-}
-
-func TestSendLatestHeader(t *testing.T) {
-	t.Parallel()
-
-	hdr1 := &types.Header{Number: big.NewInt(1)}
-	hdr2 := &types.Header{Number: big.NewInt(2)}
-	ch := make(chan *types.Header, 1)
-	ch <- hdr1
-
-	sendLatestHeader(ch, hdr2)
-
-	select {
-	case hdr := <-ch:
-		if hdr != hdr2 {
-			t.Fatalf("expected latest header %v, got %v", hdr2.Number, hdr.Number)
-		}
-	default:
-		t.Fatal("expected header in channel")
-	}
 }
 
 func TestQueuePendingTxCheckNilContext(t *testing.T) {

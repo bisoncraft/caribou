@@ -114,9 +114,6 @@ func (d *Driver) Open(cfg *asset.WalletConfig, logger util.Logger, net util.Netw
 	case util.Mainnet:
 		defaultProviders = []string{
 			// Verified working (2026-09-01)
-			// 1rpc.io caps eth_getLogs at a 50-block range (below
-			// maxScanBlocks), so it's kept for general RPC coverage
-			// rather than the transfer scan.
 			"https://1rpc.io/matic",                      // 1RPC
 			"https://rpc-mainnet.matic.quiknode.pro",     // QuikNode
 			"https://gateway.tenderly.co/public/polygon", // Tenderly

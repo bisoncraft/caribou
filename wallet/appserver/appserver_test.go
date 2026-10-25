@@ -63,6 +63,8 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 
 type TCore struct {
 	clientCore           // This is here so we don't have to implement core methods we're not testing
+	alerted              []uint32
+	alertErr             error
 	fiatRates            map[uint32]float64
 	balanceErr           error
 	loginErr             error
@@ -128,6 +130,10 @@ func (c *TCore) Login(pw []byte) error                                    { retu
 func (c *TCore) IsInitialized() bool                                      { return c.isInited }
 func (c *TCore) AssetBalance(assetID uint32) (*core.WalletBalance, error) { return nil, c.balanceErr }
 func (c *TCore) WalletFeeState(assetID uint32) (*core.FeeState, error)    { return &core.FeeState{}, nil }
+func (c *TCore) AlertWallet(assetID uint32) error {
+	c.alerted = append(c.alerted, assetID)
+	return c.alertErr
+}
 func (c *TCore) WalletState(assetID uint32) *core.WalletState {
 	if c.notHas {
 		return nil
@@ -1592,5 +1598,40 @@ func TestAPIFiatRates(t *testing.T) {
 	}
 	if !resp.OK || resp.FiatRates[0] != 64000.5 || resp.FiatRates[397] != 6.25 {
 		t.Fatalf("unexpected response %q", rec.Body.String())
+	}
+}
+
+func TestAPIAlertWallet(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+
+	post := func(body string) *standardResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.apiAlertWallet(rec, httptest.NewRequest(http.MethodPost, "/api/alertwallet", strings.NewReader(body)))
+		resp := new(standardResponse)
+		if err := json.Unmarshal(rec.Body.Bytes(), resp); err != nil {
+			t.Fatalf("error decoding response %q: %v", rec.Body.String(), err)
+		}
+		return resp
+	}
+
+	if resp := post(`{}`); resp.OK {
+		t.Fatal("missing asset ID accepted")
+	}
+	if len(tCore.alerted) != 0 {
+		t.Fatalf("core called for a missing asset ID: %v", tCore.alerted)
+	}
+
+	if resp := post(`{"assetID":60}`); !resp.OK {
+		t.Fatalf("alert failed: %s", resp.Msg)
+	}
+	if len(tCore.alerted) != 1 || tCore.alerted[0] != 60 {
+		t.Fatalf("core alerts = %v, want [60]", tCore.alerted)
+	}
+
+	tCore.alertErr = errors.New("test error")
+	if resp := post(`{"assetID":60}`); resp.OK {
+		t.Fatal("core error not reported")
 	}
 }
