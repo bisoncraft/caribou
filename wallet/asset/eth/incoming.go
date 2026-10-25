@@ -225,16 +225,22 @@ func (w *assetWallet) recordIncomingTx(txHash common.Hash, fetch func() (*txdb.W
 	return nil
 }
 
-// RecordIncomingTx implements asset.IncomingTxRecorder.
+// RecordIncomingTx implements asset.IncomingTxRecorder. A recorded payout
+// is funds the user is waiting on, so it is an alert call: an idle wallet
+// polls at once and reports the new balance.
 func (w *ETHWallet) RecordIncomingTx(ctx context.Context, txID string, amtHint uint64) error {
+	w.alert()
 	txHash := common.HexToHash(txID)
 	return w.recordIncomingTx(txHash, func() (*txdb.WalletTransaction, error) {
 		return w.fetchIncomingTx(ctx, txHash, amtHint)
 	})
 }
 
-// RecordIncomingTx implements asset.IncomingTxRecorder.
+// RecordIncomingTx implements asset.IncomingTxRecorder. A recorded payout
+// is funds the user is waiting on, so it is an alert call: an idle wallet
+// polls at once and reports the new balance.
 func (w *TokenWallet) RecordIncomingTx(ctx context.Context, txID string, amtHint uint64) error {
+	w.alert()
 	txHash := common.HexToHash(txID)
 	return w.recordIncomingTx(txHash, func() (*txdb.WalletTransaction, error) {
 		return w.fetchIncomingTx(ctx, txHash, amtHint)

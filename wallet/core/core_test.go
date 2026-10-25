@@ -1209,6 +1209,57 @@ func TestAssetCounter(t *testing.T) {
 	}
 }
 
+// tAlerterWallet is a TXCWallet that implements asset.Alerter.
+type tAlerterWallet struct {
+	*TXCWallet
+	alerts int
+}
+
+func (w *tAlerterWallet) Alert() { w.alerts++ }
+
+func TestAlertWallet(t *testing.T) {
+	rig := newTestRig()
+	defer rig.shutdown()
+	tCore := rig.core
+	const assetID uint32 = 54321
+
+	if err := tCore.AlertWallet(assetID); !errorHasCode(err, missingWalletErr) {
+		t.Fatalf("wrong error for missing wallet: %v", err)
+	}
+
+	// A wallet that is not an Alerter is a no-op.
+	xcw, _ := newTWallet(assetID)
+	tCore.wallets[assetID] = xcw
+	if err := tCore.AlertWallet(assetID); err != nil {
+		t.Fatalf("error alerting a non-Alerter wallet: %v", err)
+	}
+
+	xcw, tw := newTWallet(assetID)
+	aw := &tAlerterWallet{TXCWallet: tw}
+	xcw.Wallet = aw
+	tCore.wallets[assetID] = xcw
+	if err := tCore.AlertWallet(assetID); err != nil {
+		t.Fatalf("error alerting wallet: %v", err)
+	}
+	if aw.alerts != 1 {
+		t.Fatalf("Alert called %d times, want 1", aw.alerts)
+	}
+
+	// A disconnected wallet is not alerted, and not connected either.
+	xcw.mtx.Lock()
+	xcw.hookedUp = false
+	xcw.mtx.Unlock()
+	if err := tCore.AlertWallet(assetID); err != nil {
+		t.Fatalf("error alerting a disconnected wallet: %v", err)
+	}
+	if aw.alerts != 1 {
+		t.Fatalf("disconnected wallet alerted: %d calls, want 1", aw.alerts)
+	}
+	if xcw.connected() {
+		t.Fatal("AlertWallet connected a disconnected wallet")
+	}
+}
+
 func TestWalletSettings(t *testing.T) {
 	rig := newTestRig()
 	defer rig.shutdown()

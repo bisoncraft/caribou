@@ -4741,6 +4741,25 @@ func (c *Core) ConfigureFundsMixer(pw []byte, assetID uint32, isMixerEnabled boo
 	return mw.ConfigureFundsMixer(isMixerEnabled)
 }
 
+// AlertWallet tells the asset's wallet that the user is looking at it, so a
+// wallet that polls its network less often while idle (asset.Alerter)
+// refreshes now and polls at its active rate for a while. It is a no-op for a
+// wallet that is not connected, since viewing an asset is no reason to connect
+// its wallet, and for a wallet that is not an asset.Alerter.
+func (c *Core) AlertWallet(assetID uint32) error {
+	w, found := c.wallet(assetID)
+	if !found {
+		return newError(missingWalletErr, "no wallet for %s", unbip(assetID))
+	}
+	if !w.connected() {
+		return nil
+	}
+	if alerter, ok := w.Wallet.(asset.Alerter); ok {
+		alerter.Alert()
+	}
+	return nil
+}
+
 // WalletFeeState returns an on-demand fee-rate estimate for the asset, computed
 // when called rather than cached or pushed. Front ends should call this only
 // when a fee figure is needed for display. The returned Rate may be zero when

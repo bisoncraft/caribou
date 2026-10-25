@@ -717,6 +717,10 @@ func TestCompleteBridge(t *testing.T) {
 			}
 
 			err := ethWallet.CompleteBridge(context.Background(), initiationTx, 1e9, []byte("completionData"), "mock")
+			if !ethWallet.nonceMtx.TryLock() {
+				t.Fatal("CompleteBridge left nonceMtx locked")
+			}
+			ethWallet.nonceMtx.Unlock()
 
 			if tt.expectErr {
 				if err == nil {
@@ -762,7 +766,15 @@ func TestCompleteBridge(t *testing.T) {
 				if note != nil {
 					t.Fatalf("expected no BridgeCompletedNote to be emitted, but got one: %+v", note)
 				}
+				// Core retries CompleteBridge every minute, so a call that
+				// finds no progress must not keep the wallet active.
+				if got := ethWallet.poll.interval(); got != idlePollInterval {
+					t.Fatalf("interval after a call with no progress = %v, want idle", got)
+				}
 				return
+			}
+			if got := ethWallet.poll.interval(); got != activePollInterval {
+				t.Fatalf("interval after bridge progress = %v, want active", got)
 			}
 
 			expectedInitiationTxID := initiationTx.IDs[0]

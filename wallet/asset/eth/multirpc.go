@@ -48,10 +48,9 @@ const (
 	// failQuarantine is how long we will wait after a failed request before
 	// trying a provider again.
 	failQuarantine = time.Minute
-	// headerCheckInterval is the time between header checks. Slightly less
-	// than the fail quarantine to ensure providers with old headers stay
-	// quarantined.
-	headerCheckInterval = time.Second * 50
+	// tipCacheExpiration is how long a provider's fetched header is reused
+	// before bestHeader requests a new one.
+	tipCacheExpiration = time.Second * 10
 	// receiptCacheExpiration is how long we will track a receipt after the
 	// last request. There is no persistent storage, so all receipts are cached
 	// in-memory.
@@ -74,10 +73,6 @@ var (
 	// nonce-sensitive (NS) operation, and later have another NS operation, we
 	// will use the same provider if < nonceProviderStickiness has passed.
 	nonceProviderStickiness = time.Minute
-	// By default, connectProviders will attempt to get a WebSockets endpoint
-	// when given an HTTP(S) provider URL. Can be disabled for testing
-	// ((*MRPCTest).TestRPC).
-	forceTryWS = true
 	// https://github.com/ethereum/go-ethereum/blob/16341e05636fd088aa04a27fca6dc5cda5dbab8f/eth/backend.go#L110-L113
 	// ultimately results in a minimum fee rate by the filter applied at
 	// https://github.com/ethereum/go-ethereum/blob/4ebeca19d739a243dc0549bcaf014946cde95c4f/core/tx_pool.go#L626
@@ -108,20 +103,17 @@ type provider struct {
 	host         string
 	endpointAddr string
 	ec           *combinedRPCClient
-	ws           bool
 	chainID      *big.Int
 	net          util.Network
 	tipCapV      atomic.Value // *cachedTipCap
-	stop         func()
 
 	// tip tracks the best known header as well as any error encountered
 	tip struct {
 		sync.RWMutex
-		header       *types.Header
-		headerStamp  time.Time
-		failStamp    time.Time
-		failCount    int
-		wsHeaderSeen atomic.Bool
+		header      *types.Header
+		headerStamp time.Time
+		failStamp   time.Time
+		failCount   int
 	}
 }
 
@@ -131,7 +123,6 @@ func (p *provider) String() string {
 }
 
 func (p *provider) shutdown() {
-	p.stop()
 	p.ec.Close()
 }
 
@@ -148,21 +139,20 @@ func (p *provider) setTip(header *types.Header, log util.Logger) {
 	}
 }
 
-// cachedTip retrieves the last known best header.
+// cachedTip retrieves the last known best header, or nil if it is older than
+// tipCacheExpiration or the provider is quarantined. The cache never outlives
+// the active poll interval, so that a poll is not answered with the header
+// the previous poll fetched.
 func (p *provider) cachedTip() *types.Header {
-	stale := time.Second * 10
-	if p.tip.wsHeaderSeen.Load() {
-		// We want to avoid requests, and we expect that our notification feed
-		// is working. Setting this too low would result in unnecessary requests
-		// when notifications are working right. Setting this too high will
-		// inevitably result in long tip change intervals if notifications fail.
-		stale = time.Minute
+	maxAge := tipCacheExpiration
+	if activePoll, _ := pollIntervals(p.net); activePoll < maxAge {
+		maxAge = activePoll
 	}
 
 	p.tip.RLock()
 	defer p.tip.RUnlock()
 
-	if time.Since(p.tip.failStamp) < failQuarantine || time.Since(p.tip.headerStamp) > stale {
+	if time.Since(p.tip.failStamp) < failQuarantine || time.Since(p.tip.headerStamp) > maxAge {
 		return nil
 	}
 	return p.tip.header
@@ -175,6 +165,14 @@ func (p *provider) setFailed() {
 	p.tip.failStamp = time.Now()
 	p.tip.failCount++
 	p.tip.Unlock()
+}
+
+// quarantineExpired is true for a provider that has failed, and has not
+// failed again or succeeded within failQuarantine since.
+func (p *provider) quarantineExpired() bool {
+	p.tip.RLock()
+	defer p.tip.RUnlock()
+	return p.tip.failCount > 0 && time.Since(p.tip.failStamp) >= failQuarantine
 }
 
 // failed will be true if setFailed has been called in the last failQuarantine.
@@ -247,153 +245,6 @@ func (p *provider) suggestTipCap(ctx context.Context, log util.Logger) *big.Int 
 	return tipCap
 }
 
-// refreshHeader fetches a header every headerCheckInterval. This keeps the
-// cached header up to date or fails the provider if there is a problem getting
-// the header.
-func (p *provider) refreshHeader(ctx context.Context, log util.Logger) {
-	log.Tracef("handling header refreshes for %q", p.host)
-	ticker := time.NewTicker(headerCheckInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			// Fetching the best header will check that either the
-			// provider's cached header is not too old or that a
-			// newly fetched header is not too old. If it is too
-			// old that indicates the provider is not in sync and
-			// should not be used.
-			innerCtx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
-			if _, err := p.bestHeader(innerCtx, log); err != nil {
-				log.Warnf("Problem getting best header from provider %s: %s.", p.host, err)
-			}
-			cancel()
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// subscribeHeaders starts a listening loop for header updates for a provider.
-// The Subscription and header chan are passed in, because error-free
-// instantiation of these variable is necessary to accepting that a websocket
-// connection is valid, so they are generated early in connectProviders.
-func (p *provider) subscribeHeaders(ctx context.Context, sub ethereum.Subscription, h chan *types.Header, log util.Logger, newHeadCh chan *types.Header) {
-	defer func() {
-		// If a provider does not respond to an unsubscribe request, the unsubscribe function
-		// will never return because geth does not use a timeout.
-		doneUnsubbing := make(chan struct{})
-		go func() {
-			sub.Unsubscribe()
-			close(doneUnsubbing)
-		}()
-		select {
-		case <-doneUnsubbing:
-		case <-time.After(defaultRequestTimeout):
-			log.Errorf("Timed out waiting to unsubscribe from %q", p.host)
-		}
-	}()
-
-	var lastWarning time.Time
-	newSub := func() (ethereum.Subscription, error) {
-		for {
-			var err error
-			sub, err = p.ec.SubscribeNewHead(ctx, h)
-			if err == nil {
-				return sub, nil
-			}
-			if time.Since(lastWarning) > 5*time.Minute {
-				log.Warnf("can't resubscribe to %q headers: %v", p.host, err)
-			}
-			select {
-			case <-time.After(time.Second * 30):
-				log.Debugf("attempting to resubscribe to websocket headers from %s", p.host)
-			case <-ctx.Done():
-				return nil, context.Canceled
-			}
-		}
-	}
-
-	// I thought the filter logs might catch some transactions we could cache
-	// to avoid rpc calls, but in testing, I get nothing in the channel. May
-	// revisit later.
-	// logs := make(chan types.Log, 128)
-	// newAcctSub := func(retryTimeout time.Duration) ethereum.Subscription {
-	// 	config := ethereum.FilterQuery{
-	// 		Addresses: []common.Address{addr},
-	// 	}
-
-	// 	acctSub, err := p.ec.SubscribeFilterLogs(ctx, config, logs)
-	// 	if err != nil {
-	// 		log.Errorf("failed to subscribe to filter logs: %v", err)
-	// 		return newRetrySubscription(ctx, retryTimeout)
-	// 	}
-	// 	return acctSub
-	// }
-
-	// // If we fail the first time, don't try again.
-	// acctSub := newAcctSub(time.Hour * 24 * 365)
-	// defer acctSub.Unsubscribe()
-
-	// Start the background filtering
-	log.Tracef("handling websocket subscriptions for %q", p.host)
-
-	for {
-		select {
-		case hdr := <-h:
-			p.setTip(hdr, log)
-			p.tip.wsHeaderSeen.Store(true)
-			if newHeadCh != nil {
-				sendLatestHeader(newHeadCh, hdr)
-			}
-		case err, ok := <-sub.Err():
-			if !ok {
-				// Subscription cancelled
-				return
-			}
-			if ctx.Err() != nil || err == nil { // Both conditions indicate normal close
-				return
-			}
-			log.Errorf("%q header subscription error: %v", p.host, err)
-			log.Infof("Attempting to resubscribe to %q block headers", p.host)
-			sub, err = newSub()
-			if err != nil { // context cancelled
-				return
-			}
-		// case l := <-logs:
-		// 	log.Tracef("%q log reported: %+v", p.host, l)
-		// case err, ok := <-acctSub.Err():
-		// 	if err != nil && !errors.Is(err, retryError) {
-		// 		log.Errorf("%q log subscription error: %v", p.host, err)
-		// 	}
-		// 	if ok {
-		// 		acctSub = newAcctSub(time.Minute * 5)
-		// 	}
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// sendLatestHeader keeps at most one unread header in the channel and prefers
-// the newest header over any stale unread value.
-func sendLatestHeader(ch chan *types.Header, hdr *types.Header) {
-	select {
-	case ch <- hdr:
-		return
-	default:
-	}
-
-	select {
-	case <-ch:
-	default:
-	}
-
-	select {
-	case ch <- hdr:
-	default:
-	}
-}
-
 // receiptRecord is a cached receipt and its last-access time. Receipts are
 // stored in-memory for up to receiptCacheExpiration.
 type receiptRecord struct {
@@ -430,11 +281,6 @@ type multiRPCClient struct {
 		cache     map[common.Hash]*receiptRecord
 		lastClean time.Time
 	}
-
-	// newHeadCh receives the latest observed header from a WebSocket
-	// subscription, allowing monitorBlocks to react without an additional
-	// HeaderByNumber call.
-	newHeadCh chan *types.Header
 }
 
 var _ ethFetcher = (*multiRPCClient)(nil)
@@ -463,7 +309,6 @@ func newMultiRPCClient(
 		endpoints:     endpoints,
 		finalizeConfs: finalizeConfs,
 		torProxy:      torProxy,
-		newHeadCh:     make(chan *types.Header, 1),
 	}
 	m.receipts.cache = make(map[common.Hash]*receiptRecord)
 	m.receipts.lastClean = time.Now()
@@ -471,11 +316,35 @@ func newMultiRPCClient(
 	return m, nil
 }
 
+// endpointHost validates the endpoint's scheme and returns the host that
+// identifies its provider in logs.
+func endpointHost(endpoint string) (string, error) {
+	if strings.HasSuffix(endpoint, ".ipc") {
+		return providerIPC, nil
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse url %q: %w", endpoint, err)
+	}
+	switch u.Scheme {
+	case "http", "https", "ws", "wss":
+	default:
+		return "", fmt.Errorf("unknown scheme for endpoint %q: %q, expected any of: ws(s)/http(s)",
+			endpoint, u.Scheme)
+	}
+	// A Rivet subdomain is the account's API key, which must stay out of the
+	// logs.
+	if strings.Contains(u.Host, "rpc.rivet.cloud") {
+		return providerRivetCloud, nil
+	}
+	return u.Host, nil
+}
+
 // connectProviders attempts to connect to the list of endpoints, returning a
 // list of providers that were successfully connected. It is not an error for a
 // connection to fail, unless all endpoints fail. The caller can infer failed
 // connections from the length and contents of the returned provider list.
-func connectProviders(ctx context.Context, endpoints []string, log util.Logger, chainID *big.Int, net util.Network, torProxy string, newHeadCh chan *types.Header) ([]*provider, error) {
+func connectProviders(ctx context.Context, endpoints []string, log util.Logger, chainID *big.Int, net util.Network, torProxy string) ([]*provider, error) {
 	providers := make([]*provider, 0, len(endpoints))
 	var success bool
 
@@ -497,108 +366,36 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 		// Give ourselves a limited time to resolve a connection.
 		timedCtx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
 		defer cancel()
-		// First try to get a websocket connection. WebSockets have a header
-		// feed, so are much preferred to http connections. So much so, that
-		// we'll do some path inspection here and make an attempt to find a
-		// websocket server, even if the user requested http.
-		var ec *ethclient.Client
-		var rpcClient *rpc.Client
-		var sub ethereum.Subscription
-		var wsSubscribed bool
-		var h chan *types.Header
-		host := providerIPC
-		var scratchURL *url.URL
-		isIPC := strings.HasSuffix(endpoint, ".ipc")
-		if !isIPC {
-			var err error
-			scratchURL, err = url.Parse(endpoint)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse url %q: %w", endpoint, err)
-			}
-			host = scratchURL.Host
+		host, err := endpointHost(endpoint)
+		if err != nil {
+			return nil, err
 		}
-		if forceTryWS && !isIPC {
-			wsURL := scratchURL
-			ogScheme := wsURL.Scheme
-			switch ogScheme {
-			case "https":
-				wsURL.Scheme = "wss"
-			case "http":
-				wsURL.Scheme = "ws"
-			case "ws", "wss":
-			default:
-				return nil, fmt.Errorf("unknown scheme for endpoint %q: %q, expected any of: ws(s)/http(s)",
-					endpoint, wsURL.Scheme)
-			}
-			replaced := ogScheme != wsURL.Scheme
 
-			// Handle known paths.
-			switch {
-			case strings.Contains(wsURL.String(), "infura.io/v3"):
-				if replaced {
-					wsURL.Path = "/ws" + wsURL.Path
-				}
-			case strings.Contains(wsURL.Host, "rpc.rivet.cloud"):
-				// subdomain contains API key, so can't simply replace.
-				wsURL.Host = strings.Replace(wsURL.Host, ".rpc.", ".ws.", 1)
-				host = providerRivetCloud
-			}
-
-			// Some providers appear to meter websocket connections.
-			var err error
-			startTime := time.Now()
-			if torProxy != "" {
-				rpcClient, err = rpc.DialOptions(timedCtx, wsURL.String(), rpc.WithWebsocketDialer(websocket.Dialer{
+		// The endpoint is dialed as configured. The wallet polls for new
+		// headers (see poll.go) rather than subscribing to them, so a
+		// websocket endpoint is only a transport, and an http(s) endpoint is
+		// not upgraded to one.
+		var rpcClient *rpc.Client
+		startTime := time.Now()
+		if torProxy != "" {
+			rpcClient, err = rpc.DialOptions(timedCtx, endpoint,
+				rpc.WithHTTPClient(dexnet.ProxyHTTPClient(torProxy)),
+				rpc.WithWebsocketDialer(websocket.Dialer{
 					NetDialContext:   dexnet.ProxyDialContext(torProxy),
 					HandshakeTimeout: 30 * time.Second,
 				}))
-			} else {
-				rpcClient, err = rpc.DialWebsocket(timedCtx, wsURL.String(), "")
-			}
-			log.Tracef("%s to connect to %s", time.Since(startTime), wsURL)
-			if err == nil {
-				ec = ethclient.NewClient(rpcClient)
-				h = make(chan *types.Header, 8)
-				sub, err = ec.SubscribeNewHead(ctx, h)
-				if err != nil {
-					rpcClient.Close()
-					ec = nil
-					if replaced {
-						log.Debugf("Connected to websocket, but headers subscription not supported. Trying HTTP")
-					} else {
-						log.Errorf("Connected to websocket, but headers subscription not supported. Attempting HTTP fallback")
-					}
-				} else {
-					wsSubscribed = true
-				}
-			} else {
-				if replaced {
-					log.Debugf("couldn't get a websocket connection for %q (original scheme: %q) (OK)", wsURL, ogScheme)
-				} else {
-					log.Errorf("failed to get websocket connection to %q. attempting http(s) fallback: error = %v", endpoint, err)
-				}
-			}
+		} else {
+			rpcClient, err = rpc.DialContext(timedCtx, endpoint)
 		}
-		// Weren't able to get a websocket connection. Try HTTP now. Dial does
-		// path discrimination, so I won't even try to validate the protocol.
-		if ec == nil {
-			var err error
-			startTime := time.Now()
-			if torProxy != "" {
-				rpcClient, err = rpc.DialOptions(timedCtx, endpoint, rpc.WithHTTPClient(dexnet.ProxyHTTPClient(torProxy)))
-			} else {
-				rpcClient, err = rpc.DialContext(timedCtx, endpoint)
-			}
-			log.Tracef("%s to connect to %s", time.Since(startTime), endpoint)
-			if err != nil {
-				log.Errorf("error creating http client for %q: %v", endpoint, err)
-				return nil, nil
-			}
-			ec = ethclient.NewClient(rpcClient)
+		log.Tracef("%s to connect to %s", time.Since(startTime), endpoint)
+		if err != nil {
+			log.Errorf("error creating client for %q: %v", endpoint, err)
+			return nil, nil
 		}
+		ec := ethclient.NewClient(rpcClient)
 
 		// Chain ID seems to be metered for some providers.
-		startTime := time.Now()
+		startTime = time.Now()
 		reportedChainID, err := ec.ChainID(timedCtx)
 		log.Tracef("%s to fetch chain ID for verification at %s", time.Since(startTime), host)
 		if err != nil {
@@ -625,7 +422,6 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 			chainID:      chainID,
 			host:         host,
 			endpointAddr: endpoint,
-			ws:           wsSubscribed,
 			net:          net,
 			ec: &combinedRPCClient{
 				Client: ec,
@@ -633,31 +429,6 @@ func connectProviders(ctx context.Context, endpoints []string, log util.Logger, 
 			},
 		}
 		p.setTip(hdr, log)
-
-		ctx, cancel := context.WithCancel(ctx)
-		var wg sync.WaitGroup
-
-		// Start websocket listen loop.
-		if wsSubscribed {
-			wg.Add(1)
-			go func() {
-				p.subscribeHeaders(ctx, sub, h, log, newHeadCh)
-				wg.Done()
-			}()
-		}
-		if !wsSubscribed {
-			wg.Add(1)
-			go func() {
-				p.refreshHeader(ctx, log)
-				wg.Done()
-			}()
-		}
-
-		p.stop = func() {
-			cancel()
-			wg.Wait()
-		}
-
 		return p, nil
 	}
 
@@ -710,7 +481,7 @@ out:
 }
 
 func (m *multiRPCClient) connect(ctx context.Context) (err error) {
-	providers, err := connectProviders(ctx, m.endpoints, m.log, m.chainID, m.net, m.torProxy, m.newHeadCh)
+	providers, err := connectProviders(ctx, m.endpoints, m.log, m.chainID, m.net, m.torProxy)
 	if err != nil {
 		return err
 	}
@@ -783,7 +554,7 @@ func createAndCheckProviders(ctx context.Context, walletDir string, endpoints []
 	}
 
 	if len(unknownEndpoints) > 0 {
-		providers, err := connectProviders(ctx, unknownEndpoints, log, chainID, net, torProxy, nil)
+		providers, err := connectProviders(ctx, unknownEndpoints, log, chainID, net, torProxy)
 		if err != nil {
 			return fmt.Errorf("expected to successfully connect to at least 1 of these unfamiliar providers: %s",
 				failedProviders(providers, unknownEndpoints))
@@ -850,7 +621,7 @@ func (m *multiRPCClient) reconfigure(ctx context.Context, endpoints []string, co
 		return fmt.Errorf("create and check providers: %v", err)
 	}
 
-	providers, err := connectProviders(ctx, endpoints, m.log, m.chainID, m.net, m.torProxy, m.newHeadCh)
+	providers, err := connectProviders(ctx, endpoints, m.log, m.chainID, m.net, m.torProxy)
 	if err != nil {
 		return err
 	}
@@ -1279,6 +1050,25 @@ func (m *multiRPCClient) addressBalance(ctx context.Context, addr common.Address
 	})
 }
 
+// probeFailedProviders requests a header from each provider whose quarantine
+// has expired. Success returns the provider to service, and failure starts a
+// new quarantine. Requests skip a provider with more than brickedFailCount
+// failures, so without a probe such a provider would never recover. The probe
+// also keeps a provider that has fallen behind the chain quarantined, since
+// bestHeader fails on a stale header.
+func (m *multiRPCClient) probeFailedProviders(ctx context.Context) {
+	for _, p := range m.providerList() {
+		if !p.quarantineExpired() {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
+		if _, err := p.bestHeader(ctx, m.log); err != nil && ctx.Err() == nil {
+			m.log.Debugf("Provider %s is still failing: %v", p, err)
+		}
+		cancel()
+	}
+}
+
 func (m *multiRPCClient) bestHeader(ctx context.Context) (hdr *types.Header, err error) {
 	// Check for an unexpired cached header first.
 	var bestHeader *types.Header
@@ -1290,10 +1080,7 @@ func (m *multiRPCClient) bestHeader(ctx context.Context) (hdr *types.Header, err
 		if bestHeader == nil ||
 			// In fact, we should be comparing the total terminal difficulty of
 			// the blocks. We don't have the TTD, even though it is sent by RPC,
-			// because ethclient strips it from header data and the header
-			// subscriptions may or may not send the ttd (Infura docs do not
-			// show it in message), but it doesn't come through the geth client
-			// subscription machinery regardless.
+			// because ethclient strips it from header data.
 			h.Number.Cmp(bestHeader.Number) > 0 {
 
 			bestHeader = h

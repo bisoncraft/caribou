@@ -894,6 +894,16 @@ type MinimumDepositer interface {
 	MinimumDeposit() uint64
 }
 
+// Alerter is a wallet that polls its network at a rate that depends on
+// recent use, polling rarely while idle.
+type Alerter interface {
+	// Alert signals that the user is looking at the asset. The wallet
+	// refreshes its network state immediately and polls at its active rate
+	// for a few minutes afterwards, so a caller that keeps the asset in view
+	// repeats the call at least that often. It does not block.
+	Alert()
+}
+
 // LiveReconfigurer is a wallet that can possibly handle a reconfiguration
 // without the need for re-initialization.
 type LiveReconfigurer interface {

@@ -4,7 +4,6 @@ package eth
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"math/big"
 	"math/rand"
@@ -41,13 +40,6 @@ func NewMRPCTest(
 	compatLookup func(net util.Network) (c CompatibilityData, err error),
 	chainSymbol string,
 ) *MRPCTest {
-
-	var skipWS bool
-	flag.BoolVar(&skipWS, "skipws", false, "skip attempt to automatically resolve WebSocket URL from HTTP(S) URL")
-	flag.Parse()
-	if skipWS {
-		forceTryWS = false
-	}
 
 	dextestDir := filepath.Join(os.Getenv("HOME"), "dextest")
 	return &MRPCTest{
@@ -175,27 +167,7 @@ func (m *MRPCTest) TestSimnetMultiRPCClient(t *testing.T, wsPort, httpPort strin
 	}
 }
 
-func (m *MRPCTest) TestMonitorNet(t *testing.T, net util.Network) {
-	seed, providers := m.readProviderFile(t, net)
-	dir := t.TempDir()
-
-	cl, err := m.rpcClient(dir, seed, providers, net, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(m.ctx, time.Hour)
-	defer cancel()
-
-	if err := cl.connect(ctx); err != nil {
-		t.Fatalf("Connection error: %v", err)
-	}
-	<-ctx.Done()
-}
-
 func (m *MRPCTest) TestRPC(t *testing.T, net util.Network) {
-	// To skip automatic websocket resolution, pass flag --skipws.
-
 	endpoint := os.Getenv("PROVIDER")
 	if endpoint == "" {
 		t.Fatalf("specify a provider in the PROVIDER environmental variable")
@@ -279,7 +251,7 @@ func (m *MRPCTest) TestMainnetCompliance(t *testing.T) {
 	}
 
 	log := util.StdOutLogger("T", util.LevelTrace)
-	providers, err := connectProviders(ctx, providerLookup, log, cfg.ChainID, util.Mainnet, "", nil)
+	providers, err := connectProviders(ctx, providerLookup, log, cfg.ChainID, util.Mainnet, "")
 	if err != nil {
 		t.Fatal(err)
 	}

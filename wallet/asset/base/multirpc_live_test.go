@@ -23,14 +23,6 @@ func TestMain(m *testing.M) {
 	os.Exit(doIt())
 }
 
-func TestMonitorTestnet(t *testing.T) {
-	mt.TestMonitorNet(t, util.Testnet)
-}
-
-func TestMonitorMainnet(t *testing.T) {
-	mt.TestMonitorNet(t, util.Mainnet)
-}
-
 func TestRPCMainnet(t *testing.T) {
 	mt.TestRPC(t, util.Mainnet)
 }

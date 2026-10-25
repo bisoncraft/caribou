@@ -44,14 +44,6 @@ func TestSimnetMultiRPCClient(t *testing.T) {
 	mt.TestSimnetMultiRPCClient(t, alphaWSPort, alphaHTTPPort)
 }
 
-func TestMonitorTestnet(t *testing.T) {
-	mt.TestMonitorNet(t, util.Testnet)
-}
-
-func TestMonitorMainnet(t *testing.T) {
-	mt.TestMonitorNet(t, util.Mainnet)
-}
-
 func TestRPCMainnet(t *testing.T) {
 	mt.TestRPC(t, util.Mainnet)
 }

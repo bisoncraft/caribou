@@ -120,16 +120,6 @@ const (
 	// chainOpTick is used by explicit chain wait/recheck loops that are not
 	// part of the steady-state tip monitoring path.
 	chainOpTick = time.Second
-	// wsHeadStaleness is how long the shared header feed may go quiet before
-	// monitorBlocks resumes polling the tip itself. Every provider pushes to that
-	// one channel, so this expires only when all of their subscriptions have gone
-	// silent. It has to exceed the block time of every chain the EVM wallet
-	// drives, ethereum's ~12s being the slowest, by enough margin that ordinary
-	// variance never reads as a dead feed. At 30s a genuinely dead feed costs at
-	// most half a minute of blindness, against a bestHeader call and a no-op
-	// applyTipChange behind it every single second for the whole session
-	// otherwise.
-	wsHeadStaleness = 30 * time.Second
 	// maxUnindexedTxs is the number of pending txs we will allow to be
 	// unverified on-chain before we halt broadcasting of new txs.
 	maxUnindexedTxs = 10
@@ -192,9 +182,9 @@ var (
 		{
 			Key:         providersKey,
 			DisplayName: "RPC Provider",
-			Description: "Specify one or more RPC providers. For infrastructure " +
-				"providers, prefer using wss address. Only url-based authentication " +
-				"is supported. For a local node, use the filepath to an IPC file.",
+			Description: "Specify one or more RPC providers. Only url-based " +
+				"authentication is supported. For a local node, use the filepath " +
+				"to an IPC file.",
 			Repeatable:   providerDelimiter,
 			RepeatN:      2,
 			DefaultValue: "",
@@ -377,6 +367,9 @@ type ethFetcher interface {
 	address() common.Address
 	addressBalance(ctx context.Context, addr common.Address) (*big.Int, error)
 	bestHeader(ctx context.Context) (*types.Header, error)
+	// probeFailedProviders retries providers whose failure quarantine has
+	// expired, returning the ones that respond to service.
+	probeFailedProviders(ctx context.Context)
 	chainConfig() *params.ChainConfig
 	connect(ctx context.Context) error
 	peerCount() uint32
@@ -400,9 +393,6 @@ type ethFetcher interface {
 	transactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 	transactionAndReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, *types.Transaction, error)
 	nonce(ctx context.Context) (confirmed, next *big.Int, err error)
-	// FilterLogs is used by the incoming-transfer scan (scan.go) to discover
-	// ERC20 Transfer events.
-	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error)
 	// l1FeeForCalldata estimates the L1 fee for the given calldata using
 	// the OP Stack GasPriceOracle precompile.
 	l1FeeForCalldata(ctx context.Context, calldata []byte) (*big.Int, error)
@@ -507,12 +497,19 @@ type baseWallet struct {
 		m map[uint32]*cachedBalance
 	}
 
+	// currentFees caches the network fee state by tip height. stamp bounds
+	// the cache in time as well, because the tip only advances when the
+	// wallet polls, and an idle wallet polls rarely (see poll.go).
 	currentFees struct {
 		sync.Mutex
 		blockNum uint64
+		stamp    time.Time
 		baseRate *big.Int
 		tipRate  *big.Int
 	}
+
+	// poll sets how often the wallet polls its network for a new tip.
+	poll pollSchedule
 
 	pendingTxCheckRunning atomic.Bool
 	pendingTxCheckQueued  atomic.Bool
@@ -520,6 +517,7 @@ type baseWallet struct {
 	l1Fees struct {
 		sync.Mutex
 		sendBlockNum uint64
+		sendStamp    time.Time
 		sendL1Fee    uint64 // gwei, for a simple send tx
 	}
 
@@ -527,9 +525,6 @@ type baseWallet struct {
 	// netTxDB is the master transaction database handle supplied by Core,
 	// scoped to this wallet's base-chain network. It backs txDB.
 	netTxDB txdb.NetworkTxDB
-	// metaTable holds auxiliary per-chain state, such as the incoming-transfer
-	// scan cursor (see scan.go), that isn't itself a transaction.
-	metaTable txdb.StoreTable
 
 	bridges       map[string]bridge
 	bridgeManager *bridgeManager
@@ -587,13 +582,8 @@ type ETHWallet struct {
 	// https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	tipAtConnect     int64
 	defaultProviders []string
-	pollingTip       atomic.Bool
 
 	*assetWallet
-
-	// erc20ScanBackoff cools down the incoming-transfer ERC20 scan after a
-	// failure (see scan.go).
-	erc20ScanBackoff scanBackoff
 }
 
 // TokenWallet implements some token-specific methods.
@@ -727,11 +717,8 @@ func newWallet(assetCFG *asset.WalletConfig, logger util.Logger, net util.Networ
 		defaultProviders = []string{
 			// Verified working (2026-09-01)
 			"https://ethereum-sepolia-rpc.publicnode.com", // PublicNode - no rate limits
-			// 1rpc.io caps eth_getLogs at a 50-block range (below
-			// maxScanBlocks), so it's kept for general RPC coverage
-			// rather than the transfer scan.
-			"https://1rpc.io/sepolia",                    // 1RPC - verified working
-			"https://gateway.tenderly.co/public/sepolia", // Tenderly - verified working
+			"https://1rpc.io/sepolia",                     // 1RPC - verified working
+			"https://gateway.tenderly.co/public/sepolia",  // Tenderly - verified working
 		}
 	case util.Mainnet:
 		defaultProviders = []string{
@@ -815,6 +802,7 @@ func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
 	if privKeyFn == nil {
 		privKeyFn = privKeyFromSeed
 	}
+	activePoll, idlePoll := pollIntervals(cfg.Net)
 	eth := &baseWallet{
 		privKeyFn:           privKeyFn,
 		net:                 cfg.Net,
@@ -835,6 +823,7 @@ func NewEVMWallet(cfg *EVMWalletConfig) (w *ETHWallet, err error) {
 		maxTxFeeGwei:        cfg.MaxTxFeeGwei,
 		isOpStack:           cfg.IsOpStack,
 		netTxDB:             cfg.AssetCfg.NetworkTxDB,
+		poll:                pollSchedule{active: activePoll, idle: idlePoll, wake: make(chan struct{}, 1)},
 	}
 
 	aw := &assetWallet{
@@ -922,11 +911,6 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 	w.txDB, err = NewTxDB(w.netTxDB, w.log.SubLogger("TXDB"))
 	if err != nil {
 		return nil, err
-	}
-
-	w.metaTable, err = w.netTxDB.Table(scanMetaTableName)
-	if err != nil {
-		return nil, fmt.Errorf("error opening meta table: %w", err)
 	}
 
 	pendingTxs, err := w.txDB.getPendingTxs()
@@ -1032,12 +1016,6 @@ func (w *ETHWallet) Connect(ctx context.Context) (_ *sync.WaitGroup, err error) 
 		w.monitorPeers(ctx)
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		w.scanIncomingTransfers(ctx)
-	}()
-
 	w.connected.Store(true)
 	go func() {
 		<-ctx.Done()
@@ -1088,7 +1066,8 @@ func (w *baseWallet) tipHeight() uint64 {
 
 // sendL1Fee returns the estimated L1 fee (in gwei) for a simple ETH send
 // transaction on OP Stack chains. For non-OP Stack chains, returns 0.
-// The value is cached per block.
+// The value is cached per block, for no longer than the active poll interval
+// (see currentNetworkFees).
 func (w *baseWallet) sendL1Fee() uint64 {
 	if !w.isOpStack {
 		return 0
@@ -1098,7 +1077,7 @@ func (w *baseWallet) sendL1Fee() uint64 {
 
 	// Check cache.
 	w.l1Fees.Lock()
-	if w.l1Fees.sendBlockNum == tipNum && tipNum > 0 {
+	if w.l1Fees.sendBlockNum == tipNum && tipNum > 0 && time.Since(w.l1Fees.sendStamp) < w.poll.activeInterval() {
 		fee := w.l1Fees.sendL1Fee
 		w.l1Fees.Unlock()
 		return fee
@@ -1118,6 +1097,7 @@ func (w *baseWallet) sendL1Fee() uint64 {
 	w.l1Fees.Lock()
 	w.l1Fees.sendL1Fee = fee
 	w.l1Fees.sendBlockNum = tipNum
+	w.l1Fees.sendStamp = time.Now()
 	w.l1Fees.Unlock()
 	return fee
 }
@@ -1892,6 +1872,7 @@ func (w *assetWallet) approveBridgeContract(ctx context.Context, bridge bridge, 
 // ApproveBridgeContract approves the bridge contract to spend tokens on behalf
 // of the account handled by the wallet.
 func (w *assetWallet) ApproveBridgeContract(ctx context.Context, bridgeName string, onConfirm func()) (string, error) {
+	w.alert()
 	bridge, ok := w.bridges[bridgeName]
 	if !ok {
 		return "", fmt.Errorf("bridge %s not found", bridgeName)
@@ -1968,6 +1949,7 @@ func (w *assetWallet) unapproveBridgeContract(ctx context.Context, bridge bridge
 
 // UnapproveBridgeContract removes the approval for the bridge contract.
 func (w *assetWallet) UnapproveBridgeContract(ctx context.Context, bridgeName string, onConfirm func()) (string, error) {
+	w.alert()
 	bridge, ok := w.bridges[bridgeName]
 	if !ok {
 		return "", fmt.Errorf("bridge %s not found", bridgeName)
@@ -2039,6 +2021,7 @@ func (w *assetWallet) initiateBridge(ctx context.Context, amt uint64, dest uint3
 
 // InitiateBridge initiates bridging funds from one chain to another.
 func (w *assetWallet) InitiateBridge(ctx context.Context, amt uint64, dest uint32, bridgeName string) (string, error) {
+	w.alert()
 	balance, err := w.balance()
 	if err != nil {
 		return "", fmt.Errorf("error getting balance: %w", err)
@@ -2238,6 +2221,7 @@ func (w *assetWallet) getLatestBridgeCompletion(initiationTxID string) (*extende
 				continue
 			}
 			if tx.BridgeCounterpartTx.IDs[0] == initiationTxID {
+				w.nonceMtx.RUnlock()
 				return tx, nil
 			}
 		}
@@ -2289,6 +2273,10 @@ func (w *assetWallet) completeBridgeIfNeeded(ctx context.Context, bridgeTx *txdb
 	var sendNote, isComplete bool
 	defer func() {
 		if sendNote {
+			// Funds arriving, or a completion tx going out, is progress the
+			// user is waiting to see. Core calls CompleteBridge every minute
+			// until then, so the call itself is not an alert call.
+			w.alert()
 			w.emit.BridgeCompleted(bridgeTx.AssetID, bridgeTx.IDs[0], completionTxIDs, amount, fees, isComplete)
 		}
 	}()
@@ -2631,6 +2619,7 @@ func (w *TokenWallet) canSend(gasLimit uint64, verifyBalance, isPreEstimate bool
 // an address is provided, it will ensure wallet has enough to cover total
 // spend.
 func (w *ETHWallet) EstimateSendTxFee(addr string, value, _ uint64, _, maxWithdraw bool) (uint64, bool, error) {
+	w.alert()
 	if err := isValidSend(addr, value, maxWithdraw); err != nil && addr != "" { // fee rate estimate for a send tx.
 		return 0, false, err
 	}
@@ -2643,6 +2632,7 @@ func (w *ETHWallet) EstimateSendTxFee(addr string, value, _ uint64, _, maxWithdr
 
 // StandardSendFee returns the fees for a simple send tx.
 func (w *ETHWallet) StandardSendFee(feeRate uint64) uint64 {
+	w.alert()
 	return defaultSendGasLimit*feeRate + w.sendL1Fee()
 }
 
@@ -2651,6 +2641,7 @@ func (w *ETHWallet) StandardSendFee(feeRate uint64) uint64 {
 // an address is provided, it will ensure wallet has enough to cover total
 // spend.
 func (w *TokenWallet) EstimateSendTxFee(addr string, value, _ uint64, _, maxWithdraw bool) (fee uint64, isValidAddress bool, err error) {
+	w.alert()
 	if err := isValidSend(addr, value, maxWithdraw); err != nil && addr != "" { // fee rate estimate for a send tx.
 		return 0, false, err
 	}
@@ -2687,6 +2678,7 @@ func (w *TokenWallet) estimateSendGasLimit(addr string, value uint64) uint64 {
 
 // StandardSendFee returns the fees for a simple send tx.
 func (w *TokenWallet) StandardSendFee(feeRate uint64) uint64 {
+	w.alert()
 	return w.gasEstimate.Transfer*feeRate + w.sendL1Fee()
 }
 
@@ -2717,6 +2709,7 @@ func (w *ETHWallet) RestorationInfo(seed []byte) ([]*asset.WalletRestoration, er
 // Send sends the exact value to the specified address. The provided fee rate is
 // ignored since all sends will use an internally derived fee rate.
 func (w *ETHWallet) Send(addr string, value, _ uint64) (asset.Coin, error) {
+	w.alert()
 	if err := isValidSend(addr, value, false); err != nil {
 		return nil, err
 	}
@@ -2749,6 +2742,7 @@ func (w *ETHWallet) Send(addr string, value, _ uint64) (asset.Coin, error) {
 // parent wallet. The provided fee rate is ignored since all sends will use an
 // internally derived fee rate.
 func (w *TokenWallet) Send(addr string, value, _ uint64) (asset.Coin, error) {
+	w.alert()
 	if err := isValidSend(addr, value, false); err != nil {
 		return nil, err
 	}
@@ -2819,13 +2813,16 @@ func (eth *baseWallet) SyncStatus() (*asset.SyncStatus, error) {
 }
 
 // currentNetworkFees give the current base fee rate (from the best header),
-// and recommended tip cap.
+// and recommended tip cap. The result is cached for the current tip, but for
+// no longer than the active poll interval: an idle wallet's tip can be a
+// whole idle poll interval old, and the fee that matters is the one the next
+// block will charge.
 func (w *baseWallet) currentNetworkFees(ctx context.Context) (baseRate, tipRate *big.Int, err error) {
 	tip := w.tipHeight()
 	c := &w.currentFees
 	c.Lock()
 	defer c.Unlock()
-	if tip > 0 && c.blockNum == tip {
+	if tip > 0 && c.blockNum == tip && time.Since(c.stamp) < w.poll.activeInterval() {
 		return c.baseRate, c.tipRate, nil
 	}
 	c.baseRate, c.tipRate, err = w.node.currentFees(ctx)
@@ -2833,6 +2830,7 @@ func (w *baseWallet) currentNetworkFees(ctx context.Context) (baseRate, tipRate 
 		return nil, nil, fmt.Errorf("error getting net fee state: %v", err)
 	}
 	c.blockNum = tip
+	c.stamp = time.Now()
 	return c.baseRate, c.tipRate, nil
 }
 
@@ -2862,6 +2860,7 @@ func (w *baseWallet) recommendedMaxFeeRateGwei(ctx context.Context) (uint64, err
 
 // FeeRate satisfies asset.Wallet.
 func (eth *baseWallet) FeeRate() uint64 {
+	eth.alert()
 	r, err := eth.recommendedMaxFeeRateGwei(eth.ctx)
 	if err != nil {
 		eth.log.Errorf("Error getting max fee recommendation: %v", err)
@@ -2903,150 +2902,6 @@ func (eth *ETHWallet) monitorPeers(ctx context.Context) {
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// tipPollDecision is what monitorBlocks does with one ticker tick.
-type tipPollDecision int
-
-const (
-	// tipPollNone leaves the tick to the header feed, which is delivering and
-	// not yet due its cross-check. The poll would only re-read a header
-	// applyTipChange has already seen.
-	tipPollNone tipPollDecision = iota
-	// tipPollBlocking reads the tip on the loop goroutine. There is no feed to
-	// hold up, so there is nothing to gain from a goroutine.
-	tipPollBlocking
-	// tipPollBackground reads the tip off the loop, so a slow RPC call cannot
-	// delay a header the feed is about to deliver.
-	tipPollBackground
-)
-
-// tipPollOnTick decides whether a ticker tick should read the tip, and on which
-// goroutine. feed reports whether a shared header channel exists at all,
-// lastWSHead is when a header last arrived on it, and lastPoll when the tip was
-// last read across every provider.
-//
-// Split out of monitorBlocks because it is the subtlest state in that loop and
-// the only part of it that is decidable from four values. The three cases:
-//
-//   - No feed, so the tick is the only source of tip changes. HTTP-only and
-//     simnet configurations live here permanently.
-//   - A feed that has gone quiet for longer than any of these chains' block
-//     times, so every subscription on it may be dead, or a feed that is
-//     delivering and merely due its cross-check for a provider that has dropped
-//     off it. A provider that could not be websocket-subscribed pushes nothing
-//     onto the shared channel, so a feed kept live by the subscribed providers
-//     alone would never look at its cache.
-//   - Otherwise the feed covers tip detection on its own.
-//
-// lastWSHead zero on the first tick is deliberate rather than incidental: it
-// makes the staleness test true until a real header has arrived, so a
-// configuration that never delivers one keeps the full 1s cadence.
-func tipPollOnTick(feed bool, lastWSHead, lastPoll, now time.Time) tipPollDecision {
-	if !feed {
-		return tipPollBlocking
-	}
-	if now.Sub(lastWSHead) >= wsHeadStaleness || now.Sub(lastPoll) >= headerCheckInterval {
-		return tipPollBackground
-	}
-	return tipPollNone
-}
-
-// monitorBlocks pings for new blocks and runs the tipChange callback function
-// when the block changes. New blocks are also scanned for potential contract
-// redeems. The providers' WebSocket subscriptions are the primary driver,
-// delivering headers over the shared newHeadCh as they are mined; the ticker
-// polls only while no subscription exists at all, the feed has fallen quiet for
-// wsHeadStaleness, or a live feed is due its periodic cross-check for a provider
-// that has dropped off it.
-func (eth *ETHWallet) monitorBlocks(ctx context.Context) {
-	ticker := time.NewTicker(chainOpTick)
-	defer ticker.Stop()
-
-	// WebSocket subscriptions deliver headers directly. Selecting on this
-	// channel gives instant tip-change detection; the ticker is the fallback
-	// for HTTP-only connections and a safety net if WS drops.
-	var newHeadCh <-chan *types.Header
-	if m, ok := eth.node.(*multiRPCClient); ok {
-		newHeadCh = m.newHeadCh
-	}
-
-	// lastWSHead is when a header last arrived over the feed. Every provider
-	// pushes to the one shared newHeadCh, so while any of them is delivering the
-	// tick below has nothing to add: the header it would read is one
-	// applyTipChange has already seen, and a provider that is ahead has already
-	// won on the channel rather than needing the poll to notice. Tracking
-	// freshness rather than merely whether newHeadCh is non-nil keeps the 1s
-	// fallback for the case that needs it, every subscription silent at once.
-	// Zero to begin with, so the first tick polls until one has proved itself.
-	//
-	// What the suppressed tick was costing is a local read, not a round trip:
-	// bestHeader returns the highest header any provider has cached, and
-	// cachedTip holds one for a minute once that provider has seen a websocket
-	// head, so a warm cache never reaches the wire. Cheap, but it and the no-op
-	// applyTipChange behind it ran once a second for the life of the session
-	// with nothing to report.
-	//
-	// lastPoll is when the tip was last read across every provider. The poll is
-	// still not purely a fallback for a dead feed, because an endpoint set can be
-	// mixed: a provider that could not be websocket-subscribed falls back to HTTP
-	// and gets a refreshHeader goroutine instead (multirpc.go), and the cache that
-	// writes is reachable only through bestHeader. Nothing pushes those providers
-	// onto newHeadCh, so a feed kept live by the subscribed providers alone would
-	// never look at them. Hence a live feed still polls, just at
-	// headerCheckInterval: that is the cadence refreshHeader writes on, and
-	// reading those caches faster than they are written gains nothing. With every
-	// provider subscribed there is no such cache and the poll is a no-op, which is
-	// the cost of keeping one rule for both cases.
-	var lastWSHead, lastPoll time.Time
-
-	checkNewBlocks := func() {
-		defer eth.pollingTip.Store(false)
-		innerCtx, cancel := context.WithTimeout(ctx, onChainDataFetchTimeout)
-		defer cancel()
-		bestHdr, err := eth.node.bestHeader(innerCtx)
-		if err != nil {
-			eth.log.Errorf("failed to get best header: %v", err)
-			return
-		}
-		eth.applyTipChange(bestHdr)
-	}
-
-	for {
-		select {
-		case hdr := <-newHeadCh:
-			if hdr != nil {
-				// Only a real header counts as proof of life; a run of nils
-				// must not suppress the fallback poll below.
-				lastWSHead = time.Now()
-				eth.applyTipChange(hdr)
-			}
-		case <-ticker.C:
-			switch tipPollOnTick(newHeadCh != nil, lastWSHead, lastPoll, time.Now()) {
-			case tipPollBlocking:
-				checkNewBlocks()
-			case tipPollBackground:
-				// Poll in a goroutine so a slow or blocked RPC call cannot hold
-				// up delivery of the header that would prove the feed alive.
-				// applyTipChange is safe to call concurrently (same-hash calls
-				// are no-ops).
-				//
-				// Stamped inside the swap, so a tick that finds an earlier poll
-				// still running has not consumed the cross-check: the next tick
-				// retries a second later rather than waiting out another whole
-				// headerCheckInterval against a stale lastPoll.
-				if eth.pollingTip.CompareAndSwap(false, true) {
-					lastPoll = time.Now()
-					go checkNewBlocks()
-				}
-			}
-		case <-ctx.Done():
-			return
-		}
-		if ctx.Err() != nil {
 			return
 		}
 	}
@@ -3211,10 +3066,8 @@ func (w *assetWallet) checkPendingApprovals() {
 	// goroutine rather than a detached one, so a callback cannot outlive the
 	// tip-processing pass that observed the confirmation. The approval is already
 	// deleted above, so a callback dropped during shutdown is never retried.
-	// This narrows the window rather than closing it: applyTipChange runs on the
-	// Connect-tracked monitorBlocks goroutine for WS headers and for the
-	// HTTP-only poll, but on an untracked goroutine via the `go checkNewBlocks()`
-	// ticker fallback taken while a WS subscription is active.
+	// applyTipChange runs only on the Connect-tracked monitorBlocks goroutine,
+	// so the callbacks finish before Connect's WaitGroup does.
 	for _, onConfirm := range confirmed {
 		onConfirm()
 	}
@@ -4341,6 +4194,7 @@ func (w *baseWallet) resolveAction(uniqueID string, assetID uint32) {
 // user for an ActionRequired request, usually for a stuck tx or otherwise
 // abnormal condition.
 func (w *assetWallet) TakeAction(actionID string, actionB []byte) error {
+	w.alert()
 	switch actionID {
 	case actionTypeTooCheap:
 		return w.userActionBumpFees(actionB)
