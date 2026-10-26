@@ -3084,7 +3084,7 @@ const dashMaxBlockSize = 2_000_000
 // checked excludes a Dash block's special transaction payloads, which only
 // makes the check more lenient than the network rule.
 func maxBlockSize(chain string) int {
-	if chain == "dash" {
+	if bisonwire.Chain(chain) == bisonwire.ChainDASH {
 		return dashMaxBlockSize
 	}
 	return blockchain.MaxBlockBaseSize

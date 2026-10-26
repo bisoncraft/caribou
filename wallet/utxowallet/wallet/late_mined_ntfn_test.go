@@ -5,6 +5,7 @@
 package wallet
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -57,7 +58,9 @@ func TestMinedTxNotificationTiming(t *testing.T) {
 			t.Fatalf("connectBlock(%d): %v", height, err)
 		}
 	}
-	connect(syncedHeight)
+	for h := int32(1); h <= syncedHeight; h++ {
+		connect(h)
+	}
 
 	cl := w.NtfnServer.TransactionNotifications()
 	defer cl.Done()
@@ -68,7 +71,7 @@ func TestMinedTxNotificationTiming(t *testing.T) {
 		}
 	}()
 
-	addMined := func(seed byte, height int32) chainhash.Hash {
+	addMinedBlock := func(seed byte, block wtxmgr.BlockMeta) chainhash.Hash {
 		t.Helper()
 		msgTx := wire.NewMsgTx(2)
 		msgTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{seed}, Index: 0}})
@@ -77,14 +80,15 @@ func TestMinedTxNotificationTiming(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewTxRecordFromMsgTx: %v", err)
 		}
-		block := blockMeta(height)
-		err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
-			return w.addRelevantTx(tx, rec, &block)
-		})
+		err = w.recordRelevantTxs([]*wtxmgr.TxRecord{rec}, &block)
 		if err != nil {
 			t.Fatalf("addRelevantTx: %v", err)
 		}
 		return rec.Hash
+	}
+	addMined := func(seed byte, height int32) chainhash.Hash {
+		t.Helper()
+		return addMinedBlock(seed, blockMeta(height))
 	}
 	next := func() *TransactionNotifications {
 		t.Helper()
@@ -177,4 +181,94 @@ func TestMinedTxNotificationTiming(t *testing.T) {
 		addMined(byte(10+i), height)
 		heights(next(), syncedHeight+1)
 	}
+
+	// A late block that is not the wallet's block at that height (a reorg
+	// the wallet has not processed) is not reported, so the subscriber's tip
+	// stays the synced block.
+	forked := blockMeta(syncedHeight + 1)
+	forked.Hash = chainhash.Hash{0xff}
+	addMinedBlock(20, forked)
+	none("for a transaction in a block off the wallet's chain")
+
+	// Transactions recorded in one database transaction are reported once.
+	newRec := func(seed byte) *wtxmgr.TxRecord {
+		t.Helper()
+		msgTx := wire.NewMsgTx(2)
+		msgTx.AddTxIn(&wire.TxIn{PreviousOutPoint: wire.OutPoint{Hash: chainhash.Hash{seed}}})
+		msgTx.AddTxOut(&wire.TxOut{Value: 100_000, PkScript: pkScript})
+		rec, err := wtxmgr.NewTxRecordFromMsgTx("btc", msgTx, time.Now())
+		if err != nil {
+			t.Fatalf("NewTxRecordFromMsgTx: %v", err)
+		}
+		return rec
+	}
+	first, second := newRec(30), newRec(31)
+	firstHash, secondHash := first.Hash, second.Hash
+	block := blockMeta(6)
+	err = w.recordRelevantTxs([]*wtxmgr.TxRecord{first, second}, &block)
+	if err != nil {
+		t.Fatalf("batched recordRelevantTxs: %v", err)
+	}
+	n = next()
+	if hs := heights(n, syncedHeight+1); len(hs) != 2 {
+		t.Fatalf("attached heights %v, want the block and the tip", hs)
+	}
+	if txs := txHashes(n.AttachedBlocks[0]); len(txs) != 2 || txs[0] != firstHash || txs[1] != secondHash {
+		t.Fatalf("batched block transactions %v, want %s and %s", txs, firstHash, secondHash)
+	}
+	none("a second time for the same batch")
+
+	// A batch that fails after the flush rolls back: the flush's delivery is
+	// dropped with the commit, and the transaction recorded before the failure
+	// must not be queued for a later notification.
+	block = blockMeta(7)
+	rolledBack := newRec(40)
+	errInjected := errors.New("injected failure")
+	realDB := w.db
+	w.db = failingCommitDB{DB: realDB, err: errInjected}
+	err = w.recordRelevantTxs([]*wtxmgr.TxRecord{rolledBack}, &block)
+	w.db = realDB
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("recordRelevantTxs error = %v, want the injected failure", err)
+	}
+	none("for a transaction that was rolled back")
+
+	// The same failure with the transaction in a block above the tip leaves
+	// its entry queued rather than flushed, so only the restore removes it.
+	block = blockMeta(syncedHeight + 2)
+	rolledBackPending := newRec(41)
+	w.db = failingCommitDB{DB: realDB, err: errInjected}
+	err = w.recordRelevantTxs([]*wtxmgr.TxRecord{rolledBackPending}, &block)
+	w.db = realDB
+	if !errors.Is(err, errInjected) {
+		t.Fatalf("recordRelevantTxs error = %v, want the injected failure", err)
+	}
+	none("for a pending transaction that was rolled back")
+	connect(syncedHeight + 2)
+	n = next()
+	heights(n, syncedHeight+2)
+	for _, b := range n.AttachedBlocks {
+		for _, h := range txHashes(b) {
+			if h == rolledBack.Hash || h == rolledBackPending.Hash {
+				t.Fatalf("rolled back transaction %s reported in %+v", h, b)
+			}
+		}
+	}
+}
+
+// failingCommitDB fails every Update with err after f succeeds, so the
+// transaction rolls back following a flush that has already registered its
+// delivery.
+type failingCommitDB struct {
+	walletdb.DB
+	err error
+}
+
+func (d failingCommitDB) Update(f func(walletdb.ReadWriteTx) error, reset func()) error {
+	return d.DB.Update(func(tx walletdb.ReadWriteTx) error {
+		if err := f(tx); err != nil {
+			return err
+		}
+		return d.err
+	}, reset)
 }

@@ -278,38 +278,67 @@ func (s *NotificationServer) notifyMinedTransaction(dbtx walletdb.ReadWriteTx, d
 	txs := s.currentTxNtfn.AttachedBlocks[n-1].Transactions
 	s.currentTxNtfn.AttachedBlocks[n-1].Transactions =
 		append(txs, makeTxSummary(dbtx, s.wallet, details)) // nolint:gocritic
+}
 
-	// A block's relevant transactions normally arrive before the block is
-	// connected, and the notification waits for notifyAttachedBlock to flush
-	// it. A backend that reports a transaction after its block (electrum
-	// subscriptions race the header) has no later notifyAttachedBlock until
-	// the next block, so the transaction would stay unreported for that long.
-	// Deliver it now once its block is already connected. A pending detach
-	// means a reorg is being processed, which notifyAttachedBlock handles.
-	tip := s.wallet.Manager.SyncedTo()
-	if block.Height <= tip.Height && len(s.currentTxNtfn.DetachedBlocks) == 0 {
-		s.flushMinedTransactions(dbtx, tip)
+// snapshotQueue returns a func that restores the coalesced notification to its
+// current contents, for a caller whose database transaction may roll back
+// after queueing transactions that will not be stored. It assumes a single
+// writer: every chain-driven update runs on the chain notification goroutine,
+// so nothing queues between the snapshot and the restore.
+func (s *NotificationServer) snapshotQueue() func() {
+	var saved *TransactionNotifications
+	if s.currentTxNtfn != nil {
+		c := *s.currentTxNtfn
+		c.AttachedBlocks = append([]Block(nil), c.AttachedBlocks...)
+		saved = &c
 	}
+	return func() { s.currentTxNtfn = saved }
 }
 
 // flushMinedTransactions delivers the coalesced notification for transactions
-// mined in blocks the wallet has already connected, tip being the latest of
-// them. Like notifyUnminedTransaction it builds the notification from the open
-// write transaction but delivers it OnCommit, so a subscriber that re-queries
-// the wallet sees the committed transaction.
+// mined in blocks the wallet has already connected. Like
+// notifyUnminedTransaction it builds the notification from the open write
+// transaction but delivers it OnCommit, so a subscriber that re-queries the
+// wallet sees the committed transaction.
+//
+// A block's relevant transactions normally arrive before the block is
+// connected, and the notification waits for notifyAttachedBlock to flush it. A
+// backend that reports a transaction after its block (electrum subscriptions
+// race the header) has no later notifyAttachedBlock until the next block, so
+// the transaction would stay unreported for that long. Callers invoke this once
+// after recording a batch of transactions, so a rescan or a block with many
+// relevant transactions produces one notification. A pending detach means a
+// reorg is being processed, which notifyAttachedBlock handles.
 //
 // Subscribers take the last attached block as the chain tip, so the
-// notification carries only connected blocks, with an empty entry for tip last
-// when the late block is below it. Entries above tip belong to a block that is
-// not connected yet and stay coalesced for notifyAttachedBlock to flush.
-func (s *NotificationServer) flushMinedTransactions(dbtx walletdb.ReadWriteTx, tip waddrmgr.BlockStamp) {
+// notification carries only blocks on the wallet's chain, with an empty entry
+// for the synced tip last when the late block is below it. Entries above the
+// tip, or whose hash differs from the wallet's block at that height (a reorg
+// the wallet has not processed yet), stay coalesced for notifyAttachedBlock.
+//
+// This delivers OnCommit while notifyAttachedBlock sends synchronously, so a
+// single database transaction must not both flush here and connect a block, or
+// subscribers would see the tip move backwards.
+func (s *NotificationServer) flushMinedTransactions(dbtx walletdb.ReadWriteTx) {
+	if s.currentTxNtfn == nil || len(s.currentTxNtfn.DetachedBlocks) != 0 {
+		return
+	}
+	addrmgrNs := dbtx.ReadBucket(waddrmgrNamespaceKey)
+	tip := s.wallet.Manager.SyncedTo()
+
 	var connected, pending []Block
 	for _, b := range s.currentTxNtfn.AttachedBlocks {
 		if b.Height <= tip.Height {
-			connected = append(connected, b)
-		} else {
-			pending = append(pending, b)
+			hash, err := s.wallet.Manager.BlockHash(addrmgrNs, b.Height)
+			if err == nil && *hash == *b.Hash {
+				connected = append(connected, b)
+				continue
+			}
 		}
+		pending = append(pending, b)
+	}
+	if len(connected) == 0 {
+		return
 	}
 	s.currentTxNtfn = nil
 	if len(pending) > 0 {

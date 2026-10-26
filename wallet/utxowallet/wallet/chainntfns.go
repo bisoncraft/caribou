@@ -172,25 +172,13 @@ func (w *Wallet) handleChainNotifications() {
 				})
 				notificationName = "block disconnected"
 			case chain.RelevantTx:
-				err = walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
-					return w.addRelevantTx(tx, n.TxRecord, n.Block)
-				})
+				err = w.recordRelevantTxs(
+					[]*wtxmgr.TxRecord{n.TxRecord}, n.Block)
 				notificationName = "relevant transaction"
 			case chain.FilteredBlockConnected:
 				// Atomically update for the whole block.
 				if len(n.RelevantTxs) > 0 {
-					err = walletdb.Update(w.db, func(
-						tx walletdb.ReadWriteTx) error {
-						var err error
-						for _, rec := range n.RelevantTxs {
-							err = w.addRelevantTx(tx, rec,
-								n.Block)
-							if err != nil {
-								return err
-							}
-						}
-						return nil
-					})
+					err = w.recordRelevantTxs(n.RelevantTxs, n.Block)
 				}
 				notificationName = "filtered block connected"
 
@@ -242,6 +230,27 @@ func (w *Wallet) handleChainNotifications() {
 			return
 		}
 	}
+}
+
+// recordRelevantTxs atomically records the transactions and then flushes the
+// notification for any of them mined in an already connected block, so a batch
+// produces one notification. The notification queue is in memory and a
+// rollback does not undo it, so it is restored when the update fails.
+func (w *Wallet) recordRelevantTxs(recs []*wtxmgr.TxRecord, block *wtxmgr.BlockMeta) error {
+	restore := w.NtfnServer.snapshotQueue()
+	err := walletdb.Update(w.db, func(tx walletdb.ReadWriteTx) error {
+		for _, rec := range recs {
+			if err := w.addRelevantTx(tx, rec, block); err != nil {
+				return err
+			}
+		}
+		w.NtfnServer.flushMinedTransactions(tx)
+		return nil
+	})
+	if err != nil {
+		restore()
+	}
+	return err
 }
 
 // connectBlock handles a chain server notification by marking a wallet
