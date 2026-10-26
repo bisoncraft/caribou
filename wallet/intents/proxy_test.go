@@ -2,10 +2,10 @@ package intents
 
 import (
 	"context"
-	"github.com/bisoncraft/caribou/util/dexnet"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/util/testing/proxycanary"
 )
 

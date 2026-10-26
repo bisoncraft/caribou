@@ -3,11 +3,11 @@ package hyperliquid
 import (
 	"context"
 	"crypto/rand"
-	"github.com/bisoncraft/caribou/util/dexnet"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/util/testing/proxycanary"
 	"github.com/bisoncraft/caribou/wallet/asset"
 )

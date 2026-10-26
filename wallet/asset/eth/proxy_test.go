@@ -3,12 +3,12 @@
 package eth
 
 import (
-	"github.com/bisoncraft/caribou/util/dexnet"
 	"math/big"
 	"path/filepath"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"github.com/bisoncraft/caribou/util/testing/proxycanary"
 	"github.com/bisoncraft/caribou/wallet/asset"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
