@@ -229,8 +229,14 @@ func New(cfg *Config) (*Core, error) {
 		return assetTickerGroup(assetID, txDBLog)
 	})
 	if cfg.TorProxy != "" {
-		if _, _, err = net.SplitHostPort(cfg.TorProxy); err != nil {
+		host, _, err := net.SplitHostPort(cfg.TorProxy)
+		if err != nil {
 			return nil, err
+		}
+		// wallet2 parses the proxy as an IP and port, so a hostname such as
+		// localhost would only fail later, deep inside the XMR wallet.
+		if net.ParseIP(host) == nil {
+			return nil, fmt.Errorf("torproxy host %q must be an IP address", host)
 		}
 		dexnet.SetProxy(cfg.TorProxy)
 	}

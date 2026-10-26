@@ -12,6 +12,7 @@ import (
 // bridges, XRP rpc) reach the network only through the shared Client, so
 // SetProxy must be what carries their traffic, never the server directly.
 func TestSetProxyRoutesSharedClient(t *testing.T) {
+	ProxyLocalForTest(t)
 	server, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	// SetProxy applies once per process; reset it and restore the shared

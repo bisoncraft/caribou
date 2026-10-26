@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 // catalog fetch on opening an asset view would otherwise expose the user's
 // IP to the service.
 func TestIntentsEngineUsesConfiguredProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	service, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	rig := newTestRig()
@@ -174,6 +176,7 @@ func TestCoreHandsProxyToAssets(t *testing.T) {
 // it, so the test installs a fresh client for New to modify and restores the
 // original afterwards.
 func TestNewProxiesSharedClient(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	server, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	old := dexnet.Client
@@ -199,4 +202,21 @@ func TestNewProxiesSharedClient(t *testing.T) {
 		t.Fatal("request succeeded against a proxy that closes every connection")
 	}
 	proxycanary.AssertViaProxy(t, proxy, server)
+}
+
+// TestNewRejectsHostnameTorProxy: wallet2 parses the proxy as an IP and port,
+// so a hostname would only fail later inside the XMR wallet. New refuses it up
+// front instead.
+func TestNewRejectsHostnameTorProxy(t *testing.T) {
+	for _, proxy := range []string{"localhost:9050", "tor:9050"} {
+		_, err := New(&Config{
+			DBPath:   filepath.Join(t.TempDir(), "core.db"),
+			Net:      util.Simnet,
+			Logger:   tLogger,
+			TorProxy: proxy,
+		})
+		if err == nil || !strings.Contains(err.Error(), "must be an IP address") {
+			t.Fatalf("New(%q) error = %v, want an IP address error", proxy, err)
+		}
+	}
 }

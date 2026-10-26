@@ -5,8 +5,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -72,42 +72,29 @@ func TestOutboundConnectionsHonorProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Walk the tracked files rather than the filesystem: untracked build
+	// trees (such as .monero_c-ios) are left out, and tracked nested modules
+	// (the desktop binary) are covered.
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "*.go").Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
 	var violations []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" || strings.HasSuffix(rel, "_test.go") ||
+			slices.ContainsFunc(exemptDirs, func(d string) bool {
+				return rel == d || strings.HasPrefix(rel, d+"/")
+			}) ||
+			slices.ContainsFunc(strings.Split(rel, "/"), func(e string) bool {
+				return skipDirNames[e]
+			}) {
+			continue
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			// Skip folders the go tool ignores: hidden and underscore folders
-			// (build trees such as .monero_c-ios) and nested modules.
-			name := d.Name()
-			if skipDirNames[name] || (rel != "." &&
-				(strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_"))) {
-				return filepath.SkipDir
-			}
-			if rel != "." {
-				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
-					return filepath.SkipDir
-				}
-			}
-			if slices.Contains(exemptDirs, rel) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") {
-			return nil
+		path := filepath.Join(root, rel)
+		if _, err := os.Stat(path); err != nil {
+			continue // tracked but deleted in the working tree
 		}
 		violations = append(violations, scanFile(t, path, rel)...)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	if len(violations) > 0 {
 		sort.Strings(violations)

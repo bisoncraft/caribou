@@ -3,6 +3,7 @@ package xrp
 import (
 	"context"
 	"crypto/rand"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
@@ -13,6 +14,7 @@ import (
 // TestSubscriptionUsesProxy: the ledger websocket must dial the configured
 // proxy, never the endpoint, or the user's IP is exposed to the provider.
 func TestSubscriptionUsesProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint := proxycanary.New(t)
 	proxy := proxycanary.New(t)
 

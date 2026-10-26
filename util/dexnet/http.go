@@ -9,13 +9,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/decred/go-socks/socks"
@@ -38,9 +41,11 @@ var Client = &http.Client{
 
 // ProxyDialContext returns a DialContext function that routes connections
 // through a SOCKS5 proxy at addr (host:port). If addr is empty, nil is
-// returned. The dial returns as soon as ctx is done, and gives up on a proxy
-// that never answers after proxyDialTimeout. The socks library only honors a
-// context's deadline, so neither would hold otherwise.
+// returned. Local targets (see ProxyFor) are dialed direct, since Tor cannot
+// reach them, so a node on this machine or LAN keeps working. The dial returns
+// as soon as ctx is done, and gives up on a proxy that never answers after
+// proxyDialTimeout. The socks library only honors a context's deadline, so
+// neither would hold otherwise.
 func ProxyDialContext(addr string) func(ctx context.Context, network, address string) (net.Conn, error) {
 	if addr == "" {
 		return nil
@@ -49,6 +54,10 @@ func ProxyDialContext(addr string) func(ctx context.Context, network, address st
 	// connection, and therefore unrelated wallets, on separate circuits.
 	proxy := &socks.Proxy{Addr: addr, TorIsolation: true}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if isLocalTarget(address) && !proxyLocal.Load() {
+			// torproxy: local IP literals and localhost only, which Tor rejects
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}
 		type result struct {
 			conn net.Conn
 			err  error
@@ -85,17 +94,13 @@ func ProxyDialContext(addr string) func(ctx context.Context, network, address st
 }
 
 // cgnat is the carrier-grade NAT range (100.64.0.0/10), used by Tailscale.
-var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
-// ProxyFor returns torProxy unless hostAddr (a host, host:port or URL) is a
+// isLocalTarget reports whether hostAddr (a host, host:port or URL) is a
 // loopback, private, link-local or unspecified IP, or localhost, which Tor
-// refuses to reach, in which case it returns "" so the connection goes direct.
-// Other hostnames are always proxied, even if they resolve to a private
-// address, because resolving them locally would leak the lookup.
-func ProxyFor(hostAddr, torProxy string) string {
-	if torProxy == "" {
-		return ""
-	}
+// refuses to reach. The only local hostname is localhost. Other hostnames are never local, even if they resolve to
+// a private address, because resolving them locally would leak the lookup.
+func isLocalTarget(hostAddr string) bool {
 	host := hostAddr
 	if u, err := url.Parse(hostAddr); err == nil && u.Host != "" {
 		host = u.Hostname()
@@ -103,14 +108,44 @@ func ProxyFor(hostAddr, torProxy string) string {
 		host = h
 	}
 	host = strings.ToLower(strings.Trim(host, "[]"))
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return ""
+	// Only the exact name: the system resolver would look up any other
+	// *.localhost name, which could leak it outside Tor.
+	if host == "localhost" {
+		return true
 	}
-	if ip := net.ParseIP(host); ip != nil && (ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsUnspecified() || ip.IsLinkLocalUnicast() || cgnat.Contains(ip)) {
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap().WithZone("")
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || cgnat.Contains(ip)
+}
+
+// ProxyFor returns torProxy unless hostAddr is a local target, in which case
+// it returns "" so the connection goes direct. It is for clients that take a
+// proxy setting rather than a dialer; see ProxyDialContext.
+func ProxyFor(hostAddr, torProxy string) string {
+	if torProxy == "" || isLocalTarget(hostAddr) {
 		return ""
 	}
 	return torProxy
+}
+
+// proxyLocal makes ProxyDialContext proxy local targets too.
+var proxyLocal atomic.Bool
+
+// ProxyLocalForTest makes ProxyDialContext route loopback and private targets
+// through the proxy until the test ends, so tests can use loopback listeners
+// as stand-ins for remote servers. Tests only. It is process-wide, so it must
+// not be used from parallel tests or subtests.
+func ProxyLocalForTest(t interface {
+	Helper()
+	Cleanup(func())
+}) {
+	t.Helper()
+	proxyLocal.Store(true)
+	t.Cleanup(func() { proxyLocal.Store(false) })
 }
 
 // IsolationCreds returns random SOCKS credentials. Tor keeps connections with
@@ -122,6 +157,20 @@ func IsolationCreds() (user, pass string) {
 		panic(err)
 	}
 	return hex.EncodeToString(b[:8]), hex.EncodeToString(b[8:])
+}
+
+// refuseLocalRedirect stops a proxied request from being redirected to a local
+// address, which would be dialed direct. Redirects between local addresses of
+// a request that was local to begin with are left alone.
+func refuseLocalRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if isLocalTarget(req.URL.Host) && !isLocalTarget(via[0].URL.Host) {
+		return fmt.Errorf("refusing redirect from %s to local address %s",
+			via[0].URL.Host, req.URL.Host)
+	}
+	return nil
 }
 
 // ProxyTransport returns an *http.Transport that routes all connections through
@@ -143,8 +192,9 @@ func ProxyTransport(addr string) *http.Transport {
 func ProxyHTTPClient(addr string) *http.Client {
 	// torproxy: this is the proxy client
 	return &http.Client{
-		Transport: ProxyTransport(addr),
-		Timeout:   20 * time.Second,
+		Transport:     ProxyTransport(addr),
+		CheckRedirect: refuseLocalRedirect,
+		Timeout:       20 * time.Second,
 	}
 }
 
@@ -156,6 +206,7 @@ var setProxyOnce sync.Once
 func SetProxy(addr string) {
 	setProxyOnce.Do(func() {
 		Client.Transport = ProxyTransport(addr)
+		Client.CheckRedirect = refuseLocalRedirect
 	})
 }
 

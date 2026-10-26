@@ -3,6 +3,7 @@ package hyperliquid
 import (
 	"context"
 	"crypto/rand"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ func tProxiedWallet(t *testing.T, api, ws, proxy *proxycanary.Listener) *HyperWa
 // TestRPCUsesConfiguredProxy: the REST API must be reached through the
 // proxy set in the wallet config, or the user's IP is exposed to the API.
 func TestRPCUsesConfiguredProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	api, ws, proxy := proxycanary.New(t), proxycanary.New(t), proxycanary.New(t)
 	w := tProxiedWallet(t, api, ws, proxy)
 
@@ -55,6 +57,7 @@ func TestRPCUsesConfiguredProxy(t *testing.T) {
 // TestWebsocketUsesConfiguredProxy: the ledger websocket needs the same
 // proxy as the REST client.
 func TestWebsocketUsesConfiguredProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	api, ws, proxy := proxycanary.New(t), proxycanary.New(t), proxycanary.New(t)
 	w := tProxiedWallet(t, api, ws, proxy)
 
@@ -73,6 +76,7 @@ func TestWebsocketUsesConfiguredProxy(t *testing.T) {
 // never answers the SOCKS handshake must not keep the ledger websocket from
 // stopping, or Disconnect would wait on it for as long as the proxy stalls.
 func TestWebsocketDialStopsOnCancel(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	stall := proxycanary.NewStalling(t)
 	api, ws := proxycanary.New(t), proxycanary.New(t)
 	w := tProxiedWallet(t, api, ws, stall)

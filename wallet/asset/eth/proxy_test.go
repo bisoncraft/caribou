@@ -3,6 +3,7 @@
 package eth
 
 import (
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"math/big"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,7 @@ import (
 // TestMultiRPCClientUsesProxy: both the websocket attempt and the HTTP
 // fallback must dial the proxy, or the user's IP is exposed to the provider.
 func TestMultiRPCClientUsesProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	dir := t.TempDir()
@@ -41,6 +43,7 @@ func TestMultiRPCClientUsesProxy(t *testing.T) {
 // proxy-aware on its own, so a wallet that dropped the setting would still
 // pass the client test while connecting to the provider directly.
 func TestWalletUsesConfiguredProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	// Testnet, because simnet reads its compatibility data from harness files
@@ -71,6 +74,7 @@ func TestWalletUsesConfiguredProxy(t *testing.T) {
 // must stay on the proxy too, since go-ethereum picks the transport from the
 // URL scheme and a websocket URL ignores an http client.
 func TestMultiRPCClientWebsocketEndpointUsesProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	dir := t.TempDir()

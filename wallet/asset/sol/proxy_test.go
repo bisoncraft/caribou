@@ -3,6 +3,7 @@ package sol
 import (
 	"context"
 	"crypto/rand"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
@@ -13,6 +14,7 @@ import (
 // TestRPCClientUsesProxy: with --torproxy set, the endpoint must be reached
 // only through the proxy, or the user's IP is exposed to the RPC provider.
 func TestRPCClientUsesProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint := proxycanary.New(t)
 	proxy := proxycanary.New(t)
 
@@ -27,6 +29,7 @@ func TestRPCClientUsesProxy(t *testing.T) {
 // TestWSClientUsesProxy is the websocket counterpart: the subscription
 // connection must also dial the proxy, never the endpoint.
 func TestWSClientUsesProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint := proxycanary.New(t)
 	proxy := proxycanary.New(t)
 
@@ -42,6 +45,7 @@ func TestWSClientUsesProxy(t *testing.T) {
 // proxy-aware on its own, so a wallet that dropped the setting would still
 // pass the client test while contacting the provider directly.
 func TestWalletUsesConfiguredProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	dir := t.TempDir()

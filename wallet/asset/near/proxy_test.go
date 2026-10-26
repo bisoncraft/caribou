@@ -3,6 +3,7 @@ package near
 import (
 	"context"
 	"crypto/rand"
+	"github.com/bisoncraft/caribou/util/dexnet"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 // TestWalletUsesConfiguredProxy: RPC requests must go through the proxy set
 // in the wallet config, or the user's IP is exposed to the RPC provider.
 func TestWalletUsesConfiguredProxy(t *testing.T) {
+	dexnet.ProxyLocalForTest(t)
 	endpoint, proxy := proxycanary.New(t), proxycanary.New(t)
 
 	dir := t.TempDir()

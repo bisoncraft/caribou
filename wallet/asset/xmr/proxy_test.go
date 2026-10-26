@@ -14,35 +14,49 @@ import (
 	"github.com/bisoncraft/caribou/wallet/asset"
 )
 
-func tProxiedWallet(t *testing.T, daemon, proxy *proxycanary.Listener) *ExchangeWallet {
+// tDaemonHost is a non-local daemon address. Loopback and private daemons are
+// deliberately kept off the proxy (see dexnet.ProxyFor), so the proxied path
+// can only be exercised with a hostname. It is never reached: the proxy
+// canary hangs up on every connection.
+const tDaemonHost = "xmr-node.example.com:18081"
+
+func tProxiedWallet(t *testing.T, proxy *proxycanary.Listener) *ExchangeWallet {
 	t.Helper()
 	return tOpenWallet(t, t.TempDir(), true, func(cfg *asset.WalletConfig) {
 		cfg.TorProxy = proxy.Addr
-		cfg.Settings = map[string]string{"daemonaddress": daemon.Addr}
+		cfg.Settings = map[string]string{"daemonaddress": tDaemonHost}
 	})
+}
+
+// assertProxied fails the test unless the proxy received a connection. A
+// hostname cannot be pointed at a direct canary, so a leak is not observable
+// here, only the proxy being used.
+func assertProxied(t *testing.T, proxy *proxycanary.Listener) {
+	t.Helper()
+	if !proxy.WaitAccepted(2 * time.Second) {
+		t.Fatal("never connected to the configured proxy")
+	}
 }
 
 // TestFeeRPCUsesProxy: the fee estimate request goes to the daemon and must
 // take the proxy, or the user's IP reaches the daemon outside Tor.
 func TestFeeRPCUsesProxy(t *testing.T) {
-	daemon := proxycanary.New(t)
 	proxy := proxycanary.New(t)
-	w := tProxiedWallet(t, daemon, proxy)
+	w := tProxiedWallet(t, proxy)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := w.feeRPC.getFeeEstimate(ctx); err == nil {
 		t.Fatal("fee estimate succeeded against a proxy that closes every connection")
 	}
-	proxycanary.AssertViaProxy(t, proxy, daemon)
+	assertProxied(t, proxy)
 }
 
 // TestDaemonConnectUsesProxy covers the native library's own connection to
 // the daemon, which is configured separately from the fee RPC client.
 func TestDaemonConnectUsesProxy(t *testing.T) {
-	daemon := proxycanary.New(t)
 	proxy := proxycanary.New(t)
-	w := tProxiedWallet(t, daemon, proxy)
+	w := tProxiedWallet(t, proxy)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -51,5 +65,5 @@ func TestDaemonConnectUsesProxy(t *testing.T) {
 		cancel()
 		wg.Wait()
 	}
-	proxycanary.AssertViaProxy(t, proxy, daemon)
+	assertProxied(t, proxy)
 }
