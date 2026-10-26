@@ -2339,10 +2339,7 @@ func TestLedgerBatchEmitsAfterUnlockOnce(t *testing.T) {
 	defer srv.Close()
 
 	log := util.StdOutLogger("HLWTEST", util.LevelTrace)
-	rpc, err := newRPCClient(srv.URL, "", log)
-	if err != nil {
-		t.Fatalf("newRPCClient: %v", err)
-	}
+	rpc := newRPCClient(srv.URL, "", log)
 	notes := make(chan asset.WalletNotification, 16)
 	w = &HyperWallet{
 		log:     log,
