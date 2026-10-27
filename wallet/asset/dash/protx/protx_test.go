@@ -13,7 +13,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
@@ -433,6 +435,7 @@ func TestInputsHashCommitsToOrderAndIndex(t *testing.T) {
 type payload interface {
 	payloadDecoder
 	Serialize(w io.Writer) error
+	PayloadHash() (chainhash.Hash, error)
 }
 
 var payloadKinds = []struct {
@@ -569,8 +572,9 @@ func TestParseRejectsEveryTruncation(t *testing.T) {
 
 // TestServiceMustSurviveDashRoundTrip checks the addresses Dash stores
 // differently from how they are written. Dash hashes its parsed copy, so a
-// payload with such an address would hash differently here than it does in
-// Dash Core, and a signature over our hash would be rejected.
+// payload with such an address must decode to the empty Service and hash as
+// if it had been written that way, or a signature over Dash's hash would be
+// rejected.
 func TestServiceMustSurviveDashRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -585,10 +589,10 @@ func TestServiceMustSurviveDashRoundTrip(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		ip      [16]byte
-		port    uint16
-		wantErr bool
+		name  string
+		ip    [16]byte
+		port  uint16
+		empty bool // Dash stores the address as the empty Service
 	}{
 		{"public ipv4", v4(8, 8, 8, 8), 9999, false},
 		{"loopback", v4(127, 0, 0, 1), 19999, false},
@@ -626,15 +630,31 @@ func TestServiceMustSurviveDashRoundTrip(t *testing.T) {
 				binary.BigEndian.PutUint16(b[pl.offset+16:], tc.port)
 
 				p := pl.new()
-				err := Parse(b, p)
-				if tc.wantErr {
-					if !errors.Is(err, ErrNonCanonicalAddress) {
-						t.Fatalf("error %v, want %v", err, ErrNonCanonicalAddress)
+				if err := Parse(b, p); err != nil {
+					t.Fatal(err)
+				}
+				if tc.empty {
+					clean := bytes.Clone(b)
+					clear(clean[pl.offset : pl.offset+18])
+					want := pl.new()
+					if err := Parse(clean, want); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(p, want) {
+						t.Fatalf("decoded %+v, want the empty address %+v", p, want)
+					}
+					gotHash, err := p.PayloadHash()
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantHash, err := want.PayloadHash()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if gotHash != wantHash {
+						t.Fatal("payload hash differs from the one with the empty address")
 					}
 					return
-				}
-				if err != nil {
-					t.Fatal(err)
 				}
 				var buf bytes.Buffer
 				if err := p.Serialize(&buf); err != nil {
@@ -713,4 +733,40 @@ func signedMessageHash(msg string) []byte {
 	}
 	h := chainhash.DoubleHashB(buf.Bytes())
 	return h
+}
+
+// TestCollateralMessagePayoutEncoding checks that only the scripts Dash's
+// ExtractDestination knows are written as addresses.
+func TestCollateralMessagePayoutEncoding(t *testing.T) {
+	t.Parallel()
+
+	_, tx := loadVector(t, "regfund")
+	var p ProRegTx
+	if err := Parse(tx.ExtraPayload, &p); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1-of-1 bare multisig: OP_1 <33 byte key> OP_1 OP_CHECKMULTISIG.
+	key, err := hex.DecodeString("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+	if err != nil {
+		t.Fatal(err)
+	}
+	multisig, err := txscript.NewScriptBuilder().AddOp(txscript.OP_1).AddData(key).
+		AddOp(txscript.OP_1).AddOp(txscript.OP_CHECKMULTISIG).Script()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// btcd reports one address for it, which is what makes the gate matter.
+	if _, addrs, _, err := txscript.ExtractPkScriptAddrs(multisig, regtestParams()); err != nil || len(addrs) != 1 {
+		t.Fatalf("setup: %d addresses, err %v", len(addrs), err)
+	}
+	p.ScriptPayout = multisig
+
+	msg, err := p.CollateralMessage(regtestParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := strings.Cut(msg, "|"); got != hex.EncodeToString(multisig) {
+		t.Fatalf("payout %q, want hex %x", got, multisig)
+	}
 }

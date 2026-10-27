@@ -68,8 +68,9 @@ var (
 	// ErrTrailingData is returned when a payload has bytes after the last
 	// field.
 	ErrTrailingData = errors.New("trailing data after provider tx payload")
-	// ErrNonCanonicalAddress is returned for a service address Dash would
-	// store differently from how it was written, see Service.
+	// ErrNonCanonicalAddress is returned by Serialize and PayloadHash for a
+	// service address Dash would store differently from how it was written,
+	// see Service.
 	ErrNonCanonicalAddress = errors.New("non canonical service address")
 )
 
@@ -83,11 +84,10 @@ var (
 // 16 byte IPv6 (IPv4 addresses are v4-mapped) and a big endian port.
 //
 // Dash does not hash the address it received but a copy it parsed and wrote
-// back, and it stores an address that is not valid as the zero address with
-// port 0. A payload hash computed from the bytes of such an address would not
-// match Dash's, so only addresses that survive that round trip are accepted:
-// valid ones, and the zero address with port 0, which is how an empty address
-// is written.
+// back, and it stores an address that is not valid as the empty Service. So
+// decoding does the same: an invalid address becomes Service{}, and the bytes
+// read are not kept. Serializing refuses such an address, so only valid ones
+// and the empty Service are ever written.
 type Service struct {
 	IP   [16]byte
 	Port uint16
@@ -139,7 +139,7 @@ func (s *Service) deserialize(r io.Reader) error {
 	}
 	s.Port = binary.BigEndian.Uint16(port[:])
 	if !s.canonical() {
-		return ErrNonCanonicalAddress
+		*s = Service{}
 	}
 	return nil
 }
@@ -277,10 +277,16 @@ func (p *ProRegTx) CollateralMessage(net *chaincfg.Params) (string, error) {
 		return "", err
 	}
 
+	// Dash's ExtractDestination only finds an address for these classes, where
+	// ExtractPkScriptAddrs also returns one for 1-of-1 multisig and witness
+	// programs.
 	payout := hex.EncodeToString(p.ScriptPayout)
-	_, addrs, _, err := txscript.ExtractPkScriptAddrs(p.ScriptPayout, net)
-	if err == nil && len(addrs) == 1 {
-		payout = addrs[0].EncodeAddress()
+	switch txscript.GetScriptClass(p.ScriptPayout) {
+	case txscript.PubKeyHashTy, txscript.ScriptHashTy, txscript.PubKeyTy:
+		_, addrs, _, err := txscript.ExtractPkScriptAddrs(p.ScriptPayout, net)
+		if err == nil && len(addrs) == 1 {
+			payout = addrs[0].EncodeAddress()
+		}
 	}
 
 	owner, err := btcutil.NewAddressPubKeyHash(p.KeyIDOwner[:], net)
