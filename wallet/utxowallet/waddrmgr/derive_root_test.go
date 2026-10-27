@@ -346,7 +346,7 @@ func TestDeriveFromRootPathDashCoreVector(t *testing.T) {
 				t.Fatalf("%s: decode address: %v", tc.name, err)
 			}
 			got := btcutil.Hash160(priv.PubKey().SerializeCompressed())
-			if hex.EncodeToString(got) != hex.EncodeToString([]byte(want)) {
+			if hex.EncodeToString(got) != hex.EncodeToString(want) {
 				t.Errorf("%s: key hash160 %x, Dash Core derived %x",
 					tc.name, got, want)
 			}
