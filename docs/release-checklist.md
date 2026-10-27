@@ -8,8 +8,8 @@ and are cherry-picked to the branch. The release branch is never merged back
 into `master`, because it carries the built web bundle that `master`
 ignores.
 
-Desktop installers are built, signed and packaged from a Linux host by the
-scripts in `release/`; see [release/README.md](../release/README.md) for the
+Desktop installers and command-line archives are built, signed and packaged
+from a Linux host by the scripts in `release/`; see [release/README.md](../release/README.md) for the
 tooling, credentials and per-platform notes.
 
 ## 1. Before forking the release branch
@@ -130,8 +130,8 @@ code but missing from `EnUS` displays its own text in every language, and
   ```
 
 - [ ] On `master`, bump to the next minor with a `-pre` suffix (for example
-      `X.Y+1.0-pre`) in `wallet/app/version.go`, `pkg.sh` and both
-      `winres.json` files (see [Version locations](#version-locations)).
+      `X.Y+1.0-pre`) in `wallet/app/version.go` (see
+      [Version locations](#version-locations)).
 
 ## 3. Before tagging
 
@@ -161,8 +161,11 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
 - [ ] README: changes made on `master` since the fork are cherry-picked.
 - [ ] Website: changes for this release are prepared in `caribou-site`
       (see [Website](#website)), ready to deploy once the release is public.
-- [ ] Release notes are drafted. `release.sh --publish` generates a PR list
-      for the draft release; it needs a human-written summary on top.
+- [ ] Release notes are drafted in a file for `release.sh --notes <file>`.
+      Without `--notes`, GitHub generates a list of the pull requests since
+      the previous release, which needs a human-written summary on top; with
+      no previous release, that list is every pull request in the
+      repository.
 - [ ] Web assets, as the last commit before the tag. `dist/` is ignored, so
       the files are force-added; build with the Node version pinned in
       `release/Dockerfile` so the committed bundle matches the shipped one:
@@ -193,7 +196,8 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       `lib/` is already populated, `cd wallet/asset/xmr/lib && sha256sum -c
       SHA256SUMS` confirms it matches; otherwise
       `cd wallet/asset/xmr && ./fetch-libs.sh --all` downloads and verifies
-      them.
+      them. Every platform is needed, including `linux-arm64`, which only the
+      command-line archives use.
 - [ ] Builder image: the scripts build the Docker image only when it is
       missing or `--build-image` is passed. They do not notice a change to
       `release/Dockerfile`, so pass `--build-image` on the first build after
@@ -206,13 +210,20 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
       (`templates/pages/download.tmpl`). `--no-sign` cannot skip only the
       manifest signature: it is forwarded to every package script and also
       disables Windows and macOS code signing.
-- [ ] `release/release.sh vX.Y.Z --publish` builds every platform, writes
-      `SHA256SUMS` and `SHA256SUMS.asc`, and opens a draft GitHub release
-      with the artifacts attached.
-- [ ] CLI archives: `./pkg.sh` builds them, but `release.sh` neither runs it
-      nor lists its output in `SHA256SUMS`. If they ship with the release,
-      build them from the tag and add them to the manifest before it is
-      signed.
+- [ ] `release/release.sh vX.Y.Z --publish --notes <file>` builds every
+      desktop platform and, through `release/package-cli.sh`, the
+      command-line archives; writes one `SHA256SUMS` covering every file,
+      and `SHA256SUMS.asc`; and opens a draft GitHub release with the
+      artifacts attached. The command-line archives are `wallet/cmd/caribou`
+      with XMR for linux/amd64 and linux/arm64 (`.tar.gz`), darwin/amd64 and
+      darwin/arm64 (`.zip`, signed and notarized) and windows/amd64 (`.zip`,
+      signed). A notarization ticket cannot be stapled to a zip, so
+      Gatekeeper fetches it online when the binary first runs. After the
+      upload, `release.sh` compares the asset names GitHub stored with
+      `dist/` and stops on any difference, since GitHub renames some
+      characters in asset names without documenting which. The names the
+      scripts produce avoid the one known case, `~`: the `.deb` file name
+      carries `1.2.0-rc1` while its control file keeps `1.2.0~rc1`.
 
 ## 5. Verify
 
@@ -223,6 +234,13 @@ Repeat for every tag, release candidates included, on `release-vX.Y`.
 - [ ] macOS: on an Apple Silicon Mac, open both `.dmg` files (the x86_64
       build under Rosetta), confirm Gatekeeper accepts them, launch; find an
       Intel Mac tester when one is available.
+- [ ] Command-line archives: extract each one and run `caribou --version` on
+      its platform, linux/arm64 on arm64 hardware. The Windows binary has no
+      console, so run `caribou.exe --version | more` to see its output, or
+      read the version from the Details tab of the file's properties. On a
+      Mac, run the binary from a zip downloaded with a browser, so the
+      quarantine attribute is set, which confirms Gatekeeper accepts the
+      online notarization ticket.
 - [ ] Verify `SHA256SUMS.asc` with the release signing key.
 
 ## 6. Publish
@@ -240,17 +258,10 @@ made; on `master`, the next minor with `-pre`.
 | File | Field | Release-branch value |
 | --- | --- | --- |
 | `wallet/app/version.go` | `Version` | `X.Y.Z[-rcN]+release.local` |
-| `pkg.sh` | `VER`, `META` | `X.Y.Z[-rcN]`, `release` |
-| `wallet/cmd/caribou/winres.json` | `file_version`, `product_version`, `FileVersion`, `ProductVersion` | `X.Y.Z.0[-rcN]` |
-| `wallet/cmd/caribou-desktop/winres.json` | same four fields | `X.Y.Z.0[-rcN]` |
 
-After editing a `winres.json`, regenerate the checked-in resource objects
-(`rsrc_windows_386.syso`, `rsrc_windows_amd64.syso`) with
-`go generate ./wallet/cmd/caribou ./wallet/cmd/caribou-desktop`. The CLI's
-objects are what `pkg.sh` links into the Windows build;
-`release/package-windows.sh` regenerates the desktop app's objects with the
-tag's version at build time, so the committed desktop copy only affects
-source builds.
+The release scripts override `Version` at build time with the tag's
+version, through the linker (`-X` in `go_ldflags`, `release/common.sh`). The
+checked-in value is what `go build` and `go install` from the tag report.
 
 The mobile apps are versioned separately and bumped when a mobile build is
 released:
@@ -267,6 +278,11 @@ Derived from the tag at build time, no edit needed:
 - `release/linux/control.in` and `release/linux/snapcraft.yaml.in`
   (`@VERSION@`).
 - `release/windows/caribou.nsi` (`VERSION_NUM`).
+- `wallet/cmd/caribou/winres.json` and `wallet/cmd/caribou-desktop/winres.json`:
+  `package-cli.sh` and `package-windows.sh` regenerate the resource objects
+  with the tag's version (`windows_resources` in `release/common.sh`). The
+  checked-in values and `rsrc_windows_*.syso` objects serve source builds
+  only.
 - `release/linux/org.bisoncraft.caribou.metainfo.xml` has no `<releases>`
   element; if one is added, it needs an entry per release.
 
