@@ -18,12 +18,11 @@
 #     background image and the .DS_Store generator.
 #
 # The Electron floor is macOS 13; the Go binary is built with the same
-# deployment target.
+# deployment target (MACOS_DEPLOYMENT_TARGET in common.sh).
 
 source "$(dirname "$0")/common.sh"
 
 ARCHS="amd64 arm64"
-DEPLOYMENT_TARGET="13.0"
 BUNDLE_ID="com.bisoncraft.caribou.desktop"
 # Mounted-volume name. The .DS_Store's background alias embeds it, so the two
 # must agree (see release/darwin/dmg/dsstore.py).
@@ -68,7 +67,7 @@ rerun with --build-image."
 		log "building caribou for darwin/${arch}"
 		# The XMR dylib's install name is @executable_path/..., so the loader
 		# finds it beside the binary with no rpath needed.
-		PATH="/opt/osxcross/bin:$PATH" MACOSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET" \
+		PATH="/opt/osxcross/bin:$PATH" MACOSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" \
 			CGO_ENABLED=1 GOOS=darwin GOARCH="$arch" CC="$cc" CXX="${cc}++" \
 			go build -trimpath "${GO_TAGS[@]}" -ldflags "$(go_ldflags)" -o "${res}/caribou" ./wallet/cmd/caribou
 		with_xmr && cp "wallet/asset/xmr/lib/darwin-${arch}/libmonero_wallet2_api_c.dylib" "$res/"
