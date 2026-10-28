@@ -18,6 +18,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/snacl"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/spv/cache/lru"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/walletdb"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -478,6 +479,35 @@ func (m *Manager) Close() {
 	m.closed = true
 }
 
+// decryptRootKey fetches and decrypts the master root HD private key. The
+// caller must hold m.mtx and have checked that the manager is neither watch
+// only nor locked. The caller should zero the returned key when done.
+func (m *Manager) decryptRootKey(ns walletdb.ReadBucket) (*hdkeychain.ExtendedKey, error) {
+	masterRootPrivEnc, _ := fetchMasterHDKeys(ns)
+
+	// If the master root private key isn't found within the database, the
+	// root has been neutered and there is nothing to decrypt.
+	if masterRootPrivEnc == nil {
+		return nil, managerError(ErrWatchingOnly, "", nil)
+	}
+
+	serializedMasterRootPriv, err := m.cryptoKeyPriv.Decrypt(masterRootPrivEnc)
+	if err != nil {
+		str := "failed to decrypt master root serialized private key"
+		return nil, managerError(ErrLocked, str, err)
+	}
+
+	rootPriv, err := hdkeychain.NewKeyFromString(
+		string(serializedMasterRootPriv),
+	)
+	zero.Bytes(serializedMasterRootPriv)
+	if err != nil {
+		str := "failed to create master extended private key"
+		return nil, managerError(ErrKeyChain, str, err)
+	}
+	return rootPriv, nil
+}
+
 // NewScopedKeyManager creates a new scoped key manager from the root manager. A
 // scoped key manager is a sub-manager that only has the coin type key of a
 // particular coin type and BIP0043 purpose. This is useful as it enables
@@ -502,43 +532,17 @@ func (m *Manager) NewScopedKeyManager(ns walletdb.ReadWriteBucket,
 			return nil, managerError(ErrLocked, errLocked, nil)
 		}
 
-		// Now that we know the manager is unlocked, we'll need to
-		// fetch the root master HD private key. This is required as
-		// we'll be attempting the following derivation:
-		// m/purpose'/cointype'
+		// Now that we know the manager is unlocked, we'll need the root
+		// master HD private key. This is required as we'll be
+		// attempting the following derivation: m/purpose'/cointype'
 		//
 		// Note that the path to the coin type is requires hardened
 		// derivation, therefore this can only be done if the wallet's
 		// root key hasn't been neutered.
-		masterRootPrivEnc, _ := fetchMasterHDKeys(ns)
-
-		// If the master root private key isn't found within the
-		// database, but we need to bail here as we can't create the
-		// cointype key without the master root private key.
-		if masterRootPrivEnc == nil {
-			return nil, managerError(ErrWatchingOnly, "", nil)
-		}
-
-		// Before we can derive any new scoped managers using this
-		// key, we'll need to fully decrypt it.
-		serializedMasterRootPriv, err :=
-			m.cryptoKeyPriv.Decrypt(masterRootPrivEnc)
+		var err error
+		rootPriv, err = m.decryptRootKey(ns)
 		if err != nil {
-			str := fmt.Sprintf("failed to decrypt master root " +
-				"serialized private key")
-			return nil, managerError(ErrLocked, str, err)
-		}
-
-		// Now that we know the root priv is within the database,
-		// we'll decode it into a usable object.
-		rootPriv, err = hdkeychain.NewKeyFromString(
-			string(serializedMasterRootPriv),
-		)
-		zero.Bytes(serializedMasterRootPriv)
-		if err != nil {
-			str := fmt.Sprintf("failed to create master extended " +
-				"private key")
-			return nil, managerError(ErrKeyChain, str, err)
+			return nil, err
 		}
 	}
 
@@ -1098,6 +1102,56 @@ func (m *Manager) ConvertToWatchingOnly(ns walletdb.ReadWriteBucket) error {
 	m.watchingOnly.Store(true)
 	return nil
 
+}
+
+// DeriveFromRootPath derives the private key at path from the wallet's master
+// root key. Each path element is used as given, so hardened levels must
+// include hdkeychain.HardenedKeyStart. This is for paths that don't fit a
+// scope's purpose'/coin'/account'/branch/index shape, such as DIP-9
+// m/9'/coin'/3'/feature'/index. The caller owns the returned key and should
+// not retain it longer than needed.
+//
+// The manager must be unlocked. Nothing derived here is cached.
+func (m *Manager) DeriveFromRootPath(ns walletdb.ReadBucket,
+	path []uint32) (*btcec.PrivateKey, error) {
+
+	// An empty path would return the master root secret itself.
+	if len(path) == 0 {
+		return nil, managerError(ErrKeyChain, "empty derivation path", nil)
+	}
+
+	m.mtx.RLock()
+	defer m.mtx.RUnlock()
+
+	if m.WatchOnly() {
+		return nil, managerError(ErrWatchingOnly, errWatchingOnly, nil)
+	}
+	if m.IsLocked() {
+		return nil, managerError(ErrLocked, errLocked, nil)
+	}
+
+	key, err := m.decryptRootKey(ns)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, idx := range path {
+		child, err := key.Derive(idx)
+		key.Zero()
+		if err != nil {
+			str := fmt.Sprintf("failed to derive path element %d", idx)
+			return nil, managerError(ErrKeyChain, str, err)
+		}
+		key = child
+	}
+	defer key.Zero()
+
+	privKey, err := key.ECPrivKey()
+	if err != nil {
+		str := "failed to get private key from derived key"
+		return nil, managerError(ErrKeyChain, str, err)
+	}
+	return privKey, nil
 }
 
 // IsLocked returns whether or not the address managed is locked.  When it is

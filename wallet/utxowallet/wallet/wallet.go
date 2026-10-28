@@ -1781,6 +1781,20 @@ func (w *Wallet) Locked() bool {
 	return <-w.lockState
 }
 
+// DeriveFromRootPath derives the private key at path from the wallet's master
+// root key. See waddrmgr.Manager.DeriveFromRootPath. The wallet must be
+// unlocked, and the caller owns the returned key.
+func (w *Wallet) DeriveFromRootPath(path []uint32) (*btcec.PrivateKey, error) {
+	var key *btcec.PrivateKey
+	err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		ns := tx.ReadBucket(waddrmgrNamespaceKey)
+		var err error
+		key, err = w.Manager.DeriveFromRootPath(ns, path)
+		return err
+	})
+	return key, err
+}
+
 // holdUnlock prevents the wallet from being locked.  The heldUnlock object
 // *must* be released, or the wallet will forever remain unlocked.
 //
