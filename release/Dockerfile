@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 # caribou-builder: one image that cross-compiles, signs and packages the
-# desktop release for Linux, Windows and macOS from a Linux host. Built by
-# release/common.sh (build_image) with wallet/asset/xmr/xcode/ as the build
-# context: that directory is where a staged Xcode xip is picked up for the
-# macOS toolchain, and nothing else from the tree is needed at build time
-# because the release scripts are bind-mounted at run time.
+# desktop and command-line releases for Linux, Windows and macOS from a Linux
+# host. Built by release/common.sh (build_image) with wallet/asset/xmr/xcode/
+# as the build context: that directory is where a staged Xcode xip is picked
+# up for the macOS toolchain, and nothing else from the tree is needed at
+# build time because the release scripts are bind-mounted at run time.
 #
 # Ubuntu 22.04 is the base so that the Linux binary links against glibc 2.35
 # and WebKitGTK 2.x from that release, which is the oldest distro the .deb
@@ -158,6 +158,13 @@ RUN git clone https://github.com/fanquake/libdmg-hfsplus.git /tmp/libdmg \
 # every executable file it carries is signed. Installed in its own late layer
 # so adding it does not rebuild the osxcross stage.
 RUN apt-get update && apt-get install -y --no-install-recommends p7zip-full \
+    && rm -rf /var/lib/apt/lists/*
+
+# The linux/arm64 CLI build (release/package-cli.sh) links the arm64 XMR
+# library with cgo, so it needs a cross compiler and the target's libc. Also
+# in a late layer, for the same reason as 7-Zip above.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
 
 # ds_store writes the Finder layout (.DS_Store) of the macOS dmg and mac_alias

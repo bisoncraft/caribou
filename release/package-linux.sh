@@ -63,7 +63,11 @@ stage_build() {
 	rm -rf "${out:?}/${tarname}"
 
 	# Debian package. The tree under $deb mirrors the installed filesystem.
-	local debname="${DEB_PKG}_${VERSION_DEB}-${DEB_REV}_${DEB_ARCH}"
+	# The file name carries VERSION, not VERSION_DEB: GitHub replaces "~" with
+	# "." in uploaded asset names, which would break the SHA256SUMS line and
+	# the download link. dpkg takes the version from DEBIAN/control, where
+	# "~" stays and keeps a release candidate ordered before the release.
+	local debname="${DEB_PKG}_${VERSION}-${DEB_REV}_${DEB_ARCH}"
 	local deb="${out}/${debname}"
 	install -Dm755 "${stage}/${APP}" "${deb}/usr/bin/${APP}"
 	with_xmr && install -Dm644 "${stage}/libmonero_wallet2_api_c.so" "${deb}/usr/lib/caribou/libmonero_wallet2_api_c.so"

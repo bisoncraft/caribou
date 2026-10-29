@@ -1,14 +1,16 @@
-# Desktop release packaging
+# Release packaging
 
-Scripts that build, sign and package the Caribou desktop app for Linux,
-Windows and macOS, all from a Linux host. Each platform has one script that
-takes a release tag and produces installers with no further input:
+Scripts that build, sign and package the Caribou desktop app and the
+command-line `caribou` binary for Linux, Windows and macOS, all from a Linux
+host. Each script takes a release tag and produces its artifacts with no
+further input:
 
 ```bash
 release/package-linux.sh   v1.2.0   # .deb + .tar.gz (amd64)
 release/package-windows.sh v1.2.0   # signed setup.exe + .zip (amd64)
 release/package-darwin.sh  v1.2.0   # notarized .dmg (x86_64 and arm64)
-release/release.sh         v1.2.0   # all three, SHA256SUMS + GPG signature, draft GitHub release
+release/package-cli.sh     v1.2.0   # command-line archives (see below)
+release/release.sh         v1.2.0   # all four, one SHA256SUMS + GPG signature, draft GitHub release
 ```
 
 Every release build carries the `xmr` tag. The prebuilt
@@ -40,20 +42,21 @@ across runs. `release/out` and `release/.env` are gitignored.
 
 `release/Dockerfile` builds `caribou-builder` on Ubuntu 22.04, which fixes
 the Linux binary's glibc and WebKitGTK floor at Ubuntu 22.04 / Debian 12. It
-holds Go, Node, MinGW, NSIS, rcodesign, jsign, osslsigncode, genisoimage
-and libdmg-hfsplus, and an osxcross toolchain when a macOS SDK is available.
+holds Go, Node, MinGW, an aarch64 Linux cross compiler, NSIS, rcodesign,
+jsign, osslsigncode, genisoimage and libdmg-hfsplus, and an osxcross
+toolchain when a macOS SDK is available.
 Every download is pinned by checksum in the Dockerfile.
 
 The image builds automatically on first use as `caribou-builder:<base>`.
-The base is chosen by `package-linux.sh` from the Linux XMR library: the
-oldest Ubuntu whose glibc and libstdc++ can link it (22.04 when the library
-needs glibc 2.35 or older, 24.04 otherwise), since that library sets the
-.deb's floor and the binary should be built on the oldest base that can
-satisfy it. The other platforms reuse whatever builder image exists. When a
-new base is needed, the image is rebuilt on it and the previous builder image
-(identified by the `caribou.builder` label, nothing else) is removed once the
-new one exists. Rebuild after changing the Dockerfile or staging the Xcode
-xip with `--build-image`.
+The base is chosen by `package-linux.sh` and `package-cli.sh` from the Linux
+XMR libraries: the oldest Ubuntu whose glibc and libstdc++ can link them
+(22.04 when they need glibc 2.35 or older, 24.04 otherwise), since those
+libraries set the Linux floor and the binaries should be built on the oldest
+base that can satisfy it. The other platforms reuse whatever builder image
+exists. When a new base is needed, the image is rebuilt on it and the
+previous builder image (identified by the `caribou.builder` label, nothing
+else) is removed once the new one exists. Rebuild after changing the
+Dockerfile or staging the Xcode xip with `--build-image`.
 
 ### macOS toolchain
 
@@ -138,6 +141,28 @@ notarized app. Verify on a Mac with `spctl --assess --type open
 --context context:primary-signature -v Caribou.dmg` and by launching the
 installed app; an Apple Silicon Mac can also run the x86_64 build under
 Rosetta.
+
+**Command line.** `package-cli.sh` builds `wallet/cmd/caribou` for
+linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and windows/amd64, each
+with cgo and the XMR library, and archives the binary and library together in
+a directory named like the archive, `caribou-<version>-<os>-<arch>`. Each
+binary loads the library from its own directory: through the `$ORIGIN` rpath
+on Linux, the dylib's `@executable_path` install name on macOS and the DLL
+search order on Windows.
+
+- Linux: `.tar.gz`. The arm64 build uses the image's `aarch64-linux-gnu`
+  cross compiler. Both inherit the builder base's glibc floor.
+- macOS: `.zip`. The binary and dylib get the Developer ID signature with
+  the hardened runtime, and the zip is notarized. A ticket cannot be stapled
+  to a zip, so Gatekeeper fetches it online when the binary first runs.
+- Windows: `.zip`, built with the `systray` tag and `-H windowsgui` so it
+  runs as a tray app without a console window. The `.exe` and the DLL are
+  Authenticode-signed and verified like the desktop app's, and the
+  resources in `wallet/cmd/caribou/winres.json` are regenerated with the
+  release's version.
+
+FreeBSD, OpenBSD and other Linux architectures have no prebuilt XMR library
+and are not built.
 
 ## Release checklist
 

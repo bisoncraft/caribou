@@ -12,6 +12,7 @@
 #   out/<version>/src/        clean export of the ref being built
 #   out/<version>/COMMIT      the exact commit that was exported
 #   out/<version>/<os>/       per-platform outputs and staging
+#   out/<version>/cli/        command-line archives (package-cli.sh)
 #   out/<version>/dist/       collected artifacts, SHA256SUMS (release.sh)
 #   out/.cache/               Go, npm, Electron and dotnet caches shared across runs
 #
@@ -30,6 +31,10 @@ IMAGE=""          # set by select_image; CARIBOU_BUILDER_IMAGE overrides
 BASE="${BASE:-}"  # Ubuntu release of the builder image (22.04 or 24.04); the
                   # container half receives it from run_stage's environment
 APP="caribou-desktop"
+CLI_APP="caribou"
+# Oldest macOS the binaries run on: Electron's floor, and the minimum OS
+# version of the arm64 XMR dylib.
+MACOS_DEPLOYMENT_TARGET="13.0"
 GO_VERSION_SYMBOL="github.com/bisoncraft/caribou/wallet/app.Version"
 HOMEPAGE="https://github.com/bisoncraft/caribou"
 
@@ -71,7 +76,13 @@ parse_common_args() {
 		--no-notarize) NO_NOTARIZE=1; shift ;;
 		--no-xmr) NO_XMR=1; shift ;;
 		--build-image) BUILD_IMAGE=1; shift ;;
-		v[0-9]*) TAG="$1"; shift ;;
+		v[0-9]*)
+			# The first tag-shaped argument is the tag. A later one is a value
+			# of the caller's own option, such as a notes file named after
+			# the release.
+			if [[ -z "$TAG" ]]; then TAG="$1"; else EXTRA_ARGS+=("$1"); fi
+			shift
+			;;
 		*) EXTRA_ARGS+=("$1"); shift ;;
 		esac
 	done
@@ -84,7 +95,7 @@ parse_common_args() {
 #   VERSION      1.2.0-rc1            full semver, stamped into the binaries
 #   VERSION_NUM  1.2.0                numeric core (Windows file and product version)
 #   PRERELEASE   rc1                  empty for a final release
-#   VERSION_DEB  1.2.0~rc1            dpkg orders ~rc1 before the final 1.2.0
+#   VERSION_DEB  1.2.0~rc1            DEBIAN/control only: dpkg orders ~rc1 before 1.2.0
 #   COMMIT       full sha of what is exported
 resolve_version() {
 	if [[ -n "$TAG" ]]; then
@@ -182,15 +193,18 @@ load_env() {
 
 version_le() { [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" == "$1" ]]; }
 
-# linux_base_for_lib <libmonero_wallet2_api_c.so>: the oldest Ubuntu base
-# whose glibc and libstdc++ can link the prebuilt library. The library sets
-# the .deb's floor, so the binary is built on the oldest base able to link
-# it, and the floor falls on its own once a library built against an older
-# glibc arrives. Prints the base; diagnostics go to stderr.
+# linux_base_for_lib <libmonero_wallet2_api_c.so>...: the oldest Ubuntu base
+# whose glibc and libstdc++ can link every given prebuilt library. The
+# libraries set the Linux packages' floor, so the binaries are built on the
+# oldest base able to link them, and the floor falls on its own once
+# libraries built against an older glibc arrive. readelf reads the symbol
+# versions of an ELF file for any architecture; the host's objdump reads only
+# its own. Prints the base; diagnostics go to stderr.
 linux_base_for_lib() {
-	local so="$1" glibc cxx
-	glibc="$(objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
-	cxx="$(objdump -T "$so" | grep -oE 'GLIBCXX_[0-9.]+' | sort -Vu | tail -1)"
+	local syms glibc cxx
+	syms="$(for so in "$@"; do readelf --dyn-syms -W "$so"; done)"
+	glibc="$(grep -oE 'GLIBC_[0-9.]+' <<<"$syms" | sort -Vu | tail -1)"
+	cxx="$(grep -oE 'GLIBCXX_[0-9.]+' <<<"$syms" | sort -Vu | tail -1)"
 	glibc="${glibc#GLIBC_}"; cxx="${cxx#GLIBCXX_}"
 	log "XMR library needs glibc ${glibc:-?} and libstdc++ ${cxx:-(none)}"
 	if version_le "${glibc:-0}" 2.35 && version_le "${cxx:-0}" 3.4.30; then
@@ -289,16 +303,40 @@ run_stage() {
 # Container-side helpers. Everything below assumes cwd=/work/src.
 
 go_ldflags() { printf -- '-s -w -buildid= -X %s=%s %s' "$GO_VERSION_SYMBOL" "$VERSION" "${1:-}"; }
-# go_tags fills GO_TAGS with the build tags for this build.
+# go_tags [tag...] fills GO_TAGS with the build tags for this build: the
+# given ones, plus xmr unless --no-xmr.
 go_tags() {
+	local tags=("$@")
+	[[ "$NO_XMR" == 1 ]] || tags+=(xmr)
 	GO_TAGS=()
-	[[ "$NO_XMR" == 1 ]] || GO_TAGS=(-tags xmr)
+	if [[ ${#tags[@]} -gt 0 ]]; then GO_TAGS=(-tags "$(IFS=,; echo "${tags[*]}")"); fi
 }
 with_xmr() { [[ "$NO_XMR" != 1 ]]; }
 
 build_ui() {
 	log "building web UI"
 	(cd wallet/appserver && npm ci --no-audit --no-fund && npm run build --workspace=desktop)
+}
+
+# windows_resources <app> <arch>: regenerate wallet/cmd/<app>'s icon and
+# version resources stamped with this release's version. The checked-in .syso
+# objects carry whatever version was current when they were generated, and
+# Explorer's Details tab should match the binary.
+windows_resources() {
+	log "generating Windows resources for $1 ${VERSION}"
+	(cd "wallet/cmd/$1" && go-winres make --in winres.json --arch "$2" \
+		--product-version "$VERSION" --file-version "${VERSION_NUM}.0")
+}
+
+# xmr_import_lib <arch>: MinGW cannot link against a .dll directly, so make an
+# import library for the XMR one. It is named .a rather than .dll.a because
+# webview_go links with -static, which makes the linker skip .dll.a files.
+xmr_import_lib() {
+	with_xmr || return 0
+	log "generating import library for libmonero_wallet2_api_c.dll"
+	(cd "wallet/asset/xmr/lib/windows-$1" &&
+		gendef libmonero_wallet2_api_c.dll >/dev/null &&
+		x86_64-w64-mingw32-dlltool -d libmonero_wallet2_api_c.def -l libmonero_wallet2_api_c.a -D libmonero_wallet2_api_c.dll)
 }
 
 # sign_windows_file <file>: Authenticode-sign a PE file with jsign. Azure
@@ -450,12 +488,16 @@ verify_macos_runtime() {
 	log "hardened runtime present on every executable in $(basename "$bundle")"
 }
 
-# notarize_macos <path>: submit to Apple's notary service and staple the
-# ticket. Needs the App Store Connect API key encoded by
+# notarize_macos <path> [--no-staple]: submit to Apple's notary service and
+# staple the ticket. A zip cannot hold a stapled ticket, so with --no-staple
+# the submission is only waited on, and Gatekeeper fetches the ticket online
+# instead. Needs the App Store Connect API key encoded by
 # `rcodesign encode-app-store-connect-api-key` (ASC_KEY_JSON, default
 # apple/asc-key.json under release/.env).
 notarize_macos() {
 	local target="$1"
+	local -a mode=(--staple)
+	[[ "${2:-}" == --no-staple ]] && mode=(--wait)
 	if [[ "$NO_SIGN" == 1 || "$NO_NOTARIZE" == 1 ]]; then
 		warn "not notarizing $(basename "$target")"
 		return 0
@@ -468,5 +510,5 @@ notarize_macos() {
 	# an hour, and giving up leaves the build unstapled even if the ticket is
 	# issued later. Wait up to six hours; NOTARY_WAIT_SECONDS overrides.
 	rcodesign notary-submit --api-key-file "$key" \
-		--max-wait-seconds "${NOTARY_WAIT_SECONDS:-21600}" --staple "$target"
+		--max-wait-seconds "${NOTARY_WAIT_SECONDS:-21600}" "${mode[@]}" "$target"
 }

@@ -36,20 +36,8 @@ stage_build() {
 	build_ui
 	go_tags
 
-	# Icon and version resources. The checked-in .syso objects carry whatever
-	# version was current when they were generated; regenerate them stamped
-	# with this release's version so Explorer's Details tab matches the binary.
-	log "generating Windows resources for ${VERSION}"
-	(cd "wallet/cmd/${APP}" && go-winres make --in winres.json --arch "$ARCH" \
-		--product-version "$VERSION" --file-version "${VERSION_NUM}.0")
-
-	# MinGW cannot link against a .dll directly; make an import library. It is
-	# named .a rather than .dll.a because webview_go links with -static, which
-	# makes the linker skip .dll.a files.
-	with_xmr && log "generating import library for libmonero_wallet2_api_c.dll" &&
-		(cd "wallet/asset/xmr/lib/windows-${ARCH}" &&
-		gendef libmonero_wallet2_api_c.dll >/dev/null &&
-		x86_64-w64-mingw32-dlltool -d libmonero_wallet2_api_c.def -l libmonero_wallet2_api_c.a -D libmonero_wallet2_api_c.dll)
+	windows_resources "$APP" "$ARCH"
+	xmr_import_lib "$ARCH"
 
 	log "building ${APP}.exe for windows/${ARCH}"
 	# /opt/winsdk holds a stub EventToken.h: webview_go's bundled WebView2.h

@@ -248,10 +248,9 @@ a loopback server, around the Go core bound with gomobile from
 
 ### Release packaging
 
-Desktop installers for Linux, Windows and macOS are built, signed and
-packaged from a Linux host by the scripts in `release/`; see
-[release/README.md](release/README.md). `./pkg.sh` builds the CLI/server
-tarballs.
+Desktop installers and command-line archives for Linux, Windows and macOS
+are built, signed and packaged from a Linux host by the scripts in
+`release/`; see [release/README.md](release/README.md).
 
 ## Testing
 
