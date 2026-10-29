@@ -544,6 +544,7 @@ func (m *Manager) NewScopedKeyManager(ns walletdb.ReadWriteBucket,
 		if err != nil {
 			return nil, err
 		}
+		defer rootPriv.Zero()
 	}
 
 	// Now that we have the root private key, we'll fetch the scope bucket
@@ -1108,8 +1109,8 @@ func (m *Manager) ConvertToWatchingOnly(ns walletdb.ReadWriteBucket) error {
 // root key. Each path element is used as given, so hardened levels must
 // include hdkeychain.HardenedKeyStart. This is for paths that don't fit a
 // scope's purpose'/coin'/account'/branch/index shape, such as DIP-9
-// m/9'/coin'/3'/feature'/index. The caller owns the returned key and should
-// not retain it longer than needed.
+// m/9'/coin'/3'/subfeature'/index. The caller owns the returned key and
+// should call Zero on it when done.
 //
 // The manager must be unlocked. Nothing derived here is cached.
 func (m *Manager) DeriveFromRootPath(ns walletdb.ReadBucket,
