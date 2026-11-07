@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -995,6 +996,9 @@ func (w *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asset.
 		txid := tx.TxID()
 		w.log.Debugf("Max withdraw pre-commit: amount=%d, fee=%d, txid=%s, txCount=%d", amount, fee, txid, tx.TxCount())
 
+		if err := checkTxFee(fee, tx.Hex()); err != nil {
+			return nil, err
+		}
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("failed to broadcast sweep transaction: %w", err)
 		}
@@ -1116,6 +1120,35 @@ func (w *ExchangeWallet) estimateFee(address string, value uint64) (uint64, erro
 	return testTx.Fee(), nil
 }
 
+// maxTxFeeRate is the highest fee, in atoms per byte of signed transaction,
+// this wallet will broadcast. The fee rate comes from the daemon, which may be
+// a third party, so it is not taken on trust.
+//
+// Mainnet in July 2026 quotes 4000000 atoms per weight unit at the most
+// expensive priority (Last), so this allows 5x that. A standard 1500 byte send
+// can then cost at most 0.03 XMR. For the transactions this wallet builds (at
+// most two outputs each) weight equals size, so atoms per byte is the rate the
+// daemon quoted.
+const maxTxFeeRate = 20_000_000
+
+// checkTxFee refuses a built transaction whose fee is above maxTxFeeRate. txHex
+// is PendingTransaction.Hex: the signed transactions, comma separated. The
+// check fails closed if the size is unknown.
+func checkTxFee(fee uint64, txHex string) error {
+	var size uint64
+	for _, h := range strings.Split(txHex, ",") {
+		size += uint64(len(strings.TrimSpace(h)) / 2)
+	}
+	if size == 0 {
+		return errors.New("refusing to broadcast: could not read the signed transaction to check its fee")
+	}
+	if limit := maxTxFeeRate * size; fee > limit {
+		return fmt.Errorf("refusing to broadcast: fee of %d atoms (%d per byte over %d bytes) is above the %d per byte limit. "+
+			"The daemon may be quoting a bad fee", fee, fee/size, size, uint64(maxTxFeeRate))
+	}
+	return nil
+}
+
 // commitTx commits a pending transaction and returns the resulting Coin.
 // sendAmount is the expected send amount, used as fallback if the library
 // returns 0 for Amount().
@@ -1128,6 +1161,9 @@ func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64
 	fee := tx.Fee()
 	txid := tx.TxID()
 
+	if err := checkTxFee(fee, tx.Hex()); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to broadcast transaction: %w", err)
 	}
