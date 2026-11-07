@@ -342,7 +342,11 @@ func (s *AppServer) apiExportSeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Close = true
-	seed, err := s.core.ExportSeed(form.Pass)
+	var seed string
+	err := s.withAppPassword(func() (err error) {
+		seed, err = s.core.ExportSeed(form.Pass)
+		return err
+	})
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("error exporting seed: %w", err))
 		return
@@ -368,9 +372,13 @@ func (s *AppServer) apiRestoreWalletInfo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	info, err := s.core.WalletRestorationInfo(form.Pass, form.AssetID)
+	var info []*asset.WalletRestoration
+	err := s.withAppPassword(func() (err error) {
+		info, err = s.core.WalletRestorationInfo(form.Pass, form.AssetID)
+		return err
+	})
 	if err != nil {
-		s.writeAPIError(w, fmt.Errorf("error updating cert: %w", err))
+		s.writeAPIError(w, fmt.Errorf("error getting restoration info: %w", err))
 		return
 	}
 
@@ -546,30 +554,36 @@ func (e badCredentials) Error() string        { return e.err.Error() }
 func (e badCredentials) Unwrap() error        { return e.err }
 func (e badCredentials) Is(target error) bool { return target == errBadCredentials }
 
+// throttledLogin is actuallyLogin under the password throttle.
+func (s *AppServer) throttledLogin(w http.ResponseWriter, r *http.Request, login *loginForm) error {
+	s.passCheckMtx.Lock()
+	defer s.passCheckMtx.Unlock()
+	if d := s.passwordThrottle(); d > 0 {
+		return passwordThrottled{d}
+	}
+	if err := s.actuallyLogin(w, r, login); err != nil {
+		// Only a rejected password counts toward the throttle; environmental
+		// errors must not lock out the (single) legitimate client.
+		if errors.Is(err, errBadCredentials) {
+			s.notePasswordFailure()
+		}
+		return err
+	}
+	s.notePasswordSuccess()
+	return nil
+}
+
 // apiLogin handles the 'login' API request.
 func (s *AppServer) apiLogin(w http.ResponseWriter, r *http.Request) {
-	if d := s.loginThrottle(); d > 0 {
-		s.writeAPIError(w, fmt.Errorf("too many failed login attempts, try again in %s", d.Round(time.Second)))
-		return
-	}
-
 	login := new(loginForm)
 	defer login.Pass.Clear()
 	if !readPost(w, r, login) {
 		return
 	}
-
-	err := s.actuallyLogin(w, r, login)
-	if err != nil {
-		// Only a rejected password counts toward the throttle; environmental
-		// errors must not lock out the (single) legitimate client.
-		if errors.Is(err, errBadCredentials) {
-			s.noteLoginFailure()
-		}
+	if err := s.throttledLogin(w, r, login); err != nil {
 		s.writeAPIError(w, err)
 		return
 	}
-	s.noteLoginSuccess()
 
 	notes, pokes, err := s.core.Notifications(100)
 	if err != nil {
@@ -861,16 +875,24 @@ func (s *AppServer) apiChangeAppPass(w http.ResponseWriter, r *http.Request) {
 	if !readPost(w, r, form) {
 		return
 	}
-
 	// Serialize against Lock/Unlock. Changing the password tears down every
 	// session (deauth) and mints a fresh one; without this a concurrent biometric
 	// Unlock could mint a grant against a token this deauth is about to drop,
-	// leaving that unlock stranded on the login gate.
-	s.sessionMtx.Lock()
-	defer s.sessionMtx.Unlock()
+	// leaving that unlock stranded on the login gate. The password throttle's
+	// lock is taken first.
+	var sessionLocked bool
+	defer func() {
+		if sessionLocked {
+			s.sessionMtx.Unlock()
+		}
+	}()
 
 	// Update application password.
-	err := s.core.ChangeAppPass(form.AppPW, form.NewAppPW)
+	err := s.withAppPassword(func() error {
+		s.sessionMtx.Lock()
+		sessionLocked = true
+		return s.core.ChangeAppPass(form.AppPW, form.NewAppPW)
+	})
 	if err != nil {
 		s.writeAPIError(w, fmt.Errorf("change app pass error: %w", err))
 		return
@@ -1100,7 +1122,10 @@ func (s *AppServer) actuallyLogin(w http.ResponseWriter, r *http.Request, login 
 			return errors.New("companion app is not paired")
 		}
 	}
-	pass, err := s.resolvePass(login.Pass, r)
+	// Not resolvePass: core.Login below is the password check, so checking
+	// here too would cost a second key derivation and count a wrong password
+	// twice.
+	pass, err := s.passOrCached(login.Pass, r)
 	defer zero(pass)
 	if err != nil {
 		// A missing or unreadable cached password is environmental, not a
@@ -1540,7 +1565,12 @@ func (s *AppServer) apiWalletLogFilePath(w http.ResponseWriter, r *http.Request)
 // writeAPIError logs the formatted error and sends a standardResponse with the
 // error message.
 func (s *AppServer) writeAPIError(w http.ResponseWriter, err error) {
-	log.Error(err.Error())
+	// A wrong or throttled password is an expected outcome, not an error.
+	if errors.Is(err, errBadCredentials) || errors.As(err, new(passwordThrottled)) {
+		log.Debug(err.Error())
+	} else {
+		log.Error(err.Error())
+	}
 	writeJSON(w, apiErrorResponse(err))
 }
 
@@ -1593,9 +1623,23 @@ func clearCookie(name string, w http.ResponseWriter) {
 	})
 }
 
-// resolvePass returns the appPW if it has a value, but if not, it attempts
-// to retrieve the cached password using the information in cookies.
+// resolvePass returns the appPW if it has a value, after checking it under the
+// password throttle. If not, it attempts to retrieve the cached password using
+// the information in cookies. A cached password is not a guess, so it is not
+// checked or counted.
 func (s *AppServer) resolvePass(appPW []byte, r *http.Request) ([]byte, error) {
+	if len(appPW) > 0 {
+		if err := s.checkAppPassword(appPW); err != nil {
+			return nil, err
+		}
+		return appPW, nil
+	}
+	return s.passOrCached(nil, r)
+}
+
+// passOrCached is resolvePass without the password check. The caller must check
+// the password under the password throttle.
+func (s *AppServer) passOrCached(appPW []byte, r *http.Request) ([]byte, error) {
 	if len(appPW) > 0 {
 		return appPW, nil
 	}
@@ -1609,25 +1653,26 @@ func (s *AppServer) resolvePass(appPW []byte, r *http.Request) ([]byte, error) {
 	return cachedPass, nil
 }
 
-// checkSendRequiresPassword enforces the send-requires-password setting for
-// endpoints that move or authorize value but, unlike '/send', do not
-// otherwise take a password to unlock a wallet (they rely on the wallet
-// already being unlocked). When the setting is enabled, the caller must
-// supply the correct app password explicitly; emptyPassMsg is returned when
-// none was supplied.
-func (s *AppServer) checkSendRequiresPassword(pass encode.PassBytes, emptyPassMsg string) error {
+// requireSendPassword checks for the app password the way '/send' does: an
+// explicit password, or the session's cached one, and only an explicit one
+// when send-requires-password is on. emptyPassMsg is returned when the setting
+// is on and none was supplied.
+func (s *AppServer) requireSendPassword(pass encode.PassBytes, r *http.Request, emptyPassMsg string) error {
 	requirePW, err := s.core.SendRequiresPassword()
 	if err != nil {
 		return fmt.Errorf("error reading send-requires-password setting: %w", err)
 	}
-	if !requirePW {
-		return nil
-	}
-	if len(pass) == 0 {
+	if requirePW && len(pass) == 0 {
 		return errors.New(emptyPassMsg)
 	}
-	if err := s.core.VerifyPassword(pass); err != nil {
+	// An explicit password is checked under the throttle. A cached one came
+	// from this session's login, so finding it is enough.
+	pw, err := s.resolvePass(pass, r)
+	if err != nil {
 		return fmt.Errorf("password error: %w", err)
+	}
+	if len(pass) == 0 {
+		zero(pw) // a decrypted copy of the cached password
 	}
 	return nil
 }
@@ -1675,8 +1720,7 @@ func (s *AppServer) apiBridgeFeesAndLimits(w http.ResponseWriter, r *http.Reques
 }
 
 // apiBridge is the handler for the '/bridge' API request. It moves funds off
-// the source chain, so it honors the send-requires-password setting exactly
-// as '/send' does.
+// the source chain, so it needs the app password exactly as '/send' does.
 func (s *AppServer) apiBridge(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
 		FromAssetID uint32           `json:"fromAssetID"`
@@ -1694,7 +1738,7 @@ func (s *AppServer) apiBridge(w http.ResponseWriter, r *http.Request) {
 	if !readPost(w, r, form) {
 		return
 	}
-	if err := s.checkSendRequiresPassword(form.Pass, "password required to bridge"); err != nil {
+	if err := s.requireSendPassword(form.Pass, r, "password required to bridge"); err != nil {
 		s.writeAPIError(w, err)
 		return
 	}
@@ -1741,7 +1785,7 @@ func (s *AppServer) apiBridgeApprovalStatus(w http.ResponseWriter, r *http.Reque
 
 // apiApproveBridgeContract is the handler for the '/approvebridgecontract'
 // API request. It grants the bridge contract a token spending allowance, so
-// it honors the send-requires-password setting exactly as '/send' does.
+// it needs the app password exactly as '/send' does.
 func (s *AppServer) apiApproveBridgeContract(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
 		AssetID    uint32           `json:"assetID"`
@@ -1753,7 +1797,7 @@ func (s *AppServer) apiApproveBridgeContract(w http.ResponseWriter, r *http.Requ
 	if !readPost(w, r, form) {
 		return
 	}
-	if err := s.checkSendRequiresPassword(form.Pass, "password required to approve the bridge contract"); err != nil {
+	if err := s.requireSendPassword(form.Pass, r, "password required to approve the bridge contract"); err != nil {
 		s.writeAPIError(w, err)
 		return
 	}
@@ -1775,8 +1819,8 @@ func (s *AppServer) apiApproveBridgeContract(w http.ResponseWriter, r *http.Requ
 
 // apiUnapproveBridgeContract is the handler for the
 // '/unapprovebridgecontract' API request. It revokes the bridge contract's
-// token spending allowance, so it honors the send-requires-password setting
-// exactly as '/send' does.
+// token spending allowance, so it needs the app password exactly as '/send'
+// does.
 func (s *AppServer) apiUnapproveBridgeContract(w http.ResponseWriter, r *http.Request) {
 	form := &struct {
 		AssetID    uint32           `json:"assetID"`
@@ -1788,7 +1832,7 @@ func (s *AppServer) apiUnapproveBridgeContract(w http.ResponseWriter, r *http.Re
 	if !readPost(w, r, form) {
 		return
 	}
-	if err := s.checkSendRequiresPassword(form.Pass, "password required to unapprove the bridge contract"); err != nil {
+	if err := s.requireSendPassword(form.Pass, r, "password required to unapprove the bridge contract"); err != nil {
 		s.writeAPIError(w, err)
 		return
 	}

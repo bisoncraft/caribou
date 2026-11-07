@@ -98,17 +98,20 @@ asset's smallest unit (satoshis for BTC).
 
 ### Common endpoints
 
-| Route                   | Reads/Writes | App password?       |
-| ----------------------- | ------------ | ------------------- |
-| `/api/user`             | read         | no                  |
-| `/api/balance`          | read         | no                  |
-| `/api/depositaddress`   | write        | no                  |
-| `/api/validateaddress`  | read         | no                  |
-| `/api/txfee`            | read         | no                  |
-| `/api/txhistory`        | read         | no                  |
-| `/api/send`             | write        | **yes** (`"pw"`)    |
-| `/api/generateapitoken` | write        | session (bootstrap) |
-| `/api/revokeapitoken`   | write        | token or session    |
+| Route                          | Reads/Writes | App password?       |
+| ------------------------------ | ------------ | ------------------- |
+| `/api/user`                    | read         | no                  |
+| `/api/balance`                 | read         | no                  |
+| `/api/depositaddress`          | write        | no                  |
+| `/api/validateaddress`         | read         | no                  |
+| `/api/txfee`                   | read         | no                  |
+| `/api/txhistory`               | read         | no                  |
+| `/api/send`                    | write        | **yes** (`"pw"`)    |
+| `/api/bridge`                  | write        | **yes** (`"pass"`)  |
+| `/api/approvebridgecontract`   | write        | **yes** (`"pass"`)  |
+| `/api/unapprovebridgecontract` | write        | **yes** (`"pass"`)  |
+| `/api/generateapitoken`        | write        | session (bootstrap) |
+| `/api/revokeapitoken`          | write        | token or session    |
 
 These are a subset; any endpoint behind the authenticated API accepts the token.
 
@@ -140,8 +143,10 @@ To rotate, just generate a new token; the old hash is overwritten.
 - **Same-machine only.** The token is rejected from any non-loopback peer.
   Combined with the default loopback bind, the automation surface stays on the
   box.
-- **Spending is still password-gated.** `send` (and other password-bearing
-  actions) require the app password in the body even with a valid token.
+- **Spending is still password-gated.** `send`, `bridge`, the bridge contract
+  approvals (and other password-bearing actions) require the app password in
+  the body even with a valid token. Wrong passwords count toward the same
+  throttle as the login screen.
 - **One token at a time.** Generating a token replaces the previous one. There
   is a single local-token slot.
 - **Shared session semantics.** The wallet has one logged-in core shared by all

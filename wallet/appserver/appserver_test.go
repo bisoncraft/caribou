@@ -83,6 +83,7 @@ type TCore struct {
 	sendRequiresPWErr    error
 	setSendRequiresPWErr error
 	verifyPasswordErr    error
+	verifyPasswordDelay  time.Duration // stands in for the key derivation
 	notHas               bool
 	notRunning           bool
 	notOpen              bool
@@ -158,7 +159,7 @@ func (c *TCore) ToggleWalletStatus(assetID uint32, disable bool) error {
 	c.walletDisabled = disable
 	return c.walletStatusErr
 }
-func (c *TCore) ChangeAppPass(appPW, newAppPW []byte) error                         { return nil }
+func (c *TCore) ChangeAppPass(appPW, newAppPW []byte) error                         { return c.verifyPasswordErr }
 func (c *TCore) ResetAppPass(newAppPW []byte, seed string) error                    { return c.resetAppPassErr }
 func (c *TCore) SetWalletPassword(appPW []byte, assetID uint32, newPW []byte) error { return nil }
 func (c *TCore) NewDepositAddress(assetID uint32) (string, error)                   { return "", nil }
@@ -196,6 +197,9 @@ func (c *TCore) AckNotes(ids []util.Bytes) {}
 func (c *TCore) Logout() error { c.logoutCalls++; return c.logoutErr }
 
 func (c *TCore) ExportSeed(pw []byte) (string, error) {
+	if c.verifyPasswordErr != nil {
+		return "", c.verifyPasswordErr
+	}
 	return "seed words here", nil
 }
 func (c *TCore) WalletLogFilePath(uint32) (string, error) {
@@ -205,7 +209,7 @@ func (c *TCore) RecoverWallet(uint32, []byte, bool) error {
 	return nil
 }
 func (c *TCore) WalletRestorationInfo(pw []byte, assetID uint32) ([]*asset.WalletRestoration, error) {
-	return nil, nil
+	return nil, c.verifyPasswordErr
 }
 func (c *TCore) WalletPeers(assetID uint32) ([]*asset.WalletPeer, error) {
 	return nil, nil
@@ -275,7 +279,10 @@ func (c *TCore) SetAcceptedTermsVersion(v string) error {
 	return nil
 }
 func (c *TCore) AcceptedTermsVersion() (string, error) { return c.acceptedTerms, c.acceptedTermsErr }
-func (c *TCore) VerifyPassword(pw []byte) error        { return c.verifyPasswordErr }
+func (c *TCore) VerifyPassword(pw []byte) error {
+	time.Sleep(c.verifyPasswordDelay)
+	return c.verifyPasswordErr
+}
 
 func (c *TCore) Bridge(fromAssetID, toAssetID uint32, amt uint64, bridgeName string) (string, error) {
 	c.bridgeCalls++
@@ -1266,6 +1273,82 @@ func TestApiGetBalance(t *testing.T) {
 	tCore.balanceErr = errTest
 	ensure(fmt.Sprintf(`{"ok":false,"msg":"%s"}`, errTest))
 	tCore.balanceErr = nil
+}
+
+// TestAPIBridgeNeedsPasswordByDefault checks the bridge and approval routes
+// with send-requires-password off (the default). Like '/send', they still need
+// the app password: the session's cached one, or an explicit one. A caller with
+// neither, such as an API token caller, is refused before core is reached.
+func TestAPIBridgeNeedsPasswordByDefault(t *testing.T) {
+	s, tCore, shutdown := newTServer(t, false)
+	defer shutdown()
+	tCore.sendRequiresPW = false
+
+	authToken, err := s.authorize()
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	pwKey, err := s.cacheAppPassword(encode.PassBytes("apppass"), authToken)
+	if err != nil {
+		t.Fatalf("cacheAppPassword: %v", err)
+	}
+
+	routes := []struct {
+		name  string
+		h     http.HandlerFunc
+		calls func() int
+	}{
+		{"bridge", s.apiBridge, func() int { return tCore.bridgeCalls }},
+		{"approvebridgecontract", s.apiApproveBridgeContract, func() int { return tCore.approveBridgeCalls }},
+		{"unapprovebridgecontract", s.apiUnapproveBridgeContract, func() int { return tCore.unapproveBridgeCalls }},
+	}
+	for _, rt := range routes {
+		post := func(body string, session bool) bool {
+			t.Helper()
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			if session {
+				req.AddCookie(&http.Cookie{Name: authCK, Value: authToken})
+				req.AddCookie(&http.Cookie{Name: pwKeyCK, Value: hex.EncodeToString(pwKey)})
+			}
+			rec := httptest.NewRecorder()
+			rt.h(rec, req)
+			resp := &standardResponse{}
+			if err := json.Unmarshal(rec.Body.Bytes(), resp); err != nil {
+				t.Fatalf("%s: decode response: %v (%s)", rt.name, err, rec.Body.String())
+			}
+			return resp.OK
+		}
+
+		// No password and no session: refused.
+		before := rt.calls()
+		if post(`{"amount":1}`, false) {
+			t.Fatalf("%s: ok with no password and no session", rt.name)
+		}
+		if rt.calls() != before {
+			t.Fatalf("%s: core called with no password and no session", rt.name)
+		}
+
+		// A wrong explicit password: refused.
+		tCore.verifyPasswordErr = errTest
+		if post(`{"amount":1,"pass":"wrong"}`, false) {
+			t.Fatalf("%s: ok with a wrong password", rt.name)
+		}
+		tCore.verifyPasswordErr = nil
+		if rt.calls() != before {
+			t.Fatalf("%s: core called with a wrong password", rt.name)
+		}
+
+		// The session's cached password, or an explicit one: allowed.
+		if !post(`{"amount":1}`, true) {
+			t.Fatalf("%s: refused with the session's cached password", rt.name)
+		}
+		if !post(`{"amount":1,"pass":"apppass"}`, false) {
+			t.Fatalf("%s: refused with an explicit password", rt.name)
+		}
+		if got := rt.calls() - before; got != 2 {
+			t.Fatalf("%s: core called %d times, want 2", rt.name, got)
+		}
+	}
 }
 
 func TestPasswordCache(t *testing.T) {

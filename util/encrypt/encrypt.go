@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"runtime"
 
@@ -51,6 +52,9 @@ const (
 
 // Big-endian encoder.
 var intCoder = encode.IntCoder
+
+// ErrIncorrectPassword is returned by Deserialize when the password is wrong.
+var ErrIncorrectPassword = errors.New("incorrect password")
 
 // Key is 32 bytes.
 type Key [KeySize]byte
@@ -271,7 +275,7 @@ func decodeArgonPoly_v0(pw []byte, pushes [][]byte) (*argonPolyCrypter, error) {
 	macKey := keyB[KeySize:]
 	expTag := macTag(macKey, c.serializeParams())
 	if !hmac.Equal(c.tag[:], expTag[:]) {
-		return nil, fmt.Errorf("incorrect password")
+		return nil, ErrIncorrectPassword
 	}
 
 	// Copy the key.
