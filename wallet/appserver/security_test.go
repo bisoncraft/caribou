@@ -587,3 +587,138 @@ func TestUnpairCompanionDisconnectsWS(t *testing.T) {
 
 	assertWSClosed(t, conn, "the companion app was unpaired")
 }
+
+// TestHostAllowlist checks hostMiddleware, the DNS rebinding defense. A page
+// that rebinds its own name to 127.0.0.1 still sends that name as the Host
+// header, and must get nothing, not even the unauthenticated routes.
+func TestHostAllowlist(t *testing.T) {
+	s, _, shutdown := newTServer(t, false)
+	defer shutdown()
+	s.webHost = hostOnly("mywallet.lan:5758")
+	s.onionHost = hostOnly("abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion")
+
+	allowed := []string{
+		"127.0.0.1:5758",
+		"127.0.0.1",
+		"[::1]:5758",
+		"192.168.1.20:5758", // bound to 0.0.0.0 or a LAN IP
+		"localhost:5758",
+		"LOCALHOST:5758",
+		"mywallet.lan:5758", // the configured --webaddr host
+		"mywallet.lan.",
+		"abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion",
+		"abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion:80",
+	}
+	refused := []string{
+		"evil.example:5758", // the rebinding case
+		"evil.example",
+		"localhost.evil.example:5758",
+		"127.0.0.1.evil.example:5758",
+		"sub.localhost:5758",
+		"other.onion",
+		"",
+	}
+
+	serve := func(host string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/login", strings.NewReader(`{"pass":"x"}`))
+		req.Host = host
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, h := range allowed {
+		if code := serve(h); code == http.StatusMisdirectedRequest {
+			t.Errorf("Host %q refused, want allowed", h)
+		}
+	}
+	for _, h := range refused {
+		if code := serve(h); code != http.StatusMisdirectedRequest {
+			t.Errorf("Host %q got %d, want %d", h, code, http.StatusMisdirectedRequest)
+		}
+	}
+
+}
+
+// TestCapabilityGate checks Config.CapabilityGate, which the desktop shells
+// set: New generates a token, BootstrapURL carries it, and a request without
+// it (a DNS rebinding page, say) gets nothing, while the window that loaded
+// BootstrapURL gets in.
+func TestCapabilityGate(t *testing.T) {
+	newServer := func(gate bool) *AppServer {
+		t.Helper()
+		s, err := New(&Config{
+			Core:           &TCore{},
+			Addr:           "127.0.0.1:0",
+			Logger:         tLogger,
+			AppVersion:     testAppVersion,
+			CapabilityGate: gate,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		s.addr = "127.0.0.1:5758" // set by Connect
+		return s
+	}
+
+	// Off: no token, and the bootstrap URL is the bare address.
+	if s := newServer(false); s.capToken != "" || s.BootstrapURL() != "http://127.0.0.1:5758" {
+		t.Fatalf("gate off: token %q, bootstrap URL %q", s.capToken, s.BootstrapURL())
+	}
+
+	s := newServer(true)
+	if len(s.capToken) != 64 {
+		t.Fatalf("gate on: token %q, want 32 random bytes as hex", s.capToken)
+	}
+	if other := newServer(true); other.capToken == s.capToken {
+		t.Fatal("two servers got the same token")
+	}
+	bootstrap := s.BootstrapURL()
+	if bootstrap != "http://127.0.0.1:5758/?k="+s.capToken {
+		t.Fatalf("bootstrap URL %q does not carry the token", bootstrap)
+	}
+
+	serve := func(req *http.Request) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// No token: nothing, including the unauthenticated login route.
+	for _, path := range []string{"/", "/api/user", "/api/login"} {
+		method := http.MethodGet
+		if path == "/api/login" {
+			method = http.MethodPost
+		}
+		req := httptest.NewRequest(method, "http://127.0.0.1:5758"+path, strings.NewReader(`{"pass":"x"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if rec := serve(req); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s without the token: %d, want 404", method, path, rec.Code)
+		}
+	}
+
+	// The bootstrap URL swaps the token for a cookie, which then gets in.
+	rec := serve(httptest.NewRequest(http.MethodGet, bootstrap, nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("bootstrap URL: %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, s.capToken) {
+		t.Fatalf("redirect %q still carries the token", loc)
+	}
+	var capCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == capCK {
+			capCookie = c
+		}
+	}
+	if capCookie == nil {
+		t.Fatal("bootstrap URL set no capability cookie")
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:5758/api/user", nil)
+	req.AddCookie(capCookie)
+	if rec := serve(req); rec.Code == http.StatusNotFound {
+		t.Fatal("request with the capability cookie got 404")
+	}
+}
