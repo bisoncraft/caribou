@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -430,18 +431,9 @@ func (b *acrossBridge) initiateBridge(txOpts *bind.TransactOpts, sourceAssetID, 
 	if res.IsAmountTooLow {
 		return nil, fmt.Errorf("amount too low for bridging")
 	}
-	relayFeeTotal, ok := new(big.Int).SetString(res.TotalRelayFee.Total, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid relay fee total")
-	}
-	outputAmount := new(big.Int).Sub(amount, relayFeeTotal)
-	quoteTimestamp, ok := new(big.Int).SetString(res.Timestamp, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid quote timestamp")
-	}
-	fillDeadline, ok := new(big.Int).SetString(res.FillDeadline, 10)
-	if !ok {
-		return nil, fmt.Errorf("invalid fill deadline")
+	params, err := acrossDepositParamsFromQuote(amount, &res, time.Now())
+	if err != nil {
+		return nil, err
 	}
 	exclusivityDeadline := uint32(0)
 	exclusiveRelayer := common.Address{}
@@ -453,13 +445,89 @@ func (b *acrossBridge) initiateBridge(txOpts *bind.TransactOpts, sourceAssetID, 
 		txOpts.Value = amount
 	}
 
-	// TODO: check that the fee is not too high before initiating the bridge. Consider a fee limit config.
-	// On the UI the expected fee can be displayed and the user can approve it before proceeding, but some
-	// other mechanism will be needed for market making.
+	// TODO: also compare the relay fee against one the caller approved.
 
 	return b.spokePool.DepositV3(txOpts, depositor, recipient, sourceAsset.address, destAsset.address,
-		amount, outputAmount, destChainIdBig, exclusiveRelayer, uint32(quoteTimestamp.Uint64()),
-		uint32(fillDeadline.Uint64()), exclusivityDeadline, message)
+		amount, params.outputAmount, destChainIdBig, exclusiveRelayer, params.quoteTimestamp,
+		params.fillDeadline, exclusivityDeadline, message)
+}
+
+const (
+	// maxAcrossRelayFeePct is the largest relay fee, as a percentage of the
+	// amount, this wallet will deposit with. Real Across fees are well under
+	// 1%, more for very small amounts where the destination gas dominates.
+	maxAcrossRelayFeePct = 5
+	// maxAcrossQuoteAge bounds how far the quote timestamp may be from now,
+	// either way. The SpokePool also rejects stale quotes, but this keeps
+	// nonsense out of the uint32 it is packed into.
+	maxAcrossQuoteAge = time.Hour
+	// maxAcrossFillWindow bounds the fill deadline. Funds stay locked in the
+	// SpokePool until a relayer fills or the deadline passes, so a deadline
+	// far in the future would strand them.
+	maxAcrossFillWindow = 24 * time.Hour
+)
+
+// acrossDepositParams are the quote values a deposit is built from, after
+// checking.
+type acrossDepositParams struct {
+	outputAmount   *big.Int
+	quoteTimestamp uint32
+	fillDeadline   uint32
+}
+
+// acrossDepositParamsFromQuote checks a suggested-fees response against the
+// bounds above and returns the deposit parameters.
+func acrossDepositParamsFromQuote(amount *big.Int, res *suggestedFeesRes, now time.Time) (*acrossDepositParams, error) {
+	if amount.Sign() <= 0 {
+		return nil, fmt.Errorf("bridge amount must be positive")
+	}
+	relayFee, ok := new(big.Int).SetString(res.TotalRelayFee.Total, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid relay fee total %q", res.TotalRelayFee.Total)
+	}
+	if relayFee.Sign() <= 0 {
+		// Relayers are paid from the fee, so a zero fee would never be
+		// filled, and a negative one would mean receiving more than sent.
+		return nil, fmt.Errorf("invalid relay fee %s", relayFee)
+	}
+	// relayFee * 100 > amount * maxAcrossRelayFeePct
+	if new(big.Int).Mul(relayFee, big.NewInt(100)).Cmp(new(big.Int).Mul(amount, big.NewInt(maxAcrossRelayFeePct))) > 0 {
+		return nil, fmt.Errorf("the Across relay fee of %s is more than %d%% of the %s being bridged",
+			relayFee, maxAcrossRelayFeePct, amount)
+	}
+	outputAmount := new(big.Int).Sub(amount, relayFee)
+
+	quoteTimestamp, err := acrossUnixTime(res.Timestamp, "quote timestamp")
+	if err != nil {
+		return nil, err
+	}
+	if d := now.Sub(time.Unix(int64(quoteTimestamp), 0)); d > maxAcrossQuoteAge || d < -maxAcrossQuoteAge {
+		return nil, fmt.Errorf("the Across quote timestamp %d is more than %s from now", quoteTimestamp, maxAcrossQuoteAge)
+	}
+	fillDeadline, err := acrossUnixTime(res.FillDeadline, "fill deadline")
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Unix(int64(fillDeadline), 0)
+	if !deadline.After(now) || deadline.Sub(now) > maxAcrossFillWindow {
+		return nil, fmt.Errorf("the Across fill deadline %d is not within %s from now", fillDeadline, maxAcrossFillWindow)
+	}
+
+	return &acrossDepositParams{
+		outputAmount:   outputAmount,
+		quoteTimestamp: quoteTimestamp,
+		fillDeadline:   fillDeadline,
+	}, nil
+}
+
+// acrossUnixTime parses a unix time from the Across API, which the SpokePool
+// takes as a uint32.
+func acrossUnixTime(s, what string) (uint32, error) {
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", what, s, err)
+	}
+	return uint32(v), nil
 }
 
 func (b *acrossBridge) getCompletionData(ctx context.Context, sourceAssetID uint32, bridgeTxID string) ([]byte, error) {
