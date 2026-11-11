@@ -5,11 +5,14 @@ package eth
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -622,6 +625,25 @@ func TestAcrossInitiateBridgeErrors(t *testing.T) {
 		}
 	})
 
+	// The quote bounds run inside initiateBridge, before the deposit. The
+	// bridge here has no SpokePool, so a quote that got past them would panic
+	// rather than pass.
+	t.Run("relay fee over the cap", func(t *testing.T) {
+		now := time.Now().Unix()
+		b := setup(t, stubs{
+			routesStatus: http.StatusOK,
+			routesBody:   routeETHtoBase,
+			feesStatus:   http.StatusOK,
+			feesBody: fmt.Sprintf(`{"totalRelayFee":{"total":"999999"},"timestamp":"%d","fillDeadline":"%d"}`,
+				now, now+3600),
+		})
+		txOpts := &bind.TransactOpts{Context: context.Background()}
+		_, err := b.initiateBridge(txOpts, ethID, baseID, amount)
+		if err == nil || !strings.Contains(err.Error(), "relay fee") {
+			t.Errorf("expected a relay fee error, got %v", err)
+		}
+	})
+
 	t.Run("fees http error propagates", func(t *testing.T) {
 		b := setup(t, stubs{
 			routesStatus: http.StatusOK,
@@ -634,4 +656,66 @@ func TestAcrossInitiateBridgeErrors(t *testing.T) {
 			t.Error("expected error on fees 503")
 		}
 	})
+}
+
+// TestAcrossDepositParamsFromQuote checks the local bounds on an Across
+// suggested-fees response.
+func TestAcrossDepositParamsFromQuote(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	unix := func(d time.Duration) string { return strconv.FormatInt(now.Add(d).Unix(), 10) }
+	amount := big.NewInt(1_000_000) // 1 USDC
+
+	quote := func(fee, ts, deadline string) *suggestedFeesRes {
+		res := new(suggestedFeesRes)
+		res.TotalRelayFee.Total = fee
+		res.Timestamp = ts
+		res.FillDeadline = deadline
+		return res
+	}
+	good := func() *suggestedFeesRes { return quote("2000", unix(-time.Minute), unix(4*time.Hour)) }
+
+	params, err := acrossDepositParamsFromQuote(amount, good(), now)
+	if err != nil {
+		t.Fatalf("good quote rejected: %v", err)
+	}
+	if params.outputAmount.Int64() != 998_000 {
+		t.Fatalf("outputAmount %s, want 998000", params.outputAmount)
+	}
+	if int64(params.quoteTimestamp) != now.Add(-time.Minute).Unix() || int64(params.fillDeadline) != now.Add(4*time.Hour).Unix() {
+		t.Fatalf("times %d, %d not carried through", params.quoteTimestamp, params.fillDeadline)
+	}
+
+	// Exactly at the cap is allowed.
+	if _, err := acrossDepositParamsFromQuote(amount, quote("50000", unix(0), unix(time.Hour)), now); err != nil {
+		t.Fatalf("fee at the %d%% cap rejected: %v", maxAcrossRelayFeePct, err)
+	}
+
+	tests := []struct {
+		name   string
+		amount *big.Int
+		res    *suggestedFeesRes
+	}{
+		{"fee just over the cap", amount, quote("50001", unix(0), unix(time.Hour))},
+		{"fee equals the amount", amount, quote("1000000", unix(0), unix(time.Hour))},
+		{"fee above the amount", amount, quote("2000000", unix(0), unix(time.Hour))},
+		{"zero fee", amount, quote("0", unix(0), unix(time.Hour))},
+		{"negative fee", amount, quote("-5", unix(0), unix(time.Hour))},
+		{"non-numeric fee", amount, quote("lots", unix(0), unix(time.Hour))},
+		{"zero amount", big.NewInt(0), good()},
+		{"stale quote", amount, quote("2000", unix(-2*time.Hour), unix(time.Hour))},
+		{"quote from the future", amount, quote("2000", unix(2*time.Hour), unix(3*time.Hour))},
+		{"quote timestamp over uint32", amount, quote("2000", "4294967296", unix(time.Hour))},
+		{"deadline passed", amount, quote("2000", unix(0), unix(-time.Second))},
+		{"deadline now", amount, quote("2000", unix(0), unix(0))},
+		{"deadline too far out", amount, quote("2000", unix(0), unix(25*time.Hour))},
+		{"deadline over uint32", amount, quote("2000", unix(0), "4294967296")},
+		{"negative deadline", amount, quote("2000", unix(0), "-1")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if p, err := acrossDepositParamsFromQuote(tt.amount, tt.res, now); err == nil {
+				t.Fatalf("accepted, outputAmount %s", p.outputAmount)
+			}
+		})
+	}
 }
