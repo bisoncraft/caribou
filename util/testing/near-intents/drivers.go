@@ -97,8 +97,10 @@ type pinger interface {
 // newHarnessDriver builds the harness-backed driver for a chain slug.
 func newHarnessDriver(slug, dextestDir string) (Driver, error) {
 	switch slug {
-	case "btc", "ltc", "bch", "doge", "dash", "zec":
+	case "btc", "ltc", "bch", "doge", "dash":
 		return newUTXODriver(slug, dextestDir)
+	case "zec":
+		return newZecDriver(dextestDir)
 	case "near":
 		return newNearDriver(dextestDir)
 	case "sol":
