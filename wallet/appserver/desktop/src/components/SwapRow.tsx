@@ -3,13 +3,8 @@ import app from '@caribou/shared/application'
 import Doc from '@caribou/shared/doc'
 import AssetLogo from './AssetLogo'
 import Spinner from './Spinner'
-import { IntentsSwap, StateSuccess, StateRefunded, StateExpired, StateDepositFailed, swapIsActive, stateLabel, stateColorClass } from '../intents'
-
-// swapTime is the ordering timestamp for a swap in the Activity feed, in
-// seconds (matching WalletTransaction.timestamp).
-export function swapTime (s: IntentsSwap): number {
-  return Math.floor(new Date(s.createdAt).getTime() / 1000)
-}
+import { swapTime } from '@caribou/shared/activity'
+import { IntentsSwap, StateSuccess, StateRefunded, StateExpired, StateDepositFailed, swapIsActive, stateLabel, stateColorClass } from '@caribou/shared/intents'
 
 // SwapRow is a cross-chain swap's row in the Activity feed: paired coin
 // logos, the pair and status, and both legs' amounts. Clicking opens the

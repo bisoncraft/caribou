@@ -1,115 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
-import { postJSON } from '@caribou/shared/http'
 import { useForceUpdate } from '@caribou/shared/hooks'
-import { CoreNote, WalletNote, WalletTransaction } from '@caribou/shared/registry'
-import { TickerAsset, isVariantActive, networkID } from '@caribou/shared/assets'
-import { TxType } from '@caribou/shared/tx'
+import { CoreNote, WalletNote } from '@caribou/shared/registry'
 import Spinner from './Spinner'
-import TxRow, { TxRowItem, variantForTx } from './TxRow'
-import SwapRow, { swapTime } from './SwapRow'
-import { IntentsSwap, swapIsActive, fetchSwaps, relateTxToSwaps } from '../intents'
+import TxRow from './TxRow'
+import SwapRow from './SwapRow'
+import { IntentsSwap, swapIsActive, fetchSwaps } from '@caribou/shared/intents'
+import {
+  ActivityFilter, TxSource, activityFilters, sections, bucketBySection, fetchSources, loadMoreSources,
+  anyMore as sourcesHaveMore, mergeFeed, mergeSwaps, upsertSwap
+} from '@caribou/shared/activity'
 
 const PAGE_SIZE = 20
 // Rows shown per display page. Distinct from PAGE_SIZE, the per-source fetch
 // batch: display pages slice the merged, filtered feed.
 const PAGE_ROWS = 10
 
-type Filter = 'all' | 'sent' | 'received' | 'swapped'
-
-// The filter pills partition the common types; everything exotic (approvals,
-// bridges, tickets, mixes, …) shows only under All.
-const filterTypes: Record<Exclude<Filter, 'all'>, Set<number>> = {
-  sent: new Set<number>([TxType.Send, TxType.SelfSend, TxType.SwapOrSend]),
-  received: new Set<number>([TxType.Receive, TxType.Redeem, TxType.Refund]),
-  swapped: new Set<number>([TxType.Swap])
-}
-
-const filters: { key: Filter, label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'sent', label: 'Sent' },
-  { key: 'received', label: 'Received' },
-  { key: 'swapped', label: 'Swapped' }
-]
-
-// effectiveTime orders the merged feed; mempool transactions (timestamp 0)
-// sort newest.
-function effectiveTime (tx: WalletTransaction): number {
-  return tx.timestamp === 0 ? Number.MAX_SAFE_INTEGER : tx.timestamp
-}
-
-// FeedEntry is one row of the merged feed: an on-chain transaction or a
-// completed cross-chain swap record. time carries the entry's ordering and
-// bucketing timestamp in seconds.
-interface FeedEntry {
-  time: number
-  tx?: TxRowItem
-  swap?: IntentsSwap
-}
-
-// swapMatchesQuery reports whether a transaction-ID search hits any of the
-// swap's identifying strings: its deposit address or any leg's txid.
-function swapMatchesQuery (s: IntentsSwap, q: string): boolean {
-  const ids = [s.depositAddress, s.depositTxID ?? '', ...(s.destinationTxs ?? []), ...(s.refundTxs ?? [])]
-  return ids.some(id => id.toLowerCase().includes(q))
-}
-
-type Section = 'today' | 'yesterday' | 'week' | 'older'
-
-const sections: { key: Section, label: string }[] = [
-  { key: 'today', label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: 'week', label: 'Earlier this week' },
-  { key: 'older', label: 'Older' }
-]
-
-interface SectionBounds {
-  todayStart: number
-  yesterdayStart: number
-  weekStart: number
-}
-
-// sectionBounds computes the local calendar boundaries — today, yesterday,
-// and the current (Monday-based) week — once per bucketing pass.
-function sectionBounds (): SectionBounds {
-  const now = new Date()
-  const dayMS = 86400 * 1000
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  return {
-    todayStart,
-    yesterdayStart: todayStart - dayMS,
-    weekStart: todayStart - ((now.getDay() + 6) % 7) * dayMS
-  }
-}
-
-// sectionFor buckets a feed timestamp (seconds) by local calendar time.
-// Mempool transactions carry MAX_SAFE_INTEGER (see effectiveTime) and so
-// land in today.
-function sectionFor (time: number, bounds: SectionBounds): Section {
-  const ms = time * 1000
-  if (ms >= bounds.todayStart) return 'today'
-  if (ms >= bounds.yesterdayStart) return 'yesterday'
-  if (ms >= bounds.weekStart) return 'week'
-  return 'older'
-}
-
-// Per-ticker history source. The ticker endpoint serves a ticker group's
-// networks merged and time-ordered from the master txdb's ticker index; the
-// Activity feed merges the per-ticker streams client-side. (A wallet keeping
-// its own history store rather than the master txdb — only xmr today — is
-// not visible to the ticker index and so not to this feed.)
-interface TxSource {
-  ta: TickerAsset
-  txs: WalletTransaction[]
-  more: boolean
-}
-
 export default function Activity () {
   const redraw = useForceUpdate()
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [filter, setFilter] = useState<Filter>('all')
+  const [filter, setFilter] = useState<ActivityFilter>('all')
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
   const sourcesRef = useRef<Map<string, TxSource>>(new Map())
@@ -121,17 +33,9 @@ export default function Activity () {
   // row belonging to that swap can light up together.
   const [hoverSwap, setHoverSwap] = useState('')
 
-  const activeTickers = (): TickerAsset[] =>
-    (app.tickerList ?? []).filter(ta => ta.variants.some(isVariantActive))
-
   const fetchInitial = async () => {
     const gen = ++fetchGenRef.current
-    const next = new Map<string, TxSource>()
-    await Promise.all(activeTickers().map(async ta => {
-      const r = await postJSON('/api/txhistoryticker', { ticker: ta.ticker, n: PAGE_SIZE, past: true })
-      if (!r.ok) return
-      next.set(ta.ticker, { ta, txs: r.txs ?? [], more: Boolean(r.moreAvailable) })
-    }))
+    const next = await fetchSources(PAGE_SIZE)
     if (gen !== fetchGenRef.current) return // superseded
     sourcesRef.current = next
     setLoading(false)
@@ -142,25 +46,10 @@ export default function Activity () {
     const gen = fetchGenRef.current
     setLoadingMore(true)
     try {
-      // The gen checks gate only the data application: a superseding refetch
+      // The gen check gates only the data application: a superseding refetch
       // mid-flight discards these batches, but loadingMore must clear
       // regardless or the pager wedges disabled.
-      await Promise.all(Array.from(sourcesRef.current.values()).filter(s => s.more).map(async s => {
-        const last = s.txs[s.txs.length - 1]
-        if (!last) return
-        const v = variantForTx(s.ta, last)
-        if (!v) return
-        const r = await postJSON('/api/txhistoryticker', {
-          ticker: s.ta.ticker,
-          n: PAGE_SIZE,
-          refID: last.id,
-          refNetwork: networkID(v),
-          past: true
-        })
-        if (!r.ok || gen !== fetchGenRef.current) return
-        s.txs = s.txs.concat(r.txs ?? [])
-        s.more = Boolean(r.moreAvailable)
-      }))
+      await loadMoreSources(sourcesRef.current, PAGE_SIZE, () => gen === fetchGenRef.current)
     } finally {
       setLoadingMore(false)
       redraw()
@@ -174,10 +63,7 @@ export default function Activity () {
   // already delivered.
   const loadSwaps = async () => {
     const fetched = await fetchSwaps()
-    setSwaps(prev => {
-      const have = new Set(prev.map(s => s.depositAddress))
-      return [...prev, ...fetched.filter(s => !have.has(s.depositAddress))]
-    })
+    setSwaps(prev => mergeSwaps(prev, fetched))
   }
 
   useEffect(() => {
@@ -191,9 +77,7 @@ export default function Activity () {
       if (n.type === 'intentsswap') {
         // The note carries the full updated record; upsert it in place.
         const s = (n as CoreNote & { swap: IntentsSwap }).swap
-        if (s) {
-          setSwaps(prev => [s, ...prev.filter(x => x.depositAddress !== s.depositAddress)])
-        }
+        if (s) setSwaps(prev => upsertSwap(prev, s))
         return
       }
       if (n.type !== 'walletnote') return
@@ -208,64 +92,11 @@ export default function Activity () {
     }
   }, [])
 
-  // watermark is the completeness boundary of the merged feed: the newest
-  // oldest-loaded confirmed timestamp among sources with more history
-  // server-side. Each source's loaded batch reaches back only to its own
-  // boundary, so the merge is known-complete only for items at or above the
-  // newest boundary — below it, a deeper source may still hold unfetched
-  // items that belong earlier in the feed, and showing loaded items there
-  // would misorder the feed and shift rows between pages when the gap is
-  // later fetched. A source whose entire loaded batch is mempool (oldest has
-  // no timestamp) contributes no confirmed coverage and is skipped rather
-  // than blanking the whole feed.
-  const watermark = (): number => {
-    let wm = 0
-    for (const s of Array.from(sourcesRef.current.values())) {
-      if (!s.more || s.txs.length === 0) continue
-      const oldest = s.txs[s.txs.length - 1]
-      if (oldest.timestamp === 0) continue
-      wm = Math.max(wm, oldest.timestamp)
-    }
-    return wm
-  }
+  // computeFiltered reads sourcesRef so nextPage can recompute after
+  // fetches without waiting on a render.
+  const computeFiltered = () => mergeFeed(sourcesRef.current, swaps, filter, query)
 
-  // computeFiltered merges the per-ticker streams and the terminal swap
-  // records, sorts newest-first, and applies the watermark, pill, and txid
-  // filters. Reads sourcesRef so nextPage can recompute after fetches
-  // without waiting on a render. Active swaps are excluded — they render in
-  // the pinned section above the feed.
-  const computeFiltered = (): FeedEntry[] => {
-    const entries: FeedEntry[] = []
-    for (const s of Array.from(sourcesRef.current.values())) {
-      for (const tx of s.txs) {
-        const variant = variantForTx(s.ta, tx)
-        if (!variant) continue
-        entries.push({ time: effectiveTime(tx), tx: { tx, ta: s.ta, variant, swapRelation: relateTxToSwaps(swaps, tx) } })
-      }
-    }
-    for (const s of swaps) {
-      if (!swapIsActive(s)) entries.push({ time: swapTime(s), swap: s })
-    }
-    entries.sort((a, b) => b.time - a.time)
-    const q = query.trim().toLowerCase()
-    // A transaction-ID search overrides the type pills and the watermark:
-    // the searcher wants that transaction, whatever its type or position.
-    if (q !== '') {
-      return entries.filter(e => e.tx ? e.tx.tx.id.toLowerCase().includes(q) : swapMatchesQuery(e.swap as IntentsSwap, q))
-    }
-    const wm = watermark()
-    return entries.filter(e => {
-      if (e.swap) {
-        if (swapTime(e.swap) < wm) return false
-        return filter === 'all' || filter === 'swapped'
-      }
-      const tx = (e.tx as TxRowItem).tx
-      if (tx.timestamp !== 0 && tx.timestamp < wm) return false
-      return filter === 'all' || filterTypes[filter].has(tx.type)
-    })
-  }
-
-  const anyMore = () => Array.from(sourcesRef.current.values()).some(s => s.more)
+  const anyMore = () => sourcesHaveMore(sourcesRef.current)
 
   // nextPage advances the pager, fetching more from the sources first when
   // the local buffer cannot fill the next page (filters can consume whole
@@ -287,14 +118,7 @@ export default function Activity () {
   const pageItems = filtered.slice(curPage * PAGE_ROWS, (curPage + 1) * PAGE_ROWS)
   const hasNext = filtered.length > (curPage + 1) * PAGE_ROWS || anyMore()
 
-  const buckets = new Map<Section, FeedEntry[]>()
-  const bounds = sectionBounds()
-  for (const entry of pageItems) {
-    const key = sectionFor(entry.time, bounds)
-    const list = buckets.get(key)
-    if (list) list.push(entry)
-    else buckets.set(key, [entry])
-  }
+  const buckets = bucketBySection(pageItems)
 
   // Active swaps pin above the date-bucketed feed whenever their pill is
   // selected; a txid search hides them like everything else it misses.
@@ -315,7 +139,7 @@ export default function Activity () {
             />
           </div>
           <div className="d-flex align-items-center">
-            {filters.map(f => (
+            {activityFilters.map(f => (
               <button
                 key={f.key}
                 type="button"

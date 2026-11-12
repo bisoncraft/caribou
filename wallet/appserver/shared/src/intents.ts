@@ -1,6 +1,6 @@
-import t, { tvar } from '@caribou/shared/intl'
-import app from '@caribou/shared/application'
-import { getJSON } from '@caribou/shared/http'
+import t, { tvar } from './intl'
+import app from './application'
+import { getJSON } from './http'
 
 // Types mirroring the Go structs served by the /api/intents endpoints
 // (wallet/core/near-intents.go, wallet/db/near-intents.go).

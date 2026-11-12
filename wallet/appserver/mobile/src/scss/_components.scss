@@ -1,0 +1,1059 @@
+// Reusable mobile components: layout frames, navigation, buttons, lists,
+// form fields, sheets.
+
+// ---------------------------------------------------------------------------
+// Layout frames.
+
+// A tab page or full-screen flow: a column that fills the frame. The body
+// scrolls; headers, footers and the tab bar do not.
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+// Padding for a tab page whose large title starts at the top edge.
+.page {
+  padding: calc(var(--safe-top) + 18px) var(--gutter) 28px;
+}
+
+// Padding for content below a navigation header.
+.body {
+  padding: 12px var(--gutter) 24px;
+}
+
+// A column body whose last child (a primary button) pins to the bottom.
+.body-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.foot {
+  flex: none;
+  padding: 12px var(--gutter) calc(var(--safe-bottom) + 16px);
+}
+
+.page-title {
+  margin: 0 4px;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.page-sub {
+  margin: 8px 4px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-grey);
+}
+
+.center-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 100%;
+  gap: 12px;
+  padding: 24px;
+}
+
+// ---------------------------------------------------------------------------
+// Navigation.
+
+// Navigation header: a 40px button slot either side of a centered title.
+.navh {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: calc(var(--safe-top) + 52px);
+  padding: var(--safe-top) 8px 0;
+
+  h1 {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-size: 17px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .slot {
+    width: 40px;
+    flex: none;
+  }
+}
+
+.tabbar {
+  flex: none;
+  display: flex;
+  height: calc(var(--tabbar-h) + var(--safe-bottom));
+  padding: 6px 8px var(--safe-bottom);
+  background: var(--body-bg);
+  border-top: 1px solid var(--border-color);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-grey);
+
+  .pill {
+    width: 56px;
+    height: 30px;
+    border-radius: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    transition: background-color 0.15s;
+  }
+
+  &.on {
+    color: var(--text-color);
+
+    .pill {
+      background: var(--sel);
+      color: var(--accent);
+    }
+  }
+}
+
+// Setup progress: equal segments, filled up to the current step.
+.segs {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+
+  span {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--tile);
+  }
+
+  .on {
+    background: var(--accent);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Buttons.
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 52px;
+  padding: 0 16px;
+  border-radius: 12px;
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  flex: none;
+
+  &:active:not(:disabled) {
+    background: var(--btn-feature-hover-bg);
+  }
+
+  &:disabled {
+    background: var(--form-input-bg);
+    color: var(--text-grey);
+  }
+
+  &.secondary {
+    background: transparent;
+    color: var(--text-color);
+    border: 1px solid var(--btnb);
+
+    &:active:not(:disabled) {
+      background: var(--tile);
+    }
+
+    &:disabled {
+      color: var(--text-grey);
+    }
+  }
+
+  &.quiet {
+    background: transparent;
+    color: var(--text-grey);
+    height: 44px;
+    font-size: 15px;
+  }
+
+  &.danger {
+    background: transparent;
+    color: var(--text-danger);
+    border: 1px solid color-mix(in srgb, var(--text-danger) 50%, transparent);
+  }
+
+  .ico {
+    font-size: 16px;
+  }
+}
+
+.btn-row {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+
+  .btn {
+    flex: 1;
+    width: auto;
+  }
+}
+
+// Round icon button.
+.ib {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex: none;
+
+  &.tile {
+    background: var(--tile);
+  }
+
+  &.sm {
+    width: 32px;
+    height: 32px;
+    font-size: 13px;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+  }
+}
+
+// Pill chips. Filled (accent), outlined, and tile variants.
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+  font-size: 13px;
+  font-weight: 600;
+  flex: none;
+  white-space: nowrap;
+
+  &.outline {
+    background: transparent;
+    color: var(--text-color);
+    border: 1px solid var(--btnb);
+  }
+
+  &.tile {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    background: var(--tile);
+    color: var(--text-color);
+  }
+
+  &.sel {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    background: var(--sel);
+    color: var(--accent);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+.link {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+// Large round action (Receive / Send / Swap).
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: 36px;
+}
+
+.act {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+
+  .disc {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: var(--tile);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    transition: background-color 0.15s;
+  }
+
+  &:active:not(:disabled) .disc {
+    background: var(--sel);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lists.
+
+.lbl {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-grey);
+}
+
+// Section label above a list.
+.sec {
+  margin: 24px 4px 10px;
+}
+
+.sec-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 24px 4px 10px;
+}
+
+// A grouped list card: rows separated by 1px dividers.
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border-color);
+  border-radius: 16px;
+  overflow: hidden;
+
+  > * {
+    background: var(--surface);
+  }
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 62px;
+  padding: 12px 14px;
+  text-align: left;
+
+  &.tappable:active {
+    background: var(--surface-raised);
+  }
+
+  &.compact {
+    min-height: 52px;
+  }
+}
+
+.t1 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.t2 {
+  font-size: 13px;
+  color: var(--text-grey);
+  margin-top: 3px;
+}
+
+.num {
+  text-align: right;
+  white-space: nowrap;
+  flex: none;
+}
+
+.coin {
+  width: 36px;
+  height: 36px;
+  flex: none;
+}
+
+.coin-sm {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.chev {
+  color: var(--text-grey);
+  font-size: 12px;
+  transform: scaleX(-1);
+}
+
+// Key/value rows (review sheets, detail lists).
+.kv {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 46px;
+  padding: 10px 14px;
+  font-size: 14px;
+
+  > :first-child {
+    color: var(--text-grey);
+    flex: none;
+  }
+
+  > :last-child {
+    text-align: right;
+    min-width: 0;
+  }
+
+  &.stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+
+    > :last-child {
+      text-align: left;
+    }
+  }
+}
+
+// Plain (unboxed) key/value rows.
+.kvs .kv {
+  min-height: 0;
+  padding: 7px 4px;
+}
+
+.empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-grey);
+  font-size: 14px;
+}
+
+// Logo with a network badge in its corner (shared NetworkedTokenLogo).
+.position-relative {
+  position: relative;
+}
+
+.d-inline-flex {
+  display: inline-flex;
+}
+
+.w-100 {
+  width: 100%;
+}
+
+.h-100 {
+  height: 100%;
+}
+
+.networked-token-badge {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 55%;
+  height: 55%;
+  padding: 2px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+// ---------------------------------------------------------------------------
+// Form fields.
+
+.flbl {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-grey);
+  margin: 0 4px 8px;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 54px;
+  padding: 0 6px 0 16px;
+  border-radius: 12px;
+  background: var(--form-input-bg);
+  border: 1px solid transparent;
+  transition: border-color 0.1s;
+
+  &:focus-within {
+    border-color: var(--accent-border);
+  }
+
+  &.bad {
+    border-color: var(--text-error);
+  }
+
+  &.search {
+    height: 46px;
+    padding: 0 14px;
+
+    .ico-search {
+      color: var(--text-grey);
+      font-size: 16px;
+    }
+  }
+
+  input,
+  select {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    background: none;
+    border: 0;
+    outline: none;
+    color: var(--text-color);
+    font-size: 17px;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-grey);
+  }
+
+  input[type="password"] {
+    letter-spacing: 0.12em;
+  }
+
+  input[type="password"]:placeholder-shown {
+    letter-spacing: normal;
+  }
+}
+
+// Multi-line field (addresses, seed entry).
+.area {
+  border-radius: 16px;
+  background: var(--form-input-bg);
+  padding: 14px 14px 10px;
+  border: 1px solid transparent;
+  transition: border-color 0.1s;
+
+  &:focus-within {
+    border-color: var(--accent-border);
+  }
+
+  &.bad {
+    border-color: var(--text-error);
+  }
+
+  textarea {
+    display: block;
+    width: 100%;
+    resize: none;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--text-color);
+    font-size: 17px;
+    line-height: 1.45;
+    padding: 0;
+    caret-color: var(--accent);
+  }
+}
+
+.field-err {
+  min-height: 18px;
+  margin: 8px 4px 0;
+  font-size: 13px;
+  color: var(--text-error);
+
+  &:empty {
+    min-height: 0;
+    margin: 0;
+  }
+}
+
+.field-ok {
+  margin: 8px 4px 0;
+  font-size: 13px;
+  color: var(--accent-green);
+}
+
+// Native select styled as a value with a chevron (settings pickers).
+.select-val {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-grey);
+  font-size: 15px;
+  flex: none;
+
+  select {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    width: 100%;
+    font-size: 16px;
+  }
+}
+
+// Switch.
+.toggle {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--tile);
+  flex: none;
+  transition: background-color 0.15s;
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+    transition: left 0.15s;
+  }
+
+  &.on {
+    background: var(--accent-strong);
+
+    &::after {
+      left: 21px;
+    }
+  }
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+// Checkbox.
+.chk {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1.5px solid var(--btnb);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex: none;
+
+  &.on {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+    color: var(--accent-contrast);
+  }
+
+  &.sm {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    font-size: 12px;
+  }
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  width: 100%;
+
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feedback.
+
+.spin {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+  flex: none;
+
+  &.gold {
+    border-color: color-mix(in srgb, var(--gold) 30%, transparent);
+    border-top-color: var(--gold);
+  }
+
+  &.sm {
+    width: 11px;
+    height: 11px;
+  }
+
+  &.lg {
+    width: 28px;
+    height: 28px;
+    border-width: 3px;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// Inline info or warning box.
+.callout {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-grey);
+  text-align: left;
+
+  > [class^="ico-"] {
+    font-size: 16px;
+    line-height: 1.2;
+  }
+
+  &.caution {
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+
+    > [class^="ico-"] {
+      color: var(--gold);
+    }
+  }
+
+  &.strong {
+    color: var(--text-color);
+  }
+}
+
+.err-box {
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text-error) 12%, transparent);
+  color: var(--text-error);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+// Thin progress bar.
+.bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tile);
+  overflow: hidden;
+
+  > span {
+    display: block;
+    height: 100%;
+    background: var(--gold);
+  }
+
+  &.accent > span {
+    background: var(--accent);
+  }
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+// Non-mainnet network strip, pinned above every screen. It sits in the
+// status-bar inset itself, so the screens below it drop their own top inset.
+.net-strip {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: calc(var(--safe-top) + 6px) 0 6px;
+  background: var(--body-bg);
+
+  + .app-body {
+    --safe-top: 0px;
+  }
+}
+
+// Non-mainnet network pill.
+.net-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 13px;
+  border: 1px solid var(--text-warning);
+  color: var(--text-warning);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+// ---------------------------------------------------------------------------
+// Bottom sheets.
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim-bg);
+  z-index: 20;
+  animation: fade-in 0.18s ease-out;
+}
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 21;
+  max-height: calc(100% - var(--safe-top) - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--body-bg);
+  border-radius: 24px 24px 0 0;
+  box-shadow: 0 -12px 40px rgb(0 0 0 / 0.3);
+  animation: sheet-up 0.22s ease-out;
+
+  &.tall {
+    top: calc(var(--safe-top) + 40px);
+  }
+
+  .grab {
+    width: 36px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--btnb);
+    margin: 8px auto 0;
+    flex: none;
+  }
+
+  .sheet-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px 6px 20px;
+
+    h1 {
+      font-size: 20px;
+      font-weight: 600;
+    }
+  }
+
+  .sheet-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px var(--gutter) 16px;
+  }
+
+  .sheet-foot {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px var(--gutter) calc(var(--safe-bottom) + 16px);
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+// Transient toast (copy confirmations).
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + var(--tabbar-h) + 20px);
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: fade-in 0.15s ease-out;
+}
+
+// ---------------------------------------------------------------------------
+// Slide to confirm.
+
+.slide {
+  --thumb: 52px;
+  --inset: 4px;
+
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 60px;
+  border-radius: 30px;
+  background: var(--form-input-bg);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.slide-trail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: calc(var(--thumb) + 2 * var(--inset));
+  border-radius: 30px;
+  background: color-mix(in srgb, var(--accent-strong) 30%, transparent);
+  transition: width 0.2s ease-out;
+}
+
+.slide-label {
+  position: relative;
+  padding-left: 44px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-grey);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.slide-thumb {
+  position: absolute;
+  left: var(--inset);
+  top: var(--inset);
+  width: var(--thumb);
+  height: var(--thumb);
+  border-radius: 50%;
+  background: var(--accent-strong);
+  color: var(--accent-contrast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.25);
+  cursor: grab;
+  touch-action: none;
+  transition: transform 0.2s ease-out, left 0.2s ease-out;
+}
+
+.slide.dragging {
+  .slide-thumb {
+    cursor: grabbing;
+    transition: none;
+  }
+
+  .slide-trail {
+    transition: none;
+  }
+}
+
+.slide.off {
+  .slide-trail {
+    background: transparent;
+  }
+
+  .slide-thumb {
+    background: var(--btn-select-or-hover-bg);
+    color: var(--text-grey);
+    box-shadow: none;
+    cursor: default;
+  }
+}
+
+.slide.busy {
+  .slide-trail {
+    width: 100%;
+  }
+
+  .slide-label {
+    padding-left: 0;
+    padding-right: 44px;
+  }
+
+  .slide-thumb {
+    left: calc(100% - var(--thumb) - var(--inset));
+    transform: none;
+    cursor: default;
+  }
+}
+
+// Spinner drawn on an accent fill.
+.spin.on-fill {
+  border-color: color-mix(in srgb, var(--accent-contrast) 35%, transparent);
+  border-top-color: var(--accent-contrast);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-thumb,
+  .slide-trail {
+    transition: none;
+  }
+}

@@ -1,125 +1,23 @@
-import { useEffect, useMemo, useRef, useState, ChangeEvent, ReactNode } from 'react'
+import { useRef, useState, ReactNode } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
 import { explorerTxURL } from '@caribou/shared/coinexplorers'
-import { useForceUpdate } from '@caribou/shared/hooks'
-import { getJSON, postJSON } from '@caribou/shared/http'
-import { CoreNote, UnitInfo, WalletTransaction } from '@caribou/shared/registry'
-import State from '@caribou/shared/state'
 import Doc from '@caribou/shared/doc'
 import AssetLogo from './AssetLogo'
 import Spinner from './Spinner'
 import PasswordInput from './PasswordInput'
 import { useModalBusy } from './modalBusy'
 import {
-  IntentsAsset, IntentsPreview, IntentsSwap,
-  StateProcessing, StateSuccess, StateRefunded, StateFailed, StateExpired, StateDepositFailed,
-  swapIsActive, stateLabel, stateColorClass,
-  conventionalToAtoms, assetTicker, assetName
-} from '../intents'
-
-// localStorage keys for sticky swap-form preferences.
-const pairLK = 'intentsPair'
-const slippageLK = 'intentsSlippageBps'
-
-const slippagePresets = [50, 100, 200] // basis points
-
-// Preview quotes refresh on this cadence while the form or review view is
-// showing, so displayed pricing tracks the market.
-const previewRefreshMS = 10000
-const previewDebounceMS = 350
-
-function slippagePct (bps: number): string {
-  return `${(bps / 100).toLocaleString()}%`
-}
-
-// ---- Custody and bridge trust ----
-
-// bridgeTrustMap classifies settlement chains by the custody model of their
-// Intents bridge leg. Data-driven rather than baked copy because the
-// PoA→Omni migration is ongoing; an unlisted chain falls back to a generic
-// third-party label.
-const bridgeTrustOmni = t('bridge custody by a distributed MPC signing network (Omni)')
-const bridgeTrustHot = t('bridge custody by a distributed MPC signing network (HOT)')
-const bridgeTrustPoA = t('bridge custody by a validator federation operated for the service')
-const bridgeTrustMap: Record<string, string> = {
-  BTC: bridgeTrustOmni,
-  ETH: bridgeTrustOmni,
-  SOL: bridgeTrustOmni,
-  BNB: bridgeTrustOmni,
-  POL: bridgeTrustHot,
-  LTC: bridgeTrustPoA,
-  DOGE: bridgeTrustPoA,
-  XRP: bridgeTrustPoA,
-  ZEC: bridgeTrustPoA,
-  BCH: bridgeTrustPoA,
-  DASH: bridgeTrustPoA,
-  NEAR: t('settles natively on the NEAR network — no bridge leg')
-}
-
-function bridgeTrust (chain: string): string {
-  return bridgeTrustMap[chain.toUpperCase()] ?? t('bridge custody by a third-party bridge operator')
-}
-
-// chainTicker resolves the settlement network's native ticker for an Intents
-// asset. Trust classification is per chain, not per token: a token's bridge
-// leg is custodied by its network's bridge.
-function chainTicker (a: IntentsAsset): string {
-  const wa = app.user?.assets[a.assetID]
-  const chainID = wa?.token ? wa.token.networkID : a.assetID
-  return app.user?.assets[chainID]?.unitInfo.conventional.unit ?? a.symbol
-}
-
-// unitInfoFor returns the wallet UnitInfo for a swappable asset, or a
-// minimal stand-in built from the catalog scale when the asset is unknown
-// to this build's wallet map (walletReady is false for those, so the
-// stand-in only ever formats display amounts).
-function unitInfoFor (a: IntentsAsset): UnitInfo {
-  const sa = app.user?.assets[a.assetID]
-  if (sa) return sa.unitInfo
-  const unit = a.symbol.toUpperCase()
-  return {
-    atomicUnit: unit,
-    conventional: { unit, conversionFactor: Math.pow(10, a.atomDecimals) },
-    denominations: [],
-    feeRateDenom: ''
-  }
-}
-
-// usdRate is an asset's USD display rate, preferring the app's live rate
-// over the catalog price.
-function usdRate (a: IntentsAsset): number {
-  return app.idRate(a.assetID) || a.priceUSD
-}
-
-// usdValue prices conventional units of a swappable asset.
-function usdValue (a: IntentsAsset, conventional: number): number {
-  return conventional * usdRate(a)
-}
-
-// plainAtoms renders atoms as a plain decimal string for use as an input
-// value — no locale grouping, which would fail the decimal validation on
-// the next keystroke.
-function plainAtoms (atoms: number, decimals: number): string {
-  if (atoms <= 0) return ''
-  return (atoms / Math.pow(10, decimals)).toFixed(decimals).replace(/\.?0+$/, '')
-}
-
-// plainUSD renders a dollar value as a plain input string.
-function plainUSD (v: number): string {
-  if (v <= 0) return ''
-  return v.toFixed(2)
-}
-
-// displayBalance floors a conventional balance to four significant digits
-// (capped at eight decimals) so the line stays short and never overstates
-// holdings. Max still spends full precision.
-function displayBalance (v: number): string {
-  if (v <= 0) return '0'
-  const digits = Math.min(8, Math.max(0, 4 - Math.floor(Math.log10(v)) - 1))
-  const f = Math.pow(10, digits)
-  return (Math.floor(v * f) / f).toLocaleString(undefined, { maximumFractionDigits: digits })
-}
+  IntentsAsset, IntentsSwap,
+  StateSuccess, StateRefunded, StateFailed, StateExpired, StateDepositFailed,
+  stateLabel, stateColorClass, assetTicker, assetName
+} from '@caribou/shared/intents'
+import {
+  slippagePresets, slippagePct, bridgeTrust, chainTicker, custodyDisclosure, screeningDisclosure,
+  unitInfoFor, usdValue, availableAtoms, displayBalance, swapPickList, fetchWalletTx, swapProgressInfo
+} from '@caribou/shared/swap'
+import { useSwapForm } from '@caribou/shared/useSwapForm'
+import { useSwapRecord, useDepositTx } from '@caribou/shared/useSwapProgress'
 
 interface SwapProps {
   // depositAddress opens the dialog directly on an existing swap's progress
@@ -131,21 +29,8 @@ type View = 'form' | 'pick' | 'review' | 'progress'
 
 export default function Swap ({ depositAddress }: SwapProps) {
   const close = () => app.setForm({ form: '', data: {} })
-  const redraw = useForceUpdate()
 
   const [view, setView] = useState<View>(depositAddress ? 'progress' : 'form')
-  const [assets, setAssets] = useState<IntentsAsset[] | null>(null)
-  const [assetsErr, setAssetsErr] = useState('')
-  const [sellID, setSellID] = useState<number | null>(null)
-  const [buyID, setBuyID] = useState<number | null>(null)
-  const [amount, setAmount] = useState('')
-  // The side and unit the typed amount belongs to. 'buy' quotes
-  // exact-output: the service computes the required input for the
-  // requested output. A 'usd' unit converts to the side's asset amount at
-  // the display rate before quoting.
-  const [editSide, setEditSide] = useState<'sell' | 'buy'>('sell')
-  const [editUnit, setEditUnit] = useState<'asset' | 'usd'>('asset')
-  const [slippageBps, setSlippageBps] = useState<number>(State.fetchLocal(slippageLK) || 100)
   const [showSlippage, setShowSlippage] = useState(false)
   const [showCustody, setShowCustody] = useState(false)
 
@@ -153,208 +38,33 @@ export default function Swap ({ depositAddress }: SwapProps) {
   const [pickSide, setPickSide] = useState<'sell' | 'buy'>('sell')
   const [query, setQuery] = useState('')
 
-  // Preview state. previewSeq orders requests: a response is applied only if
-  // no newer request has been issued since, so a slow stale quote can never
-  // overwrite a fresher one.
-  const [preview, setPreview] = useState<IntentsPreview | null>(null)
-  const [previewErr, setPreviewErr] = useState('')
-  const [previewing, setPreviewing] = useState(false)
-  const previewSeq = useRef(0)
   const amtInputRef = useRef<HTMLInputElement>(null)
   const buyInputRef = useRef<HTMLInputElement>(null)
 
-  // Execution / progress.
-  const [pw, setPW] = useState('')
-  const [executing, setExecuting] = useState(false)
-  const [execErr, setExecErr] = useState('')
-  const [swap, setSwap] = useState<IntentsSwap | null>(null)
+  // The swap on display in the progress view: loaded by deposit address, or
+  // installed by a successful execute.
+  const { swap, setSwap, refresh: refreshSwap } = useSwapRecord(depositAddress)
+
+  const {
+    assets, assetsErr, sellID, buyID, sellAsset, buyAsset, sellAvail, buyAvail,
+    exactOutput, slippageBps, setSlippageBps,
+    preview, previewErr, previewing, depositFeeText,
+    requirePW, pw, setPW, executing, execErr, setExecErr, canExecute,
+    sellUSD, buyUSD, sellAssetValue, buyAssetValue, sellUSDValue, buyUSDValue,
+    sellFieldText, buyFieldText, rateText, minOutText, maxInText, etaText, feeBps,
+    overBalance, formStatus,
+    fetchPreview, flip, pick: pickFor, setMax, amountChanged, execute
+  } = useSwapForm({
+    liveView: view === 'form' || view === 'review' ? view : null,
+    onExecuted: s => {
+      setSwap(s)
+      setView('progress')
+    }
+  })
 
   useModalBusy(executing)
 
-  const requirePW = app.appSettings.sendRequiresPassword
-
-  const assetMap = useMemo(() => {
-    const m = new Map<number, IntentsAsset>()
-    for (const a of assets ?? []) m.set(a.assetID, a)
-    return m
-  }, [assets])
-
-  const sellAsset = sellID === null ? null : assetMap.get(sellID) ?? null
-  const buyAsset = buyID === null ? null : assetMap.get(buyID) ?? null
-
-  const exactOutput = editSide === 'buy'
-  const editAsset = exactOutput ? buyAsset : sellAsset
-
-  // The typed amount in the edited side's wallet atoms — the preview and
-  // execute `value` for either direction. A USD entry converts at the
-  // display rate; the quote then prices the derived asset amount.
-  const editAtoms = useMemo(() => {
-    if (!editAsset) return 0
-    const v = parseFloat(amount)
-    if (!isFinite(v) || v <= 0) return 0
-    if (editUnit === 'usd') {
-      const rate = usdRate(editAsset)
-      if (rate <= 0) return 0
-      return conventionalToAtoms(v / rate, editAsset.atomDecimals)
-    }
-    return conventionalToAtoms(v, editAsset.atomDecimals)
-  }, [amount, editAsset, editUnit])
-
-  const sellAvail = sellID === null ? 0 : app.wallet(sellID)?.balance?.available ?? 0
-  const buyAvail = buyID === null ? 0 : app.wallet(buyID)?.balance?.available ?? 0
-
-  // Projected origin-chain network fee for the deposit transaction, in the
-  // fee asset's atoms (the parent chain's for tokens). Refreshed on the
-  // preview cadence while the form or review view is showing.
-  const [depositFee, setDepositFee] = useState(0)
-  const sellWalletAsset = sellID === null ? undefined : app.user?.assets[sellID]
-  const depositFeeAssetID = sellWalletAsset?.token ? sellWalletAsset.token.networkID : sellID
-  useEffect(() => {
-    setDepositFee(0)
-    if (sellID === null || (view !== 'form' && view !== 'review') || !app.wallet(sellID)) return
-    let stale = false
-    const fetchFee = async () => {
-      const r = await postJSON('/api/feestate', { assetID: sellID })
-      if (!stale && r.ok) setDepositFee(r.feeState?.send ?? 0)
-    }
-    fetchFee()
-    const ticker = window.setInterval(fetchFee, previewRefreshMS)
-    return () => { stale = true; window.clearInterval(ticker) }
-  }, [sellID, view])
-  const depositFeeAsset = depositFeeAssetID == null ? undefined : app.user?.assets[depositFeeAssetID]
-  const depositFeeUSD = depositFeeAsset && depositFeeAssetID != null
-    ? Doc.usdString(depositFee, depositFeeAsset.unitInfo.conventional.conversionFactor, app.idRate(depositFeeAssetID) ?? 0)
-    : ''
-  const depositFeeText = depositFee > 0 && depositFeeAsset
-    ? `${Doc.formatCoinValue(depositFee, depositFeeAsset.unitInfo)} ${depositFeeAsset.unitInfo.conventional.unit}${depositFeeUSD !== '' ? ` (${depositFeeUSD})` : ''}`
-    : ''
-
-  // ---- Data loading ----
-
-  useEffect(() => {
-    const loadAssets = async () => {
-      const r = await getJSON('/api/intents/assets')
-      if (!r.ok) {
-        setAssetsErr(r.msg || r.errMsg || t('Cross-chain swaps are unavailable.'))
-        return
-      }
-      const list: IntentsAsset[] = r.assets ?? []
-      setAssets(list)
-      // Restore the last-used pair, falling back to the two most valuable
-      // ready wallets.
-      const ready = list.filter(a => a.walletReady)
-      const byValue = [...ready].sort((a, b) => {
-        const bal = (x: IntentsAsset) => usdValue(x, (app.wallet(x.assetID)?.balance?.available ?? 0) / Math.pow(10, x.atomDecimals))
-        return bal(b) - bal(a)
-      })
-      const stored = State.fetchLocal(pairLK) as { sellID: number, buyID: number } | null
-      let sell = stored && list.some(a => a.assetID === stored.sellID) ? stored.sellID : null
-      let buy = stored && list.some(a => a.assetID === stored.buyID) ? stored.buyID : null
-      if (sell === null) sell = byValue[0]?.assetID ?? null
-      if (buy === null || buy === sell) buy = ready.find(a => a.assetID !== sell)?.assetID ?? null
-      setSellID(sell)
-      setBuyID(buy)
-    }
-    loadAssets()
-  }, [])
-
-  // Opened on an existing swap: pull the record by deposit address.
-  useEffect(() => {
-    if (!depositAddress) return
-    const load = async () => {
-      const r = await getJSON('/api/intents/swaps')
-      if (!r.ok) return
-      const s = (r.swaps as IntentsSwap[] ?? []).find(s => s.depositAddress === depositAddress)
-      if (s) setSwap(s)
-    }
-    load()
-  }, [depositAddress])
-
-  // Live swap updates ride the notification feed; apply any that match the
-  // record on display.
-  useEffect(() => {
-    const k = app.registerNoteFeed((n: CoreNote) => {
-      if (n.type !== 'intentsswap') return
-      const s = (n as CoreNote & { swap: IntentsSwap }).swap
-      if (!s) return
-      setSwap(prev => (prev && prev.depositAddress === s.depositAddress) ? s : prev)
-    })
-    return () => app.unregisterNoteFeed(k)
-  }, [])
-
-  // Balance and rate changes arrive as notes; the sell-card balance line
-  // and USD estimates read app state directly, so re-render on either.
-  useEffect(() => {
-    const balK = app.registerBalanceUpdater(redraw)
-    const rateK = app.registerFiatRateUpdater(redraw)
-    return () => {
-      app.unregisterBalanceUpdater(balK)
-      app.unregisterFiatRateUpdater(rateK)
-    }
-  }, [])
-
-  // Persist the pair and slippage choices.
-  useEffect(() => {
-    if (sellID !== null && buyID !== null) State.storeLocal(pairLK, { sellID, buyID })
-  }, [sellID, buyID])
-  useEffect(() => { State.storeLocal(slippageLK, slippageBps) }, [slippageBps])
-
-  // ---- Preview scheduling ----
-
-  const fetchPreview = async () => {
-    if (sellID === null || buyID === null || editAtoms === 0) return
-    const seq = ++previewSeq.current
-    setPreviewing(true)
-    const r = await postJSON('/api/intents/preview', {
-      originAssetID: sellID,
-      destAssetID: buyID,
-      value: editAtoms,
-      slippageBps,
-      exactOutput
-    })
-    if (seq !== previewSeq.current) return // superseded
-    setPreviewing(false)
-    if (!r.ok) {
-      setPreview(null)
-      setPreviewErr(r.msg || r.errMsg || t('quote failed'))
-      return
-    }
-    setPreviewErr('')
-    setPreview(r.preview)
-  }
-
-  // On any parameter change: invalidate the current quote immediately (it
-  // priced different terms), then fetch behind a short debounce. The cleanup
-  // seq bump also retires any in-flight response.
-  useEffect(() => {
-    setPreview(null)
-    setPreviewErr('')
-    if (sellID === null || buyID === null || editAtoms === 0) {
-      setPreviewing(false)
-      return
-    }
-    const timer = window.setTimeout(fetchPreview, previewDebounceMS)
-    return () => {
-      window.clearTimeout(timer)
-      previewSeq.current++
-    }
-  }, [sellID, buyID, editAtoms, slippageBps, exactOutput])
-
-  // Periodic refresh keeps the displayed quote current in the form and
-  // review views, including the review dialog's live totals.
-  useEffect(() => {
-    if (view !== 'form' && view !== 'review') return
-    if (sellID === null || buyID === null || editAtoms === 0) return
-    const ticker = window.setInterval(fetchPreview, previewRefreshMS)
-    return () => window.clearInterval(ticker)
-  }, [view, sellID, buyID, editAtoms, slippageBps, exactOutput])
-
   // ---- Actions ----
-
-  const flip = () => {
-    setSellID(buyID)
-    setBuyID(sellID)
-  }
 
   const openPicker = (side: 'sell' | 'buy') => {
     setPickSide(side)
@@ -363,72 +73,8 @@ export default function Swap ({ depositAddress }: SwapProps) {
   }
 
   const pick = (a: IntentsAsset) => {
-    if (pickSide === 'sell') {
-      if (a.assetID === buyID) setBuyID(sellID) // selected the other side: swap
-      setSellID(a.assetID)
-    } else {
-      if (a.assetID === sellID) setSellID(buyID)
-      setBuyID(a.assetID)
-    }
+    pickFor(pickSide, a)
     setView('form')
-  }
-
-  const setMax = () => {
-    if (!sellAsset || sellAvail === 0) return
-    const conv = sellAvail / Math.pow(10, sellAsset.atomDecimals)
-    setEditSide('sell')
-    setEditUnit('asset')
-    setAmount(conv.toFixed(sellAsset.atomDecimals).replace(/\.?0+$/, ''))
-  }
-
-  // Typing in any of the four fields claims it: the typed field drives
-  // the quote and the other three display derived values.
-  const amountChanged = (side: 'sell' | 'buy', unit: 'asset' | 'usd') => (e: ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value.replace(',', '.')
-    if (!/^\d*\.?\d*$/.test(v)) return
-    setEditSide(side)
-    setEditUnit(unit)
-    setAmount(v)
-  }
-
-  // A synchronous re-entry latch alongside the `executing` render state:
-  // the state only takes effect on the next render, so a second click or
-  // Enter landing before the re-render would fire a second real
-  // execution — a second committed quote and a second deposit — for the
-  // same funds.
-  const executingRef = useRef(false)
-  const execute = async () => {
-    if (!preview || executingRef.current) return
-    executingRef.current = true
-    setExecuting(true)
-    setExecErr('')
-    const r = await postJSON('/api/intents/execute', {
-      originAssetID: sellID,
-      destAssetID: buyID,
-      value: editAtoms,
-      slippageBps,
-      exactOutput,
-      // The bound the user accepted: min received for exact-input, the
-      // previewed cost ceiling for exact-output.
-      minAtomsOut: exactOutput ? 0 : preview.minAtomsOut,
-      maxAtomsIn: exactOutput ? preview.atomsIn : 0,
-      pass: pw
-    })
-    executingRef.current = false
-    setExecuting(false)
-    if (!r.ok) {
-      setExecErr(r.msg || r.errMsg || t('swap failed'))
-      return
-    }
-    setPW('')
-    setSwap(r.swap)
-    setView('progress')
-  }
-
-  const refreshSwap = async () => {
-    if (!swap) return
-    const r = await postJSON('/api/intents/refresh', { depositAddress: swap.depositAddress })
-    if (r.ok && r.swap) setSwap(r.swap)
   }
 
   // ---- Unavailable / loading states ----
@@ -471,20 +117,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
   // ---- Asset picker view ----
 
   if (view === 'pick') {
-    const q = query.trim().toLowerCase()
-    const list = (assets ?? []).filter(a => {
-      if (q === '') return true
-      return assetTicker(a).toLowerCase().includes(q) ||
-        assetName(a).toLowerCase().includes(q) ||
-        a.symbol.toLowerCase().includes(q)
-    })
-    // Ready wallets first, ordered by USD balance; inactive entries trail.
-    const balUSD = (a: IntentsAsset) =>
-      usdValue(a, (app.wallet(a.assetID)?.balance?.available ?? 0) / Math.pow(10, a.atomDecimals))
-    list.sort((a, b) => {
-      if (a.walletReady !== b.walletReady) return a.walletReady ? -1 : 1
-      return balUSD(b) - balUSD(a)
-    })
+    const list = swapPickList(assets ?? [], query)
     const selectedID = pickSide === 'sell' ? sellID : buyID
     return (
       <form className="modal swap-modal">
@@ -507,7 +140,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
         <div className="swap-pick-list overflow-y-auto mb-2">
           {list.map(a => {
             const ticker = assetTicker(a)
-            const avail = app.wallet(a.assetID)?.balance?.available ?? 0
+            const avail = availableAtoms(a.assetID)
             const conv = avail / Math.pow(10, a.atomDecimals)
             const usd = usdValue(a, conv)
             return (
@@ -543,58 +176,9 @@ export default function Swap ({ depositAddress }: SwapProps) {
     )
   }
 
-  // ---- Shared quote-derived display values (form + review) ----
-
-  const buyUI = buyAsset ? unitInfoFor(buyAsset) : undefined
-  const sellUI = sellAsset ? unitInfoFor(sellAsset) : undefined
-  // Each side's amount in atoms: the typed side derives from the entry
-  // (asset or USD), the other from the quote.
-  const sellAtomsShown = editSide === 'sell' ? editAtoms : (preview?.atomsIn ?? 0)
-  const buyAtomsShown = editSide === 'buy' ? editAtoms : (preview?.atomsOut ?? 0)
-  const sellConv = sellAsset ? sellAtomsShown / Math.pow(10, sellAsset.atomDecimals) : 0
-  const buyConv = buyAsset ? buyAtomsShown / Math.pow(10, buyAsset.atomDecimals) : 0
-  const sellUSD = sellAsset && sellConv > 0 ? Doc.formatUSD(usdValue(sellAsset, sellConv)) : ''
-  const buyUSD = buyAsset && buyConv > 0 ? Doc.formatUSD(usdValue(buyAsset, buyConv)) : ''
-  // Form-field values. The field being typed in shows the raw entry; the
-  // other three show plain derived strings.
-  const sellAssetValue = editSide === 'sell' && editUnit === 'asset'
-    ? amount
-    : sellAsset ? plainAtoms(sellAtomsShown, sellAsset.atomDecimals) : ''
-  const buyAssetValue = editSide === 'buy' && editUnit === 'asset'
-    ? amount
-    : buyAsset ? plainAtoms(buyAtomsShown, buyAsset.atomDecimals) : ''
-  const sellUSDValue = editSide === 'sell' && editUnit === 'usd'
-    ? amount
-    : sellAsset ? plainUSD(usdValue(sellAsset, sellConv)) : ''
-  const buyUSDValue = editSide === 'buy' && editUnit === 'usd'
-    ? amount
-    : buyAsset ? plainUSD(usdValue(buyAsset, buyConv)) : ''
-  // Review-view amounts, straight from the quote.
-  const sellFieldText = preview && sellUI ? Doc.formatCoinValue(preview.atomsIn, sellUI) : ''
-  const buyFieldText = preview && buyUI ? Doc.formatCoinValue(preview.atomsOut, buyUI) : ''
-  const quoteRate = preview && sellConv > 0 && buyConv > 0 ? buyConv / sellConv : 0
-  const indicativeRate = sellAsset && buyAsset && usdRate(buyAsset) > 0
-    ? usdRate(sellAsset) / usdRate(buyAsset)
-    : 0
-  const rateShown = quoteRate || indicativeRate
-  const rateText = rateShown && sellAsset && buyAsset
-    ? `1 ${assetTicker(sellAsset)} = ${Doc.formatFourSigFigs(rateShown)} ${assetTicker(buyAsset)}`
-    : ''
-  const minOutText = preview && buyAsset && buyUI
-    ? `${Doc.formatCoinValue(preview.minAtomsOut, buyUI)} ${assetTicker(buyAsset)}`
-    : ''
-  const maxInText = preview && sellAsset && sellUI
-    ? `${Doc.formatCoinValue(preview.atomsIn, sellUI)} ${assetTicker(sellAsset)}`
-    : ''
-  const etaText = preview ? `~${Doc.formatDuration(preview.timeEstimate * 1000)}` : ''
-  const feeBps = preview ? preview.appFees.reduce((sum, f) => sum + f.fee, 0) : 0
-  const sellAtoms = exactOutput ? (preview?.atomsIn ?? 0) : editAtoms
-  const overBalance = sellAtoms > sellAvail
-
   // ---- Review view ----
 
   if (view === 'review' && sellAsset && buyAsset) {
-    const canSwap = Boolean(preview) && !executing && (!requirePW || pw !== '')
     return (
       <form className="modal swap-modal" onSubmit={e => { e.preventDefault(); execute() }}>
         <header>
@@ -680,14 +264,10 @@ export default function Swap ({ depositAddress }: SwapProps) {
           </div>
           {showCustody && (
             <div className="form-input-bg br5 p-2 my-1 fs12">
-              <div className="grey mb-2">
-                {t('Swaps are executed by NEAR Intents, operated by Defuse Labs Ltd (Gibraltar). This is not an atomic swap: while it completes — typically a few minutes — funds are held by the service and its bridge operators.')}
-              </div>
+              <div className="grey mb-2">{custodyDisclosure()}</div>
               <div className="mb-1"><span className="demi">{chainTicker(sellAsset)}:</span> {bridgeTrust(chainTicker(sellAsset))}.</div>
               <div className="mb-2"><span className="demi">{chainTicker(buyAsset)}:</span> {bridgeTrust(chainTicker(buyAsset))}.</div>
-              <div className="grey">
-                {t('Deposits are screened for sanctions compliance and may rarely be delayed or refused. If a swap cannot complete, funds are returned automatically. All refund and destination addresses are derived from the wallet seed, so funds at rest are never in third-party custody.')}
-              </div>
+              <div className="grey">{screeningDisclosure()}</div>
             </div>
           )}
           <div className="grey fs11 py-1 d-flex align-items-center">
@@ -707,7 +287,7 @@ export default function Swap ({ depositAddress }: SwapProps) {
         {execErr && <div role="alert" className="errcolor fs12 px-3 pb-1 text-center">{execErr}</div>}
 
         <div className="flex-stretch-column p-3">
-          <button type="submit" className="feature swap-cta" disabled={!canSwap}>
+          <button type="submit" className="feature swap-cta" disabled={!canExecute}>
             {executing
               ? <span className="d-inline-flex align-items-center justify-content-center"><Spinner className="me-2" />{t('Swapping...')}</span>
               : t('Swap')}
@@ -721,30 +301,28 @@ export default function Swap ({ depositAddress }: SwapProps) {
   // ---- Form view ----
 
   const actionButton = () => {
-    if (sellID === null || buyID === null) {
-      return <button type="button" className="feature swap-cta" disabled>{t('Select assets')}</button>
+    switch (formStatus) {
+      case 'select':
+        return <button type="button" className="feature swap-cta" disabled>{t('Select assets')}</button>
+      case 'amount':
+        return <button type="button" className="feature swap-cta" disabled>{t('Enter an amount')}</button>
+      case 'balance':
+        return (
+          <button type="button" className="feature swap-cta" disabled>
+            {tvar('Not enough {{ ticker }}', { ticker: sellAsset ? assetTicker(sellAsset) : '' })}
+          </button>
+        )
+      case 'retry':
+        return <button type="button" className="feature swap-cta" onClick={fetchPreview}>{t('Retry quote')}</button>
+      case 'quoting':
+        return (
+          <button type="button" className="feature swap-cta" disabled>
+            <span className="d-inline-flex align-items-center justify-content-center"><Spinner className="me-2" />{t('Fetching quote...')}</span>
+          </button>
+        )
+      case 'ready':
+        return <button type="button" className="feature swap-cta" onClick={() => { setExecErr(''); setView('review') }}>{t('Review swap')}</button>
     }
-    if (editAtoms === 0) {
-      return <button type="button" className="feature swap-cta" disabled>{t('Enter an amount')}</button>
-    }
-    if (overBalance) {
-      return (
-        <button type="button" className="feature swap-cta" disabled>
-          {tvar('Not enough {{ ticker }}', { ticker: sellAsset ? assetTicker(sellAsset) : '' })}
-        </button>
-      )
-    }
-    if (previewErr) {
-      return <button type="button" className="feature swap-cta" onClick={fetchPreview}>{t('Retry quote')}</button>
-    }
-    if (!preview) {
-      return (
-        <button type="button" className="feature swap-cta" disabled>
-          <span className="d-inline-flex align-items-center justify-content-center"><Spinner className="me-2" />{t('Fetching quote...')}</span>
-        </button>
-      )
-    }
-    return <button type="button" className="feature swap-cta" onClick={() => { setExecErr(''); setView('review') }}>{t('Review swap')}</button>
   }
 
   const assetChip = (a: IntentsAsset | null, side: 'sell' | 'buy') => (
@@ -929,13 +507,6 @@ export default function Swap ({ depositAddress }: SwapProps) {
 
 // ---- Progress subview ----
 
-// fetchWalletTx loads a single transaction from a wallet's history, or
-// null when the wallet has no record of it.
-async function fetchWalletTx (assetID: number, txID: string): Promise<WalletTransaction | null> {
-  const r = await postJSON('/api/wallettx', { assetID, txID })
-  return r.ok && r.tx ? r.tx as WalletTransaction : null
-}
-
 // Row is the bordered label/value row shared with the transaction detail
 // dialog.
 function Row ({ label, tip, children }: { label: string, tip?: string, children: ReactNode }) {
@@ -955,69 +526,13 @@ interface SwapProgressProps {
   onClose: () => void
 }
 
-// Progress steps for an active swap. Every pre-PROCESSING state is the
-// deposit phase.
-function activeStep (state: string): number {
-  return state === StateProcessing ? 1 : 0
-}
-
 function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
-  const active = swapIsActive(swap)
-  // depositRejected: the record is still active (the engine has not yet
-  // polled), but the fetched deposit tx already proves an on-chain
-  // rejection. The header and step indicator show the failure rather than
-  // a healthy in-flight swap. Declared here, assigned after depositTx.
-  let depositRejected = false
-  const originAsset = app.user?.assets[swap.originAssetID]
-  const destAsset = app.user?.assets[swap.destAssetID]
-  const originTicker = originAsset?.unitInfo.conventional.unit ?? swap.originAsset
-  const destTicker = destAsset?.unitInfo.conventional.unit ?? swap.destAsset
-  const amountIn = originAsset ? Doc.formatCoinValue(swap.atomsIn, originAsset.unitInfo) : swap.amountIn
-  const amountOut = destAsset ? Doc.formatCoinValue(swap.atomsOut, destAsset.unitInfo) : swap.amountOut
-
-  const inFactor = originAsset?.unitInfo.conventional.conversionFactor ?? 0
-  const outFactor = destAsset?.unitInfo.conventional.conversionFactor ?? 0
-  const usdIn = inFactor ? Doc.usdString(swap.atomsIn, inFactor, app.idRate(swap.originAssetID) ?? 0) : ''
-  const usdOut = outFactor ? Doc.usdString(swap.atomsOut, outFactor, app.idRate(swap.destAssetID) ?? 0) : ''
-  const inConv = inFactor ? swap.atomsIn / inFactor : 0
-  const outConv = outFactor ? swap.atomsOut / outFactor : 0
-  const rateText = inConv > 0 && outConv > 0
-    ? `1 ${originTicker} = ${Doc.formatFourSigFigs(outConv / inConv)} ${destTicker}`
-    : ''
-  const feeBps = (swap.appFees ?? []).reduce((sum, f) => sum + f.fee, 0)
-  // The refund's origin-atoms conversion and USD pricing are captured on the
-  // record at refund time; an older or unresolvable record leaves them zero
-  // and the row is omitted.
-  const refundedAtoms = swap.refundedAtoms ?? 0
-  const refundedText = originAsset && refundedAtoms > 0
-    ? `${Doc.formatCoinValue(refundedAtoms, originAsset.unitInfo)} ${originTicker}`
-    : ''
-  const refundedUSD = Doc.formatUsd(swap.usdRefunded ?? 0)
-
-  // The deposit leg, for its network fee: undefined while loading, null
-  // when the wallet has no record of it.
-  const [depositTx, setDepositTx] = useState<WalletTransaction | null | undefined>(undefined)
-  useEffect(() => {
-    if (!swap.depositTxID) {
-      setDepositTx(null)
-      return
-    }
-    let stale = false
-    setDepositTx(undefined)
-    fetchWalletTx(swap.originAssetID, swap.depositTxID).then(tx => {
-      if (!stale) setDepositTx(tx)
-    })
-    return () => { stale = true }
-  }, [swap.originAssetID, swap.depositTxID])
-
-  depositRejected = active && depositTx?.rejected === true
-
-  // The deposit's network fee is paid in the origin chain's native asset.
-  const feeAssetID = originAsset?.token ? originAsset.token.networkID : swap.originAssetID
-  const feeAsset = app.user?.assets[feeAssetID]
-  const feeUSD = depositTx && feeAsset
-    ? Doc.usdString(depositTx.fees, feeAsset.unitInfo.conventional.conversionFactor, app.idRate(feeAssetID) ?? 0)
-    : ''
+  // The deposit leg, for its network fee and rejection status.
+  const depositTx = useDepositTx(swap.originAssetID, swap.depositTxID)
+  const {
+    active, depositRejected, step, originTicker, destTicker, amountIn, amountOut, usdIn, usdOut,
+    rateText, feeBps, refundedText, refundedUSD, feeAsset, feeUSD
+  } = swapProgressInfo(swap, depositTx)
 
   // One shared "Copied!" flash keyed by the copied string.
   const [copiedID, setCopiedID] = useState('')
@@ -1083,7 +598,6 @@ function SwapProgress ({ swap, onRefresh, onClose }: SwapProgressProps) {
   )
 
   const steps = [t('Deposit'), t('Swapping'), t('Delivered')]
-  const step = activeStep(swap.state)
 
   const started = new Date(swap.createdAt)
   const updated = new Date(swap.updatedAt)
