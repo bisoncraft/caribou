@@ -1,401 +1,499 @@
 #!/usr/bin/env bash
-
-# IMPORTANT NOTE: It can take the beta node a little bit to get caught up with
-# alpha after the harness initializes.
+#
+# Tmux script that sets up a simnet harness for Zcash on two Zebra (zebrad)
+# regtest nodes.
+#
+# Zebra has no wallet and no command-line RPC client. The control scripts call
+# the node JSON-RPC with curl and jq, and two funder wallets are kept with
+# zcash-devtool, a light client that talks to the gRPC server built into
+# zebrad. See README.md for installation and usage.
 
 SYMBOL="zec"
-DAEMON="zcashd"
-CLI="zcash-cli"
-RPC_USER="user"
-RPC_PASS="pass"
+# zebrad and zcash-devtool should be in PATH.
+DAEMON="zebrad"
+WALLET_TOOL="zcash-devtool"
 ALPHA_LISTEN_PORT="33764"
 BETA_LISTEN_PORT="33765"
-DELTA_LISTEN_PORT="33766"
-GAMMA_LISTEN_PORT="33767"
 ALPHA_RPC_PORT="33768"
 BETA_RPC_PORT="33769"
-DELTA_RPC_PORT="33770"
-GAMMA_RPC_PORT="33771"
+# Light-client (lightwalletd protocol) gRPC ports, plaintext.
+ALPHA_GRPC_PORT="33770"
+BETA_GRPC_PORT="33771"
 
-set -ex
-NODES_ROOT=~/dextest/${SYMBOL}
-rm -rf "${NODES_ROOT}"
-SOURCE_DIR=$(pwd)
+# BIP-39 mnemonics for the funder wallets. The addresses below are the default
+# addresses of account 0 and can be re-derived with
+# zcash-devtool wallet derive-address --mnemonic "..." -n regtest
+# The unified addresses are not used by this script. They are recorded for
+# tests that pay a funder.
+ALPHA_MNEMONIC="involve hurdle oven property measure quick cotton wing next firm same core puzzle execute garden acquire dash boss harbor enlist rabbit small spare bike"
+ALPHA_UNIFIED_ADDR="uregtest13pvma5dl78lka0cl83u4jmm78emspd6rm9e56xgm3ttk4pxcwcr4guhdc5u8mg7z3fyr9zjec593khe5m4c3a825yx22lcjwm4anp2xvu4ej5frpc5dm25294c8w3x0pnnxjde38tz4fpgaglrrhx0k7z5259slahnxng23mhn8lhhff8dkeznyhynrfwlu3e8mzedknqathcdlv7hd"
+ALPHA_TRANSPARENT_ADDR="tmQbvCAJZfBjBztopcwVDbujsC33vFH1whm"
 
-ALPHA_DIR="${NODES_ROOT}/alpha"
-BETA_DIR="${NODES_ROOT}/beta"
-DELTA_DIR="${NODES_ROOT}/delta"
-GAMMA_DIR="${NODES_ROOT}/gamma"
-HARNESS_DIR="${NODES_ROOT}/harness-ctl"
+BETA_MNEMONIC="street thrive bounce giant crunch special renew cargo elegant curve tool scan spot extra lumber belt hello devote child name entire attack gather galaxy"
+BETA_UNIFIED_ADDR="uregtest109f95z55t5l6xmdgdlshu60xggacda887hvxsv6kp8mpau9s8kq4n7tcydfecf7hmcev85jmt77p5hr0nn94l9d7neld8dyk3w8frq5gscfpkml39y3mdnl9gyp8jv3tqlaxq33t5hv6wz7wfq840tulv942npgwm5ulptssgcc239ududzrav2wv50ahkdl97njf6mauhqtjghy3tz"
+BETA_TRANSPARENT_ADDR="tmAsfbvNQVxLcp88CBhp7AW74XdapKbpo5n"
 
-echo "Writing node config files"
-mkdir -p "${HARNESS_DIR}"
+# mine-alpha, mine-beta and the background miner pay this transparent address,
+# which belongs to neither funder. The funder shield command spends every
+# transparent output it holds, immature coinbase included, so paying a funder
+# on every block would make its shield transactions invalid. The address is
+# the default transparent address of this mnemonic:
+# drop pretty present believe clump level fence loop render twenty essay visual
+# pigeon salute capable sport typical betray bench supply divorce bench slot
+# turtle
+MINER_ADDR="tmUV6poBiYV5thY9QeovauFFYUMAejmfKNh"
 
-WALLET_PASSWORD="abc"
+# Transparent coinbase blocks mined to each funder. The subsidy is
+# 2.08333333 ZEC per block, so 150 blocks is about 312.5 ZEC.
+FUNDER_TRANSPARENT_BLOCKS="150"
+# The shielding transaction splits its output into this many notes. Change is
+# not spendable until it is mined, so the number of notes bounds the number of
+# sends a funder can make in one block.
+FUNDER_NOTE_COUNT="16"
+# Blocks mined on top of the funding transactions. A reorg replaces the
+# transactions in the blocks it removes, so a reorg deeper than this right
+# after setup would leave a funder without funds.
+FUNDING_BURIAL_BLOCKS="20"
 
-ALPHA_CLI_CFG="-rpcport=${ALPHA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass -conf=${ALPHA_DIR}/alpha.conf"
-BETA_CLI_CFG="-rpcport=${BETA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass -conf=${BETA_DIR}/beta.conf"
-DELTA_CLI_CFG="-rpcport=${DELTA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass -conf=${DELTA_DIR}/delta.conf"
-GAMMA_CLI_CFG="-rpcport=${GAMMA_RPC_PORT} -regtest=1 -rpcuser=user -rpcpassword=pass -conf=${GAMMA_DIR}/gamma.conf"
+# Background watch mining in window 3 by default:
+# 'export NOMINER="1"' or uncomment this line to disable
+#NOMINER="1"
 
-# DONE can be used in a send-keys call along with a `wait-for btc` command to
-# wait for process termination.
-DONE="; tmux wait-for -S ${SYMBOL}"
-WAIT="wait-for ${SYMBOL}"
-
-SESSION="${SYMBOL}-harness"
+set -e
 
 SHELL=$(which bash)
 
+for DEP in "${DAEMON}" "${WALLET_TOOL}" tmux curl jq awk watch; do
+  if ! command -v "${DEP}" > /dev/null; then
+    echo "${DEP} not found in PATH. See util/testing/zec/README.md." >&2
+    exit 1
+  fi
+done
+
+SESSION="${SYMBOL}-harness"
+NODES_ROOT=~/dextest/${SYMBOL}
+
+if tmux has-session -t "${SESSION}" 2> /dev/null; then
+  echo "tmux session ${SESSION} is already running. Shut it down with ${NODES_ROOT}/harness-ctl/quit," >&2
+  echo "or with 'tmux kill-session -t ${SESSION}' if that script is missing." >&2
+  exit 1
+fi
+
+rm -rf "${NODES_ROOT}"
+## Tree clean ##
+
 ################################################################################
-# Load prepared wallet if the files exist.
+# Make directories and start tmux
 ################################################################################
+ALPHA_DIR="${NODES_ROOT}/alpha"
+BETA_DIR="${NODES_ROOT}/beta"
+WALLETS_DIR="${NODES_ROOT}/wallets"
+HARNESS_DIR="${NODES_ROOT}/harness-ctl"
+ACTIVATION_HEIGHTS="${NODES_ROOT}/activation-heights.toml"
 
 mkdir -p "${ALPHA_DIR}"
 mkdir -p "${BETA_DIR}"
-mkdir -p "${DELTA_DIR}"
-mkdir -p "${GAMMA_DIR}"
+mkdir -p "${WALLETS_DIR}/alpha"
+mkdir -p "${WALLETS_DIR}/beta"
+mkdir -p "${HARNESS_DIR}"
 
-# mkdir -p ${ALPHA_DIR}/regtest
-# cp ${SOURCE_DIR}/alpha_wallet.dat ${ALPHA_DIR}/regtest/wallet.dat
-# mkdir -p ${BETA_DIR}/regtest
-# cp ${SOURCE_DIR}/beta_wallet.dat ${BETA_DIR}/regtest/wallet.dat
-
-cd ${NODES_ROOT} && tmux new-session -d -s $SESSION $SHELL
+# Windows are addressed by name, so a tmux base-index setting does not matter.
+cd "${NODES_ROOT}" && tmux new-session -d -s "${SESSION}" -n 'alpha' "${SHELL}"
 
 ################################################################################
 # Write config files.
 ################################################################################
 
-# These config files aren't actually used here, but can be used by other
-# programs. I would use them here, but bitcoind seems to have some issues
-# reading from the file when using regtest.
+echo "Writing node config files"
 
-cat > "${ALPHA_DIR}/alpha.conf" <<EOF
-rpcuser=user
-rpcpassword=pass
-txindex=1
-port=${ALPHA_LISTEN_PORT}
-regtest=1
-rpcport=${ALPHA_RPC_PORT}
-i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
-exportdir=${SOURCE_DIR}
-# Activate all the things.
-nuparams=5ba81b19:1
-nuparams=76b809bb:1
-nuparams=2bb40e60:1
-nuparams=f5b9230b:1
-nuparams=e9ff75a6:2
-nuparams=c2d6d0b4:3
+# write_node_config NAME LISTEN_PORT RPC_PORT GRPC_PORT PEERS
+#
+# Every network upgrade through NU7 activates at height 1. Cookie
+# authentication is off so the control scripts need no credentials.
+# debug_enable_at_height starts the mempool without waiting for the node to
+# consider itself synced.
+write_node_config() {
+  cat > "${NODES_ROOT}/$1/$1.toml" <<EOF
+[network]
+network = "Regtest"
+listen_addr = "127.0.0.1:$2"
+initial_testnet_peers = [$5]
+peerset_initial_target_size = 1
+cache_dir = false
+
+[network.testnet_parameters.activation_heights]
+NU5 = 1
+NU6 = 1
+"NU6.1" = 1
+"NU6.2" = 1
+"NU6.3" = 1
+NU7 = 1
+
+[state]
+cache_dir = "${NODES_ROOT}/$1"
+
+[rpc]
+listen_addr = "127.0.0.1:$3"
+lightwalletd_listen_addr = "127.0.0.1:$4"
+enable_cookie_auth = false
+
+[mining]
+miner_address = "${MINER_ADDR}"
+
+[mempool]
+debug_enable_at_height = 0
 EOF
+}
 
-cat > "${BETA_DIR}/beta.conf" <<EOF
-rpcuser=user
-rpcpassword=pass
-txindex=1
-regtest=1
-rpcport=${BETA_RPC_PORT}
-i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
-exportdir=${SOURCE_DIR}
-nuparams=5ba81b19:1
-nuparams=76b809bb:1
-nuparams=2bb40e60:1
-nuparams=f5b9230b:1
-nuparams=e9ff75a6:2
-nuparams=c2d6d0b4:3
-EOF
+write_node_config alpha "${ALPHA_LISTEN_PORT}" "${ALPHA_RPC_PORT}" "${ALPHA_GRPC_PORT}" ""
+write_node_config beta "${BETA_LISTEN_PORT}" "${BETA_RPC_PORT}" "${BETA_GRPC_PORT}" "\"127.0.0.1:${ALPHA_LISTEN_PORT}\""
 
-cat > "${DELTA_DIR}/delta.conf" <<EOF
-rpcuser=user
-rpcpassword=pass
-regtest=1
-rpcport=${DELTA_RPC_PORT}
-i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
-exportdir=${SOURCE_DIR}
-nuparams=5ba81b19:1
-nuparams=76b809bb:1
-nuparams=2bb40e60:1
-nuparams=f5b9230b:1
-nuparams=e9ff75a6:2
-nuparams=c2d6d0b4:3
-EOF
-
-cat > "${GAMMA_DIR}/gamma.conf" <<EOF
-rpcuser=user
-rpcpassword=pass
-regtest=1
-rpcport=${GAMMA_RPC_PORT}
-i-am-aware-zcashd-will-be-replaced-by-zebrad-and-zallet-in-2025=1
-exportdir=${SOURCE_DIR}
-nuparams=5ba81b19:1
-nuparams=76b809bb:1
-nuparams=2bb40e60:1
-nuparams=f5b9230b:1
-nuparams=e9ff75a6:2
-nuparams=c2d6d0b4:3
+# The same schedule in the form zcash-devtool takes at wallet creation. A
+# wallet whose schedule differs from the nodes' builds transactions the nodes
+# reject.
+cat > "${ACTIVATION_HEIGHTS}" <<EOF
+overwinter = 1
+sapling = 1
+blossom = 1
+heartwood = 1
+canopy = 1
+nu5 = 1
+nu6 = 1
+nu6_1 = 1
+nu6_2 = 1
+nu6_3 = 1
+nu7 = 1
 EOF
 
 ################################################################################
-# Start the alpha node.
+# Setup the harness-ctl directory with scripts
 ################################################################################
 
-tmux rename-window -t $SESSION:0 'alpha'
-tmux send-keys -t $SESSION:0 "set +o history" C-m
-tmux send-keys -t $SESSION:0 "cd ${ALPHA_DIR}" C-m
-echo "Starting simnet alpha node"
-tmux send-keys -t $SESSION:0 "${DAEMON} -rpcuser=user -rpcpassword=pass \
-  -rpcport=${ALPHA_RPC_PORT} -datadir=${ALPHA_DIR} -conf=alpha.conf \
-  -debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
-  -whitelist=127.0.0.0/8 -whitelist=::1 -preferredtxversion=5 \
-  -txindex=1 -regtest=1 -port=${ALPHA_LISTEN_PORT} -fallbackfee=0.00001 \
-  -printtoconsole; tmux wait-for -S alpha${SYMBOL}" C-m
+cd "${HARNESS_DIR}"
 
-################################################################################
-# Setup the beta node.
-################################################################################
-
-tmux new-window -t $SESSION:1 -n 'beta' $SHELL
-tmux send-keys -t $SESSION:1 "set +o history" C-m
-tmux send-keys -t $SESSION:1 "cd ${BETA_DIR}" C-m
-
-echo "Starting simnet beta node"
-tmux send-keys -t $SESSION:1 "${DAEMON} -rpcuser=user -rpcpassword=pass \
-  -rpcport=${BETA_RPC_PORT} -datadir=${BETA_DIR} -conf=beta.conf -txindex=1 -regtest=1 \
-  -debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
-  -whitelist=127.0.0.0/8 -whitelist=::1 -preferredtxversion=5 \
-  -port=${BETA_LISTEN_PORT} -fallbackfee=0.00001 -printtoconsole; \
-  tmux wait-for -S beta${SYMBOL}" C-m
-
-################################################################################
-# Setup the delta node.
-################################################################################
-
-tmux new-window -t $SESSION:2 -n 'delta' $SHELL
-tmux send-keys -t $SESSION:2 "set +o history" C-m
-tmux send-keys -t $SESSION:2 "cd ${DELTA_DIR}" C-m
-
-echo "Starting simnet delta node"
-tmux send-keys -t $SESSION:2 "${DAEMON} -rpcuser=user -rpcpassword=pass \
-  -rpcport=${DELTA_RPC_PORT} -datadir=${DELTA_DIR} -conf=delta.conf -regtest=1 \
-  -debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
-  -whitelist=127.0.0.0/8 -whitelist=::1 -preferredtxversion=5 \
-  -port=${DELTA_LISTEN_PORT} -fallbackfee=0.00001 -printtoconsole; \
-  tmux wait-for -S delta${SYMBOL}" C-m
-
-################################################################################
-# Setup the gamma node.
-################################################################################
-
-tmux new-window -t $SESSION:3 -n 'gamma' $SHELL
-tmux send-keys -t $SESSION:3 "set +o history" C-m
-tmux send-keys -t $SESSION:3 "cd ${GAMMA_DIR}" C-m
-
-echo "Starting simnet gamma node"
-tmux send-keys -t $SESSION:3 "${DAEMON} -rpcuser=user -rpcpassword=pass \
-  -rpcport=${GAMMA_RPC_PORT} -datadir=${GAMMA_DIR} -conf=gamma.conf -regtest=1 \
-  -debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
-  -whitelist=127.0.0.0/8 -whitelist=::1 -preferredtxversion=5 \
-  -port=${GAMMA_LISTEN_PORT} -fallbackfee=0.00001 -printtoconsole; \
-  tmux wait-for -S gamma${SYMBOL}" C-m
-sleep 30
-
-################################################################################
-# Setup the harness-ctl directory
-################################################################################
-
-tmux new-window -t $SESSION:4 -n 'harness-ctl' $SHELL
-tmux send-keys -t $SESSION:4 "set +o history" C-m
-tmux send-keys -t $SESSION:4 "cd ${HARNESS_DIR}" C-m
-sleep 1
-
-cd ${HARNESS_DIR}
-
-# start-wallet, connect-alpha, and stop-wallet are used by loadbot to set up and
-# run new wallets.
-cat > "./start-wallet" <<EOF
+# Arguments that parse as JSON are sent typed (numbers, booleans, objects) and
+# anything else is sent as a string, so both
+#   ./alpha getblockhash 5
+#   ./alpha getaddressbalance '{"addresses":["tm..."]}'
+# work as written. getblock, getblockheader and z_gettreestate take a height
+# or hash that the node requires as a string, so their first argument is never
+# converted.
+cat > "./rpc" <<'EOF'
 #!/usr/bin/env bash
-
-mkdir ${NODES_ROOT}/\$1
-
-printf "rpcuser=user\nrpcpassword=pass\nregtest=1\nrpcport=\$2\nexportdir=${SOURCE_DIR}\nnuparams=5ba81b19:1\nnuparams=76b809bb:1\nnuparams=2bb40e60:1\nnuparams=f5b9230b:1\nnuparams=e9ff75a6:2\nnuparams=c2d6d0b4:3\n" > ${NODES_ROOT}/\$1/\$1.conf
-
-${DAEMON} -rpcuser=user -rpcpassword=pass \
--rpcport=\$2 -datadir=${NODES_ROOT}/\$1 -regtest=1 -conf=\$1.conf \
--debug=rpc -debug=net -debug=mempool -debug=walletdb -debug=addrman -debug=mempoolrej \
--whitelist=127.0.0.0/8 -whitelist=::1 -preferredtxversion=5 \
--port=\$3 -fallbackfee=0.00001 -printtoconsole
+# JSON-RPC call to a node: ./rpc PORT METHOD [PARAMS...]
+set -o pipefail
+if [ $# -lt 2 ]; then
+  echo "usage: rpc PORT METHOD [PARAMS...]" >&2
+  exit 1
+fi
+port=$1
+method=$2
+shift 2
+params=$(jq -cn --arg m "${method}" '
+  ($m | IN("getblock", "getblockheader", "z_gettreestate")) as $string_first
+  | $ARGS.positional | to_entries
+  | map(.value as $a | if .key == 0 and $string_first then $a else ($a | try fromjson catch $a) end)
+' --args -- "$@") || exit 1
+curl -sS --data-binary "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"${method}\",\"params\":${params}}" \
+  -H 'content-type: application/json' "http://127.0.0.1:${port}/" |
+  jq -r 'if .error then ("error \(.error.code): \(.error.message)\n" | halt_error(1)) else .result end'
 EOF
-chmod +x "./start-wallet"
-
-cat > "./connect-alpha" <<EOF
-#!/usr/bin/env bash
-${CLI} -conf=${NODES_ROOT}/\$2/\$2.conf -rpcport=\$1 -regtest=1 -rpcuser=user -rpcpassword=pass addnode 127.0.0.1:${ALPHA_LISTEN_PORT} onetry
-EOF
-chmod +x "./connect-alpha"
-
-cat > "./stop-wallet" <<EOF
-#!/usr/bin/env bash
-${CLI} -conf=${NODES_ROOT}/\$2/\$2.conf -rpcport=\$1 -regtest=1 -rpcuser=user -rpcpassword=pass stop
-EOF
-chmod +x "./stop-wallet"
+chmod +x "./rpc"
 
 cat > "./alpha" <<EOF
 #!/usr/bin/env bash
-${CLI} ${ALPHA_CLI_CFG} "\$@"
+exec ${HARNESS_DIR}/rpc ${ALPHA_RPC_PORT} "\$@"
 EOF
 chmod +x "./alpha"
 
 cat > "./beta" <<EOF
 #!/usr/bin/env bash
-${CLI} ${BETA_CLI_CFG} "\$@"
+exec ${HARNESS_DIR}/rpc ${BETA_RPC_PORT} "\$@"
 EOF
 chmod +x "./beta"
 
-cat > "./delta" <<EOF
-#!/usr/bin/env bash
-${CLI} ${DELTA_CLI_CFG} "\$@"
-EOF
-chmod +x "./delta"
-
-cat > "./gamma" <<EOF
-#!/usr/bin/env bash
-${CLI} ${GAMMA_CLI_CFG} "\$@"
-EOF
-chmod +x "./gamma"
-
 cat > "./mine-alpha" <<EOF
 #!/usr/bin/env bash
-${CLI} ${ALPHA_CLI_CFG} generate \$1
+# Mine blocks on alpha, paying the miner address: ./mine-alpha [N]
+exec ${HARNESS_DIR}/alpha generate "\${1:-1}"
 EOF
 chmod +x "./mine-alpha"
 
 cat > "./mine-beta" <<EOF
 #!/usr/bin/env bash
-${CLI} ${BETA_CLI_CFG} generate \$1
+# Mine blocks on beta, paying the miner address: ./mine-beta [N]
+exec ${HARNESS_DIR}/beta generate "\${1:-1}"
 EOF
 chmod +x "./mine-beta"
 
+cat > "./mine-to" <<EOF
+#!/usr/bin/env bash
+# Mine blocks on alpha with the coinbase paid to a transparent, Sapling or
+# unified address: ./mine-to ADDRESS [N]
+if [ \$# -lt 1 ]; then
+  echo "usage: mine-to ADDRESS [N]" >&2
+  exit 1
+fi
+exec ${HARNESS_DIR}/alpha generatetoaddress "\${2:-1}" "\$1"
+EOF
+chmod +x "./mine-to"
+
+# Zebra has no disconnectnode, so the reorg is made by invalidating blocks on
+# alpha and mining a longer replacement chain, which beta then follows.
+# Transactions in the replaced blocks are not returned to the mempool.
 cat > "./reorg" <<EOF
 #!/usr/bin/env bash
-set -x
-echo "Disconnecting beta from alpha"
-sleep 1
-./beta disconnectnode 127.0.0.1:${ALPHA_LISTEN_PORT}
-echo "Mining a block on alpha"
-sleep 1
-./mine-alpha 1
-echo "Mining 3 blocks on beta"
-./mine-beta 3
-sleep 2
-echo "Reconnecting beta to alpha"
-./beta addnode 127.0.0.1:${ALPHA_LISTEN_PORT} onetry
-sleep 2
+# Replace the last DEPTH blocks with DEPTH+1 new ones: ./reorg [DEPTH]
+set -e
+depth=\${1:-1}
+tip=\$(${HARNESS_DIR}/alpha getblockcount)
+if ! [[ "\${depth}" =~ ^[1-9][0-9]*\$ ]] || [ "\${depth}" -ge "\${tip}" ]; then
+  echo "usage: reorg [DEPTH], with DEPTH from 1 to \$((tip - 1))" >&2
+  exit 1
+fi
+first=\$((tip - depth + 1))
+hash=\$(${HARNESS_DIR}/alpha getblockhash "\${first}")
+echo "Invalidating \${depth} block(s) on alpha from height \${first} (\${hash})"
+${HARNESS_DIR}/alpha invalidateblock "\${hash}" > /dev/null
+echo "Mining \$((depth + 1)) replacement blocks on alpha"
+${HARNESS_DIR}/alpha generate "\$((depth + 1))" > /dev/null
+followed=""
+for _ in \$(seq 1 60); do
+  if [ "\$(${HARNESS_DIR}/alpha getbestblockhash)" = "\$(${HARNESS_DIR}/beta getbestblockhash)" ]; then
+    followed="1"
+    break
+  fi
+  sleep 0.5
+done
+echo "alpha: \$(${HARNESS_DIR}/alpha getblockcount) \$(${HARNESS_DIR}/alpha getbestblockhash)"
+echo "beta:  \$(${HARNESS_DIR}/beta getblockcount) \$(${HARNESS_DIR}/beta getbestblockhash)"
+if [ -z "\${followed}" ]; then
+  echo "beta has not followed alpha's new chain" >&2
+  exit 1
+fi
 EOF
 chmod +x "./reorg"
 
-cat > "${HARNESS_DIR}/quit" <<EOF
+# write_wallet_scripts NAME GRPC_PORT
+write_wallet_scripts() {
+  cat > "./wallet-$1" <<EOF
 #!/usr/bin/env bash
-tmux send-keys -t $SESSION:0 C-c
-tmux send-keys -t $SESSION:1 C-c
-tmux send-keys -t $SESSION:2 C-c
-tmux send-keys -t $SESSION:3 C-c
+# ${WALLET_TOOL} wallet command for the $1 funder:
+#   ./wallet-$1 SUBCOMMAND [ARGS...]
+# The server and identity flags are added for sync, enhance, get-info, send
+# and shield. Other subcommands that need them take them on the command line.
+# Logging is at warn level unless RUST_LOG is set.
+export RUST_LOG=\${RUST_LOG:-warn}
+if [ \$# -lt 1 ]; then
+  exec ${WALLET_TOOL} wallet --help
+fi
+cmd=\$1
+shift
+case "\${cmd}" in
+  sync|enhance|get-info)
+    extra=(-s 127.0.0.1:$2 --connection direct) ;;
+  send|shield)
+    extra=(-i ${WALLETS_DIR}/$1/age-identity.txt -s 127.0.0.1:$2 --connection direct) ;;
+  *)
+    extra=() ;;
+esac
+exec ${WALLET_TOOL} wallet -w ${WALLETS_DIR}/$1 "\${cmd}" "\${extra[@]}" "\$@"
+EOF
+  chmod +x "./wallet-$1"
+
+  cat > "./send-$1" <<EOF
+#!/usr/bin/env bash
+# Send from the $1 funder to a transparent, Sapling or unified address:
+#   ./send-$1 ADDRESS AMOUNT_ZEC [MEMO]
+# Prints the transaction id on the last line. Notes with one confirmation are
+# spendable.
+set -e
+if [ \$# -lt 2 ]; then
+  echo "usage: send-$1 ADDRESS AMOUNT_ZEC [MEMO]" >&2
+  exit 1
+fi
+if ! [[ "\$2" =~ ^[0-9]+(\\.[0-9]{1,8})?\$ ]]; then
+  echo "AMOUNT_ZEC must be a decimal number with at most 8 decimal places, such as 1.5" >&2
+  exit 1
+fi
+zats=\$(awk -v v="\$2" 'BEGIN { printf "%.0f", v * 100000000 }')
+${HARNESS_DIR}/wallet-$1 sync
+${HARNESS_DIR}/wallet-$1 send --address "\$1" --value "\${zats}" --min-confirmations 1 \${3:+--memo "\$3"}
+EOF
+  chmod +x "./send-$1"
+
+  cat > "./balance-$1" <<EOF
+#!/usr/bin/env bash
+# Sync the $1 funder and print its balances in ZEC.
+set -eo pipefail
+${HARNESS_DIR}/wallet-$1 sync
+${HARNESS_DIR}/wallet-$1 balance --json --min-confirmations 1 |
+  jq 'with_entries(if .key == "chain_tip_height" then . else .value /= 100000000 end)'
+EOF
+  chmod +x "./balance-$1"
+}
+
+write_wallet_scripts alpha "${ALPHA_GRPC_PORT}"
+write_wallet_scripts beta "${BETA_GRPC_PORT}"
+
+# The nodes are stopped with the stop RPC. A Ctrl-C sent with tmux send-keys
+# only leaves copy mode when a node window has been scrolled back, and the
+# wait-for below would then never return.
+cat > "./quit" <<EOF
+#!/usr/bin/env bash
+# Stop the miner and both nodes, then close the tmux session.
+if ! tmux has-session -t ${SESSION} 2> /dev/null; then
+  echo "tmux session ${SESSION} is not running" >&2
+  exit 1
+fi
+EOF
+if [ -z "$NOMINER" ] ; then
+  echo "tmux send-keys -t ${SESSION}:miner C-c" >> "./quit"
+fi
+cat >> "./quit" <<EOF
+${HARNESS_DIR}/alpha stop > /dev/null
+${HARNESS_DIR}/beta stop > /dev/null
 tmux wait-for alpha${SYMBOL}
 tmux wait-for beta${SYMBOL}
-tmux wait-for delta${SYMBOL}
-tmux wait-for gamma${SYMBOL}
 # seppuku
-tmux kill-session
+tmux kill-session -t ${SESSION}
 EOF
-chmod +x "${HARNESS_DIR}/quit"
-
-sleep 10
+chmod +x "./quit"
 
 ################################################################################
-# Wait for wallets to be ready before any operations
+# Start the nodes
 ################################################################################
 
-# Wait for a wallet to be ready (RPC responsive)
-waitforwallet () {
-  cd ${HARNESS_DIR}
-  NODE=$1
-  i=0
-  while true; do
-    # Use z_listaccounts as a read-only check since getwalletinfo returns
-    # "reindexing" error on regtest until a block is mined
-    RESULT=$(./${NODE} z_listaccounts 2>&1)
-    # If result starts with '[', it's valid JSON (empty or with accounts)
-    if [[ "${RESULT}" == \[* ]]; then
-      break
+# A failed setup step leaves the session and the nodes running so that the
+# node windows can be read.
+setup_failed() {
+  echo "Setup failed. Node output is in tmux session ${SESSION}: tmux attach -t ${SESSION}" >&2
+  echo "Shut it down with ${HARNESS_DIR}/quit" >&2
+}
+trap setup_failed EXIT
+
+# wait_for SECONDS DESCRIPTION COMMAND [ARGS...] polls until the command
+# succeeds or the time is up.
+wait_for() {
+  local limit=$1 desc=$2
+  shift 2
+  for _ in $(seq 1 $((limit * 2))); do
+    if "$@" > /dev/null 2>&1; then
+      return 0
     fi
-    sleep 1
-    i=$((i+1))
-    if [ $i -gt 120 ]; then
-      echo "Timeout waiting for ${NODE} wallet: ${RESULT}"
-      exit 1
-    fi
+    sleep 0.5
   done
+  echo "Timed out waiting for ${desc}" >&2
+  exit 1
 }
 
-echo "Waiting for wallets to be ready..."
-waitforwallet alpha
-waitforwallet beta
-waitforwallet delta
-waitforwallet gamma
-echo "All wallets ready"
-
-tmux send-keys -t $SESSION:4 "./beta addnode 127.0.0.1:${ALPHA_LISTEN_PORT} add${DONE}" C-m\; ${WAIT}
-tmux send-keys -t $SESSION:4 "./delta addnode 127.0.0.1:${ALPHA_LISTEN_PORT} add${DONE}" C-m\; ${WAIT}
-tmux send-keys -t $SESSION:4 "./gamma addnode 127.0.0.1:${ALPHA_LISTEN_PORT} add${DONE}" C-m\; ${WAIT}
-# This timeout is apparently critical. Give the nodes time to sync.
-sleep 3
-
-echo "Generating the genesis block"
-tmux send-keys -t $SESSION:4 "./alpha generate 1${DONE}" C-m\; ${WAIT}
-sleep 1
-
-echo "Generating 600 blocks for alpha"
-tmux send-keys -t $SESSION:4 "./alpha generate 600${DONE}" C-m\; ${WAIT}
-
-################################################################################
-# Send gamma and delta some coin
-################################################################################
-
-getaddr () {
-  cd ${HARNESS_DIR}
-  NODE=$1
-  ./${NODE} z_getnewaccount > /dev/null
-  R=$(./${NODE} z_getaddressforaccount 0)
-  UADDR=$(sed -rn 's/.*"address": "([^"]+)".*/\1/p' <<< "${R}")
-  R=$(./${NODE} z_listunifiedreceivers ${UADDR})
-  ADDR=$(sed -rn 's/.*"p2pkh": "([^"]+)".*/\1/p' <<< "${R}")
-  echo $ADDR
+beta_has_peer() {
+  [ "$(./beta getpeerinfo | jq 'length')" -ge 1 ]
 }
 
-ALPHA_ADDR=$(getaddr alpha)
-BETA_ADDR=$(getaddr beta)
-DELTA_ADDR=$(getaddr delta)
-GAMMA_ADDR=$(getaddr gamma)
+tips_match() {
+  [ "$(./alpha getbestblockhash)" = "$(./beta getbestblockhash)" ]
+}
 
-echo "beta address ${BETA_ADDR}"
-echo "delta address ${DELTA_ADDR}"
-echo "gamma address ${GAMMA_ADDR}"
+# Blocks normally reach the other node within a second or two. A node that
+# falls back to its sync loop, or that has to reconnect, can take about 90
+# seconds.
+SYNC_TIMEOUT="120"
 
-# Send the lazy wallets some dough.
-echo "Sending 74 ZEC to beta in 8 blocks"
-for i in 18 5 7 1 15 3 25
-do
-    tmux send-keys -t $SESSION:4 "./alpha sendtoaddress ${BETA_ADDR} ${i}${DONE}" C-m\; ${WAIT}
-    tmux send-keys -t $SESSION:4 "./alpha sendtoaddress ${DELTA_ADDR} ${i}${DONE}" C-m\; ${WAIT}
-    tmux send-keys -t $SESSION:4 "./alpha sendtoaddress ${GAMMA_ADDR} ${i}${DONE}" C-m\; ${WAIT}
-done
+tmux send-keys -t "${SESSION}:alpha" "set +o history" C-m
+tmux send-keys -t "${SESSION}:alpha" "cd ${ALPHA_DIR}" C-m
 
-tmux send-keys -t $SESSION:4 "./mine-alpha 2${DONE}" C-m\; ${WAIT}
+echo "Starting simnet alpha node"
+tmux send-keys -t "${SESSION}:alpha" "${DAEMON} -c ${ALPHA_DIR}/alpha.toml start; tmux wait-for -S alpha${SYMBOL}" C-m
+# zebrad opens its peer listener before its RPC server, so alpha is accepting
+# connections by the time beta starts.
+wait_for 30 "the alpha RPC server" ./alpha getblockcount
 
-tmux new-window -t $SESSION:5 -n 'miner' $SHELL
-tmux send-keys -t $SESSION:5 "cd ${HARNESS_DIR}" C-m
-tmux send-keys -t $SESSION:5 "watch -n 15 ./mine-alpha 1" C-m
+tmux new-window -t "${SESSION}:" -n 'beta' "${SHELL}"
+tmux send-keys -t "${SESSION}:beta" "set +o history" C-m
+tmux send-keys -t "${SESSION}:beta" "cd ${BETA_DIR}" C-m
 
-# Reenable history and attach to the control session.
-tmux select-window -t $SESSION:4
-tmux send-keys -t $SESSION:4 "set -o history" C-m
-tmux attach-session -t $SESSION
+echo "Starting simnet beta node"
+tmux send-keys -t "${SESSION}:beta" "${DAEMON} -c ${BETA_DIR}/beta.toml start; tmux wait-for -S beta${SYMBOL}" C-m
+wait_for 30 "the beta RPC server" ./beta getblockcount
+# A node that starts behind is slow to catch up, so beta must be connected
+# before any blocks are mined.
+wait_for "${SYNC_TIMEOUT}" "beta to connect to alpha" beta_has_peer
+
+tmux new-window -t "${SESSION}:" -n 'harness-ctl' "${SHELL}"
+tmux send-keys -t "${SESSION}:harness-ctl" "cd ${HARNESS_DIR}" C-m
+
+################################################################################
+# Mine
+################################################################################
+
+echo "Mining ${FUNDER_TRANSPARENT_BLOCKS} transparent coinbase blocks to each funder"
+./mine-to "${ALPHA_TRANSPARENT_ADDR}" "${FUNDER_TRANSPARENT_BLOCKS}" > /dev/null
+./mine-to "${BETA_TRANSPARENT_ADDR}" "${FUNDER_TRANSPARENT_BLOCKS}" > /dev/null
+
+# Transparent coinbase matures after 100 blocks.
+echo "Mining 100 blocks to mature the funders' transparent coinbase"
+./mine-alpha 100 > /dev/null
+
+wait_for "${SYNC_TIMEOUT}" "beta to sync with alpha" tips_match
+
+################################################################################
+# Create and fund the funder wallets
+################################################################################
+
+# init_wallet NAME MNEMONIC GRPC_PORT
+#
+# The birthday is 2 because a scan starting at height 1 asks the server for
+# the tree state at height 0, which Zebra rejects.
+init_wallet() {
+  echo "$2" | RUST_LOG=warn "${WALLET_TOOL}" wallet -w "${WALLETS_DIR}/$1" init --name "$1" \
+    -i "${WALLETS_DIR}/$1/age-identity.txt" --birthday 2 -n regtest \
+    -s "127.0.0.1:$3" --connection direct --activation-heights "${ACTIVATION_HEIGHTS}"
+}
+
+echo "Creating the alpha funder wallet"
+init_wallet alpha "${ALPHA_MNEMONIC}" "${ALPHA_GRPC_PORT}"
+./wallet-alpha sync
+
+echo "Creating the beta funder wallet"
+init_wallet beta "${BETA_MNEMONIC}" "${BETA_GRPC_PORT}"
+./wallet-beta sync
+
+# Each shielding transaction is mined on the node it was submitted to, because
+# a transaction takes several seconds to reach the other node's mempool.
+echo "Shielding the alpha funder's transparent coinbase"
+./wallet-alpha shield --target-note-count "${FUNDER_NOTE_COUNT}"
+./mine-alpha 1 > /dev/null
+wait_for "${SYNC_TIMEOUT}" "beta to sync with alpha" tips_match
+
+echo "Shielding the beta funder's transparent coinbase"
+./wallet-beta shield --target-note-count "${FUNDER_NOTE_COUNT}"
+./mine-beta 1 > /dev/null
+wait_for "${SYNC_TIMEOUT}" "alpha to sync with beta" tips_match
+
+echo "Mining ${FUNDING_BURIAL_BLOCKS} blocks on top of the funding transactions"
+./mine-alpha "${FUNDING_BURIAL_BLOCKS}" > /dev/null
+wait_for "${SYNC_TIMEOUT}" "beta to sync with alpha" tips_match
+
+echo "alpha funder balance:"
+./balance-alpha
+echo "beta funder balance:"
+./balance-beta
+
+################################################################################
+# Setup the watch background miner, if required
+################################################################################
+if [ -z "$NOMINER" ] ; then
+  tmux new-window -t "${SESSION}:" -n 'miner' "${SHELL}"
+  tmux send-keys -t "${SESSION}:miner" "cd ${HARNESS_DIR}" C-m
+  tmux send-keys -t "${SESSION}:miner" "watch -n 15 ./mine-alpha 1" C-m
+fi
+
+trap - EXIT
+
+echo "----------"
+echo "SETUP DONE"
+echo "----------"
+
+tmux select-window -t "${SESSION}:harness-ctl"
+tmux attach-session -t "${SESSION}"
