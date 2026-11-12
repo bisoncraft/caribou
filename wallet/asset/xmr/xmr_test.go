@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bisoncraft/caribou/util"
@@ -116,5 +117,40 @@ func TestDepositAddressPersisted(t *testing.T) {
 	}
 	if next == addr {
 		t.Fatalf("reopened wallet reissued deposit address %s", addr)
+	}
+}
+
+// TestCheckTxFee checks the per-byte fee ceiling applied before broadcast.
+func TestCheckTxFee(t *testing.T) {
+	// A 1500 byte signed transaction, as hex.
+	tx1500 := strings.Repeat("ab", 1500)
+
+	tests := []struct {
+		name    string
+		fee     uint64
+		txHex   string
+		wantErr bool
+	}{
+		// Mainnet default priority, July 2026: 20000 per byte.
+		{"default priority", 20_000 * 1500, tx1500, false},
+		// Mainnet Last priority: 4000000 per byte.
+		{"last priority", 4_000_000 * 1500, tx1500, false},
+		{"at the limit", maxTxFeeRate * 1500, tx1500, false},
+		{"just over the limit", maxTxFeeRate*1500 + 1, tx1500, true},
+		{"whole balance", 50e12, tx1500, true},
+		// A sweep split over two transactions counts both sizes.
+		{"two transactions", maxTxFeeRate * 3000, tx1500 + "," + tx1500, false},
+		{"two transactions over", maxTxFeeRate*3000 + 1, tx1500 + "," + tx1500, true},
+		// Size unknown: fail closed.
+		{"empty hex", 1, "", true},
+		{"only separators", 1, ",", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkTxFee(tt.fee, tt.txHex)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("checkTxFee(%d, %d hex chars) error = %v, want error %t", tt.fee, len(tt.txHex), err, tt.wantErr)
+			}
+		})
 	}
 }

@@ -94,9 +94,8 @@ func TestFeeForPriority(t *testing.T) {
 // third-party node.
 func TestFeeEstimateCeiling(t *testing.T) {
 	for name, est := range map[string]*feeEstimate{
-		"scalar fee":        {Status: "OK", Fee: maxBaseFee + 1},
-		"per-priority fee":  {Status: "OK", Fee: 20000, Fees: []uint64{20000, maxBaseFee + 1}},
-		"quantization mask": {Status: "OK", Fee: 20000, QuantizationMask: maxBaseFee + 1},
+		"scalar fee":        {Status: "OK", Fee: maxTxFeeRate + 1},
+		"quantization mask": {Status: "OK", Fee: 20000, QuantizationMask: maxTxFeeRate + 1},
 	} {
 		if err := validateFeeEstimate(est); err == nil {
 			t.Errorf("%s above the ceiling was accepted", name)
@@ -112,6 +111,32 @@ func TestFeeEstimateCeiling(t *testing.T) {
 	}
 	if err := validateFeeEstimate(ok); err != nil {
 		t.Errorf("a real mainnet estimate was rejected: %v", err)
+	}
+
+	// A chain short of tail emission, like simnet, quotes past the ceiling at
+	// the upper priorities. The estimate is kept and only those priorities
+	// read as unavailable.
+	high := &feeEstimate{
+		Status:           "OK",
+		Fee:              1_200_000,
+		Fees:             []uint64{1_200_000, 4_800_000, maxTxFeeRate + 1, 240_000_000},
+		QuantizationMask: 10000,
+	}
+	if err := validateFeeEstimate(high); err != nil {
+		t.Fatalf("an estimate with usable low priorities was rejected: %v", err)
+	}
+	for priority, want := range map[int]uint64{
+		1: 1_200_000,
+		2: 4_800_000,
+		3: 0,
+		4: 0,
+	} {
+		if got := high.feeForPriority(priority); got != want {
+			t.Errorf("feeForPriority(%d) = %d, want %d", priority, got, want)
+		}
+	}
+	if got := (&feeEstimate{Fee: maxTxFeeRate + 1}).feeForPriority(1); got != 0 {
+		t.Errorf("scalar fallback above the ceiling = %d, want 0", got)
 	}
 }
 
@@ -200,13 +225,13 @@ func TestStandardSendFeeRejectsAbsurdRate(t *testing.T) {
 	if got := w.StandardSendFee(math.MaxUint64 / 2); got != 42 {
 		t.Errorf("StandardSendFee with a wrapping rate = %d, want the observed fee 42", got)
 	}
-	if got := w.StandardSendFee(maxBaseFee + 1); got != 42 {
+	if got := w.StandardSendFee(maxTxFeeRate + 1); got != 42 {
 		t.Errorf("StandardSendFee above the ceiling = %d, want the observed fee 42", got)
 	}
 	// A rate at the ceiling is still priced, so the bound is not accidentally
 	// rejecting the range it is meant to admit.
-	if got := w.StandardSendFee(maxBaseFee); got != maxBaseFee*standardTxWeight {
-		t.Errorf("StandardSendFee at the ceiling = %d, want %d", got, uint64(maxBaseFee)*standardTxWeight)
+	if got := w.StandardSendFee(maxTxFeeRate); got != maxTxFeeRate*standardTxWeight {
+		t.Errorf("StandardSendFee at the ceiling = %d, want %d", got, uint64(maxTxFeeRate)*standardTxWeight)
 	}
 }
 

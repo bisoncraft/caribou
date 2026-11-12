@@ -106,12 +106,19 @@ func priorityIndex(p, n int) int {
 }
 
 // feeForPriority returns the base fee for the given priority, in atoms per
-// weight unit.
+// weight unit, or zero if that fee is above maxTxFeeRate. The bound is applied
+// per priority, not to the whole estimate, because a chain short of tail
+// emission quotes rates past it at the upper priorities while the lower ones
+// are still usable.
 func (f *feeEstimate) feeForPriority(p int) uint64 {
-	if len(f.Fees) == 0 {
-		return f.Fee
+	fee := f.Fee
+	if len(f.Fees) > 0 {
+		fee = f.Fees[priorityIndex(p, len(f.Fees))]
 	}
-	return f.Fees[priorityIndex(p, len(f.Fees))]
+	if fee > maxTxFeeRate {
+		return 0
+	}
+	return fee
 }
 
 // quantize rounds a fee up to the next multiple of the quantization mask, as
@@ -188,19 +195,6 @@ func newDaemonRPC(addr, user, pass string, cl *http.Client) *daemonRPC {
 	}
 }
 
-// maxBaseFee is the largest per-weight-unit base fee this wallet will accept
-// from a daemon, in atoms. The default mainnet daemon is a public third-party
-// node, so its numbers are untrusted input: they are multiplied by a
-// transaction weight and quantized, and an absurd value would overflow those
-// arithmetic and report a fee that is not merely wrong but small.
-//
-// Mainnet in July 2026 quotes 20000 at default priority and 4000000 at Last,
-// so this leaves better than two orders of magnitude of headroom above the
-// most expensive priority. Rejecting the estimate outright is the right
-// response: a daemon quoting a fee this far out is not one to price against,
-// and the caller falls back to the last fee actually paid.
-const maxBaseFee = 1_000_000_000
-
 // getFeeEstimate asks the daemon for the current dynamic base fee.
 func (d *daemonRPC) getFeeEstimate(ctx context.Context) (*feeEstimate, error) {
 	var est feeEstimate
@@ -222,17 +216,17 @@ func validateFeeEstimate(est *feeEstimate) error {
 	if est.Fee == 0 && len(est.Fees) == 0 {
 		return fmt.Errorf("get_fee_estimate returned no fee")
 	}
-	for _, fee := range append([]uint64{est.Fee}, est.Fees...) {
-		if fee > maxBaseFee {
-			return fmt.Errorf("daemon quoted a base fee of %d atoms per weight unit, above the %d sanity ceiling",
-				fee, maxBaseFee)
-		}
+	// Only the scalar, the lowest priority's rate, is bounded here.
+	// feeForPriority bounds the per-priority rates as they are used.
+	if est.Fee > maxTxFeeRate {
+		return fmt.Errorf("daemon quoted a base fee of %d atoms per weight unit, above the %d sanity ceiling",
+			est.Fee, maxTxFeeRate)
 	}
 	// The mask multiplies into the reported fee the same way the base fee
 	// does, so it needs the same bound.
-	if est.QuantizationMask > maxBaseFee {
+	if est.QuantizationMask > maxTxFeeRate {
 		return fmt.Errorf("daemon quoted a quantization mask of %d, above the %d sanity ceiling",
-			est.QuantizationMask, maxBaseFee)
+			est.QuantizationMask, maxTxFeeRate)
 	}
 	return nil
 }

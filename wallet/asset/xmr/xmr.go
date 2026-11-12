@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,7 +31,6 @@ const (
 	BipID            = 128
 	walletTypeNative = "native"
 
-	defaultFee          = 3 // Priority level 0-4, default to low
 	defaultFeeRateLimit = 30
 
 	// Refresh interval for sync status checks during normal operation.
@@ -293,10 +293,16 @@ type ExchangeWallet struct {
 	dataDir    string
 	walletMtx  sync.RWMutex
 
-	daemonAddr  string
-	daemonUser  string
-	daemonPass  string
-	torProxy    string
+	daemonAddr string
+	daemonUser string
+	daemonPass string
+	torProxy   string
+	// TODO: Priority 4 (Last) is not honored. On the simnet harness a send
+	// at priority 4 is built and broadcast at exactly the priority 1 fee,
+	// while stock monero-wallet-rpc v0.18.5.4 quotes the full Last rate for
+	// the same transfer. Priorities 1-3 match stock. The priority reaches
+	// MONERO_Wallet_createTransaction unchanged, so the downgrade happens
+	// inside our monero_c v0.18.4.6 build. Needs investigating.
 	feePriority cxmr.Priority
 
 	tipAtConnect  uint64
@@ -995,6 +1001,9 @@ func (w *ExchangeWallet) Withdraw(address string, value, feeRate uint64) (asset.
 		txid := tx.TxID()
 		w.log.Debugf("Max withdraw pre-commit: amount=%d, fee=%d, txid=%s, txCount=%d", amount, fee, txid, tx.TxCount())
 
+		if err := checkTxFee(fee, tx.Hex()); err != nil {
+			return nil, err
+		}
 		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("failed to broadcast sweep transaction: %w", err)
 		}
@@ -1116,6 +1125,44 @@ func (w *ExchangeWallet) estimateFee(address string, value uint64) (uint64, erro
 	return testTx.Fee(), nil
 }
 
+// maxTxFeeRate is the highest fee rate, in atoms per weight unit, this wallet
+// will price against or broadcast. The rate comes from the daemon, which may be
+// a third party, so it is not taken on trust. A quoted rate above it is not
+// priced against, which also keeps the rate times a transaction weight from
+// overflowing, and a built transaction paying more per byte is not broadcast.
+// For the transactions this wallet builds (at most two outputs each) weight
+// equals size, so the two checks agree.
+//
+// Under the 2021 fee scaling, with the tail emission reward of 0.6 XMR, every
+// priority's rate falls as block weight grows and the medians cannot drop
+// below 300 kB. So the honest maximum is 4000000 atoms per weight unit at the
+// most expensive priority (Last), reached on a quiet chain. A replay of every
+// block from the fork (Aug 2022) to Nov 2026 never quoted more. This allows 5x
+// that. A standard 1500 byte send can then cost at most 0.03 XMR.
+//
+// The maximum scales with the block reward, so a chain not yet at tail
+// emission, such as the simnet harness, quotes far higher rates. There the
+// lower priorities still work, but sends at High or Last can be refused.
+const maxTxFeeRate = 20_000_000
+
+// checkTxFee refuses a built transaction whose fee is above maxTxFeeRate. txHex
+// is PendingTransaction.Hex: the signed transactions, comma separated. The
+// check fails closed if the size is unknown.
+func checkTxFee(fee uint64, txHex string) error {
+	var size uint64
+	for _, h := range strings.Split(txHex, ",") {
+		size += uint64(len(strings.TrimSpace(h)) / 2)
+	}
+	if size == 0 {
+		return errors.New("refusing to broadcast: could not read the signed transaction to check its fee")
+	}
+	if limit := maxTxFeeRate * size; fee > limit {
+		return fmt.Errorf("refusing to broadcast: fee of %d atoms (%d per byte over %d bytes) is above the %d per byte limit. "+
+			"The daemon may be quoting a bad fee", fee, fee/size, size, uint64(maxTxFeeRate))
+	}
+	return nil
+}
+
 // commitTx commits a pending transaction and returns the resulting Coin.
 // sendAmount is the expected send amount, used as fallback if the library
 // returns 0 for Amount().
@@ -1128,6 +1175,9 @@ func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64
 	fee := tx.Fee()
 	txid := tx.TxID()
 
+	if err := checkTxFee(fee, tx.Hex()); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to broadcast transaction: %w", err)
 	}
@@ -1166,7 +1216,8 @@ func (w *ExchangeWallet) commitTx(tx *cxmr.PendingTransaction, sendAmount uint64
 
 // FeeRate returns the daemon's current dynamic base fee, in atoms per weight
 // unit, for the configured priority. It returns zero when the daemon cannot be
-// reached, which the interface documents as "no estimate available".
+// reached or quotes that priority above maxTxFeeRate, which the interface
+// documents as "no estimate available".
 //
 // This is a real rate in the unit XMR's UnitInfo advertises (FeeRateDenom
 // "B"), not the priority level. Callers still cannot steer the fee with it:
@@ -1263,10 +1314,10 @@ func (w *ExchangeWallet) StandardSendFee(feeRate uint64) uint64 {
 	if feeRate == 0 && est != nil {
 		feeRate = est.feeForPriority(int(w.feePriority))
 	}
-	if feeRate == 0 || feeRate > maxBaseFee {
-		if feeRate > maxBaseFee {
+	if feeRate == 0 || feeRate > maxTxFeeRate {
+		if feeRate > maxTxFeeRate {
 			w.log.Warnf("Ignoring fee rate %d atoms per weight unit, above the %d sanity ceiling",
-				feeRate, maxBaseFee)
+				feeRate, maxTxFeeRate)
 		}
 		if observed := w.observedFee.Load(); observed > 0 {
 			return observed
@@ -1274,7 +1325,7 @@ func (w *ExchangeWallet) StandardSendFee(feeRate uint64) uint64 {
 		return w.fallbackFee()
 	}
 
-	// maxBaseFee bounds feeRate, so this cannot overflow.
+	// maxTxFeeRate bounds feeRate, so this cannot overflow.
 	fee := feeRate * standardTxWeight
 	if est != nil {
 		fee = est.quantize(fee)
