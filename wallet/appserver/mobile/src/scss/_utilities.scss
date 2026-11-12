@@ -1,0 +1,130 @@
+// Utility classes. Loaded last so a utility on an element wins over the
+// component class it modifies.
+
+// Text color utilities.
+.grey {
+  color: var(--text-grey);
+}
+
+.pos {
+  color: var(--accent-green);
+}
+
+.gold {
+  color: var(--gold);
+}
+
+.warn {
+  color: var(--text-warning);
+}
+
+.err {
+  color: var(--text-error);
+}
+
+.accent {
+  color: var(--accent);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.demi {
+  font-weight: 600;
+}
+
+.center {
+  text-align: center;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.break-all {
+  word-break: break-all;
+}
+
+.mirror {
+  transform: scaleX(-1);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+// Swap-state tone classes, named to match the shared intents stateColorClass
+// mapping.
+.tx-amt-pos {
+  color: var(--accent-green);
+}
+
+.errcolor {
+  color: var(--text-error);
+}
+
+.warncolor {
+  color: var(--text-warning);
+}
+
+// Spacing and size utilities, generated only for the steps in use.
+$spaces: 4, 8, 10, 12, 16, 20, 24;
+
+@each $s in $spaces {
+  .mt#{$s} {
+    margin-top: #{$s}px;
+  }
+
+  .pt#{$s} {
+    padding-top: #{$s}px;
+  }
+}
+
+.mt-auto {
+  margin-top: auto;
+}
+
+.ms4 {
+  margin-left: 4px;
+}
+
+$font-sizes: 12, 13, 14, 15, 16, 17;
+
+@each $s in $font-sizes {
+  .fs#{$s} {
+    font-size: #{$s}px;
+  }
+}
+
+.gutter {
+  margin: 0 var(--gutter);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mb12 {
+  margin-bottom: 12px;
+}
+
+.block {
+  display: block;
+}
+
+.mb14 {
+  margin-bottom: 14px;
+}

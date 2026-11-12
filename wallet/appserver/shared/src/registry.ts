@@ -381,6 +381,7 @@ export interface AppState {
   appSettings: AppSettings
   termsVersion: string
   termsAccepted: boolean
+  appVersion?: string
 }
 
 export interface PageData {

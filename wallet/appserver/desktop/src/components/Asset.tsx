@@ -9,8 +9,9 @@ import { AssetVariant, networkAsset, networkID } from '@caribou/shared/assets'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
 import NetworkedTokenLogo from '@caribou/shared/components/NetworkedTokenLogo'
 import Spinner from './Spinner'
-import TxRow, { TxRowItem, variantForTx } from './TxRow'
-import { IntentsSwap, fetchIntentsAssets, fetchSwaps, relateTxToSwaps } from '../intents'
+import TxRow from './TxRow'
+import { TxRowItem, variantForTx } from '@caribou/shared/tx'
+import { IntentsSwap, fetchIntentsAssets, fetchSwaps, relateTxToSwaps } from '@caribou/shared/intents'
 
 interface AssetParams {
   ticker: string

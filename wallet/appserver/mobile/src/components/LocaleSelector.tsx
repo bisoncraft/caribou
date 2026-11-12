@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import t from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
+import { Icon } from './ui'
 
 // Each language is named in its own language, so a user who picked the wrong
 // one can still find theirs. These mirror the desktop LocaleSelector.
@@ -13,29 +14,35 @@ const autonyms: Record<string, string> = {
   'ar': 'العربية'
 }
 
-const nameOf = (code: string) => autonyms[code] ?? code
+export const languageName = (code: string) => autonyms[code] ?? code
 
-// LocaleSelector lets the user pick the app language, using the languages the
-// server reports. It renders nothing until the app state has loaded them.
-export default function LocaleSelector () {
+// useLocale returns the current language, the server's languages sorted by
+// display name, and a setter that switches the app language.
+export function useLocale (): [string, string[], (lang: string) => Promise<void>] {
   const [lang, setLang] = useState<string>(app.lang)
-  const langs = app.langs ?? []
-  if (langs.length === 0) return null
-
-  const changeLanguage = async (newLang: string) => {
+  // The server builds the list from a map, so its order differs per launch.
+  const sorted = [...(app.langs ?? [])].sort((a, b) => languageName(a).localeCompare(languageName(b)))
+  const change = async (newLang: string) => {
     await app.changeLocale(newLang)
     app.reRender()
     setLang(newLang)
   }
+  return [lang, sorted, change]
+}
 
-  // The server builds the list from a map, so its order differs per launch.
-  const sorted = [...langs].sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
-
+// LocaleSelector is the language pill shown on first-run screens: the current
+// language's name over an invisible native select, so the platform's own
+// picker opens on tap. It renders nothing until the app state has loaded the
+// language list.
+export default function LocaleSelector () {
+  const [lang, langs, change] = useLocale()
+  if (langs.length === 0) return null
   return (
-    <label className='mb-select-row'>
-      <span>{t('Language')}</span>
-      <select value={lang} onChange={e => changeLanguage(e.target.value)}>
-        {sorted.map(l => <option key={l} value={l}>{nameOf(l)}</option>)}
+    <label className='lang-pill'>
+      {languageName(lang)}
+      <Icon name='chevron-left' className='lang-pill-chev' />
+      <select value={lang} aria-label={t('Language')} onChange={e => change(e.target.value)}>
+        {langs.map(l => <option key={l} value={l}>{languageName(l)}</option>)}
       </select>
     </label>
   )

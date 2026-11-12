@@ -2,6 +2,7 @@ import t, { tvar } from '@caribou/shared/intl'
 import { AssetVariant } from '@caribou/shared/assets'
 import { TrustlineState } from '@caribou/shared/registry'
 import { useTrustlineGate } from '@caribou/shared/trustline'
+import { PasswordField, Spinner } from './ui'
 
 interface TrustlineGateProps {
   // variant is a token whose wallet reports a trust-line state other than
@@ -22,10 +23,10 @@ export default function TrustlineGate ({ variant, state, onReceiveNetwork }: Tru
 
   if (g.pending) {
     return (
-      <div className='mb-receive'>
-        <div className='mb-spinner' />
-        <div>{t('Establishing trust line...')}</div>
-        <div className='mb-muted'>
+      <div className='gate center'>
+        <Spinner large />
+        <div className='t1 mt16'>{t('Establishing trust line...')}</div>
+        <div className='grey fs14 mt8'>
           {tvar('Your {{ token }} address will appear once the network confirms the trust line.', { token: g.token })}
         </div>
       </div>
@@ -33,19 +34,19 @@ export default function TrustlineGate ({ variant, state, onReceiveNetwork }: Tru
   }
 
   return (
-    <div className='mb-receive'>
-      <p className='mb-muted'>
+    <div className='gate'>
+      <p className='callout'>
         {tvar('Receiving {{ token }} on {{ network }} requires a trust line. Establishing one keeps {{ reserve }} {{ ticker }} of your balance reserved for as long as you can hold {{ token }}, plus a small network fee. The reserve is released if you later remove the trust line.',
           { token: g.token, network: g.netName, reserve: g.reserve, ticker: g.netTicker })}
       </p>
       {g.shortfall
         ? (
           <>
-            <p>
+            <p className='callout caution strong mt12'>
               {tvar('Your {{ network }} wallet needs at least {{ amount }} more {{ ticker }} before it can hold {{ token }}.',
                 { network: g.netName, amount: g.shortfall, ticker: g.netTicker, token: g.token })}
             </p>
-            <button className='mb-btn' type='button' onClick={onReceiveNetwork}>
+            <button className='btn mt20' type='button' onClick={onReceiveNetwork}>
               {tvar('Receive {{ ticker }}', { ticker: g.netTicker })}
             </button>
           </>
@@ -53,18 +54,17 @@ export default function TrustlineGate ({ variant, state, onReceiveNetwork }: Tru
         : (
           <>
             {g.requirePW && (
-              <input
-                className='mb-input'
-                type='password'
-                autoComplete='current-password'
-                placeholder={t('App password')}
-                value={g.pw}
-                onChange={(e) => g.setPW(e.target.value)}
-                disabled={g.submitting}
-              />
+              <div className='mt20'>
+                <PasswordField
+                  value={g.pw}
+                  onChange={g.setPW}
+                  placeholder={t('App password')}
+                  disabled={g.submitting}
+                />
+              </div>
             )}
-            <div className='mb-err' aria-live='polite'>{g.err}</div>
-            <button className='mb-btn' type='button' onClick={g.establish} disabled={!g.canEstablish}>
+            {g.err && <div className='err-box mt12' aria-live='polite'>{g.err}</div>}
+            <button className='btn mt20' type='button' onClick={g.establish} disabled={!g.canEstablish}>
               {g.submitting ? t('Establishing trust line...') : t('Establish trust line')}
             </button>
           </>
