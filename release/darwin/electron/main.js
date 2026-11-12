@@ -165,10 +165,14 @@ function caribouRunning() {
 
 function startCaribou() {
   const bin = path.join(resourcesDir(), "caribou");
-  caribou = spawn(bin, [], { stdio: ["pipe", "pipe", "pipe"] });
+  // --capabilitygate makes the appserver answer only a window that loads the
+  // URL it prints, which carries a per-launch token. A web page that reaches
+  // the loopback port (by DNS rebinding, say) gets nothing.
+  caribou = spawn(bin, ["--capabilitygate"], { stdio: ["pipe", "pipe", "pipe"] });
 
   readline.createInterface({ input: caribou.stdout }).on("line", (line) => {
-    console.log(line);
+    // The banner URL carries the capability token. Keep it out of the console.
+    console.log(line.replace(/([?&]k=)[^&\s]+/, "$1<redacted>"));
     // The appserver prints its address once it is listening (see
     // wallet/appserver/appserver.go). Parsing it rather than assuming the
     // default port respects a webaddr set in caribou.conf.

@@ -18,7 +18,7 @@ type Config struct {
 	app.Config
 	Kill      bool   `long:"kill" description:"Send a kill signal to a running instance and exit. This is not be supported on darwin"`
 	LogStdout bool   `long:"stdout" description:"Log to stdout (in addition to the log file)"`
-	Webview   string `long:"webview" description:"Opens a webview window pointing to the provided URL but not supported on darwin. Does nothing else. Precludes applicability of any other settings."`
+	Webview   string `long:"webview" description:"Opens a webview window pointing to the provided URL, or to a URL read from stdin if \"-\". Not supported on darwin. Does nothing else. Precludes applicability of any other settings."`
 	// WebviewMonitor is set by caribou-desktop itself when it starts a
 	// --webview process, so the window opens on the monitor the program was
 	// launched from rather than the primary one.

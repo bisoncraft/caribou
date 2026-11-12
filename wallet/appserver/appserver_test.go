@@ -1114,7 +1114,9 @@ func TestTermsGateRouting(t *testing.T) {
 
 	post := func(path string, authed bool) int {
 		t.Helper()
-		req := httptest.NewRequest("POST", path, nil)
+		// A loopback Host, which hostMiddleware allows. httptest's default,
+		// example.com, would be refused.
+		req := httptest.NewRequest("POST", "http://127.0.0.1"+path, nil)
 		if authed {
 			req.AddCookie(&http.Cookie{Name: authCK, Value: authToken})
 		}

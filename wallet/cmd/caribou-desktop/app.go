@@ -47,6 +47,7 @@ int display_height() {
 */
 import "C"
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -58,6 +59,7 @@ import (
 	"runtime/debug"
 	"runtime/pprof"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -94,7 +96,17 @@ func mainCore() error {
 	// with caribou and taskbar icons won't be stacked. Instead, we'll create a
 	// short path here and execute ourself with the --webview flag.
 	if cfg.Webview != "" {
-		runWebview(cfg.Webview, uintptr(cfg.WebviewMonitor))
+		url := cfg.Webview
+		if url == "-" {
+			// The URL carries the capability token, so the parent passes it
+			// on stdin, not in argv where other users can read it.
+			line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+			if err != nil && line == "" {
+				return fmt.Errorf("reading the webview URL from stdin: %w", err)
+			}
+			url = strings.TrimSpace(line)
+		}
+		runWebview(url, uintptr(cfg.WebviewMonitor))
 		return nil
 	}
 
@@ -190,7 +202,12 @@ func mainCore() error {
 		wg.Wait() // no-op with clean setup and shutdown
 	}()
 
-	webSrv, err := appserver.New(cfg.Web(clientCore, logMaker.Logger("WEB"), utc))
+	webCfg := cfg.Web(clientCore, logMaker.Logger("WEB"), utc)
+	// This shell opens every window itself, so only its windows need to
+	// reach the server, and nobody needs the banner's URL.
+	webCfg.CapabilityGate = true
+	webCfg.NoBrowserBanner = true
+	webSrv, err := appserver.New(webCfg)
 	if err != nil {
 		return fmt.Errorf("failed creating web server: %w", err)
 	}
@@ -222,7 +239,7 @@ func mainCore() error {
 	openWindow := func(monitor uintptr) {
 		wg.Add(1)
 		go func() {
-			runWebviewSubprocess(appCtx, "http://"+webSrv.Addr(), monitor)
+			runWebviewSubprocess(appCtx, webSrv.BootstrapURL(), monitor)
 			wg.Done()
 		}()
 	}
@@ -383,11 +400,14 @@ func runWebview(url string, monitor uintptr) {
 }
 
 func runWebviewSubprocess(ctx context.Context, url string, monitor uintptr) {
-	args := []string{"--webview", url}
+	// "-" reads the URL from stdin. It carries the capability token, which
+	// must not go in argv.
+	args := []string{"--webview", "-"}
 	if monitor != 0 {
 		args = append(args, "--webview-monitor", strconv.FormatUint(uint64(monitor), 10))
 	}
 	cmd := exec.CommandContext(ctx, exePath, args...)
+	cmd.Stdin = strings.NewReader(url + "\n")
 	if err := cmd.Start(); err != nil {
 		log.Errorf("webview start error: %v", err)
 		return

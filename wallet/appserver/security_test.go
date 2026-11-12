@@ -790,3 +790,202 @@ func TestUnpairCompanionDisconnectsWS(t *testing.T) {
 
 	assertWSClosed(t, conn, "the companion app was unpaired")
 }
+
+// TestHostAllowlist checks hostMiddleware, the DNS rebinding defense. A page
+// that rebinds its own name to 127.0.0.1 still sends that name as the Host
+// header, and must get nothing, not even the unauthenticated routes.
+func TestHostAllowlist(t *testing.T) {
+	s, _, shutdown := newTServer(t, false)
+	defer shutdown()
+	s.webHost = hostOnly("mywallet.lan:5758")
+
+	allowed := []string{
+		"127.0.0.1:5758",
+		"127.0.0.1",
+		"[::1]:5758",
+		"192.168.1.20:5758", // bound to 0.0.0.0 or a LAN IP
+		"localhost:5758",
+		"LOCALHOST:5758",
+		"mywallet.lan:5758", // the configured --webaddr host
+		"mywallet.lan.",
+	}
+	refused := []string{
+		"evil.example:5758", // the rebinding case
+		"evil.example",
+		"localhost.evil.example:5758",
+		"127.0.0.1.evil.example:5758",
+		"sub.localhost:5758",
+		// An onion name is only trusted on the onion listener.
+		"abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion",
+		"",
+	}
+
+	serve := func(host string, onion bool) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/login", strings.NewReader(`{"pass":"x"}`))
+		req.Host = host
+		req.Header.Set("Content-Type", "application/json")
+		if onion {
+			req = req.WithContext(context.WithValue(req.Context(), onionConnKey{}, true))
+		}
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, h := range allowed {
+		if code := serve(h, false); code == http.StatusMisdirectedRequest {
+			t.Errorf("Host %q refused, want allowed", h)
+		}
+	}
+	for _, h := range refused {
+		if code := serve(h, false); code != http.StatusMisdirectedRequest {
+			t.Errorf("Host %q got %d, want %d", h, code, http.StatusMisdirectedRequest)
+		}
+	}
+
+	// On the onion listener the Host header is the remote Tor client's, in
+	// whatever form it sends the onion name, so it is not checked.
+	for _, h := range []string{
+		"abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion",
+		"abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion:80",
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUVWX.ONION",
+	} {
+		if code := serve(h, true); code == http.StatusMisdirectedRequest {
+			t.Errorf("Host %q on the onion listener refused, want allowed", h)
+		}
+	}
+}
+
+// TestCapabilityGate checks Config.CapabilityGate, which the desktop shells
+// set: New generates a token, BootstrapURL carries it, and a request without
+// it (a DNS rebinding page, say) gets nothing, while the window that loaded
+// BootstrapURL gets in.
+func TestCapabilityGate(t *testing.T) {
+	newServer := func(gate bool) *AppServer {
+		t.Helper()
+		s, err := New(&Config{
+			Core:           &TCore{},
+			Addr:           "127.0.0.1:0",
+			Logger:         tLogger,
+			AppVersion:     testAppVersion,
+			CapabilityGate: gate,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		s.addr = "127.0.0.1:5758" // set by Connect
+		return s
+	}
+
+	// Off: no token, and the bootstrap URL is the bare address.
+	if s := newServer(false); s.capToken != "" || s.BootstrapURL() != "http://127.0.0.1:5758" {
+		t.Fatalf("gate off: token %q, bootstrap URL %q", s.capToken, s.BootstrapURL())
+	}
+
+	s := newServer(true)
+	if len(s.capToken) != 64 {
+		t.Fatalf("gate on: token %q, want 32 random bytes as hex", s.capToken)
+	}
+	if other := newServer(true); other.capToken == s.capToken {
+		t.Fatal("two servers got the same token")
+	}
+	bootstrap := s.BootstrapURL()
+	if bootstrap != "http://127.0.0.1:5758/?k="+s.capToken {
+		t.Fatalf("bootstrap URL %q does not carry the token", bootstrap)
+	}
+
+	serve := func(req *http.Request) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// No token: nothing, including the unauthenticated login route.
+	for _, path := range []string{"/", "/api/user", "/api/login"} {
+		method := http.MethodGet
+		if path == "/api/login" {
+			method = http.MethodPost
+		}
+		req := httptest.NewRequest(method, "http://127.0.0.1:5758"+path, strings.NewReader(`{"pass":"x"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if rec := serve(req); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s without the token: %d, want 404", method, path, rec.Code)
+		}
+	}
+
+	// The bootstrap URL swaps the token for a cookie, which then gets in.
+	rec := serve(httptest.NewRequest(http.MethodGet, bootstrap, nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("bootstrap URL: %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, s.capToken) {
+		t.Fatalf("redirect %q still carries the token", loc)
+	}
+	var capCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == capCK {
+			capCookie = c
+		}
+	}
+	if capCookie == nil {
+		t.Fatal("bootstrap URL set no capability cookie")
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:5758/api/user", nil)
+	req.AddCookie(capCookie)
+	if rec := serve(req); rec.Code == http.StatusNotFound {
+		t.Fatal("request with the capability cookie got 404")
+	}
+
+	// A local API token gets in without the cookie, so automation still works.
+	const apiToken = "automation-token"
+	s.apiTokenHash = hashToken(apiToken)
+	tokenReq := func(token, remote string) *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:5758/api/user", nil)
+		req.Header.Set(apiTokenHeader, token)
+		req.RemoteAddr = remote
+		return req
+	}
+	if rec := serve(tokenReq(apiToken, "127.0.0.1:40000")); rec.Code == http.StatusNotFound {
+		t.Fatal("request with a valid API token got 404")
+	}
+	if rec := serve(tokenReq("wrong", "127.0.0.1:40000")); rec.Code != http.StatusNotFound {
+		t.Fatalf("request with a wrong API token: %d, want 404", rec.Code)
+	}
+	if rec := serve(tokenReq(apiToken, "192.0.2.1:40000")); rec.Code != http.StatusNotFound {
+		t.Fatalf("API token from a remote peer: %d, want 404", rec.Code)
+	}
+
+	// The onion listener skips both the Host check and the gate. A Host header
+	// naming an onion does not, since only the listener marks a request as
+	// onion.
+	req = httptest.NewRequest(http.MethodGet, "http://abc.onion/api/user", nil)
+	if rec := serve(req); rec.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("onion Host header without the onion listener: %d, want 421", rec.Code)
+	}
+	req = req.WithContext(context.WithValue(req.Context(), onionConnKey{}, true))
+	if rec := serve(req); rec.Code == http.StatusNotFound || rec.Code == http.StatusMisdirectedRequest {
+		t.Fatalf("request on the onion listener: %d, want it past the Host check and the gate", rec.Code)
+	}
+}
+
+// TestNoBrowserBanner checks that a shell opening its own windows can turn off
+// the banner, which carries the capability token when the gate is on.
+func TestNoBrowserBanner(t *testing.T) {
+	for _, off := range []bool{false, true} {
+		s, err := New(&Config{
+			Core:            &TCore{},
+			Addr:            "127.0.0.1:0",
+			Logger:          tLogger,
+			AppVersion:      testAppVersion,
+			CapabilityGate:  true,
+			NoBrowserBanner: off,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if want := printBrowserBanner && !off; s.banner != want {
+			t.Errorf("NoBrowserBanner %v: banner = %v, want %v", off, s.banner, want)
+		}
+	}
+}

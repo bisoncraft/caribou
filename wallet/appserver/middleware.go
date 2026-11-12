@@ -5,11 +5,65 @@ package appserver
 
 import (
 	"crypto/subtle"
+	"net"
 	"net/http"
+	"strings"
 )
 
+// hostMiddleware rejects requests whose Host header names a host this server
+// was not set up to answer for. That defeats DNS rebinding: a web page on
+// evil.example can re-point its own name at 127.0.0.1, and the browser then
+// treats the loopback server as same-origin with the page. The browser still
+// sends the page's name as the Host header, which is what this checks.
+//
+// Allowed hosts:
+//   - any IP literal. Rebinding needs a DNS name, so an IP is never an
+//     attacker's origin. This keeps 0.0.0.0 and LAN IP binds working.
+//   - "localhost", which browsers resolve to loopback without DNS.
+//   - the host of the configured listen address (--webaddr), which may be a
+//     name.
+//
+// Connections on the onion listener skip the check. Their Host header is set
+// by a remote Tor client, and a rebinding page cannot reach the relay port, so
+// the check protects nothing there. The listener is identified by the
+// connection, as in capabilityMiddleware.
+func (s *AppServer) hostMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.isOnionRequest(r) && !s.allowedHost(r.Host) {
+			http.Error(w, "invalid Host header. To reach the server by this name, set it with --webaddr, "+
+				"or use the server's IP address in the URL", http.StatusMisdirectedRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// allowedHost reports whether hostport, a Host header value, names this
+// server.
+func (s *AppServer) allowedHost(hostport string) bool {
+	host := hostOnly(hostport)
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil || host == "localhost" {
+		return true
+	}
+	return host == s.webHost
+}
+
+// hostOnly returns the lowercased host part of a host[:port] string, without
+// IPv6 brackets or a trailing dot.
+func hostOnly(hostport string) string {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSuffix(host, "]"), "["), ".")
+	return strings.ToLower(host)
+}
+
 // capabilityMiddleware gates every request on a capability token when one is
-// configured (Config.CapabilityToken, set by the mobile build). The token is
+// configured (Config.CapabilityToken or Config.CapabilityGate). The token is
 // handed to the WebView in the bootstrap URL (?k=...) and exchanged here for an
 // HttpOnly cookie on first load; thereafter the cookie authorizes requests.
 //
@@ -19,10 +73,17 @@ import (
 // other apps cannot present the token, so they cannot reach the SPA, the
 // unauthenticated API routes (e.g. /api/login), or the notification websocket.
 //
-// When no token is configured (desktop) the gate is a no-op.
+// Two kinds of request skip the gate, because they carry their own proof:
+//   - a valid local API token, so automation can drive a gated server. It
+//     needs the secret token and a loopback peer.
+//   - a connection on the onion listener. Those come from the Tor network,
+//     where the companion app has its own pairing, so the gate adds nothing.
+//     The listener is identified by the connection, not the Host header.
+//
+// When no token is configured the gate is a no-op.
 func (s *AppServer) capabilityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.capToken == "" {
+		if s.capToken == "" || s.isOnionRequest(r) || s.apiTokenAuthorized(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

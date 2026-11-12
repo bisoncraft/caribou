@@ -148,6 +148,10 @@ To rotate, just generate a new token; the old hash is overwritten.
   the body even with a valid token. Wrong passwords are throttled. The login
   screen has its own throttle, so guesses there cannot lock a logged-in client
   out of these actions.
+- **Desktop apps gate the server.** The desktop apps start the server with
+  `--capabilitygate`, so only their own windows get in. Requests with a valid
+  API token, and the companion app over Tor, are let through. A browser,
+  including one on another machine reaching a LAN `--webaddr`, gets a 404.
 - **One token at a time.** Generating a token replaces the previous one. There
   is a single local-token slot.
 - **Shared session semantics.** The wallet has one logged-in core shared by all
