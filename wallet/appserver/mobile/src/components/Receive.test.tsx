@@ -47,7 +47,7 @@ afterEach(() => {
 
 // Tapping USDC in the asset list lands on the network step's only variant.
 function openUsdc () {
-  render(<Receive onClose={() => {}} />)
+  render(<Receive />)
   fireEvent.click(screen.getByText('USDC'))
 }
 

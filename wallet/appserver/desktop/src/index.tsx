@@ -2,7 +2,7 @@ import './scss/application.scss'
 import * as ReactDOM from 'react-dom/client'
 
 import { App } from './App'
-import { applyTheme, storedTheme } from './theme'
+import { applyTheme, storedTheme } from '@caribou/shared/theme'
 import { applySidebarCollapsed, storedSidebarCollapsed } from './layout'
 
 // Apply the persisted theme and layout choices before the first render so

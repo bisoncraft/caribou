@@ -1,0 +1,509 @@
+// Swap flow styles: the sell/buy form, asset picker, slippage and review
+// sheets, and the progress view.
+
+// ---------------------------------------------------------------------------
+// Form.
+
+.swap-card {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--form-input-bg);
+  border: 1px solid transparent;
+  transition: border-color 0.1s;
+
+  &.focus {
+    border-color: color-mix(in srgb, var(--accent-border) 55%, transparent);
+  }
+
+  &.buy {
+    margin-top: 6px;
+  }
+}
+
+.swap-card-mid {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+// The amount entry. Long values step the size down so more digits stay
+// visible beside the asset chip.
+.swap-amt {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text-color);
+  font-size: 34px;
+  text-overflow: ellipsis;
+  caret-color: var(--accent);
+
+  &::placeholder {
+    color: var(--text-grey);
+  }
+
+  &.long {
+    font-size: 26px;
+  }
+
+  &.xlong {
+    font-size: 20px;
+  }
+}
+
+.swap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px 0 8px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-raised);
+  font-size: 16px;
+  font-weight: 600;
+  flex: none;
+  white-space: nowrap;
+
+  &.empty {
+    padding-left: 14px;
+    font-size: 15px;
+  }
+}
+
+.swap-chip-chev {
+  font-size: 11px;
+  color: var(--text-grey);
+  transform: rotate(-90deg);
+}
+
+.swap-logo-sm {
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
+
+.swap-logo-lg {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
+.swap-card-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-grey);
+}
+
+.swap-max {
+  margin-left: 4px;
+  padding: 2px 0 2px 2px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+// The direction flip, floating on the seam between the cards; its body-bg
+// border notches it out of both.
+.swap-flip-anchor {
+  position: relative;
+  z-index: 2;
+  height: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.swap-flip {
+  position: absolute;
+  top: -20px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 4px solid var(--body-bg);
+  background: var(--surface-raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+
+  > span {
+    transform: rotate(90deg);
+  }
+}
+
+// Quote details under the cards.
+.swap-quote {
+  margin-top: 16px;
+  padding: 6px 12px;
+  border-radius: 16px;
+  border: 1px solid var(--border-color);
+}
+
+// A row label that opens a short explanation.
+.swap-dl {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--btnb);
+  text-underline-offset: 3px;
+}
+
+.swap-tip {
+  margin: 0;
+  padding: 0 4px 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-grey);
+}
+
+.swap-val {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.swap-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-grey);
+
+  > span {
+    display: inline-flex;
+    font-size: 14px;
+  }
+
+  .spinning {
+    animation: spin 0.8s linear infinite;
+  }
+}
+
+.swap-msg {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.swap-by {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-grey);
+}
+
+.foot > .swap-by {
+  margin-top: 10px;
+}
+
+// ---------------------------------------------------------------------------
+// Asset picker sheet.
+
+.swap-pick {
+  margin-top: 12px;
+
+  .row:disabled {
+    opacity: 0.5;
+  }
+
+  .t1,
+  .t2 {
+    display: block;
+  }
+
+  .num .mono {
+    display: block;
+    font-size: 14px;
+  }
+}
+
+.swap-pick-check {
+  margin-left: 8px;
+  font-size: 11px;
+}
+
+// ---------------------------------------------------------------------------
+// Slippage sheet.
+
+.swap-slip {
+  display: flex;
+  gap: 10px;
+  padding-bottom: 8px;
+
+  button {
+    flex: 1;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--tile);
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .on {
+    background: var(--sel);
+    color: var(--accent);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Review sheet.
+
+.swap-sum {
+  padding: 4px 14px;
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.swap-sum-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.swap-sum-lbl {
+  font-size: 12px;
+  color: var(--text-grey);
+}
+
+.swap-sum-amt {
+  margin-top: 2px;
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.swap-sum-usd {
+  flex: none;
+  font-size: 14px;
+  color: var(--text-grey);
+}
+
+.swap-sum-sep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  > span {
+    width: 36px;
+    display: flex;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--text-grey);
+  }
+
+  > i {
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+  }
+}
+
+.swap-rev {
+  margin-top: 10px;
+}
+
+.swap-custody {
+  margin-top: 10px;
+
+  p + p {
+    margin-top: 8px;
+  }
+}
+
+.swap-trust {
+  color: var(--text-color);
+}
+
+.swap-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+// ---------------------------------------------------------------------------
+// Progress.
+
+.swap-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 8px 0 20px;
+}
+
+.swap-pair {
+  display: flex;
+  align-items: center;
+
+  > :first-child {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+// A body-bg disc behind the second logo, overlapping the first. The disc is
+// the wrapper's background; the logo itself is never clipped.
+.swap-pair-ring {
+  width: 52px;
+  height: 52px;
+  margin-left: -10px;
+  border-radius: 50%;
+  background: var(--body-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.swap-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 24px;
+  font-weight: 600;
+
+  > [class^="ico-"] {
+    font-size: 18px;
+  }
+}
+
+.swap-eta {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text-grey);
+}
+
+.swap-amts {
+  margin-top: 12px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.swap-recovered {
+  margin-top: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  font-size: 11px;
+  color: var(--text-grey);
+}
+
+.swap-steps {
+  list-style: none;
+  margin: 0 0 22px;
+  padding: 0 8px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.swap-step {
+  width: 72px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-grey);
+
+  &.done,
+  &.current {
+    color: var(--text-color);
+  }
+}
+
+.swap-step-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+
+  .done & {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+    color: var(--accent-contrast);
+  }
+
+  .current & {
+    border-color: var(--accent);
+
+    &::after {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+  }
+}
+
+.swap-step-bar {
+  flex: 1;
+  height: 2px;
+  margin-top: 13px;
+  border-radius: 1px;
+  background: var(--border-color);
+
+  &.done {
+    background: var(--accent-strong);
+  }
+}
+
+.swap-outcome {
+  margin-bottom: 16px;
+}
+
+.swap-id {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.swap-cp {
+  margin-left: 4px;
+  padding: 4px;
+  font-size: 14px;
+  color: var(--text-grey);
+}
+
+.swap-txlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+
+  > span {
+    font-size: 12px;
+  }
+}
+
+.swap-failed {
+  margin-right: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-error);
+}
+
+.swap-safe {
+  margin: 16px 8px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--text-grey);
+}

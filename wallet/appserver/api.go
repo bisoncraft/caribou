@@ -1204,6 +1204,7 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		AppSettings        appSettings `json:"appSettings"`
 		TermsVersion       string      `json:"termsVersion"`
 		TermsAccepted      bool        `json:"termsAccepted"`
+		AppVersion         string      `json:"appVersion"`
 	}{
 		User:               u,
 		Lang:               *s.lang.Load(),
@@ -1215,6 +1216,7 @@ func (s *AppServer) apiUser(w http.ResponseWriter, r *http.Request) {
 		AppSettings:        settings,
 		TermsVersion:       termsVersion,
 		TermsAccepted:      acceptedTerms,
+		AppVersion:         s.appVersion,
 	}
 	writeJSON(w, response)
 }

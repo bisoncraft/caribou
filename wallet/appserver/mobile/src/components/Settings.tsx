@@ -1,53 +1,250 @@
-import { useState, useEffect, FormEvent, ChangeEvent, ReactNode } from 'react'
+import { useState, useEffect, FormEvent, ReactNode } from 'react'
 import t, { tvar } from '@caribou/shared/intl'
 import app from '@caribou/shared/application'
-import { postJSON } from '@caribou/shared/http'
+import { getJSON, postJSON } from '@caribou/shared/http'
+import { useFlash } from '@caribou/shared/hooks'
+import { Theme, themes, storedTheme, setTheme } from '@caribou/shared/theme'
+import LegalText from '@caribou/shared/components/LegalText'
+import { CaribouBridge, bridge, canExportAppLog } from '../bridge'
+import { Icon, PasswordField, Sheet, Spinner, Toast, Toggle } from './ui'
+import { languageName, useLocale } from './LocaleSelector'
+import { SeedWords } from './InitWizard'
 
-// caribou is the native bridge the Android shell injects (window.caribou). It is
-// absent on desktop and on the web, so every use is guarded. No method takes or
-// returns the app password: enrollBiometrics captures it in a native field, and
-// unlock releases it natively, so the secret never reaches this JS.
-interface CaribouBridge {
-  // biometricAvailable reports whether the device can ENROLL biometric key-release
-  // (iOS: actual biometrics only, since the Keychain item needs .biometryCurrentSet).
-  // Gates the enroll toggle.
-  biometricAvailable(): boolean
-  // canGate reports whether the cheap UI gate has any mechanism to clear with -
-  // biometrics OR the device passcode. On Android this equals biometricAvailable
-  // (both are canAuthenticate); on iOS it is broader, so a passcode-only device can
-  // still configure and run the gate. Gates the "Lock after" row.
-  canGate(): boolean
-  biometricEnrolled(): boolean
-  enrollBiometrics(): void
-  disableBiometrics(): void
-  // Idle-lock thresholds in minutes: gateMin (0 = require unlock immediately),
-  // evictMin (0 = never evict). getLockConfig returns JSON {gateMin, evictMin}.
-  getLockConfig(): string
-  setLockConfig(gateMin: number, evictMin: number): void
-}
-declare global {
-  interface Window { caribou?: CaribouBridge }
+interface SettingRowProps {
+  title: ReactNode
+  desc?: ReactNode
+  children?: ReactNode
+  onClick?: () => void
+  icon?: ReactNode
 }
 
-// SendSettings mirrors the desktop app-level send preference: whether sending
-// requires the app password. The value is written back to app.appSettings so
-// the Send flow picks it up without a refetch.
-function SendSettings () {
-  const [requirePW, setRequirePW] = useState(app.appSettings.sendRequiresPassword)
+// SettingRow is one row of a settings card: title and description on the
+// left, a value or control on the right. With onClick the whole row is a
+// button.
+function SettingRow ({ title, desc, children, onClick, icon }: SettingRowProps) {
+  const inner = (
+    <>
+      {icon}
+      <div className='grow'>
+        <div className='st'>{title}</div>
+        {desc && <div className='sd'>{desc}</div>}
+      </div>
+      {children}
+    </>
+  )
+  return onClick
+    ? <button type='button' className='srow tappable' onClick={onClick}>{inner}</button>
+    : <div className='srow'>{inner}</div>
+}
+
+const Chevron = () => <Icon name='chevron-left' className='chev' />
+
+interface SelectValueProps<T extends string | number> {
+  value: T
+  options: { value: T, label: string }[]
+  onChange: (v: T) => void
+  label: string
+}
+
+// SelectValue shows the current choice with a chevron over an invisible
+// native select, so the platform picker opens on tap.
+function SelectValue<T extends string | number> ({ value, options, onChange, label }: SelectValueProps<T>) {
+  const current = options.find(o => o.value === value)
+  return (
+    <span className='select-val'>
+      {current?.label ?? ''}<Chevron />
+      <select
+        value={String(value)}
+        aria-label={label}
+        onChange={e => {
+          const o = options.find(x => String(x.value) === e.target.value)
+          if (o) onChange(o.value)
+        }}
+      >
+        {options.map(o => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
+      </select>
+    </span>
+  )
+}
+
+function LanguageRow () {
+  const [lang, langs, change] = useLocale()
+  if (langs.length === 0) return null
+  return (
+    <div className='srow'>
+      <div className='grow'>
+        <div className='st'>{t('Language')}</div>
+        <div className='sd'>{t('Applies across the app, including the unlock screen.')}</div>
+      </div>
+      <SelectValue value={lang} label={t('Language')} onChange={change} options={langs.map(l => ({ value: l, label: languageName(l) }))} />
+    </div>
+  )
+}
+
+const themeLabel = (th: Theme) => th === 'warm' ? t('Warm') : th === 'cool' ? t('Cool') : t('Light')
+
+function ThemeRow () {
+  const [theme, setThemeState] = useState<Theme>(storedTheme())
+  return (
+    <div className='srow col'>
+      <div className='st'>{t('Theme')}</div>
+      <div className='swatches' role='radiogroup' aria-label={t('Theme')}>
+        {themes.map(th => {
+          const on = th === theme
+          return (
+            <button
+              key={th}
+              type='button'
+              role='radio'
+              aria-checked={on}
+              className={on ? 'sw on' : 'sw'}
+              onClick={() => { setTheme(th); setThemeState(th) }}
+            >
+              {/* data-theme scopes the palette to the preview, so each
+                  swatch shows its theme's live body, fill, and gold tokens. */}
+              <span className='swb' data-theme={th}>
+                <span />
+                <span />
+              </span>
+              {themeLabel(th)}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Minute values offered for each idle-lock threshold. 0 is a sentinel: for
+// the gate it means "require unlock immediately", for eviction it means
+// "never".
+const GATE_OPTIONS = [0, 1, 5, 10, 30]
+const EVICT_OPTIONS = [30, 60, 120, 0]
+
+function gateLabel (m: number): string {
+  return m === 0 ? t('Immediately') : tvar('{{ n }} min', { n: String(m) })
+}
+function evictLabel (m: number): string {
+  if (m === 0) return t('Never')
+  if (m % 60 === 0) return m === 60 ? t('1 hour') : tvar('{{ n }} hours', { n: String(m / 60) })
+  return tvar('{{ n }} min', { n: String(m) })
+}
+
+// BiometricRows renders the native lock controls in tier order: the gate
+// threshold ("Lock after"), the biometric toggle, then the eviction threshold
+// ("Evict keys after"). They exist only in the native shell (window.caribou).
+//
+// The biometric toggle governs how keys are re-acquired once they are gone
+// (after eviction, or on a cold start): released from the keystore by
+// biometrics vs. retyping the password. It does not touch the gate, which is
+// a presence check over a still-resident session. It shows when the device
+// can enroll OR an enrollment already exists, so a stale enrollment (the
+// device's biometrics removed after enrolling) can still be turned off.
+//
+// The gate row shows only when the device can gate (biometrics OR passcode).
+// The gate must sit strictly below eviction or its band [gate, evict) is
+// empty, so only lower gate values are offered and lowering eviction pulls
+// the gate down with it. Native clamps regardless and is the single
+// authority: every write is read back.
+function BiometricRows ({ b }: { b: CaribouBridge }) {
+  const read = <T, >(f: () => T, fallback: T): T => { try { return f() } catch { return fallback } }
+  const [available, setAvailable] = useState(() => read(() => b.biometricAvailable(), false))
+  const [canGate, setCanGate] = useState(() => read(() => b.canGate(), false))
+  const [enrolled, setEnrolled] = useState(() => read(() => b.biometricEnrolled(), false))
+  const [gateMin, setGateMin] = useState(10)
+  const [evictMin, setEvictMin] = useState(60)
+
+  useEffect(() => {
+    const refresh = () => {
+      // Only touch the bridge when visible: visibilitychange also fires on
+      // hide, and re-reading then burns synchronous native round-trips on a
+      // lifecycle hot path for a view no one is looking at.
+      if (document.visibilityState !== 'visible') return
+      setAvailable(read(() => b.biometricAvailable(), false))
+      setCanGate(read(() => b.canGate(), false))
+      setEnrolled(read(() => b.biometricEnrolled(), false))
+    }
+    window.addEventListener('caribou-biometric-changed', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('caribou-biometric-changed', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [b])
+
+  const readConfig = (gate: number, evict: number) => {
+    try {
+      const cfg = JSON.parse(b.getLockConfig())
+      setGateMin(typeof cfg.gateMin === 'number' ? cfg.gateMin : gate)
+      setEvictMin(typeof cfg.evictMin === 'number' ? cfg.evictMin : evict)
+    } catch {
+      setGateMin(gate)
+      setEvictMin(evict)
+    }
+  }
+
+  useEffect(() => { readConfig(10, 60) }, [b])
+
+  const save = (gate: number, evict: number) => {
+    b.setLockConfig(gate, evict)
+    readConfig(gate, evict)
+  }
+
+  const gateChoices = GATE_OPTIONS.filter(m => evictMin === 0 || m < evictMin)
+  // Always include the persisted gate so the select can show it even if the
+  // native clamp landed on a value not in GATE_OPTIONS.
+  const gateOptions = gateChoices.includes(gateMin) ? gateChoices : [...gateChoices, gateMin].sort((x, y) => x - y)
+  const onEvictChange = (evict: number) => {
+    let gate = gateMin
+    if (evict !== 0 && gate >= evict) {
+      const below = GATE_OPTIONS.filter(m => m < evict)
+      gate = below.length ? Math.max(...below) : 0
+    }
+    save(gate, evict)
+  }
+
+  // Enrollment is an async native prompt the user can cancel, so the toggle
+  // is not flipped optimistically; it follows the stored state via the
+  // caribou-biometric-changed event.
+  const toggleBio = (on: boolean) => { if (on) b.enrollBiometrics(); else b.disableBiometrics() }
+
+  return (
+    <>
+      {canGate && (
+        <SettingRow title={t('Lock after')} desc={t('Ask for biometrics or the device passcode on return.')}>
+          <SelectValue value={gateMin} label={t('Lock after')} onChange={g => save(g, evictMin)} options={gateOptions.map(m => ({ value: m, label: gateLabel(m) }))} />
+        </SettingRow>
+      )}
+      {(available || enrolled) && (
+        <SettingRow title={t('Unlock with biometrics')} desc={t('Release keys with your fingerprint or face instead of typing your password.')}>
+          <Toggle on={enrolled} onChange={toggleBio} label={t('Unlock with biometrics')} />
+        </SettingRow>
+      )}
+      <SettingRow title={t('Evict keys after')} desc={t('Clears keys from memory. Unlocking then needs biometrics or your password.')}>
+        <SelectValue value={evictMin} label={t('Evict keys after')} onChange={onEvictChange} options={EVICT_OPTIONS.map(m => ({ value: m, label: evictLabel(m) }))} />
+      </SettingRow>
+    </>
+  )
+}
+
+// SendPasswordRow mirrors the desktop app-level send preference. The value is
+// written back to app.appSettings so the send and swap flows pick it up
+// without a refetch.
+function SendPasswordRow () {
+  const [on, setOn] = useState(app.appSettings.sendRequiresPassword)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
 
-  const toggle = async (e: ChangeEvent<HTMLInputElement>) => {
+  const toggle = async (checked: boolean) => {
     if (saving) return
-    const checked = e.target.checked
-    const prev = requirePW
+    const prev = on
     setSaving(true)
     setErr('')
-    setRequirePW(checked) // optimistic
+    setOn(checked) // optimistic
     const r = await postJSON('/api/setsendrequirespassword', { require: checked })
     setSaving(false)
     if (!r.ok) {
-      setRequirePW(prev)
+      setOn(prev)
       setErr(r.errMsg || r.msg || t('Failed to save setting.'))
       return
     }
@@ -55,28 +252,79 @@ function SendSettings () {
   }
 
   return (
-    <div className='mb-card'>
-      <h2>{t('Send Settings')}</h2>
-      <label className='mb-check-row'>
-        <input type='checkbox' checked={requirePW} onChange={toggle} disabled={saving} />
-        <span>{t('Require password to send')}</span>
-      </label>
-      {err && <div className='mb-err'>{err}</div>}
-    </div>
+    <SettingRow
+      title={t('Require password to send')}
+      desc={err ? <span className='err'>{err}</span> : t('Every send and swap will require your password.')}
+    >
+      <Toggle on={on} onChange={toggle} disabled={saving} label={t('Require password to send')} />
+    </SettingRow>
   )
 }
 
-// SeedExport reveals the wallet mnemonic after an app-password check. The seed
-// is kept only in local state and cleared on hide.
-function SeedExport () {
+// ChangePasswordSheet changes the app password through /api/changeapppass. A
+// successful change deauthorizes every other session; this session receives
+// fresh credentials in the response cookies, so no re-login is needed.
+function ChangePasswordSheet ({ onClose, onChanged }: { onClose: () => void, onChanged: () => void }) {
+  const [cur, setCur] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [err, setErr] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const mismatch = confirm !== '' && next !== confirm
+  const canSubmit = !submitting && cur !== '' && next !== '' && next === confirm
+
+  const submit = async (e?: FormEvent) => {
+    e?.preventDefault()
+    if (!canSubmit) return
+    setErr('')
+    setSubmitting(true)
+    const r = await postJSON('/api/changeapppass', { appPW: cur, newAppPW: next })
+    setSubmitting(false)
+    if (!r.ok) {
+      setErr(r.errMsg || r.msg || t('Failed to change password.'))
+      return
+    }
+    onChanged()
+  }
+
+  return (
+    <Sheet
+      title={t('Change password')}
+      onClose={() => { if (!submitting) onClose() }}
+      foot={
+        <button type='button' className='btn' disabled={!canSubmit} onClick={() => submit()}>
+          {submitting ? <><Spinner />{t('Submitting...')}</> : t('Change password')}
+        </button>
+      }
+    >
+      <form onSubmit={submit}>
+        <label className='flbl'>{t('Current password')}</label>
+        <PasswordField value={cur} onChange={setCur} label={t('Current password')} disabled={submitting} autoFocus />
+        <label className='flbl mt16'>{t('New password')}</label>
+        <PasswordField value={next} onChange={setNext} label={t('New password')} autoComplete='new-password' disabled={submitting} />
+        <label className='flbl mt16'>{t('Confirm new password')}</label>
+        <PasswordField value={confirm} onChange={setConfirm} label={t('Confirm new password')} autoComplete='new-password' disabled={submitting} bad={mismatch} />
+        {mismatch && <div className='field-err'>{t('Passwords do not match.')}</div>}
+        {err && <div className='err-box mt12' aria-live='polite'>{err}</div>}
+      </form>
+    </Sheet>
+  )
+}
+
+// SeedSheet reveals the wallet mnemonic after an app-password check. The
+// seed lives only in this component's state and is dropped when the sheet
+// closes. There is deliberately no copy control: the clipboard is readable by
+// other apps.
+function SeedSheet ({ onClose }: { onClose: () => void }) {
   const [pw, setPW] = useState('')
   const [seed, setSeed] = useState('')
   const [err, setErr] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [hidden, setHidden] = useState(false)
 
-  const reveal = async (e: FormEvent) => {
-    e.preventDefault()
+  const reveal = async (e?: FormEvent) => {
+    e?.preventDefault()
     if (submitting || pw === '') return
     setErr('')
     setSubmitting(true)
@@ -90,227 +338,148 @@ function SeedExport () {
     }
   }
 
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(seed)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch { /* clipboard unavailable */ }
-  }
+  const words = seed ? seed.trim().split(/\s+/) : []
 
-  if (seed) {
-    return (
-      <div className='mb-card'>
-        <h2>{t('Backup Wallet Seed')}</h2>
-        <p className='mb-err'>{t('export_seed_warning')}</p>
-        <div className='mb-seed'>{seed}</div>
-        <button className='mb-btn' type='button' onClick={copy}>{copied ? t('Copied!') : t('Copy Seed')}</button>
-        <button className='mb-btn mb-btn-secondary' type='button' onClick={() => setSeed('')}>{t('Hide Seed')}</button>
+  return (
+    <Sheet
+      title={t('Wallet seed')}
+      onClose={onClose}
+      foot={seed
+        ? <button type='button' className='btn secondary' onClick={onClose}>{t('Done')}</button>
+        : (
+          <button type='button' className='btn' disabled={pw === '' || submitting} onClick={() => reveal()}>
+            {submitting ? <><Spinner />{t('Revealing...')}</> : t('Reveal seed')}
+          </button>
+          )}
+    >
+      <div className='callout caution strong'>
+        <Icon name='key' />
+        <span>{t('Anyone with these words controls this wallet\'s funds, on any device. Never photograph them or type them into another app.')}</span>
       </div>
-    )
-  }
-
-  return (
-    <form className='mb-card' onSubmit={reveal}>
-      <h2>{t('Backup Wallet Seed')}</h2>
-      <p className='mb-muted'>{t('export_seed_warning')}</p>
-      <input
-        className='mb-input'
-        type='password'
-        autoComplete='current-password'
-        placeholder={t('password')}
-        value={pw}
-        onChange={(e) => { setPW(e.target.value); if (err) setErr('') }}
-        disabled={submitting}
-      />
-      <div className='mb-err' aria-live='polite'>{err}</div>
-      <button className='mb-btn' type='submit' disabled={pw === '' || submitting}>
-        {submitting ? t('Revealing...') : t('Reveal Seed')}
-      </button>
-    </form>
+      {seed
+        ? (
+          <>
+            <SeedWords words={words} hidden={hidden} />
+            <div className='center mt8'>
+              <button type='button' className='btn quiet inline' onClick={() => setHidden(!hidden)}>
+                <Icon name={hidden ? 'eyeopen' : 'eyeclosed'} />
+                {hidden ? t('Show words') : t('Hide words')}
+              </button>
+            </div>
+          </>
+          )
+        : (
+          <form onSubmit={reveal} className='mt20'>
+            <label className='flbl'>{t('App password')}</label>
+            <PasswordField value={pw} onChange={v => { setPW(v); if (err) setErr('') }} label={t('App password')} disabled={submitting} autoFocus />
+            {err && <div className='err-box mt12' aria-live='polite'>{err}</div>}
+          </form>
+          )}
+    </Sheet>
   )
 }
 
-// BiometricSettings offers the native biometric-unlock opt-in. It renders only
-// on the mobile shell (window.caribou present) and only when the device has usable
-// biometric hardware. Toggling calls into the native bridge; the actual enroll
-// or disable completes natively (a biometric prompt), and the shell fires a
-// 'caribou-biometric-changed' event when done, which we use to re-read the state.
-function BiometricSettings () {
-  const bridge = typeof window !== 'undefined' ? window.caribou : undefined
-  const [available, setAvailable] = useState(() => {
-    try { return !!bridge && bridge.biometricAvailable() } catch { return false }
-  })
-  const [canGate, setCanGate] = useState(() => {
-    try { return !!bridge && bridge.canGate() } catch { return false }
-  })
-  const [enrolled, setEnrolled] = useState(() => {
-    try { return !!bridge && bridge.biometricEnrolled() } catch { return false }
-  })
+interface LegalDoc {
+  version: string
+  terms: string
+  privacy: string
+}
 
+// LegalSheet shows the Terms of Use or the Privacy Policy.
+function LegalSheet ({ which, onClose }: { which: 'terms' | 'privacy', onClose: () => void }) {
+  const [doc, setDoc] = useState<LegalDoc | null>(null)
+  const [err, setErr] = useState('')
   useEffect(() => {
-    if (!bridge) return
-    const refresh = () => {
-      // Only touch the native bridge when the document is actually visible. The
-      // visibilitychange handler fires on hide too, and re-reading state then
-      // would burn synchronous JNI round-trips on a lifecycle hot path for a
-      // view no one is looking at.
-      if (document.visibilityState !== 'visible') return
-      try {
-        setAvailable(bridge.biometricAvailable())
-        setCanGate(bridge.canGate())
-        setEnrolled(bridge.biometricEnrolled())
-      } catch { /* bridge gone */ }
-    }
-    window.addEventListener('caribou-biometric-changed', refresh)
-    // The user may enroll a fingerprint in system settings while this pane stays
-    // mounted; re-check availability when the app regains focus so the toggle
-    // appears without a full reload.
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.removeEventListener('caribou-biometric-changed', refresh)
-      document.removeEventListener('visibilitychange', refresh)
-    }
-  }, [bridge])
-
-  if (!bridge) return null
-
-  // Don't flip optimistically: enrollment is an async native prompt the user can
-  // cancel. The checkbox reflects the real stored state, updated via the event.
-  const toggle = (e: ChangeEvent<HTMLInputElement>) => {
-    if (e.target.checked) bridge.enrollBiometrics()
-    else bridge.disableBiometrics()
-  }
-
-  // The biometric toggle governs only how keys are re-acquired once they are gone
-  // (after eviction, or on a cold-start boot): released from the Keychain via
-  // Face/Touch ID vs. retyping the password. It does not touch the gate ("Lock
-  // after"), which is a presence check over a still-resident session. So it is
-  // handed to LockTiming to render between the two tiers — just above "Evict keys
-  // after", where it applies — rather than as a master switch atop the card.
-  //
-  // Show it when the device can enroll (available) OR when an enrollment already
-  // exists (enrolled). The second case matters when biometrics/credentials were
-  // removed after enrolling: available flips false, but the stored secret is still
-  // live and the shell keeps prompting for it on every resume, so the user needs a
-  // control to turn it off. Without the `|| enrolled`, hiding the toggle strands
-  // that stale enrollment with no in-app recovery.
-  const biometricToggle = (available || enrolled) && (
-    <label className='mb-check-row'>
-      <input type='checkbox' checked={enrolled} onChange={toggle} />
-      <span>{t('Unlock with biometrics')}</span>
-    </label>
-  )
-
+    getJSON('/api/terms').then(r => {
+      if (r.ok) setDoc(r as LegalDoc)
+      else setErr(r.msg || t('Failed to load.'))
+    })
+  }, [])
   return (
-    <div className='mb-card'>
-      <h2>{t('Security')}</h2>
-      <LockTiming bridge={bridge} canGate={canGate} biometricToggle={biometricToggle} />
-    </div>
-  )
-}
-
-// Minute values offered for each threshold. 0 is a sentinel: for the gate it
-// means "require unlock immediately", for eviction it means "never".
-const GATE_OPTIONS = [0, 1, 5, 10, 30]
-const EVICT_OPTIONS = [30, 60, 120, 0]
-
-function gateLabel (m: number): string {
-  return m === 0 ? t('Immediately') : tvar('{{ n }} min', { n: String(m) })
-}
-function evictLabel (m: number): string {
-  if (m === 0) return t('Never')
-  if (m % 60 === 0) return m === 60 ? t('1 hour') : tvar('{{ n }} hours', { n: String(m / 60) })
-  return tvar('{{ n }} min', { n: String(m) })
-}
-
-// LockTiming lays out the Security card's lock controls in tier order: the gate
-// threshold ("Lock after"), then the caller-supplied biometric toggle, then the
-// eviction threshold ("Evict keys after"). It reads the two thresholds from the
-// native bridge and writes both back on any change. The gate row only shows when
-// the device can gate (canGate: biometrics OR the device passcode); without any
-// such mechanism the gate has nothing to clear with and only eviction applies.
-// biometricToggle is placed between the tiers because it governs re-acquiring keys
-// after eviction, not the gate; it is already nil when the device can neither
-// enroll nor has an existing enrollment to turn off (the caller gates it on
-// biometricAvailable || biometricEnrolled), so on a passcode-only iOS device with
-// nothing enrolled the gate row shows without an enroll toggle above it.
-function LockTiming ({ bridge, canGate, biometricToggle }: { bridge: CaribouBridge, canGate: boolean, biometricToggle: ReactNode }) {
-  const [gateMin, setGateMin] = useState(10)
-  const [evictMin, setEvictMin] = useState(60)
-
-  useEffect(() => {
-    try {
-      const cfg = JSON.parse(bridge.getLockConfig())
-      if (typeof cfg.gateMin === 'number') setGateMin(cfg.gateMin)
-      if (typeof cfg.evictMin === 'number') setEvictMin(cfg.evictMin)
-    } catch { /* older shell without the config bridge */ }
-  }, [bridge])
-
-  // Native owns persistence and is the single authority on the stored pair: it
-  // clamps the gate to sit strictly below eviction so the band never goes empty.
-  // Write through the bridge, then read back what it actually stored rather than
-  // trusting our optimistic values, so the UI can never drift from the truth even
-  // if the native clamp adjusts the pair.
-  const save = (gate: number, evict: number) => {
-    bridge.setLockConfig(gate, evict)
-    try {
-      const cfg = JSON.parse(bridge.getLockConfig())
-      setGateMin(typeof cfg.gateMin === 'number' ? cfg.gateMin : gate)
-      setEvictMin(typeof cfg.evictMin === 'number' ? cfg.evictMin : evict)
-    } catch {
-      setGateMin(gate)
-      setEvictMin(evict)
-    }
-  }
-
-  // The gate is the cheaper tier and must sit strictly below eviction, or its
-  // band [gate, evict) is empty and it would never fire. Offer only gate values
-  // below the chosen eviction (Never, 0, is always above), and when eviction
-  // drops to at or below the current gate, pull the gate down with it. Native
-  // clamps regardless; this just keeps the offered choices coherent.
-  const gateChoices = GATE_OPTIONS.filter((m) => evictMin === 0 || m < evictMin)
-  // Always include the persisted gate so the controlled select can render it even
-  // if the native clamp landed on a value not in GATE_OPTIONS.
-  const gateOptions = gateChoices.includes(gateMin)
-    ? gateChoices
-    : [...gateChoices, gateMin].sort((a, b) => a - b)
-  const onEvictChange = (evict: number) => {
-    let gate = gateMin
-    if (evict !== 0 && gate >= evict) {
-      const below = GATE_OPTIONS.filter((m) => m < evict)
-      gate = below.length ? Math.max(...below) : 0
-    }
-    save(gate, evict)
-  }
-
-  return (
-    <>
-      {canGate && (
-        <label className='mb-select-row'>
-          <span>{t('Lock after')}</span>
-          <select value={gateMin} onChange={(e) => save(Number(e.target.value), evictMin)}>
-            {gateOptions.map((m) => <option key={m} value={m}>{gateLabel(m)}</option>)}
-          </select>
-        </label>
+    <Sheet title={which === 'terms' ? t('Terms of Use') : t('Privacy Policy')} onClose={onClose} tall>
+      {err && <div className='err-box'>{err}</div>}
+      {!doc && !err && <div className='empty'><Spinner large /></div>}
+      {doc && (
+        <div className='legal flat'>
+          <LegalText markdown={which === 'terms' ? doc.terms : doc.privacy} />
+          <div className='legal-ver'>{tvar('terms_version', { version: doc.version })}</div>
+        </div>
       )}
-      {biometricToggle}
-      <label className='mb-select-row'>
-        <span>{t('Evict keys after')}</span>
-        <select value={evictMin} onChange={(e) => onEvictChange(Number(e.target.value))}>
-          {EVICT_OPTIONS.map((m) => <option key={m} value={m}>{evictLabel(m)}</option>)}
-        </select>
-      </label>
-    </>
+    </Sheet>
   )
 }
 
+type SheetKind = 'password' | 'seed' | 'terms' | 'privacy' | null
+
+// Settings is the settings tab: preferences, security, backup, diagnostics,
+// and about.
 export default function Settings () {
+  const [sheet, setSheet] = useState<SheetKind>(null)
+  const [pwChanged, flashPWChanged] = useFlash(2500)
+  const b = bridge()
+
+  // Inside a shell the log goes to the native share sheet; in a plain
+  // browser it downloads.
+  const shareLog = () => {
+    if (b) b.shareAppLog?.()
+    else window.location.href = '/api/exportapplog'
+  }
+
+  const version = app.appVersion
+
   return (
-    <div className='mb-settings'>
-      <BiometricSettings />
-      <SendSettings />
-      <SeedExport />
+    <div className='scroll'>
+      <div className='page'>
+        <h1 className='page-title'>{t('Settings')}</h1>
+
+        <h2 className='lbl sec'>{t('Preferences')}</h2>
+        <div className='list'>
+          <LanguageRow />
+          <ThemeRow />
+        </div>
+
+        <h2 className='lbl sec'>{t('Security')}</h2>
+        <div className='list'>
+          {b && <BiometricRows b={b} />}
+          <SendPasswordRow />
+          <SettingRow title={t('Change password')} onClick={() => setSheet('password')}><Chevron /></SettingRow>
+        </div>
+
+        <h2 className='lbl sec'>{t('Backup')}</h2>
+        <div className='list'>
+          <SettingRow
+            title={t('Wallet seed')}
+            desc={t('View your recovery seed.')}
+            icon={<Icon name='key' className='gold fs17' />}
+            onClick={() => setSheet('seed')}
+          >
+            <Chevron />
+          </SettingRow>
+        </div>
+
+        {canExportAppLog() && (
+          <>
+            <h2 className='lbl sec'>{t('Diagnostics')}</h2>
+            <div className='list'>
+              <SettingRow title={t('Application log')} onClick={shareLog}>
+                <span className='accent demi fs14'>{b ? t('Share') : t('Download')}</span>
+              </SettingRow>
+            </div>
+          </>
+        )}
+
+        <h2 className='lbl sec'>{t('About')}</h2>
+        <div className='list'>
+          {version && <SettingRow title={t('Version')}><span className='grey'>{version}</span></SettingRow>}
+          <SettingRow title={t('Terms of Use')} onClick={() => setSheet('terms')}><Chevron /></SettingRow>
+          <SettingRow title={t('Privacy Policy')} onClick={() => setSheet('privacy')}><Chevron /></SettingRow>
+        </div>
+      </div>
+
+      {sheet === 'password' && <ChangePasswordSheet onClose={() => setSheet(null)} onChanged={() => { setSheet(null); flashPWChanged() }} />}
+      {sheet === 'seed' && <SeedSheet onClose={() => setSheet(null)} />}
+      {(sheet === 'terms' || sheet === 'privacy') && <LegalSheet which={sheet} onClose={() => setSheet(null)} />}
+      {pwChanged && <Toast>{t('Password changed.')}</Toast>}
     </div>
   )
 }

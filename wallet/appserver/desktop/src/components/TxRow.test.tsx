@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import app from '@caribou/shared/application'
 import { WalletTransaction } from '@caribou/shared/registry'
-import { TxType } from '@caribou/shared/tx'
+import { TxType, TxRowItem } from '@caribou/shared/tx'
 import { makeAsset, makeUser, makeWallet, resetApp } from '@caribou/shared/testUtils'
-import { IntentsSwap } from '../intents'
-import TxRow, { TxRowItem } from './TxRow'
+import { IntentsSwap } from '@caribou/shared/intents'
+import TxRow from './TxRow'
 
 const btcID = 0
 

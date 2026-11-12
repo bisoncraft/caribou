@@ -7,7 +7,7 @@ import { WalletTransaction } from '@caribou/shared/registry'
 import { txTypeLabel, txAmountSign, txShowsAmount, txIsIncoming } from '@caribou/shared/tx'
 import { explorerTxURL } from '@caribou/shared/coinexplorers'
 import CoinLogo from '@caribou/shared/components/CoinLogo'
-import { SwapRelation, fetchSwaps, relateTxToSwaps, swapRelationLabel } from '../intents'
+import { SwapRelation, fetchSwaps, relateTxToSwaps, swapRelationLabel } from '@caribou/shared/intents'
 
 interface TxDetailParams {
   assetID: number
