@@ -331,7 +331,8 @@ fn addresses() {
     assert!(
         w.transparent_receivers(account.uuid.clone())
             .unwrap()
-            .contains(&transparent)
+            .iter()
+            .any(|r| r.address == transparent)
     );
 
     let shielded = w
@@ -356,7 +357,8 @@ fn addresses() {
     assert!(
         w.transparent_receivers(account.uuid.clone())
             .unwrap()
-            .contains(&next_transparent)
+            .iter()
+            .any(|r| r.address == next_transparent)
     );
     // The newest address with both receivers is now the current one.
     assert_eq!(w.current_address(account.uuid).unwrap(), all);
@@ -384,7 +386,8 @@ fn addresses_do_not_need_a_sapling_diversifier() {
     assert!(
         w.transparent_receivers(account.uuid.clone())
             .unwrap()
-            .contains(&transparent)
+            .iter()
+            .any(|r| r.address == transparent)
     );
 
     // An address from the transparent gap, where no index has a Sapling
@@ -816,7 +819,9 @@ fn transparent_outputs() {
     w.update_chain_tip(tip).unwrap();
     scan(w, BIRTHDAY..tip + 1, 0).unwrap();
 
-    let address = w.transparent_receivers(account.uuid.clone()).unwrap()[0].clone();
+    let address = w.transparent_receivers(account.uuid.clone()).unwrap()[0]
+        .address
+        .clone();
     let query_height = w.utxo_query_height(account.uuid.clone()).unwrap();
     assert!(query_height <= tip, "{query_height}");
 
@@ -928,7 +933,9 @@ fn transaction_status() {
 
     // Reporting the height of a known transaction answers the wallet's
     // status request for it.
-    let address = w.transparent_receivers(account.uuid).unwrap()[0].clone();
+    let address = w.transparent_receivers(account.uuid).unwrap()[0]
+        .address
+        .clone();
     let txid = vec![5; 32];
     w.put_utxo(Utxo {
         txid: txid.clone(),
@@ -971,6 +978,166 @@ fn empty_transaction(expiry_height: u32) -> (Vec<u8>, Vec<u8>) {
     let mut bytes = vec![];
     tx.write(&mut bytes).unwrap();
     (bytes, tx.txid().as_ref().to_vec())
+}
+
+/// A serialized transaction that spends the given outputs and pays
+/// `value_zat` to each of the given scripts. The inputs carry no signatures:
+/// the wallet stores transactions without verifying them. It does compute
+/// the fee, and rejects a transaction that pays out more than its inputs
+/// hold, which one without inputs does. An input the wallet does not know
+/// leaves the fee unknown.
+fn transparent_transaction(
+    spends: &[(Vec<u8>, u32)],
+    pays: &[Vec<u8>],
+    value_zat: u64,
+) -> (Vec<u8>, Vec<u8>) {
+    use transparent::bundle::{Authorized as TransparentAuthorized, Bundle, TxIn};
+
+    let bundle = Bundle::<TransparentAuthorized> {
+        vin: spends
+            .iter()
+            .map(|(txid, index)| {
+                let txid: [u8; 32] = txid.as_slice().try_into().unwrap();
+                TxIn::from_parts(
+                    OutPoint::new(txid, *index),
+                    Script(script::Code(vec![])),
+                    u32::MAX,
+                )
+            })
+            .collect(),
+        vout: pays
+            .iter()
+            .map(|s| {
+                TxOut::new(
+                    Zatoshis::from_u64(value_zat).unwrap(),
+                    Script(script::Code(s.clone())),
+                )
+            })
+            .collect(),
+        authorization: TransparentAuthorized,
+    };
+    let tx = TransactionData::<Authorized>::from_parts(
+        TxVersion::V5,
+        BranchId::Nu5,
+        0,
+        BlockHeight::from_u32(0),
+        Some(bundle),
+        None,
+        None,
+        None,
+    )
+    .freeze()
+    .unwrap();
+    let mut bytes = vec![];
+    tx.write(&mut bytes).unwrap();
+    (bytes, tx.txid().as_ref().to_vec())
+}
+
+/// The indexes of the receivers on one chain.
+fn indexes(receivers: &[WatchedAddress], change: bool) -> Vec<u32> {
+    receivers
+        .iter()
+        .filter(|r| r.change == change)
+        .map(|r| r.index)
+        .collect()
+}
+
+/// The indexes of the unused receivers on one chain.
+fn unused(receivers: &[WatchedAddress], change: bool) -> Vec<u32> {
+    receivers
+        .iter()
+        .filter(|r| r.change == change && r.unused)
+        .map(|r| r.index)
+        .collect()
+}
+
+#[test]
+fn transparent_window_follows_stored_history() {
+    let (fx, account) = wallet_with_account();
+    let w = &fx.wallet;
+
+    // A new account watches one gap of unused addresses on each chain,
+    // listed by chain and index.
+    let receivers = w.transparent_receivers(account.uuid.clone()).unwrap();
+    assert_eq!(indexes(&receivers, false), (0..10).collect::<Vec<_>>());
+    assert_eq!(indexes(&receivers, true), (0..5).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, false), (0..10).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, true), (0..5).collect::<Vec<_>>());
+    assert_eq!(
+        receivers.iter().map(|r| r.change).collect::<Vec<_>>(),
+        [vec![false; 10], vec![true; 5]].concat()
+    );
+
+    // The history of the last watched address for receiving: a transaction
+    // that paid it and one that spent the output. Nothing of it is unspent,
+    // and storing it still counts the address as used.
+    let last = receivers[9].address.clone();
+    let elsewhere = (vec![0xaa; 32], 0);
+    let (paying, paying_txid) = transparent_transaction(
+        std::slice::from_ref(&elsewhere),
+        &[script_for(&last)],
+        70_000,
+    );
+    assert_eq!(
+        w.decrypt_and_store_transaction(paying, Some(BIRTHDAY + 5))
+            .unwrap(),
+        paying_txid
+    );
+    let (spending, _) = transparent_transaction(&[(paying_txid, 0)], &[vec![0x51]], 60_000);
+    w.decrypt_and_store_transaction(spending, Some(BIRTHDAY + 6))
+        .unwrap();
+
+    let receivers = w.transparent_receivers(account.uuid.clone()).unwrap();
+    assert_eq!(indexes(&receivers, false), (0..20).collect::<Vec<_>>());
+    assert_eq!(indexes(&receivers, true), (0..5).collect::<Vec<_>>());
+    // The addresses up to the used one are no longer unused.
+    assert_eq!(unused(&receivers, false), (10..20).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, true), (0..5).collect::<Vec<_>>());
+
+    // The same on the change chain.
+    let change = receivers.iter().find(|r| r.change && r.index == 2).unwrap();
+    let (paying, _) = transparent_transaction(&[elsewhere], &[script_for(&change.address)], 5_000);
+    w.decrypt_and_store_transaction(paying, Some(BIRTHDAY + 7))
+        .unwrap();
+    let receivers = w.transparent_receivers(account.uuid).unwrap();
+    assert_eq!(indexes(&receivers, true), (0..8).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, true), (3..8).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, false), (10..20).collect::<Vec<_>>());
+}
+
+/// The default address of an account can lie beyond the first gap of
+/// unused addresses. The account then watches more unused addresses on the
+/// receive chain than the gap limit, and every one of them is reported as
+/// unused.
+#[test]
+fn unused_addresses_beyond_the_gap() {
+    let fx = empty_wallet();
+    let w = &fx.wallet;
+    let account = w
+        .create_account(
+            "no sapling".into(),
+            NO_SAPLING_SEED.to_vec(),
+            tree_state(PRIOR, 0),
+            None,
+            None,
+        )
+        .unwrap();
+
+    let receivers = w.transparent_receivers(account.uuid.clone()).unwrap();
+    assert_eq!(indexes(&receivers, false), (0..11).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, false), (0..11).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, true), (0..5).collect::<Vec<_>>());
+
+    // A use of the first address leaves the ones after it unused, and the
+    // gap now reaches as far as the default address.
+    let elsewhere = (vec![0xaa; 32], 0);
+    let (paying, _) =
+        transparent_transaction(&[elsewhere], &[script_for(&receivers[0].address)], 70_000);
+    w.decrypt_and_store_transaction(paying, Some(BIRTHDAY + 5))
+        .unwrap();
+    let receivers = w.transparent_receivers(account.uuid).unwrap();
+    assert_eq!(indexes(&receivers, false), (0..11).collect::<Vec<_>>());
+    assert_eq!(unused(&receivers, false), (1..11).collect::<Vec<_>>());
 }
 
 #[test]
@@ -1109,7 +1276,9 @@ fn address_checks() {
 
     // For a bounded request, the reported height must be the last block of
     // the range.
-    let address = w.transparent_receivers(account.uuid).unwrap()[0].clone();
+    let address = w.transparent_receivers(account.uuid).unwrap()[0]
+        .address
+        .clone();
     let bounded = TransactionDataRequest::TransactionsInvolvingAddress {
         address,
         block_range_start: BIRTHDAY,
@@ -1150,7 +1319,9 @@ fn address_checks() {
 fn next_check_scheduling() {
     let (fx, account) = wallet_with_account();
     let w = &fx.wallet;
-    let address = w.transparent_receivers(account.uuid).unwrap()[0].clone();
+    let address = w.transparent_receivers(account.uuid).unwrap()[0]
+        .address
+        .clone();
 
     let now = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -5,6 +5,7 @@ package zeclib
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"maps"
@@ -42,6 +43,13 @@ type fakeBackend struct {
 	// recoverUntil records the argument of each createAccount call.
 	recoverUntil []*uint32
 
+	// used holds, by account ID, how many addresses at the start of the
+	// receive chain and of the change chain end with a used one.
+	used map[string][2]uint32
+	// spent holds the outputs that stored transactions spend, as
+	// transaction ID and index.
+	spent map[string]struct{}
+
 	roots     []*subtreeRoots
 	utxos     []utxo
 	requests  []txRequest
@@ -78,6 +86,8 @@ func newFakeBackend() *fakeBackend {
 		scanned:   make(map[uint32][]byte),
 		statuses:  make(map[string]txStatus),
 		scheduled: make(map[string]time.Duration),
+		used:      make(map[string][2]uint32),
+		spent:     make(map[string]struct{}),
 		fail:      make(map[string]error),
 		failOnce:  make(map[string]error),
 		calls:     make(map[string]int),
@@ -221,7 +231,7 @@ func (b *fakeBackend) nextAvailableAddress(accountID string, receivers ReceiverS
 	return fmt.Sprintf("ufake-%s-%d-%d", accountID, receivers, b.calls["nextAvailableAddress"]), nil
 }
 
-func (b *fakeBackend) transparentReceivers(accountID string) ([]string, error) {
+func (b *fakeBackend) transparentReceivers(accountID string) ([]watchedAddress, error) {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	if err := b.enter("transparentReceivers"); err != nil {
@@ -230,7 +240,56 @@ func (b *fakeBackend) transparentReceivers(accountID string) ([]string, error) {
 	if !b.hasAccountLocked(accountID) {
 		return nil, ErrAccountNotFound
 	}
-	return []string{"tfake-" + accountID}, nil
+	return b.watchedLocked(accountID), nil
+}
+
+// The fake backend watches transparent addresses the way the wallet
+// database does: on each chain of an account, every address up to the last
+// used one and a run of unused ones after it.
+var fakeGaps = [2]uint32{10, 5}
+
+// fakeAddress is a transparent address of an account of the fake backend.
+func fakeAddress(accountID string, change bool, index uint32) string {
+	chain := "r"
+	if change {
+		chain = "c"
+	}
+	return fmt.Sprintf("tfake-%s-%s%d", accountID, chain, index)
+}
+
+func (b *fakeBackend) watchedLocked(accountID string) []watchedAddress {
+	var watched []watchedAddress
+	for chain, gap := range fakeGaps {
+		for i := uint32(0); i < b.used[accountID][chain]+gap; i++ {
+			change := chain == 1
+			watched = append(watched, watchedAddress{
+				address: fakeAddress(accountID, change, i),
+				change:  change,
+				index:   i,
+				unused:  i >= b.used[accountID][chain],
+			})
+		}
+	}
+	return watched
+}
+
+// markUsedLocked records that an output with the given script was stored.
+func (b *fakeBackend) markUsedLocked(script []byte) {
+	for i := range b.accts {
+		id := b.accts[i].ID
+		for _, a := range b.watchedLocked(id) {
+			if !bytes.Equal(p2pkhScript(a.address), script) {
+				continue
+			}
+			used := b.used[id]
+			chain := 0
+			if a.change {
+				chain = 1
+			}
+			used[chain] = max(used[chain], a.index+1)
+			b.used[id] = used
+		}
+	}
 }
 
 func (b *fakeBackend) summary(uint32) (*Summary, error) {
@@ -463,6 +522,10 @@ func (b *fakeBackend) putUTXO(u *utxo) error {
 	if err := b.enter("putUTXO"); err != nil {
 		return err
 	}
+	b.markUsedLocked(u.script)
+	if _, gone := b.spent[fmt.Sprintf("%x:%d", u.txid, u.index)]; gone {
+		return nil
+	}
 	for i := range b.utxos {
 		if bytes.Equal(b.utxos[i].txid, u.txid) && b.utxos[i].index == u.index {
 			b.utxos[i] = *u
@@ -499,7 +562,39 @@ func (b *fakeBackend) decryptAndStoreTransaction(tx []byte, minedHeight *uint32)
 		return nil, err
 	}
 	b.stored = append(b.stored, storedTx{data: tx, height: minedHeight})
-	return tx, nil
+	// A transaction made by testTx uses the addresses it pays, holds
+	// outputs for them, and spends the outputs it names.
+	id := sha256.Sum256(tx)
+	if spends, pays, ok := parseTestTx(tx); ok {
+		watched := make(map[string]struct{})
+		for i := range b.accts {
+			for _, a := range b.watchedLocked(b.accts[i].ID) {
+				watched[string(p2pkhScript(a.address))] = struct{}{}
+			}
+		}
+		for index, out := range pays {
+			if _, ok := watched[string(out.script)]; !ok {
+				continue
+			}
+			b.markUsedLocked(out.script)
+			known := slices.ContainsFunc(b.utxos, func(u utxo) bool {
+				return bytes.Equal(u.txid, id[:]) && u.index == uint32(index)
+			})
+			if !known && minedHeight != nil {
+				b.utxos = append(b.utxos, utxo{
+					txid: id[:], index: uint32(index), script: out.script, value: out.value, height: *minedHeight,
+				})
+			}
+		}
+		for _, in := range spends {
+			b.spent[fmt.Sprintf("%x:%d", in.txid, in.index)] = struct{}{}
+		}
+		b.utxos = slices.DeleteFunc(b.utxos, func(u utxo) bool {
+			_, gone := b.spent[fmt.Sprintf("%x:%d", u.txid, u.index)]
+			return gone
+		})
+	}
+	return id[:], nil
 }
 
 func (b *fakeBackend) notifyAddressChecked(req *txRequest, asOfHeight uint32) error {

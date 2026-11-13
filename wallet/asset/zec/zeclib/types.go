@@ -334,6 +334,20 @@ func (r scanRange) String() string {
 	return fmt.Sprintf("[%d, %d) %s", r.start, r.end, r.priority)
 }
 
+// watchedAddress is a transparent address that the wallet watches.
+type watchedAddress struct {
+	address string
+	// change is set for an address on the change chain of its account.
+	// The other chain holds the addresses handed out for receiving.
+	change bool
+	// index is the index of the address on its chain.
+	index uint32
+	// unused is set for an address at or above the index where the unused
+	// addresses of its chain begin: the first index from which a whole gap
+	// limit of addresses has no known use.
+	unused bool
+}
+
 // scanSummary is the range of heights that scanning a batch of blocks
 // covered.
 type scanSummary struct {

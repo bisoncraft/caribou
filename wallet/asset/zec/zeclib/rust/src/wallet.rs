@@ -11,6 +11,7 @@ use secrecy::SecretVec;
 use transparent::{
     address::Script,
     bundle::{OutPoint, TxOut},
+    keys::TransparentKeyScope,
 };
 use uuid::Uuid;
 use zcash_address::unified::Typecode;
@@ -19,6 +20,7 @@ use zcash_client_backend::{
         self, Account as _, AccountBirthday, SeedRelevance, WalletCommitmentTrees, WalletRead,
         WalletWrite,
         chain::{CommitmentTreeRoot, scan_cached_blocks},
+        ll::LowLevelWalletRead,
         wallet::{ConfirmationsPolicy, decrypt_and_store_transaction},
     },
     proto::service::TreeState,
@@ -28,7 +30,10 @@ use zcash_client_sqlite::{AccountUuid, WalletDb, util::SystemClock, wallet::init
 use zcash_keys::{
     address::Address,
     encoding::AddressCodec,
-    keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey},
+    keys::{
+        ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey,
+        transparent::gap_limits::{AddressStore, GapLimits},
+    },
 };
 use zcash_primitives::{
     merkle_tree::HashSer,
@@ -47,7 +52,7 @@ use crate::{
     network::{Network, Params},
     types::{
         Account, AccountBalance, ReceiverSet, ScanRange, ScanSummary, SubtreeRoot,
-        TransactionDataRequest, TransactionStatus, Utxo, WalletSummary,
+        TransactionDataRequest, TransactionStatus, Utxo, WalletSummary, WatchedAddress,
     },
 };
 
@@ -390,22 +395,66 @@ impl Wallet {
     }
 
     /// Lists the transparent addresses of the account that can receive
-    /// funds, including its change addresses. These are the addresses to ask
-    /// a server about when looking for transparent outputs.
-    pub fn transparent_receivers(&self, account_uuid: String) -> Result<Vec<String>, WalletError> {
+    /// funds, including its change addresses, ordered by chain and index.
+    /// These are the addresses the wallet watches: on each chain, every
+    /// address up to the last used one, and the unused ones after it.
+    pub fn transparent_receivers(
+        &self,
+        account_uuid: String,
+    ) -> Result<Vec<WatchedAddress>, WalletError> {
         guard(|| {
             let uuid = parse_account(&account_uuid)?;
-            let db = self.db();
+            let mut db = self.db();
             if db.get_account(uuid)?.is_none() {
                 return Err(WalletError::AccountNotFound);
             }
-            let mut addresses: Vec<String> = db
+            // The index on each chain at which the unused addresses begin:
+            // where the database would start generating addresses ahead.
+            let limits = GapLimits::default();
+            let (receive_from, change_from) = db.transactionally(
+                |tx| -> Result<_, zcash_client_sqlite::error::SqliteClientError> {
+                    let account = tx.get_account_ref(uuid)?;
+                    Ok((
+                        tx.find_gap_start(
+                            account,
+                            TransparentKeyScope::EXTERNAL,
+                            limits.external(),
+                        )?,
+                        tx.find_gap_start(
+                            account,
+                            TransparentKeyScope::INTERNAL,
+                            limits.internal(),
+                        )?,
+                    ))
+                },
+            )?;
+            let mut receivers: Vec<WatchedAddress> = db
                 .get_transparent_receivers(uuid, true, true)?
-                .into_keys()
-                .map(|addr| addr.encode(&self.params))
+                .into_iter()
+                .filter_map(|(addr, meta)| {
+                    // Every address of this wallet is derived from an
+                    // account key, so both are present.
+                    let scope = meta.scope()?;
+                    let index = meta.address_index()?.index();
+                    let (change, unused_from) = if scope == TransparentKeyScope::EXTERNAL {
+                        (false, receive_from)
+                    } else if scope == TransparentKeyScope::INTERNAL {
+                        (true, change_from)
+                    } else {
+                        return None;
+                    };
+                    Some(WatchedAddress {
+                        address: addr.encode(&self.params),
+                        change,
+                        index,
+                        // Without a start, the chain has run out of
+                        // indexes and has no unused addresses.
+                        unused: unused_from.is_some_and(|from| index >= from.index()),
+                    })
+                })
                 .collect();
-            addresses.sort();
-            Ok(addresses)
+            receivers.sort_by_key(|r| (r.change, r.index));
+            Ok(receivers)
         })
     }
 

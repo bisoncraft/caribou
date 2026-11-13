@@ -213,8 +213,18 @@ func TestFFIAccountsAndAddresses(t *testing.T) {
 		t.Errorf("transparentReceiver: %q, %v", transparent, err)
 	}
 	receivers, err := be.transparentReceivers(account.ID)
-	if err != nil || !strings.Contains(strings.Join(receivers, " "), transparent) {
+	if err != nil || !slices.ContainsFunc(receivers, func(a watchedAddress) bool { return a.address == transparent }) {
 		t.Errorf("transparentReceivers: %v, %v", receivers, err)
+	}
+	// One run of unused addresses on each chain, by chain and index.
+	if len(receivers) != 15 {
+		t.Fatalf("%d transparent receivers, want 15", len(receivers))
+	}
+	for i, a := range receivers {
+		want := watchedAddress{address: a.address, change: i >= 10, index: uint32(i % 10), unused: true}
+		if a != want {
+			t.Errorf("receiver %d: %+v", i, a)
+		}
 	}
 
 	shielded, err := be.nextAvailableAddress(account.ID, ReceiversShielded)
@@ -439,7 +449,7 @@ func TestFFITransparentAndTransactions(t *testing.T) {
 	}
 
 	txid := bytes.Repeat([]byte{3}, 32)
-	output := &utxo{txid: txid, index: 2, script: p2pkhScript(receivers[0]), value: 70_000, height: 120}
+	output := &utxo{txid: txid, index: 2, script: p2pkhScript(receivers[0].address), value: 70_000, height: 120}
 	if err := be.putUTXO(output); err != nil {
 		t.Fatalf("putUTXO: %v", err)
 	}
@@ -520,7 +530,7 @@ func TestFFITransparentAndTransactions(t *testing.T) {
 
 	// A bounded request has to be closed at its last height.
 	bounded := &txRequest{
-		kind: txRequestAddress, address: receivers[0], start: 100, end: 151, bounded: true,
+		kind: txRequestAddress, address: receivers[0].address, start: 100, end: 151, bounded: true,
 		txStatus: txStatusMined, outputStatus: outputStatusAll,
 	}
 	if err := be.notifyAddressChecked(bounded, 140); !errors.Is(err, ErrDatabase) {
@@ -930,4 +940,61 @@ func TestDueAddressChecksAreMadeOncePerSecond(t *testing.T) {
 	if checks == addresses {
 		t.Error("no check came due")
 	}
+}
+
+// TestWalkCoversUnusedAddressesBeyondTheGap restores a seed whose default
+// address lies beyond the first gap of unused transparent addresses. Such an
+// account watches 11 unused receive addresses from the start, one more than
+// the gap. The first of them holds an output from below the account
+// birthday, which only the history of the address shows.
+func TestWalkCoversUnusedAddressesBeyondTheGap(t *testing.T) {
+	kind := backendKinds[len(backendKinds)-1]
+	scratch := newUsedAddresses(t, kind, 1).scratch
+	e := newEnv(t, kind, 200, func(cfg *Config) { cfg.MinConfirmations = 1 })
+	account, err := e.w.CreateAccount(context.Background(), &AccountParams{
+		Name: "no sapling", Seed: noSaplingSeed, Birthday: 100, Restore: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	e.account = account
+	watched, err := e.be.transparentReceivers(account.ID)
+	if err != nil {
+		t.Fatalf("transparentReceivers: %v", err)
+	}
+	receive := 0
+	for _, a := range watched {
+		if !a.unused {
+			t.Errorf("address %s of a new account is not unused", a.address)
+		}
+		if !a.change {
+			receive++
+		}
+	}
+	if receive != 11 {
+		t.Fatalf("%d receive addresses, want 11", receive)
+	}
+
+	const value = 77_000
+	address := watched[0].address
+	paying := testTx(
+		[]testOutPoint{{txid: bytes.Repeat([]byte{0xac}, 32)}},
+		[]testOutput{{script: p2pkhScript(address), value: value}},
+	)
+	txid, err := scratch.decryptAndStoreTransaction(paying, nil)
+	if err != nil {
+		t.Fatalf("decryptAndStoreTransaction: %v", err)
+	}
+	e.srv.set(func(s *fakeLwd) {
+		s.addrTxs[address] = []*walletrpc.RawTransaction{{Data: paying, Height: 50}}
+		s.utxos[address] = []*walletrpc.GetAddressUtxosReply{{
+			Address: address, Txid: txid, Script: p2pkhScript(address), ValueZat: value, Height: 50,
+		}}
+	})
+
+	e.connect()
+	e.waitSynced(200)
+	eventually(t, "the output at the first address", func() bool {
+		return transparentBalance(t, e) == value
+	})
 }

@@ -40,7 +40,7 @@ func TestBackendErrorsAreRetried(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			e, be := newFakeEnv(t, 150, nil)
 			account := e.createAccount(100)
-			address := "tfake-" + account.ID
+			address := fakeAddress(account.ID, false, 0)
 			e.srv.set(func(s *fakeLwd) {
 				s.utxos[address] = []*walletrpc.GetAddressUtxosReply{{
 					Address: address, Txid: make([]byte, 32), ValueZat: 5, Height: 110,
@@ -736,7 +736,7 @@ func TestTransparentOutputsAreQueriedWhenTheyCanHaveChanged(t *testing.T) {
 	}
 	e.srv.set(func(s *fakeLwd) {
 		last := s.utxoQueries[len(s.utxoQueries)-1]
-		if len(last.Addresses) != 1 || last.Addresses[0] != "tfake-"+second.ID {
+		if len(last.Addresses) != 15 || last.Addresses[0] != fakeAddress(second.ID, false, 0) {
 			t.Errorf("the query after adding an account was about %v", last.Addresses)
 		}
 	})

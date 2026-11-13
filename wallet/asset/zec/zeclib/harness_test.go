@@ -452,7 +452,8 @@ func TestHarnessSyncAndReceive(t *testing.T) {
 		summary := late.waitSynced(harnessHeight(t))
 		got, _ := summary.Balance(again.ID)
 		// The shielded funds were received before the birthday. The
-		// transparent output is found by address, whatever the birthday.
+		// transparent output is found whatever the birthday, through the
+		// history of its address.
 		if got.Ironwood.Total != 0 {
 			t.Errorf("balances with a late birthday: %+v", got)
 		}

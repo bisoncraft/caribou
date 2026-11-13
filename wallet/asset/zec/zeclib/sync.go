@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -181,6 +182,16 @@ type processor struct {
 	// deferred holds the transaction data requests that failed for a
 	// reason of their own, by request key.
 	deferred map[string]deferredRequest
+	// walked holds the transparent addresses whose history has been
+	// fetched since the processor was started or last failed a cycle.
+	walked map[string]struct{}
+	// walkQueue holds the transparent addresses whose history is still to
+	// be fetched. An address stays in it until that has succeeded, also
+	// when it is no longer unused by then.
+	walkQueue map[string]struct{}
+	// walkDeferred holds the addresses whose history request failed for a
+	// reason of its own, by address.
+	walkDeferred map[string]deferredRequest
 }
 
 // deferredRequest is a transaction data request that is not tried again
@@ -220,6 +231,11 @@ func (p *processor) run(ctx context.Context) {
 		case err != nil:
 			failures++
 			p.prepared = false
+			// While the wallet was out of touch, an unused address can
+			// have been paid and emptied again, which no later query for
+			// unspent outputs shows. The unused addresses are asked about
+			// again.
+			p.walked = nil
 			p.utxoQueries = nil
 			wait = backoff(failures, p.opts.minBackoff, p.opts.maxBackoff)
 			p.log.Warnf("Sync failed, retrying in %s: %v", wait.Round(time.Millisecond), err)
@@ -320,8 +336,29 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 	if err := p.be.updateChainTip(tipHeight); err != nil {
 		return false, err
 	}
-	if err := p.refreshUTXOs(ctx, tipHeight, tip.Hash); err != nil {
-		return false, err
+	// walkErr is a failure of the server to give the history of addresses.
+	// It does not keep the wallet from scanning blocks, and is reported once
+	// that is done.
+	var walkErr error
+	// Unspent outputs can move the window of watched addresses as well, so
+	// the walk is repeated until it finds nothing to do.
+	for round := 0; ; round++ {
+		walked, err := p.walkAddresses(ctx, tipHeight)
+		if err != nil {
+			if !isConnectionError(err) || ctx.Err() != nil {
+				return false, err
+			}
+			walkErr = err
+		}
+		if walked == 0 && round > 0 {
+			break
+		}
+		if err := p.refreshUTXOs(ctx, tipHeight, tip.Hash); err != nil {
+			return false, err
+		}
+		if walkErr != nil {
+			break
+		}
 	}
 
 	// The wallet orders the ranges it wants scanned, and scanning changes
@@ -380,7 +417,10 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 		return false, err
 	}
 	p.update(func(s *SyncStatus) { s.ChainTip = tipHeight })
-	return false, p.refreshSummary()
+	if err := p.refreshSummary(); err != nil {
+		return false, err
+	}
+	return false, walkErr
 }
 
 // checkServerChain verifies that a server follows the chain of network and
@@ -519,6 +559,100 @@ func (p *processor) rewind(staleHeight, tipHeight uint32) error {
 	return p.refreshSummary()
 }
 
+// walkAddresses fetches the mined history of transparent addresses and
+// stores it, which is how the wallet learns that an address was used when
+// nothing at the address is unspent any more. It returns the number of
+// addresses it asked the server about.
+//
+// The wallet watches every address up to the last used one on a chain, and
+// the unused ones after it. Storing a transaction that pays an unused one
+// makes it the last used one, and the wallet then watches further. The walk
+// asks about the unused addresses, then about the ones that have come to be
+// watched, until none of them has a history.
+//
+// An address is asked about once between two failed cycles, so a wallet that
+// is up to date asks about the unused addresses of each chain when it is
+// connected, and again after it has lost and regained the server. An address
+// that has been picked is asked about until the server has answered, also
+// when a payment the wallet learned of in the meantime has made it a used
+// one: its history can hold outputs that the query for unspent outputs does
+// not reach.
+//
+// The history is asked for from the first block on, whatever the account's
+// birthday.
+func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked int, err error) {
+	accounts, err := p.be.accounts()
+	if err != nil || len(accounts) == 0 {
+		return 0, err
+	}
+	for {
+		for i := range accounts {
+			watched, err := p.be.transparentReceivers(accounts[i].ID)
+			if err != nil {
+				return walked, err
+			}
+			for _, a := range watched {
+				if _, done := p.walked[a.address]; a.unused && !done {
+					if p.walkQueue == nil {
+						p.walkQueue = make(map[string]struct{})
+					}
+					p.walkQueue[a.address] = struct{}{}
+				}
+			}
+		}
+
+		progressed := false
+		for _, address := range slices.Sorted(maps.Keys(p.walkQueue)) {
+			if d, ok := p.walkDeferred[address]; ok && p.opts.now().Before(d.retryAt) {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return walked, err
+			}
+			err := p.src.addressTransactions(ctx, address, 1, tipHeight, func(tx *walletrpc.RawTransaction) error {
+				_, err := p.be.decryptAndStoreTransaction(tx.Data, minedHeight(tx))
+				if err != nil && !errors.Is(err, ErrDatabase) && !errors.Is(err, ErrClosed) {
+					// One transaction the wallet cannot read must not
+					// hold up the rest of the walk.
+					p.log.Warnf("Storing a transaction of transparent address %s: %v", address, err)
+					return nil
+				}
+				return err
+			})
+			switch {
+			case err == nil:
+			case ctx.Err() != nil || !isServerError(err) || isConnectionError(err):
+				return walked, err
+			default:
+				// The server refused this one request. The address is
+				// tried again later, and the others are not held up.
+				d := p.walkDeferred[address]
+				d.failures++
+				wait := backoff(d.failures, p.opts.minBackoff, p.opts.maxBackoff)
+				d.retryAt = p.opts.now().Add(wait)
+				if p.walkDeferred == nil {
+					p.walkDeferred = make(map[string]deferredRequest)
+				}
+				p.walkDeferred[address] = d
+				p.log.Warnf("The request for the history of transparent address %s failed and is put off for %s: %v",
+					address, wait.Round(time.Millisecond), err)
+				continue
+			}
+			delete(p.walkDeferred, address)
+			delete(p.walkQueue, address)
+			if p.walked == nil {
+				p.walked = make(map[string]struct{})
+			}
+			p.walked[address] = struct{}{}
+			walked++
+			progressed = true
+		}
+		if !progressed {
+			return walked, nil
+		}
+	}
+}
+
 // refreshUTXOs records the unspent transparent outputs that the server
 // reports for the addresses of each account.
 //
@@ -533,12 +667,16 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 	}
 	for i := range accounts {
 		id := accounts[i].ID
-		addresses, err := p.be.transparentReceivers(id)
+		watched, err := p.be.transparentReceivers(id)
 		if err != nil {
 			return err
 		}
-		if len(addresses) == 0 {
+		if len(watched) == 0 {
 			continue
+		}
+		addresses := make([]string, len(watched))
+		for i := range watched {
+			addresses[i] = watched[i].address
 		}
 		start, err := p.be.utxoQueryHeight(id)
 		if err != nil {

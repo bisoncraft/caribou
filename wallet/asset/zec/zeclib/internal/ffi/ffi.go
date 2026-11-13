@@ -575,7 +575,7 @@ func uniffiCheckChecksums() {
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_method_wallet_transparent_receivers()
 		})
-		if checksum != 33191 {
+		if checksum != 22220 {
 			// If this happens try cleaning and rebuilding your project
 			panic("ffi: uniffi_zeclib_checksum_method_wallet_transparent_receivers: UniFFI API checksum mismatch")
 		}
@@ -1028,9 +1028,10 @@ type WalletInterface interface {
 	// [`TransactionDataRequest`].
 	TransactionDataRequests() ([]TransactionDataRequest, error)
 	// Lists the transparent addresses of the account that can receive
-	// funds, including its change addresses. These are the addresses to ask
-	// a server about when looking for transparent outputs.
-	TransparentReceivers(accountUuid string) ([]string, error)
+	// funds, including its change addresses, ordered by chain and index.
+	// These are the addresses the wallet watches: on each chain, every
+	// address up to the last used one, and the unused ones after it.
+	TransparentReceivers(accountUuid string) ([]WatchedAddress, error)
 	// Tells the wallet the height of the chain tip, which updates the ranges
 	// that [`suggest_scan_ranges`](Wallet::suggest_scan_ranges) returns.
 	//
@@ -1539,9 +1540,10 @@ func (_self *Wallet) TransactionDataRequests() ([]TransactionDataRequest, error)
 }
 
 // Lists the transparent addresses of the account that can receive
-// funds, including its change addresses. These are the addresses to ask
-// a server about when looking for transparent outputs.
-func (_self *Wallet) TransparentReceivers(accountUuid string) ([]string, error) {
+// funds, including its change addresses, ordered by chain and index.
+// These are the addresses the wallet watches: on each chain, every
+// address up to the last used one, and the unused ones after it.
+func (_self *Wallet) TransparentReceivers(accountUuid string) ([]WatchedAddress, error) {
 	_pointer := _self.ffiObject.incrementPointer("*Wallet")
 	defer _self.ffiObject.decrementPointer()
 	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
@@ -1551,10 +1553,10 @@ func (_self *Wallet) TransparentReceivers(accountUuid string) ([]string, error) 
 		}
 	})
 	if _uniffiErr != nil {
-		var _uniffiDefaultValue []string
+		var _uniffiDefaultValue []WatchedAddress
 		return _uniffiDefaultValue, _uniffiErr
 	} else {
-		return FfiConverterSequenceStringINSTANCE.Lift(_uniffiRV), nil
+		return FfiConverterSequenceWatchedAddressINSTANCE.Lift(_uniffiRV), nil
 	}
 }
 
@@ -2284,6 +2286,69 @@ func (c FfiConverterWalletSummary) Write(writer io.Writer, value WalletSummary) 
 type FfiDestroyerWalletSummary struct{}
 
 func (_ FfiDestroyerWalletSummary) Destroy(value WalletSummary) {
+	value.Destroy()
+}
+
+// A transparent address that the wallet watches.
+type WatchedAddress struct {
+	// The encoded address.
+	Address string
+	// Whether the address is on the change chain of its account. The other
+	// chain is the one that addresses handed out for receiving are on.
+	Change bool
+	// The index of the address on its chain.
+	Index uint32
+	// Whether the address lies at or above the index where the unused
+	// addresses of its chain begin: the first index from which a whole gap
+	// limit of addresses has no known use. An address counts as used once
+	// the wallet has stored an output that pays it, spent or not. There
+	// are at least as many unused addresses on a chain as its gap limit,
+	// and more when an address beyond them has been handed out.
+	Unused bool
+}
+
+func (r *WatchedAddress) Destroy() {
+	FfiDestroyerString{}.Destroy(r.Address)
+	FfiDestroyerBool{}.Destroy(r.Change)
+	FfiDestroyerUint32{}.Destroy(r.Index)
+	FfiDestroyerBool{}.Destroy(r.Unused)
+}
+
+type FfiConverterWatchedAddress struct{}
+
+var FfiConverterWatchedAddressINSTANCE = FfiConverterWatchedAddress{}
+
+func (c FfiConverterWatchedAddress) Lift(rb RustBufferI) WatchedAddress {
+	return LiftFromRustBuffer[WatchedAddress](c, rb)
+}
+
+func (c FfiConverterWatchedAddress) Read(reader io.Reader) WatchedAddress {
+	return WatchedAddress{
+		FfiConverterStringINSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+		FfiConverterUint32INSTANCE.Read(reader),
+		FfiConverterBoolINSTANCE.Read(reader),
+	}
+}
+
+func (c FfiConverterWatchedAddress) Lower(value WatchedAddress) C.RustBuffer {
+	return LowerIntoRustBuffer[WatchedAddress](c, value)
+}
+
+func (c FfiConverterWatchedAddress) LowerExternal(value WatchedAddress) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[WatchedAddress](c, value))
+}
+
+func (c FfiConverterWatchedAddress) Write(writer io.Writer, value WatchedAddress) {
+	FfiConverterStringINSTANCE.Write(writer, value.Address)
+	FfiConverterBoolINSTANCE.Write(writer, value.Change)
+	FfiConverterUint32INSTANCE.Write(writer, value.Index)
+	FfiConverterBoolINSTANCE.Write(writer, value.Unused)
+}
+
+type FfiDestroyerWatchedAddress struct{}
+
+func (_ FfiDestroyerWatchedAddress) Destroy(value WatchedAddress) {
 	value.Destroy()
 }
 
@@ -3461,53 +3526,6 @@ func (_ FfiDestroyerOptionalWalletSummary) Destroy(value *WalletSummary) {
 	}
 }
 
-type FfiConverterSequenceString struct{}
-
-var FfiConverterSequenceStringINSTANCE = FfiConverterSequenceString{}
-
-func (c FfiConverterSequenceString) Lift(rb RustBufferI) []string {
-	return LiftFromRustBuffer[[]string](c, rb)
-}
-
-func (c FfiConverterSequenceString) Read(reader io.Reader) []string {
-	length := readInt32(reader)
-	if length == 0 {
-		return nil
-	}
-	result := make([]string, 0, length)
-	for i := int32(0); i < length; i++ {
-		result = append(result, FfiConverterStringINSTANCE.Read(reader))
-	}
-	return result
-}
-
-func (c FfiConverterSequenceString) Lower(value []string) C.RustBuffer {
-	return LowerIntoRustBuffer[[]string](c, value)
-}
-
-func (c FfiConverterSequenceString) LowerExternal(value []string) ExternalCRustBuffer {
-	return RustBufferFromC(LowerIntoRustBuffer[[]string](c, value))
-}
-
-func (c FfiConverterSequenceString) Write(writer io.Writer, value []string) {
-	if len(value) > math.MaxInt32 {
-		panic("[]string is too large to fit into Int32")
-	}
-
-	writeInt32(writer, int32(len(value)))
-	for _, item := range value {
-		FfiConverterStringINSTANCE.Write(writer, item)
-	}
-}
-
-type FfiDestroyerSequenceString struct{}
-
-func (FfiDestroyerSequenceString) Destroy(sequence []string) {
-	for _, value := range sequence {
-		FfiDestroyerString{}.Destroy(value)
-	}
-}
-
 type FfiConverterSequenceBytes struct{}
 
 var FfiConverterSequenceBytesINSTANCE = FfiConverterSequenceBytes{}
@@ -3740,6 +3758,53 @@ type FfiDestroyerSequenceSubtreeRoot struct{}
 func (FfiDestroyerSequenceSubtreeRoot) Destroy(sequence []SubtreeRoot) {
 	for _, value := range sequence {
 		FfiDestroyerSubtreeRoot{}.Destroy(value)
+	}
+}
+
+type FfiConverterSequenceWatchedAddress struct{}
+
+var FfiConverterSequenceWatchedAddressINSTANCE = FfiConverterSequenceWatchedAddress{}
+
+func (c FfiConverterSequenceWatchedAddress) Lift(rb RustBufferI) []WatchedAddress {
+	return LiftFromRustBuffer[[]WatchedAddress](c, rb)
+}
+
+func (c FfiConverterSequenceWatchedAddress) Read(reader io.Reader) []WatchedAddress {
+	length := readInt32(reader)
+	if length == 0 {
+		return nil
+	}
+	result := make([]WatchedAddress, 0, length)
+	for i := int32(0); i < length; i++ {
+		result = append(result, FfiConverterWatchedAddressINSTANCE.Read(reader))
+	}
+	return result
+}
+
+func (c FfiConverterSequenceWatchedAddress) Lower(value []WatchedAddress) C.RustBuffer {
+	return LowerIntoRustBuffer[[]WatchedAddress](c, value)
+}
+
+func (c FfiConverterSequenceWatchedAddress) LowerExternal(value []WatchedAddress) ExternalCRustBuffer {
+	return RustBufferFromC(LowerIntoRustBuffer[[]WatchedAddress](c, value))
+}
+
+func (c FfiConverterSequenceWatchedAddress) Write(writer io.Writer, value []WatchedAddress) {
+	if len(value) > math.MaxInt32 {
+		panic("[]WatchedAddress is too large to fit into Int32")
+	}
+
+	writeInt32(writer, int32(len(value)))
+	for _, item := range value {
+		FfiConverterWatchedAddressINSTANCE.Write(writer, item)
+	}
+}
+
+type FfiDestroyerSequenceWatchedAddress struct{}
+
+func (FfiDestroyerSequenceWatchedAddress) Destroy(sequence []WatchedAddress) {
+	for _, value := range sequence {
+		FfiDestroyerWatchedAddress{}.Destroy(value)
 	}
 }
 

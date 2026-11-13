@@ -26,8 +26,11 @@ type backend interface {
 	currentAddress(accountID string) (string, error)
 	nextAvailableAddress(accountID string, receivers ReceiverSet) (string, error)
 	// transparentReceivers lists the transparent addresses of the account
-	// that can receive funds, including change addresses.
-	transparentReceivers(accountID string) ([]string, error)
+	// that can receive funds, including change addresses, ordered by chain
+	// and index. On each chain they are the addresses up to the last used
+	// one and the unused ones after it. An address is used once the wallet
+	// has stored an output that pays it, spent or not.
+	transparentReceivers(accountID string) ([]watchedAddress, error)
 
 	// summary returns nil while the wallet lacks the data to compute one:
 	// before it has an account, a chain tip and a scanned block.

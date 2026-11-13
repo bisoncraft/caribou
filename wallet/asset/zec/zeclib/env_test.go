@@ -6,6 +6,7 @@ package zeclib
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"sync"
@@ -282,14 +283,92 @@ func eventually(t *testing.T, what string, ok func() bool) {
 }
 
 // p2pkhScript returns the script that pays a transparent pay-to-public-key-
-// hash address. Fake addresses, which do not decode, get a placeholder.
+// hash address. An address of the fake backend, which does not decode, gets
+// a script of its own that holds the address.
 func p2pkhScript(address string) []byte {
 	decoded := base58.Decode(address)
 	// Two version bytes, a 20-byte hash and a 4-byte checksum.
 	if len(decoded) != 26 {
-		return []byte{0x51}
+		return append([]byte{0x6a, byte(len(address))}, address...)
 	}
 	script := []byte{0x76, 0xa9, 0x14}
 	script = append(script, decoded[2:22]...)
 	return append(script, 0x88, 0xac)
+}
+
+// testOutPoint identifies an output of a transaction.
+type testOutPoint struct {
+	txid  []byte
+	index uint32
+}
+
+// testOutput is a transparent output.
+type testOutput struct {
+	script []byte
+	value  uint64
+}
+
+// testTxHeader starts a version 5 transaction.
+var testTxHeader = []byte{
+	0x05, 0x00, 0x00, 0x80, // version 5, overwintered
+	0x0a, 0x27, 0xa7, 0x26, // version group ID
+	0xb4, 0xd0, 0xd6, 0xc2, // consensus branch ID (NU5)
+	0x00, 0x00, 0x00, 0x00, // lock time
+	0x00, 0x00, 0x00, 0x00, // expiry height
+}
+
+// testTx serializes a version 5 transaction that has transparent inputs and
+// outputs only. The inputs carry no signatures, because the wallet stores a
+// transaction without verifying it. The wallet does work out the fee, and
+// rejects a transaction that pays out more than its inputs hold, which one
+// without inputs does. An input the wallet does not know leaves the fee
+// unknown.
+func testTx(spends []testOutPoint, pays []testOutput) []byte {
+	tx := append([]byte(nil), testTxHeader...)
+	tx = append(tx, byte(len(spends)))
+	for _, in := range spends {
+		tx = append(tx, in.txid...)
+		tx = binary.LittleEndian.AppendUint32(tx, in.index)
+		tx = append(tx, 0x00)                   // empty signature script
+		tx = append(tx, 0xff, 0xff, 0xff, 0xff) // sequence
+	}
+	tx = append(tx, byte(len(pays)))
+	for _, out := range pays {
+		tx = binary.LittleEndian.AppendUint64(tx, out.value)
+		tx = append(tx, byte(len(out.script)))
+		tx = append(tx, out.script...)
+	}
+	// No Sapling spends, no Sapling outputs and no Orchard actions.
+	return append(tx, 0x00, 0x00, 0x00)
+}
+
+// parseTestTx reads back a transaction that testTx wrote. It reports false
+// for anything else.
+func parseTestTx(tx []byte) (spends []testOutPoint, pays []testOutput, ok bool) {
+	if !bytes.HasPrefix(tx, testTxHeader) {
+		return nil, nil, false
+	}
+	b := tx[len(testTxHeader):]
+	take := func(n int) []byte {
+		if n > len(b) {
+			ok = false
+			return make([]byte, n)
+		}
+		out := b[:n]
+		b = b[n:]
+		return out
+	}
+	ok = true
+	for n := int(take(1)[0]); n > 0 && ok; n-- {
+		in := testOutPoint{txid: take(32), index: binary.LittleEndian.Uint32(take(4))}
+		take(int(take(1)[0])) // signature script
+		take(4)               // sequence
+		spends = append(spends, in)
+	}
+	for n := int(take(1)[0]); n > 0 && ok; n-- {
+		value := binary.LittleEndian.Uint64(take(8))
+		pays = append(pays, testOutput{script: take(int(take(1)[0])), value: value})
+	}
+	take(3)
+	return spends, pays, ok && len(b) == 0
 }

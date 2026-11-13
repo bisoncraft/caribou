@@ -428,9 +428,13 @@ func (w *Wallet) NewAddress(accountID string, receivers ReceiverSet) (string, er
 // TransparentAddresses lists the transparent addresses of the account that
 // can receive funds, including its change addresses, sorted.
 func (w *Wallet) TransparentAddresses(accountID string) ([]string, error) {
-	addrs, err := w.be.transparentReceivers(accountID)
+	watched, err := w.be.transparentReceivers(accountID)
 	if err != nil {
 		return nil, err
+	}
+	addrs := make([]string, len(watched))
+	for i := range watched {
+		addrs[i] = watched[i].address
 	}
 	slices.Sort(addrs)
 	return addrs, nil

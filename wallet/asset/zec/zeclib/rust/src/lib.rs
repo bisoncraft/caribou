@@ -36,7 +36,7 @@ pub use network::{ActivationHeights, Network};
 pub use types::{
     Account, AccountBalance, OutputStatusFilter, PoolBalance, Ratio, ReceiverSet, ScanPriority,
     ScanRange, ScanSummary, SubtreeRoot, TransactionDataRequest, TransactionStatus,
-    TransactionStatusFilter, Utxo, WalletSummary,
+    TransactionStatusFilter, Utxo, WalletSummary, WatchedAddress,
 };
 pub use wallet::Wallet;
 

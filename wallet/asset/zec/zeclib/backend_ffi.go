@@ -124,12 +124,19 @@ func (b *ffiBackend) nextAvailableAddress(accountID string, receivers ReceiverSe
 	return address, err
 }
 
-func (b *ffiBackend) transparentReceivers(accountID string) (addresses []string, err error) {
-	err = b.with(func(w *ffi.Wallet) (err error) {
-		addresses, err = w.TransparentReceivers(accountID)
-		return err
+func (b *ffiBackend) transparentReceivers(accountID string) (watched []watchedAddress, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		addresses, err := w.TransparentReceivers(accountID)
+		if err != nil {
+			return err
+		}
+		watched = make([]watchedAddress, len(addresses))
+		for i, a := range addresses {
+			watched[i] = watchedAddress{address: a.Address, change: a.Change, index: a.Index, unused: a.Unused}
+		}
+		return nil
 	})
-	return addresses, err
+	return watched, err
 }
 
 func (b *ffiBackend) summary(minConfirmations uint32) (*Summary, error) {

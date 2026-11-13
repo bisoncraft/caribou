@@ -99,9 +99,12 @@ documents:
    without them is used anyway, and the wallet scans in order.
 2. Fetch the chain tip. If the wallet's block at the tip height differs from
    the server's, rewind.
-3. Tell the wallet the tip, and record the unspent transparent outputs of its
-   addresses. An account's outputs are queried only when the tip or the
-   account's addresses have changed since the last query.
+3. Tell the wallet the tip. Fetch and store the history of the transparent
+   addresses that have not been asked about on this connection, and record
+   the unspent transparent outputs of the account's addresses, as described
+   under [Transparent funds](#transparent-funds). An account's outputs are
+   queried only when the tip or the account's addresses have changed since
+   the last query.
 4. Ask the wallet which block range it most wants scanned, download the start
    of it, scan it, and ask again until it wants nothing. A batch that does not
    connect to the blocks already scanned is a reorganization: rewind and start
@@ -115,6 +118,65 @@ documents:
 
 A synced wallet repeats the cycle at a randomized interval. A failed cycle is
 retried with exponential backoff, and `Wallet.SyncStatus` carries the error.
+
+### Transparent funds
+
+Transparent addresses are derived in order, on a chain of addresses for
+receiving and a chain of change addresses. The wallet watches every address
+up to the last used one on each chain, and the unused ones after it: 10 for
+receiving and 5 for change, or more for receiving when the account's first
+address lies further out. An address counts as used once the wallet has
+stored an output that pays it, spent or not. A unified address with a
+transparent receiver takes the next unused address, and `NewAddress` returns
+`ErrAddressGapLimit` when they are used up.
+
+The balance comes from the unspent outputs of the watched addresses, which
+the server is asked for. Those do not show that an address was used if
+nothing at it is unspent any more, and a wallet restored from a seed would
+then stop at the first run of emptied addresses and miss the funds behind
+it. So the wallet also asks for the history of its unused addresses, and
+stores it:
+
+- The history is asked for from the first block on, whatever the account's
+  birthday. The query for unspent outputs begins at the birthday until the
+  wallet knows of a use, so an output from below the birthday is found
+  through the history of its address.
+- An address with a history counts as used, the wallet then watches further,
+  and the addresses that come into view are asked about in turn. The walk
+  ends when no unused address has a history.
+- An address is asked about when the wallet is connected, and again after a
+  sync attempt has failed, because an unused address can have been paid and
+  emptied while the wallet was out of touch. A wallet that is up to date
+  makes one history request per unused address each time, 15 for most
+  accounts. A restore makes one more for each used address: a seed of which
+  1,000 receive addresses were used takes 1,015.
+- An address that has been picked is asked about until the server has
+  answered, also when a payment has made it a used one in the meantime.
+- A server that refuses a history request does not stop the sync, and the
+  address is asked about again later. A server that cannot be reached for
+  them does not stop the scan of blocks either, and the failure is reported
+  in `SyncStatus` when the scan is done.
+
+Limits:
+
+- At least 10 unused receive addresses are watched. Wallets that follow
+  BIP 44 commonly allow 20, so a seed from such a wallet can have a gap that
+  this wallet does not cross.
+- Transactions in the mempool are not seen.
+- An unused address that is paid and emptied between two polls of a
+  connected wallet goes unnoticed until the wallet is connected again or a
+  sync attempt fails.
+- A transaction that the history brings in from below the account birthday
+  can hold shielded notes of the account, as one that shielded transparent
+  funds does. The wallet counts such notes as pending. It scans no blocks
+  below the birthday, so they never become spendable, and it does not see
+  them spent.
+- The addresses still to be asked about are not kept across a restart. An
+  address that a payment made a used one before the server had answered for
+  it is then not asked about again, and an output of it from below the
+  height at which the query for unspent outputs begins stays unseen. That
+  height is the account birthday while the wallet knows of no use, and the
+  first use among the most recently used addresses after that.
 
 ### Behavior worth knowing
 
@@ -162,9 +224,10 @@ retried with exponential backoff, and `Wallet.SyncStatus` carries the error.
 - **Reads wait for scans.** The backend holds one database connection, so a
   read waits for the batch being scanned. `Config.BatchSize` bounds the wait.
 - **What the server learns.** A lightwalletd server sees the block ranges
-  downloaded, the transparent addresses queried (all of an account's in one
-  request, repeated only when a block arrives or the account's addresses
-  change), the IDs of transactions fetched in
+  downloaded, the wallet's transparent addresses (all of an account's in one
+  request for their unspent outputs, repeated only when a block arrives or
+  the account's addresses change, and the unused ones at the end of each
+  chain in requests for their history), the IDs of transactions fetched in
   full, and the birthday when `CreateAccount` fetches the birthday tree state.
   `CreateAccountWithTreeState` takes that tree state from the caller instead.
   `Config.Dialer` routes the connection through a proxy.
@@ -242,4 +305,7 @@ in. Both get the same synthetic chain of empty blocks from the fake server in
 note commitment trees are empty at every height.
 
 The harness tests mine blocks, receive funds from the harness's alpha funder,
-restore a wallet from its seed, and reorganize the chain by two blocks.
+restore a wallet from its seed, and reorganize the chain by two blocks. One
+restores the seed of the harness's beta funder, whose first transparent
+address was used and emptied, and pays an address that the wallet watches
+only because it learned of that use.

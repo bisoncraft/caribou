@@ -213,6 +213,25 @@ pub enum ReceiverSet {
     Shielded,
 }
 
+/// A transparent address that the wallet watches.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct WatchedAddress {
+    /// The encoded address.
+    pub address: String,
+    /// Whether the address is on the change chain of its account. The other
+    /// chain is the one that addresses handed out for receiving are on.
+    pub change: bool,
+    /// The index of the address on its chain.
+    pub index: u32,
+    /// Whether the address lies at or above the index where the unused
+    /// addresses of its chain begin: the first index from which a whole gap
+    /// limit of addresses has no known use. An address counts as used once
+    /// the wallet has stored an output that pays it, spent or not. There
+    /// are at least as many unused addresses on a chain as its gap limit,
+    /// and more when an address beyond them has been handed out.
+    pub unused: bool,
+}
+
 /// Which transactions a request for an address's transactions covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
 pub enum TransactionStatusFilter {
