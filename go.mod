@@ -20,7 +20,6 @@ require (
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	github.com/btcsuite/btclog v1.0.0
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
-	github.com/dchest/blake2b v1.0.0
 	github.com/decred/base58 v1.0.6
 	github.com/decred/dcrd/addrmgr/v3 v3.0.0
 	github.com/decred/dcrd/blockchain/stake/v5 v5.0.2
