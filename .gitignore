@@ -95,3 +95,9 @@ wallet/asset/ltc/regtest/
 # Release packaging: credentials and build output (release/README.md).
 release/.env/
 release/out/
+
+# zeclib Rust backend: build output, the staged static libraries, and the
+# stamp files that build.sh writes beside the generated bindings.
+wallet/asset/zec/zeclib/rust/target/
+wallet/asset/zec/zeclib/lib/
+wallet/asset/zec/zeclib/internal/ffi/libstamp_*.go

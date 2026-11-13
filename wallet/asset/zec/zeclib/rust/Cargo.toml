@@ -1,0 +1,48 @@
+[package]
+name = "zeclib"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Go FFI backend for a Zcash light wallet, built on librustzcash"
+license = "BlueOak-1.0.0"
+publish = false
+
+[lib]
+name = "zeclib"
+# staticlib is what the Go package links. cdylib exists only so that
+# uniffi-bindgen-go can read the interface metadata from a shared object.
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+# The uniffi version is coupled to the uniffi-bindgen-go release that generates
+# the Go bindings (v0.7.1+v0.31.0). Bump the two together.
+uniffi = "0.31"
+
+# librustzcash. The crates are released as a matched set, so every one is
+# pinned exactly, as the wallets built on them do. This is the NU7 generation.
+zcash_address = "=0.14.0"
+zcash_client_backend = { version = "=0.25.0", features = ["orchard", "transparent-inputs"] }
+zcash_client_sqlite = { version = "=0.23.0", features = ["orchard", "transparent-inputs"] }
+zcash_keys = { version = "=0.17.0", features = ["orchard", "sapling", "transparent-inputs"] }
+zcash_primitives = "=0.31.0"
+zcash_protocol = { version = "=0.11.0", features = ["local-consensus"] }
+transparent = { package = "zcash_transparent", version = "=0.11.0", features = ["transparent-inputs"] }
+orchard = { version = "0.16", default-features = false }
+zcash_script = "0.6"
+
+hex = "0.4"
+prost = "0.14"
+rand = { version = "0.10", default-features = false, features = ["sys_rng"] }
+rusqlite = "0.37"
+secrecy = "0.8"
+thiserror = "2"
+uuid = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+# uniffi-bindgen-go finds the interface metadata through symbol names in the
+# cdylib, so symbols must survive. Debug info is not needed.
+strip = "debuginfo"
