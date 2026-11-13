@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -145,6 +146,43 @@ func openHarnessWallet(t *testing.T, path string, adjust func(*Config)) *harness
 func newHarnessWallet(t *testing.T, adjust func(*Config)) *harnessWallet {
 	t.Helper()
 	return openHarnessWallet(t, filepath.Join(t.TempDir(), "wallet.sqlite"), adjust)
+}
+
+// harnessBystander returns a unified address that no wallet under test and
+// no funder of the harness follows.
+func harnessBystander(t *testing.T) string {
+	t.Helper()
+	hw := newHarnessWallet(t, nil)
+	account, err := hw.w.CreateAccount(context.Background(), &AccountParams{Name: "bystander", Seed: randomSeed(t)})
+	if err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	address, err := hw.w.Address(account.ID)
+	if err != nil {
+		t.Fatalf("Address: %v", err)
+	}
+	return address
+}
+
+// harnessIronwoodRoot returns the root of the Ironwood note commitment tree
+// after the block at height on the alpha node.
+func harnessIronwoodRoot(t *testing.T, height uint32) string {
+	t.Helper()
+	out := harnessCtl(t, "alpha", "z_gettreestate", strconv.FormatUint(uint64(height), 10))
+	var state struct {
+		Ironwood struct {
+			Commitments struct {
+				FinalRoot string `json:"finalRoot"`
+			} `json:"commitments"`
+		} `json:"ironwood"`
+	}
+	if err := json.Unmarshal([]byte(out), &state); err != nil {
+		t.Fatalf("z_gettreestate %d: %v\n%s", height, err, out)
+	}
+	if state.Ironwood.Commitments.FinalRoot == "" {
+		t.Fatalf("z_gettreestate %d has no Ironwood root:\n%s", height, out)
+	}
+	return state.Ironwood.Commitments.FinalRoot
 }
 
 func randomSeed(t *testing.T) []byte {
@@ -519,7 +557,20 @@ func TestHarnessReorg(t *testing.T) {
 		return b.Ironwood.Spendable == kept
 	})
 
-	// A payment in the block that is about to be replaced.
+	// A payment in a block that is about to be replaced, and that cannot be
+	// mined again afterwards. zebrad retries a transaction that was sent to
+	// it until the transaction is mined or expires, so a payment from a
+	// replaced block is back in the mempool within seconds if the new chain
+	// accepts it. This one is built on a block whose coinbase goes into the
+	// Ironwood pool, and that block is replaced as well. The anchor of the
+	// payment, the Ironwood root after that block, never exists on the new
+	// chain.
+	harnessCtl(t, "mine-to", harnessBystander(t), "1")
+	anchorHeight := harnessHeight(t)
+	anchor := harnessIronwoodRoot(t, anchorHeight)
+	if anchor == harnessIronwoodRoot(t, anchorHeight-1) {
+		t.Fatalf("the coinbase of block %d did not change the Ironwood tree", anchorHeight)
+	}
 	const dropped = 7_000_000
 	harnessSend(t, address, dropped)
 	harnessMine(t, 1)
@@ -529,15 +580,17 @@ func TestHarnessReorg(t *testing.T) {
 		return b.Ironwood.Total == kept+dropped && st.FullyScanned == before
 	})
 
-	// The last two blocks are replaced by three. Transactions in replaced
-	// blocks do not return to the mempool, so the second payment is no
-	// longer on the chain.
+	// The last two blocks, the one with the coinbase and the one with the
+	// payment, are replaced by three.
 	harnessCtl(t, "reorg", "2")
+	if harnessIronwoodRoot(t, anchorHeight) == anchor {
+		t.Fatalf("block %d has the same Ironwood root after the reorg", anchorHeight)
+	}
 	after := harnessHeight(t)
 	if after != before+1 {
 		t.Fatalf("height after the reorg: %d, want %d", after, before+1)
 	}
-	//
+
 	// The wallet does not forget the transaction when it rewinds. It holds
 	// it as unmined, and its value as pending, until the transaction's
 	// expiry height has passed.
@@ -564,14 +617,14 @@ func TestHarnessReorg(t *testing.T) {
 
 	// Past the expiry height of the dropped transaction, 40 blocks after it
 	// was made, its value is gone.
+	//
+	// The total falls as soon as the wallet hears of a tip above the expiry
+	// height. The rest is spendable again once the new blocks are scanned.
 	harnessMine(t, 45)
-	summary = hw.waitFor("the dropped payment to expire", func(s *Summary, st SyncStatus) bool {
+	hw.waitFor("the dropped payment to expire", func(s *Summary, _ SyncStatus) bool {
 		b, _ := s.Balance(account.ID)
-		return st.State == SyncSynced && b.Ironwood.Total == kept+later
+		return b.Ironwood.Total == kept+later && b.Ironwood.Spendable == kept+later
 	})
-	if b, _ := summary.Balance(account.ID); b.Ironwood.Spendable != kept+later || b.Ironwood.ValuePending != 0 {
-		t.Errorf("balance after the expiry: %+v", b)
-	}
 }
 
 // TestHarnessLifecycle stops a wallet in the middle of its first sync and

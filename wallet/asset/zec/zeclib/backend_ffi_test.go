@@ -336,7 +336,7 @@ func TestFFIScanAndRewind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scanBlocks: %v", err)
 	}
-	if scanned.start != 100 || scanned.end != 151 || scanned.received != 0 || scanned.spent != 0 {
+	if scanned.start != 100 || scanned.end != 151 {
 		t.Errorf("scan summary: %+v", scanned)
 	}
 	if highest, ok, err := be.maxScannedHeight(); err != nil || !ok || highest != 150 {

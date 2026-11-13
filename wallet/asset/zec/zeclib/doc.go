@@ -40,13 +40,18 @@ happens when the context passed to Connect is cancelled:
 	if err != nil {
 		return err
 	}
+	// Close stops syncing if it is still running, waits for it, and
+	// releases the database.
 	defer w.Close()
 
+	// Syncing runs in the background until ctx is cancelled or the wallet
+	// is closed. The WaitGroup is done when it has stopped.
 	wg, err := w.Connect(ctx)
 	if err != nil {
 		return err
 	}
-	defer wg.Wait()
+	<-ctx.Done()
+	wg.Wait()
 
 Connect does not need the server to be reachable. The wallet keeps trying to
 reach it, and [Wallet.SyncStatus] reports whether it is connected, how far it

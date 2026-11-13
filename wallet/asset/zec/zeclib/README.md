@@ -25,6 +25,8 @@ w, err := zeclib.Open(&zeclib.Config{
 if err != nil {
     return err
 }
+// Close stops syncing if it is still running, waits for it, and releases
+// the database.
 defer w.Close()
 
 // A new wallet needs an account.
@@ -33,13 +35,22 @@ if err != nil {
     return err
 }
 
+// Syncing runs in the background until ctx is cancelled or the wallet is
+// closed.
 wg, err := w.Connect(ctx)
 if err != nil {
     return err
 }
-defer wg.Wait()
 
 addr, err := w.Address(acct.ID)
+if err != nil {
+    return err
+}
+fmt.Println("receive at", addr)
+
+// The WaitGroup is done when syncing has stopped.
+<-ctx.Done()
+wg.Wait()
 ```
 
 | Call | Purpose |
@@ -138,7 +149,8 @@ retried with exponential backoff, and `Wallet.SyncStatus` carries the error.
   its scan batches with the grid. This package does not need to.
 - **A replaced transaction lingers.** After a reorganization the wallet holds
   a transaction from a replaced block as unmined, and counts its value as
-  pending, until the transaction's expiry height has passed.
+  pending, until the transaction is mined again or its expiry height has
+  passed.
 - **No summary before the first scan.** `Wallet.Summary` returns nil until the
   wallet has an account and has scanned a block.
 - **Address checks see mined transactions only.** For some transparent

@@ -334,15 +334,12 @@ func (r scanRange) String() string {
 	return fmt.Sprintf("[%d, %d) %s", r.start, r.end, r.priority)
 }
 
-// scanSummary is what scanning a batch of blocks found.
+// scanSummary is the range of heights that scanning a batch of blocks
+// covered.
 type scanSummary struct {
 	// start is the first height scanned and end is one past the last.
 	start uint32
 	end   uint32
-	// spent is the number of the wallet's notes that the blocks spend,
-	// and received the number of notes the wallet received in them.
-	spent    uint64
-	received uint64
 }
 
 // subtreeRoot is the root of one completed subtree of a note commitment

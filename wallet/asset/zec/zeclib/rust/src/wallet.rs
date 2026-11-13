@@ -563,14 +563,6 @@ impl Wallet {
             Ok(ScanSummary {
                 start_height: range.start.into(),
                 end_height: range.end.into(),
-                // librustzcash counts Ironwood notes as Orchard notes. The
-                // Sapling counts are zero for a wallet without Sapling
-                // addresses and are added so that nothing found goes
-                // unreported.
-                spent_notes: (summary.spent_orchard_note_count()
-                    + summary.spent_sapling_note_count()) as u64,
-                received_notes: (summary.received_orchard_note_count()
-                    + summary.received_sapling_note_count()) as u64,
             })
         })
     }

@@ -539,6 +539,79 @@ func TestConcurrentCloseAndUse(t *testing.T) {
 	})
 }
 
+// TestSyncedMeansScannedToTheTip checks that the wallet never reports
+// SyncSynced together with a chain tip above the height it has scanned to.
+func TestSyncedMeansScannedToTheTip(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, kind backendKind) {
+		e := newEnv(t, kind, 110, nil)
+		e.createAccount(100)
+		e.connect()
+		e.waitSynced(110)
+
+		for height := uint32(111); height <= 115; height++ {
+			e.srv.mine(1)
+			e.waitSynced(height)
+		}
+		for _, s := range e.statuses.all() {
+			if s.State == SyncSynced && s.ChainTip > s.FullyScanned {
+				t.Fatalf("synced at tip %d with blocks scanned to %d only: %+v", s.ChainTip, s.FullyScanned, s)
+			}
+		}
+	})
+}
+
+// slowCloseBackend is a backend whose close blocks until it is released.
+type slowCloseBackend struct {
+	backend
+	closing chan struct{}
+	release chan struct{}
+}
+
+func (b *slowCloseBackend) close() error {
+	close(b.closing)
+	<-b.release
+	return b.backend.close()
+}
+
+// TestConcurrentClose checks that a Close call made while another one is
+// still closing the wallet waits for it. Close promises that the wallet is
+// closed when it returns, whichever call that is.
+func TestConcurrentClose(t *testing.T) {
+	be := &slowCloseBackend{
+		backend: newFakeBackend(),
+		closing: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	w := newWallet(&Config{Network: testNetwork, Logger: newTestLogger(t)}, be, nil)
+
+	first := make(chan error, 1)
+	go func() { first <- w.Close() }()
+	<-be.closing
+
+	second := make(chan error, 1)
+	go func() { second <- w.Close() }()
+	select {
+	case err := <-second:
+		t.Fatalf("the second Close returned (%v) while the first was still closing the wallet", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(be.release)
+	for name, done := range map[string]chan error{"first": first, "second": second} {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("the %s Close: %v", name, err)
+			}
+		case <-time.After(waitTimeout):
+			t.Fatalf("the %s Close did not return", name)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Errorf("Close of a closed wallet: %v", err)
+	}
+}
+
 func TestServerUnreachableAtConnect(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, kind backendKind) {
 		e := newEnv(t, kind, 150, nil)

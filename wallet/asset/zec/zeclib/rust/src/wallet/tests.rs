@@ -497,8 +497,6 @@ fn sync_cycle() {
         ScanSummary {
             start_height: BIRTHDAY,
             end_height: mid,
-            spent_notes: 0,
-            received_notes: 0,
         }
     );
     assert_eq!(w.fully_scanned_height().unwrap(), Some(mid - 1));

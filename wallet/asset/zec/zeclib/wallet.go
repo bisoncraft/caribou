@@ -121,6 +121,9 @@ type Wallet struct {
 	// mtx guards the lifecycle fields below.
 	mtx    sync.Mutex
 	closed bool
+	// closeDone is closed when the Close call that closes the wallet has
+	// finished. It is nil until then.
+	closeDone chan struct{}
 	// cancel stops the sync goroutine. It is nil while the wallet is not
 	// connected.
 	cancel context.CancelFunc
@@ -177,16 +180,25 @@ func (w *Wallet) Network() Network { return w.cfg.Network }
 // Close stops syncing if the wallet is connected, waits for it to stop, and
 // releases the wallet database. When it returns, the WaitGroup of Connect is
 // done and OnSyncStatus is not called again. Every later call on the wallet
-// returns ErrClosed. Closing a closed wallet does nothing.
+// returns ErrClosed.
+//
+// Close may be called more than once and from several goroutines. Only the
+// first call closes the wallet and returns its error. The others return nil,
+// and not before the first one has finished.
 func (w *Wallet) Close() error {
 	w.mtx.Lock()
 	if w.closed {
+		done := w.closeDone
 		w.mtx.Unlock()
+		<-done
 		return nil
 	}
 	w.closed = true
+	done := make(chan struct{})
+	w.closeDone = done
 	cancel, syncing := w.cancel, w.syncing
 	w.mtx.Unlock()
+	defer close(done)
 
 	if cancel != nil {
 		cancel()

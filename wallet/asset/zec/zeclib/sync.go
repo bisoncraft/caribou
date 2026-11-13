@@ -33,7 +33,9 @@ const (
 	// SyncSyncing means the wallet is downloading and scanning blocks.
 	SyncSyncing
 	// SyncSynced means the wallet has scanned every block up to the
-	// server's chain tip and is waiting for new blocks.
+	// server's chain tip and is waiting for new blocks. ChainTip is then
+	// the tip the wallet is synced to: a new block shows in it once the
+	// wallet has left this state to scan the block.
 	SyncSynced
 	// SyncDisconnected means the last exchange with the server failed. The
 	// wallet retries with increasing delays.
@@ -296,9 +298,15 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 	}
 	tipHeight := uint32(tip.Height)
 	p.update(func(s *SyncStatus) {
-		s.ChainTip = tipHeight
 		if s.State == SyncConnecting || s.State == SyncDisconnected {
 			s.State = SyncSyncing
+		}
+		// A synced wallet keeps reporting the tip it is synced to until it
+		// starts on the blocks above it or finds that there is nothing to
+		// scan. SyncSynced is then never reported together with a tip the
+		// wallet has yet to scan up to.
+		if s.State != SyncSynced {
+			s.ChainTip = tipHeight
 		}
 	})
 
@@ -343,7 +351,10 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 		}
 		last = next
 
-		p.update(func(s *SyncStatus) { s.State = SyncSyncing })
+		p.update(func(s *SyncStatus) {
+			s.State = SyncSyncing
+			s.ChainTip = tipHeight
+		})
 		summary, err := p.scanBatch(ctx, next, tipHeight)
 		var discontinuity *chainContinuityError
 		if errors.As(err, &discontinuity) {
@@ -359,8 +370,7 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 		if err != nil {
 			return false, err
 		}
-		p.log.Debugf("Scanned blocks %d to %d of range %s: %d notes received, %d spent",
-			summary.start, summary.end-1, next, summary.received, summary.spent)
+		p.log.Debugf("Scanned blocks %d to %d of range %s", summary.start, summary.end-1, next)
 		if err := p.refreshSummary(); err != nil {
 			return false, err
 		}
@@ -369,6 +379,7 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 	if err := p.enhance(ctx, tipHeight); err != nil {
 		return false, err
 	}
+	p.update(func(s *SyncStatus) { s.ChainTip = tipHeight })
 	return false, p.refreshSummary()
 }
 

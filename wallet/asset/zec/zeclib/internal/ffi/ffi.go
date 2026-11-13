@@ -2055,23 +2055,21 @@ func (_ FfiDestroyerScanRange) Destroy(value ScanRange) {
 	value.Destroy()
 }
 
-// What a scan of a batch of blocks found.
+// The heights a scan of a batch of blocks covered.
+//
+// The note counts that librustzcash reports for a scan are left out. Version
+// 0.25 counts Sapling and Orchard notes only, so both counts are always zero
+// for a wallet that receives into the Ironwood pool.
 type ScanSummary struct {
 	// The first height scanned.
 	StartHeight uint32
 	// One past the last height scanned.
 	EndHeight uint32
-	// The number of the wallet's notes that the scanned blocks spend.
-	SpentNotes uint64
-	// The number of notes the wallet received in the scanned blocks.
-	ReceivedNotes uint64
 }
 
 func (r *ScanSummary) Destroy() {
 	FfiDestroyerUint32{}.Destroy(r.StartHeight)
 	FfiDestroyerUint32{}.Destroy(r.EndHeight)
-	FfiDestroyerUint64{}.Destroy(r.SpentNotes)
-	FfiDestroyerUint64{}.Destroy(r.ReceivedNotes)
 }
 
 type FfiConverterScanSummary struct{}
@@ -2086,8 +2084,6 @@ func (c FfiConverterScanSummary) Read(reader io.Reader) ScanSummary {
 	return ScanSummary{
 		FfiConverterUint32INSTANCE.Read(reader),
 		FfiConverterUint32INSTANCE.Read(reader),
-		FfiConverterUint64INSTANCE.Read(reader),
-		FfiConverterUint64INSTANCE.Read(reader),
 	}
 }
 
@@ -2102,8 +2098,6 @@ func (c FfiConverterScanSummary) LowerExternal(value ScanSummary) ExternalCRustB
 func (c FfiConverterScanSummary) Write(writer io.Writer, value ScanSummary) {
 	FfiConverterUint32INSTANCE.Write(writer, value.StartHeight)
 	FfiConverterUint32INSTANCE.Write(writer, value.EndHeight)
-	FfiConverterUint64INSTANCE.Write(writer, value.SpentNotes)
-	FfiConverterUint64INSTANCE.Write(writer, value.ReceivedNotes)
 }
 
 type FfiDestroyerScanSummary struct{}

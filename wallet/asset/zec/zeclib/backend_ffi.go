@@ -225,10 +225,8 @@ func (b *ffiBackend) scanBlocks(fromState []byte, blocks [][]byte) (*scanSummary
 			return err
 		}
 		summary = &scanSummary{
-			start:    s.StartHeight,
-			end:      s.EndHeight,
-			spent:    s.SpentNotes,
-			received: s.ReceivedNotes,
+			start: s.StartHeight,
+			end:   s.EndHeight,
 		}
 		return nil
 	})

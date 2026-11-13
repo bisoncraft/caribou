@@ -164,17 +164,17 @@ impl From<&scanning::ScanRange> for ScanRange {
     }
 }
 
-/// What a scan of a batch of blocks found.
+/// The heights a scan of a batch of blocks covered.
+///
+/// The note counts that librustzcash reports for a scan are left out. Version
+/// 0.25 counts Sapling and Orchard notes only, so both counts are always zero
+/// for a wallet that receives into the Ironwood pool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct ScanSummary {
     /// The first height scanned.
     pub start_height: u32,
     /// One past the last height scanned.
     pub end_height: u32,
-    /// The number of the wallet's notes that the scanned blocks spend.
-    pub spent_notes: u64,
-    /// The number of notes the wallet received in the scanned blocks.
-    pub received_notes: u64,
 }
 
 /// The root of one completed subtree of a note commitment tree.
