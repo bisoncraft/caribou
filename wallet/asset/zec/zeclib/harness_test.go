@@ -34,8 +34,8 @@ import (
 )
 
 const (
-	harnessAlphaServer = "127.0.0.1:33770"
-	harnessBetaServer  = "127.0.0.1:33771"
+	harnessAlphaServer = "127.0.0.1:22770"
+	harnessBetaServer  = "127.0.0.1:22771"
 	// harnessTimeout bounds each wait for the wallet to reach a state.
 	harnessTimeout = 2 * time.Minute
 	zatsPerZEC     = 100_000_000
