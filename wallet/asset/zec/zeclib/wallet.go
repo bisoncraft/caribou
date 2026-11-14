@@ -27,16 +27,23 @@ type Config struct {
 	// Network is the chain the wallet follows.
 	Network Network
 
-	// Server is the host:port of a lightwalletd server.
+	// Server is the host:port of a lightwalletd server. It can be left
+	// empty on mainnet and testnet: the wallet then uses the public servers
+	// the package lists for the network, beginning with the first and
+	// moving to the next when the one it uses fails. A Server that is set
+	// is the only one the wallet uses. A regtest network needs one.
 	Server string
-	// Plaintext disables TLS, for a server on the local machine.
+	// Plaintext disables TLS for Server, for a server on the local
+	// machine.
 	Plaintext bool
 	// TLSConfig replaces the default TLS configuration, which verifies the
-	// server against the system roots.
+	// server against the system roots. It is used for every server the
+	// wallet connects to. A ServerName in it fits one server only and has
+	// to be left empty when Server is.
 	TLSConfig *tls.Config
 	// Dialer, if set, opens the connection to the server. It is how the
-	// connection is sent through a proxy. It receives the Server address
-	// with the host name unresolved.
+	// connection is sent through a proxy. It receives the address of the
+	// server with the host name unresolved.
 	Dialer func(ctx context.Context, address string) (net.Conn, error)
 
 	// Logger receives log output. Nothing is logged if it is nil.
@@ -110,10 +117,15 @@ const newAccountDepth = 100
 //
 // A Wallet is safe for concurrent use.
 type Wallet struct {
-	cfg  Config
-	log  util.Logger
-	be   backend
-	dial func() (chainSource, error)
+	cfg Config
+	log util.Logger
+	be  backend
+	// dial connects to a server.
+	dial func(endpoint) (chainSource, error)
+	// servers holds the servers of the configuration, or the error that
+	// kept them from being read from it.
+	servers    *serverList
+	serversErr error
 	// tune, if set, adjusts the sync options. Tests use it to shorten the
 	// delays.
 	tune func(*syncOptions)
@@ -157,8 +169,8 @@ func Open(cfg *Config, seed []byte) (*Wallet, error) {
 }
 
 // newWallet builds a Wallet around a backend. dial, if not nil, replaces the
-// gRPC connection to the configured server.
-func newWallet(cfg *Config, be backend, dial func() (chainSource, error)) *Wallet {
+// gRPC connection to a server.
+func newWallet(cfg *Config, be backend, dial func(endpoint) (chainSource, error)) *Wallet {
 	w := &Wallet{
 		cfg:  *cfg,
 		log:  cfg.Logger,
@@ -169,7 +181,14 @@ func newWallet(cfg *Config, be backend, dial func() (chainSource, error)) *Walle
 		w.log = util.Disabled
 	}
 	if w.dial == nil {
-		w.dial = func() (chainSource, error) { return dialLightwalletd(&w.cfg) }
+		w.dial = func(server endpoint) (chainSource, error) { return dialEndpoint(&w.cfg, server) }
+	}
+	// A wallet can be opened and read without a server. Connect and
+	// CreateAccount report a configuration that names none.
+	if servers, err := w.cfg.endpoints(); err != nil {
+		w.serversErr = err
+	} else {
+		w.servers = newServerList(servers)
 	}
 	return w
 }
@@ -237,7 +256,11 @@ func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		return nil, ErrConnected
 	}
 
-	src, err := w.dial()
+	if w.serversErr != nil {
+		return nil, w.serversErr
+	}
+	server := w.servers.get()
+	src, err := w.dial(server)
 	if err != nil {
 		return nil, err
 	}
@@ -251,11 +274,30 @@ func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		w.tune(&opts)
 	}
 	p := newProcessor(w.log, w.cfg.Network, w.be, src, opts, w.updateStatus)
+	p.server = server
+	if w.servers.len() > 1 {
+		p.servers = w.servers.len()
+		p.nextServer = func(failed endpoint) (chainSource, endpoint, error) {
+			// A server that a connection cannot even be prepared for is
+			// passed over like one that failed.
+			var err error
+			for range w.servers.len() {
+				next := w.servers.rotate(failed)
+				var src chainSource
+				if src, err = w.dial(next); err == nil {
+					return src, next, nil
+				}
+				w.log.Errorf("Connecting to lightwalletd server %s: %v", next.address, err)
+				failed = next
+			}
+			return nil, failed, err
+		}
+	}
 
 	wg.Go(func() {
 		p.run(ctx)
 		cancel()
-		if err := src.close(); err != nil {
+		if err := p.src.close(); err != nil {
 			w.log.Debugf("Closing the lightwalletd connection: %v", err)
 		}
 
@@ -318,7 +360,28 @@ func (w *Wallet) CreateAccount(ctx context.Context, p *AccountParams) (*Account,
 	if p == nil {
 		return nil, wrapf(ErrInvalidArgument, "no account parameters")
 	}
-	src, err := w.dial()
+	if w.serversErr != nil {
+		return nil, w.serversErr
+	}
+	// Every server is tried once, beginning with the one in use.
+	var err error
+	for range w.servers.len() {
+		server := w.servers.get()
+		var account *Account
+		account, err = w.createAccountAt(ctx, server, p)
+		if err == nil || ctx.Err() != nil || !serverUnavailable(err) {
+			return account, err
+		}
+		if next := w.servers.rotate(server); next != server {
+			w.log.Warnf("lightwalletd server %s failed, moving on to %s: %v", server.address, next.address, err)
+		}
+	}
+	return nil, err
+}
+
+// createAccountAt is CreateAccount with the chain data of one server.
+func (w *Wallet) createAccountAt(ctx context.Context, server endpoint, p *AccountParams) (*Account, error) {
+	src, err := w.dial(server)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +390,11 @@ func (w *Wallet) CreateAccount(ctx context.Context, p *AccountParams) (*Account,
 	// The birthday state of an account cannot be replaced later, and the
 	// wallet cannot rewind below it. A state from a server on another
 	// chain would leave the account unusable.
-	if _, err := checkServerChain(ctx, src, w.cfg.Network); err != nil {
+	info, err := checkServerChain(ctx, src, w.cfg.Network)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkConsensusBranch(info, w.be); err != nil {
 		return nil, err
 	}
 

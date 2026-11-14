@@ -106,6 +106,42 @@ fn open_creates_and_reopens() {
 }
 
 #[test]
+fn consensus_branch_id_changes_at_an_upgrade() {
+    const NU6_2: u32 = 0x5437_f330;
+    const NU6_3: u32 = 0x37a5_165b;
+    const NU7: u32 = 0x7719_0ad9;
+
+    // On mainnet NU6.3 activates at 3,428,143 and NU7 at 3,543,405. The
+    // public servers reported 77190ad9 for a tip at 3,570,595.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wallet.sqlite");
+    let main = Wallet::open(path.to_str().unwrap().to_owned(), Network::Mainnet, None).unwrap();
+    assert_eq!(main.consensus_branch_id(3_428_142), NU6_2);
+    assert_eq!(main.consensus_branch_id(3_428_143), NU6_3);
+    assert_eq!(main.consensus_branch_id(3_543_404), NU6_3);
+    assert_eq!(main.consensus_branch_id(3_543_405), NU7);
+    assert_eq!(main.consensus_branch_id(3_570_595), NU7);
+    // Before Overwinter there is no branch, which a node reports as zero.
+    assert_eq!(main.consensus_branch_id(0), 0);
+
+    // A regtest network follows its own schedule.
+    let mut heights = all_at(1);
+    heights.nu6_3 = Some(12);
+    heights.nu7 = None;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wallet.sqlite");
+    let local = Wallet::open(
+        path.to_str().unwrap().to_owned(),
+        Network::Regtest { heights },
+        None,
+    )
+    .unwrap();
+    assert_eq!(local.consensus_branch_id(11), NU6_2);
+    assert_eq!(local.consensus_branch_id(12), NU6_3);
+    assert_eq!(local.consensus_branch_id(u32::MAX), NU6_3);
+}
+
+#[test]
 fn open_rejects_bad_arguments() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir

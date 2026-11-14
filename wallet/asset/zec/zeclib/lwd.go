@@ -90,20 +90,25 @@ type lwdClient struct {
 
 var _ chainSource = (*lwdClient)(nil)
 
-// dialLightwalletd prepares a connection to the server in cfg. It does not
-// contact the server: gRPC connects on the first call and reconnects on its
-// own after a failure.
+// dialLightwalletd prepares a connection to the server named in cfg.
 func dialLightwalletd(cfg *Config) (*lwdClient, error) {
 	if cfg.Server == "" {
 		return nil, wrapf(ErrInvalidArgument, "no lightwalletd server is configured")
 	}
-	if _, _, err := net.SplitHostPort(cfg.Server); err != nil {
-		return nil, wrapf(ErrInvalidArgument, "lightwalletd server %q: %v", cfg.Server, err)
+	return dialEndpoint(cfg, endpoint{address: cfg.Server, plaintext: cfg.Plaintext})
+}
+
+// dialEndpoint prepares a connection to a server, with the TLS configuration
+// and the dialer of cfg. It does not contact the server: gRPC connects on
+// the first call and reconnects on its own after a failure.
+func dialEndpoint(cfg *Config, server endpoint) (*lwdClient, error) {
+	if _, _, err := net.SplitHostPort(server.address); err != nil {
+		return nil, wrapf(ErrInvalidArgument, "lightwalletd server %q: %v", server.address, err)
 	}
 
 	var creds credentials.TransportCredentials
 	switch {
-	case cfg.Plaintext:
+	case server.plaintext:
 		creds = insecure.NewCredentials()
 	case cfg.TLSConfig != nil:
 		creds = credentials.NewTLS(cfg.TLSConfig.Clone())
@@ -122,9 +127,9 @@ func dialLightwalletd(cfg *Config) (*lwdClient, error) {
 	// The passthrough scheme hands the address to the dialer as written.
 	// With the default scheme gRPC would resolve the host name itself,
 	// which would bypass a proxy dialer.
-	conn, err := grpc.NewClient("passthrough:///"+cfg.Server, opts...)
+	conn, err := grpc.NewClient("passthrough:///"+server.address, opts...)
 	if err != nil {
-		return nil, wrapf(ErrInvalidArgument, "lightwalletd server %q: %v", cfg.Server, err)
+		return nil, wrapf(ErrInvalidArgument, "lightwalletd server %q: %v", server.address, err)
 	}
 	return &lwdClient{conn: conn, client: walletrpc.NewCompactTxStreamerClient(conn)}, nil
 }

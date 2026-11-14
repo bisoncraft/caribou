@@ -8,6 +8,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -330,10 +331,10 @@ func TestWalkAsksAgainAfterAnOutage(t *testing.T) {
 
 // TestWalkAsksAboutAnAddressThatIsNoLongerUnused checks that an address
 // whose history request failed is asked about again after a payment has
-// made it a used one. The address holds an output from below the account
-// birthday and one from above it. The query for unspent outputs begins at
-// the birthday and finds the second, which takes the address out of the
-// unused ones. The first is only in its history.
+// made it a used one. The address holds two outputs. The server's list of
+// unspent outputs has the later one only, as the answer to a query that
+// begins above the earlier one does, and that takes the address out of the
+// unused ones. The earlier output is only in its history.
 func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, kind backendKind) {
 		const value = 70_000
@@ -344,7 +345,7 @@ func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 
 		var history []*walletrpc.RawTransaction
 		var unspent []*walletrpc.GetAddressUtxosReply
-		for i, height := range []uint64{50, 120} {
+		for i, height := range []uint64{120, 150} {
 			tx := testTx(
 				[]testOutPoint{{txid: bytes.Repeat([]byte{0xab}, 32), index: uint32(i)}},
 				[]testOutput{{script: p2pkhScript(address), value: value}},
@@ -354,6 +355,9 @@ func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 				t.Fatalf("decryptAndStoreTransaction: %v", err)
 			}
 			history = append(history, &walletrpc.RawTransaction{Data: tx, Height: height})
+			if i == 0 {
+				continue
+			}
 			unspent = append(unspent, &walletrpc.GetAddressUtxosReply{
 				Address: address, Txid: txid, Script: p2pkhScript(address), ValueZat: value, Height: height,
 			})
@@ -366,8 +370,7 @@ func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 
 		e.connect()
 		e.waitSynced(200)
-		// Only the output above the birthday so far, and the address is a
-		// used one.
+		// Only the later output so far, and the address is a used one.
 		if got := transparentBalance(t, e); got != value {
 			t.Fatalf("transparent balance %d while the history requests are refused, want %d", got, value)
 		}
@@ -377,9 +380,81 @@ func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 		}
 
 		e.srv.set(func(s *fakeLwd) { delete(s.fail, "GetTaddressTxids") })
-		eventually(t, "the output from below the birthday", func() bool {
+		eventually(t, "the earlier output", func() bool {
 			return transparentBalance(t, e) == 2*value
 		})
+	})
+}
+
+// TestWalkStartsAtTheBirthday checks that the history of an address is asked
+// for from the birthday of its account on. The first address of the restored
+// account was paid below the birthday. The wallet does not learn of it: the
+// address stays an unused one, and the wallet watches no further.
+func TestWalkStartsAtTheBirthday(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, kind backendKind) {
+		u := newUsedAddresses(t, kind, 1)
+		address := u.addresses[0]
+		e := newEnv(t, kind, 200, func(cfg *Config) { cfg.MinConfirmations = 1 })
+		account := restoreTestAccount(t, e)
+		tx := testTx(
+			[]testOutPoint{{txid: bytes.Repeat([]byte{0xac}, 32)}},
+			[]testOutput{{script: p2pkhScript(address), value: 70_000}},
+		)
+		e.srv.set(func(s *fakeLwd) {
+			s.addrTxs[address] = []*walletrpc.RawTransaction{{Data: tx, Height: uint64(account.Birthday) - 1}}
+		})
+
+		e.connect()
+		e.waitSynced(200)
+		asked := historyQueries(t, e)
+		if len(asked) != 15 || !slices.Contains(asked, address) {
+			t.Fatalf("history requests: %v", asked)
+		}
+		e.srv.set(func(s *fakeLwd) {
+			for _, q := range s.addrQueries {
+				if !slices.Contains(asked, q.Address) {
+					continue
+				}
+				if q.Range.Start.Height != uint64(account.Birthday) || q.Range.End.Height != 200 {
+					t.Errorf("the history of %s was asked for from %d to %d, want %d to 200",
+						q.Address, q.Range.Start.Height, q.Range.End.Height, account.Birthday)
+				}
+			}
+		})
+		watched, err := e.be.transparentReceivers(account.ID)
+		if err != nil || len(watched) != 15 || watched[0].address != address || !watched[0].unused {
+			t.Errorf("%d watched addresses, the first %+v, %v", len(watched), watched[0], err)
+		}
+		if got := transparentBalance(t, e); got != 0 {
+			t.Errorf("transparent balance %d", got)
+		}
+	})
+}
+
+// TestWalkWaitsForTheBirthday checks that the walk asks nothing about the
+// addresses of an account that begins above the server's tip, and asks once
+// the tip has reached the birthday.
+func TestWalkWaitsForTheBirthday(t *testing.T) {
+	e, _ := newFakeEnv(t, 150, nil)
+	account := e.createAccount(140)
+	srv := newFakeLwd(t, 150)
+	now := time.Unix(1_700_000_000, 0)
+	p := newTestProcessor(t, srv, e.be.(*fakeBackend), &now)
+
+	walked, err := p.walkAddresses(context.Background(), account.Birthday-1)
+	if err != nil || walked != 0 || srv.callCount("GetTaddressTxids") != 0 {
+		t.Fatalf("below the birthday: %d addresses walked, %d requests, %v", walked, srv.callCount("GetTaddressTxids"), err)
+	}
+	walked, err = p.walkAddresses(context.Background(), account.Birthday)
+	if err != nil || walked != 15 || srv.callCount("GetTaddressTxids") != 15 {
+		t.Fatalf("at the birthday: %d addresses walked, %d requests, %v", walked, srv.callCount("GetTaddressTxids"), err)
+	}
+	srv.set(func(s *fakeLwd) {
+		for _, q := range s.addrQueries {
+			if q.Range.Start.Height != uint64(account.Birthday) || q.Range.End.Height != uint64(account.Birthday) {
+				t.Errorf("the history of %s was asked for from %d to %d", q.Address, q.Range.Start.Height, q.Range.End.Height)
+			}
+		}
 	})
 }
 

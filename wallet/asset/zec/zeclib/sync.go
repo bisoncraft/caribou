@@ -12,6 +12,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,8 +78,8 @@ type SyncStatus struct {
 	Recovering       bool
 	// Err is the error that ended the last sync attempt. It is nil after
 	// an attempt that succeeded. The wallet retries on its own whatever the
-	// error is. ErrWrongNetwork and ErrReorgTooDeep do not go away without
-	// intervention.
+	// error is. ErrWrongNetwork, ErrReorgTooDeep and an ErrConsensusBranch
+	// that every server gives do not go away without intervention.
 	Err error
 }
 
@@ -110,6 +111,16 @@ const (
 	// defaultAddressCheckInterval is the average time between two checks
 	// of a transparent address that the wallet checks on a schedule.
 	defaultAddressCheckInterval = 10 * time.Minute
+	// defaultStaleLag is the number of blocks by which the node of a server
+	// can estimate the chain to be ahead of its own tip before the server
+	// counts as behind. A node estimates from the time since its tip block,
+	// at one block in 75 seconds, so 24 blocks are half an hour without a
+	// new one. If blocks arrive as a Poisson process, a gap of that length
+	// has a probability of about 4e-11.
+	defaultStaleLag = 24
+	// defaultServerCheckInterval is the time between two checks of the
+	// server that a wallet is connected to.
+	defaultServerCheckInterval = 10 * time.Minute
 
 	// rewindDistance is how far below a block that does not connect the
 	// wallet rewinds. The distance grows by this much with each consecutive
@@ -131,7 +142,11 @@ type syncOptions struct {
 	maxBatchBytes        int
 	minConfirmations     uint32
 	addressCheckInterval time.Duration
-	now                  func() time.Time
+	// staleLag is the number of blocks behind at which a server counts as
+	// stale. Zero turns the check off.
+	staleLag            uint64
+	serverCheckInterval time.Duration
+	now                 func() time.Time
 }
 
 func syncOptionsFor(cfg *Config) syncOptions {
@@ -143,7 +158,13 @@ func syncOptionsFor(cfg *Config) syncOptions {
 		maxBatchBytes:        defaultMaxBatchBytes,
 		minConfirmations:     cfg.MinConfirmations,
 		addressCheckInterval: defaultAddressCheckInterval,
+		serverCheckInterval:  defaultServerCheckInterval,
 		now:                  time.Now,
+	}
+	// A regtest chain grows when someone mines, and its tip can be of any
+	// age.
+	if cfg.Network.Type != NetworkRegtest {
+		opts.staleLag = defaultStaleLag
 	}
 	if opts.pollInterval <= 0 {
 		opts.pollInterval = defaultPollInterval
@@ -182,13 +203,42 @@ type processor struct {
 	// deferred holds the transaction data requests that failed for a
 	// reason of their own, by request key.
 	deferred map[string]deferredRequest
+	// server is the server that src is connected to.
+	server endpoint
+	// servers is the number of servers the wallet can use, and nextServer
+	// connects to the one after a server that failed. Both are unset for a
+	// wallet with a single server.
+	servers    int
+	nextServer func(failed endpoint) (chainSource, endpoint, error)
+	// answered is set once the server in use has given the wallet a batch
+	// of blocks or brought it up to the chain tip, and serverFailures
+	// counts the attempts it has failed since it last did either.
+	answered       bool
+	serverFailures int
+	// rotations counts the servers the wallet has moved on from since a
+	// server last did either.
+	rotations int
+	// progressed is set when the sync attempt under way has given the
+	// wallet a batch of blocks.
+	progressed bool
+	// checkedAt is when the server in use last passed checkServer.
+	checkedAt time.Time
+	// staleTour is set from the time the wallet leaves a server whose node
+	// is behind until a server works for it or it settles on a stale one.
+	// staleFrom is the server the tour began at, and staleRotations the
+	// value of rotations at that time.
+	staleTour      bool
+	staleFrom      endpoint
+	staleRotations int
+
 	// walked holds the transparent addresses whose history has been
 	// fetched since the processor was started or last failed a cycle.
 	walked map[string]struct{}
 	// walkQueue holds the transparent addresses whose history is still to
-	// be fetched. An address stays in it until that has succeeded, also
-	// when it is no longer unused by then.
-	walkQueue map[string]struct{}
+	// be fetched, each with the height its history is asked for from, the
+	// birthday of its account. An address stays in it until that has
+	// succeeded, also when it is no longer unused by then.
+	walkQueue map[string]uint32
 	// walkDeferred holds the addresses whose history request failed for a
 	// reason of its own, by address.
 	walkDeferred map[string]deferredRequest
@@ -221,6 +271,7 @@ func (p *processor) run(ctx context.Context) {
 
 	failures := 0
 	for {
+		p.progressed = false
 		again, err := p.cycle(ctx)
 		if ctx.Err() != nil {
 			return
@@ -229,6 +280,14 @@ func (p *processor) run(ctx context.Context) {
 		var wait time.Duration
 		switch {
 		case err != nil:
+			// An attempt that brought the wallet blocks before it failed
+			// is followed up as soon as a first failure is. A restore over
+			// a poor connection would otherwise wait longer after every
+			// lost connection, up to maxBackoff, between attempts that
+			// each take it further.
+			if p.progressed {
+				failures = 0
+			}
 			failures++
 			p.prepared = false
 			// While the wallet was out of touch, an unused address can
@@ -238,12 +297,24 @@ func (p *processor) run(ctx context.Context) {
 			p.walked = nil
 			p.utxoQueries = nil
 			wait = backoff(failures, p.opts.minBackoff, p.opts.maxBackoff)
-			p.log.Warnf("Sync failed, retrying in %s: %v", wait.Round(time.Millisecond), err)
+			if failed := p.server; p.rotateAfter(err) {
+				// A server that has not been tried since the last success
+				// is tried at once. After a round of all of them the
+				// wallet waits, longer with each round.
+				wait = 0
+				if p.rotations%p.servers == 0 {
+					wait = backoff(p.rotations/p.servers, p.opts.minBackoff, p.opts.maxBackoff)
+				}
+				p.log.Warnf("Sync with %s failed, moving on to %s in %s: %v",
+					failed.address, p.server.address, wait.Round(time.Millisecond), err)
+			} else {
+				p.log.Warnf("Sync failed, retrying in %s: %v", wait.Round(time.Millisecond), err)
+			}
 			p.update(func(s *SyncStatus) {
 				s.Err = err
 				// An error of the wallet database says nothing about
 				// the connection.
-				if isServerError(err) || errors.Is(err, ErrWrongNetwork) {
+				if isServerError(err) || unfit(err) {
 					s.State = SyncDisconnected
 				}
 			})
@@ -292,6 +363,59 @@ func jitter(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (0.75 + 0.5*rand.Float64()))
 }
 
+// unfit reports whether err means that a server is of no use to the wallet
+// whatever it answers next: it is on another network, follows other
+// consensus rules, or its node is behind the chain.
+func unfit(err error) bool {
+	return errors.Is(err, ErrWrongNetwork) || errors.Is(err, ErrConsensusBranch) || errors.Is(err, ErrServerStale)
+}
+
+// serverUnavailable reports whether err means that a server cannot serve the
+// wallet: it cannot be reached, or it is unfit.
+func serverUnavailable(err error) bool {
+	return isConnectionError(err) || unfit(err)
+}
+
+// serverWorked records that the server in use is serving the wallet. It is
+// called for every batch of blocks and not only when the wallet has reached
+// the server's chain tip: a restore is one attempt that can run for hours,
+// and a connection lost in the course of it is no reason to turn to another
+// server.
+func (p *processor) serverWorked() {
+	p.answered, p.serverFailures, p.rotations = true, 0, 0
+	p.staleTour = false
+}
+
+// rotateAfter moves the wallet to the next server if err says that the one
+// in use is unavailable, and reports whether it did.
+//
+// A server that has been working gets a second attempt first. One failed
+// call is not an outage, and every further server the wallet uses learns its
+// transparent addresses. A server that has given the wallet nothing since
+// the wallet turned to it, or that is unfit, is left at once.
+func (p *processor) rotateAfter(err error) bool {
+	if p.nextServer == nil || !serverUnavailable(err) {
+		return false
+	}
+	p.serverFailures++
+	if p.answered && p.serverFailures < 2 && !unfit(err) {
+		return false
+	}
+	src, next, dialErr := p.nextServer(p.server)
+	if dialErr != nil {
+		// No server could be connected to, the one in use included. It
+		// stays in use.
+		return false
+	}
+	if closeErr := p.src.close(); closeErr != nil {
+		p.log.Debugf("Closing the connection to %s: %v", p.server.address, closeErr)
+	}
+	p.src, p.server = src, next
+	p.answered, p.serverFailures = false, 0
+	p.rotations++
+	return true
+}
+
 // cycle brings the wallet up to the server's chain tip once. It returns
 // true if it rewound the wallet and has to be run again at once.
 func (p *processor) cycle(ctx context.Context) (again bool, err error) {
@@ -303,6 +427,9 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 			return false, err
 		}
 		p.prepared = true
+	}
+	if err := p.checkServerWhenDue(ctx); err != nil {
+		return false, err
 	}
 
 	tip, err := p.src.latestBlock(ctx)
@@ -392,6 +519,9 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 			s.State = SyncSyncing
 			s.ChainTip = tipHeight
 		})
+		if err := p.checkServerWhenDue(ctx); err != nil {
+			return false, err
+		}
 		summary, err := p.scanBatch(ctx, next, tipHeight)
 		var discontinuity *chainContinuityError
 		if errors.As(err, &discontinuity) {
@@ -407,12 +537,21 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 		if err != nil {
 			return false, err
 		}
+		p.serverWorked()
+		p.progressed = true
 		p.log.Debugf("Scanned blocks %d to %d of range %s", summary.start, summary.end-1, next)
 		if err := p.refreshSummary(); err != nil {
 			return false, err
 		}
 	}
 
+	// The server has brought the wallet up to its chain tip. The requests
+	// that follow are for single transactions and for the history of
+	// addresses. A failure of those is reported and does not count against
+	// the server, and neither does a failure of the address walk above:
+	// leaving a server that serves blocks would only tell the next one the
+	// wallet's addresses and transactions.
+	p.serverWorked()
 	if err := p.enhance(ctx, tipHeight); err != nil {
 		return false, err
 	}
@@ -437,14 +576,107 @@ func checkServerChain(ctx context.Context, src chainSource, network Network) (*w
 	return info, nil
 }
 
-// checkServer verifies that the server follows the wallet's chain.
+// checkConsensusBranch verifies that a server follows the consensus rules
+// that the wallet has for the height of the server's chain tip. A node
+// reports the consensus branch of its tip. One that has missed a network
+// upgrade reports the branch from before it, and follows a chain that the
+// network left at the upgrade. A wallet that has missed one finds every
+// server on another branch.
+//
+// A server that reports no branch is not checked.
+func checkConsensusBranch(info *walletrpc.LightdInfo, be backend) error {
+	if info.ConsensusBranchId == "" {
+		return nil
+	}
+	if info.BlockHeight > math.MaxUint32 {
+		return &serverError{"GetLightdInfo", fmt.Errorf("height %d is out of range", info.BlockHeight)}
+	}
+	want, err := be.consensusBranchID(uint32(info.BlockHeight))
+	if err != nil {
+		return err
+	}
+	got, err := strconv.ParseUint(info.ConsensusBranchId, 16, 32)
+	if err != nil || uint32(got) != want {
+		return fmt.Errorf("%w: the server reports branch %q for its tip at height %d, for which the wallet has %08x",
+			ErrConsensusBranch, info.ConsensusBranchId, info.BlockHeight, want)
+	}
+	return nil
+}
+
+// serverLag returns the number of blocks by which the node of a server
+// estimates the chain to be ahead of its own tip.
+func serverLag(info *walletrpc.LightdInfo) uint64 {
+	if info.EstimatedHeight <= info.BlockHeight {
+		return 0
+	}
+	return info.EstimatedHeight - info.BlockHeight
+}
+
+// checkStale reports a server whose node is behind the chain as
+// ErrServerStale, so that the wallet turns to the next one. A node that has
+// stopped following the chain still answers, and a wallet that syncs with it
+// reports itself synced at a tip that is hours old.
+//
+// A node estimates the height of the chain from the time since its tip
+// block. It cannot tell a chain that has moved on without it from a chain on
+// which no block was found, and the wallet cannot either. A stale server is
+// therefore passed over only while there is another to try. The wallet
+// makes one tour of its servers. The tour ends at a server that works for
+// it. If it ends where it began, or after as many moves as there are
+// servers, no server is both further along and of use, and the wallet syncs
+// with the stale one it is at. A server whose node is not behind does not
+// end the tour by saying so: it has to serve the wallet. The check is made
+// before any request that names an address or a transaction, so the servers
+// passed over learn nothing of the wallet.
+func (p *processor) checkStale(info *walletrpc.LightdInfo) error {
+	if p.opts.staleLag == 0 || serverLag(info) < p.opts.staleLag {
+		return nil
+	}
+	toured := p.staleTour && (p.server == p.staleFrom || p.rotations-p.staleRotations >= p.servers)
+	if p.nextServer == nil || toured {
+		p.log.Warnf("The node of %s is at height %d and estimates the chain at %d. The wallet has no server that is further along and syncs with this one.",
+			p.server.address, info.BlockHeight, info.EstimatedHeight)
+		p.staleTour = false
+		return nil
+	}
+	if !p.staleTour {
+		p.staleTour, p.staleFrom, p.staleRotations = true, p.server, p.rotations
+	}
+	return fmt.Errorf("%w: its node is at height %d and estimates the chain at %d",
+		ErrServerStale, info.BlockHeight, info.EstimatedHeight)
+}
+
+// checkServerWhenDue checks the server in use again once
+// serverCheckInterval has passed since it was last checked. It is called
+// before every request that tells the server something of the wallet and
+// before every batch of blocks, and not only at the start of a sync attempt:
+// a restore is one attempt that can run for hours, and in that time a node
+// can fall behind or miss a network upgrade.
+func (p *processor) checkServerWhenDue(ctx context.Context) error {
+	if p.opts.now().Sub(p.checkedAt) < p.opts.serverCheckInterval {
+		return nil
+	}
+	return p.checkServer(ctx)
+}
+
+// checkServer verifies that the server follows the wallet's chain and
+// consensus rules, and that its node is not behind.
 func (p *processor) checkServer(ctx context.Context) error {
 	info, err := checkServerChain(ctx, p.src, p.net)
 	if err != nil {
 		return err
 	}
-	p.log.Debugf("Connected to lightwalletd %s %s on chain %q at height %d",
-		info.Vendor, info.Version, info.ChainName, info.BlockHeight)
+	if err := checkConsensusBranch(info, p.be); err != nil {
+		return err
+	}
+	if err := p.checkStale(info); err != nil {
+		return err
+	}
+	if !p.prepared {
+		p.log.Debugf("Connected to lightwalletd %s (%s %s) on chain %q at height %d",
+			p.server.address, info.Vendor, info.Version, info.ChainName, info.BlockHeight)
+	}
+	p.checkedAt = p.opts.now()
 	return nil
 }
 
@@ -578,8 +810,11 @@ func (p *processor) rewind(staleHeight, tipHeight uint32) error {
 // one: its history can hold outputs that the query for unspent outputs does
 // not reach.
 //
-// The history is asked for from the first block on, whatever the account's
-// birthday.
+// The history is asked for from the account's birthday on. The wallet scans
+// no blocks below the birthday, so a transaction from below it would bring
+// in notes that never become spendable and that the wallet does not see
+// spent. Use of an address from below the birthday is therefore not
+// followed.
 func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked int, err error) {
 	accounts, err := p.be.accounts()
 	if err != nil || len(accounts) == 0 {
@@ -594,9 +829,9 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 			for _, a := range watched {
 				if _, done := p.walked[a.address]; a.unused && !done {
 					if p.walkQueue == nil {
-						p.walkQueue = make(map[string]struct{})
+						p.walkQueue = make(map[string]uint32)
 					}
-					p.walkQueue[a.address] = struct{}{}
+					p.walkQueue[a.address] = max(accounts[i].Birthday, 1)
 				}
 			}
 		}
@@ -606,10 +841,19 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 			if d, ok := p.walkDeferred[address]; ok && p.opts.now().Before(d.retryAt) {
 				continue
 			}
+			// An account that begins above the server's tip has no
+			// history on this server yet. The address stays in the queue.
+			start := p.walkQueue[address]
+			if start > tipHeight {
+				continue
+			}
 			if err := ctx.Err(); err != nil {
 				return walked, err
 			}
-			err := p.src.addressTransactions(ctx, address, 1, tipHeight, func(tx *walletrpc.RawTransaction) error {
+			if err := p.checkServerWhenDue(ctx); err != nil {
+				return walked, err
+			}
+			err := p.src.addressTransactions(ctx, address, start, tipHeight, func(tx *walletrpc.RawTransaction) error {
 				_, err := p.be.decryptAndStoreTransaction(tx.Data, minedHeight(tx))
 				if err != nil && !errors.Is(err, ErrDatabase) && !errors.Is(err, ErrClosed) {
 					// One transaction the wallet cannot read must not
@@ -685,6 +929,9 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 		query := fmt.Sprintf("%d %x %d %s", tipHeight, tipHash, start, strings.Join(addresses, " "))
 		if p.utxoQueries[id] == query {
 			continue
+		}
+		if err := p.checkServerWhenDue(ctx); err != nil {
+			return err
 		}
 		err = p.src.addressUTXOs(ctx, addresses, start, func(u *walletrpc.GetAddressUtxosReply) error {
 			if u.ValueZat < 0 || u.Index < 0 || u.Height > math.MaxUint32 {
@@ -817,6 +1064,9 @@ func (p *processor) enhance(ctx context.Context, tipHeight uint32) error {
 			handled[key] = struct{}{}
 			if d, ok := p.deferred[key]; ok && p.opts.now().Before(d.retryAt) {
 				continue
+			}
+			if err := p.checkServerWhenDue(ctx); err != nil {
+				return err
 			}
 			err := p.answer(ctx, req, tipHeight)
 			switch {

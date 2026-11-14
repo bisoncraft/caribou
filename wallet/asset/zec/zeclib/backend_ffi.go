@@ -248,6 +248,14 @@ func (b *ffiBackend) rewindToHeight(height uint32) (rewound uint32, err error) {
 	return rewound, err
 }
 
+func (b *ffiBackend) consensusBranchID(height uint32) (branch uint32, err error) {
+	err = b.with(func(w *ffi.Wallet) error {
+		branch = w.ConsensusBranchId(height)
+		return nil
+	})
+	return branch, err
+}
+
 func (b *ffiBackend) utxoQueryHeight(accountID string) (height uint32, err error) {
 	err = b.with(func(w *ffi.Wallet) (err error) {
 		height, err = w.UtxoQueryHeight(accountID)

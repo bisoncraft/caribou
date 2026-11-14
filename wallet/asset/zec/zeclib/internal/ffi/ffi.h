@@ -405,6 +405,11 @@ RustBuffer uniffi_zeclib_fn_method_wallet_block_hash(uint64_t ptr, uint32_t heig
 RustBuffer uniffi_zeclib_fn_method_wallet_chain_tip_height(uint64_t ptr, RustCallStatus *out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_CONSENSUS_BRANCH_ID
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_CONSENSUS_BRANCH_ID
+uint32_t uniffi_zeclib_fn_method_wallet_consensus_branch_id(uint64_t ptr, uint32_t height, RustCallStatus *out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_CREATE_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_CREATE_ACCOUNT
 RustBuffer uniffi_zeclib_fn_method_wallet_create_account(uint64_t ptr, RustBuffer name, RustBuffer seed, RustBuffer birthday_tree_state, RustBuffer recover_until, RustBuffer key_source, RustCallStatus *out_status
@@ -802,6 +807,12 @@ uint16_t uniffi_zeclib_checksum_method_wallet_block_hash(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_CHAIN_TIP_HEIGHT
 #define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_CHAIN_TIP_HEIGHT
 uint16_t uniffi_zeclib_checksum_method_wallet_chain_tip_height(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_CONSENSUS_BRANCH_ID
+#define UNIFFI_FFIDEF_UNIFFI_ZECLIB_CHECKSUM_METHOD_WALLET_CONSENSUS_BRANCH_ID
+uint16_t uniffi_zeclib_checksum_method_wallet_consensus_branch_id(void
     
 );
 #endif

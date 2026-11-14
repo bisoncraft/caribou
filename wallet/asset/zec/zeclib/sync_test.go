@@ -800,6 +800,29 @@ func TestCancelDuringEnhancement(t *testing.T) {
 	}
 }
 
+// TestProgressRestartsTheBackoff checks that an attempt which brought the
+// wallet blocks before it failed does not lengthen the wait before the next
+// one. Every second request for blocks fails here, so each attempt scans one
+// batch. With a wait that doubled after each of them the sync would not end
+// within the time the test allows.
+func TestProgressRestartsTheBackoff(t *testing.T) {
+	e, _ := newFakeEnv(t, 150, func(cfg *Config) { cfg.BatchSize = 2 })
+	e.createAccount(100)
+	tune := e.w.tune
+	e.w.tune = func(o *syncOptions) {
+		tune(o)
+		o.maxBackoff = time.Hour
+	}
+	e.srv.set(func(s *fakeLwd) { s.failEvery["GetBlockRange"] = 2 })
+
+	e.connect()
+	e.waitSynced(150)
+	// 51 blocks in batches of two, with a failure after each batch.
+	if n := e.srv.callCount("GetBlockRange"); n < 50 {
+		t.Errorf("%d requests for blocks, want at least 50", n)
+	}
+}
+
 func TestBackoff(t *testing.T) {
 	lo, hi := 2*time.Second, 30*time.Second
 	seconds := []int{2, 2, 4, 8, 16, 30, 30, 30}

@@ -35,7 +35,6 @@ happens when the context passed to Connect is cancelled:
 	w, err := zeclib.Open(&zeclib.Config{
 		DBPath:  filepath.Join(dir, "wallet.sqlite"),
 		Network: zeclib.Mainnet,
-		Server:  "zec.rocks:443",
 	}, nil)
 	if err != nil {
 		return err
@@ -57,6 +56,12 @@ Connect does not need the server to be reachable. The wallet keeps trying to
 reach it, and [Wallet.SyncStatus] reports whether it is connected, how far it
 has scanned, and the last error. A wallet that was stopped can be connected
 again.
+
+On mainnet and testnet the configuration needs no server. The wallet uses the
+public servers the package lists, and moves to the next one when the one it
+uses fails, follows other consensus rules than the wallet, or has a node that
+is behind the chain. Config.Server names a single server to use in their
+place.
 
 # Building
 

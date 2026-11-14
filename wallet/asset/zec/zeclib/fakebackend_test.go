@@ -43,6 +43,11 @@ type fakeBackend struct {
 	// recoverUntil records the argument of each createAccount call.
 	recoverUntil []*uint32
 
+	// branchFrom, if not zero, is the height from which the wallet has
+	// laterBranch as its consensus branch. Below it, and without it, the
+	// branch is fakeBranch.
+	branchFrom uint32
+
 	// used holds, by account ID, how many addresses at the start of the
 	// receive chain and of the change chain end with a used one.
 	used map[string][2]uint32
@@ -501,6 +506,25 @@ func (b *fakeBackend) rewindToHeight(height uint32) (uint32, error) {
 	// Rewinding shortens the scan queue to the rewind height.
 	b.tip = height
 	return height, nil
+}
+
+// fakeBranch is the consensus branch of the fake backend, and laterBranch
+// the one it has from fakeBackend.branchFrom on.
+const (
+	fakeBranch  = 0x37a5165b
+	laterBranch = 0x77190ad9
+)
+
+func (b *fakeBackend) consensusBranchID(height uint32) (uint32, error) {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+	if err := b.enter("consensusBranchID"); err != nil {
+		return 0, err
+	}
+	if b.branchFrom != 0 && height >= b.branchFrom {
+		return laterBranch, nil
+	}
+	return fakeBranch, nil
 }
 
 func (b *fakeBackend) utxoQueryHeight(accountID string) (uint32, error) {

@@ -36,6 +36,12 @@ type fakeLwd struct {
 
 	mtx       sync.Mutex
 	chainName string
+	// branch is the consensus branch that the server reports for its tip,
+	// as eight hexadecimal digits. An empty one is not reported.
+	branch string
+	// lag is the number of blocks by which the server's node estimates the
+	// chain to be ahead of its tip.
+	lag uint64
 	// blocks is indexed by height. Block 0 is the genesis block.
 	blocks []*walletrpc.CompactBlock
 	// fork distinguishes the hashes of blocks mined after a reorg from the
@@ -54,6 +60,14 @@ type fakeLwd struct {
 
 	// fail maps a method name to the error it returns.
 	fail map[string]error
+	// failOnce maps a method name to an error it returns one time.
+	failOnce map[string]error
+	// failNth maps a method name to the number of the call to it, counted
+	// from 1, that fails the way a lost connection does.
+	failNth map[string]int
+	// failEvery maps a method name to n, where every nth call to it fails
+	// the way a lost connection does.
+	failEvery map[string]int
 	// rootsFail maps a shielded pool to the error GetSubtreeRoots returns
 	// for it.
 	rootsFail map[walletrpc.ShieldedProtocol]error
@@ -86,6 +100,9 @@ func newFakeLwd(t *testing.T, height uint32) *fakeLwd {
 		addrTxs:   make(map[string][]*walletrpc.RawTransaction),
 		roots:     make(map[walletrpc.ShieldedProtocol][]*walletrpc.SubtreeRoot),
 		fail:      make(map[string]error),
+		failOnce:  make(map[string]error),
+		failNth:   make(map[string]int),
+		failEvery: make(map[string]int),
 		rootsFail: make(map[walletrpc.ShieldedProtocol]error),
 		txFail:    make(map[string]error),
 		gate:      make(map[string]chan struct{}),
@@ -209,6 +226,16 @@ func (s *fakeLwd) enter(ctx context.Context, method string) error {
 	s.mtx.Lock()
 	s.calls[method]++
 	err := s.fail[method]
+	if once, ok := s.failOnce[method]; ok {
+		delete(s.failOnce, method)
+		err = once
+	}
+	if n, ok := s.failNth[method]; ok && n == s.calls[method] {
+		err = status.Error(codes.Unavailable, "the connection was lost")
+	}
+	if n := s.failEvery[method]; n > 0 && s.calls[method]%n == 0 {
+		err = status.Error(codes.Unavailable, "the connection was lost")
+	}
 	gate := s.gate[method]
 	entered := s.entered
 	s.mtx.Unlock()
@@ -236,10 +263,12 @@ func (s *fakeLwd) GetLightdInfo(ctx context.Context, _ *walletrpc.Empty) (*walle
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	return &walletrpc.LightdInfo{
-		Version:     "fake",
-		Vendor:      "zeclib test",
-		ChainName:   s.chainName,
-		BlockHeight: uint64(len(s.blocks) - 1),
+		Version:           "fake",
+		Vendor:            "zeclib test",
+		ChainName:         s.chainName,
+		ConsensusBranchId: s.branch,
+		BlockHeight:       uint64(len(s.blocks) - 1),
+		EstimatedHeight:   uint64(len(s.blocks)-1) + s.lag,
 	}, nil
 }
 

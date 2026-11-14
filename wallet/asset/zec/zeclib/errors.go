@@ -46,6 +46,17 @@ var (
 	// CreateAccountWithTreeState, is for a different chain than the wallet.
 	// During sync it is reported in SyncStatus.
 	ErrWrongNetwork = errors.New("zeclib: the server is on a different network")
+	// ErrConsensusBranch means the server reports another consensus branch
+	// for its chain tip than the wallet has for that height. One of the
+	// two has missed a network upgrade: the server, which then follows a
+	// chain that the network left at the upgrade, or the wallet, which then
+	// finds every server on another branch. During sync it is reported in
+	// SyncStatus, and the wallet turns to its next server.
+	ErrConsensusBranch = errors.New("zeclib: the server follows other consensus rules")
+	// ErrServerStale means the node of the server estimates the chain to be
+	// well ahead of its own tip. It is reported in SyncStatus while the
+	// wallet turns to its next server.
+	ErrServerStale = errors.New("zeclib: the server is behind the chain")
 	// ErrReorgTooDeep is reported in SyncStatus when the chain was
 	// reorganized below the lowest height the wallet can rewind to. The
 	// wallet database has to be rebuilt from the seed.

@@ -65,6 +65,10 @@ type backend interface {
 	// there is no such height.
 	rewindToHeight(height uint32) (uint32, error)
 
+	// consensusBranchID is the consensus branch ID of the wallet's network
+	// at a height, which a node reports for a chain tip at that height.
+	consensusBranchID(height uint32) (uint32, error)
+
 	// utxoQueryHeight is the height from which to ask a server for the
 	// account's unspent transparent outputs.
 	utxoQueryHeight(accountID string) (uint32, error)

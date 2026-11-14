@@ -945,8 +945,8 @@ func TestDueAddressChecksAreMadeOncePerSecond(t *testing.T) {
 // TestWalkCoversUnusedAddressesBeyondTheGap restores a seed whose default
 // address lies beyond the first gap of unused transparent addresses. Such an
 // account watches 11 unused receive addresses from the start, one more than
-// the gap. The first of them holds an output from below the account
-// birthday, which only the history of the address shows.
+// the gap. The first of them holds an output that only the history of the
+// address shows: the server's list of unspent outputs does not have it.
 func TestWalkCoversUnusedAddressesBeyondTheGap(t *testing.T) {
 	kind := backendKinds[len(backendKinds)-1]
 	scratch := newUsedAddresses(t, kind, 1).scratch
@@ -981,15 +981,11 @@ func TestWalkCoversUnusedAddressesBeyondTheGap(t *testing.T) {
 		[]testOutPoint{{txid: bytes.Repeat([]byte{0xac}, 32)}},
 		[]testOutput{{script: p2pkhScript(address), value: value}},
 	)
-	txid, err := scratch.decryptAndStoreTransaction(paying, nil)
-	if err != nil {
+	if _, err := scratch.decryptAndStoreTransaction(paying, nil); err != nil {
 		t.Fatalf("decryptAndStoreTransaction: %v", err)
 	}
 	e.srv.set(func(s *fakeLwd) {
-		s.addrTxs[address] = []*walletrpc.RawTransaction{{Data: paying, Height: 50}}
-		s.utxos[address] = []*walletrpc.GetAddressUtxosReply{{
-			Address: address, Txid: txid, Script: p2pkhScript(address), ValueZat: value, Height: 50,
-		}}
+		s.addrTxs[address] = []*walletrpc.RawTransaction{{Data: paying, Height: 120}}
 	})
 
 	e.connect()

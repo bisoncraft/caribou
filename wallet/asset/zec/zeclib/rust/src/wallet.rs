@@ -262,6 +262,14 @@ impl Wallet {
         self.network
     }
 
+    /// The consensus branch ID of the wallet's network at a height. A node
+    /// reports the same number for its chain tip, so a server whose tip is
+    /// at that height and that reports another one follows other consensus
+    /// rules than the wallet.
+    pub fn consensus_branch_id(&self, height: u32) -> u32 {
+        BranchId::for_height(&self.params, BlockHeight::from_u32(height)).into()
+    }
+
     /// Creates an account from a ZIP 32 seed and returns it.
     ///
     /// The account takes the next unused ZIP 32 account index for the seed.

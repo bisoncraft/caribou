@@ -176,6 +176,12 @@ func newEnv(t *testing.T, kind backendKind, chainHeight uint32, adjust func(*Con
 	if adjust != nil {
 		adjust(cfg)
 	}
+	// The server reports the consensus branch that the wallet has.
+	branch, err := e.be.consensusBranchID(chainHeight)
+	if err != nil {
+		t.Fatalf("consensusBranchID: %v", err)
+	}
+	e.srv.set(func(s *fakeLwd) { s.branch = fmt.Sprintf("%08x", branch) })
 	e.w = newWallet(cfg, e.be, nil)
 	e.w.tune = func(o *syncOptions) {
 		o.minBackoff = 10 * time.Millisecond

@@ -420,6 +420,15 @@ func uniffiCheckChecksums() {
 	}
 	{
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
+			return C.uniffi_zeclib_checksum_method_wallet_consensus_branch_id()
+		})
+		if checksum != 7606 {
+			// If this happens try cleaning and rebuilding your project
+			panic("ffi: uniffi_zeclib_checksum_method_wallet_consensus_branch_id: UniFFI API checksum mismatch")
+		}
+	}
+	{
+		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_method_wallet_create_account()
 		})
 		if checksum != 9567 {
@@ -911,6 +920,11 @@ type WalletInterface interface {
 	// [`update_chain_tip`](Wallet::update_chain_tip), or nothing if it has
 	// never been called.
 	ChainTipHeight() (*uint32, error)
+	// The consensus branch ID of the wallet's network at a height. A node
+	// reports the same number for its chain tip, so a server whose tip is
+	// at that height and that reports another one follows other consensus
+	// rules than the wallet.
+	ConsensusBranchId(height uint32) uint32
 	// Creates an account from a ZIP 32 seed and returns it.
 	//
 	// The account takes the next unused ZIP 32 account index for the seed.
@@ -1183,6 +1197,19 @@ func (_self *Wallet) ChainTipHeight() (*uint32, error) {
 	} else {
 		return FfiConverterOptionalUint32INSTANCE.Lift(_uniffiRV), nil
 	}
+}
+
+// The consensus branch ID of the wallet's network at a height. A node
+// reports the same number for its chain tip, so a server whose tip is
+// at that height and that reports another one follows other consensus
+// rules than the wallet.
+func (_self *Wallet) ConsensusBranchId(height uint32) uint32 {
+	_pointer := _self.ffiObject.incrementPointer("*Wallet")
+	defer _self.ffiObject.decrementPointer()
+	return FfiConverterUint32INSTANCE.Lift(rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint32_t {
+		return C.uniffi_zeclib_fn_method_wallet_consensus_branch_id(
+			_pointer, FfiConverterUint32INSTANCE.Lower(height), _uniffiStatus)
+	}))
 }
 
 // Creates an account from a ZIP 32 seed and returns it.
