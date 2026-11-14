@@ -12,13 +12,16 @@ SYMBOL="zec"
 # zebrad and zcash-devtool should be in PATH.
 DAEMON="zebrad"
 WALLET_TOOL="zcash-devtool"
-ALPHA_LISTEN_PORT="33764"
-BETA_LISTEN_PORT="33765"
-ALPHA_RPC_PORT="33768"
-BETA_RPC_PORT="33769"
+# The ports are below 32768, where Linux starts handing out ports for
+# outgoing connections. A port in that range is at times taken by some other
+# connection when a node tries to listen on it.
+ALPHA_LISTEN_PORT="22764"
+BETA_LISTEN_PORT="22765"
+ALPHA_RPC_PORT="22768"
+BETA_RPC_PORT="22769"
 # Light-client (lightwalletd protocol) gRPC ports, plaintext.
-ALPHA_GRPC_PORT="33770"
-BETA_GRPC_PORT="33771"
+ALPHA_GRPC_PORT="22770"
+BETA_GRPC_PORT="22771"
 
 # BIP-39 mnemonics for the funder wallets. The addresses below are the default
 # addresses of account 0 and can be re-derived with
