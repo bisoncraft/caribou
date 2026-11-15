@@ -29,6 +29,9 @@ export class Application {
   commitHash: string
   langs: string[]
   lang: string
+  // appVersion is the user-facing app version (e.g. "0.1.0"), or '' from a
+  // server that predates reporting it.
+  appVersion = ''
   inited: boolean
   authed: boolean
   appSettings: AppSettings
@@ -157,6 +160,7 @@ export class Application {
     this.lang = r.lang
     this.langs = r.langs
     if (r.appSettings) this.appSettings = r.appSettings
+    this.appVersion = r.appVersion ?? ''
     if (needsTickers) this.prepareTickerAssets()
     this.syncSocket()
     return r

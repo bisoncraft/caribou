@@ -1,6 +1,7 @@
-import { useState, ChangeEvent, FormEvent } from 'react'
+import { useState, FormEvent } from 'react'
 import t from '@caribou/shared/intl'
 import { postJSON } from '@caribou/shared/http'
+import { PasswordField } from './ui'
 
 interface UnlockFormProps {
   onUnlocked: () => void
@@ -12,11 +13,6 @@ export default function UnlockForm ({ onUnlocked }: UnlockFormProps) {
   const [pw, setPW] = useState('')
   const [err, setErr] = useState('')
   const [submitting, setSubmitting] = useState(false)
-
-  const onChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setPW(e.target.value)
-    if (err) setErr('') // user is correcting input
-  }
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -33,23 +29,25 @@ export default function UnlockForm ({ onUnlocked }: UnlockFormProps) {
   }
 
   return (
-    <form className='mb-screen mb-unlock' onSubmit={onSubmit}>
-      <h1 className='mb-brand'>Caribou</h1>
-      <p className='mb-muted'>{t('Welcome Back!')}</p>
-      <input
-        className='mb-input'
-        type='password'
-        autoComplete='current-password'
-        placeholder={t('password')}
-        value={pw}
-        onChange={onChange}
-        disabled={submitting}
-        autoFocus
-      />
-      <button className='mb-btn' type='submit' disabled={pw === '' || submitting}>
-        {submitting ? t('Unlocking...') : t('Unlock')}
-      </button>
-      <div className='mb-err' aria-live='polite'>{err}</div>
+    <form className='frame unlock' onSubmit={onSubmit}>
+      <div className='unlock-hero'>
+        <span className='mark md' role='img' aria-label='Caribou' />
+        <h1>{t('Welcome back')}</h1>
+      </div>
+      <div className='foot'>
+        <PasswordField
+          value={pw}
+          onChange={v => { setPW(v); if (err) setErr('') }}
+          placeholder={t('Password')}
+          disabled={submitting}
+          bad={err !== ''}
+          autoFocus
+        />
+        <div className='field-err' aria-live='polite'>{err}</div>
+        <button className='btn mt12' type='submit' disabled={pw === '' || submitting}>
+          {submitting ? t('Unlocking...') : t('Unlock')}
+        </button>
+      </div>
     </form>
   )
 }

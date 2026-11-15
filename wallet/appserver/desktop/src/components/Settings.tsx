@@ -7,7 +7,7 @@ import Toggle from './Toggle'
 import LocaleSelector from './LocaleSelector'
 import { postJSON } from '@caribou/shared/http'
 import { useFlash } from '@caribou/shared/hooks'
-import { Theme, themes, storedTheme, setTheme } from '../theme'
+import { Theme, themes, storedTheme, setTheme } from '@caribou/shared/theme'
 
 const themeLabels: Record<Theme, string> = { warm: 'Warm', cool: 'Cool', light: 'Light' }
 
@@ -80,7 +80,7 @@ function ToggleRow ({ title, desc, initial, save }: {
 /*
  * ThemeRow selects among the color themes. Each option button carries its own
  * data-theme attribute, so it renders as a live preview of the palette it
- * selects (see the palette emission in scss/vars.scss). The choice applies
+ * selects (see the palette emission in shared/scss/_themes.scss). The choice applies
  * immediately and persists to localStorage.
  */
 function ThemeRow () {

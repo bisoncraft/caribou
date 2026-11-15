@@ -1,4 +1,8 @@
-import t from './intl'
+import t, { tvar } from './intl'
+import Doc from './doc'
+import { WalletTransaction } from './registry'
+import { TickerAsset, AssetVariant } from './assets'
+import { SwapRelation } from './intents'
 
 // TxType mirrors wallet/txdb/types.go TransactionType. Keep in sync with the Go
 // enum — the ordering is the wire value.
@@ -97,4 +101,51 @@ export function txAmountSign (txType: number): string {
   if (incomingTypes.has(txType)) return '+'
   if (outgoingTypes.has(txType)) return '-'
   return ''
+}
+
+// TxRowItem pairs a transaction with the ticker group and network variant it
+// belongs to, which carry the units, rate, and asset ID needed to render and
+// link it. swapRelation is set when the transaction is a leg of a
+// cross-chain swap (its deposit, payout, or refund).
+export interface TxRowItem {
+  tx: WalletTransaction
+  ta: TickerAsset
+  variant: AssetVariant
+  swapRelation?: SwapRelation
+}
+
+// variantForTx maps a history transaction back to the network variant it
+// belongs to. Every transaction carries its exact asset ID.
+export function variantForTx (ta: TickerAsset, tx: WalletTransaction): AssetVariant | undefined {
+  return ta.variantLookup[tx.assetID]
+}
+
+// txTitle names a row: past tense for the common types, the generic type
+// label otherwise.
+export function txTitle (tx: WalletTransaction, ticker: string): string {
+  switch (tx.type) {
+    case TxType.Send: return `${t('Sent')} ${ticker}`
+    case TxType.Receive: return `${t('Received')} ${ticker}`
+    case TxType.Swap: return `${t('Swapped')} ${ticker}`
+    default: return `${txTypeLabel(tx.type)} ${ticker}`
+  }
+}
+
+// txIcon is the ico-* glyph class for a transaction type's row icon.
+export function txIcon (type: number): string {
+  if (type === TxType.Swap || type === TxType.SwapOrSend) return 'ico-swap'
+  if (txIsIncoming(type)) return 'ico-download'
+  return 'ico-upload'
+}
+
+// txStatus renders confirmation progress while confirming, then age.
+export function txStatus (tx: WalletTransaction): string {
+  if (!tx.confirmed && tx.confirms) {
+    return tvar('{{ current }}/{{ target }} confs', {
+      current: String(tx.confirms.current),
+      target: String(tx.confirms.target)
+    })
+  }
+  if (tx.timestamp > 0) return tvar('{{ age }} ago', { age: Doc.timeSince(tx.timestamp * 1000) })
+  return t('pending')
 }

@@ -1,4 +1,5 @@
-// Validates WCAG AA contrast for the theme palettes in src/scss/vars.scss.
+// Validates WCAG AA contrast for the theme palettes in
+// shared/scss/_themes.scss.
 //
 // Every text token must clear 4.5:1 against every surface token in its
 // theme, and --accent-contrast must clear 4.5:1 on the --accent-strong fill.
@@ -21,7 +22,7 @@ const TEXT_TOKENS = [
 const AA = 4.5
 
 const src = fs.readFileSync(
-  path.join(__dirname, '..', 'src', 'scss', 'vars.scss'), 'utf8')
+  path.join(__dirname, '..', '..', 'shared', 'scss', '_themes.scss'), 'utf8')
 
 const themes = {}
 let current = null
@@ -36,7 +37,7 @@ for (const line of src.split('\n')) {
   if (token && current) current[token[1]] = token[2]
 }
 if (Object.keys(themes).length === 0) {
-  console.error('no theme palettes parsed from vars.scss — layout changed?')
+  console.error('no theme palettes parsed from _themes.scss — layout changed?')
   process.exit(1)
 }
 
