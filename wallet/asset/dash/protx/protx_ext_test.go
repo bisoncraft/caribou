@@ -8,12 +8,15 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -217,6 +220,134 @@ func TestProRegTxDeserializeReusedStruct(t *testing.T) {
 	}
 }
 
+// TestNetInfoDomainEntry pins the domain entry Dash Core v24 allows for Platform
+// HTTPS: kind 2, a CompactSize length, the name and a big endian port. A
+// decoder that only knew service entries would reject a valid EvoNode.
+func TestNetInfoDomainEntry(t *testing.T) {
+	t.Parallel()
+
+	p := ProRegTx{
+		Version: VersionExtAddr,
+		MNType:  TypeEvo,
+		NetInfo: NetInfo{Version: 1, Purposes: []NetPurpose{
+			{ID: PurposeCoreP2P, Entries: []NetEntry{{Kind: EntryService, Network: NetworkIPv4, Addr: []byte{8, 8, 4, 4}, Port: 19000}}},
+			{ID: PurposePlatformHTTPS, Entries: []NetEntry{{Kind: EntryDomain, Domain: "example.com", Port: 443}}},
+		}},
+	}
+	var buf bytes.Buffer
+	if err := p.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	wantEntry := append([]byte{EntryDomain, 11}, "example.com"...)
+	wantEntry = append(wantEntry, 0x01, 0xbb)
+	if !bytes.Contains(buf.Bytes(), wantEntry) {
+		t.Fatalf("no domain entry %x in %x", wantEntry, buf.Bytes())
+	}
+
+	var got ProRegTx
+	if err := Parse(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.NetInfo, p.NetInfo) {
+		t.Fatalf("netInfo %+v, want %+v", got.NetInfo, p.NetInfo)
+	}
+	var again bytes.Buffer
+	if err := got.Serialize(&again); err != nil || !bytes.Equal(again.Bytes(), buf.Bytes()) {
+		t.Fatalf("round trip differs: %v\n got %x\nwant %x", err, again.Bytes(), buf.Bytes())
+	}
+}
+
+// TestNetInfoDomainEntryRejects pins the limits on a domain entry and that an
+// entry cannot carry the fields of the other kind, which would not survive
+// encoding.
+func TestNetInfoDomainEntryRejects(t *testing.T) {
+	t.Parallel()
+
+	withEntry := func(e NetEntry) *ProRegTx {
+		return &ProRegTx{
+			Version: VersionExtAddr,
+			NetInfo: NetInfo{Version: 1, Purposes: []NetPurpose{{ID: PurposePlatformHTTPS, Entries: []NetEntry{e}}}},
+		}
+	}
+	long := strings.Repeat("a", maxDomainSize+1)
+	for name, p := range map[string]*ProRegTx{
+		"domain over the limit":     withEntry(NetEntry{Kind: EntryDomain, Domain: long, Port: 443}),
+		"address on a domain entry": withEntry(NetEntry{Kind: EntryDomain, Domain: "example.com", Network: NetworkIPv4, Addr: []byte{1, 2, 3, 4}}),
+		"domain on a service entry": withEntry(NetEntry{Kind: EntryService, Network: NetworkIPv4, Addr: []byte{1, 2, 3, 4}, Domain: "example.com"}),
+		"no kind":                   withEntry(NetEntry{Network: NetworkIPv4, Addr: []byte{1, 2, 3, 4}}),
+		"unknown kind":              withEntry(NetEntry{Kind: 3, Domain: "example.com"}),
+	} {
+		if err := p.Serialize(io.Discard); !errors.Is(err, ErrUnsupportedNetInfo) {
+			t.Errorf("%s: serialize %v, want ErrUnsupportedNetInfo", name, err)
+		}
+	}
+
+	// A decoder refuses a domain over the limit before reading it.
+	ok := withEntry(NetEntry{Kind: EntryDomain, Domain: "example.com", Port: 443})
+	var buf bytes.Buffer
+	if err := ok.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	good := buf.Bytes()
+	at := bytes.Index(good, append([]byte{EntryDomain, 11}, "example.com"...))
+	if at < 0 {
+		t.Fatalf("no domain entry in %x", good)
+	}
+	over := append(bytes.Clone(good[:at+1]), 0xfd, byte(len(long)), 0x00) // CompactSize 254
+	over = append(over, good[at+2:]...)
+	if err := Parse(over, new(ProRegTx)); !errors.Is(err, ErrUnsupportedNetInfo) {
+		t.Errorf("domain of %d bytes: %v, want ErrUnsupportedNetInfo", len(long), err)
+	}
+}
+
+// TestListCountsAreOneByte pins that the payout, share and signature counts are
+// one byte, as Dash Core writes them (uint8_t), not a CompactSize. The two are
+// the same below 253; at 253 a CompactSize would be three bytes, so a decoder
+// that read one would parse a payload Core reads differently.
+func TestListCountsAreOneByte(t *testing.T) {
+	t.Parallel()
+
+	const n = 253
+
+	reg := ProRegTx{Version: VersionExtAddr, NetInfo: NetInfo{Version: 1}, Shares: make([]Share, n)}
+	var buf bytes.Buffer
+	if err := reg.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	// 42 byte header, 2 byte empty netInfo, owner, operator, voting keys and
+	// the operator reward, then the payout count and the share count.
+	const sharesAt = 42 + 2 + KeyIDSize + OperatorPubKeySize + KeyIDSize + 2 + 1
+	// Each share is its amount, two empty scripts, the owner key id and, after
+	// all of them, its join signature; then the early terms, the inputs hash
+	// and an empty signature follow. The byte at sharesAt is 0xfd under either
+	// encoding (253, or the CompactSize marker), so the length is what tells a
+	// one byte count from a three byte one.
+	const wantLen = sharesAt + 1 + n*(8+1+1+KeyIDSize+CompactSigSize) + 4 + 8 + chainhash.HashSize + 1
+	if buf.Bytes()[sharesAt] != n || buf.Len() != wantLen {
+		t.Errorf("share count byte %#x at %d, %d bytes; want %#x and %d",
+			buf.Bytes()[sharesAt], sharesAt, buf.Len(), n, wantLen)
+	}
+	var gotReg ProRegTx
+	if err := Parse(buf.Bytes(), &gotReg); err != nil || len(gotReg.Shares) != n {
+		t.Errorf("%d shares read back as %d: %v", n, len(gotReg.Shares), err)
+	}
+
+	dis := ProDisTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, n)}
+	buf.Reset()
+	if err := dis.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	const sigsAt = 2 + chainhash.HashSize + 2
+	if buf.Bytes()[sigsAt] != n || buf.Len() != sigsAt+1+n*CompactSigSize {
+		t.Errorf("sig count byte %#x, %d bytes; want %#x and %d",
+			buf.Bytes()[sigsAt], buf.Len(), n, sigsAt+1+n*CompactSigSize)
+	}
+	var gotDis ProDisTx
+	if err := Parse(buf.Bytes(), &gotDis); err != nil || len(gotDis.Sigs) != n {
+		t.Errorf("%d signatures read back as %d: %v", n, len(gotDis.Sigs), err)
+	}
+}
+
 // TestProRegTxExtHashesRefuseVersion3 pins that the v2 hashes are not applied
 // to a version 3 payload, whose digests are not pinned yet. A caller that
 // needed one would otherwise sign over the wrong bytes.
@@ -393,7 +524,7 @@ func TestParseNetInfo(t *testing.T) {
 		anyMsg bool
 	}{
 		{"netInfo version 2", patch(verAt, verAt+1, 2), ErrUnsupportedNetInfo, false},
-		{"entry kind 2", patch(kindAt, kindAt+1, 2), ErrUnsupportedNetInfo, false},
+		{"unknown entry kind", patch(kindAt, kindAt+1, 3), ErrUnsupportedNetInfo, false},
 		{"ipv4 with 16 bytes", patch(addrLen, addrLen+1, 16), ErrUnsupportedNetInfo, false},
 		{"ipv6 with 4 bytes", patch(netAt, netAt+1, NetworkIPv6), ErrUnsupportedNetInfo, false},
 		{"address of 516 bytes", patch(addrLen, addrLen+1, 0xfd, 0x04, 0x02), ErrUnsupportedNetInfo, false},

@@ -175,7 +175,7 @@ func (p *ProUpSharedRegTx) Deserialize(r io.Reader) error {
 
 // writeSigs writes a count and that many 65 byte signatures.
 func writeSigs(w io.Writer, sigs [][CompactSigSize]byte) error {
-	if err := writeCount(w, "signatures", len(sigs)); err != nil {
+	if err := writeCount8(w, "signatures", len(sigs)); err != nil {
 		return err
 	}
 	for i := range sigs {
@@ -187,7 +187,7 @@ func writeSigs(w io.Writer, sigs [][CompactSigSize]byte) error {
 }
 
 func readSigs(r io.Reader) ([][CompactSigSize]byte, error) {
-	n, err := readCount(r, "signatures")
+	n, err := readCount8(r)
 	if err != nil {
 		return nil, err
 	}

@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -75,9 +76,11 @@ const (
 	// maxSigSize bounds a payloadSig. A compact ECDSA signature is 65 bytes
 	// and a BLS signature is 96.
 	maxSigSize = BLSSigSize
-	// maxCount bounds a count of payouts, shares, signatures or netInfo
-	// items read from a payload, as an allocation guard. The limits Dash
-	// enforces are much lower and are validation, not codec, concerns.
+	// maxCount bounds a CompactSize count of netInfo purposes or entries
+	// read from a payload, as an allocation guard. The limits Dash enforces
+	// are much lower and are validation, not codec, concerns. The counts of
+	// payouts, shares and signatures are one byte, so they are bounded by
+	// their encoding.
 	maxCount = 255
 )
 
@@ -90,7 +93,8 @@ var (
 	ErrUnsupportedType = errors.New("unsupported masternode type")
 	// ErrUnsupportedNetInfo is returned for a netInfo this package cannot
 	// carry: another layout version, an entry kind other than a service
-	// address, or an IPv4 or IPv6 address of the wrong length.
+	// address or a domain, an IPv4 or IPv6 address of the wrong length, or a
+	// domain that is too long.
 	ErrUnsupportedNetInfo = errors.New("unsupported netInfo")
 	// ErrFieldTooLong is returned for a script, signature or count longer
 	// than the codec allows: by Serialize, so that a payload that is written
@@ -337,7 +341,7 @@ func (p *ProRegTx) serializeExt(w io.Writer, withSig bool) error {
 	if err := writeU16s(w, p.OperatorReward); err != nil {
 		return err
 	}
-	if err := writeCount(w, "payouts", len(p.Payouts)); err != nil {
+	if err := writeCount8(w, "payouts", len(p.Payouts)); err != nil {
 		return err
 	}
 	for i := range p.Payouts {
@@ -348,7 +352,7 @@ func (p *ProRegTx) serializeExt(w io.Writer, withSig bool) error {
 			return err
 		}
 	}
-	if err := writeCount(w, "shares", len(p.Shares)); err != nil {
+	if err := writeCount8(w, "shares", len(p.Shares)); err != nil {
 		return err
 	}
 	for i := range p.Shares {
@@ -457,7 +461,7 @@ func (p *ProRegTx) deserializeExt(r io.Reader) error {
 	if p.OperatorReward, err = readU16(r); err != nil {
 		return err
 	}
-	np, err := readCount(r, "payouts")
+	np, err := readCount8(r)
 	if err != nil {
 		return err
 	}
@@ -473,7 +477,7 @@ func (p *ProRegTx) deserializeExt(r io.Reader) error {
 			return err
 		}
 	}
-	ns, err := readCount(r, "shares")
+	ns, err := readCount8(r)
 	if err != nil {
 		return err
 	}
@@ -957,6 +961,22 @@ func readBytes(r io.Reader, field string, limit int) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+// writeCount8 writes the count of a list as one byte, which is how Dash Core
+// writes the payouts, shares and signatures of a payload. A CompactSize would
+// give the same bytes below 253 and different ones above.
+func writeCount8(w io.Writer, field string, n int) error {
+	if n > math.MaxUint8 {
+		return fmt.Errorf("%w: %d %s, at most %d", ErrFieldTooLong, n, field, math.MaxUint8)
+	}
+	return writeU8(w, uint8(n))
+}
+
+// readCount8 reads a count written by writeCount8.
+func readCount8(r io.Reader) (int, error) {
+	n, err := readU8(r)
+	return int(n), err
 }
 
 // writeCount writes the count of a list as a CompactSize, refusing more items
