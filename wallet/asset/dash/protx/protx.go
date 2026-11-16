@@ -92,8 +92,10 @@ var (
 	// carry: another layout version, an entry kind other than a service
 	// address, or an IPv4 or IPv6 address of the wrong length.
 	ErrUnsupportedNetInfo = errors.New("unsupported netInfo")
-	// ErrFieldTooLong is returned by Serialize for a field longer than
-	// Deserialize accepts.
+	// ErrFieldTooLong is returned for a script, signature or count longer
+	// than the codec allows: by Serialize, so that a payload that is written
+	// can be read back, and by Deserialize. An address over the BIP155 limit
+	// is ErrUnsupportedNetInfo.
 	ErrFieldTooLong = errors.New("provider tx field too long")
 	// ErrTrailingData is returned when a payload has bytes after the last
 	// field.
@@ -391,6 +393,10 @@ func (p *ProRegTx) serializeExt(w io.Writer, withSig bool) error {
 
 // Deserialize reads the payload.
 func (p *ProRegTx) Deserialize(r io.Reader) error {
+	// Each version has fields the other does not, so a payload read into a
+	// struct that held another one would keep the old fields, and could then
+	// no longer be serialized.
+	*p = ProRegTx{}
 	var err error
 	if p.Version, err = readU16(r); err != nil {
 		return err
@@ -636,7 +642,7 @@ func (p *ProUpServTx) Deserialize(r io.Reader) error {
 	if err = p.Service.deserialize(r); err != nil {
 		return err
 	}
-	if p.ScriptOperatorPay, err = wire.ReadVarBytes(r, 0, maxScriptSize, "scriptOperatorPayout"); err != nil {
+	if p.ScriptOperatorPay, err = readBytes(r, "scriptOperatorPayout", maxScriptSize); err != nil {
 		return err
 	}
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
@@ -724,13 +730,13 @@ func (p *ProUpRegTx) Deserialize(r io.Reader) error {
 	if _, err = io.ReadFull(r, p.KeyIDVoting[:]); err != nil {
 		return err
 	}
-	if p.ScriptPayout, err = wire.ReadVarBytes(r, 0, maxScriptSize, "scriptPayout"); err != nil {
+	if p.ScriptPayout, err = readBytes(r, "scriptPayout", maxScriptSize); err != nil {
 		return err
 	}
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
 		return err
 	}
-	p.PayloadSig, err = wire.ReadVarBytes(r, 0, maxSigSize, "payloadSig")
+	p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize)
 	return err
 }
 
@@ -935,8 +941,22 @@ func writeBytes(w io.Writer, field string, b []byte, limit int) error {
 	return wire.WriteVarBytes(w, 0, b)
 }
 
+// readBytes reads a length prefixed field of at most limit bytes. The length is
+// checked before anything is allocated, and a length that is not the shortest
+// CompactSize is an error.
 func readBytes(r io.Reader, field string, limit int) ([]byte, error) {
-	return wire.ReadVarBytes(r, 0, uint32(limit), field)
+	n, err := wire.ReadVarInt(r, 0)
+	if err != nil {
+		return nil, err
+	}
+	if n > uint64(limit) {
+		return nil, fmt.Errorf("%w: %s is %d bytes, at most %d", ErrFieldTooLong, field, n, limit)
+	}
+	b := make([]byte, n)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // writeCount writes the count of a list as a CompactSize, refusing more items

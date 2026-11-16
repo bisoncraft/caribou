@@ -515,10 +515,13 @@ var payloadKinds = []struct {
 	{"ProRegTx", "regfund", []uint16{1, 4}, true, true, func() payload { return new(ProRegTx) }},
 	{"ProRegTx v3 shared", "regshared", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
 	{"ProRegTx v3 evo", "regevo", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
+	{"ProRegTx v3 shared no address", "regshared_nonet", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
+	{"ProRegTx v3 evo multi address", "regevo_multi", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
 	{"ProUpServTx", "updserv", []uint16{1, 3}, true, true, func() payload { return new(ProUpServTx) }},
 	{"ProUpRegTx", "updreg", []uint16{1, 3}, false, false, func() payload { return new(ProUpRegTx) }},
 	{"ProUpRevTx", "revoke", []uint16{1, 3}, false, false, func() payload { return new(ProUpRevTx) }},
 	{"ProDisTx", "dis", []uint16{0, 2}, false, false, func() payload { return new(ProDisTx) }},
+	{"ProDisTx standby", "dis_standby", []uint16{0, 2}, false, false, func() payload { return new(ProDisTx) }},
 	{"ProUpShareTx", "upshare", []uint16{0, 2}, false, false, func() payload { return new(ProUpShareTx) }},
 	{"ProUpSharedRegTx", "upsharedreg", []uint16{0, 2}, false, false, func() payload { return new(ProUpSharedRegTx) }},
 }
@@ -672,8 +675,9 @@ func TestSerializeRejectsUnsupported(t *testing.T) {
 }
 
 // TestParseRejectsEveryTruncation checks that no proper prefix of a payload is
-// accepted, and that none fails with a bare io.EOF, which a caller could take
-// for a clean end of input.
+// accepted, and that each fails with io.ErrUnexpectedEOF: not a bare io.EOF,
+// which a caller could take for a clean end of input, and not some other error
+// that would hide that the payload simply ended.
 func TestParseRejectsEveryTruncation(t *testing.T) {
 	t.Parallel()
 
@@ -681,11 +685,8 @@ func TestParseRejectsEveryTruncation(t *testing.T) {
 		_, tx := loadVector(t, k.vector)
 		for n := range len(tx.ExtraPayload) {
 			err := Parse(tx.ExtraPayload[:n], k.new())
-			if err == nil {
-				t.Fatalf("%s: accepted a payload cut to %d of %d bytes", k.name, n, len(tx.ExtraPayload))
-			}
-			if errors.Is(err, io.EOF) {
-				t.Fatalf("%s: %d of %d bytes failed with %v, want io.ErrUnexpectedEOF",
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("%s: a payload cut to %d of %d bytes failed with %v, want io.ErrUnexpectedEOF",
 					k.name, n, len(tx.ExtraPayload), err)
 			}
 		}
@@ -836,26 +837,81 @@ func TestParseLimits(t *testing.T) {
 	parse := func(script, sig []byte) error {
 		return Parse(build(script, sig), new(ProRegTx))
 	}
-	var msgErr *wire.MessageError
 
 	if err := parse(make([]byte, maxScriptSize), nil); err != nil {
 		t.Errorf("script at the limit: %v", err)
 	}
-	if err := parse(make([]byte, maxScriptSize+1), nil); !errors.As(err, &msgErr) {
-		t.Errorf("script over the limit: %v, want a wire message error", err)
+	if err := parse(make([]byte, maxScriptSize+1), nil); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("script over the limit: %v, want ErrFieldTooLong", err)
 	}
 	if err := parse(base.ScriptPayout, make([]byte, BLSSigSize)); err != nil {
 		t.Errorf("signature at the limit: %v", err)
 	}
-	if err := parse(base.ScriptPayout, make([]byte, BLSSigSize+1)); !errors.As(err, &msgErr) {
-		t.Errorf("signature over the limit: %v, want a wire message error", err)
+	if err := parse(base.ScriptPayout, make([]byte, BLSSigSize+1)); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("signature over the limit: %v, want ErrFieldTooLong", err)
 	}
 
 	// A length prefix of 16 MB must fail before anything that size is read.
 	huge := append(bytes.Clone(head.Bytes()[:scriptLenAt]), 0xfe, 0xff, 0xff, 0xff, 0x00)
-	if err := Parse(huge, new(ProRegTx)); !errors.As(err, &msgErr) {
-		t.Errorf("huge script length: %v, want a wire message error", err)
+	if err := Parse(huge, new(ProRegTx)); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("huge script length: %v, want ErrFieldTooLong", err)
 	}
+}
+
+// TestParseLimitsAreOneError checks that an over-long script or signature is
+// reported as ErrFieldTooLong whichever payload carries it, so a caller can
+// detect "over the codec limit" with one errors.Is.
+func TestParseLimitsAreOneError(t *testing.T) {
+	t.Parallel()
+
+	// Each payload is written with an empty script, whose one byte length
+	// prefix sits at a known offset, and that prefix is replaced by one over
+	// the limit followed by that many bytes.
+	tests := []struct {
+		name     string
+		p        payload
+		scriptAt int
+		limit    int
+	}{
+		{"ProUpServTx script", &ProUpServTx{Version: Version}, 2 + 2 + chainhash.HashSize + 18, maxScriptSize},
+		{"ProUpRegTx script", &ProUpRegTx{Version: Version}, 2 + chainhash.HashSize + 2 + OperatorPubKeySize + KeyIDSize, maxScriptSize},
+		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion}, 2 + chainhash.HashSize + 2, maxScriptSize},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			if err := tc.p.Serialize(&buf); err != nil {
+				t.Fatal(err)
+			}
+			good := buf.Bytes()
+			if good[tc.scriptAt] != 0 {
+				t.Fatalf("no empty script at byte %d: % x", tc.scriptAt, good)
+			}
+
+			var spliced bytes.Buffer
+			spliced.Write(good[:tc.scriptAt])
+			if err := wire.WriteVarBytes(&spliced, 0, make([]byte, tc.limit+1)); err != nil {
+				t.Fatal(err)
+			}
+			spliced.Write(good[tc.scriptAt+1:])
+
+			// A 16 MB length prefix must fail the same way, without reading it.
+			huge := append(bytes.Clone(good[:tc.scriptAt]), 0xfe, 0xff, 0xff, 0xff, 0x00)
+
+			for name, b := range map[string][]byte{"one over": spliced.Bytes(), "16 MB": huge} {
+				if err := Parse(b, newLike(tc.p)); !errors.Is(err, ErrFieldTooLong) {
+					t.Errorf("%s: %v, want ErrFieldTooLong", name, err)
+				}
+			}
+		})
+	}
+}
+
+// newLike returns a new zero payload of the same type as p.
+func newLike(p payload) payload {
+	return reflect.New(reflect.TypeOf(p).Elem()).Interface().(payload)
 }
 
 // signedMessageHash is the digest a Dash message signature covers: the double

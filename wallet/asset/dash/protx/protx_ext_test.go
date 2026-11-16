@@ -181,6 +181,42 @@ func TestProRegTxExt(t *testing.T) {
 	}
 }
 
+// TestProRegTxDeserializeReusedStruct pins that decoding into a ProRegTx that
+// held another payload gives exactly what a fresh one would. The two versions
+// have fields the other lacks, so a decoder that only overwrote its own fields
+// would keep the old ones, and the result could no longer be serialized (a
+// caller scanning transactions into one struct would hit it).
+func TestProRegTxDeserializeReusedStruct(t *testing.T) {
+	t.Parallel()
+
+	vectors := []string{"regfund", "regext", "regshared", "regshared_nonet", "regevo", "regevo_multi"}
+	for _, first := range vectors {
+		for _, second := range vectors {
+			t.Run(first+" then "+second, func(t *testing.T) {
+				t.Parallel()
+
+				_, txFirst := loadVector(t, first)
+				_, txSecond := loadVector(t, second)
+
+				var reused, fresh ProRegTx
+				if err := Parse(txFirst.ExtraPayload, &reused); err != nil {
+					t.Fatal(err)
+				}
+				if err := Parse(txSecond.ExtraPayload, &reused); err != nil {
+					t.Fatal(err)
+				}
+				if err := Parse(txSecond.ExtraPayload, &fresh); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(&reused, &fresh) {
+					t.Fatalf("decoded into a reused struct:\n got %+v\nwant %+v", reused, fresh)
+				}
+				roundTrip(t, txSecond, &reused)
+			})
+		}
+	}
+}
+
 // TestProRegTxExtHashesRefuseVersion3 pins that the v2 hashes are not applied
 // to a version 3 payload, whose digests are not pinned yet. A caller that
 // needed one would otherwise sign over the wrong bytes.
