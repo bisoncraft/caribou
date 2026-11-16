@@ -28,7 +28,10 @@ import (
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 )
 
-func TestRegistrationAcceptedByDashCore(t *testing.T) {
+// harnessProposal makes a two-share registration funded by wallet gamma's
+// outputs, with owner keys held by the test.
+func harnessProposal(t *testing.T) (*Proposal, []Own, []*btcec.PrivateKey) {
+	t.Helper()
 	if _, err := rpc(t, "walletpassphrase", "abc", 600); err != nil {
 		t.Logf("walletpassphrase: %v", err)
 	}
@@ -124,6 +127,11 @@ func TestRegistrationAcceptedByDashCore(t *testing.T) {
 	for i := range owns {
 		owns[i].Terms = p.Terms
 	}
+	return p, owns, ownerKeys
+}
+
+func TestRegistrationAcceptedByDashCore(t *testing.T) {
+	p, owns, ownerKeys := harnessProposal(t)
 	tx, err := p.Build(RegtestRules)
 	if err != nil {
 		t.Fatal(err)
