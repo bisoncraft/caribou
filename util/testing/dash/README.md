@@ -1,9 +1,9 @@
 # DASH Simnet Test Harness
 
 You must have `dashd` and `dash-cli` in `PATH` to use the harness. It is tested
-with Dash Core **v23.1.4**. (Dash Core v23+ treats a missing default
-configuration file as fatal, so the control scripts pass an explicit `-datadir`;
-this is handled for you.)
+with Dash Core **v23.1.4** and **v24.0.0** (see "Masternodes" for the v24 flag).
+(Dash Core v23+ treats a missing default configuration file as fatal, so the
+control scripts pass an explicit `-datadir`; this is handled for you.)
 
 The harness script creates two connected regtest nodes and their wallets, then
 mines some blocks and sends some DASH around. The result is a set of wallets
@@ -59,10 +59,22 @@ wallet.
 ## Masternodes
 
 The harness mines past the regtest DIP-3 enforcement height (500) during setup,
-so it finishes at about height 520. DIP-3 activates at 432, but until it is
+so it passes height 520. DIP-3 activates at 432, but until it is
 enforced a ProRegTx must use the same key for owner and voting
-(`bad-protx-key-not-same`). With ElectrumX running, the registered masternode
-is visible through `protx.info <proTxHash>` and `protx.diff <base> <tip>`.
+(`bad-protx-key-not-same`).
+
+Dash Core v24 shared masternodes (ProRegTx v3, types 10-12) need
+`DEPLOYMENT_V24`, which is EHF-gated and never activates on regtest by default.
+The harness starts both nodes with
+`-vbparams=v24:0:9223372036854775807:0:250:200:150:5:0` (the last field turns
+EHF off, so mined blocks signal it) and mines on to height 780; V24 becomes
+active at height 750. Override with `V24_VBPARAMS`, and run
+`V24_VBPARAMS= ./harness.sh` on v23, which rejects the unknown deployment.
+
+With ElectrumX running, the registered masternode is visible through
+`protx.info <proTxHash>` and `protx.diff <base> <tip>`. The electrumx patch
+for Dash in `util/testing/btc/electrumx.sh` is needed for v24, whose blocks the
+unpatched server cannot parse.
 
 `sendtoaddress` and other coin selection can spend an unlocked collateral
 output. If you register with external collateral (`protx register`), lock the
