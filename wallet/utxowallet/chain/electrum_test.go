@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,7 +148,17 @@ func (s *stubNetwork) Tip() int32 {
 	return int32(len(s.headers)) - 1
 }
 
-func (s *stubNetwork) Synced() bool { return s.synced }
+func (s *stubNetwork) Synced() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.synced
+}
+
+func (s *stubNetwork) setSynced(b bool) {
+	s.mu.Lock()
+	s.synced = b
+	s.mu.Unlock()
+}
 
 // TargetTip returns the stub's server-reported tip (same as Tip for the stub,
 // since there is no separate notion of "server ahead of local" in tests that
@@ -1038,6 +1049,358 @@ func TestElectrumScripthashAheadOfHeaders(t *testing.T) {
 	}
 	if rt.Block.Height != 5 {
 		t.Fatalf("RelevantTx.Block.Height = %d, want 5", rt.Block.Height)
+	}
+}
+
+// TestElectrumConfirmationsWaitForSync: before the header store is synced, a
+// confirmed history entry is held in pending rather than verified against a
+// header nothing has authenticated yet, and Rescan, Sweep and verifyInclusion
+// refuse. The first tip change after the store syncs releases the entry, even
+// while the initial rescan still suppresses connects.
+func TestElectrumConfirmationsWaitForSync(t *testing.T) {
+	stub := newStubNetwork()
+	for i := range 6 {
+		stub.addBlock(t, time.Unix(int64(1_700_000_000+i*60), 0))
+	}
+	c, err := NewElectrumClient(testParams(), stub)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		c.Stop()
+		c.WaitForShutdown()
+	})
+	drain(t, c, 1, time.Second) // ClientConnected
+
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTxToAddr(t, addr)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 3, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "h3"}
+	select {
+	case n := <-c.Notifications():
+		t.Fatalf("notification %T before the header store synced", n)
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.addrCacheMtx.Lock()
+	var pending int
+	if entry := c.addrCache[sh]; entry != nil {
+		pending = len(entry.pending)
+	}
+	c.addrCacheMtx.Unlock()
+	if pending != 1 {
+		t.Fatalf("%d pending entries before sync, want 1", pending)
+	}
+	if err := c.verifyInclusion(txid, 3); err == nil {
+		t.Fatal("verifyInclusion succeeded before the header store synced")
+	}
+	if err := c.Rescan(nil, nil, nil); err == nil || !strings.Contains(err.Error(), "before initial header sync") {
+		t.Fatalf("Rescan before sync: got %v", err)
+	}
+	if _, _, err := c.Sweep(nil); err == nil || !strings.Contains(err.Error(), "before initial header sync") {
+		t.Fatalf("Sweep before sync: got %v", err)
+	}
+
+	// The network marks the store synced, then publishes the baseline tip
+	// change. liveDelivery is still false (no rescan has finished), so no
+	// BlockConnected is delivered, but the pending entry is.
+	stub.setSynced(true)
+	stub.pushConnected(t, stub.Tip())
+	got := drain(t, c, 1, 2*time.Second)
+	rt, ok := got[0].(RelevantTx)
+	if !ok {
+		t.Fatalf("got %T after sync, want RelevantTx", got[0])
+	}
+	if rt.Block == nil || rt.Block.Height != 3 {
+		t.Fatalf("RelevantTx block %+v, want height 3", rt.Block)
+	}
+}
+
+// pauseSyncedNetwork pauses the first Synced call made while armed, after
+// reading the stub's value and before returning it, so a test can complete
+// the sync transition between that read and the caller acting on it.
+type pauseSyncedNetwork struct {
+	*stubNetwork
+	armed   atomic.Bool
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (s *pauseSyncedNetwork) Synced() bool {
+	synced := s.stubNetwork.Synced()
+	if s.armed.CompareAndSwap(true, false) {
+		close(s.entered)
+		<-s.resume
+	}
+	return synced
+}
+
+// TestElectrumSyncFlushLateCommit: a status diff that reads Synced false,
+// decides to defer a confirmed entry, and commits it to pending only after the
+// one-time sync flush has run (and skipped the entry, whose pending was still
+// empty) must still emit it. The client is not started, so the status diff
+// is the only Synced reader while the pause is armed.
+func TestElectrumSyncFlushLateCommit(t *testing.T) {
+	stub := newStubNetwork()
+	for i := range 6 {
+		stub.addBlock(t, time.Unix(int64(1_700_000_000+i*60), 0))
+	}
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTxToAddr(t, addr)
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 3, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	net := &pauseSyncedNetwork{stubNetwork: stub, entered: make(chan struct{}), resume: make(chan struct{})}
+
+	c, err := NewElectrumClient(testParams(), net)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	c.ctx = t.Context()
+	c.quit = make(chan struct{})
+	c.enqueueNotification = make(chan any, 8)
+	entry := &scripthashEntry{}
+	c.addrCacheMtx.Lock()
+	c.addrCache[sh] = entry
+	c.addrCacheMtx.Unlock()
+
+	net.armed.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		entry.proc.Lock()
+		defer entry.proc.Unlock()
+		_, _, err := c.refetchEntry(sh, entry, func() ([]electrum.HistoryEntry, error) {
+			return stub.GetHistory(t.Context(), sh)
+		}, "status")
+		done <- err
+	}()
+
+	// The status diff has read Synced false. Complete the sync and run the
+	// one-time flush before it commits.
+	<-net.entered
+	stub.setSynced(true)
+	c.dispatchTipChange(&electrum.TipChange{Connected: []int32{stub.Tip()}})
+	if !c.flushedOnSync {
+		t.Fatal("test setup: the sync flush did not run")
+	}
+	close(net.resume)
+	if err := <-done; err != nil {
+		t.Fatalf("refetchEntry: %v", err)
+	}
+
+	c.addrCacheMtx.Lock()
+	pending := len(entry.pending)
+	c.addrCacheMtx.Unlock()
+	if pending != 0 {
+		t.Fatalf("%d deferred entries left pending on a synced store", pending)
+	}
+	select {
+	case n := <-c.enqueueNotification:
+		rt, ok := n.(RelevantTx)
+		if !ok || rt.Block == nil || rt.Block.Height != 3 {
+			t.Fatalf("got %#v, want a RelevantTx at height 3", n)
+		}
+	default:
+		t.Fatal("no RelevantTx emitted for the late-committed entry")
+	}
+}
+
+// TestElectrumLateCommitFlushSkipsFailedFetch: the flush refetchEntry runs
+// after a late commit releases only the entries deferred for their headers.
+// An entry whose raw-tx fetch failed in the same pass stays pending without
+// a second fetch, and the next tip change retries it.
+func TestElectrumLateCommitFlushSkipsFailedFetch(t *testing.T) {
+	stub := newStubNetwork()
+	for i := range 6 {
+		stub.addBlock(t, time.Unix(int64(1_700_000_000+i*60), 0))
+	}
+	addr, sh := newSimnetAddr(t)
+	confTxid, confRaw := synthTxToAddr(t, addr)
+	memTxid, memRaw := synthTxToAddr(t, addr)
+	// The mempool transaction's raw bytes are not served yet, so its fetch
+	// fails.
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 3, TxHash: confTxid}, {Height: 0, TxHash: memTxid}}
+	stub.rawTxs[confTxid] = confRaw
+	var memFetches atomic.Int32
+	stub.rawTxHook = func(txid string) {
+		if txid == memTxid {
+			memFetches.Add(1)
+		}
+	}
+	net := &pauseSyncedNetwork{stubNetwork: stub, entered: make(chan struct{}), resume: make(chan struct{})}
+
+	c, err := NewElectrumClient(testParams(), net)
+	if err != nil {
+		t.Fatalf("NewElectrumClient: %v", err)
+	}
+	c.ctx = t.Context()
+	c.quit = make(chan struct{})
+	c.enqueueNotification = make(chan any, 8)
+	entry := &scripthashEntry{}
+	c.addrCacheMtx.Lock()
+	c.addrCache[sh] = entry
+	c.addrCacheMtx.Unlock()
+
+	// The status diff reads Synced false for the confirmed entry and defers
+	// it; the sync flush runs before the diff commits.
+	net.armed.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		entry.proc.Lock()
+		defer entry.proc.Unlock()
+		_, _, err := c.refetchEntry(sh, entry, func() ([]electrum.HistoryEntry, error) {
+			return stub.GetHistory(t.Context(), sh)
+		}, "status")
+		done <- err
+	}()
+	<-net.entered
+	stub.setSynced(true)
+	c.dispatchTipChange(&electrum.TipChange{Connected: []int32{stub.Tip()}})
+	if !c.flushedOnSync {
+		t.Fatal("test setup: the sync flush did not run")
+	}
+	close(net.resume)
+	if err := <-done; err != nil {
+		t.Fatalf("refetchEntry: %v", err)
+	}
+
+	if n := memFetches.Load(); n != 1 {
+		t.Fatalf("failed mempool transaction fetched %d times in one pass, want 1", n)
+	}
+	c.addrCacheMtx.Lock()
+	pending := append([]electrum.HistoryEntry(nil), entry.pending...)
+	c.addrCacheMtx.Unlock()
+	if len(pending) != 1 || pending[0].TxHash != memTxid {
+		t.Fatalf("pending %+v, want only the failed mempool transaction", pending)
+	}
+	select {
+	case n := <-c.enqueueNotification:
+		rt, ok := n.(RelevantTx)
+		if !ok || rt.Block == nil || rt.Block.Height != 3 || rt.TxRecord == nil || rt.TxRecord.Hash.String() != confTxid {
+			t.Fatalf("got %#v, want the header-deferred RelevantTx at height 3", n)
+		}
+	default:
+		t.Fatal("the header-deferred entry was not flushed after the late commit")
+	}
+	select {
+	case n := <-c.enqueueNotification:
+		t.Fatalf("unexpected notification %#v in the same pass", n)
+	default:
+	}
+
+	// The server recovers; the next tip change's flush retries the entry.
+	stub.mu.Lock()
+	stub.rawTxs[memTxid] = memRaw
+	stub.mu.Unlock()
+	c.flushPending()
+	if n := memFetches.Load(); n != 2 {
+		t.Fatalf("mempool transaction fetched %d times after the tip-change flush, want 2", n)
+	}
+	select {
+	case n := <-c.enqueueNotification:
+		rt, ok := n.(RelevantTx)
+		if !ok || rt.Block != nil || rt.TxRecord == nil || rt.TxRecord.Hash.String() != memTxid {
+			t.Fatalf("got %#v, want the retried mempool RelevantTx", n)
+		}
+	default:
+		t.Fatal("the tip-change flush did not retry the failed entry")
+	}
+}
+
+// TestElectrumDuplicateHistoryEntryAcrossReadinessChange: a history reply
+// that lists the same (txid, height) twice, with the store becoming synced
+// between the diff's readiness checks of the two copies, fetches the
+// transaction once in the pass. The copies are judged as one entry, deferred
+// for its header and flushed after the commit, rather than one deferred and
+// one emitted or failed.
+func TestElectrumDuplicateHistoryEntryAcrossReadinessChange(t *testing.T) {
+	for _, serve := range []bool{false, true} {
+		name := "fetch fails"
+		if serve {
+			name = "fetch succeeds"
+		}
+		t.Run(name, func(t *testing.T) {
+			stub := newStubNetwork()
+			for i := range 6 {
+				stub.addBlock(t, time.Unix(int64(1_700_000_000+i*60), 0))
+			}
+			addr, sh := newSimnetAddr(t)
+			txid, rawHex := synthTxToAddr(t, addr)
+			stub.history[sh] = []electrum.HistoryEntry{{Height: 3, TxHash: txid}, {Height: 3, TxHash: txid}}
+			if serve {
+				stub.rawTxs[txid] = rawHex
+			}
+			var fetches atomic.Int32
+			stub.rawTxHook = func(string) { fetches.Add(1) }
+			net := &pauseSyncedNetwork{stubNetwork: stub, entered: make(chan struct{}), resume: make(chan struct{})}
+
+			c, err := NewElectrumClient(testParams(), net)
+			if err != nil {
+				t.Fatalf("NewElectrumClient: %v", err)
+			}
+			c.ctx = t.Context()
+			c.quit = make(chan struct{})
+			c.enqueueNotification = make(chan any, 8)
+			entry := &scripthashEntry{}
+			c.addrCacheMtx.Lock()
+			c.addrCache[sh] = entry
+			c.addrCacheMtx.Unlock()
+
+			// The first copy's readiness check reads Synced false; the store
+			// is synced before the diff checks the second.
+			net.armed.Store(true)
+			done := make(chan error, 1)
+			go func() {
+				entry.proc.Lock()
+				defer entry.proc.Unlock()
+				_, _, err := c.refetchEntry(sh, entry, func() ([]electrum.HistoryEntry, error) {
+					return stub.GetHistory(t.Context(), sh)
+				}, "status")
+				done <- err
+			}()
+			<-net.entered
+			stub.setSynced(true)
+			close(net.resume)
+			if err := <-done; err != nil {
+				t.Fatalf("refetchEntry: %v", err)
+			}
+
+			if n := fetches.Load(); n != 1 {
+				t.Fatalf("transaction fetched %d times in one pass, want 1", n)
+			}
+			c.addrCacheMtx.Lock()
+			pending := append([]electrum.HistoryEntry(nil), entry.pending...)
+			seen := append([]electrum.HistoryEntry(nil), entry.lastHistory...)
+			c.addrCacheMtx.Unlock()
+			var notes []any
+			for len(c.enqueueNotification) > 0 {
+				notes = append(notes, <-c.enqueueNotification)
+			}
+			if !serve {
+				if len(pending) != 1 || pending[0].TxHash != txid || len(seen) != 0 || len(notes) != 0 {
+					t.Fatalf("pending %+v, baseline %+v, notifications %d; want the entry pending alone",
+						pending, seen, len(notes))
+				}
+				return
+			}
+			if len(pending) != 0 || len(seen) != 1 || seen[0].TxHash != txid {
+				t.Fatalf("pending %+v, baseline %+v; want the entry in the baseline once", pending, seen)
+			}
+			if len(notes) != 1 {
+				t.Fatalf("%d notifications, want one RelevantTx", len(notes))
+			}
+			rt, ok := notes[0].(RelevantTx)
+			if !ok || rt.Block == nil || rt.Block.Height != 3 || rt.TxRecord == nil || rt.TxRecord.Hash.String() != txid {
+				t.Fatalf("got %#v, want a RelevantTx at height 3", notes[0])
+			}
+		})
 	}
 }
 

@@ -66,8 +66,8 @@ func liveChains(t *testing.T) []liveChain {
 		GenesisHash:  chaincfg.RegressionNetParams.GenesisHash,
 		// Pin genesis as a checkpoint so the validator path runs at
 		// least once during the live sync, and flag regtest's
-		// no-retarget rule so the retarget validator skips the
-		// 2016-block boundary checks.
+		// no-retarget rule. NextBits stays nil, so the electrum
+		// package runs no contextual difficulty check.
 		Checkpoints: []netparams.Checkpoint{
 			{Height: 0, Hash: chaincfg.RegressionNetParams.GenesisHash},
 		},
