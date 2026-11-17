@@ -159,7 +159,7 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 		if node == nil {
 			var err error
 			node, err = NewNode(n.ctx, sv, n.cfg.TorProxy,
-				n.cfg.Chain.Params.GenesisHash.String())
+				n.cfg.Chain.Params.GenesisHash.String(), n.cfg.Chain.Chain)
 			if err != nil {
 				log.Debugf("electrum: election: %s: %v", sv.Addr, err)
 				n.pool.recordFailure(sv.Addr)

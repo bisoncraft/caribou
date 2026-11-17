@@ -297,7 +297,7 @@ func (n *Network) Start(parent context.Context) error {
 	var dialErr error
 	for _, sv := range candidates {
 		node, dialErr = NewNode(n.ctx, sv, n.cfg.TorProxy,
-			n.cfg.Chain.Params.GenesisHash.String())
+			n.cfg.Chain.Params.GenesisHash.String(), n.cfg.Chain.Chain)
 		if dialErr != nil {
 			n.pool.recordFailure(sv.Addr)
 			log.Warnf("electrum: server %s failed: %v", sv.Addr, dialErr)
