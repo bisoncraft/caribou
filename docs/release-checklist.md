@@ -57,6 +57,13 @@ UTXO assets:
       `wallet/utxowallet/assets/`.
 - [ ] Fee-rate sources:
       `go test -tags live -run TestLiveFeeSources ./wallet/asset/btc/`.
+- [ ] Zcash light-client servers: `publicMainnetServers` and
+      `publicTestnetServers` in `wallet/asset/zec/zeclib/servers.go`. The
+      test makes every call the wallet makes against each listed server and
+      compares their chain tips and consensus branches. The comment above
+      the lists says what qualifies a server and where candidates come
+      from:
+      `go test -tags live -run TestPublicServers -v ./wallet/asset/zec/zeclib/`.
 
 ### Other external data
 

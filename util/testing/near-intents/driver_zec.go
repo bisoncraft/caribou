@@ -18,7 +18,7 @@ import (
 )
 
 // zecHarnessRPC is the JSON-RPC endpoint of the Zcash harness alpha node.
-const zecHarnessRPC = "http://127.0.0.1:33768"
+const zecHarnessRPC = "http://127.0.0.1:22768"
 
 // zecRegtestP2PKHPrefix is the version prefix of a transparent
 // pay-to-pubkey-hash address on Zcash testnet and regtest ("tm...").

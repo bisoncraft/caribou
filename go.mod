@@ -61,6 +61,8 @@ require (
 	golang.org/x/sync v0.21.0
 	golang.org/x/text v0.38.0
 	golang.org/x/time v0.9.0
+	google.golang.org/grpc v1.77.0
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/ini.v1 v1.67.1
 	lukechampine.com/blake3 v1.4.1
 )
@@ -96,7 +98,7 @@ require (
 	golang.org/x/mobile v0.0.0-20260611195102-4dd8f1dbf5d2 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/tools v0.46.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
 )
 
 replace github.com/btcsuite/btcd/btcec/v2 v2.3.4 => github.com/martonp/btcd/btcec/v2 v2.0.0-20250528172049-6b252bb1b6a1
