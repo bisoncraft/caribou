@@ -1,0 +1,52 @@
+{
+ "type": "Regular",
+ "proTxHash": "18a2521c24eeadf02d69c24302c39e8e4035803fce1366f40fb0b0ab4ff85d01",
+ "collateralHash": "18a2521c24eeadf02d69c24302c39e8e4035803fce1366f40fb0b0ab4ff85d01",
+ "collateralIndex": 2,
+ "operatorReward": 0,
+ "state": {
+  "version": 3,
+  "addresses": {},
+  "registeredHeight": 822,
+  "lastPaidHeight": 0,
+  "consecutivePayments": 0,
+  "PoSePenalty": 0,
+  "PoSeRevivedHeight": -1,
+  "PoSeBanHeight": 822,
+  "revocationReason": 0,
+  "votingAddress": "yaEfoB5tVNEVVBmPwouKsD3UnkbGULgYsU",
+  "shares": [
+   {
+    "amount": 50000000000,
+    "refundAddress": "yhUA9zFQeQEXCbAWuopyRhsiCjJbjBLCUT",
+    "refundScript": "76a914e80073400636750060e27218bf876e25743ac74e88ac",
+    "rewardAddress": "yXuo2CUgWZRe89UF4fybvLCyzepHc74Tpj",
+    "rewardScript": "76a9147f285d8719bf5b9842cde35320f705c80b2d188688ac",
+    "ownerAddress": "yRar4WVfFJWdTbL9jrtFbnSho5CZoyADBe"
+   },
+   {
+    "amount": 50000000000,
+    "refundAddress": "yXhxiAcqFDFQi47deuVU8rXNF23FRmW2RD",
+    "refundScript": "76a9147ceb763c3c881912d0e48950c0daefc71918bf4288ac",
+    "rewardAddress": "yXhxiAcqFDFQi47deuVU8rXNF23FRmW2RD",
+    "rewardScript": "76a9147ceb763c3c881912d0e48950c0daefc71918bf4288ac",
+    "ownerAddress": "ydphF9WwuWArCLdSJ8Xv9XiGhFacqAjGbn"
+   }
+  ],
+  "earlyPeriodBlocks": 10,
+  "earlyPenalty": 2500000000,
+  "pubKeyOperator": "b0e250808f19de7f213f1b7059b9298ec0b0ee9944d0d0a408dd31c10678bc6320addb4249461add014dc2512e176ef3"
+ },
+ "confirmations": 89,
+ "metaInfo": {
+  "lastDSQ": 0,
+  "mixingTxCount": 0,
+  "outboundAttemptCount": 0,
+  "lastOutboundAttempt": 0,
+  "lastOutboundAttemptElapsed": 1794916221,
+  "lastOutboundSuccess": 0,
+  "lastOutboundSuccessElapsed": 1794916221,
+  "is_platform_banned": false,
+  "platform_ban_height_updated": 0
+ }
+}
