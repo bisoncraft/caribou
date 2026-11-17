@@ -169,7 +169,7 @@ func TestLiveNodeConnect(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			node, err := NewNode(ctx, &ServerAddr{Proto: "ssl", Addr: tc.addr, SkipVerify: true}, "",
-				tc.params.GenesisHash.String())
+				tc.params.GenesisHash.String(), bisonwire.ChainBTC)
 			if err != nil {
 				t.Fatalf("NewNode: %v", err)
 			}
@@ -256,7 +256,7 @@ func TestLiveGetTransaction(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			node, err := NewNode(ctx, &ServerAddr{Proto: "ssl", Addr: tc.addr, SkipVerify: true}, "",
-				tc.params.GenesisHash.String())
+				tc.params.GenesisHash.String(), bisonwire.ChainBTC)
 			if err != nil {
 				t.Fatalf("NewNode: %v", err)
 			}
