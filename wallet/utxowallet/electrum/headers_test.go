@@ -201,29 +201,29 @@ func TestValidateBitsLocked(t *testing.T) {
 	}
 
 	h := newH(p, 0, chain[:boundary])
-	if err := h.validateBitsLocked(boundary, chain[boundary], nil, 0); err != nil {
+	if err := h.validateBitsLocked(boundary, chain[boundary], boundary-1, nil); err != nil {
 		t.Fatalf("valid retarget rejected: %v", err)
 	}
-	if err := h.validateBitsLocked(boundary, withBits(chain[boundary], chain[boundary-1].Bits), nil, 0); err == nil {
+	if err := h.validateBitsLocked(boundary, withBits(chain[boundary], chain[boundary-1].Bits), boundary-1, nil); err == nil {
 		t.Fatal("boundary header without its retarget accepted")
 	}
-	if err := h.validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), nil, 0); err == nil {
+	if err := h.validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), boundary-1, nil); err == nil {
 		t.Fatal("boundary header at PowLimit accepted")
 	}
 	h = newH(p, 0, chain[:boundary+1])
-	if err := h.validateBitsLocked(boundary+1, chain[boundary+1], nil, 0); err != nil {
+	if err := h.validateBitsLocked(boundary+1, chain[boundary+1], boundary, nil); err != nil {
 		t.Fatalf("valid off-boundary header rejected: %v", err)
 	}
-	if err := h.validateBitsLocked(boundary+1, withBits(chain[boundary+1], p.PowLimitBits), nil, 0); err == nil {
+	if err := h.validateBitsLocked(boundary+1, withBits(chain[boundary+1], p.PowLimitBits), boundary, nil); err == nil {
 		t.Fatal("off-boundary bits change accepted")
 	}
 
 	// Inputs from the batch being appended, with nothing stored.
 	empty := newH(p, 0, nil)
-	if err := empty.validateBitsLocked(boundary, chain[boundary], chain[:boundary], 0); err != nil {
+	if err := empty.validateBitsLocked(boundary, chain[boundary], -1, chain[:boundary]); err != nil {
 		t.Fatalf("valid retarget rejected with inputs in the batch: %v", err)
 	}
-	if err := empty.validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), chain[:boundary], 0); err == nil {
+	if err := empty.validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), -1, chain[:boundary]); err == nil {
 		t.Fatal("forged retarget accepted with inputs in the batch")
 	}
 
@@ -232,21 +232,21 @@ func TestValidateBitsLocked(t *testing.T) {
 	for _, missing := range []int32{boundary - testRetargetInterval, boundary - 1} {
 		h := newH(p, 0, chain[:boundary])
 		delete(h.byHeight, missing)
-		if err := h.validateBitsLocked(boundary, chain[boundary], nil, 0); err == nil ||
+		if err := h.validateBitsLocked(boundary, chain[boundary], boundary-1, nil); err == nil ||
 			!strings.Contains(err.Error(), "inputs unavailable") {
 			t.Fatalf("block %d missing: got %v, want an unavailable-input error", missing, err)
 		}
 	}
 	h = newH(p, 0, chain[:boundary+1])
 	delete(h.byHeight, boundary)
-	if err := h.validateBitsLocked(boundary+1, chain[boundary+1], nil, 0); err == nil ||
+	if err := h.validateBitsLocked(boundary+1, chain[boundary+1], boundary, nil); err == nil ||
 		!strings.Contains(err.Error(), "inputs unavailable") {
 		t.Fatalf("off-boundary parent missing: got %v, want an unavailable-input error", err)
 	}
 
 	// Params without a rule skip the check.
 	if err := newH(paramsWithCheckpoints(nil), 0, chain[:boundary]).
-		validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), nil, 0); err != nil {
+		validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), boundary-1, nil); err != nil {
 		t.Fatalf("nil NextBits should skip: %v", err)
 	}
 
@@ -986,7 +986,7 @@ func BenchmarkCheckBatchPoW(b *testing.B) {
 				hdrs[i] = cp.Header
 			}
 			b.ResetTimer()
-			if err := h.checkBatchPoW(cp.Height+1, hdrs); err != nil {
+			if err := h.checkBranchPoW(cp.Height+1, hdrs, cp.Height+1); err != nil {
 				b.Fatal(err)
 			}
 		})
