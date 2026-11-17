@@ -124,6 +124,12 @@ func (n *Network) rotate(dead *Node, hint *electionHint, reason string) {
 	if n.tryElect(dead.Addr().Addr, hint) {
 		return
 	}
+	if n.ctx.Err() != nil {
+		// Stop interrupted the election; no group is installed, so the
+		// closer is ours to spawn.
+		n.spawnCloser()
+		return
+	}
 
 	// No candidate answered. Enter the degraded state instead of dying:
 	// wallet slot empty (getNode callers error), observers as they are,
@@ -152,6 +158,12 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 		candidates = promoteCandidates(candidates, hint.preferred)
 	}
 	for _, sv := range candidates {
+		if n.ctx.Err() != nil {
+			// Stop landed mid-election; nothing a later candidate does
+			// would be installed, and nothing it fails says anything
+			// about it.
+			return false
+		}
 		if sv.Addr == exclude {
 			continue
 		}
@@ -162,7 +174,7 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 				n.cfg.Chain.Params.GenesisHash.String())
 			if err != nil {
 				log.Debugf("electrum: election: %s: %v", sv.Addr, err)
-				n.pool.recordFailure(sv.Addr)
+				n.scoreFailure(sv.Addr)
 				continue
 			}
 			// The connection itself lives on the network context (dial
@@ -174,7 +186,7 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 			if err != nil {
 				log.Debugf("electrum: election: %s: subscribe headers: %v", sv.Addr, err)
 				node.Close()
-				n.pool.recordFailure(sv.Addr)
+				n.scoreFailure(sv.Addr)
 				continue
 			}
 			tip = t
@@ -186,7 +198,7 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 			if err != nil {
 				log.Debugf("electrum: election: %s: %v", sv.Addr, err)
 				node.Close()
-				n.pool.recordFailure(sv.Addr)
+				n.scoreFailure(sv.Addr)
 				continue
 			}
 			if !agrees {
@@ -202,11 +214,11 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 		if err := n.attachNode(node, tip); err != nil {
 			log.Warnf("electrum: rotation to %s failed: %v", sv.Addr, err)
 			node.Close()
-			// A future-dated header is no evidence against the server:
-			// local clock skew produces the same error (errTimeTooNew).
-			if !errors.Is(err, errTimeTooNew) {
-				n.pool.recordFailure(sv.Addr)
-			}
+			// A rule violation quarantines; anything else records a
+			// failure as a failed attach always has, except a
+			// future-dated header (local clock skew produces it as well)
+			// and a failure during shutdown.
+			n.penalize(sv.Addr, err, penaltyFailure)
 			continue
 		}
 		n.pool.recordSuccess(sv.Addr)
@@ -365,7 +377,7 @@ func (n *Network) adoptObserver(addr string) (*Node, *HeadersTip) {
 // height, so rounds are consumed only when the server's answer keeps
 // changing: an honest reorg mid-attach costs one extra round, while a
 // flapping or hostile server exhausts the budget and the election moves on.
-// Depth within a round is bounded by catchUpFrom's maxReorgDepth.
+// The reorg attempts of all rounds share one maxReorgAttempts budget.
 const maxReconcileRounds = 4
 
 // attachNode makes node the wallet server: header catch-up, subscription
@@ -378,25 +390,24 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	}
 
 	// A successor whose tip CONFLICTS at our height (the winning side of a
-	// verified divergence) needs forced reconciliation: the passive path
-	// keeps first-seen on equal work, but this node's histories reference
-	// ITS chain — the store must follow or replayed confirmed entries
-	// would bind to the wrong block hashes. Rewind to the fork point and
-	// refill from the successor via the standard reorg-recovery catch-up,
-	// publishing the disconnects.
+	// verified divergence) needs forced reconciliation: this node's
+	// histories reference ITS chain, so the store must follow or replayed
+	// confirmed entries would bind to the wrong block hashes. The store
+	// swaps onto the successor's branch, which SwapBranch accepts at equal
+	// work, then refills to the successor's tip, publishing the
+	// disconnects.
 	//
 	// The exit test compares the store against the header the server
 	// serves NOW — the snapshot in `tip` only short-circuits the common
 	// already-aligned case. The snapshot goes stale the moment the server
 	// reorgs again (an adopted observer's last-drained tip, or a lying
 	// server), and reconciling toward a hash the server no longer serves
-	// makes zero progress per round: each rewind refills the same blocks
+	// makes zero progress per round: each swap refills the same blocks
 	// from the server's current chain, forever, under rotMtx, flooding the
 	// consumer with disconnect batches. Rounds are consumed only when the
-	// server's answer keeps changing — an honest mid-attach reorg costs
-	// one extra round — so the small budget is purely a flap/hostility
-	// backstop; depth within a round is bounded by catchUpFrom's
-	// maxReorgDepth.
+	// server's answer keeps changing (an honest mid-attach reorg costs one
+	// extra round), so the small budget is purely a backstop against
+	// flapping or hostile servers.
 	rawTip, err := hex.DecodeString(tip.Hex)
 	if err != nil {
 		return fmt.Errorf("electrum: successor tip header: %w", err)
@@ -407,6 +418,7 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	}
 	claimed := n.headers.headerHash(&tipHdr)
 	fetch := nodeFetcher(n.ctx, node)
+	budget := maxReorgAttempts
 	for round := 0; n.ctx.Err() == nil && tip.Height == n.headers.Tip() &&
 		n.headers.TipHash() != claimed; round++ {
 		raw, count, err := fetch(tip.Height, 1)
@@ -432,20 +444,22 @@ func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 				"height %d after %d reconcile rounds",
 				node.Addr(), tip.Height, round)
 		}
-		disc, _, err := n.rewindToFork(fetch)
-		if err != nil {
-			return fmt.Errorf("electrum: reconcile rewind: %w", err)
+		disc, err := n.reorg(fetch, tip.Height, &budget)
+		if err == nil {
+			var more []DisconnectedBlock
+			more, err = n.catchUpWithin(tip.Height, fetch, &budget)
+			disc = append(disc, more...)
 		}
-		// Deliver the disconnects before any error return: the store is
-		// already truncated, and an undelivered rollback permanently
-		// diverges the consumer's view from the store.
-		more, cerr := n.catchUpFrom(tip.Height, fetch)
-		disc = append(disc, more...)
+		// Disconnects here come only from swaps, and are delivered before
+		// any error return: a swap that succeeded stays applied when a later
+		// step fails, and a swap whose append failed after its rewind
+		// returns its disconnects with the error. An undelivered rollback
+		// permanently diverges the consumer's view from the store.
 		if len(disc) > 0 && !n.deliverTipChange(&TipChange{Disconnected: disc}) {
 			return errors.New("electrum: shutdown during reconciliation")
 		}
-		if cerr != nil {
-			return fmt.Errorf("electrum: reconcile catch-up: %w", cerr)
+		if err != nil {
+			return fmt.Errorf("electrum: reconcile: %w", err)
 		}
 	}
 
@@ -527,7 +541,7 @@ func (n *Network) lagRotate(lagBlocks int32, lagFor time.Duration) {
 	if node == nil {
 		return
 	}
-	n.pool.recordFailure(node.Addr().Addr)
+	n.scoreFailure(node.Addr().Addr)
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -213,11 +212,20 @@ func (n *Network) observerTick(st *observerLoopState) {
 	// Divergence probe: an observer serving a different header at a height
 	// we have means one of us is on another chain. The dissenter must
 	// demonstrate work before any action is taken (see handleDivergence).
-	// An observer ahead of us is probed at our tip height — its extension
-	// is what breaks an equal-work tie — up to the reorg budget; beyond
+	// An observer ahead of us is probed at our tip height (its extension
+	// is what breaks an equal-work tie) up to the reorg budget; beyond
 	// that the store is stale enough that the lag path's rotation is the
 	// right answer.
+	//
+	// Work verdicts need the store to hold the newest checkpoint: below it
+	// the stored headers were never hashed, so their claimed work counts
+	// for nothing (see Headers.SwapBranch). Observers run from Start,
+	// before the initial sync, so the probe waits for the store; the lag
+	// path below does not.
 	var loss *divergenceLoss
+	if !n.headers.HoldsNewestCheckpoint() {
+		obs = nil
+	}
 	for _, o := range obs {
 		h, hdr := o.tip()
 		if hdr == nil {
@@ -313,6 +321,9 @@ func (n *Network) fillObservers(walletAddr string) {
 	}
 	dials := 0
 	for _, sv := range n.pool.observerCandidates() {
+		if n.ctx.Err() != nil {
+			return
+		}
 		count, ok := have(sv.Addr)
 		if count >= maxObservers {
 			break
@@ -327,7 +338,7 @@ func (n *Network) fillObservers(walletAddr string) {
 		node, err := NewNode(n.ctx, sv, n.cfg.TorProxy,
 			n.cfg.Chain.Params.GenesisHash.String())
 		if err != nil {
-			n.pool.recordFailure(sv.Addr)
+			n.scoreFailure(sv.Addr)
 			continue
 		}
 		ctx, cancel := n.rpcCtx()
@@ -335,7 +346,7 @@ func (n *Network) fillObservers(walletAddr string) {
 		cancel()
 		if err != nil {
 			node.Close()
-			n.pool.recordFailure(sv.Addr)
+			n.scoreFailure(sv.Addr)
 			continue
 		}
 		o := &observer{node: node, stopDrain: make(chan struct{})}
@@ -379,7 +390,7 @@ func (n *Network) fillObservers(walletAddr string) {
 					// belongs to its watchNode now.
 					return
 				case <-o.node.Done():
-					n.pool.recordFailure(o.node.Addr().Addr)
+					n.scoreFailure(o.node.Addr().Addr)
 					return
 				case <-n.ctx.Done():
 					return
@@ -390,87 +401,147 @@ func (n *Network) fillObservers(walletAddr string) {
 }
 
 // handleDivergence audits an observer whose chain conflicts with ours at
-// conflictHeight. The dissenter must demonstrate work: its recent headers
-// are fetched and PoW-checked, and their cumulative work over the contested
-// span must strictly exceed the store's. Unverified dissent demotes the
-// observer — a lone malicious server must not be able to freeze the wallet.
+// conflictHeight. The dissenter must demonstrate work: its headers above the
+// fork point are validated as a branch of the store (auditDissent), and their
+// cumulative work must strictly exceed the store's over the same span.
 // Equal work is a tie, not a verdict: same-height competing blocks carry
 // identical difficulty, so acting on a tie chose a side at random, and the
 // other side's observers reversed it on the next rotation (on LTC mainnet
 // that walked through every shipped server and left the wallet degraded for
 // hours). Returns the verified loss for the tick loop to act on once it has
 // persisted, or nil.
+//
+// The fork point is found from the observer's own headers: first the window
+// of reorgRewindDepth headers below the conflict, then, when that window
+// shares no header with the store, one more request down to the deepest fork
+// a verdict can act on (a successor's attach follows a fork at most
+// maxReorgDepth below the tip, never below a held checkpoint). A fork deeper
+// than the window is exactly what a wallet server would choose to escape the
+// observers, so it is followed, not held against the observer.
+//
+// Only evidence against the observer costs it anything. A rule violation in
+// its headers quarantines it; a failed fetch or less work demotes it. Outcomes a moving
+// chain or a local condition can produce as well are inconclusive and
+// re-probed next tick: the observer's chain changing between requests, its
+// batch not ending at its advertised tip, the store moving during the audit,
+// a timestamp past the local bound, and no header shared with the store down
+// to the deepest supported fork, which says the store may need a resync.
 func (n *Network) handleDivergence(o *observer, conflictHeight int32) *divergenceLoss {
 	// One snapshot: the drain goroutine advances the observer tip
 	// concurrently, and reading height and header separately could fetch a
-	// batch for the old height while auditing against the new tip hash,
-	// spuriously demoting an honest observer.
+	// batch for the old height while auditing against the new tip hash.
 	h, tipHdr := o.tip()
 	if tipHdr == nil || h < conflictHeight {
 		return nil
 	}
 	addr := o.node.Addr().Addr
-	start := conflictHeight - reorgRewindDepth
-	if start < n.headers.StartHeight() {
-		start = n.headers.StartHeight()
-	}
-	ctx, cancel := n.rpcCtx()
-	res, err := o.node.BlockHeaders(ctx, start, int(h-start)+1)
-	cancel()
-	if err != nil {
-		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
-			"work audit (header fetch: %v); demoting", addr, conflictHeight, err)
-		n.pool.recordFailure(addr)
-		o.node.Close()
-		return nil
-	}
-	raw, err := hex.DecodeString(res.HexConcat)
-	if err != nil || len(raw) < n.cfg.Chain.HeaderSize {
-		log.Warnf("electrum: observer %s diverged at height %d but returned an "+
-			"unusable header batch; demoting", addr, conflictHeight)
-		n.pool.recordFailure(addr)
-		o.node.Close()
-		return nil
-	}
-	batch := make([]*wire.BlockHeader, 0, len(raw)/n.cfg.Chain.HeaderSize)
-	for off := 0; off+n.cfg.Chain.HeaderSize <= len(raw); off += n.cfg.Chain.HeaderSize {
-		var hdr wire.BlockHeader
-		if err := hdr.Deserialize(bytes.NewReader(raw[off : off+n.cfg.Chain.HeaderSize])); err != nil {
-			log.Warnf("electrum: observer %s diverged at height %d but served an "+
-				"undecodable header; demoting: %v", addr, conflictHeight, err)
-			n.pool.recordFailure(addr)
-			o.node.Close()
-			return nil
+	claimedTip := n.headers.headerHash(tipHdr)
+	// demote drops the observer and penalizes it for cause: a RuleError
+	// quarantines, anything else (a failed fetch, less work) records a
+	// failure. A nil cause is a failure. Nothing is recorded during
+	// shutdown.
+	demote := func(cause error, format string, args ...any) *divergenceLoss {
+		p := penaltyNone
+		switch {
+		case cause != nil:
+			p = n.penalize(addr, cause, penaltyFailure)
+		case n.ctx.Err() == nil:
+			p = penaltyFailure
+			n.scoreFailure(addr)
 		}
-		batch = append(batch, &hdr)
-	}
-	dissentWork, err := auditDissent(batch, n.headers.headerHash(tipHdr),
-		n.headers.headerHash, n.headers.checkPoW)
-	if err != nil {
-		// Fabricated or incoherent chain: demote and drop the observer,
-		// keep the wallet stream untouched.
-		log.Warnf("electrum: observer %s diverged at height %d but failed the "+
-			"work audit; demoting: %v", addr, conflictHeight, err)
-		n.pool.recordFailure(addr)
+		verdict := "demoting"
+		if p == penaltyQuarantine {
+			verdict = "quarantined"
+		}
+		log.Warnf("electrum: observer %s diverged at height %d but "+format+"; "+verdict,
+			append([]any{addr, conflictHeight}, args...)...)
 		o.node.Close()
 		return nil
 	}
-	if int(conflictHeight-start) >= len(batch) {
-		log.Warnf("electrum: observer %s diverged at height %d but its batch "+
-			"stops short of it; demoting", addr, conflictHeight)
-		n.pool.recordFailure(addr)
-		o.node.Close()
+	inconclusive := func(format string, args ...any) *divergenceLoss {
+		log.Infof("electrum: divergence audit of observer %s at height %d is "+
+			"inconclusive: "+format+"; re-probing next tick",
+			append([]any{addr, conflictHeight}, args...)...)
 		return nil
 	}
-	theirs := n.headers.headerHash(batch[conflictHeight-start])
 
-	// The audit above involved network round trips; re-read the store
-	// before judging. A rotation completing meanwhile reconciles the store
-	// onto its successor's chain, and a live reorg can move it too — in
-	// either case the conflict may be gone, and the judgment must be
-	// against whatever the store holds NOW, not the snapshot the tick
-	// started from.
+	// The store state the verdict is judged against. A store that moves
+	// before the verdict makes the audit inconclusive.
+	localTip, localHash := n.headers.tipSnapshot()
+	floor := max(n.headers.lowestFork(), localTip-maxReorgDepth)
+	if conflictHeight <= floor {
+		return inconclusive("the conflict lies at or below the deepest supported fork %d", floor)
+	}
+	// Advertised heights are untrusted. With h at most maxReorgDepth above
+	// the tip and every request starting at or above floor, no request
+	// exceeds 2*maxReorgDepth+1 headers.
+	if h > localTip+maxReorgDepth {
+		return inconclusive("advertised tip %d is more than %d above ours", h, maxReorgDepth)
+	}
+	start := max(conflictHeight-reorgRewindDepth, floor)
+	shallow, err := n.fetchObserverHeaders(o, start, h-start+1)
+	if err != nil {
+		return demote(err, "failed the work audit (header fetch: %v)", err)
+	}
+	if err := n.linkedWithin(start, shallow); err != nil {
+		return demote(err, "failed the work audit: %v", err)
+	}
+	if len(shallow) != int(h-start)+1 || n.headers.headerHash(shallow[len(shallow)-1]) != claimedTip {
+		return inconclusive("the batch for heights %d-%d does not end at the advertised tip", start, h)
+	}
+
+	headers, from := shallow, start
+	fork, found := n.sharedHeight(from, headers, conflictHeight-1)
+	if !found && start > floor {
+		lower, err := n.fetchObserverHeaders(o, floor, start-floor)
+		if err != nil {
+			return demote(err, "failed the work audit (header fetch: %v)", err)
+		}
+		if err := n.linkedWithin(floor, lower); err != nil {
+			return demote(err, "failed the work audit: %v", err)
+		}
+		if len(lower) != int(start-floor) {
+			return inconclusive("the batch for heights %d-%d holds %d headers", floor, start-1, len(lower))
+		}
+		// The two responses are separate snapshots of the observer's
+		// chain. A seam between them is the observer reorging between
+		// requests, not a rule violation.
+		if shallow[0].PrevBlock != n.headers.headerHash(lower[len(lower)-1]) {
+			return inconclusive("its chain moved between the requests")
+		}
+		headers, from = append(lower, shallow...), floor
+		fork, found = n.sharedHeight(from, headers, conflictHeight-1)
+	}
+	if !found {
+		// A dissenter that contradicts a checkpoint is at fault.
+		for i, hdr := range headers {
+			if err := n.headers.validateCheckpoint(from+int32(i), hdr); err != nil {
+				return demote(err, "failed the work audit: %v", err)
+			}
+		}
+		log.Errorf("electrum: the header store shares no header with observer %s "+
+			"from height %d to %d, the deepest fork a reorg can follow; if the "+
+			"observer is right, the store is on a deeper fork and needs a resync",
+			addr, from, conflictHeight)
+		return nil
+	}
+
+	dissentWork, err := n.auditDissent(fork+1, headers[fork+1-from:], claimedTip)
+	var ruleErr *RuleError
+	switch {
+	case errors.As(err, &ruleErr):
+		return demote(err, "failed the work audit: %v", err)
+	case err != nil:
+		// errTimeTooNew (local clock skew produces it as well), or the
+		// store moved under the branch's root.
+		return inconclusive("%v", err)
+	}
+	theirs := n.headers.headerHash(headers[conflictHeight-from])
 	ours := n.headers.ByHeight(conflictHeight)
+	localWork := n.headers.workRange(fork+1, localTip)
+	if tip, hash := n.headers.tipSnapshot(); tip != localTip || hash != localHash {
+		return inconclusive("the header store moved during the audit")
+	}
 	if ours == nil || n.headers.headerHash(ours) == theirs {
 		log.Debugf("electrum: divergence with %s at height %d resolved during "+
 			"the audit", addr, conflictHeight)
@@ -481,18 +552,13 @@ func (n *Network) handleDivergence(o *observer, conflictHeight int32) *divergenc
 	// Self-attested Bits are only meaningful in comparison: a header's PoW
 	// check proves the hash beats its OWN claimed target, so a liar can
 	// claim trivial difficulty and "pass". The dissent is credible only if
-	// its cumulative work over the contested span exceeds our own chain's —
+	// its cumulative work above the fork exceeds our own chain's there;
 	// claiming low difficulty then loses the comparison, and claiming high
 	// difficulty fails the hash check.
-	localWork := n.headers.workRange(start, n.headers.Tip())
 	switch dissentWork.Cmp(localWork) {
 	case -1:
-		log.Warnf("electrum: observer %s presents a linked, PoW-valid chain at "+
-			"height %d with less cumulative work than ours (%s < %s); stale or "+
-			"losing fork, demoting", addr, conflictHeight, dissentWork, localWork)
-		n.pool.recordFailure(addr)
-		o.node.Close()
-		return nil
+		return demote(nil, "presents a linked, PoW-valid chain with less cumulative work "+
+			"above fork %d than ours (%s < %s); stale or losing fork", fork, dissentWork, localWork)
 	case 0:
 		// Competing blocks at one height. Neither side has demonstrated
 		// more work; the next block decides, and the next tick sees it
@@ -517,9 +583,9 @@ func (n *Network) handleDivergence(o *observer, conflictHeight int32) *divergenc
 		// observers police it from there.
 		return nil
 	}
-	log.Warnf("electrum: observer %s presents a chain with more work at height "+
-		"%d (%s vs ours %s); wallet server %s is on the losing side", addr,
-		conflictHeight, theirs, oursHash, walletNode.Addr().Addr)
+	log.Warnf("electrum: observer %s presents a chain with more work above fork %d "+
+		"(%s vs ours %s at height %d); wallet server %s is on the losing side", addr,
+		fork, theirs, oursHash, conflictHeight, walletNode.Addr().Addr)
 	return &divergenceLoss{
 		walletAddr: walletNode.Addr().Addr,
 		height:     conflictHeight,
@@ -530,6 +596,53 @@ func (n *Network) handleDivergence(o *observer, conflictHeight int32) *divergenc
 			wantHash:   theirs,
 		},
 	}
+}
+
+// fetchObserverHeaders fetches up to count headers from the observer starting
+// at from.
+func (n *Network) fetchObserverHeaders(o *observer, from, count int32) ([]*wire.BlockHeader, error) {
+	ctx, cancel := n.rpcCtx()
+	res, err := o.node.BlockHeaders(ctx, from, int(count))
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	if res.Count == 0 {
+		return nil, nil
+	}
+	raw, err := hex.DecodeString(res.HexConcat)
+	if err != nil {
+		return nil, fmt.Errorf("undecodable header batch: %w", err)
+	}
+	if len(raw)%n.cfg.Chain.HeaderSize != 0 {
+		return nil, fmt.Errorf("header batch length %d not a multiple of %d", len(raw), n.cfg.Chain.HeaderSize)
+	}
+	return n.headers.parseBatch(raw)
+}
+
+// linkedWithin returns a *RuleError for the first header of hdrs, the
+// observer's headers at heights from and up in one response, that does not
+// link to the header before it. A response that contradicts itself is the
+// observer's fault.
+func (n *Network) linkedWithin(from int32, hdrs []*wire.BlockHeader) error {
+	for i := 1; i < len(hdrs); i++ {
+		if hdrs[i].PrevBlock != n.headers.headerHash(hdrs[i-1]) {
+			return &RuleError{Height: from + int32(i), Err: errors.New("observer batch does not link")}
+		}
+	}
+	return nil
+}
+
+// sharedHeight returns the highest height at or below top whose header in
+// hdrs, the observer's headers at heights from and up, is also the store's.
+func (n *Network) sharedHeight(from int32, hdrs []*wire.BlockHeader, top int32) (int32, bool) {
+	for height := min(top, from+int32(len(hdrs))-1); height >= from; height-- {
+		ours := n.headers.ByHeight(height)
+		if ours != nil && n.headers.headerHash(ours) == n.headers.headerHash(hdrs[height-from]) {
+			return height, true
+		}
+	}
+	return 0, false
 }
 
 // divergenceRotate acts on a persisted verified loss: demote the wallet
@@ -551,7 +664,7 @@ func (n *Network) divergenceRotate(loss *divergenceLoss) {
 	log.Warnf("electrum: wallet server %s still serves the losing chain at "+
 		"height %d; rotating toward %s", loss.walletAddr, loss.height,
 		loss.hint.wantHash)
-	n.pool.recordFailure(loss.walletAddr)
+	n.scoreFailure(loss.walletAddr)
 	n.wg.Add(1)
 	go func() {
 		defer n.wg.Done()
@@ -622,35 +735,24 @@ func (n *Network) discoverPeers() {
 	}
 }
 
-// auditDissent validates a dissenting header batch's internal coherence and
-// returns its cumulative work. Requirements: non-empty, internally linked
-// (each header's PrevBlock is the previous header's hash), terminating in
-// claimedTip (the batch actually ends at the chain the observer advertised),
-// and every header passing the hash-beats-claimed-target check. The CALLER
-// must compare the returned work against the local chain's over the same
-// span — self-attested difficulty is only bounded by that comparison.
-// headerHash supplies the chain's block identity (PrevBlock linkage is X11
-// on Dash, for example, so raw wire.BlockHeader.BlockHash cannot be used).
-func auditDissent(batch []*wire.BlockHeader, claimedTip chainhash.Hash,
-	headerHash func(*wire.BlockHeader) chainhash.Hash,
-	checkPoW func(*wire.BlockHeader) error) (*big.Int, error) {
-
+// auditDissent validates a dissenting observer's header batch, its headers at
+// heights start and up, as a branch of the store rooted at the stored header
+// below start (Headers.validateBranch): linkage to that header and through
+// the batch, checkpoints, the target range, the consensus difficulty bits,
+// the timestamp bound and the PoW hash of every header. Rooting at the store
+// keeps the caller's work comparison over one span: a batch that does not
+// link there belongs to a fork deeper than the audit window, and its work
+// says nothing about the window. The batch must also end at claimedTip, the
+// chain the observer advertised. It returns the batch's cumulative work,
+// which the caller compares against the store's over the same span; a
+// header's PoW only proves its hash beats its own claimed target.
+func (n *Network) auditDissent(start int32, batch []*wire.BlockHeader, claimedTip chainhash.Hash) (*big.Int, error) {
 	if len(batch) == 0 {
 		return nil, errors.New("electrum: empty dissent batch")
 	}
-	work := new(big.Int)
-	for i, hdr := range batch {
-		if i > 0 && hdr.PrevBlock != headerHash(batch[i-1]) {
-			return nil, fmt.Errorf("electrum: dissent batch does not link at index %d", i)
-		}
-		if err := checkPoW(hdr); err != nil {
-			return nil, err
-		}
-		work.Add(work, blockchain.CalcWork(hdr.Bits))
-	}
-	if got := headerHash(batch[len(batch)-1]); got != claimedTip {
+	if got := n.headers.headerHash(batch[len(batch)-1]); got != claimedTip {
 		return nil, fmt.Errorf("electrum: dissent batch ends at %s, not the "+
 			"advertised tip %s", got, claimedTip)
 	}
-	return work, nil
+	return n.headers.validateBranch(start-1, batch)
 }

@@ -11,12 +11,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -292,17 +294,21 @@ func (n *Network) Start(parent context.Context) error {
 	var tip *HeadersTip
 	var dialErr error
 	for _, sv := range candidates {
+		if n.ctx.Err() != nil {
+			dialErr = n.ctx.Err()
+			break
+		}
 		node, dialErr = NewNode(n.ctx, sv, n.cfg.TorProxy,
 			n.cfg.Chain.Params.GenesisHash.String())
 		if dialErr != nil {
-			n.pool.recordFailure(sv.Addr)
+			n.scoreFailure(sv.Addr)
 			log.Warnf("electrum: server %s failed: %v", sv.Addr, dialErr)
 			continue
 		}
 		tip, dialErr = node.SubscribeHeaders(n.ctx)
 		if dialErr != nil {
 			node.Close()
-			n.pool.recordFailure(sv.Addr)
+			n.scoreFailure(sv.Addr)
 			log.Warnf("electrum: server %s failed: subscribe headers: %v", sv.Addr, dialErr)
 			continue
 		}
@@ -377,15 +383,14 @@ func (n *Network) Start(parent context.Context) error {
 	n.spawnReserved(group, func() {
 		if err := n.syncHeaders(n.ctx, node); err != nil {
 			if n.ctx.Err() == nil {
-				// Context is still live, so this is a real sync error
-				// (not a graceful shutdown) — bad or hostile server.
-				// Demote it so the reconnect rotates, except for a
+				// Context is still live, so this is a real sync error,
+				// not a graceful shutdown. Penalize the server so the
+				// wallet's reconnect elects around it: a rule violation
+				// quarantines, anything else records a failure, except a
 				// future-dated header, which local clock skew produces
-				// just as well and which every honest server would
-				// trigger alike.
-				if !errors.Is(err, errTimeTooNew) {
-					n.pool.recordFailure(node.Addr().Addr)
-				}
+				// just as well. The network then stops; rotating in
+				// place from Start is left to the reconnect.
+				n.penalize(node.Addr().Addr, err, penaltyFailure)
 				log.Errorf("electrum: initial header sync failed: %v", err)
 			}
 			n.mu.Lock()
@@ -753,17 +758,21 @@ func (n *Network) getNode() (*Node, error) {
 // a shipped checkpoint is broken or lying, and headers at or below that
 // checkpoint are authenticated only once the store reaches it.
 //
-// When the server's chain diverges below the stored tip — a reorg landed
-// while no node was attached: a successor after a fork, or a restart against
-// a moved chain — the first batch fails to connect. That is recoverable, not
-// fatal: rewind to the fork point (bounded like catchUpFrom) and retry,
-// surfacing the disconnects so consumers roll back what the store dropped.
-// Treating it as fatal made every candidate on the honest chain fail
-// identically after an ordinary one-block reorg, leaving rotation degraded
-// forever and Start unable to open the wallet until the header file was
-// deleted by hand.
+// When the server's chain diverges below the stored tip (a reorg landed while
+// no node was attached: a successor after a fork, or a restart against a
+// moved chain), the first batch fails to connect. That is recoverable, not
+// fatal: reorg moves the store onto the server's chain when the branch
+// validates, and the disconnects are surfaced so consumers roll back what the
+// store dropped. Treating it as fatal made every candidate on the honest
+// chain fail identically after an ordinary one-block reorg, leaving rotation
+// degraded forever and Start unable to open the wallet until the header file
+// was deleted by hand. The reorg attempts of one call share a budget of
+// maxReorgAttempts. A server chain that contradicts a checkpoint makes the
+// store discard back to the highest checkpoint it holds (see
+// discardOnCheckpointMismatch). The caller penalizes the server for the
+// returned error.
 func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
-	var rewound int32
+	budget := maxReorgAttempts
 	fetch := nodeFetcher(ctx, node)
 	for {
 		nextHeight := max(n.headers.Tip()+1, n.cfg.Chain.StartHeight)
@@ -780,20 +789,20 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 		}
 		if _, err := n.headers.AppendBatch(nextHeight, raw); err != nil {
 			if !errors.Is(err, errHeaderDoesNotConnect) {
-				return err
+				return n.discardOnCheckpointMismatch(err)
 			}
-			disc, depth, rerr := n.rewindToFork(fetch)
-			if rerr != nil {
-				return fmt.Errorf("electrum: reorg rewind: %w", rerr)
-			}
-			rewound += depth
+			// The server's tip is only a point to stop fetching the
+			// branch at; acceptance rests on the branch itself.
+			disc, rerr := n.reorg(fetch, n.TargetTip(), &budget)
+			// Disconnects are published even when reorg errors: a swap
+			// whose append failed after the rewind has already truncated
+			// the store.
 			if len(disc) > 0 && !n.deliverTipChange(&TipChange{Disconnected: disc}) {
 				return ctx.Err()
 			}
-			if rewound > maxReorgDepth {
-				return fmt.Errorf("electrum: reorg deeper than %d blocks "+
-					"near height %d; resync required: %w",
-					maxReorgDepth, nextHeight, err)
+			if rerr != nil {
+				return n.discardOnCheckpointMismatch(
+					fmt.Errorf("electrum: reorg near height %d: %w", nextHeight, rerr))
 			}
 			continue
 		}
@@ -820,15 +829,16 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 		return fmt.Errorf("electrum: server returned no headers from height %d",
 			n.cfg.Chain.StartHeight)
 	}
-	if tip, cp := n.headers.Tip(), n.headers.newestCheckpointHeight(); tip < cp {
-		return fmt.Errorf("electrum: server chain ends at %d, below checkpoint %d", tip, cp)
+	if !n.headers.HoldsNewestCheckpoint() {
+		return fmt.Errorf("electrum: server chain ends at %d without the checkpoint at %d",
+			n.headers.Tip(), n.headers.newestCheckpointHeight())
 	}
 	// Synced implies that every stored header is either at or below a
 	// checkpoint the store holds (authenticated by hash linkage to it) or
-	// PoW-checked: the store has passed the newest checkpoint, headers
-	// above it were hashed on append, and rewindLocked refuses to drop
-	// below it from here on. The chain client verifies confirmations only
-	// once Synced is true.
+	// PoW-checked: the store holds the newest checkpoint (its hash, not
+	// just its height), headers above it were hashed on append, and
+	// rewindLocked refuses to drop below it from here on. The chain client
+	// verifies no new confirmation until Synced is true.
 	n.headers.SetSynced(true)
 	log.Infof("electrum: header sync complete, tip at %d", n.headers.Tip())
 	return nil
@@ -853,7 +863,7 @@ func (n *Network) headersLoop(node *Node, initialTip *HeadersTip) {
 	// must NOT synthesize again — the previous `tip != lastDeliveredTip-1`
 	// guard always fired and double-delivered the tip after a startup
 	// catch-up.
-	n.applyTipNotification(initialTip, &lastDeliveredTip)
+	n.applyTipNotification(node, initialTip, &lastDeliveredTip)
 	if tip := n.headers.Tip(); tip == tipBefore && tip >= n.cfg.Chain.StartHeight {
 		if n.deliverConnectRange(tip-1, tip) {
 			lastDeliveredTip = tip
@@ -869,7 +879,7 @@ func (n *Network) headersLoop(node *Node, initialTip *HeadersTip) {
 			if !ok {
 				return
 			}
-			n.applyTipNotification(t, &lastDeliveredTip)
+			n.applyTipNotification(node, t, &lastDeliveredTip)
 		}
 	}
 }
@@ -894,7 +904,7 @@ func (n *Network) deliverConnectRange(lastDelivered, newTip int32) bool {
 // is the highest height we've already published in a Connected entry; we
 // update it to the new tip after a successful apply so the next iteration
 // emits only the incremental range.
-func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
+func (n *Network) applyTipNotification(node *Node, t *HeadersTip, lastDelivered *int32) {
 	if t == nil {
 		return
 	}
@@ -925,9 +935,10 @@ func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
 	if t.Height == ourTip {
 		// A header at our own height with a different hash is the
 		// common way a same-height tie resolves for the wallet: the
-		// server switched sides. Rewind the losing block and refill;
-		// otherwise the store would stay on the losing side until the
-		// next block failed to link. The same hash is a duplicate.
+		// server switched sides. Swap onto its block (equal work is
+		// accepted); otherwise the store would stay on the losing side
+		// until the next block failed to link. The same hash is a
+		// duplicate.
 		conflict, err := n.tipConflicts(t.Hex)
 		if err != nil {
 			log.Debugf("electrum: tip header at %d: %v", t.Height, err)
@@ -942,47 +953,46 @@ func (n *Network) applyTipNotification(t *HeadersTip, lastDelivered *int32) {
 	if t.Height == ourTip+1 {
 		err := n.connectOneTip(t.Hex)
 		if err != nil && !errors.Is(err, errHeaderDoesNotConnect) {
-			log.Debugf("electrum: connect tip at %d: %v", t.Height, err)
+			n.walletServerFault(node, err, fmt.Sprintf("connect tip at %d", t.Height))
 			return
 		}
 		// A header that does not link means the server reorged at or
 		// below our tip; the catch-up path locates the fork point and
-		// refills from it.
+		// swaps onto the server's branch.
 		reorg = err != nil
 	}
 	if t.Height > ourTip+1 || reorg || sameHeight {
 		// Jumped ahead, or reorged; catch up in chunks. catchUp also
 		// recovers from a reorg discovered mid-catch-up (the server's
-		// chain diverges below our tip), returning whatever it had to
-		// disconnect — even when it ultimately errors after a partial
-		// rewind.
+		// chain diverges below our tip) and returns the disconnects of
+		// every branch it swapped in.
 		disc, err := n.catchUp(t.Height, sameHeight)
 		if len(disc) > 0 {
-			// Publish the disconnects BEFORE the error check. catchUp's
-			// Rewind calls have already truncated the headers store (on
-			// disk and in memory); returning without surfacing these
-			// would leave downstream believing the orphaned blocks are
-			// still connected, permanently diverging its view from the
-			// store. disc is newest-first and contiguous, so its last
-			// element is the lowest (fork) height; drop lastDelivered
-			// just below it so the connect-range emission re-publishes
-			// the new chain from the fork forward.
+			// The catch-up disconnects only through SwapBranch, which
+			// rewinds only with a validated replacement in hand. The
+			// disconnects are published before the error check: a later step of the catch-up can
+			// fail after a swap, and a swap whose append failed after
+			// its rewind returns its disconnects with the error. Either
+			// way the store no longer holds those blocks, and an
+			// unpublished rollback would leave downstream believing they
+			// are still connected. lastDelivered drops just below the
+			// lowest disconnected height, which successive swaps can put
+			// anywhere in disc, so the connect-range emission
+			// re-publishes the new chain from there.
 			n.deliverTipChange(&TipChange{Disconnected: disc})
-			lowest := disc[len(disc)-1].Height
-			if *lastDelivered >= lowest {
+			if lowest, _ := lowestDisconnected(disc); *lastDelivered >= lowest {
 				*lastDelivered = lowest - 1
 			}
 		}
 		if err != nil {
-			// Couldn't fully resync this round (a reorg deeper than
-			// maxReorgDepth, or a server serving an incoherent chain).
-			// Any rollback is already surfaced above; the next
-			// notification continues catching up from the lowered tip,
-			// and a server that never delivers a usable chain falls to
-			// the lag rotation.
-			if n.ctx.Err() == nil {
-				log.Warnf("electrum: catch up to %d: %v", t.Height, err)
-			}
+			// Couldn't fully resync this round (a fork deeper than
+			// maxReorgDepth, a branch that failed validation or carried
+			// less work, or a server serving an incoherent chain). Any
+			// rollback is already surfaced above. walletServerFault
+			// penalizes and rotates on evidence; otherwise the next
+			// notification continues catching up, and a server that
+			// never delivers a usable chain falls to the lag rotation.
+			n.walletServerFault(node, err, fmt.Sprintf("catch up to %d", t.Height))
 			return
 		}
 	}
@@ -1036,24 +1046,26 @@ func (n *Network) parseTipHeader(hexHdr string) (*wire.BlockHeader, error) {
 }
 
 // catchUp syncs the store to targetHeight from the wallet server. With
-// rewindFirst set the server is known to conflict with the store at its
-// tip, so the fork point is located and rewound before refilling; catchUpFrom
-// alone would find nothing to fetch at an equal height.
-func (n *Network) catchUp(targetHeight int32, rewindFirst bool) ([]DisconnectedBlock, error) {
+// reorgFirst set the server is known to conflict with the store at its tip,
+// so the store swaps onto the server's branch before refilling; catchUpFrom
+// alone would find nothing to fetch at an equal height. Both steps share one
+// reorg budget.
+func (n *Network) catchUp(targetHeight int32, reorgFirst bool) ([]DisconnectedBlock, error) {
 	node, err := n.getNode()
 	if err != nil {
 		return nil, err
 	}
 	fetch := nodeFetcher(n.ctx, node)
+	budget := maxReorgAttempts
 	var disconnected []DisconnectedBlock
-	if rewindFirst {
-		disc, _, err := n.rewindToFork(fetch)
+	if reorgFirst {
+		disc, err := n.reorg(fetch, targetHeight, &budget)
 		if err != nil {
-			return nil, err
+			return disc, err
 		}
 		disconnected = disc
 	}
-	more, err := n.catchUpFrom(targetHeight, fetch)
+	more, err := n.catchUpWithin(targetHeight, fetch, &budget)
 	return append(disconnected, more...), err
 }
 
@@ -1080,87 +1092,183 @@ func nodeFetcher(ctx context.Context, node *Node) headerFetcher {
 	}
 }
 
-// errForkNotFound is returned by rewindToFork when the server serves the
-// store's own tip header yet its next header does not link to it. That is
-// not a reorg, and callers treat it as a server fault rather than a rewind.
+// errForkNotFound is returned by reorg when the server serves the store's own
+// tip header yet its next header does not link to it. That is not a reorg,
+// and callers treat it as a server fault rather than swapping anything.
 var errForkNotFound = errors.New("electrum: server agrees at the tip but its chain does not link")
 
-// rewindToFork rewinds the store to the fork point between its chain and the
-// chain fetch serves: the highest height, within reorgRewindDepth below the
-// tip, at which the two agree. It returns the disconnected blocks
-// (newest-first) and the depth rewound. When no header in the window matches
-// the whole window is rewound; the caller's loop retries from the lowered
-// tip and searches again, so the total is bounded by its maxReorgDepth
-// budget rather than by this window. Called after a batch or tip header
-// failed to link to the tip, so the fork lies at or below it.
+// errBranchSeam is returned when a branch fetched in several responses does
+// not link across a response boundary: the first header of one response does
+// not extend the last header of the previous one. An honest server that
+// reorgs between the responses produces exactly that, so it is retried
+// without penalty. A break inside one response is a RuleError.
+var errBranchSeam = errors.New("electrum: branch responses do not link")
+
+// maxReorgAttempts bounds the reorg attempts one catch-up makes: a
+// catchUpFrom or syncHeaders call, or one attachNode reconciliation. Every
+// attempt counts, retries included (after errStoreMoved, a branch whose
+// first header no longer links to the fork, or errBranchSeam), so a server
+// that keeps reorging or flapping between equal-work branches cannot hold
+// the caller in a loop.
+const maxReorgAttempts = 4
+
+// reorg moves the store onto the chain fetch serves when that chain diverges
+// below the store's tip. Each attempt locates the fork point with a read-only
+// search (locateFork), fetches the server's branch above it (fetchBranch) and
+// hands both to SwapBranch, which validates the branch in full and requires
+// at least the stored span's work before anything changes. target is the
+// server's reported tip, used only as a point to stop fetching. Attempts
+// come out of budget; retryable failures try again while it lasts.
 //
-// A blind fixed-depth rewind disconnected reorgRewindDepth blocks for every
-// one-block reorg. Each disconnect rolls the wallet's transaction store back
-// to that height, and nothing re-confirmed the innocent blocks' transactions
-// afterwards.
-func (n *Network) rewindToFork(fetch headerFetcher) ([]DisconnectedBlock, int32, error) {
-	tip := n.headers.Tip()
-	start := max(tip-reorgRewindDepth+1, n.headers.StartHeight())
-	if start > tip {
-		return nil, 0, fmt.Errorf("electrum: cannot rewind below start height %d (tip %d)",
-			n.headers.StartHeight(), tip)
-	}
-	raw, count, err := fetch(start, tip-start+1)
-	if err != nil {
-		return nil, 0, fmt.Errorf("electrum: fork search fetch: %w", err)
-	}
-	depth := tip - start + 1 // no shared header in the window
-	if count > 0 {
-		theirs, err := n.headers.parseBatch(raw)
-		if err != nil {
-			return nil, 0, fmt.Errorf("electrum: fork search batch: %w", err)
-		}
-		for i := len(theirs) - 1; i >= 0; i-- {
-			height := start + int32(i)
-			if height > tip {
-				continue
-			}
-			ours := n.headers.ByHeight(height)
-			if ours != nil && n.headers.headerHash(ours) == n.headers.headerHash(theirs[i]) {
-				depth = tip - height
-				break
-			}
+// It returns the disconnected blocks (newest-first) of a successful swap.
+// When SwapBranch's append fails after its rewind, those disconnects come
+// back with the error, and the caller must publish them: the store no longer
+// holds the blocks.
+func (n *Network) reorg(fetch headerFetcher, target int32, budget *int) ([]DisconnectedBlock, error) {
+	var lastErr error
+	for *budget > 0 {
+		*budget--
+		disc, err := n.reorgOnce(fetch, target)
+		switch {
+		case err == nil, len(disc) > 0:
+			return disc, err
+		case errors.Is(err, errStoreMoved), errors.Is(err, errHeaderDoesNotConnect),
+			errors.Is(err, errBranchSeam):
+			log.Debugf("electrum: reorg attempt: %v; retrying", err)
+			lastErr = err
+		default:
+			return nil, err
 		}
 	}
-	if depth == 0 {
-		// The server agrees with the store at its tip yet served a next
-		// header that does not link to it: an inconsistent or flapping
-		// server, not a reorg. Rewinding anything here would disconnect
-		// a canonical block for every retry.
-		return nil, 0, errForkNotFound
+	if lastErr == nil {
+		return nil, fmt.Errorf("electrum: reorg budget of %d attempts spent", maxReorgAttempts)
 	}
-	disc, err := n.headers.Rewind(depth)
-	if err != nil {
-		return nil, 0, err
-	}
-	log.Debugf("electrum: reorg: rewound %d headers to fork point %d", depth, tip-depth)
-	return disc, depth, nil
+	return nil, fmt.Errorf("electrum: reorg did not settle within %d attempts: %w",
+		maxReorgAttempts, lastErr)
 }
 
-// catchUpFrom is the chunked sync + reorg-recovery loop. It pulls headers via
-// fetch and appends them until Tip() reaches targetHeight. If the server's
-// chain has diverged below our tip, AppendBatch reports errHeaderDoesNotConnect
-// and we rewind to the fork point (searching reorgRewindDepth at a time, up to
-// maxReorgDepth total), then resume. The returned disconnected blocks
-// (newest-first, accumulated across steps) let the caller surface
-// BlockDisconnected events and reset its delivery cursor. A reorg deeper than
-// maxReorgDepth is treated as unrecoverable and surfaced as an error.
-//
-// Note: the rewind budget is per-call. A persistently flapping server that
-// serves a transient fork on each notification can therefore make us
-// truncate-and-reappend a little on every call without any single call
-// crossing maxReorgDepth. Each such call still publishes its disconnects and
-// makes forward progress, so the chain stays consistent, but the churn isn't
-// bounded across calls. A cross-call rewind budget would be the fuller fix if
-// that ever shows up against a real peer.
+// reorgOnce makes one reorg attempt; see reorg.
+func (n *Network) reorgOnce(fetch headerFetcher, target int32) ([]DisconnectedBlock, error) {
+	tip, tipHash := n.headers.tipSnapshot()
+	fork, err := n.locateFork(fetch, tip)
+	if err != nil {
+		return nil, err
+	}
+	branch, err := n.fetchBranch(fetch, fork, tip, target)
+	if err != nil {
+		return nil, err
+	}
+	disc, err := n.headers.SwapBranch(fork, tipHash, branch)
+	if err == nil {
+		log.Debugf("electrum: reorg: swapped in %d headers above fork %d, "+
+			"disconnecting %d", len(branch), fork, len(disc))
+	}
+	return disc, err
+}
+
+// locateFork finds the fork point between the store's chain, with tip at
+// tip, and the chain fetch serves: the highest height at which the two agree.
+// It searches windows of reorgRewindDepth headers downward from the tip and
+// changes nothing. The search stops at maxReorgDepth below the tip and never
+// goes below lowestFork (StartHeight, or the newest checkpoint once the store
+// holds it); a fork beyond either is an error. A server that agrees at the
+// tip returns errForkNotFound.
+func (n *Network) locateFork(fetch headerFetcher, tip int32) (int32, error) {
+	floor := max(n.headers.lowestFork(), tip-maxReorgDepth)
+	for hi := tip; hi >= floor; {
+		lo := max(hi-reorgRewindDepth+1, floor)
+		raw, count, err := fetch(lo, hi-lo+1)
+		if err != nil {
+			return 0, fmt.Errorf("electrum: fork search fetch: %w", err)
+		}
+		if count > 0 {
+			theirs, err := n.headers.parseBatch(raw)
+			if err != nil {
+				return 0, fmt.Errorf("electrum: fork search batch: %w", err)
+			}
+			for i := min(len(theirs), int(hi-lo+1)) - 1; i >= 0; i-- {
+				height := lo + int32(i)
+				ours := n.headers.ByHeight(height)
+				if ours == nil || n.headers.headerHash(ours) != n.headers.headerHash(theirs[i]) {
+					continue
+				}
+				if height == tip {
+					// The server agrees with the store at its tip yet
+					// served a next header that does not link to it: an
+					// inconsistent or flapping server, not a reorg.
+					return 0, errForkNotFound
+				}
+				return height, nil
+			}
+		}
+		hi = lo - 1
+	}
+	return 0, fmt.Errorf("electrum: no header shared with the server's chain from %d to %d "+
+		"(the search stops %d below the tip and at the newest held checkpoint)",
+		floor, tip, maxReorgDepth)
+}
+
+// fetchBranch fetches the server's headers above fork, in responses of at
+// most HeaderBatchSize, until the branch reaches target, carries at least the
+// stored span's work over (fork, tip], or the server has no more. It fetches
+// at most (tip - fork) + HeaderBatchSize headers. A response whose first
+// header does not extend the previous response's last returns errBranchSeam.
+// Everything else about the branch is SwapBranch's to validate.
+func (n *Network) fetchBranch(fetch headerFetcher, fork, tip, target int32) ([]*wire.BlockHeader, error) {
+	storedWork := n.headers.workRange(fork+1, tip)
+	limit := int(tip-fork) + n.cfg.HeaderBatchSize
+	var branch []*wire.BlockHeader
+	work := new(big.Int)
+	for len(branch) < limit {
+		start := fork + 1 + int32(len(branch))
+		want := min(limit-len(branch), n.cfg.HeaderBatchSize)
+		raw, count, err := fetch(start, int32(want))
+		if err != nil {
+			return nil, fmt.Errorf("electrum: branch fetch at %d: %w", start, err)
+		}
+		if count == 0 {
+			break
+		}
+		hdrs, err := n.headers.parseBatch(raw)
+		if err != nil {
+			return nil, fmt.Errorf("electrum: branch batch at %d: %w", start, err)
+		}
+		if len(hdrs) == 0 {
+			break
+		}
+		if len(branch) > 0 && hdrs[0].PrevBlock != n.headers.headerHash(branch[len(branch)-1]) {
+			return nil, fmt.Errorf("%w at %d", errBranchSeam, start)
+		}
+		branch = append(branch, hdrs...)
+		for _, hdr := range hdrs {
+			work.Add(work, blockchain.CalcWork(hdr.Bits))
+		}
+		if fork+int32(len(branch)) >= target || work.Cmp(storedWork) >= 0 || len(hdrs) < want {
+			break
+		}
+	}
+	if len(branch) == 0 {
+		return nil, fmt.Errorf("electrum: server serves no headers above fork %d", fork)
+	}
+	return branch, nil
+}
+
+// catchUpFrom is the chunked sync and reorg-recovery loop. It pulls headers
+// via fetch and appends them until Tip() reaches targetHeight. When a batch
+// does not link to the tip, the server's chain has diverged below it, and
+// reorg swaps the store onto the server's branch before the loop resumes.
+// The returned disconnected blocks (each swap's newest-first, swaps in order;
+// see TipChange) let the caller surface BlockDisconnected events and reset
+// its delivery cursor; they are returned with any error, since a swap already
+// applied stays applied. One call makes at most maxReorgAttempts reorg attempts.
 func (n *Network) catchUpFrom(targetHeight int32, fetch headerFetcher) ([]DisconnectedBlock, error) {
+	budget := maxReorgAttempts
+	return n.catchUpWithin(targetHeight, fetch, &budget)
+}
+
+// catchUpWithin is catchUpFrom drawing its reorg attempts from budget.
+func (n *Network) catchUpWithin(targetHeight int32, fetch headerFetcher, budget *int) ([]DisconnectedBlock, error) {
 	var disconnected []DisconnectedBlock
-	var rewound int32
 	for n.headers.Tip() < targetHeight {
 		nextHeight := n.headers.Tip() + 1
 		want := int32(min(int(targetHeight-n.headers.Tip()), n.cfg.HeaderBatchSize))
@@ -1178,20 +1286,10 @@ func (n *Network) catchUpFrom(targetHeight int32, fetch headerFetcher) ([]Discon
 		if !errors.Is(err, errHeaderDoesNotConnect) {
 			return disconnected, err
 		}
-		// Reorg: the batch doesn't link to our tip. Rewind to the fork
-		// point (or a window's worth when the fork is deeper) and retry;
-		// the next fetch starts from the lowered tip and connects once
-		// the fork point is reached.
-		disc, depth, rerr := n.rewindToFork(fetch)
-		if rerr != nil {
-			return disconnected, fmt.Errorf("electrum: reorg rewind: %w", rerr)
-		}
+		disc, rerr := n.reorg(fetch, targetHeight, budget)
 		disconnected = append(disconnected, disc...)
-		rewound += depth
-		if rewound > maxReorgDepth {
-			return disconnected, fmt.Errorf(
-				"electrum: reorg deeper than %d blocks near height %d; resync required: %w",
-				maxReorgDepth, nextHeight, err)
+		if rerr != nil {
+			return disconnected, fmt.Errorf("electrum: reorg near height %d: %w", nextHeight, rerr)
 		}
 	}
 	return disconnected, nil
@@ -1265,7 +1363,7 @@ func (n *Network) watchNode(node *Node) {
 			// here (installs a successor group or spawns the closer).
 			// rotate runs outside this loop group — it joins the group,
 			// and a member joining itself would deadlock.
-			n.pool.recordFailure(node.Addr().Addr)
+			n.scoreFailure(node.Addr().Addr)
 			log.Warnf("electrum: wallet server %s disconnected; rotating", node.Addr())
 			n.wg.Add(1)
 			go func() {

@@ -494,11 +494,12 @@ func (c *ElectrumClient) dispatchTipChange(ev *electrum.TipChange) {
 		return
 	}
 	connected := c.applyTip(ev)
-	if len(ev.Disconnected) > 0 {
-		// Disconnected is newest-first; the last entry is the fork
-		// height. Everything confirmed at or above it was in an orphaned
-		// block.
-		c.invalidateReorged(ev.Disconnected[len(ev.Disconnected)-1].Height)
+	if lowest, ok := ev.LowestDisconnected(); ok {
+		// Everything confirmed at or above the lowest disconnected height
+		// was in an orphaned block. A catch-up that swapped branches more
+		// than once lists each swap's blocks in turn, so the last entry is
+		// not necessarily the lowest.
+		c.invalidateReorged(lowest)
 	}
 	// Review2 #6: a scripthash status may have arrived while these headers
 	// were still in flight. Now that the headers are local and connected,

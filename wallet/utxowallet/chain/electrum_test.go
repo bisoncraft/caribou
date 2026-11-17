@@ -2312,6 +2312,64 @@ func TestElectrumReorgUnconfirmsDroppedTx(t *testing.T) {
 	}
 }
 
+// TestElectrumTwoSwapInvalidation: a tip change from a catch-up that swapped
+// branches twice lists the first swap's disconnects (down to the deep fork)
+// before the second's (down to a shallower fork). A transaction confirmed
+// between the two fork heights was orphaned by the first swap, so it must be
+// invalidated and refreshed, although the last disconnect lies above it.
+func TestElectrumTwoSwapInvalidation(t *testing.T) {
+	c, stub := makeClient(t, 15) // heights 0..14
+	addr, sh := newSimnetAddr(t)
+	txid, rawHex := synthTx(t)
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 8, TxHash: txid}}
+	stub.rawTxs[txid] = rawHex
+	stub.mu.Unlock()
+	if err := c.NotifyReceived([]btcutil.Address{addr}); err != nil {
+		t.Fatalf("NotifyReceived: %v", err)
+	}
+	stub.scripthashCh <- &electrum.ScripthashStatus{Scripthash: sh, Status: "changed"}
+	if rt, ok := drain(t, c, 1, 2*time.Second)[0].(RelevantTx); !ok || rt.Block == nil || rt.Block.Height != 8 {
+		t.Fatal("tx not confirmed at height 8")
+	}
+
+	// The first swap replaced 5-14 (fork 4); the second replaced the
+	// intermediate branch's 12-14 (fork 11). On the final chain the tx is
+	// back in the mempool.
+	var disc []electrum.DisconnectedBlock
+	for h := int32(14); h >= 5; h-- {
+		disc = append(disc, electrum.DisconnectedBlock{
+			Hash: stub.HeaderByHeight(h).BlockHash(), Height: h, Time: 1_700_000_000})
+	}
+	for h := int32(14); h >= 12; h-- {
+		disc = append(disc, electrum.DisconnectedBlock{
+			Hash: chainhash.Hash{byte(h), 0xb}, Height: h, Time: 1_700_000_000})
+	}
+	stub.mu.Lock()
+	stub.history[sh] = []electrum.HistoryEntry{{Height: 0, TxHash: txid}}
+	stub.mu.Unlock()
+	stub.rewindTo(t, 4)
+	for i := range 10 {
+		stub.addBlock(t, time.Unix(int64(1_700_005_000+i*60), 0))
+	}
+	stub.tipCh <- &electrum.TipChange{Disconnected: disc}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case n := <-c.Notifications():
+			if rt, ok := n.(RelevantTx); ok && rt.TxRecord != nil && rt.TxRecord.Hash.String() == txid {
+				if rt.Block != nil {
+					t.Fatalf("tx re-emitted confirmed at %d, want unconfirmed", rt.Block.Height)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("tx orphaned between the two fork heights was never refreshed")
+		}
+	}
+}
+
 // TestElectrumReorgOvertakesStatusFetch: a reorg that lands while the status
 // processor is between its baseline read and its history fetch must not let
 // the processor commit a baseline built against the replaced headers. The
