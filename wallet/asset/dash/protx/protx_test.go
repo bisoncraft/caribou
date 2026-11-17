@@ -27,25 +27,35 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// The vectors in testdata are transactions built and accepted by Dash Core
-// v23.1.4 on regtest (see util/testing/dash). Each file holds the raw
-// transaction and the fields dashd decoded from it.
+// The vectors in testdata are transactions built and accepted by Dash Core on
+// regtest (see util/testing/dash). Each file holds the raw transaction and the
+// fields dashd decoded from it. regfund, regext, updserv, updreg and revoke
+// come from v23.1.4. regshared, regshared_nonet, regevo, regevo_multi,
+// upshare, upsharedreg, dis and dis_standby come from v24.0.0 with V24 active
+// (the harness `V24_VBPARAMS`), using throwaway keys: the raw transaction and
+// the one payload key of `getrawtransaction <txid> 1` were copied from the
+// session that mined them, keeping txid, version, type and extraPayloadSize.
 type vector struct {
 	Hex   string `json:"hex"`
 	Dashd struct {
-		TxID       string          `json:"txid"`
-		Version    uint16          `json:"version"`
-		Type       uint16          `json:"type"`
-		ProRegTx   *dashdProReg    `json:"proRegTx"`
-		ProUpServ  *dashdProUpServ `json:"proUpServTx"`
-		ProUpReg   *dashdProUpReg  `json:"proUpRegTx"`
-		ProUpRev   *dashdProUpRev  `json:"proUpRevTx"`
-		PayloadLen int             `json:"extraPayloadSize"`
+		TxID           string               `json:"txid"`
+		Version        uint16               `json:"version"`
+		Type           uint16               `json:"type"`
+		ProRegTx       *dashdProReg         `json:"proRegTx"`
+		ProUpServ      *dashdProUpServ      `json:"proUpServTx"`
+		ProUpReg       *dashdProUpReg       `json:"proUpRegTx"`
+		ProUpRev       *dashdProUpRev       `json:"proUpRevTx"`
+		ProDis         *dashdProDis         `json:"proDisTx"`
+		ProUpShare     *dashdProUpShare     `json:"proUpShareTx"`
+		ProUpSharedReg *dashdProUpSharedReg `json:"proUpSharedRegTx"`
+		PayloadLen     int                  `json:"extraPayloadSize"`
 	} `json:"dashd"`
 	CollateralAddress string `json:"collateralAddress"`
 }
 
 type dashdProReg struct {
+	Version         uint16 `json:"version"`
+	Type            uint16 `json:"type"`
 	CollateralHash  string `json:"collateralHash"`
 	CollateralIndex uint32 `json:"collateralIndex"`
 	Service         string `json:"service"`
@@ -55,6 +65,53 @@ type dashdProReg struct {
 	PubKeyOperator  string `json:"pubKeyOperator"`
 	OperatorReward  uint16 `json:"operatorReward"`
 	InputsHash      string `json:"inputsHash"`
+
+	// Version 3 only.
+	Addresses         map[string][]string `json:"addresses"`
+	Payouts           []dashdPayout       `json:"payouts"`
+	Shares            []dashdShare        `json:"shares"`
+	EarlyPeriodBlocks uint32              `json:"earlyPeriodBlocks"`
+	EarlyPenalty      int64               `json:"earlyPenalty"`
+	PlatformNodeID    string              `json:"platformNodeID"`
+}
+
+type dashdPayout struct {
+	Address string `json:"address"`
+	Script  string `json:"script"`
+	Reward  uint16 `json:"reward"`
+}
+
+type dashdShare struct {
+	Amount        int64  `json:"amount"`
+	RefundAddress string `json:"refundAddress"`
+	RefundScript  string `json:"refundScript"`
+	RewardAddress string `json:"rewardAddress"`
+	RewardScript  string `json:"rewardScript"`
+	OwnerAddress  string `json:"ownerAddress"`
+}
+
+type dashdProDis struct {
+	Version    uint16 `json:"version"`
+	ProTxHash  string `json:"proTxHash"`
+	ActorIndex uint16 `json:"actorIndex"`
+	SigCount   int    `json:"sigCount"`
+}
+
+type dashdProUpShare struct {
+	Version       uint16 `json:"version"`
+	ProTxHash     string `json:"proTxHash"`
+	ShareIndex    uint16 `json:"shareIndex"`
+	RewardAddress string `json:"rewardAddress"`
+	InputsHash    string `json:"inputsHash"`
+}
+
+type dashdProUpSharedReg struct {
+	Version        uint16 `json:"version"`
+	ProTxHash      string `json:"proTxHash"`
+	VotingAddress  string `json:"votingAddress"`
+	PubKeyOperator string `json:"pubKeyOperator"`
+	InputsHash     string `json:"inputsHash"`
+	SigCount       int    `json:"sigCount"`
 }
 
 type dashdProUpServ struct {
@@ -435,21 +492,38 @@ func TestInputsHashCommitsToOrderAndIndex(t *testing.T) {
 type payload interface {
 	payloadDecoder
 	Serialize(w io.Writer) error
+}
+
+// hashedPayload is a payload that has a PayloadHash.
+type hashedPayload interface {
+	payload
 	PayloadHash() (chainhash.Hash, error)
 }
 
 var payloadKinds = []struct {
 	name   string
 	vector string
+	// badVersions are payload versions the kind must refuse.
+	badVersions []uint16
 	// hasType is whether the payload carries a masternode type after its
 	// version.
 	hasType bool
-	new     func() payload
+	// noEvo is whether the kind refuses an EvoNode.
+	noEvo bool
+	new   func() payload
 }{
-	{"ProRegTx", "regfund", true, func() payload { return new(ProRegTx) }},
-	{"ProUpServTx", "updserv", true, func() payload { return new(ProUpServTx) }},
-	{"ProUpRegTx", "updreg", false, func() payload { return new(ProUpRegTx) }},
-	{"ProUpRevTx", "revoke", false, func() payload { return new(ProUpRevTx) }},
+	{"ProRegTx", "regfund", []uint16{1, 4}, true, true, func() payload { return new(ProRegTx) }},
+	{"ProRegTx v3 shared", "regshared", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
+	{"ProRegTx v3 evo", "regevo", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
+	{"ProRegTx v3 shared no address", "regshared_nonet", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
+	{"ProRegTx v3 evo multi address", "regevo_multi", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
+	{"ProUpServTx", "updserv", []uint16{1, 3}, true, true, func() payload { return new(ProUpServTx) }},
+	{"ProUpRegTx", "updreg", []uint16{1, 3}, false, false, func() payload { return new(ProUpRegTx) }},
+	{"ProUpRevTx", "revoke", []uint16{1, 3}, false, false, func() payload { return new(ProUpRevTx) }},
+	{"ProDisTx", "dis", []uint16{0, 2}, false, false, func() payload { return new(ProDisTx) }},
+	{"ProDisTx standby", "dis_standby", []uint16{0, 2}, false, false, func() payload { return new(ProDisTx) }},
+	{"ProUpShareTx", "upshare", []uint16{0, 2}, false, false, func() payload { return new(ProUpShareTx) }},
+	{"ProUpSharedRegTx", "upsharedreg", []uint16{0, 2}, false, false, func() payload { return new(ProUpSharedRegTx) }},
 }
 
 func TestParseRejects(t *testing.T) {
@@ -465,25 +539,28 @@ func TestParseRejects(t *testing.T) {
 			return b
 		}
 
-		tests := []struct {
+		type rejectCase struct {
 			name    string
 			payload []byte
 			wantErr error
-		}{
-			{"legacy bls version", withVersion(1), ErrUnsupportedVersion},
-			{"extended address version", withVersion(3), ErrUnsupportedVersion},
+		}
+		tests := []rejectCase{
 			{"trailing byte", append(bytes.Clone(good), 0), ErrTrailingData},
 			{"truncated", good[:len(good)-10], io.ErrUnexpectedEOF},
 			{"empty", nil, io.ErrUnexpectedEOF},
 		}
+		for _, v := range k.badVersions {
+			tests = append(tests, rejectCase{"version " + strconv.Itoa(int(v)), withVersion(v), ErrUnsupportedVersion})
+		}
 		if k.hasType {
+			other := bytes.Clone(good)
+			binary.LittleEndian.PutUint16(other[2:], 2)
+			tests = append(tests, rejectCase{"unknown masternode type", other, ErrUnsupportedType})
+		}
+		if k.noEvo {
 			evo := bytes.Clone(good)
-			binary.LittleEndian.PutUint16(evo[2:], 1)
-			tests = append(tests, struct {
-				name    string
-				payload []byte
-				wantErr error
-			}{"evonode", evo, ErrUnsupportedType})
+			binary.LittleEndian.PutUint16(evo[2:], TypeEvo)
+			tests = append(tests, rejectCase{"evonode", evo, ErrUnsupportedType})
 		}
 		for _, tc := range tests {
 			t.Run(k.name+"/"+tc.name, func(t *testing.T) {
@@ -498,9 +575,23 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
+// hasService is whether p carries a Service, which Dash stores differently
+// from how it was written when it is not a valid address (see Service).
+func hasService(p payload) bool {
+	switch p := p.(type) {
+	case *ProRegTx:
+		return p.Version == Version
+	case *ProUpServTx:
+		return true
+	}
+	return false
+}
+
 // FuzzParse checks that no input panics a decoder, and that anything a decoder
 // accepts serializes back to the same bytes, so the hashes recomputed from the
-// decoded fields cover exactly the bytes that were received.
+// decoded fields cover exactly the bytes that were received. The one exception
+// is a Service Dash would store as the empty address: the decoder normalizes
+// it, as Dash does, so only the decoded fields have to survive.
 func FuzzParse(f *testing.F) {
 	for _, k := range payloadKinds {
 		_, tx := loadVector(f, k.vector)
@@ -516,7 +607,11 @@ func FuzzParse(f *testing.F) {
 			if err := p.Serialize(&buf); err != nil {
 				t.Fatalf("%s: serialize a parsed payload: %v", k.name, err)
 			}
-			if !bytes.Equal(buf.Bytes(), b) {
+			if bytes.Equal(buf.Bytes(), b) {
+				continue
+			}
+			again := k.new()
+			if !hasService(p) || Parse(buf.Bytes(), again) != nil || !reflect.DeepEqual(p, again) {
 				t.Fatalf("%s: round trip differs:\n got %x\nwant %x", k.name, buf.Bytes(), b)
 			}
 		}
@@ -526,17 +621,47 @@ func FuzzParse(f *testing.F) {
 func TestSerializeRejectsUnsupported(t *testing.T) {
 	t.Parallel()
 
+	long := func(n int) []byte { return make([]byte, n) }
+	ext := NetInfo{Version: 1}
 	tests := []struct {
 		name    string
 		p       payload
 		wantErr error
 	}{
-		{"ProRegTx version", &ProRegTx{Version: 3}, ErrUnsupportedVersion},
-		{"ProRegTx evonode", &ProRegTx{Version: Version, MNType: 1}, ErrUnsupportedType},
+		{"ProRegTx version", &ProRegTx{Version: 4}, ErrUnsupportedVersion},
+		{"ProRegTx evonode", &ProRegTx{Version: Version, MNType: TypeEvo}, ErrUnsupportedType},
+		{"ProRegTx unknown type", &ProRegTx{Version: VersionExtAddr, MNType: 2, NetInfo: ext}, ErrUnsupportedType},
+		{"ProRegTx v3 without netInfo", &ProRegTx{Version: VersionExtAddr}, ErrUnsupportedNetInfo},
+		{"ProRegTx v3 with a v2 payout script", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, ScriptPayout: []byte{0x51}}, ErrUnsupportedVersion},
+		{"ProRegTx v3 with a v2 service", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, Service: Service{Port: 1}}, ErrUnsupportedVersion},
+		{"ProRegTx v2 with shares", &ProRegTx{Version: Version, Shares: []Share{{}}}, ErrUnsupportedVersion},
+		{"ProRegTx v2 with netInfo", &ProRegTx{Version: Version, NetInfo: ext}, ErrUnsupportedVersion},
+		{"ProRegTx v2 with an early penalty", &ProRegTx{Version: Version, EarlyPenalty: 1}, ErrUnsupportedVersion},
+		{"ProRegTx platform node on a regular masternode", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, PlatformNodeID: [KeyIDSize]byte{1}}, ErrUnsupportedType},
 		{"ProUpServTx version", &ProUpServTx{Version: 3}, ErrUnsupportedVersion},
 		{"ProUpServTx evonode", &ProUpServTx{Version: Version, MNType: 1}, ErrUnsupportedType},
 		{"ProUpRegTx version", &ProUpRegTx{Version: 3}, ErrUnsupportedVersion},
 		{"ProUpRevTx version", &ProUpRevTx{Version: 3}, ErrUnsupportedVersion},
+		{"ProDisTx version", &ProDisTx{Version: 2}, ErrUnsupportedVersion},
+		{"ProUpShareTx version", &ProUpShareTx{Version: 2}, ErrUnsupportedVersion},
+		{"ProUpSharedRegTx version", &ProUpSharedRegTx{Version: 2}, ErrUnsupportedVersion},
+
+		// A payload that cannot be read back must not be written.
+		{"ProRegTx script", &ProRegTx{Version: Version, ScriptPayout: long(maxScriptSize + 1)}, ErrFieldTooLong},
+		{"ProRegTx sig", &ProRegTx{Version: Version, PayloadSig: long(maxSigSize + 1)}, ErrFieldTooLong},
+		{"ProRegTx v3 sig", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, PayloadSig: long(maxSigSize + 1)}, ErrFieldTooLong},
+		{"ProRegTx v3 payout script", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, Payouts: []Payout{{Script: long(maxScriptSize + 1)}}}, ErrFieldTooLong},
+		{"ProRegTx v3 refund script", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, Shares: []Share{{RefundScript: long(maxScriptSize + 1)}}}, ErrFieldTooLong},
+		{"ProRegTx v3 reward script", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, Shares: []Share{{RewardScript: long(maxScriptSize + 1)}}}, ErrFieldTooLong},
+		{"ProRegTx v3 payouts", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, Payouts: make([]Payout, maxCount+1)}, ErrFieldTooLong},
+		{"ProRegTx v3 shares", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, Shares: make([]Share, maxCount+1)}, ErrFieldTooLong},
+		{"ProUpServTx script", &ProUpServTx{Version: Version, ScriptOperatorPay: long(maxScriptSize + 1)}, ErrFieldTooLong},
+		{"ProUpRegTx script", &ProUpRegTx{Version: Version, ScriptPayout: long(maxScriptSize + 1)}, ErrFieldTooLong},
+		{"ProUpRegTx sig", &ProUpRegTx{Version: Version, PayloadSig: long(maxSigSize + 1)}, ErrFieldTooLong},
+		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion, ScriptReward: long(maxScriptSize + 1)}, ErrFieldTooLong},
+		{"ProUpShareTx sig", &ProUpShareTx{Version: SharedVersion, Sig: long(maxSigSize + 1)}, ErrFieldTooLong},
+		{"ProDisTx sigs", &ProDisTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, maxCount+1)}, ErrFieldTooLong},
+		{"ProUpSharedRegTx sigs", &ProUpSharedRegTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, maxCount+1)}, ErrFieldTooLong},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -550,8 +675,9 @@ func TestSerializeRejectsUnsupported(t *testing.T) {
 }
 
 // TestParseRejectsEveryTruncation checks that no proper prefix of a payload is
-// accepted, and that none fails with a bare io.EOF, which a caller could take
-// for a clean end of input.
+// accepted, and that each fails with io.ErrUnexpectedEOF: not a bare io.EOF,
+// which a caller could take for a clean end of input, and not some other error
+// that would hide that the payload simply ended.
 func TestParseRejectsEveryTruncation(t *testing.T) {
 	t.Parallel()
 
@@ -559,11 +685,8 @@ func TestParseRejectsEveryTruncation(t *testing.T) {
 		_, tx := loadVector(t, k.vector)
 		for n := range len(tx.ExtraPayload) {
 			err := Parse(tx.ExtraPayload[:n], k.new())
-			if err == nil {
-				t.Fatalf("%s: accepted a payload cut to %d of %d bytes", k.name, n, len(tx.ExtraPayload))
-			}
-			if errors.Is(err, io.EOF) {
-				t.Fatalf("%s: %d of %d bytes failed with %v, want io.ErrUnexpectedEOF",
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("%s: a payload cut to %d of %d bytes failed with %v, want io.ErrUnexpectedEOF",
 					k.name, n, len(tx.ExtraPayload), err)
 			}
 		}
@@ -600,6 +723,9 @@ func TestServiceMustSurviveDashRoundTrip(t *testing.T) {
 		{"empty address", [16]byte{}, 0, false},
 		{"zero port is kept", v4(8, 8, 8, 8), 0, false},
 		{"unspecified with a port", [16]byte{}, 9999, true},
+		// Found by FuzzParse: an IPv4 address that is not usable.
+		{"v4-mapped unspecified", v4(0, 0, 0, 0), 0, true},
+		{"v4-mapped broadcast", v4(255, 255, 255, 255), 9999, true},
 		{"ipv4 any", v4(0, 0, 0, 0), 19998, true},
 		{"ipv4 any without a port", v4(0, 0, 0, 0), 0, true},
 		{"ipv4 broadcast", v4(255, 255, 255, 255), 9999, true},
@@ -614,10 +740,10 @@ func TestServiceMustSurviveDashRoundTrip(t *testing.T) {
 		name   string
 		vector string
 		offset int
-		new    func() payload
+		new    func() hashedPayload
 	}{
-		{"ProRegTx", "regfund", 6 + 36, func() payload { return new(ProRegTx) }},
-		{"ProUpServTx", "updserv", 4 + 32, func() payload { return new(ProUpServTx) }},
+		{"ProRegTx", "regfund", 6 + 36, func() hashedPayload { return new(ProRegTx) }},
+		{"ProUpServTx", "updserv", 4 + 32, func() hashedPayload { return new(ProUpServTx) }},
 	}
 	for _, pl := range places {
 		_, tx := loadVector(t, pl.vector)
@@ -688,40 +814,104 @@ func TestParseLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parse := func(mutate func(p *ProRegTx)) error {
-		p := base
-		mutate(&p)
-		var buf bytes.Buffer
-		if err := p.Serialize(&buf); err != nil {
-			t.Fatal(err)
-		}
-		return Parse(buf.Bytes(), new(ProRegTx))
-	}
-	var msgErr *wire.MessageError
-
-	if err := parse(func(p *ProRegTx) { p.ScriptPayout = make([]byte, maxScriptSize) }); err != nil {
-		t.Errorf("script at the limit: %v", err)
-	}
-	if err := parse(func(p *ProRegTx) { p.ScriptPayout = make([]byte, maxScriptSize+1) }); !errors.As(err, &msgErr) {
-		t.Errorf("script over the limit: %v, want a wire message error", err)
-	}
-	if err := parse(func(p *ProRegTx) { p.PayloadSig = make([]byte, BLSSigSize) }); err != nil {
-		t.Errorf("signature at the limit: %v", err)
-	}
-	if err := parse(func(p *ProRegTx) { p.PayloadSig = make([]byte, BLSSigSize+1) }); !errors.As(err, &msgErr) {
-		t.Errorf("signature over the limit: %v, want a wire message error", err)
-	}
-
-	// A length prefix of 16 MB must fail before anything that size is read.
+	// Serialize refuses a field over the limit, so the payloads that carry
+	// one are spliced together by hand: the fields up to the payout script,
+	// the script, the inputs hash and the signature.
 	var head bytes.Buffer
 	if err := base.serialize(&head, false); err != nil {
 		t.Fatal(err)
 	}
 	scriptLenAt := head.Len() - chainhash.HashSize - 1 - len(base.ScriptPayout)
-	huge := append(bytes.Clone(head.Bytes()[:scriptLenAt]), 0xfe, 0xff, 0xff, 0xff, 0x00)
-	if err := Parse(huge, new(ProRegTx)); !errors.As(err, &msgErr) {
-		t.Errorf("huge script length: %v, want a wire message error", err)
+	build := func(script, sig []byte) []byte {
+		var buf bytes.Buffer
+		buf.Write(head.Bytes()[:scriptLenAt])
+		if err := wire.WriteVarBytes(&buf, 0, script); err != nil {
+			t.Fatal(err)
+		}
+		buf.Write(base.InputsHash[:])
+		if err := wire.WriteVarBytes(&buf, 0, sig); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
 	}
+	parse := func(script, sig []byte) error {
+		return Parse(build(script, sig), new(ProRegTx))
+	}
+
+	if err := parse(make([]byte, maxScriptSize), nil); err != nil {
+		t.Errorf("script at the limit: %v", err)
+	}
+	if err := parse(make([]byte, maxScriptSize+1), nil); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("script over the limit: %v, want ErrFieldTooLong", err)
+	}
+	if err := parse(base.ScriptPayout, make([]byte, BLSSigSize)); err != nil {
+		t.Errorf("signature at the limit: %v", err)
+	}
+	if err := parse(base.ScriptPayout, make([]byte, BLSSigSize+1)); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("signature over the limit: %v, want ErrFieldTooLong", err)
+	}
+
+	// A length prefix of 16 MB must fail before anything that size is read.
+	huge := append(bytes.Clone(head.Bytes()[:scriptLenAt]), 0xfe, 0xff, 0xff, 0xff, 0x00)
+	if err := Parse(huge, new(ProRegTx)); !errors.Is(err, ErrFieldTooLong) {
+		t.Errorf("huge script length: %v, want ErrFieldTooLong", err)
+	}
+}
+
+// TestParseLimitsAreOneError checks that an over-long script or signature is
+// reported as ErrFieldTooLong whichever payload carries it, so a caller can
+// detect "over the codec limit" with one errors.Is.
+func TestParseLimitsAreOneError(t *testing.T) {
+	t.Parallel()
+
+	// Each payload is written with an empty script, whose one byte length
+	// prefix sits at a known offset, and that prefix is replaced by one over
+	// the limit followed by that many bytes.
+	tests := []struct {
+		name     string
+		p        payload
+		scriptAt int
+		limit    int
+	}{
+		{"ProUpServTx script", &ProUpServTx{Version: Version}, 2 + 2 + chainhash.HashSize + 18, maxScriptSize},
+		{"ProUpRegTx script", &ProUpRegTx{Version: Version}, 2 + chainhash.HashSize + 2 + OperatorPubKeySize + KeyIDSize, maxScriptSize},
+		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion}, 2 + chainhash.HashSize + 2, maxScriptSize},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			if err := tc.p.Serialize(&buf); err != nil {
+				t.Fatal(err)
+			}
+			good := buf.Bytes()
+			if good[tc.scriptAt] != 0 {
+				t.Fatalf("no empty script at byte %d: % x", tc.scriptAt, good)
+			}
+
+			var spliced bytes.Buffer
+			spliced.Write(good[:tc.scriptAt])
+			if err := wire.WriteVarBytes(&spliced, 0, make([]byte, tc.limit+1)); err != nil {
+				t.Fatal(err)
+			}
+			spliced.Write(good[tc.scriptAt+1:])
+
+			// A 16 MB length prefix must fail the same way, without reading it.
+			huge := append(bytes.Clone(good[:tc.scriptAt]), 0xfe, 0xff, 0xff, 0xff, 0x00)
+
+			for name, b := range map[string][]byte{"one over": spliced.Bytes(), "16 MB": huge} {
+				if err := Parse(b, newLike(tc.p)); !errors.Is(err, ErrFieldTooLong) {
+					t.Errorf("%s: %v, want ErrFieldTooLong", name, err)
+				}
+			}
+		})
+	}
+}
+
+// newLike returns a new zero payload of the same type as p.
+func newLike(p payload) payload {
+	return reflect.New(reflect.TypeOf(p).Elem()).Interface().(payload)
 }
 
 // signedMessageHash is the digest a Dash message signature covers: the double

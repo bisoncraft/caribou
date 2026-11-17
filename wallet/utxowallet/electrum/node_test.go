@@ -16,6 +16,8 @@ import (
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 )
 
 // TestVerifyTxidMatchesHex covers GetRawTransaction's defence against a server
@@ -32,7 +34,7 @@ func TestVerifyTxidMatchesHex(t *testing.T) {
 	honestHex := hex.EncodeToString(buf.Bytes())
 	honestTxid := tx.TxHash().String()
 
-	if err := verifyTxidMatchesHex(honestTxid, honestHex); err != nil {
+	if err := verifyTxidMatchesHex(bisonwire.ChainBTC, honestTxid, honestHex); err != nil {
 		t.Fatalf("honest tx rejected: %v", err)
 	}
 
@@ -44,7 +46,7 @@ func TestVerifyTxidMatchesHex(t *testing.T) {
 	} else {
 		wrong[0] = '0'
 	}
-	err := verifyTxidMatchesHex(string(wrong), honestHex)
+	err := verifyTxidMatchesHex(bisonwire.ChainBTC, string(wrong), honestHex)
 	if err == nil {
 		t.Fatal("expected error when bytes do not hash to requested txid")
 	}
@@ -53,14 +55,14 @@ func TestVerifyTxidMatchesHex(t *testing.T) {
 	}
 
 	// Malformed hex.
-	if err := verifyTxidMatchesHex(honestTxid, "notahexstring"); err == nil {
+	if err := verifyTxidMatchesHex(bisonwire.ChainBTC, honestTxid, "notahexstring"); err == nil {
 		t.Fatal("expected error for malformed hex")
 	}
 
 	// Trailing bytes after a valid tx must be rejected. Deserialize stops at
 	// the tx boundary, so without the explicit trailing-length check a server
 	// could append arbitrary bytes to a valid response undetected.
-	if err := verifyTxidMatchesHex(honestTxid, honestHex+"deadbeef"); err == nil {
+	if err := verifyTxidMatchesHex(bisonwire.ChainBTC, honestTxid, honestHex+"deadbeef"); err == nil {
 		t.Fatal("expected error for trailing bytes after the transaction")
 	} else if !strings.Contains(err.Error(), "trailing bytes") {
 		t.Fatalf("unexpected error for trailing bytes: %v", err)
@@ -101,7 +103,7 @@ func TestVerifyTxidMatchesHexSegWit(t *testing.T) {
 	}
 
 	fullHex := hex.EncodeToString(full.Bytes())
-	if err := verifyTxidMatchesHex(tx.TxHash().String(), fullHex); err != nil {
+	if err := verifyTxidMatchesHex(bisonwire.ChainBTC, tx.TxHash().String(), fullHex); err != nil {
 		t.Fatalf("honest segwit tx rejected: %v", err)
 	}
 }
@@ -131,7 +133,7 @@ func TestServerPeersBounded(t *testing.T) {
 	f.peers = peers
 	f.mtx.Unlock()
 
-	node, err := NewNode(t.Context(), f.addr(), "", params.GenesisHash.String())
+	node, err := NewNode(t.Context(), f.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -152,7 +154,7 @@ func TestServerPeersBounded(t *testing.T) {
 func TestOversizedFrameDropsConnection(t *testing.T) {
 	f, params := newFakeServer(t, 3)
 
-	node, err := NewNode(t.Context(), f.addr(), "", params.GenesisHash.String())
+	node, err := NewNode(t.Context(), f.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -219,7 +221,7 @@ func TestNewNodeHandshakeTimeout(t *testing.T) {
 	t.Cleanup(func() { handshakeTimeout = old })
 
 	start := time.Now()
-	_, err = NewNode(t.Context(), &ServerAddr{Proto: "tcp", Addr: lis.Addr().String()}, "", "")
+	_, err = NewNode(t.Context(), &ServerAddr{Proto: "tcp", Addr: lis.Addr().String()}, "", "", bisonwire.ChainBTC)
 	if err == nil {
 		t.Fatal("NewNode succeeded against a silent server")
 	}
