@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bisoncraft/caribou/util"
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/electrum"
 )
 
@@ -53,7 +54,7 @@ func (w *Wallet) FeeRate(ctx context.Context) (uint64, error) {
 		if ctx.Err() != nil {
 			break
 		}
-		rate, err := electrumFeeRate(ctx, srv, genesis)
+		rate, err := electrumFeeRate(ctx, srv, genesis, bisonwire.Chain(w.chainParams.Chain))
 		if err != nil {
 			lastErr = err
 			continue
@@ -68,8 +69,8 @@ func (w *Wallet) FeeRate(ctx context.Context) (uint64, error) {
 
 // electrumFeeRate dials a single electrum server, requests a fee estimate, and
 // returns it in atoms per byte. The connection is closed before returning.
-func electrumFeeRate(ctx context.Context, srv *electrum.ServerAddr, genesis string) (uint64, error) {
-	node, err := electrum.NewNode(ctx, srv, "", genesis)
+func electrumFeeRate(ctx context.Context, srv *electrum.ServerAddr, genesis string, chain bisonwire.Chain) (uint64, error) {
+	node, err := electrum.NewNode(ctx, srv, "", genesis, chain)
 	if err != nil {
 		return 0, err
 	}

@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,13 +36,16 @@ type fakeServer struct {
 	lis net.Listener
 
 	mtx        sync.Mutex
-	chain      []*wire.BlockHeader       // height-indexed; [0] is genesis
-	hist       map[string][]HistoryEntry // scripthash -> history
-	txs        map[string]string         // txid -> raw hex
-	peers      [][]interface{}           // server.peers.subscribe reply
-	errs       map[string]string         // method -> scripted error message
-	muted      map[string]bool           // method -> swallow the request, never reply
-	broadcasts []string                  // raw hexes received
+	chain      []*wire.BlockHeader        // height-indexed; [0] is genesis
+	hist       map[string][]HistoryEntry  // scripthash -> history
+	txs        map[string]string          // txid -> raw hex
+	peers      [][]interface{}            // server.peers.subscribe reply
+	errs       map[string]string          // method -> scripted error message
+	muted      map[string]bool            // method -> swallow the request, never reply
+	protx      map[string]json.RawMessage // proTxHash -> protx.info result
+	noProtx    bool                       // answer protx.* as an unknown method
+	calls      map[string]int             // method -> requests received
+	broadcasts []string                   // raw hexes received
 	conns      map[net.Conn]*fakeConnState
 	closed     bool
 }
@@ -67,6 +72,8 @@ func newFakeServer(t *testing.T, n int) (*fakeServer, *netparams.ChainParams) {
 		txs:   make(map[string]string),
 		errs:  make(map[string]string),
 		muted: make(map[string]bool),
+		protx: make(map[string]json.RawMessage),
+		calls: make(map[string]int),
 		conns: make(map[net.Conn]*fakeConnState),
 	}
 	prev := chainhash.Hash{}
@@ -303,21 +310,24 @@ func (f *fakeServer) serveConn(conn net.Conn, cs *fakeConnState) {
 		f.mtx.Lock()
 		scriptedErr := f.errs[req.Method]
 		muted := f.muted[req.Method]
+		f.calls[req.Method]++
 		f.mtx.Unlock()
 		if muted {
 			continue
 		}
 		if scriptedErr != "" {
+			code, msg := splitErrCode(scriptedErr)
 			cs.send(map[string]interface{}{
 				"jsonrpc": "2.0", "id": req.ID,
-				"error": map[string]interface{}{"code": 1, "message": scriptedErr},
+				"error": map[string]interface{}{"code": code, "message": msg},
 			})
 			continue
 		}
 		result, errMsg := f.handle(cs, req.Method, req.Params)
 		reply := map[string]interface{}{"jsonrpc": "2.0", "id": req.ID}
 		if errMsg != "" {
-			reply["error"] = map[string]interface{}{"code": 1, "message": errMsg}
+			code, errMsg := splitErrCode(errMsg)
+			reply["error"] = map[string]interface{}{"code": code, "message": errMsg}
 		} else {
 			reply["result"] = result
 		}
@@ -407,6 +417,14 @@ func (f *fakeServer) handle(cs *fakeConnState, method string, params []json.RawM
 		}, ""
 	case "blockchain.estimatefee":
 		return 0.0001, ""
+	case "protx.info":
+		if f.noProtx {
+			return nil, fmt.Sprintf("[-32601]unknown method %q", method)
+		}
+		if raw, ok := f.protx[str(0)]; ok {
+			return raw, ""
+		}
+		return nil, fmt.Sprintf("[2]daemon error: DaemonError({'code': -8, 'message': '%s not found'})", str(0))
 	}
 	return nil, fmt.Sprintf("unhandled method %s", method)
 }
@@ -529,7 +547,7 @@ func TestReplaySubscriptions(t *testing.T) {
 	fB.hist[sh1] = missed
 	fB.mtx.Unlock()
 
-	nodeB, err := NewNode(t.Context(), fB.addr(), "", params.GenesisHash.String())
+	nodeB, err := NewNode(t.Context(), fB.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode(B): %v", err)
 	}
@@ -898,7 +916,7 @@ func installWalletAndObserver(t *testing.T, net_ *Network, fA, fB *fakeServer,
 		}
 	}()
 
-	nodeA, err := NewNode(net_.ctx, fA.addr(), "", params.GenesisHash.String())
+	nodeA, err := NewNode(net_.ctx, fA.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode(A): %v", err)
 	}
@@ -913,7 +931,7 @@ func installWalletAndObserver(t *testing.T, net_ *Network, fA, fB *fakeServer,
 	net_.node = nodeA
 	net_.mu.Unlock()
 
-	nodeB, err := NewNode(net_.ctx, fB.addr(), "", params.GenesisHash.String())
+	nodeB, err := NewNode(net_.ctx, fB.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode(B): %v", err)
 	}
@@ -1127,7 +1145,7 @@ func TestTryElectSkipsLosingChain(t *testing.T) {
 	}()
 
 	// Seed the store with the losing chain.
-	seed, err := NewNode(net_.ctx, fC.addr(), "", params.GenesisHash.String())
+	seed, err := NewNode(net_.ctx, fC.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -1199,7 +1217,7 @@ func TestTryElectSkipsStalledCandidate(t *testing.T) {
 		}
 	}()
 
-	seed, err := NewNode(net_.ctx, fB.addr(), "", params.GenesisHash.String())
+	seed, err := NewNode(net_.ctx, fB.addr(), "", params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -1374,7 +1392,7 @@ func TestAttachNodeReconcileTerminates(t *testing.T) {
 	defer net_.cancel()
 
 	node, err := NewNode(net_.ctx, fB.addr(), "",
-		params.GenesisHash.String())
+		params.GenesisHash.String(), bisonwire.ChainBTC)
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -1510,4 +1528,17 @@ func TestLagRotation(t *testing.T) {
 		t.Fatal("network torn down on lag instead of rotating")
 	default:
 	}
+}
+
+// splitErrCode reads an optional "[code]" prefix of a scripted error message,
+// which chooses the JSON-RPC error code (1 by default).
+func splitErrCode(msg string) (int, string) {
+	if strings.HasPrefix(msg, "[") {
+		if end := strings.Index(msg, "]"); end > 0 {
+			if c, err := strconv.Atoi(msg[1:end]); err == nil {
+				return c, msg[end+1:]
+			}
+		}
+	}
+	return 1, msg
 }
