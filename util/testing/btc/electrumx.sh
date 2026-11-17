@@ -65,6 +65,16 @@ sed -i 's/refresh_secs=5.0/refresh_secs=1.0/' electrumx/server/mempool.py
 # special-tx payload).
 if [ "${COIN}" = "Dash" ]; then
     sed -i 's/assert self.cursor == end/self.cursor = end/' electrumx/lib/tx_dash.py
+
+    # Dash Core 24 (shared masternodes) adds two things this electrumx cannot
+    # parse. ProRegTx and the other typed payloads are decoded with their v2
+    # layout whatever the payload's own version, and a v3 payload over-reads
+    # and aborts the block processor. Types 10 to 12 (ProDisTx, ProUpShareTx,
+    # ProUpSharedRegTx) also collide with this electrumx's obsolete DIP-5
+    # handlers. Decode a payload with a typed handler only when it is a v1/v2
+    # payload of a type below 8; everything else stays raw bytes, which is all
+    # the indexer needs.
+    sed -i "s/if spec_tx_class:/if spec_tx_class and int.from_bytes(self.binary[self.cursor:self.cursor + 2], 'little') < 3 and tx_type < 8:/" electrumx/lib/tx_dash.py
 fi
 
 if [ ! -d "${ELECTRUMX_DIR}/venv" ]; then
