@@ -125,6 +125,10 @@ func calls(srv *fakeLwd) int {
 
 var errServerDown = status.Error(codes.Unavailable, "down")
 
+// errNodeDown is how lightwalletd fails a call when its node does not
+// answer.
+var errNodeDown = status.Error(codes.Internal, "the node is not answering")
+
 // down makes every call to a server fail the way an unreachable server does,
 // and up undoes it.
 func down(srv *fakeLwd) {
@@ -196,20 +200,118 @@ func TestRotatesWhenTheServerGoesAway(t *testing.T) {
 
 // TestATransientFailureDoesNotRotate checks that one failed call to a server
 // that has been working does not make the wallet turn to another server,
-// which would then learn its transparent addresses.
+// which would then learn its transparent addresses. That holds for a call
+// that fails because the node behind the server does as well.
 func TestATransientFailureDoesNotRotate(t *testing.T) {
+	for name, failure := range map[string]error{
+		"unreachable": errServerDown,
+		"node error":  errNodeDown,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, servers := serverEnv(t, 150, 2)
+			e.createAccount(100)
+			e.connect()
+			e.waitSynced(150)
+
+			e.statuses.reset()
+			servers[0].set(func(s *fakeLwd) { s.failOnce["GetLatestBlock"] = failure })
+			e.statuses.wait(t, "the failed attempt", func(s SyncStatus) bool { return s.Err != nil })
+			servers[0].mine(1)
+			e.waitSynced(151)
+			if got := e.w.servers.get().address; got != servers[0].addr {
+				t.Errorf("the wallet uses %s after one failed call", got)
+			}
+			if n := calls(servers[1]); n != 0 {
+				t.Errorf("the second server was called %d times", n)
+			}
+		})
+	}
+}
+
+// TestRotatesPastAServerThatFailsBlockRanges checks that a server that
+// answers everything but the calls for blocks is left. Its node fails in the
+// course of every call, which is not a connection error.
+func TestRotatesPastAServerThatFailsBlockRanges(t *testing.T) {
+	e, servers := serverEnv(t, 150, 2)
+	e.createAccount(100)
+	servers[0].set(func(s *fakeLwd) { s.fail["GetBlockRange"] = errNodeDown })
+
+	e.connect()
+	e.waitSynced(150)
+	if got := e.w.servers.get().address; got != servers[1].addr {
+		t.Errorf("the wallet uses %s", got)
+	}
+}
+
+// TestRotatesWhenTheNodeBehindTheServerGoesDown checks that a wallet leaves
+// a server it has been synced with when the server stays up and its node
+// does not. lightwalletd then fails every call that reaches the node, the
+// one that every sync attempt begins with included.
+func TestRotatesWhenTheNodeBehindTheServerGoesDown(t *testing.T) {
 	e, servers := serverEnv(t, 150, 2)
 	e.createAccount(100)
 	e.connect()
 	e.waitSynced(150)
 
+	servers[0].set(func(s *fakeLwd) {
+		for _, method := range []string{
+			"GetLightdInfo", "GetLatestBlock", "GetBlock", "GetBlockRange", "GetTreeState",
+			"GetAddressUtxosStream", "GetTransaction", "GetTaddressTxids",
+		} {
+			s.fail[method] = errNodeDown
+		}
+	})
+	servers[1].mine(1)
 	e.statuses.reset()
-	servers[0].set(func(s *fakeLwd) { s.failOnce["GetLatestBlock"] = errServerDown })
-	e.statuses.wait(t, "the failed attempt", func(s SyncStatus) bool { return s.Err != nil })
-	servers[0].mine(1)
 	e.waitSynced(151)
+	if got := e.w.servers.get().address; got != servers[1].addr {
+		t.Errorf("the wallet uses %s", got)
+	}
+}
+
+// TestARejectedCallDoesNotRotate checks that a server that rejects a call as
+// invalid is not left. Every server would reject a request that the wallet
+// got wrong, and the next one would learn the wallet's addresses for
+// nothing.
+func TestARejectedCallDoesNotRotate(t *testing.T) {
+	e, servers := serverEnv(t, 150, 2)
+	e.createAccount(100)
+	servers[0].set(func(s *fakeLwd) {
+		s.fail["GetBlockRange"] = status.Error(codes.InvalidArgument, "bad range")
+	})
+
+	e.connect()
+	e.statuses.wait(t, "a failed attempt", func(s SyncStatus) bool { return s.Err != nil })
+	attempts := servers[0].callCount("GetLatestBlock")
+	eventually(t, "five more sync attempts", func() bool {
+		return servers[0].callCount("GetLatestBlock") >= attempts+5
+	})
 	if got := e.w.servers.get().address; got != servers[0].addr {
-		t.Errorf("the wallet uses %s after one failed call", got)
+		t.Errorf("the wallet uses %s", got)
+	}
+	if n := calls(servers[1]); n != 0 {
+		t.Errorf("the second server was called %d times", n)
+	}
+}
+
+// TestCreateAccountMovesOnFromAFailingServer checks which failures make
+// CreateAccount try the next server.
+func TestCreateAccountMovesOnFromAFailingServer(t *testing.T) {
+	// A server whose node is down is left.
+	e, servers := serverEnv(t, 150, 2)
+	servers[0].set(func(s *fakeLwd) { s.fail["GetLightdInfo"] = errNodeDown })
+	e.createAccount(100)
+	if got := e.w.servers.get().address; got != servers[1].addr {
+		t.Errorf("after CreateAccount the wallet uses %s, want the second server", got)
+	}
+
+	// A rejected request is not carried to the next server.
+	e, servers = serverEnv(t, 150, 2)
+	rejected := status.Error(codes.InvalidArgument, "no tree state for that height")
+	servers[0].set(func(s *fakeLwd) { s.fail["GetTreeState"] = rejected })
+	_, err := e.w.CreateAccount(context.Background(), &AccountParams{Seed: testSeed, Birthday: 100})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("CreateAccount with a rejected tree state request: %v", err)
 	}
 	if n := calls(servers[1]); n != 0 {
 		t.Errorf("the second server was called %d times", n)
@@ -246,7 +348,7 @@ func staysWithServer(t *testing.T, e *env, servers []*fakeLwd) {
 	t.Helper()
 	e.connect()
 	e.statuses.wait(t, "the blocks to be scanned", func(s SyncStatus) bool {
-		return s.FullyScanned == 150 && s.Err != nil
+		return s.FullyScanned == 150 && (s.Err != nil || s.TransparentErr != nil)
 	})
 	attempts := servers[0].callCount("GetLatestBlock")
 	eventually(t, "five more sync attempts", func() bool {
@@ -280,6 +382,22 @@ func TestFailingAddressHistoryDoesNotRotate(t *testing.T) {
 		staysWithServer(t, e, servers)
 		if n := servers[0].callCount("GetTaddressTxids"); n == 0 {
 			t.Error("no address history was asked for")
+		}
+	})
+}
+
+// TestFailingUTXOQueriesDoNotRotate checks the same for a server that lacks
+// the call for unspent outputs. The blocks are scanned all the same.
+func TestFailingUTXOQueriesDoNotRotate(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, kind backendKind) {
+		e, servers := serverEnvFor(t, kind, 150, 2)
+		e.createAccount(100)
+		servers[0].set(func(s *fakeLwd) {
+			s.fail["GetAddressUtxosStream"] = status.Error(codes.Unimplemented, "not implemented")
+		})
+		staysWithServer(t, e, servers)
+		if n := servers[0].callCount("GetAddressUtxosStream"); n == 0 {
+			t.Error("no unspent outputs were asked for")
 		}
 	})
 }

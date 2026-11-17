@@ -861,14 +861,21 @@ impl Wallet {
     /// details that compact blocks leave out (memos, transparent inputs and
     /// outputs, outgoing payments), and returns its transaction ID.
     ///
+    /// `expected_txid`, when set, is the ID the transaction must have. A
+    /// transaction fetched by its ID comes from a server, which could answer
+    /// with another one. Such a transaction is not stored, and the error is
+    /// [`WalletError::InvalidArgument`].
+    ///
     /// `mined_height` is the height of the block holding the transaction, or
     /// unset for a transaction that is not mined.
     pub fn decrypt_and_store_transaction(
         &self,
         tx: Vec<u8>,
+        expected_txid: Option<Vec<u8>>,
         mined_height: Option<u32>,
     ) -> Result<Vec<u8>, WalletError> {
         guard(|| {
+            let expected_txid = expected_txid.as_deref().map(parse_txid).transpose()?;
             let mined_height = mined_height.map(BlockHeight::from_u32);
             let mut db = self.db();
 
@@ -884,6 +891,14 @@ impl Wallet {
             let branch_id = BranchId::for_height(&self.params, branch_height);
             let tx = Transaction::read(&tx[..], branch_id)
                 .map_err(|e| WalletError::invalid(format!("transaction: {e}")))?;
+            if let Some(want) = expected_txid
+                && tx.txid() != want
+            {
+                return Err(WalletError::invalid(format!(
+                    "the transaction is {}, not {want}",
+                    tx.txid()
+                )));
+            }
 
             decrypt_and_store_transaction(&self.params, &mut *db, &tx, mined_height)?;
             Ok(tx.txid().as_ref().to_vec())

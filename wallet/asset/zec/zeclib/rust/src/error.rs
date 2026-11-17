@@ -151,8 +151,12 @@ where
 
 /// Runs `f`, converting a panic into [`WalletError::Internal`].
 ///
-/// Every exported call goes through this. uniffi reports an uncaught Rust
-/// panic to Go as a Go panic, which a wallet must not be exposed to.
+/// Every exported call that returns a `Result` goes through this. uniffi
+/// reports an uncaught Rust panic to Go as a Go panic, which a wallet must not
+/// be exposed to. The calls that return no `Result`, `Wallet::network` and
+/// `Wallet::consensus_branch_id`, have nothing in them that panics. Catching
+/// a panic depends on unwinding, which the release profile in Cargo.toml
+/// keeps.
 pub(crate) fn guard<T>(f: impl FnOnce() -> Result<T, WalletError>) -> Result<T, WalletError> {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
         Ok(res) => res,

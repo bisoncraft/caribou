@@ -42,6 +42,10 @@ uuid = "1"
 tempfile = "3"
 
 [profile.release]
+# Panics must unwind. error::guard turns a panic in an exported call into
+# WalletError::Internal, and uniffi turns one in a call outside guard into a Go
+# panic. Both catch the unwinding panic. With panic = "abort" a panic would end
+# the process.
 lto = "thin"
 # uniffi-bindgen-go finds the interface metadata through symbol names in the
 # cdylib, so symbols must survive. Debug info is not needed.

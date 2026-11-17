@@ -256,7 +256,7 @@ func TestEnhancement(t *testing.T) {
 	e.createAccount(100)
 	now := time.Now()
 
-	txid := func(n byte) []byte { return bytes.Repeat([]byte{n}, 32) }
+	txid := func(n byte) []byte { return fakeTxid([]byte{n}) }
 	raw := func(n byte, height uint64) *walletrpc.RawTransaction {
 		return &walletrpc.RawTransaction{Data: []byte{n}, Height: height}
 	}
@@ -386,7 +386,7 @@ func TestEnhancementAnswersEachRequestOncePerCycle(t *testing.T) {
 }
 
 func TestEnhancementErrors(t *testing.T) {
-	id := bytes.Repeat([]byte{9}, 32)
+	id := fakeTxid([]byte{1})
 	tests := []struct {
 		name string
 		req  txRequest
@@ -472,6 +472,12 @@ func TestFailingRequestsDoNotFailTheCycle(t *testing.T) {
 			b.fail["decryptAndStoreTransaction"] = wrapf(ErrInvalidArgument, "not a transaction")
 		},
 	}, {
+		name: "the server answers with another transaction",
+		req:  txRequest{kind: txRequestEnhancement, txid: bad}, healthy: goodAddress,
+		server: func(s *fakeLwd) {
+			s.txs[string(bad)] = &walletrpc.RawTransaction{Data: []byte{7}, Height: 120}
+		},
+	}, {
 		name: "the server rejects address queries",
 		req:  txRequest{kind: txRequestAddress, address: "taddr-bad", start: 100}, healthy: goodStatus,
 		server: func(s *fakeLwd) {
@@ -519,6 +525,11 @@ func TestFailingRequestsDoNotFailTheCycle(t *testing.T) {
 				}
 				if _, ok := b.statuses[string(bad)]; ok {
 					t.Error("the failing request was answered")
+				}
+				for _, tx := range b.stored {
+					if bytes.Equal(tx.data, []byte{7}) {
+						t.Error("the transaction of the failing request was stored")
+					}
 				}
 			})
 		})

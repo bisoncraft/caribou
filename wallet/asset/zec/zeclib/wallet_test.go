@@ -664,10 +664,7 @@ func TestServerOutageWhileSynced(t *testing.T) {
 }
 
 func TestTransientServerErrors(t *testing.T) {
-	methods := []string{
-		"GetLightdInfo", "GetSubtreeRoots", "GetLatestBlock", "GetAddressUtxosStream",
-		"GetBlockRange", "GetTreeState",
-	}
+	methods := []string{"GetLightdInfo", "GetSubtreeRoots", "GetLatestBlock", "GetBlockRange", "GetTreeState"}
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			forEachBackend(t, func(t *testing.T, kind backendKind) {
@@ -860,17 +857,20 @@ func TestMalformedServerReplies(t *testing.T) {
 				Address: addresses[0], Txid: make([]byte, 32), ValueZat: -1, Height: 120,
 			}}
 		})
+		// An output with a negative value fails the update of the
+		// transparent addresses, and the blocks are scanned all the same.
 		e.connect()
-		bad := e.statuses.wait(t, "a failed attempt", func(s SyncStatus) bool { return s.Err != nil })
-		if !isServerError(bad.Err) || bad.State != SyncDisconnected {
+		bad := e.waitSynced(150)
+		if !isServerError(bad.TransparentErr) || !strings.Contains(bad.TransparentErr.Error(), "malformed") {
 			t.Fatalf("status with a malformed output: %+v", bad)
 		}
+		e.srv.set(func(s *fakeLwd) { delete(s.utxos, addresses[0]) })
+		e.statuses.wait(t, "the update of the transparent addresses", func(s SyncStatus) bool {
+			return s.TransparentErr == nil
+		})
 
 		// A tip height that is not a block height.
-		e.srv.set(func(s *fakeLwd) {
-			delete(s.utxos, addresses[0])
-			s.tip = &walletrpc.BlockID{Height: 1 << 40}
-		})
+		e.srv.set(func(s *fakeLwd) { s.tip = &walletrpc.BlockID{Height: 1 << 40} })
 		bad = e.statuses.wait(t, "a failed attempt", func(s SyncStatus) bool {
 			return s.Err != nil && strings.Contains(s.Err.Error(), "out of range")
 		})

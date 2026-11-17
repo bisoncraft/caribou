@@ -77,8 +77,10 @@ type backend interface {
 	transactionDataRequests() ([]txRequest, error)
 	setTransactionStatus(txid []byte, status txStatus) error
 	// decryptAndStoreTransaction stores the details of a full transaction
-	// and returns its ID. minedHeight is nil for an unmined transaction.
-	decryptAndStoreTransaction(tx []byte, minedHeight *uint32) ([]byte, error)
+	// and returns its ID. A set txid is the ID that the transaction must
+	// have: one with another ID is not stored, and the error is then
+	// ErrInvalidArgument. minedHeight is nil for an unmined transaction.
+	decryptAndStoreTransaction(tx, txid []byte, minedHeight *uint32) ([]byte, error)
 	// notifyAddressChecked closes a txRequestAddress request. asOfHeight is
 	// the last height the query covered.
 	notifyAddressChecked(req *txRequest, asOfHeight uint32) error

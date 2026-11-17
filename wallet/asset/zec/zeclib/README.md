@@ -58,7 +58,7 @@ wg.Wait()
 | `CreateAccount`, `CreateAccountWithTreeState` | Derive an account from a seed. The second takes the birthday tree state from the caller instead of the server. |
 | `Connect` | Start syncing. Returns a `*sync.WaitGroup` that is done when syncing has stopped. |
 | `Config.Server` | One server to use in place of the public servers the package lists. Needed on regtest only. |
-| `SyncStatus`, `Config.OnSyncStatus` | Connection state, scan progress and the last error. |
+| `SyncStatus`, `Config.OnSyncStatus` | Connection state, scan progress, the last error, and the last error of the transparent address requests. |
 | `Summary` | Balances per account and scan progress, read from the database. |
 | `Address`, `NewAddress`, `TransparentAddresses` | Unified and transparent addresses of an account. |
 
@@ -104,23 +104,36 @@ documents:
    the unspent transparent outputs of the account's addresses, as described
    under [Transparent funds](#transparent-funds). An account's outputs are
    queried only when the tip or the account's addresses have changed since
-   the last query.
+   the last query. A failure of these requests does not end the cycle, as
+   described below.
 4. Ask the wallet which block range it most wants scanned, download the start
    of it, scan it, and ask again until it wants nothing. A batch that does not
    connect to the blocks already scanned is a reorganization: rewind and start
    the cycle over.
 5. Answer the wallet's requests for transaction data: the status of
    transactions it has not seen mined, full transactions for their memos and
-   transparent parts, and the history of its transparent addresses. A request
-   that fails on its own account, such as a transaction the server rejects or
-   the wallet cannot parse, is retried later with a growing delay and does not
-   fail the cycle.
+   transparent parts, and the history of its transparent addresses. A full
+   transaction has to be the one asked for, and one with another ID is not
+   stored. A request that fails on its own account, such as a transaction the
+   server rejects, one the wallet cannot parse, or one other than the one
+   asked for, is retried later with a growing delay and does not fail the
+   cycle.
 
 A synced wallet repeats the cycle at a randomized interval. A failed cycle is
 retried with exponential backoff, and `Wallet.SyncStatus` carries the error.
 The backoff starts over after a cycle that scanned blocks before it failed,
 so a restore that loses its connection again and again is not made to wait
 longer each time.
+
+A server can fail the requests of step 3 and still serve blocks, for
+example one that lacks the call for unspent outputs. Such a failure does not
+end the cycle and leaves the wallet's pace unchanged: the wallet goes on to
+scan blocks, and a synced wallet still polls at its interval. The error is
+reported in `SyncStatus.TransparentErr`, apart from `SyncStatus.Err`, and
+the transparent balance can be out of date while it is set. The requests
+are made again after a delay of their own, which grows with each
+consecutive failure, so a server that keeps failing them is not sent the
+wallet's addresses at every poll. A failed cycle starts the delay over.
 
 ### Transparent funds
 
@@ -158,8 +171,8 @@ stores it:
   answered, also when a payment has made it a used one in the meantime.
 - A server that refuses a history request does not stop the sync, and the
   address is asked about again later. A server that cannot be reached for
-  them does not stop the scan of blocks either, and the failure is reported
-  in `SyncStatus` when the scan is done.
+  them does not stop the scan of blocks either. The failure is reported in
+  `SyncStatus.TransparentErr`, and the walk is tried again after a delay.
 
 Limits:
 
@@ -189,17 +202,26 @@ public lightwalletd servers for both networks, and the wallet uses them in
 the order of the list:
 
 - It starts with the first server and stays with it while it works.
-- A server that cannot be reached, or that is on another network, is left
-  for the next one. A server that has been working is given a second attempt
-  first, so that one failed call does not send the wallet elsewhere. A
-  server is working once it has given the wallet a batch of blocks, which
-  covers a restore that has yet to finish. After the last server the wallet
-  returns to the first, and it waits between rounds, longer with each one.
-- A server that brings the wallet up to its chain tip is kept when the
-  requests that come after the blocks fail: those for the history of
-  transparent addresses and for single transactions. The error is reported
-  in the sync status.
-- `CreateAccount` tries each server once, beginning with the one in use.
+- A server that fails is left for the next one: it cannot be reached, it is
+  on another network, a call the wallet syncs with fails, or a reply is
+  malformed. A call also fails when the node behind lightwalletd does, which
+  lightwalletd reports with a status such as `Internal` while the node
+  restarts. A call that the server rejects as `InvalidArgument` does not
+  count, because every server rejects a request the wallet got wrong. A
+  server that has been working is given a second attempt first, so that one
+  failed call does not send the wallet elsewhere. A server is working once
+  it has given the wallet a batch of blocks, which covers a restore that has
+  yet to finish. After the last server the wallet returns to the first, and
+  it waits between rounds, longer with each one.
+- A server that serves blocks is kept when its requests about addresses and
+  transactions fail. A failure of those for the history and the unspent
+  outputs of transparent addresses never counts against a server, and is
+  reported in `SyncStatus.TransparentErr`. One of those that follow the
+  blocks, for single transactions and for the history of addresses the
+  wallet asks about, does not count once the server has brought the wallet
+  up to its chain tip, and is reported in `SyncStatus.Err`.
+- `CreateAccount` tries each server once, beginning with the one in use, and
+  moves on from one that fails in the same way.
 - The wallet stays with the server it has moved to for as long as it is
   open. A wallet that is opened again starts with the first server.
 - `Config.Server` names one server to use in place of the list. The wallet

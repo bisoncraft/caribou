@@ -578,14 +578,27 @@ func TestFFITransparentAndTransactions(t *testing.T) {
 		0x00, // Orchard actions
 	}
 	height := uint32(120)
+	var emptyTxid []byte
 	for _, mined := range []*uint32{nil, &height} {
-		id, err := be.decryptAndStoreTransaction(emptyTx, mined)
+		id, err := be.decryptAndStoreTransaction(emptyTx, nil, mined)
 		if err != nil || len(id) != 32 {
 			t.Errorf("decryptAndStoreTransaction: %x, %v", id, err)
 		}
+		emptyTxid = id
 	}
-	if _, err := be.decryptAndStoreTransaction([]byte{1, 2, 3}, nil); !errors.Is(err, ErrInvalidArgument) {
+	if _, err := be.decryptAndStoreTransaction([]byte{1, 2, 3}, nil, nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Errorf("decryptAndStoreTransaction of garbage: %v", err)
+	}
+	// A transaction is stored as the one asked for only if it has its ID.
+	if id, err := be.decryptAndStoreTransaction(emptyTx, emptyTxid, &height); err != nil || !bytes.Equal(id, emptyTxid) {
+		t.Errorf("decryptAndStoreTransaction with its own ID: %x, %v", id, err)
+	}
+	other := bytes.Repeat([]byte{0xbb}, 32)
+	if _, err := be.decryptAndStoreTransaction(emptyTx, other, &height); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("decryptAndStoreTransaction with another ID: %v", err)
+	}
+	if _, err := be.decryptAndStoreTransaction(emptyTx, []byte{1}, &height); !errors.Is(err, ErrInvalidArgument) {
+		t.Errorf("decryptAndStoreTransaction with a short ID: %v", err)
 	}
 }
 
@@ -690,7 +703,7 @@ func TestFFIClosed(t *testing.T) {
 			return be.setTransactionStatus(make([]byte, 32), txStatus{kind: txMined})
 		},
 		"decryptAndStoreTransaction": func() error {
-			_, err := be.decryptAndStoreTransaction(nil, nil)
+			_, err := be.decryptAndStoreTransaction(nil, nil, nil)
 			return err
 		},
 		"notifyAddressChecked": func() error {
@@ -981,7 +994,7 @@ func TestWalkCoversUnusedAddressesBeyondTheGap(t *testing.T) {
 		[]testOutPoint{{txid: bytes.Repeat([]byte{0xac}, 32)}},
 		[]testOutput{{script: p2pkhScript(address), value: value}},
 	)
-	if _, err := scratch.decryptAndStoreTransaction(paying, nil); err != nil {
+	if _, err := scratch.decryptAndStoreTransaction(paying, nil, nil); err != nil {
 		t.Fatalf("decryptAndStoreTransaction: %v", err)
 	}
 	e.srv.set(func(s *fakeLwd) {

@@ -579,16 +579,25 @@ func (b *fakeBackend) setTransactionStatus(txid []byte, status txStatus) error {
 	return nil
 }
 
-func (b *fakeBackend) decryptAndStoreTransaction(tx []byte, minedHeight *uint32) ([]byte, error) {
+// fakeTxid returns the ID that the fake backend gives a transaction.
+func fakeTxid(tx []byte) []byte {
+	id := sha256.Sum256(tx)
+	return id[:]
+}
+
+func (b *fakeBackend) decryptAndStoreTransaction(tx, txid []byte, minedHeight *uint32) ([]byte, error) {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
 	if err := b.enter("decryptAndStoreTransaction"); err != nil {
 		return nil, err
 	}
+	id := fakeTxid(tx)
+	if txid != nil && !bytes.Equal(txid, id) {
+		return nil, wrapf(ErrInvalidArgument, "the transaction is %x, not %x", id, txid)
+	}
 	b.stored = append(b.stored, storedTx{data: tx, height: minedHeight})
 	// A transaction made by testTx uses the addresses it pays, holds
 	// outputs for them, and spends the outputs it names.
-	id := sha256.Sum256(tx)
 	if spends, pays, ok := parseTestTx(tx); ok {
 		watched := make(map[string]struct{})
 		for i := range b.accts {
@@ -602,11 +611,11 @@ func (b *fakeBackend) decryptAndStoreTransaction(tx []byte, minedHeight *uint32)
 			}
 			b.markUsedLocked(out.script)
 			known := slices.ContainsFunc(b.utxos, func(u utxo) bool {
-				return bytes.Equal(u.txid, id[:]) && u.index == uint32(index)
+				return bytes.Equal(u.txid, id) && u.index == uint32(index)
 			})
 			if !known && minedHeight != nil {
 				b.utxos = append(b.utxos, utxo{
-					txid: id[:], index: uint32(index), script: out.script, value: out.value, height: *minedHeight,
+					txid: id, index: uint32(index), script: out.script, value: out.value, height: *minedHeight,
 				})
 			}
 		}
@@ -618,7 +627,7 @@ func (b *fakeBackend) decryptAndStoreTransaction(tx []byte, minedHeight *uint32)
 			return gone
 		})
 	}
-	return id[:], nil
+	return id, nil
 }
 
 func (b *fakeBackend) notifyAddressChecked(req *txRequest, asOfHeight uint32) error {

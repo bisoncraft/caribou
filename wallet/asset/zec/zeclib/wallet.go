@@ -201,6 +201,10 @@ func (w *Wallet) Network() Network { return w.cfg.Network }
 // done and OnSyncStatus is not called again. Every later call on the wallet
 // returns ErrClosed.
 //
+// A batch of blocks that is being scanned cannot be interrupted, so Close can
+// wait for the scan of one batch to finish. Config.BatchSize bounds that
+// wait.
+//
 // Close may be called more than once and from several goroutines. Only the
 // first call closes the wallet and returns its error. The others return nil,
 // and not before the first one has finished.
@@ -307,6 +311,7 @@ func (w *Wallet) Connect(ctx context.Context) (*sync.WaitGroup, error) {
 		w.updateStatus(func(s *SyncStatus) {
 			s.State = SyncStopped
 			s.Err = nil
+			s.TransparentErr = nil
 		})
 		w.mtx.Lock()
 		w.cancel = nil
@@ -369,7 +374,7 @@ func (w *Wallet) CreateAccount(ctx context.Context, p *AccountParams) (*Account,
 		server := w.servers.get()
 		var account *Account
 		account, err = w.createAccountAt(ctx, server, p)
-		if err == nil || ctx.Err() != nil || !serverUnavailable(err) {
+		if err == nil || ctx.Err() != nil || !countsAgainstServer(err) {
 			return account, err
 		}
 		if next := w.servers.rotate(server); next != server {

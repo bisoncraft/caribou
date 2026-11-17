@@ -422,7 +422,7 @@ RustBuffer uniffi_zeclib_fn_method_wallet_current_address(uint64_t ptr, RustBuff
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_DECRYPT_AND_STORE_TRANSACTION
 #define UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_DECRYPT_AND_STORE_TRANSACTION
-RustBuffer uniffi_zeclib_fn_method_wallet_decrypt_and_store_transaction(uint64_t ptr, RustBuffer tx, RustBuffer mined_height, RustCallStatus *out_status
+RustBuffer uniffi_zeclib_fn_method_wallet_decrypt_and_store_transaction(uint64_t ptr, RustBuffer tx, RustBuffer expected_txid, RustBuffer mined_height, RustCallStatus *out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZECLIB_FN_METHOD_WALLET_FULLY_SCANNED_HEIGHT

@@ -449,7 +449,7 @@ func uniffiCheckChecksums() {
 		checksum := rustCall(func(_uniffiStatus *C.RustCallStatus) C.uint16_t {
 			return C.uniffi_zeclib_checksum_method_wallet_decrypt_and_store_transaction()
 		})
-		if checksum != 24941 {
+		if checksum != 11197 {
 			// If this happens try cleaning and rebuilding your project
 			panic("ffi: uniffi_zeclib_checksum_method_wallet_decrypt_and_store_transaction: UniFFI API checksum mismatch")
 		}
@@ -953,9 +953,14 @@ type WalletInterface interface {
 	// details that compact blocks leave out (memos, transparent inputs and
 	// outputs, outgoing payments), and returns its transaction ID.
 	//
+	// `expected_txid`, when set, is the ID the transaction must have. A
+	// transaction fetched by its ID comes from a server, which could answer
+	// with another one. Such a transaction is not stored, and the error is
+	// [`WalletError::InvalidArgument`].
+	//
 	// `mined_height` is the height of the block holding the transaction, or
 	// unset for a transaction that is not mined.
-	DecryptAndStoreTransaction(tx []byte, minedHeight *uint32) ([]byte, error)
+	DecryptAndStoreTransaction(tx []byte, expectedTxid *[]byte, minedHeight *uint32) ([]byte, error)
 	// The height up to which every block since the birthday has been
 	// scanned, or nothing if no block has been scanned.
 	FullyScannedHeight() (*uint32, error)
@@ -1272,15 +1277,20 @@ func (_self *Wallet) CurrentAddress(accountUuid string) (string, error) {
 // details that compact blocks leave out (memos, transparent inputs and
 // outputs, outgoing payments), and returns its transaction ID.
 //
+// `expected_txid`, when set, is the ID the transaction must have. A
+// transaction fetched by its ID comes from a server, which could answer
+// with another one. Such a transaction is not stored, and the error is
+// [`WalletError::InvalidArgument`].
+//
 // `mined_height` is the height of the block holding the transaction, or
 // unset for a transaction that is not mined.
-func (_self *Wallet) DecryptAndStoreTransaction(tx []byte, minedHeight *uint32) ([]byte, error) {
+func (_self *Wallet) DecryptAndStoreTransaction(tx []byte, expectedTxid *[]byte, minedHeight *uint32) ([]byte, error) {
 	_pointer := _self.ffiObject.incrementPointer("*Wallet")
 	defer _self.ffiObject.decrementPointer()
 	_uniffiRV, _uniffiErr := rustCallWithError[*WalletError](FfiConverterWalletError{}, func(_uniffiStatus *C.RustCallStatus) RustBufferI {
 		return GoRustBuffer{
 			inner: C.uniffi_zeclib_fn_method_wallet_decrypt_and_store_transaction(
-				_pointer, FfiConverterBytesINSTANCE.Lower(tx), FfiConverterOptionalUint32INSTANCE.Lower(minedHeight), _uniffiStatus),
+				_pointer, FfiConverterBytesINSTANCE.Lower(tx), FfiConverterOptionalBytesINSTANCE.Lower(expectedTxid), FfiConverterOptionalUint32INSTANCE.Lower(minedHeight), _uniffiStatus),
 		}
 	})
 	if _uniffiErr != nil {

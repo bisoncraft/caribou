@@ -6,6 +6,7 @@ package zeclib
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func (u *usedAddresses) serve(t *testing.T, srv *fakeLwd) {
 			[]testOutPoint{{txid: bytes.Repeat([]byte{0xaa}, 32), index: uint32(i)}},
 			[]testOutput{{script: p2pkhScript(address), value: u.value}},
 		)
-		txid, err := u.scratch.decryptAndStoreTransaction(paying, nil)
+		txid, err := u.scratch.decryptAndStoreTransaction(paying, nil, nil)
 		if err != nil {
 			t.Fatalf("decryptAndStoreTransaction: %v", err)
 		}
@@ -295,6 +296,66 @@ func TestRefusedHistoryRequestsAreRetried(t *testing.T) {
 	}
 }
 
+// TestFailingTransparentRequestsKeepThePollPace checks that a server that
+// fails the requests for the transparent addresses does not slow down the
+// sync. The error is reported apart from that of the sync attempt, new
+// blocks are picked up at the poll interval, and the requests are not made
+// again before their own delay has passed, which is an hour here.
+func TestFailingTransparentRequestsKeepThePollPace(t *testing.T) {
+	for _, method := range []string{"GetAddressUtxosStream", "GetTaddressTxids"} {
+		t.Run(method, func(t *testing.T) {
+			e, _ := newFakeEnv(t, 150, nil)
+			e.w.tune = func(o *syncOptions) { o.minBackoff, o.maxBackoff = time.Hour, time.Hour }
+			e.createAccount(100)
+			e.srv.set(func(s *fakeLwd) { s.fail[method] = status.Error(codes.Unavailable, "try later") })
+
+			e.connect()
+			synced := e.waitSynced(150)
+			if !isServerError(synced.TransparentErr) || status.Code(errors.Unwrap(synced.TransparentErr)) != codes.Unavailable {
+				t.Fatalf("status while %s fails: %+v", method, synced)
+			}
+			calls := e.srv.callCount(method)
+			for height := uint32(151); height <= 153; height++ {
+				e.srv.mine(1)
+				if status := e.waitSynced(height); status.TransparentErr == nil {
+					t.Errorf("the error was cleared at height %d: %+v", height, status)
+				}
+			}
+			if got := e.srv.callCount(method); got != calls {
+				t.Errorf("%s was called %d more times before its delay had passed", method, got-calls)
+			}
+			for _, s := range e.statuses.all() {
+				if s.Err != nil || s.State == SyncDisconnected {
+					t.Fatalf("a failure of %s failed the sync attempt: %+v", method, s)
+				}
+			}
+		})
+	}
+}
+
+// TestFailingTransparentRequestsAreRetried checks that the requests for the
+// transparent addresses are made again once their delay has passed, also at
+// an unchanged chain tip, and that the error is cleared when they succeed.
+func TestFailingTransparentRequestsAreRetried(t *testing.T) {
+	e, _ := newFakeEnv(t, 150, nil)
+	e.createAccount(100)
+	e.srv.set(func(s *fakeLwd) {
+		s.fail["GetAddressUtxosStream"] = status.Error(codes.Unimplemented, "not implemented")
+	})
+
+	e.connect()
+	e.statuses.wait(t, "the failure", func(s SyncStatus) bool {
+		return s.State == SyncSynced && s.TransparentErr != nil
+	})
+	calls := e.srv.callCount("GetAddressUtxosStream")
+	eventually(t, "retries", func() bool { return e.srv.callCount("GetAddressUtxosStream") >= calls+2 })
+
+	e.srv.set(func(s *fakeLwd) { delete(s.fail, "GetAddressUtxosStream") })
+	e.statuses.wait(t, "the error to be cleared", func(s SyncStatus) bool {
+		return s.State == SyncSynced && s.TransparentErr == nil
+	})
+}
+
 // TestWalkAsksAgainAfterAnOutage checks that the unused addresses are asked
 // about again when the wallet has lost and regained the server. While it was
 // out of touch, the last address it watched was paid and emptied, and the
@@ -350,7 +411,7 @@ func TestWalkAsksAboutAnAddressThatIsNoLongerUnused(t *testing.T) {
 				[]testOutPoint{{txid: bytes.Repeat([]byte{0xab}, 32), index: uint32(i)}},
 				[]testOutput{{script: p2pkhScript(address), value: value}},
 			)
-			txid, err := u.scratch.decryptAndStoreTransaction(tx, nil)
+			txid, err := u.scratch.decryptAndStoreTransaction(tx, nil, nil)
 			if err != nil {
 				t.Fatalf("decryptAndStoreTransaction: %v", err)
 			}
@@ -441,13 +502,15 @@ func TestWalkWaitsForTheBirthday(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	p := newTestProcessor(t, srv, e.be.(*fakeBackend), &now)
 
-	walked, err := p.walkAddresses(context.Background(), account.Birthday-1)
-	if err != nil || walked != 0 || srv.callCount("GetTaddressTxids") != 0 {
-		t.Fatalf("below the birthday: %d addresses walked, %d requests, %v", walked, srv.callCount("GetTaddressTxids"), err)
+	walked, failed, err := p.walkAddresses(context.Background(), account.Birthday-1)
+	if err != nil || failed != nil || walked != 0 || srv.callCount("GetTaddressTxids") != 0 {
+		t.Fatalf("below the birthday: %d addresses walked, %d requests, %v, %v",
+			walked, srv.callCount("GetTaddressTxids"), failed, err)
 	}
-	walked, err = p.walkAddresses(context.Background(), account.Birthday)
-	if err != nil || walked != 15 || srv.callCount("GetTaddressTxids") != 15 {
-		t.Fatalf("at the birthday: %d addresses walked, %d requests, %v", walked, srv.callCount("GetTaddressTxids"), err)
+	walked, failed, err = p.walkAddresses(context.Background(), account.Birthday)
+	if err != nil || failed != nil || walked != 15 || srv.callCount("GetTaddressTxids") != 15 {
+		t.Fatalf("at the birthday: %d addresses walked, %d requests, %v, %v",
+			walked, srv.callCount("GetTaddressTxids"), failed, err)
 	}
 	srv.set(func(s *fakeLwd) {
 		for _, q := range s.addrQueries {

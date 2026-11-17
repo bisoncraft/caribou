@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/bisoncraft/caribou/util"
@@ -81,6 +83,14 @@ type SyncStatus struct {
 	// error is. ErrWrongNetwork, ErrReorgTooDeep and an ErrConsensusBranch
 	// that every server gives do not go away without intervention.
 	Err error
+	// TransparentErr is the error of the last failed attempt to update the
+	// wallet's transparent addresses: to fetch their history and their
+	// unspent outputs. It is nil once an attempt has succeeded. While it is
+	// set, the transparent balance and the addresses the wallet watches can
+	// be out of date. It does not end a sync attempt or change State: a
+	// wallet whose server fails these requests keeps scanning blocks and
+	// can be SyncSynced.
+	TransparentErr error
 }
 
 // equal reports whether two statuses would look the same to a caller.
@@ -90,10 +100,15 @@ func (s *SyncStatus) equal(o *SyncStatus) bool {
 		s.Recovering != o.Recovering {
 		return false
 	}
-	if (s.Err == nil) != (o.Err == nil) {
+	return sameError(s.Err, o.Err) && sameError(s.TransparentErr, o.TransparentErr)
+}
+
+// sameError reports whether two errors would look the same to a caller.
+func sameError(a, b error) bool {
+	if (a == nil) != (b == nil) {
 		return false
 	}
-	return s.Err == nil || s.Err.Error() == o.Err.Error()
+	return a == nil || a.Error() == b.Error()
 }
 
 const (
@@ -242,6 +257,11 @@ type processor struct {
 	// walkDeferred holds the addresses whose history request failed for a
 	// reason of its own, by address.
 	walkDeferred map[string]deferredRequest
+	// transparentFailures counts the consecutive failures of the requests
+	// for the transparent addresses, which are not made again before
+	// transparentRetryAt.
+	transparentFailures int
+	transparentRetryAt  time.Time
 }
 
 // deferredRequest is a transaction data request that is not tried again
@@ -267,6 +287,7 @@ func (p *processor) run(ctx context.Context) {
 	p.update(func(s *SyncStatus) {
 		s.State = SyncConnecting
 		s.Err = nil
+		s.TransparentErr = nil
 	})
 
 	failures := 0
@@ -293,9 +314,12 @@ func (p *processor) run(ctx context.Context) {
 			// While the wallet was out of touch, an unused address can
 			// have been paid and emptied again, which no later query for
 			// unspent outputs shows. The unused addresses are asked about
-			// again.
+			// again in the next attempt, also when a failure of those
+			// requests had put them off: the next attempt can be with
+			// another server.
 			p.walked = nil
 			p.utxoQueries = nil
+			p.transparentFailures, p.transparentRetryAt = 0, time.Time{}
 			wait = backoff(failures, p.opts.minBackoff, p.opts.maxBackoff)
 			if failed := p.server; p.rotateAfter(err) {
 				// A server that has not been tried since the last success
@@ -370,10 +394,21 @@ func unfit(err error) bool {
 	return errors.Is(err, ErrWrongNetwork) || errors.Is(err, ErrConsensusBranch) || errors.Is(err, ErrServerStale)
 }
 
-// serverUnavailable reports whether err means that a server cannot serve the
-// wallet: it cannot be reached, or it is unfit.
-func serverUnavailable(err error) bool {
-	return isConnectionError(err) || unfit(err)
+// countsAgainstServer reports whether err, which ended an attempt to use a
+// server, is a failure of the server: the server is unfit, cannot be reached,
+// failed a call, or gave a malformed reply. A call that the server rejected
+// as invalid does not count. Every server rejects a request that the wallet
+// got wrong in that way, and moving on would only show the request to the
+// next server.
+//
+// A call fails when the node behind lightwalletd does, and the error is then
+// not a connection error: lightwalletd answers with a status such as Internal
+// or Unknown while its node restarts.
+func countsAgainstServer(err error) bool {
+	if unfit(err) {
+		return true
+	}
+	return isServerError(err) && status.Code(err) != codes.InvalidArgument
 }
 
 // serverWorked records that the server in use is serving the wallet. It is
@@ -386,15 +421,15 @@ func (p *processor) serverWorked() {
 	p.staleTour = false
 }
 
-// rotateAfter moves the wallet to the next server if err says that the one
-// in use is unavailable, and reports whether it did.
+// rotateAfter moves the wallet to the next server if err counts against the
+// one in use, and reports whether it did.
 //
 // A server that has been working gets a second attempt first. One failed
 // call is not an outage, and every further server the wallet uses learns its
 // transparent addresses. A server that has given the wallet nothing since
 // the wallet turned to it, or that is unfit, is left at once.
 func (p *processor) rotateAfter(err error) bool {
-	if p.nextServer == nil || !serverUnavailable(err) {
+	if p.nextServer == nil || !countsAgainstServer(err) {
 		return false
 	}
 	p.serverFailures++
@@ -418,26 +453,47 @@ func (p *processor) rotateAfter(err error) bool {
 
 // cycle brings the wallet up to the server's chain tip once. It returns
 // true if it rewound the wallet and has to be run again at once.
+//
+// An attempt has three steps: the chain tip, the transparent addresses, and
+// the blocks. The second is before the third so that a restore, which can
+// scan for hours in one attempt, learns of transparent funds first. A failure
+// of the server to answer for the transparent addresses does not end the
+// attempt: syncAddresses reports it on its own.
 func (p *processor) cycle(ctx context.Context) (again bool, err error) {
+	tip, again, err := p.syncTip(ctx)
+	if err != nil || again {
+		return again, err
+	}
+	if err := p.syncAddresses(ctx, tip); err != nil {
+		return false, err
+	}
+	return p.syncBlocks(ctx, uint32(tip.Height))
+}
+
+// syncTip fetches the server's chain tip, rewinds the wallet if its block at
+// the tip height is not the server's, and tells the wallet the tip. On the
+// first attempt with a server, it checks the server and stores its subtree
+// roots first. It returns true if it rewound the wallet.
+func (p *processor) syncTip(ctx context.Context) (tip *walletrpc.BlockID, rewound bool, err error) {
 	if !p.prepared {
 		if err := p.checkServer(ctx); err != nil {
-			return false, err
+			return nil, false, err
 		}
 		if err := p.updateSubtreeRoots(ctx); err != nil {
-			return false, err
+			return nil, false, err
 		}
 		p.prepared = true
 	}
 	if err := p.checkServerWhenDue(ctx); err != nil {
-		return false, err
+		return nil, false, err
 	}
 
-	tip, err := p.src.latestBlock(ctx)
+	tip, err = p.src.latestBlock(ctx)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if tip.Height > math.MaxUint32 {
-		return false, &serverError{"GetLatestBlock", fmt.Errorf("height %d is out of range", tip.Height)}
+		return nil, false, &serverError{"GetLatestBlock", fmt.Errorf("height %d is out of range", tip.Height)}
 	}
 	tipHeight := uint32(tip.Height)
 	p.update(func(s *SyncStatus) {
@@ -453,41 +509,75 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 		}
 	})
 
-	rewound, err := p.checkTip(tipHeight, tip.Hash)
-	if err != nil {
-		return false, err
-	}
-	if rewound {
-		return true, nil
+	rewound, err = p.checkTip(tipHeight, tip.Hash)
+	if err != nil || rewound {
+		return nil, rewound, err
 	}
 	if err := p.be.updateChainTip(tipHeight); err != nil {
-		return false, err
+		return nil, false, err
 	}
-	// walkErr is a failure of the server to give the history of addresses.
-	// It does not keep the wallet from scanning blocks, and is reported once
-	// that is done.
-	var walkErr error
+	return tip, false, nil
+}
+
+// syncAddresses fetches the history of the transparent addresses that are
+// due to be asked about, and records the unspent outputs of every account's
+// addresses.
+//
+// A failure of the server to answer these requests does not end the sync
+// attempt, and a server that serves blocks is kept: the next server would
+// only learn the wallet's addresses. The error is reported in
+// SyncStatus.TransparentErr, and the requests are made again after a delay
+// that grows with each consecutive failure. Without the delay a server that
+// keeps failing them would be sent every address of the wallet at every
+// poll. The error that syncAddresses returns is one that ends the attempt: a
+// failed check of the server, an error of the wallet database, or a
+// cancelled context.
+func (p *processor) syncAddresses(ctx context.Context, tip *walletrpc.BlockID) error {
+	if p.opts.now().Before(p.transparentRetryAt) {
+		return nil
+	}
+	tipHeight := uint32(tip.Height)
+	var failed error
 	// Unspent outputs can move the window of watched addresses as well, so
 	// the walk is repeated until it finds nothing to do.
 	for round := 0; ; round++ {
-		walked, err := p.walkAddresses(ctx, tipHeight)
+		walked, walkFailed, err := p.walkAddresses(ctx, tipHeight)
 		if err != nil {
-			if !isConnectionError(err) || ctx.Err() != nil {
-				return false, err
-			}
-			walkErr = err
+			return err
 		}
+		failed = walkFailed
 		if walked == 0 && round > 0 {
 			break
 		}
-		if err := p.refreshUTXOs(ctx, tipHeight, tip.Hash); err != nil {
-			return false, err
+		utxoFailed, err := p.refreshUTXOs(ctx, tipHeight, tip.Hash)
+		if err != nil {
+			return err
 		}
-		if walkErr != nil {
+		if failed == nil {
+			failed = utxoFailed
+		}
+		if failed != nil {
 			break
 		}
 	}
 
+	if failed == nil {
+		p.transparentFailures, p.transparentRetryAt = 0, time.Time{}
+	} else {
+		p.transparentFailures++
+		wait := backoff(p.transparentFailures, p.opts.minBackoff, p.opts.maxBackoff)
+		p.transparentRetryAt = p.opts.now().Add(wait)
+		p.log.Warnf("The requests for the transparent addresses failed and are put off for %s: %v",
+			wait.Round(time.Millisecond), failed)
+	}
+	p.update(func(s *SyncStatus) { s.TransparentErr = failed })
+	return nil
+}
+
+// syncBlocks scans the blocks the wallet wants scanned up to the server's
+// chain tip, then answers the wallet's requests for transaction data. It
+// returns true if it rewound the wallet.
+func (p *processor) syncBlocks(ctx context.Context, tipHeight uint32) (rewound bool, err error) {
 	// The wallet orders the ranges it wants scanned, and scanning changes
 	// that order: finding a note raises the priority of the blocks that
 	// make it spendable. So the list is fetched again after every batch and
@@ -548,18 +638,14 @@ func (p *processor) cycle(ctx context.Context) (again bool, err error) {
 	// The server has brought the wallet up to its chain tip. The requests
 	// that follow are for single transactions and for the history of
 	// addresses. A failure of those is reported and does not count against
-	// the server, and neither does a failure of the address walk above:
-	// leaving a server that serves blocks would only tell the next one the
-	// wallet's addresses and transactions.
+	// the server: leaving a server that serves blocks would only tell the
+	// next one the wallet's addresses and transactions.
 	p.serverWorked()
 	if err := p.enhance(ctx, tipHeight); err != nil {
 		return false, err
 	}
 	p.update(func(s *SyncStatus) { s.ChainTip = tipHeight })
-	if err := p.refreshSummary(); err != nil {
-		return false, err
-	}
-	return false, walkErr
+	return false, p.refreshSummary()
 }
 
 // checkServerChain verifies that a server follows the chain of network and
@@ -796,6 +882,12 @@ func (p *processor) rewind(staleHeight, tipHeight uint32) error {
 // nothing at the address is unspent any more. It returns the number of
 // addresses it asked the server about.
 //
+// A failure of the connection or of the server as a whole ends the walk and
+// is returned as failed. A request that fails for a reason of its own is put
+// off, and the walk goes on. err is an error that ends the sync attempt: a
+// failed check of the server, an error of the wallet database, or a
+// cancelled context.
+//
 // The wallet watches every address up to the last used one on a chain, and
 // the unused ones after it. Storing a transaction that pays an unused one
 // makes it the last used one, and the wallet then watches further. The walk
@@ -815,16 +907,16 @@ func (p *processor) rewind(staleHeight, tipHeight uint32) error {
 // in notes that never become spendable and that the wallet does not see
 // spent. Use of an address from below the birthday is therefore not
 // followed.
-func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked int, err error) {
+func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked int, failed, err error) {
 	accounts, err := p.be.accounts()
 	if err != nil || len(accounts) == 0 {
-		return 0, err
+		return 0, nil, err
 	}
 	for {
 		for i := range accounts {
 			watched, err := p.be.transparentReceivers(accounts[i].ID)
 			if err != nil {
-				return walked, err
+				return walked, nil, err
 			}
 			for _, a := range watched {
 				if _, done := p.walked[a.address]; a.unused && !done {
@@ -848,13 +940,13 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 				continue
 			}
 			if err := ctx.Err(); err != nil {
-				return walked, err
+				return walked, nil, err
 			}
 			if err := p.checkServerWhenDue(ctx); err != nil {
-				return walked, err
+				return walked, nil, err
 			}
 			err := p.src.addressTransactions(ctx, address, start, tipHeight, func(tx *walletrpc.RawTransaction) error {
-				_, err := p.be.decryptAndStoreTransaction(tx.Data, minedHeight(tx))
+				_, err := p.be.decryptAndStoreTransaction(tx.Data, nil, minedHeight(tx))
 				if err != nil && !errors.Is(err, ErrDatabase) && !errors.Is(err, ErrClosed) {
 					// One transaction the wallet cannot read must not
 					// hold up the rest of the walk.
@@ -865,8 +957,10 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 			})
 			switch {
 			case err == nil:
-			case ctx.Err() != nil || !isServerError(err) || isConnectionError(err):
-				return walked, err
+			case ctx.Err() != nil || !isServerError(err):
+				return walked, nil, err
+			case isConnectionError(err):
+				return walked, err, nil
 			default:
 				// The server refused this one request. The address is
 				// tried again later, and the others are not held up.
@@ -892,7 +986,7 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 			progressed = true
 		}
 		if !progressed {
-			return walked, nil
+			return walked, nil, nil
 		}
 	}
 }
@@ -904,16 +998,22 @@ func (p *processor) walkAddresses(ctx context.Context, tipHeight uint32) (walked
 // addresses and start height changes only with the chain tip. An account is
 // asked about again when one of the three has changed, and not on every
 // poll: each query shows the server all of the account's addresses together.
-func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash []byte) error {
+//
+// A query that the server fails, or answers with a malformed output, ends
+// the refresh, and its error is returned as failed. A server can lack the
+// call, or have a node that cannot answer it, and still serve blocks. err is
+// an error that ends the sync attempt: a failed check of the server, an
+// error of the wallet database, or a cancelled context.
+func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash []byte) (failed, err error) {
 	accounts, err := p.be.accounts()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for i := range accounts {
 		id := accounts[i].ID
 		watched, err := p.be.transparentReceivers(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(watched) == 0 {
 			continue
@@ -924,14 +1024,14 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 		}
 		start, err := p.be.utxoQueryHeight(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		query := fmt.Sprintf("%d %x %d %s", tipHeight, tipHash, start, strings.Join(addresses, " "))
 		if p.utxoQueries[id] == query {
 			continue
 		}
 		if err := p.checkServerWhenDue(ctx); err != nil {
-			return err
+			return nil, err
 		}
 		err = p.src.addressUTXOs(ctx, addresses, start, func(u *walletrpc.GetAddressUtxosReply) error {
 			if u.ValueZat < 0 || u.Index < 0 || u.Height > math.MaxUint32 {
@@ -945,15 +1045,19 @@ func (p *processor) refreshUTXOs(ctx context.Context, tipHeight uint32, tipHash 
 				height: uint32(u.Height),
 			})
 		})
-		if err != nil {
-			return err
+		switch {
+		case err == nil:
+		case ctx.Err() != nil || !isServerError(err):
+			return nil, err
+		default:
+			return err, nil
 		}
 		if p.utxoQueries == nil {
 			p.utxoQueries = make(map[string]string)
 		}
 		p.utxoQueries[id] = query
 	}
-	return nil
+	return nil, nil
 }
 
 // batchEnd returns the last height of the batch that starts a scan of r.
@@ -1132,7 +1236,13 @@ func (p *processor) answer(ctx context.Context, req *txRequest, tipHeight uint32
 		if tx == nil {
 			return p.be.setTransactionStatus(req.txid, txStatus{kind: txNotRecognized})
 		}
-		_, err = p.be.decryptAndStoreTransaction(tx.Data, minedHeight(tx))
+		// The backend stores nothing unless the transaction is the one
+		// asked for. Another one would be stored in its place, at a height
+		// the server chose, and the request would stay open.
+		_, err = p.be.decryptAndStoreTransaction(tx.Data, req.txid, minedHeight(tx))
+		if errors.Is(err, ErrInvalidArgument) {
+			return &serverError{"GetTransaction", err}
+		}
 		return err
 
 	case txRequestAddress:
@@ -1167,7 +1277,7 @@ func (p *processor) answer(ctx context.Context, req *txRequest, tipHeight uint32
 		// while a payment to a TEX address (ZIP 320) is under way. Sending
 		// such payments needs the mempool part answered as well.
 		err := p.src.addressTransactions(ctx, req.address, req.start, last, func(tx *walletrpc.RawTransaction) error {
-			_, err := p.be.decryptAndStoreTransaction(tx.Data, minedHeight(tx))
+			_, err := p.be.decryptAndStoreTransaction(tx.Data, nil, minedHeight(tx))
 			return err
 		})
 		if err != nil {

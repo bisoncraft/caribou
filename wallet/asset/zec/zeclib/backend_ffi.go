@@ -313,12 +313,16 @@ func (b *ffiBackend) setTransactionStatus(txid []byte, status txStatus) error {
 	})
 }
 
-func (b *ffiBackend) decryptAndStoreTransaction(tx []byte, minedHeight *uint32) (txid []byte, err error) {
+func (b *ffiBackend) decryptAndStoreTransaction(tx, txid []byte, minedHeight *uint32) (id []byte, err error) {
+	var want *[]byte
+	if txid != nil {
+		want = &txid
+	}
 	err = b.with(func(w *ffi.Wallet) (err error) {
-		txid, err = w.DecryptAndStoreTransaction(tx, minedHeight)
+		id, err = w.DecryptAndStoreTransaction(tx, want, minedHeight)
 		return err
 	})
-	return txid, err
+	return id, err
 }
 
 func (b *ffiBackend) notifyAddressChecked(req *txRequest, asOfHeight uint32) error {

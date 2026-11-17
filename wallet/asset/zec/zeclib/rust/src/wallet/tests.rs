@@ -1115,12 +1115,12 @@ fn transparent_window_follows_stored_history() {
         70_000,
     );
     assert_eq!(
-        w.decrypt_and_store_transaction(paying, Some(BIRTHDAY + 5))
+        w.decrypt_and_store_transaction(paying, None, Some(BIRTHDAY + 5))
             .unwrap(),
         paying_txid
     );
     let (spending, _) = transparent_transaction(&[(paying_txid, 0)], &[vec![0x51]], 60_000);
-    w.decrypt_and_store_transaction(spending, Some(BIRTHDAY + 6))
+    w.decrypt_and_store_transaction(spending, None, Some(BIRTHDAY + 6))
         .unwrap();
 
     let receivers = w.transparent_receivers(account.uuid.clone()).unwrap();
@@ -1133,7 +1133,7 @@ fn transparent_window_follows_stored_history() {
     // The same on the change chain.
     let change = receivers.iter().find(|r| r.change && r.index == 2).unwrap();
     let (paying, _) = transparent_transaction(&[elsewhere], &[script_for(&change.address)], 5_000);
-    w.decrypt_and_store_transaction(paying, Some(BIRTHDAY + 7))
+    w.decrypt_and_store_transaction(paying, None, Some(BIRTHDAY + 7))
         .unwrap();
     let receivers = w.transparent_receivers(account.uuid).unwrap();
     assert_eq!(indexes(&receivers, true), (0..8).collect::<Vec<_>>());
@@ -1169,7 +1169,7 @@ fn unused_addresses_beyond_the_gap() {
     let elsewhere = (vec![0xaa; 32], 0);
     let (paying, _) =
         transparent_transaction(&[elsewhere], &[script_for(&receivers[0].address)], 70_000);
-    w.decrypt_and_store_transaction(paying, Some(BIRTHDAY + 5))
+    w.decrypt_and_store_transaction(paying, None, Some(BIRTHDAY + 5))
         .unwrap();
     let receivers = w.transparent_receivers(account.uuid).unwrap();
     assert_eq!(indexes(&receivers, false), (0..11).collect::<Vec<_>>());
@@ -1182,7 +1182,7 @@ fn decrypt_and_store_transaction() {
     let w = &fx.wallet;
 
     assert_invalid(
-        w.decrypt_and_store_transaction(vec![1, 2, 3], None)
+        w.decrypt_and_store_transaction(vec![1, 2, 3], None, None)
             .unwrap_err(),
         "transaction:",
     );
@@ -1192,21 +1192,61 @@ fn decrypt_and_store_transaction() {
     // only has to succeed and report the right ID.
     let (bytes, txid) = empty_transaction(BIRTHDAY + 40);
     assert_eq!(
-        w.decrypt_and_store_transaction(bytes.clone(), None)
+        w.decrypt_and_store_transaction(bytes.clone(), None, None)
             .unwrap(),
         txid
     );
     w.update_chain_tip(BIRTHDAY + 9).unwrap();
     assert_eq!(
-        w.decrypt_and_store_transaction(bytes.clone(), None)
+        w.decrypt_and_store_transaction(bytes.clone(), None, None)
             .unwrap(),
         txid
     );
     assert_eq!(
-        w.decrypt_and_store_transaction(bytes, Some(BIRTHDAY + 3))
+        w.decrypt_and_store_transaction(bytes, None, Some(BIRTHDAY + 3))
             .unwrap(),
         txid
     );
+}
+
+/// A transaction that is not the one asked for is not stored, even when it
+/// pays the wallet.
+#[test]
+fn a_transaction_with_another_id_is_not_stored() {
+    let (fx, account) = wallet_with_account();
+    let w = &fx.wallet;
+    let unused_receiving = || {
+        let receivers = w.transparent_receivers(account.uuid.clone()).unwrap();
+        unused(&receivers, false)
+    };
+    let before = unused_receiving();
+    assert!(before.contains(&0), "{before:?}");
+
+    let first = w
+        .transparent_receivers(account.uuid.clone())
+        .unwrap()
+        .remove(0);
+    let (paying, txid) = transparent_transaction(
+        &[(vec![0xaa; 32], 0)],
+        &[script_for(&first.address)],
+        70_000,
+    );
+    let mined = Some(BIRTHDAY + 5);
+    let err = w
+        .decrypt_and_store_transaction(paying.clone(), Some(vec![0xbb; 32]), mined)
+        .unwrap_err();
+    assert_invalid(err, "the transaction is");
+    let err = w
+        .decrypt_and_store_transaction(paying.clone(), Some(vec![0xbb; 31]), mined)
+        .unwrap_err();
+    assert_invalid(err, "32 bytes");
+    assert_eq!(unused_receiving(), before);
+
+    let stored = w
+        .decrypt_and_store_transaction(paying, Some(txid.clone()), mined)
+        .unwrap();
+    assert_eq!(stored, txid);
+    assert!(!unused_receiving().contains(&0));
 }
 
 #[test]
