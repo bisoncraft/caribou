@@ -48,7 +48,7 @@ func TestCatchUpFromExactFork(t *testing.T) {
 	a, b := forkedChain(forkAt, lenA, lenB)
 
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 	n := &Network{
@@ -110,7 +110,7 @@ func TestCatchUpFromDeepReorg(t *testing.T) {
 	a, b := forkedChain(forkAt, lenA, lenB)
 
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 	if h.Tip() != lenA-1 {
@@ -171,7 +171,7 @@ func TestCatchUpFromReorgExceedsBound(t *testing.T) {
 	a, b := forkedChain(forkAt, lenA, lenB)
 
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestCatchUpFromReorgExceedsBound(t *testing.T) {
 func TestApplyTipNotificationBlocksUntilDelivered(t *testing.T) {
 	chain := synthChain(6, 2000) // heights 0..5
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4]), 0); err != nil { // load 0..3
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4])); err != nil { // load 0..3
 		t.Fatalf("load: %v", err)
 	}
 
@@ -269,7 +269,7 @@ func TestApplyTipNotificationBlocksUntilDelivered(t *testing.T) {
 func TestApplyTipNotificationShutdownEscape(t *testing.T) {
 	chain := synthChain(6, 2000)
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4]), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:4])); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -465,7 +465,7 @@ func TestNetworkStopWithoutStart(t *testing.T) {
 func TestCatchUpFromNoFork(t *testing.T) {
 	a := synthChain(20, 1)
 	h, _ := newTestHeaders(t)
-	if _, err := h.AppendBatch(0, serializeBatch(t, a), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, a)); err != nil {
 		t.Fatalf("load chain A: %v", err)
 	}
 	n := &Network{

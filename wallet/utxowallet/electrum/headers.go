@@ -13,11 +13,11 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -55,25 +55,33 @@ const maxReorgDepth = 200
 // INSIDE a batch is a different error: the server contradicts itself.
 var errHeaderDoesNotConnect = errors.New("electrum: header does not connect")
 
-// recentPoWWindow is the number of recent headers (counting back from the
-// server-reported tip at sync time) that get full per-header PoW
-// validation. Older headers are validated by checkpoint match plus
-// retarget-structure: the difficulty Bits at each retarget boundary must
-// be the value computed from the prior chunk's timestamp delta. Per-header
-// PoW on deep history would force a full scrypt walk over millions of LTC
-// blocks (tens of minutes) for no meaningful additional safety beyond
-// what checkpoints + retarget structure already provide.
-const recentPoWWindow = 2016
+// maxFutureBlockTime is how far past local time a header's timestamp may lie,
+// the consensus value (MAX_FUTURE_BLOCK_TIME) on BTC, LTC and Dash.
+const maxFutureBlockTime = 2 * time.Hour
 
-// retargetInterval is the number of blocks between difficulty adjustments
-// on BTC and LTC. It's a power-of-two convenience for both chains.
-const retargetInterval = 2016
+// errTimeTooNew is returned (wrapped) for a header timestamped more than
+// maxFutureBlockTime past local time. Local clock skew produces the same
+// error, so it is no evidence against the server.
+var errTimeTooNew = errors.New("electrum: header timestamp too far in the future")
 
 // headerFileName is the on-disk header file relative to the chain data dir.
 const headerFileName = "blockchain_headers"
 
 // Headers is a chain of block headers synced from an electrumx server,
 // persisted to disk and indexed in-memory by both height and block hash.
+//
+// Validation is split by height around the newest checkpoint in the chain
+// params. Every header passes linkage, checkpoint hashes, the target range
+// (0 < target <= PowLimit), the contextual bits rule (NextBits) and the
+// future-timestamp bound (maxFutureBlockTime). Headers above the newest
+// checkpoint also pass the PoW hash check. Headers at or below it are
+// authenticated by hash linkage to that checkpoint instead, which holds once
+// the store reaches it; Synced is withheld until then (see
+// Network.syncHeaders), and a store that holds the checkpoint never rewinds
+// below it (see rewindLocked). Which headers are hashed therefore depends
+// only on the shipped params, never on the tip a server claims. The hashed
+// span is at most one checkpoint interval plus release lag, and AppendBatch
+// spreads it across GOMAXPROCS workers.
 //
 // Headers is safe for concurrent use. Mutation (Append, Truncate) is
 // serialized by an internal lock; read methods (Tip, ByHeight, ByHash) take
@@ -97,6 +105,15 @@ type Headers struct {
 	// orphanOrder is the insertion order used for eviction.
 	orphans     map[chainhash.Hash]orphanedHeader
 	orphanOrder []chainhash.Hash
+
+	// anchorDifficulty holds the anchor checkpoint's Difficulty entries by
+	// height: the difficulty fields of the blocks just below StartHeight,
+	// which the store never holds. Immutable after NewHeaders.
+	anchorDifficulty map[int32]netparams.BlockDifficulty
+
+	// now is the local clock for the future-timestamp bound. Nil means
+	// time.Now; tests substitute a fixed clock.
+	now func() time.Time
 }
 
 // orphanedHeader is a rewound header and the height it occupied.
@@ -132,9 +149,15 @@ func NewHeaders(cfg *ChainConfig, dataDir string) (*Headers, error) {
 	// (there is no parent in the store), so its identity MUST be pinned by
 	// a checkpoint at exactly that height — otherwise a hostile server
 	// could seed an arbitrary chain.
-	if cfg.StartHeight > 0 && h.anchorCheckpointHash() == nil {
+	if cfg.StartHeight > 0 && h.anchorCheckpoint() == nil {
 		return nil, fmt.Errorf("electrum: StartHeight %d has no checkpoint anchor",
 			cfg.StartHeight)
+	}
+	if cp := h.anchorCheckpoint(); cp != nil {
+		h.anchorDifficulty = make(map[int32]netparams.BlockDifficulty, len(cp.Difficulty))
+		for i, d := range cp.Difficulty {
+			h.anchorDifficulty[cp.Height-int32(len(cp.Difficulty)-i)] = d
+		}
 	}
 	h.tip.Store(cfg.StartHeight - 1) // pre-genesis if StartHeight == 0
 	if err := h.loadFromDisk(); err != nil {
@@ -158,11 +181,14 @@ func (h *Headers) Tip() int32 {
 	return h.tip.Load()
 }
 
-// Synced reports whether the initial sync has completed.
+// Synced reports whether the initial sync has completed. Once it has, every
+// stored header is either at or below a checkpoint the store holds, and so
+// authenticated by hash linkage to it, or PoW-checked.
 func (h *Headers) Synced() bool { return h.synced.Load() }
 
 // SetSynced marks the header chain as synced. Called once after the first
-// catch-up sync completes successfully.
+// catch-up sync completes successfully, which requires the store to reach the
+// newest checkpoint.
 func (h *Headers) SetSynced(b bool) { h.synced.Store(b) }
 
 // StartHeight is the configured lowest height we accept.
@@ -214,17 +240,11 @@ func (h *Headers) TipHash() chainhash.Hash {
 
 // AppendBatch appends a batch of raw headers (concatenated, headerSize bytes
 // each) starting at the given height. Each header must connect to its
-// predecessor or this returns an error and the chain is left unchanged.
+// predecessor and pass the validation described on Headers, or this returns
+// an error and the chain is left unchanged.
 //
 // startHeight must equal Tip()+1; otherwise an error is returned.
-//
-// tipHint is the server-reported best height the caller is syncing toward.
-// Headers within the trailing recentPoWWindow of tipHint get full
-// per-header PoW; older headers are validated by checkpoint match plus
-// retarget-structure (cheap, catches trivial-bits forgery without forcing
-// scrypt on millions of LTC blocks). Pass tipHint=0 to validate every
-// header — useful for bench/test paths that want the strict mode.
-func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int, error) {
+func (h *Headers) AppendBatch(startHeight int32, raw []byte) (int, error) {
 	headerSize := h.cfg.HeaderSize
 	if len(raw)%headerSize != 0 {
 		return 0, fmt.Errorf("electrum: header batch length %d not a multiple of %d",
@@ -232,6 +252,13 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 	}
 	headers, err := h.parseBatch(raw)
 	if err != nil {
+		return 0, err
+	}
+
+	// The PoW hash check reads nothing from the store, so it runs before
+	// the write lock is taken: hashing a batch of scrypt headers takes long
+	// enough on a phone that holding the lock would stall readers.
+	if err := h.checkBatchPoW(startHeight, headers); err != nil {
 		return 0, err
 	}
 
@@ -243,14 +270,11 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 			startHeight, h.tip.Load())
 	}
 
-	// Validate each header. We always check linkage and checkpoint hashes;
-	// retarget Bits are checked at boundaries; per-header PoW only applies
-	// to headers within recentPoWWindow of tipHint (or all headers when
-	// tipHint==0, the strict mode).
 	prevHash, err := h.prevHashAt(startHeight)
 	if err != nil {
 		return 0, err
 	}
+	now := h.clock()
 	for i, hdr := range headers {
 		height := startHeight + int32(i)
 		switch {
@@ -269,16 +293,8 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 			return 0, fmt.Errorf("electrum: header batch does not link at %d: "+
 				"prev %s, want %s", height, hdr.PrevBlock, prevHash)
 		}
-		if err := h.validateCheckpoint(height, hdr); err != nil {
+		if err := h.validateHeaderLocked(height, hdr, headers, startHeight, now); err != nil {
 			return 0, err
-		}
-		if err := h.validateRetargetLocked(height, hdr, headers, startHeight); err != nil {
-			return 0, err
-		}
-		if h.shouldCheckPoW(height, tipHint) {
-			if err := h.checkPoW(hdr); err != nil {
-				return 0, fmt.Errorf("electrum: header at %d: %w", height, err)
-			}
 		}
 		prevHash = h.headerHash(hdr)
 	}
@@ -297,15 +313,89 @@ func (h *Headers) AppendBatch(startHeight int32, raw []byte, tipHint int32) (int
 	return len(headers), nil
 }
 
-// shouldCheckPoW reports whether the header at `height` falls within the
-// trailing recentPoWWindow of the server-reported tipHint. Returns true also
-// when tipHint == 0 (strict mode — used by AppendOne, by tests, and as a
-// safe default when the caller doesn't know the tip).
-func (h *Headers) shouldCheckPoW(height, tipHint int32) bool {
-	if tipHint <= 0 {
-		return true
+// validateHeaderLocked runs the checks every header passes regardless of
+// height: checkpoint hash, target range, contextual bits and the
+// future-timestamp bound. Linkage and the PoW hash are checked by the caller.
+// The caller must hold h.mu.
+func (h *Headers) validateHeaderLocked(height int32, hdr *wire.BlockHeader,
+	inBatch []*wire.BlockHeader, batchStart int32, now time.Time) error {
+
+	if err := h.validateCheckpoint(height, hdr); err != nil {
+		return err
 	}
-	return height > tipHint-recentPoWWindow
+	if err := h.checkTarget(hdr); err != nil {
+		return fmt.Errorf("electrum: header at %d: %w", height, err)
+	}
+	if err := h.validateBitsLocked(height, hdr, inBatch, batchStart); err != nil {
+		return err
+	}
+	if limit := now.Add(maxFutureBlockTime); hdr.Timestamp.After(limit) {
+		return fmt.Errorf("%w: header at %d has timestamp %s, local time %s",
+			errTimeTooNew, height, hdr.Timestamp.UTC().Format(time.RFC3339),
+			now.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
+// checkBatchPoW runs checkPoW on every header of a batch starting at
+// startHeight that lies above the newest checkpoint, across GOMAXPROCS
+// workers. Heights ascend through the batch, so the checked headers are a
+// suffix of it. Workers stop taking headers after the first failure; the
+// error reported is the lowest failing height found.
+func (h *Headers) checkBatchPoW(startHeight int32, headers []*wire.BlockHeader) error {
+	first := max(int(h.newestCheckpointHeight()-startHeight+1), 0)
+	if first >= len(headers) {
+		return nil
+	}
+	check := headers[first:]
+	errs := make([]error, len(check))
+	var next atomic.Int64
+	var failed atomic.Bool
+	var wg sync.WaitGroup
+	for range min(runtime.GOMAXPROCS(0), len(check)) {
+		wg.Go(func() {
+			for !failed.Load() {
+				i := int(next.Add(1) - 1)
+				if i >= len(check) {
+					return
+				}
+				if err := h.checkPoW(check[i]); err != nil {
+					errs[i] = err
+					failed.Store(true)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return fmt.Errorf("electrum: header at %d: %w", startHeight+int32(first+i), err)
+		}
+	}
+	return nil
+}
+
+// newestCheckpointHeight returns the height of the newest checkpoint in the
+// chain params, or -1 when there is none, in which case every header is
+// PoW-checked.
+func (h *Headers) newestCheckpointHeight() int32 {
+	newest := int32(-1)
+	if h.cfg.Params != nil {
+		for _, cp := range h.cfg.Params.Checkpoints {
+			if cp.Hash != nil {
+				newest = max(newest, cp.Height)
+			}
+		}
+	}
+	return newest
+}
+
+// clock returns the local time for the future-timestamp bound.
+func (h *Headers) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 // AppendOne appends a single header that must connect to the current tip.
@@ -329,16 +419,12 @@ func (h *Headers) AppendOne(hdr *wire.BlockHeader) error {
 			errHeaderDoesNotConnect, tip+1, hdr.PrevBlock, prevHash)
 	}
 	newHeight := tip + 1
-	if err := h.validateCheckpoint(newHeight, hdr); err != nil {
+	if err := h.validateHeaderLocked(newHeight, hdr, nil, 0, h.clock()); err != nil {
 		return err
 	}
-	// AppendOne is the tip-update path: the incoming header is the new
-	// chain tip. Always run per-header PoW here regardless of any
-	// caller-side tipHint logic — this is the strongest cheap signal we
-	// have that the new tip is honest.
-	if err := h.validateRetargetLocked(newHeight, hdr, nil, 0); err != nil {
-		return err
-	}
+	// AppendOne is the tip-update path, which follows initial sync, so the
+	// new header normally lies above the newest checkpoint. The PoW check
+	// runs regardless of height: it costs one hash.
 	if err := h.checkPoW(hdr); err != nil {
 		return fmt.Errorf("electrum: header at %d: %w", newHeight, err)
 	}
@@ -397,6 +483,17 @@ func (h *Headers) rewindLocked(depth int32) ([]DisconnectedBlock, error) {
 	if tip-depth < h.cfg.StartHeight {
 		return nil, fmt.Errorf("electrum: cannot rewind %d below start %d (tip %d)",
 			depth, h.cfg.StartHeight, tip)
+	}
+	// A store that holds the newest checkpoint never rewinds below it. An
+	// honest chain cannot reorg across a checkpoint, and the headers at or
+	// below it carry no PoW check, so re-appending them after such a rewind
+	// would accept unhashed headers while Synced is true. Below the
+	// checkpoint (initial sync, Synced false) rewinds proceed as usual.
+	// Branch swaps must keep the same invariant: once the store holds the
+	// newest checkpoint, no fork point lies below it.
+	if cp := h.newestCheckpointHeight(); tip >= cp && tip-depth < cp {
+		return nil, fmt.Errorf("electrum: cannot rewind %d from tip %d below checkpoint %d",
+			depth, tip, cp)
 	}
 	// Snapshot disconnected metadata before mutating anything.
 	disc := make([]DisconnectedBlock, 0, depth)
@@ -494,54 +591,42 @@ func (h *Headers) validateCheckpoint(height int32, hdr *wire.BlockHeader) error 
 	return nil
 }
 
-// validateRetargetLocked verifies the difficulty Bits at a retarget boundary
-// matches the value computed from the prior retarget chunk's timestamp
-// delta. The check is skipped on chains with PoWNoRetargeting (regtest) and
-// for heights that aren't retarget boundaries.
+// validateBitsLocked verifies that hdr carries the difficulty bits consensus
+// requires at height, as computed by the chain's NextBits rule from the
+// difficulty fields of its ancestors. It runs at every height above the
+// anchor, deep history included: it compares integers and hashes nothing, and
+// it is what keeps a server from lowering difficulty anywhere on the chain.
+// The anchor header is skipped, since its checkpoint pins it.
 //
-// `inBatch` and `batchStart` let the validator find a chunk's first header
-// when it's still in the current batch (not yet committed to byHeight).
-// AppendOne calls with inBatch=nil and batchStart=0 — in steady-state tip
-// updates the prior chunk is always already in byHeight.
+// Ancestors resolve from inBatch (the headers being appended, indexed from
+// batchStart), then the store, then the anchor checkpoint's Difficulty
+// entries, which stand in for the blocks below the anchor that the rule reads
+// when validating the blocks just above it. A missing input is an error, never
+// a pass: a rule that cannot be evaluated has not been satisfied.
+//
+// Networks whose params carry no NextBits (testnets, regtest, and chains whose
+// rule is not implemented) skip the check.
 //
 // The caller must hold h.mu (read or write).
-func (h *Headers) validateRetargetLocked(height int32, hdr *wire.BlockHeader,
+func (h *Headers) validateBitsLocked(height int32, hdr *wire.BlockHeader,
 	inBatch []*wire.BlockHeader, batchStart int32) error {
 
-	if h.cfg.Params == nil || h.cfg.Params.PoWNoRetargeting {
+	if h.cfg.Params == nil || h.cfg.Params.NextBits == nil || h.anchoredStart(height) {
 		return nil
 	}
-	if height == 0 || height%retargetInterval != 0 {
-		// Not a retarget boundary; nothing to check (and the prior
-		// header's Bits propagates unchanged, but we don't enforce
-		// that here — it'd reject legitimate downward adjustments on
-		// chains where bits can change off-cycle. The retarget check
-		// at the next boundary will catch a tampered chunk).
-		return nil
+	at := func(ancestor int32) (netparams.BlockDifficulty, bool) {
+		if hdr := h.headerAt(ancestor, inBatch, batchStart); hdr != nil {
+			return netparams.HeaderDifficulty(hdr), true
+		}
+		d, ok := h.anchorDifficulty[ancestor]
+		return d, ok
 	}
-	prior := h.headerAt(height-1, inBatch, batchStart)
-	// Bitcoin samples the retarget timespan from the first block OF the
-	// period (height-2016). Litecoin deliberately goes back one block
-	// further (height-2017, its 51%-attack fix), except at the first-ever
-	// retarget — a consensus difference that shows up as a slightly wrong
-	// computed target at every boundary if ignored.
-	chunkStartHeight := height - retargetInterval
-	if h.cfg.Chain == bisonwire.ChainLTC && height != retargetInterval {
-		chunkStartHeight--
+	want, ok := h.cfg.Params.NextBits(height, at)
+	if !ok {
+		return fmt.Errorf("electrum: header at %d: difficulty rule inputs unavailable", height)
 	}
-	chunkStart := h.headerAt(chunkStartHeight, inBatch, batchStart)
-	if prior == nil || chunkStart == nil {
-		// Can't validate without the prior chunk; soft-pass rather
-		// than reject. This triggers at the first boundary above a
-		// checkpoint-anchored StartHeight (LTC's sample block is one
-		// below the anchor) and for batches predating loadFromDisk's
-		// range; the anchor checkpoint and the tip PoW window still
-		// guard those.
-		return nil
-	}
-	want := computeNextWorkRequired(h.cfg.Params, prior, chunkStart)
 	if hdr.Bits != want {
-		return fmt.Errorf("electrum: retarget mismatch at %d: header bits 0x%08x, computed 0x%08x",
+		return fmt.Errorf("electrum: header at %d has bits 0x%08x, consensus requires 0x%08x",
 			height, hdr.Bits, want)
 	}
 	return nil
@@ -556,56 +641,32 @@ func (h *Headers) headerAt(height int32, inBatch []*wire.BlockHeader, batchStart
 	return h.byHeight[height]
 }
 
-// computeNextWorkRequired implements the standard Bitcoin/Litecoin retarget
-// rule: new_target = prev_target * actual_timespan / expected_timespan,
-// clamped to [expected/factor, expected*factor] on the timespan and to
-// PowLimit on the target.
-//
-// This mirrors btcd's blockchain.calcNextRequiredDifficulty. We can't call
-// btcd's directly: its standalone form is unexported, and the exported
-// CalcNextRequiredDifficulty is a method on *blockchain.BlockChain that needs
-// a full instantiated chain with a HeaderCtx node graph — neither of which a
-// headers-only electrum client maintains. The duplication is consensus-
-// sensitive, so TestComputeNextWorkRequired pins this implementation's output
-// against hand-computed expectations (unclamped, both timespan clamps, and the
-// PowLimit clamp) to catch drift.
-func computeNextWorkRequired(params *netparams.ChainParams, prior, chunkStart *wire.BlockHeader) uint32 {
-	expectedTimespan := int64(params.TargetTimespan / time.Second)
-	if expectedTimespan == 0 {
-		// Params don't define retarget timing (shouldn't happen for
-		// BTC/LTC). Accept whatever the server gave us.
-		return prior.Bits
+// checkTarget rejects a header whose target is not in (0, PowLimit], matching
+// the range check of CheckProofOfWork in Bitcoin Core and Dash Core. The
+// compact encoding can express zero, negative and overflowing targets, and a
+// target above PowLimit is easier than consensus allows anywhere on the
+// chain. It reads only the header, so it runs on every header, deep history
+// included. Params without a PowLimit (some test configurations) skip it.
+func (h *Headers) checkTarget(hdr *wire.BlockHeader) error {
+	if h.cfg.Params == nil || h.cfg.Params.PowLimit == nil {
+		return nil
 	}
-	factor := params.RetargetAdjustmentFactor
-	if factor == 0 {
-		factor = 4 // BTC/LTC standard.
+	if target := blockchain.CompactToBig(hdr.Bits); target.Sign() <= 0 ||
+		target.Cmp(h.cfg.Params.PowLimit) > 0 {
+		return fmt.Errorf("bits 0x%08x encode a target outside (0, PowLimit]", hdr.Bits)
 	}
-	minTimespan := expectedTimespan / factor
-	maxTimespan := expectedTimespan * factor
-
-	actualTimespan := prior.Timestamp.Unix() - chunkStart.Timestamp.Unix()
-	actualTimespan = max(min(actualTimespan, maxTimespan), minTimespan)
-
-	prevTarget := blockchain.CompactToBig(prior.Bits)
-	newTarget := new(big.Int).Mul(prevTarget, big.NewInt(actualTimespan))
-	newTarget.Div(newTarget, big.NewInt(expectedTimespan))
-	if params.PowLimit != nil && newTarget.Cmp(params.PowLimit) > 0 {
-		newTarget = new(big.Int).Set(params.PowLimit)
-	}
-	return blockchain.BigToCompact(newTarget)
+	return nil
 }
 
-// checkPoW validates that hdr satisfies its own claimed target. For chains
-// that supply a custom CheckPoW hook on their netparams (e.g. Litecoin's
-// scrypt) the hook is delegated to; otherwise we run the standard Bitcoin
-// double-SHA256 check.
-//
-// We intentionally do not validate retargeting or PowLimit clamps here — a
-// hostile server could still claim arbitrary difficulty per header. The
-// per-header check is the cheapest meaningful bound: trivial-difficulty
-// forgeries fail it, and any cheaper attack would require breaking SHA256d
-// (or scrypt) preimage resistance.
+// checkPoW validates hdr's target range (checkTarget) and that its PoW hash
+// meets the target it claims. Chains that supply a CheckPoW hook on their
+// netparams (Litecoin's scrypt, Dash's X11) delegate the hash check to it;
+// otherwise the standard double-SHA256 check runs. Whether the claimed target
+// is the one consensus requires at that height is validateBitsLocked's job.
 func (h *Headers) checkPoW(hdr *wire.BlockHeader) error {
+	if err := h.checkTarget(hdr); err != nil {
+		return err
+	}
 	if h.cfg.Params != nil && h.cfg.Params.CheckPoW != nil {
 		return h.cfg.Params.CheckPoW(hdr)
 	}
@@ -617,18 +678,19 @@ func (h *Headers) checkPoW(hdr *wire.BlockHeader) error {
 	return nil
 }
 
-// anchorCheckpointHash returns the checkpoint hash pinning the header at
-// StartHeight, or nil when no checkpoint applies there. NewHeaders requires
-// an anchor checkpoint for any non-zero StartHeight, so nil means
-// StartHeight is 0 (regtest and no-checkpoint test configs), where genesis
-// linkage authenticates the chain instead.
-func (h *Headers) anchorCheckpointHash() *chainhash.Hash {
+// anchorCheckpoint returns the checkpoint pinning the header at StartHeight,
+// or nil when no checkpoint applies there. NewHeaders requires an anchor
+// checkpoint for any non-zero StartHeight, so nil means StartHeight is 0
+// (regtest and no-checkpoint test configs), where genesis linkage
+// authenticates the chain instead.
+func (h *Headers) anchorCheckpoint() *netparams.Checkpoint {
 	if h.cfg.Params == nil {
 		return nil
 	}
-	for _, cp := range h.cfg.Params.Checkpoints {
+	for i := range h.cfg.Params.Checkpoints {
+		cp := &h.cfg.Params.Checkpoints[i]
 		if cp.Height == h.cfg.StartHeight && cp.Hash != nil {
-			return cp.Hash
+			return cp
 		}
 	}
 	return nil
@@ -719,8 +781,8 @@ func (h *Headers) loadFromDisk() error {
 	// must hash to the anchor checkpoint. On mismatch (either bump
 	// direction), discard the file and start clean from the configured
 	// anchor; the normal first sync repopulates it.
-	if want := h.anchorCheckpointHash(); want != nil {
-		if got := h.headerHash(hdrs[0]); got != *want {
+	if cp := h.anchorCheckpoint(); cp != nil {
+		if got, want := h.headerHash(hdrs[0]), cp.Hash; got != *want {
 			log.Warnf("electrum: stored %s header file does not match the anchor "+
 				"checkpoint at height %d (stored %s, want %s); the anchor has "+
 				"moved — discarding %d stale headers and resyncing",

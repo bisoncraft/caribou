@@ -202,7 +202,11 @@ func (n *Network) tryElect(exclude string, hint *electionHint) bool {
 		if err := n.attachNode(node, tip); err != nil {
 			log.Warnf("electrum: rotation to %s failed: %v", sv.Addr, err)
 			node.Close()
-			n.pool.recordFailure(sv.Addr)
+			// A future-dated header is no evidence against the server:
+			// local clock skew produces the same error (errTimeTooNew).
+			if !errors.Is(err, errTimeTooNew) {
+				n.pool.recordFailure(sv.Addr)
+			}
 			continue
 		}
 		n.pool.recordSuccess(sv.Addr)
@@ -369,7 +373,7 @@ const maxReconcileRounds = 4
 func (n *Network) attachNode(node *Node, tip *HeadersTip) error {
 	// Catch up headers first so replayed confirmed activity has its
 	// headers local (statuses replayed below may reference new blocks).
-	if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
+	if err := n.syncHeaders(n.ctx, node); err != nil {
 		return err
 	}
 

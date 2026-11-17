@@ -24,8 +24,11 @@ import (
 func mineTestHeader(t *testing.T, prev chainhash.Hash, bits uint32, seed uint32) *wire.BlockHeader {
 	t.Helper()
 	target := blockchain.CompactToBig(bits)
+	// A zero Timestamp serializes as a uint32 wrap of year 1 (2042), which
+	// the future-timestamp bound rejects; any fixed past time works.
+	ts := time.Unix(1_600_000_000, 0)
 	for nonce := seed; ; nonce++ {
-		hdr := &wire.BlockHeader{Version: 4, PrevBlock: prev, Bits: bits, Nonce: nonce}
+		hdr := &wire.BlockHeader{Version: 4, PrevBlock: prev, Bits: bits, Nonce: nonce, Timestamp: ts}
 		hash := hdr.BlockHash()
 		if blockchain.HashToBig(&hash).Cmp(target) <= 0 {
 			return hdr

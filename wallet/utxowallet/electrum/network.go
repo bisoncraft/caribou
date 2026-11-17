@@ -274,14 +274,10 @@ func (n *Network) Start(parent context.Context) error {
 	// recorded so subsequent elections (including full wallet reconnects,
 	// which rebuild this Network) rotate away from dead servers.
 	//
-	// The subscribe happens FIRST so syncHeaders knows the server-reported
-	// tip. That height becomes the tipHint for AppendBatch: headers within
-	// the trailing recentPoWWindow get per-header PoW, older headers are
-	// validated only by checkpoint match + retarget structure (much faster
-	// than per-header scrypt over millions of LTC blocks). Tip-change
-	// notifications that arrive during the background sync are buffered by
-	// the server's headersNotify channel; headersLoop drains them after
-	// sync completes.
+	// The subscribe happens FIRST so TargetTip can report the server's tip
+	// while the background sync runs. Tip-change notifications that arrive
+	// during the sync are buffered by the server's headersNotify channel;
+	// headersLoop drains them after sync completes.
 	candidates := n.pool.walletCandidates()
 	if len(candidates) == 0 {
 		// Every shipped server is quarantined (divergence audits persist
@@ -379,12 +375,17 @@ func (n *Network) Start(parent context.Context) error {
 	// may call it; failed() is off-limits here because launched is already
 	// true and it would double-close the channels.
 	n.spawnReserved(group, func() {
-		if err := n.syncHeaders(n.ctx, node, tip.Height); err != nil {
+		if err := n.syncHeaders(n.ctx, node); err != nil {
 			if n.ctx.Err() == nil {
 				// Context is still live, so this is a real sync error
 				// (not a graceful shutdown) — bad or hostile server.
-				// Demote it so the reconnect rotates.
-				n.pool.recordFailure(node.Addr().Addr)
+				// Demote it so the reconnect rotates, except for a
+				// future-dated header, which local clock skew produces
+				// just as well and which every honest server would
+				// trigger alike.
+				if !errors.Is(err, errTimeTooNew) {
+					n.pool.recordFailure(node.Addr().Addr)
+				}
 				log.Errorf("electrum: initial header sync failed: %v", err)
 			}
 			n.mu.Lock()
@@ -747,10 +748,10 @@ func (n *Network) getNode() (*Node, error) {
 
 // syncHeaders pulls headers from `Tip()+1` until the server reports a short
 // batch (i.e. we've caught up). It runs as a single-threaded blocking call
-// during Start and during attachNode's rotation catch-up. tipHint is the
-// server-reported best height learned from the initial subscribe; it lets
-// AppendBatch decide which trailing window of headers gets full per-header
-// PoW.
+// during Start and during attachNode's rotation catch-up. It fails when the
+// store ends below the newest checkpoint: a server whose chain stops short of
+// a shipped checkpoint is broken or lying, and headers at or below that
+// checkpoint are authenticated only once the store reaches it.
 //
 // When the server's chain diverges below the stored tip — a reorg landed
 // while no node was attached: a successor after a fork, or a restart against
@@ -761,7 +762,7 @@ func (n *Network) getNode() (*Node, error) {
 // identically after an ordinary one-block reorg, leaving rotation degraded
 // forever and Start unable to open the wallet until the header file was
 // deleted by hand.
-func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) error {
+func (n *Network) syncHeaders(ctx context.Context, node *Node) error {
 	var rewound int32
 	fetch := nodeFetcher(ctx, node)
 	for {
@@ -777,7 +778,7 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) er
 		if err != nil {
 			return fmt.Errorf("electrum: decode header batch: %w", err)
 		}
-		if _, err := n.headers.AppendBatch(nextHeight, raw, tipHint); err != nil {
+		if _, err := n.headers.AppendBatch(nextHeight, raw); err != nil {
 			if !errors.Is(err, errHeaderDoesNotConnect) {
 				return err
 			}
@@ -819,6 +820,15 @@ func (n *Network) syncHeaders(ctx context.Context, node *Node, tipHint int32) er
 		return fmt.Errorf("electrum: server returned no headers from height %d",
 			n.cfg.Chain.StartHeight)
 	}
+	if tip, cp := n.headers.Tip(), n.headers.newestCheckpointHeight(); tip < cp {
+		return fmt.Errorf("electrum: server chain ends at %d, below checkpoint %d", tip, cp)
+	}
+	// Synced implies that every stored header is either at or below a
+	// checkpoint the store holds (authenticated by hash linkage to it) or
+	// PoW-checked: the store has passed the newest checkpoint, headers
+	// above it were hashed on append, and rewindLocked refuses to drop
+	// below it from here on. The chain client verifies confirmations only
+	// once Synced is true.
 	n.headers.SetSynced(true)
 	log.Infof("electrum: header sync complete, tip at %d", n.headers.Tip())
 	return nil
@@ -1161,11 +1171,7 @@ func (n *Network) catchUpFrom(targetHeight int32, fetch headerFetcher) ([]Discon
 		if count == 0 {
 			break
 		}
-		// targetHeight is the latest server-reported tip we're
-		// catching up to — pass it as tipHint so AppendBatch applies
-		// per-header PoW only to headers within the trailing
-		// recentPoWWindow.
-		_, err = n.headers.AppendBatch(nextHeight, raw, targetHeight)
+		_, err = n.headers.AppendBatch(nextHeight, raw)
 		if err == nil {
 			continue
 		}

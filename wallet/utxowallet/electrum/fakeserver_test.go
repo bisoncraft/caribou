@@ -12,13 +12,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -43,6 +46,9 @@ type fakeServer struct {
 	broadcasts []string                  // raw hexes received
 	conns      map[net.Conn]*fakeConnState
 	closed     bool
+	// claimTip, when non-zero, is the height headers.subscribe reports in
+	// place of the real tip.
+	claimTip int
 }
 
 type fakeConnState struct {
@@ -356,8 +362,12 @@ func (f *fakeServer) handle(cs *fakeConnState, method string, params []json.RawM
 		tip := len(f.chain) - 1
 		var buf bytes.Buffer
 		f.chain[tip].Serialize(&buf) //nolint:errcheck
+		claimed := tip
+		if f.claimTip != 0 {
+			claimed = f.claimTip
+		}
 		return map[string]interface{}{
-			"height": tip, "hex": hex.EncodeToString(buf.Bytes()),
+			"height": claimed, "hex": hex.EncodeToString(buf.Bytes()),
 		}, ""
 	case "blockchain.block.headers":
 		start, count := num(0), num(1)
@@ -906,7 +916,7 @@ func installWalletAndObserver(t *testing.T, net_ *Network, fA, fB *fakeServer,
 	if err != nil {
 		t.Fatalf("SubscribeHeaders(A): %v", err)
 	}
-	if err := net_.syncHeaders(net_.ctx, nodeA, tipA.Height); err != nil {
+	if err := net_.syncHeaders(net_.ctx, nodeA); err != nil {
 		t.Fatalf("syncHeaders: %v", err)
 	}
 	net_.mu.Lock()
@@ -1131,7 +1141,7 @@ func TestTryElectSkipsLosingChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
-	if err := net_.syncHeaders(net_.ctx, seed, 14); err != nil {
+	if err := net_.syncHeaders(net_.ctx, seed); err != nil {
 		t.Fatalf("syncHeaders: %v", err)
 	}
 	seed.Close()
@@ -1203,7 +1213,7 @@ func TestTryElectSkipsStalledCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
-	if err := net_.syncHeaders(net_.ctx, seed, 15); err != nil {
+	if err := net_.syncHeaders(net_.ctx, seed); err != nil {
 		t.Fatalf("syncHeaders: %v", err)
 	}
 	seed.Close()
@@ -1379,11 +1389,10 @@ func TestAttachNodeReconcileTerminates(t *testing.T) {
 		t.Fatalf("NewNode: %v", err)
 	}
 	defer node.Close()
-	nodeTip, err := node.SubscribeHeaders(net_.ctx)
-	if err != nil {
+	if _, err := node.SubscribeHeaders(net_.ctx); err != nil {
 		t.Fatalf("SubscribeHeaders: %v", err)
 	}
-	if err := net_.syncHeaders(net_.ctx, node, nodeTip.Height); err != nil {
+	if err := net_.syncHeaders(net_.ctx, node); err != nil {
 		t.Fatalf("syncHeaders: %v", err)
 	}
 	if net_.Tip() != 14 {
@@ -1509,5 +1518,143 @@ func TestLagRotation(t *testing.T) {
 	case <-net_.Done():
 		t.Fatal("network torn down on lag instead of rotating")
 	default:
+	}
+}
+
+// syncOnce runs syncHeaders against f on a fresh, unstarted network with the
+// given params and returns the network and the sync error.
+func syncOnce(t *testing.T, f *fakeServer, params *netparams.ChainParams) (*Network, error) {
+	t.Helper()
+	net_ := newUnstartedNetwork(t, f, params)
+	go func() {
+		for range net_.TipChangeChan() { //nolint:revive
+		}
+	}()
+	node, err := NewNode(net_.ctx, f.addr(), "", params.GenesisHash.String())
+	if err != nil {
+		t.Fatalf("NewNode: %v", err)
+	}
+	defer node.Close()
+	return net_, net_.syncHeaders(net_.ctx, node)
+}
+
+// TestSyncRequiresNewestCheckpoint: a server whose chain ends below the newest
+// checkpoint fails the sync and the store is not marked synced; once the
+// chain passes the checkpoint, the sync succeeds.
+func TestSyncRequiresNewestCheckpoint(t *testing.T) {
+	resetServerHealth()
+	f, params := newFakeServer(t, 20)
+	f.mtx.Lock()
+	params.Checkpoints = []netparams.Checkpoint{
+		{Height: 0, Hash: ptrHash(f.chain[0].BlockHash())},
+		{Height: 15, Hash: ptrHash(f.chain[15].BlockHash())},
+	}
+	full := f.chain
+	f.chain = full[:12]
+	f.mtx.Unlock()
+
+	net_, err := syncOnce(t, f, params)
+	if err == nil || !strings.Contains(err.Error(), "below checkpoint 15") {
+		t.Fatalf("sync of a chain ending at 11: got %v", err)
+	}
+	if net_.Synced() {
+		t.Fatal("store marked synced below the newest checkpoint")
+	}
+
+	f.mtx.Lock()
+	f.chain = full
+	f.mtx.Unlock()
+	net_, err = syncOnce(t, f, params)
+	if err != nil {
+		t.Fatalf("sync past the checkpoint: %v", err)
+	}
+	if !net_.Synced() || net_.Tip() != 19 {
+		t.Fatalf("synced %v at tip %d, want synced at 19", net_.Synced(), net_.Tip())
+	}
+}
+
+// TestSyncPoWIgnoresClaimedTip: a server claiming a tip of 2^31-1 gets no
+// headers past the PoW check. A tip-relative PoW window would place every
+// synced header far below the claimed tip and skip the hash check entirely.
+func TestSyncPoWIgnoresClaimedTip(t *testing.T) {
+	resetServerHealth()
+	f, params := newFakeServer(t, 12)
+	const bad = 6
+	f.mtx.Lock()
+	f.claimTip = math.MaxInt32
+	f.chain[bad] = unminedHeader(f.chain[bad-1].BlockHash(), time.Unix(1_600_000_000, 0))
+	for i := bad + 1; i < len(f.chain); i++ {
+		f.chain[i] = mineTestHeader(t, f.chain[i-1].BlockHash(), easyBits, uint32(i)*7919)
+	}
+	f.mtx.Unlock()
+
+	net_ := newUnstartedNetwork(t, f, params)
+	node, err := NewNode(net_.ctx, f.addr(), "", params.GenesisHash.String())
+	if err != nil {
+		t.Fatalf("NewNode: %v", err)
+	}
+	defer node.Close()
+	tip, err := node.SubscribeHeaders(net_.ctx)
+	if err != nil {
+		t.Fatalf("SubscribeHeaders: %v", err)
+	}
+	if tip.Height != math.MaxInt32 {
+		t.Fatalf("test setup: server claims tip %d", tip.Height)
+	}
+	err = net_.syncHeaders(net_.ctx, node)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("header at %d:", bad)) {
+		t.Fatalf("sync with an unmined header at %d: got %v", bad, err)
+	}
+	if net_.Synced() || net_.Tip() >= bad {
+		t.Fatalf("synced %v at tip %d after a PoW failure at %d", net_.Synced(), net_.Tip(), bad)
+	}
+}
+
+// TestTimeTooNewNoServerPenalty: an initial sync that fails on a header dated
+// past the future bound records no failure against the server, since a slow
+// local clock produces the same error with every honest server.
+func TestTimeTooNewNoServerPenalty(t *testing.T) {
+	resetServerHealth()
+	f, params := newFakeServer(t, 8)
+	f.mtx.Lock()
+	tip := &wire.BlockHeader{Version: 4, PrevBlock: f.chain[6].BlockHash(), Bits: easyBits,
+		Timestamp: time.Now().Add(maxFutureBlockTime + time.Hour)}
+	for target := blockchain.CompactToBig(easyBits); ; tip.Nonce++ {
+		if hash := tip.BlockHash(); blockchain.HashToBig(&hash).Cmp(target) <= 0 {
+			break
+		}
+	}
+	f.chain[7] = tip
+	f.mtx.Unlock()
+
+	chainCfg, err := NewChainConfig(bisonwire.ChainBTC, params)
+	if err != nil {
+		t.Fatalf("NewChainConfig: %v", err)
+	}
+	net_, err := NewNetwork(&Config{
+		Chain:   chainCfg,
+		Servers: []*ServerAddr{f.addr()},
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewNetwork: %v", err)
+	}
+	if err := net_.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer stopAndWait(net_)
+	select {
+	case <-net_.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("network did not stop after the failed sync")
+	}
+	if net_.Synced() {
+		t.Fatal("synced past a future-dated header")
+	}
+	serverHealth.mtx.Lock()
+	r := serverHealth.m[f.addr().Addr]
+	serverHealth.mtx.Unlock()
+	if r != nil && r.failures > 0 {
+		t.Fatalf("server charged %d failures for a future-dated header", r.failures)
 	}
 }

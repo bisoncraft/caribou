@@ -7,6 +7,7 @@ package electrum
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bisoncraft/caribou/wallet/utxowallet/assets"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
 	"github.com/btcsuite/btcd/blockchain"
@@ -99,208 +101,444 @@ func newTestHeaders(t *testing.T) (*Headers, string) {
 	return h, dir
 }
 
-// TestComputeNextWorkRequired pins the retarget math (review #7) so it can't
-// silently drift from btcd's consensus rule. btcd's implementation isn't
-// reusable standalone (unexported, or a *BlockChain method), so we validate
-// our copy against the formula directly across the unclamped path, both
-// timespan clamps, and the PowLimit clamp.
-func TestComputeNextWorkRequired(t *testing.T) {
-	const expected = int64(1_209_600) // 14 days of 10-min blocks (2016).
-	const factor = int64(4)
+// testRetargetInterval is the retarget period of intervalTestParams, short
+// so tests can cross several boundaries cheaply.
+const testRetargetInterval = 16
 
-	// Pick a prior target well below PowLimit. We canonicalize via the
-	// compact round trip so expectations use the same precision the
-	// production code does.
-	bigPowLimit := new(big.Int).Lsh(big.NewInt(1), 255) // ~2^255, never clamps below.
-	priorBits := blockchain.BigToCompact(new(big.Int).Lsh(big.NewInt(1), 240))
-	priorTarget := blockchain.CompactToBig(priorBits)
+// intervalTestParams returns params that enforce an interval difficulty rule
+// (Bitcoin's, or Litecoin's sampling when litecoin is set) with a
+// testRetargetInterval-block period and PowLimit 2^255-1, so mining stays a
+// few hashes per header.
+func intervalTestParams(cps []netparams.Checkpoint, litecoin bool) *netparams.ChainParams {
+	src := netparams.NSimnetParams
+	p := &netparams.ChainParams{
+		Chain:                    src.Chain,
+		Name:                     "intervaltest",
+		Net:                      src.Net,
+		GenesisHash:              src.GenesisHash,
+		PowLimit:                 new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1)),
+		PowLimitBits:             0x207fffff,
+		TargetTimePerBlock:       time.Minute,
+		TargetTimespan:           testRetargetInterval * time.Minute,
+		RetargetAdjustmentFactor: 4,
+		Checkpoints:              cps,
+	}
+	if litecoin {
+		p.NextBits = assets.LitecoinNextBits(p)
+		p.DifficultyLookback = 1
+	} else {
+		p.NextBits = assets.BitcoinNextBits(p)
+	}
+	return p
+}
 
-	mkParams := func(powLimit *big.Int, timespan time.Duration) *netparams.ChainParams {
-		return &netparams.ChainParams{
-			TargetTimespan:           timespan,
-			RetargetAdjustmentFactor: factor,
-			PowLimit:                 powLimit,
+// synthRuleChain mines count headers from height 0 whose bits follow
+// p.NextBits. Blocks arrive every 30 s against a one-minute target, so each
+// boundary raises difficulty and a boundary header differs from its parent.
+func synthRuleChain(t *testing.T, p *netparams.ChainParams, count int) []*wire.BlockHeader {
+	t.Helper()
+	out := make([]*wire.BlockHeader, 0, count)
+	at := func(height int32) (netparams.BlockDifficulty, bool) {
+		if height < 0 || int(height) >= len(out) {
+			return netparams.BlockDifficulty{}, false
+		}
+		return netparams.HeaderDifficulty(out[height]), true
+	}
+	ts := time.Unix(1_600_000_000, 0)
+	var prev chainhash.Hash
+	for i := range count {
+		bits, ok := p.NextBits(int32(i), at)
+		if !ok {
+			t.Fatalf("NextBits(%d) inputs unavailable while mining", i)
+		}
+		h := &wire.BlockHeader{
+			Version:   1,
+			PrevBlock: prev,
+			Timestamp: ts.Add(time.Duration(i) * 30 * time.Second),
+			Bits:      bits,
+		}
+		mineHeader(h)
+		out = append(out, h)
+		prev = h.BlockHash()
+	}
+	return out
+}
+
+// remine replaces hdr's bits and re-mines it in place, so only the bits rule
+// can reject it.
+func remine(hdr *wire.BlockHeader, bits uint32) {
+	hdr.Bits = bits
+	hdr.Nonce = 0
+	mineHeader(hdr)
+}
+
+// TestValidateBitsLocked covers the contextual bits check: a boundary header
+// must carry the retarget the rule computes, an off-boundary header must
+// carry its parent's bits, inputs resolve from the batch, the store and the
+// anchor checkpoint's difficulty record, and a missing input is an error.
+func TestValidateBitsLocked(t *testing.T) {
+	p := intervalTestParams(nil, false)
+	chain := synthRuleChain(t, p, 2*testRetargetInterval+2)
+	const boundary = testRetargetInterval
+	if chain[boundary].Bits == chain[boundary-1].Bits {
+		t.Fatal("test setup: boundary does not retarget")
+	}
+
+	newH := func(p *netparams.ChainParams, start int32, stored []*wire.BlockHeader) *Headers {
+		h := &Headers{
+			cfg:      &ChainConfig{Params: p, StartHeight: start, HeaderSize: 80},
+			byHeight: make(map[int32]*wire.BlockHeader),
+		}
+		for i, hdr := range stored {
+			h.byHeight[start+int32(i)] = hdr
+		}
+		return h
+	}
+	withBits := func(hdr *wire.BlockHeader, bits uint32) *wire.BlockHeader {
+		c := *hdr
+		c.Bits = bits
+		return &c
+	}
+
+	h := newH(p, 0, chain[:boundary])
+	if err := h.validateBitsLocked(boundary, chain[boundary], nil, 0); err != nil {
+		t.Fatalf("valid retarget rejected: %v", err)
+	}
+	if err := h.validateBitsLocked(boundary, withBits(chain[boundary], chain[boundary-1].Bits), nil, 0); err == nil {
+		t.Fatal("boundary header without its retarget accepted")
+	}
+	if err := h.validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), nil, 0); err == nil {
+		t.Fatal("boundary header at PowLimit accepted")
+	}
+	h = newH(p, 0, chain[:boundary+1])
+	if err := h.validateBitsLocked(boundary+1, chain[boundary+1], nil, 0); err != nil {
+		t.Fatalf("valid off-boundary header rejected: %v", err)
+	}
+	if err := h.validateBitsLocked(boundary+1, withBits(chain[boundary+1], p.PowLimitBits), nil, 0); err == nil {
+		t.Fatal("off-boundary bits change accepted")
+	}
+
+	// Inputs from the batch being appended, with nothing stored.
+	empty := newH(p, 0, nil)
+	if err := empty.validateBitsLocked(boundary, chain[boundary], chain[:boundary], 0); err != nil {
+		t.Fatalf("valid retarget rejected with inputs in the batch: %v", err)
+	}
+	if err := empty.validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), chain[:boundary], 0); err == nil {
+		t.Fatal("forged retarget accepted with inputs in the batch")
+	}
+
+	// A missing input is an error, not a pass: the sample block at
+	// boundary-interval, and separately the parent.
+	for _, missing := range []int32{boundary - testRetargetInterval, boundary - 1} {
+		h := newH(p, 0, chain[:boundary])
+		delete(h.byHeight, missing)
+		if err := h.validateBitsLocked(boundary, chain[boundary], nil, 0); err == nil ||
+			!strings.Contains(err.Error(), "inputs unavailable") {
+			t.Fatalf("block %d missing: got %v, want an unavailable-input error", missing, err)
 		}
 	}
-	mkHeaders := func(actualTimespan int64) (prior, chunkStart *wire.BlockHeader) {
-		start := time.Unix(1_600_000_000, 0)
-		chunkStart = &wire.BlockHeader{Timestamp: start}
-		prior = &wire.BlockHeader{Bits: priorBits, Timestamp: start.Add(time.Duration(actualTimespan) * time.Second)}
-		return prior, chunkStart
-	}
-	// scaled returns BigToCompact(priorTarget * num / den), clamped to
-	// PowLimit — the formula re-derived independently of the function body.
-	scaled := func(num, den int64) uint32 {
-		tgt := new(big.Int).Mul(priorTarget, big.NewInt(num))
-		tgt.Div(tgt, big.NewInt(den))
-		if tgt.Cmp(bigPowLimit) > 0 {
-			tgt = bigPowLimit
-		}
-		return blockchain.BigToCompact(tgt)
+	h = newH(p, 0, chain[:boundary+1])
+	delete(h.byHeight, boundary)
+	if err := h.validateBitsLocked(boundary+1, chain[boundary+1], nil, 0); err == nil ||
+		!strings.Contains(err.Error(), "inputs unavailable") {
+		t.Fatalf("off-boundary parent missing: got %v, want an unavailable-input error", err)
 	}
 
-	tests := []struct {
-		name           string
-		params         *netparams.ChainParams
-		actualTimespan int64
-		want           uint32
-	}{{
-		name:           "unclamped identity (actual == expected)",
-		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
-		actualTimespan: expected,
-		want:           scaled(expected, expected), // == priorBits
-	}, {
-		name:           "clamped to max (slow blocks)",
-		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
-		actualTimespan: expected * 100, // way over max → clamp to expected*factor.
-		want:           scaled(factor, 1),
-	}, {
-		name:           "clamped to min (fast blocks)",
-		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
-		actualTimespan: 1, // way under min → clamp to expected/factor.
-		want:           scaled(1, factor),
-	}, {
-		name:           "PowLimit clamp",
-		params:         mkParams(new(big.Int).Lsh(big.NewInt(1), 241), time.Duration(expected)*time.Second), // 2*priorTarget
-		actualTimespan: expected * 100,                                                                      // wants *4, exceeds PowLimit.
-		want:           blockchain.BigToCompact(new(big.Int).Lsh(big.NewInt(1), 241)),
-	}, {
-		// Non-clamped, non-integer-ratio retarget — exercises the
-		// multiply/divide + BigToCompact rounding that the identity and
-		// clean-multiple cases don't. want is re-derived from the formula
-		// with the exact actualTimespan.
-		name:           "partial retarget (no clamp)",
-		params:         mkParams(bigPowLimit, time.Duration(expected)*time.Second),
-		actualTimespan: expected + 123457, // within [expected/4, expected*4]
-		want: func() uint32 {
-			tgt := new(big.Int).Mul(priorTarget, big.NewInt(expected+123457))
-			tgt.Div(tgt, big.NewInt(expected))
-			return blockchain.BigToCompact(tgt)
-		}(),
-	}, {
-		name:           "zero timespan guard returns prior bits",
-		params:         mkParams(bigPowLimit, 0),
-		actualTimespan: expected,
-		want:           priorBits,
-	}}
+	// Params without a rule skip the check.
+	if err := newH(paramsWithCheckpoints(nil), 0, chain[:boundary]).
+		validateBitsLocked(boundary, withBits(chain[boundary], p.PowLimitBits), nil, 0); err != nil {
+		t.Fatalf("nil NextBits should skip: %v", err)
+	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			prior, chunkStart := mkHeaders(tt.actualTimespan)
-			got := computeNextWorkRequired(tt.params, prior, chunkStart)
-			if got != tt.want {
-				t.Fatalf("got 0x%08x, want 0x%08x", got, tt.want)
+	// Litecoin sampling anchored at a boundary checkpoint: the first
+	// retarget above the anchor samples the block below it, which only the
+	// checkpoint's difficulty record supplies.
+	ltc := intervalTestParams(nil, true)
+	lchain := synthRuleChain(t, ltc, 2*testRetargetInterval+2)
+	anchor := int32(testRetargetInterval)
+	next := anchor + testRetargetInterval
+	cp := netparams.Checkpoint{
+		Height: anchor,
+		Hash:   ptrHash(lchain[anchor].BlockHash()),
+		Header: lchain[anchor],
+	}
+	noRecord := intervalTestParams([]netparams.Checkpoint{cp}, true)
+	cp.Difficulty = []netparams.BlockDifficulty{netparams.HeaderDifficulty(lchain[anchor-1])}
+	withRecord := intervalTestParams([]netparams.Checkpoint{cp}, true)
+	for _, tc := range []struct {
+		name    string
+		params  *netparams.ChainParams
+		wantErr bool
+	}{
+		{"with difficulty record", withRecord, false},
+		{"without difficulty record", noRecord, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := NewHeaders(&ChainConfig{Params: tc.params, StartHeight: anchor, HeaderSize: 80,
+				Chain: bisonwire.ChainLTC}, t.TempDir())
+			if err != nil {
+				t.Fatalf("NewHeaders: %v", err)
+			}
+			if _, err := h.AppendBatch(anchor, serializeBatch(t, lchain[anchor:next])); err != nil {
+				t.Fatalf("AppendBatch below the first retarget: %v", err)
+			}
+			err = h.AppendOne(lchain[next])
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "inputs unavailable") {
+					t.Fatalf("first retarget above the anchor without its sample block: got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("first retarget above the anchor: %v", err)
 			}
 		})
 	}
 }
 
-// TestValidateRetargetLocked exercises the retarget-structure trust check at a
-// difficulty boundary — the decision that's NEVER reached by the rest of the
-// suite because every other test runs with PoWNoRetargeting=true. This is the
-// defence against a server forging difficulty across a 2016-block boundary on
-// the historical span that isn't per-header PoW-checked; computeNextWorkRequired
-// covers the math, this covers accept vs reject and the skip paths.
-func TestValidateRetargetLocked(t *testing.T) {
-	// Params with retargeting ENABLED (unlike NSimnetParams).
-	params := &netparams.ChainParams{
-		TargetTimespan:           14 * 24 * time.Hour, // 1,209,600s
-		RetargetAdjustmentFactor: 4,
-		PowLimit:                 new(big.Int).Lsh(big.NewInt(1), 255),
-		PoWNoRetargeting:         false,
-	}
-	const boundary = int32(retargetInterval) // first retarget height
-
-	priorBits := blockchain.BigToCompact(new(big.Int).Lsh(big.NewInt(1), 240))
-	start := time.Unix(1_600_000_000, 0)
-	chunkStart := &wire.BlockHeader{Bits: priorBits, Timestamp: start}
-	// actualTimespan = 10 days, inside [expected/4, expected*4] so the retarget
-	// is a real (non-clamped) adjustment rather than the identity.
-	prior := &wire.BlockHeader{Bits: priorBits, Timestamp: start.Add(10 * 24 * time.Hour)}
-	want := computeNextWorkRequired(params, prior, chunkStart)
-	if want == priorBits || want == 0x207fffff {
-		t.Fatalf("test setup: want 0x%08x not distinct from prior/forged bits", want)
-	}
-
-	newH := func(p *netparams.ChainParams, byHeight map[int32]*wire.BlockHeader) *Headers {
-		return &Headers{
-			cfg:      &ChainConfig{Params: p, StartHeight: 0, HeaderSize: 80},
-			byHeight: byHeight,
+// TestAppendRejectsOffBoundaryBits: a correctly mined, correctly linked
+// header whose bits differ from its parent's off a retarget boundary is
+// refused by both append paths.
+func TestAppendRejectsOffBoundaryBits(t *testing.T) {
+	p := intervalTestParams(nil, false)
+	chain := synthRuleChain(t, p, testRetargetInterval/2)
+	newH := func() *Headers {
+		h, err := NewHeaders(&ChainConfig{Params: p, HeaderSize: 80, Chain: bisonwire.ChainBTC}, t.TempDir())
+		if err != nil {
+			t.Fatalf("NewHeaders: %v", err)
 		}
+		return h
 	}
-	full := map[int32]*wire.BlockHeader{0: chunkStart, boundary - 1: prior}
-
-	good := &wire.BlockHeader{Bits: want}
-	bad := &wire.BlockHeader{Bits: 0x207fffff} // trivial-difficulty forgery
-
-	// Accept: the boundary header carries the correctly-computed Bits.
-	if err := newH(params, full).validateRetargetLocked(boundary, good, nil, 0); err != nil {
-		t.Fatalf("valid retarget rejected: %v", err)
-	}
-	// Reject: forged easy Bits at the boundary.
-	if err := newH(params, full).validateRetargetLocked(boundary, bad, nil, 0); err == nil {
-		t.Fatal("forged retarget Bits accepted")
-	} else if !strings.Contains(err.Error(), "retarget mismatch") {
-		t.Fatalf("unexpected error: %v", err)
+	easier := blockchain.BigToCompact(p.PowLimit)
+	if easier == chain[3].Bits {
+		easier = 0x207ffffe
 	}
 
-	// Skip — PoWNoRetargeting disables the check entirely. Construct a fresh
-	// params (can't copy *params: ChainParams holds a sync.Once).
-	noRT := &netparams.ChainParams{
-		TargetTimespan:           params.TargetTimespan,
-		RetargetAdjustmentFactor: params.RetargetAdjustmentFactor,
-		PowLimit:                 params.PowLimit,
-		PoWNoRetargeting:         true,
+	// AppendBatch: the change sits inside the batch.
+	forged := make([]*wire.BlockHeader, 4)
+	copy(forged, chain[:3])
+	f := *chain[3]
+	forged[3] = &f
+	remine(forged[3], easier)
+	h := newH()
+	if _, err := h.AppendBatch(0, serializeBatch(t, forged)); err == nil ||
+		!strings.Contains(err.Error(), "consensus requires") {
+		t.Fatalf("AppendBatch with an off-boundary bits change: got %v", err)
 	}
-	if err := newH(noRT, full).validateRetargetLocked(boundary, bad, nil, 0); err != nil {
-		t.Fatalf("PoWNoRetargeting should skip: %v", err)
-	}
-	// Skip — non-boundary height is not checked.
-	if err := newH(params, full).validateRetargetLocked(boundary-1, bad, nil, 0); err != nil {
-		t.Fatalf("non-boundary height should skip: %v", err)
-	}
-	// Soft-pass — missing chunk-start header (predates our range).
-	if err := newH(params, map[int32]*wire.BlockHeader{boundary - 1: prior}).
-		validateRetargetLocked(boundary, bad, nil, 0); err != nil {
-		t.Fatalf("missing chunk start should soft-pass: %v", err)
+	if h.Tip() != -1 {
+		t.Fatalf("rejected batch changed the tip to %d", h.Tip())
 	}
 
-	// inBatch path: prior/chunkStart resolved from the in-flight batch rather
-	// than byHeight — the headerAt branch AppendBatch uses when a batch crosses
-	// a boundary. The intermediate entries are never dereferenced.
-	batch := make([]*wire.BlockHeader, boundary)
-	batch[0] = chunkStart
-	batch[boundary-1] = prior
-	hEmpty := newH(params, map[int32]*wire.BlockHeader{})
-	if err := hEmpty.validateRetargetLocked(boundary, good, batch, 0); err != nil {
-		t.Fatalf("inBatch valid retarget rejected: %v", err)
+	// AppendOne: the change is the new tip.
+	h = newH()
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:3])); err != nil {
+		t.Fatalf("seed AppendBatch: %v", err)
 	}
-	if err := hEmpty.validateRetargetLocked(boundary, bad, batch, 0); err == nil {
-		t.Fatal("inBatch forged retarget accepted")
+	if err := h.AppendOne(forged[3]); err == nil || !strings.Contains(err.Error(), "consensus requires") {
+		t.Fatalf("AppendOne with an off-boundary bits change: got %v", err)
+	}
+	if err := h.AppendOne(chain[3]); err != nil {
+		t.Fatalf("AppendOne with the parent's bits: %v", err)
 	}
 }
 
-// TestHeadersRejectsTrivialDifficultyForgery is the regression for review2 #8:
-// a server that links headers correctly but advertises an absurdly low
-// difficulty (high Bits target). With the per-header PoW check the chain
-// rejects them; without it the wallet accepts a hostile chain as best.
-func TestHeadersRejectsTrivialDifficultyForgery(t *testing.T) {
-	h, _ := newTestHeaders(t)
-	// Tight bits that almost no random hash will satisfy.
-	hdr := &wire.BlockHeader{
-		Version:   1,
-		PrevBlock: chainhash.Hash{},
-		Bits:      0x1d00ffff, // BTC mainnet starting difficulty
-		Timestamp: time.Unix(1_600_000_000, 0),
-		Nonce:     0,
-	}
-	// We did not mine it; the hash almost certainly exceeds the target.
-	raw, err := serializeHeader(hdr)
+func ptrHash(h chainhash.Hash) *chainhash.Hash { return &h }
+
+// mustNewHeaders constructs a Headers for cfg rooted in a temp dir.
+func mustNewHeaders(t *testing.T, cfg *ChainConfig) *Headers {
+	t.Helper()
+	h, err := NewHeaders(cfg, t.TempDir())
 	if err != nil {
-		t.Fatalf("serialize: %v", err)
+		t.Fatalf("NewHeaders: %v", err)
 	}
-	if _, err := h.AppendBatch(0, raw, 0); err == nil {
-		t.Fatal("expected PoW error for unmined header at tight target")
+	return h
+}
+
+// unminedHeader returns a header linked to prev whose hash fails the tight
+// target it claims (2^-32 of hashes would pass; the nonce is bumped past any
+// that do).
+func unminedHeader(prev chainhash.Hash, ts time.Time) *wire.BlockHeader {
+	hdr := &wire.BlockHeader{Version: 1, PrevBlock: prev, Bits: 0x1d00ffff, Timestamp: ts}
+	for (&Headers{cfg: testChainConfig()}).checkPoW(hdr) == nil {
+		hdr.Nonce++
+	}
+	return hdr
+}
+
+// TestHeadersTargetRange: a header whose bits encode a target outside
+// (0, PowLimit] is refused by both append paths, whether or not its height is
+// PoW-checked, even when its hash meets the target it claims.
+func TestHeadersTargetRange(t *testing.T) {
+	btcMainPowLimit := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 224), big.NewInt(1))
+	chain := synthChain(1, 7) // mined at 0x207fffff, about 2^255
+	cases := []struct {
+		name string
+		cps  []netparams.Checkpoint
+	}{
+		{"PoW-checked height", nil},
+		// A checkpoint at height 0 puts the header at or below the newest
+		// checkpoint, where the PoW hash is not checked.
+		{"height at the newest checkpoint", []netparams.Checkpoint{{Height: 0, Hash: ptrHash(chain[0].BlockHash())}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := paramsWithCheckpoints(tc.cps)
+			p.PowLimit = btcMainPowLimit
+			h := mustNewHeaders(t, &ChainConfig{Chain: bisonwire.ChainBTC, Params: p, HeaderSize: 80})
+			_, err := h.AppendBatch(0, serializeBatch(t, chain))
+			if err == nil || !strings.Contains(err.Error(), "outside (0, PowLimit]") {
+				t.Fatalf("AppendBatch of a mined 0x207fffff header under the BTC mainnet PowLimit: got %v", err)
+			}
+		})
+	}
+
+	// AppendOne, with a seed header inside a PowLimit of 2^248.
+	p := paramsWithCheckpoints(nil)
+	p.PowLimit = new(big.Int).Lsh(big.NewInt(1), 248)
+	seed := &wire.BlockHeader{Version: 1, Bits: 0x1f00ffff, Timestamp: time.Unix(1_600_000_000, 0)}
+	mineHeader(seed)
+	h := mustNewHeaders(t, &ChainConfig{Chain: bisonwire.ChainBTC, Params: p, HeaderSize: 80})
+	if _, err := h.AppendBatch(0, serializeBatch(t, []*wire.BlockHeader{seed})); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	easy := &wire.BlockHeader{Version: 1, PrevBlock: seed.BlockHash(), Bits: 0x207fffff,
+		Timestamp: seed.Timestamp.Add(time.Minute)}
+	mineHeader(easy)
+	if err := h.AppendOne(easy); err == nil || !strings.Contains(err.Error(), "outside (0, PowLimit]") {
+		t.Fatalf("AppendOne of a header above PowLimit: got %v", err)
+	}
+
+	// Zero, negative and overflowing compact encodings.
+	hdrs := &Headers{cfg: &ChainConfig{Params: p}}
+	for _, bits := range []uint32{0, 0x01003456, 0x04923456, 0x23000001, p.PowLimitBits + 1} {
+		if err := hdrs.checkTarget(&wire.BlockHeader{Bits: bits}); err == nil {
+			t.Errorf("bits 0x%08x accepted", bits)
+		}
+	}
+	if err := hdrs.checkTarget(&wire.BlockHeader{Bits: 0x1f00ffff}); err != nil {
+		t.Fatalf("in-range bits rejected: %v", err)
+	}
+}
+
+// TestHeadersPoWAboveNewestCheckpoint: headers above the newest checkpoint
+// are PoW-checked whatever their position in the batch, and headers at or
+// below it are not.
+func TestHeadersPoWAboveNewestCheckpoint(t *testing.T) {
+	const cpHeight = 5
+	ts := time.Unix(1_600_000_000, 0)
+	// Heights 1 through cpHeight are unmined; the rest are mined.
+	chain := synthChain(1, 11)
+	for i := 1; i <= cpHeight; i++ {
+		chain = append(chain, unminedHeader(chain[i-1].BlockHash(), ts.Add(time.Duration(i)*time.Minute)))
+	}
+	for i := cpHeight + 1; i < 30; i++ {
+		hdr := &wire.BlockHeader{Version: 1, PrevBlock: chain[i-1].BlockHash(), Bits: 0x207fffff,
+			Timestamp: ts.Add(time.Duration(i) * time.Minute)}
+		mineHeader(hdr)
+		chain = append(chain, hdr)
+	}
+	p := paramsWithCheckpoints([]netparams.Checkpoint{
+		{Height: 0, Hash: ptrHash(chain[0].BlockHash())},
+		{Height: cpHeight, Hash: ptrHash(chain[cpHeight].BlockHash())},
+	})
+	newH := func() *Headers {
+		return mustNewHeaders(t, &ChainConfig{Chain: bisonwire.ChainBTC, Params: p, HeaderSize: 80})
+	}
+
+	h := newH()
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:cpHeight+1])); err != nil {
+		t.Fatalf("unmined headers at or below the newest checkpoint rejected: %v", err)
+	}
+	above := unminedHeader(chain[cpHeight].BlockHash(), ts.Add(time.Hour))
+	if err := h.AppendOne(above); err == nil || !strings.Contains(err.Error(), "exceeds target") {
+		t.Fatalf("AppendOne of an unmined header above the checkpoint: got %v", err)
+	}
+	if _, err := h.AppendBatch(cpHeight+1, serializeBatch(t, []*wire.BlockHeader{above})); err == nil {
+		t.Fatal("AppendBatch of an unmined header above the checkpoint accepted")
+	}
+
+	// One unmined header deep inside a batch that spans the checkpoint,
+	// checked by the parallel workers.
+	const bad = 17
+	forged := append([]*wire.BlockHeader(nil), chain...)
+	forged[bad] = unminedHeader(chain[bad-1].BlockHash(), chain[bad].Timestamp)
+	for i := bad + 1; i < len(forged); i++ {
+		c := *forged[i]
+		c.PrevBlock = forged[i-1].BlockHash()
+		c.Nonce = 0
+		mineHeader(&c)
+		forged[i] = &c
+	}
+	h = newH()
+	_, err := h.AppendBatch(0, serializeBatch(t, forged))
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("header at %d:", bad)) {
+		t.Fatalf("batch with an unmined header at %d: got %v", bad, err)
+	}
+	if h.Tip() != -1 {
+		t.Fatalf("rejected batch moved the tip to %d", h.Tip())
+	}
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
+		t.Fatalf("valid batch spanning the checkpoint: %v", err)
+	}
+}
+
+// TestHeadersFutureTimestamp: a header timestamped up to two hours past local
+// time is accepted, and one second later is refused with errTimeTooNew by both
+// append paths.
+func TestHeadersFutureTimestamp(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	mk := func(prev chainhash.Hash, ts time.Time) *wire.BlockHeader {
+		hdr := &wire.BlockHeader{Version: 1, PrevBlock: prev, Bits: 0x207fffff, Timestamp: ts}
+		mineHeader(hdr)
+		return hdr
+	}
+	h, _ := newTestHeaders(t)
+	h.now = func() time.Time { return now }
+	g := mk(chainhash.Hash{}, now.Add(maxFutureBlockTime))
+	if _, err := h.AppendBatch(0, serializeBatch(t, []*wire.BlockHeader{g})); err != nil {
+		t.Fatalf("header at now+2h rejected: %v", err)
+	}
+	late := mk(g.BlockHash(), now.Add(maxFutureBlockTime+time.Second))
+	if err := h.AppendOne(late); !errors.Is(err, errTimeTooNew) {
+		t.Fatalf("AppendOne at now+2h+1s: got %v, want errTimeTooNew", err)
+	}
+	if _, err := h.AppendBatch(1, serializeBatch(t, []*wire.BlockHeader{late})); !errors.Is(err, errTimeTooNew) {
+		t.Fatalf("AppendBatch at now+2h+1s: got %v, want errTimeTooNew", err)
+	}
+	if err := h.AppendOne(mk(g.BlockHash(), now.Add(maxFutureBlockTime))); err != nil {
+		t.Fatalf("AppendOne at now+2h: %v", err)
+	}
+}
+
+// TestHeadersRewindFloor: once the store holds the newest checkpoint it never
+// rewinds below it; below the checkpoint, rewinds proceed.
+func TestHeadersRewindFloor(t *testing.T) {
+	const cpHeight = 10
+	chain := synthChain(20, 13)
+	p := paramsWithCheckpoints([]netparams.Checkpoint{
+		{Height: 0, Hash: ptrHash(chain[0].BlockHash())},
+		{Height: cpHeight, Hash: ptrHash(chain[cpHeight].BlockHash())},
+	})
+	h := mustNewHeaders(t, &ChainConfig{Chain: bisonwire.ChainBTC, Params: p, HeaderSize: 80})
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:cpHeight])); err != nil {
+		t.Fatalf("seed below the checkpoint: %v", err)
+	}
+	if _, err := h.Rewind(3); err != nil {
+		t.Fatalf("rewind below an unreached checkpoint: %v", err)
+	}
+	if _, err := h.AppendBatch(cpHeight-3, serializeBatch(t, chain[cpHeight-3:])); err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+	if _, err := h.Rewind(int32(len(chain)-1-cpHeight) + 1); err == nil ||
+		!strings.Contains(err.Error(), "below checkpoint") {
+		t.Fatalf("rewind below a held checkpoint: got %v", err)
+	}
+	if h.Tip() != int32(len(chain)-1) {
+		t.Fatalf("refused rewind moved the tip to %d", h.Tip())
+	}
+	if _, err := h.Rewind(int32(len(chain) - 1 - cpHeight)); err != nil {
+		t.Fatalf("rewind to the checkpoint: %v", err)
+	}
+	if h.Tip() != cpHeight {
+		t.Fatalf("tip %d after rewinding to the checkpoint", h.Tip())
 	}
 }
 
@@ -340,7 +578,7 @@ func TestHeadersCheckpointMismatchRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHeaders: %v", err)
 	}
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err == nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err == nil {
 		t.Fatal("expected checkpoint mismatch error")
 	}
 }
@@ -362,44 +600,8 @@ func TestHeadersCheckpointMatchAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHeaders: %v", err)
 	}
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
-	}
-}
-
-// TestHeadersPoWWindowSkipsDeepHistory exercises the per-header PoW window:
-// with tipHint set far above the batch, headers in the batch get
-// retarget+checkpoint validation only; per-header PoW is skipped. We assert
-// this by feeding unmined headers and verifying they're accepted because
-// they fall outside the window.
-//
-// Because the test ChainParams has PoWNoRetargeting=true (regtest), the
-// retarget validator is a no-op. Combined with no checkpoints, this batch
-// passes purely on linkage + skip-PoW.
-func TestHeadersPoWWindowSkipsDeepHistory(t *testing.T) {
-	dir := t.TempDir()
-	h, err := NewHeaders(testChainConfig(), dir)
-	if err != nil {
-		t.Fatalf("NewHeaders: %v", err)
-	}
-	ts := time.Unix(1_600_000_000, 0)
-	var prev chainhash.Hash
-	var hdrs []*wire.BlockHeader
-	for i := range 5 {
-		hdr := &wire.BlockHeader{
-			Version:   1,
-			PrevBlock: prev,
-			Bits:      0x1d00ffff, // tight target — fails checkPoW
-			Timestamp: ts.Add(time.Duration(i) * time.Minute),
-			Nonce:     uint32(i),
-		}
-		hdrs = append(hdrs, hdr)
-		prev = hdr.BlockHash()
-	}
-	// tipHint=recentPoWWindow+10 puts every header in the batch (heights
-	// 0..4) outside the per-header PoW window.
-	if _, err := h.AppendBatch(0, serializeBatch(t, hdrs), recentPoWWindow+10); err != nil {
-		t.Fatalf("AppendBatch (deep-history skip-PoW): %v", err)
 	}
 }
 
@@ -432,7 +634,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 	chain := synthChain(10, 1)
 	raw := serializeBatch(t, chain)
 
-	n, err := h.AppendBatch(0, raw, 0)
+	n, err := h.AppendBatch(0, raw)
 	if err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
@@ -458,7 +660,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 
 	// Batch from the wrong start height must fail.
 	more := serializeBatch(t, synthChain(3, 99))
-	if _, err := h.AppendBatch(5, more, 0); err == nil {
+	if _, err := h.AppendBatch(5, more); err == nil {
 		t.Fatal("expected error appending non-contiguous batch")
 	}
 
@@ -467,7 +669,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 		{PrevBlock: chain[len(chain)-1].BlockHash(), Bits: 0x207fffff, Nonce: 100},
 		{PrevBlock: chainhash.Hash{}, Bits: 0x207fffff, Nonce: 101}, // wrong prev
 	}
-	if _, err := h.AppendBatch(10, serializeBatch(t, broken), 0); err == nil {
+	if _, err := h.AppendBatch(10, serializeBatch(t, broken)); err == nil {
 		t.Fatal("expected error for batch with internal break")
 	}
 }
@@ -475,7 +677,7 @@ func TestHeadersAppendBatch(t *testing.T) {
 func TestHeadersAppendOne(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(5, 7)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
 		t.Fatalf("seed AppendBatch: %v", err)
 	}
 	// Append one connected header.
@@ -516,7 +718,7 @@ func TestHeadersAppendOne(t *testing.T) {
 func TestHeadersReorgRewind(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(20, 1)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	tipBefore := h.Tip()
@@ -576,7 +778,7 @@ func TestHeadersReorgRewind(t *testing.T) {
 func TestHeadersOrphanRetentionBounded(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(maxOrphans+10, 3)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	first, err := h.Rewind(5)
@@ -605,7 +807,7 @@ func TestHeadersOrphanRetentionBounded(t *testing.T) {
 func TestHeadersPersistence(t *testing.T) {
 	h, dir := newTestHeaders(t)
 	chain := synthChain(15, 42)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain)); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -671,7 +873,7 @@ func TestHeadersAnchorMove(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewHeaders (seed): %v", err)
 		}
-		if _, err := h.AppendBatch(seedAnchor, serializeBatch(t, chain[seedAnchor:]), 0); err != nil {
+		if _, err := h.AppendBatch(seedAnchor, serializeBatch(t, chain[seedAnchor:])); err != nil {
 			t.Fatalf("seed AppendBatch: %v", err)
 		}
 		return dir
@@ -714,7 +916,7 @@ func TestHeadersAnchorMove(t *testing.T) {
 			}
 			// The normal first sync must be able to repopulate from the
 			// new anchor.
-			if _, err := h.AppendBatch(tc.newAnchor, serializeBatch(t, chain[tc.newAnchor:]), 0); err != nil {
+			if _, err := h.AppendBatch(tc.newAnchor, serializeBatch(t, chain[tc.newAnchor:])); err != nil {
 				t.Fatalf("resync after discard: %v", err)
 			}
 			if h.Tip() != tip {
@@ -742,14 +944,14 @@ func TestHeadersFilePathLayout(t *testing.T) {
 func TestHeadersAppendBatchInteriorBreak(t *testing.T) {
 	h, _ := newTestHeaders(t)
 	chain := synthChain(12, 5)
-	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:8]), 0); err != nil {
+	if _, err := h.AppendBatch(0, serializeBatch(t, chain[:8])); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	broken := append([]*wire.BlockHeader(nil), chain[8:]...)
 	bad := *broken[2]
 	bad.PrevBlock = chainhash.Hash{31: 7}
 	broken[2] = &bad
-	_, err := h.AppendBatch(8, serializeBatch(t, broken), 0)
+	_, err := h.AppendBatch(8, serializeBatch(t, broken))
 	if err == nil {
 		t.Fatal("interior break accepted")
 	}
@@ -758,5 +960,35 @@ func TestHeadersAppendBatchInteriorBreak(t *testing.T) {
 	}
 	if h.Tip() != 7 {
 		t.Fatalf("tip = %d after a refused batch, want 7", h.Tip())
+	}
+}
+
+// BenchmarkCheckBatchPoW measures the PoW hash check AppendBatch runs on
+// headers above the newest checkpoint, per header, using a real mainnet
+// checkpoint header repeated b.N times. Run with -cpu to compare one worker
+// against GOMAXPROCS workers, e.g.
+//
+//	go test -run '^$' -bench CheckBatchPoW -cpu 1,8 ./wallet/utxowallet/electrum/
+func BenchmarkCheckBatchPoW(b *testing.B) {
+	for _, bc := range []struct {
+		name   string
+		params *netparams.ChainParams
+	}{
+		{"ltc-scrypt", assets.LTCParams["mainnet"]},
+		{"dash-x11", assets.DashParams["mainnet"]},
+		{"btc-sha256d", assets.BTCParams["mainnet"]},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			cp := bc.params.Checkpoints[len(bc.params.Checkpoints)-1]
+			h := &Headers{cfg: &ChainConfig{Params: bc.params, HeaderSize: 80}}
+			hdrs := make([]*wire.BlockHeader, b.N)
+			for i := range hdrs {
+				hdrs[i] = cp.Header
+			}
+			b.ResetTimer()
+			if err := h.checkBatchPoW(cp.Height+1, hdrs); err != nil {
+				b.Fatal(err)
+			}
+		})
 	}
 }
