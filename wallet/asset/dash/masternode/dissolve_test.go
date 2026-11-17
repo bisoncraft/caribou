@@ -63,6 +63,8 @@ func coreMN(t *testing.T) *SharedMN {
 		RegisteredHeight:  1000,
 		EarlyPeriodBlocks: pr.EarlyPeriodBlocks,
 		EarlyPenalty:      pr.EarlyPenalty,
+		PubKeyOperator:    pr.PubKeyOperator,
+		KeyIDVoting:       pr.KeyIDVoting,
 	}
 }
 

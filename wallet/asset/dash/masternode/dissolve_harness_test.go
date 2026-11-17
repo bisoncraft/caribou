@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 )
@@ -51,7 +52,10 @@ func accepted(t *testing.T, raw []byte) (bool, string) {
 	return out[0].Allowed, out[0].Reason
 }
 
-func TestDissolutionAcceptedByDashCore(t *testing.T) {
+// registerHarnessMN registers a two-share masternode on the harness: consent,
+// Core signs the funding, broadcast, mined. The owners' keys are the test's.
+func registerHarnessMN(t *testing.T) (*SharedMN, []*btcec.PrivateKey) {
+	t.Helper()
 	p, owns, keys := harnessProposal(t)
 
 	// Register the masternode: consent, Core signs the funding, broadcast, mine.
@@ -135,7 +139,14 @@ func TestDissolutionAcceptedByDashCore(t *testing.T) {
 		RegisteredHeight:  header.Height,
 		EarlyPeriodBlocks: p.Terms.EarlyPeriodBlocks,
 		EarlyPenalty:      p.Terms.EarlyPenalty,
+		PubKeyOperator:    p.Terms.PubKeyOperator,
+		KeyIDVoting:       p.Terms.KeyIDVoting,
 	}
+	return m, keys
+}
+
+func TestDissolutionAcceptedByDashCore(t *testing.T) {
+	m, keys := registerHarnessMN(t)
 	tip := func() int32 {
 		r, err := rpc(t, "getblockcount")
 		if err != nil {

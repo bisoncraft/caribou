@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/netip"
 	"testing"
@@ -139,7 +140,7 @@ func TestValidateMatchesDashCore(t *testing.T) {
 		t.Skipf("wallet gamma has %.2f DASH, need 1001", total)
 	}
 	changeAddr, _, _ := addr(t)
-	fund := rpcStr(t, "createrawtransaction", ins, map[string]float64{changeAddr: total - 1000 - 0.01})
+	fund := rpcStr(t, "createrawtransaction", ins, map[string]float64{changeAddr: math.Round((total-1000-0.01)*1e8) / 1e8})
 
 	opJSON, err := rpc(t, "bls", "generate")
 	if err != nil {
