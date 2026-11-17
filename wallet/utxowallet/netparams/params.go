@@ -83,6 +83,20 @@ type ChainParams struct {
 	// not BlockHash() directly. Transaction ids are unaffected (still sha256d).
 	HeaderHashFunc func(*wire.BlockHeader) chainhash.Hash
 
+	// NextBits returns the difficulty bits consensus requires of the block at
+	// height, reading the difficulty fields of its ancestors through at, and
+	// false when an input the rule reads is unavailable. Nil disables
+	// contextual difficulty checks. It is nil on every network that permits
+	// minimum-difficulty blocks (ReduceMinDifficulty) or does not retarget
+	// (PoWNoRetargeting), where difficulty does not bound the cost of a forged
+	// chain whatever the client checks.
+	NextBits func(height int32, at DifficultyAt) (uint32, bool)
+
+	// DifficultyLookback is the number of blocks below a checkpoint whose
+	// difficulty fields NextBits reads when validating the blocks just above
+	// it. Each checkpoint record carries that many Difficulty entries.
+	DifficultyLookback int
+
 	// MaxSatoshi varies between assets.
 	MaxSatoshi int64
 
@@ -114,7 +128,28 @@ type Checkpoint struct {
 	// FilterHeader is the BIP-158 basic filter header of the block, which
 	// commits to the filters of the block and all of its ancestors.
 	FilterHeader *chainhash.Hash
+	// Difficulty holds the difficulty fields of the DifficultyLookback blocks
+	// below the checkpoint, oldest first, ending at Height-1. A header store
+	// starting at the checkpoint has no other source for them, and NextBits
+	// reads them when validating the blocks just above the checkpoint. They
+	// are trusted on the same footing as Hash.
+	Difficulty []BlockDifficulty
 }
+
+// BlockDifficulty is the part of a block header that difficulty rules read.
+type BlockDifficulty struct {
+	Bits      uint32
+	Timestamp uint32 // Unix seconds, as encoded in the header
+}
+
+// HeaderDifficulty returns the difficulty fields of hdr.
+func HeaderDifficulty(hdr *wire.BlockHeader) BlockDifficulty {
+	return BlockDifficulty{Bits: hdr.Bits, Timestamp: uint32(hdr.Timestamp.Unix())}
+}
+
+// DifficultyAt returns the difficulty fields of the block at height on the
+// chain being validated, and false when they are unavailable.
+type DifficultyAt func(height int32) (BlockDifficulty, bool)
 
 // HeaderHash returns the canonical block-header hash (block identity) for hdr on
 // this chain. It uses HeaderHashFunc when set and otherwise falls back to the

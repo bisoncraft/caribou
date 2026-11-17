@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bisoncraft/caribou/wallet/utxowallet/netparams"
+	"github.com/btcsuite/btcd/blockchain"
 )
 
 // mainnetCheckpointSpacing is the distance between consecutive mainnet
@@ -17,11 +18,17 @@ var mainnetCheckpointSpacing = map[string]int32{
 }
 
 // TestCheckpoints validates the checkpoint records of every network: each
-// header hashes to its recorded hash, heights and timestamps ascend, the first
+// header hashes to its recorded hash, heights and timestamps ascend, every
 // checkpoint sits on a retarget boundary on chains with interval retargeting,
-// and mainnet checkpoints follow the quarterly spacing. The filter headers
-// cannot be checked offline; the livenet TestCheckpointRecords in the spv
-// package compares them against the network.
+// mainnet checkpoints follow the quarterly spacing, and each record carries
+// DifficultyLookback difficulty entries with bits inside PowLimit. The filter
+// headers and difficulty entries cannot be checked against the chain offline;
+// the livenet TestCheckpointRecords in the spv package derives and compares
+// them.
+//
+// The boundary requirement is what lets LTC's lookback be 1: a checkpoint at
+// boundary B is followed by an off-boundary run that reads only parents, and
+// the first retarget above it, at B+2016, samples B-1.
 func TestCheckpoints(t *testing.T) {
 	for chain, nets := range map[string]map[string]*netparams.ChainParams{
 		"btc":  BTCParams,
@@ -31,6 +38,7 @@ func TestCheckpoints(t *testing.T) {
 		for net, params := range nets {
 			t.Run(chain+"."+net, func(t *testing.T) {
 				cps := params.Checkpoints
+				interval := int32(params.TargetTimespan / params.TargetTimePerBlock)
 				for i, cp := range cps {
 					if cp.Hash == nil || cp.Header == nil || cp.FilterHeader == nil {
 						t.Fatalf("checkpoint %d lacks a hash, header or filter header", cp.Height)
@@ -38,6 +46,20 @@ func TestCheckpoints(t *testing.T) {
 					if h := params.HeaderHash(cp.Header); h != *cp.Hash {
 						t.Fatalf("checkpoint %d: header hashes to %s, recorded hash is %s",
 							cp.Height, h, cp.Hash)
+					}
+					if chain != "dash" && cp.Height%interval != 0 {
+						t.Fatalf("checkpoint %d is not on a retarget boundary (every %d blocks)",
+							cp.Height, interval)
+					}
+					if len(cp.Difficulty) != params.DifficultyLookback {
+						t.Fatalf("checkpoint %d carries %d difficulty entries, want %d",
+							cp.Height, len(cp.Difficulty), params.DifficultyLookback)
+					}
+					for j, d := range cp.Difficulty {
+						if tgt := blockchain.CompactToBig(d.Bits); tgt.Sign() <= 0 || tgt.Cmp(params.PowLimit) > 0 {
+							t.Fatalf("checkpoint %d: difficulty entry %d has bits 0x%08x outside (0, PowLimit]",
+								cp.Height, j, d.Bits)
+						}
 					}
 					if i == 0 {
 						continue
@@ -54,14 +76,6 @@ func TestCheckpoints(t *testing.T) {
 						t.Fatalf("checkpoint %d is not a multiple of %d blocks after %d",
 							cp.Height, spacing, cps[0].Height)
 					}
-				}
-				if len(cps) == 0 || chain == "dash" {
-					return
-				}
-				interval := int32(params.TargetTimespan / params.TargetTimePerBlock)
-				if cps[0].Height%interval != 0 {
-					t.Fatalf("checkpoint %d is not on a retarget boundary (every %d blocks)",
-						cps[0].Height, interval)
 				}
 			})
 		}

@@ -98,6 +98,9 @@ var LTCParams = map[string]*netparams.ChainParams{
 		RetargetAdjustmentFactor: 4,                                       // 25% less, 400% more
 		ReduceMinDifficulty:      false,
 		MinDiffReductionTime:     0,
+		// The first retarget above a checkpoint at boundary B samples the
+		// timestamp of block B-1 (see LitecoinNextBits).
+		DifficultyLookback: 1,
 		// Checkpoints ordered from oldest to newest. The first is the launch
 		// anchor: the last retarget boundary mined before
 		// DefaultWalletBirthday (2026-07-01). The electrum header store
@@ -110,18 +113,23 @@ var LTCParams = map[string]*netparams.ChainParams{
 		// The livenet TestCheckpointRecords in the spv package fetches each
 		// header and filter header from P2P peers, checks the header against
 		// the hash, and requires the peers to agree on the filter header.
+		// Difficulty holds the bits and timestamp of the block below each
+		// checkpoint, derived by that test from headers linked back to the
+		// checkpoint header.
 		Checkpoints: []netparams.Checkpoint{
 			{
 				Height:       3132864, // 2026-06-28
 				Hash:         newHashFromStr("22076f9f6295e025e4b53c021b936e9f482888734536e86b6ffb7442038c14f4"),
 				Header:       newHeaderFromStr("14000020069c16322f35fadf71c5a3951fc4c6e2ef3139e6b97d2630e211457b23539c61c52a1638a6586a3b4ed2094473b1e0916e4c0ee3b96a3f0e81eb708bd03331ad650b416a7c482f198040f9c4"),
 				FilterHeader: newHashFromStr("bc2cce0376dad660ca4855dc9b7c204d0def5766c3d08d71b6748dff31717e93"),
+				Difficulty:   []netparams.BlockDifficulty{{Bits: 0x192d25d2, Timestamp: 1782647569}},
 			},
 			{
 				Height:       3185280, // 2026-09-27
 				Hash:         newHashFromStr("be08d745b1dcf064fb8d725662070a3c3461a9b02f0889a106dbe709bda8547e"),
 				Header:       newHeaderFromStr("00000020ace651653dbc6ac7747f0fec1cee48d49300f2edcf4ce0209367029575dfe18f5bd989d655e967a6147ed828a9ac7876ebeff58791eb731e1bb629421c9c455ed515b96adda82e19819dfbbb"),
 				FilterHeader: newHashFromStr("a15fd93e9ecb079386fc9a998f418cb4331e80f9e97d9de828b13f085107edd3"),
+				Difficulty:   []netparams.BlockDifficulty{{Bits: 0x192e0c95, Timestamp: 1790514548}},
 			},
 		},
 		Bech32HRPSegwit:         "ltc",                           // always ltc for main net
