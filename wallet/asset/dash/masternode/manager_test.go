@@ -655,6 +655,21 @@ func TestSharedMN(t *testing.T) {
 		}
 	})
 
+	t.Run("reported returns the checked reply", func(t *testing.T) {
+		e.chain.info = loadInfo(t, "protx_info_shared.json")
+		e.chain.info.State.PoSeBanHeight = 900
+		c, info, err := m.Reported(ctx, e.a.ProTxHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info == nil || DeriveState(info, false) != StateBanned || c.ProTxHash != e.a.ProTxHash {
+			t.Fatalf("%+v", info)
+		}
+		if _, _, err := m.Reported(ctx, chainhash.Hash{9}); !errors.Is(err, ErrUnknownMN) {
+			t.Fatalf("%v", err)
+		}
+	})
+
 	t.Run("stale", func(t *testing.T) {
 		e.chain.info = loadInfo(t, "protx_info_shared.json")
 		e.chain.tip = tipHeight + 1

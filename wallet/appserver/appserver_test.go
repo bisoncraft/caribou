@@ -62,7 +62,8 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 }
 
 type TCore struct {
-	clientCore           // This is here so we don't have to implement core methods we're not testing
+	clientCore // This is here so we don't have to implement core methods we're not testing
+	tMasternodes
 	fiatRates            map[uint32]float64
 	balanceErr           error
 	loginErr             error
@@ -243,8 +244,27 @@ func (c *TCore) ListVSPs(assetID uint32) ([]*asset.VotingServiceProvider, error)
 	return nil, nil
 }
 
+// masternode stubs
+type tMasternodes struct {
+	mns       []*asset.Masternode
+	mnStatus  *asset.MasternodeStatus
+	mnErr     error
+	mnAssetID uint32
+	mnHash    string
+}
+
 func (c *TCore) TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*asset.Ticket, error) {
 	return nil, nil
+}
+
+func (c *TCore) Masternodes(ctx context.Context, assetID uint32) ([]*asset.Masternode, error) {
+	c.mnAssetID = assetID
+	return c.mns, c.mnErr
+}
+
+func (c *TCore) MasternodeStatus(ctx context.Context, assetID uint32, proTxHash string) (*asset.MasternodeStatus, error) {
+	c.mnAssetID, c.mnHash = assetID, proTxHash
+	return c.mnStatus, c.mnErr
 }
 
 func (c *TCore) TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error) {

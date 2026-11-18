@@ -197,6 +197,13 @@ func newStore(t *testing.T) *masternode.Store {
 // vector, with the owner key id of its first share cached as the wallet's own.
 func stakedManager(t *testing.T, chain masternode.Chain, keys masternode.KeyDeriver) (*masternode.Manager, int64) {
 	t.Helper()
+	return stakedManagerWith(t, chain, keys, nil)
+}
+
+// stakedManagerWith also stores a dissolution of the masternode, if spend is not
+// nil.
+func stakedManagerWith(t *testing.T, chain masternode.Chain, keys masternode.KeyDeriver, spend *masternode.Spend) (*masternode.Manager, int64) {
+	t.Helper()
 	b, err := os.ReadFile(filepath.Join("masternode", "testdata", "dash_special_txs.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -220,10 +227,14 @@ func stakedManager(t *testing.T, chain masternode.Chain, keys masternode.KeyDeri
 		t.Fatal(err)
 	}
 	store := newStore(t)
-	err = store.Save(masternode.Update{
+	u := masternode.Update{
 		OwnerKeyIDs:   map[uint32][20]byte{1: mn.Shares[0].KeyIDOwner},
 		Registrations: []masternode.Registration{{Height: 798, Tx: raw}},
-	})
+	}
+	if spend != nil {
+		u.Dissolutions = map[chainhash.Hash]masternode.Spend{mn.ProTxHash: *spend}
+	}
+	err = store.Save(u)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ package dash
 //	go test -tags harness ./wallet/asset/dash/ -run TestDashSharedWallet
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
 
+	"github.com/bisoncraft/caribou/wallet/asset/dash/masternode"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wtxmgr"
 )
 
@@ -60,6 +62,15 @@ func TestDashSharedWalletWiring(t *testing.T) {
 	}
 	if got, ok := mgr.OwnerIndex(id); !ok || got != idx {
 		t.Fatalf("owner index of the reserved id: %d %v", got, ok)
+	}
+
+	// The wallet owns no masternode in the harness: the list is empty and a
+	// status request for one it does not own is refused.
+	if mns, err := dw.Masternodes(t.Context()); err != nil || len(mns) != 0 {
+		t.Fatalf("masternodes: %v %v", mns, err)
+	}
+	if _, err := dw.MasternodeStatus(t.Context(), chainhash.Hash{1}.String()); !errors.Is(err, masternode.ErrUnknownMN) {
+		t.Fatalf("status of a masternode it does not own: %v", err)
 	}
 
 	// A leased output leaves what is available and is locked.
