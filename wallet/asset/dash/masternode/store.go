@@ -98,7 +98,7 @@ func NewStore(db walletdb.DB) (*Store, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket, walletBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket, walletBucket, offersBucket} {
 			if _, err := b.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -491,7 +491,7 @@ func (s *Store) Load() (Snapshot, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket, walletBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket, trackedBucket, walletBucket, offersBucket} {
 			if b.NestedReadBucket(name) == nil {
 				return errors.New("masternode store is missing a bucket")
 			}
