@@ -72,6 +72,11 @@ type Config struct {
 	// Logger receives operational logging. Defaults to the stdlib
 	// default logger.
 	Logger *log.Logger
+	// Rhea, when set, adds the simulated RHEA lending world (see
+	// rhea_world.go): its market tokens join the catalog, 1Click payouts
+	// to RHEA accounts are delivered into it, and its NEAR RPC and relayer
+	// API are served under /rhea/.
+	Rhea *RheaConfig
 }
 
 // Server is the mock 1Click service. Construct with New and call Run
@@ -84,6 +89,7 @@ type Server struct {
 	assets  map[string]*mockAsset // key: Intents asset ID
 	log     *log.Logger
 	ctx     context.Context
+	rhea    *rheaWorld
 
 	priceMtx sync.RWMutex
 	prices   map[string]int64 // Intents asset ID -> microUSD per conventional unit
@@ -154,8 +160,14 @@ func New(cfg *Config) (*Server, error) {
 			return nil, fmt.Errorf("unknown chain slug %q", slug)
 		}
 	}
-	if len(drivers) < 2 {
-		return nil, fmt.Errorf("need at least two chains, got %d", len(drivers))
+	// The RHEA world supplies the other side of a quote (its market
+	// tokens), so one chain suffices with it.
+	minChains := 2
+	if c.Rhea != nil {
+		minChains = 1
+	}
+	if len(drivers) < minChains {
+		return nil, fmt.Errorf("need at least %d chains, got %d", minChains, len(drivers))
 	}
 
 	// The tradable asset set: every enabled chain's native, plus any test
@@ -170,6 +182,27 @@ func New(cfg *Config) (*Server, error) {
 				a := tokenAsset(spec, tok)
 				assets[a.intentsID] = a
 			}
+		}
+	}
+
+	var world *rheaWorld
+	if c.Rhea != nil {
+		world = newRheaWorld(c.Rhea, c.Logger)
+		near := chainSpecs["near"]
+		for _, m := range world.dep.Markets {
+			mk := world.markets[m.TokenID]
+			a := &mockAsset{
+				intentsID: m.OneClickAssetID, chain: near, symbol: mk.symbol, decimals: mk.decimals,
+				contract: m.TokenID, rhea: true, fallbackMicroUSD: 1_000_000,
+			}
+			assets[a.intentsID] = a
+		}
+		// Native NEAR prices the lending engine's NEAR fees; without a
+		// NEAR harness it lives in the RHEA world as wrap.near.
+		if _, ok := assets[near.assetID]; !ok {
+			a := nativeAsset(near)
+			a.rhea = true
+			assets[a.intentsID] = a
 		}
 	}
 
@@ -190,7 +223,7 @@ func New(cfg *Config) (*Server, error) {
 		c.Logger.Printf("asset enabled: %s on %s (%s) = %s", a.symbol, a.chain.slug, kind, id)
 	}
 
-	return &Server{
+	s := &Server{
 		cfg:     c,
 		priv:    priv,
 		pubKey:  pub,
@@ -199,7 +232,40 @@ func New(cfg *Config) (*Server, error) {
 		log:     c.Logger,
 		prices:  prices,
 		swaps:   make(map[string]*swapState),
-	}, nil
+		rhea:    world,
+	}
+	if world != nil {
+		world.poke = s.pokeDeposit
+	}
+	return s, nil
+}
+
+// driverFor returns the driver that moves an asset: the RHEA world for its
+// assets, otherwise the asset's chain harness.
+func (s *Server) driverFor(a *mockAsset) Driver {
+	if a.rhea {
+		return s.rhea
+	}
+	return s.drivers[a.chain.slug]
+}
+
+// pokeDeposit tells the swap watching addr, if any, that tokens arrived in
+// transaction txHash.
+func (s *Server) pokeDeposit(addr, txHash string) {
+	s.swapMtx.RLock()
+	sw := s.swaps[addr]
+	s.swapMtx.RUnlock()
+	if sw != nil {
+		sw.setDepositHint(txHash)
+	}
+}
+
+// Rhea returns the simulated RHEA world, or nil when not enabled.
+func (s *Server) Rhea() *RheaWorld {
+	if s.rhea == nil {
+		return nil
+	}
+	return &RheaWorld{w: s.rhea}
 }
 
 // PubKey returns the "ed25519:"-prefixed base58 public key quotes are
@@ -214,6 +280,9 @@ func (s *Server) Run(ctx context.Context) {
 	if s.cfg.RatesURL != "" {
 		go s.pollRates(ctx)
 	}
+	if s.rhea != nil {
+		go s.rhea.run(ctx.Done())
+	}
 }
 
 // Handler returns the HTTP handler serving the mock API.
@@ -225,6 +294,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v0/deposit/submit", s.handleSubmitDeposit)
 	mux.HandleFunc("POST /test/force", s.handleForce)
 	mux.HandleFunc("GET /test/swaps", s.handleTestSwaps)
+	if s.rhea != nil {
+		s.rheaRoutes(mux)
+	}
 	return mux
 }
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -108,6 +109,110 @@ type TDB struct {
 	// read-modify-write paths can run against the stub.
 	intentsMtx   sync.Mutex
 	intentsSwaps map[string]*db.IntentsSwap
+
+	// rheaOps and rheaAccounts are live in-memory implementations of the
+	// RHEA storage methods.
+	rheaMtx      sync.Mutex
+	rheaOps      map[string]*db.RheaOp
+	rheaAccounts map[string]*db.RheaAccount
+	rheaErr      error // returned by every RHEA method when set
+}
+
+// copyRheaOp deep-copies an operation through its JSON encoding, as the
+// real database's decode-on-read does, so no two callers share a leg.
+func copyRheaOp(op *db.RheaOp) *db.RheaOp {
+	b, err := json.Marshal(op)
+	if err != nil {
+		panic(err)
+	}
+	cp := new(db.RheaOp)
+	if err := json.Unmarshal(b, cp); err != nil {
+		panic(err)
+	}
+	return cp
+}
+
+func (tdb *TDB) StoreRheaOp(op *db.RheaOp) error {
+	tdb.rheaMtx.Lock()
+	defer tdb.rheaMtx.Unlock()
+	if tdb.rheaErr != nil {
+		return tdb.rheaErr
+	}
+	if tdb.rheaOps == nil {
+		tdb.rheaOps = make(map[string]*db.RheaOp)
+	}
+	tdb.rheaOps[op.ID] = copyRheaOp(op)
+	return nil
+}
+
+func (tdb *TDB) RheaOp(id string) (*db.RheaOp, error) {
+	tdb.rheaMtx.Lock()
+	defer tdb.rheaMtx.Unlock()
+	if tdb.rheaErr != nil {
+		return nil, tdb.rheaErr
+	}
+	if op, found := tdb.rheaOps[id]; found {
+		return copyRheaOp(op), nil
+	}
+	return nil, db.ErrRheaOpNotFound
+}
+
+func (tdb *TDB) RheaOps() ([]*db.RheaOp, error) {
+	tdb.rheaMtx.Lock()
+	defer tdb.rheaMtx.Unlock()
+	if tdb.rheaErr != nil {
+		return nil, tdb.rheaErr
+	}
+	ops := make([]*db.RheaOp, 0, len(tdb.rheaOps))
+	for _, op := range tdb.rheaOps {
+		ops = append(ops, copyRheaOp(op))
+	}
+	return ops, nil
+}
+
+func (tdb *TDB) ActiveRheaOps() ([]*db.RheaOp, error) {
+	ops, err := tdb.RheaOps()
+	if err != nil {
+		return nil, err
+	}
+	active := ops[:0]
+	for _, op := range ops {
+		if op.Active() {
+			active = append(active, op)
+		}
+	}
+	return active, nil
+}
+
+func tdbRheaAccountKey(am string, version uint32, identity string) string {
+	return fmt.Sprintf("%s/%d/%s", am, version, identity)
+}
+
+func (tdb *TDB) StoreRheaAccount(a *db.RheaAccount) error {
+	tdb.rheaMtx.Lock()
+	defer tdb.rheaMtx.Unlock()
+	if tdb.rheaErr != nil {
+		return tdb.rheaErr
+	}
+	if tdb.rheaAccounts == nil {
+		tdb.rheaAccounts = make(map[string]*db.RheaAccount)
+	}
+	cp := *a
+	tdb.rheaAccounts[tdbRheaAccountKey(a.AccountManager, a.DerivationVersion, a.Identity)] = &cp
+	return nil
+}
+
+func (tdb *TDB) RheaAccount(am string, version uint32, identity string) (*db.RheaAccount, error) {
+	tdb.rheaMtx.Lock()
+	defer tdb.rheaMtx.Unlock()
+	if tdb.rheaErr != nil {
+		return nil, tdb.rheaErr
+	}
+	if a, found := tdb.rheaAccounts[tdbRheaAccountKey(am, version, identity)]; found {
+		cp := *a
+		return &cp, nil
+	}
+	return nil, db.ErrRheaAccountNotFound
 }
 
 func (tdb *TDB) Connect(context.Context) (*sync.WaitGroup, error) {

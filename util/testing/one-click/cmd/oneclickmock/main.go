@@ -2,7 +2,8 @@
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
 // Command oneclickmock runs a standalone simnet mock of the NEAR Intents
-// 1Click swap API, backed by the local chain harnesses, as described in
+// 1Click swap API, backed by the local chain harnesses, and of the RHEA
+// lending deployment the wallet's lending engine uses, as described in
 // util/testing/one-click.
 package main
 
@@ -28,6 +29,8 @@ func main() {
 	rates := flag.String("rates", "http://127.0.0.3:5758", "caribou app server base URL for live USD rates ('' disables)")
 	processingDelay := flag.Duration("processing-delay", 3*time.Second, "pause per intermediate swap status")
 	pubkey := flag.Bool("pubkey", false, "print the quote-signing public key and exit")
+	rheaWorld := flag.Bool("rhea", true, "simulate the RHEA lending world (NEAR RPC and relayer API under /rhea/)")
+	rheaBlock := flag.Duration("rhea-block", time.Second, "simulated NEAR block interval of the RHEA world")
 	flag.Parse()
 
 	if *pubkey {
@@ -43,12 +46,16 @@ func main() {
 		}
 	}
 
-	srv, err := oneclickmock.New(&oneclickmock.Config{
+	cfg := &oneclickmock.Config{
 		DextestDir:      *dextest,
 		Chains:          slugs,
 		ProcessingDelay: *processingDelay,
 		RatesURL:        *rates,
-	})
+	}
+	if *rheaWorld {
+		cfg.Rhea = &oneclickmock.RheaConfig{BlockInterval: *rheaBlock}
+	}
+	srv, err := oneclickmock.New(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,6 +73,9 @@ func main() {
 	}()
 
 	log.Printf("1Click mock listening on http://%s, signing key %s", *addr, srv.PubKey())
+	if *rheaWorld {
+		log.Printf("RHEA world: NEAR RPC http://%[1]s/rhea/rpc, relayer http://%[1]s/rhea/relayer, controls http://%[1]s/test/rhea/", *addr)
+	}
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

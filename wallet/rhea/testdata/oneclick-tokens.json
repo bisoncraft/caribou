@@ -1,0 +1,51 @@
+[
+ {
+  "assetId": "nep141:wrap.near",
+  "decimals": 24,
+  "blockchain": "near",
+  "symbol": "wNEAR",
+  "price": 3.25,
+  "priceUpdatedAt": "2026-11-17T21:05:31.218Z",
+  "contractAddress": "wrap.near",
+  "coingeckoId": "wrapped-near"
+ },
+ {
+  "assetId": "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  "decimals": 6,
+  "blockchain": "near",
+  "symbol": "USDC",
+  "price": 0.9996,
+  "priceUpdatedAt": "2026-11-17T21:05:31.218Z",
+  "contractAddress": "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1",
+  "coingeckoId": "usd-coin"
+ },
+ {
+  "assetId": "nep141:zec.omft.near",
+  "decimals": 8,
+  "blockchain": "zec",
+  "symbol": "ZEC",
+  "price": 923.74,
+  "priceUpdatedAt": "2026-11-17T21:05:31.218Z",
+  "coingeckoId": "zcash"
+ },
+ {
+  "assetId": "nep141:usdt.tether-token.near",
+  "decimals": 6,
+  "blockchain": "near",
+  "symbol": "USDT",
+  "price": 0.999194,
+  "priceUpdatedAt": "2026-11-17T21:05:31.218Z",
+  "contractAddress": "usdt.tether-token.near",
+  "coingeckoId": "tether"
+ },
+ {
+  "assetId": "1cs_v1:near:nep141:zec.omft.near",
+  "decimals": 8,
+  "blockchain": "near",
+  "symbol": "ZEC",
+  "price": 923.74,
+  "priceUpdatedAt": "2026-11-17T21:05:31.218Z",
+  "contractAddress": "zec.omft.near",
+  "coingeckoId": "zcash"
+ }
+]

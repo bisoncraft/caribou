@@ -189,7 +189,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 
 	var sw *swapState
 	if !req.Dry {
-		originDrv := s.drivers[origin.chain.slug]
+		originDrv := s.driverFor(origin)
 		depositAddress, err := originDrv.NewDepositAddress()
 		if err != nil {
 			s.log.Printf("NewDepositAddress on %s failed: %v", origin.chain.slug, err)
@@ -205,7 +205,8 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 			origin:         origin,
 			dest:           dest,
 			originDrv:      originDrv,
-			destDrv:        s.drivers[dest.chain.slug],
+			destDrv:        s.driverFor(dest),
+			customMsg:      req.CustomRecipientMsg,
 			amountIn:       amountIn,
 			amountOut:      amountOut,
 			refundFee:      refundFee,

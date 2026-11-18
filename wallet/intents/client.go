@@ -192,14 +192,18 @@ func (c *Client) Catalog(ctx context.Context) (*Catalog, error) {
 }
 
 // Quote requests a quote. The client's application fees are attached when
-// the request carries none. The response signature is verified and the
+// the request carries none and does not set NoAppFee. The response
+// signature is verified and the
 // echoed request is cross-checked against the submitted one — a mismatch
 // in either means the response (and any deposit address in it) must not
 // be used. Committed (non-dry) quotes create a real deposit address and
 // are screened by the service's compliance providers; use dry quotes for
 // price previews.
 func (c *Client) Quote(ctx context.Context, req *QuoteRequest) (*QuoteResponse, error) {
-	if len(req.AppFees) == 0 && len(c.appFees) > 0 {
+	if req.NoAppFee && len(req.AppFees) > 0 {
+		return nil, errors.New("quote request sets both NoAppFee and AppFees")
+	}
+	if len(req.AppFees) == 0 && len(c.appFees) > 0 && !req.NoAppFee {
 		reqCopy := *req
 		reqCopy.AppFees = c.appFees
 		req = &reqCopy

@@ -63,6 +63,16 @@ func (c *tCoin) Confirmations(context.Context) (uint32, error) {
 
 type TCore struct {
 	clientCore           // This is here so we don't have to implement core methods we're not testing
+	rheaMarkets          *core.RheaMarketsView
+	rheaAccount          *core.RheaAccountView
+	rheaSupplyPreview    *core.RheaSupplyPreview
+	rheaWithdrawPreview  *core.RheaWithdrawPreview
+	rheaSweepPreview     *core.RheaSweepPreview
+	rheaOps              []*core.RheaOp
+	rheaErr              error
+	rheaPreviewCalls     int
+	rheaExecuteCalls     int
+	rheaExecutePass      string
 	fiatRates            map[uint32]float64
 	balanceErr           error
 	loginErr             error
@@ -296,6 +306,60 @@ func (c *TCore) UnapproveBridgeContract(assetID uint32, bridgeName string) (stri
 	c.unapproveBridgeCalls++
 	return "txid", c.unapproveBridgeErr
 }
+func (c *TCore) RheaMarkets(context.Context) (*core.RheaMarketsView, error) {
+	return c.rheaMarkets, c.rheaErr
+}
+
+func (c *TCore) RheaAccount(context.Context) (*core.RheaAccountView, error) {
+	return c.rheaAccount, c.rheaErr
+}
+
+func (c *TCore) RheaOps() ([]*core.RheaOp, error) {
+	return c.rheaOps, c.rheaErr
+}
+
+func (c *TCore) RheaSupplyPreview(context.Context, uint32, string, uint64) (*core.RheaSupplyPreview, error) {
+	c.rheaPreviewCalls++
+	if c.rheaSupplyPreview != nil {
+		return c.rheaSupplyPreview, c.rheaErr
+	}
+	return &core.RheaSupplyPreview{MinDelivered: "1"}, c.rheaErr
+}
+
+func (c *TCore) RheaSupplyExecute(pw []byte, _ uint32, _ string, _ uint64, minDelivered string, creating bool, maxCreationFee string) (*core.RheaOp, error) {
+	c.rheaExecuteCalls++
+	c.rheaExecutePass = string(pw)
+	return &core.RheaOp{ID: "op"}, c.rheaErr
+}
+
+func (c *TCore) RheaWithdrawPreview(context.Context, string, uint32, string) (*core.RheaWithdrawPreview, error) {
+	c.rheaPreviewCalls++
+	if c.rheaWithdrawPreview != nil {
+		return c.rheaWithdrawPreview, c.rheaErr
+	}
+	return &core.RheaWithdrawPreview{MinAtomsOut: 1}, c.rheaErr
+}
+
+func (c *TCore) RheaWithdrawExecute(pw []byte, _ string, _ uint32, _ string, _ uint64, _ string) (*core.RheaOp, error) {
+	c.rheaExecuteCalls++
+	c.rheaExecutePass = string(pw)
+	return &core.RheaOp{ID: "wd"}, c.rheaErr
+}
+
+func (c *TCore) RheaSweepPreview(context.Context, string, *uint32, string) (*core.RheaSweepPreview, error) {
+	c.rheaPreviewCalls++
+	if c.rheaSweepPreview != nil {
+		return c.rheaSweepPreview, c.rheaErr
+	}
+	return &core.RheaSweepPreview{}, c.rheaErr
+}
+
+func (c *TCore) RheaSweepExecute(pw []byte, _ string, _ *uint32, _ string, _ uint64, _ string) (*core.RheaOp, error) {
+	c.rheaExecuteCalls++
+	c.rheaExecutePass = string(pw)
+	return &core.RheaOp{ID: "sw"}, c.rheaErr
+}
+
 func (c *TCore) IntentsExecute(pw []byte, originAssetID, destAssetID uint32, atoms uint64, slippageBps int, exactOutput bool, minAtomsOut, maxAtomsIn uint64) (*core.IntentsSwap, error) {
 	c.intentsExecuteCalls++
 	return &core.IntentsSwap{}, c.intentsExecuteErr

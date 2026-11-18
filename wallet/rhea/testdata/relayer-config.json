@@ -1,0 +1,14 @@
+[
+ {
+  "key": "COLLECT_FEE_ACCOUNT_ID",
+  "value": "mca-relayer.rhealab.near"
+ },
+ {
+  "key": "GAS_FEE",
+  "value": "{\"near\": \"1000000000000000000000\", \"wrap.near\": \"1000000000000000000000\", \"zec.omft.near\": \"300\", \"eth.bridge.near\": \"300000000000\", \"lst.rhealab.near\": \"1000000000000000000000\", \"nbtc.bridge.near\": \"10\", \"token.rhealab.near\": \"150000000000000000\", \"xtoken.rhealab.near\": \"140000000000000000\", \"usdt.tether-token.near\": \"1000\", \"2260fac5e5542a773aa44fbcfedf7c193bc2c599.factory.bridge.near\": \"10\", \"17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1\": \"1000\"}"
+ },
+ {
+  "key": "MCA_VERSION",
+  "value": "0.1.6"
+ }
+]

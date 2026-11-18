@@ -4,6 +4,12 @@
 # slug must already be running (e.g. util/testing/btc/harness.sh and
 # util/testing/near/harness.sh for the default btc,near set).
 #
+# The mock also simulates the RHEA lending deployment (rhea.Simnet): its
+# NEAR RPC at /rhea/rpc and relayer API at /rhea/relayer, which a --simnet
+# wallet's lending engine uses. Market tokens (USDC, USDT) exist only
+# inside the mock; supplies arrive there as 1Click payouts, and
+# withdrawals leave through 1Click to the wallet's chains.
+#
 # Usage:
 #   ./harness.sh          # build and start the tmux session
 #   ./harness.sh stop     # stop the mock and kill the session
@@ -27,7 +33,16 @@
 #   ./force <outcome>                    # arm REFUND|FAIL|STALL for the NEXT swap
 #   ./force last <outcome>               # force the newest swap
 #   ./force <depositAddress> <outcome>   # force a specific swap
+#   ./rhea-state                         # RHEA world: blocks, accounts, faults
+#   ./rhea-faults ['{"failWithdraws":1}'] # read or merge fault injections
+#   ./rhea-warp <seconds>                # advance chain time (admission window)
+#   ./rhea-fund <token> <account> <amt>  # credit a plain balance ("near" for NEAR)
+#   ./rhea-nonce <mca> <nonce>           # set an MCA nonce (stale-nonce test)
 #   ./quit                               # shut down the mock and the session
+#
+# Fault members (see RheaFaults in rhea_world.go): lostResponses,
+# execDelay (nanoseconds), holdReceipts, receiptDelayBlocks, finalLag,
+# failWithdraws, rejectBurrowDeposits, rejectForwards.
 set -e
 
 NODES_ROOT=~/dextest/one-click
@@ -90,6 +105,9 @@ NEAR Intents 1Click Mock Harness
   overrides, or use on another network:
     --intentsapi=${API_URL}
     --intentssigningkey=${PUBKEY}
+
+  RHEA world (lending): NEAR RPC ${API_URL}/rhea/rpc,
+  relayer ${API_URL}/rhea/relayer, controls ${API_URL}/test/rhea/
 EOF
 
 cat > "${HARNESS_DIR}/lastswap" <<LASTEOF
@@ -166,6 +184,51 @@ echo
 FORCEEOF
 chmod +x "${HARNESS_DIR}/force"
 
+cat > "${HARNESS_DIR}/rhea-state" <<RHEAEOF
+#!/usr/bin/env bash
+set -e
+curl -sf "${API_URL}/test/rhea/state" | python3 -m json.tool
+RHEAEOF
+chmod +x "${HARNESS_DIR}/rhea-state"
+
+cat > "${HARNESS_DIR}/rhea-faults" <<RHEAEOF
+#!/usr/bin/env bash
+set -e
+if [ -z "\${1}" ]; then
+  curl -sf "${API_URL}/test/rhea/faults" | python3 -m json.tool
+else
+  curl -sf -X POST -H 'Content-Type: application/json' -d "\${1}" "${API_URL}/test/rhea/faults" | python3 -m json.tool
+fi
+RHEAEOF
+chmod +x "${HARNESS_DIR}/rhea-faults"
+
+cat > "${HARNESS_DIR}/rhea-warp" <<RHEAEOF
+#!/usr/bin/env bash
+set -e
+curl -sf -X POST -H 'Content-Type: application/json' -d "{\"seconds\": \${1:?seconds}}" "${API_URL}/test/rhea/warp"
+echo
+RHEAEOF
+chmod +x "${HARNESS_DIR}/rhea-warp"
+
+cat > "${HARNESS_DIR}/rhea-fund" <<RHEAEOF
+#!/usr/bin/env bash
+set -e
+curl -sf -X POST -H 'Content-Type: application/json' \\
+  -d "{\"token\": \"\${1:?token}\", \"account\": \"\${2:?account}\", \"amount\": \"\${3:?amount}\"}" \\
+  "${API_URL}/test/rhea/fund"
+echo
+RHEAEOF
+chmod +x "${HARNESS_DIR}/rhea-fund"
+
+cat > "${HARNESS_DIR}/rhea-nonce" <<RHEAEOF
+#!/usr/bin/env bash
+set -e
+curl -sf -X POST -H 'Content-Type: application/json' \\
+  -d "{\"mca\": \"\${1:?mca}\", \"nonce\": \${2:?nonce}}" "${API_URL}/test/rhea/nonce"
+echo
+RHEAEOF
+chmod +x "${HARNESS_DIR}/rhea-nonce"
+
 cat > "${HARNESS_DIR}/quit" <<EOF
 #!/usr/bin/env bash
 tmux send-keys -t ${SESSION}:0 C-c
@@ -210,6 +273,7 @@ cat <<EOF
   API endpoint: ${API_URL}
   Signing key:  ${PUBKEY}
   Chains:       ${CHAINS}
+  RHEA world:   ${API_URL}/rhea/rpc, ${API_URL}/rhea/relayer
 
 Attach with:  tmux attach-session -t ${SESSION}
 Stop with:    ${HARNESS_DIR}/quit   (or ./harness.sh stop)

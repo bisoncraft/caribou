@@ -37,6 +37,8 @@ type mockAsset struct {
 	sendScript       string // harness-ctl payout script, tokens only
 	walletBipID      uint32 // wallet asset ID, for live-rate lookups
 	fallbackMicroUSD int64
+	// rhea marks an asset held in the simulated RHEA world's ledger.
+	rhea bool
 }
 
 // nativeAsset builds the mockAsset for a chain's native asset.

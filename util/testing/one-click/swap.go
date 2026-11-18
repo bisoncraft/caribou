@@ -40,6 +40,7 @@ type swapState struct {
 	refundFee      *big.Int // origin base units, withheld on refund
 	recipient      string
 	refundTo       string
+	customMsg      string // customRecipientMsg, for payouts into the RHEA world
 	deadline       time.Time
 	envelope       []byte // signed quote response, echoed in status
 	createdAt      time.Time
@@ -152,9 +153,13 @@ func (sw *swapState) run(ctx context.Context) {
 	if !sleep(ctx, sw.server.cfg.ProcessingDelay) {
 		return
 	}
-	sw.mtx.Lock()
-	sw.nearTxHashes = append(sw.nearTxHashes, "simnet-near-"+sw.correlationID)
-	sw.mtx.Unlock()
+	// A swap touching the RHEA world reports only real NEAR transactions,
+	// which the lending engine reads back from the world's RPC.
+	if !sw.origin.rhea && !sw.dest.rhea {
+		sw.mtx.Lock()
+		sw.nearTxHashes = append(sw.nearTxHashes, "simnet-near-"+sw.correlationID)
+		sw.mtx.Unlock()
+	}
 	sw.setStatus(intents.StatusProcessing)
 	if !sleep(ctx, sw.server.cfg.ProcessingDelay) {
 		return
@@ -251,7 +256,18 @@ func (sw *swapState) refund(reason string) {
 		sw.setStatus(intents.StatusFailed)
 		return
 	}
-	txid, err := send(sw.originDrv, sw.origin, sw.refundTo, refundAmt)
+	var txid string
+	var err error
+	if sw.origin.rhea {
+		// A refund on NEAR is a verifier payout to the refund address,
+		// reported among the swap's NEAR transactions.
+		txid = sw.server.rhea.payout(sw.rheaToken(sw.origin), sw.refundTo, refundAmt, "", sw.depositAddress)
+		sw.mtx.Lock()
+		sw.nearTxHashes = append(sw.nearTxHashes, txid)
+		sw.mtx.Unlock()
+	} else {
+		txid, err = send(sw.originDrv, sw.origin, sw.refundTo, refundAmt)
+	}
 	if err != nil {
 		sw.logf("refund send error: %v", err)
 		sw.mtx.Lock()
@@ -274,6 +290,18 @@ func (sw *swapState) refund(reason string) {
 // payout delivers amountOut to the recipient on the destination chain and
 // finalizes as SUCCESS.
 func (sw *swapState) payout() {
+	if sw.dest.rhea {
+		// Delivered into the RHEA world, with the customRecipientMsg for
+		// an account manager or MCA recipient.
+		txid := sw.server.rhea.payout(sw.rheaToken(sw.dest), sw.recipient, sw.amountOut, sw.customMsg, sw.depositAddress)
+		sw.mtx.Lock()
+		sw.nearTxHashes = append(sw.nearTxHashes, txid)
+		sw.destTxs = append(sw.destTxs, txid)
+		sw.realizedOut = sw.amountOut.String()
+		sw.mtx.Unlock()
+		sw.setStatus(intents.StatusSuccess)
+		return
+	}
 	txid, err := send(sw.destDrv, sw.dest, sw.recipient, sw.amountOut)
 	if err != nil {
 		sw.logf("payout send error: %v", err)
@@ -348,4 +376,13 @@ func (sw *swapState) debugSummary() map[string]any {
 		"createdAt":      sw.createdAt.UTC().Format(timestampFormat),
 		"updatedAt":      sw.updatedAt.UTC().Format(timestampFormat),
 	}
+}
+
+// rheaToken is the RHEA-world token an asset stands for: its contract, or
+// wrapped NEAR for native NEAR.
+func (sw *swapState) rheaToken(a *mockAsset) string {
+	if a.contract != "" {
+		return a.contract
+	}
+	return sw.server.rhea.dep.WrappedNEAR
 }

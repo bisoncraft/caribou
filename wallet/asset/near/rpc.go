@@ -298,6 +298,36 @@ func (c *rpcClient) noEndpointServes(ctx context.Context, method string, params 
 	return true
 }
 
+// callEach sends the request to every configured endpoint, ignoring
+// cooldowns, and returns each endpoint's result in configuration order. Any
+// endpoint that fails to answer, or answers with an error, fails the whole
+// call: callers use it to corroborate a negative, where one endpoint's
+// silence is evidence for nothing.
+func (c *rpcClient) callEach(ctx context.Context, method string, params interface{}) ([]json.RawMessage, error) {
+	body, err := json.Marshal(jsonRPCRequest{
+		JSONRPC: "2.0",
+		ID:      rpcRequestID,
+		Method:  method,
+		Params:  params,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling request: %w", err)
+	}
+	c.mtx.Lock()
+	eps := make([]*rpcEndpoint, len(c.endpoints))
+	copy(eps, c.endpoints)
+	c.mtx.Unlock()
+	results := make([]json.RawMessage, 0, len(eps))
+	for _, ep := range eps {
+		res, _, err := c.doRequest(ctx, ep.url, body)
+		if err != nil {
+			return nil, fmt.Errorf("endpoint %s: %w", ep.url, err)
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
 // blockUnservedEverywhere reports whether every configured endpoint fails to
 // serve a block query at height, corroborating a single endpoint's
 // UNKNOWN_BLOCK on that same query before it is trusted as proof the height

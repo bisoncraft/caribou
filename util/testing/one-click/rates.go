@@ -34,6 +34,11 @@ var ratesHTTPClient = &http.Client{
 func (s *Server) pollRates(ctx context.Context) {
 	bipToIntentsID := make(map[uint32]string, len(s.assets))
 	for id, a := range s.assets {
+		// RHEA market tokens keep their fixed prices; their zero
+		// walletBipID would otherwise take BTC's rates.
+		if a.rhea && a.contract != "" {
+			continue
+		}
 		bipToIntentsID[a.walletBipID] = id
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/bisoncraft/caribou/wallet/appserver"
 	"github.com/bisoncraft/caribou/wallet/core"
 	"github.com/bisoncraft/caribou/wallet/intents"
+	"github.com/bisoncraft/caribou/wallet/rhea"
 	"github.com/decred/dcrd/dcrutil/v4"
 	"github.com/jessevdk/go-flags"
 )
@@ -131,7 +132,7 @@ func (cfg *Config) Web(c *core.Core, log util.Logger, utc bool) *appserver.Confi
 // instead of a CoreConfig method because Language is an app-level setting used
 // by both core and the web server.
 func (cfg *Config) Core(log util.Logger) *core.Config {
-	return &core.Config{
+	c := &core.Config{
 		DBPath:            cfg.DBPath,
 		Net:               cfg.Net,
 		Logger:            log,
@@ -142,6 +143,20 @@ func (cfg *Config) Core(log util.Logger) *core.Config {
 		IntentsBaseURL:    cfg.IntentsAPI,
 		IntentsSigningKey: cfg.IntentsSigningKey,
 	}
+	if cfg.Net == util.Simnet && cfg.IntentsAPI != "" {
+		c.RheaTest = simnetRhea(cfg.IntentsAPI)
+	}
+	return c
+}
+
+// simnetRhea points the lending engine at the RHEA world the simnet mock
+// (util/testing/one-click) serves beside its 1Click API: the simulated
+// deployment, its NEAR RPC, and its relayer API.
+func simnetRhea(mockURL string) *core.RheaTestConfig {
+	base := strings.TrimSuffix(mockURL, "/")
+	dep := *rhea.Simnet
+	dep.RelayerAPI = base + "/rhea/relayer"
+	return &core.RheaTestConfig{Deployment: &dep, RPCEndpoints: []string{base + "/rhea/rpc"}}
 }
 
 var DefaultConfig = Config{
@@ -254,7 +269,8 @@ func ResolveConfig(appData string, cfg *Config) error {
 
 	// On simnet, default the 1Click API to the local mock harness
 	// (util/testing/one-click), which signs quotes with a deterministic
-	// dev key.
+	// dev key. The lending engine uses the same mock's RHEA world (see
+	// Core).
 	if cfg.Net == util.Simnet {
 		if cfg.IntentsAPI == "" {
 			cfg.IntentsAPI = "http://127.0.0.1:17781"
