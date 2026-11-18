@@ -357,20 +357,155 @@ var BTCParams = map[string]*netparams.ChainParams{
 	},
 }
 
+// Shipped certificate pins for the BTC mainnet servers whose certificates are
+// self-signed. A connection must present the key of the pinned certificate
+// until that certificate expires; after that the server's key is learned on
+// first use like any other self-signed mainnet server (electrum/certpin.go).
+// Each was fetched with a TLS handshake on 2026-11-17 and pinned only with at
+// least two years of validity left. A server that replaces its key before the
+// pinned certificate expires is refused until the pin is refreshed; the
+// livenet TestShippedCertPins (go test -tags livenet ./wallet/utxowallet/assets/)
+// reports a changed certificate or one expiring within a year. Re-fetch with:
+//
+//	openssl s_client -connect host:port -servername host </dev/null | openssl x509
+
+// btcEmzyCertPEM is the TLS leaf certificate of electrum.emzy.de:50002,
+// self-signed and valid until 2031-10-07.
+const btcEmzyCertPEM = `-----BEGIN CERTIFICATE-----
+MIIFcjCCA1qgAwIBAgIUCeKUxFVNM7rMVEOsubzwr/DoqZ4wDQYJKoZIhvcNAQEL
+BQAwKDELMAkGA1UEBhMCREUxGTAXBgNVBAMMEGVsZWN0cnVtLmVtenkuZGUwHhcN
+MjYxMDA4MTkzMzU0WhcNMzExMDA3MTkzMzU0WjAoMQswCQYDVQQGEwJERTEZMBcG
+A1UEAwwQZWxlY3RydW0uZW16eS5kZTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCC
+AgoCggIBAOivRoQrdPR0TF4gmPGGk2Y8FKSftqLVEb6XNMCDhg/rr6Y+o5OEX5sf
+5N7BAviahmrQRQcvrOYv9vxOOzskzRDPzWJZaDLGUaxxEl2MrnGb+8SM+8vj0t60
+nsITjG4R/+TAifGYPm51HFPnzIvOWdNGtkui7T/h4BwhQdrjjJXlXePa0ewUcWnj
+q/IjLzsTyAf8p8XEer3Y3D/ajyEH/CciF73QqS56TMmu49f6cbBC4jLk6FL01Lfh
+vpejLEtFoUwR3AyP0Je70yFoBF50o4pt2GEPmy6HRJ7xnw5bHtaxWWTm47guP/nb
+7VFxAHGPpUaKnkec3EmAUdMw7IML21cOSsICfZdwyFHawbXhPMUtgFZe/TeWJ+Dj
+1Pp3nqWDE32vUFQ7uBdIn17eVhL9xXXno5ubQQ5dGkjU7we3N0DPPXIAjYRbTW3g
+CCRUJyJBm6RzFOmP8GItk9UNMix9qSzHtj04rRZ89pat/xCU/EpRjMtAedtzik9n
+CLjaM+ztjdPkulw32g/pA9qAQH1nRnP0bu8G3rwWxtFCnBDhGHS/4ufIFadvivKj
+xBv30cSmqfJ/uRf9Whz9daQhwTBGoif7N/puBJtgY7d4Km1/Fx9ieQUXuLmieXvv
+ZanJzzBmKIAi3bwlJTJjBDAbb/DcDhXGIZidBq/iGlL5Bd5nXCi7AgMBAAGjgZMw
+gZAwHQYDVR0OBBYEFHLcuR7075ym2bkhxSlo8N0OlmklMB8GA1UdIwQYMBaAFHLc
+uR7075ym2bkhxSlo8N0OlmklMBsGA1UdEQQUMBKCEGVsZWN0cnVtLmVtenkuZGUw
+DAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYIKwYBBQUH
+AwEwDQYJKoZIhvcNAQELBQADggIBADhEjN2jetzj1IaHpQTf+z0g7/7iOTNpTRDw
+oJJT0x8+J3QQ4ucH5oWp5KufbvLSTeXqU8vrfjLoYTmKuBO1Gyc/5V58NNpgRsHm
+JXeNmUonTx/Q/BRoU7cOK9SKVwPMbrNQeq+D7aqLOfljh1L2R/B5jrtO7zzCV1GV
+Y42klUXbfewUm6Cmb5v/arpgF0YfPOpjnqGAzU+pmAKG2d2nPY39vwVgZN5jR/NE
+Ht+Yi/57IcUYCrkovz2c6dQ8ugnO6k+1S9IR5darescqnpWXUH0s1M0ef0b5Xcng
+rdm+NZrnPzLiBb+bRaGGRIbKm6PX13UnNVbQw28owyELJ2t6u/XcjFfpbA5odteF
+g76/w0a60YYZrgVcHSajMa+BRKHDKNl3aNzmkfO9k32FvbqMBjEmzzfN4Elf3Ap8
+OXJaACvRTkAumOJBlfMp7qJXKWaM31qWMLVuaAoNjUEtF16RCFdD9fEQz5SgUwDr
+TieB1uDh4kT4pM+H/ol//SsPus9HObMqKIIcgbgrZyAAUBlcA7XqX86SnBXUkCJZ
+aAb4ziqs2A+2BLDg7aWMYCqUK4G9zvZ2hkgvHo4QN6HV3B/Jf5Sxp73HKKL3wuB9
+SSlJE/7Mm/ppnV04ZuPanrodzgHOX4lwwsdONbmfBknvWq5t4eNZLsHit3yR44Kl
+V37IuTZo
+-----END CERTIFICATE-----`
+
+// btcBitarooCertPEM is the TLS leaf certificate of electrum.bitaroo.net:50002,
+// self-signed and valid until 2035-12-04.
+const btcBitarooCertPEM = `-----BEGIN CERTIFICATE-----
+MIIDazCCAlOgAwIBAgIUE7zxJ2kri1w1Frn3Iq2U/PN6c+IwDQYJKoZIhvcNAQEL
+BQAwRTELMAkGA1UEBhMCQVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoM
+GEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDAeFw0yNTEyMDYxNDE4NDVaFw0zNTEy
+MDQxNDE4NDVaMEUxCzAJBgNVBAYTAkFVMRMwEQYDVQQIDApTb21lLVN0YXRlMSEw
+HwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRzIFB0eSBMdGQwggEiMA0GCSqGSIb3DQEB
+AQUAA4IBDwAwggEKAoIBAQDi8qS/GfccDdB+lDm0NkrJ9JV4jq3NzxYMXvwVY4ug
+H6jgu/TSYhhy59mWOl/PYldKZisMkbXURe1d7dbo/JA+8dQxp/smRmPDSJp618ww
+1U5pck5MimpMDS4h7CC+eskwX8XZK5rs/FV4+QLXI3TxBD+ON9V4JfvRdPgeILw2
+G7fxoR6sxePtwlP4cxt98B6b1ajmp3zE5GQB65qzaBGFQwk2o9WmrpoBn6EzWhGg
+jbdoRoukzsrbGIE7F1VwXS7EUtRuyg3hFRDVru4SU6iaRfTobL9P5posnI9RZSdm
+q/u1FGWfhxMfEGtHJ3OeQQ6x1C9g6+BaFEE48XhmgD+5AgMBAAGjUzBRMB0GA1Ud
+DgQWBBTNC6HutEzs8LvsLYFwwD720JVxMzAfBgNVHSMEGDAWgBTNC6HutEzs8Lvs
+LYFwwD720JVxMzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQDB
+XX5LRzcCCtqIFjD/PZ3dEYnNo8RsFoKdJGOI0YRmko1oHoaETV94GMGjZAmMYClP
+8Y4x+irMb3eVAALoGGFrF7gCHnfGK9/gGz8nPL55jQpcsdtg7Ki9+aFjqjsSJKQf
++IkqP65P3of9fl0Esmic1XG/DigLiKtDZYoggX+qOj/RV4kBNuqZCfQlHjWsME6C
+b/waPadr8QTwkPoAP4Aif5w/kTUXSmKkqLq+lVrbG4CBAKsBdsCzkZdYtoVShNqs
+/VeQm3cWomGWBR6OQ0Gh/qv2dULQ4BnXiZxLk+I82a9BI/lgYOQKkj9PyFLNP/NO
+pYi+voNN0TLJTjZ6MqZR
+-----END CERTIFICATE-----`
+
+// btcLukeCertPEM is the TLS leaf certificate of bitcoin.lu.ke:50002,
+// self-signed and valid until 2031-03-29.
+const btcLukeCertPEM = `-----BEGIN CERTIFICATE-----
+MIIDCTCCAfGgAwIBAgIUFbmdyrEx2XfcL4sYEa8e7srYuI0wDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UECgwJRWxlY3RydW1YMB4XDTIxMDMzMTE2MTMzNloXDTMxMDMy
+OTE2MTMzNlowFDESMBAGA1UECgwJRWxlY3RydW1YMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAtAsmZqxtPc9zd5ITHPyexu6P3ZXF+xLEyvlYUV9iirBg
+SRW2adB/CH57orjnzrlL/kdIKYjkVZ0aVbIzVDQ+uGFUUYsOozEOYINO6O2ZekPa
+j3Z+mXdlrH/DW+vQVzVp20goVcXDUcGBTaUDuqrmzrgXwDgWsoa4vtesS3gXj201
+xI+aUkzWcYgNg+060+PpnVYTTmRGWm5AFNh2Q3BqRlAfEHKdmumlhf+Gmq6OpJyB
+JrZOX0v7HEU3QYYwwgWSvdhUNqCUcZ7+JDeLg5jDIVrQvgfqo9bV5ATLpvWiTOoW
+n8zE9XhjISLwsywk7ECAx2ytGJBpwEEQyV4nIeyGPwIDAQABo1MwUTAdBgNVHQ4E
+FgQU61kXeO/4CudZUUYpY1HtsFddxDQwHwYDVR0jBBgwFoAU61kXeO/4CudZUUYp
+Y1HtsFddxDQwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAlOtZ
+jP6M8sTe0CzxvtJl1+ovE6O2CQ94TgABbOfw53MLHCwi6u4ew1SgTcoRfccQcdkC
+OKmuN4MmyvrbodSq1rw+z2qaUvU5ns4r2XWjA5IkdMZLD4x1IRI8PXgckVAi1EYA
+HWrY5639dvixs5n87uwP9UNDQPn04b041sdo6SJQmwho9YEJzCJueDg+oWXr0/+A
+SCnOmafY3in8laYutDFIPp37OtHzRkJbBnXNTb4YeE0zmwdP/FKWJFzx/jZweBw9
+0C88SZmLDHSs0cFTeyGzY1pS7fAfRMdfm+VayOFt73OuOJXtWcHUuBmrBd5vBq5W
+0xaV2OXs82CRYMjghA==
+-----END CERTIFICATE-----`
+
+// btcQtornadoCertPEM is the TLS leaf certificate of fortress.qtornado.com:443,
+// self-signed and valid until 2029-04-06.
+const btcQtornadoCertPEM = `-----BEGIN CERTIFICATE-----
+MIIFBjCCAu4CCQC7D90yRDNezjANBgkqhkiG9w0BAQsFADBFMQswCQYDVQQGEwJB
+VTETMBEGA1UECAwKU29tZS1TdGF0ZTEhMB8GA1UECgwYSW50ZXJuZXQgV2lkZ2l0
+cyBQdHkgTHRkMB4XDTE5MDQwOTE0NDI1MVoXDTI5MDQwNjE0NDI1MVowRTELMAkG
+A1UEBhMCQVUxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoMGEludGVybmV0
+IFdpZGdpdHMgUHR5IEx0ZDCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIB
+AMu8SPoVVN61EgMjDF/DiC3QrOZuQM9a8xS//DE0pwgVJ12PmI5jfLxYPJLXP3m8
+Ep48Qn4414zz3H9Kkktl2lmdzO5wJc2C6WQk7hgVhNmW0N9EM14jM4d1HLpuBCVH
+hjkxA7YrHQq7944w7Pz/elIEfDDANXyaiKcQCp2xI+SPRV/beHhVYWJemospCVBa
+Vd2lGYg7Kh/L+TIlwlhwHBBsdZ382P6LOcWGJv8NPlSYsl+hzdAFYgNsxdcJ1mRU
+asAlqX32mQAD0HWGifmxpc0dj0J3nM8NNRHycDIG/EHzMtxm2RYGu4E+TXGRsxAM
+7S/GOxM4bY3C5LL4ZuUwe4mW7zZQk5sr+hf45vdLGWQMGLIPvQ85eXIiUyooEJzG
+z5Q2jokVCl5HcNdeENnpjlysbO+HwZdoP1zTvtybey0g6xxDd/MoKx0TsT2wkyZl
+GsENvSlAQ1C5Z7FoM2/TYrljHWjyU1z1EEhGHLsdY5FRA9ZebwDXbNG04DN34qW9
+TIbxW9hmCYlSZMLt+Nn4hgAxqU884zKobMXr6YfM4e9jHWschwi5b5OTrMExKBjX
+aOmRUQaZlgyRfczJ1wjxDL5Nj0vEUZRAjzTkcUg7Lu/bl1ZtPlZoS7IXCzhBG/va
+oS4ndOt2C2a8BKmSbIW5vRnHPRXSO0lD/OfkUfV58i/XAgMBAAEwDQYJKoZIhvcN
+AQELBQADggIBAIqnBIUlurrDR5nqKm1DfKx5LicyGATsJGsVBQvvHoQIGb1ZASqm
+9vdiyrPWjFTXPVu/OY1/+m7PD/VDYc4O4ukRu3woRkSj0Ol39mamr4TpQj0RXzC1
+araTFdEMLK36w7fxJuBg4Hdgrx5n5bM1UOBeC213Gwv+AeXJ14rt+2qNDyeySJFM
+yH0RcnvutLApsJxS49pJbYxs0ojKNat8TMwVdqE+ab4bJJOn71Ykkn8sGIiI8a3W
+9bagA8naGPBX7mXN+qy11jY79sBU5SZldnP/LafqJC6UkwgydowrL+opfL5szP6Z
+QaPrmkHb1Pqtj+vq5R6PvahQZn3oUOGJQRbN5BSFdfvzMJ9c7Oh18Cj++GodEgoE
+S0BQmjbM5T0L8XOb6XTBHVkjL2BazZemIVvSjYitmjU/QanQKiQ/+42upPnBwzt2
+FNbKH4H0FJBsXgxId1Rc6qaX3ciXvlTAY6csVZfZr7gDr1oy3UxMKjHJj8gxXvC6
+wVLXUQ4lawuyyocwygE03Gay0ZGw1eZP2eqQp19d93I8VFreBy5JHmYKypwVw13K
+8YoTb6ll1kHGuMCTmXuk88fd3hi4g+kk/vXOvVoaQe16WMiDANLoWddp8fbGQ6MG
+U9L96HJGerT2SOjDTpXO00S2+aVq4X3dbYLLjstA3eJXii1QXGwHPJKj
+-----END CERTIFICATE-----`
+
+// DER forms of the shipped BTC pins, decoded at init; a malformed constant
+// panics at startup.
+var (
+	btcEmzyCert     = netparams.MustParseCertPEM(btcEmzyCertPEM)
+	btcBitarooCert  = netparams.MustParseCertPEM(btcBitarooCertPEM)
+	btcLukeCert     = netparams.MustParseCertPEM(btcLukeCertPEM)
+	btcQtornadoCert = netparams.MustParseCertPEM(btcQtornadoCertPEM)
+)
+
 // btcMainnetElectrumServers are the built-in electrumx servers for BTC
 // mainnet, in preference order; the network layer elects one and rotates
 // past failures (electrum/serverpool.go). Operators are deliberately
 // diverse. Most public electrum servers present self-signed certificates
-// (the electrum ecosystem's norm), hence SkipVerify; Blockstream's uses a
-// publicly CA-issued certificate verified against the system roots — a
-// pinned leaf would break on every ~90-day renewal. Liveness and genesis
-// verified 2026-07-09; blockstream was unreachable that day and is kept as
-// a trailing candidate.
+// (the electrum ecosystem's norm); those are pinned to their shipped
+// certificates above. Blockstream's uses a publicly CA-issued certificate
+// verified against the system roots, since CA renewals can change the key.
+// Liveness and genesis verified 2026-07-09 and again with the certificate
+// fetch on 2026-11-17; blockstream was unreachable on the first date and is
+// kept as a trailing candidate.
 var btcMainnetElectrumServers = []*netparams.ServerAddr{
-	{Proto: "ssl", Addr: "electrum.emzy.de:50002", SkipVerify: true},
-	{Proto: "ssl", Addr: "electrum.bitaroo.net:50002", SkipVerify: true},
-	{Proto: "ssl", Addr: "bitcoin.lu.ke:50002", SkipVerify: true},
-	{Proto: "ssl", Addr: "fortress.qtornado.com:443", SkipVerify: true},
+	{Proto: "ssl", Addr: "electrum.emzy.de:50002", Cert: btcEmzyCert},
+	{Proto: "ssl", Addr: "electrum.bitaroo.net:50002", Cert: btcBitarooCert},
+	{Proto: "ssl", Addr: "bitcoin.lu.ke:50002", Cert: btcLukeCert},
+	{Proto: "ssl", Addr: "fortress.qtornado.com:443", Cert: btcQtornadoCert},
 	{Proto: "ssl", Addr: "electrum.blockstream.info:700"},
 }
 
