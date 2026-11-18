@@ -83,6 +83,10 @@ export const traitWithdrawer = 1 << 6
 // WalletState.traits.
 export const traitDestinationTagger = 1 << 22
 
+// traitMasternodeOwner marks wallets that own shares of masternodes. Mirrors the
+// asset.WalletTrait bit in Go.
+export const traitMasternodeOwner = 1 << 23
+
 export interface WalletState {
   symbol: string
   assetID: number
