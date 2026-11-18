@@ -99,6 +99,14 @@ func TestCheckTransactionSanityEmptyInputsOutputs(t *testing.T) {
 		{"asset unlock, no inputs", 9, true, false, ok},
 		{"asset unlock, no outputs", 9, false, true, blockchain.ErrNoTxOutputs},
 		{"provider register, no inputs", 1, true, false, blockchain.ErrNoTxInputs},
+		// Shared masternode transactions (Dash Core v24) take the default
+		// rule: they spend and pay, so they need an input and an output.
+		{"provider dissolve, no inputs", 10, true, false, blockchain.ErrNoTxInputs},
+		{"provider dissolve, no outputs", 10, false, true, blockchain.ErrNoTxOutputs},
+		{"provider share update, no inputs", 11, true, false, blockchain.ErrNoTxInputs},
+		{"provider share update, no outputs", 11, false, true, blockchain.ErrNoTxOutputs},
+		{"provider shared registrar update, no inputs", 12, true, false, blockchain.ErrNoTxInputs},
+		{"provider shared registrar update, no outputs", 12, false, true, blockchain.ErrNoTxOutputs},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,6 +159,50 @@ func TestCheckTransactionSanityDashRegtestBlock(t *testing.T) {
 	params := &netparams.ChainParams{MaxSatoshi: 21_000_000 * 1e8}
 	for i, tx := range blk.Transactions {
 		require.NoError(t, checkTransactionSanity(tx, params), "tx %d (type %d)", i, tx.Type)
+	}
+}
+
+// TestCheckTransactionSanityDashSharedMasternodeTxs runs the shared masternode
+// transactions Dash Core v24.0.0 mined on regtest through the sanity check.
+// Types 10 to 12 have no special case, so they must pass the default rule. The
+// dissolution is the one that matters: it spends the shared collateral, an
+// OP_TRUE output, so its only input has an empty signature script.
+func TestCheckTransactionSanityDashSharedMasternodeTxs(t *testing.T) {
+	t.Parallel()
+
+	params := &netparams.ChainParams{MaxSatoshi: 21_000_000 * 1e8}
+	tests := []struct {
+		file         string
+		txType       uint16
+		emptyScripts bool // every input has an empty signature script
+	}{
+		{"dash_v24_prodis_tx.hex", 10, true},
+		{"dash_v24_proupshare_tx.hex", 11, false},
+		{"dash_v24_proupsharedreg_tx.hex", 12, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.file, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := os.ReadFile("testdata/" + tc.file)
+			require.NoError(t, err)
+			b, err := hex.DecodeString(string(bytes.TrimSpace(raw)))
+			require.NoError(t, err)
+
+			tx := &bisonwire.Tx{Chain: "dash"}
+			require.NoError(t, tx.Deserialize(bytes.NewReader(b)))
+			require.EqualValues(t, bisonwire.DashSpecialTxVersion, tx.Version)
+			require.Equal(t, tc.txType, tx.Type)
+			require.NotEmpty(t, tx.ExtraPayload)
+			require.NotEmpty(t, tx.TxIn)
+			require.NotEmpty(t, tx.TxOut)
+			for i, in := range tx.TxIn {
+				require.Equal(t, tc.emptyScripts, len(in.SignatureScript) == 0,
+					"input %d signature script of %d bytes", i, len(in.SignatureScript))
+			}
+
+			require.NoError(t, checkTransactionSanity(tx, params))
+		})
 	}
 }
 

@@ -1212,23 +1212,9 @@ func (c *ElectrumClient) verifyInclusion(txid string, height int32) error {
 	if err != nil {
 		return err
 	}
-	cur := *node
-	pos := proof.Pos
-	for _, sibHex := range proof.Merkle {
-		sib, err := chainhash.NewHashFromStr(sibHex)
-		if err != nil {
-			return fmt.Errorf("electrum: bad merkle sibling: %w", err)
-		}
-		var cat [64]byte
-		if pos&1 == 1 {
-			copy(cat[:32], sib[:])
-			copy(cat[32:], cur[:])
-		} else {
-			copy(cat[:32], cur[:])
-			copy(cat[32:], sib[:])
-		}
-		cur = chainhash.DoubleHashH(cat[:])
-		pos >>= 1
+	cur, err := electrum.MerkleRoot(*node, proof)
+	if err != nil {
+		return err
 	}
 	if cur != hdr.MerkleRoot {
 		return fmt.Errorf("electrum: merkle proof for %s does not fold to the "+

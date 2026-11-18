@@ -1,0 +1,56 @@
+{
+ "type": "Regular",
+ "proTxHash": "8e7019ff0db6eb8e4e1333834f95f3b155d232d6234c95bb047a545cb38831d6",
+ "collateralHash": "8e7019ff0db6eb8e4e1333834f95f3b155d232d6234c95bb047a545cb38831d6",
+ "collateralIndex": 2,
+ "operatorReward": 0,
+ "state": {
+  "version": 3,
+  "addresses": {
+   "core_p2p": [
+    "127.0.0.1:19999"
+   ]
+  },
+  "registeredHeight": 798,
+  "lastPaidHeight": 910,
+  "consecutivePayments": 0,
+  "PoSePenalty": 0,
+  "PoSeRevivedHeight": -1,
+  "PoSeBanHeight": -1,
+  "revocationReason": 0,
+  "votingAddress": "yQnqsAF4zdgdKFvFbvNAXB3TKTV8wGqRVJ",
+  "shares": [
+   {
+    "amount": 50000000000,
+    "refundAddress": "ySkrz68ugbp6ny9JmMToJE9E2AeqnV4xnd",
+    "refundScript": "76a914469f4d2b42c56e0a4e19fd81fa3d4c82a597904588ac",
+    "rewardAddress": "ySkrz68ugbp6ny9JmMToJE9E2AeqnV4xnd",
+    "rewardScript": "76a914469f4d2b42c56e0a4e19fd81fa3d4c82a597904588ac",
+    "ownerAddress": "yiBH7BTY72jHCUYTupKGxymbnXCvZeYdbY"
+   },
+   {
+    "amount": 50000000000,
+    "refundAddress": "yTimJeENUr1XFg2EtPpyTV5vgyuvg5oFs7",
+    "refundScript": "76a9145131da915d6ac2cddd6684b663552673b8f6770e88ac",
+    "rewardAddress": "yTimJeENUr1XFg2EtPpyTV5vgyuvg5oFs7",
+    "rewardScript": "76a9145131da915d6ac2cddd6684b663552673b8f6770e88ac",
+    "ownerAddress": "yP1aEFNBAxGBUnr6MXYbTLw7i4Absfcxmv"
+   }
+  ],
+  "earlyPeriodBlocks": 10,
+  "earlyPenalty": 500000000,
+  "pubKeyOperator": "83a1f70702ebc322b7f4943b85fcd6f5e94bbbb3fdd047e86c62436360b98f6e6efa07f2bd736f4659dd9186bac15b3e"
+ },
+ "confirmations": 113,
+ "metaInfo": {
+  "lastDSQ": 0,
+  "mixingTxCount": 0,
+  "outboundAttemptCount": 0,
+  "lastOutboundAttempt": 0,
+  "lastOutboundAttemptElapsed": 1794916221,
+  "lastOutboundSuccess": 0,
+  "lastOutboundSuccessElapsed": 1794916221,
+  "is_platform_banned": false,
+  "platform_ban_height_updated": 0
+ }
+}
