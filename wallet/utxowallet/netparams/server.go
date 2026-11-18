@@ -20,14 +20,19 @@ type ServerAddr struct {
 	// Onion is true if Addr is a Tor hidden service.
 	Onion bool
 	// Cert, when set, is the DER-encoded leaf certificate this ssl server is
-	// pinned to: the certificate the server presents must byte-match it. Use it
-	// for servers with self-signed certificates that cannot be validated against
-	// a public CA. Mutually exclusive with SkipVerify.
+	// pinned to: while the certificate is unexpired, the server must present
+	// a certificate with the same public key. Past its expiry, the electrum
+	// network layer moves a mainnet server to a key learned on first use and
+	// keeps enforcing the shipped key elsewhere. Use it for servers with
+	// self-signed certificates that cannot be validated against a public CA.
+	// Mutually exclusive with SkipVerify.
 	Cert []byte
-	// SkipVerify disables TLS certificate verification entirely. Use it ONLY for
-	// dev/testnet/simnet servers with throwaway self-signed certificates. When
-	// neither Cert nor SkipVerify is set, an ssl server's certificate is
-	// verified against the system CA roots.
+	// SkipVerify disables CA verification for a server with a self-signed
+	// certificate that is not pinned. On mainnet the electrum network layer
+	// pins such a server's key on first use; on testnets and loopback
+	// endpoints the connection is unauthenticated. When neither Cert nor
+	// SkipVerify is set, an ssl server's certificate is verified against the
+	// system CA roots.
 	SkipVerify bool
 }
 

@@ -335,8 +335,7 @@ func (n *Network) fillObservers(walletAddr string) {
 			break
 		}
 		dials++
-		node, err := NewNode(n.ctx, sv, n.cfg.TorProxy,
-			n.cfg.Chain.Params.GenesisHash.String())
+		node, err := n.dialServer(sv)
 		if err != nil {
 			n.scoreFailure(sv.Addr)
 			continue

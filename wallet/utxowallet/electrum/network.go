@@ -191,10 +191,40 @@ func NewNetwork(cfg *Config) (*Network, error) {
 	// The persistent server pool lives beside the header store (created by
 	// NewHeaders above): shipped seeds plus discovered peers with durable
 	// reputation (multi-server phase 4).
-	n.pool = newServerPool(
+	pool, err := newServerPool(
 		filepath.Join(cfg.DataDir, "electrum", string(cfg.Chain.Chain)),
 		n.candidates())
+	if err != nil {
+		return nil, err
+	}
+	mainnet := cfg.Chain.Params.Name == "mainnet"
+	pool.learnable = func(addr string) bool { return tofuEndpoint(addr, mainnet) }
+	n.pool = pool
 	return n, nil
+}
+
+// dialServer dials sv and performs the handshake, authenticating the server's
+// certificate by the pool's policy for it (serverPool.tlsPolicy), and commits
+// any first-use pin or renewal once the server has passed the genesis check
+// (serverPool.recordPin). The node is returned only after that commit, so no
+// request beyond the handshake reaches a server whose key lost a race to
+// another connection or could not be pinned durably.
+func (n *Network) dialServer(sv *ServerAddr) (*Node, error) {
+	pol := n.pool.tlsPolicy(sv, n.pool.isLearnable(sv.Addr))
+	node, err := newNodePinned(n.ctx, sv, n.cfg.TorProxy,
+		n.cfg.Chain.Params.GenesisHash.String(), pol)
+	if err != nil {
+		if errors.Is(err, errCertPinMismatch) || errors.Is(err, errCertNotCurrent) {
+			log.Warnf("electrum: refusing %s: %v", sv.Addr, err)
+		}
+		return nil, err
+	}
+	if err := n.pool.recordPin(sv.Addr, pol, node.peerLeaf()); err != nil {
+		node.Close()
+		log.Warnf("electrum: refusing %s: %v", sv.Addr, err)
+		return nil, err
+	}
+	return node, nil
 }
 
 // Headers returns the underlying header store. Useful for chain.Backend
@@ -298,8 +328,7 @@ func (n *Network) Start(parent context.Context) error {
 			dialErr = n.ctx.Err()
 			break
 		}
-		node, dialErr = NewNode(n.ctx, sv, n.cfg.TorProxy,
-			n.cfg.Chain.Params.GenesisHash.String())
+		node, dialErr = n.dialServer(sv)
 		if dialErr != nil {
 			n.scoreFailure(sv.Addr)
 			log.Warnf("electrum: server %s failed: %v", sv.Addr, dialErr)

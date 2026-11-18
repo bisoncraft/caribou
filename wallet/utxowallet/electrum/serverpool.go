@@ -5,10 +5,15 @@
 package electrum
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -165,6 +170,53 @@ type poolEntry struct {
 	// exclusion; see quarantineTerm.
 	QuarantinedUntil time.Time `json:"quarantinedUntil,omitempty"`
 	QuarantineReason string    `json:"quarantineReason,omitempty"`
+
+	// CertSPKISHA256, CertNotAfter and CertPinnedAt are the server's learned
+	// certificate pin (see certPin), recorded by address and never on the
+	// ServerAddr, so a shipped server's current configuration and its
+	// learned identity stay separate. Empty when nothing is pinned.
+	CertSPKISHA256 string    `json:"certSpkiSha256,omitempty"`
+	CertNotAfter   time.Time `json:"certNotAfter,omitempty"`
+	CertPinnedAt   time.Time `json:"certPinnedAt,omitempty"`
+}
+
+// pin returns the entry's learned certificate pin. Records are validated at
+// load (see validatePin), so a stored value always decodes.
+func (e *poolEntry) pin() certPin {
+	if e.CertPinnedAt.IsZero() {
+		return certPin{}
+	}
+	spki, err := decodePinHex(e.CertSPKISHA256)
+	if err != nil {
+		return certPin{}
+	}
+	return certPin{spki: spki, notAfter: e.CertNotAfter, pinnedAt: e.CertPinnedAt}
+}
+
+// setPin stores c as the entry's learned pin; a zero c clears it.
+func (e *poolEntry) setPin(c certPin) {
+	if c.isZero() {
+		e.CertSPKISHA256, e.CertNotAfter, e.CertPinnedAt = "", time.Time{}, time.Time{}
+		return
+	}
+	e.CertSPKISHA256 = encodePinHex(c.spki)
+	e.CertNotAfter = c.notAfter
+	e.CertPinnedAt = c.pinnedAt
+}
+
+// validatePin reports whether a loaded record's pin fields form a pin: all
+// empty, or a 32-byte hex key with non-zero expiry and pin times.
+func (e *poolEntry) validatePin() error {
+	if e.CertSPKISHA256 == "" && e.CertNotAfter.IsZero() && e.CertPinnedAt.IsZero() {
+		return nil
+	}
+	if _, err := decodePinHex(e.CertSPKISHA256); err != nil {
+		return fmt.Errorf("key hash: %w", err)
+	}
+	if e.CertNotAfter.IsZero() || e.CertPinnedAt.IsZero() {
+		return errors.New("missing expiry or pin time")
+	}
+	return nil
 }
 
 // quarantinedLocked reports whether the entry is currently excluded for
@@ -193,6 +245,26 @@ type serverPool struct {
 	saveTimer *time.Timer
 	saveCount int
 
+	// pinsDirty is set when a pin's expiry was extended in memory but the
+	// write failed; the next successful save clears it, and the next
+	// connection to a pinned server retries the write. The in-memory value
+	// stays authoritative for this process, so no other dial reopens first
+	// use on the stale expiry. If the process restarts before a write
+	// succeeds, the older expiry on disk can reopen first use earlier than
+	// the observed renewal would allow.
+	pinsDirty bool
+
+	// writeFile persists the database (atomicWriteFile; tests substitute a
+	// failing writer), and now is the clock for pin expiry (time.Now when
+	// nil).
+	writeFile func(path string, data []byte) error
+	now       func() time.Time
+
+	// learnable reports whether learned pins apply to an endpoint, for
+	// ranking observers by the policy a dial would apply (see
+	// tofuEndpoint). Nil treats every endpoint as learnable.
+	learnable func(addr string) bool
+
 	// shippedDownSince is set when every shipped server is observed in
 	// failure backoff, and cleared by any shipped success. It gates the
 	// discovered-fallback tier.
@@ -200,45 +272,98 @@ type serverPool struct {
 }
 
 // newServerPool loads (or initializes) the pool database at dir, merging the
-// shipped servers as permanent seeds.
-func newServerPool(dir string, shipped []*ServerAddr) *serverPool {
+// shipped servers as permanent seeds. Every address is normalized
+// (normalizeAddr), and stored entries whose addresses collide after
+// normalization are merged.
+//
+// A missing database starts a fresh pool. A database that exists but cannot
+// be read (permissions, I/O) is an error: it may be intact, and starting
+// fresh would overwrite its learned certificate pins on the next save. A
+// database whose content does not parse is moved aside to
+// servers.json.corrupt-<unix time> and the pool starts fresh, logged at error
+// level: that is a deliberate trust reset, since every learned pin it held is
+// lost and those servers re-enroll on first use. A record that does not parse,
+// or whose pin fields are malformed, loses only that record (or that pin),
+// also logged at error level.
+func newServerPool(dir string, shipped []*ServerAddr) (*serverPool, error) {
 	p := &serverPool{
-		path:    filepath.Join(dir, serverDBName),
-		shipped: shipped,
-		entries: make(map[string]*poolEntry),
-	}
-	if raw, err := os.ReadFile(p.path); err == nil {
-		var stored []*poolEntry
-		if err := json.Unmarshal(raw, &stored); err != nil {
-			log.Warnf("electrum: unreadable server database %s: %v", p.path, err)
-		} else {
-			now := time.Now()
-			for _, e := range stored {
-				if e.Server == nil || e.Server.Addr == "" {
-					continue
-				}
-				if !e.Shipped && now.Sub(e.LastSeen) > discoveredExpiry &&
-					now.Sub(e.LastSuccess) > discoveredExpiry {
-					continue // aged out
-				}
-				p.entries[e.Server.Addr] = e
-			}
-		}
+		path:      filepath.Join(dir, serverDBName),
+		entries:   make(map[string]*poolEntry),
+		writeFile: atomicWriteFile,
 	}
 	now := time.Now()
-	for _, sv := range shipped {
-		e := p.entries[sv.Addr]
-		if e == nil {
-			e = &poolEntry{Server: sv, FirstSeen: now}
+	raw, err := os.ReadFile(p.path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return nil, fmt.Errorf("electrum: read server database %s: %w", p.path, err)
+	default:
+		var records []json.RawMessage
+		if err := json.Unmarshal(raw, &records); err != nil {
+			aside := p.path + ".corrupt-" + strconv.FormatInt(now.Unix(), 10)
+			if rerr := os.Rename(p.path, aside); rerr != nil {
+				return nil, fmt.Errorf("electrum: move corrupt server database %s aside: %w", p.path, rerr)
+			}
+			log.Errorf("electrum: server database %s does not parse (%v); moved to %s. "+
+				"Learned certificate pins and server reputation are lost, and servers "+
+				"re-enroll their certificates on first use", p.path, err, aside)
+			records = nil
+		}
+		for i, rec := range records {
+			e := new(poolEntry)
+			if err := json.Unmarshal(rec, e); err != nil {
+				log.Errorf("electrum: server database %s record %d does not parse (%v); "+
+					"dropped, with any certificate pin it held", p.path, i, err)
+				continue
+			}
+			if e.Server == nil || e.Server.Addr == "" {
+				continue
+			}
+			if err := e.validatePin(); err != nil {
+				log.Errorf("electrum: server database entry %s has a malformed certificate "+
+					"pin (%v); the pin is dropped and the server re-enrolls on first use",
+					e.Server.Addr, err)
+				e.setPin(certPin{})
+			}
+			if !e.Shipped && now.Sub(e.LastSeen) > discoveredExpiry &&
+				now.Sub(e.LastSuccess) > discoveredExpiry {
+				continue // aged out
+			}
+			sv := *e.Server
+			sv.Addr = normalizeAddr(sv.Addr)
+			e.Server = &sv
+			if prev := p.entries[sv.Addr]; prev != nil {
+				e = mergeEntries(prev, e)
+			}
 			p.entries[sv.Addr] = e
 		}
+	}
+	// Shipped servers take their configuration from the current release,
+	// not from the stored ServerAddr, so a release that pins or unpins a
+	// server reaches existing installs; the stored reputation and learned
+	// pin carry over.
+	seen := make(map[string]bool, len(shipped))
+	for _, cfg := range shipped {
+		sv := *cfg
+		sv.Addr = normalizeAddr(sv.Addr)
+		if seen[sv.Addr] {
+			continue // a second spelling of a shipped server
+		}
+		seen[sv.Addr] = true
+		p.shipped = append(p.shipped, &sv)
+		e := p.entries[sv.Addr]
+		if e == nil {
+			e = &poolEntry{FirstSeen: now}
+			p.entries[sv.Addr] = e
+		}
+		e.Server = &sv
 		e.Shipped = true
 		e.LastSeen = now
 	}
 	// Enforce the discovered cap on load too: a database written before the
 	// caps existed (or flooded on disk by an attacker) must not carry an
 	// oversized set into the election scans. Actively quarantined entries
-	// are kept first — dropping one would erase its persisted exclusion —
+	// are kept first (dropping one would erase its persisted exclusion),
 	// then previously successful ones, then the oldest.
 	var discovered []*poolEntry
 	for _, e := range p.entries {
@@ -261,14 +386,83 @@ func newServerPool(dir string, shipped []*ServerAddr) *serverPool {
 			delete(p.entries, e.Server.Addr)
 		}
 	}
-	return p
+	return p, nil
 }
 
-// saveLocked persists the pool immediately; best-effort (logged, never fatal
-// — the pool rebuilds from shipped seeds and discovery). Must be called with
-// mtx held. Routine reputation updates should go through scheduleSaveLocked
-// instead; only writes that must survive a crash (quarantines) belong here.
-func (p *serverPool) saveLocked() {
+// mergeEntries combines two stored records for one normalized address. A
+// pinned record's pin wins. Two pins for the same key merge to the latest
+// expiry and the earliest pin time. Between pins for different keys, the one
+// pinned earlier wins (the later one was learned while the earlier was
+// already established under another spelling), and both are logged. A quarantine is kept,
+// counters add, and the time bounds widen.
+func mergeEntries(a, b *poolEntry) *poolEntry {
+	out := *a
+	pa, pb := a.pin(), b.pin()
+	switch {
+	case pa.isZero():
+		out.setPin(pb)
+	case pb.isZero():
+	case pa.spki == pb.spki:
+		// One key under two spellings: the latest expiry seen and the
+		// first pin time both stand.
+		merged := pa
+		if pb.notAfter.After(merged.notAfter) {
+			merged.notAfter = pb.notAfter
+		}
+		if pb.pinnedAt.Before(merged.pinnedAt) {
+			merged.pinnedAt = pb.pinnedAt
+		}
+		out.setPin(merged)
+	default:
+		if pb.pinnedAt.Before(pa.pinnedAt) {
+			out.setPin(pb)
+		}
+		log.Errorf("electrum: server database holds two certificate pins for %s under "+
+			"different spellings (%x pinned %s, %x pinned %s); keeping the one pinned first",
+			a.Server.Addr, pa.spki, pa.pinnedAt.UTC().Format(time.RFC3339),
+			pb.spki, pb.pinnedAt.UTC().Format(time.RFC3339))
+	}
+	out.Shipped = a.Shipped || b.Shipped
+	out.Successes += b.Successes
+	out.Failures += b.Failures
+	if b.FirstSeen.Before(out.FirstSeen) || out.FirstSeen.IsZero() {
+		out.FirstSeen = b.FirstSeen
+	}
+	if b.LastSeen.After(out.LastSeen) {
+		out.LastSeen = b.LastSeen
+	}
+	if b.LastSuccess.After(out.LastSuccess) {
+		out.LastSuccess = b.LastSuccess
+	}
+	if b.QuarantinedUntil.After(out.QuarantinedUntil) {
+		out.QuarantinedUntil, out.QuarantineReason = b.QuarantinedUntil, b.QuarantineReason
+	}
+	for _, r := range b.Recommenders {
+		known := false
+		for _, have := range out.Recommenders {
+			known = known || have == r
+		}
+		if !known && len(out.Recommenders) < maxRecommenders {
+			out.Recommenders = append(out.Recommenders, r)
+		}
+	}
+	return &out
+}
+
+// clock returns the pool's notion of now for pin expiry.
+func (p *serverPool) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
+// saveLocked persists the pool immediately and atomically (see
+// atomicWriteFile), returning any error. Must be called with mtx held.
+// Routine reputation updates should go through scheduleSaveLocked instead;
+// only writes that must survive a crash (quarantines, certificate pins)
+// belong here.
+func (p *serverPool) saveLocked() error {
 	p.dirty = false
 	p.saveCount++
 	entries := make([]*poolEntry, 0, len(p.entries))
@@ -277,11 +471,14 @@ func (p *serverPool) saveLocked() {
 	}
 	raw, err := json.MarshalIndent(entries, "", "\t")
 	if err == nil {
-		err = os.WriteFile(p.path, raw, 0o600)
+		err = p.writeFile(p.path, raw)
 	}
 	if err != nil {
-		log.Warnf("electrum: persist server database: %v", err)
+		p.dirty = true
+		return fmt.Errorf("electrum: persist server database: %w", err)
 	}
+	p.pinsDirty = false
+	return nil
 }
 
 // scheduleSaveLocked marks the pool dirty and arms the coalescing timer if it
@@ -302,13 +499,17 @@ func (p *serverPool) flush() {
 	p.flushLocked()
 }
 
+// flushLocked persists the pool if it is dirty, logging a failure. A failed
+// write leaves the pool dirty for the next attempt.
 func (p *serverPool) flushLocked() {
 	if p.saveTimer != nil {
 		p.saveTimer.Stop()
 		p.saveTimer = nil
 	}
 	if p.dirty {
-		p.saveLocked()
+		if err := p.saveLocked(); err != nil {
+			log.Warnf("%v", err)
+		}
 	}
 }
 
@@ -367,7 +568,10 @@ func (p *serverPool) addDiscovered(recommender string, peers []*ServerAddr) {
 		}
 	}
 
-	for _, sv := range peers {
+	for _, adv := range peers {
+		norm := *adv
+		norm.Addr = normalizeAddr(adv.Addr)
+		sv := &norm
 		e := p.entries[sv.Addr]
 		if e == nil {
 			if discovered >= maxDiscovered ||
@@ -396,6 +600,179 @@ func (p *serverPool) addDiscovered(recommender string, peers []*ServerAddr) {
 	if changed {
 		p.scheduleSaveLocked()
 	}
+}
+
+// tlsPolicy returns the certificate check for a dial to sv and snapshots the
+// learned pin the dial starts from (see certpin.go for the precedence).
+// learnable reports whether trust on first use applies to the endpoint (see
+// tofuEndpoint). A shipped pin past its expiry falls back to the learned pin
+// rules where they apply, and stays in force where they do not.
+func (p *serverPool) tlsPolicy(sv *ServerAddr, learnable bool) *tlsPolicy {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	return p.tlsPolicyLocked(sv, learnable, p.clock())
+}
+
+// tlsPolicyLocked is tlsPolicy at now for a caller holding mtx.
+func (p *serverPool) tlsPolicyLocked(sv *ServerAddr, learnable bool, now time.Time) *tlsPolicy {
+	if sv.Proto != "ssl" {
+		return &tlsPolicy{mode: pinNone}
+	}
+	var learned certPin
+	if e := p.entries[sv.Addr]; e != nil {
+		learned = e.pin()
+	}
+	pol := &tlsPolicy{snapshot: learned, now: now, learnable: learnable}
+	switch {
+	case len(sv.Cert) > 0:
+		shipped := shippedPolicy(sv)
+		if !learnable || !now.After(shipped.wantNotAfter) {
+			shipped.snapshot, shipped.now, shipped.learnable = learned, now, learnable
+			return shipped
+		}
+	case !sv.SkipVerify || !learnable:
+		pol.mode = pinNone
+		return pol
+	}
+	if learned.activeAt(now) {
+		pol.mode, pol.want, pol.wantNotAfter = pinLearned, learned.spki, learned.notAfter
+	} else {
+		pol.mode = pinEnroll
+	}
+	return pol
+}
+
+// recordPin commits what a dial under pol learned from leaf, the certificate
+// the server presented, after the server passed the genesis check.
+//
+// Under a shipped pin on a learnable endpoint, the shipped key is recorded as
+// the server's learned pin, replacing a stale pin for any other key, so that
+// a certificate renewed for the shipped key extends the server's identity
+// past the shipped certificate's own expiry. The commit is checked against
+// the state at commit time, since the shipped pin can expire during the
+// handshake: a pin for the shipped key is extended as a continuation; a pin
+// for another key is replaced only if it is unchanged since the dial began
+// and, once the shipped pin has expired, no longer active. Otherwise the
+// learned rules now in force bind another key and the dial gets
+// errCertPinMismatch.
+//
+// Otherwise it is a compare-and-set against the pin state the dial started
+// from (pol.snapshot):
+//
+//   - the pinned key, whether the state is unchanged or a concurrent
+//     connection pinned the same key meanwhile: a continuation. The pin's
+//     expiry becomes the later of its own and the certificate's, never
+//     earlier;
+//   - unchanged state and a new key (first use, or a replacement once the
+//     pinned expiry has passed): the key is pinned and written before the
+//     connection is accepted, and a failed write refuses the connection;
+//   - state changed by a concurrent connection to a different key, or to a
+//     pin no longer active: errCertPinMismatch.
+//
+// A continuation whose write fails keeps the connection, since the server's
+// key is already authenticated, holds the new expiry in memory and retries
+// the write on the next connection. The caller closes the connection on any
+// error and hands out no node before recordPin returns nil.
+func (p *serverPool) recordPin(addr string, pol *tlsPolicy, leaf *x509.Certificate) error {
+	switch {
+	case pol.mode == pinShipped && pol.learnable:
+	case pol.mode == pinLearned, pol.mode == pinEnroll:
+	default:
+		return nil
+	}
+	if leaf == nil {
+		return fmt.Errorf("electrum: %s presented no certificate to pin", addr)
+	}
+	got := spkiHash(leaf)
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	now := p.clock()
+	e := p.entries[addr]
+	if e == nil {
+		e = &poolEntry{Server: &ServerAddr{Proto: "ssl", Addr: addr}, FirstSeen: now}
+		p.entries[addr] = e
+	}
+	cur := e.pin()
+	switch {
+	case pol.mode == pinShipped:
+		if !cur.isZero() && cur.spki == got {
+			break // the shipped key's continuation
+		}
+		lapsed := now.After(pol.wantNotAfter)
+		if !cur.equal(pol.snapshot) || (lapsed && cur.activeAt(now)) {
+			return fmt.Errorf("%w: %s presented shipped key %x, but its shipped pin expired "+
+				"%s and key %x is pinned until %s", errCertPinMismatch, addr, got,
+				pol.wantNotAfter.UTC().Format(time.RFC3339), cur.spki,
+				cur.notAfter.UTC().Format(time.RFC3339))
+		}
+		e.setPin(certPin{spki: got, notAfter: leaf.NotAfter, pinnedAt: now})
+		p.pinsDirty = true
+		return p.persistContinuation(addr, leaf.NotAfter)
+	case !cur.equal(pol.snapshot) && !(cur.activeAt(now) && cur.spki == got):
+		return fmt.Errorf("%w: %s presented key %x, but a concurrent connection pinned %x",
+			errCertPinMismatch, addr, got, cur.spki)
+	case cur.isZero() || cur.spki != got:
+		e.setPin(certPin{spki: got, notAfter: leaf.NotAfter, pinnedAt: now})
+		if err := p.saveLocked(); err != nil {
+			e.setPin(cur)
+			return fmt.Errorf("electrum: pin certificate key for %s: %w", addr, err)
+		}
+		if cur.isZero() {
+			log.Infof("electrum: pinned %s to certificate key %x (certificate valid until %s)",
+				addr, got, leaf.NotAfter.UTC().Format(time.RFC3339))
+		} else {
+			log.Warnf("electrum: %s presented a new certificate key after its pinned "+
+				"certificate expired; re-pinned from %x (expired %s) to %x (valid until %s)",
+				addr, cur.spki, cur.notAfter.UTC().Format(time.RFC3339), got,
+				leaf.NotAfter.UTC().Format(time.RFC3339))
+		}
+		return nil
+	}
+	// The pinned key: extend the expiry, never shorten it.
+	if leaf.NotAfter.After(cur.notAfter) {
+		cur.notAfter = leaf.NotAfter
+		e.setPin(cur)
+		p.pinsDirty = true
+	}
+	return p.persistContinuation(addr, cur.notAfter)
+}
+
+// persistContinuation writes the pool when a pin's expiry is held only in
+// memory. A failure is logged and retried on the next connection; the
+// connection that extended the pin stands. Must be called with mtx held.
+func (p *serverPool) persistContinuation(addr string, notAfter time.Time) error {
+	if !p.pinsDirty {
+		return nil
+	}
+	if err := p.saveLocked(); err != nil {
+		log.Warnf("electrum: %s presented its pinned key on a certificate valid until %s; "+
+			"recording the expiry failed and is retried on the next connection: %v",
+			addr, notAfter.UTC().Format(time.RFC3339), err)
+	}
+	return nil
+}
+
+// authenticatedLocked reports whether a dial to sv now authenticates the
+// server, by the same policy the dial would use: an unexpired shipped pin
+// (or a shipped pin where learned pins do not apply), CA verification, or an
+// active learned pin. An endpoint that would accept a first-use certificate
+// is not authenticated. Must be called with mtx held.
+func (p *serverPool) authenticatedLocked(sv *ServerAddr, now time.Time) bool {
+	switch p.tlsPolicyLocked(sv, p.isLearnable(sv.Addr), now).mode {
+	case pinShipped, pinLearned:
+		return true
+	case pinNone:
+		return sv.Proto == "ssl" && !sv.SkipVerify && len(sv.Cert) == 0
+	}
+	return false
+}
+
+// isLearnable reports whether learned pins apply to addr (see learnable).
+func (p *serverPool) isLearnable(addr string) bool {
+	if p.learnable == nil {
+		return true
+	}
+	return p.learnable(addr)
 }
 
 // recordSuccess/recordFailure update both the fast health registry and the
@@ -567,6 +944,16 @@ func (p *serverPool) observerCandidates() []*ServerAddr {
 	// and observer oversight matters most.
 	shippedHealthy, shippedBacked := partitionBackoff(shipped)
 	discHealthy, discBacked := partitionBackoff(disc)
+	// Within each partition, servers whose identity a dial authenticates
+	// (shipped pin, CA, or an active learned pin) come first, so a phone's
+	// single observer is an authenticated one whenever one is available. A
+	// learned pin only authenticates continuity with its first connection,
+	// so this does not defend against sybils present at first use.
+	for _, part := range [][]*ServerAddr{shippedHealthy, discHealthy, shippedBacked, discBacked} {
+		sort.SliceStable(part, func(i, j int) bool {
+			return p.authenticatedLocked(part[i], now) && !p.authenticatedLocked(part[j], now)
+		})
+	}
 	out := make([]*ServerAddr, 0,
 		len(shippedHealthy)+len(discHealthy)+len(shippedBacked)+len(discBacked))
 	out = append(out, shippedHealthy...)

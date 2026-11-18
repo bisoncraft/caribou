@@ -113,7 +113,7 @@ func TestServerPoolTiering(t *testing.T) {
 
 	dir := t.TempDir()
 	shipped := []*ServerAddr{{Proto: "ssl", Addr: "ship1:1"}, {Proto: "ssl", Addr: "ship2:1"}}
-	p := newServerPool(dir, shipped)
+	p := mustServerPool(t, dir, shipped)
 
 	// Discovered peers: aged+multi-recommended, aged+single, fresh.
 	p.addDiscovered("recA:1", []*ServerAddr{{Proto: "ssl", Addr: "disc1:1"}, {Proto: "ssl", Addr: "disc2:1"}})
@@ -162,7 +162,7 @@ func TestServerPoolTiering(t *testing.T) {
 	// Persistence round-trip: reload keeps the discovered entries and
 	// reputation. Routine writes are coalesced, so force the pending one.
 	p.flush()
-	p2 := newServerPool(dir, shipped)
+	p2 := mustServerPool(t, dir, shipped)
 	p2.mtx.Lock()
 	e := p2.entries["disc1:1"]
 	p2.mtx.Unlock()
@@ -181,7 +181,7 @@ func TestServerPoolDiscoveredCaps(t *testing.T) {
 	serverHealth.quarantined = make(map[string]bool)
 	serverHealth.mtx.Unlock()
 
-	p := newServerPool(t.TempDir(), []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}})
+	p := mustServerPool(t, t.TempDir(), []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}})
 
 	mk := func(prefix string, n int) []*ServerAddr {
 		out := make([]*ServerAddr, n)
@@ -247,7 +247,7 @@ func TestServerPoolLoadCap(t *testing.T) {
 
 	dir := t.TempDir()
 	shipped := []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}}
-	p := newServerPool(dir, shipped)
+	p := mustServerPool(t, dir, shipped)
 	now := time.Now()
 	p.mtx.Lock()
 	// Bypass addDiscovered's caps to fabricate an oversized database.
@@ -264,7 +264,7 @@ func TestServerPoolLoadCap(t *testing.T) {
 	p.flushLocked()
 	p.mtx.Unlock()
 
-	p2 := newServerPool(dir, shipped)
+	p2 := mustServerPool(t, dir, shipped)
 	p2.mtx.Lock()
 	defer p2.mtx.Unlock()
 	count := 0
@@ -293,7 +293,7 @@ func TestServerPoolRuntimePrune(t *testing.T) {
 	serverHealth.quarantined = make(map[string]bool)
 	serverHealth.mtx.Unlock()
 
-	p := newServerPool(t.TempDir(), []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}})
+	p := mustServerPool(t, t.TempDir(), []*ServerAddr{{Proto: "ssl", Addr: "ship:1"}})
 	p.addDiscovered("rec:1", []*ServerAddr{{Proto: "ssl", Addr: "stale:1"}})
 	p.mtx.Lock()
 	e := p.entries["stale:1"]
@@ -329,7 +329,7 @@ func TestServerPoolSaveDebounce(t *testing.T) {
 
 	dir := t.TempDir()
 	shipped := []*ServerAddr{{Proto: "ssl", Addr: "dbn1:1"}, {Proto: "ssl", Addr: "dbn2:1"}}
-	p := newServerPool(dir, shipped)
+	p := mustServerPool(t, dir, shipped)
 
 	writes := func() int {
 		p.mtx.Lock()
@@ -347,7 +347,7 @@ func TestServerPoolSaveDebounce(t *testing.T) {
 		t.Fatalf("burst of %d updates wrote %d times before the delay elapsed", burst, w)
 	}
 	waitFor(t, "coalesced write to land", func() bool {
-		p2 := newServerPool(dir, shipped)
+		p2 := mustServerPool(t, dir, shipped)
 		p2.mtx.Lock()
 		defer p2.mtx.Unlock()
 		return p2.entries["dbn1:1"].Failures == burst
@@ -363,7 +363,7 @@ func TestServerPoolSaveDebounce(t *testing.T) {
 	if w := writes(); w != before+1 {
 		t.Fatalf("quarantine wrote %d times, want exactly 1 immediate write", w-before)
 	}
-	p3 := newServerPool(dir, shipped)
+	p3 := mustServerPool(t, dir, shipped)
 	p3.mtx.Lock()
 	reason := p3.entries["dbn2:1"].QuarantineReason
 	p3.mtx.Unlock()
@@ -380,7 +380,7 @@ func TestServerPoolQuarantine(t *testing.T) {
 
 	dir := t.TempDir()
 	shipped := []*ServerAddr{{Proto: "ssl", Addr: "q1:1"}, {Proto: "ssl", Addr: "q2:1"}}
-	p := newServerPool(dir, shipped)
+	p := mustServerPool(t, dir, shipped)
 
 	p.quarantine("q1:1", "checkpoint mismatch")
 
@@ -407,7 +407,7 @@ func TestServerPoolQuarantine(t *testing.T) {
 	serverHealth.mtx.Lock()
 	serverHealth.quarantined = make(map[string]bool)
 	serverHealth.mtx.Unlock()
-	p2 := newServerPool(dir, shipped)
+	p2 := mustServerPool(t, dir, shipped)
 	if wc := p2.walletCandidates(); len(wc) != 1 || wc[0].Addr != "q2:1" {
 		t.Fatalf("reloaded wallet candidates = %v", wc)
 	}
@@ -437,7 +437,7 @@ func TestFallbackOpensOnQuarantine(t *testing.T) {
 
 	s1 := &ServerAddr{Proto: "ssl", Addr: "s1:1"}
 	s2 := &ServerAddr{Proto: "ssl", Addr: "s2:1"}
-	p := newServerPool(t.TempDir(), []*ServerAddr{s1, s2})
+	p := mustServerPool(t, t.TempDir(), []*ServerAddr{s1, s2})
 	t.Cleanup(p.flush)
 
 	// An aged, previously successful discovered server: fallback-eligible
@@ -486,4 +486,14 @@ func TestFallbackOpensOnQuarantine(t *testing.T) {
 	if got := names(p.walletCandidates()); got != "aged:1 " {
 		t.Fatalf("all quarantined = %q", got)
 	}
+}
+
+// mustServerPool loads the pool at dir, failing the test on an error.
+func mustServerPool(t *testing.T, dir string, shipped []*ServerAddr) *serverPool {
+	t.Helper()
+	p, err := newServerPool(dir, shipped)
+	if err != nil {
+		t.Fatalf("newServerPool: %v", err)
+	}
+	return p
 }

@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -424,4 +425,17 @@ func (s *Server) HeadersNotifyChan() <-chan *HeadersTip { return s.headersNotify
 // down.
 func (s *Server) ScripthashNotifyChan() <-chan *ScripthashStatus {
 	return s.scripthashNotify
+}
+
+// peerLeaf returns the leaf certificate presented on a TLS connection, or
+// nil for a plain one.
+func (s *Server) peerLeaf() *x509.Certificate {
+	tc, ok := s.conn.(*tls.Conn)
+	if !ok {
+		return nil
+	}
+	if certs := tc.ConnectionState().PeerCertificates; len(certs) > 0 {
+		return certs[0]
+	}
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -54,6 +55,8 @@ type fakeServer struct {
 	// reply with mtx held, and may replace chain.
 	onBlockHeaders func(call, start, count int)
 	headerCalls    int
+	// tls marks a fake behind TLS (newFakeTLSServer).
+	tls bool
 }
 
 type fakeConnState struct {
@@ -71,6 +74,22 @@ const easyBits = 0x207fffff
 // (including genesis at height 0) and returns it with a matching
 // netparams.ChainParams whose GenesisHash pins the fake chain.
 func newFakeServer(t *testing.T, n int) (*fakeServer, *netparams.ChainParams) {
+	t.Helper()
+	return startFakeServer(t, n, nil)
+}
+
+// newFakeTLSServer is newFakeServer behind TLS, presenting whatever
+// certificate getCert returns for each handshake. Its addr() is an ssl
+// SkipVerify endpoint.
+func newFakeTLSServer(t *testing.T, n int,
+	getCert func(*tls.ClientHelloInfo) (*tls.Certificate, error)) (*fakeServer, *netparams.ChainParams) {
+
+	t.Helper()
+	return startFakeServer(t, n, &tls.Config{GetCertificate: getCert, MinVersion: tls.VersionTLS12})
+}
+
+// startFakeServer starts a fake, behind TLS when tlsCfg is non-nil.
+func startFakeServer(t *testing.T, n int, tlsCfg *tls.Config) (*fakeServer, *netparams.ChainParams) {
 	t.Helper()
 	f := &fakeServer{
 		t:     t,
@@ -91,6 +110,10 @@ func newFakeServer(t *testing.T, n int) (*fakeServer, *netparams.ChainParams) {
 	if err != nil {
 		t.Fatalf("fake listen: %v", err)
 	}
+	if tlsCfg != nil {
+		lis = tls.NewListener(lis, tlsCfg)
+		f.tls = true
+	}
 	f.lis = lis
 	go f.acceptLoop()
 	t.Cleanup(f.Close)
@@ -108,6 +131,9 @@ func newFakeServer(t *testing.T, n int) (*fakeServer, *netparams.ChainParams) {
 }
 
 func (f *fakeServer) addr() *ServerAddr {
+	if f.tls {
+		return &ServerAddr{Proto: "ssl", Addr: f.lis.Addr().String(), SkipVerify: true}
+	}
 	return &ServerAddr{Proto: "tcp", Addr: f.lis.Addr().String()}
 }
 
