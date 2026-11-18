@@ -24,6 +24,8 @@ var (
 	ownersBucket = []byte("owners")
 	regsBucket   = []byte("regs")
 	versionKey   = []byte("version")
+	// dissolvedBucket holds the proven spends of registered collaterals.
+	dissolvedBucket = []byte("dissolved")
 )
 
 // storeVersion is the layout of the store. A record format or bucket change
@@ -86,7 +88,7 @@ func NewStore(db walletdb.DB) (*Store, error) {
 		if err := checkVersion(v); err != nil {
 			return err
 		}
-		for _, name := range [][]byte{ownersBucket, regsBucket} {
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket} {
 			if _, err := b.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -101,17 +103,30 @@ func NewStore(db walletdb.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Cursor is how far discovery has scanned: the tip it scanned to.
+// Cursor is how far discovery has scanned: the tip it scanned to. Hash is the
+// double sha256 of the header at Height, a fingerprint that is only compared
+// with itself and need not be the chain's block id.
 type Cursor struct {
 	Height int32
 	Hash   chainhash.Hash
 }
 
-// Registration is a mined registration: its raw serialized transaction and
-// the height of the block that holds it.
+// Registration is a mined registration: its raw serialized transaction, the
+// height of the block that holds it and that block's fingerprint (the double
+// sha256 of its header, as in Cursor). While the chain's header at Height has
+// that fingerprint the block is unchanged, so the registration is still mined.
 type Registration struct {
 	Height int32
+	Block  chainhash.Hash
 	Tx     []byte
+}
+
+// Spend is the proven spend of a registered collateral: the height of the
+// block that holds it, that block's fingerprint and its transaction id.
+type Spend struct {
+	Height int32
+	Block  chainhash.Hash
+	TxID   chainhash.Hash
 }
 
 // Snapshot is everything in the store.
@@ -122,6 +137,8 @@ type Snapshot struct {
 	OwnerKeyIDs   map[[protx.KeyIDSize]byte]uint32
 	Cursor        Cursor
 	Registrations map[chainhash.Hash]Registration
+	// Dissolutions are by the proTxHash of a stored registration.
+	Dissolutions map[chainhash.Hash]Spend
 }
 
 // Update is a change to the store, applied together or not at all.
@@ -141,6 +158,15 @@ type Update struct {
 	// Registrations are put by their transaction id. A registration already
 	// stored is replaced, as a reorg can move its height.
 	Registrations []Registration
+	// Dissolutions are put by proTxHash. Each must have a registration in the
+	// store once the update is applied.
+	Dissolutions map[chainhash.Hash]Spend
+	// Drop removes these registrations and their dissolutions, and
+	// DropDissolutions removes dissolutions only, before the others are put:
+	// a reorg can undo them. Neither touches the owner key ids or the
+	// counter, which only grow.
+	Drop             []chainhash.Hash
+	DropDissolutions []chainhash.Hash
 	// Cursor, if not nil, replaces the scan cursor.
 	Cursor *Cursor
 }
@@ -188,33 +214,33 @@ func (s *Store) ReserveOwnerIndex() (uint32, error) {
 }
 
 func regValue(r Registration) []byte {
-	v := make([]byte, 4, 4+len(r.Tx))
+	v := make([]byte, 4, 36+len(r.Tx))
 	binary.BigEndian.PutUint32(v, uint32(r.Height))
+	v = append(v, r.Block[:]...)
 	return append(v, r.Tx...)
 }
 
-// decodeRegistration checks that raw is a valid shared registration mined at
-// height and returns its transaction id.
-// It also returns the owner key ids of its shares.
-func decodeRegistration(raw []byte, height int32) (chainhash.Hash, [][protx.KeyIDSize]byte, error) {
-	var tx bisonwire.Tx
-	tx.Chain = "dash"
+// decodeTx deserializes a Dash transaction and refuses trailing bytes.
+func decodeTx(raw []byte) (*bisonwire.Tx, error) {
+	tx := &bisonwire.Tx{Chain: "dash"}
 	r := bytes.NewReader(raw)
 	if err := tx.Deserialize(r); err != nil {
-		return chainhash.Hash{}, nil, fmt.Errorf("%w: %w", ErrInvalidRegistration, err)
+		return nil, err
 	}
 	if r.Len() != 0 {
-		return chainhash.Hash{}, nil, badReg("%d trailing bytes", r.Len())
+		return nil, fmt.Errorf("%d trailing bytes", r.Len())
 	}
-	m, err := RegistrationMN(&tx, height)
+	return tx, nil
+}
+
+// decodeRegistration checks that raw is a valid shared registration mined at
+// height and returns the masternode it registers.
+func decodeRegistration(raw []byte, height int32) (*SharedMN, error) {
+	tx, err := decodeTx(raw)
 	if err != nil {
-		return chainhash.Hash{}, nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRegistration, err)
 	}
-	ids := make([][protx.KeyIDSize]byte, len(m.Shares))
-	for i := range m.Shares {
-		ids[i] = m.Shares[i].KeyIDOwner
-	}
-	return m.ProTxHash, ids, nil
+	return RegistrationMN(tx, height)
 }
 
 // Save applies u. A registration that is not a valid shared registration fails
@@ -223,13 +249,13 @@ func (s *Store) Save(u Update) error {
 	hashes := make([]chainhash.Hash, len(u.Registrations))
 	shareOwners := make(map[[protx.KeyIDSize]byte]struct{})
 	for i, r := range u.Registrations {
-		h, ids, err := decodeRegistration(r.Tx, r.Height)
+		m, err := decodeRegistration(r.Tx, r.Height)
 		if err != nil {
 			return err
 		}
-		hashes[i] = h
-		for _, id := range ids {
-			shareOwners[id] = struct{}{}
+		hashes[i] = m.ProTxHash
+		for j := range m.Shares {
+			shareOwners[m.Shares[j].KeyIDOwner] = struct{}{}
 		}
 	}
 	return walletdb.Update(s.db, func(tx walletdb.ReadWriteTx) error {
@@ -238,6 +264,9 @@ func (s *Store) Save(u Update) error {
 			return errors.New("masternode store is missing")
 		}
 		owners := b.NestedReadWriteBucket(ownersBucket)
+		if owners == nil || b.NestedReadWriteBucket(regsBucket) == nil || b.NestedReadWriteBucket(dissolvedBucket) == nil {
+			return errors.New("masternode store is missing a bucket")
+		}
 		for idx, id := range u.OwnerKeyIDs {
 			var k [4]byte
 			binary.BigEndian.PutUint32(k[:], idx)
@@ -273,8 +302,33 @@ func (s *Store) Save(u Update) error {
 			}
 		}
 		regs := b.NestedReadWriteBucket(regsBucket)
+		dis := b.NestedReadWriteBucket(dissolvedBucket)
+		for _, h := range u.Drop {
+			if err := regs.Delete(h[:]); err != nil {
+				return err
+			}
+			if err := dis.Delete(h[:]); err != nil {
+				return err
+			}
+		}
+		for _, h := range u.DropDissolutions {
+			if err := dis.Delete(h[:]); err != nil {
+				return err
+			}
+		}
 		for i, r := range u.Registrations {
 			if err := regs.Put(hashes[i][:], regValue(r)); err != nil {
+				return err
+			}
+		}
+		for h, sp := range u.Dissolutions {
+			if regs.Get(h[:]) == nil {
+				return errors.New("dissolution of an unknown registration")
+			}
+			v := make([]byte, 4, 68)
+			binary.BigEndian.PutUint32(v, uint32(sp.Height))
+			v = append(v, sp.Block[:]...)
+			if err := dis.Put(h[:], append(v, sp.TxID[:]...)); err != nil {
 				return err
 			}
 		}
@@ -295,6 +349,7 @@ func (s *Store) Load() (Snapshot, error) {
 	snap := Snapshot{
 		OwnerKeyIDs:   make(map[[protx.KeyIDSize]byte]uint32),
 		Registrations: make(map[chainhash.Hash]Registration),
+		Dissolutions:  make(map[chainhash.Hash]Spend),
 	}
 	err := walletdb.View(s.db, func(tx walletdb.ReadTx) error {
 		b := tx.ReadBucket(storeBucket)
@@ -307,6 +362,11 @@ func (s *Store) Load() (Snapshot, error) {
 		}
 		if err := checkVersion(v); err != nil {
 			return err
+		}
+		for _, name := range [][]byte{ownersBucket, regsBucket, dissolvedBucket} {
+			if b.NestedReadBucket(name) == nil {
+				return errors.New("masternode store is missing a bucket")
+			}
 		}
 		if snap.NextOwner, err = nextOwner(b); err != nil {
 			return err
@@ -333,16 +393,36 @@ func (s *Store) Load() (Snapshot, error) {
 		if err != nil {
 			return err
 		}
-		return b.NestedReadBucket(regsBucket).ForEach(func(k, v []byte) error {
-			if len(k) != chainhash.HashSize || len(v) <= 4 {
+		err = b.NestedReadBucket(regsBucket).ForEach(func(k, v []byte) error {
+			if len(k) != chainhash.HashSize || len(v) <= 36 {
 				return errors.New("malformed registration record")
 			}
 			var h chainhash.Hash
 			copy(h[:], k)
-			snap.Registrations[h] = Registration{
+			r := Registration{
 				Height: int32(binary.BigEndian.Uint32(v)),
-				Tx:     bytes.Clone(v[4:]),
+				Tx:     bytes.Clone(v[36:]),
 			}
+			copy(r.Block[:], v[4:36])
+			snap.Registrations[h] = r
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return b.NestedReadBucket(dissolvedBucket).ForEach(func(k, v []byte) error {
+			if len(k) != chainhash.HashSize || len(v) != 68 {
+				return errors.New("malformed dissolution record")
+			}
+			var h chainhash.Hash
+			copy(h[:], k)
+			if _, ok := snap.Registrations[h]; !ok {
+				return errors.New("dissolution of an unknown registration")
+			}
+			sp := Spend{Height: int32(binary.BigEndian.Uint32(v))}
+			copy(sp.Block[:], v[4:36])
+			copy(sp.TxID[:], v[36:])
+			snap.Dissolutions[h] = sp
 			return nil
 		})
 	})
