@@ -5,10 +5,13 @@
 package masternode
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/btcsuite/btcd/btcutil"
@@ -98,7 +101,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	mns       map[chainhash.Hash]*SharedMN
 	dissolved map[chainhash.Hash]Spend
-	owned     map[[protx.KeyIDSize]byte]struct{}
+	owned     map[[protx.KeyIDSize]byte]uint32 // the wallet's owner key ids by index
 	// hints are heights where Track was told a transaction is mined, tried
 	// before asking the server. They are not saved.
 	hints map[chainhash.Hash]int32
@@ -167,15 +170,22 @@ func (m *Manager) install(snap Snapshot) error {
 	if err != nil {
 		return err
 	}
-	owned := make(map[[protx.KeyIDSize]byte]struct{}, len(snap.OwnerKeyIDs))
-	for id := range snap.OwnerKeyIDs {
-		owned[id] = struct{}{}
+	owned := make(map[[protx.KeyIDSize]byte]uint32, len(snap.OwnerKeyIDs))
+	for id, idx := range snap.OwnerKeyIDs {
+		owned[id] = idx
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mns = mns
 	m.dissolved = snap.Dissolutions
-	m.owned = owned
+	// The cached ids only grow. PrimeOwnerKeys adds to them without waiting for
+	// a scan, so a scan that read the store before it must not drop what it added.
+	if m.owned == nil {
+		m.owned = make(map[[protx.KeyIDSize]byte]uint32, len(owned))
+	}
+	for id, idx := range owned {
+		m.owned[id] = idx
+	}
 	return nil
 }
 
@@ -566,4 +576,115 @@ func (m *Manager) StakedAmount() int64 {
 		}
 	}
 	return total
+}
+
+// OwnerIndex returns the owner index of one of the wallet's owner key ids. It
+// knows only the ids that have been derived and cached.
+func (m *Manager) OwnerIndex(id [protx.KeyIDSize]byte) (uint32, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	idx, ok := m.owned[id]
+	return idx, ok
+}
+
+// NeedsKeys reports whether a scan could need a key that is not cached, so that
+// it fails while the wallet is locked: some index below the owner counter plus
+// the gap has no cached key id.
+func (m *Manager) NeedsKeys() (bool, error) {
+	snap, err := m.store.Load()
+	if err != nil {
+		return false, err
+	}
+	return uint64(len(snap.OwnerKeyIDs)) < uint64(snap.NextOwner)+ownerGap, nil
+}
+
+// PrimeOwnerKeys derives and caches the owner key id of every index below the
+// owner counter plus the gap, which is every index a scan looks at, so that a
+// scan needs no key while the wallet is locked. It needs the wallet unlocked if
+// anything is missing, and does not wait for a scan.
+func (m *Manager) PrimeOwnerKeys() error {
+	snap, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+	cached := make(map[uint32]struct{}, len(snap.OwnerKeyIDs))
+	for _, idx := range snap.OwnerKeyIDs {
+		cached[idx] = struct{}{}
+	}
+	newIDs := make(map[uint32][protx.KeyIDSize]byte)
+	limit := uint64(snap.NextOwner) + ownerGap
+	for idx := uint32(0); uint64(idx) < limit && idx <= maxMasternodeIdx; idx++ {
+		if _, ok := cached[idx]; ok {
+			continue
+		}
+		id, err := ownerKeyID(m.keys, m.coinType, idx)
+		if err != nil {
+			return err
+		}
+		newIDs[idx] = id
+	}
+	if len(newIDs) == 0 {
+		return nil
+	}
+	if err := m.store.Save(Update{OwnerKeyIDs: newIDs}); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for idx, id := range newIDs {
+		m.owned[id] = idx
+	}
+	return nil
+}
+
+// ReserveOwner reserves the next owner index and returns it with its key id,
+// which goes in a share table. The index is recorded as used before the key is
+// derived (see NewShareOwner), and the ids a scan will need are cached after, so
+// that the next scan does not need the wallet unlocked. If that fails the index
+// stays reserved.
+func (m *Manager) ReserveOwner() (uint32, [protx.KeyIDSize]byte, error) {
+	idx, id, err := NewShareOwner(m.store, m.keys, m.coinType)
+	if err != nil {
+		return 0, id, err
+	}
+	if err := m.PrimeOwnerKeys(); err != nil {
+		return 0, id, fmt.Errorf("owner index %d is reserved: %w", idx, err)
+	}
+	return idx, id, nil
+}
+
+// Owned is a masternode the wallet has a share of.
+type Owned struct {
+	MN *SharedMN
+	// Shares are the indexes in MN.Shares of the wallet's own shares.
+	Shares []int
+	// Dissolution is the proven spend of the collateral, or nil.
+	Dissolution *Spend
+}
+
+// List returns copies of the wallet's masternodes, oldest first, as registered
+// (not with the server's info), with the dissolved ones.
+func (m *Manager) List() []Owned {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Owned, 0, len(m.mns))
+	for h, mn := range m.mns {
+		o := Owned{MN: mn.clone()}
+		for i := range mn.Shares {
+			if _, ok := m.owned[mn.Shares[i].KeyIDOwner]; ok {
+				o.Shares = append(o.Shares, i)
+			}
+		}
+		if sp, ok := m.dissolved[h]; ok {
+			o.Dissolution = &sp
+		}
+		out = append(out, o)
+	}
+	slices.SortFunc(out, func(a, b Owned) int {
+		if c := cmp.Compare(a.MN.RegisteredHeight, b.MN.RegisteredHeight); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.MN.ProTxHash[:], b.MN.ProTxHash[:])
+	})
+	return out
 }

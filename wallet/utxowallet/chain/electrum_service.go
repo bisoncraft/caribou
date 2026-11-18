@@ -39,6 +39,9 @@ type ElectrumNetwork interface {
 	TipChangeChan() <-chan *electrum.TipChange
 	ScripthashChan() <-chan *electrum.ScripthashStatus
 
+	// ProTxInfo issues `protx.info` on the current server (Dash only).
+	ProTxInfo(ctx context.Context, proTxHash chainhash.Hash) (*electrum.ProTxInfo, error)
+
 	// Scripthash subscriptions.
 	SubscribeScripthash(ctx context.Context, scripthash string) (*electrum.ScripthashStatus, error)
 	UnsubscribeScripthash(ctx context.Context, scripthash string)
