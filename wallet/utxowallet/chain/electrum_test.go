@@ -284,6 +284,10 @@ func (s *stubNetwork) ListUnspent(_ context.Context, _ string) ([]electrum.Unspe
 // verifyInclusion call goes through first), so GetMerkle never mutates a header
 // and cannot race the concurrent header serialization in buildRelevantTx. Tests
 // exercising a LYING server override stub behavior instead.
+func (s *stubNetwork) ProTxInfo(context.Context, chainhash.Hash) (*electrum.ProTxInfo, error) {
+	return nil, electrum.ErrProTxUnsupported
+}
+
 func (s *stubNetwork) GetMerkle(_ context.Context, txid string, height int32) (*electrum.MerkleProof, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
