@@ -2775,6 +2775,50 @@ func TestOutputLocks(t *testing.T) {
 			},
 		},
 		{
+			// Asserts that the leased balance is what the unspent
+			// leased outputs are worth, until a lease ends.
+			name: "leased balance",
+			run: func(t *testing.T, s *Store, ns walletdb.ReadWriteBucket) {
+				assertLeased(t, s, ns, 0)
+
+				lockID := LockID{1}
+				_ = lock(t, s, ns, lockID, unconfirmedOutPoint, nil)
+				assertLeased(t, s, ns, unconfirmedBalance)
+				expiry := lock(
+					t, s, ns, lockID, confirmedOutPoint, nil,
+				)
+				assertLeased(t, s, ns, balance)
+
+				unlock(t, s, ns, lockID, unconfirmedOutPoint, nil)
+				assertLeased(t, s, ns, confirmedBalance)
+
+				s.clock.(*clock.TestClock).SetTime(expiry)
+				assertLeased(t, s, ns, 0)
+			},
+		},
+		{
+			// Asserts that a leased output that an unmined
+			// transaction spends is not counted.
+			name: "leased balance skips an unmined spend",
+			run: func(t *testing.T, s *Store, ns walletdb.ReadWriteBucket) {
+				lockID := LockID{1}
+				_ = lock(t, s, ns, lockID, confirmedOutPoint, nil)
+				assertLeased(t, s, ns, confirmedBalance)
+
+				txHash := confirmedTx.TxHash()
+				rec, err := NewTxRecordFromMsgTx(
+					"btc", spendOutput(&txHash, 0, 500), time.Now(),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.InsertTx(ns, rec, nil); err != nil {
+					t.Fatal(err)
+				}
+				assertLeased(t, s, ns, 0)
+			},
+		},
+		{
 			// Assert that deleting expired locked outputs works as
 			// intended.
 			name: "delete expired locked outputs",
@@ -2853,5 +2897,17 @@ func TestOutputLocks(t *testing.T) {
 				testCase.run(t, store, ns)
 			})
 		})
+	}
+}
+
+func assertLeased(t *testing.T, s *Store, ns walletdb.ReadBucket, exp btcutil.Amount) {
+	t.Helper()
+
+	got, err := s.LeasedBalance(ns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != exp {
+		t.Fatalf("leased balance %v, want %v", got, exp)
 	}
 }

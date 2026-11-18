@@ -3192,6 +3192,19 @@ func (w *Wallet) ListLeasedOutputs() ([]*ListLeasedOutputResult, error) {
 	return results, err
 }
 
+// LeasedBalance returns the value of the leased outputs that are unspent: the
+// amount that is set aside by leases and so is in neither the spendable balance
+// nor coin selection.
+func (w *Wallet) LeasedBalance() (btcutil.Amount, error) {
+	var total btcutil.Amount
+	err := walletdb.View(w.db, func(tx walletdb.ReadTx) error {
+		var err error
+		total, err = w.TxStore.LeasedBalance(tx.ReadBucket(wtxmgrNamespaceKey))
+		return err
+	})
+	return total, err
+}
+
 // DumpPrivKeys returns the WIF-encoded private keys for all addresses with
 // private keys in a wallet.
 func (w *Wallet) DumpPrivKeys() ([]string, error) {
