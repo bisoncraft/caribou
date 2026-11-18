@@ -459,26 +459,35 @@ func (m *Manager) matchOwners(snap Snapshot, cands []*candidate) (map[[protx.Key
 // wallet's tip is ErrStale. A reply that contradicts the registration, which a
 // reorg can cause, is retried once after a Refresh.
 func (m *Manager) SharedMN(ctx context.Context, hash chainhash.Hash, fresh bool) (*SharedMN, error) {
+	if !fresh {
+		return m.copyOf(hash)
+	}
+	c, _, err := m.Reported(ctx, hash)
+	return c, err
+}
+
+// Reported is SharedMN with the server's data applied. It also returns the
+// reply that was checked against the registration, for what only the server
+// knows: banned state and the last paid height. The reply is untrusted beyond
+// the fields ApplyInfo matched.
+func (m *Manager) Reported(ctx context.Context, hash chainhash.Hash) (*SharedMN, *electrum.ProTxInfo, error) {
 	c, err := m.copyOf(hash)
 	if err != nil {
-		return nil, err
-	}
-	if !fresh {
-		return c, nil
+		return nil, nil, err
 	}
 	for attempt := 0; ; attempt++ {
-		err := m.applyFresh(ctx, c)
+		info, err := m.applyFresh(ctx, c)
 		if err == nil {
-			return c, nil
+			return c, info, nil
 		}
 		if !errors.Is(err, ErrInfoMismatch) || attempt > 0 {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := m.Refresh(ctx); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if c, err = m.copyOf(hash); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 }
@@ -496,17 +505,20 @@ func (m *Manager) copyOf(hash chainhash.Hash) (*SharedMN, error) {
 	return mn.clone(), nil
 }
 
-func (m *Manager) applyFresh(ctx context.Context, c *SharedMN) error {
+func (m *Manager) applyFresh(ctx context.Context, c *SharedMN) (*electrum.ProTxInfo, error) {
 	info, err := m.chain.ProTxInfo(ctx, c.ProTxHash)
 	if err != nil {
-		return fmt.Errorf("protx info: %w", err)
+		return nil, fmt.Errorf("protx info: %w", err)
 	}
 	// The reply's confirmations count from the block that registered the
 	// masternode, so they say which tip the server answered for.
 	if int64(info.State.RegisteredHeight)+int64(info.Confirmations)-1 != int64(m.chain.Tip()) {
-		return ErrStale
+		return nil, ErrStale
 	}
-	return c.ApplyInfo(info, m.net)
+	if err := c.ApplyInfo(info, m.net); err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 // StakedAmount is the total of the wallet's shares in masternodes that are not
