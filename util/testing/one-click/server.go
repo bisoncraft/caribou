@@ -1,7 +1,7 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-// Package nearintentsmock implements a minimal simnet stand-in for the NEAR
+// Package oneclickmock implements a minimal simnet stand-in for the NEAR
 // Intents 1Click swap API (GET /v0/tokens, POST /v0/quote, GET /v0/status,
 // POST /v0/deposit/submit) — the subset the caribou wallet's intents client
 // uses. Committed quotes are backed by real fund movement: the mock watches
@@ -20,7 +20,7 @@
 //
 // It is test-only scaffolding: the real 1Click API surface is much larger,
 // and this server implements only the subset listed above.
-package nearintentsmock
+package oneclickmock
 
 import (
 	"context"

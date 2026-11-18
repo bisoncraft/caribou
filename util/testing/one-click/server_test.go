@@ -1,4 +1,4 @@
-package nearintentsmock
+package oneclickmock
 
 import (
 	"context"

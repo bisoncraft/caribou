@@ -18,9 +18,9 @@
 # baked-in simnet defaults point at this address and signing key); the
 # --intentsapi and --intentssigningkey options override.
 #
-# The session is named near-intents-harness: window 0 (intentsmock) runs the
+# The session is named one-click-harness: window 0 (oneclickmock) runs the
 # mock in the foreground, window 1 (harness-ctl) holds the helper scripts in
-# ~/dextest/near-intents/harness-ctl/:
+# ~/dextest/one-click/harness-ctl/:
 #   ./status <depositAddress|last>       # query a swap's 1Click status
 #   ./swaps                              # dump all swap states
 #   ./lastswap                           # deposit address of the newest swap
@@ -30,13 +30,13 @@
 #   ./quit                               # shut down the mock and the session
 set -e
 
-NODES_ROOT=~/dextest/near-intents
+NODES_ROOT=~/dextest/one-click
 HARNESS_DIR="${NODES_ROOT}/harness-ctl"
 ADDR="127.0.0.1:17781"
 API_URL="http://${ADDR}"
 CHAINS="${CHAINS:-auto}"
 RATES="${RATES-http://127.0.0.3:5758}"
-SESSION="near-intents-harness"
+SESSION="one-click-harness"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
@@ -50,7 +50,7 @@ stop_running() {
     tmux kill-session -t "${SESSION}"
     stopped=0
   fi
-  if pkill -f "intentsmock -addr ${ADDR}" 2>/dev/null; then
+  if pkill -f "oneclickmock -addr ${ADDR}" 2>/dev/null; then
     stopped=0
   fi
   return "${stopped}"
@@ -58,9 +58,9 @@ stop_running() {
 
 if [ "$1" = "stop" ]; then
   if stop_running; then
-    echo "Stopped intents mock harness."
+    echo "Stopped 1Click mock harness."
   else
-    echo "No running intents mock harness."
+    echo "No running 1Click mock harness."
   fi
   exit 0
 fi
@@ -68,17 +68,17 @@ fi
 # A restart must take the old instance down first: the new one cannot bind
 # the port while the old one lives.
 if stop_running; then
-  echo "Stopped the running intents mock harness."
+  echo "Stopped the running 1Click mock harness."
   sleep 0.3
 fi
 
 rm -rf "${NODES_ROOT}"
 mkdir -p "${HARNESS_DIR}"
 
-echo "Building intentsmock..."
-go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/intentsmock" ./util/testing/near-intents/cmd/intentsmock/
+echo "Building oneclickmock..."
+go build -C "${REPO_ROOT}" -o "${NODES_ROOT}/oneclickmock" ./util/testing/one-click/cmd/oneclickmock/
 
-PUBKEY="$("${NODES_ROOT}/intentsmock" -pubkey)"
+PUBKEY="$("${NODES_ROOT}/oneclickmock" -pubkey)"
 
 cat > "${NODES_ROOT}/info.txt" <<EOF
 NEAR Intents 1Click Mock Harness
@@ -169,7 +169,7 @@ chmod +x "${HARNESS_DIR}/force"
 cat > "${HARNESS_DIR}/quit" <<EOF
 #!/usr/bin/env bash
 tmux send-keys -t ${SESSION}:0 C-c
-tmux wait-for nearintents
+tmux wait-for oneclick
 # seppuku
 tmux kill-session -t ${SESSION}
 EOF
@@ -177,10 +177,10 @@ chmod +x "${HARNESS_DIR}/quit"
 
 cd "${NODES_ROOT}" && tmux new-session -d -s "${SESSION}" "$SHELL"
 
-tmux rename-window -t "${SESSION}:0" 'intentsmock'
+tmux rename-window -t "${SESSION}:0" 'oneclickmock'
 tmux send-keys -t "${SESSION}:0" "set +o history" C-m
 tmux send-keys -t "${SESSION}:0" "cd ${NODES_ROOT}" C-m
-tmux send-keys -t "${SESSION}:0" "./intentsmock -addr \"${ADDR}\" -chains \"${CHAINS}\" -rates \"${RATES}\" 2>&1 | tee intentsmock.log; tmux wait-for -S nearintents" C-m
+tmux send-keys -t "${SESSION}:0" "./oneclickmock -addr \"${ADDR}\" -chains \"${CHAINS}\" -rates \"${RATES}\" 2>&1 | tee oneclickmock.log; tmux wait-for -S oneclick" C-m
 
 tmux new-window -t "${SESSION}:1" -n 'harness-ctl' "$SHELL"
 tmux send-keys -t "${SESSION}:1" "set +o history" C-m
@@ -196,16 +196,16 @@ for _ in $(seq 1 20); do
   sleep 0.25
 done
 if [ -z "${up}" ]; then
-  echo "intentsmock failed to start:"
-  tail -20 "${NODES_ROOT}/intentsmock.log" 2>/dev/null || true
+  echo "oneclickmock failed to start:"
+  tail -20 "${NODES_ROOT}/oneclickmock.log" 2>/dev/null || true
   tmux kill-session -t "${SESSION}" 2>/dev/null || true
   exit 1
 fi
 
 cat <<EOF
 
-Intents mock harness running in tmux session ${SESSION}
-(windows: 0 intentsmock, 1 harness-ctl), log: ${NODES_ROOT}/intentsmock.log
+1Click mock harness running in tmux session ${SESSION}
+(windows: 0 oneclickmock, 1 harness-ctl), log: ${NODES_ROOT}/oneclickmock.log
 
   API endpoint: ${API_URL}
   Signing key:  ${PUBKEY}

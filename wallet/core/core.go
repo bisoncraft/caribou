@@ -77,7 +77,7 @@ type Config struct {
 	// startup.
 	NoAutoWalletLock bool // zero value is legacy behavior
 	// IntentsBaseURL overrides the NEAR Intents 1Click API base URL, for
-	// dev servers such as the simnet mock (util/testing/near-intents).
+	// dev servers such as the simnet mock (util/testing/one-click).
 	// Ignored on mainnet: an injected base URL would bypass the pinned
 	// quote-signing key and redirect deposits.
 	IntentsBaseURL string

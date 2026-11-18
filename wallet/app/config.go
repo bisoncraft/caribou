@@ -42,7 +42,7 @@ type CoreConfig struct {
 
 	NoAutoWalletLock bool `long:"no-wallet-lock" description:"Disable locking of wallets on shutdown or logout. Use this if you want your external wallets to stay unlocked after closing the app."`
 
-	IntentsAPI        string `long:"intentsapi" description:"Override the NEAR Intents 1Click API base URL, e.g. for the simnet mock server. Ignored on mainnet. On simnet, defaults to the util/testing/near-intents harness."`
+	IntentsAPI        string `long:"intentsapi" description:"Override the NEAR Intents 1Click API base URL, e.g. for the simnet mock server. Ignored on mainnet. On simnet, defaults to the util/testing/one-click harness."`
 	IntentsSigningKey string `long:"intentssigningkey" description:"Override the pinned 1Click quote-signing public key (base58, optional ed25519: prefix). Ignored on mainnet. On simnet, defaults to the simnet mock's dev key."`
 }
 
@@ -253,7 +253,7 @@ func ResolveConfig(appData string, cfg *Config) error {
 	}
 
 	// On simnet, default the 1Click API to the local mock harness
-	// (util/testing/near-intents), which signs quotes with a deterministic
+	// (util/testing/one-click), which signs quotes with a deterministic
 	// dev key.
 	if cfg.Net == util.Simnet {
 		if cfg.IntentsAPI == "" {

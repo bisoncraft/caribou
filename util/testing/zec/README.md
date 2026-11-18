@@ -202,7 +202,7 @@ zcash-devtool wallet -w w balance --min-confirmations 1
 - **No node wallet.** `zebrad` serves none of the zcashd wallet RPCs
   (`z_sendmany`, `listunspent`, `gettransaction`). The zcashd wallet-RPC
   client in `wallet/asset/zec` cannot use this harness.
-- **near-intents mock.** The mock in `util/testing/near-intents` has its own
+- **1Click mock.** The mock in `util/testing/one-click` has its own
   driver for this harness. It takes deposits at transparent addresses, finds
   them through the alpha node's address index and mempool, and pays out from
   the alpha funder with `./send-alpha`.

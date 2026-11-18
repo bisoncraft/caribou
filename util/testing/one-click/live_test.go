@@ -1,13 +1,13 @@
 //go:build harness
 
-package nearintentsmock
+package oneclickmock
 
 // These tests require running harnesses for the chains involved:
 //   util/testing/btc/harness.sh
 //   util/testing/eth/harness.sh
 //   util/testing/near/harness.sh
 //   util/testing/zec/harness.sh (the zec tests need only this one)
-// Run with: go test -v -tags harness -run TestHarness ./util/testing/near-intents/
+// Run with: go test -v -tags harness -run TestHarness ./util/testing/one-click/
 //
 // Swaps move real simnet funds: deposits are sent from the harness wallets
 // (btc alpha, NEAR test.near) and payouts land on harness-reachable

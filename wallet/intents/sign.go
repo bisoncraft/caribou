@@ -11,7 +11,7 @@ import (
 )
 
 // SimnetSigningKey is the public half of the deterministic dev keypair the
-// simnet 1Click mock server (util/testing/near-intents) signs quotes with.
+// simnet 1Click mock server (util/testing/one-click) signs quotes with.
 // The private half is derived in that package from a fixed seed; a test
 // there asserts the derivation matches this constant. Determinism, not
 // secrecy, is the point — the key authenticates nothing outside a local

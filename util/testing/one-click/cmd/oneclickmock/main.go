@@ -1,9 +1,9 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-// Command intentsmock runs a standalone simnet mock of the NEAR Intents
+// Command oneclickmock runs a standalone simnet mock of the NEAR Intents
 // 1Click swap API, backed by the local chain harnesses, as described in
-// util/testing/near-intents.
+// util/testing/one-click.
 package main
 
 import (
@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	nearintentsmock "github.com/bisoncraft/caribou/util/testing/near-intents"
+	oneclickmock "github.com/bisoncraft/caribou/util/testing/one-click"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func main() {
 	flag.Parse()
 
 	if *pubkey {
-		_, pub := nearintentsmock.DevSigningKey()
+		_, pub := oneclickmock.DevSigningKey()
 		fmt.Println(pub)
 		return
 	}
@@ -43,7 +43,7 @@ func main() {
 		}
 	}
 
-	srv, err := nearintentsmock.New(&nearintentsmock.Config{
+	srv, err := oneclickmock.New(&oneclickmock.Config{
 		DextestDir:      *dextest,
 		Chains:          slugs,
 		ProcessingDelay: *processingDelay,

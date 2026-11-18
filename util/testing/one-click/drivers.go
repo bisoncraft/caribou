@@ -1,7 +1,7 @@
 // This code is available on the terms of the project LICENSE.md file,
 // also available online at https://blueoakcouncil.org/license/1.0.0.
 
-package nearintentsmock
+package oneclickmock
 
 import (
 	"bytes"
@@ -145,7 +145,7 @@ var rpcHTTPClient = &http.Client{Timeout: 10 * time.Second}
 func rpcCall(url, method string, params any, thing any) error {
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
-		"id":      "nearintentsmock",
+		"id":      "oneclickmock",
 		"method":  method,
 		"params":  params,
 	})
