@@ -239,7 +239,9 @@ func TestSharedRegistrationRules(t *testing.T) {
 	owner.KeyIDOwner = [KeyIDSize]byte{1}
 	collateral := good
 	collateral.Collateral.Hash = chainhash.Hash{1}
-	for name, p := range map[string]ProRegTx{"owner key": owner, "external collateral": collateral} {
+	payouts := good
+	payouts.Payouts = []Payout{{Script: []byte{0x51}, Reward: 10000}}
+	for name, p := range map[string]ProRegTx{"owner key": owner, "external collateral": collateral, "payouts": payouts} {
 		if err := p.Serialize(io.Discard); !errors.Is(err, ErrInvalidShared) {
 			t.Errorf("%s: Serialize got %v, want ErrInvalidShared", name, err)
 		}
@@ -251,6 +253,28 @@ func TestSharedRegistrationRules(t *testing.T) {
 	var got ProRegTx
 	if err := Parse(raw, &got); !errors.Is(err, ErrInvalidShared) {
 		t.Errorf("external collateral: Parse got %v, want ErrInvalidShared", err)
+	}
+
+	// The owner key follows the netInfo, at the first byte that differs
+	// between two registrations with one owner that differ only in it.
+	one := good
+	one.Shares, one.Payouts = nil, nil
+	var a, b bytes.Buffer
+	if err := one.Serialize(&a); err != nil {
+		t.Fatal(err)
+	}
+	one.KeyIDOwner = [KeyIDSize]byte{1}
+	if err := one.Serialize(&b); err != nil {
+		t.Fatal(err)
+	}
+	at := 0
+	for a.Bytes()[at] == b.Bytes()[at] {
+		at++
+	}
+	raw = bytes.Clone(tx.ExtraPayload)
+	raw[at] = 1
+	if err := Parse(raw, &got); !errors.Is(err, ErrInvalidShared) {
+		t.Errorf("owner key: Parse got %v, want ErrInvalidShared", err)
 	}
 
 	// A registration with one owner may have both.
@@ -686,6 +710,21 @@ func TestProRegTxV2EvoNode(t *testing.T) {
 	}
 	if got.MNType != TypeEvo || got.PlatformP2PPort != 0x1122 || got.PlatformHTTPPort != 0x3344 {
 		t.Fatalf("decoded %+v", got)
+	}
+
+	// The payload hash, which an external collateral key signs, covers the
+	// platform fields.
+	h1, err := p.PayloadHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.PlatformHTTPPort++
+	h2, err := p.PayloadHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 == h2 {
+		t.Fatal("payload hash ignores the platform ports")
 	}
 }
 

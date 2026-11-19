@@ -20,8 +20,8 @@ const (
 
 // Address networks of a NetEntry, as numbered by BIP155.
 const (
-	NetworkIPv4 = 1
-	NetworkIPv6 = 2
+	NetworkIPv4  = 1
+	NetworkIPv6  = 2
 	NetworkTORv3 = 4
 	NetworkI2P   = 5
 	NetworkCJDNS = 6
@@ -69,8 +69,9 @@ type NetPurpose struct {
 // A service entry has a Network and an Addr, 4 bytes for NetworkIPv4, 16 for
 // NetworkIPv6, 32 for NetworkTORv3, 32 for NetworkI2P and 16 for NetworkCJDNS,
 // the sizes Dash Core refuses a payload over. Other networks (TORv2 and ones
-// Core does not know) are carried as they are; Core ignores such an entry. A domain entry has a
-// Domain instead. The fields of the other kind must be left zero.
+// Core does not know) are carried as they are, though Core reads them as an
+// invalid address and refuses the registration. A domain entry has a Domain
+// instead. The fields of the other kind must be left zero.
 type NetEntry struct {
 	Kind    uint8
 	Network uint8

@@ -91,13 +91,13 @@ var (
 	// version does not support.
 	ErrUnsupportedType = errors.New("unsupported masternode type")
 	// ErrInvalidShared is returned for a shared registration (one with
-	// Shares) that has an owner key or external collateral, which Dash Core
-	// refuses.
+	// Shares) that has an owner key, external collateral or payouts, which
+	// Dash Core refuses.
 	ErrInvalidShared = errors.New("invalid shared registration")
 	// ErrUnsupportedNetInfo is returned for a netInfo this package cannot
 	// carry: another layout version, an entry kind other than a service
-	// address or a domain, an IPv4 or IPv6 address of the wrong length, or a
-	// domain that is too long.
+	// address or a domain, a service address of the wrong length for its
+	// network, or a domain that is too long.
 	ErrUnsupportedNetInfo = errors.New("unsupported netInfo")
 	// ErrFieldTooLong is returned for a script, signature or count longer
 	// than the codec allows: by Serialize, so that a payload that is written
@@ -205,9 +205,11 @@ type Share struct {
 // ProRegTx is a provider registration payload (special transaction type 1).
 //
 // Version 2 uses Service and ScriptPayout. Version 3 replaces them with
-// NetInfo and Payouts and adds Shares, EarlyPeriodBlocks, EarlyPenalty and, for
-// an EvoNode, PlatformNodeID. A field the version does not have must be left
-// zero, or Serialize fails.
+// NetInfo and Payouts and adds Shares, EarlyPeriodBlocks and EarlyPenalty. An
+// EvoNode adds PlatformNodeID, and at version 2 the two platform ports. A field
+// the version does not have must be left zero, or Serialize fails. A shared
+// registration with an owner key, external collateral or Payouts is refused
+// (ErrInvalidShared).
 type ProRegTx struct {
 	// Version is Version or VersionExtAddr.
 	Version uint16
@@ -348,8 +350,9 @@ func (p *ProRegTx) checkSerializable() error {
 }
 
 // checkShared applies the rules Dash Core puts on a shared registration: the
-// collateral is output Index of the registration itself and there is no owner
-// key, because the share owners hold the keys.
+// collateral is output Index of the registration itself, there is no owner key
+// because the share owners hold the keys, and there are no payouts because
+// owner rewards come from the share table.
 func (p *ProRegTx) checkShared() error {
 	if len(p.Shares) == 0 {
 		return nil
@@ -359,6 +362,9 @@ func (p *ProRegTx) checkShared() error {
 	}
 	if p.KeyIDOwner != [KeyIDSize]byte{} {
 		return fmt.Errorf("%w: owner key", ErrInvalidShared)
+	}
+	if len(p.Payouts) != 0 {
+		return fmt.Errorf("%w: payouts", ErrInvalidShared)
 	}
 	return nil
 }
