@@ -306,6 +306,8 @@ func (t *Terms) validateNetInfo(rules NetRules) error {
 			if e.Network != protx.NetworkIPv4 {
 				return invalid("bad-protx-netinfo-addr-type: the first address must be IPv4")
 			}
+			// Only mainnet is pinned: Dash Core's v3 netInfo does not refuse the
+			// mainnet port elsewhere, which only the version 2 netInfo does.
 			if rules.Mainnet && e.Port != mainnetCorePort {
 				return invalid("bad-protx-netinfo-port: mainnet port must be %d", mainnetCorePort)
 			}
@@ -314,10 +316,16 @@ func (t *Terms) validateNetInfo(rules NetRules) error {
 	return nil
 }
 
-// validAddr follows CNetAddr::IsValid: it is false for the unspecified address,
-// the IPv4 broadcast address and the documentation range 2001:db8::/32.
+// validAddr follows CNetAddr::IsValid and the BIP155 decode in front of it: it
+// is false for the unspecified address, the IPv4 broadcast address, the
+// documentation range 2001:db8::/32 and, because Dash Core reads them as an
+// invalid address, IPv4 and the retired Tor v2 range embedded in IPv6 and the
+// internal range.
 func validAddr(ip netip.Addr) bool {
-	if ip.IsUnspecified() {
+	if ip.IsUnspecified() || ip.Is4In6() {
+		return false
+	}
+	if prefix("fd6b:88c0:8724::/48").Contains(ip) || prefix("fd87:d87e:eb43::/48").Contains(ip) {
 		return false
 	}
 	if ip.Is4() && ip.As4() == [4]byte{255, 255, 255, 255} {
