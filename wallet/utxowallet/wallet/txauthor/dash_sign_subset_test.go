@@ -110,9 +110,8 @@ func requireDashSignature(t *testing.T, tx *bisonwire.Tx, idx int, pkScript []by
 // TestAddDashInputScriptsSignsOnlyListedInputs pins what the function is for:
 // the caller signs its own input of a transaction that also holds another
 // participant's signed input and the shared collateral. Another participant's
-// signature must survive, and the collateral spend must keep the empty
-// signature script a dissolution needs, since its signatures are in the
-// payload.
+// signature must survive, and the collateral input, which is not listed, must
+// keep its empty signature script.
 func TestAddDashInputScriptsSignsOnlyListedInputs(t *testing.T) {
 	t.Parallel()
 
@@ -295,8 +294,9 @@ func TestAddAllDashInputScriptsErrorLeavesTxUnchanged(t *testing.T) {
 	// Input 1 spends a script that is not P2PKH, so signing fails after input 0.
 	prev := [][]byte{pkScript, {0x51}, pkScript}
 
-	if err := AddAllDashInputScripts(tx, prev, stubKeySecrets(t)); err == nil {
-		t.Fatal("expected an error for the non P2PKH input")
+	err := AddAllDashInputScripts(tx, prev, stubKeySecrets(t))
+	if err == nil || !strings.Contains(err.Error(), "input 1") {
+		t.Fatalf("error %v, want one for input 1", err)
 	}
 	for i, got := range signatureScripts(tx) {
 		if !bytes.Equal(got, before[i]) {
