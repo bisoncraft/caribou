@@ -67,6 +67,23 @@ func validTerms(t *testing.T) *Terms {
 	return tm
 }
 
+// second adds an IPv6 entry for addr to the Core P2P addresses of tm.
+func second(tm *Terms, addr string) {
+	e := tm.NetInfo.Purposes[0].Entries[0]
+	e.Network, e.Addr = protx.NetworkIPv6, netip.MustParseAddr(addr).AsSlice()
+	tm.NetInfo.Purposes[0].Entries = append(tm.NetInfo.Purposes[0].Entries, e)
+}
+
+// TestValidateAcceptsMainnetPortOffMainnet pins that the mainnet port is only
+// pinned on mainnet: Dash Core's v3 netInfo does not refuse it elsewhere.
+func TestValidateAcceptsMainnetPortOffMainnet(t *testing.T) {
+	tm := validTerms(t)
+	tm.NetInfo, _ = CoreP2PNetInfo(netip.MustParseAddrPort("8.8.8.8:9999"))
+	if err := tm.Validate(TestnetRules); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateAccepts(t *testing.T) {
 	if err := validTerms(t).Validate(RegtestRules); err != nil {
 		t.Fatal(err)
@@ -119,6 +136,10 @@ func TestValidateRejects(t *testing.T) {
 			e.Network, e.Addr = protx.NetworkIPv6, netip.MustParseAddr("2001:db8::1").AsSlice()
 			tm.NetInfo.Purposes[0].Entries = append(tm.NetInfo.Purposes[0].Entries, e)
 		}, "netinfo-addr:"},
+		{"ipv4 mapped ipv6 second entry", MainnetRules, func(tm *Terms) { public(tm, "8.8.8.8:9999"); second(tm, "::ffff:8.8.4.4") }, "netinfo-addr:"},
+		{"ipv4 mapped private ipv6 second entry", MainnetRules, func(tm *Terms) { public(tm, "8.8.8.8:9999"); second(tm, "::ffff:10.0.0.1") }, "netinfo-addr:"},
+		{"internal ipv6 range on regtest", RegtestRules, func(tm *Terms) { second(tm, "fd6b:88c0:8724::1") }, "netinfo-addr:"},
+		{"tor v2 ipv6 range on regtest", RegtestRules, func(tm *Terms) { second(tm, "fd87:d87e:eb43::1") }, "netinfo-addr:"},
 		{"cgnat on mainnet", MainnetRules, func(tm *Terms) { public(tm, "100.64.1.1:9999") }, "unroutable"},
 		{"benchmarking range on testnet", TestnetRules, func(tm *Terms) { public(tm, "198.18.0.1:19999") }, "unroutable"},
 		{"operator reward over 100%", RegtestRules, func(tm *Terms) { tm.OperatorReward = 10001 }, "operator-reward"},
