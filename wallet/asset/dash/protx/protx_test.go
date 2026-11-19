@@ -660,6 +660,9 @@ func TestSerializeRejectsUnsupported(t *testing.T) {
 		{"ProUpRegTx sig", &ProUpRegTx{Version: Version, PayloadSig: long(maxSigSize + 1)}, ErrFieldTooLong},
 		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion, ScriptReward: long(maxScriptSize + 1)}, ErrFieldTooLong},
 		{"ProUpShareTx sig", &ProUpShareTx{Version: SharedVersion, Sig: long(maxSigSize + 1)}, ErrFieldTooLong},
+		{"ProUpShareTx empty sig", &ProUpShareTx{Version: SharedVersion}, ErrFieldTooLong},
+		{"ProUpShareTx short sig", &ProUpShareTx{Version: SharedVersion, Sig: long(CompactSigSize - 1)}, ErrFieldTooLong},
+		{"ProUpShareTx long sig", &ProUpShareTx{Version: SharedVersion, Sig: long(CompactSigSize + 1)}, ErrFieldTooLong},
 		{"ProDisTx sigs", &ProDisTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, maxCount+1)}, ErrFieldTooLong},
 		{"ProUpSharedRegTx sigs", &ProUpSharedRegTx{Version: SharedVersion, Sigs: make([][CompactSigSize]byte, maxCount+1)}, ErrFieldTooLong},
 	}
@@ -875,7 +878,7 @@ func TestParseLimitsAreOneError(t *testing.T) {
 	}{
 		{"ProUpServTx script", &ProUpServTx{Version: Version}, 2 + 2 + chainhash.HashSize + 18, maxScriptSize},
 		{"ProUpRegTx script", &ProUpRegTx{Version: Version}, 2 + chainhash.HashSize + 2 + OperatorPubKeySize + KeyIDSize, maxScriptSize},
-		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion}, 2 + chainhash.HashSize + 2, maxScriptSize},
+		{"ProUpShareTx script", &ProUpShareTx{Version: SharedVersion, Sig: make([]byte, CompactSigSize)}, 2 + chainhash.HashSize + 2, maxScriptSize},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

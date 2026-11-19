@@ -424,6 +424,29 @@ func TestProDisTx(t *testing.T) {
 	}
 }
 
+// TestProUpShareTxDecodeSigLength checks that a share update whose signature
+// is not a 65 byte compact signature does not decode.
+func TestProUpShareTxDecodeSigLength(t *testing.T) {
+	t.Parallel()
+
+	p := ProUpShareTx{Version: SharedVersion, Sig: make([]byte, CompactSigSize)}
+	var buf bytes.Buffer
+	if err := p.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	good := buf.Bytes()
+	// The signature is last, behind a one byte length.
+	at := len(good) - CompactSigSize - 1
+	for _, n := range []int{0, CompactSigSize - 1, CompactSigSize + 1} {
+		raw := append(append([]byte{}, good[:at]...), byte(n))
+		raw = append(raw, make([]byte, n)...)
+		var got ProUpShareTx
+		if err := got.Deserialize(bytes.NewReader(raw)); !errors.Is(err, ErrFieldTooLong) {
+			t.Errorf("%d byte signature: got %v, want ErrFieldTooLong", n, err)
+		}
+	}
+}
+
 func TestProUpShareTx(t *testing.T) {
 	t.Parallel()
 

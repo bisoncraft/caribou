@@ -159,21 +159,17 @@ func (s *Service) serialize(w io.Writer) error {
 	if _, err := w.Write(s.IP[:]); err != nil {
 		return err
 	}
-	var port [2]byte
-	binary.BigEndian.PutUint16(port[:], s.Port)
-	_, err := w.Write(port[:])
-	return err
+	return writeU16BE(w, s.Port)
 }
 
 func (s *Service) deserialize(r io.Reader) error {
 	if _, err := io.ReadFull(r, s.IP[:]); err != nil {
 		return err
 	}
-	var port [2]byte
-	if _, err := io.ReadFull(r, port[:]); err != nil {
+	var err error
+	if s.Port, err = readU16BE(r); err != nil {
 		return err
 	}
-	s.Port = binary.BigEndian.Uint16(port[:])
 	if !s.canonical() {
 		*s = Service{}
 	}
@@ -465,7 +461,6 @@ func (p *ProRegTx) deserializeExt(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	p.Payouts = nil
 	if np > 0 {
 		p.Payouts = make([]Payout, np)
 	}
@@ -481,7 +476,6 @@ func (p *ProRegTx) deserializeExt(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	p.Shares = nil
 	if ns > 0 {
 		p.Shares = make([]Share, ns)
 	}

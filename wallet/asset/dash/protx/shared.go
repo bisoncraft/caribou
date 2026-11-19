@@ -98,7 +98,10 @@ func (p *ProUpShareTx) Serialize(w io.Writer) error {
 	if _, err := w.Write(p.InputsHash[:]); err != nil {
 		return err
 	}
-	return writeBytes(w, "sig", p.Sig, maxSigSize)
+	if len(p.Sig) != CompactSigSize {
+		return fmt.Errorf("%w: signature is %d bytes, want %d", ErrFieldTooLong, len(p.Sig), CompactSigSize)
+	}
+	return writeBytes(w, "sig", p.Sig, CompactSigSize)
 }
 
 // Deserialize reads the payload.
@@ -122,8 +125,13 @@ func (p *ProUpShareTx) Deserialize(r io.Reader) error {
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
 		return err
 	}
-	p.Sig, err = readBytes(r, "sig", maxSigSize)
-	return err
+	if p.Sig, err = readBytes(r, "sig", CompactSigSize); err != nil {
+		return err
+	}
+	if len(p.Sig) != CompactSigSize {
+		return fmt.Errorf("%w: signature is %d bytes, want %d", ErrFieldTooLong, len(p.Sig), CompactSigSize)
+	}
+	return nil
 }
 
 // ProUpSharedRegTx is a shared masternode registrar update payload (special

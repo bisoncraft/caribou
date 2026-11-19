@@ -178,7 +178,6 @@ func (n *NetInfo) deserialize(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	n.Purposes = nil
 	if np > 0 {
 		n.Purposes = make([]NetPurpose, np)
 	}
