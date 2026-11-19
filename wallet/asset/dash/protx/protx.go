@@ -3,19 +3,27 @@
 // the LICENSE file.
 
 // Package protx encodes and decodes the DIP-3 provider transaction payloads
-// (the extra payload of Dash special transactions of types 1 to 4) and computes
-// the hashes they commit to. It has no wallet dependency.
+// (the extra payload of Dash special transactions of types 1 to 4), the shared
+// masternode payloads of Dash Core v24 (types 10 to 12), and computes the
+// hashes the older ones commit to. It has no wallet dependency.
 //
-// Only payload version 2 (basic BLS scheme, one CService address) is
-// supported. Version 3 (extended addresses) is not accepted by released chains
-// until DEPLOYMENT_V24 activates, and evonode registrations are not supported.
-// The layouts were pinned against transactions built by Dash Core v23.1.4,
-// see testdata.
+// Payload version 2 (basic BLS scheme, one CService address) is supported by
+// all four DIP-3 payloads, for regular masternodes only. A ProRegTx also
+// decodes at version 3 (extended addresses, payout lists and shares, regular
+// and EvoNode); the other DIP-3 payloads at version 3 are not supported yet.
+// Released chains accept version 3 only once DEPLOYMENT_V24 activates. The
+// layouts were pinned against transactions built by Dash Core v23.1.4 (version
+// 2) and v24.0.0 (version 3, types 10 to 12), see testdata.
 //
-// Serialize does not enforce the length limits Deserialize applies to the
-// payout script (10000 bytes) and the payloadSig (96 bytes), so a payload built
-// with a longer one cannot be read back. Dash only accepts a 65 byte compact
-// signature or none.
+// Decoding a version 3 ProRegTx and encoding it again gives the same bytes,
+// but a hash over a payload this wallet did not build must still use the bytes
+// as received (bisonwire.Tx.ExtraPayload), never a re-encoding. Version 2 does
+// not have that property, see Service. PayloadHash and CollateralMessage return
+// ErrUnsupportedVersion for version 3 until the digests are pinned.
+//
+// Serialize applies the length limits Deserialize does (10000 bytes for a
+// script, 96 for a signature), so a payload that is written can be read back.
+// Dash only accepts a 65 byte compact signature or none.
 package protx
 
 import (
@@ -25,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -36,12 +45,20 @@ import (
 )
 
 const (
-	// Version is the only supported payload version: the basic BLS scheme
-	// with a single CService address.
+	// Version is the payload version of the basic BLS scheme with a single
+	// CService address, supported by every DIP-3 payload.
 	Version = 2
+	// VersionExtAddr is the payload version with extended addresses
+	// (NetInfo). Only a ProRegTx supports it.
+	VersionExtAddr = 3
+	// SharedVersion is the payload version of the shared masternode types 10
+	// to 12.
+	SharedVersion = 1
 
 	// TypeRegular is the masternode type of a regular masternode.
 	TypeRegular = 0
+	// TypeEvo is the masternode type of an EvoNode.
+	TypeEvo = 1
 
 	// KeyIDSize is the size of a key id (hash160 of a public key).
 	KeyIDSize = 20
@@ -49,6 +66,8 @@ const (
 	OperatorPubKeySize = 48
 	// BLSSigSize is the size of a compressed BLS12-381 G2 signature.
 	BLSSigSize = 96
+	// CompactSigSize is the size of a compact ECDSA signature.
+	CompactSigSize = 65
 
 	// maxScriptSize bounds a payout script read from a payload so a
 	// malformed length cannot force a large allocation.
@@ -56,15 +75,35 @@ const (
 	// maxSigSize bounds a payloadSig. A compact ECDSA signature is 65 bytes
 	// and a BLS signature is 96.
 	maxSigSize = BLSSigSize
+	// maxCount bounds a CompactSize count of netInfo purposes or entries
+	// read from a payload, as an allocation guard. The limits Dash enforces
+	// are much lower and are validation, not codec, concerns. The counts of
+	// payouts, shares and signatures are one byte, so they are bounded by
+	// their encoding.
+	maxCount = 255
 )
 
 var (
-	// ErrUnsupportedVersion is returned for a payload version other than
-	// Version.
+	// ErrUnsupportedVersion is returned for a payload version the payload
+	// type does not support.
 	ErrUnsupportedVersion = errors.New("unsupported provider tx version")
-	// ErrUnsupportedType is returned for a masternode type other than
-	// TypeRegular.
+	// ErrUnsupportedType is returned for a masternode type the payload
+	// version does not support.
 	ErrUnsupportedType = errors.New("unsupported masternode type")
+	// ErrInvalidShared is returned for a shared registration (one with
+	// Shares) that has an owner key, external collateral or payouts, which
+	// Dash Core refuses.
+	ErrInvalidShared = errors.New("invalid shared registration")
+	// ErrUnsupportedNetInfo is returned for a netInfo this package cannot
+	// carry: another layout version, an entry kind other than a service
+	// address or a domain, a service address of the wrong length for its
+	// network, or a domain that is too long.
+	ErrUnsupportedNetInfo = errors.New("unsupported netInfo")
+	// ErrFieldTooLong is returned for a script, signature or count longer
+	// than the codec allows: by Serialize, so that a payload that is written
+	// can be read back, and by Deserialize. An address over the BIP155 limit
+	// is ErrUnsupportedNetInfo.
+	ErrFieldTooLong = errors.New("provider tx field too long")
 	// ErrTrailingData is returned when a payload has bytes after the last
 	// field.
 	ErrTrailingData = errors.New("trailing data after provider tx payload")
@@ -123,46 +162,95 @@ func (s *Service) serialize(w io.Writer) error {
 	if _, err := w.Write(s.IP[:]); err != nil {
 		return err
 	}
-	var port [2]byte
-	binary.BigEndian.PutUint16(port[:], s.Port)
-	_, err := w.Write(port[:])
-	return err
+	return writeU16BE(w, s.Port)
 }
 
 func (s *Service) deserialize(r io.Reader) error {
 	if _, err := io.ReadFull(r, s.IP[:]); err != nil {
 		return err
 	}
-	var port [2]byte
-	if _, err := io.ReadFull(r, port[:]); err != nil {
+	var err error
+	if s.Port, err = readU16BE(r); err != nil {
 		return err
 	}
-	s.Port = binary.BigEndian.Uint16(port[:])
 	if !s.canonical() {
 		*s = Service{}
 	}
 	return nil
 }
 
+// Payout is one payee of a masternode's owner reward.
+type Payout struct {
+	Script []byte
+	// Reward is the payee's share in basis points.
+	Reward uint16
+}
+
+// Share is one participant of a shared masternode: its part of the collateral
+// and what it signed to join.
+type Share struct {
+	// Amount is the collateral contribution in duffs.
+	Amount int64
+	// RefundScript receives the principal at dissolution.
+	RefundScript []byte
+	// RewardScript receives this share's rewards.
+	RewardScript []byte
+	KeyIDOwner   [KeyIDSize]byte
+	// JoinSig is the owner's compact signature consenting to the
+	// registration. On the wire all shares are written first, then all join
+	// signatures.
+	JoinSig [CompactSigSize]byte
+}
+
 // ProRegTx is a provider registration payload (special transaction type 1).
+//
+// Version 2 uses Service and ScriptPayout. Version 3 replaces them with
+// NetInfo and Payouts and adds Shares, EarlyPeriodBlocks and EarlyPenalty. An
+// EvoNode adds PlatformNodeID, and at version 2 the two platform ports. A field
+// the version does not have must be left zero, or Serialize fails. A shared
+// registration with an owner key, external collateral or Payouts is refused
+// (ErrInvalidShared).
 type ProRegTx struct {
+	// Version is Version or VersionExtAddr.
 	Version uint16
-	// MNType is TypeRegular.
+	// MNType is TypeRegular or TypeEvo.
 	MNType uint16
 	Mode   uint16
 	// Collateral is the collateral outpoint. A zero hash means the collateral
-	// is output Index of the registration transaction itself.
-	Collateral     wire.OutPoint
-	Service        Service
+	// is output Index of the registration transaction itself. A shared
+	// masternode's collateral is always that.
+	Collateral wire.OutPoint
+	// Service is the core P2P address (version 2).
+	Service Service
+	// NetInfo holds the addresses (version 3).
+	NetInfo NetInfo
+	// KeyIDOwner is zero for a shared masternode: the share owners hold the
+	// keys.
 	KeyIDOwner     [KeyIDSize]byte
 	PubKeyOperator [OperatorPubKeySize]byte
 	KeyIDVoting    [KeyIDSize]byte
 	// OperatorReward is the operator's share of the reward in basis points.
 	OperatorReward uint16
-	ScriptPayout   []byte
+	// ScriptPayout is the owner's payout script (version 2).
+	ScriptPayout []byte
+	// Payouts splits the owner's reward (version 3).
+	Payouts []Payout
+	// Shares is the collateral share table of a shared masternode (version
+	// 3). It is empty for a masternode with one owner.
+	Shares []Share
+	// EarlyPeriodBlocks and EarlyPenalty are the early dissolution terms of a
+	// shared masternode (version 3), zero otherwise.
+	EarlyPeriodBlocks uint32
+	EarlyPenalty      int64
 	// InputsHash commits to the transaction's input outpoints, see
 	// InputsHash.
 	InputsHash chainhash.Hash
+	// PlatformNodeID is the Platform node id of an EvoNode.
+	PlatformNodeID [KeyIDSize]byte
+	// PlatformP2PPort and PlatformHTTPPort are the Platform ports of a version
+	// 2 EvoNode. Version 3 carries them in NetInfo.
+	PlatformP2PPort  uint16
+	PlatformHTTPPort uint16
 	// PayloadSig is empty for internal collateral and a 65 byte compact
 	// signature by the collateral key for external collateral.
 	PayloadSig []byte
@@ -174,11 +262,8 @@ func (p *ProRegTx) Serialize(w io.Writer) error {
 }
 
 func (p *ProRegTx) serialize(w io.Writer, withSig bool) error {
-	if p.Version != Version {
-		return ErrUnsupportedVersion
-	}
-	if p.MNType != TypeRegular {
-		return ErrUnsupportedType
+	if err := p.checkSerializable(); err != nil {
+		return err
 	}
 	if err := writeU16s(w, p.Version, p.MNType, p.Mode); err != nil {
 		return err
@@ -188,6 +273,9 @@ func (p *ProRegTx) serialize(w io.Writer, withSig bool) error {
 	}
 	if err := writeU32(w, p.Collateral.Index); err != nil {
 		return err
+	}
+	if p.Version == VersionExtAddr {
+		return p.serializeExt(w, withSig)
 	}
 	if err := p.Service.serialize(w); err != nil {
 		return err
@@ -200,31 +288,171 @@ func (p *ProRegTx) serialize(w io.Writer, withSig bool) error {
 	if err := writeU16s(w, p.OperatorReward); err != nil {
 		return err
 	}
-	if err := wire.WriteVarBytes(w, 0, p.ScriptPayout); err != nil {
+	if err := writeBytes(w, "scriptPayout", p.ScriptPayout, maxScriptSize); err != nil {
 		return err
 	}
 	if _, err := w.Write(p.InputsHash[:]); err != nil {
 		return err
 	}
+	if p.MNType == TypeEvo {
+		if _, err := w.Write(p.PlatformNodeID[:]); err != nil {
+			return err
+		}
+		if err := writeU16s(w, p.PlatformP2PPort, p.PlatformHTTPPort); err != nil {
+			return err
+		}
+	}
 	if !withSig {
 		return nil
 	}
-	return wire.WriteVarBytes(w, 0, p.PayloadSig)
+	return writeBytes(w, "payloadSig", p.PayloadSig, maxSigSize)
+}
+
+// checkSerializable rejects a version and type this package does not support
+// and a field the version does not have.
+func (p *ProRegTx) checkSerializable() error {
+	switch p.Version {
+	case Version:
+		if p.MNType != TypeRegular && p.MNType != TypeEvo {
+			return ErrUnsupportedType
+		}
+		if p.MNType != TypeEvo && (p.PlatformNodeID != [KeyIDSize]byte{} ||
+			p.PlatformP2PPort != 0 || p.PlatformHTTPPort != 0) {
+			return fmt.Errorf("%w: platform field on a regular masternode",
+				ErrUnsupportedType)
+		}
+		if p.NetInfo.Version != 0 || len(p.NetInfo.Purposes) != 0 ||
+			len(p.Payouts) != 0 || len(p.Shares) != 0 ||
+			p.EarlyPeriodBlocks != 0 || p.EarlyPenalty != 0 {
+			return fmt.Errorf("%w: version 3 field set on a version %d payload",
+				ErrUnsupportedVersion, p.Version)
+		}
+	case VersionExtAddr:
+		if p.MNType != TypeRegular && p.MNType != TypeEvo {
+			return ErrUnsupportedType
+		}
+		if err := p.checkShared(); err != nil {
+			return err
+		}
+		if p.Service != (Service{}) || len(p.ScriptPayout) != 0 ||
+			p.PlatformP2PPort != 0 || p.PlatformHTTPPort != 0 {
+			return fmt.Errorf("%w: version 2 field set on a version %d payload",
+				ErrUnsupportedVersion, p.Version)
+		}
+		if p.MNType != TypeEvo && p.PlatformNodeID != [KeyIDSize]byte{} {
+			return fmt.Errorf("%w: platformNodeID on a regular masternode",
+				ErrUnsupportedType)
+		}
+	default:
+		return ErrUnsupportedVersion
+	}
+	return nil
+}
+
+// checkShared applies the rules Dash Core puts on a shared registration: the
+// collateral is output Index of the registration itself, there is no owner key
+// because the share owners hold the keys, and there are no payouts because
+// owner rewards come from the share table.
+func (p *ProRegTx) checkShared() error {
+	if len(p.Shares) == 0 {
+		return nil
+	}
+	if p.Collateral.Hash != (chainhash.Hash{}) {
+		return fmt.Errorf("%w: external collateral", ErrInvalidShared)
+	}
+	if p.KeyIDOwner != [KeyIDSize]byte{} {
+		return fmt.Errorf("%w: owner key", ErrInvalidShared)
+	}
+	if len(p.Payouts) != 0 {
+		return fmt.Errorf("%w: payouts", ErrInvalidShared)
+	}
+	return nil
+}
+
+// serializeExt writes a version 3 payload after the collateral.
+func (p *ProRegTx) serializeExt(w io.Writer, withSig bool) error {
+	if err := p.NetInfo.serialize(w); err != nil {
+		return err
+	}
+	for _, b := range [][]byte{p.KeyIDOwner[:], p.PubKeyOperator[:], p.KeyIDVoting[:]} {
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+	}
+	if err := writeU16s(w, p.OperatorReward); err != nil {
+		return err
+	}
+	if err := writeCount8(w, "payouts", len(p.Payouts)); err != nil {
+		return err
+	}
+	for i := range p.Payouts {
+		if err := writeBytes(w, "payout script", p.Payouts[i].Script, maxScriptSize); err != nil {
+			return err
+		}
+		if err := writeU16s(w, p.Payouts[i].Reward); err != nil {
+			return err
+		}
+	}
+	if err := writeCount8(w, "shares", len(p.Shares)); err != nil {
+		return err
+	}
+	for i := range p.Shares {
+		s := &p.Shares[i]
+		if err := writeU64(w, uint64(s.Amount)); err != nil {
+			return err
+		}
+		if err := writeBytes(w, "refund script", s.RefundScript, maxScriptSize); err != nil {
+			return err
+		}
+		if err := writeBytes(w, "reward script", s.RewardScript, maxScriptSize); err != nil {
+			return err
+		}
+		if _, err := w.Write(s.KeyIDOwner[:]); err != nil {
+			return err
+		}
+	}
+	for i := range p.Shares {
+		if _, err := w.Write(p.Shares[i].JoinSig[:]); err != nil {
+			return err
+		}
+	}
+	if err := writeU32(w, p.EarlyPeriodBlocks); err != nil {
+		return err
+	}
+	if err := writeU64(w, uint64(p.EarlyPenalty)); err != nil {
+		return err
+	}
+	if _, err := w.Write(p.InputsHash[:]); err != nil {
+		return err
+	}
+	if p.MNType == TypeEvo {
+		if _, err := w.Write(p.PlatformNodeID[:]); err != nil {
+			return err
+		}
+	}
+	if !withSig {
+		return nil
+	}
+	return writeBytes(w, "payloadSig", p.PayloadSig, maxSigSize)
 }
 
 // Deserialize reads the payload.
 func (p *ProRegTx) Deserialize(r io.Reader) error {
+	// Each version has fields the other does not, so a payload read into a
+	// struct that held another one would keep the old fields, and could then
+	// no longer be serialized.
+	*p = ProRegTx{}
 	var err error
 	if p.Version, err = readU16(r); err != nil {
 		return err
 	}
-	if p.Version != Version {
+	if p.Version != Version && p.Version != VersionExtAddr {
 		return fmt.Errorf("%w: %d", ErrUnsupportedVersion, p.Version)
 	}
 	if p.MNType, err = readU16(r); err != nil {
 		return err
 	}
-	if p.MNType != TypeRegular {
+	if p.MNType != TypeRegular && p.MNType != TypeEvo {
 		return fmt.Errorf("%w: %d", ErrUnsupportedType, p.MNType)
 	}
 	if p.Mode, err = readU16(r); err != nil {
@@ -235,6 +463,9 @@ func (p *ProRegTx) Deserialize(r io.Reader) error {
 	}
 	if p.Collateral.Index, err = readU32(r); err != nil {
 		return err
+	}
+	if p.Version == VersionExtAddr {
+		return p.deserializeExt(r)
 	}
 	if err = p.Service.deserialize(r); err != nil {
 		return err
@@ -247,19 +478,113 @@ func (p *ProRegTx) Deserialize(r io.Reader) error {
 	if p.OperatorReward, err = readU16(r); err != nil {
 		return err
 	}
-	if p.ScriptPayout, err = wire.ReadVarBytes(r, 0, maxScriptSize, "scriptPayout"); err != nil {
+	if p.ScriptPayout, err = readBytes(r, "scriptPayout", maxScriptSize); err != nil {
 		return err
 	}
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
 		return err
 	}
-	p.PayloadSig, err = wire.ReadVarBytes(r, 0, maxSigSize, "payloadSig")
+	if p.MNType == TypeEvo {
+		if _, err = io.ReadFull(r, p.PlatformNodeID[:]); err != nil {
+			return err
+		}
+		if p.PlatformP2PPort, err = readU16(r); err != nil {
+			return err
+		}
+		if p.PlatformHTTPPort, err = readU16(r); err != nil {
+			return err
+		}
+	}
+	p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize)
 	return err
 }
 
+// deserializeExt reads a version 3 payload after the collateral.
+func (p *ProRegTx) deserializeExt(r io.Reader) error {
+	if err := p.NetInfo.deserialize(r); err != nil {
+		return err
+	}
+	for _, b := range [][]byte{p.KeyIDOwner[:], p.PubKeyOperator[:], p.KeyIDVoting[:]} {
+		if _, err := io.ReadFull(r, b); err != nil {
+			return err
+		}
+	}
+	var err error
+	if p.OperatorReward, err = readU16(r); err != nil {
+		return err
+	}
+	np, err := readCount8(r)
+	if err != nil {
+		return err
+	}
+	if np > 0 {
+		p.Payouts = make([]Payout, np)
+	}
+	for i := range p.Payouts {
+		if p.Payouts[i].Script, err = readBytes(r, "payout script", maxScriptSize); err != nil {
+			return err
+		}
+		if p.Payouts[i].Reward, err = readU16(r); err != nil {
+			return err
+		}
+	}
+	ns, err := readCount8(r)
+	if err != nil {
+		return err
+	}
+	if ns > 0 {
+		p.Shares = make([]Share, ns)
+	}
+	for i := range p.Shares {
+		s := &p.Shares[i]
+		amount, err := readU64(r)
+		if err != nil {
+			return err
+		}
+		s.Amount = int64(amount)
+		if s.RefundScript, err = readBytes(r, "refund script", maxScriptSize); err != nil {
+			return err
+		}
+		if s.RewardScript, err = readBytes(r, "reward script", maxScriptSize); err != nil {
+			return err
+		}
+		if _, err = io.ReadFull(r, s.KeyIDOwner[:]); err != nil {
+			return err
+		}
+	}
+	for i := range p.Shares {
+		if _, err = io.ReadFull(r, p.Shares[i].JoinSig[:]); err != nil {
+			return err
+		}
+	}
+	if p.EarlyPeriodBlocks, err = readU32(r); err != nil {
+		return err
+	}
+	penalty, err := readU64(r)
+	if err != nil {
+		return err
+	}
+	p.EarlyPenalty = int64(penalty)
+	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
+		return err
+	}
+	if p.MNType == TypeEvo {
+		if _, err = io.ReadFull(r, p.PlatformNodeID[:]); err != nil {
+			return err
+		}
+	}
+	if p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize); err != nil {
+		return err
+	}
+	return p.checkShared()
+}
+
 // PayloadHash returns the hash the payload signature commits to: the double
-// SHA-256 of the payload without its signature.
+// SHA-256 of the payload without its signature. It supports version 2 only.
 func (p *ProRegTx) PayloadHash() (chainhash.Hash, error) {
+	if p.Version != Version {
+		return chainhash.Hash{}, ErrUnsupportedVersion
+	}
 	return payloadHash(func(w io.Writer) error { return p.serialize(w, false) })
 }
 
@@ -345,7 +670,7 @@ func (p *ProUpServTx) serialize(w io.Writer) error {
 	if err := p.Service.serialize(w); err != nil {
 		return err
 	}
-	if err := wire.WriteVarBytes(w, 0, p.ScriptOperatorPay); err != nil {
+	if err := writeBytes(w, "scriptOperatorPayout", p.ScriptOperatorPay, maxScriptSize); err != nil {
 		return err
 	}
 	_, err := w.Write(p.InputsHash[:])
@@ -373,7 +698,7 @@ func (p *ProUpServTx) Deserialize(r io.Reader) error {
 	if err = p.Service.deserialize(r); err != nil {
 		return err
 	}
-	if p.ScriptOperatorPay, err = wire.ReadVarBytes(r, 0, maxScriptSize, "scriptOperatorPayout"); err != nil {
+	if p.ScriptOperatorPay, err = readBytes(r, "scriptOperatorPayout", maxScriptSize); err != nil {
 		return err
 	}
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
@@ -428,7 +753,7 @@ func (p *ProUpRegTx) serialize(w io.Writer, withSig bool) error {
 	if _, err := w.Write(p.KeyIDVoting[:]); err != nil {
 		return err
 	}
-	if err := wire.WriteVarBytes(w, 0, p.ScriptPayout); err != nil {
+	if err := writeBytes(w, "scriptPayout", p.ScriptPayout, maxScriptSize); err != nil {
 		return err
 	}
 	if _, err := w.Write(p.InputsHash[:]); err != nil {
@@ -437,7 +762,7 @@ func (p *ProUpRegTx) serialize(w io.Writer, withSig bool) error {
 	if !withSig {
 		return nil
 	}
-	return wire.WriteVarBytes(w, 0, p.PayloadSig)
+	return writeBytes(w, "payloadSig", p.PayloadSig, maxSigSize)
 }
 
 // Deserialize reads the payload.
@@ -461,13 +786,13 @@ func (p *ProUpRegTx) Deserialize(r io.Reader) error {
 	if _, err = io.ReadFull(r, p.KeyIDVoting[:]); err != nil {
 		return err
 	}
-	if p.ScriptPayout, err = wire.ReadVarBytes(r, 0, maxScriptSize, "scriptPayout"); err != nil {
+	if p.ScriptPayout, err = readBytes(r, "scriptPayout", maxScriptSize); err != nil {
 		return err
 	}
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
 		return err
 	}
-	p.PayloadSig, err = wire.ReadVarBytes(r, 0, maxSigSize, "payloadSig")
+	p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize)
 	return err
 }
 
@@ -618,4 +943,114 @@ func readU32(r io.Reader) (uint32, error) {
 		return 0, err
 	}
 	return binary.LittleEndian.Uint32(b[:]), nil
+}
+
+func writeU64(w io.Writer, v uint64) error {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], v)
+	_, err := w.Write(b[:])
+	return err
+}
+
+func readU64(r io.Reader) (uint64, error) {
+	var b [8]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint64(b[:]), nil
+}
+
+func writeU8(w io.Writer, v uint8) error {
+	_, err := w.Write([]byte{v})
+	return err
+}
+
+func readU8(r io.Reader) (uint8, error) {
+	var b [1]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return 0, err
+	}
+	return b[0], nil
+}
+
+func writeU16BE(w io.Writer, v uint16) error {
+	var b [2]byte
+	binary.BigEndian.PutUint16(b[:], v)
+	_, err := w.Write(b[:])
+	return err
+}
+
+func readU16BE(r io.Reader) (uint16, error) {
+	var b [2]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint16(b[:]), nil
+}
+
+// writeBytes writes b as a length prefixed field, refusing one longer than
+// Deserialize would read.
+func writeBytes(w io.Writer, field string, b []byte, limit int) error {
+	if len(b) > limit {
+		return fmt.Errorf("%w: %s is %d bytes, at most %d", ErrFieldTooLong, field, len(b), limit)
+	}
+	return wire.WriteVarBytes(w, 0, b)
+}
+
+// readBytes reads a length prefixed field of at most limit bytes. The length is
+// checked before anything is allocated, and a length that is not the shortest
+// CompactSize is an error. It does not wrap wire.ReadVarBytes, which has the
+// same bound but reports an over-long field as an untyped wire.MessageError, so
+// a caller could not tell it from other malformed data with errors.Is.
+func readBytes(r io.Reader, field string, limit int) ([]byte, error) {
+	n, err := wire.ReadVarInt(r, 0)
+	if err != nil {
+		return nil, err
+	}
+	if n > uint64(limit) {
+		return nil, fmt.Errorf("%w: %s is %d bytes, at most %d", ErrFieldTooLong, field, n, limit)
+	}
+	b := make([]byte, n)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// writeCount8 writes the count of a list as one byte, which is how Dash Core
+// writes the payouts, shares and signatures of a payload. A CompactSize would
+// give the same bytes below 253 and different ones above.
+func writeCount8(w io.Writer, field string, n int) error {
+	if n > math.MaxUint8 {
+		return fmt.Errorf("%w: %d %s, at most %d", ErrFieldTooLong, n, field, math.MaxUint8)
+	}
+	return writeU8(w, uint8(n))
+}
+
+// readCount8 reads a count written by writeCount8.
+func readCount8(r io.Reader) (int, error) {
+	n, err := readU8(r)
+	return int(n), err
+}
+
+// writeCount writes the count of a list as a CompactSize, refusing more items
+// than Deserialize would read.
+func writeCount(w io.Writer, field string, n int) error {
+	if n > maxCount {
+		return fmt.Errorf("%w: %d %s, at most %d", ErrFieldTooLong, n, field, maxCount)
+	}
+	return wire.WriteVarInt(w, 0, uint64(n))
+}
+
+// readCount reads the count of a list. A CompactSize that is not the shortest
+// encoding is an error, so decoding and encoding again gives the same bytes.
+func readCount(r io.Reader, field string) (int, error) {
+	n, err := wire.ReadVarInt(r, 0)
+	if err != nil {
+		return 0, err
+	}
+	if n > maxCount {
+		return 0, fmt.Errorf("%w: %d %s, at most %d", ErrFieldTooLong, n, field, maxCount)
+	}
+	return int(n), nil
 }
