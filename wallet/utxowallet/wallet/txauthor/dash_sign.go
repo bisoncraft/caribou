@@ -93,7 +93,7 @@ func dashSignatureHash(tx *bisonwire.Tx, idx int, subScript []byte) ([]byte, err
 // transaction, signing with Dash's digest so that special transactions commit
 // to their type and extra payload. Use it instead of AddAllInputScripts for any
 // transaction that may be special. Dash wallets only hold P2PKH outputs, so any
-// other previous output script is an error.
+// other previous output script is an error. An error leaves tx unchanged.
 func AddAllDashInputScripts(tx *bisonwire.Tx, prevPkScripts [][]byte,
 	secrets SecretsSource) error {
 
@@ -102,12 +102,18 @@ func AddAllDashInputScripts(tx *bisonwire.Tx, prevPkScripts [][]byte,
 			"have equal length")
 	}
 
-	for i, in := range tx.TxIn {
+	// Compute every script before assigning any, so a failure leaves tx
+	// unchanged.
+	scripts := make([][]byte, len(tx.TxIn))
+	for i := range tx.TxIn {
 		script, err := dashInputScript(tx, i, prevPkScripts[i], secrets)
 		if err != nil {
 			return fmt.Errorf("input %d: %w", i, err)
 		}
-		in.SignatureScript = script
+		scripts[i] = script
+	}
+	for i, script := range scripts {
+		tx.TxIn[i].SignatureScript = script
 	}
 	return nil
 }
@@ -116,9 +122,7 @@ func AddAllDashInputScripts(tx *bisonwire.Tx, prevPkScripts [][]byte,
 // prevPkScripts, each mapped to the script of the output it spends, and leaves
 // every other input as it is. Use it when the transaction has inputs this
 // wallet does not own: the funding inputs of the other participants of a shared
-// masternode registration, which they sign themselves, and the shared
-// collateral a dissolution spends, which has no signature script at all (its
-// signatures are in the payload).
+// masternode registration, which they sign themselves.
 //
 // The caller names its own inputs, and the function never guesses: a key
 // lookup that fails, for instance on a locked wallet, is an error and not a

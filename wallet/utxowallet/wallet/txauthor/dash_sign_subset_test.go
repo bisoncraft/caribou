@@ -285,6 +285,26 @@ func TestAddDashInputScriptsRejects(t *testing.T) {
 	}
 }
 
+// TestAddAllDashInputScriptsErrorLeavesTxUnchanged pins that an error on a later
+// input does not leave the earlier ones signed, as for AddDashInputScripts.
+func TestAddAllDashInputScriptsErrorLeavesTxUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tx, pkScript := sharedFundingTx(t, 1)
+	before := signatureScripts(tx)
+	// Input 1 spends a script that is not P2PKH, so signing fails after input 0.
+	prev := [][]byte{pkScript, {0x51}, pkScript}
+
+	if err := AddAllDashInputScripts(tx, prev, stubKeySecrets(t)); err == nil {
+		t.Fatal("expected an error for the non P2PKH input")
+	}
+	for i, got := range signatureScripts(tx) {
+		if !bytes.Equal(got, before[i]) {
+			t.Errorf("input %d was signed although signing failed", i)
+		}
+	}
+}
+
 // TestAddAllDashInputScriptsRejectsMismatchedKey pins that signing every input
 // has the same protection: a key that does not own the output is an error, not
 // a signature script that looks right and fails only on the network.
