@@ -421,6 +421,17 @@ func Review(tx *bisonwire.Tx, rules NetRules, own Own) (*RegReview, error) {
 	return rv, nil
 }
 
+// SignedShares are the indexes of the shares whose join signature is in.
+func (rv *RegReview) SignedShares() []int {
+	var out []int
+	for i := range rv.pr.Shares {
+		if rv.pr.Shares[i].JoinSig != ([protx.CompactSigSize]byte{}) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // Raw returns the serialized registration with the signatures added so far.
 func (rv *RegReview) Raw() ([]byte, error) {
 	var b bytes.Buffer

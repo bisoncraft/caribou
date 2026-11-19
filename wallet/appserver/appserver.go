@@ -141,6 +141,12 @@ type clientCore interface {
 	TicketPage(assetID uint32, scanStart int32, n, skipN int) ([]*asset.Ticket, error)
 	Masternodes(ctx context.Context, assetID uint32) ([]*asset.Masternode, error)
 	MasternodeStatus(ctx context.Context, assetID uint32, proTxHash string) (*asset.MasternodeStatus, error)
+	CreateMasternodeOffer(ctx context.Context, assetID uint32, pw []byte, amount uint64) (*asset.MasternodeOffer, error)
+	MasternodeOffers(ctx context.Context, assetID uint32) ([]*asset.MasternodeOffer, error)
+	CancelMasternodeOffer(ctx context.Context, assetID uint32, offerID string) error
+	ReviewMasternodeRegistration(ctx context.Context, assetID uint32, offerID, blob string) (*asset.MasternodeRegReview, error)
+	SignMasternodeRegistration(ctx context.Context, assetID uint32, pw []byte, offerID, blob, reviewID string) (*asset.MasternodeRegSigned, error)
+	BroadcastMasternodeRegistration(ctx context.Context, assetID uint32, offerID, blob string) (string, error)
 	TxHistory(assetID uint32, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	TxHistoryByTicker(ticker string, req *txdb.TxHistoryRequest) (*txdb.TxHistoryResponse, error)
 	IntentsAssets(ctx context.Context) ([]*core.IntentsAsset, error)
@@ -628,6 +634,12 @@ func New(cfg *Config) (*AppServer, error) {
 
 			apiAuth.Post("/masternodes", s.apiMasternodes)
 			apiAuth.Post("/masternodestatus", s.apiMasternodeStatus)
+			apiAuth.Post("/createmasternodeoffer", s.apiCreateMasternodeOffer)
+			apiAuth.Post("/masternodeoffers", s.apiMasternodeOffers)
+			apiAuth.Post("/cancelmasternodeoffer", s.apiCancelMasternodeOffer)
+			apiAuth.Post("/reviewmasternodereg", s.apiReviewMasternodeReg)
+			apiAuth.Post("/signmasternodereg", s.apiSignMasternodeReg)
+			apiAuth.Post("/broadcastmasternodereg", s.apiBroadcastMasternodeReg)
 
 			apiAuth.Post("/mixingstats", s.apiMixingStats)
 			apiAuth.Post("/configuremixer", s.apiConfigureMixer)

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
 
@@ -50,6 +51,14 @@ type dashWallet struct {
 	// refresh asks the refresh loop for a Refresh. One pending request is
 	// enough, so a burst of blocks makes one.
 	refresh chan struct{}
+
+	// offerMu serialises the changes of offers: an offer's state is read,
+	// changed and stored as one step.
+	offerMu sync.Mutex
+	// fw replaces the inner wallet as the funding wallet in tests.
+	fw fundingWallet
+	// now replaces the clock in tests.
+	now func() time.Time
 }
 
 // openDashSharedWallet constructs the electrum wallet with shared masternode

@@ -1136,6 +1136,95 @@ type MasternodeOwner interface {
 	// MasternodeStatus is one masternode with the server's current state and
 	// keys.
 	MasternodeStatus(ctx context.Context, proTxHash string) (*MasternodeStatus, error)
+
+	// CreateMasternodeOffer commits an amount of the wallet to a shared
+	// registration that others build: it reserves an owner key, makes the
+	// refund, reward and change addresses, and leases the inputs. The offer
+	// lasts until it expires or is cancelled. The wallet must be unlocked.
+	CreateMasternodeOffer(ctx context.Context, amount uint64) (*MasternodeOffer, error)
+	// MasternodeOffers lists the offers, dropping the expired ones that have
+	// signed nothing.
+	MasternodeOffers(ctx context.Context) ([]*MasternodeOffer, error)
+	// CancelMasternodeOffer releases an offer's inputs and deletes it. It does
+	// not revoke signatures already given: only spending an input does.
+	CancelMasternodeOffer(ctx context.Context, offerID string) error
+	// ReviewMasternodeRegistration checks a registration blob against an
+	// offer and returns what it would sign.
+	ReviewMasternodeRegistration(ctx context.Context, offerID, blob string) (*MasternodeRegReview, error)
+	// SignMasternodeRegistration signs the registration that ReviewID was
+	// returned for: the wallet's consent, and its inputs once every consent is
+	// in. It refuses a registration that has changed since the review. The
+	// wallet must be unlocked.
+	SignMasternodeRegistration(ctx context.Context, offerID, blob, reviewID string) (*MasternodeRegSigned, error)
+	// BroadcastMasternodeRegistration broadcasts a fully signed registration
+	// that is the one the offer signed.
+	BroadcastMasternodeRegistration(ctx context.Context, offerID, blob string) (string, error)
+}
+
+// MasternodeOffer is a commitment to a shared registration.
+type MasternodeOffer struct {
+	ID string `json:"id"`
+	// State is open, consented, signed, broadcast, registered or expired.
+	State     string `json:"state"`
+	CreatedAt int64  `json:"createdAt"`
+	ExpiresAt int64  `json:"expiresAt"`
+	Amount    uint64 `json:"amount"`
+	// MaxFee is the most the offer pays beyond its share, which is the cost
+	// of the transaction fee and not necessarily all of it.
+	MaxFee uint64 `json:"maxFee"`
+	// OwnerAddress, RefundAddress and RewardAddress are what whoever builds
+	// the registration needs for this share.
+	OwnerAddress  string `json:"ownerAddress"`
+	RefundAddress string `json:"refundAddress"`
+	RewardAddress string `json:"rewardAddress"`
+	ChangeAddress string `json:"changeAddress"`
+	// Inputs are the funding outpoints as txid:vout, with their total.
+	Inputs      []string `json:"inputs"`
+	InputsValue uint64   `json:"inputsValue"`
+	TxID        string   `json:"txID,omitempty"`
+}
+
+// MasternodeTerms are the terms of a registration, as the blob says them.
+type MasternodeTerms struct {
+	Shares            []*MasternodeShare `json:"shares"`
+	Keys              MasternodeKeys     `json:"keys"`
+	OperatorReward    uint16             `json:"operatorReward"`
+	EarlyPeriodBlocks uint32             `json:"earlyPeriodBlocks"`
+	EarlyPenalty      uint64             `json:"earlyPenalty"`
+	// NetInfo are the addresses the masternode announces.
+	NetInfo []string `json:"netInfo"`
+}
+
+// MasternodeOutput is an output of a registration that is not the wallet's.
+type MasternodeOutput struct {
+	Value  uint64 `json:"value"`
+	Script string `json:"script"`
+}
+
+// MasternodeRegReview is a registration checked against an offer. The terms
+// are display only: the wallet's own share is the offer's.
+type MasternodeRegReview struct {
+	ReviewID        string          `json:"reviewID"`
+	OfferID         string          `json:"offerID"`
+	ShareIndex      int             `json:"shareIndex"`
+	Terms           MasternodeTerms `json:"terms"`
+	CollateralIndex int             `json:"collateralIndex"`
+	// FeePortion is what the wallet pays beyond its share. It is not the total
+	// fee, which the wallet cannot see.
+	FeePortion uint64 `json:"feePortion"`
+	// OtherOutputs are outputs other owners fund, to be shown.
+	OtherOutputs []*MasternodeOutput `json:"otherOutputs"`
+	// SignedShares are the share indexes whose consent is in the blob.
+	SignedShares []int `json:"signedShares"`
+}
+
+// MasternodeRegSigned is the result of signing a registration.
+type MasternodeRegSigned struct {
+	// Blob goes on to the other owners.
+	Blob string `json:"blob"`
+	// Complete is true when every consent is in and the wallet's inputs are
+	// signed.
+	Complete bool `json:"complete"`
 }
 
 // TicketBuyer is a wallet that can participate in decred staking.
