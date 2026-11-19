@@ -220,6 +220,47 @@ func TestProRegTxDeserializeReusedStruct(t *testing.T) {
 	}
 }
 
+// TestSharedRegistrationRules checks that a shared registration with an owner
+// key or external collateral, which Dash Core refuses, is neither written nor
+// read.
+func TestSharedRegistrationRules(t *testing.T) {
+	t.Parallel()
+
+	_, tx := loadVector(t, "regshared")
+	var good ProRegTx
+	if err := Parse(tx.ExtraPayload, &good); err != nil {
+		t.Fatal(err)
+	}
+	if len(good.Shares) == 0 {
+		t.Fatal("vector is not shared")
+	}
+
+	owner := good
+	owner.KeyIDOwner = [KeyIDSize]byte{1}
+	collateral := good
+	collateral.Collateral.Hash = chainhash.Hash{1}
+	for name, p := range map[string]ProRegTx{"owner key": owner, "external collateral": collateral} {
+		if err := p.Serialize(io.Discard); !errors.Is(err, ErrInvalidShared) {
+			t.Errorf("%s: Serialize got %v, want ErrInvalidShared", name, err)
+		}
+	}
+
+	// The collateral hash follows the version, type and mode.
+	raw := bytes.Clone(tx.ExtraPayload)
+	raw[6] = 1
+	var got ProRegTx
+	if err := Parse(raw, &got); !errors.Is(err, ErrInvalidShared) {
+		t.Errorf("external collateral: Parse got %v, want ErrInvalidShared", err)
+	}
+
+	// A registration with one owner may have both.
+	solo := ProRegTx{Version: VersionExtAddr, KeyIDOwner: [KeyIDSize]byte{1}, NetInfo: good.NetInfo}
+	solo.Collateral.Hash = chainhash.Hash{1}
+	if err := solo.Serialize(io.Discard); err != nil {
+		t.Errorf("one owner: %v", err)
+	}
+}
+
 // TestNetInfoDomainEntry pins the domain entry Dash Core v24 allows for Platform
 // HTTPS: kind 2, a CompactSize length, the name and a big endian port. A
 // decoder that only knew service entries would reject a valid EvoNode.
@@ -602,6 +643,49 @@ func TestParseNetInfo(t *testing.T) {
 				t.Fatalf("round trip differs:\n got %x\nwant %x", buf.Bytes(), tc.payload)
 			}
 		})
+	}
+}
+
+// TestProRegTxV2EvoNode checks a version 2 EvoNode registration against the
+// layout Dash Core writes: after the inputs hash come the platform node id and
+// the two platform ports, little endian, then the signature.
+func TestProRegTxV2EvoNode(t *testing.T) {
+	t.Parallel()
+
+	p := ProRegTx{
+		Version:          Version,
+		MNType:           TypeEvo,
+		Service:          Service{Port: 9999},
+		ScriptPayout:     []byte{0x51},
+		PlatformNodeID:   [KeyIDSize]byte{1, 2, 3},
+		PlatformP2PPort:  0x1122,
+		PlatformHTTPPort: 0x3344,
+	}
+	copy(p.Service.IP[:], []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1})
+	var buf bytes.Buffer
+	if err := p.Serialize(&buf); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.Bytes()
+	// The platform fields are followed by the empty payload signature.
+	tail := raw[len(raw)-1-4-KeyIDSize : len(raw)-1]
+	want := append(append([]byte{}, p.PlatformNodeID[:]...), 0x22, 0x11, 0x44, 0x33)
+	if !bytes.Equal(tail, want) {
+		t.Fatalf("platform fields % x, want % x", tail, want)
+	}
+	var got ProRegTx
+	if err := Parse(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	var again bytes.Buffer
+	if err := got.Serialize(&again); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again.Bytes(), raw) {
+		t.Fatalf("round trip differs:\n got %x\nwant %x", again.Bytes(), raw)
+	}
+	if got.MNType != TypeEvo || got.PlatformP2PPort != 0x1122 || got.PlatformHTTPPort != 0x3344 {
+		t.Fatalf("decoded %+v", got)
 	}
 }
 

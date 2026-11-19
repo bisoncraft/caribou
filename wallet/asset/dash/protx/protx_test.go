@@ -512,7 +512,7 @@ var payloadKinds = []struct {
 	noEvo bool
 	new   func() payload
 }{
-	{"ProRegTx", "regfund", []uint16{1, 4}, true, true, func() payload { return new(ProRegTx) }},
+	{"ProRegTx", "regfund", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
 	{"ProRegTx v3 shared", "regshared", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
 	{"ProRegTx v3 evo", "regevo", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
 	{"ProRegTx v3 shared no address", "regshared_nonet", []uint16{1, 4}, true, false, func() payload { return new(ProRegTx) }},
@@ -629,7 +629,9 @@ func TestSerializeRejectsUnsupported(t *testing.T) {
 		wantErr error
 	}{
 		{"ProRegTx version", &ProRegTx{Version: 4}, ErrUnsupportedVersion},
-		{"ProRegTx evonode", &ProRegTx{Version: Version, MNType: TypeEvo}, ErrUnsupportedType},
+		{"ProRegTx v2 platform node on a regular masternode", &ProRegTx{Version: Version, PlatformNodeID: [KeyIDSize]byte{1}}, ErrUnsupportedType},
+		{"ProRegTx v2 platform port on a regular masternode", &ProRegTx{Version: Version, PlatformP2PPort: 1}, ErrUnsupportedType},
+		{"ProRegTx v3 with a v2 platform port", &ProRegTx{Version: VersionExtAddr, MNType: TypeEvo, NetInfo: ext, PlatformHTTPPort: 1}, ErrUnsupportedVersion},
 		{"ProRegTx unknown type", &ProRegTx{Version: VersionExtAddr, MNType: 2, NetInfo: ext}, ErrUnsupportedType},
 		{"ProRegTx v3 without netInfo", &ProRegTx{Version: VersionExtAddr}, ErrUnsupportedNetInfo},
 		{"ProRegTx v3 with a v2 payout script", &ProRegTx{Version: VersionExtAddr, NetInfo: ext, ScriptPayout: []byte{0x51}}, ErrUnsupportedVersion},

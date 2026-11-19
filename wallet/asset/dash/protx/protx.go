@@ -57,8 +57,7 @@ const (
 
 	// TypeRegular is the masternode type of a regular masternode.
 	TypeRegular = 0
-	// TypeEvo is the masternode type of an EvoNode. It is only supported at
-	// VersionExtAddr.
+	// TypeEvo is the masternode type of an EvoNode.
 	TypeEvo = 1
 
 	// KeyIDSize is the size of a key id (hash160 of a public key).
@@ -91,6 +90,10 @@ var (
 	// ErrUnsupportedType is returned for a masternode type the payload
 	// version does not support.
 	ErrUnsupportedType = errors.New("unsupported masternode type")
+	// ErrInvalidShared is returned for a shared registration (one with
+	// Shares) that has an owner key or external collateral, which Dash Core
+	// refuses.
+	ErrInvalidShared = errors.New("invalid shared registration")
 	// ErrUnsupportedNetInfo is returned for a netInfo this package cannot
 	// carry: another layout version, an entry kind other than a service
 	// address or a domain, an IPv4 or IPv6 address of the wrong length, or a
@@ -208,7 +211,7 @@ type Share struct {
 type ProRegTx struct {
 	// Version is Version or VersionExtAddr.
 	Version uint16
-	// MNType is TypeRegular, or TypeEvo at VersionExtAddr.
+	// MNType is TypeRegular or TypeEvo.
 	MNType uint16
 	Mode   uint16
 	// Collateral is the collateral outpoint. A zero hash means the collateral
@@ -240,8 +243,12 @@ type ProRegTx struct {
 	// InputsHash commits to the transaction's input outpoints, see
 	// InputsHash.
 	InputsHash chainhash.Hash
-	// PlatformNodeID is the Platform node id of an EvoNode (version 3).
+	// PlatformNodeID is the Platform node id of an EvoNode.
 	PlatformNodeID [KeyIDSize]byte
+	// PlatformP2PPort and PlatformHTTPPort are the Platform ports of a version
+	// 2 EvoNode. Version 3 carries them in NetInfo.
+	PlatformP2PPort  uint16
+	PlatformHTTPPort uint16
 	// PayloadSig is empty for internal collateral and a 65 byte compact
 	// signature by the collateral key for external collateral.
 	PayloadSig []byte
@@ -285,6 +292,14 @@ func (p *ProRegTx) serialize(w io.Writer, withSig bool) error {
 	if _, err := w.Write(p.InputsHash[:]); err != nil {
 		return err
 	}
+	if p.MNType == TypeEvo {
+		if _, err := w.Write(p.PlatformNodeID[:]); err != nil {
+			return err
+		}
+		if err := writeU16s(w, p.PlatformP2PPort, p.PlatformHTTPPort); err != nil {
+			return err
+		}
+	}
 	if !withSig {
 		return nil
 	}
@@ -296,13 +311,17 @@ func (p *ProRegTx) serialize(w io.Writer, withSig bool) error {
 func (p *ProRegTx) checkSerializable() error {
 	switch p.Version {
 	case Version:
-		if p.MNType != TypeRegular {
+		if p.MNType != TypeRegular && p.MNType != TypeEvo {
 			return ErrUnsupportedType
+		}
+		if p.MNType != TypeEvo && (p.PlatformNodeID != [KeyIDSize]byte{} ||
+			p.PlatformP2PPort != 0 || p.PlatformHTTPPort != 0) {
+			return fmt.Errorf("%w: platform field on a regular masternode",
+				ErrUnsupportedType)
 		}
 		if p.NetInfo.Version != 0 || len(p.NetInfo.Purposes) != 0 ||
 			len(p.Payouts) != 0 || len(p.Shares) != 0 ||
-			p.EarlyPeriodBlocks != 0 || p.EarlyPenalty != 0 ||
-			p.PlatformNodeID != [KeyIDSize]byte{} {
+			p.EarlyPeriodBlocks != 0 || p.EarlyPenalty != 0 {
 			return fmt.Errorf("%w: version 3 field set on a version %d payload",
 				ErrUnsupportedVersion, p.Version)
 		}
@@ -310,7 +329,11 @@ func (p *ProRegTx) checkSerializable() error {
 		if p.MNType != TypeRegular && p.MNType != TypeEvo {
 			return ErrUnsupportedType
 		}
-		if p.Service != (Service{}) || len(p.ScriptPayout) != 0 {
+		if err := p.checkShared(); err != nil {
+			return err
+		}
+		if p.Service != (Service{}) || len(p.ScriptPayout) != 0 ||
+			p.PlatformP2PPort != 0 || p.PlatformHTTPPort != 0 {
 			return fmt.Errorf("%w: version 2 field set on a version %d payload",
 				ErrUnsupportedVersion, p.Version)
 		}
@@ -320,6 +343,22 @@ func (p *ProRegTx) checkSerializable() error {
 		}
 	default:
 		return ErrUnsupportedVersion
+	}
+	return nil
+}
+
+// checkShared applies the rules Dash Core puts on a shared registration: the
+// collateral is output Index of the registration itself and there is no owner
+// key, because the share owners hold the keys.
+func (p *ProRegTx) checkShared() error {
+	if len(p.Shares) == 0 {
+		return nil
+	}
+	if p.Collateral.Hash != (chainhash.Hash{}) {
+		return fmt.Errorf("%w: external collateral", ErrInvalidShared)
+	}
+	if p.KeyIDOwner != [KeyIDSize]byte{} {
+		return fmt.Errorf("%w: owner key", ErrInvalidShared)
 	}
 	return nil
 }
@@ -407,7 +446,7 @@ func (p *ProRegTx) Deserialize(r io.Reader) error {
 	if p.MNType, err = readU16(r); err != nil {
 		return err
 	}
-	if p.MNType != TypeRegular && (p.MNType != TypeEvo || p.Version != VersionExtAddr) {
+	if p.MNType != TypeRegular && p.MNType != TypeEvo {
 		return fmt.Errorf("%w: %d", ErrUnsupportedType, p.MNType)
 	}
 	if p.Mode, err = readU16(r); err != nil {
@@ -438,6 +477,17 @@ func (p *ProRegTx) Deserialize(r io.Reader) error {
 	}
 	if _, err = io.ReadFull(r, p.InputsHash[:]); err != nil {
 		return err
+	}
+	if p.MNType == TypeEvo {
+		if _, err = io.ReadFull(r, p.PlatformNodeID[:]); err != nil {
+			return err
+		}
+		if p.PlatformP2PPort, err = readU16(r); err != nil {
+			return err
+		}
+		if p.PlatformHTTPPort, err = readU16(r); err != nil {
+			return err
+		}
 	}
 	p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize)
 	return err
@@ -517,8 +567,10 @@ func (p *ProRegTx) deserializeExt(r io.Reader) error {
 			return err
 		}
 	}
-	p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize)
-	return err
+	if p.PayloadSig, err = readBytes(r, "payloadSig", maxSigSize); err != nil {
+		return err
+	}
+	return p.checkShared()
 }
 
 // PayloadHash returns the hash the payload signature commits to: the double
@@ -941,7 +993,9 @@ func writeBytes(w io.Writer, field string, b []byte, limit int) error {
 
 // readBytes reads a length prefixed field of at most limit bytes. The length is
 // checked before anything is allocated, and a length that is not the shortest
-// CompactSize is an error.
+// CompactSize is an error. It does not wrap wire.ReadVarBytes, which has the
+// same bound but reports an over-long field as an untyped wire.MessageError, so
+// a caller could not tell it from other malformed data with errors.Is.
 func readBytes(r io.Reader, field string, limit int) ([]byte, error) {
 	n, err := wire.ReadVarInt(r, 0)
 	if err != nil {
