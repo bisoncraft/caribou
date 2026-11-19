@@ -22,6 +22,9 @@ const (
 const (
 	NetworkIPv4 = 1
 	NetworkIPv6 = 2
+	NetworkTORv3 = 4
+	NetworkI2P   = 5
+	NetworkCJDNS = 6
 )
 
 // Entry kinds of a NetEntry, as numbered by Dash Core.
@@ -63,8 +66,10 @@ type NetPurpose struct {
 
 // NetEntry is one address. Kind is EntryService or EntryDomain.
 //
-// A service entry has a Network and an Addr, 4 bytes for NetworkIPv4 and 16 for
-// NetworkIPv6; other networks are carried as they are. A domain entry has a
+// A service entry has a Network and an Addr, 4 bytes for NetworkIPv4, 16 for
+// NetworkIPv6, 32 for NetworkTORv3, 32 for NetworkI2P and 16 for NetworkCJDNS,
+// the sizes Dash Core refuses a payload over. Other networks (TORv2 and ones
+// Core does not know) are carried as they are; Core ignores such an entry. A domain entry has a
 // Domain instead. The fields of the other kind must be left zero.
 type NetEntry struct {
 	Kind    uint8
@@ -151,8 +156,10 @@ func (e *NetEntry) checkAddr() error {
 	switch e.Network {
 	case NetworkIPv4:
 		want = 4
-	case NetworkIPv6:
+	case NetworkIPv6, NetworkCJDNS:
 		want = 16
+	case NetworkTORv3, NetworkI2P:
+		want = 32
 	default:
 		if len(e.Addr) > maxAddrSize {
 			return fmt.Errorf("%w: %d byte address", ErrUnsupportedNetInfo, len(e.Addr))

@@ -550,6 +550,9 @@ func TestParseNetInfo(t *testing.T) {
 		{"unknown entry kind", patch(kindAt, kindAt+1, 3), ErrUnsupportedNetInfo, false},
 		{"ipv4 with 16 bytes", patch(addrLen, addrLen+1, 16), ErrUnsupportedNetInfo, false},
 		{"ipv6 with 4 bytes", patch(netAt, netAt+1, NetworkIPv6), ErrUnsupportedNetInfo, false},
+		{"torv3 with 4 bytes", patch(netAt, netAt+1, NetworkTORv3), ErrUnsupportedNetInfo, false},
+		{"i2p with 4 bytes", patch(netAt, netAt+1, NetworkI2P), ErrUnsupportedNetInfo, false},
+		{"cjdns with 4 bytes", patch(netAt, netAt+1, NetworkCJDNS), ErrUnsupportedNetInfo, false},
 		{"address of 516 bytes", patch(addrLen, addrLen+1, 0xfd, 0x04, 0x02), ErrUnsupportedNetInfo, false},
 		{"more purposes than the limit", patch(countAt, countAt+1, 0xfd, 0x00, 0x01), ErrFieldTooLong, false},
 		{"non canonical purpose count", patch(countAt, countAt+1, 0xfd, 0x01, 0x00), nil, true},
@@ -599,5 +602,34 @@ func TestParseNetInfo(t *testing.T) {
 				t.Fatalf("round trip differs:\n got %x\nwant %x", buf.Bytes(), tc.payload)
 			}
 		})
+	}
+}
+
+// TestNetEntryAddrSizes checks the address size of each network Dash Core sizes
+// and that a network it does not know is carried as it is.
+func TestNetEntryAddrSizes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		network uint8
+		size    int
+		ok      bool
+	}{
+		{NetworkIPv4, 4, true}, {NetworkIPv4, 16, false},
+		{NetworkIPv6, 16, true}, {NetworkIPv6, 4, false},
+		{NetworkTORv3, 32, true}, {NetworkTORv3, 10, false}, {NetworkTORv3, 33, false},
+		{NetworkI2P, 32, true}, {NetworkI2P, 16, false},
+		{NetworkCJDNS, 16, true}, {NetworkCJDNS, 32, false},
+		{3, 10, true}, {99, 7, true},
+	}
+	for _, tc := range tests {
+		e := NetEntry{Kind: EntryService, Network: tc.network, Addr: make([]byte, tc.size), Port: 9999}
+		err := e.serialize(io.Discard)
+		if tc.ok && err != nil {
+			t.Errorf("network %d with %d bytes: %v", tc.network, tc.size, err)
+		}
+		if !tc.ok && !errors.Is(err, ErrUnsupportedNetInfo) {
+			t.Errorf("network %d with %d bytes: got %v, want ErrUnsupportedNetInfo", tc.network, tc.size, err)
+		}
 	}
 }
