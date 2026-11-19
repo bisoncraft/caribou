@@ -33,9 +33,9 @@ import (
 const (
 	// dashTxTypeNormal is TRANSACTION_NORMAL; such txns carry no extra payload.
 	dashTxTypeNormal = 0
-	// dashSpecialTxVersion is CTransaction::SPECIAL_VERSION; at or above this
+	// DashSpecialTxVersion is CTransaction::SPECIAL_VERSION; at or above this
 	// version a non-normal type carries an extra payload.
-	dashSpecialTxVersion = 3
+	DashSpecialTxVersion = 3
 	// maxTxPerBlock bounds the transaction count taken from a block's
 	// CompactSize before we preallocate, so a malicious peer cannot declare a
 	// huge count and trigger an enormous allocation. Mirrors btcd's guard
@@ -100,7 +100,7 @@ func deserializeDashTx(r io.Reader, tx *Tx) error {
 	}
 
 	// DIP-2 special-transaction extra payload.
-	if version >= dashSpecialTxVersion && tx.Type != dashTxTypeNormal {
+	if version >= DashSpecialTxVersion && tx.Type != dashTxTypeNormal {
 		tx.ExtraPayload, err = wire.ReadVarBytes(dec, pver, wire.MaxMessagePayload, "dash extra payload")
 		if err != nil {
 			return err
@@ -139,7 +139,7 @@ func serializeDashTx(w io.Writer, tx *Tx) error {
 	}
 
 	// Trailing extra payload (compactSize length + bytes).
-	if tx.MsgTx.Version >= dashSpecialTxVersion {
+	if tx.MsgTx.Version >= DashSpecialTxVersion {
 		return wire.WriteVarBytes(w, pver, tx.ExtraPayload)
 	}
 	return nil
