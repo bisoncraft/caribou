@@ -74,6 +74,23 @@ func second(tm *Terms, addr string) {
 	tm.NetInfo.Purposes[0].Entries = append(tm.NetInfo.Purposes[0].Entries, e)
 }
 
+// TestValidateAcceptsBesideRejectedRanges pins that the IPv6 ranges Dash Core
+// reads as invalid are refused no wider than they are: the addresses just
+// outside each /48 and the other forms that embed an IPv4 address are valid.
+func TestValidateAcceptsBesideRejectedRanges(t *testing.T) {
+	for _, addr := range []string{
+		"fd6b:88c0:8723:ffff::1", "fd6b:88c0:8725::1",
+		"fd87:d87e:eb42:ffff::1", "fd87:d87e:eb44::1",
+		"::ffff:0:808:808", "::808:808", "64:ff9b::808:808",
+	} {
+		tm := validTerms(t)
+		second(tm, addr)
+		if err := tm.Validate(RegtestRules); err != nil {
+			t.Errorf("%s: %v", addr, err)
+		}
+	}
+}
+
 // TestValidateAcceptsMainnetPortOffMainnet pins that the mainnet port is only
 // pinned on mainnet: Dash Core's v3 netInfo does not refuse it elsewhere.
 func TestValidateAcceptsMainnetPortOffMainnet(t *testing.T) {
