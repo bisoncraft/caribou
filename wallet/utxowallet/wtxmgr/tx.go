@@ -1477,3 +1477,31 @@ func (s *Store) ListLockedOutputs(ns walletdb.ReadBucket) ([]*LockedOutput,
 
 	return outputs, nil
 }
+
+// LeasedBalance returns the total value of the unexpired leased outputs that
+// are still unspent. A mined spend clears the lease, but an output that an
+// unmined transaction spends is still leased and is not the wallet's to count,
+// so it is not included. Leased outputs are left out of the balance
+// and of coin selection, so this is the amount that is set aside by the leases.
+func (s *Store) LeasedBalance(ns walletdb.ReadBucket) (btcutil.Amount, error) {
+	locked, err := s.ListLockedOutputs(ns)
+	if err != nil {
+		return 0, err
+	}
+	var total btcutil.Amount
+	for _, lo := range locked {
+		k := canonicalOutPoint(&lo.Outpoint.Hash, lo.Outpoint.Index)
+		if existsRawUnminedInput(ns, k) != nil {
+			continue
+		}
+		details, err := s.TxDetails(ns, &lo.Outpoint.Hash)
+		if err != nil {
+			return 0, err
+		}
+		if details == nil || int(lo.Outpoint.Index) >= len(details.Tx.TxOut) {
+			continue
+		}
+		total += btcutil.Amount(details.Tx.TxOut[lo.Outpoint.Index].Value)
+	}
+	return total, nil
+}

@@ -8,6 +8,7 @@ package txauthor
 import (
 	"errors"
 
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txrules"
 	"github.com/bisoncraft/caribou/wallet/utxowallet/wallet/txsizes"
 	"github.com/btcsuite/btcd/btcutil"
@@ -125,7 +126,7 @@ func NewUnsignedSpecialTransaction(outputs []*wire.TxOut, feeRatePerKb btcutil.A
 		)
 	}
 	return newUnsignedTransaction(outputs, feeRatePerKb, fetchInputs,
-		changeSource, dashSpecialTxVersion, estimate)
+		changeSource, bisonwire.DashSpecialTxVersion, estimate)
 }
 
 // newUnsignedTransaction implements the input selection and fee loop shared by

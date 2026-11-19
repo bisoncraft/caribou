@@ -16,9 +16,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+
+	"github.com/bisoncraft/caribou/wallet/utxowallet/bisonwire"
 )
 
 // ErrNotConnected is returned when a Node API call is attempted on a Node
@@ -59,6 +63,13 @@ var rpcTimeout = 15 * time.Second
 type Node struct {
 	addr   *ServerAddr
 	server *Server
+	// chain decides how raw transactions are decoded to check their txid.
+	chain bisonwire.Chain
+
+	// protxUnsupported is set once the server has answered a protx method
+	// with "unknown method", so later calls fail without a round trip. The
+	// Node is one-shot, so a server that is rotated in is probed afresh.
+	protxUnsupported atomic.Bool
 
 	softwareVersion string
 	protocolVersion string
@@ -70,7 +81,12 @@ type Node struct {
 //
 // If torProxy is non-empty (e.g. "127.0.0.1:9050"), the connection is dialed
 // through a local SOCKS5 proxy.
-func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGenesis string) (*Node, error) {
+//
+// chain is the chain the server follows, which raw transactions are decoded
+// as when their txid is checked.
+func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGenesis string,
+	chain bisonwire.Chain) (*Node, error) {
+
 	if err := addr.Validate(); err != nil {
 		return nil, err
 	}
@@ -92,6 +108,7 @@ func NewNode(ctx context.Context, addr *ServerAddr, torProxy string, expectedGen
 	n := &Node{
 		addr:   addr,
 		server: srv,
+		chain:  chain,
 	}
 
 	hctx, cancel := context.WithTimeout(ctx, handshakeTimeout)
@@ -316,7 +333,7 @@ func (n *Node) GetRawTransaction(ctx context.Context, txid string) (string, erro
 		positional{txid, false}, &out); err != nil {
 		return "", err
 	}
-	if err := verifyTxidMatchesHex(txid, out); err != nil {
+	if err := verifyTxidMatchesHex(n.chain, txid, out); err != nil {
 		return "", err
 	}
 	return out, nil
@@ -332,10 +349,33 @@ func (n *Node) GetRawTransaction(ctx context.Context, txid string) (string, erro
 // wtxid, not the txid. wire.MsgTx.TxHash hashes the witness-stripped form,
 // which is exactly what the txid commits to — so this works for both legacy
 // and segwit transactions.
-func verifyTxidMatchesHex(txid, outHex string) error {
+//
+// A Dash special transaction (a masternode registration, a coinbase carrying
+// the chain's quorum commitment, ...) has a payload after its lock time that
+// wire.MsgTx does not read, and its txid is the hash of the bytes including
+// the payload, so Dash is decoded by bisonwire instead.
+func verifyTxidMatchesHex(chain bisonwire.Chain, txid, outHex string) error {
 	raw, err := hex.DecodeString(outHex)
 	if err != nil {
 		return fmt.Errorf("electrum: decode tx hex: %w", err)
+	}
+	if chain == bisonwire.ChainDASH {
+		r := bytes.NewReader(raw)
+		tx := &bisonwire.Tx{Chain: string(chain)}
+		if err := tx.Deserialize(r); err != nil {
+			return fmt.Errorf("electrum: deserialize tx: %w", err)
+		}
+		if r.Len() != 0 {
+			return fmt.Errorf("electrum: tx hex has %d trailing bytes after the transaction", r.Len())
+		}
+		// Dash has no witness data, so the txid is the hash of the bytes as
+		// received. Hashing the decoded transaction instead would accept other
+		// bytes for it, because bisonwire reads encodings it writes back
+		// differently (a non-minimal compact size, a version read as 16 bits).
+		if got := chainhash.DoubleHashH(raw).String(); got != txid {
+			return fmt.Errorf("electrum: tx hex hashes to %s, requested %s", got, txid)
+		}
+		return nil
 	}
 	// wire.MsgTx parses BTC and standard (including segwit) LTC transactions.
 	// It does NOT understand LTC MWEB transactions (extension flag 0x08),
