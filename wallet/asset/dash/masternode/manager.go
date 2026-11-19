@@ -609,6 +609,10 @@ func (m *Manager) StakedAmount() int64 {
 	return total
 }
 
+// Store is the store the Manager keeps its state in, which also holds the
+// offers.
+func (m *Manager) Store() *Store { return m.store }
+
 // OwnerIndex returns the owner index of one of the wallet's owner key ids. It
 // knows only the ids that have been derived and cached.
 func (m *Manager) OwnerIndex(id [protx.KeyIDSize]byte) (uint32, bool) {

@@ -35,7 +35,7 @@ const (
 	// OfferConsented has signed its consent to one registration, ConsentHash.
 	OfferConsented OfferState = "consented"
 	// OfferSigned has signed its inputs, so the registration can be broadcast
-	// by anyone who holds it.
+	// by anyone who holds it. Its ConsentHash is the registration it signed.
 	OfferSigned OfferState = "signed"
 	// OfferBroadcast has had its registration broadcast.
 	OfferBroadcast OfferState = "broadcast"
@@ -160,9 +160,10 @@ func (o *Offer) Own(tx *bisonwire.Tx) (Own, error) {
 }
 
 // Review checks tx against the offer and returns it for signing. An offer that
-// has consented accepts only the registration it consented to.
+// has consented or signed accepts only the registration it consented to, which
+// lets a signature that was lost on its way back be asked for again.
 func (o *Offer) Review(tx *bisonwire.Tx, rules NetRules) (*OfferReview, error) {
-	if o.State != OfferOpen && o.State != OfferConsented {
+	if o.State != OfferOpen && o.State != OfferConsented && o.State != OfferSigned {
 		return nil, fmt.Errorf("%w: the offer is %s", ErrOfferMismatch, o.State)
 	}
 	own, err := o.Own(tx)
@@ -173,7 +174,7 @@ func (o *Offer) Review(tx *bisonwire.Tx, rules NetRules) (*OfferReview, error) {
 	if err != nil {
 		return nil, err
 	}
-	if o.State == OfferConsented && rv.ConsentHash != o.ConsentHash {
+	if (o.State == OfferConsented || o.State == OfferSigned) && rv.ConsentHash != o.ConsentHash {
 		return nil, fmt.Errorf("%w: the offer consented to another registration", ErrOfferMismatch)
 	}
 	id, err := o.ReviewID(tx, own.ShareIndex, rv.FeePortion)

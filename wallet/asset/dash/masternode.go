@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/btcsuite/btcd/chaincfg"
 
@@ -55,6 +56,14 @@ type dashWallet struct {
 	// early is the subscription to the wallet's transactions made as it opens,
 	// which the track loop takes.
 	early atomic.Pointer[feed]
+
+	// offerMu serialises the changes of offers: an offer's state is read,
+	// changed and stored as one step.
+	offerMu sync.Mutex
+	// fw replaces the inner wallet as the funding wallet in tests.
+	fw fundingWallet
+	// now replaces the clock in tests.
+	now func() time.Time
 }
 
 // openDashSharedWallet constructs the electrum wallet with shared masternode
