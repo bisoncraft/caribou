@@ -20,7 +20,11 @@ import (
 var (
 	// ErrProTxUnsupported is returned when the server does not know the protx
 	// methods, which the stock ElectrumX does not for any coin but Dash. It is
-	// remembered for the life of the Node.
+	// remembered for the life of the Node, and the wallet does not rotate
+	// servers for it: replacing the wallet server replays every subscription,
+	// which is too much to do for one optional method. A caller that needs
+	// protx.info has to treat this as "no masternode state from this server",
+	// and the wallet server is chosen for the rest of what the wallet needs.
 	ErrProTxUnsupported = errors.New("electrum: server does not support protx")
 
 	// ErrProTxNotFound is returned when the server has no such registration. It
