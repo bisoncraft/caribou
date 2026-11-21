@@ -694,6 +694,32 @@ type Owned struct {
 	Dissolution *Spend
 }
 
+// ownedOf is the Owned of the masternode mn with hash h. The caller holds mu.
+func (m *Manager) ownedOf(h chainhash.Hash, mn *SharedMN) Owned {
+	o := Owned{MN: mn.clone()}
+	for i := range mn.Shares {
+		if _, ok := m.owned[mn.Shares[i].KeyIDOwner]; ok {
+			o.Shares = append(o.Shares, i)
+		}
+	}
+	if sp, ok := m.dissolved[h]; ok {
+		o.Dissolution = &sp
+	}
+	return o
+}
+
+// Owned returns a copy of the masternode with hash, as List does, and whether
+// the wallet has it.
+func (m *Manager) Owned(hash chainhash.Hash) (Owned, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	mn, ok := m.mns[hash]
+	if !ok {
+		return Owned{}, false
+	}
+	return m.ownedOf(hash, mn), true
+}
+
 // List returns copies of the wallet's masternodes, oldest first, as registered
 // (not with the server's info), with the dissolved ones.
 func (m *Manager) List() []Owned {
@@ -701,16 +727,7 @@ func (m *Manager) List() []Owned {
 	defer m.mu.RUnlock()
 	out := make([]Owned, 0, len(m.mns))
 	for h, mn := range m.mns {
-		o := Owned{MN: mn.clone()}
-		for i := range mn.Shares {
-			if _, ok := m.owned[mn.Shares[i].KeyIDOwner]; ok {
-				o.Shares = append(o.Shares, i)
-			}
-		}
-		if sp, ok := m.dissolved[h]; ok {
-			o.Dissolution = &sp
-		}
-		out = append(out, o)
+		out = append(out, m.ownedOf(h, mn))
 	}
 	slices.SortFunc(out, func(a, b Owned) int {
 		if c := cmp.Compare(a.MN.RegisteredHeight, b.MN.RegisteredHeight); c != 0 {

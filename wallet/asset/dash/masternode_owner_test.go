@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -231,5 +232,70 @@ func TestMasternodeStatusDissolved(t *testing.T) {
 	}
 	if st.State != "dissolved" || st.DissolvedHeight != 850 || st.ReportedKeys != nil || chain.calls != 0 {
 		t.Fatalf("%+v, %d server calls", st, chain.calls)
+	}
+}
+
+// A dissolved masternode's shares are not staked: the list must add up to the
+// balance, which leaves them out.
+func TestMasternodesDissolvedIsNotStaked(t *testing.T) {
+	chain := newInfoChain(t, "protx_info_shared.json")
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, _ := stakedManagerWith(t, chain, seqKeys{}, &masternode.Spend{Height: 850})
+	dw.mn.Store(mgr)
+	mns, err := dw.Masternodes(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mns) != 1 || mns[0].DissolvedHeight != 850 || mns[0].Staked != 0 {
+		t.Fatalf("%+v", mns)
+	}
+	if mgr.StakedAmount() != 0 {
+		t.Fatal("the balance still counts it")
+	}
+}
+
+// Owned is List for one masternode.
+func TestManagerOwned(t *testing.T) {
+	chain := newInfoChain(t, "protx_info_shared.json")
+	dw, hash, _ := ownerWallet(t, chain)
+	mgr := dw.mn.Load()
+	h, err := chainhash.NewHashFromStr(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := mgr.Owned(*h)
+	if !ok || o.MN.ProTxHash != *h || len(o.Shares) != 1 {
+		t.Fatalf("%+v %v", o, ok)
+	}
+	if l := mgr.List(); len(l) != 1 || !reflect.DeepEqual(l[0], o) {
+		t.Fatalf("list %+v, owned %+v", l, o)
+	}
+	// It is a copy.
+	o.MN.Shares[0].Amount++
+	if o2, _ := mgr.Owned(*h); o2.MN.Shares[0].Amount == o.MN.Shares[0].Amount {
+		t.Fatal("Owned returned the stored masternode")
+	}
+	if _, ok := mgr.Owned(chainhash.Hash{1}); ok {
+		t.Fatal("an unknown masternode was found")
+	}
+}
+
+// Owned carries the dissolution, as a copy: changing it changes nothing stored.
+func TestManagerOwnedDissolution(t *testing.T) {
+	chain := newInfoChain(t, "protx_info_shared.json")
+	dw := openDashSharedWallet(&asset.WalletConfig{DataDir: t.TempDir()}, RegressionNetParams, util.Disabled)
+	mgr, _ := stakedManagerWith(t, chain, seqKeys{}, &masternode.Spend{Height: 850})
+	dw.mn.Store(mgr)
+	h, err := chainhash.NewHashFromStr(chain.info.ProTxHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := mgr.Owned(*h)
+	if !ok || o.Dissolution == nil || o.Dissolution.Height != 850 {
+		t.Fatalf("%+v %v", o, ok)
+	}
+	o.Dissolution.Height = 1
+	if o2, _ := mgr.Owned(*h); o2.Dissolution == nil || o2.Dissolution.Height != 850 {
+		t.Fatal("Owned returned the stored dissolution")
 	}
 }

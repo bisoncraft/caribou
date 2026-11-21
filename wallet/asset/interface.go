@@ -1091,7 +1091,8 @@ type Masternode struct {
 	Collateral       string             `json:"collateral"`
 	RegisteredHeight int32              `json:"registeredHeight"`
 	Shares           []*MasternodeShare `json:"shares"`
-	// Staked is the sum of the wallet's own shares.
+	// Staked is the sum of the wallet's own shares, or 0 once the masternode
+	// is dissolved, as in the balance.
 	Staked            uint64 `json:"staked"`
 	EarlyPeriodBlocks uint32 `json:"earlyPeriodBlocks"`
 	EarlyPenalty      uint64 `json:"earlyPenalty"`

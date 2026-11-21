@@ -55,7 +55,8 @@ func toAssetMN(o *masternode.Owned) *asset.Masternode {
 			RefundScript: hex.EncodeToString(s.RefundScript),
 			RewardScript: hex.EncodeToString(s.RewardScript),
 		}
-		if own[i] {
+		// A dissolved masternode's shares are not staked, as in the balance.
+		if own[i] && o.Dissolution == nil {
 			mn.Staked += uint64(s.Amount)
 		}
 	}
@@ -70,6 +71,12 @@ func toAssetMN(o *masternode.Owned) *asset.Masternode {
 // registration, leaves the state unknown and says why in ReportError: what is
 // known from the chain is still returned. Known keys come only from the
 // registration, never from the server's reply.
+//
+// A reply that does not match the registration is retried after a Refresh, which
+// runs in the call and waits behind any scan in progress, so a call can be slow.
+// That Refresh does not wait for a locked wallet's cached owner keys as the
+// refresh loop does: if it needs one it fails, and the call reports why in
+// ReportError.
 func (dw *dashWallet) MasternodeStatus(ctx context.Context, proTxHash string) (*asset.MasternodeStatus, error) {
 	mgr, err := dw.manager()
 	if err != nil {
@@ -79,17 +86,11 @@ func (dw *dashWallet) MasternodeStatus(ctx context.Context, proTxHash string) (*
 	if err != nil {
 		return nil, fmt.Errorf("invalid pro tx hash: %w", err)
 	}
-	var found *masternode.Owned
-	owned := mgr.List()
-	for i := range owned {
-		if owned[i].MN.ProTxHash == *hash {
-			found = &owned[i]
-			break
-		}
-	}
-	if found == nil {
+	owned, ok := mgr.Owned(*hash)
+	if !ok {
 		return nil, masternode.ErrUnknownMN
 	}
+	found := &owned
 	known := dw.keysOf(found.MN.PubKeyOperator, found.MN.KeyIDVoting)
 	st := &asset.MasternodeStatus{
 		Masternode:     *toAssetMN(found),
@@ -106,8 +107,12 @@ func (dw *dashWallet) MasternodeStatus(ctx context.Context, proTxHash string) (*
 	case ctx.Err() != nil:
 		return nil, ctx.Err()
 	case errors.Is(err, masternode.ErrDissolved):
-		// A refresh found the spend after the list was taken.
+		// A refresh found the spend after the list was taken, so take the
+		// masternode again for its dissolved height and what is staked.
 		st.State = masternode.StateDissolved.String()
+		if o, ok := mgr.Owned(*hash); ok {
+			st.Masternode = *toAssetMN(&o)
+		}
 	case err != nil:
 		st.ReportError = err.Error()
 	default:
