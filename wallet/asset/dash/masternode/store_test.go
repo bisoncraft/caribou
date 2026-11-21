@@ -335,3 +335,81 @@ func TestStoreHandsOutOwnerIndexes(t *testing.T) {
 		t.Fatalf("%d %d %x %x", i0, i1, id0, id1)
 	}
 }
+
+// A store records the layout it was written with, and one of another layout is
+// refused rather than read as this one: a later layout changes the registration
+// record, and reading it with this one corrupts or fails every start.
+func TestStoreVersion(t *testing.T) {
+	setVersion := func(t *testing.T, db walletdb.DB, v []byte) {
+		t.Helper()
+		err := walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
+			b := tx.ReadWriteBucket(storeBucket)
+			if v == nil {
+				return b.Delete(versionKey)
+			}
+			return b.Put(versionKey, v)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	stored := func(t *testing.T, db walletdb.DB) []byte {
+		t.Helper()
+		var v []byte
+		err := walletdb.View(db, func(tx walletdb.ReadTx) error {
+			v = bytes.Clone(tx.ReadBucket(storeBucket).Get(versionKey))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+
+	t.Run("a new store is stamped", func(t *testing.T) {
+		_, db, _ := newTestStore(t)
+		defer db.Close()
+		if v := stored(t, db); !bytes.Equal(v, []byte{0, 0, 0, storeVersion}) {
+			t.Fatalf("version %v", v)
+		}
+	})
+	t.Run("a store from before the version was recorded is stamped", func(t *testing.T) {
+		s, db, _ := newTestStore(t)
+		defer db.Close()
+		if _, err := s.ReserveOwnerIndex(); err != nil {
+			t.Fatal(err)
+		}
+		setVersion(t, db, nil)
+		s, err := NewStore(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// An unversioned store is the legacy layout whatever the current
+		// version is, so a later bump must migrate it, not relabel it.
+		if v := stored(t, db); !bytes.Equal(v, []byte{0, 0, 0, 1}) {
+			t.Fatalf("version %v", v)
+		}
+		if snap, err := s.Load(); err != nil || snap.NextOwner != 1 {
+			t.Fatalf("what was there is kept: %v %v", snap.NextOwner, err)
+		}
+	})
+	for name, v := range map[string][]byte{
+		"a newer layout":  {0, 0, 0, storeVersion + 1},
+		"a malformed one": {1},
+	} {
+		t.Run(name+" is refused", func(t *testing.T) {
+			s, db, _ := newTestStore(t)
+			defer db.Close()
+			setVersion(t, db, v)
+			if _, err := NewStore(db); err == nil {
+				t.Fatal("NewStore opened it")
+			}
+			if _, err := s.Load(); err == nil {
+				t.Fatal("Load read it")
+			}
+			if got := stored(t, db); !bytes.Equal(got, v) {
+				t.Fatalf("a refused open changed the version to %v", got)
+			}
+		})
+	}
+}

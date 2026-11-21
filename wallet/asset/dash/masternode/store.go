@@ -23,7 +23,17 @@ var (
 	cursorKey    = []byte("cursor")
 	ownersBucket = []byte("owners")
 	regsBucket   = []byte("regs")
+	versionKey   = []byte("version")
 )
+
+// storeVersion is the layout of the store. A record format or bucket change
+// raises it, so a store written by another layout is refused and not read as
+// this one.
+const storeVersion = 1
+
+// legacyVersion is the layout of a store with no version recorded: the only
+// layout before it was. It is history and does not follow storeVersion.
+const legacyVersion = 1
 
 // Store keeps what a shared masternode wallet cannot recompute: the owner
 // index counter, the owner key ids it has derived, how far discovery has
@@ -35,20 +45,57 @@ type Store struct {
 
 var _ OwnerIndexStore = (*Store)(nil)
 
-// NewStore opens the store in db, creating it if needed.
+// version returns the layout b was written with, 0 if it has no version.
+func version(b walletdb.ReadBucket) (uint32, error) {
+	v := b.Get(versionKey)
+	switch len(v) {
+	case 0:
+		return 0, nil
+	case 4:
+		return binary.BigEndian.Uint32(v), nil
+	}
+	return 0, fmt.Errorf("store version is %d bytes", len(v))
+}
+
+// checkVersion refuses a store of a layout this code does not read.
+func checkVersion(v uint32) error {
+	if v != storeVersion {
+		return fmt.Errorf("masternode store is version %d, this wallet reads version %d", v, storeVersion)
+	}
+	return nil
+}
+
+// NewStore opens the store in db, creating it if needed. It fails on a store
+// of another version.
 func NewStore(db walletdb.DB) (*Store, error) {
 	err := walletdb.Update(db, func(tx walletdb.ReadWriteTx) error {
-		b, err := tx.CreateTopLevelBucket(storeBucket)
+		b := tx.ReadWriteBucket(storeBucket)
+		if b == nil {
+			var err error
+			if b, err = tx.CreateTopLevelBucket(storeBucket); err != nil {
+				return err
+			}
+		}
+		v, err := version(b)
 		if err != nil {
 			return err
 		}
-		if _, err := b.CreateBucketIfNotExists(ownersBucket); err != nil {
+		if v == 0 {
+			v = legacyVersion
+		}
+		if err := checkVersion(v); err != nil {
 			return err
 		}
-		_, err = b.CreateBucketIfNotExists(regsBucket)
-		return err
+		for _, name := range [][]byte{ownersBucket, regsBucket} {
+			if _, err := b.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		var buf [4]byte
+		binary.BigEndian.PutUint32(buf[:], v)
+		return b.Put(versionKey, buf[:])
 	})
-	if err != nil && !errors.Is(err, walletdb.ErrBucketExists) {
+	if err != nil {
 		return nil, err
 	}
 	return &Store{db: db}, nil
@@ -254,7 +301,13 @@ func (s *Store) Load() (Snapshot, error) {
 		if b == nil {
 			return errors.New("masternode store is missing")
 		}
-		var err error
+		v, err := version(b)
+		if err != nil {
+			return err
+		}
+		if err := checkVersion(v); err != nil {
+			return err
+		}
 		if snap.NextOwner, err = nextOwner(b); err != nil {
 			return err
 		}
